@@ -1,12 +1,9 @@
-# If you prefer the allow list template instead of the deny list, see community template:
-# https://github.com/github/gitignore/blob/main/community/Golang/Go.AllowList.gitignore
+# Please do not use this ignore file to define platform specific files.
 #
-# Binaries for programs and plugins
-*.exe
-*.exe~
-*.dll
-*.so
-*.dylib
+# For these purposes create a global .gitignore file, which is a list of rules
+# for ignoring files in every Git repository on your workstation.
+#
+# https://help.github.com/articles/ignoring-files/#create-a-global-gitignore
 
 # Test binary, built with `go test -c`
 *.test
@@ -17,9 +14,6 @@ coverage.*
 *.coverprofile
 profile.cov
 
-# Dependency directories (remove the comment below to include it)
-# vendor/
-
 # Go workspace file
 go.work
 go.work.sum
@@ -27,6 +21,10 @@ go.work.sum
 # env file
 .env
 
-# Editor/IDE
-# .idea/
-# .vscode/
+# Build output
+sortie
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib

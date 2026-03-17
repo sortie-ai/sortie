@@ -8,12 +8,12 @@ service. Each task is atomic, independently verifiable, and sized for a single a
 Establish the Go project structure, tooling, and development conventions before writing any
 business logic. Every subsequent task assumes this foundation exists.
 
-- [ ] 0.1 Research Go project layout conventions (standard-layout, cmd/internal/pkg patterns)
+- [x] 0.1 Research Go project layout conventions (standard-layout, cmd/internal/pkg patterns)
       and select the structure for Sortie. Document the decision in a short comment in go.mod
       or a dedicated section in CONTRIBUTING.md.
       **Verify:** `go build ./...` succeeds with an empty main package.
 
-- [ ] 0.2 Initialize Go module (`go mod init`), create `cmd/sortie/main.go` with a minimal
+- [x] 0.2 Initialize Go module (`go mod init`), create `cmd/sortie/main.go` with a minimal
       `main()` that prints version and exits. Set up the directory skeleton per the chosen
       layout.
       **Verify:** `go run ./cmd/sortie` prints version string and exits 0.
