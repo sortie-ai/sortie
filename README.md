@@ -8,6 +8,14 @@ Engineers manage work at the ticket level. Agents handle implementation.
 
 > **Note:** Sortie is under active development and is not yet ready for use.
 
+## Why "Sortie"
+
+A *sortie* is a military and aviation term for a single mission executed autonomously. The
+metaphor is precise: the orchestrator dispatches agents on missions (issues), each with an
+isolated workspace, a defined objective, and an expected return. The name is short, two
+syllables, pronounceable across languages, and does not conflict with existing projects in
+this domain.
+
 ## How It Works
 
 1. Polls an issue tracker for tickets in active states.
