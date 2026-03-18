@@ -119,9 +119,9 @@ yet - just the ability to read, validate, and watch the workflow file.
 SQLite database for retry queues, run history, session metadata, and aggregate metrics.
 No orchestration logic yet - just the storage primitives.
 
-- [ ] 2.1 Research SQLite libraries for Go (`modernc.org/sqlite` vs `mattn/go-sqlite3`).
-      Select the library and add to `go.mod`. Create a minimal integration test that opens
-      an in-memory SQLite database.
+- [x] 2.1 Add `modernc.org/sqlite` to `go.mod` per ADR-0002 (pure-Go SQLite, no CGo).
+      Create a minimal integration test that opens an in-memory SQLite database, verifies
+      WAL mode can be enabled, and exercises basic CRUD.
       **Verify:** test opens DB, creates a table, inserts a row, reads it back.
 
 - [ ] 2.2 Implement schema migration runner: numbered migrations applied in order, tracked in

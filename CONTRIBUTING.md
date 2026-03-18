@@ -10,6 +10,7 @@ internal/domain/       — domain types: Issue, TrackerAdapter, AgentAdapter int
 internal/workflow/     — WORKFLOW.md loader (front matter + prompt body split), file watcher
 internal/config/       — typed config structs, defaults, $VAR resolution, validation
 internal/prompt/       — prompt template rendering (text/template, strict mode, FuncMap)
+internal/persistence/  — SQLite-backed durable storage (retry queues, run history, metrics)
 internal/orchestrator/ — poll loop, dispatch, reconciliation, retry, state machine
 internal/tracker/      — tracker adapter implementations (jira, file, etc.)
 internal/agent/        — agent adapter implementations (claude-code, mock, etc.)
