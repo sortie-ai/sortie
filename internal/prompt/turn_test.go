@@ -111,6 +111,23 @@ func TestBuildTurnPrompt(t *testing.T) {
 		}
 	})
 
+	t.Run("FirstTurnEmptyNoFallback", func(t *testing.T) {
+		// First-turn empty output must pass through as-is, NOT substitute
+		// DefaultContinuationPrompt. The fallback is for continuation turns only.
+		tmpl, err := Parse("", "WORKFLOW.md", 0)
+		if err != nil {
+			t.Fatalf("parse: %v", err)
+		}
+
+		got, err := BuildTurnPrompt(tmpl, issue, nil, 1, 20)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got == DefaultContinuationPrompt {
+			t.Error("first turn empty output must not fall back to DefaultContinuationPrompt")
+		}
+	})
+
 	t.Run("FirstTurnRenderError", func(t *testing.T) {
 		body := "{{ .issue.nonexistent_field }}"
 		tmpl, err := Parse(body, "WORKFLOW.md", 0)
