@@ -26,6 +26,10 @@ func Open(ctx context.Context, path string) (*Store, error) {
 		return nil, fmt.Errorf("open sqlite %q: %w", path, err)
 	}
 
+	// SQLite requires a single connection to enforce single-writer
+	// semantics and to keep :memory: databases consistent.
+	db.SetMaxOpenConns(1)
+
 	// Verify the connection is usable.
 	if err := db.PingContext(ctx); err != nil {
 		db.Close() //nolint:errcheck // best-effort cleanup on open failure
@@ -33,9 +37,17 @@ func Open(ctx context.Context, path string) (*Store, error) {
 	}
 
 	// Enable WAL mode for concurrent reads with single-writer semantics.
-	if _, err := db.ExecContext(ctx, "PRAGMA journal_mode=WAL"); err != nil {
+	// QueryRow is required because PRAGMA journal_mode returns the actual
+	// mode set, which may differ from the requested mode without error.
+	var mode string
+	if err := db.QueryRowContext(ctx, "PRAGMA journal_mode=WAL").Scan(&mode); err != nil {
 		db.Close() //nolint:errcheck // best-effort cleanup on open failure
 		return nil, fmt.Errorf("enable WAL mode: %w", err)
+	}
+	// :memory: databases report "memory"; file-backed databases report "wal".
+	if mode != "wal" && mode != "memory" {
+		db.Close() //nolint:errcheck // best-effort cleanup on open failure
+		return nil, fmt.Errorf("expected journal_mode wal or memory, got %q", mode)
 	}
 
 	return &Store{db: db}, nil
