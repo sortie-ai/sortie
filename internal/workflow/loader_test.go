@@ -123,6 +123,12 @@ func TestLoad(t *testing.T) {
 			wantConfig: map[string]any{},
 			wantPrompt: "",
 		},
+		{
+			name:       "DelimiterOnlyNoTrailingNewline",
+			content:    []byte("---"),
+			wantConfig: map[string]any{},
+			wantPrompt: "---",
+		},
 	}
 
 	for _, tt := range tests {
