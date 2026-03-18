@@ -94,7 +94,7 @@ yet - just the ability to read, validate, and watch the workflow file.
       **Verify:** unit tests cover successful render, unknown variable error, nested field
       access (labels, blockers), and `run` fields (`turn_number`, `is_continuation`).
 
-- [ ] 1.5 Implement the turn prompt builder: a function that returns the full rendered task
+- [x] 1.5 Implement the turn prompt builder: a function that returns the full rendered task
       prompt on the first turn (`turn_number == 1`, `is_continuation == false`) and a shorter
       continuation guidance prompt on subsequent turns (`is_continuation == true`). The
       continuation prompt should not resend the original task prompt that is already present
