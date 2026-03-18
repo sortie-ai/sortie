@@ -2,4 +2,4 @@ module github.com/sortie-ai/sortie
 
 go 1.26.1
 
-require gopkg.in/yaml.v3 v3.0.1 // indirect
+require gopkg.in/yaml.v3 v3.0.1
