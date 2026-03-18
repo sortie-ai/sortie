@@ -108,7 +108,7 @@ yet - just the ability to read, validate, and watch the workflow file.
       **Verify:** integration test modifies a temp WORKFLOW.md file, confirms new config is
       picked up. A second test introduces invalid YAML and confirms the old config is retained.
 
-- [ ] 1.7 Implement CLI entry point: accept an optional positional argument for workflow file
+- [x] 1.7 Implement CLI entry point: accept an optional positional argument for workflow file
       path, default to `./WORKFLOW.md`. Add `--port` flag (stored for later). On missing file,
       print a clear error and exit nonzero.
       **Verify:** `go run ./cmd/sortie /tmp/test-workflow.md` loads the file.
