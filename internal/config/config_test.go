@@ -395,6 +395,18 @@ func TestNewServiceConfig(t *testing.T) {
 		}
 		assertIntEqual(t, "Agent.StallTimeoutMS", 300000, cfg.Agent.StallTimeoutMS)
 	})
+
+	t.Run("SectionAsNonMap", func(t *testing.T) {
+		cfg, err := NewServiceConfig(map[string]any{
+			"tracker": "not-a-map",
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		assertStringEqual(t, "Tracker.Kind", "", cfg.Tracker.Kind)
+		assertStringEqual(t, "Tracker.Endpoint", "", cfg.Tracker.Endpoint)
+		assertStringEqual(t, "Tracker.APIKey", "", cfg.Tracker.APIKey)
+	})
 }
 
 // --- test helpers ---
