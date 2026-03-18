@@ -129,16 +129,7 @@ func TestRunNonexistentPath(t *testing.T) {
 }
 
 func TestRunMissingDefaultWorkflow(t *testing.T) {
-	dir := t.TempDir()
-
-	orig, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chdir(dir); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { os.Chdir(orig) }) //nolint:errcheck // best-effort restore in test cleanup
+	t.Chdir(t.TempDir())
 
 	var stdout, stderr bytes.Buffer
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
