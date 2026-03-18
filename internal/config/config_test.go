@@ -257,6 +257,17 @@ func TestNewServiceConfig(t *testing.T) {
 		assertStringEqual(t, "ConfigError.Field", "polling.interval_ms", cfgErr.Field)
 	})
 
+	t.Run("Coercion/FractionalFloat64Rejected", func(t *testing.T) {
+		_, err := NewServiceConfig(map[string]any{
+			"polling": map[string]any{"interval_ms": float64(0.9)},
+		})
+		var cfgErr *ConfigError
+		if !errors.As(err, &cfgErr) {
+			t.Fatalf("expected *ConfigError, got %T: %v", err, err)
+		}
+		assertStringEqual(t, "ConfigError.Field", "polling.interval_ms", cfgErr.Field)
+	})
+
 	t.Run("ByStateMap/Normalization", func(t *testing.T) {
 		cfg, err := NewServiceConfig(map[string]any{
 			"agent": map[string]any{
