@@ -85,6 +85,10 @@ func Load(path string) (Workflow, error) {
 // before the delimiter and the prompt body after it. When no closing
 // delimiter is found the entire content is treated as front matter and
 // the prompt body is empty.
+//
+// A manual line scanner is used instead of strings.Cut or strings.SplitN
+// on "\n---\n" because the closing delimiter tolerates trailing whitespace
+// (e.g. "---   \n"), which a fixed-pattern split cannot express.
 func splitAtClosingDelimiter(content string) (frontMatter, promptBody string) {
 	offset := 0
 	for offset < len(content) {
