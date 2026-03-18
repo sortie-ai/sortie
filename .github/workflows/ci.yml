@@ -20,8 +20,8 @@ concurrency:
   # Explanation:
   # - github.workflow: The name of the workflow (e.g. Workflow 1).
   # - github.event.pull_request.number: The number of the pull request (when the trigger event is a PR).
-  # - github.ref: The branch name (when the trigger is not a PR but a push).
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  # - github.ref_name: The short branch or tag name (when the trigger is not a PR but a push).
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref_name }}
   cancel-in-progress: true
 
 jobs:
@@ -48,13 +48,9 @@ jobs:
     name: Test
     runs-on: ubuntu-latest
 
-    strategy:
-      # When set to true, GitHub cancels
-      # all in-progress jobs if any matrix job fails.
-      fail-fast: false
-
-      matrix:
-        go-version: ['1.26']
+    env:
+      # secrets cannot be directly referenced in if: conditionals
+      CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
 
     steps:
       - name: Checkout code
@@ -65,19 +61,18 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
-          go-version: ${{ matrix.go-version }}
+          go-version-file: go.mod
 
       - name: Run tests
         run: go test -race -count=1 -coverprofile=coverage.out -covermode=atomic ./...
 
       - name: Upload coverage reports to Codecov
         uses: codecov/codecov-action@v5.5.2
-        if: success()
+        if: success() && env.CODECOV_TOKEN != ''
         with:
           fail_ci_if_error: false
           name: codecov-umbrella
           flags: unittests
-          env_vars: OS,GO
           files: ./coverage.out
           token: ${{ secrets.CODECOV_TOKEN }}
 
