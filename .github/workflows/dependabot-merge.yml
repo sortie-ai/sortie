@@ -12,6 +12,6 @@ permissions:
 
 jobs:
   dependabot:
-    uses: sortie-ai/shared-workflows/.github/workflows/dependabot-merge.yml@v1
+    uses: sortie-ai/shared-workflows/.github/workflows/dependabot-merge.yml@v1.0.0
     secrets:
       bot-token: ${{ secrets.CICDBOT_TOKEN }}
