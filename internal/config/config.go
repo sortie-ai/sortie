@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -301,6 +302,9 @@ func coerceInt(val any) (int, error) {
 	case int32:
 		return int(v), nil
 	case float64:
+		if v != math.Trunc(v) {
+			return 0, fmt.Errorf("fractional value %v", v)
+		}
 		return int(v), nil
 	case string:
 		return strconv.Atoi(strings.TrimSpace(v))
