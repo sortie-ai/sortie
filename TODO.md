@@ -75,7 +75,7 @@ yet - just the ability to read, validate, and watch the workflow file.
       cases: missing file, invalid YAML, non-map front matter.
       **Verify:** unit tests cover happy path, missing file, bad YAML, non-map YAML.
 
-- [ ] 1.3 Implement the typed config layer: define Go structs for all config sections
+- [x] 1.3 Implement the typed config layer: define Go structs for all config sections
       (`tracker`, `polling`, `workspace`, `hooks`, `agent`). Apply defaults. Resolve `$VAR`
       environment indirection and `~` path expansion. Validate required fields. Reference
       architecture Section 6.4 for the complete field list. Key `agent` fields that must be
@@ -87,7 +87,7 @@ yet - just the ability to read, validate, and watch the workflow file.
       **Verify:** unit tests cover defaults, env resolution, path expansion, validation errors,
       per-state concurrency map normalization.
 
-- [ ] 1.4 Implement prompt template rendering using `text/template` with strict mode (no
+- [x] 1.4 Implement prompt template rendering using `text/template` with strict mode (no
       undefined variables). Accept `issue`, `attempt`, and `run` as template inputs. The `run`
       object contains `turn_number` (integer), `max_turns` (integer), and `is_continuation`
       (boolean). Test with a sample template that exercises all variables.

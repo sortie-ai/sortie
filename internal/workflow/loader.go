@@ -29,6 +29,12 @@ type Workflow struct {
 	// PromptTemplate is the Markdown body after the closing ---
 	// delimiter, trimmed of leading and trailing whitespace.
 	PromptTemplate string
+
+	// FrontMatterLines is the number of lines from the start of the
+	// file through and including the closing --- delimiter. Zero when
+	// the file has no front matter block. Used by the prompt renderer
+	// to rewrite template error line numbers to file-relative positions.
+	FrontMatterLines int
 }
 
 // Load reads the workflow file at path and returns the parsed [Workflow].
@@ -56,7 +62,7 @@ func Load(path string) (Workflow, error) {
 
 	rest := content[firstNL+1:] // skip opening delimiter line
 
-	fmBytes, promptBody := splitAtClosingDelimiter(rest)
+	fmBytes, promptBody, closingFound := splitAtClosingDelimiter(rest)
 
 	var parsed any
 	if err := yaml.Unmarshal([]byte(fmBytes), &parsed); err != nil {
@@ -79,22 +85,30 @@ func Load(path string) (Workflow, error) {
 		}
 	}
 
+	// Count lines consumed by front matter: opening delimiter (1) +
+	// YAML body lines + closing delimiter (1 if found).
+	fmLines := 1 + strings.Count(fmBytes, "\n")
+	if closingFound {
+		fmLines++
+	}
+
 	return Workflow{
-		Config:         config,
-		PromptTemplate: strings.TrimSpace(promptBody),
+		Config:           config,
+		PromptTemplate:   strings.TrimSpace(promptBody),
+		FrontMatterLines: fmLines,
 	}, nil
 }
 
 // splitAtClosingDelimiter scans content for a line that is exactly "---"
 // (with optional trailing whitespace). It returns the front matter text
-// before the delimiter and the prompt body after it. When no closing
-// delimiter is found the entire content is treated as front matter and
-// the prompt body is empty.
+// before the delimiter, the prompt body after it, and whether the closing
+// delimiter was found. When no closing delimiter is found the entire
+// content is treated as front matter and the prompt body is empty.
 //
 // A manual line scanner is used instead of strings.Cut or strings.SplitN
 // on "\n---\n" because the closing delimiter tolerates trailing whitespace
 // (e.g. "---   \n"), which a fixed-pattern split cannot express.
-func splitAtClosingDelimiter(content string) (frontMatter, promptBody string) {
+func splitAtClosingDelimiter(content string) (frontMatter, promptBody string, found bool) {
 	offset := 0
 	for offset < len(content) {
 		nlIdx := strings.IndexByte(content[offset:], '\n')
@@ -113,7 +127,7 @@ func splitAtClosingDelimiter(content string) (frontMatter, promptBody string) {
 			} else {
 				promptBody = content[offset+nlIdx+1:]
 			}
-			return frontMatter, promptBody
+			return frontMatter, promptBody, true
 		}
 
 		if nlIdx == -1 {
@@ -122,5 +136,5 @@ func splitAtClosingDelimiter(content string) (frontMatter, promptBody string) {
 		offset += nlIdx + 1
 	}
 
-	return content, ""
+	return content, "", false
 }

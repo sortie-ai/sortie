@@ -11,13 +11,14 @@ import (
 
 func TestLoad(t *testing.T) {
 	tests := []struct {
-		name           string
-		content        []byte // nil means do not create the file
-		wantErr        bool
-		wantKind       ErrorKind
-		wantConfig     map[string]any
-		wantPrompt     string
-		skipFileCreate bool
+		name                 string
+		content              []byte // nil means do not create the file
+		wantErr              bool
+		wantKind             ErrorKind
+		wantConfig           map[string]any
+		wantPrompt           string
+		wantFrontMatterLines int
+		skipFileCreate       bool
 	}{
 		{
 			name:    "HappyPath",
@@ -26,19 +27,22 @@ func TestLoad(t *testing.T) {
 				"tracker": map[string]any{"kind": "jira", "project": "SORT"},
 				"agent":   map[string]any{"kind": "claude-code"},
 			},
-			wantPrompt: "# Task\n\nFix the bug in {{ .issue.title }}.",
+			wantPrompt:           "# Task\n\nFix the bug in {{ .issue.title }}.",
+			wantFrontMatterLines: 7,
 		},
 		{
-			name:       "NoFrontMatter",
-			content:    []byte("# Just a prompt\n\nDo the thing.\n"),
-			wantConfig: map[string]any{},
-			wantPrompt: "# Just a prompt\n\nDo the thing.",
+			name:                 "NoFrontMatter",
+			content:              []byte("# Just a prompt\n\nDo the thing.\n"),
+			wantConfig:           map[string]any{},
+			wantPrompt:           "# Just a prompt\n\nDo the thing.",
+			wantFrontMatterLines: 0,
 		},
 		{
-			name:       "EmptyFrontMatter",
-			content:    []byte("---\n---\nprompt body\n"),
-			wantConfig: map[string]any{},
-			wantPrompt: "prompt body",
+			name:                 "EmptyFrontMatter",
+			content:              []byte("---\n---\nprompt body\n"),
+			wantConfig:           map[string]any{},
+			wantPrompt:           "prompt body",
+			wantFrontMatterLines: 2,
 		},
 		{
 			name:           "MissingFile",
@@ -70,7 +74,8 @@ func TestLoad(t *testing.T) {
 			wantConfig: map[string]any{
 				"key": "value",
 			},
-			wantPrompt: "the prompt",
+			wantPrompt:           "the prompt",
+			wantFrontMatterLines: 3,
 		},
 		{
 			name:    "TrailingWhitespaceOnDelimiters",
@@ -78,7 +83,8 @@ func TestLoad(t *testing.T) {
 			wantConfig: map[string]any{
 				"key": "value",
 			},
-			wantPrompt: "the prompt",
+			wantPrompt:           "the prompt",
+			wantFrontMatterLines: 3,
 		},
 		{
 			name:    "NoClosingDelimiter",
@@ -86,7 +92,8 @@ func TestLoad(t *testing.T) {
 			wantConfig: map[string]any{
 				"key": "value",
 			},
-			wantPrompt: "",
+			wantPrompt:           "",
+			wantFrontMatterLines: 2,
 		},
 		{
 			// YAML 1.1 treats bare NO, ON, YES as booleans. yaml.v3 follows
@@ -100,19 +107,22 @@ func TestLoad(t *testing.T) {
 				"b": "ON",
 				"c": "YES",
 			},
-			wantPrompt: "prompt",
+			wantPrompt:           "prompt",
+			wantFrontMatterLines: 5,
 		},
 		{
-			name:       "PromptBodyTrimming",
-			content:    []byte("---\nk: v\n---\n\n\n  prompt text  \n\n\n"),
-			wantConfig: map[string]any{"k": "v"},
-			wantPrompt: "prompt text",
+			name:                 "PromptBodyTrimming",
+			content:              []byte("---\nk: v\n---\n\n\n  prompt text  \n\n\n"),
+			wantConfig:           map[string]any{"k": "v"},
+			wantPrompt:           "prompt text",
+			wantFrontMatterLines: 3,
 		},
 		{
-			name:       "GoTemplateDirectivesPreserved",
-			content:    []byte("---\nk: v\n---\n{{ .issue.title }} — {{ if .attempt }}retry{{ end }}\n"),
-			wantConfig: map[string]any{"k": "v"},
-			wantPrompt: "{{ .issue.title }} — {{ if .attempt }}retry{{ end }}",
+			name:                 "GoTemplateDirectivesPreserved",
+			content:              []byte("---\nk: v\n---\n{{ .issue.title }} — {{ if .attempt }}retry{{ end }}\n"),
+			wantConfig:           map[string]any{"k": "v"},
+			wantPrompt:           "{{ .issue.title }} — {{ if .attempt }}retry{{ end }}",
+			wantFrontMatterLines: 3,
 		},
 		{
 			name:    "UTF8BOMStripping",
@@ -120,37 +130,43 @@ func TestLoad(t *testing.T) {
 			wantConfig: map[string]any{
 				"key": "value",
 			},
-			wantPrompt: "prompt",
+			wantPrompt:           "prompt",
+			wantFrontMatterLines: 3,
 		},
 		{
-			name:       "EmptyFile",
-			content:    []byte(""),
-			wantConfig: map[string]any{},
-			wantPrompt: "",
+			name:                 "EmptyFile",
+			content:              []byte(""),
+			wantConfig:           map[string]any{},
+			wantPrompt:           "",
+			wantFrontMatterLines: 0,
 		},
 		{
-			name:       "DelimiterOnlyNoTrailingNewline",
-			content:    []byte("---"),
-			wantConfig: map[string]any{},
-			wantPrompt: "---",
+			name:                 "DelimiterOnlyNoTrailingNewline",
+			content:              []byte("---"),
+			wantConfig:           map[string]any{},
+			wantPrompt:           "---",
+			wantFrontMatterLines: 0,
 		},
 		{
-			name:       "OpeningDelimiterOnly",
-			content:    []byte("---\n"),
-			wantConfig: map[string]any{},
-			wantPrompt: "",
+			name:                 "OpeningDelimiterOnly",
+			content:              []byte("---\n"),
+			wantConfig:           map[string]any{},
+			wantPrompt:           "",
+			wantFrontMatterLines: 1,
 		},
 		{
-			name:       "DashesInQuotedYAMLValue",
-			content:    []byte("---\nkey: \"---\"\n---\nprompt\n"),
-			wantConfig: map[string]any{"key": "---"},
-			wantPrompt: "prompt",
+			name:                 "DashesInQuotedYAMLValue",
+			content:              []byte("---\nkey: \"---\"\n---\nprompt\n"),
+			wantConfig:           map[string]any{"key": "---"},
+			wantPrompt:           "prompt",
+			wantFrontMatterLines: 3,
 		},
 		{
-			name:       "DashesInBlockScalar",
-			content:    []byte("---\nkey: |\n  ---\n  more\n---\nprompt\n"),
-			wantConfig: map[string]any{"key": "---\nmore\n"},
-			wantPrompt: "prompt",
+			name:                 "DashesInBlockScalar",
+			content:              []byte("---\nkey: |\n  ---\n  more\n---\nprompt\n"),
+			wantConfig:           map[string]any{"key": "---\nmore\n"},
+			wantPrompt:           "prompt",
+			wantFrontMatterLines: 5,
 		},
 	}
 
@@ -197,6 +213,10 @@ func TestLoad(t *testing.T) {
 
 			if wf.PromptTemplate != tt.wantPrompt {
 				t.Errorf("PromptTemplate mismatch\n  want: %q\n  got:  %q", tt.wantPrompt, wf.PromptTemplate)
+			}
+
+			if wf.FrontMatterLines != tt.wantFrontMatterLines {
+				t.Errorf("FrontMatterLines mismatch\n  want: %d\n  got:  %d", tt.wantFrontMatterLines, wf.FrontMatterLines)
 			}
 		})
 	}

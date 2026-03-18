@@ -1,3 +1,7 @@
+// Package config converts raw workflow front matter into typed runtime
+// configuration. Start with [NewServiceConfig] to obtain a
+// [ServiceConfig] from a generic map, and inspect [ConfigError] for
+// structured diagnostics on invalid values.
 package config
 
 import (
