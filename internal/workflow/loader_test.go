@@ -135,6 +135,18 @@ func TestLoad(t *testing.T) {
 			wantConfig: map[string]any{},
 			wantPrompt: "",
 		},
+		{
+			name:       "DashesInQuotedYAMLValue",
+			content:    []byte("---\nkey: \"---\"\n---\nprompt\n"),
+			wantConfig: map[string]any{"key": "---"},
+			wantPrompt: "prompt",
+		},
+		{
+			name:       "DashesInBlockScalar",
+			content:    []byte("---\nkey: |\n  ---\n  more\n---\nprompt\n"),
+			wantConfig: map[string]any{"key": "---\nmore\n"},
+			wantPrompt: "prompt",
+		},
 	}
 
 	for _, tt := range tests {
