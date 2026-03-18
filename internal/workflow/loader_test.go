@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -236,7 +237,9 @@ func TestWorkflowError_Unwrap(t *testing.T) {
 }
 
 // assertMapsEqual performs a recursive value comparison of two
-// map[string]any values, reporting mismatches via t.Errorf.
+// map[string]any values, reporting mismatches via t.Errorf. Leaf values
+// are compared with reflect.DeepEqual to avoid panics on uncomparable
+// types such as []any that YAML sequences decode into.
 func assertMapsEqual(t *testing.T, want, got map[string]any) {
 	t.Helper()
 	if len(want) != len(got) {
@@ -253,7 +256,7 @@ func assertMapsEqual(t *testing.T, want, got map[string]any) {
 		gm, gIsMap := gv.(map[string]any)
 		if wIsMap && gIsMap {
 			assertMapsEqual(t, wm, gm)
-		} else if wv != gv {
+		} else if !reflect.DeepEqual(wv, gv) {
 			t.Errorf("key %q: want %v (%T), got %v (%T)", k, wv, wv, gv, gv)
 		}
 	}
