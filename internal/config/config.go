@@ -129,10 +129,12 @@ func NewServiceConfig(raw map[string]any) (ServiceConfig, error) {
 
 func buildTrackerConfig(m map[string]any) TrackerConfig {
 	return TrackerConfig{
-		Kind:           extractString(m, "kind"),
-		Endpoint:       resolveEnvRef(extractString(m, "endpoint")),
-		APIKey:         resolveEnv(extractString(m, "api_key")),
-		Project:        resolveEnvRef(extractString(m, "project")),
+		Kind:     extractString(m, "kind"),
+		Endpoint: resolveEnvRef(extractString(m, "endpoint")),
+		APIKey:   resolveEnv(extractString(m, "api_key")),
+		Project:  resolveEnvRef(extractString(m, "project")),
+		// States are stored with original casing; the orchestrator
+		// normalizes both sides to lowercase when comparing.
 		ActiveStates:   extractStringSlice(mapVal(m, "active_states")),
 		TerminalStates: extractStringSlice(mapVal(m, "terminal_states")),
 	}
