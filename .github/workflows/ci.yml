@@ -1,25 +1,42 @@
 name: CI
 
 on:
-  push:
-    branches: [main]
-  pull_request:
+    push:
+      branches:
+        # This is to make sure that there is no broken CI on
+        # the main branch, and also for Sonarqube integration
+        - main
+    # We need it for better Sonarqube integration
+    pull_request:
+      types: [opened, synchronize, reopened]
 
 permissions:
   contents: read
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  # Cancel any currently running job or workflow in the same concurrency group.
+  # The group is a unique identifier for the workflow run.
+  #
+  # Explanation:
+  # - github.workflow: The name of the workflow (e.g. Workflow 1).
+  # - github.event.pull_request.number: The number of the pull request (when the trigger event is a PR).
+  # - github.ref: The branch name (when the trigger is not a PR but a push).
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
   lint:
     name: Lint
     runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
 
-      - uses: actions/setup-go@v5
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
 
@@ -30,27 +47,53 @@ jobs:
   test:
     name: Test
     runs-on: ubuntu-latest
+
     strategy:
+      # When set to true, GitHub cancels
+      # all in-progress jobs if any matrix job fails.
+      fail-fast: false
+
       matrix:
         go-version: ['1.26']
-    steps:
-      - uses: actions/checkout@v4
 
-      - uses: actions/setup-go@v5
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
         with:
           go-version: ${{ matrix.go-version }}
 
       - name: Run tests
-        run: make test
+        run: go test -race -count=1 -coverprofile=coverage.out -covermode=atomic ./...
+
+      - name: Upload coverage reports to Codecov
+        uses: codecov/codecov-action@v5.5.2
+        if: success()
+        with:
+          fail_ci_if_error: false
+          name: codecov-umbrella
+          flags: unittests
+          env_vars: OS,GO
+          files: ./coverage.out
+          token: ${{ secrets.CODECOV_TOKEN }}
 
   build:
     name: Build
     runs-on: ubuntu-latest
     needs: [lint, test]
-    steps:
-      - uses: actions/checkout@v4
 
-      - uses: actions/setup-go@v5
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
         with:
           go-version-file: go.mod
 
