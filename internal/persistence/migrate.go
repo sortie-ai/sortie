@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 )
@@ -22,9 +23,24 @@ func (s *Store) Migrate(ctx context.Context) error {
 		return fmt.Errorf("create schema_migrations table: %w", err)
 	}
 
+	versions := make([]int, len(migrations))
+	for i, m := range migrations {
+		versions[i] = m.Version
+	}
+	if !sort.IntsAreSorted(versions) {
+		return fmt.Errorf("migrations are not sorted by version: %v", versions)
+	}
+
 	applied, err := s.appliedVersions(ctx)
 	if err != nil {
 		return err
+	}
+
+	maxRegistered := versions[len(versions)-1]
+	for v := range applied {
+		if v > maxRegistered {
+			return fmt.Errorf("database has migration %d, but this binary only knows up to %d — refusing to run against a newer schema", v, maxRegistered)
+		}
 	}
 
 	for _, m := range migrations {
@@ -88,6 +104,10 @@ func (s *Store) applyMigration(ctx context.Context, m Migration) error {
 // executes each non-empty statement individually within the given transaction.
 // This is required because database/sql drivers have inconsistent support for
 // multi-statement Exec calls.
+//
+// Limitation: the naive split on ";" does not handle semicolons inside string
+// literals. This is safe for DDL statements (CREATE TABLE, CREATE INDEX) but
+// would mis-split DML containing literal semicolons.
 func execStatements(ctx context.Context, tx *sql.Tx, rawSQL string) error {
 	for _, stmt := range strings.Split(rawSQL, ";") {
 		stmt = strings.TrimSpace(stmt)
