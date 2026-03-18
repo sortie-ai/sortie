@@ -1,0 +1,12 @@
+# Normalize line endings - Go tooling expects LF
+* text=auto eol=lf
+
+# Go-aware diff - shows function names in hunk headers
+*.go diff=golang
+
+# Generated - collapsed in PR diffs, excluded from language stats
+go.sum linguist-generated
+
+# Documentation - excluded from language stats
+docs/** linguist-documentation
+examples/** linguist-documentation
