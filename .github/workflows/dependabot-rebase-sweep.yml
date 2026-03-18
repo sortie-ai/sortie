@@ -1,0 +1,17 @@
+name: Dependabot rebase sweep
+
+on:
+  schedule:
+    - cron: '30 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+  actions: read
+
+jobs:
+  sweep:
+    uses: sortie-ai/shared-workflows/.github/workflows/dependabot-rebase-sweep.yml@v1
+    secrets:
+      bot-token: ${{ secrets.CICDBOT_TOKEN }}
