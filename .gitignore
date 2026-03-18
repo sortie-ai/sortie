@@ -22,7 +22,7 @@ go.work.sum
 .env
 
 # Build output
-sortie
+/sortie
 *.exe
 *.exe~
 *.dll
