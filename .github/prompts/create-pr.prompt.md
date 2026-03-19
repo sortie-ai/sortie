@@ -18,7 +18,7 @@ Commit staged changes and manage pull requests (PR).
 
 ## Task
 
-- Use specific skills to create a branch, commit the changes, and open/change a PR with a meaningful title and description
+- Use `git-commit` skill to create commits, create a branch, and `creating-pr` skill to open/change a PR with a meaningful title and description
 - Incorporate provided details or context about the changes
 - Detect whether you need to create a new PR or update an existing one based on context
 - Stage only relevant files — never `git add -A` without reviewing what would be included

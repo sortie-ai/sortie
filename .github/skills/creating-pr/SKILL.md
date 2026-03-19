@@ -87,7 +87,7 @@ gh pr create \
 
 For drafts, add `--draft`.
 
-Use single quotes for `--body` to avoid shell interpolation.
+MANDATORY: Use single quotes for `--body` to avoid shell interpolation. **NEVER** use double quotes, which can cause variables or special characters in the description to be misinterpreted by the shell.
 
 ### Step 6: Verify
 
