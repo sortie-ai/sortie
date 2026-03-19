@@ -3,6 +3,7 @@ package persistence
 import (
 	"context"
 	"fmt"
+	"math"
 	"path/filepath"
 	"testing"
 )
@@ -747,5 +748,399 @@ func TestAppendRunHistory_DBError(t *testing.T) {
 	_, err := s.AppendRunHistory(context.Background(), newTestRun(1))
 	if err == nil {
 		t.Fatal("expected error from AppendRunHistory on closed DB, got nil")
+	}
+}
+
+// --- Session Metadata Tests ---
+
+func TestUpsertSessionMetadata(t *testing.T) {
+	s := openTestStore(t)
+	migrateOrFatal(t, s)
+	ctx := context.Background()
+
+	pid := "12345"
+	meta := SessionMetadata{
+		IssueID:      "ISS-1",
+		SessionID:    "sess-abc",
+		AgentPID:     &pid,
+		InputTokens:  100,
+		OutputTokens: 50,
+		TotalTokens:  150,
+		UpdatedAt:    "2026-03-19T10:00:00Z",
+	}
+	if err := s.UpsertSessionMetadata(ctx, meta); err != nil {
+		t.Fatalf("UpsertSessionMetadata: %v", err)
+	}
+
+	got, found, err := s.LoadSessionMetadata(ctx, "ISS-1")
+	if err != nil {
+		t.Fatalf("LoadSessionMetadata: %v", err)
+	}
+	if !found {
+		t.Fatal("expected found=true, got false")
+	}
+	if got.IssueID != "ISS-1" {
+		t.Errorf("IssueID = %q, want %q", got.IssueID, "ISS-1")
+	}
+	if got.SessionID != "sess-abc" {
+		t.Errorf("SessionID = %q, want %q", got.SessionID, "sess-abc")
+	}
+	if got.AgentPID == nil {
+		t.Fatal("AgentPID = nil, want non-nil")
+	}
+	if *got.AgentPID != "12345" {
+		t.Errorf("AgentPID = %q, want %q", *got.AgentPID, "12345")
+	}
+	if got.InputTokens != 100 {
+		t.Errorf("InputTokens = %d, want 100", got.InputTokens)
+	}
+	if got.OutputTokens != 50 {
+		t.Errorf("OutputTokens = %d, want 50", got.OutputTokens)
+	}
+	if got.TotalTokens != 150 {
+		t.Errorf("TotalTokens = %d, want 150", got.TotalTokens)
+	}
+	if got.UpdatedAt != "2026-03-19T10:00:00Z" {
+		t.Errorf("UpdatedAt = %q, want %q", got.UpdatedAt, "2026-03-19T10:00:00Z")
+	}
+}
+
+func TestUpsertSessionMetadata_Update(t *testing.T) {
+	s := openTestStore(t)
+	migrateOrFatal(t, s)
+	ctx := context.Background()
+
+	pid1 := "111"
+	meta1 := SessionMetadata{
+		IssueID:      "ISS-1",
+		SessionID:    "sess-1",
+		AgentPID:     &pid1,
+		InputTokens:  10,
+		OutputTokens: 5,
+		TotalTokens:  15,
+		UpdatedAt:    "2026-03-19T10:00:00Z",
+	}
+	if err := s.UpsertSessionMetadata(ctx, meta1); err != nil {
+		t.Fatalf("UpsertSessionMetadata (first): %v", err)
+	}
+
+	pid2 := "222"
+	meta2 := SessionMetadata{
+		IssueID:      "ISS-1",
+		SessionID:    "sess-2",
+		AgentPID:     &pid2,
+		InputTokens:  200,
+		OutputTokens: 100,
+		TotalTokens:  300,
+		UpdatedAt:    "2026-03-19T11:00:00Z",
+	}
+	if err := s.UpsertSessionMetadata(ctx, meta2); err != nil {
+		t.Fatalf("UpsertSessionMetadata (second): %v", err)
+	}
+
+	got, found, err := s.LoadSessionMetadata(ctx, "ISS-1")
+	if err != nil {
+		t.Fatalf("LoadSessionMetadata: %v", err)
+	}
+	if !found {
+		t.Fatal("expected found=true, got false")
+	}
+	if got.SessionID != "sess-2" {
+		t.Errorf("SessionID = %q, want %q", got.SessionID, "sess-2")
+	}
+	if got.AgentPID == nil || *got.AgentPID != "222" {
+		t.Errorf("AgentPID = %v, want %q", got.AgentPID, "222")
+	}
+	if got.InputTokens != 200 {
+		t.Errorf("InputTokens = %d, want 200", got.InputTokens)
+	}
+	if got.OutputTokens != 100 {
+		t.Errorf("OutputTokens = %d, want 100", got.OutputTokens)
+	}
+	if got.TotalTokens != 300 {
+		t.Errorf("TotalTokens = %d, want 300", got.TotalTokens)
+	}
+	if got.UpdatedAt != "2026-03-19T11:00:00Z" {
+		t.Errorf("UpdatedAt = %q, want %q", got.UpdatedAt, "2026-03-19T11:00:00Z")
+	}
+}
+
+func TestUpsertSessionMetadata_NilAgentPID(t *testing.T) {
+	s := openTestStore(t)
+	migrateOrFatal(t, s)
+	ctx := context.Background()
+
+	meta := SessionMetadata{
+		IssueID:      "ISS-1",
+		SessionID:    "sess-abc",
+		AgentPID:     nil,
+		InputTokens:  0,
+		OutputTokens: 0,
+		TotalTokens:  0,
+		UpdatedAt:    "2026-03-19T10:00:00Z",
+	}
+	if err := s.UpsertSessionMetadata(ctx, meta); err != nil {
+		t.Fatalf("UpsertSessionMetadata: %v", err)
+	}
+
+	got, found, err := s.LoadSessionMetadata(ctx, "ISS-1")
+	if err != nil {
+		t.Fatalf("LoadSessionMetadata: %v", err)
+	}
+	if !found {
+		t.Fatal("expected found=true, got false")
+	}
+	if got.AgentPID != nil {
+		t.Errorf("AgentPID = %q, want nil", *got.AgentPID)
+	}
+}
+
+func TestLoadSessionMetadata_NotFound(t *testing.T) {
+	s := openTestStore(t)
+	migrateOrFatal(t, s)
+	ctx := context.Background()
+
+	got, found, err := s.LoadSessionMetadata(ctx, "no-such-id")
+	if err != nil {
+		t.Fatalf("LoadSessionMetadata: %v", err)
+	}
+	if found {
+		t.Fatal("expected found=false, got true")
+	}
+	if got != (SessionMetadata{}) {
+		t.Errorf("expected zero-value SessionMetadata, got %+v", got)
+	}
+}
+
+func TestLoadAllSessionMetadata(t *testing.T) {
+	s := openTestStore(t)
+	migrateOrFatal(t, s)
+	ctx := context.Background()
+
+	entries := []SessionMetadata{
+		{IssueID: "ISS-1", SessionID: "s1", UpdatedAt: "2026-03-19T10:01:00Z"},
+		{IssueID: "ISS-2", SessionID: "s2", UpdatedAt: "2026-03-19T10:03:00Z"},
+		{IssueID: "ISS-3", SessionID: "s3", UpdatedAt: "2026-03-19T10:02:00Z"},
+	}
+	for _, e := range entries {
+		if err := s.UpsertSessionMetadata(ctx, e); err != nil {
+			t.Fatalf("UpsertSessionMetadata(%s): %v", e.IssueID, err)
+		}
+	}
+
+	got, err := s.LoadAllSessionMetadata(ctx)
+	if err != nil {
+		t.Fatalf("LoadAllSessionMetadata: %v", err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("got %d entries, want 3", len(got))
+	}
+
+	// Descending updated_at order: ISS-2 (10:03), ISS-3 (10:02), ISS-1 (10:01).
+	wantIDs := []string{"ISS-2", "ISS-3", "ISS-1"}
+	for i, want := range wantIDs {
+		if got[i].IssueID != want {
+			t.Errorf("got[%d].IssueID = %q, want %q", i, got[i].IssueID, want)
+		}
+	}
+}
+
+func TestLoadAllSessionMetadata_Empty(t *testing.T) {
+	s := openTestStore(t)
+	migrateOrFatal(t, s)
+	ctx := context.Background()
+
+	got, err := s.LoadAllSessionMetadata(ctx)
+	if err != nil {
+		t.Fatalf("LoadAllSessionMetadata: %v", err)
+	}
+	if got == nil {
+		t.Fatal("returned nil slice, want non-nil empty slice")
+	}
+	if len(got) != 0 {
+		t.Fatalf("got %d entries, want 0", len(got))
+	}
+}
+
+func TestDeleteSessionMetadata(t *testing.T) {
+	s := openTestStore(t)
+	migrateOrFatal(t, s)
+	ctx := context.Background()
+
+	e1 := SessionMetadata{IssueID: "ISS-1", SessionID: "s1", UpdatedAt: "2026-03-19T10:00:00Z"}
+	e2 := SessionMetadata{IssueID: "ISS-2", SessionID: "s2", UpdatedAt: "2026-03-19T10:01:00Z"}
+	if err := s.UpsertSessionMetadata(ctx, e1); err != nil {
+		t.Fatalf("UpsertSessionMetadata(ISS-1): %v", err)
+	}
+	if err := s.UpsertSessionMetadata(ctx, e2); err != nil {
+		t.Fatalf("UpsertSessionMetadata(ISS-2): %v", err)
+	}
+
+	if err := s.DeleteSessionMetadata(ctx, "ISS-1"); err != nil {
+		t.Fatalf("DeleteSessionMetadata: %v", err)
+	}
+
+	got, err := s.LoadAllSessionMetadata(ctx)
+	if err != nil {
+		t.Fatalf("LoadAllSessionMetadata: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("got %d entries, want 1", len(got))
+	}
+	if got[0].IssueID != "ISS-2" {
+		t.Errorf("IssueID = %q, want %q", got[0].IssueID, "ISS-2")
+	}
+}
+
+func TestDeleteSessionMetadata_Nonexistent(t *testing.T) {
+	s := openTestStore(t)
+	migrateOrFatal(t, s)
+	ctx := context.Background()
+
+	if err := s.DeleteSessionMetadata(ctx, "no-such-id"); err != nil {
+		t.Fatalf("DeleteSessionMetadata on empty table returned error: %v", err)
+	}
+}
+
+// --- Aggregate Metrics Tests ---
+
+func TestUpsertAggregateMetrics(t *testing.T) {
+	s := openTestStore(t)
+	migrateOrFatal(t, s)
+	ctx := context.Background()
+
+	metrics := AggregateMetrics{
+		Key:            "agent_totals",
+		InputTokens:    5000,
+		OutputTokens:   2400,
+		TotalTokens:    7400,
+		SecondsRunning: 1834.2,
+		UpdatedAt:      "2026-03-19T10:00:00Z",
+	}
+	if err := s.UpsertAggregateMetrics(ctx, metrics); err != nil {
+		t.Fatalf("UpsertAggregateMetrics: %v", err)
+	}
+
+	got, found, err := s.LoadAggregateMetrics(ctx, "agent_totals")
+	if err != nil {
+		t.Fatalf("LoadAggregateMetrics: %v", err)
+	}
+	if !found {
+		t.Fatal("expected found=true, got false")
+	}
+	if got.Key != "agent_totals" {
+		t.Errorf("Key = %q, want %q", got.Key, "agent_totals")
+	}
+	if got.InputTokens != 5000 {
+		t.Errorf("InputTokens = %d, want 5000", got.InputTokens)
+	}
+	if got.OutputTokens != 2400 {
+		t.Errorf("OutputTokens = %d, want 2400", got.OutputTokens)
+	}
+	if got.TotalTokens != 7400 {
+		t.Errorf("TotalTokens = %d, want 7400", got.TotalTokens)
+	}
+	if math.Abs(got.SecondsRunning-1834.2) > 1e-9 {
+		t.Errorf("SecondsRunning = %v, want 1834.2", got.SecondsRunning)
+	}
+	if got.UpdatedAt != "2026-03-19T10:00:00Z" {
+		t.Errorf("UpdatedAt = %q, want %q", got.UpdatedAt, "2026-03-19T10:00:00Z")
+	}
+}
+
+func TestUpsertAggregateMetrics_Update(t *testing.T) {
+	s := openTestStore(t)
+	migrateOrFatal(t, s)
+	ctx := context.Background()
+
+	m1 := AggregateMetrics{
+		Key:            "agent_totals",
+		InputTokens:    100,
+		OutputTokens:   50,
+		TotalTokens:    150,
+		SecondsRunning: 10.5,
+		UpdatedAt:      "2026-03-19T10:00:00Z",
+	}
+	if err := s.UpsertAggregateMetrics(ctx, m1); err != nil {
+		t.Fatalf("UpsertAggregateMetrics (first): %v", err)
+	}
+
+	m2 := AggregateMetrics{
+		Key:            "agent_totals",
+		InputTokens:    5000,
+		OutputTokens:   2400,
+		TotalTokens:    7400,
+		SecondsRunning: 1834.2,
+		UpdatedAt:      "2026-03-19T11:00:00Z",
+	}
+	if err := s.UpsertAggregateMetrics(ctx, m2); err != nil {
+		t.Fatalf("UpsertAggregateMetrics (second): %v", err)
+	}
+
+	got, found, err := s.LoadAggregateMetrics(ctx, "agent_totals")
+	if err != nil {
+		t.Fatalf("LoadAggregateMetrics: %v", err)
+	}
+	if !found {
+		t.Fatal("expected found=true, got false")
+	}
+	if got.InputTokens != 5000 {
+		t.Errorf("InputTokens = %d, want 5000", got.InputTokens)
+	}
+	if got.OutputTokens != 2400 {
+		t.Errorf("OutputTokens = %d, want 2400", got.OutputTokens)
+	}
+	if got.TotalTokens != 7400 {
+		t.Errorf("TotalTokens = %d, want 7400", got.TotalTokens)
+	}
+	if math.Abs(got.SecondsRunning-1834.2) > 1e-9 {
+		t.Errorf("SecondsRunning = %v, want 1834.2", got.SecondsRunning)
+	}
+	if got.UpdatedAt != "2026-03-19T11:00:00Z" {
+		t.Errorf("UpdatedAt = %q, want %q", got.UpdatedAt, "2026-03-19T11:00:00Z")
+	}
+}
+
+func TestLoadAggregateMetrics_NotFound(t *testing.T) {
+	s := openTestStore(t)
+	migrateOrFatal(t, s)
+	ctx := context.Background()
+
+	got, found, err := s.LoadAggregateMetrics(ctx, "no-such-key")
+	if err != nil {
+		t.Fatalf("LoadAggregateMetrics: %v", err)
+	}
+	if found {
+		t.Fatal("expected found=false, got true")
+	}
+	if got != (AggregateMetrics{}) {
+		t.Errorf("expected zero-value AggregateMetrics, got %+v", got)
+	}
+}
+
+func TestUpsertAggregateMetrics_SecondsRunningPrecision(t *testing.T) {
+	s := openTestStore(t)
+	migrateOrFatal(t, s)
+	ctx := context.Background()
+
+	want := 1834.567
+	metrics := AggregateMetrics{
+		Key:            "agent_totals",
+		SecondsRunning: want,
+		UpdatedAt:      "2026-03-19T10:00:00Z",
+	}
+	if err := s.UpsertAggregateMetrics(ctx, metrics); err != nil {
+		t.Fatalf("UpsertAggregateMetrics: %v", err)
+	}
+
+	got, found, err := s.LoadAggregateMetrics(ctx, "agent_totals")
+	if err != nil {
+		t.Fatalf("LoadAggregateMetrics: %v", err)
+	}
+	if !found {
+		t.Fatal("expected found=true, got false")
+	}
+	if math.Abs(got.SecondsRunning-want) > 1e-9 {
+		t.Errorf("SecondsRunning = %v, want %v (diff=%v)", got.SecondsRunning, want, math.Abs(got.SecondsRunning-want))
 	}
 }
