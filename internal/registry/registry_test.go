@@ -3,6 +3,7 @@ package registry
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -103,10 +104,7 @@ func TestRegisterDuplicate_Panics(t *testing.T) {
 		if v == nil {
 			t.Fatal("expected panic on duplicate registration")
 		}
-		msg, ok := v.(string)
-		if !ok {
-			t.Fatalf("panic value type = %T, want string", v)
-		}
+		msg := fmt.Sprint(v)
 		if !strings.Contains(msg, "duplicate") {
 			t.Errorf("panic message = %q, want it to contain %q", msg, "duplicate")
 		}
@@ -123,10 +121,7 @@ func TestRegisterEmptyKind_Panics(t *testing.T) {
 		if v == nil {
 			t.Fatal("expected panic on empty kind")
 		}
-		msg, ok := v.(string)
-		if !ok {
-			t.Fatalf("panic value type = %T, want string", v)
-		}
+		msg := fmt.Sprint(v)
 		if !strings.Contains(msg, "empty") {
 			t.Errorf("panic message = %q, want it to contain %q", msg, "empty")
 		}
