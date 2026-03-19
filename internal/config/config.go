@@ -38,6 +38,7 @@ type TrackerConfig struct {
 	Project        string
 	ActiveStates   []string
 	TerminalStates []string
+	QueryFilter    string
 }
 
 // PollingConfig holds the poll loop timing.
@@ -142,6 +143,7 @@ func buildTrackerConfig(m map[string]any) TrackerConfig {
 		// normalizes both sides to lowercase when comparing.
 		ActiveStates:   extractStringSlice(mapVal(m, "active_states")),
 		TerminalStates: extractStringSlice(mapVal(m, "terminal_states")),
+		QueryFilter:    extractString(m, "query_filter"),
 	}
 }
 

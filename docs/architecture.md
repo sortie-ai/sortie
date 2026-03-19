@@ -395,6 +395,11 @@ Fields:
 - `terminal_states` (list of strings)
   - Default values are adapter-defined; must be configured explicitly when the adapter's defaults
     differ from deployment expectations.
+- `query_filter` (string, optional)
+  - Adapter-defined query fragment appended to base candidate and terminal-state queries.
+  - The orchestrator passes this value to the tracker adapter without interpretation.
+  - The adapter is responsible for safe integration into its native query language.
+  - Default: empty string (no additional filtering).
 
 #### 5.3.2 `polling` (object)
 
@@ -606,6 +611,7 @@ This section is intentionally redundant so a coding agent can implement the conf
 - `tracker.project`: string, required when the tracker adapter requires project scoping
 - `tracker.active_states`: list of strings, adapter-defined defaults
 - `tracker.terminal_states`: list of strings, adapter-defined defaults
+- `tracker.query_filter`: string, optional, default empty (adapter-defined filter fragment)
 - `polling.interval_ms`: integer, default `30000`
 - `workspace.root`: path, default `<system-temp>/sortie_workspaces`
 - `worker.ssh_hosts` (extension): list of SSH host strings, optional; when omitted, work runs
@@ -1644,8 +1650,9 @@ Possible hardening measures include:
   configuration.
 - Adding external isolation layers such as OS/container/VM sandboxing, network restrictions, or
   separate credentials beyond the built-in agent policy controls.
-- Filtering which issues, projects, teams, labels, or other tracker sources are eligible for
-  dispatch so untrusted or out-of-scope tasks do not automatically reach the agent.
+- Using `tracker.query_filter` to restrict which issues are eligible for dispatch
+  (e.g., by label, component, epic, or other tracker-native criteria) so untrusted or
+  out-of-scope tasks do not automatically reach the agent.
 - Scoping the optional `tracker_api` tool so it can only read or mutate data inside the intended
   project scope, rather than exposing general tracker access.
 - Reducing the set of client-side tools, credentials, filesystem paths, and network destinations
@@ -1964,6 +1971,11 @@ Unless otherwise noted, Sections 17.1 through 17.7 are `Core Conformance`. Bulle
 - Labels are normalized to lowercase
 - Issue state refresh by ID returns minimal normalized issues
 - Error mapping covers transport errors, auth errors, API errors, and malformed payloads
+- `query_filter` is appended to candidate fetch JQL when non-empty
+- `query_filter` is appended to terminal-state fetch JQL when non-empty
+- `query_filter` is NOT appended to state-refresh-by-IDs JQL
+- Empty `query_filter` produces the same JQL as before (no trailing AND)
+- `query_filter` containing OR operators is wrapped in parentheses
 - SQLite persistence layer correctly saves and restores retry entries across simulated restart
 - Startup recovery from SQLite reconstructs retry timers with correct remaining delays
 - Run history is queryable after session completion
