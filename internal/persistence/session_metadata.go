@@ -84,7 +84,7 @@ func (s *Store) LoadAllSessionMetadata(ctx context.Context) ([]SessionMetadata, 
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT issue_id, session_id, agent_pid, input_tokens, output_tokens, total_tokens, updated_at
 		FROM session_metadata
-		ORDER BY updated_at DESC`)
+		ORDER BY updated_at DESC, issue_id ASC`)
 	if err != nil {
 		return nil, fmt.Errorf("load all session metadata: %w", err)
 	}
