@@ -143,24 +143,24 @@ would be relevant.
 
 `domain.Issue` field → Jira REST response path:
 
-| `domain.Issue` field | Jira field                        | Notes                           |
-| -------------------- | --------------------------------- | ------------------------------- |
-| `ID`                 | `id` (string)                     | Numeric ID as string            |
-| `Identifier`         | `key` (string)                    | e.g. `"PROJ-123"`               |
-| `Title`              | `fields.summary`                  |                                 |
-| `Description`        | `fields.description` (ADF)        | Flatten ADF → plain text        |
+| `domain.Issue` field | Jira field                        | Notes                                   |
+| -------------------- | --------------------------------- | --------------------------------------- |
+| `ID`                 | `id` (string)                     | Numeric ID as string                    |
+| `Identifier`         | `key` (string)                    | e.g. `"PROJ-123"`                       |
+| `Title`              | `fields.summary`                  |                                         |
+| `Description`        | `fields.description` (ADF)        | Flatten ADF → plain text                |
 | `Priority`           | `fields.priority.id` (string)     | e.g. `"3"` → int 3; use `id` not `name` |
-| `State`              | `fields.status.name`              | Preserve original casing        |
-| `BranchName`         | —                                 | See dev-status note below       |
-| `URL`                | `{endpoint}/browse/{key}`         | Constructed                     |
-| `Labels`             | `fields.labels` (string array)    | Lowercase each                  |
-| `Assignee`           | `fields.assignee.displayName`     | Nil → empty string              |
-| `IssueType`          | `fields.issuetype.name`           |                                 |
-| `Parent`             | `fields.parent.id`, `.parent.key` | Nil when absent                 |
-| `Comments`           | Separate endpoint                 | ADF → plain text                |
-| `BlockedBy`          | `fields.issuelinks[]` (filtered)  | See blocker extraction below    |
-| `CreatedAt`          | `fields.created` (ISO-8601)       |                                 |
-| `UpdatedAt`          | `fields.updated` (ISO-8601)       |                                 |
+| `State`              | `fields.status.name`              | Preserve original casing                |
+| `BranchName`         | —                                 | See dev-status note below               |
+| `URL`                | `{endpoint}/browse/{key}`         | Constructed                             |
+| `Labels`             | `fields.labels` (string array)    | Lowercase each                          |
+| `Assignee`           | `fields.assignee.displayName`     | Nil → empty string                      |
+| `IssueType`          | `fields.issuetype.name`           |                                         |
+| `Parent`             | `fields.parent.id`, `.parent.key` | Nil when absent                         |
+| `Comments`           | Separate endpoint                 | ADF → plain text                        |
+| `BlockedBy`          | `fields.issuelinks[]` (filtered)  | See blocker extraction below            |
+| `CreatedAt`          | `fields.created` (ISO-8601)       |                                         |
+| `UpdatedAt`          | `fields.updated` (ISO-8601)       |                                         |
 
 ### BranchName via dev-status API
 
@@ -181,11 +181,16 @@ Filter for links where:
 - Extract `inwardIssue.key` as the blocker identifier.
 
 Example: if issue A blocks issue B, then on issue B the link looks like:
+
 ```json
-{ "type": { "name": "Blocks", "inward": "is blocked by" }, "inwardIssue": { "key": "A-1" } }
+{
+  "type": { "name": "Blocks", "inward": "is blocked by" },
+  "inwardIssue": { "key": "A-1" }
+}
 ```
 
 Caveats:
+
 - The link type name "Blocks" may be renamed by Jira admins.
 - Verify link direction against live Jira responses during adapter implementation;
   the inward/outward semantics depend on which issue the link is read from.
