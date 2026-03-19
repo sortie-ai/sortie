@@ -48,7 +48,7 @@ func (s *Store) LoadRetryEntries(ctx context.Context) ([]RetryEntry, error) {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT issue_id, identifier, attempt, due_at_ms, error
 		FROM retry_entries
-		ORDER BY due_at_ms ASC`)
+		ORDER BY due_at_ms ASC, issue_id ASC`)
 	if err != nil {
 		return nil, fmt.Errorf("load retry entries: %w", err)
 	}
