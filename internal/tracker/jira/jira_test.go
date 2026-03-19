@@ -768,7 +768,7 @@ func TestFetchIssueComments_NotFound(t *testing.T) {
 
 	a := mustAdapter(t, validConfig(srv.URL))
 	_, err := a.FetchIssueComments(context.Background(), "PROJ-999")
-	assertTrackerErrorKind(t, err, domain.ErrTrackerAPI)
+	assertTrackerErrorKind(t, err, domain.ErrTrackerPayload)
 }
 
 // --- Full lifecycle integration test ---

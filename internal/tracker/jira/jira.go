@@ -273,6 +273,12 @@ func (a *JiraAdapter) fetchComments(ctx context.Context, issueID string) ([]doma
 
 		body, err := a.client.do(ctx, "GET", "/rest/api/3/issue/"+issueID+"/comment", params)
 		if err != nil {
+			if isNotFound(err) {
+				return nil, &domain.TrackerError{
+					Kind:    domain.ErrTrackerPayload,
+					Message: fmt.Sprintf("issue not found: %s", issueID),
+				}
+			}
 			return nil, err
 		}
 
