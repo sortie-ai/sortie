@@ -85,9 +85,8 @@ func TestNewFileAdapter_YAMLAnySliceExtraction(t *testing.T) {
 	// YAML decoders produce []any, not []string. Verify the constructor
 	// handles this without panic and lowercases state values.
 	config := map[string]any{
-		"path":            fixture("basic.json"),
-		"active_states":   []any{"To Do", "In Progress"},
-		"terminal_states": []any{"Done"},
+		"path":          fixture("basic.json"),
+		"active_states": []any{"To Do", "In Progress"},
 	}
 	a, err := NewFileAdapter(config)
 	if err != nil {
@@ -99,9 +98,6 @@ func TestNewFileAdapter_YAMLAnySliceExtraction(t *testing.T) {
 	}
 	if !fa.activeStates["in progress"] {
 		t.Error("active_states missing 'in progress'")
-	}
-	if !fa.terminalStates["done"] {
-		t.Error("terminal_states missing 'done'")
 	}
 }
 

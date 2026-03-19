@@ -4,7 +4,7 @@
 // priority (non-integers become nil), and nil-vs-empty comments
 // semantics. Intended for development and testing where a live
 // tracker API is unavailable. Registered under kind "file" via
-// [init].
+// an init function.
 package file
 
 import (
@@ -30,9 +30,8 @@ var _ domain.TrackerAdapter = (*FileAdapter)(nil)
 // call to support test scenarios that modify the fixture between
 // operations. Safe for concurrent use.
 type FileAdapter struct {
-	path           string
-	activeStates   map[string]bool
-	terminalStates map[string]bool
+	path         string
+	activeStates map[string]bool
 }
 
 // NewFileAdapter creates a [FileAdapter] from adapter configuration.
@@ -43,9 +42,6 @@ type FileAdapter struct {
 //   - "active_states" ([]any holding strings): states considered active
 //     for [FileAdapter.FetchCandidateIssues]. If empty, all issues are
 //     candidates.
-//   - "terminal_states" ([]any holding strings): states considered
-//     terminal for [FileAdapter.FetchIssuesByStates]. If empty, no
-//     issues match terminal queries.
 //
 // Returns a [*domain.TrackerError] with Kind [domain.ErrTrackerPayload]
 // if "path" is missing or empty.
@@ -59,9 +55,8 @@ func NewFileAdapter(config map[string]any) (domain.TrackerAdapter, error) {
 	}
 
 	return &FileAdapter{
-		path:           path,
-		activeStates:   toStringSet(extractStringSlice(config["active_states"])),
-		terminalStates: toStringSet(extractStringSlice(config["terminal_states"])),
+		path:         path,
+		activeStates: toStringSet(extractStringSlice(config["active_states"])),
 	}, nil
 }
 
@@ -143,6 +138,10 @@ func (a *FileAdapter) FetchIssuesByStates(_ context.Context, states []string) ([
 // FetchIssueStatesByIDs returns the current state for each requested
 // issue ID. Issues not found in the file are omitted from the map.
 func (a *FileAdapter) FetchIssueStatesByIDs(_ context.Context, issueIDs []string) (map[string]string, error) {
+	if len(issueIDs) == 0 {
+		return map[string]string{}, nil
+	}
+
 	raws, err := loadIssues(a.path)
 	if err != nil {
 		return nil, err
