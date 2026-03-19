@@ -356,16 +356,12 @@ func TestLoadRetryEntries_ScanError(t *testing.T) {
 	migrateOrFatal(t, s)
 	ctx := context.Background()
 
-	// Insert a row with wrong column count by adding data directly to a
-	// corrupted schema. Drop and recreate retry_entries with fewer columns
-	// so the SELECT in LoadRetryEntries (which expects 5 columns) fails on Scan.
-	if _, err := s.db.ExecContext(ctx, `DROP TABLE retry_entries`); err != nil {
-		t.Fatalf("DROP TABLE: %v", err)
-	}
-	if _, err := s.db.ExecContext(ctx, `CREATE TABLE retry_entries (issue_id TEXT PRIMARY KEY)`); err != nil {
-		t.Fatalf("CREATE TABLE: %v", err)
-	}
-	if _, err := s.db.ExecContext(ctx, `INSERT INTO retry_entries (issue_id) VALUES ('ISS-1')`); err != nil {
+	// Insert a row with a non-numeric value in the attempt column so that
+	// rows.Scan fails on type conversion (attempt is scanned into an int).
+	// We bypass SaveRetryEntry to inject the invalid data directly.
+	if _, err := s.db.ExecContext(ctx,
+		`INSERT INTO retry_entries (issue_id, identifier, attempt, due_at_ms, error)
+		VALUES ('ISS-1', 'PROJ-1', 'not-a-number', 1000, NULL)`); err != nil {
 		t.Fatalf("INSERT: %v", err)
 	}
 
