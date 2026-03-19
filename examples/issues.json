@@ -1,0 +1,116 @@
+[
+  {
+    "id": "10001",
+    "identifier": "PROJ-1",
+    "title": "Implement OAuth2 login flow",
+    "description": "Add OAuth2 login with SSO support for enterprise accounts.",
+    "priority": 2,
+    "state": "To Do",
+    "branch_name": "feature/PROJ-1",
+    "url": "https://tracker.example.com/PROJ-1",
+    "labels": ["feature", "Auth"],
+    "assignee": "alice",
+    "issue_type": "Story",
+    "parent": {
+      "id": "10000",
+      "identifier": "PROJ-0"
+    },
+    "comments": [
+      {
+        "id": "c1",
+        "author": "bob",
+        "body": "Needs SSO support for SAML providers.",
+        "created_at": "2026-03-01T10:00:00Z"
+      },
+      {
+        "id": "c2",
+        "author": "charlie",
+        "body": "Token refresh must handle clock skew.",
+        "created_at": "2026-03-02T14:30:00Z"
+      }
+    ],
+    "blocked_by": [
+      {
+        "id": "10002",
+        "identifier": "PROJ-2",
+        "state": "In Progress"
+      }
+    ],
+    "created_at": "2026-02-28T09:00:00Z",
+    "updated_at": "2026-03-02T14:30:00Z"
+  },
+  {
+    "id": "10002",
+    "identifier": "PROJ-2",
+    "title": "Fix database connection pool exhaustion",
+    "description": "Under sustained load the pool hits max_open_conns and new queries block indefinitely.",
+    "priority": 1,
+    "state": "In Progress",
+    "branch_name": "fix/PROJ-2",
+    "url": "https://tracker.example.com/PROJ-2",
+    "labels": ["bug", "database"],
+    "assignee": "charlie",
+    "issue_type": "Bug",
+    "parent": null,
+    "comments": [],
+    "blocked_by": [],
+    "created_at": "2026-02-27T08:00:00Z",
+    "updated_at": "2026-03-02T14:00:00Z"
+  },
+  {
+    "id": "10003",
+    "identifier": "PROJ-3",
+    "title": "Update Go module dependencies",
+    "description": "Routine dependency update for Q1 2026.",
+    "priority": 3,
+    "state": "Done",
+    "branch_name": "",
+    "url": "https://tracker.example.com/PROJ-3",
+    "labels": [],
+    "assignee": "",
+    "issue_type": "Task",
+    "parent": null,
+    "comments": null,
+    "blocked_by": [],
+    "created_at": "2026-02-26T07:00:00Z",
+    "updated_at": "2026-03-03T16:00:00Z"
+  },
+  {
+    "id": "10004",
+    "identifier": "PROJ-4",
+    "title": "Add metrics dashboard",
+    "description": "",
+    "priority": null,
+    "state": "Backlog",
+    "branch_name": "",
+    "url": "https://tracker.example.com/PROJ-4",
+    "labels": ["Enhancement"],
+    "assignee": "",
+    "issue_type": "Story",
+    "parent": {
+      "id": "10000",
+      "identifier": "PROJ-0"
+    },
+    "comments": null,
+    "blocked_by": [
+      {
+        "id": "10001",
+        "identifier": "PROJ-1",
+        "state": "To Do"
+      },
+      {
+        "id": "10002",
+        "identifier": "PROJ-2",
+        "state": "In Progress"
+      }
+    ],
+    "created_at": "2026-03-01T11:00:00Z",
+    "updated_at": "2026-03-01T11:00:00Z"
+  },
+  {
+    "id": "10005",
+    "identifier": "PROJ-5",
+    "title": "Minimal issue with only required fields",
+    "state": "To Do"
+  }
+]
