@@ -111,6 +111,10 @@ Request only `status` field to minimize payload. Used for active-run reconciliat
 
 Note: `id IN (...)` uses numeric internal IDs; `key IN (...)` uses project-prefixed keys.
 
+With many running issues (50+), the `key IN (...)` JQL in a GET URL may exceed URI length
+limits. If this becomes an issue, fall back to `POST /rest/api/3/search` with the JQL in
+the request body (offset-based pagination).
+
 ### 5. `FetchIssueComments` → `GET /rest/api/3/issue/{issueIdOrKey}/comment`
 
 Query params: `startAt`, `maxResults`, `orderBy`
@@ -145,9 +149,9 @@ would be relevant.
 | `Identifier`         | `key` (string)                    | e.g. `"PROJ-123"`               |
 | `Title`              | `fields.summary`                  |                                 |
 | `Description`        | `fields.description` (ADF)        | Flatten ADF → plain text        |
-| `Priority`           | `fields.priority.id`              | Parse to int; non-numeric → nil |
+| `Priority`           | `fields.priority.id` (string)     | e.g. `"3"` → int 3; use `id` not `name` |
 | `State`              | `fields.status.name`              | Preserve original casing        |
-| `BranchName`         | —                                 | Not natively available          |
+| `BranchName`         | —                                 | See dev-status note below       |
 | `URL`                | `{endpoint}/browse/{key}`         | Constructed                     |
 | `Labels`             | `fields.labels` (string array)    | Lowercase each                  |
 | `Assignee`           | `fields.assignee.displayName`     | Nil → empty string              |
@@ -158,16 +162,33 @@ would be relevant.
 | `CreatedAt`          | `fields.created` (ISO-8601)       |                                 |
 | `UpdatedAt`          | `fields.updated` (ISO-8601)       |                                 |
 
+### BranchName via dev-status API
+
+Not available through the core REST API v3. However, Jira Cloud exposes development
+information via `GET /rest/dev-status/latest/issue/detail?issueId={id}&applicationType=GitHub`
+when a source control tool (GitHub, Bitbucket) is connected. This returns branches, commits,
+and PRs linked to the issue. Not required for initial implementation but noted as a potential
+future source.
+
 ### Blocker extraction from `issuelinks`
 
-The "Blocks" link type has `type.inward = "Blocked by"` and `type.outward = "Blocks"`.
+The "Blocks" link type has `type.inward = "is blocked by"` and `type.outward = "blocks"`.
 
-To find issues blocking the current issue, filter for links where:
+When reading links from the **blocked** issue, the blocking issue appears in `inwardIssue`.
+Filter for links where:
 
-- `type.name == "Blocks"` AND `outwardIssue` is present (meaning another issue blocks this one)
-- Extract `outwardIssue.key` as the blocker identifier.
+- `type.name == "Blocks"` AND `inwardIssue` is present
+- Extract `inwardIssue.key` as the blocker identifier.
 
-Note: The link type name "Blocks" may be renamed by Jira admins.
+Example: if issue A blocks issue B, then on issue B the link looks like:
+```json
+{ "type": { "name": "Blocks", "inward": "is blocked by" }, "inwardIssue": { "key": "A-1" } }
+```
+
+Caveats:
+- The link type name "Blocks" may be renamed by Jira admins.
+- Verify link direction against live Jira responses during adapter implementation;
+  the inward/outward semantics depend on which issue the link is read from.
 
 ### ADF (Atlassian Document Format) flattening
 
