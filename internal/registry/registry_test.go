@@ -21,8 +21,6 @@ func dummyConstructor() testConstructor {
 	return func() string { return "marker" }
 }
 
-// --- Phase 2.1: Core Registry[T] behavior tests ---
-
 func TestRegisterAndGet(t *testing.T) {
 	r := newTestRegistry()
 	r.Register("alpha", dummyConstructor())
@@ -191,8 +189,6 @@ func TestRegistryError_Format_WithAvailable(t *testing.T) {
 	}
 }
 
-// --- Phase 2.2: Domain integration test ---
-
 // Compile-time interface satisfaction check.
 var _ domain.TrackerAdapter = (*mockTrackerAdapter)(nil)
 
@@ -242,8 +238,6 @@ func TestTrackerConstructor_Integration(t *testing.T) {
 		t.Errorf("FetchCandidateIssues returned %v, want nil", issues)
 	}
 }
-
-// --- Phase 2.3: Package-level Trackers instance ---
 
 func TestPackageLevelTrackers_Usable(t *testing.T) {
 	if Trackers == nil {
