@@ -13,6 +13,8 @@ description: >
 
 Create and maintain JSON issue files consumed by the Sortie file-based tracker adapter (`internal/tracker/file`). The adapter reads a JSON array of issue objects from disk and normalizes them into `domain.Issue` values.
 
+> **Authoritative specification:** `docs/file-based-tasks-spec.md` at the project root — the formal RFC defining the file format, all normalization rules, adapter operation contracts, and a JSON Schema. This skill is an operational guide; the spec is the source of truth for edge cases and conformance.
+
 ## Schema
 
 The file is a JSON array. Each element is an issue object. See `examples/issues.json` for a canonical reference with all features demonstrated.
