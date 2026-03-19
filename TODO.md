@@ -153,12 +153,12 @@ Define the normalized issue model, the tracker adapter interface, implement the 
 registry, and implement the first adapter (Jira). No orchestration logic yet - just the
 ability to talk to a tracker.
 
-- [ ] 3.1 Define the normalized `Issue` struct with all fields from architecture Section 4.1.1.
+- [x] 3.1 Define the normalized `Issue` struct with all fields from architecture Section 4.1.1.
       Define the `TrackerAdapter` interface with the five required operations (Section 11.1).
       Place these in `internal/domain/` or equivalent.
       **Verify:** code compiles, interfaces are importable from other packages.
 
-- [ ] 3.2 Implement the adapter registry: a map of `kind` string to adapter constructor
+- [x] 3.2 Implement the adapter registry: a map of `kind` string to adapter constructor
       function, with `Register` and `Get` methods. This registry is shared by tracker adapters
       and agent adapters (or one registry per dimension). The orchestrator uses this to look up
       adapters by `tracker.kind` and `agent.kind` from config. See architecture Section 6.3
