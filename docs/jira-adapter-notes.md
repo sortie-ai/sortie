@@ -48,7 +48,8 @@ Relevant only if Sortie adds Data Center support in the future.
 | `tracker.project`  | Jira project key, e.g. `SORT`                   |
 
 Encoding `email:token` in a single field follows curl convention (`-u email:token`) and avoids
-adding Jira-specific config keys to the core schema.
+adding Jira-specific config keys to the core schema. The value may be provided via environment
+variable indirection (e.g. `$JIRA_API_KEY`) if the config layer supports it.
 
 **CAPTCHA caveat:** After several failed logins Jira triggers CAPTCHA and returns
 `X-Seraph-LoginReason: AUTHENTICATION_DENIED`. The adapter should detect this header and
@@ -229,6 +230,9 @@ ADF flattening gives the adapter full control over text extraction.
 - First request: omit `nextPageToken`, set `maxResults` (recommend `50`).
 - Subsequent requests: pass the `nextPageToken` from the previous response.
 - Stop when `nextPageToken` is absent from the response.
+- If the response indicates more results (e.g. `total > startAt + len(issues)`) but
+  `nextPageToken` is missing, raise `tracker_missing_end_cursor` rather than silently
+  treating pagination as complete.
 
 Note: `POST /rest/api/3/search` uses offset-based (`startAt`/`total`) but is deprecated.
 Use `GET` with cursor-based pagination.
@@ -305,4 +309,4 @@ HTTP status → error category:
 - **`tracker.active_states`:** Common defaults: `["Backlog", "Selected for Development", "In Progress"]`.
 - **`tracker.terminal_states`:** Common defaults: `["Done", "Cancelled"]`.
 - **JQL quoting:** Always quote string values in JQL to handle special characters in state names.
-- **Network timeout:** 30,000 ms.
+- **Network timeout:** 30000 ms.
