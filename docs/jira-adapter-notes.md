@@ -26,8 +26,8 @@ The recommended method for external apps accessing Jira on behalf of users. Uses
 authorization code grant type (3LO, Three-Legged OAuth). More secure as it restricts
 scope and doesn't require sharing user credentials.
 
-Not suitable for Sortie. OAuth 2.0 requires an interactive authorization flow and
-callback URL, which a headless background service cannot provide.
+Not used by Sortie. Sortie runs as a headless background service and does not implement
+the interactive 3LO authorization flow or user-facing callback required by this pattern.
 
 ### Personal Access Tokens (Data Center / Server)
 
@@ -40,11 +40,11 @@ Relevant only if Sortie adds Data Center support in the future.
 
 ### Config mapping
 
-| Config field       | Value                                           |
-| ------------------ | ----------------------------------------------- |
-| `tracker.endpoint` | `https://<site>.atlassian.net` (no trailing /)  |
-| `tracker.api_key`  | `email:api_token`; adapter splits on first `:`  |
-| `tracker.project`  | Jira project key, e.g. `SORT`                   |
+| Config field       | Value                                          |
+| ------------------ | ---------------------------------------------- |
+| `tracker.endpoint` | `https://<site>.atlassian.net` (no trailing /) |
+| `tracker.api_key`  | `email:api_token`; adapter splits on first `:` |
+| `tracker.project`  | Jira project key, e.g. `SORT`                  |
 
 Encoding `email:token` in a single field follows curl convention (`-u email:token`) and avoids
 adding Jira-specific config keys to the core schema. The value may be provided via environment
@@ -191,7 +191,9 @@ Example: if issue A blocks issue B, then on issue B the link looks like:
 
 Caveats:
 
-- The link type name "Blocks" may be renamed by Jira admins.
+- The link type name "Blocks" may be renamed by Jira admins. The adapter should make
+  the expected link type name configurable (or at minimum, a named constant) so it can
+  be adjusted without code changes.
 - Verify link direction against live Jira responses during adapter implementation;
   the inward/outward semantics depend on which issue the link is read from.
 
