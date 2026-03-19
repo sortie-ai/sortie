@@ -17,9 +17,9 @@ fmt:
 lint:
 	$(LINT) run ./...
 
-## test: run all tests
+## test: run tests (use PKG=./path/to/pkg and/or RUN=TestName to filter)
 test:
-	$(GO) test -race -count=1 ./...
+	$(GO) test -race -count=1 $(if $(PKG),$(PKG),./...) $(if $(RUN),-run $(RUN),)
 
 ## build: compile the sortie binary
 build:
