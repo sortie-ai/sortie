@@ -3,6 +3,7 @@ package registry
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/sortie-ai/sortie/internal/domain"
@@ -59,7 +60,7 @@ func TestGetUnknownKind_Empty(t *testing.T) {
 	if len(re.Available) != 0 {
 		t.Errorf("len(Available) = %d, want 0", len(re.Available))
 	}
-	if msg := err.Error(); !contains(msg, "no adapters registered") {
+	if msg := err.Error(); !strings.Contains(msg, "no adapters registered") {
 		t.Errorf("error message = %q, want it to contain %q", msg, "no adapters registered")
 	}
 }
@@ -90,7 +91,7 @@ func TestGetUnknownKind_ListsAvailable(t *testing.T) {
 	}
 
 	msg := err.Error()
-	if !contains(msg, "alpha") || !contains(msg, "beta") {
+	if !strings.Contains(msg, "alpha") || !strings.Contains(msg, "beta") {
 		t.Errorf("error message = %q, want it to contain both %q and %q", msg, "alpha", "beta")
 	}
 }
@@ -108,7 +109,7 @@ func TestRegisterDuplicate_Panics(t *testing.T) {
 		if !ok {
 			t.Fatalf("panic value type = %T, want string", v)
 		}
-		if !contains(msg, "duplicate") {
+		if !strings.Contains(msg, "duplicate") {
 			t.Errorf("panic message = %q, want it to contain %q", msg, "duplicate")
 		}
 	}()
@@ -128,7 +129,7 @@ func TestRegisterEmptyKind_Panics(t *testing.T) {
 		if !ok {
 			t.Fatalf("panic value type = %T, want string", v)
 		}
-		if !contains(msg, "empty") {
+		if !strings.Contains(msg, "empty") {
 			t.Errorf("panic message = %q, want it to contain %q", msg, "empty")
 		}
 	}()
@@ -252,18 +253,4 @@ func TestPackageLevelTrackers_Usable(t *testing.T) {
 	if kinds == nil {
 		t.Fatal("Trackers.Kinds() returned nil, want non-nil slice")
 	}
-}
-
-// contains reports whether s contains substr.
-func contains(s, substr string) bool {
-	return len(s) >= len(substr) && containsAt(s, substr)
-}
-
-func containsAt(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
 }
