@@ -33,7 +33,7 @@ func TestToTemplateMap_FullyPopulated(t *testing.T) {
 
 	m := iss.ToTemplateMap()
 
-	// Verify all 18 keys exist.
+	// Verify all 16 keys exist.
 	expectedKeys := []string{
 		"id", "identifier", "title", "description", "priority", "state",
 		"branch_name", "url", "labels", "assignee", "issue_type", "parent",
@@ -246,5 +246,28 @@ func TestToTemplateMap_BlockedByEmptyState(t *testing.T) {
 	}
 	if blockers[0]["state"] != "" {
 		t.Errorf("blocked_by[0].state = %q, want empty string", blockers[0]["state"])
+	}
+}
+
+func TestToTemplateMap_NilLabelsNormalized(t *testing.T) {
+	iss := &Issue{
+		ID:         "1",
+		Identifier: "X-1",
+		Title:      "No labels",
+		State:      "Open",
+		Labels:     nil,
+		BlockedBy:  []BlockerRef{},
+	}
+	m := iss.ToTemplateMap()
+
+	labels, ok := m["labels"].([]string)
+	if !ok {
+		t.Fatalf("labels type = %T, want []string", m["labels"])
+	}
+	if labels == nil {
+		t.Error("labels is nil, want non-nil empty slice")
+	}
+	if len(labels) != 0 {
+		t.Errorf("len(labels) = %d, want 0", len(labels))
 	}
 }

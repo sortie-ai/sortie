@@ -154,6 +154,11 @@ func (iss *Issue) ToTemplateMap() map[string]any {
 		}
 	}
 
+	labels := iss.Labels
+	if labels == nil {
+		labels = []string{}
+	}
+
 	return map[string]any{
 		"id":          iss.ID,
 		"identifier":  iss.Identifier,
@@ -163,7 +168,7 @@ func (iss *Issue) ToTemplateMap() map[string]any {
 		"state":       iss.State,
 		"branch_name": iss.BranchName,
 		"url":         iss.URL,
-		"labels":      iss.Labels,
+		"labels":      labels,
 		"assignee":    iss.Assignee,
 		"issue_type":  iss.IssueType,
 		"parent":      parent,
