@@ -3,7 +3,7 @@ name: createPr
 description: Commit staged changes, create or update a pull request
 argument-hint: PR details or branch/commit context
 agent: agent
-model: Claude Sonnet 4.5 (copilot)
+model: Claude Sonnet 4.6 (copilot)
 tools:
   - 'execute/getTerminalOutput'
   - 'execute/runInTerminal'
@@ -43,6 +43,12 @@ Commit staged changes and manage pull requests (PR).
 - Map changes to template sections
 - Create PR body matching template structure
 - Verify sections match before running `gh pr create`
+
+## PR Description Content Rules
+
+- **DO NOT** reference `docs/architecture.md`, `docs/decisions/`, section numbers, ADR numbers, or TODO IDs (e.g. "task 2.4", "Section 16.6", "ADR-0002") in the PR description. Those belong in specs and plans, not in the git history.
+- **DO NOT** add an "Implementation Details" or "References" section beyond what the template defines.
+- **ONLY** fill in the sections defined by the PR template — nothing more.
 
 ## Constraints
 
