@@ -4,12 +4,6 @@
     "preToolUse": [
       {
         "type": "command",
-        "bash": "./scripts/hooks/makefile-only.sh",
-        "timeoutSec": 10,
-        "comment": "Enforce make targets instead of raw go commands"
-      },
-      {
-        "type": "command",
         "bash": "./scripts/hooks/no-cgo.sh",
         "timeoutSec": 10,
         "comment": "Block CGo dependencies and mattn/go-sqlite3"
