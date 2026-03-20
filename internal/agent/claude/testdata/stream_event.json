@@ -1,0 +1,14 @@
+{
+  "type": "stream_event",
+  "event": {
+    "type": "content_block_delta",
+    "index": 0,
+    "delta": {
+      "type": "text_delta",
+      "text": "partial text..."
+    }
+  },
+  "uuid": "evt-stream-001",
+  "session_id": "abc12345-def6-4789-abcd-ef0123456789",
+  "parent_tool_use_id": null
+}

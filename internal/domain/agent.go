@@ -155,6 +155,14 @@ type StartSessionParams struct {
 	// AgentConfig is the typed agent configuration from WORKFLOW.md.
 	// Adapters read kind-specific fields (command, timeouts, etc.).
 	AgentConfig AgentConfig
+
+	// ResumeSessionID is the session ID from a previous worker
+	// attempt for the same issue. When non-empty, the adapter
+	// resumes the existing conversation instead of starting fresh.
+	// Used for continuation retries after normal worker exit.
+	// Adapters that do not support session continuity ignore this
+	// field.
+	ResumeSessionID string
 }
 
 // RunTurnParams contains the inputs for [AgentAdapter.RunTurn].

@@ -1,0 +1,31 @@
+{
+  "type": "assistant",
+  "message": {
+    "id": "msg_02BFDUDYJgAACzvnptvVoYEZ",
+    "type": "message",
+    "role": "assistant",
+    "content": [
+      {
+        "type": "tool_use",
+        "id": "toolu_02B09q90qw90lq917835lhkm",
+        "name": "Bash",
+        "input": {
+          "command": "go test ./..."
+        }
+      },
+      {
+        "type": "tool_result",
+        "tool_use_id": "toolu_02B09q90qw90lq917835lhkm",
+        "content": "ok  \tgithub.com/example/project\t0.042s",
+        "is_error": false
+      }
+    ],
+    "model": "claude-sonnet-4-20250514",
+    "stop_reason": "tool_use",
+    "usage": {
+      "input_tokens": 14000,
+      "output_tokens": 200
+    }
+  },
+  "session_id": "abc12345-def6-4789-abcd-ef0123456789"
+}

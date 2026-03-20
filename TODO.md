@@ -207,12 +207,12 @@ orchestration logic yet - just the ability to launch an agent, run a turn, and r
       `docs/claude-code-adapter-notes.md`.
       **Verify:** document exists with CLI reference and observed behavior.
 
-- [ ] 4.3 Implement a mock agent adapter for testing. Simulates session start, emits canned
+- [x] 4.3 Implement a mock agent adapter for testing. Simulates session start, emits canned
       events on `RunTurn` (including token_usage events), supports configurable success/failure
       outcomes. Register in the adapter registry under kind `mock`.
       **Verify:** unit tests demonstrate the mock adapter satisfying the interface contract.
 
-- [ ] 4.4 Implement Claude Code agent adapter: subprocess launch, stdio reading, event parsing,
+- [x] 4.4 Implement Claude Code agent adapter: subprocess launch, stdio reading, event parsing,
       session lifecycle (start, turn, stop). Normalize Claude Code output to the standard event
       types. Register in the adapter registry under kind `claude-code`.
       **Verify:** unit tests with captured Claude Code output fixtures. Tests cover event
@@ -244,13 +244,20 @@ just the ability to prepare and clean workspaces.
       **Verify:** unit tests run a trivial hook script, confirm env vars are set, confirm
       timeout kills the hook, confirm output truncation.
 
-- [ ] 5.4 Implement workspace lifecycle orchestration: `after_create` on new, `before_run`
+- [ ] 5.4 Restrict hook subprocess environment: inherit only `PATH`, `HOME`, `SHELL`, and
+      `SORTIE_*` variables instead of the full parent process environment. This prevents
+      accidental leakage of secrets (e.g., `JIRA_API_TOKEN`, cloud credentials) into hook
+      scripts that may log or forward their environment.
+      **Verify:** unit test confirms hook process receives `SORTIE_*` and `PATH` but not an
+      unrelated variable set in the parent environment.
+
+- [ ] 5.5 Implement workspace lifecycle orchestration: `after_create` on new, `before_run`
       before agent, `after_run` after agent, `before_remove` before cleanup. Enforce failure
       semantics (fatal vs. ignored per hook).
       **Verify:** integration test exercises the full lifecycle with a temp workspace and
       script hooks that write marker files.
 
-- [ ] 5.5 Implement workspace cleanup function for terminal issues: given a list of issue
+- [ ] 5.6 Implement workspace cleanup function for terminal issues: given a list of issue
       identifiers, remove matching workspace directories (with `before_remove` hook). This
       function is a reusable primitive called by the orchestrator during startup cleanup
       (Section 8.6) and active-run reconciliation (Section 8.5).
@@ -304,28 +311,38 @@ component. Uses mock adapters for tracker and agent - no real external calls.
       turn_completed), confirms running entry fields are updated correctly, token deltas are
       accumulated without double-counting, and agent_totals reflect the sum.
 
-- [ ] 6.6 Implement worker exit handling (Section 16.6): normal exit adds runtime seconds to
+- [ ] 6.6 Add retry semantics to error categories: extend `TrackerErrorKind` and
+      `AgentErrorKind` with a helper that returns whether a given error kind is retryable
+      and its recommended backoff strategy (immediate, exponential, or non-retryable).
+      For example: `tracker_transport_error` is retryable with exponential backoff,
+      `tracker_auth_error` is non-retryable, `turn_timeout` is retryable. The worker exit
+      handler (6.7) uses this to decide between continuation retry, backoff retry, or
+      giving up.
+      **Verify:** unit tests confirm each error kind returns the expected retry semantics.
+      Table-driven test covers all defined kinds.
+
+- [ ] 6.7 Implement worker exit handling (Section 16.6): normal exit adds runtime seconds to
       `agent_totals` and `aggregate_metrics` (SQLite), persists completed run to `run_history`,
       schedules continuation retry (attempt 1, 1s delay). Abnormal exit does the same but
       schedules exponential backoff retry (`min(10000 * 2^(attempt-1), max_retry_backoff_ms)`).
       **Verify:** unit tests for both exit paths, confirm correct retry delays, runtime seconds
       accounting, and SQLite persistence.
 
-- [ ] 6.7 Implement retry timer handling (Section 16.6): on timer fire, re-fetch active
+- [ ] 6.8 Implement retry timer handling (Section 16.6): on timer fire, re-fetch active
       candidates, find issue by ID, check eligibility. If not found, release claim. If found
       and eligible and slots available, dispatch. If found but no slots, requeue with error
       `no available orchestrator slots`. If found but no longer active, release claim.
       **Verify:** unit tests with mock tracker returning various states on retry.
 
-- [ ] 6.8 Implement reconciliation (Section 16.3): stall detection (elapsed >
+- [ ] 6.9 Implement reconciliation (Section 16.3): stall detection (elapsed >
       stall_timeout_ms; skipped if stall_timeout_ms <= 0), tracker state refresh for all
-      running issue IDs (terminal -> stop + cleanup workspace via 5.5, active -> update
+      running issue IDs (terminal -> stop + cleanup workspace via 5.6, active -> update
       in-memory issue snapshot, other -> stop without cleanup). Handle refresh failure by
       keeping workers running and retrying next tick.
       **Verify:** unit tests for each reconciliation outcome including refresh failure and
       disabled stall detection.
 
-- [ ] 6.9 Implement dispatch preflight validation (Section 6.3): before each dispatch cycle,
+- [ ] 6.10 Implement dispatch preflight validation (Section 6.3): before each dispatch cycle,
       validate that the workflow can be loaded/parsed, `tracker.kind` is present and the
       adapter is registered, `tracker.api_key` is present after `$` resolution,
       `tracker.project` is present when required, `agent.command` is present when `agent.kind`
@@ -336,24 +353,24 @@ component. Uses mock adapters for tracker and agent - no real external calls.
       api_key, unregistered adapter kind, missing agent.command. Integration test confirms
       dispatch is skipped but reconciliation runs when validation fails mid-operation.
 
-- [ ] 6.10 Implement the poll loop (Section 16.2): tick scheduling, reconciliation before
+- [ ] 6.11 Implement the poll loop (Section 16.2): tick scheduling, reconciliation before
       dispatch, preflight validation before dispatch, fetch candidates, sort, dispatch until
       slots exhausted, notify observers. Wire everything together with mock adapters.
       **Verify:** integration test runs the orchestrator with mock tracker (returns 3 issues)
       and mock agent (completes after 1 turn). Confirm all 3 issues are dispatched, run, and
       completed. Confirm retry on simulated failure.
 
-- [ ] 6.11 Implement the full startup sequence (Section 16.1): open/create SQLite DB, run
+- [ ] 6.12 Implement the full startup sequence (Section 16.1): open/create SQLite DB, run
       schema migrations, configure logging, start workflow file watcher, load persisted retry
       entries from SQLite and reconstruct timers, run dispatch preflight validation (fail
       startup on error), enumerate existing workspace directories and query tracker for their
-      states to clean terminal workspaces (Section 8.6 — uses the cleanup function from 5.5),
+      states to clean terminal workspaces (Section 8.6 — uses the cleanup function from 5.6),
       schedule the first tick with delay 0, enter event loop.
       **Verify:** integration test with mock tracker and mock agent starts the full
       orchestrator, confirms: DB is created, retry entries from a previous run are loaded,
       terminal workspaces are cleaned, and the first poll tick fires immediately.
 
-- [ ] 6.12 Implement dynamic config reload integration: when WORKFLOW.md changes, the
+- [ ] 6.13 Implement dynamic config reload integration: when WORKFLOW.md changes, the
       orchestrator picks up new polling interval, concurrency limits, active/terminal states,
       hook timeouts, agent settings, and prompt template for future runs. In-flight sessions
       are not restarted.
@@ -480,34 +497,54 @@ tooling.
       confirms no continuation retry is scheduled. A second test with an absent file confirms
       normal continuation behavior.
 
-- [ ] 10.4 Write CONTRIBUTING.md: build instructions, test instructions, code conventions,
+- [ ] 10.4 Research and write ADR-0008: Workspace cleanup policy. Evaluate time-based TTL
+      expiration (delete workspaces older than N days) vs run-count-based retention (keep
+      last N workspaces) vs manual-only cleanup vs disk-pressure-triggered eviction.
+      Consider: the current design cleans workspaces only on terminal state transitions
+      (Sections 8.5, 8.6), which leaves orphaned workspaces when issues are deleted or
+      the orchestrator is stopped before reconciliation. Document the decision in
+      `docs/decisions/0008-workspace-cleanup-policy.md`.
+      **Verify:** ADR exists with status `accepted`, covers at least 3 alternatives, and
+      `docs/decisions/README.md` index is updated.
+
+- [ ] 10.5 Implement workspace TTL cleanup: on startup and periodically (e.g., once per hour),
+      scan workspace root for directories older than the configured retention period. Remove
+      directories that have no corresponding active or retrying issue in orchestrator state.
+      Respect `before_remove` hook. Make the retention period configurable via a
+      `workspace.retention_days` field (default: no automatic cleanup for backward
+      compatibility).
+      **Verify:** unit test creates old workspace directories, runs cleanup, confirms only
+      orphaned directories beyond retention age are removed. Directories with active issues
+      are preserved.
+
+- [ ] 10.6 Write CONTRIBUTING.md: build instructions, test instructions, code conventions,
       PR process, architecture overview reference.
       **Verify:** a new contributor can follow the guide to build, test, and submit a change.
 
-- [ ] 10.5 Write SECURITY.md: trust model, secret handling, workspace isolation guarantees,
+- [ ] 10.7 Write SECURITY.md: trust model, secret handling, workspace isolation guarantees,
       prompt injection risks, harness hardening guidance. Cover all items from architecture
       Section 15 (trust boundary, filesystem safety, secret handling, hook safety, harness
       hardening).
       **Verify:** document covers all items from architecture Section 15.
 
-- [x] 10.6 Add release automation: GoReleaser config for building cross-platform static
+- [x] 10.8 Add release automation: GoReleaser config for building cross-platform static
       binaries, GitHub Actions `workflow_dispatch` release workflow that runs lint, unit
       tests, and Jira integration tests before creating a tag and publishing a release.
       **Verify:** "Run workflow" button in GitHub Actions with version input `0.1.0`
       produces release artifacts on GitHub after all tests pass.
 
-- [ ] 10.7 Add SBOM generation to release pipeline: install `syft` via `anchore/sbom-action`
+- [ ] 10.9 Add SBOM generation to release pipeline: install `syft` via `anchore/sbom-action`
       in the release workflow, re-enable the `sboms` section in `.goreleaser.yaml` to produce
       SPDX JSON manifests for each archive artifact.
       **Verify:** dry run release produces `*.sbom.json` files alongside each archive in
       the `dist/` directory.
 
-- [ ] 10.8 Review and finalize README.md: add installation instructions, quick start guide,
+- [ ] 10.10 Review and finalize README.md: add installation instructions, quick start guide,
       and configuration reference now that the software exists.
       **Verify:** a new user can follow the README to install and run Sortie against their
       own Jira project.
 
-- [ ] 10.9 Prepare 1.0.0 release: update CHANGELOG.md to replace the pre-1.0 notice with
+- [ ] 10.11 Prepare 1.0.0 release: update CHANGELOG.md to replace the pre-1.0 notice with
       standard Semantic Versioning adherence, remove the "not yet ready for use" note from
       README.md, and tag the first stable release.
       **Verify:** CHANGELOG.md references SemVer, README.md has no development-only

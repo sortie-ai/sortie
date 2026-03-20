@@ -1,0 +1,11 @@
+{
+  "type": "system",
+  "subtype": "api_retry",
+  "attempt": 1,
+  "max_retries": 5,
+  "retry_delay_ms": 1000,
+  "error_status": 429,
+  "error": "rate_limit",
+  "uuid": "evt-retry-001",
+  "session_id": "abc12345-def6-4789-abcd-ef0123456789"
+}

@@ -1,0 +1,16 @@
+{
+  "type": "system",
+  "subtype": "init",
+  "session_id": "abc12345-def6-4789-abcd-ef0123456789",
+  "cwd": "/home/user/workspace/PROJECT-123",
+  "tools": [
+    "Bash",
+    "Read",
+    "Write",
+    "Edit",
+    "MultiEdit",
+    "TodoRead",
+    "TodoWrite"
+  ],
+  "mcp_servers": []
+}

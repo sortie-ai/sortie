@@ -1,0 +1,31 @@
+{
+  "type": "assistant",
+  "message": {
+    "id": "msg_01XFDUDYJgAACzvnptvVoYEL",
+    "type": "message",
+    "role": "assistant",
+    "content": [
+      {
+        "type": "text",
+        "text": "I'll analyze the codebase and implement the requested changes."
+      },
+      {
+        "type": "tool_use",
+        "id": "toolu_01A09q90qw90lq917835lhkg",
+        "name": "Read",
+        "input": {
+          "file_path": "main.go"
+        }
+      }
+    ],
+    "model": "claude-sonnet-4-20250514",
+    "stop_reason": "tool_use",
+    "usage": {
+      "input_tokens": 12500,
+      "output_tokens": 350,
+      "cache_read_input_tokens": 8000,
+      "cache_creation_input_tokens": 1500
+    }
+  },
+  "session_id": "abc12345-def6-4789-abcd-ef0123456789"
+}

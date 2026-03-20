@@ -1,0 +1,424 @@
+package claude
+
+import (
+	"bufio"
+	"os"
+	"path/filepath"
+	"runtime"
+	"testing"
+
+	"github.com/sortie-ai/sortie/internal/domain"
+)
+
+func testdataPath(t *testing.T, name string) string {
+	t.Helper()
+	_, file, _, ok := runtime.Caller(0)
+	if !ok {
+		t.Fatal("cannot determine testdata path")
+	}
+	return filepath.Join(filepath.Dir(file), "testdata", name)
+}
+
+func readFixture(t *testing.T, name string) []byte {
+	t.Helper()
+	data, err := os.ReadFile(testdataPath(t, name))
+	if err != nil {
+		t.Fatalf("read fixture %s: %v", name, err)
+	}
+	return data
+}
+
+func TestParseEvent(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		fixture   string
+		wantType  string
+		wantSub   string
+		checkFunc func(t *testing.T, ev rawEvent)
+	}{
+		{
+			name:     "init system event",
+			fixture:  "init_event.json",
+			wantType: "system",
+			wantSub:  "init",
+			checkFunc: func(t *testing.T, ev rawEvent) {
+				t.Helper()
+				if ev.SessionID != "abc12345-def6-4789-abcd-ef0123456789" {
+					t.Errorf("SessionID = %q, want abc12345-...", ev.SessionID)
+				}
+				if ev.Cwd != "/home/user/workspace/PROJECT-123" {
+					t.Errorf("Cwd = %q", ev.Cwd)
+				}
+			},
+		},
+		{
+			name:     "assistant message with text and tool_use",
+			fixture:  "assistant_message.json",
+			wantType: "assistant",
+			checkFunc: func(t *testing.T, ev rawEvent) {
+				t.Helper()
+				blocks := ev.contentBlocks()
+				if len(blocks) != 2 {
+					t.Fatalf("content blocks = %d, want 2", len(blocks))
+				}
+				if blocks[0].Type != "text" {
+					t.Errorf("block[0].Type = %q, want text", blocks[0].Type)
+				}
+				if blocks[1].Type != "tool_use" {
+					t.Errorf("block[1].Type = %q, want tool_use", blocks[1].Type)
+				}
+				if blocks[1].Name != "Read" {
+					t.Errorf("block[1].Name = %q, want Read", blocks[1].Name)
+				}
+			},
+		},
+		{
+			name:     "tool_use message",
+			fixture:  "tool_use_message.json",
+			wantType: "assistant",
+			checkFunc: func(t *testing.T, ev rawEvent) {
+				t.Helper()
+				blocks := ev.contentBlocks()
+				if len(blocks) != 2 {
+					t.Fatalf("content blocks = %d, want 2", len(blocks))
+				}
+				if blocks[0].Type != "tool_use" {
+					t.Errorf("block[0].Type = %q, want tool_use", blocks[0].Type)
+				}
+				if blocks[1].Type != "tool_result" {
+					t.Errorf("block[1].Type = %q, want tool_result", blocks[1].Type)
+				}
+				if blocks[1].IsError {
+					t.Error("block[1].IsError = true, want false")
+				}
+			},
+		},
+		{
+			name:     "result success",
+			fixture:  "result_success.json",
+			wantType: "result",
+			wantSub:  "success",
+			checkFunc: func(t *testing.T, ev rawEvent) {
+				t.Helper()
+				if ev.IsError {
+					t.Error("IsError = true, want false")
+				}
+				if ev.Usage == nil {
+					t.Fatal("Usage is nil")
+				}
+				if ev.Usage.InputTokens != 15000 {
+					t.Errorf("InputTokens = %d, want 15000", ev.Usage.InputTokens)
+				}
+				if ev.Usage.OutputTokens != 3200 {
+					t.Errorf("OutputTokens = %d, want 3200", ev.Usage.OutputTokens)
+				}
+				if ev.NumTurns != 3 {
+					t.Errorf("NumTurns = %d, want 3", ev.NumTurns)
+				}
+			},
+		},
+		{
+			name:     "result error max_turns",
+			fixture:  "result_error_max_turns.json",
+			wantType: "result",
+			wantSub:  "error_max_turns",
+			checkFunc: func(t *testing.T, ev rawEvent) {
+				t.Helper()
+				if !ev.IsError {
+					t.Error("IsError = false, want true")
+				}
+				if ev.Usage == nil {
+					t.Fatal("Usage is nil")
+				}
+				if ev.Usage.InputTokens != 50000 {
+					t.Errorf("InputTokens = %d, want 50000", ev.Usage.InputTokens)
+				}
+			},
+		},
+		{
+			name:     "result error during execution",
+			fixture:  "result_error_execution.json",
+			wantType: "result",
+			wantSub:  "error_during_execution",
+			checkFunc: func(t *testing.T, ev rawEvent) {
+				t.Helper()
+				if !ev.IsError {
+					t.Error("IsError = false, want true")
+				}
+				if ev.Result == "" {
+					t.Error("Result is empty, want error message")
+				}
+			},
+		},
+		{
+			name:     "api retry event",
+			fixture:  "api_retry_event.json",
+			wantType: "system",
+			wantSub:  "api_retry",
+			checkFunc: func(t *testing.T, ev rawEvent) {
+				t.Helper()
+				if ev.Attempt != 1 {
+					t.Errorf("Attempt = %d, want 1", ev.Attempt)
+				}
+				if ev.MaxRetries != 5 {
+					t.Errorf("MaxRetries = %d, want 5", ev.MaxRetries)
+				}
+				if ev.RetryDelayMS != 1000 {
+					t.Errorf("RetryDelayMS = %d, want 1000", ev.RetryDelayMS)
+				}
+				if ev.ErrorStatus != 429 {
+					t.Errorf("ErrorStatus = %d, want 429", ev.ErrorStatus)
+				}
+				if ev.ErrorField != "rate_limit" {
+					t.Errorf("ErrorField = %q, want rate_limit", ev.ErrorField)
+				}
+			},
+		},
+		{
+			name:     "stream event",
+			fixture:  "stream_event.json",
+			wantType: "stream_event",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			data := readFixture(t, tt.fixture)
+
+			ev, err := parseEvent(data)
+			if err != nil {
+				t.Fatalf("parseEvent() error = %v", err)
+			}
+			if ev.Type != tt.wantType {
+				t.Errorf("Type = %q, want %q", ev.Type, tt.wantType)
+			}
+			if tt.wantSub != "" && ev.Subtype != tt.wantSub {
+				t.Errorf("Subtype = %q, want %q", ev.Subtype, tt.wantSub)
+			}
+			if tt.checkFunc != nil {
+				tt.checkFunc(t, ev)
+			}
+		})
+	}
+}
+
+func TestParseEvent_Malformed(t *testing.T) {
+	t.Parallel()
+
+	data := readFixture(t, "malformed_line.txt")
+	_, err := parseEvent(data)
+	if err == nil {
+		t.Fatal("parseEvent(malformed) did not return error")
+	}
+}
+
+func TestNormalizeUsage(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		raw  *rawUsage
+		want domain.TokenUsage
+	}{
+		{
+			name: "nil usage",
+			raw:  nil,
+			want: domain.TokenUsage{},
+		},
+		{
+			name: "valid usage",
+			raw: &rawUsage{
+				InputTokens:  15000,
+				OutputTokens: 3200,
+			},
+			want: domain.TokenUsage{
+				InputTokens:  15000,
+				OutputTokens: 3200,
+				TotalTokens:  18200,
+			},
+		},
+		{
+			name: "zero usage",
+			raw:  &rawUsage{},
+			want: domain.TokenUsage{},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := normalizeUsage(tt.raw)
+			if got != tt.want {
+				t.Errorf("normalizeUsage() = %+v, want %+v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestSummarizeAssistant(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		fixture string
+		want    string
+	}{
+		{
+			name:    "text and tool_use",
+			fixture: "assistant_message.json",
+			want:    "I'll analyze the codebase and implement the requested changes. [tool: Read]",
+		},
+		{
+			name:    "tool_use and tool_result",
+			fixture: "tool_use_message.json",
+			want:    "[tool: Bash] [tool_result: ok]",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			data := readFixture(t, tt.fixture)
+			ev, err := parseEvent(data)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := summarizeAssistant(ev)
+			if got != tt.want {
+				t.Errorf("summarizeAssistant() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestSummarizeAssistant_EmptyMessage(t *testing.T) {
+	t.Parallel()
+
+	ev := rawEvent{Type: "assistant"}
+	got := summarizeAssistant(ev)
+	if got != "assistant message" {
+		t.Errorf("summarizeAssistant(empty) = %q, want %q", got, "assistant message")
+	}
+}
+
+func TestFormatAPIRetry(t *testing.T) {
+	t.Parallel()
+
+	data := readFixture(t, "api_retry_event.json")
+	ev, err := parseEvent(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := formatAPIRetry(ev)
+	want := "API retry attempt 1/5 (delay 1000ms, status 429: rate_limit)"
+	if got != want {
+		t.Errorf("formatAPIRetry() = %q, want %q", got, want)
+	}
+}
+
+func TestRawEventSummary(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		ev   rawEvent
+		want string
+	}{
+		{
+			name: "type only",
+			ev:   rawEvent{Type: "stream_event"},
+			want: "stream_event",
+		},
+		{
+			name: "type and subtype",
+			ev:   rawEvent{Type: "system", Subtype: "init"},
+			want: "system/init",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := tt.ev.summary()
+			if got != tt.want {
+				t.Errorf("summary() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestTruncate(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		input  string
+		maxLen int
+		want   string
+	}{
+		{"short string", "hello", 10, "hello"},
+		{"exact length", "hello", 5, "hello"},
+		{"over limit", "hello world", 5, "hello…"},
+		{"unicode safe", "日本語テスト", 3, "日本語…"},
+		{"empty string", "", 5, ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := truncate(tt.input, tt.maxLen)
+			if got != tt.want {
+				t.Errorf("truncate(%q, %d) = %q, want %q", tt.input, tt.maxLen, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestParseFullSession(t *testing.T) {
+	t.Parallel()
+
+	f, err := os.Open(testdataPath(t, "full_session.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = f.Close() }()
+
+	wantTypes := []string{"system", "assistant", "assistant", "assistant", "result"}
+	scanner := bufio.NewScanner(f)
+	var i int
+	for scanner.Scan() {
+		ev, err := parseEvent(scanner.Bytes())
+		if err != nil {
+			t.Fatalf("line %d: parseEvent() error = %v", i+1, err)
+		}
+		if i >= len(wantTypes) {
+			t.Fatalf("unexpected extra line %d: type=%q", i+1, ev.Type)
+		}
+		if ev.Type != wantTypes[i] {
+			t.Errorf("line %d: Type = %q, want %q", i+1, ev.Type, wantTypes[i])
+		}
+		i++
+	}
+	if err := scanner.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if i != len(wantTypes) {
+		t.Errorf("parsed %d lines, want %d", i, len(wantTypes))
+	}
+}
+
+func TestContentBlocks_InvalidJSON(t *testing.T) {
+	t.Parallel()
+
+	ev := rawEvent{
+		Type:    "assistant",
+		Message: []byte(`not json`),
+	}
+	blocks := ev.contentBlocks()
+	if blocks != nil {
+		t.Errorf("contentBlocks(invalid) = %v, want nil", blocks)
+	}
+}
