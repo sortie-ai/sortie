@@ -496,7 +496,13 @@ tooling.
       **Verify:** "Run workflow" button in GitHub Actions with version input `0.1.0`
       produces release artifacts on GitHub after all tests pass.
 
-- [ ] 10.7 Review and finalize README.md: add installation instructions, quick start guide,
+- [ ] 10.7 Add SBOM generation to release pipeline: install `syft` via `anchore/sbom-action`
+      in the release workflow, re-enable the `sboms` section in `.goreleaser.yaml` to produce
+      SPDX JSON manifests for each archive artifact.
+      **Verify:** dry run release produces `*.sbom.json` files alongside each archive in
+      the `dist/` directory.
+
+- [ ] 10.8 Review and finalize README.md: add installation instructions, quick start guide,
       and configuration reference now that the software exists.
       **Verify:** a new user can follow the README to install and run Sortie against their
       own Jira project.

@@ -85,8 +85,5 @@ release:
   make_latest: true
   mode: keep-existing
 
-sboms:
-  - artifacts: archive
-
 snapshot:
   version_template: "{{ incpatch .Version }}-SNAPSHOT-{{ .ShortCommit }}"
