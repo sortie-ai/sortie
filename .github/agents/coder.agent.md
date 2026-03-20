@@ -11,6 +11,8 @@ tools:
   - edit
   - todo
   - search
+  - web
+  - context7/*
 handoffs:
   - label: Verify Implementation
     agent: Tester
