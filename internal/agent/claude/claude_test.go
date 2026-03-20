@@ -578,10 +578,17 @@ func TestStopSession_NilProc(t *testing.T) {
 
 // writeScript writes an executable shell script to the given directory and
 // returns the path. Used by RunTurn integration tests.
+//
+// To avoid the ETXTBSY race on Linux (the kernel may still hold a
+// write-back reference on an inode immediately after close), the
+// script is written to a temporary name and then renamed into place.
+// rename(2) atomically swaps the directory entry so exec never sees
+// a file that was recently opened for writing under that name.
 func writeScript(t *testing.T, dir, content string) string {
 	t.Helper()
-	path := filepath.Join(dir, "fake-claude")
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o755)
+	finalPath := filepath.Join(dir, "fake-claude")
+	tmpPath := finalPath + ".tmp"
+	f, err := os.OpenFile(tmpPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o755)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -589,14 +596,13 @@ func writeScript(t *testing.T, dir, content string) string {
 		_ = f.Close()
 		t.Fatal(err)
 	}
-	if err := f.Sync(); err != nil {
-		_ = f.Close()
-		t.Fatal(err)
-	}
 	if err := f.Close(); err != nil {
 		t.Fatal(err)
 	}
-	return path
+	if err := os.Rename(tmpPath, finalPath); err != nil {
+		t.Fatal(err)
+	}
+	return finalPath
 }
 
 // Section 10.1: RunTurn integration tests using fake subprocess scripts.
