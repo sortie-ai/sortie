@@ -731,7 +731,7 @@ sub-object in WORKFLOW.md:
 ### Turn 1 (new session)
 
 ```bash
-sh -c 'claude -p "You are working on issue PROJ-123. Fix the authentication bug described below.
+prompt='You are working on issue PROJ-123. Fix the authentication bug described below.
 
 ## Issue: Authentication fails on expired tokens
 
@@ -740,10 +740,12 @@ The login endpoint returns 500 when the JWT token is expired instead of 401...
 ## Instructions
 1. Read the relevant code files
 2. Implement the fix
-3. Run tests to verify" \
+3. Run tests to verify'
+
+sh -c 'claude -p "$1" \
   --output-format stream-json \
   --verbose \
-  --dangerously-skip-permissions'
+  --dangerously-skip-permissions' -- "$prompt"
 ```
 
 Working directory: `/var/sortie/workspaces/PROJ-123`
@@ -751,11 +753,14 @@ Working directory: `/var/sortie/workspaces/PROJ-123`
 ### Turn 2 (continuation)
 
 ```bash
-sh -c 'claude -p "Continue working on the issue. The previous turn made progress but tests are still failing. Focus on fixing the remaining test failures." \
+prompt='Continue working on the issue. The previous turn made progress but tests are still failing. Focus on fixing the remaining test failures.'
+session_id='abc123-session-id'
+
+sh -c 'claude -p "$1" \
   --output-format stream-json \
   --verbose \
   --dangerously-skip-permissions \
-  --resume "abc123-session-id"'
+  --resume "$2"' -- "$prompt" "$session_id"
 ```
 
 Working directory: `/var/sortie/workspaces/PROJ-123`
@@ -763,14 +768,14 @@ Working directory: `/var/sortie/workspaces/PROJ-123`
 ### With cost cap and model override
 
 ```bash
-sh -c 'claude -p "..." \
+sh -c 'claude -p "$1" \
   --output-format stream-json \
   --verbose \
   --dangerously-skip-permissions \
   --model claude-sonnet-4-6 \
   --fallback-model claude-haiku-4-5-20251001 \
   --max-budget-usd 5.00 \
-  --max-turns 50'
+  --max-turns 50' -- "$prompt"
 ```
 
 ---
