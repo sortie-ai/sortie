@@ -7,6 +7,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 > Versions before 1.0.0 do not follow Semantic Versioning. Any release may
 > contain breaking changes without prior notice.
 
+## [0.0.4] - 2026-03-20
+
+### Added
+
+- `AgentAdapter` interface and normalized event model: 13 event types,
+  `TokenUsage`, `AgentConfig`, `Session`, `TurnResult`, and `AgentError` with
+  9 error kinds.
+- Agent adapter registry (`registry.Agents`) for registration and lookup by kind.
+- Mock agent adapter (kind `"mock"`) with configurable turn outcomes, delays,
+  and cumulative token accumulation for orchestrator and integration testing.
+- Claude Code agent adapter (kind `"claude-code"`) that launches the CLI as a
+  subprocess, reads JSONL events from stdout, and normalizes them to domain event
+  types. Supports graceful SIGTERM→SIGKILL shutdown on context cancellation and
+  session resumption via `ResumeSessionID`.
+
+### Fixed
+
+- Claude Code adapter: double-wait race between `RunTurn` and `StopSession` —
+  `gracefulKill` is now fire-and-forget with timer-based SIGKILL escalation.
+- Claude Code adapter: error on missing binary now includes the actual command
+  name instead of a hardcoded string.
+
 ## [0.0.3] - 2026-03-20
 
 ### Added
@@ -75,7 +97,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   execution via GitHub Actions.
 - Architecture Decision Records (ADR-0001 through ADR-0005).
 
-[Unreleased]: https://github.com/sortie-ai/sortie/compare/0.0.3...HEAD
+[Unreleased]: https://github.com/sortie-ai/sortie/compare/0.0.4...HEAD
+[0.0.4]: https://github.com/sortie-ai/sortie/compare/0.0.3...0.0.4
 [0.0.3]: https://github.com/sortie-ai/sortie/compare/0.0.2...0.0.3
 [0.0.2]: https://github.com/sortie-ai/sortie/compare/0.0.1...0.0.2
 [0.0.1]: https://github.com/sortie-ai/sortie/compare/0.0.0...0.0.1
