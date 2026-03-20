@@ -253,7 +253,7 @@ just the ability to prepare and clean workspaces.
       **Verify:** unit test confirms hook process receives `SORTIE_*` and `PATH` but not an
       unrelated variable set in the parent environment.
 
-- [ ] 5.5 Implement workspace lifecycle orchestration: `after_create` on new, `before_run`
+- [x] 5.5 Implement workspace lifecycle orchestration: `after_create` on new, `before_run`
       before agent, `after_run` after agent, `before_remove` before cleanup. Enforce failure
       semantics (fatal vs. ignored per hook).
       **Verify:** integration test exercises the full lifecycle with a temp workspace and
