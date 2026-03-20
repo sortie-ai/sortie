@@ -177,14 +177,14 @@ ability to talk to a tracker.
       Document findings in a short `docs/jira-adapter-notes.md`.
       **Verify:** document exists with endpoint references and auth requirements.
 
-- [ ] 3.5 Implement Jira tracker adapter: all five required operations — candidate issue fetch
+- [x] 3.5 Implement Jira tracker adapter: all five required operations — candidate issue fetch
       using JQL, issue state refresh by ID batch, terminal state fetch by states, single issue
       fetch with comments, and comment fetch by issue ID. Normalize Jira responses to the
       `Issue` model. Register in the adapter registry under kind `jira`.
       **Verify:** unit tests with HTTP response fixtures (recorded or hand-crafted JSON).
       Tests cover normalization, pagination, error mapping to generic categories (Section 11.4).
 
-- [ ] 3.6 Implement real Jira integration test (guarded by env var `SORTIE_JIRA_TEST=1` and
+- [x] 3.6 Implement real Jira integration test (guarded by env var `SORTIE_JIRA_TEST=1` and
       credentials). Fetch real issues from a test project, confirm normalization produces valid
       Issue structs.
       **Verify:** `SORTIE_JIRA_TEST=1 make test PKG=./internal/tracker/jira/... RUN=Integration`
