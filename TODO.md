@@ -240,7 +240,7 @@ just the ability to prepare and clean workspaces.
       **Verify:** unit tests with temp directories covering create, reuse, non-directory
       conflict error, and atomic CreatedNow correctness.
 
-- [ ] 5.3 Implement hook execution: run a shell script with workspace as cwd, enforce timeout,
+- [x] 5.3 Implement hook execution: run a shell script with workspace as cwd, enforce timeout,
       set environment variables (`SORTIE_ISSUE_ID`, `SORTIE_ISSUE_IDENTIFIER`,
       `SORTIE_WORKSPACE`, `SORTIE_ATTEMPT`), capture and truncate output.
       **Verify:** unit tests run a trivial hook script, confirm env vars are set, confirm
