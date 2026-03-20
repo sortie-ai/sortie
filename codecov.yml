@@ -1,0 +1,16 @@
+# Codecov configuration
+# https://docs.codecov.com/docs/codecov-yaml
+
+coverage:
+  status:
+    project:
+      default:
+        target: auto    # use the coverage of the base commit
+        threshold: 1%   # allow 1% drop before failing
+    patch:
+      default:
+        target: 75%     # new code must have ≥75% coverage
+
+comment:
+  layout: "condensed_header, condensed_files, condensed_footer"
+  require_changes: true   # only comment when coverage changes
