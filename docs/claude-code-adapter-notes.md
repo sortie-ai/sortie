@@ -75,7 +75,7 @@ are always set by the adapter; others are conditional.
 | `-p <prompt>`                        | Non-interactive (headless) mode. Passes the prompt and exits when done.                     | **(required)** Every turn invocation uses this.                                         |
 | `--output-format stream-json`        | Newline-delimited JSON on stdout. Each line is a JSON object.                               | **(required)** For real-time event parsing.                                             |
 | `--verbose`                          | Include internal events (tool calls, system messages) in stream output.                     | **(required)** Needed for full event visibility.                                        |
-| `--max-turns <N>`                    | Maximum number of agentic turns within a single CLI invocation.                             | Set to `1` for single-turn control, or omit to let Claude decide. See Turn Model below. |
+| `--max-turns <N>`                    | Maximum number of agentic turns within a single CLI invocation. Not in `claude --help` v2.1.76; may be SDK/action only. | Set to `1` for single-turn control, or omit to let Claude decide. See Turn Model below. |
 | `--max-budget-usd <amount>`          | Maximum dollar spend for this invocation (print mode only).                                 | Optional. Cost safety backstop. Exits with error when exceeded.                         |
 | `--model <model>`                    | Override the model (e.g., `claude-sonnet-4-6`, `claude-opus-4-6`).                          | Optional. Adapter passes through if configured.                                         |
 | `--fallback-model <model>`           | Automatic fallback model when primary is overloaded (print mode only).                      | Optional. Resilience for rate-limited deployments.                                      |
@@ -455,6 +455,18 @@ Claude Code has its own internal concept of "turns" (agentic loops within a sing
 invocation). The `--max-turns` flag controls how many internal turns Claude Code executes
 before returning.
 
+**Default behavior when `--max-turns` is omitted:** Claude Code runs until the model
+decides it is done (the agent loop completes naturally). There is no hardcoded internal
+turn limit — the agent continues executing tool calls and producing responses until it
+emits `end_turn`. In practice this means the only bounds are the cost budget
+(`--max-budget-usd`) and the adapter's `turn_timeout_ms` deadline in Sortie.
+
+> **Note:** `--max-turns` is documented in the GitHub Actions `claude_args` reference but
+> does not appear in `claude --help` as of CLI v2.1.76. It may be handled via the SDK
+> layer or settings rather than a direct CLI flag. Verify availability before relying on it
+> in the adapter; if unavailable, rely on `--max-budget-usd` and `turn_timeout_ms` as the
+> primary safety bounds.
+
 **Sortie's turn model is distinct from Claude Code's internal turns.** Sortie's "turn" is
 one CLI invocation (one `RunTurn` call). Within that invocation, Claude Code may execute
 multiple internal agentic loops.
@@ -463,7 +475,7 @@ Two strategies:
 
 ### Strategy A: Single Sortie turn = single Claude Code invocation (recommended)
 
-- Omit `--max-turns` or set it high (e.g., `--max-turns 50`).
+- Omit `--max-turns` (agent runs until done) or set it explicitly if available.
 - Claude Code runs its full agentic loop within one invocation.
 - Sortie calls `RunTurn` once per Sortie turn. Claude Code decides when it's done.
 - After each Sortie turn, the orchestrator re-checks tracker state and decides whether to
