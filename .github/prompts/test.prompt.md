@@ -5,7 +5,7 @@ argument-hint: Path to spec/plan, or description of what to test
 agent: Tester
 ---
 
-Generate test coverage for the implemented feature or changed code. Use `go-testing` skill when generating tests for Go code.
+Generate test coverage for the implemented feature or changed code. Use [go-testing](../skills/go-testing/SKILL.md) Agent Skill when generating tests for Go code.
 
 ## Process
 
