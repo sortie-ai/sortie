@@ -2,11 +2,12 @@ package jira
 
 import (
 	"encoding/json"
-	"os"
 	"testing"
 )
 
 func TestFlattenADF(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name  string
 		input any
@@ -180,6 +181,8 @@ func TestFlattenADF(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
 			got := flattenADF(tt.input)
 			if got != tt.want {
 				t.Errorf("flattenADF() = %q, want %q", got, tt.want)
@@ -189,10 +192,9 @@ func TestFlattenADF(t *testing.T) {
 }
 
 func TestFlattenADF_Fixture(t *testing.T) {
-	data, err := os.ReadFile("testdata/adf_description.json")
-	if err != nil {
-		t.Fatalf("reading fixture: %v", err)
-	}
+	t.Parallel()
+
+	data := loadFixture(t, "adf_description.json")
 
 	var node any
 	if err := json.Unmarshal(data, &node); err != nil {

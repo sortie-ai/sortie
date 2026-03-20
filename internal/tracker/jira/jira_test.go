@@ -59,6 +59,8 @@ func loadFixture(t *testing.T, name string) []byte {
 // --- Constructor tests ---
 
 func TestNewJiraAdapter(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name     string
 		config   map[string]any
@@ -120,6 +122,8 @@ func TestNewJiraAdapter(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
 			a, err := NewJiraAdapter(tt.config)
 			if tt.wantErr {
 				assertTrackerErrorKind(t, err, tt.wantKind)
@@ -139,6 +143,8 @@ func TestNewJiraAdapter(t *testing.T) {
 }
 
 func TestNewJiraAdapter_DefaultActiveStates(t *testing.T) {
+	t.Parallel()
+
 	a := mustAdapter(t, validConfig("https://x.atlassian.net"))
 	if len(a.activeStates) != 3 {
 		t.Fatalf("activeStates len = %d, want 3", len(a.activeStates))
@@ -149,6 +155,8 @@ func TestNewJiraAdapter_DefaultActiveStates(t *testing.T) {
 }
 
 func TestNewJiraAdapter_CustomActiveStates(t *testing.T) {
+	t.Parallel()
+
 	config := validConfig("https://x.atlassian.net")
 	config["active_states"] = []any{"Open", "WIP"}
 	a := mustAdapter(t, config)
@@ -158,6 +166,8 @@ func TestNewJiraAdapter_CustomActiveStates(t *testing.T) {
 }
 
 func TestNewJiraAdapter_QueryFilter(t *testing.T) {
+	t.Parallel()
+
 	config := validConfig("https://x.atlassian.net")
 	config["query_filter"] = "component = 'api'"
 	a := mustAdapter(t, config)
@@ -167,6 +177,8 @@ func TestNewJiraAdapter_QueryFilter(t *testing.T) {
 }
 
 func TestNewJiraAdapter_QueryFilter_Absent(t *testing.T) {
+	t.Parallel()
+
 	a := mustAdapter(t, validConfig("https://x.atlassian.net"))
 	if a.queryFilter != "" {
 		t.Errorf("queryFilter = %q, want empty", a.queryFilter)
@@ -174,6 +186,8 @@ func TestNewJiraAdapter_QueryFilter_Absent(t *testing.T) {
 }
 
 func TestNewJiraAdapter_EndpointTrailingSlash(t *testing.T) {
+	t.Parallel()
+
 	config := validConfig("https://x.atlassian.net/")
 	a := mustAdapter(t, config)
 	if a.endpoint != "https://x.atlassian.net" {
@@ -182,6 +196,8 @@ func TestNewJiraAdapter_EndpointTrailingSlash(t *testing.T) {
 }
 
 func TestRegistration(t *testing.T) {
+	t.Parallel()
+
 	ctor, err := registry.Trackers.Get("jira")
 	if err != nil {
 		t.Fatalf("registry.Trackers.Get(jira): %v", err)
@@ -194,6 +210,8 @@ func TestRegistration(t *testing.T) {
 // --- FetchCandidateIssues tests ---
 
 func TestFetchCandidateIssues_SinglePage(t *testing.T) {
+	t.Parallel()
+
 	fixture := loadFixture(t, "search_single_page.json")
 	var receivedJQL string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -238,6 +256,8 @@ func TestFetchCandidateIssues_SinglePage(t *testing.T) {
 }
 
 func TestFetchCandidateIssues_MultiPage(t *testing.T) {
+	t.Parallel()
+
 	page1 := loadFixture(t, "search_multi_page_1.json")
 	page2 := loadFixture(t, "search_multi_page_2.json")
 
@@ -272,6 +292,8 @@ func TestFetchCandidateIssues_MultiPage(t *testing.T) {
 }
 
 func TestFetchCandidateIssues_Empty(t *testing.T) {
+	t.Parallel()
+
 	fixture := loadFixture(t, "search_empty.json")
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Write(fixture) //nolint:errcheck // test helper
@@ -292,6 +314,8 @@ func TestFetchCandidateIssues_Empty(t *testing.T) {
 }
 
 func TestFetchCandidateIssues_AuthError(t *testing.T) {
+	t.Parallel()
+
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusUnauthorized)
 	}))
@@ -303,6 +327,8 @@ func TestFetchCandidateIssues_AuthError(t *testing.T) {
 }
 
 func TestFetchCandidateIssues_ServerError(t *testing.T) {
+	t.Parallel()
+
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 	}))
@@ -314,6 +340,8 @@ func TestFetchCandidateIssues_ServerError(t *testing.T) {
 }
 
 func TestFetchCandidateIssues_JQLSanitization(t *testing.T) {
+	t.Parallel()
+
 	var receivedJQL string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		receivedJQL = r.URL.Query().Get("jql")
@@ -338,6 +366,8 @@ func TestFetchCandidateIssues_JQLSanitization(t *testing.T) {
 }
 
 func TestFetchCandidateIssues_QueryFilter(t *testing.T) {
+	t.Parallel()
+
 	var receivedJQL string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		receivedJQL = r.URL.Query().Get("jql")
@@ -358,6 +388,8 @@ func TestFetchCandidateIssues_QueryFilter(t *testing.T) {
 }
 
 func TestFetchCandidateIssues_NoQueryFilter(t *testing.T) {
+	t.Parallel()
+
 	var receivedJQL string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		receivedJQL = r.URL.Query().Get("jql")
@@ -384,6 +416,8 @@ func TestFetchCandidateIssues_NoQueryFilter(t *testing.T) {
 // --- FetchIssueByID tests ---
 
 func TestFetchIssueByID_WithComments(t *testing.T) {
+	t.Parallel()
+
 	issueData := loadFixture(t, "issue_detail.json")
 	commentsData := loadFixture(t, "comments.json")
 
@@ -433,6 +467,8 @@ func TestFetchIssueByID_WithComments(t *testing.T) {
 }
 
 func TestFetchIssueByID_NoComments(t *testing.T) {
+	t.Parallel()
+
 	issueData := loadFixture(t, "issue_detail.json")
 	emptyComments := loadFixture(t, "comments_empty.json")
 
@@ -459,6 +495,8 @@ func TestFetchIssueByID_NoComments(t *testing.T) {
 }
 
 func TestFetchIssueByID_NotFound(t *testing.T) {
+	t.Parallel()
+
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
 	}))
@@ -476,6 +514,8 @@ func TestFetchIssueByID_NotFound(t *testing.T) {
 }
 
 func TestFetchIssueByID_MultiPageComments(t *testing.T) {
+	t.Parallel()
+
 	issueData := loadFixture(t, "issue_detail.json")
 	commentsPage1 := loadFixture(t, "comments_multi_page_1.json")
 	commentsPage2 := loadFixture(t, "comments_multi_page_2.json")
@@ -513,6 +553,8 @@ func TestFetchIssueByID_MultiPageComments(t *testing.T) {
 // --- FetchIssuesByStates tests ---
 
 func TestFetchIssuesByStates_EmptyStates(t *testing.T) {
+	t.Parallel()
+
 	var called bool
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		called = true
@@ -536,6 +578,8 @@ func TestFetchIssuesByStates_EmptyStates(t *testing.T) {
 }
 
 func TestFetchIssuesByStates_SingleState(t *testing.T) {
+	t.Parallel()
+
 	var receivedJQL string
 	fixture := loadFixture(t, "search_single_page.json")
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -561,6 +605,8 @@ func TestFetchIssuesByStates_SingleState(t *testing.T) {
 }
 
 func TestFetchIssuesByStates_QueryFilter(t *testing.T) {
+	t.Parallel()
+
 	var receivedJQL string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		receivedJQL = r.URL.Query().Get("jql")
@@ -583,6 +629,8 @@ func TestFetchIssuesByStates_QueryFilter(t *testing.T) {
 // --- FetchIssueStatesByIDs tests ---
 
 func TestFetchIssueStatesByIDs_Empty(t *testing.T) {
+	t.Parallel()
+
 	var called bool
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		called = true
@@ -606,6 +654,8 @@ func TestFetchIssueStatesByIDs_Empty(t *testing.T) {
 }
 
 func TestFetchIssueStatesByIDs_SingleBatch(t *testing.T) {
+	t.Parallel()
+
 	var receivedJQL string
 	resp := searchResponse{
 		Issues: []jiraIssue{
@@ -648,6 +698,8 @@ func TestFetchIssueStatesByIDs_SingleBatch(t *testing.T) {
 }
 
 func TestFetchIssueStatesByIDs_MultiBatch(t *testing.T) {
+	t.Parallel()
+
 	var requestCount int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		atomic.AddInt32(&requestCount, 1)
@@ -687,6 +739,8 @@ func TestFetchIssueStatesByIDs_MultiBatch(t *testing.T) {
 }
 
 func TestFetchIssueStatesByIDs_NoQueryFilter(t *testing.T) {
+	t.Parallel()
+
 	var receivedJQL string
 	resp := searchResponse{
 		Issues: []jiraIssue{
@@ -717,6 +771,8 @@ func TestFetchIssueStatesByIDs_NoQueryFilter(t *testing.T) {
 // --- FetchIssueComments tests ---
 
 func TestFetchIssueComments_MultiPage(t *testing.T) {
+	t.Parallel()
+
 	page1 := loadFixture(t, "comments_multi_page_1.json")
 	page2 := loadFixture(t, "comments_multi_page_2.json")
 
@@ -747,6 +803,8 @@ func TestFetchIssueComments_MultiPage(t *testing.T) {
 }
 
 func TestFetchIssueComments_Empty(t *testing.T) {
+	t.Parallel()
+
 	fixture := loadFixture(t, "comments_empty.json")
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Write(fixture) //nolint:errcheck // test helper
@@ -767,6 +825,8 @@ func TestFetchIssueComments_Empty(t *testing.T) {
 }
 
 func TestFetchIssueComments_NotFound(t *testing.T) {
+	t.Parallel()
+
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
 	}))
@@ -780,6 +840,8 @@ func TestFetchIssueComments_NotFound(t *testing.T) {
 // --- Full lifecycle integration test ---
 
 func TestAdapterLifecycle(t *testing.T) {
+	t.Parallel()
+
 	searchFixture := loadFixture(t, "search_single_page.json")
 	issueFixture := loadFixture(t, "issue_detail.json")
 	commentsFixture := loadFixture(t, "comments.json")

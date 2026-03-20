@@ -124,7 +124,7 @@ func TestComputePath(t *testing.T) {
 
 		_, err := ComputePath("", "ABC-123")
 		if err == nil {
-			t.Fatal("ComputePath with empty root should error")
+			t.Fatal("ComputePath(\"\", \"ABC-123\") error = nil, want error")
 		}
 		var pe *PathError
 		if !errors.As(err, &pe) {
@@ -141,7 +141,7 @@ func TestComputePath(t *testing.T) {
 
 		_, err := ComputePath(root, "")
 		if err == nil {
-			t.Fatal("ComputePath with empty identifier should error")
+			t.Fatalf("ComputePath(%q, \"\") error = nil, want error", root)
 		}
 		var pe *PathError
 		if !errors.As(err, &pe) {
@@ -186,59 +186,53 @@ func TestComputePath(t *testing.T) {
 		}
 	})
 
+	// Section 9.5: workspace path must stay inside workspace root
 	t.Run("path is always under root", func(t *testing.T) {
 		t.Parallel()
 		root := t.TempDir()
 
 		identifiers := []string{"ABC-123", "A/B#C", "日本語", "my.task_1"}
 		for _, id := range identifiers {
-			res, err := ComputePath(root, id)
-			if err != nil {
-				t.Errorf("ComputePath(%q, %q) error: %v", root, id, err)
-				continue
-			}
+			t.Run(id, func(t *testing.T) {
+				t.Parallel()
 
-			dir := filepath.Dir(res.Path)
-			if dir != root {
-				t.Errorf("ComputePath(%q, %q): Dir(Path) = %q, want %q", root, id, dir, root)
-			}
-			if filepath.Base(res.Path) != res.Key {
-				t.Errorf("ComputePath(%q, %q): Base(Path) = %q, want Key %q", root, id, filepath.Base(res.Path), res.Key)
-			}
+				res, err := ComputePath(root, id)
+				if err != nil {
+					t.Fatalf("ComputePath(%q, %q) error: %v", root, id, err)
+				}
+
+				dir := filepath.Dir(res.Path)
+				if dir != root {
+					t.Errorf("ComputePath(%q, %q): Dir(Path) = %q, want %q", root, id, dir, root)
+				}
+				if filepath.Base(res.Path) != res.Key {
+					t.Errorf("ComputePath(%q, %q): Base(Path) = %q, want Key %q", root, id, filepath.Base(res.Path), res.Key)
+				}
+			})
 		}
 	})
 
-	t.Run("dot identifier rejected", func(t *testing.T) {
+	// Section 9.5: "." and ".." identifiers must be rejected
+	t.Run("special name identifiers rejected", func(t *testing.T) {
 		t.Parallel()
-		root := t.TempDir()
 
-		_, err := ComputePath(root, ".")
-		if err == nil {
-			t.Fatal("ComputePath with dot identifier should error")
-		}
-		var pe *PathError
-		if !errors.As(err, &pe) {
-			t.Fatalf("error type = %T, want *PathError", err)
-		}
-		if pe.Op != "sanitize" {
-			t.Errorf("PathError.Op = %q, want %q", pe.Op, "sanitize")
-		}
-	})
+		for _, id := range []string{".", ".."} {
+			t.Run(id, func(t *testing.T) {
+				t.Parallel()
+				root := t.TempDir()
 
-	t.Run("dotdot identifier rejected", func(t *testing.T) {
-		t.Parallel()
-		root := t.TempDir()
-
-		_, err := ComputePath(root, "..")
-		if err == nil {
-			t.Fatal("ComputePath with dotdot identifier should error")
-		}
-		var pe *PathError
-		if !errors.As(err, &pe) {
-			t.Fatalf("error type = %T, want *PathError", err)
-		}
-		if pe.Op != "sanitize" {
-			t.Errorf("PathError.Op = %q, want %q", pe.Op, "sanitize")
+				_, err := ComputePath(root, id)
+				if err == nil {
+					t.Fatalf("ComputePath(%q, %q) error = nil, want error", root, id)
+				}
+				var pe *PathError
+				if !errors.As(err, &pe) {
+					t.Fatalf("error type = %T, want *PathError", err)
+				}
+				if pe.Op != "sanitize" {
+					t.Errorf("PathError.Op = %q, want %q", pe.Op, "sanitize")
+				}
+			})
 		}
 	})
 }
@@ -348,7 +342,7 @@ func TestEnsure(t *testing.T) {
 
 		_, err := Ensure(root, "CONFLICT-1")
 		if err == nil {
-			t.Fatal("Ensure should return error for non-directory at workspace path")
+			t.Fatalf("Ensure(%q, %q) error = nil, want error", root, "CONFLICT-1")
 		}
 
 		var pe *PathError
@@ -412,7 +406,7 @@ func TestEnsure(t *testing.T) {
 
 		_, err := Ensure(root, "SYM-1")
 		if err == nil {
-			t.Fatal("Ensure should return error for symlink at workspace path")
+			t.Fatalf("Ensure(%q, %q) error = nil, want error", root, "SYM-1")
 		}
 
 		var pe *PathError
@@ -430,7 +424,7 @@ func TestEnsure(t *testing.T) {
 
 		_, err := Ensure(root, "")
 		if err == nil {
-			t.Fatal("Ensure with empty identifier should error")
+			t.Fatalf("Ensure(%q, \"\") error = nil, want error", root)
 		}
 		var pe *PathError
 		if !errors.As(err, &pe) {
@@ -446,7 +440,7 @@ func TestEnsure(t *testing.T) {
 
 		_, err := Ensure("", "X-1")
 		if err == nil {
-			t.Fatal("Ensure with empty root should error")
+			t.Fatal("Ensure(\"\", \"X-1\") error = nil, want error")
 		}
 		var pe *PathError
 		if !errors.As(err, &pe) {

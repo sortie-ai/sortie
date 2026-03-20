@@ -17,17 +17,19 @@ func TestSetup(t *testing.T) {
 	output := buf.String()
 
 	if !strings.Contains(output, "startup complete") {
-		t.Errorf("expected log output to contain message, got: %s", output)
+		t.Errorf("Setup() output = %q, want containing %q", output, "startup complete")
 	}
 
 	buf.Reset()
 	slog.Default().Debug("should be filtered")
 	if buf.Len() != 0 {
-		t.Errorf("expected DEBUG message to be filtered at INFO level, got: %s", buf.String())
+		t.Errorf("Setup(LevelInfo) wrote DEBUG message: %q, want empty", buf.String())
 	}
 }
 
 func TestWithIssue(t *testing.T) {
+	t.Parallel()
+
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&buf, nil))
 
@@ -37,14 +39,16 @@ func TestWithIssue(t *testing.T) {
 	output := buf.String()
 
 	if !strings.Contains(output, "issue_id=10042") {
-		t.Errorf("expected issue_id=10042 in output, got: %s", output)
+		t.Errorf("WithIssue() output = %q, want containing %q", output, "issue_id=10042")
 	}
 	if !strings.Contains(output, "issue_identifier=PROJ-123") {
-		t.Errorf("expected issue_identifier=PROJ-123 in output, got: %s", output)
+		t.Errorf("WithIssue() output = %q, want containing %q", output, "issue_identifier=PROJ-123")
 	}
 }
 
 func TestWithSession(t *testing.T) {
+	t.Parallel()
+
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&buf, nil))
 
@@ -54,11 +58,13 @@ func TestWithSession(t *testing.T) {
 	output := buf.String()
 
 	if !strings.Contains(output, "session_id=sess-abc-def") {
-		t.Errorf("expected session_id=sess-abc-def in output, got: %s", output)
+		t.Errorf("WithSession() output = %q, want containing %q", output, "session_id=sess-abc-def")
 	}
 }
 
 func TestWithIssueAndSession(t *testing.T) {
+	t.Parallel()
+
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&buf, nil))
 
@@ -69,12 +75,14 @@ func TestWithIssueAndSession(t *testing.T) {
 
 	for _, key := range []string{"issue_id=10042", "issue_identifier=PROJ-123", "session_id=sess-abc-def"} {
 		if !strings.Contains(output, key) {
-			t.Errorf("expected %s in output, got: %s", key, output)
+			t.Errorf("WithSession(WithIssue()) output = %q, want containing %q", output, key)
 		}
 	}
 }
 
 func TestWithIssue_SpecialValues(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name            string
 		issueID         string
@@ -128,6 +136,8 @@ func TestWithIssue_SpecialValues(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
 			var buf bytes.Buffer
 			logger := slog.New(slog.NewTextHandler(&buf, nil))
 
@@ -137,16 +147,18 @@ func TestWithIssue_SpecialValues(t *testing.T) {
 			output := buf.String()
 
 			if !strings.Contains(output, tt.wantID) {
-				t.Errorf("expected %s in output, got: %s", tt.wantID, output)
+				t.Errorf("WithIssue(%q, %q) output = %q, want containing %q", tt.issueID, tt.issueIdentifier, output, tt.wantID)
 			}
 			if !strings.Contains(output, tt.wantIdentifier) {
-				t.Errorf("expected %s in output, got: %s", tt.wantIdentifier, output)
+				t.Errorf("WithIssue(%q, %q) output = %q, want containing %q", tt.issueID, tt.issueIdentifier, output, tt.wantIdentifier)
 			}
 		})
 	}
 }
 
 func TestWithSession_SpecialValues(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name      string
 		sessionID string
@@ -176,6 +188,8 @@ func TestWithSession_SpecialValues(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
 			var buf bytes.Buffer
 			logger := slog.New(slog.NewTextHandler(&buf, nil))
 
@@ -185,7 +199,7 @@ func TestWithSession_SpecialValues(t *testing.T) {
 			output := buf.String()
 
 			if !strings.Contains(output, tt.want) {
-				t.Errorf("expected %s in output, got: %s", tt.want, output)
+				t.Errorf("WithSession(%q) output = %q, want containing %q", tt.sessionID, output, tt.want)
 			}
 		})
 	}

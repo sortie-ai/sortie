@@ -12,12 +12,16 @@ import (
 const branchingTemplate = `{{ if .run.is_continuation }}Continue turn {{ .run.turn_number }} cont=true{{ else }}Task: {{ .issue.title }} cont=false{{ end }}`
 
 func TestBuildTurnPrompt(t *testing.T) {
+	t.Parallel()
+
 	issue := map[string]any{
 		"title": "Fix login bug",
 		"state": "In Progress",
 	}
 
 	t.Run("FirstTurnFullPrompt", func(t *testing.T) {
+		t.Parallel()
+
 		tmpl, err := Parse(branchingTemplate, "WORKFLOW.md", 0)
 		if err != nil {
 			t.Fatalf("parse: %v", err)
@@ -28,17 +32,19 @@ func TestBuildTurnPrompt(t *testing.T) {
 			t.Fatalf("unexpected error: %v", err)
 		}
 		if !strings.Contains(got, "Fix login bug") {
-			t.Errorf("expected issue title in output, got %q", got)
+			t.Errorf("BuildTurnPrompt() = %q, want substring %q", got, "Fix login bug")
 		}
 		if !strings.Contains(got, "cont=false") {
-			t.Errorf("expected cont=false in output, got %q", got)
+			t.Errorf("BuildTurnPrompt() = %q, want substring %q", got, "cont=false")
 		}
 		if got == DefaultContinuationPrompt {
-			t.Error("first turn must not return DefaultContinuationPrompt")
+			t.Errorf("BuildTurnPrompt() = DefaultContinuationPrompt, want author-defined prompt")
 		}
 	})
 
 	t.Run("ContinuationTurnRendersTemplate", func(t *testing.T) {
+		t.Parallel()
+
 		tmpl, err := Parse(branchingTemplate, "WORKFLOW.md", 0)
 		if err != nil {
 			t.Fatalf("parse: %v", err)
@@ -49,14 +55,16 @@ func TestBuildTurnPrompt(t *testing.T) {
 			t.Fatalf("unexpected error: %v", err)
 		}
 		if got == DefaultContinuationPrompt {
-			t.Error("expected author-defined continuation, got DefaultContinuationPrompt")
+			t.Errorf("BuildTurnPrompt() = DefaultContinuationPrompt, want author-defined continuation")
 		}
 		if !strings.Contains(got, "cont=true") {
-			t.Errorf("expected cont=true in output, got %q", got)
+			t.Errorf("BuildTurnPrompt() = %q, want substring %q", got, "cont=true")
 		}
 	})
 
 	t.Run("ContinuationTurnShorter", func(t *testing.T) {
+		t.Parallel()
+
 		tmpl, err := Parse(branchingTemplate, "WORKFLOW.md", 0)
 		if err != nil {
 			t.Fatalf("parse: %v", err)
@@ -71,14 +79,16 @@ func TestBuildTurnPrompt(t *testing.T) {
 			t.Fatalf("continuation turn: %v", err)
 		}
 		if len(cont) >= len(first) {
-			t.Errorf("continuation (%d bytes) should be shorter than first turn (%d bytes)", len(cont), len(first))
+			t.Errorf("BuildTurnPrompt() continuation len = %d, want < first turn len %d", len(cont), len(first))
 		}
 		if strings.Contains(cont, "Fix login bug") {
-			t.Error("continuation should not contain the issue title")
+			t.Errorf("BuildTurnPrompt() continuation = %q, want no issue title", cont)
 		}
 	})
 
 	t.Run("ContinuationFallbackOnEmptyOutput", func(t *testing.T) {
+		t.Parallel()
+
 		// Template emits nothing when is_continuation is true (no else branch).
 		body := `{{ if not .run.is_continuation }}Full task: {{ .issue.title }}{{ end }}`
 		tmpl, err := Parse(body, "WORKFLOW.md", 0)
@@ -91,11 +101,13 @@ func TestBuildTurnPrompt(t *testing.T) {
 			t.Fatalf("unexpected error: %v", err)
 		}
 		if got != DefaultContinuationPrompt {
-			t.Errorf("expected DefaultContinuationPrompt, got %q", got)
+			t.Errorf("BuildTurnPrompt() = %q, want DefaultContinuationPrompt", got)
 		}
 	})
 
 	t.Run("ContinuationFallbackOnWhitespaceOnly", func(t *testing.T) {
+		t.Parallel()
+
 		body := "{{ if .run.is_continuation }}  \n  {{ else }}Full task{{ end }}"
 		tmpl, err := Parse(body, "WORKFLOW.md", 0)
 		if err != nil {
@@ -107,11 +119,13 @@ func TestBuildTurnPrompt(t *testing.T) {
 			t.Fatalf("unexpected error: %v", err)
 		}
 		if got != DefaultContinuationPrompt {
-			t.Errorf("expected DefaultContinuationPrompt, got %q", got)
+			t.Errorf("BuildTurnPrompt() = %q, want DefaultContinuationPrompt", got)
 		}
 	})
 
 	t.Run("FirstTurnEmptyNoFallback", func(t *testing.T) {
+		t.Parallel()
+
 		// First-turn empty output must pass through as-is, NOT substitute
 		// DefaultContinuationPrompt. The fallback is for continuation turns only.
 		tmpl, err := Parse("", "WORKFLOW.md", 0)
@@ -124,11 +138,13 @@ func TestBuildTurnPrompt(t *testing.T) {
 			t.Fatalf("unexpected error: %v", err)
 		}
 		if got == DefaultContinuationPrompt {
-			t.Error("first turn empty output must not fall back to DefaultContinuationPrompt")
+			t.Errorf("BuildTurnPrompt(turnNumber=1) = DefaultContinuationPrompt, want empty passthrough")
 		}
 	})
 
 	t.Run("FirstTurnRenderError", func(t *testing.T) {
+		t.Parallel()
+
 		body := "{{ .issue.nonexistent_field }}"
 		tmpl, err := Parse(body, "WORKFLOW.md", 0)
 		if err != nil {
@@ -149,6 +165,8 @@ func TestBuildTurnPrompt(t *testing.T) {
 	})
 
 	t.Run("ContinuationTurnRenderError", func(t *testing.T) {
+		t.Parallel()
+
 		// References a missing field unconditionally — errors on all turns.
 		body := "{{ .issue.missing_field }}"
 		tmpl, err := Parse(body, "WORKFLOW.md", 0)
@@ -167,6 +185,8 @@ func TestBuildTurnPrompt(t *testing.T) {
 	})
 
 	t.Run("InvalidTurnNumber", func(t *testing.T) {
+		t.Parallel()
+
 		tmpl, err := Parse("hello", "WORKFLOW.md", 0)
 		if err != nil {
 			t.Fatalf("parse: %v", err)
@@ -179,11 +199,13 @@ func TestBuildTurnPrompt(t *testing.T) {
 		// Must NOT be a *TemplateError — this is a caller bug, not a template issue.
 		var te *TemplateError
 		if errors.As(err, &te) {
-			t.Errorf("expected plain error, got *TemplateError: %v", err)
+			t.Errorf("BuildTurnPrompt(turnNumber=0) error type = %T, want plain error", err)
 		}
 	})
 
 	t.Run("NilAttemptFirstRun", func(t *testing.T) {
+		t.Parallel()
+
 		tmpl, err := Parse("{{ .issue.title }} attempt={{ .attempt }}", "WORKFLOW.md", 0)
 		if err != nil {
 			t.Fatalf("parse: %v", err)
@@ -194,11 +216,13 @@ func TestBuildTurnPrompt(t *testing.T) {
 			t.Fatalf("unexpected error: %v", err)
 		}
 		if !strings.Contains(got, "Fix login bug") {
-			t.Errorf("expected issue title in output, got %q", got)
+			t.Errorf("BuildTurnPrompt() = %q, want substring %q", got, "Fix login bug")
 		}
 	})
 
 	t.Run("RetryAttemptFirstTurn", func(t *testing.T) {
+		t.Parallel()
+
 		tmpl, err := Parse("{{ .issue.title }} attempt={{ .attempt }}", "WORKFLOW.md", 0)
 		if err != nil {
 			t.Fatalf("parse: %v", err)
@@ -209,11 +233,13 @@ func TestBuildTurnPrompt(t *testing.T) {
 			t.Fatalf("unexpected error: %v", err)
 		}
 		if !strings.Contains(got, "attempt=2") {
-			t.Errorf("expected attempt=2 in output, got %q", got)
+			t.Errorf("BuildTurnPrompt() = %q, want substring %q", got, "attempt=2")
 		}
 	})
 
 	t.Run("ContinuationConsistentAcrossTurns", func(t *testing.T) {
+		t.Parallel()
+
 		tmpl, err := Parse(branchingTemplate, "WORKFLOW.md", 0)
 		if err != nil {
 			t.Fatalf("parse: %v", err)

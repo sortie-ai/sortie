@@ -64,7 +64,11 @@ func mustRemove(t *testing.T, path string) {
 }
 
 func TestNewManager(t *testing.T) {
+	t.Parallel()
+
 	t.Run("ValidFile", func(t *testing.T) {
+		t.Parallel()
+
 		dir := t.TempDir()
 		path := filepath.Join(dir, "WORKFLOW.md")
 		mustWriteFile(t, path, validWorkflow(5000))
@@ -86,36 +90,44 @@ func TestNewManager(t *testing.T) {
 	})
 
 	t.Run("MissingFile", func(t *testing.T) {
+		t.Parallel()
+
 		_, err := NewManager(filepath.Join(t.TempDir(), "nonexistent.md"), testLogger())
 		if err == nil {
-			t.Fatal("expected error, got nil")
+			t.Fatal("NewManager() error = nil, want error")
 		}
 	})
 
 	t.Run("InvalidYAML", func(t *testing.T) {
+		t.Parallel()
+
 		dir := t.TempDir()
 		path := filepath.Join(dir, "WORKFLOW.md")
 		mustWriteFile(t, path, []byte("---\n: : : bad {{{\n---\nprompt\n"))
 
 		_, err := NewManager(path, testLogger())
 		if err == nil {
-			t.Fatal("expected error, got nil")
+			t.Fatal("NewManager() error = nil, want error")
 		}
 	})
 
 	t.Run("InvalidTemplate", func(t *testing.T) {
+		t.Parallel()
+
 		dir := t.TempDir()
 		path := filepath.Join(dir, "WORKFLOW.md")
 		mustWriteFile(t, path, []byte("---\nk: v\n---\n{{ .issue.title\n"))
 
 		_, err := NewManager(path, testLogger())
 		if err == nil {
-			t.Fatal("expected error, got nil")
+			t.Fatal("NewManager() error = nil, want error")
 		}
 	})
 }
 
 func TestManager_Reload(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	path := filepath.Join(dir, "WORKFLOW.md")
 	mustWriteFile(t, path, validWorkflow(5000))
@@ -140,6 +152,8 @@ func TestManager_Reload(t *testing.T) {
 }
 
 func TestManager_ReloadRetainsOnError(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	path := filepath.Join(dir, "WORKFLOW.md")
 	mustWriteFile(t, path, validWorkflow(5000))
@@ -154,7 +168,7 @@ func TestManager_ReloadRetainsOnError(t *testing.T) {
 
 	err = mgr.Reload()
 	if err == nil {
-		t.Fatal("expected Reload to return error")
+		t.Fatal("Reload() error = nil, want error")
 	}
 	if mgr.Config().Polling.IntervalMS != 5000 {
 		t.Errorf("after failed Reload: Polling.IntervalMS = %d, want 5000", mgr.Config().Polling.IntervalMS)
@@ -167,6 +181,8 @@ func TestManager_ReloadRetainsOnError(t *testing.T) {
 // Section 17.1: Workflow file changes are detected and trigger
 // re-read/re-apply without restart.
 func TestManager_WatchPicksUpChange(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	path := filepath.Join(dir, "WORKFLOW.md")
 	mustWriteFile(t, path, validWorkflow(5000))
@@ -200,6 +216,8 @@ func TestManager_WatchPicksUpChange(t *testing.T) {
 // Section 17.1: Invalid workflow reload keeps last known good effective
 // configuration and emits an operator-visible error.
 func TestManager_WatchInvalidRetainsGood(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	path := filepath.Join(dir, "WORKFLOW.md")
 	mustWriteFile(t, path, validWorkflow(5000))
@@ -237,6 +255,8 @@ func TestManager_WatchInvalidRetainsGood(t *testing.T) {
 }
 
 func TestManager_ConcurrentReadSafety(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	path := filepath.Join(dir, "WORKFLOW.md")
 	mustWriteFile(t, path, validWorkflow(5000))
@@ -290,6 +310,8 @@ func TestManager_ConcurrentReadSafety(t *testing.T) {
 }
 
 func TestManager_DebounceCoalescence(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	path := filepath.Join(dir, "WORKFLOW.md")
 	mustWriteFile(t, path, validWorkflow(1000))
@@ -326,6 +348,8 @@ func TestManager_DebounceCoalescence(t *testing.T) {
 }
 
 func TestManager_DeleteAndRecreate(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	path := filepath.Join(dir, "WORKFLOW.md")
 	mustWriteFile(t, path, validWorkflow(5000))
@@ -370,6 +394,8 @@ func TestManager_DeleteAndRecreate(t *testing.T) {
 }
 
 func TestManager_ContextCancellation(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	path := filepath.Join(dir, "WORKFLOW.md")
 	mustWriteFile(t, path, validWorkflow(5000))
@@ -402,6 +428,8 @@ func TestManager_ContextCancellation(t *testing.T) {
 }
 
 func TestManager_StopIdempotent(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	path := filepath.Join(dir, "WORKFLOW.md")
 	mustWriteFile(t, path, validWorkflow(5000))
@@ -423,6 +451,8 @@ func TestManager_StopIdempotent(t *testing.T) {
 }
 
 func TestManager_RecoverAfterInvalidReload(t *testing.T) {
+	t.Parallel()
+
 	dir := t.TempDir()
 	path := filepath.Join(dir, "WORKFLOW.md")
 	mustWriteFile(t, path, validWorkflow(5000))

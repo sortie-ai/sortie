@@ -10,6 +10,8 @@ import (
 )
 
 func TestLoad(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name                 string
 		content              []byte // nil means do not create the file
@@ -172,6 +174,8 @@ func TestLoad(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
 			var path string
 			if tt.skipFileCreate {
 				path = filepath.Join(t.TempDir(), "nonexistent", "WORKFLOW.md")
@@ -187,24 +191,24 @@ func TestLoad(t *testing.T) {
 
 			if tt.wantErr {
 				if err == nil {
-					t.Fatal("expected error, got nil")
+					t.Fatalf("Load(%q) error = nil, want *WorkflowError", path)
 				}
 				var wErr *WorkflowError
 				if !errors.As(err, &wErr) {
-					t.Fatalf("expected *WorkflowError, got %T: %v", err, err)
+					t.Fatalf("Load(%q) error type = %T, want *WorkflowError", path, err)
 				}
 				if wErr.Kind != tt.wantKind {
-					t.Errorf("expected Kind %d, got %d", tt.wantKind, wErr.Kind)
+					t.Errorf("Load(%q) WorkflowError.Kind = %d, want %d", path, wErr.Kind, tt.wantKind)
 				}
 				return
 			}
 
 			if err != nil {
-				t.Fatalf("unexpected error: %v", err)
+				t.Fatalf("Load(%q) unexpected error: %v", path, err)
 			}
 
 			if wf.Config == nil {
-				t.Fatal("Config must never be nil")
+				t.Fatalf("Load(%q) Config = nil, want non-nil", path)
 			}
 
 			if tt.wantConfig != nil {
@@ -212,43 +216,53 @@ func TestLoad(t *testing.T) {
 			}
 
 			if wf.PromptTemplate != tt.wantPrompt {
-				t.Errorf("PromptTemplate mismatch\n  want: %q\n  got:  %q", tt.wantPrompt, wf.PromptTemplate)
+				t.Errorf("Load(%q) PromptTemplate = %q, want %q", path, wf.PromptTemplate, tt.wantPrompt)
 			}
 
 			if wf.FrontMatterLines != tt.wantFrontMatterLines {
-				t.Errorf("FrontMatterLines mismatch\n  want: %d\n  got:  %d", tt.wantFrontMatterLines, wf.FrontMatterLines)
+				t.Errorf("Load(%q) FrontMatterLines = %d, want %d", path, wf.FrontMatterLines, tt.wantFrontMatterLines)
 			}
 		})
 	}
 }
 
 func TestWorkflowError_Error(t *testing.T) {
+	t.Parallel()
+
 	t.Run("ErrParseError_hint", func(t *testing.T) {
+		t.Parallel()
+
 		e := &WorkflowError{Kind: ErrParseError, Path: "test.md", Err: errors.New("yaml: bad")}
 		msg := e.Error()
 		if want := "did you forget the closing '---' delimiter?"; !strings.Contains(msg, want) {
-			t.Errorf("ErrParseError message missing hint\n  want substring: %q\n  got: %q", want, msg)
+			t.Errorf("WorkflowError{Kind: ErrParseError}.Error() = %q, want substring %q", msg, want)
 		}
 	})
 
 	t.Run("ErrMissingFile_path", func(t *testing.T) {
+		t.Parallel()
+
 		e := &WorkflowError{Kind: ErrMissingFile, Path: "/some/path.md", Err: errors.New("no such file")}
 		msg := e.Error()
-		if !strings.Contains(msg, "/some/path.md") {
-			t.Errorf("ErrMissingFile message missing path\n  got: %q", msg)
+		if want := "/some/path.md"; !strings.Contains(msg, want) {
+			t.Errorf("WorkflowError{Kind: ErrMissingFile}.Error() = %q, want substring %q", msg, want)
 		}
 	})
 
 	t.Run("ErrFrontMatterNotMap_type", func(t *testing.T) {
+		t.Parallel()
+
 		e := &WorkflowError{Kind: ErrFrontMatterNotMap, Path: "t.md", Err: errors.New("got []interface {}")}
 		msg := e.Error()
-		if !strings.Contains(msg, "YAML map") {
-			t.Errorf("ErrFrontMatterNotMap message missing 'YAML map'\n  got: %q", msg)
+		if want := "YAML map"; !strings.Contains(msg, want) {
+			t.Errorf("WorkflowError{Kind: ErrFrontMatterNotMap}.Error() = %q, want substring %q", msg, want)
 		}
 	})
 }
 
 func TestWorkflowError_Unwrap(t *testing.T) {
+	t.Parallel()
+
 	sentinel := errors.New("sentinel")
 	e := &WorkflowError{Kind: ErrParseError, Path: "x.md", Err: sentinel}
 	if !errors.Is(e, sentinel) {
@@ -263,7 +277,7 @@ func TestWorkflowError_Unwrap(t *testing.T) {
 func assertMapsEqual(t *testing.T, want, got map[string]any) {
 	t.Helper()
 	if len(want) != len(got) {
-		t.Errorf("map length mismatch: want %d, got %d\n  want: %v\n  got:  %v", len(want), len(got), want, got)
+		t.Errorf("map length = %d, want %d\n  got:  %v\n  want: %v", len(got), len(want), got, want)
 		return
 	}
 	for k, wv := range want {

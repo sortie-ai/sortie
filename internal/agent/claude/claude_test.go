@@ -42,7 +42,7 @@ func TestNewClaudeCodeAdapter(t *testing.T) {
 		}
 		a := adapter.(*ClaudeCodeAdapter)
 		if a.passthrough.Model != "claude-sonnet-4-20250514" {
-			t.Errorf("Model = %q", a.passthrough.Model)
+			t.Errorf("Model = %q, want %q", a.passthrough.Model, "claude-sonnet-4-20250514")
 		}
 		if a.passthrough.MaxTurns != 10 {
 			t.Errorf("MaxTurns = %d, want 10", a.passthrough.MaxTurns)
@@ -51,7 +51,7 @@ func TestNewClaudeCodeAdapter(t *testing.T) {
 			t.Errorf("MaxBudgetUSD = %f, want 1.5", a.passthrough.MaxBudgetUSD)
 		}
 		if a.passthrough.PermissionMode != "bypassPermissions" {
-			t.Errorf("PermissionMode = %q", a.passthrough.PermissionMode)
+			t.Errorf("PermissionMode = %q, want %q", a.passthrough.PermissionMode, "bypassPermissions")
 		}
 	})
 }
@@ -68,7 +68,7 @@ func TestRegistration(t *testing.T) {
 		t.Fatalf("factory() error = %v", err)
 	}
 	if _, ok := adapter.(*ClaudeCodeAdapter); !ok {
-		t.Error("factory returned wrong type")
+		t.Errorf("factory() type = %T, want *ClaudeCodeAdapter", adapter)
 	}
 }
 
@@ -80,35 +80,49 @@ func TestStartSession(t *testing.T) {
 
 	tests := []struct {
 		name    string
-		params  domain.StartSessionParams
+		setup   func(t *testing.T) domain.StartSessionParams
 		wantErr domain.AgentErrorKind
 	}{
 		{
-			name:    "empty workspace path",
-			params:  domain.StartSessionParams{},
+			name: "empty workspace path",
+			setup: func(_ *testing.T) domain.StartSessionParams {
+				return domain.StartSessionParams{}
+			},
 			wantErr: domain.ErrInvalidWorkspaceCwd,
 		},
 		{
 			name: "non-existent workspace",
-			params: domain.StartSessionParams{
-				WorkspacePath: "/nonexistent/path/that/does/not/exist",
-				AgentConfig:   domain.AgentConfig{Command: existingCmd},
+			setup: func(_ *testing.T) domain.StartSessionParams {
+				return domain.StartSessionParams{
+					WorkspacePath: "/nonexistent/path/that/does/not/exist",
+					AgentConfig:   domain.AgentConfig{Command: existingCmd},
+				}
 			},
 			wantErr: domain.ErrInvalidWorkspaceCwd,
 		},
 		{
 			name: "workspace is a file",
-			params: domain.StartSessionParams{
-				AgentConfig: domain.AgentConfig{Command: existingCmd},
-				// WorkspacePath set below
+			setup: func(t *testing.T) domain.StartSessionParams {
+				t.Helper()
+				tmpFile := filepath.Join(t.TempDir(), "afile")
+				if err := os.WriteFile(tmpFile, []byte("x"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+				return domain.StartSessionParams{
+					WorkspacePath: tmpFile,
+					AgentConfig:   domain.AgentConfig{Command: existingCmd},
+				}
 			},
 			wantErr: domain.ErrInvalidWorkspaceCwd,
 		},
 		{
 			name: "command not found",
-			params: domain.StartSessionParams{
-				AgentConfig: domain.AgentConfig{Command: "sortie-nonexistent-binary-12345"},
-				// WorkspacePath set below
+			setup: func(t *testing.T) domain.StartSessionParams {
+				t.Helper()
+				return domain.StartSessionParams{
+					WorkspacePath: t.TempDir(),
+					AgentConfig:   domain.AgentConfig{Command: "sortie-nonexistent-binary-12345"},
+				}
 			},
 			wantErr: domain.ErrAgentNotFound,
 		},
@@ -119,17 +133,7 @@ func TestStartSession(t *testing.T) {
 			t.Parallel()
 			adapter, _ := NewClaudeCodeAdapter(map[string]any{})
 
-			params := tt.params
-			if tt.name == "workspace is a file" {
-				tmpFile := filepath.Join(t.TempDir(), "afile")
-				if err := os.WriteFile(tmpFile, []byte("x"), 0o644); err != nil {
-					t.Fatal(err)
-				}
-				params.WorkspacePath = tmpFile
-			}
-			if tt.name == "command not found" {
-				params.WorkspacePath = t.TempDir()
-			}
+			params := tt.setup(t)
 
 			_, err := adapter.StartSession(context.Background(), params)
 			if err == nil {

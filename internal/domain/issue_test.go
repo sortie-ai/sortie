@@ -5,6 +5,8 @@ import "testing"
 func intPtr(v int) *int { return &v }
 
 func TestToTemplateMap_FullyPopulated(t *testing.T) {
+	t.Parallel()
+
 	iss := &Issue{
 		ID:          "10001",
 		Identifier:  "PROJ-42",
@@ -117,6 +119,8 @@ func TestToTemplateMap_FullyPopulated(t *testing.T) {
 }
 
 func TestToTemplateMap_Minimal(t *testing.T) {
+	t.Parallel()
+
 	iss := &Issue{
 		ID:         "10001",
 		Identifier: "PROJ-1",
@@ -158,6 +162,8 @@ func TestToTemplateMap_Minimal(t *testing.T) {
 }
 
 func TestToTemplateMap_NilVsEmptyComments(t *testing.T) {
+	t.Parallel()
+
 	// Nil comments = not fetched.
 	issNil := &Issue{
 		ID:         "1",
@@ -194,6 +200,8 @@ func TestToTemplateMap_NilVsEmptyComments(t *testing.T) {
 }
 
 func TestToTemplateMap_Priority(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name     string
 		priority *int
@@ -206,6 +214,7 @@ func TestToTemplateMap_Priority(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			iss := &Issue{
 				ID:         "1",
 				Identifier: "X-1",
@@ -225,6 +234,8 @@ func TestToTemplateMap_Priority(t *testing.T) {
 }
 
 func TestToTemplateMap_BlockedByEmptyState(t *testing.T) {
+	t.Parallel()
+
 	iss := &Issue{
 		ID:         "1",
 		Identifier: "X-1",
@@ -250,6 +261,8 @@ func TestToTemplateMap_BlockedByEmptyState(t *testing.T) {
 }
 
 func TestToTemplateMap_NilLabelsNormalized(t *testing.T) {
+	t.Parallel()
+
 	iss := &Issue{
 		ID:         "1",
 		Identifier: "X-1",

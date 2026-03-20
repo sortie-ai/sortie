@@ -41,6 +41,8 @@ func requireTrackerError(t *testing.T, err error) {
 // --- Constructor tests ---
 
 func TestNewFileAdapter(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name    string
 		config  map[string]any
@@ -63,6 +65,8 @@ func TestNewFileAdapter(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
 			a, err := NewFileAdapter(tt.config)
 			if tt.wantErr {
 				requireTrackerError(t, err)
@@ -82,6 +86,8 @@ func TestNewFileAdapter(t *testing.T) {
 }
 
 func TestNewFileAdapter_YAMLAnySliceExtraction(t *testing.T) {
+	t.Parallel()
+
 	// YAML decoders produce []any, not []string. Verify the constructor
 	// handles this without panic and lowercases state values.
 	config := map[string]any{
@@ -104,9 +110,13 @@ func TestNewFileAdapter_YAMLAnySliceExtraction(t *testing.T) {
 // --- FetchCandidateIssues tests ---
 
 func TestFetchCandidateIssues(t *testing.T) {
+	t.Parallel()
+
 	ctx := context.Background()
 
 	t.Run("filters by active states", func(t *testing.T) {
+		t.Parallel()
+
 		a := newAdapter(t, fixture("basic.json"), []any{"to do", "in progress"})
 		issues, err := a.FetchCandidateIssues(ctx)
 		if err != nil {
@@ -125,6 +135,8 @@ func TestFetchCandidateIssues(t *testing.T) {
 	})
 
 	t.Run("no active states returns all", func(t *testing.T) {
+		t.Parallel()
+
 		a := newAdapter(t, fixture("basic.json"), nil)
 		issues, err := a.FetchCandidateIssues(ctx)
 		if err != nil {
@@ -136,6 +148,8 @@ func TestFetchCandidateIssues(t *testing.T) {
 	})
 
 	t.Run("empty file", func(t *testing.T) {
+		t.Parallel()
+
 		a := newAdapter(t, fixture("empty.json"), nil)
 		issues, err := a.FetchCandidateIssues(ctx)
 		if err != nil {
@@ -150,18 +164,24 @@ func TestFetchCandidateIssues(t *testing.T) {
 	})
 
 	t.Run("malformed json", func(t *testing.T) {
+		t.Parallel()
+
 		a := newAdapter(t, fixture("malformed.json"), nil)
 		_, err := a.FetchCandidateIssues(ctx)
 		requireTrackerError(t, err)
 	})
 
 	t.Run("nonexistent file", func(t *testing.T) {
+		t.Parallel()
+
 		a := newAdapter(t, "testdata/does_not_exist.json", nil)
 		_, err := a.FetchCandidateIssues(ctx)
 		requireTrackerError(t, err)
 	})
 
 	t.Run("comments are nil", func(t *testing.T) {
+		t.Parallel()
+
 		a := newAdapter(t, fixture("basic.json"), nil)
 		issues, err := a.FetchCandidateIssues(ctx)
 		if err != nil {
@@ -175,6 +195,8 @@ func TestFetchCandidateIssues(t *testing.T) {
 	})
 
 	t.Run("case-insensitive state filtering", func(t *testing.T) {
+		t.Parallel()
+
 		a := newAdapter(t, fixture("basic.json"), []any{"TO DO"})
 		issues, err := a.FetchCandidateIssues(ctx)
 		if err != nil {
@@ -192,10 +214,14 @@ func TestFetchCandidateIssues(t *testing.T) {
 // --- FetchIssueByID tests ---
 
 func TestFetchIssueByID(t *testing.T) {
+	t.Parallel()
+
 	ctx := context.Background()
 	a := newAdapter(t, fixture("basic.json"), nil)
 
 	t.Run("fully populated issue", func(t *testing.T) {
+		t.Parallel()
+
 		iss, err := a.FetchIssueByID(ctx, "10001")
 		if err != nil {
 			t.Fatalf("FetchIssueByID: %v", err)
@@ -266,11 +292,15 @@ func TestFetchIssueByID(t *testing.T) {
 	})
 
 	t.Run("not found", func(t *testing.T) {
+		t.Parallel()
+
 		_, err := a.FetchIssueByID(ctx, "99999")
 		requireTrackerError(t, err)
 	})
 
 	t.Run("empty comments array", func(t *testing.T) {
+		t.Parallel()
+
 		iss, err := a.FetchIssueByID(ctx, "10002")
 		if err != nil {
 			t.Fatalf("FetchIssueByID: %v", err)
@@ -287,10 +317,14 @@ func TestFetchIssueByID(t *testing.T) {
 // --- FetchIssuesByStates tests ---
 
 func TestFetchIssuesByStates(t *testing.T) {
+	t.Parallel()
+
 	ctx := context.Background()
 	a := newAdapter(t, fixture("basic.json"), nil)
 
 	t.Run("match by original case", func(t *testing.T) {
+		t.Parallel()
+
 		issues, err := a.FetchIssuesByStates(ctx, []string{"Done"})
 		if err != nil {
 			t.Fatalf("FetchIssuesByStates: %v", err)
@@ -304,6 +338,8 @@ func TestFetchIssuesByStates(t *testing.T) {
 	})
 
 	t.Run("case-insensitive matching", func(t *testing.T) {
+		t.Parallel()
+
 		issues, err := a.FetchIssuesByStates(ctx, []string{"done"})
 		if err != nil {
 			t.Fatalf("FetchIssuesByStates: %v", err)
@@ -315,6 +351,8 @@ func TestFetchIssuesByStates(t *testing.T) {
 
 	// Section 17.3: empty states returns empty without API call.
 	t.Run("empty states slice", func(t *testing.T) {
+		t.Parallel()
+
 		issues, err := a.FetchIssuesByStates(ctx, []string{})
 		if err != nil {
 			t.Fatalf("FetchIssuesByStates: %v", err)
@@ -328,6 +366,8 @@ func TestFetchIssuesByStates(t *testing.T) {
 	})
 
 	t.Run("no matching states", func(t *testing.T) {
+		t.Parallel()
+
 		issues, err := a.FetchIssuesByStates(ctx, []string{"Nonexistent"})
 		if err != nil {
 			t.Fatalf("FetchIssuesByStates: %v", err)
@@ -341,10 +381,14 @@ func TestFetchIssuesByStates(t *testing.T) {
 // --- FetchIssueStatesByIDs tests ---
 
 func TestFetchIssueStatesByIDs(t *testing.T) {
+	t.Parallel()
+
 	ctx := context.Background()
 	a := newAdapter(t, fixture("basic.json"), nil)
 
 	t.Run("multiple found", func(t *testing.T) {
+		t.Parallel()
+
 		m, err := a.FetchIssueStatesByIDs(ctx, []string{"10001", "10002"})
 		if err != nil {
 			t.Fatalf("FetchIssueStatesByIDs: %v", err)
@@ -361,6 +405,8 @@ func TestFetchIssueStatesByIDs(t *testing.T) {
 	})
 
 	t.Run("missing ID omitted", func(t *testing.T) {
+		t.Parallel()
+
 		m, err := a.FetchIssueStatesByIDs(ctx, []string{"10001", "99999"})
 		if err != nil {
 			t.Fatalf("FetchIssueStatesByIDs: %v", err)
@@ -374,6 +420,8 @@ func TestFetchIssueStatesByIDs(t *testing.T) {
 	})
 
 	t.Run("empty IDs", func(t *testing.T) {
+		t.Parallel()
+
 		m, err := a.FetchIssueStatesByIDs(ctx, []string{})
 		if err != nil {
 			t.Fatalf("FetchIssueStatesByIDs: %v", err)
@@ -390,10 +438,14 @@ func TestFetchIssueStatesByIDs(t *testing.T) {
 // --- FetchIssueComments tests ---
 
 func TestFetchIssueComments(t *testing.T) {
+	t.Parallel()
+
 	ctx := context.Background()
 	a := newAdapter(t, fixture("basic.json"), nil)
 
 	t.Run("issue with comments", func(t *testing.T) {
+		t.Parallel()
+
 		comments, err := a.FetchIssueComments(ctx, "10001")
 		if err != nil {
 			t.Fatalf("FetchIssueComments: %v", err)
@@ -417,6 +469,8 @@ func TestFetchIssueComments(t *testing.T) {
 	})
 
 	t.Run("empty comments array", func(t *testing.T) {
+		t.Parallel()
+
 		comments, err := a.FetchIssueComments(ctx, "10002")
 		if err != nil {
 			t.Fatalf("FetchIssueComments: %v", err)
@@ -430,6 +484,8 @@ func TestFetchIssueComments(t *testing.T) {
 	})
 
 	t.Run("null comments coerced to empty", func(t *testing.T) {
+		t.Parallel()
+
 		comments, err := a.FetchIssueComments(ctx, "10003")
 		if err != nil {
 			t.Fatalf("FetchIssueComments: %v", err)
@@ -443,6 +499,8 @@ func TestFetchIssueComments(t *testing.T) {
 	})
 
 	t.Run("not found", func(t *testing.T) {
+		t.Parallel()
+
 		_, err := a.FetchIssueComments(ctx, "99999")
 		requireTrackerError(t, err)
 	})
@@ -451,6 +509,8 @@ func TestFetchIssueComments(t *testing.T) {
 // --- Normalization tests (Section 11.3) ---
 
 func TestNormalization(t *testing.T) {
+	t.Parallel()
+
 	ctx := context.Background()
 	a := newAdapter(t, fixture("normalization.json"), nil)
 	issues, err := a.FetchCandidateIssues(ctx)
@@ -464,6 +524,8 @@ func TestNormalization(t *testing.T) {
 	}
 
 	t.Run("labels lowercased", func(t *testing.T) {
+		t.Parallel()
+
 		iss := issueByID["n1"]
 		want := []string{"bug", "high-priority"}
 		if len(iss.Labels) != len(want) {
@@ -477,24 +539,32 @@ func TestNormalization(t *testing.T) {
 	})
 
 	t.Run("string priority is nil", func(t *testing.T) {
+		t.Parallel()
+
 		if issueByID["n2"].Priority != nil {
 			t.Errorf("Priority = %v, want nil", *issueByID["n2"].Priority)
 		}
 	})
 
 	t.Run("float priority is nil", func(t *testing.T) {
+		t.Parallel()
+
 		if issueByID["n3"].Priority != nil {
 			t.Errorf("Priority = %v, want nil", *issueByID["n3"].Priority)
 		}
 	})
 
 	t.Run("boolean priority is nil", func(t *testing.T) {
+		t.Parallel()
+
 		if issueByID["n4"].Priority != nil {
 			t.Errorf("Priority = %v, want nil", *issueByID["n4"].Priority)
 		}
 	})
 
 	t.Run("integer priority", func(t *testing.T) {
+		t.Parallel()
+
 		p := issueByID["n5"].Priority
 		if p == nil {
 			t.Fatal("Priority is nil, want 1")
@@ -505,18 +575,24 @@ func TestNormalization(t *testing.T) {
 	})
 
 	t.Run("null priority is nil", func(t *testing.T) {
+		t.Parallel()
+
 		if issueByID["n6"].Priority != nil {
 			t.Errorf("Priority = %v, want nil", *issueByID["n6"].Priority)
 		}
 	})
 
 	t.Run("absent priority is nil", func(t *testing.T) {
+		t.Parallel()
+
 		if issueByID["n7"].Priority != nil {
 			t.Errorf("Priority = %v, want nil", *issueByID["n7"].Priority)
 		}
 	})
 
 	t.Run("absent labels is non-nil empty", func(t *testing.T) {
+		t.Parallel()
+
 		iss := issueByID["n7"]
 		if iss.Labels == nil {
 			t.Fatal("Labels is nil, want non-nil empty slice")
@@ -527,6 +603,8 @@ func TestNormalization(t *testing.T) {
 	})
 
 	t.Run("absent blocked_by is non-nil empty", func(t *testing.T) {
+		t.Parallel()
+
 		iss := issueByID["n7"]
 		if iss.BlockedBy == nil {
 			t.Fatal("BlockedBy is nil, want non-nil empty slice")
@@ -537,12 +615,16 @@ func TestNormalization(t *testing.T) {
 	})
 
 	t.Run("absent parent is nil", func(t *testing.T) {
+		t.Parallel()
+
 		if issueByID["n7"].Parent != nil {
 			t.Errorf("Parent = %v, want nil", issueByID["n7"].Parent)
 		}
 	})
 
 	t.Run("absent description is empty string", func(t *testing.T) {
+		t.Parallel()
+
 		if issueByID["n7"].Description != "" {
 			t.Errorf("Description = %q, want empty", issueByID["n7"].Description)
 		}
@@ -552,6 +634,8 @@ func TestNormalization(t *testing.T) {
 // --- Registry integration test ---
 
 func TestRegistryIntegration(t *testing.T) {
+	t.Parallel()
+
 	ctor, err := registry.Trackers.Get("file")
 	if err != nil {
 		t.Fatalf("registry.Trackers.Get(\"file\"): %v", err)

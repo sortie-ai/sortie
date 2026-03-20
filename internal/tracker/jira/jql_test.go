@@ -3,6 +3,8 @@ package jira
 import "testing"
 
 func TestEscapeJQLString(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name  string
 		input string
@@ -16,6 +18,8 @@ func TestEscapeJQLString(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
 			got := escapeJQLString(tt.input)
 			if got != tt.want {
 				t.Errorf("escapeJQLString(%q) = %q, want %q", tt.input, got, tt.want)
@@ -25,6 +29,8 @@ func TestEscapeJQLString(t *testing.T) {
 }
 
 func TestBuildStatusIN(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name   string
 		states []string
@@ -37,6 +43,8 @@ func TestBuildStatusIN(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
 			got := buildStatusIN(tt.states)
 			if got != tt.want {
 				t.Errorf("buildStatusIN(%v) = %q, want %q", tt.states, got, tt.want)
@@ -46,6 +54,8 @@ func TestBuildStatusIN(t *testing.T) {
 }
 
 func TestBuildCandidateJQL(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name        string
 		project     string
@@ -87,6 +97,8 @@ func TestBuildCandidateJQL(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
 			got := buildCandidateJQL(tt.project, tt.states, tt.queryFilter)
 			if got != tt.want {
 				t.Errorf("buildCandidateJQL() =\n  %q\nwant\n  %q", got, tt.want)
@@ -96,6 +108,8 @@ func TestBuildCandidateJQL(t *testing.T) {
 }
 
 func TestBuildStatesFetchJQL(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name        string
 		project     string
@@ -119,6 +133,8 @@ func TestBuildStatesFetchJQL(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
 			got := buildStatesFetchJQL(tt.project, tt.states, tt.queryFilter)
 			if got != tt.want {
 				t.Errorf("buildStatesFetchJQL() =\n  %q\nwant\n  %q", got, tt.want)
@@ -128,6 +144,8 @@ func TestBuildStatesFetchJQL(t *testing.T) {
 }
 
 func TestBuildKeyINJQL(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name string
 		keys []string
@@ -151,6 +169,8 @@ func TestBuildKeyINJQL(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
 			got := buildKeyINJQL(tt.keys)
 			if got != tt.want {
 				t.Errorf("buildKeyINJQL(%v) =\n  %q\nwant\n  %q", tt.keys, got, tt.want)

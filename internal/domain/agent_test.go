@@ -32,6 +32,8 @@ func (m *mockAgentAdapter) EventStream() <-chan AgentEvent {
 // Section 10.3: verify all 13 normalized event type string values match the
 // architecture specification exactly.
 func TestAgentEventType_Values(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		constant AgentEventType
 		want     string
@@ -52,6 +54,7 @@ func TestAgentEventType_Values(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.want, func(t *testing.T) {
+			t.Parallel()
 			if string(tt.constant) != tt.want {
 				t.Errorf("AgentEventType constant = %q, want %q", tt.constant, tt.want)
 			}
@@ -65,6 +68,8 @@ func TestAgentEventType_Values(t *testing.T) {
 // Section 10.5: verify all 9 agent error kind string values match the
 // architecture specification exactly.
 func TestAgentErrorKind_Values(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		constant AgentErrorKind
 		want     string
@@ -81,6 +86,7 @@ func TestAgentErrorKind_Values(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.want, func(t *testing.T) {
+			t.Parallel()
 			if string(tt.constant) != tt.want {
 				t.Errorf("AgentErrorKind constant = %q, want %q", tt.constant, tt.want)
 			}
@@ -92,6 +98,8 @@ func TestAgentErrorKind_Values(t *testing.T) {
 }
 
 func TestAgentError_Error(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name string
 		err  AgentError
@@ -145,6 +153,7 @@ func TestAgentError_Error(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 			if got := tt.err.Error(); got != tt.want {
 				t.Errorf("Error() = %q, want %q", got, tt.want)
 			}
@@ -153,6 +162,8 @@ func TestAgentError_Error(t *testing.T) {
 }
 
 func TestAgentError_Unwrap(t *testing.T) {
+	t.Parallel()
+
 	inner := fmt.Errorf("underlying error")
 	agentErr := &AgentError{
 		Kind:    ErrTurnTimeout,
@@ -161,7 +172,7 @@ func TestAgentError_Unwrap(t *testing.T) {
 	}
 
 	if agentErr.Unwrap() != inner {
-		t.Error("Unwrap() did not return the inner error")
+		t.Errorf("Unwrap() = %v, want %v", agentErr.Unwrap(), inner)
 	}
 
 	// Verify errors.As works through a wrapping chain.
@@ -176,6 +187,8 @@ func TestAgentError_Unwrap(t *testing.T) {
 }
 
 func TestAgentError_UnwrapNil(t *testing.T) {
+	t.Parallel()
+
 	err := &AgentError{
 		Kind:    ErrAgentNotFound,
 		Message: "command not in PATH",
@@ -187,6 +200,8 @@ func TestAgentError_UnwrapNil(t *testing.T) {
 
 // Section 10.2: Session.Internal carries adapter-specific opaque state.
 func TestSession_InternalRoundTrip(t *testing.T) {
+	t.Parallel()
+
 	type adapterState struct {
 		pid  int
 		pipe string
@@ -213,6 +228,8 @@ func TestSession_InternalRoundTrip(t *testing.T) {
 
 // Section 10.3: AgentEvent can carry all fields including token usage.
 func TestAgentEvent_Construction(t *testing.T) {
+	t.Parallel()
+
 	ts := time.Date(2026, 3, 20, 12, 0, 0, 0, time.UTC)
 	event := AgentEvent{
 		Type:      EventTokenUsage,
@@ -245,6 +262,8 @@ func TestAgentEvent_Construction(t *testing.T) {
 
 // TokenUsage zero value is the documented sentinel for non-token events.
 func TestTokenUsage_ZeroValue(t *testing.T) {
+	t.Parallel()
+
 	var usage TokenUsage
 	if usage.InputTokens != 0 || usage.OutputTokens != 0 || usage.TotalTokens != 0 {
 		t.Errorf("zero TokenUsage = %+v, want all zeros", usage)

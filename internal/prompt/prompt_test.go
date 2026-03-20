@@ -8,7 +8,11 @@ import (
 )
 
 func TestParse(t *testing.T) {
+	t.Parallel()
+
 	t.Run("ValidTemplate", func(t *testing.T) {
+		t.Parallel()
+
 		tmpl, err := Parse("Hello {{ .issue.title }}", "WORKFLOW.md", 0)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -19,6 +23,8 @@ func TestParse(t *testing.T) {
 	})
 
 	t.Run("EmptyBody", func(t *testing.T) {
+		t.Parallel()
+
 		tmpl, err := Parse("", "WORKFLOW.md", 0)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -29,6 +35,8 @@ func TestParse(t *testing.T) {
 	})
 
 	t.Run("InvalidSyntax", func(t *testing.T) {
+		t.Parallel()
+
 		_, err := Parse("{{ .issue.title", "WORKFLOW.md", 0)
 		if err == nil {
 			t.Fatal("expected error, got nil")
@@ -43,6 +51,8 @@ func TestParse(t *testing.T) {
 	})
 
 	t.Run("ParseErrorLineOffset", func(t *testing.T) {
+		t.Parallel()
+
 		// Put the error on line 3 of the template body.
 		body := "line1\nline2\n{{ .issue.title"
 		_, err := Parse(body, "WORKFLOW.md", 10)
@@ -63,6 +73,8 @@ func TestParse(t *testing.T) {
 	})
 
 	t.Run("UnknownFunction", func(t *testing.T) {
+		t.Parallel()
+
 		_, err := Parse("{{ .issue.title | nonexistent }}", "WORKFLOW.md", 0)
 		if err == nil {
 			t.Fatal("expected error for unknown function")
@@ -78,6 +90,8 @@ func TestParse(t *testing.T) {
 }
 
 func TestRender(t *testing.T) {
+	t.Parallel()
+
 	sampleIssue := map[string]any{
 		"id":         "12345",
 		"identifier": "PROJ-42",
@@ -93,6 +107,8 @@ func TestRender(t *testing.T) {
 	}
 
 	t.Run("AllVariables", func(t *testing.T) {
+		t.Parallel()
+
 		tmpl, err := Parse(
 			"Issue: {{ .issue.title }} Attempt: {{ .attempt }} Turn: {{ .run.turn_number }}",
 			"WORKFLOW.md", 0,
@@ -106,11 +122,13 @@ func TestRender(t *testing.T) {
 		}
 		want := "Issue: Fix the login bug Attempt: 2 Turn: 3"
 		if got != want {
-			t.Errorf("got %q, want %q", got, want)
+			t.Errorf("Render() = %q, want %q", got, want)
 		}
 	})
 
 	t.Run("AttemptNil_FirstRun", func(t *testing.T) {
+		t.Parallel()
+
 		tmpl, err := Parse(
 			"{{ if .attempt }}retry #{{ .attempt }}{{ else }}first run{{ end }}",
 			"WORKFLOW.md", 0,
@@ -123,11 +141,13 @@ func TestRender(t *testing.T) {
 			t.Fatalf("render: %v", err)
 		}
 		if got != "first run" {
-			t.Errorf("got %q, want %q", got, "first run")
+			t.Errorf("Render() = %q, want %q", got, "first run")
 		}
 	})
 
 	t.Run("AttemptInteger_Retry", func(t *testing.T) {
+		t.Parallel()
+
 		tmpl, err := Parse(
 			"{{ if .attempt }}retry #{{ .attempt }}{{ else }}first run{{ end }}",
 			"WORKFLOW.md", 0,
@@ -140,11 +160,13 @@ func TestRender(t *testing.T) {
 			t.Fatalf("render: %v", err)
 		}
 		if got != "retry #3" {
-			t.Errorf("got %q, want %q", got, "retry #3")
+			t.Errorf("Render() = %q, want %q", got, "retry #3")
 		}
 	})
 
 	t.Run("RunFields", func(t *testing.T) {
+		t.Parallel()
+
 		tmpl, err := Parse(
 			"turn={{ .run.turn_number }} max={{ .run.max_turns }} cont={{ .run.is_continuation }}",
 			"WORKFLOW.md", 0,
@@ -162,11 +184,13 @@ func TestRender(t *testing.T) {
 		}
 		want := "turn=5 max=20 cont=true"
 		if got != want {
-			t.Errorf("got %q, want %q", got, want)
+			t.Errorf("Render() = %q, want %q", got, want)
 		}
 	})
 
 	t.Run("NestedLabels", func(t *testing.T) {
+		t.Parallel()
+
 		tmpl, err := Parse(
 			"{{ range .issue.labels }}[{{ . }}]{{ end }}",
 			"WORKFLOW.md", 0,
@@ -179,11 +203,13 @@ func TestRender(t *testing.T) {
 			t.Fatalf("render: %v", err)
 		}
 		if got != "[bug][urgent]" {
-			t.Errorf("got %q, want %q", got, "[bug][urgent]")
+			t.Errorf("Render() = %q, want %q", got, "[bug][urgent]")
 		}
 	})
 
 	t.Run("NestedBlockedBy", func(t *testing.T) {
+		t.Parallel()
+
 		tmpl, err := Parse(
 			"{{ range .issue.blocked_by }}{{ .identifier }} {{ end }}",
 			"WORKFLOW.md", 0,
@@ -196,11 +222,13 @@ func TestRender(t *testing.T) {
 			t.Fatalf("render: %v", err)
 		}
 		if got != "PROJ-40 PROJ-41 " {
-			t.Errorf("got %q, want %q", got, "PROJ-40 PROJ-41 ")
+			t.Errorf("Render() = %q, want %q", got, "PROJ-40 PROJ-41 ")
 		}
 	})
 
 	t.Run("ParentAccess", func(t *testing.T) {
+		t.Parallel()
+
 		tmpl, err := Parse(
 			"{{ if .issue.parent }}parent={{ .issue.parent.identifier }}{{ end }}",
 			"WORKFLOW.md", 0,
@@ -213,12 +241,14 @@ func TestRender(t *testing.T) {
 			t.Fatalf("render: %v", err)
 		}
 		if got != "parent=PROJ-10" {
-			t.Errorf("got %q, want %q", got, "parent=PROJ-10")
+			t.Errorf("Render() = %q, want %q", got, "parent=PROJ-10")
 		}
 	})
 }
 
 func TestRender_FuncMap(t *testing.T) {
+	t.Parallel()
+
 	issue := map[string]any{
 		"title":  "Test Issue",
 		"state":  "In Progress",
@@ -227,6 +257,8 @@ func TestRender_FuncMap(t *testing.T) {
 	run := RunContext{TurnNumber: 1, MaxTurns: 20}
 
 	t.Run("toJSON", func(t *testing.T) {
+		t.Parallel()
+
 		tmpl, err := Parse("{{ .issue.labels | toJSON }}", "WORKFLOW.md", 0)
 		if err != nil {
 			t.Fatalf("parse: %v", err)
@@ -236,11 +268,13 @@ func TestRender_FuncMap(t *testing.T) {
 			t.Fatalf("render: %v", err)
 		}
 		if got != `["bug","urgent"]` {
-			t.Errorf("got %q, want %q", got, `["bug","urgent"]`)
+			t.Errorf("Render() = %q, want %q", got, `["bug","urgent"]`)
 		}
 	})
 
 	t.Run("join", func(t *testing.T) {
+		t.Parallel()
+
 		tmpl, err := Parse(`{{ join ", " .issue.labels }}`, "WORKFLOW.md", 0)
 		if err != nil {
 			t.Fatalf("parse: %v", err)
@@ -250,11 +284,13 @@ func TestRender_FuncMap(t *testing.T) {
 			t.Fatalf("render: %v", err)
 		}
 		if got != "bug, urgent" {
-			t.Errorf("got %q, want %q", got, "bug, urgent")
+			t.Errorf("Render() = %q, want %q", got, "bug, urgent")
 		}
 	})
 
 	t.Run("join_AnySlice", func(t *testing.T) {
+		t.Parallel()
+
 		// YAML decoder produces []any, not []string. Verify join handles it.
 		issueAny := map[string]any{
 			"labels": []any{"bug", "urgent"},
@@ -268,11 +304,13 @@ func TestRender_FuncMap(t *testing.T) {
 			t.Fatalf("render: %v", err)
 		}
 		if got != "bug, urgent" {
-			t.Errorf("got %q, want %q", got, "bug, urgent")
+			t.Errorf("Render() = %q, want %q", got, "bug, urgent")
 		}
 	})
 
 	t.Run("lower", func(t *testing.T) {
+		t.Parallel()
+
 		tmpl, err := Parse("{{ .issue.state | lower }}", "WORKFLOW.md", 0)
 		if err != nil {
 			t.Fatalf("parse: %v", err)
@@ -282,18 +320,22 @@ func TestRender_FuncMap(t *testing.T) {
 			t.Fatalf("render: %v", err)
 		}
 		if got != "in progress" {
-			t.Errorf("got %q, want %q", got, "in progress")
+			t.Errorf("Render() = %q, want %q", got, "in progress")
 		}
 	})
 }
 
 func TestRender_Errors(t *testing.T) {
+	t.Parallel()
+
 	issue := map[string]any{
 		"title": "Test Issue",
 	}
 	run := RunContext{TurnNumber: 1, MaxTurns: 20}
 
 	t.Run("DollarRootAccess", func(t *testing.T) {
+		t.Parallel()
+
 		// ADR-0005: inside {{ range }}, $ accesses the root data map.
 		issueWithLabels := map[string]any{
 			"title":  "Test Issue",
@@ -312,11 +354,13 @@ func TestRender_Errors(t *testing.T) {
 		}
 		want := "bug: Test Issue; urgent: Test Issue; "
 		if got != want {
-			t.Errorf("got %q, want %q", got, want)
+			t.Errorf("Render() = %q, want %q", got, want)
 		}
 	})
 
 	t.Run("EmptyIssueMap", func(t *testing.T) {
+		t.Parallel()
+
 		tmpl, err := Parse("{{ .issue.title }}", "WORKFLOW.md", 0)
 		if err != nil {
 			t.Fatalf("parse: %v", err)
@@ -335,6 +379,8 @@ func TestRender_Errors(t *testing.T) {
 	})
 
 	t.Run("UnknownTopLevelKey", func(t *testing.T) {
+		t.Parallel()
+
 		tmpl, err := Parse("{{ .config }}", "WORKFLOW.md", 0)
 		if err != nil {
 			t.Fatalf("parse: %v", err)
@@ -353,6 +399,8 @@ func TestRender_Errors(t *testing.T) {
 	})
 
 	t.Run("RenderErrorLineOffset", func(t *testing.T) {
+		t.Parallel()
+
 		// Error on template line 2, with 7 front matter lines.
 		body := "line 1\n{{ .nonexistent }}"
 		tmpl, err := Parse(body, "WORKFLOW.md", 7)
@@ -374,6 +422,8 @@ func TestRender_Errors(t *testing.T) {
 	})
 
 	t.Run("ErrorMessageContainsSource", func(t *testing.T) {
+		t.Parallel()
+
 		tmpl, err := Parse("{{ .config }}", "my/WORKFLOW.md", 5)
 		if err != nil {
 			t.Fatalf("parse: %v", err)
@@ -393,14 +443,18 @@ func TestRender_Errors(t *testing.T) {
 }
 
 func TestTemplateError_Unwrap(t *testing.T) {
+	t.Parallel()
+
 	sentinel := errors.New("sentinel")
 	te := &TemplateError{Kind: ErrTemplateParse, Source: "x.md", Err: sentinel}
 	if !errors.Is(te, sentinel) {
-		t.Error("Unwrap did not expose the underlying sentinel error")
+		t.Errorf("errors.Is(TemplateError, sentinel) = false, want true")
 	}
 }
 
 func TestRender_Concurrent(t *testing.T) {
+	t.Parallel()
+
 	tmpl, err := Parse(
 		"{{ .issue.title }} turn={{ .run.turn_number }}",
 		"WORKFLOW.md", 0,

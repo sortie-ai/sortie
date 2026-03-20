@@ -4,26 +4,16 @@ import (
 	"bufio"
 	"os"
 	"path/filepath"
-	"runtime"
 	"testing"
 
 	"github.com/sortie-ai/sortie/internal/domain"
 )
 
-func testdataPath(t *testing.T, name string) string {
+func loadFixture(t *testing.T, name string) []byte {
 	t.Helper()
-	_, file, _, ok := runtime.Caller(0)
-	if !ok {
-		t.Fatal("cannot determine testdata path")
-	}
-	return filepath.Join(filepath.Dir(file), "testdata", name)
-}
-
-func readFixture(t *testing.T, name string) []byte {
-	t.Helper()
-	data, err := os.ReadFile(testdataPath(t, name))
+	data, err := os.ReadFile(filepath.Join("testdata", name))
 	if err != nil {
-		t.Fatalf("read fixture %s: %v", name, err)
+		t.Fatalf("loading fixture %s: %v", name, err)
 	}
 	return data
 }
@@ -186,7 +176,7 @@ func TestParseEvent(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			data := readFixture(t, tt.fixture)
+			data := loadFixture(t, tt.fixture)
 
 			ev, err := parseEvent(data)
 			if err != nil {
@@ -208,7 +198,7 @@ func TestParseEvent(t *testing.T) {
 func TestParseEvent_Malformed(t *testing.T) {
 	t.Parallel()
 
-	data := readFixture(t, "malformed_line.txt")
+	data := loadFixture(t, "malformed_line.txt")
 	_, err := parseEvent(data)
 	if err == nil {
 		t.Fatal("parseEvent(malformed) did not return error")
@@ -281,7 +271,7 @@ func TestSummarizeAssistant(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			data := readFixture(t, tt.fixture)
+			data := loadFixture(t, tt.fixture)
 			ev, err := parseEvent(data)
 			if err != nil {
 				t.Fatal(err)
@@ -307,7 +297,7 @@ func TestSummarizeAssistant_EmptyMessage(t *testing.T) {
 func TestFormatAPIRetry(t *testing.T) {
 	t.Parallel()
 
-	data := readFixture(t, "api_retry_event.json")
+	data := loadFixture(t, "api_retry_event.json")
 	ev, err := parseEvent(data)
 	if err != nil {
 		t.Fatal(err)
@@ -380,7 +370,7 @@ func TestTruncate(t *testing.T) {
 func TestParseFullSession(t *testing.T) {
 	t.Parallel()
 
-	f, err := os.Open(testdataPath(t, "full_session.jsonl"))
+	f, err := os.Open(filepath.Join("testdata", "full_session.jsonl"))
 	if err != nil {
 		t.Fatal(err)
 	}

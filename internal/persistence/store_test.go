@@ -16,6 +16,8 @@ func closeStore(t *testing.T, s *Store) {
 }
 
 func TestOpen(t *testing.T) {
+	t.Parallel()
+
 	ctx := context.Background()
 
 	s, err := Open(ctx, ":memory:")
@@ -26,6 +28,8 @@ func TestOpen(t *testing.T) {
 }
 
 func TestOpen_WALEnabled(t *testing.T) {
+	t.Parallel()
+
 	ctx := context.Background()
 
 	// WAL requires a file-backed database; in-memory always reports "memory".
@@ -51,6 +55,8 @@ func TestOpen_WALEnabled(t *testing.T) {
 // It verifies that basic SQL operations work through the configured connection.
 // This test will be superseded by CRUD method tests in tasks 2.3–2.5.
 func TestOpen_BasicCRUD(t *testing.T) {
+	t.Parallel()
+
 	ctx := context.Background()
 
 	s, err := Open(ctx, ":memory:")
@@ -97,6 +103,8 @@ func TestOpen_BasicCRUD(t *testing.T) {
 }
 
 func TestSaveAndLoadRetryEntry(t *testing.T) {
+	t.Parallel()
+
 	s := openTestStore(t)
 	migrateOrFatal(t, s)
 	ctx := context.Background()
@@ -138,6 +146,8 @@ func TestSaveAndLoadRetryEntry(t *testing.T) {
 }
 
 func TestSaveRetryEntry_Upsert(t *testing.T) {
+	t.Parallel()
+
 	s := openTestStore(t)
 	migrateOrFatal(t, s)
 	ctx := context.Background()
@@ -188,6 +198,8 @@ func TestSaveRetryEntry_Upsert(t *testing.T) {
 }
 
 func TestSaveRetryEntry_UpsertClearsError(t *testing.T) {
+	t.Parallel()
+
 	s := openTestStore(t)
 	migrateOrFatal(t, s)
 	ctx := context.Background()
@@ -232,6 +244,8 @@ func TestSaveRetryEntry_UpsertClearsError(t *testing.T) {
 }
 
 func TestDeleteRetryEntry(t *testing.T) {
+	t.Parallel()
+
 	s := openTestStore(t)
 	migrateOrFatal(t, s)
 	ctx := context.Background()
@@ -262,6 +276,8 @@ func TestDeleteRetryEntry(t *testing.T) {
 }
 
 func TestDeleteRetryEntry_Nonexistent(t *testing.T) {
+	t.Parallel()
+
 	s := openTestStore(t)
 	migrateOrFatal(t, s)
 	ctx := context.Background()
@@ -272,6 +288,8 @@ func TestDeleteRetryEntry_Nonexistent(t *testing.T) {
 }
 
 func TestLoadRetryEntries_Empty(t *testing.T) {
+	t.Parallel()
+
 	s := openTestStore(t)
 	migrateOrFatal(t, s)
 	ctx := context.Background()
@@ -289,6 +307,8 @@ func TestLoadRetryEntries_Empty(t *testing.T) {
 }
 
 func TestLoadRetryEntries_OrderByDueAtMs(t *testing.T) {
+	t.Parallel()
+
 	s := openTestStore(t)
 	migrateOrFatal(t, s)
 	ctx := context.Background()
@@ -320,6 +340,8 @@ func TestLoadRetryEntries_OrderByDueAtMs(t *testing.T) {
 }
 
 func TestSaveRetryEntry_DBError(t *testing.T) {
+	t.Parallel()
+
 	s := openTestStore(t)
 	migrateOrFatal(t, s)
 	ctx := context.Background()
@@ -338,6 +360,8 @@ func TestSaveRetryEntry_DBError(t *testing.T) {
 }
 
 func TestLoadRetryEntries_QueryError(t *testing.T) {
+	t.Parallel()
+
 	s := openTestStore(t)
 	migrateOrFatal(t, s)
 	ctx := context.Background()
@@ -354,6 +378,8 @@ func TestLoadRetryEntries_QueryError(t *testing.T) {
 }
 
 func TestLoadRetryEntries_ScanError(t *testing.T) {
+	t.Parallel()
+
 	s := openTestStore(t)
 	migrateOrFatal(t, s)
 	ctx := context.Background()
@@ -374,6 +400,8 @@ func TestLoadRetryEntries_ScanError(t *testing.T) {
 }
 
 func TestDeleteRetryEntry_DBError(t *testing.T) {
+	t.Parallel()
+
 	s := openTestStore(t)
 	migrateOrFatal(t, s)
 	ctx := context.Background()
@@ -390,6 +418,8 @@ func TestDeleteRetryEntry_DBError(t *testing.T) {
 }
 
 func TestLoadRetryEntries_DeterministicTieBreak(t *testing.T) {
+	t.Parallel()
+
 	s := openTestStore(t)
 	migrateOrFatal(t, s)
 	ctx := context.Background()
@@ -448,6 +478,8 @@ func appendOrFatal(t *testing.T, s *Store, run RunHistory) RunHistory {
 }
 
 func TestAppendRunHistory(t *testing.T) {
+	t.Parallel()
+
 	s := openTestStore(t)
 	migrateOrFatal(t, s)
 
@@ -487,6 +519,8 @@ func TestAppendRunHistory(t *testing.T) {
 }
 
 func TestAppendRunHistory_WithError(t *testing.T) {
+	t.Parallel()
+
 	s := openTestStore(t)
 	migrateOrFatal(t, s)
 	ctx := context.Background()
@@ -517,6 +551,8 @@ func TestAppendRunHistory_WithError(t *testing.T) {
 }
 
 func TestAppendRunHistory_NilError(t *testing.T) {
+	t.Parallel()
+
 	s := openTestStore(t)
 	migrateOrFatal(t, s)
 	ctx := context.Background()
@@ -537,6 +573,8 @@ func TestAppendRunHistory_NilError(t *testing.T) {
 }
 
 func TestAppendRunHistory_MultipleAppendsAutoIncrement(t *testing.T) {
+	t.Parallel()
+
 	s := openTestStore(t)
 	migrateOrFatal(t, s)
 
@@ -552,6 +590,8 @@ func TestAppendRunHistory_MultipleAppendsAutoIncrement(t *testing.T) {
 }
 
 func TestQueryRunHistoryByIssue(t *testing.T) {
+	t.Parallel()
+
 	s := openTestStore(t)
 	migrateOrFatal(t, s)
 	ctx := context.Background()
@@ -585,6 +625,8 @@ func TestQueryRunHistoryByIssue(t *testing.T) {
 }
 
 func TestQueryRunHistoryByIssue_Empty(t *testing.T) {
+	t.Parallel()
+
 	s := openTestStore(t)
 	migrateOrFatal(t, s)
 	ctx := context.Background()
@@ -602,6 +644,8 @@ func TestQueryRunHistoryByIssue_Empty(t *testing.T) {
 }
 
 func TestQueryRecentRunHistory_FirstPage(t *testing.T) {
+	t.Parallel()
+
 	s := openTestStore(t)
 	migrateOrFatal(t, s)
 	ctx := context.Background()
@@ -632,6 +676,8 @@ func TestQueryRecentRunHistory_FirstPage(t *testing.T) {
 }
 
 func TestQueryRecentRunHistory_Pagination(t *testing.T) {
+	t.Parallel()
+
 	s := openTestStore(t)
 	migrateOrFatal(t, s)
 	ctx := context.Background()
@@ -684,6 +730,8 @@ func TestQueryRecentRunHistory_Pagination(t *testing.T) {
 }
 
 func TestQueryRecentRunHistory_Empty(t *testing.T) {
+	t.Parallel()
+
 	s := openTestStore(t)
 	migrateOrFatal(t, s)
 	ctx := context.Background()
@@ -701,6 +749,8 @@ func TestQueryRecentRunHistory_Empty(t *testing.T) {
 }
 
 func TestQueryRecentRunHistory_LimitExceedsRows(t *testing.T) {
+	t.Parallel()
+
 	s := openTestStore(t)
 	migrateOrFatal(t, s)
 	ctx := context.Background()
@@ -718,6 +768,8 @@ func TestQueryRecentRunHistory_LimitExceedsRows(t *testing.T) {
 }
 
 func TestQueryRecentRunHistory_NonPositiveLimit(t *testing.T) {
+	t.Parallel()
+
 	s := openTestStore(t)
 	migrateOrFatal(t, s)
 	ctx := context.Background()
@@ -738,6 +790,8 @@ func TestQueryRecentRunHistory_NonPositiveLimit(t *testing.T) {
 }
 
 func TestAppendRunHistory_DBError(t *testing.T) {
+	t.Parallel()
+
 	s := openTestStore(t)
 	migrateOrFatal(t, s)
 
@@ -754,6 +808,8 @@ func TestAppendRunHistory_DBError(t *testing.T) {
 // --- Session Metadata Tests ---
 
 func TestUpsertSessionMetadata(t *testing.T) {
+	t.Parallel()
+
 	s := openTestStore(t)
 	migrateOrFatal(t, s)
 	ctx := context.Background()
@@ -806,6 +862,8 @@ func TestUpsertSessionMetadata(t *testing.T) {
 }
 
 func TestUpsertSessionMetadata_Update(t *testing.T) {
+	t.Parallel()
+
 	s := openTestStore(t)
 	migrateOrFatal(t, s)
 	ctx := context.Background()
@@ -866,6 +924,8 @@ func TestUpsertSessionMetadata_Update(t *testing.T) {
 }
 
 func TestUpsertSessionMetadata_NilAgentPID(t *testing.T) {
+	t.Parallel()
+
 	s := openTestStore(t)
 	migrateOrFatal(t, s)
 	ctx := context.Background()
@@ -896,6 +956,8 @@ func TestUpsertSessionMetadata_NilAgentPID(t *testing.T) {
 }
 
 func TestLoadSessionMetadata_NotFound(t *testing.T) {
+	t.Parallel()
+
 	s := openTestStore(t)
 	migrateOrFatal(t, s)
 	ctx := context.Background()
@@ -913,6 +975,8 @@ func TestLoadSessionMetadata_NotFound(t *testing.T) {
 }
 
 func TestLoadAllSessionMetadata(t *testing.T) {
+	t.Parallel()
+
 	s := openTestStore(t)
 	migrateOrFatal(t, s)
 	ctx := context.Background()
@@ -946,6 +1010,8 @@ func TestLoadAllSessionMetadata(t *testing.T) {
 }
 
 func TestLoadAllSessionMetadata_Empty(t *testing.T) {
+	t.Parallel()
+
 	s := openTestStore(t)
 	migrateOrFatal(t, s)
 	ctx := context.Background()
@@ -963,6 +1029,8 @@ func TestLoadAllSessionMetadata_Empty(t *testing.T) {
 }
 
 func TestDeleteSessionMetadata(t *testing.T) {
+	t.Parallel()
+
 	s := openTestStore(t)
 	migrateOrFatal(t, s)
 	ctx := context.Background()
@@ -993,6 +1061,8 @@ func TestDeleteSessionMetadata(t *testing.T) {
 }
 
 func TestDeleteSessionMetadata_Nonexistent(t *testing.T) {
+	t.Parallel()
+
 	s := openTestStore(t)
 	migrateOrFatal(t, s)
 	ctx := context.Background()
@@ -1005,6 +1075,8 @@ func TestDeleteSessionMetadata_Nonexistent(t *testing.T) {
 // --- Aggregate Metrics Tests ---
 
 func TestUpsertAggregateMetrics(t *testing.T) {
+	t.Parallel()
+
 	s := openTestStore(t)
 	migrateOrFatal(t, s)
 	ctx := context.Background()
@@ -1049,6 +1121,8 @@ func TestUpsertAggregateMetrics(t *testing.T) {
 }
 
 func TestUpsertAggregateMetrics_Update(t *testing.T) {
+	t.Parallel()
+
 	s := openTestStore(t)
 	migrateOrFatal(t, s)
 	ctx := context.Background()
@@ -1102,6 +1176,8 @@ func TestUpsertAggregateMetrics_Update(t *testing.T) {
 }
 
 func TestLoadAggregateMetrics_NotFound(t *testing.T) {
+	t.Parallel()
+
 	s := openTestStore(t)
 	migrateOrFatal(t, s)
 	ctx := context.Background()
@@ -1119,6 +1195,8 @@ func TestLoadAggregateMetrics_NotFound(t *testing.T) {
 }
 
 func TestUpsertAggregateMetrics_SecondsRunningPrecision(t *testing.T) {
+	t.Parallel()
+
 	s := openTestStore(t)
 	migrateOrFatal(t, s)
 	ctx := context.Background()
@@ -1148,6 +1226,8 @@ func TestUpsertAggregateMetrics_SecondsRunningPrecision(t *testing.T) {
 // --- Startup Recovery Tests ---
 
 func TestLoadRetryEntriesForRecovery_Empty(t *testing.T) {
+	t.Parallel()
+
 	s := openTestStore(t)
 	migrateOrFatal(t, s)
 	ctx := context.Background()
@@ -1165,6 +1245,8 @@ func TestLoadRetryEntriesForRecovery_Empty(t *testing.T) {
 }
 
 func TestLoadRetryEntriesForRecovery_FutureDueAt(t *testing.T) {
+	t.Parallel()
+
 	s := openTestStore(t)
 	migrateOrFatal(t, s)
 	ctx := context.Background()
@@ -1194,6 +1276,8 @@ func TestLoadRetryEntriesForRecovery_FutureDueAt(t *testing.T) {
 }
 
 func TestLoadRetryEntriesForRecovery_PastDueAt(t *testing.T) {
+	t.Parallel()
+
 	s := openTestStore(t)
 	migrateOrFatal(t, s)
 	ctx := context.Background()
@@ -1222,6 +1306,8 @@ func TestLoadRetryEntriesForRecovery_PastDueAt(t *testing.T) {
 }
 
 func TestLoadRetryEntriesForRecovery_Mixed(t *testing.T) {
+	t.Parallel()
+
 	s := openTestStore(t)
 	migrateOrFatal(t, s)
 	ctx := context.Background()
@@ -1267,6 +1353,8 @@ func TestLoadRetryEntriesForRecovery_Mixed(t *testing.T) {
 }
 
 func TestLoadRetryEntriesForRecovery_PreservesEntryFields(t *testing.T) {
+	t.Parallel()
+
 	s := openTestStore(t)
 	migrateOrFatal(t, s)
 	ctx := context.Background()
@@ -1316,6 +1404,8 @@ func TestLoadRetryEntriesForRecovery_PreservesEntryFields(t *testing.T) {
 }
 
 func TestLoadRetryEntriesForRecovery_DBError(t *testing.T) {
+	t.Parallel()
+
 	s := openTestStore(t)
 	migrateOrFatal(t, s)
 

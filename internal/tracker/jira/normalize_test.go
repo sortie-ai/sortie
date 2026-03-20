@@ -6,6 +6,8 @@ import (
 )
 
 func TestNormalizeSearchIssue_AllFields(t *testing.T) {
+	t.Parallel()
+
 	pri := "2"
 	ji := jiraIssue{
 		ID:  "10001",
@@ -87,6 +89,8 @@ func TestNormalizeSearchIssue_AllFields(t *testing.T) {
 }
 
 func TestNormalizeSearchIssue_NilFields(t *testing.T) {
+	t.Parallel()
+
 	ji := jiraIssue{
 		ID:  "10002",
 		Key: "PROJ-2",
@@ -132,6 +136,8 @@ func TestNormalizeSearchIssue_NilFields(t *testing.T) {
 }
 
 func TestNormalizeSearchIssue_NonIntegerPriority(t *testing.T) {
+	t.Parallel()
+
 	ji := jiraIssue{
 		ID:  "1",
 		Key: "X-1",
@@ -146,6 +152,8 @@ func TestNormalizeSearchIssue_NonIntegerPriority(t *testing.T) {
 }
 
 func TestNormalizeSearchIssue_BlockerExtraction(t *testing.T) {
+	t.Parallel()
+
 	ji := jiraIssue{
 		ID:  "1",
 		Key: "X-1",
@@ -193,7 +201,11 @@ func TestNormalizeSearchIssue_BlockerExtraction(t *testing.T) {
 }
 
 func TestNormalizeComments(t *testing.T) {
+	t.Parallel()
+
 	t.Run("normal comments", func(t *testing.T) {
+		t.Parallel()
+
 		comments := []jiraComment{
 			{
 				ID:      "100",
@@ -221,6 +233,8 @@ func TestNormalizeComments(t *testing.T) {
 	})
 
 	t.Run("nil author", func(t *testing.T) {
+		t.Parallel()
+
 		comments := []jiraComment{
 			{
 				ID:      "200",
@@ -236,6 +250,8 @@ func TestNormalizeComments(t *testing.T) {
 	})
 
 	t.Run("empty list", func(t *testing.T) {
+		t.Parallel()
+
 		result := normalizeComments([]jiraComment{})
 		if result == nil {
 			t.Error("result is nil, want non-nil empty slice")
@@ -247,22 +263,32 @@ func TestNormalizeComments(t *testing.T) {
 }
 
 func TestUnmarshalADF(t *testing.T) {
+	t.Parallel()
+
 	t.Run("nil input", func(t *testing.T) {
+		t.Parallel()
+
 		if v := unmarshalADF(nil); v != nil {
 			t.Errorf("got %v, want nil", v)
 		}
 	})
 	t.Run("empty input", func(t *testing.T) {
+		t.Parallel()
+
 		if v := unmarshalADF(json.RawMessage{}); v != nil {
 			t.Errorf("got %v, want nil", v)
 		}
 	})
 	t.Run("invalid json", func(t *testing.T) {
+		t.Parallel()
+
 		if v := unmarshalADF(json.RawMessage(`{invalid`)); v != nil {
 			t.Errorf("got %v, want nil", v)
 		}
 	})
 	t.Run("valid json", func(t *testing.T) {
+		t.Parallel()
+
 		v := unmarshalADF(json.RawMessage(`{"type":"doc"}`))
 		if v == nil {
 			t.Error("got nil, want non-nil")
@@ -278,6 +304,8 @@ func TestUnmarshalADF(t *testing.T) {
 }
 
 func TestNormalizeSearchIssue_EmptyLabelsSlice(t *testing.T) {
+	t.Parallel()
+
 	// Empty labels array from Jira (not nil) → non-nil empty slice
 	ji := jiraIssue{
 		ID:  "1",
@@ -296,6 +324,8 @@ func TestNormalizeSearchIssue_EmptyLabelsSlice(t *testing.T) {
 }
 
 func TestExtractBlockers_Empty(t *testing.T) {
+	t.Parallel()
+
 	result := extractBlockers(nil)
 	if result == nil {
 		t.Error("result is nil, want non-nil empty slice")

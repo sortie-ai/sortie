@@ -10,6 +10,7 @@ import (
 
 func TestNewServiceConfig(t *testing.T) {
 	t.Run("Defaults/EmptyMap", func(t *testing.T) {
+		t.Parallel()
 		cfg, err := NewServiceConfig(map[string]any{})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -39,6 +40,7 @@ func TestNewServiceConfig(t *testing.T) {
 	})
 
 	t.Run("Defaults/NilMap", func(t *testing.T) {
+		t.Parallel()
 		cfg, err := NewServiceConfig(nil)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
@@ -185,6 +187,7 @@ func TestNewServiceConfig(t *testing.T) {
 	})
 
 	t.Run("PathExpansion/Tilde", func(t *testing.T) {
+		t.Parallel()
 		home, err := os.UserHomeDir()
 		if err != nil {
 			t.Skip("cannot determine home directory")
@@ -227,6 +230,7 @@ func TestNewServiceConfig(t *testing.T) {
 	})
 
 	t.Run("Coercion/StringToInt", func(t *testing.T) {
+		t.Parallel()
 		cfg, err := NewServiceConfig(map[string]any{
 			"polling": map[string]any{"interval_ms": "5000"},
 		})
@@ -237,6 +241,7 @@ func TestNewServiceConfig(t *testing.T) {
 	})
 
 	t.Run("Coercion/Float64ToInt", func(t *testing.T) {
+		t.Parallel()
 		cfg, err := NewServiceConfig(map[string]any{
 			"agent": map[string]any{"max_concurrent_agents": float64(5)},
 		})
@@ -247,28 +252,23 @@ func TestNewServiceConfig(t *testing.T) {
 	})
 
 	t.Run("Coercion/InvalidString", func(t *testing.T) {
+		t.Parallel()
 		_, err := NewServiceConfig(map[string]any{
 			"polling": map[string]any{"interval_ms": "notanumber"},
 		})
-		var cfgErr *ConfigError
-		if !errors.As(err, &cfgErr) {
-			t.Fatalf("expected *ConfigError, got %T: %v", err, err)
-		}
-		assertStringEqual(t, "ConfigError.Field", "polling.interval_ms", cfgErr.Field)
+		assertConfigErrorField(t, err, "polling.interval_ms")
 	})
 
 	t.Run("Coercion/FractionalFloat64Rejected", func(t *testing.T) {
+		t.Parallel()
 		_, err := NewServiceConfig(map[string]any{
 			"polling": map[string]any{"interval_ms": float64(0.9)},
 		})
-		var cfgErr *ConfigError
-		if !errors.As(err, &cfgErr) {
-			t.Fatalf("expected *ConfigError, got %T: %v", err, err)
-		}
-		assertStringEqual(t, "ConfigError.Field", "polling.interval_ms", cfgErr.Field)
+		assertConfigErrorField(t, err, "polling.interval_ms")
 	})
 
 	t.Run("ByStateMap/Normalization", func(t *testing.T) {
+		t.Parallel()
 		cfg, err := NewServiceConfig(map[string]any{
 			"agent": map[string]any{
 				"max_concurrent_agents_by_state": map[string]any{
@@ -288,6 +288,7 @@ func TestNewServiceConfig(t *testing.T) {
 	})
 
 	t.Run("ByStateMap/IgnoresNonPositive", func(t *testing.T) {
+		t.Parallel()
 		cfg, err := NewServiceConfig(map[string]any{
 			"agent": map[string]any{
 				"max_concurrent_agents_by_state": map[string]any{
@@ -305,6 +306,7 @@ func TestNewServiceConfig(t *testing.T) {
 	})
 
 	t.Run("ByStateMap/IgnoresNonNumeric", func(t *testing.T) {
+		t.Parallel()
 		cfg, err := NewServiceConfig(map[string]any{
 			"agent": map[string]any{
 				"max_concurrent_agents_by_state": map[string]any{
@@ -321,6 +323,7 @@ func TestNewServiceConfig(t *testing.T) {
 	})
 
 	t.Run("HooksTimeout/Zero", func(t *testing.T) {
+		t.Parallel()
 		cfg, err := NewServiceConfig(map[string]any{
 			"hooks": map[string]any{"timeout_ms": 0},
 		})
@@ -331,6 +334,7 @@ func TestNewServiceConfig(t *testing.T) {
 	})
 
 	t.Run("HooksTimeout/Negative", func(t *testing.T) {
+		t.Parallel()
 		cfg, err := NewServiceConfig(map[string]any{
 			"hooks": map[string]any{"timeout_ms": -100},
 		})
@@ -341,6 +345,7 @@ func TestNewServiceConfig(t *testing.T) {
 	})
 
 	t.Run("Extensions/Collected", func(t *testing.T) {
+		t.Parallel()
 		raw := map[string]any{
 			"server": map[string]any{"port": 8080},
 			"worker": map[string]any{"ssh_hosts": []any{"host1"}},
@@ -366,6 +371,7 @@ func TestNewServiceConfig(t *testing.T) {
 	})
 
 	t.Run("AgentCommand/PreservedAsIs", func(t *testing.T) {
+		t.Parallel()
 		cfg, err := NewServiceConfig(map[string]any{
 			"agent": map[string]any{"command": "claude --flag=$VAR"},
 		})
@@ -376,6 +382,7 @@ func TestNewServiceConfig(t *testing.T) {
 	})
 
 	t.Run("States/Extracted", func(t *testing.T) {
+		t.Parallel()
 		cfg, err := NewServiceConfig(map[string]any{
 			"tracker": map[string]any{
 				"active_states": []any{"To Do", "In Progress"},
@@ -388,6 +395,7 @@ func TestNewServiceConfig(t *testing.T) {
 	})
 
 	t.Run("StallTimeout/ZeroIsValid", func(t *testing.T) {
+		t.Parallel()
 		cfg, err := NewServiceConfig(map[string]any{
 			"agent": map[string]any{"stall_timeout_ms": 0},
 		})
@@ -398,6 +406,7 @@ func TestNewServiceConfig(t *testing.T) {
 	})
 
 	t.Run("StallTimeout/AbsentGetsDefault", func(t *testing.T) {
+		t.Parallel()
 		cfg, err := NewServiceConfig(map[string]any{
 			"agent": map[string]any{"kind": "claude-code"},
 		})
@@ -408,6 +417,7 @@ func TestNewServiceConfig(t *testing.T) {
 	})
 
 	t.Run("SectionAsNonMap", func(t *testing.T) {
+		t.Parallel()
 		cfg, err := NewServiceConfig(map[string]any{
 			"tracker": "not-a-map",
 		})
@@ -421,6 +431,20 @@ func TestNewServiceConfig(t *testing.T) {
 }
 
 // --- test helpers ---
+
+func assertConfigErrorField(t *testing.T, err error, wantField string) {
+	t.Helper()
+	if err == nil {
+		t.Fatalf("expected *ConfigError with field %q, got nil", wantField)
+	}
+	var ce *ConfigError
+	if !errors.As(err, &ce) {
+		t.Fatalf("error type = %T, want *ConfigError", err)
+	}
+	if ce.Field != wantField {
+		t.Errorf("ConfigError.Field = %q, want %q", ce.Field, wantField)
+	}
+}
 
 func assertStringEqual(t *testing.T, name, want, got string) {
 	t.Helper()

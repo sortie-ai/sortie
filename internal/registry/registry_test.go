@@ -10,8 +10,8 @@ import (
 	"github.com/sortie-ai/sortie/internal/domain"
 )
 
-// testConstructor is a trivial function type used to test generic
-// Registry behavior without coupling to domain.TrackerAdapter.
+// --- Test helpers ---
+
 type testConstructor func() string
 
 func newTestRegistry() *Registry[testConstructor] {
@@ -22,169 +22,227 @@ func dummyConstructor() testConstructor {
 	return func() string { return "marker" }
 }
 
+// --- Tests ---
+
 func TestRegisterAndGet(t *testing.T) {
+	t.Parallel()
+
 	r := newTestRegistry()
 	r.Register("alpha", dummyConstructor())
 
 	got, err := r.Get("alpha")
 	if err != nil {
-		t.Fatalf("Get(\"alpha\") returned unexpected error: %v", err)
+		t.Fatalf("Get(%q) unexpected error: %v", "alpha", err)
 	}
 	if got() != "marker" {
-		t.Errorf("constructor returned %q, want %q", got(), "marker")
+		t.Errorf("Get(%q)() = %q, want %q", "alpha", got(), "marker")
 	}
 }
 
-func TestGetUnknownKind_Empty(t *testing.T) {
-	r := newTestRegistry()
+func TestGet_UnknownKind(t *testing.T) {
+	t.Parallel()
 
-	_, err := r.Get("nonexistent")
-	if err == nil {
-		t.Fatal("Get(\"nonexistent\") returned nil error, want *RegistryError")
+	tests := []struct {
+		name          string
+		register      []string
+		lookup        string
+		wantAvailable []string
+		wantMsgPart   string
+	}{
+		{
+			name:          "empty registry",
+			register:      nil,
+			lookup:        "nonexistent",
+			wantAvailable: []string{},
+			wantMsgPart:   "no adapters registered",
+		},
+		{
+			name:          "lists available kinds sorted",
+			register:      []string{"beta", "alpha"},
+			lookup:        "gamma",
+			wantAvailable: []string{"alpha", "beta"},
+			wantMsgPart:   "alpha",
+		},
 	}
 
-	var re *RegistryError
-	if !errors.As(err, &re) {
-		t.Fatalf("error type = %T, want *RegistryError", err)
-	}
-	if re.Dimension != "test" {
-		t.Errorf("Dimension = %q, want %q", re.Dimension, "test")
-	}
-	if re.Kind != "nonexistent" {
-		t.Errorf("Kind = %q, want %q", re.Kind, "nonexistent")
-	}
-	if re.Available == nil {
-		t.Fatal("Available is nil, want non-nil empty slice")
-	}
-	if len(re.Available) != 0 {
-		t.Errorf("len(Available) = %d, want 0", len(re.Available))
-	}
-	if msg := err.Error(); !strings.Contains(msg, "no adapters registered") {
-		t.Errorf("error message = %q, want it to contain %q", msg, "no adapters registered")
-	}
-}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 
-func TestGetUnknownKind_ListsAvailable(t *testing.T) {
-	r := newTestRegistry()
-	r.Register("beta", dummyConstructor())
-	r.Register("alpha", dummyConstructor())
+			r := newTestRegistry()
+			for _, k := range tt.register {
+				r.Register(k, dummyConstructor())
+			}
 
-	_, err := r.Get("gamma")
-	if err == nil {
-		t.Fatal("Get(\"gamma\") returned nil error")
-	}
+			_, err := r.Get(tt.lookup)
+			if err == nil {
+				t.Fatalf("Get(%q) returned nil error, want *RegistryError", tt.lookup)
+			}
 
-	var re *RegistryError
-	if !errors.As(err, &re) {
-		t.Fatalf("error type = %T, want *RegistryError", err)
-	}
-
-	want := []string{"alpha", "beta"}
-	if len(re.Available) != len(want) {
-		t.Fatalf("Available = %v, want %v", re.Available, want)
-	}
-	for i, v := range want {
-		if re.Available[i] != v {
-			t.Errorf("Available[%d] = %q, want %q", i, re.Available[i], v)
-		}
-	}
-
-	msg := err.Error()
-	if !strings.Contains(msg, "alpha") || !strings.Contains(msg, "beta") {
-		t.Errorf("error message = %q, want it to contain both %q and %q", msg, "alpha", "beta")
-	}
-}
-
-func TestRegisterDuplicate_Panics(t *testing.T) {
-	r := newTestRegistry()
-	r.Register("dup", dummyConstructor())
-
-	defer func() {
-		v := recover()
-		if v == nil {
-			t.Fatal("expected panic on duplicate registration")
-		}
-		msg := fmt.Sprint(v)
-		if !strings.Contains(msg, "duplicate") {
-			t.Errorf("panic message = %q, want it to contain %q", msg, "duplicate")
-		}
-	}()
-
-	r.Register("dup", dummyConstructor())
-}
-
-func TestRegisterEmptyKind_Panics(t *testing.T) {
-	r := newTestRegistry()
-
-	defer func() {
-		v := recover()
-		if v == nil {
-			t.Fatal("expected panic on empty kind")
-		}
-		msg := fmt.Sprint(v)
-		if !strings.Contains(msg, "empty") {
-			t.Errorf("panic message = %q, want it to contain %q", msg, "empty")
-		}
-	}()
-
-	r.Register("", dummyConstructor())
-}
-
-func TestKinds_Sorted(t *testing.T) {
-	r := newTestRegistry()
-	r.Register("zulu", dummyConstructor())
-	r.Register("alpha", dummyConstructor())
-	r.Register("mike", dummyConstructor())
-
-	got := r.Kinds()
-	want := []string{"alpha", "mike", "zulu"}
-	if len(got) != len(want) {
-		t.Fatalf("Kinds() = %v, want %v", got, want)
-	}
-	for i, v := range want {
-		if got[i] != v {
-			t.Errorf("Kinds()[%d] = %q, want %q", i, got[i], v)
-		}
+			var re *RegistryError
+			if !errors.As(err, &re) {
+				t.Fatalf("Get(%q) error type = %T, want *RegistryError", tt.lookup, err)
+			}
+			if re.Dimension != "test" {
+				t.Errorf("RegistryError.Dimension = %q, want %q", re.Dimension, "test")
+			}
+			if re.Kind != tt.lookup {
+				t.Errorf("RegistryError.Kind = %q, want %q", re.Kind, tt.lookup)
+			}
+			if re.Available == nil {
+				t.Fatal("RegistryError.Available is nil, want non-nil slice")
+			}
+			if len(re.Available) != len(tt.wantAvailable) {
+				t.Fatalf("RegistryError.Available = %v, want %v", re.Available, tt.wantAvailable)
+			}
+			for i, v := range tt.wantAvailable {
+				if re.Available[i] != v {
+					t.Errorf("RegistryError.Available[%d] = %q, want %q", i, re.Available[i], v)
+				}
+			}
+			if msg := err.Error(); !strings.Contains(msg, tt.wantMsgPart) {
+				t.Errorf("Error() = %q, want it to contain %q", msg, tt.wantMsgPart)
+			}
+		})
 	}
 }
 
-func TestKinds_Empty(t *testing.T) {
-	r := newTestRegistry()
+func TestRegister_Panics(t *testing.T) {
+	t.Parallel()
 
-	got := r.Kinds()
-	if got == nil {
-		t.Fatal("Kinds() returned nil, want non-nil empty slice")
+	tests := []struct {
+		name    string
+		kind    string
+		setup   func(*Registry[testConstructor])
+		wantMsg string
+	}{
+		{
+			name:    "empty kind",
+			kind:    "",
+			setup:   nil,
+			wantMsg: "empty",
+		},
+		{
+			name: "duplicate kind",
+			kind: "dup",
+			setup: func(r *Registry[testConstructor]) {
+				r.Register("dup", dummyConstructor())
+			},
+			wantMsg: "duplicate",
+		},
 	}
-	if len(got) != 0 {
-		t.Errorf("len(Kinds()) = %d, want 0", len(got))
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			r := newTestRegistry()
+			if tt.setup != nil {
+				tt.setup(r)
+			}
+
+			defer func() {
+				v := recover()
+				if v == nil {
+					t.Fatalf("Register(%q) did not panic", tt.kind)
+				}
+				msg := fmt.Sprint(v)
+				if !strings.Contains(msg, tt.wantMsg) {
+					t.Errorf("Register(%q) panic = %q, want it to contain %q", tt.kind, msg, tt.wantMsg)
+				}
+			}()
+
+			r.Register(tt.kind, dummyConstructor())
+		})
 	}
 }
 
-func TestRegistryError_Format_NoAvailable(t *testing.T) {
-	e := &RegistryError{
-		Dimension: "tracker",
-		Kind:      "linear",
-		Available: []string{},
+func TestKinds(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		register []string
+		want     []string
+	}{
+		{
+			name:     "empty registry",
+			register: nil,
+			want:     []string{},
+		},
+		{
+			name:     "returns sorted",
+			register: []string{"zulu", "alpha", "mike"},
+			want:     []string{"alpha", "mike", "zulu"},
+		},
 	}
-	want := `unknown tracker adapter kind "linear"; no adapters registered`
-	if got := e.Error(); got != want {
-		t.Errorf("Error() = %q, want %q", got, want)
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			r := newTestRegistry()
+			for _, k := range tt.register {
+				r.Register(k, dummyConstructor())
+			}
+
+			got := r.Kinds()
+			if got == nil {
+				t.Fatal("Kinds() returned nil, want non-nil slice")
+			}
+			if len(got) != len(tt.want) {
+				t.Fatalf("Kinds() = %v, want %v", got, tt.want)
+			}
+			for i, v := range tt.want {
+				if got[i] != v {
+					t.Errorf("Kinds()[%d] = %q, want %q", i, got[i], v)
+				}
+			}
+		})
 	}
 }
 
-func TestRegistryError_Format_WithAvailable(t *testing.T) {
-	e := &RegistryError{
-		Dimension: "agent",
-		Kind:      "foo",
-		Available: []string{"claude-code", "mock"},
+func TestRegistryError_Error(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		err  *RegistryError
+		want string
+	}{
+		{
+			name: "no available adapters",
+			err: &RegistryError{
+				Dimension: "tracker",
+				Kind:      "linear",
+				Available: []string{},
+			},
+			want: `unknown tracker adapter kind "linear"; no adapters registered`,
+		},
+		{
+			name: "with available adapters",
+			err: &RegistryError{
+				Dimension: "agent",
+				Kind:      "foo",
+				Available: []string{"claude-code", "mock"},
+			},
+			want: `unknown agent adapter kind "foo"; registered: [claude-code, mock]`,
+		},
 	}
-	want := `unknown agent adapter kind "foo"; registered: [claude-code, mock]`
-	if got := e.Error(); got != want {
-		t.Errorf("Error() = %q, want %q", got, want)
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := tt.err.Error(); got != tt.want {
+				t.Errorf("RegistryError.Error() = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }
 
-// Compile-time interface satisfaction check.
+// --- Type-specific constructor tests ---
+
 var _ domain.TrackerAdapter = (*mockTrackerAdapter)(nil)
 
 type mockTrackerAdapter struct{}
@@ -209,7 +267,9 @@ func (m *mockTrackerAdapter) FetchIssueComments(_ context.Context, _ string) ([]
 	return nil, nil
 }
 
-func TestTrackerConstructor_Integration(t *testing.T) {
+func TestTrackerRegistry(t *testing.T) {
+	t.Parallel()
+
 	r := NewRegistry[TrackerConstructor]("tracker")
 	r.Register("mock", func(_ map[string]any) (domain.TrackerAdapter, error) {
 		return &mockTrackerAdapter{}, nil
@@ -217,36 +277,18 @@ func TestTrackerConstructor_Integration(t *testing.T) {
 
 	constructor, err := r.Get("mock")
 	if err != nil {
-		t.Fatalf("Get(\"mock\") returned unexpected error: %v", err)
+		t.Fatalf("Get(%q) unexpected error: %v", "mock", err)
 	}
 
 	adapter, err := constructor(nil)
 	if err != nil {
-		t.Fatalf("constructor returned unexpected error: %v", err)
+		t.Fatalf("TrackerConstructor() unexpected error: %v", err)
 	}
-
-	issues, err := adapter.FetchCandidateIssues(context.Background())
-	if err != nil {
-		t.Fatalf("FetchCandidateIssues returned unexpected error: %v", err)
-	}
-	if issues != nil {
-		t.Errorf("FetchCandidateIssues returned %v, want nil", issues)
+	if adapter == nil {
+		t.Fatal("TrackerConstructor() returned nil adapter")
 	}
 }
 
-func TestPackageLevelTrackers_Usable(t *testing.T) {
-	if Trackers == nil {
-		t.Fatal("Trackers is nil")
-	}
-	kinds := Trackers.Kinds()
-	if kinds == nil {
-		t.Fatal("Trackers.Kinds() returned nil, want non-nil slice")
-	}
-}
-
-// --- Agent adapter registry tests ---
-
-// Compile-time interface satisfaction check for agent mock.
 var _ domain.AgentAdapter = (*mockAgentAdapter)(nil)
 
 type mockAgentAdapter struct{}
@@ -267,7 +309,9 @@ func (m *mockAgentAdapter) EventStream() <-chan domain.AgentEvent {
 	return nil
 }
 
-func TestAgentConstructor_Integration(t *testing.T) {
+func TestAgentRegistry(t *testing.T) {
+	t.Parallel()
+
 	r := NewRegistry[AgentConstructor]("agent")
 	r.Register("mock", func(_ map[string]any) (domain.AgentAdapter, error) {
 		return &mockAgentAdapter{}, nil
@@ -275,52 +319,40 @@ func TestAgentConstructor_Integration(t *testing.T) {
 
 	constructor, err := r.Get("mock")
 	if err != nil {
-		t.Fatalf("Get(\"mock\") returned unexpected error: %v", err)
+		t.Fatalf("Get(%q) unexpected error: %v", "mock", err)
 	}
 
 	adapter, err := constructor(nil)
 	if err != nil {
-		t.Fatalf("constructor returned unexpected error: %v", err)
+		t.Fatalf("AgentConstructor() unexpected error: %v", err)
 	}
-
-	session, err := adapter.StartSession(context.Background(), domain.StartSessionParams{})
-	if err != nil {
-		t.Fatalf("StartSession returned unexpected error: %v", err)
-	}
-	if session.ID != "" {
-		t.Errorf("session.ID = %q, want empty string", session.ID)
+	if adapter == nil {
+		t.Fatal("AgentConstructor() returned nil adapter")
 	}
 }
 
-func TestAgentConstructor_UnknownKind(t *testing.T) {
-	r := NewRegistry[AgentConstructor]("agent")
-	r.Register("mock", func(_ map[string]any) (domain.AgentAdapter, error) {
-		return &mockAgentAdapter{}, nil
+func TestPackageLevelRegistries(t *testing.T) {
+	t.Parallel()
+
+	t.Run("Trackers", func(t *testing.T) {
+		t.Parallel()
+
+		if Trackers == nil {
+			t.Fatal("Trackers is nil")
+		}
+		if kinds := Trackers.Kinds(); kinds == nil {
+			t.Fatal("Trackers.Kinds() returned nil, want non-nil slice")
+		}
 	})
 
-	_, err := r.Get("unknown")
-	if err == nil {
-		t.Fatal("Get(\"unknown\") returned nil error, want *RegistryError")
-	}
+	t.Run("Agents", func(t *testing.T) {
+		t.Parallel()
 
-	var re *RegistryError
-	if !errors.As(err, &re) {
-		t.Fatalf("error type = %T, want *RegistryError", err)
-	}
-	if re.Dimension != "agent" {
-		t.Errorf("Dimension = %q, want %q", re.Dimension, "agent")
-	}
-	if re.Kind != "unknown" {
-		t.Errorf("Kind = %q, want %q", re.Kind, "unknown")
-	}
-}
-
-func TestPackageLevelAgents_Usable(t *testing.T) {
-	if Agents == nil {
-		t.Fatal("Agents is nil")
-	}
-	kinds := Agents.Kinds()
-	if kinds == nil {
-		t.Fatal("Agents.Kinds() returned nil, want non-nil slice")
-	}
+		if Agents == nil {
+			t.Fatal("Agents is nil")
+		}
+		if kinds := Agents.Kinds(); kinds == nil {
+			t.Fatal("Agents.Kinds() returned nil, want non-nil slice")
+		}
+	})
 }

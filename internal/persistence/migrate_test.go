@@ -27,6 +27,8 @@ func migrateOrFatal(t *testing.T, s *Store) {
 }
 
 func TestMigrate_FreshDB(t *testing.T) {
+	t.Parallel()
+
 	s := openTestStore(t)
 	migrateOrFatal(t, s)
 
@@ -75,6 +77,8 @@ func TestMigrate_FreshDB(t *testing.T) {
 }
 
 func TestMigrate_Idempotent(t *testing.T) {
+	t.Parallel()
+
 	s := openTestStore(t)
 	migrateOrFatal(t, s)
 
@@ -93,6 +97,8 @@ func TestMigrate_Idempotent(t *testing.T) {
 }
 
 func TestMigrate_SchemaMigrationsTracking(t *testing.T) {
+	t.Parallel()
+
 	s := openTestStore(t)
 	migrateOrFatal(t, s)
 
@@ -149,6 +155,8 @@ func tableColumns(t *testing.T, s *Store, table string) []columnInfo {
 }
 
 func TestMigrate_ColumnCorrectness(t *testing.T) {
+	t.Parallel()
+
 	s := openTestStore(t)
 	migrateOrFatal(t, s)
 
@@ -246,6 +254,8 @@ func TestMigrate_ColumnCorrectness(t *testing.T) {
 }
 
 func TestMigrate_RunHistoryAutoincrement(t *testing.T) {
+	t.Parallel()
+
 	s := openTestStore(t)
 	migrateOrFatal(t, s)
 
@@ -261,6 +271,8 @@ func TestMigrate_RunHistoryAutoincrement(t *testing.T) {
 }
 
 func TestMigrate_DefaultValues(t *testing.T) {
+	t.Parallel()
+
 	s := openTestStore(t)
 	migrateOrFatal(t, s)
 
@@ -300,6 +312,8 @@ func TestMigrate_DefaultValues(t *testing.T) {
 }
 
 func TestMigrate_NullConstraints(t *testing.T) {
+	t.Parallel()
+
 	s := openTestStore(t)
 	migrateOrFatal(t, s)
 
@@ -336,6 +350,8 @@ func TestMigrate_NullConstraints(t *testing.T) {
 }
 
 func TestMigrate_PrimaryKeyConstraints(t *testing.T) {
+	t.Parallel()
+
 	s := openTestStore(t)
 	migrateOrFatal(t, s)
 
@@ -359,6 +375,8 @@ func TestMigrate_PrimaryKeyConstraints(t *testing.T) {
 
 // Verify the migrations slice is correctly ordered and non-empty.
 func TestMigrations_Registry(t *testing.T) {
+	t.Parallel()
+
 	if len(migrations) == 0 {
 		t.Fatal("migrations slice is empty")
 	}

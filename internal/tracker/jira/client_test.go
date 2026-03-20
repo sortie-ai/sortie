@@ -13,6 +13,8 @@ import (
 )
 
 func TestClientDo_Success(t *testing.T) {
+	t.Parallel()
+
 	var gotHeaders http.Header
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotHeaders = r.Header
@@ -41,6 +43,8 @@ func TestClientDo_Success(t *testing.T) {
 }
 
 func TestClientDo_QueryParams(t *testing.T) {
+	t.Parallel()
+
 	var gotQuery url.Values
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotQuery = r.URL.Query()
@@ -64,6 +68,8 @@ func TestClientDo_QueryParams(t *testing.T) {
 }
 
 func TestClientDo_ErrorMapping(t *testing.T) {
+	t.Parallel()
+
 	tests := []struct {
 		name     string
 		status   int
@@ -118,6 +124,8 @@ func TestClientDo_ErrorMapping(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				for k, v := range tt.headers {
 					w.Header().Set(k, v)
@@ -148,6 +156,8 @@ func TestClientDo_ErrorMapping(t *testing.T) {
 }
 
 func TestClientDo_NetworkFailure(t *testing.T) {
+	t.Parallel()
+
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 	srv.Close() // close immediately to cause connection refused
 
@@ -167,6 +177,8 @@ func TestClientDo_NetworkFailure(t *testing.T) {
 }
 
 func TestClientDo_ContextCancellation(t *testing.T) {
+	t.Parallel()
+
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 	}))
