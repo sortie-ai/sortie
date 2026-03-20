@@ -73,14 +73,21 @@ func NewMockAdapter(config map[string]any) (domain.AgentAdapter, error) {
 		m.stopError = v
 	}
 
-	if v, ok := config["turn_outcomes"].([]any); ok {
-		outcomes := make([]string, 0, len(v))
-		for _, item := range v {
-			if s, ok := item.(string); ok {
-				outcomes = append(outcomes, s)
+	if raw, ok := config["turn_outcomes"]; ok {
+		switch v := raw.(type) {
+		case []any:
+			outcomes := make([]string, 0, len(v))
+			for _, item := range v {
+				if s, ok := item.(string); ok {
+					outcomes = append(outcomes, s)
+				}
 			}
+			m.turnOutcomes = outcomes
+		case []string:
+			outcomes := make([]string, len(v))
+			copy(outcomes, v)
+			m.turnOutcomes = outcomes
 		}
-		m.turnOutcomes = outcomes
 	}
 
 	m.eventsPerTurn = intFromConfig(config, "events_per_turn", m.eventsPerTurn)
@@ -133,9 +140,11 @@ func (m *MockAdapter) RunTurn(ctx context.Context, session domain.Session, param
 
 	// Artificial delay (outside lock).
 	if m.turnDelayMS > 0 {
+		timer := time.NewTimer(time.Duration(m.turnDelayMS) * time.Millisecond)
 		select {
-		case <-time.After(time.Duration(m.turnDelayMS) * time.Millisecond):
+		case <-timer.C:
 		case <-ctx.Done():
+			timer.Stop()
 			params.OnEvent(domain.AgentEvent{
 				Type:      domain.EventTurnCancelled,
 				Timestamp: time.Now().UTC(),
@@ -168,8 +177,8 @@ func (m *MockAdapter) RunTurn(ctx context.Context, session domain.Session, param
 	}
 
 	// Compute cumulative token usage.
-	cumulativeInput := int64((currentIndex + 1) * m.inputTokensPerTurn)
-	cumulativeOutput := int64((currentIndex + 1) * m.outputTokensPerTurn)
+	cumulativeInput := int64(currentIndex+1) * int64(m.inputTokensPerTurn)
+	cumulativeOutput := int64(currentIndex+1) * int64(m.outputTokensPerTurn)
 	usage := domain.TokenUsage{
 		InputTokens:  cumulativeInput,
 		OutputTokens: cumulativeOutput,
@@ -251,7 +260,8 @@ func outcomeToEvent(outcome string) (domain.AgentEventType, domain.AgentErrorKin
 }
 
 // intFromConfig extracts an integer value from a config map, accepting
-// both int and float64 (JSON unmarshalling yields float64). Returns
+// both int and float64 (JSON unmarshalling yields float64). Fractional
+// float64 values are rejected to prevent silent truncation. Returns
 // the fallback if the key is missing or has an unexpected type.
 func intFromConfig(config map[string]any, key string, fallback int) int {
 	v, ok := config[key]
@@ -262,6 +272,9 @@ func intFromConfig(config map[string]any, key string, fallback int) int {
 	case int:
 		return n
 	case float64:
+		if n != float64(int(n)) {
+			return fallback
+		}
 		return int(n)
 	default:
 		return fallback
