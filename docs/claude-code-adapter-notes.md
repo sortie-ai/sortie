@@ -70,31 +70,31 @@ are always set by the adapter; others are conditional.
 
 ### Core flags
 
-| Flag                                 | Description                                                                                 | Adapter usage                                                                           |
-| ------------------------------------ | ------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
-| `-p <prompt>`                        | Non-interactive (headless) mode. Passes the prompt and exits when done.                     | **(required)** Every turn invocation uses this.                                         |
-| `--output-format stream-json`        | Newline-delimited JSON on stdout. Each line is a JSON object.                               | **(required)** For real-time event parsing.                                             |
-| `--verbose`                          | Include internal events (tool calls, system messages) in stream output.                     | **(required)** Needed for full event visibility.                                        |
+| Flag                                 | Description                                                                                                             | Adapter usage                                                                           |
+| ------------------------------------ | ----------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
+| `-p <prompt>`                        | Non-interactive (headless) mode. Passes the prompt and exits when done.                                                 | **(required)** Every turn invocation uses this.                                         |
+| `--output-format stream-json`        | Newline-delimited JSON on stdout. Each line is a JSON object.                                                           | **(required)** For real-time event parsing.                                             |
+| `--verbose`                          | Include internal events (tool calls, system messages) in stream output.                                                 | **(required)** Needed for full event visibility.                                        |
 | `--max-turns <N>`                    | Maximum number of agentic turns within a single CLI invocation. Not in `claude --help` v2.1.76; may be SDK/action only. | Set to `1` for single-turn control, or omit to let Claude decide. See Turn Model below. |
-| `--max-budget-usd <amount>`          | Maximum dollar spend for this invocation (print mode only).                                 | Optional. Cost safety backstop. Exits with error when exceeded.                         |
-| `--model <model>`                    | Override the model (e.g., `claude-sonnet-4-6`, `claude-opus-4-6`).                          | Optional. Adapter passes through if configured.                                         |
-| `--fallback-model <model>`           | Automatic fallback model when primary is overloaded (print mode only).                      | Optional. Resilience for rate-limited deployments.                                      |
-| `--effort <level>`                   | Reasoning effort: `low`, `medium`, `high`, `max`.                                           | Optional. Controls depth of reasoning.                                                  |
-| `--allowedTools <tools>`             | Space-separated list of pre-approved tools. Supports prefix matching: `"Bash(git diff *)"`. | Optional. For tool restriction.                                                         |
-| `--disallowedTools <tools>`          | Tools to remove from model context entirely.                                                | Optional.                                                                               |
-| `--tools <tools>`                    | Restrict available built-in tools. `""` = none, `"default"` = all.                          | Optional. Limits the tool palette.                                                      |
-| `--append-system-prompt <text>`      | Append text to the system prompt. Preserves built-in capabilities.                          | Optional. For adapter-injected instructions.                                            |
-| `--system-prompt <text>`             | Replace entire default system prompt.                                                       | Optional. **Caution:** removes built-in tool instructions.                              |
-| `--system-prompt-file <path>`        | Replace system prompt from file.                                                            | Optional.                                                                               |
-| `--append-system-prompt-file <path>` | Append to system prompt from file.                                                          | Optional.                                                                               |
-| `--json-schema <schema>`             | JSON Schema for structured output validation (print mode only).                             | Optional. Forces output to conform to a schema.                                         |
-| `--mcp-config <path>`                | Path to MCP server configuration JSON.                                                      | Optional. For tool extensions (e.g., `tracker_api`).                                    |
-| `--strict-mcp-config`                | Only use MCP servers from `--mcp-config` (ignore workspace MCP configs).                    | Optional. For controlled MCP environments.                                              |
-| `--add-dir <dirs>`                   | Additional directories for tool access beyond the cwd.                                      | Optional. Multi-repo workflows.                                                         |
-| `--debug [filter]`                   | Enable debug logging with optional category filter (e.g., `"api,hooks"`).                   | Optional. For troubleshooting.                                                          |
-| `--include-partial-messages`         | Include partial message deltas in stream-json output.                                       | Optional. Provides token-by-token streaming for text deltas.                            |
-| `--agents <json>`                    | Define custom subagents via JSON.                                                           | Optional. Advanced multi-agent patterns.                                                |
-| `--agent <name>`                     | Use a specific named agent for the session.                                                 | Optional. Agent routing.                                                                |
+| `--max-budget-usd <amount>`          | Maximum dollar spend for this invocation (print mode only).                                                             | Optional. Cost safety backstop. Exits with error when exceeded.                         |
+| `--model <model>`                    | Override the model (e.g., `claude-sonnet-4-6`, `claude-opus-4-6`).                                                      | Optional. Adapter passes through if configured.                                         |
+| `--fallback-model <model>`           | Automatic fallback model when primary is overloaded (print mode only).                                                  | Optional. Resilience for rate-limited deployments.                                      |
+| `--effort <level>`                   | Reasoning effort: `low`, `medium`, `high`, `max`.                                                                       | Optional. Controls depth of reasoning.                                                  |
+| `--allowedTools <tools>`             | Space-separated list of pre-approved tools. Supports prefix matching: `"Bash(git diff *)"`.                             | Optional. For tool restriction.                                                         |
+| `--disallowedTools <tools>`          | Tools to remove from model context entirely.                                                                            | Optional.                                                                               |
+| `--tools <tools>`                    | Restrict available built-in tools. `""` = none, `"default"` = all.                                                      | Optional. Limits the tool palette.                                                      |
+| `--append-system-prompt <text>`      | Append text to the system prompt. Preserves built-in capabilities.                                                      | Optional. For adapter-injected instructions.                                            |
+| `--system-prompt <text>`             | Replace entire default system prompt.                                                                                   | Optional. **Caution:** removes built-in tool instructions.                              |
+| `--system-prompt-file <path>`        | Replace system prompt from file.                                                                                        | Optional.                                                                               |
+| `--append-system-prompt-file <path>` | Append to system prompt from file.                                                                                      | Optional.                                                                               |
+| `--json-schema <schema>`             | JSON Schema for structured output validation (print mode only).                                                         | Optional. Forces output to conform to a schema.                                         |
+| `--mcp-config <path>`                | Path to MCP server configuration JSON.                                                                                  | Optional. For tool extensions (e.g., `tracker_api`).                                    |
+| `--strict-mcp-config`                | Only use MCP servers from `--mcp-config` (ignore workspace MCP configs).                                                | Optional. For controlled MCP environments.                                              |
+| `--add-dir <dirs>`                   | Additional directories for tool access beyond the cwd.                                                                  | Optional. Multi-repo workflows.                                                         |
+| `--debug [filter]`                   | Enable debug logging with optional category filter (e.g., `"api,hooks"`).                                               | Optional. For troubleshooting.                                                          |
+| `--include-partial-messages`         | Include partial message deltas in stream-json output.                                                                   | Optional. Provides token-by-token streaming for text deltas.                            |
+| `--agents <json>`                    | Define custom subagents via JSON.                                                                                       | Optional. Advanced multi-agent patterns.                                                |
+| `--agent <name>`                     | Use a specific named agent for the session.                                                                             | Optional. Agent routing.                                                                |
 
 ### Session management flags
 
@@ -124,10 +124,10 @@ are always set by the adapter; others are conditional.
 
 ### Input flags
 
-| Flag                      | Description                                                              | Adapter usage                                                       |
-| ------------------------- | ------------------------------------------------------------------------ | ------------------------------------------------------------------- |
+| Flag                      | Description                                                              | Adapter usage                                                        |
+| ------------------------- | ------------------------------------------------------------------------ | -------------------------------------------------------------------- |
 | `--input-format <format>` | Input format (print mode only): `text` (default), `stream-json`.         | Optional. `stream-json` enables real-time streaming input via stdin. |
-| `--replay-user-messages`  | Re-emit user messages from stdin on stdout (requires `stream-json` I/O). | Optional. For bidirectional streaming protocols.                    |
+| `--replay-user-messages`  | Re-emit user messages from stdin on stdout (requires `stream-json` I/O). | Optional. For bidirectional streaming protocols.                     |
 
 ### Config/settings flags
 
@@ -415,7 +415,7 @@ Architecture Section 10.2 defines the session lifecycle. Here is how Claude Code
 ### `StartSession`
 
 Architecture Sections 10.1 and 10.2 define `StartSession` as the operation that "launches or
-connects" to the agent. For Claude Code, the *session* is disk-persisted and identified by
+connects" to the agent. For Claude Code, the _session_ is disk-persisted and identified by
 `--session-id`, while the OS subprocess is short-lived and created per turn. This adapter
 treats `StartSession` as establishing and validating the logical Claude Code session, while
 deferring creation of the Node.js subprocess until `RunTurn`.
@@ -432,8 +432,8 @@ deferring creation of the Node.js subprocess until `RunTurn`.
    - `ID`: the chosen session ID if pre-assigned, or empty (to be populated after the first
      turn if Claude Code allocates it).
    - `Internal`: adapter-internal state (workspace path, config snapshot, chosen session ID).
-   No OS subprocess is spawned at this point; that happens in `RunTurn` while resuming this
-   logical session.
+     No OS subprocess is spawned at this point; that happens in `RunTurn` while resuming this
+     logical session.
 
 ### `RunTurn`
 
