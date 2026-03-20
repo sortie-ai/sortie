@@ -195,14 +195,14 @@ ability to talk to a tracker.
 Define the agent adapter interface and implement the first adapter (Claude Code). No
 orchestration logic yet - just the ability to launch an agent, run a turn, and receive events.
 
-- [ ] 4.1 Define the `AgentAdapter` interface with `StartSession`, `RunTurn`, `StopSession`,
+- [x] 4.1 Define the `AgentAdapter` interface with `StartSession`, `RunTurn`, `StopSession`,
       and an optional `EventStream` channel method (Section 10.1). Define the normalized event
       types from architecture Section 10.3, including the `token_usage` event with
       `{input_tokens, output_tokens, total_tokens}`. Place these in `internal/domain/` or
       equivalent.
       **Verify:** code compiles, interfaces are importable.
 
-- [ ] 4.2 Research Claude Code CLI: available flags, subprocess behavior, stdio output format,
+- [x] 4.2 Research Claude Code CLI: available flags, subprocess behavior, stdio output format,
       session lifecycle, how to detect turn completion and failures. Document findings in
       `docs/claude-code-adapter-notes.md`.
       **Verify:** document exists with CLI reference and observed behavior.
