@@ -2,12 +2,12 @@ package workspace
 
 import "fmt"
 
-// PathError represents a workspace path computation failure. Use
-// [errors.As] to extract it from errors returned by [SanitizeKey] or
-// [ComputePath], then inspect Op for programmatic handling.
+// PathError represents a workspace operation failure. Use [errors.As]
+// to extract it from errors returned by [SanitizeKey], [ComputePath],
+// or [Ensure], then inspect Op for programmatic handling.
 type PathError struct {
-	// Op describes the failed operation: "sanitize", "resolve", or
-	// "containment".
+	// Op describes the failed operation: "sanitize", "resolve",
+	// "containment", "create", "stat", or "conflict".
 	Op string
 
 	// Root is the workspace root path involved, if applicable.

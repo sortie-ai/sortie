@@ -26,6 +26,23 @@ type PathResult struct {
 	Path string
 }
 
+// EnsureResult holds the outcome of ensuring a workspace directory
+// exists for an issue. Create one via [Ensure]. The Key and Path
+// fields mirror [PathResult]; CreatedNow indicates whether the
+// directory was atomically created during the call.
+type EnsureResult struct {
+	// Key is the sanitized directory name derived from the issue
+	// identifier. Contains only [A-Za-z0-9._-] characters.
+	Key string
+
+	// Path is the absolute workspace path: <resolved_root>/<key>.
+	Path string
+
+	// CreatedNow is true when the directory was created during this
+	// call. The caller uses this to gate the after_create hook.
+	CreatedNow bool
+}
+
 // SanitizeKey derives a safe directory name from an issue identifier
 // by replacing every character not in [A-Za-z0-9._-] with underscore.
 // Returns a [*PathError] if the input is empty or the sanitized result
@@ -128,4 +145,74 @@ func ComputePath(root, identifier string) (PathResult, error) {
 	}
 
 	return PathResult{Key: key, Path: workspacePath}, nil
+}
+
+// Ensure ensures a workspace directory exists for the given issue
+// identifier under the specified workspace root. It creates the
+// directory if missing and reuses it if it already exists as a
+// directory. If the path exists but is not a directory, Ensure
+// returns a [*PathError] with Op "conflict" rather than silently
+// replacing the entry.
+//
+// Directory creation uses atomic [os.Mkdir] so CreatedNow is
+// reliable even when external processes share the filesystem.
+//
+// Returns an [EnsureResult] with CreatedNow=true when the directory
+// was atomically created during this call, and CreatedNow=false
+// when an existing directory was reused.
+//
+// Returns a [*PathError] on path computation failure, root creation
+// failure, non-directory conflict, or filesystem errors.
+func Ensure(root, identifier string) (EnsureResult, error) {
+	pr, err := ComputePath(root, identifier)
+	if err != nil {
+		return EnsureResult{}, err
+	}
+
+	// Ensure the workspace root directory exists.
+	parentDir := filepath.Dir(pr.Path)
+	if err := os.MkdirAll(parentDir, 0o750); err != nil {
+		return EnsureResult{}, &PathError{
+			Op:         "create",
+			Root:       root,
+			Identifier: identifier,
+			Err:        err,
+		}
+	}
+
+	// Atomic creation of the workspace directory. Only the successful
+	// Mkdir caller gets CreatedNow=true, eliminating TOCTOU races.
+	if err := os.Mkdir(pr.Path, 0o750); err == nil {
+		return EnsureResult{Key: pr.Key, Path: pr.Path, CreatedNow: true}, nil
+	} else if !errors.Is(err, fs.ErrExist) {
+		return EnsureResult{}, &PathError{
+			Op:         "create",
+			Root:       root,
+			Identifier: identifier,
+			Err:        err,
+		}
+	}
+
+	// Path already exists — verify it is a directory.
+	info, statErr := os.Lstat(pr.Path)
+	if statErr != nil {
+		return EnsureResult{}, &PathError{
+			Op:         "stat",
+			Root:       root,
+			Identifier: identifier,
+			Err:        statErr,
+		}
+	}
+
+	if info.IsDir() {
+		return EnsureResult{Key: pr.Key, Path: pr.Path, CreatedNow: false}, nil
+	}
+
+	// Non-directory entry at workspace path — hard error.
+	return EnsureResult{}, &PathError{
+		Op:         "conflict",
+		Root:       root,
+		Identifier: identifier,
+		Err:        errors.New("path exists but is not a directory"),
+	}
 }

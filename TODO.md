@@ -234,9 +234,11 @@ just the ability to prepare and clean workspaces.
       escape).
       **Verify:** unit tests cover sanitization, containment check, symlink rejection.
 
-- [ ] 5.2 Implement workspace creation and reuse: create directory if missing, reuse if exists,
-      replace if exists but is not a directory. Track `created_now` flag.
-      **Verify:** unit tests with temp directories covering create, reuse, and replace cases.
+- [x] 5.2 Implement workspace creation and reuse: create directory if missing, reuse if exists,
+      return hard error if path exists but is not a directory. Use atomic os.Mkdir for
+      reliable `created_now` flag. Track `created_now` flag.
+      **Verify:** unit tests with temp directories covering create, reuse, non-directory
+      conflict error, and atomic CreatedNow correctness.
 
 - [ ] 5.3 Implement hook execution: run a shell script with workspace as cwd, enforce timeout,
       set environment variables (`SORTIE_ISSUE_ID`, `SORTIE_ISSUE_IDENTIFIER`,

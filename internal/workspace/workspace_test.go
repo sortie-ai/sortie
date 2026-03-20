@@ -270,6 +270,241 @@ func TestComputePath_SymlinkRoot(t *testing.T) {
 	}
 }
 
+func TestEnsure(t *testing.T) {
+	t.Parallel()
+
+	t.Run("create new workspace", func(t *testing.T) {
+		t.Parallel()
+		root := t.TempDir()
+
+		res, err := Ensure(root, "ABC-123")
+		if err != nil {
+			t.Fatalf("Ensure(%q, %q) error: %v", root, "ABC-123", err)
+		}
+		if !res.CreatedNow {
+			t.Error("CreatedNow = false, want true")
+		}
+		if res.Key != "ABC-123" {
+			t.Errorf("Key = %q, want %q", res.Key, "ABC-123")
+		}
+		wantPath := filepath.Join(root, "ABC-123")
+		if res.Path != wantPath {
+			t.Errorf("Path = %q, want %q", res.Path, wantPath)
+		}
+		if !filepath.IsAbs(res.Path) {
+			t.Errorf("Path %q is not absolute", res.Path)
+		}
+
+		info, err := os.Stat(res.Path)
+		if err != nil {
+			t.Fatalf("os.Stat(%q) error: %v", res.Path, err)
+		}
+		if !info.IsDir() {
+			t.Errorf("path %q is not a directory", res.Path)
+		}
+	})
+
+	t.Run("reuse existing directory", func(t *testing.T) {
+		t.Parallel()
+		root := t.TempDir()
+		wsPath := filepath.Join(root, "EXIST-1")
+
+		if err := os.Mkdir(wsPath, 0o750); err != nil {
+			t.Fatalf("setup: os.Mkdir: %v", err)
+		}
+
+		res, err := Ensure(root, "EXIST-1")
+		if err != nil {
+			t.Fatalf("Ensure(%q, %q) error: %v", root, "EXIST-1", err)
+		}
+		if res.CreatedNow {
+			t.Error("CreatedNow = true, want false for existing directory")
+		}
+		if res.Key != "EXIST-1" {
+			t.Errorf("Key = %q, want %q", res.Key, "EXIST-1")
+		}
+		if res.Path != wsPath {
+			t.Errorf("Path = %q, want %q", res.Path, wsPath)
+		}
+
+		info, err := os.Stat(wsPath)
+		if err != nil {
+			t.Fatalf("directory should still exist: %v", err)
+		}
+		if !info.IsDir() {
+			t.Error("path should still be a directory")
+		}
+	})
+
+	t.Run("non-directory at workspace path returns conflict error", func(t *testing.T) {
+		t.Parallel()
+		root := t.TempDir()
+		filePath := filepath.Join(root, "CONFLICT-1")
+
+		if err := os.WriteFile(filePath, []byte("occupied"), 0o644); err != nil {
+			t.Fatalf("setup: os.WriteFile: %v", err)
+		}
+
+		_, err := Ensure(root, "CONFLICT-1")
+		if err == nil {
+			t.Fatal("Ensure should return error for non-directory at workspace path")
+		}
+
+		var pe *PathError
+		if !errors.As(err, &pe) {
+			t.Fatalf("error type = %T, want *PathError", err)
+		}
+		if pe.Op != "conflict" {
+			t.Errorf("PathError.Op = %q, want %q", pe.Op, "conflict")
+		}
+
+		// File must NOT be deleted — non-destructive behavior.
+		info, statErr := os.Lstat(filePath)
+		if statErr != nil {
+			t.Fatalf("file should still exist after conflict error: %v", statErr)
+		}
+		if info.IsDir() {
+			t.Error("file should not have been replaced with a directory")
+		}
+	})
+
+	t.Run("root does not exist yet", func(t *testing.T) {
+		t.Parallel()
+		base := t.TempDir()
+		deepRoot := filepath.Join(base, "deep", "nested")
+
+		res, err := Ensure(deepRoot, "NEW-1")
+		if err != nil {
+			t.Fatalf("Ensure(%q, %q) error: %v", deepRoot, "NEW-1", err)
+		}
+		if !res.CreatedNow {
+			t.Error("CreatedNow = false, want true")
+		}
+
+		info, err := os.Stat(deepRoot)
+		if err != nil {
+			t.Fatalf("root directory should exist: %v", err)
+		}
+		if !info.IsDir() {
+			t.Error("root path should be a directory")
+		}
+
+		info, err = os.Stat(res.Path)
+		if err != nil {
+			t.Fatalf("workspace directory should exist: %v", err)
+		}
+		if !info.IsDir() {
+			t.Error("workspace path should be a directory")
+		}
+	})
+
+	// Section 9.5: symlinks at workspace path are rejected by ComputePath.
+	t.Run("symlink at workspace path rejected", func(t *testing.T) {
+		t.Parallel()
+		root := t.TempDir()
+		target := t.TempDir()
+		symlinkPath := filepath.Join(root, "SYM-1")
+
+		if err := os.Symlink(target, symlinkPath); err != nil {
+			t.Skipf("symlinks not supported: %v", err)
+		}
+
+		_, err := Ensure(root, "SYM-1")
+		if err == nil {
+			t.Fatal("Ensure should return error for symlink at workspace path")
+		}
+
+		var pe *PathError
+		if !errors.As(err, &pe) {
+			t.Fatalf("error type = %T, want *PathError", err)
+		}
+		if pe.Op != "containment" {
+			t.Errorf("PathError.Op = %q, want %q", pe.Op, "containment")
+		}
+	})
+
+	t.Run("empty identifier", func(t *testing.T) {
+		t.Parallel()
+		root := t.TempDir()
+
+		_, err := Ensure(root, "")
+		if err == nil {
+			t.Fatal("Ensure with empty identifier should error")
+		}
+		var pe *PathError
+		if !errors.As(err, &pe) {
+			t.Fatalf("error type = %T, want *PathError", err)
+		}
+		if pe.Op != "sanitize" {
+			t.Errorf("PathError.Op = %q, want %q", pe.Op, "sanitize")
+		}
+	})
+
+	t.Run("empty root", func(t *testing.T) {
+		t.Parallel()
+
+		_, err := Ensure("", "X-1")
+		if err == nil {
+			t.Fatal("Ensure with empty root should error")
+		}
+		var pe *PathError
+		if !errors.As(err, &pe) {
+			t.Fatalf("error type = %T, want *PathError", err)
+		}
+		if pe.Op != "resolve" {
+			t.Errorf("PathError.Op = %q, want %q", pe.Op, "resolve")
+		}
+	})
+
+	t.Run("reuse preserves directory contents", func(t *testing.T) {
+		t.Parallel()
+		root := t.TempDir()
+		wsPath := filepath.Join(root, "KEEP-1")
+
+		if err := os.Mkdir(wsPath, 0o750); err != nil {
+			t.Fatalf("setup: os.Mkdir: %v", err)
+		}
+		markerPath := filepath.Join(wsPath, "marker.txt")
+		if err := os.WriteFile(markerPath, []byte("keep me"), 0o644); err != nil {
+			t.Fatalf("setup: os.WriteFile: %v", err)
+		}
+
+		res, err := Ensure(root, "KEEP-1")
+		if err != nil {
+			t.Fatalf("Ensure(%q, %q) error: %v", root, "KEEP-1", err)
+		}
+		if res.CreatedNow {
+			t.Error("CreatedNow = true, want false for existing directory")
+		}
+
+		data, err := os.ReadFile(markerPath)
+		if err != nil {
+			t.Fatalf("marker file should still exist: %v", err)
+		}
+		if string(data) != "keep me" {
+			t.Errorf("marker file content = %q, want %q", string(data), "keep me")
+		}
+	})
+
+	t.Run("atomic CreatedNow correctness", func(t *testing.T) {
+		t.Parallel()
+		root := t.TempDir()
+		wsPath := filepath.Join(root, "PRE-1")
+
+		if err := os.Mkdir(wsPath, 0o750); err != nil {
+			t.Fatalf("setup: os.Mkdir: %v", err)
+		}
+
+		res, err := Ensure(root, "PRE-1")
+		if err != nil {
+			t.Fatalf("Ensure(%q, %q) error: %v", root, "PRE-1", err)
+		}
+		if res.CreatedNow {
+			t.Error("CreatedNow = true, want false — directory was pre-created externally")
+		}
+	})
+}
+
 func TestPathError_Error(t *testing.T) {
 	t.Parallel()
 
