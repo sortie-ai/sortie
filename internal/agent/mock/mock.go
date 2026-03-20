@@ -1,0 +1,269 @@
+// Package mock implements [domain.AgentAdapter] as a configurable test
+// double for orchestrator and integration tests. Events are delivered
+// synchronously via the [domain.RunTurnParams] OnEvent callback with
+// canned outcomes, token usage accumulation, and optional artificial
+// delays. Registered under kind "mock" via an init function.
+// Safe for concurrent use.
+package mock
+
+import (
+	"context"
+	"fmt"
+	"sync"
+	"time"
+
+	"github.com/sortie-ai/sortie/internal/domain"
+	"github.com/sortie-ai/sortie/internal/registry"
+)
+
+func init() {
+	registry.Agents.Register("mock", NewMockAdapter)
+}
+
+// Compile-time interface satisfaction check.
+var _ domain.AgentAdapter = (*MockAdapter)(nil)
+
+// MockAdapter is a configurable agent adapter for testing. It emits
+// canned events and returns pre-configured outcomes without launching
+// any subprocess. All fields except [MockAdapter.turnIndex] are
+// read-only after construction.
+type MockAdapter struct {
+	sessionID           string
+	agentPID            string
+	startError          string
+	turnOutcomes        []string
+	eventsPerTurn       int
+	inputTokensPerTurn  int
+	outputTokensPerTurn int
+	turnDelayMS         int
+	stopError           string
+
+	// mu guards turnIndex for concurrent RunTurn calls.
+	mu        sync.Mutex
+	turnIndex int
+}
+
+// NewMockAdapter creates a [MockAdapter] from adapter configuration.
+// All config keys are optional with safe defaults. A zero-config map
+// produces a mock that starts successfully, emits 3 notifications plus
+// token_usage and turn_completed per turn, and stops cleanly.
+//
+// Accepted config keys: session_id, agent_pid, start_error,
+// turn_outcomes, events_per_turn, input_tokens_per_turn,
+// output_tokens_per_turn, turn_delay_ms, stop_error.
+func NewMockAdapter(config map[string]any) (domain.AgentAdapter, error) {
+	m := &MockAdapter{
+		sessionID:           "mock-session-001",
+		agentPID:            "",
+		eventsPerTurn:       3,
+		inputTokensPerTurn:  100,
+		outputTokensPerTurn: 50,
+	}
+
+	if v, ok := config["session_id"].(string); ok {
+		m.sessionID = v
+	}
+	if v, ok := config["agent_pid"].(string); ok {
+		m.agentPID = v
+	}
+	if v, ok := config["start_error"].(string); ok {
+		m.startError = v
+	}
+	if v, ok := config["stop_error"].(string); ok {
+		m.stopError = v
+	}
+
+	if v, ok := config["turn_outcomes"].([]any); ok {
+		outcomes := make([]string, 0, len(v))
+		for _, item := range v {
+			if s, ok := item.(string); ok {
+				outcomes = append(outcomes, s)
+			}
+		}
+		m.turnOutcomes = outcomes
+	}
+
+	m.eventsPerTurn = intFromConfig(config, "events_per_turn", m.eventsPerTurn)
+	m.inputTokensPerTurn = intFromConfig(config, "input_tokens_per_turn", m.inputTokensPerTurn)
+	m.outputTokensPerTurn = intFromConfig(config, "output_tokens_per_turn", m.outputTokensPerTurn)
+	m.turnDelayMS = intFromConfig(config, "turn_delay_ms", m.turnDelayMS)
+
+	return m, nil
+}
+
+// StartSession returns a canned [domain.Session] or an error when
+// configured with start_error. Validates that
+// [domain.StartSessionParams.WorkspacePath] is non-empty.
+func (m *MockAdapter) StartSession(_ context.Context, params domain.StartSessionParams) (domain.Session, error) {
+	if m.startError != "" {
+		return domain.Session{}, &domain.AgentError{
+			Kind:    domain.ErrAgentNotFound,
+			Message: m.startError,
+		}
+	}
+
+	if params.WorkspacePath == "" {
+		return domain.Session{}, &domain.AgentError{
+			Kind:    domain.ErrInvalidWorkspaceCwd,
+			Message: "empty workspace path",
+		}
+	}
+
+	return domain.Session{
+		ID:       m.sessionID,
+		AgentPID: m.agentPID,
+	}, nil
+}
+
+// RunTurn emits a configurable sequence of events via params.OnEvent
+// and returns a [domain.TurnResult] with the outcome determined by
+// the turn_outcomes config. Token usage accumulates across turns.
+func (m *MockAdapter) RunTurn(ctx context.Context, session domain.Session, params domain.RunTurnParams) (domain.TurnResult, error) {
+	if params.OnEvent == nil {
+		panic("mock: OnEvent must be non-nil")
+	}
+
+	// Critical section: read and advance turn state.
+	m.mu.Lock()
+	currentIndex := m.turnIndex
+	m.turnIndex++
+	outcome := m.outcomeAt(currentIndex)
+	isFirstTurn := currentIndex == 0
+	m.mu.Unlock()
+
+	// Artificial delay (outside lock).
+	if m.turnDelayMS > 0 {
+		select {
+		case <-time.After(time.Duration(m.turnDelayMS) * time.Millisecond):
+		case <-ctx.Done():
+			params.OnEvent(domain.AgentEvent{
+				Type:      domain.EventTurnCancelled,
+				Timestamp: time.Now().UTC(),
+				Message:   "context cancelled",
+			})
+			return domain.TurnResult{
+				SessionID:  session.ID,
+				ExitReason: domain.EventTurnCancelled,
+			}, ctx.Err()
+		}
+	}
+
+	// Emit session_started on the very first turn.
+	if isFirstTurn {
+		params.OnEvent(domain.AgentEvent{
+			Type:      domain.EventSessionStarted,
+			Timestamp: time.Now().UTC(),
+			AgentPID:  m.agentPID,
+			Message:   "mock session started",
+		})
+	}
+
+	// Emit N notification events.
+	for i := 0; i < m.eventsPerTurn; i++ {
+		params.OnEvent(domain.AgentEvent{
+			Type:      domain.EventNotification,
+			Timestamp: time.Now().UTC(),
+			Message:   fmt.Sprintf("mock notification %d", i+1),
+		})
+	}
+
+	// Compute cumulative token usage.
+	cumulativeInput := int64((currentIndex + 1) * m.inputTokensPerTurn)
+	cumulativeOutput := int64((currentIndex + 1) * m.outputTokensPerTurn)
+	usage := domain.TokenUsage{
+		InputTokens:  cumulativeInput,
+		OutputTokens: cumulativeOutput,
+		TotalTokens:  cumulativeInput + cumulativeOutput,
+	}
+
+	// Emit token_usage event.
+	params.OnEvent(domain.AgentEvent{
+		Type:      domain.EventTokenUsage,
+		Timestamp: time.Now().UTC(),
+		Usage:     usage,
+		Message:   "mock token usage",
+	})
+
+	// Map outcome to terminal event and emit it.
+	exitReason, errKind, isError := outcomeToEvent(outcome)
+	params.OnEvent(domain.AgentEvent{
+		Type:      exitReason,
+		Timestamp: time.Now().UTC(),
+		Message:   fmt.Sprintf("mock turn %s", outcome),
+	})
+
+	result := domain.TurnResult{
+		SessionID:  session.ID,
+		ExitReason: exitReason,
+		Usage:      usage,
+	}
+
+	if isError {
+		return result, &domain.AgentError{
+			Kind:    errKind,
+			Message: fmt.Sprintf("mock turn %s", outcome),
+		}
+	}
+
+	return result, nil
+}
+
+// StopSession returns nil or an error when configured with stop_error.
+func (m *MockAdapter) StopSession(_ context.Context, _ domain.Session) error {
+	if m.stopError != "" {
+		return fmt.Errorf("mock stop: %s", m.stopError)
+	}
+	return nil
+}
+
+// EventStream returns nil. The mock adapter delivers all events
+// synchronously via the [domain.RunTurnParams] OnEvent callback.
+func (m *MockAdapter) EventStream() <-chan domain.AgentEvent {
+	return nil
+}
+
+// outcomeAt returns the outcome string for the given turn index.
+// Falls back to "completed" when the index exceeds the configured
+// turn_outcomes slice.
+func (m *MockAdapter) outcomeAt(index int) string {
+	if index < len(m.turnOutcomes) {
+		return m.turnOutcomes[index]
+	}
+	return "completed"
+}
+
+// outcomeToEvent maps an outcome config string to the corresponding
+// terminal event type, error kind, and whether an error should be
+// returned to the caller.
+func outcomeToEvent(outcome string) (domain.AgentEventType, domain.AgentErrorKind, bool) {
+	switch outcome {
+	case "failed":
+		return domain.EventTurnFailed, domain.ErrTurnFailed, true
+	case "cancelled":
+		return domain.EventTurnCancelled, domain.ErrTurnCancelled, true
+	case "error":
+		return domain.EventTurnEndedWithError, domain.ErrPortExit, true
+	case "input_required":
+		return domain.EventTurnInputRequired, domain.ErrTurnInputRequired, true
+	default:
+		return domain.EventTurnCompleted, "", false
+	}
+}
+
+// intFromConfig extracts an integer value from a config map, accepting
+// both int and float64 (JSON unmarshalling yields float64). Returns
+// the fallback if the key is missing or has an unexpected type.
+func intFromConfig(config map[string]any, key string, fallback int) int {
+	v, ok := config[key]
+	if !ok {
+		return fallback
+	}
+	switch n := v.(type) {
+	case int:
+		return n
+	case float64:
+		return int(n)
+	default:
+		return fallback
+	}
+}
