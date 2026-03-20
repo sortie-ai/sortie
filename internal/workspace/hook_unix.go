@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"strings"
 	"syscall"
 	"time"
 )
@@ -60,8 +61,21 @@ func RunHook(ctx context.Context, params HookParams) (HookResult, error) {
 	cmd.WaitDelay = 3 * time.Second
 
 	env := os.Environ()
-	for k, v := range params.Env {
-		env = append(env, k+"="+v)
+	if len(params.Env) > 0 {
+		// Filter out existing entries for keys we are about to inject,
+		// ensuring the injected values always take effect regardless of
+		// OS/libc getenv duplicate-key behavior.
+		filtered := make([]string, 0, len(env)+len(params.Env))
+		for _, entry := range env {
+			k, _, _ := strings.Cut(entry, "=")
+			if _, dup := params.Env[k]; !dup {
+				filtered = append(filtered, entry)
+			}
+		}
+		for k, v := range params.Env {
+			filtered = append(filtered, k+"="+v)
+		}
+		env = filtered
 	}
 	cmd.Env = env
 
@@ -86,7 +100,7 @@ func RunHook(ctx context.Context, params HookParams) (HookResult, error) {
 			Script:   truncateScript(params.Script),
 			ExitCode: -1,
 			Output:   output,
-			Err:      fmt.Errorf("hook timed out after %dms", params.TimeoutMS),
+			Err:      fmt.Errorf("hook timed out after %dms: %w", params.TimeoutMS, context.DeadlineExceeded),
 		}
 	}
 
@@ -96,7 +110,7 @@ func RunHook(ctx context.Context, params HookParams) (HookResult, error) {
 			Script:   truncateScript(params.Script),
 			ExitCode: -1,
 			Output:   output,
-			Err:      errors.New("hook cancelled"),
+			Err:      fmt.Errorf("hook cancelled: %w", context.Canceled),
 		}
 	}
 
@@ -142,12 +156,20 @@ func validateParams(params HookParams) error {
 	}
 
 	info, err := os.Stat(params.Dir)
-	if err != nil || !info.IsDir() {
+	if err != nil {
 		return &HookError{
 			Op:       "validate",
 			Script:   truncateScript(params.Script),
 			ExitCode: -1,
-			Err:      fmt.Errorf("dir must be an existing directory: %s", params.Dir),
+			Err:      fmt.Errorf("dir %q: %w", params.Dir, err),
+		}
+	}
+	if !info.IsDir() {
+		return &HookError{
+			Op:       "validate",
+			Script:   truncateScript(params.Script),
+			ExitCode: -1,
+			Err:      fmt.Errorf("dir %q: not a directory", params.Dir),
 		}
 	}
 

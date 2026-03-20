@@ -65,8 +65,8 @@ type HookError struct {
 	Err error
 }
 
-// Error returns a human-readable diagnostic including the operation,
-// exit code, and truncated script context.
+// Error returns a human-readable diagnostic including the operation
+// and exit code (when applicable).
 func (e *HookError) Error() string {
 	if e.ExitCode >= 0 {
 		return fmt.Sprintf("hook %s: exit_code=%d: %v", e.Op, e.ExitCode, e.Err)
