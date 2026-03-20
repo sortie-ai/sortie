@@ -490,9 +490,11 @@ tooling.
       hardening).
       **Verify:** document covers all items from architecture Section 15.
 
-- [ ] 10.6 Add release automation: GoReleaser config for building cross-platform binaries,
-      GitHub Actions release workflow triggered by tags.
-      **Verify:** `git tag v0.1.0 && git push --tags` produces release artifacts on GitHub.
+- [x] 10.6 Add release automation: GoReleaser config for building cross-platform static
+      binaries, GitHub Actions `workflow_dispatch` release workflow that runs lint, unit
+      tests, and Jira integration tests before creating a tag and publishing a release.
+      **Verify:** "Run workflow" button in GitHub Actions with version input `0.1.0`
+      produces release artifacts on GitHub after all tests pass.
 
 - [ ] 10.7 Review and finalize README.md: add installation instructions, quick start guide,
       and configuration reference now that the software exists.
