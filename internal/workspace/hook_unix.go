@@ -15,8 +15,8 @@ import (
 
 // allowedEnvKeys lists the parent-process environment variables that
 // hook subprocesses are permitted to inherit. All other variables are
-// stripped to prevent accidental leakage of secrets (e.g.,
-// JIRA_API_TOKEN, cloud credentials) into hook output.
+// stripped so that secrets (e.g., JIRA_API_TOKEN, cloud credentials)
+// are not present in the hook subprocess environment unless explicitly injected.
 var allowedEnvKeys = map[string]bool{
 	"PATH":          true,
 	"HOME":          true,

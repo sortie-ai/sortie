@@ -331,8 +331,12 @@ func TestRunHook_RestrictedEnv(t *testing.T) {
 		if strings.Contains(result.Output, "TEST_SECRET_LEAK_CANARY") {
 			t.Error("hook env contains TEST_SECRET_LEAK_CANARY; want it excluded")
 		}
-		if !strings.Contains(result.Output, "PATH=") {
-			t.Error("hook env missing PATH; want it inherited")
+		wantPath := os.Getenv("PATH")
+		if wantPath == "" {
+			t.Skip("PATH not set in parent environment")
+		}
+		if !strings.Contains(result.Output, "PATH="+wantPath) {
+			t.Errorf("hook env missing PATH=%s; want it inherited with exact value", wantPath)
 		}
 	})
 
