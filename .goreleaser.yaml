@@ -64,12 +64,12 @@ changelog:
       order: 999
   filters:
     exclude:
-      - "(?i)docs[:(]"
-      - "(?i)test[:(]"
-      - "(?i)chore[:(]"
-      - "(?i)ci[:(]"
-      - "(?i)style[:(]"
-      - "(?i)refactor[:(]"
+      - "(?i)^docs[:(]"
+      - "(?i)^test[:(]"
+      - "(?i)^chore[:(]"
+      - "(?i)^ci[:(]"
+      - "(?i)^style[:(]"
+      - "(?i)^refactor[:(]"
 
 release:
   github:

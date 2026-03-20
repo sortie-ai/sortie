@@ -124,11 +124,15 @@ type AgentConfig struct {
 }
 
 // Session is an opaque handle returned by [AgentAdapter.StartSession].
-// The orchestrator does not inspect session contents; it passes the
-// handle back to [AgentAdapter.RunTurn] and [AgentAdapter.StopSession].
+// The orchestrator does not interpret or mutate the session; it passes
+// the handle back to [AgentAdapter.RunTurn] and [AgentAdapter.StopSession].
+// The orchestrator may copy [Session.ID] and [Session.AgentPID] into its
+// own state for observability, but must treat [Session.Internal] as
+// adapter-owned and opaque.
 type Session struct {
 	// ID is the adapter-assigned session identifier. The orchestrator
-	// stores this as the opaque session_id in the running map entry.
+	// may copy this into an opaque session_id field in its own state
+	// for observability, but does not otherwise interpret it.
 	ID string
 
 	// AgentPID is the process ID of the agent subprocess, if
