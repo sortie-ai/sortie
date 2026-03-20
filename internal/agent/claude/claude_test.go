@@ -581,7 +581,19 @@ func TestStopSession_NilProc(t *testing.T) {
 func writeScript(t *testing.T, dir, content string) string {
 	t.Helper()
 	path := filepath.Join(dir, "fake-claude")
-	if err := os.WriteFile(path, []byte("#!/bin/sh\n"+content), 0o755); err != nil {
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o755)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteString("#!/bin/sh\n" + content); err != nil {
+		_ = f.Close()
+		t.Fatal(err)
+	}
+	if err := f.Sync(); err != nil {
+		_ = f.Close()
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
 		t.Fatal(err)
 	}
 	return path
