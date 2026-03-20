@@ -128,8 +128,9 @@ func stringFrom(config map[string]any, key string) string {
 }
 
 // intFrom extracts an integer value from config by key. Handles both
-// int and float64 (JSON numbers decode as float64). Returns
-// defaultVal if absent or wrong type.
+// int and float64 (JSON numbers decode as float64). Fractional
+// float64 values are rejected to prevent silent truncation. Returns
+// defaultVal if absent, wrong type, or fractional.
 func intFrom(config map[string]any, key string, defaultVal int) int {
 	raw, ok := config[key]
 	if !ok {
@@ -139,6 +140,9 @@ func intFrom(config map[string]any, key string, defaultVal int) int {
 	case int:
 		return v
 	case float64:
+		if v != float64(int(v)) {
+			return defaultVal
+		}
 		return int(v)
 	default:
 		return defaultVal

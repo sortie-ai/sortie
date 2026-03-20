@@ -51,9 +51,11 @@ type sessionState struct {
 	agentConfig     domain.AgentConfig
 	turnCount       int
 
-	// mu guards proc for concurrent access from StopSession.
-	mu   sync.Mutex
-	proc *os.Process
+	// mu guards proc and waitCh for concurrent access from
+	// StopSession and gracefulKill.
+	mu     sync.Mutex
+	proc   *os.Process
+	waitCh chan struct{} // closed when cmd.Wait() completes; nil when no process is running
 }
 
 // NewClaudeCodeAdapter creates a [ClaudeCodeAdapter] from adapter
@@ -108,7 +110,7 @@ func (a *ClaudeCodeAdapter) StartSession(_ context.Context, params domain.StartS
 	if err != nil {
 		return domain.Session{}, &domain.AgentError{
 			Kind:    domain.ErrAgentNotFound,
-			Message: "claude command not found on PATH",
+			Message: fmt.Sprintf("agent command %q not found", command),
 			Err:     err,
 		}
 	}
@@ -185,6 +187,8 @@ func (a *ClaudeCodeAdapter) RunTurn(ctx context.Context, session domain.Session,
 		}
 	}
 	state.proc = cmd.Process
+	state.waitCh = make(chan struct{})
+	waitCh := state.waitCh // local copy for cleanup closures
 	state.mu.Unlock()
 
 	state.turnCount++
@@ -284,9 +288,12 @@ func (a *ClaudeCodeAdapter) RunTurn(ctx context.Context, session domain.Session,
 	// Check scanner error (e.g., buffer overflow).
 	if scanErr := scanner.Err(); scanErr != nil {
 		gracefulKill(state)
+		cmd.Wait() //nolint:errcheck // best-effort reap; exit code is irrelevant on scanner failure
+		close(waitCh)
 		close(doneCh)
 		state.mu.Lock()
 		state.proc = nil
+		state.waitCh = nil
 		state.mu.Unlock()
 		now := time.Now().UTC()
 		params.OnEvent(domain.AgentEvent{
@@ -305,13 +312,16 @@ func (a *ClaudeCodeAdapter) RunTurn(ctx context.Context, session domain.Session,
 			}
 	}
 
-	// Wait for process to exit.
+	// Wait for process to exit. cmd.Wait is the sole waiter;
+	// StopSession and gracefulKill only signal and wait on waitCh.
 	waitErr := cmd.Wait()
+	close(waitCh)
 	close(doneCh)
 
 	// Clear subprocess reference.
 	state.mu.Lock()
 	state.proc = nil
+	state.waitCh = nil
 	state.mu.Unlock()
 
 	now := time.Now().UTC()
@@ -433,6 +443,7 @@ func (a *ClaudeCodeAdapter) StopSession(ctx context.Context, session domain.Sess
 	state.mu.Lock()
 	proc := state.proc
 	state.proc = nil
+	waitCh := state.waitCh
 	state.mu.Unlock()
 
 	if proc == nil {
@@ -442,14 +453,8 @@ func (a *ClaudeCodeAdapter) StopSession(ctx context.Context, session domain.Sess
 	// Send SIGTERM for graceful shutdown.
 	_ = proc.Signal(syscall.SIGTERM) //nolint:errcheck // best-effort signal; process may already be dead
 
-	done := make(chan struct{})
-	go func() {
-		_, _ = proc.Wait() //nolint:errcheck // best-effort wait; may fail if already waited by RunTurn
-		close(done)
-	}()
-
 	select {
-	case <-done:
+	case <-waitCh:
 		return nil
 	case <-time.After(5 * time.Second):
 		_ = proc.Kill() //nolint:errcheck // best-effort kill
@@ -466,9 +471,9 @@ func (a *ClaudeCodeAdapter) EventStream() <-chan domain.AgentEvent {
 	return nil
 }
 
-// gracefulKill sends SIGTERM to the session's subprocess, waits up to
-// 5 seconds for exit, then sends SIGKILL. Safe to call when proc is
-// nil.
+// gracefulKill sends SIGTERM and schedules a SIGKILL escalation after
+// 5 seconds. It returns immediately; the caller (RunTurn) is
+// responsible for calling cmd.Wait. Safe to call when proc is nil.
 func gracefulKill(state *sessionState) {
 	state.mu.Lock()
 	proc := state.proc
@@ -480,17 +485,16 @@ func gracefulKill(state *sessionState) {
 
 	_ = proc.Signal(syscall.SIGTERM) //nolint:errcheck // best-effort signal
 
-	done := make(chan struct{})
-	go func() {
-		_, _ = proc.Wait() //nolint:errcheck // best-effort wait
-		close(done)
-	}()
-
-	select {
-	case <-done:
-	case <-time.After(5 * time.Second):
-		_ = proc.Kill() //nolint:errcheck // best-effort kill
-	}
+	// Schedule SIGKILL escalation. The timer checks state.proc
+	// under the lock; once RunTurn clears proc the kill is skipped.
+	time.AfterFunc(5*time.Second, func() {
+		state.mu.Lock()
+		p := state.proc
+		state.mu.Unlock()
+		if p != nil {
+			_ = p.Kill() //nolint:errcheck // best-effort kill
+		}
+	})
 }
 
 // drainStderr reads stderr from the subprocess line by line and logs
