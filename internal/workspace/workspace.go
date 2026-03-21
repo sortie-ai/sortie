@@ -241,7 +241,11 @@ func ListWorkspaceKeys(root string) ([]string, error) {
 
 	keys := make([]string, 0, len(entries))
 	for _, entry := range entries {
-		if entry.IsDir() && entry.Type()&os.ModeSymlink == 0 {
+		fi, statErr := os.Lstat(filepath.Join(absRoot, entry.Name()))
+		if statErr != nil {
+			continue
+		}
+		if fi.IsDir() && fi.Mode()&os.ModeSymlink == 0 {
 			keys = append(keys, entry.Name())
 		}
 	}
