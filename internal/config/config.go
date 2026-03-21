@@ -273,8 +273,7 @@ func resolveEnv(val string) string {
 // resolveEnvRef performs targeted environment variable resolution: it
 // expands the value only when the entire string is an env var reference
 // ($VAR or ${VAR}). Mixed content such as URIs with embedded
-// $-references is returned unchanged to avoid destructive rewriting
-// (architecture Section 6.1: do not rewrite URIs).
+// $-references is returned unchanged to avoid destructive rewriting.
 func resolveEnvRef(val string) string {
 	trimmed := strings.TrimSpace(val)
 	if strings.HasPrefix(trimmed, "$") {

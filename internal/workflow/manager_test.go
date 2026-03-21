@@ -178,8 +178,8 @@ func TestManager_ReloadRetainsOnError(t *testing.T) {
 	}
 }
 
-// Section 17.1: Workflow file changes are detected and trigger
-// re-read/re-apply without restart.
+// TestManager_WatchPicksUpChange verifies that workflow file changes are
+// detected and trigger re-read/re-apply without restart.
 func TestManager_WatchPicksUpChange(t *testing.T) {
 	t.Parallel()
 
@@ -213,8 +213,8 @@ func TestManager_WatchPicksUpChange(t *testing.T) {
 	}
 }
 
-// Section 17.1: Invalid workflow reload keeps last known good effective
-// configuration and emits an operator-visible error.
+// TestManager_WatchInvalidRetainsGood verifies that an invalid workflow
+// reload keeps the last known good effective configuration.
 func TestManager_WatchInvalidRetainsGood(t *testing.T) {
 	t.Parallel()
 

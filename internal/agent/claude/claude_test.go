@@ -608,7 +608,8 @@ func writeScript(t *testing.T, dir, content string) string {
 	return path
 }
 
-// Section 10.1: RunTurn integration tests using fake subprocess scripts.
+// TestRunTurn_SuccessfulSession verifies a successful session using a fake
+// subprocess script.
 func TestRunTurn_SuccessfulSession(t *testing.T) {
 	t.Parallel()
 

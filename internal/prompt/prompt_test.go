@@ -336,7 +336,7 @@ func TestRender_Errors(t *testing.T) {
 	t.Run("DollarRootAccess", func(t *testing.T) {
 		t.Parallel()
 
-		// ADR-0005: inside {{ range }}, $ accesses the root data map.
+		// Inside {{ range }}, $ accesses the root data map.
 		issueWithLabels := map[string]any{
 			"title":  "Test Issue",
 			"labels": []any{"bug", "urgent"},

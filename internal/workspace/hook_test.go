@@ -135,7 +135,7 @@ func TestRunHook(t *testing.T) {
 		}
 	})
 
-	// Section 15.4: process group kill prevents orphaned grandchildren
+	// Process group kill prevents orphaned grandchildren.
 	t.Run("timeout kills child processes", func(t *testing.T) {
 		t.Parallel()
 
@@ -178,7 +178,6 @@ func TestRunHook(t *testing.T) {
 		}
 	})
 
-	// Section 15.4: output truncation
 	t.Run("output truncation", func(t *testing.T) {
 		t.Parallel()
 
@@ -295,7 +294,6 @@ func TestRunHook(t *testing.T) {
 		}
 	})
 
-	// Section 5.3.4: SORTIE_ATTEMPT passed as string
 	t.Run("SORTIE_ATTEMPT as string", func(t *testing.T) {
 		t.Parallel()
 
@@ -314,7 +312,8 @@ func TestRunHook(t *testing.T) {
 	})
 }
 
-// Section 15.3: restricted hook environment prevents secret leakage
+// TestRunHook_RestrictedEnv verifies that the hook environment is restricted
+// to prevent secret leakage from the host process environment.
 func TestRunHook_RestrictedEnv(t *testing.T) {
 	t.Run("excludes unrelated variables", func(t *testing.T) {
 		t.Setenv("TEST_SECRET_LEAK_CANARY", "s3cret_value_42")

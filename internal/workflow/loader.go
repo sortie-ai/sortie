@@ -51,7 +51,7 @@ func Load(path string) (Workflow, error) {
 
 	// Check whether the first line is a front matter opening delimiter.
 	// Allow optional trailing whitespace on the delimiter line, consistent
-	// with closing delimiter handling (ADR-0004 edge cases).
+	// with closing delimiter handling.
 	firstNL := strings.IndexByte(content, '\n')
 	if firstNL == -1 || strings.TrimRight(content[:firstNL], " \t") != "---" {
 		return Workflow{

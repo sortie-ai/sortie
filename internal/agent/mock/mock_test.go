@@ -304,7 +304,7 @@ func TestRunTurn_MultiTurnTokenAccumulation(t *testing.T) {
 	adapter, _ := NewMockAdapter(map[string]any{})
 	sess := domain.Session{ID: "s"}
 
-	// Section 13.5: token usage is cumulative.
+	// Token usage is cumulative across turns.
 	wantUsage := []domain.TokenUsage{
 		{InputTokens: 100, OutputTokens: 50, TotalTokens: 150},
 		{InputTokens: 200, OutputTokens: 100, TotalTokens: 300},

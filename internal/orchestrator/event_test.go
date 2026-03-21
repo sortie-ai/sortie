@@ -184,7 +184,7 @@ func TestHandleAgentEvent_TurnCount(t *testing.T) {
 // TestHandleAgentEvent_TokenUsage_DeltaAccumulation verifies the cumulative
 // delta algorithm: the orchestrator computes positive-clamped deltas relative
 // to LastReported* and accumulates them without double-counting on duplicate
-// reports (architecture Section 13.5).
+// reports.
 func TestHandleAgentEvent_TokenUsage_DeltaAccumulation(t *testing.T) {
 	t.Parallel()
 
@@ -258,9 +258,8 @@ func TestHandleAgentEvent_TokenUsage_DeltaAccumulation(t *testing.T) {
 	}
 }
 
-// TestHandleAgentEvent_FullSequence is the primary integration test from
-// Spec §4 test 7. It sends the full five-event sequence and asserts the
-// complete set of final field values.
+// TestHandleAgentEvent_FullSequence sends the full five-event sequence and
+// asserts the complete set of final field values.
 func TestHandleAgentEvent_FullSequence(t *testing.T) {
 	t.Parallel()
 
@@ -304,7 +303,7 @@ func TestHandleAgentEvent_FullSequence(t *testing.T) {
 		Timestamp: ts,
 	})
 
-	// Assert all final field values from Spec §4 test 7.
+	// Assert all final field values.
 	if entry.SessionID != "sess-1" {
 		t.Errorf("SessionID = %q, want %q", entry.SessionID, "sess-1")
 	}
@@ -381,8 +380,7 @@ func TestHandleAgentEvent_TwoSessions_AgentTotals(t *testing.T) {
 // TestHandleAgentEvent_RateLimits verifies that a non-nil RateLimits payload
 // is stored as a shallow copy in state.AgentRateLimits so that mutating the
 // original map after delivery does not corrupt the stored snapshot. Also
-// verifies that a nil RateLimits event does not clear an existing snapshot
-// (Spec §4 test 9, §3.2.4).
+// verifies that a nil RateLimits event does not clear an existing snapshot.
 func TestHandleAgentEvent_RateLimits(t *testing.T) {
 	t.Parallel()
 
@@ -422,7 +420,7 @@ func TestHandleAgentEvent_RateLimits(t *testing.T) {
 
 // TestHandleAgentEvent_MonotonicTimestamp verifies the monotonic timestamp
 // guard: out-of-order events must not regress LastAgentTimestamp, while
-// LastAgentEvent is still updated unconditionally (Spec §4 test 10, §3.2.4).
+// LastAgentEvent is still updated unconditionally.
 func TestHandleAgentEvent_MonotonicTimestamp(t *testing.T) {
 	t.Parallel()
 

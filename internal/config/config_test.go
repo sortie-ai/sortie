@@ -172,7 +172,7 @@ func TestNewServiceConfig(t *testing.T) {
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		// Inline $VAR in URIs must NOT be expanded (architecture Section 6.1).
+		// Inline $VAR in URIs must NOT be expanded.
 		assertStringEqual(t, "Tracker.Endpoint", "https://$JIRA_HOST/rest/api/3", cfg.Tracker.Endpoint)
 	})
 

@@ -170,7 +170,7 @@ func TestComputePath(t *testing.T) {
 		}
 	})
 
-	// Section 9.5, Invariant 2: root="/" must not cause false rejection
+	// root="/" must not cause false rejection.
 	t.Run("root is filesystem root", func(t *testing.T) {
 		t.Parallel()
 
@@ -186,7 +186,7 @@ func TestComputePath(t *testing.T) {
 		}
 	})
 
-	// Section 9.5: workspace path must stay inside workspace root
+	// Workspace path must always stay inside the workspace root.
 	t.Run("path is always under root", func(t *testing.T) {
 		t.Parallel()
 		root := t.TempDir()

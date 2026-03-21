@@ -100,7 +100,7 @@ func TestComputeBackoffDelay(t *testing.T) {
 		maxRetryBackoffMS int
 		want              int64
 	}{
-		// Default cap (300000) — attempts 1..7 per spec §3.4
+		// Default cap (300000) — attempts 1..7.
 		{name: "attempt 1 default cap", attempt: 1, maxRetryBackoffMS: 300_000, want: 10_000},
 		{name: "attempt 2 default cap", attempt: 2, maxRetryBackoffMS: 300_000, want: 20_000},
 		{name: "attempt 3 default cap", attempt: 3, maxRetryBackoffMS: 300_000, want: 40_000},
