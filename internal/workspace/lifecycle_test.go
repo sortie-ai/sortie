@@ -795,4 +795,27 @@ func TestCleanupTerminal(t *testing.T) {
 			t.Errorf("Errors = %v, want empty", result.Errors)
 		}
 	})
+
+	t.Run("only terminal workspaces removed others preserved", func(t *testing.T) {
+		t.Parallel()
+		root := t.TempDir()
+		mustEnsure(t, root, "ACTIVE-1")
+		mustEnsure(t, root, "TERMINAL-1")
+		mustEnsure(t, root, "TERMINAL-2")
+
+		result := CleanupTerminal(context.Background(), CleanupTerminalParams{
+			Root:          root,
+			Identifiers:   []string{"TERMINAL-1", "TERMINAL-2"},
+			HookTimeoutMS: 5000,
+		})
+		if len(result.Errors) != 0 {
+			t.Fatalf("CleanupTerminal() errors: %v", result.Errors)
+		}
+		if len(result.Removed) != 2 {
+			t.Errorf("CleanupTerminal() removed %d, want 2", len(result.Removed))
+		}
+		assertFileExists(t, filepath.Join(root, "ACTIVE-1"))
+		assertFileNotExists(t, filepath.Join(root, "TERMINAL-1"))
+		assertFileNotExists(t, filepath.Join(root, "TERMINAL-2"))
+	})
 }
