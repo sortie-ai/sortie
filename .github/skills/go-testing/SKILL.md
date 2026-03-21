@@ -1,6 +1,6 @@
 ---
 name: go-testing
-description: "Write, review, and improve Go test code for this project. Use when creating tests, adding test cases, writing test helpers, reviewing test quality, or when asked to test any Go function — even without explicit mention of table-driven tests, subtests, or fixtures. Covers table-driven tests, subtests, parallel execution, test helpers, error semantics, fixture loading, httptest servers, env-gated integration tests, and adapter conformance. Do NOT use for benchmarks or performance profiling."
+description: "Write, review, and improve Go test code for this project. Use whenever generating, reviewing, or modifying Go tests — including when invoked by the Tester agent, the /test prompt, or any test-related request. Covers table-driven tests, subtests, t.Parallel(), test helpers with t.Helper(), error assertions via errors.As/errors.Is, fixture loading from testdata/, httptest servers, env-gated integration tests, mock/fake/spy patterns, and adapter conformance. Do NOT use for benchmarks or performance profiling."
 ---
 
 # Go Testing — Sortie Project
