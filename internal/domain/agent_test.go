@@ -29,8 +29,6 @@ func (m *mockAgentAdapter) EventStream() <-chan AgentEvent {
 	return nil
 }
 
-// Section 10.3: verify all 13 normalized event type string values match the
-// architecture specification exactly.
 func TestAgentEventType_Values(t *testing.T) {
 	t.Parallel()
 
@@ -65,8 +63,6 @@ func TestAgentEventType_Values(t *testing.T) {
 	}
 }
 
-// Section 10.5: verify all 9 agent error kind string values match the
-// architecture specification exactly.
 func TestAgentErrorKind_Values(t *testing.T) {
 	t.Parallel()
 
@@ -198,7 +194,6 @@ func TestAgentError_UnwrapNil(t *testing.T) {
 	}
 }
 
-// Section 10.2: Session.Internal carries adapter-specific opaque state.
 func TestSession_InternalRoundTrip(t *testing.T) {
 	t.Parallel()
 
@@ -214,6 +209,13 @@ func TestSession_InternalRoundTrip(t *testing.T) {
 		Internal: state,
 	}
 
+	if s.ID != "sess-1" {
+		t.Errorf("ID = %q, want %q", s.ID, "sess-1")
+	}
+	if s.AgentPID != "42" {
+		t.Errorf("AgentPID = %q, want %q", s.AgentPID, "42")
+	}
+
 	got, ok := s.Internal.(*adapterState)
 	if !ok {
 		t.Fatalf("Internal type assertion failed, got %T", s.Internal)
@@ -226,7 +228,6 @@ func TestSession_InternalRoundTrip(t *testing.T) {
 	}
 }
 
-// Section 10.3: AgentEvent can carry all fields including token usage.
 func TestAgentEvent_Construction(t *testing.T) {
 	t.Parallel()
 
@@ -257,6 +258,12 @@ func TestAgentEvent_Construction(t *testing.T) {
 	}
 	if event.Usage.TotalTokens != 700 {
 		t.Errorf("Usage.TotalTokens = %d, want 700", event.Usage.TotalTokens)
+	}
+	if event.AgentPID != "1234" {
+		t.Errorf("AgentPID = %q, want %q", event.AgentPID, "1234")
+	}
+	if event.Message != "token update" {
+		t.Errorf("Message = %q, want %q", event.Message, "token update")
 	}
 }
 
