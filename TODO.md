@@ -289,7 +289,7 @@ component. Uses mock adapters for tracker and agent - no real external calls.
       **Verify:** unit tests confirm issue is claimed, running entry is created with correct
       initial fields, and spawn failure triggers retry scheduling.
 
-- [ ] 6.4 Implement the worker attempt function (Section 16.5): the goroutine spawned by
+- [x] 6.4 Implement the worker attempt function (Section 16.5): the goroutine spawned by
       dispatch. Sequence: create/reuse workspace, run `before_run` hook, start agent session,
       loop up to `agent.max_turns` turns. On each turn: build the turn-appropriate prompt
       (full prompt on turn 1 via task 1.4, continuation prompt on turns 2+ via task 1.5),
