@@ -323,7 +323,7 @@ component. Uses mock adapters for tracker and agent - no real external calls.
       **Verify:** unit tests confirm each error kind returns the expected retry semantics.
       Table-driven test covers all defined kinds.
 
-- [ ] 6.7 Implement worker exit handling (Section 16.6): normal exit adds runtime seconds to
+- [x] 6.7 Implement worker exit handling (Section 16.6): normal exit adds runtime seconds to
       `agent_totals` and `aggregate_metrics` (SQLite), persists completed run to `run_history`,
       schedules continuation retry (attempt 1, 1s delay). Abnormal exit does the same but
       schedules exponential backoff retry (`min(10000 * 2^(attempt-1), max_retry_backoff_ms)`).
