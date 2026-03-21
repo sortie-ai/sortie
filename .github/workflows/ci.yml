@@ -1,14 +1,14 @@
 name: CI
 
 on:
-    push:
-      branches:
-        # This is to make sure that there is no broken CI on
-        # the main branch, and also for Sonarqube integration
-        - main
-    # We need it for better Sonarqube integration
-    pull_request:
-      types: [opened, synchronize, reopened]
+  push:
+    branches:
+      # This is to make sure that there is no broken CI on
+      # the main branch, and also for Sonarqube integration
+      - main
+  # We need it for better Sonarqube integration
+  pull_request:
+    types: [opened, synchronize, reopened]
 
 permissions:
   contents: read
