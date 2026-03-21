@@ -577,3 +577,85 @@ func TestPathError_Unwrap(t *testing.T) {
 		t.Error("errors.Is should find the wrapped error")
 	}
 }
+
+func TestListWorkspaceKeys(t *testing.T) {
+	t.Parallel()
+
+	t.Run("directories returned files skipped", func(t *testing.T) {
+		t.Parallel()
+		root := t.TempDir()
+
+		// Create two directories and one regular file.
+		for _, dir := range []string{"PROJ-1", "PROJ-2"} {
+			if err := os.Mkdir(filepath.Join(root, dir), 0o750); err != nil {
+				t.Fatalf("setup mkdir %s: %v", dir, err)
+			}
+		}
+		if err := os.WriteFile(filepath.Join(root, "not-a-dir.txt"), []byte("x"), 0o644); err != nil {
+			t.Fatalf("setup writefile: %v", err)
+		}
+
+		got, err := ListWorkspaceKeys(root)
+		if err != nil {
+			t.Fatalf("ListWorkspaceKeys() error: %v", err)
+		}
+
+		want := map[string]bool{"PROJ-1": true, "PROJ-2": true}
+		if len(got) != len(want) {
+			t.Fatalf("ListWorkspaceKeys() returned %d keys, want %d: %v", len(got), len(want), got)
+		}
+		for _, k := range got {
+			if !want[k] {
+				t.Errorf("ListWorkspaceKeys() unexpected key %q", k)
+			}
+		}
+	})
+
+	t.Run("symlinks skipped", func(t *testing.T) {
+		t.Parallel()
+		root := t.TempDir()
+
+		target := t.TempDir()
+		if err := os.Symlink(target, filepath.Join(root, "link-dir")); err != nil {
+			t.Skip("symlinks not supported:", err)
+		}
+		if err := os.Mkdir(filepath.Join(root, "real-dir"), 0o750); err != nil {
+			t.Fatalf("setup: %v", err)
+		}
+
+		got, err := ListWorkspaceKeys(root)
+		if err != nil {
+			t.Fatalf("ListWorkspaceKeys() error: %v", err)
+		}
+
+		if len(got) != 1 || got[0] != "real-dir" {
+			t.Errorf("ListWorkspaceKeys() = %v, want [real-dir]", got)
+		}
+	})
+
+	t.Run("nonexistent root returns empty", func(t *testing.T) {
+		t.Parallel()
+		root := filepath.Join(t.TempDir(), "does-not-exist")
+
+		got, err := ListWorkspaceKeys(root)
+		if err != nil {
+			t.Fatalf("ListWorkspaceKeys() error: %v", err)
+		}
+		if len(got) != 0 {
+			t.Errorf("ListWorkspaceKeys() = %v, want empty slice", got)
+		}
+	})
+
+	t.Run("empty directory returns empty", func(t *testing.T) {
+		t.Parallel()
+		root := t.TempDir()
+
+		got, err := ListWorkspaceKeys(root)
+		if err != nil {
+			t.Fatalf("ListWorkspaceKeys() error: %v", err)
+		}
+		if len(got) != 0 {
+			t.Errorf("ListWorkspaceKeys() = %v, want empty slice", got)
+		}
+	})
+}

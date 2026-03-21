@@ -216,3 +216,34 @@ func Ensure(root, identifier string) (EnsureResult, error) {
 		Err:        errors.New("path exists but is not a directory"),
 	}
 }
+
+// ListWorkspaceKeys returns the names of direct child directories
+// under root. Non-directory entries and symlinks are skipped. Returns
+// an empty slice (not nil) if root does not exist or contains no
+// directories.
+//
+// This function does not validate or reverse-map keys to identifiers;
+// callers are responsible for matching keys against known issue
+// identifiers.
+func ListWorkspaceKeys(root string) ([]string, error) {
+	absRoot, err := filepath.Abs(root)
+	if err != nil {
+		return nil, err
+	}
+
+	entries, err := os.ReadDir(absRoot)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return []string{}, nil
+		}
+		return nil, err
+	}
+
+	keys := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if entry.IsDir() && entry.Type()&os.ModeSymlink == 0 {
+			keys = append(keys, entry.Name())
+		}
+	}
+	return keys, nil
+}

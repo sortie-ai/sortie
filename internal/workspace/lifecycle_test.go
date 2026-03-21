@@ -604,3 +604,195 @@ func TestLifecycleFullSequence(t *testing.T) {
 	assertFileExists(t, beforeRemoveMarker)
 	assertFileNotExists(t, result.Path)
 }
+
+// TestCleanupTerminal exercises the batch workspace removal function
+// used during startup cleanup of terminal-state issues (Section 8.6).
+func TestCleanupTerminal(t *testing.T) {
+	t.Parallel()
+
+	t.Run("all workspaces removed no hook", func(t *testing.T) {
+		t.Parallel()
+		root := t.TempDir()
+		mustEnsure(t, root, "T-1")
+		mustEnsure(t, root, "T-2")
+
+		result := CleanupTerminal(context.Background(), CleanupTerminalParams{
+			Root:          root,
+			Identifiers:   []string{"T-1", "T-2"},
+			HookTimeoutMS: 5000,
+		})
+		if len(result.Errors) != 0 {
+			t.Fatalf("CleanupTerminal() errors: %v", result.Errors)
+		}
+		if len(result.Removed) != 2 {
+			t.Errorf("CleanupTerminal() removed %d, want 2", len(result.Removed))
+		}
+		assertFileNotExists(t, filepath.Join(root, "T-1"))
+		assertFileNotExists(t, filepath.Join(root, "T-2"))
+	})
+
+	t.Run("missing workspace is idempotent", func(t *testing.T) {
+		t.Parallel()
+		root := t.TempDir()
+
+		result := CleanupTerminal(context.Background(), CleanupTerminalParams{
+			Root:          root,
+			Identifiers:   []string{"NO-EXIST"},
+			HookTimeoutMS: 5000,
+		})
+		if len(result.Errors) != 0 {
+			t.Errorf("CleanupTerminal() errors: %v", result.Errors)
+		}
+		if len(result.Removed) != 1 || result.Removed[0] != "NO-EXIST" {
+			t.Errorf("CleanupTerminal().Removed = %v, want [NO-EXIST]", result.Removed)
+		}
+	})
+
+	t.Run("before_remove hook writes marker", func(t *testing.T) {
+		t.Parallel()
+		root := t.TempDir()
+		markerDir := t.TempDir()
+		marker := filepath.Join(markerDir, "hook_ran")
+		mustEnsure(t, root, "H-1")
+
+		result := CleanupTerminal(context.Background(), CleanupTerminalParams{
+			Root:          root,
+			Identifiers:   []string{"H-1"},
+			BeforeRemove:  `touch "` + marker + `"`,
+			HookTimeoutMS: 5000,
+		})
+		if len(result.Errors) != 0 {
+			t.Fatalf("CleanupTerminal() errors: %v", result.Errors)
+		}
+		assertFileExists(t, marker)
+		assertFileNotExists(t, filepath.Join(root, "H-1"))
+	})
+
+	t.Run("empty identifier collected in errors", func(t *testing.T) {
+		t.Parallel()
+		root := t.TempDir()
+
+		result := CleanupTerminal(context.Background(), CleanupTerminalParams{
+			Root:          root,
+			Identifiers:   []string{""},
+			HookTimeoutMS: 5000,
+		})
+		if len(result.Errors) != 1 {
+			t.Fatalf("CleanupTerminal() errors count = %d, want 1", len(result.Errors))
+		}
+		if _, ok := result.Errors[""]; !ok {
+			t.Error("CleanupTerminal() expected error for empty identifier")
+		}
+		var pe *PathError
+		if !errors.As(result.Errors[""], &pe) {
+			t.Errorf("error type = %T, want *PathError", result.Errors[""])
+		}
+	})
+
+	t.Run("mixed valid and invalid", func(t *testing.T) {
+		t.Parallel()
+		root := t.TempDir()
+		mustEnsure(t, root, "OK-1")
+
+		result := CleanupTerminal(context.Background(), CleanupTerminalParams{
+			Root:          root,
+			Identifiers:   []string{"OK-1", ""},
+			HookTimeoutMS: 5000,
+		})
+		if len(result.Removed) != 1 || result.Removed[0] != "OK-1" {
+			t.Errorf("Removed = %v, want [OK-1]", result.Removed)
+		}
+		if len(result.Errors) != 1 {
+			t.Errorf("Errors count = %d, want 1", len(result.Errors))
+		}
+		assertFileNotExists(t, filepath.Join(root, "OK-1"))
+	})
+
+	t.Run("issue ID lookup from map", func(t *testing.T) {
+		t.Parallel()
+		root := t.TempDir()
+		markerDir := t.TempDir()
+		envFile := filepath.Join(markerDir, "env.txt")
+		mustEnsure(t, root, "MAP-1")
+
+		script := `printf "%s" "$SORTIE_ISSUE_ID" > "` + envFile + `"`
+		result := CleanupTerminal(context.Background(), CleanupTerminalParams{
+			Root:        root,
+			Identifiers: []string{"MAP-1"},
+			IssueIDsByIdentifier: map[string]string{
+				"MAP-1": "tracker-id-42",
+			},
+			BeforeRemove:  script,
+			HookTimeoutMS: 5000,
+		})
+		if len(result.Errors) != 0 {
+			t.Fatalf("CleanupTerminal() errors: %v", result.Errors)
+		}
+		data, err := os.ReadFile(envFile)
+		if err != nil {
+			t.Fatalf("ReadFile: %v", err)
+		}
+		if got := string(data); got != "tracker-id-42" {
+			t.Errorf("SORTIE_ISSUE_ID = %q, want %q", got, "tracker-id-42")
+		}
+	})
+
+	t.Run("issue ID fallback to identifier", func(t *testing.T) {
+		t.Parallel()
+		root := t.TempDir()
+		markerDir := t.TempDir()
+		envFile := filepath.Join(markerDir, "env.txt")
+		mustEnsure(t, root, "FALL-1")
+
+		script := `printf "%s" "$SORTIE_ISSUE_ID" > "` + envFile + `"`
+		result := CleanupTerminal(context.Background(), CleanupTerminalParams{
+			Root:          root,
+			Identifiers:   []string{"FALL-1"},
+			BeforeRemove:  script,
+			HookTimeoutMS: 5000,
+		})
+		if len(result.Errors) != 0 {
+			t.Fatalf("CleanupTerminal() errors: %v", result.Errors)
+		}
+		data, err := os.ReadFile(envFile)
+		if err != nil {
+			t.Fatalf("ReadFile: %v", err)
+		}
+		if got := string(data); got != "FALL-1" {
+			t.Errorf("SORTIE_ISSUE_ID = %q, want %q (fallback to identifier)", got, "FALL-1")
+		}
+	})
+
+	t.Run("empty identifiers list", func(t *testing.T) {
+		t.Parallel()
+		root := t.TempDir()
+
+		result := CleanupTerminal(context.Background(), CleanupTerminalParams{
+			Root:          root,
+			Identifiers:   []string{},
+			HookTimeoutMS: 5000,
+		})
+		if len(result.Removed) != 0 {
+			t.Errorf("Removed = %v, want empty", result.Removed)
+		}
+		if len(result.Errors) != 0 {
+			t.Errorf("Errors = %v, want empty", result.Errors)
+		}
+	})
+
+	t.Run("nil identifiers list", func(t *testing.T) {
+		t.Parallel()
+		root := t.TempDir()
+
+		result := CleanupTerminal(context.Background(), CleanupTerminalParams{
+			Root:          root,
+			HookTimeoutMS: 5000,
+		})
+		if len(result.Removed) != 0 {
+			t.Errorf("Removed = %v, want empty", result.Removed)
+		}
+		if len(result.Errors) != 0 {
+			t.Errorf("Errors = %v, want empty", result.Errors)
+		}
+	})
+}
