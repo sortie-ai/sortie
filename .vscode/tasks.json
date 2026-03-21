@@ -1,0 +1,373 @@
+{
+  "version": "2.0.0",
+
+  // Ensure tasks run in a login+interactive shell so version managers
+  // (asdf, nvm, etc.) fully initialize — including .bashrc env fixups
+  // that only run in interactive shells.
+  "options": {
+    "shell": {
+      "executable": "/bin/bash",
+      "args": ["-l", "-i", "-c"]
+    }
+  },
+
+  "tasks": [
+    // ── Build ────────────────────────────────────────────────────────────────
+    {
+      "label": "build",
+      "detail": "Compile the sortie binary into the repo root",
+      "type": "shell",
+      "command": "make",
+      "args": ["build"],
+      "group": { "kind": "build", "isDefault": true },
+      "problemMatcher": "$go",
+      "presentation": {
+        "reveal": "silent",
+        "panel": "shared",
+        "showReuseMessage": false,
+        "clear": true
+      }
+    },
+    {
+      "label": "clean",
+      "detail": "Remove build artifacts",
+      "type": "shell",
+      "command": "make",
+      "args": ["clean"],
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "silent",
+        "panel": "shared",
+        "showReuseMessage": false
+      }
+    },
+    {
+      "label": "rebuild",
+      "detail": "Clean then build from scratch",
+      "dependsOn": ["clean", "build"],
+      "dependsOrder": "sequence",
+      "group": "build",
+      "problemMatcher": []
+    },
+
+    // ── Format ───────────────────────────────────────────────────────────────
+    {
+      "label": "fmt",
+      "detail": "Format all Go source files",
+      "type": "shell",
+      "command": "make",
+      "args": ["fmt"],
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "silent",
+        "panel": "shared",
+        "showReuseMessage": false
+      }
+    },
+
+    // ── Lint ─────────────────────────────────────────────────────────────────
+    {
+      "label": "lint",
+      "detail": "Run golangci-lint on all packages",
+      "type": "shell",
+      "command": "make",
+      "args": ["lint"],
+      "group": "test",
+      "problemMatcher": {
+        "owner": "golangci-lint",
+        "source": "golangci-lint",
+        "fileLocation": ["relative", "${workspaceFolder}"],
+        "severity": "warning",
+        "pattern": [
+          {
+            "regexp": "^([^:]+):(\\d+):(\\d+):\\s+(.+)$",
+            "file": 1,
+            "line": 2,
+            "column": 3,
+            "message": 4
+          }
+        ]
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "showReuseMessage": false,
+        "clear": true
+      }
+    },
+
+    // ── Test ─────────────────────────────────────────────────────────────────
+    {
+      "label": "test:all",
+      "detail": "Run all tests with -race",
+      "type": "shell",
+      "command": "make",
+      "args": ["test"],
+      "group": { "kind": "test", "isDefault": true },
+      "problemMatcher": "$go",
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "showReuseMessage": false,
+        "clear": true
+      }
+    },
+    {
+      "label": "test:package",
+      "detail": "Run tests for a selected package",
+      "type": "shell",
+      "command": "make",
+      "args": ["test", "PKG=${input:packagePath}"],
+      "group": "test",
+      "problemMatcher": "$go",
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "showReuseMessage": false,
+        "clear": true
+      },
+      "runOptions": { "reevaluateOnRerun": true }
+    },
+    {
+      "label": "test:current-package",
+      "detail": "Run tests for the package of the currently open file",
+      "type": "shell",
+      "command": "make",
+      "args": ["test", "PKG=./${relativeFileDirname}"],
+      "group": "test",
+      "problemMatcher": "$go",
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "showReuseMessage": false,
+        "clear": true
+      }
+    },
+    {
+      "label": "test:function",
+      "detail": "Run a specific test function by name (regex)",
+      "type": "shell",
+      "command": "make",
+      "args": ["test", "PKG=${input:packagePath}", "RUN=${input:testName}"],
+      "group": "test",
+      "problemMatcher": "$go",
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "showReuseMessage": false,
+        "clear": true
+      },
+      "runOptions": { "reevaluateOnRerun": true }
+    },
+    {
+      "label": "test:verbose",
+      "detail": "Run tests with verbose output for a selected package",
+      "type": "shell",
+      "command": "go",
+      "args": ["test", "-race", "-count=1", "-v", "${input:packagePath}"],
+      "group": "test",
+      "problemMatcher": "$go",
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "showReuseMessage": false,
+        "clear": true
+      },
+      "runOptions": { "reevaluateOnRerun": true }
+    },
+    {
+      "label": "test:coverage",
+      "detail": "Run tests with coverage profiling (atomic mode, -race)",
+      "type": "shell",
+      "command": "go",
+      "args": [
+        "test", "-race", "-count=1",
+        "-coverprofile=${workspaceFolder}/coverage.out",
+        "-covermode=atomic",
+        "${input:packagePath}"
+      ],
+      "group": "test",
+      "problemMatcher": "$go",
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "showReuseMessage": false,
+        "clear": true
+      },
+      "runOptions": { "reevaluateOnRerun": true }
+    },
+    {
+      "label": "test:coverage-html",
+      "detail": "Generate HTML coverage report and open it",
+      "type": "shell",
+      "command": "go",
+      "args": [
+        "tool", "cover",
+        "-html=${workspaceFolder}/coverage.out",
+        "-o", "${workspaceFolder}/coverage.html"
+      ],
+      "dependsOn": ["test:coverage"],
+      "group": "test",
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "silent",
+        "panel": "shared",
+        "showReuseMessage": false
+      }
+    },
+
+    // ── Integration Tests ────────────────────────────────────────────────────
+    {
+      "label": "test:integration-jira",
+      "detail": "Run Jira integration tests (requires SORTIE_JIRA_TEST=1)",
+      "type": "shell",
+      "command": "go",
+      "args": [
+        "test", "-race", "-count=1", "-v",
+        "./internal/tracker/jira/..."
+      ],
+      "options": {
+        "env": { "SORTIE_JIRA_TEST": "1" }
+      },
+      "group": "test",
+      "problemMatcher": "$go",
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "showReuseMessage": false,
+        "clear": true
+      }
+    },
+    {
+      "label": "test:integration-claude",
+      "detail": "Run Claude Code integration tests (requires SORTIE_CLAUDE_TEST=1)",
+      "type": "shell",
+      "command": "go",
+      "args": [
+        "test", "-race", "-count=1", "-v",
+        "./internal/agent/claude/..."
+      ],
+      "options": {
+        "env": { "SORTIE_CLAUDE_TEST": "1" }
+      },
+      "group": "test",
+      "problemMatcher": "$go",
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "showReuseMessage": false,
+        "clear": true
+      }
+    },
+    {
+      "label": "test:integration-all",
+      "detail": "Run all integration tests",
+      "dependsOn": ["test:integration-jira", "test:integration-claude"],
+      "dependsOrder": "parallel",
+      "group": "test",
+      "problemMatcher": []
+    },
+
+    // ── Compound / CI ────────────────────────────────────────────────────────
+    {
+      "label": "ci",
+      "detail": "Full CI pipeline: fmt → lint → test → build",
+      "dependsOn": ["fmt", "lint", "test:all", "build"],
+      "dependsOrder": "sequence",
+      "group": "build",
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "new"
+      }
+    },
+    {
+      "label": "check",
+      "detail": "Quick validation: lint + test in parallel",
+      "dependsOn": ["lint", "test:all"],
+      "dependsOrder": "parallel",
+      "group": "test",
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "new"
+      }
+    },
+
+    // ── Utilities ────────────────────────────────────────────────────────────
+    {
+      "label": "mod:tidy",
+      "detail": "Run go mod tidy to clean up dependencies",
+      "type": "shell",
+      "command": "go",
+      "args": ["mod", "tidy"],
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "silent",
+        "panel": "shared",
+        "showReuseMessage": false
+      }
+    },
+    {
+      "label": "mod:verify",
+      "detail": "Verify module dependencies haven't been modified",
+      "type": "shell",
+      "command": "go",
+      "args": ["mod", "verify"],
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared",
+        "showReuseMessage": false
+      }
+    },
+    {
+      "label": "vet",
+      "detail": "Run go vet on all packages",
+      "type": "shell",
+      "command": "go",
+      "args": ["vet", "./..."],
+      "problemMatcher": "$go",
+      "presentation": {
+        "reveal": "always",
+        "panel": "dedicated",
+        "showReuseMessage": false,
+        "clear": true
+      }
+    }
+  ],
+
+  // ── Parameterized Inputs ─────────────────────────────────────────────────
+  "inputs": [
+    {
+      "id": "packagePath",
+      "type": "pickString",
+      "description": "Select Go package to target",
+      "default": "./...",
+      "options": [
+        { "label": "All packages (./...)", "value": "./..." },
+        { "label": "cmd/sortie", "value": "./cmd/sortie" },
+        { "label": "internal/agent/claude", "value": "./internal/agent/claude/..." },
+        { "label": "internal/agent/mock", "value": "./internal/agent/mock" },
+        { "label": "internal/config", "value": "./internal/config" },
+        { "label": "internal/domain", "value": "./internal/domain" },
+        { "label": "internal/logging", "value": "./internal/logging" },
+        { "label": "internal/orchestrator", "value": "./internal/orchestrator" },
+        { "label": "internal/persistence", "value": "./internal/persistence/..." },
+        { "label": "internal/prompt", "value": "./internal/prompt" },
+        { "label": "internal/registry", "value": "./internal/registry" },
+        { "label": "internal/server", "value": "./internal/server" },
+        { "label": "internal/tracker/file", "value": "./internal/tracker/file" },
+        { "label": "internal/tracker/jira", "value": "./internal/tracker/jira/..." },
+        { "label": "internal/workflow", "value": "./internal/workflow" },
+        { "label": "internal/workspace", "value": "./internal/workspace" }
+      ]
+    },
+    {
+      "id": "testName",
+      "type": "promptString",
+      "description": "Test function name or regex (e.g. TestNew or Test.*Error)",
+      "default": ""
+    }
+  ]
+}
