@@ -7,6 +7,29 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 > Versions before 1.0.0 do not follow Semantic Versioning. Any release may
 > contain breaking changes without prior notice.
 
+## [Unreleased]
+
+## [0.0.5] - 2026-03-21
+
+### Added
+
+- Workspace manager: safe path computation from issue identifiers with
+  containment validation and symlink rejection.
+- Workspace manager: atomic directory creation and reuse with `CreatedNow`
+  flag for hook gating.
+- Workspace hook execution with configurable timeout, truncated output
+  capture, and restricted subprocess environment (only `PATH`, `HOME`,
+  `SHELL`, and `SORTIE_*` variables are inherited).
+- Workspace lifecycle orchestration: `Prepare`, `Finish`, and `Cleanup`
+  functions that sequence `after_create`, `before_run`, `after_run`, and
+  `before_remove` hooks with appropriate failure semantics (fatal vs
+  best-effort) and `context.WithoutCancel` for teardown hooks.
+- Batch workspace cleanup (`CleanupTerminal`) for removing terminal-state
+  issue workspaces with per-identifier error collection and best-effort
+  `before_remove` hook execution.
+- `ListWorkspaceKeys` for enumerating workspace directory names under a
+  root, skipping non-directories and symlinks.
+
 ## [0.0.4] - 2026-03-20
 
 ### Added
@@ -97,7 +120,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   execution via GitHub Actions.
 - Architecture Decision Records (ADR-0001 through ADR-0005).
 
-[Unreleased]: https://github.com/sortie-ai/sortie/compare/0.0.4...HEAD
+[Unreleased]: https://github.com/sortie-ai/sortie/compare/0.0.5...HEAD
+[0.0.5]: https://github.com/sortie-ai/sortie/compare/0.0.4...0.0.5
 [0.0.4]: https://github.com/sortie-ai/sortie/compare/0.0.3...0.0.4
 [0.0.3]: https://github.com/sortie-ai/sortie/compare/0.0.2...0.0.3
 [0.0.2]: https://github.com/sortie-ai/sortie/compare/0.0.1...0.0.2
