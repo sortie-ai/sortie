@@ -102,7 +102,7 @@ func TestClientDo_ErrorMapping(t *testing.T) {
 		{
 			name:     "404 not found",
 			status:   http.StatusNotFound,
-			wantKind: domain.ErrTrackerAPI,
+			wantKind: domain.ErrTrackerNotFound,
 		},
 		{
 			name:     "429 rate limited",

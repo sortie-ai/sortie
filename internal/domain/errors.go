@@ -26,8 +26,13 @@ const (
 	// ErrTrackerAuth indicates an authentication or authorization failure.
 	ErrTrackerAuth TrackerErrorKind = "tracker_auth_error"
 
-	// ErrTrackerAPI indicates a non-200 HTTP or API-level error.
+	// ErrTrackerAPI indicates a non-200 HTTP or API-level error that
+	// may be transient (e.g. rate limiting, server errors).
 	ErrTrackerAPI TrackerErrorKind = "tracker_api_error"
+
+	// ErrTrackerNotFound indicates the requested resource does not exist
+	// in the tracker (e.g. HTTP 404). Non-retryable.
+	ErrTrackerNotFound TrackerErrorKind = "tracker_not_found"
 
 	// ErrTrackerPayload indicates a malformed or unexpected response
 	// structure from the tracker.
@@ -173,6 +178,8 @@ func (k TrackerErrorKind) RetryClassification() RetryClassification {
 	case ErrUnsupportedTrackerKind, ErrMissingTrackerAPIKey, ErrMissingTrackerProject:
 		return RetryClassification{Retryable: false, Backoff: BackoffNone}
 	case ErrTrackerAuth:
+		return RetryClassification{Retryable: false, Backoff: BackoffNone}
+	case ErrTrackerNotFound:
 		return RetryClassification{Retryable: false, Backoff: BackoffNone}
 	case ErrTrackerPayload:
 		return RetryClassification{Retryable: false, Backoff: BackoffNone}

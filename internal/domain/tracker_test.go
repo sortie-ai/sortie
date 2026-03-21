@@ -45,6 +45,7 @@ func TestTrackerErrorKind_Values(t *testing.T) {
 		{ErrTrackerTransport, "tracker_transport_error"},
 		{ErrTrackerAuth, "tracker_auth_error"},
 		{ErrTrackerAPI, "tracker_api_error"},
+		{ErrTrackerNotFound, "tracker_not_found"},
 		{ErrTrackerPayload, "tracker_payload_error"},
 		{ErrTrackerMissingCursor, "tracker_missing_end_cursor"},
 	}
@@ -56,8 +57,8 @@ func TestTrackerErrorKind_Values(t *testing.T) {
 			}
 		})
 	}
-	if len(tests) != 8 {
-		t.Errorf("expected 8 tracker error kinds, got %d", len(tests))
+	if len(tests) != 9 {
+		t.Errorf("expected 9 tracker error kinds, got %d", len(tests))
 	}
 }
 
@@ -157,12 +158,13 @@ func TestTrackerErrorKind_RetryClassification(t *testing.T) {
 		{"tracker_transport_error", ErrTrackerTransport, true, BackoffExponential},
 		{"tracker_auth_error", ErrTrackerAuth, false, BackoffNone},
 		{"tracker_api_error", ErrTrackerAPI, true, BackoffExponential},
+		{"tracker_not_found", ErrTrackerNotFound, false, BackoffNone},
 		{"tracker_payload_error", ErrTrackerPayload, false, BackoffNone},
 		{"tracker_missing_end_cursor", ErrTrackerMissingCursor, true, BackoffExponential},
 	}
 
-	if len(tests) != 8 {
-		t.Errorf("expected 8 tracker error kinds, got %d", len(tests))
+	if len(tests) != 9 {
+		t.Errorf("expected 9 tracker error kinds, got %d", len(tests))
 	}
 
 	for _, tt := range tests {

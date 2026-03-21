@@ -312,10 +312,10 @@ func (a *JiraAdapter) fetchComments(ctx context.Context, issueID string) ([]doma
 }
 
 // isNotFound checks whether an error is a TrackerError with kind
-// ErrTrackerAPI indicating a 404 response.
+// ErrTrackerNotFound (HTTP 404).
 func isNotFound(err error) bool {
 	te, ok := err.(*domain.TrackerError)
-	return ok && te.Kind == domain.ErrTrackerAPI && strings.Contains(te.Message, "not found")
+	return ok && te.Kind == domain.ErrTrackerNotFound
 }
 
 // extractStringSlice converts an []any (from JSON unmarshaling) to

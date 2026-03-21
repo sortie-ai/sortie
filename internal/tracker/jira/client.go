@@ -110,7 +110,7 @@ func (c *jiraClient) do(ctx context.Context, method, path string, params url.Val
 
 	case resp.StatusCode == http.StatusNotFound:
 		return nil, &domain.TrackerError{
-			Kind:    domain.ErrTrackerAPI,
+			Kind:    domain.ErrTrackerNotFound,
 			Message: fmt.Sprintf("%s %s: not found", method, path),
 		}
 
