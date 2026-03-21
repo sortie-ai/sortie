@@ -138,9 +138,16 @@ func HandleWorkerExit(state *State, result WorkerResult, params HandleWorkerExit
 	}
 
 	// Persist session metadata so per-session token data survives restarts.
+	// Prefer result.SessionID: the worker carries the authoritative value
+	// directly from the adapter, while entry.SessionID depends on
+	// EventSessionStarted having been processed before exit.
+	sessionID := result.SessionID
+	if sessionID == "" {
+		sessionID = entry.SessionID
+	}
 	sessionMeta := persistence.SessionMetadata{
 		IssueID:      result.IssueID,
-		SessionID:    entry.SessionID,
+		SessionID:    sessionID,
 		InputTokens:  entry.AgentInputTokens,
 		OutputTokens: entry.AgentOutputTokens,
 		TotalTokens:  entry.AgentTotalTokens,
