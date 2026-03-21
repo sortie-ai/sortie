@@ -5,6 +5,9 @@
 #
 # https://help.github.com/articles/ignoring-files/#create-a-global-gitignore
 
+# Do not ignore .vscode directory.
+!/.vscode
+
 # Test binary, built with `go test -c`
 *.test
 
@@ -18,8 +21,8 @@ profile.cov
 go.work
 go.work.sum
 
-# env file
-.env
+# Application and docker compose environment variables.
+/.env
 
 # Build output
 /sortie
@@ -29,7 +32,7 @@ go.work.sum
 *.so
 *.dylib
 
-# Local task files
-.specs
-.plans
-.tasks
+# Ignore generated specification and plan files.
+/.specs
+/.plans
+/.tasks

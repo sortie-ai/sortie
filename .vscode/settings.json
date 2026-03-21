@@ -1,0 +1,112 @@
+{
+  // Enable the use of AGENTS.md file for agent configuration including nested agents.
+  // See: https://agents.md
+  "chat.useAgentsMdFile": true,
+  "chat.useClaudeMdFile": false,
+
+  // Note: As of 13 January 2026 this feature is in Experimental stage.
+  "chat.useNestedAgentsMdFiles": true,
+
+  // Increase the maximum number of requests an agent can make in a single session.
+  // Default is usually 25.
+  "chat.agent.maxRequests": 99,
+
+  // Enable the use of agent skills: https://agentskills.io
+  // Note: As of 13 January 2026 this feature is in Experimental stage.
+  "chat.useAgentSkills": true,
+  "chat.experimental.useSkillAdherencePrompt": true,
+
+  "chat.agentSkillsLocations": {
+    ".claude/skills": false,
+    "~/.claude/skills": false,
+    ".github/skills": true,
+    ".agents/skills": false,
+    "~/.copilot/skills": true,
+    "~/.agents/skills": false
+  },
+
+  "chat.instructionsFilesLocations": {
+    "~/.claude/rules": false,
+    ".claude/rules": false,
+    ".github/instructions": true,
+    "~/.copilot/instructions": true
+  },
+
+  "chat.hookFilesLocations": {
+    "~/.claude/settings.json": false,
+    ".claude/settings.json": false,
+    ".claude/settings.local.json": false,
+    ".github/hooks": true,
+    "~/.copilot/hooks": true
+  },
+
+  "chat.agentFilesLocations": {
+    ".claude/agents": false,
+    "~/.claude/agents": false,
+    ".github/agents": true,
+    "~/.copilot/agents": true
+  },
+
+  // Setting PAGER to "cat" to avoid interactive pager blocking output in terminal
+  // when agent runs commands like `gh pr view`.
+  "chat.tools.terminal.terminalProfile.linux": {
+    "path": "/bin/bash",
+    "args": ["-l"],
+    "env": {
+      "GH_PAGER": "cat",
+      "GIT_PAGER": "cat",
+      "MANPAGER": "cat",
+      "PAGER": "cat"
+    }
+  },
+
+  // Use instruction files for code generation requests.
+  // See: https://code.visualstudio.com/docs/copilot/customization/custom-instructions
+  "github.copilot.chat.codeGeneration.useInstructionFiles": true,
+
+  // Custom instruction files for code review for the current selection.
+  // See: https://code.visualstudio.com/docs/copilot/customization/custom-instructions
+  // Note: As of 13 January 2026 this feature is in Preview stage.
+  "github.copilot.chat.reviewSelection.instructions": [
+    { "file": ".github/instructions/code-review.instructions.md" }
+  ],
+
+  // Custom instruction files for commit message generation.
+  // See: https://code.visualstudio.com/docs/copilot/customization/custom-instructions
+  // Note: As of 13 January 2026 this feature is in Experimental stage.
+  "github.copilot.chat.commitMessageGeneration.instructions": [
+    { "file": ".github/instructions/commit-messages.instructions.md" }
+  ],
+
+  // Custom instruction files for pull request description generation.
+  // See: https://code.visualstudio.com/docs/copilot/customization/custom-instructions
+  // Note: As of 13 January 2026 this feature is in Experimental stage.
+  "github.copilot.chat.pullRequestDescriptionGeneration.instructions": [
+    { "file": ".github/skills/creating-pr/SKILL.md" }
+  ],
+
+  // Enable or disable inline suggestions for specified languages.
+  "github.copilot.enable": {
+    "*": true,
+    "plaintext": false,
+    "markdown": true,
+    "scminput": false
+  },
+
+  // Enables next edit suggestions.
+  // See: https://code.visualstudio.com/docs/copilot/ai-powered-suggestions#_next-edit-suggestions
+  "github.copilot.nextEditSuggestions.enabled": true,
+
+  // Enable detailed logging for agent execution to help with debugging and development.
+  // See: https://code.visualstudio.com/docs/copilot/chat/chat-debug-view
+  "github.copilot.chat.agentDebugLog.enabled": true,
+  "github.copilot.chat.agentDebugLog.fileLogging.enabled": true,
+
+  // Let Copilot guess what you are looking for in search.
+  // This will enable semantic search when appropriate.
+  // Note: As of 13 January 2026 this feature is in Preview stage.
+  "search.searchView.semanticSearchBehavior": "auto",
+
+  // Set a ruler at 100 characters to help maintain line length.
+  "editor.rulers": [100, 120]
+}
