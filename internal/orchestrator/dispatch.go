@@ -11,7 +11,7 @@ import (
 // SortForDispatch returns a new slice of issues sorted in dispatch priority
 // order: priority ascending (nil sorts last), created_at oldest first (empty
 // sorts last), identifier lexicographic tiebreaker. The input slice is not
-// modified.
+// modified. Returns nil when the input is empty or nil.
 func SortForDispatch(issues []domain.Issue) []domain.Issue {
 	if len(issues) == 0 {
 		return nil
