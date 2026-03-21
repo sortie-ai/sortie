@@ -163,6 +163,7 @@ func (m *MockAdapter) RunTurn(ctx context.Context, session domain.Session, param
 			Type:      domain.EventSessionStarted,
 			Timestamp: time.Now().UTC(),
 			AgentPID:  m.agentPID,
+			SessionID: m.sessionID,
 			Message:   "mock session started",
 		})
 	}

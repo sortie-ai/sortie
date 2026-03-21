@@ -237,6 +237,7 @@ func (a *ClaudeCodeAdapter) RunTurn(ctx context.Context, session domain.Session,
 					Type:      domain.EventSessionStarted,
 					Timestamp: now,
 					AgentPID:  strconv.Itoa(cmd.Process.Pid),
+					SessionID: state.claudeSessionID,
 					Message:   "session started",
 				})
 			case "api_retry":

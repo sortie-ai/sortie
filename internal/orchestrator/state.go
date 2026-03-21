@@ -100,8 +100,8 @@ type RunningEntry struct {
 	// StartedAt is the UTC time the worker was spawned.
 	StartedAt time.Time
 
-	// TurnCount is the number of coding-agent turns started within the
-	// current worker lifetime.
+	// TurnCount is the number of coding-agent turns completed or finalized
+	// within the current worker lifetime.
 	TurnCount int
 
 	// CancelFunc cancels the per-worker context created by [DispatchIssue].

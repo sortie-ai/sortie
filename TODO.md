@@ -302,7 +302,7 @@ component. Uses mock adapters for tracker and agent - no real external calls.
       when tracker state becomes terminal after turn 1, (c) loop stops at max_turns, (d)
       agent failure on turn 2 reports error and runs after_run hook.
 
-- [ ] 6.5 Implement agent event handling: when the worker relays agent update events to the
+- [x] 6.5 Implement agent event handling: when the worker relays agent update events to the
       orchestrator, update live session fields in the running map entry (`session_id`,
       `agent_pid`, `last_agent_event`, `last_agent_timestamp`, `last_agent_message`,
       `turn_count`). For `token_usage` events, compute deltas relative to

@@ -98,6 +98,18 @@ type AgentEvent struct {
 	// Used for last_agent_message in the running map entry and for
 	// observability. May be empty.
 	Message string
+
+	// SessionID is the adapter-assigned session identifier, populated
+	// on EventSessionStarted events. Empty for all other event types.
+	// The orchestrator copies this into RunningEntry.SessionID when
+	// non-empty, enabling live session tracking before the worker exits.
+	SessionID string
+
+	// RateLimits is the latest rate-limit payload received from the agent
+	// adapter. Structure is adapter-defined and intentionally opaque to the
+	// orchestrator. Non-nil when rate-limit data is available; nil otherwise.
+	// Per architecture Section 13.5 (Rate-limit tracking).
+	RateLimits map[string]any
 }
 
 // AgentConfig is the subset of configuration relevant to agent
