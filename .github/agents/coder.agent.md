@@ -275,4 +275,8 @@ When you finish, provide a summary in this format so the Tester agent can pick u
 > 1. [what changed and why]
 > 2. [what changed and why]
 >
-> **Testing considerations:** [what the Tester agent should cover]
+> **Testing considerations:**
+>
+> ```markdown
+> [what the Tester agent should cover]
+> ```
