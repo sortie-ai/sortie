@@ -78,10 +78,12 @@ func HandleAgentEvent(state *State, issueID string, event domain.AgentEvent) {
 		state.AgentTotals.TotalTokens += deltaTotal
 	}
 
-	// Snapshot the rate-limit payload when present. A shallow copy is
-	// taken to prevent the adapter from mutating state.AgentRateLimits.Data
-	// after delivery (concurrent map write from worker goroutine vs HTTP
-	// server read would cause a data race).
+	// Snapshot the rate-limit payload when present. The worker's
+	// OnEvent relay already defensive-copies the map before it crosses
+	// the goroutine boundary. The second shallowCopyMap here is
+	// defense-in-depth: it isolates the stored snapshot from any
+	// top-level mutation of event.RateLimits within this function or
+	// future callers.
 	if event.RateLimits != nil {
 		// Only replace the snapshot when this event is at least as recent
 		// as the stored one, preserving monotonicity under out-of-order
