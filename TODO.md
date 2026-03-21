@@ -276,7 +276,7 @@ component. Uses mock adapters for tracker and agent - no real external calls.
       slot availability calculation (global and per-state). See architecture Section 4.1.8.
       **Verify:** unit tests for slot math with various running/claimed combinations.
 
-- [ ] 6.2 Implement candidate selection and dispatch sorting: priority ascending, created_at
+- [x] 6.2 Implement candidate selection and dispatch sorting: priority ascending, created_at
       oldest first, identifier tiebreaker. Implement eligibility checks (active state, not
       claimed, not running, slots available, blocker rule). See architecture Section 8.2.
       **Verify:** unit tests with various issue sets confirm correct sort order and
@@ -358,6 +358,8 @@ component. Uses mock adapters for tracker and agent - no real external calls.
 - [ ] 6.11 Implement the poll loop (Section 16.2): tick scheduling, reconciliation before
       dispatch, preflight validation before dispatch, fetch candidates, sort, dispatch until
       slots exhausted, notify observers. Wire everything together with mock adapters.
+      **Optimization note:** `ShouldDispatch` rebuilds `stateSet` maps on each call; the
+      dispatch loop should build them once before iterating candidates.
       **Verify:** integration test runs the orchestrator with mock tracker (returns 3 issues)
       and mock agent (completes after 1 turn). Confirm all 3 issues are dispatched, run, and
       completed. Confirm retry on simulated failure.

@@ -102,7 +102,10 @@ func ShouldDispatch(issue domain.Issue, state *State, activeStates, terminalStat
 		return false
 	}
 
-	// Rule 5: blocker rule — any non-terminal blocker blocks dispatch.
+	// Rule 5: blocker rule — applies to issues in an active non-running
+	// state. Rules 2 and 3 guarantee that precondition: by this point the
+	// issue's state is active (Rule 2) and the issue is not in the Running
+	// map (Rule 3). Any non-terminal blocker blocks dispatch.
 	for _, blocker := range issue.BlockedBy {
 		if blocker.State == "" {
 			return false
