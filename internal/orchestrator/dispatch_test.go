@@ -104,6 +104,14 @@ func TestSortForDispatch(t *testing.T) {
 			wantID: []string{"HAS", "EMPTY"},
 		},
 		{
+			name: "both empty created_at falls through to identifier",
+			input: []domain.Issue{
+				issueWithPriority("B-1", intPtr(1), ""),
+				issueWithPriority("A-1", intPtr(1), ""),
+			},
+			wantID: []string{"A-1", "B-1"},
+		},
+		{
 			name: "identifier tiebreaker lexicographic",
 			input: []domain.Issue{
 				issueWithPriority("C-1", intPtr(1), "2025-01-01T00:00:00Z"),
