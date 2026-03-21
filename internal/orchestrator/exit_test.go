@@ -798,6 +798,7 @@ func TestHandleWorkerExit_SessionMetadataPersisted(t *testing.T) {
 		IssueID:      "SM-1",
 		Identifier:   "SM-1-ident",
 		ExitKind:     WorkerExitNormal,
+		SessionID:    "ses-abc",
 		AgentAdapter: "mock",
 	}, params)
 
@@ -852,4 +853,56 @@ func TestHandleWorkerExit_SessionMetadataNilPID(t *testing.T) {
 	if store.sessionMetadata[0].AgentPID != nil {
 		t.Errorf("SessionMetadata.AgentPID = %v, want nil for empty PID", store.sessionMetadata[0].AgentPID)
 	}
+}
+
+func TestHandleWorkerExit_SessionIDPrefersResult(t *testing.T) {
+	t.Parallel()
+
+	t.Run("result.SessionID overrides entry.SessionID", func(t *testing.T) {
+		t.Parallel()
+		store := &mockExitStore{}
+		state := exitState(t, "SID-1", nil)
+		state.Running["SID-1"].SessionID = "stale-ses"
+		params := defaultExitParams(t, store)
+
+		HandleWorkerExit(state, WorkerResult{
+			IssueID:      "SID-1",
+			Identifier:   "SID-1-ident",
+			ExitKind:     WorkerExitNormal,
+			SessionID:    "fresh-ses",
+			AgentAdapter: "mock",
+		}, params)
+
+		if len(store.sessionMetadata) != 1 {
+			t.Fatalf("UpsertSessionMetadata called %d times, want 1", len(store.sessionMetadata))
+		}
+		if store.sessionMetadata[0].SessionID != "fresh-ses" {
+			t.Errorf("SessionMetadata.SessionID = %q, want %q (from result, not entry)",
+				store.sessionMetadata[0].SessionID, "fresh-ses")
+		}
+	})
+
+	t.Run("falls back to entry.SessionID when result is empty", func(t *testing.T) {
+		t.Parallel()
+		store := &mockExitStore{}
+		state := exitState(t, "SID-2", nil)
+		state.Running["SID-2"].SessionID = "entry-ses"
+		params := defaultExitParams(t, store)
+
+		HandleWorkerExit(state, WorkerResult{
+			IssueID:      "SID-2",
+			Identifier:   "SID-2-ident",
+			ExitKind:     WorkerExitNormal,
+			SessionID:    "",
+			AgentAdapter: "mock",
+		}, params)
+
+		if len(store.sessionMetadata) != 1 {
+			t.Fatalf("UpsertSessionMetadata called %d times, want 1", len(store.sessionMetadata))
+		}
+		if store.sessionMetadata[0].SessionID != "entry-ses" {
+			t.Errorf("SessionMetadata.SessionID = %q, want %q (fallback from entry)",
+				store.sessionMetadata[0].SessionID, "entry-ses")
+		}
+	})
 }
