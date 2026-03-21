@@ -17,12 +17,14 @@ import (
 // mockExitStore records calls to the WorkerExitStore interface methods and
 // returns configurable errors. It satisfies [WorkerExitStore].
 type mockExitStore struct {
-	runHistories []persistence.RunHistory
-	metrics      []persistence.AggregateMetrics
-	retryEntries []persistence.RetryEntry
+	runHistories    []persistence.RunHistory
+	metrics         []persistence.AggregateMetrics
+	sessionMetadata []persistence.SessionMetadata
+	retryEntries    []persistence.RetryEntry
 
 	appendRunHistoryErr       error
 	upsertAggregateMetricsErr error
+	upsertSessionMetadataErr  error
 	saveRetryEntryErr         error
 }
 
@@ -45,6 +47,11 @@ func (m *mockExitStore) UpsertAggregateMetrics(_ context.Context, metrics persis
 func (m *mockExitStore) SaveRetryEntry(_ context.Context, entry persistence.RetryEntry) error {
 	m.retryEntries = append(m.retryEntries, entry)
 	return m.saveRetryEntryErr
+}
+
+func (m *mockExitStore) UpsertSessionMetadata(_ context.Context, meta persistence.SessionMetadata) error {
+	m.sessionMetadata = append(m.sessionMetadata, meta)
+	return m.upsertSessionMetadataErr
 }
 
 // --- Test helpers ---
@@ -496,6 +503,7 @@ func TestHandleWorkerExit_PersistenceFailureNonFatal(t *testing.T) {
 	store := &mockExitStore{
 		appendRunHistoryErr:       errors.New("db write failed"),
 		upsertAggregateMetricsErr: errors.New("db write failed"),
+		upsertSessionMetadataErr:  errors.New("db write failed"),
 		saveRetryEntryErr:         errors.New("db write failed"),
 	}
 	state := exitState(t, "ISSUE-6", nil)
@@ -526,6 +534,9 @@ func TestHandleWorkerExit_PersistenceFailureNonFatal(t *testing.T) {
 	}
 	if len(store.metrics) != 1 {
 		t.Errorf("UpsertAggregateMetrics called %d times, want 1", len(store.metrics))
+	}
+	if len(store.sessionMetadata) != 1 {
+		t.Errorf("UpsertSessionMetadata called %d times, want 1", len(store.sessionMetadata))
 	}
 	if len(store.retryEntries) != 1 {
 		t.Errorf("SaveRetryEntry called %d times, want 1", len(store.retryEntries))
@@ -566,6 +577,9 @@ func TestHandleWorkerExit_UnknownIssueNoOp(t *testing.T) {
 	}
 	if len(store.retryEntries) != 0 {
 		t.Errorf("SaveRetryEntry called %d times, want 0", len(store.retryEntries))
+	}
+	if len(store.sessionMetadata) != 0 {
+		t.Errorf("UpsertSessionMetadata called %d times, want 0", len(store.sessionMetadata))
 	}
 }
 
@@ -763,5 +777,79 @@ func TestHandleWorkerExit_RunHistoryFields(t *testing.T) {
 	}
 	if !strings.Contains(*rh.Error, "assertion failed") {
 		t.Errorf("RunHistory.Error = %q, want to contain %q", *rh.Error, "assertion failed")
+	}
+}
+
+func TestHandleWorkerExit_SessionMetadataPersisted(t *testing.T) {
+	t.Parallel()
+
+	store := &mockExitStore{}
+	state := exitState(t, "SM-1", nil)
+	// Populate session and token data on the running entry.
+	entry := state.Running["SM-1"]
+	entry.SessionID = "ses-abc"
+	entry.AgentPID = "12345"
+	entry.AgentInputTokens = 500
+	entry.AgentOutputTokens = 200
+	entry.AgentTotalTokens = 700
+	params := defaultExitParams(t, store)
+
+	HandleWorkerExit(state, WorkerResult{
+		IssueID:      "SM-1",
+		Identifier:   "SM-1-ident",
+		ExitKind:     WorkerExitNormal,
+		AgentAdapter: "mock",
+	}, params)
+
+	if len(store.sessionMetadata) != 1 {
+		t.Fatalf("UpsertSessionMetadata called %d times, want 1", len(store.sessionMetadata))
+	}
+
+	sm := store.sessionMetadata[0]
+	if sm.IssueID != "SM-1" {
+		t.Errorf("SessionMetadata.IssueID = %q, want %q", sm.IssueID, "SM-1")
+	}
+	if sm.SessionID != "ses-abc" {
+		t.Errorf("SessionMetadata.SessionID = %q, want %q", sm.SessionID, "ses-abc")
+	}
+	if sm.AgentPID == nil || *sm.AgentPID != "12345" {
+		t.Errorf("SessionMetadata.AgentPID = %v, want %q", sm.AgentPID, "12345")
+	}
+	if sm.InputTokens != 500 {
+		t.Errorf("SessionMetadata.InputTokens = %d, want 500", sm.InputTokens)
+	}
+	if sm.OutputTokens != 200 {
+		t.Errorf("SessionMetadata.OutputTokens = %d, want 200", sm.OutputTokens)
+	}
+	if sm.TotalTokens != 700 {
+		t.Errorf("SessionMetadata.TotalTokens = %d, want 700", sm.TotalTokens)
+	}
+
+	wantUpdated := baseTime.Add(60 * time.Second).Format(time.RFC3339)
+	if sm.UpdatedAt != wantUpdated {
+		t.Errorf("SessionMetadata.UpdatedAt = %q, want %q", sm.UpdatedAt, wantUpdated)
+	}
+}
+
+func TestHandleWorkerExit_SessionMetadataNilPID(t *testing.T) {
+	t.Parallel()
+
+	store := &mockExitStore{}
+	state := exitState(t, "SM-2", nil)
+	// AgentPID left as empty string (default).
+	params := defaultExitParams(t, store)
+
+	HandleWorkerExit(state, WorkerResult{
+		IssueID:      "SM-2",
+		Identifier:   "SM-2-ident",
+		ExitKind:     WorkerExitNormal,
+		AgentAdapter: "mock",
+	}, params)
+
+	if len(store.sessionMetadata) != 1 {
+		t.Fatalf("UpsertSessionMetadata called %d times, want 1", len(store.sessionMetadata))
+	}
+	if store.sessionMetadata[0].AgentPID != nil {
+		t.Errorf("SessionMetadata.AgentPID = %v, want nil for empty PID", store.sessionMetadata[0].AgentPID)
 	}
 }

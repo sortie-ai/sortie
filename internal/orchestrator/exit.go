@@ -28,6 +28,7 @@ const continuationDelayMS int64 = 1_000
 type WorkerExitStore interface {
 	AppendRunHistory(ctx context.Context, run persistence.RunHistory) (persistence.RunHistory, error)
 	UpsertAggregateMetrics(ctx context.Context, metrics persistence.AggregateMetrics) error
+	UpsertSessionMetadata(ctx context.Context, meta persistence.SessionMetadata) error
 	SaveRetryEntry(ctx context.Context, entry persistence.RetryEntry) error
 }
 
@@ -53,6 +54,11 @@ type HandleWorkerExitParams struct {
 	// If nil, time.Now().UTC() is used.
 	NowFunc func() time.Time
 
+	// Ctx is the context for persistence operations. The event loop
+	// passes its own context so graceful shutdown can deadline-cancel
+	// in-flight SQLite writes. If nil, context.Background() is used.
+	Ctx context.Context
+
 	// Logger is the structured logger with orchestrator context.
 	Logger *slog.Logger
 }
@@ -65,6 +71,11 @@ func HandleWorkerExit(state *State, result WorkerResult, params HandleWorkerExit
 	log := params.Logger
 	if log == nil {
 		log = slog.Default()
+	}
+
+	ctx := params.Ctx
+	if ctx == nil {
+		ctx = context.Background()
 	}
 
 	entry, exists := state.Running[result.IssueID]
@@ -102,7 +113,7 @@ func HandleWorkerExit(state *State, result WorkerResult, params HandleWorkerExit
 		Status:       status,
 		Error:        errorStringPtr(result.Error),
 	}
-	if _, err := params.Store.AppendRunHistory(context.Background(), runHistory); err != nil {
+	if _, err := params.Store.AppendRunHistory(ctx, runHistory); err != nil {
 		log.Error("failed to persist run history",
 			"issue_id", result.IssueID,
 			"issue_identifier", result.Identifier,
@@ -118,8 +129,28 @@ func HandleWorkerExit(state *State, result WorkerResult, params HandleWorkerExit
 		SecondsRunning: state.AgentTotals.SecondsRunning,
 		UpdatedAt:      now.Format(time.RFC3339),
 	}
-	if err := params.Store.UpsertAggregateMetrics(context.Background(), metrics); err != nil {
+	if err := params.Store.UpsertAggregateMetrics(ctx, metrics); err != nil {
 		log.Error("failed to persist aggregate metrics",
+			"issue_id", result.IssueID,
+			"issue_identifier", result.Identifier,
+			"error", err,
+		)
+	}
+
+	// Persist session metadata so per-session token data survives restarts.
+	sessionMeta := persistence.SessionMetadata{
+		IssueID:      result.IssueID,
+		SessionID:    entry.SessionID,
+		InputTokens:  entry.AgentInputTokens,
+		OutputTokens: entry.AgentOutputTokens,
+		TotalTokens:  entry.AgentTotalTokens,
+		UpdatedAt:    now.Format(time.RFC3339),
+	}
+	if entry.AgentPID != "" {
+		sessionMeta.AgentPID = &entry.AgentPID
+	}
+	if err := params.Store.UpsertSessionMetadata(ctx, sessionMeta); err != nil {
+		log.Error("failed to persist session metadata",
 			"issue_id", result.IssueID,
 			"issue_identifier", result.Identifier,
 			"error", err,
@@ -181,7 +212,7 @@ func HandleWorkerExit(state *State, result WorkerResult, params HandleWorkerExit
 				DueAtMs:    retryEntry.DueAtMS,
 				Error:      stringPtr(retryEntry.Error),
 			}
-			if err := params.Store.SaveRetryEntry(context.Background(), pEntry); err != nil {
+			if err := params.Store.SaveRetryEntry(ctx, pEntry); err != nil {
 				log.Error("failed to persist retry entry",
 					"issue_id", result.IssueID,
 					"issue_identifier", result.Identifier,
