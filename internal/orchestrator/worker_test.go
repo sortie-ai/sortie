@@ -1170,6 +1170,69 @@ func TestRunWorkerAttempt(t *testing.T) {
 			t.Errorf("SessionID = %q, want %q", result.SessionID, "sess-1")
 		}
 	})
+
+	t.Run("on_event_relay_copies_rate_limits", func(t *testing.T) {
+		t.Parallel()
+
+		tmpDir := t.TempDir()
+		cfg := defaultWorkerConfig(tmpDir)
+		cfg.Agent.MaxTurns = 1
+
+		// adapterMap is the original map the adapter attaches to the event.
+		// We hold a reference to verify the relay produces a distinct copy.
+		adapterMap := map[string]any{"remaining": 42}
+
+		var relayedMap atomic.Value
+		ec := newExitCapture()
+
+		deps := WorkerDeps{
+			TrackerAdapter: &mockTrackerAdapter{},
+			AgentAdapter: &mockAgentAdapter{
+				runTurnFn: func(_ context.Context, session domain.Session, params domain.RunTurnParams) (domain.TurnResult, error) {
+					if params.OnEvent != nil {
+						params.OnEvent(domain.AgentEvent{
+							Type:       domain.EventNotification,
+							Timestamp:  time.Now().UTC(),
+							RateLimits: adapterMap,
+						})
+					}
+					return domain.TurnResult{SessionID: session.ID, ExitReason: domain.EventTurnCompleted}, nil
+				},
+			},
+			ConfigFunc:         func() config.ServiceConfig { return cfg },
+			PromptTemplateFunc: func() *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
+			OnEvent: func(_ string, event domain.AgentEvent) {
+				if event.RateLimits != nil {
+					relayedMap.Store(event.RateLimits)
+				}
+			},
+			OnExit: ec.onExit,
+			Logger: discardLogger(),
+		}
+
+		RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
+
+		result := ec.waitResult(t)
+		if result.ExitKind != WorkerExitNormal {
+			t.Fatalf("ExitKind = %q, want %q", result.ExitKind, WorkerExitNormal)
+		}
+
+		got, ok := relayedMap.Load().(map[string]any)
+		if !ok {
+			t.Fatal("OnEvent never relayed an event with RateLimits")
+		}
+
+		// The relayed map must contain the same data.
+		if got["remaining"] != 42 {
+			t.Errorf("relayed RateLimits[\"remaining\"] = %v, want 42", got["remaining"])
+		}
+
+		// The relayed map must be a distinct object from the adapter's
+		// original, proving the OnEvent relay defensive-copied it.
+		if fmt.Sprintf("%p", got) == fmt.Sprintf("%p", adapterMap) {
+			t.Error("relayed RateLimits has same pointer as adapter map, want defensive copy")
+		}
+	})
 }
 
 // --- stopSessionBestEffort unit tests ---

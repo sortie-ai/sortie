@@ -368,6 +368,13 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 			Prompt: rendered,
 			Issue:  issue,
 			OnEvent: func(event domain.AgentEvent) {
+				// Defensive copy: RateLimits is a reference type. Copying
+				// here, in the worker goroutine, before the event crosses
+				// the goroutine boundary ensures the orchestrator never
+				// iterates a map that the adapter may still mutate.
+				if event.RateLimits != nil {
+					event.RateLimits = shallowCopyMap(event.RateLimits)
+				}
 				deps.OnEvent(issue.ID, event)
 			},
 		})
