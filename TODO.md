@@ -259,7 +259,7 @@ just the ability to prepare and clean workspaces.
       **Verify:** integration test exercises the full lifecycle with a temp workspace and
       script hooks that write marker files.
 
-- [ ] 5.6 Implement workspace cleanup function for terminal issues: given a list of issue
+- [x] 5.6 Implement workspace cleanup function for terminal issues: given a list of issue
       identifiers, remove matching workspace directories (with `before_remove` hook). This
       function is a reusable primitive called by the orchestrator during startup cleanup
       (Section 8.6) and active-run reconciliation (Section 8.5).

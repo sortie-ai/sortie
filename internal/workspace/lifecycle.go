@@ -254,3 +254,96 @@ func Cleanup(ctx context.Context, params CleanupParams) error {
 
 	return os.RemoveAll(pathResult.Path)
 }
+
+// CleanupTerminalParams holds the inputs for batch workspace removal
+// of terminal-state issues. Construct from orchestrator state during
+// startup cleanup or reconciliation.
+type CleanupTerminalParams struct {
+	// Root is the workspace root directory (from config).
+	Root string
+
+	// Identifiers is the list of issue identifiers whose workspaces
+	// should be removed. Each identifier is sanitized to a workspace
+	// key before lookup.
+	Identifiers []string
+
+	// IssueIDsByIdentifier maps issue identifiers to their
+	// tracker-assigned IDs. Used for hook environment variables.
+	// Identifiers missing from this map use the identifier as the
+	// issue ID fallback.
+	IssueIDsByIdentifier map[string]string
+
+	// BeforeRemove is the before_remove hook script. Empty means no hook.
+	BeforeRemove string
+
+	// HookTimeoutMS is the timeout for each before_remove hook invocation.
+	HookTimeoutMS int
+
+	// Logger is the structured logger for cleanup lifecycle events.
+	// If nil, [slog.Default] is used.
+	Logger *slog.Logger
+}
+
+// CleanupTerminalResult holds the outcome of a batch workspace
+// cleanup. Inspect Removed for successful removals and Errors for
+// per-identifier failures.
+type CleanupTerminalResult struct {
+	// Removed lists the identifiers whose workspaces were
+	// successfully removed or did not exist on disk.
+	Removed []string
+
+	// Errors maps identifiers to the error encountered during their
+	// cleanup. Identifiers that succeeded or had no workspace on disk
+	// are not present in this map.
+	Errors map[string]error
+}
+
+// CleanupTerminal removes workspace directories for terminal-state
+// issues. For each identifier in params.Identifiers, it delegates to
+// [Cleanup] which sanitizes the identifier, checks existence, runs the
+// before_remove hook (best-effort), and removes the directory.
+//
+// Cleanup is best-effort per identifier: a failure removing one
+// workspace does not prevent cleanup of others. Individual errors are
+// collected in [CleanupTerminalResult.Errors].
+func CleanupTerminal(ctx context.Context, params CleanupTerminalParams) CleanupTerminalResult {
+	result := CleanupTerminalResult{
+		Removed: make([]string, 0, len(params.Identifiers)),
+		Errors:  make(map[string]error),
+	}
+
+	logger := params.Logger
+	if logger == nil {
+		logger = slog.Default()
+	}
+
+	for _, identifier := range params.Identifiers {
+		issueID := identifier
+		if params.IssueIDsByIdentifier != nil {
+			if mapped, ok := params.IssueIDsByIdentifier[identifier]; ok {
+				issueID = mapped
+			}
+		}
+
+		err := Cleanup(ctx, CleanupParams{
+			Root:          params.Root,
+			Identifier:    identifier,
+			IssueID:       issueID,
+			Attempt:       0,
+			BeforeRemove:  params.BeforeRemove,
+			HookTimeoutMS: params.HookTimeoutMS,
+			Logger:        logger,
+		})
+		if err != nil {
+			logger.WarnContext(ctx, "workspace cleanup failed",
+				"identifier", identifier, "error", err)
+			result.Errors[identifier] = err
+		} else {
+			logger.InfoContext(ctx, "workspace cleaned",
+				"identifier", identifier)
+			result.Removed = append(result.Removed, identifier)
+		}
+	}
+
+	return result
+}
