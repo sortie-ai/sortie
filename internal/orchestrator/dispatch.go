@@ -165,12 +165,28 @@ type ScheduleRetryParams struct {
 // timer, and stores a [RetryEntry] in the state's retry map. The onFire
 // callback is invoked when the timer expires; the caller provides the
 // retry-timer handler. The claim on the issue is preserved.
+//
+// Concurrency note: [time.Timer.Stop] does not guarantee the callback
+// will not fire if the timer goroutine has already been scheduled. The
+// event loop handler (on_retry_timer) must therefore validate the entry
+// still exists and matches the expected attempt before acting.
+//
+// Panics if onFire is nil (programming error in orchestrator wiring).
 func ScheduleRetry(state *State, params ScheduleRetryParams, onFire func(issueID string)) {
+	if onFire == nil {
+		panic("ScheduleRetry: nil onFire callback")
+	}
+
 	CancelRetry(state, params.IssueID)
 
-	dueAtMS := time.Now().UnixMilli() + params.DelayMS
+	delayMS := params.DelayMS
+	if delayMS < 0 {
+		delayMS = 0
+	}
 
-	timer := time.AfterFunc(time.Duration(params.DelayMS)*time.Millisecond, func() {
+	dueAtMS := time.Now().UnixMilli() + delayMS
+
+	timer := time.AfterFunc(time.Duration(delayMS)*time.Millisecond, func() {
 		onFire(params.IssueID)
 	})
 
@@ -209,17 +225,23 @@ func DispatchIssue(ctx context.Context, state *State, issue domain.Issue, attemp
 
 	workerCtx, cancelFn := context.WithCancel(ctx)
 
+	var attemptCopy *int
+	if attempt != nil {
+		v := *attempt
+		attemptCopy = &v
+	}
+
 	state.Claimed[issue.ID] = struct{}{}
 
 	state.Running[issue.ID] = &RunningEntry{
 		Identifier:   issue.Identifier,
 		Issue:        issue,
-		RetryAttempt: attempt,
+		RetryAttempt: attemptCopy,
 		StartedAt:    time.Now().UTC(),
 		CancelFunc:   cancelFn,
 	}
 
 	CancelRetry(state, issue.ID)
 
-	go workerFn(workerCtx, issue, attempt)
+	go workerFn(workerCtx, issue, attemptCopy)
 }
