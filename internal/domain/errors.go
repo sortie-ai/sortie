@@ -154,7 +154,7 @@ const (
 	BackoffNone BackoffStrategy = "none"
 
 	// BackoffExponential indicates exponential-backoff retry using the
-	// formula min(10000 * 2^(attempt-1), max_retry_backoff_ms).
+	// formula min(10000 * 2^(attempt-1), agent.max_retry_backoff_ms).
 	BackoffExponential BackoffStrategy = "exponential"
 )
 

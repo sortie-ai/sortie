@@ -315,7 +315,7 @@ component. Uses mock adapters for tracker and agent - no real external calls.
 
 - [x] 6.6 Add retry semantics to error categories: extend `TrackerErrorKind` and
       `AgentErrorKind` with a helper that returns whether a given error kind is retryable
-      and its recommended backoff strategy (immediate, exponential, or non-retryable).
+      and its recommended backoff strategy (exponential or non-retryable).
       For example: `tracker_transport_error` is retryable with exponential backoff,
       `tracker_auth_error` is non-retryable, `turn_timeout` is retryable. The worker exit
       handler (6.7) uses this to decide between continuation retry, backoff retry, or
