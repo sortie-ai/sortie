@@ -235,7 +235,11 @@ func ListWorkspaceKeys(root string) ([]string, error) {
 
 	absRoot, err := filepath.Abs(root)
 	if err != nil {
-		return nil, err
+		return nil, &PathError{
+			Op:   "resolve",
+			Root: root,
+			Err:  err,
+		}
 	}
 
 	entries, err := os.ReadDir(absRoot)
@@ -243,14 +247,21 @@ func ListWorkspaceKeys(root string) ([]string, error) {
 		if errors.Is(err, fs.ErrNotExist) {
 			return []string{}, nil
 		}
-		return nil, err
+		return nil, &PathError{
+			Op:   "readdir",
+			Root: absRoot,
+			Err:  err,
+		}
 	}
 
 	keys := make([]string, 0, len(entries))
 	for _, entry := range entries {
 		fi, statErr := os.Lstat(filepath.Join(absRoot, entry.Name()))
 		if statErr != nil {
-			continue
+			if errors.Is(statErr, fs.ErrNotExist) {
+				continue
+			}
+			return nil, statErr
 		}
 		if fi.IsDir() && fi.Mode()&os.ModeSymlink == 0 {
 			keys = append(keys, entry.Name())

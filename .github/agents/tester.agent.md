@@ -82,9 +82,8 @@ You are PROHIBITED from responding "Done" until you have verified that the tests
 
 Steps to verify:
 
-1. Run `go test ./...` to execute all tests.
+1. Run `make test` to execute all tests.
 2. If any tests fail, FIX the test code and RETRY until success.
-3. Run `go vet ./...` to check for correctness issues.
-4. If `golangci-lint` config exists, run `golangci-lint run` to check for lint errors.
-5. If ALL tests pass AND vet/lint are clean, respond "Done".
-6. NEVER respond "Done" until you have verified that all tests pass and there are no vet/lint errors or warnings.
+3. Run `make lint` to check for vet and lint errors.
+4. If ALL tests pass AND lint is clean, respond "Done".
+5. NEVER respond "Done" until you have verified that all tests pass and there are no vet/lint errors or warnings.
