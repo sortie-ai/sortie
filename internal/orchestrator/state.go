@@ -47,6 +47,14 @@ type RunningEntry struct {
 	// empty; populated when the worker reports session_started.
 	SessionID string
 
+	// ThreadID is the adapter-assigned thread identifier. Populated by
+	// adapters that expose thread/turn granularity; empty otherwise.
+	ThreadID string
+
+	// TurnID is the adapter-assigned turn identifier. Populated by
+	// adapters that expose thread/turn granularity; empty otherwise.
+	TurnID string
+
 	// AgentPID is the agent subprocess PID. Initially empty; populated
 	// from agent events.
 	AgentPID string
@@ -157,6 +165,8 @@ type State struct {
 // NewState creates an initialized [State] with empty collections and the
 // provided config values. If persisted [AgentTotals] are available from
 // SQLite recovery, pass them in; otherwise pass a zero-value AgentTotals.
+// Keys in maxConcurrentByState must be pre-normalized to lowercase by the
+// caller; the config layer does this during parsing.
 func NewState(pollIntervalMS, maxConcurrentAgents int, maxConcurrentByState map[string]int, totals AgentTotals) *State {
 	if maxConcurrentByState == nil {
 		maxConcurrentByState = make(map[string]int)
