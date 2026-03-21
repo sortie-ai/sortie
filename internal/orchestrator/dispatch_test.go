@@ -1,7 +1,10 @@
 package orchestrator
 
 import (
+	"context"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/sortie-ai/sortie/internal/domain"
 )
@@ -396,4 +399,528 @@ func TestStateSet(t *testing.T) {
 			}
 		})
 	}
+}
+
+// --- Test helpers for 6.3 functions ---
+
+func testIssue(id string) domain.Issue {
+	return domain.Issue{
+		ID:         id,
+		Identifier: id,
+		Title:      "title-" + id,
+		State:      "To Do",
+	}
+}
+
+func newTestState() *State {
+	return NewState(1000, 10, nil, AgentTotals{})
+}
+
+// --- Tests for NextAttempt ---
+
+func TestNextAttempt(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		current *int
+		want    int
+	}{
+		{name: "nil returns 1", current: nil, want: 1},
+		{name: "pointer to 0 returns 1", current: intPtr(0), want: 1},
+		{name: "pointer to 1 returns 2", current: intPtr(1), want: 2},
+		{name: "pointer to 5 returns 6", current: intPtr(5), want: 6},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := NextAttempt(tt.current)
+			if got != tt.want {
+				t.Errorf("NextAttempt(%v) = %d, want %d", tt.current, got, tt.want)
+			}
+		})
+	}
+}
+
+// --- Tests for CancelRetry ---
+
+func TestCancelRetry(t *testing.T) {
+	t.Parallel()
+
+	t.Run("no-op when entry does not exist", func(t *testing.T) {
+		t.Parallel()
+
+		s := newTestState()
+		CancelRetry(s, "nonexistent")
+
+		if len(s.RetryAttempts) != 0 {
+			t.Errorf("RetryAttempts length = %d, want 0", len(s.RetryAttempts))
+		}
+	})
+
+	t.Run("stops timer and removes entry", func(t *testing.T) {
+		t.Parallel()
+
+		s := newTestState()
+		timer := time.AfterFunc(time.Hour, func() {})
+		s.RetryAttempts["ISS-1"] = &RetryEntry{
+			IssueID:     "ISS-1",
+			Identifier:  "ISS-1",
+			Attempt:     1,
+			DueAtMS:     time.Now().UnixMilli() + 3600000,
+			Error:       "some error",
+			TimerHandle: timer,
+		}
+
+		CancelRetry(s, "ISS-1")
+
+		if _, exists := s.RetryAttempts["ISS-1"]; exists {
+			t.Error("CancelRetry(ISS-1) did not remove entry from RetryAttempts")
+		}
+		// Timer.Stop returns false if already stopped; confirm it was stopped.
+		if timer.Stop() {
+			t.Error("CancelRetry(ISS-1) did not stop the timer")
+		}
+	})
+
+	t.Run("nil timer handle does not panic", func(t *testing.T) {
+		t.Parallel()
+
+		s := newTestState()
+		s.RetryAttempts["ISS-2"] = &RetryEntry{
+			IssueID:     "ISS-2",
+			Identifier:  "ISS-2",
+			Attempt:     1,
+			DueAtMS:     time.Now().UnixMilli(),
+			TimerHandle: nil,
+		}
+
+		CancelRetry(s, "ISS-2")
+
+		if _, exists := s.RetryAttempts["ISS-2"]; exists {
+			t.Error("CancelRetry(ISS-2) did not remove entry with nil TimerHandle")
+		}
+	})
+
+	t.Run("does not modify claimed set", func(t *testing.T) {
+		t.Parallel()
+
+		s := newTestState()
+		s.Claimed["ISS-3"] = struct{}{}
+		s.RetryAttempts["ISS-3"] = &RetryEntry{
+			IssueID:     "ISS-3",
+			TimerHandle: nil,
+		}
+
+		CancelRetry(s, "ISS-3")
+
+		if _, claimed := s.Claimed["ISS-3"]; !claimed {
+			t.Error("CancelRetry(ISS-3) removed entry from Claimed, want preserved")
+		}
+	})
+}
+
+// --- Tests for ScheduleRetry ---
+
+func TestScheduleRetry(t *testing.T) {
+	t.Parallel()
+
+	t.Run("fresh schedule creates correct entry", func(t *testing.T) {
+		t.Parallel()
+
+		s := newTestState()
+		before := time.Now().UnixMilli()
+
+		ScheduleRetry(s, ScheduleRetryParams{
+			IssueID:    "ISS-1",
+			Identifier: "ISS-1",
+			Attempt:    2,
+			DelayMS:    5000,
+			Error:      "some error",
+		}, func(_ string) {})
+
+		after := time.Now().UnixMilli()
+
+		entry, exists := s.RetryAttempts["ISS-1"]
+		if !exists {
+			t.Fatal("ScheduleRetry() did not create RetryAttempts entry")
+		}
+		if entry.IssueID != "ISS-1" {
+			t.Errorf("RetryEntry.IssueID = %q, want %q", entry.IssueID, "ISS-1")
+		}
+		if entry.Identifier != "ISS-1" {
+			t.Errorf("RetryEntry.Identifier = %q, want %q", entry.Identifier, "ISS-1")
+		}
+		if entry.Attempt != 2 {
+			t.Errorf("RetryEntry.Attempt = %d, want %d", entry.Attempt, 2)
+		}
+		if entry.Error != "some error" {
+			t.Errorf("RetryEntry.Error = %q, want %q", entry.Error, "some error")
+		}
+		if entry.TimerHandle == nil {
+			t.Error("RetryEntry.TimerHandle = nil, want non-nil")
+		}
+		// DueAtMS should be between before+5000 and after+5000.
+		wantMin := before + 5000
+		wantMax := after + 5000
+		if entry.DueAtMS < wantMin || entry.DueAtMS > wantMax {
+			t.Errorf("RetryEntry.DueAtMS = %d, want between %d and %d", entry.DueAtMS, wantMin, wantMax)
+		}
+		// Clean up timer.
+		entry.TimerHandle.Stop()
+	})
+
+	t.Run("replaces existing retry and stops old timer", func(t *testing.T) {
+		t.Parallel()
+
+		s := newTestState()
+		oldTimer := time.AfterFunc(time.Hour, func() {})
+		s.RetryAttempts["ISS-1"] = &RetryEntry{
+			IssueID:     "ISS-1",
+			Attempt:     1,
+			TimerHandle: oldTimer,
+		}
+
+		ScheduleRetry(s, ScheduleRetryParams{
+			IssueID:    "ISS-1",
+			Identifier: "ISS-1",
+			Attempt:    2,
+			DelayMS:    1000,
+			Error:      "retry again",
+		}, func(_ string) {})
+
+		entry := s.RetryAttempts["ISS-1"]
+		if entry.Attempt != 2 {
+			t.Errorf("RetryEntry.Attempt = %d, want %d", entry.Attempt, 2)
+		}
+		// Old timer should have been stopped.
+		if oldTimer.Stop() {
+			t.Error("old timer was not stopped by ScheduleRetry")
+		}
+		// Clean up new timer.
+		entry.TimerHandle.Stop()
+	})
+
+	t.Run("timer fires callback with correct issueID", func(t *testing.T) {
+		t.Parallel()
+
+		s := newTestState()
+		var mu sync.Mutex
+		var fired string
+
+		ScheduleRetry(s, ScheduleRetryParams{
+			IssueID:    "ISS-FIRE",
+			Identifier: "ISS-FIRE",
+			Attempt:    1,
+			DelayMS:    1, // fires quickly
+		}, func(issueID string) {
+			mu.Lock()
+			fired = issueID
+			mu.Unlock()
+		})
+
+		// Wait for timer to fire.
+		time.Sleep(50 * time.Millisecond)
+
+		mu.Lock()
+		got := fired
+		mu.Unlock()
+
+		if got != "ISS-FIRE" {
+			t.Errorf("onFire callback received issueID = %q, want %q", got, "ISS-FIRE")
+		}
+	})
+
+	t.Run("zero delay fires nearly immediately", func(t *testing.T) {
+		t.Parallel()
+
+		s := newTestState()
+		ch := make(chan string, 1)
+
+		ScheduleRetry(s, ScheduleRetryParams{
+			IssueID:    "ISS-ZERO",
+			Identifier: "ISS-ZERO",
+			Attempt:    1,
+			DelayMS:    0,
+		}, func(issueID string) {
+			ch <- issueID
+		})
+
+		select {
+		case got := <-ch:
+			if got != "ISS-ZERO" {
+				t.Errorf("onFire callback received issueID = %q, want %q", got, "ISS-ZERO")
+			}
+		case <-time.After(time.Second):
+			t.Error("zero-delay timer did not fire within 1 second")
+		}
+	})
+}
+
+// --- Tests for DispatchIssue ---
+
+func TestDispatchIssue(t *testing.T) {
+	t.Parallel()
+
+	t.Run("first dispatch claims issue and creates running entry", func(t *testing.T) {
+		t.Parallel()
+
+		s := newTestState()
+		issue := testIssue("ISS-1")
+		workerDone := make(chan struct{})
+
+		DispatchIssue(context.Background(), s, issue, nil, func(_ context.Context, _ domain.Issue, _ *int) {
+			close(workerDone)
+		})
+
+		// Wait for worker to execute.
+		select {
+		case <-workerDone:
+		case <-time.After(time.Second):
+			t.Fatal("worker goroutine did not execute within 1 second")
+		}
+
+		// Issue must be claimed.
+		if _, claimed := s.Claimed[issue.ID]; !claimed {
+			t.Error("DispatchIssue() did not add issue to Claimed set")
+		}
+
+		// Running entry must exist.
+		entry, exists := s.Running[issue.ID]
+		if !exists {
+			t.Fatal("DispatchIssue() did not create Running entry")
+		}
+
+		// Running count.
+		if got := len(s.Running); got != 1 {
+			t.Errorf("len(Running) = %d, want 1", got)
+		}
+
+		// Verify initial fields.
+		if entry.Identifier != issue.Identifier {
+			t.Errorf("RunningEntry.Identifier = %q, want %q", entry.Identifier, issue.Identifier)
+		}
+		if entry.Issue.ID != issue.ID {
+			t.Errorf("RunningEntry.Issue.ID = %q, want %q", entry.Issue.ID, issue.ID)
+		}
+		if entry.SessionID != "" {
+			t.Errorf("RunningEntry.SessionID = %q, want empty", entry.SessionID)
+		}
+		if entry.ThreadID != "" {
+			t.Errorf("RunningEntry.ThreadID = %q, want empty", entry.ThreadID)
+		}
+		if entry.TurnID != "" {
+			t.Errorf("RunningEntry.TurnID = %q, want empty", entry.TurnID)
+		}
+		if entry.AgentPID != "" {
+			t.Errorf("RunningEntry.AgentPID = %q, want empty", entry.AgentPID)
+		}
+		if entry.LastAgentEvent != "" {
+			t.Errorf("RunningEntry.LastAgentEvent = %q, want empty", entry.LastAgentEvent)
+		}
+		if !entry.LastAgentTimestamp.IsZero() {
+			t.Errorf("RunningEntry.LastAgentTimestamp = %v, want zero", entry.LastAgentTimestamp)
+		}
+		if entry.LastAgentMessage != "" {
+			t.Errorf("RunningEntry.LastAgentMessage = %q, want empty", entry.LastAgentMessage)
+		}
+		if entry.AgentInputTokens != 0 {
+			t.Errorf("RunningEntry.AgentInputTokens = %d, want 0", entry.AgentInputTokens)
+		}
+		if entry.AgentOutputTokens != 0 {
+			t.Errorf("RunningEntry.AgentOutputTokens = %d, want 0", entry.AgentOutputTokens)
+		}
+		if entry.AgentTotalTokens != 0 {
+			t.Errorf("RunningEntry.AgentTotalTokens = %d, want 0", entry.AgentTotalTokens)
+		}
+		if entry.LastReportedInputTokens != 0 {
+			t.Errorf("RunningEntry.LastReportedInputTokens = %d, want 0", entry.LastReportedInputTokens)
+		}
+		if entry.LastReportedOutputTokens != 0 {
+			t.Errorf("RunningEntry.LastReportedOutputTokens = %d, want 0", entry.LastReportedOutputTokens)
+		}
+		if entry.LastReportedTotalTokens != 0 {
+			t.Errorf("RunningEntry.LastReportedTotalTokens = %d, want 0", entry.LastReportedTotalTokens)
+		}
+		if entry.TurnCount != 0 {
+			t.Errorf("RunningEntry.TurnCount = %d, want 0", entry.TurnCount)
+		}
+
+		// RetryAttempt nil for first dispatch.
+		if entry.RetryAttempt != nil {
+			t.Errorf("RunningEntry.RetryAttempt = %v, want nil", entry.RetryAttempt)
+		}
+	})
+
+	t.Run("StartedAt is recent UTC", func(t *testing.T) {
+		t.Parallel()
+
+		s := newTestState()
+		before := time.Now().UTC()
+		workerDone := make(chan struct{})
+
+		DispatchIssue(context.Background(), s, testIssue("ISS-T"), nil, func(_ context.Context, _ domain.Issue, _ *int) {
+			close(workerDone)
+		})
+		<-workerDone
+
+		after := time.Now().UTC()
+		entry := s.Running["ISS-T"]
+
+		if entry.StartedAt.Before(before) || entry.StartedAt.After(after) {
+			t.Errorf("RunningEntry.StartedAt = %v, want between %v and %v", entry.StartedAt, before, after)
+		}
+	})
+
+	t.Run("retry dispatch sets RetryAttempt", func(t *testing.T) {
+		t.Parallel()
+
+		s := newTestState()
+		attempt := 3
+		workerDone := make(chan struct{})
+
+		DispatchIssue(context.Background(), s, testIssue("ISS-R"), &attempt, func(_ context.Context, _ domain.Issue, _ *int) {
+			close(workerDone)
+		})
+		<-workerDone
+
+		entry := s.Running["ISS-R"]
+		if entry.RetryAttempt == nil {
+			t.Fatal("RunningEntry.RetryAttempt = nil, want non-nil")
+		}
+		if *entry.RetryAttempt != 3 {
+			t.Errorf("RunningEntry.RetryAttempt = %d, want 3", *entry.RetryAttempt)
+		}
+	})
+
+	t.Run("CancelFunc is non-nil", func(t *testing.T) {
+		t.Parallel()
+
+		s := newTestState()
+		workerDone := make(chan struct{})
+
+		DispatchIssue(context.Background(), s, testIssue("ISS-C"), nil, func(_ context.Context, _ domain.Issue, _ *int) {
+			close(workerDone)
+		})
+		<-workerDone
+
+		entry := s.Running["ISS-C"]
+		if entry.CancelFunc == nil {
+			t.Error("RunningEntry.CancelFunc = nil, want non-nil")
+		}
+	})
+
+	t.Run("worker receives valid context issue and attempt", func(t *testing.T) {
+		t.Parallel()
+
+		s := newTestState()
+		issue := testIssue("ISS-W")
+		attempt := 2
+
+		type workerArgs struct {
+			ctx     context.Context
+			issue   domain.Issue
+			attempt *int
+		}
+		ch := make(chan workerArgs, 1)
+
+		DispatchIssue(context.Background(), s, issue, &attempt, func(ctx context.Context, iss domain.Issue, att *int) {
+			ch <- workerArgs{ctx: ctx, issue: iss, attempt: att}
+		})
+
+		select {
+		case args := <-ch:
+			if args.ctx == nil {
+				t.Error("worker received nil context")
+			}
+			if args.issue.ID != issue.ID {
+				t.Errorf("worker received issue.ID = %q, want %q", args.issue.ID, issue.ID)
+			}
+			if args.attempt == nil || *args.attempt != 2 {
+				t.Errorf("worker received attempt = %v, want pointer to 2", args.attempt)
+			}
+		case <-time.After(time.Second):
+			t.Fatal("worker goroutine did not execute within 1 second")
+		}
+	})
+
+	t.Run("worker context is cancellable via stored CancelFunc", func(t *testing.T) {
+		t.Parallel()
+
+		s := newTestState()
+		ch := make(chan context.Context, 1)
+
+		DispatchIssue(context.Background(), s, testIssue("ISS-CTX"), nil, func(ctx context.Context, _ domain.Issue, _ *int) {
+			ch <- ctx
+		})
+
+		var workerCtx context.Context
+		select {
+		case workerCtx = <-ch:
+		case <-time.After(time.Second):
+			t.Fatal("worker did not execute within 1 second")
+		}
+
+		// Cancel via the stored CancelFunc.
+		entry := s.Running["ISS-CTX"]
+		entry.CancelFunc()
+
+		select {
+		case <-workerCtx.Done():
+			// expected
+		case <-time.After(time.Second):
+			t.Error("worker context was not cancelled by CancelFunc")
+		}
+	})
+
+	t.Run("existing retry entry is cleared on dispatch", func(t *testing.T) {
+		t.Parallel()
+
+		s := newTestState()
+		timer := time.AfterFunc(time.Hour, func() {})
+		s.RetryAttempts["ISS-X"] = &RetryEntry{
+			IssueID:     "ISS-X",
+			Identifier:  "ISS-X",
+			Attempt:     1,
+			TimerHandle: timer,
+		}
+		s.Claimed["ISS-X"] = struct{}{}
+		workerDone := make(chan struct{})
+
+		DispatchIssue(context.Background(), s, testIssue("ISS-X"), intPtr(2), func(_ context.Context, _ domain.Issue, _ *int) {
+			close(workerDone)
+		})
+		<-workerDone
+
+		if _, exists := s.RetryAttempts["ISS-X"]; exists {
+			t.Error("DispatchIssue() did not clear existing retry entry")
+		}
+		// Timer should have been stopped.
+		if timer.Stop() {
+			t.Error("DispatchIssue() did not stop existing retry timer")
+		}
+	})
+
+	t.Run("nil workerFn panics", func(t *testing.T) {
+		t.Parallel()
+
+		s := newTestState()
+		defer func() {
+			r := recover()
+			if r == nil {
+				t.Fatal("DispatchIssue(nil workerFn) did not panic")
+			}
+			msg, ok := r.(string)
+			if !ok {
+				t.Fatalf("panic value type = %T, want string", r)
+			}
+			if msg != "DispatchIssue: nil WorkerFunc" {
+				t.Errorf("panic message = %q, want %q", msg, "DispatchIssue: nil WorkerFunc")
+			}
+		}()
+
+		DispatchIssue(context.Background(), s, testIssue("ISS-P"), nil, nil)
+	})
 }

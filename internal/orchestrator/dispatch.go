@@ -2,8 +2,10 @@ package orchestrator
 
 import (
 	"cmp"
+	"context"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/sortie-ai/sortie/internal/domain"
 )
@@ -125,4 +127,99 @@ func stateSet(states []string) map[string]struct{} {
 		set[strings.ToLower(s)] = struct{}{}
 	}
 	return set
+}
+
+// NextAttempt returns the next retry attempt number. A nil input (first
+// dispatch) returns 1. A non-nil input returns *attempt + 1.
+func NextAttempt(current *int) int {
+	if current == nil {
+		return 1
+	}
+	return *current + 1
+}
+
+// CancelRetry stops the retry timer for the given issue (if any) and
+// removes the entry from [State.RetryAttempts]. No-op if no retry exists.
+// Does not modify [State.Claimed].
+func CancelRetry(state *State, issueID string) {
+	entry, exists := state.RetryAttempts[issueID]
+	if !exists {
+		return
+	}
+	if entry.TimerHandle != nil {
+		entry.TimerHandle.Stop()
+	}
+	delete(state.RetryAttempts, issueID)
+}
+
+// ScheduleRetryParams holds the inputs for [ScheduleRetry].
+type ScheduleRetryParams struct {
+	IssueID    string
+	Identifier string
+	Attempt    int   // 1-based retry attempt number.
+	DelayMS    int64 // Delay before timer fires, in milliseconds.
+	Error      string
+}
+
+// ScheduleRetry cancels any existing retry for the issue, creates a new
+// timer, and stores a [RetryEntry] in the state's retry map. The onFire
+// callback is invoked when the timer expires; the caller provides the
+// retry-timer handler. The claim on the issue is preserved.
+func ScheduleRetry(state *State, params ScheduleRetryParams, onFire func(issueID string)) {
+	CancelRetry(state, params.IssueID)
+
+	dueAtMS := time.Now().UnixMilli() + params.DelayMS
+
+	timer := time.AfterFunc(time.Duration(params.DelayMS)*time.Millisecond, func() {
+		onFire(params.IssueID)
+	})
+
+	state.RetryAttempts[params.IssueID] = &RetryEntry{
+		IssueID:     params.IssueID,
+		Identifier:  params.Identifier,
+		Attempt:     params.Attempt,
+		DueAtMS:     dueAtMS,
+		Error:       params.Error,
+		TimerHandle: timer,
+	}
+}
+
+// WorkerFunc is the function signature for the worker goroutine spawned by
+// [DispatchIssue]. The orchestrator provides the actual worker implementation
+// at call time; tests inject a controllable stub.
+//
+// The context carries a per-worker cancellation signal used by reconciliation
+// (stall timeout, terminal-state detection) and graceful shutdown. The worker
+// must select on ctx.Done() to terminate promptly when cancelled.
+type WorkerFunc func(ctx context.Context, issue domain.Issue, attempt *int)
+
+// DispatchIssue claims the issue, populates the running map with initial
+// session fields, clears any existing retry entry, and spawns the worker
+// goroutine. All state mutations happen synchronously on the caller's
+// goroutine before the goroutine starts.
+//
+// The attempt parameter follows the architecture convention: nil for first
+// dispatch, non-nil and >= 1 for retries/continuations.
+//
+// Panics if workerFn is nil (programming error in orchestrator wiring).
+func DispatchIssue(ctx context.Context, state *State, issue domain.Issue, attempt *int, workerFn WorkerFunc) {
+	if workerFn == nil {
+		panic("DispatchIssue: nil WorkerFunc")
+	}
+
+	workerCtx, cancelFn := context.WithCancel(ctx)
+
+	state.Claimed[issue.ID] = struct{}{}
+
+	state.Running[issue.ID] = &RunningEntry{
+		Identifier:   issue.Identifier,
+		Issue:        issue,
+		RetryAttempt: attempt,
+		StartedAt:    time.Now().UTC(),
+		CancelFunc:   cancelFn,
+	}
+
+	CancelRetry(state, issue.ID)
+
+	go workerFn(workerCtx, issue, attempt)
 }

@@ -3,6 +3,7 @@
 package orchestrator
 
 import (
+	"context"
 	"strings"
 	"time"
 
@@ -102,6 +103,12 @@ type RunningEntry struct {
 	// TurnCount is the number of coding-agent turns started within the
 	// current worker lifetime.
 	TurnCount int
+
+	// CancelFunc cancels the per-worker context created by [DispatchIssue].
+	// Called by reconciliation to stop stalled or terminal-state workers,
+	// and by graceful shutdown to drain active sessions. Nil only in test
+	// fixtures that bypass [DispatchIssue].
+	CancelFunc context.CancelFunc
 }
 
 // RetryEntry holds the runtime state for a pending retry. The persisted
