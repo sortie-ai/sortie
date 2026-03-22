@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"strconv"
 	"strings"
 
 	"github.com/sortie-ai/sortie/internal/config"
@@ -9,10 +10,10 @@ import (
 
 // PreflightError represents a single preflight validation failure.
 type PreflightError struct {
-	// Check identifies which validation check failed. Values match
-	// the architecture doc Section 6.3 list (e.g. "tracker.kind",
-	// "tracker.api_key", "tracker_adapter", "agent_adapter",
-	// "agent.command", "tracker.project", "workflow_load").
+	// Check identifies which validation check failed. Known values:
+	// "workflow_load", "tracker.kind", "tracker.api_key",
+	// "tracker.project", "tracker_adapter", "agent.kind",
+	// "agent.command", "agent_adapter".
 	Check string
 
 	// Message is an operator-friendly description of the failure.
@@ -71,9 +72,12 @@ type PreflightParams struct {
 	}
 }
 
-// ValidateDispatchConfig runs all dispatch preflight checks. Errors
-// are collected (not short-circuited) so the operator sees every
-// problem at once.
+// ValidateDispatchConfig runs all dispatch preflight checks.
+// Config-level errors are collected (not short-circuited) so the
+// operator sees every problem at once. The one exception is a
+// workflow reload failure: if the workflow file cannot be loaded,
+// the function returns immediately because the remaining checks
+// would evaluate stale or default config.
 func ValidateDispatchConfig(params PreflightParams) PreflightResult {
 	var errs []PreflightError
 
@@ -112,7 +116,7 @@ func ValidateDispatchConfig(params PreflightParams) PreflightResult {
 		if cfg.Tracker.Project == "" {
 			errs = append(errs, PreflightError{
 				Check:   "tracker.project",
-				Message: "tracker.project is required for tracker kind " + quote(cfg.Tracker.Kind),
+				Message: "tracker.project is required for tracker kind " + strconv.Quote(cfg.Tracker.Kind),
 			})
 		}
 	}
@@ -127,28 +131,33 @@ func ValidateDispatchConfig(params PreflightParams) PreflightResult {
 		}
 	}
 
-	// Check 6: agent.command when required by the adapter.
-	if params.AgentRegistry.Meta(cfg.Agent.Kind).RequiresCommand {
+	// Check 6: agent.kind is present.
+	if cfg.Agent.Kind == "" {
+		errs = append(errs, PreflightError{
+			Check:   "agent.kind",
+			Message: "agent.kind is required",
+		})
+	}
+
+	// Check 7: agent.command when required by the adapter.
+	if cfg.Agent.Kind != "" && params.AgentRegistry.Meta(cfg.Agent.Kind).RequiresCommand {
 		if cfg.Agent.Command == "" {
 			errs = append(errs, PreflightError{
 				Check:   "agent.command",
-				Message: "agent.command is required for agent kind " + quote(cfg.Agent.Kind),
+				Message: "agent.command is required for agent kind " + strconv.Quote(cfg.Agent.Kind),
 			})
 		}
 	}
 
-	// Check 7: Agent adapter registered and available.
-	if _, err := params.AgentRegistry.Get(cfg.Agent.Kind); err != nil {
-		errs = append(errs, PreflightError{
-			Check:   "agent_adapter",
-			Message: err.Error(),
-		})
+	// Check 8: Agent adapter registered and available.
+	if cfg.Agent.Kind != "" {
+		if _, err := params.AgentRegistry.Get(cfg.Agent.Kind); err != nil {
+			errs = append(errs, PreflightError{
+				Check:   "agent_adapter",
+				Message: err.Error(),
+			})
+		}
 	}
 
 	return PreflightResult{Errors: errs}
-}
-
-// quote wraps s in double quotes for use in error messages.
-func quote(s string) string {
-	return "\"" + s + "\""
 }

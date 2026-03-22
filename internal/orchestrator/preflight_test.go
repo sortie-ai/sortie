@@ -270,6 +270,34 @@ func TestValidateDispatchConfig(t *testing.T) {
 			noChecks: []string{"agent.command"},
 		},
 		{
+			name: "missing agent.kind skips command and adapter checks",
+			modify: func(p *PreflightParams) {
+				p.ConfigFunc = func() config.ServiceConfig {
+					return config.ServiceConfig{
+						Tracker: config.TrackerConfig{
+							Kind:   "test-tracker",
+							APIKey: "secret",
+						},
+						Agent: config.AgentConfig{},
+					}
+				}
+				p.AgentRegistry = &stubAgentRegistry{
+					getFunc: func(kind string) (registry.AgentConstructor, error) {
+						return nil, &registry.RegistryError{
+							Dimension: "agent",
+							Kind:      kind,
+							Available: []string{},
+						}
+					},
+					metaFunc: func(string) registry.AdapterMeta {
+						return registry.AdapterMeta{RequiresCommand: true}
+					},
+				}
+			},
+			wantChecks: []string{"agent.kind"},
+			noChecks:   []string{"agent.command", "agent_adapter"},
+		},
+		{
 			name: "unregistered agent kind",
 			modify: func(p *PreflightParams) {
 				p.AgentRegistry = &stubAgentRegistry{
@@ -302,7 +330,7 @@ func TestValidateDispatchConfig(t *testing.T) {
 					metaFunc: func(string) registry.AdapterMeta { return registry.AdapterMeta{} },
 				}
 			},
-			wantChecks: []string{"tracker.kind", "tracker.api_key", "agent_adapter"},
+			wantChecks: []string{"tracker.kind", "tracker.api_key", "agent.kind"},
 			noChecks:   []string{"workflow_load"},
 		},
 		{
@@ -311,7 +339,7 @@ func TestValidateDispatchConfig(t *testing.T) {
 				p.ReloadWorkflow = func() error { return errors.New("file missing") }
 			},
 			wantChecks: []string{"workflow_load"},
-			noChecks:   []string{"tracker.kind", "tracker.api_key", "tracker_adapter", "agent_adapter", "agent.command", "tracker.project"},
+			noChecks:   []string{"tracker.kind", "tracker.api_key", "tracker_adapter", "agent_adapter", "agent.kind", "agent.command", "tracker.project"},
 		},
 		{
 			name: "zero-value meta from plain Register means no project or command error",
