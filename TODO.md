@@ -393,20 +393,36 @@ the system does real work.
       **Verify:** `go run ./cmd/sortie ./WORKFLOW.md` starts, connects to Jira, and polls
       for issues (with a valid WORKFLOW.md and credentials).
 
-- [ ] 7.2 Create a sample `WORKFLOW.md` for testing: configure Jira project, workspace root,
+- [ ] 7.2 Write the `WORKFLOW.md` syntax reference (`docs/workflow-reference.md`): a formal
+      configuration reference covering file format (front matter + prompt body parsing rules),
+      field-by-field specification for every config section (`tracker`, `polling`, `workspace`,
+      `hooks`, `agent`, extensions, etc.) with types, defaults, validation rules, dynamic reload
+      behavior, and examples. Include prompt template variable reference (Go `text/template`
+      syntax, `issue`/`attempt`/`run` inputs, first-turn vs continuation semantics), hook
+      lifecycle reference (env vars, failure semantics, inline vs file path), adapter-specific
+      configuration sections (per `tracker.kind` and `agent.kind`), error reference (all
+      parse/validation errors with causes and fixes), and complete annotated examples (minimal,
+      production Jira+Claude Code). Derive all content strictly from `docs/architecture.md`
+      Sections 5, 6, 9.4, and 10. This document is the authoritative user-facing reference
+      for workflow authors and must be accurate enough to guide task 7.3 (sample `WORKFLOW.md`).
+      **Verify:** document covers every field from architecture Section 6.4, every hook from
+      Section 5.3.4, every template variable from Section 5.4, and every error from Section 5.5.
+      A reviewer can write a valid WORKFLOW.md using only this reference.
+
+- [ ] 7.3 Create a sample `WORKFLOW.md` for testing: configure Jira project, workspace root,
       a simple after_create hook (e.g., `git clone`), and a minimal prompt template.
       **Verify:** the sample file passes config validation when loaded by Sortie.
 
-- [ ] 7.3 Run the first real end-to-end test: create a test issue in Jira, start Sortie,
+- [ ] 7.4 Run the first real end-to-end test: create a test issue in Jira, start Sortie,
       confirm it dispatches the issue, Claude Code runs a turn, and the run completes.
       **Verify:** Jira issue shows evidence of agent activity (comment or state change).
       Run history is persisted in SQLite.
 
-- [ ] 7.4 Test failure and retry: create an issue that will cause Claude Code to fail (e.g.,
+- [ ] 7.5 Test failure and retry: create an issue that will cause Claude Code to fail (e.g.,
       invalid workspace), confirm Sortie retries with exponential backoff.
       **Verify:** SQLite run_history shows multiple attempts with increasing delays.
 
-- [ ] 7.5 Test reconciliation: start Sortie with a running issue, move the issue to Done in
+- [ ] 7.6 Test reconciliation: start Sortie with a running issue, move the issue to Done in
       Jira, confirm Sortie stops the agent and cleans the workspace.
       **Verify:** workspace directory is removed after reconciliation.
 
@@ -551,12 +567,26 @@ tooling.
       **Verify:** dry run release produces `*.sbom.json` files alongside each archive in
       the `dist/` directory.
 
-- [ ] 10.11 Review and finalize README.md: add installation instructions, quick start guide,
+- [ ] 10.11 Finalize `docs/workflow-reference.md`: update the reference written in task 7.2
+      to reflect all features implemented through Milestones 7–10 — including `tracker_api`
+      tool extension (10.2), `.sortie/status` file (10.3), workspace TTL cleanup and
+      `workspace.retention_days` (10.5), `sortie validate` subcommand, and any adapter-specific
+      configuration discovered during end-to-end testing. Add a migration/changelog section
+      noting any schema changes since the initial draft. Ensure every field, hook, template
+      variable, error code, and adapter extension documented in the architecture spec has a
+      corresponding entry. This is the production-quality reference that README.md (10.12)
+      will link to as the definitive WORKFLOW.md documentation.
+      **Verify:** the reference covers 100% of config fields from architecture Section 6.4,
+      all extensions added in Milestones 8–10, and includes at least three complete annotated
+      examples (minimal, production Jira+Claude Code, self-hosting). A new user can write a
+      valid WORKFLOW.md using only this document.
+
+- [ ] 10.12 Review and finalize README.md: add installation instructions, quick start guide,
       and configuration reference now that the software exists.
       **Verify:** a new user can follow the README to install and run Sortie against their
       own Jira project.
 
-- [ ] 10.12 Prepare 1.0.0 release: update CHANGELOG.md to replace the pre-1.0 notice with
+- [ ] 10.13 Prepare 1.0.0 release: update CHANGELOG.md to replace the pre-1.0 notice with
       standard Semantic Versioning adherence, remove the "not yet ready for use" note from
       README.md, and tag the first stable release.
       **Verify:** CHANGELOG.md references SemVer, README.md has no development-only
