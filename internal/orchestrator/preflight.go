@@ -107,8 +107,9 @@ func ValidateDispatchConfig(params PreflightParams) PreflightResult {
 	if cfg.Tracker.Kind != "" && params.TrackerRegistry.Meta(cfg.Tracker.Kind).RequiresAPIKey {
 		if cfg.Tracker.APIKey == "" {
 			errs = append(errs, PreflightError{
-				Check:   "tracker.api_key",
-				Message: "tracker.api_key is required for tracker kind " + strconv.Quote(cfg.Tracker.Kind),
+				Check: "tracker.api_key",
+				Message: "tracker.api_key is required for tracker kind " + strconv.Quote(cfg.Tracker.Kind) +
+					" (value may be empty after environment variable expansion)",
 			})
 		}
 	}
