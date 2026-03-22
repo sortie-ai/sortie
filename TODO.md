@@ -364,7 +364,7 @@ component. Uses mock adapters for tracker and agent - no real external calls.
       and mock agent (completes after 1 turn). Confirm all 3 issues are dispatched, run, and
       completed. Confirm retry on simulated failure.
 
-- [ ] 6.12 Implement the full startup sequence (Section 16.1): open/create SQLite DB, run
+- [x] 6.12 Implement the full startup sequence (Section 16.1): open/create SQLite DB, run
       schema migrations, configure logging, start workflow file watcher, load persisted retry
       entries from SQLite and reconstruct timers, run dispatch preflight validation (fail
       startup on error), enumerate existing workspace directories and query tracker for their

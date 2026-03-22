@@ -60,6 +60,10 @@ func (m *mockReconcileTracker) FetchIssuesByStates(context.Context, []string) ([
 	panic("FetchIssuesByStates must not be called by ReconcileRunningIssues")
 }
 
+func (m *mockReconcileTracker) FetchIssueStatesByIdentifiers(context.Context, []string) (map[string]string, error) {
+	panic("FetchIssueStatesByIdentifiers must not be called by ReconcileRunningIssues")
+}
+
 func (m *mockReconcileTracker) FetchIssueComments(context.Context, string) ([]domain.Comment, error) {
 	panic("FetchIssueComments must not be called by ReconcileRunningIssues")
 }

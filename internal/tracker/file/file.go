@@ -25,7 +25,7 @@ func init() {
 // Compile-time interface satisfaction check.
 var _ domain.TrackerAdapter = (*FileAdapter)(nil)
 
-// FileAdapter reads issues from a JSON file and implements all five
+// FileAdapter reads issues from a JSON file and implements all six
 // [domain.TrackerAdapter] operations. The file is re-read on each
 // call to support test scenarios that modify the fixture between
 // operations. Safe for concurrent use.
@@ -156,6 +156,33 @@ func (a *FileAdapter) FetchIssueStatesByIDs(_ context.Context, issueIDs []string
 	for _, raw := range raws {
 		if wanted[raw.ID] {
 			result[raw.ID] = raw.State
+		}
+	}
+	return result, nil
+}
+
+// FetchIssueStatesByIdentifiers returns the current state for each
+// requested issue identifier. Issues not found in the file are omitted
+// from the map.
+func (a *FileAdapter) FetchIssueStatesByIdentifiers(_ context.Context, identifiers []string) (map[string]string, error) {
+	if len(identifiers) == 0 {
+		return map[string]string{}, nil
+	}
+
+	raws, err := loadIssues(a.path)
+	if err != nil {
+		return nil, err
+	}
+
+	wanted := make(map[string]bool, len(identifiers))
+	for _, id := range identifiers {
+		wanted[id] = true
+	}
+
+	result := make(map[string]string, len(identifiers))
+	for _, raw := range raws {
+		if wanted[raw.Identifier] {
+			result[raw.Identifier] = raw.State
 		}
 	}
 	return result, nil
