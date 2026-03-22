@@ -304,6 +304,39 @@ func TestResolveWorkflowPath(t *testing.T) {
 	}
 }
 
+func TestRunDatabaseCreatedNextToWorkflow(t *testing.T) {
+	// The database must be created adjacent to WORKFLOW.md, not in the
+	// process working directory. Set CWD to a separate temp directory
+	// so the two locations differ.
+	workflowDir := t.TempDir()
+	cwdDir := t.TempDir()
+	t.Chdir(cwdDir)
+
+	writeIssuesFixture(t, workflowDir)
+	wfPath := writeWorkflowFile(t, workflowDir)
+
+	var stdout, stderr bytes.Buffer
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+
+	code := run(ctx, []string{wfPath}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr: %s", code, stderr.String())
+	}
+
+	// .sortie.db must exist next to WORKFLOW.md.
+	dbNextToWorkflow := filepath.Join(workflowDir, ".sortie.db")
+	if _, err := os.Stat(dbNextToWorkflow); err != nil {
+		t.Errorf("expected database at %s, got error: %v", dbNextToWorkflow, err)
+	}
+
+	// .sortie.db must NOT exist in the process CWD.
+	dbInCwd := filepath.Join(cwdDir, ".sortie.db")
+	if _, err := os.Stat(dbInCwd); err == nil {
+		t.Errorf("database should not exist in CWD at %s", dbInCwd)
+	}
+}
+
 // --- Config map completeness tests ---
 
 // toSnakeCase converts a PascalCase field name to snake_case, handling
