@@ -622,3 +622,53 @@ func TestReconcile_StalledAndTerminal(t *testing.T) {
 		t.Error("PendingCleanup not set for terminal entry")
 	}
 }
+
+func TestReconcile_SameIssueStalledAndTerminal(t *testing.T) {
+	t.Parallel()
+
+	store := &mockReconcileStore{}
+	// Same issue is stalled (Part A) AND terminal (Part B).
+	tracker := &mockReconcileTracker{
+		states: map[string]string{"ISSUE-1": "Done"},
+	}
+	params := defaultReconcileParams(t, store, tracker)
+	params.StallTimeoutMS = 60_000
+
+	state := NewState(5000, 4, nil, AgentTotals{})
+	cc := &cancelCounter{}
+	state.Running["ISSUE-1"] = &RunningEntry{
+		Identifier: "ISSUE-1-ident",
+		StartedAt:  reconcileBaseTime.Add(-120 * time.Second), // stalled: 120s > 60s
+		CancelFunc: cc.cancel,
+		Issue:      domain.Issue{State: "In Progress"},
+	}
+	state.Claimed["ISSUE-1"] = struct{}{}
+
+	ReconcileRunningIssues(state, params)
+
+	// CancelFunc called at least once (Part A cancels, Part B cancels again - idempotent).
+	if cc.count < 1 {
+		t.Error("CancelFunc never called")
+	}
+
+	// Part A scheduled a retry AND persisted it (SaveRetryEntry).
+	if len(store.savedEntries) != 1 {
+		t.Errorf("SaveRetryEntry called %d times, want 1 (from Part A)", len(store.savedEntries))
+	}
+
+	// Part B then cancelled that retry AND deleted it (DeleteRetryEntry).
+	if len(store.deletedIssueID) != 1 {
+		t.Fatalf("DeleteRetryEntry called %d times, want 1 (from Part B)", len(store.deletedIssueID))
+	}
+	if store.deletedIssueID[0] != "ISSUE-1" {
+		t.Errorf("deleted issue ID = %q, want %q", store.deletedIssueID[0], "ISSUE-1")
+	}
+
+	// Final state: retry removed by Part B, PendingCleanup set.
+	if _, ok := state.RetryAttempts["ISSUE-1"]; ok {
+		t.Error("retry still present after Part B should have cancelled it")
+	}
+	if !state.Running["ISSUE-1"].PendingCleanup {
+		t.Error("PendingCleanup not set for stalled+terminal issue")
+	}
+}
