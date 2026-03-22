@@ -386,6 +386,8 @@ Fields:
 - `api_key` (string)
   - May be a literal token or `$VAR_NAME`.
   - If `$VAR_NAME` resolves to an empty string, treat the key as missing.
+  - Required for dispatch when the tracker adapter declares it (e.g., Jira requires an API
+    key; a file-based tracker does not).
 - `project` (string)
   - Project identifier. Interpretation is adapter-defined (e.g., project key for Jira, slug for
     Linear). Required for dispatch when the tracker adapter requires project scoping.
@@ -607,7 +609,7 @@ This section is intentionally redundant so a coding agent can implement the conf
 
 - `tracker.kind`: string, required, no default (e.g., `jira`)
 - `tracker.endpoint`: string, adapter-defined default
-- `tracker.api_key`: string or `$VAR`, adapter-defined canonical env var
+- `tracker.api_key`: string or `$VAR`, required when the tracker adapter declares it
 - `tracker.project`: string, required when the tracker adapter requires project scoping
 - `tracker.active_states`: list of strings, adapter-defined defaults
 - `tracker.terminal_states`: list of strings, adapter-defined defaults

@@ -384,11 +384,11 @@ component. Uses mock adapters for tracker and agent - no real external calls.
 
 - [x] 6.14 Make `tracker.api_key` preflight check conditional via `AdapterMeta.RequiresAPIKey`.
       Add a `RequiresAPIKey bool` field to `registry.AdapterMeta`. Update the Jira adapter's
-      `RegisterWithMeta` call to set `RequiresAPIKey: true`. Update the file adapter to use
-      `RegisterWithMeta` with `RequiresAPIKey: false`. Change preflight Check 3 to skip the
-      `tracker.api_key` validation when the tracker's metadata does not require it. Amend
-      architecture.md Section 6.3 to make `tracker.api_key` conditional ("when required by
-      the selected tracker adapter"), consistent with `tracker.project` and `agent.command`.
+      `RegisterWithMeta` call to set `RequiresAPIKey: true`. The file adapter keeps plain
+      `Register` (zero-value meta means no API key required). Change preflight Check 3 to
+      skip the `tracker.api_key` validation when the tracker's metadata does not require it.
+      Amend architecture.md Section 6.3 to make `tracker.api_key` conditional ("when required
+      by the selected tracker adapter"), consistent with `tracker.project` and `agent.command`.
       **Verify:** unit test confirms preflight passes with an empty `tracker.api_key` when the
       adapter's `RequiresAPIKey` is false, and fails when `RequiresAPIKey` is true.
 
@@ -428,6 +428,18 @@ component. Uses mock adapters for tracker and agent - no real external calls.
       passes YAML parsing but fails preflight for a different check, confirms
       reconciliation does not cancel a running worker whose tracker state is
       still in the previous config's active set.
+
+- [ ] 6.18 Split `registry.AdapterMeta` into separate `TrackerMeta` and `AgentMeta` types.
+      Currently `AdapterMeta` mixes tracker-specific fields (`RequiresAPIKey`,
+      `RequiresProject`) and agent-specific fields (`RequiresCommand`) in a single struct.
+      This works for 3 fields but will become confusing as more adapter-specific
+      capabilities are added. Define `TrackerMeta` and `AgentMeta` structs, update
+      `Registry[T]` to accept the appropriate meta type (may require separate registry
+      types or a type parameter for meta), and migrate all adapter registrations.
+      Also consider changing `Meta()` to return `(M, bool)` so callers can distinguish
+      "unregistered kind" from "registered with zero-value meta."
+      **Verify:** existing preflight tests pass unchanged. Compilation confirms no adapter
+      mixes tracker fields with agent fields or vice-versa.
 
 ## Milestone 7: End-to-End with Real Adapters
 
