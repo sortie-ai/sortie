@@ -330,7 +330,7 @@ component. Uses mock adapters for tracker and agent - no real external calls.
       **Verify:** unit tests for both exit paths, confirm correct retry delays, runtime seconds
       accounting, and SQLite persistence.
 
-- [ ] 6.8 Implement retry timer handling (Section 16.6): on timer fire, re-fetch active
+- [x] 6.8 Implement retry timer handling (Section 16.6): on timer fire, re-fetch active
       candidates, find issue by ID, check eligibility. If not found, release claim. If found
       and eligible and slots available, dispatch. If found but no slots, requeue with error
       `no available orchestrator slots`. If found but no longer active, release claim.
