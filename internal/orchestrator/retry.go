@@ -100,6 +100,29 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 	}
 	delete(state.RetryAttempts, issueID)
 
+	// Guard: if the cancelled worker has not yet exited, the issue is
+	// still in the Running map. Re-scheduling a dispatch would overwrite
+	// the running entry and spawn a duplicate worker. Reschedule the
+	// retry with the same attempt so it fires again after the exit is
+	// processed.
+	if _, running := state.Running[issueID]; running {
+		delayMS := computeBackoffDelay(popped.Attempt, params.MaxRetryBackoffMS)
+		log.Debug("worker still running, rescheduling retry",
+			slog.String("issue_id", issueID),
+			slog.String("issue_identifier", popped.Identifier),
+			slog.Int("attempt", popped.Attempt),
+		)
+		ScheduleRetry(state, ScheduleRetryParams{
+			IssueID:    issueID,
+			Identifier: popped.Identifier,
+			Attempt:    popped.Attempt,
+			DelayMS:    delayMS,
+			Error:      popped.Error,
+		}, params.OnRetryFire)
+		persistRetryEntry(ctx, log, params.Store, state, issueID)
+		return
+	}
+
 	// Step 2: Re-fetch active candidates from the tracker.
 	candidates, err := params.TrackerAdapter.FetchCandidateIssues(ctx)
 	if err != nil {

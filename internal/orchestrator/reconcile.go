@@ -59,7 +59,8 @@ type ReconcileParams struct {
 }
 
 // ReconcileRunningIssues detects stalled workers and refreshes tracker
-// state for all running issues. Called from the poll tick before dispatch.
+// state for all running issues. Intended to be called from the poll tick
+// before dispatch; wiring into the event loop is done by the caller.
 //
 // Part A cancels workers that have exceeded the configured stall timeout
 // and schedules exponential-backoff retries. Part B queries the tracker
@@ -82,7 +83,7 @@ func ReconcileRunningIssues(state *State, params ReconcileParams) {
 
 	now := time.Now().UTC()
 	if params.NowFunc != nil {
-		now = params.NowFunc()
+		now = params.NowFunc().UTC()
 	}
 
 	// Part A: stall detection.
@@ -118,30 +119,44 @@ func reconcileStalled(state *State, params ReconcileParams, log *slog.Logger, ct
 		}
 
 		nextAttempt := NextAttempt(entry.RetryAttempt)
-		delayMS := computeBackoffDelay(nextAttempt, params.MaxRetryBackoffMS)
 
-		ScheduleRetry(state, ScheduleRetryParams{
-			IssueID:    issueID,
-			Identifier: entry.Identifier,
-			Attempt:    nextAttempt,
-			DelayMS:    delayMS,
-			Error:      "stall timeout exceeded",
-		}, params.OnRetryFire)
+		// Skip scheduling when a retry is already present at the same or
+		// higher attempt. Without this guard, every reconciliation tick
+		// would replace the existing timer, pushing DueAtMS forward and
+		// preventing the retry from ever firing.
+		if existing, ok := state.RetryAttempts[issueID]; ok && existing.Attempt >= nextAttempt {
+			log.Debug("stall retry already scheduled, skipping reschedule",
+				slog.String("issue_id", issueID),
+				slog.String("issue_identifier", entry.Identifier),
+				slog.Int("current_attempt", existing.Attempt),
+				slog.Int("next_attempt", nextAttempt),
+			)
+		} else {
+			delayMS := computeBackoffDelay(nextAttempt, params.MaxRetryBackoffMS)
 
-		if retryEntry, ok := state.RetryAttempts[issueID]; ok {
-			pEntry := persistence.RetryEntry{
-				IssueID:    retryEntry.IssueID,
-				Identifier: retryEntry.Identifier,
-				Attempt:    retryEntry.Attempt,
-				DueAtMs:    retryEntry.DueAtMS,
-				Error:      stringPtr(retryEntry.Error),
-			}
-			if err := params.Store.SaveRetryEntry(ctx, pEntry); err != nil {
-				log.Error("failed to persist stall retry entry",
-					slog.String("issue_id", issueID),
-					slog.String("issue_identifier", entry.Identifier),
-					slog.Any("error", err),
-				)
+			ScheduleRetry(state, ScheduleRetryParams{
+				IssueID:    issueID,
+				Identifier: entry.Identifier,
+				Attempt:    nextAttempt,
+				DelayMS:    delayMS,
+				Error:      "stall timeout exceeded",
+			}, params.OnRetryFire)
+
+			if retryEntry, ok := state.RetryAttempts[issueID]; ok {
+				pEntry := persistence.RetryEntry{
+					IssueID:    retryEntry.IssueID,
+					Identifier: retryEntry.Identifier,
+					Attempt:    retryEntry.Attempt,
+					DueAtMs:    retryEntry.DueAtMS,
+					Error:      stringPtr(retryEntry.Error),
+				}
+				if err := params.Store.SaveRetryEntry(ctx, pEntry); err != nil {
+					log.Error("failed to persist stall retry entry",
+						slog.String("issue_id", issueID),
+						slog.String("issue_identifier", entry.Identifier),
+						slog.Any("error", err),
+					)
+				}
 			}
 		}
 
@@ -199,7 +214,7 @@ func reconcileTrackerState(state *State, params ReconcileParams, log *slog.Logge
 				)
 			}
 			entry.PendingCleanup = true
-			log.Info("reconciliation: issue terminal, stopping worker",
+			log.Info("stopping worker for terminal issue",
 				slog.String("issue_id", issueID),
 				slog.String("issue_identifier", entry.Identifier),
 				slog.String("state", stateName),
@@ -209,7 +224,7 @@ func reconcileTrackerState(state *State, params ReconcileParams, log *slog.Logge
 
 		if _, active := activeSet[normalized]; active {
 			entry.Issue.State = stateName
-			log.Debug("reconciliation: issue state refreshed",
+			log.Debug("refreshed issue state",
 				slog.String("issue_id", issueID),
 				slog.String("issue_identifier", entry.Identifier),
 				slog.String("state", stateName),
@@ -229,7 +244,7 @@ func reconcileTrackerState(state *State, params ReconcileParams, log *slog.Logge
 				slog.Any("error", err),
 			)
 		}
-		log.Info("reconciliation: issue no longer active, stopping worker",
+		log.Info("stopping worker for non-active issue",
 			slog.String("issue_id", issueID),
 			slog.String("issue_identifier", entry.Identifier),
 			slog.String("state", stateName),
