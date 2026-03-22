@@ -1358,7 +1358,7 @@ func TestDispatchLoopPerStateExhaustion(t *testing.T) {
 
 // TestOrchestratorDynamicConfigReload verifies that handleTick propagates
 // config changes from the WorkflowManager to observable orchestrator state
-// and behaviour, covering the six scenarios specified in Plan 6.13 Phase 2.
+// and behavior, covering the seven scenarios exercised by cases A–G.
 func TestOrchestratorDynamicConfigReload(t *testing.T) {
 	t.Parallel()
 
@@ -1598,7 +1598,7 @@ func TestOrchestratorDynamicConfigReload(t *testing.T) {
 	})
 
 	// Test Case D: reconciliation uses fresh terminal states after reload.
-	// Section 6.3: reconciliation runs with post-reload config.
+	// Reconciliation runs with post-reload config.
 	t.Run("reconcile_fresh_terminal_states", func(t *testing.T) {
 		t.Parallel()
 
@@ -1931,7 +1931,7 @@ func TestOrchestratorDynamicConfigReload(t *testing.T) {
 	})
 
 	// Test Case G: state fields update even on preflight failure.
-	// Section 6.3: "skip dispatch but keep reconciliation active".
+	// Dispatch is skipped but reconciliation remains active.
 	t.Run("state_updates_on_preflight_failure", func(t *testing.T) {
 		t.Parallel()
 
@@ -2092,7 +2092,10 @@ do {{ .issue.identifier }}
 		Store:           &stubStore{},
 		Observers:       []Observer{obs},
 		PreflightParams: PreflightParams{
-			ReloadWorkflow:  wm.Reload,
+			// Use a no-op reload so that any observed config changes
+			// come from the fsnotify watcher path rather than the
+			// defensive reload in preflight.
+			ReloadWorkflow:  func() error { return nil },
 			ConfigFunc:      wm.Config,
 			TrackerRegistry: regs.TrackerRegistry,
 			AgentRegistry:   regs.AgentRegistry,

@@ -172,10 +172,9 @@ func (o *Orchestrator) Run(ctx context.Context) {
 //
 // Preflight runs first so the config reload (if any) is visible to all
 // subsequent steps. Reconciliation and state-field updates always run —
-// even when preflight fails — because Section 6.3 requires "keep
-// reconciliation active" and the last-known-good config is still valid
-// for those purposes. Dispatch is the only step gated on preflight
-// success.
+// even when preflight fails — to keep orchestrator state aligned with
+// the tracker using the last-known-good config, which remains valid for
+// those purposes. Dispatch is the only step gated on preflight success.
 func (o *Orchestrator) handleTick(ctx context.Context) {
 	// Step 1: dispatch preflight validation. This triggers a
 	// defensive Reload() of the workflow file, ensuring the config
@@ -196,7 +195,7 @@ func (o *Orchestrator) handleTick(ctx context.Context) {
 
 	// Step 4: reconcile running issues with fresh config. Runs
 	// unconditionally so in-flight workers are monitored even when
-	// dispatch is skipped (Section 6.3).
+	// dispatch is skipped.
 	ReconcileRunningIssues(o.state, ReconcileParams{
 		TrackerAdapter:    o.trackerAdapter,
 		ActiveStates:      cfg.Tracker.ActiveStates,
