@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"log/slog"
 	"sync"
 	"sync/atomic"
@@ -461,7 +462,7 @@ func TestMakeWorkerFn(t *testing.T) {
 			Issue:      issue,
 		}
 
-		wfn := o.makeWorkerFn()
+		wfn := o.makeWorkerFn("")
 
 		exitDone := make(chan struct{})
 		go func() {
@@ -523,7 +524,7 @@ func TestMakeWorkerFn(t *testing.T) {
 			Issue:      issue,
 		}
 
-		wfn := o.makeWorkerFn()
+		wfn := o.makeWorkerFn("")
 
 		exitDone := make(chan struct{})
 		go func() {
@@ -578,7 +579,7 @@ func TestMakeWorkerFn(t *testing.T) {
 			SessionID:  "resume-sess-42",
 		}
 
-		wfn := o.makeWorkerFn()
+		wfn := o.makeWorkerFn("resume-sess-42")
 
 		exitDone := make(chan struct{})
 		go func() {
@@ -892,5 +893,428 @@ func passingPreflightRegistries() PreflightParams {
 			getFunc:  func(string) (registry.AgentConstructor, error) { return nil, nil },
 			metaFunc: func(string) registry.AdapterMeta { return registry.AdapterMeta{} },
 		},
+	}
+}
+
+// lifecycleConfig returns a config suitable for full lifecycle tests.
+// Workspace root must be a t.TempDir().
+func lifecycleConfig(workspaceRoot string) config.ServiceConfig {
+	return config.ServiceConfig{
+		Tracker: config.TrackerConfig{
+			Kind:           "mock",
+			APIKey:         "test-key",
+			ActiveStates:   []string{"To Do"},
+			TerminalStates: []string{"Done"},
+		},
+		Polling:   config.PollingConfig{IntervalMS: 60000},
+		Workspace: config.WorkspaceConfig{Root: workspaceRoot},
+		Hooks:     config.HooksConfig{TimeoutMS: 5000},
+		Agent: config.AgentConfig{
+			Kind:                "mock",
+			Command:             "/usr/bin/agent",
+			MaxConcurrentAgents: 10,
+			MaxTurns:            1,
+			ReadTimeoutMS:       1000,
+		},
+	}
+}
+
+// lifecycleIssues returns 3 dispatch-eligible issues.
+func lifecycleIssues() []domain.Issue {
+	return []domain.Issue{
+		{ID: "id-1", Identifier: "TEST-1", Title: "First", State: "To Do"},
+		{ID: "id-2", Identifier: "TEST-2", Title: "Second", State: "To Do"},
+		{ID: "id-3", Identifier: "TEST-3", Title: "Third", State: "To Do"},
+	}
+}
+
+// --- TestOrchestratorLifecycle ---
+
+func TestOrchestratorLifecycle(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	cfg := lifecycleConfig(tmpDir)
+	tmpl := mustParseTemplate(t, "work on {{ .issue.identifier }}")
+
+	tracker := &candidateTrackerAdapter{
+		mockTrackerAdapter: &mockTrackerAdapter{
+			fetchStatesFn: func(_ context.Context, ids []string) (map[string]string, error) {
+				result := make(map[string]string, len(ids))
+				for _, id := range ids {
+					// Return "Done" so the worker exits after 1 turn
+					// (state is no longer active → loop breaks).
+					result[id] = "Done"
+				}
+				return result, nil
+			},
+		},
+		fetchCandidatesFn: func(_ context.Context) ([]domain.Issue, error) {
+			return lifecycleIssues(), nil
+		},
+	}
+
+	agent := &mockAgentAdapter{
+		runTurnFn: func(_ context.Context, sess domain.Session, _ domain.RunTurnParams) (domain.TurnResult, error) {
+			return domain.TurnResult{
+				SessionID:  sess.ID,
+				ExitReason: domain.EventTurnCompleted,
+			}, nil
+		},
+	}
+
+	wm := &stubWorkflowManager{config: cfg, template: tmpl}
+	store := &stubStore{}
+	obs := &stubObserver{}
+	regs := passingPreflightRegistries()
+
+	state := NewState(cfg.Polling.IntervalMS, cfg.Agent.MaxConcurrentAgents, nil, AgentTotals{})
+	o := NewOrchestrator(OrchestratorParams{
+		State:           state,
+		Logger:          discardLogger(),
+		TrackerAdapter:  tracker,
+		AgentAdapter:    agent,
+		WorkflowManager: wm,
+		Store:           store,
+		PreflightParams: PreflightParams{
+			ReloadWorkflow:  func() error { return nil },
+			ConfigFunc:      wm.Config,
+			TrackerRegistry: regs.TrackerRegistry,
+			AgentRegistry:   regs.AgentRegistry,
+		},
+		Observers: []Observer{obs},
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		o.Run(ctx)
+		close(done)
+	}()
+
+	// Poll the store (mutex-protected) for run history entries instead
+	// of reading state directly, to avoid data races with the event loop.
+	deadline := time.After(15 * time.Second)
+	for {
+		select {
+		case <-deadline:
+			cancel()
+			<-done
+			store.mu.Lock()
+			n := len(store.runHistories)
+			store.mu.Unlock()
+			t.Fatalf("timed out: run histories = %d, want 3", n)
+		default:
+		}
+		store.mu.Lock()
+		n := len(store.runHistories)
+		store.mu.Unlock()
+		if n >= 3 {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	cancel()
+	<-done
+
+	// After Run returns, the event loop is stopped and state is safe to read.
+
+	// Verify all 3 issues completed.
+	for _, issue := range lifecycleIssues() {
+		if _, ok := state.Completed[issue.ID]; !ok {
+			t.Errorf("issue %s not in Completed set", issue.Identifier)
+		}
+	}
+
+	// Verify no issues still running.
+	if len(state.Running) != 0 {
+		t.Errorf("Running count = %d, want 0", len(state.Running))
+	}
+
+	// Verify run history was persisted for all 3 issues.
+	store.mu.Lock()
+	historyCount := len(store.runHistories)
+	store.mu.Unlock()
+	if historyCount != 3 {
+		t.Errorf("run history count = %d, want 3", historyCount)
+	}
+
+	// Observer should have been notified (at least once per tick + per exit).
+	if got := obs.calls.Load(); got < 1 {
+		t.Errorf("observer calls = %d, want >= 1", got)
+	}
+}
+
+// --- TestOrchestratorLifecycleRetry ---
+
+func TestOrchestratorLifecycleRetry(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	cfg := lifecycleConfig(tmpDir)
+	cfg.Agent.MaxConcurrentAgents = 5
+	tmpl := mustParseTemplate(t, "work on {{ .issue.identifier }}")
+
+	issues := []domain.Issue{
+		{ID: "id-ok", Identifier: "OK-1", Title: "Good", State: "To Do"},
+		{ID: "id-fail", Identifier: "FAIL-1", Title: "Bad", State: "To Do"},
+	}
+
+	tracker := &candidateTrackerAdapter{
+		mockTrackerAdapter: &mockTrackerAdapter{
+			fetchStatesFn: func(_ context.Context, ids []string) (map[string]string, error) {
+				result := make(map[string]string, len(ids))
+				for _, id := range ids {
+					result[id] = "Done"
+				}
+				return result, nil
+			},
+		},
+		fetchCandidatesFn: func(_ context.Context) ([]domain.Issue, error) {
+			return issues, nil
+		},
+	}
+
+	var failOnce atomic.Bool
+	agent := &mockAgentAdapter{
+		runTurnFn: func(_ context.Context, sess domain.Session, params domain.RunTurnParams) (domain.TurnResult, error) {
+			if params.Issue.ID == "id-fail" && !failOnce.Load() {
+				failOnce.Store(true)
+				return domain.TurnResult{}, fmt.Errorf("simulated agent failure")
+			}
+			return domain.TurnResult{
+				SessionID:  sess.ID,
+				ExitReason: domain.EventTurnCompleted,
+			}, nil
+		},
+	}
+
+	wm := &stubWorkflowManager{config: cfg, template: tmpl}
+	store := &stubStore{}
+	regs := passingPreflightRegistries()
+
+	state := NewState(cfg.Polling.IntervalMS, cfg.Agent.MaxConcurrentAgents, nil, AgentTotals{})
+	o := NewOrchestrator(OrchestratorParams{
+		State:           state,
+		Logger:          discardLogger(),
+		TrackerAdapter:  tracker,
+		AgentAdapter:    agent,
+		WorkflowManager: wm,
+		Store:           store,
+		PreflightParams: PreflightParams{
+			ReloadWorkflow:  func() error { return nil },
+			ConfigFunc:      wm.Config,
+			TrackerRegistry: regs.TrackerRegistry,
+			AgentRegistry:   regs.AgentRegistry,
+		},
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		o.Run(ctx)
+		close(done)
+	}()
+
+	// Poll the store (mutex-protected) for evidence of completion and retry
+	// scheduling. The OK issue produces a run_history entry; the failed
+	// issue produces a saved retry entry.
+	deadline := time.After(15 * time.Second)
+	for {
+		select {
+		case <-deadline:
+			cancel()
+			<-done
+			store.mu.Lock()
+			h, r := len(store.runHistories), len(store.savedRetries)
+			store.mu.Unlock()
+			t.Fatalf("timed out: run histories = %d, saved retries = %d", h, r)
+		default:
+		}
+
+		store.mu.Lock()
+		hasOKHistory := false
+		for _, rh := range store.runHistories {
+			if rh.IssueID == "id-ok" {
+				hasOKHistory = true
+				break
+			}
+		}
+		hasFailRetry := false
+		for _, re := range store.savedRetries {
+			if re.IssueID == "id-fail" {
+				hasFailRetry = true
+				break
+			}
+		}
+		store.mu.Unlock()
+
+		if hasOKHistory && hasFailRetry {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	cancel()
+	<-done
+
+	// After Run returns, state is safe to read.
+
+	// The OK issue completed.
+	if _, ok := state.Completed["id-ok"]; !ok {
+		t.Error("issue id-ok not in Completed set")
+	}
+
+	// The failed issue should have a retry entry persisted.
+	store.mu.Lock()
+	retriesSaved := len(store.savedRetries)
+	store.mu.Unlock()
+	if retriesSaved < 1 {
+		t.Errorf("saved retries = %d, want >= 1", retriesSaved)
+	}
+
+	// The failed issue should still be claimed (retry pending).
+	if _, claimed := state.Claimed["id-fail"]; !claimed {
+		t.Error("issue id-fail not in Claimed set after retry scheduling")
+	}
+}
+
+// --- TestDispatchLoopPerStateExhaustion ---
+
+func TestDispatchLoopPerStateExhaustion(t *testing.T) {
+	t.Parallel()
+
+	// Regression: when per-state slots for one state are exhausted, the
+	// dispatch loop must continue evaluating issues in other states
+	// rather than breaking out of the loop entirely.
+
+	tmpDir := t.TempDir()
+	cfg := lifecycleConfig(tmpDir)
+	cfg.Agent.MaxConcurrentAgents = 10
+	cfg.Agent.MaxTurns = 1
+	cfg.Tracker.ActiveStates = []string{"In Progress", "To Do"}
+	cfg.Agent.MaxConcurrentByState = map[string]int{
+		"in progress": 2,
+		"to do":       5,
+	}
+	tmpl := mustParseTemplate(t, "work on {{ .issue.identifier }}")
+
+	// 2 "In Progress" + 1 "To Do" issue. Per-state limit for "In Progress" is 2.
+	// After dispatching the 2 "In Progress" issues, the "To Do" issue must
+	// still be dispatched.
+	issues := []domain.Issue{
+		{ID: "ip-1", Identifier: "IP-1", Title: "A", State: "In Progress", Priority: intPtr(1)},
+		{ID: "ip-2", Identifier: "IP-2", Title: "B", State: "In Progress", Priority: intPtr(1)},
+		{ID: "ip-3", Identifier: "IP-3", Title: "C", State: "In Progress", Priority: intPtr(1)},
+		{ID: "td-1", Identifier: "TD-1", Title: "D", State: "To Do", Priority: intPtr(2)},
+	}
+
+	tracker := &candidateTrackerAdapter{
+		mockTrackerAdapter: &mockTrackerAdapter{
+			fetchStatesFn: func(_ context.Context, ids []string) (map[string]string, error) {
+				result := make(map[string]string, len(ids))
+				for _, id := range ids {
+					result[id] = "Done"
+				}
+				return result, nil
+			},
+		},
+		fetchCandidatesFn: func(_ context.Context) ([]domain.Issue, error) {
+			return issues, nil
+		},
+	}
+
+	agent := &mockAgentAdapter{
+		runTurnFn: func(_ context.Context, sess domain.Session, _ domain.RunTurnParams) (domain.TurnResult, error) {
+			return domain.TurnResult{
+				SessionID:  sess.ID,
+				ExitReason: domain.EventTurnCompleted,
+			}, nil
+		},
+	}
+
+	wm := &stubWorkflowManager{config: cfg, template: tmpl}
+	store := &stubStore{}
+	regs := passingPreflightRegistries()
+
+	state := NewState(cfg.Polling.IntervalMS, cfg.Agent.MaxConcurrentAgents, cfg.Agent.MaxConcurrentByState, AgentTotals{})
+	o := NewOrchestrator(OrchestratorParams{
+		State:           state,
+		Logger:          discardLogger(),
+		TrackerAdapter:  tracker,
+		AgentAdapter:    agent,
+		WorkflowManager: wm,
+		Store:           store,
+		PreflightParams: PreflightParams{
+			ReloadWorkflow:  func() error { return nil },
+			ConfigFunc:      wm.Config,
+			TrackerRegistry: regs.TrackerRegistry,
+			AgentRegistry:   regs.AgentRegistry,
+		},
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		o.Run(ctx)
+		close(done)
+	}()
+
+	// Poll the store for run history entries. We expect at least 3 dispatched
+	// (2 IP + 1 TD), with IP-3 skipped on the first tick due to per-state limit.
+	deadline := time.After(15 * time.Second)
+	for {
+		select {
+		case <-deadline:
+			cancel()
+			<-done
+			store.mu.Lock()
+			n := len(store.runHistories)
+			store.mu.Unlock()
+			t.Fatalf("timed out: run histories = %d, want >= 3", n)
+		default:
+		}
+
+		store.mu.Lock()
+		hasIP1, hasIP2, hasTD1 := false, false, false
+		for _, rh := range store.runHistories {
+			switch rh.IssueID {
+			case "ip-1":
+				hasIP1 = true
+			case "ip-2":
+				hasIP2 = true
+			case "td-1":
+				hasTD1 = true
+			}
+		}
+		store.mu.Unlock()
+
+		if hasIP1 && hasIP2 && hasTD1 {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	cancel()
+	<-done
+
+	// After Run returns, state is safe to read.
+
+	// Verify the "To Do" issue was dispatched despite "In Progress" being full.
+	if _, ok := state.Completed["td-1"]; !ok {
+		t.Error("issue TD-1 not in Completed set — per-state exhaustion blocked cross-state dispatch")
+	}
+
+	// Verify ip-3 was NOT dispatched on the first tick (per-state limit of 2).
+	store.mu.Lock()
+	firstThreeIDs := make(map[string]bool)
+	for i := range min(3, len(store.runHistories)) {
+		firstThreeIDs[store.runHistories[i].IssueID] = true
+	}
+	store.mu.Unlock()
+
+	if firstThreeIDs["ip-3"] && !firstThreeIDs["td-1"] {
+		t.Error("ip-3 was dispatched before td-1 — per-state limit was not enforced")
 	}
 }
