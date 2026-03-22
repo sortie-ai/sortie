@@ -77,12 +77,16 @@ type PreflightParams struct {
 func ValidateDispatchConfig(params PreflightParams) PreflightResult {
 	var errs []PreflightError
 
-	// Check 1: Workflow file can be loaded and parsed.
+	// Check 1: Workflow file can be loaded and parsed. When the
+	// reload fails, remaining checks are skipped because ConfigFunc
+	// would return stale (or default) config, making those results
+	// misleading. The operator must fix the workflow file first.
 	if err := params.ReloadWorkflow(); err != nil {
 		errs = append(errs, PreflightError{
 			Check:   "workflow_load",
 			Message: "workflow file cannot be loaded: " + err.Error(),
 		})
+		return PreflightResult{Errors: errs}
 	}
 
 	cfg := params.ConfigFunc()

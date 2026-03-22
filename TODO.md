@@ -382,6 +382,16 @@ component. Uses mock adapters for tracker and agent - no real external calls.
       behavior changes (e.g., new polling interval takes effect, new concurrency limit is
       respected).
 
+- [ ] 6.14 Make `tracker.api_key` preflight check conditional via `AdapterMeta.RequiresAPIKey`.
+      Add a `RequiresAPIKey bool` field to `registry.AdapterMeta`. Update the Jira adapter's
+      `RegisterWithMeta` call to set `RequiresAPIKey: true`. Update the file adapter to use
+      `RegisterWithMeta` with `RequiresAPIKey: false`. Change preflight Check 3 to skip the
+      `tracker.api_key` validation when the tracker's metadata does not require it. Amend
+      architecture.md Section 6.3 to make `tracker.api_key` conditional ("when required by
+      the selected tracker adapter"), consistent with `tracker.project` and `agent.command`.
+      **Verify:** unit test confirms preflight passes with an empty `tracker.api_key` when the
+      adapter's `RequiresAPIKey` is false, and fails when `RequiresAPIKey` is true.
+
 ## Milestone 7: End-to-End with Real Adapters
 
 Connect real Jira and real Claude Code adapters to the orchestrator. This is the first time
