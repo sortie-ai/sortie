@@ -393,7 +393,7 @@ component. Uses mock adapters for tracker and agent - no real external calls.
       adapter's `RequiresAPIKey` is false, and fails when `RequiresAPIKey` is true.
 
 - [ ] 6.15 Make the database path configurable: add an optional `db_path` field to the
-      top-level config (default: `sortie.db` next to WORKFLOW.md). Resolve `$VAR`
+      top-level config (default: `.sortie.db` next to WORKFLOW.md). Resolve `$VAR`
       environment indirection and `~` expansion. Update `cmd/sortie/main.go` to use
       the configured path instead of the hardcoded `filepath.Join(filepath.Dir(path),
       ".sortie.db")`. This allows operators to place the database on a separate volume
