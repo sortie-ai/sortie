@@ -415,6 +415,20 @@ component. Uses mock adapters for tracker and agent - no real external calls.
       `PendingCleanup=true`, confirms cleanup removes the directory at the original path
       (not the new root). Existing cleanup tests continue to pass.
 
+- [ ] 6.17 Guard reconciliation against semantically invalid config on preflight
+      failure. When `ReloadWorkflow` succeeds but preflight fails for a
+      different reason (missing `tracker.kind`, unregistered adapter, etc.),
+      `Config()` returns the newly loaded config which may have empty or
+      incorrect `active_states`/`terminal_states`. Reconciliation running with
+      these values can cancel workers as "non-active, non-terminal". Either
+      keep a pre-reload config snapshot for reconciliation when preflight
+      fails, or prevent the workflow manager from promoting a config whose
+      state lists are empty.
+      **Verify:** unit test loads a config with empty `active_states` that
+      passes YAML parsing but fails preflight for a different check, confirms
+      reconciliation does not cancel a running worker whose tracker state is
+      still in the previous config's active set.
+
 ## Milestone 7: End-to-End with Real Adapters
 
 Connect real Jira and real Claude Code adapters to the orchestrator. This is the first time
@@ -466,6 +480,19 @@ the system does real work.
       multiplier or introduce a blocking send with timeout for token_usage events.
       **Verify:** run a sustained multi-agent workload, confirm no `agent event channel full`
       warnings in logs, and per-session token totals match agent-reported cumulative totals.
+
+- [ ] 7.8 Evaluate `workerExitCh` buffer sizing when `max_concurrent_agents`
+      increases at runtime. The channel is sized `max(maxConc*2, 64)` at
+      startup. If concurrency is raised far above the initial value via
+      dynamic config reload, `OnExit` performs a blocking send that could
+      stall worker goroutines when the buffer fills and the event loop is
+      temporarily busy. Consider using a non-blocking send with a fallback
+      queue, or sizing the buffer based on a hard upper bound independent of
+      the initial config value.
+      **Verify:** unit test creates an orchestrator with initial
+      `max_concurrent_agents=2`, increases it to a value exceeding the exit
+      channel buffer, exits all workers simultaneously, and confirms no
+      goroutine blocks indefinitely on the exit send.
 
 ## Milestone 8: Observability
 
