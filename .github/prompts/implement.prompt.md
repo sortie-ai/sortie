@@ -15,7 +15,7 @@ Before writing any code, read the relevant sections of [architecture.md](../../d
 
 **If no plan exists:** analyze the request, identify required changes across all layers (domain → service → adapter → integration), and implement atomically following the architecture guidelines.
 
-Apply coding standards from: [Go documentation guidelines](../instructions/go-documentation.instructions.md) and [Go environment guidelines](../instructions/go-environment.instructions.md)
+Apply coding standards from: [Go Structured Logging](../instructions/go-logging.instructions.md), [Go documentation guidelines](../instructions/go-documentation.instructions.md) and follow [Go environment guidelines](../instructions/go-environment.instructions.md) for any necessary environment variable setup.
 
 When finished, provide an implementation summary (files modified, changes made, testing considerations) and use the **Verify Implementation** handoff to pass work to the Tester agent.
 
