@@ -3,8 +3,8 @@ package orchestrator
 import (
 	"context"
 	"errors"
-	"sync"
 	"testing"
+	"time"
 
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/persistence"
@@ -122,7 +122,7 @@ func TestHandleRetryTimer(t *testing.T) {
 		store   func() *mockRetryStore
 		tracker func(issueID string) *mockRetryTracker
 		// overrides applied after defaultRetryParams
-		workerFn func(wg *sync.WaitGroup) WorkerFunc
+		workerFn func(ch chan<- struct{}) WorkerFunc
 		// assertions
 		check func(t *testing.T, issueID string, state *State, store *mockRetryStore, tracker *mockRetryTracker, workerCalled bool)
 	}{
@@ -146,6 +146,46 @@ func TestHandleRetryTimer(t *testing.T) {
 				}
 				if len(store.deletedIssueID) != 0 {
 					t.Errorf("DeleteRetryEntry call count = %d, want 0", len(store.deletedIssueID))
+				}
+			},
+		},
+		{
+			name:    "stale timer from replaced entry is skipped",
+			issueID: "ISS-5",
+			state: func(t *testing.T, id string) *State {
+				t.Helper()
+				state := NewState(5000, 4, nil, AgentTotals{})
+				state.RetryAttempts[id] = &RetryEntry{
+					IssueID:    id,
+					Identifier: id,
+					Attempt:    2,
+					DueAtMS:    time.Now().UnixMilli() + 3_600_000, // 1 hour from now
+				}
+				state.Claimed[id] = struct{}{}
+				return state
+			},
+			store:   func() *mockRetryStore { return &mockRetryStore{} },
+			tracker: func(_ string) *mockRetryTracker { return &mockRetryTracker{} },
+			check: func(t *testing.T, id string, state *State, store *mockRetryStore, tracker *mockRetryTracker, _ bool) {
+				t.Helper()
+				// Entry was NOT popped — still in RetryAttempts.
+				if _, ok := state.RetryAttempts[id]; !ok {
+					t.Errorf("RetryAttempts[%s] missing, want present (stale timer should not pop)", id)
+				}
+				// No tracker calls.
+				if tracker.fetchCount != 0 {
+					t.Errorf("FetchCandidateIssues call count = %d, want 0", tracker.fetchCount)
+				}
+				// No store calls.
+				if len(store.savedEntries) != 0 {
+					t.Errorf("SaveRetryEntry call count = %d, want 0", len(store.savedEntries))
+				}
+				if len(store.deletedIssueID) != 0 {
+					t.Errorf("DeleteRetryEntry call count = %d, want 0", len(store.deletedIssueID))
+				}
+				// Issue stays claimed.
+				if _, claimed := state.Claimed[id]; !claimed {
+					t.Errorf("Claimed[%s] missing, want claimed", id)
 				}
 			},
 		},
@@ -305,9 +345,9 @@ func TestHandleRetryTimer(t *testing.T) {
 					},
 				}
 			},
-			workerFn: func(wg *sync.WaitGroup) WorkerFunc {
+			workerFn: func(ch chan<- struct{}) WorkerFunc {
 				return func(_ context.Context, _ domain.Issue, _ *int) {
-					wg.Done()
+					ch <- struct{}{}
 				}
 			},
 			check: func(t *testing.T, id string, state *State, store *mockRetryStore, _ *mockRetryTracker, workerCalled bool) {
@@ -354,9 +394,9 @@ func TestHandleRetryTimer(t *testing.T) {
 					},
 				}
 			},
-			workerFn: func(wg *sync.WaitGroup) WorkerFunc {
+			workerFn: func(ch chan<- struct{}) WorkerFunc {
 				return func(_ context.Context, _ domain.Issue, _ *int) {
-					wg.Done()
+					ch <- struct{}{}
 				}
 			},
 			check: func(t *testing.T, id string, state *State, store *mockRetryStore, _ *mockRetryTracker, workerCalled bool) {
@@ -537,12 +577,15 @@ func TestHandleRetryTimer(t *testing.T) {
 
 			var workerCalled bool
 			if tt.workerFn != nil {
-				var wg sync.WaitGroup
-				wg.Add(1)
-				params.WorkerFn = tt.workerFn(&wg)
+				ch := make(chan struct{}, 1)
+				params.WorkerFn = tt.workerFn(ch)
 				HandleRetryTimer(state, id, params)
-				wg.Wait()
-				workerCalled = true
+				select {
+				case <-ch:
+					workerCalled = true
+				case <-time.After(time.Second):
+					t.Fatal("worker goroutine did not execute within 1 second")
+				}
 			} else {
 				HandleRetryTimer(state, id, params)
 			}
