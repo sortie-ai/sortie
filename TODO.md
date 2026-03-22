@@ -344,7 +344,7 @@ component. Uses mock adapters for tracker and agent - no real external calls.
       **Verify:** unit tests for each reconciliation outcome including refresh failure and
       disabled stall detection.
 
-- [ ] 6.10 Implement dispatch preflight validation (Section 6.3): before each dispatch cycle,
+- [x] 6.10 Implement dispatch preflight validation (Section 6.3): before each dispatch cycle,
       validate that the workflow can be loaded/parsed, `tracker.kind` is present and the
       adapter is registered, `tracker.api_key` is present after `$` resolution,
       `tracker.project` is present when required, `agent.command` is present when `agent.kind`
