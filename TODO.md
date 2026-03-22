@@ -537,18 +537,26 @@ tooling.
       **Verify:** "Run workflow" button in GitHub Actions with version input `0.1.0`
       produces release artifacts on GitHub after all tests pass.
 
-- [ ] 10.9 Add SBOM generation to release pipeline: install `syft` via `anchore/sbom-action`
+- [ ] 10.9 Optimize retry timer candidate fetch: `HandleRetryTimer` calls
+      `FetchCandidateIssues` (full paginated sweep) to validate a single issue. At scale
+      (hundreds of active issues, multiple concurrent retries) this becomes expensive.
+      Replace with `FetchIssueByID` + active-state check to reduce to a single API call
+      per retry timer event. Requires verifying that the state check produces the same
+      eligibility result as candidate-set membership.
+      **Verify:** benchmark or integration test confirms single-issue fetch path.
+
+- [ ] 10.10 Add SBOM generation to release pipeline: install `syft` via `anchore/sbom-action`
       in the release workflow, re-enable the `sboms` section in `.goreleaser.yaml` to produce
       SPDX JSON manifests for each archive artifact.
       **Verify:** dry run release produces `*.sbom.json` files alongside each archive in
       the `dist/` directory.
 
-- [ ] 10.10 Review and finalize README.md: add installation instructions, quick start guide,
+- [ ] 10.11 Review and finalize README.md: add installation instructions, quick start guide,
       and configuration reference now that the software exists.
       **Verify:** a new user can follow the README to install and run Sortie against their
       own Jira project.
 
-- [ ] 10.11 Prepare 1.0.0 release: update CHANGELOG.md to replace the pre-1.0 notice with
+- [ ] 10.12 Prepare 1.0.0 release: update CHANGELOG.md to replace the pre-1.0 notice with
       standard Semantic Versioning adherence, remove the "not yet ready for use" note from
       README.md, and tag the first stable release.
       **Verify:** CHANGELOG.md references SemVer, README.md has no development-only

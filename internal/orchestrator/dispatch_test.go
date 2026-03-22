@@ -353,6 +353,100 @@ func TestShouldDispatch(t *testing.T) {
 	}
 }
 
+func TestIsBlockedByNonTerminal(t *testing.T) {
+	t.Parallel()
+
+	terminal := []string{"Done", "Closed"}
+
+	tests := []struct {
+		name           string
+		issue          domain.Issue
+		terminalStates []string
+		want           bool
+	}{
+		{
+			name:           "no blockers",
+			issue:          domain.Issue{ID: "1", BlockedBy: nil},
+			terminalStates: terminal,
+			want:           false,
+		},
+		{
+			name:           "empty blockers slice",
+			issue:          domain.Issue{ID: "1", BlockedBy: []domain.BlockerRef{}},
+			terminalStates: terminal,
+			want:           false,
+		},
+		{
+			name: "all blockers terminal",
+			issue: domain.Issue{
+				ID: "1",
+				BlockedBy: []domain.BlockerRef{
+					{ID: "2", State: "Done"},
+					{ID: "3", State: "Closed"},
+				},
+			},
+			terminalStates: terminal,
+			want:           false,
+		},
+		{
+			name: "one blocker non-terminal",
+			issue: domain.Issue{
+				ID: "1",
+				BlockedBy: []domain.BlockerRef{
+					{ID: "2", State: "Done"},
+					{ID: "3", State: "In Progress"},
+				},
+			},
+			terminalStates: terminal,
+			want:           true,
+		},
+		{
+			name: "blocker with empty state treated as non-terminal",
+			issue: domain.Issue{
+				ID: "1",
+				BlockedBy: []domain.BlockerRef{
+					{ID: "2", State: ""},
+				},
+			},
+			terminalStates: terminal,
+			want:           true,
+		},
+		{
+			name: "case-insensitive terminal matching",
+			issue: domain.Issue{
+				ID: "1",
+				BlockedBy: []domain.BlockerRef{
+					{ID: "2", State: "done"},
+				},
+			},
+			terminalStates: []string{"Done"},
+			want:           false,
+		},
+		{
+			name: "empty terminal states list blocks all",
+			issue: domain.Issue{
+				ID: "1",
+				BlockedBy: []domain.BlockerRef{
+					{ID: "2", State: "Done"},
+				},
+			},
+			terminalStates: nil,
+			want:           true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := IsBlockedByNonTerminal(tt.issue, tt.terminalStates)
+			if got != tt.want {
+				t.Errorf("IsBlockedByNonTerminal(issue %q) = %t, want %t", tt.issue.ID, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestStateSet(t *testing.T) {
 	t.Parallel()
 
