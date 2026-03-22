@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"testing"
 	"time"
 
@@ -732,5 +733,174 @@ func TestReconcileStalled_SecondTickSkipsReschedule(t *testing.T) {
 	// CancelFunc called on both ticks (stall detected both times).
 	if cc.count != 2 {
 		t.Errorf("CancelFunc called %d times after two ticks, want 2", cc.count)
+	}
+}
+
+// --- Log spy ---
+
+// logRecord captures the level and message of a single slog record.
+type logRecord struct {
+	Level   slog.Level
+	Message string
+}
+
+// recordHandler is a slog.Handler that captures records for test assertions.
+type recordHandler struct {
+	records []logRecord
+}
+
+func (h *recordHandler) Enabled(_ context.Context, _ slog.Level) bool { return true }
+func (h *recordHandler) Handle(_ context.Context, r slog.Record) error {
+	h.records = append(h.records, logRecord{Level: r.Level, Message: r.Message})
+	return nil
+}
+func (h *recordHandler) WithAttrs(_ []slog.Attr) slog.Handler { return h }
+func (h *recordHandler) WithGroup(_ string) slog.Handler      { return h }
+
+// countByMessage returns the number of captured records with the given message.
+func (h *recordHandler) countByMessage(msg string) int {
+	n := 0
+	for _, r := range h.records {
+		if r.Message == msg {
+			n++
+		}
+	}
+	return n
+}
+
+// --- PendingCleanup idempotency tests ---
+
+func TestReconcileTerminal_PendingCleanupSkipsSecondTick(t *testing.T) {
+	t.Parallel()
+
+	store := &mockReconcileStore{}
+	tracker := &mockReconcileTracker{
+		states: map[string]string{"ISSUE-1": "Done"},
+	}
+	params := defaultReconcileParams(t, store, tracker)
+	params.StallTimeoutMS = 0 // disable stall detection for Part B isolation
+
+	state := NewState(5000, 4, nil, AgentTotals{})
+	cc := &cancelCounter{}
+	state.Running["ISSUE-1"] = &RunningEntry{
+		Identifier: "ISSUE-1-ident",
+		StartedAt:  reconcileBaseTime,
+		CancelFunc: cc.cancel,
+		Issue:      domain.Issue{State: "In Progress"},
+	}
+	state.Claimed["ISSUE-1"] = struct{}{}
+
+	// First tick: marks terminal, sets PendingCleanup.
+	ReconcileRunningIssues(state, params)
+
+	if !state.Running["ISSUE-1"].PendingCleanup {
+		t.Fatal("PendingCleanup not set after first tick")
+	}
+	if cc.count != 1 {
+		t.Fatalf("CancelFunc called %d times after first tick, want 1", cc.count)
+	}
+	firstDeleteCount := len(store.deletedIssueID)
+	if firstDeleteCount != 1 {
+		t.Fatalf("DeleteRetryEntry called %d times after first tick, want 1", firstDeleteCount)
+	}
+
+	// Second tick: PendingCleanup already set — should be a no-op.
+	ReconcileRunningIssues(state, params)
+
+	if cc.count != 1 {
+		t.Errorf("CancelFunc called %d times after second tick, want 1 (no additional call)", cc.count)
+	}
+	if len(store.deletedIssueID) != firstDeleteCount {
+		t.Errorf("DeleteRetryEntry called %d times after second tick, want %d (no additional call)", len(store.deletedIssueID), firstDeleteCount)
+	}
+	// PendingCleanup remains set.
+	if !state.Running["ISSUE-1"].PendingCleanup {
+		t.Error("PendingCleanup cleared after second tick, want still set")
+	}
+}
+
+func TestReconcileTerminal_PendingCleanupSkipsLogAndRetryDeletion(t *testing.T) {
+	t.Parallel()
+
+	store := &mockReconcileStore{}
+	tracker := &mockReconcileTracker{
+		states: map[string]string{"ISSUE-1": "Done"},
+	}
+
+	handler := &recordHandler{}
+	params := defaultReconcileParams(t, store, tracker)
+	params.StallTimeoutMS = 0
+	params.Logger = slog.New(handler)
+
+	state := NewState(5000, 4, nil, AgentTotals{})
+	cc := &cancelCounter{}
+	// Pre-set PendingCleanup to simulate prior terminal detection.
+	state.Running["ISSUE-1"] = &RunningEntry{
+		Identifier:     "ISSUE-1-ident",
+		StartedAt:      reconcileBaseTime,
+		CancelFunc:     cc.cancel,
+		Issue:          domain.Issue{State: "Done"},
+		PendingCleanup: true,
+	}
+	state.Claimed["ISSUE-1"] = struct{}{}
+
+	ReconcileRunningIssues(state, params)
+
+	if cc.count != 0 {
+		t.Errorf("CancelFunc called %d times, want 0 (PendingCleanup already set)", cc.count)
+	}
+	if len(store.deletedIssueID) != 0 {
+		t.Errorf("DeleteRetryEntry called %d times, want 0", len(store.deletedIssueID))
+	}
+	if handler.countByMessage("stopping worker for terminal issue") != 0 {
+		t.Error("Info log emitted for already-pending-cleanup issue, want 0")
+	}
+}
+
+// --- Stall Warn log first-tick-only test ---
+
+func TestReconcileStalled_WarnLogOnlyOnFirstTick(t *testing.T) {
+	t.Parallel()
+
+	store := &mockReconcileStore{}
+	tracker := &mockReconcileTracker{
+		states: map[string]string{"ISSUE-1": "In Progress"},
+	}
+
+	handler := &recordHandler{}
+	params := defaultReconcileParams(t, store, tracker)
+	params.StallTimeoutMS = 60_000
+	params.Logger = slog.New(handler)
+
+	state := NewState(5000, 4, nil, AgentTotals{})
+	cc := &cancelCounter{}
+	state.Running["ISSUE-1"] = &RunningEntry{
+		Identifier: "ISSUE-1-ident",
+		StartedAt:  reconcileBaseTime.Add(-120 * time.Second), // stalled
+		CancelFunc: cc.cancel,
+		Issue:      domain.Issue{State: "In Progress"},
+	}
+	state.Claimed["ISSUE-1"] = struct{}{}
+
+	// First tick: should emit Warn.
+	ReconcileRunningIssues(state, params)
+
+	warnCount := handler.countByMessage("stall detected, cancelling worker")
+	if warnCount != 1 {
+		t.Fatalf("Warn('stall detected, cancelling worker') emitted %d times after first tick, want 1", warnCount)
+	}
+
+	// Second tick: retry already scheduled → no Warn re-emitted.
+	ReconcileRunningIssues(state, params)
+
+	warnCount = handler.countByMessage("stall detected, cancelling worker")
+	if warnCount != 1 {
+		t.Errorf("Warn('stall detected, cancelling worker') emitted %d times after second tick, want 1 (no additional Warn)", warnCount)
+	}
+
+	// Verify Debug was emitted on second tick instead.
+	debugCount := handler.countByMessage("stall retry already scheduled, skipping reschedule")
+	if debugCount != 1 {
+		t.Errorf("Debug('stall retry already scheduled, skipping reschedule') emitted %d times, want 1", debugCount)
 	}
 }
