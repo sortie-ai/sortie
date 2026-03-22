@@ -158,14 +158,14 @@ func reconcileStalled(state *State, params ReconcileParams, log *slog.Logger, ct
 					)
 				}
 			}
-		}
 
-		log.Warn("stall detected, cancelling worker",
-			slog.String("issue_id", issueID),
-			slog.String("issue_identifier", entry.Identifier),
-			slog.Int64("elapsed_ms", elapsedMS),
-			slog.Int("stall_timeout_ms", params.StallTimeoutMS),
-		)
+			log.Warn("stall detected, cancelling worker",
+				slog.String("issue_id", issueID),
+				slog.String("issue_identifier", entry.Identifier),
+				slog.Int64("elapsed_ms", elapsedMS),
+				slog.Int("stall_timeout_ms", params.StallTimeoutMS),
+			)
+		}
 	}
 }
 
@@ -202,6 +202,9 @@ func reconcileTrackerState(state *State, params ReconcileParams, log *slog.Logge
 		normalized := strings.ToLower(stateName)
 
 		if _, terminal := terminalSet[normalized]; terminal {
+			if entry.PendingCleanup {
+				continue
+			}
 			if entry.CancelFunc != nil {
 				entry.CancelFunc()
 			}
