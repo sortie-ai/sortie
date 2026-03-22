@@ -1,0 +1,528 @@
+package orchestrator
+
+import (
+	"context"
+	"errors"
+	"sync"
+	"testing"
+
+	"github.com/sortie-ai/sortie/internal/domain"
+	"github.com/sortie-ai/sortie/internal/persistence"
+)
+
+// --- Test doubles ---
+
+// mockRetryStore records calls to RetryTimerStore methods and returns
+// configurable errors.
+type mockRetryStore struct {
+	savedEntries   []persistence.RetryEntry
+	deletedIssueID []string
+
+	saveRetryEntryErr   error
+	deleteRetryEntryErr error
+}
+
+var _ RetryTimerStore = (*mockRetryStore)(nil)
+
+func (m *mockRetryStore) SaveRetryEntry(_ context.Context, entry persistence.RetryEntry) error {
+	m.savedEntries = append(m.savedEntries, entry)
+	return m.saveRetryEntryErr
+}
+
+func (m *mockRetryStore) DeleteRetryEntry(_ context.Context, issueID string) error {
+	m.deletedIssueID = append(m.deletedIssueID, issueID)
+	return m.deleteRetryEntryErr
+}
+
+// mockRetryTracker implements domain.TrackerAdapter for retry timer tests.
+// Only FetchCandidateIssues is used by HandleRetryTimer; the remaining
+// methods panic if called.
+type mockRetryTracker struct {
+	candidates []domain.Issue
+	fetchErr   error
+	fetchCount int
+}
+
+var _ domain.TrackerAdapter = (*mockRetryTracker)(nil)
+
+func (m *mockRetryTracker) FetchCandidateIssues(_ context.Context) ([]domain.Issue, error) {
+	m.fetchCount++
+	return m.candidates, m.fetchErr
+}
+
+func (m *mockRetryTracker) FetchIssueByID(context.Context, string) (domain.Issue, error) {
+	panic("FetchIssueByID must not be called by HandleRetryTimer")
+}
+
+func (m *mockRetryTracker) FetchIssuesByStates(context.Context, []string) ([]domain.Issue, error) {
+	panic("FetchIssuesByStates must not be called by HandleRetryTimer")
+}
+
+func (m *mockRetryTracker) FetchIssueStatesByIDs(context.Context, []string) (map[string]string, error) {
+	panic("FetchIssueStatesByIDs must not be called by HandleRetryTimer")
+}
+
+func (m *mockRetryTracker) FetchIssueComments(context.Context, string) ([]domain.Comment, error) {
+	panic("FetchIssueComments must not be called by HandleRetryTimer")
+}
+
+// --- Test helpers ---
+
+// retryState creates a *State with a retry entry and claim for the given
+// issue. The retry entry has the specified attempt number.
+func retryState(t *testing.T, id, identifier string, attempt int) *State {
+	t.Helper()
+	state := NewState(5000, 4, nil, AgentTotals{})
+	state.RetryAttempts[id] = &RetryEntry{
+		IssueID:    id,
+		Identifier: identifier,
+		Attempt:    attempt,
+	}
+	state.Claimed[id] = struct{}{}
+	return state
+}
+
+// candidateIssue returns a minimal domain.Issue suitable for retry tests.
+func candidateIssue(id, identifier, st string) domain.Issue {
+	return domain.Issue{
+		ID:         id,
+		Identifier: identifier,
+		Title:      "title-" + identifier,
+		State:      st,
+	}
+}
+
+// defaultRetryParams returns HandleRetryTimerParams wired with the given
+// mocks and a discard logger.
+func defaultRetryParams(t *testing.T, store *mockRetryStore, tracker *mockRetryTracker) HandleRetryTimerParams {
+	t.Helper()
+	return HandleRetryTimerParams{
+		Store:             store,
+		TrackerAdapter:    tracker,
+		ActiveStates:      []string{"To Do", "In Progress"},
+		TerminalStates:    []string{"Done"},
+		MaxRetryBackoffMS: 300_000,
+		WorkerFn:          func(_ context.Context, _ domain.Issue, _ *int) {},
+		OnRetryFire:       noopRetryFire,
+		Ctx:               context.Background(),
+		Logger:            discardLogger(),
+	}
+}
+
+// --- Tests ---
+
+func TestHandleRetryTimer(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		issueID string
+		// setup
+		state   func(t *testing.T, issueID string) *State
+		store   func() *mockRetryStore
+		tracker func(issueID string) *mockRetryTracker
+		// overrides applied after defaultRetryParams
+		workerFn func(wg *sync.WaitGroup) WorkerFunc
+		// assertions
+		check func(t *testing.T, issueID string, state *State, store *mockRetryStore, tracker *mockRetryTracker, workerCalled bool)
+	}{
+		{
+			name:    "entry missing is no-op",
+			issueID: "ISS-1",
+			state: func(t *testing.T, _ string) *State {
+				t.Helper()
+				// No retry entry for the issue — simulates race/cancelled timer.
+				return NewState(5000, 4, nil, AgentTotals{})
+			},
+			store:   func() *mockRetryStore { return &mockRetryStore{} },
+			tracker: func(_ string) *mockRetryTracker { return &mockRetryTracker{} },
+			check: func(t *testing.T, _ string, _ *State, store *mockRetryStore, tracker *mockRetryTracker, _ bool) {
+				t.Helper()
+				if tracker.fetchCount != 0 {
+					t.Errorf("FetchCandidateIssues call count = %d, want 0", tracker.fetchCount)
+				}
+				if len(store.savedEntries) != 0 {
+					t.Errorf("SaveRetryEntry call count = %d, want 0", len(store.savedEntries))
+				}
+				if len(store.deletedIssueID) != 0 {
+					t.Errorf("DeleteRetryEntry call count = %d, want 0", len(store.deletedIssueID))
+				}
+			},
+		},
+		{
+			name:    "fetch failure reschedules with backoff",
+			issueID: "ISS-2",
+			state: func(t *testing.T, id string) *State {
+				t.Helper()
+				return retryState(t, id, id, 2)
+			},
+			store: func() *mockRetryStore { return &mockRetryStore{} },
+			tracker: func(_ string) *mockRetryTracker {
+				return &mockRetryTracker{fetchErr: errors.New("connection refused")}
+			},
+			check: func(t *testing.T, id string, state *State, store *mockRetryStore, _ *mockRetryTracker, _ bool) {
+				t.Helper()
+				// Retry entry re-created with attempt+1.
+				entry, ok := state.RetryAttempts[id]
+				if !ok {
+					t.Fatalf("RetryAttempts[%s] missing after fetch failure", id)
+				}
+				if entry.Attempt != 3 {
+					t.Errorf("RetryAttempts[%s].Attempt = %d, want 3", id, entry.Attempt)
+				}
+				if entry.Error != "retry poll failed" {
+					t.Errorf("RetryAttempts[%s].Error = %q, want %q", id, entry.Error, "retry poll failed")
+				}
+				if entry.DueAtMS == 0 {
+					t.Errorf("RetryAttempts[%s].DueAtMS = 0, want non-zero", id)
+				}
+				if entry.TimerHandle == nil {
+					t.Errorf("RetryAttempts[%s].TimerHandle = nil, want non-nil", id)
+				} else {
+					entry.TimerHandle.Stop()
+				}
+				// Issue stays claimed.
+				if _, claimed := state.Claimed[id]; !claimed {
+					t.Errorf("Claimed[%s] missing after fetch failure, want claimed", id)
+				}
+				// SaveRetryEntry called once.
+				if len(store.savedEntries) != 1 {
+					t.Fatalf("SaveRetryEntry call count = %d, want 1", len(store.savedEntries))
+				}
+				if store.savedEntries[0].Attempt != 3 {
+					t.Errorf("saved entry Attempt = %d, want 3", store.savedEntries[0].Attempt)
+				}
+				// DeleteRetryEntry not called.
+				if len(store.deletedIssueID) != 0 {
+					t.Errorf("DeleteRetryEntry call count = %d, want 0", len(store.deletedIssueID))
+				}
+			},
+		},
+		{
+			name:    "issue not found releases claim",
+			issueID: "ISS-1",
+			state: func(t *testing.T, id string) *State {
+				t.Helper()
+				return retryState(t, id, id, 1)
+			},
+			store: func() *mockRetryStore { return &mockRetryStore{} },
+			tracker: func(_ string) *mockRetryTracker {
+				// Return candidates that do NOT contain the target issue.
+				return &mockRetryTracker{
+					candidates: []domain.Issue{
+						candidateIssue("OTHER-1", "OTHER-1", "To Do"),
+					},
+				}
+			},
+			check: func(t *testing.T, id string, state *State, store *mockRetryStore, _ *mockRetryTracker, _ bool) {
+				t.Helper()
+				// Claim released.
+				if _, claimed := state.Claimed[id]; claimed {
+					t.Errorf("Claimed[%s] still present, want released", id)
+				}
+				// Retry entry removed (popped in step 1, not re-created).
+				if _, ok := state.RetryAttempts[id]; ok {
+					t.Errorf("RetryAttempts[%s] still present, want removed", id)
+				}
+				// DeleteRetryEntry called with correct ID.
+				if len(store.deletedIssueID) != 1 || store.deletedIssueID[0] != id {
+					t.Errorf("DeleteRetryEntry calls = %v, want [%s]", store.deletedIssueID, id)
+				}
+				// SaveRetryEntry not called.
+				if len(store.savedEntries) != 0 {
+					t.Errorf("SaveRetryEntry call count = %d, want 0", len(store.savedEntries))
+				}
+			},
+		},
+		{
+			name:    "no available slots reschedules with backoff",
+			issueID: "ISS-1",
+			state: func(t *testing.T, id string) *State {
+				t.Helper()
+				state := retryState(t, id, id, 1)
+				// Fill the single slot with another running issue.
+				state.MaxConcurrentAgents = 1
+				state.Running["OTHER-1"] = &RunningEntry{
+					Identifier: "OTHER-1",
+					Issue:      candidateIssue("OTHER-1", "OTHER-1", "To Do"),
+				}
+				return state
+			},
+			store: func() *mockRetryStore { return &mockRetryStore{} },
+			tracker: func(id string) *mockRetryTracker {
+				return &mockRetryTracker{
+					candidates: []domain.Issue{
+						candidateIssue(id, id, "To Do"),
+						candidateIssue("OTHER-1", "OTHER-1", "To Do"),
+					},
+				}
+			},
+			check: func(t *testing.T, id string, state *State, store *mockRetryStore, _ *mockRetryTracker, _ bool) {
+				t.Helper()
+				// Retry entry re-created at attempt+1.
+				entry, ok := state.RetryAttempts[id]
+				if !ok {
+					t.Fatalf("RetryAttempts[%s] missing after no-slots", id)
+				}
+				if entry.Attempt != 2 {
+					t.Errorf("RetryAttempts[%s].Attempt = %d, want 2", id, entry.Attempt)
+				}
+				if entry.Error != "no available orchestrator slots" {
+					t.Errorf("RetryAttempts[%s].Error = %q, want %q", id, entry.Error, "no available orchestrator slots")
+				}
+				if entry.TimerHandle != nil {
+					entry.TimerHandle.Stop()
+				}
+				// Issue stays claimed.
+				if _, claimed := state.Claimed[id]; !claimed {
+					t.Errorf("Claimed[%s] missing, want claimed", id)
+				}
+				// Running map unchanged — no dispatch occurred.
+				if _, running := state.Running[id]; running {
+					t.Errorf("Running[%s] present, want absent (no dispatch)", id)
+				}
+				// SaveRetryEntry called.
+				if len(store.savedEntries) != 1 {
+					t.Fatalf("SaveRetryEntry call count = %d, want 1", len(store.savedEntries))
+				}
+				if store.savedEntries[0].Attempt != 2 {
+					t.Errorf("saved entry Attempt = %d, want 2", store.savedEntries[0].Attempt)
+				}
+			},
+		},
+		{
+			name:    "eligible with slots dispatches issue",
+			issueID: "ISS-1",
+			state: func(t *testing.T, id string) *State {
+				t.Helper()
+				return retryState(t, id, id, 3)
+			},
+			store: func() *mockRetryStore { return &mockRetryStore{} },
+			tracker: func(id string) *mockRetryTracker {
+				return &mockRetryTracker{
+					candidates: []domain.Issue{
+						candidateIssue(id, id, "To Do"),
+					},
+				}
+			},
+			workerFn: func(wg *sync.WaitGroup) WorkerFunc {
+				return func(_ context.Context, _ domain.Issue, _ *int) {
+					wg.Done()
+				}
+			},
+			check: func(t *testing.T, id string, state *State, store *mockRetryStore, _ *mockRetryTracker, workerCalled bool) {
+				t.Helper()
+				// Issue appears in Running map.
+				running, ok := state.Running[id]
+				if !ok {
+					t.Fatalf("Running[%s] missing after dispatch", id)
+				}
+				if running.RetryAttempt == nil || *running.RetryAttempt != 3 {
+					t.Errorf("Running[%s].RetryAttempt = %v, want *3", id, running.RetryAttempt)
+				}
+				// Issue in Claimed (DispatchIssue sets it).
+				if _, claimed := state.Claimed[id]; !claimed {
+					t.Errorf("Claimed[%s] missing after dispatch, want claimed", id)
+				}
+				// Retry entry cleared.
+				if _, ok := state.RetryAttempts[id]; ok {
+					t.Errorf("RetryAttempts[%s] still present after dispatch, want cleared", id)
+				}
+				// DeleteRetryEntry called for cleanup.
+				if len(store.deletedIssueID) != 1 || store.deletedIssueID[0] != id {
+					t.Errorf("DeleteRetryEntry calls = %v, want [%s]", store.deletedIssueID, id)
+				}
+				// Worker was invoked.
+				if !workerCalled {
+					t.Error("worker function not invoked, want invoked")
+				}
+			},
+		},
+		{
+			name:    "continuation retry dispatches with attempt 1",
+			issueID: "ISS-1",
+			state: func(t *testing.T, id string) *State {
+				t.Helper()
+				// attempt=1 matches continuation path from normal worker exit.
+				return retryState(t, id, id, 1)
+			},
+			store: func() *mockRetryStore { return &mockRetryStore{} },
+			tracker: func(id string) *mockRetryTracker {
+				return &mockRetryTracker{
+					candidates: []domain.Issue{
+						candidateIssue(id, id, "In Progress"),
+					},
+				}
+			},
+			workerFn: func(wg *sync.WaitGroup) WorkerFunc {
+				return func(_ context.Context, _ domain.Issue, _ *int) {
+					wg.Done()
+				}
+			},
+			check: func(t *testing.T, id string, state *State, store *mockRetryStore, _ *mockRetryTracker, workerCalled bool) {
+				t.Helper()
+				running, ok := state.Running[id]
+				if !ok {
+					t.Fatalf("Running[%s] missing after continuation dispatch", id)
+				}
+				if running.RetryAttempt == nil || *running.RetryAttempt != 1 {
+					t.Errorf("Running[%s].RetryAttempt = %v, want *1", id, running.RetryAttempt)
+				}
+				if !workerCalled {
+					t.Error("worker function not invoked for continuation, want invoked")
+				}
+				if len(store.deletedIssueID) != 1 {
+					t.Errorf("DeleteRetryEntry call count = %d, want 1", len(store.deletedIssueID))
+				}
+			},
+		},
+		{
+			name:    "SQLite save error on reschedule is non-fatal",
+			issueID: "ISS-1",
+			state: func(t *testing.T, id string) *State {
+				t.Helper()
+				return retryState(t, id, id, 2)
+			},
+			store: func() *mockRetryStore {
+				return &mockRetryStore{saveRetryEntryErr: errors.New("disk full")}
+			},
+			tracker: func(_ string) *mockRetryTracker {
+				return &mockRetryTracker{fetchErr: errors.New("timeout")}
+			},
+			check: func(t *testing.T, id string, state *State, store *mockRetryStore, _ *mockRetryTracker, _ bool) {
+				t.Helper()
+				// In-memory retry entry still scheduled despite save failure.
+				entry, ok := state.RetryAttempts[id]
+				if !ok {
+					t.Fatalf("RetryAttempts[%s] missing, want present despite save error", id)
+				}
+				if entry.Attempt != 3 {
+					t.Errorf("RetryAttempts[%s].Attempt = %d, want 3", id, entry.Attempt)
+				}
+				if entry.TimerHandle != nil {
+					entry.TimerHandle.Stop()
+				}
+				// Claim preserved.
+				if _, claimed := state.Claimed[id]; !claimed {
+					t.Errorf("Claimed[%s] missing, want claimed", id)
+				}
+				// SaveRetryEntry was attempted.
+				if len(store.savedEntries) != 1 {
+					t.Errorf("SaveRetryEntry call count = %d, want 1", len(store.savedEntries))
+				}
+			},
+		},
+		{
+			name:    "SQLite delete error on claim release is non-fatal",
+			issueID: "ISS-1",
+			state: func(t *testing.T, id string) *State {
+				t.Helper()
+				return retryState(t, id, id, 1)
+			},
+			store: func() *mockRetryStore {
+				return &mockRetryStore{deleteRetryEntryErr: errors.New("locked")}
+			},
+			tracker: func(_ string) *mockRetryTracker {
+				// Candidates don't contain the target issue → release path.
+				return &mockRetryTracker{
+					candidates: []domain.Issue{
+						candidateIssue("OTHER-1", "OTHER-1", "To Do"),
+					},
+				}
+			},
+			check: func(t *testing.T, id string, state *State, store *mockRetryStore, _ *mockRetryTracker, _ bool) {
+				t.Helper()
+				// Claim still released despite delete error.
+				if _, claimed := state.Claimed[id]; claimed {
+					t.Errorf("Claimed[%s] still present, want released despite delete error", id)
+				}
+				// DeleteRetryEntry was attempted.
+				if len(store.deletedIssueID) != 1 {
+					t.Errorf("DeleteRetryEntry call count = %d, want 1", len(store.deletedIssueID))
+				}
+				// No retry re-created.
+				if _, ok := state.RetryAttempts[id]; ok {
+					t.Errorf("RetryAttempts[%s] present, want absent", id)
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			id := tt.issueID
+			state := tt.state(t, id)
+			store := tt.store()
+			tracker := tt.tracker(id)
+			params := defaultRetryParams(t, store, tracker)
+
+			var workerCalled bool
+			if tt.workerFn != nil {
+				var wg sync.WaitGroup
+				wg.Add(1)
+				params.WorkerFn = tt.workerFn(&wg)
+				HandleRetryTimer(state, id, params)
+				wg.Wait()
+				workerCalled = true
+			} else {
+				HandleRetryTimer(state, id, params)
+			}
+
+			tt.check(t, id, state, store, tracker, workerCalled)
+		})
+	}
+}
+
+func TestFindIssueByID(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		issues []domain.Issue
+		id     string
+		want   bool
+		wantID string
+	}{
+		{
+			name:   "empty list",
+			issues: nil,
+			id:     "ISS-1",
+			want:   false,
+		},
+		{
+			name: "found",
+			issues: []domain.Issue{
+				candidateIssue("A", "A-1", "To Do"),
+				candidateIssue("B", "B-1", "To Do"),
+			},
+			id:     "B",
+			want:   true,
+			wantID: "B",
+		},
+		{
+			name: "not found",
+			issues: []domain.Issue{
+				candidateIssue("A", "A-1", "To Do"),
+			},
+			id:   "Z",
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, found := findIssueByID(tt.issues, tt.id)
+
+			if found != tt.want {
+				t.Fatalf("findIssueByID(%v, %q) found = %v, want %v", tt.issues, tt.id, found, tt.want)
+			}
+			if found && got.ID != tt.wantID {
+				t.Errorf("findIssueByID(%v, %q).ID = %q, want %q", tt.issues, tt.id, got.ID, tt.wantID)
+			}
+		})
+	}
+}
