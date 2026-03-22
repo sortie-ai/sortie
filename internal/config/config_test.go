@@ -85,6 +85,7 @@ func TestNewServiceConfig(t *testing.T) {
 				"max_retry_backoff_ms":           600000,
 				"max_concurrent_agents_by_state": map[string]any{"In Progress": 3, "Review": 1},
 			},
+			"db_path": "/data/sortie.db",
 		}
 
 		cfg, err := NewServiceConfig(raw)
@@ -118,6 +119,8 @@ func TestNewServiceConfig(t *testing.T) {
 		assertIntEqual(t, "Agent.MaxRetryBackoffMS", 600000, cfg.Agent.MaxRetryBackoffMS)
 		assertIntEqual(t, "ByState[in progress]", 3, cfg.Agent.MaxConcurrentByState["in progress"])
 		assertIntEqual(t, "ByState[review]", 1, cfg.Agent.MaxConcurrentByState["review"])
+
+		assertStringEqual(t, "DBPath", "/data/sortie.db", cfg.DBPath)
 	})
 
 	t.Run("EnvResolution/DollarVar", func(t *testing.T) {
@@ -414,6 +417,104 @@ func TestNewServiceConfig(t *testing.T) {
 			t.Fatalf("unexpected error: %v", err)
 		}
 		assertIntEqual(t, "Agent.StallTimeoutMS", 300000, cfg.Agent.StallTimeoutMS)
+	})
+
+	// --- DBPath subtests ---
+
+	t.Run("DBPath/Absent", func(t *testing.T) {
+		t.Parallel()
+		cfg, err := NewServiceConfig(map[string]any{})
+		if err != nil {
+			t.Fatalf("NewServiceConfig({}) unexpected error: %v", err)
+		}
+		assertStringEqual(t, "DBPath", "", cfg.DBPath)
+	})
+
+	t.Run("DBPath/AbsolutePath", func(t *testing.T) {
+		t.Parallel()
+		cfg, err := NewServiceConfig(map[string]any{
+			"db_path": "/data/sortie.db",
+		})
+		if err != nil {
+			t.Fatalf("NewServiceConfig(db_path=/data/sortie.db) unexpected error: %v", err)
+		}
+		assertStringEqual(t, "DBPath", "/data/sortie.db", cfg.DBPath)
+	})
+
+	t.Run("DBPath/RelativePath", func(t *testing.T) {
+		t.Parallel()
+		cfg, err := NewServiceConfig(map[string]any{
+			"db_path": "custom.db",
+		})
+		if err != nil {
+			t.Fatalf("NewServiceConfig(db_path=custom.db) unexpected error: %v", err)
+		}
+		// Config layer stores relative paths as-is; caller resolves.
+		assertStringEqual(t, "DBPath", "custom.db", cfg.DBPath)
+	})
+
+	t.Run("DBPath/TildeExpansion", func(t *testing.T) {
+		t.Parallel()
+		home, err := os.UserHomeDir()
+		if err != nil {
+			t.Skip("cannot determine home directory")
+		}
+		cfg, err := NewServiceConfig(map[string]any{
+			"db_path": "~/sortie.db",
+		})
+		if err != nil {
+			t.Fatalf("NewServiceConfig(db_path=~/sortie.db) unexpected error: %v", err)
+		}
+		want := filepath.Join(home, "sortie.db")
+		assertStringEqual(t, "DBPath", want, cfg.DBPath)
+	})
+
+	t.Run("DBPath/EnvVar", func(t *testing.T) {
+		t.Setenv("SORTIE_TEST_DB_PATH", "/tmp/test.db")
+		cfg, err := NewServiceConfig(map[string]any{
+			"db_path": "$SORTIE_TEST_DB_PATH",
+		})
+		if err != nil {
+			t.Fatalf("NewServiceConfig(db_path=$SORTIE_TEST_DB_PATH) unexpected error: %v", err)
+		}
+		assertStringEqual(t, "DBPath", "/tmp/test.db", cfg.DBPath)
+	})
+
+	t.Run("DBPath/UnsetEnvVar", func(t *testing.T) {
+		// os.ExpandEnv replaces undefined vars with empty string;
+		// expandPath does not error — result is empty sentinel.
+		cfg, err := NewServiceConfig(map[string]any{
+			"db_path": "$SORTIE_UNSET_VAR_XYZ",
+		})
+		if err != nil {
+			t.Fatalf("NewServiceConfig(db_path=$SORTIE_UNSET_VAR_XYZ) unexpected error: %v", err)
+		}
+		assertStringEqual(t, "DBPath", "", cfg.DBPath)
+	})
+
+	t.Run("DBPath/NonStringIgnored", func(t *testing.T) {
+		t.Parallel()
+		cfg, err := NewServiceConfig(map[string]any{
+			"db_path": 42,
+		})
+		if err != nil {
+			t.Fatalf("NewServiceConfig(db_path=42) unexpected error: %v", err)
+		}
+		// extractString returns "" for non-string values.
+		assertStringEqual(t, "DBPath", "", cfg.DBPath)
+	})
+
+	t.Run("DBPath/NotInExtensions", func(t *testing.T) {
+		t.Parallel()
+		cfg, err := NewServiceConfig(map[string]any{
+			"db_path": "/data/sortie.db",
+		})
+		if err != nil {
+			t.Fatalf("NewServiceConfig(db_path=/data/sortie.db) unexpected error: %v", err)
+		}
+		if _, ok := cfg.Extensions["db_path"]; ok {
+			t.Error("db_path should not appear in Extensions")
+		}
 	})
 
 	t.Run("SectionAsNonMap", func(t *testing.T) {

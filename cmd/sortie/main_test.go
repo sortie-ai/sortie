@@ -337,6 +337,153 @@ func TestRunDatabaseCreatedNextToWorkflow(t *testing.T) {
 	}
 }
 
+// --- resolveDBPath tests ---
+
+func TestResolveDBPath(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		cfgPath     string
+		workflowDir string
+		want        string
+	}{
+		{
+			name:        "empty falls back to default",
+			cfgPath:     "",
+			workflowDir: "/project",
+			want:        "/project/.sortie.db",
+		},
+		{
+			name:        "absolute path used as-is",
+			cfgPath:     "/data/custom.db",
+			workflowDir: "/project",
+			want:        "/data/custom.db",
+		},
+		{
+			name:        "relative path joined with workflowDir",
+			cfgPath:     "subdir/my.db",
+			workflowDir: "/project",
+			want:        "/project/subdir/my.db",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := resolveDBPath(tt.cfgPath, tt.workflowDir)
+			if got != tt.want {
+				t.Errorf("resolveDBPath(%q, %q) = %q, want %q", tt.cfgPath, tt.workflowDir, got, tt.want)
+			}
+		})
+	}
+}
+
+// --- Database path integration tests ---
+
+// writeWorkflowFileWithDBPath creates a WORKFLOW.md in dir with a
+// custom db_path field and returns its absolute path.
+func writeWorkflowFileWithDBPath(t *testing.T, dir, dbPath string) string {
+	t.Helper()
+	content := fmt.Sprintf(`---
+polling:
+  interval_ms: 30000
+tracker:
+  kind: file
+  api_key: "unused"
+  active_states:
+    - To Do
+    - In Progress
+  terminal_states:
+    - Done
+agent:
+  kind: mock
+db_path: "%s"
+file:
+  path: issues.json
+---
+Do {{ .issue.title }}.
+`, dbPath)
+	p := filepath.Join(dir, "WORKFLOW.md")
+	if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+func TestRunDatabaseCustomPath(t *testing.T) {
+	workflowDir := t.TempDir()
+	dbDir := t.TempDir()
+
+	writeIssuesFixture(t, workflowDir)
+	dbFile := filepath.Join(dbDir, "custom.db")
+	wfPath := writeWorkflowFileWithDBPath(t, workflowDir, dbFile)
+
+	var stdout, stderr bytes.Buffer
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+
+	code := run(ctx, []string{wfPath}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr: %s", code, stderr.String())
+	}
+
+	// custom.db must exist at the configured absolute path.
+	if _, err := os.Stat(dbFile); err != nil {
+		t.Errorf("expected database at %s, got error: %v", dbFile, err)
+	}
+
+	// .sortie.db must NOT exist next to WORKFLOW.md.
+	defaultDB := filepath.Join(workflowDir, ".sortie.db")
+	if _, err := os.Stat(defaultDB); err == nil {
+		t.Errorf("default database should not exist at %s", defaultDB)
+	}
+}
+
+func TestRunDatabaseRelativePath(t *testing.T) {
+	workflowDir := t.TempDir()
+	cwdDir := t.TempDir()
+	t.Chdir(cwdDir)
+
+	writeIssuesFixture(t, workflowDir)
+
+	// Create the subdirectory inside the workflow directory.
+	subdir := filepath.Join(workflowDir, "data")
+	if err := os.Mkdir(subdir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	wfPath := writeWorkflowFileWithDBPath(t, workflowDir, "data/my.db")
+
+	var stdout, stderr bytes.Buffer
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+
+	code := run(ctx, []string{wfPath}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr: %s", code, stderr.String())
+	}
+
+	// data/my.db must exist inside the workflow directory.
+	relDB := filepath.Join(workflowDir, "data", "my.db")
+	if _, err := os.Stat(relDB); err != nil {
+		t.Errorf("expected database at %s, got error: %v", relDB, err)
+	}
+
+	// data/ must NOT exist in CWD — confirms resolution against workflow dir.
+	cwdData := filepath.Join(cwdDir, "data")
+	if _, err := os.Stat(cwdData); err == nil {
+		t.Errorf("data/ should not exist in CWD at %s", cwdData)
+	}
+
+	// .sortie.db must NOT exist next to WORKFLOW.md.
+	defaultDB := filepath.Join(workflowDir, ".sortie.db")
+	if _, err := os.Stat(defaultDB); err == nil {
+		t.Errorf("default database should not exist at %s", defaultDB)
+	}
+}
+
 // --- Config map completeness tests ---
 
 // toSnakeCase converts a PascalCase field name to snake_case, handling
