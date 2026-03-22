@@ -103,12 +103,14 @@ func ValidateDispatchConfig(params PreflightParams) PreflightResult {
 		})
 	}
 
-	// Check 3: tracker.api_key is present after $VAR resolution.
-	if cfg.Tracker.APIKey == "" {
-		errs = append(errs, PreflightError{
-			Check:   "tracker.api_key",
-			Message: "tracker.api_key is required (value is empty after environment variable resolution)",
-		})
+	// Check 3: tracker.api_key when required by the adapter.
+	if cfg.Tracker.Kind != "" && params.TrackerRegistry.Meta(cfg.Tracker.Kind).RequiresAPIKey {
+		if cfg.Tracker.APIKey == "" {
+			errs = append(errs, PreflightError{
+				Check:   "tracker.api_key",
+				Message: "tracker.api_key is required for tracker kind " + strconv.Quote(cfg.Tracker.Kind),
+			})
+		}
 	}
 
 	// Check 4: tracker.project when required by the adapter.

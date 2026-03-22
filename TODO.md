@@ -382,7 +382,7 @@ component. Uses mock adapters for tracker and agent - no real external calls.
       behavior changes (e.g., new polling interval takes effect, new concurrency limit is
       respected).
 
-- [ ] 6.14 Make `tracker.api_key` preflight check conditional via `AdapterMeta.RequiresAPIKey`.
+- [x] 6.14 Make `tracker.api_key` preflight check conditional via `AdapterMeta.RequiresAPIKey`.
       Add a `RequiresAPIKey bool` field to `registry.AdapterMeta`. Update the Jira adapter's
       `RegisterWithMeta` call to set `RequiresAPIKey: true`. Update the file adapter to use
       `RegisterWithMeta` with `RequiresAPIKey: false`. Change preflight Check 3 to skip the

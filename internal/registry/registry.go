@@ -45,6 +45,10 @@ type AdapterMeta struct {
 	// non-empty tracker.project config value.
 	RequiresProject bool
 
+	// RequiresAPIKey indicates the tracker adapter requires a
+	// non-empty tracker.api_key config value.
+	RequiresAPIKey bool
+
 	// RequiresCommand indicates the agent adapter requires a
 	// non-empty agent.command config value.
 	RequiresCommand bool

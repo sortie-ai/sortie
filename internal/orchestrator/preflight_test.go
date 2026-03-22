@@ -154,6 +154,12 @@ func TestValidateDispatchConfig(t *testing.T) {
 						},
 					}
 				}
+				p.TrackerRegistry = &stubTrackerRegistry{
+					getFunc: func(string) (registry.TrackerConstructor, error) { return nil, nil },
+					metaFunc: func(string) registry.AdapterMeta {
+						return registry.AdapterMeta{RequiresAPIKey: true}
+					},
+				}
 			},
 			wantChecks: []string{"tracker.api_key"},
 		},
@@ -330,8 +336,8 @@ func TestValidateDispatchConfig(t *testing.T) {
 					metaFunc: func(string) registry.AdapterMeta { return registry.AdapterMeta{} },
 				}
 			},
-			wantChecks: []string{"tracker.kind", "tracker.api_key", "agent.kind"},
-			noChecks:   []string{"workflow_load"},
+			wantChecks: []string{"tracker.kind", "agent.kind"},
+			noChecks:   []string{"workflow_load", "tracker.api_key"},
 		},
 		{
 			name: "workflow reload fails skips config checks",
@@ -342,13 +348,59 @@ func TestValidateDispatchConfig(t *testing.T) {
 			noChecks:   []string{"tracker.kind", "tracker.api_key", "tracker_adapter", "agent_adapter", "agent.kind", "agent.command", "tracker.project"},
 		},
 		{
-			name: "zero-value meta from plain Register means no project or command error",
+			name: "tracker.api_key not required when meta says so",
 			modify: func(p *PreflightParams) {
 				p.ConfigFunc = func() config.ServiceConfig {
 					return config.ServiceConfig{
 						Tracker: config.TrackerConfig{
-							Kind:   "test-tracker",
-							APIKey: "secret",
+							Kind: "test-tracker",
+						},
+						Agent: config.AgentConfig{
+							Kind:    "test-agent",
+							Command: "/usr/bin/agent",
+						},
+					}
+				}
+				p.TrackerRegistry = &stubTrackerRegistry{
+					getFunc: func(string) (registry.TrackerConstructor, error) { return nil, nil },
+					metaFunc: func(string) registry.AdapterMeta {
+						return registry.AdapterMeta{RequiresAPIKey: false}
+					},
+				}
+			},
+			wantOK:   true,
+			noChecks: []string{"tracker.api_key"},
+		},
+		{
+			name: "tracker.api_key required when meta says so",
+			modify: func(p *PreflightParams) {
+				p.ConfigFunc = func() config.ServiceConfig {
+					return config.ServiceConfig{
+						Tracker: config.TrackerConfig{
+							Kind: "test-tracker",
+						},
+						Agent: config.AgentConfig{
+							Kind:    "test-agent",
+							Command: "/usr/bin/agent",
+						},
+					}
+				}
+				p.TrackerRegistry = &stubTrackerRegistry{
+					getFunc: func(string) (registry.TrackerConstructor, error) { return nil, nil },
+					metaFunc: func(string) registry.AdapterMeta {
+						return registry.AdapterMeta{RequiresAPIKey: true}
+					},
+				}
+			},
+			wantChecks: []string{"tracker.api_key"},
+		},
+		{
+			name: "zero-value meta from plain Register means no project or command or api_key error",
+			modify: func(p *PreflightParams) {
+				p.ConfigFunc = func() config.ServiceConfig {
+					return config.ServiceConfig{
+						Tracker: config.TrackerConfig{
+							Kind: "test-tracker",
 						},
 						Agent: config.AgentConfig{
 							Kind: "test-agent",
@@ -366,7 +418,7 @@ func TestValidateDispatchConfig(t *testing.T) {
 				}
 			},
 			wantOK:   true,
-			noChecks: []string{"tracker.project", "agent.command"},
+			noChecks: []string{"tracker.api_key", "tracker.project", "agent.command"},
 		},
 	}
 

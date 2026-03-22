@@ -595,7 +595,7 @@ Validation checks:
 
 - Workflow file can be loaded and parsed.
 - `tracker.kind` is present and supported.
-- `tracker.api_key` is present after `$` resolution.
+- `tracker.api_key` is present after `$` resolution, when required by the selected tracker adapter.
 - `tracker.project` is present when required by the selected tracker adapter.
 - `agent.command` is present and non-empty when `agent.kind` requires a local command.
 - Tracker adapter for the configured `tracker.kind` is registered and available.

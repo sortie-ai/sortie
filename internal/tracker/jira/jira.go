@@ -20,6 +20,7 @@ import (
 func init() {
 	registry.Trackers.RegisterWithMeta("jira", NewJiraAdapter, registry.AdapterMeta{
 		RequiresProject: true,
+		RequiresAPIKey:  true,
 	})
 }
 
