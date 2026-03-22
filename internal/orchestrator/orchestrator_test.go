@@ -2065,6 +2065,10 @@ do {{ .issue.identifier }}
 		t.Fatalf("Start watcher: %v", err)
 	}
 
+	// Give the watcher time to register with the filesystem so that
+	// subsequent WORKFLOW.md updates are reliably observed.
+	time.Sleep(50 * time.Millisecond)
+
 	tracker := &candidateTrackerAdapter{
 		mockTrackerAdapter: &mockTrackerAdapter{},
 		fetchCandidatesFn: func(_ context.Context) ([]domain.Issue, error) {
