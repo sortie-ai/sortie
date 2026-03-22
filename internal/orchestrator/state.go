@@ -113,8 +113,9 @@ type RunningEntry struct {
 
 // RetryEntry holds the runtime state for a pending retry. The persisted
 // fields (IssueID, Identifier, Attempt, DueAtMS, Error) map to
-// persistence.RetryEntry. TimerHandle is runtime-only and is reconstructed
-// on startup from persisted due_at timestamps.
+// persistence.RetryEntry. TimerHandle, scheduledAt, and scheduledDelayMS
+// are runtime-only and are reconstructed on startup from persisted
+// due_at timestamps.
 type RetryEntry struct {
 	IssueID     string
 	Identifier  string
@@ -122,6 +123,19 @@ type RetryEntry struct {
 	DueAtMS     int64
 	Error       string
 	TimerHandle *time.Timer
+
+	// scheduledAt records time.Now() at the moment ScheduleRetry creates
+	// this entry. Because time.Time preserves the monotonic clock reading,
+	// staleness detection via time.Since is immune to wall-clock jumps.
+	// Zero when the entry was reconstructed from SQLite at startup.
+	scheduledAt time.Time
+
+	// scheduledDelayMS is the delay (in milliseconds) passed to
+	// ScheduleRetry. Together with scheduledAt it enables a monotonic
+	// staleness check: if time.Since(scheduledAt) < scheduledDelayMS the
+	// timer fired before its intended moment, indicating a stale callback
+	// from a replaced timer.
+	scheduledDelayMS int64
 }
 
 // State is the single authoritative runtime state owned by the orchestrator.

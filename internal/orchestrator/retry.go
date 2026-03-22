@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/sortie-ai/sortie/internal/domain"
@@ -60,10 +61,10 @@ type HandleRetryTimerParams struct {
 }
 
 // HandleRetryTimer processes a retry timer event for the given issue.
-// It implements the on_retry_timer algorithm from architecture Section 16.6:
-// pop the retry entry, re-fetch candidates, find the issue, check slot
-// availability, and either dispatch or reschedule/release. Must be called
-// from the orchestrator's single-writer event loop.
+// It removes the retry entry, re-fetches candidate issues, locates and
+// validates the issue, checks worker slot availability, and either
+// dispatches the issue, reschedules the retry, or releases the claim.
+// It must be called from the orchestrator's single-writer event loop.
 func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParams) {
 	log := params.Logger
 	if log == nil {
@@ -76,10 +77,10 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 	}
 
 	// Step 1: Pop the retry entry. If missing, the timer raced with a
-	// cancellation or a subsequent ScheduleRetry — no-op. If the entry's
-	// DueAtMS is in the future, a newer ScheduleRetry replaced the entry
-	// after this timer's goroutine was already enqueued; skip to let the
-	// replacement timer fire at the correct time.
+	// cancellation or a subsequent ScheduleRetry — no-op. If the entry
+	// was replaced by a newer ScheduleRetry after this timer's goroutine
+	// was already enqueued, skip to let the replacement timer fire at the
+	// correct time.
 	popped, exists := state.RetryAttempts[issueID]
 	if !exists {
 		log.Debug("retry timer for unknown entry",
@@ -87,7 +88,7 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 		)
 		return
 	}
-	if popped.DueAtMS > time.Now().UnixMilli() {
+	if isStaleRetryTimer(popped) {
 		log.Debug("stale retry timer, entry was rescheduled",
 			"issue_id", issueID,
 			"due_at_ms", popped.DueAtMS,
@@ -143,12 +144,17 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 		return
 	}
 
-	// Step 3b: Validate retry eligibility — required fields and blocker
-	// rule. FetchCandidateIssues confirms active state; these additional
-	// checks guard against issues that gained blockers or lost required
-	// data between retry schedule and timer fire.
+	// Step 3b: Validate retry eligibility — required fields, terminal
+	// state exclusion, and blocker rule. FetchCandidateIssues returns
+	// active-state issues, but a mis-configured active_states list or an
+	// adapter that returns terminal issues would bypass the normal
+	// ShouldDispatch terminal-state gate. The explicit check keeps the
+	// retry path consistent with the main dispatch path.
+	terminalSet := stateSet(params.TerminalStates)
+	_, isTerminal := terminalSet[strings.ToLower(issue.State)]
 	if issue.ID == "" || issue.Identifier == "" || issue.Title == "" || issue.State == "" ||
-		IsBlockedByNonTerminal(issue, params.TerminalStates) {
+		isTerminal ||
+		isBlockedByNonTerminalSet(issue, terminalSet) {
 		log.Info("issue no longer eligible for retry, releasing claim",
 			"issue_id", issueID,
 			"issue_identifier", popped.Identifier,
@@ -210,6 +216,21 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 			"error", err,
 		)
 	}
+}
+
+// isStaleRetryTimer reports whether the entry belongs to a newer
+// ScheduleRetry call than the timer that just fired. When scheduledAt is
+// set (entries created by [ScheduleRetry]), the check uses Go's monotonic
+// clock via time.Since, making it immune to wall-clock adjustments (NTP,
+// suspend/resume). When scheduledAt is zero (entries reconstructed from
+// SQLite at startup), it falls back to comparing DueAtMS against wall
+// time — acceptable because startup-reconstructed timers have no stale
+// predecessor to race with.
+func isStaleRetryTimer(entry *RetryEntry) bool {
+	if !entry.scheduledAt.IsZero() {
+		return time.Since(entry.scheduledAt) < time.Duration(entry.scheduledDelayMS)*time.Millisecond
+	}
+	return entry.DueAtMS > time.Now().UnixMilli()
 }
 
 // persistRetryEntry saves the current in-memory retry entry for issueID to

@@ -210,12 +210,14 @@ func ScheduleRetry(state *State, params ScheduleRetryParams, onFire func(issueID
 	})
 
 	state.RetryAttempts[params.IssueID] = &RetryEntry{
-		IssueID:     params.IssueID,
-		Identifier:  params.Identifier,
-		Attempt:     params.Attempt,
-		DueAtMS:     dueAtMS,
-		Error:       params.Error,
-		TimerHandle: timer,
+		IssueID:          params.IssueID,
+		Identifier:       params.Identifier,
+		Attempt:          params.Attempt,
+		DueAtMS:          dueAtMS,
+		Error:            params.Error,
+		TimerHandle:      timer,
+		scheduledAt:      time.Now(),
+		scheduledDelayMS: delayMS,
 	}
 }
 
