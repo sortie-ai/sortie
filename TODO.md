@@ -336,7 +336,7 @@ component. Uses mock adapters for tracker and agent - no real external calls.
       `no available orchestrator slots`. If found but no longer active, release claim.
       **Verify:** unit tests with mock tracker returning various states on retry.
 
-- [ ] 6.9 Implement reconciliation (Section 16.3): stall detection (elapsed >
+- [x] 6.9 Implement reconciliation (Section 16.3): stall detection (elapsed >
       stall_timeout_ms; skipped if stall_timeout_ms <= 0), tracker state refresh for all
       running issue IDs (terminal -> stop + cleanup workspace via 5.6, active -> update
       in-memory issue snapshot, other -> stop without cleanup). Handle refresh failure by

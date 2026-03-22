@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -905,4 +907,164 @@ func TestHandleWorkerExit_SessionIDPrefersResult(t *testing.T) {
 				store.sessionMetadata[0].SessionID, "entry-ses")
 		}
 	})
+}
+
+// --- Cancelled exit: retry claim preservation (Section 8.5) ---
+
+func TestHandleWorkerExit_CancelledWithPreScheduledRetryKeepsClaim(t *testing.T) {
+	t.Parallel()
+
+	store := &mockExitStore{}
+	state := exitState(t, "CAN-1", nil)
+	// Pre-schedule a retry (simulates reconciliation stall detection scheduling
+	// a retry before the cancelled worker exits).
+	state.RetryAttempts["CAN-1"] = &RetryEntry{
+		IssueID:    "CAN-1",
+		Identifier: "CAN-1-ident",
+		Attempt:    2,
+	}
+	params := defaultExitParams(t, store)
+
+	HandleWorkerExit(state, WorkerResult{
+		IssueID:      "CAN-1",
+		Identifier:   "CAN-1-ident",
+		ExitKind:     WorkerExitCancelled,
+		AgentAdapter: "mock",
+	}, params)
+
+	// Running entry removed.
+	if _, ok := state.Running["CAN-1"]; ok {
+		t.Error("Running entry not removed after cancelled exit")
+	}
+
+	// Claim preserved because a retry is pre-scheduled.
+	if _, ok := state.Claimed["CAN-1"]; !ok {
+		t.Error("claim released despite pre-scheduled retry")
+	}
+
+	// Retry entry preserved.
+	if _, ok := state.RetryAttempts["CAN-1"]; !ok {
+		t.Error("pre-scheduled retry entry removed")
+	}
+}
+
+func TestHandleWorkerExit_CancelledWithoutRetryReleasesClaim(t *testing.T) {
+	t.Parallel()
+
+	store := &mockExitStore{}
+	state := exitState(t, "CAN-2", nil)
+	// No pre-scheduled retry.
+	params := defaultExitParams(t, store)
+
+	HandleWorkerExit(state, WorkerResult{
+		IssueID:      "CAN-2",
+		Identifier:   "CAN-2-ident",
+		ExitKind:     WorkerExitCancelled,
+		AgentAdapter: "mock",
+	}, params)
+
+	// Running entry removed.
+	if _, ok := state.Running["CAN-2"]; ok {
+		t.Error("Running entry not removed after cancelled exit")
+	}
+
+	// Claim released — no pre-scheduled retry.
+	if _, ok := state.Claimed["CAN-2"]; ok {
+		t.Error("claim preserved without pre-scheduled retry")
+	}
+}
+
+// --- PendingCleanup: workspace removal on exit ---
+
+func TestHandleWorkerExit_PendingCleanupRemovesWorkspace(t *testing.T) {
+	t.Parallel()
+
+	store := &mockExitStore{}
+	state := exitState(t, "CLEAN-1", nil)
+	state.Running["CLEAN-1"].PendingCleanup = true
+	state.Running["CLEAN-1"].Identifier = "CLEAN-1-ident"
+
+	// Create a real workspace directory to verify removal.
+	wsRoot := t.TempDir()
+	wsDir := filepath.Join(wsRoot, "CLEAN-1-ident")
+	if err := os.MkdirAll(wsDir, 0o755); err != nil {
+		t.Fatalf("failed to create workspace dir: %v", err)
+	}
+
+	params := defaultExitParams(t, store)
+	params.WorkspaceRoot = wsRoot
+
+	HandleWorkerExit(state, WorkerResult{
+		IssueID:      "CLEAN-1",
+		Identifier:   "CLEAN-1-ident",
+		ExitKind:     WorkerExitCancelled,
+		AgentAdapter: "mock",
+	}, params)
+
+	// Workspace directory removed.
+	if _, err := os.Stat(wsDir); !os.IsNotExist(err) {
+		t.Errorf("workspace directory still exists after PendingCleanup exit")
+	}
+}
+
+func TestHandleWorkerExit_NoPendingCleanupSkipsWorkspace(t *testing.T) {
+	t.Parallel()
+
+	store := &mockExitStore{}
+	state := exitState(t, "NOCLEAN-1", nil)
+	// PendingCleanup is false (default).
+	state.Running["NOCLEAN-1"].Identifier = "NOCLEAN-1-ident"
+
+	wsRoot := t.TempDir()
+	wsDir := filepath.Join(wsRoot, "NOCLEAN-1-ident")
+	if err := os.MkdirAll(wsDir, 0o755); err != nil {
+		t.Fatalf("failed to create workspace dir: %v", err)
+	}
+
+	params := defaultExitParams(t, store)
+	params.WorkspaceRoot = wsRoot
+
+	HandleWorkerExit(state, WorkerResult{
+		IssueID:      "NOCLEAN-1",
+		Identifier:   "NOCLEAN-1-ident",
+		ExitKind:     WorkerExitNormal,
+		AgentAdapter: "mock",
+	}, params)
+
+	// Workspace directory still exists — no cleanup.
+	if _, err := os.Stat(wsDir); err != nil {
+		t.Errorf("workspace directory removed despite PendingCleanup=false: %v", err)
+	}
+}
+
+func TestHandleWorkerExit_CleanupFailureNonFatal(t *testing.T) {
+	t.Parallel()
+
+	store := &mockExitStore{}
+	state := exitState(t, "CFAIL-1", nil)
+	state.Running["CFAIL-1"].PendingCleanup = true
+	state.Running["CFAIL-1"].Identifier = "CFAIL-1-ident"
+
+	// WorkspaceRoot points to a non-existent directory.
+	// workspace.Cleanup returns nil when the directory doesn't exist (idempotent),
+	// so to test failure handling we use an empty identifier which causes
+	// a sanitization error — but since we set identifier in the entry,
+	// we instead set WorkspaceRoot to empty which will cause ComputePath
+	// to return an error.
+	params := defaultExitParams(t, store)
+	// Empty workspace root triggers a PathError from workspace.ComputePath.
+	params.WorkspaceRoot = ""
+
+	// Must not panic; cleanup error is logged but not fatal.
+	HandleWorkerExit(state, WorkerResult{
+		IssueID:      "CFAIL-1",
+		Identifier:   "CFAIL-1-ident",
+		ExitKind:     WorkerExitCancelled,
+		AgentAdapter: "mock",
+	}, params)
+
+	// In-memory state still updated despite cleanup failure.
+	if _, ok := state.Running["CFAIL-1"]; ok {
+		t.Error("Running entry not removed despite cleanup failure")
+	}
 }

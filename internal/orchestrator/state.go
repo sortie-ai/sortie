@@ -109,6 +109,13 @@ type RunningEntry struct {
 	// and by graceful shutdown to drain active sessions. Nil only in test
 	// fixtures that bypass [DispatchIssue].
 	CancelFunc context.CancelFunc
+
+	// PendingCleanup is set by reconciliation when the tracker reports a
+	// terminal state for this issue. [HandleWorkerExit] checks this flag
+	// after the worker goroutine exits and performs the actual workspace
+	// cleanup. This defers cleanup until the agent process has fully
+	// terminated, avoiding races with active file writes or hooks.
+	PendingCleanup bool
 }
 
 // RetryEntry holds the runtime state for a pending retry. The persisted

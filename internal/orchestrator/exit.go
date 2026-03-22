@@ -9,6 +9,7 @@ import (
 
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/persistence"
+	"github.com/sortie-ai/sortie/internal/workspace"
 )
 
 // defaultMaxRetryBackoffMS is the fallback cap for exponential backoff when
@@ -61,6 +62,17 @@ type HandleWorkerExitParams struct {
 
 	// Logger is the structured logger with orchestrator context.
 	Logger *slog.Logger
+
+	// WorkspaceRoot is the workspace root directory (from config).
+	// Used for deferred terminal workspace cleanup.
+	WorkspaceRoot string
+
+	// BeforeRemoveHook is the before_remove hook script (from config).
+	// Empty means no hook.
+	BeforeRemoveHook string
+
+	// HookTimeoutMS is the timeout for hook invocations (from config).
+	HookTimeoutMS int
 }
 
 // HandleWorkerExit processes a worker's terminal outcome. It removes the
@@ -87,6 +99,26 @@ func HandleWorkerExit(state *State, result WorkerResult, params HandleWorkerExit
 		return
 	}
 	delete(state.Running, result.IssueID)
+
+	// Deferred workspace cleanup: reconciliation marks terminal issues with
+	// PendingCleanup so cleanup runs only after the worker has fully exited.
+	if entry.PendingCleanup {
+		if err := workspace.Cleanup(ctx, workspace.CleanupParams{
+			Root:          params.WorkspaceRoot,
+			Identifier:    entry.Identifier,
+			IssueID:       result.IssueID,
+			Attempt:       0,
+			BeforeRemove:  params.BeforeRemoveHook,
+			HookTimeoutMS: params.HookTimeoutMS,
+			Logger:        log,
+		}); err != nil {
+			log.Warn("workspace cleanup failed",
+				slog.String("issue_id", result.IssueID),
+				slog.String("issue_identifier", entry.Identifier),
+				slog.Any("error", err),
+			)
+		}
+	}
 
 	now := time.Now().UTC()
 	if params.NowFunc != nil {
@@ -179,7 +211,12 @@ func HandleWorkerExit(state *State, result WorkerResult, params HandleWorkerExit
 		retryScheduled = true
 
 	case WorkerExitCancelled:
-		delete(state.Claimed, result.IssueID)
+		// Only release the claim if no retry has been pre-scheduled by
+		// reconciliation stall detection. A pre-scheduled retry needs the
+		// claim to prevent duplicate dispatch.
+		if _, hasRetry := state.RetryAttempts[result.IssueID]; !hasRetry {
+			delete(state.Claimed, result.IssueID)
+		}
 
 	default: // WorkerExitError and any unknown kind
 		classification := classifyWorkerError(result.Error)
