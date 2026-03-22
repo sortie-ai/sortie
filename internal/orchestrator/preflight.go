@@ -103,20 +103,22 @@ func ValidateDispatchConfig(params PreflightParams) PreflightResult {
 		})
 	}
 
-	// Check 3: tracker.api_key when required by the adapter.
-	if cfg.Tracker.Kind != "" && params.TrackerRegistry.Meta(cfg.Tracker.Kind).RequiresAPIKey {
-		if cfg.Tracker.APIKey == "" {
+	// Checks 3 & 4: tracker.api_key and tracker.project when required
+	// by the adapter. Fetch meta once to avoid duplicate lookups.
+	if cfg.Tracker.Kind != "" {
+		trackerMeta := params.TrackerRegistry.Meta(cfg.Tracker.Kind)
+
+		// Check 3: tracker.api_key when required by the adapter.
+		if trackerMeta.RequiresAPIKey && cfg.Tracker.APIKey == "" {
 			errs = append(errs, PreflightError{
 				Check: "tracker.api_key",
 				Message: "tracker.api_key is required for tracker kind " + strconv.Quote(cfg.Tracker.Kind) +
 					" (value may be empty after environment variable expansion)",
 			})
 		}
-	}
 
-	// Check 4: tracker.project when required by the adapter.
-	if cfg.Tracker.Kind != "" && params.TrackerRegistry.Meta(cfg.Tracker.Kind).RequiresProject {
-		if cfg.Tracker.Project == "" {
+		// Check 4: tracker.project when required by the adapter.
+		if trackerMeta.RequiresProject && cfg.Tracker.Project == "" {
 			errs = append(errs, PreflightError{
 				Check:   "tracker.project",
 				Message: "tracker.project is required for tracker kind " + strconv.Quote(cfg.Tracker.Kind),
