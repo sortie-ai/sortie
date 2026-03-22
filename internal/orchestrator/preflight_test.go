@@ -286,9 +286,8 @@ func TestValidateDispatchConfig(t *testing.T) {
 			wantChecks: []string{"agent_adapter"},
 		},
 		{
-			name: "multiple errors collected",
+			name: "multiple config errors collected",
 			modify: func(p *PreflightParams) {
-				p.ReloadWorkflow = func() error { return errors.New("broken") }
 				p.ConfigFunc = func() config.ServiceConfig {
 					return config.ServiceConfig{}
 				}
@@ -303,27 +302,16 @@ func TestValidateDispatchConfig(t *testing.T) {
 					metaFunc: func(string) registry.AdapterMeta { return registry.AdapterMeta{} },
 				}
 			},
-			wantChecks: []string{"workflow_load", "tracker.kind", "tracker.api_key", "agent_adapter"},
+			wantChecks: []string{"tracker.kind", "tracker.api_key", "agent_adapter"},
+			noChecks:   []string{"workflow_load"},
 		},
 		{
-			name: "workflow reload fails but config checks still run",
+			name: "workflow reload fails skips config checks",
 			modify: func(p *PreflightParams) {
 				p.ReloadWorkflow = func() error { return errors.New("file missing") }
-				p.ConfigFunc = func() config.ServiceConfig {
-					return config.ServiceConfig{
-						Tracker: config.TrackerConfig{
-							Kind:   "test-tracker",
-							APIKey: "secret",
-						},
-						Agent: config.AgentConfig{
-							Kind:    "test-agent",
-							Command: "/usr/bin/agent",
-						},
-					}
-				}
 			},
 			wantChecks: []string{"workflow_load"},
-			noChecks:   []string{"tracker.kind", "tracker.api_key", "tracker_adapter", "agent_adapter"},
+			noChecks:   []string{"tracker.kind", "tracker.api_key", "tracker_adapter", "agent_adapter", "agent.command", "tracker.project"},
 		},
 		{
 			name: "zero-value meta from plain Register means no project or command error",
