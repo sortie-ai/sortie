@@ -166,13 +166,37 @@ func (o *Orchestrator) Run(ctx context.Context) {
 	}
 }
 
-// handleTick executes a single poll-and-dispatch cycle: reconcile,
-// preflight, fetch, sort, dispatch. Called from the event loop on each
-// tick timer fire.
+// handleTick executes a single poll-and-dispatch cycle: preflight,
+// config read, reconcile, fetch, sort, dispatch. Called from the event
+// loop on each tick timer fire.
+//
+// Preflight runs first so the config reload (if any) is visible to all
+// subsequent steps. Reconciliation and state-field updates always run —
+// even when preflight fails — because Section 6.3 requires "keep
+// reconciliation active" and the last-known-good config is still valid
+// for those purposes. Dispatch is the only step gated on preflight
+// success.
 func (o *Orchestrator) handleTick(ctx context.Context) {
+	// Step 1: dispatch preflight validation. This triggers a
+	// defensive Reload() of the workflow file, ensuring the config
+	// snapshot returned by Config() below reflects the latest disk
+	// state.
+	validation := ValidateDispatchConfig(o.preflightParams)
+
+	// Step 2: read fresh config unconditionally. On reload failure
+	// the workflow manager retains last-known-good config, so
+	// Config() always returns a usable snapshot.
 	cfg := o.workflowManager.Config()
 
-	// Step 1: reconcile running issues.
+	// Step 3: apply config to state (unconditional — not gated on
+	// preflight success).
+	o.state.PollIntervalMS = cfg.Polling.IntervalMS
+	o.state.MaxConcurrentAgents = cfg.Agent.MaxConcurrentAgents
+	o.state.MaxConcurrentByState = cfg.Agent.MaxConcurrentByState
+
+	// Step 4: reconcile running issues with fresh config. Runs
+	// unconditionally so in-flight workers are monitored even when
+	// dispatch is skipped (Section 6.3).
 	ReconcileRunningIssues(o.state, ReconcileParams{
 		TrackerAdapter:    o.trackerAdapter,
 		ActiveStates:      cfg.Tracker.ActiveStates,
@@ -185,8 +209,8 @@ func (o *Orchestrator) handleTick(ctx context.Context) {
 		Logger:            o.logger,
 	})
 
-	// Step 2: dispatch preflight validation.
-	validation := ValidateDispatchConfig(o.preflightParams)
+	// Step 5: if preflight failed, skip dispatch but still notify
+	// observers so the UI reflects the reconciliation outcome.
 	if !validation.OK() {
 		o.logger.Error("dispatch preflight failed",
 			slog.String("error", validation.Error()),
@@ -195,13 +219,7 @@ func (o *Orchestrator) handleTick(ctx context.Context) {
 		return
 	}
 
-	// Step 3: re-read config after successful preflight reload.
-	cfg = o.workflowManager.Config()
-	o.state.PollIntervalMS = cfg.Polling.IntervalMS
-	o.state.MaxConcurrentAgents = cfg.Agent.MaxConcurrentAgents
-	o.state.MaxConcurrentByState = cfg.Agent.MaxConcurrentByState
-
-	// Step 4: fetch candidate issues.
+	// Step 6: fetch candidate issues.
 	issues, err := o.trackerAdapter.FetchCandidateIssues(ctx)
 	if err != nil {
 		o.logger.Error("failed to fetch candidate issues",
@@ -211,14 +229,14 @@ func (o *Orchestrator) handleTick(ctx context.Context) {
 		return
 	}
 
-	// Step 5: sort for dispatch.
+	// Step 7: sort for dispatch.
 	sorted := SortForDispatch(issues)
 
-	// Step 6: pre-build state sets once for the dispatch loop.
+	// Step 8: pre-build state sets once for the dispatch loop.
 	activeSet := stateSet(cfg.Tracker.ActiveStates)
 	terminalSet := stateSet(cfg.Tracker.TerminalStates)
 
-	// Step 7: dispatch loop. Break only when global capacity is
+	// Step 9: dispatch loop. Break only when global capacity is
 	// exhausted; skip individual issues whose per-state limit is full
 	// so issues in other states can still be dispatched.
 	for _, issue := range sorted {
