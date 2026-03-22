@@ -108,7 +108,7 @@ func ShouldDispatch(issue domain.Issue, state *State, activeStates, terminalStat
 	// state. Rules 2 and 3 guarantee that precondition: by this point the
 	// issue's state is active (Rule 2) and the issue is not in the Running
 	// map (Rule 3). Any non-terminal blocker blocks dispatch.
-	if IsBlockedByNonTerminal(issue, terminalStates) {
+	if isBlockedByNonTerminalSet(issue, terminalSet) {
 		return false
 	}
 
@@ -121,7 +121,13 @@ func ShouldDispatch(issue domain.Issue, state *State, activeStates, terminalStat
 // [ShouldDispatch] for the normal dispatch path and by [HandleRetryTimer]
 // for the retry eligibility check.
 func IsBlockedByNonTerminal(issue domain.Issue, terminalStates []string) bool {
-	terminalSet := stateSet(terminalStates)
+	return isBlockedByNonTerminalSet(issue, stateSet(terminalStates))
+}
+
+// isBlockedByNonTerminalSet is the pre-built-set variant of
+// [IsBlockedByNonTerminal]. [ShouldDispatch] calls this directly to
+// avoid rebuilding the terminal set that it already constructed.
+func isBlockedByNonTerminalSet(issue domain.Issue, terminalSet map[string]struct{}) bool {
 	for _, blocker := range issue.BlockedBy {
 		if blocker.State == "" {
 			return true
