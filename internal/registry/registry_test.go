@@ -202,6 +202,130 @@ func TestKinds(t *testing.T) {
 	}
 }
 
+func TestRegisterWithMeta_AndMeta(t *testing.T) {
+	t.Parallel()
+
+	t.Run("stores and retrieves metadata", func(t *testing.T) {
+		t.Parallel()
+
+		r := newTestRegistry()
+		r.RegisterWithMeta("alpha", dummyConstructor(), AdapterMeta{
+			RequiresProject: true,
+			RequiresCommand: true,
+		})
+
+		got := r.Meta("alpha")
+		if !got.RequiresProject {
+			t.Errorf("Meta(%q).RequiresProject = false, want true", "alpha")
+		}
+		if !got.RequiresCommand {
+			t.Errorf("Meta(%q).RequiresCommand = false, want true", "alpha")
+		}
+	})
+
+	t.Run("Get returns constructor from RegisterWithMeta", func(t *testing.T) {
+		t.Parallel()
+
+		r := newTestRegistry()
+		r.RegisterWithMeta("beta", dummyConstructor(), AdapterMeta{RequiresProject: true})
+
+		got, err := r.Get("beta")
+		if err != nil {
+			t.Fatalf("Get(%q) unexpected error: %v", "beta", err)
+		}
+		if got() != "marker" {
+			t.Errorf("Get(%q)() = %q, want %q", "beta", got(), "marker")
+		}
+	})
+
+	t.Run("plain Register returns zero-value meta", func(t *testing.T) {
+		t.Parallel()
+
+		r := newTestRegistry()
+		r.Register("gamma", dummyConstructor())
+
+		got := r.Meta("gamma")
+		if got.RequiresProject {
+			t.Errorf("Meta(%q).RequiresProject = true, want false for plain Register", "gamma")
+		}
+		if got.RequiresCommand {
+			t.Errorf("Meta(%q).RequiresCommand = true, want false for plain Register", "gamma")
+		}
+	})
+
+	t.Run("unregistered kind returns zero-value meta", func(t *testing.T) {
+		t.Parallel()
+
+		r := newTestRegistry()
+
+		got := r.Meta("nonexistent")
+		if got.RequiresProject {
+			t.Errorf("Meta(%q).RequiresProject = true, want false for unregistered kind", "nonexistent")
+		}
+		if got.RequiresCommand {
+			t.Errorf("Meta(%q).RequiresCommand = true, want false for unregistered kind", "nonexistent")
+		}
+	})
+}
+
+func TestRegisterWithMeta_Panics(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		kind    string
+		setup   func(*Registry[testConstructor])
+		wantMsg string
+	}{
+		{
+			name:    "empty kind",
+			kind:    "",
+			setup:   nil,
+			wantMsg: "empty",
+		},
+		{
+			name: "duplicate kind",
+			kind: "dup",
+			setup: func(r *Registry[testConstructor]) {
+				r.RegisterWithMeta("dup", dummyConstructor(), AdapterMeta{})
+			},
+			wantMsg: "duplicate",
+		},
+		{
+			name: "duplicate kind across Register and RegisterWithMeta",
+			kind: "dup",
+			setup: func(r *Registry[testConstructor]) {
+				r.Register("dup", dummyConstructor())
+			},
+			wantMsg: "duplicate",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			r := newTestRegistry()
+			if tt.setup != nil {
+				tt.setup(r)
+			}
+
+			defer func() {
+				v := recover()
+				if v == nil {
+					t.Fatalf("RegisterWithMeta(%q) did not panic", tt.kind)
+				}
+				msg := fmt.Sprint(v)
+				if !strings.Contains(msg, tt.wantMsg) {
+					t.Errorf("RegisterWithMeta(%q) panic = %q, want it to contain %q", tt.kind, msg, tt.wantMsg)
+				}
+			}()
+
+			r.RegisterWithMeta(tt.kind, dummyConstructor(), AdapterMeta{RequiresProject: true})
+		})
+	}
+}
+
 func TestRegistryError_Error(t *testing.T) {
 	t.Parallel()
 

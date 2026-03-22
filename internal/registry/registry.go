@@ -37,6 +37,19 @@ type AgentConstructor func(config map[string]any) (domain.AgentAdapter, error)
 // the orchestrator resolves adapters via [Registry.Get] at runtime.
 var Agents = NewRegistry[AgentConstructor]("agent")
 
+// AdapterMeta holds optional adapter-declared properties queried by
+// the orchestrator at preflight time. Zero value means no special
+// requirements.
+type AdapterMeta struct {
+	// RequiresProject indicates the tracker adapter requires a
+	// non-empty tracker.project config value.
+	RequiresProject bool
+
+	// RequiresCommand indicates the agent adapter requires a
+	// non-empty agent.command config value.
+	RequiresCommand bool
+}
+
 // Registry is a typed adapter registry mapping kind strings to
 // constructor functions. Safe for concurrent use; registrations are
 // expected during init and lookups happen at runtime.
@@ -47,6 +60,7 @@ type Registry[T any] struct {
 	name     string
 	mu       sync.RWMutex
 	adapters map[string]T
+	meta     map[string]AdapterMeta
 }
 
 // NewRegistry creates an empty [Registry] with the given dimension
@@ -56,6 +70,7 @@ func NewRegistry[T any](name string) *Registry[T] {
 	return &Registry[T]{
 		name:     name,
 		adapters: make(map[string]T),
+		meta:     make(map[string]AdapterMeta),
 	}
 }
 
@@ -74,6 +89,31 @@ func (r *Registry[T]) Register(kind string, constructor T) {
 		panic(fmt.Sprintf("registry: duplicate registration for kind %q", kind))
 	}
 	r.adapters[kind] = constructor
+}
+
+// RegisterWithMeta associates a kind string with a constructor and
+// declared metadata. Panics on the same conditions as [Register].
+func (r *Registry[T]) RegisterWithMeta(kind string, constructor T, meta AdapterMeta) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if kind == "" {
+		panic("registry: kind must not be empty")
+	}
+	if _, exists := r.adapters[kind]; exists {
+		panic(fmt.Sprintf("registry: duplicate registration for kind %q", kind))
+	}
+	r.adapters[kind] = constructor
+	r.meta[kind] = meta
+}
+
+// Meta returns the metadata for the given kind. Returns zero-value
+// [AdapterMeta] if the kind is not registered or was registered
+// without metadata.
+func (r *Registry[T]) Meta(kind string) AdapterMeta {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.meta[kind]
 }
 
 // Get returns the constructor for the given kind, or a
