@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"log/slog"
+	"time"
 
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/persistence"
@@ -75,11 +76,21 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 	}
 
 	// Step 1: Pop the retry entry. If missing, the timer raced with a
-	// cancellation or a subsequent ScheduleRetry — no-op.
+	// cancellation or a subsequent ScheduleRetry — no-op. If the entry's
+	// DueAtMS is in the future, a newer ScheduleRetry replaced the entry
+	// after this timer's goroutine was already enqueued; skip to let the
+	// replacement timer fire at the correct time.
 	popped, exists := state.RetryAttempts[issueID]
 	if !exists {
 		log.Debug("retry timer for unknown entry",
 			"issue_id", issueID,
+		)
+		return
+	}
+	if popped.DueAtMS > time.Now().UnixMilli() {
+		log.Debug("stale retry timer, entry was rescheduled",
+			"issue_id", issueID,
+			"due_at_ms", popped.DueAtMS,
 		)
 		return
 	}
