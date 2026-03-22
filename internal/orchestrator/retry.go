@@ -84,14 +84,14 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 	popped, exists := state.RetryAttempts[issueID]
 	if !exists {
 		log.Debug("retry timer for unknown entry",
-			"issue_id", issueID,
+			slog.String("issue_id", issueID),
 		)
 		return
 	}
 	if isStaleRetryTimer(popped) {
 		log.Debug("stale retry timer, entry was rescheduled",
-			"issue_id", issueID,
-			"due_at_ms", popped.DueAtMS,
+			slog.String("issue_id", issueID),
+			slog.Int64("due_at_ms", popped.DueAtMS),
 		)
 		return
 	}
@@ -107,11 +107,11 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 		delayMS := computeBackoffDelay(nextAttempt, params.MaxRetryBackoffMS)
 
 		log.Error("retry poll failed, rescheduling",
-			"issue_id", issueID,
-			"issue_identifier", popped.Identifier,
-			"attempt", nextAttempt,
-			"delay_ms", delayMS,
-			"error", err,
+			slog.String("issue_id", issueID),
+			slog.String("issue_identifier", popped.Identifier),
+			slog.Int("attempt", nextAttempt),
+			slog.Int64("delay_ms", delayMS),
+			slog.Any("error", err),
 		)
 
 		ScheduleRetry(state, ScheduleRetryParams{
@@ -130,15 +130,15 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 	issue, found := findIssueByID(candidates, issueID)
 	if !found {
 		log.Info("issue no longer active, releasing claim",
-			"issue_id", issueID,
-			"issue_identifier", popped.Identifier,
+			slog.String("issue_id", issueID),
+			slog.String("issue_identifier", popped.Identifier),
 		)
 		delete(state.Claimed, issueID)
 
 		if err := params.Store.DeleteRetryEntry(ctx, issueID); err != nil {
 			log.Error("failed to delete retry entry from store",
-				"issue_id", issueID,
-				"error", err,
+				slog.String("issue_id", issueID),
+				slog.Any("error", err),
 			)
 		}
 		return
@@ -156,15 +156,15 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 		isTerminal ||
 		isBlockedByNonTerminalSet(issue, terminalSet) {
 		log.Info("issue no longer eligible for retry, releasing claim",
-			"issue_id", issueID,
-			"issue_identifier", popped.Identifier,
+			slog.String("issue_id", issueID),
+			slog.String("issue_identifier", popped.Identifier),
 		)
 		delete(state.Claimed, issueID)
 
 		if err := params.Store.DeleteRetryEntry(ctx, issueID); err != nil {
 			log.Error("failed to delete retry entry from store",
-				"issue_id", issueID,
-				"error", err,
+				slog.String("issue_id", issueID),
+				slog.Any("error", err),
 			)
 		}
 		return
@@ -176,11 +176,11 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 		delayMS := computeBackoffDelay(nextAttempt, params.MaxRetryBackoffMS)
 
 		log.Warn("no available orchestrator slots, rescheduling retry",
-			"issue_id", issueID,
-			"issue_identifier", popped.Identifier,
-			"issue_state", issue.State,
-			"attempt", nextAttempt,
-			"delay_ms", delayMS,
+			slog.String("issue_id", issueID),
+			slog.String("issue_identifier", popped.Identifier),
+			slog.String("issue_state", issue.State),
+			slog.Int("attempt", nextAttempt),
+			slog.Int64("delay_ms", delayMS),
 		)
 
 		ScheduleRetry(state, ScheduleRetryParams{
@@ -202,9 +202,9 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 	DispatchIssue(ctx, state, issue, &attempt, params.WorkerFn)
 
 	log.Info("retried issue dispatched",
-		"issue_id", issueID,
-		"issue_identifier", issue.Identifier,
-		"attempt", attempt,
+		slog.String("issue_id", issueID),
+		slog.String("issue_identifier", issue.Identifier),
+		slog.Int("attempt", attempt),
 	)
 
 	// Defense-in-depth: delete the SQLite row persisted by worker exit.
@@ -212,8 +212,8 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 	// but the persisted row must also be cleaned up.
 	if err := params.Store.DeleteRetryEntry(ctx, issueID); err != nil {
 		log.Error("failed to delete retry entry from store after dispatch",
-			"issue_id", issueID,
-			"error", err,
+			slog.String("issue_id", issueID),
+			slog.Any("error", err),
 		)
 	}
 }
@@ -249,9 +249,9 @@ func persistRetryEntry(ctx context.Context, log *slog.Logger, store RetryTimerSt
 	}
 	if err := store.SaveRetryEntry(ctx, pEntry); err != nil {
 		log.Error("failed to persist retry entry",
-			"issue_id", issueID,
-			"issue_identifier", retryEntry.Identifier,
-			"error", err,
+			slog.String("issue_id", issueID),
+			slog.String("issue_identifier", retryEntry.Identifier),
+			slog.Any("error", err),
 		)
 	}
 }

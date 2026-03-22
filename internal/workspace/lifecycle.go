@@ -95,7 +95,7 @@ func Prepare(ctx context.Context, params PrepareParams) (PrepareResult, error) {
 	env := HookEnv(params.IssueID, params.Identifier, result.Path, params.Attempt)
 
 	if result.CreatedNow && params.AfterCreate != "" {
-		logger.InfoContext(ctx, "running hook", "hook", "after_create", "workspace", result.Path)
+		logger.InfoContext(ctx, "running hook", slog.String("hook", "after_create"), slog.String("workspace", result.Path))
 		_, hookErr := RunHook(ctx, HookParams{
 			Script:    params.AfterCreate,
 			Dir:       result.Path,
@@ -104,17 +104,17 @@ func Prepare(ctx context.Context, params PrepareParams) (PrepareResult, error) {
 		})
 		if hookErr != nil {
 			logger.WarnContext(ctx, "after_create hook failed, rolling back workspace",
-				"workspace", result.Path, "error", hookErr)
+				slog.String("workspace", result.Path), slog.Any("error", hookErr))
 			if rmErr := os.RemoveAll(result.Path); rmErr != nil {
 				logger.ErrorContext(ctx, "workspace rollback failed after after_create hook error",
-					"workspace", result.Path, "rollback_error", rmErr)
+					slog.String("workspace", result.Path), slog.Any("rollback_error", rmErr))
 			}
 			return PrepareResult{}, hookErr
 		}
 	}
 
 	if params.BeforeRun != "" {
-		logger.InfoContext(ctx, "running hook", "hook", "before_run", "workspace", result.Path)
+		logger.InfoContext(ctx, "running hook", slog.String("hook", "before_run"), slog.String("workspace", result.Path))
 		_, hookErr := RunHook(ctx, HookParams{
 			Script:    params.BeforeRun,
 			Dir:       result.Path,
@@ -122,7 +122,7 @@ func Prepare(ctx context.Context, params PrepareParams) (PrepareResult, error) {
 			TimeoutMS: params.HookTimeoutMS,
 		})
 		if hookErr != nil {
-			logger.WarnContext(ctx, "before_run hook failed", "workspace", result.Path, "error", hookErr)
+			logger.WarnContext(ctx, "before_run hook failed", slog.String("workspace", result.Path), slog.Any("error", hookErr))
 			return PrepareResult{}, hookErr
 		}
 	}
@@ -174,7 +174,7 @@ func Finish(ctx context.Context, params FinishParams) {
 	detachedCtx := context.WithoutCancel(ctx)
 	env := HookEnv(params.IssueID, params.Identifier, params.Path, params.Attempt)
 
-	logger.InfoContext(ctx, "running hook", "hook", "after_run", "workspace", params.Path)
+	logger.InfoContext(ctx, "running hook", slog.String("hook", "after_run"), slog.String("workspace", params.Path))
 	_, hookErr := RunHook(detachedCtx, HookParams{
 		Script:    params.AfterRun,
 		Dir:       params.Path,
@@ -182,7 +182,7 @@ func Finish(ctx context.Context, params FinishParams) {
 		TimeoutMS: params.HookTimeoutMS,
 	})
 	if hookErr != nil {
-		logger.WarnContext(ctx, "after_run hook failed", "workspace", params.Path, "error", hookErr)
+		logger.WarnContext(ctx, "after_run hook failed", slog.String("workspace", params.Path), slog.Any("error", hookErr))
 	}
 }
 
@@ -240,7 +240,7 @@ func Cleanup(ctx context.Context, params CleanupParams) error {
 	env := HookEnv(params.IssueID, params.Identifier, pathResult.Path, params.Attempt)
 
 	if params.BeforeRemove != "" {
-		logger.InfoContext(ctx, "running hook", "hook", "before_remove", "workspace", pathResult.Path)
+		logger.InfoContext(ctx, "running hook", slog.String("hook", "before_remove"), slog.String("workspace", pathResult.Path))
 		_, hookErr := RunHook(detachedCtx, HookParams{
 			Script:    params.BeforeRemove,
 			Dir:       pathResult.Path,
@@ -248,7 +248,7 @@ func Cleanup(ctx context.Context, params CleanupParams) error {
 			TimeoutMS: params.HookTimeoutMS,
 		})
 		if hookErr != nil {
-			logger.WarnContext(ctx, "before_remove hook failed", "workspace", pathResult.Path, "error", hookErr)
+			logger.WarnContext(ctx, "before_remove hook failed", slog.String("workspace", pathResult.Path), slog.Any("error", hookErr))
 		}
 	}
 
@@ -336,11 +336,11 @@ func CleanupTerminal(ctx context.Context, params CleanupTerminalParams) CleanupT
 		})
 		if err != nil {
 			logger.WarnContext(ctx, "workspace cleanup failed",
-				"identifier", identifier, "error", err)
+				slog.String("identifier", identifier), slog.Any("error", err))
 			result.Errors[identifier] = err
 		} else {
 			logger.InfoContext(ctx, "workspace cleaned",
-				"identifier", identifier)
+				slog.String("identifier", identifier))
 			result.Removed = append(result.Removed, identifier)
 		}
 	}

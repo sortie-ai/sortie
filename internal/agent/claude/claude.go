@@ -22,6 +22,7 @@ import (
 	"time"
 
 	"github.com/sortie-ai/sortie/internal/domain"
+	"github.com/sortie-ai/sortie/internal/logging"
 	"github.com/sortie-ai/sortie/internal/registry"
 )
 
@@ -150,7 +151,7 @@ func (a *ClaudeCodeAdapter) RunTurn(ctx context.Context, session domain.Session,
 	}
 
 	state := session.Internal.(*sessionState)
-	logger := slog.Default().With("component", "claude-adapter", "session_id", state.claudeSessionID)
+	logger := logging.WithSession(slog.Default().With(slog.String("component", "claude-adapter")), state.claudeSessionID)
 
 	args := buildArgs(state, params.Prompt, a.passthrough)
 
@@ -503,7 +504,7 @@ func gracefulKill(state *sessionState) {
 func drainStderr(r io.Reader, logger *slog.Logger) {
 	scanner := bufio.NewScanner(r)
 	for scanner.Scan() {
-		logger.Debug("agent stderr", "line", scanner.Text())
+		logger.Debug("agent stderr", slog.String("line", scanner.Text()))
 	}
 }
 

@@ -15,6 +15,12 @@ linters:
     - misspell
     - unconvert
     - unparam
+    - sloglint
+  settings:
+    sloglint:
+      attr-only: true
+      static-msg: true
+      key-naming-case: snake
 
 formatters:
   enable:

@@ -194,7 +194,7 @@ func (m *Manager) watch(ctx context.Context) {
 			if !ok {
 				return
 			}
-			m.logger.Error("workflow watcher error", "error", err)
+			m.logger.Error("workflow watcher error", slog.Any("error", err))
 		case <-timer.C:
 			m.reload()
 		}
@@ -204,7 +204,7 @@ func (m *Manager) watch(ctx context.Context) {
 func (m *Manager) reload() {
 	cfg, tmpl, err := m.loadPipeline()
 	if err != nil {
-		m.logger.Error("workflow reload failed", "error", err, "path", m.path)
+		m.logger.Error("workflow reload failed", slog.Any("error", err), slog.String("path", m.path))
 		m.mu.Lock()
 		m.lastLoadErr = err
 		m.mu.Unlock()
@@ -216,7 +216,7 @@ func (m *Manager) reload() {
 	m.currentPrompt = tmpl
 	m.lastLoadErr = nil
 	m.mu.Unlock()
-	m.logger.Info("workflow reloaded", "path", m.path)
+	m.logger.Info("workflow reloaded", slog.String("path", m.path))
 }
 
 // loadPipeline runs the full Load → NewServiceConfig → Parse pipeline
