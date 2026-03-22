@@ -27,7 +27,9 @@ import (
 )
 
 func init() {
-	registry.Agents.Register("claude-code", NewClaudeCodeAdapter)
+	registry.Agents.RegisterWithMeta("claude-code", NewClaudeCodeAdapter, registry.AdapterMeta{
+		RequiresCommand: true,
+	})
 }
 
 // Compile-time interface satisfaction check.

@@ -18,7 +18,9 @@ import (
 )
 
 func init() {
-	registry.Trackers.Register("jira", NewJiraAdapter)
+	registry.Trackers.RegisterWithMeta("jira", NewJiraAdapter, registry.AdapterMeta{
+		RequiresProject: true,
+	})
 }
 
 // Compile-time interface satisfaction check.
