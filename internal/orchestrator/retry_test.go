@@ -563,6 +563,46 @@ func TestHandleRetryTimer(t *testing.T) {
 				}
 			},
 		},
+		{
+			name:    "terminal state releases claim",
+			issueID: "ISS-6",
+			state: func(t *testing.T, id string) *State {
+				t.Helper()
+				return retryState(t, id, id, 1)
+			},
+			store: func() *mockRetryStore { return &mockRetryStore{} },
+			tracker: func(id string) *mockRetryTracker {
+				// Issue is in terminal state "Done" — rejected by Step 3b.
+				return &mockRetryTracker{
+					candidates: []domain.Issue{
+						candidateIssue(id, id, "Done"),
+					},
+				}
+			},
+			check: func(t *testing.T, id string, state *State, store *mockRetryStore, _ *mockRetryTracker, _ bool) {
+				t.Helper()
+				// Claim released.
+				if _, claimed := state.Claimed[id]; claimed {
+					t.Errorf("Claimed[%s] still present, want released due to terminal state", id)
+				}
+				// Retry entry removed.
+				if _, ok := state.RetryAttempts[id]; ok {
+					t.Errorf("RetryAttempts[%s] still present, want removed", id)
+				}
+				// Not dispatched.
+				if _, running := state.Running[id]; running {
+					t.Errorf("Running[%s] present, want absent (terminal issue should not dispatch)", id)
+				}
+				// DeleteRetryEntry called.
+				if len(store.deletedIssueID) != 1 || store.deletedIssueID[0] != id {
+					t.Errorf("DeleteRetryEntry calls = %v, want [%s]", store.deletedIssueID, id)
+				}
+				// No save (no reschedule).
+				if len(store.savedEntries) != 0 {
+					t.Errorf("SaveRetryEntry call count = %d, want 0", len(store.savedEntries))
+				}
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -642,6 +682,68 @@ func TestFindIssueByID(t *testing.T) {
 			}
 			if found && got.ID != tt.wantID {
 				t.Errorf("findIssueByID(%v, %q).ID = %q, want %q", tt.issues, tt.id, got.ID, tt.wantID)
+			}
+		})
+	}
+}
+
+func TestIsStaleRetryTimer(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		entry *RetryEntry
+		want  bool
+	}{
+		{
+			name: "monotonic: freshly scheduled with long delay is stale",
+			entry: &RetryEntry{
+				scheduledAt:      time.Now(),
+				scheduledDelayMS: 60_000, // 60s delay, just scheduled
+			},
+			want: true,
+		},
+		{
+			name: "monotonic: delay already elapsed is not stale",
+			entry: &RetryEntry{
+				scheduledAt:      time.Now().Add(-2 * time.Second),
+				scheduledDelayMS: 1000, // 1s delay, scheduled 2s ago
+			},
+			want: false,
+		},
+		{
+			name: "monotonic: zero delay just scheduled is not stale",
+			entry: &RetryEntry{
+				scheduledAt:      time.Now().Add(-time.Millisecond),
+				scheduledDelayMS: 0,
+			},
+			want: false,
+		},
+		{
+			name: "wall-clock fallback: future DueAtMS is stale",
+			entry: &RetryEntry{
+				// scheduledAt is zero — startup-reconstructed entry.
+				DueAtMS: time.Now().UnixMilli() + 3_600_000,
+			},
+			want: true,
+		},
+		{
+			name: "wall-clock fallback: past DueAtMS is not stale",
+			entry: &RetryEntry{
+				// scheduledAt is zero — startup-reconstructed entry.
+				DueAtMS: time.Now().UnixMilli() - 1000,
+			},
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := isStaleRetryTimer(tt.entry)
+			if got != tt.want {
+				t.Errorf("isStaleRetryTimer(%+v) = %v, want %v", tt.entry, got, tt.want)
 			}
 		})
 	}
