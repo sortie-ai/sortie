@@ -5,6 +5,8 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -15,25 +17,58 @@ import (
 	"github.com/sortie-ai/sortie/internal/persistence"
 	"github.com/sortie-ai/sortie/internal/prompt"
 	"github.com/sortie-ai/sortie/internal/registry"
+	"github.com/sortie-ai/sortie/internal/workflow"
 )
 
 // --- stub types for orchestrator tests ---
 
 // stubWorkflowManager implements [WorkflowManager] with configurable returns.
+// All methods are safe for concurrent use.
 type stubWorkflowManager struct {
+	mu       sync.RWMutex
 	config   config.ServiceConfig
 	template *prompt.Template
 	reloadFn func() error
 }
 
-func (s *stubWorkflowManager) Config() config.ServiceConfig     { return s.config }
-func (s *stubWorkflowManager) PromptTemplate() *prompt.Template { return s.template }
+func (s *stubWorkflowManager) Config() config.ServiceConfig {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.config
+}
+
+func (s *stubWorkflowManager) PromptTemplate() *prompt.Template {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.template
+}
+
 func (s *stubWorkflowManager) Reload() error {
-	if s.reloadFn != nil {
-		return s.reloadFn()
+	s.mu.RLock()
+	fn := s.reloadFn
+	s.mu.RUnlock()
+	if fn != nil {
+		return fn()
 	}
 	return nil
 }
+
+func (s *stubWorkflowManager) setConfig(cfg config.ServiceConfig) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.config = cfg
+}
+
+func (s *stubWorkflowManager) setTemplate(tmpl *prompt.Template) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.template = tmpl
+}
+
+// observerFunc adapts a plain function to the [Observer] interface.
+type observerFunc func()
+
+func (f observerFunc) OnStateChange() { f() }
 
 // stubStore implements [OrchestratorStore] with call tracking.
 type stubStore struct {
@@ -773,7 +808,7 @@ func TestOrchestratorDynamicConfig(t *testing.T) {
 	// Change config and tick again.
 	cfg.Agent.MaxConcurrentAgents = 5
 	cfg.Polling.IntervalMS = 2000
-	wm.config = cfg
+	wm.setConfig(cfg)
 
 	o.handleTick(ctx)
 	if state.MaxConcurrentAgents != 5 {
@@ -1317,4 +1352,776 @@ func TestDispatchLoopPerStateExhaustion(t *testing.T) {
 	if firstThreeIDs["ip-3"] && !firstThreeIDs["td-1"] {
 		t.Error("ip-3 was dispatched before td-1 — per-state limit was not enforced")
 	}
+}
+
+// --- TestOrchestratorDynamicConfigReload ---
+
+// TestOrchestratorDynamicConfigReload verifies that handleTick propagates
+// config changes from the WorkflowManager to observable orchestrator state
+// and behaviour, covering the six scenarios specified in Plan 6.13 Phase 2.
+func TestOrchestratorDynamicConfigReload(t *testing.T) {
+	t.Parallel()
+
+	// Test Case A: polling interval change propagates to state.
+	t.Run("polling_interval_change", func(t *testing.T) {
+		t.Parallel()
+
+		cfg := lifecycleConfig(t.TempDir())
+		cfg.Polling.IntervalMS = 60000
+
+		wm := &stubWorkflowManager{config: cfg}
+		regs := passingPreflightRegistries()
+		obs := &stubObserver{}
+		state := NewState(60000, cfg.Agent.MaxConcurrentAgents, nil, AgentTotals{})
+
+		tracker := &candidateTrackerAdapter{
+			mockTrackerAdapter: &mockTrackerAdapter{},
+			fetchCandidatesFn: func(_ context.Context) ([]domain.Issue, error) {
+				return nil, nil
+			},
+		}
+
+		o := NewOrchestrator(OrchestratorParams{
+			State:           state,
+			Logger:          discardLogger(),
+			TrackerAdapter:  tracker,
+			AgentAdapter:    &mockAgentAdapter{},
+			WorkflowManager: wm,
+			Store:           &stubStore{},
+			PreflightParams: PreflightParams{
+				ReloadWorkflow:  func() error { return nil },
+				ConfigFunc:      wm.Config,
+				TrackerRegistry: regs.TrackerRegistry,
+				AgentRegistry:   regs.AgentRegistry,
+			},
+			Observers: []Observer{obs},
+		})
+
+		o.handleTick(context.Background())
+
+		if state.PollIntervalMS != 60000 {
+			t.Fatalf("after first tick PollIntervalMS = %d, want 60000", state.PollIntervalMS)
+		}
+
+		cfg.Polling.IntervalMS = 100
+		wm.setConfig(cfg)
+
+		o.handleTick(context.Background())
+
+		if state.PollIntervalMS != 100 {
+			t.Errorf("after second tick PollIntervalMS = %d, want 100", state.PollIntervalMS)
+		}
+		if got := obs.calls.Load(); got != 2 {
+			t.Errorf("observer calls = %d, want 2", got)
+		}
+	})
+
+	// Test Case B: concurrency limit change affects dispatch capacity.
+	t.Run("concurrency_limit_change", func(t *testing.T) {
+		t.Parallel()
+
+		tmpDir := t.TempDir()
+		cfg := lifecycleConfig(tmpDir)
+		cfg.Agent.MaxConcurrentAgents = 1
+		cfg.Agent.MaxTurns = 1
+		tmpl := mustParseTemplate(t, "do {{ .issue.identifier }}")
+
+		issues := []domain.Issue{
+			{ID: "c-1", Identifier: "C-1", Title: "First", State: "To Do"},
+			{ID: "c-2", Identifier: "C-2", Title: "Second", State: "To Do"},
+			{ID: "c-3", Identifier: "C-3", Title: "Third", State: "To Do"},
+		}
+
+		tracker := &candidateTrackerAdapter{
+			mockTrackerAdapter: &mockTrackerAdapter{
+				fetchStatesFn: func(_ context.Context, ids []string) (map[string]string, error) {
+					result := make(map[string]string, len(ids))
+					for _, id := range ids {
+						result[id] = "To Do"
+					}
+					return result, nil
+				},
+			},
+			fetchCandidatesFn: func(_ context.Context) ([]domain.Issue, error) {
+				return issues, nil
+			},
+		}
+
+		wm := &stubWorkflowManager{config: cfg, template: tmpl}
+		regs := passingPreflightRegistries()
+		state := NewState(cfg.Polling.IntervalMS, 1, nil, AgentTotals{})
+
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		o := NewOrchestrator(OrchestratorParams{
+			State:           state,
+			Logger:          discardLogger(),
+			TrackerAdapter:  tracker,
+			AgentAdapter:    &mockAgentAdapter{},
+			WorkflowManager: wm,
+			Store:           &stubStore{},
+			PreflightParams: PreflightParams{
+				ReloadWorkflow:  func() error { return nil },
+				ConfigFunc:      wm.Config,
+				TrackerRegistry: regs.TrackerRegistry,
+				AgentRegistry:   regs.AgentRegistry,
+			},
+		})
+
+		o.handleTick(ctx)
+
+		if len(state.Running) != 1 {
+			t.Fatalf("after first tick Running = %d, want 1", len(state.Running))
+		}
+
+		// Cancel first worker and wait for its exit.
+		for _, entry := range state.Running {
+			if entry.CancelFunc != nil {
+				entry.CancelFunc()
+			}
+		}
+		select {
+		case <-o.workerExitCh:
+		case <-time.After(5 * time.Second):
+			t.Fatal("timed out waiting for first worker exit")
+		}
+		for id := range state.Running {
+			delete(state.Running, id)
+			delete(state.Claimed, id)
+		}
+
+		// Increase concurrency and tick again.
+		cfg.Agent.MaxConcurrentAgents = 3
+		wm.setConfig(cfg)
+
+		o.handleTick(ctx)
+
+		if state.MaxConcurrentAgents != 3 {
+			t.Errorf("MaxConcurrentAgents = %d, want 3", state.MaxConcurrentAgents)
+		}
+		if len(state.Running) != 3 {
+			t.Errorf("after second tick Running = %d, want 3", len(state.Running))
+		}
+
+		// Cancel all workers and drain exits before test cleanup.
+		cancel()
+		for i := 0; i < len(state.Running); i++ {
+			select {
+			case <-o.workerExitCh:
+			case <-time.After(5 * time.Second):
+				t.Fatal("timed out waiting for worker exit")
+			}
+		}
+	})
+
+	// Test Case C: active state change makes previously-ineligible issues
+	// dispatchable.
+	t.Run("active_states_change", func(t *testing.T) {
+		t.Parallel()
+
+		tmpDir := t.TempDir()
+		cfg := lifecycleConfig(tmpDir)
+		cfg.Tracker.ActiveStates = []string{"To Do"}
+		cfg.Tracker.TerminalStates = []string{"Done"}
+
+		qaIssue := domain.Issue{
+			ID: "qa-1", Identifier: "QA-1", Title: "Review", State: "QA Review",
+		}
+		tracker := &candidateTrackerAdapter{
+			mockTrackerAdapter: &mockTrackerAdapter{
+				fetchStatesFn: func(_ context.Context, ids []string) (map[string]string, error) {
+					result := make(map[string]string, len(ids))
+					for _, id := range ids {
+						result[id] = "QA Review"
+					}
+					return result, nil
+				},
+			},
+			fetchCandidatesFn: func(_ context.Context) ([]domain.Issue, error) {
+				return []domain.Issue{qaIssue}, nil
+			},
+		}
+
+		tmpl := mustParseTemplate(t, "do {{ .issue.identifier }}")
+		wm := &stubWorkflowManager{config: cfg, template: tmpl}
+		regs := passingPreflightRegistries()
+		state := NewState(cfg.Polling.IntervalMS, cfg.Agent.MaxConcurrentAgents, nil, AgentTotals{})
+
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+
+		o := NewOrchestrator(OrchestratorParams{
+			State:           state,
+			Logger:          discardLogger(),
+			TrackerAdapter:  tracker,
+			AgentAdapter:    &mockAgentAdapter{},
+			WorkflowManager: wm,
+			Store:           &stubStore{},
+			PreflightParams: PreflightParams{
+				ReloadWorkflow:  func() error { return nil },
+				ConfigFunc:      wm.Config,
+				TrackerRegistry: regs.TrackerRegistry,
+				AgentRegistry:   regs.AgentRegistry,
+			},
+		})
+
+		// First tick: "QA Review" not in ActiveStates → no dispatch.
+		o.handleTick(ctx)
+
+		if len(state.Running) != 0 {
+			t.Fatalf("after first tick Running = %d, want 0", len(state.Running))
+		}
+
+		// Add "QA Review" to active states and tick again.
+		cfg.Tracker.ActiveStates = []string{"To Do", "QA Review"}
+		wm.setConfig(cfg)
+
+		o.handleTick(ctx)
+
+		if len(state.Running) != 1 {
+			t.Errorf("after second tick Running = %d, want 1", len(state.Running))
+		}
+		if _, ok := state.Running["qa-1"]; !ok {
+			t.Error("issue qa-1 not in Running map after active state change")
+		}
+
+		// Cancel workers and drain exits before test cleanup.
+		cancel()
+		for range state.Running {
+			select {
+			case <-o.workerExitCh:
+			case <-time.After(5 * time.Second):
+				t.Fatal("timed out waiting for worker exit")
+			}
+		}
+	})
+
+	// Test Case D: reconciliation uses fresh terminal states after reload.
+	// Section 6.3: reconciliation runs with post-reload config.
+	t.Run("reconcile_fresh_terminal_states", func(t *testing.T) {
+		t.Parallel()
+
+		tmpDir := t.TempDir()
+		cfg := lifecycleConfig(tmpDir)
+		cfg.Tracker.ActiveStates = []string{"To Do"}
+		cfg.Tracker.TerminalStates = []string{"Done"}
+
+		// The tracker will report "Archived" for the running issue.
+		tracker := &candidateTrackerAdapter{
+			mockTrackerAdapter: &mockTrackerAdapter{
+				fetchStatesFn: func(_ context.Context, ids []string) (map[string]string, error) {
+					result := make(map[string]string, len(ids))
+					for _, id := range ids {
+						result[id] = "Archived"
+					}
+					return result, nil
+				},
+			},
+			fetchCandidatesFn: func(_ context.Context) ([]domain.Issue, error) {
+				return nil, nil
+			},
+		}
+
+		tmpl := mustParseTemplate(t, "do {{ .issue.identifier }}")
+		wm := &stubWorkflowManager{config: cfg, template: tmpl}
+		regs := passingPreflightRegistries()
+		state := NewState(cfg.Polling.IntervalMS, cfg.Agent.MaxConcurrentAgents, nil, AgentTotals{})
+
+		o := NewOrchestrator(OrchestratorParams{
+			State:           state,
+			Logger:          discardLogger(),
+			TrackerAdapter:  tracker,
+			AgentAdapter:    &mockAgentAdapter{},
+			WorkflowManager: wm,
+			Store:           &stubStore{},
+			PreflightParams: PreflightParams{
+				ReloadWorkflow:  func() error { return nil },
+				ConfigFunc:      wm.Config,
+				TrackerRegistry: regs.TrackerRegistry,
+				AgentRegistry:   regs.AgentRegistry,
+			},
+		})
+
+		// Manually place an issue into the running map.
+		var cancelCalled atomic.Bool
+		state.Running["arch-1"] = &RunningEntry{
+			Identifier: "ARCH-1",
+			Issue: domain.Issue{
+				ID: "arch-1", Identifier: "ARCH-1", Title: "Archived Issue", State: "To Do",
+			},
+			StartedAt: time.Now().UTC(),
+			CancelFunc: func() {
+				cancelCalled.Store(true)
+			},
+		}
+		state.Claimed["arch-1"] = struct{}{}
+
+		// First tick: TerminalStates=["Done"]. "Archived" is not
+		// terminal, so reconciliation cancels (non-active, non-terminal)
+		// but does NOT set PendingCleanup.
+		o.handleTick(context.Background())
+
+		entry := state.Running["arch-1"]
+		if entry == nil {
+			t.Fatal("entry removed from Running — reconciliation should not remove entries")
+		}
+		if entry.PendingCleanup {
+			t.Fatal("PendingCleanup = true before adding Archived to terminal states")
+		}
+		if !cancelCalled.Load() {
+			t.Fatal("CancelFunc not called for non-active non-terminal issue")
+		}
+
+		// Now add "Archived" to terminal states and tick again.
+		// Reset the cancel tracker since the entry was already cancelled.
+		cancelCalled.Store(false)
+		entry.CancelFunc = func() { cancelCalled.Store(true) }
+		cfg.Tracker.TerminalStates = []string{"Done", "Archived"}
+		wm.setConfig(cfg)
+
+		o.handleTick(context.Background())
+
+		entry = state.Running["arch-1"]
+		if entry == nil {
+			t.Fatal("entry removed from Running — reconciliation should not remove entries")
+		}
+		if !entry.PendingCleanup {
+			t.Error("PendingCleanup = false after adding Archived to terminal states, want true")
+		}
+	})
+
+	// Test Case E: prompt template change applies to new workers.
+	t.Run("prompt_template_change", func(t *testing.T) {
+		t.Parallel()
+
+		tmpDir := t.TempDir()
+		cfg := lifecycleConfig(tmpDir)
+		cfg.Agent.MaxConcurrentAgents = 5
+		cfg.Polling.IntervalMS = 100
+
+		var capturedPrompts sync.Map
+
+		agent := &mockAgentAdapter{
+			runTurnFn: func(_ context.Context, sess domain.Session, params domain.RunTurnParams) (domain.TurnResult, error) {
+				capturedPrompts.Store(params.Issue.Identifier, params.Prompt)
+				return domain.TurnResult{
+					SessionID:  sess.ID,
+					ExitReason: domain.EventTurnCompleted,
+				}, nil
+			},
+		}
+
+		issues1 := []domain.Issue{
+			{ID: "p-1", Identifier: "P-1", Title: "First", State: "To Do"},
+		}
+		issues2 := []domain.Issue{
+			{ID: "p-2", Identifier: "P-2", Title: "Second", State: "To Do"},
+		}
+
+		var issueSet atomic.Int32
+		tracker := &candidateTrackerAdapter{
+			mockTrackerAdapter: &mockTrackerAdapter{
+				fetchStatesFn: func(_ context.Context, ids []string) (map[string]string, error) {
+					result := make(map[string]string, len(ids))
+					for _, id := range ids {
+						result[id] = "Done"
+					}
+					return result, nil
+				},
+			},
+			fetchCandidatesFn: func(_ context.Context) ([]domain.Issue, error) {
+				if issueSet.Load() == 0 {
+					return issues1, nil
+				}
+				return issues2, nil
+			},
+		}
+
+		tmpl1 := mustParseTemplate(t, "do {{ .issue.identifier }}")
+		wm := &stubWorkflowManager{config: cfg, template: tmpl1}
+		regs := passingPreflightRegistries()
+		store := &stubStore{}
+		state := NewState(cfg.Polling.IntervalMS, cfg.Agent.MaxConcurrentAgents, nil, AgentTotals{})
+
+		o := NewOrchestrator(OrchestratorParams{
+			State:           state,
+			Logger:          discardLogger(),
+			TrackerAdapter:  tracker,
+			AgentAdapter:    agent,
+			WorkflowManager: wm,
+			Store:           store,
+			PreflightParams: PreflightParams{
+				ReloadWorkflow:  func() error { return nil },
+				ConfigFunc:      wm.Config,
+				TrackerRegistry: regs.TrackerRegistry,
+				AgentRegistry:   regs.AgentRegistry,
+			},
+		})
+
+		// Start orchestrator so workers actually run.
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan struct{})
+		go func() {
+			o.Run(ctx)
+			close(done)
+		}()
+
+		// Wait for first issue to be dispatched and complete.
+		deadline := time.After(10 * time.Second)
+		for {
+			store.mu.Lock()
+			n := len(store.runHistories)
+			store.mu.Unlock()
+			if n >= 1 {
+				break
+			}
+			select {
+			case <-deadline:
+				cancel()
+				<-done
+				t.Fatal("timed out waiting for first issue to complete")
+			default:
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+
+		// Swap template and issue set for the next tick.
+		tmpl2 := mustParseTemplate(t, "review {{ .issue.identifier }}")
+		wm.setTemplate(tmpl2)
+		issueSet.Store(1)
+
+		// Wait for second issue to complete.
+		deadline = time.After(10 * time.Second)
+		for {
+			store.mu.Lock()
+			n := len(store.runHistories)
+			store.mu.Unlock()
+			if n >= 2 {
+				break
+			}
+			select {
+			case <-deadline:
+				cancel()
+				<-done
+				t.Fatal("timed out waiting for second issue to complete")
+			default:
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+
+		cancel()
+		<-done
+
+		if v, ok := capturedPrompts.Load("P-1"); !ok {
+			t.Error("no prompt captured for P-1")
+		} else if got, ok := v.(string); !ok || got != "do P-1" {
+			t.Errorf("prompt for P-1 = %q, want %q", got, "do P-1")
+		}
+
+		if v, ok := capturedPrompts.Load("P-2"); !ok {
+			t.Error("no prompt captured for P-2")
+		} else if got, ok := v.(string); !ok || got != "review P-2" {
+			t.Errorf("prompt for P-2 = %q, want %q", got, "review P-2")
+		}
+	})
+
+	// Test Case F: in-flight sessions are not restarted on config change.
+	t.Run("inflight_not_restarted", func(t *testing.T) {
+		t.Parallel()
+
+		tmpDir := t.TempDir()
+		cfg := lifecycleConfig(tmpDir)
+		cfg.Agent.MaxConcurrentAgents = 2
+
+		// Worker blocks until context is cancelled.
+		agent := &mockAgentAdapter{
+			runTurnFn: func(ctx context.Context, sess domain.Session, _ domain.RunTurnParams) (domain.TurnResult, error) {
+				<-ctx.Done()
+				return domain.TurnResult{
+					SessionID:  sess.ID,
+					ExitReason: domain.EventTurnCompleted,
+				}, nil
+			},
+		}
+
+		issues := []domain.Issue{
+			{ID: "f-1", Identifier: "F-1", Title: "Inflight", State: "To Do"},
+		}
+
+		tracker := &candidateTrackerAdapter{
+			mockTrackerAdapter: &mockTrackerAdapter{
+				fetchStatesFn: func(_ context.Context, ids []string) (map[string]string, error) {
+					result := make(map[string]string, len(ids))
+					for _, id := range ids {
+						result[id] = "To Do"
+					}
+					return result, nil
+				},
+			},
+			fetchCandidatesFn: func(_ context.Context) ([]domain.Issue, error) {
+				return issues, nil
+			},
+		}
+
+		tmpl := mustParseTemplate(t, "do {{ .issue.identifier }}")
+		wm := &stubWorkflowManager{config: cfg, template: tmpl}
+		regs := passingPreflightRegistries()
+		state := NewState(cfg.Polling.IntervalMS, cfg.Agent.MaxConcurrentAgents, nil, AgentTotals{})
+
+		o := NewOrchestrator(OrchestratorParams{
+			State:           state,
+			Logger:          discardLogger(),
+			TrackerAdapter:  tracker,
+			AgentAdapter:    agent,
+			WorkflowManager: wm,
+			Store:           &stubStore{},
+			PreflightParams: PreflightParams{
+				ReloadWorkflow:  func() error { return nil },
+				ConfigFunc:      wm.Config,
+				TrackerRegistry: regs.TrackerRegistry,
+				AgentRegistry:   regs.AgentRegistry,
+			},
+		})
+
+		// First tick dispatches the issue.
+		o.handleTick(context.Background())
+
+		if len(state.Running) != 1 {
+			t.Fatalf("after first tick Running = %d, want 1", len(state.Running))
+		}
+
+		entry := state.Running["f-1"]
+		if entry == nil {
+			t.Fatal("issue f-1 not in Running map")
+		}
+		originalCancel := entry.CancelFunc
+
+		// Swap config (change concurrency limit) and tick again.
+		cfg.Agent.MaxConcurrentAgents = 10
+		wm.setConfig(cfg)
+
+		o.handleTick(context.Background())
+
+		if state.MaxConcurrentAgents != 10 {
+			t.Errorf("MaxConcurrentAgents = %d, want 10", state.MaxConcurrentAgents)
+		}
+
+		// The in-flight entry must still be in the Running map.
+		entry = state.Running["f-1"]
+		if entry == nil {
+			t.Fatal("issue f-1 removed from Running after config change")
+		}
+
+		// The CancelFunc must be the same original (not replaced).
+		if entry.CancelFunc == nil {
+			t.Fatal("CancelFunc is nil after config change")
+		}
+
+		// Verify the worker is still actually running by confirming
+		// we can cancel it and it responds.
+		originalCancel()
+
+		// Drain the worker exit to clean up goroutines.
+		select {
+		case <-o.workerExitCh:
+		case <-time.After(5 * time.Second):
+			t.Fatal("worker did not exit after cancel")
+		}
+	})
+
+	// Test Case G: state fields update even on preflight failure.
+	// Section 6.3: "skip dispatch but keep reconciliation active".
+	t.Run("state_updates_on_preflight_failure", func(t *testing.T) {
+		t.Parallel()
+
+		cfg := lifecycleConfig(t.TempDir())
+		cfg.Polling.IntervalMS = 5000
+		cfg.Agent.MaxConcurrentAgents = 3
+
+		wm := &stubWorkflowManager{config: cfg}
+		state := NewState(1000, 1, nil, AgentTotals{})
+		obs := &stubObserver{}
+
+		o := NewOrchestrator(OrchestratorParams{
+			State:  state,
+			Logger: discardLogger(),
+			TrackerAdapter: &candidateTrackerAdapter{
+				mockTrackerAdapter: &mockTrackerAdapter{},
+				fetchCandidatesFn: func(_ context.Context) ([]domain.Issue, error) {
+					t.Error("FetchCandidateIssues called despite preflight failure")
+					return nil, nil
+				},
+			},
+			AgentAdapter:    &mockAgentAdapter{},
+			WorkflowManager: wm,
+			Store:           &stubStore{},
+			PreflightParams: PreflightParams{
+				ReloadWorkflow: func() error {
+					return errPreflightFailed
+				},
+				ConfigFunc: wm.Config,
+			},
+			Observers: []Observer{obs},
+		})
+
+		o.handleTick(context.Background())
+
+		// State fields must have been updated despite preflight failure.
+		if state.PollIntervalMS != 5000 {
+			t.Errorf("PollIntervalMS = %d, want 5000", state.PollIntervalMS)
+		}
+		if state.MaxConcurrentAgents != 3 {
+			t.Errorf("MaxConcurrentAgents = %d, want 3", state.MaxConcurrentAgents)
+		}
+		if got := obs.calls.Load(); got != 1 {
+			t.Errorf("observer calls = %d, want 1", got)
+		}
+	})
+}
+
+// --- TestOrchestratorDynamicConfigReloadWithFileWatcher ---
+
+// TestOrchestratorDynamicConfigReloadWithFileWatcher exercises the full
+// reload pipeline: WORKFLOW.md change → fsnotify → workflow.Manager →
+// Config() → handleTick → state update.
+func TestOrchestratorDynamicConfigReloadWithFileWatcher(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	workflowPath := filepath.Join(tmpDir, "WORKFLOW.md")
+
+	initialContent := `---
+tracker:
+  kind: mock
+  api_key: test-key
+  active_states:
+    - To Do
+  terminal_states:
+    - Done
+polling:
+  interval_ms: 100
+workspace:
+  root: ` + tmpDir + `
+hooks:
+  timeout_ms: 5000
+agent:
+  kind: mock
+  command: /usr/bin/agent
+  max_concurrent_agents: 2
+  max_turns: 1
+---
+do {{ .issue.identifier }}
+`
+	if err := os.WriteFile(workflowPath, []byte(initialContent), 0o644); err != nil {
+		t.Fatalf("writing initial WORKFLOW.md: %v", err)
+	}
+
+	wm, err := workflow.NewManager(workflowPath, discardLogger())
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	t.Cleanup(wm.Stop)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	if err := wm.Start(ctx); err != nil {
+		t.Fatalf("Start watcher: %v", err)
+	}
+
+	tracker := &candidateTrackerAdapter{
+		mockTrackerAdapter: &mockTrackerAdapter{},
+		fetchCandidatesFn: func(_ context.Context) ([]domain.Issue, error) {
+			return nil, nil
+		},
+	}
+
+	regs := passingPreflightRegistries()
+	state := NewState(100, 2, nil, AgentTotals{})
+
+	// Observer captures MaxConcurrentAgents atomically from the
+	// event loop goroutine so the test goroutine can poll safely.
+	var observedMax atomic.Int32
+	observedMax.Store(int32(state.MaxConcurrentAgents))
+	obs := observerFunc(func() {
+		observedMax.Store(int32(state.MaxConcurrentAgents))
+	})
+
+	o := NewOrchestrator(OrchestratorParams{
+		State:           state,
+		Logger:          discardLogger(),
+		TrackerAdapter:  tracker,
+		AgentAdapter:    &mockAgentAdapter{},
+		WorkflowManager: wm,
+		Store:           &stubStore{},
+		Observers:       []Observer{obs},
+		PreflightParams: PreflightParams{
+			ReloadWorkflow:  wm.Reload,
+			ConfigFunc:      wm.Config,
+			TrackerRegistry: regs.TrackerRegistry,
+			AgentRegistry:   regs.AgentRegistry,
+		},
+	})
+
+	done := make(chan struct{})
+	go func() {
+		o.Run(ctx)
+		close(done)
+	}()
+
+	// Overwrite WORKFLOW.md with changed values.
+	updatedContent := `---
+tracker:
+  kind: mock
+  api_key: test-key
+  active_states:
+    - To Do
+  terminal_states:
+    - Done
+polling:
+  interval_ms: 100
+workspace:
+  root: ` + tmpDir + `
+hooks:
+  timeout_ms: 5000
+agent:
+  kind: mock
+  command: /usr/bin/agent
+  max_concurrent_agents: 7
+  max_turns: 1
+---
+do {{ .issue.identifier }}
+`
+	// Write to a temp file and rename for atomic update (fsnotify
+	// detects Create on the parent directory).
+	tmpFile := filepath.Join(tmpDir, "WORKFLOW.md.tmp")
+	if err := os.WriteFile(tmpFile, []byte(updatedContent), 0o644); err != nil {
+		t.Fatalf("writing updated WORKFLOW.md: %v", err)
+	}
+	if err := os.Rename(tmpFile, workflowPath); err != nil {
+		t.Fatalf("renaming WORKFLOW.md: %v", err)
+	}
+
+	// Poll the atomic snapshot written by the observer. The observer
+	// runs on the event loop goroutine after state mutation, so this
+	// is free of data races.
+	deadline := time.After(5 * time.Second)
+	for {
+		select {
+		case <-deadline:
+			cancel()
+			<-done
+			t.Fatalf("timed out: MaxConcurrentAgents = %d, want 7",
+				observedMax.Load())
+		default:
+		}
+		if observedMax.Load() == 7 {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	cancel()
+	<-done
 }

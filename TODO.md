@@ -374,7 +374,7 @@ component. Uses mock adapters for tracker and agent - no real external calls.
       orchestrator, confirms: DB is created, retry entries from a previous run are loaded,
       terminal workspaces are cleaned, and the first poll tick fires immediately.
 
-- [ ] 6.13 Implement dynamic config reload integration: when WORKFLOW.md changes, the
+- [x] 6.13 Implement dynamic config reload integration: when WORKFLOW.md changes, the
       orchestrator picks up new polling interval, concurrency limits, active/terminal states,
       hook timeouts, agent settings, and prompt template for future runs. In-flight sessions
       are not restarted.
@@ -395,12 +395,25 @@ component. Uses mock adapters for tracker and agent - no real external calls.
 - [ ] 6.15 Make the database path configurable: add an optional `db_path` field to the
       top-level config (default: `.sortie.db` next to WORKFLOW.md). Resolve `$VAR`
       environment indirection and `~` expansion. Update `cmd/sortie/main.go` to use
-      the configured path instead of the hardcoded `filepath.Join(filepath.Dir(path),
-      ".sortie.db")`. This allows operators to place the database on a separate volume
-      or shared filesystem.
+      the configured path instead of the hardcoded
+      `filepath.Join(filepath.Dir(path), ".sortie.db")`. This allows operators to place
+      the database on a separate volume or shared filesystem.
       **Verify:** unit test confirms `db_path` is resolved from config with default
       falling back to workflow-adjacent `.sortie.db`. Integration test confirms a custom
       `db_path` is used when specified.
+
+- [ ] 6.16 Fix workspace cleanup to use actual path instead of reconstructing from config.
+      `HandleWorkerExit` currently passes `params.WorkspaceRoot` (from fresh config) to
+      `workspace.Cleanup`, which calls `ComputePath(root, identifier)` to reconstruct the
+      workspace path. If `workspace.root` changes at runtime between worker spawn and exit,
+      cleanup targets the wrong directory and the actual workspace becomes orphaned. Store
+      the workspace path in `RunningEntry.WorkspacePath` at dispatch time (populated from
+      `WorkerResult.WorkspacePath` via the first agent event or passed through dispatch),
+      and use it directly in the `PendingCleanup` code path instead of reconstructing from
+      `params.WorkspaceRoot` + `entry.Identifier`.
+      **Verify:** unit test changes `workspace.root` between dispatch and worker exit with
+      `PendingCleanup=true`, confirms cleanup removes the directory at the original path
+      (not the new root). Existing cleanup tests continue to pass.
 
 ## Milestone 7: End-to-End with Real Adapters
 
