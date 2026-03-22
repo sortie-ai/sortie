@@ -114,7 +114,9 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 
 	// --- Database open, migrate, and recovery ---
 
-	dbPath := filepath.Join(filepath.Dir(path), ".sortie.db")
+	workflowDir := filepath.Dir(path)
+	dbPath := resolveDBPath(mgr.Config().DBPath, workflowDir)
+	logger.Info("database path resolved", slog.String("db_path", dbPath))
 	store, err := persistence.Open(ctx, dbPath)
 	if err != nil {
 		logger.Error("failed to open database", slog.Any("error", err))
@@ -316,4 +318,18 @@ func mergeExtensions(dst map[string]any, extensions map[string]any, kind string)
 			dst[k] = v
 		}
 	}
+}
+
+// resolveDBPath returns the effective database file path. An absolute
+// cfgPath is used as-is. A relative cfgPath is joined with workflowDir
+// so database location is deterministic regardless of the process CWD.
+// An empty cfgPath falls back to .sortie.db inside workflowDir.
+func resolveDBPath(cfgPath, workflowDir string) string {
+	if cfgPath == "" {
+		return filepath.Join(workflowDir, ".sortie.db")
+	}
+	if filepath.IsAbs(cfgPath) {
+		return cfgPath
+	}
+	return filepath.Join(workflowDir, cfgPath)
 }
