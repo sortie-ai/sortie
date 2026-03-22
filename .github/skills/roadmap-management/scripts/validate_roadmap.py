@@ -172,7 +172,11 @@ def validate(path: str) -> list[str]:
 
 def main() -> int:
     path = sys.argv[1] if len(sys.argv) > 1 else "TODO.md"
-    errors = validate(path)
+    try:
+        errors = validate(path)
+    except (FileNotFoundError, OSError) as exc:
+        print(f"ERROR: {exc}", file=sys.stderr)
+        return 2
     for e in errors:
         print(f"VIOLATION: {e}", file=sys.stderr)
     if errors:
