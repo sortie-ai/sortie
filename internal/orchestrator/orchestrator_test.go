@@ -1938,16 +1938,37 @@ func TestOrchestratorDynamicConfigReload(t *testing.T) {
 		cfg := lifecycleConfig(t.TempDir())
 		cfg.Polling.IntervalMS = 5000
 		cfg.Agent.MaxConcurrentAgents = 3
+		cfg.Tracker.TerminalStates = []string{"Done"}
 
 		wm := &stubWorkflowManager{config: cfg}
 		state := NewState(1000, 1, nil, AgentTotals{})
 		obs := &stubObserver{}
 
+		// Place a running entry whose tracker state will be terminal.
+		var cancelCalled atomic.Bool
+		state.Running["g-1"] = &RunningEntry{
+			Identifier: "G-1",
+			Issue: domain.Issue{
+				ID: "g-1", Identifier: "G-1", Title: "Terminal", State: "To Do",
+			},
+			StartedAt:  time.Now().UTC(),
+			CancelFunc: func() { cancelCalled.Store(true) },
+		}
+		state.Claimed["g-1"] = struct{}{}
+
 		o := NewOrchestrator(OrchestratorParams{
 			State:  state,
 			Logger: discardLogger(),
 			TrackerAdapter: &candidateTrackerAdapter{
-				mockTrackerAdapter: &mockTrackerAdapter{},
+				mockTrackerAdapter: &mockTrackerAdapter{
+					fetchStatesFn: func(_ context.Context, ids []string) (map[string]string, error) {
+						result := make(map[string]string, len(ids))
+						for _, id := range ids {
+							result[id] = "Done"
+						}
+						return result, nil
+					},
+				},
 				fetchCandidatesFn: func(_ context.Context) ([]domain.Issue, error) {
 					t.Error("FetchCandidateIssues called despite preflight failure")
 					return nil, nil
@@ -1974,6 +1995,20 @@ func TestOrchestratorDynamicConfigReload(t *testing.T) {
 		if state.MaxConcurrentAgents != 3 {
 			t.Errorf("MaxConcurrentAgents = %d, want 3", state.MaxConcurrentAgents)
 		}
+
+		// Reconciliation must have run: the terminal running entry
+		// should be marked PendingCleanup and cancelled.
+		entry := state.Running["g-1"]
+		if entry == nil {
+			t.Fatal("entry g-1 removed from Running — reconciliation should not remove entries")
+		}
+		if !entry.PendingCleanup {
+			t.Error("PendingCleanup = false despite terminal tracker state and preflight failure")
+		}
+		if !cancelCalled.Load() {
+			t.Error("CancelFunc not called despite terminal tracker state")
+		}
+
 		if got := obs.calls.Load(); got != 1 {
 			t.Errorf("observer calls = %d, want 1", got)
 		}
