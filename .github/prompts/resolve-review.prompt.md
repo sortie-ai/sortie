@@ -67,6 +67,8 @@ If the concern passes all three filters, add it to TODO.md:
 - **Task format.** Follow the existing convention: `- [ ] N.N <description>\n      **Verify:** <how to confirm completion>`. The description must be self-contained — a future agent reading only the task line must understand what to do.
 - **Do not renumber** existing tasks. Append only.
 
+**MANDATORY:** Load and apply the `roadmap-management` skill before making any TODO.md changes.
+
 ### For architecture-domain comments (Valid & Actionable):
 1. Locate the exact section in the specification document.
 2. Revise the specification to address the concern.
