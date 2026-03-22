@@ -3,17 +3,41 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
+	"unicode"
+
+	"github.com/sortie-ai/sortie/internal/config"
 )
 
-// minimalWorkflow returns a minimal valid WORKFLOW.md content.
+// minimalWorkflow returns a minimal valid WORKFLOW.md content that
+// includes tracker (file) and agent (mock) config needed for the
+// full startup sequence.
 func minimalWorkflow() []byte {
-	return []byte("---\npolling:\n  interval_ms: 30000\n---\nDo {{ .issue.title }}.\n")
+	return []byte(`---
+polling:
+  interval_ms: 30000
+tracker:
+  kind: file
+  api_key: "unused"
+  active_states:
+    - To Do
+    - In Progress
+  terminal_states:
+    - Done
+agent:
+  kind: mock
+file:
+  path: issues.json
+---
+Do {{ .issue.title }}.
+`)
 }
 
 // writeWorkflowFile creates a WORKFLOW.md in dir and returns its absolute path.
@@ -24,6 +48,37 @@ func writeWorkflowFile(t *testing.T, dir string) string {
 		t.Fatal(err)
 	}
 	return p
+}
+
+// writeIssuesFixture creates a minimal issues.json fixture in dir for
+// the file tracker adapter.
+func writeIssuesFixture(t *testing.T, dir string) {
+	t.Helper()
+	issues := []map[string]any{
+		{
+			"id": "10001", "identifier": "PROJ-1",
+			"title": "Test issue", "state": "To Do",
+			"priority": 1, "labels": []string{},
+			"comments": []any{}, "blocked_by": []any{},
+		},
+	}
+	data, err := json.Marshal(issues)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "issues.json"), data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// setupRunDir creates a temp directory with WORKFLOW.md and issues.json
+// fixture, sets CWD to that directory, and returns the workflow path.
+func setupRunDir(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	t.Chdir(dir)
+	writeIssuesFixture(t, dir)
+	return writeWorkflowFile(t, dir)
 }
 
 func TestRunVersion(t *testing.T) {
@@ -145,11 +200,10 @@ func TestRunMissingDefaultWorkflow(t *testing.T) {
 }
 
 func TestRunValidWorkflowWithTimeout(t *testing.T) {
-	dir := t.TempDir()
-	wfPath := writeWorkflowFile(t, dir)
+	wfPath := setupRunDir(t)
 
 	var stdout, stderr bytes.Buffer
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
 
 	code := run(ctx, []string{wfPath}, &stdout, &stderr)
@@ -159,25 +213,25 @@ func TestRunValidWorkflowWithTimeout(t *testing.T) {
 }
 
 func TestRunAlreadyCancelledContext(t *testing.T) {
-	dir := t.TempDir()
-	wfPath := writeWorkflowFile(t, dir)
+	// With a pre-cancelled context, the DB open fails immediately.
+	// The startup sequence correctly returns exit code 1.
+	wfPath := setupRunDir(t)
 
 	var stdout, stderr bytes.Buffer
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
 	code := run(ctx, []string{wfPath}, &stdout, &stderr)
-	if code != 0 {
-		t.Fatalf("exit code = %d, want 0; stderr: %s", code, stderr.String())
+	if code != 1 {
+		t.Fatalf("exit code = %d, want 1; stderr: %s", code, stderr.String())
 	}
 }
 
 func TestRunPortFlagLogged(t *testing.T) {
-	dir := t.TempDir()
-	wfPath := writeWorkflowFile(t, dir)
+	wfPath := setupRunDir(t)
 
 	var stdout, stderr bytes.Buffer
-	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
 
 	code := run(ctx, []string{"--port", "8080", wfPath}, &stdout, &stderr)
@@ -248,4 +302,153 @@ func TestResolveWorkflowPath(t *testing.T) {
 			}
 		})
 	}
+}
+
+// --- Config map completeness tests ---
+
+// toSnakeCase converts a PascalCase field name to snake_case, handling
+// acronyms like "MS", "API", "ID" correctly: APIKey → api_key,
+// TurnTimeoutMS → turn_timeout_ms, MaxConcurrentByState → max_concurrent_by_state.
+func toSnakeCase(s string) string {
+	var b strings.Builder
+	runes := []rune(s)
+	for i, r := range runes {
+		if unicode.IsUpper(r) {
+			if i > 0 {
+				prev := runes[i-1]
+				if unicode.IsLower(prev) {
+					b.WriteRune('_')
+				} else if unicode.IsUpper(prev) && i+1 < len(runes) && unicode.IsLower(runes[i+1]) {
+					b.WriteRune('_')
+				}
+			}
+			b.WriteRune(unicode.ToLower(r))
+		} else {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
+func TestTrackerConfigMapCompleteness(t *testing.T) {
+	t.Parallel()
+
+	m := trackerConfigMap(config.TrackerConfig{})
+	rt := reflect.TypeOf(config.TrackerConfig{})
+
+	for _, field := range reflect.VisibleFields(rt) {
+		if !field.IsExported() {
+			continue
+		}
+		key := toSnakeCase(field.Name)
+		if _, ok := m[key]; !ok {
+			t.Errorf("trackerConfigMap missing key %q for field %s", key, field.Name)
+		}
+	}
+}
+
+func TestAgentConfigMapCompleteness(t *testing.T) {
+	t.Parallel()
+
+	m := agentConfigMap(config.AgentConfig{})
+	rt := reflect.TypeOf(config.AgentConfig{})
+
+	// Known field→key overrides where the map key intentionally
+	// differs from a naive PascalCase→snake_case conversion.
+	overrides := map[string]string{
+		"MaxConcurrentByState": "max_concurrent_agents_by_state",
+	}
+
+	for _, field := range reflect.VisibleFields(rt) {
+		if !field.IsExported() {
+			continue
+		}
+		key := toSnakeCase(field.Name)
+		if override, ok := overrides[field.Name]; ok {
+			key = override
+		}
+		if _, ok := m[key]; !ok {
+			t.Errorf("agentConfigMap missing key %q for field %s", key, field.Name)
+		}
+	}
+}
+
+// --- mergeExtensions tests ---
+
+func TestMergeExtensions(t *testing.T) {
+	t.Parallel()
+
+	t.Run("copies extension keys", func(t *testing.T) {
+		t.Parallel()
+
+		dst := map[string]any{"kind": "file"}
+		extensions := map[string]any{
+			"file": map[string]any{"path": "issues.json", "extra": 42},
+		}
+
+		mergeExtensions(dst, extensions, "file")
+
+		if dst["path"] != "issues.json" {
+			t.Errorf("path = %v, want %q", dst["path"], "issues.json")
+		}
+		if dst["extra"] != 42 {
+			t.Errorf("extra = %v, want 42", dst["extra"])
+		}
+	})
+
+	t.Run("does not overwrite existing keys", func(t *testing.T) {
+		t.Parallel()
+
+		dst := map[string]any{"kind": "file", "path": "original.json"}
+		extensions := map[string]any{
+			"file": map[string]any{"path": "overridden.json"},
+		}
+
+		mergeExtensions(dst, extensions, "file")
+
+		if dst["path"] != "original.json" {
+			t.Errorf("path = %v, want %q (should not overwrite)", dst["path"], "original.json")
+		}
+	})
+
+	t.Run("missing kind is no-op", func(t *testing.T) {
+		t.Parallel()
+
+		dst := map[string]any{"kind": "jira"}
+		extensions := map[string]any{
+			"file": map[string]any{"path": "issues.json"},
+		}
+
+		mergeExtensions(dst, extensions, "jira")
+
+		if _, ok := dst["path"]; ok {
+			t.Error("path should not be set when kind has no extensions")
+		}
+	})
+
+	t.Run("nil extensions is no-op", func(t *testing.T) {
+		t.Parallel()
+
+		dst := map[string]any{"kind": "file"}
+		mergeExtensions(dst, nil, "file")
+
+		if len(dst) != 1 {
+			t.Errorf("dst has %d keys, want 1", len(dst))
+		}
+	})
+
+	t.Run("non-map extension value is no-op", func(t *testing.T) {
+		t.Parallel()
+
+		dst := map[string]any{"kind": "file"}
+		extensions := map[string]any{
+			"file": "not a map",
+		}
+
+		mergeExtensions(dst, extensions, "file")
+
+		if len(dst) != 1 {
+			t.Errorf("dst has %d keys, want 1", len(dst))
+		}
+	})
 }

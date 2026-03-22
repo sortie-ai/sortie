@@ -768,6 +768,145 @@ func TestFetchIssueStatesByIDs_NoQueryFilter(t *testing.T) {
 	}
 }
 
+// --- FetchIssueStatesByIdentifiers tests ---
+
+func TestFetchIssueStatesByIdentifiers_Empty(t *testing.T) {
+	t.Parallel()
+
+	var called bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		called = true
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	a := mustAdapter(t, validConfig(srv.URL))
+	result, err := a.FetchIssueStatesByIdentifiers(context.Background(), []string{})
+	if err != nil {
+		t.Fatalf("FetchIssueStatesByIdentifiers: %v", err)
+	}
+	if result == nil {
+		t.Fatal("result is nil")
+	}
+	if len(result) != 0 {
+		t.Errorf("len = %d, want 0", len(result))
+	}
+	if called {
+		t.Error("server was called, but empty identifiers should return immediately")
+	}
+}
+
+func TestFetchIssueStatesByIdentifiers_SingleBatch(t *testing.T) {
+	t.Parallel()
+
+	var receivedJQL string
+	resp := searchResponse{
+		Issues: []jiraIssue{
+			{ID: "1", Key: "PROJ-1", Fields: jiraFields{Status: &jiraStatus{Name: "To Do"}}},
+			{ID: "2", Key: "PROJ-2", Fields: jiraFields{Status: &jiraStatus{Name: "Done"}}},
+		},
+	}
+	respBytes, _ := json.Marshal(resp)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedJQL = r.URL.Query().Get("jql")
+		w.Write(respBytes) //nolint:errcheck // test helper
+	}))
+	defer srv.Close()
+
+	a := mustAdapter(t, validConfig(srv.URL))
+	result, err := a.FetchIssueStatesByIdentifiers(context.Background(), []string{"PROJ-1", "PROJ-2", "PROJ-3"})
+	if err != nil {
+		t.Fatalf("FetchIssueStatesByIdentifiers: %v", err)
+	}
+
+	// PROJ-3 is missing from response — omitted from map.
+	if len(result) != 2 {
+		t.Fatalf("len = %d, want 2", len(result))
+	}
+	if result["PROJ-1"] != "To Do" {
+		t.Errorf("PROJ-1 = %q, want To Do", result["PROJ-1"])
+	}
+	if result["PROJ-2"] != "Done" {
+		t.Errorf("PROJ-2 = %q, want Done", result["PROJ-2"])
+	}
+	if _, exists := result["PROJ-3"]; exists {
+		t.Error("PROJ-3 should be absent from result")
+	}
+
+	// Verify JQL uses key IN.
+	if !strings.Contains(receivedJQL, "key IN") {
+		t.Errorf("JQL = %q, should use key IN", receivedJQL)
+	}
+}
+
+func TestFetchIssueStatesByIdentifiers_MultiBatch(t *testing.T) {
+	t.Parallel()
+
+	var requestCount int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&requestCount, 1)
+		jql := r.URL.Query().Get("jql")
+		keyCount := strings.Count(jql, `"PROJ-`)
+		if keyCount > batchSize {
+			t.Errorf("batch has %d keys, max allowed %d", keyCount, batchSize)
+		}
+
+		resp := searchResponse{
+			Issues: []jiraIssue{
+				{ID: "1", Key: "PROJ-1", Fields: jiraFields{Status: &jiraStatus{Name: "Open"}}},
+			},
+		}
+		data, _ := json.Marshal(resp)
+		w.Write(data) //nolint:errcheck // test helper
+	}))
+	defer srv.Close()
+
+	ids := make([]string, 45)
+	for i := range ids {
+		ids[i] = fmt.Sprintf("PROJ-%d", i+1)
+	}
+
+	a := mustAdapter(t, validConfig(srv.URL))
+	_, err := a.FetchIssueStatesByIdentifiers(context.Background(), ids)
+	if err != nil {
+		t.Fatalf("FetchIssueStatesByIdentifiers: %v", err)
+	}
+
+	if got := atomic.LoadInt32(&requestCount); got != 2 {
+		t.Errorf("request count = %d, want 2 batches", got)
+	}
+}
+
+func TestFetchIssueStatesByIdentifiers_NoQueryFilter(t *testing.T) {
+	t.Parallel()
+
+	var receivedJQL string
+	resp := searchResponse{
+		Issues: []jiraIssue{
+			{ID: "1", Key: "PROJ-1", Fields: jiraFields{Status: &jiraStatus{Name: "Open"}}},
+		},
+	}
+	respBytes, _ := json.Marshal(resp)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedJQL = r.URL.Query().Get("jql")
+		w.Write(respBytes) //nolint:errcheck // test helper
+	}))
+	defer srv.Close()
+
+	config := validConfig(srv.URL)
+	config["query_filter"] = "component = 'api'"
+	a := mustAdapter(t, config)
+	_, err := a.FetchIssueStatesByIdentifiers(context.Background(), []string{"PROJ-1"})
+	if err != nil {
+		t.Fatalf("FetchIssueStatesByIdentifiers: %v", err)
+	}
+	if strings.Contains(receivedJQL, "component") {
+		t.Errorf("JQL = %q, should NOT contain queryFilter", receivedJQL)
+	}
+}
+
 // --- FetchIssueComments tests ---
 
 func TestFetchIssueComments_MultiPage(t *testing.T) {

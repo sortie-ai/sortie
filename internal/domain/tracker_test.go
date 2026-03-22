@@ -28,6 +28,10 @@ func (m *mockTrackerAdapter) FetchIssueStatesByIDs(_ context.Context, _ []string
 	return nil, nil
 }
 
+func (m *mockTrackerAdapter) FetchIssueStatesByIdentifiers(_ context.Context, _ []string) (map[string]string, error) {
+	return nil, nil
+}
+
 func (m *mockTrackerAdapter) FetchIssueComments(_ context.Context, _ string) ([]Comment, error) {
 	return nil, nil
 }

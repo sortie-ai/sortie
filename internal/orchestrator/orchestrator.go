@@ -94,7 +94,7 @@ func NewOrchestrator(params OrchestratorParams) *Orchestrator {
 
 	maxConc := params.State.MaxConcurrentAgents
 	exitBuf := max(maxConc*2, 64)
-	retryBuf := max(maxConc*2, 64)
+	retryBuf := max(maxConc*2, 64, len(params.State.RetryAttempts))
 	eventBuf := max(maxConc*16, 256)
 
 	return &Orchestrator{
@@ -117,6 +117,8 @@ func NewOrchestrator(params OrchestratorParams) *Orchestrator {
 // tick timer is stopped and the function returns immediately (hard stop).
 // A future milestone replaces this with a draining shutdown phase.
 func (o *Orchestrator) Run(ctx context.Context) {
+	o.activateReconstructedRetries()
+
 	tickTimer := time.NewTimer(0)
 	defer tickTimer.Stop()
 
@@ -282,6 +284,30 @@ func (o *Orchestrator) onRetryFire(issueID string) {
 			slog.Int("retry_timer_channel_len", len(o.retryTimerCh)),
 			slog.Int("retry_timer_channel_cap", cap(o.retryTimerCh)),
 		)
+	}
+}
+
+// activateReconstructedRetries starts timers for retry entries that
+// were populated by [PopulateRetries] during startup recovery. Entries
+// with TimerHandle == nil are pending activation. Entries with
+// scheduledDelayMS > 0 get a [time.AfterFunc] timer; entries with
+// scheduledDelayMS == 0 (past-due) are written directly to
+// retryTimerCh. Called at the top of [Run] before the select loop,
+// guaranteeing the channel is being drained.
+func (o *Orchestrator) activateReconstructedRetries() {
+	for issueID, entry := range o.state.RetryAttempts {
+		if entry.TimerHandle != nil {
+			continue
+		}
+		if entry.scheduledDelayMS > 0 {
+			id := issueID
+			entry.TimerHandle = time.AfterFunc(
+				time.Duration(entry.scheduledDelayMS)*time.Millisecond,
+				func() { o.onRetryFire(id) },
+			)
+		} else {
+			o.retryTimerCh <- issueID
+		}
 	}
 }
 

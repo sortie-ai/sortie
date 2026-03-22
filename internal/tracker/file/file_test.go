@@ -435,6 +435,63 @@ func TestFetchIssueStatesByIDs(t *testing.T) {
 	})
 }
 
+// --- FetchIssueStatesByIdentifiers tests ---
+
+func TestFetchIssueStatesByIdentifiers(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	a := newAdapter(t, fixture("basic.json"), nil)
+
+	t.Run("multiple found by identifier", func(t *testing.T) {
+		t.Parallel()
+
+		m, err := a.FetchIssueStatesByIdentifiers(ctx, []string{"PROJ-1", "PROJ-2"})
+		if err != nil {
+			t.Fatalf("FetchIssueStatesByIdentifiers: %v", err)
+		}
+		if len(m) != 2 {
+			t.Fatalf("got %d entries, want 2", len(m))
+		}
+		if m["PROJ-1"] != "To Do" {
+			t.Errorf("PROJ-1 state = %q, want %q", m["PROJ-1"], "To Do")
+		}
+		if m["PROJ-2"] != "In Progress" {
+			t.Errorf("PROJ-2 state = %q, want %q", m["PROJ-2"], "In Progress")
+		}
+	})
+
+	t.Run("missing identifier omitted", func(t *testing.T) {
+		t.Parallel()
+
+		m, err := a.FetchIssueStatesByIdentifiers(ctx, []string{"PROJ-1", "NONEXISTENT"})
+		if err != nil {
+			t.Fatalf("FetchIssueStatesByIdentifiers: %v", err)
+		}
+		if len(m) != 1 {
+			t.Fatalf("got %d entries, want 1", len(m))
+		}
+		if _, ok := m["NONEXISTENT"]; ok {
+			t.Error("missing identifier should be omitted from result")
+		}
+	})
+
+	t.Run("empty identifiers", func(t *testing.T) {
+		t.Parallel()
+
+		m, err := a.FetchIssueStatesByIdentifiers(ctx, []string{})
+		if err != nil {
+			t.Fatalf("FetchIssueStatesByIdentifiers: %v", err)
+		}
+		if m == nil {
+			t.Fatal("map is nil, want non-nil")
+		}
+		if len(m) != 0 {
+			t.Fatalf("got %d entries, want 0", len(m))
+		}
+	})
+}
+
 // --- FetchIssueComments tests ---
 
 func TestFetchIssueComments(t *testing.T) {

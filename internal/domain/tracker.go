@@ -34,6 +34,14 @@ type TrackerAdapter interface {
 	// active-run reconciliation.
 	FetchIssueStatesByIDs(ctx context.Context, issueIDs []string) (map[string]string, error)
 
+	// FetchIssueStatesByIdentifiers returns the current state for each
+	// requested issue identifier (human-readable key, e.g. "PROJ-123").
+	// The returned map is keyed by identifier with the value being the
+	// current state name. Issues not found in the tracker are omitted
+	// from the map (not an error). Used for startup terminal workspace
+	// cleanup.
+	FetchIssueStatesByIdentifiers(ctx context.Context, identifiers []string) (map[string]string, error)
+
 	// FetchIssueComments returns comments for the specified issue.
 	// Used for continuation runs and the agent workpad pattern.
 	// Returns an empty non-nil slice when no comments exist.

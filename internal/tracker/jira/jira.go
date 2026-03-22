@@ -204,6 +204,42 @@ func (a *JiraAdapter) FetchIssueStatesByIDs(ctx context.Context, issueIDs []stri
 	return result, nil
 }
 
+// FetchIssueStatesByIdentifiers returns the current state for each
+// requested issue identifier (key). Batches identifiers into groups
+// of 40 to stay within URI length limits. Issues not found are
+// omitted from the result map. The queryFilter is intentionally not
+// applied.
+func (a *JiraAdapter) FetchIssueStatesByIdentifiers(ctx context.Context, identifiers []string) (map[string]string, error) {
+	if len(identifiers) == 0 {
+		return map[string]string{}, nil
+	}
+
+	result := make(map[string]string, len(identifiers))
+
+	for start := 0; start < len(identifiers); start += batchSize {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+
+		end := start + batchSize
+		if end > len(identifiers) {
+			end = len(identifiers)
+		}
+		batch := identifiers[start:end]
+
+		jql := buildKeyINJQL(batch)
+		issues, err := a.paginatedSearch(ctx, jql, "status")
+		if err != nil {
+			return nil, err
+		}
+		for _, iss := range issues {
+			result[iss.Identifier] = iss.State
+		}
+	}
+
+	return result, nil
+}
+
 // FetchIssueComments returns comments for the specified issue.
 // Returns an empty non-nil slice when no comments exist.
 func (a *JiraAdapter) FetchIssueComments(ctx context.Context, issueID string) ([]domain.Comment, error) {

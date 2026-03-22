@@ -32,6 +32,8 @@ go.work.sum
 *.so
 *.dylib
 
+sortie.db
+
 # Ignore generated specification and plan files.
 /.specs
 /.plans
