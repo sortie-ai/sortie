@@ -392,6 +392,16 @@ component. Uses mock adapters for tracker and agent - no real external calls.
       **Verify:** unit test confirms preflight passes with an empty `tracker.api_key` when the
       adapter's `RequiresAPIKey` is false, and fails when `RequiresAPIKey` is true.
 
+- [ ] 6.15 Make the database path configurable: add an optional `db_path` field to the
+      top-level config (default: `sortie.db` next to WORKFLOW.md). Resolve `$VAR`
+      environment indirection and `~` expansion. Update `cmd/sortie/main.go` to use
+      the configured path instead of the hardcoded `filepath.Join(filepath.Dir(path),
+      ".sortie.db")`. This allows operators to place the database on a separate volume
+      or shared filesystem.
+      **Verify:** unit test confirms `db_path` is resolved from config with default
+      falling back to workflow-adjacent `.sortie.db`. Integration test confirms a custom
+      `db_path` is used when specified.
+
 ## Milestone 7: End-to-End with Real Adapters
 
 Connect real Jira and real Claude Code adapters to the orchestrator. This is the first time
@@ -609,3 +619,16 @@ tooling.
       README.md, and tag the first stable release.
       **Verify:** CHANGELOG.md references SemVer, README.md has no development-only
       disclaimers, and the 1.0.0 release is published.
+
+- [ ] 10.14 Propagate session ID through the retry chain: add `SessionID` to
+      `RetryEntry`, `ScheduleRetryParams`, and `persistence.RetryEntry` (schema
+      migration). Populate from `WorkerResult.SessionID` in `HandleWorkerExit`,
+      read in `HandleRetryTimer`, and pass to `makeWorkerFn(entry.SessionID)` so
+      continuation retries can resume the same agent session when the adapter
+      supports it (e.g., Claude Code `--resume`). This is an optimization — the
+      architecture spec does not require session resume across retry boundaries
+      (Section 10.2 covers intra-worker session reuse only).
+      **Verify:** unit test confirms session ID survives a full retry round-trip:
+      worker exit → schedule retry → timer fire → new worker receives the original
+      session ID. Integration test with mock agent confirms `--resume` flag is
+      passed when session ID is present.

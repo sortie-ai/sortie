@@ -114,7 +114,8 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 
 	// --- Database open, migrate, and recovery ---
 
-	store, err := persistence.Open(ctx, "sortie.db")
+	dbPath := filepath.Join(filepath.Dir(path), ".sortie.db")
+	store, err := persistence.Open(ctx, dbPath)
 	if err != nil {
 		logger.Error("failed to open database", slog.Any("error", err))
 		return 1
