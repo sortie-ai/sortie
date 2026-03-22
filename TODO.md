@@ -355,7 +355,7 @@ component. Uses mock adapters for tracker and agent - no real external calls.
       api_key, unregistered adapter kind, missing agent.command. Integration test confirms
       dispatch is skipped but reconciliation runs when validation fails mid-operation.
 
-- [ ] 6.11 Implement the poll loop (Section 16.2): tick scheduling, reconciliation before
+- [x] 6.11 Implement the poll loop (Section 16.2): tick scheduling, reconciliation before
       dispatch, preflight validation before dispatch, fetch candidates, sort, dispatch until
       slots exhausted, notify observers. Wire everything together with mock adapters.
       **Optimization note:** `ShouldDispatch` rebuilds `stateSet` maps on each call; the
