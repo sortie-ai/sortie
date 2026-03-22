@@ -446,6 +446,83 @@ func TestHandleRetryTimer(t *testing.T) {
 				}
 			},
 		},
+		{
+			name:    "non-terminal blocker releases claim",
+			issueID: "ISS-3",
+			state: func(t *testing.T, id string) *State {
+				t.Helper()
+				return retryState(t, id, id, 1)
+			},
+			store: func() *mockRetryStore { return &mockRetryStore{} },
+			tracker: func(id string) *mockRetryTracker {
+				issue := candidateIssue(id, id, "To Do")
+				issue.BlockedBy = []domain.BlockerRef{
+					{ID: "BLOCK-1", Identifier: "BLOCK-1", State: "In Progress"},
+				}
+				return &mockRetryTracker{
+					candidates: []domain.Issue{issue},
+				}
+			},
+			check: func(t *testing.T, id string, state *State, store *mockRetryStore, _ *mockRetryTracker, _ bool) {
+				t.Helper()
+				// Claim released.
+				if _, claimed := state.Claimed[id]; claimed {
+					t.Errorf("Claimed[%s] still present, want released due to blocker", id)
+				}
+				// Retry entry removed (popped, not re-created).
+				if _, ok := state.RetryAttempts[id]; ok {
+					t.Errorf("RetryAttempts[%s] still present, want removed", id)
+				}
+				// Not dispatched.
+				if _, running := state.Running[id]; running {
+					t.Errorf("Running[%s] present, want absent (blocked issue should not dispatch)", id)
+				}
+				// DeleteRetryEntry called.
+				if len(store.deletedIssueID) != 1 || store.deletedIssueID[0] != id {
+					t.Errorf("DeleteRetryEntry calls = %v, want [%s]", store.deletedIssueID, id)
+				}
+				// No save (no reschedule).
+				if len(store.savedEntries) != 0 {
+					t.Errorf("SaveRetryEntry call count = %d, want 0", len(store.savedEntries))
+				}
+			},
+		},
+		{
+			name:    "missing required field releases claim",
+			issueID: "ISS-4",
+			state: func(t *testing.T, id string) *State {
+				t.Helper()
+				return retryState(t, id, id, 2)
+			},
+			store: func() *mockRetryStore { return &mockRetryStore{} },
+			tracker: func(id string) *mockRetryTracker {
+				// Issue has empty Title — fails required field check.
+				return &mockRetryTracker{
+					candidates: []domain.Issue{
+						{ID: id, Identifier: id, Title: "", State: "To Do"},
+					},
+				}
+			},
+			check: func(t *testing.T, id string, state *State, store *mockRetryStore, _ *mockRetryTracker, _ bool) {
+				t.Helper()
+				// Claim released.
+				if _, claimed := state.Claimed[id]; claimed {
+					t.Errorf("Claimed[%s] still present, want released due to missing title", id)
+				}
+				// Retry entry removed.
+				if _, ok := state.RetryAttempts[id]; ok {
+					t.Errorf("RetryAttempts[%s] still present, want removed", id)
+				}
+				// Not dispatched.
+				if _, running := state.Running[id]; running {
+					t.Errorf("Running[%s] present, want absent (ineligible issue should not dispatch)", id)
+				}
+				// DeleteRetryEntry called.
+				if len(store.deletedIssueID) != 1 || store.deletedIssueID[0] != id {
+					t.Errorf("DeleteRetryEntry calls = %v, want [%s]", store.deletedIssueID, id)
+				}
+			},
+		},
 	}
 
 	for _, tt := range tests {

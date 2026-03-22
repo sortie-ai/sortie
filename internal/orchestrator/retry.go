@@ -30,13 +30,13 @@ type HandleRetryTimerParams struct {
 	TrackerAdapter domain.TrackerAdapter
 
 	// ActiveStates is the current list of configured active issue states.
-	// Passed through for future eligibility checking; currently unused
-	// because presence in candidates implies active state.
+	// Not used directly by HandleRetryTimer because presence in the
+	// candidate set returned by FetchCandidateIssues implies active state.
 	ActiveStates []string
 
-	// TerminalStates is the current list of configured terminal states.
-	// Passed through for future eligibility checking; currently unused
-	// because presence in candidates implies active state.
+	// TerminalStates is the current list of configured terminal issue
+	// states. Used to evaluate the blocker rule via
+	// [IsBlockedByNonTerminal] before dispatch.
 	TerminalStates []string
 
 	// MaxRetryBackoffMS is the configured cap for exponential backoff
@@ -132,6 +132,27 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 		return
 	}
 
+	// Step 3b: Validate retry eligibility — required fields and blocker
+	// rule. FetchCandidateIssues confirms active state; these additional
+	// checks guard against issues that gained blockers or lost required
+	// data between retry schedule and timer fire.
+	if issue.ID == "" || issue.Identifier == "" || issue.Title == "" || issue.State == "" ||
+		IsBlockedByNonTerminal(issue, params.TerminalStates) {
+		log.Info("issue no longer eligible for retry, releasing claim",
+			"issue_id", issueID,
+			"issue_identifier", popped.Identifier,
+		)
+		delete(state.Claimed, issueID)
+
+		if err := params.Store.DeleteRetryEntry(ctx, issueID); err != nil {
+			log.Error("failed to delete retry entry from store",
+				"issue_id", issueID,
+				"error", err,
+			)
+		}
+		return
+	}
+
 	// Step 4: Check slot availability for the issue's state.
 	if !HasAvailableSlots(state, issue.State) {
 		nextAttempt := popped.Attempt + 1
@@ -158,6 +179,8 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 	}
 
 	// Step 5: Dispatch the issue with the popped entry's attempt number.
+	// Pass the popped attempt as-is; NextAttempt increments only on the
+	// next worker exit, not at dispatch time.
 	attempt := popped.Attempt
 	DispatchIssue(ctx, state, issue, &attempt, params.WorkerFn)
 

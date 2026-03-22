@@ -108,16 +108,29 @@ func ShouldDispatch(issue domain.Issue, state *State, activeStates, terminalStat
 	// state. Rules 2 and 3 guarantee that precondition: by this point the
 	// issue's state is active (Rule 2) and the issue is not in the Running
 	// map (Rule 3). Any non-terminal blocker blocks dispatch.
-	for _, blocker := range issue.BlockedBy {
-		if blocker.State == "" {
-			return false
-		}
-		if _, terminal := terminalSet[strings.ToLower(blocker.State)]; !terminal {
-			return false
-		}
+	if IsBlockedByNonTerminal(issue, terminalStates) {
+		return false
 	}
 
 	return true
+}
+
+// IsBlockedByNonTerminal reports whether the issue has any blocker whose
+// state is empty or non-terminal. A blocker with an empty state is treated
+// as non-terminal (unknown state blocks by default). Used by
+// [ShouldDispatch] for the normal dispatch path and by [HandleRetryTimer]
+// for the retry eligibility check.
+func IsBlockedByNonTerminal(issue domain.Issue, terminalStates []string) bool {
+	terminalSet := stateSet(terminalStates)
+	for _, blocker := range issue.BlockedBy {
+		if blocker.State == "" {
+			return true
+		}
+		if _, terminal := terminalSet[strings.ToLower(blocker.State)]; !terminal {
+			return true
+		}
+	}
+	return false
 }
 
 // stateSet builds a set of lowercase state names for O(1) membership testing.
