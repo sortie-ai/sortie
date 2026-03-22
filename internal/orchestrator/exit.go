@@ -107,7 +107,7 @@ func HandleWorkerExit(state *State, result WorkerResult, params HandleWorkerExit
 			Root:          params.WorkspaceRoot,
 			Identifier:    entry.Identifier,
 			IssueID:       result.IssueID,
-			Attempt:       0,
+			Attempt:       normalizeAttempt(entry.RetryAttempt),
 			BeforeRemove:  params.BeforeRemoveHook,
 			HookTimeoutMS: params.HookTimeoutMS,
 			Logger:        log,
