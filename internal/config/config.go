@@ -24,6 +24,11 @@ type ServiceConfig struct {
 	Hooks     HooksConfig
 	Agent     AgentConfig
 
+	// DBPath is the resolved filesystem path for the SQLite database.
+	// Empty string means the caller should apply its own default
+	// (typically .sortie.db adjacent to WORKFLOW.md).
+	DBPath string
+
 	// Extensions holds top-level front matter keys not covered by the
 	// core schema (e.g. "server", "worker"). Consumers access these
 	// via map lookup. Never nil after construction.
@@ -82,6 +87,7 @@ var knownTopLevelKeys = map[string]bool{
 	"workspace": true,
 	"hooks":     true,
 	"agent":     true,
+	"db_path":   true,
 }
 
 // NewServiceConfig converts a raw front matter map into a validated
@@ -114,6 +120,14 @@ func NewServiceConfig(raw map[string]any) (ServiceConfig, error) {
 		return ServiceConfig{}, err
 	}
 
+	dbPath, err := expandPath(extractString(raw, "db_path"))
+	if err != nil {
+		return ServiceConfig{}, &ConfigError{
+			Field:   "db_path",
+			Message: err.Error(),
+		}
+	}
+
 	extensions := make(map[string]any)
 	for k, v := range raw {
 		if !knownTopLevelKeys[k] {
@@ -127,6 +141,7 @@ func NewServiceConfig(raw map[string]any) (ServiceConfig, error) {
 		Workspace:  workspace,
 		Hooks:      hooks,
 		Agent:      agent,
+		DBPath:     dbPath,
 		Extensions: extensions,
 	}, nil
 }
