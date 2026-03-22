@@ -146,9 +146,26 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 		}
 	}
 
-	// --- State construction and retry population ---
+	// --- Preflight validation ---
 
+	preflightParams := orchestrator.PreflightParams{
+		ReloadWorkflow:  mgr.Reload,
+		ConfigFunc:      mgr.Config,
+		TrackerRegistry: registry.Trackers,
+		AgentRegistry:   registry.Agents,
+	}
+
+	validation := orchestrator.ValidateDispatchConfig(preflightParams)
+	if !validation.OK() {
+		logger.Error("dispatch preflight failed", slog.Any("error", validation))
+		return 1
+	}
+
+	// Read config after preflight reload so state and adapters reflect
+	// the validated configuration.
 	cfg := mgr.Config()
+
+	// --- State construction and retry population ---
 
 	state := orchestrator.NewState(
 		cfg.Polling.IntervalMS,
@@ -185,24 +202,6 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 		logger.Error("failed to construct agent adapter", slog.Any("error", err))
 		return 1
 	}
-
-	// --- Preflight validation ---
-
-	preflightParams := orchestrator.PreflightParams{
-		ReloadWorkflow:  mgr.Reload,
-		ConfigFunc:      mgr.Config,
-		TrackerRegistry: registry.Trackers,
-		AgentRegistry:   registry.Agents,
-	}
-
-	validation := orchestrator.ValidateDispatchConfig(preflightParams)
-	if !validation.OK() {
-		logger.Error("dispatch preflight failed", slog.String("error", validation.Error()))
-		return 1
-	}
-
-	// Re-read config after successful preflight reload.
-	cfg = mgr.Config()
 
 	// --- Startup terminal workspace cleanup ---
 
@@ -304,9 +303,9 @@ func agentConfigMap(ac config.AgentConfig) map[string]any {
 }
 
 // mergeExtensions copies adapter-specific config from the Extensions
-// map into dst. Per architecture Section 5.3, adapters may define
-// their own configuration fields in a sub-object named after their
-// kind value. Existing keys in dst are not overwritten.
+// map into dst. Adapters may define their own configuration fields
+// in a sub-object named after their kind value. Existing keys in dst
+// are not overwritten.
 func mergeExtensions(dst map[string]any, extensions map[string]any, kind string) {
 	sub, ok := extensions[kind].(map[string]any)
 	if !ok {

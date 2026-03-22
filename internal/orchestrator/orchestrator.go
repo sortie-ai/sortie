@@ -292,8 +292,9 @@ func (o *Orchestrator) onRetryFire(issueID string) {
 // with TimerHandle == nil are pending activation. Entries with
 // scheduledDelayMS > 0 get a [time.AfterFunc] timer; entries with
 // scheduledDelayMS == 0 (past-due) are written directly to
-// retryTimerCh. Called at the top of [Run] before the select loop,
-// guaranteeing the channel is being drained.
+// retryTimerCh. Called at the top of [Run] before entering the select
+// loop, relying on the channel buffer sizing to tolerate immediate-fire
+// entries written before the loop begins draining the channel.
 func (o *Orchestrator) activateReconstructedRetries() {
 	for issueID, entry := range o.state.RetryAttempts {
 		if entry.TimerHandle != nil {
