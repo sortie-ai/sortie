@@ -194,6 +194,60 @@ func TestHandleRetryTimer(t *testing.T) {
 			},
 		},
 		{
+			name:    "startup-reconstructed entry with future DueAtMS proceeds to dispatch",
+			issueID: "ISS-7",
+			state: func(t *testing.T, id string) *State {
+				t.Helper()
+				state := NewState(5000, 4, nil, AgentTotals{})
+				// Simulate startup recovery: zero scheduledAt, DueAtMS in
+				// the future. Old wall-clock code would have treated this as
+				// stale and returned early. New code proceeds normally.
+				state.RetryAttempts[id] = &RetryEntry{
+					IssueID:    id,
+					Identifier: id,
+					Attempt:    2,
+					DueAtMS:    time.Now().UnixMilli() + 3_600_000,
+				}
+				state.Claimed[id] = struct{}{}
+				return state
+			},
+			store: func() *mockRetryStore { return &mockRetryStore{} },
+			tracker: func(id string) *mockRetryTracker {
+				return &mockRetryTracker{
+					candidates: []domain.Issue{
+						candidateIssue(id, id, "To Do"),
+					},
+				}
+			},
+			workerFn: func(ch chan<- struct{}) WorkerFunc {
+				return func(_ context.Context, _ domain.Issue, _ *int) {
+					ch <- struct{}{}
+				}
+			},
+			check: func(t *testing.T, id string, state *State, store *mockRetryStore, tracker *mockRetryTracker, workerCalled bool) {
+				t.Helper()
+				// Tracker was called — entry was NOT treated as stale.
+				if tracker.fetchCount != 1 {
+					t.Errorf("FetchCandidateIssues call count = %d, want 1", tracker.fetchCount)
+				}
+				// Issue dispatched.
+				if _, ok := state.Running[id]; !ok {
+					t.Fatalf("Running[%s] missing after dispatch, want present", id)
+				}
+				if !workerCalled {
+					t.Error("worker function not invoked, want invoked")
+				}
+				// Retry entry cleared.
+				if _, ok := state.RetryAttempts[id]; ok {
+					t.Errorf("RetryAttempts[%s] still present after dispatch, want cleared", id)
+				}
+				// DeleteRetryEntry called.
+				if len(store.deletedIssueID) != 1 || store.deletedIssueID[0] != id {
+					t.Errorf("DeleteRetryEntry calls = %v, want [%s]", store.deletedIssueID, id)
+				}
+			},
+		},
+		{
 			name:    "fetch failure reschedules with backoff",
 			issueID: "ISS-2",
 			state: func(t *testing.T, id string) *State {
@@ -224,6 +278,13 @@ func TestHandleRetryTimer(t *testing.T) {
 					t.Errorf("RetryAttempts[%s].TimerHandle = nil, want non-nil", id)
 				} else {
 					entry.TimerHandle.Stop()
+				}
+				// ScheduleRetry must set monotonic fields for future stale checks.
+				if entry.scheduledAt.IsZero() {
+					t.Errorf("RetryAttempts[%s].scheduledAt is zero, want non-zero (set by ScheduleRetry)", id)
+				}
+				if entry.scheduledDelayMS == 0 {
+					t.Errorf("RetryAttempts[%s].scheduledDelayMS = 0, want non-zero backoff delay", id)
 				}
 				// Issue stays claimed.
 				if _, claimed := state.Claimed[id]; !claimed {
@@ -724,11 +785,21 @@ func TestIsStaleRetryTimer(t *testing.T) {
 			want: false,
 		},
 		{
-			name: "startup-reconstructed: always non-stale",
+			name: "startup-reconstructed: always non-stale regardless of DueAtMS",
 			entry: &RetryEntry{
 				// scheduledAt is zero — startup-reconstructed entry.
 				// No stale predecessor exists, so always non-stale.
 				DueAtMS: time.Now().UnixMilli() + 3_600_000,
+			},
+			want: false,
+		},
+		{
+			name: "startup-reconstructed: past DueAtMS also non-stale",
+			entry: &RetryEntry{
+				// scheduledAt is zero, DueAtMS in the past.
+				// Old wall-clock code returned false here too, but this
+				// documents that DueAtMS is irrelevant for the decision.
+				DueAtMS: time.Now().UnixMilli() - 10_000,
 			},
 			want: false,
 		},

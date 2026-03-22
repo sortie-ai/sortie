@@ -1,9 +1,11 @@
 package claude
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/sortie-ai/sortie/internal/domain"
+	"github.com/sortie-ai/sortie/internal/logging"
 	"github.com/sortie-ai/sortie/internal/registry"
 )
 
@@ -577,6 +580,31 @@ func TestStopSession_NilProc(t *testing.T) {
 	err := adapter.StopSession(context.Background(), session)
 	if err != nil {
 		t.Errorf("StopSession(nil proc) = %v, want nil", err)
+	}
+}
+
+func TestDrainStderr_SessionID(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	base := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	logger := logging.WithSession(base.With(slog.String("component", "claude-adapter")), "sess-test-789")
+
+	r := strings.NewReader("some stderr line\n")
+	drainStderr(r, logger)
+
+	output := buf.String()
+	if !strings.Contains(output, "session_id=sess-test-789") {
+		t.Errorf("log output missing session_id attribute, got: %s", output)
+	}
+	if !strings.Contains(output, "component=claude-adapter") {
+		t.Errorf("log output missing component attribute, got: %s", output)
+	}
+	if !strings.Contains(output, "agent stderr") {
+		t.Errorf("log output missing message, got: %s", output)
+	}
+	if !strings.Contains(output, "line=\"some stderr line\"") {
+		t.Errorf("log output missing line attribute, got: %s", output)
 	}
 }
 

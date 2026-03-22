@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -1316,6 +1317,38 @@ func TestStopSessionBestEffort(t *testing.T) {
 		// Should not panic or propagate the error.
 		stopSessionBestEffort(context.Background(), adapter, domain.Session{ID: "s1"}, cfg, discardLogger())
 	})
+}
+
+// --- stopSessionBestEffort log message tests ---
+
+func TestStopSessionBestEffort_LogMessage(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, nil))
+
+	adapter := &mockAgentAdapter{
+		stopSessionFn: func(_ context.Context, _ domain.Session) error {
+			return errors.New("connection refused")
+		},
+	}
+
+	cfg := config.ServiceConfig{
+		Agent: config.AgentConfig{ReadTimeoutMS: 1000},
+	}
+
+	stopSessionBestEffort(context.Background(), adapter, domain.Session{ID: "s1"}, cfg, logger)
+
+	output := buf.String()
+	if !strings.Contains(output, "stop session failed") {
+		t.Errorf("want log message %q, got: %s", "stop session failed", output)
+	}
+	if strings.Contains(output, "StopSession") {
+		t.Errorf("log message contains uppercase StopSession, want lowercase: %s", output)
+	}
+	if !strings.Contains(output, "connection refused") {
+		t.Errorf("log output missing error attribute, got: %s", output)
+	}
 }
 
 // --- exitKindForErr unit tests ---
