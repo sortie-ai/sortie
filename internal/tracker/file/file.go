@@ -19,7 +19,7 @@ import (
 )
 
 func init() {
-	registry.Trackers.RegisterWithMeta("file", NewFileAdapter, registry.AdapterMeta{})
+	registry.Trackers.Register("file", NewFileAdapter)
 }
 
 // Compile-time interface satisfaction check.
