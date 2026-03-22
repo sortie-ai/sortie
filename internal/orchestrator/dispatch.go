@@ -115,6 +115,44 @@ func ShouldDispatch(issue domain.Issue, state *State, activeStates, terminalStat
 	return true
 }
 
+// ShouldDispatchWithSets is the pre-built-set variant of [ShouldDispatch].
+// The dispatch loop calls this to avoid rebuilding state sets on each
+// candidate. activeSet and terminalSet must contain lowercase state names
+// built via [stateSet].
+func ShouldDispatchWithSets(issue domain.Issue, state *State, activeSet, terminalSet map[string]struct{}) bool {
+	// Rule 1: required fields.
+	if issue.ID == "" || issue.Identifier == "" || issue.Title == "" || issue.State == "" {
+		return false
+	}
+
+	normalizedState := strings.ToLower(issue.State)
+
+	// Rule 2: state must be active and not terminal.
+	if _, active := activeSet[normalizedState]; !active {
+		return false
+	}
+	if _, terminal := terminalSet[normalizedState]; terminal {
+		return false
+	}
+
+	// Rule 3: not already running.
+	if _, running := state.Running[issue.ID]; running {
+		return false
+	}
+
+	// Rule 4: not already claimed.
+	if _, claimed := state.Claimed[issue.ID]; claimed {
+		return false
+	}
+
+	// Rule 5: blocker rule.
+	if isBlockedByNonTerminalSet(issue, terminalSet) {
+		return false
+	}
+
+	return true
+}
+
 // IsBlockedByNonTerminal reports whether the issue has any blocker whose
 // state is empty or non-terminal. A blocker with an empty state is treated
 // as non-terminal (unknown state blocks by default). Used by
