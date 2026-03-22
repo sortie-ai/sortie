@@ -42,6 +42,7 @@ Spec-first, agent-developed orchestration service. The architecture document is 
 - Put integration-specific logic (Jira field names, Claude Code CLI flags) in orchestrator core packages.
 - Weaken workspace path containment or sanitization rules.
 - Edit `LICENSE` or `README.md` without explicit instruction.
+- Do not reference `docs/architecture.md`, `docs/decisions/`, section numbers, ADR numbers, or ticket IDs in godoc comments. Those belong in specs and plans, not in the source.
 
 ## Reference docs
 

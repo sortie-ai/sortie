@@ -392,7 +392,7 @@ component. Uses mock adapters for tracker and agent - no real external calls.
       **Verify:** unit test confirms preflight passes with an empty `tracker.api_key` when the
       adapter's `RequiresAPIKey` is false, and fails when `RequiresAPIKey` is true.
 
-- [ ] 6.15 Make the database path configurable: add an optional `db_path` field to the
+- [x] 6.15 Make the database path configurable: add an optional `db_path` field to the
       top-level config (default: `.sortie.db` next to WORKFLOW.md). Resolve `$VAR`
       environment indirection and `~` expansion. Update `cmd/sortie/main.go` to use
       the configured path instead of the hardcoded
