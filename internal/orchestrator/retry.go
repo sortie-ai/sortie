@@ -223,14 +223,13 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 // set (entries created by [ScheduleRetry]), the check uses Go's monotonic
 // clock via time.Since, making it immune to wall-clock adjustments (NTP,
 // suspend/resume). When scheduledAt is zero (entries reconstructed from
-// SQLite at startup), it falls back to comparing DueAtMS against wall
-// time — acceptable because startup-reconstructed timers have no stale
-// predecessor to race with.
+// SQLite at startup), the timer is always treated as non-stale because
+// startup-reconstructed entries have no stale predecessor to race with.
 func isStaleRetryTimer(entry *RetryEntry) bool {
 	if !entry.scheduledAt.IsZero() {
 		return time.Since(entry.scheduledAt) < time.Duration(entry.scheduledDelayMS)*time.Millisecond
 	}
-	return entry.DueAtMS > time.Now().UnixMilli()
+	return false
 }
 
 // persistRetryEntry saves the current in-memory retry entry for issueID to

@@ -155,11 +155,15 @@ func TestHandleRetryTimer(t *testing.T) {
 			state: func(t *testing.T, id string) *State {
 				t.Helper()
 				state := NewState(5000, 4, nil, AgentTotals{})
+				// Simulate a replaced entry: scheduledAt is recent and
+				// scheduledDelayMS hasn't elapsed yet (monotonic stale check).
 				state.RetryAttempts[id] = &RetryEntry{
-					IssueID:    id,
-					Identifier: id,
-					Attempt:    2,
-					DueAtMS:    time.Now().UnixMilli() + 3_600_000, // 1 hour from now
+					IssueID:          id,
+					Identifier:       id,
+					Attempt:          2,
+					DueAtMS:          time.Now().UnixMilli() + 3_600_000,
+					scheduledAt:      time.Now(),
+					scheduledDelayMS: 3_600_000, // 1 hour delay, just scheduled
 				}
 				state.Claimed[id] = struct{}{}
 				return state
@@ -720,18 +724,11 @@ func TestIsStaleRetryTimer(t *testing.T) {
 			want: false,
 		},
 		{
-			name: "wall-clock fallback: future DueAtMS is stale",
+			name: "startup-reconstructed: always non-stale",
 			entry: &RetryEntry{
 				// scheduledAt is zero — startup-reconstructed entry.
+				// No stale predecessor exists, so always non-stale.
 				DueAtMS: time.Now().UnixMilli() + 3_600_000,
-			},
-			want: true,
-		},
-		{
-			name: "wall-clock fallback: past DueAtMS is not stale",
-			entry: &RetryEntry{
-				// scheduledAt is zero — startup-reconstructed entry.
-				DueAtMS: time.Now().UnixMilli() - 1000,
 			},
 			want: false,
 		},
