@@ -672,3 +672,65 @@ func TestReconcile_SameIssueStalledAndTerminal(t *testing.T) {
 		t.Error("PendingCleanup not set for stalled+terminal issue")
 	}
 }
+
+// --- Stall-retry guard tests ---
+
+func TestReconcileStalled_SecondTickSkipsReschedule(t *testing.T) {
+	t.Parallel()
+
+	store := &mockReconcileStore{}
+	tracker := &mockReconcileTracker{
+		states: map[string]string{"ISSUE-1": "In Progress"},
+	}
+	params := defaultReconcileParams(t, store, tracker)
+	params.StallTimeoutMS = 60_000
+
+	state := NewState(5000, 4, nil, AgentTotals{})
+	cc := &cancelCounter{}
+	state.Running["ISSUE-1"] = &RunningEntry{
+		Identifier: "ISSUE-1-ident",
+		StartedAt:  reconcileBaseTime.Add(-120 * time.Second), // stalled
+		CancelFunc: cc.cancel,
+		Issue:      domain.Issue{State: "In Progress"},
+	}
+	state.Claimed["ISSUE-1"] = struct{}{}
+
+	// First tick: should schedule retry.
+	ReconcileRunningIssues(state, params)
+
+	firstEntry, ok := state.RetryAttempts["ISSUE-1"]
+	if !ok {
+		t.Fatal("retry not scheduled after first tick")
+	}
+	firstDueAt := firstEntry.DueAtMS
+	firstAttempt := firstEntry.Attempt
+	if firstAttempt != 1 {
+		t.Fatalf("first retry Attempt = %d, want 1", firstAttempt)
+	}
+	if len(store.savedEntries) != 1 {
+		t.Fatalf("SaveRetryEntry called %d times after first tick, want 1", len(store.savedEntries))
+	}
+
+	// Second tick: same entry still stalled but retry already present.
+	// Guard should skip rescheduling — DueAtMS and save count unchanged.
+	ReconcileRunningIssues(state, params)
+
+	secondEntry, ok := state.RetryAttempts["ISSUE-1"]
+	if !ok {
+		t.Fatal("retry entry removed after second tick")
+	}
+	if secondEntry.DueAtMS != firstDueAt {
+		t.Errorf("DueAtMS changed from %d to %d after second tick, want unchanged", firstDueAt, secondEntry.DueAtMS)
+	}
+	if secondEntry.Attempt != firstAttempt {
+		t.Errorf("Attempt changed from %d to %d after second tick, want unchanged", firstAttempt, secondEntry.Attempt)
+	}
+	// No additional SaveRetryEntry call.
+	if len(store.savedEntries) != 1 {
+		t.Errorf("SaveRetryEntry called %d times after second tick, want 1 (no additional call)", len(store.savedEntries))
+	}
+	// CancelFunc called on both ticks (stall detected both times).
+	if cc.count != 2 {
+		t.Errorf("CancelFunc called %d times after two ticks, want 2", cc.count)
+	}
+}

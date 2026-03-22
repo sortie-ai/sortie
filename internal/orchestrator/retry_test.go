@@ -700,6 +700,70 @@ func TestHandleRetryTimer(t *testing.T) {
 	}
 }
 
+func TestHandleRetryTimer_WorkerStillRunningReschedulesInsteadOfDispatching(t *testing.T) {
+	t.Parallel()
+
+	store := &mockRetryStore{}
+	tracker := &mockRetryTracker{
+		// If the guard works, FetchCandidateIssues should never be called.
+		candidates: []domain.Issue{candidateIssue("ISS-1", "ISS-1", "To Do")},
+	}
+
+	state := retryState(t, "ISS-1", "ISS-1", 2)
+	// Place the issue in Running to simulate a cancelled-but-not-yet-exited worker.
+	state.Running["ISS-1"] = &RunningEntry{
+		Identifier: "ISS-1",
+		Issue:      candidateIssue("ISS-1", "ISS-1", "In Progress"),
+		StartedAt:  time.Now().UTC(),
+	}
+
+	params := defaultRetryParams(t, store, tracker)
+
+	workerCalled := false
+	params.WorkerFn = func(_ context.Context, _ domain.Issue, _ *int) {
+		workerCalled = true
+	}
+
+	HandleRetryTimer(state, "ISS-1", params)
+
+	// Worker must NOT have been dispatched.
+	if workerCalled {
+		t.Error("worker dispatched while issue still in Running, want no dispatch")
+	}
+
+	// FetchCandidateIssues should not have been called — guard returns early.
+	if tracker.fetchCount != 0 {
+		t.Errorf("FetchCandidateIssues call count = %d, want 0", tracker.fetchCount)
+	}
+
+	// Retry entry rescheduled with same attempt number.
+	entry, ok := state.RetryAttempts["ISS-1"]
+	if !ok {
+		t.Fatal("RetryAttempts[ISS-1] missing, want rescheduled")
+	}
+	if entry.Attempt != 2 {
+		t.Errorf("rescheduled Attempt = %d, want 2 (same as original)", entry.Attempt)
+	}
+	if entry.TimerHandle == nil {
+		t.Error("rescheduled TimerHandle = nil, want non-nil")
+	} else {
+		entry.TimerHandle.Stop()
+	}
+
+	// Claim preserved.
+	if _, claimed := state.Claimed["ISS-1"]; !claimed {
+		t.Error("Claimed[ISS-1] missing, want preserved")
+	}
+
+	// SaveRetryEntry called for the rescheduled entry.
+	if len(store.savedEntries) != 1 {
+		t.Fatalf("SaveRetryEntry call count = %d, want 1", len(store.savedEntries))
+	}
+	if store.savedEntries[0].Attempt != 2 {
+		t.Errorf("saved Attempt = %d, want 2", store.savedEntries[0].Attempt)
+	}
+}
+
 func TestFindIssueByID(t *testing.T) {
 	t.Parallel()
 
