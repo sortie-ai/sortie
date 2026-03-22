@@ -179,7 +179,7 @@ func stopSessionBestEffort(
 	defer cancel()
 
 	if err := adapter.StopSession(stopCtx, session); err != nil {
-		logger.Warn("StopSession failed", "error", err)
+		logger.Warn("stop session failed", slog.Any("error", err))
 	}
 }
 
@@ -273,7 +273,7 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 	}
 
 	workspacePath = wsResult.Path
-	logger.Info("workspace prepared", "workspace", wsResult.Path)
+	logger.Info("workspace prepared", slog.String("workspace", wsResult.Path))
 
 	// finishWorkspace is a helper that runs the after_run hook
 	// best-effort. Called on every exit path after successful
@@ -328,12 +328,12 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 
 	sessionStarted = true
 	sessionID = session.ID
-	logger.Info("agent session started", "session_id", session.ID)
+	logger.Info("agent session started", slog.String("session_id", session.ID))
 
 	// Phase 3: Multi-Turn Loop.
 	maxTurns := cfg.Agent.MaxTurns
 	if maxTurns < 1 {
-		logger.Warn("agent max_turns is less than 1; clamping to 1", "configured_max_turns", cfg.Agent.MaxTurns)
+		logger.Warn("agent max_turns is less than 1; clamping to 1", slog.Int("configured_max_turns", cfg.Agent.MaxTurns))
 		maxTurns = 1
 	}
 	turnNumber := 1
@@ -361,7 +361,7 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 			return
 		}
 
-		logger.Info("turn started", "turn_number", turnNumber, "max_turns", maxTurns)
+		logger.Info("turn started", slog.Int("turn_number", turnNumber), slog.Int("max_turns", maxTurns))
 
 		// 3b: Execute turn.
 		turnResult, err := deps.AgentAdapter.RunTurn(ctx, session, domain.RunTurnParams{
@@ -397,7 +397,7 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 		}
 
 		turnsCompleted++
-		logger.Info("turn completed", "turn_number", turnNumber, "max_turns", maxTurns)
+		logger.Info("turn completed", slog.Int("turn_number", turnNumber), slog.Int("max_turns", maxTurns))
 
 		// 3c: Check for turn-level failure exit reasons.
 		if !isTurnSuccess(turnResult.ExitReason) {
@@ -406,8 +406,8 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 			reported = true
 			exitKind := exitKindForErr(ctx)
 			logger.Warn("turn exit reason indicates failure",
-				"turn_number", turnNumber,
-				"exit_reason", turnResult.ExitReason,
+				slog.Int("turn_number", turnNumber),
+				slog.Any("exit_reason", turnResult.ExitReason),
 			)
 			deps.OnExit(issue.ID, WorkerResult{
 				IssueID:        issue.ID,
@@ -447,7 +447,7 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 			issue.State = stateStr
 		}
 
-		logger.Info("issue state refreshed", "refreshed_state", issue.State)
+		logger.Info("issue state refreshed", slog.String("refreshed_state", issue.State))
 
 		if !isActiveState(issue.State, activeStates) {
 			break
@@ -465,8 +465,8 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 	finishWorkspace()
 
 	logger.Info("worker exiting",
-		"exit_kind", WorkerExitNormal,
-		"turns_completed", turnsCompleted,
+		slog.Any("exit_kind", WorkerExitNormal),
+		slog.Int("turns_completed", turnsCompleted),
 	)
 
 	reported = true
