@@ -7,6 +7,7 @@ import (
 
 	"github.com/sortie-ai/sortie/internal/config"
 	"github.com/sortie-ai/sortie/internal/domain"
+	"github.com/sortie-ai/sortie/internal/logging"
 	"github.com/sortie-ai/sortie/internal/persistence"
 	"github.com/sortie-ai/sortie/internal/prompt"
 )
@@ -114,7 +115,7 @@ func NewOrchestrator(params OrchestratorParams) *Orchestrator {
 // Run enters the event loop, blocks until ctx is cancelled, and returns.
 // Must be called from a single goroutine. On context cancellation the
 // tick timer is stopped and the function returns immediately (hard stop).
-// Task 10.1 replaces this with a draining shutdown phase.
+// A future milestone replaces this with a draining shutdown phase.
 func (o *Orchestrator) Run(ctx context.Context) {
 	tickTimer := time.NewTimer(0)
 	defer tickTimer.Stop()
@@ -150,7 +151,7 @@ func (o *Orchestrator) Run(ctx context.Context) {
 				ActiveStates:      cfg.Tracker.ActiveStates,
 				TerminalStates:    cfg.Tracker.TerminalStates,
 				MaxRetryBackoffMS: cfg.Agent.MaxRetryBackoffMS,
-				WorkerFn:          o.makeWorkerFn(),
+				WorkerFn:          o.makeWorkerFn(""),
 				OnRetryFire:       o.onRetryFire,
 				Ctx:               ctx,
 				Logger:            o.logger,
@@ -186,7 +187,7 @@ func (o *Orchestrator) handleTick(ctx context.Context) {
 	validation := ValidateDispatchConfig(o.preflightParams)
 	if !validation.OK() {
 		o.logger.Error("dispatch preflight failed",
-			slog.String("errors", validation.Error()),
+			slog.String("error", validation.Error()),
 		)
 		o.notifyObservers()
 		return
@@ -215,15 +216,20 @@ func (o *Orchestrator) handleTick(ctx context.Context) {
 	activeSet := stateSet(cfg.Tracker.ActiveStates)
 	terminalSet := stateSet(cfg.Tracker.TerminalStates)
 
-	// Step 7: dispatch loop.
+	// Step 7: dispatch loop. Break only when global capacity is
+	// exhausted; skip individual issues whose per-state limit is full
+	// so issues in other states can still be dispatched.
 	for _, issue := range sorted {
-		if !HasAvailableSlots(o.state, issue.State) {
+		if GlobalAvailableSlots(o.state.MaxConcurrentAgents, len(o.state.Running)) == 0 {
 			break
+		}
+		if !HasAvailableSlots(o.state, issue.State) {
+			continue
 		}
 		if !ShouldDispatchWithSets(issue, o.state, activeSet, terminalSet) {
 			continue
 		}
-		DispatchIssue(ctx, o.state, issue, nil, o.makeWorkerFn())
+		DispatchIssue(ctx, o.state, issue, nil, o.makeWorkerFn(""))
 	}
 
 	o.notifyObservers()
@@ -232,21 +238,13 @@ func (o *Orchestrator) handleTick(ctx context.Context) {
 // makeWorkerFn returns a [WorkerFunc] closure that runs
 // [RunWorkerAttempt] with the orchestrator's shared dependencies.
 // The closure captures channel references for OnEvent and OnExit
-// delivery.
-func (o *Orchestrator) makeWorkerFn() WorkerFunc {
+// delivery. The resumeSessionID must be read by the caller (on the
+// event loop goroutine) before the goroutine starts, to avoid a
+// data race on the Running map.
+func (o *Orchestrator) makeWorkerFn(resumeSessionID string) WorkerFunc {
 	return func(ctx context.Context, issue domain.Issue, attempt *int) {
-		// Read resume session ID from the running entry set by
-		// DispatchIssue. Safe because makeWorkerFn is called from the
-		// event loop goroutine before the worker goroutine starts.
-		var resumeSessionID string
-		if entry, ok := o.state.Running[issue.ID]; ok {
-			resumeSessionID = entry.SessionID
-		}
 
-		logger := o.logger.With(
-			slog.String("issue_id", issue.ID),
-			slog.String("issue_identifier", issue.Identifier),
-		)
+		logger := logging.WithIssue(o.logger, issue.ID, issue.Identifier)
 
 		deps := WorkerDeps{
 			TrackerAdapter:     o.trackerAdapter,
@@ -257,8 +255,7 @@ func (o *Orchestrator) makeWorkerFn() WorkerFunc {
 				select {
 				case o.agentEventCh <- agentEventMsg{IssueID: issueID, Event: event}:
 				default:
-					o.logger.Warn("agent event channel full, dropping event",
-						slog.String("issue_id", issueID),
+					logger.Warn("agent event channel full, dropping event",
 						slog.Any("event_type", event.Type),
 					)
 				}
@@ -280,8 +277,10 @@ func (o *Orchestrator) onRetryFire(issueID string) {
 	select {
 	case o.retryTimerCh <- issueID:
 	default:
-		o.logger.Error("retry timer channel full, dropping event",
+		o.logger.Warn("retry timer channel full, dropping event",
 			slog.String("issue_id", issueID),
+			slog.Int("retry_timer_channel_len", len(o.retryTimerCh)),
+			slog.Int("retry_timer_channel_cap", cap(o.retryTimerCh)),
 		)
 	}
 }

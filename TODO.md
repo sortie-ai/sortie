@@ -436,6 +436,14 @@ the system does real work.
       Jira, confirm Sortie stops the agent and cleans the workspace.
       **Verify:** workspace directory is removed after reconciliation.
 
+- [ ] 7.7 Evaluate agent event channel buffer sizing under sustained load. The current buffer
+      `max(maxConc*16, 256)` may overflow when many concurrent agents emit high-frequency
+      token_usage events, causing silent drops and understated per-session token totals.
+      Measure event throughput under 10+ concurrent Claude Code sessions and tune the buffer
+      multiplier or introduce a blocking send with timeout for token_usage events.
+      **Verify:** run a sustained multi-agent workload, confirm no `agent event channel full`
+      warnings in logs, and per-session token totals match agent-reported cumulative totals.
+
 ## Milestone 8: Observability
 
 Observability surfaces. The system should be monitorable by operators after this milestone.
