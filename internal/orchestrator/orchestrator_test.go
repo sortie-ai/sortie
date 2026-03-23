@@ -921,6 +921,186 @@ type errorString string
 
 func (e errorString) Error() string { return string(e) }
 
+// --- TestTickLogging ---
+
+func TestTickLogging_ZeroCandidates(t *testing.T) {
+	t.Parallel()
+
+	cfg := config.ServiceConfig{
+		Tracker: config.TrackerConfig{
+			Kind:           "mock",
+			ActiveStates:   []string{"To Do"},
+			TerminalStates: []string{"Done"},
+		},
+		Polling: config.PollingConfig{IntervalMS: 1000},
+		Agent:   config.AgentConfig{Kind: "mock", MaxConcurrentAgents: 5},
+	}
+
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, nil))
+
+	pf := passingPreflightRegistries()
+	pf.ReloadWorkflow = func() error { return nil }
+	pf.ConfigFunc = func() config.ServiceConfig { return cfg }
+
+	o := NewOrchestrator(OrchestratorParams{
+		State:  NewState(1000, 5, nil, AgentTotals{}),
+		Logger: logger,
+		TrackerAdapter: &candidateTrackerAdapter{
+			mockTrackerAdapter: &mockTrackerAdapter{},
+			fetchCandidatesFn:  func(_ context.Context) ([]domain.Issue, error) { return nil, nil },
+		},
+		AgentAdapter:    &mockAgentAdapter{},
+		WorkflowManager: &stubWorkflowManager{config: cfg},
+		Store:           &stubStore{},
+		PreflightParams: pf,
+	})
+
+	o.handleTick(context.Background())
+
+	got := buf.String()
+	if !strings.Contains(got, "tick completed") {
+		t.Fatalf("log missing 'tick completed': %s", got)
+	}
+	if !strings.Contains(got, "candidates=0") {
+		t.Errorf("log missing candidates=0: %s", got)
+	}
+	if !strings.Contains(got, "dispatched=0") {
+		t.Errorf("log missing dispatched=0: %s", got)
+	}
+}
+
+func TestTickLogging_WithDispatches(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	cfg := config.ServiceConfig{
+		Tracker: config.TrackerConfig{
+			Kind:           "mock",
+			ActiveStates:   []string{"To Do"},
+			TerminalStates: []string{"Done"},
+		},
+		Polling:   config.PollingConfig{IntervalMS: 1000},
+		Workspace: config.WorkspaceConfig{Root: tmpDir},
+		Hooks:     config.HooksConfig{TimeoutMS: 5000},
+		Agent: config.AgentConfig{
+			Kind:                "mock",
+			Command:             "/usr/bin/agent",
+			MaxConcurrentAgents: 5,
+			MaxTurns:            1,
+			ReadTimeoutMS:       1000,
+		},
+	}
+
+	// Use a mutex-guarded buffer because dispatched worker goroutines
+	// also write log messages concurrently.
+	lb := &lockedBuf{}
+	logger := slog.New(slog.NewTextHandler(lb, nil))
+
+	pf := passingPreflightRegistries()
+	pf.ReloadWorkflow = func() error { return nil }
+	pf.ConfigFunc = func() config.ServiceConfig { return cfg }
+
+	issues := []domain.Issue{
+		{ID: "1", Identifier: "T-1", Title: "First", State: "To Do"},
+		{ID: "2", Identifier: "T-2", Title: "Second", State: "To Do"},
+	}
+
+	tmpl := mustParseTemplate(t, "do {{.issue.identifier}}")
+
+	o := NewOrchestrator(OrchestratorParams{
+		State:  NewState(1000, 5, nil, AgentTotals{}),
+		Logger: logger,
+		TrackerAdapter: &candidateTrackerAdapter{
+			mockTrackerAdapter: &mockTrackerAdapter{},
+			fetchCandidatesFn: func(_ context.Context) ([]domain.Issue, error) {
+				return issues, nil
+			},
+		},
+		AgentAdapter:    &mockAgentAdapter{},
+		WorkflowManager: &stubWorkflowManager{config: cfg, template: tmpl},
+		Store:           &stubStore{},
+		PreflightParams: pf,
+	})
+
+	o.handleTick(context.Background())
+
+	got := lb.String()
+	if !strings.Contains(got, "tick completed") {
+		t.Fatalf("log missing 'tick completed': %s", got)
+	}
+	if !strings.Contains(got, "candidates=2") {
+		t.Errorf("log missing candidates=2: %s", got)
+	}
+	if !strings.Contains(got, "dispatched=2") {
+		t.Errorf("log missing dispatched=2: %s", got)
+	}
+}
+
+// lockedBuf is a concurrency-safe [bytes.Buffer] for log capture in tests
+// where background goroutines also write log output.
+type lockedBuf struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (lb *lockedBuf) Write(p []byte) (int, error) {
+	lb.mu.Lock()
+	defer lb.mu.Unlock()
+	return lb.buf.Write(p)
+}
+
+func (lb *lockedBuf) String() string {
+	lb.mu.Lock()
+	defer lb.mu.Unlock()
+	return lb.buf.String()
+}
+
+func TestTickLogging_PreflightFailure_NoTickLog(t *testing.T) {
+	t.Parallel()
+
+	// When preflight fails, "tick completed" must NOT be logged.
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, nil))
+
+	cfg := config.ServiceConfig{
+		Tracker: config.TrackerConfig{
+			Kind:           "mock",
+			ActiveStates:   []string{"To Do"},
+			TerminalStates: []string{"Done"},
+		},
+		Polling: config.PollingConfig{IntervalMS: 1000},
+		Agent:   config.AgentConfig{Kind: "mock", MaxConcurrentAgents: 5},
+	}
+
+	wm := &stubWorkflowManager{config: cfg}
+
+	o := NewOrchestrator(OrchestratorParams{
+		State:  NewState(1000, 5, nil, AgentTotals{}),
+		Logger: logger,
+		TrackerAdapter: &candidateTrackerAdapter{
+			mockTrackerAdapter: &mockTrackerAdapter{},
+		},
+		AgentAdapter:    &mockAgentAdapter{},
+		WorkflowManager: wm,
+		Store:           &stubStore{},
+		PreflightParams: PreflightParams{
+			ReloadWorkflow: func() error { return errPreflightFailed },
+			ConfigFunc:     wm.Config,
+		},
+	})
+
+	o.handleTick(context.Background())
+
+	got := buf.String()
+	if strings.Contains(got, "tick completed") {
+		t.Errorf("'tick completed' logged despite preflight failure: %s", got)
+	}
+	if !strings.Contains(got, "dispatch preflight failed") {
+		t.Errorf("expected preflight error log: %s", got)
+	}
+}
+
 // passingPreflightRegistries returns a PreflightParams with stub registries
 // that pass all validation checks.
 func passingPreflightRegistries() PreflightParams {

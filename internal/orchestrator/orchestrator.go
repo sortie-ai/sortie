@@ -251,6 +251,7 @@ func (o *Orchestrator) handleTick(ctx context.Context) {
 	// Step 9: dispatch loop. Break only when global capacity is
 	// exhausted; skip individual issues whose per-state limit is full
 	// so issues in other states can still be dispatched.
+	var dispatched int
 	for _, issue := range sorted {
 		if GlobalAvailableSlots(o.state.MaxConcurrentAgents, len(o.state.Running)) == 0 {
 			break
@@ -262,7 +263,15 @@ func (o *Orchestrator) handleTick(ctx context.Context) {
 			continue
 		}
 		DispatchIssue(ctx, o.state, issue, nil, o.makeWorkerFn(""))
+		dispatched++
 	}
+
+	o.logger.Info("tick completed",
+		slog.Int("candidates", len(sorted)),
+		slog.Int("dispatched", dispatched),
+		slog.Int("running", len(o.state.Running)),
+		slog.Int("retrying", len(o.state.RetryAttempts)),
+	)
 
 	o.notifyObservers()
 }
