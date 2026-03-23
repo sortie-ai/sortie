@@ -337,6 +337,43 @@ func TestRunDatabaseCreatedNextToWorkflow(t *testing.T) {
 	}
 }
 
+func TestRunPreflightFailureSkipsDBCreation(t *testing.T) {
+	// When preflight validation fails (here: missing tracker.kind),
+	// the database file must not be created. This exercises the
+	// startup ordering: preflight runs before DB open.
+	workflowDir := t.TempDir()
+
+	// Write a workflow that loads and starts but fails preflight
+	// because tracker.kind is absent.
+	content := []byte(`---
+polling:
+  interval_ms: 30000
+agent:
+  kind: mock
+---
+Do {{ .issue.title }}.
+`)
+	wfPath := filepath.Join(workflowDir, "WORKFLOW.md")
+	if err := os.WriteFile(wfPath, content, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	code := run(ctx, []string{wfPath}, &stdout, &stderr)
+	if code != 1 {
+		t.Fatalf("exit code = %d, want 1 (preflight should fail); stderr: %s", code, stderr.String())
+	}
+
+	// .sortie.db must NOT exist — DB open should not have run.
+	dbPath := filepath.Join(workflowDir, ".sortie.db")
+	if _, err := os.Stat(dbPath); err == nil {
+		t.Errorf("database file should not exist at %s when preflight fails", dbPath)
+	}
+}
+
 // --- resolveDBPath tests ---
 
 func TestResolveDBPath(t *testing.T) {
