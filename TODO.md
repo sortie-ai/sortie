@@ -429,20 +429,7 @@ component. Uses mock adapters for tracker and agent - no real external calls.
       reconciliation does not cancel a running worker whose tracker state is
       still in the previous config's active set.
 
-- [ ] 6.18 Split `registry.AdapterMeta` into separate `TrackerMeta` and `AgentMeta` types.
-      Currently `AdapterMeta` mixes tracker-specific fields (`RequiresAPIKey`,
-      `RequiresProject`) and agent-specific fields (`RequiresCommand`) in a single struct.
-      This works for 3 fields but will become confusing as more adapter-specific
-      capabilities are added. Define `TrackerMeta` and `AgentMeta` structs, update
-      `Registry[T]` to accept the appropriate meta type (may require separate registry
-      types or a type parameter for meta), and migrate all adapter registrations.
-      Also consider changing `Meta()` to return `(M, bool)` so callers can distinguish
-      "unregistered kind" from "registered with zero-value meta." Make sure this does not
-      conflict with the documented architecture and is covered in architecture.md
-      **Verify:** existing preflight tests pass unchanged. Compilation confirms no adapter
-      mixes tracker fields with agent fields or vice-versa.
-
-- [x] 6.19 Update `docs/architecture.md` to document `db_path` as a top-level config field.
+- [x] 6.18 Update `docs/architecture.md` to document `db_path` as a top-level config field.
       Add `db_path` to the top-level key list in Section 5.3, add a field entry in
       Section 6.4 (type: path, default: `.sortie.db` next to WORKFLOW.md, supports `$VAR`
       and `~` expansion), and update Section 19.1 to reference the `db_path` field name
@@ -451,7 +438,7 @@ component. Uses mock adapters for tracker and agent - no real external calls.
       **Verify:** `db_path` appears in Sections 5.3, 6.4, and 19.1 of the architecture
       doc. No contradictions with existing content.
 
-- [x] 6.20 Update `docs/architecture.md` Section 16.1 startup pseudocode to move
+- [x] 6.19 Update `docs/architecture.md` Section 16.1 startup pseudocode to move
       `validate_dispatch_config()` before `open_or_create_sqlite_db()`. The implementation
       now runs preflight before opening the database so invalid config is rejected without
       creating files on disk. The spec should reflect this ordering.
@@ -463,27 +450,16 @@ component. Uses mock adapters for tracker and agent - no real external calls.
 Connect real Jira and real Claude Code adapters to the orchestrator. This is the first time
 the system does real work.
 
-- [ ] 7.1 Wire the Jira adapter and Claude Code adapter into the orchestrator startup via the
+- [ ] 7.1 Implement graceful shutdown: on SIGTERM/SIGINT, stop accepting new dispatches,
+      wait for running agents to complete (with timeout), close SQLite cleanly. This is
+      required before E2E testing to avoid SQLite corruption and orphaned agent processes.
+      **Verify:** send SIGTERM to running Sortie, confirm it shuts down without data loss.
+
+- [ ] 7.2 Wire the Jira adapter and Claude Code adapter into the orchestrator startup via the
       adapter registry. Adapter selection uses `tracker.kind` and `agent.kind` from config.
       Confirm the registry-based lookup works end-to-end.
       **Verify:** `go run ./cmd/sortie ./WORKFLOW.md` starts, connects to Jira, and polls
       for issues (with a valid WORKFLOW.md and credentials).
-
-- [ ] 7.2 Write the `WORKFLOW.md` syntax reference (`docs/workflow-reference.md`): a formal
-      configuration reference covering file format (front matter + prompt body parsing rules),
-      field-by-field specification for every config section (`tracker`, `polling`, `workspace`,
-      `hooks`, `agent`, extensions, etc.) with types, defaults, validation rules, dynamic reload
-      behavior, and examples. Include prompt template variable reference (Go `text/template`
-      syntax, `issue`/`attempt`/`run` inputs, first-turn vs continuation semantics), hook
-      lifecycle reference (env vars, failure semantics, inline vs file path), adapter-specific
-      configuration sections (per `tracker.kind` and `agent.kind`), error reference (all
-      parse/validation errors with causes and fixes), and complete annotated examples (minimal,
-      production Jira+Claude Code). Derive all content strictly from `docs/architecture.md`
-      Sections 5, 6, 9.4, and 10. This document is the authoritative user-facing reference
-      for workflow authors and must be accurate enough to guide task 7.3 (sample `WORKFLOW.md`).
-      **Verify:** document covers every field from architecture Section 6.4, every hook from
-      Section 5.3.4, every template variable from Section 5.4, and every error from Section 5.5.
-      A reviewer can write a valid WORKFLOW.md using only this reference.
 
 - [ ] 7.3 Create a sample `WORKFLOW.md` for testing: configure Jira project, workspace root,
       a simple after_create hook (e.g., `git clone`), and a minimal prompt template.
@@ -502,32 +478,28 @@ the system does real work.
       Jira, confirm Sortie stops the agent and cleans the workspace.
       **Verify:** workspace directory is removed after reconciliation.
 
-- [ ] 7.7 Evaluate agent event channel buffer sizing under sustained load. The current buffer
-      `max(maxConc*16, 256)` may overflow when many concurrent agents emit high-frequency
-      token_usage events, causing silent drops and understated per-session token totals.
-      Measure event throughput under 10+ concurrent Claude Code sessions and tune the buffer
-      multiplier or introduce a blocking send with timeout for token_usage events.
-      **Verify:** run a sustained multi-agent workload, confirm no `agent event channel full`
-      warnings in logs, and per-session token totals match agent-reported cumulative totals.
+- [ ] 7.7 Write the `WORKFLOW.md` syntax reference (`docs/workflow-reference.md`): a formal
+      configuration reference covering file format (front matter + prompt body parsing rules),
+      field-by-field specification for every config section (`tracker`, `polling`, `workspace`,
+      `hooks`, `agent`, extensions, etc.) with types, defaults, validation rules, dynamic reload
+      behavior, and examples. Include prompt template variable reference (Go `text/template`
+      syntax, `issue`/`attempt`/`run` inputs, first-turn vs continuation semantics), hook
+      lifecycle reference (env vars, failure semantics, inline vs file path), adapter-specific
+      configuration sections (per `tracker.kind` and `agent.kind`), error reference (all
+      parse/validation errors with causes and fixes), and complete annotated examples (minimal,
+      production Jira+Claude Code). Derive all content strictly from `docs/architecture.md`
+      Sections 5, 6, 9.4, and 10. This document is the authoritative user-facing reference
+      for workflow authors. Informed by E2E testing experience from tasks 7.4–7.6.
+      **Verify:** document covers every field from architecture Section 6.4, every hook from
+      Section 5.3.4, every template variable from Section 5.4, and every error from Section 5.5.
+      A reviewer can write a valid WORKFLOW.md using only this reference.
 
-- [ ] 7.8 Evaluate `workerExitCh` buffer sizing when `max_concurrent_agents`
-      increases at runtime. The channel is sized `max(maxConc*2, 64)` at
-      startup. If concurrency is raised far above the initial value via
-      dynamic config reload, `OnExit` performs a blocking send that could
-      stall worker goroutines when the buffer fills and the event loop is
-      temporarily busy. Consider using a non-blocking send with a fallback
-      queue, or sizing the buffer based on a hard upper bound independent of
-      the initial config value.
-      **Verify:** unit test creates an orchestrator with initial
-      `max_concurrent_agents=2`, increases it to a value exceeding the exit
-      channel buffer, exits all workers simultaneously, and confirms no
-      goroutine blocks indefinitely on the exit send.
+## Milestone 8: Observability and Agent Extensions
 
-## Milestone 8: Observability
-
-Observability surfaces. The system should be monitorable by operators after this milestone.
-Basic structured logging was set up in task 0.8; this milestone decides the observability
-model (ADR-0007), enhances logging, and implements the chosen surfaces.
+Observability surfaces and agent-facing extensions. The system should be monitorable by
+operators and agents should have access to tracker data after this milestone. Basic
+structured logging was set up in task 0.8; this milestone decides the observability model
+(ADR-0007), enhances logging, implements the chosen surfaces, and adds agent capabilities.
 
 - [ ] 8.1 Research and write ADR-0007: Observability model. Evaluate embedded HTTP server
       with JSON API + HTML dashboard (current spec) vs Prometheus `/metrics` endpoint
@@ -568,6 +540,24 @@ model (ADR-0007), enhances logging, and implements the chosen surfaces.
       **Verify:** start Sortie with `--port 8080`, open `http://localhost:8080` in a browser,
       confirm the dashboard renders current state.
 
+- [ ] 8.6 Implement the `tracker_api` client-side tool (Section 10.4): expose tracker API
+      access to agents during sessions, scoped to the configured project. Advertise the tool
+      during session startup. Return structured results: `success=true` on API success,
+      `success=false` with preserved response body on API errors, `success=false` with error
+      payload on transport/auth/input failures. Unsupported tool names return failure without
+      stalling. See architecture Section 10.4 for full contract.
+      **Verify:** integration test with mock tracker confirms tool is advertised, successful
+      query returns data, API error preserves body, and tool is scoped to configured project.
+
+- [ ] 8.7 Implement `.sortie/status` workspace file reading (Section 21): after each turn
+      completes, read `.sortie/status` from the workspace root. If value is `blocked` or
+      `needs-human-review`, do not schedule continuation retries until the issue state changes
+      in the tracker. Unknown or absent values are ignored. This is advisory only and does not
+      affect core orchestration correctness.
+      **Verify:** integration test with mock agent that writes `.sortie/status` with `blocked`
+      confirms no continuation retry is scheduled. A second test with an absent file confirms
+      normal continuation behavior.
+
 ## Milestone 9: Self-Hosting (Sortie Builds Sortie)
 
 At this point, Sortie has enough functionality to orchestrate its own development. Create
@@ -578,8 +568,8 @@ features.
       prompt template, hooks (git clone, go mod download, make lint), and agent config.
       **Verify:** Sortie starts and polls the Sortie Jira project.
 
-- [ ] 9.2 Create 3-5 small Jira issues for real improvements (e.g., "add graceful shutdown",
-      "add request logging middleware", "add --version flag"). Start Sortie and observe it
+- [ ] 9.2 Create 3-5 small Jira issues for real improvements (e.g., "add request logging
+      middleware", "add --version flag", "add --dry-run mode"). Start Sortie and observe it
       dispatching agents to work on these issues.
       **Verify:** at least one issue results in a working PR or code change.
 
@@ -587,34 +577,11 @@ features.
       instructions for continuation turns, error recovery, and coding conventions.
       **Verify:** subsequent agent runs produce higher quality output than initial runs.
 
-## Milestone 10: Hardening and Production Readiness
+## Milestone 10: Hardening and Optimization
 
-Polish for public release. Security, documentation, graceful shutdown, and operational
-tooling.
+Operational hardening, performance tuning, and workspace lifecycle improvements.
 
-- [ ] 10.1 Implement graceful shutdown: on SIGTERM/SIGINT, stop accepting new dispatches,
-      wait for running agents to complete (with timeout), close SQLite cleanly.
-      **Verify:** send SIGTERM to running Sortie, confirm it shuts down without data loss.
-
-- [ ] 10.2 Implement the `tracker_api` client-side tool (Section 10.4): expose tracker API
-      access to agents during sessions, scoped to the configured project. Advertise the tool
-      during session startup. Return structured results: `success=true` on API success,
-      `success=false` with preserved response body on API errors, `success=false` with error
-      payload on transport/auth/input failures. Unsupported tool names return failure without
-      stalling. See architecture Section 10.4 for full contract.
-      **Verify:** integration test with mock tracker confirms tool is advertised, successful
-      query returns data, API error preserves body, and tool is scoped to configured project.
-
-- [ ] 10.3 Implement `.sortie/status` workspace file reading (Section 21): after each turn
-      completes, read `.sortie/status` from the workspace root. If value is `blocked` or
-      `needs-human-review`, do not schedule continuation retries until the issue state changes
-      in the tracker. Unknown or absent values are ignored. This is advisory only and does not
-      affect core orchestration correctness.
-      **Verify:** integration test with mock agent that writes `.sortie/status` with `blocked`
-      confirms no continuation retry is scheduled. A second test with an absent file confirms
-      normal continuation behavior.
-
-- [ ] 10.4 Research and write ADR-0008: Workspace cleanup policy. Evaluate time-based TTL
+- [ ] 10.1 Research and write ADR-0008: Workspace cleanup policy. Evaluate time-based TTL
       expiration (delete workspaces older than N days) vs run-count-based retention (keep
       last N workspaces) vs manual-only cleanup vs disk-pressure-triggered eviction.
       Consider: the current design cleans workspaces only on terminal state transitions
@@ -624,7 +591,7 @@ tooling.
       **Verify:** ADR exists with status `accepted`, covers at least 3 alternatives, and
       `docs/decisions/README.md` index is updated.
 
-- [ ] 10.5 Implement workspace TTL cleanup: on startup and periodically (e.g., once per hour),
+- [ ] 10.2 Implement workspace TTL cleanup: on startup and periodically (e.g., once per hour),
       scan workspace root for directories older than the configured retention period. Remove
       directories that have no corresponding active or retrying issue in orchestrator state.
       Respect `before_remove` hook. Make the retention period configurable via a
@@ -634,23 +601,7 @@ tooling.
       orphaned directories beyond retention age are removed. Directories with active issues
       are preserved.
 
-- [ ] 10.6 Write CONTRIBUTING.md: build instructions, test instructions, code conventions,
-      PR process, architecture overview reference.
-      **Verify:** a new contributor can follow the guide to build, test, and submit a change.
-
-- [ ] 10.7 Write SECURITY.md: trust model, secret handling, workspace isolation guarantees,
-      prompt injection risks, harness hardening guidance. Cover all items from architecture
-      Section 15 (trust boundary, filesystem safety, secret handling, hook safety, harness
-      hardening).
-      **Verify:** document covers all items from architecture Section 15.
-
-- [x] 10.8 Add release automation: GoReleaser config for building cross-platform static
-      binaries, GitHub Actions `workflow_dispatch` release workflow that runs lint, unit
-      tests, and Jira integration tests before creating a tag and publishing a release.
-      **Verify:** "Run workflow" button in GitHub Actions with version input `0.1.0`
-      produces release artifacts on GitHub after all tests pass.
-
-- [ ] 10.9 Optimize retry timer candidate fetch: `HandleRetryTimer` calls
+- [ ] 10.3 Optimize retry timer candidate fetch: `HandleRetryTimer` calls
       `FetchCandidateIssues` (full paginated sweep) to validate a single issue. At scale
       (hundreds of active issues, multiple concurrent retries) this becomes expensive.
       Replace with `FetchIssueByID` + active-state check to reduce to a single API call
@@ -658,38 +609,7 @@ tooling.
       eligibility result as candidate-set membership.
       **Verify:** benchmark or integration test confirms single-issue fetch path.
 
-- [ ] 10.10 Add SBOM generation to release pipeline: install `syft` via `anchore/sbom-action`
-      in the release workflow, re-enable the `sboms` section in `.goreleaser.yaml` to produce
-      SPDX JSON manifests for each archive artifact.
-      **Verify:** dry run release produces `*.sbom.json` files alongside each archive in
-      the `dist/` directory.
-
-- [ ] 10.11 Finalize `docs/workflow-reference.md`: update the reference written in task 7.2
-      to reflect all features implemented through Milestones 7–10 — including `tracker_api`
-      tool extension (10.2), `.sortie/status` file (10.3), workspace TTL cleanup and
-      `workspace.retention_days` (10.5), `sortie validate` subcommand, and any adapter-specific
-      configuration discovered during end-to-end testing. Add a migration/changelog section
-      noting any schema changes since the initial draft. Ensure every field, hook, template
-      variable, error code, and adapter extension documented in the architecture spec has a
-      corresponding entry. This is the production-quality reference that README.md (10.12)
-      will link to as the definitive WORKFLOW.md documentation.
-      **Verify:** the reference covers 100% of config fields from architecture Section 6.4,
-      all extensions added in Milestones 8–10, and includes at least three complete annotated
-      examples (minimal, production Jira+Claude Code, self-hosting). A new user can write a
-      valid WORKFLOW.md using only this document.
-
-- [ ] 10.12 Review and finalize README.md: add installation instructions, quick start guide,
-      and configuration reference now that the software exists.
-      **Verify:** a new user can follow the README to install and run Sortie against their
-      own Jira project.
-
-- [ ] 10.13 Prepare 1.0.0 release: update CHANGELOG.md to replace the pre-1.0 notice with
-      standard Semantic Versioning adherence, remove the "not yet ready for use" note from
-      README.md, and tag the first stable release.
-      **Verify:** CHANGELOG.md references SemVer, README.md has no development-only
-      disclaimers, and the 1.0.0 release is published.
-
-- [ ] 10.14 Propagate session ID through the retry chain: add `SessionID` to
+- [ ] 10.4 Propagate session ID through the retry chain: add `SessionID` to
       `RetryEntry`, `ScheduleRetryParams`, and `persistence.RetryEntry` (schema
       migration). Populate from `WorkerResult.SessionID` in `HandleWorkerExit`,
       read in `HandleRetryTimer`, and pass to `makeWorkerFn(entry.SessionID)` so
@@ -701,3 +621,88 @@ tooling.
       worker exit → schedule retry → timer fire → new worker receives the original
       session ID. Integration test with mock agent confirms `--resume` flag is
       passed when session ID is present.
+
+- [ ] 10.5 Evaluate agent event channel buffer sizing under sustained load. The current buffer
+      `max(maxConc*16, 256)` may overflow when many concurrent agents emit high-frequency
+      token_usage events, causing silent drops and understated per-session token totals.
+      Measure event throughput under 10+ concurrent Claude Code sessions and tune the buffer
+      multiplier or introduce a blocking send with timeout for token_usage events.
+      **Verify:** run a sustained multi-agent workload, confirm no `agent event channel full`
+      warnings in logs, and per-session token totals match agent-reported cumulative totals.
+
+- [ ] 10.6 Evaluate `workerExitCh` buffer sizing when `max_concurrent_agents`
+      increases at runtime. The channel is sized `max(maxConc*2, 64)` at
+      startup. If concurrency is raised far above the initial value via
+      dynamic config reload, `OnExit` performs a blocking send that could
+      stall worker goroutines when the buffer fills and the event loop is
+      temporarily busy. Consider using a non-blocking send with a fallback
+      queue, or sizing the buffer based on a hard upper bound independent of
+      the initial config value.
+      **Verify:** unit test creates an orchestrator with initial
+      `max_concurrent_agents=2`, increases it to a value exceeding the exit
+      channel buffer, exits all workers simultaneously, and confirms no
+      goroutine blocks indefinitely on the exit send.
+
+- [ ] 10.7 Split `registry.AdapterMeta` into separate `TrackerMeta` and `AgentMeta` types.
+      Currently `AdapterMeta` mixes tracker-specific fields (`RequiresAPIKey`,
+      `RequiresProject`) and agent-specific fields (`RequiresCommand`) in a single struct.
+      This works for 3 fields but will become confusing as more adapter-specific
+      capabilities are added. Define `TrackerMeta` and `AgentMeta` structs, update
+      `Registry[T]` to accept the appropriate meta type (may require separate registry
+      types or a type parameter for meta), and migrate all adapter registrations.
+      Also consider changing `Meta()` to return `(M, bool)` so callers can distinguish
+      "unregistered kind" from "registered with zero-value meta." Make sure this does not
+      conflict with the documented architecture and is covered in architecture.md
+      **Verify:** existing preflight tests pass unchanged. Compilation confirms no adapter
+      mixes tracker fields with agent fields or vice-versa.
+
+## Milestone 11: Documentation and Release
+
+Documentation, security guidance, and public release preparation.
+
+- [ ] 11.1 Write CONTRIBUTING.md: build instructions, test instructions, code conventions,
+      PR process, architecture overview reference.
+      **Verify:** a new contributor can follow the guide to build, test, and submit a change.
+
+- [ ] 11.2 Write SECURITY.md: trust model, secret handling, workspace isolation guarantees,
+      prompt injection risks, harness hardening guidance. Cover all items from architecture
+      Section 15 (trust boundary, filesystem safety, secret handling, hook safety, harness
+      hardening).
+      **Verify:** document covers all items from architecture Section 15.
+
+- [x] 11.3 Add release automation: GoReleaser config for building cross-platform static
+      binaries, GitHub Actions `workflow_dispatch` release workflow that runs lint, unit
+      tests, and Jira integration tests before creating a tag and publishing a release.
+      **Verify:** "Run workflow" button in GitHub Actions with version input `0.1.0`
+      produces release artifacts on GitHub after all tests pass.
+
+- [ ] 11.4 Add SBOM generation to release pipeline: install `syft` via `anchore/sbom-action`
+      in the release workflow, re-enable the `sboms` section in `.goreleaser.yaml` to produce
+      SPDX JSON manifests for each archive artifact.
+      **Verify:** dry run release produces `*.sbom.json` files alongside each archive in
+      the `dist/` directory.
+
+- [ ] 11.5 Finalize `docs/workflow-reference.md`: update the reference written in task 7.7
+      to reflect all features implemented through Milestones 7–11 — including `tracker_api`
+      tool extension (8.6), `.sortie/status` file (8.7), workspace TTL cleanup and
+      `workspace.retention_days` (10.2), `sortie validate` subcommand, and any adapter-specific
+      configuration discovered during end-to-end testing. Add a migration/changelog section
+      noting any schema changes since the initial draft. Ensure every field, hook, template
+      variable, error code, and adapter extension documented in the architecture spec has a
+      corresponding entry. This is the production-quality reference that README.md (11.6)
+      will link to as the definitive WORKFLOW.md documentation.
+      **Verify:** the reference covers 100% of config fields from architecture Section 6.4,
+      all extensions added in Milestones 8–11, and includes at least three complete annotated
+      examples (minimal, production Jira+Claude Code, self-hosting). A new user can write a
+      valid WORKFLOW.md using only this document.
+
+- [ ] 11.6 Review and finalize README.md: add installation instructions, quick start guide,
+      and configuration reference now that the software exists.
+      **Verify:** a new user can follow the README to install and run Sortie against their
+      own Jira project.
+
+- [ ] 11.7 Prepare 1.0.0 release: update CHANGELOG.md to replace the pre-1.0 notice with
+      standard Semantic Versioning adherence, remove the "not yet ready for use" note from
+      README.md, and tag the first stable release.
+      **Verify:** CHANGELOG.md references SemVer, README.md has no development-only
+      disclaimers, and the 1.0.0 release is published.
