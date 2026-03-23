@@ -654,6 +654,56 @@ func TestNewServiceConfig(t *testing.T) {
 		})
 		assertConfigErrorField(t, err, "tracker.handoff_state")
 	})
+
+	t.Run("MaxSessions/DefaultIsZero", func(t *testing.T) {
+		t.Parallel()
+		cfg, err := NewServiceConfig(map[string]any{})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		assertIntEqual(t, "Agent.MaxSessions", 0, cfg.Agent.MaxSessions)
+	})
+
+	t.Run("MaxSessions/ExplicitZero", func(t *testing.T) {
+		t.Parallel()
+		cfg, err := NewServiceConfig(map[string]any{
+			"agent": map[string]any{"max_sessions": 0},
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		assertIntEqual(t, "Agent.MaxSessions", 0, cfg.Agent.MaxSessions)
+	})
+
+	t.Run("MaxSessions/PositiveInteger", func(t *testing.T) {
+		t.Parallel()
+		cfg, err := NewServiceConfig(map[string]any{
+			"agent": map[string]any{"max_sessions": 5},
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		assertIntEqual(t, "Agent.MaxSessions", 5, cfg.Agent.MaxSessions)
+	})
+
+	t.Run("MaxSessions/StringCoercion", func(t *testing.T) {
+		t.Parallel()
+		cfg, err := NewServiceConfig(map[string]any{
+			"agent": map[string]any{"max_sessions": "5"},
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		assertIntEqual(t, "Agent.MaxSessions", 5, cfg.Agent.MaxSessions)
+	})
+
+	t.Run("MaxSessions/NegativeRejected", func(t *testing.T) {
+		t.Parallel()
+		_, err := NewServiceConfig(map[string]any{
+			"agent": map[string]any{"max_sessions": -1},
+		})
+		assertConfigErrorField(t, err, "agent.max_sessions")
+	})
 }
 
 // --- test helpers ---

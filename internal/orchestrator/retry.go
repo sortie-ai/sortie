@@ -16,6 +16,7 @@ import (
 type RetryTimerStore interface {
 	SaveRetryEntry(ctx context.Context, entry persistence.RetryEntry) error
 	DeleteRetryEntry(ctx context.Context, issueID string) error
+	CountRunHistoryByIssue(ctx context.Context, issueID string) (int, error)
 }
 
 // HandleRetryTimerParams holds the dependencies for [HandleRetryTimer]
@@ -58,6 +59,13 @@ type HandleRetryTimerParams struct {
 
 	// Logger is the structured logger with orchestrator context.
 	Logger *slog.Logger
+
+	// MaxSessions is the configured per-issue effort budget (from
+	// config.Agent.MaxSessions). When > 0, HandleRetryTimer counts
+	// completed sessions for the issue from run_history and releases
+	// the claim instead of dispatching if the count has reached the
+	// budget. When 0, no budget is enforced.
+	MaxSessions int
 }
 
 // HandleRetryTimer processes a retry timer event for the given issue.
@@ -121,6 +129,35 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 		}, params.OnRetryFire)
 		persistRetryEntry(ctx, log, params.Store, state, issueID)
 		return
+	}
+
+	// Effort budget gate: when max_sessions > 0, count completed sessions
+	// for this issue and release the claim if the budget is exhausted.
+	// Runs before the tracker fetch to avoid a wasted network call.
+	if params.MaxSessions > 0 {
+		count, countErr := params.Store.CountRunHistoryByIssue(ctx, issueID)
+		if countErr != nil {
+			log.Warn("effort budget check failed, proceeding with dispatch",
+				slog.String("issue_id", issueID),
+				slog.String("issue_identifier", popped.Identifier),
+				slog.Any("error", countErr),
+			)
+		} else if count >= params.MaxSessions {
+			log.Warn("effort budget exhausted, releasing claim",
+				slog.String("issue_id", issueID),
+				slog.String("issue_identifier", popped.Identifier),
+				slog.Int("count", count),
+				slog.Int("max_sessions", params.MaxSessions),
+			)
+			delete(state.Claimed, issueID)
+			if err := params.Store.DeleteRetryEntry(ctx, issueID); err != nil {
+				log.Error("failed to delete retry entry after budget exhaustion",
+					slog.String("issue_id", issueID),
+					slog.Any("error", err),
+				)
+			}
+			return
+		}
 	}
 
 	// Step 2: Re-fetch active candidates from the tracker.

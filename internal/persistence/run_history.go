@@ -141,3 +141,16 @@ func (s *Store) QueryRecentRunHistory(ctx context.Context, limit int, afterID in
 	}
 	return entries, nil
 }
+
+// CountRunHistoryByIssue returns the number of run_history entries for the
+// given issue ID. Returns (0, nil) when no entries exist.
+func (s *Store) CountRunHistoryByIssue(ctx context.Context, issueID string) (int, error) {
+	var count int
+	err := s.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM run_history WHERE issue_id = ?`, issueID,
+	).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("count run history by issue %q: %w", issueID, err)
+	}
+	return count, nil
+}

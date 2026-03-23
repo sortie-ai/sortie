@@ -28,6 +28,7 @@ type OrchestratorStore interface {
 	UpsertSessionMetadata(ctx context.Context, meta persistence.SessionMetadata) error
 	SaveRetryEntry(ctx context.Context, entry persistence.RetryEntry) error
 	DeleteRetryEntry(ctx context.Context, issueID string) error
+	CountRunHistoryByIssue(ctx context.Context, issueID string) (int, error)
 }
 
 // Observer receives notifications when orchestrator state changes.
@@ -168,6 +169,7 @@ func (o *Orchestrator) Run(ctx context.Context) {
 				OnRetryFire:       o.onRetryFire,
 				Ctx:               ctx,
 				Logger:            o.logger,
+				MaxSessions:       cfg.Agent.MaxSessions,
 			})
 			o.notifyObservers()
 

@@ -83,6 +83,7 @@ type AgentConfig struct {
 	MaxTurns             int
 	MaxRetryBackoffMS    int
 	MaxConcurrentByState map[string]int
+	MaxSessions          int
 }
 
 // knownTopLevelKeys enumerates the front matter keys consumed by the
@@ -331,6 +332,17 @@ func buildAgentConfig(m map[string]any) (AgentConfig, error) {
 
 	byState := normalizeByStateMap(mapVal(m, "max_concurrent_agents_by_state"))
 
+	maxSessions, err := coerceIntField(m, "max_sessions", "agent.max_sessions")
+	if err != nil {
+		return AgentConfig{}, err
+	}
+	if maxSessions < 0 {
+		return AgentConfig{}, &ConfigError{
+			Field:   "agent.max_sessions",
+			Message: "must be non-negative",
+		}
+	}
+
 	return AgentConfig{
 		Kind:                 kind,
 		Command:              command,
@@ -341,6 +353,7 @@ func buildAgentConfig(m map[string]any) (AgentConfig, error) {
 		MaxTurns:             maxTurns,
 		MaxRetryBackoffMS:    maxRetryBackoff,
 		MaxConcurrentByState: byState,
+		MaxSessions:          maxSessions,
 	}, nil
 }
 

@@ -518,7 +518,7 @@ the system does real work.
       scheduled), transition fails (retry scheduled, error logged), `handoff_state`
       not configured (existing continuation behavior unchanged).
 
-- [ ] 7.9 Add per-issue effort budget as defense-in-depth: new optional config field
+- [x] 7.9 Add per-issue effort budget as defense-in-depth: new optional config field
       `agent.max_sessions` (integer, default 0 = unlimited). In `HandleRetryTimer`,
       count completed sessions for the issue from `run_history`. When the count reaches
       `max_sessions`, release the claim and log a warning instead of re-dispatching.

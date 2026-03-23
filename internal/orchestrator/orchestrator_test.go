@@ -117,6 +117,10 @@ func (s *stubStore) DeleteRetryEntry(_ context.Context, issueID string) error {
 	return nil
 }
 
+func (s *stubStore) CountRunHistoryByIssue(_ context.Context, _ string) (int, error) {
+	return 0, nil
+}
+
 // stubObserver implements [Observer] with an atomic call counter.
 type stubObserver struct {
 	calls atomic.Int64

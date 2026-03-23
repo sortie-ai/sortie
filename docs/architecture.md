@@ -498,6 +498,13 @@ Fields:
   - Default: empty map.
   - State keys are normalized (`lowercase`) for lookup.
   - Invalid entries (non-positive or non-numeric) are ignored.
+- `max_sessions` (integer)
+  - Default: `0` (unlimited — no effort budget enforced).
+  - Maximum number of completed worker sessions for a single issue before the orchestrator
+    stops re-dispatching it. Counted from `run_history` entries.
+  - When the count reaches `max_sessions`, the claim is released and a warning is logged.
+  - `0` disables the budget (unlimited retries).
+  - Changes are re-applied at runtime and affect future retry timer evaluations.
 
 Adapter-specific pass-through config:
 
@@ -668,6 +675,7 @@ This section is intentionally redundant so a coding agent can implement the conf
 - `agent.max_turns`: integer, default `20`
 - `agent.max_retry_backoff_ms`: integer, default `300000` (5m)
 - `agent.max_concurrent_agents_by_state`: map of positive integers, default `{}`
+- `agent.max_sessions`: integer, default `0` (unlimited)
 - `server.port` (extension): integer, optional; enables the HTTP server, `0` may be used for
   ephemeral local bind, and CLI `--port` overrides it
 - `db_path`: path, default `.sortie.db` next to `WORKFLOW.md`; supports `$VAR` and `~`
@@ -866,6 +874,16 @@ Retry handling behavior:
    - Dispatch if slots are available.
    - Otherwise requeue with error `no available orchestrator slots`.
 5. If found but no longer active, release claim.
+
+Per-issue effort budget (defense-in-depth):
+
+- When `agent.max_sessions > 0`, the retry handler counts completed sessions for the issue
+  from `run_history` before fetching candidates.
+- If the count reaches `max_sessions`, the claim is released and a warning is logged instead
+  of re-dispatching.
+- If the count query fails, the budget check is skipped (fail-open) and dispatch proceeds
+  normally.
+- `max_sessions = 0` (default) disables the budget entirely.
 
 Note:
 

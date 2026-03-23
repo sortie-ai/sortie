@@ -1418,3 +1418,77 @@ func TestLoadRetryEntriesForRecovery_DBError(t *testing.T) {
 		t.Fatal("expected error from LoadRetryEntriesForRecovery on closed DB, got nil")
 	}
 }
+
+// --- CountRunHistoryByIssue Tests ---
+
+func TestCountRunHistoryByIssue(t *testing.T) {
+	t.Parallel()
+
+	t.Run("zero entries returns zero", func(t *testing.T) {
+		t.Parallel()
+		s := openTestStore(t)
+		migrateOrFatal(t, s)
+
+		count, err := s.CountRunHistoryByIssue(context.Background(), "ISS-NONEXISTENT")
+		if err != nil {
+			t.Fatalf("CountRunHistoryByIssue(ISS-NONEXISTENT) unexpected error: %v", err)
+		}
+		if count != 0 {
+			t.Errorf("CountRunHistoryByIssue(ISS-NONEXISTENT) = %d, want 0", count)
+		}
+	})
+
+	t.Run("returns correct count for N entries", func(t *testing.T) {
+		t.Parallel()
+		s := openTestStore(t)
+		migrateOrFatal(t, s)
+
+		for i := 1; i <= 5; i++ {
+			run := newTestRun(i)
+			run.IssueID = "ISS-COUNT"
+			appendOrFatal(t, s, run)
+		}
+
+		count, err := s.CountRunHistoryByIssue(context.Background(), "ISS-COUNT")
+		if err != nil {
+			t.Fatalf("CountRunHistoryByIssue(ISS-COUNT) unexpected error: %v", err)
+		}
+		if count != 5 {
+			t.Errorf("CountRunHistoryByIssue(ISS-COUNT) = %d, want 5", count)
+		}
+	})
+
+	t.Run("independent counts per issue", func(t *testing.T) {
+		t.Parallel()
+		s := openTestStore(t)
+		migrateOrFatal(t, s)
+
+		for i := 1; i <= 3; i++ {
+			run := newTestRun(i)
+			run.IssueID = "ISS-A"
+			appendOrFatal(t, s, run)
+		}
+		for i := 4; i <= 5; i++ {
+			run := newTestRun(i)
+			run.IssueID = "ISS-B"
+			appendOrFatal(t, s, run)
+		}
+
+		ctx := context.Background()
+		countA, err := s.CountRunHistoryByIssue(ctx, "ISS-A")
+		if err != nil {
+			t.Fatalf("CountRunHistoryByIssue(ISS-A) unexpected error: %v", err)
+		}
+		if countA != 3 {
+			t.Errorf("CountRunHistoryByIssue(ISS-A) = %d, want 3", countA)
+		}
+
+		countB, err := s.CountRunHistoryByIssue(ctx, "ISS-B")
+		if err != nil {
+			t.Fatalf("CountRunHistoryByIssue(ISS-B) unexpected error: %v", err)
+		}
+		if countB != 2 {
+			t.Errorf("CountRunHistoryByIssue(ISS-B) = %d, want 2", countB)
+		}
+	})
+}

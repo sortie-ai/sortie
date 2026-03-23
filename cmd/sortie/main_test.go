@@ -579,6 +579,7 @@ func TestAgentConfigMapCompleteness(t *testing.T) {
 		"MaxConcurrentAgents":  true,
 		"MaxRetryBackoffMS":    true,
 		"MaxConcurrentByState": true,
+		"MaxSessions":          true,
 	}
 
 	for _, field := range reflect.VisibleFields(rt) {
@@ -614,6 +615,7 @@ func TestAgentConfigMapExcludesOrchestratorFields(t *testing.T) {
 		"max_concurrent_agents",
 		"max_retry_backoff_ms",
 		"max_concurrent_agents_by_state",
+		"max_sessions",
 	}
 	for _, key := range excluded {
 		if _, ok := m[key]; ok {
