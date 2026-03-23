@@ -500,7 +500,7 @@ the system does real work.
       **Verify:** unit test loads a fixture file, calls `TransitionIssue`, confirms the
       issue's state is updated and subsequent `FetchCandidateIssues` reflects the change.
 
-- [ ] 7.7 Add `tracker.handoff_state` to the config schema: an optional string field naming
+- [x] 7.7 Add `tracker.handoff_state` to the config schema: an optional string field naming
       the tracker state to transition an issue to after a successful worker run while the
       issue remains active. Validate: when set, must be non-empty, must not appear in
       `tracker.active_states` or `tracker.terminal_states`. Support `$VAR` indirection.
