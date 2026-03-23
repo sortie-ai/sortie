@@ -783,9 +783,19 @@ func TestFetchIssueStatesByIDs_MultiBatch(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		atomic.AddInt32(&requestCount, 1)
 		jql := r.URL.Query().Get("jql")
-		// Count comma-separated IDs in the id IN (...) clause
 		if !strings.Contains(jql, "id IN") {
 			t.Errorf("JQL = %q, should use id IN", jql)
+		}
+
+		// Verify the batch does not exceed 40 IDs.
+		if start := strings.Index(jql, "id IN ("); start != -1 {
+			inner := jql[start+len("id IN ("):]
+			if end := strings.Index(inner, ")"); end != -1 {
+				idCount := len(strings.Split(strings.TrimSpace(inner[:end]), ","))
+				if idCount > 40 {
+					t.Errorf("batch has %d IDs, max allowed 40", idCount)
+				}
+			}
 		}
 
 		// Return one issue per batch

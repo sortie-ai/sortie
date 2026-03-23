@@ -194,6 +194,9 @@ func (a *JiraAdapter) FetchIssueStatesByIDs(ctx context.Context, issueIDs []stri
 		batch := issueIDs[start:end]
 
 		jql := buildIDINJQL(batch)
+		if jql == "" {
+			continue
+		}
 		issues, err := a.paginatedSearch(ctx, jql, "status")
 		if err != nil {
 			return nil, err
