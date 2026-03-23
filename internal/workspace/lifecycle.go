@@ -3,6 +3,7 @@ package workspace
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -298,7 +299,8 @@ type CleanupByPathParams struct {
 // cancelled. Hook execution time is still bounded by HookTimeoutMS.
 //
 // Returns nil if the path does not exist (idempotent).
-// Returns an error if the path is empty or directory removal fails.
+// Returns an error if the path is empty, not absolute, not in canonical
+// form, resolves to the filesystem root, or if directory removal fails.
 func CleanupByPath(ctx context.Context, params CleanupByPathParams) error {
 	if params.Path == "" {
 		return errors.New("workspace path must not be empty")
@@ -306,7 +308,11 @@ func CleanupByPath(ctx context.Context, params CleanupByPathParams) error {
 	if !filepath.IsAbs(params.Path) {
 		return errors.New("workspace path must be absolute")
 	}
-	if filepath.Clean(params.Path) == "/" {
+	cleaned := filepath.Clean(params.Path)
+	if cleaned != params.Path {
+		return fmt.Errorf("workspace path must be in canonical form: got %q, cleaned to %q", params.Path, cleaned)
+	}
+	if cleaned == "/" {
 		return errors.New("refusing to remove filesystem root")
 	}
 
