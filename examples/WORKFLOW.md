@@ -8,7 +8,7 @@ tracker:
   active_states:
     - To Do
     - In Progress
-  handoff_state: In Review
+  handoff_state: Human Review
   terminal_states:
     - Done
     - Won't Do
