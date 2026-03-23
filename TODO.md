@@ -531,16 +531,16 @@ the system does real work.
       a simple after_create hook (e.g., `git clone`), and a minimal prompt template.
       **Verify:** the sample file passes config validation when loaded by Sortie.
 
-- [ ] 7.11 Run the first real end-to-end test: create a test issue in Jira, start Sortie,
+- [x] 7.11 Run the first real end-to-end test: create a test issue in Jira, start Sortie,
       confirm it dispatches the issue, Claude Code runs a turn, and the run completes.
       **Verify:** Jira issue shows evidence of agent activity (comment or state change).
       Run history is persisted in SQLite.
 
-- [ ] 7.12 Test failure and retry: create an issue that will cause Claude Code to fail (e.g.,
+- [x] 7.12 Test failure and retry: create an issue that will cause Claude Code to fail (e.g.,
       invalid workspace), confirm Sortie retries with exponential backoff.
       **Verify:** SQLite run_history shows multiple attempts with increasing delays.
 
-- [ ] 7.13 Test reconciliation: start Sortie with a running issue, move the issue to Done in
+- [x] 7.13 Test reconciliation: start Sortie with a running issue, move the issue to Done in
       Jira, confirm Sortie stops the agent and cleans the workspace.
       **Verify:** workspace directory is removed after reconciliation.
 
