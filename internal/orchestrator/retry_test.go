@@ -70,6 +70,10 @@ func (m *mockRetryTracker) FetchIssueComments(context.Context, string) ([]domain
 	panic("FetchIssueComments must not be called by HandleRetryTimer")
 }
 
+func (m *mockRetryTracker) TransitionIssue(context.Context, string, string) error {
+	panic("TransitionIssue must not be called by HandleRetryTimer")
+}
+
 // --- Test helpers ---
 
 // retryState creates a *State with a retry entry and claim for the given

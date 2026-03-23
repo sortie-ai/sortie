@@ -25,7 +25,7 @@ func init() {
 // Compile-time interface satisfaction check.
 var _ domain.TrackerAdapter = (*FileAdapter)(nil)
 
-// FileAdapter reads issues from a JSON file and implements all six
+// FileAdapter reads issues from a JSON file and implements all seven
 // [domain.TrackerAdapter] operations. The file is re-read on each
 // call to support test scenarios that modify the fixture between
 // operations. Safe for concurrent use.
@@ -210,6 +210,15 @@ func (a *FileAdapter) FetchIssueComments(_ context.Context, issueID string) ([]d
 	return nil, &domain.TrackerError{
 		Kind:    domain.ErrTrackerPayload,
 		Message: fmt.Sprintf("issue not found: %s", issueID),
+	}
+}
+
+// TransitionIssue updates the in-memory state of an issue. This is a
+// stub that will be replaced with a full implementation.
+func (a *FileAdapter) TransitionIssue(_ context.Context, _ string, _ string) error {
+	return &domain.TrackerError{
+		Kind:    domain.ErrTrackerAPI,
+		Message: "TransitionIssue not implemented",
 	}
 }
 

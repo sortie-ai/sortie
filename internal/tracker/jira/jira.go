@@ -247,6 +247,16 @@ func (a *JiraAdapter) FetchIssueComments(ctx context.Context, issueID string) ([
 	return a.fetchComments(ctx, issueID)
 }
 
+// TransitionIssue moves an issue to the specified target state by
+// finding and executing the matching Jira workflow transition.
+// This is a stub that will be replaced with a full implementation.
+func (a *JiraAdapter) TransitionIssue(ctx context.Context, issueID string, targetState string) error {
+	return &domain.TrackerError{
+		Kind:    domain.ErrTrackerAPI,
+		Message: "TransitionIssue not implemented",
+	}
+}
+
 // paginatedSearch executes a cursor-based paginated JQL search and
 // returns all normalized issues. Comments are set to nil.
 func (a *JiraAdapter) paginatedSearch(ctx context.Context, jql, fields string) ([]domain.Issue, error) {

@@ -2,9 +2,11 @@
 
 This document is derived from the [Symphony Service Specification](https://github.com/openai/symphony/blob/main/SPEC.md).
 Sortie is a concrete Go implementation, not a language-agnostic specification. Key adaptations from
-Symphony include: agent-agnostic design with Claude Code as the first supported runtime, tracker-agnostic
-design with Jira as the first supported tracker, SQLite-backed persistence for retry queues and run history,
-and adapter-based extensibility for both agent runtimes and issue trackers.
+Symphony include: agent-agnostic design with Claude Code as the first supported runtime,
+tracker-agnostic design with Jira as the first supported tracker, SQLite-backed persistence for
+retry queues and run history, adapter-based extensibility for both agent runtimes and issue
+trackers, and orchestrator-level handoff transitions that break the continuation retry loop without
+relying on agent behavior.
 
 ## 1. Problem Statement
 
@@ -1177,8 +1179,18 @@ A tracker adapter must support these operations:
 4. `fetch_issue_states_by_ids(issue_ids)`
    - Used for active-run reconciliation.
 
-5. `fetch_issue_comments(issue_id)`
+5. `fetch_issue_states_by_identifiers(identifiers)`
+   - Return the current state for each requested issue identifier (human-readable key).
+     Issues not found are omitted. Used for startup terminal workspace cleanup.
+
+6. `fetch_issue_comments(issue_id)`
    - Return comments for an issue. Used for continuation runs and the agent workpad pattern.
+
+7. `transition_issue(issue_id, target_state)`
+   - Transition an issue to the named target state in the tracker's native workflow system.
+   - Used for orchestrator-initiated handoff transitions (ADR-0007).
+   - Error semantics: returns normalized error categories per Section 11.4.
+   - All errors are non-fatal from the orchestrator's perspective.
 
 ### 11.2 Query Semantics
 

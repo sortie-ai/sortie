@@ -36,6 +36,10 @@ func (m *mockTrackerAdapter) FetchIssueComments(_ context.Context, _ string) ([]
 	return nil, nil
 }
 
+func (m *mockTrackerAdapter) TransitionIssue(_ context.Context, _ string, _ string) error {
+	return nil
+}
+
 func TestTrackerErrorKind_Values(t *testing.T) {
 	t.Parallel()
 

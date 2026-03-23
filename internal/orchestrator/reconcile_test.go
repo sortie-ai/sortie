@@ -68,6 +68,10 @@ func (m *mockReconcileTracker) FetchIssueComments(context.Context, string) ([]do
 	panic("FetchIssueComments must not be called by ReconcileRunningIssues")
 }
 
+func (m *mockReconcileTracker) TransitionIssue(context.Context, string, string) error {
+	panic("TransitionIssue must not be called by ReconcileRunningIssues")
+}
+
 // --- Test helpers ---
 
 // reconcileBaseTime is a fixed reference for reconcile tests.

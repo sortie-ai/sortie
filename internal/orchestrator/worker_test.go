@@ -139,6 +139,10 @@ func (m *mockTrackerAdapter) FetchIssueComments(_ context.Context, _ string) ([]
 	return nil, nil
 }
 
+func (m *mockTrackerAdapter) TransitionIssue(_ context.Context, _ string, _ string) error {
+	return nil
+}
+
 // exitCapture captures the OnExit callback arguments.
 type exitCapture struct {
 	mu      sync.Mutex

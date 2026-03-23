@@ -46,4 +46,21 @@ type TrackerAdapter interface {
 	// Used for continuation runs and the agent workpad pattern.
 	// Returns an empty non-nil slice when no comments exist.
 	FetchIssueComments(ctx context.Context, issueID string) ([]Comment, error)
+
+	// TransitionIssue moves an issue to the specified target state in
+	// the tracker. Used by the orchestrator to perform handoff
+	// transitions after a successful worker run. The targetState is
+	// matched against the tracker's native state model by the adapter.
+	//
+	// Returns nil on success. Returns a [*TrackerError] on failure:
+	//   - [ErrTrackerTransport]: network failure during the API call.
+	//   - [ErrTrackerAuth]: insufficient permissions for write operations.
+	//   - [ErrTrackerAPI]: tracker returned a non-success response (rate limit, server error).
+	//   - [ErrTrackerNotFound]: the issue does not exist.
+	//   - [ErrTrackerPayload]: no available transition leads to targetState
+	//     from the issue's current state, or the response is malformed.
+	//
+	// The orchestrator treats all errors as non-fatal: log and degrade
+	// to continuation retry.
+	TransitionIssue(ctx context.Context, issueID string, targetState string) error
 }
