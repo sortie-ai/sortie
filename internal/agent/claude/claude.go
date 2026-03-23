@@ -141,12 +141,24 @@ func (a *ClaudeCodeAdapter) StartSession(_ context.Context, params domain.StartS
 	}, nil
 }
 
-// RunTurn executes one agent turn by launching a Claude Code
-// subprocess and reading JSONL events from stdout. Events are
-// delivered synchronously via params.OnEvent. The subprocess is
-// managed with graceful shutdown (SIGTERM → SIGKILL) on context
-// cancellation rather than the immediate SIGKILL behavior of
-// [exec.CommandContext].
+// RunTurn executes one agent turn by launching a Claude Code subprocess
+// and reading JSONL events from stdout. Events are delivered
+// synchronously via params.OnEvent.
+//
+// Subprocess lifecycle uses [exec.Command], not [exec.CommandContext].
+// Context cancellation is monitored by a dedicated goroutine that calls
+// gracefulKill, which sends SIGTERM and escalates to SIGKILL after 5
+// seconds. This is intentional: [exec.CommandContext] sends SIGKILL
+// (immediate, untrappable) on context cancellation by default, which
+// denies the agent process any opportunity to flush output buffers,
+// close network connections, or emit final token-usage events. The
+// orchestrator's graceful shutdown relies on SIGTERM being delivered
+// first so the agent can exit cleanly before the forced kill.
+//
+// If refactoring to [exec.CommandContext], preserve the SIGTERM-first
+// invariant by setting [exec.Cmd].Cancel to send [syscall.SIGTERM] and
+// [exec.Cmd].WaitDelay to the escalation interval (currently 5 seconds)
+// so SIGKILL is deferred rather than immediate.
 func (a *ClaudeCodeAdapter) RunTurn(ctx context.Context, session domain.Session, params domain.RunTurnParams) (domain.TurnResult, error) {
 	if params.OnEvent == nil {
 		panic("claude: OnEvent must be non-nil")
