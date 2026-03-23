@@ -781,7 +781,7 @@ func TestLifecycleFullSequence(t *testing.T) {
 }
 
 // TestCleanupTerminal exercises the batch workspace removal function
-// used during startup cleanup of terminal-state issues (Section 8.6).
+// used during startup cleanup of terminal-state issues.
 func TestCleanupTerminal(t *testing.T) {
 	t.Parallel()
 

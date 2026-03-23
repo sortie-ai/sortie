@@ -2172,7 +2172,7 @@ do {{ .issue.identifier }}
 // TestReconciliationGuardOnInvalidReload verifies that when config
 // promotion is rejected (both state lists empty), handleTick retains
 // the last-known-good config and reconciliation does not cancel running
-// workers. Section 6.2: invalid reloads keep last-known-good config.
+// workers.
 func TestReconciliationGuardOnInvalidReload(t *testing.T) {
 	t.Parallel()
 
@@ -2272,7 +2272,7 @@ func TestReconciliationGuardOnInvalidReload(t *testing.T) {
 // path with a real workflow.Manager backed by a file on disk, wired
 // with WithValidateFunc(ValidateConfigForPromotion). This ensures that
 // removing the WithValidateFunc wiring from main.go would cause test
-// breakage. Section 6.2: invalid reloads keep last-known-good config.
+// breakage.
 func TestReconciliationGuardEndToEnd(t *testing.T) {
 	t.Parallel()
 
@@ -2421,9 +2421,6 @@ do {{ .issue.identifier }}
 
 func TestGracefulShutdown(t *testing.T) {
 	t.Parallel()
-
-	// Section 7.3: graceful shutdown drains workers, persists results,
-	// cancels retry timers, then returns.
 
 	t.Run("no_running_workers", func(t *testing.T) {
 		t.Parallel()
