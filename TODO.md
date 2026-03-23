@@ -461,7 +461,7 @@ the system does real work.
       **Verify:** `go run ./cmd/sortie ./WORKFLOW.md` starts, connects to Jira, and polls
       for issues (with a valid WORKFLOW.md and credentials).
 
-- [ ] 7.3 Research and write ADR-0007: Handoff State and Tracker Write Contract. The
+- [x] 7.3 Research and write ADR-0007: Handoff State and Tracker Write Contract. The
       orchestrator currently re-dispatches issues indefinitely when a worker exits normally
       but the tracker state remains active — there is no channel for the orchestrator to
       signal completion back to the tracker. Evaluate `tracker.handoff_state` (optional):
@@ -476,10 +476,10 @@ the system does real work.
       documents `TrackerAdapter.TransitionIssue` contract, failure semantics, and
       `docs/decisions/README.md` index is updated.
 
-- [ ] 7.4 Extend `TrackerAdapter` interface with `TransitionIssue(ctx context.Context,
-    issueID, targetState string) error` (Section 11.1). Add stub implementations to
-      the file and Jira adapters returning `errors.New("not implemented")` until tasks
-      7.5–7.6 fill them in. Update architecture Section 11.1 to include
+- [x] 7.4 Extend `TrackerAdapter` interface with
+      `TransitionIssue(ctx context.Context, issueID, targetState string) error` (Section 11.1).
+      Add stub implementations to the file and Jira adapters returning `errors.New("not implemented")`
+      until tasks 7.5–7.6 fill them in. Update architecture Section 11.1 to include
       `TransitionIssue` as the sixth operation.
       **Verify:** code compiles, both existing adapter types satisfy the updated interface.
 

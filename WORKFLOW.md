@@ -6,9 +6,10 @@ tracker:
   project: ST
   query_filter: "labels = 'agent-ready'"
   active_states:
-    - Backlog
     - To Do
     - In Progress
+  handoff_state:
+    - In Review
   terminal_states:
     - Done
 
