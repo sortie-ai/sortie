@@ -1,1 +1,13 @@
-* @sergeyklay @cicdbot
+# Default owners for everything
+* @sergeyklay @serghei-dev
+
+# Go dependency files - cicdbot can approve Dependabot PRs
+/go.mod @cicdbot
+/go.sum @cicdbot
+
+# GitHub Actions workflows - bot + human
+/.github/workflows/ @cicdbot @sergeyklay
+
+# CI/CD config - humans only
+/.github/dependabot.yml @sergeyklay @serghei-dev
+/.github/CODEOWNERS @sergeyklay @serghei-dev
