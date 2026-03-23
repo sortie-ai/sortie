@@ -112,10 +112,29 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 	}
 	defer mgr.Stop()
 
+	// --- Preflight validation ---
+
+	preflightParams := orchestrator.PreflightParams{
+		ReloadWorkflow:  mgr.Reload,
+		ConfigFunc:      mgr.Config,
+		TrackerRegistry: registry.Trackers,
+		AgentRegistry:   registry.Agents,
+	}
+
+	validation := orchestrator.ValidateDispatchConfig(preflightParams)
+	if !validation.OK() {
+		logger.Error("dispatch preflight failed", slog.Any("error", validation))
+		return 1
+	}
+
+	// Read config after preflight reload so state and adapters reflect
+	// the validated configuration.
+	cfg := mgr.Config()
+
 	// --- Database open, migrate, and recovery ---
 
 	workflowDir := filepath.Dir(path)
-	dbPath := resolveDBPath(mgr.Config().DBPath, workflowDir)
+	dbPath := resolveDBPath(cfg.DBPath, workflowDir)
 	logger.Info("database path resolved", slog.String("db_path", dbPath))
 	store, err := persistence.Open(ctx, dbPath)
 	if err != nil {
@@ -147,25 +166,6 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 			SecondsRunning: metrics.SecondsRunning,
 		}
 	}
-
-	// --- Preflight validation ---
-
-	preflightParams := orchestrator.PreflightParams{
-		ReloadWorkflow:  mgr.Reload,
-		ConfigFunc:      mgr.Config,
-		TrackerRegistry: registry.Trackers,
-		AgentRegistry:   registry.Agents,
-	}
-
-	validation := orchestrator.ValidateDispatchConfig(preflightParams)
-	if !validation.OK() {
-		logger.Error("dispatch preflight failed", slog.Any("error", validation))
-		return 1
-	}
-
-	// Read config after preflight reload so state and adapters reflect
-	// the validated configuration.
-	cfg := mgr.Config()
 
 	// --- State construction and retry population ---
 

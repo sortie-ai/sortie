@@ -24,12 +24,10 @@ type ServiceConfig struct {
 	Hooks     HooksConfig
 	Agent     AgentConfig
 
-	// DBPath is the resolved filesystem path for the SQLite database.
-	// Empty string means the caller should apply its own default
-	// (typically .sortie.db adjacent to WORKFLOW.md).
-	//
-	// Relative paths are stored as-is after expansion; the caller must
-	// resolve them against the workflow file directory before use.
+	// DBPath is the environment- and tilde-expanded path for the SQLite
+	// database. It may be relative; callers resolve it against the
+	// WORKFLOW.md directory. Empty string means the caller should apply
+	// its own default (typically .sortie.db adjacent to WORKFLOW.md).
 	//
 	// DBPath is read once at startup to open the database. Dynamic
 	// reloads update this field in memory but have no effect on the
