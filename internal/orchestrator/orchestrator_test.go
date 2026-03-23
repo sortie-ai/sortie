@@ -2266,3 +2266,152 @@ func TestReconciliationGuardOnInvalidReload(t *testing.T) {
 		t.Error("running entry removed; expected it to remain")
 	}
 }
+
+// TestReconciliationGuardEndToEnd exercises the full validation guard
+// path with a real workflow.Manager backed by a file on disk, wired
+// with WithValidateFunc(ValidateConfigForPromotion). This ensures that
+// removing the WithValidateFunc wiring from main.go would cause test
+// breakage. Section 6.2: invalid reloads keep last-known-good config.
+func TestReconciliationGuardEndToEnd(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	workflowPath := filepath.Join(tmpDir, "WORKFLOW.md")
+
+	// Valid initial workflow: populated state lists.
+	initialContent := `---
+tracker:
+  kind: mock
+  api_key: test-key
+  active_states:
+    - In Progress
+  terminal_states:
+    - Done
+polling:
+  interval_ms: 60000
+workspace:
+  root: ` + tmpDir + `
+hooks:
+  timeout_ms: 5000
+agent:
+  kind: mock
+  command: /usr/bin/agent
+  max_concurrent_agents: 5
+  max_turns: 1
+---
+do {{ .issue.identifier }}
+`
+	if err := os.WriteFile(workflowPath, []byte(initialContent), 0o644); err != nil {
+		t.Fatalf("writing initial WORKFLOW.md: %v", err)
+	}
+
+	// Real Manager with the production validator.
+	wm, err := workflow.NewManager(workflowPath, discardLogger(),
+		workflow.WithValidateFunc(ValidateConfigForPromotion))
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+
+	// Sanity-check initial config.
+	cfg := wm.Config()
+	if len(cfg.Tracker.ActiveStates) == 0 {
+		t.Fatal("initial ActiveStates is empty; expected [In Progress]")
+	}
+
+	// Tracker returns "In Progress" for the running issue.
+	tracker := &mockTrackerAdapter{
+		fetchStatesFn: func(_ context.Context, ids []string) (map[string]string, error) {
+			result := make(map[string]string, len(ids))
+			for _, id := range ids {
+				result[id] = "In Progress"
+			}
+			return result, nil
+		},
+	}
+
+	var cancelCalled atomic.Bool
+	cancelFn := func() { cancelCalled.Store(true) }
+
+	state := NewState(60000, 5, nil, AgentTotals{})
+	state.Running["issue-1"] = &RunningEntry{
+		Identifier: "TEST-1",
+		Issue: domain.Issue{
+			ID:         "issue-1",
+			Identifier: "TEST-1",
+			Title:      "Active issue",
+			State:      "In Progress",
+		},
+		CancelFunc: cancelFn,
+		StartedAt:  time.Now().UTC(),
+	}
+
+	regs := passingPreflightRegistries()
+
+	o := NewOrchestrator(OrchestratorParams{
+		State:           state,
+		Logger:          discardLogger(),
+		TrackerAdapter:  tracker,
+		AgentAdapter:    &mockAgentAdapter{},
+		WorkflowManager: wm,
+		Store:           &stubStore{},
+		PreflightParams: PreflightParams{
+			ReloadWorkflow:  wm.Reload,
+			ConfigFunc:      wm.Config,
+			TrackerRegistry: regs.TrackerRegistry,
+			AgentRegistry:   regs.AgentRegistry,
+		},
+	})
+
+	// Overwrite WORKFLOW.md with empty state lists (valid YAML, but
+	// semantically dangerous — both active_states and terminal_states
+	// are empty).
+	brokenContent := `---
+tracker:
+  kind: mock
+  api_key: test-key
+polling:
+  interval_ms: 60000
+workspace:
+  root: ` + tmpDir + `
+hooks:
+  timeout_ms: 5000
+agent:
+  kind: mock
+  command: /usr/bin/agent
+  max_concurrent_agents: 5
+  max_turns: 1
+---
+do {{ .issue.identifier }}
+`
+	if err := os.WriteFile(workflowPath, []byte(brokenContent), 0o644); err != nil {
+		t.Fatalf("writing broken WORKFLOW.md: %v", err)
+	}
+
+	// handleTick triggers Reload() via preflight, which should reject
+	// the new config and retain the last-known-good.
+	o.handleTick(context.Background())
+
+	// (1) Config() must retain the original state lists.
+	cfg = wm.Config()
+	if len(cfg.Tracker.ActiveStates) != 1 || cfg.Tracker.ActiveStates[0] != "In Progress" {
+		t.Errorf("Config().Tracker.ActiveStates = %v, want [In Progress]", cfg.Tracker.ActiveStates)
+	}
+	if len(cfg.Tracker.TerminalStates) != 1 || cfg.Tracker.TerminalStates[0] != "Done" {
+		t.Errorf("Config().Tracker.TerminalStates = %v, want [Done]", cfg.Tracker.TerminalStates)
+	}
+
+	// (2) The running worker must NOT have been cancelled.
+	if cancelCalled.Load() {
+		t.Error("running worker was cancelled; expected it to be preserved by validation guard")
+	}
+
+	// The running entry must still exist.
+	if _, ok := state.Running["issue-1"]; !ok {
+		t.Error("running entry removed; expected it to remain")
+	}
+
+	// LastLoadError should report the validation rejection.
+	if wm.LastLoadError() == nil {
+		t.Error("LastLoadError() = nil, want validation error")
+	}
+}
