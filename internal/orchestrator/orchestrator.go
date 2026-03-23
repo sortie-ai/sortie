@@ -139,7 +139,6 @@ func (o *Orchestrator) Run(ctx context.Context) {
 				OnRetryFire:       o.onRetryFire,
 				Ctx:               ctx,
 				Logger:            o.logger,
-				WorkspaceRoot:     cfg.Workspace.Root,
 				BeforeRemoveHook:  cfg.Hooks.BeforeRemove,
 				HookTimeoutMS:     cfg.Hooks.TimeoutMS,
 			})
