@@ -450,7 +450,7 @@ component. Uses mock adapters for tracker and agent - no real external calls.
 Connect real Jira and real Claude Code adapters to the orchestrator. This is the first time
 the system does real work.
 
-- [ ] 7.1 Implement graceful shutdown: on SIGTERM/SIGINT, stop accepting new dispatches,
+- [x] 7.1 Implement graceful shutdown: on SIGTERM/SIGINT, stop accepting new dispatches,
       wait for running agents to complete (with timeout), close SQLite cleanly. This is
       required before E2E testing to avoid SQLite corruption and orphaned agent processes.
       **Verify:** send SIGTERM to running Sortie, confirm it shuts down without data loss.
