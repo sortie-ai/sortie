@@ -110,20 +110,23 @@ func NewServiceConfig(raw map[string]any) (ServiceConfig, error) {
 	rawTracker := extractSubMap(raw, "tracker")
 	tracker := buildTrackerConfig(rawTracker)
 
-	// Validate handoff_state: reject explicit value that resolved to empty.
-	if rawVal, ok := rawTracker["handoff_state"]; ok {
-		if s, isStr := rawVal.(string); !isStr || s != "" {
-			// The operator wrote something (non-empty string or non-string
-			// type that extractString silently ignored). If resolution
-			// produced an empty string, the env var is missing.
-			if tracker.HandoffState == "" {
-				return ServiceConfig{}, &ConfigError{
-					Field:   "tracker.handoff_state",
-					Message: "resolved to empty (check environment variable)",
-				}
+	// Validate handoff_state: enforce string type, reject explicit empty
+	// values, and detect env var indirection that resolved to empty.
+	if rawVal, ok := rawTracker["handoff_state"]; ok && rawVal != nil {
+		s, isStr := rawVal.(string)
+		if !isStr {
+			return ServiceConfig{}, &ConfigError{
+				Field:   "tracker.handoff_state",
+				Message: fmt.Sprintf("expected string, got %T", rawVal),
 			}
-		} else {
-			// Key present with explicit empty string — config error.
+		}
+		if s == "" {
+			return ServiceConfig{}, &ConfigError{
+				Field:   "tracker.handoff_state",
+				Message: "must not be empty",
+			}
+		}
+		if tracker.HandoffState == "" {
 			return ServiceConfig{}, &ConfigError{
 				Field:   "tracker.handoff_state",
 				Message: "resolved to empty (check environment variable)",

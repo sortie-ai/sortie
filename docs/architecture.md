@@ -409,8 +409,10 @@ Fields:
   - Target tracker state for orchestrator-initiated handoff transitions after a successful
     worker run (see ADR-0007).
   - Supports `$VAR` environment indirection.
-  - When absent or empty, no handoff transition is performed; the orchestrator uses
+  - When absent, no handoff transition is performed; the orchestrator uses
     continuation retry as before.
+  - Empty values, including `$VAR` references that resolve to empty, are treated as
+    configuration errors.
   - Must not appear in `active_states` (would cause immediate re-dispatch after handoff).
   - Must not appear in `terminal_states` (handoff is not terminal; the issue may return
     to active).
