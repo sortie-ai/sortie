@@ -570,22 +570,67 @@ func TestAgentConfigMapCompleteness(t *testing.T) {
 	m := agentConfigMap(config.AgentConfig{})
 	rt := reflect.TypeOf(config.AgentConfig{})
 
-	// Known field→key overrides where the map key intentionally
-	// differs from a naive PascalCase→snake_case conversion.
-	overrides := map[string]string{
-		"MaxConcurrentByState": "max_concurrent_agents_by_state",
+	// Orchestrator-only fields are intentionally excluded from the
+	// adapter config map. They are consumed by the orchestrator via
+	// typed config.AgentConfig and would shadow adapter extension
+	// keys of the same name during mergeExtensions.
+	excluded := map[string]bool{
+		"MaxTurns":             true,
+		"MaxConcurrentAgents":  true,
+		"MaxRetryBackoffMS":    true,
+		"MaxConcurrentByState": true,
 	}
 
 	for _, field := range reflect.VisibleFields(rt) {
-		if !field.IsExported() {
+		if !field.IsExported() || excluded[field.Name] {
 			continue
 		}
 		key := toSnakeCase(field.Name)
-		if override, ok := overrides[field.Name]; ok {
-			key = override
-		}
 		if _, ok := m[key]; !ok {
 			t.Errorf("agentConfigMap missing key %q for field %s", key, field.Name)
+		}
+	}
+}
+
+func TestAgentConfigMapExcludesOrchestratorFields(t *testing.T) {
+	t.Parallel()
+
+	cfg := config.AgentConfig{
+		Kind:                 "claude-code",
+		Command:              "claude",
+		TurnTimeoutMS:        3600000,
+		ReadTimeoutMS:        5000,
+		StallTimeoutMS:       300000,
+		MaxConcurrentAgents:  10,
+		MaxTurns:             20,
+		MaxRetryBackoffMS:    300000,
+		MaxConcurrentByState: map[string]int{"open": 5},
+	}
+
+	m := agentConfigMap(cfg)
+
+	excluded := []string{
+		"max_turns",
+		"max_concurrent_agents",
+		"max_retry_backoff_ms",
+		"max_concurrent_agents_by_state",
+	}
+	for _, key := range excluded {
+		if _, ok := m[key]; ok {
+			t.Errorf("agentConfigMap contains orchestrator-only key %q", key)
+		}
+	}
+
+	required := []string{
+		"kind",
+		"command",
+		"turn_timeout_ms",
+		"read_timeout_ms",
+		"stall_timeout_ms",
+	}
+	for _, key := range required {
+		if _, ok := m[key]; !ok {
+			t.Errorf("agentConfigMap missing required key %q", key)
 		}
 	}
 }
@@ -666,6 +711,25 @@ func TestMergeExtensions(t *testing.T) {
 
 		if len(dst) != 1 {
 			t.Errorf("dst has %d keys, want 1", len(dst))
+		}
+	})
+
+	t.Run("adapter max_turns passthrough", func(t *testing.T) {
+		t.Parallel()
+
+		dst := agentConfigMap(config.AgentConfig{MaxTurns: 5})
+		extensions := map[string]any{
+			"claude-code": map[string]any{"max_turns": float64(50)},
+		}
+
+		mergeExtensions(dst, extensions, "claude-code")
+
+		got, ok := dst["max_turns"]
+		if !ok {
+			t.Fatal("max_turns not present after mergeExtensions")
+		}
+		if got != float64(50) {
+			t.Errorf("max_turns = %v, want 50 (adapter value, not orchestrator value)", got)
 		}
 	})
 }

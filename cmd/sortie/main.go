@@ -291,17 +291,20 @@ func trackerConfigMap(tc config.TrackerConfig) map[string]any {
 // agentConfigMap converts typed [config.AgentConfig] fields into the
 // raw map expected by [registry.AgentConstructor]. Adapter packages
 // extract their required fields from this map.
+//
+// Orchestrator-only fields (max_turns, max_concurrent_agents,
+// max_retry_backoff_ms, max_concurrent_agents_by_state) are
+// intentionally excluded. They are consumed by the orchestrator via
+// the typed [config.AgentConfig] before this map reaches the adapter
+// constructor, and including them would shadow adapter-specific
+// extension keys of the same name during [mergeExtensions].
 func agentConfigMap(ac config.AgentConfig) map[string]any {
 	return map[string]any{
-		"kind":                           ac.Kind,
-		"command":                        ac.Command,
-		"turn_timeout_ms":                ac.TurnTimeoutMS,
-		"read_timeout_ms":                ac.ReadTimeoutMS,
-		"stall_timeout_ms":               ac.StallTimeoutMS,
-		"max_concurrent_agents":          ac.MaxConcurrentAgents,
-		"max_turns":                      ac.MaxTurns,
-		"max_retry_backoff_ms":           ac.MaxRetryBackoffMS,
-		"max_concurrent_agents_by_state": ac.MaxConcurrentByState,
+		"kind":             ac.Kind,
+		"command":          ac.Command,
+		"turn_timeout_ms":  ac.TurnTimeoutMS,
+		"read_timeout_ms":  ac.ReadTimeoutMS,
+		"stall_timeout_ms": ac.StallTimeoutMS,
 	}
 }
 
