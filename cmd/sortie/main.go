@@ -100,7 +100,8 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 	}
 	logger.Info("sortie starting", logAttrs...)
 
-	mgr, err := workflow.NewManager(path, logger)
+	mgr, err := workflow.NewManager(path, logger,
+		workflow.WithValidateFunc(orchestrator.ValidateConfigForPromotion))
 	if err != nil {
 		fmt.Fprintf(stderr, "sortie: %s\n", err) //nolint:errcheck // stderr write failure is unrecoverable
 		return 1

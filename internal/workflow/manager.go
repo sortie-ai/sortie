@@ -17,13 +17,31 @@ import (
 
 const debounceInterval = 50 * time.Millisecond
 
+// ValidateFunc is a caller-supplied validation function invoked after
+// [config.NewServiceConfig] succeeds and before config promotion. If it
+// returns a non-nil error, the new config is rejected and the
+// last-known-good config is retained. This allows the caller to enforce
+// domain-level invariants without leaking domain knowledge into the
+// Manager.
+type ValidateFunc func(config.ServiceConfig) error
+
+// ManagerOption configures optional behavior on [NewManager].
+type ManagerOption func(*Manager)
+
+// WithValidateFunc sets a validation callback that gates config
+// promotion. See [ValidateFunc] for the contract.
+func WithValidateFunc(fn ValidateFunc) ManagerOption {
+	return func(m *Manager) { m.validateFunc = fn }
+}
+
 // Manager watches a workflow file for changes and maintains the current
 // effective configuration. Obtain the latest config and prompt template
 // via [Manager.Config] and [Manager.PromptTemplate]. Safe for concurrent
 // use.
 type Manager struct {
-	path   string
-	logger *slog.Logger
+	path         string
+	logger       *slog.Logger
+	validateFunc ValidateFunc
 
 	mu            sync.RWMutex
 	currentConfig config.ServiceConfig
@@ -40,8 +58,9 @@ type Manager struct {
 // NewManager creates a [Manager] for the workflow file at path. It
 // performs a synchronous initial load — if the file cannot be loaded or
 // the config is invalid, NewManager returns an error so the caller can
-// fail startup. The logger is used for reload diagnostics.
-func NewManager(path string, logger *slog.Logger) (*Manager, error) {
+// fail startup. The logger is used for reload diagnostics. Options are
+// applied after construction; see [WithValidateFunc].
+func NewManager(path string, logger *slog.Logger, opts ...ManagerOption) (*Manager, error) {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -60,13 +79,24 @@ func NewManager(path string, logger *slog.Logger) (*Manager, error) {
 		return nil, err
 	}
 
-	return &Manager{
+	m := &Manager{
 		path:          path,
 		logger:        logger,
 		currentConfig: cfg,
 		currentPrompt: tmpl,
 		done:          make(chan struct{}),
-	}, nil
+	}
+	for _, o := range opts {
+		o(m)
+	}
+
+	if m.validateFunc != nil {
+		if err := m.validateFunc(cfg); err != nil {
+			return nil, err
+		}
+	}
+
+	return m, nil
 }
 
 // Config returns the current effective [config.ServiceConfig]. If the
@@ -106,6 +136,15 @@ func (m *Manager) Reload() error {
 		m.lastLoadErr = err
 		m.mu.Unlock()
 		return err
+	}
+
+	if m.validateFunc != nil {
+		if err := m.validateFunc(cfg); err != nil {
+			m.mu.Lock()
+			m.lastLoadErr = err
+			m.mu.Unlock()
+			return err
+		}
 	}
 
 	m.mu.Lock()
@@ -209,6 +248,16 @@ func (m *Manager) reload() {
 		m.lastLoadErr = err
 		m.mu.Unlock()
 		return
+	}
+
+	if m.validateFunc != nil {
+		if err := m.validateFunc(cfg); err != nil {
+			m.logger.Error("workflow reload failed", slog.Any("error", err), slog.String("path", m.path))
+			m.mu.Lock()
+			m.lastLoadErr = err
+			m.mu.Unlock()
+			return
+		}
 	}
 
 	m.mu.Lock()

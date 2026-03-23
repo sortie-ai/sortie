@@ -2167,3 +2167,102 @@ do {{ .issue.identifier }}
 	cancel()
 	<-done
 }
+
+// TestReconciliationGuardOnInvalidReload verifies that when config
+// promotion is rejected (both state lists empty), handleTick retains
+// the last-known-good config and reconciliation does not cancel running
+// workers. Section 6.2: invalid reloads keep last-known-good config.
+func TestReconciliationGuardOnInvalidReload(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+
+	// Initial config: "In Progress" is active, "Done" is terminal.
+	goodCfg := config.ServiceConfig{
+		Tracker: config.TrackerConfig{
+			Kind:           "mock",
+			ActiveStates:   []string{"In Progress"},
+			TerminalStates: []string{"Done"},
+		},
+		Polling:   config.PollingConfig{IntervalMS: 60000},
+		Workspace: config.WorkspaceConfig{Root: tmpDir},
+		Hooks:     config.HooksConfig{TimeoutMS: 5000},
+		Agent: config.AgentConfig{
+			Kind:                "mock",
+			MaxConcurrentAgents: 5,
+			MaxTurns:            1,
+		},
+	}
+
+	// Simulate Manager.Reload returning a validation error (as it would
+	// when both state lists are empty), while Config() keeps returning
+	// the last-known-good config.
+	reloadErr := errorString("tracker.active_states and tracker.terminal_states are both empty; at least one must be configured")
+	wm := &stubWorkflowManager{
+		config:   goodCfg,
+		template: mustParseTemplate(t, "do {{ .issue.identifier }}"),
+		reloadFn: func() error { return reloadErr },
+	}
+
+	// Tracker returns "In Progress" for the running issue.
+	tracker := &mockTrackerAdapter{
+		fetchStatesFn: func(_ context.Context, ids []string) (map[string]string, error) {
+			result := make(map[string]string, len(ids))
+			for _, id := range ids {
+				result[id] = "In Progress"
+			}
+			return result, nil
+		},
+	}
+
+	var cancelCalled atomic.Bool
+	cancelFn := func() { cancelCalled.Store(true) }
+
+	state := NewState(60000, 5, nil, AgentTotals{})
+	state.Running["issue-1"] = &RunningEntry{
+		Identifier: "TEST-1",
+		Issue: domain.Issue{
+			ID:         "issue-1",
+			Identifier: "TEST-1",
+			Title:      "Active issue",
+			State:      "In Progress",
+		},
+		CancelFunc: cancelFn,
+		StartedAt:  time.Now().UTC(),
+	}
+
+	regs := passingPreflightRegistries()
+
+	o := NewOrchestrator(OrchestratorParams{
+		State:           state,
+		Logger:          discardLogger(),
+		TrackerAdapter:  tracker,
+		AgentAdapter:    &mockAgentAdapter{},
+		WorkflowManager: wm,
+		Store:           &stubStore{},
+		PreflightParams: PreflightParams{
+			ReloadWorkflow:  wm.Reload,
+			ConfigFunc:      wm.Config,
+			TrackerRegistry: regs.TrackerRegistry,
+			AgentRegistry:   regs.AgentRegistry,
+		},
+	})
+
+	o.handleTick(context.Background())
+
+	// Config() must still return the last-known-good config.
+	cfg := wm.Config()
+	if len(cfg.Tracker.ActiveStates) != 1 || cfg.Tracker.ActiveStates[0] != "In Progress" {
+		t.Errorf("Config().Tracker.ActiveStates = %v, want [In Progress]", cfg.Tracker.ActiveStates)
+	}
+
+	// The running worker must NOT have been cancelled.
+	if cancelCalled.Load() {
+		t.Error("running worker was cancelled; expected it to be preserved")
+	}
+
+	// The running entry must still exist.
+	if _, ok := state.Running["issue-1"]; !ok {
+		t.Error("running entry removed; expected it to remain")
+	}
+}

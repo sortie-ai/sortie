@@ -2,6 +2,7 @@ package workflow
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -10,6 +11,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/sortie-ai/sortie/internal/config"
 )
 
 // validWorkflow returns a minimal valid WORKFLOW.md content with the
@@ -492,5 +495,174 @@ func TestManager_RecoverAfterInvalidReload(t *testing.T) {
 	}
 	if mgr.LastLoadError() != nil {
 		t.Errorf("after recovery: LastLoadError = %v, want nil", mgr.LastLoadError())
+	}
+}
+
+// workflowWithStates returns valid WORKFLOW.md content with the given
+// active and terminal state lists. An empty slice results in the key being
+// absent from the front matter.
+func workflowWithStates(active, terminal []string) []byte {
+	var s string
+	s += "---\npolling:\n  interval_ms: 5000\ntracker:\n"
+	if len(active) > 0 {
+		s += "  active_states:\n"
+		for _, st := range active {
+			s += fmt.Sprintf("    - %s\n", st)
+		}
+	}
+	if len(terminal) > 0 {
+		s += "  terminal_states:\n"
+		for _, st := range terminal {
+			s += fmt.Sprintf("    - %s\n", st)
+		}
+	}
+	s += "---\nDo the task for {{ .issue.title }}.\n"
+	return []byte(s)
+}
+
+// rejectBothEmpty is a ValidateFunc that rejects configs where both
+// active_states and terminal_states are empty.
+func rejectBothEmpty(cfg config.ServiceConfig) error {
+	if len(cfg.Tracker.ActiveStates) == 0 && len(cfg.Tracker.TerminalStates) == 0 {
+		return errors.New("both state lists empty")
+	}
+	return nil
+}
+
+func TestManager_ReloadValidatorRejects(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "WORKFLOW.md")
+	mustWriteFile(t, path, workflowWithStates([]string{"To Do"}, []string{"Done"}))
+
+	mgr, err := NewManager(path, testLogger(), WithValidateFunc(rejectBothEmpty))
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+
+	// Overwrite with both state lists empty.
+	mustWriteFile(t, path, workflowWithStates(nil, nil))
+
+	err = mgr.Reload()
+	if err == nil {
+		t.Fatal("Reload() error = nil, want error from validator")
+	}
+	if got := mgr.Config().Tracker.ActiveStates; len(got) != 1 || got[0] != "To Do" {
+		t.Errorf("Config().Tracker.ActiveStates = %v, want [To Do]", got)
+	}
+	if mgr.LastLoadError() == nil {
+		t.Error("LastLoadError() = nil, want non-nil")
+	}
+}
+
+func TestManager_ReloadValidatorAccepts(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "WORKFLOW.md")
+	mustWriteFile(t, path, workflowWithStates([]string{"To Do"}, []string{"Done"}))
+
+	mgr, err := NewManager(path, testLogger(), WithValidateFunc(rejectBothEmpty))
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+
+	// Overwrite with different but valid state lists.
+	mustWriteFile(t, path, workflowWithStates([]string{"In Progress"}, []string{"Closed"}))
+
+	if err := mgr.Reload(); err != nil {
+		t.Fatalf("Reload() unexpected error: %v", err)
+	}
+	if got := mgr.Config().Tracker.ActiveStates; len(got) != 1 || got[0] != "In Progress" {
+		t.Errorf("Config().Tracker.ActiveStates = %v, want [In Progress]", got)
+	}
+	if mgr.LastLoadError() != nil {
+		t.Errorf("LastLoadError() = %v, want nil", mgr.LastLoadError())
+	}
+}
+
+func TestManager_ReloadWithoutValidatorPromotesBothEmpty(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "WORKFLOW.md")
+	mustWriteFile(t, path, workflowWithStates([]string{"To Do"}, []string{"Done"}))
+
+	mgr, err := NewManager(path, testLogger())
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+
+	// Overwrite with both state lists empty — no validator so should promote.
+	mustWriteFile(t, path, workflowWithStates(nil, nil))
+
+	if err := mgr.Reload(); err != nil {
+		t.Fatalf("Reload() unexpected error: %v", err)
+	}
+	if got := mgr.Config().Tracker.ActiveStates; len(got) != 0 {
+		t.Errorf("Config().Tracker.ActiveStates = %v, want empty", got)
+	}
+}
+
+func TestNewManager_ValidatorRejectsInitialLoad(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "WORKFLOW.md")
+	mustWriteFile(t, path, workflowWithStates(nil, nil))
+
+	mgr, err := NewManager(path, testLogger(), WithValidateFunc(rejectBothEmpty))
+	if err == nil {
+		t.Fatal("NewManager() error = nil, want error from validator")
+	}
+	if mgr != nil {
+		t.Errorf("NewManager() returned non-nil Manager on validation failure")
+	}
+}
+
+func TestManager_ReloadEmptyActiveNonEmptyTerminalPromotes(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "WORKFLOW.md")
+	mustWriteFile(t, path, workflowWithStates([]string{"To Do"}, []string{"Done"}))
+
+	mgr, err := NewManager(path, testLogger(), WithValidateFunc(rejectBothEmpty))
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+
+	// Empty active_states but non-empty terminal_states — should pass.
+	mustWriteFile(t, path, workflowWithStates(nil, []string{"Done"}))
+
+	if err := mgr.Reload(); err != nil {
+		t.Fatalf("Reload() unexpected error: %v", err)
+	}
+	if got := mgr.Config().Tracker.TerminalStates; len(got) != 1 || got[0] != "Done" {
+		t.Errorf("Config().Tracker.TerminalStates = %v, want [Done]", got)
+	}
+}
+
+func TestManager_ReloadNonEmptyActiveEmptyTerminalPromotes(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "WORKFLOW.md")
+	mustWriteFile(t, path, workflowWithStates([]string{"To Do"}, []string{"Done"}))
+
+	mgr, err := NewManager(path, testLogger(), WithValidateFunc(rejectBothEmpty))
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+
+	// Non-empty active_states but empty terminal_states — should pass.
+	mustWriteFile(t, path, workflowWithStates([]string{"In Progress"}, nil))
+
+	if err := mgr.Reload(); err != nil {
+		t.Fatalf("Reload() unexpected error: %v", err)
+	}
+	if got := mgr.Config().Tracker.ActiveStates; len(got) != 1 || got[0] != "In Progress" {
+		t.Errorf("Config().Tracker.ActiveStates = %v, want [In Progress]", got)
 	}
 }

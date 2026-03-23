@@ -514,3 +514,64 @@ func TestPreflightResult_Error(t *testing.T) {
 		}
 	})
 }
+
+func TestValidateConfigForPromotion(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		active   []string
+		terminal []string
+		wantErr  bool
+	}{
+		{
+			name:     "both empty returns error",
+			active:   nil,
+			terminal: nil,
+			wantErr:  true,
+		},
+		{
+			name:     "active non-empty terminal empty returns nil",
+			active:   []string{"To Do"},
+			terminal: nil,
+			wantErr:  false,
+		},
+		{
+			name:     "active empty terminal non-empty returns nil",
+			active:   nil,
+			terminal: []string{"Done"},
+			wantErr:  false,
+		},
+		{
+			name:     "both non-empty returns nil",
+			active:   []string{"To Do"},
+			terminal: []string{"Done"},
+			wantErr:  false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			cfg := config.ServiceConfig{
+				Tracker: config.TrackerConfig{
+					ActiveStates:   tt.active,
+					TerminalStates: tt.terminal,
+				},
+			}
+
+			err := ValidateConfigForPromotion(cfg)
+
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("ValidateConfigForPromotion() = nil, want error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("ValidateConfigForPromotion() unexpected error: %v", err)
+			}
+		})
+	}
+}
