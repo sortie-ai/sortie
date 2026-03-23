@@ -461,24 +461,90 @@ the system does real work.
       **Verify:** `go run ./cmd/sortie ./WORKFLOW.md` starts, connects to Jira, and polls
       for issues (with a valid WORKFLOW.md and credentials).
 
-- [ ] 7.3 Create a sample `WORKFLOW.md` for testing: configure Jira project, workspace root,
+- [ ] 7.3 Research and write ADR-0007: Handoff State and Tracker Write Contract. The
+      orchestrator currently re-dispatches issues indefinitely when a worker exits normally
+      but the tracker state remains active — there is no channel for the orchestrator to
+      signal completion back to the tracker. Evaluate `tracker.handoff_state` (optional):
+      after a successful worker run on an active issue, the orchestrator transitions it to
+      this state via a new `TrackerAdapter.TransitionIssue` operation, breaking the cycle.
+      Also evaluate a Per-Issue Effort Budget (`agent.max_sessions`) as defense-in-depth.
+      Cover: `TransitionIssue` contract and per-adapter implementation strategy, failure
+      degradation (degrade to continuation retry when transition fails), interaction with
+      `.sortie/status` semantics, and backward compatibility. Document in
+      `docs/decisions/0007-handoff-state-and-tracker-writes.md`.
+      **Verify:** ADR exists with status `accepted`, covers at least 3 alternatives,
+      documents `TrackerAdapter.TransitionIssue` contract, failure semantics, and
+      `docs/decisions/README.md` index is updated.
+
+- [ ] 7.4 Extend `TrackerAdapter` interface with `TransitionIssue(ctx context.Context,
+    issueID, targetState string) error` (Section 11.1). Add stub implementations to
+      the file and Jira adapters returning `errors.New("not implemented")` until tasks
+      7.5–7.6 fill them in. Update architecture Section 11.1 to include
+      `TransitionIssue` as the sixth operation.
+      **Verify:** code compiles, both existing adapter types satisfy the updated interface.
+
+- [ ] 7.5 Implement `TransitionIssue` for the Jira adapter: fetch available transitions
+      via `GET /rest/api/3/issue/{issueID}/transitions`, find the transition whose name
+      matches `targetState` (case-insensitive), and execute it via
+      `POST /rest/api/3/issue/{issueID}/transitions`. Map HTTP and API errors to
+      `TrackerError` kinds per Section 11.4. Return a descriptive error when no
+      matching transition is found.
+      **Verify:** unit tests with HTTP fixtures cover: successful transition, state not
+      found in available transitions, auth error, transport error. Tests confirm correct
+      HTTP request construction and error classification.
+
+- [ ] 7.6 Implement `TransitionIssue` for the file adapter: find the issue by ID in the
+      in-memory issue list and update its `State` field to `targetState`. Return an error
+      if the issue ID is not found. The mutation is in-memory only — the file adapter is
+      read-only from disk; on-disk content is not modified.
+      **Verify:** unit test loads a fixture file, calls `TransitionIssue`, confirms the
+      issue's state is updated and subsequent `FetchCandidateIssues` reflects the change.
+
+- [ ] 7.7 Add `tracker.handoff_state` to the config schema: an optional string field naming
+      the tracker state to transition an issue to after a successful worker run while the
+      issue remains active. Validate: when set, must be non-empty, must not appear in
+      `tracker.active_states` or `tracker.terminal_states`. Support `$VAR` indirection.
+      Update architecture Sections 5.3.1 and 6.4.
+      **Verify:** unit tests cover: absent field (no error), valid value, empty string
+      error, value colliding with an active state, value colliding with a terminal state.
+
+- [ ] 7.8 Integrate handoff transition in `HandleWorkerExit`: on `WorkerExitNormal`, if
+      `handoff_state` is configured and the issue is still in an active state, call
+      `TrackerAdapter.TransitionIssue`. On success, skip the continuation retry. On
+      failure, log the error and schedule a normal continuation retry (graceful
+      degradation). Add `TrackerAdapter` and `HandoffState` fields to
+      `HandleWorkerExitParams`. Update architecture Sections 7.1, 7.3, and 16.6.
+      **Verify:** unit tests with mock tracker cover: transition succeeds (no retry
+      scheduled), transition fails (retry scheduled, error logged), `handoff_state`
+      not configured (existing continuation behavior unchanged).
+
+- [ ] 7.9 Add per-issue effort budget as defense-in-depth: new optional config field
+      `agent.max_sessions` (integer, default 0 = unlimited). In `HandleRetryTimer`,
+      count completed sessions for the issue from `run_history`. When the count reaches
+      `max_sessions`, release the claim and log a warning instead of re-dispatching.
+      Update architecture Section 8.4 to document the budget gate.
+      **Verify:** unit test confirms re-dispatch is blocked after `max_sessions` runs
+      are recorded in `run_history`; a second test confirms `max_sessions=0` allows
+      unlimited retries.
+
+- [x] 7.10 Create a sample `WORKFLOW.md` for testing: configure Jira project, workspace root,
       a simple after_create hook (e.g., `git clone`), and a minimal prompt template.
       **Verify:** the sample file passes config validation when loaded by Sortie.
 
-- [ ] 7.4 Run the first real end-to-end test: create a test issue in Jira, start Sortie,
+- [ ] 7.11 Run the first real end-to-end test: create a test issue in Jira, start Sortie,
       confirm it dispatches the issue, Claude Code runs a turn, and the run completes.
       **Verify:** Jira issue shows evidence of agent activity (comment or state change).
       Run history is persisted in SQLite.
 
-- [ ] 7.5 Test failure and retry: create an issue that will cause Claude Code to fail (e.g.,
+- [ ] 7.12 Test failure and retry: create an issue that will cause Claude Code to fail (e.g.,
       invalid workspace), confirm Sortie retries with exponential backoff.
       **Verify:** SQLite run_history shows multiple attempts with increasing delays.
 
-- [ ] 7.6 Test reconciliation: start Sortie with a running issue, move the issue to Done in
+- [ ] 7.13 Test reconciliation: start Sortie with a running issue, move the issue to Done in
       Jira, confirm Sortie stops the agent and cleans the workspace.
       **Verify:** workspace directory is removed after reconciliation.
 
-- [ ] 7.7 Write the `WORKFLOW.md` syntax reference (`docs/workflow-reference.md`): a formal
+- [ ] 7.14 Write the `WORKFLOW.md` syntax reference (`docs/workflow-reference.md`): a formal
       configuration reference covering file format (front matter + prompt body parsing rules),
       field-by-field specification for every config section (`tracker`, `polling`, `workspace`,
       `hooks`, `agent`, extensions, etc.) with types, defaults, validation rules, dynamic reload
@@ -489,12 +555,12 @@ the system does real work.
       parse/validation errors with causes and fixes), and complete annotated examples (minimal,
       production Jira+Claude Code). Derive all content strictly from `docs/architecture.md`
       Sections 5, 6, 9.4, and 10. This document is the authoritative user-facing reference
-      for workflow authors. Informed by E2E testing experience from tasks 7.4–7.6.
+      for workflow authors. Informed by E2E testing experience from tasks 7.11–7.13.
       **Verify:** document covers every field from architecture Section 6.4, every hook from
       Section 5.3.4, every template variable from Section 5.4, and every error from Section 5.5.
       A reviewer can write a valid WORKFLOW.md using only this reference.
 
-- [x] 7.8 Fix `agent.max_turns` leaking into adapter config map and shadowing
+- [x] 7.15 Fix `agent.max_turns` leaking into adapter config map and shadowing
       the adapter-specific `max_turns` passthrough. `agentCfgMap` in
       `cmd/sortie/main.go` includes `max_turns` (the Sortie orchestrator
       turn-loop limit), which causes `mergeExtensions` to silently skip the
@@ -505,7 +571,7 @@ the system does real work.
       `max_concurrent_agents_by_state`, `max_retry_backoff_ms`) from
       `agentCfgMap` — they are consumed by the orchestrator before the map
       reaches the adapter constructor and must not pollute the passthrough
-      namespace. Do this before task 7.4.
+      namespace. Do this before task 7.11.
       **Verify:** unit test confirms `agentCfgMap` does not contain
       `max_turns`, `max_concurrent_agents`, `max_concurrent_agents_by_state`,
       or `max_retry_backoff_ms`. Integration test with WORKFLOW.md containing
@@ -517,16 +583,16 @@ the system does real work.
 Observability surfaces and agent-facing extensions. The system should be monitorable by
 operators and agents should have access to tracker data after this milestone. Basic
 structured logging was set up in task 0.8; this milestone decides the observability model
-(ADR-0007), enhances logging, implements the chosen surfaces, and adds agent capabilities.
+(ADR-0008), enhances logging, implements the chosen surfaces, and adds agent capabilities.
 
-- [ ] 8.1 Research and write ADR-0007: Observability model. Evaluate embedded HTTP server
+- [ ] 8.1 Research and write ADR-0008: Observability model. Evaluate embedded HTTP server
       with JSON API + HTML dashboard (current spec) vs Prometheus `/metrics` endpoint
       consumed by external Grafana vs structured logs only (consumed by log aggregation) vs
       Unix socket + reverse proxy. Consider: the "single binary, zero infrastructure" deployment
       model vs integration with existing monitoring stacks (most Go production services use
       Prometheus). The embedded dashboard optimizes for zero-dependency operation but diverges
       from industry convention. Document the decision in
-      `docs/decisions/0007-observability-model.md`.
+      `docs/decisions/0008-observability-model.md`.
       **Verify:** ADR exists with status `accepted`, covers at least 3 alternatives, and
       `docs/decisions/README.md` index is updated.
 
@@ -610,13 +676,13 @@ features.
 
 Operational hardening, performance tuning, and workspace lifecycle improvements.
 
-- [ ] 10.1 Research and write ADR-0008: Workspace cleanup policy. Evaluate time-based TTL
+- [ ] 10.1 Research and write ADR-0009: Workspace cleanup policy. Evaluate time-based TTL
       expiration (delete workspaces older than N days) vs run-count-based retention (keep
       last N workspaces) vs manual-only cleanup vs disk-pressure-triggered eviction.
       Consider: the current design cleans workspaces only on terminal state transitions
       (Sections 8.5, 8.6), which leaves orphaned workspaces when issues are deleted or
       the orchestrator is stopped before reconciliation. Document the decision in
-      `docs/decisions/0008-workspace-cleanup-policy.md`.
+      `docs/decisions/0009-workspace-cleanup-policy.md`.
       **Verify:** ADR exists with status `accepted`, covers at least 3 alternatives, and
       `docs/decisions/README.md` index is updated.
 
@@ -711,7 +777,7 @@ Documentation, security guidance, and public release preparation.
       **Verify:** dry run release produces `*.sbom.json` files alongside each archive in
       the `dist/` directory.
 
-- [ ] 11.5 Finalize `docs/workflow-reference.md`: update the reference written in task 7.7
+- [ ] 11.5 Finalize `docs/workflow-reference.md`: update the reference written in task 7.14
       to reflect all features implemented through Milestones 7–11 — including `tracker_api`
       tool extension (8.6), `.sortie/status` file (8.7), workspace TTL cleanup and
       `workspace.retention_days` (10.2), `sortie validate` subcommand, and any adapter-specific
