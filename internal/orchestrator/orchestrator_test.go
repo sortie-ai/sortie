@@ -2662,14 +2662,16 @@ func TestGracefulShutdown(t *testing.T) {
 			},
 		})
 
-		// Add a retry entry with a timer that would fire in 10s.
+		// Add a retry entry with a short timer (50ms). If
+		// cancelRetryTimers fails to Stop() it, the timer will fire
+		// within the 200ms wait below, proving the test is effective.
 		// Since TimerHandle is non-nil, activateReconstructedRetries
 		// skips it.
 		state.RetryAttempts["retry-1"] = &RetryEntry{
 			IssueID:    "retry-1",
 			Identifier: "RETRY-1",
 			Attempt:    1,
-			TimerHandle: time.AfterFunc(10*time.Second, func() {
+			TimerHandle: time.AfterFunc(50*time.Millisecond, func() {
 				o.onRetryFire("retry-1")
 			}),
 		}
@@ -2690,8 +2692,9 @@ func TestGracefulShutdown(t *testing.T) {
 			t.Fatal("Run did not return within 3 seconds")
 		}
 
-		// Wait long enough for the timer to have fired if not stopped.
-		time.Sleep(500 * time.Millisecond)
+		// Wait longer than the 50ms timer duration. If Stop() was not
+		// called, the timer fires and writes to retryTimerCh.
+		time.Sleep(200 * time.Millisecond)
 
 		select {
 		case id := <-o.retryTimerCh:

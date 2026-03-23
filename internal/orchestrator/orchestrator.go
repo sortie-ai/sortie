@@ -117,10 +117,11 @@ func NewOrchestrator(params OrchestratorParams) *Orchestrator {
 // Run enters the event loop, blocks until ctx is cancelled, and returns.
 // Must be called from a single goroutine. On context cancellation the
 // tick timer is stopped and a draining shutdown begins: all running
-// worker contexts are cancelled, the loop waits up to 30 seconds for
-// workers to exit (processing results through [HandleWorkerExit] and
-// agent events through [HandleAgentEvent]), pending retry timers are
-// stopped, and the function returns.
+// worker contexts are cancelled, the loop waits up to the drain
+// timeout (30 seconds by default) for workers to exit (processing
+// results through [HandleWorkerExit] and agent events through
+// [HandleAgentEvent]), pending retry timers are stopped, and the
+// function returns.
 func (o *Orchestrator) Run(ctx context.Context) {
 	o.activateReconstructedRetries()
 
@@ -376,7 +377,7 @@ func (o *Orchestrator) drainRunningWorkers() {
 			HandleWorkerExit(o.state, result, HandleWorkerExitParams{
 				Store:             o.store,
 				MaxRetryBackoffMS: cfg.Agent.MaxRetryBackoffMS,
-				OnRetryFire:       func(string) {}, // suppress retry scheduling during drain
+				OnRetryFire:       func(string) {}, // no-op: prevent retry fire events from reaching the event loop during drain
 				Ctx:               drainCtx,
 				Logger:            o.logger,
 				BeforeRemoveHook:  cfg.Hooks.BeforeRemove,
