@@ -501,6 +501,8 @@ Filesystem path for the SQLite database file.
 - Absolute paths are used as-is.
 - Relative paths are resolved against the directory containing `WORKFLOW.md`.
 - Default: `.sortie.db` in the same directory as `WORKFLOW.md`.
+- An explicit empty string (`db_path: ""`) is equivalent to omitting the field; the
+  default path is used.
 - Non-string values are rejected with a configuration error.
 - If the value resolves to an empty string after environment expansion (e.g., an unset
   `$VAR`), startup fails with a configuration error.

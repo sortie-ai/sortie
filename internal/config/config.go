@@ -216,6 +216,11 @@ func buildDBPath(raw map[string]any) (string, error) {
 			Message: fmt.Sprintf("expected string, got %T", v),
 		}
 	}
+	// Explicit empty string (db_path: "") is equivalent to omitting
+	// the field — the caller applies its default path.
+	if s == "" {
+		return "", nil
+	}
 	expanded, err := expandPath(s)
 	if err != nil {
 		return "", &ConfigError{
@@ -223,7 +228,7 @@ func buildDBPath(raw map[string]any) (string, error) {
 			Message: err.Error(),
 		}
 	}
-	if s != "" && expanded == "" {
+	if expanded == "" {
 		return "", &ConfigError{
 			Field:   "db_path",
 			Message: "resolved to empty (check environment variable)",
