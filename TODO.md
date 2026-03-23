@@ -441,6 +441,15 @@ component. Uses mock adapters for tracker and agent - no real external calls.
       **Verify:** existing preflight tests pass unchanged. Compilation confirms no adapter
       mixes tracker fields with agent fields or vice-versa.
 
+- [ ] 6.19 Update `docs/architecture.md` to document `db_path` as a top-level config field.
+      Add `db_path` to the top-level key list in Section 5.3, add a field entry in
+      Section 6.4 (type: path, default: `.sortie.db` next to WORKFLOW.md, supports `$VAR`
+      and `~` expansion), and update Section 19.1 to reference the `db_path` field name
+      explicitly instead of the current generic "the database file location is
+      configurable" phrasing.
+      **Verify:** `db_path` appears in Sections 5.3, 6.4, and 19.1 of the architecture
+      doc. No contradictions with existing content.
+
 ## Milestone 7: End-to-End with Real Adapters
 
 Connect real Jira and real Claude Code adapters to the orchestrator. This is the first time
