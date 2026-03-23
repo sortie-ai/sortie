@@ -349,7 +349,6 @@ func TestFetchIssuesByStates(t *testing.T) {
 		}
 	})
 
-	// Section 17.3: empty states returns empty without API call.
 	t.Run("empty states slice", func(t *testing.T) {
 		t.Parallel()
 
@@ -563,7 +562,7 @@ func TestFetchIssueComments(t *testing.T) {
 	})
 }
 
-// --- Normalization tests (Section 11.3) ---
+// --- Normalization tests ---
 
 func TestNormalization(t *testing.T) {
 	t.Parallel()

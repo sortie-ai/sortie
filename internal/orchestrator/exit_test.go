@@ -909,7 +909,7 @@ func TestHandleWorkerExit_SessionIDPrefersResult(t *testing.T) {
 	})
 }
 
-// --- Cancelled exit: retry claim preservation (Section 8.5) ---
+// --- Cancelled exit: retry claim preservation ---
 
 func TestHandleWorkerExit_CancelledWithPreScheduledRetryKeepsClaim(t *testing.T) {
 	t.Parallel()
@@ -1076,7 +1076,7 @@ func TestHandleWorkerExit_CleanupFailureNonFatal(t *testing.T) {
 	}
 }
 
-// Section 8.5: PendingCleanup uses the actual workspace path from the worker
+// PendingCleanup uses the actual workspace path from the worker
 // result, not a path reconstructed from config. This prevents orphaned
 // workspaces when workspace.root changes at runtime via dynamic config reload.
 func TestHandleWorkerExit_PendingCleanupUsesActualPath(t *testing.T) {

@@ -212,7 +212,6 @@ func TestComputePath(t *testing.T) {
 		}
 	})
 
-	// Section 9.5: "." and ".." identifiers must be rejected
 	t.Run("special name identifiers rejected", func(t *testing.T) {
 		t.Parallel()
 
@@ -237,7 +236,6 @@ func TestComputePath(t *testing.T) {
 	})
 }
 
-// Section 9.5, Invariant 2: symlinked root resolves to real directory
 func TestComputePath_SymlinkRoot(t *testing.T) {
 	t.Parallel()
 
@@ -393,7 +391,6 @@ func TestEnsure(t *testing.T) {
 		}
 	})
 
-	// Section 9.5: symlinks at workspace path are rejected by ComputePath.
 	t.Run("symlink at workspace path rejected", func(t *testing.T) {
 		t.Parallel()
 		root := t.TempDir()
