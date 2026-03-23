@@ -1118,7 +1118,7 @@ func TestHandleWorkerExit_PendingCleanupUsesActualPath(t *testing.T) {
 	}
 }
 
-// --- Handoff transition tests (Section 7.3, ADR-0007) ---
+// --- Handoff transition tests ---
 
 // exitStateWithIssue creates a *State with a running entry whose
 // Issue.State is set to issueState. Used by handoff transition tests.

@@ -535,7 +535,7 @@ func TestNewServiceConfig(t *testing.T) {
 		assertStringEqual(t, "Tracker.APIKey", "", cfg.Tracker.APIKey)
 	})
 
-	// --- HandoffState subtests (ADR-0007) ---
+	// --- HandoffState subtests ---
 
 	t.Run("HandoffState/Absent", func(t *testing.T) {
 		t.Parallel()
