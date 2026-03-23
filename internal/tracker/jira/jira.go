@@ -172,9 +172,9 @@ func (a *JiraAdapter) FetchIssuesByStates(ctx context.Context, states []string) 
 }
 
 // FetchIssueStatesByIDs returns the current state for each requested
-// issue key. Issues not found are omitted from the result map.
-// Batches keys into groups of 40 to stay within URI length limits.
-// The queryFilter is intentionally not applied.
+// issue ID (Jira internal numeric ID). Issues not found are omitted
+// from the result map. Batches IDs into groups of 40 to stay within
+// URI length limits. The queryFilter is intentionally not applied.
 func (a *JiraAdapter) FetchIssueStatesByIDs(ctx context.Context, issueIDs []string) (map[string]string, error) {
 	if len(issueIDs) == 0 {
 		return map[string]string{}, nil
@@ -193,13 +193,13 @@ func (a *JiraAdapter) FetchIssueStatesByIDs(ctx context.Context, issueIDs []stri
 		}
 		batch := issueIDs[start:end]
 
-		jql := buildKeyINJQL(batch)
+		jql := buildIDINJQL(batch)
 		issues, err := a.paginatedSearch(ctx, jql, "status")
 		if err != nil {
 			return nil, err
 		}
 		for _, iss := range issues {
-			result[iss.Identifier] = iss.State
+			result[iss.ID] = iss.State
 		}
 	}
 
@@ -415,18 +415,22 @@ func isNotFound(err error) bool {
 	return ok && te.Kind == domain.ErrTrackerNotFound
 }
 
-// extractStringSlice converts an []any (from JSON unmarshaling) to
-// []string, skipping non-string elements.
+// extractStringSlice converts a value that may be []any (from JSON
+// unmarshaling) or []string (from typed config) to []string, skipping
+// non-string elements.
 func extractStringSlice(v any) []string {
-	items, ok := v.([]any)
-	if !ok {
+	switch s := v.(type) {
+	case []any:
+		result := make([]string, 0, len(s))
+		for _, item := range s {
+			if str, ok := item.(string); ok {
+				result = append(result, str)
+			}
+		}
+		return result
+	case []string:
+		return s
+	default:
 		return nil
 	}
-	result := make([]string, 0, len(items))
-	for _, item := range items {
-		if s, ok := item.(string); ok {
-			result = append(result, s)
-		}
-	}
-	return result
 }

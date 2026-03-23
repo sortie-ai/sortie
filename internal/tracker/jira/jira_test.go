@@ -166,6 +166,50 @@ func TestNewJiraAdapter_CustomActiveStates(t *testing.T) {
 	}
 }
 
+func TestNewJiraAdapter_CustomActiveStates_StringSlice(t *testing.T) {
+	t.Parallel()
+
+	// Config layer passes typed []string; the adapter must accept it.
+	config := validConfig("https://x.atlassian.net")
+	config["active_states"] = []string{"To Do", "In Progress"}
+	a := mustAdapter(t, config)
+	if len(a.activeStates) != 2 || a.activeStates[0] != "To Do" || a.activeStates[1] != "In Progress" {
+		t.Errorf("activeStates = %v, want [To Do In Progress]", a.activeStates)
+	}
+}
+
+func TestExtractStringSlice(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		input any
+		want  []string
+	}{
+		{name: "nil", input: nil, want: nil},
+		{name: "[]any strings", input: []any{"A", "B"}, want: []string{"A", "B"}},
+		{name: "[]string", input: []string{"X", "Y"}, want: []string{"X", "Y"}},
+		{name: "[]any mixed", input: []any{"ok", 42, "yes"}, want: []string{"ok", "yes"}},
+		{name: "[]any empty", input: []any{}, want: []string{}},
+		{name: "wrong type int", input: 42, want: nil},
+		{name: "wrong type string", input: "single", want: nil},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := extractStringSlice(tt.input)
+			if len(got) != len(tt.want) {
+				t.Fatalf("extractStringSlice(%v) len = %d, want %d", tt.input, len(got), len(tt.want))
+			}
+			for i := range got {
+				if got[i] != tt.want[i] {
+					t.Errorf("extractStringSlice(%v)[%d] = %q, want %q", tt.input, i, got[i], tt.want[i])
+				}
+			}
+		})
+	}
+}
+
 func TestNewJiraAdapter_QueryFilter(t *testing.T) {
 	t.Parallel()
 
@@ -363,6 +407,37 @@ func TestFetchCandidateIssues_JQLSanitization(t *testing.T) {
 	}
 	if !strings.Contains(receivedJQL, `"To Do"`) {
 		t.Errorf("JQL missing sanitized state: %q", receivedJQL)
+	}
+}
+
+func TestFetchCandidateIssues_StringSliceActiveStates(t *testing.T) {
+	t.Parallel()
+
+	// Regression: config layer passes []string; the adapter must use those
+	// states (not fall back to defaults) in the JQL query.
+	var receivedJQL string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedJQL = r.URL.Query().Get("jql")
+		w.Write(loadFixture(t, "search_empty.json")) //nolint:errcheck // test helper
+	}))
+	defer srv.Close()
+
+	config := validConfig(srv.URL)
+	config["active_states"] = []string{"To Do", "Code Review"}
+	a := mustAdapter(t, config)
+	_, err := a.FetchCandidateIssues(context.Background())
+	if err != nil {
+		t.Fatalf("FetchCandidateIssues: %v", err)
+	}
+	if !strings.Contains(receivedJQL, `"To Do"`) {
+		t.Errorf("JQL missing 'To Do' state: %q", receivedJQL)
+	}
+	if !strings.Contains(receivedJQL, `"Code Review"`) {
+		t.Errorf("JQL missing 'Code Review' state: %q", receivedJQL)
+	}
+	// Must NOT contain default states that weren't configured.
+	if strings.Contains(receivedJQL, `"Backlog"`) {
+		t.Errorf("JQL contains default state 'Backlog' despite custom active_states: %q", receivedJQL)
 	}
 }
 
@@ -673,28 +748,31 @@ func TestFetchIssueStatesByIDs_SingleBatch(t *testing.T) {
 	defer srv.Close()
 
 	a := mustAdapter(t, validConfig(srv.URL))
-	result, err := a.FetchIssueStatesByIDs(context.Background(), []string{"PROJ-1", "PROJ-2", "PROJ-3"})
+	result, err := a.FetchIssueStatesByIDs(context.Background(), []string{"1", "2", "3"})
 	if err != nil {
 		t.Fatalf("FetchIssueStatesByIDs: %v", err)
 	}
 
-	// PROJ-3 is missing from response — omitted from map
+	// ID "3" is missing from response — omitted from map
 	if len(result) != 2 {
 		t.Fatalf("len = %d, want 2", len(result))
 	}
-	if result["PROJ-1"] != "To Do" {
-		t.Errorf("PROJ-1 = %q, want To Do", result["PROJ-1"])
+	if result["1"] != "To Do" {
+		t.Errorf("result[\"1\"] = %q, want To Do", result["1"])
 	}
-	if result["PROJ-2"] != "Done" {
-		t.Errorf("PROJ-2 = %q, want Done", result["PROJ-2"])
+	if result["2"] != "Done" {
+		t.Errorf("result[\"2\"] = %q, want Done", result["2"])
 	}
-	if _, exists := result["PROJ-3"]; exists {
-		t.Error("PROJ-3 should be absent from result")
+	if _, exists := result["3"]; exists {
+		t.Error("ID \"3\" should be absent from result")
 	}
 
-	// Verify JQL uses key IN, not queryFilter
-	if !strings.Contains(receivedJQL, "key IN") {
-		t.Errorf("JQL = %q, should use key IN", receivedJQL)
+	// Verify JQL uses id IN (numeric IDs), not key IN
+	if !strings.Contains(receivedJQL, "id IN") {
+		t.Errorf("JQL = %q, should use id IN", receivedJQL)
+	}
+	if strings.Contains(receivedJQL, "key IN") {
+		t.Errorf("JQL = %q, should NOT use key IN", receivedJQL)
 	}
 }
 
@@ -705,10 +783,9 @@ func TestFetchIssueStatesByIDs_MultiBatch(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		atomic.AddInt32(&requestCount, 1)
 		jql := r.URL.Query().Get("jql")
-		// Count keys in JQL by counting quoted items
-		keyCount := strings.Count(jql, `"PROJ-`)
-		if keyCount > batchSize {
-			t.Errorf("batch has %d keys, max allowed %d", keyCount, batchSize)
+		// Count comma-separated IDs in the id IN (...) clause
+		if !strings.Contains(jql, "id IN") {
+			t.Errorf("JQL = %q, should use id IN", jql)
 		}
 
 		// Return one issue per batch
@@ -722,10 +799,10 @@ func TestFetchIssueStatesByIDs_MultiBatch(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	// Create 45 IDs to force 2 batches (40 + 5)
+	// Create 45 numeric IDs to force 2 batches (40 + 5)
 	ids := make([]string, 45)
 	for i := range ids {
-		ids[i] = fmt.Sprintf("PROJ-%d", i+1)
+		ids[i] = fmt.Sprintf("%d", i+1)
 	}
 
 	a := mustAdapter(t, validConfig(srv.URL))
@@ -745,7 +822,7 @@ func TestFetchIssueStatesByIDs_NoQueryFilter(t *testing.T) {
 	var receivedJQL string
 	resp := searchResponse{
 		Issues: []jiraIssue{
-			{ID: "1", Key: "PROJ-1", Fields: jiraFields{Status: &jiraStatus{Name: "Open"}}},
+			{ID: "10001", Key: "PROJ-1", Fields: jiraFields{Status: &jiraStatus{Name: "Open"}}},
 		},
 	}
 	respBytes, _ := json.Marshal(resp)
@@ -759,13 +836,51 @@ func TestFetchIssueStatesByIDs_NoQueryFilter(t *testing.T) {
 	config := validConfig(srv.URL)
 	config["query_filter"] = "component = 'api'"
 	a := mustAdapter(t, config)
-	_, err := a.FetchIssueStatesByIDs(context.Background(), []string{"PROJ-1"})
+	_, err := a.FetchIssueStatesByIDs(context.Background(), []string{"10001"})
 	if err != nil {
 		t.Fatalf("FetchIssueStatesByIDs: %v", err)
 	}
 	// queryFilter must NOT be in the JQL for state-by-IDs
 	if strings.Contains(receivedJQL, "component") {
 		t.Errorf("JQL = %q, should NOT contain queryFilter", receivedJQL)
+	}
+	// Must use id IN, not key IN
+	if !strings.Contains(receivedJQL, "id IN") {
+		t.Errorf("JQL = %q, should use id IN", receivedJQL)
+	}
+}
+
+// TestFetchIssueStatesByIDs_ResultKeyedByID verifies the regression fix:
+// results must be keyed by numeric ID (iss.ID), not by Jira key
+// (iss.Identifier). Callers (reconciliation, worker state refresh)
+// look up by issue.ID which is the numeric internal Jira ID.
+func TestFetchIssueStatesByIDs_ResultKeyedByID(t *testing.T) {
+	t.Parallel()
+
+	resp := searchResponse{
+		Issues: []jiraIssue{
+			{ID: "10037", Key: "ST-5", Fields: jiraFields{Status: &jiraStatus{Name: "Done"}}},
+		},
+	}
+	respBytes, _ := json.Marshal(resp)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Write(respBytes) //nolint:errcheck // test helper
+	}))
+	defer srv.Close()
+
+	a := mustAdapter(t, validConfig(srv.URL))
+	result, err := a.FetchIssueStatesByIDs(context.Background(), []string{"10037"})
+	if err != nil {
+		t.Fatalf("FetchIssueStatesByIDs: %v", err)
+	}
+
+	// Must be keyed by numeric ID, not by Jira key
+	if result["10037"] != "Done" {
+		t.Errorf("result[\"10037\"] = %q, want \"Done\"", result["10037"])
+	}
+	if _, exists := result["ST-5"]; exists {
+		t.Error("result should NOT be keyed by Jira key \"ST-5\"")
 	}
 }
 
@@ -992,8 +1107,8 @@ func TestAdapterLifecycle(t *testing.T) {
 		switch {
 		case path == "/rest/api/3/search/jql":
 			jql := r.URL.Query().Get("jql")
-			if strings.Contains(jql, "key IN") {
-				// FetchIssueStatesByIDs — return minimal status
+			if strings.Contains(jql, "id IN") {
+				// FetchIssueStatesByIDs — return minimal status keyed by numeric ID
 				resp := searchResponse{
 					Issues: []jiraIssue{
 						{ID: "10001", Key: "PROJ-1", Fields: jiraFields{Status: &jiraStatus{Name: "To Do"}}},
@@ -1079,16 +1194,16 @@ func TestAdapterLifecycle(t *testing.T) {
 		t.Errorf("terminal len = %d, want 2", len(terminal))
 	}
 
-	// 4. FetchIssueStatesByIDs
-	stateMap, err := a.FetchIssueStatesByIDs(ctx, []string{"PROJ-1", "PROJ-2"})
+	// 4. FetchIssueStatesByIDs — uses numeric IDs, results keyed by ID
+	stateMap, err := a.FetchIssueStatesByIDs(ctx, []string{"10001", "10002"})
 	if err != nil {
 		t.Fatalf("FetchIssueStatesByIDs: %v", err)
 	}
-	if stateMap["PROJ-1"] != "To Do" {
-		t.Errorf("PROJ-1 state = %q, want To Do", stateMap["PROJ-1"])
+	if stateMap["10001"] != "To Do" {
+		t.Errorf("stateMap[\"10001\"] = %q, want To Do", stateMap["10001"])
 	}
-	if stateMap["PROJ-2"] != "In Progress" {
-		t.Errorf("PROJ-2 state = %q, want In Progress", stateMap["PROJ-2"])
+	if stateMap["10002"] != "In Progress" {
+		t.Errorf("stateMap[\"10002\"] = %q, want In Progress", stateMap["10002"])
 	}
 
 	// 5. FetchIssueComments

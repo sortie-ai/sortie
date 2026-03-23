@@ -48,7 +48,8 @@ func buildStatesFetchJQL(project string, states []string, queryFilter string) st
 	return jql
 }
 
-// buildKeyINJQL builds the JQL for fetching issues by their keys.
+// buildKeyINJQL builds the JQL for fetching issues by their keys
+// (human-readable identifiers like "PROJ-123").
 // The queryFilter is intentionally not applied — these issues already
 // passed filtering at dispatch time.
 func buildKeyINJQL(keys []string) string {
@@ -57,4 +58,30 @@ func buildKeyINJQL(keys []string) string {
 		quoted[i] = fmt.Sprintf(`"%s"`, escapeJQLString(k))
 	}
 	return fmt.Sprintf("key IN (%s) ORDER BY key ASC", strings.Join(quoted, ", "))
+}
+
+// buildIDINJQL builds JQL for fetching issues by their internal numeric
+// IDs. Each ID is sanitized to digits only to prevent JQL injection.
+// Used by [FetchIssueStatesByIDs] for reconciliation and worker state
+// refresh where state.Running is keyed by numeric ID.
+func buildIDINJQL(ids []string) string {
+	sanitized := make([]string, 0, len(ids))
+	for _, id := range ids {
+		clean := stripNonDigits(id)
+		if clean != "" {
+			sanitized = append(sanitized, clean)
+		}
+	}
+	return fmt.Sprintf("id IN (%s) ORDER BY key ASC", strings.Join(sanitized, ", "))
+}
+
+// stripNonDigits removes all non-digit characters from a string.
+func stripNonDigits(s string) string {
+	var b strings.Builder
+	for _, r := range s {
+		if r >= '0' && r <= '9' {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
 }
