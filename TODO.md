@@ -544,7 +544,7 @@ the system does real work.
       Jira, confirm Sortie stops the agent and cleans the workspace.
       **Verify:** workspace directory is removed after reconciliation.
 
-- [ ] 7.14 Write the `WORKFLOW.md` syntax reference (`docs/workflow-reference.md`): a formal
+- [x] 7.14 Write the `WORKFLOW.md` syntax reference (`docs/workflow-reference.md`): a formal
       configuration reference covering file format (front matter + prompt body parsing rules),
       field-by-field specification for every config section (`tracker`, `polling`, `workspace`,
       `hooks`, `agent`, extensions, etc.) with types, defaults, validation rules, dynamic reload
