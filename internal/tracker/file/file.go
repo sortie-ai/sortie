@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/registry"
@@ -28,10 +29,16 @@ var _ domain.TrackerAdapter = (*FileAdapter)(nil)
 // FileAdapter reads issues from a JSON file and implements all seven
 // [domain.TrackerAdapter] operations. The file is re-read on each
 // call to support test scenarios that modify the fixture between
-// operations. Safe for concurrent use.
+// operations. State mutations via [FileAdapter.TransitionIssue] are
+// stored in an in-memory override map layered on top of disk reads.
+// Overrides are not persisted to disk — they exist only for the
+// lifetime of the adapter instance. Safe for concurrent use.
 type FileAdapter struct {
 	path         string
 	activeStates map[string]bool
+
+	mu        sync.RWMutex
+	overrides map[string]string // issue ID → overridden state
 }
 
 // NewFileAdapter creates a [FileAdapter] from adapter configuration.
@@ -57,6 +64,7 @@ func NewFileAdapter(config map[string]any) (domain.TrackerAdapter, error) {
 	return &FileAdapter{
 		path:         path,
 		activeStates: toStringSet(extractStringSlice(config["active_states"])),
+		overrides:    make(map[string]string),
 	}, nil
 }
 
@@ -69,8 +77,12 @@ func (a *FileAdapter) FetchCandidateIssues(_ context.Context) ([]domain.Issue, e
 		return nil, err
 	}
 
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+
 	result := make([]domain.Issue, 0, len(raws))
 	for _, raw := range raws {
+		raw = a.applyOverride(raw)
 		if len(a.activeStates) > 0 && !a.activeStates[strings.ToLower(raw.State)] {
 			continue
 		}
@@ -90,8 +102,12 @@ func (a *FileAdapter) FetchIssueByID(_ context.Context, issueID string) (domain.
 		return domain.Issue{}, err
 	}
 
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+
 	for _, raw := range raws {
 		if raw.ID == issueID {
+			raw = a.applyOverride(raw)
 			iss := normalize(raw)
 			if iss.Comments == nil {
 				iss.Comments = []domain.Comment{}
@@ -119,6 +135,9 @@ func (a *FileAdapter) FetchIssuesByStates(_ context.Context, states []string) ([
 		return nil, err
 	}
 
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+
 	stateSet := make(map[string]bool, len(states))
 	for _, s := range states {
 		stateSet[strings.ToLower(s)] = true
@@ -126,6 +145,7 @@ func (a *FileAdapter) FetchIssuesByStates(_ context.Context, states []string) ([
 
 	result := make([]domain.Issue, 0, len(raws))
 	for _, raw := range raws {
+		raw = a.applyOverride(raw)
 		if stateSet[strings.ToLower(raw.State)] {
 			iss := normalize(raw)
 			iss.Comments = nil
@@ -147,6 +167,9 @@ func (a *FileAdapter) FetchIssueStatesByIDs(_ context.Context, issueIDs []string
 		return nil, err
 	}
 
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+
 	wanted := make(map[string]bool, len(issueIDs))
 	for _, id := range issueIDs {
 		wanted[id] = true
@@ -155,6 +178,7 @@ func (a *FileAdapter) FetchIssueStatesByIDs(_ context.Context, issueIDs []string
 	result := make(map[string]string, len(issueIDs))
 	for _, raw := range raws {
 		if wanted[raw.ID] {
+			raw = a.applyOverride(raw)
 			result[raw.ID] = raw.State
 		}
 	}
@@ -174,6 +198,9 @@ func (a *FileAdapter) FetchIssueStatesByIdentifiers(_ context.Context, identifie
 		return nil, err
 	}
 
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+
 	wanted := make(map[string]bool, len(identifiers))
 	for _, id := range identifiers {
 		wanted[id] = true
@@ -182,6 +209,7 @@ func (a *FileAdapter) FetchIssueStatesByIdentifiers(_ context.Context, identifie
 	result := make(map[string]string, len(identifiers))
 	for _, raw := range raws {
 		if wanted[raw.Identifier] {
+			raw = a.applyOverride(raw)
 			result[raw.Identifier] = raw.State
 		}
 	}
@@ -213,13 +241,48 @@ func (a *FileAdapter) FetchIssueComments(_ context.Context, issueID string) ([]d
 	}
 }
 
-// TransitionIssue updates the in-memory state of an issue. This is a
-// stub that will be replaced with a full implementation.
-func (a *FileAdapter) TransitionIssue(_ context.Context, _ string, _ string) error {
-	return &domain.TrackerError{
-		Kind:    domain.ErrTrackerAPI,
-		Message: "TransitionIssue not implemented",
+// TransitionIssue records a state override for the given issue in the
+// adapter's in-memory override map. Subsequent read operations
+// ([FileAdapter.FetchCandidateIssues], [FileAdapter.FetchIssueByID],
+// etc.) reflect the overridden state. The on-disk fixture file is
+// never modified. Returns a [*domain.TrackerError] with Kind
+// [domain.ErrTrackerNotFound] if the issue ID does not exist in the
+// fixture. Safe for concurrent use.
+func (a *FileAdapter) TransitionIssue(_ context.Context, issueID string, targetState string) error {
+	raws, err := loadIssues(a.path)
+	if err != nil {
+		return err
 	}
+
+	found := false
+	for _, raw := range raws {
+		if raw.ID == issueID {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return &domain.TrackerError{
+			Kind:    domain.ErrTrackerNotFound,
+			Message: fmt.Sprintf("issue not found: %s", issueID),
+		}
+	}
+
+	a.mu.Lock()
+	a.overrides[issueID] = targetState
+	a.mu.Unlock()
+
+	return nil
+}
+
+// applyOverride returns a copy of raw with its State replaced by the
+// in-memory override value when one exists. Caller must hold at least
+// a read lock on a.mu.
+func (a *FileAdapter) applyOverride(raw rawIssue) rawIssue {
+	if st, ok := a.overrides[raw.ID]; ok {
+		raw.State = st
+	}
+	return raw
 }
 
 // --- unexported helpers ---

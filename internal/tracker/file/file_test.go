@@ -38,6 +38,20 @@ func requireTrackerError(t *testing.T, err error) {
 	}
 }
 
+func requireTrackerErrorKind(t *testing.T, err error, kind domain.TrackerErrorKind) {
+	t.Helper()
+	if err == nil {
+		t.Fatalf("expected error with kind %q, got nil", kind)
+	}
+	var te *domain.TrackerError
+	if !errors.As(err, &te) {
+		t.Fatalf("error type = %T, want *domain.TrackerError", err)
+	}
+	if te.Kind != kind {
+		t.Fatalf("TrackerError.Kind = %q, want %q", te.Kind, kind)
+	}
+}
+
 // --- Constructor tests ---
 
 func TestNewFileAdapter(t *testing.T) {
@@ -709,4 +723,164 @@ func TestRegistryIntegration(t *testing.T) {
 	if len(issues) == 0 {
 		t.Fatal("expected issues from registry-constructed adapter")
 	}
+}
+
+// --- TransitionIssue tests ---
+
+func TestTransitionIssue(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+
+	t.Run("successful transition", func(t *testing.T) {
+		t.Parallel()
+
+		a := newAdapter(t, fixture("basic.json"), []any{"to do", "in progress"})
+		if err := a.TransitionIssue(ctx, "10001", "Human Review"); err != nil {
+			t.Fatalf("TransitionIssue: %v", err)
+		}
+
+		iss, err := a.FetchIssueByID(ctx, "10001")
+		if err != nil {
+			t.Fatalf("FetchIssueByID: %v", err)
+		}
+		if iss.State != "Human Review" {
+			t.Errorf("State = %q, want %q", iss.State, "Human Review")
+		}
+	})
+
+	t.Run("reflected in FetchCandidateIssues", func(t *testing.T) {
+		t.Parallel()
+
+		a := newAdapter(t, fixture("basic.json"), []any{"to do", "in progress"})
+		if err := a.TransitionIssue(ctx, "10001", "Human Review"); err != nil {
+			t.Fatalf("TransitionIssue: %v", err)
+		}
+
+		issues, err := a.FetchCandidateIssues(ctx)
+		if err != nil {
+			t.Fatalf("FetchCandidateIssues: %v", err)
+		}
+		if len(issues) != 1 {
+			t.Fatalf("got %d issues, want 1", len(issues))
+		}
+		if issues[0].Identifier != "PROJ-2" {
+			t.Errorf("got %s, want PROJ-2", issues[0].Identifier)
+		}
+	})
+
+	t.Run("reflected in FetchIssueStatesByIDs", func(t *testing.T) {
+		t.Parallel()
+
+		a := newAdapter(t, fixture("basic.json"), nil)
+		if err := a.TransitionIssue(ctx, "10001", "Human Review"); err != nil {
+			t.Fatalf("TransitionIssue: %v", err)
+		}
+
+		m, err := a.FetchIssueStatesByIDs(ctx, []string{"10001"})
+		if err != nil {
+			t.Fatalf("FetchIssueStatesByIDs: %v", err)
+		}
+		if m["10001"] != "Human Review" {
+			t.Errorf("state = %q, want %q", m["10001"], "Human Review")
+		}
+	})
+
+	t.Run("reflected in FetchIssueStatesByIdentifiers", func(t *testing.T) {
+		t.Parallel()
+
+		a := newAdapter(t, fixture("basic.json"), nil)
+		if err := a.TransitionIssue(ctx, "10001", "Human Review"); err != nil {
+			t.Fatalf("TransitionIssue: %v", err)
+		}
+
+		m, err := a.FetchIssueStatesByIdentifiers(ctx, []string{"PROJ-1"})
+		if err != nil {
+			t.Fatalf("FetchIssueStatesByIdentifiers: %v", err)
+		}
+		if m["PROJ-1"] != "Human Review" {
+			t.Errorf("state = %q, want %q", m["PROJ-1"], "Human Review")
+		}
+	})
+
+	t.Run("reflected in FetchIssuesByStates", func(t *testing.T) {
+		t.Parallel()
+
+		a := newAdapter(t, fixture("basic.json"), nil)
+		if err := a.TransitionIssue(ctx, "10001", "Human Review"); err != nil {
+			t.Fatalf("TransitionIssue: %v", err)
+		}
+
+		found, err := a.FetchIssuesByStates(ctx, []string{"Human Review"})
+		if err != nil {
+			t.Fatalf("FetchIssuesByStates(Human Review): %v", err)
+		}
+		if len(found) != 1 {
+			t.Fatalf("got %d issues, want 1", len(found))
+		}
+		if found[0].ID != "10001" {
+			t.Errorf("ID = %q, want %q", found[0].ID, "10001")
+		}
+
+		old, err := a.FetchIssuesByStates(ctx, []string{"To Do"})
+		if err != nil {
+			t.Fatalf("FetchIssuesByStates(To Do): %v", err)
+		}
+		if len(old) != 0 {
+			t.Errorf("got %d issues for old state, want 0", len(old))
+		}
+	})
+
+	t.Run("issue not found", func(t *testing.T) {
+		t.Parallel()
+
+		a := newAdapter(t, fixture("basic.json"), nil)
+		err := a.TransitionIssue(ctx, "99999", "Human Review")
+		requireTrackerErrorKind(t, err, domain.ErrTrackerNotFound)
+	})
+
+	t.Run("file read error", func(t *testing.T) {
+		t.Parallel()
+
+		a := newAdapter(t, "testdata/does_not_exist.json", nil)
+		err := a.TransitionIssue(ctx, "10001", "Human Review")
+		requireTrackerErrorKind(t, err, domain.ErrTrackerPayload)
+	})
+
+	t.Run("multiple transitions", func(t *testing.T) {
+		t.Parallel()
+
+		a := newAdapter(t, fixture("basic.json"), nil)
+		if err := a.TransitionIssue(ctx, "10001", "Review"); err != nil {
+			t.Fatalf("TransitionIssue(Review): %v", err)
+		}
+		if err := a.TransitionIssue(ctx, "10001", "Done"); err != nil {
+			t.Fatalf("TransitionIssue(Done): %v", err)
+		}
+
+		iss, err := a.FetchIssueByID(ctx, "10001")
+		if err != nil {
+			t.Fatalf("FetchIssueByID: %v", err)
+		}
+		if iss.State != "Done" {
+			t.Errorf("State = %q, want %q", iss.State, "Done")
+		}
+	})
+
+	t.Run("transition does not affect other issues", func(t *testing.T) {
+		t.Parallel()
+
+		a := newAdapter(t, fixture("basic.json"), nil)
+		if err := a.TransitionIssue(ctx, "10001", "Human Review"); err != nil {
+			t.Fatalf("TransitionIssue: %v", err)
+		}
+
+		iss, err := a.FetchIssueByID(ctx, "10002")
+		if err != nil {
+			t.Fatalf("FetchIssueByID: %v", err)
+		}
+		if iss.State != "In Progress" {
+			t.Errorf("State = %q, want %q", iss.State, "In Progress")
+		}
+	})
 }
