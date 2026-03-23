@@ -42,6 +42,7 @@ const maxErrorBody = 512
 // [maxErrorBody] bytes for the error detail.
 func classifyHTTPError(resp *http.Response, method, path string) error {
 	snippet, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBody))
+	_, _ = io.Copy(io.Discard, resp.Body)
 	detail := string(snippet)
 
 	switch {

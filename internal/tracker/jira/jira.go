@@ -270,9 +270,8 @@ func (a *JiraAdapter) TransitionIssue(ctx context.Context, issueID string, targe
 	}
 
 	var matchID string
-	lowerTarget := strings.ToLower(targetState)
 	for _, t := range resp.Transitions {
-		if strings.ToLower(t.To.Name) == lowerTarget {
+		if strings.EqualFold(t.To.Name, targetState) {
 			matchID = t.ID
 			break
 		}

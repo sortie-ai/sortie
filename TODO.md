@@ -484,8 +484,8 @@ the system does real work.
       **Verify:** code compiles, both existing adapter types satisfy the updated interface.
 
 - [x] 7.5 Implement `TransitionIssue` for the Jira adapter: fetch available transitions
-      via `GET /rest/api/3/issue/{issueID}/transitions`, find the transition whose name
-      matches `targetState` (case-insensitive), and execute it via
+      via `GET /rest/api/3/issue/{issueID}/transitions`, find the transition whose
+      destination status (`to.name`) matches `targetState` (case-insensitive), and execute via
       `POST /rest/api/3/issue/{issueID}/transitions`. Map HTTP and API errors to
       `TrackerError` kinds per Section 11.4. Return a descriptive error when no
       matching transition is found.
