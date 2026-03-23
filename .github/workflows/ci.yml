@@ -68,7 +68,7 @@ jobs:
         run: go test -race -count=1 -coverprofile=coverage.out -covermode=atomic ./...
 
       - name: Upload coverage reports to Codecov
-        uses: codecov/codecov-action@v5.5.2
+        uses: codecov/codecov-action@v5.5.3
         if: success() && env.CODECOV_TOKEN != ''
         with:
           fail_ci_if_error: false
