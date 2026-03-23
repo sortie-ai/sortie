@@ -455,7 +455,7 @@ the system does real work.
       required before E2E testing to avoid SQLite corruption and orphaned agent processes.
       **Verify:** send SIGTERM to running Sortie, confirm it shuts down without data loss.
 
-- [ ] 7.2 Wire the Jira adapter and Claude Code adapter into the orchestrator startup via the
+- [x] 7.2 Wire the Jira adapter and Claude Code adapter into the orchestrator startup via the
       adapter registry. Adapter selection uses `tracker.kind` and `agent.kind` from config.
       Confirm the registry-based lookup works end-to-end.
       **Verify:** `go run ./cmd/sortie ./WORKFLOW.md` starts, connects to Jira, and polls
@@ -493,6 +493,24 @@ the system does real work.
       **Verify:** document covers every field from architecture Section 6.4, every hook from
       Section 5.3.4, every template variable from Section 5.4, and every error from Section 5.5.
       A reviewer can write a valid WORKFLOW.md using only this reference.
+
+- [x] 7.8 Fix `agent.max_turns` leaking into adapter config map and shadowing
+      the adapter-specific `max_turns` passthrough. `agentCfgMap` in
+      `cmd/sortie/main.go` includes `max_turns` (the Sortie orchestrator
+      turn-loop limit), which causes `mergeExtensions` to silently skip the
+      same key from the `claude-code:` extensions block because existing keys
+      are not overwritten. The adapter then receives the orchestrator's limit
+      (e.g. 5) as `--max-turns` instead of the intended CLI value (e.g. 50).
+      Remove orchestrator-only fields (`max_turns`, `max_concurrent_agents`,
+      `max_concurrent_agents_by_state`, `max_retry_backoff_ms`) from
+      `agentCfgMap` — they are consumed by the orchestrator before the map
+      reaches the adapter constructor and must not pollute the passthrough
+      namespace. Do this before task 7.4.
+      **Verify:** unit test confirms `agentCfgMap` does not contain
+      `max_turns`, `max_concurrent_agents`, `max_concurrent_agents_by_state`,
+      or `max_retry_backoff_ms`. Integration test with WORKFLOW.md containing
+      `claude-code.max_turns: 50` confirms Claude Code CLI receives
+      `--max-turns 50` (visible via agent command log or parse test).
 
 ## Milestone 8: Observability and Agent Extensions
 
@@ -557,6 +575,17 @@ structured logging was set up in task 0.8; this milestone decides the observabil
       **Verify:** integration test with mock agent that writes `.sortie/status` with `blocked`
       confirms no continuation retry is scheduled. A second test with an absent file confirms
       normal continuation behavior.
+
+- [ ] 8.8 Log a structured ERROR on worker run failure in `HandleWorkerExit`: when a
+      worker exits with a non-nil error or a failed status, emit an ERROR log line with
+      `issue_id`, `issue_identifier`, and `error` fields. Currently `HandleWorkerExit`
+      records the failure in `run_history` but emits no log entry, so run failures are
+      invisible in the log stream and require a SQLite query to diagnose. Discovered
+      during E2E testing in Milestone 7.
+      **Verify:** unit test confirms an ERROR log line with `issue_id`,
+      `issue_identifier`, and `error` fields is emitted when `HandleWorkerExit`
+      processes a failed result. A second test confirms no ERROR is logged on a
+      successful (normal) exit.
 
 ## Milestone 9: Self-Hosting (Sortie Builds Sortie)
 
