@@ -287,7 +287,7 @@ the handoff transition and the continuation retry — no conflict.
 3. **Section 6.4** — Config cheat sheet updates for both fields.
 4. **Section 7.1** — Document handoff transition after normal worker exit.
 5. **Section 7.3** — New trigger: `Worker Exit (normal)` + active state → handoff transition.
-6. **Section 11.1** — `TransitionIssue` as the sixth `TrackerAdapter` operation.
+6. **Section 11.1** — `TransitionIssue` as the seventh `TrackerAdapter` operation.
 7. **Section 11.5** — Update boundary: "Sortie performs handoff transitions when configured;
    full tracker writes remain agent responsibility via `tracker_api`."
 8. **Section 14.2** — Transition failure recovery: degrade to continuation retry.
