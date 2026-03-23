@@ -363,6 +363,7 @@ Top-level keys:
 - `workspace`
 - `hooks`
 - `agent`
+- `db_path`
 
 Unknown keys should be ignored for forward compatibility.
 
@@ -491,6 +492,20 @@ value. These are pass-through values interpreted by the adapter and not by the o
 core. For example, a Codex adapter may accept `codex.approval_policy` and
 `codex.thread_sandbox`; a Claude Code adapter may accept `claude-code.permission_mode`.
 The orchestrator forwards the entire sub-object to the adapter without validation.
+
+#### 5.3.6 `db_path` (string, optional)
+
+Filesystem path for the SQLite database file.
+
+- Supports `$VAR` environment indirection and `~` home directory expansion.
+- Absolute paths are used as-is.
+- Relative paths are resolved against the directory containing `WORKFLOW.md`.
+- Default: `.sortie.db` in the same directory as `WORKFLOW.md`.
+- Non-string values are rejected with a configuration error.
+- If the value resolves to an empty string after environment expansion (e.g., an unset
+  `$VAR`), startup fails with a configuration error.
+- Changes to `db_path` during dynamic reload update the in-memory config but have no
+  effect on the already-open database connection; a restart is required.
 
 ### 5.4 Prompt Template Contract
 
@@ -636,6 +651,8 @@ This section is intentionally redundant so a coding agent can implement the conf
 - `agent.max_concurrent_agents_by_state`: map of positive integers, default `{}`
 - `server.port` (extension): integer, optional; enables the HTTP server, `0` may be used for
   ephemeral local bind, and CLI `--port` overrides it
+- `db_path`: path, default `.sortie.db` next to `WORKFLOW.md`; supports `$VAR` and `~`
+  expansion; requires restart to take effect
 
 ## 7. Orchestration State Machine
 
@@ -2116,9 +2133,10 @@ Use the same validation profiles as Section 17:
 
 ### 19.1 Overview
 
-Sortie uses an embedded SQLite database for durable state. The database file location is
-configurable. On startup, Sortie opens or creates the database and runs all pending schema
-migrations before beginning normal operation.
+Sortie uses an embedded SQLite database for durable state. The database file path defaults to
+`.sortie.db` in the same directory as `WORKFLOW.md` and can be overridden with the `db_path`
+front matter field (see Section 5.3.6). On startup, Sortie opens or creates the database and
+runs all pending schema migrations before beginning normal operation.
 
 ### 19.2 Tables
 

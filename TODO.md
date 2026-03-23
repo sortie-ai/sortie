@@ -441,7 +441,7 @@ component. Uses mock adapters for tracker and agent - no real external calls.
       **Verify:** existing preflight tests pass unchanged. Compilation confirms no adapter
       mixes tracker fields with agent fields or vice-versa.
 
-- [ ] 6.19 Update `docs/architecture.md` to document `db_path` as a top-level config field.
+- [x] 6.19 Update `docs/architecture.md` to document `db_path` as a top-level config field.
       Add `db_path` to the top-level key list in Section 5.3, add a field entry in
       Section 6.4 (type: path, default: `.sortie.db` next to WORKFLOW.md, supports `$VAR`
       and `~` expansion), and update Section 19.1 to reference the `db_path` field name
