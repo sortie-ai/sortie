@@ -123,7 +123,7 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 
 	validation := orchestrator.ValidateDispatchConfig(preflightParams)
 	if !validation.OK() {
-		logger.Error("dispatch preflight failed", slog.Any("error", validation))
+		logger.Error("dispatch preflight failed", slog.String("error", validation.Error()))
 		return 1
 	}
 

@@ -450,6 +450,13 @@ component. Uses mock adapters for tracker and agent - no real external calls.
       **Verify:** `db_path` appears in Sections 5.3, 6.4, and 19.1 of the architecture
       doc. No contradictions with existing content.
 
+- [ ] 6.20 Update `docs/architecture.md` Section 16.1 startup pseudocode to move
+      `validate_dispatch_config()` before `open_or_create_sqlite_db()`. The implementation
+      now runs preflight before opening the database so invalid config is rejected without
+      creating files on disk. The spec should reflect this ordering.
+      **Verify:** Section 16.1 pseudocode shows `validate_dispatch_config()` before
+      `open_or_create_sqlite_db()` and `run_schema_migrations()`.
+
 ## Milestone 7: End-to-End with Real Adapters
 
 Connect real Jira and real Claude Code adapters to the orchestrator. This is the first time
