@@ -198,19 +198,29 @@ func TestBuildIDINJQL(t *testing.T) {
 			want: "id IN (42) ORDER BY key ASC",
 		},
 		{
-			name: "non-digit characters stripped",
-			ids:  []string{"abc123", "45x6"},
-			want: "id IN (123, 456) ORDER BY key ASC",
+			name: "non-numeric IDs skipped",
+			ids:  []string{"abc123", "456"},
+			want: "id IN (456) ORDER BY key ASC",
 		},
 		{
-			name: "all-non-digit ID skipped",
-			ids:  []string{"abc", "123"},
+			name: "jira key skipped",
+			ids:  []string{"PROJ-5", "123"},
 			want: "id IN (123) ORDER BY key ASC",
 		},
 		{
-			name: "empty input",
+			name: "all invalid returns empty",
+			ids:  []string{"abc", "PROJ-5"},
+			want: "",
+		},
+		{
+			name: "empty input returns empty",
 			ids:  []string{},
-			want: "id IN () ORDER BY key ASC",
+			want: "",
+		},
+		{
+			name: "whitespace trimmed",
+			ids:  []string{" 10001 ", "10002"},
+			want: "id IN (10001, 10002) ORDER BY key ASC",
 		},
 	}
 	for _, tt := range tests {
@@ -225,28 +235,30 @@ func TestBuildIDINJQL(t *testing.T) {
 	}
 }
 
-func TestStripNonDigits(t *testing.T) {
+func TestIsNumericID(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
 		name  string
 		input string
-		want  string
+		want  bool
 	}{
-		{"pure digits", "12345", "12345"},
-		{"mixed", "abc123def456", "123456"},
-		{"no digits", "abcdef", ""},
-		{"empty", "", ""},
-		{"special chars", "1-2.3/4", "1234"},
-		{"spaces", " 1 2 3 ", "123"},
+		{"pure digits", "12345", true},
+		{"single digit", "0", true},
+		{"mixed alphanumeric", "abc123", false},
+		{"jira key", "PROJ-5", false},
+		{"no digits", "abcdef", false},
+		{"empty", "", false},
+		{"special chars", "1-2.3", false},
+		{"spaces", " 123 ", false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			got := stripNonDigits(tt.input)
+			got := isNumericID(tt.input)
 			if got != tt.want {
-				t.Errorf("stripNonDigits(%q) = %q, want %q", tt.input, got, tt.want)
+				t.Errorf("isNumericID(%q) = %v, want %v", tt.input, got, tt.want)
 			}
 		})
 	}

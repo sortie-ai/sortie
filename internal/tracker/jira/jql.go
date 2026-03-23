@@ -61,27 +61,34 @@ func buildKeyINJQL(keys []string) string {
 }
 
 // buildIDINJQL builds JQL for fetching issues by their internal numeric
-// IDs. Each ID is sanitized to digits only to prevent JQL injection.
-// Used by [FetchIssueStatesByIDs] for reconciliation and worker state
-// refresh where state.Running is keyed by numeric ID.
+// IDs. Non-numeric IDs are skipped rather than silently sanitized, so
+// caller bugs (e.g. passing a Jira key like "PROJ-123" instead of the
+// numeric ID) surface as missing results instead of querying the wrong
+// issue. Returns an empty string when no valid IDs remain, allowing
+// the caller to short-circuit without sending invalid JQL to Jira.
 func buildIDINJQL(ids []string) string {
-	sanitized := make([]string, 0, len(ids))
+	valid := make([]string, 0, len(ids))
 	for _, id := range ids {
-		clean := stripNonDigits(id)
-		if clean != "" {
-			sanitized = append(sanitized, clean)
+		trimmed := strings.TrimSpace(id)
+		if isNumericID(trimmed) {
+			valid = append(valid, trimmed)
 		}
 	}
-	return fmt.Sprintf("id IN (%s) ORDER BY key ASC", strings.Join(sanitized, ", "))
+	if len(valid) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("id IN (%s) ORDER BY key ASC", strings.Join(valid, ", "))
 }
 
-// stripNonDigits removes all non-digit characters from a string.
-func stripNonDigits(s string) string {
-	var b strings.Builder
+// isNumericID reports whether s is a non-empty string of ASCII digits.
+func isNumericID(s string) bool {
+	if s == "" {
+		return false
+	}
 	for _, r := range s {
-		if r >= '0' && r <= '9' {
-			b.WriteRune(r)
+		if r < '0' || r > '9' {
+			return false
 		}
 	}
-	return b.String()
+	return true
 }
