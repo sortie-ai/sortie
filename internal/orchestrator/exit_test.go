@@ -1118,6 +1118,251 @@ func TestHandleWorkerExit_PendingCleanupUsesActualPath(t *testing.T) {
 	}
 }
 
+// --- Handoff transition tests (Section 7.3, ADR-0007) ---
+
+// exitStateWithIssue creates a *State with a running entry whose
+// Issue.State is set to issueState. Used by handoff transition tests.
+func exitStateWithIssue(t *testing.T, issueID, issueState string) *State {
+	t.Helper()
+	state := exitState(t, issueID, nil)
+	state.Running[issueID].Issue.State = issueState
+	return state
+}
+
+func TestHandleWorkerExit_HandoffTransitionSucceeds(t *testing.T) {
+	t.Parallel()
+
+	store := &mockExitStore{}
+	tracker := &mockTrackerAdapter{}
+	state := exitStateWithIssue(t, "HO-1", "In Progress")
+	params := defaultExitParams(t, store)
+	params.TrackerAdapter = tracker
+	params.HandoffState = "Human Review"
+	params.ActiveStates = []string{"In Progress"}
+
+	HandleWorkerExit(state, WorkerResult{
+		IssueID:      "HO-1",
+		Identifier:   "HO-1-ident",
+		ExitKind:     WorkerExitNormal,
+		AgentAdapter: "mock",
+	}, params)
+
+	// TransitionIssue called once with correct args.
+	if len(tracker.transitionCalls) != 1 {
+		t.Fatalf("TransitionIssue called %d times, want 1", len(tracker.transitionCalls))
+	}
+	if tracker.transitionCalls[0].IssueID != "HO-1" {
+		t.Errorf("TransitionIssue IssueID = %q, want %q", tracker.transitionCalls[0].IssueID, "HO-1")
+	}
+	if tracker.transitionCalls[0].TargetState != "Human Review" {
+		t.Errorf("TransitionIssue TargetState = %q, want %q", tracker.transitionCalls[0].TargetState, "Human Review")
+	}
+
+	// No retry scheduled.
+	if _, ok := state.RetryAttempts["HO-1"]; ok {
+		t.Error("retry scheduled after successful handoff transition, should not be")
+	}
+
+	// Claim released.
+	if _, ok := state.Claimed["HO-1"]; ok {
+		t.Error("claim preserved after successful handoff transition, should be released")
+	}
+
+	// Added to Completed set.
+	if _, ok := state.Completed["HO-1"]; !ok {
+		t.Error("issue not added to Completed set after handoff transition")
+	}
+
+	// No retry entry persisted.
+	if len(store.retryEntries) != 0 {
+		t.Errorf("SaveRetryEntry called %d times, want 0", len(store.retryEntries))
+	}
+}
+
+func TestHandleWorkerExit_HandoffTransitionFails(t *testing.T) {
+	t.Parallel()
+
+	store := &mockExitStore{}
+	tracker := &mockTrackerAdapter{
+		transitionIssueFn: func(_ context.Context, _, _ string) error {
+			return errors.New("permission denied")
+		},
+	}
+	state := exitStateWithIssue(t, "HO-2", "In Progress")
+	params := defaultExitParams(t, store)
+	params.TrackerAdapter = tracker
+	params.HandoffState = "Human Review"
+	params.ActiveStates = []string{"In Progress"}
+
+	HandleWorkerExit(state, WorkerResult{
+		IssueID:      "HO-2",
+		Identifier:   "HO-2-ident",
+		ExitKind:     WorkerExitNormal,
+		AgentAdapter: "mock",
+	}, params)
+
+	// TransitionIssue called once.
+	if len(tracker.transitionCalls) != 1 {
+		t.Fatalf("TransitionIssue called %d times, want 1", len(tracker.transitionCalls))
+	}
+
+	// Continuation retry scheduled (attempt=1).
+	retryEntry, ok := state.RetryAttempts["HO-2"]
+	if !ok {
+		t.Fatal("retry not scheduled after failed handoff transition")
+	}
+	if retryEntry.Attempt != 1 {
+		t.Errorf("retry Attempt = %d, want 1", retryEntry.Attempt)
+	}
+
+	// Claim preserved.
+	if _, ok := state.Claimed["HO-2"]; !ok {
+		t.Error("claim released after failed handoff transition, should be preserved")
+	}
+
+	// Added to Completed set.
+	if _, ok := state.Completed["HO-2"]; !ok {
+		t.Error("issue not added to Completed set after failed handoff")
+	}
+
+	// Retry entry persisted.
+	if len(store.retryEntries) != 1 {
+		t.Fatalf("SaveRetryEntry called %d times, want 1", len(store.retryEntries))
+	}
+}
+
+func TestHandleWorkerExit_HandoffNotConfigured(t *testing.T) {
+	t.Parallel()
+
+	store := &mockExitStore{}
+	tracker := &mockTrackerAdapter{}
+	state := exitStateWithIssue(t, "HO-3", "In Progress")
+	params := defaultExitParams(t, store)
+	params.TrackerAdapter = tracker
+	params.HandoffState = ""
+	params.ActiveStates = []string{"In Progress"}
+
+	HandleWorkerExit(state, WorkerResult{
+		IssueID:      "HO-3",
+		Identifier:   "HO-3-ident",
+		ExitKind:     WorkerExitNormal,
+		AgentAdapter: "mock",
+	}, params)
+
+	// TransitionIssue NOT called.
+	if len(tracker.transitionCalls) != 0 {
+		t.Errorf("TransitionIssue called %d times, want 0", len(tracker.transitionCalls))
+	}
+
+	// Continuation retry scheduled (existing behavior).
+	retryEntry, ok := state.RetryAttempts["HO-3"]
+	if !ok {
+		t.Fatal("retry not scheduled when handoff is not configured")
+	}
+	if retryEntry.Attempt != 1 {
+		t.Errorf("retry Attempt = %d, want 1", retryEntry.Attempt)
+	}
+
+	// Claim preserved.
+	if _, ok := state.Claimed["HO-3"]; !ok {
+		t.Error("claim released when handoff not configured, should be preserved")
+	}
+}
+
+func TestHandleWorkerExit_HandoffConfiguredButIssueNotActive(t *testing.T) {
+	t.Parallel()
+
+	store := &mockExitStore{}
+	tracker := &mockTrackerAdapter{}
+	state := exitStateWithIssue(t, "HO-4", "Done")
+	params := defaultExitParams(t, store)
+	params.TrackerAdapter = tracker
+	params.HandoffState = "Human Review"
+	params.ActiveStates = []string{"In Progress"}
+
+	HandleWorkerExit(state, WorkerResult{
+		IssueID:      "HO-4",
+		Identifier:   "HO-4-ident",
+		ExitKind:     WorkerExitNormal,
+		AgentAdapter: "mock",
+	}, params)
+
+	// TransitionIssue NOT called — issue is not active.
+	if len(tracker.transitionCalls) != 0 {
+		t.Errorf("TransitionIssue called %d times, want 0", len(tracker.transitionCalls))
+	}
+
+	// No retry scheduled.
+	if _, ok := state.RetryAttempts["HO-4"]; ok {
+		t.Error("retry scheduled for non-active issue, should not be")
+	}
+
+	// Claim released.
+	if _, ok := state.Claimed["HO-4"]; ok {
+		t.Error("claim preserved for non-active issue, should be released")
+	}
+}
+
+func TestHandleWorkerExit_NormalExitIssueNotActive_NoHandoff(t *testing.T) {
+	t.Parallel()
+
+	store := &mockExitStore{}
+	state := exitStateWithIssue(t, "HO-5", "Done")
+	params := defaultExitParams(t, store)
+	params.HandoffState = ""
+	params.ActiveStates = []string{"In Progress"}
+
+	HandleWorkerExit(state, WorkerResult{
+		IssueID:      "HO-5",
+		Identifier:   "HO-5-ident",
+		ExitKind:     WorkerExitNormal,
+		AgentAdapter: "mock",
+	}, params)
+
+	// No retry scheduled.
+	if _, ok := state.RetryAttempts["HO-5"]; ok {
+		t.Error("retry scheduled for non-active issue without handoff, should not be")
+	}
+
+	// Claim released.
+	if _, ok := state.Claimed["HO-5"]; ok {
+		t.Error("claim preserved for non-active issue, should be released")
+	}
+
+	// No retry entry persisted.
+	if len(store.retryEntries) != 0 {
+		t.Errorf("SaveRetryEntry called %d times, want 0", len(store.retryEntries))
+	}
+}
+
+func TestHandleWorkerExit_EmptyActiveStatesDefaultsToContinuationRetry(t *testing.T) {
+	t.Parallel()
+
+	store := &mockExitStore{}
+	state := exitStateWithIssue(t, "HO-6", "In Progress")
+	params := defaultExitParams(t, store)
+	params.HandoffState = ""
+	params.ActiveStates = nil // backward compat guard
+
+	HandleWorkerExit(state, WorkerResult{
+		IssueID:      "HO-6",
+		Identifier:   "HO-6-ident",
+		ExitKind:     WorkerExitNormal,
+		AgentAdapter: "mock",
+	}, params)
+
+	// Continuation retry scheduled (backward compat: empty ActiveStates
+	// treated as "issue is active").
+	if _, ok := state.RetryAttempts["HO-6"]; !ok {
+		t.Error("retry not scheduled with empty ActiveStates, backward compat guard failed")
+	}
+
+	// Claim preserved.
+	if _, ok := state.Claimed["HO-6"]; !ok {
+		t.Error("claim released with empty ActiveStates, should be preserved")
+	}
+}
+
 func TestHandleWorkerExit_PendingCleanupSkipsWhenNoWorkspacePath(t *testing.T) {
 	t.Parallel()
 

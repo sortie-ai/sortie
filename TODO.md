@@ -508,7 +508,7 @@ the system does real work.
       **Verify:** unit tests cover: absent field (no error), valid value, empty string
       error, value colliding with an active state, value colliding with a terminal state.
 
-- [ ] 7.8 Integrate handoff transition in `HandleWorkerExit`: on `WorkerExitNormal`, if
+- [x] 7.8 Integrate handoff transition in `HandleWorkerExit`: on `WorkerExitNormal`, if
       `handoff_state` is configured and the issue is still in an active state, call
       `TrackerAdapter.TransitionIssue`. On success, skip the continuation retry. On
       failure, log the error and schedule a normal continuation retry (graceful

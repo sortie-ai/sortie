@@ -101,9 +101,17 @@ func (m *mockAgentAdapter) StopSession(ctx context.Context, session domain.Sessi
 
 func (m *mockAgentAdapter) EventStream() <-chan domain.AgentEvent { return nil }
 
+// transitionIssueCall records a single invocation of TransitionIssue.
+type transitionIssueCall struct {
+	IssueID     string
+	TargetState string
+}
+
 // mockTrackerAdapter is a configurable test double for domain.TrackerAdapter.
 type mockTrackerAdapter struct {
-	fetchStatesFn func(ctx context.Context, ids []string) (map[string]string, error)
+	fetchStatesFn     func(ctx context.Context, ids []string) (map[string]string, error)
+	transitionIssueFn func(ctx context.Context, issueID, targetState string) error
+	transitionCalls   []transitionIssueCall
 }
 
 var _ domain.TrackerAdapter = (*mockTrackerAdapter)(nil)
@@ -139,7 +147,11 @@ func (m *mockTrackerAdapter) FetchIssueComments(_ context.Context, _ string) ([]
 	return nil, nil
 }
 
-func (m *mockTrackerAdapter) TransitionIssue(_ context.Context, _ string, _ string) error {
+func (m *mockTrackerAdapter) TransitionIssue(ctx context.Context, issueID string, targetState string) error {
+	m.transitionCalls = append(m.transitionCalls, transitionIssueCall{IssueID: issueID, TargetState: targetState})
+	if m.transitionIssueFn != nil {
+		return m.transitionIssueFn(ctx, issueID, targetState)
+	}
 	return nil
 }
 

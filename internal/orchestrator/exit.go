@@ -69,6 +69,22 @@ type HandleWorkerExitParams struct {
 
 	// HookTimeoutMS is the timeout for hook invocations (from config).
 	HookTimeoutMS int
+
+	// TrackerAdapter is the tracker integration used to perform handoff
+	// transitions. Required when HandoffState is non-empty. Nil is safe
+	// when HandoffState is empty.
+	TrackerAdapter domain.TrackerAdapter
+
+	// HandoffState is the target tracker state for orchestrator-initiated
+	// handoff transitions (from config.Tracker.HandoffState). Empty string
+	// means no handoff transition; the existing continuation retry fires.
+	HandoffState string
+
+	// ActiveStates is the current list of configured active issue states
+	// (from config.Tracker.ActiveStates). Used to determine whether the
+	// issue is still in an active state at worker exit time. The check is
+	// case-insensitive.
+	ActiveStates []string
 }
 
 // HandleWorkerExit processes a worker's terminal outcome. It removes the
@@ -206,14 +222,56 @@ func HandleWorkerExit(state *State, result WorkerResult, params HandleWorkerExit
 	switch result.ExitKind {
 	case WorkerExitNormal:
 		state.Completed[result.IssueID] = struct{}{}
-		ScheduleRetry(state, ScheduleRetryParams{
-			IssueID:    result.IssueID,
-			Identifier: result.Identifier,
-			Attempt:    NextAttempt(entry.RetryAttempt),
-			DelayMS:    continuationDelayMS,
-			Error:      "",
-		}, params.OnRetryFire)
-		retryScheduled = true
+
+		// Determine whether the issue is still in an active tracker state.
+		// When ActiveStates is nil or empty, default to true (pessimistic —
+		// backward compatibility guard: continuation retry fires).
+		issueIsActive := len(params.ActiveStates) == 0 || isActiveState(entry.Issue.State, params.ActiveStates)
+
+		switch {
+		case params.HandoffState != "" && issueIsActive:
+			// Handoff: issue is active and handoff_state is configured.
+			err := params.TrackerAdapter.TransitionIssue(ctx, result.IssueID, params.HandoffState)
+			if err != nil {
+				log.Warn("handoff transition failed, scheduling continuation retry",
+					slog.String("issue_id", result.IssueID),
+					slog.String("issue_identifier", result.Identifier),
+					slog.String("handoff_state", params.HandoffState),
+					slog.Any("error", err),
+				)
+				ScheduleRetry(state, ScheduleRetryParams{
+					IssueID:    result.IssueID,
+					Identifier: result.Identifier,
+					Attempt:    NextAttempt(entry.RetryAttempt),
+					DelayMS:    continuationDelayMS,
+					Error:      "",
+				}, params.OnRetryFire)
+				retryScheduled = true
+			} else {
+				log.Info("handoff transition succeeded, releasing claim",
+					slog.String("issue_id", result.IssueID),
+					slog.String("issue_identifier", result.Identifier),
+					slog.String("handoff_state", params.HandoffState),
+				)
+				delete(state.Claimed, result.IssueID)
+			}
+
+		case issueIsActive:
+			// No handoff configured but issue is still active:
+			// schedule continuation retry (existing behavior).
+			ScheduleRetry(state, ScheduleRetryParams{
+				IssueID:    result.IssueID,
+				Identifier: result.Identifier,
+				Attempt:    NextAttempt(entry.RetryAttempt),
+				DelayMS:    continuationDelayMS,
+				Error:      "",
+			}, params.OnRetryFire)
+			retryScheduled = true
+
+		default:
+			// Issue is not in an active state: release claim, no retry.
+			delete(state.Claimed, result.IssueID)
+		}
 
 	case WorkerExitCancelled:
 		// Only release the claim if no retry has been pre-scheduled by

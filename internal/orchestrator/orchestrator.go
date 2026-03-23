@@ -150,6 +150,9 @@ func (o *Orchestrator) Run(ctx context.Context) {
 				Logger:            o.logger,
 				BeforeRemoveHook:  cfg.Hooks.BeforeRemove,
 				HookTimeoutMS:     cfg.Hooks.TimeoutMS,
+				TrackerAdapter:    o.trackerAdapter,
+				HandoffState:      cfg.Tracker.HandoffState,
+				ActiveStates:      cfg.Tracker.ActiveStates,
 			})
 			o.notifyObservers()
 
@@ -382,6 +385,9 @@ func (o *Orchestrator) drainRunningWorkers() {
 				Logger:            o.logger,
 				BeforeRemoveHook:  cfg.Hooks.BeforeRemove,
 				HookTimeoutMS:     cfg.Hooks.TimeoutMS,
+				TrackerAdapter:    o.trackerAdapter,
+				HandoffState:      cfg.Tracker.HandoffState,
+				ActiveStates:      cfg.Tracker.ActiveStates,
 			})
 			o.notifyObservers()
 
