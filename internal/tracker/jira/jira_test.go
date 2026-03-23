@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -1100,5 +1101,273 @@ func TestAdapterLifecycle(t *testing.T) {
 	}
 	if comments[0].Body != "Looks good, please proceed." {
 		t.Errorf("comments[0].Body = %q", comments[0].Body)
+	}
+}
+
+// --- TransitionIssue tests ---
+
+func TestTransitionIssue_Success(t *testing.T) {
+	t.Parallel()
+
+	var postBody []byte
+	var postPath string
+	var getPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case "GET":
+			getPath = r.URL.Path
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			w.Write(loadFixture(t, "transitions.json")) //nolint:errcheck // test helper
+		case "POST":
+			postPath = r.URL.Path
+			postBody, _ = io.ReadAll(r.Body)
+			w.WriteHeader(http.StatusNoContent)
+		}
+	}))
+	defer srv.Close()
+
+	a := mustAdapter(t, validConfig(srv.URL))
+	err := a.TransitionIssue(context.Background(), "PROJ-123", "Human Review")
+	if err != nil {
+		t.Fatalf("TransitionIssue() unexpected error: %v", err)
+	}
+
+	// Verify POST body contains transition.id "31"
+	var req struct {
+		Transition struct {
+			ID string `json:"id"`
+		} `json:"transition"`
+	}
+	if err := json.Unmarshal(postBody, &req); err != nil {
+		t.Fatalf("unmarshal POST body: %v", err)
+	}
+	if req.Transition.ID != "31" {
+		t.Errorf("POST transition.id = %q, want %q", req.Transition.ID, "31")
+	}
+
+	// Verify request paths (test case 13)
+	wantPath := "/rest/api/3/issue/PROJ-123/transitions"
+	if getPath != wantPath {
+		t.Errorf("GET path = %q, want %q", getPath, wantPath)
+	}
+	if postPath != wantPath {
+		t.Errorf("POST path = %q, want %q", postPath, wantPath)
+	}
+}
+
+func TestTransitionIssue_CaseInsensitive(t *testing.T) {
+	t.Parallel()
+
+	// Fixture has "Human Review" but we pass "human review"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case "GET":
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			w.Write(loadFixture(t, "transitions.json")) //nolint:errcheck // test helper
+		case "POST":
+			w.WriteHeader(http.StatusNoContent)
+		}
+	}))
+	defer srv.Close()
+
+	a := mustAdapter(t, validConfig(srv.URL))
+	err := a.TransitionIssue(context.Background(), "PROJ-123", "human review")
+	if err != nil {
+		t.Fatalf("TransitionIssue() unexpected error: %v", err)
+	}
+}
+
+func TestTransitionIssue_DuplicateTarget_FirstMatch(t *testing.T) {
+	t.Parallel()
+
+	var postBody []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case "GET":
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			w.Write(loadFixture(t, "transitions_duplicate_target.json")) //nolint:errcheck // test helper
+		case "POST":
+			postBody, _ = io.ReadAll(r.Body)
+			w.WriteHeader(http.StatusNoContent)
+		}
+	}))
+	defer srv.Close()
+
+	a := mustAdapter(t, validConfig(srv.URL))
+	err := a.TransitionIssue(context.Background(), "PROJ-123", "Human Review")
+	if err != nil {
+		t.Fatalf("TransitionIssue() unexpected error: %v", err)
+	}
+
+	// Must use first match (id "31"), not second (id "51")
+	var req struct {
+		Transition struct {
+			ID string `json:"id"`
+		} `json:"transition"`
+	}
+	if err := json.Unmarshal(postBody, &req); err != nil {
+		t.Fatalf("unmarshal POST body: %v", err)
+	}
+	if req.Transition.ID != "31" {
+		t.Errorf("POST transition.id = %q, want %q (first match)", req.Transition.ID, "31")
+	}
+}
+
+func TestTransitionIssue_ErrorCases(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		handler  http.HandlerFunc
+		wantKind domain.TrackerErrorKind
+	}{
+		{
+			name: "target state not found",
+			handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusOK)
+				w.Write(loadFixture(t, "transitions_no_match.json")) //nolint:errcheck // test helper
+			}),
+			wantKind: domain.ErrTrackerPayload,
+		},
+		{
+			name: "empty transitions list",
+			handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusOK)
+				w.Write(loadFixture(t, "transitions_empty.json")) //nolint:errcheck // test helper
+			}),
+			wantKind: domain.ErrTrackerPayload,
+		},
+		{
+			name: "issue not found GET 404",
+			handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusNotFound)
+			}),
+			wantKind: domain.ErrTrackerNotFound,
+		},
+		{
+			name: "auth error GET 401",
+			handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusUnauthorized)
+			}),
+			wantKind: domain.ErrTrackerAuth,
+		},
+		{
+			name: "transport error GET 500",
+			handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(http.StatusInternalServerError)
+			}),
+			wantKind: domain.ErrTrackerTransport,
+		},
+		{
+			name: "GET OK POST 400",
+			handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.Method {
+				case "GET":
+					w.Header().Set("Content-Type", "application/json")
+					w.WriteHeader(http.StatusOK)
+					w.Write(loadFixture(t, "transitions.json")) //nolint:errcheck // test helper
+				case "POST":
+					w.WriteHeader(http.StatusBadRequest)
+					w.Write([]byte("workflow error")) //nolint:errcheck // test helper
+				}
+			}),
+			wantKind: domain.ErrTrackerPayload,
+		},
+		{
+			name: "GET OK POST 500",
+			handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.Method {
+				case "GET":
+					w.Header().Set("Content-Type", "application/json")
+					w.WriteHeader(http.StatusOK)
+					w.Write(loadFixture(t, "transitions.json")) //nolint:errcheck // test helper
+				case "POST":
+					w.WriteHeader(http.StatusInternalServerError)
+				}
+			}),
+			wantKind: domain.ErrTrackerTransport,
+		},
+		{
+			name: "malformed JSON from GET",
+			handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusOK)
+				w.Write([]byte(`{invalid json`)) //nolint:errcheck // test helper
+			}),
+			wantKind: domain.ErrTrackerPayload,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			srv := httptest.NewServer(tt.handler)
+			defer srv.Close()
+
+			a := mustAdapter(t, validConfig(srv.URL))
+			err := a.TransitionIssue(context.Background(), "PROJ-123", "Human Review")
+			assertTrackerErrorKind(t, err, tt.wantKind)
+		})
+	}
+}
+
+func TestTransitionIssue_TargetStateNotFound_MessageContainsState(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write(loadFixture(t, "transitions_no_match.json")) //nolint:errcheck // test helper
+	}))
+	defer srv.Close()
+
+	a := mustAdapter(t, validConfig(srv.URL))
+	err := a.TransitionIssue(context.Background(), "PROJ-123", "Human Review")
+	if err == nil {
+		t.Fatal("TransitionIssue() expected error, got nil")
+	}
+
+	var te *domain.TrackerError
+	if !errors.As(err, &te) {
+		t.Fatalf("error type = %T, want *domain.TrackerError", err)
+	}
+	if !strings.Contains(te.Message, "Human Review") {
+		t.Errorf("TrackerError.Message = %q, should contain target state %q", te.Message, "Human Review")
+	}
+}
+
+func TestTransitionIssue_ContextCancellation(t *testing.T) {
+	t.Parallel()
+
+	started := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(started)
+		// Block until the request context is canceled
+		<-r.Context().Done()
+	}))
+	defer srv.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	a := mustAdapter(t, validConfig(srv.URL))
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- a.TransitionIssue(ctx, "PROJ-123", "Human Review")
+	}()
+
+	<-started
+	cancel()
+
+	err := <-errCh
+	if err == nil {
+		t.Fatal("TransitionIssue() expected error, got nil")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("TransitionIssue() error = %v, want context.Canceled", err)
 	}
 }
