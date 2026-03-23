@@ -231,8 +231,23 @@ func HandleWorkerExit(state *State, result WorkerResult, params HandleWorkerExit
 		switch {
 		case params.HandoffState != "" && issueIsActive:
 			// Handoff: issue is active and handoff_state is configured.
-			err := params.TrackerAdapter.TransitionIssue(ctx, result.IssueID, params.HandoffState)
-			if err != nil {
+			// Guard against nil TrackerAdapter (misconfiguration or test
+			// that sets HandoffState without providing an adapter).
+			if params.TrackerAdapter == nil {
+				log.Warn("handoff configured but tracker adapter is nil, scheduling continuation retry",
+					slog.String("issue_id", result.IssueID),
+					slog.String("issue_identifier", result.Identifier),
+					slog.String("handoff_state", params.HandoffState),
+				)
+				ScheduleRetry(state, ScheduleRetryParams{
+					IssueID:    result.IssueID,
+					Identifier: result.Identifier,
+					Attempt:    NextAttempt(entry.RetryAttempt),
+					DelayMS:    continuationDelayMS,
+					Error:      "",
+				}, params.OnRetryFire)
+				retryScheduled = true
+			} else if err := params.TrackerAdapter.TransitionIssue(ctx, result.IssueID, params.HandoffState); err != nil {
 				log.Warn("handoff transition failed, scheduling continuation retry",
 					slog.String("issue_id", result.IssueID),
 					slog.String("issue_identifier", result.Identifier),
@@ -253,6 +268,7 @@ func HandleWorkerExit(state *State, result WorkerResult, params HandleWorkerExit
 					slog.String("issue_identifier", result.Identifier),
 					slog.String("handoff_state", params.HandoffState),
 				)
+				CancelRetry(state, result.IssueID)
 				delete(state.Claimed, result.IssueID)
 			}
 
@@ -269,7 +285,9 @@ func HandleWorkerExit(state *State, result WorkerResult, params HandleWorkerExit
 			retryScheduled = true
 
 		default:
-			// Issue is not in an active state: release claim, no retry.
+			// Issue is not in an active state: cancel any pending retry
+			// and release claim.
+			CancelRetry(state, result.IssueID)
 			delete(state.Claimed, result.IssueID)
 		}
 
