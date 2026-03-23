@@ -995,10 +995,11 @@ func TestHandleWorkerExit_PendingCleanupRemovesWorkspace(t *testing.T) {
 	params.WorkspaceRoot = wsRoot
 
 	HandleWorkerExit(state, WorkerResult{
-		IssueID:      "CLEAN-1",
-		Identifier:   "CLEAN-1-ident",
-		ExitKind:     WorkerExitCancelled,
-		AgentAdapter: "mock",
+		IssueID:       "CLEAN-1",
+		Identifier:    "CLEAN-1-ident",
+		ExitKind:      WorkerExitCancelled,
+		AgentAdapter:  "mock",
+		WorkspacePath: wsDir,
 	}, params)
 
 	// Workspace directory removed.
@@ -1045,26 +1046,109 @@ func TestHandleWorkerExit_CleanupFailureNonFatal(t *testing.T) {
 	state.Running["CFAIL-1"].PendingCleanup = true
 	state.Running["CFAIL-1"].Identifier = "CFAIL-1-ident"
 
-	// WorkspaceRoot points to a non-existent directory.
-	// workspace.Cleanup returns nil when the directory doesn't exist (idempotent),
-	// so to test failure handling we use an empty identifier which causes
-	// a sanitization error — but since we set identifier in the entry,
-	// we instead set WorkspaceRoot to empty which will cause ComputePath
-	// to return an error.
+	// With CleanupByPath, an empty WorkspacePath causes cleanup to be
+	// skipped entirely (guard: entry.WorkspacePath != ""). Verify the
+	// running entry is still removed and state is consistent.
 	params := defaultExitParams(t, store)
-	// Empty workspace root triggers a PathError from workspace.ComputePath.
-	params.WorkspaceRoot = ""
 
-	// Must not panic; cleanup error is logged but not fatal.
+	// Must not panic; empty WorkspacePath skips cleanup gracefully.
 	HandleWorkerExit(state, WorkerResult{
-		IssueID:      "CFAIL-1",
-		Identifier:   "CFAIL-1-ident",
-		ExitKind:     WorkerExitCancelled,
-		AgentAdapter: "mock",
+		IssueID:       "CFAIL-1",
+		Identifier:    "CFAIL-1-ident",
+		ExitKind:      WorkerExitCancelled,
+		AgentAdapter:  "mock",
+		WorkspacePath: "",
 	}, params)
 
-	// In-memory state still updated despite cleanup failure.
+	// In-memory state still updated despite cleanup being skipped.
 	if _, ok := state.Running["CFAIL-1"]; ok {
-		t.Error("Running entry not removed despite cleanup failure")
+		t.Error("Running entry not removed when WorkspacePath is empty")
+	}
+}
+
+// Section 8.5: PendingCleanup uses the actual workspace path from the worker
+// result, not a path reconstructed from config. This prevents orphaned
+// workspaces when workspace.root changes at runtime via dynamic config reload.
+func TestHandleWorkerExit_PendingCleanupUsesActualPath(t *testing.T) {
+	t.Parallel()
+
+	store := &mockExitStore{}
+	state := exitState(t, "PROJ-99", nil)
+	state.Running["PROJ-99"].PendingCleanup = true
+	state.Running["PROJ-99"].Identifier = "PROJ-99"
+
+	// Two separate roots: oldRoot has the actual workspace; newRoot
+	// simulates config changing workspace.root at runtime.
+	oldRoot := t.TempDir()
+	newRoot := t.TempDir()
+	actualWS := filepath.Join(oldRoot, "PROJ-99")
+	if err := os.MkdirAll(actualWS, 0o755); err != nil {
+		t.Fatalf("failed to create workspace dir: %v", err)
+	}
+
+	params := defaultExitParams(t, store)
+	params.WorkspaceRoot = newRoot // config has changed
+
+	HandleWorkerExit(state, WorkerResult{
+		IssueID:       "PROJ-99",
+		Identifier:    "PROJ-99",
+		ExitKind:      WorkerExitCancelled,
+		AgentAdapter:  "mock",
+		WorkspacePath: actualWS, // actual path at old root
+	}, params)
+
+	// Actual workspace at old root is cleaned.
+	if _, err := os.Stat(actualWS); !os.IsNotExist(err) {
+		t.Error("workspace at old root still exists, cleanup used wrong path")
+	}
+
+	// New root was never touched — no directory created there.
+	newRootWS := filepath.Join(newRoot, "PROJ-99")
+	if _, err := os.Stat(newRootWS); !os.IsNotExist(err) {
+		t.Error("directory exists at new root, cleanup should not touch it")
+	}
+}
+
+func TestHandleWorkerExit_PendingCleanupSkipsWhenNoWorkspacePath(t *testing.T) {
+	t.Parallel()
+
+	store := &mockExitStore{}
+	state := exitState(t, "NOWSP-1", nil)
+	state.Running["NOWSP-1"].PendingCleanup = true
+	state.Running["NOWSP-1"].Identifier = "NOWSP-1-ident"
+
+	// Create a directory that would match the old ComputePath derivation;
+	// it must NOT be removed when WorkspacePath is empty.
+	wsRoot := t.TempDir()
+	oldPathDir := filepath.Join(wsRoot, "NOWSP-1-ident")
+	if err := os.MkdirAll(oldPathDir, 0o755); err != nil {
+		t.Fatalf("failed to create workspace dir: %v", err)
+	}
+
+	params := defaultExitParams(t, store)
+	params.WorkspaceRoot = wsRoot
+
+	// Worker exited before workspace preparation — WorkspacePath is empty.
+	HandleWorkerExit(state, WorkerResult{
+		IssueID:       "NOWSP-1",
+		Identifier:    "NOWSP-1-ident",
+		ExitKind:      WorkerExitCancelled,
+		AgentAdapter:  "mock",
+		WorkspacePath: "",
+	}, params)
+
+	// Running entry removed.
+	if _, ok := state.Running["NOWSP-1"]; ok {
+		t.Error("Running entry not removed")
+	}
+
+	// Directory at wsRoot is NOT removed — no workspace path means no cleanup.
+	if _, err := os.Stat(oldPathDir); err != nil {
+		t.Errorf("workspace dir removed despite empty WorkspacePath: %v", err)
+	}
+
+	// Claim handling proceeds normally (cancelled exit releases claim).
+	if _, ok := state.Claimed["NOWSP-1"]; ok {
+		t.Error("claim not released after cancelled exit")
 	}
 }

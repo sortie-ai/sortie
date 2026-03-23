@@ -100,11 +100,20 @@ func HandleWorkerExit(state *State, result WorkerResult, params HandleWorkerExit
 	}
 	delete(state.Running, result.IssueID)
 
+	// Capture the actual workspace path from the worker result so that
+	// PendingCleanup operates on the real directory, not a path
+	// reconstructed from potentially-changed config.
+	if entry.WorkspacePath == "" && result.WorkspacePath != "" {
+		entry.WorkspacePath = result.WorkspacePath
+	}
+
 	// Deferred workspace cleanup: reconciliation marks terminal issues with
 	// PendingCleanup so cleanup runs only after the worker has fully exited.
-	if entry.PendingCleanup {
-		if err := workspace.Cleanup(ctx, workspace.CleanupParams{
-			Root:          params.WorkspaceRoot,
+	// Guarded on WorkspacePath being non-empty — if the worker exited before
+	// workspace preparation, there is no directory to clean.
+	if entry.PendingCleanup && entry.WorkspacePath != "" {
+		if err := workspace.CleanupByPath(ctx, workspace.CleanupByPathParams{
+			Path:          entry.WorkspacePath,
 			Identifier:    entry.Identifier,
 			IssueID:       result.IssueID,
 			Attempt:       normalizeAttempt(entry.RetryAttempt),

@@ -550,6 +550,143 @@ func TestCleanup(t *testing.T) {
 	})
 }
 
+func TestCleanupByPath(t *testing.T) {
+	t.Parallel()
+
+	t.Run("workspace exists no hook", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		wsDir := filepath.Join(dir, "WS-1")
+		if err := os.MkdirAll(wsDir, 0o755); err != nil {
+			t.Fatalf("MkdirAll: %v", err)
+		}
+
+		err := CleanupByPath(context.Background(), CleanupByPathParams{
+			Path:          wsDir,
+			Identifier:    "WS-1",
+			IssueID:       "id-1",
+			Attempt:       1,
+			HookTimeoutMS: 5000,
+		})
+		if err != nil {
+			t.Fatalf("CleanupByPath() error: %v", err)
+		}
+		assertFileNotExists(t, wsDir)
+	})
+
+	t.Run("workspace exists before_remove succeeds", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		wsDir := filepath.Join(dir, "WS-2")
+		if err := os.MkdirAll(wsDir, 0o755); err != nil {
+			t.Fatalf("MkdirAll: %v", err)
+		}
+		markerDir := t.TempDir()
+		marker := filepath.Join(markerDir, "before_remove_marker")
+
+		err := CleanupByPath(context.Background(), CleanupByPathParams{
+			Path:          wsDir,
+			Identifier:    "WS-2",
+			IssueID:       "id-2",
+			Attempt:       1,
+			BeforeRemove:  `touch "` + marker + `"`,
+			HookTimeoutMS: 5000,
+		})
+		if err != nil {
+			t.Fatalf("CleanupByPath() error: %v", err)
+		}
+		assertFileExists(t, marker)
+		assertFileNotExists(t, wsDir)
+	})
+
+	t.Run("workspace exists before_remove fails removal proceeds", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		wsDir := filepath.Join(dir, "WS-3")
+		if err := os.MkdirAll(wsDir, 0o755); err != nil {
+			t.Fatalf("MkdirAll: %v", err)
+		}
+
+		err := CleanupByPath(context.Background(), CleanupByPathParams{
+			Path:          wsDir,
+			Identifier:    "WS-3",
+			IssueID:       "id-3",
+			Attempt:       1,
+			BeforeRemove:  "exit 1",
+			HookTimeoutMS: 5000,
+		})
+		if err != nil {
+			t.Fatalf("CleanupByPath() error: %v", err)
+		}
+		assertFileNotExists(t, wsDir)
+	})
+
+	t.Run("workspace does not exist idempotent", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		nonExistent := filepath.Join(dir, "no-such-dir")
+
+		err := CleanupByPath(context.Background(), CleanupByPathParams{
+			Path:          nonExistent,
+			Identifier:    "NONE",
+			IssueID:       "id-4",
+			Attempt:       1,
+			HookTimeoutMS: 5000,
+		})
+		if err != nil {
+			t.Fatalf("CleanupByPath() of non-existent path should return nil, got: %v", err)
+		}
+	})
+
+	t.Run("empty path returns error", func(t *testing.T) {
+		t.Parallel()
+
+		err := CleanupByPath(context.Background(), CleanupByPathParams{
+			Path:          "",
+			Identifier:    "EMPTY",
+			IssueID:       "id-5",
+			Attempt:       1,
+			HookTimeoutMS: 5000,
+		})
+		if err == nil {
+			t.Fatal("CleanupByPath(\"\") should return error")
+		}
+		if !strings.Contains(err.Error(), "workspace path must not be empty") {
+			t.Errorf("CleanupByPath(\"\") error = %q, want to contain %q",
+				err.Error(), "workspace path must not be empty")
+		}
+	})
+
+	// context.WithoutCancel: before_remove hook runs despite cancelled parent.
+	t.Run("cancelled parent context hook still runs", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		wsDir := filepath.Join(dir, "WS-6")
+		if err := os.MkdirAll(wsDir, 0o755); err != nil {
+			t.Fatalf("MkdirAll: %v", err)
+		}
+		markerDir := t.TempDir()
+		marker := filepath.Join(markerDir, "detached_marker")
+
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		err := CleanupByPath(ctx, CleanupByPathParams{
+			Path:          wsDir,
+			Identifier:    "WS-6",
+			IssueID:       "id-6",
+			Attempt:       1,
+			BeforeRemove:  `touch "` + marker + `"`,
+			HookTimeoutMS: 5000,
+		})
+		if err != nil {
+			t.Fatalf("CleanupByPath() error: %v", err)
+		}
+		assertFileExists(t, marker)
+		assertFileNotExists(t, wsDir)
+	})
+}
+
 // TestLifecycleFullSequence exercises the complete Prepare → Finish → Cleanup
 // sequence with real hook scripts writing marker files at each stage.
 func TestLifecycleFullSequence(t *testing.T) {

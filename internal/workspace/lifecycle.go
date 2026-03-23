@@ -2,6 +2,7 @@ package workspace
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"os"
 	"strconv"
@@ -253,6 +254,82 @@ func Cleanup(ctx context.Context, params CleanupParams) error {
 	}
 
 	return os.RemoveAll(pathResult.Path)
+}
+
+// CleanupByPathParams holds the inputs for workspace directory removal
+// when the absolute path is already known. Unlike [CleanupParams], this
+// does not require a workspace root or identifier-to-path derivation.
+type CleanupByPathParams struct {
+	// Path is the absolute workspace directory path to remove.
+	Path string
+
+	// Identifier is the issue identifier (for hook env vars and logging).
+	Identifier string
+
+	// IssueID is the tracker-assigned issue ID (for hook env vars).
+	IssueID string
+
+	// Attempt is the retry attempt number (for hook env vars).
+	Attempt int
+
+	// BeforeRemove is the before_remove hook script. Empty means no hook.
+	BeforeRemove string
+
+	// HookTimeoutMS is the timeout for the hook invocation.
+	HookTimeoutMS int
+
+	// Logger is the structured logger. If nil, [slog.Default] is used.
+	Logger *slog.Logger
+}
+
+// CleanupByPath removes a workspace directory at the given absolute path,
+// running the before_remove hook first if configured. Unlike [Cleanup],
+// this function uses the provided path directly instead of reconstructing
+// it from workspace root and identifier via [ComputePath].
+//
+// The caller is responsible for ensuring the path is a valid, contained
+// workspace path. This function is intended for cases where the workspace
+// path was captured at creation time and the workspace root may have
+// changed since then (dynamic config reload).
+//
+// The parent context is detached via [context.WithoutCancel] so that
+// the before_remove hook runs even when the caller's context has been
+// cancelled. Hook execution time is still bounded by HookTimeoutMS.
+//
+// Returns nil if the path does not exist (idempotent).
+// Returns an error if the path is empty or directory removal fails.
+func CleanupByPath(ctx context.Context, params CleanupByPathParams) error {
+	if params.Path == "" {
+		return errors.New("workspace path must not be empty")
+	}
+
+	_, statErr := os.Stat(params.Path)
+	if os.IsNotExist(statErr) {
+		return nil
+	}
+
+	logger := params.Logger
+	if logger == nil {
+		logger = slog.Default()
+	}
+
+	detachedCtx := context.WithoutCancel(ctx)
+	env := HookEnv(params.IssueID, params.Identifier, params.Path, params.Attempt)
+
+	if params.BeforeRemove != "" {
+		logger.InfoContext(ctx, "running hook", slog.String("hook", "before_remove"), slog.String("workspace", params.Path))
+		_, hookErr := RunHook(detachedCtx, HookParams{
+			Script:    params.BeforeRemove,
+			Dir:       params.Path,
+			Env:       env,
+			TimeoutMS: params.HookTimeoutMS,
+		})
+		if hookErr != nil {
+			logger.WarnContext(ctx, "before_remove hook failed", slog.String("workspace", params.Path), slog.Any("error", hookErr))
+		}
+	}
+
+	return os.RemoveAll(params.Path)
 }
 
 // CleanupTerminalParams holds the inputs for batch workspace removal

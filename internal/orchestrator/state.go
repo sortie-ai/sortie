@@ -116,6 +116,14 @@ type RunningEntry struct {
 	// cleanup. This defers cleanup until the agent process has fully
 	// terminated, avoiding races with active file writes or hooks.
 	PendingCleanup bool
+
+	// WorkspacePath is the absolute path to the workspace directory used
+	// by this worker. Populated from [WorkerResult.WorkspacePath] in
+	// [HandleWorkerExit] before cleanup runs. Empty if the worker exited
+	// before workspace preparation succeeded. Used by the PendingCleanup
+	// code path to clean the actual directory instead of reconstructing
+	// it from config (which may have changed via dynamic config reload).
+	WorkspacePath string
 }
 
 // RetryEntry holds the runtime state for a pending retry. The persisted
