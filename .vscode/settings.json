@@ -1,4 +1,8 @@
 {
+  "files.associations": {
+    "**/CODEOWNERS": "plaintext"
+  },
+
   // ── Agent Configuration ────────────────────────────────────────────────────
   // Enable the use of AGENTS.md file for agent configuration including nested agents.
   // See: https://agents.md
