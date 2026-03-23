@@ -66,30 +66,19 @@ func NewManager(path string, logger *slog.Logger, opts ...ManagerOption) (*Manag
 	if logger == nil {
 		logger = slog.Default()
 	}
-	wf, err := Load(path)
-	if err != nil {
-		return nil, err
-	}
-
-	cfg, err := config.NewServiceConfig(wf.Config)
-	if err != nil {
-		return nil, err
-	}
-
-	tmpl, err := prompt.Parse(wf.PromptTemplate, path, wf.FrontMatterLines)
-	if err != nil {
-		return nil, err
-	}
 
 	m := &Manager{
-		path:          path,
-		logger:        logger,
-		currentConfig: cfg,
-		currentPrompt: tmpl,
-		done:          make(chan struct{}),
+		path:   path,
+		logger: logger,
+		done:   make(chan struct{}),
 	}
 	for _, o := range opts {
 		o(m)
+	}
+
+	cfg, tmpl, err := m.loadPipeline()
+	if err != nil {
+		return nil, err
 	}
 
 	if m.validateFunc != nil {
@@ -98,6 +87,8 @@ func NewManager(path string, logger *slog.Logger, opts ...ManagerOption) (*Manag
 		}
 	}
 
+	m.currentConfig = cfg
+	m.currentPrompt = tmpl
 	return m, nil
 }
 
@@ -254,7 +245,8 @@ func (m *Manager) reload() {
 
 	if m.validateFunc != nil {
 		if err := m.validateFunc(cfg); err != nil {
-			m.logger.Error("workflow reload failed", slog.Any("error", err), slog.String("path", m.path))
+			m.logger.Error("workflow reload rejected by validation",
+				slog.Any("error", err), slog.String("path", m.path))
 			m.mu.Lock()
 			m.lastLoadErr = err
 			m.mu.Unlock()
