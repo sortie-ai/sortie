@@ -153,6 +153,7 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 			if err := params.Store.DeleteRetryEntry(ctx, issueID); err != nil {
 				log.Error("failed to delete retry entry after budget exhaustion",
 					slog.String("issue_id", issueID),
+					slog.String("issue_identifier", popped.Identifier),
 					slog.Any("error", err),
 				)
 			}

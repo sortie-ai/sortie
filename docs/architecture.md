@@ -499,7 +499,7 @@ Fields:
   - State keys are normalized (`lowercase`) for lookup.
   - Invalid entries (non-positive or non-numeric) are ignored.
 - `max_sessions` (integer)
-  - Default: `0` (unlimited — no effort budget enforced).
+  - Default: `0` (unlimited; no effort budget enforced).
   - Maximum number of completed worker sessions for a single issue before the orchestrator
     stops re-dispatching it. Counted from `run_history` entries.
   - When the count reaches `max_sessions`, the claim is released and a warning is logged.
