@@ -77,6 +77,7 @@ type Orchestrator struct {
 
 	preflightParams PreflightParams
 	observers       []Observer
+	drainTimeout    time.Duration
 }
 
 // NewOrchestrator creates an [Orchestrator] with all dependencies wired.
@@ -109,13 +110,17 @@ func NewOrchestrator(params OrchestratorParams) *Orchestrator {
 		agentEventCh:    make(chan agentEventMsg, eventBuf),
 		preflightParams: params.PreflightParams,
 		observers:       observers,
+		drainTimeout:    defaultDrainTimeout,
 	}
 }
 
 // Run enters the event loop, blocks until ctx is cancelled, and returns.
 // Must be called from a single goroutine. On context cancellation the
-// tick timer is stopped and the function returns immediately (hard stop).
-// A future milestone replaces this with a draining shutdown phase.
+// tick timer is stopped and a draining shutdown begins: all running
+// worker contexts are cancelled, the loop waits up to 30 seconds for
+// workers to exit (processing results through [HandleWorkerExit] and
+// agent events through [HandleAgentEvent]), pending retry timers are
+// stopped, and the function returns.
 func (o *Orchestrator) Run(ctx context.Context) {
 	o.activateReconstructedRetries()
 
@@ -125,6 +130,9 @@ func (o *Orchestrator) Run(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
+			tickTimer.Stop()
+			o.drainRunningWorkers()
+			o.cancelRetryTimers()
 			return
 
 		case <-tickTimer.C:
@@ -324,6 +332,76 @@ func (o *Orchestrator) activateReconstructedRetries() {
 			)
 		} else {
 			o.retryTimerCh <- issueID
+		}
+	}
+}
+
+// defaultDrainTimeout is the maximum duration the orchestrator waits for
+// running workers to exit during graceful shutdown.
+const defaultDrainTimeout = 30 * time.Second
+
+// drainRunningWorkers cancels all running worker contexts and waits for
+// them to exit, processing each [WorkerResult] through [HandleWorkerExit]
+// for clean persistence. Agent events are processed through
+// [HandleAgentEvent] to capture final token usage. Observer notifications
+// fire after each worker exit for dashboard visibility. Returns when all
+// workers have exited or the drain timeout expires.
+func (o *Orchestrator) drainRunningWorkers() {
+	remaining := len(o.state.Running)
+	if remaining == 0 {
+		return
+	}
+
+	o.logger.Info("draining workers",
+		slog.Int("count", remaining),
+	)
+
+	for _, entry := range o.state.Running {
+		if entry.CancelFunc != nil {
+			entry.CancelFunc()
+		}
+	}
+
+	deadline := time.NewTimer(o.drainTimeout)
+	defer deadline.Stop()
+
+	// The parent ctx is already cancelled; SQLite writes in
+	// HandleWorkerExit need a live context.
+	drainCtx := context.Background()
+
+	for len(o.state.Running) > 0 {
+		select {
+		case result := <-o.workerExitCh:
+			cfg := o.workflowManager.Config()
+			HandleWorkerExit(o.state, result, HandleWorkerExitParams{
+				Store:             o.store,
+				MaxRetryBackoffMS: cfg.Agent.MaxRetryBackoffMS,
+				OnRetryFire:       func(string) {}, // suppress retry scheduling during drain
+				Ctx:               drainCtx,
+				Logger:            o.logger,
+				BeforeRemoveHook:  cfg.Hooks.BeforeRemove,
+				HookTimeoutMS:     cfg.Hooks.TimeoutMS,
+			})
+			o.notifyObservers()
+
+		case msg := <-o.agentEventCh:
+			HandleAgentEvent(o.state, msg.IssueID, msg.Event)
+
+		case <-deadline.C:
+			o.logger.Warn("drain timeout exceeded, abandoning workers",
+				slog.Int("remaining", len(o.state.Running)),
+			)
+			return
+		}
+	}
+}
+
+// cancelRetryTimers stops all pending retry timers to prevent late fires
+// after the event loop exits.
+func (o *Orchestrator) cancelRetryTimers() {
+	for _, entry := range o.state.RetryAttempts {
+		if entry.TimerHandle != nil {
+			entry.TimerHandle.Stop()
 		}
 	}
 }
