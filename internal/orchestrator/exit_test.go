@@ -1041,28 +1041,40 @@ func TestHandleWorkerExit_NoPendingCleanupSkipsWorkspace(t *testing.T) {
 func TestHandleWorkerExit_CleanupFailureNonFatal(t *testing.T) {
 	t.Parallel()
 
+	if os.Getuid() == 0 {
+		t.Skip("skipping: test requires non-root to enforce directory permissions")
+	}
+
 	store := &mockExitStore{}
 	state := exitState(t, "CFAIL-1", nil)
 	state.Running["CFAIL-1"].PendingCleanup = true
 	state.Running["CFAIL-1"].Identifier = "CFAIL-1-ident"
 
-	// With CleanupByPath, an empty WorkspacePath causes cleanup to be
-	// skipped entirely (guard: entry.WorkspacePath != ""). Verify the
-	// running entry is still removed and state is consistent.
+	// Create a workspace directory where os.RemoveAll will fail:
+	// a child directory inside a non-writable parent prevents unlinking.
+	wsDir := filepath.Join(t.TempDir(), "ws")
+	if err := os.MkdirAll(filepath.Join(wsDir, "locked"), 0o755); err != nil {
+		t.Fatalf("failed to create dir: %v", err)
+	}
+	if err := os.Chmod(wsDir, 0o555); err != nil {
+		t.Fatalf("chmod: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(wsDir, 0o755) })
+
 	params := defaultExitParams(t, store)
 
-	// Must not panic; empty WorkspacePath skips cleanup gracefully.
+	// Must not panic; cleanup error is logged but not fatal.
 	HandleWorkerExit(state, WorkerResult{
 		IssueID:       "CFAIL-1",
 		Identifier:    "CFAIL-1-ident",
 		ExitKind:      WorkerExitCancelled,
 		AgentAdapter:  "mock",
-		WorkspacePath: "",
+		WorkspacePath: wsDir,
 	}, params)
 
-	// In-memory state still updated despite cleanup being skipped.
+	// In-memory state still updated despite cleanup failure.
 	if _, ok := state.Running["CFAIL-1"]; ok {
-		t.Error("Running entry not removed when WorkspacePath is empty")
+		t.Error("Running entry not removed despite cleanup failure")
 	}
 }
 

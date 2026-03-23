@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strconv"
 )
 
@@ -301,6 +302,12 @@ type CleanupByPathParams struct {
 func CleanupByPath(ctx context.Context, params CleanupByPathParams) error {
 	if params.Path == "" {
 		return errors.New("workspace path must not be empty")
+	}
+	if !filepath.IsAbs(params.Path) {
+		return errors.New("workspace path must be absolute")
+	}
+	if filepath.Clean(params.Path) == "/" {
+		return errors.New("refusing to remove filesystem root")
 	}
 
 	_, statErr := os.Stat(params.Path)

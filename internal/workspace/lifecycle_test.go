@@ -657,6 +657,44 @@ func TestCleanupByPath(t *testing.T) {
 		}
 	})
 
+	t.Run("relative path returns error", func(t *testing.T) {
+		t.Parallel()
+
+		err := CleanupByPath(context.Background(), CleanupByPathParams{
+			Path:          "relative/path",
+			Identifier:    "REL",
+			IssueID:       "id-7",
+			Attempt:       1,
+			HookTimeoutMS: 5000,
+		})
+		if err == nil {
+			t.Fatal(`CleanupByPath("relative/path") should return error`)
+		}
+		if !strings.Contains(err.Error(), "workspace path must be absolute") {
+			t.Errorf(`CleanupByPath("relative/path") error = %q, want to contain %q`,
+				err.Error(), "workspace path must be absolute")
+		}
+	})
+
+	t.Run("filesystem root rejected", func(t *testing.T) {
+		t.Parallel()
+
+		err := CleanupByPath(context.Background(), CleanupByPathParams{
+			Path:          "/",
+			Identifier:    "ROOT",
+			IssueID:       "id-8",
+			Attempt:       1,
+			HookTimeoutMS: 5000,
+		})
+		if err == nil {
+			t.Fatal(`CleanupByPath("/") should return error`)
+		}
+		if !strings.Contains(err.Error(), "refusing to remove filesystem root") {
+			t.Errorf(`CleanupByPath("/") error = %q, want to contain %q`,
+				err.Error(), "refusing to remove filesystem root")
+		}
+	})
+
 	// context.WithoutCancel: before_remove hook runs despite cancelled parent.
 	t.Run("cancelled parent context hook still runs", func(t *testing.T) {
 		t.Parallel()
