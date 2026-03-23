@@ -34,8 +34,7 @@ go.work.sum
 
 .sortie.db
 
-# Ignore generated specification and plan files.
+# Ignore generated plans, specs and review files.
 /.plans
 /.reviews
 /.specs
-/.tasks
