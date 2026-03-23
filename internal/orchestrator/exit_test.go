@@ -992,7 +992,6 @@ func TestHandleWorkerExit_PendingCleanupRemovesWorkspace(t *testing.T) {
 	}
 
 	params := defaultExitParams(t, store)
-	params.WorkspaceRoot = wsRoot
 
 	HandleWorkerExit(state, WorkerResult{
 		IssueID:       "CLEAN-1",
@@ -1023,7 +1022,6 @@ func TestHandleWorkerExit_NoPendingCleanupSkipsWorkspace(t *testing.T) {
 	}
 
 	params := defaultExitParams(t, store)
-	params.WorkspaceRoot = wsRoot
 
 	HandleWorkerExit(state, WorkerResult{
 		IssueID:      "NOCLEAN-1",
@@ -1099,7 +1097,6 @@ func TestHandleWorkerExit_PendingCleanupUsesActualPath(t *testing.T) {
 	}
 
 	params := defaultExitParams(t, store)
-	params.WorkspaceRoot = newRoot // config has changed
 
 	HandleWorkerExit(state, WorkerResult{
 		IssueID:       "PROJ-99",
@@ -1138,7 +1135,6 @@ func TestHandleWorkerExit_PendingCleanupSkipsWhenNoWorkspacePath(t *testing.T) {
 	}
 
 	params := defaultExitParams(t, store)
-	params.WorkspaceRoot = wsRoot
 
 	// Worker exited before workspace preparation — WorkspacePath is empty.
 	HandleWorkerExit(state, WorkerResult{

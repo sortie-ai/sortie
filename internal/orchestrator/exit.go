@@ -63,12 +63,6 @@ type HandleWorkerExitParams struct {
 	// Logger is the structured logger with orchestrator context.
 	Logger *slog.Logger
 
-	// WorkspaceRoot is the workspace root directory (from config).
-	// No longer used by the PendingCleanup code path (which now uses
-	// RunningEntry.WorkspacePath directly via CleanupByPath). Retained
-	// for backward compatibility with call sites that populate it.
-	WorkspaceRoot string
-
 	// BeforeRemoveHook is the before_remove hook script (from config).
 	// Empty means no hook.
 	BeforeRemoveHook string
