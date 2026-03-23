@@ -483,7 +483,7 @@ the system does real work.
       `TransitionIssue` as the sixth operation.
       **Verify:** code compiles, both existing adapter types satisfy the updated interface.
 
-- [ ] 7.5 Implement `TransitionIssue` for the Jira adapter: fetch available transitions
+- [x] 7.5 Implement `TransitionIssue` for the Jira adapter: fetch available transitions
       via `GET /rest/api/3/issue/{issueID}/transitions`, find the transition whose name
       matches `targetState` (case-insensitive), and execute it via
       `POST /rest/api/3/issue/{issueID}/transitions`. Map HTTP and API errors to
@@ -493,7 +493,7 @@ the system does real work.
       found in available transitions, auth error, transport error. Tests confirm correct
       HTTP request construction and error classification.
 
-- [ ] 7.6 Implement `TransitionIssue` for the file adapter: find the issue by ID in the
+- [x] 7.6 Implement `TransitionIssue` for the file adapter: find the issue by ID in the
       in-memory issue list and update its `State` field to `targetState`. Return an error
       if the issue ID is not found. The mutation is in-memory only — the file adapter is
       read-only from disk; on-disk content is not modified.
@@ -577,6 +577,20 @@ the system does real work.
       or `max_retry_backoff_ms`. Integration test with WORKFLOW.md containing
       `claude-code.max_turns: 50` confirms Claude Code CLI receives
       `--max-turns 50` (visible via agent command log or parse test).
+
+- [ ] 7.16 Normalize `FetchIssueByID` and `FetchIssueComments` not-found errors
+      to use `ErrTrackerNotFound` instead of `ErrTrackerPayload`. The interface
+      contract in `domain/tracker.go` and both adapter implementations (file,
+      Jira) currently return `ErrTrackerPayload` when an issue is not found,
+      but `ErrTrackerNotFound` exists for exactly this purpose and is already
+      used by `TransitionIssue` (ADR-0007). Update the interface doc comments,
+      both adapter implementations, and their tests. This is a consistency fix
+      that enables the orchestrator to distinguish "not found" from "malformed
+      response" for future error handling improvements.
+      **Verify:** unit tests for both adapters confirm `FetchIssueByID` and
+      `FetchIssueComments` return `*TrackerError` with Kind `ErrTrackerNotFound`
+      when the issue ID does not exist. Existing orchestrator code compiles
+      without changes (`go build ./...`).
 
 ## Milestone 8: Observability and Agent Extensions
 
