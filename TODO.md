@@ -415,7 +415,7 @@ component. Uses mock adapters for tracker and agent - no real external calls.
       `PendingCleanup=true`, confirms cleanup removes the directory at the original path
       (not the new root). Existing cleanup tests continue to pass.
 
-- [ ] 6.17 Guard reconciliation against semantically invalid config on preflight
+- [x] 6.17 Guard reconciliation against semantically invalid config on preflight
       failure. When `ReloadWorkflow` succeeds but preflight fails for a
       different reason (missing `tracker.kind`, unregistered adapter, etc.),
       `Config()` returns the newly loaded config which may have empty or
