@@ -402,7 +402,7 @@ component. Uses mock adapters for tracker and agent - no real external calls.
       falling back to workflow-adjacent `.sortie.db`. Integration test confirms a custom
       `db_path` is used when specified.
 
-- [ ] 6.16 Fix workspace cleanup to use actual path instead of reconstructing from config.
+- [x] 6.16 Fix workspace cleanup to use actual path instead of reconstructing from config.
       `HandleWorkerExit` currently passes `params.WorkspaceRoot` (from fresh config) to
       `workspace.Cleanup`, which calls `ComputePath(root, identifier)` to reconstruct the
       workspace path. If `workspace.root` changes at runtime between worker spawn and exit,
