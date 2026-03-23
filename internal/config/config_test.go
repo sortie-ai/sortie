@@ -534,6 +534,126 @@ func TestNewServiceConfig(t *testing.T) {
 		assertStringEqual(t, "Tracker.Endpoint", "", cfg.Tracker.Endpoint)
 		assertStringEqual(t, "Tracker.APIKey", "", cfg.Tracker.APIKey)
 	})
+
+	// --- HandoffState subtests (ADR-0007) ---
+
+	t.Run("HandoffState/Absent", func(t *testing.T) {
+		t.Parallel()
+		cfg, err := NewServiceConfig(map[string]any{
+			"tracker": map[string]any{
+				"kind": "jira",
+			},
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		assertStringEqual(t, "Tracker.HandoffState", "", cfg.Tracker.HandoffState)
+	})
+
+	t.Run("HandoffState/ValidValue", func(t *testing.T) {
+		t.Parallel()
+		cfg, err := NewServiceConfig(map[string]any{
+			"tracker": map[string]any{
+				"handoff_state":   "Human Review",
+				"active_states":   []any{"To Do", "In Progress"},
+				"terminal_states": []any{"Done"},
+			},
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		assertStringEqual(t, "Tracker.HandoffState", "Human Review", cfg.Tracker.HandoffState)
+	})
+
+	t.Run("HandoffState/EmptyString", func(t *testing.T) {
+		t.Parallel()
+		_, err := NewServiceConfig(map[string]any{
+			"tracker": map[string]any{
+				"handoff_state": "",
+			},
+		})
+		assertConfigErrorField(t, err, "tracker.handoff_state")
+	})
+
+	t.Run("HandoffState/EnvVar", func(t *testing.T) {
+		t.Setenv("TEST_HANDOFF", "Human Review")
+		cfg, err := NewServiceConfig(map[string]any{
+			"tracker": map[string]any{
+				"handoff_state":   "$TEST_HANDOFF",
+				"active_states":   []any{"To Do", "In Progress"},
+				"terminal_states": []any{"Done"},
+			},
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		assertStringEqual(t, "Tracker.HandoffState", "Human Review", cfg.Tracker.HandoffState)
+	})
+
+	t.Run("HandoffState/UnsetEnvVar", func(t *testing.T) {
+		t.Parallel()
+		_, err := NewServiceConfig(map[string]any{
+			"tracker": map[string]any{
+				"handoff_state": "$SORTIE_UNSET_VAR_XYZ",
+			},
+		})
+		assertConfigErrorField(t, err, "tracker.handoff_state")
+	})
+
+	t.Run("HandoffState/CollidesWithActive", func(t *testing.T) {
+		t.Parallel()
+		_, err := NewServiceConfig(map[string]any{
+			"tracker": map[string]any{
+				"handoff_state": "In Progress",
+				"active_states": []any{"In Progress"},
+			},
+		})
+		assertConfigErrorField(t, err, "tracker.handoff_state")
+	})
+
+	t.Run("HandoffState/CollidesWithActiveCaseInsensitive", func(t *testing.T) {
+		t.Parallel()
+		_, err := NewServiceConfig(map[string]any{
+			"tracker": map[string]any{
+				"handoff_state": "in progress",
+				"active_states": []any{"In Progress"},
+			},
+		})
+		assertConfigErrorField(t, err, "tracker.handoff_state")
+	})
+
+	t.Run("HandoffState/CollidesWithTerminal", func(t *testing.T) {
+		t.Parallel()
+		_, err := NewServiceConfig(map[string]any{
+			"tracker": map[string]any{
+				"handoff_state":   "Done",
+				"terminal_states": []any{"Done"},
+			},
+		})
+		assertConfigErrorField(t, err, "tracker.handoff_state")
+	})
+
+	t.Run("HandoffState/CollidesWithTerminalCaseInsensitive", func(t *testing.T) {
+		t.Parallel()
+		_, err := NewServiceConfig(map[string]any{
+			"tracker": map[string]any{
+				"handoff_state":   "done",
+				"terminal_states": []any{"Done"},
+			},
+		})
+		assertConfigErrorField(t, err, "tracker.handoff_state")
+	})
+
+	t.Run("HandoffState/ExplicitEmptyExistingField", func(t *testing.T) {
+		t.Parallel()
+		_, err := NewServiceConfig(map[string]any{
+			"tracker": map[string]any{
+				"kind":          "jira",
+				"handoff_state": "",
+			},
+		})
+		assertConfigErrorField(t, err, "tracker.handoff_state")
+	})
 }
 
 // --- test helpers ---

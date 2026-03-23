@@ -49,6 +49,7 @@ type TrackerConfig struct {
 	ActiveStates   []string
 	TerminalStates []string
 	QueryFilter    string
+	HandoffState   string
 }
 
 // PollingConfig holds the poll loop timing.
@@ -106,7 +107,32 @@ func NewServiceConfig(raw map[string]any) (ServiceConfig, error) {
 		raw = map[string]any{}
 	}
 
-	tracker := buildTrackerConfig(extractSubMap(raw, "tracker"))
+	rawTracker := extractSubMap(raw, "tracker")
+	tracker := buildTrackerConfig(rawTracker)
+
+	// Validate handoff_state: reject explicit value that resolved to empty.
+	if rawVal, ok := rawTracker["handoff_state"]; ok {
+		if s, isStr := rawVal.(string); !isStr || s != "" {
+			// The operator wrote something (non-empty string or non-string
+			// type that extractString silently ignored). If resolution
+			// produced an empty string, the env var is missing.
+			if tracker.HandoffState == "" {
+				return ServiceConfig{}, &ConfigError{
+					Field:   "tracker.handoff_state",
+					Message: "resolved to empty (check environment variable)",
+				}
+			}
+		} else {
+			// Key present with explicit empty string — config error.
+			return ServiceConfig{}, &ConfigError{
+				Field:   "tracker.handoff_state",
+				Message: "resolved to empty (check environment variable)",
+			}
+		}
+	}
+	if err := validateHandoffState(tracker.HandoffState, tracker.ActiveStates, tracker.TerminalStates); err != nil {
+		return ServiceConfig{}, err
+	}
 
 	polling, err := buildPollingConfig(extractSubMap(raw, "polling"))
 	if err != nil {
@@ -161,6 +187,7 @@ func buildTrackerConfig(m map[string]any) TrackerConfig {
 		ActiveStates:   extractStringSlice(mapVal(m, "active_states")),
 		TerminalStates: extractStringSlice(mapVal(m, "terminal_states")),
 		QueryFilter:    resolveEnvRef(extractString(m, "query_filter")),
+		HandoffState:   resolveEnvRef(extractString(m, "handoff_state")),
 	}
 }
 
@@ -315,6 +342,32 @@ func buildAgentConfig(m map[string]any) (AgentConfig, error) {
 }
 
 // --- resolution helpers ---
+
+// validateHandoffState checks that handoffState does not collide with
+// active or terminal states. Returns a *ConfigError on violation.
+func validateHandoffState(handoffState string, activeStates, terminalStates []string) error {
+	if handoffState == "" {
+		return nil
+	}
+	lower := strings.ToLower(handoffState)
+	for _, s := range activeStates {
+		if strings.ToLower(s) == lower {
+			return &ConfigError{
+				Field:   "tracker.handoff_state",
+				Message: fmt.Sprintf("%q collides with active state %q", handoffState, s),
+			}
+		}
+	}
+	for _, s := range terminalStates {
+		if strings.ToLower(s) == lower {
+			return &ConfigError{
+				Field:   "tracker.handoff_state",
+				Message: fmt.Sprintf("%q collides with terminal state %q", handoffState, s),
+			}
+		}
+	}
+	return nil
+}
 
 func resolveEnv(val string) string {
 	return os.ExpandEnv(val)

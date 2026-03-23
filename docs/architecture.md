@@ -405,6 +405,16 @@ Fields:
   - The orchestrator passes this value to the tracker adapter without interpretation.
   - The adapter is responsible for safe integration into its native query language.
   - Default: empty string (no additional filtering).
+- `handoff_state` (string, optional)
+  - Target tracker state for orchestrator-initiated handoff transitions after a successful
+    worker run (see ADR-0007).
+  - Supports `$VAR` environment indirection.
+  - When absent or empty, no handoff transition is performed; the orchestrator uses
+    continuation retry as before.
+  - Must not appear in `active_states` (would cause immediate re-dispatch after handoff).
+  - Must not appear in `terminal_states` (handoff is not terminal; the issue may return
+    to active).
+  - Changes take effect for future worker exits, not in-flight sessions.
 
 #### 5.3.2 `polling` (object)
 
@@ -633,6 +643,9 @@ This section is intentionally redundant so a coding agent can implement the conf
 - `tracker.active_states`: list of strings, adapter-defined defaults
 - `tracker.terminal_states`: list of strings, adapter-defined defaults
 - `tracker.query_filter`: string, optional, default empty (adapter-defined filter fragment)
+- `tracker.handoff_state`: string, optional, default absent; target state for
+  orchestrator-initiated handoff after successful worker run; must not collide with
+  `active_states` or `terminal_states`; supports `$VAR`
 - `polling.interval_ms`: integer, default `30000`
 - `workspace.root`: path, default `<system-temp>/sortie_workspaces`
 - `worker.ssh_hosts` (extension): list of SSH host strings, optional; when omitted, work runs
