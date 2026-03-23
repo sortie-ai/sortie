@@ -53,9 +53,9 @@ type TrackerAdapter interface {
 	// matched against the tracker's native state model by the adapter.
 	//
 	// Returns nil on success. Returns a [*TrackerError] on failure:
-	//   - [ErrTrackerTransport]: network failure during the API call.
+	//   - [ErrTrackerTransport]: network or server failure (connection error, HTTP 5xx).
 	//   - [ErrTrackerAuth]: insufficient permissions for write operations.
-	//   - [ErrTrackerAPI]: tracker returned a non-success response (rate limit, server error).
+	//   - [ErrTrackerAPI]: non-success response from the tracker (rate limit, unexpected status).
 	//   - [ErrTrackerNotFound]: the issue does not exist.
 	//   - [ErrTrackerPayload]: no available transition leads to targetState
 	//     from the issue's current state, or the response is malformed.
