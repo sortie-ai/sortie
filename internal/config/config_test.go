@@ -430,6 +430,17 @@ func TestNewServiceConfig(t *testing.T) {
 		assertStringEqual(t, "DBPath", "", cfg.DBPath)
 	})
 
+	t.Run("DBPath/ExplicitEmptyString", func(t *testing.T) {
+		t.Parallel()
+		cfg, err := NewServiceConfig(map[string]any{
+			"db_path": "",
+		})
+		if err != nil {
+			t.Fatalf("NewServiceConfig(db_path=\"\") unexpected error: %v", err)
+		}
+		assertStringEqual(t, "DBPath", "", cfg.DBPath)
+	})
+
 	t.Run("DBPath/AbsolutePath", func(t *testing.T) {
 		t.Parallel()
 		cfg, err := NewServiceConfig(map[string]any{
