@@ -22,7 +22,9 @@ const debounceInterval = 50 * time.Millisecond
 // returns a non-nil error, the new config is rejected and the
 // last-known-good config is retained. This allows the caller to enforce
 // domain-level invariants without leaking domain knowledge into the
-// Manager.
+// Manager. Implementations must be safe for concurrent use and must
+// treat the supplied [config.ServiceConfig] as read-only; they must not
+// mutate the config value or any data reachable from it.
 type ValidateFunc func(config.ServiceConfig) error
 
 // ManagerOption configures optional behavior on [NewManager].
