@@ -437,7 +437,8 @@ component. Uses mock adapters for tracker and agent - no real external calls.
       `Registry[T]` to accept the appropriate meta type (may require separate registry
       types or a type parameter for meta), and migrate all adapter registrations.
       Also consider changing `Meta()` to return `(M, bool)` so callers can distinguish
-      "unregistered kind" from "registered with zero-value meta."
+      "unregistered kind" from "registered with zero-value meta." Make sure this does not
+      conflict with the documented architecture and is covered in architecture.md
       **Verify:** existing preflight tests pass unchanged. Compilation confirms no adapter
       mixes tracker fields with agent fields or vice-versa.
 
@@ -450,7 +451,7 @@ component. Uses mock adapters for tracker and agent - no real external calls.
       **Verify:** `db_path` appears in Sections 5.3, 6.4, and 19.1 of the architecture
       doc. No contradictions with existing content.
 
-- [ ] 6.20 Update `docs/architecture.md` Section 16.1 startup pseudocode to move
+- [x] 6.20 Update `docs/architecture.md` Section 16.1 startup pseudocode to move
       `validate_dispatch_config()` before `open_or_create_sqlite_db()`. The implementation
       now runs preflight before opening the database so invalid config is rejected without
       creating files on disk. The spec should reflect this ordering.

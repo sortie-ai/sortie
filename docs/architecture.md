@@ -1686,12 +1686,17 @@ treat harness hardening as part of the core safety model rather than an optional
 
 ```text
 function start_service():
-  open_or_create_sqlite_db()
-  run_schema_migrations()
-
   configure_logging()
   start_observability_outputs()
   start_workflow_watch(on_change=reload_and_reapply_workflow)
+
+  validation = validate_dispatch_config()
+  if validation is not ok:
+    log_validation_error(validation)
+    fail_startup(validation)
+
+  open_or_create_sqlite_db()
+  run_schema_migrations()
 
   persisted_retries = sqlite.load_retry_entries()
 
@@ -1708,11 +1713,6 @@ function start_service():
 
   for entry in persisted_retries:
     state = reconstruct_retry_timer(state, entry)
-
-  validation = validate_dispatch_config()
-  if validation is not ok:
-    log_validation_error(validation)
-    fail_startup(validation)
 
   startup_terminal_workspace_cleanup()
   schedule_tick(delay_ms=0)
