@@ -484,8 +484,8 @@ the system does real work.
       **Verify:** code compiles, both existing adapter types satisfy the updated interface.
 
 - [x] 7.5 Implement `TransitionIssue` for the Jira adapter: fetch available transitions
-      via `GET /rest/api/3/issue/{issueID}/transitions`, find the transition whose name
-      matches `targetState` (case-insensitive), and execute it via
+      via `GET /rest/api/3/issue/{issueID}/transitions`, find the transition whose
+      destination status (`to.name`) matches `targetState` (case-insensitive), and execute via
       `POST /rest/api/3/issue/{issueID}/transitions`. Map HTTP and API errors to
       `TrackerError` kinds per Section 11.4. Return a descriptive error when no
       matching transition is found.
@@ -673,7 +673,7 @@ At this point, Sortie has enough functionality to orchestrate its own developmen
 Jira issues for remaining work, point Sortie at its own repository, and let agents implement
 features.
 
-- [ ] 9.1 Create a production `WORKFLOW.md` for the Sortie repository itself. Define the
+- [x] 9.1 Create a production `WORKFLOW.md` for the Sortie repository itself. Define the
       prompt template, hooks (git clone, go mod download, make lint), and agent config.
       **Verify:** Sortie starts and polls the Sortie Jira project.
 
@@ -764,6 +764,15 @@ Operational hardening, performance tuning, and workspace lifecycle improvements.
       conflict with the documented architecture and is covered in architecture.md
       **Verify:** existing preflight tests pass unchanged. Compilation confirms no adapter
       mixes tracker fields with agent fields or vice-versa.
+
+- [ ] 10.8 Add a `User-Agent` header to `jiraClient`: set `User-Agent: sortie/<version>`
+      on every HTTP request so Atlassian can identify traffic source and operators can
+      trace Sortie activity in Jira audit logs. Read the binary version from the same
+      source as `cmd/sortie/version.go` (expose via a package-level variable or injected
+      at construction time). Fall back to `sortie/dev` when no version is available.
+      **Verify:** unit test confirms the `User-Agent` header is present on requests made
+      by `jiraClient.do` and `jiraClient.doJSON`, with value matching `sortie/<version>`
+      format. Existing client tests continue to pass.
 
 ## Milestone 11: Documentation and Release
 

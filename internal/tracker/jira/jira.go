@@ -7,6 +7,7 @@
 package jira
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -249,12 +250,59 @@ func (a *JiraAdapter) FetchIssueComments(ctx context.Context, issueID string) ([
 
 // TransitionIssue moves an issue to the specified target state by
 // finding and executing the matching Jira workflow transition.
-// This is a stub that will be replaced with a full implementation.
+// Available transitions are fetched via GET, matched by target status
+// name (case-insensitive, first match), then executed via POST.
 func (a *JiraAdapter) TransitionIssue(ctx context.Context, issueID string, targetState string) error {
-	return &domain.TrackerError{
-		Kind:    domain.ErrTrackerAPI,
-		Message: "TransitionIssue not implemented",
+	path := "/rest/api/3/issue/" + url.PathEscape(issueID) + "/transitions"
+
+	body, err := a.client.do(ctx, "GET", path, nil)
+	if err != nil {
+		return err
 	}
+
+	var resp transitionsResponse
+	if err := json.Unmarshal(body, &resp); err != nil {
+		return &domain.TrackerError{
+			Kind:    domain.ErrTrackerPayload,
+			Message: fmt.Sprintf("failed to parse transitions response for issue %s", issueID),
+			Err:     err,
+		}
+	}
+
+	var matchID string
+	for _, t := range resp.Transitions {
+		if strings.EqualFold(t.To.Name, targetState) {
+			matchID = t.ID
+			break
+		}
+	}
+
+	if matchID == "" {
+		return &domain.TrackerError{
+			Kind:    domain.ErrTrackerPayload,
+			Message: fmt.Sprintf("no transition to state %q available for issue %s", targetState, issueID),
+		}
+	}
+
+	postBody, err := json.Marshal(struct {
+		Transition struct {
+			ID string `json:"id"`
+		} `json:"transition"`
+	}{
+		Transition: struct {
+			ID string `json:"id"`
+		}{ID: matchID},
+	})
+	if err != nil {
+		return &domain.TrackerError{
+			Kind:    domain.ErrTrackerPayload,
+			Message: "failed to marshal transition request",
+			Err:     err,
+		}
+	}
+
+	_, err = a.client.doJSON(ctx, "POST", path, bytes.NewReader(postBody))
+	return err
 }
 
 // paginatedSearch executes a cursor-based paginated JQL search and

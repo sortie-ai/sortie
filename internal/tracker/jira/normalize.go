@@ -202,3 +202,20 @@ func unmarshalADF(raw json.RawMessage) any {
 	}
 	return v
 }
+
+// transitionsResponse represents GET /rest/api/3/issue/{id}/transitions.
+type transitionsResponse struct {
+	Transitions []jiraTransition `json:"transitions"`
+}
+
+// jiraTransition represents a single available workflow transition.
+type jiraTransition struct {
+	ID   string               `json:"id"`
+	Name string               `json:"name"`
+	To   jiraTransitionTarget `json:"to"`
+}
+
+// jiraTransitionTarget represents the destination status of a transition.
+type jiraTransitionTarget struct {
+	Name string `json:"name"`
+}

@@ -124,18 +124,24 @@ Response: `{ startAt, maxResults, total, comments: [...] }`
 Comment body uses ADF and must be flattened. Each comment has `id`, `author.displayName`,
 `body` (ADF), `created`, `updated`.
 
-### Transitions (reference only)
+### Transitions
 
-Sortie is a tracker **reader**. State transitions are handled by the coding agent,
-not the orchestrator. These endpoints are documented for reference only.
+Sortie uses these endpoints for orchestrator-initiated handoff transitions when
+`tracker.handoff_state` is configured (per ADR-0007). After a successful worker run, the
+orchestrator calls `TransitionIssue` to move the issue to the configured handoff state
+(e.g., "Human Review").
 
 - `GET /rest/api/3/issue/{issueIdOrKey}/transitions`: lists available transitions for an
-  issue based on the current user's permissions and workflow rules.
+  issue based on the current user's permissions and workflow rules. The adapter matches the
+  configured target state against `transition.to.name` (case-insensitive), not the
+  transition label (`transition.name`), to avoid workflow-specific naming fragility.
 - `POST /rest/api/3/issue/{issueIdOrKey}/transitions`: executes a transition, moving the
-  issue to a new status. Request body: `{ "transition": { "id": "<transition_id>" } }`
+  issue to a new status. Request body: `{ "transition": { "id": "<transition_id>" } }`.
+  Returns `204 No Content` on success (empty body).
 
-If an optional `tracker_api` client-side tool extension is implemented, these endpoints
-would be relevant.
+OAuth scopes required: `write:jira-work` (classic) or `write:issue:jira` (granular). This
+is an escalation from the read-only scopes (`read:jira-work`) used by other adapter
+operations.
 
 ---
 
