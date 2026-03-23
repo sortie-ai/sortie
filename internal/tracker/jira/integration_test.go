@@ -358,32 +358,32 @@ func TestIntegration_FetchIssueStatesByIDs(t *testing.T) {
 	if len(candidates) < limit {
 		limit = len(candidates)
 	}
-	identifiers := make([]string, limit)
+	ids := make([]string, limit)
 	candidateStates := make(map[string]string, limit)
 	for i := 0; i < limit; i++ {
-		identifiers[i] = candidates[i].Identifier
-		candidateStates[candidates[i].Identifier] = candidates[i].State
+		ids[i] = candidates[i].ID
+		candidateStates[candidates[i].ID] = candidates[i].State
 	}
 
 	ctx2, cancel2 := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel2()
 
-	stateMap, err := adapter.FetchIssueStatesByIDs(ctx2, identifiers)
+	stateMap, err := adapter.FetchIssueStatesByIDs(ctx2, ids)
 	if err != nil {
 		t.Fatalf("FetchIssueStatesByIDs: %v", err)
 	}
 
-	for _, id := range identifiers {
+	for _, id := range ids {
 		state, ok := stateMap[id]
 		if !ok {
-			t.Errorf("identifier %s missing from result map", id)
+			t.Errorf("ID %s missing from result map", id)
 			continue
 		}
 		if state == "" {
-			t.Errorf("identifier %s: state is empty", id)
+			t.Errorf("ID %s: state is empty", id)
 		}
 		if prev, exists := candidateStates[id]; exists && state != prev {
-			t.Logf("identifier %s: state changed between calls (%q -> %q)", id, prev, state)
+			t.Logf("ID %s: state changed between calls (%q -> %q)", id, prev, state)
 		}
 	}
 }
