@@ -91,8 +91,9 @@ The initial implementation targets Jira and Claude Code. See
 Sortie's architecture is informed by [OpenAI Symphony](https://github.com/openai/symphony),
 a spec-first orchestration framework with an Elixir reference implementation. Sortie diverges
 in language (Go for deployment simplicity), persistence (SQLite instead of in-memory state),
-and extensibility (pluggable adapters for any tracker or agent, not hardcoded to Linear
-and Codex).
+extensibility (pluggable adapters for any tracker or agent, not hardcoded to Linear and Codex),
+and completion signaling (orchestrator-managed handoff transitions instead of relying solely on
+agent-initiated tracker writes).
 
 ## Why "Sortie"
 
