@@ -481,27 +481,21 @@ func TestNewServiceConfig(t *testing.T) {
 	})
 
 	t.Run("DBPath/UnsetEnvVar", func(t *testing.T) {
-		// os.ExpandEnv replaces undefined vars with empty string;
-		// expandPath does not error — result is empty sentinel.
-		cfg, err := NewServiceConfig(map[string]any{
+		// An explicit db_path whose env var resolves to empty must
+		// produce a ConfigError — silent fallback to the default
+		// path would surprise the operator.
+		_, err := NewServiceConfig(map[string]any{
 			"db_path": "$SORTIE_UNSET_VAR_XYZ",
 		})
-		if err != nil {
-			t.Fatalf("NewServiceConfig(db_path=$SORTIE_UNSET_VAR_XYZ) unexpected error: %v", err)
-		}
-		assertStringEqual(t, "DBPath", "", cfg.DBPath)
+		assertConfigErrorField(t, err, "db_path")
 	})
 
-	t.Run("DBPath/NonStringIgnored", func(t *testing.T) {
+	t.Run("DBPath/NonStringRejected", func(t *testing.T) {
 		t.Parallel()
-		cfg, err := NewServiceConfig(map[string]any{
+		_, err := NewServiceConfig(map[string]any{
 			"db_path": 42,
 		})
-		if err != nil {
-			t.Fatalf("NewServiceConfig(db_path=42) unexpected error: %v", err)
-		}
-		// extractString returns "" for non-string values.
-		assertStringEqual(t, "DBPath", "", cfg.DBPath)
+		assertConfigErrorField(t, err, "db_path")
 	})
 
 	t.Run("DBPath/NotInExtensions", func(t *testing.T) {

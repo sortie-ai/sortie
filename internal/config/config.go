@@ -27,6 +27,13 @@ type ServiceConfig struct {
 	// DBPath is the resolved filesystem path for the SQLite database.
 	// Empty string means the caller should apply its own default
 	// (typically .sortie.db adjacent to WORKFLOW.md).
+	//
+	// Relative paths are stored as-is after expansion; the caller must
+	// resolve them against the workflow file directory before use.
+	//
+	// DBPath is read once at startup to open the database. Dynamic
+	// reloads update this field in memory but have no effect on the
+	// already-open database connection.
 	DBPath string
 
 	// Extensions holds top-level front matter keys not covered by the
@@ -120,12 +127,9 @@ func NewServiceConfig(raw map[string]any) (ServiceConfig, error) {
 		return ServiceConfig{}, err
 	}
 
-	dbPath, err := expandPath(extractString(raw, "db_path"))
+	dbPath, err := buildDBPath(raw)
 	if err != nil {
-		return ServiceConfig{}, &ConfigError{
-			Field:   "db_path",
-			Message: err.Error(),
-		}
+		return ServiceConfig{}, err
 	}
 
 	extensions := make(map[string]any)
@@ -200,6 +204,34 @@ func buildHooksConfig(m map[string]any) HooksConfig {
 		BeforeRemove: extractString(m, "before_remove"),
 		TimeoutMS:    timeoutMS,
 	}
+}
+
+func buildDBPath(raw map[string]any) (string, error) {
+	v, exists := raw["db_path"]
+	if !exists || v == nil {
+		return "", nil
+	}
+	s, ok := v.(string)
+	if !ok {
+		return "", &ConfigError{
+			Field:   "db_path",
+			Message: fmt.Sprintf("expected string, got %T", v),
+		}
+	}
+	expanded, err := expandPath(s)
+	if err != nil {
+		return "", &ConfigError{
+			Field:   "db_path",
+			Message: err.Error(),
+		}
+	}
+	if s != "" && expanded == "" {
+		return "", &ConfigError{
+			Field:   "db_path",
+			Message: "resolved to empty (check environment variable)",
+		}
+	}
+	return expanded, nil
 }
 
 func buildAgentConfig(m map[string]any) (AgentConfig, error) {
