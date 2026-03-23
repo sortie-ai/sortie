@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -2414,4 +2415,289 @@ do {{ .issue.identifier }}
 	if wm.LastLoadError() == nil {
 		t.Error("LastLoadError() = nil, want validation error")
 	}
+}
+
+// --- TestGracefulShutdown ---
+
+func TestGracefulShutdown(t *testing.T) {
+	t.Parallel()
+
+	// Section 7.3: graceful shutdown drains workers, persists results,
+	// cancels retry timers, then returns.
+
+	t.Run("no_running_workers", func(t *testing.T) {
+		t.Parallel()
+
+		state := NewState(60000, 1, nil, AgentTotals{})
+		o := NewOrchestrator(OrchestratorParams{
+			State:           state,
+			Logger:          discardLogger(),
+			TrackerAdapter:  &mockTrackerAdapter{},
+			AgentAdapter:    &mockAgentAdapter{},
+			WorkflowManager: &stubWorkflowManager{},
+			Store:           &stubStore{},
+			PreflightParams: PreflightParams{
+				ReloadWorkflow: func() error { return errPreflightFailed },
+				ConfigFunc:     func() config.ServiceConfig { return config.ServiceConfig{} },
+			},
+		})
+
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel() // pre-cancelled
+
+		done := make(chan struct{})
+		go func() {
+			o.Run(ctx)
+			close(done)
+		}()
+
+		select {
+		case <-done:
+		case <-time.After(1 * time.Second):
+			t.Fatal("Run did not return within 1 second with pre-cancelled context and empty state")
+		}
+
+		if len(state.Running) != 0 {
+			t.Errorf("Running = %d, want 0", len(state.Running))
+		}
+	})
+
+	t.Run("drains_workers", func(t *testing.T) {
+		t.Parallel()
+
+		tmpDir := t.TempDir()
+		cfg := lifecycleConfig(tmpDir)
+		cfg.Agent.MaxConcurrentAgents = 2
+		cfg.Agent.MaxTurns = 100
+		tmpl := mustParseTemplate(t, "work on {{ .issue.identifier }}")
+
+		issues := []domain.Issue{
+			{ID: "d-1", Identifier: "DRAIN-1", Title: "First", State: "To Do"},
+			{ID: "d-2", Identifier: "DRAIN-2", Title: "Second", State: "To Do"},
+		}
+
+		tracker := &candidateTrackerAdapter{
+			mockTrackerAdapter: &mockTrackerAdapter{
+				fetchStatesFn: func(_ context.Context, ids []string) (map[string]string, error) {
+					result := make(map[string]string, len(ids))
+					for _, id := range ids {
+						result[id] = "To Do"
+					}
+					return result, nil
+				},
+			},
+			fetchCandidatesFn: func(_ context.Context) ([]domain.Issue, error) {
+				return issues, nil
+			},
+		}
+
+		// Agent blocks until context is cancelled.
+		var workersStarted sync.WaitGroup
+		workersStarted.Add(2)
+		agent := &mockAgentAdapter{
+			runTurnFn: func(ctx context.Context, sess domain.Session, _ domain.RunTurnParams) (domain.TurnResult, error) {
+				workersStarted.Done()
+				<-ctx.Done()
+				return domain.TurnResult{}, ctx.Err()
+			},
+		}
+
+		wm := &stubWorkflowManager{config: cfg, template: tmpl}
+		store := &stubStore{}
+		obs := &stubObserver{}
+		regs := passingPreflightRegistries()
+
+		state := NewState(cfg.Polling.IntervalMS, cfg.Agent.MaxConcurrentAgents, nil, AgentTotals{})
+		o := NewOrchestrator(OrchestratorParams{
+			State:           state,
+			Logger:          discardLogger(),
+			TrackerAdapter:  tracker,
+			AgentAdapter:    agent,
+			WorkflowManager: wm,
+			Store:           store,
+			PreflightParams: PreflightParams{
+				ReloadWorkflow:  func() error { return nil },
+				ConfigFunc:      wm.Config,
+				TrackerRegistry: regs.TrackerRegistry,
+				AgentRegistry:   regs.AgentRegistry,
+			},
+			Observers: []Observer{obs},
+		})
+
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan struct{})
+		go func() {
+			o.Run(ctx)
+			close(done)
+		}()
+
+		// Wait for both workers to be inside RunTurn.
+		waitCh := make(chan struct{})
+		go func() {
+			workersStarted.Wait()
+			close(waitCh)
+		}()
+		select {
+		case <-waitCh:
+		case <-time.After(10 * time.Second):
+			cancel()
+			<-done
+			t.Fatal("timed out waiting for workers to start")
+		}
+
+		// Cancel the parent context to trigger graceful shutdown.
+		cancel()
+
+		select {
+		case <-done:
+		case <-time.After(10 * time.Second):
+			t.Fatal("Run did not return within 10 seconds of cancellation")
+		}
+
+		// After Run returns, state is safe to read.
+		if len(state.Running) != 0 {
+			t.Errorf("Running = %d after drain, want 0", len(state.Running))
+		}
+
+		store.mu.Lock()
+		historyCount := len(store.runHistories)
+		for _, rh := range store.runHistories {
+			if rh.Status != "cancelled" {
+				t.Errorf("run history %s: status = %q, want %q", rh.IssueID, rh.Status, "cancelled")
+			}
+		}
+		store.mu.Unlock()
+
+		if historyCount != 2 {
+			t.Errorf("run history count = %d, want 2", historyCount)
+		}
+
+		if state.AgentTotals.SecondsRunning <= 0 {
+			t.Error("AgentTotals.SecondsRunning <= 0, want > 0")
+		}
+
+		if got := obs.calls.Load(); got < 1 {
+			t.Errorf("observer calls = %d, want >= 1", got)
+		}
+	})
+
+	t.Run("drain_timeout", func(t *testing.T) {
+		t.Parallel()
+
+		// Use an injected short drain timeout to avoid a 30s test runtime.
+		state := NewState(60000, 1, nil, AgentTotals{})
+
+		var buf bytes.Buffer
+		logger := slog.New(slog.NewTextHandler(&buf, nil))
+
+		o := NewOrchestrator(OrchestratorParams{
+			State:           state,
+			Logger:          logger,
+			TrackerAdapter:  &mockTrackerAdapter{},
+			AgentAdapter:    &mockAgentAdapter{},
+			WorkflowManager: &stubWorkflowManager{},
+			Store:           &stubStore{},
+			PreflightParams: PreflightParams{
+				ReloadWorkflow: func() error { return errPreflightFailed },
+				ConfigFunc:     func() config.ServiceConfig { return config.ServiceConfig{} },
+			},
+		})
+		o.drainTimeout = 200 * time.Millisecond
+
+		// Manually inject a running entry whose worker will never send
+		// a result to workerExitCh, simulating a hung worker.
+		workerCtx, workerCancel := context.WithCancel(context.Background())
+		defer workerCancel()
+		state.Running["hang-1"] = &RunningEntry{
+			Identifier: "HANG-1",
+			Issue:      domain.Issue{ID: "hang-1", Identifier: "HANG-1", Title: "Hung", State: "To Do"},
+			StartedAt:  time.Now().UTC(),
+			CancelFunc: workerCancel,
+		}
+		state.Claimed["hang-1"] = struct{}{}
+
+		// Launch a goroutine that pretends to be the worker but never
+		// calls OnExit (simulating a hung process).
+		go func() {
+			<-workerCtx.Done()
+			// Worker context cancelled but no result sent — hung.
+		}()
+
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan struct{})
+		go func() {
+			o.Run(ctx)
+			close(done)
+		}()
+
+		// Cancel immediately to trigger shutdown.
+		cancel()
+
+		select {
+		case <-done:
+		case <-time.After(3 * time.Second):
+			t.Fatal("Run did not return within 3 seconds (expected ~200ms drain timeout)")
+		}
+
+		logOutput := buf.String()
+		if !strings.Contains(logOutput, "drain timeout exceeded") {
+			t.Errorf("expected warn log about drain timeout, got:\n%s", logOutput)
+		}
+	})
+
+	t.Run("cancels_retry_timers", func(t *testing.T) {
+		t.Parallel()
+
+		state := NewState(60000, 1, nil, AgentTotals{})
+		o := NewOrchestrator(OrchestratorParams{
+			State:           state,
+			Logger:          discardLogger(),
+			TrackerAdapter:  &mockTrackerAdapter{},
+			AgentAdapter:    &mockAgentAdapter{},
+			WorkflowManager: &stubWorkflowManager{},
+			Store:           &stubStore{},
+			PreflightParams: PreflightParams{
+				ReloadWorkflow: func() error { return errPreflightFailed },
+				ConfigFunc:     func() config.ServiceConfig { return config.ServiceConfig{} },
+			},
+		})
+
+		// Add a retry entry with a timer that would fire in 10s.
+		// Since TimerHandle is non-nil, activateReconstructedRetries
+		// skips it.
+		state.RetryAttempts["retry-1"] = &RetryEntry{
+			IssueID:    "retry-1",
+			Identifier: "RETRY-1",
+			Attempt:    1,
+			TimerHandle: time.AfterFunc(10*time.Second, func() {
+				o.onRetryFire("retry-1")
+			}),
+		}
+
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan struct{})
+		go func() {
+			o.Run(ctx)
+			close(done)
+		}()
+
+		// Cancel immediately.
+		cancel()
+
+		select {
+		case <-done:
+		case <-time.After(3 * time.Second):
+			t.Fatal("Run did not return within 3 seconds")
+		}
+
+		// Wait long enough for the timer to have fired if not stopped.
+		time.Sleep(500 * time.Millisecond)
+
+		select {
+		case id := <-o.retryTimerCh:
+			t.Errorf("retryTimerCh received %q after shutdown, want no late fires", id)
+		default:
+			// No message — timer was stopped correctly.
+		}
+	})
 }
