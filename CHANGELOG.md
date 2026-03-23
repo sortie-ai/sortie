@@ -9,6 +9,38 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.0.6] - 2026-03-23
+
+### Added
+
+- Orchestrator engine with state management, concurrency-limited dispatch,
+  worker lifecycle, exponential-backoff retry scheduling, active-run
+  reconciliation, and event-driven poll loop with graceful shutdown.
+- Full startup sequence: workflow load, preflight validation, database open,
+  state reconciliation, and poll loop — in that order.
+- Dispatch preflight checks that validate adapter availability, required API
+  keys, and agent configuration before dispatching work.
+- Adapter metadata via `AdapterMeta` and `RegisterWithMeta` so adapters can
+  declare requirements (e.g., `RequiresAPIKey`) checked during preflight.
+- Retry classification on `TrackerErrorKind` and `AgentErrorKind` — errors
+  are now classified as retryable or permanent for dispatch decisions.
+- `ErrTrackerNotFound` error kind for HTTP 404 responses from tracker
+  adapters.
+- Configurable `db_path` field in workflow configuration with `~` and `$VAR`
+  expansion.
+- Workflow validation callback (`ValidateFunc`) that guards config promotion
+  during hot-reload.
+
+### Fixed
+
+- Workspace `CleanupByPath` now rejects non-canonical paths and uses the
+  actual workspace path for pending cleanup instead of reconstructing it
+  from config.
+- Startup: preflight checks now run before opening the database, preventing
+  `.sortie.db` creation when configuration is invalid.
+- Startup: `.sortie.db` is now created adjacent to WORKFLOW.md instead of in
+  the working directory.
+
 ## [0.0.5] - 2026-03-21
 
 ### Added
@@ -120,7 +152,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   execution via GitHub Actions.
 - Architecture Decision Records (ADR-0001 through ADR-0005).
 
-[Unreleased]: https://github.com/sortie-ai/sortie/compare/0.0.5...HEAD
+[Unreleased]: https://github.com/sortie-ai/sortie/compare/0.0.6...HEAD
+[0.0.6]: https://github.com/sortie-ai/sortie/compare/0.0.5...0.0.6
 [0.0.5]: https://github.com/sortie-ai/sortie/compare/0.0.4...0.0.5
 [0.0.4]: https://github.com/sortie-ai/sortie/compare/0.0.3...0.0.4
 [0.0.3]: https://github.com/sortie-ai/sortie/compare/0.0.2...0.0.3
