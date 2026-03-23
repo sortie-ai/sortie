@@ -7,16 +7,16 @@ Sortie turns issue tracker tickets into autonomous coding agent sessions.
 Engineers manage work at the ticket level. Agents handle implementation.
 Single binary, zero dependencies, SQLite persistence.
 
-> Sortie is in active development. Core components (tracker adapters, agent adapters, workspace management) are implemented. The orchestrator integration is in progress. See [TODO.md](TODO.md) for current status.
+> Sortie is in active development. Core components (tracker adapters, agent adapters,
+> workspace management) are implemented. The orchestrator integration is in progress.
+> See [TODO.md](TODO.md) for current status.
 
 ## The Problem
 
-Coding agents can handle routine engineering tasks: bug fixes,
-dependency updates, test coverage, build features. But running
-them at scale requires infrastructure that doesn't exist yet:
-isolated workspaces, retry logic, state reconciliation, tracker
-integration, cost tracking. Teams build this ad-hoc, poorly,
-and differently each time.
+Coding agents can handle routine engineering tasks: bug fixes, dependency updates, test
+coverage, build features. But running them at scale requires infrastructure that doesn't
+exist yet: isolated workspaces, retry logic, state reconciliation, tracker integration,
+cost tracking. Teams build this ad-hoc, poorly, and differently each time.
 
 Sortie is that infrastructure.
 
@@ -31,6 +31,7 @@ tracker:
   project: PLATFORM
   query_filter: "component = 'billing-api' AND labels = 'agent-ready'"
   active_states: [To Do, In Progress]
+  handoff_state: Human Review
   terminal_states: [Done, Won't Do]
 
 agent:
