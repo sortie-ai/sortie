@@ -209,7 +209,7 @@ func HandleWorkerExit(state *State, result WorkerResult, params HandleWorkerExit
 		ScheduleRetry(state, ScheduleRetryParams{
 			IssueID:    result.IssueID,
 			Identifier: result.Identifier,
-			Attempt:    1,
+			Attempt:    NextAttempt(entry.RetryAttempt),
 			DelayMS:    continuationDelayMS,
 			Error:      "",
 		}, params.OnRetryFire)
