@@ -178,3 +178,76 @@ func TestBuildKeyINJQL(t *testing.T) {
 		})
 	}
 }
+
+func TestBuildIDINJQL(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		ids  []string
+		want string
+	}{
+		{
+			name: "two numeric IDs",
+			ids:  []string{"10001", "10002"},
+			want: "id IN (10001, 10002) ORDER BY key ASC",
+		},
+		{
+			name: "single ID",
+			ids:  []string{"42"},
+			want: "id IN (42) ORDER BY key ASC",
+		},
+		{
+			name: "non-digit characters stripped",
+			ids:  []string{"abc123", "45x6"},
+			want: "id IN (123, 456) ORDER BY key ASC",
+		},
+		{
+			name: "all-non-digit ID skipped",
+			ids:  []string{"abc", "123"},
+			want: "id IN (123) ORDER BY key ASC",
+		},
+		{
+			name: "empty input",
+			ids:  []string{},
+			want: "id IN () ORDER BY key ASC",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := buildIDINJQL(tt.ids)
+			if got != tt.want {
+				t.Errorf("buildIDINJQL(%v) =\n  %q\nwant\n  %q", tt.ids, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestStripNonDigits(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{"pure digits", "12345", "12345"},
+		{"mixed", "abc123def456", "123456"},
+		{"no digits", "abcdef", ""},
+		{"empty", "", ""},
+		{"special chars", "1-2.3/4", "1234"},
+		{"spaces", " 1 2 3 ", "123"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := stripNonDigits(tt.input)
+			if got != tt.want {
+				t.Errorf("stripNonDigits(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
