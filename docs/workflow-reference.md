@@ -237,6 +237,36 @@ workspace:
 **Workspace key sanitization:** Only `[A-Za-z0-9._-]` are allowed. All other characters in
 the issue identifier are replaced with `_`.
 
+#### Changing `workspace.root`
+
+> **Warning:** Changing `workspace.root` and restarting the orchestrator will leave the
+> old workspace directory on disk. Sortie's startup cleanup scans only the path that is
+> currently configured, so any directories under the previous root become orphans and
+> accumulate disk space until removed manually.
+
+**Why this happens:** On startup, Sortie lists workspace subdirectory names under
+`workspace.root`, queries the tracker for their states, and removes any whose issues are
+in terminal states. Because the scan is anchored to the configured root, a prior root is
+never consulted.
+
+**Disk leak scenario:**
+
+1. Sortie runs with `workspace.root: /data/old_runs` (contains `BUG-1/`, `BUG-2/`).
+2. You update config to `workspace.root: /mnt/new_runs` and restart the process.
+3. Startup cleanup scans `/mnt/new_runs` — finds nothing to clean.
+4. `/data/old_runs/BUG-1` and `/data/old_runs/BUG-2` remain on disk permanently.
+
+**How to migrate `workspace.root` safely:**
+
+1. Stop the Sortie process.
+2. Remove workspace directories from the old root: `rm -rf /data/old_runs/*`
+3. Update `workspace.root` in `WORKFLOW.md`.
+4. Restart Sortie.
+
+> **Note:** Dynamic changes to `workspace.root` at runtime (without a restart) are safe
+> for in-flight sessions — cleanup for already-running sessions uses the path stored in
+> memory at the time the session was started.
+
 ---
 
 ### 2.5 `hooks` — Workspace Lifecycle Hooks
