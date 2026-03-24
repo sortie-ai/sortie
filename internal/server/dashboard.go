@@ -182,12 +182,14 @@ func buildDashboardData(
 		OutputTokens:   snap.AgentTotals.OutputTokens,
 	}
 
-	// Sort running entries by StartedAt ascending before mapping.
-	sort.Slice(snap.Running, func(i, j int) bool {
-		return snap.Running[i].StartedAt.Before(snap.Running[j].StartedAt)
+	// Copy and sort running entries by StartedAt ascending before mapping.
+	sortedRunning := make([]orchestrator.SnapshotRunningEntry, len(snap.Running))
+	copy(sortedRunning, snap.Running)
+	sort.Slice(sortedRunning, func(i, j int) bool {
+		return sortedRunning[i].StartedAt.Before(sortedRunning[j].StartedAt)
 	})
-	running := make([]dashboardRunningEntry, len(snap.Running))
-	for i, e := range snap.Running {
+	running := make([]dashboardRunningEntry, len(sortedRunning))
+	for i, e := range sortedRunning {
 		dur := snap.GeneratedAt.Sub(e.StartedAt)
 		if dur < 0 {
 			dur = 0
@@ -204,12 +206,14 @@ func buildDashboardData(
 	}
 	data.Running = running
 
-	// Sort retry entries by DueAtMS ascending before mapping.
-	sort.Slice(snap.Retrying, func(i, j int) bool {
-		return snap.Retrying[i].DueAtMS < snap.Retrying[j].DueAtMS
+	// Copy and sort retry entries by DueAtMS ascending before mapping.
+	sortedRetrying := make([]orchestrator.SnapshotRetryEntry, len(snap.Retrying))
+	copy(sortedRetrying, snap.Retrying)
+	sort.Slice(sortedRetrying, func(i, j int) bool {
+		return sortedRetrying[i].DueAtMS < sortedRetrying[j].DueAtMS
 	})
-	retrying := make([]dashboardRetryEntry, len(snap.Retrying))
-	for i, e := range snap.Retrying {
+	retrying := make([]dashboardRetryEntry, len(sortedRetrying))
+	for i, e := range sortedRetrying {
 		retrying[i] = dashboardRetryEntry{
 			Identifier: e.Identifier,
 			Attempt:    e.Attempt,
