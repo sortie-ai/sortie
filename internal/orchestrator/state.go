@@ -293,16 +293,22 @@ type RuntimeSnapshotResult struct {
 
 // RuntimeSnapshot captures a point-in-time view of the orchestrator's
 // runtime state. The now parameter controls the snapshot timestamp and
-// the active-session elapsed time computation. Callers on the event
-// loop goroutine pass time.Now(); test callers pass a fixed time for
-// deterministic assertions.
+// the active-session elapsed time computation; it is normalized to UTC
+// internally. Callers on the event loop goroutine pass time.Now();
+// test callers pass a fixed time for deterministic assertions.
 //
-// The returned result contains copied-out data — callers may serialize
-// or retain it without synchronization concerns.
+// The returned result contains copied-out data for Running, Retrying,
+// and AgentTotals — callers may serialize or retain those fields without
+// synchronization concerns.
+//
+// RateLimits is shallow-copied from State.AgentRateLimits.Data and may
+// alias nested mutable values. Callers must treat RateLimits and any
+// values it references as read-only and only perform concurrent reads.
 //
 // Must be called from the orchestrator's event loop goroutine. [State]
 // is not safe for concurrent access.
 func RuntimeSnapshot(state *State, now time.Time) RuntimeSnapshotResult {
+	now = now.UTC()
 	result := RuntimeSnapshotResult{
 		GeneratedAt: now,
 		Running:     make([]SnapshotRunningEntry, 0, len(state.Running)),
