@@ -111,10 +111,13 @@ func New(params Params) *Server {
 		slotFunc:      params.SlotFunc,
 	}
 
+	// Dashboard route. Method-specific pattern so non-GET methods
+	// receive the default 405 response from Go's ServeMux.
+	mux.HandleFunc("GET /{$}", s.handleDashboard)
+
 	// API routes. Use method-agnostic patterns with internal method
 	// checking so 405 responses use JSON error envelopes instead of
 	// the default plain-text body from Go's ServeMux.
-	mux.HandleFunc("GET /{$}", s.handleDashboard)
 	mux.HandleFunc("/api/v1/state", s.routeState)
 	mux.HandleFunc("/api/v1/refresh", s.routeRefresh)
 	mux.HandleFunc("/api/v1/{identifier}", s.routeIssueDetail)

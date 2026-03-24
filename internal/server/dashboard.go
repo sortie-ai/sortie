@@ -61,21 +61,18 @@ type dashboardRetryEntry struct {
 
 // fmtInt formats an int64 with comma thousand separators.
 func fmtInt(v int64) string {
-	if v == 0 {
-		return "0"
-	}
-
-	negative := v < 0
-	if negative {
-		v = -v
-	}
-
+	// Format first to avoid negation overflow on math.MinInt64.
 	s := strconv.FormatInt(v, 10)
-	n := len(s)
+
+	digits := s
+	negative := false
+	if s[0] == '-' {
+		negative = true
+		digits = s[1:]
+	}
+
+	n := len(digits)
 	if n <= 3 {
-		if negative {
-			return "-" + s
-		}
 		return s
 	}
 
@@ -84,7 +81,7 @@ func fmtInt(v int64) string {
 	buf := make([]byte, n+commas)
 	j := len(buf) - 1
 	for i := n - 1; i >= 0; i-- {
-		buf[j] = s[i]
+		buf[j] = digits[i]
 		j--
 		if (n-i)%3 == 0 && i > 0 {
 			buf[j] = ','
@@ -164,9 +161,17 @@ func buildDashboardData(
 		}
 	}
 
+	uptimeDur := time.Duration(0)
+	if !startedAt.IsZero() {
+		uptimeDur = now.Sub(startedAt)
+		if uptimeDur < 0 {
+			uptimeDur = 0
+		}
+	}
+
 	data := dashboardData{
 		Version:        version,
-		Uptime:         formatDuration(now.Sub(startedAt)),
+		Uptime:         formatDuration(uptimeDur),
 		GeneratedAt:    snap.GeneratedAt,
 		RunningCount:   runningCount,
 		RetryingCount:  len(snap.Retrying),
@@ -177,7 +182,10 @@ func buildDashboardData(
 		OutputTokens:   snap.AgentTotals.OutputTokens,
 	}
 
-	// Map running entries, sorted by StartedAt ascending.
+	// Sort running entries by StartedAt ascending before mapping.
+	sort.Slice(snap.Running, func(i, j int) bool {
+		return snap.Running[i].StartedAt.Before(snap.Running[j].StartedAt)
+	})
 	running := make([]dashboardRunningEntry, len(snap.Running))
 	for i, e := range snap.Running {
 		dur := snap.GeneratedAt.Sub(e.StartedAt)
@@ -194,12 +202,12 @@ func buildDashboardData(
 			DetailURL:   "/api/v1/" + url.PathEscape(e.Identifier),
 		}
 	}
-	sort.Slice(running, func(i, j int) bool {
-		return snap.Running[i].StartedAt.Before(snap.Running[j].StartedAt)
-	})
 	data.Running = running
 
-	// Map retry entries, sorted by DueAtMS ascending.
+	// Sort retry entries by DueAtMS ascending before mapping.
+	sort.Slice(snap.Retrying, func(i, j int) bool {
+		return snap.Retrying[i].DueAtMS < snap.Retrying[j].DueAtMS
+	})
 	retrying := make([]dashboardRetryEntry, len(snap.Retrying))
 	for i, e := range snap.Retrying {
 		retrying[i] = dashboardRetryEntry{
@@ -209,9 +217,6 @@ func buildDashboardData(
 			Error:      e.Error,
 		}
 	}
-	sort.Slice(retrying, func(i, j int) bool {
-		return snap.Retrying[i].DueAtMS < snap.Retrying[j].DueAtMS
-	})
 	data.Retrying = retrying
 
 	return data
