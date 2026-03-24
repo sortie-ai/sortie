@@ -111,6 +111,15 @@ func HandleWorkerExit(state *State, result WorkerResult, params HandleWorkerExit
 	}
 	delete(state.Running, result.IssueID)
 
+	// Enrich with session context now that both sources are available.
+	// Prefer result.SessionID (authoritative from the adapter) over
+	// entry.SessionID (depends on EventSessionStarted processing order).
+	if sid := result.SessionID; sid != "" {
+		log = logging.WithSession(log, sid)
+	} else if entry.SessionID != "" {
+		log = logging.WithSession(log, entry.SessionID)
+	}
+
 	// Capture the actual workspace path from the worker result so that
 	// PendingCleanup operates on the real directory, not a path
 	// reconstructed from potentially-changed config.

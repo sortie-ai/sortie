@@ -225,7 +225,7 @@ func (o *Orchestrator) handleTick(ctx context.Context) {
 	// observers so the UI reflects the reconciliation outcome.
 	if !validation.OK() {
 		o.logger.Error("dispatch preflight failed",
-			slog.String("validation_error", validation.Error()),
+			slog.Any("error", validation),
 		)
 		o.notifyObservers()
 		return

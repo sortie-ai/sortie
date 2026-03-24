@@ -118,7 +118,7 @@ Rules:
 
 - Every `Error` must include an `"error"` attribute with the original `error` value (not `.Error()` string).
 - `Warn` is for things the operator should know but that the system handles automatically. If the system cannot continue, use `Error`.
-- `Debug` should be cheap to produce. `slog` handlers skip formatting when the level is below threshold (zero allocation at `Info` default). No explicit `logger.Enabled()` guard is needed unless the attribute construction itself is expensive.
+- `Debug` should be cheap to produce. `slog` handlers skip formatting and handler work when the level is below threshold, but attribute arguments are still evaluated. Use `logger.Enabled(ctx, slog.LevelDebug)` only when constructing attributes is noticeably expensive (e.g., JSON marshaling or building large strings).
 - Never use `slog.Log` with custom numeric levels. Four levels are enough.
 
 ### Hot-Path Debug Logging
@@ -173,16 +173,23 @@ logger.Error("persistence failed", slog.String("error", err.Error()))
 
 ### Non-error diagnostic strings
 
-For diagnostic strings that are not Go `error` values (e.g., validation summaries, preflight results), use a descriptive key — never `"error"`:
+For diagnostic strings that are not Go `error` values and the source type does not satisfy the `error` interface, use a descriptive key — never `"error"`:
 
 ```go
-// ✅ Distinct key for non-error diagnostic.
-logger.Warn("preflight check failed",
-    slog.String("validation_error", validation.Error()))
+// ✅ Distinct key for a plain string diagnostic.
+logger.Warn("hook output unexpected",
+    slog.String("hook_output", truncatedOutput))
 
-// ❌ Collides with the error convention, confuses log processors.
-logger.Warn("preflight check failed",
-    slog.String("error", validation.Error()))
+// ❌ Collides with the error convention.
+logger.Warn("hook output unexpected",
+    slog.String("error", truncatedOutput))
+```
+
+If the source type satisfies `error` (has an `Error() string` method), use `slog.Any("error", val)` — even if it wraps a validation summary rather than a runtime failure:
+
+```go
+// ✅ PreflightResult satisfies error — use slog.Any.
+logger.Error("dispatch preflight failed", slog.Any("error", validation))
 ```
 
 ### Decision-point logging

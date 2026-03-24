@@ -119,8 +119,9 @@ func HandleAgentEvent(state *State, issueID string, event domain.AgentEvent, log
 		}
 	}
 
-	// Emit a Debug-level summary for observability. Gated by the handler's
-	// level check so zero allocation occurs at Info and above.
+	// Emit a Debug-level summary for observability. Handlers skip
+	// formatting at higher log levels; attribute construction here is
+	// cheap enough that no additional log.Enabled guard is required.
 	switch event.Type {
 	case domain.EventSessionStarted:
 		log.Debug("agent event processed",
