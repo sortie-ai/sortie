@@ -625,7 +625,7 @@ JSON API + HTML dashboard, Prometheus `/metrics`), and adds agent capabilities.
       **Verify:** unit test populates orchestrator state, calls snapshot, confirms all
       fields are populated including computed `seconds_running`.
 
-- [ ] 8.4 Implement the JSON API server (Section 13.7.2): `GET /api/v1/state`,
+- [x] 8.4 Implement the JSON API server (Section 13.7.2): `GET /api/v1/state`,
       `GET /api/v1/<identifier>` (404 for unknown issues), `POST /api/v1/refresh` (202
       Accepted). Use Go `net/http` and `encoding/json`. Bind to loopback by default. Enable
       via `--port` flag (overrides `server.port` from WORKFLOW.md). Read `server.port` from

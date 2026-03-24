@@ -387,12 +387,24 @@ server:
 
 | Field         | Type    | Required | Default                      | Dynamic Reload            | Description                                                  |
 | ------------- | ------- | -------- | ---------------------------- | ------------------------- | ------------------------------------------------------------ |
-| `server.port` | integer | No       | _(absent — server disabled)_ | **No** — requires restart | Reserved for the planned embedded HTTP observability server. |
+| `server.port` | integer | No       | _(absent — server disabled)_ | **No** — requires restart | TCP port for the embedded HTTP observability server.          |
 
-> **Not yet implemented.** The `server.port` field is collected into `Extensions` and
-> stored but has no runtime effect in the current release. The `--port` CLI flag is
-> parsed and logged at startup but does not start a listener. Neither field is validated
-> beyond YAML type coercion.
+When `server.port` is set (or `--port` is passed on the CLI), Sortie starts an HTTP
+server on `127.0.0.1:<port>` exposing a JSON API for runtime observability and
+operational control. The CLI `--port` flag takes precedence over `server.port`.
+Port `0` requests an ephemeral OS-assigned port.
+
+#### API Endpoints
+
+| Method | Path                     | Description                                                        |
+| ------ | ------------------------ | ------------------------------------------------------------------ |
+| GET    | `/api/v1/state`          | System-wide runtime snapshot (running sessions, retry queue, aggregate token/runtime totals, rate limits). |
+| GET    | `/api/v1/{identifier}`   | Per-issue detail for a specific issue identifier. Returns 404 for unknown issues. |
+| POST   | `/api/v1/refresh`        | Trigger an immediate poll+reconciliation cycle. Returns 202 Accepted. Best-effort; repeated requests are coalesced. |
+
+All responses use `Content-Type: application/json; charset=utf-8`. Error responses
+use a standard envelope: `{"error": {"code": "...", "message": "..."}}`.
+Unsupported methods return 405 with the error envelope.
 
 ### 3.2 `worker` — SSH Worker Extension
 
@@ -953,7 +965,7 @@ A flat reference of every configuration field, for quick lookup.
 | `agent.max_sessions`                    | integer          | `0`                          | Unlimited; dynamic reload                                                              |
 | `db_path`                               | path             | `.sortie.db`                 | Restart required                                                                       |
 | **Extensions**                          |                  |                              |                                                                                        |
-| `server.port`                           | integer          | _(absent)_                   | **Not yet implemented.** Stored but has no runtime effect; CLI `--port` is logged only |
+| `server.port`                           | integer          | _(absent)_                   | TCP port for the embedded HTTP observability server; CLI `--port` overrides             |
 | `worker.ssh_hosts`                      | `[string]`       | _(absent)_                   | **Not yet implemented.** Stored but has no runtime effect                              |
 | `worker.max_concurrent_agents_per_host` | integer          | _(absent)_                   | **Not yet implemented.** Per-host cap; stored but has no runtime effect                |
 

@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"time"
 
@@ -37,6 +38,14 @@ type Observer interface {
 	// OnStateChange is called after each event loop iteration that
 	// modifies state (tick completion, worker exit, retry fire).
 	OnStateChange()
+}
+
+// SnapshotRequest is a request for a point-in-time runtime snapshot.
+// Sent by external consumers (HTTP server) through the snapshotCh
+// channel. The orchestrator's event loop processes it and sends the
+// result on ReplyCh.
+type SnapshotRequest struct {
+	ReplyCh chan<- RuntimeSnapshotResult
 }
 
 // agentEventMsg pairs an issue ID with the agent event for delivery
@@ -75,6 +84,8 @@ type Orchestrator struct {
 	workerExitCh chan WorkerResult
 	retryTimerCh chan string
 	agentEventCh chan agentEventMsg
+	snapshotCh   chan SnapshotRequest
+	refreshCh    chan struct{}
 
 	preflightParams PreflightParams
 	observers       []Observer
@@ -109,6 +120,8 @@ func NewOrchestrator(params OrchestratorParams) *Orchestrator {
 		workerExitCh:    make(chan WorkerResult, exitBuf),
 		retryTimerCh:    make(chan string, retryBuf),
 		agentEventCh:    make(chan agentEventMsg, eventBuf),
+		snapshotCh:      make(chan SnapshotRequest, 4),
+		refreshCh:       make(chan struct{}, 1),
 		preflightParams: params.PreflightParams,
 		observers:       observers,
 		drainTimeout:    defaultDrainTimeout,
@@ -175,6 +188,13 @@ func (o *Orchestrator) Run(ctx context.Context) {
 
 		case msg := <-o.agentEventCh:
 			HandleAgentEvent(o.state, msg.IssueID, msg.Event, o.logger)
+
+		case req := <-o.snapshotCh:
+			snap := RuntimeSnapshot(o.state, time.Now())
+			req.ReplyCh <- snap
+
+		case <-o.refreshCh:
+			o.handleTick(ctx)
 		}
 	}
 }
@@ -405,6 +425,10 @@ func (o *Orchestrator) drainRunningWorkers() {
 		case msg := <-o.agentEventCh:
 			HandleAgentEvent(o.state, msg.IssueID, msg.Event, o.logger)
 
+		case req := <-o.snapshotCh:
+			snap := RuntimeSnapshot(o.state, time.Now())
+			req.ReplyCh <- snap
+
 		case <-deadline.C:
 			o.logger.Warn("drain timeout exceeded, abandoning workers",
 				slog.Int("remaining", len(o.state.Running)),
@@ -430,5 +454,52 @@ func (o *Orchestrator) cancelRetryTimers() {
 func (o *Orchestrator) notifyObservers() {
 	for _, obs := range o.observers {
 		obs.OnStateChange()
+	}
+}
+
+// AddObserver appends an observer to the notification list. Must be
+// called before [Orchestrator.Run] or between event loop iterations
+// (i.e., never concurrently with the event loop).
+func (o *Orchestrator) AddObserver(obs Observer) {
+	o.observers = append(o.observers, obs)
+}
+
+// SnapshotFunc returns a function that retrieves a point-in-time
+// runtime snapshot via the event loop channel. The returned function
+// is safe to call from any goroutine. It blocks until the event loop
+// produces the snapshot or a 5-second timeout expires.
+func (o *Orchestrator) SnapshotFunc() func() (RuntimeSnapshotResult, error) {
+	return func() (RuntimeSnapshotResult, error) {
+		replyCh := make(chan RuntimeSnapshotResult, 1)
+		req := SnapshotRequest{ReplyCh: replyCh}
+
+		select {
+		case o.snapshotCh <- req:
+		case <-time.After(5 * time.Second):
+			return RuntimeSnapshotResult{}, fmt.Errorf("timed out sending snapshot request")
+		}
+
+		select {
+		case snap := <-replyCh:
+			return snap, nil
+		case <-time.After(5 * time.Second):
+			return RuntimeSnapshotResult{}, fmt.Errorf("timed out waiting for snapshot reply")
+		}
+	}
+}
+
+// RefreshFunc returns a function that signals the orchestrator to
+// perform an immediate poll+reconciliation cycle. Returns true if the
+// signal was accepted, false if it was coalesced (a refresh was
+// already pending). The returned function is safe to call from any
+// goroutine.
+func (o *Orchestrator) RefreshFunc() func() bool {
+	return func() bool {
+		select {
+		case o.refreshCh <- struct{}{}:
+			return true
+		default:
+			return false
+		}
 	}
 }

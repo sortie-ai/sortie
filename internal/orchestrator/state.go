@@ -259,6 +259,7 @@ type SnapshotRunningEntry struct {
 	AgentInputTokens   int64                 `json:"input_tokens"`
 	AgentOutputTokens  int64                 `json:"output_tokens"`
 	AgentTotalTokens   int64                 `json:"total_tokens"`
+	WorkspacePath      string                `json:"workspace_path"`
 }
 
 // SnapshotRetryEntry is a read-only view of a pending retry for
@@ -330,6 +331,7 @@ func RuntimeSnapshot(state *State, now time.Time) RuntimeSnapshotResult {
 			AgentInputTokens:   entry.AgentInputTokens,
 			AgentOutputTokens:  entry.AgentOutputTokens,
 			AgentTotalTokens:   entry.AgentTotalTokens,
+			WorkspacePath:      entry.WorkspacePath,
 		})
 
 		if !entry.StartedAt.IsZero() {

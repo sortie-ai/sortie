@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -22,6 +23,7 @@ import (
 	"github.com/sortie-ai/sortie/internal/orchestrator"
 	"github.com/sortie-ai/sortie/internal/persistence"
 	"github.com/sortie-ai/sortie/internal/registry"
+	"github.com/sortie-ai/sortie/internal/server"
 	"github.com/sortie-ai/sortie/internal/workflow"
 	"github.com/sortie-ai/sortie/internal/workspace"
 
@@ -242,6 +244,16 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 		}
 	}
 
+	// --- Server port resolution ---
+
+	serverPort, serverEnabled := resolveServerPort(*port, portSet, cfg.Extensions)
+	if serverEnabled && serverPort < 0 {
+		logger.Warn("invalid server port, server will not start",
+			slog.Int("port", serverPort),
+		)
+		serverEnabled = false
+	}
+
 	// --- Orchestrator construction and event loop ---
 
 	logger.Info("sortie started")
@@ -256,7 +268,36 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 		PreflightParams: preflightParams,
 	})
 
+	var srv *server.Server
+	if serverEnabled {
+		addr := fmt.Sprintf("127.0.0.1:%d", serverPort)
+		srv = server.New(server.Params{
+			SnapshotFn: o.SnapshotFunc(),
+			RefreshFn:  o.RefreshFunc(),
+			Logger:     logger,
+			Addr:       addr,
+		})
+		o.AddObserver(srv)
+
+		go func() {
+			logger.Info("http server starting",
+				slog.String("addr", addr),
+			)
+			if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+				logger.Error("http server error", slog.Any("error", err))
+			}
+		}()
+	}
+
 	o.Run(ctx)
+
+	if srv != nil {
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer shutdownCancel()
+		if err := srv.Shutdown(shutdownCtx); err != nil {
+			logger.Error("http server shutdown error", slog.Any("error", err))
+		}
+	}
 
 	logger.Info("shutting down")
 	return 0
@@ -337,4 +378,27 @@ func resolveDBPath(cfgPath, workflowDir string) string {
 		return cfgPath
 	}
 	return filepath.Join(workflowDir, cfgPath)
+}
+
+// resolveServerPort determines the effective HTTP server port from the
+// CLI flag and workflow extensions. Returns the port and whether the
+// server should be started.
+func resolveServerPort(portFlag int, portFlagSet bool, extensions map[string]any) (int, bool) {
+	if portFlagSet {
+		return portFlag, true
+	}
+
+	serverExt, ok := extensions["server"].(map[string]any)
+	if !ok {
+		return 0, false
+	}
+
+	switch v := serverExt["port"].(type) {
+	case int:
+		return v, true
+	case float64:
+		return int(v), true
+	default:
+		return 0, false
+	}
 }

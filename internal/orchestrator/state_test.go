@@ -493,4 +493,45 @@ func TestRuntimeSnapshot(t *testing.T) {
 			t.Errorf("AgentTotals.SecondsRunning = %f, want 50.0 (zero StartedAt should contribute 0)", result.AgentTotals.SecondsRunning)
 		}
 	})
+
+	t.Run("WorkspacePath copied to snapshot", func(t *testing.T) {
+		t.Parallel()
+
+		state := NewState(5000, 10, nil, AgentTotals{})
+		state.Running["ws-issue"] = &RunningEntry{
+			Identifier:    "MT-600",
+			Issue:         domain.Issue{ID: "ws-issue", State: "In Progress"},
+			StartedAt:     fixedNow.Add(-30 * time.Second),
+			WorkspacePath: "/tmp/workspaces/mt-600",
+		}
+
+		result := RuntimeSnapshot(state, fixedNow)
+
+		if len(result.Running) != 1 {
+			t.Fatalf("len(Running) = %d, want 1", len(result.Running))
+		}
+		if result.Running[0].WorkspacePath != "/tmp/workspaces/mt-600" {
+			t.Errorf("WorkspacePath = %q, want %q", result.Running[0].WorkspacePath, "/tmp/workspaces/mt-600")
+		}
+	})
+
+	t.Run("empty WorkspacePath preserved", func(t *testing.T) {
+		t.Parallel()
+
+		state := NewState(5000, 10, nil, AgentTotals{})
+		state.Running["no-ws"] = &RunningEntry{
+			Identifier: "MT-700",
+			Issue:      domain.Issue{ID: "no-ws", State: "To Do"},
+			StartedAt:  fixedNow.Add(-10 * time.Second),
+		}
+
+		result := RuntimeSnapshot(state, fixedNow)
+
+		if len(result.Running) != 1 {
+			t.Fatalf("len(Running) = %d, want 1", len(result.Running))
+		}
+		if result.Running[0].WorkspacePath != "" {
+			t.Errorf("WorkspacePath = %q, want empty string", result.Running[0].WorkspacePath)
+		}
+	})
 }

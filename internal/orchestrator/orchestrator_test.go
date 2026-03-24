@@ -2906,3 +2906,198 @@ func TestGracefulShutdown(t *testing.T) {
 		}
 	})
 }
+
+// --- SnapshotFunc / RefreshFunc / AddObserver tests ---
+
+func TestSnapshotFunc(t *testing.T) {
+	t.Parallel()
+
+	t.Run("round-trip through event loop", func(t *testing.T) {
+		t.Parallel()
+
+		state := NewState(60000, 1, nil, AgentTotals{InputTokens: 42})
+
+		o := NewOrchestrator(OrchestratorParams{
+			State:           state,
+			Logger:          discardLogger(),
+			TrackerAdapter:  &mockTrackerAdapter{},
+			AgentAdapter:    &mockAgentAdapter{},
+			WorkflowManager: &stubWorkflowManager{},
+			Store:           &stubStore{},
+			PreflightParams: PreflightParams{
+				ReloadWorkflow: func() error { return errPreflightFailed },
+				ConfigFunc:     func() config.ServiceConfig { return config.ServiceConfig{} },
+			},
+		})
+
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan struct{})
+		go func() {
+			o.Run(ctx)
+			close(done)
+		}()
+
+		// Wait for the initial tick so the event loop is ready.
+		time.Sleep(100 * time.Millisecond)
+
+		snapFn := o.SnapshotFunc()
+		snap, err := snapFn()
+		if err != nil {
+			t.Fatalf("SnapshotFunc() error = %v", err)
+		}
+
+		if snap.GeneratedAt.IsZero() {
+			t.Error("GeneratedAt is zero")
+		}
+		if snap.AgentTotals.InputTokens != 42 {
+			t.Errorf("AgentTotals.InputTokens = %d, want 42", snap.AgentTotals.InputTokens)
+		}
+
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Fatal("Run did not return within 5 seconds")
+		}
+	})
+}
+
+func TestRefreshFunc(t *testing.T) {
+	t.Parallel()
+
+	t.Run("accepted", func(t *testing.T) {
+		t.Parallel()
+
+		state := NewState(60000, 1, nil, AgentTotals{})
+		o := NewOrchestrator(OrchestratorParams{
+			State:           state,
+			Logger:          discardLogger(),
+			TrackerAdapter:  &mockTrackerAdapter{},
+			AgentAdapter:    &mockAgentAdapter{},
+			WorkflowManager: &stubWorkflowManager{},
+			Store:           &stubStore{},
+		})
+
+		refreshFn := o.RefreshFunc()
+		got := refreshFn()
+		if !got {
+			t.Error("RefreshFunc() = false, want true (channel was empty)")
+		}
+	})
+
+	t.Run("coalesced when channel full", func(t *testing.T) {
+		t.Parallel()
+
+		state := NewState(60000, 1, nil, AgentTotals{})
+		o := NewOrchestrator(OrchestratorParams{
+			State:           state,
+			Logger:          discardLogger(),
+			TrackerAdapter:  &mockTrackerAdapter{},
+			AgentAdapter:    &mockAgentAdapter{},
+			WorkflowManager: &stubWorkflowManager{},
+			Store:           &stubStore{},
+		})
+
+		refreshFn := o.RefreshFunc()
+
+		// Fill the buffer (capacity 1).
+		if !refreshFn() {
+			t.Fatal("first RefreshFunc() = false, want true")
+		}
+
+		// Second call should be coalesced.
+		got := refreshFn()
+		if got {
+			t.Error("RefreshFunc() = true, want false (channel full, should coalesce)")
+		}
+	})
+}
+
+func TestAddObserver(t *testing.T) {
+	t.Parallel()
+
+	state := NewState(1000, 1, nil, AgentTotals{})
+	o := NewOrchestrator(OrchestratorParams{
+		State:           state,
+		Logger:          discardLogger(),
+		TrackerAdapter:  &mockTrackerAdapter{},
+		AgentAdapter:    &mockAgentAdapter{},
+		WorkflowManager: &stubWorkflowManager{},
+		Store:           &stubStore{},
+	})
+
+	obs := &stubObserver{}
+	o.AddObserver(obs)
+
+	o.notifyObservers()
+
+	if got := obs.calls.Load(); got != 1 {
+		t.Errorf("observer calls = %d, want 1", got)
+	}
+}
+
+func TestSnapshotDuringDrain(t *testing.T) {
+	t.Parallel()
+
+	state := NewState(60000, 1, nil, AgentTotals{})
+	state.Running["id-1"] = &RunningEntry{
+		Identifier: "MT-1",
+		Issue:      domain.Issue{ID: "id-1", State: "In Progress"},
+		StartedAt:  time.Now().UTC(),
+		CancelFunc: func() {}, // no-op cancel to support drain
+	}
+
+	o := NewOrchestrator(OrchestratorParams{
+		State:           state,
+		Logger:          discardLogger(),
+		TrackerAdapter:  &mockTrackerAdapter{},
+		AgentAdapter:    &mockAgentAdapter{},
+		WorkflowManager: &stubWorkflowManager{},
+		Store:           &stubStore{},
+		PreflightParams: PreflightParams{
+			ReloadWorkflow: func() error { return errPreflightFailed },
+			ConfigFunc:     func() config.ServiceConfig { return config.ServiceConfig{} },
+		},
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		o.Run(ctx)
+		close(done)
+	}()
+
+	// Let the event loop start.
+	time.Sleep(100 * time.Millisecond)
+
+	// Cancel ctx to trigger drain.
+	cancel()
+
+	// Give drain time to enter the select loop.
+	time.Sleep(50 * time.Millisecond)
+
+	// Send the snapshot request. The drain loop services snapshotCh.
+	snapFn := o.SnapshotFunc()
+
+	// The worker will never exit on its own, so simulate exit
+	// after a small delay to let the snapshot be processed first.
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		o.workerExitCh <- WorkerResult{IssueID: "id-1"}
+	}()
+
+	snap, err := snapFn()
+	if err != nil {
+		t.Fatalf("SnapshotFunc() during drain: %v", err)
+	}
+
+	if snap.GeneratedAt.IsZero() {
+		t.Error("GeneratedAt is zero")
+	}
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run did not return within 5 seconds")
+	}
+}

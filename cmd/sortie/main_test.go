@@ -879,3 +879,103 @@ func (lb *lockedBuf) String() string {
 	defer lb.mu.Unlock()
 	return lb.buf.String()
 }
+
+func TestResolveServerPort(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		portFlag    int
+		portFlagSet bool
+		extensions  map[string]any
+		wantPort    int
+		wantEnabled bool
+	}{
+		{
+			name:        "flag set overrides everything",
+			portFlag:    9090,
+			portFlagSet: true,
+			extensions:  map[string]any{"server": map[string]any{"port": 8080}},
+			wantPort:    9090,
+			wantEnabled: true,
+		},
+		{
+			name:        "flag set with zero port",
+			portFlag:    0,
+			portFlagSet: true,
+			extensions:  nil,
+			wantPort:    0,
+			wantEnabled: true,
+		},
+		{
+			name:        "extensions int port",
+			portFlag:    0,
+			portFlagSet: false,
+			extensions:  map[string]any{"server": map[string]any{"port": 8080}},
+			wantPort:    8080,
+			wantEnabled: true,
+		},
+		{
+			name:        "extensions float64 port (JSON decode)",
+			portFlag:    0,
+			portFlagSet: false,
+			extensions:  map[string]any{"server": map[string]any{"port": float64(8080)}},
+			wantPort:    8080,
+			wantEnabled: true,
+		},
+		{
+			name:        "no server in extensions",
+			portFlag:    0,
+			portFlagSet: false,
+			extensions:  map[string]any{},
+			wantPort:    0,
+			wantEnabled: false,
+		},
+		{
+			name:        "nil extensions",
+			portFlag:    0,
+			portFlagSet: false,
+			extensions:  nil,
+			wantPort:    0,
+			wantEnabled: false,
+		},
+		{
+			name:        "server extension without port key",
+			portFlag:    0,
+			portFlagSet: false,
+			extensions:  map[string]any{"server": map[string]any{"other": "value"}},
+			wantPort:    0,
+			wantEnabled: false,
+		},
+		{
+			name:        "server extension port is string (unsupported type)",
+			portFlag:    0,
+			portFlagSet: false,
+			extensions:  map[string]any{"server": map[string]any{"port": "8080"}},
+			wantPort:    0,
+			wantEnabled: false,
+		},
+		{
+			name:        "server extension is not a map",
+			portFlag:    0,
+			portFlagSet: false,
+			extensions:  map[string]any{"server": "not-a-map"},
+			wantPort:    0,
+			wantEnabled: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			gotPort, gotEnabled := resolveServerPort(tt.portFlag, tt.portFlagSet, tt.extensions)
+			if gotPort != tt.wantPort {
+				t.Errorf("resolveServerPort() port = %d, want %d", gotPort, tt.wantPort)
+			}
+			if gotEnabled != tt.wantEnabled {
+				t.Errorf("resolveServerPort() enabled = %v, want %v", gotEnabled, tt.wantEnabled)
+			}
+		})
+	}
+}
