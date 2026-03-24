@@ -628,11 +628,17 @@ JSON API + HTML dashboard, Prometheus `/metrics`), and adds agent capabilities.
 - [ ] 8.4 Implement the JSON API server (Section 13.7.2): `GET /api/v1/state`,
       `GET /api/v1/<identifier>` (404 for unknown issues), `POST /api/v1/refresh` (202
       Accepted). Use Go `net/http` and `encoding/json`. Bind to loopback by default. Enable
-      via `--port` flag (overrides `server.port` from WORKFLOW.md). Return `405` for
-      unsupported methods. Use `{"error":{"code":"...","message":"..."}}` envelope for errors.
-      Cover relevant changes in `docs/workflow-reference.md`.
+      via `--port` flag (overrides `server.port` from WORKFLOW.md). Read `server.port` from
+      the raw config map (it is extension configuration per Section 13.7, not a typed config
+      field). Return `405` for unsupported methods. Use
+      `{"error":{"code":"...","message":"..."}}` envelope for errors. Export the `*http.ServeMux`
+      so tasks 8.5 (`/`) and 8.8 (`/metrics`) add routes without refactoring. Register
+      `server.Shutdown(ctx)` in the graceful shutdown sequence (task 7.1) so in-flight
+      responses complete before exit. Cover changes in `docs/workflow-reference.md`.
       **Verify:** integration test starts the HTTP server, calls each endpoint, validates
-      response shapes against the architecture doc (Section 13.7.2).
+      response shapes against the architecture doc (Section 13.7.2). A second test confirms
+      graceful shutdown completes an in-flight `GET /api/v1/state` before closing the
+      listener.
 
 - [ ] 8.5 Implement the HTML dashboard (Section 13.7.1): server-rendered page at `/` showing
       running sessions, retry queue, token totals, runtime seconds, recent events. Use Go
