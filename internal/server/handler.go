@@ -359,8 +359,12 @@ func buildIssueDetail(identifier string, snap orchestrator.RuntimeSnapshotResult
 
 	var attempts *attemptsInfo
 	if retryEntry != nil {
+		restartCount := retryEntry.Attempt
+		if restartCount > 0 {
+			restartCount--
+		}
 		attempts = &attemptsInfo{
-			RestartCount:        retryEntry.Attempt,
+			RestartCount:        restartCount,
 			CurrentRetryAttempt: retryEntry.Attempt,
 		}
 	} else {

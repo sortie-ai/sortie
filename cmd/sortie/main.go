@@ -247,7 +247,11 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 
 	// --- Server port resolution ---
 
-	serverPort, serverEnabled := resolveServerPort(*port, portSet, cfg.Extensions)
+	serverPort, serverEnabled, portErr := resolveServerPort(*port, portSet, cfg.Extensions)
+	if portErr != nil {
+		logger.Error("server port configuration error", slog.Any("error", portErr))
+		return 1
+	}
 
 	// --- Orchestrator construction and event loop ---
 
@@ -382,20 +386,22 @@ func resolveDBPath(cfgPath, workflowDir string) string {
 }
 
 // resolveServerPort determines the effective HTTP server port from the
-// CLI flag and workflow extensions. Returns the port and whether the
-// server should be started. Invalid ports (negative, above 65535, or
-// non-integer floats) return (0, false).
-func resolveServerPort(portFlag int, portFlagSet bool, extensions map[string]any) (int, bool) {
+// CLI flag and workflow extensions. Returns the port, whether the
+// server should be started, and an error if an explicitly configured
+// port is invalid. When no port is configured, (0, false, nil) is
+// returned. Invalid ports (negative, above 65535, or non-integer
+// floats) return an error so callers can fail loudly.
+func resolveServerPort(portFlag int, portFlagSet bool, extensions map[string]any) (int, bool, error) {
 	if portFlagSet {
 		if portFlag < 0 || portFlag > 65535 {
-			return 0, false
+			return 0, false, fmt.Errorf("invalid --port value %d: must be between 0 and 65535", portFlag)
 		}
-		return portFlag, true
+		return portFlag, true, nil
 	}
 
 	serverExt, ok := extensions["server"].(map[string]any)
 	if !ok {
-		return 0, false
+		return 0, false, nil
 	}
 
 	var port int
@@ -404,15 +410,15 @@ func resolveServerPort(portFlag int, portFlagSet bool, extensions map[string]any
 		port = v
 	case float64:
 		if v != float64(int(v)) {
-			return 0, false
+			return 0, false, fmt.Errorf("invalid server.port value %v: must be an integer", v)
 		}
 		port = int(v)
 	default:
-		return 0, false
+		return 0, false, nil
 	}
 
 	if port < 0 || port > 65535 {
-		return 0, false
+		return 0, false, fmt.Errorf("invalid server.port value %d: must be between 0 and 65535", port)
 	}
-	return port, true
+	return port, true, nil
 }

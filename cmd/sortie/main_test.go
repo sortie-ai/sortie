@@ -893,6 +893,7 @@ func TestResolveServerPort(t *testing.T) {
 		extensions  map[string]any
 		wantPort    int
 		wantEnabled bool
+		wantErr     bool
 	}{
 		{
 			name:        "flag set overrides everything",
@@ -975,6 +976,7 @@ func TestResolveServerPort(t *testing.T) {
 			portFlagSet: true,
 			wantPort:    0,
 			wantEnabled: false,
+			wantErr:     true,
 		},
 		{
 			name:        "flag port above 65535 rejected",
@@ -982,6 +984,7 @@ func TestResolveServerPort(t *testing.T) {
 			portFlagSet: true,
 			wantPort:    0,
 			wantEnabled: false,
+			wantErr:     true,
 		},
 		{
 			name:        "flag port exactly 65535 accepted",
@@ -1004,6 +1007,7 @@ func TestResolveServerPort(t *testing.T) {
 			extensions:  map[string]any{"server": map[string]any{"port": float64(8080.9)}},
 			wantPort:    0,
 			wantEnabled: false,
+			wantErr:     true,
 		},
 		{
 			name:        "extensions float64 above 65535 rejected",
@@ -1012,6 +1016,7 @@ func TestResolveServerPort(t *testing.T) {
 			extensions:  map[string]any{"server": map[string]any{"port": float64(99999)}},
 			wantPort:    0,
 			wantEnabled: false,
+			wantErr:     true,
 		},
 		{
 			name:        "extensions negative int rejected",
@@ -1020,6 +1025,7 @@ func TestResolveServerPort(t *testing.T) {
 			extensions:  map[string]any{"server": map[string]any{"port": -1}},
 			wantPort:    0,
 			wantEnabled: false,
+			wantErr:     true,
 		},
 		{
 			name:        "extensions int above 65535 rejected",
@@ -1028,6 +1034,7 @@ func TestResolveServerPort(t *testing.T) {
 			extensions:  map[string]any{"server": map[string]any{"port": 70000}},
 			wantPort:    0,
 			wantEnabled: false,
+			wantErr:     true,
 		},
 		{
 			name:        "extensions int exactly 65535 accepted",
@@ -1051,12 +1058,15 @@ func TestResolveServerPort(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			gotPort, gotEnabled := resolveServerPort(tt.portFlag, tt.portFlagSet, tt.extensions)
+			gotPort, gotEnabled, gotErr := resolveServerPort(tt.portFlag, tt.portFlagSet, tt.extensions)
 			if gotPort != tt.wantPort {
 				t.Errorf("resolveServerPort() port = %d, want %d", gotPort, tt.wantPort)
 			}
 			if gotEnabled != tt.wantEnabled {
 				t.Errorf("resolveServerPort() enabled = %v, want %v", gotEnabled, tt.wantEnabled)
+			}
+			if (gotErr != nil) != tt.wantErr {
+				t.Errorf("resolveServerPort() err = %v, wantErr %v", gotErr, tt.wantErr)
 			}
 		})
 	}

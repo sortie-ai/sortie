@@ -342,8 +342,8 @@ func TestBuildIssueDetail(t *testing.T) {
 		if got.Workspace != nil {
 			t.Errorf("Workspace = %v, want nil for retrying issue", got.Workspace)
 		}
-		if got.Attempts.RestartCount != 2 {
-			t.Errorf("Attempts.RestartCount = %d, want %d", got.Attempts.RestartCount, 2)
+		if got.Attempts.RestartCount != 1 {
+			t.Errorf("Attempts.RestartCount = %d, want %d", got.Attempts.RestartCount, 1)
 		}
 	})
 
