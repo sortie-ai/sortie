@@ -705,8 +705,9 @@ JSON API + HTML dashboard, Prometheus `/metrics`), and adds agent capabilities.
       Gauges: update `sortie_sessions_running`, `sortie_sessions_retrying`, and
       `sortie_slots_available` after every state mutation (dispatch, worker exit,
       retry schedule/fire, reconciliation). Compute
-      `sortie_active_sessions_elapsed_seconds` at scrape time from `started_at`
-      timestamps of running entries (requires a callback or gauge function).
+      `sortie_active_sessions_elapsed_seconds` from `started_at` timestamps of
+      running entries and update via the `Metrics` setter on each poll cycle and
+      after relevant state mutations (dispatch, worker exit, reconciliation).
       Counters: increment `sortie_dispatches_total` on dispatch attempt,
       `sortie_worker_exits_total` on worker exit, `sortie_retries_total` on retry
       schedule, `sortie_reconciliation_actions_total` on reconciliation action,
@@ -726,7 +727,7 @@ JSON API + HTML dashboard, Prometheus `/metrics`), and adds agent capabilities.
       adapter constructors (Jira and file adapters). Increment
       `IncTrackerRequests(operation, result)` on completion of each adapter
       method: `operation` is one of `{fetch_candidates, fetch_issue,
-    fetch_comments, transition}` and `result` is `{success, error}`. The
+      fetch_comments, transition}` and `result` is `{success, error}`. The
       adapter increments the counter after each API call without the
       orchestrator knowing tracker-specific details.
       **Verify:** unit test for each adapter confirms the counter is incremented

@@ -112,14 +112,16 @@ standard metric equivalent: workspace paths, agent event messages, retry queue r
 the architecture's runtime snapshot requirement (Section 13.3) and the human-readable status
 surface requirement (Section 13.4).
 
-The JSON API shapes follow architecture Section 13.7.2 exactly.
+The JSON API shapes conform to the endpoints and recommended baseline shapes in architecture
+Section 13.7.2.
 
 ### Tier 3: Prometheus `/metrics` Endpoint (Opt-In, Co-located with HTTP Server)
 
 When the HTTP server is enabled, Sortie exposes a standard Prometheus metrics endpoint at
-`/metrics`. This endpoint is served by `prometheus/client_golang`'s `promhttp.Handler()` from
-a dedicated `prometheus.Registry` (not the global default, to avoid polluting metrics with
-unrelated collectors).
+`/metrics`. This endpoint is served by a handler constructed with
+`prometheus/client_golang`'s `promhttp.HandlerFor(registry, opts)` using a dedicated
+`prometheus.Registry` (not the global default, to avoid polluting metrics with unrelated
+collectors).
 
 The `/metrics` endpoint is available at the same address and port as the JSON API and
 dashboard. No separate port, no separate configuration. If `--port 8080` enables the
@@ -136,9 +138,9 @@ rich contextual data available in the JSON API.
 | Metric | Type | Labels | Description |
 |--------|------|--------|-------------|
 | `sortie_sessions_running` | Gauge | — | Number of currently running agent sessions |
-| `sortie_sessions_retrying` | Gauge | — | Number of issues in the retry queue |
+| `sortie_sessions_retrying` | Gauge | — | Number of issues awaiting session retry |
 | `sortie_slots_available` | Gauge | — | Remaining dispatch slots (`max_concurrent - running - claimed`) |
-| `sortie_active_sessions_elapsed_seconds` | Gauge | — | Sum of wall-clock elapsed seconds across all running sessions (computed at scrape time from `started_at`) |
+| `sortie_active_sessions_elapsed_seconds` | Gauge | — | Sum of wall-clock elapsed seconds across all running sessions (recomputed from `started_at` on each poll cycle and state mutation) |
 
 **Counters (monotonically increasing):**
 
