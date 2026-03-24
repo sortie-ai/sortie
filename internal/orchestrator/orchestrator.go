@@ -40,11 +40,11 @@ type Observer interface {
 	OnStateChange()
 }
 
-// SnapshotRequest is a request for a point-in-time runtime snapshot.
-// Sent by external consumers (HTTP server) through the snapshotCh
-// channel. The orchestrator's event loop processes it and sends the
-// result on ReplyCh.
-type SnapshotRequest struct {
+// snapshotRequest is a request for a point-in-time runtime snapshot.
+// Created and sent to the event loop by [Orchestrator.SnapshotFunc].
+// The orchestrator's event loop processes it and sends the result on
+// ReplyCh.
+type snapshotRequest struct {
 	ReplyCh chan<- RuntimeSnapshotResult
 }
 
@@ -84,7 +84,7 @@ type Orchestrator struct {
 	workerExitCh chan WorkerResult
 	retryTimerCh chan string
 	agentEventCh chan agentEventMsg
-	snapshotCh   chan SnapshotRequest
+	snapshotCh   chan snapshotRequest
 	refreshCh    chan struct{}
 
 	preflightParams PreflightParams
@@ -120,7 +120,7 @@ func NewOrchestrator(params OrchestratorParams) *Orchestrator {
 		workerExitCh:    make(chan WorkerResult, exitBuf),
 		retryTimerCh:    make(chan string, retryBuf),
 		agentEventCh:    make(chan agentEventMsg, eventBuf),
-		snapshotCh:      make(chan SnapshotRequest, 4),
+		snapshotCh:      make(chan snapshotRequest, 4),
 		refreshCh:       make(chan struct{}, 1),
 		preflightParams: params.PreflightParams,
 		observers:       observers,
@@ -475,7 +475,7 @@ func (o *Orchestrator) AddObserver(obs Observer) {
 func (o *Orchestrator) SnapshotFunc() func() (RuntimeSnapshotResult, error) {
 	return func() (RuntimeSnapshotResult, error) {
 		replyCh := make(chan RuntimeSnapshotResult, 1)
-		req := SnapshotRequest{ReplyCh: replyCh}
+		req := snapshotRequest{ReplyCh: replyCh}
 
 		select {
 		case o.snapshotCh <- req:

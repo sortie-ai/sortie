@@ -6,6 +6,7 @@ package server
 import (
 	"context"
 	"log/slog"
+	"net"
 	"net/http"
 	"time"
 
@@ -57,6 +58,13 @@ var _ orchestrator.Observer = (*Server)(nil)
 // [http.ServeMux]. Does not start listening — call
 // [Server.ListenAndServe].
 func New(params Params) *Server {
+	if params.SnapshotFn == nil {
+		panic("server.New: SnapshotFn must not be nil")
+	}
+	if params.RefreshFn == nil {
+		panic("server.New: RefreshFn must not be nil")
+	}
+
 	logger := params.Logger
 	if logger == nil {
 		logger = slog.Default()
@@ -99,6 +107,13 @@ func (s *Server) Mux() *http.ServeMux {
 // [http.ErrServerClosed] on graceful shutdown.
 func (s *Server) ListenAndServe() error {
 	return s.httpServer.ListenAndServe()
+}
+
+// Serve accepts connections on the provided [net.Listener]. Use this
+// instead of [Server.ListenAndServe] when the listener is pre-bound
+// (e.g. to discover the actual port for ephemeral port 0).
+func (s *Server) Serve(ln net.Listener) error {
+	return s.httpServer.Serve(ln)
 }
 
 // Shutdown gracefully shuts down the server without interrupting

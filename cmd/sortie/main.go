@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -273,11 +274,17 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 		})
 		o.AddObserver(srv)
 
+		ln, listenErr := (&net.ListenConfig{}).Listen(ctx, "tcp", addr)
+		if listenErr != nil {
+			logger.Error("http server listen failed", slog.Any("error", listenErr))
+			return 1
+		}
+
 		go func() {
-			logger.Info("http server starting",
-				slog.String("addr", addr),
+			logger.Info("http server listening",
+				slog.String("addr", ln.Addr().String()),
 			)
-			if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			if err := srv.Serve(ln); err != nil && err != http.ErrServerClosed {
 				logger.Error("http server error", slog.Any("error", err))
 			}
 		}()

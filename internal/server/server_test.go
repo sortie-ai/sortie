@@ -99,3 +99,77 @@ func TestServerLifecycle(t *testing.T) {
 		t.Errorf("Serve error = %v, want %v", serveErr, http.ErrServerClosed)
 	}
 }
+
+func TestNewPanicsOnNilSnapshotFn(t *testing.T) {
+	t.Parallel()
+
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatal("New did not panic with nil SnapshotFn")
+		}
+	}()
+
+	New(Params{
+		RefreshFn: acceptingRefresh(),
+		Logger:    slog.New(slog.DiscardHandler),
+	})
+}
+
+func TestNewPanicsOnNilRefreshFn(t *testing.T) {
+	t.Parallel()
+
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatal("New did not panic with nil RefreshFn")
+		}
+	}()
+
+	New(Params{
+		SnapshotFn: fixedSnapshot(orchestrator.RuntimeSnapshotResult{}),
+		Logger:     slog.New(slog.DiscardHandler),
+	})
+}
+
+func TestServeMethod(t *testing.T) {
+	t.Parallel()
+
+	srv := New(Params{
+		SnapshotFn: fixedSnapshot(orchestrator.RuntimeSnapshotResult{
+			GeneratedAt: time.Now().UTC(),
+		}),
+		RefreshFn: acceptingRefresh(),
+		Logger:    slog.New(slog.DiscardHandler),
+		Addr:      "127.0.0.1:0",
+	})
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("net.Listen: %v", err)
+	}
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- srv.Serve(ln)
+	}()
+
+	// Verify the server is actually accepting requests.
+	resp, err := http.Get("http://" + ln.Addr().String() + "/api/v1/state")
+	if err != nil {
+		t.Fatalf("GET /api/v1/state: %v", err)
+	}
+	resp.Body.Close() //nolint:errcheck // test code
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusOK)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := srv.Shutdown(ctx); err != nil {
+		t.Fatalf("Shutdown: %v", err)
+	}
+
+	serveErr := <-errCh
+	if serveErr != http.ErrServerClosed {
+		t.Errorf("Serve error = %v, want %v", serveErr, http.ErrServerClosed)
+	}
+}
