@@ -243,3 +243,118 @@ func RunningCountByState(running map[string]*RunningEntry, state string) int {
 	}
 	return count
 }
+
+// SnapshotRunningEntry is a read-only view of a single running session
+// for observability consumers. Produced by [RuntimeSnapshot].
+type SnapshotRunningEntry struct {
+	IssueID            string                `json:"issue_id"`
+	Identifier         string                `json:"issue_identifier"`
+	State              string                `json:"state"`
+	SessionID          string                `json:"session_id"`
+	TurnCount          int                   `json:"turn_count"`
+	LastAgentEvent     domain.AgentEventType `json:"last_event"`
+	LastAgentTimestamp time.Time             `json:"last_event_at"`
+	LastAgentMessage   string                `json:"last_message"`
+	StartedAt          time.Time             `json:"started_at"`
+	AgentInputTokens   int64                 `json:"input_tokens"`
+	AgentOutputTokens  int64                 `json:"output_tokens"`
+	AgentTotalTokens   int64                 `json:"total_tokens"`
+}
+
+// SnapshotRetryEntry is a read-only view of a pending retry for
+// observability consumers. Produced by [RuntimeSnapshot].
+type SnapshotRetryEntry struct {
+	IssueID    string `json:"issue_id"`
+	Identifier string `json:"issue_identifier"`
+	Attempt    int    `json:"attempt"`
+	DueAtMS    int64  `json:"due_at_ms"`
+	Error      string `json:"error"`
+}
+
+// SnapshotAgentTotals holds aggregate token counts and runtime seconds
+// at a point in time. Unlike [AgentTotals], SecondsRunning includes
+// elapsed time from currently active sessions.
+type SnapshotAgentTotals struct {
+	InputTokens    int64   `json:"input_tokens"`
+	OutputTokens   int64   `json:"output_tokens"`
+	TotalTokens    int64   `json:"total_tokens"`
+	SecondsRunning float64 `json:"seconds_running"`
+}
+
+// RuntimeSnapshotResult is a point-in-time capture of the orchestrator's
+// runtime state for observability consumers. Produced by [RuntimeSnapshot].
+type RuntimeSnapshotResult struct {
+	GeneratedAt time.Time              `json:"generated_at"`
+	Running     []SnapshotRunningEntry `json:"running"`
+	Retrying    []SnapshotRetryEntry   `json:"retrying"`
+	AgentTotals SnapshotAgentTotals    `json:"agent_totals"`
+	RateLimits  map[string]any         `json:"rate_limits"`
+}
+
+// RuntimeSnapshot captures a point-in-time view of the orchestrator's
+// runtime state. The now parameter controls the snapshot timestamp and
+// the active-session elapsed time computation. Callers on the event
+// loop goroutine pass time.Now(); test callers pass a fixed time for
+// deterministic assertions.
+//
+// The returned result contains copied-out data — callers may serialize
+// or retain it without synchronization concerns.
+//
+// Must be called from the orchestrator's event loop goroutine. [State]
+// is not safe for concurrent access.
+func RuntimeSnapshot(state *State, now time.Time) RuntimeSnapshotResult {
+	result := RuntimeSnapshotResult{
+		GeneratedAt: now,
+		Running:     make([]SnapshotRunningEntry, 0, len(state.Running)),
+		Retrying:    make([]SnapshotRetryEntry, 0, len(state.RetryAttempts)),
+	}
+
+	var activeElapsedTotal float64
+	for _, entry := range state.Running {
+		result.Running = append(result.Running, SnapshotRunningEntry{
+			IssueID:            entry.Issue.ID,
+			Identifier:         entry.Identifier,
+			State:              entry.Issue.State,
+			SessionID:          entry.SessionID,
+			TurnCount:          entry.TurnCount,
+			LastAgentEvent:     entry.LastAgentEvent,
+			LastAgentTimestamp: entry.LastAgentTimestamp,
+			LastAgentMessage:   entry.LastAgentMessage,
+			StartedAt:          entry.StartedAt,
+			AgentInputTokens:   entry.AgentInputTokens,
+			AgentOutputTokens:  entry.AgentOutputTokens,
+			AgentTotalTokens:   entry.AgentTotalTokens,
+		})
+
+		if !entry.StartedAt.IsZero() {
+			elapsed := now.Sub(entry.StartedAt).Seconds()
+			if elapsed < 0 {
+				elapsed = 0
+			}
+			activeElapsedTotal += elapsed
+		}
+	}
+
+	for _, entry := range state.RetryAttempts {
+		result.Retrying = append(result.Retrying, SnapshotRetryEntry{
+			IssueID:    entry.IssueID,
+			Identifier: entry.Identifier,
+			Attempt:    entry.Attempt,
+			DueAtMS:    entry.DueAtMS,
+			Error:      entry.Error,
+		})
+	}
+
+	result.AgentTotals = SnapshotAgentTotals{
+		InputTokens:    state.AgentTotals.InputTokens,
+		OutputTokens:   state.AgentTotals.OutputTokens,
+		TotalTokens:    state.AgentTotals.TotalTokens,
+		SecondsRunning: state.AgentTotals.SecondsRunning + activeElapsedTotal,
+	}
+
+	if state.AgentRateLimits != nil {
+		result.RateLimits = shallowCopyMap(state.AgentRateLimits.Data)
+	}
+
+	return result
+}

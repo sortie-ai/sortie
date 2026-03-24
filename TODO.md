@@ -618,7 +618,7 @@ JSON API + HTML dashboard, Prometheus `/metrics`), and adds agent capabilities.
       **Verify:** run the orchestrator with mock adapters, grep logs for structured fields,
       confirm they are present and consistent across all lifecycle events.
 
-- [ ] 8.3 Implement the runtime snapshot function (Section 13.3): return running sessions
+- [x] 8.3 Implement the runtime snapshot function (Section 13.3): return running sessions
       (including `turn_count` per row), retry queue, agent totals (`input_tokens`,
       `output_tokens`, `total_tokens`, `seconds_running` computed as cumulative ended-session
       time plus active-session elapsed time from `started_at`), and rate limits.
@@ -630,7 +630,7 @@ JSON API + HTML dashboard, Prometheus `/metrics`), and adds agent capabilities.
       Accepted). Use Go `net/http` and `encoding/json`. Bind to loopback by default. Enable
       via `--port` flag (overrides `server.port` from WORKFLOW.md). Return `405` for
       unsupported methods. Use `{"error":{"code":"...","message":"..."}}` envelope for errors.
-      Cover changes in `docs/workflow-reference.md`.
+      Cover relevant changes in `docs/workflow-reference.md`.
       **Verify:** integration test starts the HTTP server, calls each endpoint, validates
       response shapes against the architecture doc (Section 13.7.2).
 
