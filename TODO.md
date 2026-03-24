@@ -640,7 +640,7 @@ JSON API + HTML dashboard, Prometheus `/metrics`), and adds agent capabilities.
       graceful shutdown completes an in-flight `GET /api/v1/state` before closing the
       listener.
 
-- [ ] 8.5 Implement the HTML dashboard (Section 13.7.1): server-rendered page at `/` showing
+- [x] 8.5 Implement the HTML dashboard (Section 13.7.1): server-rendered page at `/` showing
       running sessions, retry queue, token totals, runtime seconds, recent events. Use Go
       `html/template`. Add auto-refresh via SSE or meta-refresh.
       **Verify:** start Sortie with `--port 8080`, open `http://localhost:8080` in a browser,

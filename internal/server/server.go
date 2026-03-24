@@ -5,6 +5,7 @@ package server
 
 import (
 	"context"
+	"html/template"
 	"log/slog"
 	"net"
 	"net/http"
@@ -23,6 +24,11 @@ type SnapshotFunc func() (orchestrator.RuntimeSnapshotResult, error)
 // false if it was coalesced (channel already has a pending signal).
 type RefreshFunc func() bool
 
+// SlotFunc returns the current maximum concurrent agent count.
+// Called on each dashboard render to compute available slots.
+// If nil, available slots defaults to 0.
+type SlotFunc func() int
+
 // Params holds construction-time dependencies for [New].
 type Params struct {
 	// SnapshotFn returns the current runtime state. Called on each
@@ -38,17 +44,33 @@ type Params struct {
 
 	// Addr is the TCP address to listen on (e.g. "127.0.0.1:8080").
 	Addr string
+
+	// Version is the build version string displayed on the dashboard.
+	// Falls back to "dev" when empty.
+	Version string
+
+	// StartedAt is the time the process started, used to compute
+	// uptime on the dashboard.
+	StartedAt time.Time
+
+	// SlotFunc returns the current max concurrent agents from config.
+	// If nil, available slots displays as 0 on the dashboard.
+	SlotFunc SlotFunc
 }
 
 // Server is the embedded HTTP server for JSON API, dashboard, and
 // metrics endpoints. Construct via [New]. Safe for concurrent use
 // after construction.
 type Server struct {
-	httpServer *http.Server
-	mux        *http.ServeMux
-	logger     *slog.Logger
-	snapshotFn SnapshotFunc
-	refreshFn  RefreshFunc
+	httpServer    *http.Server
+	mux           *http.ServeMux
+	logger        *slog.Logger
+	snapshotFn    SnapshotFunc
+	refreshFn     RefreshFunc
+	dashboardTmpl *template.Template
+	version       string
+	startedAt     time.Time
+	slotFunc      SlotFunc
 }
 
 // Compile-time assertion: Server satisfies orchestrator.Observer.
@@ -72,16 +94,27 @@ func New(params Params) *Server {
 
 	mux := http.NewServeMux()
 
+	tmpl := template.Must(
+		template.New("dashboard").Funcs(template.FuncMap{
+			"fmtInt": fmtInt,
+		}).Parse(dashboardHTML),
+	)
+
 	s := &Server{
-		mux:        mux,
-		logger:     logger,
-		snapshotFn: params.SnapshotFn,
-		refreshFn:  params.RefreshFn,
+		mux:           mux,
+		logger:        logger,
+		snapshotFn:    params.SnapshotFn,
+		refreshFn:     params.RefreshFn,
+		dashboardTmpl: tmpl,
+		version:       params.Version,
+		startedAt:     params.StartedAt,
+		slotFunc:      params.SlotFunc,
 	}
 
 	// API routes. Use method-agnostic patterns with internal method
 	// checking so 405 responses use JSON error envelopes instead of
 	// the default plain-text body from Go's ServeMux.
+	mux.HandleFunc("GET /{$}", s.handleDashboard)
 	mux.HandleFunc("/api/v1/state", s.routeState)
 	mux.HandleFunc("/api/v1/refresh", s.routeRefresh)
 	mux.HandleFunc("/api/v1/{identifier}", s.routeIssueDetail)

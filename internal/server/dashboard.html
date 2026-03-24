@@ -1,0 +1,330 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta http-equiv="refresh" content="5" />
+    <title>Sortie Dashboard</title>
+    <style>
+      :root {
+        --font-family:
+          -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+          "Helvetica Neue", Arial, "Noto Sans", sans-serif;
+        --bg: #ffffff;
+        --bg-secondary: #f8f9fa;
+        --text-primary: #212529;
+        --text-secondary: #6c757d;
+        --border: #dee2e6;
+        --color-running: #198754;
+        --color-retrying: #cc9a06;
+        --color-neutral: #6c757d;
+        --color-tokens: #0d6efd;
+        --color-link: #0d6efd;
+        --color-link-hover: #0a58ca;
+        --card-bg: #ffffff;
+        --table-stripe: #f8f9fa;
+        --table-hover: #e9ecef;
+      }
+
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #1a1a2e;
+          --bg-secondary: #16213e;
+          --text-primary: #e0e0e0;
+          --text-secondary: #a0a0b0;
+          --border: #2a2a4a;
+          --color-running: #2dd36f;
+          --color-retrying: #ffc409;
+          --color-neutral: #92949c;
+          --color-tokens: #4dabf7;
+          --color-link: #4dabf7;
+          --color-link-hover: #74c0fc;
+          --card-bg: #16213e;
+          --table-stripe: #16213e;
+          --table-hover: #1a2744;
+        }
+      }
+
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+
+      body {
+        font-family: var(--font-family);
+        background: var(--bg);
+        color: var(--text-primary);
+        line-height: 1.5;
+      }
+
+      .container {
+        max-width: 1200px;
+        margin: 0 auto;
+        padding: 1.5rem 1rem;
+      }
+
+      header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        padding: 0.75rem 1rem;
+        background: var(--bg-secondary);
+        border-bottom: 1px solid var(--border);
+      }
+
+      .header-left {
+        display: flex;
+        align-items: center;
+        gap: 0.75rem;
+      }
+
+      .header-left h1 {
+        font-size: 1.25rem;
+        font-weight: 700;
+      }
+
+      .version-badge {
+        font-size: 0.75rem;
+        padding: 0.15rem 0.5rem;
+        background: var(--border);
+        border-radius: 4px;
+        color: var(--text-secondary);
+      }
+
+      .header-right {
+        font-size: 0.875rem;
+        color: var(--text-secondary);
+      }
+
+      .summary-cards {
+        display: flex;
+        gap: 1rem;
+        margin-bottom: 1.5rem;
+      }
+
+      .card {
+        flex: 1;
+        text-align: center;
+        padding: 1.25rem 1rem;
+        background: var(--card-bg);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        border-top: 3px solid var(--border);
+      }
+
+      .card-running {
+        border-top-color: var(--color-running);
+      }
+      .card-retrying {
+        border-top-color: var(--color-retrying);
+      }
+      .card-neutral {
+        border-top-color: var(--color-neutral);
+      }
+      .card-tokens {
+        border-top-color: var(--color-tokens);
+      }
+
+      .card-number {
+        font-size: 2rem;
+        font-weight: 700;
+        line-height: 1.2;
+      }
+
+      .card-running .card-number {
+        color: var(--color-running);
+      }
+      .card-retrying .card-number {
+        color: var(--color-retrying);
+      }
+      .card-neutral .card-number {
+        color: var(--color-neutral);
+      }
+      .card-tokens .card-number {
+        color: var(--color-tokens);
+      }
+
+      .card-label {
+        font-size: 0.875rem;
+        color: var(--text-secondary);
+        margin-top: 0.25rem;
+      }
+
+      section {
+        margin-bottom: 1.5rem;
+      }
+
+      section h2 {
+        font-size: 1rem;
+        font-weight: 600;
+        margin-bottom: 0.75rem;
+      }
+
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 0.875rem;
+      }
+
+      th {
+        font-size: 0.75rem;
+        text-transform: uppercase;
+        letter-spacing: 0.05em;
+        color: var(--text-secondary);
+        text-align: left;
+        padding: 0.5rem 0.75rem;
+        border-bottom: 2px solid var(--border);
+      }
+
+      td {
+        padding: 0.5rem 0.75rem;
+        border-bottom: 1px solid var(--border);
+      }
+
+      tr:nth-child(even) td {
+        background: var(--table-stripe);
+      }
+
+      .empty-state {
+        text-align: center;
+        padding: 1.5rem;
+        color: var(--text-secondary);
+        font-style: italic;
+      }
+
+      a {
+        color: var(--color-link);
+        text-decoration: none;
+      }
+
+      a:hover {
+        color: var(--color-link-hover);
+        text-decoration: underline;
+      }
+
+      .text-right {
+        text-align: right;
+      }
+
+      .error-cell {
+        max-width: 300px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      footer {
+        text-align: center;
+        padding: 1rem;
+        font-size: 0.8rem;
+        color: var(--text-secondary);
+        border-top: 1px solid var(--border);
+      }
+
+      footer .aggregate {
+        margin-bottom: 0.25rem;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div class="header-left">
+        <h1>Sortie</h1>
+        <span class="version-badge">{{.Version}}</span>
+      </div>
+      <div class="header-right">
+        Uptime: {{.Uptime}} &middot; {{.GeneratedAt.Format "15:04:05 UTC"}}
+      </div>
+    </header>
+
+    <div class="container">
+      <section class="summary-cards">
+        <div class="card card-running">
+          <div class="card-number">{{.RunningCount}}</div>
+          <div class="card-label">Running</div>
+        </div>
+        <div class="card card-retrying">
+          <div class="card-number">{{.RetryingCount}}</div>
+          <div class="card-label">Retrying</div>
+        </div>
+        <div class="card card-neutral">
+          <div class="card-number">{{.AvailableSlots}}</div>
+          <div class="card-label">Slots Free</div>
+        </div>
+        <div class="card card-tokens">
+          <div class="card-number">{{fmtInt .TotalTokens}}</div>
+          <div class="card-label">Total Tokens</div>
+        </div>
+      </section>
+
+      <section>
+        <h2>Running Sessions</h2>
+        {{if .Running}}
+        <table>
+          <thead>
+            <tr>
+              <th>Identifier</th>
+              <th>State</th>
+              <th class="text-right">Turns</th>
+              <th>Duration</th>
+              <th>Last Event</th>
+              <th class="text-right">Tokens</th>
+            </tr>
+          </thead>
+          <tbody>
+            {{range .Running}}
+            <tr>
+              <td><a href="{{.DetailURL}}">{{.Identifier}}</a></td>
+              <td>{{.State}}</td>
+              <td class="text-right">{{.TurnCount}}</td>
+              <td>{{.Duration}}</td>
+              <td>{{.LastEvent}}</td>
+              <td class="text-right">{{fmtInt .TotalTokens}}</td>
+            </tr>
+            {{end}}
+          </tbody>
+        </table>
+        {{else}}
+        <div class="empty-state">No running sessions</div>
+        {{end}}
+      </section>
+
+      <section>
+        <h2>Retry Queue</h2>
+        {{if .Retrying}}
+        <table>
+          <thead>
+            <tr>
+              <th>Identifier</th>
+              <th class="text-right">Attempt</th>
+              <th>Due</th>
+              <th>Error</th>
+            </tr>
+          </thead>
+          <tbody>
+            {{range .Retrying}}
+            <tr>
+              <td>{{.Identifier}}</td>
+              <td class="text-right">{{.Attempt}}</td>
+              <td>{{.DueIn}}</td>
+              <td class="error-cell" title="{{.Error}}">{{.Error}}</td>
+            </tr>
+            {{end}}
+          </tbody>
+        </table>
+        {{else}}
+        <div class="empty-state">No retries pending</div>
+        {{end}}
+      </section>
+    </div>
+
+    <footer>
+      <div class="aggregate">
+        Agent runtime: {{.RuntimeDisplay}} &middot; Input: {{fmtInt
+        .InputTokens}} &middot; Output: {{fmtInt .OutputTokens}}
+      </div>
+      <div>Auto-refresh every 5s</div>
+    </footer>
+  </body>
+</html>

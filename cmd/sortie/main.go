@@ -275,6 +275,9 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 			RefreshFn:  o.RefreshFunc(),
 			Logger:     logger,
 			Addr:       addr,
+			Version:    Version,
+			StartedAt:  time.Now(),
+			SlotFunc:   func() int { return mgr.Config().Agent.MaxConcurrentAgents },
 		})
 		o.AddObserver(srv)
 
