@@ -11,6 +11,30 @@ import (
 	"github.com/sortie-ai/sortie/internal/domain"
 )
 
+// Label value constants for metric instrumentation. Unexported; used as
+// arguments to domain.Metrics methods throughout the orchestrator.
+const (
+	outcomeSuccess = "success"
+	outcomeError   = "error"
+
+	exitTypeNormal    = "normal"
+	exitTypeError     = "error"
+	exitTypeCancelled = "cancelled"
+
+	triggerError        = "error"
+	triggerContinuation = "continuation"
+	triggerTimer        = "timer"
+	triggerStall        = "stall"
+
+	actionStop    = "stop"
+	actionCleanup = "cleanup"
+	actionKeep    = "keep"
+
+	handoffSuccess = "success"
+	handoffError   = "error"
+	handoffSkipped = "skipped"
+)
+
 // AgentTotals holds cumulative token and runtime counters across all ended
 // agent sessions. These values are persisted to SQLite (aggregate_metrics
 // table, key "agent_totals") and restored on startup.
@@ -292,6 +316,25 @@ type RuntimeSnapshotResult struct {
 	RateLimits  map[string]any         `json:"rate_limits"`
 }
 
+// ActiveElapsedSeconds returns the sum of wall-clock elapsed seconds
+// across all running sessions at the given point in time. Entries with
+// a zero StartedAt are skipped; negative elapsed values are clamped to
+// zero to guard against clock skew.
+func ActiveElapsedSeconds(state *State, now time.Time) float64 {
+	var total float64
+	for _, entry := range state.Running {
+		if entry.StartedAt.IsZero() {
+			continue
+		}
+		elapsed := now.Sub(entry.StartedAt).Seconds()
+		if elapsed < 0 {
+			elapsed = 0
+		}
+		total += elapsed
+	}
+	return total
+}
+
 // RuntimeSnapshot captures a point-in-time view of the orchestrator's
 // runtime state. The now parameter controls the snapshot timestamp and
 // the active-session elapsed time computation; it is normalized to UTC
@@ -316,7 +359,6 @@ func RuntimeSnapshot(state *State, now time.Time) RuntimeSnapshotResult {
 		Retrying:    make([]SnapshotRetryEntry, 0, len(state.RetryAttempts)),
 	}
 
-	var activeElapsedTotal float64
 	for _, entry := range state.Running {
 		result.Running = append(result.Running, SnapshotRunningEntry{
 			IssueID:            entry.Issue.ID,
@@ -333,14 +375,6 @@ func RuntimeSnapshot(state *State, now time.Time) RuntimeSnapshotResult {
 			AgentTotalTokens:   entry.AgentTotalTokens,
 			WorkspacePath:      entry.WorkspacePath,
 		})
-
-		if !entry.StartedAt.IsZero() {
-			elapsed := now.Sub(entry.StartedAt).Seconds()
-			if elapsed < 0 {
-				elapsed = 0
-			}
-			activeElapsedTotal += elapsed
-		}
 	}
 
 	for _, entry := range state.RetryAttempts {
@@ -352,6 +386,8 @@ func RuntimeSnapshot(state *State, now time.Time) RuntimeSnapshotResult {
 			Error:      entry.Error,
 		})
 	}
+
+	activeElapsedTotal := ActiveElapsedSeconds(state, now)
 
 	result.AgentTotals = SnapshotAgentTotals{
 		InputTokens:    state.AgentTotals.InputTokens,

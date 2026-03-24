@@ -65,7 +65,8 @@ type OrchestratorParams struct {
 	WorkflowManager WorkflowManager
 	Store           OrchestratorStore
 	PreflightParams PreflightParams
-	Observers       []Observer // may be nil/empty
+	Observers       []Observer     // may be nil/empty
+	Metrics         domain.Metrics // may be nil; defaults to NoopMetrics
 }
 
 // Orchestrator owns the poll-and-dispatch event loop and all runtime
@@ -80,6 +81,7 @@ type Orchestrator struct {
 	agentAdapter    domain.AgentAdapter
 	workflowManager WorkflowManager
 	store           OrchestratorStore
+	metrics         domain.Metrics
 
 	workerExitCh chan WorkerResult
 	retryTimerCh chan string
@@ -105,6 +107,11 @@ func NewOrchestrator(params OrchestratorParams) *Orchestrator {
 		observers = []Observer{}
 	}
 
+	metrics := params.Metrics
+	if metrics == nil {
+		metrics = &domain.NoopMetrics{}
+	}
+
 	maxConc := params.State.MaxConcurrentAgents
 	exitBuf := max(maxConc*2, 64)
 	retryBuf := max(maxConc*2, 64, len(params.State.RetryAttempts))
@@ -117,6 +124,7 @@ func NewOrchestrator(params OrchestratorParams) *Orchestrator {
 		agentAdapter:    params.AgentAdapter,
 		workflowManager: params.WorkflowManager,
 		store:           params.Store,
+		metrics:         metrics,
 		workerExitCh:    make(chan WorkerResult, exitBuf),
 		retryTimerCh:    make(chan string, retryBuf),
 		agentEventCh:    make(chan agentEventMsg, eventBuf),
@@ -167,7 +175,9 @@ func (o *Orchestrator) Run(ctx context.Context) {
 				TrackerAdapter:    o.trackerAdapter,
 				HandoffState:      cfg.Tracker.HandoffState,
 				ActiveStates:      cfg.Tracker.ActiveStates,
+				Metrics:           o.metrics,
 			})
+			o.updateGauges(time.Now())
 			o.notifyObservers()
 
 		case issueID := <-o.retryTimerCh:
@@ -183,11 +193,13 @@ func (o *Orchestrator) Run(ctx context.Context) {
 				Ctx:               ctx,
 				Logger:            o.logger,
 				MaxSessions:       cfg.Agent.MaxSessions,
+				Metrics:           o.metrics,
 			})
+			o.updateGauges(time.Now())
 			o.notifyObservers()
 
 		case msg := <-o.agentEventCh:
-			HandleAgentEvent(o.state, msg.IssueID, msg.Event, o.logger)
+			HandleAgentEvent(o.state, msg.IssueID, msg.Event, o.logger, o.metrics)
 
 		case req := <-o.snapshotCh:
 			snap := RuntimeSnapshot(o.state, time.Now())
@@ -197,6 +209,16 @@ func (o *Orchestrator) Run(ctx context.Context) {
 			o.handleTick(ctx)
 		}
 	}
+}
+
+// updateGauges recomputes all point-in-time gauges from current state
+// and publishes them via the Metrics interface. Called after every
+// state mutation in the event loop.
+func (o *Orchestrator) updateGauges(now time.Time) {
+	o.metrics.SetRunningSessions(len(o.state.Running))
+	o.metrics.SetRetryingSessions(len(o.state.RetryAttempts))
+	o.metrics.SetAvailableSlots(GlobalAvailableSlots(o.state.MaxConcurrentAgents, len(o.state.Running)))
+	o.metrics.SetActiveSessionsElapsed(ActiveElapsedSeconds(o.state, now))
 }
 
 // handleTick executes a single poll-and-dispatch cycle: preflight,
@@ -209,6 +231,14 @@ func (o *Orchestrator) Run(ctx context.Context) {
 // the tracker using the last-known-good config, which remains valid for
 // those purposes. Dispatch is the only step gated on preflight success.
 func (o *Orchestrator) handleTick(ctx context.Context) {
+	tickStart := time.Now()
+	pollResult := outcomeSuccess
+	defer func() {
+		o.metrics.IncPollCycles(pollResult)
+		o.metrics.ObservePollDuration(time.Since(tickStart).Seconds())
+		o.updateGauges(time.Now())
+	}()
+
 	// Step 1: dispatch preflight validation. This triggers a
 	// defensive Reload() of the workflow file, ensuring the config
 	// snapshot returned by Config() below reflects the latest disk
@@ -239,11 +269,13 @@ func (o *Orchestrator) handleTick(ctx context.Context) {
 		OnRetryFire:       o.onRetryFire,
 		Ctx:               ctx,
 		Logger:            o.logger,
+		Metrics:           o.metrics,
 	})
 
 	// Step 5: if preflight failed, skip dispatch but still notify
 	// observers so the UI reflects the reconciliation outcome.
 	if !validation.OK() {
+		pollResult = outcomeError
 		o.logger.Error("dispatch preflight failed",
 			slog.Any("error", validation),
 		)
@@ -254,6 +286,7 @@ func (o *Orchestrator) handleTick(ctx context.Context) {
 	// Step 6: fetch candidate issues.
 	issues, err := o.trackerAdapter.FetchCandidateIssues(ctx)
 	if err != nil {
+		pollResult = outcomeError
 		o.logger.Error("failed to fetch candidate issues",
 			slog.Any("error", err),
 		)
@@ -283,6 +316,7 @@ func (o *Orchestrator) handleTick(ctx context.Context) {
 			continue
 		}
 		DispatchIssue(ctx, o.state, issue, nil, o.makeWorkerFn(""))
+		o.metrics.IncDispatches(outcomeSuccess)
 		dispatched++
 	}
 
@@ -419,11 +453,13 @@ func (o *Orchestrator) drainRunningWorkers() {
 				TrackerAdapter:    o.trackerAdapter,
 				HandoffState:      cfg.Tracker.HandoffState,
 				ActiveStates:      cfg.Tracker.ActiveStates,
+				Metrics:           o.metrics,
 			})
+			o.updateGauges(time.Now())
 			o.notifyObservers()
 
 		case msg := <-o.agentEventCh:
-			HandleAgentEvent(o.state, msg.IssueID, msg.Event, o.logger)
+			HandleAgentEvent(o.state, msg.IssueID, msg.Event, o.logger, o.metrics)
 
 		case req := <-o.snapshotCh:
 			snap := RuntimeSnapshot(o.state, time.Now())
