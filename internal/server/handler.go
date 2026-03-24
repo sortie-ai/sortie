@@ -211,7 +211,7 @@ func (s *Server) handleState(w http.ResponseWriter, r *http.Request) {
 		)
 		writeErrorJSON(w, s.logger, http.StatusServiceUnavailable,
 			"snapshot_unavailable",
-			"timed out waiting for orchestrator state snapshot")
+			"orchestrator state snapshot unavailable")
 		return
 	}
 
@@ -246,7 +246,7 @@ func (s *Server) handleIssueDetail(w http.ResponseWriter, r *http.Request) {
 		)
 		writeErrorJSON(w, s.logger, http.StatusServiceUnavailable,
 			"snapshot_unavailable",
-			"timed out waiting for orchestrator state snapshot")
+			"orchestrator state snapshot unavailable")
 		return
 	}
 

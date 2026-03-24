@@ -429,6 +429,10 @@ func (o *Orchestrator) drainRunningWorkers() {
 			snap := RuntimeSnapshot(o.state, time.Now())
 			req.ReplyCh <- snap
 
+		case <-o.refreshCh:
+			// Discard refresh signals during drain; the event loop is no
+			// longer accepting new work.
+
 		case <-deadline.C:
 			o.logger.Warn("drain timeout exceeded, abandoning workers",
 				slog.Int("remaining", len(o.state.Running)),

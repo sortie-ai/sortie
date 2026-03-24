@@ -247,12 +247,6 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 	// --- Server port resolution ---
 
 	serverPort, serverEnabled := resolveServerPort(*port, portSet, cfg.Extensions)
-	if serverEnabled && serverPort < 0 {
-		logger.Warn("invalid server port, server will not start",
-			slog.Int("port", serverPort),
-		)
-		serverEnabled = false
-	}
 
 	// --- Orchestrator construction and event loop ---
 
@@ -382,9 +376,13 @@ func resolveDBPath(cfgPath, workflowDir string) string {
 
 // resolveServerPort determines the effective HTTP server port from the
 // CLI flag and workflow extensions. Returns the port and whether the
-// server should be started.
+// server should be started. Invalid ports (negative, above 65535, or
+// non-integer floats) return (0, false).
 func resolveServerPort(portFlag int, portFlagSet bool, extensions map[string]any) (int, bool) {
 	if portFlagSet {
+		if portFlag < 0 || portFlag > 65535 {
+			return 0, false
+		}
 		return portFlag, true
 	}
 
@@ -393,12 +391,21 @@ func resolveServerPort(portFlag int, portFlagSet bool, extensions map[string]any
 		return 0, false
 	}
 
+	var port int
 	switch v := serverExt["port"].(type) {
 	case int:
-		return v, true
+		port = v
 	case float64:
-		return int(v), true
+		if v != float64(int(v)) {
+			return 0, false
+		}
+		port = int(v)
 	default:
 		return 0, false
 	}
+
+	if port < 0 || port > 65535 {
+		return 0, false
+	}
+	return port, true
 }
