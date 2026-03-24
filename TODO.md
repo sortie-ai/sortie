@@ -665,7 +665,7 @@ JSON API + HTML dashboard, Prometheus `/metrics`), and adds agent capabilities.
       **Verify:** code compiles, `NoopMetrics` satisfies the `Metrics` interface,
       unit test calls every method on `NoopMetrics` without panic.
 
-- [ ] 8.7 Add `github.com/prometheus/client_golang` dependency and implement the
+- [x] 8.7 Add `github.com/prometheus/client_golang` dependency and implement the
       Prometheus-backed `Metrics` (ADR-0008, Tier 3). Place the implementation in
       `internal/server/` (Observability layer). Use a dedicated
       `prometheus.Registry` — not the global default — to avoid polluting metrics
