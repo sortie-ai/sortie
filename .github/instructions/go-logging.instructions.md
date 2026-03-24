@@ -80,6 +80,19 @@ if !exists {
 log = logging.WithIssue(log, issueID, popped.Identifier)
 ```
 
+### Composing `WithSession`
+
+When the session ID is known, compose `WithSession` onto the issue-scoped logger so all subsequent logs carry `session_id`. Apply conditionally — the session ID may be empty early in a lifecycle or absent entirely.
+
+```go
+log := logging.WithIssue(logger, issueID, entry.Identifier)
+if entry.SessionID != "" {
+    log = logging.WithSession(log, entry.SessionID)
+}
+```
+
+Order matters: always `WithIssue` first, then `WithSession`. If the session ID changes mid-function (e.g., `EventSessionStarted` updates `entry.SessionID`), the logger chain carries the *previous* session ID. Log the new session ID as an explicit attribute where it differs from the chain value.
+
 ### Nil-Logger Guard
 
 Functions accepting `*slog.Logger` must guard against nil at entry:
