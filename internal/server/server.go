@@ -63,7 +63,7 @@ type Params struct {
 	// MetricsRegistry is an optional Prometheus registry for the
 	// /metrics endpoint. When non-nil, New registers a handler at
 	// GET /metrics that serves the Prometheus text exposition format.
-	// Construct via [PromMetrics.Registry]. When nil, /metrics is
+	// Obtain via [PromMetrics.Registry]. When nil, /metrics is
 	// not registered.
 	MetricsRegistry *prometheus.Registry
 }
