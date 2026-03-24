@@ -326,7 +326,7 @@ type rawBlockerRef struct {
 }
 
 func loadIssues(path string) ([]rawIssue, error) {
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) //nolint:gosec // G304: path is from trusted adapter configuration
 	if err != nil {
 		return nil, &domain.TrackerError{
 			Kind:    domain.ErrTrackerPayload,

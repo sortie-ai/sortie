@@ -82,7 +82,7 @@ func RunHook(ctx context.Context, params HookParams) (HookResult, error) {
 	hookCtx, cancel := context.WithTimeout(ctx, time.Duration(params.TimeoutMS)*time.Millisecond)
 	defer cancel()
 
-	cmd := exec.CommandContext(hookCtx, "sh", "-c", params.Script)
+	cmd := exec.CommandContext(hookCtx, "sh", "-c", params.Script) //nolint:gosec // G204: hook scripts are from trusted workflow configuration
 	cmd.Dir = params.Dir
 
 	// Place the shell and all descendants in a new process group so

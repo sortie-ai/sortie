@@ -16,16 +16,29 @@ linters:
     - unconvert
     - unparam
     - sloglint
+    - bodyclose
+    - noctx
+    - gosec
   settings:
     sloglint:
       attr-only: true
       static-msg: true
       key-naming-case: snake
+  exclusions:
+    rules:
+      - path: _test\.go
+        linters:
+          - gosec
+          - noctx
 
 formatters:
   enable:
     - gofmt
     - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/sortie-ai/sortie
 
 issues:
   max-issues-per-linter: 0

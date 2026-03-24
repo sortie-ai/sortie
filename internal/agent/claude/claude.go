@@ -169,7 +169,7 @@ func (a *ClaudeCodeAdapter) RunTurn(ctx context.Context, session domain.Session,
 
 	args := buildArgs(state, params.Prompt, a.passthrough)
 
-	cmd := exec.Command(state.command, args...) //nolint:gosec // args are constructed programmatically, not from untrusted shell input
+	cmd := exec.Command(state.command, args...) //nolint:gosec,noctx // args are constructed programmatically; context cancellation handled via gracefulKill goroutine
 	cmd.Dir = state.workspacePath
 	cmd.Env = os.Environ()
 
@@ -304,7 +304,7 @@ func (a *ClaudeCodeAdapter) RunTurn(ctx context.Context, session domain.Session,
 	// Check scanner error (e.g., buffer overflow).
 	if scanErr := scanner.Err(); scanErr != nil {
 		gracefulKill(state)
-		cmd.Wait() //nolint:errcheck // best-effort reap; exit code is irrelevant on scanner failure
+		cmd.Wait() //nolint:errcheck,gosec // best-effort reap; exit code is irrelevant on scanner failure
 		close(waitCh)
 		close(doneCh)
 		state.mu.Lock()

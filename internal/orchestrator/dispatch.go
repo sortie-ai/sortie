@@ -282,7 +282,7 @@ func DispatchIssue(ctx context.Context, state *State, issue domain.Issue, attemp
 		panic("DispatchIssue: nil WorkerFunc")
 	}
 
-	workerCtx, cancelFn := context.WithCancel(ctx)
+	workerCtx, cancelFn := context.WithCancel(ctx) //nolint:gosec // G118: cancelFn is stored in RunningEntry.CancelFunc for later use
 
 	var attemptCopy *int
 	if attempt != nil {
