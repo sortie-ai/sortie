@@ -1,4 +1,5 @@
 {
+  // ── File Associations ───────────────────────────────────────────────────────
   "files.associations": {
     "**/CODEOWNERS": "plaintext"
   },
@@ -157,5 +158,17 @@
   "go.coverOnTestPackage": true,
 
   // Use atomic coverage mode (required when -race is enabled).
-  "go.coverMode": "atomic"
+  "go.coverMode": "atomic",
+
+  // ── Go-specific Settings ───────────────────────────────────────────────────────
+  "go.goroot": "~/.asdf/installs/golang/1.26.1/go",
+  "go.gopath": "~/.asdf/installs/golang/1.26.1/packages",
+  "go.alternateTools": {
+    "go": "~/.asdf/shims/go"
+  },
+  "go.toolsEnvVars": {
+    "GOBIN": "~/.local/bin",
+    "GOPATH": "~/.asdf/installs/golang/1.26.1/packages",
+    "GOROOT": "~/.asdf/installs/golang/1.26.1/go"
+  }
 }
