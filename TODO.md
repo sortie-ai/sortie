@@ -646,7 +646,7 @@ JSON API + HTML dashboard, Prometheus `/metrics`), and adds agent capabilities.
       **Verify:** start Sortie with `--port 8080`, open `http://localhost:8080` in a browser,
       confirm the dashboard renders current state.
 
-- [ ] 8.6 Define the `Metrics` interface and no-op implementation (ADR-0008, Metric
+- [x] 8.6 Define the `Metrics` interface and no-op implementation (ADR-0008, Metric
       Instrumentation Boundaries). Place the interface in `internal/domain/` to preserve
       layer boundaries — the orchestrator (coordination layer) and adapters (integration
       layer) must not import `prometheus/client_golang` directly. The interface methods
