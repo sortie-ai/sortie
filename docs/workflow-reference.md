@@ -85,6 +85,8 @@ The parser applies the following steps in order:
    entire content is `---` with no trailing newline is treated as having no front matter.
 4. **Front matter extraction.** Scan lines until a line that is exactly `---` (with
    optional trailing whitespace). Bytes between the delimiters are the YAML front matter.
+   If no closing delimiter is found, the entire content after the opening delimiter is
+   treated as front matter and the prompt body is empty (this is not an error).
 5. **YAML decoding.** Decode front matter bytes to a map. Non-map YAML (scalar, list) is
    a parse error. Empty or comment-only YAML between delimiters produces an empty map.
 6. **Prompt body extraction.** All remaining bytes after the closing delimiter become the
@@ -874,11 +876,11 @@ skipped for that tick, reconciliation remains active, and an error is emitted.
 
 These errors are raised during workflow file loading and prevent dispatch until fixed.
 
-| Error                               | Cause                                                                                                                        | Fix                                                                                                                                |
-| ----------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
-| **Missing workflow file**           | The workflow file cannot be read at the configured or default path.                                                          | Verify the file exists. Check path spelling. Ensure read permissions. If using a custom path, confirm the CLI argument.            |
-| **Workflow parse error**            | YAML front matter contains syntax errors. Common cause: missing closing `---` delimiter, or invalid YAML between delimiters. | Check for balanced `---` delimiters. Validate YAML syntax (indentation, colons, quoting). Look for tabs where spaces are expected. |
-| **Workflow front matter not a map** | YAML front matter decoded to a scalar or list instead of a map/object.                                                       | Ensure front matter contains key-value pairs, not a bare value or list. The top level must be a YAML mapping.                      |
+| Error                               | Cause                                                                                                                                                                                                                                                           | Fix                                                                                                                                                                                         |
+| ----------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Missing workflow file**           | The workflow file cannot be read at the configured or default path.                                                                                                                                                                                             | Verify the file exists. Check path spelling. Ensure read permissions. If using a custom path, confirm the CLI argument.                                                                     |
+| **Workflow parse error**            | YAML front matter contains syntax errors: invalid YAML between delimiters. A missing closing `---` is **not** itself an error (see [parsing rule 4](#12-parsing-rules)), but it causes the prompt body to be consumed as YAML, which often triggers this error. | Validate YAML syntax (indentation, colons, quoting). Look for tabs where spaces are expected. If the error text includes unexpected content, verify the closing `---` delimiter is present. |
+| **Workflow front matter not a map** | YAML front matter decoded to a scalar or list instead of a map/object.                                                                                                                                                                                          | Ensure front matter contains key-value pairs, not a bare value or list. The top level must be a YAML mapping.                                                                               |
 
 ### 8.2 Configuration Errors
 
