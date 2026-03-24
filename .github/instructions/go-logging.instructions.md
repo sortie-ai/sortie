@@ -19,12 +19,12 @@ Sortie uses `log/slog` exclusively. No external logging libraries (zap, zerolog,
 Use typed `slog.Attr` constructors exclusively. Never use the alternating `key, value` shorthand — it silently produces `!BADKEY` on arity mismatches.
 
 ```go
-// Correct — typed attributes, compile-time safe.
+// ✅ Typed attributes, compile-time safe.
 logger.Info("workspace prepared",
     slog.String("workspace", wsResult.Path),
     slog.Int("attempt", attempt))
 
-// Wrong — positional key-value pairs, silent corruption on mismatch.
+// ❌ Positional key-value pairs, silent corruption on mismatch.
 logger.Info("workspace prepared", "workspace", wsResult.Path, "attempt", attempt)
 ```
 
@@ -41,11 +41,62 @@ logger  = logging.WithSession(logger, sessionID)
 
 Never attach these fields manually with `logger.With(...)` — the helper functions guarantee consistent key names and ordering.
 
+### Logger Derivation Patterns
+
+Derive the issue-scoped logger **once at function entry** (after a nil-logger guard if applicable), then use it for every log call in that scope. This eliminates repeated manual attributes and prevents accidental omissions.
+
+**Single-issue functions** (e.g., exit handlers, retry handlers):
+
+```go
+func HandleWorkerExit(state *State, result WorkerResult, log *slog.Logger) {
+    if log == nil {
+        log = slog.Default()
+    }
+    log = logging.WithIssue(log, result.IssueID, result.Identifier)
+
+    // All subsequent log calls carry issue_id + issue_identifier automatically.
+    log.Info("worker exited", slog.Int("exit_code", result.ExitCode))
+}
+```
+
+**Multi-issue loops** (e.g., reconciliation): derive a scoped logger per iteration. The allocation is negligible at O(10) concurrent sessions.
+
+```go
+for issueID, entry := range state.Running {
+    entryLog := logging.WithIssue(log, issueID, entry.Identifier)
+    entryLog.Warn("stall detected", slog.Int64("elapsed_ms", elapsed))
+}
+```
+
+**Early returns before identifier is available**: use manual `slog.String("issue_id", issueID)` only when the identifier genuinely cannot be resolved (e.g., entry not found). After the identifier is known, switch to `WithIssue`.
+
+```go
+popped, exists := state.RetryAttempts[issueID]
+if !exists {
+    log.Debug("retry timer for unknown entry", slog.String("issue_id", issueID))
+    return
+}
+// Identifier now available — derive scoped logger for remaining logic.
+log = logging.WithIssue(log, issueID, popped.Identifier)
+```
+
+### Nil-Logger Guard
+
+Functions accepting `*slog.Logger` must guard against nil at entry:
+
+```go
+if log == nil {
+    log = slog.Default()
+}
+```
+
+Place the guard before `WithIssue` derivation. One guard per function entry point is sufficient.
+
 ## Log Levels
 
 | Level   | Semantics                                                                                       |
 |---------|-------------------------------------------------------------------------------------------------|
-| `Debug` | Internal detail useful only during development: timer values, stale-entry detection, raw stderr |
+| `Debug` | Internal detail useful only during development: timer values, stale-entry detection, raw stderr, agent event processing |
 | `Info`  | Operator-visible lifecycle events: startup, workspace ready, session started, turn completed    |
 | `Warn`  | Degraded but recoverable: config clamping, stale timers, hook failures, no available slots      |
 | `Error` | Failed operations requiring attention: persistence errors, API failures, panics                  |
@@ -54,17 +105,27 @@ Rules:
 
 - Every `Error` must include an `"error"` attribute with the original `error` value (not `.Error()` string).
 - `Warn` is for things the operator should know but that the system handles automatically. If the system cannot continue, use `Error`.
-- `Debug` should be cheap to produce. Guard expensive serialization behind `logger.Enabled(ctx, slog.LevelDebug)`.
+- `Debug` should be cheap to produce. `slog` handlers skip formatting when the level is below threshold (zero allocation at `Info` default). No explicit `logger.Enabled()` guard is needed unless the attribute construction itself is expensive.
 - Never use `slog.Log` with custom numeric levels. Four levels are enough.
+
+### Hot-Path Debug Logging
+
+Event handlers called on every agent event (e.g., `HandleAgentEvent`) use `Debug` level to avoid noise at `Info`. Include event-specific attributes:
+
+- `EventSessionStarted`: `session_id`
+- `EventTokenUsage`: `delta_input_tokens`, `delta_output_tokens`, `delta_total_tokens`
+- Turn-finalization events: `turn_count`
+- All others: `event_type` only
 
 ## Message Formatting
 
 Messages are lowercase verb phrases describing the action and its outcome:
 
 ```
-"workspace prepared"          — success, Info
+"workspace prepared"                 — success, Info
 "turn exit reason indicates failure" — degraded, Warn
 "failed to persist retry entry"      — failure, Error
+"agent event processed"              — hot-path detail, Debug
 ```
 
 Rules:
@@ -75,20 +136,46 @@ Rules:
 - Never interpolate variable data into the message string. Variables go in attributes:
 
 ```go
-// Correct — stable message, variable in attribute.
+// ✅ Stable message, variable in attribute.
 logger.Error("failed to persist retry entry",
-    slog.String("issue_id", issueID),
     slog.Any("error", err))
 
-// Wrong — message changes with every call, breaks alerting.
+// ❌ Message changes with every call, breaks alerting.
 logger.Error(fmt.Sprintf("failed to persist retry entry for %s: %v", issueID, err))
 ```
 
-## Error Logging
+## Error and Validation Attributes
+
+### The `"error"` key
+
+Reserve `"error"` exclusively for Go `error` values logged via `slog.Any("error", err)`. This preserves the full error chain for log processors that support `errors.Is`/`errors.As`.
+
+```go
+// ✅ error value via slog.Any — preserves chain.
+logger.Error("persistence failed", slog.Any("error", err))
+
+// ❌ Stringified error — strips unwrap chain.
+logger.Error("persistence failed", slog.String("error", err.Error()))
+```
+
+### Non-error diagnostic strings
+
+For diagnostic strings that are not Go `error` values (e.g., validation summaries, preflight results), use a descriptive key — never `"error"`:
+
+```go
+// ✅ Distinct key for non-error diagnostic.
+logger.Warn("preflight check failed",
+    slog.String("validation_error", validation.Error()))
+
+// ❌ Collides with the error convention, confuses log processors.
+logger.Warn("preflight check failed",
+    slog.String("error", validation.Error()))
+```
+
+### Decision-point logging
 
 - Log errors at the **point of decision**, not at every intermediate return. If a function returns an error to its caller, it should not also log it — that produces duplicates.
 - The orchestrator layer (`internal/orchestrator`) is the primary decision point. Adapter and domain packages return errors; the orchestrator logs them.
-- Use `slog.Any("error", err)` to preserve the full error chain. Never `slog.String("error", err.Error())` — it strips `errors.Is`/`errors.As` structure from log processors that support structured errors.
 - After a panic recovery, log at `Error` with the panic value and then continue — never `log.Fatal` or `os.Exit` from a worker goroutine.
 
 ## What Not to Log
@@ -108,4 +195,21 @@ When a new cross-cutting context field is needed (e.g., `workspace_id`), add a `
 
 ## Testing
 
-Use `slogtest.Handler` or a `bytes.Buffer`-backed `TextHandler` to assert log output in tests. Never assert on exact timestamp values. Assert on the presence and correctness of structured attributes.
+Use a `bytes.Buffer`-backed `slog.NewTextHandler` at `Debug` level to capture and assert log output in tests:
+
+```go
+var buf bytes.Buffer
+h := slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})
+logger := slog.New(h)
+
+// ... call function under test with logger ...
+
+output := buf.String()
+// Assert presence of structured attributes, not exact formatting.
+if !strings.Contains(output, "issue_id=") { t.Error("missing issue_id") }
+```
+
+Rules:
+- Never assert on exact timestamp values.
+- Assert on attribute key presence and expected values, not full line formatting.
+- For functions that accept `*slog.Logger`, pass the test logger — never rely on `slog.Default()` in tests.

@@ -174,7 +174,7 @@ func (o *Orchestrator) Run(ctx context.Context) {
 			o.notifyObservers()
 
 		case msg := <-o.agentEventCh:
-			HandleAgentEvent(o.state, msg.IssueID, msg.Event)
+			HandleAgentEvent(o.state, msg.IssueID, msg.Event, o.logger)
 		}
 	}
 }
@@ -225,7 +225,7 @@ func (o *Orchestrator) handleTick(ctx context.Context) {
 	// observers so the UI reflects the reconciliation outcome.
 	if !validation.OK() {
 		o.logger.Error("dispatch preflight failed",
-			slog.String("error", validation.Error()),
+			slog.String("validation_error", validation.Error()),
 		)
 		o.notifyObservers()
 		return
@@ -403,7 +403,7 @@ func (o *Orchestrator) drainRunningWorkers() {
 			o.notifyObservers()
 
 		case msg := <-o.agentEventCh:
-			HandleAgentEvent(o.state, msg.IssueID, msg.Event)
+			HandleAgentEvent(o.state, msg.IssueID, msg.Event, o.logger)
 
 		case <-deadline.C:
 			o.logger.Warn("drain timeout exceeded, abandoning workers",

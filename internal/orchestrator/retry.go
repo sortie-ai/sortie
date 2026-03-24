@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/sortie-ai/sortie/internal/domain"
+	"github.com/sortie-ai/sortie/internal/logging"
 	"github.com/sortie-ai/sortie/internal/persistence"
 )
 
@@ -108,6 +109,8 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 	}
 	delete(state.RetryAttempts, issueID)
 
+	log = logging.WithIssue(log, issueID, popped.Identifier)
+
 	// Guard: if the cancelled worker has not yet exited, the issue is
 	// still in the Running map. Re-scheduling a dispatch would overwrite
 	// the running entry and spawn a duplicate worker. Reschedule the
@@ -116,8 +119,6 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 	if _, running := state.Running[issueID]; running {
 		delayMS := computeBackoffDelay(popped.Attempt, params.MaxRetryBackoffMS)
 		log.Debug("worker still running, rescheduling retry",
-			slog.String("issue_id", issueID),
-			slog.String("issue_identifier", popped.Identifier),
 			slog.Int("attempt", popped.Attempt),
 		)
 		ScheduleRetry(state, ScheduleRetryParams{
@@ -138,22 +139,16 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 		count, countErr := params.Store.CountRunHistoryByIssue(ctx, issueID)
 		if countErr != nil {
 			log.Warn("effort budget check failed, proceeding with dispatch",
-				slog.String("issue_id", issueID),
-				slog.String("issue_identifier", popped.Identifier),
 				slog.Any("error", countErr),
 			)
 		} else if count >= params.MaxSessions {
 			log.Warn("effort budget exhausted, releasing claim",
-				slog.String("issue_id", issueID),
-				slog.String("issue_identifier", popped.Identifier),
 				slog.Int("count", count),
 				slog.Int("max_sessions", params.MaxSessions),
 			)
 			delete(state.Claimed, issueID)
 			if err := params.Store.DeleteRetryEntry(ctx, issueID); err != nil {
 				log.Error("failed to delete retry entry after budget exhaustion",
-					slog.String("issue_id", issueID),
-					slog.String("issue_identifier", popped.Identifier),
 					slog.Any("error", err),
 				)
 			}
@@ -168,8 +163,6 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 		delayMS := computeBackoffDelay(nextAttempt, params.MaxRetryBackoffMS)
 
 		log.Error("retry poll failed, rescheduling",
-			slog.String("issue_id", issueID),
-			slog.String("issue_identifier", popped.Identifier),
 			slog.Int("attempt", nextAttempt),
 			slog.Int64("delay_ms", delayMS),
 			slog.Any("error", err),
@@ -190,15 +183,11 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 	// Step 3: Find the issue by ID in fetched candidates.
 	issue, found := findIssueByID(candidates, issueID)
 	if !found {
-		log.Info("issue no longer active, releasing claim",
-			slog.String("issue_id", issueID),
-			slog.String("issue_identifier", popped.Identifier),
-		)
+		log.Info("issue no longer active, releasing claim")
 		delete(state.Claimed, issueID)
 
 		if err := params.Store.DeleteRetryEntry(ctx, issueID); err != nil {
 			log.Error("failed to delete retry entry from store",
-				slog.String("issue_id", issueID),
 				slog.Any("error", err),
 			)
 		}
@@ -216,15 +205,11 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 	if issue.ID == "" || issue.Identifier == "" || issue.Title == "" || issue.State == "" ||
 		isTerminal ||
 		isBlockedByNonTerminalSet(issue, terminalSet) {
-		log.Info("issue no longer eligible for retry, releasing claim",
-			slog.String("issue_id", issueID),
-			slog.String("issue_identifier", popped.Identifier),
-		)
+		log.Info("issue no longer eligible for retry, releasing claim")
 		delete(state.Claimed, issueID)
 
 		if err := params.Store.DeleteRetryEntry(ctx, issueID); err != nil {
 			log.Error("failed to delete retry entry from store",
-				slog.String("issue_id", issueID),
 				slog.Any("error", err),
 			)
 		}
@@ -237,8 +222,6 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 		delayMS := computeBackoffDelay(nextAttempt, params.MaxRetryBackoffMS)
 
 		log.Warn("no available orchestrator slots, rescheduling retry",
-			slog.String("issue_id", issueID),
-			slog.String("issue_identifier", popped.Identifier),
 			slog.String("issue_state", issue.State),
 			slog.Int("attempt", nextAttempt),
 			slog.Int64("delay_ms", delayMS),
@@ -263,8 +246,6 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 	DispatchIssue(ctx, state, issue, &attempt, params.WorkerFn)
 
 	log.Info("retried issue dispatched",
-		slog.String("issue_id", issueID),
-		slog.String("issue_identifier", issue.Identifier),
 		slog.Int("attempt", attempt),
 	)
 
@@ -273,7 +254,6 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 	// but the persisted row must also be cleaned up.
 	if err := params.Store.DeleteRetryEntry(ctx, issueID); err != nil {
 		log.Error("failed to delete retry entry from store after dispatch",
-			slog.String("issue_id", issueID),
 			slog.Any("error", err),
 		)
 	}
@@ -310,8 +290,6 @@ func persistRetryEntry(ctx context.Context, log *slog.Logger, store RetryTimerSt
 	}
 	if err := store.SaveRetryEntry(ctx, pEntry); err != nil {
 		log.Error("failed to persist retry entry",
-			slog.String("issue_id", issueID),
-			slog.String("issue_identifier", retryEntry.Identifier),
 			slog.Any("error", err),
 		)
 	}

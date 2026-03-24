@@ -1,7 +1,10 @@
 package orchestrator
 
 import (
+	"log/slog"
+
 	"github.com/sortie-ai/sortie/internal/domain"
+	"github.com/sortie-ai/sortie/internal/logging"
 )
 
 // HandleAgentEvent applies an incoming agent event from the worker's
@@ -14,11 +17,21 @@ import (
 //
 // Must be called from the orchestrator's single-writer event loop
 // goroutine. Not safe for concurrent use.
-func HandleAgentEvent(state *State, issueID string, event domain.AgentEvent) {
+func HandleAgentEvent(state *State, issueID string, event domain.AgentEvent, logger *slog.Logger) {
+	if logger == nil {
+		logger = slog.Default()
+	}
+
 	entry, ok := state.Running[issueID]
 	if !ok {
+		logger.Debug("agent event for unknown issue",
+			slog.String("issue_id", issueID),
+			slog.Any("event_type", event.Type),
+		)
 		return
 	}
+
+	log := logging.WithIssue(logger, issueID, entry.Identifier)
 
 	// Always record the most-recently-processed event type.
 	entry.LastAgentEvent = event.Type
@@ -76,6 +89,13 @@ func HandleAgentEvent(state *State, issueID string, event domain.AgentEvent) {
 		state.AgentTotals.InputTokens += deltaInput
 		state.AgentTotals.OutputTokens += deltaOutput
 		state.AgentTotals.TotalTokens += deltaTotal
+
+		log.Debug("agent event processed",
+			slog.Any("event_type", event.Type),
+			slog.Int64("delta_input", deltaInput),
+			slog.Int64("delta_output", deltaOutput),
+			slog.Int64("delta_total", deltaTotal),
+		)
 	}
 
 	// Snapshot the rate-limit payload when present. The worker's
@@ -94,6 +114,31 @@ func HandleAgentEvent(state *State, issueID string, event domain.AgentEvent) {
 				ReceivedAt: event.Timestamp,
 			}
 		}
+	}
+
+	// Emit a Debug-level summary for observability. Gated by the handler's
+	// level check so zero allocation occurs at Info and above.
+	switch event.Type {
+	case domain.EventSessionStarted:
+		log.Debug("agent event processed",
+			slog.Any("event_type", event.Type),
+			slog.String("session_id", event.SessionID),
+		)
+	case domain.EventTokenUsage:
+		// Logged inside the delta computation block above.
+	case domain.EventTurnCompleted,
+		domain.EventTurnFailed,
+		domain.EventTurnCancelled,
+		domain.EventTurnEndedWithError,
+		domain.EventTurnInputRequired:
+		log.Debug("agent event processed",
+			slog.Any("event_type", event.Type),
+			slog.Int("turn_count", entry.TurnCount),
+		)
+	default:
+		log.Debug("agent event processed",
+			slog.Any("event_type", event.Type),
+		)
 	}
 }
 

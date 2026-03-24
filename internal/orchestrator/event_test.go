@@ -1,6 +1,9 @@
 package orchestrator
 
 import (
+	"bytes"
+	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -27,7 +30,7 @@ func TestHandleAgentEvent_UnknownIssue(t *testing.T) {
 		Type:      domain.EventNotification,
 		Timestamp: time.Now().UTC(),
 		Message:   "should be dropped",
-	})
+	}, slog.Default())
 
 	if state.AgentTotals != (AgentTotals{}) {
 		t.Errorf("AgentTotals modified for unknown issue: %+v", state.AgentTotals)
@@ -51,7 +54,7 @@ func TestHandleAgentEvent_BasicFields(t *testing.T) {
 		Timestamp: ts,
 		AgentPID:  "4242",
 		Message:   "hello",
-	})
+	}, slog.Default())
 
 	if entry.LastAgentEvent != "notification" {
 		t.Errorf("LastAgentEvent = %q, want %q", entry.LastAgentEvent, "notification")
@@ -87,7 +90,7 @@ func TestHandleAgentEvent_SessionStarted(t *testing.T) {
 		AgentPID:  "9999",
 		SessionID: "sess-1",
 		Message:   "session started",
-	})
+	}, slog.Default())
 
 	if entry.SessionID != "sess-1" {
 		t.Errorf("SessionID = %q, want %q", entry.SessionID, "sess-1")
@@ -113,7 +116,7 @@ func TestHandleAgentEvent_SessionStarted_EmptySessionID(t *testing.T) {
 		Type:      domain.EventSessionStarted,
 		Timestamp: time.Now().UTC(),
 		SessionID: "",
-	})
+	}, slog.Default())
 
 	if entry.SessionID != "existing-id" {
 		t.Errorf("SessionID = %q, want %q (must not overwrite with empty)", entry.SessionID, "existing-id")
@@ -145,7 +148,7 @@ func TestHandleAgentEvent_TurnCount(t *testing.T) {
 			HandleAgentEvent(state, "MT-4", domain.AgentEvent{
 				Type:      ft.eventType,
 				Timestamp: time.Now().UTC(),
-			})
+			}, slog.Default())
 
 			if entry.TurnCount != 1 {
 				t.Errorf("TurnCount = %d, want 1 for %q", entry.TurnCount, ft.eventType)
@@ -172,7 +175,7 @@ func TestHandleAgentEvent_TurnCount(t *testing.T) {
 			HandleAgentEvent(state, "MT-5", domain.AgentEvent{
 				Type:      nft.eventType,
 				Timestamp: time.Now().UTC(),
-			})
+			}, slog.Default())
 
 			if entry.TurnCount != 0 {
 				t.Errorf("TurnCount = %d, want 0 for non-finalization event %q", entry.TurnCount, nft.eventType)
@@ -200,7 +203,7 @@ func TestHandleAgentEvent_TokenUsage_DeltaAccumulation(t *testing.T) {
 			OutputTokens: 50,
 			TotalTokens:  150,
 		},
-	})
+	}, slog.Default())
 
 	if entry.AgentInputTokens != 100 {
 		t.Errorf("after 1st event: AgentInputTokens = %d, want 100", entry.AgentInputTokens)
@@ -227,7 +230,7 @@ func TestHandleAgentEvent_TokenUsage_DeltaAccumulation(t *testing.T) {
 			OutputTokens: 100,
 			TotalTokens:  300,
 		},
-	})
+	}, slog.Default())
 
 	if entry.AgentInputTokens != 200 {
 		t.Errorf("after 2nd event: AgentInputTokens = %d, want 200", entry.AgentInputTokens)
@@ -248,7 +251,7 @@ func TestHandleAgentEvent_TokenUsage_DeltaAccumulation(t *testing.T) {
 			OutputTokens: 100,
 			TotalTokens:  300,
 		},
-	})
+	}, slog.Default())
 
 	if entry.AgentInputTokens != 200 {
 		t.Errorf("after duplicate event: AgentInputTokens = %d, want 200 (no double-count)", entry.AgentInputTokens)
@@ -274,34 +277,34 @@ func TestHandleAgentEvent_FullSequence(t *testing.T) {
 		AgentPID:  "1234",
 		SessionID: "sess-1",
 		Message:   "session started",
-	})
+	}, slog.Default())
 
 	// 2. First token usage: {100, 50, 150}.
 	HandleAgentEvent(state, issueID, domain.AgentEvent{
 		Type:      domain.EventTokenUsage,
 		Timestamp: ts,
 		Usage:     domain.TokenUsage{InputTokens: 100, OutputTokens: 50, TotalTokens: 150},
-	})
+	}, slog.Default())
 
 	// 3. Second token usage: {200, 100, 300} — delta {+100, +50, +150}.
 	HandleAgentEvent(state, issueID, domain.AgentEvent{
 		Type:      domain.EventTokenUsage,
 		Timestamp: ts,
 		Usage:     domain.TokenUsage{InputTokens: 200, OutputTokens: 100, TotalTokens: 300},
-	})
+	}, slog.Default())
 
 	// 4. Duplicate token usage — zero delta.
 	HandleAgentEvent(state, issueID, domain.AgentEvent{
 		Type:      domain.EventTokenUsage,
 		Timestamp: ts,
 		Usage:     domain.TokenUsage{InputTokens: 200, OutputTokens: 100, TotalTokens: 300},
-	})
+	}, slog.Default())
 
 	// 5. Turn completed.
 	HandleAgentEvent(state, issueID, domain.AgentEvent{
 		Type:      domain.EventTurnCompleted,
 		Timestamp: ts,
-	})
+	}, slog.Default())
 
 	// Assert all final field values.
 	if entry.SessionID != "sess-1" {
@@ -350,12 +353,12 @@ func TestHandleAgentEvent_TwoSessions_AgentTotals(t *testing.T) {
 		Type:      domain.EventTokenUsage,
 		Timestamp: ts,
 		Usage:     domain.TokenUsage{InputTokens: 300, OutputTokens: 100, TotalTokens: 400},
-	})
+	}, slog.Default())
 	HandleAgentEvent(state, "B-1", domain.AgentEvent{
 		Type:      domain.EventTokenUsage,
 		Timestamp: ts,
 		Usage:     domain.TokenUsage{InputTokens: 200, OutputTokens: 50, TotalTokens: 250},
-	})
+	}, slog.Default())
 
 	// Global totals are the sum of both sessions.
 	if state.AgentTotals.InputTokens != 500 {
@@ -392,7 +395,7 @@ func TestHandleAgentEvent_RateLimits(t *testing.T) {
 		Type:       domain.EventNotification,
 		Timestamp:  ts,
 		RateLimits: originalMap,
-	})
+	}, slog.Default())
 
 	if state.AgentRateLimits == nil {
 		t.Fatal("AgentRateLimits = nil, want non-nil after delivery")
@@ -412,7 +415,7 @@ func TestHandleAgentEvent_RateLimits(t *testing.T) {
 		Type:       domain.EventNotification,
 		Timestamp:  ts,
 		RateLimits: nil,
-	})
+	}, slog.Default())
 	if state.AgentRateLimits == nil {
 		t.Error("AgentRateLimits = nil after nil-RateLimits event, want previous snapshot preserved")
 	}
@@ -434,7 +437,7 @@ func TestHandleAgentEvent_MonotonicTimestamp(t *testing.T) {
 	HandleAgentEvent(state, "MT-10", domain.AgentEvent{
 		Type:      domain.EventNotification,
 		Timestamp: tPlus2,
-	})
+	}, slog.Default())
 	if !entry.LastAgentTimestamp.Equal(tPlus2) {
 		t.Errorf("after event A: LastAgentTimestamp = %v, want %v", entry.LastAgentTimestamp, tPlus2)
 	}
@@ -443,7 +446,7 @@ func TestHandleAgentEvent_MonotonicTimestamp(t *testing.T) {
 	HandleAgentEvent(state, "MT-10", domain.AgentEvent{
 		Type:      domain.EventTurnCompleted,
 		Timestamp: tPlus1,
-	})
+	}, slog.Default())
 	if !entry.LastAgentTimestamp.Equal(tPlus2) {
 		t.Errorf("after out-of-order event B: LastAgentTimestamp = %v, want %v (must not regress)", entry.LastAgentTimestamp, tPlus2)
 	}
@@ -456,7 +459,7 @@ func TestHandleAgentEvent_MonotonicTimestamp(t *testing.T) {
 	HandleAgentEvent(state, "MT-10", domain.AgentEvent{
 		Type:      domain.EventNotification,
 		Timestamp: tPlus3,
-	})
+	}, slog.Default())
 	if !entry.LastAgentTimestamp.Equal(tPlus3) {
 		t.Errorf("after event C: LastAgentTimestamp = %v, want %v", entry.LastAgentTimestamp, tPlus3)
 	}
@@ -477,7 +480,7 @@ func TestHandleAgentEvent_TokenUsage_CounterRegression(t *testing.T) {
 		Type:      domain.EventTokenUsage,
 		Timestamp: ts,
 		Usage:     domain.TokenUsage{InputTokens: 200, OutputTokens: 100, TotalTokens: 300},
-	})
+	}, slog.Default())
 
 	if entry.AgentInputTokens != 200 {
 		t.Errorf("after 1st: AgentInputTokens = %d, want 200", entry.AgentInputTokens)
@@ -489,7 +492,7 @@ func TestHandleAgentEvent_TokenUsage_CounterRegression(t *testing.T) {
 		Type:      domain.EventTokenUsage,
 		Timestamp: ts,
 		Usage:     domain.TokenUsage{InputTokens: 150, OutputTokens: 80, TotalTokens: 230},
-	})
+	}, slog.Default())
 
 	if entry.AgentInputTokens != 200 {
 		t.Errorf("after regression: AgentInputTokens = %d, want 200 (unchanged)", entry.AgentInputTokens)
@@ -513,7 +516,7 @@ func TestHandleAgentEvent_TokenUsage_CounterRegression(t *testing.T) {
 		Type:      domain.EventTokenUsage,
 		Timestamp: ts,
 		Usage:     domain.TokenUsage{InputTokens: 250, OutputTokens: 120, TotalTokens: 370},
-	})
+	}, slog.Default())
 
 	if entry.AgentInputTokens != 250 {
 		t.Errorf("after recovery: AgentInputTokens = %d, want 250", entry.AgentInputTokens)
@@ -555,7 +558,7 @@ func TestHandleAgentEvent_RateLimits_OutOfOrder(t *testing.T) {
 		Type:       domain.EventNotification,
 		Timestamp:  tPlus2,
 		RateLimits: map[string]any{"a": 1},
-	})
+	}, slog.Default())
 
 	if state.AgentRateLimits == nil {
 		t.Fatal("AgentRateLimits = nil after first delivery")
@@ -569,7 +572,7 @@ func TestHandleAgentEvent_RateLimits_OutOfOrder(t *testing.T) {
 		Type:       domain.EventNotification,
 		Timestamp:  tPlus1,
 		RateLimits: map[string]any{"b": 2},
-	})
+	}, slog.Default())
 
 	if got := state.AgentRateLimits.Data["a"]; got != 1 {
 		t.Errorf("after out-of-order event: Data[\"a\"] = %v, want 1 (must not be overwritten)", got)
@@ -580,4 +583,107 @@ func TestHandleAgentEvent_RateLimits_OutOfOrder(t *testing.T) {
 	if !state.AgentRateLimits.ReceivedAt.Equal(tPlus2) {
 		t.Errorf("after out-of-order event: ReceivedAt = %v, want %v", state.AgentRateLimits.ReceivedAt, tPlus2)
 	}
+}
+
+// debugLogger returns a *slog.Logger that writes text records at Debug level
+// to buf. Use buf.String() after the test action to inspect log output.
+func debugLogger(t *testing.T, buf *bytes.Buffer) *slog.Logger {
+	t.Helper()
+	return slog.New(slog.NewTextHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+}
+
+// TestHandleAgentEvent_DebugLogging verifies that HandleAgentEvent emits
+// Debug-level structured log lines containing the expected context fields
+// for each event category: session_started, token_usage, turn finalization,
+// and generic events. Also verifies that unknown-issue events log issue_id.
+func TestHandleAgentEvent_DebugLogging(t *testing.T) {
+	t.Parallel()
+
+	const issueID = "LOG-1"
+	const identifier = "LOG-1-ident"
+
+	t.Run("session_started logs issue_id, issue_identifier, session_id", func(t *testing.T) {
+		t.Parallel()
+		var buf bytes.Buffer
+		logger := debugLogger(t, &buf)
+
+		state, entry := newStateWithEntry(issueID)
+		entry.Identifier = identifier
+
+		HandleAgentEvent(state, issueID, domain.AgentEvent{
+			Type:      domain.EventSessionStarted,
+			Timestamp: time.Now().UTC(),
+			SessionID: "sess-42",
+		}, logger)
+
+		out := buf.String()
+		for _, want := range []string{"issue_id=" + issueID, "issue_identifier=" + identifier, "session_id=sess-42", "event_type=session_started"} {
+			if !strings.Contains(out, want) {
+				t.Errorf("log output missing %q\ngot: %s", want, out)
+			}
+		}
+	})
+
+	t.Run("token_usage logs delta fields", func(t *testing.T) {
+		t.Parallel()
+		var buf bytes.Buffer
+		logger := debugLogger(t, &buf)
+
+		state, entry := newStateWithEntry(issueID)
+		entry.Identifier = identifier
+
+		HandleAgentEvent(state, issueID, domain.AgentEvent{
+			Type:      domain.EventTokenUsage,
+			Timestamp: time.Now().UTC(),
+			Usage:     domain.TokenUsage{InputTokens: 100, OutputTokens: 50, TotalTokens: 150},
+		}, logger)
+
+		out := buf.String()
+		for _, want := range []string{"issue_id=" + issueID, "issue_identifier=" + identifier, "delta_input=100", "delta_output=50", "delta_total=150"} {
+			if !strings.Contains(out, want) {
+				t.Errorf("log output missing %q\ngot: %s", want, out)
+			}
+		}
+	})
+
+	t.Run("turn_completed logs turn_count", func(t *testing.T) {
+		t.Parallel()
+		var buf bytes.Buffer
+		logger := debugLogger(t, &buf)
+
+		state, entry := newStateWithEntry(issueID)
+		entry.Identifier = identifier
+
+		HandleAgentEvent(state, issueID, domain.AgentEvent{
+			Type:      domain.EventTurnCompleted,
+			Timestamp: time.Now().UTC(),
+		}, logger)
+
+		out := buf.String()
+		for _, want := range []string{"issue_id=" + issueID, "issue_identifier=" + identifier, "turn_count=1"} {
+			if !strings.Contains(out, want) {
+				t.Errorf("log output missing %q\ngot: %s", want, out)
+			}
+		}
+	})
+
+	t.Run("unknown issue logs issue_id and event_type", func(t *testing.T) {
+		t.Parallel()
+		var buf bytes.Buffer
+		logger := debugLogger(t, &buf)
+
+		state := NewState(5000, 4, nil, AgentTotals{})
+
+		HandleAgentEvent(state, "GHOST-1", domain.AgentEvent{
+			Type:      domain.EventNotification,
+			Timestamp: time.Now().UTC(),
+		}, logger)
+
+		out := buf.String()
+		for _, want := range []string{"issue_id=GHOST-1", "event_type=notification"} {
+			if !strings.Contains(out, want) {
+				t.Errorf("log output missing %q\ngot: %s", want, out)
+			}
+		}
+	})
 }

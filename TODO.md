@@ -611,7 +611,7 @@ JSON API + HTML dashboard, Prometheus `/metrics`), and adds agent capabilities.
       **Verify:** ADR exists with status `accepted`, covers at least 3 alternatives, and
       `docs/decisions/README.md` index is updated.
 
-- [ ] 8.2 Audit and enhance structured logging across all modules: confirm `issue_id`,
+- [x] 8.2 Audit and enhance structured logging across all modules: confirm `issue_id`,
       `issue_identifier`, and `session_id` context fields are present on all relevant log
       lines (dispatch, retry, reconciliation, worker lifecycle, agent events). Add any
       missing context. Confirm key=value format is consistent.

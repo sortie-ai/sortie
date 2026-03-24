@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/sortie-ai/sortie/internal/domain"
+	"github.com/sortie-ai/sortie/internal/logging"
 	"github.com/sortie-ai/sortie/internal/persistence"
 )
 
@@ -104,6 +105,8 @@ func reconcileStalled(state *State, params ReconcileParams, log *slog.Logger, ct
 	stallThreshold := int64(params.StallTimeoutMS)
 
 	for issueID, entry := range state.Running {
+		entryLog := logging.WithIssue(log, issueID, entry.Identifier)
+
 		refTime := entry.StartedAt
 		if !entry.LastAgentTimestamp.IsZero() {
 			refTime = entry.LastAgentTimestamp
@@ -125,9 +128,7 @@ func reconcileStalled(state *State, params ReconcileParams, log *slog.Logger, ct
 		// would replace the existing timer, pushing DueAtMS forward and
 		// preventing the retry from ever firing.
 		if existing, ok := state.RetryAttempts[issueID]; ok && existing.Attempt >= nextAttempt {
-			log.Debug("stall retry already scheduled, skipping reschedule",
-				slog.String("issue_id", issueID),
-				slog.String("issue_identifier", entry.Identifier),
+			entryLog.Debug("stall retry already scheduled, skipping reschedule",
 				slog.Int("current_attempt", existing.Attempt),
 				slog.Int("next_attempt", nextAttempt),
 			)
@@ -151,17 +152,13 @@ func reconcileStalled(state *State, params ReconcileParams, log *slog.Logger, ct
 					Error:      stringPtr(retryEntry.Error),
 				}
 				if err := params.Store.SaveRetryEntry(ctx, pEntry); err != nil {
-					log.Error("failed to persist stall retry entry",
-						slog.String("issue_id", issueID),
-						slog.String("issue_identifier", entry.Identifier),
+					entryLog.Error("failed to persist stall retry entry",
 						slog.Any("error", err),
 					)
 				}
 			}
 
-			log.Warn("stall detected, cancelling worker",
-				slog.String("issue_id", issueID),
-				slog.String("issue_identifier", entry.Identifier),
+			entryLog.Warn("stall detected, cancelling worker",
 				slog.Int64("elapsed_ms", elapsedMS),
 				slog.Int("stall_timeout_ms", params.StallTimeoutMS),
 			)
@@ -199,6 +196,8 @@ func reconcileTrackerState(state *State, params ReconcileParams, log *slog.Logge
 			continue
 		}
 
+		entryLog := logging.WithIssue(log, issueID, entry.Identifier)
+
 		normalized := strings.ToLower(stateName)
 
 		if _, terminal := terminalSet[normalized]; terminal {
@@ -210,16 +209,12 @@ func reconcileTrackerState(state *State, params ReconcileParams, log *slog.Logge
 			}
 			CancelRetry(state, issueID)
 			if err := params.Store.DeleteRetryEntry(ctx, issueID); err != nil {
-				log.Error("failed to delete retry entry for terminal issue",
-					slog.String("issue_id", issueID),
-					slog.String("issue_identifier", entry.Identifier),
+				entryLog.Error("failed to delete retry entry for terminal issue",
 					slog.Any("error", err),
 				)
 			}
 			entry.PendingCleanup = true
-			log.Info("stopping worker for terminal issue",
-				slog.String("issue_id", issueID),
-				slog.String("issue_identifier", entry.Identifier),
+			entryLog.Info("stopping worker for terminal issue",
 				slog.String("state", stateName),
 			)
 			continue
@@ -227,9 +222,7 @@ func reconcileTrackerState(state *State, params ReconcileParams, log *slog.Logge
 
 		if _, active := activeSet[normalized]; active {
 			entry.Issue.State = stateName
-			log.Debug("refreshed issue state",
-				slog.String("issue_id", issueID),
-				slog.String("issue_identifier", entry.Identifier),
+			entryLog.Debug("refreshed issue state",
 				slog.String("state", stateName),
 			)
 			continue
@@ -241,15 +234,11 @@ func reconcileTrackerState(state *State, params ReconcileParams, log *slog.Logge
 		}
 		CancelRetry(state, issueID)
 		if err := params.Store.DeleteRetryEntry(ctx, issueID); err != nil {
-			log.Error("failed to delete retry entry for non-active issue",
-				slog.String("issue_id", issueID),
-				slog.String("issue_identifier", entry.Identifier),
+			entryLog.Error("failed to delete retry entry for non-active issue",
 				slog.Any("error", err),
 			)
 		}
-		log.Info("stopping worker for non-active issue",
-			slog.String("issue_id", issueID),
-			slog.String("issue_identifier", entry.Identifier),
+		entryLog.Info("stopping worker for non-active issue",
 			slog.String("state", stateName),
 		)
 	}

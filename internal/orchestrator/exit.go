@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/sortie-ai/sortie/internal/domain"
+	"github.com/sortie-ai/sortie/internal/logging"
 	"github.com/sortie-ai/sortie/internal/persistence"
 	"github.com/sortie-ai/sortie/internal/workspace"
 )
@@ -96,6 +97,7 @@ func HandleWorkerExit(state *State, result WorkerResult, params HandleWorkerExit
 	if log == nil {
 		log = slog.Default()
 	}
+	log = logging.WithIssue(log, result.IssueID, result.Identifier)
 
 	ctx := params.Ctx
 	if ctx == nil {
@@ -104,10 +106,7 @@ func HandleWorkerExit(state *State, result WorkerResult, params HandleWorkerExit
 
 	entry, exists := state.Running[result.IssueID]
 	if !exists {
-		log.Warn("worker exit for unknown issue",
-			slog.String("issue_id", result.IssueID),
-			slog.String("issue_identifier", result.Identifier),
-		)
+		log.Warn("worker exit for unknown issue")
 		return
 	}
 	delete(state.Running, result.IssueID)
@@ -134,8 +133,6 @@ func HandleWorkerExit(state *State, result WorkerResult, params HandleWorkerExit
 			Logger:        log,
 		}); err != nil {
 			log.Warn("workspace cleanup failed",
-				slog.String("issue_id", result.IssueID),
-				slog.String("issue_identifier", entry.Identifier),
 				slog.Any("error", err),
 			)
 		}
@@ -168,8 +165,6 @@ func HandleWorkerExit(state *State, result WorkerResult, params HandleWorkerExit
 	}
 	if _, err := params.Store.AppendRunHistory(ctx, runHistory); err != nil {
 		log.Error("failed to persist run history",
-			slog.String("issue_id", result.IssueID),
-			slog.String("issue_identifier", result.Identifier),
 			slog.Any("error", err),
 		)
 	}
@@ -184,8 +179,6 @@ func HandleWorkerExit(state *State, result WorkerResult, params HandleWorkerExit
 	}
 	if err := params.Store.UpsertAggregateMetrics(ctx, metrics); err != nil {
 		log.Error("failed to persist aggregate metrics",
-			slog.String("issue_id", result.IssueID),
-			slog.String("issue_identifier", result.Identifier),
 			slog.Any("error", err),
 		)
 	}
@@ -211,8 +204,6 @@ func HandleWorkerExit(state *State, result WorkerResult, params HandleWorkerExit
 	}
 	if err := params.Store.UpsertSessionMetadata(ctx, sessionMeta); err != nil {
 		log.Error("failed to persist session metadata",
-			slog.String("issue_id", result.IssueID),
-			slog.String("issue_identifier", result.Identifier),
 			slog.Any("error", err),
 		)
 	}
@@ -235,8 +226,6 @@ func HandleWorkerExit(state *State, result WorkerResult, params HandleWorkerExit
 			// that sets HandoffState without providing an adapter).
 			if params.TrackerAdapter == nil {
 				log.Warn("handoff configured but tracker adapter is nil, scheduling continuation retry",
-					slog.String("issue_id", result.IssueID),
-					slog.String("issue_identifier", result.Identifier),
 					slog.String("handoff_state", params.HandoffState),
 				)
 				ScheduleRetry(state, ScheduleRetryParams{
@@ -249,8 +238,6 @@ func HandleWorkerExit(state *State, result WorkerResult, params HandleWorkerExit
 				retryScheduled = true
 			} else if err := params.TrackerAdapter.TransitionIssue(ctx, result.IssueID, params.HandoffState); err != nil {
 				log.Warn("handoff transition failed, scheduling continuation retry",
-					slog.String("issue_id", result.IssueID),
-					slog.String("issue_identifier", result.Identifier),
 					slog.String("handoff_state", params.HandoffState),
 					slog.Any("error", err),
 				)
@@ -264,8 +251,6 @@ func HandleWorkerExit(state *State, result WorkerResult, params HandleWorkerExit
 				retryScheduled = true
 			} else {
 				log.Info("handoff transition succeeded, releasing claim",
-					slog.String("issue_id", result.IssueID),
-					slog.String("issue_identifier", result.Identifier),
 					slog.String("handoff_state", params.HandoffState),
 				)
 				CancelRetry(state, result.IssueID)
@@ -320,8 +305,6 @@ func HandleWorkerExit(state *State, result WorkerResult, params HandleWorkerExit
 			retryScheduled = true
 		} else {
 			log.Error("non-retryable worker error, releasing claim",
-				slog.String("issue_id", result.IssueID),
-				slog.String("issue_identifier", result.Identifier),
 				slog.Any("error", result.Error),
 			)
 			delete(state.Claimed, result.IssueID)
@@ -339,8 +322,6 @@ func HandleWorkerExit(state *State, result WorkerResult, params HandleWorkerExit
 			}
 			if err := params.Store.SaveRetryEntry(ctx, pEntry); err != nil {
 				log.Error("failed to persist retry entry",
-					slog.String("issue_id", result.IssueID),
-					slog.String("issue_identifier", result.Identifier),
 					slog.Any("error", err),
 				)
 			}
