@@ -285,6 +285,7 @@ func TestBuildIssueDetail(t *testing.T) {
 		got := buildIssueDetail("MT-100", snap)
 		if got == nil {
 			t.Fatal("buildIssueDetail(MT-100) = nil, want non-nil")
+			return
 		}
 		if got.Status != "running" {
 			t.Errorf("Status = %q, want %q", got.Status, "running")
@@ -320,6 +321,7 @@ func TestBuildIssueDetail(t *testing.T) {
 		got := buildIssueDetail("MT-200", snap)
 		if got == nil {
 			t.Fatal("buildIssueDetail(MT-200) = nil, want non-nil")
+			return
 		}
 		if got.Status != "retrying" {
 			t.Errorf("Status = %q, want %q", got.Status, "retrying")
@@ -365,6 +367,7 @@ func TestBuildIssueDetail(t *testing.T) {
 		got := buildIssueDetail("MT-300", noWSSnap)
 		if got == nil {
 			t.Fatal("buildIssueDetail(MT-300) = nil, want non-nil")
+			return
 		}
 		if got.Workspace != nil {
 			t.Errorf("Workspace = %v, want nil when WorkspacePath is empty", got.Workspace)
@@ -381,6 +384,7 @@ func TestBuildIssueDetail(t *testing.T) {
 		got := buildIssueDetail("MT-400", noErrSnap)
 		if got == nil {
 			t.Fatal("buildIssueDetail(MT-400) = nil, want non-nil")
+			return
 		}
 		if got.LastError != nil {
 			t.Errorf("LastError = %v, want nil when Error is empty", got.LastError)
