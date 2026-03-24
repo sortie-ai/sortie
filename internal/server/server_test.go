@@ -2,11 +2,16 @@ package server
 
 import (
 	"context"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
+
+	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/sortie-ai/sortie/internal/orchestrator"
 )
@@ -171,5 +176,99 @@ func TestServeMethod(t *testing.T) {
 	serveErr := <-errCh
 	if serveErr != http.ErrServerClosed {
 		t.Errorf("Serve error = %v, want %v", serveErr, http.ErrServerClosed)
+	}
+}
+
+// --- Helpers for /metrics tests ---
+
+func testServerWithRegistry(t *testing.T, reg *prometheus.Registry) *httptest.Server {
+	t.Helper()
+	srv := New(Params{
+		SnapshotFn:      fixedSnapshot(orchestrator.RuntimeSnapshotResult{}),
+		RefreshFn:       acceptingRefresh(),
+		Logger:          slog.New(slog.DiscardHandler),
+		MetricsRegistry: reg,
+	})
+	ts := httptest.NewServer(srv.Mux())
+	t.Cleanup(ts.Close)
+	return ts
+}
+
+// --- /metrics endpoint tests (Spec 8.8, ADR-0008 Tier 3) ---
+
+func TestMetricsEndpoint(t *testing.T) {
+	t.Parallel()
+
+	pm := NewPromMetrics("1.0.0-test", "go1.26.1")
+	ts := testServerWithRegistry(t, pm.Registry())
+
+	// First request primes the promhttp self-instrumentation counters
+	// (they are incremented after the response is written).
+	resp, err := http.Get(ts.URL + "/metrics")
+	if err != nil {
+		t.Fatalf("GET /metrics (prime): %v", err)
+	}
+	resp.Body.Close() //nolint:errcheck // test code
+
+	// Second request captures the self-instrumentation in the output.
+	resp, err = http.Get(ts.URL + "/metrics")
+	if err != nil {
+		t.Fatalf("GET /metrics: %v", err)
+	}
+	defer resp.Body.Close() //nolint:errcheck // test code
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusOK)
+	}
+
+	ct := resp.Header.Get("Content-Type")
+	if !strings.Contains(ct, "text/plain") {
+		t.Errorf("Content-Type = %q, want it to contain %q", ct, "text/plain")
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("reading body: %v", err)
+	}
+	bodyStr := string(body)
+
+	if !strings.Contains(bodyStr, "sortie_build_info") {
+		t.Error("response body missing sortie_build_info metric")
+	}
+	if !strings.Contains(bodyStr, "promhttp_metric_handler_requests_total") {
+		t.Error("response body missing promhttp_metric_handler_requests_total (self-instrumentation not on dedicated registry)")
+	}
+}
+
+func TestMetricsEndpointDisabled(t *testing.T) {
+	t.Parallel()
+
+	ts := testServerWithRegistry(t, nil)
+
+	resp, err := http.Get(ts.URL + "/metrics")
+	if err != nil {
+		t.Fatalf("GET /metrics: %v", err)
+	}
+	defer resp.Body.Close() //nolint:errcheck // test code
+
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusNotFound)
+	}
+}
+
+func TestMetricsEndpointMethodNotAllowed(t *testing.T) {
+	t.Parallel()
+
+	pm := NewPromMetrics("1.0.0-test", "go1.26.1")
+	ts := testServerWithRegistry(t, pm.Registry())
+
+	resp, err := http.Post(ts.URL+"/metrics", "text/plain", nil)
+	if err != nil {
+		t.Fatalf("POST /metrics: %v", err)
+	}
+	defer resp.Body.Close() //nolint:errcheck // test code
+
+	if resp.StatusCode != http.StatusMethodNotAllowed {
+		t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusMethodNotAllowed)
 	}
 }
