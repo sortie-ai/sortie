@@ -67,6 +67,10 @@ type HandleRetryTimerParams struct {
 	// the claim instead of dispatching if the count has reached the
 	// budget. When 0, no budget is enforced.
 	MaxSessions int
+
+	// Metrics records instrumentation counters for retry timer events.
+	// If nil, defaults to [domain.NoopMetrics].
+	Metrics domain.Metrics
 }
 
 // HandleRetryTimer processes a retry timer event for the given issue.
@@ -78,6 +82,11 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 	log := params.Logger
 	if log == nil {
 		log = slog.Default()
+	}
+
+	metrics := params.Metrics
+	if metrics == nil {
+		metrics = &domain.NoopMetrics{}
 	}
 
 	ctx := params.Ctx
@@ -129,6 +138,7 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 			Error:      popped.Error,
 		}, params.OnRetryFire)
 		persistRetryEntry(ctx, log, params.Store, state, issueID)
+		metrics.IncRetries(triggerTimer)
 		return
 	}
 
@@ -177,6 +187,7 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 		}, params.OnRetryFire)
 
 		persistRetryEntry(ctx, log, params.Store, state, issueID)
+		metrics.IncRetries(triggerTimer)
 		return
 	}
 
@@ -236,6 +247,7 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 		}, params.OnRetryFire)
 
 		persistRetryEntry(ctx, log, params.Store, state, issueID)
+		metrics.IncRetries(triggerTimer)
 		return
 	}
 
@@ -244,6 +256,7 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 	// next worker exit, not at dispatch time.
 	attempt := popped.Attempt
 	DispatchIssue(ctx, state, issue, &attempt, params.WorkerFn)
+	metrics.IncDispatches(outcomeSuccess)
 
 	log.Info("retried issue dispatched",
 		slog.Int("attempt", attempt),

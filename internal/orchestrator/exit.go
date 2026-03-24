@@ -86,6 +86,10 @@ type HandleWorkerExitParams struct {
 	// issue is still in an active state at worker exit time. The check is
 	// case-insensitive.
 	ActiveStates []string
+
+	// Metrics records instrumentation counters for worker exit events.
+	// If nil, defaults to [domain.NoopMetrics].
+	Metrics domain.Metrics
 }
 
 // HandleWorkerExit processes a worker's terminal outcome. It removes the
@@ -98,6 +102,11 @@ func HandleWorkerExit(state *State, result WorkerResult, params HandleWorkerExit
 		log = slog.Default()
 	}
 	log = logging.WithIssue(log, result.IssueID, result.Identifier)
+
+	metrics := params.Metrics
+	if metrics == nil {
+		metrics = &domain.NoopMetrics{}
+	}
 
 	ctx := params.Ctx
 	if ctx == nil {
@@ -158,6 +167,11 @@ func HandleWorkerExit(state *State, result WorkerResult, params HandleWorkerExit
 	}
 	state.AgentTotals.SecondsRunning += elapsed
 
+	exitType := mapExitKindToExitType(result.ExitKind)
+	metrics.IncWorkerExits(exitType)
+	metrics.ObserveWorkerDuration(exitType, elapsed)
+	metrics.AddAgentRuntime(elapsed)
+
 	status := mapExitKindToStatus(result.ExitKind)
 	attempt := normalizeAttempt(entry.RetryAttempt)
 
@@ -178,7 +192,7 @@ func HandleWorkerExit(state *State, result WorkerResult, params HandleWorkerExit
 		)
 	}
 
-	metrics := persistence.AggregateMetrics{
+	aggMetrics := persistence.AggregateMetrics{
 		Key:            "agent_totals",
 		InputTokens:    state.AgentTotals.InputTokens,
 		OutputTokens:   state.AgentTotals.OutputTokens,
@@ -186,7 +200,7 @@ func HandleWorkerExit(state *State, result WorkerResult, params HandleWorkerExit
 		SecondsRunning: state.AgentTotals.SecondsRunning,
 		UpdatedAt:      now.Format(time.RFC3339),
 	}
-	if err := params.Store.UpsertAggregateMetrics(ctx, metrics); err != nil {
+	if err := params.Store.UpsertAggregateMetrics(ctx, aggMetrics); err != nil {
 		log.Error("failed to persist aggregate metrics",
 			slog.Any("error", err),
 		)
@@ -237,6 +251,7 @@ func HandleWorkerExit(state *State, result WorkerResult, params HandleWorkerExit
 				log.Warn("handoff configured but tracker adapter is nil, scheduling continuation retry",
 					slog.String("handoff_state", params.HandoffState),
 				)
+				metrics.IncHandoffTransitions(handoffError)
 				ScheduleRetry(state, ScheduleRetryParams{
 					IssueID:    result.IssueID,
 					Identifier: result.Identifier,
@@ -244,12 +259,14 @@ func HandleWorkerExit(state *State, result WorkerResult, params HandleWorkerExit
 					DelayMS:    continuationDelayMS,
 					Error:      "",
 				}, params.OnRetryFire)
+				metrics.IncRetries(triggerContinuation)
 				retryScheduled = true
 			} else if err := params.TrackerAdapter.TransitionIssue(ctx, result.IssueID, params.HandoffState); err != nil {
 				log.Warn("handoff transition failed, scheduling continuation retry",
 					slog.String("handoff_state", params.HandoffState),
 					slog.Any("error", err),
 				)
+				metrics.IncHandoffTransitions(handoffError)
 				ScheduleRetry(state, ScheduleRetryParams{
 					IssueID:    result.IssueID,
 					Identifier: result.Identifier,
@@ -257,11 +274,13 @@ func HandleWorkerExit(state *State, result WorkerResult, params HandleWorkerExit
 					DelayMS:    continuationDelayMS,
 					Error:      "",
 				}, params.OnRetryFire)
+				metrics.IncRetries(triggerContinuation)
 				retryScheduled = true
 			} else {
 				log.Info("handoff transition succeeded, releasing claim",
 					slog.String("handoff_state", params.HandoffState),
 				)
+				metrics.IncHandoffTransitions(handoffSuccess)
 				CancelRetry(state, result.IssueID)
 				delete(state.Claimed, result.IssueID)
 			}
@@ -276,11 +295,15 @@ func HandleWorkerExit(state *State, result WorkerResult, params HandleWorkerExit
 				DelayMS:    continuationDelayMS,
 				Error:      "",
 			}, params.OnRetryFire)
+			metrics.IncRetries(triggerContinuation)
 			retryScheduled = true
 
 		default:
 			// Issue is not in an active state: cancel any pending retry
 			// and release claim.
+			if params.HandoffState != "" {
+				metrics.IncHandoffTransitions(handoffSkipped)
+			}
 			CancelRetry(state, result.IssueID)
 			delete(state.Claimed, result.IssueID)
 		}
@@ -311,6 +334,7 @@ func HandleWorkerExit(state *State, result WorkerResult, params HandleWorkerExit
 				DelayMS:    delayMS,
 				Error:      errMsg,
 			}, params.OnRetryFire)
+			metrics.IncRetries(triggerError)
 			retryScheduled = true
 		} else {
 			log.Error("non-retryable worker error, releasing claim",
@@ -370,6 +394,19 @@ func mapExitKindToStatus(kind WorkerExitKind) string {
 		return "cancelled"
 	default:
 		return "failed"
+	}
+}
+
+func mapExitKindToExitType(kind WorkerExitKind) string {
+	switch kind {
+	case WorkerExitNormal:
+		return exitTypeNormal
+	case WorkerExitError:
+		return exitTypeError
+	case WorkerExitCancelled:
+		return exitTypeCancelled
+	default:
+		return exitTypeError
 	}
 }
 

@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/sortie-ai/sortie/internal/config"
+	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/logging"
 	"github.com/sortie-ai/sortie/internal/orchestrator"
 	"github.com/sortie-ai/sortie/internal/persistence"
@@ -258,6 +259,15 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 
 	logger.Info("sortie started")
 
+	// Create Prometheus metrics early so the orchestrator can record
+	// counters and gauges from its first tick.
+	var orchMetrics domain.Metrics
+	var promMetrics *server.PromMetrics
+	if serverEnabled {
+		promMetrics = server.NewPromMetrics(Version, runtime.Version())
+		orchMetrics = promMetrics
+	}
+
 	o := orchestrator.NewOrchestrator(orchestrator.OrchestratorParams{
 		State:           state,
 		Logger:          logger,
@@ -266,11 +276,11 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 		WorkflowManager: mgr,
 		Store:           store,
 		PreflightParams: preflightParams,
+		Metrics:         orchMetrics,
 	})
 
 	var srv *server.Server
 	if serverEnabled {
-		promMetrics := server.NewPromMetrics(Version, runtime.Version())
 		addr := fmt.Sprintf("127.0.0.1:%d", serverPort)
 		srv = server.New(server.Params{
 			SnapshotFn:      o.SnapshotFunc(),

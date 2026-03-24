@@ -17,9 +17,12 @@ import (
 //
 // Must be called from the orchestrator's single-writer event loop
 // goroutine. Not safe for concurrent use.
-func HandleAgentEvent(state *State, issueID string, event domain.AgentEvent, logger *slog.Logger) {
+func HandleAgentEvent(state *State, issueID string, event domain.AgentEvent, logger *slog.Logger, metrics domain.Metrics) {
 	if logger == nil {
 		logger = slog.Default()
+	}
+	if metrics == nil {
+		metrics = &domain.NoopMetrics{}
 	}
 
 	entry, ok := state.Running[issueID]
@@ -92,6 +95,13 @@ func HandleAgentEvent(state *State, issueID string, event domain.AgentEvent, log
 		state.AgentTotals.InputTokens += deltaInput
 		state.AgentTotals.OutputTokens += deltaOutput
 		state.AgentTotals.TotalTokens += deltaTotal
+
+		if deltaInput > 0 {
+			metrics.AddTokens("input", deltaInput)
+		}
+		if deltaOutput > 0 {
+			metrics.AddTokens("output", deltaOutput)
+		}
 
 		log.Debug("agent event processed",
 			slog.Any("event_type", event.Type),

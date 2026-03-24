@@ -57,6 +57,10 @@ type ReconcileParams struct {
 
 	// Logger is the structured logger with orchestrator context.
 	Logger *slog.Logger
+
+	// Metrics records instrumentation counters for reconciliation events.
+	// If nil, defaults to [domain.NoopMetrics].
+	Metrics domain.Metrics
 }
 
 // ReconcileRunningIssues detects stalled workers and refreshes tracker
@@ -77,6 +81,11 @@ func ReconcileRunningIssues(state *State, params ReconcileParams) {
 		log = slog.Default()
 	}
 
+	metrics := params.Metrics
+	if metrics == nil {
+		metrics = &domain.NoopMetrics{}
+	}
+
 	ctx := params.Ctx
 	if ctx == nil {
 		ctx = context.Background()
@@ -88,16 +97,16 @@ func ReconcileRunningIssues(state *State, params ReconcileParams) {
 	}
 
 	// Part A: stall detection.
-	reconcileStalled(state, params, log, ctx, now)
+	reconcileStalled(state, params, log, ctx, now, metrics)
 
 	// Part B: tracker state refresh.
-	reconcileTrackerState(state, params, log, ctx)
+	reconcileTrackerState(state, params, log, ctx, metrics)
 }
 
 // reconcileStalled implements Part A: stall detection. For each running
 // entry whose last activity exceeds the stall timeout, the worker is
 // cancelled and an exponential-backoff retry is scheduled.
-func reconcileStalled(state *State, params ReconcileParams, log *slog.Logger, ctx context.Context, now time.Time) {
+func reconcileStalled(state *State, params ReconcileParams, log *slog.Logger, ctx context.Context, now time.Time, metrics domain.Metrics) {
 	if params.StallTimeoutMS <= 0 {
 		return
 	}
@@ -142,6 +151,7 @@ func reconcileStalled(state *State, params ReconcileParams, log *slog.Logger, ct
 				DelayMS:    delayMS,
 				Error:      "stall timeout exceeded",
 			}, params.OnRetryFire)
+			metrics.IncRetries(triggerStall)
 
 			if retryEntry, ok := state.RetryAttempts[issueID]; ok {
 				pEntry := persistence.RetryEntry{
@@ -169,7 +179,7 @@ func reconcileStalled(state *State, params ReconcileParams, log *slog.Logger, ct
 // reconcileTrackerState implements Part B: tracker state refresh. It
 // fetches current issue states for all running IDs and cancels workers
 // whose issues are terminal or no longer active.
-func reconcileTrackerState(state *State, params ReconcileParams, log *slog.Logger, ctx context.Context) {
+func reconcileTrackerState(state *State, params ReconcileParams, log *slog.Logger, ctx context.Context, metrics domain.Metrics) {
 	if len(state.Running) == 0 {
 		return
 	}
@@ -214,6 +224,7 @@ func reconcileTrackerState(state *State, params ReconcileParams, log *slog.Logge
 				)
 			}
 			entry.PendingCleanup = true
+			metrics.IncReconciliationActions(actionCleanup)
 			entryLog.Info("stopping worker for terminal issue",
 				slog.String("state", stateName),
 			)
@@ -222,6 +233,7 @@ func reconcileTrackerState(state *State, params ReconcileParams, log *slog.Logge
 
 		if _, active := activeSet[normalized]; active {
 			entry.Issue.State = stateName
+			metrics.IncReconciliationActions(actionKeep)
 			entryLog.Debug("refreshed issue state",
 				slog.String("state", stateName),
 			)
@@ -238,6 +250,7 @@ func reconcileTrackerState(state *State, params ReconcileParams, log *slog.Logge
 				slog.Any("error", err),
 			)
 		}
+		metrics.IncReconciliationActions(actionStop)
 		entryLog.Info("stopping worker for non-active issue",
 			slog.String("state", stateName),
 		)

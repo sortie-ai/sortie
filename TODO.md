@@ -704,7 +704,7 @@ JSON API + HTML dashboard, Prometheus `/metrics`), and adds agent capabilities.
       `GET /metrics`, confirms response is valid Prometheus text exposition format
       containing `sortie_build_info` and `promhttp_metric_handler_requests_total`.
 
-- [ ] 8.9 Instrument the orchestrator (coordination layer) with `Metrics` interface
+- [x] 8.9 Instrument the orchestrator (coordination layer) with `Metrics` interface
       calls (ADR-0008, Metric Instrumentation Boundaries). Wire the `Metrics`
       interface into the orchestrator constructor. Insert calls at the defined
       instrumentation points:
@@ -769,12 +769,32 @@ JSON API + HTML dashboard, Prometheus `/metrics`), and adds agent capabilities.
       processes a failed result. A second test confirms no ERROR is logged on a
       successful (normal) exit.
 
-- [ ] 8.14 Add a `/health` (or `/live`) endpoint to the HTTP server: return `200 OK`
-      when the orchestrator is running. Deferred from ADR-0008 review (recommendation
-      6.3). Not required for core observability model but useful for container
-      orchestrators and scripted heartbeat checks. `GET /api/v1/state` serves as a
-      de facto health check in the interim.
-      **Verify:** integration test starts the HTTP server, `GET /health` returns 200.
+- [ ] 8.14 Add `/livez` and `/readyz` health endpoints to the HTTP server,
+      following the Kubernetes z-pages convention (kube-apiserver, etcd,
+      controller-manager).
+      `GET /livez`: return 200 `{"status":"pass"}` when the orchestrator
+      event loop is responsive. Return 503 `{"status":"fail"}` during
+      graceful shutdown. No dependency checks — this must be cheap enough
+      for aggressive K8s liveness probes. No I/O.
+      `GET /readyz`: return 200 when the system is ready to dispatch work.
+      Check: SQLite database accessible (ping), preflight validation passed,
+      workflow file loaded. Response includes version, uptime, and per-check
+      status:
+      `{"status":"pass","version":"...","uptime_seconds":N,
+        "checks":{"database":"pass","preflight":"pass","workflow":"pass"}}`.
+      Return 503 with `"status":"fail"` and the failing check(s) when any
+      dependency is unavailable. Response format inspired by
+      draft-inadarei-api-health-check (IETF) but simplified — no
+      componentId, componentType, or observedValue fields.
+      /healthz, /ping, /status are intentionally not implemented:
+      /livez + /readyz cover K8s probes with correct semantics,
+      /api/v1/state covers rich operational status.
+      Cover changes in `docs/workflow-reference.md`.
+      **Verify:** integration test: `GET /livez` returns 200 with status
+      "pass". `GET /readyz` returns 200 with all checks "pass" after
+      normal startup. A test with inaccessible DB confirms /readyz returns
+      503 while /livez still returns 200. A test during graceful shutdown
+      confirms both return 503.
 
 - [ ] 8.15 Update `docs/architecture.md` per ADR-0008 spec section update requirements.
       Section 3.3: add `github.com/prometheus/client_golang` to the external dependencies
