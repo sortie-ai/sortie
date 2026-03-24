@@ -89,6 +89,11 @@ for a new tracker or agent is an additive change: implement the interface in a n
 The initial implementation targets Jira and Claude Code. See
 [docs/decisions/](docs/decisions/) for detailed rationale on technology choices.
 
+## Documentation
+
+Full configuration reference, CLI usage, and getting started guide:
+[docs.sortie-ai.com](https://docs.sortie-ai.com)
+
 ## Prior Art
 
 Sortie's architecture is informed by [OpenAI Symphony](https://github.com/openai/symphony),
