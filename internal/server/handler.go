@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/sortie-ai/sortie/internal/orchestrator"
@@ -183,7 +184,7 @@ func writeErrorJSON(w http.ResponseWriter, logger *slog.Logger, status int, code
 
 func (s *Server) routeState(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		s.methodNotAllowed(w, r)
+		s.methodNotAllowed(w, r, http.MethodGet)
 		return
 	}
 	s.handleState(w, r)
@@ -191,7 +192,7 @@ func (s *Server) routeState(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) routeRefresh(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
-		s.methodNotAllowed(w, r)
+		s.methodNotAllowed(w, r, http.MethodPost)
 		return
 	}
 	s.handleRefresh(w, r)
@@ -199,7 +200,7 @@ func (s *Server) routeRefresh(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) routeIssueDetail(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
-		s.methodNotAllowed(w, r)
+		s.methodNotAllowed(w, r, http.MethodGet)
 		return
 	}
 	s.handleIssueDetail(w, r)
@@ -298,11 +299,14 @@ func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
 	)
 }
 
-func (s *Server) methodNotAllowed(w http.ResponseWriter, r *http.Request) {
+func (s *Server) methodNotAllowed(w http.ResponseWriter, r *http.Request, allowed ...string) {
 	s.logger.Warn("method not allowed",
 		slog.String("method", r.Method),
 		slog.String("path", r.URL.Path),
 	)
+	if len(allowed) > 0 {
+		w.Header().Set("Allow", strings.Join(allowed, ", "))
+	}
 	writeErrorJSON(w, s.logger, http.StatusMethodNotAllowed,
 		"method_not_allowed",
 		fmt.Sprintf("method %s is not allowed on this endpoint", r.Method))
