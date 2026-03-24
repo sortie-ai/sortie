@@ -110,13 +110,13 @@ The parser applies the following steps in order:
 
 ### 1.3 Returned Workflow Object
 
-After parsing, the loader produces:
+After parsing, the loader produces a struct with three fields:
 
-| Field                | Type             | Description                                                                               |
-| -------------------- | ---------------- | ----------------------------------------------------------------------------------------- |
-| `config`             | `map[string]any` | Front matter root object (not nested under a `config` key)                                |
-| `prompt_template`    | `string`         | Trimmed Markdown body                                                                     |
-| `front_matter_lines` | `int`            | Line count through closing `---`; `0` when absent. Used for error line number adjustment. |
+| Output             | Type             | Description                                                                               |
+| ------------------ | ---------------- | ----------------------------------------------------------------------------------------- |
+| Config             | `map[string]any` | Front matter root object (not nested under a `config` key).                               |
+| Prompt template    | `string`         | Trimmed Markdown body.                                                                    |
+| Front matter lines | `int`            | Line count through closing `---`; `0` when absent. Used for error line number adjustment. |
 
 ---
 
@@ -323,9 +323,9 @@ agent:
 | -------------------------------- | --------------------------------- | ----------------------------------- | --------------- | ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `kind`                           | string                            | No                                  | `claude-code`   | Future dispatches                          | Agent adapter identifier. This codebase ships with the `claude-code` adapter. Other kinds (for example, HTTP-based adapters) are available only if you register them separately. |
 | `command`                        | string (shell command)            | When adapter requires local process | Adapter-defined | Future dispatches                          | Shell command to launch the agent for adapters that run as a local subprocess (such as `claude-code`). Adapters that do not start a local process ignore this field.             |
-| `turn_timeout_ms`                | integer                           | No                                  | `3600000` (1h)  | Future turns                               | Total timeout for a single agent turn.                                                                                                                                           |
-| `read_timeout_ms`                | integer                           | No                                  | `5000` (5s)     | Future turns                               | Request/response timeout during startup and synchronous operations.                                                                                                              |
-| `stall_timeout_ms`               | integer                           | No                                  | `300000` (5m)   | Future turns                               | Inactivity timeout based on event stream gaps. Set to `0` or negative to **disable** stall detection.                                                                            |
+| `turn_timeout_ms`                | integer                           | No                                  | `3600000` (1h)  | Future worker attempts                     | Total timeout for a single agent turn.                                                                                                                                           |
+| `read_timeout_ms`                | integer                           | No                                  | `5000` (5s)     | Future worker attempts                     | Request/response timeout during startup and synchronous operations.                                                                                                              |
+| `stall_timeout_ms`               | integer                           | No                                  | `300000` (5m)   | Future worker attempts                     | Inactivity timeout based on event stream gaps. Set to `0` or negative to **disable** stall detection.                                                                            |
 | `max_concurrent_agents`          | integer or string integer         | No                                  | `10`            | **Yes** — affects subsequent dispatch      | Global concurrency limit across all issues.                                                                                                                                      |
 | `max_turns`                      | integer                           | No                                  | `20`            | Future dispatches                          | Maximum coding-agent turns per worker session. The worker re-checks tracker state after each turn and starts another turn if the issue is still active, up to this limit.        |
 | `max_retry_backoff_ms`           | integer or string integer         | No                                  | `300000` (5m)   | **Yes** — affects future retry scheduling  | Maximum delay cap for exponential backoff on retries.                                                                                                                            |
@@ -383,17 +383,14 @@ server:
   port: 8642
 ```
 
-| Field         | Type    | Required | Default                      | Dynamic Reload            | Description                                                                                                               |
-| ------------- | ------- | -------- | ---------------------------- | ------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
-| `server.port` | integer | No       | _(absent — server disabled)_ | **No** — requires restart | Reserved for the embedded HTTP observability server. Positive values will bind that port. `0` requests an ephemeral port. |
+| Field         | Type    | Required | Default                      | Dynamic Reload            | Description                                                  |
+| ------------- | ------- | -------- | ---------------------------- | ------------------------- | ------------------------------------------------------------ |
+| `server.port` | integer | No       | _(absent — server disabled)_ | **No** — requires restart | Reserved for the planned embedded HTTP observability server. |
 
-> **Not yet implemented.** The `server.port` field and the `--port` CLI flag are parsed
-> and validated but do not start a listener in the current release. The HTTP server is
-> defined in the architecture specification and will be activated in a future release.
-
-**Precedence:** CLI `--port` argument overrides `server.port` when both are present.
-
-**Bind address:** Loopback (`127.0.0.1`) by default.
+> **Not yet implemented.** The `server.port` field is collected into `Extensions` and
+> stored but has no runtime effect in the current release. The `--port` CLI flag is
+> parsed and logged at startup but does not start a listener. Neither field is validated
+> beyond YAML type coercion.
 
 ### 3.2 `worker` — SSH Worker Extension
 
@@ -406,9 +403,8 @@ worker:
 ```
 
 > **Not yet implemented.** The `worker` block is collected into `Extensions` and stored
-> but is not acted upon in the current release. Remote SSH execution is defined in the
-> architecture specification and will be activated in a future release. Agents run locally
-> until then.
+> but has no runtime effect in the current release. Agents run locally on the host
+> where Sortie is started.
 
 | Field                                   | Type             | Required | Default                        | Description                                                                                 |
 | --------------------------------------- | ---------------- | -------- | ------------------------------ | ------------------------------------------------------------------------------------------- |
@@ -833,9 +829,9 @@ re-applies configuration and prompt template without restart.
 | `hooks.timeout_ms`                     | Future hook executions.                                                                        |
 | `agent.kind`                           | Future dispatches.                                                                             |
 | `agent.command`                        | Future dispatches.                                                                             |
-| `agent.turn_timeout_ms`                | Future turns.                                                                                  |
-| `agent.read_timeout_ms`                | Future turns.                                                                                  |
-| `agent.stall_timeout_ms`               | Future turns.                                                                                  |
+| `agent.turn_timeout_ms`                | Future worker attempts, not in-flight sessions.                                                |
+| `agent.read_timeout_ms`                | Future worker attempts, not in-flight sessions.                                                |
+| `agent.stall_timeout_ms`               | Future worker attempts, not in-flight sessions.                                                |
 | `agent.max_concurrent_agents`          | **Immediate** — affects subsequent dispatch decisions.                                         |
 | `agent.max_turns`                      | Future dispatches.                                                                             |
 | `agent.max_retry_backoff_ms`           | **Immediate** — affects future retry scheduling.                                               |
@@ -926,38 +922,38 @@ template render error in WORKFLOW.md (line 52): template: prompt:9: ...
 
 A flat reference of every configuration field, for quick lookup.
 
-| Field                                   | Type             | Default                      | Notes                                                                                                         |
-| --------------------------------------- | ---------------- | ---------------------------- | ------------------------------------------------------------------------------------------------------------- |
-| `tracker.kind`                          | string           | _(required)_                 | e.g., `jira`                                                                                                  |
-| `tracker.endpoint`                      | string           | adapter-defined              | `$VAR` supported                                                                                              |
-| `tracker.api_key`                       | string or `$VAR` | _(required for Jira)_        | Full env expansion                                                                                            |
-| `tracker.project`                       | string           | _(required for Jira)_        | `$VAR` supported                                                                                              |
-| `tracker.active_states`                 | `[string]`       | `[]` (empty)                 | At least one of active/terminal must be configured; empty means no dispatch                                   |
-| `tracker.terminal_states`               | `[string]`       | `[]` (empty)                 | At least one of active/terminal must be configured                                                            |
-| `tracker.query_filter`                  | string           | `""`                         | Adapter-interpreted                                                                                           |
-| `tracker.handoff_state`                 | string           | _(absent)_                   | `$VAR` supported; must not collide with active/terminal                                                       |
-| `polling.interval_ms`                   | integer          | `30000`                      | Dynamic reload                                                                                                |
-| `workspace.root`                        | path             | `<tmpdir>/sortie_workspaces` | `~`/`~/` expanded; all `$VAR` references expanded via `os.ExpandEnv`                                          |
-| `hooks.after_create`                    | shell script     | _(null)_                     | Fatal on failure                                                                                              |
-| `hooks.before_run`                      | shell script     | _(null)_                     | Fatal on failure                                                                                              |
-| `hooks.after_run`                       | shell script     | _(null)_                     | Failure ignored                                                                                               |
-| `hooks.before_remove`                   | shell script     | _(null)_                     | Failure ignored                                                                                               |
-| `hooks.timeout_ms`                      | integer          | `60000`                      | All hooks                                                                                                     |
-| `agent.kind`                            | string           | `claude-code`                |                                                                                                               |
-| `agent.command`                         | shell command    | adapter-defined              | Required for local adapters                                                                                   |
-| `agent.turn_timeout_ms`                 | integer          | `3600000`                    | 1 hour                                                                                                        |
-| `agent.read_timeout_ms`                 | integer          | `5000`                       | 5 seconds                                                                                                     |
-| `agent.stall_timeout_ms`                | integer          | `300000`                     | 5 min; `≤ 0` disables                                                                                         |
-| `agent.max_concurrent_agents`           | integer          | `10`                         | Dynamic reload                                                                                                |
-| `agent.max_turns`                       | integer          | `20`                         |                                                                                                               |
-| `agent.max_retry_backoff_ms`            | integer          | `300000`                     | 5 min; dynamic reload                                                                                         |
-| `agent.max_concurrent_agents_by_state`  | `map[string]int` | `{}`                         | Keys lowercased; dynamic reload                                                                               |
-| `agent.max_sessions`                    | integer          | `0`                          | Unlimited; dynamic reload                                                                                     |
-| `db_path`                               | path             | `.sortie.db`                 | Restart required                                                                                              |
-| **Extensions**                          |                  |                              |                                                                                                               |
-| `server.port`                           | integer          | _(absent)_                   | **Not yet implemented.** Parsed but does not start a listener. Restart required when activated; CLI overrides |
-| `worker.ssh_hosts`                      | `[string]`       | _(absent)_                   | **Not yet implemented.** Parsed but ignored. Local execution only until remote worker is activated            |
-| `worker.max_concurrent_agents_per_host` | integer          | _(absent)_                   | **Not yet implemented.** Per-host cap                                                                         |
+| Field                                   | Type             | Default                      | Notes                                                                                  |
+| --------------------------------------- | ---------------- | ---------------------------- | -------------------------------------------------------------------------------------- |
+| `tracker.kind`                          | string           | _(required)_                 | e.g., `jira`                                                                           |
+| `tracker.endpoint`                      | string           | adapter-defined              | `$VAR` supported                                                                       |
+| `tracker.api_key`                       | string or `$VAR` | _(required for Jira)_        | Full env expansion                                                                     |
+| `tracker.project`                       | string           | _(required for Jira)_        | `$VAR` supported                                                                       |
+| `tracker.active_states`                 | `[string]`       | `[]` (empty)                 | At least one of active/terminal must be configured; empty means no dispatch            |
+| `tracker.terminal_states`               | `[string]`       | `[]` (empty)                 | At least one of active/terminal must be configured                                     |
+| `tracker.query_filter`                  | string           | `""`                         | Adapter-interpreted                                                                    |
+| `tracker.handoff_state`                 | string           | _(absent)_                   | `$VAR` supported; must not collide with active/terminal                                |
+| `polling.interval_ms`                   | integer          | `30000`                      | Dynamic reload                                                                         |
+| `workspace.root`                        | path             | `<tmpdir>/sortie_workspaces` | `~`/`~/` expanded; all `$VAR` references expanded via `os.ExpandEnv`                   |
+| `hooks.after_create`                    | shell script     | _(null)_                     | Fatal on failure                                                                       |
+| `hooks.before_run`                      | shell script     | _(null)_                     | Fatal on failure                                                                       |
+| `hooks.after_run`                       | shell script     | _(null)_                     | Failure ignored                                                                        |
+| `hooks.before_remove`                   | shell script     | _(null)_                     | Failure ignored                                                                        |
+| `hooks.timeout_ms`                      | integer          | `60000`                      | All hooks                                                                              |
+| `agent.kind`                            | string           | `claude-code`                |                                                                                        |
+| `agent.command`                         | shell command    | adapter-defined              | Required for local adapters                                                            |
+| `agent.turn_timeout_ms`                 | integer          | `3600000`                    | 1 hour                                                                                 |
+| `agent.read_timeout_ms`                 | integer          | `5000`                       | 5 seconds                                                                              |
+| `agent.stall_timeout_ms`                | integer          | `300000`                     | 5 min; `≤ 0` disables                                                                  |
+| `agent.max_concurrent_agents`           | integer          | `10`                         | Dynamic reload                                                                         |
+| `agent.max_turns`                       | integer          | `20`                         |                                                                                        |
+| `agent.max_retry_backoff_ms`            | integer          | `300000`                     | 5 min; dynamic reload                                                                  |
+| `agent.max_concurrent_agents_by_state`  | `map[string]int` | `{}`                         | Keys lowercased; dynamic reload                                                        |
+| `agent.max_sessions`                    | integer          | `0`                          | Unlimited; dynamic reload                                                              |
+| `db_path`                               | path             | `.sortie.db`                 | Restart required                                                                       |
+| **Extensions**                          |                  |                              |                                                                                        |
+| `server.port`                           | integer          | _(absent)_                   | **Not yet implemented.** Stored but has no runtime effect; CLI `--port` is logged only |
+| `worker.ssh_hosts`                      | `[string]`       | _(absent)_                   | **Not yet implemented.** Stored but has no runtime effect                              |
+| `worker.max_concurrent_agents_per_host` | integer          | _(absent)_                   | **Not yet implemented.** Per-host cap; stored but has no runtime effect                |
 
 ---
 
