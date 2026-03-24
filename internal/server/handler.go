@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -157,10 +158,17 @@ func toStateResponse(snap orchestrator.RuntimeSnapshotResult) stateResponse {
 // --- JSON helpers ---
 
 func writeJSON(w http.ResponseWriter, logger *slog.Logger, status int, v any) {
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(v); err != nil {
+		logger.Error("failed to marshal JSON response", slog.Any("error", err))
+		w.Header().Set("Content-Type", "application/json; charset=utf-8")
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(`{"error":{"code":"internal_error","message":"failed to encode response"}}` + "\n"))
+		return
+	}
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(status)
-
-	if err := json.NewEncoder(w).Encode(v); err != nil {
+	if _, err := w.Write(buf.Bytes()); err != nil {
 		logger.Warn("failed to write JSON response", slog.Any("error", err))
 	}
 }

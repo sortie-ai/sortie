@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -744,5 +745,37 @@ func TestStateResponseJSON(t *testing.T) {
 		if _, ok := m[key]; !ok {
 			t.Errorf("missing JSON key %q", key)
 		}
+	}
+}
+
+// TestWriteJSONMarshalFailure verifies that writeJSON returns a complete
+// error envelope (not a partial body) when JSON encoding fails.
+func TestWriteJSONMarshalFailure(t *testing.T) {
+	t.Parallel()
+
+	rec := httptest.NewRecorder()
+	logger := slog.New(slog.DiscardHandler)
+
+	// math.NaN is not representable in JSON — forces an encoding error.
+	writeJSON(rec, logger, http.StatusOK, math.NaN())
+
+	res := rec.Result()
+	defer res.Body.Close() //nolint:errcheck // test code
+
+	if res.StatusCode != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want %d", res.StatusCode, http.StatusInternalServerError)
+	}
+
+	body, err := io.ReadAll(res.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+
+	var envelope errorResponse
+	if err := json.Unmarshal(body, &envelope); err != nil {
+		t.Fatalf("unmarshal error envelope: %v (body: %s)", err, body)
+	}
+	if envelope.Error.Code != "internal_error" {
+		t.Errorf("error code = %q, want %q", envelope.Error.Code, "internal_error")
 	}
 }

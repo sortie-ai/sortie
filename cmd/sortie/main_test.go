@@ -235,12 +235,15 @@ func TestRunPortFlagLogged(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 	defer cancel()
 
-	code := run(ctx, []string{"--port", "8080", wfPath}, &stdout, &stderr)
+	code := run(ctx, []string{"--port", "0", wfPath}, &stdout, &stderr)
 	if code != 0 {
 		t.Fatalf("exit code = %d, want 0; stderr: %s", code, stderr.String())
 	}
-	if !strings.Contains(stderr.String(), "port=8080") {
-		t.Errorf("stderr = %q, want to contain %q", stderr.String(), "port=8080")
+	if !strings.Contains(stderr.String(), "port=0") {
+		t.Errorf("stderr = %q, want to contain %q", stderr.String(), "port=0")
+	}
+	if !strings.Contains(stderr.String(), "http server listening") {
+		t.Errorf("stderr = %q, want to contain %q", stderr.String(), "http server listening")
 	}
 }
 
