@@ -161,7 +161,7 @@ tracker:
 
 | Field             | Type            | Required                  | Default         | Dynamic Reload                     | Description                                                                                                                                                                                     |
 | ----------------- | --------------- | ------------------------- | --------------- | ---------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `kind`            | string          | **Yes** (for dispatch)    | _(none)_        | Future dispatches                  | Adapter identifier. Supported: `jira`. Additional adapters registered separately.                                                                                                               |
+| `kind`            | string          | **Yes** (for dispatch)    | _(none)_        | Future dispatches                  | Adapter identifier. Supported: `jira`, `file`. Additional adapters are registered separately.                                                                                                   |
 | `endpoint`        | string          | Adapter-defined           | Adapter-defined | Future dispatches                  | Tracker API endpoint URL. Supports `$VAR` indirection: if the value starts with `$`, it is expanded via `os.ExpandEnv`.                                                                         |
 | `api_key`         | string          | When adapter requires it  | _(none)_        | Future dispatches                  | API authentication token. May be a literal or `$VAR_NAME`. If `$VAR_NAME` resolves to empty, treated as missing. Jira requires this field. Full env expansion applied (`$VAR` at any position). |
 | `project`         | string          | When adapter requires it  | _(none)_        | Future dispatches                  | Project identifier (e.g., Jira project key). Supports `$VAR` indirection: if the value starts with `$`, it is expanded via `os.ExpandEnv`.                                                      |
@@ -172,7 +172,7 @@ tracker:
 
 **`active_states` / `terminal_states` validation rules:**
 
-- Both default to empty. At startup, if **both** lists are empty after `$VAR` resolution,
+- Both default to empty. At startup, if **both** lists are empty,
   validation fails with an error — at least one of the two must be configured.
 - An issue is dispatch-eligible only if its tracker state appears in `active_states`.
   With an empty `active_states` list no issues will be dispatched even if other configuration
@@ -319,18 +319,18 @@ agent:
     to do: 1
 ```
 
-| Field                            | Type                              | Required                            | Default         | Dynamic Reload                             | Description                                                                                                                                                                    |
-| -------------------------------- | --------------------------------- | ----------------------------------- | --------------- | ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `kind`                           | string                            | No                                  | `claude-code`   | Future dispatches                          | Agent adapter identifier. Supported: `claude-code`, `codex`, `http`, and any additionally registered adapter.                                                                  |
-| `command`                        | string (shell command)            | When adapter requires local process | Adapter-defined | Future dispatches                          | Shell command to launch the agent. Required for local subprocess adapters (`claude-code`, `codex`). Not required for HTTP-based adapters.                                      |
-| `turn_timeout_ms`                | integer                           | No                                  | `3600000` (1h)  | Future turns                               | Total timeout for a single agent turn.                                                                                                                                         |
-| `read_timeout_ms`                | integer                           | No                                  | `5000` (5s)     | Future turns                               | Request/response timeout during startup and synchronous operations.                                                                                                            |
-| `stall_timeout_ms`               | integer                           | No                                  | `300000` (5m)   | Future turns                               | Inactivity timeout based on event stream gaps. Set to `0` or negative to **disable** stall detection.                                                                          |
-| `max_concurrent_agents`          | integer or string integer         | No                                  | `10`            | **Yes** — affects subsequent dispatch      | Global concurrency limit across all issues.                                                                                                                                    |
-| `max_turns`                      | integer                           | No                                  | `20`            | Future dispatches                          | Maximum coding-agent turns per worker session. The worker re-checks tracker state after each turn and starts another turn if the issue is still active, up to this limit.      |
-| `max_retry_backoff_ms`           | integer or string integer         | No                                  | `300000` (5m)   | **Yes** — affects future retry scheduling  | Maximum delay cap for exponential backoff on retries.                                                                                                                          |
-| `max_concurrent_agents_by_state` | map of `state → positive integer` | No                                  | `{}` (empty)    | **Yes** — affects subsequent dispatch      | Per-state concurrency limits. State keys are normalized to lowercase for lookup. Non-positive or non-numeric entries are silently ignored.                                     |
-| `max_sessions`                   | integer                           | No                                  | `0` (unlimited) | **Yes** — affects future retry evaluations | Maximum completed worker sessions per issue before the orchestrator stops re-dispatching. Counted from run history. `0` disables the budget (unlimited). Must be non-negative. |
+| Field                            | Type                              | Required                            | Default         | Dynamic Reload                             | Description                                                                                                                                                                      |
+| -------------------------------- | --------------------------------- | ----------------------------------- | --------------- | ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `kind`                           | string                            | No                                  | `claude-code`   | Future dispatches                          | Agent adapter identifier. This codebase ships with the `claude-code` adapter. Other kinds (for example, HTTP-based adapters) are available only if you register them separately. |
+| `command`                        | string (shell command)            | When adapter requires local process | Adapter-defined | Future dispatches                          | Shell command to launch the agent for adapters that run as a local subprocess (such as `claude-code`). Adapters that do not start a local process ignore this field.             |
+| `turn_timeout_ms`                | integer                           | No                                  | `3600000` (1h)  | Future turns                               | Total timeout for a single agent turn.                                                                                                                                           |
+| `read_timeout_ms`                | integer                           | No                                  | `5000` (5s)     | Future turns                               | Request/response timeout during startup and synchronous operations.                                                                                                              |
+| `stall_timeout_ms`               | integer                           | No                                  | `300000` (5m)   | Future turns                               | Inactivity timeout based on event stream gaps. Set to `0` or negative to **disable** stall detection.                                                                            |
+| `max_concurrent_agents`          | integer or string integer         | No                                  | `10`            | **Yes** — affects subsequent dispatch      | Global concurrency limit across all issues.                                                                                                                                      |
+| `max_turns`                      | integer                           | No                                  | `20`            | Future dispatches                          | Maximum coding-agent turns per worker session. The worker re-checks tracker state after each turn and starts another turn if the issue is still active, up to this limit.        |
+| `max_retry_backoff_ms`           | integer or string integer         | No                                  | `300000` (5m)   | **Yes** — affects future retry scheduling  | Maximum delay cap for exponential backoff on retries.                                                                                                                            |
+| `max_concurrent_agents_by_state` | map of `state → positive integer` | No                                  | `{}` (empty)    | **Yes** — affects subsequent dispatch      | Per-state concurrency limits. State keys are normalized to lowercase for lookup. Non-positive or non-numeric entries are silently ignored.                                       |
+| `max_sessions`                   | integer                           | No                                  | `0` (unlimited) | **Yes** — affects future retry evaluations | Maximum completed worker sessions per issue before the orchestrator stops re-dispatching. Counted from run history. `0` disables the budget (unlimited). Must be non-negative.   |
 
 **Orchestrator vs adapter fields:** The fields above are consumed by the orchestrator
 for scheduling, concurrency, and retry decisions. They are **not** passed through to the
@@ -417,9 +417,28 @@ worker:
 
 ### 3.3 Adapter-Specific Pass-Through Config
 
-Each agent adapter may define configuration in a top-level object named after its `kind`
-value. These values are passed through to the adapter without validation by the
-orchestrator core.
+Each adapter (tracker or agent) may define configuration in a top-level object named
+after its `kind` value. These values are passed through to the adapter without validation
+by the orchestrator core.
+
+**File tracker adapter:**
+
+```yaml
+tracker:
+  kind: file
+  active_states:
+    - To Do
+    - In Progress
+  terminal_states:
+    - Done
+
+file:
+  path: /path/to/issues.json
+```
+
+The `file:` block is forwarded to the file tracker adapter. The `path` field is required
+and specifies the filesystem path to a JSON file containing issue records. This adapter
+is intended for local testing and CI workflows where a live tracker is not available.
 
 **Claude Code adapter:**
 
@@ -440,16 +459,16 @@ to CLI flags.
 > the Claude Code CLI's internal turn budget. They serve different purposes and should
 > typically have different values.
 
-**Codex adapter (example):**
+**Custom or future adapters (illustrative example):**
 
 ```yaml
-codex:
-  approval_policy: auto-edit
-  thread_sandbox: true
+my-custom-adapter:
+  option_one: value
+  option_two: true
 ```
 
 The orchestrator forwards the entire sub-object to the matching adapter without
-interpretation.
+interpretation. Any adapter you register can read its fields from this block.
 
 ---
 
@@ -505,14 +524,15 @@ underlying tracker system.
 
 #### `attempt` — Retry Counter
 
-| Value          | Meaning                               |
-| -------------- | ------------------------------------- |
-| `nil`          | First attempt — no prior failures.    |
-| Integer `>= 1` | Retry or continuation attempt number. |
+| Value          | Meaning                                                                                   |
+| -------------- | ----------------------------------------------------------------------------------------- |
+| Integer `0`    | First try, no prior worker failures in this session.                                      |
+| Integer `>= 1` | Retry try number after a worker failure. The value does not change on continuation turns. |
 
-**Template usage:** Use `{{ if .attempt }}` to test presence. On first run, `attempt` is
-`nil` (present in the data map with a nil value), so `{{ if .attempt }}` evaluates to
-`false`. On retries, it evaluates to `true`.
+**Template usage:** Use `{{ if .attempt }}` to distinguish first tries from retries.
+`attempt` is always an integer; on the first try it is `0`, so `{{ if .attempt }}`
+evaluates to `false`, and on retries it is `>= 1`, so `{{ if .attempt }}` evaluates to
+`true`. Continuation turns within the same session reuse the same `attempt` value.
 
 #### `run` — Per-Turn Metadata
 
@@ -563,8 +583,8 @@ use `attempt` and `run.is_continuation` to branch:
 
 | Scenario              | `attempt`      | `run.is_continuation` | Typical template action                                       |
 | --------------------- | -------------- | --------------------- | ------------------------------------------------------------- |
-| **First run**         | `nil`          | `false`               | Full task instructions, context gathering steps.              |
-| **Continuation turn** | integer        | `true`                | Resume guidance — review state, pick up where left off.       |
+| **First run**         | `0`            | `false`               | Full task instructions, context gathering steps.              |
+| **Continuation turn** | same as turn 1 | `true`                | Resume guidance — review state, pick up where left off.       |
 | **Retry after error** | integer `>= 1` | `false`               | Diagnostic steps — check prior failure, approach differently. |
 
 **Template pattern:**
@@ -823,7 +843,7 @@ re-applies configuration and prompt template without restart.
 | `agent.max_sessions`                   | **Immediate** — affects future retry timer evaluations.                                        |
 | `db_path`                              | **No effect** — requires restart. In-memory config updated, but database connection unchanged. |
 | `server.port`                          | **No effect** — requires restart.                                                              |
-| Prompt template                        | Future agent launches and continuation turns.                                                  |
+| Prompt template                        | Future worker attempts (including continuation retries), not in-flight continuation turns.     |
 
 ---
 
@@ -858,11 +878,11 @@ skipped for that tick, reconciliation remains active, and an error is emitted.
 
 These errors are raised during workflow file loading and prevent dispatch until fixed.
 
-| Error                                 | Cause                                                                                                                        | Fix                                                                                                                                |
-| ------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
-| **`missing_workflow_file`**           | The workflow file cannot be read at the configured or default path.                                                          | Verify the file exists. Check path spelling. Ensure read permissions. If using a custom path, confirm the CLI argument.            |
-| **`workflow_parse_error`**            | YAML front matter contains syntax errors. Common cause: missing closing `---` delimiter, or invalid YAML between delimiters. | Check for balanced `---` delimiters. Validate YAML syntax (indentation, colons, quoting). Look for tabs where spaces are expected. |
-| **`workflow_front_matter_not_a_map`** | YAML front matter decoded to a scalar or list instead of a map/object.                                                       | Ensure front matter contains key-value pairs, not a bare value or list. The top level must be a YAML mapping.                      |
+| Error                               | Cause                                                                                                                        | Fix                                                                                                                                |
+| ----------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| **Missing workflow file**           | The workflow file cannot be read at the configured or default path.                                                          | Verify the file exists. Check path spelling. Ensure read permissions. If using a custom path, confirm the CLI argument.            |
+| **Workflow parse error**            | YAML front matter contains syntax errors. Common cause: missing closing `---` delimiter, or invalid YAML between delimiters. | Check for balanced `---` delimiters. Validate YAML syntax (indentation, colons, quoting). Look for tabs where spaces are expected. |
+| **Workflow front matter not a map** | YAML front matter decoded to a scalar or list instead of a map/object.                                                       | Ensure front matter contains key-value pairs, not a bare value or list. The top level must be a YAML mapping.                      |
 
 ### 8.2 Configuration Errors
 
