@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 	"unicode"
@@ -759,7 +760,7 @@ agent:
   max_turns: 2
 
 polling:
-  interval_ms: 5000
+  interval_ms: 500
 
 workspace:
   root: %s
@@ -814,10 +815,12 @@ func TestQuickStartScenario(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	var stdout, stderr bytes.Buffer
-	// 6 seconds: mock-agent turns complete in <1 s, plus one full 5 s
-	// poll interval so the second tick confirms zero candidates.
-	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
+	var stdout bytes.Buffer
+	var stderr lockedBuf
+	// 5 seconds: mock-agent turns complete in <1 s; polling interval is
+	// 500 ms so the second tick confirming zero candidates arrives quickly.
+	// Extra headroom avoids flakiness under -race in CI.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
 	code := run(ctx, []string{wfPath}, &stdout, &stderr)
@@ -833,17 +836,18 @@ func TestQuickStartScenario(t *testing.T) {
 		substr string
 	}{
 		{"sortie started", `msg="sortie started"`},
-		{"tick completed with 2 candidates", `candidates=2`},
-		{"DEMO-1 session started", `msg="agent session started"`},
+		{"tick completed with 2 candidates", `msg="tick completed" candidates=2`},
+		{"DEMO-1 session started", `msg="agent session started" issue_id=1 issue_identifier=DEMO-1`},
+		{"DEMO-2 session started", `msg="agent session started" issue_id=2 issue_identifier=DEMO-2`},
 		{"DEMO-1 turn 1 completed", `issue_identifier=DEMO-1 turn_number=1`},
 		{"DEMO-1 turn 2 completed", `issue_identifier=DEMO-1 turn_number=2`},
 		{"DEMO-2 turn 1 completed", `issue_identifier=DEMO-2 turn_number=1`},
 		{"DEMO-2 turn 2 completed", `issue_identifier=DEMO-2 turn_number=2`},
 		{"DEMO-1 worker exiting normally", `issue_identifier=DEMO-1 exit_kind=normal`},
 		{"DEMO-2 worker exiting normally", `issue_identifier=DEMO-2 exit_kind=normal`},
-		{"DEMO-1 handoff succeeded", `msg="handoff transition succeeded, releasing claim"`},
-		{"DEMO-2 handoff to Done", `handoff_state=Done`},
-		{"second tick finds zero candidates", `candidates=0`},
+		{"DEMO-1 handoff succeeded", `issue_identifier=DEMO-1 handoff_state=Done`},
+		{"DEMO-2 handoff succeeded", `issue_identifier=DEMO-2 handoff_state=Done`},
+		{"second tick finds zero candidates", `msg="tick completed" candidates=0`},
 	}
 	for _, c := range checks {
 		if !strings.Contains(logs, c.substr) {
@@ -855,4 +859,23 @@ func TestQuickStartScenario(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dir, ".sortie.db")); err != nil {
 		t.Errorf("expected .sortie.db next to WORKFLOW.md: %v", err)
 	}
+}
+
+// lockedBuf is a concurrency-safe bytes.Buffer for log capture in tests
+// where background goroutines also write log output via slog.
+type lockedBuf struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (lb *lockedBuf) Write(p []byte) (int, error) {
+	lb.mu.Lock()
+	defer lb.mu.Unlock()
+	return lb.buf.Write(p)
+}
+
+func (lb *lockedBuf) String() string {
+	lb.mu.Lock()
+	defer lb.mu.Unlock()
+	return lb.buf.String()
 }
