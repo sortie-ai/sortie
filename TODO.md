@@ -803,6 +803,18 @@ JSON API + HTML dashboard, Prometheus `/metrics`), and adds agent capabilities.
       to local execution. Integration test with a real SSH host confirms
       agent stdout/stderr are relayed correctly.
 
+- [ ] 8.17 Make `RefreshFunc` reject refresh requests during orchestrator drain. Add an
+      atomic draining flag that `RefreshFunc` checks before sending to `refreshCh`;
+      return `false` when draining so the HTTP handler can respond with `queued: false`
+      instead of `202 Accepted`. Currently the refresh signal is accepted into the
+      channel during drain but silently discarded, causing the API to report success
+      for work that will never run. The architecture spec defines refresh as a
+      "best-effort trigger" which permits this, but truthful responses are preferable.
+      **Verify:** unit test starts the orchestrator, initiates drain, calls
+      `RefreshFunc()` and confirms it returns `false`; the HTTP handler returns a
+      non-202 status (or `queued: false`) for refresh requests received after drain
+      begins.
+
 ## Milestone 9: Self-Hosting (Sortie Builds Sortie)
 
 At this point, Sortie has enough functionality to orchestrate its own development. Create
@@ -984,3 +996,41 @@ Documentation, security guidance, and public release preparation.
       **Verify:** reference page lists all metrics from ADR-0008 (4 gauges, 9 counters,
       2 histograms, 1 info), includes at least 5 PromQL examples, and the Grafana
       dashboard JSON is downloadable and imports cleanly into Grafana 10+.
+
+- [ ] 11.10 Write the HTTP API reference for https://docs.sortie-ai.com/
+      (`reference/http-api.md`). Cover: enablement (`--port` flag and `server.port`
+      config field, loopback-only bind), JSON API endpoints (`GET /api/v1/state`,
+      `GET /api/v1/<identifier>`, `POST /api/v1/refresh`) with full request/response
+      shapes and the `{"error":{"code":"...","message":"..."}}` error envelope,
+      HTML dashboard at `/` (auto-refresh, rendered fields), and `GET /health`
+      (200 OK contract). Include `curl` examples for every endpoint. Audience:
+      operators integrating Sortie into scripts, dashboards, or container probes.
+      Depends on: 8.4, 8.5, 8.14.
+      **Verify:** document covers all endpoints from architecture Section 13.7.2;
+      every endpoint has a request example, response shape, and at least one `curl`
+      example. A reviewer can call any endpoint without reading source code.
+
+- [ ] 11.11 Write the agent extensions reference for https://docs.sortie-ai.com/
+      (`reference/agent-extensions.md`). Cover the `.sortie/status` file protocol
+      (recognized values: `blocked`, `needs-human-review`; effect on continuation
+      retry scheduling; absent and unknown-value handling) and the `tracker_api`
+      tool (available operations, request/response format, project scoping, failure
+      envelope). Audience: workflow authors writing prompt templates who need to
+      know what capabilities the agent has and what signals it can send back to the
+      orchestrator. Depends on: 8.11, 8.12.
+      **Verify:** document lists every recognized `.sortie/status` value with its
+      orchestrator effect; lists every `tracker_api` operation with request and
+      response shape. A workflow author can use both features without reading source
+      code.
+
+- [ ] 11.12 Write the Prometheus monitoring how-to guide for
+      https://docs.sortie-ai.com/ (`guides/monitor-with-prometheus.md`). Cover: how
+      to enable the `/metrics` endpoint via `--port`, how to add Sortie as a
+      Prometheus scrape target (complete `prometheus.yml` snippet), how to import
+      the reference Grafana dashboard from 11.9, and common PromQL queries for
+      operational dashboards. Distinct from the structured-logs guide — this is
+      Tier 3 (Prometheus) per ADR-0008, not Tier 1. Depends on: 8.8, 11.9.
+      **Verify:** guide includes a complete `prometheus.yml` scrape config, step-by-
+      step Grafana import instructions, and at least 3 PromQL examples. A platform
+      engineer with an existing Prometheus stack can integrate Sortie by following
+      this guide alone.
