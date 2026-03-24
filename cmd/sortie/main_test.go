@@ -963,6 +963,85 @@ func TestResolveServerPort(t *testing.T) {
 			wantPort:    0,
 			wantEnabled: false,
 		},
+
+		// --- Boundary and invalid port regression tests ---
+
+		{
+			name:        "flag negative port rejected",
+			portFlag:    -1,
+			portFlagSet: true,
+			wantPort:    0,
+			wantEnabled: false,
+		},
+		{
+			name:        "flag port above 65535 rejected",
+			portFlag:    70000,
+			portFlagSet: true,
+			wantPort:    0,
+			wantEnabled: false,
+		},
+		{
+			name:        "flag port exactly 65535 accepted",
+			portFlag:    65535,
+			portFlagSet: true,
+			wantPort:    65535,
+			wantEnabled: true,
+		},
+		{
+			name:        "flag port 1 accepted",
+			portFlag:    1,
+			portFlagSet: true,
+			wantPort:    1,
+			wantEnabled: true,
+		},
+		{
+			name:        "extensions fractional float64 rejected",
+			portFlag:    0,
+			portFlagSet: false,
+			extensions:  map[string]any{"server": map[string]any{"port": float64(8080.9)}},
+			wantPort:    0,
+			wantEnabled: false,
+		},
+		{
+			name:        "extensions float64 above 65535 rejected",
+			portFlag:    0,
+			portFlagSet: false,
+			extensions:  map[string]any{"server": map[string]any{"port": float64(99999)}},
+			wantPort:    0,
+			wantEnabled: false,
+		},
+		{
+			name:        "extensions negative int rejected",
+			portFlag:    0,
+			portFlagSet: false,
+			extensions:  map[string]any{"server": map[string]any{"port": -1}},
+			wantPort:    0,
+			wantEnabled: false,
+		},
+		{
+			name:        "extensions int above 65535 rejected",
+			portFlag:    0,
+			portFlagSet: false,
+			extensions:  map[string]any{"server": map[string]any{"port": 70000}},
+			wantPort:    0,
+			wantEnabled: false,
+		},
+		{
+			name:        "extensions int exactly 65535 accepted",
+			portFlag:    0,
+			portFlagSet: false,
+			extensions:  map[string]any{"server": map[string]any{"port": 65535}},
+			wantPort:    65535,
+			wantEnabled: true,
+		},
+		{
+			name:        "extensions float64 exactly 65535 accepted",
+			portFlag:    0,
+			portFlagSet: false,
+			extensions:  map[string]any{"server": map[string]any{"port": float64(65535)}},
+			wantPort:    65535,
+			wantEnabled: true,
+		},
 	}
 
 	for _, tt := range tests {

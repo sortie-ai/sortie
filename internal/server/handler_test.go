@@ -443,10 +443,10 @@ func TestHandleState(t *testing.T) {
 		}
 	})
 
-	t.Run("snapshot error returns 503", func(t *testing.T) {
+	t.Run("snapshot error returns 503 with generic message", func(t *testing.T) {
 		t.Parallel()
 
-		ts := testServer(t, failingSnapshot("timeout"), acceptingRefresh())
+		ts := testServer(t, failingSnapshot("connection refused"), acceptingRefresh())
 		resp, err := http.Get(ts.URL + "/api/v1/state")
 		if err != nil {
 			t.Fatalf("GET /api/v1/state: %v", err)
@@ -463,6 +463,11 @@ func TestHandleState(t *testing.T) {
 		}
 		if body.Error.Code != "snapshot_unavailable" {
 			t.Errorf("error code = %q, want %q", body.Error.Code, "snapshot_unavailable")
+		}
+
+		wantMsg := "orchestrator state snapshot unavailable"
+		if body.Error.Message != wantMsg {
+			t.Errorf("error message = %q, want %q", body.Error.Message, wantMsg)
 		}
 	})
 
@@ -568,10 +573,10 @@ func TestHandleIssueDetail(t *testing.T) {
 		}
 	})
 
-	t.Run("snapshot error returns 503", func(t *testing.T) {
+	t.Run("snapshot error returns 503 with generic message", func(t *testing.T) {
 		t.Parallel()
 
-		ts := testServer(t, failingSnapshot("timeout"), acceptingRefresh())
+		ts := testServer(t, failingSnapshot("connection refused"), acceptingRefresh())
 		resp, err := http.Get(ts.URL + "/api/v1/MT-100")
 		if err != nil {
 			t.Fatalf("GET /api/v1/MT-100: %v", err)
@@ -580,6 +585,16 @@ func TestHandleIssueDetail(t *testing.T) {
 
 		if resp.StatusCode != http.StatusServiceUnavailable {
 			t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusServiceUnavailable)
+		}
+
+		var body errorResponse
+		if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+			t.Fatalf("decode error response: %v", err)
+		}
+
+		wantMsg := "orchestrator state snapshot unavailable"
+		if body.Error.Message != wantMsg {
+			t.Errorf("error message = %q, want %q", body.Error.Message, wantMsg)
 		}
 	})
 }

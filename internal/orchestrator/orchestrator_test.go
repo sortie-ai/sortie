@@ -3101,3 +3101,81 @@ func TestSnapshotDuringDrain(t *testing.T) {
 		t.Fatal("Run did not return within 5 seconds")
 	}
 }
+
+func TestRefreshDrainedDuringShutdown(t *testing.T) {
+	t.Parallel()
+
+	state := NewState(60000, 1, nil, AgentTotals{})
+	state.Running["id-1"] = &RunningEntry{
+		Identifier: "MT-1",
+		Issue:      domain.Issue{ID: "id-1", State: "In Progress"},
+		StartedAt:  time.Now().UTC(),
+		CancelFunc: func() {},
+	}
+
+	o := NewOrchestrator(OrchestratorParams{
+		State:           state,
+		Logger:          discardLogger(),
+		TrackerAdapter:  &mockTrackerAdapter{},
+		AgentAdapter:    &mockAgentAdapter{},
+		WorkflowManager: &stubWorkflowManager{},
+		Store:           &stubStore{},
+		PreflightParams: PreflightParams{
+			ReloadWorkflow: func() error { return errPreflightFailed },
+			ConfigFunc:     func() config.ServiceConfig { return config.ServiceConfig{} },
+		},
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		o.Run(ctx)
+		close(done)
+	}()
+
+	// Let the event loop start.
+	time.Sleep(100 * time.Millisecond)
+
+	// Cancel ctx to trigger drain.
+	cancel()
+
+	// Let drain enter the select loop.
+	time.Sleep(50 * time.Millisecond)
+
+	refreshFn := o.RefreshFunc()
+
+	// Fill the refresh channel (capacity 1).
+	if !refreshFn() {
+		t.Fatal("first RefreshFunc() = false, want true (channel was empty)")
+	}
+
+	// The drain loop should consume the signal, freeing the channel.
+	// Allow time for the drain select to pick it up.
+	time.Sleep(50 * time.Millisecond)
+
+	// After drain consumes the signal, the channel is empty again.
+	// A second send should succeed (not block) because drain keeps
+	// consuming. Verify with a short timeout.
+	accepted := make(chan bool, 1)
+	go func() {
+		accepted <- refreshFn()
+	}()
+
+	select {
+	case got := <-accepted:
+		// Either accepted (true) or coalesced (false) is fine — the key
+		// invariant is that RefreshFunc did not block.
+		_ = got
+	case <-time.After(2 * time.Second):
+		t.Fatal("RefreshFunc() blocked during drain — refreshCh not being consumed")
+	}
+
+	// Let the worker exit so drain completes.
+	o.workerExitCh <- WorkerResult{IssueID: "id-1"}
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("Run did not return within 5 seconds")
+	}
+}

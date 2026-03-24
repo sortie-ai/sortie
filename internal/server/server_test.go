@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"log/slog"
+	"net"
 	"net/http"
 	"testing"
 	"time"
@@ -71,14 +72,18 @@ func TestServerLifecycle(t *testing.T) {
 		Addr:      "127.0.0.1:0",
 	})
 
-	// Start the server in a goroutine.
+	// Bind a listener first so we know the server is ready
+	// immediately after Serve starts — no sleep needed.
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("net.Listen: %v", err)
+	}
+
+	// Start serving on the pre-bound listener.
 	errCh := make(chan error, 1)
 	go func() {
-		errCh <- srv.ListenAndServe()
+		errCh <- srv.httpServer.Serve(ln)
 	}()
-
-	// Give server time to start.
-	time.Sleep(50 * time.Millisecond)
 
 	// Gracefully shut down.
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -88,9 +93,9 @@ func TestServerLifecycle(t *testing.T) {
 		t.Fatalf("Shutdown: %v", err)
 	}
 
-	// ListenAndServe should return ErrServerClosed.
-	err := <-errCh
-	if err != http.ErrServerClosed {
-		t.Errorf("ListenAndServe error = %v, want %v", err, http.ErrServerClosed)
+	// Serve should return ErrServerClosed.
+	serveErr := <-errCh
+	if serveErr != http.ErrServerClosed {
+		t.Errorf("Serve error = %v, want %v", serveErr, http.ErrServerClosed)
 	}
 }
