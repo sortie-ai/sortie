@@ -314,14 +314,14 @@ func TestSampleWorkflowEnvVarIndirection(t *testing.T) {
 		t.Fatal("config missing tracker map")
 	}
 
-	// All operator-specific values must use $SORTIE_TEST_* indirection.
+	// All operator-specific values must use $SORTIE_* indirection.
 	checks := []struct {
 		key  string
 		want string
 	}{
-		{"endpoint", "$SORTIE_TEST_JIRA_ENDPOINT"},
-		{"api_key", "$SORTIE_TEST_JIRA_API_KEY"},
-		{"project", "$SORTIE_TEST_JIRA_PROJECT"},
+		{"endpoint", "$SORTIE_JIRA_ENDPOINT"},
+		{"api_key", "$SORTIE_JIRA_API_KEY"},
+		{"project", "$SORTIE_JIRA_PROJECT"},
 	}
 	for _, c := range checks {
 		got, _ := tracker[c.key].(string)
