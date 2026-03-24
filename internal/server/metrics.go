@@ -190,7 +190,7 @@ func NewPromMetrics(version, goVersion string) *PromMetrics {
 }
 
 // Registry returns the dedicated [prometheus.Registry] used by this
-// [PromMetrics] instance. Pass this to [promhttp.HandlerFor] to
+// [PromMetrics] instance. Pass this to promhttp.HandlerFor to
 // construct the /metrics HTTP handler.
 func (p *PromMetrics) Registry() *prometheus.Registry {
 	return p.registry

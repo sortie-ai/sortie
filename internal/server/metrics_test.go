@@ -88,19 +88,16 @@ func histogramStats(t *testing.T, families map[string]*dto.MetricFamily, name st
 }
 
 func matchLabels(pairs []*dto.LabelPair, want map[string]string) bool {
-	if len(want) == 0 && len(pairs) == 0 {
-		return true
+	if len(want) != len(pairs) {
+		return false
 	}
-	if len(want) == 0 {
-		return true
-	}
-	found := 0
 	for _, lp := range pairs {
-		if v, ok := want[lp.GetName()]; ok && v == lp.GetValue() {
-			found++
+		v, ok := want[lp.GetName()]
+		if !ok || v != lp.GetValue() {
+			return false
 		}
 	}
-	return found == len(want)
+	return true
 }
 
 // --- Tests ---
