@@ -597,9 +597,10 @@ the system does real work.
 Observability surfaces and agent-facing extensions. The system should be monitorable by
 operators and agents should have access to tracker data after this milestone. Basic
 structured logging was set up in task 0.8; this milestone decides the observability model
-(ADR-0008), enhances logging, implements the chosen surfaces, and adds agent capabilities.
+(ADR-0008), enhances logging, implements the chosen surfaces (three-tier: structured logs,
+JSON API + HTML dashboard, Prometheus `/metrics`), and adds agent capabilities.
 
-- [ ] 8.1 Research and write ADR-0008: Observability model. Evaluate embedded HTTP server
+- [x] 8.1 Research and write ADR-0008: Observability model. Evaluate embedded HTTP server
       with JSON API + HTML dashboard (current spec) vs Prometheus `/metrics` endpoint
       consumed by external Grafana vs structured logs only (consumed by log aggregation) vs
       Unix socket + reverse proxy. Consider: the "single binary, zero infrastructure" deployment
@@ -639,7 +640,100 @@ structured logging was set up in task 0.8; this milestone decides the observabil
       **Verify:** start Sortie with `--port 8080`, open `http://localhost:8080` in a browser,
       confirm the dashboard renders current state.
 
-- [ ] 8.6 Implement the `tracker_api` client-side tool (Section 10.4): expose tracker API
+- [ ] 8.6 Define the `Metrics` interface and no-op implementation (ADR-0008, Metric
+      Instrumentation Boundaries). Place the interface in `internal/domain/` to preserve
+      layer boundaries — the orchestrator (coordination layer) and adapters (integration
+      layer) must not import `prometheus/client_golang` directly. The interface methods
+      map to the metric operations defined in ADR-0008:
+      Gauges: `SetRunningSessions(n)`, `SetRetryingSessions(n)`,
+      `SetAvailableSlots(n)`, `SetActiveSessionsElapsed(seconds)`.
+      Counters: `AddTokens(tokenType, count)`, `AddAgentRuntime(seconds)`,
+      `IncDispatches(outcome)`, `IncWorkerExits(exitType)`,
+      `IncRetries(trigger)`, `IncReconciliationActions(action)`,
+      `IncPollCycles(result)`, `IncTrackerRequests(operation, result)`,
+      `IncHandoffTransitions(result)`.
+      Histograms: `ObservePollDuration(seconds)`,
+      `ObserveWorkerDuration(exitType, seconds)`.
+      Provide a `NoopMetrics` struct satisfying the interface for use when the HTTP
+      server is disabled and in unit tests.
+      **Verify:** code compiles, `NoopMetrics` satisfies the `Metrics` interface,
+      unit test calls every method on `NoopMetrics` without panic.
+
+- [ ] 8.7 Add `github.com/prometheus/client_golang` dependency and implement the
+      Prometheus-backed `Metrics` (ADR-0008, Tier 3). Place the implementation in
+      `internal/server/` (Observability layer). Use a dedicated
+      `prometheus.Registry` — not the global default — to avoid polluting metrics
+      with unrelated collectors and to enable isolated test assertions. Register
+      all metrics from ADR-0008:
+      Gauges: `sortie_sessions_running`, `sortie_sessions_retrying`,
+      `sortie_slots_available`, `sortie_active_sessions_elapsed_seconds`.
+      Counters: `sortie_tokens_total{type}`, `sortie_agent_runtime_seconds_total`,
+      `sortie_dispatches_total{outcome}`, `sortie_worker_exits_total{exit_type}`,
+      `sortie_retries_total{trigger}`,
+      `sortie_reconciliation_actions_total{action}`,
+      `sortie_poll_cycles_total{result}`,
+      `sortie_tracker_requests_total{operation,result}`,
+      `sortie_handoff_transitions_total{result}`.
+      Histograms: `sortie_poll_duration_seconds` (tuned buckets for O(seconds)
+      range), `sortie_worker_duration_seconds{exit_type}` (tuned buckets for
+      O(minutes) to O(hours) range). Use `prometheus.ExponentialBuckets` or
+      equivalent with ranges appropriate to each histogram.
+      Info: `sortie_build_info{version,go_version}` (gauge, always 1).
+      Expose the underlying `prometheus.Registry` for handler registration in 8.8.
+      **Verify:** unit test creates the Prometheus `Metrics` implementation, calls
+      each method, gathers metrics from the registry, and confirms all metric names,
+      types, and label values are correct. `sortie_build_info` is present with
+      `version` and `go_version` labels.
+
+- [ ] 8.8 Wire the Prometheus `/metrics` endpoint on the HTTP server (ADR-0008,
+      Tier 3). Add a `/metrics` route to the server mux created in 8.4, served by
+      `promhttp.HandlerFor(registry, opts)` — not `promhttp.Handler()` — using the
+      dedicated registry from 8.7. Configure `promhttp.HandlerOpts` to register
+      scrape self-instrumentation (`promhttp_metric_handler_*` metrics) on the
+      same dedicated registry so they appear in scrape output rather than silently
+      landing on the global default. The `/metrics` endpoint is co-located with
+      the JSON API and dashboard on the same address and port — no separate
+      configuration.
+      **Verify:** integration test starts the HTTP server with `--port`, performs
+      `GET /metrics`, confirms response is valid Prometheus text exposition format
+      containing `sortie_build_info` and `promhttp_metric_handler_requests_total`.
+
+- [ ] 8.9 Instrument the orchestrator (coordination layer) with `Metrics` interface
+      calls (ADR-0008, Metric Instrumentation Boundaries). Wire the `Metrics`
+      interface into the orchestrator constructor. Insert calls at the defined
+      instrumentation points:
+      Gauges: update `sortie_sessions_running`, `sortie_sessions_retrying`, and
+      `sortie_slots_available` after every state mutation (dispatch, worker exit,
+      retry schedule/fire, reconciliation). Compute
+      `sortie_active_sessions_elapsed_seconds` at scrape time from `started_at`
+      timestamps of running entries (requires a callback or gauge function).
+      Counters: increment `sortie_dispatches_total` on dispatch attempt,
+      `sortie_worker_exits_total` on worker exit, `sortie_retries_total` on retry
+      schedule, `sortie_reconciliation_actions_total` on reconciliation action,
+      `sortie_poll_cycles_total` on tick completion, `sortie_tokens_total` on
+      token event delta, `sortie_agent_runtime_seconds_total` on session end,
+      `sortie_handoff_transitions_total` on handoff attempt.
+      Histograms: observe `sortie_poll_duration_seconds` on tick completion,
+      `sortie_worker_duration_seconds` on worker exit.
+      **Verify:** integration test with the Prometheus `Metrics` runs a full poll
+      cycle with mock adapters (dispatch → worker run → exit → retry), gathers
+      metrics from the registry, and confirms: gauges reflect current state,
+      counters have incremented, histograms have observations. A second test
+      confirms `NoopMetrics` causes no panics in the same code path.
+
+- [ ] 8.10 Instrument tracker adapters with `sortie_tracker_requests_total`
+      (ADR-0008, Integration Layer). Wire the `Metrics` interface into tracker
+      adapter constructors (Jira and file adapters). Increment
+      `IncTrackerRequests(operation, result)` on completion of each adapter
+      method: `operation` is one of `{fetch_candidates, fetch_issue,
+    fetch_comments, transition}` and `result` is `{success, error}`. The
+      adapter increments the counter after each API call without the
+      orchestrator knowing tracker-specific details.
+      **Verify:** unit test for each adapter confirms the counter is incremented
+      with correct `operation` and `result` labels on successful and failed
+      calls. Existing adapter tests continue to pass.
+
+- [ ] 8.11 Implement the `tracker_api` client-side tool (Section 10.4): expose tracker API
       access to agents during sessions, scoped to the configured project. Advertise the tool
       during session startup. Return structured results: `success=true` on API success,
       `success=false` with preserved response body on API errors, `success=false` with error
@@ -648,7 +742,7 @@ structured logging was set up in task 0.8; this milestone decides the observabil
       **Verify:** integration test with mock tracker confirms tool is advertised, successful
       query returns data, API error preserves body, and tool is scoped to configured project.
 
-- [ ] 8.7 Implement `.sortie/status` workspace file reading (Section 21): after each turn
+- [ ] 8.12 Implement `.sortie/status` workspace file reading (Section 21): after each turn
       completes, read `.sortie/status` from the workspace root. If value is `blocked` or
       `needs-human-review`, do not schedule continuation retries until the issue state changes
       in the tracker. Unknown or absent values are ignored. This is advisory only and does not
@@ -657,7 +751,7 @@ structured logging was set up in task 0.8; this milestone decides the observabil
       confirms no continuation retry is scheduled. A second test with an absent file confirms
       normal continuation behavior.
 
-- [ ] 8.8 Log a structured ERROR on worker run failure in `HandleWorkerExit`: when a
+- [ ] 8.13 Log a structured ERROR on worker run failure in `HandleWorkerExit`: when a
       worker exits with a non-nil error or a failed status, emit an ERROR log line with
       `issue_id`, `issue_identifier`, and `error` fields. Currently `HandleWorkerExit`
       records the failure in `run_history` but emits no log entry, so run failures are
@@ -668,7 +762,26 @@ structured logging was set up in task 0.8; this milestone decides the observabil
       processes a failed result. A second test confirms no ERROR is logged on a
       successful (normal) exit.
 
-- [ ] 8.9 Implement the SSH worker extension (architecture Appendix A): when
+- [ ] 8.14 Add a `/health` (or `/live`) endpoint to the HTTP server: return `200 OK`
+      when the orchestrator is running. Deferred from ADR-0008 review (recommendation
+      6.3). Not required for core observability model but useful for container
+      orchestrators and scripted heartbeat checks. `GET /api/v1/state` serves as a
+      de facto health check in the interim.
+      **Verify:** integration test starts the HTTP server, `GET /health` returns 200.
+
+- [ ] 8.15 Update `docs/architecture.md` per ADR-0008 spec section update requirements.
+      Section 3.3: add `github.com/prometheus/client_golang` to the external dependencies
+      list. Section 13.4: clarify that the "optional human-readable status surface" is the
+      HTML dashboard at `/` when the HTTP server is enabled. Section 13.7: add `/metrics`
+      to the HTTP server route list and document that it serves Prometheus exposition
+      format via `prometheus/client_golang`. Section 18.2: add "Prometheus `/metrics`
+      endpoint exposes defined gauges, counters, and histograms when the HTTP server is
+      enabled" to the recommended extensions checklist.
+      **Verify:** all four sections are updated, no contradictions with existing content
+      or other ADRs. `grep -c 'prometheus' docs/architecture.md` returns at least 3
+      matches.
+
+- [ ] 8.16 Implement the SSH worker extension (architecture Appendix A): when
       `worker.ssh_hosts` is configured, dispatch worker runs to remote hosts
       over SSH instead of launching local subprocesses. Launch the coding
       agent via SSH stdio (`ssh host agent-command`), round-robin or
@@ -818,7 +931,7 @@ Documentation, security guidance, and public release preparation.
 
 - [ ] 11.5 Finalize `docs/workflow-reference.md`: update the reference written in task 7.14
       to reflect all features implemented through Milestones 7–11 — including `tracker_api`
-      tool extension (8.6), `.sortie/status` file (8.7), workspace TTL cleanup and
+      tool extension (8.11), `.sortie/status` file (8.12), workspace TTL cleanup and
       `workspace.retention_days` (10.2), `sortie validate` subcommand, and any adapter-specific
       configuration discovered during end-to-end testing. Add a migration/changelog section
       noting any schema changes since the initial draft. Ensure every field, hook, template
@@ -840,3 +953,27 @@ Documentation, security guidance, and public release preparation.
       README.md, and tag the first stable release.
       **Verify:** CHANGELOG.md references SemVer, README.md has no development-only
       disclaimers, and the 1.0.0 release is published.
+
+- [ ] 11.8 Write the observability and monitoring guide for https://docs.sortie-ai.com/.
+      Cover all three tiers from ADR-0008: Tier 1 (structured logs — format, key fields,
+      grep examples for common diagnostics), Tier 2 (embedded HTTP server — how to enable
+      via `--port` / `server.port`, JSON API endpoint reference with `curl` examples,
+      HTML dashboard overview), and Tier 3 (Prometheus `/metrics` — how to add Sortie as
+      a Prometheus scrape target, example `prometheus.yml` snippet, integration with
+      Grafana). Include a "Which tier should I use?" decision table mapping operator
+      personas (solo developer, platform engineer, on-call, CI/automation) to recommended
+      tiers per ADR-0008. Cover the cardinality model: Prometheus for aggregate questions,
+      JSON API for per-issue detail.
+      **Verify:** guide covers all three tiers, includes working `curl` and Prometheus
+      scrape config examples, and is published at https://docs.sortie-ai.com/.
+
+- [ ] 11.9 Write the Prometheus metrics reference for https://docs.sortie-ai.com/.
+      Provide a complete reference page listing every Prometheus metric defined in
+      ADR-0008: name, type (gauge/counter/histogram/info), labels, description, and
+      which Sortie layer produces it. Include example PromQL queries for common
+      operational questions (token burn rate, dispatch throughput, active sessions,
+      error rate, worker duration percentiles). Provide a reference Grafana dashboard
+      JSON file that operators can import for immediate visibility.
+      **Verify:** reference page lists all metrics from ADR-0008 (4 gauges, 9 counters,
+      2 histograms, 1 info), includes at least 5 PromQL examples, and the Grafana
+      dashboard JSON is downloadable and imports cleanly into Grafana 10+.
