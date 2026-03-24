@@ -845,8 +845,8 @@ func TestQuickStartScenario(t *testing.T) {
 		{"DEMO-2 turn 2 completed", `issue_identifier=DEMO-2 turn_number=2`},
 		{"DEMO-1 worker exiting normally", `issue_identifier=DEMO-1 exit_kind=normal`},
 		{"DEMO-2 worker exiting normally", `issue_identifier=DEMO-2 exit_kind=normal`},
-		{"DEMO-1 handoff succeeded", `issue_identifier=DEMO-1 handoff_state=Done`},
-		{"DEMO-2 handoff succeeded", `issue_identifier=DEMO-2 handoff_state=Done`},
+		{"DEMO-1 handoff succeeded", `issue_identifier=DEMO-1 session_id=mock-session-001 handoff_state=Done`},
+		{"DEMO-2 handoff succeeded", `issue_identifier=DEMO-2 session_id=mock-session-001 handoff_state=Done`},
 		{"second tick finds zero candidates", `msg="tick completed" candidates=0`},
 	}
 	for _, c := range checks {
