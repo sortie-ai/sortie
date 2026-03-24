@@ -187,6 +187,7 @@ Sortie is a single-binary Go service with this internal layout:
 | `internal/agent/mock/`   | Integration   | Mock agent for testing                               |
 | `internal/workspace/`    | Execution     | Workspace lifecycle, hooks, path safety              |
 | `internal/orchestrator/` | Coordination  | Poll loop, dispatch, retry, reconciliation           |
+| `internal/server/`       | Observability | HTTP API server, JSON endpoints, dashboard           |
 | `internal/prompt/`       | Support       | Prompt template utilities                            |
 | `internal/registry/`     | Support       | Adapter registration                                 |
 | `internal/logging/`      | Support       | Structured logging setup                             |

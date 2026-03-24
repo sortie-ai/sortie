@@ -59,6 +59,10 @@ At least one criterion must be met. Do not write useless tests. Your KPI is test
 | Agent        | `internal/agent/*/`      | Unit (fixtures) + Integration (env-gated) | Event parsing, token extraction, timeout handling                 |
 | Workspace    | `internal/workspace/`    | Unit + Integration (temp dirs)            | Path containment (**SECURITY**), symlink rejection, hook env vars |
 | Orchestrator | `internal/orchestrator/` | Unit (mock adapters)                      | Dispatch order, concurrency, reconciliation, retry scheduling     |
+| Server       | `internal/server/`       | Unit (httptest)                           | JSON serialization, endpoint routing, error envelopes, 405 handling |
+| Prompt       | `internal/prompt/`       | Unit                                      | Template rendering, strict mode, FuncMap, error handling          |
+| Registry     | `internal/registry/`     | Unit                                      | Adapter registration, duplicate detection, lookup                 |
+| Logging      | `internal/logging/`      | Unit                                      | Logger setup, context field helpers                               |
 | CLI          | `cmd/sortie/`            | Integration                               | Arg handling, flag parsing, exit codes                            |
 
 Integration tests requiring external services MUST be gated:

@@ -72,7 +72,7 @@ the rest: stall detection, timeout enforcement, retries with backoff, state
 reconciliation with the tracker, and workspace cleanup when issues reach terminal
 states. Changes to the workflow are applied without restart.
 
-See [examples/WORKFLOW.md](examples/WORKFLOW.md) for a complete example with
+See [examples/WORKFLOW.md](examples/WORKFLOW.md?plain=1) for a complete example with
 all hooks, continuation guidance, and blocker handling.
 
 ## Architecture

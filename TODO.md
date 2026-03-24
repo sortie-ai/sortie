@@ -914,7 +914,7 @@ Operational hardening, performance tuning, and workspace lifecycle improvements.
 
 Documentation, security guidance, and public release preparation.
 
-- [ ] 11.1 Write CONTRIBUTING.md: build instructions, test instructions, code conventions,
+- [x] 11.1 Write CONTRIBUTING.md: build instructions, test instructions, code conventions,
       PR process, architecture overview reference.
       **Verify:** a new contributor can follow the guide to build, test, and submit a change.
 

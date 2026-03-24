@@ -1,9 +1,9 @@
 ---
 tracker:
   kind: jira
-  endpoint: $SORTIE_TEST_JIRA_ENDPOINT
-  api_key: $SORTIE_TEST_JIRA_API_KEY
-  project: $SORTIE_TEST_JIRA_PROJECT
+  endpoint: $SORTIE_JIRA_ENDPOINT
+  api_key: $SORTIE_JIRA_API_KEY
+  project: $SORTIE_JIRA_PROJECT
   query_filter: "labels = 'agent-ready'"
   active_states:
     - To Do
@@ -17,11 +17,11 @@ polling:
   interval_ms: 45000
 
 workspace:
-  root: $SORTIE_TEST_WORKSPACE_ROOT
+  root: $SORTIE_WORKSPACE_ROOT
 
 hooks:
   after_create: |
-    git clone --depth 1 $SORTIE_TEST_REPO_URL .
+    git clone --depth 1 $SORTIE_REPO_URL .
     go mod download
   before_run: |
     git fetch origin main
@@ -58,9 +58,9 @@ server:
 ---
 
 {{/* Sortie sample workflow — E2E testing and documentation reference.
-     Required env vars: SORTIE_TEST_JIRA_ENDPOINT, SORTIE_TEST_JIRA_API_KEY,
-     SORTIE_TEST_JIRA_PROJECT, SORTIE_TEST_REPO_URL.
-     Optional: SORTIE_TEST_WORKSPACE_ROOT (defaults to system temp). */}}
+     Required env vars: SORTIE_JIRA_ENDPOINT, SORTIE_JIRA_API_KEY,
+     SORTIE_JIRA_PROJECT, SORTIE_REPO_URL.
+     Optional: SORTIE_WORKSPACE_ROOT (defaults to system temp). */}}
 You are a senior engineer. Your work is tracked by an automated orchestrator (Sortie)
 that manages your session, retries failures, and monitors progress.
 
