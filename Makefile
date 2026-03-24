@@ -11,7 +11,7 @@ LINT     := golangci-lint
 
 ## fmt: format all Go source files
 fmt:
-	$(GO) fmt ./...
+	$(LINT) fmt ./...
 
 ## lint: run golangci-lint on all packages
 lint:

@@ -32,7 +32,7 @@ func Open(ctx context.Context, path string) (*Store, error) {
 
 	// Verify the connection is usable.
 	if err := db.PingContext(ctx); err != nil {
-		db.Close() //nolint:errcheck // best-effort cleanup on open failure
+		db.Close() //nolint:errcheck,gosec // best-effort cleanup on open failure
 		return nil, fmt.Errorf("ping sqlite %q: %w", path, err)
 	}
 
@@ -41,12 +41,12 @@ func Open(ctx context.Context, path string) (*Store, error) {
 	// mode set, which may differ from the requested mode without error.
 	var mode string
 	if err := db.QueryRowContext(ctx, "PRAGMA journal_mode=WAL").Scan(&mode); err != nil {
-		db.Close() //nolint:errcheck // best-effort cleanup on open failure
+		db.Close() //nolint:errcheck,gosec // best-effort cleanup on open failure
 		return nil, fmt.Errorf("enable WAL mode: %w", err)
 	}
 	// :memory: databases report "memory"; file-backed databases report "wal".
 	if mode != "wal" && mode != "memory" {
-		db.Close() //nolint:errcheck // best-effort cleanup on open failure
+		db.Close() //nolint:errcheck,gosec // best-effort cleanup on open failure
 		return nil, fmt.Errorf("expected journal_mode wal or memory, got %q", mode)
 	}
 

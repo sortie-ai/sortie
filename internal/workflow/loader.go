@@ -41,7 +41,7 @@ type Workflow struct {
 // It returns a [*WorkflowError] for every expected failure mode: missing
 // file, invalid YAML, and non-map front matter.
 func Load(path string) (Workflow, error) {
-	raw, err := os.ReadFile(path)
+	raw, err := os.ReadFile(path) //nolint:gosec // G304: path is the user-configured workflow file location
 	if err != nil {
 		return Workflow{}, &WorkflowError{Kind: ErrMissingFile, Path: path, Err: err}
 	}

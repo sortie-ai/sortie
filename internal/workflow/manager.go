@@ -168,7 +168,7 @@ func (m *Manager) Start(ctx context.Context) error {
 
 	dir := filepath.Dir(m.path)
 	if err := w.Add(dir); err != nil {
-		w.Close() //nolint:errcheck // best-effort cleanup on startup failure
+		w.Close() //nolint:errcheck,gosec // best-effort cleanup on startup failure
 		return err
 	}
 

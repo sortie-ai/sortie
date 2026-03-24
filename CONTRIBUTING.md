@@ -16,7 +16,7 @@ reliability are welcome. This guide explains how to work within that model.
 
 **Discuss first** (open an issue before writing code):
 
-- Changes to `docs/architecture.md` or accepted ADRs
+- Changes to [docs/architecture.md](docs/architecture.md) or accepted ADRs
 - Features not yet in `TODO.md`
 - New dependencies beyond what the architecture specifies
 - Reordering or skipping `TODO.md` milestones
@@ -140,7 +140,7 @@ Beyond what the linter enforces:
 - `t.TempDir()` for filesystem isolation, `t.Setenv()` for environment variables.
 - Error semantics via `errors.As()` / `errors.Is()`, never string matching.
 - Failure messages in the format: `FuncName(input) = got, want expected`.
-- No external assertion libraries. Stdlib plus `cmp.Diff` when needed.
+- No external assertion libraries. Use only the Go standard library for comparisons and diffs.
 - Fixtures in `testdata/` within the package directory, loaded through helpers.
 - Integration tests in `integration_test.go`, gated by `SORTIE_*_TEST=1` skip helpers.
 
