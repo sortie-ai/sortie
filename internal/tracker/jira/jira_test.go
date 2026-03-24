@@ -580,7 +580,7 @@ func TestFetchIssueByID_NotFound(t *testing.T) {
 
 	a := mustAdapter(t, validConfig(srv.URL))
 	_, err := a.FetchIssueByID(context.Background(), "PROJ-999")
-	assertTrackerErrorKind(t, err, domain.ErrTrackerPayload)
+	assertTrackerErrorKind(t, err, domain.ErrTrackerNotFound)
 
 	var te *domain.TrackerError
 	errors.As(err, &te)
@@ -1099,7 +1099,7 @@ func TestFetchIssueComments_NotFound(t *testing.T) {
 
 	a := mustAdapter(t, validConfig(srv.URL))
 	_, err := a.FetchIssueComments(context.Background(), "PROJ-999")
-	assertTrackerErrorKind(t, err, domain.ErrTrackerPayload)
+	assertTrackerErrorKind(t, err, domain.ErrTrackerNotFound)
 }
 
 // --- Full lifecycle integration test ---

@@ -273,8 +273,8 @@ func TestIntegration_FetchIssueByID_NotFound(t *testing.T) {
 	if !errors.As(err, &te) {
 		t.Fatalf("error type = %T, want *domain.TrackerError", err)
 	}
-	if te.Kind != domain.ErrTrackerPayload {
-		t.Errorf("TrackerError.Kind = %q, want %q", te.Kind, domain.ErrTrackerPayload)
+	if te.Kind != domain.ErrTrackerNotFound {
+		t.Errorf("TrackerError.Kind = %q, want %q", te.Kind, domain.ErrTrackerNotFound)
 	}
 }
 

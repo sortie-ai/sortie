@@ -578,7 +578,7 @@ the system does real work.
       `claude-code.max_turns: 50` confirms Claude Code CLI receives
       `--max-turns 50` (visible via agent command log or parse test).
 
-- [ ] 7.16 Normalize `FetchIssueByID` and `FetchIssueComments` not-found errors
+- [x] 7.16 Normalize `FetchIssueByID` and `FetchIssueComments` not-found errors
       to use `ErrTrackerNotFound` instead of `ErrTrackerPayload`. The interface
       contract in `domain/tracker.go` and both adapter implementations (file,
       Jira) currently return `ErrTrackerPayload` when an issue is not found,

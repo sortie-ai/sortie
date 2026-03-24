@@ -19,7 +19,7 @@ type TrackerAdapter interface {
 	// FetchIssueByID returns a single fully-populated issue including
 	// comments. Used for pre-dispatch revalidation and prompt
 	// rendering. Returns a [*TrackerError] with Kind
-	// [ErrTrackerPayload] if the issue cannot be found.
+	// [ErrTrackerNotFound] if the issue does not exist.
 	FetchIssueByID(ctx context.Context, issueID string) (Issue, error)
 
 	// FetchIssuesByStates returns issues in the specified states.
@@ -45,6 +45,8 @@ type TrackerAdapter interface {
 	// FetchIssueComments returns comments for the specified issue.
 	// Used for continuation runs and the agent workpad pattern.
 	// Returns an empty non-nil slice when no comments exist.
+	// Returns a [*TrackerError] with Kind [ErrTrackerNotFound]
+	// if the issue does not exist.
 	FetchIssueComments(ctx context.Context, issueID string) ([]Comment, error)
 
 	// TransitionIssue moves an issue to the specified target state in
