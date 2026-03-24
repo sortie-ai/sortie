@@ -735,3 +735,124 @@ func TestMergeExtensions(t *testing.T) {
 		}
 	})
 }
+
+// --- Quick-start documentation integration test ---
+
+// quickStartWorkflow returns WORKFLOW.md content matching the
+// https://docs.sortie-ai.com/getting-started/quick-start/ tutorial,
+// with workspace.root overridden to use the provided temp directory
+// for test isolation.
+func quickStartWorkflow(issuesPath, workspaceRoot string) []byte {
+	return []byte(fmt.Sprintf(`---
+tracker:
+  kind: file
+  project: DEMO
+  active_states:
+    - "To Do"
+  handoff_state: "Done"
+
+file:
+  path: %s
+
+agent:
+  kind: mock
+  max_turns: 2
+
+polling:
+  interval_ms: 5000
+
+workspace:
+  root: %s
+---
+
+Fix the following issue.
+
+**{{ .issue.identifier }}**: {{ .issue.title }}
+
+{{ .issue.description }}
+`, issuesPath, workspaceRoot))
+}
+
+// quickStartIssues returns issues.json content matching the
+// https://docs.sortie-ai.com/getting-started/quick-start/ tutorial.
+func quickStartIssues() []byte {
+	return []byte(`[
+  {
+    "id": "1",
+    "identifier": "DEMO-1",
+    "title": "Add input validation to signup form",
+    "description": "The signup form accepts empty email addresses. Add validation before submission.",
+    "state": "To Do",
+    "priority": 1
+  },
+  {
+    "id": "2",
+    "identifier": "DEMO-2",
+    "title": "Fix off-by-one error in pagination",
+    "description": "Page 2 repeats the last item from page 1. The offset calculation is wrong.",
+    "state": "To Do",
+    "priority": 2
+  }
+]`)
+}
+
+// TestQuickStartScenario is an integration test that exercises the exact
+// workflow described in https://docs.sortie-ai.com/getting-started/quick-start/ end-to-end:
+// two issues dispatched with mock agent, two turns each, handoff to "Done".
+func TestQuickStartScenario(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	wsRoot := filepath.Join(dir, "workspaces")
+
+	issuesPath := filepath.Join(dir, "issues.json")
+	if err := os.WriteFile(issuesPath, quickStartIssues(), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	wfPath := filepath.Join(dir, "WORKFLOW.md")
+	if err := os.WriteFile(wfPath, quickStartWorkflow(issuesPath, wsRoot), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	// 6 seconds: mock-agent turns complete in <1 s, plus one full 5 s
+	// poll interval so the second tick confirms zero candidates.
+	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
+	defer cancel()
+
+	code := run(ctx, []string{wfPath}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr:\n%s", code, stderr.String())
+	}
+
+	logs := stderr.String()
+
+	// Verify key lifecycle events from the quick-start scenario.
+	checks := []struct {
+		name   string
+		substr string
+	}{
+		{"sortie started", `msg="sortie started"`},
+		{"tick completed with 2 candidates", `candidates=2`},
+		{"DEMO-1 session started", `msg="agent session started"`},
+		{"DEMO-1 turn 1 completed", `issue_identifier=DEMO-1 turn_number=1`},
+		{"DEMO-1 turn 2 completed", `issue_identifier=DEMO-1 turn_number=2`},
+		{"DEMO-2 turn 1 completed", `issue_identifier=DEMO-2 turn_number=1`},
+		{"DEMO-2 turn 2 completed", `issue_identifier=DEMO-2 turn_number=2`},
+		{"DEMO-1 worker exiting normally", `issue_identifier=DEMO-1 exit_kind=normal`},
+		{"DEMO-2 worker exiting normally", `issue_identifier=DEMO-2 exit_kind=normal`},
+		{"DEMO-1 handoff succeeded", `msg="handoff transition succeeded, releasing claim"`},
+		{"DEMO-2 handoff to Done", `handoff_state=Done`},
+		{"second tick finds zero candidates", `candidates=0`},
+	}
+	for _, c := range checks {
+		if !strings.Contains(logs, c.substr) {
+			t.Errorf("%s: expected log substring %q not found in output:\n%s", c.name, c.substr, logs)
+		}
+	}
+
+	// .sortie.db must be created next to WORKFLOW.md.
+	if _, err := os.Stat(filepath.Join(dir, ".sortie.db")); err != nil {
+		t.Errorf("expected .sortie.db next to WORKFLOW.md: %v", err)
+	}
+}
