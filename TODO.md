@@ -629,6 +629,7 @@ structured logging was set up in task 0.8; this milestone decides the observabil
       Accepted). Use Go `net/http` and `encoding/json`. Bind to loopback by default. Enable
       via `--port` flag (overrides `server.port` from WORKFLOW.md). Return `405` for
       unsupported methods. Use `{"error":{"code":"...","message":"..."}}` envelope for errors.
+      Cover changes in `docs/workflow-reference.md`.
       **Verify:** integration test starts the HTTP server, calls each endpoint, validates
       response shapes against the architecture doc (Section 13.7.2).
 
@@ -666,6 +667,21 @@ structured logging was set up in task 0.8; this milestone decides the observabil
       `issue_identifier`, and `error` fields is emitted when `HandleWorkerExit`
       processes a failed result. A second test confirms no ERROR is logged on a
       successful (normal) exit.
+
+- [ ] 8.9 Implement the SSH worker extension (architecture Appendix A): when
+      `worker.ssh_hosts` is configured, dispatch worker runs to remote hosts
+      over SSH instead of launching local subprocesses. Launch the coding
+      agent via SSH stdio (`ssh host agent-command`), round-robin or
+      least-loaded across configured hosts, and enforce
+      `worker.max_concurrent_agents_per_host` as a per-host concurrency cap.
+      When all hosts are at capacity, defer dispatch until a slot opens. When
+      `worker.ssh_hosts` is absent, continue running agents locally (current
+      behavior). See architecture Appendix A for the full contract.
+      Cover changes in `docs/workflow-reference.md`.
+      **Verify:** unit test with mock SSH transport confirms: dispatch routes
+      to configured hosts, per-host cap is enforced, absent config falls back
+      to local execution. Integration test with a real SSH host confirms
+      agent stdout/stderr are relayed correctly.
 
 ## Milestone 9: Self-Hosting (Sortie Builds Sortie)
 
