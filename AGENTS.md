@@ -50,10 +50,11 @@ Read whichever of these are relevant before starting work:
 
 - `docs/architecture.md` — the full specification: domain model, state machine, algorithms, adapter contracts, persistence schema, test matrix
 - `docs/decisions/` — accepted ADRs for Go runtime, SQLite persistence, and adapter-based extensibility
+- `docs/workflow-reference.md` - WORKFLOW.md Syntax Reference
 - `TODO.md` — sequenced milestones with atomic, verifiable tasks sized for single agent sessions
 
 ---
 
-Last updated: 2026-03-17
+Last updated: 2026-03-24
 
 Maintained by: AI Agents under human supervision
