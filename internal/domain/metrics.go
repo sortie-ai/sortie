@@ -4,10 +4,9 @@ package domain
 // packages remain decoupled from any concrete telemetry library. The
 // Observability Layer (internal/server) provides a Prometheus-backed
 // implementation; a [NoopMetrics] implementation is provided for use
-// when the HTTP server is disabled and in unit tests.
-//
-// All methods must be safe for concurrent use. Implementations must
-// not block or perform I/O beyond in-memory counter/gauge mutation.
+// when the HTTP server is disabled and in unit tests. All methods
+// must be safe for concurrent use. Implementations must not block or
+// perform I/O beyond in-memory counter/gauge mutation.
 type Metrics interface {
 	// --- Gauges (point-in-time state) ---
 
