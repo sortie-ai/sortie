@@ -32,6 +32,9 @@ func HandleAgentEvent(state *State, issueID string, event domain.AgentEvent, log
 	}
 
 	log := logging.WithIssue(logger, issueID, entry.Identifier)
+	if entry.SessionID != "" {
+		log = logging.WithSession(log, entry.SessionID)
+	}
 
 	// Always record the most-recently-processed event type.
 	entry.LastAgentEvent = event.Type

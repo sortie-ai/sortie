@@ -113,7 +113,7 @@ Rules:
 Event handlers called on every agent event (e.g., `HandleAgentEvent`) use `Debug` level to avoid noise at `Info`. Include event-specific attributes:
 
 - `EventSessionStarted`: `session_id`
-- `EventTokenUsage`: `delta_input_tokens`, `delta_output_tokens`, `delta_total_tokens`
+- `EventTokenUsage`: `delta_input`, `delta_output`, `delta_total`
 - Turn-finalization events: `turn_count`
 - All others: `event_type` only
 
