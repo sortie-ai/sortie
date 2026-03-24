@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 	"time"
@@ -269,15 +270,17 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 
 	var srv *server.Server
 	if serverEnabled {
+		promMetrics := server.NewPromMetrics(Version, runtime.Version())
 		addr := fmt.Sprintf("127.0.0.1:%d", serverPort)
 		srv = server.New(server.Params{
-			SnapshotFn: o.SnapshotFunc(),
-			RefreshFn:  o.RefreshFunc(),
-			Logger:     logger,
-			Addr:       addr,
-			Version:    Version,
-			StartedAt:  time.Now(),
-			SlotFunc:   func() int { return mgr.Config().Agent.MaxConcurrentAgents },
+			SnapshotFn:      o.SnapshotFunc(),
+			RefreshFn:       o.RefreshFunc(),
+			Logger:          logger,
+			Addr:            addr,
+			Version:         Version,
+			StartedAt:       time.Now(),
+			SlotFunc:        func() int { return mgr.Config().Agent.MaxConcurrentAgents },
+			MetricsRegistry: promMetrics.Registry(),
 		})
 		o.AddObserver(srv)
 

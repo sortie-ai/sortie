@@ -691,7 +691,7 @@ JSON API + HTML dashboard, Prometheus `/metrics`), and adds agent capabilities.
       types, and label values are correct. `sortie_build_info` is present with
       `version` and `go_version` labels.
 
-- [ ] 8.8 Wire the Prometheus `/metrics` endpoint on the HTTP server (ADR-0008,
+- [x] 8.8 Wire the Prometheus `/metrics` endpoint on the HTTP server (ADR-0008,
       Tier 3). Add a `/metrics` route to the server mux created in 8.4, served by
       `promhttp.HandlerFor(registry, opts)` — not `promhttp.Handler()` — using the
       dedicated registry from 8.7. Configure `promhttp.HandlerOpts` to register

@@ -11,6 +11,9 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+
 	"github.com/sortie-ai/sortie/internal/orchestrator"
 )
 
@@ -56,6 +59,13 @@ type Params struct {
 	// SlotFunc returns the current max concurrent agents from config.
 	// If nil, available slots displays as 0 on the dashboard.
 	SlotFunc SlotFunc
+
+	// MetricsRegistry is an optional Prometheus registry for the
+	// /metrics endpoint. When non-nil, New registers a handler at
+	// GET /metrics that serves the Prometheus text exposition format.
+	// Construct via [PromMetrics.Registry]. When nil, /metrics is
+	// not registered.
+	MetricsRegistry *prometheus.Registry
 }
 
 // Server is the embedded HTTP server for JSON API, dashboard, and
@@ -122,6 +132,13 @@ func New(params Params) *Server {
 	mux.HandleFunc("/api/v1/refresh", s.routeRefresh)
 	mux.HandleFunc("/api/v1/{identifier}", s.routeIssueDetail)
 
+	if params.MetricsRegistry != nil {
+		mux.Handle("GET /metrics", promhttp.InstrumentMetricHandler(
+			params.MetricsRegistry,
+			promhttp.HandlerFor(params.MetricsRegistry, promhttp.HandlerOpts{}),
+		))
+	}
+
 	s.httpServer = &http.Server{
 		Addr:              params.Addr,
 		Handler:           mux,
@@ -135,8 +152,9 @@ func New(params Params) *Server {
 }
 
 // Mux returns the underlying [*http.ServeMux] so callers can register
-// additional routes (dashboard at "/", metrics at "/metrics") without
-// refactoring the server.
+// additional routes beyond those registered by [New]. When
+// [Params.MetricsRegistry] is non-nil, New registers GET /metrics
+// internally; Mux remains available for any further external routes.
 func (s *Server) Mux() *http.ServeMux {
 	return s.mux
 }
