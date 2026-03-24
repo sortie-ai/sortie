@@ -4,7 +4,7 @@ date: 2026-03-23
 decision-makers: Serghei Iakovlev
 ---
 
-# Handoff State and Tracker Write Contract
+# Use Handoff State Transitions to Signal Agent Completion
 
 ## Context and Problem Statement
 
@@ -68,8 +68,10 @@ fallback — to break the cycle.
 
 ## Decision Outcome
 
-Chosen option: **Option A (orchestrator handoff state transition) as the primary mechanism,
-with Option C (per-issue effort budget) as defense-in-depth.** Options B and D remain
+Chosen option: **Option A (orchestrator handoff state transition)**, combined with
+**Option C (per-issue effort budget)** as defense-in-depth, because this deterministically
+breaks the continuation retry loop for configured deployments while providing a hard ceiling
+against failure modes the transition alone cannot handle. Options B and D remain
 complementary capabilities but are insufficient as sole solutions.
 
 ### Why Option A
