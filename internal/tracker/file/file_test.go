@@ -309,7 +309,7 @@ func TestFetchIssueByID(t *testing.T) {
 		t.Parallel()
 
 		_, err := a.FetchIssueByID(ctx, "99999")
-		requireTrackerError(t, err)
+		requireTrackerErrorKind(t, err, domain.ErrTrackerNotFound)
 	})
 
 	t.Run("empty comments array", func(t *testing.T) {
@@ -572,7 +572,7 @@ func TestFetchIssueComments(t *testing.T) {
 		t.Parallel()
 
 		_, err := a.FetchIssueComments(ctx, "99999")
-		requireTrackerError(t, err)
+		requireTrackerErrorKind(t, err, domain.ErrTrackerNotFound)
 	})
 }
 

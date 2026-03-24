@@ -94,8 +94,8 @@ func (a *FileAdapter) FetchCandidateIssues(_ context.Context) ([]domain.Issue, e
 }
 
 // FetchIssueByID returns a single fully-populated issue including
-// comments. Returns a [*domain.TrackerError] if the issue is not
-// found.
+// comments. Returns a [*domain.TrackerError] with Kind
+// [domain.ErrTrackerNotFound] if the issue does not exist.
 func (a *FileAdapter) FetchIssueByID(_ context.Context, issueID string) (domain.Issue, error) {
 	raws, err := loadIssues(a.path)
 	if err != nil {
@@ -117,7 +117,7 @@ func (a *FileAdapter) FetchIssueByID(_ context.Context, issueID string) (domain.
 	}
 
 	return domain.Issue{}, &domain.TrackerError{
-		Kind:    domain.ErrTrackerPayload,
+		Kind:    domain.ErrTrackerNotFound,
 		Message: fmt.Sprintf("issue not found: %s", issueID),
 	}
 }
@@ -218,7 +218,8 @@ func (a *FileAdapter) FetchIssueStatesByIdentifiers(_ context.Context, identifie
 
 // FetchIssueComments returns comments for the specified issue.
 // Returns an empty non-nil slice when no comments exist. Returns a
-// [*domain.TrackerError] if the issue is not found.
+// [*domain.TrackerError] with Kind [domain.ErrTrackerNotFound] if
+// the issue does not exist.
 func (a *FileAdapter) FetchIssueComments(_ context.Context, issueID string) ([]domain.Comment, error) {
 	raws, err := loadIssues(a.path)
 	if err != nil {
@@ -236,7 +237,7 @@ func (a *FileAdapter) FetchIssueComments(_ context.Context, issueID string) ([]d
 	}
 
 	return nil, &domain.TrackerError{
-		Kind:    domain.ErrTrackerPayload,
+		Kind:    domain.ErrTrackerNotFound,
 		Message: fmt.Sprintf("issue not found: %s", issueID),
 	}
 }

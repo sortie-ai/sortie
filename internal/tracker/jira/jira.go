@@ -133,7 +133,7 @@ func (a *JiraAdapter) FetchIssueByID(ctx context.Context, issueID string) (domai
 	if err != nil {
 		if isNotFound(err) {
 			return domain.Issue{}, &domain.TrackerError{
-				Kind:    domain.ErrTrackerPayload,
+				Kind:    domain.ErrTrackerNotFound,
 				Message: fmt.Sprintf("issue not found: %s", issueID),
 			}
 		}
@@ -381,7 +381,7 @@ func (a *JiraAdapter) fetchComments(ctx context.Context, issueID string) ([]doma
 		if err != nil {
 			if isNotFound(err) {
 				return nil, &domain.TrackerError{
-					Kind:    domain.ErrTrackerPayload,
+					Kind:    domain.ErrTrackerNotFound,
 					Message: fmt.Sprintf("issue not found: %s", issueID),
 				}
 			}
