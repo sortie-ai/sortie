@@ -61,7 +61,19 @@ func TestBuildSSHArgs(t *testing.T) {
 				"-o", "ConnectTimeout=30",
 				"-o", "ServerAliveInterval=15",
 				"-o", "ServerAliveCountMax=3",
+				"--",
 				"dev-host",
+			},
+		},
+		{
+			name:          "whitespace-padded host is trimmed",
+			host:          "  padded-host  ",
+			workspacePath: "/ws",
+			remoteCommand: "claude",
+			agentArgs:     nil,
+			wantContains: []string{
+				"--",
+				"padded-host",
 			},
 		},
 		{
@@ -122,18 +134,26 @@ func TestBuildSSHArgs(t *testing.T) {
 				}
 			}
 
-			// Host should appear before the remote command.
+			// Host (trimmed) should appear at second-to-last position,
+			// and "--" immediately before it.
+			trimmedHost := strings.TrimSpace(tt.host)
 			hostIdx := -1
 			for i, a := range got {
-				if a == tt.host {
+				if a == trimmedHost {
 					hostIdx = i
 					break
 				}
 			}
 			if hostIdx < 0 {
-				t.Errorf("host %q not found in args %v", tt.host, got)
-			} else if hostIdx != len(got)-2 {
-				t.Errorf("host at index %d, want %d (second-to-last)", hostIdx, len(got)-2)
+				t.Errorf("host %q not found in args %v", trimmedHost, got)
+			} else {
+				if hostIdx != len(got)-2 {
+					t.Errorf("host at index %d, want %d (second-to-last)", hostIdx, len(got)-2)
+				}
+				// "--" must immediately precede the host.
+				if hostIdx > 0 && got[hostIdx-1] != "--" {
+					t.Errorf("arg before host = %q, want %q", got[hostIdx-1], "--")
+				}
 			}
 		})
 	}
