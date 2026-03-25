@@ -1492,3 +1492,34 @@ func TestCountRunHistoryByIssue(t *testing.T) {
 		}
 	})
 }
+
+// --- Health check tests (Spec 8.14) ---
+
+func TestPing_OpenStore(t *testing.T) {
+	t.Parallel()
+
+	s := openTestStore(t)
+	ctx := context.Background()
+
+	if err := s.Ping(ctx); err != nil {
+		t.Fatalf("Ping() on open store = %v, want nil", err)
+	}
+}
+
+func TestPing_ClosedStore(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	s, err := Open(ctx, ":memory:")
+	if err != nil {
+		t.Fatalf("Open(:memory:): %v", err)
+	}
+
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	if err := s.Ping(ctx); err == nil {
+		t.Fatal("Ping() on closed store = nil, want error")
+	}
+}

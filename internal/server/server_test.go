@@ -272,3 +272,64 @@ func TestMetricsEndpointMethodNotAllowed(t *testing.T) {
 		t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusMethodNotAllowed)
 	}
 }
+
+// --- Draining + Shutdown tests (Spec 8.14) ---
+
+func TestSetDrainingThenShutdown(t *testing.T) {
+	t.Parallel()
+
+	srv := New(Params{
+		SnapshotFn: fixedSnapshot(orchestrator.RuntimeSnapshotResult{
+			GeneratedAt: time.Now().UTC(),
+		}),
+		RefreshFn: acceptingRefresh(),
+		Logger:    slog.New(slog.DiscardHandler),
+		Addr:      "127.0.0.1:0",
+	})
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("net.Listen: %v", err)
+	}
+
+	errCh := make(chan error, 1)
+	go func() {
+		errCh <- srv.Serve(ln)
+	}()
+
+	// Verify /livez is pass before draining.
+	resp, err := http.Get("http://" + ln.Addr().String() + "/livez")
+	if err != nil {
+		t.Fatalf("GET /livez (pre-drain): %v", err)
+	}
+	resp.Body.Close() //nolint:errcheck // test code
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("pre-drain livez status = %d, want %d", resp.StatusCode, http.StatusOK)
+	}
+
+	// Set draining.
+	srv.SetDraining()
+
+	// /livez should now return 503.
+	resp, err = http.Get("http://" + ln.Addr().String() + "/livez")
+	if err != nil {
+		t.Fatalf("GET /livez (post-drain): %v", err)
+	}
+	resp.Body.Close() //nolint:errcheck // test code
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Errorf("post-drain livez status = %d, want %d", resp.StatusCode, http.StatusServiceUnavailable)
+	}
+
+	// Shutdown should succeed even after draining.
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	if err := srv.Shutdown(ctx); err != nil {
+		t.Fatalf("Shutdown: %v", err)
+	}
+
+	serveErr := <-errCh
+	if serveErr != http.ErrServerClosed {
+		t.Errorf("Serve error = %v, want %v", serveErr, http.ErrServerClosed)
+	}
+}

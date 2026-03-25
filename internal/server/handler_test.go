@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -781,5 +782,366 @@ func TestWriteJSONMarshalFailure(t *testing.T) {
 	}
 	if envelope.Error.Code != "internal_error" {
 		t.Errorf("error code = %q, want %q", envelope.Error.Code, "internal_error")
+	}
+}
+
+// --- Health endpoint tests (Spec 8.14) ---
+
+// testHealthServer creates a server with configurable health-check functions.
+func testHealthServer(t *testing.T, opts ...func(*Params)) *httptest.Server {
+	t.Helper()
+	params := Params{
+		SnapshotFn: fixedSnapshot(orchestrator.RuntimeSnapshotResult{}),
+		RefreshFn:  acceptingRefresh(),
+		Logger:     slog.New(slog.DiscardHandler),
+		Version:    "1.0.0-test",
+		StartedAt:  time.Now(),
+	}
+	for _, o := range opts {
+		o(&params)
+	}
+	srv := New(params)
+	ts := httptest.NewServer(srv.Mux())
+	t.Cleanup(ts.Close)
+	return ts
+}
+
+func TestHandleLivez_Pass(t *testing.T) {
+	t.Parallel()
+
+	ts := testHealthServer(t)
+	resp, err := http.Get(ts.URL + "/livez")
+	if err != nil {
+		t.Fatalf("GET /livez: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusOK)
+	}
+
+	body := decodeJSON[healthResponse](t, resp)
+	if body.Status != "pass" {
+		t.Errorf("Status = %q, want %q", body.Status, "pass")
+	}
+}
+
+func TestHandleLivez_MethodNotAllowed(t *testing.T) {
+	t.Parallel()
+
+	ts := testHealthServer(t)
+
+	methods := []string{http.MethodPost, http.MethodPut, http.MethodDelete}
+	for _, method := range methods {
+		t.Run(method, func(t *testing.T) {
+			t.Parallel()
+
+			req, err := http.NewRequest(method, ts.URL+"/livez", nil)
+			if err != nil {
+				t.Fatalf("new request: %v", err)
+			}
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatalf("%s /livez: %v", method, err)
+			}
+			defer func() { _ = resp.Body.Close() }()
+
+			if resp.StatusCode != http.StatusMethodNotAllowed {
+				t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusMethodNotAllowed)
+			}
+		})
+	}
+}
+
+func TestHandleReadyz_AllPass(t *testing.T) {
+	t.Parallel()
+
+	ts := testHealthServer(t,
+		func(p *Params) { p.DBPingFn = func(_ context.Context) error { return nil } },
+		func(p *Params) { p.PreflightFn = func() bool { return true } },
+		func(p *Params) { p.WorkflowLoadedFn = func() bool { return true } },
+	)
+
+	resp, err := http.Get(ts.URL + "/readyz")
+	if err != nil {
+		t.Fatalf("GET /readyz: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusOK)
+	}
+
+	body := decodeJSON[readyResponse](t, resp)
+	if body.Status != "pass" {
+		t.Errorf("Status = %q, want %q", body.Status, "pass")
+	}
+	if body.Version != "1.0.0-test" {
+		t.Errorf("Version = %q, want %q", body.Version, "1.0.0-test")
+	}
+	if body.Checks["database"] != "pass" {
+		t.Errorf("Checks[database] = %q, want %q", body.Checks["database"], "pass")
+	}
+	if body.Checks["preflight"] != "pass" {
+		t.Errorf("Checks[preflight] = %q, want %q", body.Checks["preflight"], "pass")
+	}
+	if body.Checks["workflow"] != "pass" {
+		t.Errorf("Checks[workflow] = %q, want %q", body.Checks["workflow"], "pass")
+	}
+}
+
+func TestHandleReadyz_DatabaseFail(t *testing.T) {
+	t.Parallel()
+
+	ts := testHealthServer(t,
+		func(p *Params) { p.DBPingFn = func(_ context.Context) error { return fmt.Errorf("db down") } },
+		func(p *Params) { p.PreflightFn = func() bool { return true } },
+		func(p *Params) { p.WorkflowLoadedFn = func() bool { return true } },
+	)
+
+	resp, err := http.Get(ts.URL + "/readyz")
+	if err != nil {
+		t.Fatalf("GET /readyz: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusServiceUnavailable)
+	}
+
+	body := decodeJSON[readyResponse](t, resp)
+	if body.Status != "fail" {
+		t.Errorf("Status = %q, want %q", body.Status, "fail")
+	}
+	if body.Checks["database"] != "fail" {
+		t.Errorf("Checks[database] = %q, want %q", body.Checks["database"], "fail")
+	}
+	if body.Checks["preflight"] != "pass" {
+		t.Errorf("Checks[preflight] = %q, want %q", body.Checks["preflight"], "pass")
+	}
+}
+
+func TestHandleReadyz_PreflightFail(t *testing.T) {
+	t.Parallel()
+
+	ts := testHealthServer(t,
+		func(p *Params) { p.DBPingFn = func(_ context.Context) error { return nil } },
+		func(p *Params) { p.PreflightFn = func() bool { return false } },
+		func(p *Params) { p.WorkflowLoadedFn = func() bool { return true } },
+	)
+
+	resp, err := http.Get(ts.URL + "/readyz")
+	if err != nil {
+		t.Fatalf("GET /readyz: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusServiceUnavailable)
+	}
+
+	body := decodeJSON[readyResponse](t, resp)
+	if body.Status != "fail" {
+		t.Errorf("Status = %q, want %q", body.Status, "fail")
+	}
+	if body.Checks["preflight"] != "fail" {
+		t.Errorf("Checks[preflight] = %q, want %q", body.Checks["preflight"], "fail")
+	}
+	if body.Checks["database"] != "pass" {
+		t.Errorf("Checks[database] = %q, want %q", body.Checks["database"], "pass")
+	}
+}
+
+func TestHandleReadyz_WorkflowFail(t *testing.T) {
+	t.Parallel()
+
+	ts := testHealthServer(t,
+		func(p *Params) { p.DBPingFn = func(_ context.Context) error { return nil } },
+		func(p *Params) { p.PreflightFn = func() bool { return true } },
+		func(p *Params) { p.WorkflowLoadedFn = func() bool { return false } },
+	)
+
+	resp, err := http.Get(ts.URL + "/readyz")
+	if err != nil {
+		t.Fatalf("GET /readyz: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusServiceUnavailable)
+	}
+
+	body := decodeJSON[readyResponse](t, resp)
+	if body.Status != "fail" {
+		t.Errorf("Status = %q, want %q", body.Status, "fail")
+	}
+	if body.Checks["workflow"] != "fail" {
+		t.Errorf("Checks[workflow] = %q, want %q", body.Checks["workflow"], "fail")
+	}
+	if body.Checks["database"] != "pass" {
+		t.Errorf("Checks[database] = %q, want %q", body.Checks["database"], "pass")
+	}
+}
+
+func TestHandleReadyz_NilFunctions(t *testing.T) {
+	t.Parallel()
+
+	// When all check functions are nil, all checks default to "pass".
+	ts := testHealthServer(t)
+
+	resp, err := http.Get(ts.URL + "/readyz")
+	if err != nil {
+		t.Fatalf("GET /readyz: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusOK)
+	}
+
+	body := decodeJSON[readyResponse](t, resp)
+	if body.Status != "pass" {
+		t.Errorf("Status = %q, want %q", body.Status, "pass")
+	}
+	for _, check := range []string{"database", "preflight", "workflow"} {
+		if body.Checks[check] != "pass" {
+			t.Errorf("Checks[%s] = %q, want %q (nil func should default to pass)", check, body.Checks[check], "pass")
+		}
+	}
+}
+
+func TestHandleReadyz_MethodNotAllowed(t *testing.T) {
+	t.Parallel()
+
+	ts := testHealthServer(t)
+
+	methods := []string{http.MethodPost, http.MethodPut, http.MethodDelete}
+	for _, method := range methods {
+		t.Run(method, func(t *testing.T) {
+			t.Parallel()
+
+			req, err := http.NewRequest(method, ts.URL+"/readyz", nil)
+			if err != nil {
+				t.Fatalf("new request: %v", err)
+			}
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				t.Fatalf("%s /readyz: %v", method, err)
+			}
+			defer func() { _ = resp.Body.Close() }()
+
+			if resp.StatusCode != http.StatusMethodNotAllowed {
+				t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusMethodNotAllowed)
+			}
+		})
+	}
+}
+
+func TestLivezDuringDrain(t *testing.T) {
+	t.Parallel()
+
+	srv := New(Params{
+		SnapshotFn: fixedSnapshot(orchestrator.RuntimeSnapshotResult{}),
+		RefreshFn:  acceptingRefresh(),
+		Logger:     slog.New(slog.DiscardHandler),
+		Version:    "1.0.0-test",
+		StartedAt:  time.Now(),
+	})
+	srv.SetDraining()
+
+	ts := httptest.NewServer(srv.Mux())
+	t.Cleanup(ts.Close)
+
+	resp, err := http.Get(ts.URL + "/livez")
+	if err != nil {
+		t.Fatalf("GET /livez: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusServiceUnavailable)
+	}
+
+	body := decodeJSON[healthResponse](t, resp)
+	if body.Status != "fail" {
+		t.Errorf("Status = %q, want %q", body.Status, "fail")
+	}
+}
+
+func TestReadyzDuringDrain(t *testing.T) {
+	t.Parallel()
+
+	srv := New(Params{
+		SnapshotFn:       fixedSnapshot(orchestrator.RuntimeSnapshotResult{}),
+		RefreshFn:        acceptingRefresh(),
+		Logger:           slog.New(slog.DiscardHandler),
+		Version:          "1.0.0-test",
+		StartedAt:        time.Now(),
+		DBPingFn:         func(_ context.Context) error { return nil },
+		PreflightFn:      func() bool { return true },
+		WorkflowLoadedFn: func() bool { return true },
+	})
+	srv.SetDraining()
+
+	ts := httptest.NewServer(srv.Mux())
+	t.Cleanup(ts.Close)
+
+	resp, err := http.Get(ts.URL + "/readyz")
+	if err != nil {
+		t.Fatalf("GET /readyz: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusServiceUnavailable)
+	}
+
+	body := decodeJSON[readyResponse](t, resp)
+	if body.Status != "fail" {
+		t.Errorf("Status = %q, want %q", body.Status, "fail")
+	}
+	// During drain, all checks report "fail" as fail-fast.
+	for _, check := range []string{"database", "preflight", "workflow"} {
+		if body.Checks[check] != "fail" {
+			t.Errorf("Checks[%s] = %q, want %q (draining should fail-fast all checks)", check, body.Checks[check], "fail")
+		}
+	}
+}
+
+func TestLivez200_Readyz503_DBDown(t *testing.T) {
+	t.Parallel()
+
+	// Livez should pass (process alive) while readyz fails (DB down).
+	ts := testHealthServer(t,
+		func(p *Params) { p.DBPingFn = func(_ context.Context) error { return fmt.Errorf("disk full") } },
+		func(p *Params) { p.PreflightFn = func() bool { return true } },
+		func(p *Params) { p.WorkflowLoadedFn = func() bool { return true } },
+	)
+
+	// Livez should be 200.
+	liveResp, err := http.Get(ts.URL + "/livez")
+	if err != nil {
+		t.Fatalf("GET /livez: %v", err)
+	}
+	defer func() { _ = liveResp.Body.Close() }()
+
+	if liveResp.StatusCode != http.StatusOK {
+		t.Errorf("livez status = %d, want %d", liveResp.StatusCode, http.StatusOK)
+	}
+
+	// Readyz should be 503.
+	readyResp, err := http.Get(ts.URL + "/readyz")
+	if err != nil {
+		t.Fatalf("GET /readyz: %v", err)
+	}
+	defer func() { _ = readyResp.Body.Close() }()
+
+	if readyResp.StatusCode != http.StatusServiceUnavailable {
+		t.Errorf("readyz status = %d, want %d", readyResp.StatusCode, http.StatusServiceUnavailable)
+	}
+
+	body := decodeJSON[readyResponse](t, readyResp)
+	if body.Checks["database"] != "fail" {
+		t.Errorf("readyz Checks[database] = %q, want %q", body.Checks["database"], "fail")
 	}
 }

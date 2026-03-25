@@ -418,6 +418,91 @@ func TestNewOrchestrator(t *testing.T) {
 	})
 }
 
+// --- PreflightOK tests (Spec 8.14) ---
+
+func TestPreflightOK_InitialValue(t *testing.T) {
+	t.Parallel()
+
+	state := NewState(1000, 1, nil, AgentTotals{})
+	o := NewOrchestrator(OrchestratorParams{
+		State:           state,
+		Logger:          discardLogger(),
+		TrackerAdapter:  &mockTrackerAdapter{},
+		AgentAdapter:    &mockAgentAdapter{},
+		WorkflowManager: &stubWorkflowManager{},
+		Store:           &stubStore{},
+	})
+
+	if !o.PreflightOK() {
+		t.Error("PreflightOK() = false after NewOrchestrator, want true")
+	}
+}
+
+func TestPreflightOK_ReflectsTickResult(t *testing.T) {
+	t.Parallel()
+
+	// A tick with a failing preflight sets PreflightOK to false.
+	// We create an orchestrator whose ReloadWorkflow returns an error,
+	// which causes ValidateDispatchConfig to fail immediately.
+
+	failReload := func() error { return fmt.Errorf("workflow file missing") }
+
+	cfg := config.ServiceConfig{
+		Polling: config.PollingConfig{IntervalMS: 60000},
+		Agent: config.AgentConfig{
+			Kind:                "mock",
+			Command:             "/usr/bin/agent",
+			MaxConcurrentAgents: 1,
+		},
+		Tracker: config.TrackerConfig{
+			Kind:         "mock",
+			APIKey:       "key",
+			ActiveStates: []string{"To Do"},
+		},
+	}
+
+	wm := &stubWorkflowManager{config: cfg}
+	regs := passingPreflightRegistries()
+
+	state := NewState(60000, 1, nil, AgentTotals{})
+	o := NewOrchestrator(OrchestratorParams{
+		State:           state,
+		Logger:          discardLogger(),
+		TrackerAdapter:  &mockTrackerAdapter{},
+		AgentAdapter:    &mockAgentAdapter{},
+		WorkflowManager: wm,
+		Store:           &stubStore{},
+		PreflightParams: PreflightParams{
+			ReloadWorkflow:  failReload,
+			ConfigFunc:      wm.Config,
+			TrackerRegistry: regs.TrackerRegistry,
+			AgentRegistry:   regs.AgentRegistry,
+		},
+	})
+
+	// Initially true.
+	if !o.PreflightOK() {
+		t.Fatal("PreflightOK() = false before tick, want true")
+	}
+
+	// Run a single tick. The preflight should fail because
+	// ReloadWorkflow returns an error.
+	ctx := context.Background()
+	o.handleTick(ctx)
+
+	if o.PreflightOK() {
+		t.Error("PreflightOK() = true after tick with failing preflight, want false")
+	}
+
+	// Fix the reload and run another tick — should pass again.
+	o.preflightParams.ReloadWorkflow = func() error { return nil }
+	o.handleTick(ctx)
+
+	if !o.PreflightOK() {
+		t.Error("PreflightOK() = false after tick with passing preflight, want true")
+	}
+}
+
 // --- TestOrchestratorShutdown ---
 
 func TestOrchestratorShutdown(t *testing.T) {
