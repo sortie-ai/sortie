@@ -655,6 +655,42 @@ func TestHandleRefresh(t *testing.T) {
 			t.Error("Queued = false, want true even when coalesced")
 		}
 	})
+
+	// Spec 8.17: refresh returns 409 Conflict during drain.
+	t.Run("rejected during drain", func(t *testing.T) {
+		t.Parallel()
+
+		srv := New(Params{
+			SnapshotFn: fixedSnapshot(orchestrator.RuntimeSnapshotResult{}),
+			RefreshFn:  func() bool { return false },
+			Logger:     slog.New(slog.DiscardHandler),
+		})
+		srv.SetDraining()
+
+		ts := httptest.NewServer(srv.Mux())
+		t.Cleanup(ts.Close)
+
+		resp, err := http.Post(ts.URL+"/api/v1/refresh", "", nil)
+		if err != nil {
+			t.Fatalf("POST /api/v1/refresh: %v", err)
+		}
+		defer func() { _ = resp.Body.Close() }()
+
+		if resp.StatusCode != http.StatusConflict {
+			t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusConflict)
+		}
+
+		body := decodeJSON[refreshResponse](t, resp)
+		if body.Queued {
+			t.Error("Queued = true, want false during drain")
+		}
+		if body.Coalesced {
+			t.Error("Coalesced = true, want false during drain")
+		}
+		if len(body.Operations) != 0 {
+			t.Errorf("len(Operations) = %d, want 0", len(body.Operations))
+		}
+	})
 }
 
 // --- Method enforcement tests ---

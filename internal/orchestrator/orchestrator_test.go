@@ -3101,6 +3101,51 @@ func TestRefreshFunc(t *testing.T) {
 			t.Error("RefreshFunc() = true, want false (channel full, should coalesce)")
 		}
 	})
+
+	// Spec 8.17: RefreshFunc returns false when the orchestrator is draining.
+	t.Run("rejected during drain", func(t *testing.T) {
+		t.Parallel()
+
+		state := NewState(60000, 1, nil, AgentTotals{})
+		o := NewOrchestrator(OrchestratorParams{
+			State:           state,
+			Logger:          discardLogger(),
+			TrackerAdapter:  &mockTrackerAdapter{},
+			AgentAdapter:    &mockAgentAdapter{},
+			WorkflowManager: &stubWorkflowManager{},
+			Store:           &stubStore{},
+			PreflightParams: PreflightParams{
+				ReloadWorkflow: func() error { return errPreflightFailed },
+				ConfigFunc:     func() config.ServiceConfig { return config.ServiceConfig{} },
+			},
+		})
+
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan struct{})
+		go func() {
+			o.Run(ctx)
+			close(done)
+		}()
+
+		// Let the event loop start.
+		time.Sleep(100 * time.Millisecond)
+
+		// Cancel ctx to trigger drain.
+		cancel()
+
+		// Wait for Run to return (drain completes immediately with no workers).
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Fatal("Run did not return within 5 seconds")
+		}
+
+		// After drain, RefreshFunc must return false.
+		refreshFn := o.RefreshFunc()
+		if refreshFn() {
+			t.Error("RefreshFunc() = true after drain, want false")
+		}
+	})
 }
 
 func TestAddObserver(t *testing.T) {
@@ -3216,6 +3261,19 @@ func TestRefreshDrainedDuringShutdown(t *testing.T) {
 		},
 	})
 
+	refreshFn := o.RefreshFunc()
+
+	// Before drain, RefreshFunc should accept.
+	if !refreshFn() {
+		t.Fatal("RefreshFunc() = false before drain, want true")
+	}
+
+	// Drain the channel so the next call tests drain rejection, not coalescing.
+	select {
+	case <-o.refreshCh:
+	default:
+	}
+
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() {
@@ -3229,37 +3287,6 @@ func TestRefreshDrainedDuringShutdown(t *testing.T) {
 	// Cancel ctx to trigger drain.
 	cancel()
 
-	// Let drain enter the select loop.
-	time.Sleep(50 * time.Millisecond)
-
-	refreshFn := o.RefreshFunc()
-
-	// Fill the refresh channel (capacity 1).
-	if !refreshFn() {
-		t.Fatal("first RefreshFunc() = false, want true (channel was empty)")
-	}
-
-	// The drain loop should consume the signal, freeing the channel.
-	// Allow time for the drain select to pick it up.
-	time.Sleep(50 * time.Millisecond)
-
-	// After drain consumes the signal, the channel is empty again.
-	// A second send should succeed (not block) because drain keeps
-	// consuming. Verify with a short timeout.
-	accepted := make(chan bool, 1)
-	go func() {
-		accepted <- refreshFn()
-	}()
-
-	select {
-	case got := <-accepted:
-		// Either accepted (true) or coalesced (false) is fine — the key
-		// invariant is that RefreshFunc did not block.
-		_ = got
-	case <-time.After(2 * time.Second):
-		t.Fatal("RefreshFunc() blocked during drain — refreshCh not being consumed")
-	}
-
 	// Let the worker exit so drain completes.
 	o.workerExitCh <- WorkerResult{IssueID: "id-1"}
 
@@ -3267,5 +3294,10 @@ func TestRefreshDrainedDuringShutdown(t *testing.T) {
 	case <-done:
 	case <-time.After(5 * time.Second):
 		t.Fatal("Run did not return within 5 seconds")
+	}
+
+	// After drain completes, RefreshFunc must return false.
+	if refreshFn() {
+		t.Error("RefreshFunc() = true after drain, want false")
 	}
 }
