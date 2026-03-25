@@ -639,6 +639,7 @@ func TestNormalization(t *testing.T) {
 		p := issueByID["n5"].Priority
 		if p == nil {
 			t.Fatal("Priority is nil, want 1")
+			return // unreachable; helps staticcheck SA5011
 		}
 		if *p != 1 {
 			t.Errorf("Priority = %d, want 1", *p)
