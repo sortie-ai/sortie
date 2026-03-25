@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"sync"
 	"testing"
 
 	"github.com/sortie-ai/sortie/internal/domain"
@@ -882,5 +883,217 @@ func TestTransitionIssue(t *testing.T) {
 		if iss.State != "In Progress" {
 			t.Errorf("State = %q, want %q", iss.State, "In Progress")
 		}
+	})
+}
+
+// --- Metrics instrumentation tests ---
+
+type trackerRequestCall struct {
+	operation string
+	result    string
+}
+
+type spyMetrics struct {
+	domain.NoopMetrics
+	mu    sync.Mutex
+	calls []trackerRequestCall
+}
+
+func (s *spyMetrics) IncTrackerRequests(operation, result string) {
+	s.mu.Lock()
+	s.calls = append(s.calls, trackerRequestCall{operation, result})
+	s.mu.Unlock()
+}
+
+func newAdapterWithMetrics(t *testing.T, path string) (*FileAdapter, *spyMetrics) {
+	t.Helper()
+	a := newAdapter(t, path, nil)
+	spy := &spyMetrics{}
+	a.SetMetrics(spy)
+	return a, spy
+}
+
+func requireSingleCall(t *testing.T, spy *spyMetrics, wantOp, wantResult string) {
+	t.Helper()
+	spy.mu.Lock()
+	defer spy.mu.Unlock()
+	if len(spy.calls) != 1 {
+		t.Fatalf("spy.calls len = %d, want 1; calls = %v", len(spy.calls), spy.calls)
+	}
+	if spy.calls[0].operation != wantOp {
+		t.Errorf("spy.calls[0].operation = %q, want %q", spy.calls[0].operation, wantOp)
+	}
+	if spy.calls[0].result != wantResult {
+		t.Errorf("spy.calls[0].result = %q, want %q", spy.calls[0].result, wantResult)
+	}
+}
+
+func requireNoCalls(t *testing.T, spy *spyMetrics) {
+	t.Helper()
+	spy.mu.Lock()
+	defer spy.mu.Unlock()
+	if len(spy.calls) != 0 {
+		t.Fatalf("spy.calls len = %d, want 0; calls = %v", len(spy.calls), spy.calls)
+	}
+}
+
+// Compile-time interface satisfaction for MetricsSetter.
+var _ domain.MetricsSetter = (*FileAdapter)(nil)
+
+func TestFileAdapterMetrics(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	t.Run("FetchCandidateIssues/success", func(t *testing.T) {
+		t.Parallel()
+		a, spy := newAdapterWithMetrics(t, fixture("basic.json"))
+		_, err := a.FetchCandidateIssues(ctx)
+		if err != nil {
+			t.Fatalf("FetchCandidateIssues: %v", err)
+		}
+		requireSingleCall(t, spy, "fetch_candidates", "success")
+	})
+
+	t.Run("FetchCandidateIssues/error", func(t *testing.T) {
+		t.Parallel()
+		a, spy := newAdapterWithMetrics(t, "/nonexistent/path.json")
+		_, err := a.FetchCandidateIssues(ctx)
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+		requireSingleCall(t, spy, "fetch_candidates", "error")
+	})
+
+	t.Run("FetchIssueByID/success", func(t *testing.T) {
+		t.Parallel()
+		a, spy := newAdapterWithMetrics(t, fixture("basic.json"))
+		_, err := a.FetchIssueByID(ctx, "10001")
+		if err != nil {
+			t.Fatalf("FetchIssueByID: %v", err)
+		}
+		requireSingleCall(t, spy, "fetch_issue", "success")
+	})
+
+	t.Run("FetchIssueByID/not_found", func(t *testing.T) {
+		t.Parallel()
+		a, spy := newAdapterWithMetrics(t, fixture("basic.json"))
+		_, err := a.FetchIssueByID(ctx, "nonexistent")
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+		requireSingleCall(t, spy, "fetch_issue", "error")
+	})
+
+	t.Run("FetchIssueComments/success", func(t *testing.T) {
+		t.Parallel()
+		a, spy := newAdapterWithMetrics(t, fixture("basic.json"))
+		_, err := a.FetchIssueComments(ctx, "10001")
+		if err != nil {
+			t.Fatalf("FetchIssueComments: %v", err)
+		}
+		requireSingleCall(t, spy, "fetch_comments", "success")
+	})
+
+	t.Run("FetchIssueComments/not_found", func(t *testing.T) {
+		t.Parallel()
+		a, spy := newAdapterWithMetrics(t, fixture("basic.json"))
+		_, err := a.FetchIssueComments(ctx, "nonexistent")
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+		requireSingleCall(t, spy, "fetch_comments", "error")
+	})
+
+	t.Run("FetchIssuesByStates/success", func(t *testing.T) {
+		t.Parallel()
+		a, spy := newAdapterWithMetrics(t, fixture("basic.json"))
+		_, err := a.FetchIssuesByStates(ctx, []string{"To Do"})
+		if err != nil {
+			t.Fatalf("FetchIssuesByStates: %v", err)
+		}
+		requireSingleCall(t, spy, "fetch_by_states", "success")
+	})
+
+	t.Run("FetchIssuesByStates/empty_input", func(t *testing.T) {
+		t.Parallel()
+		a, spy := newAdapterWithMetrics(t, fixture("basic.json"))
+		_, err := a.FetchIssuesByStates(ctx, []string{})
+		if err != nil {
+			t.Fatalf("FetchIssuesByStates: %v", err)
+		}
+		requireNoCalls(t, spy)
+	})
+
+	t.Run("FetchIssueStatesByIDs/success", func(t *testing.T) {
+		t.Parallel()
+		a, spy := newAdapterWithMetrics(t, fixture("basic.json"))
+		_, err := a.FetchIssueStatesByIDs(ctx, []string{"10001"})
+		if err != nil {
+			t.Fatalf("FetchIssueStatesByIDs: %v", err)
+		}
+		requireSingleCall(t, spy, "fetch_states_by_ids", "success")
+	})
+
+	t.Run("FetchIssueStatesByIDs/empty_input", func(t *testing.T) {
+		t.Parallel()
+		a, spy := newAdapterWithMetrics(t, fixture("basic.json"))
+		_, err := a.FetchIssueStatesByIDs(ctx, []string{})
+		if err != nil {
+			t.Fatalf("FetchIssueStatesByIDs: %v", err)
+		}
+		requireNoCalls(t, spy)
+	})
+
+	t.Run("FetchIssueStatesByIdentifiers/success", func(t *testing.T) {
+		t.Parallel()
+		a, spy := newAdapterWithMetrics(t, fixture("basic.json"))
+		_, err := a.FetchIssueStatesByIdentifiers(ctx, []string{"PROJ-1"})
+		if err != nil {
+			t.Fatalf("FetchIssueStatesByIdentifiers: %v", err)
+		}
+		requireSingleCall(t, spy, "fetch_states_by_identifiers", "success")
+	})
+
+	t.Run("FetchIssueStatesByIdentifiers/empty_input", func(t *testing.T) {
+		t.Parallel()
+		a, spy := newAdapterWithMetrics(t, fixture("basic.json"))
+		_, err := a.FetchIssueStatesByIdentifiers(ctx, []string{})
+		if err != nil {
+			t.Fatalf("FetchIssueStatesByIdentifiers: %v", err)
+		}
+		requireNoCalls(t, spy)
+	})
+
+	t.Run("TransitionIssue/success", func(t *testing.T) {
+		t.Parallel()
+		a, spy := newAdapterWithMetrics(t, fixture("basic.json"))
+		err := a.TransitionIssue(ctx, "10001", "Done")
+		if err != nil {
+			t.Fatalf("TransitionIssue: %v", err)
+		}
+		requireSingleCall(t, spy, "transition", "success")
+	})
+
+	t.Run("TransitionIssue/not_found", func(t *testing.T) {
+		t.Parallel()
+		a, spy := newAdapterWithMetrics(t, fixture("basic.json"))
+		err := a.TransitionIssue(ctx, "nonexistent", "Done")
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+		requireSingleCall(t, spy, "transition", "error")
+	})
+
+	t.Run("nil_metrics", func(t *testing.T) {
+		t.Parallel()
+		a := newAdapter(t, fixture("basic.json"), nil)
+		// All methods must not panic without SetMetrics.
+		a.FetchCandidateIssues(ctx)                              //nolint:errcheck // verifying no panic
+		a.FetchIssueByID(ctx, "10001")                           //nolint:errcheck // verifying no panic
+		a.FetchIssuesByStates(ctx, []string{"To Do"})            //nolint:errcheck // verifying no panic
+		a.FetchIssueStatesByIDs(ctx, []string{"10001"})          //nolint:errcheck // verifying no panic
+		a.FetchIssueStatesByIdentifiers(ctx, []string{"PROJ-1"}) //nolint:errcheck // verifying no panic
+		a.FetchIssueComments(ctx, "10001")                       //nolint:errcheck // verifying no panic
+		a.TransitionIssue(ctx, "10001", "Done")                  //nolint:errcheck // verifying no panic
 	})
 }

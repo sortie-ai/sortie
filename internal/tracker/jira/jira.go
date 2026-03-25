@@ -53,6 +53,7 @@ type JiraAdapter struct {
 	activeStates []string
 	endpoint     string
 	queryFilter  string
+	metrics      domain.Metrics // nil-safe: check before calling
 }
 
 // NewJiraAdapter creates a [JiraAdapter] from adapter configuration.
@@ -122,7 +123,13 @@ func NewJiraAdapter(config map[string]any) (domain.TrackerAdapter, error) {
 // issues. Results are ordered by priority then creation time.
 func (a *JiraAdapter) FetchCandidateIssues(ctx context.Context) ([]domain.Issue, error) {
 	jql := buildCandidateJQL(a.project, a.activeStates, a.queryFilter)
-	return a.paginatedSearch(ctx, jql, searchFields)
+	issues, err := a.paginatedSearch(ctx, jql, searchFields)
+	if err != nil {
+		a.incTrackerRequest("fetch_candidates", "error")
+		return nil, err
+	}
+	a.incTrackerRequest("fetch_candidates", "success")
+	return issues, nil
 }
 
 // FetchIssueByID returns a fully populated issue including comments.
@@ -131,6 +138,7 @@ func (a *JiraAdapter) FetchIssueByID(ctx context.Context, issueID string) (domai
 	params := url.Values{"fields": {searchFields}}
 	body, err := a.client.do(ctx, "GET", "/rest/api/3/issue/"+url.PathEscape(issueID), params)
 	if err != nil {
+		a.incTrackerRequest("fetch_issue", "error")
 		if isNotFound(err) {
 			return domain.Issue{}, &domain.TrackerError{
 				Kind:    domain.ErrTrackerNotFound,
@@ -142,6 +150,7 @@ func (a *JiraAdapter) FetchIssueByID(ctx context.Context, issueID string) (domai
 
 	var ji jiraIssue
 	if err := json.Unmarshal(body, &ji); err != nil {
+		a.incTrackerRequest("fetch_issue", "error")
 		return domain.Issue{}, &domain.TrackerError{
 			Kind:    domain.ErrTrackerPayload,
 			Message: "failed to parse issue response",
@@ -153,10 +162,12 @@ func (a *JiraAdapter) FetchIssueByID(ctx context.Context, issueID string) (domai
 
 	comments, err := a.fetchComments(ctx, issueID)
 	if err != nil {
+		a.incTrackerRequest("fetch_issue", "error")
 		return domain.Issue{}, err
 	}
 	issue.Comments = comments
 
+	a.incTrackerRequest("fetch_issue", "success")
 	return issue, nil
 }
 
@@ -168,7 +179,13 @@ func (a *JiraAdapter) FetchIssuesByStates(ctx context.Context, states []string) 
 		return []domain.Issue{}, nil
 	}
 	jql := buildStatesFetchJQL(a.project, states, a.queryFilter)
-	return a.paginatedSearch(ctx, jql, searchFields)
+	issues, err := a.paginatedSearch(ctx, jql, searchFields)
+	if err != nil {
+		a.incTrackerRequest("fetch_by_states", "error")
+		return nil, err
+	}
+	a.incTrackerRequest("fetch_by_states", "success")
+	return issues, nil
 }
 
 // FetchIssueStatesByIDs returns the current state for each requested
@@ -184,6 +201,7 @@ func (a *JiraAdapter) FetchIssueStatesByIDs(ctx context.Context, issueIDs []stri
 
 	for start := 0; start < len(issueIDs); start += batchSize {
 		if ctx.Err() != nil {
+			a.incTrackerRequest("fetch_states_by_ids", "error")
 			return nil, ctx.Err()
 		}
 
@@ -199,6 +217,7 @@ func (a *JiraAdapter) FetchIssueStatesByIDs(ctx context.Context, issueIDs []stri
 		}
 		issues, err := a.paginatedSearch(ctx, jql, "status")
 		if err != nil {
+			a.incTrackerRequest("fetch_states_by_ids", "error")
 			return nil, err
 		}
 		for _, iss := range issues {
@@ -206,6 +225,7 @@ func (a *JiraAdapter) FetchIssueStatesByIDs(ctx context.Context, issueIDs []stri
 		}
 	}
 
+	a.incTrackerRequest("fetch_states_by_ids", "success")
 	return result, nil
 }
 
@@ -223,6 +243,7 @@ func (a *JiraAdapter) FetchIssueStatesByIdentifiers(ctx context.Context, identif
 
 	for start := 0; start < len(identifiers); start += batchSize {
 		if ctx.Err() != nil {
+			a.incTrackerRequest("fetch_states_by_identifiers", "error")
 			return nil, ctx.Err()
 		}
 
@@ -235,6 +256,7 @@ func (a *JiraAdapter) FetchIssueStatesByIdentifiers(ctx context.Context, identif
 		jql := buildKeyINJQL(batch)
 		issues, err := a.paginatedSearch(ctx, jql, "status")
 		if err != nil {
+			a.incTrackerRequest("fetch_states_by_identifiers", "error")
 			return nil, err
 		}
 		for _, iss := range issues {
@@ -242,13 +264,20 @@ func (a *JiraAdapter) FetchIssueStatesByIdentifiers(ctx context.Context, identif
 		}
 	}
 
+	a.incTrackerRequest("fetch_states_by_identifiers", "success")
 	return result, nil
 }
 
 // FetchIssueComments returns comments for the specified issue.
 // Returns an empty non-nil slice when no comments exist.
 func (a *JiraAdapter) FetchIssueComments(ctx context.Context, issueID string) ([]domain.Comment, error) {
-	return a.fetchComments(ctx, issueID)
+	comments, err := a.fetchComments(ctx, issueID)
+	if err != nil {
+		a.incTrackerRequest("fetch_comments", "error")
+		return nil, err
+	}
+	a.incTrackerRequest("fetch_comments", "success")
+	return comments, nil
 }
 
 // TransitionIssue moves an issue to the specified target state by
@@ -260,11 +289,13 @@ func (a *JiraAdapter) TransitionIssue(ctx context.Context, issueID string, targe
 
 	body, err := a.client.do(ctx, "GET", path, nil)
 	if err != nil {
+		a.incTrackerRequest("transition", "error")
 		return err
 	}
 
 	var resp transitionsResponse
 	if err := json.Unmarshal(body, &resp); err != nil {
+		a.incTrackerRequest("transition", "error")
 		return &domain.TrackerError{
 			Kind:    domain.ErrTrackerPayload,
 			Message: fmt.Sprintf("failed to parse transitions response for issue %s", issueID),
@@ -281,6 +312,7 @@ func (a *JiraAdapter) TransitionIssue(ctx context.Context, issueID string, targe
 	}
 
 	if matchID == "" {
+		a.incTrackerRequest("transition", "error")
 		return &domain.TrackerError{
 			Kind:    domain.ErrTrackerPayload,
 			Message: fmt.Sprintf("no transition to state %q available for issue %s", targetState, issueID),
@@ -297,6 +329,7 @@ func (a *JiraAdapter) TransitionIssue(ctx context.Context, issueID string, targe
 		}{ID: matchID},
 	})
 	if err != nil {
+		a.incTrackerRequest("transition", "error")
 		return &domain.TrackerError{
 			Kind:    domain.ErrTrackerPayload,
 			Message: "failed to marshal transition request",
@@ -305,7 +338,27 @@ func (a *JiraAdapter) TransitionIssue(ctx context.Context, issueID string, targe
 	}
 
 	_, err = a.client.doJSON(ctx, "POST", path, bytes.NewReader(postBody))
-	return err
+	if err != nil {
+		a.incTrackerRequest("transition", "error")
+		return err
+	}
+	a.incTrackerRequest("transition", "success")
+	return nil
+}
+
+// SetMetrics configures the metrics recorder for tracker API call
+// instrumentation. When not called or called with nil, the adapter
+// operates without recording metrics. Safe to call before any
+// adapter operations. Not safe to call concurrently with adapter
+// operations.
+func (a *JiraAdapter) SetMetrics(m domain.Metrics) {
+	a.metrics = m
+}
+
+func (a *JiraAdapter) incTrackerRequest(operation, result string) {
+	if a.metrics != nil {
+		a.metrics.IncTrackerRequests(operation, result)
+	}
 }
 
 // paginatedSearch executes a cursor-based paginated JQL search and

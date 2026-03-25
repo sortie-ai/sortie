@@ -728,7 +728,7 @@ JSON API + HTML dashboard, Prometheus `/metrics`), and adds agent capabilities.
       counters have incremented, histograms have observations. A second test
       confirms `NoopMetrics` causes no panics in the same code path.
 
-- [ ] 8.10 Instrument tracker adapters with `sortie_tracker_requests_total`
+- [x] 8.10 Instrument tracker adapters with `sortie_tracker_requests_total`
       (ADR-0008, Integration Layer). Wire the `Metrics` interface into tracker
       adapter constructors (Jira and file adapters). Increment
       `IncTrackerRequests(operation, result)` on completion of each adapter
@@ -834,6 +834,70 @@ JSON API + HTML dashboard, Prometheus `/metrics`), and adds agent capabilities.
       `RefreshFunc()` and confirms it returns `false`; the HTTP handler returns a
       non-202 status (or `queued: false`) for refresh requests received after drain
       begins.
+
+- [ ] 8.18 Extend per-session token metrics in the JSON API and dashboard.
+      The current `tokens` object in `GET /api/v1/state` running entries and
+      `GET /api/v1/<identifier>` returns only `{input_tokens, output_tokens,
+      total_tokens}`. Extend `RunningEntry` and the JSON API response with:
+      `cache_read_tokens` (from a new optional field on `token_usage` events),
+      `model_name` (from agent adapter events or config), `api_request_count`
+      (incremented per `token_usage` event), and `requests_by_model`
+      (map[string]int grouping request count by model name). Add a schema
+      migration to extend `session_metadata` with `cache_read_tokens`,
+      `model_name`, `api_request_count` columns. Update `aggregate_metrics`
+      to track global `cache_read_tokens`. Render the new fields in the HTML
+      dashboard (task 8.5). Update `docs/architecture.md` Section 13.7.2
+      suggested response shapes to include the new fields.
+      **Verify:** unit test sends `token_usage` events with `cache_read_tokens`
+      and `model` fields, confirms `RunningEntry` and JSON API response include
+      the new fields. Existing tests that omit the new fields continue to pass
+      (backward compatible). Dashboard renders extended token breakdown.
+
+- [ ] 8.19 Add per-session timing breakdown to the JSON API and dashboard.
+      Compute and expose two timing percentages per running session:
+      `tool_time_percent` (cumulative tool call duration as fraction of
+      session wall-clock time) and `api_time_percent` (cumulative LLM API
+      response wait time as fraction of session wall-clock time). Extend
+      `token_usage` event type with an optional `api_duration_ms` field.
+      Define a new `tool_result` normalized event type with `tool_name`
+      and `duration_ms` fields (Section 10.3). Accumulate per-session totals
+      in `RunningEntry`: `ToolTimeMs int64`, `APITimeMs int64`. Compute
+      percentages at render time: `ToolTimeMs / elapsed * 100`. Display in
+      the HTML dashboard and include in JSON API per-session response.
+      Update `docs/architecture.md` Sections 10.3 and 13.7.2.
+      **Verify:** unit test sends a sequence of events with timing data,
+      confirms accumulated totals and computed percentages are correct.
+      Sessions without timing data show "N/A" gracefully.
+
+- [ ] 8.20 Add `sortie_tool_calls_total` Prometheus counter with labels
+      `tool` (tool name, e.g. `tracker_api`) and `result` (`success` or
+      `error`). Increment on each agent tool call completion. Add the
+      counter to the `Metrics` interface (task 8.6), implement in the
+      Prometheus-backed `Metrics` (task 8.7), and instrument in the tool
+      execution path. Update ADR-0008 metric table to include this counter.
+      Update `docs/architecture.md` to reference the new metric.
+      **Verify:** unit test calls a mock tool, gathers metrics from the
+      registry, confirms `sortie_tool_calls_total` is incremented with
+      correct `tool` and `result` labels. Metric appears in `/metrics`.
+
+- [ ] 8.21 Add structured logging for agent tool calls. On each tool call
+      completion, emit an INFO log line with structured fields: `issue_id`,
+      `issue_identifier`, `session_id`, `tool` (tool name), `duration_ms`,
+      `result` (`success` or `error`), and `error` (message, omitted on
+      success). This enables grep-based debugging of tool interactions
+      without requiring the dashboard or Prometheus.
+      **Verify:** unit test confirms INFO log line is emitted with all
+      expected fields on tool call completion. A second test confirms
+      `error` field is present on failure and absent on success.
+
+- [ ] 8.22 Update user-facing documentation for observability enhancements.
+      Update `docs/workflow-reference.md` to document any new config fields
+      added by tasks 8.18-8.19. This task does not cover docs.sortie-ai.com
+      pages (those are written after M8 stabilizes per the docs content
+      plan); it covers only in-repo documentation that ships with the
+      binary.
+      **Verify:** `docs/workflow-reference.md` reflects all new fields.
+      No contradictions with `docs/architecture.md`.
 
 ## Milestone 9: Self-Hosting (Sortie Builds Sortie)
 

@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -1495,4 +1496,310 @@ func TestTransitionIssue_ContextCancellation(t *testing.T) {
 	if !errors.Is(err, context.Canceled) {
 		t.Errorf("TransitionIssue() error = %v, want context.Canceled", err)
 	}
+}
+
+// --- Metrics instrumentation tests ---
+
+type trackerRequestCall struct {
+	operation string
+	result    string
+}
+
+type spyMetrics struct {
+	domain.NoopMetrics
+	mu    sync.Mutex
+	calls []trackerRequestCall
+}
+
+func (s *spyMetrics) IncTrackerRequests(operation, result string) {
+	s.mu.Lock()
+	s.calls = append(s.calls, trackerRequestCall{operation, result})
+	s.mu.Unlock()
+}
+
+func mustAdapterWithMetrics(t *testing.T, config map[string]any) (*JiraAdapter, *spyMetrics) {
+	t.Helper()
+	a := mustAdapter(t, config)
+	spy := &spyMetrics{}
+	a.SetMetrics(spy)
+	return a, spy
+}
+
+func requireSingleCall(t *testing.T, spy *spyMetrics, wantOp, wantResult string) {
+	t.Helper()
+	spy.mu.Lock()
+	defer spy.mu.Unlock()
+	if len(spy.calls) != 1 {
+		t.Fatalf("spy.calls len = %d, want 1; calls = %v", len(spy.calls), spy.calls)
+	}
+	if spy.calls[0].operation != wantOp {
+		t.Errorf("spy.calls[0].operation = %q, want %q", spy.calls[0].operation, wantOp)
+	}
+	if spy.calls[0].result != wantResult {
+		t.Errorf("spy.calls[0].result = %q, want %q", spy.calls[0].result, wantResult)
+	}
+}
+
+func requireNoCalls(t *testing.T, spy *spyMetrics) {
+	t.Helper()
+	spy.mu.Lock()
+	defer spy.mu.Unlock()
+	if len(spy.calls) != 0 {
+		t.Fatalf("spy.calls len = %d, want 0; calls = %v", len(spy.calls), spy.calls)
+	}
+}
+
+func requireNoFetchCommentsCall(t *testing.T, spy *spyMetrics) {
+	t.Helper()
+	spy.mu.Lock()
+	defer spy.mu.Unlock()
+	for _, c := range spy.calls {
+		if c.operation == "fetch_comments" {
+			t.Errorf("unexpected fetch_comments call: %v", c)
+		}
+	}
+}
+
+// Compile-time interface satisfaction for MetricsSetter.
+var _ domain.MetricsSetter = (*JiraAdapter)(nil)
+
+func TestJiraAdapterMetrics(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+
+	t.Run("FetchCandidateIssues/success", func(t *testing.T) {
+		t.Parallel()
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Write(loadFixture(t, "search_single_page.json")) //nolint:errcheck // test helper
+		}))
+		defer srv.Close()
+
+		a, spy := mustAdapterWithMetrics(t, validConfig(srv.URL))
+		_, err := a.FetchCandidateIssues(ctx)
+		if err != nil {
+			t.Fatalf("FetchCandidateIssues: %v", err)
+		}
+		requireSingleCall(t, spy, "fetch_candidates", "success")
+	})
+
+	t.Run("FetchCandidateIssues/error", func(t *testing.T) {
+		t.Parallel()
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusInternalServerError)
+		}))
+		defer srv.Close()
+
+		a, spy := mustAdapterWithMetrics(t, validConfig(srv.URL))
+		_, err := a.FetchCandidateIssues(ctx)
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+		requireSingleCall(t, spy, "fetch_candidates", "error")
+	})
+
+	t.Run("FetchIssueByID/success", func(t *testing.T) {
+		t.Parallel()
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if strings.HasSuffix(r.URL.Path, "/comment") {
+				w.Write(loadFixture(t, "comments.json")) //nolint:errcheck // test helper
+			} else {
+				w.Write(loadFixture(t, "issue_detail.json")) //nolint:errcheck // test helper
+			}
+		}))
+		defer srv.Close()
+
+		a, spy := mustAdapterWithMetrics(t, validConfig(srv.URL))
+		_, err := a.FetchIssueByID(ctx, "PROJ-5")
+		if err != nil {
+			t.Fatalf("FetchIssueByID: %v", err)
+		}
+		requireSingleCall(t, spy, "fetch_issue", "success")
+		requireNoFetchCommentsCall(t, spy)
+	})
+
+	t.Run("FetchIssueByID/not_found", func(t *testing.T) {
+		t.Parallel()
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusNotFound)
+		}))
+		defer srv.Close()
+
+		a, spy := mustAdapterWithMetrics(t, validConfig(srv.URL))
+		_, err := a.FetchIssueByID(ctx, "PROJ-999")
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+		requireSingleCall(t, spy, "fetch_issue", "error")
+	})
+
+	t.Run("FetchIssueComments/success", func(t *testing.T) {
+		t.Parallel()
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Write(loadFixture(t, "comments.json")) //nolint:errcheck // test helper
+		}))
+		defer srv.Close()
+
+		a, spy := mustAdapterWithMetrics(t, validConfig(srv.URL))
+		_, err := a.FetchIssueComments(ctx, "PROJ-5")
+		if err != nil {
+			t.Fatalf("FetchIssueComments: %v", err)
+		}
+		requireSingleCall(t, spy, "fetch_comments", "success")
+	})
+
+	t.Run("FetchIssueComments/not_found", func(t *testing.T) {
+		t.Parallel()
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusNotFound)
+		}))
+		defer srv.Close()
+
+		a, spy := mustAdapterWithMetrics(t, validConfig(srv.URL))
+		_, err := a.FetchIssueComments(ctx, "PROJ-999")
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+		requireSingleCall(t, spy, "fetch_comments", "error")
+	})
+
+	t.Run("FetchIssuesByStates/success", func(t *testing.T) {
+		t.Parallel()
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Write(loadFixture(t, "search_single_page.json")) //nolint:errcheck // test helper
+		}))
+		defer srv.Close()
+
+		a, spy := mustAdapterWithMetrics(t, validConfig(srv.URL))
+		_, err := a.FetchIssuesByStates(ctx, []string{"Done"})
+		if err != nil {
+			t.Fatalf("FetchIssuesByStates: %v", err)
+		}
+		requireSingleCall(t, spy, "fetch_by_states", "success")
+	})
+
+	t.Run("FetchIssuesByStates/empty_input", func(t *testing.T) {
+		t.Parallel()
+		a, spy := mustAdapterWithMetrics(t, validConfig("https://unused.test"))
+		_, err := a.FetchIssuesByStates(ctx, []string{})
+		if err != nil {
+			t.Fatalf("FetchIssuesByStates: %v", err)
+		}
+		requireNoCalls(t, spy)
+	})
+
+	t.Run("FetchIssueStatesByIDs/success", func(t *testing.T) {
+		t.Parallel()
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Write(loadFixture(t, "search_single_page.json")) //nolint:errcheck // test helper
+		}))
+		defer srv.Close()
+
+		a, spy := mustAdapterWithMetrics(t, validConfig(srv.URL))
+		_, err := a.FetchIssueStatesByIDs(ctx, []string{"10001"})
+		if err != nil {
+			t.Fatalf("FetchIssueStatesByIDs: %v", err)
+		}
+		requireSingleCall(t, spy, "fetch_states_by_ids", "success")
+	})
+
+	t.Run("FetchIssueStatesByIDs/empty_input", func(t *testing.T) {
+		t.Parallel()
+		a, spy := mustAdapterWithMetrics(t, validConfig("https://unused.test"))
+		_, err := a.FetchIssueStatesByIDs(ctx, []string{})
+		if err != nil {
+			t.Fatalf("FetchIssueStatesByIDs: %v", err)
+		}
+		requireNoCalls(t, spy)
+	})
+
+	t.Run("FetchIssueStatesByIdentifiers/success", func(t *testing.T) {
+		t.Parallel()
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.Write(loadFixture(t, "search_single_page.json")) //nolint:errcheck // test helper
+		}))
+		defer srv.Close()
+
+		a, spy := mustAdapterWithMetrics(t, validConfig(srv.URL))
+		_, err := a.FetchIssueStatesByIdentifiers(ctx, []string{"PROJ-1"})
+		if err != nil {
+			t.Fatalf("FetchIssueStatesByIdentifiers: %v", err)
+		}
+		requireSingleCall(t, spy, "fetch_states_by_identifiers", "success")
+	})
+
+	t.Run("FetchIssueStatesByIdentifiers/empty_input", func(t *testing.T) {
+		t.Parallel()
+		a, spy := mustAdapterWithMetrics(t, validConfig("https://unused.test"))
+		_, err := a.FetchIssueStatesByIdentifiers(ctx, []string{})
+		if err != nil {
+			t.Fatalf("FetchIssueStatesByIdentifiers: %v", err)
+		}
+		requireNoCalls(t, spy)
+	})
+
+	t.Run("TransitionIssue/success", func(t *testing.T) {
+		t.Parallel()
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch r.Method {
+			case "GET":
+				w.Write(loadFixture(t, "transitions.json")) //nolint:errcheck // test helper
+			case "POST":
+				w.WriteHeader(http.StatusNoContent)
+			}
+		}))
+		defer srv.Close()
+
+		a, spy := mustAdapterWithMetrics(t, validConfig(srv.URL))
+		err := a.TransitionIssue(ctx, "PROJ-123", "Human Review")
+		if err != nil {
+			t.Fatalf("TransitionIssue: %v", err)
+		}
+		requireSingleCall(t, spy, "transition", "success")
+	})
+
+	t.Run("TransitionIssue/error", func(t *testing.T) {
+		t.Parallel()
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusInternalServerError)
+		}))
+		defer srv.Close()
+
+		a, spy := mustAdapterWithMetrics(t, validConfig(srv.URL))
+		err := a.TransitionIssue(ctx, "PROJ-123", "Human Review")
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+		requireSingleCall(t, spy, "transition", "error")
+	})
+
+	t.Run("nil_metrics", func(t *testing.T) {
+		t.Parallel()
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch {
+			case strings.HasSuffix(r.URL.Path, "/comment"):
+				w.Write(loadFixture(t, "comments.json")) //nolint:errcheck // test helper
+			case strings.HasSuffix(r.URL.Path, "/transitions"):
+				if r.Method == "POST" {
+					w.WriteHeader(http.StatusNoContent)
+				} else {
+					w.Write(loadFixture(t, "transitions.json")) //nolint:errcheck // test helper
+				}
+			case strings.Contains(r.URL.Path, "/rest/api/3/issue/"):
+				w.Write(loadFixture(t, "issue_detail.json")) //nolint:errcheck // test helper
+			default:
+				w.Write(loadFixture(t, "search_single_page.json")) //nolint:errcheck // test helper
+			}
+		}))
+		defer srv.Close()
+
+		// Adapter without SetMetrics — all methods must not panic.
+		a := mustAdapter(t, validConfig(srv.URL))
+		a.FetchCandidateIssues(ctx)                              //nolint:errcheck // verifying no panic
+		a.FetchIssueByID(ctx, "PROJ-5")                          //nolint:errcheck // verifying no panic
+		a.FetchIssuesByStates(ctx, []string{"Done"})             //nolint:errcheck // verifying no panic
+		a.FetchIssueStatesByIDs(ctx, []string{"10001"})          //nolint:errcheck // verifying no panic
+		a.FetchIssueStatesByIdentifiers(ctx, []string{"PROJ-1"}) //nolint:errcheck // verifying no panic
+		a.FetchIssueComments(ctx, "PROJ-5")                      //nolint:errcheck // verifying no panic
+		a.TransitionIssue(ctx, "PROJ-123", "Human Review")       //nolint:errcheck // verifying no panic
+	})
 }

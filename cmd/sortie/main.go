@@ -268,6 +268,10 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 		orchMetrics = promMetrics
 	}
 
+	if ms, ok := trackerAdapter.(domain.MetricsSetter); ok && orchMetrics != nil {
+		ms.SetMetrics(orchMetrics)
+	}
+
 	o := orchestrator.NewOrchestrator(orchestrator.OrchestratorParams{
 		State:           state,
 		Logger:          logger,

@@ -39,6 +39,7 @@ type FileAdapter struct {
 
 	mu        sync.RWMutex
 	overrides map[string]string // issue ID → overridden state
+	metrics   domain.Metrics    // nil-safe: check before calling
 }
 
 // NewFileAdapter creates a [FileAdapter] from adapter configuration.
@@ -74,6 +75,7 @@ func NewFileAdapter(config map[string]any) (domain.TrackerAdapter, error) {
 func (a *FileAdapter) FetchCandidateIssues(_ context.Context) ([]domain.Issue, error) {
 	raws, err := loadIssues(a.path)
 	if err != nil {
+		a.incTrackerRequest("fetch_candidates", "error")
 		return nil, err
 	}
 
@@ -90,6 +92,7 @@ func (a *FileAdapter) FetchCandidateIssues(_ context.Context) ([]domain.Issue, e
 		iss.Comments = nil
 		result = append(result, iss)
 	}
+	a.incTrackerRequest("fetch_candidates", "success")
 	return result, nil
 }
 
@@ -99,6 +102,7 @@ func (a *FileAdapter) FetchCandidateIssues(_ context.Context) ([]domain.Issue, e
 func (a *FileAdapter) FetchIssueByID(_ context.Context, issueID string) (domain.Issue, error) {
 	raws, err := loadIssues(a.path)
 	if err != nil {
+		a.incTrackerRequest("fetch_issue", "error")
 		return domain.Issue{}, err
 	}
 
@@ -112,10 +116,12 @@ func (a *FileAdapter) FetchIssueByID(_ context.Context, issueID string) (domain.
 			if iss.Comments == nil {
 				iss.Comments = []domain.Comment{}
 			}
+			a.incTrackerRequest("fetch_issue", "success")
 			return iss, nil
 		}
 	}
 
+	a.incTrackerRequest("fetch_issue", "error")
 	return domain.Issue{}, &domain.TrackerError{
 		Kind:    domain.ErrTrackerNotFound,
 		Message: fmt.Sprintf("issue not found: %s", issueID),
@@ -132,6 +138,7 @@ func (a *FileAdapter) FetchIssuesByStates(_ context.Context, states []string) ([
 
 	raws, err := loadIssues(a.path)
 	if err != nil {
+		a.incTrackerRequest("fetch_by_states", "error")
 		return nil, err
 	}
 
@@ -152,6 +159,7 @@ func (a *FileAdapter) FetchIssuesByStates(_ context.Context, states []string) ([
 			result = append(result, iss)
 		}
 	}
+	a.incTrackerRequest("fetch_by_states", "success")
 	return result, nil
 }
 
@@ -164,6 +172,7 @@ func (a *FileAdapter) FetchIssueStatesByIDs(_ context.Context, issueIDs []string
 
 	raws, err := loadIssues(a.path)
 	if err != nil {
+		a.incTrackerRequest("fetch_states_by_ids", "error")
 		return nil, err
 	}
 
@@ -182,6 +191,7 @@ func (a *FileAdapter) FetchIssueStatesByIDs(_ context.Context, issueIDs []string
 			result[raw.ID] = raw.State
 		}
 	}
+	a.incTrackerRequest("fetch_states_by_ids", "success")
 	return result, nil
 }
 
@@ -195,6 +205,7 @@ func (a *FileAdapter) FetchIssueStatesByIdentifiers(_ context.Context, identifie
 
 	raws, err := loadIssues(a.path)
 	if err != nil {
+		a.incTrackerRequest("fetch_states_by_identifiers", "error")
 		return nil, err
 	}
 
@@ -213,6 +224,7 @@ func (a *FileAdapter) FetchIssueStatesByIdentifiers(_ context.Context, identifie
 			result[raw.Identifier] = raw.State
 		}
 	}
+	a.incTrackerRequest("fetch_states_by_identifiers", "success")
 	return result, nil
 }
 
@@ -223,12 +235,14 @@ func (a *FileAdapter) FetchIssueStatesByIdentifiers(_ context.Context, identifie
 func (a *FileAdapter) FetchIssueComments(_ context.Context, issueID string) ([]domain.Comment, error) {
 	raws, err := loadIssues(a.path)
 	if err != nil {
+		a.incTrackerRequest("fetch_comments", "error")
 		return nil, err
 	}
 
 	for _, raw := range raws {
 		if raw.ID == issueID {
 			iss := normalize(raw)
+			a.incTrackerRequest("fetch_comments", "success")
 			if iss.Comments == nil {
 				return []domain.Comment{}, nil
 			}
@@ -236,6 +250,7 @@ func (a *FileAdapter) FetchIssueComments(_ context.Context, issueID string) ([]d
 		}
 	}
 
+	a.incTrackerRequest("fetch_comments", "error")
 	return nil, &domain.TrackerError{
 		Kind:    domain.ErrTrackerNotFound,
 		Message: fmt.Sprintf("issue not found: %s", issueID),
@@ -252,6 +267,7 @@ func (a *FileAdapter) FetchIssueComments(_ context.Context, issueID string) ([]d
 func (a *FileAdapter) TransitionIssue(_ context.Context, issueID string, targetState string) error {
 	raws, err := loadIssues(a.path)
 	if err != nil {
+		a.incTrackerRequest("transition", "error")
 		return err
 	}
 
@@ -263,6 +279,7 @@ func (a *FileAdapter) TransitionIssue(_ context.Context, issueID string, targetS
 		}
 	}
 	if !found {
+		a.incTrackerRequest("transition", "error")
 		return &domain.TrackerError{
 			Kind:    domain.ErrTrackerNotFound,
 			Message: fmt.Sprintf("issue not found: %s", issueID),
@@ -273,7 +290,23 @@ func (a *FileAdapter) TransitionIssue(_ context.Context, issueID string, targetS
 	a.overrides[issueID] = targetState
 	a.mu.Unlock()
 
+	a.incTrackerRequest("transition", "success")
 	return nil
+}
+
+// SetMetrics configures the metrics recorder for tracker API call
+// instrumentation. When not called or called with nil, the adapter
+// operates without recording metrics. Safe to call before any
+// adapter operations. Not safe to call concurrently with adapter
+// operations.
+func (a *FileAdapter) SetMetrics(m domain.Metrics) {
+	a.metrics = m
+}
+
+func (a *FileAdapter) incTrackerRequest(operation, result string) {
+	if a.metrics != nil {
+		a.metrics.IncTrackerRequests(operation, result)
+	}
 }
 
 // applyOverride returns a copy of raw with its State replaced by the
