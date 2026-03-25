@@ -47,7 +47,8 @@ func (t *TrackerAPITool) Name() string { return "tracker_api" }
 // Description returns a summary of the tool's capabilities.
 func (t *TrackerAPITool) Description() string {
 	return "Query or modify issues in the configured issue tracker. " +
-		"Supports fetch_issue, fetch_comments, search_issues, and transition_issue operations."
+		"Supports fetch_issue, fetch_comments, search_issues (active states only), " +
+		"and transition_issue operations."
 }
 
 // inputSchema is the static JSON Schema for the tool's input.
@@ -57,7 +58,7 @@ var inputSchema = json.RawMessage(`{
     "operation": {
       "type": "string",
       "enum": ["fetch_issue", "fetch_comments", "search_issues", "transition_issue"],
-      "description": "The tracker operation to perform."
+      "description": "The tracker operation to perform. search_issues returns active-state issues only."
     },
     "issue_id": {
       "type": "string",
@@ -73,8 +74,12 @@ var inputSchema = json.RawMessage(`{
 }`)
 
 // InputSchema returns the JSON Schema describing the expected input.
+// The returned slice is a defensive copy; callers may modify it
+// without affecting other consumers.
 func (t *TrackerAPITool) InputSchema() json.RawMessage {
-	return inputSchema
+	out := make(json.RawMessage, len(inputSchema))
+	copy(out, inputSchema)
+	return out
 }
 
 // toolInput is the parsed input for Execute.
@@ -140,7 +145,7 @@ func (t *TrackerAPITool) fetchIssue(ctx context.Context, issueID string) (json.R
 			fmt.Sprintf("issue %s is not in project %s", issue.Identifier, t.project)), nil
 	}
 
-	return successResult(issue.ToTemplateMap())
+	return successResult(issue.ToTemplateMap()), nil
 }
 
 func (t *TrackerAPITool) fetchComments(ctx context.Context, issueID string) (json.RawMessage, error) {
@@ -170,7 +175,7 @@ func (t *TrackerAPITool) fetchComments(ctx context.Context, issueID string) (jso
 		}
 	}
 
-	return successResult(data)
+	return successResult(data), nil
 }
 
 func (t *TrackerAPITool) searchIssues(ctx context.Context) (json.RawMessage, error) {
@@ -184,7 +189,7 @@ func (t *TrackerAPITool) searchIssues(ctx context.Context) (json.RawMessage, err
 		data[i] = issues[i].ToTemplateMap()
 	}
 
-	return successResult(data)
+	return successResult(data), nil
 }
 
 func (t *TrackerAPITool) transitionIssue(ctx context.Context, issueID, targetState string) (json.RawMessage, error) {
@@ -203,7 +208,7 @@ func (t *TrackerAPITool) transitionIssue(ctx context.Context, issueID, targetSta
 		return mapTrackerError(err), nil
 	}
 
-	return successResult(map[string]any{"transitioned": true})
+	return successResult(map[string]any{"transitioned": true}), nil
 }
 
 // isInProject is a defense-in-depth check using identifier prefix.
@@ -252,16 +257,18 @@ func mapTrackerError(err error) json.RawMessage {
 	return errorResult("internal_error", "an unexpected internal error occurred")
 }
 
-// successResult marshals a success response envelope.
-func successResult(data any) (json.RawMessage, error) {
+// successResult marshals a success response envelope. Panics on
+// marshal failure (programming error — only called with JSON-safe
+// map values).
+func successResult(data any) json.RawMessage {
 	result, err := json.Marshal(map[string]any{
 		"success": true,
 		"data":    data,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("trackerapi: marshal success result: %w", err)
+		panic(fmt.Sprintf("trackerapi: marshal success result: %v", err))
 	}
-	return result, nil
+	return result
 }
 
 // errorResult marshals an error response envelope. Panics on marshal

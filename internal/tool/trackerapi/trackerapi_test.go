@@ -3,6 +3,8 @@ package trackerapi
 import (
 	"context"
 	"encoding/json"
+	"math"
+	"strings"
 	"testing"
 
 	"github.com/sortie-ai/sortie/internal/domain"
@@ -141,15 +143,9 @@ func assertErrorContains(t *testing.T, raw json.RawMessage, substr string) {
 	if err := json.Unmarshal(fields["error"], &errObj); err != nil {
 		t.Fatalf("unmarshal error field: %v\nraw: %s", err, raw)
 	}
-	if len(errObj.Message) == 0 {
-		t.Fatalf("error.message is empty, want to contain %q", substr)
+	if !strings.Contains(errObj.Message, substr) {
+		t.Errorf("error.message = %q, want to contain %q", errObj.Message, substr)
 	}
-	for i := range errObj.Message {
-		if len(errObj.Message[i:]) >= len(substr) && errObj.Message[i:i+len(substr)] == substr {
-			return
-		}
-	}
-	t.Errorf("error.message = %q, want to contain %q", errObj.Message, substr)
 }
 
 // --- tests ---
@@ -641,4 +637,25 @@ func TestTrailingJSONContent(t *testing.T) {
 	}
 	assertErrorKind(t, result, "invalid_input")
 	assertErrorContains(t, result, "trailing")
+}
+
+func TestSuccessResultPanicsOnUnmarshalable(t *testing.T) {
+	t.Parallel()
+
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Fatal("successResult did not panic on unmarshalable input")
+		}
+		msg, ok := r.(string)
+		if !ok {
+			t.Fatalf("panic value type = %T, want string", r)
+		}
+		if !strings.Contains(msg, "marshal success result") {
+			t.Errorf("panic message = %q, want it to contain %q", msg, "marshal success result")
+		}
+	}()
+
+	// math.Inf produces a float64 value that json.Marshal cannot encode.
+	successResult(math.Inf(1))
 }
