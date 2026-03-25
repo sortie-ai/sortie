@@ -125,7 +125,9 @@ func HandleWorkerExit(state *State, result WorkerResult, params HandleWorkerExit
 	delete(state.Running, result.IssueID)
 
 	// Release the SSH host slot so it becomes available for other issues.
-	if params.HostPool != nil && result.SSHHost != "" {
+	// ReleaseHost is a no-op when issueID has no assignment, so calling
+	// it unconditionally is safe and more robust than gating on SSHHost.
+	if params.HostPool != nil {
 		params.HostPool.ReleaseHost(result.IssueID)
 	}
 

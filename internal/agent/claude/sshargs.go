@@ -22,7 +22,8 @@ func buildSSHArgs(host, workspacePath, remoteCommand string, agentArgs []string)
 		"-o", "ConnectTimeout=30",
 		"-o", "ServerAliveInterval=15",
 		"-o", "ServerAliveCountMax=3",
-		host,
+		"--",
+		strings.TrimSpace(host),
 	}
 
 	// Build remote command: cd <workspace> && <command> <args...>

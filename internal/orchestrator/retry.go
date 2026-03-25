@@ -285,8 +285,6 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 		}
 	}
 
-	// Resolve resume session ID from the running entry's session (if any).
-	resumeSessionID := ""
 	if params.MakeWorkerFn == nil {
 		panic("HandleRetryTimer: nil MakeWorkerFn")
 	}
@@ -295,7 +293,7 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 	// Pass the popped attempt as-is; NextAttempt increments only on the
 	// next worker exit, not at dispatch time.
 	attempt := popped.Attempt
-	DispatchIssue(ctx, state, issue, &attempt, host, params.MakeWorkerFn(resumeSessionID, host))
+	DispatchIssue(ctx, state, issue, &attempt, host, params.MakeWorkerFn("", host))
 	metrics.IncDispatches(outcomeSuccess)
 
 	log.Info("retried issue dispatched",

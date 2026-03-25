@@ -255,10 +255,12 @@ func (o *Orchestrator) updateGauges(now time.Time) {
 	o.metrics.SetAvailableSlots(GlobalAvailableSlots(o.state.MaxConcurrentAgents, len(o.state.Running)))
 	o.metrics.SetActiveSessionsElapsed(ActiveElapsedSeconds(o.state, now))
 
-	if o.hostPool.IsSSHEnabled() {
-		for host, count := range o.hostPool.Snapshot() {
-			o.metrics.SetSSHHostUsage(host, count)
-		}
+	// Always emit host-usage gauges from the full usage map. This covers
+	// hosts removed by config reload that still have in-flight workers,
+	// ensuring their gauges decrement to zero when workers exit rather
+	// than freezing at the last published value.
+	for host, count := range o.hostPool.Snapshot() {
+		o.metrics.SetSSHHostUsage(host, count)
 	}
 }
 

@@ -37,8 +37,10 @@ func (hp *HostPool) AcquireHost(issueID, preferredHost string) (string, bool) {
 		return "", true
 	}
 
-	// Retry affinity: prefer same host when it has capacity.
-	if preferredHost != "" && hp.hasHostCapacity(preferredHost) {
+	// Retry affinity: prefer same host when it is still configured
+	// and has capacity. A host removed by config reload is not eligible
+	// even if it still has tracked usage from in-flight workers.
+	if preferredHost != "" && hp.isConfigured(preferredHost) && hp.hasHostCapacity(preferredHost) {
 		hp.assign(issueID, preferredHost)
 		return preferredHost, true
 	}
@@ -118,6 +120,28 @@ func (hp *HostPool) Update(hosts []string, maxPerHost int) {
 			hp.usage[h] = 0
 		}
 	}
+
+	// Prune usage entries for hosts that are no longer configured and
+	// have no active assignments. This prevents unbounded growth in the
+	// usage map (and downstream metric label cardinality) when hosts are
+	// repeatedly added and removed via dynamic config reload.
+	configured := make(map[string]struct{}, len(deduped))
+	for _, h := range deduped {
+		configured[h] = struct{}{}
+	}
+	assigned := make(map[string]struct{}, len(hp.assignments))
+	for _, host := range hp.assignments {
+		assigned[host] = struct{}{}
+	}
+	for host := range hp.usage {
+		if _, ok := configured[host]; ok {
+			continue
+		}
+		if _, ok := assigned[host]; ok {
+			continue
+		}
+		delete(hp.usage, host)
+	}
 }
 
 // Snapshot returns a copy of the usage map for observability.
@@ -127,6 +151,16 @@ func (hp *HostPool) Snapshot() map[string]int {
 		snap[h] = c
 	}
 	return snap
+}
+
+// isConfigured reports whether host is in the current host list.
+func (hp *HostPool) isConfigured(host string) bool {
+	for _, h := range hp.hosts {
+		if h == host {
+			return true
+		}
+	}
+	return false
 }
 
 func (hp *HostPool) hasHostCapacity(host string) bool {

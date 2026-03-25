@@ -518,16 +518,16 @@ interact with the remote host — for example:
 
 ```bash
 # after_create — clone repo on the remote host
-ssh "$SORTIE_SSH_HOST" "git clone https://repo.example.com/project.git $SORTIE_WORKSPACE"
+ssh "$SORTIE_SSH_HOST" "git clone https://repo.example.com/project.git \"$SORTIE_WORKSPACE\""
 
 # before_run — install dependencies on the remote host
-ssh "$SORTIE_SSH_HOST" "cd $SORTIE_WORKSPACE && npm install"
+ssh "$SORTIE_SSH_HOST" "cd \"$SORTIE_WORKSPACE\" && npm install"
 
 # after_run — collect artifacts from the remote host
-scp "$SORTIE_SSH_HOST:$SORTIE_WORKSPACE/coverage.out" ./artifacts/
+scp "$SORTIE_SSH_HOST:\"$SORTIE_WORKSPACE\"/coverage.out" ./artifacts/
 
 # before_remove — clean up the remote workspace directory
-ssh "$SORTIE_SSH_HOST" "rm -rf $SORTIE_WORKSPACE"
+ssh "$SORTIE_SSH_HOST" "rm -rf \"$SORTIE_WORKSPACE\""
 ```
 
 #### Operator Guidance
@@ -573,9 +573,9 @@ worker:
 
 hooks:
   after_create: |
-    ssh "$SORTIE_SSH_HOST" "mkdir -p $SORTIE_WORKSPACE && git clone https://repo.example.com/project.git $SORTIE_WORKSPACE"
+    ssh "$SORTIE_SSH_HOST" "mkdir -p \"$SORTIE_WORKSPACE\" && git clone https://repo.example.com/project.git \"$SORTIE_WORKSPACE\""
   before_remove: |
-    ssh "$SORTIE_SSH_HOST" "rm -rf $SORTIE_WORKSPACE"
+    ssh "$SORTIE_SSH_HOST" "rm -rf \"$SORTIE_WORKSPACE\""
 ---
 You are a software engineer. Fix the issue described below.
 {{.issue_body}}
