@@ -497,16 +497,12 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 // the first turn so the agent knows what tools exist.
 func buildToolAdvertisement(reg *domain.ToolRegistry, project string) string {
 	var sb strings.Builder
-	sb.WriteString("## Sortie Tools Reference\n\n")
-	sb.WriteString("The Sortie orchestrator provides tools for querying and modifying\n")
-	sb.WriteString("resources in connected systems")
+	sb.WriteString("## Available Sortie tools\n\n")
 	if project != "" {
-		sb.WriteString(". When using tracker-scoped tools, the default project is ")
+		sb.WriteString("All operations are scoped to project: ")
 		sb.WriteString(project)
+		sb.WriteString("\n\n")
 	}
-	sb.WriteString(". Interactive tool execution\n")
-	sb.WriteString("will be available in a future version via MCP. This section documents the tools'\n")
-	sb.WriteString("API contracts for reference.\n\n")
 
 	for _, tool := range reg.List() {
 		sb.WriteString("### ")
