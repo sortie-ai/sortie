@@ -805,7 +805,7 @@ JSON API + HTML dashboard, Prometheus `/metrics`), and adds agent capabilities.
       503 while /livez still returns 200. A test during graceful shutdown
       confirms both return 503.
 
-- [ ] 8.15 Update `docs/architecture.md` per ADR-0008 spec section update requirements.
+- [x] 8.15 Update `docs/architecture.md` per ADR-0008 spec section update requirements.
       Section 3.3: add `github.com/prometheus/client_golang` to the external dependencies
       list. Section 13.4: clarify that the "optional human-readable status surface" is the
       HTML dashboard at `/` when the HTTP server is enabled. Section 13.7: add `/metrics`

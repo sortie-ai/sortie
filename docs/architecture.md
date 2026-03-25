@@ -150,6 +150,9 @@ Sortie is organized into these layers:
 - SQLite library (embedded, no external server).
 - Filesystem event library (`github.com/fsnotify/fsnotify`) for `WORKFLOW.md` live reload.
   Pure Go, no CGo, no external daemon. See ADR-0006.
+- Metrics exposition library (`github.com/prometheus/client_golang`) for the Prometheus
+  `/metrics` endpoint when the HTTP server is enabled. Pure Go; does not require an external
+  Prometheus server. See ADR-0008.
 
 ## 4. Core Domain Model
 
@@ -1365,8 +1368,9 @@ Recommended snapshot error modes:
 
 ### 13.4 Optional Human-Readable Status Surface
 
-A human-readable status surface (terminal output, dashboard, etc.) is optional and
-implementation-defined.
+A human-readable status surface is optional and implementation-defined. When the HTTP server is
+enabled (Section 13.7), the HTML dashboard served at `/` (Section 13.7.1) is the concrete
+realization of this surface.
 
 If present, it should draw from orchestrator state/metrics only and must not be required for
 correctness.
@@ -1567,6 +1571,45 @@ API design notes:
 - API errors should use a JSON envelope such as `{"error":{"code":"...","message":"..."}}`.
 - If the dashboard is a client-side app, it should consume this API rather than duplicating state
   logic.
+
+#### 13.7.3 Prometheus Metrics Endpoint (`/metrics`)
+
+When the HTTP server is enabled, Sortie exposes a Prometheus exposition-format scrape endpoint at
+`/metrics` via `github.com/prometheus/client_golang`. The endpoint is co-located with the JSON
+API and HTML dashboard on the same address and port — no separate configuration is required.
+
+Implementation requirements:
+
+- Use a dedicated `prometheus.Registry` (not the global default) to prevent pollution from
+  unrelated collectors and to enable isolated test assertions.
+- Register the handler via `promhttp.InstrumentMetricHandler(registry, promhttp.HandlerFor(registry, promhttp.HandlerOpts{}))`.
+  `InstrumentMetricHandler` wraps `HandlerFor` and registers `promhttp_metric_handler_*` counters
+  on the same dedicated registry automatically, ensuring scrape self-instrumentation appears in
+  scrape output rather than landing silently on the global default.
+- Register standard Go runtime and process collectors (`collectors.NewGoCollector`,
+  `collectors.NewProcessCollector`) on the dedicated registry so that `go_*` and `process_*`
+  metrics appear in scrape output alongside Sortie's own metrics.
+
+Defined metrics (see ADR-0008 for full label and bucket specifications):
+
+| Name | Type | Description |
+|------|------|-------------|
+| `sortie_sessions_running` | Gauge | Number of agent sessions currently executing. |
+| `sortie_sessions_retrying` | Gauge | Number of issues in the retry queue. |
+| `sortie_slots_available` | Gauge | Remaining dispatch capacity under current concurrency limits. |
+| `sortie_active_sessions_elapsed_seconds` | Gauge | Cumulative wall-clock elapsed time across all currently running sessions. |
+| `sortie_tokens_total{type}` | Counter | Tokens consumed, partitioned by type (`input`, `output`). |
+| `sortie_agent_runtime_seconds_total` | Counter | Cumulative agent-session wall-clock time for completed sessions. |
+| `sortie_dispatches_total{outcome}` | Counter | Dispatch attempts, partitioned by outcome (`success`, `error`). |
+| `sortie_worker_exits_total{exit_type}` | Counter | Worker exits, partitioned by exit type (`normal`, `error`, `cancelled`). |
+| `sortie_retries_total{trigger}` | Counter | Retry schedule events, partitioned by trigger (`error`, `continuation`, `timer`, `stall`). |
+| `sortie_reconciliation_actions_total{action}` | Counter | Reconciliation outcomes per issue, partitioned by action (`stop`, `cleanup`, `keep`). |
+| `sortie_poll_cycles_total{result}` | Counter | Poll tick completions, partitioned by result (`success`, `error`). |
+| `sortie_tracker_requests_total{operation,result}` | Counter | Tracker adapter API calls, partitioned by operation (`fetch_candidates`, `fetch_issue`, `fetch_by_states`, `fetch_states_by_ids`, `fetch_states_by_identifiers`, `fetch_comments`, `transition`) and result (`success`, `error`). |
+| `sortie_handoff_transitions_total{result}` | Counter | Handoff-state transition attempts, partitioned by result (`success`, `error`, `skipped`). |
+| `sortie_poll_duration_seconds` | Histogram | Wall-clock time per poll cycle; buckets via `ExponentialBuckets(0.1, 2, 10)` (0.1 s–51.2 s). |
+| `sortie_worker_duration_seconds{exit_type}` | Histogram | Worker session wall-clock time; buckets via `ExponentialBuckets(10, 2, 12)` (10 s–5.7 h). |
+| `sortie_build_info{version,go_version}` | Gauge | Always `1`; carries build metadata as labels. |
 
 ## 14. Failure Model and Recovery Strategy
 
@@ -2162,6 +2205,9 @@ Use the same validation profiles as Section 17:
 
 - HTTP server honors CLI `--port` over `server.port`, uses a safe default bind host, and exposes
   the baseline endpoints/error semantics in Section 13.7 if shipped.
+- Prometheus `/metrics` endpoint exposes defined gauges, counters, and histograms when the HTTP
+  server is enabled (Section 13.7.3). Backed by `github.com/prometheus/client_golang` with a
+  dedicated registry; no external Prometheus server required.
 - Optional `tracker_api` client-side tool extension exposes tracker API access through the agent
   session using configured Sortie auth, scoped to the configured project.
 - Make observability settings configurable in workflow front matter without prescribing UI
