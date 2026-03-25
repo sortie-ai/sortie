@@ -60,6 +60,7 @@ func TestNewState(t *testing.T) {
 
 			if s == nil {
 				t.Fatal("NewState() = nil, want non-nil")
+				return
 			}
 			if s.PollIntervalMS != tt.pollIntervalMS {
 				t.Errorf("PollIntervalMS = %d, want %d", s.PollIntervalMS, tt.pollIntervalMS)
