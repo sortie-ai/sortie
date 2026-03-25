@@ -1431,7 +1431,7 @@ func TestRunWorkerAttempt(t *testing.T) {
 		p := capturedPrompt
 		mu.Unlock()
 
-		if strings.Contains(p, "Sortie Tracker API Reference") {
+		if strings.Contains(p, "Sortie Tools Reference") {
 			t.Errorf("prompt should not contain tool advertisement with nil ToolRegistry:\n%s", p)
 		}
 	})
@@ -1476,7 +1476,7 @@ func TestRunWorkerAttempt(t *testing.T) {
 		p := capturedPrompt
 		mu.Unlock()
 
-		if strings.Contains(p, "Sortie Tracker API Reference") {
+		if strings.Contains(p, "Sortie Tools Reference") {
 			t.Errorf("prompt should not contain tool advertisement with empty ToolRegistry:\n%s", p)
 		}
 	})

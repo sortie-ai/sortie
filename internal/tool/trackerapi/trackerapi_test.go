@@ -610,3 +610,35 @@ func TestExecuteNeverReturnsGoError(t *testing.T) {
 		}
 	}
 }
+
+func TestNewNilAdapterPanics(t *testing.T) {
+	t.Parallel()
+
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Fatal("New(nil, ...) did not panic, want panic")
+		}
+		msg, ok := r.(string)
+		if !ok {
+			t.Fatalf("panic value type = %T, want string", r)
+		}
+		if msg != "trackerapi.New: adapter must not be nil" {
+			t.Errorf("panic message = %q, want %q", msg, "trackerapi.New: adapter must not be nil")
+		}
+	}()
+
+	New(nil, "PROJ")
+}
+
+func TestTrailingJSONContent(t *testing.T) {
+	t.Parallel()
+
+	tool := New(&mockTrackerAdapter{}, "PROJ")
+	result, err := tool.Execute(context.Background(), json.RawMessage(`{"operation":"search_issues"}{"extra":"object"}`))
+	if err != nil {
+		t.Fatalf("Execute returned Go error: %v", err)
+	}
+	assertErrorKind(t, result, "invalid_input")
+	assertErrorContains(t, result, "trailing")
+}
