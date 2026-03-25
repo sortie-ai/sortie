@@ -690,6 +690,35 @@ func TestHandleRefresh(t *testing.T) {
 			t.Errorf("len(Operations) = %d, want 0", len(body.Operations))
 		}
 	})
+
+	t.Run("rejected during drain even when refreshFn accepts", func(t *testing.T) {
+		t.Parallel()
+
+		srv := New(Params{
+			SnapshotFn: fixedSnapshot(orchestrator.RuntimeSnapshotResult{}),
+			RefreshFn:  acceptingRefresh(),
+			Logger:     slog.New(slog.DiscardHandler),
+		})
+		srv.SetDraining()
+
+		ts := httptest.NewServer(srv.Mux())
+		t.Cleanup(ts.Close)
+
+		resp, err := http.Post(ts.URL+"/api/v1/refresh", "", nil)
+		if err != nil {
+			t.Fatalf("POST /api/v1/refresh: %v", err)
+		}
+		defer func() { _ = resp.Body.Close() }()
+
+		if resp.StatusCode != http.StatusConflict {
+			t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusConflict)
+		}
+
+		body := decodeJSON[refreshResponse](t, resp)
+		if body.Queued {
+			t.Error("Queued = true, want false during drain")
+		}
+	})
 }
 
 // --- Method enforcement tests ---

@@ -280,9 +280,7 @@ func (s *Server) handleIssueDetail(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
 
-	accepted := s.refreshFn()
-
-	if !accepted && s.drainingFlag.Load() {
+	if s.drainingFlag.Load() {
 		resp := refreshResponse{
 			Queued:      false,
 			Coalesced:   false,
@@ -299,6 +297,8 @@ func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
 		)
 		return
 	}
+
+	accepted := s.refreshFn()
 
 	resp := refreshResponse{
 		Queued:      true,
