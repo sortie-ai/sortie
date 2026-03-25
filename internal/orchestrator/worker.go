@@ -109,6 +109,10 @@ type WorkerDeps struct {
 	// populates this from the previous RunningEntry.SessionID.
 	ResumeSessionID string
 
+	// ToolRegistry holds the tools available to agent sessions. May
+	// be nil when no tools are registered. Read-only after construction.
+	ToolRegistry *domain.ToolRegistry
+
 	// Logger is the structured logger with issue-scoped context fields
 	// already attached (issue_id, issue_identifier).
 	Logger *slog.Logger
@@ -361,6 +365,11 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 			return
 		}
 
+		// Append tool advertisement on the first turn only.
+		if turnNumber == 1 && deps.ToolRegistry != nil && deps.ToolRegistry.Len() > 0 {
+			rendered += "\n\n" + buildToolAdvertisement(deps.ToolRegistry, cfg.Tracker.Project)
+		}
+
 		logger.Info("turn started", slog.Int("turn_number", turnNumber), slog.Int("max_turns", maxTurns))
 
 		// 3b: Execute turn.
@@ -480,4 +489,37 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 		AgentAdapter:   cfg.Agent.Kind,
 		Attempt:        attempt,
 	})
+}
+
+// buildToolAdvertisement formats a Markdown section documenting the
+// tools available in the registry. Appended to the agent prompt on
+// the first turn so the agent knows what tools exist.
+func buildToolAdvertisement(reg *domain.ToolRegistry, project string) string {
+	var sb strings.Builder
+	sb.WriteString("## Sortie Tracker API Reference\n\n")
+	sb.WriteString("The Sortie orchestrator provides tools for querying and modifying\n")
+	sb.WriteString("issues in the configured tracker")
+	if project != "" {
+		sb.WriteString(" (project: ")
+		sb.WriteString(project)
+		sb.WriteString(")")
+	}
+	sb.WriteString(". Interactive tool execution\n")
+	sb.WriteString("will be available in a future version via MCP. This section documents the tool's\n")
+	sb.WriteString("API contract for reference.\n\n")
+
+	for _, tool := range reg.List() {
+		sb.WriteString("### ")
+		sb.WriteString(tool.Name())
+		sb.WriteString("\n\n")
+		sb.WriteString(tool.Description())
+		sb.WriteString("\n\n")
+		sb.WriteString("Input schema:\n```json\n")
+		sb.Write(tool.InputSchema())
+		sb.WriteString("\n```\n\n")
+	}
+
+	sb.WriteString("All responses are JSON: {\"success\": true, \"data\": ...} or {\"success\": false, \"error\": {\"kind\": \"...\", \"message\": \"...\"}}.\n")
+
+	return sb.String()
 }

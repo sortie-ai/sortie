@@ -740,12 +740,13 @@ JSON API + HTML dashboard, Prometheus `/metrics`), and adds agent capabilities.
       with correct `operation` and `result` labels on successful and failed
       calls. Existing adapter tests continue to pass.
 
-- [ ] 8.11 Implement the `tracker_api` client-side tool (Section 10.4): expose tracker API
+- [x] 8.11 Implement the `tracker_api` client-side tool (Section 10.4): expose tracker API
       access to agents during sessions, scoped to the configured project. Advertise the tool
       during session startup. Return structured results: `success=true` on API success,
       `success=false` with preserved response body on API errors, `success=false` with error
       payload on transport/auth/input failures. Unsupported tool names return failure without
-      stalling. See architecture Section 10.4 for full contract.
+      stalling. See architecture Section 10.4 for full contract. This task implements the first
+      client-side tool that Sortie exposes to agents during sessions.
       **Verify:** integration test with mock tracker confirms tool is advertised, successful
       query returns data, API error preserves body, and tool is scoped to configured project.
 

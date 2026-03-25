@@ -65,8 +65,9 @@ type OrchestratorParams struct {
 	WorkflowManager WorkflowManager
 	Store           OrchestratorStore
 	PreflightParams PreflightParams
-	Observers       []Observer     // may be nil/empty
-	Metrics         domain.Metrics // may be nil; defaults to NoopMetrics
+	Observers       []Observer           // may be nil/empty
+	Metrics         domain.Metrics       // may be nil; defaults to NoopMetrics
+	ToolRegistry    *domain.ToolRegistry // may be nil
 }
 
 // Orchestrator owns the poll-and-dispatch event loop and all runtime
@@ -92,6 +93,7 @@ type Orchestrator struct {
 	preflightParams PreflightParams
 	observers       []Observer
 	drainTimeout    time.Duration
+	toolRegistry    *domain.ToolRegistry
 }
 
 // NewOrchestrator creates an [Orchestrator] with all dependencies wired.
@@ -133,6 +135,7 @@ func NewOrchestrator(params OrchestratorParams) *Orchestrator {
 		preflightParams: params.PreflightParams,
 		observers:       observers,
 		drainTimeout:    defaultDrainTimeout,
+		toolRegistry:    params.ToolRegistry,
 	}
 }
 
@@ -360,6 +363,7 @@ func (o *Orchestrator) makeWorkerFn(resumeSessionID string) WorkerFunc {
 			},
 			ResumeSessionID: resumeSessionID,
 			Logger:          logger,
+			ToolRegistry:    o.toolRegistry,
 		}
 
 		RunWorkerAttempt(ctx, issue, attempt, deps)

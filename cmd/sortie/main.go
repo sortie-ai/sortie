@@ -27,6 +27,7 @@ import (
 	"github.com/sortie-ai/sortie/internal/persistence"
 	"github.com/sortie-ai/sortie/internal/registry"
 	"github.com/sortie-ai/sortie/internal/server"
+	"github.com/sortie-ai/sortie/internal/tool/trackerapi"
 	"github.com/sortie-ai/sortie/internal/workflow"
 	"github.com/sortie-ai/sortie/internal/workspace"
 
@@ -272,6 +273,11 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 		ms.SetMetrics(orchMetrics)
 	}
 
+	toolRegistry := domain.NewToolRegistry()
+	if cfg.Tracker.Project != "" {
+		toolRegistry.Register(trackerapi.New(trackerAdapter, cfg.Tracker.Project))
+	}
+
 	o := orchestrator.NewOrchestrator(orchestrator.OrchestratorParams{
 		State:           state,
 		Logger:          logger,
@@ -281,6 +287,7 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 		Store:           store,
 		PreflightParams: preflightParams,
 		Metrics:         orchMetrics,
+		ToolRegistry:    toolRegistry,
 	})
 
 	var srv *server.Server

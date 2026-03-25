@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -154,6 +155,21 @@ func (m *mockTrackerAdapter) TransitionIssue(ctx context.Context, issueID string
 	}
 	return nil
 }
+
+// stubAgentTool is a minimal domain.AgentTool for worker tests.
+type stubAgentTool struct {
+	toolName string
+	desc     string
+}
+
+func (s *stubAgentTool) Name() string                 { return s.toolName }
+func (s *stubAgentTool) Description() string          { return s.desc }
+func (s *stubAgentTool) InputSchema() json.RawMessage { return json.RawMessage(`{}`) }
+func (s *stubAgentTool) Execute(_ context.Context, _ json.RawMessage) (json.RawMessage, error) {
+	return json.RawMessage(`{}`), nil
+}
+
+var _ domain.AgentTool = (*stubAgentTool)(nil)
 
 // exitCapture captures the OnExit callback arguments.
 type exitCapture struct {
@@ -1252,6 +1268,216 @@ func TestRunWorkerAttempt(t *testing.T) {
 		// original, proving the OnEvent relay defensive-copied it.
 		if fmt.Sprintf("%p", got) == fmt.Sprintf("%p", adapterMap) {
 			t.Error("relayed RateLimits has same pointer as adapter map, want defensive copy")
+		}
+	})
+
+	t.Run("tool_advertisement_on_turn_1", func(t *testing.T) {
+		t.Parallel()
+
+		tmpDir := t.TempDir()
+		cfg := defaultWorkerConfig(tmpDir)
+		cfg.Agent.MaxTurns = 1
+		cfg.Tracker.Project = "TESTPROJ"
+
+		ec := newExitCapture()
+		var capturedPrompt string
+		var mu sync.Mutex
+
+		reg := domain.NewToolRegistry()
+		reg.Register(&stubAgentTool{toolName: "tracker_api", desc: "Query issues"})
+
+		deps := WorkerDeps{
+			TrackerAdapter: &mockTrackerAdapter{},
+			AgentAdapter: &mockAgentAdapter{
+				runTurnFn: func(_ context.Context, session domain.Session, params domain.RunTurnParams) (domain.TurnResult, error) {
+					mu.Lock()
+					capturedPrompt = params.Prompt
+					mu.Unlock()
+					return domain.TurnResult{SessionID: session.ID, ExitReason: domain.EventTurnCompleted}, nil
+				},
+			},
+			ConfigFunc:         func() config.ServiceConfig { return cfg },
+			PromptTemplateFunc: func() *prompt.Template { return mustParseTemplate(t, "do work on {{ .issue.title }}") },
+			OnEvent:            func(_ string, _ domain.AgentEvent) {},
+			OnExit:             ec.onExit,
+			Logger:             discardLogger(),
+			ToolRegistry:       reg,
+		}
+
+		RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
+
+		result := ec.waitResult(t)
+		if result.ExitKind != WorkerExitNormal {
+			t.Fatalf("ExitKind = %q, want %q", result.ExitKind, WorkerExitNormal)
+		}
+
+		mu.Lock()
+		p := capturedPrompt
+		mu.Unlock()
+
+		if !strings.Contains(p, "tracker_api") {
+			t.Errorf("turn 1 prompt missing tool name \"tracker_api\":\n%s", p)
+		}
+		if !strings.Contains(p, "Query issues") {
+			t.Errorf("turn 1 prompt missing tool description:\n%s", p)
+		}
+		if !strings.Contains(p, "TESTPROJ") {
+			t.Errorf("turn 1 prompt missing project name \"TESTPROJ\":\n%s", p)
+		}
+	})
+
+	t.Run("tool_advertisement_not_on_continuation_turns", func(t *testing.T) {
+		t.Parallel()
+
+		tmpDir := t.TempDir()
+		cfg := defaultWorkerConfig(tmpDir)
+		cfg.Agent.MaxTurns = 3
+		cfg.Tracker.Project = "TESTPROJ"
+
+		ec := newExitCapture()
+		var capturedPrompts []string
+		var mu sync.Mutex
+
+		reg := domain.NewToolRegistry()
+		reg.Register(&stubAgentTool{toolName: "tracker_api", desc: "Query issues"})
+
+		deps := WorkerDeps{
+			TrackerAdapter: &mockTrackerAdapter{},
+			AgentAdapter: &mockAgentAdapter{
+				runTurnFn: func(_ context.Context, session domain.Session, params domain.RunTurnParams) (domain.TurnResult, error) {
+					mu.Lock()
+					capturedPrompts = append(capturedPrompts, params.Prompt)
+					mu.Unlock()
+					return domain.TurnResult{SessionID: session.ID, ExitReason: domain.EventTurnCompleted}, nil
+				},
+			},
+			ConfigFunc:         func() config.ServiceConfig { return cfg },
+			PromptTemplateFunc: func() *prompt.Template { return mustParseTemplate(t, "turn={{ .run.turn_number }}") },
+			OnEvent:            func(_ string, _ domain.AgentEvent) {},
+			OnExit:             ec.onExit,
+			Logger:             discardLogger(),
+			ToolRegistry:       reg,
+		}
+
+		RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
+
+		result := ec.waitResult(t)
+		if result.ExitKind != WorkerExitNormal {
+			t.Fatalf("ExitKind = %q, want %q", result.ExitKind, WorkerExitNormal)
+		}
+		if result.TurnsCompleted != 3 {
+			t.Fatalf("TurnsCompleted = %d, want 3", result.TurnsCompleted)
+		}
+
+		mu.Lock()
+		prompts := make([]string, len(capturedPrompts))
+		copy(prompts, capturedPrompts)
+		mu.Unlock()
+
+		if len(prompts) != 3 {
+			t.Fatalf("captured %d prompts, want 3", len(prompts))
+		}
+
+		// Turn 1 should have the advertisement.
+		if !strings.Contains(prompts[0], "tracker_api") {
+			t.Errorf("turn 1 prompt missing tool advertisement:\n%s", prompts[0])
+		}
+
+		// Turns 2 and 3 should NOT have the advertisement.
+		for i := 1; i < len(prompts); i++ {
+			if strings.Contains(prompts[i], "tracker_api") {
+				t.Errorf("turn %d prompt should not contain tool advertisement:\n%s", i+1, prompts[i])
+			}
+		}
+	})
+
+	t.Run("nil_tool_registry_no_advertisement", func(t *testing.T) {
+		t.Parallel()
+
+		tmpDir := t.TempDir()
+		cfg := defaultWorkerConfig(tmpDir)
+		cfg.Agent.MaxTurns = 1
+
+		ec := newExitCapture()
+		var capturedPrompt string
+		var mu sync.Mutex
+
+		deps := WorkerDeps{
+			TrackerAdapter: &mockTrackerAdapter{},
+			AgentAdapter: &mockAgentAdapter{
+				runTurnFn: func(_ context.Context, session domain.Session, params domain.RunTurnParams) (domain.TurnResult, error) {
+					mu.Lock()
+					capturedPrompt = params.Prompt
+					mu.Unlock()
+					return domain.TurnResult{SessionID: session.ID, ExitReason: domain.EventTurnCompleted}, nil
+				},
+			},
+			ConfigFunc:         func() config.ServiceConfig { return cfg },
+			PromptTemplateFunc: func() *prompt.Template { return mustParseTemplate(t, "do work on {{ .issue.title }}") },
+			OnEvent:            func(_ string, _ domain.AgentEvent) {},
+			OnExit:             ec.onExit,
+			Logger:             discardLogger(),
+			ToolRegistry:       nil,
+		}
+
+		RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
+
+		result := ec.waitResult(t)
+		if result.ExitKind != WorkerExitNormal {
+			t.Fatalf("ExitKind = %q, want %q", result.ExitKind, WorkerExitNormal)
+		}
+
+		mu.Lock()
+		p := capturedPrompt
+		mu.Unlock()
+
+		if strings.Contains(p, "Sortie Tracker API Reference") {
+			t.Errorf("prompt should not contain tool advertisement with nil ToolRegistry:\n%s", p)
+		}
+	})
+
+	t.Run("empty_tool_registry_no_advertisement", func(t *testing.T) {
+		t.Parallel()
+
+		tmpDir := t.TempDir()
+		cfg := defaultWorkerConfig(tmpDir)
+		cfg.Agent.MaxTurns = 1
+
+		ec := newExitCapture()
+		var capturedPrompt string
+		var mu sync.Mutex
+
+		deps := WorkerDeps{
+			TrackerAdapter: &mockTrackerAdapter{},
+			AgentAdapter: &mockAgentAdapter{
+				runTurnFn: func(_ context.Context, session domain.Session, params domain.RunTurnParams) (domain.TurnResult, error) {
+					mu.Lock()
+					capturedPrompt = params.Prompt
+					mu.Unlock()
+					return domain.TurnResult{SessionID: session.ID, ExitReason: domain.EventTurnCompleted}, nil
+				},
+			},
+			ConfigFunc:         func() config.ServiceConfig { return cfg },
+			PromptTemplateFunc: func() *prompt.Template { return mustParseTemplate(t, "do work on {{ .issue.title }}") },
+			OnEvent:            func(_ string, _ domain.AgentEvent) {},
+			OnExit:             ec.onExit,
+			Logger:             discardLogger(),
+			ToolRegistry:       domain.NewToolRegistry(),
+		}
+
+		RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
+
+		result := ec.waitResult(t)
+		if result.ExitKind != WorkerExitNormal {
+			t.Fatalf("ExitKind = %q, want %q", result.ExitKind, WorkerExitNormal)
+		}
+
+		mu.Lock()
+		p := capturedPrompt
+		mu.Unlock()
+
+		if strings.Contains(p, "Sortie Tracker API Reference") {
+			t.Errorf("prompt should not contain tool advertisement with empty ToolRegistry:\n%s", p)
 		}
 	})
 }
