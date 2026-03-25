@@ -765,7 +765,7 @@ func TestDispatchIssue(t *testing.T) {
 		issue := testIssue("ISS-1")
 		workerDone := make(chan struct{})
 
-		DispatchIssue(context.Background(), s, issue, nil, func(_ context.Context, _ domain.Issue, _ *int) {
+		DispatchIssue(context.Background(), s, issue, nil, "", func(_ context.Context, _ domain.Issue, _ *int) {
 			close(workerDone)
 		})
 
@@ -855,7 +855,7 @@ func TestDispatchIssue(t *testing.T) {
 		before := time.Now().UTC()
 		workerDone := make(chan struct{})
 
-		DispatchIssue(context.Background(), s, testIssue("ISS-T"), nil, func(_ context.Context, _ domain.Issue, _ *int) {
+		DispatchIssue(context.Background(), s, testIssue("ISS-T"), nil, "", func(_ context.Context, _ domain.Issue, _ *int) {
 			close(workerDone)
 		})
 		<-workerDone
@@ -875,7 +875,7 @@ func TestDispatchIssue(t *testing.T) {
 		attempt := 3
 		workerDone := make(chan struct{})
 
-		DispatchIssue(context.Background(), s, testIssue("ISS-R"), &attempt, func(_ context.Context, _ domain.Issue, _ *int) {
+		DispatchIssue(context.Background(), s, testIssue("ISS-R"), &attempt, "", func(_ context.Context, _ domain.Issue, _ *int) {
 			close(workerDone)
 		})
 		<-workerDone
@@ -895,7 +895,7 @@ func TestDispatchIssue(t *testing.T) {
 		s := newTestState()
 		workerDone := make(chan struct{})
 
-		DispatchIssue(context.Background(), s, testIssue("ISS-C"), nil, func(_ context.Context, _ domain.Issue, _ *int) {
+		DispatchIssue(context.Background(), s, testIssue("ISS-C"), nil, "", func(_ context.Context, _ domain.Issue, _ *int) {
 			close(workerDone)
 		})
 		<-workerDone
@@ -920,7 +920,7 @@ func TestDispatchIssue(t *testing.T) {
 		}
 		ch := make(chan workerArgs, 1)
 
-		DispatchIssue(context.Background(), s, issue, &attempt, func(ctx context.Context, iss domain.Issue, att *int) {
+		DispatchIssue(context.Background(), s, issue, &attempt, "", func(ctx context.Context, iss domain.Issue, att *int) {
 			ch <- workerArgs{ctx: ctx, issue: iss, attempt: att}
 		})
 
@@ -946,7 +946,7 @@ func TestDispatchIssue(t *testing.T) {
 		s := newTestState()
 		ch := make(chan context.Context, 1)
 
-		DispatchIssue(context.Background(), s, testIssue("ISS-CTX"), nil, func(ctx context.Context, _ domain.Issue, _ *int) {
+		DispatchIssue(context.Background(), s, testIssue("ISS-CTX"), nil, "", func(ctx context.Context, _ domain.Issue, _ *int) {
 			ch <- ctx
 		})
 
@@ -983,7 +983,7 @@ func TestDispatchIssue(t *testing.T) {
 		s.Claimed["ISS-X"] = struct{}{}
 		workerDone := make(chan struct{})
 
-		DispatchIssue(context.Background(), s, testIssue("ISS-X"), intPtr(2), func(_ context.Context, _ domain.Issue, _ *int) {
+		DispatchIssue(context.Background(), s, testIssue("ISS-X"), intPtr(2), "", func(_ context.Context, _ domain.Issue, _ *int) {
 			close(workerDone)
 		})
 		<-workerDone
@@ -1015,6 +1015,6 @@ func TestDispatchIssue(t *testing.T) {
 			}
 		}()
 
-		DispatchIssue(context.Background(), s, testIssue("ISS-P"), nil, nil)
+		DispatchIssue(context.Background(), s, testIssue("ISS-P"), nil, "", nil)
 	})
 }

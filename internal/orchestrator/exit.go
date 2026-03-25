@@ -90,6 +90,10 @@ type HandleWorkerExitParams struct {
 	// Metrics records instrumentation counters for worker exit events.
 	// If nil, defaults to [domain.NoopMetrics].
 	Metrics domain.Metrics
+
+	// HostPool is the SSH host pool for releasing hosts on worker exit.
+	// If nil, no host pool release occurs (local-mode or tests).
+	HostPool *HostPool
 }
 
 // HandleWorkerExit processes a worker's terminal outcome. It removes the
@@ -119,6 +123,11 @@ func HandleWorkerExit(state *State, result WorkerResult, params HandleWorkerExit
 		return
 	}
 	delete(state.Running, result.IssueID)
+
+	// Release the SSH host slot so it becomes available for other issues.
+	if params.HostPool != nil && result.SSHHost != "" {
+		params.HostPool.ReleaseHost(result.IssueID)
+	}
 
 	// Enrich with session context now that both sources are available.
 	// Prefer result.SessionID (authoritative from the adapter) over
@@ -253,11 +262,12 @@ func HandleWorkerExit(state *State, result WorkerResult, params HandleWorkerExit
 				)
 				metrics.IncHandoffTransitions(handoffError)
 				ScheduleRetry(state, ScheduleRetryParams{
-					IssueID:    result.IssueID,
-					Identifier: result.Identifier,
-					Attempt:    NextAttempt(entry.RetryAttempt),
-					DelayMS:    continuationDelayMS,
-					Error:      "",
+					IssueID:     result.IssueID,
+					Identifier:  result.Identifier,
+					Attempt:     NextAttempt(entry.RetryAttempt),
+					DelayMS:     continuationDelayMS,
+					Error:       "",
+					LastSSHHost: result.SSHHost,
 				}, params.OnRetryFire)
 				metrics.IncRetries(triggerContinuation)
 				retryScheduled = true
@@ -268,11 +278,12 @@ func HandleWorkerExit(state *State, result WorkerResult, params HandleWorkerExit
 				)
 				metrics.IncHandoffTransitions(handoffError)
 				ScheduleRetry(state, ScheduleRetryParams{
-					IssueID:    result.IssueID,
-					Identifier: result.Identifier,
-					Attempt:    NextAttempt(entry.RetryAttempt),
-					DelayMS:    continuationDelayMS,
-					Error:      "",
+					IssueID:     result.IssueID,
+					Identifier:  result.Identifier,
+					Attempt:     NextAttempt(entry.RetryAttempt),
+					DelayMS:     continuationDelayMS,
+					Error:       "",
+					LastSSHHost: result.SSHHost,
 				}, params.OnRetryFire)
 				metrics.IncRetries(triggerContinuation)
 				retryScheduled = true
@@ -289,11 +300,12 @@ func HandleWorkerExit(state *State, result WorkerResult, params HandleWorkerExit
 			// No handoff configured but issue is still active:
 			// schedule continuation retry (existing behavior).
 			ScheduleRetry(state, ScheduleRetryParams{
-				IssueID:    result.IssueID,
-				Identifier: result.Identifier,
-				Attempt:    NextAttempt(entry.RetryAttempt),
-				DelayMS:    continuationDelayMS,
-				Error:      "",
+				IssueID:     result.IssueID,
+				Identifier:  result.Identifier,
+				Attempt:     NextAttempt(entry.RetryAttempt),
+				DelayMS:     continuationDelayMS,
+				Error:       "",
+				LastSSHHost: result.SSHHost,
 			}, params.OnRetryFire)
 			metrics.IncRetries(triggerContinuation)
 			retryScheduled = true
@@ -334,11 +346,12 @@ func HandleWorkerExit(state *State, result WorkerResult, params HandleWorkerExit
 			}
 
 			ScheduleRetry(state, ScheduleRetryParams{
-				IssueID:    result.IssueID,
-				Identifier: result.Identifier,
-				Attempt:    nextAttempt,
-				DelayMS:    delayMS,
-				Error:      errMsg,
+				IssueID:     result.IssueID,
+				Identifier:  result.Identifier,
+				Attempt:     nextAttempt,
+				DelayMS:     delayMS,
+				Error:       errMsg,
+				LastSSHHost: result.SSHHost,
 			}, params.OnRetryFire)
 			metrics.IncRetries(triggerError)
 			retryScheduled = true

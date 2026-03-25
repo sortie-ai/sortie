@@ -35,6 +35,9 @@ type PromMetrics struct {
 	// Histograms
 	pollDuration   prometheus.Histogram
 	workerDuration *prometheus.HistogramVec
+
+	// SSH host usage
+	sshHostUsage *prometheus.GaugeVec
 }
 
 // NewPromMetrics creates a [PromMetrics] that registers all Sortie
@@ -150,6 +153,12 @@ func NewPromMetrics(version, goVersion string) *PromMetrics {
 	}, []string{"version", "go_version"})
 	buildInfo.WithLabelValues(version, goVersion).Set(1)
 
+	sshHostUsage := prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Namespace: "sortie",
+		Name:      "ssh_host_usage",
+		Help:      "Current session count per SSH host.",
+	}, []string{"host"})
+
 	reg.MustRegister(
 		sessionsRunning,
 		sessionsRetrying,
@@ -167,6 +176,7 @@ func NewPromMetrics(version, goVersion string) *PromMetrics {
 		pollDuration,
 		workerDuration,
 		buildInfo,
+		sshHostUsage,
 	)
 
 	return &PromMetrics{
@@ -186,6 +196,7 @@ func NewPromMetrics(version, goVersion string) *PromMetrics {
 		handoffTransitions:    handoffTransitions,
 		pollDuration:          pollDuration,
 		workerDuration:        workerDuration,
+		sshHostUsage:          sshHostUsage,
 	}
 }
 
@@ -284,4 +295,9 @@ func (p *PromMetrics) ObservePollDuration(seconds float64) {
 // ObserveWorkerDuration records the wall-clock time of a worker session in seconds.
 func (p *PromMetrics) ObserveWorkerDuration(exitType string, seconds float64) {
 	p.workerDuration.WithLabelValues(exitType).Observe(seconds)
+}
+
+// SetSSHHostUsage records the current session count for the given SSH host.
+func (p *PromMetrics) SetSSHHostUsage(host string, count int) {
+	p.sshHostUsage.WithLabelValues(host).Set(float64(count))
 }

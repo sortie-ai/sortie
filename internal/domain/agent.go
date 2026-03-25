@@ -175,6 +175,12 @@ type StartSessionParams struct {
 	// Adapters that do not support session continuity ignore this
 	// field.
 	ResumeSessionID string
+
+	// SSHHost is the SSH destination for remote agent execution.
+	// When non-empty, the adapter launches the agent on this host
+	// via SSH instead of as a local subprocess. When empty, existing
+	// local behavior is unchanged.
+	SSHHost string
 }
 
 // RunTurnParams contains the inputs for [AgentAdapter.RunTurn].

@@ -118,7 +118,7 @@ func defaultRetryParams(t *testing.T, store *mockRetryStore, tracker *mockRetryT
 		ActiveStates:      []string{"To Do", "In Progress"},
 		TerminalStates:    []string{"Done"},
 		MaxRetryBackoffMS: 300_000,
-		WorkerFn:          func(_ context.Context, _ domain.Issue, _ *int) {},
+		MakeWorkerFn:      func(_, _ string) WorkerFunc { return func(_ context.Context, _ domain.Issue, _ *int) {} },
 		OnRetryFire:       noopRetryFire,
 		Ctx:               context.Background(),
 		Logger:            discardLogger(),
@@ -866,7 +866,8 @@ func TestHandleRetryTimer(t *testing.T) {
 			var workerCalled bool
 			if tt.workerFn != nil {
 				ch := make(chan struct{}, 1)
-				params.WorkerFn = tt.workerFn(ch)
+				wf := tt.workerFn(ch)
+				params.MakeWorkerFn = func(_, _ string) WorkerFunc { return wf }
 				HandleRetryTimer(state, id, params)
 				select {
 				case <-ch:
@@ -903,8 +904,10 @@ func TestHandleRetryTimer_WorkerStillRunningReschedulesInsteadOfDispatching(t *t
 	params := defaultRetryParams(t, store, tracker)
 
 	workerCalled := false
-	params.WorkerFn = func(_ context.Context, _ domain.Issue, _ *int) {
-		workerCalled = true
+	params.MakeWorkerFn = func(_, _ string) WorkerFunc {
+		return func(_ context.Context, _ domain.Issue, _ *int) {
+			workerCalled = true
+		}
 	}
 
 	HandleRetryTimer(state, "ISS-1", params)
@@ -945,6 +948,88 @@ func TestHandleRetryTimer_WorkerStillRunningReschedulesInsteadOfDispatching(t *t
 	if store.savedEntries[0].Attempt != 2 {
 		t.Errorf("saved Attempt = %d, want 2", store.savedEntries[0].Attempt)
 	}
+}
+
+// Section 8.16: SSH host acquisition on retry timer path.
+func TestHandleRetryTimer_SSHHostAcquisition(t *testing.T) {
+	t.Parallel()
+
+	t.Run("acquires host with preference", func(t *testing.T) {
+		t.Parallel()
+
+		hp := NewHostPool([]string{"host-a", "host-b"}, 2)
+		store := &mockRetryStore{}
+		tracker := &mockRetryTracker{
+			candidates: []domain.Issue{candidateIssue("ISS-SSH", "ISS-SSH", "To Do")},
+		}
+
+		state := retryState(t, "ISS-SSH", "ISS-SSH", 2)
+		state.RetryAttempts["ISS-SSH"].LastSSHHost = "host-b"
+
+		params := defaultRetryParams(t, store, tracker)
+		params.HostPool = hp
+
+		ch := make(chan struct{}, 1)
+		params.MakeWorkerFn = func(_, sshHost string) WorkerFunc {
+			return func(_ context.Context, _ domain.Issue, _ *int) {
+				if sshHost != "host-b" {
+					t.Errorf("MakeWorkerFn sshHost = %q, want \"host-b\" (preferred)", sshHost)
+				}
+				ch <- struct{}{}
+			}
+		}
+
+		HandleRetryTimer(state, "ISS-SSH", params)
+
+		select {
+		case <-ch:
+		case <-time.After(time.Second):
+			t.Fatal("worker did not execute")
+		}
+
+		// Host-b was acquired (preferred).
+		if hp.HostFor("ISS-SSH") != "host-b" {
+			t.Errorf("HostFor(ISS-SSH) = %q, want \"host-b\"", hp.HostFor("ISS-SSH"))
+		}
+	})
+
+	t.Run("no SSH capacity reschedules", func(t *testing.T) {
+		t.Parallel()
+
+		hp := NewHostPool([]string{"host-a"}, 1)
+		hp.AcquireHost("OTHER-1", "")
+
+		store := &mockRetryStore{}
+		tracker := &mockRetryTracker{
+			candidates: []domain.Issue{candidateIssue("ISS-FULL", "ISS-FULL", "To Do")},
+		}
+
+		state := retryState(t, "ISS-FULL", "ISS-FULL", 1)
+		params := defaultRetryParams(t, store, tracker)
+		params.HostPool = hp
+
+		HandleRetryTimer(state, "ISS-FULL", params)
+
+		// Not dispatched.
+		if _, ok := state.Running["ISS-FULL"]; ok {
+			t.Error("Running[ISS-FULL] present, want absent (no SSH capacity)")
+		}
+
+		// Rescheduled with backoff.
+		entry, ok := state.RetryAttempts["ISS-FULL"]
+		if !ok {
+			t.Fatal("RetryAttempts[ISS-FULL] missing, want rescheduled")
+		}
+		if entry.Attempt != 2 {
+			t.Errorf("rescheduled Attempt = %d, want 2", entry.Attempt)
+		}
+		if entry.Error != "no available SSH hosts" {
+			t.Errorf("rescheduled Error = %q, want %q", entry.Error, "no available SSH hosts")
+		}
+		if entry.TimerHandle != nil {
+			entry.TimerHandle.Stop()
+		}
+	})
 }
 
 func TestFindIssueByID(t *testing.T) {

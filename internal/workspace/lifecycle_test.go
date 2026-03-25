@@ -75,6 +75,46 @@ func TestHookEnv(t *testing.T) {
 	}
 }
 
+func TestHookEnv_SSHHost(t *testing.T) {
+	t.Parallel()
+
+	t.Run("with ssh host", func(t *testing.T) {
+		t.Parallel()
+
+		env := HookEnv("id-1", "PROJ-1", "/ws", 1, "worker-host")
+		if got := env["SORTIE_SSH_HOST"]; got != "worker-host" {
+			t.Errorf("SORTIE_SSH_HOST = %q, want %q", got, "worker-host")
+		}
+		if len(env) != 5 {
+			t.Errorf("env has %d keys, want 5", len(env))
+		}
+	})
+
+	t.Run("empty ssh host omitted", func(t *testing.T) {
+		t.Parallel()
+
+		env := HookEnv("id-1", "PROJ-1", "/ws", 1, "")
+		if _, ok := env["SORTIE_SSH_HOST"]; ok {
+			t.Error("SORTIE_SSH_HOST present with empty host, want absent")
+		}
+		if len(env) != 4 {
+			t.Errorf("env has %d keys, want 4", len(env))
+		}
+	})
+
+	t.Run("no ssh host arg", func(t *testing.T) {
+		t.Parallel()
+
+		env := HookEnv("id-1", "PROJ-1", "/ws", 1)
+		if _, ok := env["SORTIE_SSH_HOST"]; ok {
+			t.Error("SORTIE_SSH_HOST present without arg, want absent")
+		}
+		if len(env) != 4 {
+			t.Errorf("env has %d keys, want 4", len(env))
+		}
+	})
+}
+
 func TestPrepare(t *testing.T) {
 	t.Parallel()
 

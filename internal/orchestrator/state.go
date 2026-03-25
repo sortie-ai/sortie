@@ -149,6 +149,12 @@ type RunningEntry struct {
 	// code path to clean the actual directory instead of reconstructing
 	// it from config (which may have changed via dynamic config reload).
 	WorkspacePath string
+
+	// SSHHost is the SSH host that this worker is executing on. Empty
+	// for local execution. Used by [HandleWorkerExit] for host pool
+	// release, [RuntimeSnapshot] for observability, and the retry
+	// timer for host preference.
+	SSHHost string
 }
 
 // RetryEntry holds the runtime state for a pending retry. The persisted
@@ -163,6 +169,11 @@ type RetryEntry struct {
 	DueAtMS     int64
 	Error       string
 	TimerHandle *time.Timer
+
+	// LastSSHHost is the SSH host from the previous worker attempt.
+	// Runtime-only (not persisted to SQLite). Used by
+	// [HandleRetryTimer] to pass as preferred host to [HostPool.AcquireHost].
+	LastSSHHost string
 
 	// scheduledAt records time.Now() at the moment ScheduleRetry creates
 	// this entry. Because time.Time preserves the monotonic clock reading,
@@ -284,6 +295,7 @@ type SnapshotRunningEntry struct {
 	AgentOutputTokens  int64                 `json:"output_tokens"`
 	AgentTotalTokens   int64                 `json:"total_tokens"`
 	WorkspacePath      string                `json:"workspace_path"`
+	SSHHost            string                `json:"ssh_host,omitempty"`
 }
 
 // SnapshotRetryEntry is a read-only view of a pending retry for
@@ -375,6 +387,7 @@ func RuntimeSnapshot(state *State, now time.Time) RuntimeSnapshotResult {
 			AgentOutputTokens:  entry.AgentOutputTokens,
 			AgentTotalTokens:   entry.AgentTotalTokens,
 			WorkspacePath:      entry.WorkspacePath,
+			SSHHost:            entry.SSHHost,
 		})
 
 		if !entry.StartedAt.IsZero() {

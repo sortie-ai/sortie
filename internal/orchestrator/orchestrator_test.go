@@ -587,7 +587,7 @@ func TestMakeWorkerFn(t *testing.T) {
 			Issue:      issue,
 		}
 
-		wfn := o.makeWorkerFn("")
+		wfn := o.makeWorkerFn("", "")
 
 		exitDone := make(chan struct{})
 		go func() {
@@ -649,7 +649,7 @@ func TestMakeWorkerFn(t *testing.T) {
 			Issue:      issue,
 		}
 
-		wfn := o.makeWorkerFn("")
+		wfn := o.makeWorkerFn("", "")
 
 		exitDone := make(chan struct{})
 		go func() {
@@ -704,7 +704,7 @@ func TestMakeWorkerFn(t *testing.T) {
 			SessionID:  "resume-sess-42",
 		}
 
-		wfn := o.makeWorkerFn("resume-sess-42")
+		wfn := o.makeWorkerFn("resume-sess-42", "")
 
 		exitDone := make(chan struct{})
 		go func() {

@@ -817,7 +817,7 @@ JSON API + HTML dashboard, Prometheus `/metrics`), and adds agent capabilities.
       or other ADRs. `grep -c 'prometheus' docs/architecture.md` returns at least 3
       matches.
 
-- [ ] 8.16 Implement the SSH worker extension (architecture Appendix A): when
+- [x] 8.16 Implement the SSH worker extension (architecture Appendix A): when
       `worker.ssh_hosts` is configured, dispatch worker runs to remote hosts
       over SSH instead of launching local subprocesses. Launch the coding
       agent via SSH stdio (`ssh host agent-command`), round-robin or

@@ -501,3 +501,61 @@ func TestDashboard_HTMLEscaping(t *testing.T) {
 		t.Error("body missing HTML-escaped script tag")
 	}
 }
+
+func TestHandleDashboard_SSHHostColumn(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 3, 24, 12, 0, 0, 0, time.UTC)
+	snap := orchestrator.RuntimeSnapshotResult{
+		GeneratedAt: now,
+		Running: []orchestrator.SnapshotRunningEntry{
+			{
+				IssueID:    "id-1",
+				Identifier: "SSH-1",
+				State:      "In Progress",
+				StartedAt:  now.Add(-5 * time.Minute),
+				SSHHost:    "worker-a",
+			},
+			{
+				IssueID:    "id-2",
+				Identifier: "SSH-2",
+				State:      "In Progress",
+				StartedAt:  now.Add(-3 * time.Minute),
+				SSHHost:    "worker-b",
+			},
+		},
+	}
+
+	ts := dashboardServer(t, fixedSnapshot(snap), "0.1.0", func() int { return 4 })
+	dr := getDashboard(t, ts, "/")
+
+	for _, want := range []string{"worker-a", "worker-b", "SSH-1", "SSH-2"} {
+		if !strings.Contains(dr.Body, want) {
+			t.Errorf("body missing %q", want)
+		}
+	}
+}
+
+func TestHandleDashboard_NoSSHHostColumn(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 3, 24, 12, 0, 0, 0, time.UTC)
+	snap := orchestrator.RuntimeSnapshotResult{
+		GeneratedAt: now,
+		Running: []orchestrator.SnapshotRunningEntry{
+			{
+				IssueID:    "id-1",
+				Identifier: "LOCAL-1",
+				State:      "In Progress",
+				StartedAt:  now.Add(-5 * time.Minute),
+			},
+		},
+	}
+
+	ts := dashboardServer(t, fixedSnapshot(snap), "0.1.0", func() int { return 4 })
+	dr := getDashboard(t, ts, "/")
+
+	if !strings.Contains(dr.Body, "LOCAL-1") {
+		t.Error("body missing LOCAL-1")
+	}
+}

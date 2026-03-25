@@ -31,6 +31,7 @@ type spyMetrics struct {
 	handoffTransitions   []string
 	pollDurations        []float64
 	workerDurations      []workerDurCall
+	sshHostUsage         []sshHostUsageCall
 }
 
 type tokenCall struct {
@@ -46,6 +47,11 @@ type trackerReqCall struct {
 type workerDurCall struct {
 	exitType string
 	seconds  float64
+}
+
+type sshHostUsageCall struct {
+	host  string
+	count int
 }
 
 var _ domain.Metrics = (*spyMetrics)(nil)
@@ -140,6 +146,12 @@ func (s *spyMetrics) ObserveWorkerDuration(exitType string, seconds float64) {
 	s.workerDurations = append(s.workerDurations, workerDurCall{exitType, seconds})
 }
 
+func (s *spyMetrics) SetSSHHostUsage(host string, count int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.sshHostUsage = append(s.sshHostUsage, sshHostUsageCall{host, count})
+}
+
 // --- Tests ---
 
 func TestActiveElapsedSeconds(t *testing.T) {
@@ -216,8 +228,9 @@ func TestUpdateGauges(t *testing.T) {
 	state.RetryAttempts["B-1"] = &RetryEntry{IssueID: "B-1"}
 
 	o := &Orchestrator{
-		state:   state,
-		metrics: spy,
+		state:    state,
+		metrics:  spy,
+		hostPool: NewHostPool(nil, 0),
 	}
 	o.updateGauges(now)
 
@@ -234,6 +247,47 @@ func TestUpdateGauges(t *testing.T) {
 	// 30 + 60 = 90
 	if len(spy.activeSessionElapsed) != 1 || spy.activeSessionElapsed[0] != 90 {
 		t.Errorf("SetActiveSessionsElapsed calls = %v, want [90]", spy.activeSessionElapsed)
+	}
+	// No SSH hosts configured → no SetSSHHostUsage calls.
+	if len(spy.sshHostUsage) != 0 {
+		t.Errorf("SetSSHHostUsage calls = %v, want empty (local mode)", spy.sshHostUsage)
+	}
+}
+
+func TestUpdateGauges_SSH(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 6, 1, 12, 0, 0, 0, time.UTC)
+	spy := &spyMetrics{}
+
+	hp := NewHostPool([]string{"host-a", "host-b"}, 2)
+	hp.AcquireHost("ISS-1", "host-a")
+	hp.AcquireHost("ISS-2", "host-a")
+	hp.AcquireHost("ISS-3", "host-b")
+
+	state := NewState(5000, 4, nil, AgentTotals{})
+
+	o := &Orchestrator{
+		state:    state,
+		metrics:  spy,
+		hostPool: hp,
+	}
+	o.updateGauges(now)
+
+	// Should have 2 calls — one per host.
+	if len(spy.sshHostUsage) != 2 {
+		t.Fatalf("SetSSHHostUsage call count = %d, want 2", len(spy.sshHostUsage))
+	}
+
+	usageMap := make(map[string]int)
+	for _, c := range spy.sshHostUsage {
+		usageMap[c.host] = c.count
+	}
+	if usageMap["host-a"] != 2 {
+		t.Errorf("host-a usage = %d, want 2", usageMap["host-a"])
+	}
+	if usageMap["host-b"] != 1 {
+		t.Errorf("host-b usage = %d, want 1", usageMap["host-b"])
 	}
 }
 
@@ -553,8 +607,10 @@ func TestHandleRetryTimerMetrics(t *testing.T) {
 			ActiveStates:      []string{"To Do"},
 			TerminalStates:    []string{"Done"},
 			MaxRetryBackoffMS: 300_000,
-			WorkerFn: func(_ context.Context, _ domain.Issue, _ *int) {
-				// no-op worker
+			MakeWorkerFn: func(_, _ string) WorkerFunc {
+				return func(_ context.Context, _ domain.Issue, _ *int) {
+					// no-op worker
+				}
 			},
 			OnRetryFire: noopRetryFire,
 			Logger:      discardLogger(),

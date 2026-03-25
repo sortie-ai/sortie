@@ -48,8 +48,10 @@ type HandleRetryTimerParams struct {
 	// a retry after fetch failure or slot exhaustion.
 	MaxRetryBackoffMS int
 
-	// WorkerFn is the worker function to pass to [DispatchIssue].
-	WorkerFn WorkerFunc
+	// MakeWorkerFn constructs a [WorkerFunc] for the given resume
+	// session ID and SSH host. Replaces the former WorkerFn field to
+	// allow the retry handler to pass the acquired SSH host at fire time.
+	MakeWorkerFn func(resumeSessionID string, sshHost string) WorkerFunc
 
 	// OnRetryFire is the callback for re-scheduled retry timers.
 	// Routes back into the event loop.
@@ -71,6 +73,10 @@ type HandleRetryTimerParams struct {
 	// Metrics records instrumentation counters for retry timer events.
 	// If nil, defaults to [domain.NoopMetrics].
 	Metrics domain.Metrics
+
+	// HostPool is the SSH host pool for host acquisition on retry.
+	// May be nil (local mode).
+	HostPool *HostPool
 }
 
 // HandleRetryTimer processes a retry timer event for the given issue.
@@ -251,11 +257,45 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 		return
 	}
 
+	// Step 4b: Acquire SSH host with preference from the previous attempt.
+	var host string
+	if params.HostPool != nil && params.HostPool.IsSSHEnabled() {
+		var ok bool
+		host, ok = params.HostPool.AcquireHost(issueID, popped.LastSSHHost)
+		if !ok {
+			nextAttempt := popped.Attempt + 1
+			delayMS := computeBackoffDelay(nextAttempt, params.MaxRetryBackoffMS)
+
+			log.Warn("no available SSH hosts, rescheduling retry",
+				slog.Int("attempt", nextAttempt),
+				slog.Int64("delay_ms", delayMS),
+			)
+
+			ScheduleRetry(state, ScheduleRetryParams{
+				IssueID:    issueID,
+				Identifier: popped.Identifier,
+				Attempt:    nextAttempt,
+				DelayMS:    delayMS,
+				Error:      "no available SSH hosts",
+			}, params.OnRetryFire)
+
+			persistRetryEntry(ctx, log, params.Store, state, issueID)
+			metrics.IncRetries(triggerTimer)
+			return
+		}
+	}
+
+	// Resolve resume session ID from the running entry's session (if any).
+	resumeSessionID := ""
+	if params.MakeWorkerFn == nil {
+		panic("HandleRetryTimer: nil MakeWorkerFn")
+	}
+
 	// Step 5: Dispatch the issue with the popped entry's attempt number.
 	// Pass the popped attempt as-is; NextAttempt increments only on the
 	// next worker exit, not at dispatch time.
 	attempt := popped.Attempt
-	DispatchIssue(ctx, state, issue, &attempt, params.WorkerFn)
+	DispatchIssue(ctx, state, issue, &attempt, host, params.MakeWorkerFn(resumeSessionID, host))
 	metrics.IncDispatches(outcomeSuccess)
 
 	log.Info("retried issue dispatched",

@@ -69,6 +69,7 @@ type OrchestratorParams struct {
 	Observers       []Observer           // may be nil/empty
 	Metrics         domain.Metrics       // may be nil; defaults to NoopMetrics
 	ToolRegistry    *domain.ToolRegistry // may be nil
+	HostPool        *HostPool            // may be nil; defaults to local-mode pool
 }
 
 // Orchestrator owns the poll-and-dispatch event loop and all runtime
@@ -96,6 +97,7 @@ type Orchestrator struct {
 	drainTimeout    time.Duration
 	toolRegistry    *domain.ToolRegistry
 	preflightOK     atomic.Bool
+	hostPool        *HostPool
 }
 
 // NewOrchestrator creates an [Orchestrator] with all dependencies wired.
@@ -121,6 +123,27 @@ func NewOrchestrator(params OrchestratorParams) *Orchestrator {
 	retryBuf := max(maxConc*2, 64, len(params.State.RetryAttempts))
 	eventBuf := max(maxConc*16, 256)
 
+	hostPool := params.HostPool
+	if hostPool == nil {
+		hostPool = NewHostPool(nil, 0)
+	}
+
+	if hostPool.IsSSHEnabled() {
+		snap := hostPool.Snapshot()
+		logger.Info("SSH worker mode enabled",
+			slog.Int("host_count", len(snap)),
+			slog.Int("max_per_host", hostPool.maxPerHost),
+		)
+	} else {
+		// Warn if max_concurrent_agents_per_host is set without ssh_hosts.
+		cfg := params.WorkflowManager.Config()
+		if worker, ok := cfg.Extensions["worker"].(map[string]any); ok {
+			if _, hasMax := worker["max_concurrent_agents_per_host"]; hasMax {
+				logger.Warn("max_concurrent_agents_per_host has no effect without worker.ssh_hosts")
+			}
+		}
+	}
+
 	o := &Orchestrator{
 		state:           params.State,
 		logger:          logger,
@@ -138,6 +161,7 @@ func NewOrchestrator(params OrchestratorParams) *Orchestrator {
 		observers:       observers,
 		drainTimeout:    defaultDrainTimeout,
 		toolRegistry:    params.ToolRegistry,
+		hostPool:        hostPool,
 	}
 	// Startup preflight must have passed for the orchestrator to be
 	// constructed, so the initial value is true.
@@ -185,6 +209,7 @@ func (o *Orchestrator) Run(ctx context.Context) {
 				HandoffState:      cfg.Tracker.HandoffState,
 				ActiveStates:      cfg.Tracker.ActiveStates,
 				Metrics:           o.metrics,
+				HostPool:          o.hostPool,
 			})
 			o.updateGauges(time.Now())
 			o.notifyObservers()
@@ -197,12 +222,13 @@ func (o *Orchestrator) Run(ctx context.Context) {
 				ActiveStates:      cfg.Tracker.ActiveStates,
 				TerminalStates:    cfg.Tracker.TerminalStates,
 				MaxRetryBackoffMS: cfg.Agent.MaxRetryBackoffMS,
-				WorkerFn:          o.makeWorkerFn(""),
+				MakeWorkerFn:      o.makeWorkerFn,
 				OnRetryFire:       o.onRetryFire,
 				Ctx:               ctx,
 				Logger:            o.logger,
 				MaxSessions:       cfg.Agent.MaxSessions,
 				Metrics:           o.metrics,
+				HostPool:          o.hostPool,
 			})
 			o.updateGauges(time.Now())
 			o.notifyObservers()
@@ -228,6 +254,12 @@ func (o *Orchestrator) updateGauges(now time.Time) {
 	o.metrics.SetRetryingSessions(len(o.state.RetryAttempts))
 	o.metrics.SetAvailableSlots(GlobalAvailableSlots(o.state.MaxConcurrentAgents, len(o.state.Running)))
 	o.metrics.SetActiveSessionsElapsed(ActiveElapsedSeconds(o.state, now))
+
+	if o.hostPool.IsSSHEnabled() {
+		for host, count := range o.hostPool.Snapshot() {
+			o.metrics.SetSSHHostUsage(host, count)
+		}
+	}
 }
 
 // handleTick executes a single poll-and-dispatch cycle: preflight,
@@ -265,6 +297,10 @@ func (o *Orchestrator) handleTick(ctx context.Context) {
 	o.state.PollIntervalMS = cfg.Polling.IntervalMS
 	o.state.MaxConcurrentAgents = cfg.Agent.MaxConcurrentAgents
 	o.state.MaxConcurrentByState = cfg.Agent.MaxConcurrentByState
+
+	// Step 3b: update host pool from config extensions.
+	sshHosts, maxPerHost := parseWorkerConfig(cfg.Extensions)
+	o.hostPool.Update(sshHosts, maxPerHost)
 
 	// Step 4: reconcile running issues with fresh config. Runs
 	// unconditionally so in-flight workers are monitored even when
@@ -319,13 +355,20 @@ func (o *Orchestrator) handleTick(ctx context.Context) {
 		if GlobalAvailableSlots(o.state.MaxConcurrentAgents, len(o.state.Running)) == 0 {
 			break
 		}
+		if o.hostPool.IsSSHEnabled() && !o.hostPool.HasCapacity() {
+			break
+		}
 		if !HasAvailableSlots(o.state, issue.State) {
 			continue
 		}
 		if !ShouldDispatchWithSets(issue, o.state, activeSet, terminalSet) {
 			continue
 		}
-		DispatchIssue(ctx, o.state, issue, nil, o.makeWorkerFn(""))
+		host, ok := o.hostPool.AcquireHost(issue.ID, "")
+		if !ok {
+			break
+		}
+		DispatchIssue(ctx, o.state, issue, nil, host, o.makeWorkerFn("", host))
 		o.metrics.IncDispatches(outcomeSuccess)
 		dispatched++
 	}
@@ -346,7 +389,7 @@ func (o *Orchestrator) handleTick(ctx context.Context) {
 // delivery. The resumeSessionID must be read by the caller (on the
 // event loop goroutine) before the goroutine starts, to avoid a
 // data race on the Running map.
-func (o *Orchestrator) makeWorkerFn(resumeSessionID string) WorkerFunc {
+func (o *Orchestrator) makeWorkerFn(resumeSessionID string, sshHost string) WorkerFunc {
 	return func(ctx context.Context, issue domain.Issue, attempt *int) {
 
 		logger := logging.WithIssue(o.logger, issue.ID, issue.Identifier)
@@ -371,6 +414,7 @@ func (o *Orchestrator) makeWorkerFn(resumeSessionID string) WorkerFunc {
 			ResumeSessionID: resumeSessionID,
 			Logger:          logger,
 			ToolRegistry:    o.toolRegistry,
+			SSHHost:         sshHost,
 		}
 
 		RunWorkerAttempt(ctx, issue, attempt, deps)
@@ -465,6 +509,7 @@ func (o *Orchestrator) drainRunningWorkers() {
 				HandoffState:      cfg.Tracker.HandoffState,
 				ActiveStates:      cfg.Tracker.ActiveStates,
 				Metrics:           o.metrics,
+				HostPool:          o.hostPool,
 			})
 			o.updateGauges(time.Now())
 			o.notifyObservers()

@@ -54,6 +54,15 @@ type sessionState struct {
 	agentConfig     domain.AgentConfig
 	turnCount       int
 
+	// sshHost is the SSH destination for remote execution. Empty for
+	// local mode.
+	sshHost string
+
+	// remoteCommand is the agent command to run on the remote host
+	// when sshHost is non-empty. Empty for local mode. The local
+	// command field holds the resolved path to the ssh binary.
+	remoteCommand string
+
 	// mu guards proc and waitCh for concurrent access from
 	// StopSession and gracefulKill.
 	mu     sync.Mutex
@@ -109,12 +118,34 @@ func (a *ClaudeCodeAdapter) StartSession(_ context.Context, params domain.StartS
 	if command == "" {
 		command = "claude"
 	}
-	resolvedPath, err := exec.LookPath(command)
-	if err != nil {
-		return domain.Session{}, &domain.AgentError{
-			Kind:    domain.ErrAgentNotFound,
-			Message: fmt.Sprintf("agent command %q not found", command),
-			Err:     err,
+
+	var resolvedPath string
+	var sshHost string
+	var remoteCommand string
+
+	if params.SSHHost != "" {
+		// SSH mode: resolve "ssh" locally, skip local LookPath for
+		// the agent command (it resolves on the remote host).
+		sshPath, lookErr := exec.LookPath("ssh")
+		if lookErr != nil {
+			return domain.Session{}, &domain.AgentError{
+				Kind:    domain.ErrAgentNotFound,
+				Message: "ssh binary not found on orchestrator host",
+				Err:     lookErr,
+			}
+		}
+		resolvedPath = sshPath
+		sshHost = params.SSHHost
+		remoteCommand = command
+	} else {
+		var lookErr error
+		resolvedPath, lookErr = exec.LookPath(command)
+		if lookErr != nil {
+			return domain.Session{}, &domain.AgentError{
+				Kind:    domain.ErrAgentNotFound,
+				Message: fmt.Sprintf("agent command %q not found", command),
+				Err:     lookErr,
+			}
 		}
 	}
 
@@ -133,6 +164,8 @@ func (a *ClaudeCodeAdapter) StartSession(_ context.Context, params domain.StartS
 		claudeSessionID: sessionUUID,
 		isContinuation:  isContinuation,
 		agentConfig:     params.AgentConfig,
+		sshHost:         sshHost,
+		remoteCommand:   remoteCommand,
 	}
 
 	return domain.Session{
@@ -169,7 +202,13 @@ func (a *ClaudeCodeAdapter) RunTurn(ctx context.Context, session domain.Session,
 
 	args := buildArgs(state, params.Prompt, a.passthrough)
 
-	cmd := exec.Command(state.command, args...) //nolint:gosec,noctx // args are constructed programmatically; context cancellation handled via gracefulKill goroutine
+	var cmd *exec.Cmd
+	if state.sshHost != "" {
+		sshArgs := buildSSHArgs(state.sshHost, state.workspacePath, state.remoteCommand, args)
+		cmd = exec.Command(state.command, sshArgs...) //nolint:gosec,noctx // args are constructed programmatically with shell quoting; context cancellation handled via gracefulKill goroutine
+	} else {
+		cmd = exec.Command(state.command, args...) //nolint:gosec,noctx // args are constructed programmatically; context cancellation handled via gracefulKill goroutine
+	}
 	cmd.Dir = state.workspacePath
 	cmd.Env = os.Environ()
 
