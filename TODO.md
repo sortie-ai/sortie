@@ -1047,7 +1047,7 @@ Documentation, security guidance, and public release preparation.
       `sortie validate` subcommand, and any adapter-specific configuration discovered during
       end-to-end testing. Add a migration/changelog section noting any schema changes since the
       initial draft. Ensure every field, hook, template variable, error code, and adapter
-      extension documented in the architecture spec has a  corresponding entry. This is the
+      extension documented in the architecture spec has a corresponding entry. This is the
       production-quality reference that README.md (11.6) will link to as the definitive WORKFLOW.md
       documentation.
       **Verify:** the reference covers 100% of config fields from architecture Section 6.4,

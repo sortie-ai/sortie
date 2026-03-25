@@ -1426,12 +1426,15 @@ func TestHandleWorkerExit_RetryableErrorLogsWarn(t *testing.T) {
 	}, params)
 
 	out := buf.String()
+	expectedDelayMs := computeBackoffDelay(NextAttempt(nil), params.MaxRetryBackoffMS)
 	for _, want := range []string{
 		"level=WARN",
 		`msg="worker run failed, scheduling retry"`,
 		"next_attempt=1",
-		"delay_ms=10000",
+		fmt.Sprintf("delay_ms=%d", expectedDelayMs),
 		"timed out",
+		"issue_id=LOGW-1",
+		"issue_identifier=LOGW-1-ident",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("log output missing %q\ngot: %s", want, out)
@@ -1469,6 +1472,8 @@ func TestHandleWorkerExit_NonRetryableErrorLogsError(t *testing.T) {
 		"level=ERROR",
 		`msg="worker run failed, non-retryable, releasing claim"`,
 		"binary missing",
+		"issue_id=LOGE-1",
+		"issue_identifier=LOGE-1-ident",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("log output missing %q\ngot: %s", want, out)
