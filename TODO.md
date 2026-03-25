@@ -750,7 +750,7 @@ JSON API + HTML dashboard, Prometheus `/metrics`), and adds agent capabilities.
       **Verify:** integration test with mock tracker confirms tool is advertised, successful
       query returns data, API error preserves body, and tool is scoped to configured project.
 
-- [ ] 8.12 Implement `.sortie/status` workspace file reading (Section 21): after each turn
+- [ ] 8.12 **REJECTED**. Implement `.sortie/status` workspace file reading (Section 21): after each turn
       completes, read `.sortie/status` from the workspace root. If value is `blocked` or
       `needs-human-review`, do not schedule continuation retries until the issue state changes
       in the tracker. Unknown or absent values are ignored. This is advisory only and does not
@@ -759,16 +759,24 @@ JSON API + HTML dashboard, Prometheus `/metrics`), and adds agent capabilities.
       confirms no continuation retry is scheduled. A second test with an absent file confirms
       normal continuation behavior.
 
-- [ ] 8.13 Log a structured ERROR on worker run failure in `HandleWorkerExit`: when a
-      worker exits with a non-nil error or a failed status, emit an ERROR log line with
-      `issue_id`, `issue_identifier`, and `error` fields. Currently `HandleWorkerExit`
-      records the failure in `run_history` but emits no log entry, so run failures are
-      invisible in the log stream and require a SQLite query to diagnose. Discovered
-      during E2E testing in Milestone 7.
-      **Verify:** unit test confirms an ERROR log line with `issue_id`,
-      `issue_identifier`, and `error` fields is emitted when `HandleWorkerExit`
-      processes a failed result. A second test confirms no ERROR is logged on a
-      successful (normal) exit.
+- [x] 8.13 Add worker failure logging to `HandleWorkerExit` with severity
+      aligned to the orchestrator's retry decision. Currently the
+      `default` branch (WorkerExitError) records failures in `run_history`
+      but emits no log, so worker errors are invisible without a SQLite
+      query. Add two log lines, one per decision path:
+      - WARN for retryable errors (system is recovering): include `error`,
+        `next_attempt`, and computed `delay_ms` so operators can assess
+        backoff progression without alarm.
+      - ERROR for non-retryable errors (system is giving up): include
+        `error`. This replaces the existing "non-retryable worker error,
+        releasing claim" log which already uses ERROR — reword it to
+        include "worker run failed" for grep consistency, do not downgrade.
+      Log level reflects the orchestrator's decision, not the raw error.
+      Retryable = expected, WARN. Non-retryable = needs attention, ERROR.
+      **Verify:** unit test confirms WARN with `error`, `next_attempt`,
+      `delay_ms` on retryable failure. Unit test confirms ERROR with
+      `error` on non-retryable failure. Unit test confirms no WARN/ERROR
+      on normal exit.
 
 - [ ] 8.14 Add `/livez` and `/readyz` health endpoints to the HTTP server,
       following the Kubernetes z-pages convention (kube-apiserver, etcd,
@@ -1035,13 +1043,13 @@ Documentation, security guidance, and public release preparation.
 
 - [ ] 11.5 Finalize `docs/workflow-reference.md`: update the reference written in task 7.14
       to reflect all features implemented through Milestones 7–11 — including `tracker_api`
-      tool extension (8.11), `.sortie/status` file (8.12), workspace TTL cleanup and
-      `workspace.retention_days` (10.2), `sortie validate` subcommand, and any adapter-specific
-      configuration discovered during end-to-end testing. Add a migration/changelog section
-      noting any schema changes since the initial draft. Ensure every field, hook, template
-      variable, error code, and adapter extension documented in the architecture spec has a
-      corresponding entry. This is the production-quality reference that README.md (11.6)
-      will link to as the definitive WORKFLOW.md documentation.
+      tool extension (8.11), workspace TTL cleanup and `workspace.retention_days` (10.2),
+      `sortie validate` subcommand, and any adapter-specific configuration discovered during
+      end-to-end testing. Add a migration/changelog section noting any schema changes since the
+      initial draft. Ensure every field, hook, template variable, error code, and adapter
+      extension documented in the architecture spec has a  corresponding entry. This is the
+      production-quality reference that README.md (11.6) will link to as the definitive WORKFLOW.md
+      documentation.
       **Verify:** the reference covers 100% of config fields from architecture Section 6.4,
       all extensions added in Milestones 8–11, and includes at least three complete annotated
       examples (minimal, production Jira+Claude Code, self-hosting). A new user can write a
@@ -1095,20 +1103,7 @@ Documentation, security guidance, and public release preparation.
       every endpoint has a request example, response shape, and at least one `curl`
       example. A reviewer can call any endpoint without reading source code.
 
-- [ ] 11.11 Write the agent extensions reference for https://docs.sortie-ai.com/
-      (`reference/agent-extensions.md`). Cover the `.sortie/status` file protocol
-      (recognized values: `blocked`, `needs-human-review`; effect on continuation
-      retry scheduling; absent and unknown-value handling) and the `tracker_api`
-      tool (available operations, request/response format, project scoping, failure
-      envelope). Audience: workflow authors writing prompt templates who need to
-      know what capabilities the agent has and what signals it can send back to the
-      orchestrator. Depends on: 8.11, 8.12.
-      **Verify:** document lists every recognized `.sortie/status` value with its
-      orchestrator effect; lists every `tracker_api` operation with request and
-      response shape. A workflow author can use both features without reading source
-      code.
-
-- [ ] 11.12 Write the Prometheus monitoring how-to guide for
+- [ ] 11.11 Write the Prometheus monitoring how-to guide for
       https://docs.sortie-ai.com/ (`guides/monitor-with-prometheus.md`). Cover: how
       to enable the `/metrics` endpoint via `--port`, how to add Sortie as a
       Prometheus scrape target (complete `prometheus.yml` snippet), how to import

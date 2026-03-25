@@ -322,6 +322,12 @@ func HandleWorkerExit(state *State, result WorkerResult, params HandleWorkerExit
 			nextAttempt := NextAttempt(entry.RetryAttempt)
 			delayMS := computeBackoffDelay(nextAttempt, params.MaxRetryBackoffMS)
 
+			log.Warn("worker run failed, scheduling retry",
+				slog.Any("error", result.Error),
+				slog.Int("next_attempt", nextAttempt),
+				slog.Int64("delay_ms", delayMS),
+			)
+
 			var errMsg string
 			if result.Error != nil {
 				errMsg = "worker exited: " + result.Error.Error()
@@ -337,7 +343,7 @@ func HandleWorkerExit(state *State, result WorkerResult, params HandleWorkerExit
 			metrics.IncRetries(triggerError)
 			retryScheduled = true
 		} else {
-			log.Error("non-retryable worker error, releasing claim",
+			log.Error("worker run failed, non-retryable, releasing claim",
 				slog.Any("error", result.Error),
 			)
 			delete(state.Claimed, result.IssueID)

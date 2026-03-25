@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -1403,5 +1404,104 @@ func TestHandleWorkerExit_PendingCleanupSkipsWhenNoWorkspacePath(t *testing.T) {
 	// Claim handling proceeds normally (cancelled exit releases claim).
 	if _, ok := state.Claimed["NOWSP-1"]; ok {
 		t.Error("claim not released after cancelled exit")
+	}
+}
+
+func TestHandleWorkerExit_RetryableErrorLogsWarn(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	store := &mockExitStore{}
+	state := exitState(t, "LOGW-1", nil)
+	params := defaultExitParams(t, store)
+	params.Logger = debugLogger(t, &buf)
+
+	HandleWorkerExit(state, WorkerResult{
+		IssueID:       "LOGW-1",
+		Identifier:    "LOGW-1-ident",
+		ExitKind:      WorkerExitError,
+		Error:         &domain.AgentError{Kind: domain.ErrTurnTimeout, Message: "timed out"},
+		AgentAdapter:  "mock",
+		WorkspacePath: "/tmp/ws",
+	}, params)
+
+	out := buf.String()
+	for _, want := range []string{
+		"level=WARN",
+		`msg="worker run failed, scheduling retry"`,
+		"next_attempt=1",
+		"delay_ms=10000",
+		"timed out",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("log output missing %q\ngot: %s", want, out)
+		}
+	}
+
+	// No "worker run failed" at ERROR level.
+	for _, line := range strings.Split(out, "\n") {
+		if strings.Contains(line, "level=ERROR") && strings.Contains(line, "worker run failed") {
+			t.Errorf("unexpected ERROR log with 'worker run failed':\n%s", line)
+		}
+	}
+}
+
+func TestHandleWorkerExit_NonRetryableErrorLogsError(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	store := &mockExitStore{}
+	state := exitState(t, "LOGE-1", nil)
+	params := defaultExitParams(t, store)
+	params.Logger = debugLogger(t, &buf)
+
+	HandleWorkerExit(state, WorkerResult{
+		IssueID:       "LOGE-1",
+		Identifier:    "LOGE-1-ident",
+		ExitKind:      WorkerExitError,
+		Error:         &domain.AgentError{Kind: domain.ErrAgentNotFound, Message: "binary missing"},
+		AgentAdapter:  "mock",
+		WorkspacePath: "/tmp/ws",
+	}, params)
+
+	out := buf.String()
+	for _, want := range []string{
+		"level=ERROR",
+		`msg="worker run failed, non-retryable, releasing claim"`,
+		"binary missing",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("log output missing %q\ngot: %s", want, out)
+		}
+	}
+
+	// No "worker run failed" at WARN level.
+	for _, line := range strings.Split(out, "\n") {
+		if strings.Contains(line, "level=WARN") && strings.Contains(line, "worker run failed") {
+			t.Errorf("unexpected WARN log with 'worker run failed':\n%s", line)
+		}
+	}
+}
+
+func TestHandleWorkerExit_NormalExitNoWorkerFailedLog(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	store := &mockExitStore{}
+	state := exitState(t, "LOGN-1", nil)
+	params := defaultExitParams(t, store)
+	params.Logger = debugLogger(t, &buf)
+
+	HandleWorkerExit(state, WorkerResult{
+		IssueID:       "LOGN-1",
+		Identifier:    "LOGN-1-ident",
+		ExitKind:      WorkerExitNormal,
+		AgentAdapter:  "mock",
+		WorkspacePath: "/tmp/ws",
+	}, params)
+
+	out := buf.String()
+	if strings.Contains(out, "worker run failed") {
+		t.Errorf("normal exit should not emit 'worker run failed' log\ngot: %s", out)
 	}
 }
