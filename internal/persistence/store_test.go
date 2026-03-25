@@ -1493,7 +1493,7 @@ func TestCountRunHistoryByIssue(t *testing.T) {
 	})
 }
 
-// --- Health check tests (Spec 8.14) ---
+// --- Health check tests ---
 
 func TestPing_OpenStore(t *testing.T) {
 	t.Parallel()

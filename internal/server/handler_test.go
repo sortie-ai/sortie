@@ -656,7 +656,6 @@ func TestHandleRefresh(t *testing.T) {
 		}
 	})
 
-	// Spec 8.17: refresh returns 409 Conflict during drain.
 	t.Run("rejected during drain", func(t *testing.T) {
 		t.Parallel()
 
@@ -821,7 +820,7 @@ func TestWriteJSONMarshalFailure(t *testing.T) {
 	}
 }
 
-// --- Health endpoint tests (Spec 8.14) ---
+// --- Health endpoint tests ---
 
 // testHealthServer creates a server with configurable health-check functions.
 func testHealthServer(t *testing.T, opts ...func(*Params)) *httptest.Server {

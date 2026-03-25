@@ -418,7 +418,7 @@ func TestNewOrchestrator(t *testing.T) {
 	})
 }
 
-// --- PreflightOK tests (Spec 8.14) ---
+// --- PreflightOK tests ---
 
 func TestPreflightOK_InitialValue(t *testing.T) {
 	t.Parallel()
@@ -3102,7 +3102,6 @@ func TestRefreshFunc(t *testing.T) {
 		}
 	})
 
-	// Spec 8.17: RefreshFunc returns false when the orchestrator is draining.
 	t.Run("rejected during drain", func(t *testing.T) {
 		t.Parallel()
 

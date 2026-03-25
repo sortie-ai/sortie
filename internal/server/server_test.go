@@ -194,7 +194,7 @@ func testServerWithRegistry(t *testing.T, reg *prometheus.Registry) *httptest.Se
 	return ts
 }
 
-// --- /metrics endpoint tests (Spec 8.8, ADR-0008 Tier 3) ---
+// --- /metrics endpoint tests ---
 
 func TestMetricsEndpoint(t *testing.T) {
 	t.Parallel()
@@ -273,7 +273,7 @@ func TestMetricsEndpointMethodNotAllowed(t *testing.T) {
 	}
 }
 
-// --- Draining + Shutdown tests (Spec 8.14) ---
+// --- Draining + Shutdown tests ---
 
 func TestSetDrainingThenShutdown(t *testing.T) {
 	t.Parallel()
