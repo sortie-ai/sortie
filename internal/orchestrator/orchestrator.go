@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sync/atomic"
 	"time"
 
 	"github.com/sortie-ai/sortie/internal/config"
@@ -94,6 +95,7 @@ type Orchestrator struct {
 	observers       []Observer
 	drainTimeout    time.Duration
 	toolRegistry    *domain.ToolRegistry
+	preflightOK     atomic.Bool
 }
 
 // NewOrchestrator creates an [Orchestrator] with all dependencies wired.
@@ -119,7 +121,7 @@ func NewOrchestrator(params OrchestratorParams) *Orchestrator {
 	retryBuf := max(maxConc*2, 64, len(params.State.RetryAttempts))
 	eventBuf := max(maxConc*16, 256)
 
-	return &Orchestrator{
+	o := &Orchestrator{
 		state:           params.State,
 		logger:          logger,
 		trackerAdapter:  params.TrackerAdapter,
@@ -137,6 +139,10 @@ func NewOrchestrator(params OrchestratorParams) *Orchestrator {
 		drainTimeout:    defaultDrainTimeout,
 		toolRegistry:    params.ToolRegistry,
 	}
+	// Startup preflight must have passed for the orchestrator to be
+	// constructed, so the initial value is true.
+	o.preflightOK.Store(true)
+	return o
 }
 
 // Run enters the event loop, blocks until ctx is cancelled, and returns.
@@ -247,6 +253,7 @@ func (o *Orchestrator) handleTick(ctx context.Context) {
 	// snapshot returned by Config() below reflects the latest disk
 	// state.
 	validation := ValidateDispatchConfig(o.preflightParams)
+	o.preflightOK.Store(validation.OK())
 
 	// Step 2: read fresh config unconditionally. On reload failure
 	// the workflow manager retains last-known-good config, so
@@ -506,6 +513,12 @@ func (o *Orchestrator) notifyObservers() {
 // (i.e., never concurrently with the event loop).
 func (o *Orchestrator) AddObserver(obs Observer) {
 	o.observers = append(o.observers, obs)
+}
+
+// PreflightOK returns whether the most recent dispatch preflight
+// validation passed. Safe to call from any goroutine.
+func (o *Orchestrator) PreflightOK() bool {
+	return o.preflightOK.Load()
 }
 
 // SnapshotFunc returns a function that retrieves a point-in-time

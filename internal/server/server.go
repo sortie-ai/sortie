@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"sync/atomic"
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
@@ -31,6 +32,11 @@ type RefreshFunc func() bool
 // Called on each dashboard render to compute available slots.
 // If nil, available slots defaults to 0.
 type SlotFunc func() int
+
+// DBPingFunc checks whether the SQLite database is accessible.
+// Returns nil on success, an error on failure. Called on each
+// GET /readyz request.
+type DBPingFunc func(ctx context.Context) error
 
 // Params holds construction-time dependencies for [New].
 type Params struct {
@@ -66,6 +72,20 @@ type Params struct {
 	// Obtain via [PromMetrics.Registry]. When nil, /metrics is
 	// not registered.
 	MetricsRegistry *prometheus.Registry
+
+	// DBPingFn checks database accessibility for /readyz.
+	// When nil, the database check always reports "pass".
+	DBPingFn DBPingFunc
+
+	// PreflightFn returns the result of the most recent dispatch
+	// preflight validation. Called on each GET /readyz request.
+	// When nil, the preflight check always reports "pass".
+	PreflightFn func() bool
+
+	// WorkflowLoadedFn returns whether the workflow file has been
+	// successfully loaded at least once. Called on each GET /readyz.
+	// When nil, the workflow check always reports "pass".
+	WorkflowLoadedFn func() bool
 }
 
 // Server is the embedded HTTP server for JSON API, dashboard, and
@@ -81,6 +101,11 @@ type Server struct {
 	version       string
 	startedAt     time.Time
 	slotFunc      SlotFunc
+
+	drainingFlag     atomic.Bool
+	dbPingFn         DBPingFunc
+	preflightFn      func() bool
+	workflowLoadedFn func() bool
 }
 
 // Compile-time assertion: Server satisfies orchestrator.Observer.
@@ -111,19 +136,27 @@ func New(params Params) *Server {
 	)
 
 	s := &Server{
-		mux:           mux,
-		logger:        logger,
-		snapshotFn:    params.SnapshotFn,
-		refreshFn:     params.RefreshFn,
-		dashboardTmpl: tmpl,
-		version:       params.Version,
-		startedAt:     params.StartedAt,
-		slotFunc:      params.SlotFunc,
+		mux:              mux,
+		logger:           logger,
+		snapshotFn:       params.SnapshotFn,
+		refreshFn:        params.RefreshFn,
+		dashboardTmpl:    tmpl,
+		version:          params.Version,
+		startedAt:        params.StartedAt,
+		slotFunc:         params.SlotFunc,
+		dbPingFn:         params.DBPingFn,
+		preflightFn:      params.PreflightFn,
+		workflowLoadedFn: params.WorkflowLoadedFn,
 	}
 
 	// Dashboard route. Method-specific pattern so non-GET methods
 	// receive the default 405 response from Go's ServeMux.
 	mux.HandleFunc("GET /{$}", s.handleDashboard)
+
+	// Health probe routes. Method-specific patterns ensure non-GET
+	// methods receive the default 405 response from Go's ServeMux.
+	mux.HandleFunc("GET /livez", s.handleLivez)
+	mux.HandleFunc("GET /readyz", s.handleReadyz)
 
 	// API routes. Use method-agnostic patterns with internal method
 	// checking so 405 responses use JSON error envelopes instead of
@@ -174,9 +207,19 @@ func (s *Server) Serve(ln net.Listener) error {
 }
 
 // Shutdown gracefully shuts down the server without interrupting
-// in-flight requests. Delegates to [http.Server.Shutdown].
+// in-flight requests. Sets the draining flag as defense-in-depth
+// before delegating to [http.Server.Shutdown].
 func (s *Server) Shutdown(ctx context.Context) error {
+	s.drainingFlag.Store(true)
 	return s.httpServer.Shutdown(ctx)
+}
+
+// SetDraining marks the server as draining. After this call, /livez
+// and /readyz return 503. The listener remains open so K8s probes
+// receive HTTP responses rather than connection refused. Safe to call
+// from any goroutine.
+func (s *Server) SetDraining() {
+	s.drainingFlag.Store(true)
 }
 
 // OnStateChange satisfies [orchestrator.Observer]. Currently a no-op;

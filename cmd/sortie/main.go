@@ -294,14 +294,17 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 	if serverEnabled {
 		addr := fmt.Sprintf("127.0.0.1:%d", serverPort)
 		srv = server.New(server.Params{
-			SnapshotFn:      o.SnapshotFunc(),
-			RefreshFn:       o.RefreshFunc(),
-			Logger:          logger,
-			Addr:            addr,
-			Version:         Version,
-			StartedAt:       time.Now(),
-			SlotFunc:        func() int { return mgr.Config().Agent.MaxConcurrentAgents },
-			MetricsRegistry: promMetrics.Registry(),
+			SnapshotFn:       o.SnapshotFunc(),
+			RefreshFn:        o.RefreshFunc(),
+			Logger:           logger,
+			Addr:             addr,
+			Version:          Version,
+			StartedAt:        time.Now(),
+			SlotFunc:         func() int { return mgr.Config().Agent.MaxConcurrentAgents },
+			MetricsRegistry:  promMetrics.Registry(),
+			DBPingFn:         func(ctx context.Context) error { return store.Ping(ctx) },
+			PreflightFn:      o.PreflightOK,
+			WorkflowLoadedFn: func() bool { return mgr.Config().Tracker.Kind != "" },
 		})
 		o.AddObserver(srv)
 
@@ -318,6 +321,17 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 			if err := srv.Serve(ln); err != nil && err != http.ErrServerClosed {
 				logger.Error("http server error", slog.Any("error", err))
 			}
+		}()
+	}
+
+	// Set draining flag as soon as the context is cancelled so
+	// health probes return 503 during the orchestrator's drain phase
+	// while the listener is still open.
+	if srv != nil {
+		drainSrv := srv
+		go func() {
+			<-ctx.Done()
+			drainSrv.SetDraining()
 		}()
 	}
 

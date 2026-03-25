@@ -778,7 +778,7 @@ JSON API + HTML dashboard, Prometheus `/metrics`), and adds agent capabilities.
       `error` on non-retryable failure. Unit test confirms no WARN/ERROR
       on normal exit.
 
-- [ ] 8.14 Add `/livez` and `/readyz` health endpoints to the HTTP server,
+- [x] 8.14 Add `/livez` and `/readyz` health endpoints to the HTTP server,
       following the Kubernetes z-pages convention (kube-apiserver, etcd,
       controller-manager).
       `GET /livez`: return 200 `{"status":"pass"}` when the orchestrator

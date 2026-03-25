@@ -389,3 +389,86 @@ func buildIssueDetail(identifier string, snap orchestrator.RuntimeSnapshotResult
 		Tracked:         map[string]any{},
 	}
 }
+
+// --- Health endpoint wire types ---
+
+// healthResponse is the JSON wire format for GET /livez.
+type healthResponse struct {
+	Status string `json:"status"`
+}
+
+// readyResponse is the JSON wire format for GET /readyz.
+type readyResponse struct {
+	Status        string            `json:"status"`
+	Version       string            `json:"version"`
+	UptimeSeconds float64           `json:"uptime_seconds"`
+	Checks        map[string]string `json:"checks"`
+}
+
+// --- Health endpoint handlers ---
+
+func (s *Server) handleLivez(w http.ResponseWriter, _ *http.Request) {
+	if s.drainingFlag.Load() {
+		writeJSON(w, s.logger, http.StatusServiceUnavailable, healthResponse{Status: "fail"})
+		return
+	}
+	writeJSON(w, s.logger, http.StatusOK, healthResponse{Status: "pass"})
+}
+
+func (s *Server) handleReadyz(w http.ResponseWriter, r *http.Request) {
+	uptime := time.Since(s.startedAt).Seconds()
+
+	if s.drainingFlag.Load() {
+		writeJSON(w, s.logger, http.StatusServiceUnavailable, readyResponse{
+			Status:        "fail",
+			Version:       s.version,
+			UptimeSeconds: uptime,
+			Checks: map[string]string{
+				"database":  "fail",
+				"preflight": "fail",
+				"workflow":  "fail",
+			},
+		})
+		return
+	}
+
+	status := "pass"
+	checks := map[string]string{}
+
+	if s.dbPingFn != nil {
+		if err := s.dbPingFn(r.Context()); err != nil {
+			checks["database"] = "fail"
+			status = "fail"
+		} else {
+			checks["database"] = "pass"
+		}
+	} else {
+		checks["database"] = "pass"
+	}
+
+	if s.preflightFn != nil && !s.preflightFn() {
+		checks["preflight"] = "fail"
+		status = "fail"
+	} else {
+		checks["preflight"] = "pass"
+	}
+
+	if s.workflowLoadedFn != nil && !s.workflowLoadedFn() {
+		checks["workflow"] = "fail"
+		status = "fail"
+	} else {
+		checks["workflow"] = "pass"
+	}
+
+	httpStatus := http.StatusOK
+	if status != "pass" {
+		httpStatus = http.StatusServiceUnavailable
+	}
+
+	writeJSON(w, s.logger, httpStatus, readyResponse{
+		Status:        status,
+		Version:       s.version,
+		UptimeSeconds: uptime,
+		Checks:        checks,
+	})
+}

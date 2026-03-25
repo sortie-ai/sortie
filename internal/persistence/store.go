@@ -57,3 +57,8 @@ func Open(ctx context.Context, path string) (*Store, error) {
 func (s *Store) Close() error {
 	return s.db.Close()
 }
+
+// Ping verifies the database connection is alive.
+func (s *Store) Ping(ctx context.Context) error {
+	return s.db.PingContext(ctx)
+}

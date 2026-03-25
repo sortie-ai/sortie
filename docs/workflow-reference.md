@@ -398,6 +398,8 @@ Port `0` requests an ephemeral OS-assigned port.
 
 | Method | Path                     | Description                                                        |
 | ------ | ------------------------ | ------------------------------------------------------------------ |
+| GET    | `/livez`                 | Liveness probe. Returns 200 when the event loop is responsive, 503 during graceful shutdown. No I/O. |
+| GET    | `/readyz`                | Readiness probe. Returns 200 when database, preflight, and workflow are healthy. Returns 503 with per-check status when any dependency fails. |
 | GET    | `/api/v1/state`          | System-wide runtime snapshot (running sessions, retry queue, aggregate token/runtime totals, rate limits). |
 | GET    | `/api/v1/{identifier}`   | Per-issue detail for a specific issue identifier. Returns 404 for unknown issues. |
 | POST   | `/api/v1/refresh`        | Trigger an immediate poll+reconciliation cycle. Returns 202 Accepted. Best-effort; repeated requests are coalesced. |
@@ -405,6 +407,82 @@ Port `0` requests an ephemeral OS-assigned port.
 All responses use `Content-Type: application/json; charset=utf-8`. Error responses
 use a standard envelope: `{"error": {"code": "...", "message": "..."}}`.
 Unsupported methods return 405 with the error envelope.
+
+#### Health Endpoints
+
+Sortie exposes Kubernetes z-pages health endpoints (`/livez` and `/readyz`) for liveness
+and readiness probes.
+
+**`GET /livez`** — Liveness probe. Returns 200 when the process is alive, 503 during
+graceful shutdown. No I/O; a single atomic flag check:
+
+```json
+{"status": "pass"}
+```
+
+During graceful shutdown:
+
+```json
+{"status": "fail"}
+```
+
+**`GET /readyz`** — Readiness probe. Returns 200 when all dependencies are healthy,
+503 when any check fails. Checks: SQLite database ping, dispatch preflight validation,
+workflow file loaded:
+
+```json
+{
+  "status": "pass",
+  "version": "0.4.0",
+  "uptime_seconds": 3842,
+  "checks": {
+    "database": "pass",
+    "preflight": "pass",
+    "workflow": "pass"
+  }
+}
+```
+
+When a check fails, the overall status is `"fail"` and the failing check is identified:
+
+```json
+{
+  "status": "fail",
+  "version": "0.4.0",
+  "uptime_seconds": 3842,
+  "checks": {
+    "database": "fail",
+    "preflight": "pass",
+    "workflow": "pass"
+  }
+}
+```
+
+**Draining behavior.** When `SIGTERM` arrives, Sortie sets a draining flag before the
+orchestrator begins its worker drain phase. Both `/livez` and `/readyz` return 503 once
+the flag is set. The HTTP listener remains open during drain so K8s probes receive proper
+HTTP responses. After the orchestrator drain completes, the listener closes and new
+connections are refused.
+
+**Kubernetes probe configuration.** Sortie's graceful shutdown cancels running agents
+before closing the HTTP listener. Configure `terminationGracePeriodSeconds` and liveness
+probe tolerance to exceed the expected drain duration (default: 30 seconds):
+
+```yaml
+livenessProbe:
+  httpGet:
+    path: /livez
+    port: 8642
+  periodSeconds: 10
+  failureThreshold: 6    # 60s tolerance for drain
+readinessProbe:
+  httpGet:
+    path: /readyz
+    port: 8642
+  periodSeconds: 10
+  failureThreshold: 1
+terminationGracePeriodSeconds: 90
+```
 
 ### 3.2 `worker` — SSH Worker Extension
 
