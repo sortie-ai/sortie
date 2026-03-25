@@ -199,6 +199,8 @@ func (a *JiraAdapter) FetchIssueStatesByIDs(ctx context.Context, issueIDs []stri
 
 	result := make(map[string]string, len(issueIDs))
 
+	var requested bool
+
 	for start := 0; start < len(issueIDs); start += batchSize {
 		if ctx.Err() != nil {
 			a.incTrackerRequest("fetch_states_by_ids", "error")
@@ -215,6 +217,7 @@ func (a *JiraAdapter) FetchIssueStatesByIDs(ctx context.Context, issueIDs []stri
 		if jql == "" {
 			continue
 		}
+		requested = true
 		issues, err := a.paginatedSearch(ctx, jql, "status")
 		if err != nil {
 			a.incTrackerRequest("fetch_states_by_ids", "error")
@@ -225,7 +228,9 @@ func (a *JiraAdapter) FetchIssueStatesByIDs(ctx context.Context, issueIDs []stri
 		}
 	}
 
-	a.incTrackerRequest("fetch_states_by_ids", "success")
+	if requested {
+		a.incTrackerRequest("fetch_states_by_ids", "success")
+	}
 	return result, nil
 }
 
