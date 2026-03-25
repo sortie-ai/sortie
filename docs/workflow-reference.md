@@ -402,7 +402,7 @@ Port `0` requests an ephemeral OS-assigned port.
 | GET    | `/readyz`                | Readiness probe. Returns 200 when database, preflight, and workflow are healthy. Returns 503 with per-check status when any dependency fails. |
 | GET    | `/api/v1/state`          | System-wide runtime snapshot (running sessions, retry queue, aggregate token/runtime totals, rate limits). |
 | GET    | `/api/v1/{identifier}`   | Per-issue detail for a specific issue identifier. Returns 404 for unknown issues. |
-| POST   | `/api/v1/refresh`        | Trigger an immediate poll+reconciliation cycle. Returns 202 Accepted. Best-effort; repeated requests are coalesced. |
+| POST   | `/api/v1/refresh`        | Trigger an immediate poll+reconciliation cycle. Returns 202 Accepted normally, 409 Conflict during graceful shutdown. Best-effort; repeated requests are coalesced. |
 
 All responses use `Content-Type: application/json; charset=utf-8`. Error responses
 use a standard envelope: `{"error": {"code": "...", "message": "..."}}`.
@@ -464,6 +464,37 @@ orchestrator begins its worker drain phase. Both `/livez` and `/readyz` return 5
 the flag is set. The HTTP listener remains open during drain so K8s probes receive proper
 HTTP responses. After the orchestrator drain completes, the listener closes and new
 connections are refused.
+
+#### `POST /api/v1/refresh`
+
+Triggers an immediate poll+reconciliation cycle. The endpoint is best-effort: repeated
+requests while a refresh is already pending are coalesced. During graceful shutdown the
+endpoint rejects requests with `409 Conflict`.
+
+**Normal response** — refresh signal accepted:
+
+```http
+HTTP/1.1 202 Accepted
+{"queued": true, "coalesced": false, "requested_at": "...", "operations": ["poll", "reconcile"]}
+```
+
+**Coalesced response** — a refresh was already pending:
+
+```http
+HTTP/1.1 202 Accepted
+{"queued": true, "coalesced": true, "requested_at": "...", "operations": ["poll", "reconcile"]}
+```
+
+**Drain rejection** — orchestrator is shutting down:
+
+```http
+HTTP/1.1 409 Conflict
+{"queued": false, "coalesced": false, "requested_at": "...", "operations": []}
+```
+
+Callers should check the `queued` field or HTTP status to determine whether the refresh
+will be processed. A `409` response indicates the server is draining and the caller
+should retry against another instance or wait for the restart.
 
 **Kubernetes probe configuration.** Sortie's graceful shutdown cancels running agents
 before closing the HTTP listener. Configure `terminationGracePeriodSeconds` and liveness

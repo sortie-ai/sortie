@@ -97,6 +97,7 @@ type Orchestrator struct {
 	drainTimeout    time.Duration
 	toolRegistry    *domain.ToolRegistry
 	preflightOK     atomic.Bool
+	draining        atomic.Bool
 	hostPool        *HostPool
 }
 
@@ -186,6 +187,7 @@ func (o *Orchestrator) Run(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
+			o.draining.Store(true)
 			tickTimer.Stop()
 			o.drainRunningWorkers()
 			o.cancelRetryTimers()
@@ -595,10 +597,13 @@ func (o *Orchestrator) SnapshotFunc() func() (RuntimeSnapshotResult, error) {
 // RefreshFunc returns a function that signals the orchestrator to
 // perform an immediate poll+reconciliation cycle. Returns true if the
 // signal was accepted, false if it was coalesced (a refresh was
-// already pending). The returned function is safe to call from any
-// goroutine.
+// already pending) or if the orchestrator is draining. The returned
+// function is safe to call from any goroutine.
 func (o *Orchestrator) RefreshFunc() func() bool {
 	return func() bool {
+		if o.draining.Load() {
+			return false
+		}
 		select {
 		case o.refreshCh <- struct{}{}:
 			return true

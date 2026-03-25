@@ -832,7 +832,7 @@ JSON API + HTML dashboard, Prometheus `/metrics`), and adds agent capabilities.
       to local execution. Integration test with a real SSH host confirms
       agent stdout/stderr are relayed correctly.
 
-- [ ] 8.17 Make `RefreshFunc` reject refresh requests during orchestrator drain. Add an
+- [x] 8.17 Make `RefreshFunc` reject refresh requests during orchestrator drain. Add an
       atomic draining flag that `RefreshFunc` checks before sending to `refreshCh`;
       return `false` when draining so the HTTP handler can respond with `queued: false`
       instead of `202 Accepted`. Currently the refresh signal is accepted into the

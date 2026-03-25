@@ -282,6 +282,24 @@ func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
 
 	accepted := s.refreshFn()
 
+	if !accepted && s.drainingFlag.Load() {
+		resp := refreshResponse{
+			Queued:      false,
+			Coalesced:   false,
+			RequestedAt: time.Now().UTC(),
+			Operations:  []string{},
+		}
+		writeJSON(w, s.logger, http.StatusConflict, resp)
+
+		s.logger.Debug("request served",
+			slog.String("method", r.Method),
+			slog.String("path", r.URL.Path),
+			slog.Int("status", http.StatusConflict),
+			slog.Duration("duration", time.Since(start)),
+		)
+		return
+	}
+
 	resp := refreshResponse{
 		Queued:      true,
 		Coalesced:   !accepted,
