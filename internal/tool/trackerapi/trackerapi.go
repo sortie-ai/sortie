@@ -104,6 +104,10 @@ func (t *TrackerAPITool) Execute(ctx context.Context, input json.RawMessage) (js
 		return errorResult("invalid_input", "unexpected trailing content after JSON object"), nil
 	}
 
+	if in.Operation == "" {
+		return errorResult("invalid_input", "operation is required"), nil
+	}
+
 	switch in.Operation {
 	case "fetch_issue":
 		if in.IssueID == "" {
