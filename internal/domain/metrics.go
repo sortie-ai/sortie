@@ -113,9 +113,10 @@ func (*NoopMetrics) ObservePollDuration(float64)           {}
 func (*NoopMetrics) ObserveWorkerDuration(string, float64) {}
 
 // MetricsSetter is implemented by adapters that accept a [Metrics]
-// recorder for self-instrumentation. The orchestrator wiring code
-// calls SetMetrics after adapter construction, before any operations.
-// Not safe to call concurrently with adapter operations.
+// recorder for self-instrumentation. The wiring code calls SetMetrics
+// after adapter construction, before orchestrator operations; some
+// startup cleanup calls on the adapter may run before metrics are
+// configured. Not safe to call concurrently with adapter operations.
 type MetricsSetter interface {
 	SetMetrics(m Metrics)
 }
