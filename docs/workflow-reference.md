@@ -398,7 +398,7 @@ Port `0` requests an ephemeral OS-assigned port.
 
 | Method | Path                     | Description                                                        |
 | ------ | ------------------------ | ------------------------------------------------------------------ |
-| GET    | `/livez`                 | Liveness probe. Returns 200 when the event loop is responsive, 503 during graceful shutdown. No I/O. |
+| GET    | `/livez`                 | Liveness probe. Returns 200 while the process is running and not draining, 503 during graceful shutdown. No I/O. |
 | GET    | `/readyz`                | Readiness probe. Returns 200 when database, preflight, and workflow are healthy. Returns 503 with per-check status when any dependency fails. |
 | GET    | `/api/v1/state`          | System-wide runtime snapshot (running sessions, retry queue, aggregate token/runtime totals, rate limits). |
 | GET    | `/api/v1/{identifier}`   | Per-issue detail for a specific issue identifier. Returns 404 for unknown issues. |
@@ -406,7 +406,8 @@ Port `0` requests an ephemeral OS-assigned port.
 
 All responses use `Content-Type: application/json; charset=utf-8`. Error responses
 use a standard envelope: `{"error": {"code": "...", "message": "..."}}`.
-Unsupported methods return 405 with the error envelope.
+API endpoints (`/api/v1/*`) return 405 with the JSON error envelope.
+Health probes (`/livez`, `/readyz`) return the standard HTTP 405 plain-text response.
 
 #### Health Endpoints
 

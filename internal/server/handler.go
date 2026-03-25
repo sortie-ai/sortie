@@ -416,7 +416,14 @@ func (s *Server) handleLivez(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (s *Server) handleReadyz(w http.ResponseWriter, r *http.Request) {
-	uptime := time.Since(s.startedAt).Seconds()
+	var uptime float64
+	if !s.startedAt.IsZero() {
+		d := time.Since(s.startedAt)
+		if d < 0 {
+			d = 0
+		}
+		uptime = d.Seconds()
+	}
 
 	if s.drainingFlag.Load() {
 		writeJSON(w, s.logger, http.StatusServiceUnavailable, readyResponse{
