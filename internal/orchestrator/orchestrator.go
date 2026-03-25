@@ -212,8 +212,8 @@ func (o *Orchestrator) Run(ctx context.Context) {
 }
 
 // updateGauges recomputes all point-in-time gauges from current state
-// and publishes them via the Metrics interface. Called after every
-// state mutation in the event loop.
+// and publishes them via the Metrics interface. It is called from the
+// event loop after tick handling, worker exits, and retry timer events.
 func (o *Orchestrator) updateGauges(now time.Time) {
 	o.metrics.SetRunningSessions(len(o.state.Running))
 	o.metrics.SetRetryingSessions(len(o.state.RetryAttempts))
