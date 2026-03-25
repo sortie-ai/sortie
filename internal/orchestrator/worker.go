@@ -75,8 +75,9 @@ type WorkerResult struct {
 }
 
 // WorkerDeps holds the collaborators injected into the worker attempt
-// function. All fields are required. The orchestrator constructs this
-// once and shares it across all workers.
+// function. The orchestrator constructs this once and shares it
+// across all workers. All fields are required unless documented as
+// optional (e.g. ToolRegistry).
 type WorkerDeps struct {
 	// TrackerAdapter fetches issue states for mid-turn re-checks.
 	TrackerAdapter domain.TrackerAdapter
@@ -496,17 +497,16 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 // the first turn so the agent knows what tools exist.
 func buildToolAdvertisement(reg *domain.ToolRegistry, project string) string {
 	var sb strings.Builder
-	sb.WriteString("## Sortie Tracker API Reference\n\n")
+	sb.WriteString("## Sortie Tools Reference\n\n")
 	sb.WriteString("The Sortie orchestrator provides tools for querying and modifying\n")
-	sb.WriteString("issues in the configured tracker")
+	sb.WriteString("resources in connected systems")
 	if project != "" {
-		sb.WriteString(" (project: ")
+		sb.WriteString(". When using tracker-scoped tools, the default project is ")
 		sb.WriteString(project)
-		sb.WriteString(")")
 	}
 	sb.WriteString(". Interactive tool execution\n")
-	sb.WriteString("will be available in a future version via MCP. This section documents the tool's\n")
-	sb.WriteString("API contract for reference.\n\n")
+	sb.WriteString("will be available in a future version via MCP. This section documents the tools'\n")
+	sb.WriteString("API contracts for reference.\n\n")
 
 	for _, tool := range reg.List() {
 		sb.WriteString("### ")

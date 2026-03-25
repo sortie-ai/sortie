@@ -3,6 +3,7 @@ package domain
 import (
 	"context"
 	"encoding/json"
+	"sort"
 )
 
 // AgentTool defines a client-side tool that Sortie exposes to agents
@@ -46,11 +47,17 @@ func NewToolRegistry() *ToolRegistry {
 	return &ToolRegistry{tools: make(map[string]AgentTool)}
 }
 
-// Register adds a tool to the registry. Panics if a tool with the
-// same name is already registered (programming error, not runtime
-// input).
+// Register adds a tool to the registry. Panics if tool is nil, has
+// an empty name, or a tool with the same name is already registered
+// (programming error, not runtime input).
 func (r *ToolRegistry) Register(tool AgentTool) {
+	if tool == nil {
+		panic("tool registration: tool must not be nil")
+	}
 	name := tool.Name()
+	if name == "" {
+		panic("tool registration: tool name must not be empty")
+	}
 	if _, exists := r.tools[name]; exists {
 		panic("duplicate tool registration: " + name)
 	}
@@ -64,14 +71,17 @@ func (r *ToolRegistry) Get(name string) (AgentTool, bool) {
 	return t, ok
 }
 
-// List returns all registered tools in unspecified order. The
-// returned slice is a snapshot; mutations to the registry after
-// List returns are not reflected.
+// List returns all registered tools sorted by name. The returned
+// slice is a snapshot; mutations to the registry after List returns
+// are not reflected.
 func (r *ToolRegistry) List() []AgentTool {
 	result := make([]AgentTool, 0, len(r.tools))
 	for _, t := range r.tools {
 		result = append(result, t)
 	}
+	sort.Slice(result, func(i, j int) bool {
+		return result[i].Name() < result[j].Name()
+	})
 	return result
 }
 

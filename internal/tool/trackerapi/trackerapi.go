@@ -28,9 +28,13 @@ type TrackerAPITool struct {
 }
 
 // New creates a [TrackerAPITool] scoped to the given tracker adapter
-// and project. The project parameter should be non-empty; callers
-// should skip construction when tracker.project is unconfigured.
+// and project. Panics if adapter is nil (programming error). The
+// project parameter should be non-empty; callers should skip
+// construction when tracker.project is unconfigured.
 func New(adapter domain.TrackerAdapter, project string) *TrackerAPITool {
+	if adapter == nil {
+		panic("trackerapi.New: adapter must not be nil")
+	}
 	return &TrackerAPITool{
 		adapter: adapter,
 		project: project,
@@ -90,6 +94,9 @@ func (t *TrackerAPITool) Execute(ctx context.Context, input json.RawMessage) (js
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&in); err != nil {
 		return errorResult("invalid_input", fmt.Sprintf("failed to parse input: %s", err)), nil
+	}
+	if dec.More() {
+		return errorResult("invalid_input", "unexpected trailing content after JSON object"), nil
 	}
 
 	switch in.Operation {
@@ -231,7 +238,7 @@ func (t *TrackerAPITool) isInProject(identifier string) bool {
 // Unknown errors become internal_error.
 func mapTrackerError(err error) json.RawMessage {
 	if errors.Is(err, context.Canceled) {
-		return errorResult("tracker_transport_error", "request cancelled")
+		return errorResult("tracker_transport_error", "request canceled")
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
 		return errorResult("tracker_transport_error", "deadline exceeded")
@@ -242,7 +249,7 @@ func mapTrackerError(err error) json.RawMessage {
 		return errorResult(string(te.Kind), te.Message)
 	}
 
-	return errorResult("internal_error", err.Error())
+	return errorResult("internal_error", "an unexpected internal error occurred")
 }
 
 // successResult marshals a success response envelope.

@@ -140,3 +140,67 @@ func TestToolRegistry_ListIsSnapshot(t *testing.T) {
 		t.Errorf("snapshot length changed to %d after subsequent Register, want 1", len(snapshot))
 	}
 }
+
+func TestToolRegistry_RegisterNilPanics(t *testing.T) {
+	t.Parallel()
+
+	reg := NewToolRegistry()
+
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Fatal("Register(nil) did not panic, want panic")
+		}
+		msg, ok := r.(string)
+		if !ok {
+			t.Fatalf("panic value type = %T, want string", r)
+		}
+		if msg != "tool registration: tool must not be nil" {
+			t.Errorf("panic message = %q, want %q", msg, "tool registration: tool must not be nil")
+		}
+	}()
+
+	reg.Register(nil)
+}
+
+func TestToolRegistry_RegisterEmptyNamePanics(t *testing.T) {
+	t.Parallel()
+
+	reg := NewToolRegistry()
+
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Fatal("Register(empty name) did not panic, want panic")
+		}
+		msg, ok := r.(string)
+		if !ok {
+			t.Fatalf("panic value type = %T, want string", r)
+		}
+		if msg != "tool registration: tool name must not be empty" {
+			t.Errorf("panic message = %q, want %q", msg, "tool registration: tool name must not be empty")
+		}
+	}()
+
+	reg.Register(&stubTool{name: ""})
+}
+
+func TestToolRegistry_ListIsSorted(t *testing.T) {
+	t.Parallel()
+
+	reg := NewToolRegistry()
+	reg.Register(&stubTool{name: "charlie"})
+	reg.Register(&stubTool{name: "alpha"})
+	reg.Register(&stubTool{name: "bravo"})
+
+	tools := reg.List()
+	if len(tools) != 3 {
+		t.Fatalf("List() returned %d tools, want 3", len(tools))
+	}
+	want := []string{"alpha", "bravo", "charlie"}
+	for i, tool := range tools {
+		if tool.Name() != want[i] {
+			t.Errorf("List()[%d].Name() = %q, want %q", i, tool.Name(), want[i])
+		}
+	}
+}
