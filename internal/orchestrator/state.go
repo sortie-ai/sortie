@@ -359,6 +359,7 @@ func RuntimeSnapshot(state *State, now time.Time) RuntimeSnapshotResult {
 		Retrying:    make([]SnapshotRetryEntry, 0, len(state.RetryAttempts)),
 	}
 
+	var activeElapsedTotal float64
 	for _, entry := range state.Running {
 		result.Running = append(result.Running, SnapshotRunningEntry{
 			IssueID:            entry.Issue.ID,
@@ -375,6 +376,14 @@ func RuntimeSnapshot(state *State, now time.Time) RuntimeSnapshotResult {
 			AgentTotalTokens:   entry.AgentTotalTokens,
 			WorkspacePath:      entry.WorkspacePath,
 		})
+
+		if !entry.StartedAt.IsZero() {
+			elapsed := now.Sub(entry.StartedAt).Seconds()
+			if elapsed < 0 {
+				elapsed = 0
+			}
+			activeElapsedTotal += elapsed
+		}
 	}
 
 	for _, entry := range state.RetryAttempts {
@@ -386,8 +395,6 @@ func RuntimeSnapshot(state *State, now time.Time) RuntimeSnapshotResult {
 			Error:      entry.Error,
 		})
 	}
-
-	activeElapsedTotal := ActiveElapsedSeconds(state, now)
 
 	result.AgentTotals = SnapshotAgentTotals{
 		InputTokens:    state.AgentTotals.InputTokens,
