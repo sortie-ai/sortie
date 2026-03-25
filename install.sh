@@ -186,7 +186,7 @@ main() {
     esac
 
     printf '\n  %bDocs:%b       https://docs.sortie-ai.com\n' "${DIM}" "${RESET}"
-    printf '  %bChangelog:%b  https://github.com/%s/blob/%s/CHANGELOG.md\n' "${DIM}" "${RESET}" "$REPO" "$_tag"
+    printf '  %bChangelog:%b  https://docs.sortie-ai.com/changelog/#%s\n' "${DIM}" "${RESET}" "$_tag"
     printf '\n  Happy hacking! %b♠%b\n\n' "${CYAN}" "${RESET}"
 }
 
