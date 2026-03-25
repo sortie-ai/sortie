@@ -266,6 +266,9 @@
             <tr>
               <th>Identifier</th>
               <th>State</th>
+              {{if $.HasSSH}}
+              <th>Host</th>
+              {{end}}
               <th class="text-right">Turns</th>
               <th>Duration</th>
               <th>Last Event</th>
@@ -277,6 +280,9 @@
             <tr>
               <td><a href="{{.DetailURL}}">{{.Identifier}}</a></td>
               <td>{{.State}}</td>
+              {{if $.HasSSH}}
+              <td>{{if .Host}}{{.Host}}{{else}}local{{end}}</td>
+              {{end}}
               <td class="text-right">{{.TurnCount}}</td>
               <td>{{.Duration}}</td>
               <td>{{.LastEvent}}</td>

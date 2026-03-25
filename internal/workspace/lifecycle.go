@@ -12,17 +12,22 @@ import (
 
 // HookEnv returns the standard SORTIE_* environment variables for
 // hook execution. The attempt value is formatted as a decimal string;
-// a zero or negative attempt is rendered as "0".
-func HookEnv(issueID, identifier, workspacePath string, attempt int) map[string]string {
+// a zero or negative attempt is rendered as "0". When sshHost is
+// non-empty, SORTIE_SSH_HOST is included in the returned map.
+func HookEnv(issueID, identifier, workspacePath string, attempt int, sshHost ...string) map[string]string {
 	if attempt < 0 {
 		attempt = 0
 	}
-	return map[string]string{
+	env := map[string]string{
 		"SORTIE_ISSUE_ID":         issueID,
 		"SORTIE_ISSUE_IDENTIFIER": identifier,
 		"SORTIE_WORKSPACE":        workspacePath,
 		"SORTIE_ATTEMPT":          strconv.Itoa(attempt),
 	}
+	if len(sshHost) > 0 && sshHost[0] != "" {
+		env["SORTIE_SSH_HOST"] = sshHost[0]
+	}
+	return env
 }
 
 // PrepareParams holds the inputs for workspace preparation before an
@@ -52,6 +57,10 @@ type PrepareParams struct {
 	// Logger is the structured logger for hook lifecycle events.
 	// If nil, [slog.Default] is used.
 	Logger *slog.Logger
+
+	// SSHHost is the SSH destination host for the worker. When non-empty,
+	// hooks receive SORTIE_SSH_HOST in their environment.
+	SSHHost string
 }
 
 // PrepareResult holds the outcome of successful workspace preparation.
@@ -95,7 +104,7 @@ func Prepare(ctx context.Context, params PrepareParams) (PrepareResult, error) {
 		return PrepareResult{}, err
 	}
 
-	env := HookEnv(params.IssueID, params.Identifier, result.Path, params.Attempt)
+	env := HookEnv(params.IssueID, params.Identifier, result.Path, params.Attempt, params.SSHHost)
 
 	if result.CreatedNow && params.AfterCreate != "" {
 		logger.InfoContext(ctx, "running hook", slog.String("hook", "after_create"), slog.String("workspace", result.Path))
@@ -155,6 +164,10 @@ type FinishParams struct {
 
 	// Logger is the structured logger. If nil, [slog.Default] is used.
 	Logger *slog.Logger
+
+	// SSHHost is the SSH destination host. When non-empty, hooks receive
+	// SORTIE_SSH_HOST in their environment.
+	SSHHost string
 }
 
 // Finish runs the after_run hook if configured. Failure is logged and
@@ -175,7 +188,7 @@ func Finish(ctx context.Context, params FinishParams) {
 	}
 
 	detachedCtx := context.WithoutCancel(ctx)
-	env := HookEnv(params.IssueID, params.Identifier, params.Path, params.Attempt)
+	env := HookEnv(params.IssueID, params.Identifier, params.Path, params.Attempt, params.SSHHost)
 
 	logger.InfoContext(ctx, "running hook", slog.String("hook", "after_run"), slog.String("workspace", params.Path))
 	_, hookErr := RunHook(detachedCtx, HookParams{
@@ -211,6 +224,10 @@ type CleanupParams struct {
 
 	// Logger is the structured logger. If nil, [slog.Default] is used.
 	Logger *slog.Logger
+
+	// SSHHost is the SSH destination host. When non-empty, hooks receive
+	// SORTIE_SSH_HOST in their environment.
+	SSHHost string
 }
 
 // Cleanup removes a workspace directory for the given issue, running
@@ -240,7 +257,7 @@ func Cleanup(ctx context.Context, params CleanupParams) error {
 	}
 
 	detachedCtx := context.WithoutCancel(ctx)
-	env := HookEnv(params.IssueID, params.Identifier, pathResult.Path, params.Attempt)
+	env := HookEnv(params.IssueID, params.Identifier, pathResult.Path, params.Attempt, params.SSHHost)
 
 	if params.BeforeRemove != "" {
 		logger.InfoContext(ctx, "running hook", slog.String("hook", "before_remove"), slog.String("workspace", pathResult.Path))
@@ -282,6 +299,10 @@ type CleanupByPathParams struct {
 
 	// Logger is the structured logger. If nil, [slog.Default] is used.
 	Logger *slog.Logger
+
+	// SSHHost is the SSH destination host. When non-empty, hooks receive
+	// SORTIE_SSH_HOST in their environment.
+	SSHHost string
 }
 
 // CleanupByPath removes a workspace directory at the given absolute path,
@@ -327,7 +348,7 @@ func CleanupByPath(ctx context.Context, params CleanupByPathParams) error {
 	}
 
 	detachedCtx := context.WithoutCancel(ctx)
-	env := HookEnv(params.IssueID, params.Identifier, params.Path, params.Attempt)
+	env := HookEnv(params.IssueID, params.Identifier, params.Path, params.Attempt, params.SSHHost)
 
 	if params.BeforeRemove != "" {
 		logger.InfoContext(ctx, "running hook", slog.String("hook", "before_remove"), slog.String("workspace", params.Path))

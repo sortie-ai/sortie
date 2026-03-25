@@ -68,6 +68,10 @@ type WorkerResult struct {
 	// Attempt is the retry attempt parameter passed to the worker.
 	Attempt *int
 
+	// SSHHost is the SSH host the worker executed on. Empty for local
+	// execution. Copied from [WorkerDeps] at exit for host pool release.
+	SSHHost string
+
 	// StartedAt is copied from the RunningEntry (set by DispatchIssue).
 	// The worker does not set this — it is populated by the exit
 	// handler from the running map entry.
@@ -117,6 +121,11 @@ type WorkerDeps struct {
 	// Logger is the structured logger with issue-scoped context fields
 	// already attached (issue_id, issue_identifier).
 	Logger *slog.Logger
+
+	// SSHHost is the SSH destination for this worker's agent sessions.
+	// Empty for local execution. Set by the orchestrator when dispatching
+	// to a remote host.
+	SSHHost string
 }
 
 // normalizeAttempt converts the nullable attempt to a plain integer.
@@ -235,6 +244,7 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 					AfterRun:      cfg.Hooks.AfterRun,
 					HookTimeoutMS: cfg.Hooks.TimeoutMS,
 					Logger:        logger,
+					SSHHost:       deps.SSHHost,
 				})
 			}
 			if !reported {
@@ -248,6 +258,7 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 					WorkspacePath:  workspacePath,
 					AgentAdapter:   cfg.Agent.Kind,
 					Attempt:        attempt,
+					SSHHost:        deps.SSHHost,
 				})
 			}
 		}
@@ -263,6 +274,7 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 		BeforeRun:     cfg.Hooks.BeforeRun,
 		HookTimeoutMS: cfg.Hooks.TimeoutMS,
 		Logger:        logger,
+		SSHHost:       deps.SSHHost,
 	})
 	if err != nil {
 		reported = true
@@ -273,6 +285,7 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 			Error:        fmt.Errorf("workspace preparation: %w", err),
 			AgentAdapter: cfg.Agent.Kind,
 			Attempt:      attempt,
+			SSHHost:      deps.SSHHost,
 		})
 		return
 	}
@@ -292,6 +305,7 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 			AfterRun:      cfg.Hooks.AfterRun,
 			HookTimeoutMS: cfg.Hooks.TimeoutMS,
 			Logger:        logger,
+			SSHHost:       deps.SSHHost,
 		})
 	}
 
@@ -306,6 +320,7 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 			WorkspacePath: wsResult.Path,
 			AgentAdapter:  cfg.Agent.Kind,
 			Attempt:       attempt,
+			SSHHost:       deps.SSHHost,
 		})
 		return
 	}
@@ -315,6 +330,7 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 		WorkspacePath:   wsResult.Path,
 		AgentConfig:     toDomainAgentConfig(cfg.Agent),
 		ResumeSessionID: deps.ResumeSessionID,
+		SSHHost:         deps.SSHHost,
 	})
 	if err != nil {
 		finishWorkspace()
@@ -327,6 +343,7 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 			WorkspacePath: wsResult.Path,
 			AgentAdapter:  cfg.Agent.Kind,
 			Attempt:       attempt,
+			SSHHost:       deps.SSHHost,
 		})
 		return
 	}
@@ -362,6 +379,7 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 				WorkspacePath:  wsResult.Path,
 				AgentAdapter:   cfg.Agent.Kind,
 				Attempt:        attempt,
+				SSHHost:        deps.SSHHost,
 			})
 			return
 		}
@@ -402,6 +420,7 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 				WorkspacePath:  wsResult.Path,
 				AgentAdapter:   cfg.Agent.Kind,
 				Attempt:        attempt,
+				SSHHost:        deps.SSHHost,
 			})
 			return
 		}
@@ -429,6 +448,7 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 				WorkspacePath:  wsResult.Path,
 				AgentAdapter:   cfg.Agent.Kind,
 				Attempt:        attempt,
+				SSHHost:        deps.SSHHost,
 			})
 			return
 		}
@@ -449,6 +469,7 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 				WorkspacePath:  wsResult.Path,
 				AgentAdapter:   cfg.Agent.Kind,
 				Attempt:        attempt,
+				SSHHost:        deps.SSHHost,
 			})
 			return
 		}
@@ -489,6 +510,7 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 		WorkspacePath:  wsResult.Path,
 		AgentAdapter:   cfg.Agent.Kind,
 		Attempt:        attempt,
+		SSHHost:        deps.SSHHost,
 	})
 }
 

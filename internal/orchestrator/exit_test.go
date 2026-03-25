@@ -1510,3 +1510,85 @@ func TestHandleWorkerExit_NormalExitNoWorkerFailedLog(t *testing.T) {
 		t.Errorf("normal exit should not emit 'worker run failed' log\ngot: %s", out)
 	}
 }
+
+// --- SSH Host Pool integration tests ---
+
+func TestHandleWorkerExit_ReleasesSSHHost(t *testing.T) {
+	t.Parallel()
+
+	hp := NewHostPool([]string{"host-a", "host-b"}, 2)
+	hp.AcquireHost("ISSUE-SSH", "host-a")
+
+	store := &mockExitStore{}
+	state := exitState(t, "ISSUE-SSH", nil)
+	state.Running["ISSUE-SSH"].SSHHost = "host-a"
+	params := defaultExitParams(t, store)
+	params.HostPool = hp
+
+	HandleWorkerExit(state, WorkerResult{
+		IssueID:       "ISSUE-SSH",
+		Identifier:    "ISSUE-SSH-ident",
+		ExitKind:      WorkerExitNormal,
+		SSHHost:       "host-a",
+		AgentAdapter:  "mock",
+		WorkspacePath: "/tmp/ws",
+	}, params)
+
+	// Host slot released.
+	snap := hp.Snapshot()
+	if snap["host-a"] != 0 {
+		t.Errorf("host-a usage = %d after exit, want 0", snap["host-a"])
+	}
+	if got := hp.HostFor("ISSUE-SSH"); got != "" {
+		t.Errorf("HostFor(ISSUE-SSH) = %q after exit, want empty", got)
+	}
+}
+
+func TestHandleWorkerExit_NilHostPoolSafe(t *testing.T) {
+	t.Parallel()
+
+	store := &mockExitStore{}
+	state := exitState(t, "ISSUE-NIL", nil)
+	params := defaultExitParams(t, store)
+	// HostPool is nil (default) — should not panic.
+
+	HandleWorkerExit(state, WorkerResult{
+		IssueID:       "ISSUE-NIL",
+		Identifier:    "ISSUE-NIL-ident",
+		ExitKind:      WorkerExitNormal,
+		SSHHost:       "some-host",
+		AgentAdapter:  "mock",
+		WorkspacePath: "/tmp/ws",
+	}, params)
+
+	// Normal exit path completed.
+	if _, ok := state.Running["ISSUE-NIL"]; ok {
+		t.Error("Running entry not removed after exit with nil HostPool")
+	}
+}
+
+func TestHandleWorkerExit_LastSSHHostPropagated(t *testing.T) {
+	t.Parallel()
+
+	store := &mockExitStore{}
+	state := exitState(t, "ISSUE-PROP", nil)
+	params := defaultExitParams(t, store)
+
+	HandleWorkerExit(state, WorkerResult{
+		IssueID:       "ISSUE-PROP",
+		Identifier:    "ISSUE-PROP-ident",
+		ExitKind:      WorkerExitNormal,
+		SSHHost:       "worker-7",
+		AgentAdapter:  "mock",
+		WorkspacePath: "/tmp/ws",
+	}, params)
+
+	// Continuation retry should have LastSSHHost set.
+	entry, ok := state.RetryAttempts["ISSUE-PROP"]
+	if !ok {
+		t.Fatal("retry not scheduled after normal exit")
+	}
+	if entry.LastSSHHost != "worker-7" {
+		t.Errorf("RetryEntry.LastSSHHost = %q, want %q", entry.LastSSHHost, "worker-7")
+	}
+}

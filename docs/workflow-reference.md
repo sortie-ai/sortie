@@ -495,14 +495,91 @@ worker:
   max_concurrent_agents_per_host: 2
 ```
 
-> **Not yet implemented.** The `worker` block is collected into `Extensions` and stored
-> but has no runtime effect in the current release. Agents run locally on the host
-> where Sortie is started.
+When `worker.ssh_hosts` is configured, Sortie dispatches agent runs to remote
+hosts over SSH using the system `ssh` binary. Each dispatch selects the host
+with the fewest active sessions (least-loaded selection). When a per-host
+concurrency cap is set, hosts at capacity are skipped. On retry, the previous
+host is preferred if it still has capacity.
+
+When `worker.ssh_hosts` is absent or empty, all agents run locally on the
+host where Sortie is started (the default behavior).
 
 | Field                                   | Type             | Required | Default                        | Description                                                                                 |
 | --------------------------------------- | ---------------- | -------- | ------------------------------ | ------------------------------------------------------------------------------------------- |
 | `worker.ssh_hosts`                      | list of strings  | No       | _(absent — work runs locally)_ | SSH host targets for remote agent execution.                                                |
 | `worker.max_concurrent_agents_per_host` | positive integer | No       | _(absent)_                     | Per-host concurrency cap shared across configured SSH hosts. Hosts at capacity are skipped. |
+
+#### SSH Hook Environment
+
+When SSH mode is active, all lifecycle hooks (`after_create`, `before_run`,
+`after_run`, `before_remove`) receive the `SORTIE_SSH_HOST` environment variable
+set to the target host for the current session. Hooks can use this variable to
+interact with the remote host — for example:
+
+```bash
+# after_create — clone repo on the remote host
+ssh "$SORTIE_SSH_HOST" "git clone https://repo.example.com/project.git $SORTIE_WORKSPACE"
+
+# before_run — install dependencies on the remote host
+ssh "$SORTIE_SSH_HOST" "cd $SORTIE_WORKSPACE && npm install"
+
+# after_run — collect artifacts from the remote host
+scp "$SORTIE_SSH_HOST:$SORTIE_WORKSPACE/coverage.out" ./artifacts/
+
+# before_remove — clean up the remote workspace directory
+ssh "$SORTIE_SSH_HOST" "rm -rf $SORTIE_WORKSPACE"
+```
+
+#### Operator Guidance
+
+- **SSH connectivity is validated at dispatch time**, not at startup. Hosts
+  that are temporarily unreachable cause the worker to fail and retry with
+  exponential backoff.
+- **Process lifecycle:** The remote agent process receives stdin EOF when
+  the SSH connection closes (e.g., on cancellation or stall timeout). The
+  agent should terminate on stdin EOF or SIGHUP.
+- **SSH options:** Sortie sets `ServerAliveInterval=15`,
+  `ServerAliveCountMax=3`, and `StrictHostKeyChecking=accept-new` by default.
+  Operators should ensure SSH key-based authentication is configured for all
+  target hosts.
+
+#### Complete SSH-Mode Example
+
+```yaml
+---
+tracker:
+  kind: jira
+  project: PROJ
+  active_states:
+    - To Do
+    - In Progress
+  terminal_states:
+    - Done
+
+agent:
+  kind: claude-code
+  max_sessions: 4
+  max_turns: 10
+
+workspace:
+  root: /srv/sortie/workspaces
+
+worker:
+  ssh_hosts:
+    - build01.internal
+    - build02.internal
+    - build03.internal
+  max_concurrent_agents_per_host: 2
+
+hooks:
+  after_create: |
+    ssh "$SORTIE_SSH_HOST" "mkdir -p $SORTIE_WORKSPACE && git clone https://repo.example.com/project.git $SORTIE_WORKSPACE"
+  before_remove: |
+    ssh "$SORTIE_SSH_HOST" "rm -rf $SORTIE_WORKSPACE"
+---
+You are a software engineer. Fix the issue described below.
+{{.issue_body}}
+```
 
 ### 3.3 Adapter-Specific Pass-Through Config
 
@@ -1045,8 +1122,8 @@ A flat reference of every configuration field, for quick lookup.
 | `db_path`                               | path             | `.sortie.db`                 | Restart required                                                                       |
 | **Extensions**                          |                  |                              |                                                                                        |
 | `server.port`                           | integer          | _(absent)_                   | TCP port for the embedded HTTP observability server; CLI `--port` overrides             |
-| `worker.ssh_hosts`                      | `[string]`       | _(absent)_                   | **Not yet implemented.** Stored but has no runtime effect                              |
-| `worker.max_concurrent_agents_per_host` | integer          | _(absent)_                   | **Not yet implemented.** Per-host cap; stored but has no runtime effect                |
+| `worker.ssh_hosts`                      | `[string]`       | _(absent)_                   | SSH host targets for remote agent execution; dynamic reload                            |
+| `worker.max_concurrent_agents_per_host` | integer          | _(absent)_                   | Per-host concurrency cap for SSH hosts; dynamic reload                                 |
 
 ---
 

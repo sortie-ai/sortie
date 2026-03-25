@@ -35,6 +35,7 @@ type dashboardData struct {
 	// Tables
 	Running  []dashboardRunningEntry
 	Retrying []dashboardRetryEntry
+	HasSSH   bool
 
 	// Footer
 	RuntimeDisplay string
@@ -50,6 +51,7 @@ type dashboardRunningEntry struct {
 	LastEvent   string
 	TotalTokens int64
 	DetailURL   string
+	Host        string
 }
 
 type dashboardRetryEntry struct {
@@ -189,10 +191,14 @@ func buildDashboardData(
 		return sortedRunning[i].StartedAt.Before(sortedRunning[j].StartedAt)
 	})
 	running := make([]dashboardRunningEntry, len(sortedRunning))
+	hasSSH := false
 	for i, e := range sortedRunning {
 		dur := snap.GeneratedAt.Sub(e.StartedAt)
 		if dur < 0 {
 			dur = 0
+		}
+		if e.SSHHost != "" {
+			hasSSH = true
 		}
 		running[i] = dashboardRunningEntry{
 			Identifier:  e.Identifier,
@@ -202,9 +208,11 @@ func buildDashboardData(
 			LastEvent:   string(e.LastAgentEvent),
 			TotalTokens: e.AgentTotalTokens,
 			DetailURL:   "/api/v1/" + url.PathEscape(e.Identifier),
+			Host:        e.SSHHost,
 		}
 	}
 	data.Running = running
+	data.HasSSH = hasSSH
 
 	// Copy and sort retry entries by DueAtMS ascending before mapping.
 	sortedRetrying := make([]orchestrator.SnapshotRetryEntry, len(snap.Retrying))

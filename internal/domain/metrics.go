@@ -87,6 +87,10 @@ type Metrics interface {
 	// "cancelled" (sortie_worker_duration_seconds{exit_type}
 	// histogram).
 	ObserveWorkerDuration(exitType string, seconds float64)
+
+	// SetSSHHostUsage records the current session count for the
+	// given SSH host (sortie_ssh_host_usage{host} gauge).
+	SetSSHHostUsage(host string, count int)
 }
 
 // NoopMetrics is a [Metrics] implementation where every method is a
@@ -111,6 +115,7 @@ func (*NoopMetrics) IncTrackerRequests(string, string)     {}
 func (*NoopMetrics) IncHandoffTransitions(string)          {}
 func (*NoopMetrics) ObservePollDuration(float64)           {}
 func (*NoopMetrics) ObserveWorkerDuration(string, float64) {}
+func (*NoopMetrics) SetSSHHostUsage(string, int)           {}
 
 // MetricsSetter is implemented by adapters that accept a [Metrics]
 // recorder for self-instrumentation. The wiring code calls SetMetrics

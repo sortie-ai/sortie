@@ -211,11 +211,12 @@ func CancelRetry(state *State, issueID string) {
 
 // ScheduleRetryParams holds the inputs for [ScheduleRetry].
 type ScheduleRetryParams struct {
-	IssueID    string
-	Identifier string
-	Attempt    int   // 1-based retry attempt number.
-	DelayMS    int64 // Delay before timer fires, in milliseconds.
-	Error      string
+	IssueID     string
+	Identifier  string
+	Attempt     int   // 1-based retry attempt number.
+	DelayMS     int64 // Delay before timer fires, in milliseconds.
+	Error       string
+	LastSSHHost string // Runtime-only: SSH host from previous attempt for retry affinity.
 }
 
 // ScheduleRetry cancels any existing retry for the issue, creates a new
@@ -254,6 +255,7 @@ func ScheduleRetry(state *State, params ScheduleRetryParams, onFire func(issueID
 		DueAtMS:          dueAtMS,
 		Error:            params.Error,
 		TimerHandle:      timer,
+		LastSSHHost:      params.LastSSHHost,
 		scheduledAt:      time.Now(),
 		scheduledDelayMS: delayMS,
 	}
@@ -276,8 +278,11 @@ type WorkerFunc func(ctx context.Context, issue domain.Issue, attempt *int)
 // The attempt parameter follows the architecture convention: nil for first
 // dispatch, non-nil and >= 1 for retries/continuations.
 //
+// The sshHost parameter is the SSH destination for remote execution.
+// Empty for local execution.
+//
 // Panics if workerFn is nil (programming error in orchestrator wiring).
-func DispatchIssue(ctx context.Context, state *State, issue domain.Issue, attempt *int, workerFn WorkerFunc) {
+func DispatchIssue(ctx context.Context, state *State, issue domain.Issue, attempt *int, sshHost string, workerFn WorkerFunc) {
 	if workerFn == nil {
 		panic("DispatchIssue: nil WorkerFunc")
 	}
@@ -298,6 +303,7 @@ func DispatchIssue(ctx context.Context, state *State, issue domain.Issue, attemp
 		RetryAttempt: attemptCopy,
 		StartedAt:    time.Now().UTC(),
 		CancelFunc:   cancelFn,
+		SSHHost:      sshHost,
 	}
 
 	CancelRetry(state, issue.ID)
