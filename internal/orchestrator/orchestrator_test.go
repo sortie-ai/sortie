@@ -1869,6 +1869,7 @@ func TestOrchestratorDynamicConfigReload(t *testing.T) {
 		entry := state.Running["arch-1"]
 		if entry == nil {
 			t.Fatal("entry removed from Running — reconciliation should not remove entries")
+			return
 		}
 		if entry.PendingCleanup {
 			t.Fatal("PendingCleanup = true before adding Archived to terminal states")
@@ -1889,6 +1890,7 @@ func TestOrchestratorDynamicConfigReload(t *testing.T) {
 		entry = state.Running["arch-1"]
 		if entry == nil {
 			t.Fatal("entry removed from Running — reconciliation should not remove entries")
+			return
 		}
 		if !entry.PendingCleanup {
 			t.Error("PendingCleanup = false after adding Archived to terminal states, want true")
@@ -2100,6 +2102,7 @@ func TestOrchestratorDynamicConfigReload(t *testing.T) {
 		entry := state.Running["f-1"]
 		if entry == nil {
 			t.Fatal("issue f-1 not in Running map")
+			return
 		}
 		originalCancel := entry.CancelFunc
 
@@ -2117,6 +2120,7 @@ func TestOrchestratorDynamicConfigReload(t *testing.T) {
 		entry = state.Running["f-1"]
 		if entry == nil {
 			t.Fatal("issue f-1 removed from Running after config change")
+			return
 		}
 
 		// The CancelFunc must be the same original (not replaced).
@@ -2207,6 +2211,7 @@ func TestOrchestratorDynamicConfigReload(t *testing.T) {
 		entry := state.Running["g-1"]
 		if entry == nil {
 			t.Fatal("entry g-1 removed from Running — reconciliation should not remove entries")
+			return
 		}
 		if !entry.PendingCleanup {
 			t.Error("PendingCleanup = false despite terminal tracker state and preflight failure")
