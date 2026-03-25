@@ -1590,7 +1590,7 @@ Implementation requirements:
   `collectors.NewProcessCollector`) on the dedicated registry so that `go_*` and `process_*`
   metrics appear in scrape output alongside Sortie's own metrics.
 
-Defined metrics (see ADR-0008 for full label and bucket specifications):
+Defined metrics (label sets and buckets are specified here; see ADR-0008 for historical rationale):
 
 | Name | Type | Description |
 |------|------|-------------|
@@ -1604,7 +1604,7 @@ Defined metrics (see ADR-0008 for full label and bucket specifications):
 | `sortie_worker_exits_total{exit_type}` | Counter | Worker exits, partitioned by exit type (`normal`, `error`, `cancelled`). |
 | `sortie_retries_total{trigger}` | Counter | Retry schedule events, partitioned by trigger (`error`, `continuation`, `timer`, `stall`). |
 | `sortie_reconciliation_actions_total{action}` | Counter | Reconciliation outcomes per issue, partitioned by action (`stop`, `cleanup`, `keep`). |
-| `sortie_poll_cycles_total{result}` | Counter | Poll tick completions, partitioned by result (`success`, `error`). |
+| `sortie_poll_cycles_total{result}` | Counter | Poll tick completions, partitioned by result (`success`, `error`, `skipped`). |
 | `sortie_tracker_requests_total{operation,result}` | Counter | Tracker adapter API calls, partitioned by operation (`fetch_candidates`, `fetch_issue`, `fetch_by_states`, `fetch_states_by_ids`, `fetch_states_by_identifiers`, `fetch_comments`, `transition`) and result (`success`, `error`). |
 | `sortie_handoff_transitions_total{result}` | Counter | Handoff-state transition attempts, partitioned by result (`success`, `error`, `skipped`). |
 | `sortie_poll_duration_seconds` | Histogram | Wall-clock time per poll cycle; buckets via `ExponentialBuckets(0.1, 2, 10)` (0.1 s–51.2 s). |
