@@ -343,6 +343,56 @@ func TestParseWorkerConfig(t *testing.T) {
 	}
 }
 
+func TestAcquireHost_PreferredNotConfigured(t *testing.T) {
+	t.Parallel()
+
+	hp := NewHostPool([]string{"a", "b"}, 2)
+	// Load "a" so it is not empty.
+	hp.AcquireHost("ISS-0", "a")
+
+	// Remove "b" from the configured host list.
+	hp.Update([]string{"a"}, 2)
+
+	// Prefer "b", but it is no longer configured → fall back to "a".
+	host, ok := hp.AcquireHost("ISS-1", "b")
+	if !ok || host != "a" {
+		t.Errorf("AcquireHost(ISS-1, preferred=b) = (%q, %v), want (\"a\", true)", host, ok)
+	}
+}
+
+func TestUpdate_PrunesStaleHosts(t *testing.T) {
+	t.Parallel()
+
+	hp := NewHostPool([]string{"a", "b"}, 2)
+
+	// Acquire on "b" so it has an active assignment.
+	hp.AcquireHost("ISS-1", "b")
+
+	// Update to remove "b". It should remain in usage because ISS-1 is
+	// still assigned there.
+	hp.Update([]string{"a"}, 2)
+	snap := hp.Snapshot()
+	if _, ok := snap["b"]; !ok {
+		t.Fatal("Snapshot() missing \"b\" after Update with active assignment")
+	}
+
+	// Release "b"'s assignment.
+	hp.ReleaseHost("ISS-1")
+
+	// Update again. Now "b" has no assignment and is not configured, so
+	// it should be pruned from the usage map.
+	hp.Update([]string{"a"}, 2)
+	snap = hp.Snapshot()
+	if _, ok := snap["b"]; ok {
+		t.Errorf("Snapshot() still contains \"b\" after prune, want removed")
+	}
+
+	// "a" must still be present.
+	if _, ok := snap["a"]; !ok {
+		t.Error("Snapshot() missing \"a\" after prune")
+	}
+}
+
 func TestHasCapacity_UnlimitedPerHost(t *testing.T) {
 	t.Parallel()
 
