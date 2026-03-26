@@ -12,13 +12,16 @@ import (
 // session ID, process ID, and accumulated token counters at the time of
 // the last update.
 type SessionMetadata struct {
-	IssueID      string  // Tracker-internal issue ID (primary key).
-	SessionID    string  // Last session ID assigned by the agent adapter.
-	AgentPID     *string // Last known agent PID; nil when unknown.
-	InputTokens  int64   // Accumulated input tokens for the session.
-	OutputTokens int64   // Accumulated output tokens for the session.
-	TotalTokens  int64   // Accumulated total tokens for the session.
-	UpdatedAt    string  // ISO-8601 timestamp of last update.
+	IssueID         string  // Tracker-internal issue ID (primary key).
+	SessionID       string  // Last session ID assigned by the agent adapter.
+	AgentPID        *string // Last known agent PID; nil when unknown.
+	InputTokens     int64   // Accumulated input tokens for the session.
+	OutputTokens    int64   // Accumulated output tokens for the session.
+	TotalTokens     int64   // Accumulated total tokens for the session.
+	CacheReadTokens int64   // Accumulated cache-read tokens for the session.
+	ModelName       string  // Last reported LLM model identifier.
+	APIRequestCount int     // Number of API round-trips observed.
+	UpdatedAt       string  // ISO-8601 timestamp of last update.
 }
 
 // UpsertSessionMetadata inserts or replaces session metadata for the given
@@ -32,17 +35,22 @@ func (s *Store) UpsertSessionMetadata(ctx context.Context, meta SessionMetadata)
 
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO session_metadata
-			(issue_id, session_id, agent_pid, input_tokens, output_tokens, total_tokens, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
+			(issue_id, session_id, agent_pid, input_tokens, output_tokens, total_tokens,
+			 cache_read_tokens, model_name, api_request_count, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (issue_id) DO UPDATE SET
-			session_id    = excluded.session_id,
-			agent_pid     = excluded.agent_pid,
-			input_tokens  = excluded.input_tokens,
-			output_tokens = excluded.output_tokens,
-			total_tokens  = excluded.total_tokens,
-			updated_at    = excluded.updated_at`,
+			session_id        = excluded.session_id,
+			agent_pid         = excluded.agent_pid,
+			input_tokens      = excluded.input_tokens,
+			output_tokens     = excluded.output_tokens,
+			total_tokens      = excluded.total_tokens,
+			cache_read_tokens = excluded.cache_read_tokens,
+			model_name        = excluded.model_name,
+			api_request_count = excluded.api_request_count,
+			updated_at        = excluded.updated_at`,
 		meta.IssueID, meta.SessionID, pidVal,
-		meta.InputTokens, meta.OutputTokens, meta.TotalTokens, meta.UpdatedAt,
+		meta.InputTokens, meta.OutputTokens, meta.TotalTokens,
+		meta.CacheReadTokens, meta.ModelName, meta.APIRequestCount, meta.UpdatedAt,
 	)
 	if err != nil {
 		return fmt.Errorf("upsert session metadata %q: %w", meta.IssueID, err)
@@ -58,11 +66,13 @@ func (s *Store) LoadSessionMetadata(ctx context.Context, issueID string) (Sessio
 	var pidVal sql.NullString
 
 	err := s.db.QueryRowContext(ctx,
-		`SELECT issue_id, session_id, agent_pid, input_tokens, output_tokens, total_tokens, updated_at
+		`SELECT issue_id, session_id, agent_pid, input_tokens, output_tokens, total_tokens,
+		        cache_read_tokens, model_name, api_request_count, updated_at
 		FROM session_metadata
 		WHERE issue_id = ?`, issueID,
 	).Scan(&m.IssueID, &m.SessionID, &pidVal,
-		&m.InputTokens, &m.OutputTokens, &m.TotalTokens, &m.UpdatedAt)
+		&m.InputTokens, &m.OutputTokens, &m.TotalTokens,
+		&m.CacheReadTokens, &m.ModelName, &m.APIRequestCount, &m.UpdatedAt)
 
 	if errors.Is(err, sql.ErrNoRows) {
 		return SessionMetadata{}, false, nil
@@ -82,7 +92,8 @@ func (s *Store) LoadSessionMetadata(ctx context.Context, issueID string) (Sessio
 // non-nil slice when no entries exist.
 func (s *Store) LoadAllSessionMetadata(ctx context.Context) ([]SessionMetadata, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT issue_id, session_id, agent_pid, input_tokens, output_tokens, total_tokens, updated_at
+		`SELECT issue_id, session_id, agent_pid, input_tokens, output_tokens, total_tokens,
+		        cache_read_tokens, model_name, api_request_count, updated_at
 		FROM session_metadata
 		ORDER BY updated_at DESC, issue_id ASC`)
 	if err != nil {
@@ -95,7 +106,8 @@ func (s *Store) LoadAllSessionMetadata(ctx context.Context) ([]SessionMetadata, 
 		var m SessionMetadata
 		var pidVal sql.NullString
 		if err := rows.Scan(&m.IssueID, &m.SessionID, &pidVal,
-			&m.InputTokens, &m.OutputTokens, &m.TotalTokens, &m.UpdatedAt); err != nil {
+			&m.InputTokens, &m.OutputTokens, &m.TotalTokens,
+			&m.CacheReadTokens, &m.ModelName, &m.APIRequestCount, &m.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("scan session metadata: %w", err)
 		}
 		if pidVal.Valid {

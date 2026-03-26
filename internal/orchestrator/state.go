@@ -42,10 +42,11 @@ const (
 // SecondsRunning tracks only ended-session time. At snapshot time, the
 // caller adds elapsed time from active sessions in the Running map.
 type AgentTotals struct {
-	InputTokens    int64
-	OutputTokens   int64
-	TotalTokens    int64
-	SecondsRunning float64
+	InputTokens     int64
+	OutputTokens    int64
+	TotalTokens     int64
+	CacheReadTokens int64
+	SecondsRunning  float64
 }
 
 // RateLimitSnapshot holds the latest rate-limit information received from
@@ -117,6 +118,27 @@ type RunningEntry struct {
 	// LastReportedTotalTokens is the last absolute total token value
 	// reported by the agent.
 	LastReportedTotalTokens int64
+
+	// CacheReadTokens is the cumulative cache-read token count for this session.
+	CacheReadTokens int64
+
+	// LastReportedCacheReadTokens is the last absolute cache-read value
+	// reported by the agent. Used to compute deltas.
+	LastReportedCacheReadTokens int64
+
+	// ModelName is the latest LLM model identifier reported by the agent.
+	// Empty when no model has been reported.
+	ModelName string
+
+	// APIRequestCount is the number of token_usage events received for
+	// this session. Each token_usage event corresponds to one API request
+	// round-trip from the agent.
+	APIRequestCount int
+
+	// RequestsByModel maps model name to the count of token_usage events
+	// attributed to that model. Nil until the first token_usage event
+	// carrying a model name arrives.
+	RequestsByModel map[string]int
 
 	// RetryAttempt is the retry attempt number. Nil for first dispatch,
 	// non-nil and >= 1 for retries and continuations.
@@ -294,6 +316,10 @@ type SnapshotRunningEntry struct {
 	AgentInputTokens   int64                 `json:"input_tokens"`
 	AgentOutputTokens  int64                 `json:"output_tokens"`
 	AgentTotalTokens   int64                 `json:"total_tokens"`
+	CacheReadTokens    int64                 `json:"cache_read_tokens"`
+	ModelName          string                `json:"model_name,omitempty"`
+	APIRequestCount    int                   `json:"api_request_count"`
+	RequestsByModel    map[string]int        `json:"requests_by_model,omitempty"`
 	WorkspacePath      string                `json:"workspace_path"`
 	SSHHost            string                `json:"ssh_host,omitempty"`
 }
@@ -312,10 +338,11 @@ type SnapshotRetryEntry struct {
 // at a point in time. Unlike [AgentTotals], SecondsRunning includes
 // elapsed time from currently active sessions.
 type SnapshotAgentTotals struct {
-	InputTokens    int64   `json:"input_tokens"`
-	OutputTokens   int64   `json:"output_tokens"`
-	TotalTokens    int64   `json:"total_tokens"`
-	SecondsRunning float64 `json:"seconds_running"`
+	InputTokens     int64   `json:"input_tokens"`
+	OutputTokens    int64   `json:"output_tokens"`
+	TotalTokens     int64   `json:"total_tokens"`
+	CacheReadTokens int64   `json:"cache_read_tokens"`
+	SecondsRunning  float64 `json:"seconds_running"`
 }
 
 // RuntimeSnapshotResult is a point-in-time capture of the orchestrator's
@@ -373,6 +400,13 @@ func RuntimeSnapshot(state *State, now time.Time) RuntimeSnapshotResult {
 
 	var activeElapsedTotal float64
 	for _, entry := range state.Running {
+		var rbm map[string]int
+		if entry.RequestsByModel != nil {
+			rbm = make(map[string]int, len(entry.RequestsByModel))
+			for k, v := range entry.RequestsByModel {
+				rbm[k] = v
+			}
+		}
 		result.Running = append(result.Running, SnapshotRunningEntry{
 			IssueID:            entry.Issue.ID,
 			Identifier:         entry.Identifier,
@@ -386,6 +420,10 @@ func RuntimeSnapshot(state *State, now time.Time) RuntimeSnapshotResult {
 			AgentInputTokens:   entry.AgentInputTokens,
 			AgentOutputTokens:  entry.AgentOutputTokens,
 			AgentTotalTokens:   entry.AgentTotalTokens,
+			CacheReadTokens:    entry.CacheReadTokens,
+			ModelName:          entry.ModelName,
+			APIRequestCount:    entry.APIRequestCount,
+			RequestsByModel:    rbm,
 			WorkspacePath:      entry.WorkspacePath,
 			SSHHost:            entry.SSHHost,
 		})
@@ -410,10 +448,11 @@ func RuntimeSnapshot(state *State, now time.Time) RuntimeSnapshotResult {
 	}
 
 	result.AgentTotals = SnapshotAgentTotals{
-		InputTokens:    state.AgentTotals.InputTokens,
-		OutputTokens:   state.AgentTotals.OutputTokens,
-		TotalTokens:    state.AgentTotals.TotalTokens,
-		SecondsRunning: state.AgentTotals.SecondsRunning + activeElapsedTotal,
+		InputTokens:     state.AgentTotals.InputTokens,
+		OutputTokens:    state.AgentTotals.OutputTokens,
+		TotalTokens:     state.AgentTotals.TotalTokens,
+		CacheReadTokens: state.AgentTotals.CacheReadTokens,
+		SecondsRunning:  state.AgentTotals.SecondsRunning + activeElapsedTotal,
 	}
 
 	if state.AgentRateLimits != nil {

@@ -91,8 +91,8 @@ func TestMigrate_Idempotent(t *testing.T) {
 		"SELECT COUNT(*) FROM schema_migrations").Scan(&count); err != nil {
 		t.Fatalf("count schema_migrations: %v", err)
 	}
-	if count != 1 {
-		t.Errorf("schema_migrations row count = %d, want 1", count)
+	if count != len(migrations) {
+		t.Errorf("schema_migrations row count = %d, want %d", count, len(migrations))
 	}
 }
 
@@ -206,6 +206,9 @@ func TestMigrate_ColumnCorrectness(t *testing.T) {
 				{"output_tokens", "INTEGER", true, 0},
 				{"total_tokens", "INTEGER", true, 0},
 				{"updated_at", "TEXT", true, 0},
+				{"cache_read_tokens", "INTEGER", true, 0},
+				{"model_name", "TEXT", true, 0},
+				{"api_request_count", "INTEGER", true, 0},
 			},
 		},
 		{
@@ -217,6 +220,7 @@ func TestMigrate_ColumnCorrectness(t *testing.T) {
 				{"total_tokens", "INTEGER", true, 0},
 				{"seconds_running", "REAL", true, 0},
 				{"updated_at", "TEXT", true, 0},
+				{"cache_read_tokens", "INTEGER", true, 0},
 			},
 		},
 	}
@@ -397,5 +401,85 @@ func TestMigrations_Registry(t *testing.T) {
 	}
 	if versions[0] != 1 {
 		t.Errorf("first migration version = %d, want 1", versions[0])
+	}
+}
+
+// TestMigrate_Migration002_Defaults verifies that migration 002 adds the
+// extended token metric columns with correct defaults. Existing rows
+// inserted before migration 002 gain zero/empty defaults.
+func TestMigrate_Migration002_Defaults(t *testing.T) {
+	t.Parallel()
+
+	s := openTestStore(t)
+	migrateOrFatal(t, s)
+	ctx := context.Background()
+
+	// Insert minimal rows exercising only the original columns.
+	if _, err := s.db.ExecContext(ctx,
+		`INSERT INTO session_metadata (issue_id, session_id, updated_at)
+		 VALUES ('m2-1', 'sess-1', '2026-01-01T00:00:00Z')`); err != nil {
+		t.Fatalf("insert session_metadata: %v", err)
+	}
+	if _, err := s.db.ExecContext(ctx,
+		`INSERT INTO aggregate_metrics (key, updated_at)
+		 VALUES ('agent_totals', '2026-01-01T00:00:00Z')`); err != nil {
+		t.Fatalf("insert aggregate_metrics: %v", err)
+	}
+
+	// Verify session_metadata new column defaults.
+	var cacheRead int64
+	var modelName string
+	var apiReqCount int
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT cache_read_tokens, model_name, api_request_count
+		 FROM session_metadata WHERE issue_id='m2-1'`,
+	).Scan(&cacheRead, &modelName, &apiReqCount); err != nil {
+		t.Fatalf("query session_metadata new columns: %v", err)
+	}
+	if cacheRead != 0 {
+		t.Errorf("session_metadata.cache_read_tokens default = %d, want 0", cacheRead)
+	}
+	if modelName != "" {
+		t.Errorf("session_metadata.model_name default = %q, want empty", modelName)
+	}
+	if apiReqCount != 0 {
+		t.Errorf("session_metadata.api_request_count default = %d, want 0", apiReqCount)
+	}
+
+	// Verify aggregate_metrics new column default.
+	var aggCacheRead int64
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT cache_read_tokens FROM aggregate_metrics WHERE key='agent_totals'`,
+	).Scan(&aggCacheRead); err != nil {
+		t.Fatalf("query aggregate_metrics new column: %v", err)
+	}
+	if aggCacheRead != 0 {
+		t.Errorf("aggregate_metrics.cache_read_tokens default = %d, want 0", aggCacheRead)
+	}
+}
+
+// TestMigrate_Migration002_SchemaMigrationsTracking verifies that
+// migration 002 is tracked in the schema_migrations table.
+func TestMigrate_Migration002_SchemaMigrationsTracking(t *testing.T) {
+	t.Parallel()
+
+	s := openTestStore(t)
+	migrateOrFatal(t, s)
+
+	var version int
+	var appliedAt string
+	if err := s.db.QueryRowContext(context.Background(),
+		"SELECT version, applied_at FROM schema_migrations WHERE version = 2",
+	).Scan(&version, &appliedAt); err != nil {
+		t.Fatalf("query schema_migrations version 2: %v", err)
+	}
+	if version != 2 {
+		t.Errorf("version = %d, want 2", version)
+	}
+	if appliedAt == "" {
+		t.Fatal("applied_at is empty")
+	}
+	if _, err := time.Parse(time.RFC3339, appliedAt); err != nil {
+		t.Errorf("applied_at %q is not valid RFC 3339: %v", appliedAt, err)
 	}
 }

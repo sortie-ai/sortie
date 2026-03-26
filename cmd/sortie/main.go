@@ -167,10 +167,11 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 		logger.Warn("failed to load agent totals, using zero values", slog.Any("error", err))
 	} else if found {
 		totals = orchestrator.AgentTotals{
-			InputTokens:    metrics.InputTokens,
-			OutputTokens:   metrics.OutputTokens,
-			TotalTokens:    metrics.TotalTokens,
-			SecondsRunning: metrics.SecondsRunning,
+			InputTokens:     metrics.InputTokens,
+			OutputTokens:    metrics.OutputTokens,
+			TotalTokens:     metrics.TotalTokens,
+			CacheReadTokens: metrics.CacheReadTokens,
+			SecondsRunning:  metrics.SecondsRunning,
 		}
 	}
 

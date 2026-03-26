@@ -844,7 +844,7 @@ JSON API + HTML dashboard, Prometheus `/metrics`), and adds agent capabilities.
       non-202 status (or `queued: false`) for refresh requests received after drain
       begins.
 
-- [ ] 8.18 Extend per-session token metrics in the JSON API and dashboard.
+- [x] 8.18 Extend per-session token metrics in the JSON API and dashboard.
       The current `tokens` object in `GET /api/v1/state` running entries and
       `GET /api/v1/<identifier>` returns only `{input_tokens, output_tokens,
       total_tokens}`. Extend `RunningEntry` and the JSON API response with:

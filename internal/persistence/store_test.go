@@ -1523,3 +1523,198 @@ func TestPing_ClosedStore(t *testing.T) {
 		t.Fatal("Ping() on closed store = nil, want error")
 	}
 }
+
+// --- Extended Token Metrics Round-Trip Tests ---
+
+// TestUpsertSessionMetadata_ExtendedFields verifies that the new
+// CacheReadTokens, ModelName, and APIRequestCount fields survive a
+// round-trip through Upsert → Load.
+func TestUpsertSessionMetadata_ExtendedFields(t *testing.T) {
+	t.Parallel()
+
+	s := openTestStore(t)
+	migrateOrFatal(t, s)
+	ctx := context.Background()
+
+	pid := "9876"
+	meta := SessionMetadata{
+		IssueID:         "EXT-1",
+		SessionID:       "sess-ext",
+		AgentPID:        &pid,
+		InputTokens:     500,
+		OutputTokens:    200,
+		TotalTokens:     700,
+		CacheReadTokens: 3000,
+		ModelName:       "claude-sonnet-4-20250514",
+		APIRequestCount: 42,
+		UpdatedAt:       "2026-04-01T12:00:00Z",
+	}
+	if err := s.UpsertSessionMetadata(ctx, meta); err != nil {
+		t.Fatalf("UpsertSessionMetadata: %v", err)
+	}
+
+	got, found, err := s.LoadSessionMetadata(ctx, "EXT-1")
+	if err != nil {
+		t.Fatalf("LoadSessionMetadata: %v", err)
+	}
+	if !found {
+		t.Fatal("expected found=true, got false")
+	}
+	if got.CacheReadTokens != 3000 {
+		t.Errorf("CacheReadTokens = %d, want 3000", got.CacheReadTokens)
+	}
+	if got.ModelName != "claude-sonnet-4-20250514" {
+		t.Errorf("ModelName = %q, want %q", got.ModelName, "claude-sonnet-4-20250514")
+	}
+	if got.APIRequestCount != 42 {
+		t.Errorf("APIRequestCount = %d, want 42", got.APIRequestCount)
+	}
+}
+
+// TestUpsertSessionMetadata_ExtendedFieldsUpdate verifies that updating
+// extended fields overwrites old values correctly.
+func TestUpsertSessionMetadata_ExtendedFieldsUpdate(t *testing.T) {
+	t.Parallel()
+
+	s := openTestStore(t)
+	migrateOrFatal(t, s)
+	ctx := context.Background()
+
+	m1 := SessionMetadata{
+		IssueID:         "EXT-UPD",
+		SessionID:       "sess-1",
+		CacheReadTokens: 100,
+		ModelName:       "model-a",
+		APIRequestCount: 5,
+		UpdatedAt:       "2026-04-01T10:00:00Z",
+	}
+	if err := s.UpsertSessionMetadata(ctx, m1); err != nil {
+		t.Fatalf("UpsertSessionMetadata (first): %v", err)
+	}
+
+	m2 := SessionMetadata{
+		IssueID:         "EXT-UPD",
+		SessionID:       "sess-2",
+		CacheReadTokens: 5000,
+		ModelName:       "model-b",
+		APIRequestCount: 18,
+		UpdatedAt:       "2026-04-01T11:00:00Z",
+	}
+	if err := s.UpsertSessionMetadata(ctx, m2); err != nil {
+		t.Fatalf("UpsertSessionMetadata (second): %v", err)
+	}
+
+	got, _, err := s.LoadSessionMetadata(ctx, "EXT-UPD")
+	if err != nil {
+		t.Fatalf("LoadSessionMetadata: %v", err)
+	}
+	if got.CacheReadTokens != 5000 {
+		t.Errorf("CacheReadTokens = %d, want 5000", got.CacheReadTokens)
+	}
+	if got.ModelName != "model-b" {
+		t.Errorf("ModelName = %q, want %q", got.ModelName, "model-b")
+	}
+	if got.APIRequestCount != 18 {
+		t.Errorf("APIRequestCount = %d, want 18", got.APIRequestCount)
+	}
+}
+
+// TestLoadAllSessionMetadata_ExtendedFields verifies that extended fields
+// are visible via LoadAllSessionMetadata.
+func TestLoadAllSessionMetadata_ExtendedFields(t *testing.T) {
+	t.Parallel()
+
+	s := openTestStore(t)
+	migrateOrFatal(t, s)
+	ctx := context.Background()
+
+	if err := s.UpsertSessionMetadata(ctx, SessionMetadata{
+		IssueID:         "ALL-1",
+		SessionID:       "s1",
+		CacheReadTokens: 111,
+		ModelName:       "model-x",
+		APIRequestCount: 3,
+		UpdatedAt:       "2026-04-01T12:00:00Z",
+	}); err != nil {
+		t.Fatalf("UpsertSessionMetadata: %v", err)
+	}
+
+	all, err := s.LoadAllSessionMetadata(ctx)
+	if err != nil {
+		t.Fatalf("LoadAllSessionMetadata: %v", err)
+	}
+	if len(all) != 1 {
+		t.Fatalf("got %d entries, want 1", len(all))
+	}
+	if all[0].CacheReadTokens != 111 {
+		t.Errorf("CacheReadTokens = %d, want 111", all[0].CacheReadTokens)
+	}
+	if all[0].ModelName != "model-x" {
+		t.Errorf("ModelName = %q, want %q", all[0].ModelName, "model-x")
+	}
+	if all[0].APIRequestCount != 3 {
+		t.Errorf("APIRequestCount = %d, want 3", all[0].APIRequestCount)
+	}
+}
+
+// TestUpsertAggregateMetrics_CacheReadTokens verifies that the new
+// CacheReadTokens field survives a round-trip.
+func TestUpsertAggregateMetrics_CacheReadTokens(t *testing.T) {
+	t.Parallel()
+
+	s := openTestStore(t)
+	migrateOrFatal(t, s)
+	ctx := context.Background()
+
+	metrics := AggregateMetrics{
+		Key:             "agent_totals",
+		InputTokens:     1000,
+		OutputTokens:    500,
+		TotalTokens:     1500,
+		CacheReadTokens: 7500,
+		SecondsRunning:  120.5,
+		UpdatedAt:       "2026-04-01T12:00:00Z",
+	}
+	if err := s.UpsertAggregateMetrics(ctx, metrics); err != nil {
+		t.Fatalf("UpsertAggregateMetrics: %v", err)
+	}
+
+	got, found, err := s.LoadAggregateMetrics(ctx, "agent_totals")
+	if err != nil {
+		t.Fatalf("LoadAggregateMetrics: %v", err)
+	}
+	if !found {
+		t.Fatal("expected found=true, got false")
+	}
+	if got.CacheReadTokens != 7500 {
+		t.Errorf("CacheReadTokens = %d, want 7500", got.CacheReadTokens)
+	}
+}
+
+// TestUpsertAggregateMetrics_CacheReadTokensUpdate verifies that
+// updating CacheReadTokens overwrites the old value.
+func TestUpsertAggregateMetrics_CacheReadTokensUpdate(t *testing.T) {
+	t.Parallel()
+
+	s := openTestStore(t)
+	migrateOrFatal(t, s)
+	ctx := context.Background()
+
+	m1 := AggregateMetrics{Key: "agent_totals", CacheReadTokens: 100, UpdatedAt: "2026-04-01T10:00:00Z"}
+	if err := s.UpsertAggregateMetrics(ctx, m1); err != nil {
+		t.Fatalf("UpsertAggregateMetrics (first): %v", err)
+	}
+
+	m2 := AggregateMetrics{Key: "agent_totals", CacheReadTokens: 9999, UpdatedAt: "2026-04-01T11:00:00Z"}
+	if err := s.UpsertAggregateMetrics(ctx, m2); err != nil {
+		t.Fatalf("UpsertAggregateMetrics (second): %v", err)
+	}
+
+	got, _, err := s.LoadAggregateMetrics(ctx, "agent_totals")
+	if err != nil {
+		t.Fatalf("LoadAggregateMetrics: %v", err)
+	}
+	if got.CacheReadTokens != 9999 {
+		t.Errorf("CacheReadTokens = %d, want 9999", got.CacheReadTokens)
+	}
+}

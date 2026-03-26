@@ -2,6 +2,7 @@ package claude
 
 import (
 	"bufio"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -235,6 +236,20 @@ func TestNormalizeUsage(t *testing.T) {
 			raw:  &rawUsage{},
 			want: domain.TokenUsage{},
 		},
+		{
+			name: "cache read input tokens",
+			raw: &rawUsage{
+				InputTokens:          12000,
+				OutputTokens:         3000,
+				CacheReadInputTokens: 8000,
+			},
+			want: domain.TokenUsage{
+				InputTokens:     12000,
+				OutputTokens:    3000,
+				TotalTokens:     15000,
+				CacheReadTokens: 8000,
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -410,5 +425,43 @@ func TestContentBlocks_InvalidJSON(t *testing.T) {
 	blocks := ev.contentBlocks()
 	if blocks != nil {
 		t.Errorf("contentBlocks(invalid) = %v, want nil", blocks)
+	}
+}
+
+// TestRawAssistantMessageMeta_FromFixture verifies that model and
+// per-request usage can be extracted from the assistant_message fixture.
+func TestRawAssistantMessageMeta_FromFixture(t *testing.T) {
+	t.Parallel()
+
+	data := loadFixture(t, "assistant_message.json")
+	ev, err := parseEvent(data)
+	if err != nil {
+		t.Fatalf("parseEvent: %v", err)
+	}
+
+	var meta rawAssistantMessageMeta
+	if err := json.Unmarshal(ev.Message, &meta); err != nil {
+		t.Fatalf("unmarshal meta: %v", err)
+	}
+	if meta.Model != "claude-sonnet-4-20250514" {
+		t.Errorf("Model = %q, want %q", meta.Model, "claude-sonnet-4-20250514")
+	}
+	if meta.Usage == nil {
+		t.Fatal("Usage is nil, want non-nil")
+	}
+	if meta.Usage.InputTokens != 12500 {
+		t.Errorf("Usage.InputTokens = %d, want 12500", meta.Usage.InputTokens)
+	}
+	if meta.Usage.OutputTokens != 350 {
+		t.Errorf("Usage.OutputTokens = %d, want 350", meta.Usage.OutputTokens)
+	}
+	if meta.Usage.CacheReadInputTokens != 8000 {
+		t.Errorf("Usage.CacheReadInputTokens = %d, want 8000", meta.Usage.CacheReadInputTokens)
+	}
+
+	// normalizeUsage must map CacheReadInputTokens → CacheReadTokens.
+	normalized := normalizeUsage(meta.Usage)
+	if normalized.CacheReadTokens != 8000 {
+		t.Errorf("normalizeUsage().CacheReadTokens = %d, want 8000", normalized.CacheReadTokens)
 	}
 }

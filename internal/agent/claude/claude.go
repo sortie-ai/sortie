@@ -9,6 +9,7 @@ package claude
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -266,6 +267,17 @@ func (a *ClaudeCodeAdapter) RunTurn(ctx context.Context, session domain.Session,
 	var lastResult *rawEvent
 	var usage domain.TokenUsage
 
+	// Cumulative accumulators for per-assistant-message token usage.
+	// Claude Code assistant message usage fields are per-request (not
+	// cumulative). The orchestrator delta algorithm requires cumulative
+	// values, so we accumulate here and emit cumulative totals.
+	var (
+		cumulativeInput     int64
+		cumulativeOutput    int64
+		cumulativeCacheRead int64
+		lastModel           string
+	)
+
 	for scanner.Scan() {
 		line := scanner.Bytes()
 		now := time.Now().UTC()
@@ -309,6 +321,33 @@ func (a *ClaudeCodeAdapter) RunTurn(ctx context.Context, session domain.Session,
 			}
 
 		case "assistant":
+			// Extract model and per-request usage from assistant message.
+			if len(event.Message) > 0 {
+				var meta rawAssistantMessageMeta
+				if err := json.Unmarshal(event.Message, &meta); err == nil {
+					if meta.Model != "" {
+						lastModel = meta.Model
+					}
+					if meta.Usage != nil {
+						cumulativeInput += meta.Usage.InputTokens
+						cumulativeOutput += meta.Usage.OutputTokens
+						cumulativeCacheRead += meta.Usage.CacheReadInputTokens
+						cumulativeTotal := cumulativeInput + cumulativeOutput
+						usage = domain.TokenUsage{
+							InputTokens:     cumulativeInput,
+							OutputTokens:    cumulativeOutput,
+							TotalTokens:     cumulativeTotal,
+							CacheReadTokens: cumulativeCacheRead,
+						}
+						params.OnEvent(domain.AgentEvent{
+							Type:      domain.EventTokenUsage,
+							Timestamp: now,
+							Usage:     usage,
+							Model:     lastModel,
+						})
+					}
+				}
+			}
 			params.OnEvent(domain.AgentEvent{
 				Type:      domain.EventNotification,
 				Timestamp: now,
@@ -323,6 +362,7 @@ func (a *ClaudeCodeAdapter) RunTurn(ctx context.Context, session domain.Session,
 				Type:      domain.EventTokenUsage,
 				Timestamp: now,
 				Usage:     usage,
+				Model:     lastModel,
 			})
 
 		case "stream_event":

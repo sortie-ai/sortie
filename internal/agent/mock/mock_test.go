@@ -547,3 +547,85 @@ func TestEventStream_ReturnsNil(t *testing.T) {
 		t.Errorf("EventStream() = %v, want nil", ch)
 	}
 }
+
+// TestNewMockAdapter_ExtendedConfigKeys verifies that the new
+// cache_read_tokens_per_turn and model_name config keys are parsed.
+func TestNewMockAdapter_ExtendedConfigKeys(t *testing.T) {
+	t.Parallel()
+
+	adapter, err := NewMockAdapter(map[string]any{
+		"cache_read_tokens_per_turn": 500,
+		"model_name":                 "claude-sonnet-4-20250514",
+	})
+	if err != nil {
+		t.Fatalf("NewMockAdapter() error = %v", err)
+	}
+
+	m := adapter.(*MockAdapter)
+	if m.cacheReadTokensPerTurn != 500 {
+		t.Errorf("cacheReadTokensPerTurn = %d, want 500", m.cacheReadTokensPerTurn)
+	}
+	if m.modelName != "claude-sonnet-4-20250514" {
+		t.Errorf("modelName = %q, want %q", m.modelName, "claude-sonnet-4-20250514")
+	}
+}
+
+// TestRunTurn_ExtendedTokenFields verifies that token_usage events include
+// CacheReadTokens and Model, and that cumulative accumulation works.
+func TestRunTurn_ExtendedTokenFields(t *testing.T) {
+	t.Parallel()
+
+	adapter, _ := NewMockAdapter(map[string]any{
+		"input_tokens_per_turn":      100,
+		"output_tokens_per_turn":     50,
+		"cache_read_tokens_per_turn": 200,
+		"model_name":                 "test-model",
+		"events_per_turn":            0,
+	})
+	sess := domain.Session{ID: "s"}
+
+	// Turn 1: cumulative cache_read = 200.
+	params1 := defaultParams()
+	events1 := collectEvents(&params1)
+	if _, err := adapter.RunTurn(context.Background(), sess, params1); err != nil {
+		t.Fatalf("RunTurn(1) error = %v", err)
+	}
+
+	var tokenEv1 *domain.AgentEvent
+	for i := range *events1 {
+		if (*events1)[i].Type == domain.EventTokenUsage {
+			tokenEv1 = &(*events1)[i]
+			break
+		}
+	}
+	if tokenEv1 == nil {
+		t.Fatal("no token_usage event in turn 1")
+	}
+	if tokenEv1.Usage.CacheReadTokens != 200 {
+		t.Errorf("turn 1 CacheReadTokens = %d, want 200", tokenEv1.Usage.CacheReadTokens)
+	}
+	if tokenEv1.Model != "test-model" {
+		t.Errorf("turn 1 Model = %q, want %q", tokenEv1.Model, "test-model")
+	}
+
+	// Turn 2: cumulative cache_read = 400.
+	params2 := defaultParams()
+	events2 := collectEvents(&params2)
+	if _, err := adapter.RunTurn(context.Background(), sess, params2); err != nil {
+		t.Fatalf("RunTurn(2) error = %v", err)
+	}
+
+	var tokenEv2 *domain.AgentEvent
+	for i := range *events2 {
+		if (*events2)[i].Type == domain.EventTokenUsage {
+			tokenEv2 = &(*events2)[i]
+			break
+		}
+	}
+	if tokenEv2 == nil {
+		t.Fatal("no token_usage event in turn 2")
+	}
+	if tokenEv2.Usage.CacheReadTokens != 400 {
+		t.Errorf("turn 2 CacheReadTokens = %d, want 400", tokenEv2.Usage.CacheReadTokens)
+	}
+}

@@ -28,15 +28,17 @@ var _ domain.AgentAdapter = (*MockAdapter)(nil)
 // any subprocess. All fields except [MockAdapter.turnIndex] are
 // read-only after construction.
 type MockAdapter struct {
-	sessionID           string
-	agentPID            string
-	startError          string
-	turnOutcomes        []string
-	eventsPerTurn       int
-	inputTokensPerTurn  int
-	outputTokensPerTurn int
-	turnDelayMS         int
-	stopError           string
+	sessionID              string
+	agentPID               string
+	startError             string
+	turnOutcomes           []string
+	eventsPerTurn          int
+	inputTokensPerTurn     int
+	outputTokensPerTurn    int
+	cacheReadTokensPerTurn int
+	modelName              string
+	turnDelayMS            int
+	stopError              string
 
 	// mu guards turnIndex for concurrent RunTurn calls.
 	mu        sync.Mutex
@@ -93,7 +95,11 @@ func NewMockAdapter(config map[string]any) (domain.AgentAdapter, error) {
 	m.eventsPerTurn = intFromConfig(config, "events_per_turn", m.eventsPerTurn)
 	m.inputTokensPerTurn = intFromConfig(config, "input_tokens_per_turn", m.inputTokensPerTurn)
 	m.outputTokensPerTurn = intFromConfig(config, "output_tokens_per_turn", m.outputTokensPerTurn)
+	m.cacheReadTokensPerTurn = intFromConfig(config, "cache_read_tokens_per_turn", m.cacheReadTokensPerTurn)
 	m.turnDelayMS = intFromConfig(config, "turn_delay_ms", m.turnDelayMS)
+	if v, ok := config["model_name"].(string); ok {
+		m.modelName = v
+	}
 
 	return m, nil
 }
@@ -180,10 +186,12 @@ func (m *MockAdapter) RunTurn(ctx context.Context, session domain.Session, param
 	// Compute cumulative token usage.
 	cumulativeInput := int64(currentIndex+1) * int64(m.inputTokensPerTurn)
 	cumulativeOutput := int64(currentIndex+1) * int64(m.outputTokensPerTurn)
+	cumulativeCacheRead := int64(currentIndex+1) * int64(m.cacheReadTokensPerTurn)
 	usage := domain.TokenUsage{
-		InputTokens:  cumulativeInput,
-		OutputTokens: cumulativeOutput,
-		TotalTokens:  cumulativeInput + cumulativeOutput,
+		InputTokens:     cumulativeInput,
+		OutputTokens:    cumulativeOutput,
+		TotalTokens:     cumulativeInput + cumulativeOutput,
+		CacheReadTokens: cumulativeCacheRead,
 	}
 
 	// Emit token_usage event.
@@ -191,6 +199,7 @@ func (m *MockAdapter) RunTurn(ctx context.Context, session domain.Session, param
 		Type:      domain.EventTokenUsage,
 		Timestamp: time.Now().UTC(),
 		Usage:     usage,
+		Model:     m.modelName,
 		Message:   "mock token usage",
 	})
 

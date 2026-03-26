@@ -30,23 +30,27 @@ type stateCounts struct {
 }
 
 type runningEntryResponse struct {
-	IssueID         string    `json:"issue_id"`
-	IssueIdentifier string    `json:"issue_identifier"`
-	State           string    `json:"state"`
-	SessionID       string    `json:"session_id"`
-	TurnCount       int       `json:"turn_count"`
-	LastEvent       string    `json:"last_event"`
-	LastMessage     string    `json:"last_message"`
-	StartedAt       time.Time `json:"started_at"`
-	LastEventAt     time.Time `json:"last_event_at"`
-	WorkspacePath   string    `json:"workspace_path"`
-	Tokens          tokenInfo `json:"tokens"`
+	IssueID         string         `json:"issue_id"`
+	IssueIdentifier string         `json:"issue_identifier"`
+	State           string         `json:"state"`
+	SessionID       string         `json:"session_id"`
+	TurnCount       int            `json:"turn_count"`
+	LastEvent       string         `json:"last_event"`
+	LastMessage     string         `json:"last_message"`
+	StartedAt       time.Time      `json:"started_at"`
+	LastEventAt     time.Time      `json:"last_event_at"`
+	WorkspacePath   string         `json:"workspace_path"`
+	Tokens          tokenInfo      `json:"tokens"`
+	ModelName       string         `json:"model_name,omitempty"`
+	APIRequestCount int            `json:"api_request_count"`
+	RequestsByModel map[string]int `json:"requests_by_model,omitempty"`
 }
 
 type tokenInfo struct {
-	InputTokens  int64 `json:"input_tokens"`
-	OutputTokens int64 `json:"output_tokens"`
-	TotalTokens  int64 `json:"total_tokens"`
+	InputTokens     int64 `json:"input_tokens"`
+	OutputTokens    int64 `json:"output_tokens"`
+	TotalTokens     int64 `json:"total_tokens"`
+	CacheReadTokens int64 `json:"cache_read_tokens"`
 }
 
 type retryEntryResponse struct {
@@ -110,10 +114,14 @@ func toRunningEntryResponse(e orchestrator.SnapshotRunningEntry) runningEntryRes
 		LastEventAt:     e.LastAgentTimestamp.UTC(),
 		WorkspacePath:   e.WorkspacePath,
 		Tokens: tokenInfo{
-			InputTokens:  e.AgentInputTokens,
-			OutputTokens: e.AgentOutputTokens,
-			TotalTokens:  e.AgentTotalTokens,
+			InputTokens:     e.AgentInputTokens,
+			OutputTokens:    e.AgentOutputTokens,
+			TotalTokens:     e.AgentTotalTokens,
+			CacheReadTokens: e.CacheReadTokens,
 		},
+		ModelName:       e.ModelName,
+		APIRequestCount: e.APIRequestCount,
+		RequestsByModel: e.RequestsByModel,
 	}
 }
 

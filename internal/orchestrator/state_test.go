@@ -535,4 +535,94 @@ func TestRuntimeSnapshot(t *testing.T) {
 			t.Errorf("WorkspacePath = %q, want empty string", result.Running[0].WorkspacePath)
 		}
 	})
+
+	// --- Extended token metric snapshot tests ---
+
+	t.Run("extended fields copied to snapshot", func(t *testing.T) {
+		t.Parallel()
+
+		state := NewState(5000, 10, nil, AgentTotals{CacheReadTokens: 999})
+		state.Running["ext-1"] = &RunningEntry{
+			Identifier:      "MT-EXT",
+			Issue:           domain.Issue{ID: "ext-1", State: "In Progress"},
+			StartedAt:       fixedNow.Add(-10 * time.Second),
+			CacheReadTokens: 2500,
+			ModelName:       "claude-sonnet-4-20250514",
+			APIRequestCount: 7,
+			RequestsByModel: map[string]int{"claude-sonnet-4-20250514": 5, "claude-opus-4-20250514": 2},
+		}
+
+		result := RuntimeSnapshot(state, fixedNow)
+
+		if len(result.Running) != 1 {
+			t.Fatalf("len(Running) = %d, want 1", len(result.Running))
+		}
+		snap := result.Running[0]
+		if snap.CacheReadTokens != 2500 {
+			t.Errorf("CacheReadTokens = %d, want 2500", snap.CacheReadTokens)
+		}
+		if snap.ModelName != "claude-sonnet-4-20250514" {
+			t.Errorf("ModelName = %q, want %q", snap.ModelName, "claude-sonnet-4-20250514")
+		}
+		if snap.APIRequestCount != 7 {
+			t.Errorf("APIRequestCount = %d, want 7", snap.APIRequestCount)
+		}
+		if len(snap.RequestsByModel) != 2 {
+			t.Errorf("len(RequestsByModel) = %d, want 2", len(snap.RequestsByModel))
+		}
+		if snap.RequestsByModel["claude-sonnet-4-20250514"] != 5 {
+			t.Errorf("RequestsByModel[sonnet] = %d, want 5", snap.RequestsByModel["claude-sonnet-4-20250514"])
+		}
+
+		// AgentTotals.CacheReadTokens must come from state.AgentTotals.
+		if result.AgentTotals.CacheReadTokens != 999 {
+			t.Errorf("AgentTotals.CacheReadTokens = %d, want 999", result.AgentTotals.CacheReadTokens)
+		}
+	})
+
+	t.Run("RequestsByModel snapshot is an isolated copy", func(t *testing.T) {
+		t.Parallel()
+
+		rbm := map[string]int{"model-a": 3}
+		state := NewState(5000, 10, nil, AgentTotals{})
+		state.Running["iso-1"] = &RunningEntry{
+			Identifier:      "MT-ISO",
+			Issue:           domain.Issue{ID: "iso-1", State: "In Progress"},
+			StartedAt:       fixedNow.Add(-5 * time.Second),
+			RequestsByModel: rbm,
+		}
+
+		result := RuntimeSnapshot(state, fixedNow)
+
+		// Mutate the source map after snapshot.
+		rbm["model-a"] = 999
+		rbm["model-b"] = 1
+
+		snap := result.Running[0]
+		if snap.RequestsByModel["model-a"] != 3 {
+			t.Errorf("after mutation: RequestsByModel[model-a] = %d, want 3 (copy isolation)", snap.RequestsByModel["model-a"])
+		}
+		if _, exists := snap.RequestsByModel["model-b"]; exists {
+			t.Error("after mutation: RequestsByModel[model-b] exists, want absent")
+		}
+	})
+
+	t.Run("nil RequestsByModel produces nil in snapshot", func(t *testing.T) {
+		t.Parallel()
+
+		state := NewState(5000, 10, nil, AgentTotals{})
+		state.Running["nil-rbm"] = &RunningEntry{
+			Identifier:      "MT-NIL",
+			Issue:           domain.Issue{ID: "nil-rbm", State: "In Progress"},
+			StartedAt:       fixedNow.Add(-1 * time.Second),
+			RequestsByModel: nil,
+		}
+
+		result := RuntimeSnapshot(state, fixedNow)
+
+		snap := result.Running[0]
+		if snap.RequestsByModel != nil {
+			t.Errorf("RequestsByModel = %v, want nil", snap.RequestsByModel)
+		}
+	})
 }

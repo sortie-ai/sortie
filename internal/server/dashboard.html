@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta http-equiv="refresh" content="5" />
     <title>Sortie Dashboard</title>
+    <link rel="icon" type="image/x-icon" href="/favicon.ico" />
     <style>
       :root {
         --font-family:
@@ -272,6 +273,8 @@
               <th class="text-right">Turns</th>
               <th>Duration</th>
               <th>Last Event</th>
+              <th>Model</th>
+              <th class="text-right">Requests</th>
               <th class="text-right">Tokens</th>
             </tr>
           </thead>
@@ -286,7 +289,12 @@
               <td class="text-right">{{.TurnCount}}</td>
               <td>{{.Duration}}</td>
               <td>{{.LastEvent}}</td>
-              <td class="text-right">{{fmtInt .TotalTokens}}</td>
+              <td>{{if .ModelName}}{{.ModelName}}{{else}}&mdash;{{end}}</td>
+              <td class="text-right">{{.APIRequestCount}}</td>
+              <td class="text-right">
+                {{fmtInt .TotalTokens}}{{if .CacheReadTokens}}
+                <small>({{fmtInt .CacheReadTokens}} cached)</small>{{end}}
+              </td>
             </tr>
             {{end}}
           </tbody>
@@ -328,7 +336,8 @@
     <footer>
       <div class="aggregate">
         Agent runtime: {{.RuntimeDisplay}} &middot; Input: {{fmtInt
-        .InputTokens}} &middot; Output: {{fmtInt .OutputTokens}}
+        .InputTokens}} &middot; Cache: {{fmtInt .CacheReadTokens}} &middot;
+        Output: {{fmtInt .OutputTokens}}
       </div>
       <div>Auto-refresh every 5s</div>
     </footer>
