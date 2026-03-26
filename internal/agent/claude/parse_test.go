@@ -469,8 +469,8 @@ func TestRawAssistantMessageMeta_FromFixture(t *testing.T) {
 
 // collectToolEvents delegates to [processToolBlocks] and collects the
 // emitted [domain.AgentEvent] values. It mirrors the RunTurn call
-// sites, using now for both the monotonic observed timestamp and the
-// wall-clock event timestamp.
+// sites, using the same now value for both the observed timestamp and
+// the event wall-clock timestamp in tests.
 func collectToolEvents(t *testing.T, ev rawEvent, inFlight map[string]inFlightTool, now time.Time) []domain.AgentEvent {
 	t.Helper()
 	var events []domain.AgentEvent
