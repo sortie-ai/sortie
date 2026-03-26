@@ -126,7 +126,7 @@ func toRunningEntryResponse(e orchestrator.SnapshotRunningEntry, nowArgs ...time
 		RequestsByModel: e.RequestsByModel,
 	}
 
-	if len(nowArgs) > 0 {
+	if len(nowArgs) > 0 && !e.StartedAt.IsZero() {
 		now := nowArgs[0]
 		elapsedMs := now.Sub(e.StartedAt).Milliseconds()
 		if elapsedMs > 0 && e.ToolTimeMs > 0 {

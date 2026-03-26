@@ -433,6 +433,32 @@ func TestBuildDashboardData(t *testing.T) {
 			t.Errorf("APITimePct = %q, want %q (zero elapsed)", data.Running[0].APITimePct, "N/A")
 		}
 	})
+
+	t.Run("timing N/A when StartedAt is zero value", func(t *testing.T) {
+		t.Parallel()
+
+		timingSnap := orchestrator.RuntimeSnapshotResult{
+			GeneratedAt: now,
+			Running: []orchestrator.SnapshotRunningEntry{
+				{
+					Identifier: "MT-ZERO-START",
+					State:      "In Progress",
+					StartedAt:  time.Time{}, // zero value
+					ToolTimeMs: 5000,
+					APITimeMs:  10000,
+				},
+			},
+		}
+
+		data := buildDashboardData(timingSnap, "v1", startedAt, nil, now)
+
+		if data.Running[0].ToolTimePct != "N/A" {
+			t.Errorf("ToolTimePct = %q, want %q (zero StartedAt)", data.Running[0].ToolTimePct, "N/A")
+		}
+		if data.Running[0].APITimePct != "N/A" {
+			t.Errorf("APITimePct = %q, want %q (zero StartedAt)", data.Running[0].APITimePct, "N/A")
+		}
+	})
 }
 
 func TestFormatDuration(t *testing.T) {

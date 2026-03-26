@@ -211,14 +211,16 @@ func buildDashboardData(
 			hasSSH = true
 		}
 
-		elapsedMs := snap.GeneratedAt.Sub(e.StartedAt).Milliseconds()
 		toolPct := "N/A"
-		if elapsedMs > 0 && e.ToolTimeMs > 0 {
-			toolPct = fmt.Sprintf("%.1f%%", float64(e.ToolTimeMs)/float64(elapsedMs)*100.0)
-		}
 		apiPct := "N/A"
-		if elapsedMs > 0 && e.APITimeMs > 0 {
-			apiPct = fmt.Sprintf("%.1f%%", float64(e.APITimeMs)/float64(elapsedMs)*100.0)
+		if !e.StartedAt.IsZero() {
+			elapsedMs := snap.GeneratedAt.Sub(e.StartedAt).Milliseconds()
+			if elapsedMs > 0 && e.ToolTimeMs > 0 {
+				toolPct = fmt.Sprintf("%.1f%%", float64(e.ToolTimeMs)/float64(elapsedMs)*100.0)
+			}
+			if elapsedMs > 0 && e.APITimeMs > 0 {
+				apiPct = fmt.Sprintf("%.1f%%", float64(e.APITimeMs)/float64(elapsedMs)*100.0)
+			}
 		}
 
 		running[i] = dashboardRunningEntry{

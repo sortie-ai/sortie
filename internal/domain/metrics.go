@@ -30,7 +30,7 @@ type Metrics interface {
 	// --- Counters (monotonically increasing) ---
 
 	// AddTokens increments the cumulative token counter by count.
-	// tokenType is "input" or "output"
+	// tokenType is "input", "output", or "cache_read"
 	// (sortie_tokens_total{type} counter).
 	AddTokens(tokenType string, count int64)
 

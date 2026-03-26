@@ -420,6 +420,66 @@ func TestToRunningEntryResponse_TimingJSON_NumberWhenPresent(t *testing.T) {
 	}
 }
 
+// TestToRunningEntryResponse_ZeroStartedAt_NilPercentages verifies that
+// when StartedAt is the zero time, timing percentages are nil even when
+// now is provided and timing values are non-zero.
+func TestToRunningEntryResponse_ZeroStartedAt_NilPercentages(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 3, 24, 12, 0, 0, 0, time.UTC)
+
+	entry := orchestrator.SnapshotRunningEntry{
+		IssueID:    "zero-start",
+		Identifier: "MT-ZS",
+		StartedAt:  time.Time{}, // zero value
+		ToolTimeMs: 5000,
+		APITimeMs:  10000,
+	}
+
+	got := toRunningEntryResponse(entry, now)
+
+	if got.ToolTimePercent != nil {
+		t.Errorf("ToolTimePercent = %v, want nil (zero StartedAt)", *got.ToolTimePercent)
+	}
+	if got.APITimePercent != nil {
+		t.Errorf("APITimePercent = %v, want nil (zero StartedAt)", *got.APITimePercent)
+	}
+}
+
+// TestToRunningEntryResponse_ZeroStartedAt_JSON_Null verifies that the
+// JSON output contains null for timing percentages when StartedAt is zero.
+func TestToRunningEntryResponse_ZeroStartedAt_JSON_Null(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 3, 24, 12, 0, 0, 0, time.UTC)
+
+	entry := orchestrator.SnapshotRunningEntry{
+		IssueID:    "zero-start-json",
+		Identifier: "MT-ZSJ",
+		StartedAt:  time.Time{},
+		ToolTimeMs: 5000,
+		APITimeMs:  10000,
+	}
+
+	got := toRunningEntryResponse(entry, now)
+	data, err := json.Marshal(got)
+	if err != nil {
+		t.Fatalf("json.Marshal: %v", err)
+	}
+
+	var decoded map[string]any
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("json.Unmarshal: %v", err)
+	}
+
+	if decoded["tool_time_percent"] != nil {
+		t.Errorf("JSON tool_time_percent = %v, want null (zero StartedAt)", decoded["tool_time_percent"])
+	}
+	if decoded["api_time_percent"] != nil {
+		t.Errorf("JSON api_time_percent = %v, want null (zero StartedAt)", decoded["api_time_percent"])
+	}
+}
+
 func TestToRetryEntryResponse(t *testing.T) {
 	t.Parallel()
 
