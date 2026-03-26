@@ -21,6 +21,7 @@ import (
 	"sync"
 	"syscall"
 	"time"
+	"unicode/utf8"
 
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/logging"
@@ -596,6 +597,58 @@ func (a *ClaudeCodeAdapter) EventStream() <-chan domain.AgentEvent {
 	return nil
 }
 
+// maxToolErrorLen is the maximum number of bytes written to
+// [domain.AgentEvent.Message] when a tool_result block carries
+// is_error: true. Longer outputs are truncated at the nearest UTF-8
+// rune boundary to keep log lines within a practical single-record size.
+const maxToolErrorLen = 512
+
+// toolResultText extracts a human-readable string from a tool_result
+// content block. It handles the two shapes emitted by Claude Code:
+// a plain JSON string and an array of typed content objects. Returns
+// an empty string when neither shape matches or when both Text and
+// Content are empty.
+func toolResultText(block rawContentBlock) string {
+	if block.Text != "" {
+		return block.Text
+	}
+	if len(block.Content) == 0 {
+		return ""
+	}
+	var s string
+	if err := json.Unmarshal(block.Content, &s); err == nil && s != "" {
+		return s
+	}
+	var items []struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	}
+	if err := json.Unmarshal(block.Content, &items); err == nil {
+		for _, item := range items {
+			if item.Type == "text" && item.Text != "" {
+				return item.Text
+			}
+		}
+	}
+	return ""
+}
+
+// truncateToolError returns s truncated to at most maxLen bytes at a
+// UTF-8 rune boundary. Returns s unchanged when len(s) <= maxLen.
+func truncateToolError(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	n := 0
+	for i, r := range s {
+		if n+utf8.RuneLen(r) > maxLen {
+			return s[:i]
+		}
+		n += utf8.RuneLen(r)
+	}
+	return s
+}
+
 // processToolBlocks scans content blocks for tool_use and tool_result
 // entries. tool_use blocks are registered in inFlight; tool_result
 // blocks are correlated against inFlight and emitted as
@@ -623,13 +676,19 @@ func processToolBlocks(
 				}
 				delete(inFlight, block.ToolUseID)
 			}
+			msg := "tool_result: " + toolName
+			if block.IsError {
+				if errText := toolResultText(block); errText != "" {
+					msg = truncateToolError(errText, maxToolErrorLen)
+				}
+			}
 			onEvent(domain.AgentEvent{
 				Type:           domain.EventToolResult,
 				Timestamp:      wallTime,
 				ToolName:       toolName,
 				ToolDurationMS: durationMS,
 				ToolError:      block.IsError,
-				Message:        "tool_result: " + toolName,
+				Message:        msg,
 			})
 		}
 	}

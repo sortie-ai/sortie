@@ -54,12 +54,13 @@ type rawUsage struct {
 // rawContentBlock represents a single block inside an assistant
 // message content array.
 type rawContentBlock struct {
-	Type      string `json:"type"`
-	Text      string `json:"text,omitempty"`
-	Name      string `json:"name,omitempty"`
-	ID        string `json:"id,omitempty"`
-	ToolUseID string `json:"tool_use_id,omitempty"`
-	IsError   bool   `json:"is_error,omitempty"`
+	Type      string          `json:"type"`
+	Text      string          `json:"text,omitempty"`
+	Name      string          `json:"name,omitempty"`
+	ID        string          `json:"id,omitempty"`
+	ToolUseID string          `json:"tool_use_id,omitempty"`
+	IsError   bool            `json:"is_error,omitempty"`
+	Content   json.RawMessage `json:"content,omitempty"`
 }
 
 // rawAssistantMessage is the nested message object inside an
