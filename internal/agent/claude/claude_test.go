@@ -1730,7 +1730,7 @@ func TestToolResultText(t *testing.T) {
 			want:  "",
 		},
 		{
-			name:  "truncation",
+			name:  "long_json_string",
 			block: rawContentBlock{Content: []byte(longContent)},
 			want:  longStr,
 		},
