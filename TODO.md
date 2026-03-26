@@ -908,6 +908,21 @@ JSON API + HTML dashboard, Prometheus `/metrics`), and adds agent capabilities.
       **Verify:** `docs/workflow-reference.md` reflects all new fields.
       No contradictions with `docs/architecture.md`.
 
+- [ ] 8.23 Emit `EventToolResult` from the Claude Code adapter. The adapter
+      currently parses `tool_use`/`tool_result` content blocks from assistant
+      messages but does not emit normalized `domain.EventToolResult` events.
+      This means `sortie_tool_calls_total` (task 8.20) stays at zero in
+      production. Correlate `tool_use` blocks (which carry `name`) with
+      subsequent `tool_result` blocks (which carry `is_error`) to emit
+      `EventToolResult` with `ToolName`, `ToolDurationMS` (elapsed between
+      tool_use and tool_result), and `ToolError`. Requires tracking
+      in-flight tool_use IDs to match results.
+      **Verify:** unit test with Claude-format JSON fixture containing
+      `tool_use` + `tool_result` blocks confirms `EventToolResult` events
+      are emitted with correct `ToolName` and `ToolError` values.
+      Integration test with `SORTIE_CLAUDE_TEST=1` confirms real tool
+      calls produce non-zero `sortie_tool_calls_total`.
+
 ## Milestone 9: Self-Hosting (Sortie Builds Sortie)
 
 At this point, Sortie has enough functionality to orchestrate its own development. Create
