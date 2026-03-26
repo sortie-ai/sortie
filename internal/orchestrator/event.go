@@ -85,6 +85,25 @@ func HandleAgentEvent(state *State, issueID string, event domain.AgentEvent, log
 			result = outcomeError
 		}
 		metrics.IncToolCalls(event.ToolName, result)
+
+		if event.ToolError {
+			errMsg := event.Message
+			if errMsg == "" {
+				errMsg = "tool returned error"
+			}
+			log.Info("tool call completed",
+				slog.String("tool", event.ToolName),
+				slog.Int64("duration_ms", event.ToolDurationMS),
+				slog.String("result", result),
+				slog.String("error", errMsg),
+			)
+		} else {
+			log.Info("tool call completed",
+				slog.String("tool", event.ToolName),
+				slog.Int64("duration_ms", event.ToolDurationMS),
+				slog.String("result", result),
+			)
+		}
 	}
 
 	// Increment TurnCount on turn-finalization events only. Every
@@ -190,12 +209,7 @@ func HandleAgentEvent(state *State, issueID string, event domain.AgentEvent, log
 		)
 	case domain.EventTokenUsage:
 		// Logged inside the delta computation block above.
-	case domain.EventToolResult:
-		log.Debug("agent event processed",
-			slog.Any("event_type", event.Type),
-			slog.String("tool_name", event.ToolName),
-			slog.Int64("duration_ms", event.ToolDurationMS),
-		)
+
 	case domain.EventTurnCompleted,
 		domain.EventTurnFailed,
 		domain.EventTurnCancelled,
