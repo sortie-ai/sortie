@@ -850,6 +850,182 @@ exit 0
 	t.Error("no turn_completed event found")
 }
 
+// TestRunTurn_AssistantUsage_SuppressesResultTokenUsage verifies that when
+// assistant messages emit per-request usage, the result event does NOT emit
+// a duplicate token_usage event. The dedup uses an explicit boolean.
+func TestRunTurn_AssistantUsage_SuppressesResultTokenUsage(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	// Assistant message carries usage → emittedUsage = true.
+	// Result event should NOT emit token_usage.
+	script := writeScript(t, tmpDir, `
+cat <<'JSONL'
+{"type":"system","subtype":"init","session_id":"dedup-sess","cwd":"/tmp"}
+{"type":"assistant","message":{"model":"claude-sonnet-4-20250514","usage":{"input_tokens":80,"output_tokens":20,"cache_read_input_tokens":5},"content":[{"type":"text","text":"Working."}]},"session_id":"dedup-sess"}
+{"type":"result","subtype":"success","result":"Done.","is_error":false,"usage":{"input_tokens":80,"output_tokens":20},"session_id":"dedup-sess"}
+JSONL
+exit 0
+`)
+
+	adapter, _ := NewClaudeCodeAdapter(map[string]any{})
+	session, err := adapter.StartSession(context.Background(), domain.StartSessionParams{
+		WorkspacePath: tmpDir,
+		AgentConfig:   domain.AgentConfig{Command: script},
+	})
+	if err != nil {
+		t.Fatalf("StartSession() error = %v", err)
+	}
+
+	var events []domain.AgentEvent
+	_, err = adapter.RunTurn(context.Background(), session, domain.RunTurnParams{
+		Prompt: "test",
+		OnEvent: func(e domain.AgentEvent) {
+			events = append(events, e)
+		},
+	})
+	if err != nil {
+		t.Fatalf("RunTurn() error = %v", err)
+	}
+
+	// Count token_usage events — should be exactly 1 (from assistant), not 2.
+	var tokenUsageCount int
+	for _, e := range events {
+		if e.Type == domain.EventTokenUsage {
+			tokenUsageCount++
+		}
+	}
+	if tokenUsageCount != 1 {
+		eventTypes := make([]domain.AgentEventType, len(events))
+		for i, e := range events {
+			eventTypes[i] = e.Type
+		}
+		t.Errorf("token_usage events = %d, want 1 (dedup should suppress result emission); events = %v",
+			tokenUsageCount, eventTypes)
+	}
+}
+
+// TestRunTurn_AssistantZeroUsage_SuppressesResultTokenUsage verifies that
+// the dedup boolean tracks emission, not cumulative counts. Even when
+// assistant messages report all-zero usage, the result event must not
+// emit a duplicate token_usage.
+func TestRunTurn_AssistantZeroUsage_SuppressesResultTokenUsage(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	// Assistant carries a usage object with all-zero counts. The adapter
+	// still emits a token_usage event (zeroes are valid). The boolean
+	// emittedUsage is set true, so the result event must not emit again.
+	script := writeScript(t, tmpDir, `
+cat <<'JSONL'
+{"type":"system","subtype":"init","session_id":"zero-usage","cwd":"/tmp"}
+{"type":"assistant","message":{"model":"claude-sonnet-4-20250514","usage":{"input_tokens":0,"output_tokens":0,"cache_read_input_tokens":0},"content":[{"type":"text","text":"Thinking."}]},"session_id":"zero-usage"}
+{"type":"result","subtype":"success","result":"OK.","is_error":false,"usage":{"input_tokens":0,"output_tokens":0},"session_id":"zero-usage"}
+JSONL
+exit 0
+`)
+
+	adapter, _ := NewClaudeCodeAdapter(map[string]any{})
+	session, err := adapter.StartSession(context.Background(), domain.StartSessionParams{
+		WorkspacePath: tmpDir,
+		AgentConfig:   domain.AgentConfig{Command: script},
+	})
+	if err != nil {
+		t.Fatalf("StartSession() error = %v", err)
+	}
+
+	var events []domain.AgentEvent
+	_, err = adapter.RunTurn(context.Background(), session, domain.RunTurnParams{
+		Prompt: "test",
+		OnEvent: func(e domain.AgentEvent) {
+			events = append(events, e)
+		},
+	})
+	if err != nil {
+		t.Fatalf("RunTurn() error = %v", err)
+	}
+
+	var tokenUsageCount int
+	for _, e := range events {
+		if e.Type == domain.EventTokenUsage {
+			tokenUsageCount++
+		}
+	}
+	if tokenUsageCount != 1 {
+		eventTypes := make([]domain.AgentEventType, len(events))
+		for i, e := range events {
+			eventTypes[i] = e.Type
+		}
+		t.Errorf("token_usage events = %d, want 1 (zero-usage assistant should still suppress result emission); events = %v",
+			tokenUsageCount, eventTypes)
+	}
+}
+
+// TestRunTurn_ResultOnlyFallback verifies that when no assistant message
+// carries usage, the result event emits token_usage as a fallback.
+// This is the "result-only" path — the existing TestRunTurn_SuccessfulSession
+// implicitly tests this (assistant has no usage field), but this test makes
+// the contract explicit.
+func TestRunTurn_ResultOnlyFallback(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	// Assistant message with NO usage field → emittedUsage stays false.
+	// Result event must emit token_usage.
+	script := writeScript(t, tmpDir, `
+cat <<'JSONL'
+{"type":"system","subtype":"init","session_id":"fallback-sess","cwd":"/tmp"}
+{"type":"assistant","message":{"content":[{"type":"text","text":"Working."}]},"session_id":"fallback-sess"}
+{"type":"result","subtype":"success","result":"All done.","is_error":false,"usage":{"input_tokens":200,"output_tokens":80},"session_id":"fallback-sess"}
+JSONL
+exit 0
+`)
+
+	adapter, _ := NewClaudeCodeAdapter(map[string]any{})
+	session, err := adapter.StartSession(context.Background(), domain.StartSessionParams{
+		WorkspacePath: tmpDir,
+		AgentConfig:   domain.AgentConfig{Command: script},
+	})
+	if err != nil {
+		t.Fatalf("StartSession() error = %v", err)
+	}
+
+	var events []domain.AgentEvent
+	result, err := adapter.RunTurn(context.Background(), session, domain.RunTurnParams{
+		Prompt: "test",
+		OnEvent: func(e domain.AgentEvent) {
+			events = append(events, e)
+		},
+	})
+	if err != nil {
+		t.Fatalf("RunTurn() error = %v", err)
+	}
+
+	// Exactly 1 token_usage event (from result fallback).
+	var tokenUsageCount int
+	for _, e := range events {
+		if e.Type == domain.EventTokenUsage {
+			tokenUsageCount++
+		}
+	}
+	if tokenUsageCount != 1 {
+		eventTypes := make([]domain.AgentEventType, len(events))
+		for i, e := range events {
+			eventTypes[i] = e.Type
+		}
+		t.Errorf("token_usage events = %d, want 1 (result fallback); events = %v",
+			tokenUsageCount, eventTypes)
+	}
+
+	// Verify the usage from the result event.
+	if result.Usage.InputTokens != 200 {
+		t.Errorf("Usage.InputTokens = %d, want 200", result.Usage.InputTokens)
+	}
+	if result.Usage.OutputTokens != 80 {
+		t.Errorf("Usage.OutputTokens = %d, want 80", result.Usage.OutputTokens)
+	}
+}
+
 func TestRunTurn_ErrorResult(t *testing.T) {
 	t.Parallel()
 
