@@ -394,6 +394,34 @@ func (a *ClaudeCodeAdapter) RunTurn(ctx context.Context, session domain.Session,
 				Message:   summarizeAssistant(event),
 			})
 
+		case "user":
+			// Claude Code emits tool results as user-role messages.
+			// Scan content blocks for tool_result entries and
+			// correlate with the inFlight map populated from
+			// assistant tool_use blocks.
+			observed := time.Now()
+			for _, block := range event.contentBlocks() {
+				if block.Type == "tool_result" {
+					toolName := "unknown"
+					var durationMS int64
+					if entry, ok := inFlight[block.ToolUseID]; ok {
+						toolName = entry.Name
+						if d := observed.Sub(entry.Timestamp); d > 0 {
+							durationMS = d.Milliseconds()
+						}
+						delete(inFlight, block.ToolUseID)
+					}
+					params.OnEvent(domain.AgentEvent{
+						Type:           domain.EventToolResult,
+						Timestamp:      now,
+						ToolName:       toolName,
+						ToolDurationMS: durationMS,
+						ToolError:      block.IsError,
+						Message:        "tool_result: " + toolName,
+					})
+				}
+			}
+
 		case "result":
 			captured := event
 			lastResult = &captured
