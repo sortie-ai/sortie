@@ -1156,3 +1156,145 @@ func TestHandleAgentEvent_ToolCallMetric(t *testing.T) {
 		})
 	}
 }
+
+// infoLogger returns a *slog.Logger that writes text records at INFO level
+// to buf. Debug-level lines are excluded, enabling clean negative assertions.
+func infoLogger(t *testing.T, buf *bytes.Buffer) *slog.Logger {
+	t.Helper()
+	return slog.New(slog.NewTextHandler(buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
+}
+
+// TestHandleAgentEvent_ToolCallLogging verifies the INFO-level structured
+// log emitted for tool_result events with non-empty ToolName. Covers
+// success, error with message, error with empty message (fallback), and
+// the empty-ToolName negative case.
+func TestHandleAgentEvent_ToolCallLogging(t *testing.T) {
+	t.Parallel()
+
+	const issueID = "TCL-1"
+	const identifier = "TCL-1-ident"
+	const sessionID = "sess-tcl"
+
+	t.Run("success logs tool, duration_ms, result without error field", func(t *testing.T) {
+		t.Parallel()
+
+		var buf bytes.Buffer
+		logger := infoLogger(t, &buf)
+		spy := &spyMetrics{}
+
+		state, entry := newStateWithEntry(issueID)
+		entry.Identifier = identifier
+		entry.SessionID = sessionID
+
+		HandleAgentEvent(state, issueID, domain.AgentEvent{
+			Type:           domain.EventToolResult,
+			Timestamp:      time.Now().UTC(),
+			ToolName:       "Bash",
+			ToolDurationMS: 150,
+			ToolError:      false,
+		}, logger, spy)
+
+		out := buf.String()
+		for _, want := range []string{
+			"level=INFO",
+			"tool call completed",
+			"issue_id=" + issueID,
+			"issue_identifier=" + identifier,
+			"session_id=" + sessionID,
+			"tool=Bash",
+			"duration_ms=150",
+			"result=success",
+		} {
+			if !strings.Contains(out, want) {
+				t.Errorf("log output missing %q\ngot: %s", want, out)
+			}
+		}
+		if strings.Contains(out, "error=") {
+			t.Errorf("log output contains error= on success path\ngot: %s", out)
+		}
+	})
+
+	t.Run("error logs tool, result, and error message", func(t *testing.T) {
+		t.Parallel()
+
+		var buf bytes.Buffer
+		logger := infoLogger(t, &buf)
+		spy := &spyMetrics{}
+
+		state, entry := newStateWithEntry(issueID)
+		entry.Identifier = identifier
+		entry.SessionID = sessionID
+
+		HandleAgentEvent(state, issueID, domain.AgentEvent{
+			Type:           domain.EventToolResult,
+			Timestamp:      time.Now().UTC(),
+			ToolName:       "Bash",
+			ToolDurationMS: 0,
+			ToolError:      true,
+			Message:        "command failed",
+		}, logger, spy)
+
+		out := buf.String()
+		for _, want := range []string{
+			"level=INFO",
+			"tool call completed",
+			"tool=Bash",
+			"result=error",
+			`error="command failed"`,
+		} {
+			if !strings.Contains(out, want) {
+				t.Errorf("log output missing %q\ngot: %s", want, out)
+			}
+		}
+	})
+
+	t.Run("error with empty message uses fallback", func(t *testing.T) {
+		t.Parallel()
+
+		var buf bytes.Buffer
+		logger := infoLogger(t, &buf)
+		spy := &spyMetrics{}
+
+		state, entry := newStateWithEntry(issueID)
+		entry.Identifier = identifier
+		entry.SessionID = sessionID
+
+		HandleAgentEvent(state, issueID, domain.AgentEvent{
+			Type:           domain.EventToolResult,
+			Timestamp:      time.Now().UTC(),
+			ToolName:       "Bash",
+			ToolDurationMS: 0,
+			ToolError:      true,
+			Message:        "",
+		}, logger, spy)
+
+		out := buf.String()
+		if !strings.Contains(out, `error="tool returned error"`) {
+			t.Errorf("log output missing fallback error message\ngot: %s", out)
+		}
+	})
+
+	t.Run("empty ToolName does not emit INFO log", func(t *testing.T) {
+		t.Parallel()
+
+		var buf bytes.Buffer
+		logger := infoLogger(t, &buf)
+		spy := &spyMetrics{}
+
+		state, entry := newStateWithEntry(issueID)
+		entry.Identifier = identifier
+		entry.SessionID = sessionID
+
+		HandleAgentEvent(state, issueID, domain.AgentEvent{
+			Type:           domain.EventToolResult,
+			Timestamp:      time.Now().UTC(),
+			ToolName:       "",
+			ToolDurationMS: 100,
+		}, logger, spy)
+
+		out := buf.String()
+		if strings.Contains(out, "tool call completed") {
+			t.Errorf("log output contains 'tool call completed' for empty ToolName\ngot: %s", out)
+		}
+	})
+}

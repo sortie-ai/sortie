@@ -889,7 +889,7 @@ JSON API + HTML dashboard, Prometheus `/metrics`), and adds agent capabilities.
       registry, confirms `sortie_tool_calls_total` is incremented with
       correct `tool` and `result` labels. Metric appears in `/metrics`.
 
-- [ ] 8.21 Add structured logging for agent tool calls. On each tool call
+- [x] 8.21 Add structured logging for agent tool calls. On each tool call
       completion, emit an INFO log line with structured fields: `issue_id`,
       `issue_identifier`, `session_id`, `tool` (tool name), `duration_ms`,
       `result` (`success` or `error`), and `error` (message, omitted on
