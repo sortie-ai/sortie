@@ -405,8 +405,8 @@ func TestMigrations_Registry(t *testing.T) {
 }
 
 // TestMigrate_Migration002_Defaults verifies that migration 002 adds the
-// extended token metric columns with correct defaults. Existing rows
-// inserted before migration 002 gain zero/empty defaults.
+// extended token metric columns with correct defaults. Rows inserted after
+// migration 002 that omit these columns receive zero/empty defaults.
 func TestMigrate_Migration002_Defaults(t *testing.T) {
 	t.Parallel()
 
