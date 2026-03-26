@@ -213,6 +213,27 @@ func TestIntegration_RunTurn(t *testing.T) {
 	assertNoEventType(t, collected, domain.EventTurnFailed)
 	assertNoEventType(t, collected, domain.EventStartupFailed)
 
+	// Verify at least one EventToolResult with a non-empty ToolName.
+	// The prompt causes Claude Code to use the Read tool, producing
+	// tool_use + tool_result content blocks.
+	var foundToolResult bool
+	for _, e := range collected {
+		if e.Type == domain.EventToolResult && e.ToolName != "" {
+			foundToolResult = true
+			if e.ToolDurationMS < 0 {
+				t.Errorf("EventToolResult.ToolDurationMS = %d, want >= 0", e.ToolDurationMS)
+			}
+			break
+		}
+	}
+	if !foundToolResult {
+		types := make([]domain.AgentEventType, len(collected))
+		for i, e := range collected {
+			types[i] = e.Type
+		}
+		t.Errorf("expected EventToolResult with non-empty ToolName not found; got types: %v", types)
+	}
+
 	for _, e := range collected {
 		if e.Type == domain.EventTokenUsage {
 			if e.Usage.InputTokens <= 0 {

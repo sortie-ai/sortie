@@ -36,6 +36,13 @@ func init() {
 // Compile-time interface satisfaction check.
 var _ domain.AgentAdapter = (*ClaudeCodeAdapter)(nil)
 
+// inFlightTool tracks a tool_use block that has been seen but whose
+// corresponding tool_result has not yet arrived.
+type inFlightTool struct {
+	Name      string
+	Timestamp time.Time
+}
+
 // ClaudeCodeAdapter satisfies [domain.AgentAdapter] by managing Claude
 // Code CLI subprocesses. One adapter instance serves all concurrent
 // sessions; per-session state is held in [sessionState] via the
@@ -266,6 +273,7 @@ func (a *ClaudeCodeAdapter) RunTurn(ctx context.Context, session domain.Session,
 
 	var lastResult *rawEvent
 	var usage domain.TokenUsage
+	inFlight := make(map[string]inFlightTool)
 
 	// Cumulative accumulators for per-assistant-message token usage.
 	// Claude Code assistant message usage fields are per-request (not
@@ -348,6 +356,28 @@ func (a *ClaudeCodeAdapter) RunTurn(ctx context.Context, session domain.Session,
 						})
 						emittedUsage = true
 					}
+				}
+			}
+			for _, block := range event.contentBlocks() {
+				if block.Type == "tool_use" && block.ID != "" {
+					inFlight[block.ID] = inFlightTool{Name: block.Name, Timestamp: now}
+				}
+				if block.Type == "tool_result" {
+					toolName := "unknown"
+					var durationMS int64
+					if entry, ok := inFlight[block.ToolUseID]; ok {
+						toolName = entry.Name
+						durationMS = now.Sub(entry.Timestamp).Milliseconds()
+						delete(inFlight, block.ToolUseID)
+					}
+					params.OnEvent(domain.AgentEvent{
+						Type:           domain.EventToolResult,
+						Timestamp:      now,
+						ToolName:       toolName,
+						ToolDurationMS: durationMS,
+						ToolError:      block.IsError,
+						Message:        "tool_result: " + toolName,
+					})
 				}
 			}
 			params.OnEvent(domain.AgentEvent{
