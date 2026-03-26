@@ -522,7 +522,7 @@ aggregate token/runtime totals, and rate limits.
     "cache_read_tokens": 1500,
     "seconds_running": 1834.2
   },
-  "rate_limits": null
+  "rate_limits": {}
 }
 ```
 
@@ -530,9 +530,9 @@ aggregate token/runtime totals, and rate limits.
 
 | Field               | Type              | Description                                                                                                                                |
 | ------------------- | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| `tokens`            | object            | Token counts for this session: `input_tokens`, `output_tokens`, `total_tokens`, `cache_read_tokens`.                                      |
-| `cache_read_tokens` | integer           | Cumulative cache-read token count. Reflects tokens served from the LLM provider's prompt cache rather than reprocessed. Zero when the agent adapter does not report cache data. |
-| `model_name`        | string or absent  | LLM model identifier reported by the agent (e.g. `"claude-sonnet-4-20250514"`). Omitted when the adapter does not report a model.         |
+| `tokens`                  | object            | Token counts for this session: `input_tokens`, `output_tokens`, `total_tokens`, `cache_read_tokens`.                                      |
+| `tokens.cache_read_tokens` | integer          | Cumulative cache-read token count. Reflects tokens served from the LLM provider's prompt cache rather than reprocessed. Zero when the agent adapter does not report cache data. |
+| `model_name`              | string or absent  | LLM model identifier reported by the agent (e.g. `"claude-sonnet-4-20250514"`). Omitted when the adapter does not report a model.         |
 | `api_request_count` | integer           | Number of LLM API requests made during this session. Incremented once per `token_usage` event from the agent adapter.                     |
 | `requests_by_model` | object or absent  | Map of model name to request count (e.g. `{"claude-sonnet-4-20250514": 3}`). Omitted when no model data is available. Enables tracking model usage when the agent switches models mid-session. |
 | `tool_time_percent` | number or `null`  | Cumulative tool call execution time as a percentage of session wall-clock time. Computed at response time. `null` when no tool timing data has been received. |
@@ -563,8 +563,8 @@ not in current orchestrator state.
     "path": "/tmp/sortie_workspaces/MT-649"
   },
   "attempts": {
-    "restart_count": 1,
-    "current_retry_attempt": 2
+    "restart_count": 0,
+    "current_retry_attempt": 0
   },
   "running": {
     "session_id": "thread-1-turn-1",
@@ -668,7 +668,7 @@ are included alongside Sortie-specific metrics.
 | `sortie_sessions_retrying`                      | Gauge     | —                           | Number of issues in the retry queue.                           |
 | `sortie_slots_available`                        | Gauge     | —                           | Remaining dispatch capacity under current concurrency limits.  |
 | `sortie_active_sessions_elapsed_seconds`        | Gauge     | —                           | Cumulative wall-clock elapsed time across running sessions.    |
-| `sortie_tokens_total`                           | Counter   | `type`                      | Tokens consumed, by type (`input`, `output`).                  |
+| `sortie_tokens_total`                           | Counter   | `type`                      | Tokens consumed, by type (`input`, `output`, `cache_read`).    |
 | `sortie_agent_runtime_seconds_total`            | Counter   | —                           | Cumulative agent-session wall-clock time for completed sessions. |
 | `sortie_dispatches_total`                       | Counter   | `outcome`                   | Dispatch attempts (`success`, `error`).                        |
 | `sortie_worker_exits_total`                     | Counter   | `exit_type`                 | Worker exits (`normal`, `error`, `cancelled`).                 |
@@ -681,6 +681,7 @@ are included alongside Sortie-specific metrics.
 | `sortie_poll_duration_seconds`                  | Histogram | —                           | Wall-clock time per poll cycle.                                |
 | `sortie_worker_duration_seconds`                | Histogram | `exit_type`                 | Worker session wall-clock time.                                |
 | `sortie_build_info`                             | Gauge     | `version`, `go_version`     | Always `1`; carries build metadata as labels.                  |
+| `sortie_ssh_host_usage`                         | Gauge     | `host`                      | Current session count per SSH host.                            |
 
 Example scrape:
 
