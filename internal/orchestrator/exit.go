@@ -204,12 +204,13 @@ func HandleWorkerExit(state *State, result WorkerResult, params HandleWorkerExit
 	}
 
 	aggMetrics := persistence.AggregateMetrics{
-		Key:            "agent_totals",
-		InputTokens:    state.AgentTotals.InputTokens,
-		OutputTokens:   state.AgentTotals.OutputTokens,
-		TotalTokens:    state.AgentTotals.TotalTokens,
-		SecondsRunning: state.AgentTotals.SecondsRunning,
-		UpdatedAt:      now.Format(time.RFC3339),
+		Key:             "agent_totals",
+		InputTokens:     state.AgentTotals.InputTokens,
+		OutputTokens:    state.AgentTotals.OutputTokens,
+		TotalTokens:     state.AgentTotals.TotalTokens,
+		CacheReadTokens: state.AgentTotals.CacheReadTokens,
+		SecondsRunning:  state.AgentTotals.SecondsRunning,
+		UpdatedAt:       now.Format(time.RFC3339),
 	}
 	if err := params.Store.UpsertAggregateMetrics(ctx, aggMetrics); err != nil {
 		log.Error("failed to persist aggregate metrics",
@@ -226,12 +227,15 @@ func HandleWorkerExit(state *State, result WorkerResult, params HandleWorkerExit
 		sessionID = entry.SessionID
 	}
 	sessionMeta := persistence.SessionMetadata{
-		IssueID:      result.IssueID,
-		SessionID:    sessionID,
-		InputTokens:  entry.AgentInputTokens,
-		OutputTokens: entry.AgentOutputTokens,
-		TotalTokens:  entry.AgentTotalTokens,
-		UpdatedAt:    now.Format(time.RFC3339),
+		IssueID:         result.IssueID,
+		SessionID:       sessionID,
+		InputTokens:     entry.AgentInputTokens,
+		OutputTokens:    entry.AgentOutputTokens,
+		TotalTokens:     entry.AgentTotalTokens,
+		CacheReadTokens: entry.CacheReadTokens,
+		ModelName:       entry.ModelName,
+		APIRequestCount: entry.APIRequestCount,
+		UpdatedAt:       now.Format(time.RFC3339),
 	}
 	if entry.AgentPID != "" {
 		sessionMeta.AgentPID = &entry.AgentPID

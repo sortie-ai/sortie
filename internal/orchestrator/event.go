@@ -92,9 +92,14 @@ func HandleAgentEvent(state *State, issueID string, event domain.AgentEvent, log
 		entry.LastReportedOutputTokens = max(entry.LastReportedOutputTokens, event.Usage.OutputTokens)
 		entry.LastReportedTotalTokens = max(entry.LastReportedTotalTokens, event.Usage.TotalTokens)
 
+		deltaCacheRead := max(event.Usage.CacheReadTokens-entry.LastReportedCacheReadTokens, 0)
+		entry.CacheReadTokens += deltaCacheRead
+		entry.LastReportedCacheReadTokens = max(entry.LastReportedCacheReadTokens, event.Usage.CacheReadTokens)
+
 		state.AgentTotals.InputTokens += deltaInput
 		state.AgentTotals.OutputTokens += deltaOutput
 		state.AgentTotals.TotalTokens += deltaTotal
+		state.AgentTotals.CacheReadTokens += deltaCacheRead
 
 		if deltaInput > 0 {
 			metrics.AddTokens("input", deltaInput)
@@ -102,12 +107,34 @@ func HandleAgentEvent(state *State, issueID string, event domain.AgentEvent, log
 		if deltaOutput > 0 {
 			metrics.AddTokens("output", deltaOutput)
 		}
+		if deltaCacheRead > 0 {
+			metrics.AddTokens("cache_read", deltaCacheRead)
+		}
+
+		// Increment API request count unconditionally — each
+		// token_usage event represents one API round-trip.
+		entry.APIRequestCount++
+
+		// Track model: prefer the event's model, fall back to last known.
+		model := event.Model
+		if model != "" {
+			entry.ModelName = model
+		} else {
+			model = entry.ModelName
+		}
+		if model != "" {
+			if entry.RequestsByModel == nil {
+				entry.RequestsByModel = make(map[string]int)
+			}
+			entry.RequestsByModel[model]++
+		}
 
 		log.Debug("agent event processed",
 			slog.Any("event_type", event.Type),
 			slog.Int64("delta_input", deltaInput),
 			slog.Int64("delta_output", deltaOutput),
 			slog.Int64("delta_total", deltaTotal),
+			slog.Int64("delta_cache_read", deltaCacheRead),
 		)
 	}
 

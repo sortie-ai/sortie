@@ -73,6 +73,10 @@ type TokenUsage struct {
 
 	// TotalTokens is the cumulative total token count.
 	TotalTokens int64
+
+	// CacheReadTokens is the cumulative cache-read token count.
+	// Zero when the adapter does not report cache data.
+	CacheReadTokens int64
 }
 
 // AgentEvent is a normalized event emitted by an agent adapter over the
@@ -104,6 +108,11 @@ type AgentEvent struct {
 	// The orchestrator copies this into RunningEntry.SessionID when
 	// non-empty, enabling live session tracking before the worker exits.
 	SessionID string
+
+	// Model is the LLM model identifier reported by the agent adapter
+	// (e.g. "claude-sonnet-4-20250514"). Populated on token_usage events
+	// when the adapter can determine the model. Empty string when unknown.
+	Model string
 
 	// RateLimits is the latest rate-limit payload received from the agent
 	// adapter. The keys and values are adapter-defined and intentionally

@@ -1074,7 +1074,7 @@ native protocol events to this normalized set:
 - `turn_input_required` — agent requested user input (hard failure per policy)
 - `approval_auto_approved` — approval request was auto-resolved
 - `unsupported_tool_call` — agent requested an unsupported tool
-- `token_usage` — normalized token usage event: `{input_tokens, output_tokens, total_tokens}`
+- `token_usage` — normalized token usage event: `{input_tokens, output_tokens, total_tokens, cache_read_tokens}`. Optional `model` field (string) identifies the LLM model when available.
 - `notification` — informational message from the agent
 - `other_message` — unclassified message
 - `malformed` — unparseable or unrecognized message
@@ -1084,12 +1084,13 @@ Each event should include:
 - `event` (enum/string)
 - `timestamp` (UTC timestamp)
 - `agent_pid` (if available)
-- optional `usage` map: `{input_tokens, output_tokens, total_tokens}`
+- optional `usage` map: `{input_tokens, output_tokens, total_tokens, cache_read_tokens}`
+- optional `model` string: LLM model identifier when available
 - payload fields as needed
 
 Token accounting is normalized at the adapter boundary. The orchestrator receives
-`{input_tokens, output_tokens, total_tokens}` directly and does not parse adapter-specific payload
-shapes.
+`{input_tokens, output_tokens, total_tokens, cache_read_tokens}` directly and does not parse
+adapter-specific payload shapes.
 
 ### 10.4 Approval, Tool Calls, and User Input Policy
 
@@ -1358,6 +1359,7 @@ should return:
   - `input_tokens`
   - `output_tokens`
   - `total_tokens`
+  - `cache_read_tokens`
   - `seconds_running` (aggregate runtime seconds as of snapshot time, including active sessions)
 - `rate_limits` (latest coding-agent rate limit payload, if available)
 
@@ -1380,8 +1382,11 @@ correctness.
 Token accounting rules:
 
 - Agent adapters normalize token counts before emitting events. The orchestrator receives
-  `{input_tokens, output_tokens, total_tokens}` directly.
+  `{input_tokens, output_tokens, total_tokens, cache_read_tokens}` directly.
 - For absolute totals, track deltas relative to last reported totals to avoid double-counting.
+  The `cache_read_tokens` field follows the same cumulative-delta accounting as
+  `input_tokens` / `output_tokens`.
+- `api_request_count` is incremented monotonically per `token_usage` event.
 - Accumulate aggregate totals in orchestrator state (`agent_totals`).
 
 Runtime accounting:
@@ -1468,8 +1473,12 @@ Minimum endpoints:
           "tokens": {
             "input_tokens": 1200,
             "output_tokens": 800,
-            "total_tokens": 2000
-          }
+            "total_tokens": 2000,
+            "cache_read_tokens": 400
+          },
+          "model_name": "claude-sonnet-4-20250514",
+          "api_request_count": 3,
+          "requests_by_model": {"claude-sonnet-4-20250514": 3}
         }
       ],
       "retrying": [
@@ -1485,6 +1494,7 @@ Minimum endpoints:
         "input_tokens": 5000,
         "output_tokens": 2400,
         "total_tokens": 7400,
+        "cache_read_tokens": 1500,
         "seconds_running": 1834.2
       },
       "rate_limits": null
@@ -2262,26 +2272,30 @@ Note: `timer_handle` is runtime-only and is not stored.
 
 **`session_metadata`** — last known session metadata per issue (for observability and debug)
 
-| Column          | Type    | Notes                             |
-| --------------- | ------- | --------------------------------- |
-| `issue_id`      | TEXT PK | Tracker-internal issue ID         |
-| `session_id`    | TEXT    | Last session ID                   |
-| `agent_pid`     | TEXT    | Last known agent PID, may be null |
-| `input_tokens`  | INTEGER | Accumulated input tokens          |
-| `output_tokens` | INTEGER | Accumulated output tokens         |
-| `total_tokens`  | INTEGER | Accumulated total tokens          |
-| `updated_at`    | TEXT    | ISO-8601 timestamp of last update |
+| Column              | Type    | Notes                             |
+| ------------------- | ------- | --------------------------------- |
+| `issue_id`          | TEXT PK | Tracker-internal issue ID         |
+| `session_id`        | TEXT    | Last session ID                   |
+| `agent_pid`         | TEXT    | Last known agent PID, may be null |
+| `input_tokens`      | INTEGER | Accumulated input tokens          |
+| `output_tokens`     | INTEGER | Accumulated output tokens         |
+| `total_tokens`      | INTEGER | Accumulated total tokens          |
+| `cache_read_tokens` | INTEGER | Accumulated cache-read tokens (migration 002) |
+| `model_name`        | TEXT    | Last reported LLM model identifier (migration 002) |
+| `api_request_count` | INTEGER | Number of API round-trips observed (migration 002) |
+| `updated_at`        | TEXT    | ISO-8601 timestamp of last update |
 
 **`aggregate_metrics`** — global token and runtime totals
 
-| Column            | Type    | Notes                             |
-| ----------------- | ------- | --------------------------------- |
-| `key`             | TEXT PK | Metric key (e.g., `agent_totals`) |
-| `input_tokens`    | INTEGER |                                   |
-| `output_tokens`   | INTEGER |                                   |
-| `total_tokens`    | INTEGER |                                   |
-| `seconds_running` | REAL    | Cumulative runtime seconds        |
-| `updated_at`      | TEXT    | ISO-8601 timestamp                |
+| Column              | Type    | Notes                             |
+| ------------------- | ------- | --------------------------------- |
+| `key`               | TEXT PK | Metric key (e.g., `agent_totals`) |
+| `input_tokens`      | INTEGER |                                   |
+| `output_tokens`     | INTEGER |                                   |
+| `total_tokens`      | INTEGER |                                   |
+| `cache_read_tokens` | INTEGER | Cumulative cache-read tokens (migration 002) |
+| `seconds_running`   | REAL    | Cumulative runtime seconds        |
+| `updated_at`        | TEXT    | ISO-8601 timestamp                |
 
 ### 19.3 Migration Strategy
 

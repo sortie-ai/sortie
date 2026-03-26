@@ -687,3 +687,238 @@ func TestHandleAgentEvent_DebugLogging(t *testing.T) {
 		}
 	})
 }
+
+// --- Extended Token Metrics Tests ---
+
+// TestHandleAgentEvent_CacheReadTokens_Delta verifies the delta algorithm
+// for CacheReadTokens: cumulative deltas, zero on duplicate, clamped on
+// regression, accumulated into AgentTotals.
+func TestHandleAgentEvent_CacheReadTokens_Delta(t *testing.T) {
+	t.Parallel()
+
+	state, entry := newStateWithEntry("CR-1")
+	ts := time.Now().UTC()
+
+	// First report: cache_read=500.
+	HandleAgentEvent(state, "CR-1", domain.AgentEvent{
+		Type:      domain.EventTokenUsage,
+		Timestamp: ts,
+		Usage:     domain.TokenUsage{InputTokens: 100, OutputTokens: 50, TotalTokens: 150, CacheReadTokens: 500},
+	}, slog.Default(), nil)
+
+	if entry.CacheReadTokens != 500 {
+		t.Errorf("after 1st: CacheReadTokens = %d, want 500", entry.CacheReadTokens)
+	}
+	if entry.LastReportedCacheReadTokens != 500 {
+		t.Errorf("after 1st: LastReportedCacheReadTokens = %d, want 500", entry.LastReportedCacheReadTokens)
+	}
+	if state.AgentTotals.CacheReadTokens != 500 {
+		t.Errorf("after 1st: AgentTotals.CacheReadTokens = %d, want 500", state.AgentTotals.CacheReadTokens)
+	}
+
+	// Second report: cumulative 800 → delta +300.
+	HandleAgentEvent(state, "CR-1", domain.AgentEvent{
+		Type:      domain.EventTokenUsage,
+		Timestamp: ts,
+		Usage:     domain.TokenUsage{InputTokens: 200, OutputTokens: 100, TotalTokens: 300, CacheReadTokens: 800},
+	}, slog.Default(), nil)
+
+	if entry.CacheReadTokens != 800 {
+		t.Errorf("after 2nd: CacheReadTokens = %d, want 800", entry.CacheReadTokens)
+	}
+	if state.AgentTotals.CacheReadTokens != 800 {
+		t.Errorf("after 2nd: AgentTotals.CacheReadTokens = %d, want 800", state.AgentTotals.CacheReadTokens)
+	}
+
+	// Duplicate report: 800 again → zero delta.
+	HandleAgentEvent(state, "CR-1", domain.AgentEvent{
+		Type:      domain.EventTokenUsage,
+		Timestamp: ts,
+		Usage:     domain.TokenUsage{InputTokens: 200, OutputTokens: 100, TotalTokens: 300, CacheReadTokens: 800},
+	}, slog.Default(), nil)
+
+	if entry.CacheReadTokens != 800 {
+		t.Errorf("after dup: CacheReadTokens = %d, want 800 (no double-count)", entry.CacheReadTokens)
+	}
+
+	// Regression: 600 → delta clamped to zero, baseline stays at 800.
+	HandleAgentEvent(state, "CR-1", domain.AgentEvent{
+		Type:      domain.EventTokenUsage,
+		Timestamp: ts,
+		Usage:     domain.TokenUsage{InputTokens: 200, OutputTokens: 100, TotalTokens: 300, CacheReadTokens: 600},
+	}, slog.Default(), nil)
+
+	if entry.CacheReadTokens != 800 {
+		t.Errorf("after regression: CacheReadTokens = %d, want 800", entry.CacheReadTokens)
+	}
+	if entry.LastReportedCacheReadTokens != 800 {
+		t.Errorf("after regression: LastReportedCacheReadTokens = %d, want 800", entry.LastReportedCacheReadTokens)
+	}
+}
+
+// TestHandleAgentEvent_ModelTracking verifies model name tracking: the
+// event's Model is stored; when empty, the last-known model persists;
+// RequestsByModel is incremented per token_usage.
+func TestHandleAgentEvent_ModelTracking(t *testing.T) {
+	t.Parallel()
+
+	state, entry := newStateWithEntry("MOD-1")
+	ts := time.Now().UTC()
+
+	// First report with model.
+	HandleAgentEvent(state, "MOD-1", domain.AgentEvent{
+		Type:      domain.EventTokenUsage,
+		Timestamp: ts,
+		Usage:     domain.TokenUsage{InputTokens: 100, OutputTokens: 50, TotalTokens: 150},
+		Model:     "claude-sonnet-4-20250514",
+	}, slog.Default(), nil)
+
+	if entry.ModelName != "claude-sonnet-4-20250514" {
+		t.Errorf("ModelName = %q, want %q", entry.ModelName, "claude-sonnet-4-20250514")
+	}
+	if entry.RequestsByModel == nil {
+		t.Fatal("RequestsByModel = nil, want non-nil")
+	}
+	if entry.RequestsByModel["claude-sonnet-4-20250514"] != 1 {
+		t.Errorf("RequestsByModel[sonnet] = %d, want 1", entry.RequestsByModel["claude-sonnet-4-20250514"])
+	}
+
+	// Second report with empty model → falls back to last-known.
+	HandleAgentEvent(state, "MOD-1", domain.AgentEvent{
+		Type:      domain.EventTokenUsage,
+		Timestamp: ts,
+		Usage:     domain.TokenUsage{InputTokens: 200, OutputTokens: 100, TotalTokens: 300},
+		Model:     "",
+	}, slog.Default(), nil)
+
+	if entry.ModelName != "claude-sonnet-4-20250514" {
+		t.Errorf("after empty model: ModelName = %q, want %q", entry.ModelName, "claude-sonnet-4-20250514")
+	}
+	if entry.RequestsByModel["claude-sonnet-4-20250514"] != 2 {
+		t.Errorf("RequestsByModel[sonnet] = %d, want 2", entry.RequestsByModel["claude-sonnet-4-20250514"])
+	}
+
+	// Third report with a different model.
+	HandleAgentEvent(state, "MOD-1", domain.AgentEvent{
+		Type:      domain.EventTokenUsage,
+		Timestamp: ts,
+		Usage:     domain.TokenUsage{InputTokens: 300, OutputTokens: 150, TotalTokens: 450},
+		Model:     "claude-opus-4-20250514",
+	}, slog.Default(), nil)
+
+	if entry.ModelName != "claude-opus-4-20250514" {
+		t.Errorf("ModelName = %q, want %q", entry.ModelName, "claude-opus-4-20250514")
+	}
+	if entry.RequestsByModel["claude-opus-4-20250514"] != 1 {
+		t.Errorf("RequestsByModel[opus] = %d, want 1", entry.RequestsByModel["claude-opus-4-20250514"])
+	}
+	if entry.RequestsByModel["claude-sonnet-4-20250514"] != 2 {
+		t.Errorf("RequestsByModel[sonnet] = %d, want 2 (unchanged)", entry.RequestsByModel["claude-sonnet-4-20250514"])
+	}
+}
+
+// TestHandleAgentEvent_APIRequestCount verifies that APIRequestCount
+// increments on every token_usage event and is unaffected by non-token events.
+func TestHandleAgentEvent_APIRequestCount(t *testing.T) {
+	t.Parallel()
+
+	state, entry := newStateWithEntry("ARC-1")
+	ts := time.Now().UTC()
+
+	// Non-token events should not increment.
+	HandleAgentEvent(state, "ARC-1", domain.AgentEvent{
+		Type: domain.EventNotification, Timestamp: ts,
+	}, slog.Default(), nil)
+	HandleAgentEvent(state, "ARC-1", domain.AgentEvent{
+		Type: domain.EventSessionStarted, Timestamp: ts, SessionID: "s1",
+	}, slog.Default(), nil)
+
+	if entry.APIRequestCount != 0 {
+		t.Errorf("after non-token events: APIRequestCount = %d, want 0", entry.APIRequestCount)
+	}
+
+	// Three token_usage events → count 3.
+	for i := range 3 {
+		HandleAgentEvent(state, "ARC-1", domain.AgentEvent{
+			Type:      domain.EventTokenUsage,
+			Timestamp: ts,
+			Usage:     domain.TokenUsage{InputTokens: int64((i + 1) * 100)},
+		}, slog.Default(), nil)
+	}
+
+	if entry.APIRequestCount != 3 {
+		t.Errorf("after 3 token_usage: APIRequestCount = %d, want 3", entry.APIRequestCount)
+	}
+}
+
+// TestHandleAgentEvent_ModelTracking_NoModel verifies that when no model
+// is ever reported, ModelName stays empty and RequestsByModel remains nil.
+func TestHandleAgentEvent_ModelTracking_NoModel(t *testing.T) {
+	t.Parallel()
+
+	state, entry := newStateWithEntry("NM-1")
+	ts := time.Now().UTC()
+
+	HandleAgentEvent(state, "NM-1", domain.AgentEvent{
+		Type:      domain.EventTokenUsage,
+		Timestamp: ts,
+		Usage:     domain.TokenUsage{InputTokens: 100, OutputTokens: 50, TotalTokens: 150},
+	}, slog.Default(), nil)
+
+	if entry.ModelName != "" {
+		t.Errorf("ModelName = %q, want empty", entry.ModelName)
+	}
+	if entry.RequestsByModel != nil {
+		t.Errorf("RequestsByModel = %v, want nil", entry.RequestsByModel)
+	}
+	if entry.APIRequestCount != 1 {
+		t.Errorf("APIRequestCount = %d, want 1", entry.APIRequestCount)
+	}
+}
+
+// TestHandleAgentEvent_CacheReadTokens_DebugLog verifies that the
+// delta_cache_read field appears in the debug log for token_usage events.
+func TestHandleAgentEvent_CacheReadTokens_DebugLog(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	logger := debugLogger(t, &buf)
+
+	state, entry := newStateWithEntry("CRL-1")
+	entry.Identifier = "CRL-1-ident"
+
+	HandleAgentEvent(state, "CRL-1", domain.AgentEvent{
+		Type:      domain.EventTokenUsage,
+		Timestamp: time.Now().UTC(),
+		Usage:     domain.TokenUsage{InputTokens: 100, CacheReadTokens: 250},
+	}, logger, nil)
+
+	out := buf.String()
+	if !strings.Contains(out, "delta_cache_read=250") {
+		t.Errorf("log output missing delta_cache_read=250\ngot: %s", out)
+	}
+}
+
+// TestHandleAgentEvent_TwoSessions_CacheReadTotals verifies cache-read
+// delta accumulation across independent sessions.
+func TestHandleAgentEvent_TwoSessions_CacheReadTotals(t *testing.T) {
+	t.Parallel()
+
+	state := NewState(5000, 4, nil, AgentTotals{})
+	state.Running["A-1"] = &RunningEntry{}
+	state.Running["B-1"] = &RunningEntry{}
+	ts := time.Now().UTC()
+
+	HandleAgentEvent(state, "A-1", domain.AgentEvent{
+		Type: domain.EventTokenUsage, Timestamp: ts,
+		Usage: domain.TokenUsage{CacheReadTokens: 1000},
+	}, slog.Default(), nil)
+	HandleAgentEvent(state, "B-1", domain.AgentEvent{
+		Type: domain.EventTokenUsage, Timestamp: ts,
+		Usage: domain.TokenUsage{CacheReadTokens: 2000},
+	}, slog.Default(), nil)
+
+	if state.AgentTotals.CacheReadTokens != 3000 {
+		t.Errorf("AgentTotals.CacheReadTokens = %d, want 3000", state.AgentTotals.CacheReadTokens)
+	}
+}

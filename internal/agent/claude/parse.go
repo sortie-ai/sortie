@@ -67,6 +67,13 @@ type rawAssistantMessage struct {
 	Content []rawContentBlock `json:"content,omitempty"`
 }
 
+// rawAssistantMessageMeta extracts the model and per-request usage
+// from an assistant event's message object.
+type rawAssistantMessageMeta struct {
+	Model string    `json:"model,omitempty"`
+	Usage *rawUsage `json:"usage,omitempty"`
+}
+
 // parseEvent parses a single JSONL line from Claude Code stdout into
 // a [rawEvent]. Returns an error if JSON parsing fails.
 func parseEvent(line []byte) (rawEvent, error) {
@@ -85,9 +92,10 @@ func normalizeUsage(raw *rawUsage) domain.TokenUsage {
 		return domain.TokenUsage{}
 	}
 	return domain.TokenUsage{
-		InputTokens:  raw.InputTokens,
-		OutputTokens: raw.OutputTokens,
-		TotalTokens:  raw.InputTokens + raw.OutputTokens,
+		InputTokens:     raw.InputTokens,
+		OutputTokens:    raw.OutputTokens,
+		TotalTokens:     raw.InputTokens + raw.OutputTokens,
+		CacheReadTokens: raw.CacheReadInputTokens,
 	}
 }
 

@@ -559,3 +559,93 @@ func TestHandleDashboard_NoSSHHostColumn(t *testing.T) {
 		t.Error("body missing LOCAL-1")
 	}
 }
+
+// TestBuildDashboardData_ExtendedFields verifies that the new
+// CacheReadTokens, ModelName, and APIRequestCount fields are passed
+// through buildDashboardData to the template data structures.
+func TestBuildDashboardData_ExtendedFields(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 3, 24, 12, 0, 0, 0, time.UTC)
+	snap := orchestrator.RuntimeSnapshotResult{
+		GeneratedAt: now,
+		Running: []orchestrator.SnapshotRunningEntry{
+			{
+				Identifier:       "MT-EXT",
+				State:            "In Progress",
+				TurnCount:        5,
+				LastAgentEvent:   domain.EventTurnCompleted,
+				StartedAt:        now.Add(-10 * time.Minute),
+				AgentTotalTokens: 3000,
+				CacheReadTokens:  8000,
+				ModelName:        "claude-sonnet-4-20250514",
+				APIRequestCount:  12,
+			},
+		},
+		AgentTotals: orchestrator.SnapshotAgentTotals{
+			InputTokens:     5000,
+			OutputTokens:    2400,
+			TotalTokens:     7400,
+			CacheReadTokens: 15000,
+			SecondsRunning:  3600,
+		},
+	}
+
+	data := buildDashboardData(snap, "1.0.0", now.Add(-1*time.Hour), func() int { return 5 }, now)
+
+	if len(data.Running) != 1 {
+		t.Fatalf("len(Running) = %d, want 1", len(data.Running))
+	}
+	entry := data.Running[0]
+	if entry.CacheReadTokens != 8000 {
+		t.Errorf("Running[0].CacheReadTokens = %d, want 8000", entry.CacheReadTokens)
+	}
+	if entry.ModelName != "claude-sonnet-4-20250514" {
+		t.Errorf("Running[0].ModelName = %q, want %q", entry.ModelName, "claude-sonnet-4-20250514")
+	}
+	if entry.APIRequestCount != 12 {
+		t.Errorf("Running[0].APIRequestCount = %d, want 12", entry.APIRequestCount)
+	}
+	if data.CacheReadTokens != 15000 {
+		t.Errorf("CacheReadTokens = %d, want 15000", data.CacheReadTokens)
+	}
+}
+
+// TestHandleDashboard_ExtendedFieldsRendered verifies that the extended
+// fields appear in the HTML output.
+func TestHandleDashboard_ExtendedFieldsRendered(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 3, 24, 12, 0, 0, 0, time.UTC)
+	snap := orchestrator.RuntimeSnapshotResult{
+		GeneratedAt: now,
+		Running: []orchestrator.SnapshotRunningEntry{
+			{
+				IssueID:          "id-ext",
+				Identifier:       "MT-EXT-DASH",
+				State:            "In Progress",
+				StartedAt:        now.Add(-5 * time.Minute),
+				AgentTotalTokens: 4500,
+				CacheReadTokens:  12345,
+				ModelName:        "claude-sonnet-4-20250514",
+				APIRequestCount:  9,
+			},
+		},
+		AgentTotals: orchestrator.SnapshotAgentTotals{
+			CacheReadTokens: 25000,
+		},
+	}
+
+	ts := dashboardServer(t, fixedSnapshot(snap), "1.0.0", func() int { return 5 })
+	dr := getDashboard(t, ts, "/")
+
+	if dr.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want %d", dr.StatusCode, http.StatusOK)
+	}
+
+	for _, want := range []string{"MT-EXT-DASH", "12,345", "25,000"} {
+		if !strings.Contains(dr.Body, want) {
+			t.Errorf("body missing %q", want)
+		}
+	}
+}

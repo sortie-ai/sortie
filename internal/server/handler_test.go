@@ -135,6 +135,89 @@ func TestToRunningEntryResponse(t *testing.T) {
 	}
 }
 
+// TestToRunningEntryResponse_ExtendedFields verifies that the new
+// CacheReadTokens, ModelName, APIRequestCount, and RequestsByModel
+// fields are mapped correctly through the wire-type constructor.
+func TestToRunningEntryResponse_ExtendedFields(t *testing.T) {
+	t.Parallel()
+
+	entry := orchestrator.SnapshotRunningEntry{
+		IssueID:         "issue-ext",
+		Identifier:      "MT-EXT",
+		State:           "In Progress",
+		StartedAt:       time.Date(2026, 3, 24, 12, 0, 0, 0, time.UTC),
+		CacheReadTokens: 8000,
+		ModelName:       "claude-sonnet-4-20250514",
+		APIRequestCount: 15,
+		RequestsByModel: map[string]int{"claude-sonnet-4-20250514": 12, "claude-opus-4-20250514": 3},
+	}
+
+	got := toRunningEntryResponse(entry)
+
+	if got.Tokens.CacheReadTokens != 8000 {
+		t.Errorf("Tokens.CacheReadTokens = %d, want 8000", got.Tokens.CacheReadTokens)
+	}
+	if got.ModelName != "claude-sonnet-4-20250514" {
+		t.Errorf("ModelName = %q, want %q", got.ModelName, "claude-sonnet-4-20250514")
+	}
+	if got.APIRequestCount != 15 {
+		t.Errorf("APIRequestCount = %d, want 15", got.APIRequestCount)
+	}
+	if len(got.RequestsByModel) != 2 {
+		t.Fatalf("len(RequestsByModel) = %d, want 2", len(got.RequestsByModel))
+	}
+	if got.RequestsByModel["claude-sonnet-4-20250514"] != 12 {
+		t.Errorf("RequestsByModel[sonnet] = %d, want 12", got.RequestsByModel["claude-sonnet-4-20250514"])
+	}
+}
+
+// TestToRunningEntryResponse_ExtendedFields_JSON verifies that the new
+// fields serialize correctly as JSON with proper keys.
+func TestToRunningEntryResponse_ExtendedFields_JSON(t *testing.T) {
+	t.Parallel()
+
+	entry := orchestrator.SnapshotRunningEntry{
+		IssueID:           "issue-json",
+		Identifier:        "MT-JSON",
+		State:             "In Progress",
+		StartedAt:         time.Date(2026, 3, 24, 12, 0, 0, 0, time.UTC),
+		AgentInputTokens:  1000,
+		AgentOutputTokens: 500,
+		AgentTotalTokens:  1500,
+		CacheReadTokens:   3000,
+		ModelName:         "test-model",
+		APIRequestCount:   7,
+		RequestsByModel:   map[string]int{"test-model": 7},
+	}
+
+	got := toRunningEntryResponse(entry)
+	data, err := json.Marshal(got)
+	if err != nil {
+		t.Fatalf("json.Marshal: %v", err)
+	}
+
+	var decoded map[string]any
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("json.Unmarshal: %v", err)
+	}
+
+	// Check JSON key names.
+	tokens := decoded["tokens"].(map[string]any)
+	if tokens["cache_read_tokens"] != float64(3000) {
+		t.Errorf("JSON tokens.cache_read_tokens = %v, want 3000", tokens["cache_read_tokens"])
+	}
+	if decoded["model_name"] != "test-model" {
+		t.Errorf("JSON model_name = %v, want %q", decoded["model_name"], "test-model")
+	}
+	if decoded["api_request_count"] != float64(7) {
+		t.Errorf("JSON api_request_count = %v, want 7", decoded["api_request_count"])
+	}
+	rbm := decoded["requests_by_model"].(map[string]any)
+	if rbm["test-model"] != float64(7) {
+		t.Errorf("JSON requests_by_model[test-model] = %v, want 7", rbm["test-model"])
+	}
+}
+
 func TestToRetryEntryResponse(t *testing.T) {
 	t.Parallel()
 

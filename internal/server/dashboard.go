@@ -17,6 +17,9 @@ import (
 //go:embed dashboard.html
 var dashboardHTML string
 
+//go:embed favicon.ico
+var faviconICO []byte
+
 // dashboardData is the template context for the HTML dashboard.
 // All duration and relative-time fields are pre-formatted in Go;
 // the template performs no computation.
@@ -38,20 +41,24 @@ type dashboardData struct {
 	HasSSH   bool
 
 	// Footer
-	RuntimeDisplay string
-	InputTokens    int64
-	OutputTokens   int64
+	RuntimeDisplay  string
+	InputTokens     int64
+	OutputTokens    int64
+	CacheReadTokens int64
 }
 
 type dashboardRunningEntry struct {
-	Identifier  string
-	State       string
-	TurnCount   int
-	Duration    string
-	LastEvent   string
-	TotalTokens int64
-	DetailURL   string
-	Host        string
+	Identifier      string
+	State           string
+	TurnCount       int
+	Duration        string
+	LastEvent       string
+	TotalTokens     int64
+	CacheReadTokens int64
+	ModelName       string
+	APIRequestCount int
+	DetailURL       string
+	Host            string
 }
 
 type dashboardRetryEntry struct {
@@ -172,16 +179,17 @@ func buildDashboardData(
 	}
 
 	data := dashboardData{
-		Version:        version,
-		Uptime:         formatDuration(uptimeDur),
-		GeneratedAt:    snap.GeneratedAt,
-		RunningCount:   runningCount,
-		RetryingCount:  len(snap.Retrying),
-		AvailableSlots: available,
-		TotalTokens:    snap.AgentTotals.TotalTokens,
-		RuntimeDisplay: formatDuration(time.Duration(snap.AgentTotals.SecondsRunning * float64(time.Second))),
-		InputTokens:    snap.AgentTotals.InputTokens,
-		OutputTokens:   snap.AgentTotals.OutputTokens,
+		Version:         version,
+		Uptime:          formatDuration(uptimeDur),
+		GeneratedAt:     snap.GeneratedAt,
+		RunningCount:    runningCount,
+		RetryingCount:   len(snap.Retrying),
+		AvailableSlots:  available,
+		TotalTokens:     snap.AgentTotals.TotalTokens,
+		RuntimeDisplay:  formatDuration(time.Duration(snap.AgentTotals.SecondsRunning * float64(time.Second))),
+		InputTokens:     snap.AgentTotals.InputTokens,
+		OutputTokens:    snap.AgentTotals.OutputTokens,
+		CacheReadTokens: snap.AgentTotals.CacheReadTokens,
 	}
 
 	// Copy and sort running entries by StartedAt ascending before mapping.
@@ -201,14 +209,17 @@ func buildDashboardData(
 			hasSSH = true
 		}
 		running[i] = dashboardRunningEntry{
-			Identifier:  e.Identifier,
-			State:       e.State,
-			TurnCount:   e.TurnCount,
-			Duration:    formatDuration(dur),
-			LastEvent:   string(e.LastAgentEvent),
-			TotalTokens: e.AgentTotalTokens,
-			DetailURL:   "/api/v1/" + url.PathEscape(e.Identifier),
-			Host:        e.SSHHost,
+			Identifier:      e.Identifier,
+			State:           e.State,
+			TurnCount:       e.TurnCount,
+			Duration:        formatDuration(dur),
+			LastEvent:       string(e.LastAgentEvent),
+			TotalTokens:     e.AgentTotalTokens,
+			CacheReadTokens: e.CacheReadTokens,
+			ModelName:       e.ModelName,
+			APIRequestCount: e.APIRequestCount,
+			DetailURL:       "/api/v1/" + url.PathEscape(e.Identifier),
+			Host:            e.SSHHost,
 		}
 	}
 	data.Running = running
@@ -232,6 +243,14 @@ func buildDashboardData(
 	data.Retrying = retrying
 
 	return data
+}
+
+// handleFavicon serves the embedded favicon.ico with aggressive caching.
+func handleFavicon(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "image/x-icon")
+	w.Header().Set("Cache-Control", "public, max-age=86400")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(faviconICO)
 }
 
 // handleDashboard serves the HTML dashboard at GET /.
