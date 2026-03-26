@@ -59,6 +59,8 @@ type dashboardRunningEntry struct {
 	APIRequestCount int
 	DetailURL       string
 	Host            string
+	ToolTimePct     string
+	APITimePct      string
 }
 
 type dashboardRetryEntry struct {
@@ -208,6 +210,17 @@ func buildDashboardData(
 		if e.SSHHost != "" {
 			hasSSH = true
 		}
+
+		elapsedMs := snap.GeneratedAt.Sub(e.StartedAt).Milliseconds()
+		toolPct := "N/A"
+		if elapsedMs > 0 && e.ToolTimeMs > 0 {
+			toolPct = fmt.Sprintf("%.1f%%", float64(e.ToolTimeMs)/float64(elapsedMs)*100.0)
+		}
+		apiPct := "N/A"
+		if elapsedMs > 0 && e.APITimeMs > 0 {
+			apiPct = fmt.Sprintf("%.1f%%", float64(e.APITimeMs)/float64(elapsedMs)*100.0)
+		}
+
 		running[i] = dashboardRunningEntry{
 			Identifier:      e.Identifier,
 			State:           e.State,
@@ -220,6 +233,8 @@ func buildDashboardData(
 			APIRequestCount: e.APIRequestCount,
 			DetailURL:       "/api/v1/" + url.PathEscape(e.Identifier),
 			Host:            e.SSHHost,
+			ToolTimePct:     toolPct,
+			APITimePct:      apiPct,
 		}
 	}
 	data.Running = running

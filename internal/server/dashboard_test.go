@@ -350,6 +350,89 @@ func TestBuildDashboardData(t *testing.T) {
 			t.Errorf("AvailableSlots = %d, want 0", data.AvailableSlots)
 		}
 	})
+
+	// --- Timing percentage formatting tests ---
+
+	t.Run("timing percentages formatted as string", func(t *testing.T) {
+		t.Parallel()
+
+		timingSnap := orchestrator.RuntimeSnapshotResult{
+			GeneratedAt: now,
+			Running: []orchestrator.SnapshotRunningEntry{
+				{
+					Identifier: "MT-T1",
+					State:      "In Progress",
+					StartedAt:  now.Add(-100 * time.Second), // 100s = 100000ms
+					ToolTimeMs: 12300,                       // 12.3%
+					APITimeMs:  45600,                       // 45.6%
+				},
+			},
+		}
+
+		data := buildDashboardData(timingSnap, "v1", startedAt, nil, now)
+
+		if len(data.Running) != 1 {
+			t.Fatalf("len(Running) = %d, want 1", len(data.Running))
+		}
+		if data.Running[0].ToolTimePct != "12.3%" {
+			t.Errorf("ToolTimePct = %q, want %q", data.Running[0].ToolTimePct, "12.3%")
+		}
+		if data.Running[0].APITimePct != "45.6%" {
+			t.Errorf("APITimePct = %q, want %q", data.Running[0].APITimePct, "45.6%")
+		}
+	})
+
+	t.Run("timing N/A when zero values", func(t *testing.T) {
+		t.Parallel()
+
+		timingSnap := orchestrator.RuntimeSnapshotResult{
+			GeneratedAt: now,
+			Running: []orchestrator.SnapshotRunningEntry{
+				{
+					Identifier: "MT-NAT",
+					State:      "In Progress",
+					StartedAt:  now.Add(-60 * time.Second),
+					ToolTimeMs: 0,
+					APITimeMs:  0,
+				},
+			},
+		}
+
+		data := buildDashboardData(timingSnap, "v1", startedAt, nil, now)
+
+		if data.Running[0].ToolTimePct != "N/A" {
+			t.Errorf("ToolTimePct = %q, want %q", data.Running[0].ToolTimePct, "N/A")
+		}
+		if data.Running[0].APITimePct != "N/A" {
+			t.Errorf("APITimePct = %q, want %q", data.Running[0].APITimePct, "N/A")
+		}
+	})
+
+	t.Run("timing N/A when zero elapsed", func(t *testing.T) {
+		t.Parallel()
+
+		timingSnap := orchestrator.RuntimeSnapshotResult{
+			GeneratedAt: now,
+			Running: []orchestrator.SnapshotRunningEntry{
+				{
+					Identifier: "MT-ZE",
+					State:      "In Progress",
+					StartedAt:  now, // zero elapsed
+					ToolTimeMs: 500,
+					APITimeMs:  1000,
+				},
+			},
+		}
+
+		data := buildDashboardData(timingSnap, "v1", startedAt, nil, now)
+
+		if data.Running[0].ToolTimePct != "N/A" {
+			t.Errorf("ToolTimePct = %q, want %q (zero elapsed)", data.Running[0].ToolTimePct, "N/A")
+		}
+		if data.Running[0].APITimePct != "N/A" {
+			t.Errorf("APITimePct = %q, want %q (zero elapsed)", data.Running[0].APITimePct, "N/A")
+		}
+	})
 }
 
 func TestFormatDuration(t *testing.T) {

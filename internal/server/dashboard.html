@@ -276,6 +276,8 @@
               <th>Model</th>
               <th class="text-right">Requests</th>
               <th class="text-right">Tokens</th>
+              <th class="text-right">Tool %</th>
+              <th class="text-right">API %</th>
             </tr>
           </thead>
           <tbody>
@@ -295,6 +297,8 @@
                 {{fmtInt .TotalTokens}}{{if .CacheReadTokens}}
                 <small>({{fmtInt .CacheReadTokens}} cached)</small>{{end}}
               </td>
+              <td class="text-right">{{.ToolTimePct}}</td>
+              <td class="text-right">{{.APITimePct}}</td>
             </tr>
             {{end}}
           </tbody>

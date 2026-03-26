@@ -625,4 +625,53 @@ func TestRuntimeSnapshot(t *testing.T) {
 			t.Errorf("RequestsByModel = %v, want nil", snap.RequestsByModel)
 		}
 	})
+
+	// --- Timing fields snapshot tests ---
+
+	t.Run("ToolTimeMs and APITimeMs copied to snapshot", func(t *testing.T) {
+		t.Parallel()
+
+		state := NewState(5000, 10, nil, AgentTotals{})
+		state.Running["timing-1"] = &RunningEntry{
+			Identifier: "MT-TIM",
+			Issue:      domain.Issue{ID: "timing-1", State: "In Progress"},
+			StartedAt:  fixedNow.Add(-60 * time.Second),
+			ToolTimeMs: 4500,
+			APITimeMs:  12000,
+		}
+
+		result := RuntimeSnapshot(state, fixedNow)
+
+		if len(result.Running) != 1 {
+			t.Fatalf("len(Running) = %d, want 1", len(result.Running))
+		}
+		snap := result.Running[0]
+		if snap.ToolTimeMs != 4500 {
+			t.Errorf("ToolTimeMs = %d, want 4500", snap.ToolTimeMs)
+		}
+		if snap.APITimeMs != 12000 {
+			t.Errorf("APITimeMs = %d, want 12000", snap.APITimeMs)
+		}
+	})
+
+	t.Run("zero timing fields preserved in snapshot", func(t *testing.T) {
+		t.Parallel()
+
+		state := NewState(5000, 10, nil, AgentTotals{})
+		state.Running["zero-time"] = &RunningEntry{
+			Identifier: "MT-ZT",
+			Issue:      domain.Issue{ID: "zero-time", State: "In Progress"},
+			StartedAt:  fixedNow.Add(-10 * time.Second),
+		}
+
+		result := RuntimeSnapshot(state, fixedNow)
+
+		snap := result.Running[0]
+		if snap.ToolTimeMs != 0 {
+			t.Errorf("ToolTimeMs = %d, want 0", snap.ToolTimeMs)
+		}
+		if snap.APITimeMs != 0 {
+			t.Errorf("APITimeMs = %d, want 0", snap.APITimeMs)
+		}
+	})
 }

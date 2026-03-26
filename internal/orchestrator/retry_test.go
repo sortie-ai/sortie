@@ -950,7 +950,6 @@ func TestHandleRetryTimer_WorkerStillRunningReschedulesInsteadOfDispatching(t *t
 	}
 }
 
-// Section 8.16: SSH host acquisition on retry timer path.
 func TestHandleRetryTimer_SSHHostAcquisition(t *testing.T) {
 	t.Parallel()
 

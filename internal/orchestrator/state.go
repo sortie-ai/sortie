@@ -177,6 +177,15 @@ type RunningEntry struct {
 	// release, [RuntimeSnapshot] for observability, and the retry
 	// timer for host preference.
 	SSHHost string
+
+	// ToolTimeMs is the cumulative tool call execution time in
+	// milliseconds, accumulated from tool_result events.
+	ToolTimeMs int64
+
+	// APITimeMs is the cumulative LLM API response wait time in
+	// milliseconds, accumulated from any agent event carrying
+	// APIDurationMS > 0.
+	APITimeMs int64
 }
 
 // RetryEntry holds the runtime state for a pending retry. The persisted
@@ -322,6 +331,8 @@ type SnapshotRunningEntry struct {
 	RequestsByModel    map[string]int        `json:"requests_by_model,omitempty"`
 	WorkspacePath      string                `json:"workspace_path"`
 	SSHHost            string                `json:"ssh_host,omitempty"`
+	ToolTimeMs         int64                 `json:"tool_time_ms"`
+	APITimeMs          int64                 `json:"api_time_ms"`
 }
 
 // SnapshotRetryEntry is a read-only view of a pending retry for
@@ -426,6 +437,8 @@ func RuntimeSnapshot(state *State, now time.Time) RuntimeSnapshotResult {
 			RequestsByModel:    rbm,
 			WorkspacePath:      entry.WorkspacePath,
 			SSHHost:            entry.SSHHost,
+			ToolTimeMs:         entry.ToolTimeMs,
+			APITimeMs:          entry.APITimeMs,
 		})
 
 		if !entry.StartedAt.IsZero() {

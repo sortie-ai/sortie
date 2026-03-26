@@ -481,9 +481,10 @@ func (a *ClaudeCodeAdapter) RunTurn(ctx context.Context, session domain.Session,
 	if lastResult != nil {
 		if lastResult.Subtype == "success" && !lastResult.IsError {
 			params.OnEvent(domain.AgentEvent{
-				Type:      domain.EventTurnCompleted,
-				Timestamp: now,
-				Message:   truncate(lastResult.Result, 500),
+				Type:          domain.EventTurnCompleted,
+				Timestamp:     now,
+				Message:       truncate(lastResult.Result, 500),
+				APIDurationMS: lastResult.DurationAPI,
 			})
 			return domain.TurnResult{
 				SessionID:  state.claudeSessionID,
@@ -492,9 +493,10 @@ func (a *ClaudeCodeAdapter) RunTurn(ctx context.Context, session domain.Session,
 			}, nil
 		}
 		params.OnEvent(domain.AgentEvent{
-			Type:      domain.EventTurnFailed,
-			Timestamp: now,
-			Message:   lastResult.Subtype,
+			Type:          domain.EventTurnFailed,
+			Timestamp:     now,
+			Message:       lastResult.Subtype,
+			APIDurationMS: lastResult.DurationAPI,
 		})
 		return domain.TurnResult{
 				SessionID:  state.claudeSessionID,

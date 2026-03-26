@@ -39,10 +39,19 @@ type MockAdapter struct {
 	modelName              string
 	turnDelayMS            int
 	stopError              string
+	apiDurationMS          int64
+	toolCalls              []mockToolCall
 
 	// mu guards turnIndex for concurrent RunTurn calls.
 	mu        sync.Mutex
 	turnIndex int
+}
+
+// mockToolCall describes a single tool call to emit as a tool_result
+// event during each turn.
+type mockToolCall struct {
+	ToolName   string
+	DurationMS int64
 }
 
 // NewMockAdapter creates a [MockAdapter] from adapter configuration.
@@ -99,6 +108,22 @@ func NewMockAdapter(config map[string]any) (domain.AgentAdapter, error) {
 	m.turnDelayMS = intFromConfig(config, "turn_delay_ms", m.turnDelayMS)
 	if v, ok := config["model_name"].(string); ok {
 		m.modelName = v
+	}
+
+	m.apiDurationMS = int64FromConfig(config, "api_duration_ms", 0)
+	if raw, ok := config["tool_calls"]; ok {
+		if items, ok := raw.([]any); ok {
+			for _, item := range items {
+				if tc, ok := item.(map[string]any); ok {
+					name, _ := tc["tool_name"].(string)
+					dur := int64FromConfig(tc, "duration_ms", 0)
+					m.toolCalls = append(m.toolCalls, mockToolCall{
+						ToolName:   name,
+						DurationMS: dur,
+					})
+				}
+			}
+		}
 	}
 
 	return m, nil
@@ -195,13 +220,28 @@ func (m *MockAdapter) RunTurn(ctx context.Context, session domain.Session, param
 	}
 
 	// Emit token_usage event.
-	params.OnEvent(domain.AgentEvent{
+	tokenEvt := domain.AgentEvent{
 		Type:      domain.EventTokenUsage,
 		Timestamp: time.Now().UTC(),
 		Usage:     usage,
 		Model:     m.modelName,
 		Message:   "mock token usage",
-	})
+	}
+	if m.apiDurationMS > 0 {
+		tokenEvt.APIDurationMS = m.apiDurationMS
+	}
+	params.OnEvent(tokenEvt)
+
+	// Emit tool_result events for configured tool calls.
+	for _, tc := range m.toolCalls {
+		params.OnEvent(domain.AgentEvent{
+			Type:           domain.EventToolResult,
+			Timestamp:      time.Now().UTC(),
+			ToolName:       tc.ToolName,
+			ToolDurationMS: tc.DurationMS,
+			Message:        fmt.Sprintf("mock tool %s", tc.ToolName),
+		})
+	}
 
 	// Map outcome to terminal event and emit it.
 	exitReason, errKind, isError := outcomeToEvent(outcome)
@@ -286,6 +326,30 @@ func intFromConfig(config map[string]any, key string, fallback int) int {
 			return fallback
 		}
 		return int(n)
+	default:
+		return fallback
+	}
+}
+
+// int64FromConfig extracts an int64 value from a config map, accepting
+// int, int64, and float64 (JSON unmarshalling yields float64).
+// Fractional float64 values are rejected. Returns the fallback if the
+// key is missing or has an unexpected type.
+func int64FromConfig(config map[string]any, key string, fallback int64) int64 {
+	v, ok := config[key]
+	if !ok {
+		return fallback
+	}
+	switch n := v.(type) {
+	case int:
+		return int64(n)
+	case int64:
+		return n
+	case float64:
+		if n != float64(int64(n)) {
+			return fallback
+		}
+		return int64(n)
 	default:
 		return fallback
 	}

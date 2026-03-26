@@ -862,7 +862,7 @@ JSON API + HTML dashboard, Prometheus `/metrics`), and adds agent capabilities.
       the new fields. Existing tests that omit the new fields continue to pass
       (backward compatible). Dashboard renders extended token breakdown.
 
-- [ ] 8.19 Add per-session timing breakdown to the JSON API and dashboard.
+- [x] 8.19 Add per-session timing breakdown to the JSON API and dashboard.
       Compute and expose two timing percentages per running session:
       `tool_time_percent` (cumulative tool call duration as fraction of
       session wall-clock time) and `api_time_percent` (cumulative LLM API

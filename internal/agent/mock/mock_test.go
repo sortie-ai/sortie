@@ -629,3 +629,147 @@ func TestRunTurn_ExtendedTokenFields(t *testing.T) {
 		t.Errorf("turn 2 CacheReadTokens = %d, want 400", tokenEv2.Usage.CacheReadTokens)
 	}
 }
+
+// --- Per-session timing tests (Spec 8.19) ---
+
+// TestNewMockAdapter_TimingConfig verifies parsing of api_duration_ms
+// and tool_calls configuration keys.
+func TestNewMockAdapter_TimingConfig(t *testing.T) {
+	t.Parallel()
+
+	adapter, err := NewMockAdapter(map[string]any{
+		"api_duration_ms": float64(750),
+		"tool_calls": []any{
+			map[string]any{"tool_name": "Read", "duration_ms": float64(120)},
+			map[string]any{"tool_name": "Write", "duration_ms": float64(350)},
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewMockAdapter() error = %v", err)
+	}
+
+	m := adapter.(*MockAdapter)
+	if m.apiDurationMS != 750 {
+		t.Errorf("apiDurationMS = %d, want 750", m.apiDurationMS)
+	}
+	if len(m.toolCalls) != 2 {
+		t.Fatalf("len(toolCalls) = %d, want 2", len(m.toolCalls))
+	}
+	if m.toolCalls[0].ToolName != "Read" || m.toolCalls[0].DurationMS != 120 {
+		t.Errorf("toolCalls[0] = %+v, want {Read 120}", m.toolCalls[0])
+	}
+	if m.toolCalls[1].ToolName != "Write" || m.toolCalls[1].DurationMS != 350 {
+		t.Errorf("toolCalls[1] = %+v, want {Write 350}", m.toolCalls[1])
+	}
+}
+
+// TestRunTurn_APIDurationMS_OnTokenUsage verifies that the token_usage
+// event carries APIDurationMS when api_duration_ms is configured.
+func TestRunTurn_APIDurationMS_OnTokenUsage(t *testing.T) {
+	t.Parallel()
+
+	adapter, _ := NewMockAdapter(map[string]any{
+		"api_duration_ms": float64(500),
+	})
+	sess := domain.Session{ID: "mock-session-001"}
+	params := defaultParams()
+	events := collectEvents(&params)
+
+	if _, err := adapter.RunTurn(context.Background(), sess, params); err != nil {
+		t.Fatalf("RunTurn() error = %v", err)
+	}
+
+	for _, e := range *events {
+		if e.Type == domain.EventTokenUsage {
+			if e.APIDurationMS != 500 {
+				t.Errorf("token_usage APIDurationMS = %d, want 500", e.APIDurationMS)
+			}
+			return
+		}
+	}
+	t.Error("no token_usage event found")
+}
+
+// TestRunTurn_APIDurationMS_ZeroByDefault verifies that APIDurationMS
+// is 0 on token_usage events when api_duration_ms is not configured.
+func TestRunTurn_APIDurationMS_ZeroByDefault(t *testing.T) {
+	t.Parallel()
+
+	adapter, _ := NewMockAdapter(map[string]any{})
+	sess := domain.Session{ID: "mock-session-001"}
+	params := defaultParams()
+	events := collectEvents(&params)
+
+	if _, err := adapter.RunTurn(context.Background(), sess, params); err != nil {
+		t.Fatalf("RunTurn() error = %v", err)
+	}
+
+	for _, e := range *events {
+		if e.Type == domain.EventTokenUsage {
+			if e.APIDurationMS != 0 {
+				t.Errorf("token_usage APIDurationMS = %d, want 0", e.APIDurationMS)
+			}
+			return
+		}
+	}
+	t.Error("no token_usage event found")
+}
+
+// TestRunTurn_ToolCalls_EmitsToolResultEvents verifies that configured
+// tool_calls produce tool_result events with correct ToolName and
+// ToolDurationMS.
+func TestRunTurn_ToolCalls_EmitsToolResultEvents(t *testing.T) {
+	t.Parallel()
+
+	adapter, _ := NewMockAdapter(map[string]any{
+		"tool_calls": []any{
+			map[string]any{"tool_name": "Read", "duration_ms": float64(100)},
+			map[string]any{"tool_name": "Bash", "duration_ms": float64(250)},
+		},
+	})
+	sess := domain.Session{ID: "mock-session-001"}
+	params := defaultParams()
+	events := collectEvents(&params)
+
+	if _, err := adapter.RunTurn(context.Background(), sess, params); err != nil {
+		t.Fatalf("RunTurn() error = %v", err)
+	}
+
+	var toolResults []domain.AgentEvent
+	for _, e := range *events {
+		if e.Type == domain.EventToolResult {
+			toolResults = append(toolResults, e)
+		}
+	}
+
+	if len(toolResults) != 2 {
+		t.Fatalf("got %d tool_result events, want 2", len(toolResults))
+	}
+	if toolResults[0].ToolName != "Read" || toolResults[0].ToolDurationMS != 100 {
+		t.Errorf("tool_result[0] = {%q, %d}, want {Read, 100}", toolResults[0].ToolName, toolResults[0].ToolDurationMS)
+	}
+	if toolResults[1].ToolName != "Bash" || toolResults[1].ToolDurationMS != 250 {
+		t.Errorf("tool_result[1] = {%q, %d}, want {Bash, 250}", toolResults[1].ToolName, toolResults[1].ToolDurationMS)
+	}
+}
+
+// TestRunTurn_NoToolCalls_NoToolResultEvents verifies that no tool_result
+// events are emitted when tool_calls is not configured.
+func TestRunTurn_NoToolCalls_NoToolResultEvents(t *testing.T) {
+	t.Parallel()
+
+	adapter, _ := NewMockAdapter(map[string]any{})
+	sess := domain.Session{ID: "mock-session-001"}
+	params := defaultParams()
+	events := collectEvents(&params)
+
+	if _, err := adapter.RunTurn(context.Background(), sess, params); err != nil {
+		t.Fatalf("RunTurn() error = %v", err)
+	}
+
+	for _, e := range *events {
+		if e.Type == domain.EventToolResult {
+			t.Error("unexpected tool_result event when tool_calls not configured")
+		}
+	}
+}

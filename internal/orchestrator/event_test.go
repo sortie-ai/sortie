@@ -922,3 +922,168 @@ func TestHandleAgentEvent_TwoSessions_CacheReadTotals(t *testing.T) {
 		t.Errorf("AgentTotals.CacheReadTokens = %d, want 3000", state.AgentTotals.CacheReadTokens)
 	}
 }
+
+// --- Per-session timing breakdown tests ---
+
+// TestHandleAgentEvent_APIDurationMS_Accumulates verifies that
+// APIDurationMS on any event type accumulates into entry.APITimeMs.
+func TestHandleAgentEvent_APIDurationMS_Accumulates(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		eventType  domain.AgentEventType
+		durations  []int64
+		wantAPIMs  int64
+		wantTurnUp bool // whether TurnCount should increment
+	}{
+		{
+			name:      "token_usage events accumulate API time",
+			eventType: domain.EventTokenUsage,
+			durations: []int64{500, 300},
+			wantAPIMs: 800,
+		},
+		{
+			name:       "turn_completed carries API time",
+			eventType:  domain.EventTurnCompleted,
+			durations:  []int64{1500},
+			wantAPIMs:  1500,
+			wantTurnUp: true,
+		},
+		{
+			name:       "turn_failed carries API time",
+			eventType:  domain.EventTurnFailed,
+			durations:  []int64{200, 800},
+			wantAPIMs:  1000,
+			wantTurnUp: true,
+		},
+		{
+			name:      "zero APIDurationMS ignored",
+			eventType: domain.EventNotification,
+			durations: []int64{0, 0},
+			wantAPIMs: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			state, entry := newStateWithEntry("API-1")
+			ts := time.Now().UTC()
+
+			for _, dur := range tt.durations {
+				HandleAgentEvent(state, "API-1", domain.AgentEvent{
+					Type:          tt.eventType,
+					Timestamp:     ts,
+					APIDurationMS: dur,
+				}, slog.Default(), nil)
+			}
+
+			if entry.APITimeMs != tt.wantAPIMs {
+				t.Errorf("APITimeMs = %d, want %d", entry.APITimeMs, tt.wantAPIMs)
+			}
+		})
+	}
+}
+
+// TestHandleAgentEvent_ToolResult_Accumulates verifies that tool_result
+// events with ToolDurationMS > 0 accumulate into entry.ToolTimeMs and
+// do NOT increment TurnCount.
+func TestHandleAgentEvent_ToolResult_Accumulates(t *testing.T) {
+	t.Parallel()
+
+	state, entry := newStateWithEntry("TOOL-1")
+	ts := time.Now().UTC()
+
+	HandleAgentEvent(state, "TOOL-1", domain.AgentEvent{
+		Type:           domain.EventToolResult,
+		Timestamp:      ts,
+		ToolName:       "Read",
+		ToolDurationMS: 120,
+	}, slog.Default(), nil)
+
+	HandleAgentEvent(state, "TOOL-1", domain.AgentEvent{
+		Type:           domain.EventToolResult,
+		Timestamp:      ts,
+		ToolName:       "Write",
+		ToolDurationMS: 350,
+	}, slog.Default(), nil)
+
+	// Zero-duration tool_result should be ignored.
+	HandleAgentEvent(state, "TOOL-1", domain.AgentEvent{
+		Type:           domain.EventToolResult,
+		Timestamp:      ts,
+		ToolName:       "Bash",
+		ToolDurationMS: 0,
+	}, slog.Default(), nil)
+
+	if entry.ToolTimeMs != 470 {
+		t.Errorf("ToolTimeMs = %d, want 470", entry.ToolTimeMs)
+	}
+	if entry.TurnCount != 0 {
+		t.Errorf("TurnCount = %d, want 0 (tool_result must not increment)", entry.TurnCount)
+	}
+}
+
+// TestHandleAgentEvent_ToolResult_OnlyToolResultAccumulatesToolTime
+// verifies that ToolDurationMS is only accumulated for EventToolResult,
+// not for other event types that happen to carry the field.
+func TestHandleAgentEvent_ToolResult_OnlyToolResultAccumulatesToolTime(t *testing.T) {
+	t.Parallel()
+
+	state, entry := newStateWithEntry("TOOLONLY-1")
+	ts := time.Now().UTC()
+
+	// A notification event with ToolDurationMS should NOT contribute.
+	HandleAgentEvent(state, "TOOLONLY-1", domain.AgentEvent{
+		Type:           domain.EventNotification,
+		Timestamp:      ts,
+		ToolDurationMS: 999,
+	}, slog.Default(), nil)
+
+	if entry.ToolTimeMs != 0 {
+		t.Errorf("ToolTimeMs = %d, want 0 (only tool_result events accumulate)", entry.ToolTimeMs)
+	}
+}
+
+// TestHandleAgentEvent_CombinedTimingAccumulation verifies that API time
+// and tool time accumulate independently across mixed event sequences.
+func TestHandleAgentEvent_CombinedTimingAccumulation(t *testing.T) {
+	t.Parallel()
+
+	state, entry := newStateWithEntry("COMBO-1")
+	ts := time.Now().UTC()
+
+	// Turn-completed with API time.
+	HandleAgentEvent(state, "COMBO-1", domain.AgentEvent{
+		Type:          domain.EventTurnCompleted,
+		Timestamp:     ts,
+		APIDurationMS: 1500,
+	}, slog.Default(), nil)
+
+	// Tool result with tool time.
+	HandleAgentEvent(state, "COMBO-1", domain.AgentEvent{
+		Type:           domain.EventToolResult,
+		Timestamp:      ts,
+		ToolName:       "Read",
+		ToolDurationMS: 200,
+	}, slog.Default(), nil)
+
+	// Token usage with API time.
+	HandleAgentEvent(state, "COMBO-1", domain.AgentEvent{
+		Type:          domain.EventTokenUsage,
+		Timestamp:     ts,
+		APIDurationMS: 500,
+	}, slog.Default(), nil)
+
+	if entry.APITimeMs != 2000 {
+		t.Errorf("APITimeMs = %d, want 2000", entry.APITimeMs)
+	}
+	if entry.ToolTimeMs != 200 {
+		t.Errorf("ToolTimeMs = %d, want 200", entry.ToolTimeMs)
+	}
+	if entry.TurnCount != 1 {
+		t.Errorf("TurnCount = %d, want 1", entry.TurnCount)
+	}
+}

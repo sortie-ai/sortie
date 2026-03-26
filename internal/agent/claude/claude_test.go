@@ -710,6 +710,146 @@ exit 0
 	}
 }
 
+// TestRunTurn_APIDurationMS_Success verifies that the turn-completed event
+// carries APIDurationMS from the result's duration_api_ms field.
+func TestRunTurn_APIDurationMS_Success(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	script := writeScript(t, tmpDir, `
+cat <<'JSONL'
+{"type":"system","subtype":"init","session_id":"api-dur-session","cwd":"/tmp"}
+{"type":"result","subtype":"success","result":"Done.","is_error":false,"duration_api_ms":1500,"usage":{"input_tokens":100,"output_tokens":50},"session_id":"api-dur-session"}
+JSONL
+exit 0
+`)
+
+	adapter, _ := NewClaudeCodeAdapter(map[string]any{})
+	session, err := adapter.StartSession(context.Background(), domain.StartSessionParams{
+		WorkspacePath: tmpDir,
+		AgentConfig:   domain.AgentConfig{Command: script},
+	})
+	if err != nil {
+		t.Fatalf("StartSession() error = %v", err)
+	}
+
+	var events []domain.AgentEvent
+	_, err = adapter.RunTurn(context.Background(), session, domain.RunTurnParams{
+		Prompt: "test",
+		OnEvent: func(e domain.AgentEvent) {
+			events = append(events, e)
+		},
+	})
+	if err != nil {
+		t.Fatalf("RunTurn() error = %v", err)
+	}
+
+	// Find the turn_completed event.
+	var found bool
+	for _, e := range events {
+		if e.Type == domain.EventTurnCompleted {
+			found = true
+			if e.APIDurationMS != 1500 {
+				t.Errorf("turn_completed APIDurationMS = %d, want 1500", e.APIDurationMS)
+			}
+		}
+	}
+	if !found {
+		t.Error("no turn_completed event found")
+	}
+}
+
+// TestRunTurn_APIDurationMS_Error verifies that the turn-failed event
+// carries APIDurationMS from the result's duration_api_ms field.
+func TestRunTurn_APIDurationMS_Error(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	script := writeScript(t, tmpDir, `
+cat <<'JSONL'
+{"type":"system","subtype":"init","session_id":"api-dur-err","cwd":"/tmp"}
+{"type":"result","subtype":"error_max_turns","result":"","is_error":true,"duration_api_ms":2200,"usage":{"input_tokens":500,"output_tokens":100},"session_id":"api-dur-err"}
+JSONL
+exit 0
+`)
+
+	adapter, _ := NewClaudeCodeAdapter(map[string]any{})
+	session, err := adapter.StartSession(context.Background(), domain.StartSessionParams{
+		WorkspacePath: tmpDir,
+		AgentConfig:   domain.AgentConfig{Command: script},
+	})
+	if err != nil {
+		t.Fatalf("StartSession() error = %v", err)
+	}
+
+	var events []domain.AgentEvent
+	_, _ = adapter.RunTurn(context.Background(), session, domain.RunTurnParams{
+		Prompt: "test",
+		OnEvent: func(e domain.AgentEvent) {
+			events = append(events, e)
+		},
+	})
+
+	// Find the turn_failed event.
+	var found bool
+	for _, e := range events {
+		if e.Type == domain.EventTurnFailed {
+			found = true
+			if e.APIDurationMS != 2200 {
+				t.Errorf("turn_failed APIDurationMS = %d, want 2200", e.APIDurationMS)
+			}
+		}
+	}
+	if !found {
+		t.Error("no turn_failed event found")
+	}
+}
+
+// TestRunTurn_APIDurationMS_ZeroWhenAbsent verifies that APIDurationMS
+// defaults to 0 when the result line omits duration_api_ms.
+func TestRunTurn_APIDurationMS_ZeroWhenAbsent(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	script := writeScript(t, tmpDir, `
+cat <<'JSONL'
+{"type":"system","subtype":"init","session_id":"no-dur","cwd":"/tmp"}
+{"type":"result","subtype":"success","result":"OK","is_error":false,"usage":{"input_tokens":100,"output_tokens":50},"session_id":"no-dur"}
+JSONL
+exit 0
+`)
+
+	adapter, _ := NewClaudeCodeAdapter(map[string]any{})
+	session, err := adapter.StartSession(context.Background(), domain.StartSessionParams{
+		WorkspacePath: tmpDir,
+		AgentConfig:   domain.AgentConfig{Command: script},
+	})
+	if err != nil {
+		t.Fatalf("StartSession() error = %v", err)
+	}
+
+	var events []domain.AgentEvent
+	_, err = adapter.RunTurn(context.Background(), session, domain.RunTurnParams{
+		Prompt: "test",
+		OnEvent: func(e domain.AgentEvent) {
+			events = append(events, e)
+		},
+	})
+	if err != nil {
+		t.Fatalf("RunTurn() error = %v", err)
+	}
+
+	for _, e := range events {
+		if e.Type == domain.EventTurnCompleted {
+			if e.APIDurationMS != 0 {
+				t.Errorf("turn_completed APIDurationMS = %d, want 0 (absent field)", e.APIDurationMS)
+			}
+			return
+		}
+	}
+	t.Error("no turn_completed event found")
+}
+
 func TestRunTurn_ErrorResult(t *testing.T) {
 	t.Parallel()
 

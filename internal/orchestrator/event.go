@@ -64,6 +64,18 @@ func HandleAgentEvent(state *State, issueID string, event domain.AgentEvent, log
 		entry.SessionID = event.SessionID
 	}
 
+	// Accumulate API timing from any event that carries it. This is
+	// event-type-independent so adapters can set APIDurationMS on
+	// turn-finalization events without polluting APIRequestCount.
+	if event.APIDurationMS > 0 {
+		entry.APITimeMs += event.APIDurationMS
+	}
+
+	// Accumulate tool execution time from tool_result events.
+	if event.Type == domain.EventToolResult && event.ToolDurationMS > 0 {
+		entry.ToolTimeMs += event.ToolDurationMS
+	}
+
 	// Increment TurnCount on turn-finalization events only. Every
 	// adapter emits exactly one finalization event per completed turn
 	// regardless of how many session_started events it produces.
@@ -167,6 +179,12 @@ func HandleAgentEvent(state *State, issueID string, event domain.AgentEvent, log
 		)
 	case domain.EventTokenUsage:
 		// Logged inside the delta computation block above.
+	case domain.EventToolResult:
+		log.Debug("agent event processed",
+			slog.Any("event_type", event.Type),
+			slog.String("tool_name", event.ToolName),
+			slog.Int64("duration_ms", event.ToolDurationMS),
+		)
 	case domain.EventTurnCompleted,
 		domain.EventTurnFailed,
 		domain.EventTurnCancelled,

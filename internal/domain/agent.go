@@ -59,6 +59,11 @@ const (
 	// EventMalformed indicates an unparseable or unrecognized message
 	// from the agent.
 	EventMalformed AgentEventType = "malformed"
+
+	// EventToolResult indicates a tool call completed. Adapters that
+	// can observe tool execution timing emit this event with ToolName
+	// and ToolDurationMS populated.
+	EventToolResult AgentEventType = "tool_result"
 )
 
 // TokenUsage holds normalized token counts emitted by agent adapters.
@@ -119,6 +124,19 @@ type AgentEvent struct {
 	// opaque to the orchestrator. Non-nil when rate-limit data is available
 	// on a given event; nil otherwise.
 	RateLimits map[string]any
+
+	// APIDurationMS is the LLM API response wait time in milliseconds
+	// for this event. Zero when unavailable. Any event carrying
+	// APIDurationMS > 0 contributes to the session's cumulative API time.
+	APIDurationMS int64
+
+	// ToolName is the name of the tool that completed, for tool_result
+	// events. Empty for non-tool events.
+	ToolName string
+
+	// ToolDurationMS is the wall-clock execution time of the tool call
+	// in milliseconds, for tool_result events. Zero when unavailable.
+	ToolDurationMS int64
 }
 
 // AgentConfig is the subset of configuration relevant to agent

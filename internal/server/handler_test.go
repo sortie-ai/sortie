@@ -218,6 +218,208 @@ func TestToRunningEntryResponse_ExtendedFields_JSON(t *testing.T) {
 	}
 }
 
+// --- Per-session timing percentage tests ---
+
+// TestToRunningEntryResponse_TimingPercentages verifies that
+// toRunningEntryResponse computes correct tool_time_percent and
+// api_time_percent when called with a now argument.
+func TestToRunningEntryResponse_TimingPercentages(t *testing.T) {
+	t.Parallel()
+
+	startedAt := time.Date(2026, 3, 24, 12, 0, 0, 0, time.UTC)
+
+	tests := []struct {
+		name        string
+		toolTimeMs  int64
+		apiTimeMs   int64
+		now         time.Time
+		wantToolNil bool
+		wantAPINil  bool
+		wantToolPct float64
+		wantAPIPct  float64
+	}{
+		{
+			name:        "both timing values present",
+			toolTimeMs:  6000,  // 6s tool time
+			apiTimeMs:   30000, // 30s API time
+			now:         startedAt.Add(60 * time.Second),
+			wantToolPct: 10.0, // 6000/60000 * 100
+			wantAPIPct:  50.0, // 30000/60000 * 100
+		},
+		{
+			name:        "zero tool time yields nil",
+			toolTimeMs:  0,
+			apiTimeMs:   15000,
+			now:         startedAt.Add(60 * time.Second),
+			wantToolNil: true,
+			wantAPIPct:  25.0,
+		},
+		{
+			name:        "zero api time yields nil",
+			toolTimeMs:  3000,
+			apiTimeMs:   0,
+			now:         startedAt.Add(60 * time.Second),
+			wantToolPct: 5.0,
+			wantAPINil:  true,
+		},
+		{
+			name:        "both zero yields nil",
+			toolTimeMs:  0,
+			apiTimeMs:   0,
+			now:         startedAt.Add(60 * time.Second),
+			wantToolNil: true,
+			wantAPINil:  true,
+		},
+		{
+			name:        "zero elapsed yields nil",
+			toolTimeMs:  500,
+			apiTimeMs:   500,
+			now:         startedAt,
+			wantToolNil: true,
+			wantAPINil:  true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			entry := orchestrator.SnapshotRunningEntry{
+				IssueID:    "pct-1",
+				Identifier: "MT-PCT",
+				StartedAt:  startedAt,
+				ToolTimeMs: tt.toolTimeMs,
+				APITimeMs:  tt.apiTimeMs,
+			}
+
+			got := toRunningEntryResponse(entry, tt.now)
+
+			if tt.wantToolNil {
+				if got.ToolTimePercent != nil {
+					t.Errorf("ToolTimePercent = %v, want nil", *got.ToolTimePercent)
+				}
+			} else {
+				if got.ToolTimePercent == nil {
+					t.Fatal("ToolTimePercent = nil, want non-nil")
+				}
+				if diff := *got.ToolTimePercent - tt.wantToolPct; diff > 0.01 || diff < -0.01 {
+					t.Errorf("ToolTimePercent = %.4f, want %.4f", *got.ToolTimePercent, tt.wantToolPct)
+				}
+			}
+
+			if tt.wantAPINil {
+				if got.APITimePercent != nil {
+					t.Errorf("APITimePercent = %v, want nil", *got.APITimePercent)
+				}
+			} else {
+				if got.APITimePercent == nil {
+					t.Fatal("APITimePercent = nil, want non-nil")
+				}
+				if diff := *got.APITimePercent - tt.wantAPIPct; diff > 0.01 || diff < -0.01 {
+					t.Errorf("APITimePercent = %.4f, want %.4f", *got.APITimePercent, tt.wantAPIPct)
+				}
+			}
+		})
+	}
+}
+
+// TestToRunningEntryResponse_NoNowArg_NilPercentages verifies backward
+// compatibility: calling without now produces nil percentages.
+func TestToRunningEntryResponse_NoNowArg_NilPercentages(t *testing.T) {
+	t.Parallel()
+
+	entry := orchestrator.SnapshotRunningEntry{
+		IssueID:    "compat-1",
+		Identifier: "MT-COMPAT",
+		StartedAt:  time.Date(2026, 3, 24, 12, 0, 0, 0, time.UTC),
+		ToolTimeMs: 5000,
+		APITimeMs:  10000,
+	}
+
+	got := toRunningEntryResponse(entry)
+
+	if got.ToolTimePercent != nil {
+		t.Errorf("ToolTimePercent = %v, want nil (no now arg)", *got.ToolTimePercent)
+	}
+	if got.APITimePercent != nil {
+		t.Errorf("APITimePercent = %v, want nil (no now arg)", *got.APITimePercent)
+	}
+}
+
+// TestToRunningEntryResponse_TimingJSON_NullWhenNil verifies that
+// the JSON output contains null for timing percentages when they are nil.
+func TestToRunningEntryResponse_TimingJSON_NullWhenNil(t *testing.T) {
+	t.Parallel()
+
+	entry := orchestrator.SnapshotRunningEntry{
+		IssueID:    "json-null",
+		Identifier: "MT-NUL",
+		StartedAt:  time.Date(2026, 3, 24, 12, 0, 0, 0, time.UTC),
+	}
+
+	got := toRunningEntryResponse(entry)
+	data, err := json.Marshal(got)
+	if err != nil {
+		t.Fatalf("json.Marshal: %v", err)
+	}
+
+	var decoded map[string]any
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("json.Unmarshal: %v", err)
+	}
+
+	if decoded["tool_time_percent"] != nil {
+		t.Errorf("JSON tool_time_percent = %v, want null", decoded["tool_time_percent"])
+	}
+	if decoded["api_time_percent"] != nil {
+		t.Errorf("JSON api_time_percent = %v, want null", decoded["api_time_percent"])
+	}
+}
+
+// TestToRunningEntryResponse_TimingJSON_NumberWhenPresent verifies that
+// the JSON output contains numeric values for timing percentages.
+func TestToRunningEntryResponse_TimingJSON_NumberWhenPresent(t *testing.T) {
+	t.Parallel()
+
+	startedAt := time.Date(2026, 3, 24, 12, 0, 0, 0, time.UTC)
+	now := startedAt.Add(100 * time.Second) // 100s elapsed = 100000ms
+
+	entry := orchestrator.SnapshotRunningEntry{
+		IssueID:    "json-num",
+		Identifier: "MT-NUM",
+		StartedAt:  startedAt,
+		ToolTimeMs: 25000, // 25%
+		APITimeMs:  50000, // 50%
+	}
+
+	got := toRunningEntryResponse(entry, now)
+	data, err := json.Marshal(got)
+	if err != nil {
+		t.Fatalf("json.Marshal: %v", err)
+	}
+
+	var decoded map[string]any
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("json.Unmarshal: %v", err)
+	}
+
+	toolPct, ok := decoded["tool_time_percent"].(float64)
+	if !ok {
+		t.Fatalf("JSON tool_time_percent is not a number: %v", decoded["tool_time_percent"])
+	}
+	if diff := toolPct - 25.0; diff > 0.01 || diff < -0.01 {
+		t.Errorf("JSON tool_time_percent = %v, want 25.0", toolPct)
+	}
+
+	apiPct, ok := decoded["api_time_percent"].(float64)
+	if !ok {
+		t.Fatalf("JSON api_time_percent is not a number: %v", decoded["api_time_percent"])
+	}
+	if diff := apiPct - 50.0; diff > 0.01 || diff < -0.01 {
+		t.Errorf("JSON api_time_percent = %v, want 50.0", apiPct)
+	}
+}
+
 func TestToRetryEntryResponse(t *testing.T) {
 	t.Parallel()
 

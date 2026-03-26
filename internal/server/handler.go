@@ -44,6 +44,8 @@ type runningEntryResponse struct {
 	ModelName       string         `json:"model_name,omitempty"`
 	APIRequestCount int            `json:"api_request_count"`
 	RequestsByModel map[string]int `json:"requests_by_model,omitempty"`
+	ToolTimePercent *float64       `json:"tool_time_percent"`
+	APITimePercent  *float64       `json:"api_time_percent"`
 }
 
 type tokenInfo struct {
@@ -101,8 +103,8 @@ type errorDetail struct {
 
 // --- Wire-type constructors ---
 
-func toRunningEntryResponse(e orchestrator.SnapshotRunningEntry) runningEntryResponse {
-	return runningEntryResponse{
+func toRunningEntryResponse(e orchestrator.SnapshotRunningEntry, nowArgs ...time.Time) runningEntryResponse {
+	resp := runningEntryResponse{
 		IssueID:         e.IssueID,
 		IssueIdentifier: e.Identifier,
 		State:           e.State,
@@ -123,6 +125,21 @@ func toRunningEntryResponse(e orchestrator.SnapshotRunningEntry) runningEntryRes
 		APIRequestCount: e.APIRequestCount,
 		RequestsByModel: e.RequestsByModel,
 	}
+
+	if len(nowArgs) > 0 {
+		now := nowArgs[0]
+		elapsedMs := now.Sub(e.StartedAt).Milliseconds()
+		if elapsedMs > 0 && e.ToolTimeMs > 0 {
+			pct := float64(e.ToolTimeMs) / float64(elapsedMs) * 100.0
+			resp.ToolTimePercent = &pct
+		}
+		if elapsedMs > 0 && e.APITimeMs > 0 {
+			pct := float64(e.APITimeMs) / float64(elapsedMs) * 100.0
+			resp.APITimePercent = &pct
+		}
+	}
+
+	return resp
 }
 
 func toRetryEntryResponse(e orchestrator.SnapshotRetryEntry) retryEntryResponse {
@@ -138,7 +155,7 @@ func toRetryEntryResponse(e orchestrator.SnapshotRetryEntry) retryEntryResponse 
 func toStateResponse(snap orchestrator.RuntimeSnapshotResult) stateResponse {
 	running := make([]runningEntryResponse, 0, len(snap.Running))
 	for _, e := range snap.Running {
-		running = append(running, toRunningEntryResponse(e))
+		running = append(running, toRunningEntryResponse(e, snap.GeneratedAt))
 	}
 
 	retrying := make([]retryEntryResponse, 0, len(snap.Retrying))
@@ -346,7 +363,7 @@ func buildIssueDetail(identifier string, snap orchestrator.RuntimeSnapshotResult
 
 	for _, e := range snap.Running {
 		if e.Identifier == identifier {
-			re := toRunningEntryResponse(e)
+			re := toRunningEntryResponse(e, snap.GeneratedAt)
 			runEntry = &re
 			break
 		}

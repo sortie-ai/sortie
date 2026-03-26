@@ -1074,7 +1074,8 @@ native protocol events to this normalized set:
 - `turn_input_required` — agent requested user input (hard failure per policy)
 - `approval_auto_approved` — approval request was auto-resolved
 - `unsupported_tool_call` — agent requested an unsupported tool
-- `token_usage` — normalized token usage event: `{input_tokens, output_tokens, total_tokens, cache_read_tokens}`. Optional `model` field (string) identifies the LLM model when available.
+- `token_usage` — normalized token usage event: `{input_tokens, output_tokens, total_tokens, cache_read_tokens}`. Optional `model` field (string) identifies the LLM model when available. Optional `api_duration_ms` field (int64, milliseconds) carries per-request or per-turn API response wait time when the adapter can measure it.
+- `tool_result` — a tool call completed. Optional fields: `tool_name` (string), `duration_ms` (int64).
 - `notification` — informational message from the agent
 - `other_message` — unclassified message
 - `malformed` — unparseable or unrecognized message
@@ -1389,6 +1390,16 @@ Token accounting rules:
 - `api_request_count` is incremented monotonically per `token_usage` event.
 - Accumulate aggregate totals in orchestrator state (`agent_totals`).
 
+Timing accounting rules:
+
+- `api_time_ms` is the cumulative LLM API wait time in milliseconds for the session.
+  Accumulated from `api_duration_ms` fields on any agent event that carries timing data.
+- `tool_time_ms` is the cumulative tool execution time in milliseconds.
+  Accumulated from `tool_result` events that carry `duration_ms`.
+- `tool_time_percent` and `api_time_percent` are computed at render time as
+  `(cumulative_ms / session_elapsed_ms) * 100`. Displayed as null/"N/A" when no timing
+  data has been received.
+
 Runtime accounting:
 
 - Runtime should be reported as a live aggregate at snapshot/render time.
@@ -1478,7 +1489,9 @@ Minimum endpoints:
           },
           "model_name": "claude-sonnet-4-20250514",
           "api_request_count": 3,
-          "requests_by_model": {"claude-sonnet-4-20250514": 3}
+          "requests_by_model": {"claude-sonnet-4-20250514": 3},
+          "tool_time_percent": 12.3,
+          "api_time_percent": 45.6
         }
       ],
       "retrying": [
