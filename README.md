@@ -9,9 +9,9 @@ Single binary, zero dependencies, SQLite persistence.
 
 > Sortie is in active development. The core system is implemented: tracker adapters
 > (Jira, file-based), agent adapter (Claude Code), workspace management, persistence,
-> and the orchestrator (dispatch, retry, reconciliation, multi-turn sessions). Current
-> work: observability surfaces, self-hosting, and hardening.
-> See [TODO.md](TODO.md) for current status.
+> orchestrator (dispatch, retry, reconciliation, multi-turn sessions), and observability
+> (JSON API, HTML dashboard, Prometheus metrics, health endpoints). Current work:
+> self-hosting, hardening, and documentation. See [TODO.md](TODO.md) for current status.
 
 ## The Problem
 

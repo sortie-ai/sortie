@@ -9,6 +9,55 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.0.8] - 2026-03-26
+
+### Added
+
+- JSON API server with `GET /api/v1/state`, `GET /api/v1/<identifier>`, and
+  `POST /api/v1/refresh` endpoints for programmatic access to orchestrator
+  state. Enabled via `--port` flag or `server.port` config.
+- HTML dashboard at `/` with auto-refreshing view of running sessions, retry
+  queue, token totals, and runtime statistics when the HTTP server is enabled.
+- `/livez` and `/readyz` health endpoints following Kubernetes z-pages
+  conventions. `/readyz` checks database accessibility, preflight validation,
+  and workflow loading.
+- Prometheus `/metrics` endpoint exposing session gauges, dispatch/worker/retry
+  counters, token counters, tracker request counters, tool call counters,
+  poll and worker duration histograms, and `sortie_build_info`. Uses a dedicated
+  `prometheus.Registry` — compatible with standard Prometheus scrape configs.
+- `tracker_api` client-side tool: agents can query the tracker during sessions
+  to fetch issues and comments, scoped to the configured project.
+- SSH worker extension via `worker.ssh_hosts` config: dispatch agent runs to
+  remote hosts over SSH with round-robin host selection and per-host concurrency
+  limits (`worker.max_concurrent_agents_per_host`).
+- Per-session token breakdown in JSON API and dashboard: `input_tokens`,
+  `output_tokens`, `cache_creation_tokens`, `cache_read_tokens`.
+- Per-session timing breakdown in JSON API and dashboard: `elapsed`,
+  `agent_time`, `idle_time`, `agent_pct`.
+- Claude Code adapter: `tool_result` events now emitted, making agent tool
+  invocations visible in the dashboard and API.
+- Worker failure logging in `HandleWorkerExit`: WARN with `next_attempt` and
+  `delay_ms` for retryable errors, ERROR for non-retryable errors.
+- Structured logging: `issue_id`, `issue_identifier`, and `session_id` context
+  fields now present on all orchestrator lifecycle log lines. Agent tool calls
+  logged at INFO level.
+- POSIX-compatible install script (`install.sh`) for automated binary
+  installation.
+
+### Changed
+
+- `POST /api/v1/refresh` returns `409 Conflict` during graceful shutdown
+  instead of accepting requests that cannot be fulfilled.
+
+### Fixed
+
+- Claude Code adapter: duplicate `token_usage` events no longer emitted when
+  assistant-level usage is already reported in the result message.
+- HTTP server: `405 Method Not Allowed` responses now include the `Allow`
+  header per RFC 9110.
+- Jira adapter: `sortie_tracker_requests_total` counter no longer increments
+  on no-op calls with empty ID lists.
+
 ## [0.0.7] - 2026-03-24
 
 ### Added
@@ -195,7 +244,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   execution via GitHub Actions.
 - Architecture Decision Records (ADR-0001 through ADR-0005).
 
-[Unreleased]: https://github.com/sortie-ai/sortie/compare/0.0.7...HEAD
+[Unreleased]: https://github.com/sortie-ai/sortie/compare/0.0.8...HEAD
+[0.0.8]: https://github.com/sortie-ai/sortie/compare/0.0.7...0.0.8
 [0.0.7]: https://github.com/sortie-ai/sortie/compare/0.0.6...0.0.7
 [0.0.6]: https://github.com/sortie-ai/sortie/compare/0.0.5...0.0.6
 [0.0.5]: https://github.com/sortie-ai/sortie/compare/0.0.4...0.0.5
