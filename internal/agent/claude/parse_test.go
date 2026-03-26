@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/sortie-ai/sortie/internal/domain"
 )
@@ -463,5 +464,234 @@ func TestRawAssistantMessageMeta_FromFixture(t *testing.T) {
 	normalized := normalizeUsage(meta.Usage)
 	if normalized.CacheReadTokens != 8000 {
 		t.Errorf("normalizeUsage().CacheReadTokens = %d, want 8000", normalized.CacheReadTokens)
+	}
+}
+
+// collectToolEvents replicates the in-flight tracking logic from
+// RunTurn's "assistant" case for a single parsed event. It processes
+// content blocks in array order, registering tool_use blocks and
+// matching tool_result blocks against the in-flight map.
+func collectToolEvents(t *testing.T, ev rawEvent, inFlight map[string]inFlightTool, now time.Time) []domain.AgentEvent {
+	t.Helper()
+	var events []domain.AgentEvent
+	for _, block := range ev.contentBlocks() {
+		if block.Type == "tool_use" && block.ID != "" {
+			inFlight[block.ID] = inFlightTool{Name: block.Name, Timestamp: now}
+		}
+		if block.Type == "tool_result" {
+			toolName := "unknown"
+			var durationMS int64
+			if entry, ok := inFlight[block.ToolUseID]; ok {
+				toolName = entry.Name
+				durationMS = now.Sub(entry.Timestamp).Milliseconds()
+				delete(inFlight, block.ToolUseID)
+			}
+			events = append(events, domain.AgentEvent{
+				Type:           domain.EventToolResult,
+				Timestamp:      now,
+				ToolName:       toolName,
+				ToolDurationMS: durationMS,
+				ToolError:      block.IsError,
+				Message:        "tool_result: " + toolName,
+			})
+		}
+	}
+	return events
+}
+
+func TestContentBlock_ToolUseID(t *testing.T) {
+	t.Parallel()
+
+	data := loadFixture(t, "tool_use_message.json")
+	ev, err := parseEvent(data)
+	if err != nil {
+		t.Fatalf("parseEvent() error = %v", err)
+	}
+
+	blocks := ev.contentBlocks()
+	if len(blocks) != 2 {
+		t.Fatalf("contentBlocks() = %d blocks, want 2", len(blocks))
+	}
+
+	// blocks[0]: tool_use
+	if blocks[0].Type != "tool_use" {
+		t.Errorf("blocks[0].Type = %q, want %q", blocks[0].Type, "tool_use")
+	}
+	if blocks[0].ID != "toolu_02B09q90qw90lq917835lhkm" {
+		t.Errorf("blocks[0].ID = %q, want %q", blocks[0].ID, "toolu_02B09q90qw90lq917835lhkm")
+	}
+	if blocks[0].Name != "Bash" {
+		t.Errorf("blocks[0].Name = %q, want %q", blocks[0].Name, "Bash")
+	}
+
+	// blocks[1]: tool_result with ToolUseID correlation
+	if blocks[1].Type != "tool_result" {
+		t.Errorf("blocks[1].Type = %q, want %q", blocks[1].Type, "tool_result")
+	}
+	if blocks[1].ToolUseID != "toolu_02B09q90qw90lq917835lhkm" {
+		t.Errorf("blocks[1].ToolUseID = %q, want %q", blocks[1].ToolUseID, "toolu_02B09q90qw90lq917835lhkm")
+	}
+	if blocks[1].IsError {
+		t.Error("blocks[1].IsError = true, want false")
+	}
+}
+
+func TestEmitToolResult_SameMessage(t *testing.T) {
+	t.Parallel()
+
+	data := loadFixture(t, "tool_use_message.json")
+	ev, err := parseEvent(data)
+	if err != nil {
+		t.Fatalf("parseEvent() error = %v", err)
+	}
+
+	inFlight := make(map[string]inFlightTool)
+	now := time.Now().UTC()
+	events := collectToolEvents(t, ev, inFlight, now)
+
+	if len(events) != 1 {
+		t.Fatalf("collectToolEvents() = %d events, want 1", len(events))
+	}
+
+	got := events[0]
+	if got.Type != domain.EventToolResult {
+		t.Errorf("event.Type = %q, want %q", got.Type, domain.EventToolResult)
+	}
+	if got.ToolName != "Bash" {
+		t.Errorf("event.ToolName = %q, want %q", got.ToolName, "Bash")
+	}
+	if got.ToolDurationMS != 0 {
+		t.Errorf("event.ToolDurationMS = %d, want 0 (same-message pair)", got.ToolDurationMS)
+	}
+	if got.ToolError {
+		t.Error("event.ToolError = true, want false")
+	}
+	if got.Message != "tool_result: Bash" {
+		t.Errorf("event.Message = %q, want %q", got.Message, "tool_result: Bash")
+	}
+}
+
+func TestEmitToolResult_CrossMessage(t *testing.T) {
+	t.Parallel()
+
+	f, err := os.Open(filepath.Join("testdata", "tool_use_result_separate.jsonl"))
+	if err != nil {
+		t.Fatalf("open fixture: %v", err)
+	}
+	defer func() { _ = f.Close() }()
+
+	inFlight := make(map[string]inFlightTool)
+	var toolEvents []domain.AgentEvent
+
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		ev, parseErr := parseEvent(scanner.Bytes())
+		if parseErr != nil {
+			t.Fatalf("parseEvent() error = %v", parseErr)
+		}
+		if ev.Type != "assistant" {
+			continue
+		}
+		now := time.Now().UTC()
+		toolEvents = append(toolEvents, collectToolEvents(t, ev, inFlight, now)...)
+	}
+	if err := scanner.Err(); err != nil {
+		t.Fatalf("scanner error: %v", err)
+	}
+
+	if len(toolEvents) != 2 {
+		t.Fatalf("total EventToolResult events = %d, want 2", len(toolEvents))
+	}
+
+	// First: Read tool result
+	if toolEvents[0].ToolName != "Read" {
+		t.Errorf("toolEvents[0].ToolName = %q, want %q", toolEvents[0].ToolName, "Read")
+	}
+	if toolEvents[0].ToolError {
+		t.Error("toolEvents[0].ToolError = true, want false")
+	}
+	if toolEvents[0].ToolDurationMS < 0 {
+		t.Errorf("toolEvents[0].ToolDurationMS = %d, want >= 0", toolEvents[0].ToolDurationMS)
+	}
+
+	// Second: Bash tool result
+	if toolEvents[1].ToolName != "Bash" {
+		t.Errorf("toolEvents[1].ToolName = %q, want %q", toolEvents[1].ToolName, "Bash")
+	}
+	if toolEvents[1].ToolError {
+		t.Error("toolEvents[1].ToolError = true, want false")
+	}
+	if toolEvents[1].ToolDurationMS < 0 {
+		t.Errorf("toolEvents[1].ToolDurationMS = %d, want >= 0", toolEvents[1].ToolDurationMS)
+	}
+}
+
+func TestEmitToolResult_ErrorResult(t *testing.T) {
+	t.Parallel()
+
+	data := loadFixture(t, "tool_use_error_result.json")
+	ev, err := parseEvent(data)
+	if err != nil {
+		t.Fatalf("parseEvent() error = %v", err)
+	}
+
+	// Empty in-flight map simulates orphaned tool_result.
+	inFlight := make(map[string]inFlightTool)
+	now := time.Now().UTC()
+	events := collectToolEvents(t, ev, inFlight, now)
+
+	if len(events) != 1 {
+		t.Fatalf("collectToolEvents() = %d events, want 1", len(events))
+	}
+
+	got := events[0]
+	if got.ToolName != "unknown" {
+		t.Errorf("event.ToolName = %q, want %q", got.ToolName, "unknown")
+	}
+	if !got.ToolError {
+		t.Error("event.ToolError = false, want true")
+	}
+	if got.ToolDurationMS != 0 {
+		t.Errorf("event.ToolDurationMS = %d, want 0 (orphaned result)", got.ToolDurationMS)
+	}
+}
+
+func TestEmitToolResult_ParallelToolUse(t *testing.T) {
+	t.Parallel()
+
+	data := loadFixture(t, "tool_use_parallel.json")
+	ev, err := parseEvent(data)
+	if err != nil {
+		t.Fatalf("parseEvent() error = %v", err)
+	}
+
+	inFlight := make(map[string]inFlightTool)
+	now := time.Now().UTC()
+	events := collectToolEvents(t, ev, inFlight, now)
+
+	// No tool_result blocks → no EventToolResult events.
+	if len(events) != 0 {
+		t.Errorf("collectToolEvents() = %d events, want 0", len(events))
+	}
+
+	// In-flight map should have 2 entries.
+	if len(inFlight) != 2 {
+		t.Fatalf("len(inFlight) = %d, want 2", len(inFlight))
+	}
+
+	entry1, ok := inFlight["toolu_par_01"]
+	if !ok {
+		t.Fatal("inFlight missing key \"toolu_par_01\"")
+	}
+	if entry1.Name != "Read" {
+		t.Errorf("inFlight[\"toolu_par_01\"].Name = %q, want %q", entry1.Name, "Read")
+	}
+
+	entry2, ok := inFlight["toolu_par_02"]
+	if !ok {
+		t.Fatal("inFlight missing key \"toolu_par_02\"")
+	}
+	if entry2.Name != "Read" {
+		t.Errorf("inFlight[\"toolu_par_02\"].Name = %q, want %q", entry2.Name, "Read")
 	}
 }

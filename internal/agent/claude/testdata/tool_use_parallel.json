@@ -1,0 +1,32 @@
+{
+  "type": "assistant",
+  "message": {
+    "id": "msg_par_01",
+    "type": "message",
+    "role": "assistant",
+    "content": [
+      {
+        "type": "text",
+        "text": "I'll read both files simultaneously."
+      },
+      {
+        "type": "tool_use",
+        "id": "toolu_par_01",
+        "name": "Read",
+        "input": { "file_path": "file1.go" }
+      },
+      {
+        "type": "tool_use",
+        "id": "toolu_par_02",
+        "name": "Read",
+        "input": { "file_path": "file2.go" }
+      }
+    ],
+    "model": "claude-sonnet-4-20250514",
+    "stop_reason": "tool_use",
+    "usage": {
+      "input_tokens": 3000,
+      "output_tokens": 150
+    }
+  }
+}

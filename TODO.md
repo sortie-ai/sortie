@@ -908,7 +908,7 @@ JSON API + HTML dashboard, Prometheus `/metrics`), and adds agent capabilities.
       **Verify:** `docs/workflow-reference.md` reflects all new fields.
       No contradictions with `docs/architecture.md`.
 
-- [ ] 8.23 Emit `EventToolResult` from the Claude Code adapter. The adapter
+- [x] 8.23 Emit `EventToolResult` from the Claude Code adapter. The adapter
       currently parses `tool_use`/`tool_result` content blocks from assistant
       messages but does not emit normalized `domain.EventToolResult` events.
       This means `sortie_tool_calls_total` (task 8.20) stays at zero in

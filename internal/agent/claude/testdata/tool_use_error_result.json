@@ -1,0 +1,26 @@
+{
+  "type": "assistant",
+  "message": {
+    "id": "msg_err_01",
+    "type": "message",
+    "role": "assistant",
+    "content": [
+      {
+        "type": "tool_result",
+        "tool_use_id": "toolu_err_01",
+        "content": "bash: command not found: foobar",
+        "is_error": true
+      },
+      {
+        "type": "text",
+        "text": "The command failed. Let me try a different approach."
+      }
+    ],
+    "model": "claude-sonnet-4-20250514",
+    "stop_reason": "end_turn",
+    "usage": {
+      "input_tokens": 5000,
+      "output_tokens": 200
+    }
+  }
+}
