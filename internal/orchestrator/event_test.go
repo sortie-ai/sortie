@@ -1087,3 +1087,72 @@ func TestHandleAgentEvent_CombinedTimingAccumulation(t *testing.T) {
 		t.Errorf("TurnCount = %d, want 1", entry.TurnCount)
 	}
 }
+
+// TestHandleAgentEvent_ToolCallMetric verifies that HandleAgentEvent
+// increments the IncToolCalls metric for EventToolResult events with
+// non-empty ToolName, using the correct result label based on ToolError.
+func TestHandleAgentEvent_ToolCallMetric(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		toolName   string
+		toolError  bool
+		wantCalls  int
+		wantTool   string
+		wantResult string
+	}{
+		{
+			name:       "success tool call",
+			toolName:   "Bash",
+			toolError:  false,
+			wantCalls:  1,
+			wantTool:   "Bash",
+			wantResult: "success",
+		},
+		{
+			name:       "error tool call",
+			toolName:   "Bash",
+			toolError:  true,
+			wantCalls:  1,
+			wantTool:   "Bash",
+			wantResult: "error",
+		},
+		{
+			name:      "empty ToolName skips metric",
+			toolName:  "",
+			toolError: false,
+			wantCalls: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			spy := &spyMetrics{}
+			state, _ := newStateWithEntry("TOOLM-1")
+
+			HandleAgentEvent(state, "TOOLM-1", domain.AgentEvent{
+				Type:           domain.EventToolResult,
+				Timestamp:      time.Now().UTC(),
+				ToolName:       tt.toolName,
+				ToolDurationMS: 100,
+				ToolError:      tt.toolError,
+			}, slog.Default(), spy)
+
+			if len(spy.toolCalls) != tt.wantCalls {
+				t.Fatalf("IncToolCalls called %d times, want %d", len(spy.toolCalls), tt.wantCalls)
+			}
+			if tt.wantCalls > 0 {
+				got := spy.toolCalls[0]
+				if got.tool != tt.wantTool {
+					t.Errorf("IncToolCalls tool = %q, want %q", got.tool, tt.wantTool)
+				}
+				if got.result != tt.wantResult {
+					t.Errorf("IncToolCalls result = %q, want %q", got.result, tt.wantResult)
+				}
+			}
+		})
+	}
+}

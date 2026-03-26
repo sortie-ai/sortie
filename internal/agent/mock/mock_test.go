@@ -773,3 +773,44 @@ func TestRunTurn_NoToolCalls_NoToolResultEvents(t *testing.T) {
 		}
 	}
 }
+
+// TestRunTurn_ToolCalls_ErrorField verifies that the error field in
+// tool_calls config is parsed and emitted as ToolError on the event.
+func TestRunTurn_ToolCalls_ErrorField(t *testing.T) {
+	t.Parallel()
+
+	adapter, err := NewMockAdapter(map[string]any{
+		"tool_calls": []any{
+			map[string]any{"tool_name": "Bash", "duration_ms": float64(100), "error": true},
+			map[string]any{"tool_name": "Read", "duration_ms": float64(50)},
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewMockAdapter() error = %v", err)
+	}
+
+	sess := domain.Session{ID: "mock-session-001"}
+	params := defaultParams()
+	events := collectEvents(&params)
+
+	if _, err := adapter.RunTurn(context.Background(), sess, params); err != nil {
+		t.Fatalf("RunTurn() error = %v", err)
+	}
+
+	var toolResults []domain.AgentEvent
+	for _, e := range *events {
+		if e.Type == domain.EventToolResult {
+			toolResults = append(toolResults, e)
+		}
+	}
+
+	if len(toolResults) != 2 {
+		t.Fatalf("got %d tool_result events, want 2", len(toolResults))
+	}
+	if !toolResults[0].ToolError {
+		t.Errorf("tool_result[0] ToolError = false, want true (Bash configured with error: true)")
+	}
+	if toolResults[1].ToolError {
+		t.Errorf("tool_result[1] ToolError = true, want false (Read has no error config)")
+	}
+}

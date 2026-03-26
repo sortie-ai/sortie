@@ -52,6 +52,7 @@ type MockAdapter struct {
 type mockToolCall struct {
 	ToolName   string
 	DurationMS int64
+	Error      bool
 }
 
 // NewMockAdapter creates a [MockAdapter] from adapter configuration.
@@ -117,9 +118,11 @@ func NewMockAdapter(config map[string]any) (domain.AgentAdapter, error) {
 				if tc, ok := item.(map[string]any); ok {
 					name, _ := tc["tool_name"].(string)
 					dur := int64FromConfig(tc, "duration_ms", 0)
+					tcError, _ := tc["error"].(bool)
 					m.toolCalls = append(m.toolCalls, mockToolCall{
 						ToolName:   name,
 						DurationMS: dur,
+						Error:      tcError,
 					})
 				}
 			}
@@ -239,6 +242,7 @@ func (m *MockAdapter) RunTurn(ctx context.Context, session domain.Session, param
 			Timestamp:      time.Now().UTC(),
 			ToolName:       tc.ToolName,
 			ToolDurationMS: tc.DurationMS,
+			ToolError:      tc.Error,
 			Message:        fmt.Sprintf("mock tool %s", tc.ToolName),
 		})
 	}

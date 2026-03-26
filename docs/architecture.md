@@ -1630,6 +1630,7 @@ Defined metrics (label sets and buckets are specified here; see ADR-0008 for his
 | `sortie_poll_cycles_total{result}` | Counter | Poll tick completions, partitioned by result (`success`, `error`, `skipped`). |
 | `sortie_tracker_requests_total{operation,result}` | Counter | Tracker adapter API calls, partitioned by operation (`fetch_candidates`, `fetch_issue`, `fetch_by_states`, `fetch_states_by_ids`, `fetch_states_by_identifiers`, `fetch_comments`, `transition`) and result (`success`, `error`). |
 | `sortie_handoff_transitions_total{result}` | Counter | Handoff-state transition attempts, partitioned by result (`success`, `error`, `skipped`). |
+| `sortie_tool_calls_total{tool,result}` | Counter | Agent tool call completions, partitioned by tool name and result (`success`, `error`). |
 | `sortie_poll_duration_seconds` | Histogram | Wall-clock time per poll cycle; buckets via `ExponentialBuckets(0.1, 2, 10)` (0.1 s–51.2 s). |
 | `sortie_worker_duration_seconds{exit_type}` | Histogram | Worker session wall-clock time; buckets via `ExponentialBuckets(10, 2, 12)` (10 s–5.7 h). |
 | `sortie_build_info{version,go_version}` | Gauge | Always `1`; carries build metadata as labels. |

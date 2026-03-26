@@ -76,6 +76,12 @@ type Metrics interface {
 	// (sortie_handoff_transitions_total{result} counter).
 	IncHandoffTransitions(result string)
 
+	// IncToolCalls increments the tool call completion counter.
+	// tool is the tool name (e.g. "Bash", "tracker_api").
+	// result is "success" or "error"
+	// (sortie_tool_calls_total{tool,result} counter).
+	IncToolCalls(tool string, result string)
+
 	// --- Histograms (distributions) ---
 
 	// ObservePollDuration records the duration of a complete poll
@@ -113,6 +119,7 @@ func (*NoopMetrics) IncReconciliationActions(string)       {}
 func (*NoopMetrics) IncPollCycles(string)                  {}
 func (*NoopMetrics) IncTrackerRequests(string, string)     {}
 func (*NoopMetrics) IncHandoffTransitions(string)          {}
+func (*NoopMetrics) IncToolCalls(string, string)           {}
 func (*NoopMetrics) ObservePollDuration(float64)           {}
 func (*NoopMetrics) ObserveWorkerDuration(string, float64) {}
 func (*NoopMetrics) SetSSHHostUsage(string, int)           {}

@@ -76,6 +76,17 @@ func HandleAgentEvent(state *State, issueID string, event domain.AgentEvent, log
 		entry.ToolTimeMs += event.ToolDurationMS
 	}
 
+	// Increment the tool call completion counter for tool_result events
+	// with a known tool name. Empty ToolName is a defensive guard —
+	// well-behaved adapters always populate it.
+	if event.Type == domain.EventToolResult && event.ToolName != "" {
+		result := outcomeSuccess
+		if event.ToolError {
+			result = outcomeError
+		}
+		metrics.IncToolCalls(event.ToolName, result)
+	}
+
 	// Increment TurnCount on turn-finalization events only. Every
 	// adapter emits exactly one finalization event per completed turn
 	// regardless of how many session_started events it produces.

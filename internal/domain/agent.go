@@ -137,6 +137,13 @@ type AgentEvent struct {
 	// ToolDurationMS is the wall-clock execution time of the tool call
 	// in milliseconds, for tool_result events. Zero when unavailable.
 	ToolDurationMS int64
+
+	// ToolError indicates whether the tool call completed with an error
+	// result. Relevant for tool_result events only. When false (the
+	// default), the tool call succeeded. When true, the tool returned
+	// an error response. Adapters populate this based on observed tool
+	// execution outcomes.
+	ToolError bool
 }
 
 // AgentConfig is the subset of configuration relevant to agent

@@ -29,6 +29,7 @@ type spyMetrics struct {
 	pollCycles           []string
 	trackerRequests      []trackerReqCall
 	handoffTransitions   []string
+	toolCalls            []toolCallCall
 	pollDurations        []float64
 	workerDurations      []workerDurCall
 	sshHostUsage         []sshHostUsageCall
@@ -52,6 +53,11 @@ type workerDurCall struct {
 type sshHostUsageCall struct {
 	host  string
 	count int
+}
+
+type toolCallCall struct {
+	tool   string
+	result string
 }
 
 var _ domain.Metrics = (*spyMetrics)(nil)
@@ -132,6 +138,12 @@ func (s *spyMetrics) IncHandoffTransitions(result string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.handoffTransitions = append(s.handoffTransitions, result)
+}
+
+func (s *spyMetrics) IncToolCalls(tool string, result string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.toolCalls = append(s.toolCalls, toolCallCall{tool, result})
 }
 
 func (s *spyMetrics) ObservePollDuration(seconds float64) {
