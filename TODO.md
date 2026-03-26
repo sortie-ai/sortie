@@ -899,7 +899,7 @@ JSON API + HTML dashboard, Prometheus `/metrics`), and adds agent capabilities.
       expected fields on tool call completion. A second test confirms
       `error` field is present on failure and absent on success.
 
-- [ ] 8.22 Update user-facing documentation for observability enhancements.
+- [x] 8.22 Update user-facing documentation for observability enhancements.
       Update `docs/workflow-reference.md` to document any new config fields
       added by tasks 8.18-8.19. This task does not cover docs.sortie-ai.com
       pages (those are written after M8 stabilizes per the docs content

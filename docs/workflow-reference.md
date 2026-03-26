@@ -398,16 +398,20 @@ Port `0` requests an ephemeral OS-assigned port.
 
 | Method | Path                     | Description                                                        |
 | ------ | ------------------------ | ------------------------------------------------------------------ |
+| GET    | `/`                      | HTML dashboard — server-rendered status page with running sessions, retry queue, token totals, timing breakdown, and recent events. Auto-refreshes. |
 | GET    | `/livez`                 | Liveness probe. Returns 200 while the process is running and not draining, 503 during graceful shutdown. No I/O. |
 | GET    | `/readyz`                | Readiness probe. Returns 200 when database, preflight, and workflow are healthy. Returns 503 with per-check status when any dependency fails. |
 | GET    | `/api/v1/state`          | System-wide runtime snapshot (running sessions, retry queue, aggregate token/runtime totals, rate limits). |
 | GET    | `/api/v1/{identifier}`   | Per-issue detail for a specific issue identifier. Returns 404 for unknown issues. |
 | POST   | `/api/v1/refresh`        | Trigger an immediate poll+reconciliation cycle. Returns 202 Accepted normally, 409 Conflict during graceful shutdown. Best-effort; repeated requests are coalesced. |
+| GET    | `/metrics`               | Prometheus exposition-format scrape endpoint. Present only when `github.com/prometheus/client_golang` metrics are enabled (always co-located with the HTTP server). |
 
-All responses use `Content-Type: application/json; charset=utf-8`. Error responses
-use a standard envelope: `{"error": {"code": "...", "message": "..."}}`.
+All responses use `Content-Type: application/json; charset=utf-8` (JSON endpoints).
+Error responses use a standard envelope: `{"error": {"code": "...", "message": "..."}}`.
 API endpoints (`/api/v1/*`) return 405 with the JSON error envelope.
 Health probes (`/livez`, `/readyz`) return the standard HTTP 405 plain-text response.
+The `/metrics` endpoint returns `text/plain` in Prometheus exposition format.
+The `/` dashboard returns `text/html`.
 
 #### Health Endpoints
 
@@ -465,6 +469,135 @@ the flag is set. The HTTP listener remains open during drain so K8s probes recei
 HTTP responses. After the orchestrator drain completes, the listener closes and new
 connections are refused.
 
+#### `GET /api/v1/state` — Runtime Snapshot
+
+Returns the system-wide runtime state including running sessions, retry queue,
+aggregate token/runtime totals, and rate limits.
+
+```json
+{
+  "generated_at": "2026-02-24T20:15:30Z",
+  "counts": {
+    "running": 2,
+    "retrying": 1
+  },
+  "running": [
+    {
+      "issue_id": "abc123",
+      "issue_identifier": "MT-649",
+      "state": "In Progress",
+      "session_id": "thread-1-turn-1",
+      "turn_count": 7,
+      "last_event": "turn_completed",
+      "last_message": "",
+      "started_at": "2026-02-24T20:10:12Z",
+      "last_event_at": "2026-02-24T20:14:59Z",
+      "workspace_path": "/tmp/sortie_workspaces/MT-649",
+      "tokens": {
+        "input_tokens": 1200,
+        "output_tokens": 800,
+        "total_tokens": 2000,
+        "cache_read_tokens": 400
+      },
+      "model_name": "claude-sonnet-4-20250514",
+      "api_request_count": 3,
+      "requests_by_model": {"claude-sonnet-4-20250514": 3},
+      "tool_time_percent": 12.3,
+      "api_time_percent": 45.6
+    }
+  ],
+  "retrying": [
+    {
+      "issue_id": "def456",
+      "issue_identifier": "MT-650",
+      "attempt": 3,
+      "due_at": "2026-02-24T20:16:00Z",
+      "error": "no available orchestrator slots"
+    }
+  ],
+  "agent_totals": {
+    "input_tokens": 5000,
+    "output_tokens": 2400,
+    "total_tokens": 7400,
+    "cache_read_tokens": 1500,
+    "seconds_running": 1834.2
+  },
+  "rate_limits": null
+}
+```
+
+**Per-session fields:**
+
+| Field               | Type              | Description                                                                                                                                |
+| ------------------- | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `tokens`            | object            | Token counts for this session: `input_tokens`, `output_tokens`, `total_tokens`, `cache_read_tokens`.                                      |
+| `cache_read_tokens` | integer           | Cumulative cache-read token count. Reflects tokens served from the LLM provider's prompt cache rather than reprocessed. Zero when the agent adapter does not report cache data. |
+| `model_name`        | string or absent  | LLM model identifier reported by the agent (e.g. `"claude-sonnet-4-20250514"`). Omitted when the adapter does not report a model.         |
+| `api_request_count` | integer           | Number of LLM API requests made during this session. Incremented once per `token_usage` event from the agent adapter.                     |
+| `requests_by_model` | object or absent  | Map of model name to request count (e.g. `{"claude-sonnet-4-20250514": 3}`). Omitted when no model data is available. Enables tracking model usage when the agent switches models mid-session. |
+| `tool_time_percent` | number or `null`  | Cumulative tool call execution time as a percentage of session wall-clock time. Computed at response time. `null` when no tool timing data has been received. |
+| `api_time_percent`  | number or `null`  | Cumulative LLM API response wait time as a percentage of session wall-clock time. Computed at response time. `null` when no API timing data has been received. |
+
+**Aggregate totals:**
+
+| Field               | Type    | Description                                                                                             |
+| ------------------- | ------- | ------------------------------------------------------------------------------------------------------- |
+| `input_tokens`      | integer | Total input tokens consumed across all sessions (current and completed).                                |
+| `output_tokens`     | integer | Total output tokens consumed.                                                                           |
+| `total_tokens`      | integer | Total tokens consumed.                                                                                  |
+| `cache_read_tokens` | integer | Total cache-read tokens across all sessions. Follows the same cumulative-delta accounting as other token counters. |
+| `seconds_running`   | number  | Aggregate wall-clock runtime — completed-session time plus elapsed time from currently running sessions. |
+
+#### `GET /api/v1/{identifier}` — Per-Issue Detail
+
+Returns issue-specific runtime and debug details for a single issue. Returns `404`
+with `{"error":{"code":"issue_not_found","message":"..."}}` when the identifier is
+not in current orchestrator state.
+
+```json
+{
+  "issue_identifier": "MT-649",
+  "issue_id": "abc123",
+  "status": "running",
+  "workspace": {
+    "path": "/tmp/sortie_workspaces/MT-649"
+  },
+  "attempts": {
+    "restart_count": 1,
+    "current_retry_attempt": 2
+  },
+  "running": {
+    "session_id": "thread-1-turn-1",
+    "turn_count": 7,
+    "state": "In Progress",
+    "started_at": "2026-02-24T20:10:12Z",
+    "last_event": "turn_completed",
+    "last_message": "Working on tests",
+    "last_event_at": "2026-02-24T20:14:59Z",
+    "workspace_path": "/tmp/sortie_workspaces/MT-649",
+    "tokens": {
+      "input_tokens": 1200,
+      "output_tokens": 800,
+      "total_tokens": 2000,
+      "cache_read_tokens": 400
+    },
+    "model_name": "claude-sonnet-4-20250514",
+    "api_request_count": 3,
+    "requests_by_model": {"claude-sonnet-4-20250514": 3},
+    "tool_time_percent": 12.3,
+    "api_time_percent": 45.6
+  },
+  "retry": null,
+  "recent_events": [],
+  "last_error": null,
+  "tracked": {}
+}
+```
+
+The `running` object uses the same per-session field schema as `GET /api/v1/state`
+(see the per-session fields table above). When the issue is retrying rather than
+running, `running` is `null` and `retry` contains the retry entry.
+
 #### `POST /api/v1/refresh`
 
 Triggers an immediate poll+reconciliation cycle. The endpoint is best-effort: repeated
@@ -514,6 +647,48 @@ readinessProbe:
   periodSeconds: 10
   failureThreshold: 1
 terminationGracePeriodSeconds: 90
+```
+
+#### `GET /metrics` — Prometheus Scrape Endpoint
+
+When the HTTP server is enabled, Sortie exposes a Prometheus exposition-format endpoint
+at `/metrics` for integration with Prometheus, Grafana, and other monitoring stacks. The
+endpoint is co-located with the JSON API and dashboard on the same address and port — no
+separate configuration is required.
+
+The endpoint uses a dedicated `prometheus.Registry` (not the Go default global) to
+prevent metric pollution. Standard Go runtime (`go_*`) and process (`process_*`) metrics
+are included alongside Sortie-specific metrics.
+
+**Sortie-defined metrics:**
+
+| Name                                            | Type      | Labels                      | Description                                                    |
+| ----------------------------------------------- | --------- | --------------------------- | -------------------------------------------------------------- |
+| `sortie_sessions_running`                       | Gauge     | —                           | Number of agent sessions currently executing.                  |
+| `sortie_sessions_retrying`                      | Gauge     | —                           | Number of issues in the retry queue.                           |
+| `sortie_slots_available`                        | Gauge     | —                           | Remaining dispatch capacity under current concurrency limits.  |
+| `sortie_active_sessions_elapsed_seconds`        | Gauge     | —                           | Cumulative wall-clock elapsed time across running sessions.    |
+| `sortie_tokens_total`                           | Counter   | `type`                      | Tokens consumed, by type (`input`, `output`).                  |
+| `sortie_agent_runtime_seconds_total`            | Counter   | —                           | Cumulative agent-session wall-clock time for completed sessions. |
+| `sortie_dispatches_total`                       | Counter   | `outcome`                   | Dispatch attempts (`success`, `error`).                        |
+| `sortie_worker_exits_total`                     | Counter   | `exit_type`                 | Worker exits (`normal`, `error`, `cancelled`).                 |
+| `sortie_retries_total`                          | Counter   | `trigger`                   | Retry schedule events (`error`, `continuation`, `timer`, `stall`). |
+| `sortie_reconciliation_actions_total`           | Counter   | `action`                    | Reconciliation outcomes (`stop`, `cleanup`, `keep`).           |
+| `sortie_poll_cycles_total`                      | Counter   | `result`                    | Poll tick completions (`success`, `error`, `skipped`).         |
+| `sortie_tracker_requests_total`                 | Counter   | `operation`, `result`       | Tracker adapter API calls by operation and result.             |
+| `sortie_handoff_transitions_total`              | Counter   | `result`                    | Handoff-state transition attempts (`success`, `error`, `skipped`). |
+| `sortie_tool_calls_total`                       | Counter   | `tool`, `result`            | Agent tool call completions by tool name and result.           |
+| `sortie_poll_duration_seconds`                  | Histogram | —                           | Wall-clock time per poll cycle.                                |
+| `sortie_worker_duration_seconds`                | Histogram | `exit_type`                 | Worker session wall-clock time.                                |
+| `sortie_build_info`                             | Gauge     | `version`, `go_version`     | Always `1`; carries build metadata as labels.                  |
+
+Example scrape:
+
+```
+$ curl -s http://localhost:8642/metrics | grep sortie_sessions_running
+# HELP sortie_sessions_running Number of agent sessions currently executing.
+# TYPE sortie_sessions_running gauge
+sortie_sessions_running 2
 ```
 
 ### 3.2 `worker` — SSH Worker Extension
