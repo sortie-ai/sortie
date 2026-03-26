@@ -276,6 +276,7 @@ func (a *ClaudeCodeAdapter) RunTurn(ctx context.Context, session domain.Session,
 		cumulativeOutput    int64
 		cumulativeCacheRead int64
 		lastModel           string
+		emittedUsage        bool
 	)
 
 	for scanner.Scan() {
@@ -345,6 +346,7 @@ func (a *ClaudeCodeAdapter) RunTurn(ctx context.Context, session domain.Session,
 							Usage:     usage,
 							Model:     lastModel,
 						})
+						emittedUsage = true
 					}
 				}
 			}
@@ -361,7 +363,7 @@ func (a *ClaudeCodeAdapter) RunTurn(ctx context.Context, session domain.Session,
 			// Only emit token_usage from the result event when no
 			// per-assistant-message usage was already emitted. This
 			// avoids inflating APIRequestCount in the orchestrator.
-			if cumulativeInput == 0 && cumulativeOutput == 0 && cumulativeCacheRead == 0 {
+			if !emittedUsage {
 				params.OnEvent(domain.AgentEvent{
 					Type:      domain.EventTokenUsage,
 					Timestamp: now,
