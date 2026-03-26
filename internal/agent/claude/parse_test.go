@@ -467,35 +467,16 @@ func TestRawAssistantMessageMeta_FromFixture(t *testing.T) {
 	}
 }
 
-// collectToolEvents replicates the in-flight tracking logic from
-// RunTurn's "assistant" case for a single parsed event. It processes
-// content blocks in array order, registering tool_use blocks and
-// matching tool_result blocks against the in-flight map.
+// collectToolEvents delegates to [processToolBlocks] and collects the
+// emitted [domain.AgentEvent] values. It mirrors the RunTurn call
+// sites, using now for both the monotonic observed timestamp and the
+// wall-clock event timestamp.
 func collectToolEvents(t *testing.T, ev rawEvent, inFlight map[string]inFlightTool, now time.Time) []domain.AgentEvent {
 	t.Helper()
 	var events []domain.AgentEvent
-	for _, block := range ev.contentBlocks() {
-		if block.Type == "tool_use" && block.ID != "" {
-			inFlight[block.ID] = inFlightTool{Name: block.Name, Timestamp: now}
-		}
-		if block.Type == "tool_result" {
-			toolName := "unknown"
-			var durationMS int64
-			if entry, ok := inFlight[block.ToolUseID]; ok {
-				toolName = entry.Name
-				durationMS = now.Sub(entry.Timestamp).Milliseconds()
-				delete(inFlight, block.ToolUseID)
-			}
-			events = append(events, domain.AgentEvent{
-				Type:           domain.EventToolResult,
-				Timestamp:      now,
-				ToolName:       toolName,
-				ToolDurationMS: durationMS,
-				ToolError:      block.IsError,
-				Message:        "tool_result: " + toolName,
-			})
-		}
-	}
+	processToolBlocks(ev.contentBlocks(), inFlight, now, now, func(e domain.AgentEvent) {
+		events = append(events, e)
+	})
 	return events
 }
 

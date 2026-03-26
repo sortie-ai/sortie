@@ -364,30 +364,7 @@ func (a *ClaudeCodeAdapter) RunTurn(ctx context.Context, session domain.Session,
 			// could go negative on clock adjustment. A separate
 			// time.Now() retains the monotonic component.
 			observed := time.Now()
-			for _, block := range event.contentBlocks() {
-				if block.Type == "tool_use" && block.ID != "" {
-					inFlight[block.ID] = inFlightTool{Name: block.Name, Timestamp: observed}
-				}
-				if block.Type == "tool_result" {
-					toolName := "unknown"
-					var durationMS int64
-					if entry, ok := inFlight[block.ToolUseID]; ok {
-						toolName = entry.Name
-						if d := observed.Sub(entry.Timestamp); d > 0 {
-							durationMS = d.Milliseconds()
-						}
-						delete(inFlight, block.ToolUseID)
-					}
-					params.OnEvent(domain.AgentEvent{
-						Type:           domain.EventToolResult,
-						Timestamp:      now,
-						ToolName:       toolName,
-						ToolDurationMS: durationMS,
-						ToolError:      block.IsError,
-						Message:        "tool_result: " + toolName,
-					})
-				}
-			}
+			processToolBlocks(event.contentBlocks(), inFlight, observed, now, params.OnEvent)
 			params.OnEvent(domain.AgentEvent{
 				Type:      domain.EventNotification,
 				Timestamp: now,
@@ -396,31 +373,9 @@ func (a *ClaudeCodeAdapter) RunTurn(ctx context.Context, session domain.Session,
 
 		case "user":
 			// Claude Code emits tool results as user-role messages.
-			// Scan content blocks for tool_result entries and
-			// correlate with the inFlight map populated from
+			// Correlate with the inFlight map populated from
 			// assistant tool_use blocks.
-			observed := time.Now()
-			for _, block := range event.contentBlocks() {
-				if block.Type == "tool_result" {
-					toolName := "unknown"
-					var durationMS int64
-					if entry, ok := inFlight[block.ToolUseID]; ok {
-						toolName = entry.Name
-						if d := observed.Sub(entry.Timestamp); d > 0 {
-							durationMS = d.Milliseconds()
-						}
-						delete(inFlight, block.ToolUseID)
-					}
-					params.OnEvent(domain.AgentEvent{
-						Type:           domain.EventToolResult,
-						Timestamp:      now,
-						ToolName:       toolName,
-						ToolDurationMS: durationMS,
-						ToolError:      block.IsError,
-						Message:        "tool_result: " + toolName,
-					})
-				}
-			}
+			processToolBlocks(event.contentBlocks(), inFlight, time.Now(), now, params.OnEvent)
 
 		case "result":
 			captured := event
@@ -639,6 +594,45 @@ func (a *ClaudeCodeAdapter) StopSession(ctx context.Context, session domain.Sess
 // synchronously via the [domain.RunTurnParams] OnEvent callback.
 func (a *ClaudeCodeAdapter) EventStream() <-chan domain.AgentEvent {
 	return nil
+}
+
+// processToolBlocks scans content blocks for tool_use and tool_result
+// entries. tool_use blocks are registered in inFlight; tool_result
+// blocks are correlated against inFlight and emitted as
+// [domain.EventToolResult] via onEvent. The observed parameter is a
+// monotonic-capable timestamp for duration math; wallTime is the
+// wall-clock timestamp written into emitted events.
+func processToolBlocks(
+	blocks []rawContentBlock,
+	inFlight map[string]inFlightTool,
+	observed time.Time,
+	wallTime time.Time,
+	onEvent func(domain.AgentEvent),
+) {
+	for _, block := range blocks {
+		if block.Type == "tool_use" && block.ID != "" {
+			inFlight[block.ID] = inFlightTool{Name: block.Name, Timestamp: observed}
+		}
+		if block.Type == "tool_result" {
+			toolName := "unknown"
+			var durationMS int64
+			if entry, ok := inFlight[block.ToolUseID]; ok {
+				toolName = entry.Name
+				if d := observed.Sub(entry.Timestamp); d > 0 {
+					durationMS = d.Milliseconds()
+				}
+				delete(inFlight, block.ToolUseID)
+			}
+			onEvent(domain.AgentEvent{
+				Type:           domain.EventToolResult,
+				Timestamp:      wallTime,
+				ToolName:       toolName,
+				ToolDurationMS: durationMS,
+				ToolError:      block.IsError,
+				Message:        "tool_result: " + toolName,
+			})
+		}
+	}
 }
 
 // gracefulKill sends SIGTERM and schedules a SIGKILL escalation after
