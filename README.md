@@ -11,7 +11,8 @@ Single binary, zero dependencies, SQLite persistence.
 > (Jira, file-based), agent adapter (Claude Code), workspace management, persistence,
 > orchestrator (dispatch, retry, reconciliation, multi-turn sessions), and observability
 > (JSON API, HTML dashboard, Prometheus metrics, health endpoints). Current work:
-> self-hosting, hardening, and documentation. See [TODO.md](TODO.md) for current status.
+> self-hosting, hardening, and documentation.
+> See [project roadmap](https://github.com/orgs/sortie-ai/projects/1) for current status.
 
 ## The Problem
 
@@ -110,6 +111,10 @@ metaphor is precise: the orchestrator dispatches agents on missions (issues), ea
 isolated workspace, a defined objective, and an expected return. The name is short, two
 syllables, pronounceable across languages, and does not conflict with existing projects in
 this domain.
+
+## Roadmap
+
+See our [project board](https://github.com/orgs/sortie-ai/projects/1) for current status and priorities.
 
 ## License
 
