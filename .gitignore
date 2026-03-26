@@ -40,3 +40,6 @@ go.work.sum
 /.plans
 /.reviews
 /.specs
+
+# Sortie user documentation
+/website
