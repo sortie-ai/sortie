@@ -750,14 +750,14 @@ JSON API + HTML dashboard, Prometheus `/metrics`), and adds agent capabilities.
       **Verify:** integration test with mock tracker confirms tool is advertised, successful
       query returns data, API error preserves body, and tool is scoped to configured project.
 
-- [ ] 8.12 **REJECTED**. Implement `.sortie/status` workspace file reading (Section 21): after each turn
+- [ ] 8.12 **REJECTED**. ~~Implement `.sortie/status` workspace file reading (Section 21): after each turn
       completes, read `.sortie/status` from the workspace root. If value is `blocked` or
       `needs-human-review`, do not schedule continuation retries until the issue state changes
       in the tracker. Unknown or absent values are ignored. This is advisory only and does not
       affect core orchestration correctness.
       **Verify:** integration test with mock agent that writes `.sortie/status` with `blocked`
       confirms no continuation retry is scheduled. A second test with an absent file confirms
-      normal continuation behavior.
+      normal continuation behavior.~~
 
 - [x] 8.13 Add worker failure logging to `HandleWorkerExit` with severity
       aligned to the orchestrator's retry decision. Currently the
@@ -933,14 +933,71 @@ features.
       prompt template, hooks (git clone, go mod download, make lint), and agent config.
       **Verify:** Sortie starts and polls the Sortie Jira project.
 
-- [ ] 9.2 Create 3-5 small Jira issues for real improvements (e.g., "add request logging
-      middleware", "add --version flag", "add --dry-run mode"). Start Sortie and observe it
-      dispatching agents to work on these issues.
+- [ ] 9.2 Create 3-5 small Jira issues for real improvements and let Sortie dispatch
+      agents to implement them. Candidate issues:
+      (a) Add HTTP request logging middleware to the embedded server — wrap the
+          http.ServeMux to log method, path, status code, and duration as structured
+          slog fields on every request.
+      (b) Add `make test-coverage` Makefile target — run tests with `-coverprofile`,
+          print total coverage percentage to stdout.
+      (c) Add `make test-coverage-html` Makefile target — generate and open an HTML
+          coverage report via `go tool cover`.
       **Verify:** at least one issue results in a working PR or code change.
 
 - [ ] 9.3 Iterate on the WORKFLOW.md prompt based on observed agent behavior. Improve
       instructions for continuation turns, error recovery, and coding conventions.
       **Verify:** subsequent agent runs produce higher quality output than initial runs.
+
+- [ ] 9.4 Implement `sortie validate` subcommand. Parse the workflow file, apply defaults,
+      run dispatch preflight checks, and exit 0 on success or 1 with diagnostic output
+      on failure. Reuse the existing `config.Load` + `orchestrator.ValidateDispatchConfig`
+      pipeline — no new validation logic, just a new entry point. Add `--format json` option
+      for CI integration. Update `reference/cli.md` on docs.sortie-ai.com.
+      **Verify:** `sortie validate ./WORKFLOW.md` exits 0 for a valid file. Missing
+      `tracker.kind`, unresolved `$API_KEY`, and unregistered adapter kind each produce
+      a nonzero exit with a descriptive message. `--format json` outputs machine-readable
+      diagnostics.
+
+- [ ] 9.5 Implement `--dry-run` flag. Run one poll cycle: connect to the tracker, fetch
+      candidates, compute dispatch decisions, log what would be dispatched (issue
+      identifiers, slot availability, eligibility results), then exit 0 without spawning
+      any agents or writing to SQLite. Complements `validate` (config correctness) with
+      runtime verification (tracker connectivity, query results, slot math).
+      **Verify:** `sortie --dry-run ./WORKFLOW.md` connects to Jira, logs candidate
+      issues and dispatch decisions, exits 0 without creating a database file or
+      launching any agent processes.
+
+- [ ] 9.6 Add workspace root permission validation to dispatch preflight. Before the
+      first poll cycle, verify write access to `workspace.root` by creating and
+      removing a temporary file. Fail startup with a clear error message if the
+      directory is not writable. Currently operators discover permission problems
+      only when the first worker attempt fails.
+      **Verify:** unit test with a read-only directory fails preflight with
+      descriptive error. Test with a writable directory passes.
+
+- [ ] 9.7 Add `User-Agent: sortie/<version>` header to `jiraClient`. Set the header
+      on every HTTP request so Atlassian can identify traffic source and operators
+      can trace Sortie activity in Jira audit logs. Read the version from the same
+      source as `cmd/sortie/version.go`. Fall back to `sortie/dev` when no version
+      is available.
+      **Verify:** unit test confirms the `User-Agent` header is present on requests
+      made by `jiraClient.do` and `jiraClient.doJSON`, with value matching
+      `sortie/<version>` format.
+
+- [ ] 9.8 Create Homebrew tap for Sortie. Set up `sortie-ai/homebrew-tap` repository
+      with a formula that downloads the appropriate GoReleaser binary for the
+      platform. `brew install sortie-ai/tap/sortie` should install the latest
+      release. Update `getting-started/installation.md` on docs.sortie-ai.com.
+      **Verify:** `brew install sortie-ai/tap/sortie && sortie --version` succeeds
+      on macOS and Linux.
+
+- [ ] 9.9 Update `getting-started/quick-start.md` and `getting-started/installation.md`
+      on docs.sortie-ai.com based on self-hosting experience from tasks 9.1-9.3.
+      Fix any inaccurate steps, add troubleshooting tips for common pitfalls
+      discovered during real usage, and incorporate `sortie validate` into the
+      getting-started flow.
+      **Verify:** a new user can follow the updated quick-start guide without
+      hitting undocumented issues.
 
 ## Milestone 10: Hardening and Optimization
 
@@ -1021,15 +1078,6 @@ Operational hardening, performance tuning, and workspace lifecycle improvements.
       **Verify:** existing preflight tests pass unchanged. Compilation confirms no adapter
       mixes tracker fields with agent fields or vice-versa.
 
-- [ ] 10.8 Add a `User-Agent` header to `jiraClient`: set `User-Agent: sortie/<version>`
-      on every HTTP request so Atlassian can identify traffic source and operators can
-      trace Sortie activity in Jira audit logs. Read the binary version from the same
-      source as `cmd/sortie/version.go` (expose via a package-level variable or injected
-      at construction time). Fall back to `sortie/dev` when no version is available.
-      **Verify:** unit test confirms the `User-Agent` header is present on requests made
-      by `jiraClient.do` and `jiraClient.doJSON`, with value matching `sortie/<version>`
-      format. Existing client tests continue to pass.
-
 ## Milestone 11: Documentation and Release
 
 Documentation, security guidance, and public release preparation.
@@ -1070,62 +1118,15 @@ Documentation, security guidance, and public release preparation.
       examples (minimal, production Jira+Claude Code, self-hosting). A new user can write a
       valid WORKFLOW.md using only this document.
 
-- [ ] 11.6 Review and finalize README.md: add installation instructions, quick start guide,
-      and configuration reference now that the software exists.
+- [ ] 11.6 Review and finalize README.md for 1.0.0: update the development notice banner,
+      ensure installation instructions reference install.sh and Homebrew tap (9.8), verify
+      the quick start flow works end-to-end, and add a "Status" section with badges
+      (CI, coverage, latest release, license).
       **Verify:** a new user can follow the README to install and run Sortie against their
-      own Jira project.
+      own Jira project without consulting any other document.
 
 - [ ] 11.7 Prepare 1.0.0 release: update CHANGELOG.md to replace the pre-1.0 notice with
       standard Semantic Versioning adherence, remove the "not yet ready for use" note from
       README.md, and tag the first stable release.
       **Verify:** CHANGELOG.md references SemVer, README.md has no development-only
       disclaimers, and the 1.0.0 release is published.
-
-- [ ] 11.8 Write the observability and monitoring guide for https://docs.sortie-ai.com/.
-      Cover all three tiers from ADR-0008: Tier 1 (structured logs — format, key fields,
-      grep examples for common diagnostics), Tier 2 (embedded HTTP server — how to enable
-      via `--port` / `server.port`, JSON API endpoint reference with `curl` examples,
-      HTML dashboard overview), and Tier 3 (Prometheus `/metrics` — how to add Sortie as
-      a Prometheus scrape target, example `prometheus.yml` snippet, integration with
-      Grafana). Include a "Which tier should I use?" decision table mapping operator
-      personas (solo developer, platform engineer, on-call, CI/automation) to recommended
-      tiers per ADR-0008. Cover the cardinality model: Prometheus for aggregate questions,
-      JSON API for per-issue detail.
-      **Verify:** guide covers all three tiers, includes working `curl` and Prometheus
-      scrape config examples, and is published at https://docs.sortie-ai.com/.
-
-- [ ] 11.9 Write the Prometheus metrics reference for https://docs.sortie-ai.com/.
-      Provide a complete reference page listing every Prometheus metric defined in
-      ADR-0008: name, type (gauge/counter/histogram/info), labels, description, and
-      which Sortie layer produces it. Include example PromQL queries for common
-      operational questions (token burn rate, dispatch throughput, active sessions,
-      error rate, worker duration percentiles). Provide a reference Grafana dashboard
-      JSON file that operators can import for immediate visibility.
-      **Verify:** reference page lists all metrics from ADR-0008 (4 gauges, 9 counters,
-      2 histograms, 1 info), includes at least 5 PromQL examples, and the Grafana
-      dashboard JSON is downloadable and imports cleanly into Grafana 10+.
-
-- [ ] 11.10 Write the HTTP API reference for https://docs.sortie-ai.com/
-      (`reference/http-api.md`). Cover: enablement (`--port` flag and `server.port`
-      config field, loopback-only bind), JSON API endpoints (`GET /api/v1/state`,
-      `GET /api/v1/<identifier>`, `POST /api/v1/refresh`) with full request/response
-      shapes and the `{"error":{"code":"...","message":"..."}}` error envelope,
-      HTML dashboard at `/` (auto-refresh, rendered fields), and `GET /health`
-      (200 OK contract). Include `curl` examples for every endpoint. Audience:
-      operators integrating Sortie into scripts, dashboards, or container probes.
-      Depends on: 8.4, 8.5, 8.14.
-      **Verify:** document covers all endpoints from architecture Section 13.7.2;
-      every endpoint has a request example, response shape, and at least one `curl`
-      example. A reviewer can call any endpoint without reading source code.
-
-- [ ] 11.11 Write the Prometheus monitoring how-to guide for
-      https://docs.sortie-ai.com/ (`guides/monitor-with-prometheus.md`). Cover: how
-      to enable the `/metrics` endpoint via `--port`, how to add Sortie as a
-      Prometheus scrape target (complete `prometheus.yml` snippet), how to import
-      the reference Grafana dashboard from 11.9, and common PromQL queries for
-      operational dashboards. Distinct from the structured-logs guide — this is
-      Tier 3 (Prometheus) per ADR-0008, not Tier 1. Depends on: 8.8, 11.9.
-      **Verify:** guide includes a complete `prometheus.yml` scrape config, step-by-
-      step Grafana import instructions, and at least 3 PromQL examples. A platform
-      engineer with an existing Prometheus stack can integrate Sortie by following
-      this guide alone.
