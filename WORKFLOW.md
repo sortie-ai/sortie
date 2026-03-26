@@ -25,7 +25,9 @@ hooks:
   before_run: |
     git fetch origin main
     git checkout -B "sortie/${SORTIE_ISSUE_IDENTIFIER}" origin/main
+    cp AGENTS.md CLAUDE.md
   after_run: |
+    rm -f CLAUDE.md
     make fmt 2>/dev/null || true
     git add -A
     git diff --cached --quiet || git commit -m "sortie(${SORTIE_ISSUE_IDENTIFIER}): automated changes"
