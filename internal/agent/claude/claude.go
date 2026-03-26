@@ -358,12 +358,17 @@ func (a *ClaudeCodeAdapter) RunTurn(ctx context.Context, session domain.Session,
 			captured := event
 			lastResult = &captured
 			usage = normalizeUsage(event.Usage)
-			params.OnEvent(domain.AgentEvent{
-				Type:      domain.EventTokenUsage,
-				Timestamp: now,
-				Usage:     usage,
-				Model:     lastModel,
-			})
+			// Only emit token_usage from the result event when no
+			// per-assistant-message usage was already emitted. This
+			// avoids inflating APIRequestCount in the orchestrator.
+			if cumulativeInput == 0 && cumulativeOutput == 0 && cumulativeCacheRead == 0 {
+				params.OnEvent(domain.AgentEvent{
+					Type:      domain.EventTokenUsage,
+					Timestamp: now,
+					Usage:     usage,
+					Model:     lastModel,
+				})
+			}
 
 		case "stream_event":
 			params.OnEvent(domain.AgentEvent{
