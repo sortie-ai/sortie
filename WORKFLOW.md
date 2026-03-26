@@ -31,6 +31,7 @@ hooks:
     make fmt 2>/dev/null || true
     git add -A
     git diff --cached --quiet || git commit -m "sortie(${SORTIE_ISSUE_IDENTIFIER}): automated changes"
+    git push origin "sortie/${SORTIE_ISSUE_IDENTIFIER}"
   before_remove: |
     git push origin --delete "sortie/${SORTIE_ISSUE_IDENTIFIER}" 2>/dev/null || true
   timeout_ms: 120000
