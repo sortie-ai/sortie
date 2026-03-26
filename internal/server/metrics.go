@@ -31,6 +31,7 @@ type PromMetrics struct {
 	pollCyclesTotal       *prometheus.CounterVec
 	trackerRequestsTotal  *prometheus.CounterVec
 	handoffTransitions    *prometheus.CounterVec
+	toolCallsTotal        *prometheus.CounterVec
 
 	// Histograms
 	pollDuration   prometheus.Histogram
@@ -132,6 +133,12 @@ func NewPromMetrics(version, goVersion string) *PromMetrics {
 		Help:      "Handoff state transition outcomes.",
 	}, []string{"result"})
 
+	toolCallsTotal := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: "sortie",
+		Name:      "tool_calls_total",
+		Help:      "Agent tool call completions.",
+	}, []string{"tool", "result"})
+
 	pollDuration := prometheus.NewHistogram(prometheus.HistogramOpts{
 		Namespace: "sortie",
 		Name:      "poll_duration_seconds",
@@ -173,6 +180,7 @@ func NewPromMetrics(version, goVersion string) *PromMetrics {
 		pollCyclesTotal,
 		trackerRequestsTotal,
 		handoffTransitions,
+		toolCallsTotal,
 		pollDuration,
 		workerDuration,
 		buildInfo,
@@ -194,6 +202,7 @@ func NewPromMetrics(version, goVersion string) *PromMetrics {
 		pollCyclesTotal:       pollCyclesTotal,
 		trackerRequestsTotal:  trackerRequestsTotal,
 		handoffTransitions:    handoffTransitions,
+		toolCallsTotal:        toolCallsTotal,
 		pollDuration:          pollDuration,
 		workerDuration:        workerDuration,
 		sshHostUsage:          sshHostUsage,
@@ -283,6 +292,11 @@ func (p *PromMetrics) IncTrackerRequests(operation, result string) {
 // IncHandoffTransitions increments the handoff state transition outcome counter.
 func (p *PromMetrics) IncHandoffTransitions(result string) {
 	p.handoffTransitions.WithLabelValues(result).Inc()
+}
+
+// IncToolCalls increments the tool call completion counter.
+func (p *PromMetrics) IncToolCalls(tool, result string) {
+	p.toolCallsTotal.WithLabelValues(tool, result).Inc()
 }
 
 // --- Histograms ---

@@ -124,6 +124,7 @@ func TestNewPromMetrics(t *testing.T) {
 	m.IncPollCycles("success")
 	m.IncTrackerRequests("fetch_candidates", "success")
 	m.IncHandoffTransitions("success")
+	m.IncToolCalls("Bash", "success")
 	m.ObserveWorkerDuration("normal", 1)
 
 	families := gatherFamilies(t, m)
@@ -142,6 +143,7 @@ func TestNewPromMetrics(t *testing.T) {
 		"sortie_poll_cycles_total",
 		"sortie_tracker_requests_total",
 		"sortie_handoff_transitions_total",
+		"sortie_tool_calls_total",
 		"sortie_poll_duration_seconds",
 		"sortie_worker_duration_seconds",
 		"sortie_build_info",
@@ -366,6 +368,27 @@ func TestPromMetricsCounters(t *testing.T) {
 		}
 		if got := counterValue(t, families, "sortie_handoff_transitions_total", map[string]string{"result": "skipped"}); got != 1 {
 			t.Errorf("sortie_handoff_transitions_total{result=skipped} = %v, want 1", got)
+		}
+	})
+
+	t.Run("IncToolCalls", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestMetrics(t)
+		m.IncToolCalls("Bash", "success")
+		m.IncToolCalls("Bash", "success")
+		m.IncToolCalls("Bash", "error")
+		m.IncToolCalls("Read", "success")
+
+		families := gatherFamilies(t, m)
+		if got := counterValue(t, families, "sortie_tool_calls_total", map[string]string{"tool": "Bash", "result": "success"}); got != 2 {
+			t.Errorf("sortie_tool_calls_total{tool=Bash,result=success} = %v, want 2", got)
+		}
+		if got := counterValue(t, families, "sortie_tool_calls_total", map[string]string{"tool": "Bash", "result": "error"}); got != 1 {
+			t.Errorf("sortie_tool_calls_total{tool=Bash,result=error} = %v, want 1", got)
+		}
+		if got := counterValue(t, families, "sortie_tool_calls_total", map[string]string{"tool": "Read", "result": "success"}); got != 1 {
+			t.Errorf("sortie_tool_calls_total{tool=Read,result=success} = %v, want 1", got)
 		}
 	})
 

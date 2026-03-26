@@ -155,6 +155,7 @@ rich contextual data available in the JSON API.
 | `sortie_poll_cycles_total` | Counter | `result={success,error,skipped}` | Poll tick outcomes |
 | `sortie_tracker_requests_total` | Counter | `operation={fetch_candidates,fetch_issue,fetch_comments,transition},result={success,error}` | Tracker adapter API calls |
 | `sortie_handoff_transitions_total` | Counter | `result={success,error,skipped}` | Handoff state transition outcomes |
+| `sortie_tool_calls_total` | Counter | `tool={tool_name},result={success,error}` | Agent tool call completions by tool name and outcome |
 
 **Histograms (distributions):**
 

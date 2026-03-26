@@ -878,7 +878,7 @@ JSON API + HTML dashboard, Prometheus `/metrics`), and adds agent capabilities.
       confirms accumulated totals and computed percentages are correct.
       Sessions without timing data show "N/A" gracefully.
 
-- [ ] 8.20 Add `sortie_tool_calls_total` Prometheus counter with labels
+- [x] 8.20 Add `sortie_tool_calls_total` Prometheus counter with labels
       `tool` (tool name, e.g. `tracker_api`) and `result` (`success` or
       `error`). Increment on each agent tool call completion. Add the
       counter to the `Metrics` interface (task 8.6), implement in the
