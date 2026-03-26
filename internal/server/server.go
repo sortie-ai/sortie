@@ -152,6 +152,7 @@ func New(params Params) *Server {
 	// Dashboard route. Method-specific pattern so non-GET methods
 	// receive the default 405 response from Go's ServeMux.
 	mux.HandleFunc("GET /{$}", s.handleDashboard)
+	mux.HandleFunc("GET /favicon.ico", handleFavicon)
 
 	// Health probe routes. Method-specific patterns ensure non-GET
 	// methods receive the default 405 response from Go's ServeMux.
