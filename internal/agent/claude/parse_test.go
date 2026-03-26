@@ -701,3 +701,66 @@ func TestEmitToolResult_ParallelToolUse(t *testing.T) {
 		t.Errorf("inFlight[\"toolu_par_02\"].Name = %q, want %q", entry2.Name, "Read")
 	}
 }
+
+// TestEmitToolResult_UserEventCorrelation verifies that tool_result blocks
+// in user-type events correlate correctly with tool_use blocks from
+// preceding assistant events. This is a regression test for the bug where
+// user-event tool_result blocks were silently dropped.
+func TestEmitToolResult_UserEventCorrelation(t *testing.T) {
+	t.Parallel()
+
+	f, err := os.Open(filepath.Join("testdata", "tool_use_result_user_event.jsonl"))
+	if err != nil {
+		t.Fatalf("open fixture: %v", err)
+	}
+	defer func() { _ = f.Close() }()
+
+	inFlight := make(map[string]inFlightTool)
+	var toolEvents []domain.AgentEvent
+
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	msgIndex := 0
+
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		ev, parseErr := parseEvent(scanner.Bytes())
+		if parseErr != nil {
+			t.Fatalf("parseEvent() error = %v", parseErr)
+		}
+		// Process both assistant and user events to mirror RunTurn logic.
+		switch ev.Type {
+		case "assistant", "user":
+			now := base.Add(time.Duration(msgIndex) * time.Second)
+			msgIndex++
+			toolEvents = append(toolEvents, collectToolEvents(t, ev, inFlight, now)...)
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		t.Fatalf("scanner error: %v", err)
+	}
+
+	// Exactly one tool_result expected (Read, from user event).
+	if len(toolEvents) != 1 {
+		t.Fatalf("total EventToolResult events = %d, want 1", len(toolEvents))
+	}
+
+	got := toolEvents[0]
+	if got.ToolName != "Read" {
+		t.Errorf("toolEvents[0].ToolName = %q, want %q", got.ToolName, "Read")
+	}
+	if got.ToolError {
+		t.Error("toolEvents[0].ToolError = true, want false")
+	}
+	// tool_use registered at T+0s (assistant msg), tool_result at T+1s (user msg) → 1000ms.
+	if got.ToolDurationMS != 1000 {
+		t.Errorf("toolEvents[0].ToolDurationMS = %d, want 1000", got.ToolDurationMS)
+	}
+	if got.Message != "tool_result: Read" {
+		t.Errorf("toolEvents[0].Message = %q, want %q", got.Message, "tool_result: Read")
+	}
+
+	// In-flight map should be empty after correlation.
+	if len(inFlight) != 0 {
+		t.Errorf("len(inFlight) = %d, want 0 (all tool_use blocks should be resolved)", len(inFlight))
+	}
+}

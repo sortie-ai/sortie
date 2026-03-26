@@ -198,14 +198,19 @@ The stream produces messages conforming to a union type:
 
 ### Event categories
 
-| `type` field   | Description                                               | Adapter mapping                     |
-| -------------- | --------------------------------------------------------- | ----------------------------------- |
-| `system`       | System/init messages (session start, retries, compaction) | `session_started` or `notification` |
-| `assistant`    | Complete assistant message (text, tool calls)             | `notification` / `other_message`    |
-| `tool_use`     | Tool invocation by the agent                              | `notification`                      |
-| `tool_result`  | Tool execution result                                     | `notification`                      |
-| `result`       | Final result message when the turn/session completes      | `turn_completed` or `turn_failed`   |
-| `stream_event` | Streaming delta (with `--include-partial-messages`)       | Ignored or used for stall detection |
+| `type` field   | Description                                               | Adapter mapping                        |
+| -------------- | --------------------------------------------------------- | -------------------------------------- |
+| `system`       | System/init messages (session start, retries, compaction) | `session_started` or `notification`    |
+| `assistant`    | Complete assistant message (text, tool calls)             | `notification` / `tool_use` tracking   |
+| `user`         | User-role message carrying tool execution results         | `tool_result` (via content blocks)     |
+| `result`       | Final result message when the turn/session completes      | `turn_completed` or `turn_failed`      |
+| `stream_event` | Streaming delta (with `--include-partial-messages`)       | Ignored or used for stall detection    |
+
+> **Note (v2.1.x change):** Earlier Claude Code versions emitted `tool_use` and `tool_result`
+> as separate top-level event types *or* as content blocks within `assistant` messages. As of
+> v2.1.x, the canonical flow is: `assistant` message with `ToolUseBlock` content → `user`
+> message with `ToolResultBlock` content. The adapter handles both the legacy (assistant-only)
+> and current (assistant + user) patterns.
 
 ### SystemMessage subtypes
 
@@ -306,16 +311,20 @@ The result message is always the final line in the stream. It contains comprehen
 | `cache_read_input_tokens`     | integer | Tokens served from prompt cache. |
 | `cache_creation_input_tokens` | integer | Tokens written to prompt cache.  |
 
-### AssistantMessage content blocks
+### Message content blocks
 
-Assistant messages contain an array of content blocks:
+Assistant and user messages contain an array of content blocks:
 
-| Block type        | Key fields                           | Description                       |
-| ----------------- | ------------------------------------ | --------------------------------- |
-| `TextBlock`       | `text`                               | Text output from the model.       |
-| `ThinkingBlock`   | `thinking`, `signature`              | Extended thinking (when enabled). |
-| `ToolUseBlock`    | `id`, `name`, `input`                | Tool call request.                |
-| `ToolResultBlock` | `tool_use_id`, `content`, `is_error` | Tool execution result.            |
+| Block type        | Key fields                           | Appears in    | Description                       |
+| ----------------- | ------------------------------------ | ------------- | --------------------------------- |
+| `TextBlock`       | `text`                               | `assistant`   | Text output from the model.       |
+| `ThinkingBlock`   | `thinking`, `signature`              | `assistant`   | Extended thinking (when enabled). |
+| `ToolUseBlock`    | `id`, `name`, `input`                | `assistant`   | Tool call request.                |
+| `ToolResultBlock` | `tool_use_id`, `content`, `is_error` | `user`        | Tool execution result.            |
+
+> **v2.1.x:** `ToolResultBlock` moved from `assistant` messages to `user` messages.
+> Legacy streams may still embed `ToolResultBlock` inside `assistant` messages; the
+> adapter handles both layouts.
 
 ### StreamEvent (partial messages)
 
@@ -378,7 +387,11 @@ The adapter reads stdout line by line. For each line:
      - Any other subtype or `is_error == true` → emit `turn_failed`.
      - Extract `usage` for `token_usage` event.
    - `"assistant"` → emit `notification` or `other_message` with content summary.
-     Inspect content blocks for `ToolUseBlock` entries.
+     Inspect content blocks for `ToolUseBlock` entries (populate in-flight map).
+     Legacy streams may also contain `ToolResultBlock` here.
+   - `"user"` → inspect content blocks for `ToolResultBlock` entries. Correlate
+     each `tool_use_id` with the in-flight map to emit `tool_result` events with
+     the originating tool name and execution duration.
    - `"stream_event"` → update stall detection timer. Optionally emit `notification`
      for text deltas.
 3. Any event with recognizable token/cost data → emit `token_usage` event.

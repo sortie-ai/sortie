@@ -1486,3 +1486,136 @@ exec sleep 60
 	cancel()
 	<-done
 }
+
+// TestRunTurn_ToolResultInUserEvent is a regression test verifying that
+// tool_result content blocks in user-type JSONL events (not assistant)
+// produce correlated EventToolResult events with the correct ToolName.
+// Prior to the fix, user-event tool_result blocks were silently dropped.
+func TestRunTurn_ToolResultInUserEvent(t *testing.T) {
+	t.Parallel()
+
+	fixture := loadFixture(t, "tool_use_result_user_event.jsonl")
+
+	tmpDir := t.TempDir()
+	script := writeScript(t, tmpDir, fmt.Sprintf(`cat <<'JSONL'
+%s
+JSONL
+exit 0
+`, string(fixture)))
+
+	adapter, _ := NewClaudeCodeAdapter(map[string]any{})
+	session, err := adapter.StartSession(context.Background(), domain.StartSessionParams{
+		WorkspacePath: tmpDir,
+		AgentConfig:   domain.AgentConfig{Command: script},
+	})
+	if err != nil {
+		t.Fatalf("StartSession() error = %v", err)
+	}
+
+	var events []domain.AgentEvent
+	result, err := adapter.RunTurn(context.Background(), session, domain.RunTurnParams{
+		Prompt: "read main.go",
+		OnEvent: func(e domain.AgentEvent) {
+			events = append(events, e)
+		},
+	})
+	if err != nil {
+		t.Fatalf("RunTurn() error = %v", err)
+	}
+	if result.ExitReason != domain.EventTurnCompleted {
+		t.Errorf("ExitReason = %q, want %q", result.ExitReason, domain.EventTurnCompleted)
+	}
+
+	// Collect all EventToolResult events.
+	var toolResults []domain.AgentEvent
+	for _, e := range events {
+		if e.Type == domain.EventToolResult {
+			toolResults = append(toolResults, e)
+		}
+	}
+
+	if len(toolResults) != 1 {
+		eventTypes := make([]string, len(events))
+		for i, e := range events {
+			eventTypes[i] = string(e.Type)
+		}
+		t.Fatalf("EventToolResult count = %d, want 1; all events = %v", len(toolResults), eventTypes)
+	}
+
+	got := toolResults[0]
+	if got.ToolName != "Read" {
+		t.Errorf("ToolName = %q, want %q", got.ToolName, "Read")
+	}
+	if got.ToolError {
+		t.Error("ToolError = true, want false")
+	}
+	if got.ToolDurationMS < 0 {
+		t.Errorf("ToolDurationMS = %d, want >= 0", got.ToolDurationMS)
+	}
+	if got.Message != "tool_result: Read" {
+		t.Errorf("Message = %q, want %q", got.Message, "tool_result: Read")
+	}
+}
+
+// TestRunTurn_ToolResultInAssistantEvent validates that the original
+// assistant-only tool_result correlation path still works after the
+// user-event fix. Uses the tool_use_result_separate.jsonl fixture.
+func TestRunTurn_ToolResultInAssistantEvent(t *testing.T) {
+	t.Parallel()
+
+	fixture := loadFixture(t, "tool_use_result_separate.jsonl")
+
+	tmpDir := t.TempDir()
+	script := writeScript(t, tmpDir, fmt.Sprintf(`cat <<'JSONL'
+%s
+JSONL
+exit 0
+`, string(fixture)))
+
+	adapter, _ := NewClaudeCodeAdapter(map[string]any{})
+	session, err := adapter.StartSession(context.Background(), domain.StartSessionParams{
+		WorkspacePath: tmpDir,
+		AgentConfig:   domain.AgentConfig{Command: script},
+	})
+	if err != nil {
+		t.Fatalf("StartSession() error = %v", err)
+	}
+
+	var events []domain.AgentEvent
+	result, err := adapter.RunTurn(context.Background(), session, domain.RunTurnParams{
+		Prompt: "test tools",
+		OnEvent: func(e domain.AgentEvent) {
+			events = append(events, e)
+		},
+	})
+	if err != nil {
+		t.Fatalf("RunTurn() error = %v", err)
+	}
+	if result.ExitReason != domain.EventTurnCompleted {
+		t.Errorf("ExitReason = %q, want %q", result.ExitReason, domain.EventTurnCompleted)
+	}
+
+	// Collect all EventToolResult events.
+	var toolResults []domain.AgentEvent
+	for _, e := range events {
+		if e.Type == domain.EventToolResult {
+			toolResults = append(toolResults, e)
+		}
+	}
+
+	// tool_use_result_separate.jsonl has 2 tool uses with results in assistant events.
+	if len(toolResults) != 2 {
+		eventTypes := make([]string, len(events))
+		for i, e := range events {
+			eventTypes[i] = string(e.Type)
+		}
+		t.Fatalf("EventToolResult count = %d, want 2; all events = %v", len(toolResults), eventTypes)
+	}
+
+	if toolResults[0].ToolName != "Read" {
+		t.Errorf("toolResults[0].ToolName = %q, want %q", toolResults[0].ToolName, "Read")
+	}
+	if toolResults[1].ToolName != "Bash" {
+		t.Errorf("toolResults[1].ToolName = %q, want %q", toolResults[1].ToolName, "Bash")
+	}
+}
