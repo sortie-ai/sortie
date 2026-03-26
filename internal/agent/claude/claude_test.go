@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/logging"
@@ -1617,5 +1618,201 @@ exit 0
 	}
 	if toolResults[1].ToolName != "Bash" {
 		t.Errorf("toolResults[1].ToolName = %q, want %q", toolResults[1].ToolName, "Bash")
+	}
+}
+
+// TestRunTurn_ToolResultErrorText verifies that when a tool call completes
+// with is_error: true, the EventToolResult Message contains the actual error
+// text from the tool_result content block, not the generic
+// "tool_result: <name>" placeholder.
+func TestRunTurn_ToolResultErrorText(t *testing.T) {
+	t.Parallel()
+
+	fixture := loadFixture(t, "tool_use_error_result.jsonl")
+
+	tmpDir := t.TempDir()
+	script := writeScript(t, tmpDir, fmt.Sprintf(`cat <<'JSONL'
+%s
+JSONL
+exit 0
+`, string(fixture)))
+
+	adapter, _ := NewClaudeCodeAdapter(map[string]any{})
+	session, err := adapter.StartSession(context.Background(), domain.StartSessionParams{
+		WorkspacePath: tmpDir,
+		AgentConfig:   domain.AgentConfig{Command: script},
+	})
+	if err != nil {
+		t.Fatalf("StartSession() error = %v", err)
+	}
+
+	var events []domain.AgentEvent
+	result, err := adapter.RunTurn(context.Background(), session, domain.RunTurnParams{
+		Prompt: "run foobar",
+		OnEvent: func(e domain.AgentEvent) {
+			events = append(events, e)
+		},
+	})
+	if err != nil {
+		t.Fatalf("RunTurn() error = %v", err)
+	}
+	if result.ExitReason != domain.EventTurnCompleted {
+		t.Errorf("ExitReason = %q, want %q", result.ExitReason, domain.EventTurnCompleted)
+	}
+
+	var toolResults []domain.AgentEvent
+	for _, e := range events {
+		if e.Type == domain.EventToolResult {
+			toolResults = append(toolResults, e)
+		}
+	}
+
+	if len(toolResults) != 1 {
+		eventTypes := make([]string, len(events))
+		for i, e := range events {
+			eventTypes[i] = string(e.Type)
+		}
+		t.Fatalf("EventToolResult count = %d, want 1; all events = %v", len(toolResults), eventTypes)
+	}
+
+	got := toolResults[0]
+	if got.ToolName != "Bash" {
+		t.Errorf("ToolName = %q, want %q", got.ToolName, "Bash")
+	}
+	if !got.ToolError {
+		t.Error("ToolError = false, want true")
+	}
+	if got.ToolDurationMS < 0 {
+		t.Errorf("ToolDurationMS = %d, want >= 0", got.ToolDurationMS)
+	}
+	const wantMsg = "bash: command not found: foobar"
+	if got.Message != wantMsg {
+		t.Errorf("Message = %q, want %q", got.Message, wantMsg)
+	}
+}
+
+// TestToolResultText verifies the toolResultText helper correctly extracts
+// error text from various rawContentBlock shapes.
+func TestToolResultText(t *testing.T) {
+	t.Parallel()
+
+	longStr := strings.Repeat("a", 600)
+	longContent := `"` + longStr + `"`
+
+	tests := []struct {
+		name  string
+		block rawContentBlock
+		want  string
+	}{
+		{
+			name:  "text_field",
+			block: rawContentBlock{Text: "error from text"},
+			want:  "error from text",
+		},
+		{
+			name:  "json_string",
+			block: rawContentBlock{Content: []byte(`"bash: not found"`)},
+			want:  "bash: not found",
+		},
+		{
+			name:  "json_array_text",
+			block: rawContentBlock{Content: []byte(`[{"type":"text","text":"array error"}]`)},
+			want:  "array error",
+		},
+		{
+			name:  "json_array_no_text",
+			block: rawContentBlock{Content: []byte(`[{"type":"image"}]`)},
+			want:  "",
+		},
+		{
+			name:  "empty",
+			block: rawContentBlock{},
+			want:  "",
+		},
+		{
+			name:  "truncation",
+			block: rawContentBlock{Content: []byte(longContent)},
+			want:  longStr,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := toolResultText(tt.block)
+
+			if got != tt.want {
+				t.Errorf("toolResultText() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestTruncateToolError verifies the truncateToolError helper enforces the
+// byte ceiling while preserving UTF-8 rune boundaries.
+func TestTruncateToolError(t *testing.T) {
+	t.Parallel()
+
+	// 172 CJK runes × 3 bytes = 516 bytes. The 512-byte boundary falls inside
+	// the 171st rune (bytes 510-512), so truncation must stop at byte 510
+	// (170 full runes) to avoid splitting a rune.
+	cjk := strings.Repeat("一", 172)
+
+	tests := []struct {
+		name     string
+		input    string
+		maxLen   int
+		wantLen  int  // expected len(result); 0 means expect unchanged
+		wantSame bool // true if result must equal input
+	}{
+		{
+			name:     "short_string",
+			input:    "hello",
+			maxLen:   maxToolErrorLen,
+			wantSame: true,
+		},
+		{
+			name:     "exactly_512_bytes",
+			input:    strings.Repeat("a", 512),
+			maxLen:   maxToolErrorLen,
+			wantSame: true,
+		},
+		{
+			name:    "600_ascii_bytes",
+			input:   strings.Repeat("a", 600),
+			maxLen:  maxToolErrorLen,
+			wantLen: 512,
+		},
+		{
+			name:    "multibyte_mid_rune_boundary",
+			input:   cjk,
+			maxLen:  maxToolErrorLen,
+			wantLen: 510, // 170 full CJK runes × 3 bytes
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := truncateToolError(tt.input, tt.maxLen)
+
+			if tt.wantSame {
+				if got != tt.input {
+					t.Errorf("truncateToolError() modified input: got len %d, want len %d", len(got), len(tt.input))
+				}
+				return
+			}
+			if len(got) != tt.wantLen {
+				t.Errorf("truncateToolError() len = %d, want %d", len(got), tt.wantLen)
+			}
+			if len(got) > tt.maxLen {
+				t.Errorf("truncateToolError() len = %d exceeds maxLen %d", len(got), tt.maxLen)
+			}
+			if !utf8.ValidString(got) {
+				t.Error("truncateToolError() returned invalid UTF-8")
+			}
+		})
 	}
 }
