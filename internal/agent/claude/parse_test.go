@@ -583,6 +583,11 @@ func TestEmitToolResult_CrossMessage(t *testing.T) {
 	inFlight := make(map[string]inFlightTool)
 	var toolEvents []domain.AgentEvent
 
+	// Use deterministic synthetic timestamps so the test does not
+	// depend on wall-clock timing or monotonic clock behavior.
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	msgIndex := 0
+
 	scanner := bufio.NewScanner(f)
 	for scanner.Scan() {
 		ev, parseErr := parseEvent(scanner.Bytes())
@@ -592,7 +597,8 @@ func TestEmitToolResult_CrossMessage(t *testing.T) {
 		if ev.Type != "assistant" {
 			continue
 		}
-		now := time.Now().UTC()
+		now := base.Add(time.Duration(msgIndex) * time.Second)
+		msgIndex++
 		toolEvents = append(toolEvents, collectToolEvents(t, ev, inFlight, now)...)
 	}
 	if err := scanner.Err(); err != nil {
@@ -603,26 +609,26 @@ func TestEmitToolResult_CrossMessage(t *testing.T) {
 		t.Fatalf("total EventToolResult events = %d, want 2", len(toolEvents))
 	}
 
-	// First: Read tool result
+	// First: Read tool result (tool_use at T+0s, tool_result at T+1s → 1000ms)
 	if toolEvents[0].ToolName != "Read" {
 		t.Errorf("toolEvents[0].ToolName = %q, want %q", toolEvents[0].ToolName, "Read")
 	}
 	if toolEvents[0].ToolError {
 		t.Error("toolEvents[0].ToolError = true, want false")
 	}
-	if toolEvents[0].ToolDurationMS < 0 {
-		t.Errorf("toolEvents[0].ToolDurationMS = %d, want >= 0", toolEvents[0].ToolDurationMS)
+	if toolEvents[0].ToolDurationMS != 1000 {
+		t.Errorf("toolEvents[0].ToolDurationMS = %d, want 1000", toolEvents[0].ToolDurationMS)
 	}
 
-	// Second: Bash tool result
+	// Second: Bash tool result (tool_use at T+1s, tool_result at T+2s → 1000ms)
 	if toolEvents[1].ToolName != "Bash" {
 		t.Errorf("toolEvents[1].ToolName = %q, want %q", toolEvents[1].ToolName, "Bash")
 	}
 	if toolEvents[1].ToolError {
 		t.Error("toolEvents[1].ToolError = true, want false")
 	}
-	if toolEvents[1].ToolDurationMS < 0 {
-		t.Errorf("toolEvents[1].ToolDurationMS = %d, want >= 0", toolEvents[1].ToolDurationMS)
+	if toolEvents[1].ToolDurationMS != 1000 {
+		t.Errorf("toolEvents[1].ToolDurationMS = %d, want 1000", toolEvents[1].ToolDurationMS)
 	}
 }
 

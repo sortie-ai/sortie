@@ -358,16 +358,24 @@ func (a *ClaudeCodeAdapter) RunTurn(ctx context.Context, session domain.Session,
 					}
 				}
 			}
+			// Use a monotonic timestamp for in-flight duration math.
+			// The wall-clock `now` (from .UTC()) has its monotonic
+			// reading stripped, so Sub() would depend on wall time and
+			// could go negative on clock adjustment. A separate
+			// time.Now() retains the monotonic component.
+			observed := time.Now()
 			for _, block := range event.contentBlocks() {
 				if block.Type == "tool_use" && block.ID != "" {
-					inFlight[block.ID] = inFlightTool{Name: block.Name, Timestamp: now}
+					inFlight[block.ID] = inFlightTool{Name: block.Name, Timestamp: observed}
 				}
 				if block.Type == "tool_result" {
 					toolName := "unknown"
 					var durationMS int64
 					if entry, ok := inFlight[block.ToolUseID]; ok {
 						toolName = entry.Name
-						durationMS = now.Sub(entry.Timestamp).Milliseconds()
+						if d := observed.Sub(entry.Timestamp); d > 0 {
+							durationMS = d.Milliseconds()
+						}
 						delete(inFlight, block.ToolUseID)
 					}
 					params.OnEvent(domain.AgentEvent{

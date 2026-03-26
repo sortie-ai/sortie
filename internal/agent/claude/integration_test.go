@@ -213,12 +213,13 @@ func TestIntegration_RunTurn(t *testing.T) {
 	assertNoEventType(t, collected, domain.EventTurnFailed)
 	assertNoEventType(t, collected, domain.EventStartupFailed)
 
-	// Verify at least one EventToolResult with a non-empty ToolName.
+	// Verify at least one EventToolResult with a correlated ToolName.
 	// The prompt causes Claude Code to use the Read tool, producing
-	// tool_use + tool_result content blocks.
+	// tool_use + tool_result content blocks. Asserting != "unknown"
+	// validates that tool_use↔tool_result correlation succeeded.
 	var foundToolResult bool
 	for _, e := range collected {
-		if e.Type == domain.EventToolResult && e.ToolName != "" {
+		if e.Type == domain.EventToolResult && e.ToolName != "" && e.ToolName != "unknown" {
 			foundToolResult = true
 			if e.ToolDurationMS < 0 {
 				t.Errorf("EventToolResult.ToolDurationMS = %d, want >= 0", e.ToolDurationMS)
@@ -227,11 +228,13 @@ func TestIntegration_RunTurn(t *testing.T) {
 		}
 	}
 	if !foundToolResult {
-		types := make([]domain.AgentEventType, len(collected))
-		for i, e := range collected {
-			types[i] = e.Type
+		var toolNames []string
+		for _, e := range collected {
+			if e.Type == domain.EventToolResult {
+				toolNames = append(toolNames, e.ToolName)
+			}
 		}
-		t.Errorf("expected EventToolResult with non-empty ToolName not found; got types: %v", types)
+		t.Errorf("expected EventToolResult with correlated ToolName; got tool results: %v", toolNames)
 	}
 
 	for _, e := range collected {
