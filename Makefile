@@ -28,7 +28,7 @@ test-coverage:
 	$(GO) test -race -count=1 -coverprofile=$(COVERAGE_OUT) $(if $(PKG),$(PKG),./...) $(if $(RUN),-run $(RUN),)
 	$(GO) tool cover -func=$(COVERAGE_OUT)
 
-## test-coverage-html: generate and open HTML coverage report
+## test-coverage-html: generate HTML coverage report
 test-coverage-html: test-coverage
 	$(GO) tool cover -html=$(COVERAGE_OUT) -o $(COVERAGE_HTML)
 
