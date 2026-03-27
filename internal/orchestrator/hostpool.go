@@ -199,10 +199,10 @@ func deduplicateHosts(hosts []string) []string {
 	return result
 }
 
-// parseWorkerConfig extracts SSH-related config from the Extensions map.
+// ParseWorkerConfig extracts SSH-related config from the Extensions map.
 // Returns (hosts, maxPerHost). When the worker key is absent or
 // ssh_hosts is empty, returns (nil, 0) — local mode.
-func parseWorkerConfig(extensions map[string]any) ([]string, int) {
+func ParseWorkerConfig(extensions map[string]any) ([]string, int) {
 	if extensions == nil {
 		return nil, 0
 	}

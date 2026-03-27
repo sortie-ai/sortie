@@ -326,10 +326,10 @@ func TestParseWorkerConfig(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			hosts, maxPerHost := parseWorkerConfig(tt.extensions)
+			hosts, maxPerHost := ParseWorkerConfig(tt.extensions)
 
 			if len(hosts) != len(tt.wantHosts) {
-				t.Fatalf("parseWorkerConfig() hosts = %v, want %v", hosts, tt.wantHosts)
+				t.Fatalf("ParseWorkerConfig() hosts = %v, want %v", hosts, tt.wantHosts)
 			}
 			for i := range hosts {
 				if hosts[i] != tt.wantHosts[i] {
@@ -337,7 +337,7 @@ func TestParseWorkerConfig(t *testing.T) {
 				}
 			}
 			if maxPerHost != tt.wantMaxPerHost {
-				t.Errorf("parseWorkerConfig() maxPerHost = %d, want %d", maxPerHost, tt.wantMaxPerHost)
+				t.Errorf("ParseWorkerConfig() maxPerHost = %d, want %d", maxPerHost, tt.wantMaxPerHost)
 			}
 		})
 	}

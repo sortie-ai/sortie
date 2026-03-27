@@ -303,7 +303,7 @@ func (o *Orchestrator) handleTick(ctx context.Context) {
 	o.state.MaxConcurrentByState = cfg.Agent.MaxConcurrentByState
 
 	// Step 3b: update host pool from config extensions.
-	sshHosts, maxPerHost := parseWorkerConfig(cfg.Extensions)
+	sshHosts, maxPerHost := ParseWorkerConfig(cfg.Extensions)
 	o.hostPool.Update(sshHosts, maxPerHost)
 
 	// Step 4: reconcile running issues with fresh config. Runs
