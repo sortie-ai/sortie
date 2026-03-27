@@ -77,8 +77,8 @@ func TestHandleAgentEvent_BasicFields(t *testing.T) {
 }
 
 // TestHandleAgentEvent_SessionStarted verifies that EventSessionStarted
-// populates SessionID and AgentPID on the entry while leaving TurnCount
-// unchanged (session_started is not a turn-finalization event).
+// populates SessionID and AgentPID on the entry and increments TurnCount
+// by 1. Per architecture Section 4.1.6, turn_count counts turns started.
 func TestHandleAgentEvent_SessionStarted(t *testing.T) {
 	t.Parallel()
 
@@ -98,8 +98,8 @@ func TestHandleAgentEvent_SessionStarted(t *testing.T) {
 	if entry.AgentPID != "9999" {
 		t.Errorf("AgentPID = %q, want %q", entry.AgentPID, "9999")
 	}
-	if entry.TurnCount != 0 {
-		t.Errorf("TurnCount = %d, want 0 (session_started is not a finalization event)", entry.TurnCount)
+	if entry.TurnCount != 1 {
+		t.Errorf("TurnCount = %d, want 1 (session_started increments turn count)", entry.TurnCount)
 	}
 }
 
@@ -123,13 +123,29 @@ func TestHandleAgentEvent_SessionStarted_EmptySessionID(t *testing.T) {
 	}
 }
 
-// TestHandleAgentEvent_TurnCount verifies the turn-finalization set.
-// Each finalization event type must increment TurnCount by exactly 1.
-// Non-finalization event types must not increment TurnCount.
+// TestHandleAgentEvent_TurnCount verifies the turn-count semantics.
+// Per architecture Section 4.1.6, turn_count counts turns started.
+// Only session_started increments TurnCount; finalization and other
+// event types must not.
 func TestHandleAgentEvent_TurnCount(t *testing.T) {
 	t.Parallel()
 
-	finalizationTypes := []struct {
+	t.Run("increments on session_started", func(t *testing.T) {
+		t.Parallel()
+		state, entry := newStateWithEntry("MT-4")
+
+		HandleAgentEvent(state, "MT-4", domain.AgentEvent{
+			Type:      domain.EventSessionStarted,
+			Timestamp: time.Now().UTC(),
+			SessionID: "s1",
+		}, slog.Default(), nil)
+
+		if entry.TurnCount != 1 {
+			t.Errorf("TurnCount = %d, want 1 for session_started", entry.TurnCount)
+		}
+	})
+
+	noIncrementTypes := []struct {
 		name      string
 		eventType domain.AgentEventType
 	}{
@@ -138,36 +154,13 @@ func TestHandleAgentEvent_TurnCount(t *testing.T) {
 		{"turn_cancelled", domain.EventTurnCancelled},
 		{"turn_ended_with_error", domain.EventTurnEndedWithError},
 		{"turn_input_required", domain.EventTurnInputRequired},
-	}
-
-	for _, ft := range finalizationTypes {
-		t.Run("increments on "+ft.name, func(t *testing.T) {
-			t.Parallel()
-			state, entry := newStateWithEntry("MT-4")
-
-			HandleAgentEvent(state, "MT-4", domain.AgentEvent{
-				Type:      ft.eventType,
-				Timestamp: time.Now().UTC(),
-			}, slog.Default(), nil)
-
-			if entry.TurnCount != 1 {
-				t.Errorf("TurnCount = %d, want 1 for %q", entry.TurnCount, ft.eventType)
-			}
-		})
-	}
-
-	nonFinalizationTypes := []struct {
-		name      string
-		eventType domain.AgentEventType
-	}{
-		{"session_started", domain.EventSessionStarted},
 		{"startup_failed", domain.EventStartupFailed},
 		{"notification", domain.EventNotification},
 		{"token_usage", domain.EventTokenUsage},
 		{"other_message", domain.EventOtherMessage},
 	}
 
-	for _, nft := range nonFinalizationTypes {
+	for _, nft := range noIncrementTypes {
 		t.Run("no increment on "+nft.name, func(t *testing.T) {
 			t.Parallel()
 			state, entry := newStateWithEntry("MT-5")
@@ -178,7 +171,7 @@ func TestHandleAgentEvent_TurnCount(t *testing.T) {
 			}, slog.Default(), nil)
 
 			if entry.TurnCount != 0 {
-				t.Errorf("TurnCount = %d, want 0 for non-finalization event %q", entry.TurnCount, nft.eventType)
+				t.Errorf("TurnCount = %d, want 0 for %q", entry.TurnCount, nft.eventType)
 			}
 		})
 	}
@@ -654,6 +647,13 @@ func TestHandleAgentEvent_DebugLogging(t *testing.T) {
 		state, entry := newStateWithEntry(issueID)
 		entry.Identifier = identifier
 
+		// Send session_started first so TurnCount = 1 when turn_completed fires.
+		HandleAgentEvent(state, issueID, domain.AgentEvent{
+			Type:      domain.EventSessionStarted,
+			Timestamp: time.Now().UTC(),
+			SessionID: "sess-log",
+		}, logger, nil)
+
 		HandleAgentEvent(state, issueID, domain.AgentEvent{
 			Type:      domain.EventTurnCompleted,
 			Timestamp: time.Now().UTC(),
@@ -931,11 +931,10 @@ func TestHandleAgentEvent_APIDurationMS_Accumulates(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name       string
-		eventType  domain.AgentEventType
-		durations  []int64
-		wantAPIMs  int64
-		wantTurnUp bool // whether TurnCount should increment
+		name      string
+		eventType domain.AgentEventType
+		durations []int64
+		wantAPIMs int64
 	}{
 		{
 			name:      "token_usage events accumulate API time",
@@ -944,18 +943,16 @@ func TestHandleAgentEvent_APIDurationMS_Accumulates(t *testing.T) {
 			wantAPIMs: 800,
 		},
 		{
-			name:       "turn_completed carries API time",
-			eventType:  domain.EventTurnCompleted,
-			durations:  []int64{1500},
-			wantAPIMs:  1500,
-			wantTurnUp: true,
+			name:      "turn_completed carries API time",
+			eventType: domain.EventTurnCompleted,
+			durations: []int64{1500},
+			wantAPIMs: 1500,
 		},
 		{
-			name:       "turn_failed carries API time",
-			eventType:  domain.EventTurnFailed,
-			durations:  []int64{200, 800},
-			wantAPIMs:  1000,
-			wantTurnUp: true,
+			name:      "turn_failed carries API time",
+			eventType: domain.EventTurnFailed,
+			durations: []int64{200, 800},
+			wantAPIMs: 1000,
 		},
 		{
 			name:      "zero APIDurationMS ignored",
@@ -1054,6 +1051,13 @@ func TestHandleAgentEvent_CombinedTimingAccumulation(t *testing.T) {
 
 	state, entry := newStateWithEntry("COMBO-1")
 	ts := time.Now().UTC()
+
+	// Session started — increments TurnCount to 1.
+	HandleAgentEvent(state, "COMBO-1", domain.AgentEvent{
+		Type:      domain.EventSessionStarted,
+		Timestamp: ts,
+		SessionID: "s-combo",
+	}, slog.Default(), nil)
 
 	// Turn-completed with API time.
 	HandleAgentEvent(state, "COMBO-1", domain.AgentEvent{

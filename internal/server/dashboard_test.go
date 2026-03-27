@@ -459,6 +459,35 @@ func TestBuildDashboardData(t *testing.T) {
 			t.Errorf("APITimePct = %q, want %q (zero StartedAt)", data.Running[0].APITimePct, "N/A")
 		}
 	})
+
+	t.Run("mid-turn shows TurnCount 1", func(t *testing.T) {
+		t.Parallel()
+
+		midTurnSnap := orchestrator.RuntimeSnapshotResult{
+			GeneratedAt: now,
+			Running: []orchestrator.SnapshotRunningEntry{
+				{
+					Identifier:     "MT-MIDTURN",
+					State:          "In Progress",
+					TurnCount:      1,
+					LastAgentEvent: domain.EventNotification,
+					StartedAt:      now.Add(-30 * time.Second),
+				},
+			},
+		}
+
+		data := buildDashboardData(midTurnSnap, "v1", startedAt, nil, now)
+
+		if len(data.Running) != 1 {
+			t.Fatalf("len(Running) = %d, want 1", len(data.Running))
+		}
+		if data.Running[0].TurnCount != 1 {
+			t.Errorf("TurnCount = %d, want 1 (mid-turn must show started turn)", data.Running[0].TurnCount)
+		}
+		if data.Running[0].LastEvent != string(domain.EventNotification) {
+			t.Errorf("LastEvent = %q, want %q", data.Running[0].LastEvent, domain.EventNotification)
+		}
+	})
 }
 
 func TestFormatDuration(t *testing.T) {
