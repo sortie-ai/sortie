@@ -13,7 +13,6 @@ Spec-first, agent-developed orchestration service. The architecture document is 
 ## Gotchas
 
 - **Architecture doc is the spec.** `docs/architecture.md` (~2100 lines) defines every entity, state machine, algorithm, and validation rule. Read the relevant section before implementing anything. Drift from the spec is a bug.
-- **TODO.md is the sequencing authority.** Milestones are deliberately ordered — each depends on the previous. Do not implement features from later milestones before earlier ones are complete.
 - **Symphony is prior art, not a template.** Sortie derives from OpenAI Symphony but diverges intentionally (Go instead of Elixir, SQLite persistence, adapter interfaces). Do not copy Symphony patterns or Elixir idioms.
 - **Workspace safety invariants are security boundaries.** Path containment under workspace root, sanitized workspace keys (`[A-Za-z0-9._-]` only), and cwd validation before agent launch are mandatory — not suggestions. See architecture Section 9.5.
 - **Generic naming in core code.** Use `agent_*`, `tracker_*`, `session_*` in orchestrator core. Never `jira_*`, `claude_*`, `codex_*` outside their adapter packages.
@@ -25,14 +24,12 @@ Spec-first, agent-developed orchestration service. The architecture document is 
 ### Always
 
 - Read the relevant architecture doc section before implementing a feature.
-- Follow TODO.md task ordering within and across milestones.
 - Implement adapter integrations as new packages behind the existing Go interface — additive only.
 - Produce a statically-linked single binary with zero runtime dependencies.
 
 ### Ask first
 
 - Any change to `docs/architecture.md` or `docs/decisions/*.md`.
-- Reordering or skipping TODO.md milestones.
 - Adding dependencies beyond what the architecture specifies.
 
 ### Never
@@ -51,10 +48,9 @@ Read whichever of these are relevant before starting work:
 - `docs/architecture.md` — the full specification: domain model, state machine, algorithms, adapter contracts, persistence schema, test matrix
 - `docs/decisions/` — accepted ADRs for Go runtime, SQLite persistence, and adapter-based extensibility
 - `docs/workflow-reference.md` - WORKFLOW.md Syntax Reference
-- `TODO.md` — sequenced milestones with atomic, verifiable tasks sized for single agent sessions
 
 ---
 
-Last updated: 2026-03-24
+Last updated: 2026-03-27
 
 Maintained by: AI Agents under human supervision

@@ -142,7 +142,6 @@ You must analyze which file you are editing and apply the correct architectural 
   - `docs/decisions/*.md` (accepted ADRs)
   - `LICENSE`
   - `README.md`
-  - `TODO.md`
 
 ## Rules
 

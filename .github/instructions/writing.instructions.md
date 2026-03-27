@@ -1,12 +1,12 @@
 ---
 name: 'Technical Writing'
-description: 'Prose standards for architecture documents, ADRs, TODO tasks and user guides'
+description: 'Prose standards for architecture documents, ADRs and user guides'
 applyTo: '**/docs/*.md'
 ---
 
 # Technical Writing Standards
 
-These rules govern all prose in this project: architecture documents, ADRs, TODO tasks and user guides. They do not govern Go source files (see [Go documentation guidelines](go-documentation.instructions.md) for godoc conventions).
+These rules govern all prose in this project: architecture documents, ADRs, issue descriptions, and user guides. They do not govern Go source files (see [Go documentation guidelines](go-documentation.instructions.md) for godoc conventions).
 
 ## Core Principles
 
@@ -128,21 +128,6 @@ Architecture Decision Records are reference documents, not essays. Target 200-50
 **Trade-off honesty is mandatory.** Acknowledge what the chosen option makes harder. "Go's ecosystem has weaker LLM generation tooling than TypeScript" is honest. "Go is the best choice in every dimension" is not credible.
 
 **Compare concretely.** "Go's goroutines map to OS threads via the runtime scheduler without application-level coordination; Node.js serializes all orchestration on a single event loop thread" — not "Go is better at concurrency."
-
-## Task Writing
-
-Tasks in TODO.md follow a fixed format:
-
-```
-- [ ] N.N Brief imperative description.
-      **Verify:** measurable completion criterion.
-```
-
-**Imperative action verb first:** "Implement," "Add," "Configure," "Research." Not "We need to implement" or "Implementation of."
-
-**Atomic sizing:** one task, one agent session. If a task requires multiple sessions, split it.
-
-**Verification clause is mandatory.** It names a command, a condition, or an observable outcome. "`make test` passes" — not "everything works."
 
 ## Inline Comments and Commit Messages
 

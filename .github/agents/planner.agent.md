@@ -149,15 +149,15 @@ Produce a Markdown checklist in `.plans/Plan-{TASK_NAME_OR_JIRA_ID}.md`. Group s
 - [ ] Confirm integration tests skip cleanly without `SORTIE_JIRA_TEST=1` / `SORTIE_CLAUDE_TEST=1`.
 
 ## Constraints
-- Each step must be atomic and independently verifiable (matches TODO.md task sizing convention).
+- Each step must be atomic and independently verifiable — sized for a single agent session.
 - **Strict Layering:** Follow the six abstraction levels in architecture Section 3.2. No upward imports.
-- **Milestone Sequencing:** Map phases to TODO.md milestones. Do not plan steps from Milestone N if Milestone N-1 is incomplete.
+- **Milestone Sequencing:** Map phases to GitHub milestones. Do not plan steps from Milestone N if Milestone N-1 is incomplete.
 - **Single Binary:** Every dependency must be pure Go. No CGo, no C toolchain, no external services at runtime.
 - **Spec Traceability:** Every non-trivial step must cite the architecture doc section it implements.
 
 ## Philosophy Checklist
 Before finalizing the plan, verify:
-- [ ] Does every step trace to a specific architecture doc section or TODO.md task?
+- [ ] Does every step trace to a specific architecture doc section or GitHub issue?
 - [ ] Are adapter-specific details confined to adapter package steps only?
 - [ ] Does the plan respect milestone sequencing — no forward dependencies?
 - [ ] Is the solution the simplest possible implementation that conforms to the spec?

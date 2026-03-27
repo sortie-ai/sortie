@@ -46,7 +46,7 @@ Commit staged changes and manage pull requests (PR).
 
 ## PR Description Content Rules
 
-- **DO NOT** reference `docs/architecture.md`, `docs/decisions/`, section numbers, ADR numbers, or TODO IDs (e.g. "task 2.4", "Section 16.6", "ADR-0002") in the PR description. Those belong in specs and plans, not in the git history.
+- **DO NOT** reference `docs/architecture.md`, `docs/decisions/`, section numbers, or ADR numbers (e.g. "Section 16.6", "ADR-0002") in the PR description. Those belong in specs and plans, not in the git history.
 - **DO NOT** add an "Implementation Details" or "References" section beyond what the template defines.
 - **ONLY** fill in the sections defined by the PR template — nothing more.
 

@@ -88,7 +88,7 @@ Subject line: imperative mood, under 72 chars, no period, English only.
 Body (if needed): wrap at 72 chars, explain what and why.
 
 Do not reference `docs/architecture.md`, `docs/decisions/`, section numbers,
-ADR numbers, or TODO IDs in commit messages. Those belong in specs and plans,
+or ADR numbers in commit messages. Those belong in specs and plans,
 not in the git history.
 
 ### Step 5: Verify

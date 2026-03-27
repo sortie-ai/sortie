@@ -64,7 +64,7 @@ Formatting rules:
 - All sections required, sub-sections only when relevant data exists
 
 Do not reference `docs/architecture.md`, `docs/decisions/`, section numbers,
-ADR numbers, or TODO IDs in pull request descriptions. Those belong in specs and
+or ADR numbers in pull request descriptions. Those belong in specs and
 plans, not in the git history.
 
 Complexity guide:
