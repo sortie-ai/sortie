@@ -5,6 +5,7 @@ description: >
   decisions. Use when asked to specify, architect, design, write a spec,
   define requirements, or analyze a feature request.
 argument-hint: Specify the feature or idea to architect
+model: Claude Opus 4.6 (copilot)
 tools:
   - execute
   - read

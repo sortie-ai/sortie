@@ -5,6 +5,7 @@ description: >
   Use when asked to plan, break down, outline implementation steps, create
   a checklist, or convert a spec into actionable tasks.
 argument-hint: Outline the goal or problem to plan
+model: Claude Sonnet 4.6 (copilot)
 tools:
   - read
   - edit

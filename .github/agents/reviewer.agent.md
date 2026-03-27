@@ -7,6 +7,7 @@ description: >
   check coupling/cohesion, or review dependency structure. Produces
   structured verdicts with actionable recommendations.
 argument-hint: Describe what to review (code changes, spec file, or implementation)
+model: Gemini 3.1 Pro (Preview) (copilot)
 tools:
   - read
   - search

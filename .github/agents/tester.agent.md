@@ -5,6 +5,7 @@ description: >
   to test, write tests, add test coverage, create unit tests, integration
   tests, or verify implemented code.
 argument-hint: Specify the source code file or module to test
+model: Claude Sonnet 4.6 (copilot)
 tools:
   - execute/runInTerminal
   - execute/getTerminalOutput
