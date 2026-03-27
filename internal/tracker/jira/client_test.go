@@ -24,7 +24,7 @@ func TestClientDo_Success(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := newJiraClient(srv.URL, "user@test.com", "tok123")
+	c := newJiraClient(srv.URL, "user@test.com", "tok123", "sortie/test")
 	body, err := c.do(context.Background(), "GET", "/test", nil)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -54,7 +54,7 @@ func TestClientDo_QueryParams(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := newJiraClient(srv.URL, "u@t.com", "t")
+	c := newJiraClient(srv.URL, "u@t.com", "t", "sortie/test")
 	params := url.Values{"jql": {"project = X"}, "maxResults": {"50"}}
 	_, err := c.do(context.Background(), "GET", "/search", params)
 	if err != nil {
@@ -136,7 +136,7 @@ func TestClientDo_ErrorMapping(t *testing.T) {
 			}))
 			defer srv.Close()
 
-			c := newJiraClient(srv.URL, "u@t.com", "t")
+			c := newJiraClient(srv.URL, "u@t.com", "t", "sortie/test")
 			_, err := c.do(context.Background(), "GET", "/test", nil)
 			if err == nil {
 				t.Fatal("expected error, got nil")
@@ -162,7 +162,7 @@ func TestClientDo_NetworkFailure(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 	srv.Close() // close immediately to cause connection refused
 
-	c := newJiraClient(srv.URL, "u@t.com", "t")
+	c := newJiraClient(srv.URL, "u@t.com", "t", "sortie/test")
 	_, err := c.do(context.Background(), "GET", "/test", nil)
 	if err == nil {
 		t.Fatal("expected error, got nil")
@@ -188,7 +188,7 @@ func TestClientDo_ContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // cancel before request
 
-	c := newJiraClient(srv.URL, "u@t.com", "t")
+	c := newJiraClient(srv.URL, "u@t.com", "t", "sortie/test")
 	_, err := c.do(ctx, "GET", "/test", nil)
 	if err == nil {
 		t.Fatal("expected error, got nil")
@@ -219,7 +219,7 @@ func TestClientDoJSON_Success(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := newJiraClient(srv.URL, "user@test.com", "tok123")
+	c := newJiraClient(srv.URL, "user@test.com", "tok123", "sortie/test")
 	body, err := c.doJSON(context.Background(), "POST", "/transitions", strings.NewReader(`{"transition":{"id":"31"}}`))
 	if err != nil {
 		t.Fatalf("doJSON() unexpected error: %v", err)
@@ -253,7 +253,7 @@ func TestClientDoJSON_200_WithBody(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	c := newJiraClient(srv.URL, "u@t.com", "t")
+	c := newJiraClient(srv.URL, "u@t.com", "t", "sortie/test")
 	body, err := c.doJSON(context.Background(), "POST", "/test", strings.NewReader("{}"))
 	if err != nil {
 		t.Fatalf("doJSON() unexpected error: %v", err)
@@ -288,7 +288,7 @@ func TestClientDoJSON_ErrorMapping(t *testing.T) {
 			}))
 			defer srv.Close()
 
-			c := newJiraClient(srv.URL, "u@t.com", "t")
+			c := newJiraClient(srv.URL, "u@t.com", "t", "sortie/test")
 			_, err := c.doJSON(context.Background(), "POST", "/test", strings.NewReader("{}"))
 			if err == nil {
 				t.Fatal("doJSON() expected error, got nil")
@@ -316,7 +316,7 @@ func TestClientDoJSON_ContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	c := newJiraClient(srv.URL, "u@t.com", "t")
+	c := newJiraClient(srv.URL, "u@t.com", "t", "sortie/test")
 	_, err := c.doJSON(ctx, "POST", "/test", strings.NewReader("{}"))
 	if err == nil {
 		t.Fatal("doJSON() expected error, got nil")
@@ -327,5 +327,78 @@ func TestClientDoJSON_ContextCancellation(t *testing.T) {
 	var te *domain.TrackerError
 	if errors.As(err, &te) {
 		t.Errorf("context cancellation should not be wrapped in TrackerError, got Kind=%q", te.Kind)
+	}
+}
+
+// --- User-Agent header tests ---
+
+func TestClientDo_UserAgentHeader(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		userAgent string
+		want      string
+	}{
+		{"release version", "sortie/v0.8.3", "sortie/v0.8.3"},
+		{"dev fallback", "sortie/dev", "sortie/dev"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			var gotUA string
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				gotUA = r.Header.Get("User-Agent")
+				w.WriteHeader(http.StatusOK)
+				w.Write([]byte("{}")) //nolint:errcheck // test helper
+			}))
+			defer srv.Close()
+
+			c := newJiraClient(srv.URL, "u@t.com", "t", tt.userAgent)
+			_, err := c.do(context.Background(), "GET", "/test", nil)
+			if err != nil {
+				t.Fatalf("do() unexpected error: %v", err)
+			}
+			if gotUA != tt.want {
+				t.Errorf("User-Agent header = %q, want %q", gotUA, tt.want)
+			}
+		})
+	}
+}
+
+func TestClientDoJSON_UserAgentHeader(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		userAgent string
+		want      string
+	}{
+		{"release version", "sortie/v0.8.3", "sortie/v0.8.3"},
+		{"dev fallback", "sortie/dev", "sortie/dev"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			var gotUA string
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				gotUA = r.Header.Get("User-Agent")
+				w.WriteHeader(http.StatusNoContent)
+			}))
+			defer srv.Close()
+
+			c := newJiraClient(srv.URL, "u@t.com", "t", tt.userAgent)
+			_, err := c.doJSON(context.Background(), "POST", "/test", strings.NewReader("{}"))
+			if err != nil {
+				t.Fatalf("doJSON() unexpected error: %v", err)
+			}
+			if gotUA != tt.want {
+				t.Errorf("User-Agent header = %q, want %q", gotUA, tt.want)
+			}
+		})
 	}
 }

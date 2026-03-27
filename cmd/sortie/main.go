@@ -204,6 +204,7 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 		return 1
 	}
 	trackerCfgMap := trackerConfigMap(cfg.Tracker)
+	trackerCfgMap["user_agent"] = "sortie/" + Version
 	mergeExtensions(trackerCfgMap, cfg.Extensions, cfg.Tracker.Kind)
 	trackerAdapter, err := trackerCtor(trackerCfgMap)
 	if err != nil {

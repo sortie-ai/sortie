@@ -19,16 +19,18 @@ type jiraClient struct {
 	httpClient *http.Client
 	baseURL    string
 	authHeader string
+	userAgent  string
 }
 
 // newJiraClient constructs a jiraClient with Basic authentication
 // derived from the email and API token. The baseURL is stripped of
-// any trailing slash.
-func newJiraClient(baseURL, email, token string) *jiraClient {
+// any trailing slash. The userAgent value is set on every outgoing request.
+func newJiraClient(baseURL, email, token, userAgent string) *jiraClient {
 	return &jiraClient{
 		httpClient: &http.Client{Timeout: 30 * time.Second},
 		baseURL:    strings.TrimRight(baseURL, "/"),
 		authHeader: "Basic " + base64.StdEncoding.EncodeToString([]byte(email+":"+token)),
+		userAgent:  userAgent,
 	}
 }
 
@@ -118,6 +120,7 @@ func (c *jiraClient) do(ctx context.Context, method, path string, params url.Val
 	req.Header.Set("Authorization", c.authHeader)
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", c.userAgent)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -170,6 +173,7 @@ func (c *jiraClient) doJSON(ctx context.Context, method, path string, body io.Re
 	req.Header.Set("Authorization", c.authHeader)
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", c.userAgent)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
