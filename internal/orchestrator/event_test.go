@@ -78,7 +78,7 @@ func TestHandleAgentEvent_BasicFields(t *testing.T) {
 
 // TestHandleAgentEvent_SessionStarted verifies that EventSessionStarted
 // populates SessionID and AgentPID on the entry and increments TurnCount
-// by 1. Per architecture Section 4.1.6, turn_count counts turns started.
+// by 1, reflecting that turn_count counts turns started.
 func TestHandleAgentEvent_SessionStarted(t *testing.T) {
 	t.Parallel()
 
@@ -123,10 +123,9 @@ func TestHandleAgentEvent_SessionStarted_EmptySessionID(t *testing.T) {
 	}
 }
 
-// TestHandleAgentEvent_TurnCount verifies the turn-count semantics.
-// Per architecture Section 4.1.6, turn_count counts turns started.
-// Only session_started increments TurnCount; finalization and other
-// event types must not.
+// TestHandleAgentEvent_TurnCount verifies the turn-count semantics:
+// TurnCount counts turns started, so session_started events increment it.
+// Finalization and other event types must not change TurnCount.
 func TestHandleAgentEvent_TurnCount(t *testing.T) {
 	t.Parallel()
 

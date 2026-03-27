@@ -64,7 +64,7 @@ func HandleAgentEvent(state *State, issueID string, event domain.AgentEvent, log
 		entry.TurnCount++
 
 		// Overwrite the session ID when the event carries a non-empty
-		// identifier. Claude Code spawns a fresh subprocess per turn,
+		// session ID. Claude Code spawns a fresh subprocess per turn,
 		// so the active session ID changes.
 		if event.SessionID != "" {
 			entry.SessionID = event.SessionID
