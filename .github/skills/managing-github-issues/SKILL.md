@@ -85,6 +85,9 @@ gh issue list --search "<keywords>" --state all --limit 20 \
 - **Self-contained:** A stranger must understand the issue from the body alone.
 - **Bugs describe problems, not solutions.** The implementer chooses the fix.
 - **Verification:** Every issue states how to confirm it is resolved.
+- **No hard wrapping.** Write each paragraph as a single line — let GitHub
+  handle word wrap at render time. Hard line breaks mid-sentence produce
+  ragged diffs and noisy reflows when text is edited later.
 
 ### Body templates by type
 
