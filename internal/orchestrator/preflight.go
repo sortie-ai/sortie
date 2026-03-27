@@ -1,6 +1,8 @@
 package orchestrator
 
 import (
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -13,7 +15,7 @@ type PreflightError struct {
 	// Check identifies which validation check failed. Known values:
 	// "workflow_load", "tracker.kind", "tracker.api_key",
 	// "tracker.project", "tracker_adapter", "agent.kind",
-	// "agent.command", "agent_adapter".
+	// "agent.command", "agent_adapter", "workspace.root_writable".
 	Check string
 
 	// Message is an operator-friendly description of the failure.
@@ -164,5 +166,38 @@ func ValidateDispatchConfig(params PreflightParams) PreflightResult {
 		}
 	}
 
+	// Check 9: workspace root is writable.
+	if cfg.Workspace.Root != "" {
+		if err := checkWorkspaceRootWritable(cfg.Workspace.Root); err != nil {
+			errs = append(errs, PreflightError{
+				Check:   "workspace.root_writable",
+				Message: "workspace.root is not writable: " + cfg.Workspace.Root + ": " + err.Error(),
+			})
+		}
+	}
+
 	return PreflightResult{Errors: errs}
+}
+
+// checkWorkspaceRootWritable verifies that root exists (creating it
+// if necessary) and is writable by creating and removing a temporary
+// file. Returns nil on success.
+func checkWorkspaceRootWritable(root string) error {
+	absRoot, err := filepath.Abs(root)
+	if err != nil {
+		return err
+	}
+
+	if err := os.MkdirAll(absRoot, 0o750); err != nil {
+		return err
+	}
+
+	tmpFile, err := os.CreateTemp(absRoot, ".sortie-preflight-*")
+	if err != nil {
+		return err
+	}
+	defer tmpFile.Close()           //nolint:errcheck // best-effort cleanup in defer
+	defer os.Remove(tmpFile.Name()) //nolint:errcheck // best-effort cleanup in defer
+
+	return nil
 }

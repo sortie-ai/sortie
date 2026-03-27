@@ -2,6 +2,8 @@ package orchestrator
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -571,6 +573,191 @@ func TestValidateConfigForPromotion(t *testing.T) {
 			}
 			if err != nil {
 				t.Fatalf("ValidateConfigForPromotion() unexpected error: %v", err)
+			}
+		})
+	}
+}
+
+func TestValidateDispatchConfig_WorkspaceRootWritable(t *testing.T) {
+	t.Parallel()
+
+	// serviceConfigWithRoot returns a valid ServiceConfig with the given workspace root.
+	serviceConfigWithRoot := func(root string) config.ServiceConfig {
+		return config.ServiceConfig{
+			Tracker: config.TrackerConfig{
+				Kind:   "test-tracker",
+				APIKey: "secret",
+			},
+			Agent: config.AgentConfig{
+				Kind:    "test-agent",
+				Command: "/usr/bin/agent",
+			},
+			Workspace: config.WorkspaceConfig{
+				Root: root,
+			},
+		}
+	}
+
+	tests := []struct {
+		name          string
+		setup         func(t *testing.T, p *PreflightParams)
+		wantOK        bool
+		wantChecks    []string
+		noChecks      []string
+		checkMessages map[string]string // check name → expected substring in Message
+	}{
+		{
+			name: "writable directory",
+			setup: func(t *testing.T, p *PreflightParams) {
+				t.Helper()
+				root := t.TempDir()
+				p.ConfigFunc = func() config.ServiceConfig {
+					return serviceConfigWithRoot(root)
+				}
+			},
+			wantOK:   true,
+			noChecks: []string{"workspace.root_writable"},
+		},
+		{
+			name: "read-only directory",
+			setup: func(t *testing.T, p *PreflightParams) {
+				t.Helper()
+				if os.Getuid() == 0 {
+					t.Skip("read-only directory test requires non-root user")
+				}
+				root := t.TempDir()
+				t.Cleanup(func() { _ = os.Chmod(root, 0o750) })
+				if err := os.Chmod(root, 0o555); err != nil {
+					t.Fatalf("chmod: %v", err)
+				}
+				p.ConfigFunc = func() config.ServiceConfig {
+					return serviceConfigWithRoot(root)
+				}
+			},
+			wantOK:        false,
+			wantChecks:    []string{"workspace.root_writable"},
+			checkMessages: map[string]string{"workspace.root_writable": "permission denied"},
+		},
+		{
+			name: "non-existent parent writable",
+			setup: func(t *testing.T, p *PreflightParams) {
+				t.Helper()
+				root := filepath.Join(t.TempDir(), "sub", "deep")
+				p.ConfigFunc = func() config.ServiceConfig {
+					return serviceConfigWithRoot(root)
+				}
+			},
+			wantOK:   true,
+			noChecks: []string{"workspace.root_writable"},
+		},
+		{
+			name: "non-existent parent read-only",
+			setup: func(t *testing.T, p *PreflightParams) {
+				t.Helper()
+				if os.Getuid() == 0 {
+					t.Skip("read-only directory test requires non-root user")
+				}
+				parent := t.TempDir()
+				t.Cleanup(func() { _ = os.Chmod(parent, 0o750) })
+				if err := os.Chmod(parent, 0o555); err != nil {
+					t.Fatalf("chmod: %v", err)
+				}
+				p.ConfigFunc = func() config.ServiceConfig {
+					return serviceConfigWithRoot(filepath.Join(parent, "sub"))
+				}
+			},
+			wantOK:        false,
+			wantChecks:    []string{"workspace.root_writable"},
+			checkMessages: map[string]string{"workspace.root_writable": "permission denied"},
+		},
+		{
+			name: "root is symlink",
+			setup: func(t *testing.T, p *PreflightParams) {
+				t.Helper()
+				realDir := t.TempDir()
+				symlinkPath := filepath.Join(t.TempDir(), "link")
+				if err := os.Symlink(realDir, symlinkPath); err != nil {
+					t.Fatalf("symlink: %v", err)
+				}
+				p.ConfigFunc = func() config.ServiceConfig {
+					return serviceConfigWithRoot(symlinkPath)
+				}
+			},
+			wantOK:   true,
+			noChecks: []string{"workspace.root_writable"},
+		},
+		{
+			name: "empty root skipped",
+			setup: func(t *testing.T, p *PreflightParams) {
+				t.Helper()
+				p.ConfigFunc = func() config.ServiceConfig {
+					return serviceConfigWithRoot("")
+				}
+			},
+			wantOK:   true,
+			noChecks: []string{"workspace.root_writable"},
+		},
+		{
+			// Section 8.2: errors are collected, not short-circuited.
+			name: "collected with other errors",
+			setup: func(t *testing.T, p *PreflightParams) {
+				t.Helper()
+				if os.Getuid() == 0 {
+					t.Skip("read-only directory test requires non-root user")
+				}
+				root := t.TempDir()
+				t.Cleanup(func() { _ = os.Chmod(root, 0o750) })
+				if err := os.Chmod(root, 0o555); err != nil {
+					t.Fatalf("chmod: %v", err)
+				}
+				p.ConfigFunc = func() config.ServiceConfig {
+					return config.ServiceConfig{
+						Tracker: config.TrackerConfig{
+							APIKey: "secret",
+							// Kind intentionally empty to trigger tracker.kind error.
+						},
+						Agent: config.AgentConfig{
+							Kind:    "test-agent",
+							Command: "/usr/bin/agent",
+						},
+						Workspace: config.WorkspaceConfig{
+							Root: root,
+						},
+					}
+				}
+			},
+			wantOK:     false,
+			wantChecks: []string{"tracker.kind", "workspace.root_writable"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			params := validPreflightParams()
+			tt.setup(t, &params)
+
+			result := ValidateDispatchConfig(params)
+
+			if tt.wantOK && !result.OK() {
+				t.Fatalf("ValidateDispatchConfig() OK = false, want true; errors: %v", result.Errors)
+			}
+			if !tt.wantOK && len(tt.wantChecks) > 0 && result.OK() {
+				t.Fatalf("ValidateDispatchConfig() OK = true, want false with checks %v", tt.wantChecks)
+			}
+			for _, check := range tt.wantChecks {
+				requireCheck(t, result, check)
+			}
+			for _, check := range tt.noChecks {
+				requireNoCheck(t, result, check)
+			}
+			for check, want := range tt.checkMessages {
+				for _, e := range result.Errors {
+					if e.Check == check && !strings.Contains(e.Message, want) {
+						t.Errorf("error check %q message = %q, want to contain %q", check, e.Message, want)
+					}
+				}
 			}
 		})
 	}
