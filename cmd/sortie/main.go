@@ -565,7 +565,7 @@ func mapManagerError(err error) []validateDiag {
 
 	var ce *config.ConfigError
 	if errors.As(err, &ce) {
-		return []validateDiag{{Check: "config." + ce.Field, Message: err.Error()}}
+		return []validateDiag{{Check: "config." + ce.Field, Message: ce.Message}}
 	}
 
 	var te *prompt.TemplateError
