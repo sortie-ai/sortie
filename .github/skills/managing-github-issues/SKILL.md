@@ -8,8 +8,7 @@ description: >
   "add to backlog", "search issues", "close issue", or mentions GitHub Issues
   in any task-management context. Handles label/milestone assignment, duplicate
   detection, and project board integration. Do NOT use for pull requests (use
-  creating-pr), changelog entries (use changelog-maintenance), or TODO.md
-  updates (use roadmap-management).
+  creating-pr) or changelog entries (use changelog-maintenance).
 ---
 
 # Managing GitHub Issues
@@ -300,5 +299,4 @@ Before executing `gh issue create`, verify:
 
 ## Handoff
 
-- If created issues correspond to TODO.md tasks → use roadmap-management skill.
 - If issues need immediate implementation → user may invoke Planner or Coder.
