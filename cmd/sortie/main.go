@@ -490,13 +490,16 @@ type validateDiag struct {
 
 func runValidate(_ context.Context, args []string, stdout io.Writer, stderr io.Writer) int {
 	fs := flag.NewFlagSet("sortie validate", flag.ContinueOnError)
-	fs.SetOutput(stderr)
+	fs.SetOutput(io.Discard)
 	format := fs.String("format", "text", `Output format: "text" or "json"`)
 
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
+			fs.SetOutput(stderr)
+			fs.Usage()
 			return 0
 		}
+		emitDiags(stdout, stderr, *format, []validateDiag{{Check: "args", Message: err.Error()}})
 		return 1
 	}
 

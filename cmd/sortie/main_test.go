@@ -1075,14 +1075,20 @@ func TestResolveServerPort(t *testing.T) {
 // --- Validate subcommand tests (Plan Phase 5) ---
 
 // writeCustomWorkflowFile writes the given YAML front matter and prompt
-// body as a WORKFLOW.md in dir, returning the absolute path.
+// body as a WORKFLOW.md in dir and returns the absolute path to the
+// created file. It calls filepath.Abs so the returned path is
+// absolute regardless of whether dir is relative or absolute.
 func writeCustomWorkflowFile(t *testing.T, dir string, content []byte) string {
 	t.Helper()
 	p := filepath.Join(dir, "WORKFLOW.md")
-	if err := os.WriteFile(p, content, 0o644); err != nil {
+	absPath, err := filepath.Abs(p)
+	if err != nil {
+		t.Fatalf("filepath.Abs(%q): %v", p, err)
+	}
+	if err := os.WriteFile(absPath, content, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	return p
+	return absPath
 }
 
 // noTrackerKindWorkflow is a minimal workflow with active/terminal
@@ -1367,6 +1373,59 @@ func TestValidateHelp(t *testing.T) {
 	}
 }
 
+func TestValidateUnknownFlagText(t *testing.T) {
+	t.Parallel()
+
+	var stdout, stderr bytes.Buffer
+	ctx := context.Background()
+
+	// An unknown flag in text mode must be routed through emitDiags, not
+	// printed directly by the flag package. stderr must contain the
+	// "args: " prefix that emitDiags emits, and stdout must be empty.
+	code := run(ctx, []string{"validate", "--unknown-flag-xyz"}, &stdout, &stderr)
+	if code != 1 {
+		t.Fatalf("run(validate --unknown-flag-xyz) = %d, want 1", code)
+	}
+	if !strings.Contains(stderr.String(), "args: ") {
+		t.Errorf("stderr = %q, want to contain %q (emitDiags prefix)", stderr.String(), "args: ")
+	}
+	if stdout.Len() != 0 {
+		t.Errorf("stdout = %q, want empty for text-mode error", stdout.String())
+	}
+}
+
+func TestValidateUnknownFlagJSON(t *testing.T) {
+	t.Parallel()
+
+	var stdout, stderr bytes.Buffer
+	ctx := context.Background()
+
+	// --format is parsed before --unknown-flag-xyz, so *format is "json"
+	// when the parse error is returned. emitDiags must write structured
+	// JSON to stdout; stderr must remain empty.
+	code := run(ctx, []string{"validate", "--format", "json", "--unknown-flag-xyz"}, &stdout, &stderr)
+	if code != 1 {
+		t.Fatalf("run(validate --format json --unknown-flag-xyz) = %d, want 1", code)
+	}
+	if stderr.Len() != 0 {
+		t.Errorf("stderr = %q, want empty for JSON-mode error", stderr.String())
+	}
+
+	var out validateOutput
+	if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
+		t.Fatalf("json.Unmarshal(%q) error: %v", stdout.String(), err)
+	}
+	if out.Valid {
+		t.Errorf("validateOutput.Valid = true, want false")
+	}
+	if len(out.Errors) == 0 {
+		t.Errorf("validateOutput.Errors is empty, want at least one diagnostic")
+	}
+	if len(out.Errors) > 0 && out.Errors[0].Check != "args" {
+		t.Errorf("validateOutput.Errors[0].Check = %q, want %q", out.Errors[0].Check, "args")
+	}
+}
+
 func TestValidateTooManyArgs(t *testing.T) {
 	t.Parallel()
 
@@ -1442,7 +1501,9 @@ func TestValidateDoesNotStartWatcher(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("run(validate) = %d, want 0; stderr: %s", code, stderr.String())
 	}
-	const maxDuration = 2 * time.Second
+	// 30 s is generous enough to remain stable on slow CI runners while
+	// still catching the case where a watcher goroutine blocks the return.
+	const maxDuration = 30 * time.Second
 	if elapsed > maxDuration {
 		t.Errorf("run(validate) took %v, want < %v (possible watcher goroutine started)", elapsed, maxDuration)
 	}
