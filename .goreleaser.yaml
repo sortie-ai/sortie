@@ -47,6 +47,27 @@ checksum:
   name_template: "checksums.txt"
   algorithm: sha256
 
+brews:
+  - name: sortie
+    repository:
+      owner: sortie-ai
+      name: homebrew-tap
+      branch: main
+      token: "{{ .Env.TAP_GITHUB_TOKEN }}"
+    directory: Formula
+    commit_author:
+      name: goreleaserbot
+      email: goreleaserbot@users.noreply.github.com
+    commit_msg_template: "chore(formula): update {{ .ProjectName }} to {{ .Tag }}"
+    homepage: "https://github.com/sortie-ai/sortie"
+    description: "Spec-first orchestration service for coding agents"
+    license: "Apache-2.0"
+    install: |
+      bin.install "sortie"
+    test: |
+      assert_match version.to_s, shell_output("#{bin}/sortie --version")
+    skip_upload: "auto"
+
 changelog:
   sort: asc
   use: git
