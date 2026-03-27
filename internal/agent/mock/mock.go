@@ -169,7 +169,6 @@ func (m *MockAdapter) RunTurn(ctx context.Context, session domain.Session, param
 	currentIndex := m.turnIndex
 	m.turnIndex++
 	outcome := m.outcomeAt(currentIndex)
-	isFirstTurn := currentIndex == 0
 	m.mu.Unlock()
 
 	// Artificial delay (outside lock).
@@ -191,16 +190,16 @@ func (m *MockAdapter) RunTurn(ctx context.Context, session domain.Session, param
 		}
 	}
 
-	// Emit session_started on the very first turn.
-	if isFirstTurn {
-		params.OnEvent(domain.AgentEvent{
-			Type:      domain.EventSessionStarted,
-			Timestamp: time.Now().UTC(),
-			AgentPID:  m.agentPID,
-			SessionID: m.sessionID,
-			Message:   "mock session started",
-		})
-	}
+	// Emit session_started on every turn, matching real adapter behavior.
+	// Claude Code spawns a fresh subprocess per turn and emits
+	// session_started at startup.
+	params.OnEvent(domain.AgentEvent{
+		Type:      domain.EventSessionStarted,
+		Timestamp: time.Now().UTC(),
+		AgentPID:  m.agentPID,
+		SessionID: m.sessionID,
+		Message:   "mock session started",
+	})
 
 	// Emit N notification events.
 	for i := 0; i < m.eventsPerTurn; i++ {

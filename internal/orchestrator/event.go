@@ -57,11 +57,18 @@ func HandleAgentEvent(state *State, issueID string, event domain.AgentEvent, log
 		entry.AgentPID = event.AgentPID
 	}
 
-	// Overwrite the session ID on every EventSessionStarted event that
-	// carries a non-empty identifier. Claude Code spawns a fresh
-	// subprocess per turn, so the active session ID changes.
-	if event.Type == domain.EventSessionStarted && event.SessionID != "" {
-		entry.SessionID = event.SessionID
+	// Increment TurnCount on session_started — the signal that a new
+	// turn has begun. Each adapter emits exactly one session_started
+	// per turn.
+	if event.Type == domain.EventSessionStarted {
+		entry.TurnCount++
+
+		// Overwrite the session ID when the event carries a non-empty
+		// identifier. Claude Code spawns a fresh subprocess per turn,
+		// so the active session ID changes.
+		if event.SessionID != "" {
+			entry.SessionID = event.SessionID
+		}
 	}
 
 	// Accumulate API timing from any event that carries it. This is
@@ -104,18 +111,6 @@ func HandleAgentEvent(state *State, issueID string, event domain.AgentEvent, log
 				slog.String("result", result),
 			)
 		}
-	}
-
-	// Increment TurnCount on turn-finalization events only. Every
-	// adapter emits exactly one finalization event per completed turn
-	// regardless of how many session_started events it produces.
-	switch event.Type {
-	case domain.EventTurnCompleted,
-		domain.EventTurnFailed,
-		domain.EventTurnCancelled,
-		domain.EventTurnEndedWithError,
-		domain.EventTurnInputRequired:
-		entry.TurnCount++
 	}
 
 	// Apply the token delta algorithm when the adapter reports usage.

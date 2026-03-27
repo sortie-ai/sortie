@@ -273,7 +273,10 @@ func TestRunTurn_DefaultSuccess(t *testing.T) {
 	}
 }
 
-func TestRunTurn_SecondTurnNoSessionStarted(t *testing.T) {
+// TestRunTurn_SecondTurnEmitsSessionStarted verifies that session_started
+// is emitted on every turn, not just the first. Real adapters (Claude Code)
+// spawn a fresh subprocess per turn and emit session_started at startup.
+func TestRunTurn_SecondTurnEmitsSessionStarted(t *testing.T) {
 	t.Parallel()
 
 	adapter, _ := NewMockAdapter(map[string]any{})
@@ -291,10 +294,15 @@ func TestRunTurn_SecondTurnNoSessionStarted(t *testing.T) {
 		t.Fatalf("RunTurn() error = %v", err)
 	}
 
+	var found bool
 	for _, e := range *events {
 		if e.Type == domain.EventSessionStarted {
-			t.Error("session_started emitted on second turn; expected only on first")
+			found = true
+			break
 		}
+	}
+	if !found {
+		t.Error("session_started not emitted on second turn; expected on every turn")
 	}
 }
 
