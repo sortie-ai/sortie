@@ -9,6 +9,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- `sortie validate` subcommand for one-shot workflow file validation without
+  starting the orchestrator, opening the database, or spawning a filesystem
+  watcher. Supports `--format text` (stderr diagnostics) and `--format json`
+  (structured stdout output) for CI pipelines and pre-commit hooks.
+
 ## [0.0.8] - 2026-03-26
 
 ### Added
