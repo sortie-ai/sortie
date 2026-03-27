@@ -1071,3 +1071,379 @@ func TestResolveServerPort(t *testing.T) {
 		})
 	}
 }
+
+// --- Validate subcommand tests (Plan Phase 5) ---
+
+// writeCustomWorkflowFile writes the given YAML front matter and prompt
+// body as a WORKFLOW.md in dir, returning the absolute path.
+func writeCustomWorkflowFile(t *testing.T, dir string, content []byte) string {
+	t.Helper()
+	p := filepath.Join(dir, "WORKFLOW.md")
+	if err := os.WriteFile(p, content, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+// noTrackerKindWorkflow is a minimal workflow with active/terminal
+// states set (to pass ValidateConfigForPromotion) but tracker.kind
+// absent (to trigger the preflight check).
+func noTrackerKindWorkflow() []byte {
+	return []byte(`---
+polling:
+  interval_ms: 30000
+tracker:
+  active_states:
+    - To Do
+  terminal_states:
+    - Done
+agent:
+  kind: mock
+---
+Do {{ .issue.title }}.
+`)
+}
+
+// unknownTrackerKindWorkflow is a minimal workflow with an unregistered
+// tracker kind, used to trigger the tracker_adapter preflight check.
+func unknownTrackerKindWorkflow() []byte {
+	return []byte(`---
+polling:
+  interval_ms: 30000
+tracker:
+  kind: nonexistent
+  active_states:
+    - To Do
+  terminal_states:
+    - Done
+agent:
+  kind: mock
+---
+Do {{ .issue.title }}.
+`)
+}
+
+// jiraEmptyAPIKeyWorkflow returns a workflow using the jira tracker with
+// an api_key referencing SORTIE_TEST_NONEXISTENT_VAR_198, which must be
+// unset (or empty) when the test runs. The jira adapter requires an API
+// key, so os.ExpandEnv resolving to "" triggers tracker.api_key preflight.
+func jiraEmptyAPIKeyWorkflow() []byte {
+	return []byte(`---
+polling:
+  interval_ms: 30000
+tracker:
+  kind: jira
+  api_key: "$SORTIE_TEST_NONEXISTENT_VAR_198"
+  project: TEST
+  active_states:
+    - In Progress
+  terminal_states:
+    - Done
+agent:
+  kind: mock
+---
+Do {{ .issue.title }}.
+`)
+}
+
+func TestValidateValidWorkflow(t *testing.T) {
+	wfPath := setupRunDir(t)
+
+	var stdout, stderr bytes.Buffer
+	ctx := context.Background()
+
+	code := run(ctx, []string{"validate", wfPath}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("run(validate) = %d, want 0; stderr: %s", code, stderr.String())
+	}
+	if stderr.Len() != 0 {
+		t.Errorf("stderr = %q, want empty", stderr.String())
+	}
+	if stdout.Len() != 0 {
+		t.Errorf("stdout = %q, want empty (text format produces no output on success)", stdout.String())
+	}
+}
+
+func TestValidateValidWorkflowJSON(t *testing.T) {
+	wfPath := setupRunDir(t)
+
+	var stdout, stderr bytes.Buffer
+	ctx := context.Background()
+
+	code := run(ctx, []string{"validate", "--format", "json", wfPath}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("run(validate --format json) = %d, want 0; stderr: %s", code, stderr.String())
+	}
+
+	var out validateOutput
+	if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
+		t.Fatalf("json.Unmarshal(%q) error: %v", stdout.String(), err)
+	}
+	if !out.Valid {
+		t.Errorf("validateOutput.Valid = false, want true")
+	}
+	if out.Errors == nil {
+		t.Errorf("validateOutput.Errors = nil, want [] (must not be null in JSON)")
+	}
+	if len(out.Errors) != 0 {
+		t.Errorf("validateOutput.Errors = %v, want empty slice", out.Errors)
+	}
+
+	// Verify the raw JSON contains "errors":[] not "errors":null.
+	raw := stdout.String()
+	if !strings.Contains(raw, `"errors":[]`) {
+		t.Errorf("JSON output = %q, want to contain %q", raw, `"errors":[]`)
+	}
+}
+
+func TestValidateDefaultPath(t *testing.T) {
+	// setupRunDir sets cwd to a temp dir that contains WORKFLOW.md.
+	setupRunDir(t)
+
+	var stdout, stderr bytes.Buffer
+	ctx := context.Background()
+
+	// No explicit path — resolveWorkflowPath defaults to ./WORKFLOW.md.
+	code := run(ctx, []string{"validate"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("run(validate) = %d, want 0; stderr: %s", code, stderr.String())
+	}
+}
+
+func TestValidateMissingFile(t *testing.T) {
+	t.Parallel()
+
+	var stdout, stderr bytes.Buffer
+	ctx := context.Background()
+
+	code := run(ctx, []string{"validate", "/nonexistent/sortie-test-workflow.md"}, &stdout, &stderr)
+	if code != 1 {
+		t.Fatalf("run(validate /nonexistent) = %d, want 1", code)
+	}
+	if !strings.Contains(stderr.String(), "workflow") {
+		t.Errorf("stderr = %q, want to contain %q", stderr.String(), "workflow")
+	}
+}
+
+func TestValidateMissingFileJSON(t *testing.T) {
+	t.Parallel()
+
+	var stdout, stderr bytes.Buffer
+	ctx := context.Background()
+
+	code := run(ctx, []string{"validate", "--format", "json", "/nonexistent/sortie-test-workflow.md"}, &stdout, &stderr)
+	if code != 1 {
+		t.Fatalf("run(validate --format json /nonexistent) = %d, want 1", code)
+	}
+
+	var out validateOutput
+	if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
+		t.Fatalf("json.Unmarshal(%q) error: %v", stdout.String(), err)
+	}
+	if out.Valid {
+		t.Errorf("validateOutput.Valid = true, want false")
+	}
+	if len(out.Errors) == 0 {
+		t.Errorf("validateOutput.Errors is empty, want at least one diagnostic")
+	}
+	if len(out.Errors) > 0 && !strings.Contains(out.Errors[0].Check, "workflow") {
+		t.Errorf("validateOutput.Errors[0].Check = %q, want to contain %q", out.Errors[0].Check, "workflow")
+	}
+}
+
+func TestValidateMissingTrackerKind(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	wfPath := writeCustomWorkflowFile(t, dir, noTrackerKindWorkflow())
+
+	var stdout, stderr bytes.Buffer
+	ctx := context.Background()
+
+	code := run(ctx, []string{"validate", wfPath}, &stdout, &stderr)
+	if code != 1 {
+		t.Fatalf("run(validate) = %d, want 1; stderr: %s", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "tracker.kind") {
+		t.Errorf("stderr = %q, want to contain %q", stderr.String(), "tracker.kind")
+	}
+}
+
+func TestValidateMissingTrackerKindJSON(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	wfPath := writeCustomWorkflowFile(t, dir, noTrackerKindWorkflow())
+
+	var stdout, stderr bytes.Buffer
+	ctx := context.Background()
+
+	code := run(ctx, []string{"validate", "--format", "json", wfPath}, &stdout, &stderr)
+	if code != 1 {
+		t.Fatalf("run(validate --format json) = %d, want 1", code)
+	}
+
+	var out validateOutput
+	if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
+		t.Fatalf("json.Unmarshal(%q) error: %v", stdout.String(), err)
+	}
+	if out.Valid {
+		t.Errorf("validateOutput.Valid = true, want false")
+	}
+
+	found := false
+	for _, d := range out.Errors {
+		if d.Check == "tracker.kind" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("validateOutput.Errors = %v, want a diagnostic with check %q", out.Errors, "tracker.kind")
+	}
+}
+
+func TestValidateUnregisteredAdapter(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	wfPath := writeCustomWorkflowFile(t, dir, unknownTrackerKindWorkflow())
+
+	var stdout, stderr bytes.Buffer
+	ctx := context.Background()
+
+	code := run(ctx, []string{"validate", wfPath}, &stdout, &stderr)
+	if code != 1 {
+		t.Fatalf("run(validate) = %d, want 1; stderr: %s", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "tracker_adapter") {
+		t.Errorf("stderr = %q, want to contain %q", stderr.String(), "tracker_adapter")
+	}
+}
+
+func TestValidateInvalidFormat(t *testing.T) {
+	t.Parallel()
+
+	var stdout, stderr bytes.Buffer
+	ctx := context.Background()
+
+	code := run(ctx, []string{"validate", "--format", "xml"}, &stdout, &stderr)
+	if code != 1 {
+		t.Fatalf("run(validate --format xml) = %d, want 1", code)
+	}
+	if !strings.Contains(stderr.String(), "invalid --format") {
+		t.Errorf("stderr = %q, want to contain %q", stderr.String(), "invalid --format")
+	}
+}
+
+func TestValidateExplicitTextFormat(t *testing.T) {
+	wfPath := setupRunDir(t)
+
+	var stdout, stderr bytes.Buffer
+	ctx := context.Background()
+
+	code := run(ctx, []string{"validate", "--format", "text", wfPath}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("run(validate --format text) = %d, want 0; stderr: %s", code, stderr.String())
+	}
+	if stderr.Len() != 0 {
+		t.Errorf("stderr = %q, want empty", stderr.String())
+	}
+}
+
+func TestValidateHelp(t *testing.T) {
+	t.Parallel()
+
+	var stdout, stderr bytes.Buffer
+	ctx := context.Background()
+
+	// --help must exit 0 — it is not a failure.
+	code := run(ctx, []string{"validate", "--help"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("run(validate --help) = %d, want 0", code)
+	}
+	if !strings.Contains(stderr.String(), "format") {
+		t.Errorf("stderr = %q, want usage text containing %q", stderr.String(), "format")
+	}
+}
+
+func TestValidateTooManyArgs(t *testing.T) {
+	t.Parallel()
+
+	var stdout, stderr bytes.Buffer
+	ctx := context.Background()
+
+	code := run(ctx, []string{"validate", "a.md", "b.md"}, &stdout, &stderr)
+	if code != 1 {
+		t.Fatalf("run(validate a.md b.md) = %d, want 1", code)
+	}
+	if !strings.Contains(stderr.String(), "too many arguments") {
+		t.Errorf("stderr = %q, want to contain %q", stderr.String(), "too many arguments")
+	}
+}
+
+func TestValidateUnresolvedEnvVar(t *testing.T) {
+	// t.Parallel omitted: t.Setenv requires a sequential test.
+
+	// Ensure the test env var expands to empty string. Using t.Setenv
+	// with "" has the same expansion result as the var being unset — both
+	// cause os.ExpandEnv to produce "". t.Setenv restores the original
+	// value after the test.
+	t.Setenv("SORTIE_TEST_NONEXISTENT_VAR_198", "")
+
+	dir := t.TempDir()
+	wfPath := writeCustomWorkflowFile(t, dir, jiraEmptyAPIKeyWorkflow())
+
+	var stdout, stderr bytes.Buffer
+	ctx := context.Background()
+
+	code := run(ctx, []string{"validate", wfPath}, &stdout, &stderr)
+	if code != 1 {
+		t.Fatalf("run(validate) = %d, want 1; stderr: %s", code, stderr.String())
+	}
+	// os.ExpandEnv produces "" for the unset var, then preflight check 3
+	// catches the empty api_key for the jira adapter.
+	if !strings.Contains(stderr.String(), "tracker.api_key") {
+		t.Errorf("stderr = %q, want to contain %q", stderr.String(), "tracker.api_key")
+	}
+}
+
+func TestValidateDoesNotCreateDB(t *testing.T) {
+	wfPath := setupRunDir(t)
+	wfDir := filepath.Dir(wfPath)
+
+	var stdout, stderr bytes.Buffer
+	ctx := context.Background()
+
+	code := run(ctx, []string{"validate", wfPath}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("run(validate) = %d, want 0; stderr: %s", code, stderr.String())
+	}
+
+	// The validate subcommand must not open the database.
+	dbPath := filepath.Join(wfDir, ".sortie.db")
+	if _, err := os.Stat(dbPath); err == nil {
+		t.Errorf("database file %s must not be created by validate subcommand", dbPath)
+	}
+}
+
+func TestValidateDoesNotStartWatcher(t *testing.T) {
+	wfPath := setupRunDir(t)
+
+	var stdout, stderr bytes.Buffer
+	ctx := context.Background()
+
+	// The validate subcommand must return promptly — no filesystem
+	// watcher goroutine is started (mgr.Start is never called).
+	start := time.Now()
+	code := run(ctx, []string{"validate", wfPath}, &stdout, &stderr)
+	elapsed := time.Since(start)
+
+	if code != 0 {
+		t.Fatalf("run(validate) = %d, want 0; stderr: %s", code, stderr.String())
+	}
+	const maxDuration = 2 * time.Second
+	if elapsed > maxDuration {
+		t.Errorf("run(validate) took %v, want < %v (possible watcher goroutine started)", elapsed, maxDuration)
+	}
+}

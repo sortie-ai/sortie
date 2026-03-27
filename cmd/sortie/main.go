@@ -1,11 +1,14 @@
 // Package main is the entry point for the Sortie orchestration service.
 // The binary accepts an optional positional workflow file path (default
-// ./WORKFLOW.md) and a --port flag for the HTTP observability server.
+// ./WORKFLOW.md), a --port flag for the HTTP observability server, and
+// a "validate" subcommand for offline workflow file validation.
 // Start with [run] for the complete startup and shutdown lifecycle.
 package main
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -25,6 +28,7 @@ import (
 	"github.com/sortie-ai/sortie/internal/logging"
 	"github.com/sortie-ai/sortie/internal/orchestrator"
 	"github.com/sortie-ai/sortie/internal/persistence"
+	"github.com/sortie-ai/sortie/internal/prompt"
 	"github.com/sortie-ai/sortie/internal/registry"
 	"github.com/sortie-ai/sortie/internal/server"
 	"github.com/sortie-ai/sortie/internal/tool/trackerapi"
@@ -46,6 +50,12 @@ func main() {
 }
 
 func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer) int {
+	// Subcommand dispatch — must occur before top-level flag parsing
+	// because subcommands define their own flag sets.
+	if len(args) > 0 && args[0] == "validate" {
+		return runValidate(ctx, args[1:], stdout, stderr)
+	}
+
 	fs := flag.NewFlagSet("sortie", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	port := fs.Int("port", 0, "HTTP server port")
@@ -57,7 +67,8 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 	// flag package accepts both forms regardless of how they are displayed.
 	singleDashFlags := map[string]bool{"dumpversion": true}
 	fs.Usage = func() {
-		fmt.Fprintf(fs.Output(), "Usage: sortie [flags] [workflow-path]\n\nFlags:\n") //nolint:errcheck // stderr write failure is unrecoverable
+		fmt.Fprintf(fs.Output(), "Usage: sortie [flags] [workflow-path]\n")                                 //nolint:errcheck // stderr write failure is unrecoverable
+		fmt.Fprintf(fs.Output(), "       sortie validate [--format text|json] [workflow-path]\n\nFlags:\n") //nolint:errcheck // stderr write failure is unrecoverable
 		fs.VisitAll(func(f *flag.Flag) {
 			prefix := "--"
 			if singleDashFlags[f.Name] {
@@ -463,4 +474,112 @@ func resolveServerPort(portFlag int, portFlagSet bool, extensions map[string]any
 		return 0, false, fmt.Errorf("invalid server.port value %d: must be between 0 and 65535", port)
 	}
 	return port, true, nil
+}
+
+// --- Validate subcommand ---
+
+type validateOutput struct {
+	Valid  bool           `json:"valid"`
+	Errors []validateDiag `json:"errors"`
+}
+
+type validateDiag struct {
+	Check   string `json:"check"`
+	Message string `json:"message"`
+}
+
+func runValidate(_ context.Context, args []string, stdout io.Writer, stderr io.Writer) int {
+	fs := flag.NewFlagSet("sortie validate", flag.ContinueOnError)
+	fs.SetOutput(stderr)
+	format := fs.String("format", "text", `Output format: "text" or "json"`)
+
+	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return 0
+		}
+		return 1
+	}
+
+	if *format != "text" && *format != "json" {
+		fmt.Fprintf(stderr, "sortie validate: invalid --format value %q: must be \"text\" or \"json\"\n", *format) //nolint:errcheck // stderr write failure is unrecoverable
+		return 1
+	}
+
+	path, err := resolveWorkflowPath(fs.Args())
+	if err != nil {
+		emitDiags(stdout, stderr, *format, []validateDiag{{Check: "args", Message: err.Error()}})
+		return 1
+	}
+
+	logger := slog.New(slog.DiscardHandler)
+
+	mgr, err := workflow.NewManager(path, logger,
+		workflow.WithValidateFunc(orchestrator.ValidateConfigForPromotion))
+	if err != nil {
+		emitDiags(stdout, stderr, *format, mapManagerError(err))
+		return 1
+	}
+
+	preflightParams := orchestrator.PreflightParams{
+		ReloadWorkflow:  mgr.Reload,
+		ConfigFunc:      mgr.Config,
+		TrackerRegistry: registry.Trackers,
+		AgentRegistry:   registry.Agents,
+	}
+
+	result := orchestrator.ValidateDispatchConfig(preflightParams)
+	if !result.OK() {
+		emitDiags(stdout, stderr, *format, mapPreflightErrors(result.Errors))
+		return 1
+	}
+
+	if *format == "json" {
+		writeJSON(stdout, validateOutput{Valid: true, Errors: []validateDiag{}})
+	}
+	return 0
+}
+
+func emitDiags(stdout io.Writer, stderr io.Writer, format string, diags []validateDiag) {
+	if format == "json" {
+		writeJSON(stdout, validateOutput{Valid: false, Errors: diags})
+		return
+	}
+	for _, d := range diags {
+		fmt.Fprintf(stderr, "%s: %s\n", d.Check, d.Message) //nolint:errcheck // stderr write failure is unrecoverable
+	}
+}
+
+func writeJSON(w io.Writer, v any) {
+	json.NewEncoder(w).Encode(v) //nolint:errcheck,gosec // stdout write failure is unrecoverable
+}
+
+func mapManagerError(err error) []validateDiag {
+	var we *workflow.WorkflowError
+	if errors.As(err, &we) {
+		check := "workflow_load"
+		if we.Kind == workflow.ErrFrontMatterNotMap {
+			check = "workflow_front_matter"
+		}
+		return []validateDiag{{Check: check, Message: err.Error()}}
+	}
+
+	var ce *config.ConfigError
+	if errors.As(err, &ce) {
+		return []validateDiag{{Check: "config." + ce.Field, Message: err.Error()}}
+	}
+
+	var te *prompt.TemplateError
+	if errors.As(err, &te) {
+		return []validateDiag{{Check: "template_parse", Message: err.Error()}}
+	}
+
+	return []validateDiag{{Check: "workflow_load", Message: err.Error()}}
+}
+
+func mapPreflightErrors(errs []orchestrator.PreflightError) []validateDiag {
+	diags := make([]validateDiag, len(errs))
+	for i, e := range errs {
+		diags[i] = validateDiag{Check: e.Check, Message: e.Message}
+	}
+	return diags
 }
