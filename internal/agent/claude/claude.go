@@ -17,7 +17,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -36,6 +38,11 @@ func init() {
 
 // Compile-time interface satisfaction check.
 var _ domain.AgentAdapter = (*ClaudeCodeAdapter)(nil)
+
+// ansiEscapeRE matches VT100/ANSI CSI SGR escape sequences emitted by CLI
+// tools for color and formatting (e.g. \x1b[31m, \x1b[0m). Compiled once at
+// program startup; applied inside stripClaudeMarkup.
+var ansiEscapeRE = regexp.MustCompile(`\x1b\[[0-9;]*[a-zA-Z]`)
 
 // inFlightTool tracks a tool_use block that has been seen but whose
 // corresponding tool_result has not yet arrived.
@@ -597,11 +604,13 @@ func (a *ClaudeCodeAdapter) EventStream() <-chan domain.AgentEvent {
 	return nil
 }
 
-// maxToolErrorLen is the maximum number of bytes written to
-// [domain.AgentEvent.Message] when a tool_result block carries
-// is_error: true. Longer outputs are truncated at the nearest UTF-8
-// rune boundary to keep log lines within a practical single-record size.
-const maxToolErrorLen = 512
+// maxToolErrorLen is the maximum byte budget for [domain.AgentEvent.Message]
+// when a tool_result block carries is_error: true. Output that exceeds this
+// limit is formatted as first-line-plus-tail: the first line of the error
+// output is preserved (typically an exit-code header), followed by the
+// omission marker "\n...\n", followed by the last bytes of the remaining
+// output — ensuring that CLI failure lines at the tail are always visible.
+const maxToolErrorLen = 2048
 
 // toolResultText extracts a human-readable string from a tool_result
 // content block. It handles the two shapes emitted by Claude Code:
@@ -633,20 +642,76 @@ func toolResultText(block rawContentBlock) string {
 	return ""
 }
 
-// truncateToolError returns s truncated to at most maxLen bytes at a
-// UTF-8 rune boundary. Returns s unchanged when len(s) <= maxLen.
+// stripClaudeMarkup removes Claude Code-specific markup from a raw error
+// string before it reaches [domain.AgentEvent.Message]. Two cleanups are
+// applied in sequence:
+//
+//  1. If s is wrapped in a <tool_use_error>…</tool_use_error> envelope
+//     (Claude Code's internal error protocol), the envelope is removed and
+//     the inner content is returned. Only the outermost wrapper is stripped;
+//     inner angle brackets are left intact.
+//
+//  2. ANSI SGR escape sequences (e.g. \x1b[31m…\x1b[0m) are removed so that
+//     structured log fields contain plain text that grep can match directly.
+//
+// The function degrades gracefully: if neither condition applies the original
+// string is returned unchanged.
+func stripClaudeMarkup(s string) string {
+	s = strings.TrimSpace(s)
+	const open = "<tool_use_error>"
+	const close = "</tool_use_error>"
+	if strings.HasPrefix(s, open) && strings.HasSuffix(s, close) {
+		s = strings.TrimSpace(s[len(open) : len(s)-len(close)])
+	}
+	return ansiEscapeRE.ReplaceAllString(s, "")
+}
+
+// tailBytes returns the last n bytes of s aligned to a valid UTF-8 rune
+// boundary. If len(s) <= n, s is returned unchanged. When the n-byte suffix
+// begins mid-rune, start is advanced past the continuation bytes so the
+// result always starts on a rune boundary; the result may be up to 3 bytes
+// shorter than n in that case.
+func tailBytes(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	start := len(s) - n
+	for start < len(s) && !utf8.RuneStart(s[start]) {
+		start++
+	}
+	return s[start:]
+}
+
+// truncateToolError returns s within maxLen bytes, preserving the most useful
+// content for operator log inspection. When s fits in maxLen it is returned
+// unchanged. For longer strings the algorithm is first-line-plus-tail:
+//
+//   - The first line of s (up to the first '\n') is kept as a header — for
+//     CLI tools this is typically an exit-code line such as "Exit code 2".
+//   - The omission marker "\n...\n" separates the header from the tail.
+//   - The remaining byte budget after the header and marker is filled by the
+//     last bytes of s[after first line], so that failure lines at the tail
+//     (e.g. "FAIL pkg 0.5s") are always included.
+//
+// When no newline is present, or when the first line alone exceeds the budget,
+// tailBytes(s, maxLen) is returned instead. All truncation respects UTF-8 rune
+// boundaries.
 func truncateToolError(s string, maxLen int) string {
 	if len(s) <= maxLen {
 		return s
 	}
-	n := 0
-	for i, r := range s {
-		if n+utf8.RuneLen(r) > maxLen {
-			return s[:i]
-		}
-		n += utf8.RuneLen(r)
+	nlPos := strings.IndexByte(s, '\n')
+	if nlPos == -1 {
+		return tailBytes(s, maxLen)
 	}
-	return s
+	firstLine := s[:nlPos]
+	const sep = "\n...\n"
+	tailBudget := maxLen - len(firstLine) - len(sep)
+	if tailBudget <= 0 {
+		return tailBytes(s, maxLen)
+	}
+	tail := tailBytes(s[nlPos+1:], tailBudget)
+	return firstLine + sep + tail
 }
 
 // processToolBlocks scans content blocks for tool_use and tool_result
@@ -679,7 +744,7 @@ func processToolBlocks(
 			msg := "tool_result: " + toolName
 			if block.IsError {
 				if errText := toolResultText(block); errText != "" {
-					msg = truncateToolError(errText, maxToolErrorLen)
+					msg = truncateToolError(stripClaudeMarkup(errText), maxToolErrorLen)
 				}
 			}
 			onEvent(domain.AgentEvent{

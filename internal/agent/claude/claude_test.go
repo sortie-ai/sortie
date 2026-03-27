@@ -3,6 +3,7 @@ package claude
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -12,6 +13,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	"github.com/sortie-ai/sortie/internal/domain"
@@ -1750,21 +1752,22 @@ func TestToolResultText(t *testing.T) {
 }
 
 // TestTruncateToolError verifies the truncateToolError helper enforces the
-// byte ceiling while preserving UTF-8 rune boundaries.
+// byte ceiling while preserving UTF-8 rune boundaries using the
+// first-line-plus-tail algorithm.
 func TestTruncateToolError(t *testing.T) {
 	t.Parallel()
 
-	// 172 CJK runes × 3 bytes = 516 bytes. The 512-byte boundary falls inside
-	// the 171st rune (bytes 510-512), so truncation must stop at byte 510
-	// (170 full runes) to avoid splitting a rune.
+	// 172 CJK runes × 3 bytes = 516 bytes.
 	cjk := strings.Repeat("一", 172)
 
 	tests := []struct {
 		name     string
 		input    string
 		maxLen   int
-		wantLen  int  // expected len(result); 0 means expect unchanged
-		wantSame bool // true if result must equal input
+		wantLen  int    // expected len(result); 0 means check wantSame/wantHead/wantTail
+		wantSame bool   // true if result must equal input
+		wantHead string // if non-empty, result must start with this
+		wantTail string // if non-empty, result must end with this
 	}{
 		{
 			name:     "short_string",
@@ -1779,16 +1782,56 @@ func TestTruncateToolError(t *testing.T) {
 			wantSame: true,
 		},
 		{
+			// Pin to 512 to preserve as a boundary test. No newline in
+			// input → tailBytes(s, 512) → last 512 bytes.
 			name:    "600_ascii_bytes",
 			input:   strings.Repeat("a", 600),
-			maxLen:  maxToolErrorLen,
+			maxLen:  512,
 			wantLen: 512,
 		},
 		{
+			// Pin to 512 to preserve CJK rune-boundary coverage.
+			// tailBytes(cjk, 512): 512 mod 3 = 1 (continuation byte),
+			// advances to next rune start → 510 bytes (170 full runes).
 			name:    "multibyte_mid_rune_boundary",
 			input:   cjk,
-			maxLen:  maxToolErrorLen,
+			maxLen:  512,
 			wantLen: 510, // 170 full CJK runes × 3 bytes
+		},
+		{
+			name:     "multiline_tail_preserving",
+			input:    "Exit code 2\n" + strings.Repeat("ok  \tpkg/a\t0.04s\n", 60) + "FAIL pkg 0.5s\n",
+			maxLen:   512,
+			wantHead: "Exit code 2",
+			wantTail: "FAIL pkg 0.5s\n",
+		},
+		{
+			name:     "multiline_fits_unchanged",
+			input:    "Exit code 2\nFAIL pkg 0.5s\n",
+			maxLen:   512,
+			wantSame: true,
+		},
+		{
+			// No newline → tailBytes fallback.
+			name:    "no_newline_tail_only",
+			input:   strings.Repeat("x", 600),
+			maxLen:  512,
+			wantLen: 512,
+		},
+		{
+			// First line alone > maxLen → tailBudget <= 0 → tailBytes fallback.
+			name:    "first_line_exceeds_budget",
+			input:   strings.Repeat("a", 600) + "\nFAIL pkg",
+			maxLen:  512,
+			wantLen: 512,
+		},
+		{
+			// Tail lands mid-rune; tailBytes must advance to valid rune start.
+			name:     "multiline_tail_utf8_boundary",
+			input:    "Exit code 1\n" + strings.Repeat("一", 200) + "\nFAIL",
+			maxLen:   512,
+			wantHead: "Exit code 1",
+			wantTail: "FAIL",
 		},
 	}
 
@@ -1804,7 +1847,7 @@ func TestTruncateToolError(t *testing.T) {
 				}
 				return
 			}
-			if len(got) != tt.wantLen {
+			if tt.wantLen != 0 && len(got) != tt.wantLen {
 				t.Errorf("truncateToolError() len = %d, want %d", len(got), tt.wantLen)
 			}
 			if len(got) > tt.maxLen {
@@ -1813,6 +1856,251 @@ func TestTruncateToolError(t *testing.T) {
 			if !utf8.ValidString(got) {
 				t.Error("truncateToolError() returned invalid UTF-8")
 			}
+			if tt.wantHead != "" && !strings.HasPrefix(got, tt.wantHead) {
+				t.Errorf("truncateToolError() head = %q, want prefix %q", got[:min(len(got), 40)], tt.wantHead)
+			}
+			if tt.wantTail != "" && !strings.HasSuffix(got, tt.wantTail) {
+				suffix := got[max(0, len(got)-40):]
+				t.Errorf("truncateToolError() tail = %q, want suffix %q", suffix, tt.wantTail)
+			}
 		})
+	}
+}
+
+// TestStripClaudeMarkup verifies that stripClaudeMarkup removes the
+// <tool_use_error> XML wrapper and ANSI escape sequences from error text.
+func TestStripClaudeMarkup(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{
+			name:  "xml_wrapped",
+			input: "<tool_use_error>Found 3 matches of the string to replace, but replace_all is false.</tool_use_error>",
+			want:  "Found 3 matches of the string to replace, but replace_all is false.",
+		},
+		{
+			name:  "xml_wrapped_with_surrounding_whitespace",
+			input: "  <tool_use_error>some error</tool_use_error>  ",
+			want:  "some error",
+		},
+		{
+			name:  "no_xml",
+			input: "bash: command not found: foobar",
+			want:  "bash: command not found: foobar",
+		},
+		{
+			name:  "partial_open_tag",
+			input: "<tool_use_error>only open tag",
+			want:  "<tool_use_error>only open tag",
+		},
+		{
+			name:  "partial_close_tag",
+			input: "only close tag</tool_use_error>",
+			want:  "only close tag</tool_use_error>",
+		},
+		{
+			name:  "ansi_color_codes",
+			input: "\x1b[31mFAIL\x1b[0m pkg/foo \u2014 some assertion",
+			want:  "FAIL pkg/foo \u2014 some assertion",
+		},
+		{
+			name:  "xml_with_ansi_inside",
+			input: "<tool_use_error>\x1b[1mfile not found\x1b[0m</tool_use_error>",
+			want:  "file not found",
+		},
+		{
+			name:  "empty",
+			input: "",
+			want:  "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := stripClaudeMarkup(tt.input)
+			if got != tt.want {
+				t.Errorf("stripClaudeMarkup(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestProcessToolBlocks_XMLStripping verifies that processToolBlocks strips
+// the <tool_use_error> XML wrapper from tool error messages before emitting
+// events.
+func TestProcessToolBlocks_XMLStripping(t *testing.T) {
+	t.Parallel()
+
+	xmlContent := `"<tool_use_error>Found 3 matches of the string to replace, but replace_all is false. Use str_replace API with replace_all=true to replace all instances.</tool_use_error>"`
+	blocks := []rawContentBlock{
+		{
+			Type:      "tool_result",
+			ToolUseID: "toolu_test01",
+			IsError:   true,
+			Content:   json.RawMessage(xmlContent),
+		},
+	}
+	inFlight := map[string]inFlightTool{
+		"toolu_test01": {Name: "Edit", Timestamp: time.Now()},
+	}
+
+	var events []domain.AgentEvent
+	processToolBlocks(blocks, inFlight, time.Now(), time.Now(), func(e domain.AgentEvent) {
+		events = append(events, e)
+	})
+
+	if len(events) != 1 {
+		t.Fatalf("processToolBlocks() emitted %d events, want 1", len(events))
+	}
+	e := events[0]
+	if e.Type != domain.EventToolResult {
+		t.Fatalf("event.Type = %q, want %q", e.Type, domain.EventToolResult)
+	}
+	if !e.ToolError {
+		t.Error("event.ToolError = false, want true")
+	}
+	if strings.Contains(e.Message, "<tool_use_error>") {
+		t.Errorf("event.Message contains <tool_use_error>: %q", e.Message)
+	}
+	if strings.Contains(e.Message, "</tool_use_error>") {
+		t.Errorf("event.Message contains </tool_use_error>: %q", e.Message)
+	}
+	if !strings.Contains(e.Message, "Found 3 matches") {
+		t.Errorf("event.Message missing expected text: %q", e.Message)
+	}
+}
+
+// TestProcessToolBlocks_TailTruncation verifies that processToolBlocks
+// preserves the first line and the failure-bearing tail of large CLI output
+// within the maxToolErrorLen byte budget.
+func TestProcessToolBlocks_TailTruncation(t *testing.T) {
+	t.Parallel()
+
+	// Build a content string that exceeds 2048 bytes:
+	// "Exit code 2\n" + 80 ok-lines + "FAIL ...\n"
+	var b strings.Builder
+	b.WriteString("Exit code 2\n")
+	for range 80 {
+		b.WriteString("ok  \tgithub.com/example/pkg\t0.042s\n")
+	}
+	b.WriteString("FAIL github.com/example/fail_pkg 0.5s\n")
+	largeOutput := b.String()
+
+	// Wrap in JSON string for rawContentBlock.Content.
+	contentJSON, err := json.Marshal(largeOutput)
+	if err != nil {
+		t.Fatalf("json.Marshal: %v", err)
+	}
+
+	blocks := []rawContentBlock{
+		{
+			Type:      "tool_result",
+			ToolUseID: "toolu_tail01",
+			IsError:   true,
+			Content:   json.RawMessage(contentJSON),
+		},
+	}
+	inFlight := map[string]inFlightTool{
+		"toolu_tail01": {Name: "Bash", Timestamp: time.Now()},
+	}
+
+	var events []domain.AgentEvent
+	processToolBlocks(blocks, inFlight, time.Now(), time.Now(), func(e domain.AgentEvent) {
+		events = append(events, e)
+	})
+
+	if len(events) != 1 {
+		t.Fatalf("processToolBlocks() emitted %d events, want 1", len(events))
+	}
+	msg := events[0].Message
+	if !strings.Contains(msg, "Exit code 2") {
+		t.Errorf("message missing head line: %q", msg[:min(len(msg), 80)])
+	}
+	if !strings.Contains(msg, "FAIL github.com/example/fail_pkg 0.5s") {
+		suffix := msg[max(0, len(msg)-80):]
+		t.Errorf("message missing FAIL tail: %q", suffix)
+	}
+	if len(msg) > maxToolErrorLen {
+		t.Errorf("len(msg) = %d, exceeds maxToolErrorLen %d", len(msg), maxToolErrorLen)
+	}
+	if !utf8.ValidString(msg) {
+		t.Error("message is not valid UTF-8")
+	}
+}
+
+// TestRunTurn_ToolResultXMLWrappedError verifies end-to-end that an
+// XML-wrapped tool error from the Claude Code subprocess has its
+// <tool_use_error> envelope stripped before reaching the emitted event.
+func TestRunTurn_ToolResultXMLWrappedError(t *testing.T) {
+	t.Parallel()
+
+	fixture := loadFixture(t, "tool_use_error_xml_wrapped.jsonl")
+
+	tmpDir := t.TempDir()
+	script := writeScript(t, tmpDir, fmt.Sprintf(`cat <<'JSONL'
+%s
+JSONL
+exit 0
+`, string(fixture)))
+
+	adapter, _ := NewClaudeCodeAdapter(map[string]any{})
+	session, err := adapter.StartSession(context.Background(), domain.StartSessionParams{
+		WorkspacePath: tmpDir,
+		AgentConfig:   domain.AgentConfig{Command: script},
+	})
+	if err != nil {
+		t.Fatalf("StartSession() error = %v", err)
+	}
+
+	var events []domain.AgentEvent
+	result, err := adapter.RunTurn(context.Background(), session, domain.RunTurnParams{
+		Prompt: "edit file",
+		OnEvent: func(e domain.AgentEvent) {
+			events = append(events, e)
+		},
+	})
+	if err != nil {
+		t.Fatalf("RunTurn() error = %v", err)
+	}
+	if result.ExitReason != domain.EventTurnCompleted {
+		t.Errorf("ExitReason = %q, want %q", result.ExitReason, domain.EventTurnCompleted)
+	}
+
+	var toolResults []domain.AgentEvent
+	for _, e := range events {
+		if e.Type == domain.EventToolResult {
+			toolResults = append(toolResults, e)
+		}
+	}
+
+	if len(toolResults) != 1 {
+		eventTypes := make([]string, len(events))
+		for i, e := range events {
+			eventTypes[i] = string(e.Type)
+		}
+		t.Fatalf("EventToolResult count = %d, want 1; all events = %v", len(toolResults), eventTypes)
+	}
+
+	got := toolResults[0]
+	if got.ToolName != "Edit" {
+		t.Errorf("ToolName = %q, want %q", got.ToolName, "Edit")
+	}
+	if !got.ToolError {
+		t.Error("ToolError = false, want true")
+	}
+	if strings.Contains(got.Message, "<tool_use_error>") {
+		t.Errorf("Message contains <tool_use_error>: %q", got.Message)
+	}
+	if strings.Contains(got.Message, "</tool_use_error>") {
+		t.Errorf("Message contains </tool_use_error>: %q", got.Message)
+	}
+	if !strings.Contains(got.Message, "Found 3 matches") {
+		t.Errorf("Message missing expected text: %q", got.Message)
 	}
 }
