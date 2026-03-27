@@ -65,6 +65,7 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 	fs := flag.NewFlagSet("sortie", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	logLevel := fs.String("log-level", "", `Log verbosity: "debug", "info", "warn", "error" (default "info")`)
+	dryRun := fs.Bool("dry-run", false, "Run one poll cycle without spawning agents or writing to the database, then exit")
 	port := fs.Int("port", 0, "HTTP server port")
 	showVersion := fs.Bool("version", false, "Print program's version information and quit")
 	dumpVersion := fs.Bool("dumpversion", false, "Print the version of the program and don't do anything else")
@@ -182,13 +183,46 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 		slog.String("version", Version),
 		slog.String("workflow_path", path),
 	}
-	if portSet {
+	if portSet && !*dryRun {
 		logAttrs = append(logAttrs, slog.Int("port", *port))
 	}
 	if effectiveLevel != slog.LevelInfo {
 		logAttrs = append(logAttrs, slog.String("log_level", effectiveLevel.String()))
 	}
-	logger.Info("sortie starting", logAttrs...)
+	if *dryRun {
+		logger.Info("sortie dry-run starting", logAttrs...)
+	} else {
+		logger.Info("sortie starting", logAttrs...)
+	}
+
+	if *dryRun && portSet {
+		logger.Debug("dry-run: --port flag ignored, HTTP server not started")
+	}
+
+	// --- Tracker adapter construction (shared by normal and dry-run paths) ---
+
+	trackerCtor, err := registry.Trackers.Get(cfg.Tracker.Kind)
+	if err != nil {
+		logger.Error("unknown tracker kind", slog.String("kind", cfg.Tracker.Kind), slog.Any("error", err))
+		return 1
+	}
+	trackerCfgMap := trackerConfigMap(cfg.Tracker)
+	trackerCfgMap["user_agent"] = "sortie/" + Version
+	mergeExtensions(trackerCfgMap, cfg.Extensions, cfg.Tracker.Kind)
+	trackerAdapter, err := trackerCtor(trackerCfgMap)
+	if err != nil {
+		logger.Error("failed to construct tracker adapter", slog.Any("error", err))
+		return 1
+	}
+	if closer, ok := trackerAdapter.(io.Closer); ok {
+		defer closer.Close() //nolint:errcheck // best-effort cleanup at shutdown
+	}
+
+	// --- Dry-run branch: single poll cycle, no database or agents ---
+
+	if *dryRun {
+		return runDryRun(ctx, cfg, logger, trackerAdapter)
+	}
 
 	// --- Database open, migrate, and recovery ---
 
@@ -237,24 +271,7 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 	)
 	orchestrator.PopulateRetries(state, pendingRetries)
 
-	// --- Adapter construction from registry ---
-
-	trackerCtor, err := registry.Trackers.Get(cfg.Tracker.Kind)
-	if err != nil {
-		logger.Error("unknown tracker kind", slog.String("kind", cfg.Tracker.Kind), slog.Any("error", err))
-		return 1
-	}
-	trackerCfgMap := trackerConfigMap(cfg.Tracker)
-	trackerCfgMap["user_agent"] = "sortie/" + Version
-	mergeExtensions(trackerCfgMap, cfg.Extensions, cfg.Tracker.Kind)
-	trackerAdapter, err := trackerCtor(trackerCfgMap)
-	if err != nil {
-		logger.Error("failed to construct tracker adapter", slog.Any("error", err))
-		return 1
-	}
-	if closer, ok := trackerAdapter.(io.Closer); ok {
-		defer closer.Close() //nolint:errcheck // best-effort cleanup at shutdown
-	}
+	// --- Agent adapter construction ---
 
 	agentCtor, err := registry.Agents.Get(cfg.Agent.Kind)
 	if err != nil {
@@ -548,6 +565,118 @@ func resolveLogLevel(flagValue string, flagSet bool, extensions map[string]any) 
 	}
 
 	return logging.ParseLevel(levelStr)
+}
+
+// --- Dry-run mode ---
+
+// runDryRun executes a single poll cycle in read-only mode: fetches
+// candidate issues, computes dispatch eligibility, logs results, and
+// returns an exit code. No database is opened, no agents are spawned,
+// and no state is written. The caller constructs and defers closing
+// the tracker adapter.
+func runDryRun(ctx context.Context, cfg config.ServiceConfig, logger *slog.Logger, trackerAdapter domain.TrackerAdapter) int {
+	issues, err := trackerAdapter.FetchCandidateIssues(ctx)
+	if err != nil {
+		logger.Error("dry-run: failed to fetch candidate issues", slog.Any("error", err))
+		return 1
+	}
+
+	sorted := orchestrator.SortForDispatch(issues)
+
+	state := orchestrator.NewState(
+		cfg.Polling.IntervalMS,
+		cfg.Agent.MaxConcurrentAgents,
+		cfg.Agent.MaxConcurrentByState,
+		orchestrator.AgentTotals{},
+	)
+
+	sshHosts, maxPerHost := orchestrator.ParseWorkerConfig(cfg.Extensions)
+	hostPool := orchestrator.NewHostPool(sshHosts, maxPerHost)
+
+	activeSet := dryRunStateSet(cfg.Tracker.ActiveStates)
+	terminalSet := dryRunStateSet(cfg.Tracker.TerminalStates)
+
+	var eligible, ineligible int
+	for i, issue := range sorted {
+		globalAvail := orchestrator.GlobalAvailableSlots(
+			state.MaxConcurrentAgents, len(state.Running))
+
+		if hostPool.IsSSHEnabled() && !hostPool.HasCapacity() {
+			for _, remaining := range sorted[i:] {
+				ineligible++
+				logger.Info("dry-run: candidate",
+					slog.String("issue_id", remaining.ID),
+					slog.String("identifier", remaining.Identifier),
+					slog.String("state", remaining.State),
+					slog.Bool("would_dispatch", false),
+					slog.String("skip_reason", "ssh_hosts_at_capacity"),
+				)
+			}
+			break
+		}
+
+		stateRunning := orchestrator.RunningCountByState(state.Running, issue.State)
+		stateAvail := orchestrator.StateAvailableSlots(
+			issue.State, state.MaxConcurrentByState, stateRunning, globalAvail)
+
+		wouldDispatch := orchestrator.ShouldDispatchWithSets(
+			issue, state, activeSet, terminalSet) && globalAvail > 0 && stateAvail > 0
+
+		if wouldDispatch && hostPool.IsSSHEnabled() {
+			_, ok := hostPool.AcquireHost(issue.ID, "")
+			if !ok {
+				wouldDispatch = false
+			}
+		}
+
+		logFields := []any{
+			slog.String("issue_id", issue.ID),
+			slog.String("identifier", issue.Identifier),
+			slog.String("title", issue.Title),
+			slog.String("state", issue.State),
+			slog.Bool("would_dispatch", wouldDispatch),
+			slog.Int("global_slots_available", globalAvail),
+			slog.Int("state_slots_available", stateAvail),
+		}
+		if issue.Priority != nil {
+			logFields = append(logFields, slog.Int("priority", *issue.Priority))
+		}
+		if hostPool.IsSSHEnabled() {
+			logFields = append(logFields, slog.String("ssh_host", hostPool.HostFor(issue.ID)))
+		}
+
+		logger.Info("dry-run: candidate", logFields...)
+
+		if wouldDispatch {
+			eligible++
+			state.Claimed[issue.ID] = struct{}{}
+			state.Running[issue.ID] = &orchestrator.RunningEntry{
+				Identifier: issue.Identifier,
+				Issue:      issue,
+			}
+		} else {
+			ineligible++
+		}
+	}
+
+	logger.Info("dry-run: complete",
+		slog.Int("candidates_fetched", len(issues)),
+		slog.Int("would_dispatch", eligible),
+		slog.Int("ineligible", ineligible),
+		slog.Int("max_concurrent_agents", cfg.Agent.MaxConcurrentAgents),
+	)
+
+	return 0
+}
+
+// dryRunStateSet builds a set of lowercase state names for O(1) membership
+// testing. Mirrors orchestrator.stateSet which is unexported.
+func dryRunStateSet(states []string) map[string]struct{} {
+	set := make(map[string]struct{}, len(states))
+	for _, s := range states {
+		set[strings.ToLower(s)] = struct{}{}
+	}
+	return set
 }
 
 // --- Validate subcommand ---
