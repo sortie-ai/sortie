@@ -42,6 +42,11 @@ import (
 	_ "github.com/sortie-ai/sortie/internal/tracker/jira"
 )
 
+// serverShutdownTimeout controls how long [run] waits for the HTTP server
+// to drain active connections on graceful shutdown. Overridden in tests to
+// exercise the shutdown-error path without a 5-second wait.
+var serverShutdownTimeout = 5 * time.Second
+
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	code := run(ctx, os.Args[1:], os.Stdout, os.Stderr)
@@ -211,6 +216,9 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 		logger.Error("failed to construct tracker adapter", slog.Any("error", err))
 		return 1
 	}
+	if closer, ok := trackerAdapter.(io.Closer); ok {
+		defer closer.Close() //nolint:errcheck // best-effort cleanup at shutdown
+	}
 
 	agentCtor, err := registry.Agents.Get(cfg.Agent.Kind)
 	if err != nil {
@@ -223,6 +231,9 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 	if err != nil {
 		logger.Error("failed to construct agent adapter", slog.Any("error", err))
 		return 1
+	}
+	if closer, ok := agentAdapter.(io.Closer); ok {
+		defer closer.Close() //nolint:errcheck // best-effort cleanup at shutdown
 	}
 
 	// --- Startup terminal workspace cleanup ---
@@ -331,7 +342,7 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 			logger.Info("http server listening",
 				slog.String("addr", ln.Addr().String()),
 			)
-			if err := srv.Serve(ln); err != nil && err != http.ErrServerClosed {
+			if err := srv.Serve(ln); err != nil && !errors.Is(err, http.ErrServerClosed) {
 				logger.Error("http server error", slog.Any("error", err))
 			}
 		}()
@@ -351,7 +362,7 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 	o.Run(ctx)
 
 	if srv != nil {
-		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), serverShutdownTimeout)
 		defer shutdownCancel()
 		if err := srv.Shutdown(shutdownCtx); err != nil {
 			logger.Error("http server shutdown error", slog.Any("error", err))
@@ -538,14 +549,21 @@ func runValidate(_ context.Context, args []string, stdout io.Writer, stderr io.W
 	}
 
 	if *format == "json" {
-		writeJSON(stdout, validateOutput{Valid: true, Errors: []validateDiag{}})
+		if err := writeJSON(stdout, validateOutput{Valid: true, Errors: []validateDiag{}}); err != nil {
+			fmt.Fprintf(stderr, "sortie validate: failed to write JSON output: %s\n", err) //nolint:errcheck // stderr write failure is unrecoverable
+			return 1
+		}
 	}
 	return 0
 }
 
 func emitDiags(stdout io.Writer, stderr io.Writer, format string, diags []validateDiag) {
 	if format == "json" {
-		writeJSON(stdout, validateOutput{Valid: false, Errors: diags})
+		if err := writeJSON(stdout, validateOutput{Valid: false, Errors: diags}); err != nil {
+			for _, d := range diags {
+				fmt.Fprintf(stderr, "%s: %s\n", d.Check, d.Message) //nolint:errcheck // stderr write failure is unrecoverable
+			}
+		}
 		return
 	}
 	for _, d := range diags {
@@ -553,8 +571,8 @@ func emitDiags(stdout io.Writer, stderr io.Writer, format string, diags []valida
 	}
 }
 
-func writeJSON(w io.Writer, v any) {
-	json.NewEncoder(w).Encode(v) //nolint:errcheck,gosec // stdout write failure is unrecoverable
+func writeJSON(w io.Writer, v any) error {
+	return json.NewEncoder(w).Encode(v)
 }
 
 func mapManagerError(err error) []validateDiag {
