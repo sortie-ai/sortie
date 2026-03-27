@@ -205,6 +205,7 @@ jobs:
           args: release ${{ inputs.dry_run && '--skip=publish --skip=announce' || '' }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAP_GITHUB_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
 
       - name: Release summary
         if: ${{ !inputs.dry_run }}
