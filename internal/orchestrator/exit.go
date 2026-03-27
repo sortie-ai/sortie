@@ -196,6 +196,7 @@ func HandleWorkerExit(state *State, result WorkerResult, params HandleWorkerExit
 		CompletedAt:  now.Format(time.RFC3339),
 		Status:       status,
 		Error:        errorStringPtr(result.Error),
+		WorkflowFile: entry.WorkflowFile,
 	}
 	if _, err := params.Store.AppendRunHistory(ctx, runHistory); err != nil {
 		log.Error("failed to persist run history",

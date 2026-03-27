@@ -33,6 +33,23 @@ type RefreshFunc func() bool
 // If nil, available slots defaults to 0.
 type SlotFunc func() int
 
+// RunHistoryFunc returns recent run history entries for the dashboard.
+// Called on each dashboard render. If nil, the run history section
+// is omitted.
+type RunHistoryFunc func(ctx context.Context, limit int) ([]RunHistoryEntry, error)
+
+// RunHistoryEntry is a server-layer view of a completed run attempt.
+// Decoupled from persistence types to avoid leaking internal packages.
+type RunHistoryEntry struct {
+	Identifier   string
+	Attempt      int
+	Status       string
+	WorkflowFile string
+	StartedAt    string
+	CompletedAt  string
+	Error        *string
+}
+
 // DBPingFunc checks whether the SQLite database is accessible.
 // Returns nil on success, an error on failure. Called on each
 // GET /readyz request.
@@ -86,6 +103,11 @@ type Params struct {
 	// successfully loaded at least once. Called on each GET /readyz.
 	// When nil, the workflow check always reports "pass".
 	WorkflowLoadedFn func() bool
+
+	// RunHistoryFn returns recent run history entries for the
+	// dashboard. Called on each dashboard render. When nil, the run
+	// history section is omitted.
+	RunHistoryFn RunHistoryFunc
 }
 
 // Server is the embedded HTTP server for JSON API, dashboard, and
@@ -106,6 +128,7 @@ type Server struct {
 	dbPingFn         DBPingFunc
 	preflightFn      func() bool
 	workflowLoadedFn func() bool
+	runHistoryFn     RunHistoryFunc
 }
 
 // Compile-time assertion: Server satisfies orchestrator.Observer.
@@ -147,6 +170,7 @@ func New(params Params) *Server {
 		dbPingFn:         params.DBPingFn,
 		preflightFn:      params.PreflightFn,
 		workflowLoadedFn: params.WorkflowLoadedFn,
+		runHistoryFn:     params.RunHistoryFn,
 	}
 
 	// Dashboard route. Method-specific pattern so non-GET methods

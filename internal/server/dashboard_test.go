@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"io"
 	"log/slog"
 	"net/http"
@@ -785,5 +786,157 @@ func TestHandleDashboard_ExtendedFieldsRendered(t *testing.T) {
 		if !strings.Contains(dr.Body, want) {
 			t.Errorf("body missing %q", want)
 		}
+	}
+}
+
+func TestMapRunHistoryEntries(t *testing.T) {
+	t.Parallel()
+
+	errMsg := "agent crashed"
+	tests := []struct {
+		name         string
+		input        RunHistoryEntry
+		wantWF       string
+		wantDuration string
+		wantError    string
+	}{
+		{
+			name: "non-empty workflow file passed through",
+			input: RunHistoryEntry{
+				Identifier:   "MT-1",
+				Attempt:      1,
+				Status:       "succeeded",
+				WorkflowFile: "WORKFLOW.md",
+				StartedAt:    "2026-03-24T10:00:00Z",
+				CompletedAt:  "2026-03-24T10:00:30Z",
+			},
+			wantWF:       "WORKFLOW.md",
+			wantDuration: "30s",
+			wantError:    "",
+		},
+		{
+			name: "empty workflow file becomes em dash",
+			input: RunHistoryEntry{
+				Identifier:   "MT-2",
+				Attempt:      1,
+				Status:       "succeeded",
+				WorkflowFile: "",
+				StartedAt:    "2026-03-24T10:00:00Z",
+				CompletedAt:  "2026-03-24T10:01:00Z",
+			},
+			wantWF:       "\u2014",
+			wantDuration: "1m 0s",
+			wantError:    "",
+		},
+		{
+			name: "non-nil error extracted",
+			input: RunHistoryEntry{
+				Identifier:   "MT-3",
+				Attempt:      2,
+				Status:       "failed",
+				WorkflowFile: "backend.WORKFLOW.md",
+				StartedAt:    "2026-03-24T10:00:00Z",
+				CompletedAt:  "2026-03-24T10:02:00Z",
+				Error:        &errMsg,
+			},
+			wantWF:       "backend.WORKFLOW.md",
+			wantDuration: "2m 0s",
+			wantError:    "agent crashed",
+		},
+		{
+			name: "invalid RFC3339 dates produce empty duration",
+			input: RunHistoryEntry{
+				Identifier:   "MT-4",
+				Attempt:      1,
+				Status:       "failed",
+				WorkflowFile: "WORKFLOW.md",
+				StartedAt:    "not-a-date",
+				CompletedAt:  "also-not-a-date",
+			},
+			wantWF:       "WORKFLOW.md",
+			wantDuration: "",
+			wantError:    "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := mapRunHistoryEntries([]RunHistoryEntry{tt.input})
+
+			if len(got) != 1 {
+				t.Fatalf("len = %d, want 1", len(got))
+			}
+			e := got[0]
+			if e.WorkflowFile != tt.wantWF {
+				t.Errorf("WorkflowFile = %q, want %q", e.WorkflowFile, tt.wantWF)
+			}
+			if e.Duration != tt.wantDuration {
+				t.Errorf("Duration = %q, want %q", e.Duration, tt.wantDuration)
+			}
+			if e.Error != tt.wantError {
+				t.Errorf("Error = %q, want %q", e.Error, tt.wantError)
+			}
+		})
+	}
+}
+
+func TestHandleDashboard_RunHistory(t *testing.T) {
+	t.Parallel()
+
+	snap := orchestrator.RuntimeSnapshotResult{
+		GeneratedAt: time.Date(2026, 3, 24, 12, 0, 0, 0, time.UTC),
+	}
+
+	srv := New(Params{
+		SnapshotFn: fixedSnapshot(snap),
+		RefreshFn:  acceptingRefresh(),
+		Logger:     slog.New(slog.DiscardHandler),
+		StartedAt:  time.Date(2026, 3, 24, 10, 0, 0, 0, time.UTC),
+		RunHistoryFn: func(_ context.Context, _ int) ([]RunHistoryEntry, error) {
+			return []RunHistoryEntry{
+				{
+					Identifier:   "MT-100",
+					Attempt:      1,
+					Status:       "succeeded",
+					WorkflowFile: "backend.WORKFLOW.md",
+					StartedAt:    "2026-03-24T09:00:00Z",
+					CompletedAt:  "2026-03-24T09:05:00Z",
+				},
+			}, nil
+		},
+	})
+	ts := httptest.NewServer(srv.Mux())
+	t.Cleanup(ts.Close)
+
+	dr := getDashboard(t, ts, "/")
+
+	if dr.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want %d", dr.StatusCode, http.StatusOK)
+	}
+	for _, want := range []string{"MT-100", "backend.WORKFLOW.md", "Run History"} {
+		if !strings.Contains(dr.Body, want) {
+			t.Errorf("body missing %q", want)
+		}
+	}
+}
+
+func TestHandleDashboard_NoRunHistoryFn(t *testing.T) {
+	t.Parallel()
+
+	snap := orchestrator.RuntimeSnapshotResult{
+		GeneratedAt: time.Date(2026, 3, 24, 12, 0, 0, 0, time.UTC),
+	}
+
+	// No RunHistoryFn → run history section must be omitted entirely.
+	ts := dashboardServer(t, fixedSnapshot(snap), "1.0.0", nil)
+	dr := getDashboard(t, ts, "/")
+
+	if dr.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want %d", dr.StatusCode, http.StatusOK)
+	}
+	if strings.Contains(dr.Body, "Run History") {
+		t.Error("body contains 'Run History', want omitted when RunHistoryFn is nil")
 	}
 }

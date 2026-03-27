@@ -805,6 +805,76 @@ func TestAppendRunHistory_DBError(t *testing.T) {
 	}
 }
 
+func TestAppendRunHistory_WorkflowFile(t *testing.T) {
+	t.Parallel()
+
+	s := openTestStore(t)
+	migrateOrFatal(t, s)
+	ctx := context.Background()
+
+	run := newTestRun(1)
+	run.WorkflowFile = "backend.WORKFLOW.md"
+	appendOrFatal(t, s, run)
+
+	entries, err := s.QueryRunHistoryByIssue(ctx, run.IssueID)
+	if err != nil {
+		t.Fatalf("QueryRunHistoryByIssue: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("got %d entries, want 1", len(entries))
+	}
+	if entries[0].WorkflowFile != "backend.WORKFLOW.md" {
+		t.Errorf("WorkflowFile = %q, want %q", entries[0].WorkflowFile, "backend.WORKFLOW.md")
+	}
+}
+
+func TestAppendRunHistory_WorkflowFile_EmptyStoredAsNull(t *testing.T) {
+	t.Parallel()
+
+	s := openTestStore(t)
+	migrateOrFatal(t, s)
+	ctx := context.Background()
+
+	// newTestRun leaves WorkflowFile empty; must be stored as NULL and
+	// read back as empty string (not "<nil>" or similar).
+	run := newTestRun(2)
+	appendOrFatal(t, s, run)
+
+	entries, err := s.QueryRunHistoryByIssue(ctx, run.IssueID)
+	if err != nil {
+		t.Fatalf("QueryRunHistoryByIssue: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("got %d entries, want 1", len(entries))
+	}
+	if entries[0].WorkflowFile != "" {
+		t.Errorf("WorkflowFile = %q, want empty string for NULL column", entries[0].WorkflowFile)
+	}
+}
+
+func TestQueryRecentRunHistory_WorkflowFileRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	s := openTestStore(t)
+	migrateOrFatal(t, s)
+	ctx := context.Background()
+
+	run := newTestRun(1)
+	run.WorkflowFile = "infra.WORKFLOW.md"
+	appendOrFatal(t, s, run)
+
+	entries, err := s.QueryRecentRunHistory(ctx, 1, 0)
+	if err != nil {
+		t.Fatalf("QueryRecentRunHistory: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("got %d entries, want 1", len(entries))
+	}
+	if entries[0].WorkflowFile != "infra.WORKFLOW.md" {
+		t.Errorf("WorkflowFile = %q, want %q", entries[0].WorkflowFile, "infra.WORKFLOW.md")
+	}
+}
+
 // --- Session Metadata Tests ---
 
 func TestUpsertSessionMetadata(t *testing.T) {

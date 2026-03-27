@@ -36,9 +36,10 @@ type dashboardData struct {
 	TotalTokens    int64
 
 	// Tables
-	Running  []dashboardRunningEntry
-	Retrying []dashboardRetryEntry
-	HasSSH   bool
+	Running    []dashboardRunningEntry
+	Retrying   []dashboardRetryEntry
+	RunHistory []dashboardRunHistoryEntry
+	HasSSH     bool
 
 	// Footer
 	RuntimeDisplay  string
@@ -61,6 +62,7 @@ type dashboardRunningEntry struct {
 	Host            string
 	ToolTimePct     string
 	APITimePct      string
+	WorkflowFile    string
 }
 
 type dashboardRetryEntry struct {
@@ -68,6 +70,16 @@ type dashboardRetryEntry struct {
 	Attempt    int
 	DueIn      string
 	Error      string
+}
+
+type dashboardRunHistoryEntry struct {
+	Identifier   string
+	Attempt      int
+	Status       string
+	WorkflowFile string
+	StartedAt    string
+	Duration     string
+	Error        string
 }
 
 // fmtInt formats an int64 with comma thousand separators.
@@ -237,6 +249,7 @@ func buildDashboardData(
 			Host:            e.SSHHost,
 			ToolTimePct:     toolPct,
 			APITimePct:      apiPct,
+			WorkflowFile:    e.WorkflowFile,
 		}
 	}
 	data.Running = running
@@ -262,6 +275,43 @@ func buildDashboardData(
 	return data
 }
 
+// mapRunHistoryEntries converts [RunHistoryEntry] values into the
+// dashboard-specific [dashboardRunHistoryEntry] with pre-formatted
+// fields. Duration is computed from StartedAt and CompletedAt when
+// both are valid RFC 3339 strings.
+func mapRunHistoryEntries(runs []RunHistoryEntry) []dashboardRunHistoryEntry {
+	out := make([]dashboardRunHistoryEntry, len(runs))
+	for i, r := range runs {
+		dur := ""
+		startT, errS := time.Parse(time.RFC3339, r.StartedAt)
+		endT, errE := time.Parse(time.RFC3339, r.CompletedAt)
+		if errS == nil && errE == nil {
+			dur = formatDuration(endT.Sub(startT))
+		}
+
+		errMsg := ""
+		if r.Error != nil {
+			errMsg = *r.Error
+		}
+
+		wf := r.WorkflowFile
+		if wf == "" {
+			wf = "\u2014" // em dash for missing
+		}
+
+		out[i] = dashboardRunHistoryEntry{
+			Identifier:   r.Identifier,
+			Attempt:      r.Attempt,
+			Status:       r.Status,
+			WorkflowFile: wf,
+			StartedAt:    r.StartedAt,
+			Duration:     dur,
+			Error:        errMsg,
+		}
+	}
+	return out
+}
+
 // handleFavicon serves the embedded favicon.ico with aggressive caching.
 func handleFavicon(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "image/x-icon")
@@ -285,6 +335,15 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	}
 
 	data := buildDashboardData(snap, s.version, s.startedAt, s.slotFunc, time.Now())
+
+	if s.runHistoryFn != nil {
+		runs, err := s.runHistoryFn(r.Context(), 25)
+		if err != nil {
+			s.logger.Warn("dashboard run history query failed", slog.Any("error", err))
+		} else {
+			data.RunHistory = mapRunHistoryEntries(runs)
+		}
+	}
 
 	var buf bytes.Buffer
 	if err := s.dashboardTmpl.Execute(&buf, data); err != nil {

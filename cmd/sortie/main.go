@@ -356,15 +356,16 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 	}
 
 	o := orchestrator.NewOrchestrator(orchestrator.OrchestratorParams{
-		State:           state,
-		Logger:          logger,
-		TrackerAdapter:  trackerAdapter,
-		AgentAdapter:    agentAdapter,
-		WorkflowManager: mgr,
-		Store:           store,
-		PreflightParams: preflightParams,
-		Metrics:         orchMetrics,
-		ToolRegistry:    toolRegistry,
+		State:            state,
+		Logger:           logger,
+		TrackerAdapter:   trackerAdapter,
+		AgentAdapter:     agentAdapter,
+		WorkflowManager:  mgr,
+		Store:            store,
+		PreflightParams:  preflightParams,
+		Metrics:          orchMetrics,
+		ToolRegistry:     toolRegistry,
+		WorkflowFileFunc: mgr.FilePath,
 	})
 
 	var srv *server.Server
@@ -382,6 +383,25 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 			DBPingFn:         func(ctx context.Context) error { return store.Ping(ctx) },
 			PreflightFn:      o.PreflightOK,
 			WorkflowLoadedFn: func() bool { return mgr.Config().Tracker.Kind != "" },
+			RunHistoryFn: func(ctx context.Context, limit int) ([]server.RunHistoryEntry, error) {
+				runs, err := store.QueryRecentRunHistory(ctx, limit, 0)
+				if err != nil {
+					return nil, err
+				}
+				out := make([]server.RunHistoryEntry, len(runs))
+				for i, r := range runs {
+					out[i] = server.RunHistoryEntry{
+						Identifier:   r.Identifier,
+						Attempt:      r.Attempt,
+						Status:       r.Status,
+						WorkflowFile: r.WorkflowFile,
+						StartedAt:    r.StartedAt,
+						CompletedAt:  r.CompletedAt,
+						Error:        r.Error,
+					}
+				}
+				return out, nil
+			},
 		})
 		o.AddObserver(srv)
 

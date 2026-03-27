@@ -66,6 +66,40 @@ func mustRemove(t *testing.T, path string) {
 	}
 }
 
+func TestManager_FilePath(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		filename string
+	}{
+		{name: "standard name", filename: "WORKFLOW.md"},
+		{name: "custom prefix", filename: "backend.WORKFLOW.md"},
+		{name: "all lowercase", filename: "workflow.md"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			dir := t.TempDir()
+			path := filepath.Join(dir, tt.filename)
+			if err := os.WriteFile(path, validWorkflow(5000), 0o644); err != nil {
+				t.Fatalf("write workflow file: %v", err)
+			}
+			m, err := NewManager(path, testLogger())
+			if err != nil {
+				t.Fatalf("NewManager: %v", err)
+			}
+			m.Stop()
+
+			if got := m.FilePath(); got != tt.filename {
+				t.Errorf("FilePath() = %q, want %q", got, tt.filename)
+			}
+		})
+	}
+}
+
 func TestNewManager(t *testing.T) {
 	t.Parallel()
 

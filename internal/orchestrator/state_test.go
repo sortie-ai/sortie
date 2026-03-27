@@ -675,3 +675,55 @@ func TestRuntimeSnapshot(t *testing.T) {
 		}
 	})
 }
+
+func TestRuntimeSnapshot_WorkflowFile(t *testing.T) {
+	t.Parallel()
+
+	fixedNow := time.Date(2026, 3, 24, 12, 0, 0, 0, time.UTC)
+
+	tests := []struct {
+		name         string
+		workflowFile string
+		wantFile     string
+	}{
+		{
+			name:         "workflow file propagated to snapshot",
+			workflowFile: "WORKFLOW.md",
+			wantFile:     "WORKFLOW.md",
+		},
+		{
+			name:         "custom workflow filename propagated",
+			workflowFile: "backend.WORKFLOW.md",
+			wantFile:     "backend.WORKFLOW.md",
+		},
+		{
+			name:         "empty workflow file preserved as empty",
+			workflowFile: "",
+			wantFile:     "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			state := NewState(5000, 4, nil, AgentTotals{})
+			state.Running["ISS-1"] = &RunningEntry{
+				Identifier:   "PROJ-1",
+				Issue:        domain.Issue{ID: "ISS-1", State: "In Progress"},
+				StartedAt:    fixedNow.Add(-5 * time.Minute),
+				WorkflowFile: tt.workflowFile,
+			}
+
+			result := RuntimeSnapshot(state, fixedNow)
+
+			if len(result.Running) != 1 {
+				t.Fatalf("len(Running) = %d, want 1", len(result.Running))
+			}
+			got := result.Running[0].WorkflowFile
+			if got != tt.wantFile {
+				t.Errorf("WorkflowFile = %q, want %q", got, tt.wantFile)
+			}
+		})
+	}
+}

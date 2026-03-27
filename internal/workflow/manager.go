@@ -110,6 +110,13 @@ func (m *Manager) PromptTemplate() *prompt.Template {
 	return m.currentPrompt
 }
 
+// FilePath returns the base filename of the workflow file (e.g.
+// "WORKFLOW.md"). The full directory path is stripped to avoid
+// exposing sensitive directory structure.
+func (m *Manager) FilePath() string {
+	return filepath.Base(m.path)
+}
+
 // LastLoadError returns the error from the most recent reload attempt,
 // or nil if the last reload succeeded. Safe for concurrent use.
 func (m *Manager) LastLoadError() error {

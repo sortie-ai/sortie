@@ -70,6 +70,12 @@ type OrchestratorParams struct {
 	Metrics         domain.Metrics       // may be nil; defaults to NoopMetrics
 	ToolRegistry    *domain.ToolRegistry // may be nil
 	HostPool        *HostPool            // may be nil; defaults to local-mode pool
+
+	// WorkflowFileFunc returns the base filename of the active workflow
+	// file (e.g. "WORKFLOW.md"). Used for observability: recorded on
+	// RunningEntry and persisted in run_history. If nil, defaults to
+	// empty string.
+	WorkflowFileFunc func() string
 }
 
 // Orchestrator owns the poll-and-dispatch event loop and all runtime
@@ -92,13 +98,14 @@ type Orchestrator struct {
 	snapshotCh   chan snapshotRequest
 	refreshCh    chan struct{}
 
-	preflightParams PreflightParams
-	observers       []Observer
-	drainTimeout    time.Duration
-	toolRegistry    *domain.ToolRegistry
-	preflightOK     atomic.Bool
-	draining        atomic.Bool
-	hostPool        *HostPool
+	preflightParams  PreflightParams
+	observers        []Observer
+	drainTimeout     time.Duration
+	toolRegistry     *domain.ToolRegistry
+	preflightOK      atomic.Bool
+	draining         atomic.Bool
+	hostPool         *HostPool
+	workflowFileFunc func() string
 }
 
 // NewOrchestrator creates an [Orchestrator] with all dependencies wired.
@@ -146,23 +153,24 @@ func NewOrchestrator(params OrchestratorParams) *Orchestrator {
 	}
 
 	o := &Orchestrator{
-		state:           params.State,
-		logger:          logger,
-		trackerAdapter:  params.TrackerAdapter,
-		agentAdapter:    params.AgentAdapter,
-		workflowManager: params.WorkflowManager,
-		store:           params.Store,
-		metrics:         metrics,
-		workerExitCh:    make(chan WorkerResult, exitBuf),
-		retryTimerCh:    make(chan string, retryBuf),
-		agentEventCh:    make(chan agentEventMsg, eventBuf),
-		snapshotCh:      make(chan snapshotRequest, 4),
-		refreshCh:       make(chan struct{}, 1),
-		preflightParams: params.PreflightParams,
-		observers:       observers,
-		drainTimeout:    defaultDrainTimeout,
-		toolRegistry:    params.ToolRegistry,
-		hostPool:        hostPool,
+		state:            params.State,
+		logger:           logger,
+		trackerAdapter:   params.TrackerAdapter,
+		agentAdapter:     params.AgentAdapter,
+		workflowManager:  params.WorkflowManager,
+		store:            params.Store,
+		metrics:          metrics,
+		workerExitCh:     make(chan WorkerResult, exitBuf),
+		retryTimerCh:     make(chan string, retryBuf),
+		agentEventCh:     make(chan agentEventMsg, eventBuf),
+		snapshotCh:       make(chan snapshotRequest, 4),
+		refreshCh:        make(chan struct{}, 1),
+		preflightParams:  params.PreflightParams,
+		observers:        observers,
+		drainTimeout:     defaultDrainTimeout,
+		toolRegistry:     params.ToolRegistry,
+		hostPool:         hostPool,
+		workflowFileFunc: params.WorkflowFileFunc,
 	}
 	// Startup preflight must have passed for the orchestrator to be
 	// constructed, so the initial value is true.
@@ -231,6 +239,7 @@ func (o *Orchestrator) Run(ctx context.Context) {
 				MaxSessions:       cfg.Agent.MaxSessions,
 				Metrics:           o.metrics,
 				HostPool:          o.hostPool,
+				WorkflowFile:      o.workflowFile(),
 			})
 			o.updateGauges(time.Now())
 			o.notifyObservers()
@@ -373,6 +382,9 @@ func (o *Orchestrator) handleTick(ctx context.Context) {
 			break
 		}
 		DispatchIssue(ctx, o.state, issue, nil, host, o.makeWorkerFn("", host))
+		if entry := o.state.Running[issue.ID]; entry != nil {
+			entry.WorkflowFile = o.workflowFile()
+		}
 		o.metrics.IncDispatches(outcomeSuccess)
 		dispatched++
 	}
@@ -423,6 +435,15 @@ func (o *Orchestrator) makeWorkerFn(resumeSessionID string, sshHost string) Work
 
 		RunWorkerAttempt(ctx, issue, attempt, deps)
 	}
+}
+
+// workflowFile returns the base filename of the active workflow file.
+// Returns empty string when no callback is configured.
+func (o *Orchestrator) workflowFile() string {
+	if o.workflowFileFunc != nil {
+		return o.workflowFileFunc()
+	}
+	return ""
 }
 
 // onRetryFire delivers a retry timer event to the event loop channel.

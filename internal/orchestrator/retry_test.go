@@ -1147,3 +1147,42 @@ func TestIsStaleRetryTimer(t *testing.T) {
 		})
 	}
 }
+
+func TestHandleRetryTimer_WorkflowFilePropagated(t *testing.T) {
+	t.Parallel()
+
+	// Section 9.5: WorkflowFile captured at dispatch should appear on the
+	// RunningEntry so it is persisted by HandleWorkerExit.
+	store := &mockRetryStore{}
+	tracker := &mockRetryTracker{
+		candidates: []domain.Issue{candidateIssue("ISS-WF", "ISS-WF", "To Do")},
+	}
+
+	state := retryState(t, "ISS-WF", "ISS-WF", 1)
+
+	params := defaultRetryParams(t, store, tracker)
+	params.WorkflowFile = "infra.WORKFLOW.md"
+
+	workerCalled := make(chan struct{}, 1)
+	params.MakeWorkerFn = func(_, _ string) WorkerFunc {
+		return func(_ context.Context, _ domain.Issue, _ *int) {
+			workerCalled <- struct{}{}
+		}
+	}
+
+	HandleRetryTimer(state, "ISS-WF", params)
+
+	select {
+	case <-workerCalled:
+	case <-time.After(time.Second):
+		t.Fatal("worker goroutine did not execute within 1 second")
+	}
+
+	running, ok := state.Running["ISS-WF"]
+	if !ok {
+		t.Fatal("Running[ISS-WF] missing after dispatch")
+	}
+	if running.WorkflowFile != "infra.WORKFLOW.md" {
+		t.Errorf("Running[ISS-WF].WorkflowFile = %q, want %q", running.WorkflowFile, "infra.WORKFLOW.md")
+	}
+}

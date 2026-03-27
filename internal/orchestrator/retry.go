@@ -77,6 +77,10 @@ type HandleRetryTimerParams struct {
 	// HostPool is the SSH host pool for host acquisition on retry.
 	// May be nil (local mode).
 	HostPool *HostPool
+
+	// WorkflowFile is the base filename of the active WORKFLOW.md file.
+	// Recorded on the RunningEntry for observability.
+	WorkflowFile string
 }
 
 // HandleRetryTimer processes a retry timer event for the given issue.
@@ -294,6 +298,9 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 	// next worker exit, not at dispatch time.
 	attempt := popped.Attempt
 	DispatchIssue(ctx, state, issue, &attempt, host, params.MakeWorkerFn("", host))
+	if entry := state.Running[issue.ID]; entry != nil {
+		entry.WorkflowFile = params.WorkflowFile
+	}
 	metrics.IncDispatches(outcomeSuccess)
 
 	log.Info("retried issue dispatched",

@@ -194,6 +194,7 @@ func TestMigrate_ColumnCorrectness(t *testing.T) {
 				{"completed_at", "TEXT", true, 0},
 				{"status", "TEXT", true, 0},
 				{"error", "TEXT", false, 0},
+				{"workflow_file", "TEXT", false, 0},
 			},
 		},
 		{

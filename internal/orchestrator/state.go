@@ -172,6 +172,11 @@ type RunningEntry struct {
 	// it from config (which may have changed via dynamic config reload).
 	WorkspacePath string
 
+	// WorkflowFile is the base filename of the WORKFLOW.md file that was
+	// active when this session was dispatched (e.g. "WORKFLOW.md").
+	// Recorded for observability and persisted in run_history.
+	WorkflowFile string
+
 	// SSHHost is the SSH host that this worker is executing on. Empty
 	// for local execution. Used by [HandleWorkerExit] for host pool
 	// release, [RuntimeSnapshot] for observability, and the retry
@@ -333,6 +338,7 @@ type SnapshotRunningEntry struct {
 	SSHHost            string                `json:"ssh_host,omitempty"`
 	ToolTimeMs         int64                 `json:"tool_time_ms"`
 	APITimeMs          int64                 `json:"api_time_ms"`
+	WorkflowFile       string                `json:"workflow_file,omitempty"`
 }
 
 // SnapshotRetryEntry is a read-only view of a pending retry for
@@ -439,6 +445,7 @@ func RuntimeSnapshot(state *State, now time.Time) RuntimeSnapshotResult {
 			SSHHost:            entry.SSHHost,
 			ToolTimeMs:         entry.ToolTimeMs,
 			APITimeMs:          entry.APITimeMs,
+			WorkflowFile:       entry.WorkflowFile,
 		})
 
 		if !entry.StartedAt.IsZero() {

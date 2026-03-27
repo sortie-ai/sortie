@@ -1592,3 +1592,28 @@ func TestHandleWorkerExit_LastSSHHostPropagated(t *testing.T) {
 		t.Errorf("RetryEntry.LastSSHHost = %q, want %q", entry.LastSSHHost, "worker-7")
 	}
 }
+
+func TestHandleWorkerExit_WorkflowFilePersisted(t *testing.T) {
+	t.Parallel()
+
+	store := &mockExitStore{}
+	state := exitState(t, "WF-1", nil)
+	// WorkflowFile is set on the running entry to simulate it being captured at
+	// dispatch time.
+	state.Running["WF-1"].WorkflowFile = "backend.WORKFLOW.md"
+	params := defaultExitParams(t, store)
+
+	HandleWorkerExit(state, WorkerResult{
+		IssueID:      "WF-1",
+		Identifier:   "WF-1-ident",
+		ExitKind:     WorkerExitNormal,
+		AgentAdapter: "mock",
+	}, params)
+
+	if len(store.runHistories) != 1 {
+		t.Fatalf("AppendRunHistory called %d times, want 1", len(store.runHistories))
+	}
+	if got := store.runHistories[0].WorkflowFile; got != "backend.WORKFLOW.md" {
+		t.Errorf("RunHistory.WorkflowFile = %q, want %q", got, "backend.WORKFLOW.md")
+	}
+}
