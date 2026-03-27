@@ -9,6 +9,8 @@ description: >
   planning — use the individual agents directly for those tasks.
 argument-hint: Describe the feature or problem to specify
 tools:
+  - execute
+  - web
   - agent
   - read
   - search
