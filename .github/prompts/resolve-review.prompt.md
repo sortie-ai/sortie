@@ -55,7 +55,9 @@ Before accepting or rejecting: quote the reviewer comment and the artifact it re
 
 ### For deferred comments — Roadmap Triage (Step 3b)
 
-Not every valid concern belongs in the current change. When you classify a comment as **Valid — Deferred to Roadmap**, decide whether it earns a place in [TODO.md](../../TODO.md). Apply these filters in order:
+Not every valid concern belongs in the current change. When you classify a comment as **Valid — Deferred to Roadmap**, decide whether it earns a place in project roadmap. Use `managing-github-issues` Agent Skill to query the live issue tracker, triage the concern, and create a new task if needed.
+
+Apply these filters in order:
 
 1. **Architecture conflict gate.** Read the relevant section of [architecture.md](../../docs/architecture.md). If the suggestion contradicts the spec's design intent — not just its current implementation — it does not belong in the roadmap. Explain why in the summary and stop here.
 2. **Redundancy check.** Scan TODO.md for an existing task that already covers this concern, even partially. If one exists, note the task number in the summary and stop here — do not create duplicates.
