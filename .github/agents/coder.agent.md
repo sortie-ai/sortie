@@ -36,6 +36,11 @@ handoffs:
       3. Investigate the actual implementation source files.
       4. Determine what requires test coverage using your Analyze Protocol.
       5. Write and verify tests. STRICTLY follow your instructions.
+  - label: Review Implementation
+    agent: Reviewer
+    prompt: |-
+      Review the implementation changes I just made. Evaluate correctness,
+      architectural fit, regression risk, error handling, and completeness.
 ---
 
 ## Scope Boundary — Read This First

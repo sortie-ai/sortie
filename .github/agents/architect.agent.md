@@ -29,6 +29,9 @@ handoffs:
   - label: Plan Implementation
     agent: Planner
     prompt: Carefully analyze the provided spec section-by-section and create a plan. Follow your role instructions precisely.
+  - label: Review Spec
+    agent: Reviewer
+    prompt: Review the specification I just created. Evaluate alignment with the codebase, feasibility, risks, completeness, and tradeoffs.
 ---
 
 ## Role
