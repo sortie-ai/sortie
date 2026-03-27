@@ -293,6 +293,8 @@ func (a *ClaudeCodeAdapter) RunTurn(ctx context.Context, session domain.Session,
 		cumulativeCacheRead int64
 		lastModel           string
 		emittedUsage        bool
+		apiCallStart        time.Time // monotonic timestamp of the last event before an API call
+		emittedAPITiming    bool      // true once per-request APIDurationMS has been emitted
 	)
 
 	for scanner.Scan() {
@@ -323,6 +325,13 @@ func (a *ClaudeCodeAdapter) RunTurn(ctx context.Context, session domain.Session,
 					SessionID: state.claudeSessionID,
 					Message:   "session started",
 				})
+				// The first API call is imminent. Start the monotonic timer.
+				// This first measurement includes agent initialization overhead
+				// (workspace scanning, .claude.json parsing, system prompt
+				// assembly) that occurs before the actual HTTP request.
+				// Subsequent measurements (after user events) do not have this
+				// overhead.
+				apiCallStart = time.Now()
 			case "api_retry":
 				params.OnEvent(domain.AgentEvent{
 					Type:      domain.EventNotification,
@@ -356,12 +365,18 @@ func (a *ClaudeCodeAdapter) RunTurn(ctx context.Context, session domain.Session,
 							TotalTokens:     cumulativeTotal,
 							CacheReadTokens: cumulativeCacheRead,
 						}
-						params.OnEvent(domain.AgentEvent{
+						tokenEvt := domain.AgentEvent{
 							Type:      domain.EventTokenUsage,
 							Timestamp: now,
 							Usage:     usage,
 							Model:     lastModel,
-						})
+						}
+						if !apiCallStart.IsZero() {
+							tokenEvt.APIDurationMS = time.Since(apiCallStart).Milliseconds()
+							apiCallStart = time.Time{}
+							emittedAPITiming = true
+						}
+						params.OnEvent(tokenEvt)
 						emittedUsage = true
 					}
 				}
@@ -384,6 +399,7 @@ func (a *ClaudeCodeAdapter) RunTurn(ctx context.Context, session domain.Session,
 			// Correlate with the inFlight map populated from
 			// assistant tool_use blocks.
 			processToolBlocks(event.contentBlocks(), inFlight, time.Now(), now, params.OnEvent)
+			apiCallStart = time.Now() // next API call is imminent
 
 		case "result":
 			captured := event
@@ -510,12 +526,18 @@ func (a *ClaudeCodeAdapter) RunTurn(ctx context.Context, session domain.Session,
 	}
 
 	if lastResult != nil {
+		// Use turn-level duration_api_ms only when no per-request
+		// API timing was emitted, to avoid double-counting.
+		var turnAPIDuration int64
+		if !emittedAPITiming {
+			turnAPIDuration = lastResult.DurationAPI
+		}
 		if lastResult.Subtype == "success" && !lastResult.IsError {
 			params.OnEvent(domain.AgentEvent{
 				Type:          domain.EventTurnCompleted,
 				Timestamp:     now,
 				Message:       truncate(lastResult.Result, 500),
-				APIDurationMS: lastResult.DurationAPI,
+				APIDurationMS: turnAPIDuration,
 			})
 			return domain.TurnResult{
 				SessionID:  state.claudeSessionID,
@@ -527,7 +549,7 @@ func (a *ClaudeCodeAdapter) RunTurn(ctx context.Context, session domain.Session,
 			Type:          domain.EventTurnFailed,
 			Timestamp:     now,
 			Message:       lastResult.Subtype,
-			APIDurationMS: lastResult.DurationAPI,
+			APIDurationMS: turnAPIDuration,
 		})
 		return domain.TurnResult{
 				SessionID:  state.claudeSessionID,

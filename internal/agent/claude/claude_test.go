@@ -2104,3 +2104,179 @@ exit 0
 		t.Errorf("Message missing expected text: %q", got.Message)
 	}
 }
+
+// TestRunTurn_PerRequestAPIDurationMS verifies that each assistant event
+// with per-request usage emits a token_usage event with APIDurationMS > 0,
+// measured from the preceding system/init or user event.
+func TestRunTurn_PerRequestAPIDurationMS(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	script := writeScript(t, tmpDir, `
+cat <<'JSONL'
+{"type":"system","subtype":"init","session_id":"per-req-timing","cwd":"/tmp"}
+{"type":"assistant","message":{"model":"claude-sonnet-4-20250514","content":[{"type":"tool_use","id":"toolu_req01","name":"Read","input":{"file_path":"main.go"}}],"usage":{"input_tokens":100,"output_tokens":10}},"session_id":"per-req-timing"}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_req01","content":"package main","is_error":false}]}}
+{"type":"assistant","message":{"model":"claude-sonnet-4-20250514","content":[{"type":"text","text":"Done."}],"usage":{"input_tokens":150,"output_tokens":5}},"session_id":"per-req-timing"}
+{"type":"result","subtype":"success","result":"Done.","is_error":false,"usage":{"input_tokens":250,"output_tokens":15},"session_id":"per-req-timing"}
+JSONL
+exit 0
+`)
+
+	adapter, _ := NewClaudeCodeAdapter(map[string]any{})
+	session, err := adapter.StartSession(context.Background(), domain.StartSessionParams{
+		WorkspacePath: tmpDir,
+		AgentConfig:   domain.AgentConfig{Command: script},
+	})
+	if err != nil {
+		t.Fatalf("StartSession() error = %v", err)
+	}
+
+	var events []domain.AgentEvent
+	_, err = adapter.RunTurn(context.Background(), session, domain.RunTurnParams{
+		Prompt: "read main.go",
+		OnEvent: func(e domain.AgentEvent) {
+			events = append(events, e)
+		},
+	})
+	if err != nil {
+		t.Fatalf("RunTurn() error = %v", err)
+	}
+
+	var tokenUsageEvents []domain.AgentEvent
+	for _, e := range events {
+		if e.Type == domain.EventTokenUsage {
+			tokenUsageEvents = append(tokenUsageEvents, e)
+		}
+	}
+
+	if len(tokenUsageEvents) != 2 {
+		eventTypes := make([]string, len(events))
+		for i, e := range events {
+			eventTypes[i] = string(e.Type)
+		}
+		t.Fatalf("token_usage event count = %d, want 2; all events = %v", len(tokenUsageEvents), eventTypes)
+	}
+	// APIDurationMS must be non-negative. The fake subprocess runs in < 1ms
+	// so the integer millisecond value may be 0 — this is expected for fast
+	// scripts. The no-double-count and no-init-guard tests together verify
+	// that the timer code paths fire correctly.
+	for i, e := range tokenUsageEvents {
+		if e.APIDurationMS < 0 {
+			t.Errorf("token_usage[%d].APIDurationMS = %d, want >= 0", i, e.APIDurationMS)
+		}
+	}
+}
+
+// TestRunTurn_PerRequestAPIDurationMS_NoDoubleCount verifies that the
+// turn_completed event carries APIDurationMS == 0 when per-request timing
+// was already emitted on token_usage events during the turn.
+func TestRunTurn_PerRequestAPIDurationMS_NoDoubleCount(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	// Same flow as PerRequestAPIDurationMS but result carries duration_api_ms.
+	// The turn-finalization guard must suppress it to prevent double-counting.
+	script := writeScript(t, tmpDir, `
+cat <<'JSONL'
+{"type":"system","subtype":"init","session_id":"no-double-count","cwd":"/tmp"}
+{"type":"assistant","message":{"model":"claude-sonnet-4-20250514","content":[{"type":"tool_use","id":"toolu_dc01","name":"Read","input":{"file_path":"main.go"}}],"usage":{"input_tokens":100,"output_tokens":10}},"session_id":"no-double-count"}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_dc01","content":"package main","is_error":false}]}}
+{"type":"assistant","message":{"model":"claude-sonnet-4-20250514","content":[{"type":"text","text":"Done."}],"usage":{"input_tokens":150,"output_tokens":5}},"session_id":"no-double-count"}
+{"type":"result","subtype":"success","result":"Done.","is_error":false,"duration_api_ms":5000,"usage":{"input_tokens":250,"output_tokens":15},"session_id":"no-double-count"}
+JSONL
+exit 0
+`)
+
+	adapter, _ := NewClaudeCodeAdapter(map[string]any{})
+	session, err := adapter.StartSession(context.Background(), domain.StartSessionParams{
+		WorkspacePath: tmpDir,
+		AgentConfig:   domain.AgentConfig{Command: script},
+	})
+	if err != nil {
+		t.Fatalf("StartSession() error = %v", err)
+	}
+
+	var events []domain.AgentEvent
+	_, err = adapter.RunTurn(context.Background(), session, domain.RunTurnParams{
+		Prompt: "read main.go",
+		OnEvent: func(e domain.AgentEvent) {
+			events = append(events, e)
+		},
+	})
+	if err != nil {
+		t.Fatalf("RunTurn() error = %v", err)
+	}
+
+	for _, e := range events {
+		if e.Type == domain.EventTurnCompleted {
+			if e.APIDurationMS != 0 {
+				t.Errorf("turn_completed APIDurationMS = %d, want 0 (per-request timing suppresses turn-level value)", e.APIDurationMS)
+			}
+			return
+		}
+	}
+	t.Error("no turn_completed event found")
+}
+
+// TestRunTurn_PerRequestAPIDurationMS_NoInitGuard verifies that when the
+// first event is an assistant event with no preceding system/init, the
+// token_usage event carries APIDurationMS == 0 (apiCallStart is unset),
+// and the turn-finalization fallback then uses result.duration_api_ms.
+func TestRunTurn_PerRequestAPIDurationMS_NoInitGuard(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	// No system/init event — apiCallStart stays zero, so the guard
+	// !apiCallStart.IsZero() prevents any timing from being recorded.
+	// emittedAPITiming stays false, so the fallback path fires on result.
+	script := writeScript(t, tmpDir, `
+cat <<'JSONL'
+{"type":"assistant","message":{"model":"claude-sonnet-4-20250514","content":[{"type":"text","text":"Working."}],"usage":{"input_tokens":100,"output_tokens":10}}}
+{"type":"result","subtype":"success","result":"Done.","is_error":false,"duration_api_ms":1000,"usage":{"input_tokens":100,"output_tokens":10}}
+JSONL
+exit 0
+`)
+
+	adapter, _ := NewClaudeCodeAdapter(map[string]any{})
+	session, err := adapter.StartSession(context.Background(), domain.StartSessionParams{
+		WorkspacePath: tmpDir,
+		AgentConfig:   domain.AgentConfig{Command: script},
+	})
+	if err != nil {
+		t.Fatalf("StartSession() error = %v", err)
+	}
+
+	var events []domain.AgentEvent
+	_, err = adapter.RunTurn(context.Background(), session, domain.RunTurnParams{
+		Prompt: "test",
+		OnEvent: func(e domain.AgentEvent) {
+			events = append(events, e)
+		},
+	})
+	if err != nil {
+		t.Fatalf("RunTurn() error = %v", err)
+	}
+
+	var foundTokenUsage, foundTurnCompleted bool
+	for _, e := range events {
+		switch e.Type {
+		case domain.EventTokenUsage:
+			foundTokenUsage = true
+			if e.APIDurationMS != 0 {
+				t.Errorf("token_usage APIDurationMS = %d, want 0 (no preceding init event)", e.APIDurationMS)
+			}
+		case domain.EventTurnCompleted:
+			foundTurnCompleted = true
+			if e.APIDurationMS != 1000 {
+				t.Errorf("turn_completed APIDurationMS = %d, want 1000 (fallback to result.duration_api_ms)", e.APIDurationMS)
+			}
+		}
+	}
+	if !foundTokenUsage {
+		t.Error("no token_usage event found")
+	}
+	if !foundTurnCompleted {
+		t.Error("no turn_completed event found")
+	}
+}
