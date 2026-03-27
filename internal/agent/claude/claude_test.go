@@ -2157,13 +2157,9 @@ exit 0
 		}
 		t.Fatalf("token_usage event count = %d, want 2; all events = %v", len(tokenUsageEvents), eventTypes)
 	}
-	// APIDurationMS must be non-negative. The fake subprocess runs in < 1ms
-	// so the integer millisecond value may be 0 — this is expected for fast
-	// scripts. The no-double-count and no-init-guard tests together verify
-	// that the timer code paths fire correctly.
 	for i, e := range tokenUsageEvents {
-		if e.APIDurationMS < 0 {
-			t.Errorf("token_usage[%d].APIDurationMS = %d, want >= 0", i, e.APIDurationMS)
+		if e.APIDurationMS <= 0 {
+			t.Errorf("token_usage[%d].APIDurationMS = %d, want > 0", i, e.APIDurationMS)
 		}
 	}
 }

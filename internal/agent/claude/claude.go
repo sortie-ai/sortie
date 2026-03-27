@@ -372,7 +372,11 @@ func (a *ClaudeCodeAdapter) RunTurn(ctx context.Context, session domain.Session,
 							Model:     lastModel,
 						}
 						if !apiCallStart.IsZero() {
-							tokenEvt.APIDurationMS = time.Since(apiCallStart).Milliseconds()
+							dur := time.Since(apiCallStart).Milliseconds()
+							if dur <= 0 {
+								dur = 1 // clamp so the orchestrator accumulates this measurement
+							}
+							tokenEvt.APIDurationMS = dur
 							apiCallStart = time.Time{}
 							emittedAPITiming = true
 						}
