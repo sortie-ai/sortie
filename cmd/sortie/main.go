@@ -606,7 +606,7 @@ func runDryRun(ctx context.Context, cfg config.ServiceConfig, logger *slog.Logge
 				ineligible++
 				logger.Info("dry-run: candidate",
 					slog.String("issue_id", remaining.ID),
-					slog.String("identifier", remaining.Identifier),
+					slog.String("issue_identifier", remaining.Identifier),
 					slog.String("state", remaining.State),
 					slog.Bool("would_dispatch", false),
 					slog.String("skip_reason", "ssh_hosts_at_capacity"),
@@ -631,7 +631,7 @@ func runDryRun(ctx context.Context, cfg config.ServiceConfig, logger *slog.Logge
 
 		logFields := []any{
 			slog.String("issue_id", issue.ID),
-			slog.String("identifier", issue.Identifier),
+			slog.String("issue_identifier", issue.Identifier),
 			slog.String("title", issue.Title),
 			slog.String("state", issue.State),
 			slog.Bool("would_dispatch", wouldDispatch),

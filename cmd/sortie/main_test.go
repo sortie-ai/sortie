@@ -2121,8 +2121,11 @@ func TestRunLogLevelDumpVersionIgnoredInvalid(t *testing.T) {
 func assertNoDatabaseFile(t *testing.T, workflowDir string) {
 	t.Helper()
 	dbPath := filepath.Join(workflowDir, ".sortie.db")
-	if _, err := os.Stat(dbPath); err == nil {
+	_, err := os.Stat(dbPath)
+	if err == nil {
 		t.Errorf("database file %s must not exist after dry-run", dbPath)
+	} else if !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("failed to stat database file %s: %v", dbPath, err)
 	}
 }
 
