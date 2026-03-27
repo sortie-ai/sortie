@@ -73,7 +73,29 @@ If the concern passes all three filters, create a GitHub issue following the ski
 3. Verify internal consistency — ensure the change does not contradict other sections.
 4. If the revision has downstream implications for existing code, enumerate them.
 
-## Step 4: Produce Summary
+## Step 4: Reply to Declined Comments on GitHub
+
+**Applies only when the source is a GitHub PR.**
+
+For every comment classified as **Skipped — Subjective** or **Rejected**, post a reply to the reviewer directly on the PR so they see the rationale without having to ask:
+
+```bash
+# For review comments (inline on code):
+gh api "repos/{owner}/{repo}/pulls/${PR_NUMBER}/comments/${COMMENT_ID}/replies" \
+  -f body="@${REVIEWER_LOGIN} ${REASON}"
+
+# For issue-level comments (conversation tab):
+gh api "repos/{owner}/{repo}/issues/${PR_NUMBER}/comments" \
+  -f body="@${REVIEWER_LOGIN} ${REASON}"
+```
+
+Where:
+- `REVIEWER_LOGIN` is the GitHub login of the comment author (from the `user.login` field of the fetched comment).
+- `REASON` is the same explanation you produce in the summary — the stylistic trade-off (for Subjective) or technical rationale (for Rejected).
+
+Do NOT reply to comments that were Applied, Deferred, Already Addressed, Stale, or flagged for Discussion — those are handled by code changes, issues, or human follow-up.
+
+## Step 5: Produce Summary
 
 ```markdown
 ## Review Resolution Summary
