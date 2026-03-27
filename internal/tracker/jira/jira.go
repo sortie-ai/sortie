@@ -109,8 +109,13 @@ func NewJiraAdapter(config map[string]any) (domain.TrackerAdapter, error) {
 
 	queryFilter, _ := config["query_filter"].(string)
 
+	userAgent, _ := config["user_agent"].(string)
+	if userAgent == "" {
+		userAgent = "sortie/dev"
+	}
+
 	return &JiraAdapter{
-		client:       newJiraClient(endpoint, email, token),
+		client:       newJiraClient(endpoint, email, token, userAgent),
 		project:      project,
 		activeStates: activeStates,
 		endpoint:     endpoint,

@@ -1803,3 +1803,44 @@ func TestJiraAdapterMetrics(t *testing.T) {
 		a.TransitionIssue(ctx, "PROJ-123", "Human Review")       //nolint:errcheck // verifying no panic
 	})
 }
+
+func TestNewJiraAdapter_UserAgentFromConfig(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		version string // empty means key is omitted
+		wantUA  string
+	}{
+		{"explicit version", "v1.2.3", "sortie/v1.2.3"},
+		{"missing version defaults to dev", "", "sortie/dev"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			var gotUA string
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				gotUA = r.Header.Get("User-Agent")
+				w.Header().Set("Content-Type", "application/json")
+				w.Write([]byte(`{"issues":[]}`)) //nolint:errcheck // test helper
+			}))
+			defer srv.Close()
+
+			cfg := validConfig(srv.URL)
+			if tt.version != "" {
+				cfg["user_agent"] = "sortie/" + tt.version
+			}
+
+			a := mustAdapter(t, cfg)
+			_, err := a.FetchCandidateIssues(context.Background())
+			if err != nil {
+				t.Fatalf("FetchCandidateIssues: %v", err)
+			}
+			if gotUA != tt.wantUA {
+				t.Errorf("User-Agent = %q, want %q", gotUA, tt.wantUA)
+			}
+		})
+	}
+}
