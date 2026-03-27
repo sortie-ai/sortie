@@ -9,6 +9,56 @@ import (
 	"github.com/sortie-ai/sortie/internal/logging"
 )
 
+func TestParseLevel(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		input     string
+		wantLevel slog.Level
+		wantErr   bool
+	}{
+		{name: "debug lowercase", input: "debug", wantLevel: slog.LevelDebug},
+		{name: "debug uppercase", input: "DEBUG", wantLevel: slog.LevelDebug},
+		{name: "debug mixed case", input: "Debug", wantLevel: slog.LevelDebug},
+		{name: "info lowercase", input: "info", wantLevel: slog.LevelInfo},
+		{name: "info uppercase", input: "INFO", wantLevel: slog.LevelInfo},
+		{name: "warn lowercase", input: "warn", wantLevel: slog.LevelWarn},
+		{name: "warn uppercase", input: "WARN", wantLevel: slog.LevelWarn},
+		{name: "error lowercase", input: "error", wantLevel: slog.LevelError},
+		{name: "error uppercase", input: "ERROR", wantLevel: slog.LevelError},
+		{name: "empty string", input: "", wantErr: true},
+		{name: "warning rejected", input: "warning", wantErr: true},
+		{name: "trace rejected", input: "trace", wantErr: true},
+		{name: "fatal rejected", input: "fatal", wantErr: true},
+		{name: "trailing space rejected", input: "Info ", wantErr: true},
+		{name: "leading space rejected", input: " info", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := logging.ParseLevel(tt.input)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("ParseLevel(%q) = %v, want error", tt.input, got)
+				}
+				if !strings.Contains(err.Error(), "unknown log level") {
+					t.Errorf("ParseLevel(%q) error = %q, want to contain %q", tt.input, err.Error(), "unknown log level")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("ParseLevel(%q) unexpected error: %v", tt.input, err)
+			}
+			if got != tt.wantLevel {
+				t.Errorf("ParseLevel(%q) = %v, want %v", tt.input, got, tt.wantLevel)
+			}
+		})
+	}
+}
+
 func TestSetup(t *testing.T) {
 	var buf bytes.Buffer
 	logging.Setup(&buf, slog.LevelInfo)

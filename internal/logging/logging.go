@@ -6,8 +6,10 @@
 package logging
 
 import (
+	"fmt"
 	"io"
 	"log/slog"
+	"strings"
 )
 
 // Setup initialises the process-wide default logger. The resulting
@@ -21,6 +23,24 @@ func Setup(w io.Writer, level slog.Level) {
 		Level: level,
 	})
 	slog.SetDefault(slog.New(handler))
+}
+
+// ParseLevel converts a case-insensitive level name to the
+// corresponding [slog.Level]. Accepted names: "debug", "info",
+// "warn", "error". Returns an error for unrecognized names.
+func ParseLevel(s string) (slog.Level, error) {
+	switch strings.ToLower(s) {
+	case "debug":
+		return slog.LevelDebug, nil
+	case "info":
+		return slog.LevelInfo, nil
+	case "warn":
+		return slog.LevelWarn, nil
+	case "error":
+		return slog.LevelError, nil
+	default:
+		return 0, fmt.Errorf("unknown log level %q: accepted values are debug, info, warn, error", s)
+	}
 }
 
 // WithIssue derives a child logger that attaches the tracker-native

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"os"
 	"os/exec"
@@ -1782,5 +1783,332 @@ func TestRunReadOnlyWorkflowDir(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "failed to open database") {
 		t.Errorf("stderr = %q, want to contain %q", stderr.String(), "failed to open database")
+	}
+}
+
+// --- resolveLogLevel tests ---
+
+func TestResolveLogLevel(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		flagValue  string
+		flagSet    bool
+		extensions map[string]any
+		wantLevel  slog.Level
+		wantErr    bool
+	}{
+		{
+			name:      "flag set: debug",
+			flagValue: "debug",
+			flagSet:   true,
+			wantLevel: slog.LevelDebug,
+		},
+		{
+			name:       "flag set: error",
+			flagValue:  "error",
+			flagSet:    true,
+			extensions: nil,
+			wantLevel:  slog.LevelError,
+		},
+		{
+			name:      "flag set: invalid",
+			flagValue: "bogus",
+			flagSet:   true,
+			wantErr:   true,
+		},
+		{
+			name:       "flag set overrides config",
+			flagValue:  "debug",
+			flagSet:    true,
+			extensions: map[string]any{"logging": map[string]any{"level": "error"}},
+			wantLevel:  slog.LevelDebug,
+		},
+		{
+			name:       "extension: warn",
+			flagSet:    false,
+			extensions: map[string]any{"logging": map[string]any{"level": "warn"}},
+			wantLevel:  slog.LevelWarn,
+		},
+		{
+			name:       "extension: case insensitive",
+			flagSet:    false,
+			extensions: map[string]any{"logging": map[string]any{"level": "DEBUG"}},
+			wantLevel:  slog.LevelDebug,
+		},
+		{
+			name:       "extension: invalid string",
+			flagSet:    false,
+			extensions: map[string]any{"logging": map[string]any{"level": "bogus"}},
+			wantErr:    true,
+		},
+		{
+			name:       "extension: non-string type (int)",
+			flagSet:    false,
+			extensions: map[string]any{"logging": map[string]any{"level": 42}},
+			wantErr:    true,
+		},
+		{
+			name:       "no logging block",
+			flagSet:    false,
+			extensions: map[string]any{},
+			wantLevel:  slog.LevelInfo,
+		},
+		{
+			name:       "nil extensions",
+			flagSet:    false,
+			extensions: nil,
+			wantLevel:  slog.LevelInfo,
+		},
+		{
+			name:       "logging block without level key",
+			flagSet:    false,
+			extensions: map[string]any{"logging": map[string]any{"format": "json"}},
+			wantLevel:  slog.LevelInfo,
+		},
+		{
+			name:       "logging block is not a map",
+			flagSet:    false,
+			extensions: map[string]any{"logging": "not-a-map"},
+			wantLevel:  slog.LevelInfo,
+		},
+		{
+			name:       "extension: null value (YAML null)",
+			flagSet:    false,
+			extensions: map[string]any{"logging": map[string]any{"level": nil}},
+			wantLevel:  slog.LevelInfo,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := resolveLogLevel(tt.flagValue, tt.flagSet, tt.extensions)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("resolveLogLevel(%q, %v, ...) = %v, want error", tt.flagValue, tt.flagSet, got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("resolveLogLevel(%q, %v, ...) unexpected error: %v", tt.flagValue, tt.flagSet, err)
+			}
+			if got != tt.wantLevel {
+				t.Errorf("resolveLogLevel(%q, %v, ...) = %v, want %v", tt.flagValue, tt.flagSet, got, tt.wantLevel)
+			}
+		})
+	}
+}
+
+// --- --log-level CLI flag integration tests ---
+
+// minimalWorkflowWithLogLevel returns a WORKFLOW.md with the given level
+// set in the logging.level extension key.
+func minimalWorkflowWithLogLevel(level string) []byte {
+	return []byte(fmt.Sprintf(`---
+polling:
+  interval_ms: 30000
+tracker:
+  kind: file
+  api_key: "unused"
+  active_states:
+    - To Do
+    - In Progress
+  terminal_states:
+    - Done
+agent:
+  kind: mock
+file:
+  path: issues.json
+logging:
+  level: %s
+---
+Do {{ .issue.title }}.
+`, level))
+}
+
+// writeWorkflowFileWithContent writes the given content as WORKFLOW.md
+// in dir and returns its absolute path.
+func writeWorkflowFileWithContent(t *testing.T, dir string, content []byte) string {
+	t.Helper()
+	p := filepath.Join(dir, "WORKFLOW.md")
+	if err := os.WriteFile(p, content, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return p
+}
+
+func TestRunLogLevelDebug(t *testing.T) {
+	wfPath := setupRunDir(t)
+
+	var stdout, stderr bytes.Buffer
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+
+	code := run(ctx, []string{"--log-level", "debug", wfPath}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr: %s", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "level=DEBUG") {
+		t.Errorf("stderr = %q, want to contain %q", stderr.String(), "level=DEBUG")
+	}
+	if !strings.Contains(stderr.String(), "log_level=DEBUG") {
+		t.Errorf("stderr = %q, want to contain %q (startup attr)", stderr.String(), "log_level=DEBUG")
+	}
+}
+
+func TestRunLogLevelWarn(t *testing.T) {
+	wfPath := setupRunDir(t)
+
+	var stdout, stderr bytes.Buffer
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+
+	code := run(ctx, []string{"--log-level", "warn", wfPath}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr: %s", code, stderr.String())
+	}
+	// INFO-level startup line must be suppressed at warn level.
+	if strings.Contains(stderr.String(), "level=INFO") {
+		t.Errorf("stderr = %q, want no INFO lines at warn level", stderr.String())
+	}
+}
+
+func TestRunLogLevelInvalid(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	ctx := context.Background()
+
+	code := run(ctx, []string{"--log-level", "bogus"}, &stdout, &stderr)
+	if code != 1 {
+		t.Fatalf("exit code = %d, want 1", code)
+	}
+	if !strings.Contains(stderr.String(), `unknown log level "bogus"`) {
+		t.Errorf("stderr = %q, want to contain %q", stderr.String(), `unknown log level "bogus"`)
+	}
+}
+
+func TestRunLogLevelEmpty(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	ctx := context.Background()
+
+	code := run(ctx, []string{"--log-level", ""}, &stdout, &stderr)
+	if code != 1 {
+		t.Fatalf("exit code = %d, want 1", code)
+	}
+	if !strings.Contains(stderr.String(), "unknown log level") {
+		t.Errorf("stderr = %q, want to contain %q", stderr.String(), "unknown log level")
+	}
+}
+
+func TestRunLogLevelFromExtension(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	writeIssuesFixture(t, dir)
+	wfPath := writeWorkflowFileWithContent(t, dir, minimalWorkflowWithLogLevel("warn"))
+
+	var stdout, stderr bytes.Buffer
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+
+	code := run(ctx, []string{wfPath}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr: %s", code, stderr.String())
+	}
+	// INFO-level lines must be suppressed when extension sets warn.
+	if strings.Contains(stderr.String(), "level=INFO") {
+		t.Errorf("stderr = %q, want no INFO lines when logging.level=warn", stderr.String())
+	}
+}
+
+func TestRunLogLevelFlagOverridesExtension(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	writeIssuesFixture(t, dir)
+	// Extension requests error level; flag requests debug — flag must win.
+	wfPath := writeWorkflowFileWithContent(t, dir, minimalWorkflowWithLogLevel("error"))
+
+	var stdout, stderr bytes.Buffer
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+
+	code := run(ctx, []string{"--log-level", "debug", wfPath}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr: %s", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "level=DEBUG") {
+		t.Errorf("stderr = %q, want to contain %q (flag wins over extension)", stderr.String(), "level=DEBUG")
+	}
+}
+
+func TestRunLogLevelExtensionInvalid(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	writeIssuesFixture(t, dir)
+	wfPath := writeWorkflowFileWithContent(t, dir, minimalWorkflowWithLogLevel("bogus"))
+
+	var stdout, stderr bytes.Buffer
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+
+	code := run(ctx, []string{wfPath}, &stdout, &stderr)
+	if code != 1 {
+		t.Fatalf("exit code = %d, want 1; stderr: %s", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "unknown log level") {
+		t.Errorf("stderr = %q, want to contain %q", stderr.String(), "unknown log level")
+	}
+}
+
+func TestRunLogLevelDefault(t *testing.T) {
+	wfPath := setupRunDir(t)
+
+	var stdout, stderr bytes.Buffer
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+
+	// No --log-level flag and no extension — default is info.
+	code := run(ctx, []string{wfPath}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr: %s", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "level=INFO") {
+		t.Errorf("stderr = %q, want to contain INFO-level startup line", stderr.String())
+	}
+	// DEBUG-level lines must be absent at the default info level.
+	if strings.Contains(stderr.String(), "level=DEBUG") {
+		t.Errorf("stderr = %q, want no DEBUG lines at default info level", stderr.String())
+	}
+}
+
+func TestRunLogLevelVersionIgnoredInvalid(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	// Version fast path must exit 0 even when --log-level is invalid.
+	code := run(ctx, []string{"--version", "--log-level", "invalid"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0 (version fast path ignores invalid log level)", code)
+	}
+	if !strings.Contains(stdout.String(), "sortie "+Version) {
+		t.Errorf("stdout = %q, want to contain %q", stdout.String(), "sortie "+Version)
+	}
+}
+
+func TestRunLogLevelDumpVersionIgnoredInvalid(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	// -dumpversion fast path must exit 0 even when --log-level is invalid.
+	code := run(ctx, []string{"-dumpversion", "--log-level", "invalid"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0 (-dumpversion fast path ignores invalid log level)", code)
+	}
+	got := strings.TrimSpace(stdout.String())
+	if got != Version {
+		t.Errorf("-dumpversion stdout = %q, want %q", got, Version)
 	}
 }
