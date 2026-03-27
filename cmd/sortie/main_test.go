@@ -4,12 +4,18 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"io"
+	"net"
 	"os"
+	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"reflect"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 	"unicode"
@@ -871,6 +877,9 @@ type lockedBuf struct {
 	buf bytes.Buffer
 }
 
+// errWriter is a test double that always returns a fixed error from Write.
+type errWriter struct{ err error }
+
 func (lb *lockedBuf) Write(p []byte) (int, error) {
 	lb.mu.Lock()
 	defer lb.mu.Unlock()
@@ -882,6 +891,8 @@ func (lb *lockedBuf) String() string {
 	defer lb.mu.Unlock()
 	return lb.buf.String()
 }
+
+func (e errWriter) Write(_ []byte) (int, error) { return 0, e.err }
 
 func TestResolveServerPort(t *testing.T) {
 	t.Parallel()
@@ -1506,5 +1517,268 @@ func TestValidateDoesNotStartWatcher(t *testing.T) {
 	const maxDuration = 30 * time.Second
 	if elapsed > maxDuration {
 		t.Errorf("run(validate) took %v, want < %v (possible watcher goroutine started)", elapsed, maxDuration)
+	}
+}
+
+// --- writeJSON / emitDiags error-path tests ---
+
+func TestWriteJSON(t *testing.T) {
+	t.Parallel()
+
+	t.Run("success returns nil", func(t *testing.T) {
+		t.Parallel()
+
+		var buf bytes.Buffer
+		if err := writeJSON(&buf, validateOutput{Valid: true, Errors: []validateDiag{}}); err != nil {
+			t.Errorf("writeJSON() unexpected error: %v", err)
+		}
+		if buf.Len() == 0 {
+			t.Error("writeJSON() wrote nothing to the buffer")
+		}
+	})
+
+	t.Run("writer failure is returned as error", func(t *testing.T) {
+		t.Parallel()
+
+		w := errWriter{err: fmt.Errorf("disk full")}
+		if err := writeJSON(w, validateOutput{Valid: false, Errors: []validateDiag{}}); err == nil {
+			t.Error("writeJSON() expected error from failing writer, got nil")
+		}
+	})
+}
+
+func TestEmitDiagsJSONFallback(t *testing.T) {
+	t.Parallel()
+
+	// When stdout fails to accept JSON, emitDiags must fall back to
+	// plain-text diagnostics on stderr so the caller still sees the error.
+	diags := []validateDiag{
+		{Check: "tracker.kind", Message: "tracker kind is required"},
+	}
+	var stderr bytes.Buffer
+	emitDiags(errWriter{err: fmt.Errorf("disk full")}, &stderr, "json", diags)
+
+	got := stderr.String()
+	if !strings.Contains(got, "tracker.kind") {
+		t.Errorf("stderr = %q, want to contain %q (fallback text)", got, "tracker.kind")
+	}
+	if !strings.Contains(got, "tracker kind is required") {
+		t.Errorf("stderr = %q, want to contain %q (fallback text)", got, "tracker kind is required")
+	}
+}
+
+func TestRunValidateJSONSuccessStdoutFails(t *testing.T) {
+	// No t.Parallel: setupRunDir calls t.Chdir.
+	wfPath := setupRunDir(t)
+
+	var stderr bytes.Buffer
+	ctx := context.Background()
+
+	code := run(ctx, []string{"validate", "--format", "json", wfPath},
+		errWriter{err: fmt.Errorf("disk full")}, &stderr)
+	if code != 1 {
+		t.Fatalf("run(validate --format json) with failing stdout = %d, want 1; stderr: %s",
+			code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "failed to write JSON output") {
+		t.Errorf("stderr = %q, want to contain %q", stderr.String(), "failed to write JSON output")
+	}
+}
+
+// --- OS signal and server shutdown edge-case tests ---
+
+// TestRunSIGINTCleanShutdown verifies that run() returns 0 when the process
+// receives SIGINT via signal.NotifyContext. Uses the helper-subprocess
+// pattern to avoid delivering OS signals to the test runner's own process.
+//
+// Subprocess mode is activated by SORTIE_TEST_SIGINT_HELPER=1.
+func TestRunSIGINTCleanShutdown(t *testing.T) {
+	if os.Getenv("SORTIE_TEST_SIGINT_HELPER") == "1" {
+		// --- subprocess ---
+		// This code runs as a subprocess when the parent test injects the
+		// env var. signal.NotifyContext handles SIGINT by cancelling ctx,
+		// which causes run() to shut down cleanly.
+		dir := os.Getenv("SORTIE_TEST_SIGINT_DIR")
+		wfPath := filepath.Join(dir, "WORKFLOW.md")
+		ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+		defer stop()
+		os.Exit(run(ctx, []string{wfPath}, os.Stdout, os.Stderr))
+		return // unreachable — silences staticcheck
+	}
+
+	// --- parent test ---
+	dir := t.TempDir()
+	writeIssuesFixture(t, dir)
+	writeWorkflowFile(t, dir)
+
+	cmd := exec.Command(os.Args[0], "-test.run=TestRunSIGINTCleanShutdown", "-test.v")
+	cmd.Env = append(os.Environ(),
+		"SORTIE_TEST_SIGINT_HELPER=1",
+		"SORTIE_TEST_SIGINT_DIR="+dir,
+	)
+	var subStderr lockedBuf
+	cmd.Stdout = io.Discard
+	cmd.Stderr = &subStderr
+
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("cmd.Start: %v", err)
+	}
+
+	// Poll subprocess stderr until "sortie started" appears — confirming
+	// the orchestrator event loop is running before we send SIGINT.
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if strings.Contains(subStderr.String(), "sortie started") {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if !strings.Contains(subStderr.String(), "sortie started") {
+		cmd.Process.Kill() //nolint:errcheck // best-effort cleanup
+		t.Fatalf("subprocess did not reach 'sortie started' within 5 s; stderr:\n%s", subStderr.String())
+	}
+
+	// Send SIGINT — should trigger context cancellation and clean shutdown.
+	if err := cmd.Process.Signal(syscall.SIGINT); err != nil {
+		t.Fatalf("Signal(SIGINT): %v", err)
+	}
+
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+
+	select {
+	case waitErr := <-done:
+		if waitErr != nil {
+			var exitErr *exec.ExitError
+			if errors.As(waitErr, &exitErr) {
+				t.Errorf("subprocess exited with code %d after SIGINT, want 0; stderr:\n%s",
+					exitErr.ExitCode(), subStderr.String())
+			} else {
+				t.Errorf("subprocess Wait: %v; stderr:\n%s", waitErr, subStderr.String())
+			}
+		}
+	case <-time.After(5 * time.Second):
+		cmd.Process.Kill() //nolint:errcheck // best-effort cleanup
+		t.Errorf("subprocess did not exit within 5 s after SIGINT; stderr:\n%s", subStderr.String())
+	}
+}
+
+// TestRunServerShutdownError covers the logger.Error("http server shutdown
+// error", ...) branch that fires when srv.Shutdown returns an error because
+// active connections are still open when the shutdown context expires.
+//
+// The test uses an incomplete HTTP request to hold a connection in the
+// "active" state, preventing immediate shutdown, and a short
+// serverShutdownTimeout override to make the context expire quickly.
+func TestRunServerShutdownError(t *testing.T) {
+	// No t.Parallel: mutates package-level serverShutdownTimeout.
+	orig := serverShutdownTimeout
+	serverShutdownTimeout = 50 * time.Millisecond
+	t.Cleanup(func() { serverShutdownTimeout = orig })
+
+	wfPath := setupRunDir(t)
+
+	var stderr lockedBuf
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	result := make(chan int, 1)
+	go func() {
+		result <- run(ctx, []string{"--port", "0", wfPath}, io.Discard, &stderr)
+	}()
+
+	// Wait until the HTTP server reports its bound address.
+	var addr string
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if log := stderr.String(); strings.Contains(log, "http server listening") {
+			if i := strings.Index(log, "addr="); i >= 0 {
+				rest := log[i+5:]
+				if end := strings.IndexAny(rest, " \t\n\r"); end >= 0 {
+					addr = rest[:end]
+				} else {
+					addr = strings.TrimSpace(rest)
+				}
+				break
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if addr == "" {
+		cancel()
+		t.Fatal("HTTP server did not start or log its address within 3 s")
+	}
+
+	// Open a TCP connection and send an incomplete HTTP request (no
+	// trailing \r\n\r\n). The server goroutine is waiting to finish
+	// reading the request headers, keeping the connection "active" from
+	// http.Server.Shutdown's perspective.
+	conn, dialErr := net.DialTimeout("tcp", addr, time.Second)
+	if dialErr != nil {
+		cancel()
+		t.Fatalf("dial %s: %v", addr, dialErr)
+	}
+	defer conn.Close() //nolint:errcheck // best-effort cleanup
+	//nolint:errcheck // test write — errors are unrecoverable here
+	conn.Write([]byte("GET / HTTP/1.1\r\nHost: localhost\r\n"))
+
+	// Give the server goroutine time to register the connection as active.
+	time.Sleep(20 * time.Millisecond)
+
+	// Cancel the run context to trigger the shutdown sequence.
+	cancel()
+
+	select {
+	case code := <-result:
+		// shutdown errors are logged but do not change the exit code.
+		if code != 0 {
+			t.Errorf("run() = %d, want 0 (shutdown error is non-fatal); stderr:\n%s",
+				code, stderr.String())
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatalf("run() did not return within 3 s after context cancel; stderr:\n%s", stderr.String())
+	}
+
+	if !strings.Contains(stderr.String(), "http server shutdown error") {
+		t.Errorf("stderr = %q, want to contain %q", stderr.String(), "http server shutdown error")
+	}
+}
+
+// TestRunReadOnlyWorkflowDir covers the persistence.Open error path that
+// fires when the database file cannot be created because the workflow
+// directory has no write permission.
+func TestRunReadOnlyWorkflowDir(t *testing.T) {
+	// No t.Parallel: calls t.Chdir via setupRunDir, and mutates permissions.
+	if os.Getuid() == 0 {
+		t.Skip("skipping: root bypasses filesystem permission checks")
+	}
+
+	workflowDir := t.TempDir()
+	writeIssuesFixture(t, workflowDir)
+	writeWorkflowFile(t, workflowDir)
+	t.Chdir(workflowDir)
+
+	// Make the directory read-only: traversable and readable, but no writes.
+	// This prevents creating .sortie.db while still allowing the workflow
+	// file and issues fixture to be read by the startup sequence.
+	if err := os.Chmod(workflowDir, 0o555); err != nil {
+		t.Fatalf("chmod: %v", err)
+	}
+	t.Cleanup(func() {
+		os.Chmod(workflowDir, 0o755) //nolint:errcheck // cleanup
+	})
+
+	var stdout, stderr bytes.Buffer
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	wfPath := filepath.Join(workflowDir, "WORKFLOW.md")
+	code := run(ctx, []string{wfPath}, &stdout, &stderr)
+	if code != 1 {
+		t.Fatalf("exit code = %d, want 1 (DB must not be created in read-only dir); stderr: %s",
+			code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "failed to open database") {
+		t.Errorf("stderr = %q, want to contain %q", stderr.String(), "failed to open database")
 	}
 }
