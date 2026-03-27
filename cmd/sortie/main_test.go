@@ -1699,6 +1699,8 @@ func TestRunServerShutdownError(t *testing.T) {
 				} else {
 					addr = strings.TrimSpace(rest)
 				}
+				// slog.TextHandler may quote string values (addr="host:port").
+				addr = strings.Trim(addr, "\"")
 				break
 			}
 		}
