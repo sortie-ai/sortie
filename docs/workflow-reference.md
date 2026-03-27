@@ -23,8 +23,9 @@
   - [2.7 `db_path` — SQLite Database Path](#27-db_path--sqlite-database-path)
 - [3. Extensions](#3-extensions)
   - [3.1 `server.port` — HTTP Server](#31-serverport--http-server)
-  - [3.2 `worker` — SSH Worker Extension](#32-worker--ssh-worker-extension)
-  - [3.3 Adapter-Specific Pass-Through Config](#33-adapter-specific-pass-through-config)
+  - [3.2 `logging.level` — Log Verbosity](#32-logginglevel--log-verbosity)
+  - [3.3 `worker` — SSH Worker Extension](#33-worker--ssh-worker-extension)
+  - [3.4 Adapter-Specific Pass-Through Config](#34-adapter-specific-pass-through-config)
 - [4. Prompt Template Reference](#4-prompt-template-reference)
   - [4.1 Template Engine](#41-template-engine)
   - [4.2 Template Input Variables](#42-template-input-variables)
@@ -337,7 +338,7 @@ agent:
 **Orchestrator vs adapter fields:** The fields above are consumed by the orchestrator
 for scheduling, concurrency, and retry decisions. They are **not** passed through to the
 agent adapter. Adapter-specific configuration uses separate pass-through blocks — see
-[Section 3.3](#33-adapter-specific-pass-through-config).
+[Section 3.4](#34-adapter-specific-pass-through-config).
 
 ---
 
@@ -692,7 +693,23 @@ $ curl -s http://localhost:8642/metrics | grep sortie_sessions_running
 sortie_sessions_running 2
 ```
 
-### 3.2 `worker` — SSH Worker Extension
+### 3.2 `logging.level` — Log Verbosity
+
+```yaml
+logging:
+  level: debug
+```
+
+| Field | Type | Required | Default | Dynamic Reload | Description |
+|---|---|---|---|---|---|
+| `logging.level` | string | No | `info` | **No** — requires restart | Log verbosity: `debug`, `info`, `warn`, `error`. CLI `--log-level` overrides. |
+
+When `logging.level` is set, Sortie initializes the log handler at the specified
+verbosity after the workflow config is loaded. The CLI `--log-level` flag takes
+precedence when both are present. Accepted values: `debug`, `info`, `warn`,
+`error` (case-insensitive). Unknown values cause startup failure with exit code 1.
+
+### 3.3 `worker` — SSH Worker Extension
 
 ```yaml
 worker:
@@ -788,7 +805,7 @@ You are a software engineer. Fix the issue described below.
 {{.issue_body}}
 ```
 
-### 3.3 Adapter-Specific Pass-Through Config
+### 3.4 Adapter-Specific Pass-Through Config
 
 Each adapter (tracker or agent) may define configuration in a top-level object named
 after its `kind` value. These values are passed through to the adapter without validation
@@ -1216,6 +1233,7 @@ re-applies configuration and prompt template without restart.
 | `agent.max_sessions`                   | **Immediate** — affects future retry timer evaluations.                                        |
 | `db_path`                              | **No effect** — requires restart. In-memory config updated, but database connection unchanged. |
 | `server.port`                          | **No effect** — requires restart.                                                              |
+| `logging.level`                        | **No effect** — requires restart.                                                              |
 | Prompt template                        | Future worker attempts (including continuation retries), not in-flight continuation turns.     |
 
 ---
@@ -1329,6 +1347,7 @@ A flat reference of every configuration field, for quick lookup.
 | `db_path`                               | path             | `.sortie.db`                 | Restart required                                                                       |
 | **Extensions**                          |                  |                              |                                                                                        |
 | `server.port`                           | integer          | _(absent)_                   | TCP port for the embedded HTTP observability server; CLI `--port` overrides             |
+| `logging.level`                         | string           | `info`                       | Log verbosity; CLI `--log-level` overrides                                             |
 | `worker.ssh_hosts`                      | `[string]`       | _(absent)_                   | SSH host targets for remote agent execution; dynamic reload                            |
 | `worker.max_concurrent_agents_per_host` | integer          | _(absent)_                   | Per-host concurrency cap for SSH hosts; dynamic reload                                 |
 

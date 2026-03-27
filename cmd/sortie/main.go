@@ -1,7 +1,8 @@
 // Package main is the entry point for the Sortie orchestration service.
 // The binary accepts an optional positional workflow file path (default
-// ./WORKFLOW.md), a --port flag for the HTTP observability server, and
-// a "validate" subcommand for offline workflow file validation.
+// ./WORKFLOW.md), a --log-level flag to control log verbosity, a --port
+// flag for the HTTP observability server, and a "validate" subcommand
+// for offline workflow file validation.
 // Start with [run] for the complete startup and shutdown lifecycle.
 package main
 
@@ -63,6 +64,7 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 
 	fs := flag.NewFlagSet("sortie", flag.ContinueOnError)
 	fs.SetOutput(stderr)
+	logLevel := fs.String("log-level", "", `Log verbosity: "debug", "info", "warn", "error" (default "info")`)
 	port := fs.Int("port", 0, "HTTP server port")
 	showVersion := fs.Bool("version", false, "Print program's version information and quit")
 	dumpVersion := fs.Bool("dumpversion", false, "Print the version of the program and don't do anything else")
@@ -103,24 +105,31 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 		return 1
 	}
 
-	var portSet bool
+	var portSet, logLevelSet bool
 	fs.Visit(func(f *flag.Flag) {
-		if f.Name == "port" {
+		switch f.Name {
+		case "port":
 			portSet = true
+		case "log-level":
+			logLevelSet = true
 		}
 	})
 
-	logging.Setup(stderr, slog.LevelInfo)
+	// Phase 1: early logging setup (before workflow load).
+	// If the CLI flag is set, validate and apply it immediately so all
+	// subsequent output (including workflow loading) respects the
+	// operator's choice. Otherwise, start at the default info level.
+	var effectiveLevel = slog.LevelInfo
+	if logLevelSet {
+		lvl, err := logging.ParseLevel(*logLevel)
+		if err != nil {
+			fmt.Fprintf(stderr, "sortie: %s\n", err) //nolint:errcheck // stderr write failure is unrecoverable
+			return 1
+		}
+		effectiveLevel = lvl
+	}
+	logging.Setup(stderr, effectiveLevel)
 	logger := slog.Default()
-
-	logAttrs := []any{
-		slog.String("version", Version),
-		slog.String("workflow_path", path),
-	}
-	if portSet {
-		logAttrs = append(logAttrs, slog.Int("port", *port))
-	}
-	logger.Info("sortie starting", logAttrs...)
 
 	mgr, err := workflow.NewManager(path, logger,
 		workflow.WithValidateFunc(orchestrator.ValidateConfigForPromotion))
@@ -153,6 +162,33 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 	// Read config after preflight reload so state and adapters reflect
 	// the validated configuration.
 	cfg := mgr.Config()
+
+	// Phase 2: post-config log level adjustment. When the CLI flag was
+	// not set, check the workflow extensions for a logging.level key.
+	if !logLevelSet {
+		lvl, err := resolveLogLevel("", false, cfg.Extensions)
+		if err != nil {
+			fmt.Fprintf(stderr, "sortie: %s\n", err) //nolint:errcheck // stderr write failure is unrecoverable
+			return 1
+		}
+		if lvl != slog.LevelInfo {
+			effectiveLevel = lvl
+			logging.Setup(stderr, effectiveLevel)
+			logger = slog.Default()
+		}
+	}
+
+	logAttrs := []any{
+		slog.String("version", Version),
+		slog.String("workflow_path", path),
+	}
+	if portSet {
+		logAttrs = append(logAttrs, slog.Int("port", *port))
+	}
+	if effectiveLevel != slog.LevelInfo {
+		logAttrs = append(logAttrs, slog.String("log_level", effectiveLevel.String()))
+	}
+	logger.Info("sortie starting", logAttrs...)
 
 	// --- Database open, migrate, and recovery ---
 
@@ -488,6 +524,32 @@ func resolveServerPort(portFlag int, portFlagSet bool, extensions map[string]any
 	return port, true, nil
 }
 
+// resolveLogLevel determines the effective log level from the CLI flag
+// and workflow extensions. Precedence: CLI flag > logging.level
+// extension > default (info).
+func resolveLogLevel(flagValue string, flagSet bool, extensions map[string]any) (slog.Level, error) {
+	if flagSet {
+		return logging.ParseLevel(flagValue)
+	}
+
+	loggingExt, ok := extensions["logging"].(map[string]any)
+	if !ok {
+		return slog.LevelInfo, nil
+	}
+
+	rawLevel, ok := loggingExt["level"]
+	if !ok || rawLevel == nil {
+		return slog.LevelInfo, nil
+	}
+
+	levelStr, ok := rawLevel.(string)
+	if !ok {
+		return 0, fmt.Errorf("invalid logging.level: expected string, got %T", rawLevel)
+	}
+
+	return logging.ParseLevel(levelStr)
+}
+
 // --- Validate subcommand ---
 
 type validateOutput struct {
@@ -504,6 +566,13 @@ func runValidate(_ context.Context, args []string, stdout io.Writer, stderr io.W
 	fs := flag.NewFlagSet("sortie validate", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	format := fs.String("format", "text", `Output format: "text" or "json"`)
+
+	fs.Usage = func() {
+		fmt.Fprintf(fs.Output(), "Usage: sortie validate [--format text|json] [workflow-path]\n\nFlags:\n") //nolint:errcheck // stderr write failure is unrecoverable
+		fs.VisitAll(func(f *flag.Flag) {
+			fmt.Fprintf(fs.Output(), "  --%s\t%s (default %q)\n", f.Name, f.Usage, f.DefValue) //nolint:errcheck // stderr write failure is unrecoverable
+		})
+	}
 
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
