@@ -1,6 +1,7 @@
 package prompt
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/sortie-ai/sortie/internal/domain"
@@ -175,6 +176,29 @@ func TestAnalyzeTemplate(t *testing.T) {
 			wantKind:  WarnUnknownField,
 			wantNode:  "$.run.nonexistent",
 		},
+		// Depth-4+ chains: level-3 fields are scalars, further chaining is invalid.
+		{
+			name:      "Depth4ChainKnownLevel3",
+			body:      `{{ .issue.parent.identifier.extra }}`,
+			wantCount: 1,
+			wantKind:  WarnUnknownField,
+			wantNode:  ".issue.parent.identifier.extra",
+		},
+		{
+			name:      "Depth4ChainDollarKnownLevel3",
+			body:      `{{ $.issue.parent.id.surplus }}`,
+			wantCount: 1,
+			wantKind:  WarnUnknownField,
+			wantNode:  "$.issue.parent.id.surplus",
+		},
+		// Depth-5 chain still produces exactly one warning.
+		{
+			name:      "Depth5ChainKnownLevel3",
+			body:      `{{ .issue.parent.identifier.a.b }}`,
+			wantCount: 1,
+			wantKind:  WarnUnknownField,
+			wantNode:  ".issue.parent.identifier.a.b",
+		},
 		// FuncMap calls (join, lower, toJSON) must not produce warnings.
 		{
 			name:      "FuncMapNoWarn",
@@ -237,6 +261,68 @@ func TestAnalyzeTemplate(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestAnalyzeTemplateDepth4ChainMessage verifies the full warning content
+// for depth-4+ field chains: kind, node text, and message substring.
+func TestAnalyzeTemplateDepth4ChainMessage(t *testing.T) {
+	t.Parallel()
+
+	tmpl := mustParseAnalyze(t, `{{ .issue.parent.identifier.extra }}`)
+	warnings := AnalyzeTemplate(tmpl)
+
+	if len(warnings) != 1 {
+		t.Fatalf("AnalyzeTemplate returned %d warnings, want 1: %v", len(warnings), warnings)
+	}
+	w := warnings[0]
+	if w.Kind != WarnUnknownField {
+		t.Errorf("Kind = %v, want WarnUnknownField", w.Kind)
+	}
+	if w.Node != ".issue.parent.identifier.extra" {
+		t.Errorf("Node = %q, want %q", w.Node, ".issue.parent.identifier.extra")
+	}
+	const wantSubstr = "scalar with no sub-fields"
+	if !strings.Contains(w.Message, wantSubstr) {
+		t.Errorf("Message = %q, want to contain %q", w.Message, wantSubstr)
+	}
+	// The message must name the parent scalar field (issue.parent.identifier).
+	const wantBase = "issue.parent.identifier"
+	if !strings.Contains(w.Message, wantBase) {
+		t.Errorf("Message = %q, want to contain %q", w.Message, wantBase)
+	}
+}
+
+// TestAnalyzeTemplateNestedRangeAllWarnings verifies the DotContextRangeNested
+// case fully: both warnings must be WarnDotContext and reference the correct
+// node expressions.
+func TestAnalyzeTemplateNestedRangeAllWarnings(t *testing.T) {
+	t.Parallel()
+
+	// Outer range body contains an inner range whose pipe (.issue.labels)
+	// fires at scopeDepth=1; the inner body's .run.turn_number fires at
+	// scopeDepth=2.
+	body := `{{ range .issue.labels }}{{ range .issue.labels }}{{ .run.turn_number }}{{ end }}{{ end }}`
+	tmpl := mustParseAnalyze(t, body)
+	warnings := AnalyzeTemplate(tmpl)
+
+	if len(warnings) != 2 {
+		t.Fatalf("AnalyzeTemplate returned %d warnings, want 2: %v", len(warnings), warnings)
+	}
+	want := []struct {
+		kind WarnKind
+		node string
+	}{
+		{WarnDotContext, ".issue.labels"},
+		{WarnDotContext, ".run.turn_number"},
+	}
+	for i, w := range warnings {
+		if w.Kind != want[i].kind {
+			t.Errorf("warnings[%d].Kind = %v, want %v", i, w.Kind, want[i].kind)
+		}
+		if w.Node != want[i].node {
+			t.Errorf("warnings[%d].Node = %q, want %q", i, w.Node, want[i].node)
+		}
 	}
 }
 
