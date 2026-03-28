@@ -1823,6 +1823,312 @@ func TestValidateErrorAndWarningsTogether(t *testing.T) {
 	}
 }
 
+// --- Template static analysis warning tests ---
+
+// dotContextWorkflow returns a workflow whose prompt triggers WarnDotContext:
+// .issue.title referenced inside {{ range }} where dot is the element.
+func dotContextWorkflow() []byte {
+	return []byte(`---
+tracker:
+  kind: file
+  active_states:
+    - To Do
+  terminal_states:
+    - Done
+agent:
+  kind: mock
+---
+{{ range .issue.labels }}{{ .issue.title }}{{ end }}
+`)
+}
+
+// unknownVarWorkflow returns a workflow whose prompt triggers WarnUnknownVar:
+// .config is not in the template data contract.
+func unknownVarWorkflow() []byte {
+	return []byte(`---
+tracker:
+  kind: file
+  active_states:
+    - To Do
+  terminal_states:
+    - Done
+agent:
+  kind: mock
+---
+{{ .config }}
+`)
+}
+
+// unknownFieldWorkflow returns a workflow whose prompt triggers WarnUnknownField:
+// .run.nonexistent is not a valid sub-field of run.
+func unknownFieldWorkflow() []byte {
+	return []byte(`---
+tracker:
+  kind: file
+  active_states:
+    - To Do
+  terminal_states:
+    - Done
+agent:
+  kind: mock
+---
+{{ .run.nonexistent }}
+`)
+}
+
+// multipleTemplateWarningWorkflow returns a workflow whose prompt triggers
+// both WarnDotContext (.issue.title inside range) and WarnUnknownVar ($.config).
+func multipleTemplateWarningWorkflow() []byte {
+	return []byte(`---
+tracker:
+  kind: file
+  active_states:
+    - To Do
+  terminal_states:
+    - Done
+agent:
+  kind: mock
+---
+{{ range .issue.labels }}{{ .issue.title }}{{ $.config }}{{ end }}
+`)
+}
+
+// TestValidateTemplateDotContextText verifies that a dot-context misuse
+// produces exit 0, empty stdout, and a "dot_context" warning on stderr.
+func TestValidateTemplateDotContextText(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	wfPath := writeCustomWorkflowFile(t, dir, dotContextWorkflow())
+
+	var stdout, stderr bytes.Buffer
+	code := run(context.Background(), []string{"validate", wfPath}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("run(validate) = %d, want 0; stderr: %s", code, stderr.String())
+	}
+	if stdout.Len() != 0 {
+		t.Errorf("stdout = %q, want empty (text mode, warnings only)", stdout.String())
+	}
+	got := stderr.String()
+	if !strings.Contains(got, "warning:") {
+		t.Errorf("stderr = %q, want to contain %q", got, "warning:")
+	}
+	if !strings.Contains(got, "dot_context") {
+		t.Errorf("stderr = %q, want to contain %q", got, "dot_context")
+	}
+}
+
+// TestValidateTemplateDotContextJSON verifies that a dot-context misuse
+// produces valid=true, empty errors, and a warning with check="dot_context"
+// in JSON output.
+func TestValidateTemplateDotContextJSON(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	wfPath := writeCustomWorkflowFile(t, dir, dotContextWorkflow())
+
+	var stdout, stderr bytes.Buffer
+	code := run(context.Background(), []string{"validate", "--format", "json", wfPath}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("run(validate --format json) = %d, want 0; stderr: %s", code, stderr.String())
+	}
+
+	var out validateOutput
+	if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
+		t.Fatalf("json.Unmarshal(%q): %v", stdout.String(), err)
+	}
+	if !out.Valid {
+		t.Errorf("validateOutput.Valid = false, want true")
+	}
+	if len(out.Errors) != 0 {
+		t.Errorf("validateOutput.Errors = %v, want empty", out.Errors)
+	}
+	found := false
+	for _, w := range out.Warnings {
+		if w.Check == "dot_context" {
+			found = true
+			if w.Severity != "warning" {
+				t.Errorf("warnings[dot_context].Severity = %q, want %q", w.Severity, "warning")
+			}
+		}
+	}
+	if !found {
+		t.Errorf("validateOutput.Warnings = %v, want at least one entry with check=%q", out.Warnings, "dot_context")
+	}
+}
+
+// TestValidateTemplateUnknownVarText verifies that an unknown top-level
+// variable produces exit 0 and an "unknown_var" warning on stderr.
+func TestValidateTemplateUnknownVarText(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	wfPath := writeCustomWorkflowFile(t, dir, unknownVarWorkflow())
+
+	var stdout, stderr bytes.Buffer
+	code := run(context.Background(), []string{"validate", wfPath}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("run(validate) = %d, want 0; stderr: %s", code, stderr.String())
+	}
+	got := stderr.String()
+	if !strings.Contains(got, "warning:") {
+		t.Errorf("stderr = %q, want to contain %q", got, "warning:")
+	}
+	if !strings.Contains(got, "unknown_var") {
+		t.Errorf("stderr = %q, want to contain %q", got, "unknown_var")
+	}
+}
+
+// TestValidateTemplateUnknownVarJSON verifies that an unknown top-level
+// variable produces valid=true and a warning with check="unknown_var" in JSON.
+func TestValidateTemplateUnknownVarJSON(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	wfPath := writeCustomWorkflowFile(t, dir, unknownVarWorkflow())
+
+	var stdout, stderr bytes.Buffer
+	code := run(context.Background(), []string{"validate", "--format", "json", wfPath}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("run(validate --format json) = %d, want 0; stderr: %s", code, stderr.String())
+	}
+
+	var out validateOutput
+	if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
+		t.Fatalf("json.Unmarshal(%q): %v", stdout.String(), err)
+	}
+	if !out.Valid {
+		t.Errorf("validateOutput.Valid = false, want true")
+	}
+	found := false
+	for _, w := range out.Warnings {
+		if w.Check == "unknown_var" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("validateOutput.Warnings = %v, want at least one entry with check=%q", out.Warnings, "unknown_var")
+	}
+}
+
+// TestValidateTemplateUnknownFieldText verifies that an unknown sub-field
+// produces exit 0 and an "unknown_field" warning on stderr.
+func TestValidateTemplateUnknownFieldText(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	wfPath := writeCustomWorkflowFile(t, dir, unknownFieldWorkflow())
+
+	var stdout, stderr bytes.Buffer
+	code := run(context.Background(), []string{"validate", wfPath}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("run(validate) = %d, want 0; stderr: %s", code, stderr.String())
+	}
+	got := stderr.String()
+	if !strings.Contains(got, "warning:") {
+		t.Errorf("stderr = %q, want to contain %q", got, "warning:")
+	}
+	if !strings.Contains(got, "unknown_field") {
+		t.Errorf("stderr = %q, want to contain %q", got, "unknown_field")
+	}
+}
+
+// TestValidateTemplateUnknownFieldJSON verifies that an unknown sub-field
+// produces valid=true and a warning with check="unknown_field" in JSON.
+func TestValidateTemplateUnknownFieldJSON(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	wfPath := writeCustomWorkflowFile(t, dir, unknownFieldWorkflow())
+
+	var stdout, stderr bytes.Buffer
+	code := run(context.Background(), []string{"validate", "--format", "json", wfPath}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("run(validate --format json) = %d, want 0; stderr: %s", code, stderr.String())
+	}
+
+	var out validateOutput
+	if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
+		t.Fatalf("json.Unmarshal(%q): %v", stdout.String(), err)
+	}
+	if !out.Valid {
+		t.Errorf("validateOutput.Valid = false, want true")
+	}
+	found := false
+	for _, w := range out.Warnings {
+		if w.Check == "unknown_field" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("validateOutput.Warnings = %v, want at least one entry with check=%q", out.Warnings, "unknown_field")
+	}
+}
+
+// TestValidateTemplateMultipleWarnings verifies that a prompt triggering
+// multiple warning classes reports all of them without changing the exit code.
+func TestValidateTemplateMultipleWarnings(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	wfPath := writeCustomWorkflowFile(t, dir, multipleTemplateWarningWorkflow())
+
+	var stdout, stderr bytes.Buffer
+	code := run(context.Background(), []string{"validate", "--format", "json", wfPath}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("run(validate --format json) = %d, want 0; stderr: %s", code, stderr.String())
+	}
+
+	var out validateOutput
+	if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
+		t.Fatalf("json.Unmarshal(%q): %v", stdout.String(), err)
+	}
+	if !out.Valid {
+		t.Errorf("validateOutput.Valid = false, want true")
+	}
+	if len(out.Errors) != 0 {
+		t.Errorf("validateOutput.Errors = %v, want empty", out.Errors)
+	}
+	hasDotContext := false
+	hasUnknownVar := false
+	for _, w := range out.Warnings {
+		if w.Check == "dot_context" {
+			hasDotContext = true
+		}
+		if w.Check == "unknown_var" {
+			hasUnknownVar = true
+		}
+	}
+	if !hasDotContext {
+		t.Errorf("validateOutput.Warnings = %v, want at least one %q warning", out.Warnings, "dot_context")
+	}
+	if !hasUnknownVar {
+		t.Errorf("validateOutput.Warnings = %v, want at least one %q warning", out.Warnings, "unknown_var")
+	}
+}
+
+// TestValidateTemplateCleanNoWarnings verifies that a well-formed workflow
+// produces no template warnings.
+func TestValidateTemplateCleanNoWarnings(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	wfPath := writeCustomWorkflowFile(t, dir, minimalWorkflow())
+
+	var stdout, stderr bytes.Buffer
+	code := run(context.Background(), []string{"validate", wfPath}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("run(validate) = %d, want 0; stderr: %s", code, stderr.String())
+	}
+	if stdout.Len() != 0 {
+		t.Errorf("stdout = %q, want empty", stdout.String())
+	}
+	got := stderr.String()
+	if strings.Contains(got, "dot_context") || strings.Contains(got, "unknown_var") || strings.Contains(got, "unknown_field") {
+		t.Errorf("stderr = %q, want no template warnings for a clean workflow", got)
+	}
+}
+
 // --- writeJSON / emitDiags error-path tests ---
 
 func TestWriteJSON(t *testing.T) {
