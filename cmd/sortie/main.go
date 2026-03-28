@@ -797,6 +797,9 @@ func runValidate(_ context.Context, args []string, stdout io.Writer, stderr io.W
 	}
 	// parseErr is not emitted here — NewManager below will re-parse
 	// and produce the same error through the existing error path.
+	// TODO: accept a pre-parsed template in NewManager to avoid the
+	// double-parse; negligible overhead for validate but worth
+	// cleaning up in a future refactor.
 
 	logger := slog.New(slog.DiscardHandler)
 

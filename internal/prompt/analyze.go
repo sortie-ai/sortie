@@ -12,7 +12,10 @@ type WarnKind int
 
 const (
 	// WarnDotContext flags a FieldNode referencing a top-level data key
-	// inside a range or with block where dot has been redefined.
+	// inside a range or with block where dot has been redefined. This
+	// includes pipe arguments to nested range/with nodes, because those
+	// arguments are evaluated in the enclosing scope where dot is already
+	// the current element.
 	WarnDotContext WarnKind = iota + 1
 
 	// WarnUnknownVar flags a top-level variable reference not in the
@@ -154,14 +157,18 @@ func (a *analyzer) checkFieldNode(ident []string, scopeDepth int) {
 	}
 	_, isTopLevel := topLevelKeys[ident[0]]
 
-	// Check 1: dot-context misuse inside range/with.
+	// Check 1: dot-context misuse inside range/with. The early return
+	// is intentional: when dot is redefined, the entire expression is
+	// suspect, so sub-field validation (Check 3) is skipped. Emitting
+	// both would be noise — the operator must fix the dot reference
+	// first, which may change the sub-field chain entirely.
 	if scopeDepth > 0 && isTopLevel {
 		expr := "." + strings.Join(ident, ".")
 		a.warnings = append(a.warnings, TemplateWarning{
 			Kind: WarnDotContext,
 			Node: expr,
 			Message: fmt.Sprintf(
-				"did you mean %q instead of %q? Inside {{ range }} or {{ with }}, the dot refers to the current element, not the root data",
+				"did you mean %q instead of %q? Inside a {{ range }}/{{ with }} block (including arguments to nested range/with), dot refers to the current element, not root data",
 				"$"+expr, expr),
 		})
 		return
