@@ -6,18 +6,33 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 // dotenvPathOverride holds the .env file path set by the CLI --env-file flag.
 // Read by applyEnvOverrides on each call (supporting dynamic reload).
-var dotenvPathOverride string
+// Access is synchronized via dotenvPathMu.
+var (
+	dotenvPathOverride string
+	dotenvPathMu       sync.RWMutex
+)
 
 // SetDotEnvPath sets the .env file path for config overrides.
-// Call this once from cmd/sortie/main.go before any [NewServiceConfig]
-// calls. If not set, applyEnvOverrides falls back to
+// Safe for concurrent use. Call this from cmd/sortie/main.go before any
+// [NewServiceConfig] calls. If not set, applyEnvOverrides falls back to
 // os.Getenv("SORTIE_ENV_FILE").
 func SetDotEnvPath(path string) {
+	dotenvPathMu.Lock()
 	dotenvPathOverride = path
+	dotenvPathMu.Unlock()
+}
+
+// getDotEnvPath returns the current .env file path override. Safe for
+// concurrent use.
+func getDotEnvPath() string {
+	dotenvPathMu.RLock()
+	defer dotenvPathMu.RUnlock()
+	return dotenvPathOverride
 }
 
 // envOverride maps a SORTIE_* environment variable to a config field path.
@@ -81,7 +96,7 @@ var secretEnvVars = map[string]bool{
 // failures.
 func applyEnvOverrides(raw map[string]any) (map[string]bool, error) {
 	// Resolve dotenv path: CLI flag → env var → empty (no loading).
-	dotenvPath := dotenvPathOverride
+	dotenvPath := getDotEnvPath()
 	if dotenvPath == "" {
 		dotenvPath = os.Getenv("SORTIE_ENV_FILE")
 	}
