@@ -59,6 +59,10 @@ func TestNoopMetricsSatisfiesInterface(t *testing.T) {
 	m.IncHandoffTransitions("error")
 	m.IncHandoffTransitions("skipped")
 
+	// Counters — IncDispatchTransitions
+	m.IncDispatchTransitions("success")
+	m.IncDispatchTransitions("error")
+
 	// Counters — IncToolCalls
 	m.IncToolCalls("Bash", "success")
 	m.IncToolCalls("Read", "error")
