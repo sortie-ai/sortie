@@ -78,8 +78,12 @@ type Template struct {
 }
 
 // Tree returns the parsed template tree for static analysis. The tree
-// is safe for read-only traversal by concurrent callers.
+// is safe for read-only traversal by concurrent callers. Returns nil
+// when the receiver or its underlying template is nil.
 func (t *Template) Tree() *parse.Tree {
+	if t == nil || t.tmpl == nil {
+		return nil
+	}
 	return t.tmpl.Tree
 }
 

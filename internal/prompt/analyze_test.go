@@ -6,7 +6,7 @@ import (
 	"github.com/sortie-ai/sortie/internal/domain"
 )
 
-// mustParse compiles a template body or fatals the test.
+// mustParseAnalyze compiles a template body or fatals the test.
 func mustParseAnalyze(t *testing.T, body string) *Template {
 	t.Helper()
 	tmpl, err := Parse(body, "test.md", 0)
