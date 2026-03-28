@@ -506,7 +506,8 @@ SORTIE_TRACKER_TERMINAL_STATES="Done,Won't Do"
 
 - Items are trimmed of leading/trailing whitespace.
 - Empty items (from trailing commas or `,,`) are discarded.
-- An empty string value means "empty list" (overrides YAML to zero elements).
+- If the environment variable is unset or set to an empty string, the YAML-configured
+  states are used; there is no environment override to force an empty list.
 - State values preserve original casing.
 
 ### 3.4 `.env` file support
