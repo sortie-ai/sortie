@@ -45,7 +45,7 @@ func parseDotEnv(path string) (map[string]string, error) {
 
 		eqIdx := strings.IndexByte(line, '=')
 		if eqIdx < 0 {
-			return nil, fmt.Errorf("dotenv %s:%d: missing '=' in line %q", path, lineNum, line)
+			return nil, fmt.Errorf("dotenv %s:%d: missing '=' in line", path, lineNum)
 		}
 
 		key := strings.TrimSpace(line[:eqIdx])
