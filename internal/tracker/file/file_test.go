@@ -3,6 +3,7 @@ package file
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -1096,5 +1097,175 @@ func TestFileAdapterMetrics(t *testing.T) {
 		a.FetchIssueStatesByIdentifiers(ctx, []string{"PROJ-1"}) //nolint:errcheck // verifying no panic
 		a.FetchIssueComments(ctx, "10001")                       //nolint:errcheck // verifying no panic
 		a.TransitionIssue(ctx, "10001", "Done")                  //nolint:errcheck // verifying no panic
+		a.CommentIssue(ctx, "10001", "ping")                     //nolint:errcheck // verifying no panic
+	})
+}
+
+func TestCommentIssue(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+
+	t.Run("comment visible via FetchIssueComments", func(t *testing.T) {
+		t.Parallel()
+
+		a := newAdapter(t, fixture("basic.json"), nil)
+		if err := a.CommentIssue(ctx, "10001", "session dispatched"); err != nil {
+			t.Fatalf("CommentIssue: %v", err)
+		}
+
+		comments, err := a.FetchIssueComments(ctx, "10001")
+		if err != nil {
+			t.Fatalf("FetchIssueComments: %v", err)
+		}
+
+		// basic.json has 1 existing comment on 10001; we added 1 more.
+		if len(comments) != 2 {
+			t.Fatalf("comment count = %d, want 2", len(comments))
+		}
+		last := comments[len(comments)-1]
+		if last.Body != "session dispatched" {
+			t.Errorf("last comment body = %q, want %q", last.Body, "session dispatched")
+		}
+		if last.CreatedAt == "" {
+			t.Error("last comment CreatedAt is empty, want RFC3339 timestamp")
+		}
+	})
+
+	t.Run("comment appended after existing fixture comments", func(t *testing.T) {
+		t.Parallel()
+
+		a := newAdapter(t, fixture("basic.json"), nil)
+		if err := a.CommentIssue(ctx, "10001", "new comment"); err != nil {
+			t.Fatalf("CommentIssue: %v", err)
+		}
+
+		comments, err := a.FetchIssueComments(ctx, "10001")
+		if err != nil {
+			t.Fatalf("FetchIssueComments: %v", err)
+		}
+
+		// Fixture comment must remain first.
+		if comments[0].Body != "Needs SSO support." {
+			t.Errorf("comments[0].Body = %q, want %q", comments[0].Body, "Needs SSO support.")
+		}
+		// Injected comment is last.
+		if comments[len(comments)-1].Body != "new comment" {
+			t.Errorf("last comment = %q, want %q", comments[len(comments)-1].Body, "new comment")
+		}
+	})
+
+	t.Run("multiple comments accumulate in order", func(t *testing.T) {
+		t.Parallel()
+
+		a := newAdapter(t, fixture("basic.json"), nil)
+
+		for _, text := range []string{"first", "second", "third"} {
+			if err := a.CommentIssue(ctx, "10002", text); err != nil {
+				t.Fatalf("CommentIssue(%q): %v", text, err)
+			}
+		}
+
+		comments, err := a.FetchIssueComments(ctx, "10002")
+		if err != nil {
+			t.Fatalf("FetchIssueComments: %v", err)
+		}
+
+		// 10002 has 0 existing comments in fixture.
+		if len(comments) != 3 {
+			t.Fatalf("comment count = %d, want 3", len(comments))
+		}
+		for i, want := range []string{"first", "second", "third"} {
+			if comments[i].Body != want {
+				t.Errorf("comments[%d].Body = %q, want %q", i, comments[i].Body, want)
+			}
+		}
+	})
+
+	t.Run("comment does not affect other issues", func(t *testing.T) {
+		t.Parallel()
+
+		a := newAdapter(t, fixture("basic.json"), nil)
+		if err := a.CommentIssue(ctx, "10001", "isolated"); err != nil {
+			t.Fatalf("CommentIssue: %v", err)
+		}
+
+		comments, err := a.FetchIssueComments(ctx, "10002")
+		if err != nil {
+			t.Fatalf("FetchIssueComments: %v", err)
+		}
+		for _, c := range comments {
+			if c.Body == "isolated" {
+				t.Error("comment on 10001 appeared in 10002 comments")
+			}
+		}
+	})
+
+	t.Run("issue not found returns ErrTrackerNotFound", func(t *testing.T) {
+		t.Parallel()
+
+		a := newAdapter(t, fixture("basic.json"), nil)
+		err := a.CommentIssue(ctx, "nonexistent", "text")
+		requireTrackerErrorKind(t, err, domain.ErrTrackerNotFound)
+	})
+
+	t.Run("file read error propagated", func(t *testing.T) {
+		t.Parallel()
+
+		a := newAdapter(t, "testdata/does_not_exist.json", nil)
+		err := a.CommentIssue(ctx, "10001", "text")
+		requireTrackerErrorKind(t, err, domain.ErrTrackerPayload)
+	})
+
+	t.Run("metrics success", func(t *testing.T) {
+		t.Parallel()
+
+		a, spy := newAdapterWithMetrics(t, fixture("basic.json"))
+		if err := a.CommentIssue(ctx, "10001", "track me"); err != nil {
+			t.Fatalf("CommentIssue: %v", err)
+		}
+		requireSingleCall(t, spy, "comment", "success")
+	})
+
+	t.Run("metrics error on not found", func(t *testing.T) {
+		t.Parallel()
+
+		a, spy := newAdapterWithMetrics(t, fixture("basic.json"))
+		_ = a.CommentIssue(ctx, "nonexistent", "text")
+		requireSingleCall(t, spy, "comment", "error")
+	})
+
+	t.Run("metrics error on file read failure", func(t *testing.T) {
+		t.Parallel()
+
+		a, spy := newAdapterWithMetrics(t, "testdata/does_not_exist.json")
+		_ = a.CommentIssue(ctx, "10001", "text")
+		requireSingleCall(t, spy, "comment", "error")
+	})
+
+	t.Run("concurrent safety", func(t *testing.T) {
+		t.Parallel()
+
+		a := newAdapter(t, fixture("basic.json"), nil)
+		const goroutines = 20
+
+		var wg sync.WaitGroup
+		wg.Add(goroutines)
+		for i := range goroutines {
+			go func(n int) {
+				defer wg.Done()
+				_ = a.CommentIssue(ctx, "10001", fmt.Sprintf("goroutine %d", n))
+			}(i)
+		}
+		wg.Wait()
+
+		comments, err := a.FetchIssueComments(ctx, "10001")
+		if err != nil {
+			t.Fatalf("FetchIssueComments: %v", err)
+		}
+		// 1 existing + 20 injected.
+		if len(comments) != 21 {
+			t.Errorf("comment count = %d, want 21", len(comments))
+		}
 	})
 }
