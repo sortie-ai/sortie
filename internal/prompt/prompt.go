@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"text/template"
+	"text/template/parse"
 )
 
 // RunContext carries per-turn metadata passed to the prompt template as
@@ -74,6 +75,12 @@ type Template struct {
 	tmpl             *template.Template
 	frontMatterLines int
 	source           string
+}
+
+// Tree returns the parsed template tree for static analysis. The tree
+// is safe for read-only traversal by concurrent callers.
+func (t *Template) Tree() *parse.Tree {
+	return t.tmpl.Tree
 }
 
 // Parse compiles a prompt template body with strict mode
