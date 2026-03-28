@@ -2,9 +2,10 @@ package prompt
 
 import (
 	"fmt"
-	"sort"
 	"strings"
 	"text/template/parse"
+
+	"github.com/sortie-ai/sortie/internal/maputil"
 )
 
 // WarnKind classifies a template static analysis warning.
@@ -237,7 +238,7 @@ func (a *analyzer) validateFieldChain(ident []string, nodeText string) {
 	subField := ident[1]
 	nestedSchema, exists := schema[subField]
 	if !exists {
-		known := sortedKeys(schema)
+		known := maputil.SortedKeys(schema)
 		a.warnings = append(a.warnings, TemplateWarning{
 			Kind:    WarnUnknownField,
 			Node:    nodeText,
@@ -262,7 +263,7 @@ func (a *analyzer) validateFieldChain(ident []string, nodeText string) {
 
 	nestedField := ident[2]
 	if !nestedSchema[nestedField] {
-		known := sortedBoolMapKeys(nestedSchema)
+		known := maputil.SortedKeys(nestedSchema)
 		a.warnings = append(a.warnings, TemplateWarning{
 			Kind:    WarnUnknownField,
 			Node:    nodeText,
@@ -281,22 +282,4 @@ func (a *analyzer) validateFieldChain(ident []string, nodeText string) {
 			Message: fmt.Sprintf("unknown field %q; %q is a scalar with no sub-fields", nodeText, base),
 		})
 	}
-}
-
-func sortedKeys[V any](m map[string]V) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	return keys
-}
-
-func sortedBoolMapKeys(m map[string]bool) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	return keys
 }

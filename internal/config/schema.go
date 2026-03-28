@@ -3,9 +3,10 @@ package config
 import (
 	"fmt"
 	"math"
-	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/sortie-ai/sortie/internal/maputil"
 )
 
 // FieldType classifies the expected YAML type for a config field.
@@ -140,7 +141,7 @@ func ValidateFrontMatter(raw map[string]any, cfg ServiceConfig) []FrontMatterWar
 	}
 
 	// Phase 1: Unknown top-level keys.
-	topKeys := sortedKeys(raw)
+	topKeys := maputil.SortedKeys(raw)
 	for _, key := range topKeys {
 		if !recognized[key] {
 			warnings = append(warnings, FrontMatterWarning{
@@ -152,7 +153,7 @@ func ValidateFrontMatter(raw map[string]any, cfg ServiceConfig) []FrontMatterWar
 	}
 
 	// Phase 2 & 3: Iterate sections in deterministic order.
-	sectionNames := sortedMapKeys(knownFieldsRegistry)
+	sectionNames := maputil.SortedKeys(knownFieldsRegistry)
 	for _, sectionName := range sectionNames {
 		schema := knownFieldsRegistry[sectionName]
 
@@ -185,7 +186,7 @@ func ValidateFrontMatter(raw map[string]any, cfg ServiceConfig) []FrontMatterWar
 		}
 
 		// Phase 2: Unknown sub-keys.
-		subKeys := sortedKeys(sectionMap)
+		subKeys := maputil.SortedKeys(sectionMap)
 		for _, key := range subKeys {
 			if knownNames[key] {
 				continue
@@ -213,7 +214,7 @@ func ValidateFrontMatter(raw map[string]any, cfg ServiceConfig) []FrontMatterWar
 			for _, n := range field.Nested {
 				nestedNames[n.Name] = true
 			}
-			nestedKeys := sortedKeys(nestedMap)
+			nestedKeys := maputil.SortedKeys(nestedMap)
 			for _, key := range nestedKeys {
 				if !nestedNames[key] {
 					warnings = append(warnings, FrontMatterWarning{
@@ -343,7 +344,7 @@ func checkByStateSemantic(warnings []FrontMatterWarning, raw map[string]any) []F
 	if !ok {
 		return warnings // already caught by Phase 3 type mismatch
 	}
-	stateKeys := sortedKeys(byStateMap)
+	stateKeys := maputil.SortedKeys(byStateMap)
 	for _, stateKey := range stateKeys {
 		stateVal := byStateMap[stateKey]
 		fieldPath := "agent.max_concurrent_agents_by_state." + stateKey
@@ -414,25 +415,4 @@ func typeName(ft FieldType) string {
 	default:
 		return "unknown"
 	}
-}
-
-// sortedKeys returns the keys of a map[string]any in sorted order.
-func sortedKeys(m map[string]any) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	return keys
-}
-
-// sortedMapKeys returns the keys of the knownFieldsRegistry in sorted
-// order for deterministic iteration.
-func sortedMapKeys(m map[string]SectionSchema) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	return keys
 }
