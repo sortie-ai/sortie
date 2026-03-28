@@ -70,12 +70,16 @@ type TrackerAdapter interface {
 	// the tracker. The text parameter is plain text; adapters convert to
 	// their native format internally (e.g. ADF wrapping for Jira).
 	//
-	// Returns nil on success. Returns a [*TrackerError] on failure:
+	// Returns nil on success. Returns a [*TrackerError] on tracker failure:
 	//   - [ErrTrackerTransport]: network or server failure.
 	//   - [ErrTrackerAuth]: insufficient permissions.
 	//   - [ErrTrackerAPI]: non-success response (rate limit, unexpected status).
 	//   - [ErrTrackerNotFound]: the issue does not exist.
 	//   - [ErrTrackerPayload]: malformed request or response.
+	//
+	// When ctx is canceled or its deadline is exceeded, implementations
+	// may return ctx.Err() directly (e.g. [context.Canceled] or
+	// [context.DeadlineExceeded]) instead of a [*TrackerError].
 	//
 	// All errors are non-fatal — the orchestrator logs WARN and continues.
 	CommentIssue(ctx context.Context, issueID string, text string) error
