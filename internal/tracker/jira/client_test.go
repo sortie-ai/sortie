@@ -16,10 +16,20 @@ import (
 // newTestJiraClient creates a jiraClient with an isolated HTTP transport.
 // Parallel tests that share http.DefaultTransport can flake when one
 // test's httptest.Server.Close races with another's in-flight request.
+// Clone preserves all DefaultTransport settings while giving each test
+// its own connection pool.
 func newTestJiraClient(t *testing.T, baseURL, email, token, userAgent string) *jiraClient {
 	t.Helper()
+	defaultTransport, ok := http.DefaultTransport.(*http.Transport)
+	if !ok {
+		t.Fatalf("http.DefaultTransport is %T, want *http.Transport", http.DefaultTransport)
+	}
+	transport := defaultTransport.Clone()
 	c := newJiraClient(baseURL, email, token, userAgent)
-	c.httpClient.Transport = &http.Transport{}
+	c.httpClient.Transport = transport
+	t.Cleanup(func() {
+		transport.CloseIdleConnections()
+	})
 	return c
 }
 
