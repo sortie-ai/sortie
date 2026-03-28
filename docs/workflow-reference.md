@@ -207,6 +207,8 @@ tracker:
   different lifecycle phases — dispatch vs. exit.
 - Transition failure at runtime is non-fatal: the worker logs a warning and continues to
   workspace preparation.
+- If the issue is already in the target state (case-insensitive), the transition API call
+  is skipped and a debug-level message is logged.
 - Requires **write permissions** on the tracker API token (same as `handoff_state`).
 
 **`api_key` environment resolution:**

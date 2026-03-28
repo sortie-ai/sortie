@@ -232,18 +232,26 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 	// configured in-progress tracker state before workspace prep.
 	// Failure is non-fatal — the worker continues regardless.
 	if cfg.Tracker.InProgressState != "" {
-		transitionErr := deps.TrackerAdapter.TransitionIssue(ctx, issue.ID, cfg.Tracker.InProgressState)
-		if transitionErr != nil {
-			logger.Warn("dispatch in-progress transition failed",
+		if strings.EqualFold(issue.State, cfg.Tracker.InProgressState) {
+			logger.Debug("issue already in in-progress state, skipping transition",
+				slog.String("issue_state", issue.State),
 				slog.String("in_progress_state", cfg.Tracker.InProgressState),
-				slog.Any("error", transitionErr),
 			)
-			deps.Metrics.IncDispatchTransitions(outcomeError)
+			deps.Metrics.IncDispatchTransitions(outcomeSkipped)
 		} else {
-			logger.Info("dispatch in-progress transition succeeded",
-				slog.String("in_progress_state", cfg.Tracker.InProgressState),
-			)
-			deps.Metrics.IncDispatchTransitions(outcomeSuccess)
+			transitionErr := deps.TrackerAdapter.TransitionIssue(ctx, issue.ID, cfg.Tracker.InProgressState)
+			if transitionErr != nil {
+				logger.Warn("dispatch in-progress transition failed",
+					slog.String("in_progress_state", cfg.Tracker.InProgressState),
+					slog.Any("error", transitionErr),
+				)
+				deps.Metrics.IncDispatchTransitions(outcomeError)
+			} else {
+				logger.Info("dispatch in-progress transition succeeded",
+					slog.String("in_progress_state", cfg.Tracker.InProgressState),
+				)
+				deps.Metrics.IncDispatchTransitions(outcomeSuccess)
+			}
 		}
 	}
 

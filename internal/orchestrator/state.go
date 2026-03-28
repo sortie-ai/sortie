@@ -16,6 +16,7 @@ import (
 const (
 	outcomeSuccess = "success"
 	outcomeError   = "error"
+	outcomeSkipped = "skipped"
 
 	exitTypeNormal    = "normal"
 	exitTypeError     = "error"

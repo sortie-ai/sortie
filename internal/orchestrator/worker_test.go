@@ -1842,4 +1842,177 @@ func TestRunWorkerAttempt_DispatchTransition(t *testing.T) {
 			t.Errorf("attempt 2: TargetState = %q, want %q", got, "State B")
 		}
 	})
+
+	// Skip-when-already-in-progress: dispatch transition must be skipped
+	// (no API call, metrics "skipped") when issue.State already matches
+	// InProgressState. Tests cover exact match, case-insensitive match,
+	// and the "states differ → call proceeds" counterpart.
+
+	t.Run("SkippedWhenAlreadyInTargetState", func(t *testing.T) {
+		t.Parallel()
+
+		tmpDir := t.TempDir()
+		cfg := defaultWorkerConfig(tmpDir)
+		cfg.Tracker.InProgressState = "In Progress"
+
+		spy := &spyMetrics{}
+		tracker := &mockTrackerAdapter{}
+		ec := newExitCapture()
+
+		// Issue state exactly equals InProgressState — transition must be skipped.
+		issue := workerTestIssue()
+		issue.State = "In Progress"
+
+		deps := WorkerDeps{
+			TrackerAdapter:     tracker,
+			AgentAdapter:       &mockAgentAdapter{},
+			ConfigFunc:         func() config.ServiceConfig { return cfg },
+			PromptTemplateFunc: func() *prompt.Template { return mustParseTemplate(t, "work on {{ .issue.title }}") },
+			OnEvent:            func(_ string, _ domain.AgentEvent) {},
+			OnExit:             ec.onExit,
+			Logger:             discardLogger(),
+			Metrics:            spy,
+		}
+
+		RunWorkerAttempt(context.Background(), issue, nil, deps)
+		ec.waitResult(t)
+
+		if len(tracker.transitionCalls) != 0 {
+			t.Errorf("TransitionIssue call count = %d, want 0 (issue already in target state)", len(tracker.transitionCalls))
+		}
+
+		spy.mu.Lock()
+		transitions := append([]string(nil), spy.dispatchTransitions...)
+		spy.mu.Unlock()
+
+		if len(transitions) != 1 || transitions[0] != outcomeSkipped {
+			t.Errorf("dispatchTransitions = %v, want [%q]", transitions, outcomeSkipped)
+		}
+	})
+
+	t.Run("SkippedWhenAlreadyInTargetStateCaseInsensitive", func(t *testing.T) {
+		t.Parallel()
+
+		tmpDir := t.TempDir()
+		cfg := defaultWorkerConfig(tmpDir)
+		cfg.Tracker.InProgressState = "In Progress"
+
+		spy := &spyMetrics{}
+		tracker := &mockTrackerAdapter{}
+		ec := newExitCapture()
+
+		// issue.State differs only in casing — skip must still apply.
+		issue := workerTestIssue()
+		issue.State = "in progress"
+
+		deps := WorkerDeps{
+			TrackerAdapter:     tracker,
+			AgentAdapter:       &mockAgentAdapter{},
+			ConfigFunc:         func() config.ServiceConfig { return cfg },
+			PromptTemplateFunc: func() *prompt.Template { return mustParseTemplate(t, "work on {{ .issue.title }}") },
+			OnEvent:            func(_ string, _ domain.AgentEvent) {},
+			OnExit:             ec.onExit,
+			Logger:             discardLogger(),
+			Metrics:            spy,
+		}
+
+		RunWorkerAttempt(context.Background(), issue, nil, deps)
+		ec.waitResult(t)
+
+		if len(tracker.transitionCalls) != 0 {
+			t.Errorf("TransitionIssue call count = %d, want 0 (case-insensitive match)", len(tracker.transitionCalls))
+		}
+
+		spy.mu.Lock()
+		transitions := append([]string(nil), spy.dispatchTransitions...)
+		spy.mu.Unlock()
+
+		if len(transitions) != 1 || transitions[0] != outcomeSkipped {
+			t.Errorf("dispatchTransitions = %v, want [%q]", transitions, outcomeSkipped)
+		}
+	})
+
+	t.Run("NotSkippedWhenStatesDiffer", func(t *testing.T) {
+		t.Parallel()
+
+		tmpDir := t.TempDir()
+		cfg := defaultWorkerConfig(tmpDir)
+		cfg.Tracker.InProgressState = "In Progress"
+
+		spy := &spyMetrics{}
+		tracker := &mockTrackerAdapter{}
+		ec := newExitCapture()
+
+		// issue.State = "To Do" (default from workerTestIssue) — states differ,
+		// so TransitionIssue must be called.
+		deps := WorkerDeps{
+			TrackerAdapter:     tracker,
+			AgentAdapter:       &mockAgentAdapter{},
+			ConfigFunc:         func() config.ServiceConfig { return cfg },
+			PromptTemplateFunc: func() *prompt.Template { return mustParseTemplate(t, "work on {{ .issue.title }}") },
+			OnEvent:            func(_ string, _ domain.AgentEvent) {},
+			OnExit:             ec.onExit,
+			Logger:             discardLogger(),
+			Metrics:            spy,
+		}
+
+		RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
+		ec.waitResult(t)
+
+		if len(tracker.transitionCalls) != 1 {
+			t.Errorf("TransitionIssue call count = %d, want 1 (states differ)", len(tracker.transitionCalls))
+		}
+
+		spy.mu.Lock()
+		transitions := append([]string(nil), spy.dispatchTransitions...)
+		spy.mu.Unlock()
+
+		if len(transitions) != 1 || transitions[0] != outcomeSuccess {
+			t.Errorf("dispatchTransitions = %v, want [%q]", transitions, outcomeSuccess)
+		}
+	})
+
+	t.Run("SkippedOnRetryWhenAlreadyInTargetState", func(t *testing.T) {
+		t.Parallel()
+
+		// Simulates a continuation retry where the issue was transitioned on the
+		// first attempt and stays in InProgressState for the retry attempt.
+		tmpDir := t.TempDir()
+		cfg := defaultWorkerConfig(tmpDir)
+		cfg.Tracker.InProgressState = "In Progress"
+
+		spy := &spyMetrics{}
+		tracker := &mockTrackerAdapter{}
+		ec := newExitCapture()
+
+		issue := workerTestIssue()
+		issue.State = "In Progress" // already transitioned on prior attempt
+
+		attempt := 2
+		deps := WorkerDeps{
+			TrackerAdapter:     tracker,
+			AgentAdapter:       &mockAgentAdapter{},
+			ConfigFunc:         func() config.ServiceConfig { return cfg },
+			PromptTemplateFunc: func() *prompt.Template { return mustParseTemplate(t, "work on {{ .issue.title }}") },
+			OnEvent:            func(_ string, _ domain.AgentEvent) {},
+			OnExit:             ec.onExit,
+			Logger:             discardLogger(),
+			Metrics:            spy,
+		}
+
+		RunWorkerAttempt(context.Background(), issue, &attempt, deps)
+		ec.waitResult(t)
+
+		if len(tracker.transitionCalls) != 0 {
+			t.Errorf("TransitionIssue call count = %d, want 0 (retry: already in target state)", len(tracker.transitionCalls))
+		}
+
+		spy.mu.Lock()
+		transitions := append([]string(nil), spy.dispatchTransitions...)
+		spy.mu.Unlock()
+
+		if len(transitions) != 1 || transitions[0] != outcomeSkipped {
+			t.Errorf("dispatchTransitions = %v, want [%q]", transitions, outcomeSkipped)
+		}
+	})
 }
