@@ -1540,7 +1540,7 @@ type coercion. Each error identifies the env var as the source.
 | `config: polling.interval_ms: invalid integer value: <val> (from SORTIE_POLLING_INTERVAL_MS)`                  | Non-integer value in an integer env var.                  | Set the env var to a plain integer (e.g., `30000`). Remove units or decimals.    |
 | `config: agent.<field>: invalid integer value: <val> (from SORTIE_AGENT_<FIELD>)`                              | Same, for any agent integer field.                        | Same fix as above.                                                               |
 | `config: tracker.comments.<field>: invalid boolean value: <val> (expected true/false/1/0) (from SORTIE_TRACKER_COMMENTS_<FIELD>)` | Invalid boolean in a comments env var.                    | Use `true`, `false`, `1`, or `0` (case-insensitive).                             |
-| `config: dotenv <path>:<line>: missing '=' in line "<text>"`                                                   | `.env` file line has no `=` separator.                    | Ensure each non-comment line in the `.env` file is `KEY=VALUE`.                  |
+| `config: dotenv <path>:<line>: missing '=' in line`                                                            | `.env` file line has no `=` separator.                    | Ensure each non-comment line in the `.env` file is `KEY=VALUE`.                  |
 | `config: dotenv <path>:<line>: invalid key "<key>"`                                                            | `.env` file key contains invalid characters.              | Keys MUST match `[A-Za-z_][A-Za-z0-9_]*`.                                       |
 
 ### 9.4 Template Errors
