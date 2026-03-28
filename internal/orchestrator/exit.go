@@ -406,6 +406,9 @@ func HandleWorkerExit(state *State, result WorkerResult, params HandleWorkerExit
 		sessionID = entry.SessionID
 	}
 	runDuration := now.Sub(entry.StartedAt)
+	if runDuration < 0 {
+		runDuration = 0
+	}
 
 	switch result.ExitKind {
 	case WorkerExitNormal:
