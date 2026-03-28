@@ -1,3 +1,4 @@
 golang 1.26.1
 golangci-lint 2.11.4
+goreleaser 2.14.3
 python 3.13.12

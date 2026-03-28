@@ -47,6 +47,9 @@ checksum:
   name_template: "checksums.txt"
   algorithm: sha256
 
+sboms:
+  - artifacts: archive
+
 brews:
   - name: sortie
     repository:

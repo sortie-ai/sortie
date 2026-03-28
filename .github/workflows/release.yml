@@ -179,6 +179,9 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - name: Install Syft
+        uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
+
       - name: Create and push tag
         if: ${{ !inputs.dry_run }}
         run: |
@@ -220,6 +223,7 @@ jobs:
           echo "- \`sortie_${{ inputs.version }}_windows_amd64.zip\`" >> "$GITHUB_STEP_SUMMARY"
           echo "- \`sortie_${{ inputs.version }}_windows_arm64.zip\`" >> "$GITHUB_STEP_SUMMARY"
           echo "- \`checksums.txt\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- SBOM manifests (\`*.sbom.json\`)" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Dry run summary
         if: ${{ inputs.dry_run }}
