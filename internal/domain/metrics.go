@@ -76,6 +76,11 @@ type Metrics interface {
 	// (sortie_handoff_transitions_total{result} counter).
 	IncHandoffTransitions(result string)
 
+	// IncDispatchTransitions increments the dispatch-time in-progress
+	// transition counter. result is "success" or "error"
+	// (sortie_dispatch_transitions_total{result} counter).
+	IncDispatchTransitions(result string)
+
 	// IncToolCalls increments the tool call completion counter.
 	// tool is the tool name (e.g. "Bash", "tracker_api").
 	// result is "success" or "error"
@@ -119,6 +124,7 @@ func (*NoopMetrics) IncReconciliationActions(string)       {}
 func (*NoopMetrics) IncPollCycles(string)                  {}
 func (*NoopMetrics) IncTrackerRequests(string, string)     {}
 func (*NoopMetrics) IncHandoffTransitions(string)          {}
+func (*NoopMetrics) IncDispatchTransitions(string)         {}
 func (*NoopMetrics) IncToolCalls(string, string)           {}
 func (*NoopMetrics) ObservePollDuration(float64)           {}
 func (*NoopMetrics) ObserveWorkerDuration(string, float64) {}

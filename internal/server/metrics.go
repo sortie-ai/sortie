@@ -31,6 +31,7 @@ type PromMetrics struct {
 	pollCyclesTotal       *prometheus.CounterVec
 	trackerRequestsTotal  *prometheus.CounterVec
 	handoffTransitions    *prometheus.CounterVec
+	dispatchTransitions   *prometheus.CounterVec
 	toolCallsTotal        *prometheus.CounterVec
 
 	// Histograms
@@ -133,6 +134,12 @@ func NewPromMetrics(version, goVersion string) *PromMetrics {
 		Help:      "Handoff state transition outcomes.",
 	}, []string{"result"})
 
+	dispatchTransitions := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: "sortie",
+		Name:      "dispatch_transitions_total",
+		Help:      "Dispatch-time in-progress transition attempts.",
+	}, []string{"result"})
+
 	toolCallsTotal := prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: "sortie",
 		Name:      "tool_calls_total",
@@ -180,6 +187,7 @@ func NewPromMetrics(version, goVersion string) *PromMetrics {
 		pollCyclesTotal,
 		trackerRequestsTotal,
 		handoffTransitions,
+		dispatchTransitions,
 		toolCallsTotal,
 		pollDuration,
 		workerDuration,
@@ -202,6 +210,7 @@ func NewPromMetrics(version, goVersion string) *PromMetrics {
 		pollCyclesTotal:       pollCyclesTotal,
 		trackerRequestsTotal:  trackerRequestsTotal,
 		handoffTransitions:    handoffTransitions,
+		dispatchTransitions:   dispatchTransitions,
 		toolCallsTotal:        toolCallsTotal,
 		pollDuration:          pollDuration,
 		workerDuration:        workerDuration,
@@ -292,6 +301,11 @@ func (p *PromMetrics) IncTrackerRequests(operation, result string) {
 // IncHandoffTransitions increments the handoff state transition outcome counter.
 func (p *PromMetrics) IncHandoffTransitions(result string) {
 	p.handoffTransitions.WithLabelValues(result).Inc()
+}
+
+// IncDispatchTransitions increments the dispatch-time in-progress transition counter.
+func (p *PromMetrics) IncDispatchTransitions(result string) {
+	p.dispatchTransitions.WithLabelValues(result).Inc()
 }
 
 // IncToolCalls increments the tool call completion counter.

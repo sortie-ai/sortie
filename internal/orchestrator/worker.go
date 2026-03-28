@@ -126,6 +126,11 @@ type WorkerDeps struct {
 	// Empty for local execution. Set by the orchestrator when dispatching
 	// to a remote host.
 	SSHHost string
+
+	// Metrics records dispatch-time instrumentation counters.
+	// Always non-nil: NewOrchestrator falls back to NoopMetrics
+	// before wiring WorkerDeps via makeWorkerFn.
+	Metrics domain.Metrics
 }
 
 // normalizeAttempt converts the nullable attempt to a plain integer.
@@ -218,6 +223,33 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 	tmpl := deps.PromptTemplateFunc()
 	attemptInt := normalizeAttempt(attempt)
 	logger := deps.Logger
+
+	if deps.Metrics == nil {
+		deps.Metrics = &domain.NoopMetrics{}
+	}
+
+	// Dispatch-time in-progress transition: move the issue to the
+	// configured in-progress tracker state before workspace prep.
+	// Failure is non-fatal — the worker continues regardless.
+	if cfg.Tracker.InProgressState != "" {
+		transitionErr := deps.TrackerAdapter.TransitionIssue(ctx, issue.ID, cfg.Tracker.InProgressState)
+		if transitionErr != nil {
+			logger.Warn("dispatch in-progress transition failed",
+				slog.String("issue_id", issue.ID),
+				slog.String("issue_identifier", issue.Identifier),
+				slog.String("in_progress_state", cfg.Tracker.InProgressState),
+				slog.Any("error", transitionErr),
+			)
+			deps.Metrics.IncDispatchTransitions(outcomeError)
+		} else {
+			logger.Info("dispatch in-progress transition succeeded",
+				slog.String("issue_id", issue.ID),
+				slog.String("issue_identifier", issue.Identifier),
+				slog.String("in_progress_state", cfg.Tracker.InProgressState),
+			)
+			deps.Metrics.IncDispatchTransitions(outcomeSuccess)
+		}
+	}
 
 	// reported tracks whether OnExit has been called. The deferred
 	// panic recovery checks this to avoid double-reporting.

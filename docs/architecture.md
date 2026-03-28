@@ -420,6 +420,22 @@ Fields:
   - Must not appear in `terminal_states` (handoff is not terminal; the issue may return
     to active).
   - Changes take effect for future worker exits, not in-flight sessions.
+- `in_progress_state` (string, optional)
+  - Target tracker state for dispatch-time transitions. When configured, the worker calls
+    `TransitionIssue` as the first step of each attempt, before workspace preparation.
+  - Supports `$VAR` environment indirection.
+  - When absent, no dispatch-time transition is performed. This is the default.
+  - Empty values, including `$VAR` references that resolve to empty, are treated as
+    configuration errors.
+  - MUST appear in `active_states` (otherwise reconciliation would immediately cancel the
+    worker after the transition changes the issue's tracker state).
+  - MUST NOT appear in `terminal_states` (a terminal state would trigger workspace cleanup
+    on the next reconciliation tick).
+  - MUST NOT collide with `handoff_state` (the two transitions represent different lifecycle
+    phases — dispatch vs. exit).
+  - Transition failure is non-fatal: the worker logs a warning and continues to workspace
+    preparation.
+  - Changes take effect for future dispatches, not in-flight sessions.
 
 #### 5.3.2 `polling` (object)
 
@@ -658,6 +674,9 @@ This section is intentionally redundant so a coding agent can implement the conf
 - `tracker.handoff_state`: string, optional, default absent; target state for
   orchestrator-initiated handoff after successful worker run; must not collide with
   `active_states` or `terminal_states`; supports `$VAR`
+- `tracker.in_progress_state`: string, optional, default absent; target state for
+  dispatch-time transition at the start of each worker attempt; must be in `active_states`,
+  must not collide with `terminal_states` or `handoff_state`; supports `$VAR`
 - `polling.interval_ms`: integer, default `30000`
 - `workspace.root`: path, default `<system-temp>/sortie_workspaces`
 - `worker.ssh_hosts` (extension): list of SSH host strings, optional; when omitted, work runs
@@ -750,6 +769,8 @@ Distinct terminal reasons are important because retry logic and logs differ.
   - Validate config.
   - Fetch candidate issues.
   - Dispatch until slots are exhausted.
+  - Dispatched workers perform the optional dispatch-time in-progress transition
+    (via `tracker.in_progress_state`) as their first step, before workspace preparation.
 
 - `Worker Exit (normal)`
   - Remove running entry.
@@ -1630,6 +1651,7 @@ Defined metrics (label sets and buckets are specified here; see ADR-0008 for his
 | `sortie_poll_cycles_total{result}` | Counter | Poll tick completions, partitioned by result (`success`, `error`, `skipped`). |
 | `sortie_tracker_requests_total{operation,result}` | Counter | Tracker adapter API calls, partitioned by operation (`fetch_candidates`, `fetch_issue`, `fetch_by_states`, `fetch_states_by_ids`, `fetch_states_by_identifiers`, `fetch_comments`, `transition`) and result (`success`, `error`). |
 | `sortie_handoff_transitions_total{result}` | Counter | Handoff-state transition attempts, partitioned by result (`success`, `error`, `skipped`). |
+| `sortie_dispatch_transitions_total{result}` | Counter | Dispatch-time in-progress transition attempts, partitioned by result (`success`, `error`). |
 | `sortie_tool_calls_total{tool,result}` | Counter | Agent tool call completions, partitioned by tool name and result (`success`, `error`). |
 | `sortie_poll_duration_seconds` | Histogram | Wall-clock time per poll cycle; buckets via `ExponentialBuckets(0.1, 2, 10)` (0.1 s–51.2 s). |
 | `sortie_worker_duration_seconds{exit_type}` | Histogram | Worker session wall-clock time; buckets via `ExponentialBuckets(10, 2, 12)` (10 s–5.7 h). |
@@ -1935,6 +1957,18 @@ function dispatch_issue(issue, state, attempt):
 
 ```text
 function run_agent_attempt(issue, attempt, orchestrator_channel):
+  cfg = current_config()
+
+  // Dispatch-time in-progress transition (non-fatal).
+  if cfg.tracker.in_progress_state is configured:
+    result = tracker.transition_issue(issue.id, cfg.tracker.in_progress_state)
+    if result failed:
+      log_warn("dispatch in-progress transition failed", issue.id, error)
+      metrics.inc_dispatch_transitions("error")
+    else:
+      log_info("dispatch in-progress transition succeeded", issue.id)
+      metrics.inc_dispatch_transitions("success")
+
   workspace = workspace_manager.create_for_issue(issue.identifier)
   if workspace failed:
     fail_worker("workspace error")
@@ -2128,6 +2162,10 @@ Unless otherwise noted, Sections 17.1 through 17.7 are `Core Conformance`. Bulle
 - Retry queue entries include attempt, due time, identifier, and error
 - Stall detection kills stalled sessions and schedules retry
 - Slot exhaustion requeues retries with explicit error reason
+- Dispatch-time in-progress transition calls `TransitionIssue` when `tracker.in_progress_state`
+  is configured
+- Dispatch-time transition failure is non-fatal: the worker continues to workspace preparation
+- Dispatch-time transition is skipped when `tracker.in_progress_state` is absent
 - If a snapshot API is implemented, it returns running rows, retry rows, token totals, and rate
   limits
 - If a snapshot API is implemented, timeout/unavailable cases are surfaced

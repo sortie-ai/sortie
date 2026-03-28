@@ -160,6 +160,7 @@ tracker:
     - Won't Do
   query_filter: "labels = 'agent-ready'"
   handoff_state: Human Review
+  in_progress_state: In Progress
 ```
 
 | Field             | Type            | Required                  | Default         | Dynamic Reload                     | Description                                                                                                                                                                                     |
@@ -172,6 +173,7 @@ tracker:
 | `terminal_states` | list of strings | **Yes** (see rules below) | `[]` (empty)    | Future dispatch and reconciliation | Issue states that release claims and trigger cleanup.                                                                                                                                           |
 | `query_filter`    | string          | No                        | `""` (empty)    | Future dispatches                  | Adapter-defined query fragment appended to candidate and terminal-state queries. Passed to the adapter without interpretation. For Jira: JQL fragment (e.g., `"labels = 'agent-ready'"`).       |
 | `handoff_state`   | string          | No                        | _(absent)_      | Future worker exits                | Target tracker state for orchestrator-initiated handoff after successful worker run. When absent, no handoff transition is performed.                                                           |
+| `in_progress_state` | string        | No                        | _(absent)_      | Future dispatches                  | Target tracker state for dispatch-time transition at the start of each worker attempt. When absent, no dispatch-time transition is performed. Must be in `active_states`. Must not collide with `terminal_states` or `handoff_state`. |
 
 **`active_states` / `terminal_states` validation rules:**
 
@@ -191,6 +193,21 @@ tracker:
   to active for further work).
 - Requires **write permissions** on the tracker API token. For Jira: `write:jira-work`
   (classic) or `write:issue:jira` (granular).
+
+**`in_progress_state` validation rules:**
+
+- Supports `$VAR` environment indirection.
+- When set, must be a non-empty string after `$VAR` resolution. Empty resolution is a
+  configuration error.
+- MUST appear in `active_states` (case-insensitive). If the issue transitions to a state
+  outside `active_states`, reconciliation would immediately cancel the worker.
+- MUST **not** appear in `terminal_states` (case-insensitive). A terminal state would
+  trigger workspace cleanup on the next reconciliation tick.
+- MUST **not** collide with `handoff_state` (case-insensitive). The two transitions represent
+  different lifecycle phases — dispatch vs. exit.
+- Transition failure at runtime is non-fatal: the worker logs a warning and continues to
+  workspace preparation.
+- Requires **write permissions** on the tracker API token (same as `handoff_state`).
 
 **`api_key` environment resolution:**
 
@@ -1217,6 +1234,7 @@ re-applies configuration and prompt template without restart.
 | `tracker.terminal_states`              | Future dispatch and reconciliation.                                                            |
 | `tracker.query_filter`                 | Future dispatches.                                                                             |
 | `tracker.handoff_state`                | Future worker exits, not in-flight sessions.                                                   |
+| `tracker.in_progress_state`            | Future dispatches, not in-flight sessions.                                                     |
 | `polling.interval_ms`                  | **Immediate** — affects future tick scheduling.                                                |
 | `workspace.root`                       | Future workspace operations.                                                                   |
 | `hooks.*`                              | Future hook executions.                                                                        |
@@ -1291,6 +1309,12 @@ Each error identifies the offending field path.
 | `config: tracker.handoff_state: resolved to empty (check environment variable)` | `$VAR` reference resolved to an empty string (variable unset or empty).  | Set the referenced environment variable to a valid state name.                                                                       |
 | `config: tracker.handoff_state: "<val>" collides with active state "<state>"`   | `handoff_state` matches one of the `active_states` (case-insensitive).   | Use a state that is not in `active_states`. The handoff state must be distinct from active and terminal states.                      |
 | `config: tracker.handoff_state: "<val>" collides with terminal state "<state>"` | `handoff_state` matches one of the `terminal_states` (case-insensitive). | Use a state that is not in `terminal_states`.                                                                                        |
+| `config: tracker.in_progress_state: expected string, got <type>`                    | `in_progress_state` is not a string (e.g., integer, boolean, list).          | Ensure the value is a string, quoted if necessary.                                                                                   |
+| `config: tracker.in_progress_state: must not be empty`                              | `in_progress_state` is set to an explicit empty string.                      | Provide a valid state name, or omit the field entirely to disable dispatch-time transitions.                                         |
+| `config: tracker.in_progress_state: resolved to empty (check environment variable)` | `$VAR` reference resolved to an empty string (variable unset or empty).      | Set the referenced environment variable to a valid state name.                                                                       |
+| `config: tracker.in_progress_state: "<val>" collides with terminal state "<state>"` | `in_progress_state` matches one of the `terminal_states` (case-insensitive). | Use a state that is not in `terminal_states`.                                                                                        |
+| `config: tracker.in_progress_state: "<val>" is not in active_states...`            | `in_progress_state` is not in `active_states` (case-insensitive).            | Add the state to `active_states`, or use a state already in `active_states`.                                                         |
+| `config: tracker.in_progress_state: "<val>" collides with handoff_state "<state>"` | `in_progress_state` matches `handoff_state` (case-insensitive).              | Use different states for dispatch-time and exit-time transitions.                                                                    |
 | `config: workspace.root: cannot expand ~: <err>`                                | Home directory expansion failed.                                         | Check that the `HOME` environment variable is set.                                                                                   |
 | `config: db_path: expected string, got <type>`                                  | `db_path` is not a string value.                                         | Use a string path value, quoted if necessary.                                                                                        |
 | `config: db_path: resolved to empty (check environment variable)`               | `$VAR` reference resolved to empty.                                      | Set the environment variable or use a literal path.                                                                                  |
@@ -1327,6 +1351,7 @@ A flat reference of every configuration field, for quick lookup.
 | `tracker.terminal_states`               | `[string]`       | `[]` (empty)                 | At least one of active/terminal must be configured                                     |
 | `tracker.query_filter`                  | string           | `""`                         | Adapter-interpreted                                                                    |
 | `tracker.handoff_state`                 | string           | _(absent)_                   | `$VAR` supported; must not collide with active/terminal                                |
+| `tracker.in_progress_state`             | string           | _(absent)_                   | `$VAR` supported; must be in active; must not collide with terminal/handoff            |
 | `polling.interval_ms`                   | integer          | `30000`                      | Dynamic reload                                                                         |
 | `workspace.root`                        | path             | `<tmpdir>/sortie_workspaces` | `~`/`~/` expanded; all `$VAR` references expanded via `os.ExpandEnv`                   |
 | `hooks.after_create`                    | shell script     | _(null)_                     | Fatal on failure                                                                       |
@@ -1406,6 +1431,7 @@ tracker:
     - Done
     - Won't Do
   handoff_state: Human Review # Move here after successful agent run
+  in_progress_state: In Progress # Move here when agent picks up the issue
 
 # ─── Polling ───────────────────────────────────────────────────
 polling:

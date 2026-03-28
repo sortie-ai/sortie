@@ -42,14 +42,15 @@ type ServiceConfig struct {
 
 // TrackerConfig holds issue tracker connection and query settings.
 type TrackerConfig struct {
-	Kind           string
-	Endpoint       string
-	APIKey         string
-	Project        string
-	ActiveStates   []string
-	TerminalStates []string
-	QueryFilter    string
-	HandoffState   string
+	Kind            string
+	Endpoint        string
+	APIKey          string
+	Project         string
+	ActiveStates    []string
+	TerminalStates  []string
+	QueryFilter     string
+	HandoffState    string
+	InProgressState string
 }
 
 // PollingConfig holds the poll loop timing.
@@ -138,6 +139,33 @@ func NewServiceConfig(raw map[string]any) (ServiceConfig, error) {
 		return ServiceConfig{}, err
 	}
 
+	// Validate in_progress_state: enforce string type, reject explicit empty
+	// values, and detect env var indirection that resolved to empty.
+	if rawVal, ok := rawTracker["in_progress_state"]; ok && rawVal != nil {
+		s, isStr := rawVal.(string)
+		if !isStr {
+			return ServiceConfig{}, &ConfigError{
+				Field:   "tracker.in_progress_state",
+				Message: fmt.Sprintf("expected string, got %T", rawVal),
+			}
+		}
+		if s == "" {
+			return ServiceConfig{}, &ConfigError{
+				Field:   "tracker.in_progress_state",
+				Message: "must not be empty",
+			}
+		}
+		if tracker.InProgressState == "" {
+			return ServiceConfig{}, &ConfigError{
+				Field:   "tracker.in_progress_state",
+				Message: "resolved to empty (check environment variable)",
+			}
+		}
+	}
+	if err := validateInProgressState(tracker.InProgressState, tracker.ActiveStates, tracker.TerminalStates, tracker.HandoffState); err != nil {
+		return ServiceConfig{}, err
+	}
+
 	polling, err := buildPollingConfig(extractSubMap(raw, "polling"))
 	if err != nil {
 		return ServiceConfig{}, err
@@ -188,10 +216,11 @@ func buildTrackerConfig(m map[string]any) TrackerConfig {
 		Project:  resolveEnvRef(extractString(m, "project")),
 		// States are stored with original casing; the orchestrator
 		// normalizes both sides to lowercase when comparing.
-		ActiveStates:   extractStringSlice(mapVal(m, "active_states")),
-		TerminalStates: extractStringSlice(mapVal(m, "terminal_states")),
-		QueryFilter:    resolveEnvRef(extractString(m, "query_filter")),
-		HandoffState:   resolveEnvRef(extractString(m, "handoff_state")),
+		ActiveStates:    extractStringSlice(mapVal(m, "active_states")),
+		TerminalStates:  extractStringSlice(mapVal(m, "terminal_states")),
+		QueryFilter:     resolveEnvRef(extractString(m, "query_filter")),
+		HandoffState:    resolveEnvRef(extractString(m, "handoff_state")),
+		InProgressState: resolveEnvRef(extractString(m, "in_progress_state")),
 	}
 }
 
@@ -380,6 +409,44 @@ func validateHandoffState(handoffState string, activeStates, terminalStates []st
 				Field:   "tracker.handoff_state",
 				Message: fmt.Sprintf("%q collides with terminal state %q", handoffState, s),
 			}
+		}
+	}
+	return nil
+}
+
+// validateInProgressState checks that inProgressState does not collide
+// with terminal states or handoff_state, and is present in active states.
+// Returns a *ConfigError on violation.
+func validateInProgressState(inProgressState string, activeStates, terminalStates []string, handoffState string) error {
+	if inProgressState == "" {
+		return nil
+	}
+	lower := strings.ToLower(inProgressState)
+	for _, s := range terminalStates {
+		if strings.ToLower(s) == lower {
+			return &ConfigError{
+				Field:   "tracker.in_progress_state",
+				Message: fmt.Sprintf("%q collides with terminal state %q", inProgressState, s),
+			}
+		}
+	}
+	inActive := false
+	for _, s := range activeStates {
+		if strings.ToLower(s) == lower {
+			inActive = true
+			break
+		}
+	}
+	if !inActive {
+		return &ConfigError{
+			Field:   "tracker.in_progress_state",
+			Message: fmt.Sprintf("%q is not in active_states; reconciliation would immediately cancel the worker", inProgressState),
+		}
+	}
+	if handoffState != "" && strings.ToLower(handoffState) == lower {
+		return &ConfigError{
+			Field:   "tracker.in_progress_state",
+			Message: fmt.Sprintf("%q collides with handoff_state %q", inProgressState, handoffState),
 		}
 	}
 	return nil
