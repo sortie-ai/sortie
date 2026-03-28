@@ -77,7 +77,7 @@ type Metrics interface {
 	IncHandoffTransitions(result string)
 
 	// IncDispatchTransitions increments the dispatch-time in-progress
-	// transition counter. result is "success" or "error"
+	// transition counter. result is "success", "error", or "skipped"
 	// (sortie_dispatch_transitions_total{result} counter).
 	IncDispatchTransitions(result string)
 
