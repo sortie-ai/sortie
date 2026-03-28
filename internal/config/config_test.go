@@ -934,3 +934,263 @@ func TestValidateInProgressState(t *testing.T) {
 		})
 	}
 }
+
+// TestNewServiceConfigEnvOverrides covers end-to-end env override behaviour
+// through the full NewServiceConfig pipeline. Each subtest uses t.Setenv for
+// isolation; none calls t.Parallel() to avoid races on dotenvPathOverride.
+func TestNewServiceConfigEnvOverrides(t *testing.T) {
+	// Ensure dotenvPathOverride is clean so SORTIE_ENV_FILE subtests work.
+	origDotenvPath := dotenvPathOverride
+	t.Cleanup(func() { dotenvPathOverride = origDotenvPath })
+	dotenvPathOverride = ""
+
+	t.Run("TrackerKindOverridesYAML", func(t *testing.T) {
+		t.Setenv("SORTIE_TRACKER_KIND", "file")
+		cfg, err := NewServiceConfig(map[string]any{
+			"tracker": map[string]any{"kind": "jira"},
+		})
+		if err != nil {
+			t.Fatalf("NewServiceConfig: %v", err)
+		}
+		assertStringEqual(t, "Tracker.Kind", "file", cfg.Tracker.Kind)
+	})
+
+	t.Run("YAMLLeftIntactWhenEnvAbsent", func(t *testing.T) {
+		t.Setenv("SORTIE_TRACKER_KIND", "") // explicitly absent
+		cfg, err := NewServiceConfig(map[string]any{
+			"tracker": map[string]any{"kind": "jira"},
+		})
+		if err != nil {
+			t.Fatalf("NewServiceConfig: %v", err)
+		}
+		assertStringEqual(t, "Tracker.Kind", "jira", cfg.Tracker.Kind)
+	})
+
+	t.Run("APIKeyDollarNotExpanded", func(t *testing.T) {
+		// A dollar + numeric prefix would be truncated by os.ExpandEnv
+		// (e.g. "tok$5abc" → "tok" if $5 is treated as a variable reference).
+		// The env override layer must preserve literal dollar signs.
+		t.Setenv("SORTIE_TRACKER_API_KEY", "tok$5abc")
+		cfg, err := NewServiceConfig(map[string]any{})
+		if err != nil {
+			t.Fatalf("NewServiceConfig: %v", err)
+		}
+		assertStringEqual(t, "Tracker.APIKey", "tok$5abc", cfg.Tracker.APIKey)
+	})
+
+	t.Run("DBPathDollarNotExpanded", func(t *testing.T) {
+		// Without the envKeys guard, os.ExpandEnv would expand $SORTIE_NOTSET_UNIQUE_XYZ
+		// to "" producing "/data//sortie.db".
+		t.Setenv("SORTIE_DB_PATH", "/data/$SORTIE_NOTSET_UNIQUE_XYZ/sortie.db")
+		cfg, err := NewServiceConfig(map[string]any{})
+		if err != nil {
+			t.Fatalf("NewServiceConfig: %v", err)
+		}
+		assertStringEqual(t, "DBPath", "/data/$SORTIE_NOTSET_UNIQUE_XYZ/sortie.db", cfg.DBPath)
+	})
+
+	t.Run("WorkspaceRootTildeExpands", func(t *testing.T) {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			t.Skip("cannot determine home directory")
+		}
+		t.Setenv("SORTIE_WORKSPACE_ROOT", "~/ws_ovr_test")
+		cfg, err := NewServiceConfig(map[string]any{})
+		if err != nil {
+			t.Fatalf("NewServiceConfig: %v", err)
+		}
+		want := filepath.Join(home, "ws_ovr_test")
+		assertStringEqual(t, "Workspace.Root", want, cfg.Workspace.Root)
+	})
+
+	t.Run("PollingIntervalValid", func(t *testing.T) {
+		t.Setenv("SORTIE_POLLING_INTERVAL_MS", "5000")
+		cfg, err := NewServiceConfig(map[string]any{})
+		if err != nil {
+			t.Fatalf("NewServiceConfig: %v", err)
+		}
+		assertIntEqual(t, "Polling.IntervalMS", 5000, cfg.Polling.IntervalMS)
+	})
+
+	t.Run("PollingIntervalInvalidError", func(t *testing.T) {
+		t.Setenv("SORTIE_POLLING_INTERVAL_MS", "abc")
+		_, err := NewServiceConfig(map[string]any{})
+		assertConfigErrorField(t, err, "polling.interval_ms")
+		var ce *ConfigError
+		if errors.As(err, &ce) && !strings.Contains(ce.Message, "SORTIE_POLLING_INTERVAL_MS") {
+			t.Errorf("ConfigError.Message = %q, want it to contain env var name", ce.Message)
+		}
+	})
+
+	t.Run("ActiveStatesCSV", func(t *testing.T) {
+		t.Setenv("SORTIE_TRACKER_ACTIVE_STATES", "To Do,In Progress")
+		cfg, err := NewServiceConfig(map[string]any{})
+		if err != nil {
+			t.Fatalf("NewServiceConfig: %v", err)
+		}
+		assertStringSliceEqual(t, "Tracker.ActiveStates",
+			[]string{"To Do", "In Progress"}, cfg.Tracker.ActiveStates)
+	})
+
+	t.Run("CommentsOnDispatchOverride", func(t *testing.T) {
+		t.Setenv("SORTIE_TRACKER_COMMENTS_ON_DISPATCH", "true")
+		cfg, err := NewServiceConfig(map[string]any{})
+		if err != nil {
+			t.Fatalf("NewServiceConfig: %v", err)
+		}
+		if !cfg.Tracker.Comments.OnDispatch {
+			t.Error("Tracker.Comments.OnDispatch = false, want true")
+		}
+	})
+
+	t.Run("CommentsOnCompletionOverrideFalse", func(t *testing.T) {
+		// Override an existing YAML true → false via env.
+		t.Setenv("SORTIE_TRACKER_COMMENTS_ON_COMPLETION", "false")
+		cfg, err := NewServiceConfig(map[string]any{
+			"tracker": map[string]any{
+				"comments": map[string]any{"on_completion": true},
+			},
+		})
+		if err != nil {
+			t.Fatalf("NewServiceConfig: %v", err)
+		}
+		if cfg.Tracker.Comments.OnCompletion {
+			t.Error("Tracker.Comments.OnCompletion = true, want false (env override)")
+		}
+	})
+
+	t.Run("NonMapTrackerSectionWithOverrideNoPanic", func(t *testing.T) {
+		t.Setenv("SORTIE_TRACKER_KIND", "file")
+		cfg, err := NewServiceConfig(map[string]any{
+			"tracker": "not-a-map", // invalid YAML type
+		})
+		if err != nil {
+			t.Fatalf("NewServiceConfig: %v", err)
+		}
+		// ensureSubMap replaced the string with a new map containing the override.
+		assertStringEqual(t, "Tracker.Kind", "file", cfg.Tracker.Kind)
+	})
+
+	t.Run("NilRawMapWithOverride", func(t *testing.T) {
+		t.Setenv("SORTIE_TRACKER_KIND", "file")
+		cfg, err := NewServiceConfig(nil)
+		if err != nil {
+			t.Fatalf("NewServiceConfig(nil): %v", err)
+		}
+		assertStringEqual(t, "Tracker.Kind", "file", cfg.Tracker.Kind)
+	})
+
+	t.Run("DynamicReload", func(t *testing.T) {
+		// First call with SORTIE_TRACKER_KIND=file.
+		t.Setenv("SORTIE_TRACKER_KIND", "file")
+		cfg1, err := NewServiceConfig(map[string]any{})
+		if err != nil {
+			t.Fatalf("first NewServiceConfig: %v", err)
+		}
+		assertStringEqual(t, "Tracker.Kind (1st)", "file", cfg1.Tracker.Kind)
+
+		// Simulate dynamic reload by changing the env var.
+		t.Setenv("SORTIE_TRACKER_KIND", "jira")
+		cfg2, err := NewServiceConfig(map[string]any{})
+		if err != nil {
+			t.Fatalf("second NewServiceConfig: %v", err)
+		}
+		assertStringEqual(t, "Tracker.Kind (2nd)", "jira", cfg2.Tracker.Kind)
+	})
+
+	t.Run("DotEnvFileIntegration", func(t *testing.T) {
+		dotenvFile := writeDotEnvFile(t,
+			"SORTIE_TRACKER_KIND=file\nSORTIE_TRACKER_PROJECT=dot-env-project\n")
+		t.Setenv("SORTIE_ENV_FILE", dotenvFile)
+		// Real env absent — dotenv values should apply.
+		t.Setenv("SORTIE_TRACKER_KIND", "")
+		t.Setenv("SORTIE_TRACKER_PROJECT", "")
+
+		cfg, err := NewServiceConfig(map[string]any{})
+		if err != nil {
+			t.Fatalf("NewServiceConfig: %v", err)
+		}
+		assertStringEqual(t, "Tracker.Kind", "file", cfg.Tracker.Kind)
+		assertStringEqual(t, "Tracker.Project", "dot-env-project", cfg.Tracker.Project)
+	})
+
+	t.Run("DotEnvParseErrorFailsStartup", func(t *testing.T) {
+		malformed := writeDotEnvFile(t, "SORTIE_KEY_NO_EQUALS\n")
+		t.Setenv("SORTIE_ENV_FILE", malformed)
+
+		_, err := NewServiceConfig(map[string]any{})
+		if err == nil {
+			t.Fatal("NewServiceConfig: expected error for malformed .env file, got nil")
+		}
+		if !strings.Contains(err.Error(), "missing '='") {
+			t.Errorf("error = %q, want it to contain %q", err.Error(), "missing '='")
+		}
+	})
+
+	t.Run("AllAgentIntOverrides", func(t *testing.T) {
+		t.Setenv("SORTIE_AGENT_TURN_TIMEOUT_MS", "9000000")
+		t.Setenv("SORTIE_AGENT_READ_TIMEOUT_MS", "9001")
+		t.Setenv("SORTIE_AGENT_STALL_TIMEOUT_MS", "99000")
+		t.Setenv("SORTIE_AGENT_MAX_CONCURRENT_AGENTS", "7")
+		t.Setenv("SORTIE_AGENT_MAX_TURNS", "15")
+		t.Setenv("SORTIE_AGENT_MAX_RETRY_BACKOFF_MS", "99999")
+		t.Setenv("SORTIE_AGENT_MAX_SESSIONS", "3")
+
+		cfg, err := NewServiceConfig(map[string]any{})
+		if err != nil {
+			t.Fatalf("NewServiceConfig: %v", err)
+		}
+		assertIntEqual(t, "Agent.TurnTimeoutMS", 9000000, cfg.Agent.TurnTimeoutMS)
+		assertIntEqual(t, "Agent.ReadTimeoutMS", 9001, cfg.Agent.ReadTimeoutMS)
+		assertIntEqual(t, "Agent.StallTimeoutMS", 99000, cfg.Agent.StallTimeoutMS)
+		assertIntEqual(t, "Agent.MaxConcurrentAgents", 7, cfg.Agent.MaxConcurrentAgents)
+		assertIntEqual(t, "Agent.MaxTurns", 15, cfg.Agent.MaxTurns)
+		assertIntEqual(t, "Agent.MaxRetryBackoffMS", 99999, cfg.Agent.MaxRetryBackoffMS)
+		assertIntEqual(t, "Agent.MaxSessions", 3, cfg.Agent.MaxSessions)
+	})
+
+	t.Run("TrackerStringOverridesAllFields", func(t *testing.T) {
+		t.Setenv("SORTIE_TRACKER_ENDPOINT", "https://override.example.com")
+		t.Setenv("SORTIE_TRACKER_PROJECT", "OVRD")
+		t.Setenv("SORTIE_TRACKER_QUERY_FILTER", "project=OVRD AND status!=Done")
+
+		cfg, err := NewServiceConfig(map[string]any{
+			"tracker": map[string]any{
+				"endpoint":     "https://original.example.com",
+				"project":      "ORIG",
+				"query_filter": "original filter",
+			},
+		})
+		if err != nil {
+			t.Fatalf("NewServiceConfig: %v", err)
+		}
+		assertStringEqual(t, "Tracker.Endpoint", "https://override.example.com", cfg.Tracker.Endpoint)
+		assertStringEqual(t, "Tracker.Project", "OVRD", cfg.Tracker.Project)
+		assertStringEqual(t, "Tracker.QueryFilter", "project=OVRD AND status!=Done", cfg.Tracker.QueryFilter)
+	})
+
+	t.Run("TrackerActiveStatesOverrideCSVPreservesCase", func(t *testing.T) {
+		// States stored with original casing.
+		t.Setenv("SORTIE_TRACKER_ACTIVE_STATES", "To Do,In Progress,In Review")
+		cfg, err := NewServiceConfig(map[string]any{})
+		if err != nil {
+			t.Fatalf("NewServiceConfig: %v", err)
+		}
+		assertStringSliceEqual(t, "Tracker.ActiveStates",
+			[]string{"To Do", "In Progress", "In Review"}, cfg.Tracker.ActiveStates)
+	})
+
+	t.Run("YAMLDollarVarStillExpandedWhenEnvAbsent", func(t *testing.T) {
+		// When the SORTIE_* override is absent, existing $VAR resolution must still work.
+		t.Setenv("SORTIE_TRACKER_API_KEY", "") // not set
+		t.Setenv("MY_REAL_TOKEN", "secret_tok_xyz")
+		cfg, err := NewServiceConfig(map[string]any{
+			"tracker": map[string]any{"api_key": "$MY_REAL_TOKEN"},
+		})
+		if err != nil {
+			t.Fatalf("NewServiceConfig: %v", err)
+		}
+		// $MY_REAL_TOKEN expansion still applies (no env override for api_key).
+		assertStringEqual(t, "Tracker.APIKey", "secret_tok_xyz", cfg.Tracker.APIKey)
+	})
+}
