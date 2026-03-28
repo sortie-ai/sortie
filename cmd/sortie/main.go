@@ -50,8 +50,25 @@ var serverShutdownTimeout = 5 * time.Second
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+
+	// Log the signal that triggers shutdown. signal.NotifyContext
+	// cancels ctx but discards the signal identity, so a parallel
+	// channel captures it for operator diagnostics.
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+	go func() {
+		sig, ok := <-sigCh
+		if ok {
+			slog.Info("signal received, initiating shutdown",
+				slog.String("signal", sig.String()),
+				slog.Int("pid", os.Getpid()),
+			)
+		}
+	}()
+
 	code := run(ctx, os.Args[1:], os.Stdout, os.Stderr)
 	stop()
+	signal.Stop(sigCh)
 	os.Exit(code)
 }
 
