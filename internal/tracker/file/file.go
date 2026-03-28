@@ -14,6 +14,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/registry"
@@ -37,9 +38,10 @@ type FileAdapter struct {
 	path         string
 	activeStates map[string]bool
 
-	mu        sync.RWMutex
-	overrides map[string]string // issue ID → overridden state
-	metrics   domain.Metrics    // nil-safe: check before calling
+	mu               sync.RWMutex
+	overrides        map[string]string           // issue ID → overridden state
+	commentOverrides map[string][]domain.Comment // issue ID → appended comments
+	metrics          domain.Metrics              // nil-safe: check before calling
 }
 
 // NewFileAdapter creates a [FileAdapter] from adapter configuration.
@@ -63,9 +65,10 @@ func NewFileAdapter(config map[string]any) (domain.TrackerAdapter, error) {
 	}
 
 	return &FileAdapter{
-		path:         path,
-		activeStates: toStringSet(extractStringSlice(config["active_states"])),
-		overrides:    make(map[string]string),
+		path:             path,
+		activeStates:     toStringSet(extractStringSlice(config["active_states"])),
+		overrides:        make(map[string]string),
+		commentOverrides: make(map[string][]domain.Comment),
 	}, nil
 }
 
@@ -116,6 +119,7 @@ func (a *FileAdapter) FetchIssueByID(_ context.Context, issueID string) (domain.
 			if iss.Comments == nil {
 				iss.Comments = []domain.Comment{}
 			}
+			iss.Comments = append(iss.Comments, a.commentOverrides[issueID]...)
 			a.incTrackerRequest("fetch_issue", "success")
 			return iss, nil
 		}
@@ -242,11 +246,17 @@ func (a *FileAdapter) FetchIssueComments(_ context.Context, issueID string) ([]d
 	for _, raw := range raws {
 		if raw.ID == issueID {
 			iss := normalize(raw)
-			a.incTrackerRequest("fetch_comments", "success")
-			if iss.Comments == nil {
-				return []domain.Comment{}, nil
+			comments := iss.Comments
+			if comments == nil {
+				comments = []domain.Comment{}
 			}
-			return iss.Comments, nil
+
+			a.mu.RLock()
+			comments = append(comments, a.commentOverrides[issueID]...)
+			a.mu.RUnlock()
+
+			a.incTrackerRequest("fetch_comments", "success")
+			return comments, nil
 		}
 	}
 
@@ -291,6 +301,44 @@ func (a *FileAdapter) TransitionIssue(_ context.Context, issueID string, targetS
 	a.mu.Unlock()
 
 	a.incTrackerRequest("transition", "success")
+	return nil
+}
+
+// CommentIssue records a comment for the given issue in the adapter's
+// in-memory comment store. Subsequent [FileAdapter.FetchIssueByID] and
+// [FileAdapter.FetchIssueComments] calls include these comments after
+// any comments present in the fixture file. Returns a [*domain.TrackerError]
+// with Kind [domain.ErrTrackerNotFound] if the issue does not exist.
+func (a *FileAdapter) CommentIssue(_ context.Context, issueID string, text string) error {
+	raws, err := loadIssues(a.path)
+	if err != nil {
+		a.incTrackerRequest("comment", "error")
+		return err
+	}
+
+	found := false
+	for _, raw := range raws {
+		if raw.ID == issueID {
+			found = true
+			break
+		}
+	}
+	if !found {
+		a.incTrackerRequest("comment", "error")
+		return &domain.TrackerError{
+			Kind:    domain.ErrTrackerNotFound,
+			Message: fmt.Sprintf("issue not found: %s", issueID),
+		}
+	}
+
+	a.mu.Lock()
+	a.commentOverrides[issueID] = append(a.commentOverrides[issueID], domain.Comment{
+		Body:      text,
+		CreatedAt: time.Now().UTC().Format(time.RFC3339),
+	})
+	a.mu.Unlock()
+
+	a.incTrackerRequest("comment", "success")
 	return nil
 }
 

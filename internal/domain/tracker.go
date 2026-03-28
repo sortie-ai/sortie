@@ -65,4 +65,18 @@ type TrackerAdapter interface {
 	// The orchestrator treats all errors as non-fatal: log and degrade
 	// to continuation retry.
 	TransitionIssue(ctx context.Context, issueID string, targetState string) error
+
+	// CommentIssue posts a plain-text comment on the specified issue in
+	// the tracker. The text parameter is plain text; adapters convert to
+	// their native format internally (e.g. ADF wrapping for Jira).
+	//
+	// Returns nil on success. Returns a [*TrackerError] on failure:
+	//   - [ErrTrackerTransport]: network or server failure.
+	//   - [ErrTrackerAuth]: insufficient permissions.
+	//   - [ErrTrackerAPI]: non-success response (rate limit, unexpected status).
+	//   - [ErrTrackerNotFound]: the issue does not exist.
+	//   - [ErrTrackerPayload]: malformed request or response.
+	//
+	// All errors are non-fatal — the orchestrator logs WARN and continues.
+	CommentIssue(ctx context.Context, issueID string, text string) error
 }

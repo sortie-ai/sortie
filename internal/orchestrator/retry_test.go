@@ -82,6 +82,10 @@ func (m *mockRetryTracker) TransitionIssue(context.Context, string, string) erro
 	panic("TransitionIssue must not be called by HandleRetryTimer")
 }
 
+func (m *mockRetryTracker) CommentIssue(context.Context, string, string) error {
+	panic("CommentIssue must not be called by HandleRetryTimer")
+}
+
 // --- Test helpers ---
 
 // retryState creates a *State with a retry entry and claim for the given

@@ -34,6 +34,7 @@ type spyMetrics struct {
 	pollDurations        []float64
 	workerDurations      []workerDurCall
 	sshHostUsage         []sshHostUsageCall
+	trackerComments      []trackerCommentCall
 }
 
 type tokenCall struct {
@@ -169,6 +170,17 @@ func (s *spyMetrics) SetSSHHostUsage(host string, count int) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.sshHostUsage = append(s.sshHostUsage, sshHostUsageCall{host, count})
+}
+
+type trackerCommentCall struct {
+	lifecycle string
+	result    string
+}
+
+func (s *spyMetrics) IncTrackerComments(lifecycle string, result string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.trackerComments = append(s.trackerComments, trackerCommentCall{lifecycle, result})
 }
 
 // --- Tests ---

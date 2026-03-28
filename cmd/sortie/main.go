@@ -471,6 +471,11 @@ func trackerConfigMap(tc config.TrackerConfig) map[string]any {
 		"query_filter":      tc.QueryFilter,
 		"handoff_state":     tc.HandoffState,
 		"in_progress_state": tc.InProgressState,
+		"comments": map[string]any{
+			"on_dispatch":   tc.Comments.OnDispatch,
+			"on_completion": tc.Comments.OnCompletion,
+			"on_failure":    tc.Comments.OnFailure,
+		},
 	}
 }
 

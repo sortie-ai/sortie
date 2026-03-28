@@ -247,6 +247,20 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 		}
 	}
 
+	// Dispatch comment: post a tracker comment acknowledging claim.
+	// Fires after in-progress transition, before workspace preparation.
+	// Failure is non-fatal — the worker continues regardless.
+	if cfg.Tracker.Comments.OnDispatch {
+		text := buildDispatchComment(cfg.Agent.Kind, attemptInt)
+		if err := deps.TrackerAdapter.CommentIssue(ctx, issue.ID, text); err != nil {
+			logger.Warn("dispatch comment failed", slog.Any("error", err))
+			deps.Metrics.IncTrackerComments("dispatch", "error")
+		} else {
+			logger.Info("dispatch comment posted")
+			deps.Metrics.IncTrackerComments("dispatch", "success")
+		}
+	}
+
 	// reported tracks whether OnExit has been called. The deferred
 	// panic recovery checks this to avoid double-reporting.
 	reported := false
@@ -568,4 +582,10 @@ func buildToolAdvertisement(reg *domain.ToolRegistry, project string) string {
 	sb.WriteString("All responses are JSON: {\"success\": true, \"data\": ...} or {\"success\": false, \"error\": {\"kind\": \"...\", \"message\": \"...\"}}.\n")
 
 	return sb.String()
+}
+
+// buildDispatchComment returns the tracker comment text for a session
+// dispatch event.
+func buildDispatchComment(agentKind string, attempt int) string {
+	return fmt.Sprintf("Sortie session started.\nSession: pending\nAgent: %s\nWorkspace: pending\nAttempt: %d", agentKind, attempt)
 }

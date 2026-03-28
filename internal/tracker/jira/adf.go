@@ -63,3 +63,38 @@ func flattenADFNode(b *strings.Builder, node any) {
 		b.WriteByte('\n')
 	}
 }
+
+// buildADFComment wraps plain text in an ADF document suitable for
+// the Jira REST API v3 comment endpoint. Each line of the input text
+// becomes a separate paragraph node so that line breaks render
+// correctly in Jira's UI.
+func buildADFComment(text string) map[string]any {
+	lines := strings.Split(text, "\n")
+	paragraphs := make([]any, 0, len(lines))
+
+	for _, line := range lines {
+		var content []any
+		if line != "" {
+			content = []any{
+				map[string]any{
+					"type": "text",
+					"text": line,
+				},
+			}
+		} else {
+			content = []any{}
+		}
+		paragraphs = append(paragraphs, map[string]any{
+			"type":    "paragraph",
+			"content": content,
+		})
+	}
+
+	return map[string]any{
+		"body": map[string]any{
+			"version": 1,
+			"type":    "doc",
+			"content": paragraphs,
+		},
+	}
+}

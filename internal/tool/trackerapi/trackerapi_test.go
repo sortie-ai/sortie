@@ -62,6 +62,10 @@ func (m *mockTrackerAdapter) TransitionIssue(ctx context.Context, issueID string
 	return nil
 }
 
+func (m *mockTrackerAdapter) CommentIssue(_ context.Context, _ string, _ string) error {
+	return nil
+}
+
 // --- test helpers ---
 
 // projIssue returns an issue with the given identifier in project PROJ.

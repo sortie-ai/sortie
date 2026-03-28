@@ -113,6 +113,8 @@ type mockTrackerAdapter struct {
 	fetchStatesFn     func(ctx context.Context, ids []string) (map[string]string, error)
 	transitionIssueFn func(ctx context.Context, issueID, targetState string) error
 	transitionCalls   []transitionIssueCall
+	commentIssueFn    func(ctx context.Context, issueID, text string) error
+	commentCalls      []commentIssueCall
 }
 
 var _ domain.TrackerAdapter = (*mockTrackerAdapter)(nil)
@@ -152,6 +154,19 @@ func (m *mockTrackerAdapter) TransitionIssue(ctx context.Context, issueID string
 	m.transitionCalls = append(m.transitionCalls, transitionIssueCall{IssueID: issueID, TargetState: targetState})
 	if m.transitionIssueFn != nil {
 		return m.transitionIssueFn(ctx, issueID, targetState)
+	}
+	return nil
+}
+
+type commentIssueCall struct {
+	IssueID string
+	Text    string
+}
+
+func (m *mockTrackerAdapter) CommentIssue(ctx context.Context, issueID string, text string) error {
+	m.commentCalls = append(m.commentCalls, commentIssueCall{IssueID: issueID, Text: text})
+	if m.commentIssueFn != nil {
+		return m.commentIssueFn(ctx, issueID, text)
 	}
 	return nil
 }
@@ -1842,4 +1857,53 @@ func TestRunWorkerAttempt_DispatchTransition(t *testing.T) {
 			t.Errorf("attempt 2: TargetState = %q, want %q", got, "State B")
 		}
 	})
+}
+
+func TestBuildDispatchComment(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name         string
+		agentKind    string
+		attempt      int
+		wantContains []string
+	}{
+		{
+			name:         "first dispatch attempt 1",
+			agentKind:    "claude-code",
+			attempt:      1,
+			wantContains: []string{"Sortie session started.", "claude-code", "Attempt: 1", "Session: pending", "Workspace: pending"},
+		},
+		{
+			name:         "retry attempt 3",
+			agentKind:    "claude-code",
+			attempt:      3,
+			wantContains: []string{"Attempt: 3"},
+		},
+		{
+			name:         "attempt 0 propagated as-is",
+			agentKind:    "mock",
+			attempt:      0,
+			wantContains: []string{"Attempt: 0"},
+		},
+		{
+			name:         "agent kind included verbatim",
+			agentKind:    "mock-agent",
+			attempt:      1,
+			wantContains: []string{"mock-agent"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := buildDispatchComment(tt.agentKind, tt.attempt)
+			for _, want := range tt.wantContains {
+				if !strings.Contains(got, want) {
+					t.Errorf("buildDispatchComment(%q, %d) missing %q\ngot: %q",
+						tt.agentKind, tt.attempt, want, got)
+				}
+			}
+		})
+	}
 }

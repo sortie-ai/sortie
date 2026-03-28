@@ -3,10 +3,12 @@ package orchestrator
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"math"
 	"time"
 
+	"github.com/sortie-ai/sortie/internal/config"
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/logging"
 	"github.com/sortie-ai/sortie/internal/persistence"
@@ -90,6 +92,11 @@ type HandleWorkerExitParams struct {
 	// Metrics records instrumentation counters for worker exit events.
 	// If nil, defaults to [domain.NoopMetrics].
 	Metrics domain.Metrics
+
+	// CommentsConfig holds the boolean flags for tracker comments on
+	// completion and failure. Read from config.Tracker.Comments by the
+	// event loop caller.
+	CommentsConfig config.TrackerCommentsConfig
 
 	// HostPool is the SSH host pool for releasing hosts on worker exit.
 	// If nil, no host pool release occurs (local-mode or tests).
@@ -248,6 +255,7 @@ func HandleWorkerExit(state *State, result WorkerResult, params HandleWorkerExit
 	}
 
 	retryScheduled := false
+	nextAttempt := 0
 
 	switch result.ExitKind {
 	case WorkerExitNormal:
@@ -338,7 +346,7 @@ func HandleWorkerExit(state *State, result WorkerResult, params HandleWorkerExit
 	default: // WorkerExitError and any unknown kind
 		classification := classifyWorkerError(result.Error)
 		if classification.Retryable {
-			nextAttempt := NextAttempt(entry.RetryAttempt)
+			nextAttempt = NextAttempt(entry.RetryAttempt)
 			delayMS := computeBackoffDelay(nextAttempt, params.MaxRetryBackoffMS)
 
 			log.Warn("worker run failed, scheduling retry",
@@ -385,6 +393,61 @@ func HandleWorkerExit(state *State, result WorkerResult, params HandleWorkerExit
 				)
 			}
 		}
+	}
+
+	// Build comment text synchronously (to capture all exit-time data),
+	// then fire the CommentIssue API call in a detached goroutine so
+	// the event loop is never blocked.
+	var commentText string
+	var lifecycle string
+
+	sessionID = result.SessionID
+	if sessionID == "" {
+		sessionID = entry.SessionID
+	}
+	runDuration := now.Sub(entry.StartedAt)
+
+	switch result.ExitKind {
+	case WorkerExitNormal:
+		if params.CommentsConfig.OnCompletion {
+			commentText = buildCompletionComment(sessionID, runDuration, result.TurnsCompleted, retryScheduled)
+			lifecycle = "completion"
+		}
+	case WorkerExitCancelled:
+		// No comment on cancellation.
+	default:
+		if params.CommentsConfig.OnFailure {
+			commentText = buildFailureComment(sessionID, runDuration, result.Error, retryScheduled, nextAttempt)
+			lifecycle = "failure"
+		}
+	}
+
+	if commentText != "" && params.TrackerAdapter != nil {
+		issueID := result.IssueID
+		tracker := params.TrackerAdapter
+		m := metrics
+		commentLog := log
+		lc := lifecycle
+		ct := commentText
+
+		go func() {
+			dctx := context.WithoutCancel(context.Background())
+			dctx, cancel := context.WithTimeout(dctx, 30*time.Second)
+			defer cancel()
+
+			if err := tracker.CommentIssue(dctx, issueID, ct); err != nil {
+				commentLog.Warn("tracker comment failed",
+					slog.String("lifecycle", lc),
+					slog.Any("error", err),
+				)
+				m.IncTrackerComments(lc, "error")
+			} else {
+				commentLog.Info("tracker comment posted",
+					slog.String("lifecycle", lc),
+				)
+				m.IncTrackerComments(lc, "success")
+			}
+		}()
 	}
 
 }
@@ -471,4 +534,40 @@ func stringPtr(s string) *string {
 		return nil
 	}
 	return &s
+}
+
+// buildCompletionComment returns the tracker comment text for a normal
+// session exit. retryScheduled distinguishes "completed (re-queuing)"
+// from "completed".
+func buildCompletionComment(sessionID string, elapsed time.Duration, turnsCompleted int, retryScheduled bool) string {
+	if sessionID == "" {
+		sessionID = "unknown"
+	}
+	headline := "Sortie session completed."
+	if retryScheduled {
+		headline = "Sortie session completed (re-queuing)."
+	}
+	return fmt.Sprintf("%s\nSession: %s\nDuration: %s\nTurns: %d",
+		headline, sessionID, elapsed.Truncate(time.Second).String(), turnsCompleted)
+}
+
+// buildFailureComment returns the tracker comment text for an error
+// session exit.
+func buildFailureComment(sessionID string, elapsed time.Duration, exitErr error, retryScheduled bool, nextAttempt int) string {
+	if sessionID == "" {
+		sessionID = "unknown"
+	}
+	errStr := "unknown error"
+	if exitErr != nil {
+		errStr = exitErr.Error()
+		if len(errStr) > 200 {
+			errStr = errStr[:200] + "..."
+		}
+	}
+	retryLine := "Retry: no — not retryable"
+	if retryScheduled {
+		retryLine = fmt.Sprintf("Retry: yes (attempt %d)", nextAttempt)
+	}
+	return fmt.Sprintf("Sortie session failed.\nSession: %s\nDuration: %s\nError: %s\n%s",
+		sessionID, elapsed.Truncate(time.Second).String(), errStr, retryLine)
 }

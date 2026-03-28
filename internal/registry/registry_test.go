@@ -399,6 +399,10 @@ func (m *mockTrackerAdapter) TransitionIssue(_ context.Context, _ string, _ stri
 	return nil
 }
 
+func (m *mockTrackerAdapter) CommentIssue(_ context.Context, _ string, _ string) error {
+	return nil
+}
+
 func TestTrackerRegistry(t *testing.T) {
 	t.Parallel()
 

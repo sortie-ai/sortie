@@ -220,6 +220,7 @@ func (o *Orchestrator) Run(ctx context.Context) {
 				ActiveStates:      cfg.Tracker.ActiveStates,
 				Metrics:           o.metrics,
 				HostPool:          o.hostPool,
+				CommentsConfig:    cfg.Tracker.Comments,
 			})
 			o.updateGauges(time.Now())
 			o.notifyObservers()
@@ -536,6 +537,7 @@ func (o *Orchestrator) drainRunningWorkers() {
 				ActiveStates:      cfg.Tracker.ActiveStates,
 				Metrics:           o.metrics,
 				HostPool:          o.hostPool,
+				CommentsConfig:    cfg.Tracker.Comments,
 			})
 			o.updateGauges(time.Now())
 			o.notifyObservers()

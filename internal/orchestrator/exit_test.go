@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sortie-ai/sortie/internal/config"
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/persistence"
 )
@@ -1615,5 +1616,493 @@ func TestHandleWorkerExit_WorkflowFilePersisted(t *testing.T) {
 	}
 	if got := store.runHistories[0].WorkflowFile; got != "backend.WORKFLOW.md" {
 		t.Errorf("RunHistory.WorkflowFile = %q, want %q", got, "backend.WORKFLOW.md")
+	}
+}
+
+// --- Comment builder unit tests ---
+
+// commentAwareMetrics wraps spyMetrics and signals done when IncTrackerComments
+// is called. It lets tests synchronize with the detached comment goroutine
+// spawned by HandleWorkerExit without using sleep.
+type commentAwareMetrics struct {
+	*spyMetrics
+	done chan struct{}
+}
+
+var _ domain.Metrics = (*commentAwareMetrics)(nil)
+
+func newCommentAwareMetrics() *commentAwareMetrics {
+	return &commentAwareMetrics{
+		spyMetrics: &spyMetrics{},
+		done:       make(chan struct{}, 1),
+	}
+}
+
+func (m *commentAwareMetrics) IncTrackerComments(lifecycle, result string) {
+	m.spyMetrics.IncTrackerComments(lifecycle, result)
+	m.done <- struct{}{}
+}
+
+// waitComment blocks until IncTrackerComments is called or 2 s elapses.
+func (m *commentAwareMetrics) waitComment(t *testing.T) {
+	t.Helper()
+	select {
+	case <-m.done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for tracker comment goroutine to call IncTrackerComments")
+	}
+}
+
+func TestBuildCompletionComment(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name           string
+		sessionID      string
+		elapsed        time.Duration
+		turnsCompleted int
+		retryScheduled bool
+		wantContains   []string
+		wantAbsent     []string
+	}{
+		{
+			name:           "completed no retry",
+			sessionID:      "ses-abc",
+			elapsed:        90 * time.Second,
+			turnsCompleted: 5,
+			retryScheduled: false,
+			wantContains:   []string{"Sortie session completed.", "ses-abc", "1m30s", "5"},
+			wantAbsent:     []string{"re-queuing"},
+		},
+		{
+			name:           "completed with re-queuing",
+			sessionID:      "ses-def",
+			elapsed:        90 * time.Second,
+			turnsCompleted: 3,
+			retryScheduled: true,
+			wantContains:   []string{"Sortie session completed (re-queuing).", "ses-def", "3"},
+		},
+		{
+			name:           "empty session ID replaced with unknown",
+			sessionID:      "",
+			elapsed:        10 * time.Second,
+			turnsCompleted: 1,
+			retryScheduled: false,
+			wantContains:   []string{"unknown"},
+		},
+		{
+			name:           "sub-second elapsed truncated to zero",
+			sessionID:      "ses-xyz",
+			elapsed:        500 * time.Millisecond,
+			turnsCompleted: 0,
+			retryScheduled: false,
+			wantContains:   []string{"0s"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := buildCompletionComment(tt.sessionID, tt.elapsed, tt.turnsCompleted, tt.retryScheduled)
+			for _, want := range tt.wantContains {
+				if !strings.Contains(got, want) {
+					t.Errorf("buildCompletionComment() missing %q\ngot: %q", want, got)
+				}
+			}
+			for _, absent := range tt.wantAbsent {
+				if strings.Contains(got, absent) {
+					t.Errorf("buildCompletionComment() should not contain %q\ngot: %q", absent, got)
+				}
+			}
+		})
+	}
+}
+
+func TestBuildFailureComment(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name           string
+		sessionID      string
+		elapsed        time.Duration
+		exitErr        error
+		retryScheduled bool
+		nextAttempt    int
+		wantContains   []string
+	}{
+		{
+			name:           "failure with retry scheduled",
+			sessionID:      "ses-xyz",
+			elapsed:        45 * time.Second,
+			exitErr:        errors.New("process killed"),
+			retryScheduled: true,
+			nextAttempt:    2,
+			wantContains:   []string{"Sortie session failed.", "ses-xyz", "45s", "process killed", "Retry: yes (attempt 2)"},
+		},
+		{
+			name:           "failure no retry",
+			sessionID:      "ses-abc",
+			elapsed:        30 * time.Second,
+			exitErr:        errors.New("binary not found"),
+			retryScheduled: false,
+			nextAttempt:    0,
+			wantContains:   []string{"Sortie session failed.", "ses-abc", "binary not found", "Retry: no"},
+		},
+		{
+			name:           "nil error reports unknown error",
+			sessionID:      "ses-def",
+			elapsed:        10 * time.Second,
+			exitErr:        nil,
+			retryScheduled: false,
+			nextAttempt:    0,
+			wantContains:   []string{"Sortie session failed.", "unknown error"},
+		},
+		{
+			name:           "empty session ID replaced with unknown",
+			sessionID:      "",
+			elapsed:        5 * time.Second,
+			exitErr:        errors.New("crash"),
+			retryScheduled: false,
+			nextAttempt:    0,
+			wantContains:   []string{"unknown"},
+		},
+		{
+			name:           "long error message is truncated",
+			sessionID:      "ses-long",
+			elapsed:        1 * time.Second,
+			exitErr:        errors.New(strings.Repeat("x", 300)),
+			retryScheduled: false,
+			nextAttempt:    0,
+			wantContains:   []string{"..."},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := buildFailureComment(tt.sessionID, tt.elapsed, tt.exitErr, tt.retryScheduled, tt.nextAttempt)
+			for _, want := range tt.wantContains {
+				if !strings.Contains(got, want) {
+					t.Errorf("buildFailureComment() missing %q\ngot: %q", want, got)
+				}
+			}
+		})
+	}
+}
+
+// --- HandleWorkerExit tracker comment integration tests ---
+
+// exitParamsWithComments returns defaultExitParams extended with a tracker
+// adapter and the given comments config. ActiveStates is set so the issue
+// is not active, keeping retryScheduled=false on normal exit for clean assertions.
+func exitParamsWithComments(t *testing.T, store *mockExitStore, tracker *mockTrackerAdapter, comments config.TrackerCommentsConfig) HandleWorkerExitParams {
+	t.Helper()
+	p := defaultExitParams(t, store)
+	p.TrackerAdapter = tracker
+	p.ActiveStates = []string{"In Progress"} // issue state "" is not active → retryScheduled=false on normal exit
+	p.CommentsConfig = comments
+	return p
+}
+
+// TestHandleWorkerExit_CommentOnNormalExit verifies that a normal worker exit with
+// OnCompletion=true calls CommentIssue with a completion comment and records
+// IncTrackerComments("completion", "success").
+func TestHandleWorkerExit_CommentOnNormalExit(t *testing.T) {
+	t.Parallel()
+
+	store := &mockExitStore{}
+	tracker := &mockTrackerAdapter{}
+	spy := newCommentAwareMetrics()
+
+	state := exitState(t, "CMT-1", nil) // issue.State="" not in ActiveStates → retryScheduled=false
+	params := exitParamsWithComments(t, store, tracker, config.TrackerCommentsConfig{OnCompletion: true})
+	params.Metrics = spy
+
+	HandleWorkerExit(state, WorkerResult{
+		IssueID:        "CMT-1",
+		Identifier:     "CMT-1-ident",
+		ExitKind:       WorkerExitNormal,
+		SessionID:      "ses-cmt1",
+		TurnsCompleted: 7,
+		AgentAdapter:   "mock",
+	}, params)
+
+	spy.waitComment(t)
+
+	// CommentIssue called once with the right issue and completion text.
+	if len(tracker.commentCalls) != 1 {
+		t.Fatalf("CommentIssue call count = %d, want 1", len(tracker.commentCalls))
+	}
+	if tracker.commentCalls[0].IssueID != "CMT-1" {
+		t.Errorf("CommentIssue IssueID = %q, want %q", tracker.commentCalls[0].IssueID, "CMT-1")
+	}
+	if !strings.Contains(tracker.commentCalls[0].Text, "Sortie session completed.") {
+		t.Errorf("completion comment missing headline\ngot: %q", tracker.commentCalls[0].Text)
+	}
+	if !strings.Contains(tracker.commentCalls[0].Text, "ses-cmt1") {
+		t.Errorf("completion comment missing session ID\ngot: %q", tracker.commentCalls[0].Text)
+	}
+
+	// IncTrackerComments recorded with lifecycle=completion, result=success.
+	spy.mu.Lock()
+	comments := append([]trackerCommentCall(nil), spy.trackerComments...)
+	spy.mu.Unlock()
+
+	if len(comments) != 1 {
+		t.Fatalf("IncTrackerComments call count = %d, want 1", len(comments))
+	}
+	if comments[0].lifecycle != "completion" {
+		t.Errorf("IncTrackerComments lifecycle = %q, want %q", comments[0].lifecycle, "completion")
+	}
+	if comments[0].result != "success" {
+		t.Errorf("IncTrackerComments result = %q, want %q", comments[0].result, "success")
+	}
+}
+
+// TestHandleWorkerExit_NoCommentWhenOnCompletionFalse verifies that a normal exit
+// with OnCompletion=false does not call CommentIssue.
+func TestHandleWorkerExit_NoCommentWhenOnCompletionFalse(t *testing.T) {
+	t.Parallel()
+
+	store := &mockExitStore{}
+	tracker := &mockTrackerAdapter{}
+	state := exitState(t, "CMT-2", nil)
+	params := exitParamsWithComments(t, store, tracker, config.TrackerCommentsConfig{OnCompletion: false})
+
+	HandleWorkerExit(state, WorkerResult{
+		IssueID:      "CMT-2",
+		Identifier:   "CMT-2-ident",
+		ExitKind:     WorkerExitNormal,
+		SessionID:    "ses-cmt2",
+		AgentAdapter: "mock",
+	}, params)
+
+	// No goroutine spawned — assert immediately.
+	if len(tracker.commentCalls) != 0 {
+		t.Errorf("CommentIssue call count = %d, want 0 (OnCompletion=false)", len(tracker.commentCalls))
+	}
+}
+
+// TestHandleWorkerExit_CommentOnErrorExit verifies that an error worker exit with
+// OnFailure=true calls CommentIssue with a failure comment and records
+// IncTrackerComments("failure", "success").
+func TestHandleWorkerExit_CommentOnErrorExit(t *testing.T) {
+	t.Parallel()
+
+	store := &mockExitStore{}
+	tracker := &mockTrackerAdapter{}
+	spy := newCommentAwareMetrics()
+
+	state := exitState(t, "CMT-3", nil)
+	params := exitParamsWithComments(t, store, tracker, config.TrackerCommentsConfig{OnFailure: true})
+	params.Metrics = spy
+
+	exitErr := &domain.AgentError{Kind: domain.ErrTurnTimeout, Message: "turn timed out"}
+
+	HandleWorkerExit(state, WorkerResult{
+		IssueID:      "CMT-3",
+		Identifier:   "CMT-3-ident",
+		ExitKind:     WorkerExitError,
+		Error:        exitErr,
+		SessionID:    "ses-cmt3",
+		AgentAdapter: "mock",
+	}, params)
+
+	spy.waitComment(t)
+
+	// CommentIssue called once with failure text.
+	if len(tracker.commentCalls) != 1 {
+		t.Fatalf("CommentIssue call count = %d, want 1", len(tracker.commentCalls))
+	}
+	if !strings.Contains(tracker.commentCalls[0].Text, "Sortie session failed.") {
+		t.Errorf("failure comment missing headline\ngot: %q", tracker.commentCalls[0].Text)
+	}
+	if !strings.Contains(tracker.commentCalls[0].Text, "ses-cmt3") {
+		t.Errorf("failure comment missing session ID\ngot: %q", tracker.commentCalls[0].Text)
+	}
+
+	// IncTrackerComments recorded with lifecycle=failure, result=success.
+	spy.mu.Lock()
+	comments := append([]trackerCommentCall(nil), spy.trackerComments...)
+	spy.mu.Unlock()
+
+	if len(comments) != 1 {
+		t.Fatalf("IncTrackerComments call count = %d, want 1", len(comments))
+	}
+	if comments[0].lifecycle != "failure" {
+		t.Errorf("IncTrackerComments lifecycle = %q, want %q", comments[0].lifecycle, "failure")
+	}
+	if comments[0].result != "success" {
+		t.Errorf("IncTrackerComments result = %q, want %q", comments[0].result, "success")
+	}
+}
+
+// TestHandleWorkerExit_NoCommentWhenOnFailureFalse verifies that an error exit
+// with OnFailure=false does not call CommentIssue.
+func TestHandleWorkerExit_NoCommentWhenOnFailureFalse(t *testing.T) {
+	t.Parallel()
+
+	store := &mockExitStore{}
+	tracker := &mockTrackerAdapter{}
+	state := exitState(t, "CMT-4", nil)
+	params := exitParamsWithComments(t, store, tracker, config.TrackerCommentsConfig{OnFailure: false})
+
+	HandleWorkerExit(state, WorkerResult{
+		IssueID:      "CMT-4",
+		Identifier:   "CMT-4-ident",
+		ExitKind:     WorkerExitError,
+		Error:        &domain.AgentError{Kind: domain.ErrTurnTimeout, Message: "timeout"},
+		AgentAdapter: "mock",
+	}, params)
+
+	// No goroutine spawned — assert immediately.
+	if len(tracker.commentCalls) != 0 {
+		t.Errorf("CommentIssue call count = %d, want 0 (OnFailure=false)", len(tracker.commentCalls))
+	}
+}
+
+// TestHandleWorkerExit_NoCommentOnCancelled verifies that a cancelled worker exit
+// never posts a comment regardless of the OnCompletion/OnFailure flags.
+func TestHandleWorkerExit_NoCommentOnCancelled(t *testing.T) {
+	t.Parallel()
+
+	store := &mockExitStore{}
+	tracker := &mockTrackerAdapter{}
+	state := exitState(t, "CMT-5", nil)
+	// Both flags enabled — still no comment for cancellation.
+	params := exitParamsWithComments(t, store, tracker, config.TrackerCommentsConfig{
+		OnCompletion: true,
+		OnFailure:    true,
+	})
+
+	HandleWorkerExit(state, WorkerResult{
+		IssueID:      "CMT-5",
+		Identifier:   "CMT-5-ident",
+		ExitKind:     WorkerExitCancelled,
+		AgentAdapter: "mock",
+	}, params)
+
+	// No goroutine spawned — assert immediately.
+	if len(tracker.commentCalls) != 0 {
+		t.Errorf("CommentIssue call count = %d, want 0 (cancelled exit)", len(tracker.commentCalls))
+	}
+}
+
+// TestHandleWorkerExit_CommentErrorIsNonFatal verifies that a CommentIssue failure
+// is non-fatal: the function does not panic, IncTrackerComments records an error
+// result, and a WARN log entry is emitted.
+func TestHandleWorkerExit_CommentErrorIsNonFatal(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	store := &mockExitStore{}
+	spy := newCommentAwareMetrics()
+	tracker := &mockTrackerAdapter{
+		commentIssueFn: func(_ context.Context, _, _ string) error {
+			return errors.New("tracker API unavailable")
+		},
+	}
+
+	state := exitState(t, "CMT-6", nil)
+	params := exitParamsWithComments(t, store, tracker, config.TrackerCommentsConfig{OnFailure: true})
+	params.Metrics = spy
+	params.Logger = debugLogger(t, &buf)
+
+	HandleWorkerExit(state, WorkerResult{
+		IssueID:      "CMT-6",
+		Identifier:   "CMT-6-ident",
+		ExitKind:     WorkerExitError,
+		Error:        &domain.AgentError{Kind: domain.ErrTurnTimeout, Message: "timed out"},
+		SessionID:    "ses-cmt6",
+		AgentAdapter: "mock",
+	}, params)
+
+	// Wait for the goroutine to complete and IncTrackerComments to be called.
+	spy.waitComment(t)
+
+	// IncTrackerComments called with result=error.
+	spy.mu.Lock()
+	comments := append([]trackerCommentCall(nil), spy.trackerComments...)
+	spy.mu.Unlock()
+
+	if len(comments) != 1 {
+		t.Fatalf("IncTrackerComments call count = %d, want 1", len(comments))
+	}
+	if comments[0].result != "error" {
+		t.Errorf("IncTrackerComments result = %q, want %q", comments[0].result, "error")
+	}
+	if comments[0].lifecycle != "failure" {
+		t.Errorf("IncTrackerComments lifecycle = %q, want %q", comments[0].lifecycle, "failure")
+	}
+
+	// WARN log emitted with "tracker comment failed".
+	logOut := buf.String()
+	if !strings.Contains(logOut, "tracker comment failed") {
+		t.Errorf("log missing %q\ngot: %s", "tracker comment failed", logOut)
+	}
+	if !strings.Contains(logOut, "level=WARN") {
+		t.Errorf("expected WARN level log\ngot: %s", logOut)
+	}
+}
+
+// TestHandleWorkerExit_CommentNilTrackerAdapterSafe verifies that nil TrackerAdapter
+// with a comments config enabled does not panic and does not attempt to post a comment.
+func TestHandleWorkerExit_CommentNilTrackerAdapterSafe(t *testing.T) {
+	t.Parallel()
+
+	store := &mockExitStore{}
+	state := exitState(t, "CMT-7", nil)
+	params := defaultExitParams(t, store)
+	params.TrackerAdapter = nil // explicit nil
+	params.CommentsConfig = config.TrackerCommentsConfig{OnCompletion: true, OnFailure: true}
+
+	// Must not panic.
+	HandleWorkerExit(state, WorkerResult{
+		IssueID:      "CMT-7",
+		Identifier:   "CMT-7-ident",
+		ExitKind:     WorkerExitNormal,
+		AgentAdapter: "mock",
+	}, params)
+
+	// Normal in-memory state updates still happened.
+	if _, ok := state.Running["CMT-7"]; ok {
+		t.Error("Running entry not removed after normal exit with nil TrackerAdapter")
+	}
+}
+
+// TestHandleWorkerExit_CommentSessionIDPrefersResult verifies that when both
+// result.SessionID and entry.SessionID are set, result.SessionID is used in the
+// comment text, matching the comment version of the session ID resolution rule.
+func TestHandleWorkerExit_CommentSessionIDPrefersResult(t *testing.T) {
+	t.Parallel()
+
+	store := &mockExitStore{}
+	tracker := &mockTrackerAdapter{}
+	spy := newCommentAwareMetrics()
+
+	state := exitState(t, "CMT-8", nil)
+	state.Running["CMT-8"].SessionID = "entry-ses" // stale value on entry
+	params := exitParamsWithComments(t, store, tracker, config.TrackerCommentsConfig{OnCompletion: true})
+	params.Metrics = spy
+
+	HandleWorkerExit(state, WorkerResult{
+		IssueID:      "CMT-8",
+		Identifier:   "CMT-8-ident",
+		ExitKind:     WorkerExitNormal,
+		SessionID:    "result-ses", // authoritative value from adapter
+		AgentAdapter: "mock",
+	}, params)
+
+	spy.waitComment(t)
+
+	if len(tracker.commentCalls) != 1 {
+		t.Fatalf("CommentIssue call count = %d, want 1", len(tracker.commentCalls))
+	}
+	text := tracker.commentCalls[0].Text
+	if !strings.Contains(text, "result-ses") {
+		t.Errorf("comment text should contain result.SessionID %q\ngot: %q", "result-ses", text)
+	}
+	if strings.Contains(text, "entry-ses") {
+		t.Errorf("comment text should not contain entry.SessionID %q\ngot: %q", "entry-ses", text)
 	}
 }

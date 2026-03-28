@@ -356,6 +356,32 @@ func (a *JiraAdapter) TransitionIssue(ctx context.Context, issueID string, targe
 	return nil
 }
 
+// CommentIssue posts a plain-text comment on the specified Jira issue.
+// The text is split by newlines into ADF paragraph nodes before
+// submission to the Jira v3 REST API.
+func (a *JiraAdapter) CommentIssue(ctx context.Context, issueID string, text string) error {
+	path := "/rest/api/3/issue/" + url.PathEscape(issueID) + "/comment"
+
+	body := buildADFComment(text)
+	payload, err := json.Marshal(body)
+	if err != nil {
+		a.incTrackerRequest("comment", "error")
+		return &domain.TrackerError{
+			Kind:    domain.ErrTrackerPayload,
+			Message: "failed to marshal comment request",
+			Err:     err,
+		}
+	}
+
+	_, err = a.client.doJSON(ctx, "POST", path, bytes.NewReader(payload))
+	if err != nil {
+		a.incTrackerRequest("comment", "error")
+		return err
+	}
+	a.incTrackerRequest("comment", "success")
+	return nil
+}
+
 // SetMetrics configures the metrics recorder for tracker API call
 // instrumentation. When not called or called with nil, the adapter
 // operates without recording metrics. Safe to call before any

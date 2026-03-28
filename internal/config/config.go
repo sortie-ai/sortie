@@ -51,6 +51,15 @@ type TrackerConfig struct {
 	QueryFilter     string
 	HandoffState    string
 	InProgressState string
+	Comments        TrackerCommentsConfig
+}
+
+// TrackerCommentsConfig holds the boolean flags controlling whether
+// the orchestrator posts tracker comments at session lifecycle points.
+type TrackerCommentsConfig struct {
+	OnDispatch   bool
+	OnCompletion bool
+	OnFailure    bool
 }
 
 // PollingConfig holds the poll loop timing.
@@ -166,6 +175,27 @@ func NewServiceConfig(raw map[string]any) (ServiceConfig, error) {
 		return ServiceConfig{}, err
 	}
 
+	// Validate tracker.comments fields: reject non-boolean types.
+	if rawComments, ok := rawTracker["comments"]; ok && rawComments != nil {
+		commentsMap, isMap := rawComments.(map[string]any)
+		if !isMap {
+			return ServiceConfig{}, &ConfigError{
+				Field:   "tracker.comments",
+				Message: fmt.Sprintf("expected map, got %T", rawComments),
+			}
+		}
+		for _, key := range []string{"on_dispatch", "on_completion", "on_failure"} {
+			if v, exists := commentsMap[key]; exists && v != nil {
+				if _, isBool := v.(bool); !isBool {
+					return ServiceConfig{}, &ConfigError{
+						Field:   "tracker.comments." + key,
+						Message: fmt.Sprintf("expected bool, got %T", v),
+					}
+				}
+			}
+		}
+	}
+
 	polling, err := buildPollingConfig(extractSubMap(raw, "polling"))
 	if err != nil {
 		return ServiceConfig{}, err
@@ -209,6 +239,7 @@ func NewServiceConfig(raw map[string]any) (ServiceConfig, error) {
 // --- section builders ---
 
 func buildTrackerConfig(m map[string]any) TrackerConfig {
+	commentsMap := extractSubMap(m, "comments")
 	return TrackerConfig{
 		Kind:     extractString(m, "kind"),
 		Endpoint: resolveEnvRef(extractString(m, "endpoint")),
@@ -221,6 +252,11 @@ func buildTrackerConfig(m map[string]any) TrackerConfig {
 		QueryFilter:     resolveEnvRef(extractString(m, "query_filter")),
 		HandoffState:    resolveEnvRef(extractString(m, "handoff_state")),
 		InProgressState: resolveEnvRef(extractString(m, "in_progress_state")),
+		Comments: TrackerCommentsConfig{
+			OnDispatch:   coerceBool(commentsMap, "on_dispatch"),
+			OnCompletion: coerceBool(commentsMap, "on_completion"),
+			OnFailure:    coerceBool(commentsMap, "on_failure"),
+		},
 	}
 }
 
@@ -483,6 +519,23 @@ func expandPath(val string) (string, error) {
 }
 
 // --- coercion helpers ---
+
+// coerceBool returns the boolean value for key in m. Returns false when
+// the key is absent, the value is nil, or the value is not a bool type.
+func coerceBool(m map[string]any, key string) bool {
+	if m == nil {
+		return false
+	}
+	v, ok := m[key]
+	if !ok || v == nil {
+		return false
+	}
+	b, ok := v.(bool)
+	if !ok {
+		return false
+	}
+	return b
+}
 
 func coerceInt(val any) (int, error) {
 	switch v := val.(type) {

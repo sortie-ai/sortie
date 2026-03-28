@@ -81,6 +81,12 @@ type Metrics interface {
 	// (sortie_dispatch_transitions_total{result} counter).
 	IncDispatchTransitions(result string)
 
+	// IncTrackerComments increments the tracker comment attempt counter.
+	// lifecycle is "dispatch", "completion", or "failure".
+	// result is "success" or "error"
+	// (sortie_tracker_comments_total{lifecycle,result} counter).
+	IncTrackerComments(lifecycle string, result string)
+
 	// IncToolCalls increments the tool call completion counter.
 	// tool is the tool name (e.g. "Bash", "tracker_api").
 	// result is "success" or "error"
@@ -125,6 +131,7 @@ func (*NoopMetrics) IncPollCycles(string)                  {}
 func (*NoopMetrics) IncTrackerRequests(string, string)     {}
 func (*NoopMetrics) IncHandoffTransitions(string)          {}
 func (*NoopMetrics) IncDispatchTransitions(string)         {}
+func (*NoopMetrics) IncTrackerComments(string, string)     {}
 func (*NoopMetrics) IncToolCalls(string, string)           {}
 func (*NoopMetrics) ObservePollDuration(float64)           {}
 func (*NoopMetrics) ObserveWorkerDuration(string, float64) {}
