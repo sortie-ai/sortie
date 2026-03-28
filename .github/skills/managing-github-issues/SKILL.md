@@ -25,25 +25,34 @@ labels, milestones, and project board names are current:
 bash .github/skills/managing-github-issues/scripts/get_taxonomy.sh
 ```
 
-The script outputs all labels grouped by prefix, open milestones with issue
-counts, and the project board name. Use this output — not memorized values —
-for `--label`, `--milestone`, and `--project` flags.
+The script outputs issue types, labels grouped by prefix, open milestones
+with issue counts, and the project board name. Use this output — not memorized
+values — for `--type`, `--label`, `--milestone`, and `--project` flags.
 
 If the script is unavailable, run these individually:
 
 ```bash
+gh api "/orgs/{owner}/issue-types" --jq '.[] | "\(.name)\t\(.description)"'
 gh label list --limit 50
 gh api repos/{owner}/{repo}/milestones --paginate \
   -q '.[] | select(.state=="open") | "\(.title)  (open: \(.open_issues), closed: \(.closed_issues))"'
 gh project list --owner sortie-ai --limit 5
 ```
 
+## Issue type conventions
+
+GitHub Issue Types (organization-level) classify the kind of work. Every issue
+must have exactly one type. Available types: Task, Bug, Feature, Docs,
+Research, Refactor, Test.
+
+Set the type with `--type` when creating an issue. The taxonomy script lists
+available types — use its output, not memorized values.
+
 ## Label conventions
 
 Labels use a `prefix:name` convention (Kubernetes/CNCF style).
+Type classification is handled by Issue Types (above), not labels.
 
-- **`type:` prefix** — exactly one per issue. Classifies the kind of work
-  (bug, feature, docs, research, refactor, test).
 - **`area:` prefix** — at least one per issue. Identifies which subsystem is
   affected (orchestrator, persistence, server, etc.).
 - **`status:` prefix** — do not apply at creation. Set when work state changes.
@@ -89,9 +98,9 @@ gh issue list --search "<keywords>" --state all --limit 20 \
   handle word wrap at render time. Hard line breaks mid-sentence produce
   ragged diffs and noisy reflows when text is edited later.
 
-### Body templates by type
+### Body templates by issue type
 
-#### type:bug
+#### Bug
 
 ```markdown
 ## Summary
@@ -125,7 +134,7 @@ The bug is fixed when:
 - Test that should pass
 ```
 
-#### type:feature
+#### Feature
 
 ```markdown
 One-paragraph description of the capability and its motivation (why this
@@ -138,7 +147,7 @@ Verify: concrete command, test, or observable outcome that proves the feature
 works. Include default-behavior-preserved check if applicable.
 ```
 
-#### type:research
+#### Research
 
 ```markdown
 One-paragraph framing of the question or uncertainty to resolve.
@@ -154,7 +163,7 @@ Verify: deliverable that proves the research is complete (ADR, design doc,
 prototype, benchmark results).
 ```
 
-#### type:docs
+#### Docs
 
 ```markdown
 One-paragraph description of what documentation is missing, outdated, or
@@ -165,7 +174,7 @@ incorrect.
 Verify: documentation is published/merged and covers the stated gap.
 ```
 
-#### type:refactor / type:test
+#### Refactor / Test
 
 ```markdown
 One-paragraph description of what to improve and why (readability, coverage,
@@ -182,7 +191,7 @@ benchmark result).
 - Imperative mood, capitalize first word: "Add X", "Fix Y", "Implement Z"
 - Backtick-wrap code identifiers: `` Add `--host` flag for HTTP bind address ``
 - Under 80 characters, no trailing period
-- No type prefix in the title — labels handle categorization
+- No type prefix in the title — issue types handle categorization
 
 ### Composing the command
 
@@ -193,7 +202,7 @@ literal single quotes in the body with `'\''`.
 gh issue create \
   --title '<title>' \
   --body '<body>' \
-  --label '<type-label>' \
+  --type '<issue type from taxonomy>' \
   --label '<area-label>' \
   --milestone '<full milestone title from taxonomy>' \
   --project '<project name from taxonomy>'
@@ -203,15 +212,15 @@ gh issue create \
 
 When creating multiple related issues:
 
-1. Present all planned issues as a numbered list (title, type, area,
-   milestone) before creating any.
+1. Present all planned issues as a numbered list (title, issue type, area
+   labels, milestone) before creating any.
 2. Wait for user confirmation.
 3. Create sequentially. Report each issue number after creation.
 4. Print a summary table when done:
 
 ```
-| # | Title | Labels | Milestone |
-|---|-------|--------|-----------|
+| # | Title | Type | Labels | Milestone |
+|---|-------|------|--------|-----------|
 ```
 
 ## Search
@@ -266,7 +275,7 @@ When triaging a finding into the backlog:
 
 1. **Extract the concern** from context (code, logs, review, conversation).
 2. **Duplicate check** (see above).
-3. **Classify** — choose type and area labels from the taxonomy output.
+3. **Classify** — choose issue type and area labels from the taxonomy output.
 4. **Place in milestone** — match the milestone whose theme fits the concern.
    Read milestone titles from taxonomy output to pick correctly.
 5. **Draft the issue** following the body template for the chosen type.
@@ -277,13 +286,13 @@ When triaging a finding into the backlog:
 
 Before executing `gh issue create`, verify:
 
-- [ ] Taxonomy was fetched this session (labels and milestones are current)
+- [ ] Taxonomy was fetched this session (issue types, labels, milestones are current)
 - [ ] Duplicate check was performed
 - [ ] Title: imperative, under 80 chars, no trailing period
-- [ ] Exactly one `type:` label from taxonomy
+- [ ] Issue type set via `--type` from taxonomy
 - [ ] At least one `area:` label from taxonomy
 - [ ] Milestone set using full title from taxonomy
-- [ ] Body matches the template for its type
+- [ ] Body matches the template for its issue type
 - [ ] Verification criteria present and testable
 - [ ] No private information (usernames, keys, internal URLs)
 - [ ] No solution prescribed in bug reports
@@ -294,6 +303,7 @@ Before executing `gh issue create`, verify:
 
 | Error | Recovery |
 |---|---|
+| Issue type not found | Re-run taxonomy script; use exact name from output |
 | Milestone not found | Re-run taxonomy script; use exact title from output |
 | Label not found | Re-run taxonomy script; label may have been renamed |
 | Project not found | `gh project list --owner sortie-ai` to verify name |

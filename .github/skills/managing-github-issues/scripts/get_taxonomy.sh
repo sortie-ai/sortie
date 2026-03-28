@@ -33,6 +33,19 @@ fi
 echo "=== TAXONOMY for ${REPO} ==="
 echo ""
 
+# --- Issue Types ---
+echo "--- ISSUE TYPES ---"
+echo ""
+
+OWNER="${REPO%%/*}"
+gh api "/orgs/${OWNER}/issue-types" \
+  --jq '.[] | "\(.name)\t\(.description)"' 2>/dev/null \
+  | sort | while IFS=$'\t' read -r name desc; do
+  printf "  %-14s  %s\n" "$name" "$desc"
+done || echo "  (issue types not available)"
+
+echo ""
+
 # --- Labels ---
 echo "--- LABELS ---"
 echo ""
@@ -70,8 +83,6 @@ echo ""
 echo "--- PROJECT BOARD ---"
 echo ""
 
-# Detect org from repo
-OWNER="${REPO%%/*}"
 gh project list --owner "${OWNER}" --limit 5 --format json \
   --jq '.projects[] | "  \(.title) (#\(.number), \(.url))"' \
   2>/dev/null || echo "  (no projects found)"
