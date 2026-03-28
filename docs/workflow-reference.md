@@ -549,7 +549,8 @@ Rules:
 
 #### Precedence
 
-Real environment variables always win over `.env` file values. The `.env` file provides
+Non-empty real environment variables win over `.env` file values. Empty real environment
+variables are treated as unset and fall back to the `.env` value. The `.env` file provides
 defaults for env vars not already set in the process environment. The `--env-file` CLI
 flag takes precedence over the `SORTIE_ENV_FILE` environment variable when resolving the
 file path.
@@ -588,7 +589,9 @@ Env overrides merge into the fresh raw map before section builders run.
 - **`.env` file changes are picked up** on each reload. The `.env` file itself is not
   watched by fsnotify — only WORKFLOW.md changes trigger reload.
 - **Real environment variable changes require a process restart.** `os.Getenv` reads the
-  process environment block set at startup. This is standard Unix process semantics.
+  current process environment. While Go can observe in-process changes via `os.Setenv`,
+  operator-provided env vars are inherited at process launch and are effectively immutable
+  from outside the running process.
 
 For configuration values that need to change without restarting, use the `.env` file and
 trigger a WORKFLOW.md reload.

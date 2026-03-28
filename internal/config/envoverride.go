@@ -83,12 +83,6 @@ var envOverrides = []envOverride{
 	{"SORTIE_DB_PATH", "", "db_path", coerceString},
 }
 
-// secretEnvVars lists SORTIE_* variables whose values must never be
-// logged. Used by applyEnvOverrides for debug-level diagnostics.
-var secretEnvVars = map[string]bool{
-	"SORTIE_TRACKER_API_KEY": true,
-}
-
 // applyEnvOverrides merges SORTIE_* environment variables and .env file
 // values into the raw config map. Returns a set of field paths that were
 // set from environment sources (used by section builders to skip $VAR
@@ -138,14 +132,11 @@ func applyEnvOverrides(raw map[string]any) (map[string]bool, error) {
 			}
 		}
 
-		// Debug-level logging of applied overrides; mask secrets.
-		logVal := val
-		if secretEnvVars[ov.EnvVar] {
-			logVal = "***"
-		}
-		slog.Debug("env override applied", //nolint:gosec // G706: values are operator-provided env vars, not user input
-			slog.String("var", ov.EnvVar),
-			slog.String("value", logVal))
+		// Debug-level logging of applied overrides. Values are omitted
+		// to prevent accidental leakage of secrets embedded in URLs,
+		// commands, or other string-typed env vars.
+		slog.Debug("env override applied",
+			slog.String("var", ov.EnvVar))
 
 		if ov.Section == "" {
 			// Top-level field.
