@@ -67,6 +67,7 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 	logLevel := fs.String("log-level", "", `Log verbosity: "debug", "info", "warn", "error" (default "info")`)
 	dryRun := fs.Bool("dry-run", false, "Run one poll cycle without spawning agents or writing to the database, then exit")
 	port := fs.Int("port", 0, "HTTP server port")
+	envFile := fs.String("env-file", "", "Path to .env file for config overrides")
 	showVersion := fs.Bool("version", false, "Print program's version information and quit")
 	dumpVersion := fs.Bool("dumpversion", false, "Print the version of the program and don't do anything else")
 
@@ -104,6 +105,10 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 	if err != nil {
 		fmt.Fprintf(stderr, "sortie: %s\n", err) //nolint:errcheck // stderr write failure is unrecoverable
 		return 1
+	}
+
+	if *envFile != "" {
+		config.SetDotEnvPath(*envFile)
 	}
 
 	var portSet, logLevelSet bool

@@ -118,8 +118,13 @@ func NewServiceConfig(raw map[string]any) (ServiceConfig, error) {
 		raw = map[string]any{}
 	}
 
+	envKeys, err := applyEnvOverrides(raw)
+	if err != nil {
+		return ServiceConfig{}, err
+	}
+
 	rawTracker := extractSubMap(raw, "tracker")
-	tracker := buildTrackerConfig(rawTracker)
+	tracker := buildTrackerConfig(rawTracker, envKeys)
 
 	// Validate handoff_state: enforce string type, reject explicit empty
 	// values, and detect env var indirection that resolved to empty.
@@ -201,7 +206,7 @@ func NewServiceConfig(raw map[string]any) (ServiceConfig, error) {
 		return ServiceConfig{}, err
 	}
 
-	workspace, err := buildWorkspaceConfig(extractSubMap(raw, "workspace"))
+	workspace, err := buildWorkspaceConfig(extractSubMap(raw, "workspace"), envKeys)
 	if err != nil {
 		return ServiceConfig{}, err
 	}
@@ -213,7 +218,7 @@ func NewServiceConfig(raw map[string]any) (ServiceConfig, error) {
 		return ServiceConfig{}, err
 	}
 
-	dbPath, err := buildDBPath(raw)
+	dbPath, err := buildDBPath(raw, envKeys)
 	if err != nil {
 		return ServiceConfig{}, err
 	}
@@ -238,20 +243,49 @@ func NewServiceConfig(raw map[string]any) (ServiceConfig, error) {
 
 // --- section builders ---
 
-func buildTrackerConfig(m map[string]any) TrackerConfig {
+func buildTrackerConfig(m map[string]any, envKeys map[string]bool) TrackerConfig {
 	commentsMap := extractSubMap(m, "comments")
+
+	endpoint := extractString(m, "endpoint")
+	if !envKeys["tracker.endpoint"] {
+		endpoint = resolveEnvRef(endpoint)
+	}
+
+	apiKey := extractString(m, "api_key")
+	if !envKeys["tracker.api_key"] {
+		apiKey = resolveEnv(apiKey)
+	}
+
+	project := extractString(m, "project")
+	if !envKeys["tracker.project"] {
+		project = resolveEnvRef(project)
+	}
+
+	queryFilter := extractString(m, "query_filter")
+	if !envKeys["tracker.query_filter"] {
+		queryFilter = resolveEnvRef(queryFilter)
+	}
+
+	handoffState := extractString(m, "handoff_state")
+	if !envKeys["tracker.handoff_state"] {
+		handoffState = resolveEnvRef(handoffState)
+	}
+
+	inProgressState := extractString(m, "in_progress_state")
+	if !envKeys["tracker.in_progress_state"] {
+		inProgressState = resolveEnvRef(inProgressState)
+	}
+
 	return TrackerConfig{
-		Kind:     extractString(m, "kind"),
-		Endpoint: resolveEnvRef(extractString(m, "endpoint")),
-		APIKey:   resolveEnv(extractString(m, "api_key")),
-		Project:  resolveEnvRef(extractString(m, "project")),
-		// States are stored with original casing; the orchestrator
-		// normalizes both sides to lowercase when comparing.
+		Kind:            extractString(m, "kind"),
+		Endpoint:        endpoint,
+		APIKey:          apiKey,
+		Project:         project,
 		ActiveStates:    extractStringSlice(mapVal(m, "active_states")),
 		TerminalStates:  extractStringSlice(mapVal(m, "terminal_states")),
-		QueryFilter:     resolveEnvRef(extractString(m, "query_filter")),
-		HandoffState:    resolveEnvRef(extractString(m, "handoff_state")),
-		InProgressState: resolveEnvRef(extractString(m, "in_progress_state")),
+		QueryFilter:     queryFilter,
+		HandoffState:    handoffState,
+		InProgressState: inProgressState,
 		Comments: TrackerCommentsConfig{
 			OnDispatch:   coerceBool(commentsMap, "on_dispatch"),
 			OnCompletion: coerceBool(commentsMap, "on_completion"),
@@ -271,9 +305,9 @@ func buildPollingConfig(m map[string]any) (PollingConfig, error) {
 	return PollingConfig{IntervalMS: intervalMS}, nil
 }
 
-func buildWorkspaceConfig(m map[string]any) (WorkspaceConfig, error) {
+func buildWorkspaceConfig(m map[string]any, envKeys map[string]bool) (WorkspaceConfig, error) {
 	rootRaw := extractString(m, "root")
-	root, err := expandPath(rootRaw)
+	root, err := expandPath(rootRaw, !envKeys["workspace.root"])
 	if err != nil {
 		return WorkspaceConfig{}, &ConfigError{
 			Field:   "workspace.root",
@@ -300,7 +334,7 @@ func buildHooksConfig(m map[string]any) HooksConfig {
 	}
 }
 
-func buildDBPath(raw map[string]any) (string, error) {
+func buildDBPath(raw map[string]any, envKeys map[string]bool) (string, error) {
 	v, exists := raw["db_path"]
 	if !exists || v == nil {
 		return "", nil
@@ -317,7 +351,7 @@ func buildDBPath(raw map[string]any) (string, error) {
 	if s == "" {
 		return "", nil
 	}
-	expanded, err := expandPath(s)
+	expanded, err := expandPath(s, !envKeys["db_path"])
 	if err != nil {
 		return "", &ConfigError{
 			Field:   "db_path",
@@ -504,7 +538,7 @@ func resolveEnvRef(val string) string {
 	return val
 }
 
-func expandPath(val string) (string, error) {
+func expandPath(val string, expandEnv bool) (string, error) {
 	if val == "" {
 		return "", nil
 	}
@@ -515,7 +549,10 @@ func expandPath(val string) (string, error) {
 		}
 		val = filepath.Join(home, val[1:])
 	}
-	return os.ExpandEnv(val), nil
+	if expandEnv {
+		return os.ExpandEnv(val), nil
+	}
+	return val, nil
 }
 
 // --- coercion helpers ---
