@@ -16,6 +16,6 @@ permissions:
 
 jobs:
   sweep:
-    uses: sortie-ai/shared-workflows/.github/workflows/dependabot-rebase-sweep.yml@v1.0.0
+    uses: sortie-ai/shared-workflows/.github/workflows/dependabot-rebase-sweep.yml@d7d3eee35a3a49856abbb780d503eee59b5d5c6a # v1.0.0
     secrets:
       bot-token: ${{ secrets.CICDBOT_TOKEN }}
