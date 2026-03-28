@@ -773,10 +773,14 @@ func runValidate(_ context.Context, args []string, stdout io.Writer, stderr io.W
 	// wf.Config is the post-env-override raw map. Sole ownership — safe to read.
 	var warningDiags []validateDiag
 	for _, w := range config.ValidateFrontMatter(wf.Config, cfg) {
+		msg := w.Message
+		if w.Field != "" {
+			msg = w.Field + ": " + msg
+		}
 		warningDiags = append(warningDiags, validateDiag{
 			Severity: "warning",
 			Check:    w.Check,
-			Message:  w.Message,
+			Message:  msg,
 		})
 	}
 
