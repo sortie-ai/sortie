@@ -784,6 +784,20 @@ func runValidate(_ context.Context, args []string, stdout io.Writer, stderr io.W
 		})
 	}
 
+	// Template static analysis.
+	tmpl, parseErr := prompt.Parse(wf.PromptTemplate, path, wf.FrontMatterLines)
+	if parseErr == nil {
+		for _, w := range prompt.AnalyzeTemplate(tmpl) {
+			warningDiags = append(warningDiags, validateDiag{
+				Severity: "warning",
+				Check:    templateWarnCheck(w.Kind),
+				Message:  w.Message,
+			})
+		}
+	}
+	// parseErr is not emitted here — NewManager below will re-parse
+	// and produce the same error through the existing error path.
+
 	logger := slog.New(slog.DiscardHandler)
 
 	mgr, err := workflow.NewManager(path, logger,
@@ -875,4 +889,17 @@ func mapPreflightErrors(errs []orchestrator.PreflightError) []validateDiag {
 		diags[i] = validateDiag{Severity: "error", Check: e.Check, Message: e.Message}
 	}
 	return diags
+}
+
+func templateWarnCheck(k prompt.WarnKind) string {
+	switch k {
+	case prompt.WarnDotContext:
+		return "dot_context"
+	case prompt.WarnUnknownVar:
+		return "unknown_var"
+	case prompt.WarnUnknownField:
+		return "unknown_field"
+	default:
+		return "template_warning"
+	}
 }
