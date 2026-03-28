@@ -2,12 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
-The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
-
-> Versions before 1.0.0 do not follow Semantic Versioning. Any release may
-> contain breaking changes without prior notice.
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
+
+## [1.0.0] - 2026-03-29
 
 ## [0.0.10] - 2026-03-28
 
@@ -314,7 +314,8 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   execution via GitHub Actions.
 - Architecture Decision Records (ADR-0001 through ADR-0005).
 
-[Unreleased]: https://github.com/sortie-ai/sortie/compare/0.0.10...HEAD
+[Unreleased]: https://github.com/sortie-ai/sortie/compare/1.0.0...HEAD
+[1.0.0]: https://github.com/sortie-ai/sortie/compare/0.0.10...1.0.0
 [0.0.10]: https://github.com/sortie-ai/sortie/compare/0.0.9...0.0.10
 [0.0.9]: https://github.com/sortie-ai/sortie/compare/0.0.8...0.0.9
 [0.0.8]: https://github.com/sortie-ai/sortie/compare/0.0.7...0.0.8

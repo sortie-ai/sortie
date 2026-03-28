@@ -7,13 +7,6 @@ Sortie turns issue tracker tickets into autonomous coding agent sessions.
 Engineers manage work at the ticket level. Agents handle implementation.
 Single binary, zero dependencies, SQLite persistence.
 
-> Sortie is in active development. The core system is implemented: tracker adapters
-> (Jira, file-based), agent adapter (Claude Code), workspace management, persistence,
-> orchestrator (dispatch, retry, reconciliation, multi-turn sessions), and observability
-> (JSON API, HTML dashboard, Prometheus metrics, health endpoints). Current work:
-> self-hosting, hardening, and documentation.
-> See [project roadmap](https://github.com/orgs/sortie-ai/projects/1) for current status.
-
 ## The Problem
 
 Coding agents can handle routine engineering tasks: bug fixes, dependency updates, test
