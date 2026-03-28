@@ -21,36 +21,45 @@
   - [2.5 `hooks` — Workspace Lifecycle Hooks](#25-hooks--workspace-lifecycle-hooks)
   - [2.6 `agent` — Coding Agent Configuration](#26-agent--coding-agent-configuration)
   - [2.7 `db_path` — SQLite Database Path](#27-db_path--sqlite-database-path)
-- [3. Extensions](#3-extensions)
-  - [3.1 `server.port` — HTTP Server](#31-serverport--http-server)
-  - [3.2 `logging.level` — Log Verbosity](#32-logginglevel--log-verbosity)
-  - [3.3 `worker` — SSH Worker Extension](#33-worker--ssh-worker-extension)
-  - [3.4 Adapter-Specific Pass-Through Config](#34-adapter-specific-pass-through-config)
-- [4. Prompt Template Reference](#4-prompt-template-reference)
-  - [4.1 Template Engine](#41-template-engine)
-  - [4.2 Template Input Variables](#42-template-input-variables)
-  - [4.3 Built-in Functions (FuncMap)](#43-built-in-functions-funcmap)
-  - [4.4 Built-in Actions](#44-built-in-actions)
-  - [4.5 First-Turn vs Continuation Semantics](#45-first-turn-vs-continuation-semantics)
-  - [4.6 Fallback Prompt Behavior](#46-fallback-prompt-behavior)
-  - [4.7 Common Patterns and Pitfalls](#47-common-patterns-and-pitfalls)
-- [5. Hook Lifecycle Reference](#5-hook-lifecycle-reference)
-  - [5.1 Execution Contract](#51-execution-contract)
-  - [5.2 Hook Environment Variables](#52-hook-environment-variables)
-  - [5.3 Failure Semantics](#53-failure-semantics)
-  - [5.4 Inline Scripts vs File Paths](#54-inline-scripts-vs-file-paths)
-- [6. Dynamic Reload Behavior](#6-dynamic-reload-behavior)
-  - [6.1 General Reload Semantics](#61-general-reload-semantics)
-  - [6.2 Per-Field Reload Behavior](#62-per-field-reload-behavior)
-- [7. Dispatch Preflight Validation](#7-dispatch-preflight-validation)
-- [8. Error Reference](#8-error-reference)
-  - [8.1 Workflow File Errors](#81-workflow-file-errors)
-  - [8.2 Configuration Errors](#82-configuration-errors)
-  - [8.3 Template Errors](#83-template-errors)
-- [9. Config Fields Summary (Cheat Sheet)](#9-config-fields-summary-cheat-sheet)
-- [10. Complete Annotated Examples](#10-complete-annotated-examples)
-  - [10.1 Minimal Workflow](#101-minimal-workflow)
-  - [10.2 Production Jira + Claude Code](#102-production-jira--claude-code)
+- [3. Environment Variable Overrides](#3-environment-variable-overrides)
+  - [3.1 Source Precedence](#31-source-precedence)
+  - [3.2 Curated Variable List](#32-curated-variable-list)
+  - [3.3 Type Coercion](#33-type-coercion)
+  - [3.4 `.env` File Support](#34-env-file-support)
+  - [3.5 Interaction with `$VAR` Indirection](#35-interaction-with-var-indirection)
+  - [3.6 Fields Not Overridable via Env](#36-fields-not-overridable-via-env)
+  - [3.7 Dynamic Reload](#37-dynamic-reload)
+- [4. Extensions](#4-extensions)
+  - [4.1 `server.port` — HTTP Server](#41-serverport--http-server)
+  - [4.2 `logging.level` — Log Verbosity](#42-logginglevel--log-verbosity)
+  - [4.3 `worker` — SSH Worker Extension](#43-worker--ssh-worker-extension)
+  - [4.4 Adapter-Specific Pass-Through Config](#44-adapter-specific-pass-through-config)
+- [5. Prompt Template Reference](#5-prompt-template-reference)
+  - [5.1 Template Engine](#51-template-engine)
+  - [5.2 Template Input Variables](#52-template-input-variables)
+  - [5.3 Built-in Functions (FuncMap)](#53-built-in-functions-funcmap)
+  - [5.4 Built-in Actions](#54-built-in-actions)
+  - [5.5 First-Turn vs Continuation Semantics](#55-first-turn-vs-continuation-semantics)
+  - [5.6 Fallback Prompt Behavior](#56-fallback-prompt-behavior)
+  - [5.7 Common Patterns and Pitfalls](#57-common-patterns-and-pitfalls)
+- [6. Hook Lifecycle Reference](#6-hook-lifecycle-reference)
+  - [6.1 Execution Contract](#61-execution-contract)
+  - [6.2 Hook Environment Variables](#62-hook-environment-variables)
+  - [6.3 Failure Semantics](#63-failure-semantics)
+  - [6.4 Inline Scripts vs File Paths](#64-inline-scripts-vs-file-paths)
+- [7. Dynamic Reload Behavior](#7-dynamic-reload-behavior)
+  - [7.1 General Reload Semantics](#71-general-reload-semantics)
+  - [7.2 Per-Field Reload Behavior](#72-per-field-reload-behavior)
+- [8. Dispatch Preflight Validation](#8-dispatch-preflight-validation)
+- [9. Error Reference](#9-error-reference)
+  - [9.1 Workflow File Errors](#91-workflow-file-errors)
+  - [9.2 Configuration Errors](#92-configuration-errors)
+  - [9.3 Environment Variable Errors](#93-environment-variable-errors)
+  - [9.4 Template Errors](#94-template-errors)
+- [10. Config Fields Summary (Cheat Sheet)](#10-config-fields-summary-cheat-sheet)
+- [11. Complete Annotated Examples](#11-complete-annotated-examples)
+  - [11.1 Minimal Workflow](#111-minimal-workflow)
+  - [11.2 Production Jira + Claude Code](#112-production-jira--claude-code)
 
 ---
 
@@ -318,7 +327,7 @@ hooks:
 | `before_remove` | multiline shell script or null | No       | _(none)_ | Future hook executions | Runs before workspace deletion, if the directory exists.                             |
 | `timeout_ms`    | integer                        | No       | `60000`  | Future hook executions | Timeout in milliseconds for all hooks. Non-positive values fall back to the default. |
 
-See [Section 5: Hook Lifecycle Reference](#5-hook-lifecycle-reference) for execution
+See [Section 6: Hook Lifecycle Reference](#6-hook-lifecycle-reference) for execution
 contract, environment variables, and failure semantics.
 
 ---
@@ -357,7 +366,7 @@ agent:
 **Orchestrator vs adapter fields:** The fields above are consumed by the orchestrator
 for scheduling, concurrency, and retry decisions. They are **not** passed through to the
 agent adapter. Adapter-specific configuration uses separate pass-through blocks — see
-[Section 3.4](#34-adapter-specific-pass-through-config).
+[Section 4.4](#44-adapter-specific-pass-through-config).
 
 ---
 
@@ -392,13 +401,206 @@ connection. A restart is required to change the database file.
 
 ---
 
-## 3. Extensions
+## 3. Environment Variable Overrides
+
+Sortie supports a curated set of `SORTIE_*` environment variables that override YAML front
+matter values. This enables twelve-factor app deployment patterns: operators inject secrets,
+endpoint URLs, and tuning parameters via environment rather than committing them to a
+workflow file.
+
+### 3.1 Source precedence
+
+Configuration sources are resolved in the following order (highest to lowest):
+
+1. **Workflow file path selection** (runtime setting → cwd default).
+2. **`SORTIE_*` real environment variables**.
+3. **`.env` file values** (when `SORTIE_ENV_FILE` or `--env-file` is set).
+4. **YAML front matter values**.
+5. **`$VAR` indirection** inside YAML values — applies only to values that survive the
+   merge (fields not overridden by env).
+6. **Built-in defaults**.
+
+An env override replaces the YAML value in the raw config map *before* `$VAR` expansion
+and section builders run. If `WORKFLOW.md` says `api_key: $MY_TOKEN` and
+`SORTIE_TRACKER_API_KEY=secret`, the env var value `secret` replaces the YAML value
+entirely. The `$MY_TOKEN` indirection never executes for that field.
+
+### 3.2 Curated variable list
+
+Each variable maps to exactly one config field. The naming convention is
+`SORTIE_<SECTION>_<FIELD>` with underscores separating words.
+
+#### Tracker
+
+| Environment variable                       | Config field                     | Type   | Notes                          |
+| ------------------------------------------ | -------------------------------- | ------ | ------------------------------ |
+| `SORTIE_TRACKER_KIND`                      | `tracker.kind`                   | string |                                |
+| `SORTIE_TRACKER_ENDPOINT`                  | `tracker.endpoint`               | string |                                |
+| `SORTIE_TRACKER_API_KEY`                   | `tracker.api_key`                | string | Secret; MUST NOT be logged     |
+| `SORTIE_TRACKER_PROJECT`                   | `tracker.project`                | string |                                |
+| `SORTIE_TRACKER_ACTIVE_STATES`             | `tracker.active_states`          | csv    | Comma-separated list           |
+| `SORTIE_TRACKER_TERMINAL_STATES`           | `tracker.terminal_states`        | csv    | Comma-separated list           |
+| `SORTIE_TRACKER_QUERY_FILTER`              | `tracker.query_filter`           | string |                                |
+| `SORTIE_TRACKER_HANDOFF_STATE`             | `tracker.handoff_state`          | string |                                |
+| `SORTIE_TRACKER_IN_PROGRESS_STATE`         | `tracker.in_progress_state`      | string |                                |
+| `SORTIE_TRACKER_COMMENTS_ON_DISPATCH`      | `tracker.comments.on_dispatch`   | bool   | `true`/`false`/`1`/`0`        |
+| `SORTIE_TRACKER_COMMENTS_ON_COMPLETION`    | `tracker.comments.on_completion` | bool   | `true`/`false`/`1`/`0`        |
+| `SORTIE_TRACKER_COMMENTS_ON_FAILURE`       | `tracker.comments.on_failure`    | bool   | `true`/`false`/`1`/`0`        |
+
+#### Polling
+
+| Environment variable         | Config field          | Type | Notes |
+| ---------------------------- | --------------------- | ---- | ----- |
+| `SORTIE_POLLING_INTERVAL_MS` | `polling.interval_ms` | int  |       |
+
+#### Workspace
+
+| Environment variable    | Config field     | Type   | Notes                                 |
+| ----------------------- | ---------------- | ------ | ------------------------------------- |
+| `SORTIE_WORKSPACE_ROOT` | `workspace.root` | string | `~` expansion applies; `$VAR` skipped |
+
+#### Agent
+
+| Environment variable                 | Config field                  | Type   | Notes |
+| ------------------------------------ | ----------------------------- | ------ | ----- |
+| `SORTIE_AGENT_KIND`                  | `agent.kind`                  | string |       |
+| `SORTIE_AGENT_COMMAND`               | `agent.command`               | string |       |
+| `SORTIE_AGENT_TURN_TIMEOUT_MS`       | `agent.turn_timeout_ms`       | int    |       |
+| `SORTIE_AGENT_READ_TIMEOUT_MS`       | `agent.read_timeout_ms`       | int    |       |
+| `SORTIE_AGENT_STALL_TIMEOUT_MS`      | `agent.stall_timeout_ms`      | int    |       |
+| `SORTIE_AGENT_MAX_CONCURRENT_AGENTS` | `agent.max_concurrent_agents` | int    |       |
+| `SORTIE_AGENT_MAX_TURNS`             | `agent.max_turns`             | int    |       |
+| `SORTIE_AGENT_MAX_RETRY_BACKOFF_MS`  | `agent.max_retry_backoff_ms`  | int    |       |
+| `SORTIE_AGENT_MAX_SESSIONS`          | `agent.max_sessions`          | int    |       |
+
+#### Top-level
+
+| Environment variable | Config field | Type   | Notes                                 |
+| -------------------- | ------------ | ------ | ------------------------------------- |
+| `SORTIE_DB_PATH`     | `db_path`    | string | `~` expansion applies; `$VAR` skipped |
+
+#### Control variable
+
+| Environment variable | Purpose                     | Type   | Notes                              |
+| -------------------- | --------------------------- | ------ | ---------------------------------- |
+| `SORTIE_ENV_FILE`    | Path to `.env` file to load | string | Default: empty (no `.env` loading) |
+
+### 3.3 Type coercion
+
+All environment variable values are strings. The override layer coerces them to the
+expected type before section builders run.
+
+| Target type  | Coercion rule                                                                         | Error behavior                              |
+| ------------ | ------------------------------------------------------------------------------------- | ------------------------------------------- |
+| `string`     | Used as-is.                                                                           | N/A                                         |
+| `int`        | `strconv.Atoi` after trimming whitespace.                                             | `*ConfigError` naming the `SORTIE_*` env var |
+| `bool`       | `"true"`, `"1"` → `true`; `"false"`, `"0"` → `false` (case-insensitive).            | `*ConfigError` naming the `SORTIE_*` env var |
+| `csv`        | `strings.Split(val, ",")` then trim each element; empty elements discarded.           | N/A                                         |
+
+**CSV encoding for list fields** (`active_states`, `terminal_states`):
+
+```
+SORTIE_TRACKER_ACTIVE_STATES="To Do,In Progress"
+SORTIE_TRACKER_TERMINAL_STATES="Done,Won't Do"
+```
+
+- Items are trimmed of leading/trailing whitespace.
+- Empty items (from trailing commas or `,,`) are discarded.
+- An empty string value means "empty list" (overrides YAML to zero elements).
+- State values preserve original casing.
+
+### 3.4 `.env` file support
+
+Sortie supports an optional `.env` file for operators who prefer file-based secrets over
+shell environment.
+
+#### Loading
+
+- `.env` loading is **opt-in**: set `SORTIE_ENV_FILE=/path/to/.env` as a real environment
+  variable, or pass `--env-file /path/to/.env` on the CLI.
+- Sortie does **not** auto-discover `.env` in the working directory. Operators MUST opt
+  in explicitly.
+- When the path is set but the file does not exist, Sortie logs a warning and continues
+  without `.env` values.
+- When the file exists but has parse errors, Sortie fails startup with an error
+  identifying the file and line number.
+
+#### File format
+
+```
+# Comment lines start with #
+SORTIE_TRACKER_API_KEY="tok_abc123"
+SORTIE_TRACKER_ENDPOINT=https://mycompany.atlassian.net
+SORTIE_POLLING_INTERVAL_MS=60000
+```
+
+Rules:
+
+- One `KEY=VALUE` per line.
+- Lines starting with `#` (after optional whitespace) are comments.
+- Empty lines are ignored.
+- Leading/trailing whitespace on keys and values is trimmed.
+- Values MAY be quoted with single or double quotes; quotes are stripped but no escape
+  processing is performed.
+- Keys MUST match `[A-Za-z_][A-Za-z0-9_]*`.
+- Only `SORTIE_*` prefixed keys are loaded; other keys are silently ignored.
+- Variable interpolation within `.env` values is **not** supported.
+
+#### Precedence
+
+Real environment variables always win over `.env` file values. The `.env` file provides
+defaults for env vars not already set in the process environment. The `--env-file` CLI
+flag takes precedence over the `SORTIE_ENV_FILE` environment variable when resolving the
+file path.
+
+### 3.5 Interaction with `$VAR` indirection
+
+Values injected by environment overrides are already fully resolved. They MUST NOT be
+passed through `os.ExpandEnv`, `resolveEnv`, or `resolveEnvRef`. This prevents
+double-expansion that would corrupt values containing `$` characters.
+
+For path fields (`workspace.root`, `db_path`), tilde (`~`) expansion still applies to
+env-sourced values. Only `$VAR` expansion is skipped.
+
+**Example:** If `SORTIE_TRACKER_API_KEY=tok$5abc` is set, the literal value `tok$5abc` is
+used as the API key. Without this guard, `os.ExpandEnv` would attempt to expand `$5abc`
+as an environment variable reference.
+
+### 3.6 Fields not overridable via env
+
+| Config field                           | Reason                                                          |
+| -------------------------------------- | --------------------------------------------------------------- |
+| `hooks.after_create`                   | Multiline shell scripts; not representable as single env var    |
+| `hooks.before_run`                     | Same as above                                                   |
+| `hooks.after_run`                      | Same as above                                                   |
+| `hooks.before_remove`                  | Same as above                                                   |
+| `hooks.timeout_ms`                     | Low-risk tuning; hooks are rarely changed per-environment       |
+| `agent.max_concurrent_agents_by_state` | Complex map type; no clean single-value representation          |
+| Extensions (`server`, `worker`, etc.)  | Extension-defined; would couple core env parsing to extensions  |
+| `logging.level` (via extensions)       | Resolved from `--log-level` flag; not part of typed config layer |
+
+### 3.7 Dynamic reload
+
+On WORKFLOW.md reload, `applyEnvOverrides` re-reads both `os.Getenv` and the `.env` file.
+Env overrides merge into the fresh raw map before section builders run.
+
+- **`.env` file changes are picked up** on each reload. The `.env` file itself is not
+  watched by fsnotify — only WORKFLOW.md changes trigger reload.
+- **Real environment variable changes require a process restart.** `os.Getenv` reads the
+  process environment block set at startup. This is standard Unix process semantics.
+
+For configuration values that need to change without restarting, use the `.env` file and
+trigger a WORKFLOW.md reload.
+
+---
+
+## 4. Extensions
 
 The front matter is extensible. Unknown top-level keys are collected into an `Extensions`
 map and are not validated by the core schema. Extensions should document their own field
 schemas, defaults, and reload behavior.
 
-### 3.1 `server.port` — HTTP Server
+### 4.1 `server.port` — HTTP Server
 
 ```yaml
 server:
@@ -712,7 +914,7 @@ $ curl -s http://localhost:8642/metrics | grep sortie_sessions_running
 sortie_sessions_running 2
 ```
 
-### 3.2 `logging.level` — Log Verbosity
+### 4.2 `logging.level` — Log Verbosity
 
 ```yaml
 logging:
@@ -728,7 +930,7 @@ verbosity after the workflow config is loaded. The CLI `--log-level` flag takes
 precedence when both are present. Accepted values: `debug`, `info`, `warn`,
 `error` (case-insensitive). Unknown values cause startup failure with exit code 1.
 
-### 3.3 `worker` — SSH Worker Extension
+### 4.3 `worker` — SSH Worker Extension
 
 ```yaml
 worker:
@@ -824,7 +1026,7 @@ You are a software engineer. Fix the issue described below.
 {{.issue_body}}
 ```
 
-### 3.4 Adapter-Specific Pass-Through Config
+### 4.4 Adapter-Specific Pass-Through Config
 
 Each adapter (tracker or agent) may define configuration in a top-level object named
 after its `kind` value. These values are passed through to the adapter without validation
@@ -881,9 +1083,9 @@ interpretation. Any adapter you register can read its fields from this block.
 
 ---
 
-## 4. Prompt Template Reference
+## 5. Prompt Template Reference
 
-### 4.1 Template Engine
+### 5.1 Template Engine
 
 Sortie uses Go [`text/template`](https://pkg.go.dev/text/template) with strict mode
 enabled:
@@ -903,7 +1105,7 @@ template.New("prompt").
 - `missingkey=error` distinguishes between a map key that is absent (error) and a key
   that is present with a `nil` value (evaluates as falsy in `{{ if }}`).
 
-### 4.2 Template Input Variables
+### 5.2 Template Input Variables
 
 The data map passed to `Execute` contains exactly **three top-level keys**:
 
@@ -951,7 +1153,7 @@ evaluates to `false`, and on retries it is `>= 1`, so `{{ if .attempt }}` evalua
 | `.run.max_turns`       | integer | Configured maximum turns per session.                                                                              |
 | `.run.is_continuation` | boolean | `true` when this is a continuation turn within a multi-turn session (not the first turn, not a retry after error). |
 
-### 4.3 Built-in Functions (FuncMap)
+### 5.3 Built-in Functions (FuncMap)
 
 In addition to Go `text/template` built-in actions, Sortie ships a minimal set of
 prompt-essential functions. Each is permanent API surface.
@@ -966,7 +1168,7 @@ prompt-essential functions. Each is permanent API surface.
 > The separator comes first in the function signature because Go template pipelines pass
 > the piped value as the last argument.
 
-### 4.4 Built-in Actions
+### 5.4 Built-in Actions
 
 Go `text/template` provides these built-in actions, all available in workflow templates:
 
@@ -985,7 +1187,7 @@ Go `text/template` provides these built-in actions, all available in workflow te
 | `{{ print A }}`, `{{ printf FMT A }}`, `{{ println A }}`       | Formatted output.               |
 | `{{ call FUNC ARGS }}`                                         | Call a function value.          |
 
-### 4.5 First-Turn vs Continuation Semantics
+### 5.5 First-Turn vs Continuation Semantics
 
 The prompt template supports three distinct modes within a single file. Workflow authors
 use `attempt` and `run.is_continuation` to branch:
@@ -1026,7 +1228,7 @@ A previous attempt failed. Diagnose the root cause.
 - After each turn, the worker re-checks the tracker issue state. If the issue is
   still active, another turn begins (up to `agent.max_turns`).
 
-### 4.6 Fallback Prompt Behavior
+### 5.6 Fallback Prompt Behavior
 
 - On **continuation turns** (turn number > 1), if the rendered prompt is empty, the
   runtime substitutes a built-in default continuation prompt as a safety net. This covers
@@ -1036,7 +1238,7 @@ A previous attempt failed. Diagnose the root cause.
 - Workflow file read/parse failures are validation errors and do **not** silently fall
   back to a default prompt.
 
-### 4.7 Common Patterns and Pitfalls
+### 5.7 Common Patterns and Pitfalls
 
 #### Dot context inside `{{ range }}`
 
@@ -1087,9 +1289,9 @@ Blockers: {{ .issue.blocked_by | toJSON }}
 
 ---
 
-## 5. Hook Lifecycle Reference
+## 6. Hook Lifecycle Reference
 
-### 5.1 Execution Contract
+### 6.1 Execution Contract
 
 Hooks execute as shell scripts in a local shell context:
 
@@ -1133,7 +1335,7 @@ Issue dispatched
       └─ Workspace directory deleted
 ```
 
-### 5.2 Hook Environment Variables
+### 6.2 Hook Environment Variables
 
 All hooks receive the following environment variables:
 
@@ -1168,7 +1370,7 @@ If a hook needs additional secrets or environment values, arrange for them expli
 - Load credentials from a file or external secrets manager inside the hook script
   (for example, `source /etc/sortie/hooks-env` or `aws sts get-caller-identity`).
 
-### 5.3 Failure Semantics
+### 6.3 Failure Semantics
 
 | Hook            | When it runs                      | Failure behavior                                                                                            |
 | --------------- | --------------------------------- | ----------------------------------------------------------------------------------------------------------- |
@@ -1179,7 +1381,7 @@ If a hook needs additional secrets or environment values, arrange for them expli
 
 Timeouts are treated the same as failures for each hook's failure semantics.
 
-### 5.4 Inline Scripts vs File Paths
+### 6.4 Inline Scripts vs File Paths
 
 Hook values are multiline shell script strings defined inline using YAML literal block
 syntax (`|`). For complex hooks, consider extracting scripts to separate files and
@@ -1205,9 +1407,9 @@ hooks:
 
 ---
 
-## 6. Dynamic Reload Behavior
+## 7. Dynamic Reload Behavior
 
-### 6.1 General Reload Semantics
+### 7.1 General Reload Semantics
 
 Sortie watches `WORKFLOW.md` for filesystem changes and automatically re-reads and
 re-applies configuration and prompt template without restart.
@@ -1224,7 +1426,7 @@ re-applies configuration and prompt template without restart.
 - The file watcher monitors the parent directory to detect atomic-rename saves
   (vim, `sed -i`).
 
-### 6.2 Per-Field Reload Behavior
+### 7.2 Per-Field Reload Behavior
 
 | Field                                  | Reload behavior                                                                                |
 | -------------------------------------- | ---------------------------------------------------------------------------------------------- |
@@ -1256,9 +1458,15 @@ re-applies configuration and prompt template without restart.
 | `logging.level`                        | **No effect** — requires restart.                                                              |
 | Prompt template                        | Future worker attempts (including continuation retries), not in-flight continuation turns.     |
 
+**Environment variable overrides and reload:** On each WORKFLOW.md reload, `SORTIE_*`
+environment variables and the `.env` file are re-read and merged into the fresh config.
+`.env` file changes are picked up on reload. Real environment variable changes require a
+process restart (standard Unix process semantics). See
+[Section 3.7](#37-dynamic-reload) for details.
+
 ---
 
-## 7. Dispatch Preflight Validation
+## 8. Dispatch Preflight Validation
 
 Before dispatching work, the orchestrator validates the workflow configuration. This runs
 at two points:
@@ -1283,9 +1491,9 @@ skipped for that tick, reconciliation remains active, and an error is emitted.
 
 ---
 
-## 8. Error Reference
+## 9. Error Reference
 
-### 8.1 Workflow File Errors
+### 9.1 Workflow File Errors
 
 These errors are raised during workflow file loading and prevent dispatch until fixed.
 
@@ -1295,7 +1503,7 @@ These errors are raised during workflow file loading and prevent dispatch until 
 | **Workflow parse error**            | YAML front matter contains syntax errors: invalid YAML between delimiters. A missing closing `---` is **not** itself an error (see [parsing rule 4](#12-parsing-rules)), but it causes the prompt body to be consumed as YAML, which often triggers this error. | Validate YAML syntax (indentation, colons, quoting). Look for tabs where spaces are expected. If the error text includes unexpected content, verify the closing `---` delimiter is present. |
 | **Workflow front matter not a map** | YAML front matter decoded to a scalar or list instead of a map/object.                                                                                                                                                                                          | Ensure front matter contains key-value pairs, not a bare value or list. The top level must be a YAML mapping.                                                                               |
 
-### 8.2 Configuration Errors
+### 9.2 Configuration Errors
 
 These errors are raised during typed config construction from the parsed front matter.
 Each error identifies the offending field path.
@@ -1321,7 +1529,20 @@ Each error identifies the offending field path.
 | `config: db_path: expected string, got <type>`                                  | `db_path` is not a string value.                                         | Use a string path value, quoted if necessary.                                                                                        |
 | `config: db_path: resolved to empty (check environment variable)`               | `$VAR` reference resolved to empty.                                      | Set the environment variable or use a literal path.                                                                                  |
 
-### 8.3 Template Errors
+### 9.3 Environment Variable Errors
+
+These errors are raised when `SORTIE_*` environment variables or `.env` file values fail
+type coercion. Each error identifies the env var as the source.
+
+| Error pattern                                                                                                  | Cause                                                     | Fix                                                                              |
+| -------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------- | -------------------------------------------------------------------------------- |
+| `config: polling.interval_ms: invalid integer value: <val> (from SORTIE_POLLING_INTERVAL_MS)`                  | Non-integer value in an integer env var.                  | Set the env var to a plain integer (e.g., `30000`). Remove units or decimals.    |
+| `config: agent.<field>: invalid integer value: <val> (from SORTIE_AGENT_<FIELD>)`                              | Same, for any agent integer field.                        | Same fix as above.                                                               |
+| `config: tracker.comments.<field>: invalid boolean value: <val> (expected true/false/1/0) (from SORTIE_TRACKER_COMMENTS_<FIELD>)` | Invalid boolean in a comments env var.                    | Use `true`, `false`, `1`, or `0` (case-insensitive).                             |
+| `config: dotenv <path>:<line>: missing '=' in line "<text>"`                                                   | `.env` file line has no `=` separator.                    | Ensure each non-comment line in the `.env` file is `KEY=VALUE`.                  |
+| `config: dotenv <path>:<line>: invalid key "<key>"`                                                            | `.env` file key contains invalid characters.              | Keys MUST match `[A-Za-z_][A-Za-z0-9_]*`.                                       |
+
+### 9.4 Template Errors
 
 | Error                       | Phase                 | Impact                                   | Cause                                                                                                        | Fix                                                                                                                                                                                                                   |
 | --------------------------- | --------------------- | ---------------------------------------- | ------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -1339,50 +1560,55 @@ template render error in WORKFLOW.md (line 52): template: prompt:9: ...
 
 ---
 
-## 9. Config Fields Summary (Cheat Sheet)
+## 10. Config Fields Summary (Cheat Sheet)
 
-A flat reference of every configuration field, for quick lookup.
+A flat reference of every configuration field, for quick lookup. The "Env Override" column
+lists the `SORTIE_*` variable that overrides the field, or "—" if not overridable (see
+[Section 3](#3-environment-variable-overrides)).
 
-| Field                                   | Type             | Default                      | Notes                                                                                  |
-| --------------------------------------- | ---------------- | ---------------------------- | -------------------------------------------------------------------------------------- |
-| `tracker.kind`                          | string           | _(required)_                 | e.g., `jira`                                                                           |
-| `tracker.endpoint`                      | string           | adapter-defined              | `$VAR` supported                                                                       |
-| `tracker.api_key`                       | string or `$VAR` | _(required for Jira)_        | Full env expansion                                                                     |
-| `tracker.project`                       | string           | _(required for Jira)_        | `$VAR` supported                                                                       |
-| `tracker.active_states`                 | `[string]`       | `[]` (empty)                 | At least one of active/terminal must be configured; empty means no dispatch            |
-| `tracker.terminal_states`               | `[string]`       | `[]` (empty)                 | At least one of active/terminal must be configured                                     |
-| `tracker.query_filter`                  | string           | `""`                         | Adapter-interpreted                                                                    |
-| `tracker.handoff_state`                 | string           | _(absent)_                   | `$VAR` supported; must not collide with active/terminal                                |
-| `tracker.in_progress_state`             | string           | _(absent)_                   | `$VAR` supported; must be in active; must not collide with terminal/handoff            |
-| `polling.interval_ms`                   | integer          | `30000`                      | Dynamic reload                                                                         |
-| `workspace.root`                        | path             | `<tmpdir>/sortie_workspaces` | `~`/`~/` expanded; all `$VAR` references expanded via `os.ExpandEnv`                   |
-| `hooks.after_create`                    | shell script     | _(null)_                     | Fatal on failure                                                                       |
-| `hooks.before_run`                      | shell script     | _(null)_                     | Fatal on failure                                                                       |
-| `hooks.after_run`                       | shell script     | _(null)_                     | Failure ignored                                                                        |
-| `hooks.before_remove`                   | shell script     | _(null)_                     | Failure ignored                                                                        |
-| `hooks.timeout_ms`                      | integer          | `60000`                      | All hooks                                                                              |
-| `agent.kind`                            | string           | `claude-code`                |                                                                                        |
-| `agent.command`                         | shell command    | adapter-defined              | Required for local adapters                                                            |
-| `agent.turn_timeout_ms`                 | integer          | `3600000`                    | 1 hour                                                                                 |
-| `agent.read_timeout_ms`                 | integer          | `5000`                       | 5 seconds                                                                              |
-| `agent.stall_timeout_ms`                | integer          | `300000`                     | 5 min; `≤ 0` disables                                                                  |
-| `agent.max_concurrent_agents`           | integer          | `10`                         | Dynamic reload                                                                         |
-| `agent.max_turns`                       | integer          | `20`                         |                                                                                        |
-| `agent.max_retry_backoff_ms`            | integer          | `300000`                     | 5 min; dynamic reload                                                                  |
-| `agent.max_concurrent_agents_by_state`  | `map[string]int` | `{}`                         | Keys lowercased; dynamic reload                                                        |
-| `agent.max_sessions`                    | integer          | `0`                          | Unlimited; dynamic reload                                                              |
-| `db_path`                               | path             | `.sortie.db`                 | Restart required                                                                       |
-| **Extensions**                          |                  |                              |                                                                                        |
-| `server.port`                           | integer          | _(absent)_                   | TCP port for the embedded HTTP observability server; CLI `--port` overrides             |
-| `logging.level`                         | string           | `info`                       | Log verbosity; CLI `--log-level` overrides                                             |
-| `worker.ssh_hosts`                      | `[string]`       | _(absent)_                   | SSH host targets for remote agent execution; dynamic reload                            |
-| `worker.max_concurrent_agents_per_host` | integer          | _(absent)_                   | Per-host concurrency cap for SSH hosts; dynamic reload                                 |
+| Field                                   | Type             | Default                      | Env Override                             | Notes                                                                                  |
+| --------------------------------------- | ---------------- | ---------------------------- | ---------------------------------------- | -------------------------------------------------------------------------------------- |
+| `tracker.kind`                          | string           | _(required)_                 | `SORTIE_TRACKER_KIND`                    | e.g., `jira`                                                                           |
+| `tracker.endpoint`                      | string           | adapter-defined              | `SORTIE_TRACKER_ENDPOINT`                | `$VAR` supported                                                                       |
+| `tracker.api_key`                       | string or `$VAR` | _(required for Jira)_        | `SORTIE_TRACKER_API_KEY`                 | Full env expansion                                                                     |
+| `tracker.project`                       | string           | _(required for Jira)_        | `SORTIE_TRACKER_PROJECT`                 | `$VAR` supported                                                                       |
+| `tracker.active_states`                 | `[string]`       | `[]` (empty)                 | `SORTIE_TRACKER_ACTIVE_STATES`           | CSV; at least one of active/terminal required                                          |
+| `tracker.terminal_states`               | `[string]`       | `[]` (empty)                 | `SORTIE_TRACKER_TERMINAL_STATES`         | CSV; at least one of active/terminal required                                          |
+| `tracker.query_filter`                  | string           | `""`                         | `SORTIE_TRACKER_QUERY_FILTER`            | Adapter-interpreted                                                                    |
+| `tracker.handoff_state`                 | string           | _(absent)_                   | `SORTIE_TRACKER_HANDOFF_STATE`           | Must not collide with active/terminal                                                  |
+| `tracker.in_progress_state`             | string           | _(absent)_                   | `SORTIE_TRACKER_IN_PROGRESS_STATE`       | Must be in active; must not collide with terminal/handoff                              |
+| `tracker.comments.on_dispatch`          | bool             | `false`                      | `SORTIE_TRACKER_COMMENTS_ON_DISPATCH`    |                                                                                        |
+| `tracker.comments.on_completion`        | bool             | `false`                      | `SORTIE_TRACKER_COMMENTS_ON_COMPLETION`  |                                                                                        |
+| `tracker.comments.on_failure`           | bool             | `false`                      | `SORTIE_TRACKER_COMMENTS_ON_FAILURE`     |                                                                                        |
+| `polling.interval_ms`                   | integer          | `30000`                      | `SORTIE_POLLING_INTERVAL_MS`             | Dynamic reload                                                                         |
+| `workspace.root`                        | path             | `<tmpdir>/sortie_workspaces` | `SORTIE_WORKSPACE_ROOT`                  | `~` expanded; `$VAR` skipped for env-sourced values                                    |
+| `hooks.after_create`                    | shell script     | _(null)_                     | —                                        | Fatal on failure                                                                       |
+| `hooks.before_run`                      | shell script     | _(null)_                     | —                                        | Fatal on failure                                                                       |
+| `hooks.after_run`                       | shell script     | _(null)_                     | —                                        | Failure ignored                                                                        |
+| `hooks.before_remove`                   | shell script     | _(null)_                     | —                                        | Failure ignored                                                                        |
+| `hooks.timeout_ms`                      | integer          | `60000`                      | —                                        | All hooks                                                                              |
+| `agent.kind`                            | string           | `claude-code`                | `SORTIE_AGENT_KIND`                      |                                                                                        |
+| `agent.command`                         | shell command    | adapter-defined              | `SORTIE_AGENT_COMMAND`                   | Required for local adapters                                                            |
+| `agent.turn_timeout_ms`                 | integer          | `3600000`                    | `SORTIE_AGENT_TURN_TIMEOUT_MS`           | 1 hour                                                                                 |
+| `agent.read_timeout_ms`                 | integer          | `5000`                       | `SORTIE_AGENT_READ_TIMEOUT_MS`           | 5 seconds                                                                              |
+| `agent.stall_timeout_ms`               | integer          | `300000`                     | `SORTIE_AGENT_STALL_TIMEOUT_MS`          | 5 min; `≤ 0` disables                                                                  |
+| `agent.max_concurrent_agents`           | integer          | `10`                         | `SORTIE_AGENT_MAX_CONCURRENT_AGENTS`     | Dynamic reload                                                                         |
+| `agent.max_turns`                       | integer          | `20`                         | `SORTIE_AGENT_MAX_TURNS`                 |                                                                                        |
+| `agent.max_retry_backoff_ms`            | integer          | `300000`                     | `SORTIE_AGENT_MAX_RETRY_BACKOFF_MS`      | 5 min; dynamic reload                                                                  |
+| `agent.max_concurrent_agents_by_state`  | `map[string]int` | `{}`                         | —                                        | Keys lowercased; dynamic reload                                                        |
+| `agent.max_sessions`                    | integer          | `0`                          | `SORTIE_AGENT_MAX_SESSIONS`              | Unlimited; dynamic reload                                                              |
+| `db_path`                               | path             | `.sortie.db`                 | `SORTIE_DB_PATH`                         | Restart required; `$VAR` skipped for env-sourced values                                |
+| **Extensions**                          |                  |                              |                                          |                                                                                        |
+| `server.port`                           | integer          | _(absent)_                   | —                                        | CLI `--port` overrides                                                                 |
+| `logging.level`                         | string           | `info`                       | —                                        | CLI `--log-level` overrides                                                            |
+| `worker.ssh_hosts`                      | `[string]`       | _(absent)_                   | —                                        | SSH host targets; dynamic reload                                                       |
+| `worker.max_concurrent_agents_per_host` | integer          | _(absent)_                   | —                                        | Per-host cap; dynamic reload                                                           |
 
 ---
 
-## 10. Complete Annotated Examples
+## 11. Complete Annotated Examples
 
-### 10.1 Minimal Workflow
+### 11.1 Minimal Workflow
 
 The simplest valid workflow — a prompt-only file with no front matter:
 
@@ -1413,7 +1639,7 @@ tracker:
 Fix {{ .issue.identifier }}: {{ .issue.title }}
 ```
 
-### 10.2 Production Jira + Claude Code
+### 11.2 Production Jira + Claude Code
 
 A complete, production-ready workflow demonstrating all major features:
 

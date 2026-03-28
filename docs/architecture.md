@@ -601,12 +601,29 @@ Dispatch gating behavior:
 
 ### 6.1 Source Precedence and Resolution Semantics
 
-Configuration precedence:
+Configuration precedence (highest to lowest):
 
 1. Workflow file path selection (runtime setting -> cwd default).
-2. YAML front matter values.
-3. Environment indirection via `$VAR_NAME` inside selected YAML values.
-4. Built-in defaults.
+2. `SORTIE_*` real environment variables (curated set; see below).
+3. `.env` file values (opt-in via `SORTIE_ENV_FILE` env var or `--env-file` CLI flag).
+4. YAML front matter values.
+5. Environment indirection via `$VAR_NAME` inside selected YAML values — applies only to values
+   not overridden by env (layers 2–3).
+6. Built-in defaults.
+
+**Environment variable overrides:** A curated set of `SORTIE_*` environment variables map to
+specific config fields. Env overrides replace the YAML value in the raw map before `$VAR`
+expansion and section builders run. The curated variable list, type coercion rules, `.env` file
+format, and exclusions are documented in the WORKFLOW.md Syntax Reference (Section 3). The override
+merge runs inside `NewServiceConfig` as a pre-processing step; all existing validation, coercion,
+and default logic applies uniformly regardless of source. On dynamic reload, env vars and the `.env`
+file are re-read. Real env var changes require a process restart; `.env` file changes are picked up
+on each reload.
+
+**Double-expansion prevention:** Values sourced from environment overrides MUST NOT be passed through
+`os.ExpandEnv`, `resolveEnv`, or `resolveEnvRef`. Section builders use the override set returned by
+`applyEnvOverrides` to skip `$VAR` expansion for env-sourced fields. Only tilde (`~`) expansion is
+permitted for path fields.
 
 Value coercion semantics:
 
