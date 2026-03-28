@@ -434,8 +434,7 @@ func HandleWorkerExit(state *State, result WorkerResult, params HandleWorkerExit
 		ct := commentText
 
 		go func() {
-			dctx := context.WithoutCancel(context.Background())
-			dctx, cancel := context.WithTimeout(dctx, 30*time.Second)
+			dctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 			defer cancel()
 
 			if err := tracker.CommentIssue(dctx, issueID, ct); err != nil {

@@ -1772,6 +1772,35 @@ func TestJiraAdapterMetrics(t *testing.T) {
 		requireSingleCall(t, spy, "transition", "error")
 	})
 
+	t.Run("CommentIssue/success", func(t *testing.T) {
+		t.Parallel()
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusCreated)
+		}))
+		defer srv.Close()
+
+		a, spy := mustAdapterWithMetrics(t, validConfig(srv.URL))
+		if err := a.CommentIssue(ctx, "PROJ-5", "test"); err != nil {
+			t.Fatalf("CommentIssue: %v", err)
+		}
+		requireSingleCall(t, spy, "comment", "success")
+	})
+
+	t.Run("CommentIssue/error", func(t *testing.T) {
+		t.Parallel()
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusInternalServerError)
+		}))
+		defer srv.Close()
+
+		a, spy := mustAdapterWithMetrics(t, validConfig(srv.URL))
+		err := a.CommentIssue(ctx, "PROJ-5", "test")
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+		requireSingleCall(t, spy, "comment", "error")
+	})
+
 	t.Run("nil_metrics", func(t *testing.T) {
 		t.Parallel()
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1801,7 +1830,110 @@ func TestJiraAdapterMetrics(t *testing.T) {
 		a.FetchIssueStatesByIdentifiers(ctx, []string{"PROJ-1"}) //nolint:errcheck // verifying no panic
 		a.FetchIssueComments(ctx, "PROJ-5")                      //nolint:errcheck // verifying no panic
 		a.TransitionIssue(ctx, "PROJ-123", "Human Review")       //nolint:errcheck // verifying no panic
+		a.CommentIssue(ctx, "PROJ-5", "test")                    //nolint:errcheck // verifying no panic
 	})
+}
+
+// --- CommentIssue tests ---
+
+func TestCommentIssue_Success(t *testing.T) {
+	t.Parallel()
+
+	var (
+		receivedMethod string
+		receivedPath   string
+		receivedBody   []byte
+	)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedMethod = r.Method
+		receivedPath = r.URL.Path
+		receivedBody, _ = io.ReadAll(r.Body)
+		w.WriteHeader(http.StatusCreated)
+	}))
+	defer srv.Close()
+
+	a := mustAdapter(t, validConfig(srv.URL))
+	if err := a.CommentIssue(context.Background(), "PROJ-123", "Hello\nWorld"); err != nil {
+		t.Fatalf("CommentIssue() unexpected error: %v", err)
+	}
+
+	wantPath := "/rest/api/3/issue/PROJ-123/comment"
+	if receivedMethod != "POST" {
+		t.Errorf("method = %q, want POST", receivedMethod)
+	}
+	if receivedPath != wantPath {
+		t.Errorf("path = %q, want %q", receivedPath, wantPath)
+	}
+
+	// Verify ADF body: version, type, and one paragraph per line.
+	var body struct {
+		Body struct {
+			Version int    `json:"version"`
+			Type    string `json:"type"`
+			Content []any  `json:"content"`
+		} `json:"body"`
+	}
+	if err := json.Unmarshal(receivedBody, &body); err != nil {
+		t.Fatalf("unmarshal request body: %v", err)
+	}
+	if body.Body.Version != 1 {
+		t.Errorf("body.version = %d, want 1", body.Body.Version)
+	}
+	if body.Body.Type != "doc" {
+		t.Errorf("body.type = %q, want doc", body.Body.Type)
+	}
+	if len(body.Body.Content) != 2 {
+		t.Errorf("body.content paragraphs = %d, want 2 (one per line)", len(body.Body.Content))
+	}
+}
+
+func TestCommentIssue_IDURLEscaped(t *testing.T) {
+	t.Parallel()
+
+	var receivedPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedPath = r.URL.EscapedPath()
+		w.WriteHeader(http.StatusCreated)
+	}))
+	defer srv.Close()
+
+	a := mustAdapter(t, validConfig(srv.URL))
+	if err := a.CommentIssue(context.Background(), "PROJ 123", "text"); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	want := "/rest/api/3/issue/PROJ%20123/comment"
+	if receivedPath != want {
+		t.Errorf("path = %q, want %q", receivedPath, want)
+	}
+}
+
+func TestCommentIssue_ErrorCases(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		status   int
+		wantKind domain.TrackerErrorKind
+	}{
+		{"not_found", http.StatusNotFound, domain.ErrTrackerNotFound},
+		{"unauthorized", http.StatusUnauthorized, domain.ErrTrackerAuth},
+		{"server_error", http.StatusInternalServerError, domain.ErrTrackerTransport},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(tt.status)
+			}))
+			defer srv.Close()
+
+			a := mustAdapter(t, validConfig(srv.URL))
+			err := a.CommentIssue(context.Background(), "PROJ-123", "text")
+			assertTrackerErrorKind(t, err, tt.wantKind)
+		})
+	}
 }
 
 func TestNewJiraAdapter_UserAgentFromConfig(t *testing.T) {
