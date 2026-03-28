@@ -37,16 +37,50 @@ If the file does not exist, create it with the preamble from Step 4.
 
 ### Step 2: Gather changes
 
-Determine what changed since the last release. Use the sources that fit the
-situation — not all are needed every time.
+**The merged PR is the atomic unit of a changelog entry — not the commit.**
+A single PR often contains the feature commit, follow-up fixes, review
+feedback, test additions, and docs updates. These are one logical change and
+produce one changelog bullet. Never split a PR's commits into separate entries.
+
+#### 2a: Identify the version boundary
 
 ```bash
-# Changes since last tag
-git log --oneline "$(git describe --tags --abbrev=0 2>/dev/null || echo HEAD~20)"..HEAD
-
-# Or changes in the Unreleased section (already documented)
-head -60 CHANGELOG.md
+# Find the last tag and its commit
+git tag --sort=-version:refname | head -5
+git log --oneline -1 "$(git describe --tags --abbrev=0 2>/dev/null)"
 ```
+
+#### 2b: List merged PRs by milestone
+
+PRs are the authoritative source. Use `gh pr list` filtered by milestone:
+
+```bash
+# PRs in a specific milestone (e.g., M10)
+gh pr list --state merged --limit 100 \
+  --json number,title,mergedAt,milestone,labels \
+  --jq '.[] | select(.milestone != null and (.milestone.title | startswith("M10")))
+        | "\(.number)\t\(.mergedAt | split("T")[0])\t\(.title)"' \
+  | sort -t$'\t' -k2
+
+# PRs merged in the release window without a milestone
+gh pr list --state merged --limit 100 \
+  --json number,title,mergedAt,milestone \
+  --jq '.[] | select(.milestone == null)
+        | "\(.number)\t\(.mergedAt | split("T")[0])\t\(.title)"' \
+  | sort -t$'\t' -k2 | grep "YYYY-MM-DD_RANGE"
+```
+
+#### 2c: Inspect individual PRs when needed
+
+```bash
+# PR title, body (scope/intent), and constituent commits
+gh pr view <NUMBER> --json title,body --jq '"\(.title)\n\(.body)"' | head -40
+gh pr view <NUMBER> --json commits --jq '.commits[].messageHeadline'
+```
+
+Use the PR body's **Scope & Context** section to understand the user-facing
+impact. Do not rely on `git log --oneline` — it shows commits, not logical
+changes.
 
 If the user describes changes verbally, use that as the primary source.
 
@@ -114,7 +148,15 @@ Place every surviving entry under exactly one category:
 
 Writing rules:
 
-- One bullet per logical change. Combine related sub-changes into one bullet.
+- **One bullet per merged PR.** A PR is one logical change regardless of how
+  many commits it contains. Review-feedback fixes, follow-up commits, and
+  sub-fixes within the same PR are folded into its single entry.
+- **Fold sub-fixes into the feature entry.** If a PR introduces a feature and
+  also fixes a bug discovered during its implementation (e.g., a race
+  condition found while adding env overrides), describe the fix as part of
+  the feature bullet — do not create a separate Fixed entry. Only create a
+  standalone Fixed entry when a PR's sole purpose is a bug fix.
+- Include the PR number parenthetically for traceability: `(#292)`.
 - Start each bullet with what changed, not with "Fixed" or "Added" (the heading
   already says that).
 - Be specific: "`coroutine 'main' was never awaited` bug after async migration"
@@ -195,3 +237,12 @@ To cut a release:
 | Entry under wrong category | Move it; if ambiguous, prefer Changed over Added           |
 | No tags in repository      | Use commit SHAs in comparison links as a temporary measure |
 | Noise entry slipped in     | Remove it — a leaner changelog is more trustworthy         |
+
+## Anti-Patterns
+
+| Anti-pattern | Why it's wrong | Correct approach |
+| --- | --- | --- |
+| One entry per commit | Commits are implementation steps, not logical changes. A 6-commit PR produces one changelog bullet. | Use `gh pr list` to enumerate PRs; write one bullet per PR. |
+| Separate "Fixed" entry for a sub-fix within a feature PR | Inflates the changelog and obscures that the fix was part of the feature delivery. | Fold the fix into the feature's Added bullet (e.g., "…with race-safe access" instead of a separate Fixed entry). |
+| Using `git log --oneline` as the primary source | Produces commit-level noise: test commits, review feedback, merge commits, formatting fixes. | Query merged PRs via `gh pr list --state merged` filtered by milestone. |
+| Omitting PR numbers | Makes it hard to trace entries back to the code change. | Include `(#NNN)` in every entry. |
