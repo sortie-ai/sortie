@@ -15,7 +15,7 @@
 
   // Increase the maximum number of requests an agent can make in a single session.
   // Default is usually 25.
-  "chat.agent.maxRequests": 99,
+  "chat.agent.maxRequests": 250,
 
   // ── Agent Skills ───────────────────────────────────────────────────────────
   // Enable the use of agent skills: https://agentskills.io
