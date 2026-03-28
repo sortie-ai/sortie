@@ -199,11 +199,11 @@ tracker:
 - Supports `$VAR` environment indirection.
 - When set, must be a non-empty string after `$VAR` resolution. Empty resolution is a
   configuration error.
-- MUST appear in `active_states` (case-insensitive). If the issue transitions to a state
+- Must appear in `active_states` (case-insensitive). If the issue transitions to a state
   outside `active_states`, reconciliation would immediately cancel the worker.
-- MUST **not** appear in `terminal_states` (case-insensitive). A terminal state would
+- Must **not** appear in `terminal_states` (case-insensitive). A terminal state would
   trigger workspace cleanup on the next reconciliation tick.
-- MUST **not** collide with `handoff_state` (case-insensitive). The two transitions represent
+- Must **not** collide with `handoff_state` (case-insensitive). The two transitions represent
   different lifecycle phases — dispatch vs. exit.
 - Transition failure at runtime is non-fatal: the worker logs a warning and continues to
   workspace preparation.

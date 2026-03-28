@@ -235,16 +235,12 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 		transitionErr := deps.TrackerAdapter.TransitionIssue(ctx, issue.ID, cfg.Tracker.InProgressState)
 		if transitionErr != nil {
 			logger.Warn("dispatch in-progress transition failed",
-				slog.String("issue_id", issue.ID),
-				slog.String("issue_identifier", issue.Identifier),
 				slog.String("in_progress_state", cfg.Tracker.InProgressState),
 				slog.Any("error", transitionErr),
 			)
 			deps.Metrics.IncDispatchTransitions(outcomeError)
 		} else {
 			logger.Info("dispatch in-progress transition succeeded",
-				slog.String("issue_id", issue.ID),
-				slog.String("issue_identifier", issue.Identifier),
 				slog.String("in_progress_state", cfg.Tracker.InProgressState),
 			)
 			deps.Metrics.IncDispatchTransitions(outcomeSuccess)

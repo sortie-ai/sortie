@@ -431,6 +431,7 @@ func (o *Orchestrator) makeWorkerFn(resumeSessionID string, sshHost string) Work
 			Logger:          logger,
 			ToolRegistry:    o.toolRegistry,
 			SSHHost:         sshHost,
+			Metrics:         o.metrics,
 		}
 
 		RunWorkerAttempt(ctx, issue, attempt, deps)

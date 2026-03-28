@@ -468,8 +468,9 @@ func trackerConfigMap(tc config.TrackerConfig) map[string]any {
 		"project":         tc.Project,
 		"active_states":   tc.ActiveStates,
 		"terminal_states": tc.TerminalStates,
-		"query_filter":    tc.QueryFilter,
-		"handoff_state":   tc.HandoffState,
+		"query_filter":        tc.QueryFilter,
+		"handoff_state":       tc.HandoffState,
+		"in_progress_state":   tc.InProgressState,
 	}
 }
 
