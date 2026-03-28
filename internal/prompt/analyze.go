@@ -268,6 +268,18 @@ func (a *analyzer) validateFieldChain(ident []string, nodeText string) {
 			Node:    nodeText,
 			Message: fmt.Sprintf("unknown field %q; known fields: %s", nodeText, strings.Join(known, ", ")),
 		})
+		return
+	}
+
+	// Level 3 fields are scalars in the current schema; any further
+	// chaining is invalid.
+	if len(ident) > 3 {
+		base := ident[0] + "." + subField + "." + nestedField
+		a.warnings = append(a.warnings, TemplateWarning{
+			Kind:    WarnUnknownField,
+			Node:    nodeText,
+			Message: fmt.Sprintf("unknown field %q; %q is a scalar with no sub-fields", nodeText, base),
+		})
 	}
 }
 
