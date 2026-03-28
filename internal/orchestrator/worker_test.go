@@ -1636,3 +1636,210 @@ func createFileAtPath(t *testing.T, path string) {
 		t.Fatalf("closing file at %s: %v", path, err)
 	}
 }
+
+// TestRunWorkerAttempt_DispatchTransition covers the dispatch-time
+// in-progress transition logic added to the top of RunWorkerAttempt.
+func TestRunWorkerAttempt_DispatchTransition(t *testing.T) {
+	t.Parallel()
+
+	t.Run("CalledWhenConfigured", func(t *testing.T) {
+		t.Parallel()
+
+		tmpDir := t.TempDir()
+		cfg := defaultWorkerConfig(tmpDir)
+		cfg.Tracker.InProgressState = "In Progress"
+
+		spy := &spyMetrics{}
+		tracker := &mockTrackerAdapter{}
+		ec := newExitCapture()
+
+		deps := WorkerDeps{
+			TrackerAdapter:     tracker,
+			AgentAdapter:       &mockAgentAdapter{},
+			ConfigFunc:         func() config.ServiceConfig { return cfg },
+			PromptTemplateFunc: func() *prompt.Template { return mustParseTemplate(t, "work on {{ .issue.title }}") },
+			OnEvent:            func(_ string, _ domain.AgentEvent) {},
+			OnExit:             ec.onExit,
+			Logger:             discardLogger(),
+			Metrics:            spy,
+		}
+
+		issue := workerTestIssue()
+		RunWorkerAttempt(context.Background(), issue, nil, deps)
+
+		ec.waitResult(t)
+
+		if len(tracker.transitionCalls) != 1 {
+			t.Fatalf("TransitionIssue call count = %d, want 1", len(tracker.transitionCalls))
+		}
+		if got := tracker.transitionCalls[0].IssueID; got != issue.ID {
+			t.Errorf("TransitionIssue IssueID = %q, want %q", got, issue.ID)
+		}
+		if got := tracker.transitionCalls[0].TargetState; got != "In Progress" {
+			t.Errorf("TransitionIssue TargetState = %q, want %q", got, "In Progress")
+		}
+
+		spy.mu.Lock()
+		transitions := append([]string(nil), spy.dispatchTransitions...)
+		spy.mu.Unlock()
+
+		if len(transitions) != 1 || transitions[0] != outcomeSuccess {
+			t.Errorf("dispatchTransitions = %v, want [%q]", transitions, outcomeSuccess)
+		}
+	})
+
+	t.Run("WorkerProceedsOnFailure", func(t *testing.T) {
+		t.Parallel()
+
+		tmpDir := t.TempDir()
+		cfg := defaultWorkerConfig(tmpDir)
+		cfg.Tracker.InProgressState = "In Progress"
+
+		spy := &spyMetrics{}
+		tracker := &mockTrackerAdapter{
+			transitionIssueFn: func(_ context.Context, _, _ string) error {
+				return errors.New("tracker forbidden")
+			},
+		}
+		ec := newExitCapture()
+
+		deps := WorkerDeps{
+			TrackerAdapter:     tracker,
+			AgentAdapter:       &mockAgentAdapter{},
+			ConfigFunc:         func() config.ServiceConfig { return cfg },
+			PromptTemplateFunc: func() *prompt.Template { return mustParseTemplate(t, "work on {{ .issue.title }}") },
+			OnEvent:            func(_ string, _ domain.AgentEvent) {},
+			OnExit:             ec.onExit,
+			Logger:             discardLogger(),
+			Metrics:            spy,
+		}
+
+		RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
+
+		result := ec.waitResult(t)
+
+		// Transition failure must be non-fatal: worker reaches workspace prep.
+		if result.WorkspacePath == "" {
+			t.Error("WorkspacePath is empty, want non-empty (worker proceeded past transition failure)")
+		}
+
+		if len(tracker.transitionCalls) != 1 {
+			t.Fatalf("TransitionIssue call count = %d, want 1", len(tracker.transitionCalls))
+		}
+
+		spy.mu.Lock()
+		transitions := append([]string(nil), spy.dispatchTransitions...)
+		spy.mu.Unlock()
+
+		if len(transitions) != 1 || transitions[0] != outcomeError {
+			t.Errorf("dispatchTransitions = %v, want [%q]", transitions, outcomeError)
+		}
+	})
+
+	t.Run("SkippedWhenAbsent", func(t *testing.T) {
+		t.Parallel()
+
+		tmpDir := t.TempDir()
+		cfg := defaultWorkerConfig(tmpDir)
+		// InProgressState is deliberately left empty (zero value).
+
+		spy := &spyMetrics{}
+		tracker := &mockTrackerAdapter{}
+		ec := newExitCapture()
+
+		deps := WorkerDeps{
+			TrackerAdapter:     tracker,
+			AgentAdapter:       &mockAgentAdapter{},
+			ConfigFunc:         func() config.ServiceConfig { return cfg },
+			PromptTemplateFunc: func() *prompt.Template { return mustParseTemplate(t, "work on {{ .issue.title }}") },
+			OnEvent:            func(_ string, _ domain.AgentEvent) {},
+			OnExit:             ec.onExit,
+			Logger:             discardLogger(),
+			Metrics:            spy,
+		}
+
+		RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
+		ec.waitResult(t)
+
+		// TransitionIssue must not be called when InProgressState is empty.
+		if len(tracker.transitionCalls) != 0 {
+			t.Errorf("TransitionIssue call count = %d, want 0", len(tracker.transitionCalls))
+		}
+
+		spy.mu.Lock()
+		transitions := append([]string(nil), spy.dispatchTransitions...)
+		spy.mu.Unlock()
+
+		if len(transitions) != 0 {
+			t.Errorf("dispatchTransitions = %v, want empty", transitions)
+		}
+	})
+
+	t.Run("DynamicReload", func(t *testing.T) {
+		t.Parallel()
+
+		// ConfigFunc returns different InProgressState on each call to
+		// simulate a config reload between worker attempts.
+		states := []string{"State A", "State B"}
+		var callIdx atomic.Int64
+
+		makeConfig := func(tmpDir string) func() config.ServiceConfig {
+			return func() config.ServiceConfig {
+				idx := int(callIdx.Add(1)) - 1
+				if idx >= len(states) {
+					idx = len(states) - 1
+				}
+				cfg := defaultWorkerConfig(tmpDir)
+				cfg.Tracker.InProgressState = states[idx]
+				cfg.Tracker.ActiveStates = append(cfg.Tracker.ActiveStates, states[idx])
+				return cfg
+			}
+		}
+
+		tmpDir1 := t.TempDir()
+		tracker1 := &mockTrackerAdapter{}
+		ec1 := newExitCapture()
+		deps1 := WorkerDeps{
+			TrackerAdapter:     tracker1,
+			AgentAdapter:       &mockAgentAdapter{},
+			ConfigFunc:         makeConfig(tmpDir1),
+			PromptTemplateFunc: func() *prompt.Template { return mustParseTemplate(t, "work on {{ .issue.title }}") },
+			OnEvent:            func(_ string, _ domain.AgentEvent) {},
+			OnExit:             ec1.onExit,
+			Logger:             discardLogger(),
+			Metrics:            &spyMetrics{},
+		}
+		RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps1)
+		ec1.waitResult(t)
+
+		tmpDir2 := t.TempDir()
+		tracker2 := &mockTrackerAdapter{}
+		ec2 := newExitCapture()
+		deps2 := WorkerDeps{
+			TrackerAdapter:     tracker2,
+			AgentAdapter:       &mockAgentAdapter{},
+			ConfigFunc:         makeConfig(tmpDir2),
+			PromptTemplateFunc: func() *prompt.Template { return mustParseTemplate(t, "work on {{ .issue.title }}") },
+			OnEvent:            func(_ string, _ domain.AgentEvent) {},
+			OnExit:             ec2.onExit,
+			Logger:             discardLogger(),
+			Metrics:            &spyMetrics{},
+		}
+		RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps2)
+		ec2.waitResult(t)
+
+		if len(tracker1.transitionCalls) != 1 {
+			t.Fatalf("attempt 1: TransitionIssue call count = %d, want 1", len(tracker1.transitionCalls))
+		}
+		if got := tracker1.transitionCalls[0].TargetState; got != "State A" {
+			t.Errorf("attempt 1: TargetState = %q, want %q", got, "State A")
+		}
+
+		if len(tracker2.transitionCalls) != 1 {
+			t.Fatalf("attempt 2: TransitionIssue call count = %d, want 1", len(tracker2.transitionCalls))
+		}
+		if got := tracker2.transitionCalls[0].TargetState; got != "State B" {
+			t.Errorf("attempt 2: TargetState = %q, want %q", got, "State B")
+		}
+	})
+}

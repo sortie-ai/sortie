@@ -704,6 +704,115 @@ func TestNewServiceConfig(t *testing.T) {
 		})
 		assertConfigErrorField(t, err, "agent.max_sessions")
 	})
+
+	// --- InProgressState subtests ---
+
+	t.Run("InProgressState/Absent", func(t *testing.T) {
+		t.Parallel()
+		cfg, err := NewServiceConfig(map[string]any{
+			"tracker": map[string]any{"kind": "jira"},
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		assertStringEqual(t, "Tracker.InProgressState", "", cfg.Tracker.InProgressState)
+	})
+
+	t.Run("InProgressState/Valid", func(t *testing.T) {
+		t.Parallel()
+		cfg, err := NewServiceConfig(map[string]any{
+			"tracker": map[string]any{
+				"in_progress_state": "In Progress",
+				"active_states":     []any{"In Progress", "In Review"},
+				"terminal_states":   []any{"Done"},
+			},
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		assertStringEqual(t, "Tracker.InProgressState", "In Progress", cfg.Tracker.InProgressState)
+	})
+
+	t.Run("InProgressState/EmptyString", func(t *testing.T) {
+		t.Parallel()
+		_, err := NewServiceConfig(map[string]any{
+			"tracker": map[string]any{
+				"in_progress_state": "",
+			},
+		})
+		assertConfigErrorField(t, err, "tracker.in_progress_state")
+	})
+
+	t.Run("InProgressState/NonString", func(t *testing.T) {
+		t.Parallel()
+		_, err := NewServiceConfig(map[string]any{
+			"tracker": map[string]any{
+				"in_progress_state": 42,
+			},
+		})
+		assertConfigErrorField(t, err, "tracker.in_progress_state")
+	})
+
+	t.Run("InProgressState/EnvVarResolved", func(t *testing.T) {
+		t.Setenv("TEST_IP_STATE", "Working")
+		cfg, err := NewServiceConfig(map[string]any{
+			"tracker": map[string]any{
+				"in_progress_state": "$TEST_IP_STATE",
+				"active_states":     []any{"Working"},
+				"terminal_states":   []any{"Done"},
+			},
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		assertStringEqual(t, "Tracker.InProgressState", "Working", cfg.Tracker.InProgressState)
+	})
+
+	t.Run("InProgressState/EnvVarEmpty", func(t *testing.T) {
+		t.Parallel()
+		_, err := NewServiceConfig(map[string]any{
+			"tracker": map[string]any{
+				"in_progress_state": "$SORTIE_UNSET_VAR_XYZ",
+			},
+		})
+		assertConfigErrorField(t, err, "tracker.in_progress_state")
+	})
+
+	t.Run("InProgressState/CollidesWithTerminal", func(t *testing.T) {
+		t.Parallel()
+		_, err := NewServiceConfig(map[string]any{
+			"tracker": map[string]any{
+				"in_progress_state": "Done",
+				"terminal_states":   []any{"Done"},
+				"active_states":     []any{"In Progress"},
+			},
+		})
+		assertConfigErrorField(t, err, "tracker.in_progress_state")
+	})
+
+	t.Run("InProgressState/CollidesWithTerminalCaseInsensitive", func(t *testing.T) {
+		t.Parallel()
+		_, err := NewServiceConfig(map[string]any{
+			"tracker": map[string]any{
+				"in_progress_state": "done",
+				"terminal_states":   []any{"Done"},
+				"active_states":     []any{"In Progress"},
+			},
+		})
+		assertConfigErrorField(t, err, "tracker.in_progress_state")
+	})
+
+	t.Run("InProgressState/NotInActiveStates", func(t *testing.T) {
+		t.Parallel()
+		_, err := NewServiceConfig(map[string]any{
+			"tracker": map[string]any{
+				"in_progress_state": "Blocked",
+				"active_states":     []any{"In Progress"},
+				"terminal_states":   []any{"Done"},
+			},
+		})
+		assertConfigErrorField(t, err, "tracker.in_progress_state")
+	})
 }
 
 // --- test helpers ---
@@ -746,5 +855,82 @@ func assertStringSliceEqual(t *testing.T, name string, want, got []string) {
 		if got[i] != want[i] {
 			t.Errorf("%s[%d] = %q, want %q", name, i, got[i], want[i])
 		}
+	}
+}
+
+// TestValidateInProgressState exercises rule 4 (collision with handoff_state)
+// directly, because the path through NewServiceConfig cannot reach it:
+// validateHandoffState rejects any handoffState ∈ activeStates before
+// validateInProgressState runs, and inProgressState must be ∈ activeStates.
+func TestValidateInProgressState(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name            string
+		inProgressState string
+		activeStates    []string
+		terminalStates  []string
+		handoffState    string
+		wantErr         bool
+		wantField       string
+	}{
+		{
+			name:            "valid — no collision",
+			inProgressState: "In Progress",
+			activeStates:    []string{"In Progress"},
+			terminalStates:  []string{"Done"},
+			handoffState:    "Human Review",
+			wantErr:         false,
+		},
+		{
+			name:            "absent — empty string is valid",
+			inProgressState: "",
+			activeStates:    []string{"In Progress"},
+			terminalStates:  []string{"Done"},
+			handoffState:    "Human Review",
+			wantErr:         false,
+		},
+		{
+			name:            "collides with handoff_state",
+			inProgressState: "In Progress",
+			activeStates:    []string{"In Progress"},
+			terminalStates:  []string{"Done"},
+			handoffState:    "In Progress",
+			wantErr:         true,
+			wantField:       "tracker.in_progress_state",
+		},
+		{
+			name:            "collides with handoff_state case-insensitive",
+			inProgressState: "IN PROGRESS",
+			activeStates:    []string{"IN PROGRESS"},
+			terminalStates:  []string{"Done"},
+			handoffState:    "in progress",
+			wantErr:         true,
+			wantField:       "tracker.in_progress_state",
+		},
+		{
+			name:            "no collision when handoff_state is empty",
+			inProgressState: "In Progress",
+			activeStates:    []string{"In Progress"},
+			terminalStates:  []string{"Done"},
+			handoffState:    "",
+			wantErr:         false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := validateInProgressState(tt.inProgressState, tt.activeStates, tt.terminalStates, tt.handoffState)
+
+			if tt.wantErr {
+				assertConfigErrorField(t, err, tt.wantField)
+				return
+			}
+			if err != nil {
+				t.Fatalf("validateInProgressState(%q, ...) unexpected error: %v", tt.inProgressState, err)
+			}
+		})
 	}
 }
