@@ -2080,3 +2080,193 @@ func TestBuildDispatchComment(t *testing.T) {
 		})
 	}
 }
+
+// TestRunWorkerAttempt_DispatchComment covers the dispatch comment path
+// in RunWorkerAttempt: CommentIssue call gating, metrics recording, and
+// non-fatal error handling.
+func TestRunWorkerAttempt_DispatchComment(t *testing.T) {
+	t.Parallel()
+
+	t.Run("CalledWhenOnDispatchEnabled", func(t *testing.T) {
+		t.Parallel()
+
+		tmpDir := t.TempDir()
+		cfg := defaultWorkerConfig(tmpDir)
+		cfg.Tracker.Comments.OnDispatch = true
+
+		spy := &spyMetrics{}
+		tracker := &mockTrackerAdapter{}
+		ec := newExitCapture()
+
+		issue := workerTestIssue()
+
+		deps := WorkerDeps{
+			TrackerAdapter:     tracker,
+			AgentAdapter:       &mockAgentAdapter{},
+			ConfigFunc:         func() config.ServiceConfig { return cfg },
+			PromptTemplateFunc: func() *prompt.Template { return mustParseTemplate(t, "work on {{ .issue.title }}") },
+			OnEvent:            func(_ string, _ domain.AgentEvent) {},
+			OnExit:             ec.onExit,
+			Logger:             discardLogger(),
+			Metrics:            spy,
+		}
+
+		RunWorkerAttempt(context.Background(), issue, nil, deps)
+		ec.waitResult(t)
+
+		if len(tracker.commentCalls) != 1 {
+			t.Fatalf("CommentIssue call count = %d, want 1", len(tracker.commentCalls))
+		}
+		if got := tracker.commentCalls[0].IssueID; got != issue.ID {
+			t.Errorf("CommentIssue IssueID = %q, want %q", got, issue.ID)
+		}
+		if tracker.commentCalls[0].Text == "" {
+			t.Error("CommentIssue Text is empty, want non-empty dispatch comment")
+		}
+
+		spy.mu.Lock()
+		comments := append([]trackerCommentCall(nil), spy.trackerComments...)
+		spy.mu.Unlock()
+
+		if len(comments) < 1 {
+			t.Fatalf("IncTrackerComments call count = %d, want >= 1", len(comments))
+		}
+		found := false
+		for _, c := range comments {
+			if c.lifecycle == "dispatch" && c.result == "success" {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("IncTrackerComments(\"dispatch\", \"success\") not recorded; got %v", comments)
+		}
+	})
+
+	t.Run("NotCalledWhenOnDispatchDisabled", func(t *testing.T) {
+		t.Parallel()
+
+		tmpDir := t.TempDir()
+		cfg := defaultWorkerConfig(tmpDir)
+		cfg.Tracker.Comments.OnDispatch = false // explicit zero value
+
+		spy := &spyMetrics{}
+		tracker := &mockTrackerAdapter{}
+		ec := newExitCapture()
+
+		deps := WorkerDeps{
+			TrackerAdapter:     tracker,
+			AgentAdapter:       &mockAgentAdapter{},
+			ConfigFunc:         func() config.ServiceConfig { return cfg },
+			PromptTemplateFunc: func() *prompt.Template { return mustParseTemplate(t, "work on {{ .issue.title }}") },
+			OnEvent:            func(_ string, _ domain.AgentEvent) {},
+			OnExit:             ec.onExit,
+			Logger:             discardLogger(),
+			Metrics:            spy,
+		}
+
+		RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
+		ec.waitResult(t)
+
+		if len(tracker.commentCalls) != 0 {
+			t.Errorf("CommentIssue call count = %d, want 0 (OnDispatch disabled)", len(tracker.commentCalls))
+		}
+
+		spy.mu.Lock()
+		comments := append([]trackerCommentCall(nil), spy.trackerComments...)
+		spy.mu.Unlock()
+
+		for _, c := range comments {
+			if c.lifecycle == "dispatch" {
+				t.Errorf("IncTrackerComments recorded dispatch metric when OnDispatch is false: %v", c)
+			}
+		}
+	})
+
+	t.Run("ErrorIsNonFatal", func(t *testing.T) {
+		t.Parallel()
+
+		tmpDir := t.TempDir()
+		cfg := defaultWorkerConfig(tmpDir)
+		cfg.Tracker.Comments.OnDispatch = true
+
+		spy := &spyMetrics{}
+		tracker := &mockTrackerAdapter{
+			commentIssueFn: func(_ context.Context, _, _ string) error {
+				return errors.New("comment API unavailable")
+			},
+		}
+		ec := newExitCapture()
+
+		deps := WorkerDeps{
+			TrackerAdapter:     tracker,
+			AgentAdapter:       &mockAgentAdapter{},
+			ConfigFunc:         func() config.ServiceConfig { return cfg },
+			PromptTemplateFunc: func() *prompt.Template { return mustParseTemplate(t, "work on {{ .issue.title }}") },
+			OnEvent:            func(_ string, _ domain.AgentEvent) {},
+			OnExit:             ec.onExit,
+			Logger:             discardLogger(),
+			Metrics:            spy,
+		}
+
+		RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
+		result := ec.waitResult(t)
+
+		// Comment failure must be non-fatal: worker reaches normal exit.
+		if result.ExitKind != WorkerExitNormal {
+			t.Errorf("ExitKind = %q, want %q (comment error must be non-fatal)", result.ExitKind, WorkerExitNormal)
+		}
+		if result.Error != nil {
+			t.Errorf("Error = %v, want nil (comment error must be non-fatal)", result.Error)
+		}
+
+		spy.mu.Lock()
+		comments := append([]trackerCommentCall(nil), spy.trackerComments...)
+		spy.mu.Unlock()
+
+		found := false
+		for _, c := range comments {
+			if c.lifecycle == "dispatch" && c.result == "error" {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("IncTrackerComments(\"dispatch\", \"error\") not recorded; got %v", comments)
+		}
+	})
+
+	t.Run("AttemptIncludedInCommentText", func(t *testing.T) {
+		t.Parallel()
+
+		tmpDir := t.TempDir()
+		cfg := defaultWorkerConfig(tmpDir)
+		cfg.Tracker.Comments.OnDispatch = true
+
+		tracker := &mockTrackerAdapter{}
+		ec := newExitCapture()
+
+		attempt := intPtr(2)
+
+		deps := WorkerDeps{
+			TrackerAdapter:     tracker,
+			AgentAdapter:       &mockAgentAdapter{},
+			ConfigFunc:         func() config.ServiceConfig { return cfg },
+			PromptTemplateFunc: func() *prompt.Template { return mustParseTemplate(t, "work on {{ .issue.title }}") },
+			OnEvent:            func(_ string, _ domain.AgentEvent) {},
+			OnExit:             ec.onExit,
+			Logger:             discardLogger(),
+			Metrics:            &domain.NoopMetrics{},
+		}
+
+		RunWorkerAttempt(context.Background(), workerTestIssue(), attempt, deps)
+		ec.waitResult(t)
+
+		if len(tracker.commentCalls) != 1 {
+			t.Fatalf("CommentIssue call count = %d, want 1", len(tracker.commentCalls))
+		}
+		if !strings.Contains(tracker.commentCalls[0].Text, "2") {
+			t.Errorf("CommentIssue Text = %q, want attempt number 2 present", tracker.commentCalls[0].Text)
+		}
+	})
+}
