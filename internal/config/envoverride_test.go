@@ -271,11 +271,11 @@ func assertEnvOverrideError(t *testing.T, err error, wantField, wantMsgSubstr st
 }
 
 func TestApplyEnvOverrides(t *testing.T) {
-	// Not parallel at outer level — subtests use t.Setenv and package-level
-	// dotenvPathOverride needs isolation.
-	origPath := dotenvPathOverride
-	t.Cleanup(func() { dotenvPathOverride = origPath })
-	dotenvPathOverride = ""
+	// Not parallel at outer level — subtests use t.Setenv and the
+	// package-level dotenvPathOverride (mutex-protected) needs isolation.
+	orig := getDotEnvPath()
+	SetDotEnvPath("")
+	t.Cleanup(func() { SetDotEnvPath(orig) })
 
 	t.Run("no SORTIE_ vars set leaves raw unchanged", func(t *testing.T) {
 		// Explicitly clear the vars we check to ensure isolation.
@@ -554,8 +554,8 @@ func TestApplyEnvOverrides(t *testing.T) {
 
 		t.Setenv("SORTIE_ENV_FILE", file2) // would give "file" if dotenvPathOverride not set
 
-		orig := dotenvPathOverride
-		t.Cleanup(func() { dotenvPathOverride = orig })
+		orig := getDotEnvPath()
+		t.Cleanup(func() { SetDotEnvPath(orig) })
 		SetDotEnvPath(file1) // CLI flag value → should give "jira"
 
 		raw := map[string]any{}
@@ -568,9 +568,6 @@ func TestApplyEnvOverrides(t *testing.T) {
 		if got, _ := trackerMap["kind"].(string); got != "jira" {
 			t.Errorf("raw[\"tracker\"][\"kind\"] = %q, want %q (SetDotEnvPath should win over SORTIE_ENV_FILE)", got, "jira")
 		}
-
-		// Clean up dotenvPathOverride for subsequent tests.
-		SetDotEnvPath("")
 	})
 
 	t.Run("dotenv parse error fails startup", func(t *testing.T) {

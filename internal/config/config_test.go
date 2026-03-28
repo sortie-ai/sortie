@@ -935,14 +935,22 @@ func TestValidateInProgressState(t *testing.T) {
 	}
 }
 
+// setDotEnvPathForTest sets the dotenv path via the public API and
+// registers a cleanup to restore the original value. It does not call
+// t.Parallel() — callers are responsible for sequencing.
+func setDotEnvPathForTest(t *testing.T, path string) {
+	t.Helper()
+	orig := getDotEnvPath()
+	SetDotEnvPath(path)
+	t.Cleanup(func() { SetDotEnvPath(orig) })
+}
+
 // TestNewServiceConfigEnvOverrides covers end-to-end env override behaviour
 // through the full NewServiceConfig pipeline. Each subtest uses t.Setenv for
 // isolation; none calls t.Parallel() to avoid races on dotenvPathOverride.
 func TestNewServiceConfigEnvOverrides(t *testing.T) {
-	// Ensure dotenvPathOverride is clean so SORTIE_ENV_FILE subtests work.
-	origDotenvPath := dotenvPathOverride
-	t.Cleanup(func() { dotenvPathOverride = origDotenvPath })
-	dotenvPathOverride = ""
+	// Ensure the dotenv path is clean so SORTIE_ENV_FILE subtests work.
+	setDotEnvPathForTest(t, "")
 
 	t.Run("TrackerKindOverridesYAML", func(t *testing.T) {
 		t.Setenv("SORTIE_TRACKER_KIND", "file")
