@@ -713,13 +713,15 @@ func dryRunStateSet(states []string) map[string]struct{} {
 // --- Validate subcommand ---
 
 type validateOutput struct {
-	Valid  bool           `json:"valid"`
-	Errors []validateDiag `json:"errors"`
+	Valid    bool           `json:"valid"`
+	Errors   []validateDiag `json:"errors"`
+	Warnings []validateDiag `json:"warnings"`
 }
 
 type validateDiag struct {
-	Check   string `json:"check"`
-	Message string `json:"message"`
+	Severity string `json:"severity"`
+	Check    string `json:"check"`
+	Message  string `json:"message"`
 }
 
 func runValidate(_ context.Context, args []string, stdout io.Writer, stderr io.Writer) int {
@@ -740,7 +742,7 @@ func runValidate(_ context.Context, args []string, stdout io.Writer, stderr io.W
 			fs.Usage()
 			return 0
 		}
-		emitDiags(stdout, stderr, *format, []validateDiag{{Check: "args", Message: err.Error()}})
+		emitDiags(stdout, stderr, *format, []validateDiag{{Severity: "error", Check: "args", Message: err.Error()}}, nil)
 		return 1
 	}
 
@@ -751,8 +753,31 @@ func runValidate(_ context.Context, args []string, stdout io.Writer, stderr io.W
 
 	path, err := resolveWorkflowPath(fs.Args())
 	if err != nil {
-		emitDiags(stdout, stderr, *format, []validateDiag{{Check: "args", Message: err.Error()}})
+		emitDiags(stdout, stderr, *format, []validateDiag{{Severity: "error", Check: "args", Message: err.Error()}}, nil)
 		return 1
+	}
+
+	// Load raw workflow for schema analysis (owned by this goroutine).
+	wf, err := workflow.Load(path)
+	if err != nil {
+		emitDiags(stdout, stderr, *format, mapManagerError(err), nil)
+		return 1
+	}
+
+	cfg, err := config.NewServiceConfig(wf.Config)
+	if err != nil {
+		emitDiags(stdout, stderr, *format, mapManagerError(err), nil)
+		return 1
+	}
+
+	// wf.Config is the post-env-override raw map. Sole ownership — safe to read.
+	var warningDiags []validateDiag
+	for _, w := range config.ValidateFrontMatter(wf.Config, cfg) {
+		warningDiags = append(warningDiags, validateDiag{
+			Severity: "warning",
+			Check:    w.Check,
+			Message:  w.Message,
+		})
 	}
 
 	logger := slog.New(slog.DiscardHandler)
@@ -760,7 +785,7 @@ func runValidate(_ context.Context, args []string, stdout io.Writer, stderr io.W
 	mgr, err := workflow.NewManager(path, logger,
 		workflow.WithValidateFunc(orchestrator.ValidateConfigForPromotion))
 	if err != nil {
-		emitDiags(stdout, stderr, *format, mapManagerError(err))
+		emitDiags(stdout, stderr, *format, mapManagerError(err), warningDiags)
 		return 1
 	}
 
@@ -773,30 +798,43 @@ func runValidate(_ context.Context, args []string, stdout io.Writer, stderr io.W
 
 	result := orchestrator.ValidateDispatchConfig(preflightParams)
 	if !result.OK() {
-		emitDiags(stdout, stderr, *format, mapPreflightErrors(result.Errors))
+		emitDiags(stdout, stderr, *format, mapPreflightErrors(result.Errors), warningDiags)
 		return 1
 	}
 
-	if *format == "json" {
-		if err := writeJSON(stdout, validateOutput{Valid: true, Errors: []validateDiag{}}); err != nil {
-			fmt.Fprintf(stderr, "sortie validate: failed to write JSON output: %s\n", err) //nolint:errcheck // stderr write failure is unrecoverable
-			return 1
-		}
-	}
+	// Success path: emit warnings (if any) with valid=true.
+	emitDiags(stdout, stderr, *format, nil, warningDiags)
 	return 0
 }
 
-func emitDiags(stdout io.Writer, stderr io.Writer, format string, diags []validateDiag) {
+func emitDiags(stdout io.Writer, stderr io.Writer, format string, errs []validateDiag, warnings []validateDiag) {
+	if errs == nil {
+		errs = []validateDiag{}
+	}
+	if warnings == nil {
+		warnings = []validateDiag{}
+	}
 	if format == "json" {
-		if err := writeJSON(stdout, validateOutput{Valid: false, Errors: diags}); err != nil {
-			for _, d := range diags {
-				fmt.Fprintf(stderr, "%s: %s\n", d.Check, d.Message) //nolint:errcheck // stderr write failure is unrecoverable
+		out := validateOutput{
+			Valid:    len(errs) == 0,
+			Errors:   errs,
+			Warnings: warnings,
+		}
+		if err := writeJSON(stdout, out); err != nil {
+			for _, d := range errs {
+				fmt.Fprintf(stderr, "error: %s: %s\n", d.Check, d.Message) //nolint:errcheck // stderr write failure is unrecoverable
+			}
+			for _, d := range warnings {
+				fmt.Fprintf(stderr, "warning: %s: %s\n", d.Check, d.Message) //nolint:errcheck // stderr write failure is unrecoverable
 			}
 		}
 		return
 	}
-	for _, d := range diags {
-		fmt.Fprintf(stderr, "%s: %s\n", d.Check, d.Message) //nolint:errcheck // stderr write failure is unrecoverable
+	for _, d := range errs {
+		fmt.Fprintf(stderr, "error: %s: %s\n", d.Check, d.Message) //nolint:errcheck // stderr write failure is unrecoverable
+	}
+	for _, d := range warnings {
+		fmt.Fprintf(stderr, "warning: %s: %s\n", d.Check, d.Message) //nolint:errcheck // stderr write failure is unrecoverable
 	}
 }
 
@@ -811,26 +849,26 @@ func mapManagerError(err error) []validateDiag {
 		if we.Kind == workflow.ErrFrontMatterNotMap {
 			check = "workflow_front_matter"
 		}
-		return []validateDiag{{Check: check, Message: err.Error()}}
+		return []validateDiag{{Severity: "error", Check: check, Message: err.Error()}}
 	}
 
 	var ce *config.ConfigError
 	if errors.As(err, &ce) {
-		return []validateDiag{{Check: "config." + ce.Field, Message: ce.Message}}
+		return []validateDiag{{Severity: "error", Check: "config." + ce.Field, Message: ce.Message}}
 	}
 
 	var te *prompt.TemplateError
 	if errors.As(err, &te) {
-		return []validateDiag{{Check: "template_parse", Message: err.Error()}}
+		return []validateDiag{{Severity: "error", Check: "template_parse", Message: err.Error()}}
 	}
 
-	return []validateDiag{{Check: "workflow_load", Message: err.Error()}}
+	return []validateDiag{{Severity: "error", Check: "workflow_load", Message: err.Error()}}
 }
 
 func mapPreflightErrors(errs []orchestrator.PreflightError) []validateDiag {
 	diags := make([]validateDiag, len(errs))
 	for i, e := range errs {
-		diags[i] = validateDiag{Check: e.Check, Message: e.Message}
+		diags[i] = validateDiag{Severity: "error", Check: e.Check, Message: e.Message}
 	}
 	return diags
 }

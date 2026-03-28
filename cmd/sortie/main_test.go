@@ -1212,6 +1212,17 @@ func TestValidateValidWorkflowJSON(t *testing.T) {
 	if !strings.Contains(raw, `"errors":[]`) {
 		t.Errorf("JSON output = %q, want to contain %q", raw, `"errors":[]`)
 	}
+
+	// Warnings must be a non-null empty array in JSON output.
+	if out.Warnings == nil {
+		t.Errorf("validateOutput.Warnings = nil, want [] (must not be null in JSON)")
+	}
+	if len(out.Warnings) != 0 {
+		t.Errorf("validateOutput.Warnings = %v, want empty slice", out.Warnings)
+	}
+	if !strings.Contains(raw, `"warnings":[]`) {
+		t.Errorf("JSON output = %q, want to contain %q", raw, `"warnings":[]`)
+	}
 }
 
 func TestValidateDefaultPath(t *testing.T) {
@@ -1521,6 +1532,297 @@ func TestValidateDoesNotStartWatcher(t *testing.T) {
 	}
 }
 
+// --- Front matter warning integration tests ---
+
+// typoTopLevelKeyWorkflow returns a workflow with the "trackers" typo at the
+// top level (unknown_key warning) and a valid tracker.kind so preflight passes.
+func typoTopLevelKeyWorkflow() []byte {
+	return []byte(`---
+trackers:
+  kind: file
+tracker:
+  kind: file
+  active_states:
+    - To Do
+  terminal_states:
+    - Done
+agent:
+  kind: mock
+---
+Do {{ .issue.title }}.
+`)
+}
+
+// typoSubKeyWorkflow returns a workflow with an unknown sub-key inside the
+// tracker section (unknown_sub_key warning). Preflight passes.
+func typoSubKeyWorkflow() []byte {
+	return []byte(`---
+tracker:
+  kind: file
+  active_states:
+    - To Do
+  terminal_states:
+    - Done
+  typo_endpoint: "should not be here"
+agent:
+  kind: mock
+---
+Do {{ .issue.title }}.
+`)
+}
+
+// typeMismatchWorkflow returns a workflow where hooks.timeout_ms is a
+// non-numeric string (type_mismatch warning). Preflight passes.
+func typeMismatchWorkflow() []byte {
+	return []byte(`---
+tracker:
+  kind: file
+  active_states:
+    - To Do
+  terminal_states:
+    - Done
+agent:
+  kind: mock
+hooks:
+  timeout_ms: not-a-number
+---
+Do {{ .issue.title }}.
+`)
+}
+
+// nonPositiveHooksTimeoutWorkflow returns a workflow where hooks.timeout_ms
+// is -1 (semantic type_mismatch warning: non-positive). Preflight passes.
+func nonPositiveHooksTimeoutWorkflow() []byte {
+	return []byte(`---
+tracker:
+  kind: file
+  active_states:
+    - To Do
+  terminal_states:
+    - Done
+agent:
+  kind: mock
+hooks:
+  timeout_ms: -1
+---
+Do {{ .issue.title }}.
+`)
+}
+
+// errorAndWarningWorkflow returns a workflow with the "trackers" typo
+// (warning) and no tracker.kind (error). ValidateConfigForPromotion
+// passes because active_states is set; preflight fails on tracker.kind.
+func errorAndWarningWorkflow() []byte {
+	return []byte(`---
+trackers:
+  kind: file
+tracker:
+  active_states:
+    - To Do
+  terminal_states:
+    - Done
+agent:
+  kind: mock
+---
+Do {{ .issue.title }}.
+`)
+}
+
+// TestValidateWarningTypoTopLevelKeyText asserts that a typo top-level key
+// produces exit 0 (valid), an empty stdout (text mode), and the warning
+// written to stderr with the "warning:" prefix.
+func TestValidateWarningTypoTopLevelKeyText(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	wfPath := writeCustomWorkflowFile(t, dir, typoTopLevelKeyWorkflow())
+
+	var stdout, stderr bytes.Buffer
+	ctx := context.Background()
+
+	code := run(ctx, []string{"validate", wfPath}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("run(validate) = %d, want 0; stderr: %s", code, stderr.String())
+	}
+	if stdout.Len() != 0 {
+		t.Errorf("stdout = %q, want empty (text mode, no errors)", stdout.String())
+	}
+	if !strings.Contains(stderr.String(), "warning:") {
+		t.Errorf("stderr = %q, want to contain %q", stderr.String(), "warning:")
+	}
+	if !strings.Contains(stderr.String(), "trackers") {
+		t.Errorf("stderr = %q, want to contain %q (typo key name)", stderr.String(), "trackers")
+	}
+}
+
+// TestValidateWarningTypoTopLevelKeyJSON asserts that a typo top-level key
+// in JSON mode produces exit 0, valid=true, empty errors slice, and a single
+// warning diagnostic with the expected fields.
+func TestValidateWarningTypoTopLevelKeyJSON(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	wfPath := writeCustomWorkflowFile(t, dir, typoTopLevelKeyWorkflow())
+
+	var stdout, stderr bytes.Buffer
+	ctx := context.Background()
+
+	code := run(ctx, []string{"validate", "--format", "json", wfPath}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("run(validate --format json) = %d, want 0; stderr: %s", code, stderr.String())
+	}
+	if stderr.Len() != 0 {
+		t.Errorf("stderr = %q, want empty (JSON mode, no fallback)", stderr.String())
+	}
+
+	var out validateOutput
+	if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
+		t.Fatalf("json.Unmarshal(%q) error: %v", stdout.String(), err)
+	}
+	if !out.Valid {
+		t.Errorf("validateOutput.Valid = false, want true")
+	}
+	if len(out.Errors) != 0 {
+		t.Errorf("validateOutput.Errors = %v, want empty", out.Errors)
+	}
+	if len(out.Warnings) != 1 {
+		t.Fatalf("validateOutput.Warnings = %v (len %d), want 1", out.Warnings, len(out.Warnings))
+	}
+	if out.Warnings[0].Severity != "warning" {
+		t.Errorf("warnings[0].Severity = %q, want %q", out.Warnings[0].Severity, "warning")
+	}
+	if out.Warnings[0].Check != "unknown_key" {
+		t.Errorf("warnings[0].Check = %q, want %q", out.Warnings[0].Check, "unknown_key")
+	}
+	if !strings.Contains(out.Warnings[0].Message, "trackers") {
+		t.Errorf("warnings[0].Message = %q, want to contain %q", out.Warnings[0].Message, "trackers")
+	}
+}
+
+// TestValidateWarningTypoSubKeyText asserts that an unknown sub-key inside
+// a known section produces exit 0 and a warning on stderr.
+func TestValidateWarningTypoSubKeyText(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	wfPath := writeCustomWorkflowFile(t, dir, typoSubKeyWorkflow())
+
+	var stdout, stderr bytes.Buffer
+	ctx := context.Background()
+
+	code := run(ctx, []string{"validate", wfPath}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("run(validate) = %d, want 0; stderr: %s", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "warning:") {
+		t.Errorf("stderr = %q, want to contain %q", stderr.String(), "warning:")
+	}
+	if !strings.Contains(stderr.String(), "unknown_sub_key") {
+		t.Errorf("stderr = %q, want to contain %q", stderr.String(), "unknown_sub_key")
+	}
+}
+
+// TestValidateWarningTypeMismatchText asserts that a type-mismatched field
+// produces exit 0 and a warning on stderr.
+func TestValidateWarningTypeMismatchText(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	wfPath := writeCustomWorkflowFile(t, dir, typeMismatchWorkflow())
+
+	var stdout, stderr bytes.Buffer
+	ctx := context.Background()
+
+	code := run(ctx, []string{"validate", wfPath}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("run(validate) = %d, want 0; stderr: %s", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "warning:") {
+		t.Errorf("stderr = %q, want to contain %q", stderr.String(), "warning:")
+	}
+	if !strings.Contains(stderr.String(), "type_mismatch") {
+		t.Errorf("stderr = %q, want to contain %q", stderr.String(), "type_mismatch")
+	}
+}
+
+// TestValidateWarningNonPositiveHooksTimeout asserts that a non-positive
+// hooks.timeout_ms produces exit 0 and a semantic warning on stderr.
+func TestValidateWarningNonPositiveHooksTimeout(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	wfPath := writeCustomWorkflowFile(t, dir, nonPositiveHooksTimeoutWorkflow())
+
+	var stdout, stderr bytes.Buffer
+	ctx := context.Background()
+
+	code := run(ctx, []string{"validate", wfPath}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("run(validate) = %d, want 0; stderr: %s", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "non-positive") {
+		t.Errorf("stderr = %q, want to contain %q", stderr.String(), "non-positive")
+	}
+}
+
+// TestValidateErrorAndWarningsTogether asserts that a workflow with both a
+// warning (typo top-level key) and an error (missing tracker.kind) produces
+// exit 1 with both diagnostic categories in the JSON output.
+func TestValidateErrorAndWarningsTogether(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	wfPath := writeCustomWorkflowFile(t, dir, errorAndWarningWorkflow())
+
+	var stdout, stderr bytes.Buffer
+	ctx := context.Background()
+
+	code := run(ctx, []string{"validate", "--format", "json", wfPath}, &stdout, &stderr)
+	if code != 1 {
+		t.Fatalf("run(validate --format json) = %d, want 1; stderr: %s", code, stderr.String())
+	}
+
+	var out validateOutput
+	if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
+		t.Fatalf("json.Unmarshal(%q) error: %v", stdout.String(), err)
+	}
+	if out.Valid {
+		t.Errorf("validateOutput.Valid = true, want false")
+	}
+	if len(out.Errors) == 0 {
+		t.Errorf("validateOutput.Errors is empty, want at least one error diagnostic")
+	}
+	if len(out.Warnings) == 0 {
+		t.Errorf("validateOutput.Warnings is empty, want at least one warning diagnostic")
+	}
+	// The error must be a preflight "tracker.kind" check.
+	foundTrackerKind := false
+	for _, d := range out.Errors {
+		if d.Check == "tracker.kind" {
+			foundTrackerKind = true
+			if d.Severity != "error" {
+				t.Errorf("errors[tracker.kind].Severity = %q, want %q", d.Severity, "error")
+			}
+		}
+	}
+	if !foundTrackerKind {
+		t.Errorf("validateOutput.Errors = %v, want a diagnostic with check %q", out.Errors, "tracker.kind")
+	}
+	// The warning must be an "unknown_key" for "trackers".
+	foundTrackers := false
+	for _, w := range out.Warnings {
+		if w.Check == "unknown_key" && strings.Contains(w.Message, "trackers") {
+			foundTrackers = true
+			if w.Severity != "warning" {
+				t.Errorf("warnings[unknown_key].Severity = %q, want %q", w.Severity, "warning")
+			}
+		}
+	}
+	if !foundTrackers {
+		t.Errorf("validateOutput.Warnings = %v, want a warning with check %q containing %q", out.Warnings, "unknown_key", "trackers")
+	}
+}
+
 // --- writeJSON / emitDiags error-path tests ---
 
 func TestWriteJSON(t *testing.T) {
@@ -1554,10 +1856,10 @@ func TestEmitDiagsJSONFallback(t *testing.T) {
 	// When stdout fails to accept JSON, emitDiags must fall back to
 	// plain-text diagnostics on stderr so the caller still sees the error.
 	diags := []validateDiag{
-		{Check: "tracker.kind", Message: "tracker kind is required"},
+		{Severity: "error", Check: "tracker.kind", Message: "tracker kind is required"},
 	}
 	var stderr bytes.Buffer
-	emitDiags(errWriter{err: fmt.Errorf("disk full")}, &stderr, "json", diags)
+	emitDiags(errWriter{err: fmt.Errorf("disk full")}, &stderr, "json", diags, nil)
 
 	got := stderr.String()
 	if !strings.Contains(got, "tracker.kind") {
@@ -1570,6 +1872,11 @@ func TestEmitDiagsJSONFallback(t *testing.T) {
 
 func TestRunValidateJSONSuccessStdoutFails(t *testing.T) {
 	// No t.Parallel: setupRunDir calls t.Chdir.
+	//
+	// When the success-path JSON write fails and there are no errors or
+	// warnings to fall back on, emitDiags has nothing to print to stderr.
+	// runValidate still returns 0 (the workflow is valid; the I/O failure
+	// is best-effort output delivery).
 	wfPath := setupRunDir(t)
 
 	var stderr bytes.Buffer
@@ -1577,12 +1884,13 @@ func TestRunValidateJSONSuccessStdoutFails(t *testing.T) {
 
 	code := run(ctx, []string{"validate", "--format", "json", wfPath},
 		errWriter{err: fmt.Errorf("disk full")}, &stderr)
-	if code != 1 {
-		t.Fatalf("run(validate --format json) with failing stdout = %d, want 1; stderr: %s",
+	if code != 0 {
+		t.Fatalf("run(validate --format json) with failing stdout = %d, want 0; stderr: %s",
 			code, stderr.String())
 	}
-	if !strings.Contains(stderr.String(), "failed to write JSON output") {
-		t.Errorf("stderr = %q, want to contain %q", stderr.String(), "failed to write JSON output")
+	// No per-diag fallback lines when there are no errors or warnings.
+	if stderr.Len() != 0 {
+		t.Errorf("stderr = %q, want empty (no diags to fall back on)", stderr.String())
 	}
 }
 
