@@ -26,10 +26,10 @@ func validateConfig(fields registry.TrackerConfigFields) []registry.ValidationDi
 
 // validateProject checks that tracker.project is in owner/repo
 // format. Empty project is skipped (generic preflight Check 4
-// handles the required-field case).
+// handles the required-field case). Validation uses the raw value
+// without trimming so behavior matches [NewGitHubAdapter].
 func validateProject(project string) []registry.ValidationDiag {
-	project = strings.TrimSpace(project)
-	if project == "" {
+	if strings.TrimSpace(project) == "" {
 		return nil
 	}
 
@@ -42,8 +42,8 @@ func validateProject(project string) []registry.ValidationDiag {
 	}
 
 	parts := strings.SplitN(project, "/", 2)
-	owner := strings.TrimSpace(parts[0])
-	repo := strings.TrimSpace(parts[1])
+	owner := parts[0]
+	repo := parts[1]
 
 	if owner == "" || repo == "" {
 		return []registry.ValidationDiag{{
@@ -67,7 +67,7 @@ func validateProject(project string) []registry.ValidationDiag {
 // validateAPIKeyHint produces advisory diagnostics when api_key is
 // empty, hinting about the GITHUB_TOKEN environment variable.
 func validateAPIKeyHint(apiKey string) []registry.ValidationDiag {
-	if apiKey != "" {
+	if strings.TrimSpace(apiKey) != "" {
 		return nil
 	}
 
@@ -113,7 +113,7 @@ func validateStateOverlap(fields registry.TrackerConfigFields) []registry.Valida
 	// 5a: active_states ∩ terminal_states.
 	var overlap []string
 	for label := range activeSet {
-		if label == "" {
+		if strings.TrimSpace(label) == "" {
 			continue
 		}
 		if _, ok := terminalSet[label]; ok {

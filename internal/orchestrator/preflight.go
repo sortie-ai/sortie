@@ -171,10 +171,10 @@ func ValidateDispatchConfig(params PreflightParams) PreflightResult {
 			}
 			for _, d := range trackerMeta.ValidateTrackerConfig(fields) {
 				switch d.Severity {
-				case "error":
-					errs = append(errs, PreflightError{Check: d.Check, Message: d.Message})
-				default:
+				case "warning":
 					warns = append(warns, PreflightWarning{Check: d.Check, Message: d.Message})
+				default:
+					errs = append(errs, PreflightError{Check: d.Check, Message: d.Message})
 				}
 			}
 		}
