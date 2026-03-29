@@ -8,7 +8,7 @@
 ## Authentication
 
 GitHub supports several authentication methods. All methods send the token in the
-`Authorization` header and MUST include the `X-GitHub-Api-Version: 2026-03-10` header for
+`Authorization` header and must include the `X-GitHub-Api-Version: 2026-03-10` header for
 stable behavior.
 
 ### Personal access token, fine-grained (recommended for Sortie)
@@ -22,7 +22,7 @@ method for Sortie because it follows the principle of least privilege.
 - Required repository permission: **Issues: Read and write** (covers issue read, comment
   read/write, label read/write, dependencies read).
 - Repository scope: restrict the token to the specific repository Sortie will manage.
-- Expiration: mandatory. GitHub enforces a maximum lifetime. The adapter SHOULD detect
+- Expiration: mandatory. GitHub enforces a maximum lifetime. The adapter should detect
   `401` responses and return `tracker_auth_error` with a message suggesting token renewal.
 
 The `X-Accepted-GitHub-Permissions` response header reports the permissions required by
@@ -100,7 +100,7 @@ Query parameters:
 | `per_page`  | `50`                       | Per architecture Section 11.2       |
 
 **Pull request filtering:** The issues endpoint returns both issues and pull requests.
-Pull requests have a non-null `pull_request` key. The adapter MUST skip entries where
+Pull requests have a non-null `pull_request` key. The adapter must skip entries where
 `pull_request` is present.
 
 **Alternative: `GET /search/issues`** for `query_filter` support. When `tracker.query_filter`
@@ -112,7 +112,7 @@ GET /search/issues?q=repo:{owner}/{repo}+type:issue+state:open+{query_filter}&so
 
 The search endpoint supports the full GitHub search qualifier syntax (label, assignee,
 milestone, date ranges). The search API has a **separate rate limit** of 30 requests/minute
-(see Rate limiting below), so the adapter SHOULD prefer the issues endpoint when
+(see Rate limiting below), so the adapter should prefer the issues endpoint when
 `query_filter` is not set.
 
 ### 2. `FetchIssueByID` → `GET /repos/{owner}/{repo}/issues/{issue_number}`
@@ -239,7 +239,7 @@ Section 11.3). The adapter:
 
 ### Label hygiene
 
-The adapter does NOT create labels automatically. The repository MUST have the state labels
+The adapter does not create labels automatically. The repository must have the state labels
 pre-created before Sortie starts. If a configured state label does not exist in the
 repository, `TransitionIssue` fails with `tracker_payload_error`.
 
@@ -257,7 +257,7 @@ with existing repository conventions.
 | `ID`                 | `id` (integer)                    | Global numeric ID, convert to string                 |
 | `Identifier`         | `number` (integer)                | Repo-scoped, convert to string, e.g. `"299"`        |
 | `Title`              | `title`                           |                                                      |
-| `Description`        | `body`                            | Markdown. Nil when empty. No flattening needed       |
+| `Description`        | `body`                            | Markdown. Empty string when missing or null. No flattening needed |
 | `Priority`           | —                                 | GitHub has no native priority. See note below        |
 | `State`              | Label-derived                     | See State mapping section                            |
 | `BranchName`         | —                                 | Not available in issue response. See note below      |
@@ -362,7 +362,7 @@ Example `Link` header:
 <https://api.github.com/repos/owner/repo/issues?page=5&per_page=50>; rel="last"
 ```
 
-The adapter MUST use the full URL from the `Link` header for subsequent requests, not
+The adapter must use the full URL from the `Link` header for subsequent requests, not
 construct URLs manually. GitHub may change URL structure or add query parameters.
 
 ### Search endpoint (`GET /search/issues`), page-based
@@ -413,7 +413,7 @@ The search endpoint has a separate, stricter rate limit:
 Verified: `x-ratelimit-limit: 30` and `x-ratelimit-resource: search` on
 `GET /search/issues` with PAT authentication.
 
-The adapter MUST track search rate limits separately from core rate limits. When
+The adapter must track search rate limits separately from core rate limits. When
 `query_filter` is not configured, prefer the issues endpoint to avoid consuming the
 scarce search budget.
 
@@ -433,7 +433,7 @@ header. When the status is `403`, the response body contains
 
 ### Conditional requests (ETag / Last-Modified)
 
-GitHub returns `ETag` and `Last-Modified` headers on responses. The adapter SHOULD cache
+GitHub returns `ETag` and `Last-Modified` headers on responses. The adapter should cache
 these and send `If-None-Match` (or `If-Modified-Since`) on subsequent requests for the
 same resource.
 
@@ -504,11 +504,11 @@ other messages) by inspecting the response body. Rate limit 403s map to
   the search query. Example: `label:sortie-managed milestone:"Sprint 1"`.
   When set, the adapter uses `GET /search/issues` instead of `GET /repos/.../issues`.
 - **Network timeout:** 30,000 ms per architecture Section 11.2.
-- **API version header:** The adapter MUST send `X-GitHub-Api-Version: 2026-03-10` on
+- **API version header:** The adapter must send `X-GitHub-Api-Version: 2026-03-10` on
   every request. This pins behavior to the latest supported version and prevents
   breakage from future API evolution.
-- **User-Agent header:** GitHub requires (SHOULD) a `User-Agent` header identifying the
-  application. Use `Sortie/<version>` or similar.
+- **User-Agent header:** The adapter must send a `User-Agent` header identifying the
+  application, for example `Sortie/<version>`.
 
 ---
 
