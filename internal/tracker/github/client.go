@@ -92,10 +92,6 @@ func (c *githubClient) do(ctx context.Context, method, path string, params url.V
 		return body, linkNext, nil
 	}
 
-	if resp.StatusCode == http.StatusNotModified {
-		return nil, "", nil
-	}
-
 	return nil, "", classifyHTTPError(resp, method, path)
 }
 

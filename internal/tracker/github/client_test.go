@@ -313,15 +313,16 @@ func TestDo_304NotModified(t *testing.T) {
 	defer srv.Close()
 
 	c := newTestClient(t, srv.URL)
-	body, linkNext, err := c.do(context.Background(), "GET", "/path", nil)
-	if err != nil {
-		t.Fatalf("do 304: unexpected error: %v", err)
+	_, _, err := c.do(context.Background(), "GET", "/path", nil)
+	if err == nil {
+		t.Fatal("do 304: expected error, got nil")
 	}
-	if body != nil {
-		t.Errorf("body = %v, want nil on 304", body)
+	var trackerErr *domain.TrackerError
+	if !errors.As(err, &trackerErr) {
+		t.Fatalf("error type = %T, want *domain.TrackerError", err)
 	}
-	if linkNext != "" {
-		t.Errorf("linkNext = %q, want empty on 304", linkNext)
+	if trackerErr.Kind != domain.ErrTrackerAPI {
+		t.Errorf("TrackerError.Kind = %q, want %q", trackerErr.Kind, domain.ErrTrackerAPI)
 	}
 }
 
