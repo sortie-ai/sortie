@@ -1352,6 +1352,411 @@ func TestSetMetrics_NilMetricsDoesNotPanic(t *testing.T) {
 	}
 }
 
+// --- FetchCandidateIssues (search path) ---
+
+func TestFetchCandidateIssues_SearchPagination(t *testing.T) {
+	t.Parallel()
+
+	// Two-page search result. query_filter non-empty routes through fetchCandidatesViaSearch.
+	page1 := `{"total_count":2,"incomplete_results":false,"items":[{"id":10,"number":10,"title":"T10","body":null,"state":"open","html_url":"u","labels":[{"name":"review"}],"assignees":[],"type":null,"pull_request":null,"created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z"}]}`
+	page2 := `{"total_count":2,"incomplete_results":false,"items":[{"id":20,"number":20,"title":"T20","body":null,"state":"open","html_url":"u","labels":[{"name":"backlog"}],"assignees":[],"type":null,"pull_request":null,"created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z"}]}`
+
+	var srvURL string
+	var callCount int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := atomic.AddInt32(&callCount, 1)
+		if n == 1 {
+			w.Header().Set("Link", fmt.Sprintf(`<%s/search/issues?q=...&page=2>; rel="next"`, srvURL))
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(page1)) //nolint:errcheck // test helper
+		} else {
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(page2)) //nolint:errcheck // test helper
+		}
+	}))
+	defer srv.Close()
+	srvURL = srv.URL
+
+	cfg := validConfig(srv.URL)
+	cfg["query_filter"] = "label:important"
+	a := mustAdapter(t, cfg)
+	issues, err := a.FetchCandidateIssues(context.Background())
+	if err != nil {
+		t.Fatalf("FetchCandidateIssues search pagination: %v", err)
+	}
+	if len(issues) != 2 {
+		t.Errorf("len = %d, want 2 (one from each search page)", len(issues))
+	}
+}
+
+func TestFetchCandidateIssues_SearchIncompleteResults(t *testing.T) {
+	t.Parallel()
+
+	// incomplete_results=true should log a warning but not return an error.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"total_count":100,"incomplete_results":true,"items":[{"id":1,"number":1,"title":"T","body":null,"state":"open","html_url":"u","labels":[{"name":"review"}],"assignees":[],"type":null,"pull_request":null,"created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z"}]}`)) //nolint:errcheck // test helper
+	}))
+	defer srv.Close()
+
+	cfg := validConfig(srv.URL)
+	cfg["query_filter"] = "type:bug"
+	a := mustAdapter(t, cfg)
+	issues, err := a.FetchCandidateIssues(context.Background())
+	if err != nil {
+		t.Fatalf("FetchCandidateIssues incomplete results: unexpected error: %v", err)
+	}
+	if len(issues) != 1 {
+		t.Errorf("len = %d, want 1", len(issues))
+	}
+}
+
+func TestFetchCandidateIssues_SearchAPIError(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	cfg := validConfig(srv.URL)
+	cfg["query_filter"] = "label:critical"
+	a := mustAdapter(t, cfg)
+	_, err := a.FetchCandidateIssues(context.Background())
+	assertTrackerErrorKind(t, err, domain.ErrTrackerTransport)
+}
+
+// --- FetchIssueByID additional error paths ---
+
+func TestFetchIssueByID_NonNotFoundError(t *testing.T) {
+	t.Parallel()
+
+	// 500 on the issue fetch should return ErrTrackerTransport (not ErrTrackerNotFound).
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	a := mustAdapter(t, validConfig(srv.URL))
+	_, err := a.FetchIssueByID(context.Background(), "42")
+	assertTrackerErrorKind(t, err, domain.ErrTrackerTransport)
+}
+
+func TestFetchIssueByID_BlockerAPIError(t *testing.T) {
+	t.Parallel()
+
+	// blockers endpoint returns 500 (not 404) → error propagated.
+	issueFix := loadFixture(t, "issue.json")
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/repos/owner/repo/issues/42/dependencies/blocked_by", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	})
+	mux.HandleFunc("/repos/owner/repo/issues/42", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write(issueFix) //nolint:errcheck // test helper
+	})
+
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	a := mustAdapter(t, validConfig(srv.URL))
+	_, err := a.FetchIssueByID(context.Background(), "42")
+	assertTrackerErrorKind(t, err, domain.ErrTrackerTransport)
+}
+
+func TestFetchIssueByID_ParentAPIError(t *testing.T) {
+	t.Parallel()
+
+	// parent endpoint returns 500 (not 404) → error propagated.
+	issueFix := loadFixture(t, "issue.json")
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/repos/owner/repo/issues/42/dependencies/blocked_by", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("[]")) //nolint:errcheck // test helper
+	})
+	mux.HandleFunc("/repos/owner/repo/issues/42/parent", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	})
+	mux.HandleFunc("/repos/owner/repo/issues/42", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write(issueFix) //nolint:errcheck // test helper
+	})
+
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	a := mustAdapter(t, validConfig(srv.URL))
+	_, err := a.FetchIssueByID(context.Background(), "42")
+	assertTrackerErrorKind(t, err, domain.ErrTrackerTransport)
+}
+
+// --- FetchIssuesByStates additional paths ---
+
+func TestFetchIssuesByStates_OpenPagination(t *testing.T) {
+	t.Parallel()
+
+	// Server returns page1 (issues.json) with a Link header; second call returns page2 (issues_page2.json).
+	page1 := loadFixture(t, "issues.json")
+	page2 := loadFixture(t, "issues_page2.json")
+
+	var srvURL string
+	var callCount int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := atomic.AddInt32(&callCount, 1)
+		if n == 1 {
+			w.Header().Set("Link", fmt.Sprintf(`<%s/repos/owner/repo/issues?state=open&page=2>; rel="next"`, srvURL))
+			w.WriteHeader(http.StatusOK)
+			w.Write(page1) //nolint:errcheck // test helper
+		} else {
+			w.WriteHeader(http.StatusOK)
+			w.Write(page2) //nolint:errcheck // test helper
+		}
+	}))
+	defer srv.Close()
+	srvURL = srv.URL
+
+	a := mustAdapter(t, validConfig(srv.URL))
+	// Request only active states; none are terminal so uses fetchOpenIssuesByStates.
+	issues, err := a.FetchIssuesByStates(context.Background(), []string{"backlog", "in-progress", "review"})
+	if err != nil {
+		t.Fatalf("FetchIssuesByStates open pagination: %v", err)
+	}
+	// issues.json: #1 backlog + #3 in-progress (2 non-PR active issues, #4 done is filtered out).
+	// issues_page2.json: #5 review (1 issue).
+	if len(issues) != 3 {
+		t.Errorf("len = %d, want 3 across 2 pages", len(issues))
+	}
+}
+
+func TestFetchIssuesByStates_ClosedSearchPagination(t *testing.T) {
+	t.Parallel()
+
+	page1 := `{"total_count":2,"incomplete_results":false,"items":[{"id":100,"number":100,"title":"D1","body":null,"state":"closed","html_url":"u","labels":[{"name":"done"}],"assignees":[],"type":null,"pull_request":null,"created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z"}]}`
+	page2 := `{"total_count":2,"incomplete_results":false,"items":[{"id":200,"number":200,"title":"D2","body":null,"state":"closed","html_url":"u","labels":[{"name":"done"}],"assignees":[],"type":null,"pull_request":null,"created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z"}]}`
+
+	var srvURL string
+	var callCount int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := atomic.AddInt32(&callCount, 1)
+		if n == 1 {
+			w.Header().Set("Link", fmt.Sprintf(`<%s/search/issues?q=...&page=2>; rel="next"`, srvURL))
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(page1)) //nolint:errcheck // test helper
+		} else {
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(page2)) //nolint:errcheck // test helper
+		}
+	}))
+	defer srv.Close()
+	srvURL = srv.URL
+
+	a := mustAdapter(t, validConfig(srv.URL))
+	issues, err := a.FetchIssuesByStates(context.Background(), []string{"done"})
+	if err != nil {
+		t.Fatalf("FetchIssuesByStates closed search pagination: %v", err)
+	}
+	if len(issues) != 2 {
+		t.Errorf("len = %d, want 2 across 2 search pages", len(issues))
+	}
+}
+
+func TestFetchIssuesByStates_ClosedSearchIncompleteResults(t *testing.T) {
+	t.Parallel()
+
+	// incomplete_results=true for closed search: should log warning, not error.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"total_count":999,"incomplete_results":true,"items":[{"id":50,"number":50,"title":"Partial","body":null,"state":"closed","html_url":"u","labels":[{"name":"done"}],"assignees":[],"type":null,"pull_request":null,"created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z"}]}`)) //nolint:errcheck // test helper
+	}))
+	defer srv.Close()
+
+	a := mustAdapter(t, validConfig(srv.URL))
+	issues, err := a.FetchIssuesByStates(context.Background(), []string{"done"})
+	if err != nil {
+		t.Fatalf("FetchIssuesByStates closed incomplete: unexpected error: %v", err)
+	}
+	if len(issues) != 1 {
+		t.Errorf("len = %d, want 1", len(issues))
+	}
+}
+
+func TestFetchIssuesByStates_ActiveStatesError(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	a := mustAdapter(t, validConfig(srv.URL))
+	_, err := a.FetchIssuesByStates(context.Background(), []string{"backlog"})
+	assertTrackerErrorKind(t, err, domain.ErrTrackerTransport)
+}
+
+func TestFetchIssuesByStates_TerminalStateError(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	a := mustAdapter(t, validConfig(srv.URL))
+	_, err := a.FetchIssuesByStates(context.Background(), []string{"done"})
+	assertTrackerErrorKind(t, err, domain.ErrTrackerTransport)
+}
+
+func TestFetchIssuesByStates_ContextCancelledDuringTerminal(t *testing.T) {
+	t.Parallel()
+
+	// Two terminal states: first search succeeds, context is cancelled before
+	// the second search, exercising the ctx.Err() guard between iterations.
+	started := make(chan struct{}, 1)
+	var callCount int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := atomic.AddInt32(&callCount, 1)
+		if n == 1 {
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{"total_count":0,"incomplete_results":false,"items":[]}`)) //nolint:errcheck // test helper
+			started <- struct{}{}
+			return
+		}
+		// Second search: block until context is cancelled.
+		<-r.Context().Done()
+	}))
+	defer srv.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	a := mustAdapter(t, validConfig(srv.URL))
+	errCh := make(chan error, 1)
+	go func() {
+		// defaultTerminalStates = ["done", "wontfix"]; both are terminal so both
+		// iterate through the ctx.Err() guarded loop in FetchIssuesByStates.
+		_, err := a.FetchIssuesByStates(ctx, []string{"done", "wontfix"})
+		errCh <- err
+	}()
+
+	<-started
+	cancel()
+
+	err := <-errCh
+	if err == nil {
+		t.Fatal("expected error after context cancel, got nil")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("error = %v, want context.Canceled", err)
+	}
+}
+
+// --- FetchIssueStatesByIDs additional paths ---
+
+func TestFetchIssueStatesByIDs_SkipsPullRequest(t *testing.T) {
+	t.Parallel()
+
+	// API returns a PR for the requested identifier → it must be omitted from the result map.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		// pull_request:{} marks this as a PR.
+		w.Write([]byte(`{"id":1,"number":1,"title":"PR","body":null,"state":"open","html_url":"u","labels":[],"assignees":[],"type":null,"pull_request":{},"created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z"}`)) //nolint:errcheck // test helper
+	}))
+	defer srv.Close()
+
+	a := mustAdapter(t, validConfig(srv.URL))
+	result, err := a.FetchIssueStatesByIDs(context.Background(), []string{"1"})
+	if err != nil {
+		t.Fatalf("FetchIssueStatesByIDs: %v", err)
+	}
+	if _, ok := result["1"]; ok {
+		t.Error("pull request should be omitted from the result map")
+	}
+}
+
+func TestFetchIssueStatesByIdentifiers_Error(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer srv.Close()
+
+	a := mustAdapter(t, validConfig(srv.URL))
+	_, err := a.FetchIssueStatesByIdentifiers(context.Background(), []string{"5"})
+	assertTrackerErrorKind(t, err, domain.ErrTrackerAuth)
+}
+
+// --- FetchIssueComments additional paths ---
+
+func TestFetchIssueComments_NonNotFoundError(t *testing.T) {
+	t.Parallel()
+
+	// 500 from comments endpoint → ErrTrackerTransport (not wrapped as NotFound).
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	a := mustAdapter(t, validConfig(srv.URL))
+	_, err := a.FetchIssueComments(context.Background(), "42")
+	assertTrackerErrorKind(t, err, domain.ErrTrackerTransport)
+}
+
+// --- TransitionIssue additional paths ---
+
+func TestTransitionIssue_GetIssueError(t *testing.T) {
+	t.Parallel()
+
+	// Step 1 (GET issue) returns 500 → error propagated; not a NotFound.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	a := mustAdapter(t, validConfig(srv.URL))
+	err := a.TransitionIssue(context.Background(), "42", "review")
+	assertTrackerErrorKind(t, err, domain.ErrTrackerTransport)
+}
+
+func TestTransitionIssue_DeleteLabelIsNotFound(t *testing.T) {
+	t.Parallel()
+
+	// DELETE existing label returns 404 (already removed) → treated as no-op; POST still executes.
+	var postCount int32
+	mux := http.NewServeMux()
+	mux.HandleFunc("/repos/owner/repo/issues/1", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPatch {
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(issueJSON(1, "review", "open"))) //nolint:errcheck // test helper
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(issueJSON(1, "backlog", "open"))) //nolint:errcheck // test helper
+	})
+	mux.HandleFunc("/repos/owner/repo/issues/1/labels/backlog", func(w http.ResponseWriter, r *http.Request) {
+		// Label was already removed on a prior attempt.
+		w.WriteHeader(http.StatusNotFound)
+	})
+	mux.HandleFunc("/repos/owner/repo/issues/1/labels", func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&postCount, 1)
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("[]")) //nolint:errcheck // test helper
+	})
+
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	a := mustAdapter(t, validConfig(srv.URL))
+	if err := a.TransitionIssue(context.Background(), "1", "review"); err != nil {
+		t.Fatalf("TransitionIssue 404-on-delete: %v", err)
+	}
+	if got := atomic.LoadInt32(&postCount); got != 1 {
+		t.Errorf("POST count = %d, want 1 (add-label must still execute)", got)
+	}
+}
+
 // --- extractStringSlice ---
 
 func TestExtractStringSlice(t *testing.T) {
