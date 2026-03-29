@@ -231,6 +231,34 @@ func TestNewGitHubAdapter_EndpointTrailingSlashStripped(t *testing.T) {
 	}
 }
 
+func TestNewGitHubAdapter_DoesNotMutateConfigSlices(t *testing.T) {
+	t.Parallel()
+
+	// NewGitHubAdapter lowercases state values internally; it must not write
+	// those lowercased values back into the caller-supplied slices.
+	cfg := validConfig("https://api.github.com")
+	cfg["active_states"] = []string{"InProgress", "Review"}
+	cfg["terminal_states"] = []string{"Done", "WontFix"}
+
+	mustAdapter(t, cfg)
+
+	active := cfg["active_states"].([]string)
+	if active[0] != "InProgress" {
+		t.Errorf("active_states[0] = %q after construction, want original %q", active[0], "InProgress")
+	}
+	if active[1] != "Review" {
+		t.Errorf("active_states[1] = %q after construction, want original %q", active[1], "Review")
+	}
+
+	terminal := cfg["terminal_states"].([]string)
+	if terminal[0] != "Done" {
+		t.Errorf("terminal_states[0] = %q after construction, want original %q", terminal[0], "Done")
+	}
+	if terminal[1] != "WontFix" {
+		t.Errorf("terminal_states[1] = %q after construction, want original %q", terminal[1], "WontFix")
+	}
+}
+
 // --- FetchCandidateIssues ---
 
 func TestFetchCandidateIssues_FiltersPullRequests(t *testing.T) {

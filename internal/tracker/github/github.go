@@ -107,19 +107,21 @@ func NewGitHubAdapter(config map[string]any) (domain.TrackerAdapter, error) {
 	}
 	endpoint = strings.TrimRight(endpoint, "/")
 
-	activeStates := extractStringSlice(config["active_states"])
-	if len(activeStates) == 0 {
-		activeStates = append([]string{}, defaultActiveStates...)
+	activeRaw := extractStringSlice(config["active_states"])
+	if len(activeRaw) == 0 {
+		activeRaw = defaultActiveStates
 	}
-	for i, s := range activeStates {
+	activeStates := make([]string, len(activeRaw))
+	for i, s := range activeRaw {
 		activeStates[i] = strings.ToLower(s)
 	}
 
-	terminalStates := extractStringSlice(config["terminal_states"])
-	if len(terminalStates) == 0 {
-		terminalStates = append([]string{}, defaultTerminalStates...)
+	terminalRaw := extractStringSlice(config["terminal_states"])
+	if len(terminalRaw) == 0 {
+		terminalRaw = defaultTerminalStates
 	}
-	for i, s := range terminalStates {
+	terminalStates := make([]string, len(terminalRaw))
+	for i, s := range terminalRaw {
 		terminalStates[i] = strings.ToLower(s)
 	}
 
