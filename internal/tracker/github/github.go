@@ -70,7 +70,8 @@ type GitHubAdapter struct {
 // Required config keys: "api_key" (personal access token or fine-grained
 // token), "project" (owner/repo format). Optional: "endpoint" (defaults
 // to https://api.github.com), "active_states", "terminal_states",
-// "query_filter", "user_agent".
+// "query_filter", "user_agent", "etag_cache_size" (int, default 1000;
+// set to 0 to disable ETag caching).
 func NewGitHubAdapter(config map[string]any) (domain.TrackerAdapter, error) {
 	apiKey, _ := config["api_key"].(string)
 	if apiKey == "" {
@@ -141,7 +142,7 @@ func NewGitHubAdapter(config map[string]any) (domain.TrackerAdapter, error) {
 				etagCacheSize = n
 			}
 		case float64:
-			if n >= 0 {
+			if n >= 0 && n == float64(int(n)) {
 				etagCacheSize = int(n)
 			}
 		}
@@ -753,7 +754,7 @@ func (a *GitHubAdapter) fetchStatesByNumbers(ctx context.Context, numbers []stri
 		}
 
 		path := "/repos/" + a.owner + "/" + a.repo + "/issues/" + url.PathEscape(num)
-		etag, cachedState, _ := a.etagCache.lookup(path)
+		etag, cachedState, cacheHit := a.etagCache.lookup(path)
 
 		body, responseETag, notModified, err := a.client.doConditional(ctx, "GET", path, nil, etag)
 		if err != nil {
@@ -763,7 +764,7 @@ func (a *GitHubAdapter) fetchStatesByNumbers(ctx context.Context, numbers []stri
 			return nil, err
 		}
 
-		if notModified {
+		if notModified && cacheHit {
 			a.etagCache.touch(path)
 			result[num] = cachedState
 			continue
