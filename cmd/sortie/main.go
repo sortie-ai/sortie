@@ -836,6 +836,15 @@ func runValidate(_ context.Context, args []string, stdout io.Writer, stderr io.W
 	}
 
 	result := orchestrator.ValidateDispatchConfig(preflightParams)
+
+	for _, w := range result.Warnings {
+		warningDiags = append(warningDiags, validateDiag{
+			Severity: "warning",
+			Check:    w.Check,
+			Message:  w.Message,
+		})
+	}
+
 	if !result.OK() {
 		emitDiags(stdout, stderr, *format, mapPreflightErrors(result.Errors), warningDiags)
 		return 1

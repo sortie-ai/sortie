@@ -34,8 +34,9 @@ import (
 
 func init() {
 	registry.Trackers.RegisterWithMeta("github", NewGitHubAdapter, registry.AdapterMeta{
-		RequiresProject: true,
-		RequiresAPIKey:  true,
+		RequiresProject:       true,
+		RequiresAPIKey:        true,
+		ValidateTrackerConfig: validateConfig,
 	})
 }
 

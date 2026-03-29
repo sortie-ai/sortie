@@ -37,6 +37,28 @@ type AgentConstructor func(config map[string]any) (domain.AgentAdapter, error)
 // the orchestrator resolves adapters via [Registry.Get] at runtime.
 var Agents = NewRegistry[AgentConstructor]("agent")
 
+// TrackerConfigFields holds the config values passed to adapter
+// validation functions. This is a plain data struct that avoids
+// coupling the registry package to the config package.
+type TrackerConfigFields struct {
+	Kind            string
+	Project         string
+	Endpoint        string
+	APIKey          string
+	ActiveStates    []string
+	TerminalStates  []string
+	HandoffState    string
+	InProgressState string
+}
+
+// ValidationDiag is a single diagnostic produced by adapter config
+// validation. Adapters populate Check, Severity, and Message.
+type ValidationDiag struct {
+	Severity string // "error" or "warning"
+	Check    string // e.g. "tracker.project.format"
+	Message  string // operator-friendly description
+}
+
 // AdapterMeta holds optional adapter-declared properties queried by
 // the orchestrator at preflight time. Zero value means no special
 // requirements.
@@ -52,6 +74,11 @@ type AdapterMeta struct {
 	// RequiresCommand indicates the agent adapter requires a
 	// non-empty agent.command config value.
 	RequiresCommand bool
+
+	// ValidateTrackerConfig is an optional function the preflight
+	// pipeline calls to run tracker-specific config validation.
+	// Nil means no adapter-specific validation.
+	ValidateTrackerConfig func(fields TrackerConfigFields) []ValidationDiag
 }
 
 // Registry is a typed adapter registry mapping kind strings to

@@ -22,11 +22,25 @@ type PreflightError struct {
 	Message string
 }
 
+// PreflightWarning represents a non-fatal advisory diagnostic from
+// preflight validation. Warnings do not block dispatch.
+type PreflightWarning struct {
+	// Check identifies which validation produced the warning.
+	Check string
+
+	// Message is an operator-friendly description of the advisory.
+	Message string
+}
+
 // PreflightResult holds the outcome of dispatch preflight validation.
 type PreflightResult struct {
 	// Errors contains all validation failures found. Empty slice when
 	// validation passes.
 	Errors []PreflightError
+
+	// Warnings contains non-fatal advisory diagnostics from preflight
+	// validation. Warnings do not affect [PreflightResult.OK].
+	Warnings []PreflightWarning
 }
 
 // OK reports whether preflight validation passed (no errors).
@@ -138,6 +152,34 @@ func ValidateDispatchConfig(params PreflightParams) PreflightResult {
 		}
 	}
 
+	// Check 5b: Adapter-specific tracker config validation.
+	// Meta() returns a copy of AdapterMeta; the registry lock is
+	// released before the callback executes.
+	var warns []PreflightWarning
+	if cfg.Tracker.Kind != "" {
+		trackerMeta := params.TrackerRegistry.Meta(cfg.Tracker.Kind)
+		if trackerMeta.ValidateTrackerConfig != nil {
+			fields := registry.TrackerConfigFields{
+				Kind:            cfg.Tracker.Kind,
+				Project:         cfg.Tracker.Project,
+				Endpoint:        cfg.Tracker.Endpoint,
+				APIKey:          cfg.Tracker.APIKey,
+				ActiveStates:    cfg.Tracker.ActiveStates,
+				TerminalStates:  cfg.Tracker.TerminalStates,
+				HandoffState:    cfg.Tracker.HandoffState,
+				InProgressState: cfg.Tracker.InProgressState,
+			}
+			for _, d := range trackerMeta.ValidateTrackerConfig(fields) {
+				switch d.Severity {
+				case "error":
+					errs = append(errs, PreflightError{Check: d.Check, Message: d.Message})
+				default:
+					warns = append(warns, PreflightWarning{Check: d.Check, Message: d.Message})
+				}
+			}
+		}
+	}
+
 	// Check 6: agent.kind is present.
 	if cfg.Agent.Kind == "" {
 		errs = append(errs, PreflightError{
@@ -176,7 +218,7 @@ func ValidateDispatchConfig(params PreflightParams) PreflightResult {
 		}
 	}
 
-	return PreflightResult{Errors: errs}
+	return PreflightResult{Errors: errs, Warnings: warns}
 }
 
 // checkWorkspaceRootWritable verifies that root exists (creating it
