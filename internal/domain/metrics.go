@@ -66,7 +66,7 @@ type Metrics interface {
 	// IncTrackerRequests increments the tracker adapter API call
 	// counter. operation is one of "fetch_candidates", "fetch_issue",
 	// "fetch_comments", "fetch_by_states", "fetch_states_by_ids",
-	// "fetch_states_by_identifiers", "transition".
+	// "fetch_states_by_identifiers", "transition", "comment".
 	// result is "success" or "error"
 	// (sortie_tracker_requests_total{operation,result} counter).
 	IncTrackerRequests(operation string, result string)

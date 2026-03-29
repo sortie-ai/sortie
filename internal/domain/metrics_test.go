@@ -45,7 +45,7 @@ func TestNoopMetricsSatisfiesInterface(t *testing.T) {
 	m.IncPollCycles("error")
 	m.IncPollCycles("skipped")
 
-	// Counters — IncTrackerRequests (all 7 operations)
+	// Counters — IncTrackerRequests (all 8 operations)
 	m.IncTrackerRequests("fetch_candidates", "success")
 	m.IncTrackerRequests("fetch_issue", "error")
 	m.IncTrackerRequests("fetch_comments", "success")
@@ -53,6 +53,7 @@ func TestNoopMetricsSatisfiesInterface(t *testing.T) {
 	m.IncTrackerRequests("fetch_states_by_ids", "error")
 	m.IncTrackerRequests("fetch_states_by_identifiers", "success")
 	m.IncTrackerRequests("transition", "error")
+	m.IncTrackerRequests("comment", "success")
 
 	// Counters — IncHandoffTransitions
 	m.IncHandoffTransitions("success")

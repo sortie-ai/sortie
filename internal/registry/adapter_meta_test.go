@@ -9,6 +9,7 @@ import (
 	_ "github.com/sortie-ai/sortie/internal/agent/claude"
 	_ "github.com/sortie-ai/sortie/internal/agent/mock"
 	_ "github.com/sortie-ai/sortie/internal/tracker/file"
+	_ "github.com/sortie-ai/sortie/internal/tracker/github"
 	_ "github.com/sortie-ai/sortie/internal/tracker/jira"
 )
 
@@ -28,6 +29,12 @@ func TestAdapterMeta_RealRegistrations(t *testing.T) {
 			{
 				name:        "jira requires api_key and project",
 				kind:        "jira",
+				wantAPIKey:  true,
+				wantProject: true,
+			},
+			{
+				name:        "github requires api_key and project",
+				kind:        "github",
 				wantAPIKey:  true,
 				wantProject: true,
 			},
