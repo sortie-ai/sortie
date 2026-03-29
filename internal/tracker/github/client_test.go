@@ -577,3 +577,82 @@ func TestDoNoBody_ContextCancellation(t *testing.T) {
 		t.Errorf("error = %v, want context.Canceled", err)
 	}
 }
+
+func TestDoURL_NonOKStatus(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer srv.Close()
+
+	c := newTestClient(t, srv.URL)
+	_, _, err := c.doURL(context.Background(), srv.URL+"/repos/o/r/issues?page=2")
+	assertClientError(t, err, domain.ErrTrackerAuth)
+}
+
+func TestDoURL_ContextCancellation(t *testing.T) {
+	t.Parallel()
+
+	started := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(started)
+		<-r.Context().Done()
+	}))
+	defer srv.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	c := newTestClient(t, srv.URL)
+
+	errCh := make(chan error, 1)
+	go func() {
+		_, _, err := c.doURL(ctx, srv.URL+"/repos/o/r/issues?page=2")
+		errCh <- err
+	}()
+
+	<-started
+	cancel()
+
+	err := <-errCh
+	if err == nil {
+		t.Fatal("expected error after context cancel")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("error = %v, want context.Canceled", err)
+	}
+}
+
+func TestDoJSON_ContextCancellation(t *testing.T) {
+	t.Parallel()
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(started)
+		<-release // unblocked by the test to allow srv.Close() to finish cleanly
+	}))
+	defer srv.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	c := newTestClient(t, srv.URL)
+
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := c.doJSON(ctx, "PATCH", "/repos/o/r/issues/1", bytes.NewBufferString(`{}`))
+		errCh <- err
+	}()
+
+	<-started
+	cancel()
+
+	err := <-errCh
+	close(release) // let the handler return so srv.Close() does not hang
+
+	if err == nil {
+		t.Fatal("expected error after context cancel")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("error = %v, want context.Canceled", err)
+	}
+}
