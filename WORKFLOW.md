@@ -187,6 +187,7 @@ Sortie is a single-binary Go service with this internal layout:
 | `internal/workflow/`     | Configuration | WORKFLOW.md parsing, file watching, dynamic reload   |
 | `internal/persistence/`  | Persistence   | SQLite schema, migrations, CRUD                      |
 | `internal/tracker/jira/` | Integration   | Jira adapter behind `TrackerAdapter` interface       |
+| `internal/tracker/github/` | Integration | GitHub adapter behind `TrackerAdapter` interface     |
 | `internal/tracker/file/` | Integration   | File-based tracker for dev/test                      |
 | `internal/agent/claude/` | Integration   | Claude Code adapter behind `AgentAdapter` interface  |
 | `internal/agent/mock/`   | Integration   | Mock agent for testing                               |
@@ -196,6 +197,8 @@ Sortie is a single-binary Go service with this internal layout:
 | `internal/prompt/`       | Support       | Prompt template utilities                            |
 | `internal/registry/`     | Support       | Adapter registration                                 |
 | `internal/logging/`      | Support       | Structured logging setup                             |
+| `internal/maputil/`      | Support       | Generic map helpers, sorted key iteration            |
+| `internal/tool/trackerapi/` | Support    | Agent tool for tracker operations                    |
 | `cmd/sortie/`            | Entry point   | CLI wiring, signal handling, startup                 |
 
 {{ if .issue.url }}

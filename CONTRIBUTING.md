@@ -93,13 +93,14 @@ internal/
   config/              typed config, defaults, env-var resolution
   domain/              pure types, interfaces, error categories (imports nothing)
   logging/             structured slog helpers (imports nothing)
+  maputil/             generic map utility helpers (imports nothing)
   orchestrator/        dispatch, retry, reconciliation, state machine
   persistence/         SQLite store, migrations, retry queues
   prompt/              text/template rendering, strict mode
   registry/            adapter registration
   server/              HTTP API, dashboard, metrics
   tool/                client-side tool framework (trackerapi/)
-  tracker/             tracker adapters (jira/, file/)
+  tracker/             tracker adapters (jira/, github/, file/)
   workflow/            WORKFLOW.md parser, file watcher
   workspace/           filesystem isolation, path safety, hook execution
 docs/
