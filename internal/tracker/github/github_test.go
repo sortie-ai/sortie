@@ -733,8 +733,40 @@ func TestFetchIssuesByStates_TerminalStatesUsesSearchEndpoint(t *testing.T) {
 	if !strings.Contains(gotQ, "state:closed") {
 		t.Errorf("q = %q, should contain state:closed for terminal", gotQ)
 	}
-	if !strings.Contains(gotQ, "label:done") {
-		t.Errorf("q = %q, should contain label:done", gotQ)
+	if !strings.Contains(gotQ, `label:"done"`) {
+		t.Errorf("q = %q, should contain label:\"done\" (quoted)", gotQ)
+	}
+}
+
+func TestFetchIssuesByStates_TerminalStateMultiWordLabelQuoted(t *testing.T) {
+	t.Parallel()
+
+	// Multi-word terminal state must produce label:"code review" (quoted) in the
+	// search query so GitHub parses it as a single label, not two separate terms.
+	var gotQ string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotQ = r.URL.Query().Get("q")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"total_count":0,"incomplete_results":false,"items":[]}`)) //nolint:errcheck // test helper
+	}))
+	defer srv.Close()
+
+	cfg := validConfig(srv.URL)
+	cfg["terminal_states"] = []any{"code review"}
+	a := mustAdapter(t, cfg)
+
+	_, err := a.FetchIssuesByStates(context.Background(), []string{"code review"})
+	if err != nil {
+		t.Fatalf("FetchIssuesByStates: %v", err)
+	}
+
+	// Quoted form prevents "code" and "review" from being treated as separate tokens.
+	if !strings.Contains(gotQ, `label:"code review"`) {
+		t.Errorf("q = %q, should contain label:\"code review\" (quoted for multi-word label)", gotQ)
+	}
+	// Unquoted form must not appear.
+	if strings.Contains(gotQ, "label:code review") {
+		t.Errorf("q = %q, must not contain unquoted label:code review", gotQ)
 	}
 }
 

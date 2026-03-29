@@ -333,7 +333,7 @@ func (a *GitHubAdapter) fetchCandidatesViaSearch(ctx context.Context) ([]domain.
 // FetchIssueByID returns a fully populated issue including comments,
 // blockers, and parent. The issueID is the issue number as a string.
 func (a *GitHubAdapter) FetchIssueByID(ctx context.Context, issueID string) (domain.Issue, error) {
-	basePath := "/repos/" + a.owner + "/" + a.repo + "/issues/" + issueID
+	basePath := "/repos/" + a.owner + "/" + a.repo + "/issues/" + url.PathEscape(issueID)
 
 	// Step 1: Fetch the issue itself.
 	body, _, err := a.client.do(ctx, "GET", basePath, nil)
@@ -395,7 +395,7 @@ func (a *GitHubAdapter) FetchIssueByID(ctx context.Context, issueID string) (dom
 }
 
 func (a *GitHubAdapter) fetchBlockers(ctx context.Context, issueID string) ([]domain.BlockerRef, error) {
-	path := "/repos/" + a.owner + "/" + a.repo + "/issues/" + issueID + "/dependencies/blocked_by"
+	path := "/repos/" + a.owner + "/" + a.repo + "/issues/" + url.PathEscape(issueID) + "/dependencies/blocked_by"
 	params := url.Values{"per_page": {"50"}}
 
 	body, nextURL, err := a.client.do(ctx, "GET", path, params)
@@ -444,7 +444,7 @@ func (a *GitHubAdapter) fetchBlockers(ctx context.Context, issueID string) ([]do
 }
 
 func (a *GitHubAdapter) fetchParent(ctx context.Context, issueID string) (*domain.ParentRef, error) {
-	path := "/repos/" + a.owner + "/" + a.repo + "/issues/" + issueID + "/parent"
+	path := "/repos/" + a.owner + "/" + a.repo + "/issues/" + url.PathEscape(issueID) + "/parent"
 
 	body, _, err := a.client.do(ctx, "GET", path, nil)
 	if err != nil {
@@ -617,7 +617,7 @@ func (a *GitHubAdapter) fetchOpenIssuesByStates(ctx context.Context, stateSet ma
 }
 
 func (a *GitHubAdapter) fetchClosedIssuesByLabel(ctx context.Context, label string, seen map[string]struct{}) ([]domain.Issue, error) {
-	q := fmt.Sprintf("repo:%s/%s type:issue state:closed label:%s", a.owner, a.repo, label)
+	q := fmt.Sprintf(`repo:%s/%s type:issue state:closed label:"%s"`, a.owner, a.repo, label)
 	params := url.Values{
 		"q":        {q},
 		"sort":     {"created"},
@@ -734,7 +734,7 @@ func (a *GitHubAdapter) fetchStatesByNumbers(ctx context.Context, numbers []stri
 			return nil, ctx.Err()
 		}
 
-		path := "/repos/" + a.owner + "/" + a.repo + "/issues/" + num
+		path := "/repos/" + a.owner + "/" + a.repo + "/issues/" + url.PathEscape(num)
 		body, _, err := a.client.do(ctx, "GET", path, nil)
 		if err != nil {
 			if isNotFound(err) {
@@ -773,7 +773,7 @@ func (a *GitHubAdapter) FetchIssueComments(ctx context.Context, issueID string) 
 }
 
 func (a *GitHubAdapter) fetchAllComments(ctx context.Context, issueNumber string) ([]domain.Comment, error) {
-	path := "/repos/" + a.owner + "/" + a.repo + "/issues/" + issueNumber + "/comments"
+	path := "/repos/" + a.owner + "/" + a.repo + "/issues/" + url.PathEscape(issueNumber) + "/comments"
 	params := url.Values{"per_page": {"50"}}
 
 	body, nextURL, err := a.client.do(ctx, "GET", path, params)
@@ -842,7 +842,7 @@ func (a *GitHubAdapter) TransitionIssue(ctx context.Context, issueID string, tar
 		}
 	}
 
-	basePath := "/repos/" + a.owner + "/" + a.repo + "/issues/" + issueID
+	basePath := "/repos/" + a.owner + "/" + a.repo + "/issues/" + url.PathEscape(issueID)
 
 	// Step 1: Fetch current issue to read labels and native state.
 	body, _, err := a.client.do(ctx, "GET", basePath, nil)
@@ -929,7 +929,7 @@ func (a *GitHubAdapter) TransitionIssue(ctx context.Context, issueID string, tar
 // CommentIssue posts a Markdown comment on the specified issue.
 // GitHub natively accepts Markdown, so no format conversion is needed.
 func (a *GitHubAdapter) CommentIssue(ctx context.Context, issueID string, text string) error {
-	path := "/repos/" + a.owner + "/" + a.repo + "/issues/" + issueID + "/comments"
+	path := "/repos/" + a.owner + "/" + a.repo + "/issues/" + url.PathEscape(issueID) + "/comments"
 
 	payload, err := json.Marshal(map[string]string{"body": text})
 	if err != nil {
