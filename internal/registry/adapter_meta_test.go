@@ -102,4 +102,13 @@ func TestAdapterMeta_RealRegistrations(t *testing.T) {
 			})
 		}
 	})
+
+	t.Run("github exposes ValidateTrackerConfig", func(t *testing.T) {
+		t.Parallel()
+
+		meta := registry.Trackers.Meta("github")
+		if meta.ValidateTrackerConfig == nil {
+			t.Error(`Trackers.Meta("github").ValidateTrackerConfig = nil, want non-nil`)
+		}
+	})
 }

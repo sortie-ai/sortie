@@ -101,17 +101,49 @@ func requireNoCheck(t *testing.T, result PreflightResult, check string) {
 	}
 }
 
+// hasWarnCheck reports whether the result contains a warning with the
+// given check name.
+func hasWarnCheck(t *testing.T, result PreflightResult, check string) bool {
+	t.Helper()
+	for _, w := range result.Warnings {
+		if w.Check == check {
+			return true
+		}
+	}
+	return false
+}
+
+// requireWarnCheck fails the test if the result does not contain a
+// warning with the given check name.
+func requireWarnCheck(t *testing.T, result PreflightResult, check string) {
+	t.Helper()
+	if !hasWarnCheck(t, result, check) {
+		t.Errorf("ValidateDispatchConfig() missing warning check %q; got warnings: %v", check, result.Warnings)
+	}
+}
+
+// requireNoWarnCheck fails the test if the result contains a warning
+// with the given check name.
+func requireNoWarnCheck(t *testing.T, result PreflightResult, check string) {
+	t.Helper()
+	if hasWarnCheck(t, result, check) {
+		t.Errorf("ValidateDispatchConfig() has unexpected warning check %q; got warnings: %v", check, result.Warnings)
+	}
+}
+
 // --- Tests ---
 
 func TestValidateDispatchConfig(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name       string
-		modify     func(*PreflightParams)
-		wantOK     bool
-		wantChecks []string // checks that MUST be present
-		noChecks   []string // checks that MUST NOT be present
+		name           string
+		modify         func(*PreflightParams)
+		wantOK         bool
+		wantChecks     []string // error checks that MUST be present
+		noChecks       []string // error checks that MUST NOT be present
+		wantWarnChecks []string // warning checks that MUST be present
+		noWarnChecks   []string // warning checks that MUST NOT be present
 	}{
 		{
 			name:   "all valid",
@@ -421,8 +453,57 @@ func TestValidateDispatchConfig(t *testing.T) {
 			},
 			wantOK:   true,
 			noChecks: []string{"tracker.api_key", "tracker.project", "agent.command"},
+		}, {
+			name: "adapter validation errors routed to result.Errors",
+			modify: func(p *PreflightParams) {
+				p.TrackerRegistry = &stubTrackerRegistry{
+					getFunc: func(string) (registry.TrackerConstructor, error) { return nil, nil },
+					metaFunc: func(string) registry.AdapterMeta {
+						return registry.AdapterMeta{
+							ValidateTrackerConfig: func(_ registry.TrackerConfigFields) []registry.ValidationDiag {
+								return []registry.ValidationDiag{
+									{Severity: "error", Check: "test.adapter.check", Message: "adapter error"},
+								}
+							},
+						}
+					},
+				}
+			},
+			wantChecks:   []string{"test.adapter.check"},
+			noWarnChecks: []string{"test.adapter.check"},
 		},
-	}
+		{
+			name: "adapter validation warnings routed to result.Warnings",
+			modify: func(p *PreflightParams) {
+				p.TrackerRegistry = &stubTrackerRegistry{
+					getFunc: func(string) (registry.TrackerConstructor, error) { return nil, nil },
+					metaFunc: func(string) registry.AdapterMeta {
+						return registry.AdapterMeta{
+							ValidateTrackerConfig: func(_ registry.TrackerConfigFields) []registry.ValidationDiag {
+								return []registry.ValidationDiag{
+									{Severity: "warning", Check: "test.adapter.warn", Message: "adapter warning"},
+								}
+							},
+						}
+					},
+				}
+			},
+			wantOK:         true,
+			wantWarnChecks: []string{"test.adapter.warn"},
+			noChecks:       []string{"test.adapter.warn"},
+		},
+		{
+			name: "nil ValidateTrackerConfig produces no adapter diagnostics",
+			modify: func(p *PreflightParams) {
+				p.TrackerRegistry = &stubTrackerRegistry{
+					getFunc: func(string) (registry.TrackerConstructor, error) { return nil, nil },
+					metaFunc: func(string) registry.AdapterMeta {
+						return registry.AdapterMeta{} // ValidateTrackerConfig is nil
+					},
+				}
+			},
+			wantOK: true,
+		}}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -445,6 +526,12 @@ func TestValidateDispatchConfig(t *testing.T) {
 			}
 			for _, check := range tt.noChecks {
 				requireNoCheck(t, result, check)
+			}
+			for _, check := range tt.wantWarnChecks {
+				requireWarnCheck(t, result, check)
+			}
+			for _, check := range tt.noWarnChecks {
+				requireNoWarnCheck(t, result, check)
 			}
 		})
 	}

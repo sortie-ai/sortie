@@ -2999,3 +2999,239 @@ func TestRunDryRunSSHHostCapacity(t *testing.T) {
 	}
 	assertNoDatabaseFile(t, dir)
 }
+
+// --- GitHub validate tests ---
+
+// githubInvalidProjectWorkflow is a minimal GitHub workflow where
+// tracker.project is not in owner/repo format (no slash), used to
+// trigger the tracker.project.format preflight diagnostic.
+func githubInvalidProjectWorkflow() []byte {
+	return []byte(`---
+polling:
+  interval_ms: 30000
+tracker:
+  kind: github
+  api_key: "tok"
+  project: "notvalid"
+  active_states:
+    - backlog
+  terminal_states:
+    - done
+agent:
+  kind: mock
+---
+Do {{ .issue.title }}.
+`)
+}
+
+// githubStateOverlapWorkflow is a minimal GitHub workflow where
+// active_states and terminal_states overlap on "done", used to
+// trigger the tracker.states.overlap warning.
+func githubStateOverlapWorkflow() []byte {
+	return []byte(`---
+polling:
+  interval_ms: 30000
+tracker:
+  kind: github
+  api_key: "tok"
+  project: "sortie-ai/sortie"
+  active_states:
+    - backlog
+    - done
+  terminal_states:
+    - done
+agent:
+  kind: mock
+---
+Do {{ .issue.title }}.
+`)
+}
+
+// githubMissingAPIKeyWorkflow is a minimal GitHub workflow where
+// tracker.api_key references an unset environment variable so it
+// resolves to empty, used to trigger the api_key preflight error and
+// the tracker.api_key.github_token_hint warning.
+func githubMissingAPIKeyWorkflow() []byte {
+	return []byte(`---
+polling:
+  interval_ms: 30000
+tracker:
+  kind: github
+  api_key: "$SORTIE_TEST_NONEXISTENT_VAR_303"
+  project: "sortie-ai/sortie"
+  active_states:
+    - backlog
+  terminal_states:
+    - done
+agent:
+  kind: mock
+---
+Do {{ .issue.title }}.
+`)
+}
+
+// TestValidateGitHubInvalidProject verifies that sortie validate exits 1
+// and emits a tracker.project.format error when tracker.project is not
+// in owner/repo format.
+func TestValidateGitHubInvalidProject(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	wfPath := writeCustomWorkflowFile(t, dir, githubInvalidProjectWorkflow())
+
+	t.Run("text output", func(t *testing.T) {
+		t.Parallel()
+
+		var stdout, stderr bytes.Buffer
+		ctx := context.Background()
+
+		code := run(ctx, []string{"validate", wfPath}, &stdout, &stderr)
+		if code != 1 {
+			t.Fatalf("run(validate) = %d, want 1; stderr: %s", code, stderr.String())
+		}
+		if !strings.Contains(stderr.String(), "tracker.project.format") {
+			t.Errorf("stderr = %q, want to contain %q", stderr.String(), "tracker.project.format")
+		}
+	})
+
+	t.Run("json output", func(t *testing.T) {
+		t.Parallel()
+
+		var stdout, stderr bytes.Buffer
+		ctx := context.Background()
+
+		code := run(ctx, []string{"validate", "--format", "json", wfPath}, &stdout, &stderr)
+		if code != 1 {
+			t.Fatalf("run(validate --format json) = %d, want 1; stderr: %s", code, stderr.String())
+		}
+
+		var out validateOutput
+		if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
+			t.Fatalf("json.Unmarshal(%q) error: %v", stdout.String(), err)
+		}
+		if out.Valid {
+			t.Errorf("validateOutput.Valid = true, want false")
+		}
+
+		found := false
+		for _, e := range out.Errors {
+			if e.Check == "tracker.project.format" {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("validateOutput.Errors = %v, want entry with check %q", out.Errors, "tracker.project.format")
+		}
+	})
+}
+
+// TestValidateGitHubStateOverlapWarning verifies that sortie validate exits 0
+// with a tracker.states.overlap warning when active_states and terminal_states
+// share a label.
+func TestValidateGitHubStateOverlapWarning(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	wfPath := writeCustomWorkflowFile(t, dir, githubStateOverlapWorkflow())
+
+	t.Run("text output", func(t *testing.T) {
+		t.Parallel()
+
+		var stdout, stderr bytes.Buffer
+		ctx := context.Background()
+
+		code := run(ctx, []string{"validate", wfPath}, &stdout, &stderr)
+		if code != 0 {
+			t.Fatalf("run(validate) = %d, want 0; stderr: %s", code, stderr.String())
+		}
+		if !strings.Contains(stderr.String(), "tracker.states.overlap") {
+			t.Errorf("stderr = %q, want to contain %q", stderr.String(), "tracker.states.overlap")
+		}
+	})
+
+	t.Run("json output", func(t *testing.T) {
+		t.Parallel()
+
+		var stdout, stderr bytes.Buffer
+		ctx := context.Background()
+
+		code := run(ctx, []string{"validate", "--format", "json", wfPath}, &stdout, &stderr)
+		if code != 0 {
+			t.Fatalf("run(validate --format json) = %d, want 0; stderr: %s", code, stderr.String())
+		}
+
+		var out validateOutput
+		if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
+			t.Fatalf("json.Unmarshal(%q) error: %v", stdout.String(), err)
+		}
+		if !out.Valid {
+			t.Errorf("validateOutput.Valid = false, want true")
+		}
+		if len(out.Errors) != 0 {
+			t.Errorf("validateOutput.Errors = %v, want empty", out.Errors)
+		}
+
+		found := false
+		for _, w := range out.Warnings {
+			if w.Check == "tracker.states.overlap" {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("validateOutput.Warnings = %v, want entry with check %q", out.Warnings, "tracker.states.overlap")
+		}
+	})
+}
+
+// TestValidateGitHubTokenHintWarning verifies that sortie validate exits 1
+// (generic tracker.api_key error) and also emits the
+// tracker.api_key.github_token_hint advisory warning when GITHUB_TOKEN is set.
+func TestValidateGitHubTokenHintWarning(t *testing.T) {
+	// No t.Parallel(): uses t.Setenv to control GITHUB_TOKEN.
+	t.Setenv("GITHUB_TOKEN", "ghp_test_token_validate_hint")
+
+	dir := t.TempDir()
+	wfPath := writeCustomWorkflowFile(t, dir, githubMissingAPIKeyWorkflow())
+
+	var stdout, stderr bytes.Buffer
+	ctx := context.Background()
+
+	code := run(ctx, []string{"validate", "--format", "json", wfPath}, &stdout, &stderr)
+	if code != 1 {
+		t.Fatalf("run(validate --format json) = %d, want 1 (generic api_key error); stderr: %s", code, stderr.String())
+	}
+
+	var out validateOutput
+	if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
+		t.Fatalf("json.Unmarshal(%q) error: %v", stdout.String(), err)
+	}
+	if out.Valid {
+		t.Errorf("validateOutput.Valid = true, want false")
+	}
+
+	// Generic tracker.api_key error must be present.
+	foundErr := false
+	for _, e := range out.Errors {
+		if e.Check == "tracker.api_key" {
+			foundErr = true
+			break
+		}
+	}
+	if !foundErr {
+		t.Errorf("validateOutput.Errors = %v, want entry with check %q", out.Errors, "tracker.api_key")
+	}
+
+	// GITHUB_TOKEN hint warning must also be present.
+	foundWarn := false
+	for _, w := range out.Warnings {
+		if w.Check == "tracker.api_key.github_token_hint" {
+			foundWarn = true
+			break
+		}
+	}
+	if !foundWarn {
+		t.Errorf("validateOutput.Warnings = %v, want entry with check %q", out.Warnings, "tracker.api_key.github_token_hint")
+	}
+}
