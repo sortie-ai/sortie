@@ -232,6 +232,69 @@ func (c *githubClient) doNoBody(ctx context.Context, method, path string) error 
 	return classifyHTTPError(resp, method, path)
 }
 
+// doConditional executes an HTTP request with optional conditional-GET
+// support. If ifNoneMatch is non-empty, sets the If-None-Match header.
+// Returns (body, etag, notModified, error):
+//   - On 304 Not Modified: body is nil, etag is empty, notModified is true.
+//   - On 200 OK: body is the response body, etag is the response ETag
+//     header (may be empty), notModified is false.
+//   - On error: body is nil, etag is empty, notModified is false.
+func (c *githubClient) doConditional(ctx context.Context, method, path string, params url.Values, ifNoneMatch string) (body []byte, etag string, notModified bool, err error) { //nolint:unparam // method is GET today but the signature mirrors do() for consistency
+	reqURL := c.baseURL + path
+	if len(params) > 0 {
+		reqURL += "?" + params.Encode()
+	}
+
+	req, err := http.NewRequestWithContext(ctx, method, reqURL, nil) //nolint:gosec // URL is constructed from operator-configured base URL + internal API paths, not user data
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, "", false, ctx.Err()
+		}
+		return nil, "", false, &domain.TrackerError{
+			Kind:    domain.ErrTrackerTransport,
+			Message: fmt.Sprintf("failed to build request: %s %s", method, path),
+			Err:     err,
+		}
+	}
+
+	c.setHeaders(req)
+	if ifNoneMatch != "" {
+		req.Header.Set("If-None-Match", ifNoneMatch)
+	}
+
+	resp, err := c.httpClient.Do(req) //nolint:gosec // controlled URL, see above
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, "", false, ctx.Err()
+		}
+		return nil, "", false, &domain.TrackerError{
+			Kind:    domain.ErrTrackerTransport,
+			Message: fmt.Sprintf("%s %s: network error", method, path),
+			Err:     err,
+		}
+	}
+	defer resp.Body.Close() //nolint:errcheck // best-effort cleanup on response body
+
+	if resp.StatusCode == http.StatusNotModified {
+		_, _ = io.Copy(io.Discard, resp.Body)
+		return nil, "", true, nil
+	}
+
+	if resp.StatusCode == http.StatusOK {
+		respBody, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return nil, "", false, &domain.TrackerError{
+				Kind:    domain.ErrTrackerTransport,
+				Message: "failed to read response body",
+				Err:     err,
+			}
+		}
+		return respBody, resp.Header.Get("ETag"), false, nil
+	}
+
+	return nil, "", false, classifyHTTPError(resp, method, path)
+}
+
 // classifyHTTPError maps a non-success HTTP response to a
 // [*domain.TrackerError] with GitHub-specific 403 disambiguation.
 func classifyHTTPError(resp *http.Response, method, path string) error {

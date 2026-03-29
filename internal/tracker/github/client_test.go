@@ -656,3 +656,191 @@ func TestDoJSON_ContextCancellation(t *testing.T) {
 		t.Errorf("error = %v, want context.Canceled", err)
 	}
 }
+
+// --- doConditional ---
+
+func TestDoConditional_200_ReturnsBodyAndETag(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("ETag", `"abc123"`)
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"number":1}`)) //nolint:errcheck // test helper
+	}))
+	defer srv.Close()
+
+	c := newTestClient(t, srv.URL)
+	body, etag, notModified, err := c.doConditional(context.Background(), "GET", "/repos/o/r/issues/1", nil, "")
+	if err != nil {
+		t.Fatalf("doConditional: %v", err)
+	}
+	if notModified {
+		t.Error("notModified = true, want false")
+	}
+	if string(body) != `{"number":1}` {
+		t.Errorf("body = %q, want %q", string(body), `{"number":1}`)
+	}
+	if etag != `"abc123"` {
+		t.Errorf("etag = %q, want %q", etag, `"abc123"`)
+	}
+}
+
+func TestDoConditional_200_NoETagHeader(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"number":2}`)) //nolint:errcheck // test helper
+	}))
+	defer srv.Close()
+
+	c := newTestClient(t, srv.URL)
+	body, etag, notModified, err := c.doConditional(context.Background(), "GET", "/repos/o/r/issues/2", nil, "")
+	if err != nil {
+		t.Fatalf("doConditional: %v", err)
+	}
+	if notModified {
+		t.Error("notModified = true, want false")
+	}
+	if len(body) == 0 {
+		t.Error("body is empty, want non-empty")
+	}
+	if etag != "" {
+		t.Errorf("etag = %q, want empty (no ETag header in response)", etag)
+	}
+}
+
+func TestDoConditional_304_NotModified(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotModified)
+	}))
+	defer srv.Close()
+
+	c := newTestClient(t, srv.URL)
+	body, etag, notModified, err := c.doConditional(context.Background(), "GET", "/repos/o/r/issues/3", nil, `"cached"`)
+	if err != nil {
+		t.Fatalf("doConditional: %v", err)
+	}
+	if !notModified {
+		t.Error("notModified = false, want true")
+	}
+	if body != nil {
+		t.Errorf("body = %v, want nil on 304", body)
+	}
+	if etag != "" {
+		t.Errorf("etag = %q, want empty on 304", etag)
+	}
+}
+
+func TestDoConditional_SetsIfNoneMatchHeader(t *testing.T) {
+	t.Parallel()
+
+	var gotHeader string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotHeader = r.Header.Get("If-None-Match")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{}`)) //nolint:errcheck // test helper
+	}))
+	defer srv.Close()
+
+	c := newTestClient(t, srv.URL)
+	_, _, _, err := c.doConditional(context.Background(), "GET", "/repos/o/r/issues/4", nil, `"stored-etag"`)
+	if err != nil {
+		t.Fatalf("doConditional: %v", err)
+	}
+	if gotHeader != `"stored-etag"` {
+		t.Errorf("If-None-Match = %q, want %q", gotHeader, `"stored-etag"`)
+	}
+}
+
+func TestDoConditional_OmitsIfNoneMatchWhenEmpty(t *testing.T) {
+	t.Parallel()
+
+	var gotHeader string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotHeader = r.Header.Get("If-None-Match")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{}`)) //nolint:errcheck // test helper
+	}))
+	defer srv.Close()
+
+	c := newTestClient(t, srv.URL)
+	_, _, _, err := c.doConditional(context.Background(), "GET", "/repos/o/r/issues/5", nil, "")
+	if err != nil {
+		t.Fatalf("doConditional: %v", err)
+	}
+	if gotHeader != "" {
+		t.Errorf("If-None-Match = %q, want empty (header must be omitted when ifNoneMatch is empty)", gotHeader)
+	}
+}
+
+func TestDoConditional_Error_PassesThrough(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	c := newTestClient(t, srv.URL)
+	_, _, _, err := c.doConditional(context.Background(), "GET", "/repos/o/r/issues/6", nil, "")
+	assertClientError(t, err, domain.ErrTrackerTransport)
+}
+
+func TestDoConditional_ContextCancellation(t *testing.T) {
+	t.Parallel()
+
+	started := make(chan struct{})
+	release := make(chan struct{})
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(started)
+		<-release // unblocked after test collects the error
+	}))
+	defer srv.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	c := newTestClient(t, srv.URL)
+
+	errCh := make(chan error, 1)
+	go func() {
+		_, _, _, err := c.doConditional(ctx, "GET", "/repos/o/r/issues/7", nil, "")
+		errCh <- err
+	}()
+
+	<-started
+	cancel()
+
+	err := <-errCh
+	close(release) // let the server handler return so srv.Close() does not hang
+
+	if err == nil {
+		t.Fatal("expected error after context cancel, got nil")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("error = %v, want context.Canceled", err)
+	}
+}
+
+func TestDoConditional_WeakETag(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("ETag", `W/"weaketag"`)
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{}`)) //nolint:errcheck // test helper
+	}))
+	defer srv.Close()
+
+	c := newTestClient(t, srv.URL)
+	_, etag, _, err := c.doConditional(context.Background(), "GET", "/repos/o/r/issues/8", nil, "")
+	if err != nil {
+		t.Fatalf("doConditional: %v", err)
+	}
+	// Weak ETags must be stored and replayed verbatim (opaque token per HTTP spec).
+	if etag != `W/"weaketag"` {
+		t.Errorf("etag = %q, want %q", etag, `W/"weaketag"`)
+	}
+}

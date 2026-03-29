@@ -63,6 +63,7 @@ type GitHubAdapter struct {
 	terminalStates []string
 	queryFilter    string
 	metrics        domain.Metrics
+	etagCache      *etagCache
 }
 
 // NewGitHubAdapter creates a [GitHubAdapter] from adapter configuration.
@@ -132,6 +133,20 @@ func NewGitHubAdapter(config map[string]any) (domain.TrackerAdapter, error) {
 		userAgent = "sortie/dev"
 	}
 
+	etagCacheSize := 1000
+	if v, ok := config["etag_cache_size"]; ok {
+		switch n := v.(type) {
+		case int:
+			if n >= 0 {
+				etagCacheSize = n
+			}
+		case float64:
+			if n >= 0 {
+				etagCacheSize = int(n)
+			}
+		}
+	}
+
 	return &GitHubAdapter{
 		client:         newGitHubClient(endpoint, apiKey, userAgent),
 		owner:          parts[0],
@@ -139,6 +154,7 @@ func NewGitHubAdapter(config map[string]any) (domain.TrackerAdapter, error) {
 		activeStates:   activeStates,
 		terminalStates: terminalStates,
 		queryFilter:    queryFilter,
+		etagCache:      newETagCache(etagCacheSize),
 	}, nil
 }
 
@@ -737,12 +753,20 @@ func (a *GitHubAdapter) fetchStatesByNumbers(ctx context.Context, numbers []stri
 		}
 
 		path := "/repos/" + a.owner + "/" + a.repo + "/issues/" + url.PathEscape(num)
-		body, _, err := a.client.do(ctx, "GET", path, nil)
+		etag, cachedState, _ := a.etagCache.lookup(path)
+
+		body, responseETag, notModified, err := a.client.doConditional(ctx, "GET", path, nil, etag)
 		if err != nil {
 			if isNotFound(err) {
 				continue
 			}
 			return nil, err
+		}
+
+		if notModified {
+			a.etagCache.touch(path)
+			result[num] = cachedState
+			continue
 		}
 
 		var gi githubIssue
@@ -756,7 +780,13 @@ func (a *GitHubAdapter) fetchStatesByNumbers(ctx context.Context, numbers []stri
 		if isPullRequest(gi) {
 			continue
 		}
-		result[num] = extractState(gi.Labels, gi.State, a.activeStates, a.terminalStates)
+		state := extractState(gi.Labels, gi.State, a.activeStates, a.terminalStates)
+
+		if responseETag != "" {
+			a.etagCache.put(path, responseETag, state)
+		}
+
+		result[num] = state
 	}
 
 	return result, nil

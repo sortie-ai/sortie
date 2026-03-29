@@ -1820,3 +1820,349 @@ func TestExtractStringSlice(t *testing.T) {
 		})
 	}
 }
+
+// --- ETag cache constructor tests ---
+
+func TestNewGitHubAdapter_ETagCacheSizeDefault(t *testing.T) {
+	t.Parallel()
+
+	a := mustAdapter(t, validConfig("http://localhost"))
+	if a.etagCache.maxSize != 1000 {
+		t.Errorf("etagCache.maxSize = %d, want 1000 (default)", a.etagCache.maxSize)
+	}
+}
+
+func TestNewGitHubAdapter_ETagCacheSizeCustom(t *testing.T) {
+	t.Parallel()
+
+	cfg := validConfig("http://localhost")
+	cfg["etag_cache_size"] = 50
+	a := mustAdapter(t, cfg)
+	if a.etagCache.maxSize != 50 {
+		t.Errorf("etagCache.maxSize = %d, want 50", a.etagCache.maxSize)
+	}
+}
+
+func TestNewGitHubAdapter_ETagCacheSizeZero(t *testing.T) {
+	t.Parallel()
+
+	cfg := validConfig("http://localhost")
+	cfg["etag_cache_size"] = 0
+	a := mustAdapter(t, cfg)
+	if a.etagCache.maxSize != 0 {
+		t.Errorf("etagCache.maxSize = %d, want 0 (disabled)", a.etagCache.maxSize)
+	}
+}
+
+func TestNewGitHubAdapter_ETagCacheSizeFloat64(t *testing.T) {
+	t.Parallel()
+
+	// encoding/json deserializes integers as float64; verify the adapter handles it.
+	cfg := validConfig("http://localhost")
+	cfg["etag_cache_size"] = float64(75)
+	a := mustAdapter(t, cfg)
+	if a.etagCache.maxSize != 75 {
+		t.Errorf("etagCache.maxSize = %d, want 75 (float64 key)", a.etagCache.maxSize)
+	}
+}
+
+func TestNewGitHubAdapter_ETagCacheSizeInvalid(t *testing.T) {
+	t.Parallel()
+
+	cfg := validConfig("http://localhost")
+	cfg["etag_cache_size"] = "not a number"
+	a := mustAdapter(t, cfg)
+	if a.etagCache.maxSize != 1000 {
+		t.Errorf("etagCache.maxSize = %d, want 1000 (invalid falls back to default)", a.etagCache.maxSize)
+	}
+}
+
+func TestNewGitHubAdapter_ETagCacheSizeNegative(t *testing.T) {
+	t.Parallel()
+
+	cfg := validConfig("http://localhost")
+	cfg["etag_cache_size"] = -5
+	a := mustAdapter(t, cfg)
+	if a.etagCache.maxSize != 1000 {
+		t.Errorf("etagCache.maxSize = %d, want 1000 (negative falls back to default)", a.etagCache.maxSize)
+	}
+}
+
+// --- FetchIssueStatesByIDs — ETag conditional request tests ---
+
+func TestFetchIssueStatesByIDs_ConditionalRequest_304(t *testing.T) {
+	t.Parallel()
+
+	var callCount int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := atomic.AddInt32(&callCount, 1)
+		if n == 1 {
+			w.Header().Set("ETag", `"etag-v1"`)
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(issueJSON(42, "in-progress", "open"))) //nolint:errcheck // test helper
+			return
+		}
+		// Second call must include If-None-Match carrying the cached ETag.
+		if h := r.Header.Get("If-None-Match"); h != `"etag-v1"` {
+			t.Errorf("second call If-None-Match = %q, want %q", h, `"etag-v1"`)
+		}
+		w.WriteHeader(http.StatusNotModified)
+	}))
+	defer srv.Close()
+
+	cfg := validConfig(srv.URL)
+	cfg["etag_cache_size"] = 100
+	a := mustAdapter(t, cfg)
+
+	result1, err := a.FetchIssueStatesByIDs(context.Background(), []string{"42"})
+	if err != nil {
+		t.Fatalf("first call: %v", err)
+	}
+	if result1["42"] != "in-progress" {
+		t.Errorf("first call result[\"42\"] = %q, want in-progress", result1["42"])
+	}
+
+	// Second call: server returns 304; adapter must return the cached state.
+	result2, err := a.FetchIssueStatesByIDs(context.Background(), []string{"42"})
+	if err != nil {
+		t.Fatalf("second call: %v", err)
+	}
+	if result2["42"] != "in-progress" {
+		t.Errorf("second call result[\"42\"] = %q, want in-progress (304 hit)", result2["42"])
+	}
+	if n := atomic.LoadInt32(&callCount); n != 2 {
+		t.Errorf("server call count = %d, want 2", n)
+	}
+}
+
+func TestFetchIssueStatesByIDs_ConditionalRequest_200_UpdatesCache(t *testing.T) {
+	t.Parallel()
+
+	var callCount int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := atomic.AddInt32(&callCount, 1)
+		switch n {
+		case 1:
+			w.Header().Set("ETag", `"etag-v1"`)
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(issueJSON(5, "in-progress", "open"))) //nolint:errcheck // test helper
+		case 2:
+			// State changed on server; new ETag and new state label.
+			w.Header().Set("ETag", `"etag-v2"`)
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(issueJSON(5, "review", "open"))) //nolint:errcheck // test helper
+		default:
+			// Third call: cache must carry the new ETag from call 2.
+			if h := r.Header.Get("If-None-Match"); h != `"etag-v2"` {
+				t.Errorf("third call If-None-Match = %q, want %q", h, `"etag-v2"`)
+			}
+			w.WriteHeader(http.StatusNotModified)
+		}
+	}))
+	defer srv.Close()
+
+	cfg := validConfig(srv.URL)
+	cfg["etag_cache_size"] = 100
+	a := mustAdapter(t, cfg)
+
+	result1, err := a.FetchIssueStatesByIDs(context.Background(), []string{"5"})
+	if err != nil {
+		t.Fatalf("first call: %v", err)
+	}
+	if result1["5"] != "in-progress" {
+		t.Errorf("first call result[\"5\"] = %q, want in-progress", result1["5"])
+	}
+
+	// Second call: server returns new state; cache must be updated.
+	result2, err := a.FetchIssueStatesByIDs(context.Background(), []string{"5"})
+	if err != nil {
+		t.Fatalf("second call: %v", err)
+	}
+	if result2["5"] != "review" {
+		t.Errorf("second call result[\"5\"] = %q, want review", result2["5"])
+	}
+
+	// Third call: cache must use updated ETag from call 2.
+	result3, err := a.FetchIssueStatesByIDs(context.Background(), []string{"5"})
+	if err != nil {
+		t.Fatalf("third call: %v", err)
+	}
+	if result3["5"] != "review" {
+		t.Errorf("third call result[\"5\"] = %q, want review (cached from call 2)", result3["5"])
+	}
+}
+
+func TestFetchIssueStatesByIDs_NoETagHeader_NoCacheEntry(t *testing.T) {
+	t.Parallel()
+
+	var callCount int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := atomic.AddInt32(&callCount, 1)
+		// Server intentionally omits the ETag header.
+		if h := r.Header.Get("If-None-Match"); h != "" {
+			t.Errorf("call %d: unexpected If-None-Match = %q (no ETag was ever returned)", n, h)
+		}
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(issueJSON(10, "backlog", "open"))) //nolint:errcheck // test helper
+	}))
+	defer srv.Close()
+
+	cfg := validConfig(srv.URL)
+	cfg["etag_cache_size"] = 100
+	a := mustAdapter(t, cfg)
+
+	// Both calls must be unconditional because the server never returns an ETag.
+	for i := 0; i < 2; i++ {
+		if _, err := a.FetchIssueStatesByIDs(context.Background(), []string{"10"}); err != nil {
+			t.Fatalf("call %d: %v", i+1, err)
+		}
+	}
+	if n := atomic.LoadInt32(&callCount); n != 2 {
+		t.Errorf("server call count = %d, want 2 (no caching when ETag absent)", n)
+	}
+}
+
+func TestFetchIssueStatesByIDs_304_CachedStateUsedAfterEviction(t *testing.T) {
+	t.Parallel()
+
+	// Issue 1's server handler blocks until issue 2 has been processed and has
+	// evicted issue 1 from the size-1 cache. The 304 for issue 1 must still
+	// return the correct state via the local variable captured before the HTTP
+	// call — not via a re-lookup of the (now-evicted) cache entry.
+	issue1Arrived := make(chan struct{}, 1)
+	releaseGA := make(chan struct{})
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/issues/1"):
+			select {
+			case issue1Arrived <- struct{}{}:
+			default:
+			}
+			<-releaseGA
+			w.WriteHeader(http.StatusNotModified)
+		case strings.HasSuffix(r.URL.Path, "/issues/2"):
+			w.Header().Set("ETag", `"etag-2"`)
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(issueJSON(2, "review", "open"))) //nolint:errcheck // test helper
+		}
+	}))
+	defer srv.Close()
+
+	cfg := validConfig(srv.URL)
+	cfg["etag_cache_size"] = 1
+	a := mustAdapter(t, cfg)
+
+	// Pre-populate the cache for issue 1 so lookup returns a hit before the HTTP call.
+	a.etagCache.put("/repos/owner/repo/issues/1", `"etag-1"`, "in-progress")
+
+	// GA: fetch issue 1; the server blocks until releaseGA is closed.
+	resultCh := make(chan map[string]string, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		r, err := a.FetchIssueStatesByIDs(context.Background(), []string{"1"})
+		errCh <- err
+		resultCh <- r
+	}()
+
+	// Wait until GA's HTTP request is in flight, then run GB.
+	<-issue1Arrived
+
+	// GB: fetch issue 2 synchronously; put(path/2) evicts issue 1 from the size-1 cache.
+	if _, err := a.FetchIssueStatesByIDs(context.Background(), []string{"2"}); err != nil {
+		t.Fatalf("GB FetchIssueStatesByIDs: %v", err)
+	}
+
+	// Verify issue 1 was evicted (cache size=1; issue 2 now occupies the slot).
+	if _, _, ok := a.etagCache.lookup("/repos/owner/repo/issues/1"); ok {
+		t.Error("issue 1 should have been evicted after issue 2 was inserted")
+	}
+
+	// Allow GA's server handler to return 304.
+	close(releaseGA)
+
+	if err := <-errCh; err != nil {
+		t.Fatalf("GA FetchIssueStatesByIDs: %v", err)
+	}
+	result := <-resultCh
+	// result["1"] must come from the local cachedState, not a re-lookup.
+	if result["1"] != "in-progress" {
+		t.Errorf("result[\"1\"] = %q, want in-progress (local cachedState preserved after eviction + 304)", result["1"])
+	}
+}
+
+func TestFetchIssueStatesByIDs_CacheDisabled_ZeroSize(t *testing.T) {
+	t.Parallel()
+
+	var callCount int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := atomic.AddInt32(&callCount, 1)
+		if h := r.Header.Get("If-None-Match"); h != "" {
+			t.Errorf("call %d: unexpected If-None-Match = %q (cache disabled)", n, h)
+		}
+		w.Header().Set("ETag", `"etag-v1"`)
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(issueJSON(20, "backlog", "open"))) //nolint:errcheck // test helper
+	}))
+	defer srv.Close()
+
+	cfg := validConfig(srv.URL)
+	cfg["etag_cache_size"] = 0 // caching disabled
+	a := mustAdapter(t, cfg)
+
+	for i := 0; i < 2; i++ {
+		if _, err := a.FetchIssueStatesByIDs(context.Background(), []string{"20"}); err != nil {
+			t.Fatalf("call %d: %v", i+1, err)
+		}
+	}
+	if n := atomic.LoadInt32(&callCount); n != 2 {
+		t.Errorf("server call count = %d, want 2 (cache disabled, all requests unconditional)", n)
+	}
+}
+
+func TestFetchIssueStatesByIDs_NetworkError_CachePreserved(t *testing.T) {
+	t.Parallel()
+
+	var callCount int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		n := atomic.AddInt32(&callCount, 1)
+		switch n {
+		case 1:
+			w.Header().Set("ETag", `"etag-v1"`)
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(issueJSON(30, "backlog", "open"))) //nolint:errcheck // test helper
+		case 2:
+			// Transient server error; must not evict the cache entry.
+			w.WriteHeader(http.StatusInternalServerError)
+		default:
+			// Third call: cache should still carry etag-v1 (not evicted by error).
+			if h := r.Header.Get("If-None-Match"); h != `"etag-v1"` {
+				t.Errorf("third call If-None-Match = %q, want %q", h, `"etag-v1"`)
+			}
+			w.WriteHeader(http.StatusNotModified)
+		}
+	}))
+	defer srv.Close()
+
+	cfg := validConfig(srv.URL)
+	cfg["etag_cache_size"] = 100
+	a := mustAdapter(t, cfg)
+
+	// Call 1: success — populates cache.
+	if _, err := a.FetchIssueStatesByIDs(context.Background(), []string{"30"}); err != nil {
+		t.Fatalf("first call: %v", err)
+	}
+
+	// Call 2: server error — must not evict the cache entry.
+	_, err := a.FetchIssueStatesByIDs(context.Background(), []string{"30"})
+	assertTrackerErrorKind(t, err, domain.ErrTrackerTransport)
+
+	// Call 3: cache entry preserved; 304 returns correct state.
+	result3, err := a.FetchIssueStatesByIDs(context.Background(), []string{"30"})
+	if err != nil {
+		t.Fatalf("third call: %v", err)
+	}
+	if result3["30"] != "backlog" {
+		t.Errorf("third call result[\"30\"] = %q, want backlog (304 from preserved cache)", result3["30"])
+	}
+}
