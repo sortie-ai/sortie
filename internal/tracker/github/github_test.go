@@ -1160,6 +1160,15 @@ func TestTransitionIssue_PartialFailure_AddLabel(t *testing.T) {
 	}
 }
 
+func TestTransitionIssue_InvalidTargetState(t *testing.T) {
+	t.Parallel()
+
+	// "unknown" is not in the default active or terminal state lists.
+	a := mustAdapter(t, validConfig("http://localhost"))
+	err := a.TransitionIssue(context.Background(), "1", "unknown")
+	assertTrackerErrorKind(t, err, domain.ErrTrackerPayload)
+}
+
 func TestTransitionIssue_PartialFailure_Close(t *testing.T) {
 	t.Parallel()
 

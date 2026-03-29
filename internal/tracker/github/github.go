@@ -484,12 +484,11 @@ func (a *GitHubAdapter) FetchIssuesByStates(ctx context.Context, states []string
 		stateSet[strings.ToLower(s)] = struct{}{}
 	}
 
-	activeSet := make(map[string]struct{}, len(a.activeStates))
-	for _, s := range a.activeStates {
-		activeSet[s] = struct{}{}
-	}
-
-	// Partition requested states.
+	// Partition requested states into open-fetch vs closed-search.
+	// Non-terminal states (active and unknown) route through the issues
+	// endpoint (state=open). An unknown state label on a closed issue
+	// will not be found — this is intentional: only configured terminal
+	// states warrant the closed-issue search path.
 	var requestedTerminal []string
 	needOpenFetch := false
 	for s := range stateSet {
@@ -834,6 +833,15 @@ func (a *GitHubAdapter) fetchAllComments(ctx context.Context, issueNumber string
 // because individual label operations are idempotent.
 func (a *GitHubAdapter) TransitionIssue(ctx context.Context, issueID string, targetState string) error {
 	targetLower := strings.ToLower(targetState)
+
+	if !isActiveState(targetLower, a.activeStates) && !isTerminalState(targetLower, a.terminalStates) {
+		a.incTrackerRequest("transition", "error")
+		return &domain.TrackerError{
+			Kind:    domain.ErrTrackerPayload,
+			Message: fmt.Sprintf("invalid target state: %q is not a configured active or terminal state", targetState),
+		}
+	}
+
 	basePath := "/repos/" + a.owner + "/" + a.repo + "/issues/" + issueID
 
 	// Step 1: Fetch current issue to read labels and native state.
@@ -868,7 +876,7 @@ func (a *GitHubAdapter) TransitionIssue(ctx context.Context, issueID string, tar
 
 	// Step 3: Add target state label if different from current.
 	if currentLabel != targetLower {
-		payload, err := json.Marshal(map[string][]string{"labels": {targetState}})
+		payload, err := json.Marshal(map[string][]string{"labels": {targetLower}})
 		if err != nil {
 			a.incTrackerRequest("transition", "error")
 			return &domain.TrackerError{
