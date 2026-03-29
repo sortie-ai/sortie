@@ -1,6 +1,7 @@
 package github
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -48,9 +49,11 @@ func TestValidateProject(t *testing.T) {
 			wantCount: 0,
 		},
 		{
-			name:      "whitespace-only project is skipped",
-			project:   "  ",
-			wantCount: 0,
+			name:            "whitespace-only project is rejected",
+			project:         "  ",
+			wantCount:       1,
+			wantCheck:       "tracker.project.format",
+			wantMsgContains: "owner/repo format",
 		},
 		{
 			name:      "valid owner/repo",
@@ -159,8 +162,6 @@ func TestValidateAPIKeyHint(t *testing.T) {
 	// No t.Parallel(): subtests use t.Setenv to control GITHUB_TOKEN.
 
 	t.Run("api_key set – no diagnostics", func(t *testing.T) {
-		t.Parallel()
-
 		got := validateAPIKeyHint("ghp_mytoken")
 
 		if len(got) != 0 {
@@ -269,6 +270,12 @@ func TestValidateStateLabels(t *testing.T) {
 				}
 				if d.Severity != "warning" {
 					t.Errorf("validateStateLabels diag[%d].Severity = %q, want %q", i, d.Severity, "warning")
+				}
+				if tt.wantIdx != nil {
+					wantMsg := fmt.Sprintf("%s[%d]:", tt.field, tt.wantIdx[i])
+					if !strings.Contains(d.Message, wantMsg) {
+						t.Errorf("validateStateLabels diag[%d].Message = %q, want to contain %q", i, d.Message, wantMsg)
+					}
 				}
 			}
 		})

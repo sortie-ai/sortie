@@ -119,8 +119,8 @@ func ValidateDispatchConfig(params PreflightParams) PreflightResult {
 		})
 	}
 
-	// Checks 3 & 4: tracker.api_key and tracker.project when required
-	// by the adapter. Fetch meta once to avoid duplicate lookups.
+	// Checks 3–5b share a single Meta() lookup for the tracker kind.
+	var warns []PreflightWarning
 	if cfg.Tracker.Kind != "" {
 		trackerMeta := params.TrackerRegistry.Meta(cfg.Tracker.Kind)
 
@@ -140,24 +140,16 @@ func ValidateDispatchConfig(params PreflightParams) PreflightResult {
 				Message: "tracker.project is required for tracker kind " + strconv.Quote(cfg.Tracker.Kind),
 			})
 		}
-	}
 
-	// Check 5: Tracker adapter registered and available.
-	if cfg.Tracker.Kind != "" {
+		// Check 5: Tracker adapter registered and available.
 		if _, err := params.TrackerRegistry.Get(cfg.Tracker.Kind); err != nil {
 			errs = append(errs, PreflightError{
 				Check:   "tracker_adapter",
 				Message: err.Error(),
 			})
 		}
-	}
 
-	// Check 5b: Adapter-specific tracker config validation.
-	// Meta() returns a copy of AdapterMeta; the registry lock is
-	// released before the callback executes.
-	var warns []PreflightWarning
-	if cfg.Tracker.Kind != "" {
-		trackerMeta := params.TrackerRegistry.Meta(cfg.Tracker.Kind)
+		// Check 5b: Adapter-specific tracker config validation.
 		if trackerMeta.ValidateTrackerConfig != nil {
 			fields := registry.TrackerConfigFields{
 				Kind:            cfg.Tracker.Kind,

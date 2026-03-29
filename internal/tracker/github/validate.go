@@ -29,7 +29,7 @@ func validateConfig(fields registry.TrackerConfigFields) []registry.ValidationDi
 // handles the required-field case). Validation uses the raw value
 // without trimming so behavior matches [NewGitHubAdapter].
 func validateProject(project string) []registry.ValidationDiag {
-	if strings.TrimSpace(project) == "" {
+	if project == "" {
 		return nil
 	}
 
