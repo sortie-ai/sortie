@@ -2,7 +2,7 @@ package github
 
 import (
 	"sync"
-	"time"
+	"sync/atomic"
 )
 
 // etagEntry holds the cached ETag value and derived state for a single
@@ -10,7 +10,7 @@ import (
 type etagEntry struct {
 	etag       string // ETag header value (opaque string from GitHub)
 	state      string // derived Sortie state from the cached response
-	accessedAt int64  // unix nanoseconds of last access (for LRU eviction)
+	accessedAt uint64 // monotonic counter value at last access (for LRU eviction)
 }
 
 // etagCache provides bounded, concurrency-safe ETag caching for
@@ -19,6 +19,7 @@ type etagCache struct {
 	mu      sync.RWMutex
 	entries map[string]etagEntry // keyed by request path
 	maxSize int                  // maximum number of entries; 0 disables caching
+	clock   atomic.Uint64        // monotonic counter for LRU ordering
 }
 
 // newETagCache creates a cache with the given maximum entry count.
@@ -54,7 +55,7 @@ func (c *etagCache) put(path, etag, state string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	now := time.Now().UnixNano()
+	now := c.clock.Add(1)
 
 	// If path already exists, update in place.
 	if _, exists := c.entries[path]; exists {
@@ -65,10 +66,10 @@ func (c *etagCache) put(path, etag, state string) {
 	// Evict the least-recently-accessed entry when at capacity.
 	if len(c.entries) >= c.maxSize {
 		var oldestKey string
-		var oldestTime int64 = 1<<63 - 1
+		oldestSeq := ^uint64(0)
 		for k, e := range c.entries {
-			if e.accessedAt < oldestTime {
-				oldestTime = e.accessedAt
+			if e.accessedAt < oldestSeq {
+				oldestSeq = e.accessedAt
 				oldestKey = k
 			}
 		}
@@ -88,7 +89,7 @@ func (c *etagCache) touch(path string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if e, ok := c.entries[path]; ok {
-		e.accessedAt = time.Now().UnixNano()
+		e.accessedAt = c.clock.Add(1)
 		c.entries[path] = e
 	}
 }
