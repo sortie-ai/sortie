@@ -199,13 +199,11 @@ jobs:
   release:
     name: Tag & Release
     needs:
-      [
-        lint,
-        test-unit,
-        test-integration-jira,
-        test-integration-github,
-        test-integration-claude,
-      ]
+      - lint
+      - test-unit
+      - test-integration-jira
+      - test-integration-github
+      - test-integration-claude
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
