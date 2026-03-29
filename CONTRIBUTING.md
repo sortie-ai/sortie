@@ -55,11 +55,18 @@ Integration tests are gated by environment variables and skip cleanly without th
 SORTIE_JIRA_TEST=1 SORTIE_JIRA_ENDPOINT="..." SORTIE_JIRA_API_KEY="..." \
   make test PKG=./internal/tracker/jira/...
 
+SORTIE_GITHUB_TEST=1 SORTIE_GITHUB_TOKEN="ghp_..." SORTIE_GITHUB_PROJECT="owner/repo" \
+  make test PKG=./internal/tracker/github/...
+
 SORTIE_CLAUDE_TEST=1 ANTHROPIC_API_KEY="sk-..." \
   make test PKG=./internal/agent/claude/...
 ```
 
-You do not need access to Jira or Claude to contribute. The unit test suite covers the
+GitHub integration tests also accept an optional `SORTIE_GITHUB_ISSUE_ID` variable
+(a valid issue number in the configured repo) to enable `FetchIssueByID` and
+`FetchIssueStatesByIDs` test cases.
+
+You do not need access to Jira, GitHub, or Claude to contribute. The unit test suite covers the
 vast majority of the codebase.
 
 ## Making a change
