@@ -1,0 +1,19 @@
+{
+  "id": 987654,
+  "number": 42,
+  "title": "Add dark mode support",
+  "body": "Users want a **dark mode** option.",
+  "state": "open",
+  "state_reason": null,
+  "html_url": "https://github.com/owner/repo/issues/42",
+  "labels": [
+    { "name": "in-progress" },
+    { "name": "UI" },
+    { "name": "Enhancement" }
+  ],
+  "assignees": [{ "login": "alice" }],
+  "type": { "name": "Feature" },
+  "pull_request": null,
+  "created_at": "2026-01-01T00:00:00Z",
+  "updated_at": "2026-01-02T00:00:00Z"
+}

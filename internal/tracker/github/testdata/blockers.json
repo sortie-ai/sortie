@@ -1,0 +1,16 @@
+[
+  {
+    "id": 500,
+    "number": 5,
+    "title": "Blocking dependency",
+    "body": null,
+    "state": "open",
+    "html_url": "https://github.com/owner/repo/issues/5",
+    "labels": [{ "name": "in-progress" }],
+    "assignees": [],
+    "type": null,
+    "pull_request": null,
+    "created_at": "2025-12-01T00:00:00Z",
+    "updated_at": "2025-12-01T00:00:00Z"
+  }
+]

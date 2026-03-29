@@ -1,0 +1,16 @@
+[
+  {
+    "id": 110,
+    "number": 5,
+    "title": "Page-two issue",
+    "body": "second page result",
+    "state": "open",
+    "html_url": "https://github.com/owner/repo/issues/5",
+    "labels": [{ "name": "review" }],
+    "assignees": [],
+    "type": null,
+    "pull_request": null,
+    "created_at": "2026-01-04T00:00:00Z",
+    "updated_at": "2026-01-04T00:00:00Z"
+  }
+]
