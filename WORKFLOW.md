@@ -1,18 +1,12 @@
 ---
 tracker:
-  kind: jira
-  endpoint: $SORTIE_JIRA_ENDPOINT
-  api_key: $SORTIE_JIRA_API_KEY
-  project: ST
-  query_filter: "labels = 'agent-ready'"
-  active_states: [To Do, In Progress]
-  in_progress_state: In Progress
-  handoff_state: Human Review
-  terminal_states: [Done]
-  comments:
-    on_dispatch: true
-    on_completion: true
-    on_failure: true
+  kind: github
+  api_key: $GITHUB_TOKEN
+  project: sortie-ai/sortie
+  query_filter: "label:agent-ready"
+  active_states: [todo, in-progress]
+  in_progress_state: in-progress
+  terminal_states: [done, rejected, duplicate]
 
 polling:
   interval_ms: 60000
