@@ -167,17 +167,16 @@ jobs:
       SORTIE_GITHUB_TOKEN: ${{ secrets.SORTIE_GITHUB_TOKEN }}
       SORTIE_GITHUB_PROJECT: sortie-ai/sortie-test
     steps:
-      - name: Verify GitHub secrets are configured
+      - name: Verify GitHub token secret is configured
         run: |
           missing=()
-          [ -z "$SORTIE_GITHUB_TOKEN" ]   && missing+=("SORTIE_GITHUB_TOKEN")
-          [ -z "$SORTIE_GITHUB_PROJECT" ] && missing+=("SORTIE_GITHUB_PROJECT")
+          [ -z "$SORTIE_GITHUB_TOKEN" ] && missing+=("SORTIE_GITHUB_TOKEN")
           if [ ${#missing[@]} -ne 0 ]; then
             echo "::error::Missing required secrets: ${missing[*]}"
-            echo "Configure these in Settings → Secrets and variables → Actions"
+            echo "Configure SORTIE_GITHUB_TOKEN in Settings → Secrets and variables → Actions"
             exit 1
           fi
-          echo "✓ All GitHub E2E secrets are present"
+          echo "✓ GitHub E2E token secret is present"
 
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2

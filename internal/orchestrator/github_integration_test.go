@@ -56,10 +56,11 @@ func skipUnlessGitHubE2E(t *testing.T) {
 // against the GitHub REST API. It is not used during the test itself;
 // the orchestrator uses the real adapter.
 type githubAPIClient struct {
-	token   string
-	owner   string
-	repo    string
-	baseURL string
+	token      string
+	owner      string
+	repo       string
+	baseURL    string
+	httpClient *http.Client
 }
 
 func newGitHubAPIClient(t *testing.T) *githubAPIClient {
@@ -70,10 +71,11 @@ func newGitHubAPIClient(t *testing.T) *githubAPIClient {
 		t.Fatalf("SORTIE_GITHUB_PROJECT must be owner/repo, got %q", project)
 	}
 	return &githubAPIClient{
-		token:   os.Getenv("SORTIE_GITHUB_TOKEN"),
-		owner:   parts[0],
-		repo:    parts[1],
-		baseURL: "https://api.github.com",
+		token:      os.Getenv("SORTIE_GITHUB_TOKEN"),
+		owner:      parts[0],
+		repo:       parts[1],
+		baseURL:    "https://api.github.com",
+		httpClient: &http.Client{Timeout: 30 * time.Second},
 	}
 }
 
@@ -113,7 +115,7 @@ func (c *githubAPIClient) doRequest(t *testing.T, method, path string, body any)
 		req.Header.Set("Content-Type", "application/json")
 	}
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		t.Fatalf("%s %s: %v", method, path, err)
 	}
@@ -162,7 +164,8 @@ func (c *githubAPIClient) fetchIssue(t *testing.T, number string) githubIssueRes
 	return issue
 }
 
-// restoreIssueState reopens an issue and resets it to the backlog label.
+// restoreIssueState removes state labels added by the orchestrator and closes
+// the issue as not_planned, leaving the test repository clean.
 func (c *githubAPIClient) restoreIssueState(t *testing.T, number string) {
 	t.Helper()
 	path := fmt.Sprintf("/repos/%s/%s/issues/%s", c.owner, c.repo, number)
@@ -178,7 +181,7 @@ func (c *githubAPIClient) restoreIssueState(t *testing.T, number string) {
 		req.Header.Set("Authorization", "Bearer "+c.token)
 		req.Header.Set("Accept", "application/vnd.github+json")
 		req.Header.Set("X-GitHub-Api-Version", "2026-03-10")
-		resp, err := http.DefaultClient.Do(req)
+		resp, err := c.httpClient.Do(req)
 		if err == nil {
 			resp.Body.Close() //nolint:errcheck // cleanup helper
 		}
@@ -220,6 +223,9 @@ func TestGitHubIntegration_FullDispatchCycle(t *testing.T) {
 		"project":         os.Getenv("SORTIE_GITHUB_PROJECT"),
 		"active_states":   []string{"backlog", "in-progress", "review"},
 		"terminal_states": []string{"done", "wontfix"},
+		// Scope fetches to this test's issue only so concurrent test runs
+		// cannot dispatch one another's issues.
+		"query_filter": issueTitle + " in:title",
 	})
 	if err != nil {
 		t.Fatalf("NewGitHubAdapter: %v", err)
