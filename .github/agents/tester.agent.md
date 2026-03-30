@@ -59,7 +59,7 @@ At least one criterion must be met. Do not write useless tests. Your KPI is test
 | Tracker      | `internal/tracker/*/`    | Unit (httptest) + Integration (env-gated) | Response normalization, pagination, error categories              |
 | Agent        | `internal/agent/*/`      | Unit (fixtures) + Integration (env-gated) | Event parsing, token extraction, timeout handling                 |
 | Workspace    | `internal/workspace/`    | Unit + Integration (temp dirs)            | Path containment (**SECURITY**), symlink rejection, hook env vars |
-| Orchestrator | `internal/orchestrator/` | Unit (mock adapters)                      | Dispatch order, concurrency, reconciliation, retry scheduling     |
+| Orchestrator | `internal/orchestrator/` | Unit (mock adapters) + E2E (env-gated)    | Dispatch order, concurrency, reconciliation, retry scheduling, full dispatch cycle with real adapters |
 | Server       | `internal/server/`       | Unit (httptest)                           | JSON serialization, endpoint routing, error envelopes, 405 handling |
 | Prompt       | `internal/prompt/`       | Unit                                      | Template rendering, strict mode, FuncMap, error handling          |
 | Registry     | `internal/registry/`     | Unit                                      | Adapter registration, duplicate detection, lookup                 |
@@ -72,9 +72,21 @@ Integration tests requiring external services MUST be gated:
 
 - `SORTIE_JIRA_TEST=1` for Jira adapter integration tests
 - `SORTIE_GITHUB_TEST=1` for GitHub adapter integration tests
+- `SORTIE_GITHUB_E2E=1` for orchestrator-level E2E tests with real GitHub API + mock agent (also requires `SORTIE_GITHUB_TOKEN` and `SORTIE_GITHUB_PROJECT`)
 - `SORTIE_CLAUDE_TEST=1` for Claude Code adapter integration tests
 
 Without these vars, integration tests must **skip cleanly** — never fail.
+
+## E2E Test Guidelines
+
+E2E tests wire real tracker adapters + mock agent + real SQLite store + real workspace manager through the orchestrator. They validate the full dispatch cycle: poll -> candidate pickup -> workspace creation -> agent session -> tracker transition.
+
+Rules for E2E tests:
+- Create test fixtures (issues, labels) via direct API calls in test setup, clean up in `t.Cleanup`.
+- Use `context.WithTimeout` to bound total test duration (60s typical).
+- Use `t.TempDir()` for workspace root and SQLite database.
+- Construct adapters via `registry.Trackers.Get` / `registry.Agents.Get`, not by importing adapter packages directly (blank imports for init() registration are fine).
+- Test repo: `sortie-ai/sortie-test` (dedicated fixture repo with pre-created state labels).
 
 ## Constraints (CRITICAL)
 
