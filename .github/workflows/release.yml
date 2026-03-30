@@ -94,7 +94,7 @@ jobs:
 
   test-integration-jira:
     name: "Integration: Jira"
-    needs: [validate]
+    needs: [lint, test-unit]
     runs-on: ubuntu-latest
     env:
       SORTIE_JIRA_TEST: "1"
@@ -128,7 +128,7 @@ jobs:
 
   test-integration-github:
     name: "Integration: GitHub"
-    needs: [validate]
+    needs: [lint, test-unit]
     runs-on: ubuntu-latest
     env:
       SORTIE_GITHUB_TEST: "1"
@@ -160,7 +160,7 @@ jobs:
 
   test-e2e-github:
     name: "E2E: GitHub orchestrator"
-    needs: [validate]
+    needs: [lint, test-unit]
     runs-on: ubuntu-latest
     env:
       SORTIE_GITHUB_E2E: "1"
@@ -191,7 +191,7 @@ jobs:
 
   test-integration-claude:
     name: "Integration: Claude Code"
-    needs: [validate]
+    needs: [lint, test-unit]
     runs-on: ubuntu-latest
     env:
       SORTIE_CLAUDE_TEST: "1"
