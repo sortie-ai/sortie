@@ -23,29 +23,33 @@ Define your `WORKFLOW.md` in a single file alongside the target repository:
 ```markdown
 ---
 tracker:
-  kind: jira
-  project: PLATFORM
-  query_filter: "component = 'billing-api' AND labels = 'agent-ready'"
-  active_states: [To Do, In Progress]
-  handoff_state: Human Review
-  terminal_states: [Done, Won't Do]
+  kind: github
+  api_key: $GITHUB_TOKEN
+  project: acme/billing-api
+  query_filter: "label:agent-ready"
+  active_states: [todo, in-progress]
+  in_progress_state: in-progress
+  terminal_states: [done, wontfix]
 
 agent:
   kind: claude-code
+  max_turns: 10
+  max_sessions: 3
   max_concurrent_agents: 4
-  max_concurrent_agents_by_state:
-    in progress: 3
-    to do: 1
+
+workspace:
+  root: ~/workspace/billing-api
 
 hooks:
   after_create: |
-    git clone git@github.com:acme/billing-api.git .
-    go mod download
+    git clone --depth 1 git@github.com:acme/billing-api.git .
   before_run: |
+    git fetch origin main
     git checkout -B "sortie/$SORTIE_ISSUE_IDENTIFIER" origin/main
   after_run: |
     git add -A && git diff --cached --quiet || \
       git commit -m "sortie($SORTIE_ISSUE_IDENTIFIER): automated changes"
+    git push origin "sortie/$SORTIE_ISSUE_IDENTIFIER"
 ---
 
 You are a senior Go engineer working on the billing-api service.
@@ -54,17 +58,27 @@ You are a senior Go engineer working on the billing-api service.
 
 {{ .issue.description }}
 
+{{ if .run.is_continuation }}
+Resuming work — review workspace state before continuing.
+{{ end }}
 {{ if .attempt }}
-This is retry attempt {{ .attempt }}. Check the workspace for partial work
-from the previous run. Do not start from scratch.
+Retry attempt {{ .attempt }}. Check the workspace for partial work.
 {{ end }}
 ```
 
-Sortie watches this file, polls Jira for matching issues, creates an isolated
-workspace for each, and launches Claude Code with the rendered prompt. It handles
-the rest: stall detection, timeout enforcement, retries with backoff, state
-reconciliation with the tracker, and workspace cleanup when issues reach terminal
-states. Changes to the workflow are applied without restart.
+Set `GITHUB_TOKEN` to a fine-grained PAT with **Issues: Read and write** permission
+scoped to the target repository. States are mapped to GitHub labels — create labels
+matching your `active_states` and `terminal_states` before starting Sortie. The
+`query_filter` scopes polling to issues with a specific label so Sortie only picks up
+work you explicitly mark as ready. See the
+[GitHub adapter reference](https://docs.sortie-ai.com/reference/adapter-github/) for
+full configuration details.
+
+Sortie watches this file, polls for matching issues, creates an isolated workspace
+for each, and launches Claude Code with the rendered prompt. It handles the rest:
+stall detection, timeout enforcement, retries with backoff, state reconciliation
+with the tracker, and workspace cleanup when issues reach terminal states. Changes
+to the workflow are applied without restart.
 
 See [examples/WORKFLOW.md](examples/WORKFLOW.md?plain=1) for a complete example with
 all hooks, continuation guidance, and blocker handling.
@@ -80,7 +94,7 @@ distributed coordination. For full architectural details, see
 Issue trackers and coding agents are integrated through adapter interfaces. Adding support
 for a new tracker or agent is an additive change: implement the interface in a new package.
 
-The initial implementation targets Jira and Claude Code. See
+Supported trackers: GitHub Issues and Jira. Supported agents: Claude Code. See
 [docs/decisions/](docs/decisions/) for detailed rationale on technology choices.
 
 ## Documentation
