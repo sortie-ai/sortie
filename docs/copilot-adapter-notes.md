@@ -73,8 +73,7 @@ Copilot CLI authenticates against GitHub's Copilot API via a GitHub token.
 
 The CLI resolves authentication tokens in a precedence order with **fallback on failure**. The
 official documentation ([authenticate-copilot-cli][auth-ref]) states the order as
-`COPILOT_GITHUB_TOKEN`, `GH_TOKEN`, `GITHUB_TOKEN` (in order of precedence). DeepWiki's source
-code analysis suggests `GITHUB_TOKEN` may precede `GH_TOKEN` in the actual implementation.
+`COPILOT_GITHUB_TOKEN`, `GH_TOKEN`, `GITHUB_TOKEN` (in order of precedence).
 
 **Experimental observation (v1.0.13):** the CLI implements try-and-fallback, not exclusive
 selection. Setting `COPILOT_GITHUB_TOKEN` to an invalid token while `GH_TOKEN` or
@@ -90,10 +89,8 @@ different tokens.
 | 4        | OAuth keychain               | System keychain / credential store       | From interactive `/login` device flow.                              |
 | 5        | `gh` CLI fallback            | `gh auth token`                          | Uses the `gh` CLI's stored credential if available.                |
 
-> **Note:** The table follows the official documentation order (GH_TOKEN > GITHUB_TOKEN).
-> DeepWiki analysis of the source code suggests GITHUB_TOKEN > GH_TOKEN. For Sortie's adapter,
-> this distinction is immaterial: the adapter checks that **at least one** token source is
-> present, not which specific one the CLI will select.
+> **Note:** For Sortie's adapter, the precedence order is immaterial: the adapter checks
+> that **at least one** token source is present, not which specific one the CLI will select.
 
 [auth-ref]: https://docs.github.com/en/copilot/how-tos/copilot-cli/set-up-copilot-cli/authenticate-copilot-cli
 
@@ -104,7 +101,7 @@ different tokens.
 | OAuth token (device flow)     | `gho_`          | Created via interactive `/login`.                   |
 | Fine-grained PAT              | `github_pat_`   | Requires the "Copilot Requests" permission scope.   |
 | GitHub App user-to-server     | `ghu_`          | For GitHub App integrations.                         |
-| Classic PAT                   | `ghp_`          | **Not supported.** Will fail authentication.        |
+| Classic PAT                   | `ghp_`          | **Observed:** failed Copilot CLI authentication in v1.0.13 testing. No official docs confirm this; do not treat as a permanent constraint. |
 
 ### Config mapping
 
@@ -178,9 +175,9 @@ always set by the adapter; others are conditional.
 | `--excluded-tools <tools>`    | Remove specific tools from the available set.                                       | Optional. For selectively disabling tools.         |
 
 Tool names follow the CLI's tool vocabulary ([CLI command reference: tool availability][cli-ref]).
-Built-in tools include: `bash`, `view`, `edit`, `create`, `apply_patch`, `glob`, `grep`,
-`web_fetch`, `ask_user`, `task`, `report_intent`, `show_file`, `store_memory`,
-`task_complete`, `exit_plan_mode`.
+Built-in tools include: `bash`, `view`, `edit_file` (shown as `edit` in some CLI docs,
+backed by `apply_patch`), `create`, `apply_patch`, `glob`, `grep`, `web_fetch`, `ask_user`,
+`task`, `report_intent`, `show_file`, `store_memory`, `task_complete`, `exit_plan_mode`.
 
 ### Autopilot flags
 
@@ -208,10 +205,11 @@ Built-in tools include: `bash`, `view`, `edit`, `create`, `apply_patch`, `glob`,
 Per architecture Section 10.7, the adapter launches:
 
 ```
+# POSIX (Linux / macOS). On Windows, use cmd.exe /C or PowerShell equivalent.
 sh -c 'copilot -p "$1" --output-format json -s --allow-all --autopilot --no-ask-user --max-autopilot-continues "$2" ${3:+--resume "$3"}' -- "$prompt" "$max_continues" "$session_id"
 ```
 
-> **Shell safety:** The prompt MUST NOT be interpolated directly into the `sh -c` string. Pass
+> **Shell safety:** The prompt must not be interpolated directly into the `sh -c` string. Pass
 > it as a positional parameter (`$1`) to avoid injection via shell metacharacters in
 > user-controlled issue content.
 
@@ -248,14 +246,14 @@ process exit — contains `"sessionId": "<uuid>"`. This was confirmed in v1.0.13
 {"type":"result","timestamp":"...","sessionId":"aa778ea0-6eab-4ce9-b87e-11d6d33dab4f","exitCode":0,"usage":{...}}
 ```
 
-The adapter MUST parse the `result` event and store the `sessionId` for use in subsequent
+The adapter must parse the `result` event and store the `sessionId` for use in subsequent
 `--resume` invocations. Historical context: prior to JSONL support, the session ID was not
 programmatically discoverable ([github/copilot-cli#442](https://github.com/github/copilot-cli/issues/442)).
 
 > **Concurrency note for `max_concurrent_agents > 1`:** Since the `result` event contains the
 > session ID, the adapter has a reliable per-session ID source. The fallback strategy of
 > scanning `~/.copilot/session-state/` (mentioned in earlier research) is unreliable with
-> concurrent sessions and SHOULD NOT be used. If the `result` event is somehow missing (e.g.,
+> concurrent sessions and should not be used. If the `result` event is somehow missing (e.g.,
 > the process is killed before emitting it), the adapter can fall back to `--continue` which
 > resumes the most recent session in the workspace cwd — this is safe because Sortie uses
 > workspace-per-issue isolation.
@@ -342,7 +340,7 @@ The `result` event is an exception: it has no `data` or `id` fields and instead 
 > `tool.execution_start`, etc.) turn out to be the *same* vocabulary used by
 > `--output-format json`, not a separate format.
 
-> **Implementation note:** The adapter MUST still handle unknown event types gracefully by
+> **Implementation note:** The adapter must still handle unknown event types gracefully by
 > logging them as `other_message` events. Future CLI versions may add new event types.
 
 ### Determining session completion
@@ -354,7 +352,7 @@ Completion is signaled by two mechanisms:
    `sessionId`, and `usage` data.
 2. **Process exit code** — 0 for success, non-zero for failure.
 
-The adapter SHOULD use the `result` event as the primary completion signal (it contains richer
+The adapter should use the `result` event as the primary completion signal (it contains richer
 data) and fall back to process exit code if the `result` event is missing (e.g., process was
 killed).
 
@@ -526,10 +524,10 @@ limit prevents both runaway execution and excessive API cost.
 
 ### Context cancellation
 
-The adapter MUST respect `context.Context` cancellation:
+The adapter must respect `context.Context` cancellation:
 
 - `RunTurn` receives a context. If the context is cancelled (e.g., due to tracker reconciliation
-  finding the issue is terminal), the adapter MUST kill the subprocess promptly.
+  finding the issue is terminal), the adapter must kill the subprocess promptly.
 - Use `cmd.Process.Signal(syscall.SIGTERM)` followed by a grace period, then
   `cmd.Process.Kill()`.
 
@@ -543,7 +541,7 @@ Per architecture Section 10.4, Sortie adopts a high-trust posture:
 | ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Auto-approve all actions  | `--allow-all` / `--yolo` bypasses all permission prompts for tools, paths, and URLs.                                                                                                                    |
 | User input suppression    | `--no-ask-user` disables the `ask_user` tool ([`copilot --help`][cli-help-ref]). The agent makes decisions autonomously.                                                                                 |
-| Autopilot permissions     | When entering autopilot mode, if `--allow-all` is not set, the CLI prompts for permissions. In headless mode (`-p`), this prompt would stall. `--allow-all` MUST be used with `--autopilot`.            |
+| Autopilot permissions     | When entering autopilot mode, if `--allow-all` is not set, the CLI prompts for permissions. In headless mode (`-p`), this prompt would stall. `--allow-all` must be used with `--autopilot`.            |
 | Unsupported tool calls    | Copilot CLI handles tool routing internally. Unknown tools return failure and the session continues.                                                                                                      |
 
 ### Permission system details
@@ -587,7 +585,7 @@ is set.
 | Signal (SIGTERM/SIGKILL) | Killed by adapter or OS                  | `turn_cancelled`                                  |
 
 > **Gap:** Copilot CLI does not document specific exit codes for different failure modes (unlike
-> Claude Code which uses exit code 1 for general errors). The adapter SHOULD treat any non-zero
+> Claude Code which uses exit code 1 for general errors). The adapter should treat any non-zero
 > exit code as `turn_failed` and capture stderr for diagnostics.
 
 ### Authentication failures
@@ -627,7 +625,7 @@ From [github/copilot-cli issues](https://github.com/github/copilot-cli/issues):
   When running as a headless server, kqueue file descriptors leak and the bash tool stops
   working after prolonged use.
 - **Authentication failures without output** ([#2184](https://github.com/github/copilot-cli/issues/2184)):
-  CLI fails to start without any output when there is a login issue. The adapter SHOULD treat
+  CLI fails to start without any output when there is a login issue. The adapter should treat
   no output within `read_timeout_ms` as `response_timeout`.
 - **sessionStart hook fires after userPromptSubmitted** ([#2201](https://github.com/github/copilot-cli/issues/2201)):
   The `sessionStart` hook fires after `userPromptSubmitted`, not before. Provides real examples
@@ -656,7 +654,7 @@ Each session directory contains:
 This is relevant for:
 
 - **Continuation:** `--resume <session_id>` reads from this directory.
-- **Cleanup:** Sortie MAY want to clean up session state when removing workspaces.
+- **Cleanup:** Sortie may want to clean up session state when removing workspaces.
 - **Disk usage:** Long sessions with infinite context compaction accumulate checkpoint data.
 
 ### Infinite sessions and context compaction
@@ -775,12 +773,12 @@ Where `decision` is `"block"` (force another agent turn using `reason` as the pr
 
 Sortie does **not** manage Copilot CLI's hook system directly. These are workspace-level
 configurations that the coding agent or `after_create` workspace hook can set up. However,
-the adapter SHOULD be aware that:
+the adapter should be aware that:
 
 - Hooks can block tool calls (`preToolUse` returning `"deny"`).
 - Hooks can add latency to tool execution (timeout per hook up to 30s default).
 - The `agentStop` hook can prevent session completion if it returns `"block"`.
-- Hook-induced delays SHOULD be accounted for in timeout calculations.
+- Hook-induced delays should be accounted for in timeout calculations.
 
 ---
 
@@ -828,7 +826,7 @@ Lifecycle events recorded on active spans:
 | `github.copilot.session.compaction_complete`  | History compaction completed          |
 | `github.copilot.session.shutdown`            | Session shutting down                  |
 
-Sortie MAY enable OTel in the subprocess environment for external monitoring, but the adapter's
+Sortie may enable OTel in the subprocess environment for external monitoring, but the adapter's
 primary event source is the JSONL stdout output. OTel data is supplementary and useful for
 per-tool and per-request token breakdowns that JSONL may not provide.
 
@@ -923,7 +921,7 @@ ACP is an open standard for client-agent communication.
 
 > **Status:** The `--acp` flag exists but the official documentation provides no details on the
 > ACP protocol format, message types, or session management API for Copilot CLI. Sortie's
-> initial adapter SHOULD use the CLI subprocess model. ACP may be considered for a future
+> initial adapter should use the CLI subprocess model. ACP may be considered for a future
 > iteration once documentation matures.
 
 ### Starting an ACP server
@@ -1093,10 +1091,9 @@ Remaining items requiring further verification:
 - [ ] Session storage cleanup behavior when workspaces are removed.
 - [ ] ACP protocol details (`--acp`): transport mechanism, message format, session management.
 - [ ] Token resolution order when all sources have valid but different tokens (GH_TOKEN vs
-  GITHUB_TOKEN precedence — official docs and DeepWiki disagree, but the CLI falls back on
-  failure so the practical impact is minimal).
+  GITHUB_TOKEN precedence — the CLI falls back on failure so the practical impact is minimal).
 
-[cli-help-ref]: # "copilot --help output, v1.0.13"
+[cli-help-ref]: https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-command-reference "GitHub Copilot CLI command reference (includes flags such as --no-ask-user)"
 
 ---
 
