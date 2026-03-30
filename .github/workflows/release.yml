@@ -158,6 +158,38 @@ jobs:
       - name: Run integration tests
         run: go test -race -count=1 -v -run 'Integration' ./internal/tracker/github/...
 
+  test-e2e-github:
+    name: "E2E: GitHub orchestrator"
+    needs: [validate]
+    runs-on: ubuntu-latest
+    env:
+      SORTIE_GITHUB_E2E: "1"
+      SORTIE_GITHUB_TOKEN: ${{ secrets.SORTIE_GITHUB_TOKEN }}
+      SORTIE_GITHUB_PROJECT: sortie-ai/sortie-test
+    steps:
+      - name: Verify GitHub secrets are configured
+        run: |
+          missing=()
+          [ -z "$SORTIE_GITHUB_TOKEN" ]   && missing+=("SORTIE_GITHUB_TOKEN")
+          [ -z "$SORTIE_GITHUB_PROJECT" ] && missing+=("SORTIE_GITHUB_PROJECT")
+          if [ ${#missing[@]} -ne 0 ]; then
+            echo "::error::Missing required secrets: ${missing[*]}"
+            echo "Configure these in Settings → Secrets and variables → Actions"
+            exit 1
+          fi
+          echo "✓ All GitHub E2E secrets are present"
+
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Set up Go
+        uses: actions/setup-go@4b73464bb391d4059bd26b0524d20df3927bd417 # v6.3.0
+        with:
+          go-version-file: go.mod
+
+      - name: Run E2E tests
+        run: go test -race -count=1 -v -timeout 120s -run 'TestGitHubIntegration' ./internal/orchestrator/...
+
   test-integration-claude:
     name: "Integration: Claude Code"
     needs: [validate]
@@ -203,6 +235,7 @@ jobs:
       - test-unit
       - test-integration-jira
       - test-integration-github
+      - test-e2e-github
       - test-integration-claude
     runs-on: ubuntu-latest
     steps:
