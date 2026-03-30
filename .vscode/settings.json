@@ -4,76 +4,7 @@
     "**/CODEOWNERS": "plaintext"
   },
 
-  // ── Agent Configuration ────────────────────────────────────────────────────
-  // Enable the use of AGENTS.md file for agent configuration including nested agents.
-  // See: https://agents.md
-  "chat.useAgentsMdFile": true,
-  "chat.useClaudeMdFile": false,
-
-  // Note: As of 13 January 2026 this feature is in Experimental stage.
-  "chat.useNestedAgentsMdFiles": true,
-
-  // Increase the maximum number of requests an agent can make in a single session.
-  // Default is usually 25.
-  "chat.agent.maxRequests": 250,
-
-  // ── Agent Skills ───────────────────────────────────────────────────────────
-  // Enable the use of agent skills: https://agentskills.io
-  // Note: As of 13 January 2026 this feature is in Experimental stage.
-  "chat.useAgentSkills": true,
-  "chat.experimental.useSkillAdherencePrompt": true,
-
-  "chat.agentSkillsLocations": {
-    ".claude/skills": false,
-    "~/.claude/skills": false,
-    ".github/skills": true,
-    ".agents/skills": false,
-    "~/.copilot/skills": true,
-    "~/.agents/skills": false
-  },
-
-  // ── Agent File Locations ───────────────────────────────────────────────────
-  "chat.instructionsFilesLocations": {
-    "~/.claude/rules": false,
-    ".claude/rules": false,
-    ".github/instructions": true,
-    "~/.copilot/instructions": true
-  },
-
-  "chat.hookFilesLocations": {
-    "~/.claude/settings.json": false,
-    ".claude/settings.json": false,
-    ".claude/settings.local.json": false,
-    ".github/hooks": true,
-    "~/.copilot/hooks": true
-  },
-
-  "chat.agentFilesLocations": {
-    ".claude/agents": false,
-    "~/.claude/agents": false,
-    ".github/agents": true,
-    "~/.copilot/agents": true
-  },
-
-  // ── Agent Terminal ─────────────────────────────────────────────────────────
-  // Setting PAGER to "cat" to avoid interactive pager blocking output in terminal
-  // when agent runs commands like `gh pr view`.
-  "chat.tools.terminal.terminalProfile.linux": {
-    "path": "/bin/bash",
-    "args": ["-l"],
-    "env": {
-      "GH_PAGER": "cat",
-      "GIT_PAGER": "cat",
-      "MANPAGER": "cat",
-      "PAGER": "cat"
-    }
-  },
-
-  // ── Copilot Instructions ───────────────────────────────────────────────────
-  // Use instruction files for code generation requests.
-  // See: https://code.visualstudio.com/docs/copilot/customization/custom-instructions
-  "github.copilot.chat.codeGeneration.useInstructionFiles": true,
-
+  // ── GitHub Copilot Custom Instructions ─────────────────────────────────────
   // Custom instruction files for code review for the current selection.
   // See: https://code.visualstudio.com/docs/copilot/customization/custom-instructions
   // Note: As of 13 January 2026 this feature is in Preview stage.
@@ -94,31 +25,6 @@
   "github.copilot.chat.pullRequestDescriptionGeneration.instructions": [
     { "file": ".github/skills/creating-pr/SKILL.md" }
   ],
-
-  // ── Copilot Suggestions ────────────────────────────────────────────────────
-  // Enable or disable inline suggestions for specified languages.
-  "github.copilot.enable": {
-    "*": true,
-    "plaintext": false,
-    "markdown": true,
-    "scminput": false
-  },
-
-  // Enables next edit suggestions.
-  // See: https://code.visualstudio.com/docs/copilot/ai-powered-suggestions#_next-edit-suggestions
-  "github.copilot.nextEditSuggestions.enabled": true,
-
-  // ── Copilot Debug Logging ──────────────────────────────────────────────────
-  // Enable detailed logging for agent execution to help with debugging and development.
-  // See: https://code.visualstudio.com/docs/copilot/chat/chat-debug-view
-  "github.copilot.chat.agentDebugLog.enabled": true,
-  "github.copilot.chat.agentDebugLog.fileLogging.enabled": true,
-
-  // ── Search ─────────────────────────────────────────────────────────────────
-  // Let Copilot guess what you are looking for in search.
-  // This will enable semantic search when appropriate.
-  // Note: As of 13 January 2026 this feature is in Preview stage.
-  "search.searchView.semanticSearchBehavior": "auto",
 
   // ── Editor ─────────────────────────────────────────────────────────────────
   // Set a ruler at 100 characters to help maintain line length.
