@@ -185,9 +185,38 @@ main() {
             ;;
     esac
 
+    printf '\n'
+
+    _utf8=false
+    case "${LC_ALL:-${LC_CTYPE:-${LANG:-}}}" in
+        *[Uu][Tt][Ff]8*|*[Uu][Tt][Ff]-8*) _utf8=true ;;
+    esac
+
+    # Skip decorative art in CI pipelines and non-interactive terminals.
+    printf '\n'
+    if [ -z "${CI-}" ] && [ -t 1 ] && [ "${TERM-}" != "dumb" ]; then
+        if [ "$_utf8" = "true" ]; then
+            printf '\033[36m    █████████                      █████     ███\n'
+            printf '   ███░░░░░███                    ░░███     ░░░\n'
+            printf '  ░███    ░░░   ██████  ████████  ███████   ████   ██████\n'
+            printf '  ░░█████████  ███░░███░░███░░███░░░███░   ░░███  ███░░███\n'
+            printf '   ░░░░░░░░███░███ ░███ ░███ ░░░   ░███     ░███ ░███████\n'
+            printf '   ███    ░███░███ ░███ ░███       ░███ ███ ░███ ░███░░░\n'
+            printf '  ░░█████████ ░░██████  █████      ░░█████  █████░░██████\n'
+            printf '   ░░░░░░░░░   ░░░░░░  ░░░░░        ░░░░░  ░░░░░  ░░░░░░\033[0m\n'
+        else
+            printf '  Sortie\n'
+        fi
+    fi
+
     printf '\n  %bDocs:%b       https://docs.sortie-ai.com\n' "${DIM}" "${RESET}"
-    printf '  %bChangelog:%b  https://docs.sortie-ai.com/changelog/#%s\n' "${DIM}" "${RESET}" "$_tag"
-    printf '\n  Happy hacking! %b♠%b\n\n' "${CYAN}" "${RESET}"
+    printf '  %bChangelog:%b  https://docs.sortie-ai.com/changelog/#%s\n' "${DIM}" "${RESET}" "$_version"
+    printf '  %bGitHub:%b     https://github.com/%s\n' "${DIM}" "${RESET}" "$REPO"
+    if [ "$_utf8" = "true" ]; then
+        printf '\n  Happy hacking! %b♠%b\n\n' "${CYAN}" "${RESET}"
+    else
+        printf '\n  Happy hacking!\n\n'
+    fi
 }
 
 main "$@"
