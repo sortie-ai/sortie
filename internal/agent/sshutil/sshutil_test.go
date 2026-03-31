@@ -84,15 +84,15 @@ func TestBuildSSHArgs(t *testing.T) {
 			},
 		},
 		{
-			name:      "custom StrictHostKeyChecking reject",
+			name:      "custom StrictHostKeyChecking overrides default",
 			host:      "dev.host",
 			workspace: "/workspace",
 			cmd:       "copilot",
-			opts:      SSHOptions{StrictHostKeyChecking: "reject"},
+			opts:      SSHOptions{StrictHostKeyChecking: "yes"},
 			check: func(t *testing.T, args []string) {
 				t.Helper()
-				if !sshOption(args, "StrictHostKeyChecking", "reject") {
-					t.Errorf("BuildSSHArgs() args = %v: missing StrictHostKeyChecking=reject", args)
+				if !sshOption(args, "StrictHostKeyChecking", "yes") {
+					t.Errorf("BuildSSHArgs() args = %v: missing StrictHostKeyChecking=yes", args)
 				}
 				if sshOption(args, "StrictHostKeyChecking", "accept-new") {
 					t.Errorf("BuildSSHArgs() args = %v: unexpected StrictHostKeyChecking=accept-new", args)
