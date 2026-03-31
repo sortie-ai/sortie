@@ -2424,6 +2424,10 @@ If the file is absent or contains an unrecognized value, it is ignored.
 The `.sortie/status` file is not required for any core orchestration behavior. It is an advisory
 channel only.
 
+The full protocol specification — including file format, parsing rules, read timing, cleanup
+obligations, versioning, security considerations, and design rationale — is in
+[agent-to-orchestrator-protocol.md](agent-to-orchestrator-protocol.md).
+
 ## Appendix A. SSH Worker Extension (Optional)
 
 This appendix describes a common extension profile in which Sortie keeps one central orchestrator
