@@ -72,6 +72,10 @@ type sessionState struct {
 	// Empty for local mode.
 	remoteCommand string
 
+	// sshStrictHostKeyChecking is the OpenSSH StrictHostKeyChecking
+	// value. Empty means accept-new.
+	sshStrictHostKeyChecking string
+
 	// fallbackToContinue is set when a turn completes without a
 	// result event containing a sessionId. On the next turn,
 	// buildArgs uses --continue instead of --resume.
@@ -191,12 +195,13 @@ func (a *CopilotAdapter) StartSession(ctx context.Context, params domain.StartSe
 	}
 
 	state := &sessionState{
-		workspacePath:    absPath,
-		command:          resolvedPath,
-		copilotSessionID: copilotSessionID,
-		agentConfig:      params.AgentConfig,
-		sshHost:          sshHost,
-		remoteCommand:    remoteCommand,
+		workspacePath:            absPath,
+		command:                  resolvedPath,
+		copilotSessionID:         copilotSessionID,
+		agentConfig:              params.AgentConfig,
+		sshHost:                  sshHost,
+		remoteCommand:            remoteCommand,
+		sshStrictHostKeyChecking: params.SSHStrictHostKeyChecking,
 	}
 
 	return domain.Session{
@@ -259,7 +264,9 @@ func (a *CopilotAdapter) RunTurn(ctx context.Context, session domain.Session, pa
 
 	var cmd *exec.Cmd
 	if state.sshHost != "" {
-		sshArgs := sshutil.BuildSSHArgs(state.sshHost, state.workspacePath, state.remoteCommand, args, sshutil.SSHOptions{})
+		sshArgs := sshutil.BuildSSHArgs(state.sshHost, state.workspacePath, state.remoteCommand, args, sshutil.SSHOptions{
+			StrictHostKeyChecking: state.sshStrictHostKeyChecking,
+		})
 		cmd = exec.CommandContext(cmdCtx, state.command, sshArgs...) //nolint:gosec // args are constructed programmatically with shell quoting
 	} else {
 		cmd = exec.CommandContext(cmdCtx, state.command, args...) //nolint:gosec // args are constructed programmatically

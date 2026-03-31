@@ -215,6 +215,11 @@ type StartSessionParams struct {
 	// via SSH instead of as a local subprocess. When empty, existing
 	// local behavior is unchanged.
 	SSHHost string
+
+	// SSHStrictHostKeyChecking is the OpenSSH StrictHostKeyChecking
+	// value for remote sessions. When empty, adapters default to
+	// "accept-new". Only meaningful when SSHHost is non-empty.
+	SSHStrictHostKeyChecking string
 }
 
 // RunTurnParams contains the inputs for [AgentAdapter.RunTurn].

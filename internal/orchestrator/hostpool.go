@@ -1,5 +1,10 @@
 package orchestrator
 
+import (
+	"log/slog"
+	"strings"
+)
+
 // HostPool manages SSH host allocation for dispatch. Not safe for
 // concurrent access — all methods must be called from the event loop.
 type HostPool struct {
@@ -199,20 +204,37 @@ func deduplicateHosts(hosts []string) []string {
 	return result
 }
 
-// ParseWorkerConfig extracts SSH-related config from the Extensions map.
-// Returns (hosts, maxPerHost). When the worker key is absent or
-// ssh_hosts is empty, returns (nil, 0) — local mode.
-func ParseWorkerConfig(extensions map[string]any) ([]string, int) {
+// WorkerConfig holds parsed worker extension configuration.
+type WorkerConfig struct {
+	// SSHHosts is the list of SSH host strings for remote dispatch.
+	// Nil or empty means local mode.
+	SSHHosts []string
+
+	// MaxPerHost is the per-host concurrency cap. Zero means unlimited.
+	MaxPerHost int
+
+	// SSHStrictHostKeyChecking is the OpenSSH StrictHostKeyChecking
+	// value used when building SSH arguments for agent adapters.
+	// Valid values: "accept-new", "yes", "no". Empty means "accept-new".
+	SSHStrictHostKeyChecking string
+}
+
+// ParseWorkerConfig parses worker extension configuration from the
+// Extensions map. Returns a [WorkerConfig] with SSH host list,
+// per-host concurrency cap, and SSH StrictHostKeyChecking behavior.
+// When the worker key is absent or malformed, returns zero-value
+// defaults (local mode).
+func ParseWorkerConfig(extensions map[string]any) WorkerConfig {
 	if extensions == nil {
-		return nil, 0
+		return WorkerConfig{}
 	}
 	workerRaw, ok := extensions["worker"]
 	if !ok {
-		return nil, 0
+		return WorkerConfig{}
 	}
 	workerMap, ok := workerRaw.(map[string]any)
 	if !ok {
-		return nil, 0
+		return WorkerConfig{}
 	}
 
 	var hosts []string
@@ -240,6 +262,43 @@ func ParseWorkerConfig(extensions map[string]any) ([]string, int) {
 		}
 	}
 
+	strictHostKeyChecking := parseSSHStrictHostKeyChecking(workerMap)
+
 	hosts = deduplicateHosts(hosts)
-	return hosts, maxPerHost
+	return WorkerConfig{
+		SSHHosts:                 hosts,
+		MaxPerHost:               maxPerHost,
+		SSHStrictHostKeyChecking: strictHostKeyChecking,
+	}
+}
+
+// parseSSHStrictHostKeyChecking extracts and validates the
+// ssh_strict_host_key_checking value from the worker extension map.
+// Returns one of "accept-new", "yes", "no", or empty string (meaning
+// the caller should use the default "accept-new" behavior).
+func parseSSHStrictHostKeyChecking(workerMap map[string]any) string {
+	raw, ok := workerMap["ssh_strict_host_key_checking"]
+	if !ok {
+		return ""
+	}
+
+	s, ok := raw.(string)
+	if !ok {
+		slog.Warn("ssh_strict_host_key_checking must be a string, using default",
+			slog.String("default", "accept-new"),
+		)
+		return ""
+	}
+
+	normalized := strings.ToLower(strings.TrimSpace(s))
+	switch normalized {
+	case "accept-new", "yes", "no":
+		return normalized
+	default:
+		slog.Warn("invalid ssh_strict_host_key_checking value, using default",
+			slog.String("value", s),
+			slog.String("default", "accept-new"),
+		)
+		return ""
+	}
 }

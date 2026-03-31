@@ -640,8 +640,8 @@ func runDryRun(ctx context.Context, cfg config.ServiceConfig, logger *slog.Logge
 		orchestrator.AgentTotals{},
 	)
 
-	sshHosts, maxPerHost := orchestrator.ParseWorkerConfig(cfg.Extensions)
-	hostPool := orchestrator.NewHostPool(sshHosts, maxPerHost)
+	wc := orchestrator.ParseWorkerConfig(cfg.Extensions)
+	hostPool := orchestrator.NewHostPool(wc.SSHHosts, wc.MaxPerHost)
 
 	activeSet := dryRunStateSet(cfg.Tracker.ActiveStates)
 	terminalSet := dryRunStateSet(cfg.Tracker.TerminalStates)

@@ -127,6 +127,10 @@ type WorkerDeps struct {
 	// to a remote host.
 	SSHHost string
 
+	// SSHStrictHostKeyChecking is the OpenSSH StrictHostKeyChecking
+	// value for this worker's agent sessions. Empty means "accept-new".
+	SSHStrictHostKeyChecking string
+
 	// Metrics records dispatch-time instrumentation counters.
 	// Always non-nil: NewOrchestrator falls back to NoopMetrics
 	// before wiring WorkerDeps via makeWorkerFn.
@@ -377,10 +381,11 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 
 	// Phase 2: Agent Session Start.
 	session, err = deps.AgentAdapter.StartSession(ctx, domain.StartSessionParams{
-		WorkspacePath:   wsResult.Path,
-		AgentConfig:     toDomainAgentConfig(cfg.Agent),
-		ResumeSessionID: deps.ResumeSessionID,
-		SSHHost:         deps.SSHHost,
+		WorkspacePath:            wsResult.Path,
+		AgentConfig:              toDomainAgentConfig(cfg.Agent),
+		ResumeSessionID:          deps.ResumeSessionID,
+		SSHHost:                  deps.SSHHost,
+		SSHStrictHostKeyChecking: deps.SSHStrictHostKeyChecking,
 	})
 	if err != nil {
 		finishWorkspace()

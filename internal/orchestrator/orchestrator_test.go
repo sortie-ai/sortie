@@ -722,6 +722,60 @@ func TestMakeWorkerFn(t *testing.T) {
 			t.Errorf("ResumeSessionID = %q, want %q", capturedResumeID, "resume-sess-42")
 		}
 	})
+
+	t.Run("SSHStrictHostKeyChecking propagated to StartSessionParams", func(t *testing.T) {
+		t.Parallel()
+
+		state := NewState(1000, 5, nil, AgentTotals{})
+		tmpDir := t.TempDir()
+		cfg := defaultWorkerConfig(tmpDir)
+		tmpl := mustParseTemplate(t, "do {{ .issue.identifier }}")
+
+		var capturedStrictHostKeyChecking string
+		agent := &mockAgentAdapter{
+			startSessionFn: func(_ context.Context, params domain.StartSessionParams) (domain.Session, error) {
+				capturedStrictHostKeyChecking = params.SSHStrictHostKeyChecking
+				return domain.Session{ID: "new-sess"}, nil
+			},
+		}
+
+		wm := &stubWorkflowManager{config: cfg, template: tmpl}
+
+		o := NewOrchestrator(OrchestratorParams{
+			State:           state,
+			Logger:          discardLogger(),
+			TrackerAdapter:  &mockTrackerAdapter{},
+			AgentAdapter:    agent,
+			WorkflowManager: wm,
+			Store:           &stubStore{},
+		})
+
+		o.sshStrictHostKeyChecking = "yes"
+
+		issue := workerTestIssue()
+		state.Running[issue.ID] = &RunningEntry{
+			Identifier: issue.Identifier,
+			Issue:      issue,
+		}
+
+		wfn := o.makeWorkerFn("", "")
+
+		exitDone := make(chan struct{})
+		go func() {
+			wfn(context.Background(), issue, nil)
+			close(exitDone)
+		}()
+
+		select {
+		case <-exitDone:
+		case <-time.After(10 * time.Second):
+			t.Fatal("worker did not exit within 10 seconds")
+		}
+
+		if capturedStrictHostKeyChecking != "yes" {
+			t.Errorf("StartSessionParams.SSHStrictHostKeyChecking = %q, want %q", capturedStrictHostKeyChecking, "yes")
+		}
+	})
 }
 
 // --- TestOnRetryFire ---

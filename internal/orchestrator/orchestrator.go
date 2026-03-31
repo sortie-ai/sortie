@@ -106,6 +106,11 @@ type Orchestrator struct {
 	draining         atomic.Bool
 	hostPool         *HostPool
 	workflowFileFunc func() string
+
+	// sshStrictHostKeyChecking is the current effective OpenSSH
+	// StrictHostKeyChecking value. Written by applyConfig on every
+	// tick/reload; read by makeWorkerFn at dispatch time.
+	sshStrictHostKeyChecking string
 }
 
 // NewOrchestrator creates an [Orchestrator] with all dependencies wired.
@@ -313,8 +318,9 @@ func (o *Orchestrator) handleTick(ctx context.Context) {
 	o.state.MaxConcurrentByState = cfg.Agent.MaxConcurrentByState
 
 	// Step 3b: update host pool from config extensions.
-	sshHosts, maxPerHost := ParseWorkerConfig(cfg.Extensions)
-	o.hostPool.Update(sshHosts, maxPerHost)
+	wc := ParseWorkerConfig(cfg.Extensions)
+	o.hostPool.Update(wc.SSHHosts, wc.MaxPerHost)
+	o.sshStrictHostKeyChecking = wc.SSHStrictHostKeyChecking
 
 	// Step 4: reconcile running issues with fresh config. Runs
 	// unconditionally so in-flight workers are monitored even when
@@ -407,6 +413,7 @@ func (o *Orchestrator) handleTick(ctx context.Context) {
 // event loop goroutine) before the goroutine starts, to avoid a
 // data race on the Running map.
 func (o *Orchestrator) makeWorkerFn(resumeSessionID string, sshHost string) WorkerFunc {
+	strictHostKeyChecking := o.sshStrictHostKeyChecking
 	return func(ctx context.Context, issue domain.Issue, attempt *int) {
 
 		logger := logging.WithIssue(o.logger, issue.ID, issue.Identifier)
@@ -428,11 +435,12 @@ func (o *Orchestrator) makeWorkerFn(resumeSessionID string, sshHost string) Work
 			OnExit: func(issueID string, result WorkerResult) {
 				o.workerExitCh <- result
 			},
-			ResumeSessionID: resumeSessionID,
-			Logger:          logger,
-			ToolRegistry:    o.toolRegistry,
-			SSHHost:         sshHost,
-			Metrics:         o.metrics,
+			ResumeSessionID:          resumeSessionID,
+			Logger:                   logger,
+			ToolRegistry:             o.toolRegistry,
+			SSHHost:                  sshHost,
+			SSHStrictHostKeyChecking: strictHostKeyChecking,
+			Metrics:                  o.metrics,
 		}
 
 		RunWorkerAttempt(ctx, issue, attempt, deps)

@@ -255,10 +255,11 @@ func TestParseWorkerConfig(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name           string
-		extensions     map[string]any
-		wantHosts      []string
-		wantMaxPerHost int
+		name                      string
+		extensions                map[string]any
+		wantHosts                 []string
+		wantMaxPerHost            int
+		wantSSHStrictHostKeyCheck string
 	}{
 		{
 			name:       "nil extensions",
@@ -320,24 +321,90 @@ func TestParseWorkerConfig(t *testing.T) {
 			},
 			wantHosts: []string{"host-a"},
 		},
+		// ssh_strict_host_key_checking cases
+		{
+			name: "absent ssh_strict_host_key_checking",
+			extensions: map[string]any{
+				"worker": map[string]any{"ssh_hosts": []any{"host-a"}},
+			},
+			wantHosts:                 []string{"host-a"},
+			wantSSHStrictHostKeyCheck: "",
+		},
+		{
+			name: "valid accept-new",
+			extensions: map[string]any{
+				"worker": map[string]any{
+					"ssh_strict_host_key_checking": "accept-new",
+				},
+			},
+			wantSSHStrictHostKeyCheck: "accept-new",
+		},
+		{
+			name: "valid yes",
+			extensions: map[string]any{
+				"worker": map[string]any{
+					"ssh_strict_host_key_checking": "yes",
+				},
+			},
+			wantSSHStrictHostKeyCheck: "yes",
+		},
+		{
+			name: "valid no",
+			extensions: map[string]any{
+				"worker": map[string]any{
+					"ssh_strict_host_key_checking": "no",
+				},
+			},
+			wantSSHStrictHostKeyCheck: "no",
+		},
+		{
+			name: "uppercase YES normalized to yes",
+			extensions: map[string]any{
+				"worker": map[string]any{
+					"ssh_strict_host_key_checking": "YES",
+				},
+			},
+			wantSSHStrictHostKeyCheck: "yes",
+		},
+		{
+			name: "invalid string falls back to empty",
+			extensions: map[string]any{
+				"worker": map[string]any{
+					"ssh_strict_host_key_checking": "ask",
+				},
+			},
+			wantSSHStrictHostKeyCheck: "",
+		},
+		{
+			name: "wrong type integer falls back to empty",
+			extensions: map[string]any{
+				"worker": map[string]any{
+					"ssh_strict_host_key_checking": 42,
+				},
+			},
+			wantSSHStrictHostKeyCheck: "",
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			hosts, maxPerHost := ParseWorkerConfig(tt.extensions)
+			wc := ParseWorkerConfig(tt.extensions)
 
-			if len(hosts) != len(tt.wantHosts) {
-				t.Fatalf("ParseWorkerConfig() hosts = %v, want %v", hosts, tt.wantHosts)
+			if len(wc.SSHHosts) != len(tt.wantHosts) {
+				t.Fatalf("ParseWorkerConfig() SSHHosts = %v, want %v", wc.SSHHosts, tt.wantHosts)
 			}
-			for i := range hosts {
-				if hosts[i] != tt.wantHosts[i] {
-					t.Errorf("hosts[%d] = %q, want %q", i, hosts[i], tt.wantHosts[i])
+			for i := range wc.SSHHosts {
+				if wc.SSHHosts[i] != tt.wantHosts[i] {
+					t.Errorf("SSHHosts[%d] = %q, want %q", i, wc.SSHHosts[i], tt.wantHosts[i])
 				}
 			}
-			if maxPerHost != tt.wantMaxPerHost {
-				t.Errorf("ParseWorkerConfig() maxPerHost = %d, want %d", maxPerHost, tt.wantMaxPerHost)
+			if wc.MaxPerHost != tt.wantMaxPerHost {
+				t.Errorf("ParseWorkerConfig() MaxPerHost = %d, want %d", wc.MaxPerHost, tt.wantMaxPerHost)
+			}
+			if wc.SSHStrictHostKeyChecking != tt.wantSSHStrictHostKeyCheck {
+				t.Errorf("ParseWorkerConfig() SSHStrictHostKeyChecking = %q, want %q", wc.SSHStrictHostKeyChecking, tt.wantSSHStrictHostKeyCheck)
 			}
 		})
 	}

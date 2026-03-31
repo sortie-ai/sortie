@@ -1495,6 +1495,40 @@ func TestRunWorkerAttempt(t *testing.T) {
 			t.Errorf("prompt should not contain tool advertisement with empty ToolRegistry:\n%s", p)
 		}
 	})
+
+	t.Run("SSHStrictHostKeyChecking propagated to StartSessionParams", func(t *testing.T) {
+		t.Parallel()
+
+		tmpDir := t.TempDir()
+		cfg := defaultWorkerConfig(tmpDir)
+
+		var capturedSSHStrictHostKeyChecking string
+		ec := newExitCapture()
+
+		deps := WorkerDeps{
+			TrackerAdapter: &mockTrackerAdapter{},
+			AgentAdapter: &mockAgentAdapter{
+				startSessionFn: func(_ context.Context, params domain.StartSessionParams) (domain.Session, error) {
+					capturedSSHStrictHostKeyChecking = params.SSHStrictHostKeyChecking
+					return domain.Session{ID: "sess-1"}, nil
+				},
+			},
+			ConfigFunc:               func() config.ServiceConfig { return cfg },
+			PromptTemplateFunc:       func() *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
+			OnEvent:                  func(_ string, _ domain.AgentEvent) {},
+			OnExit:                   ec.onExit,
+			Logger:                   discardLogger(),
+			SSHStrictHostKeyChecking: "yes",
+		}
+
+		RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
+
+		ec.waitResult(t)
+
+		if capturedSSHStrictHostKeyChecking != "yes" {
+			t.Errorf("StartSessionParams.SSHStrictHostKeyChecking = %q, want %q", capturedSSHStrictHostKeyChecking, "yes")
+		}
+	})
 }
 
 // --- stopSessionBestEffort unit tests ---

@@ -942,6 +942,7 @@ worker:
     - build01.internal
     - build02.internal
   max_concurrent_agents_per_host: 2
+  ssh_strict_host_key_checking: accept-new
 ```
 
 When `worker.ssh_hosts` is configured, Sortie dispatches agent runs to remote
@@ -957,6 +958,7 @@ host where Sortie is started (the default behavior).
 | --------------------------------------- | ---------------- | -------- | ------------------------------ | ------------------------------------------------------------------------------------------- |
 | `worker.ssh_hosts`                      | list of strings  | No       | _(absent — work runs locally)_ | SSH host targets for remote agent execution.                                                |
 | `worker.max_concurrent_agents_per_host` | positive integer | No       | _(absent)_                     | Per-host concurrency cap shared across configured SSH hosts. Hosts at capacity are skipped. |
+| `worker.ssh_strict_host_key_checking`   | string           | No       | `accept-new`                   | OpenSSH `StrictHostKeyChecking` value: `accept-new`, `yes`, or `no`.                       |
 
 #### SSH Hook Environment
 
@@ -989,6 +991,10 @@ ssh "$SORTIE_SSH_HOST" "rm -rf \"$SORTIE_WORKSPACE\""
   agent should terminate on stdin EOF or SIGHUP.
 - **SSH options:** Sortie sets `ServerAliveInterval=15`,
   `ServerAliveCountMax=3`, and `StrictHostKeyChecking=accept-new` by default.
+  The `StrictHostKeyChecking` value is configurable via
+  `worker.ssh_strict_host_key_checking`. Set to `yes` when `known_hosts` is
+  pre-populated by configuration management; set to `no` only in isolated
+  test environments. Invalid values fall back to `accept-new` with a warning.
   Operators should ensure SSH key-based authentication is configured for all
   target hosts.
 
@@ -1019,6 +1025,7 @@ worker:
     - build02.internal
     - build03.internal
   max_concurrent_agents_per_host: 2
+  ssh_strict_host_key_checking: accept-new
 
 hooks:
   after_create: |
@@ -1607,6 +1614,7 @@ lists the `SORTIE_*` variable that overrides the field, or "—" if not overrida
 | `logging.level`                         | string           | `info`                       | —                                        | CLI `--log-level` overrides                                                            |
 | `worker.ssh_hosts`                      | `[string]`       | _(absent)_                   | —                                        | SSH host targets; dynamic reload                                                       |
 | `worker.max_concurrent_agents_per_host` | integer          | _(absent)_                   | —                                        | Per-host cap; dynamic reload                                                           |
+| `worker.ssh_strict_host_key_checking`   | string           | `accept-new`                 | —                                        | `accept-new`, `yes`, `no`; dynamic reload                                              |
 
 ---
 

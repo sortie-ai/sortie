@@ -79,6 +79,10 @@ type sessionState struct {
 	// command field holds the resolved path to the ssh binary.
 	remoteCommand string
 
+	// sshStrictHostKeyChecking is the OpenSSH StrictHostKeyChecking
+	// value. Empty means accept-new.
+	sshStrictHostKeyChecking string
+
 	// mu guards proc and waitCh for concurrent access from
 	// StopSession and the cmd.Cancel callback.
 	mu     sync.Mutex
@@ -175,13 +179,14 @@ func (a *ClaudeCodeAdapter) StartSession(_ context.Context, params domain.StartS
 	}
 
 	state := &sessionState{
-		workspacePath:   absPath,
-		command:         resolvedPath,
-		claudeSessionID: sessionUUID,
-		isContinuation:  isContinuation,
-		agentConfig:     params.AgentConfig,
-		sshHost:         sshHost,
-		remoteCommand:   remoteCommand,
+		workspacePath:            absPath,
+		command:                  resolvedPath,
+		claudeSessionID:          sessionUUID,
+		isContinuation:           isContinuation,
+		agentConfig:              params.AgentConfig,
+		sshHost:                  sshHost,
+		remoteCommand:            remoteCommand,
+		sshStrictHostKeyChecking: params.SSHStrictHostKeyChecking,
 	}
 
 	return domain.Session{
@@ -214,7 +219,9 @@ func (a *ClaudeCodeAdapter) RunTurn(ctx context.Context, session domain.Session,
 
 	var cmd *exec.Cmd
 	if state.sshHost != "" {
-		sshArgs := sshutil.BuildSSHArgs(state.sshHost, state.workspacePath, state.remoteCommand, args, sshutil.SSHOptions{})
+		sshArgs := sshutil.BuildSSHArgs(state.sshHost, state.workspacePath, state.remoteCommand, args, sshutil.SSHOptions{
+			StrictHostKeyChecking: state.sshStrictHostKeyChecking,
+		})
 		cmd = exec.CommandContext(cmdCtx, state.command, sshArgs...) //nolint:gosec // args are constructed programmatically with shell quoting
 	} else {
 		cmd = exec.CommandContext(cmdCtx, state.command, args...) //nolint:gosec // args are constructed programmatically
