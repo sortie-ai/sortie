@@ -1,8 +1,9 @@
 ---
 tracker:
   kind: github
-  api_key: $SORTIE_GITHUB_TOKEN
+  api_key: $GITHUB_TOKEN
   project: $SORTIE_GITHUB_PROJECT
+  query_filter: "label:backlog"
   active_states:
     - backlog
     - in-progress
@@ -13,7 +14,7 @@ tracker:
     - wontfix
 
 polling:
-  interval_ms: 30000
+  interval_ms: 120000
 
 workspace:
   root: $SORTIE_WORKSPACE_ROOT
@@ -54,7 +55,10 @@ server:
      Fully GitHub-native: no Jira, no Claude Code.
 
      Required env vars:
-       SORTIE_GITHUB_TOKEN   — GitHub PAT (fine-grained with Copilot + Issues permissions)
+       GITHUB_TOKEN          — Fine-grained PAT with Issues read/write + Copilot
+                               Requests permissions. Serves double duty: the tracker
+                               reads it via $GITHUB_TOKEN expansion and the Copilot
+                               CLI picks it up from the process environment.
        SORTIE_GITHUB_PROJECT — Repository in owner/repo format
        SORTIE_REPO_URL       — Git clone URL for the repository
 
