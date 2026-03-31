@@ -3,10 +3,12 @@ package copilot
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/registry"
@@ -401,4 +403,378 @@ func TestCheckAuth_GhPresentButUnauthenticated(t *testing.T) {
 
 	err := checkAuth()
 	requireAgentError(t, err, domain.ErrAgentNotFound)
+}
+
+// fakeCopilotBinaryWithOutput creates a fake copilot binary that writes content
+// to stdout and exits with the given exit code.
+func fakeCopilotBinaryWithOutput(t *testing.T, content string, exitCode int) string {
+	t.Helper()
+	dir := t.TempDir()
+	outFile := filepath.Join(dir, "out.txt")
+	if err := os.WriteFile(outFile, []byte(content), 0o644); err != nil {
+		t.Fatalf("writing run turn output file: %v", err)
+	}
+	binPath := filepath.Join(dir, "copilot")
+	script := fmt.Sprintf("#!/bin/sh\ncat '%s'\nexit %d\n", outFile, exitCode)
+	if err := os.WriteFile(binPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("creating fake copilot binary with output: %v", err)
+	}
+	return binPath
+}
+
+// newTestSession starts a session backed by fakeCopilotBinary.
+// The caller must set GH_TOKEN (or another auth env var) before calling.
+func newTestSession(t *testing.T, workspace string) (domain.AgentAdapter, domain.Session) {
+	t.Helper()
+	adapter, err := NewCopilotAdapter(map[string]any{})
+	if err != nil {
+		t.Fatalf("NewCopilotAdapter: %v", err)
+	}
+	session, err := adapter.StartSession(context.Background(), domain.StartSessionParams{
+		WorkspacePath: workspace,
+		AgentConfig:   domain.AgentConfig{Command: fakeCopilotBinary(t)},
+	})
+	if err != nil {
+		t.Fatalf("StartSession: %v", err)
+	}
+	return adapter, session
+}
+
+// loadTestFixture reads a testdata fixture file and returns its content.
+func loadTestFixture(t *testing.T, name string) string {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join("testdata", name))
+	if err != nil {
+		t.Fatalf("loadTestFixture(%q): %v", name, err)
+	}
+	return string(data)
+}
+
+// hasEventType returns true if any event in events matches typ.
+func hasEventType(events []domain.AgentEvent, typ domain.AgentEventType) bool {
+	for _, e := range events {
+		if e.Type == typ {
+			return true
+		}
+	}
+	return false
+}
+
+func TestRunTurn_HappyPath(t *testing.T) {
+	// t.Setenv is incompatible with t.Parallel.
+	t.Setenv("GH_TOKEN", "test-token-for-unit-test")
+
+	adapter, session := newTestSession(t, t.TempDir())
+	state := session.Internal.(*sessionState)
+	state.command = fakeCopilotBinaryWithOutput(t, loadTestFixture(t, "simple_session.jsonl"), 0)
+
+	var events []domain.AgentEvent
+	result, err := adapter.RunTurn(context.Background(), session, domain.RunTurnParams{
+		Prompt: "say hello",
+		OnEvent: func(e domain.AgentEvent) {
+			events = append(events, e)
+		},
+	})
+
+	if err != nil {
+		t.Fatalf("RunTurn() error = %v", err)
+	}
+	if result.ExitReason != domain.EventTurnCompleted {
+		t.Errorf("result.ExitReason = %q, want %q", result.ExitReason, domain.EventTurnCompleted)
+	}
+	const wantSessionID = "aa778ea0-6eab-4ce9-b87e-11d6d33dab4f"
+	if result.SessionID != wantSessionID {
+		t.Errorf("result.SessionID = %q, want %q", result.SessionID, wantSessionID)
+	}
+	// Session ID captured from result event for subsequent turns.
+	if state.copilotSessionID != wantSessionID {
+		t.Errorf("state.copilotSessionID = %q, want %q", state.copilotSessionID, wantSessionID)
+	}
+	for _, typ := range []domain.AgentEventType{
+		domain.EventSessionStarted,
+		domain.EventTokenUsage,
+		domain.EventTurnCompleted,
+	} {
+		if !hasEventType(events, typ) {
+			t.Errorf("event type %q not delivered", typ)
+		}
+	}
+}
+
+func TestRunTurn_ExitCode127(t *testing.T) {
+	// t.Setenv is incompatible with t.Parallel.
+	t.Setenv("GH_TOKEN", "test-token-for-unit-test")
+
+	adapter, session := newTestSession(t, t.TempDir())
+	state := session.Internal.(*sessionState)
+	state.command = fakeCopilotBinaryWithOutput(t, "", 127)
+
+	var events []domain.AgentEvent
+	_, err := adapter.RunTurn(context.Background(), session, domain.RunTurnParams{
+		OnEvent: func(e domain.AgentEvent) { events = append(events, e) },
+	})
+
+	requireAgentError(t, err, domain.ErrAgentNotFound)
+	if !hasEventType(events, domain.EventTurnFailed) {
+		t.Error("EventTurnFailed not delivered for exit code 127")
+	}
+}
+
+func TestRunTurn_NonZeroExitNoResult(t *testing.T) {
+	// t.Setenv is incompatible with t.Parallel.
+	t.Setenv("GH_TOKEN", "test-token-for-unit-test")
+
+	adapter, session := newTestSession(t, t.TempDir())
+	state := session.Internal.(*sessionState)
+	state.command = fakeCopilotBinaryWithOutput(t, "", 1)
+
+	var events []domain.AgentEvent
+	_, err := adapter.RunTurn(context.Background(), session, domain.RunTurnParams{
+		OnEvent: func(e domain.AgentEvent) { events = append(events, e) },
+	})
+
+	requireAgentError(t, err, domain.ErrPortExit)
+	if !hasEventType(events, domain.EventTurnFailed) {
+		t.Error("EventTurnFailed not delivered for non-zero exit")
+	}
+}
+
+func TestRunTurn_ContextCancelled(t *testing.T) {
+	// t.Setenv is incompatible with t.Parallel.
+	t.Setenv("GH_TOKEN", "test-token-for-unit-test")
+
+	adapter, session := newTestSession(t, t.TempDir())
+	// state.command is fakeCopilotBinary: exits 0 immediately, no output.
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // pre-cancel before RunTurn
+
+	var events []domain.AgentEvent
+	_, err := adapter.RunTurn(ctx, session, domain.RunTurnParams{
+		OnEvent: func(e domain.AgentEvent) { events = append(events, e) },
+	})
+
+	requireAgentError(t, err, domain.ErrTurnCancelled)
+	if !hasEventType(events, domain.EventTurnCancelled) {
+		t.Error("EventTurnCancelled not delivered")
+	}
+}
+
+func TestRunTurn_MalformedLines(t *testing.T) {
+	// t.Setenv is incompatible with t.Parallel.
+	t.Setenv("GH_TOKEN", "test-token-for-unit-test")
+
+	adapter, session := newTestSession(t, t.TempDir())
+	state := session.Internal.(*sessionState)
+	state.command = fakeCopilotBinaryWithOutput(t, loadTestFixture(t, "malformed_lines.jsonl"), 0)
+
+	var events []domain.AgentEvent
+	_, err := adapter.RunTurn(context.Background(), session, domain.RunTurnParams{
+		OnEvent: func(e domain.AgentEvent) { events = append(events, e) },
+	})
+
+	if err != nil {
+		t.Fatalf("RunTurn() unexpected error = %v", err)
+	}
+	if !hasEventType(events, domain.EventMalformed) {
+		t.Error("EventMalformed not delivered for malformed JSONL line")
+	}
+}
+
+func TestRunTurn_ToolUseEvents(t *testing.T) {
+	// t.Setenv is incompatible with t.Parallel.
+	t.Setenv("GH_TOKEN", "test-token-for-unit-test")
+
+	adapter, session := newTestSession(t, t.TempDir())
+	state := session.Internal.(*sessionState)
+	state.command = fakeCopilotBinaryWithOutput(t, loadTestFixture(t, "tool_use_session.jsonl"), 0)
+
+	var events []domain.AgentEvent
+	result, err := adapter.RunTurn(context.Background(), session, domain.RunTurnParams{
+		OnEvent: func(e domain.AgentEvent) { events = append(events, e) },
+	})
+
+	if err != nil {
+		t.Fatalf("RunTurn() error = %v", err)
+	}
+	if result.ExitReason != domain.EventTurnCompleted {
+		t.Errorf("result.ExitReason = %q, want %q", result.ExitReason, domain.EventTurnCompleted)
+	}
+
+	var toolEvent *domain.AgentEvent
+	for i := range events {
+		if events[i].Type == domain.EventToolResult {
+			toolEvent = &events[i]
+			break
+		}
+	}
+	if toolEvent == nil {
+		t.Fatal("EventToolResult not delivered for tool use session")
+	}
+	if toolEvent.ToolName == "" {
+		t.Error("EventToolResult.ToolName is empty")
+	}
+}
+
+func TestRunTurn_NonZeroResultExitCode(t *testing.T) {
+	// t.Setenv is incompatible with t.Parallel.
+	t.Setenv("GH_TOKEN", "test-token-for-unit-test")
+
+	// JSONL with a result event reporting a non-zero exit code.
+	const failResultJSONL = `{"type":"result","timestamp":"2026-03-30T22:19:28.097Z","sessionId":"cc990fc2-1234-5678-9abc-def012345678","exitCode":1,"usage":{"premiumRequests":0,"totalApiDurationMs":0,"sessionDurationMs":0}}`
+
+	adapter, session := newTestSession(t, t.TempDir())
+	state := session.Internal.(*sessionState)
+	state.command = fakeCopilotBinaryWithOutput(t, failResultJSONL, 0)
+
+	var events []domain.AgentEvent
+	_, err := adapter.RunTurn(context.Background(), session, domain.RunTurnParams{
+		OnEvent: func(e domain.AgentEvent) { events = append(events, e) },
+	})
+
+	requireAgentError(t, err, domain.ErrTurnFailed)
+	if !hasEventType(events, domain.EventTurnFailed) {
+		t.Error("EventTurnFailed not delivered for non-zero result exit code")
+	}
+}
+
+func TestStopSession_NilProc(t *testing.T) {
+	t.Parallel()
+
+	adapter, err := NewCopilotAdapter(map[string]any{})
+	if err != nil {
+		t.Fatalf("NewCopilotAdapter: %v", err)
+	}
+	// Bare session with no running subprocess (proc == nil).
+	session := domain.Session{
+		Internal: &sessionState{
+			workspacePath: t.TempDir(),
+		},
+	}
+	if err := adapter.StopSession(context.Background(), session); err != nil {
+		t.Fatalf("StopSession(nil proc) error = %v", err)
+	}
+}
+
+func TestStopSession_TerminatesProcess(t *testing.T) {
+	// t.Setenv is incompatible with t.Parallel.
+	t.Setenv("GH_TOKEN", "test-token-for-unit-test")
+
+	// Fake binary that blocks until it receives a signal.
+	dir := t.TempDir()
+	sleepBin := filepath.Join(dir, "copilot")
+	if err := os.WriteFile(sleepBin, []byte("#!/bin/sh\nsleep 60\n"), 0o755); err != nil {
+		t.Fatalf("creating sleeping fake binary: %v", err)
+	}
+
+	adapter, session := newTestSession(t, t.TempDir())
+	state := session.Internal.(*sessionState)
+	state.command = sleepBin
+
+	processStarted := make(chan struct{}, 1)
+	runDone := make(chan struct{})
+	go func() {
+		defer close(runDone)
+		adapter.RunTurn(context.Background(), session, domain.RunTurnParams{ //nolint:errcheck // error is irrelevant for this test
+			OnEvent: func(e domain.AgentEvent) {
+				if e.Type == domain.EventSessionStarted {
+					select {
+					case processStarted <- struct{}{}:
+					default:
+					}
+				}
+			},
+		})
+	}()
+
+	// Wait until RunTurn has started the subprocess.
+	select {
+	case <-processStarted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for process to start")
+	}
+
+	if err := adapter.StopSession(context.Background(), session); err != nil {
+		t.Fatalf("StopSession() error = %v", err)
+	}
+
+	// Verify RunTurn unblocked after StopSession terminated the process.
+	select {
+	case <-runDone:
+	case <-time.After(10 * time.Second):
+		t.Fatal("RunTurn did not return after StopSession")
+	}
+}
+
+func TestExtractExitCode(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		buildErr func() error
+		want     int
+	}{
+		{
+			name:     "nil error returns 0",
+			buildErr: func() error { return nil },
+			want:     0,
+		},
+		{
+			name: "exit 1 returns 1",
+			buildErr: func() error {
+				return exec.Command("/bin/sh", "-c", "exit 1").Run()
+			},
+			want: 1,
+		},
+		{
+			name: "exit 42 returns 42",
+			buildErr: func() error {
+				return exec.Command("/bin/sh", "-c", "exit 42").Run()
+			},
+			want: 42,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := extractExitCode(tt.buildErr())
+			if got != tt.want {
+				t.Errorf("extractExitCode() = %d, want %d", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestWasSignaled(t *testing.T) {
+	t.Parallel()
+
+	t.Run("nil error returns false", func(t *testing.T) {
+		t.Parallel()
+		if wasSignaled(nil) {
+			t.Error("wasSignaled(nil) = true, want false")
+		}
+	})
+
+	t.Run("normal exit returns false", func(t *testing.T) {
+		t.Parallel()
+		err := exec.Command("/bin/sh", "-c", "exit 1").Run()
+		if wasSignaled(err) {
+			t.Errorf("wasSignaled(normal exit) = true, want false")
+		}
+	})
+
+	t.Run("killed by signal returns true", func(t *testing.T) {
+		t.Parallel()
+		cmd := exec.Command("sleep", "60")
+		if err := cmd.Start(); err != nil {
+			t.Fatalf("starting sleep: %v", err)
+		}
+		// SIGKILL is untrappable; the process is always terminated by signal.
+		_ = cmd.Process.Kill()
+		err := cmd.Wait()
+		if !wasSignaled(err) {
+			t.Errorf("wasSignaled(killed by signal) = false, want true")
+		}
+	})
 }
