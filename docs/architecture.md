@@ -1157,9 +1157,9 @@ Example high-trust behavior:
 
 Unsupported dynamic tool calls:
 
-- If the agent requests a dynamic tool call that is not in the `ToolRegistry`, return a tool
-  failure response and continue the session.
-- This prevents the session from stalling on unsupported tool execution paths.
+- If the agent adapter receives a tool call request for a name not in the `ToolRegistry`, the
+  adapter returns a tool failure response and continues the session.
+- This is adapter-level behavior; the orchestrator does not intercept tool call routing.
 
 Hard failure on user input requirement:
 
@@ -1173,8 +1173,7 @@ All tools that Sortie exposes to agents implement the `AgentTool` interface
 - `Name() string` — stable tool identifier used for matching tool call requests to
   implementations. MUST be unique within a `ToolRegistry`.
 - `Description() string` — human-readable summary suitable for inclusion in agent prompts and
-  MCP `tools/list` responses. Keep descriptions short and unambiguous; verbose descriptions
-  cause LLMs to hallucinate parameters.
+  MCP `tools/list` responses.
 - `InputSchema() json.RawMessage` — JSON Schema describing the tool's expected input. Used for
   MCP tool registration and prompt-based documentation.
 - `Execute(ctx context.Context, input json.RawMessage) (json.RawMessage, error)` — runs the tool
@@ -1193,9 +1192,9 @@ Invariants:
 - The registry is safe for concurrent reads after construction. Concurrent `Register` + `Get` is
   a data race; callers MUST NOT call `Register` after passing the registry to the orchestrator.
 - Duplicate names panic (programming error, not runtime input).
-- The registry feeds prompt-time tool advertisement (Section 12). The runtime execution channel
-  through which agents invoke tools at call time (e.g., MCP sidecar, HTTP, in-process) is not
-  yet designed. See issue #224 for the execution channel design discussion.
+- The registry feeds prompt-time tool advertisement. The runtime execution channel through
+  which agents invoke tools at call time (e.g., MCP sidecar, HTTP, in-process) is not yet
+  designed. See issue #224 for the execution channel design discussion.
 
 #### 10.4.4 Tool tiers
 
@@ -1213,7 +1212,7 @@ to transport failures, authentication errors, rate limits, and per-tool timeouts
 
 - `tracker_api` (Section 10.4.5)
 
-Future tools (e.g., `git_context`) follow the same classification.
+Future tools follow the same classification.
 
 #### 10.4.5 Built-in tool: `tracker_api`
 
@@ -1236,13 +1235,12 @@ Supported operations:
 | `transition_issue` | `issue_id`, `target_state` | Transition an issue to a target state |
 
 The `TrackerAdapter.CommentIssue` method exists on the adapter interface but is not yet exposed
-through `tracker_api`. Adding a `comment_issue` operation is tracked separately.
+through `tracker_api`.
 
 Tracker dispatch:
 
-- When `tracker.kind == "jira"`, the tool executes against the Jira REST API.
-- When `tracker.kind == "github"`, the tool executes against the GitHub API.
-- Transport, input shape, and query semantics are adapter-defined.
+The tool delegates to the configured `TrackerAdapter` implementation. Transport, input shape,
+and query semantics are adapter-defined.
 
 Result semantics:
 
@@ -2295,7 +2293,7 @@ Unless otherwise noted, Sections 17.1 through 17.7 are `Core Conformance`. Bulle
 - Stdout and stderr are handled separately; protocol JSON is parsed from stdout only
 - Non-JSON stderr lines are logged but do not crash parsing
 - Command/file-change approvals are handled according to the implementation's documented policy
-- Unsupported dynamic tool calls are rejected without stalling the session
+- Unsupported dynamic tool calls are handled at the adapter level without stalling the session
 - User input requests are handled according to the implementation's documented policy and do not
   stall indefinitely
 - Normalized token usage events are emitted with `{input_tokens, output_tokens, total_tokens}`
@@ -2306,7 +2304,8 @@ Unless otherwise noted, Sections 17.1 through 17.7 are `Core Conformance`. Bulle
   - API-level errors produce `success: false` with a normalized `{kind, message}` error envelope
   - invalid arguments, missing auth, and transport failures return structured failure payloads
   - the tool is scoped to the configured project
-- Unsupported tool names return a failure result without stalling the session
+- Unsupported tool names return a failure result at the adapter level without stalling the
+  session
 
 ### 17.6 Observability
 
