@@ -10,9 +10,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -25,6 +23,8 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/sortie-ai/sortie/internal/agent/procutil"
+	"github.com/sortie-ai/sortie/internal/agent/sshutil"
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/logging"
 	"github.com/sortie-ai/sortie/internal/registry"
@@ -80,7 +80,7 @@ type sessionState struct {
 	remoteCommand string
 
 	// mu guards proc and waitCh for concurrent access from
-	// StopSession and gracefulKill.
+	// StopSession and the cmd.Cancel callback.
 	mu     sync.Mutex
 	proc   *os.Process
 	waitCh chan struct{} // closed when cmd.Wait() completes; nil when no process is running
@@ -194,20 +194,11 @@ func (a *ClaudeCodeAdapter) StartSession(_ context.Context, params domain.StartS
 // and reading JSONL events from stdout. Events are delivered
 // synchronously via params.OnEvent.
 //
-// Subprocess lifecycle uses [exec.Command], not [exec.CommandContext].
-// Context cancellation is monitored by a dedicated goroutine that calls
-// gracefulKill, which sends SIGTERM and escalates to SIGKILL after 5
-// seconds. This is intentional: [exec.CommandContext] sends SIGKILL
-// (immediate, untrappable) on context cancellation by default, which
-// denies the agent process any opportunity to flush output buffers,
-// close network connections, or emit final token-usage events. The
-// orchestrator's graceful shutdown relies on SIGTERM being delivered
-// first so the agent can exit cleanly before the forced kill.
-//
-// If refactoring to [exec.CommandContext], preserve the SIGTERM-first
-// invariant by setting [exec.Cmd].Cancel to send [syscall.SIGTERM] and
-// [exec.Cmd].WaitDelay to the escalation interval (currently 5 seconds)
-// so SIGKILL is deferred rather than immediate.
+// Subprocess lifecycle uses [exec.CommandContext] with [exec.Cmd].Cancel
+// set to send [syscall.SIGTERM] and [exec.Cmd].WaitDelay set to 5
+// seconds. This preserves the SIGTERM-first invariant: on context
+// cancellation the agent receives SIGTERM and has 5 seconds to flush
+// output before SIGKILL is sent automatically.
 func (a *ClaudeCodeAdapter) RunTurn(ctx context.Context, session domain.Session, params domain.RunTurnParams) (domain.TurnResult, error) {
 	if params.OnEvent == nil {
 		panic("claude: OnEvent must be non-nil")
@@ -218,13 +209,20 @@ func (a *ClaudeCodeAdapter) RunTurn(ctx context.Context, session domain.Session,
 
 	args := buildArgs(state, params.Prompt, a.passthrough)
 
+	cmdCtx, cancelCmd := context.WithCancel(ctx)
+	defer cancelCmd()
+
 	var cmd *exec.Cmd
 	if state.sshHost != "" {
-		sshArgs := buildSSHArgs(state.sshHost, state.workspacePath, state.remoteCommand, args)
-		cmd = exec.Command(state.command, sshArgs...) //nolint:gosec,noctx // args are constructed programmatically with shell quoting; context cancellation handled via gracefulKill goroutine
+		sshArgs := sshutil.BuildSSHArgs(state.sshHost, state.workspacePath, state.remoteCommand, args, sshutil.SSHOptions{})
+		cmd = exec.CommandContext(cmdCtx, state.command, sshArgs...) //nolint:gosec // args are constructed programmatically with shell quoting
 	} else {
-		cmd = exec.Command(state.command, args...) //nolint:gosec,noctx // args are constructed programmatically; context cancellation handled via gracefulKill goroutine
+		cmd = exec.CommandContext(cmdCtx, state.command, args...) //nolint:gosec // args are constructed programmatically
 	}
+	cmd.Cancel = func() error {
+		return cmd.Process.Signal(syscall.SIGTERM)
+	}
+	cmd.WaitDelay = 5 * time.Second
 	cmd.Dir = state.workspacePath
 	cmd.Env = os.Environ()
 
@@ -250,6 +248,21 @@ func (a *ClaudeCodeAdapter) RunTurn(ctx context.Context, session domain.Session,
 	err = cmd.Start()
 	if err != nil {
 		state.mu.Unlock()
+		if ctx.Err() != nil {
+			params.OnEvent(domain.AgentEvent{
+				Type:      domain.EventTurnCancelled,
+				Timestamp: time.Now().UTC(),
+				Message:   "context cancelled",
+			})
+			return domain.TurnResult{
+					SessionID:  state.claudeSessionID,
+					ExitReason: domain.EventTurnCancelled,
+				}, &domain.AgentError{
+					Kind:    domain.ErrTurnCancelled,
+					Message: "turn cancelled",
+					Err:     ctx.Err(),
+				}
+		}
 		return domain.TurnResult{}, &domain.AgentError{
 			Kind:    domain.ErrPortExit,
 			Message: "failed to start subprocess",
@@ -263,17 +276,7 @@ func (a *ClaudeCodeAdapter) RunTurn(ctx context.Context, session domain.Session,
 
 	state.turnCount++
 
-	go drainStderr(stderrPipe, logger)
-
-	// Monitor context cancellation for graceful shutdown.
-	doneCh := make(chan struct{})
-	go func() {
-		select {
-		case <-ctx.Done():
-			gracefulKill(state)
-		case <-doneCh:
-		}
-	}()
+	go procutil.DrainStderr(stderrPipe, logger)
 
 	// Read and parse stdout line by line.
 	scanner := bufio.NewScanner(stdoutPipe)
@@ -438,14 +441,34 @@ func (a *ClaudeCodeAdapter) RunTurn(ctx context.Context, session domain.Session,
 
 	// Check scanner error (e.g., buffer overflow).
 	if scanErr := scanner.Err(); scanErr != nil {
-		gracefulKill(state)
+		cancelCmd()
 		cmd.Wait() //nolint:errcheck,gosec // best-effort reap; exit code is irrelevant on scanner failure
 		close(waitCh)
-		close(doneCh)
 		state.mu.Lock()
 		state.proc = nil
 		state.waitCh = nil
 		state.mu.Unlock()
+
+		// Context cancellation propagates through exec.CommandContext
+		// and can surface as a pipe read error. Treat as cancellation.
+		if ctx.Err() != nil {
+			now := time.Now().UTC()
+			params.OnEvent(domain.AgentEvent{
+				Type:      domain.EventTurnCancelled,
+				Timestamp: now,
+				Message:   "context cancelled",
+			})
+			return domain.TurnResult{
+					SessionID:  state.claudeSessionID,
+					ExitReason: domain.EventTurnCancelled,
+					Usage:      usage,
+				}, &domain.AgentError{
+					Kind:    domain.ErrTurnCancelled,
+					Message: "turn cancelled",
+					Err:     ctx.Err(),
+				}
+		}
+
 		now := time.Now().UTC()
 		params.OnEvent(domain.AgentEvent{
 			Type:      domain.EventTurnFailed,
@@ -464,10 +487,9 @@ func (a *ClaudeCodeAdapter) RunTurn(ctx context.Context, session domain.Session,
 	}
 
 	// Wait for process to exit. cmd.Wait is the sole waiter;
-	// StopSession and gracefulKill only signal and wait on waitCh.
+	// StopSession only signals and waits on waitCh.
 	waitErr := cmd.Wait()
 	close(waitCh)
-	close(doneCh)
 
 	// Clear subprocess reference.
 	state.mu.Lock()
@@ -495,7 +517,7 @@ func (a *ClaudeCodeAdapter) RunTurn(ctx context.Context, session domain.Session,
 			}
 	}
 
-	exitCode := extractExitCode(waitErr)
+	exitCode := procutil.ExtractExitCode(waitErr)
 
 	if exitCode == 127 {
 		params.OnEvent(domain.AgentEvent{
@@ -513,7 +535,7 @@ func (a *ClaudeCodeAdapter) RunTurn(ctx context.Context, session domain.Session,
 			}
 	}
 
-	if wasSignaled(waitErr) {
+	if procutil.WasSignaled(waitErr) {
 		params.OnEvent(domain.AgentEvent{
 			Type:      domain.EventTurnCancelled,
 			Timestamp: now,
@@ -783,66 +805,4 @@ func processToolBlocks(
 			})
 		}
 	}
-}
-
-// gracefulKill sends SIGTERM and schedules a SIGKILL escalation after
-// 5 seconds. It returns immediately; the caller (RunTurn) is
-// responsible for calling cmd.Wait. Safe to call when proc is nil.
-func gracefulKill(state *sessionState) {
-	state.mu.Lock()
-	proc := state.proc
-	state.mu.Unlock()
-
-	if proc == nil {
-		return
-	}
-
-	_ = proc.Signal(syscall.SIGTERM) //nolint:errcheck // best-effort signal
-
-	// Schedule SIGKILL escalation. The timer checks state.proc
-	// under the lock; once RunTurn clears proc the kill is skipped.
-	time.AfterFunc(5*time.Second, func() {
-		state.mu.Lock()
-		p := state.proc
-		state.mu.Unlock()
-		if p != nil {
-			_ = p.Kill() //nolint:errcheck // best-effort kill
-		}
-	})
-}
-
-// drainStderr reads stderr from the subprocess line by line and logs
-// each line at debug level. Returns when the pipe closes.
-func drainStderr(r io.Reader, logger *slog.Logger) {
-	scanner := bufio.NewScanner(r)
-	for scanner.Scan() {
-		logger.Debug("agent stderr", slog.String("line", scanner.Text()))
-	}
-}
-
-// extractExitCode returns the process exit code from an
-// [*exec.ExitError], or -1 if the error is not an ExitError or is
-// nil.
-func extractExitCode(err error) int {
-	if err == nil {
-		return 0
-	}
-	var exitErr *exec.ExitError
-	if errors.As(err, &exitErr) {
-		return exitErr.ExitCode()
-	}
-	return -1
-}
-
-// wasSignaled returns true if the process was terminated by a signal.
-func wasSignaled(err error) bool {
-	var exitErr *exec.ExitError
-	if !errors.As(err, &exitErr) {
-		return false
-	}
-	status, ok := exitErr.Sys().(syscall.WaitStatus)
-	if !ok {
-		return false
-	}
-	return status.Signaled()
 }
