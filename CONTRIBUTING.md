@@ -104,7 +104,7 @@ internal/
   workflow/            WORKFLOW.md parser, file watcher
   workspace/           filesystem isolation, path safety, hook execution
 docs/
-  architecture.md      the specification (~2700 lines)
+  architecture.md      the specification (~2600 lines)
   decisions/           Architecture Decision Records (ADRs)
 ```
 
