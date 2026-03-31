@@ -25,14 +25,15 @@ labels, milestones, and project board names are current:
 bash .github/skills/managing-github-issues/scripts/get_taxonomy.sh
 ```
 
-The script outputs issue types, labels grouped by prefix, open milestones
-with issue counts, and the project board name. Use this output — not memorized
-values — for `--type`, `--label`, `--milestone`, and `--project` flags.
+The script outputs issue types (with their GraphQL `node_id`s), labels grouped
+by prefix, open milestones with issue counts, and the project board name. Use
+this output — not memorized values — for `--label`, `--milestone`, `--project`
+flags and the issue type `node_id` used in the post-creation GraphQL call.
 
 If the script is unavailable, run these individually:
 
 ```bash
-gh api "/orgs/{owner}/issue-types" --jq '.[] | "\(.name)\t\(.description)"'
+gh api "/orgs/{owner}/issue-types" --jq '.[] | "\(.node_id)\t\(.name)\t\(.description)"'
 gh label list --limit 50
 gh api repos/{owner}/{repo}/milestones --paginate \
   -q '.[] | select(.state=="open") | "\(.title)  (open: \(.open_issues), closed: \(.closed_issues))"'
@@ -45,8 +46,10 @@ GitHub Issue Types (organization-level) classify the kind of work. Every issue
 must have exactly one type. Available types: Task, Bug, Feature, Docs,
 Research, Refactor, Test.
 
-Set the type with `--type` when creating an issue. The taxonomy script lists
-available types — use its output, not memorized values.
+`gh issue create` does **NOT** support a `--type` flag. Set the issue type
+after creation via GraphQL using the `node_id` from the taxonomy output (see
+"Composing the command" below). The taxonomy script lists available types with
+their `node_id`s — use its output, not memorized values.
 
 ## Label conventions
 
@@ -198,14 +201,31 @@ benchmark result).
 Use single quotes for `--body` to prevent shell interpolation. Escape
 literal single quotes in the body with `'\''`.
 
+`gh issue create` does **NOT** support `--type`. Create the issue first, then set
+the type via GraphQL using the `node_id` from the taxonomy output.
+
 ```bash
-gh issue create \
+# Step 1: create the issue
+ISSUE_URL=$(gh issue create \
   --title '<title>' \
   --body '<body>' \
-  --type '<issue type from taxonomy>' \
   --label '<area-label>' \
   --milestone '<full milestone title from taxonomy>' \
-  --project '<project name from taxonomy>'
+  --project '<project name from taxonomy>')
+
+ISSUE_NUMBER=$(echo "$ISSUE_URL" | grep -oE '[0-9]+$')
+
+# Step 2: set the issue type (node_id from taxonomy output)
+ISSUE_NODE_ID=$(gh api "repos/{owner}/{repo}/issues/${ISSUE_NUMBER}" --jq '.node_id')
+gh api graphql -f query="
+mutation {
+  updateIssue(input: {
+    id: \"${ISSUE_NODE_ID}\"
+    issueTypeId: \"<type node_id from taxonomy>\"
+  }) {
+    issue { number title }
+  }
+}"
 ```
 
 ### Batch creation
@@ -289,7 +309,7 @@ Before executing `gh issue create`, verify:
 - [ ] Taxonomy was fetched this session (issue types, labels, milestones are current)
 - [ ] Duplicate check was performed
 - [ ] Title: imperative, under 80 chars, no trailing period
-- [ ] Issue type set via `--type` from taxonomy
+- [ ] Issue type set via GraphQL `updateIssue` with `node_id` from taxonomy
 - [ ] At least one `area:` label from taxonomy
 - [ ] Milestone set using full title from taxonomy
 - [ ] Body matches the template for its issue type
@@ -303,7 +323,7 @@ Before executing `gh issue create`, verify:
 
 | Error | Recovery |
 |---|---|
-| Issue type not found | Re-run taxonomy script; use exact name from output |
+| Issue type not found | Re-run taxonomy script; use exact `node_id` from output |
 | Milestone not found | Re-run taxonomy script; use exact title from output |
 | Label not found | Re-run taxonomy script; label may have been renamed |
 | Project not found | `gh project list --owner sortie-ai` to verify name |

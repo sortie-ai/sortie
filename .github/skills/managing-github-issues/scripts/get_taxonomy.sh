@@ -39,9 +39,9 @@ echo ""
 
 OWNER="${REPO%%/*}"
 gh api "/orgs/${OWNER}/issue-types" \
-  --jq '.[] | "\(.name)\t\(.description)"' 2>/dev/null \
-  | sort | while IFS=$'\t' read -r name desc; do
-  printf "  %-14s  %s\n" "$name" "$desc"
+  --jq '.[] | "\(.name)\t\(.node_id)\t\(.description)"' 2>/dev/null \
+  | sort | while IFS=$'\t' read -r name node_id desc; do
+  printf "  %-14s  node_id: %-38s  %s\n" "$name" "$node_id" "$desc"
 done || echo "  (issue types not available)"
 
 echo ""
@@ -69,7 +69,7 @@ echo ""
 
 gh api "repos/${REPO}/milestones" --paginate \
   -q '.[] | select(.state=="open") | "  \(.title)  [open: \(.open_issues), closed: \(.closed_issues)]"' \
-  2>/dev/null || echo "  (none)"
+  2>/dev/null | sort || echo "  (none)"
 
 echo ""
 
