@@ -1255,20 +1255,56 @@ in-session.
 
 #### 10.4.6 Tools vs. agent-authored files
 
-The tool subsystem and the `.sortie/status` file protocol (Section 21) are independent
-mechanisms that address different communication patterns:
+The tool subsystem (this section) and the `.sortie/status` file protocol (Section 21) are
+independent communication channels between agents and the orchestrator. They address different
+concerns, operate on different transports, and have deliberately different failure
+characteristics. This separation is a design choice, not an implementation accident.
 
-| Mechanism | Direction | Transport | Timing |
-|---|---|---|---|
-| Agent tools (this section) | Agent -> Orchestrator -> Agent | Tool call (transport TBD per Section 10.4.3) | Synchronous during turn |
-| `.sortie/status` file (Section 21) | Agent -> Orchestrator | Out-of-band filesystem sentinel | Asynchronous, read after turn |
+**Communication patterns.**
 
-Tools provide structured, synchronous request/response interaction: the agent calls a tool and
-receives a JSON result within the same turn. The `.sortie/status` file is a one-way advisory
-signal that influences orchestrator behavior (retry suppression) after the turn completes.
+| Property | Agent tools | `.sortie/status` file |
+|---|---|---|
+| Direction | Agent <-> Orchestrator (request-response) | Agent -> Orchestrator (one-way advisory) |
+| Transport | Tool call (mechanism TBD per Section 10.4.3) | Filesystem sentinel file |
+| Timing | Synchronous, during a turn | Asynchronous, read after turn completes |
+| Purpose | Data access (tracker queries, orchestrator state) | Control flow (retry suppression, soft stop) |
+| Failure mode | Tool call fails; agent receives error and continues | File absent or unreadable; orchestrator proceeds normally |
+| Agent requirement | MCP client or equivalent tool-calling capability | Write a file to disk (`echo "blocked" > .sortie/status`) |
 
-An agent MAY use both mechanisms in the same session. For example, an agent might call a tool
-to check context, then write `.sortie/status` with `blocked` as its final action.
+**Why two channels exist.** The channels serve orthogonal roles:
+
+- Tools are the **data plane**: the agent requests information or performs a mutation and
+  receives a structured result within the same turn. The agent needs the response to continue
+  its work.
+- The `.sortie/status` file is the **control plane**: the agent advises the orchestrator about
+  task feasibility after the turn completes. The orchestrator uses this signal to suppress
+  continuation retries. No response flows back to the agent.
+
+Collapsing both into a single MCP-based channel was evaluated and rejected during the A2O
+protocol design (see `docs/agent-to-orchestrator-protocol.md`, Section 5.1, Alternative 2).
+The MCP approach fails the agent-agnostic requirement: an agent without MCP client support
+cannot send the control signal. The file-based channel satisfies all six A2O requirements
+(agent-agnostic, fail-safe, advisory, zero-dependency, forward-compatible, inspectable)
+simultaneously; no tool-call-based mechanism achieves this.
+
+**Coexistence.** An agent MAY use both channels in the same session. Typical sequence:
+
+1. Agent calls a tool (e.g., `tracker_api.fetch_issue`) to gather context.
+2. Agent determines the task requires a human architectural decision.
+3. Agent writes `mkdir -p .sortie && echo "blocked" > .sortie/status`.
+4. Turn completes; orchestrator reads the status file and suppresses retries.
+
+The two channels do not interact. A tool call cannot write to `.sortie/status` on behalf of
+the agent, and the `.sortie/status` file cannot trigger tool execution. The orchestrator
+processes them at different points in the worker lifecycle: tool calls during the turn (via the
+execution channel), status file after the turn (Section 21.1, read timing per
+`agent-to-orchestrator-protocol.md` Section 3.1).
+
+**Defense in depth.** The independence of the two channels provides resilience. If the MCP
+execution channel is unavailable (not yet implemented, sidecar crash, agent lacks MCP support),
+the file-based advisory signal still functions. If the filesystem is read-only or the workspace
+is on a remote host with restricted write access, tool calls still function. Neither channel is
+a single point of failure for the other.
 
 ### 10.5 Timeouts and Error Mapping
 
