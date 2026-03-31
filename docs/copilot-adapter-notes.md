@@ -793,10 +793,10 @@ MCP configuration schema with a top-level `mcpServers` object.
 ```json
 {
   "mcpServers": {
-    "sortie-tools": {
+    "my-tool-server": {
       "type": "stdio",
-      "command": "sortie",
-      "args": ["mcp-server"],
+      "command": "/usr/local/bin/my-tool",
+      "args": ["serve"],
       "env": {}
     }
   }

@@ -703,10 +703,10 @@ command, arguments, and optional environment variables.
 ```json
 {
   "mcpServers": {
-    "sortie-tools": {
+    "my-tool-server": {
       "type": "stdio",
-      "command": "sortie",
-      "args": ["mcp-server"],
+      "command": "/usr/local/bin/my-tool",
+      "args": ["serve"],
       "env": {}
     }
   }
