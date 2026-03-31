@@ -188,7 +188,7 @@ To clarify the two distinct suppression effects:
 - **Continuation turns** (turns 2..N within a single worker run): the turn loop breaks
   immediately after reading the recognized status token. The worker does not proceed to the next
   turn.
-- **Continuation retries** (new worker attempts scheduled after a normal worker exit): the
+- **Continuation retries** (new worker runs scheduled after a normal worker exit): the
   post-exit retry handler skips scheduling. The issue is not re-dispatched until its tracker
   state changes.
 
@@ -211,7 +211,7 @@ For both recognized values, the orchestrator:
 2. Breaks the turn loop (no further continuation turns in this worker run).
 3. Exits the worker run with a normal exit status.
 4. Releases the issue claim.
-5. Does NOT schedule a continuation retry (new worker attempt).
+5. Does NOT schedule a continuation retry (new worker run).
 6. Logs the status token value at `info` level with the issue identifier.
 
 The issue becomes eligible for re-dispatch only when a subsequent tracker poll detects a
@@ -248,13 +248,18 @@ and continue.
 ### 2.6 Read errors
 
 If the orchestrator encounters any error while reading the status file (permission denied,
-I/O error, encoding error), it MUST:
+I/O error), it MUST:
 
 1. Log a warning with the error details and issue identifier.
 2. Treat the file as absent (proceed with default behavior).
 
 Read errors MUST NOT cause the worker run to fail. The protocol is advisory; its unavailability
 does not affect core orchestration correctness.
+
+Non-UTF-8 or binary content is not a read error. The parsing algorithm (Section 2.2) operates on
+raw bytes and does not validate encoding. Binary content that survives the first-line split
+produces a token that will not match any recognized value and is handled as an unrecognized token
+(Section 2.5).
 
 ## 3. Operational semantics
 
@@ -365,12 +370,19 @@ In the worker lifecycle (architecture Section 16.5), the cleanup slot is:
 4. Agent session start.
 5. First turn.
 
+The cleanup operation MUST apply the same symlink rejection as the read path (Section 7.2):
+before deleting, verify via `Lstat` that neither `.sortie/` nor `status` is a symbolic link. If
+a symlink is detected, log a warning and skip the deletion — do not follow the link.
+
 If the deletion fails (e.g., the file was already removed, or the `.sortie/` directory does not
 exist), the error is logged at debug level and ignored.
 
 ```
 function pre_dispatch_cleanup(workspace_path):
     status_path = workspace_path / ".sortie" / "status"
+    if any component of status_path is a symlink (Lstat check):
+        log_warn("symlink detected in .sortie path, skipping cleanup", workspace_path)
+        return
     err = remove(status_path)
     if err and err is not "file not found":
         log_debug("status file cleanup failed", workspace_path, err)
@@ -468,8 +480,7 @@ reinforce the signal.
 ## 5. Design rationale
 
 This section summarizes the architectural alternatives evaluated during the design of this
-protocol and the reasoning behind the selected approach. The full analysis is available in the
-companion research document [18].
+protocol and the reasoning behind the selected approach.
 
 ### 5.1 Alternatives considered
 
@@ -710,6 +721,7 @@ An implementation conforms to this specification if it satisfies all of the foll
 6. The orchestrator never writes to or modifies `.sortie/status` during a worker run.
 7. The status file does not trigger tracker state transitions per Section 3.6.
 8. Symbolic links at any path component are treated as read errors per Section 7.2.
+9. Pre-dispatch cleanup applies the same symlink rejection as reads per Section 3.4.
 
 ## References
 
@@ -760,9 +772,6 @@ An implementation conforms to this specification if it satisfies all of the foll
      Agentic AI Workflows." arXiv:2512.08769, 2025.
 
 [17] Anthropic. "2026 Agentic Coding Trends Report." resources.anthropic.com, 2026.
-
-[18] Sortie project. "Research: Agent-to-Orchestrator (A2O) Protocol." research-a2o.md,
-     2026. Internal research document.
 
 ## Acknowledgments
 
