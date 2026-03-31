@@ -2,8 +2,10 @@
 // Copilot CLI. It launches the copilot binary as a subprocess in
 // headless mode, reads newline-delimited JSON from stdout, and
 // normalizes events into domain types. Registered under kind
-// "copilot-cli" via an init function. Safe for concurrent use: each
-// [CopilotAdapter.RunTurn] call operates on an independent subprocess.
+// "copilot-cli" via an init function. Safe for concurrent use across
+// sessions: callers may invoke [CopilotAdapter.RunTurn] concurrently
+// for different [domain.Session] instances, but turns for a single
+// session must be serialized.
 package copilot
 
 import (
@@ -177,7 +179,7 @@ func (a *CopilotAdapter) StartSession(ctx context.Context, params domain.StartSe
 
 		// Authentication preflight: verify at least one GitHub
 		// authentication source is available.
-		if authErr := checkAuth(); authErr != nil {
+		if authErr := checkAuth(ctx); authErr != nil {
 			return domain.Session{}, authErr
 		}
 	}
@@ -205,7 +207,7 @@ func (a *CopilotAdapter) StartSession(ctx context.Context, params domain.StartSe
 // checkAuth validates that at least one GitHub authentication source
 // is available in the environment. Returns nil on success or an
 // [domain.AgentError] if no source is found.
-func checkAuth() error {
+func checkAuth(ctx context.Context) error {
 	for _, env := range []string{"COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"} {
 		if os.Getenv(env) != "" {
 			return nil
@@ -213,7 +215,7 @@ func checkAuth() error {
 	}
 	// No env var set. Check for gh CLI with valid auth as a fallback.
 	if _, err := exec.LookPath("gh"); err == nil {
-		authCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		authCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 		defer cancel()
 
 		cmd := exec.CommandContext(authCtx, "gh", "auth", "status") //nolint:gosec // fixed args
