@@ -77,8 +77,28 @@ stall detection, timeout enforcement, retries with backoff, state reconciliation
 with the tracker, and workspace cleanup when issues reach terminal states. Changes
 to the workflow are applied without restart.
 
-See [examples/WORKFLOW.md](examples/WORKFLOW.md?plain=1) for a complete example with
+See [`examples/WORKFLOW.md`](examples/WORKFLOW.md?plain=1) for a complete example with
 all hooks, continuation guidance, and blocker handling.
+
+### Copilot CLI
+
+To use GitHub Copilot CLI instead of Claude Code, swap the agent block:
+
+```yaml
+agent:
+  kind: copilot-cli
+  max_turns: 5
+  max_concurrent_agents: 4
+
+copilot-cli:
+  model: gpt-5.3
+```
+
+The adapter requires a GitHub Copilot subscription and a valid GitHub token. See the
+[Copilot CLI adapter reference](https://docs.sortie-ai.com/reference/adapter-copilot/)
+for full configuration details and
+[`examples/WORKFLOW.copilot.md`](examples/WORKFLOW.copilot.md?plain=1) for a complete
+workflow.
 
 ## Architecture
 
@@ -86,13 +106,14 @@ Sortie is a single Go binary. It uses SQLite for persistent state (retry queues,
 metadata, run history) and communicates with coding agents over stdio. The orchestrator
 is the single authority for all scheduling decisions; there is no external job queue or
 distributed coordination. For full architectural details, see
-[docs/architecture.md](docs/architecture.md).
+[`docs/architecture.md`](docs/architecture.md).
 
 Issue trackers and coding agents are integrated through adapter interfaces. Adding support
 for a new tracker or agent is an additive change: implement the interface in a new package.
 
-Supported trackers: GitHub Issues and Jira. Supported agents: Claude Code. See
-[docs/decisions/](docs/decisions/) for detailed rationale on technology choices.
+Supported trackers: GitHub Issues and Jira. Supported agents: Claude Code and
+Copilot CLI. See [`docs/decisions/`](docs/decisions/) for detailed rationale on
+technology choices.
 
 ## Documentation
 
