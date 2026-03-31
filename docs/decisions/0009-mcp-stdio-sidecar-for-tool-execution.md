@@ -54,11 +54,16 @@ Protocol specification. It handles `tools/list` (returns registered tools from t
 `ToolRegistry`) and `tools/call` (delegates to the matching `AgentTool.Execute` implementation
 with session context).
 
-The MCP server receives configuration through two channels, split by kind:
+The MCP server receives configuration through three channels, split by kind:
 
-- **Session context and credentials** reach the server through inherited environment
-  variables. The agent runtime spawns the MCP server as a child process, so the server
-  inherits the worker's environment.
+- **Per-session context** (issue ID, workspace path, database path, session ID) reaches the
+  server through the `env` field in `mcp-config.json`. The worker writes these values at
+  config generation time. These are non-secret session metadata — safe to persist in the
+  workspace directory.
+- **Tracker credentials** reach the server through inherited environment variables. The
+  orchestrator's process environment contains these values (set by the operator). The agent
+  subprocess inherits them via `os.Environ()`, and the MCP server inherits them from the
+  agent runtime, which spawns it as a child process.
 - **Tracker configuration** (kind, endpoint, project, state mappings, query filter) reaches
   the server through the `--workflow` CLI argument. The subcommand parses the WORKFLOW.md
   file to extract tracker config and construct the `TrackerAdapter` — see
@@ -66,28 +71,38 @@ The MCP server receives configuration through two channels, split by kind:
 
 The MCP server expects the following environment variables:
 
-| Variable | Purpose | Required |
-|---|---|---|
-| `SORTIE_ISSUE_ID` | Scopes tool calls to the current issue | Yes |
-| `SORTIE_ISSUE_IDENTIFIER` | Human-readable issue key; used by `tracker_api` for project scoping via identifier prefix | Yes |
-| `SORTIE_WORKSPACE` | Workspace root path for file-relative operations | Yes |
-| `SORTIE_DB_PATH` | SQLite database path (read-only access for Tier 1 tools) | Yes |
-| `SORTIE_SESSION_ID` | Session identifier for Tier 1 run-history queries | Yes |
-| Tracker credentials | Adapter-specific (e.g., GitHub token, Jira API key) | Tier 2 tools only |
+| Variable | Purpose | Channel | Required |
+|---|---|---|---|
+| `SORTIE_ISSUE_ID` | Scopes tool calls to the current issue | Config `env` field | Yes |
+| `SORTIE_ISSUE_IDENTIFIER` | Human-readable issue key; used by `tracker_api` for project scoping via identifier prefix | Config `env` field | Yes |
+| `SORTIE_WORKSPACE` | Workspace root path for file-relative operations | Config `env` field | Yes |
+| `SORTIE_DB_PATH` | SQLite database path (read-only access for Tier 1 tools) | Config `env` field | Yes |
+| `SORTIE_SESSION_ID` | Session identifier for Tier 1 run-history queries | Config `env` field | Yes |
+| Tracker credentials | Adapter-specific (e.g., GitHub token, Jira API key) | Inherited env | Tier 2 tools only |
 
 `SORTIE_ISSUE_ID`, `SORTIE_ISSUE_IDENTIFIER`, and `SORTIE_WORKSPACE` are existing hook
 environment variables (Section 5.3.4). `SORTIE_DB_PATH` and `SORTIE_SESSION_ID` are new
 variables introduced by this ADR — the hook environment does not need them because hooks
 do not query the database or correlate with agent sessions. The MCP server needs
 `SORTIE_DB_PATH` to open a read-only SQLite connection for Tier 1 tools, and
-`SORTIE_SESSION_ID` to scope run-history queries to the current session. Tracker credentials
-are whichever variables the configured `TrackerAdapter` requires — the MCP server inherits
-them from the worker process, which received them from the orchestrator's environment.
+`SORTIE_SESSION_ID` to scope run-history queries to the current session.
 
-Environment variables carry per-session runtime state that changes with every attempt.
+Per-session variables (the first five rows) are computed by the worker at config generation
+time and written into the `env` field of `mcp-config.json`. They do not exist in the
+orchestrator's process environment — multiple workers run concurrently with different values
+for each session. The config file `env` field is the correct delivery mechanism: the agent
+runtime reads it and sets these variables on the MCP server child process at spawn time.
+
+Tracker credentials are whichever variables the configured `TrackerAdapter` requires (e.g.,
+`GITHUB_TOKEN`, Jira API key). These are set by the operator in the orchestrator's process
+environment. The agent subprocess inherits them via `os.Environ()`, and the MCP server
+inherits them from the agent — both the Claude Code and Copilot CLI adapters set
+`cmd.Env = os.Environ()`, establishing this inheritance chain.
+
 Tracker configuration is workflow-level and stable across sessions — it belongs in the
-WORKFLOW.md file, not in the environment. This separation keeps the env var surface small
-and avoids serializing structured config (state lists, query filters) into flat strings.
+WORKFLOW.md file, not in the config `env` field. This three-way separation keeps each
+channel appropriately scoped: session metadata in the config `env` field, credentials in
+inherited environment, tracker structure in the workflow file.
 
 The `mcp-config.json` file written to disk uses the standard MCP configuration format:
 
@@ -98,7 +113,13 @@ The `mcp-config.json` file written to disk uses the standard MCP configuration f
       "type": "stdio",
       "command": "/usr/local/bin/sortie",
       "args": ["mcp-server", "--workflow", "/absolute/path/to/WORKFLOW.md"],
-      "env": {}
+      "env": {
+        "SORTIE_ISSUE_ID": "abc-123",
+        "SORTIE_ISSUE_IDENTIFIER": "PROJ-42",
+        "SORTIE_WORKSPACE": "/tmp/sortie_workspaces/PROJ-42",
+        "SORTIE_DB_PATH": "/var/lib/sortie/sortie.db",
+        "SORTIE_SESSION_ID": "sess-7f3a"
+      }
     }
   }
 }
@@ -115,10 +136,11 @@ path to the `args` array. Relative paths are prohibited because the agent runtim
 MCP server's working directory to the workspace root, which may differ from the
 orchestrator's cwd.
 
-The file MUST NOT contain credential values. The `env` field, if used, MUST reference only
-non-secret configuration — never inline secret values. Credentials reach the MCP server
-through inherited environment variables, not through the config file. This ensures that
-`mcp-config.json` is safe to persist in the workspace directory without leaking credentials.
+The file MUST NOT contain credential values. The `env` field contains per-session context
+variables (non-secret metadata) — never inline secret values such as API keys or tokens.
+Credentials reach the MCP server through inherited environment variables, not through the
+config file. This ensures that `mcp-config.json` is safe to persist in the workspace
+directory without leaking credentials.
 
 ### MCP config merging with operator-provided servers
 
@@ -167,7 +189,8 @@ accomplishes this by replaying the same construction chain used by the main proc
    (`registry.Trackers.Get(kind)`).
 3. Build the config map and construct the `TrackerAdapter`. Credentials resolve from
    inherited environment variables through the same `config.EnvOverride` mechanism used by
-   the main process — the MCP server inherits the worker's full environment.
+   the main process — the MCP server inherits the orchestrator's process environment via
+   the `os.Environ()` → agent → MCP server chain.
 4. Register `trackerapi.New(adapter, project)` in a local `ToolRegistry` only if
    `project` is non-empty — the same guard the main process uses.
 
@@ -323,9 +346,9 @@ Beyond the agent-agnostic violation, two further problems apply:
 - One additional process per active agent session. The agent runtime manages the MCP server
   as its child process, so the worker's process tree is unchanged. However, the host runs
   N MCP server processes alongside N agent processes during concurrent sessions.
-- Session context passing via environment variables limits the information available to
-  the MCP server at startup. Complex session metadata requires serialization to a file or
-  database query rather than direct in-memory access.
+- Session context passing via config file environment variables limits the information
+  available to the MCP server at startup. Complex session metadata requires serialization
+  to a file or database query rather than direct in-memory access.
 
 ### Scope limitation: SSH remote execution
 
@@ -341,8 +364,9 @@ design does not address:
    remote workspace before the agent launches.
 3. **Environment variable forwarding.** The current SSH transport (`sshutil.BuildSSHArgs`)
    constructs a remote shell command without `SendEnv` or explicit variable forwarding.
-   Session context and tracker credentials do not automatically reach the remote MCP server
-   process.
+   Per-session context is delivered via the config file `env` field (handled by config file
+   delivery above), but tracker credentials in the orchestrator's process environment do
+   not automatically reach the remote agent or its MCP server child.
 
 These are solvable (e.g., write config via SSH before agent launch, prepend `env VAR=val` to
 the remote command), but the design belongs in a follow-up specific to SSH tool execution —
