@@ -134,7 +134,8 @@ func (a *CopilotAdapter) StartSession(ctx context.Context, params domain.StartSe
 	var sshHost string
 	var remoteCommand string
 
-	if params.SSHHost != "" {
+	sshHostTrimmed := strings.TrimSpace(params.SSHHost)
+	if sshHostTrimmed != "" {
 		// SSH mode: resolve "ssh" locally, skip local LookPath for
 		// the agent command (it resolves on the remote host).
 		sshPath, lookErr := exec.LookPath("ssh")
@@ -146,7 +147,7 @@ func (a *CopilotAdapter) StartSession(ctx context.Context, params domain.StartSe
 			}
 		}
 		resolvedPath = sshPath
-		sshHost = params.SSHHost
+		sshHost = sshHostTrimmed
 		remoteCommand = command
 	} else {
 		var lookErr error
@@ -210,14 +211,23 @@ func checkAuth() error {
 			return nil
 		}
 	}
-	// No env var set. Check for gh CLI as a fallback.
+	// No env var set. Check for gh CLI with valid auth as a fallback.
 	if _, err := exec.LookPath("gh"); err == nil {
-		slog.Warn("no GitHub token env var set; relying on gh auth for Copilot CLI authentication")
-		return nil
+		authCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+
+		cmd := exec.CommandContext(authCtx, "gh", "auth", "status") //nolint:gosec // fixed args
+		cmd.Stdout = io.Discard
+		cmd.Stderr = io.Discard
+
+		if err := cmd.Run(); err == nil && authCtx.Err() == nil {
+			slog.Warn("no GitHub token env var set; relying on gh auth for Copilot CLI authentication")
+			return nil
+		}
 	}
 	return &domain.AgentError{
 		Kind:    domain.ErrAgentNotFound,
-		Message: "no GitHub authentication source found",
+		Message: "no GitHub authentication source found; set COPILOT_GITHUB_TOKEN, GH_TOKEN, or GITHUB_TOKEN, or run 'gh auth login' to authenticate",
 	}
 }
 
@@ -240,7 +250,8 @@ func (a *CopilotAdapter) RunTurn(ctx context.Context, session domain.Session, pa
 	}
 
 	state := session.Internal.(*sessionState)
-	logger := logging.WithSession(slog.Default().With(slog.String("component", "copilot-adapter")), state.copilotSessionID)
+	baseLogger := slog.Default().With(slog.String("component", "copilot-adapter"))
+	logger := logging.WithSession(baseLogger, state.copilotSessionID)
 
 	args := buildArgs(state, params.Prompt, a.passthrough)
 
@@ -576,6 +587,7 @@ func (a *CopilotAdapter) RunTurn(ctx context.Context, session domain.Session, pa
 	if lastResult != nil && lastResult.SessionID != "" {
 		state.copilotSessionID = lastResult.SessionID
 		state.fallbackToContinue = false
+		logger = logging.WithSession(baseLogger, state.copilotSessionID)
 	} else if state.copilotSessionID == "" {
 		// No result event and no session ID from a prior turn.
 		// Use --continue on the next turn to resume the most recent
