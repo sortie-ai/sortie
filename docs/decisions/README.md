@@ -15,3 +15,4 @@ This directory contains architecturally significant decisions for Sortie, docume
 | [0006](0006-use-fsnotify-for-file-watching.md)   | Use fsnotify for Filesystem Event Watching                       | Accepted |
 | [0007](0007-handoff-state-and-tracker-writes.md) | Use Handoff State Transitions to Signal Agent Completion         | Accepted |
 | [0008](0008-observability-model.md)              | Use Embedded Dashboard with Prometheus Metrics for Observability | Accepted |
+| [0009](0009-mcp-stdio-sidecar-for-tool-execution.md) | Use MCP stdio sidecar for agent tool execution               | Accepted |

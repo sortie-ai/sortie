@@ -691,6 +691,57 @@ accounted for in timeout calculations.
 
 ---
 
+## MCP Server Configuration
+
+The `--mcp-config <path>` flag points Claude Code to a JSON file that declares MCP servers
+for the session. The file uses the standard MCP configuration format with a top-level
+`mcpServers` object. Each key is a server name; each value declares the transport type,
+command, arguments, and optional environment variables.
+
+### File format
+
+```json
+{
+  "mcpServers": {
+    "sortie-tools": {
+      "type": "stdio",
+      "command": "sortie",
+      "args": ["mcp-server"],
+      "env": {}
+    }
+  }
+}
+```
+
+| Field     | Type     | Required | Description                                                        |
+| --------- | -------- | -------- | ------------------------------------------------------------------ |
+| `type`    | string   | No       | Transport type: `"stdio"` (default if omitted) or `"http"`.        |
+| `command` | string   | Yes      | Executable to launch for stdio servers.                            |
+| `args`    | string[] | No       | Arguments passed to the command.                                   |
+| `env`     | object   | No       | Environment variables set for the server process. Keys are         |
+|           |          |          | variable names; values are strings. Used for non-secret config.    |
+
+Claude Code reads the file at agent startup and spawns each declared server as a child
+process with the specified command and args. The server inherits the agent's environment,
+merged with any variables in the `env` field.
+
+### `--strict-mcp-config`
+
+When passed alongside `--mcp-config`, Claude Code ignores MCP server declarations from
+workspace-level `.mcp.json` files and only uses servers from the specified config file.
+This prevents workspace-controlled MCP servers from interfering with Sortie-managed tools.
+
+### Sortie adapter usage
+
+The worker writes a temporary `mcp-config.json` to the workspace directory containing the
+`sortie mcp-server` stdio declaration. If the operator also specifies `claude-code.mcp_config`
+in WORKFLOW.md, the worker merges both server sets into a single file — Claude Code accepts
+only one `--mcp-config` path. A name collision on the `sortie-tools` key fails the attempt.
+Credential values are never written to this file — they reach the MCP server through
+inherited environment variables. See ADR-0009 for the full merge algorithm.
+
+---
+
 ## OpenTelemetry Integration
 
 Claude Code supports OpenTelemetry for monitoring:

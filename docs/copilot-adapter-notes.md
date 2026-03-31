@@ -782,6 +782,57 @@ the adapter should be aware that:
 
 ---
 
+## MCP Server Configuration
+
+The `--additional-mcp-config <json>` flag adds MCP server declarations for the session.
+It accepts either inline JSON or a path to a JSON file. The format follows the standard
+MCP configuration schema with a top-level `mcpServers` object.
+
+### File format
+
+```json
+{
+  "mcpServers": {
+    "sortie-tools": {
+      "type": "stdio",
+      "command": "sortie",
+      "args": ["mcp-server"],
+      "env": {}
+    }
+  }
+}
+```
+
+| Field     | Type     | Required | Description                                                        |
+| --------- | -------- | -------- | ------------------------------------------------------------------ |
+| `type`    | string   | No       | Transport type: `"stdio"` (default if omitted) or `"http"`.        |
+| `command` | string   | Yes      | Executable to launch for stdio servers.                            |
+| `args`    | string[] | No       | Arguments passed to the command.                                   |
+| `env`     | object   | No       | Environment variables set for the server process. Keys are         |
+|           |          |          | variable names; values are strings. Used for non-secret config.    |
+
+Copilot CLI reads the configuration at agent startup and spawns each declared server as a
+child process. The server inherits the agent's environment, merged with any variables in
+the `env` field. Unlike `--mcp-config` in Claude Code, `--additional-mcp-config` is
+additive — it supplements rather than replaces Copilot CLI's built-in MCP servers
+(`github-mcp-server`, `playwright`, `fetch`, `time`).
+
+### Disabling built-in MCP servers
+
+Use `--disable-builtin-mcps` to disable all built-in MCP servers, or
+`--disable-mcp-server <name>` to disable a specific one.
+
+### Sortie adapter usage
+
+The worker writes a temporary `mcp-config.json` to the workspace directory and passes
+its path via `--additional-mcp-config`. If the operator also specifies
+`copilot-cli.mcp_config` in WORKFLOW.md, the worker merges both server sets into a single
+file. A name collision on the `sortie-tools` key fails the attempt. Credential values are
+never written to this file — they reach the MCP server through inherited environment
+variables. See ADR-0009 for the full merge algorithm.
+
+---
+
 ## OpenTelemetry Integration
 
 Copilot CLI supports OpenTelemetry for monitoring ([CLI command reference: OTel
