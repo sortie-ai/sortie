@@ -89,7 +89,7 @@ change, that is a valid conversation to have in an issue.
 ```
 cmd/sortie/            entry point, CLI wiring
 internal/
-  agent/               agent adapters (claude/, mock/)
+  agent/               agent adapters (claude/, copilot/, mock/, etc.)
   config/              typed config, defaults, env-var resolution
   domain/              pure types, interfaces, error categories (imports nothing)
   logging/             structured slog helpers (imports nothing)
@@ -100,11 +100,11 @@ internal/
   registry/            adapter registration
   server/              HTTP API, dashboard, metrics
   tool/                client-side tool framework (trackerapi/)
-  tracker/             tracker adapters (jira/, github/, file/)
+  tracker/             tracker adapters (jira/, github/, file/, etc.)
   workflow/            WORKFLOW.md parser, file watcher
   workspace/           filesystem isolation, path safety, hook execution
 docs/
-  architecture.md      the specification (~2100 lines)
+  architecture.md      the specification (~2700 lines)
   decisions/           Architecture Decision Records (ADRs)
 ```
 

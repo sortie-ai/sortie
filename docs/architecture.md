@@ -1144,9 +1144,9 @@ Approval, sandbox, and user-input behavior is implementation-defined.
 
 Policy requirements:
 
-- Each deployment must document its chosen approval, sandbox, and operator-confirmation posture.
-- Approval requests and user-input-required events must not leave a run stalled indefinitely.
-  Sortie must either satisfy them, surface them to an operator, auto-resolve them, or fail the
+- Each deployment MUST document its chosen approval, sandbox, and operator-confirmation posture.
+- Approval requests and user-input-required events MUST NOT leave a run stalled indefinitely.
+  Sortie MUST either satisfy them, surface them to an operator, auto-resolve them, or fail the
   run according to its documented policy.
 
 Example high-trust behavior:
@@ -1193,14 +1193,15 @@ Invariants:
 - The registry is safe for concurrent reads after construction. Concurrent `Register` + `Get` is
   a data race; callers MUST NOT call `Register` after passing the registry to the orchestrator.
 - Duplicate names panic (programming error, not runtime input).
-- The registry feeds two consumers:
-  1. The MCP sidecar's `tools/list` response (Section 10.4.4).
-  2. Prompt-time tool advertisement (Section 12).
+- The registry feeds prompt-time tool advertisement (Section 12). When the MCP execution
+  channel (Section 10.4.4) is implemented, the registry also feeds the sidecar's `tools/list`
+  response.
 
 #### 10.4.4 Tool execution channel
 
-Registered tools are callable at runtime through an MCP (Model Context Protocol) stdio sidecar
-spawned by the worker alongside the agent process.
+The prescribed runtime execution channel is an MCP (Model Context Protocol) stdio sidecar
+spawned by the worker alongside the agent process. This channel is not yet implemented; tools
+are currently exposed through prompt-time advertisement only (Section 12).
 
 Entry point:
 
@@ -1221,17 +1222,23 @@ Lifecycle:
 
 Session context:
 
-The MCP server receives session context through environment variables. These are the same
-variables available to workspace hooks (Section 5.3.4), extended with tool-specific paths:
+The MCP server receives session context through environment variables. The base set matches the
+per-issue workspace hook environment (Section 5.3.4):
 
 | Variable | Value |
 |---|---|
 | `SORTIE_ISSUE_ID` | Tracker-internal issue ID |
 | `SORTIE_ISSUE_IDENTIFIER` | Human-readable ticket key |
 | `SORTIE_WORKSPACE` | Absolute path to the per-issue workspace |
+| `SORTIE_ATTEMPT` | Retry/continuation attempt number |
+
+When the MCP execution channel is implemented, the following additional variables are prescribed
+for Tier 1 tool access:
+
+| Variable | Value |
+|---|---|
 | `SORTIE_DB_PATH` | Absolute path to the SQLite database file |
 | `SORTIE_SESSION_ID` | Opaque session identifier |
-| `SORTIE_ATTEMPT` | Retry/continuation attempt number |
 
 SQLite access:
 
@@ -1254,7 +1261,7 @@ strategy, and failure characteristics.
 
 **Tier 1 — pure orchestrator state.** These tools read from local orchestrator state (in-memory
 session context or SQLite database) with zero external calls. They are deterministic, fast, and
-have no failure modes beyond internal bugs.
+have no failure modes beyond internal bugs. Not yet implemented.
 
 - `sortie_status` (Section 10.4.7)
 - `workspace_history` (Section 10.4.8)
@@ -1296,13 +1303,15 @@ Tracker dispatch:
 Result semantics:
 
 - Transport success + no API-level errors -> `success: true` with response payload.
-- API-level errors present -> `success: false`, with the response body preserved for debugging.
-- Invalid input, missing auth, or transport failure -> `success: false` with an error payload.
+- API-level errors -> `success: false` with a normalized error envelope
+  `{"success": false, "error": {"kind": "...", "message": "..."}}`.
+- Invalid input, missing auth, or transport failure -> `success: false` with the same normalized
+  error envelope (`error.kind` indicates the failure category).
 
-The response or error payload is returned as structured JSON that the agent can inspect
+The response payload or error envelope is returned as structured JSON that the agent can inspect
 in-session.
 
-#### 10.4.7 Built-in tool: `sortie_status`
+#### 10.4.7 Built-in tool: `sortie_status` (not yet implemented)
 
 `sortie_status` is a Tier 1 tool that returns read-only session runtime metadata from the
 orchestrator's perspective. It enables agents to make informed decisions about pacing, budget,
@@ -1324,7 +1333,7 @@ Returned fields:
 
 Input schema: the tool accepts no input parameters (`{}` schema).
 
-#### 10.4.8 Built-in tool: `workspace_history`
+#### 10.4.8 Built-in tool: `workspace_history` (not yet implemented)
 
 `workspace_history` is a Tier 1 tool that queries the `run_history` SQLite table (Section 19.2)
 and returns the most recent completed run attempts for the current issue. It enables agents on
@@ -2395,19 +2404,23 @@ Unless otherwise noted, Sections 17.1 through 17.7 are `Core Conformance`. Bulle
 - User input requests are handled according to the implementation's documented policy and do not
   stall indefinitely
 - Normalized token usage events are emitted with `{input_tokens, output_tokens, total_tokens}`
-- `ToolRegistry` is populated at startup and all registered tools appear in MCP `tools/list`
-- MCP sidecar process starts before the first turn and terminates on worker exit (normal and
-  abnormal paths)
-- Temporary `mcp-config.json` is generated with correct paths and cleaned up after worker exit
+- `ToolRegistry` is populated at startup and all registered tools appear in prompt-time
+  advertisement
 - `tracker_api` tool:
   - inputs execute against configured tracker auth
-  - API-level errors produce `success: false` while preserving the response body
+  - API-level errors produce `success: false` with a normalized `{kind, message}` error envelope
   - invalid arguments, missing auth, and transport failures return structured failure payloads
   - the tool is scoped to the configured project
-- `sortie_status` tool returns correct `turn_number`, `max_turns`, `turns_remaining`, and
-  `attempt` values mid-session
-- `workspace_history` tool returns entries from `run_history` ordered newest-first, capped at 10
 - Unsupported tool names return a failure result without stalling the session
+- If the MCP execution channel is implemented:
+  - MCP sidecar process starts before the first turn and terminates on worker exit (normal and
+    abnormal paths)
+  - Temporary `mcp-config.json` is generated with correct paths and cleaned up after worker exit
+  - All registered tools appear in the MCP `tools/list` response
+- If `sortie_status` is implemented, it returns correct `turn_number`, `max_turns`,
+  `turns_remaining`, and `attempt` values mid-session
+- If `workspace_history` is implemented, it returns entries from `run_history` ordered
+  newest-first, capped at 10
 
 ### 17.6 Observability
 
