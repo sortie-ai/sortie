@@ -15,6 +15,7 @@ tools:
   - read
   - search
   - todo
+  - sortie-kb/*
 agents:
   - Architect
   - Reviewer

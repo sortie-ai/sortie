@@ -14,6 +14,7 @@ tools:
   - execute
   - web
   - edit
+  - sortie-kb/*
 handoffs:
   - label: Revise Spec
     agent: Architect

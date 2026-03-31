@@ -22,6 +22,7 @@ tools:
   - search/textSearch
   - search/usages
   - context7/*
+  - sortie-kb/*
 ---
 
 ## Skill Requirement — Read This First
