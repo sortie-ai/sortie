@@ -1133,15 +1133,20 @@ Token accounting is normalized at the adapter boundary. The orchestrator receive
 `{input_tokens, output_tokens, total_tokens, cache_read_tokens}` directly and does not parse
 adapter-specific payload shapes.
 
-### 10.4 Approval, Tool Calls, and User Input Policy
+### 10.4 Approval, Tools, and User Input Policy
+
+This section covers the approval posture, tool subsystem, and user-input handling for agent
+sessions.
+
+#### 10.4.1 Approval policy
 
 Approval, sandbox, and user-input behavior is implementation-defined.
 
 Policy requirements:
 
-- Each deployment should document its chosen approval, sandbox, and operator-confirmation posture.
+- Each deployment must document its chosen approval, sandbox, and operator-confirmation posture.
 - Approval requests and user-input-required events must not leave a run stalled indefinitely.
-  Sortie should either satisfy them, surface them to an operator, auto-resolve them, or fail the
+  Sortie must either satisfy them, surface them to an operator, auto-resolve them, or fail the
   run according to its documented policy.
 
 Example high-trust behavior:
@@ -1152,37 +1157,216 @@ Example high-trust behavior:
 
 Unsupported dynamic tool calls:
 
-- If the agent requests a dynamic tool call that is not supported, return a tool failure response
-  and continue the session.
+- If the agent requests a dynamic tool call that is not in the `ToolRegistry`, return a tool
+  failure response and continue the session.
 - This prevents the session from stalling on unsupported tool execution paths.
-
-Optional client-side tool extension:
-
-- Sortie may expose a limited set of client-side tools to the agent session.
-- Current optional standardized tool: `tracker_api`.
-- If implemented, supported tools should be advertised to the agent session during startup.
-- Unsupported tool names should still return a failure result and continue the session.
-
-`tracker_api` extension contract:
-
-- Purpose: execute a query or mutation against the configured tracker using Sortie's configured
-  tracker auth for the current session.
-- Availability: only meaningful when valid tracker auth is configured.
-- The tool is scoped to the configured project. An agent working on project PROJ must not be able
-  to query or mutate issues in unrelated projects through this passthrough tool.
-- When `tracker.kind == "jira"`, the tool executes against the Jira REST API.
-- When `tracker.kind == "linear"`, the tool executes a GraphQL operation against the Linear API.
-- Transport, input shape, and query semantics are adapter-defined.
-- Tool result semantics:
-  - transport success + no API-level errors -> `success=true`
-  - API-level errors present -> `success=false`, but preserve the response body for debugging
-  - invalid input, missing auth, or transport failure -> `success=false` with an error payload
-- Return the response or error payload as structured tool output that the model can inspect
-  in-session.
 
 Hard failure on user input requirement:
 
 - If the agent requests user input, fail the run attempt immediately.
+
+#### 10.4.2 Tool interface contract
+
+All tools that Sortie exposes to agents implement the `AgentTool` interface
+(`internal/domain/tool.go`):
+
+- `Name() string` — stable tool identifier used for matching tool call requests to
+  implementations. MUST be unique within a `ToolRegistry`.
+- `Description() string` — human-readable summary suitable for inclusion in agent prompts and
+  MCP `tools/list` responses. Keep descriptions short and unambiguous; verbose descriptions
+  cause LLMs to hallucinate parameters.
+- `InputSchema() json.RawMessage` — JSON Schema describing the tool's expected input. Used for
+  MCP tool registration and prompt-based documentation.
+- `Execute(ctx context.Context, input json.RawMessage) (json.RawMessage, error)` — runs the tool
+  and returns a structured JSON result. Domain-level errors (missing auth, API failures, invalid
+  input) are encoded in the JSON result with `success: false`. The Go `error` return is reserved
+  for internal failures (nil adapter, marshal failure) that indicate programming errors.
+
+#### 10.4.3 Tool registry
+
+`ToolRegistry` (`internal/domain/tool.go`) is the central registration point for all agent tools.
+
+Invariants:
+
+- Registration is static at build time. All tools are registered during orchestrator
+  initialization, before the first dispatch. No dynamic plugin loading.
+- The registry is safe for concurrent reads after construction. Concurrent `Register` + `Get` is
+  a data race; callers MUST NOT call `Register` after passing the registry to the orchestrator.
+- Duplicate names panic (programming error, not runtime input).
+- The registry feeds two consumers:
+  1. The MCP sidecar's `tools/list` response (Section 10.4.4).
+  2. Prompt-time tool advertisement (Section 12).
+
+#### 10.4.4 Tool execution channel
+
+Registered tools are callable at runtime through an MCP (Model Context Protocol) stdio sidecar
+spawned by the worker alongside the agent process.
+
+Entry point:
+
+- `sortie mcp-server` subcommand. This maintains the single-binary constraint: no separate
+  helper binary.
+
+Lifecycle:
+
+1. **Before first turn.** The worker generates a temporary `mcp-config.json` containing the
+   `sortie mcp-server` command and session context environment variables. The config file is
+   passed to the agent adapter via `--mcp-config` or the adapter-equivalent mechanism.
+2. **During turns.** The MCP server handles `tools/list` (returns all registered tools from the
+   `ToolRegistry`) and `tools/call` (dispatches to the matching `AgentTool.Execute`
+   implementation with session context). No per-turn worker involvement is needed; the sidecar
+   runs independently.
+3. **On worker exit.** The worker terminates the MCP server process and removes the temporary
+   `mcp-config.json`. Cleanup applies to both normal and abnormal exit paths.
+
+Session context:
+
+The MCP server receives session context through environment variables. These are the same
+variables available to workspace hooks (Section 5.3.4), extended with tool-specific paths:
+
+| Variable | Value |
+|---|---|
+| `SORTIE_ISSUE_ID` | Tracker-internal issue ID |
+| `SORTIE_ISSUE_IDENTIFIER` | Human-readable ticket key |
+| `SORTIE_WORKSPACE` | Absolute path to the per-issue workspace |
+| `SORTIE_DB_PATH` | Absolute path to the SQLite database file |
+| `SORTIE_SESSION_ID` | Opaque session identifier |
+| `SORTIE_ATTEMPT` | Retry/continuation attempt number |
+
+SQLite access:
+
+- Tools that read orchestrator state (Tier 1 tools) connect to the SQLite database in read-only
+  mode. The single-writer invariant (Section 19) is preserved: the MCP server never writes to the
+  database.
+- Tools that interact with external services (Tier 2 tools) use credentials from the orchestrator
+  environment. They do not access SQLite for their primary operation.
+
+Agent compatibility:
+
+- Any MCP-compatible agent (Claude Code, GitHub Copilot, future adapters) can call Sortie tools
+  without adapter-specific integration.
+- The MCP server exits cleanly when stdin closes (agent process terminates).
+
+#### 10.4.5 Tool tiers
+
+Tools are classified by their dependency profile. The tier determines security posture, test
+strategy, and failure characteristics.
+
+**Tier 1 — pure orchestrator state.** These tools read from local orchestrator state (in-memory
+session context or SQLite database) with zero external calls. They are deterministic, fast, and
+have no failure modes beyond internal bugs.
+
+- `sortie_status` (Section 10.4.7)
+- `workspace_history` (Section 10.4.8)
+
+**Tier 2 — external dependencies.** These tools interact with external services (tracker APIs,
+future SCM APIs) through network calls using orchestrator-managed credentials. They are subject
+to transport failures, authentication errors, rate limits, and per-tool timeouts.
+
+- `tracker_api` (Section 10.4.6)
+
+Future tools (e.g., `git_context`) follow the same classification.
+
+#### 10.4.6 Built-in tool: `tracker_api`
+
+`tracker_api` is a Tier 2 tool that executes queries and mutations against the configured issue
+tracker using the orchestrator's tracker credentials.
+
+Availability: only meaningful when valid tracker auth is configured. When auth is absent, the
+tool SHOULD NOT be registered.
+
+Project scoping: the tool is scoped to the configured project. An agent working on project PROJ
+MUST NOT be able to query or mutate issues in unrelated projects through this passthrough tool.
+
+Supported operations:
+
+| Operation | Required fields | Description |
+|---|---|---|
+| `fetch_issue` | `issue_id` | Fetch a single issue by ID |
+| `fetch_comments` | `issue_id` | Fetch comments for an issue |
+| `search_issues` | (none) | Return issues in configured active states |
+| `transition_issue` | `issue_id`, `target_state` | Transition an issue to a target state |
+
+Tracker dispatch:
+
+- When `tracker.kind == "jira"`, the tool executes against the Jira REST API.
+- When `tracker.kind == "github"`, the tool executes against the GitHub API.
+- Transport, input shape, and query semantics are adapter-defined.
+
+Result semantics:
+
+- Transport success + no API-level errors -> `success: true` with response payload.
+- API-level errors present -> `success: false`, with the response body preserved for debugging.
+- Invalid input, missing auth, or transport failure -> `success: false` with an error payload.
+
+The response or error payload is returned as structured JSON that the agent can inspect
+in-session.
+
+#### 10.4.7 Built-in tool: `sortie_status`
+
+`sortie_status` is a Tier 1 tool that returns read-only session runtime metadata from the
+orchestrator's perspective. It enables agents to make informed decisions about pacing, budget,
+and when to signal `blocked` via the A2O protocol (Section 21.1).
+
+No external calls. No SQLite queries. Reads from session context passed via environment variables
+(Section 10.4.4).
+
+Returned fields:
+
+| Field | Type | Description |
+|---|---|---|
+| `turn_number` | integer | Current turn within the session |
+| `max_turns` | integer | Configured `agent.max_turns` (Section 5.3.5) |
+| `turns_remaining` | integer | `max_turns - turn_number` |
+| `attempt` | integer or null | Retry/continuation attempt number; null on first run |
+| `session_duration_seconds` | float | Wall-clock time since session started |
+| `tokens` | object | `{input_tokens, output_tokens, total_tokens, cache_read_tokens}` as tracked by the orchestrator's token accounting (Section 13.5) |
+
+Input schema: the tool accepts no input parameters (`{}` schema).
+
+#### 10.4.8 Built-in tool: `workspace_history`
+
+`workspace_history` is a Tier 1 tool that queries the `run_history` SQLite table (Section 19.2)
+and returns the most recent completed run attempts for the current issue. It enables agents on
+continuation runs and retries to understand what happened in previous sessions, avoiding repeated
+mistakes.
+
+Connects to SQLite in read-only mode using `SORTIE_DB_PATH` from the environment. Queries
+`run_history` filtered by `issue_id` from `SORTIE_ISSUE_ID`, ordered by `completed_at DESC`,
+limited to 10 rows.
+
+Returned fields per entry:
+
+| Field | Type | Description |
+|---|---|---|
+| `attempt` | integer | Attempt number at time of run |
+| `agent_adapter` | string | Agent adapter kind used |
+| `started_at` | string | ISO-8601 timestamp |
+| `completed_at` | string | ISO-8601 timestamp |
+| `status` | string | Terminal status: `succeeded`, `failed`, `timed_out`, `stalled`, `cancelled` |
+| `error` | string or null | Error message if failed |
+
+Returns an empty list for issues with no prior runs.
+
+Input schema: the tool accepts no input parameters (`{}` schema).
+
+#### 10.4.9 Tools vs. agent-authored files
+
+The tool subsystem and the `.sortie/status` file protocol (Section 21) are independent
+mechanisms that address different communication patterns:
+
+| Mechanism | Direction | Transport | Timing |
+|---|---|---|---|
+| Agent tools (this section) | Agent -> Orchestrator -> Agent | In-band MCP `tools/call` | Synchronous during turn |
+| `.sortie/status` file (Section 21) | Agent -> Orchestrator | Out-of-band filesystem sentinel | Asynchronous, read after turn |
+
+Tools provide structured, synchronous request/response interaction: the agent calls a tool and
+receives a JSON result within the same turn. The `.sortie/status` file is a one-way advisory
+signal that influences orchestrator behavior (retry suppression) after the turn completes.
+
+An agent MAY use both mechanisms in the same session. For example, an agent might call
+`sortie_status` to check remaining turns, determine it cannot finish, and then write
+`.sortie/status` with `blocked` as its final action.
 
 ### 10.5 Timeouts and Error Mapping
 
@@ -1320,8 +1504,9 @@ Sortie does not require first-class tracker write APIs in the orchestrator.
 - Sortie remains a scheduler/runner and tracker reader.
 - Workflow-specific success often means "reached the next handoff state" (for example
   `Human Review`) rather than tracker terminal state `Done`.
-- If the optional `tracker_api` client-side tool extension is implemented, it is still part of
-  the agent toolchain rather than orchestrator business logic.
+- The agent tool subsystem (Section 10.4) is part of the agent toolchain rather than
+  orchestrator business logic. `tracker_api` executes tracker operations through agent-initiated
+  tool calls, not orchestrator-driven writes.
 
 ## 12. Prompt Construction and Context Assembly
 
@@ -1827,9 +2012,9 @@ Possible hardening measures include:
 - Using `tracker.query_filter` to restrict which issues are eligible for dispatch
   (e.g., by label, component, epic, or other tracker-native criteria) so untrusted or
   out-of-scope tasks do not automatically reach the agent.
-- Scoping the optional `tracker_api` tool so it can only read or mutate data inside the intended
-  project scope, rather than exposing general tracker access.
-- Reducing the set of client-side tools, credentials, filesystem paths, and network destinations
+- Scoping the `tracker_api` tool (Section 10.4.6) so it can only read or mutate data inside the
+  intended project scope, rather than exposing general tracker access.
+- Reducing the set of registered tools, credentials, filesystem paths, and network destinations
   available to the agent to the minimum needed for the workflow.
 
 The correct controls are deployment-specific, but deployments should document them clearly and
@@ -2210,15 +2395,19 @@ Unless otherwise noted, Sections 17.1 through 17.7 are `Core Conformance`. Bulle
 - User input requests are handled according to the implementation's documented policy and do not
   stall indefinitely
 - Normalized token usage events are emitted with `{input_tokens, output_tokens, total_tokens}`
-- If optional client-side tools are implemented, the startup handshake advertises the supported
-  tool specs
-- If the optional `tracker_api` client-side tool extension is implemented:
-  - the tool is advertised to the session
+- `ToolRegistry` is populated at startup and all registered tools appear in MCP `tools/list`
+- MCP sidecar process starts before the first turn and terminates on worker exit (normal and
+  abnormal paths)
+- Temporary `mcp-config.json` is generated with correct paths and cleaned up after worker exit
+- `tracker_api` tool:
   - inputs execute against configured tracker auth
-  - API-level errors produce `success=false` while preserving the response body
+  - API-level errors produce `success: false` while preserving the response body
   - invalid arguments, missing auth, and transport failures return structured failure payloads
   - the tool is scoped to the configured project
-  - unsupported tool names still fail without stalling the session
+- `sortie_status` tool returns correct `turn_number`, `max_turns`, `turns_remaining`, and
+  `attempt` values mid-session
+- `workspace_history` tool returns entries from `run_history` ordered newest-first, capped at 10
+- Unsupported tool names return a failure result without stalling the session
 
 ### 17.6 Observability
 
@@ -2294,8 +2483,8 @@ Use the same validation profiles as Section 17:
 - Prometheus `/metrics` endpoint exposes defined gauges, counters, and histograms when the HTTP
   server is enabled (Section 13.7.3). Backed by `github.com/prometheus/client_golang` with a
   dedicated registry; no external Prometheus server required.
-- Optional `tracker_api` client-side tool extension exposes tracker API access through the agent
-  session using configured Sortie auth, scoped to the configured project.
+- Agent tool subsystem: `ToolRegistry` populated at startup, MCP sidecar execution channel, and
+  built-in tools (`tracker_api`, `sortie_status`, `workspace_history`) per Section 10.4.
 - Make observability settings configurable in workflow front matter without prescribing UI
   implementation details.
 - First-class tracker write APIs (comments/state transitions) in the orchestrator, supplementing
