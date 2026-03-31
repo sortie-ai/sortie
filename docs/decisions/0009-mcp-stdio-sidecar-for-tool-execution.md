@@ -150,7 +150,8 @@ configurations.
 
 The MCP server opens SQLite with `?mode=ro` in the DSN, enforcing read-only access at the
 driver level. This is sufficient for Tier 1 tools that query run history — the orchestrator's
-main process remains the single writer (per ADR-0002, WAL mode with `SetMaxOpenConns(1)`).
+main process remains the single writer (per ADR-0002: SQLite in WAL mode, single-writer
+concurrency).
 Tier 2 tools (e.g., `tracker_api`) delegate to tracker HTTP APIs via the `TrackerAdapter`
 interface and do not access the database. The server exits cleanly when stdin closes, which
 happens automatically when the agent runtime terminates the server's stdio pipe.
