@@ -340,3 +340,65 @@ func TestStartSession_SSHMode(t *testing.T) {
 	}
 	// Auth check is skipped in SSH mode.
 }
+
+// fakeGhBinaryDir creates a fake "gh" binary that exits non-zero (simulating
+// an unauthenticated host) and returns the directory containing it, ready for
+// use as the sole PATH entry.
+func fakeGhBinaryDir(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.WriteFile(
+		filepath.Join(dir, "gh"),
+		[]byte("#!/bin/sh\nexit 1\n"), 0o755,
+	); err != nil {
+		t.Fatalf("creating fake gh binary: %v", err)
+	}
+	return dir
+}
+
+// TestStartSession_SSHHostWhitespaceOnly verifies that a whitespace-only
+// SSHHost value is trimmed to empty and the session falls through to the
+// local subprocess path, not SSH mode.
+func TestStartSession_SSHHostWhitespaceOnly(t *testing.T) {
+	// t.Setenv is incompatible with t.Parallel.
+	t.Setenv("GH_TOKEN", "test-token-for-unit-test")
+
+	adapter, _ := NewCopilotAdapter(map[string]any{})
+	fakeBin := fakeCopilotBinary(t)
+	workspace := t.TempDir()
+
+	session, err := adapter.StartSession(context.Background(), domain.StartSessionParams{
+		WorkspacePath: workspace,
+		AgentConfig:   domain.AgentConfig{Command: fakeBin},
+		SSHHost:       "   ", // whitespace-only: must be treated as local (no SSH host)
+	})
+	if err != nil {
+		t.Fatalf("StartSession(SSHHost=%q) error = %v", "   ", err)
+	}
+
+	state := session.Internal.(*sessionState)
+	if state.sshHost != "" {
+		t.Errorf("state.sshHost = %q, want empty (whitespace-only SSHHost treated as local mode)", state.sshHost)
+	}
+	if state.remoteCommand != "" {
+		t.Errorf("state.remoteCommand = %q, want empty for local mode", state.remoteCommand)
+	}
+}
+
+// TestCheckAuth_GhPresentButUnauthenticated verifies that checkAuth returns
+// ErrAgentNotFound when the gh binary is present but "gh auth status" exits
+// non-zero (i.e., the host has gh installed but not authenticated).
+func TestCheckAuth_GhPresentButUnauthenticated(t *testing.T) {
+	// t.Setenv is incompatible with t.Parallel.
+
+	// Point PATH to a directory containing only a fake gh that exits 1.
+	t.Setenv("PATH", fakeGhBinaryDir(t))
+
+	// Unset all GitHub token env vars so the env-var fast-path is skipped.
+	for _, env := range []string{"COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"} {
+		t.Setenv(env, "")
+	}
+
+	err := checkAuth()
+	requireAgentError(t, err, domain.ErrAgentNotFound)
+}
