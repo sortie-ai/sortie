@@ -1,14 +1,11 @@
 package claude
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -18,7 +15,6 @@ import (
 
 	"github.com/sortie-ai/sortie/internal/agent/agenttest"
 	"github.com/sortie-ai/sortie/internal/domain"
-	"github.com/sortie-ai/sortie/internal/logging"
 	"github.com/sortie-ai/sortie/internal/registry"
 )
 
@@ -516,54 +512,6 @@ func TestParsePassthroughConfig(t *testing.T) {
 	})
 }
 
-func TestExtractExitCode(t *testing.T) {
-	t.Parallel()
-
-	t.Run("nil error", func(t *testing.T) {
-		t.Parallel()
-		if got := extractExitCode(nil); got != 0 {
-			t.Errorf("extractExitCode(nil) = %d, want 0", got)
-		}
-	})
-
-	t.Run("non-ExitError", func(t *testing.T) {
-		t.Parallel()
-		if got := extractExitCode(fmt.Errorf("something")); got != -1 {
-			t.Errorf("extractExitCode(fmt.Errorf) = %d, want -1", got)
-		}
-	})
-
-	t.Run("real exit code", func(t *testing.T) {
-		t.Parallel()
-		cmd := exec.Command("/bin/sh", "-c", "exit 42")
-		err := cmd.Run()
-		got := extractExitCode(err)
-		if got != 42 {
-			t.Errorf("extractExitCode(exit 42) = %d, want 42", got)
-		}
-	})
-}
-
-func TestWasSignaled(t *testing.T) {
-	t.Parallel()
-
-	t.Run("non-ExitError", func(t *testing.T) {
-		t.Parallel()
-		if wasSignaled(fmt.Errorf("not exec")) {
-			t.Error("wasSignaled(non-ExitError) = true")
-		}
-	})
-
-	t.Run("normal exit", func(t *testing.T) {
-		t.Parallel()
-		cmd := exec.Command("/bin/sh", "-c", "exit 1")
-		err := cmd.Run()
-		if wasSignaled(err) {
-			t.Error("wasSignaled(exit 1) = true, want false")
-		}
-	})
-}
-
 func TestEventStream(t *testing.T) {
 	t.Parallel()
 
@@ -584,31 +532,6 @@ func TestStopSession_NilProc(t *testing.T) {
 	err := adapter.StopSession(context.Background(), session)
 	if err != nil {
 		t.Errorf("StopSession(nil proc) = %v, want nil", err)
-	}
-}
-
-func TestDrainStderr_SessionID(t *testing.T) {
-	t.Parallel()
-
-	var buf bytes.Buffer
-	base := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
-	logger := logging.WithSession(base.With(slog.String("component", "claude-adapter")), "sess-test-789")
-
-	r := strings.NewReader("some stderr line\n")
-	drainStderr(r, logger)
-
-	output := buf.String()
-	if !strings.Contains(output, "session_id=sess-test-789") {
-		t.Errorf("log output missing session_id attribute, got: %s", output)
-	}
-	if !strings.Contains(output, "component=claude-adapter") {
-		t.Errorf("log output missing component attribute, got: %s", output)
-	}
-	if !strings.Contains(output, "agent stderr") {
-		t.Errorf("log output missing message, got: %s", output)
-	}
-	if !strings.Contains(output, "line=\"some stderr line\"") {
-		t.Errorf("log output missing line attribute, got: %s", output)
 	}
 }
 
@@ -1206,6 +1129,59 @@ exec sleep 60
 	}
 	if result.ExitReason != domain.EventTurnCancelled {
 		t.Errorf("ExitReason = %q, want %q", result.ExitReason, domain.EventTurnCancelled)
+	}
+}
+
+// TestRunTurn_ContextCancelledBeforeStart verifies that RunTurn emits
+// EventTurnCancelled and returns ErrTurnCancelled when the context is already
+// done before cmd.Start is called.
+func TestRunTurn_ContextCancelledBeforeStart(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	script := writeScript(t, tmpDir, "exit 0")
+
+	adapter, _ := NewClaudeCodeAdapter(map[string]any{})
+	session, err := adapter.StartSession(context.Background(), domain.StartSessionParams{
+		WorkspacePath: tmpDir,
+		AgentConfig:   domain.AgentConfig{Command: script},
+	})
+	if err != nil {
+		t.Fatalf("StartSession() error = %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // pre-cancel before RunTurn
+
+	var events []domain.AgentEvent
+	result, err := adapter.RunTurn(ctx, session, domain.RunTurnParams{
+		Prompt: "test",
+		OnEvent: func(e domain.AgentEvent) {
+			events = append(events, e)
+		},
+	})
+	if err == nil {
+		t.Fatal("expected error on pre-cancelled context, got nil")
+	}
+	var agentErr *domain.AgentError
+	if !errors.As(err, &agentErr) {
+		t.Fatalf("error type = %T, want *domain.AgentError", err)
+	}
+	if agentErr.Kind != domain.ErrTurnCancelled {
+		t.Errorf("AgentError.Kind = %q, want %q", agentErr.Kind, domain.ErrTurnCancelled)
+	}
+	if result.ExitReason != domain.EventTurnCancelled {
+		t.Errorf("ExitReason = %q, want %q", result.ExitReason, domain.EventTurnCancelled)
+	}
+	var foundCancel bool
+	for _, e := range events {
+		if e.Type == domain.EventTurnCancelled {
+			foundCancel = true
+			break
+		}
+	}
+	if !foundCancel {
+		t.Error("EventTurnCancelled not delivered on pre-cancelled context")
 	}
 }
 
