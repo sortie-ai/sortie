@@ -663,7 +663,7 @@ func TestStopSession_TerminatesProcess(t *testing.T) {
 	// Fake binary that blocks until it receives a signal.
 	dir := t.TempDir()
 	sleepBin := filepath.Join(dir, "copilot")
-	if err := os.WriteFile(sleepBin, []byte("#!/bin/sh\nsleep 60\n"), 0o755); err != nil {
+	if err := os.WriteFile(sleepBin, []byte("#!/bin/sh\nexec sleep 60\n"), 0o755); err != nil {
 		t.Fatalf("creating sleeping fake binary: %v", err)
 	}
 
