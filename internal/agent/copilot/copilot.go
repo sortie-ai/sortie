@@ -209,7 +209,7 @@ func (a *CopilotAdapter) StartSession(ctx context.Context, params domain.StartSe
 // [domain.AgentError] if no source is found.
 func checkAuth(ctx context.Context) error {
 	for _, env := range []string{"COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"} {
-		if os.Getenv(env) != "" {
+		if strings.TrimSpace(os.Getenv(env)) != "" {
 			return nil
 		}
 	}
@@ -598,24 +598,21 @@ func (a *CopilotAdapter) RunTurn(ctx context.Context, session domain.Session, pa
 	}
 
 	if lastResult != nil {
-		// Emit final token usage with API duration from the result event.
+		// Extract API duration from the result event. Attached to the
+		// turn completion/failure event — not a separate EventTokenUsage —
+		// to avoid inflating APIRequestCount in the orchestrator.
 		var apiDurationMS int64
 		if lastResult.Usage != nil {
 			apiDurationMS = lastResult.Usage.TotalAPIDurMS
 			logger.Info("copilot turn completed",
 				slog.Int64("premium_requests", lastResult.Usage.PremiumRequests))
 		}
-		params.OnEvent(domain.AgentEvent{
-			Type:          domain.EventTokenUsage,
-			Timestamp:     now,
-			Usage:         usage,
-			APIDurationMS: apiDurationMS,
-		})
 
 		if lastResult.ExitCode != nil && *lastResult.ExitCode == 0 {
 			params.OnEvent(domain.AgentEvent{
-				Type:      domain.EventTurnCompleted,
-				Timestamp: now,
+				Type:          domain.EventTurnCompleted,
+				Timestamp:     now,
+				APIDurationMS: apiDurationMS,
 			})
 			return domain.TurnResult{
 				SessionID:  state.copilotSessionID,
@@ -624,9 +621,10 @@ func (a *CopilotAdapter) RunTurn(ctx context.Context, session domain.Session, pa
 			}, nil
 		}
 		params.OnEvent(domain.AgentEvent{
-			Type:      domain.EventTurnFailed,
-			Timestamp: now,
-			Message:   "non-zero exit in result event",
+			Type:          domain.EventTurnFailed,
+			Timestamp:     now,
+			Message:       "non-zero exit in result event",
+			APIDurationMS: apiDurationMS,
 		})
 		return domain.TurnResult{
 				SessionID:  state.copilotSessionID,

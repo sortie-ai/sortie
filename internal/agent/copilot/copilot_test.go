@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sortie-ai/sortie/internal/agent/agenttest"
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/registry"
 )
@@ -18,12 +19,7 @@ import (
 // exits 0 for any invocation (including the --version canary check).
 func fakeCopilotBinary(t *testing.T) string {
 	t.Helper()
-	dir := t.TempDir()
-	path := filepath.Join(dir, "copilot")
-	if err := os.WriteFile(path, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
-		t.Fatalf("creating fake copilot binary: %v", err)
-	}
-	return path
+	return agenttest.WriteScript(t, t.TempDir(), "copilot", "exit 0")
 }
 
 // requireAgentError asserts err is a *domain.AgentError with the given Kind.
@@ -405,6 +401,24 @@ func TestCheckAuth_GhPresentButUnauthenticated(t *testing.T) {
 	requireAgentError(t, err, domain.ErrAgentNotFound)
 }
 
+// TestCheckAuth_WhitespaceOnlyToken verifies that a token env var set to
+// whitespace-only does not satisfy the auth preflight. The check must fall
+// through to the gh auth probe; when that also fails the function returns
+// ErrAgentNotFound.
+func TestCheckAuth_WhitespaceOnlyToken(t *testing.T) {
+	// t.Setenv is incompatible with t.Parallel.
+
+	// COPILOT_GITHUB_TOKEN is whitespace-only; the other vars are absent.
+	t.Setenv("COPILOT_GITHUB_TOKEN", "   ")
+	t.Setenv("GH_TOKEN", "")
+	t.Setenv("GITHUB_TOKEN", "")
+	// Point PATH to an unauthenticated fake gh so the fallback also fails.
+	t.Setenv("PATH", fakeGhBinaryDir(t))
+
+	err := checkAuth(context.Background())
+	requireAgentError(t, err, domain.ErrAgentNotFound)
+}
+
 // fakeCopilotBinaryWithOutput creates a fake copilot binary that writes content
 // to stdout and exits with the given exit code.
 func fakeCopilotBinaryWithOutput(t *testing.T, content string, exitCode int) string {
@@ -414,12 +428,7 @@ func fakeCopilotBinaryWithOutput(t *testing.T, content string, exitCode int) str
 	if err := os.WriteFile(outFile, []byte(content), 0o644); err != nil {
 		t.Fatalf("writing run turn output file: %v", err)
 	}
-	binPath := filepath.Join(dir, "copilot")
-	script := fmt.Sprintf("#!/bin/sh\ncat '%s'\nexit %d\n", outFile, exitCode)
-	if err := os.WriteFile(binPath, []byte(script), 0o755); err != nil {
-		t.Fatalf("creating fake copilot binary with output: %v", err)
-	}
-	return binPath
+	return agenttest.WriteScript(t, dir, "copilot", fmt.Sprintf("cat '%s'\nexit %d", outFile, exitCode))
 }
 
 // newTestSession starts a session backed by fakeCopilotBinary.
@@ -460,6 +469,17 @@ func hasEventType(events []domain.AgentEvent, typ domain.AgentEventType) bool {
 	return false
 }
 
+// findEventByType returns the first event matching typ and true, or a zero
+// value and false when no matching event exists.
+func findEventByType(events []domain.AgentEvent, typ domain.AgentEventType) (domain.AgentEvent, bool) {
+	for _, e := range events {
+		if e.Type == typ {
+			return e, true
+		}
+	}
+	return domain.AgentEvent{}, false
+}
+
 func TestRunTurn_HappyPath(t *testing.T) {
 	// t.Setenv is incompatible with t.Parallel.
 	t.Setenv("GH_TOKEN", "test-token-for-unit-test")
@@ -497,6 +517,29 @@ func TestRunTurn_HappyPath(t *testing.T) {
 	} {
 		if !hasEventType(events, typ) {
 			t.Errorf("event type %q not delivered", typ)
+		}
+	}
+
+	// EventTurnCompleted must carry APIDurationMS from result.totalApiDurationMs.
+	// simple_session.jsonl has totalApiDurationMs: 6866.
+	if e, ok := findEventByType(events, domain.EventTurnCompleted); ok {
+		const wantAPIDurationMS int64 = 6866
+		if e.APIDurationMS != wantAPIDurationMS {
+			t.Errorf("EventTurnCompleted.APIDurationMS = %d, want %d", e.APIDurationMS, wantAPIDurationMS)
+		}
+	} else {
+		t.Error("EventTurnCompleted not found in events")
+	}
+
+	// No phantom EventTokenUsage should follow the final turn-completion event.
+	for i, e := range events {
+		if e.Type == domain.EventTurnCompleted {
+			for _, after := range events[i+1:] {
+				if after.Type == domain.EventTokenUsage {
+					t.Error("phantom EventTokenUsage emitted after EventTurnCompleted")
+				}
+			}
+			break
 		}
 	}
 }
@@ -638,6 +681,50 @@ func TestRunTurn_NonZeroResultExitCode(t *testing.T) {
 	}
 }
 
+// TestRunTurn_TurnFailed_APIDurationMS verifies that EventTurnFailed carries
+// APIDurationMS from the result event's totalApiDurationMs field, and that no
+// phantom EventTokenUsage follows it.
+func TestRunTurn_TurnFailed_APIDurationMS(t *testing.T) {
+	// t.Setenv is incompatible with t.Parallel.
+	t.Setenv("GH_TOKEN", "test-token-for-unit-test")
+
+	// Result event with non-zero totalApiDurationMs and a non-zero exit code.
+	const failJSONL = `{"type":"result","timestamp":"2026-03-30T22:19:28.097Z","sessionId":"cc990fc2-1234-5678-9abc-def012345678","exitCode":1,"usage":{"premiumRequests":2,"totalApiDurationMs":5000,"sessionDurationMs":9000}}`
+
+	adapter, session := newTestSession(t, t.TempDir())
+	state := session.Internal.(*sessionState)
+	state.command = fakeCopilotBinaryWithOutput(t, failJSONL, 0)
+
+	var events []domain.AgentEvent
+	_, err := adapter.RunTurn(context.Background(), session, domain.RunTurnParams{
+		OnEvent: func(e domain.AgentEvent) { events = append(events, e) },
+	})
+
+	requireAgentError(t, err, domain.ErrTurnFailed)
+
+	// EventTurnFailed must carry APIDurationMS from the result event.
+	e, ok := findEventByType(events, domain.EventTurnFailed)
+	if !ok {
+		t.Fatal("EventTurnFailed not delivered")
+	}
+	const wantAPIDurationMS int64 = 5000
+	if e.APIDurationMS != wantAPIDurationMS {
+		t.Errorf("EventTurnFailed.APIDurationMS = %d, want %d", e.APIDurationMS, wantAPIDurationMS)
+	}
+
+	// No phantom EventTokenUsage should follow EventTurnFailed.
+	for i, ev := range events {
+		if ev.Type == domain.EventTurnFailed {
+			for _, after := range events[i+1:] {
+				if after.Type == domain.EventTokenUsage {
+					t.Error("phantom EventTokenUsage emitted after EventTurnFailed")
+				}
+			}
+			break
+		}
+	}
+}
+
 func TestStopSession_NilProc(t *testing.T) {
 	t.Parallel()
 
@@ -662,10 +749,7 @@ func TestStopSession_TerminatesProcess(t *testing.T) {
 
 	// Fake binary that blocks until it receives a signal.
 	dir := t.TempDir()
-	sleepBin := filepath.Join(dir, "copilot")
-	if err := os.WriteFile(sleepBin, []byte("#!/bin/sh\nexec sleep 60\n"), 0o755); err != nil {
-		t.Fatalf("creating sleeping fake binary: %v", err)
-	}
+	sleepBin := agenttest.WriteScript(t, dir, "copilot", "exec sleep 60")
 
 	adapter, session := newTestSession(t, t.TempDir())
 	state := session.Internal.(*sessionState)
