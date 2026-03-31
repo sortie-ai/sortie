@@ -1,0 +1,4 @@
+{"type":"session.tools_updated","data":{"model":"claude-opus-4.6"},"id":"e3a1b2c3-0001-4000-8000-000000000001","timestamp":"2026-03-30T22:21:00.000Z","parentId":"p3a1b2c3-0001-4000-8000-000000000001","ephemeral":true}
+this is not json
+{"type":"future.event.type","data":{"something":"unknown"},"id":"e3a1b2c3-0003-4000-8000-000000000003","timestamp":"2026-03-30T22:21:01.000Z","parentId":"p3a1b2c3-0001-4000-8000-000000000001"}
+{"type":"assistant.message","data":{"messageId":"96620e44-0003-4000-8000-000000000001","content":"hello after malformed","toolRequests":[],"interactionId":"bac81e5a-0003-4000-8000-000000000003","outputTokens":4},"id":"e3a1b2c3-0004-4000-8000-000000000004","timestamp":"2026-03-30T22:21:02.000Z","parentId":"p3a1b2c3-0001-4000-8000-000000000001"}
