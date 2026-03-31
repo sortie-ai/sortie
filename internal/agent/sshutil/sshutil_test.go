@@ -192,7 +192,7 @@ func TestBuildSSHArgs(t *testing.T) {
 			check: func(t *testing.T, args []string) {
 				t.Helper()
 				remote := args[len(args)-1]
-				want := "cd " + ShellQuote("/workspace") + " && " + ShellQuote("claude")
+				want := "cd -- " + ShellQuote("/workspace") + " && " + ShellQuote("claude")
 				if remote != want {
 					t.Errorf("remote cmd = %q, want %q", remote, want)
 				}

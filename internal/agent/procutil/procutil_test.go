@@ -1,6 +1,7 @@
 package procutil
 
 import (
+	"bufio"
 	"bytes"
 	"errors"
 	"log/slog"
@@ -166,5 +167,26 @@ func TestDrainStderr(t *testing.T) {
 				t.Errorf("DrainStderr log output = %q, want empty for empty input", output)
 			}
 		})
+	}
+}
+
+func TestDrainStderr_NilLogger(t *testing.T) {
+	t.Parallel()
+	// Verifies that nil logger falls back to slog.Default() and does not panic.
+	DrainStderr(strings.NewReader("some output\n"), nil)
+}
+
+func TestDrainStderr_ScannerError(t *testing.T) {
+	t.Parallel()
+	// A line longer than bufio.MaxScanTokenSize triggers scanner.Err() != nil.
+	// Verify the error is logged rather than silently dropped.
+	longLine := strings.Repeat("x", bufio.MaxScanTokenSize+1)
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	DrainStderr(strings.NewReader(longLine), logger)
+
+	if !strings.Contains(buf.String(), "agent stderr drain failed") {
+		t.Errorf("DrainStderr did not log scanner error; output = %q", buf.String())
 	}
 }

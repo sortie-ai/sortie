@@ -48,9 +48,9 @@ func BuildSSHArgs(host, workspacePath, remoteCommand string, agentArgs []string,
 		strings.TrimSpace(host),
 	}
 
-	// Build remote command: cd <workspace> && <command> <args...>
+	// Build remote command: cd -- <workspace> && <command> <args...>
 	var parts []string
-	parts = append(parts, "cd", ShellQuote(workspacePath), "&&")
+	parts = append(parts, "cd", "--", ShellQuote(workspacePath), "&&")
 	parts = append(parts, ShellQuote(remoteCommand))
 	for _, arg := range agentArgs {
 		parts = append(parts, ShellQuote(arg))

@@ -44,8 +44,16 @@ func WasSignaled(err error) bool {
 // error. Intended to run as a goroutine draining a subprocess stderr
 // pipe.
 func DrainStderr(r io.Reader, logger *slog.Logger) {
+	if logger == nil {
+		logger = slog.Default()
+	}
+
 	scanner := bufio.NewScanner(r)
 	for scanner.Scan() {
 		logger.Debug("agent stderr", slog.String("line", scanner.Text()))
+	}
+
+	if err := scanner.Err(); err != nil {
+		logger.Debug("agent stderr drain failed", slog.Any("error", err))
 	}
 }

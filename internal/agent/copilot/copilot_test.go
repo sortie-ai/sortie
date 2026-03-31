@@ -725,6 +725,50 @@ func TestRunTurn_TurnFailed_APIDurationMS(t *testing.T) {
 	}
 }
 
+// TestRunTurn_ContextCancelledBeforeStart verifies that RunTurn emits
+// EventTurnCancelled and returns ErrTurnCancelled when the context is already
+// done before cmd.Start is called.
+func TestRunTurn_ContextCancelledBeforeStart(t *testing.T) {
+	// t.Setenv is incompatible with t.Parallel.
+	t.Setenv("GH_TOKEN", "test-token-for-unit-test")
+
+	adapter, session := newTestSession(t, t.TempDir())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // pre-cancel before RunTurn
+
+	var events []domain.AgentEvent
+	result, err := adapter.RunTurn(ctx, session, domain.RunTurnParams{
+		Prompt: "test",
+		OnEvent: func(e domain.AgentEvent) {
+			events = append(events, e)
+		},
+	})
+	if err == nil {
+		t.Fatal("expected error on pre-cancelled context, got nil")
+	}
+	var agentErr *domain.AgentError
+	if !errors.As(err, &agentErr) {
+		t.Fatalf("error type = %T, want *domain.AgentError", err)
+	}
+	if agentErr.Kind != domain.ErrTurnCancelled {
+		t.Errorf("AgentError.Kind = %q, want %q", agentErr.Kind, domain.ErrTurnCancelled)
+	}
+	if result.ExitReason != domain.EventTurnCancelled {
+		t.Errorf("ExitReason = %q, want %q", result.ExitReason, domain.EventTurnCancelled)
+	}
+	var foundCancel bool
+	for _, e := range events {
+		if e.Type == domain.EventTurnCancelled {
+			foundCancel = true
+			break
+		}
+	}
+	if !foundCancel {
+		t.Error("EventTurnCancelled not delivered on pre-cancelled context")
+	}
+}
+
 func TestStopSession_NilProc(t *testing.T) {
 	t.Parallel()
 
