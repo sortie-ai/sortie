@@ -74,18 +74,20 @@ The MCP server expects the following environment variables:
 | Variable | Purpose | Channel | Required |
 |---|---|---|---|
 | `SORTIE_ISSUE_ID` | Scopes tool calls to the current issue | Config `env` field | Yes |
-| `SORTIE_ISSUE_IDENTIFIER` | Human-readable issue key; used by `tracker_api` for project scoping via identifier prefix | Config `env` field | Yes |
+| `SORTIE_ISSUE_IDENTIFIER` | Human-readable issue key (e.g., `PROJ-42`); available as session context for Tier 1 queries and future tools | Config `env` field | Yes |
 | `SORTIE_WORKSPACE` | Workspace root path for file-relative operations | Config `env` field | Yes |
 | `SORTIE_DB_PATH` | SQLite database path (read-only access for Tier 1 tools) | Config `env` field | Yes |
 | `SORTIE_SESSION_ID` | Session identifier for Tier 1 run-history queries | Config `env` field | Yes |
 | Tracker credentials | Adapter-specific (e.g., GitHub token, Jira API key) | Inherited env | Tier 2 tools only |
 
 `SORTIE_ISSUE_ID`, `SORTIE_ISSUE_IDENTIFIER`, and `SORTIE_WORKSPACE` are existing hook
-environment variables (Section 5.3.4). `SORTIE_DB_PATH` and `SORTIE_SESSION_ID` are new
-variables introduced by this ADR — the hook environment does not need them because hooks
-do not query the database or correlate with agent sessions. The MCP server needs
-`SORTIE_DB_PATH` to open a read-only SQLite connection for Tier 1 tools, and
-`SORTIE_SESSION_ID` to scope run-history queries to the current session.
+environment variables (Section 5.3.4). `SORTIE_DB_PATH` is an existing top-level env
+override for `db_path` (documented in the workflow reference); the worker propagates it
+into the config `env` field so the MCP server can locate the database without re-resolving
+the workflow. `SORTIE_SESSION_ID` is the only new variable introduced by this ADR — the
+hook environment does not need it because hooks do not correlate with agent sessions. The
+MCP server needs `SORTIE_DB_PATH` to open a read-only SQLite connection for Tier 1 tools,
+and `SORTIE_SESSION_ID` to scope run-history queries to the current session.
 
 Per-session variables (the first five rows) are computed by the worker at config generation
 time and written into the `env` field of `mcp-config.json`. They do not exist in the
@@ -343,9 +345,9 @@ Beyond the agent-agnostic violation, two further problems apply:
 
 ### Negative
 
-- One additional process per active agent session. The agent runtime manages the MCP server
-  as its child process, so the worker's process tree is unchanged. However, the host runs
-  N MCP server processes alongside N agent processes during concurrent sessions.
+- One additional process per active agent session. The worker does not spawn or manage the
+  MCP server process directly — the agent runtime does — but the host runs N MCP server
+  processes alongside N agent processes during concurrent sessions.
 - Session context passing via config file environment variables limits the information
   available to the MCP server at startup. Complex session metadata requires serialization
   to a file or database query rather than direct in-memory access.
