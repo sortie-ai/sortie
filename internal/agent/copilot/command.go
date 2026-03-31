@@ -46,7 +46,6 @@ func buildArgs(state *sessionState, prompt string, pt passthroughConfig) []strin
 		"-p", prompt,
 		"--output-format", "json",
 		"-s",
-		"--allow-all",
 		"--autopilot",
 		"--no-ask-user",
 	}
@@ -72,6 +71,14 @@ func buildArgs(state *sessionState, prompt string, pt passthroughConfig) []strin
 	}
 	if pt.Agent != "" {
 		args = append(args, "--agent", pt.Agent)
+	}
+
+	// Tool scoping: use --allow-all only when no explicit tool scoping
+	// flags are configured. --allow-all overrides scoped flags.
+	hasToolScoping := pt.AllowedTools != "" || pt.DeniedTools != "" ||
+		pt.AvailableTools != "" || pt.ExcludedTools != ""
+	if !hasToolScoping {
+		args = append(args, "--allow-all")
 	}
 	if pt.AllowedTools != "" {
 		args = append(args, "--allow-tool", pt.AllowedTools)

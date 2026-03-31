@@ -401,7 +401,7 @@ func TestCheckAuth_GhPresentButUnauthenticated(t *testing.T) {
 		t.Setenv(env, "")
 	}
 
-	err := checkAuth()
+	err := checkAuth(context.Background())
 	requireAgentError(t, err, domain.ErrAgentNotFound)
 }
 
