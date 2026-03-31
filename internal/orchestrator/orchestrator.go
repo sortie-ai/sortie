@@ -108,7 +108,7 @@ type Orchestrator struct {
 	workflowFileFunc func() string
 
 	// sshStrictHostKeyChecking is the current effective OpenSSH
-	// StrictHostKeyChecking value. Written by applyConfig on every
+	// StrictHostKeyChecking value. Written by handleTick on every
 	// tick/reload; read by makeWorkerFn at dispatch time.
 	sshStrictHostKeyChecking string
 }

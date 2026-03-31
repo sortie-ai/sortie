@@ -256,7 +256,7 @@ func ParseWorkerConfig(extensions map[string]any) WorkerConfig {
 				maxPerHost = v
 			}
 		case float64:
-			if int(v) > 0 {
+			if v > 0 && v == float64(int(v)) {
 				maxPerHost = int(v)
 			}
 		}
