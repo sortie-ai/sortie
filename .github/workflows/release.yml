@@ -233,12 +233,12 @@ jobs:
     runs-on: ubuntu-latest
     env:
       SORTIE_COPILOT_TEST: "1"
-      GH_TOKEN: ${{ secrets.SORTIE_GITHUB_TOKEN }}
+      GH_TOKEN: ${{ secrets.SORTIE_COPILOT_TOKEN }}
     steps:
       - name: Verify Copilot CLI secrets are configured
         run: |
           missing=()
-          [ -z "$GH_TOKEN" ] && missing+=("SORTIE_GITHUB_TOKEN")
+          [ -z "$GH_TOKEN" ] && missing+=("SORTIE_COPILOT_TOKEN")
           if [ ${#missing[@]} -ne 0 ]; then
             echo "::error::Missing required secrets: ${missing[*]}"
             echo "Configure these in Settings → Secrets and variables → Actions"
