@@ -10,11 +10,12 @@ import (
 )
 
 // signalledErr starts a blocking subprocess, kills it with SIGKILL, and
-// returns the resulting *exec.ExitError. Used to produce a signal-terminated
-// error for WasSignaled tests.
+// returns the resulting *exec.ExitError. Uses sleep(1) which blocks
+// indefinitely without reading stdin, avoiding races where cat exits
+// immediately on a closed stdin (e.g. in CI).
 func signalledErr(t *testing.T) error {
 	t.Helper()
-	cmd := exec.Command("cat")
+	cmd := exec.Command("sleep", "60")
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("signalledErr: Start: %v", err)
 	}
