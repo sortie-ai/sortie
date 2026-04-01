@@ -15,10 +15,22 @@ import (
 )
 
 // newTestClient creates a githubClient pointed at the given base URL with
-// a test token and user-agent.
+// a test token and user-agent. Each call gets an isolated HTTP transport
+// cloned from DefaultTransport so that parallel tests whose httptest
+// servers close do not race against shared idle connections.
 func newTestClient(t *testing.T, baseURL string) *githubClient {
 	t.Helper()
-	return newGitHubClient(baseURL, "test-token", "sortie/test")
+	defaultTransport, ok := http.DefaultTransport.(*http.Transport)
+	if !ok {
+		t.Fatalf("http.DefaultTransport is %T, want *http.Transport", http.DefaultTransport)
+	}
+	transport := defaultTransport.Clone()
+	c := newGitHubClient(baseURL, "test-token", "sortie/test")
+	c.httpClient.Transport = transport
+	t.Cleanup(func() {
+		transport.CloseIdleConnections()
+	})
+	return c
 }
 
 // assertClientError asserts that err is a *domain.TrackerError with the
@@ -477,7 +489,7 @@ func TestDoJSON_2xxRange(t *testing.T) {
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(status)
 			}))
-			defer srv.Close()
+			t.Cleanup(srv.Close)
 
 			c := newTestClient(t, srv.URL)
 			_, err := c.doJSON(context.Background(), "PATCH", "/repos/o/r/issues/1", bytes.NewBufferString("{}"))
