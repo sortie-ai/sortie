@@ -521,22 +521,25 @@ func TestToRunningEntryResponse_DisplayID(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name   string
-		id     string
-		dispID string
-		wantID string
+		name           string
+		id             string
+		dispID         string
+		wantIdentifier string
+		wantDisplayID  string
 	}{
 		{
-			name:   "DisplayID set — used as IssueIdentifier",
-			id:     "42",
-			dispID: "owner/repo#42",
-			wantID: "owner/repo#42",
+			name:           "DisplayID set — raw Identifier preserved, qualified form in DisplayIdentifier",
+			id:             "42",
+			dispID:         "owner/repo#42",
+			wantIdentifier: "42",
+			wantDisplayID:  "owner/repo#42",
 		},
 		{
-			name:   "DisplayID empty — falls back to Identifier",
-			id:     "PROJ-99",
-			dispID: "",
-			wantID: "PROJ-99",
+			name:           "DisplayID empty — Identifier unchanged, DisplayIdentifier empty",
+			id:             "PROJ-99",
+			dispID:         "",
+			wantIdentifier: "PROJ-99",
+			wantDisplayID:  "",
 		},
 	}
 
@@ -552,8 +555,11 @@ func TestToRunningEntryResponse_DisplayID(t *testing.T) {
 
 			got := toRunningEntryResponse(entry)
 
-			if got.IssueIdentifier != tt.wantID {
-				t.Errorf("IssueIdentifier = %q, want %q", got.IssueIdentifier, tt.wantID)
+			if got.IssueIdentifier != tt.wantIdentifier {
+				t.Errorf("IssueIdentifier = %q, want %q", got.IssueIdentifier, tt.wantIdentifier)
+			}
+			if got.DisplayIdentifier != tt.wantDisplayID {
+				t.Errorf("DisplayIdentifier = %q, want %q", got.DisplayIdentifier, tt.wantDisplayID)
 			}
 		})
 	}
@@ -563,22 +569,25 @@ func TestToRetryEntryResponse_DisplayID(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name   string
-		id     string
-		dispID string
-		wantID string
+		name           string
+		id             string
+		dispID         string
+		wantIdentifier string
+		wantDisplayID  string
 	}{
 		{
-			name:   "DisplayID set — used as IssueIdentifier",
-			id:     "42",
-			dispID: "owner/repo#42",
-			wantID: "owner/repo#42",
+			name:           "DisplayID set — raw Identifier preserved, qualified form in DisplayIdentifier",
+			id:             "42",
+			dispID:         "owner/repo#42",
+			wantIdentifier: "42",
+			wantDisplayID:  "owner/repo#42",
 		},
 		{
-			name:   "DisplayID empty — falls back to Identifier",
-			id:     "PROJ-42",
-			dispID: "",
-			wantID: "PROJ-42",
+			name:           "DisplayID empty — Identifier unchanged, DisplayIdentifier empty",
+			id:             "PROJ-42",
+			dispID:         "",
+			wantIdentifier: "PROJ-42",
+			wantDisplayID:  "",
 		},
 	}
 
@@ -597,8 +606,11 @@ func TestToRetryEntryResponse_DisplayID(t *testing.T) {
 
 			got := toRetryEntryResponse(entry)
 
-			if got.IssueIdentifier != tt.wantID {
-				t.Errorf("IssueIdentifier = %q, want %q", got.IssueIdentifier, tt.wantID)
+			if got.IssueIdentifier != tt.wantIdentifier {
+				t.Errorf("IssueIdentifier = %q, want %q", got.IssueIdentifier, tt.wantIdentifier)
+			}
+			if got.DisplayIdentifier != tt.wantDisplayID {
+				t.Errorf("DisplayIdentifier = %q, want %q", got.DisplayIdentifier, tt.wantDisplayID)
 			}
 		})
 	}
