@@ -75,6 +75,7 @@ type dashboardRetryEntry struct {
 type dashboardRunHistoryEntry struct {
 	Identifier   string
 	Attempt      int
+	Turns        int
 	Status       string
 	WorkflowFile string
 	StartedAt    string
@@ -302,6 +303,7 @@ func mapRunHistoryEntries(runs []RunHistoryEntry) []dashboardRunHistoryEntry {
 		out[i] = dashboardRunHistoryEntry{
 			Identifier:   r.Identifier,
 			Attempt:      r.Attempt,
+			Turns:        r.TurnsCompleted,
 			Status:       r.Status,
 			WorkflowFile: wf,
 			StartedAt:    r.StartedAt,

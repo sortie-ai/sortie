@@ -286,7 +286,9 @@
             <tr>
               <td><a href="{{.DetailURL}}">{{.Identifier}}</a></td>
               <td>{{.State}}</td>
-              <td>{{if .WorkflowFile}}{{.WorkflowFile}}{{else}}&mdash;{{end}}</td>
+              <td>
+                {{if .WorkflowFile}}{{.WorkflowFile}}{{else}}&mdash;{{end}}
+              </td>
               {{if $.HasSSH}}
               <td>{{if .Host}}{{.Host}}{{else}}local{{end}}</td>
               {{end}}
@@ -346,6 +348,7 @@
             <tr>
               <th>Identifier</th>
               <th class="text-right">Attempt</th>
+              <th class="text-right">Turns</th>
               <th>Status</th>
               <th>Workflow</th>
               <th>Started</th>
@@ -358,11 +361,14 @@
             <tr>
               <td>{{.Identifier}}</td>
               <td class="text-right">{{.Attempt}}</td>
+              <td class="text-right">{{.Turns}}</td>
               <td>{{.Status}}</td>
               <td>{{.WorkflowFile}}</td>
               <td>{{.StartedAt}}</td>
               <td>{{.Duration}}</td>
-              <td class="error-cell" title="{{.Error}}">{{if .Error}}{{.Error}}{{else}}&mdash;{{end}}</td>
+              <td class="error-cell" title="{{.Error}}">
+                {{if .Error}}{{.Error}}{{else}}&mdash;{{end}}
+              </td>
             </tr>
             {{end}}
           </tbody>
