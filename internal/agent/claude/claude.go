@@ -368,30 +368,42 @@ func (a *ClaudeCodeAdapter) RunTurn(ctx context.Context, session domain.Session,
 						cumulativeInput += meta.Usage.InputTokens
 						cumulativeOutput += meta.Usage.OutputTokens
 						cumulativeCacheRead += meta.Usage.CacheReadInputTokens
-						cumulativeTotal := cumulativeInput + cumulativeOutput
-						usage = domain.TokenUsage{
-							InputTokens:     cumulativeInput,
-							OutputTokens:    cumulativeOutput,
-							TotalTokens:     cumulativeTotal,
-							CacheReadTokens: cumulativeCacheRead,
-						}
-						tokenEvt := domain.AgentEvent{
-							Type:      domain.EventTokenUsage,
-							Timestamp: now,
-							Usage:     usage,
-							Model:     lastModel,
-						}
-						if !apiCallStart.IsZero() {
-							dur := time.Since(apiCallStart).Milliseconds()
-							if dur <= 0 {
-								dur = 1 // clamp so the orchestrator accumulates this measurement
+						// Claude Code 2.x: tool_use-only assistant messages may
+						// carry output_tokens=0 (streaming message_start snapshot).
+						// Defer the token_usage event until cumulative output is
+						// non-zero so the orchestrator never receives an event
+						// claiming zero output tokens for a real API turn.
+						if cumulativeOutput > 0 {
+							cumulativeTotal := cumulativeInput + cumulativeOutput
+							usage = domain.TokenUsage{
+								InputTokens:     cumulativeInput,
+								OutputTokens:    cumulativeOutput,
+								TotalTokens:     cumulativeTotal,
+								CacheReadTokens: cumulativeCacheRead,
 							}
-							tokenEvt.APIDurationMS = dur
+							tokenEvt := domain.AgentEvent{
+								Type:      domain.EventTokenUsage,
+								Timestamp: now,
+								Usage:     usage,
+								Model:     lastModel,
+							}
+							if !apiCallStart.IsZero() {
+								dur := time.Since(apiCallStart).Milliseconds()
+								if dur <= 0 {
+									dur = 1 // clamp so the orchestrator accumulates this measurement
+								}
+								tokenEvt.APIDurationMS = dur
+								apiCallStart = time.Time{}
+								emittedAPITiming = true
+							}
+							params.OnEvent(tokenEvt)
+							emittedUsage = true
+						} else if !apiCallStart.IsZero() {
+							// Consume the timing window without emitting so
+							// that the next user event restarts fresh timing
+							// for the subsequent API call.
 							apiCallStart = time.Time{}
-							emittedAPITiming = true
 						}
-						params.OnEvent(tokenEvt)
-						emittedUsage = true
 					}
 				}
 			}

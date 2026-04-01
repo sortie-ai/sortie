@@ -809,22 +809,23 @@ exit 0
 	}
 }
 
-// TestRunTurn_AssistantZeroUsage_SuppressesResultTokenUsage verifies that
-// the dedup boolean tracks emission, not cumulative counts. Even when
-// assistant messages report all-zero usage, the result event must not
-// emit a duplicate token_usage.
-func TestRunTurn_AssistantZeroUsage_SuppressesResultTokenUsage(t *testing.T) {
+// TestRunTurn_AssistantZeroOutputTokens_FallsBackToResult verifies that when
+// an assistant message carries a usage object with output_tokens=0 (as
+// emitted by Claude Code 2.x for tool_use-only turns), the adapter does NOT
+// emit a token_usage event for that assistant message. Instead, the result
+// event acts as the fallback and emits exactly one token_usage event.
+func TestRunTurn_AssistantZeroOutputTokens_FallsBackToResult(t *testing.T) {
 	t.Parallel()
 
 	tmpDir := t.TempDir()
-	// Assistant carries a usage object with all-zero counts. The adapter
-	// still emits a token_usage event (zeroes are valid). The boolean
-	// emittedUsage is set true, so the result event must not emit again.
+	// Assistant carries usage with output_tokens=0 (tool_use-only message).
+	// The adapter must defer emission and let the result event provide
+	// the canonical token_usage.
 	script := writeScript(t, tmpDir, `
 cat <<'JSONL'
-{"type":"system","subtype":"init","session_id":"zero-usage","cwd":"/tmp"}
-{"type":"assistant","message":{"model":"claude-sonnet-4-20250514","usage":{"input_tokens":0,"output_tokens":0,"cache_read_input_tokens":0},"content":[{"type":"text","text":"Thinking."}]},"session_id":"zero-usage"}
-{"type":"result","subtype":"success","result":"OK.","is_error":false,"usage":{"input_tokens":0,"output_tokens":0},"session_id":"zero-usage"}
+{"type":"system","subtype":"init","session_id":"zero-output","cwd":"/tmp"}
+{"type":"assistant","message":{"model":"claude-sonnet-4-20250514","usage":{"input_tokens":80,"output_tokens":0,"cache_read_input_tokens":0},"content":[{"type":"text","text":"Thinking."}]},"session_id":"zero-output"}
+{"type":"result","subtype":"success","result":"OK.","is_error":false,"usage":{"input_tokens":80,"output_tokens":25},"session_id":"zero-output"}
 JSONL
 exit 0
 `)
@@ -839,7 +840,7 @@ exit 0
 	}
 
 	var events []domain.AgentEvent
-	_, err = adapter.RunTurn(context.Background(), session, domain.RunTurnParams{
+	result, err := adapter.RunTurn(context.Background(), session, domain.RunTurnParams{
 		Prompt: "test",
 		OnEvent: func(e domain.AgentEvent) {
 			events = append(events, e)
@@ -849,9 +850,80 @@ exit 0
 		t.Fatalf("RunTurn() error = %v", err)
 	}
 
+	// Exactly 1 token_usage event — from the result fallback (not from the
+	// zero-output-tokens assistant message).
 	var tokenUsageCount int
 	for _, e := range events {
 		if e.Type == domain.EventTokenUsage {
+			tokenUsageCount++
+			if e.Usage.OutputTokens <= 0 {
+				t.Errorf("EventTokenUsage.OutputTokens = %d, want > 0", e.Usage.OutputTokens)
+			}
+		}
+	}
+	if tokenUsageCount != 1 {
+		eventTypes := make([]domain.AgentEventType, len(events))
+		for i, e := range events {
+			eventTypes[i] = e.Type
+		}
+		t.Errorf("token_usage events = %d, want 1 (result fallback); events = %v",
+			tokenUsageCount, eventTypes)
+	}
+
+	// TurnResult.Usage reflects result event totals.
+	if result.Usage.OutputTokens != 25 {
+		t.Errorf("TurnResult.Usage.OutputTokens = %d, want 25", result.Usage.OutputTokens)
+	}
+}
+
+// TestRunTurn_ToolUseThenText verifies the tool_use → text assistant sequence
+// that caused Claude Code 2.x CI failures. The first assistant message
+// (tool_use, output_tokens=0) must not emit token_usage; the second
+// (text reply, output_tokens>0) emits the cumulative token_usage. The result
+// event is then suppressed to avoid inflating APIRequestCount.
+func TestRunTurn_ToolUseThenText(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	script := writeScript(t, tmpDir, `
+cat <<'JSONL'
+{"type":"system","subtype":"init","session_id":"tool-then-text","cwd":"/tmp"}
+{"type":"assistant","message":{"model":"claude-sonnet-4-6","usage":{"input_tokens":120,"output_tokens":0},"content":[{"type":"tool_use","id":"tool_01","name":"Read","input":{"file_path":"hello.txt"}}]},"session_id":"tool-then-text"}
+{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"tool_01","content":"Hello"}]},"session_id":"tool-then-text"}
+{"type":"assistant","message":{"model":"claude-sonnet-4-6","usage":{"input_tokens":140,"output_tokens":3},"content":[{"type":"text","text":"Hello"}]},"session_id":"tool-then-text"}
+{"type":"result","subtype":"success","result":"Hello","is_error":false,"usage":{"input_tokens":260,"output_tokens":3},"session_id":"tool-then-text"}
+JSONL
+exit 0
+`)
+
+	adapter, _ := NewClaudeCodeAdapter(map[string]any{})
+	session, err := adapter.StartSession(context.Background(), domain.StartSessionParams{
+		WorkspacePath: tmpDir,
+		AgentConfig:   domain.AgentConfig{Command: script},
+	})
+	if err != nil {
+		t.Fatalf("StartSession() error = %v", err)
+	}
+
+	var events []domain.AgentEvent
+	result, err := adapter.RunTurn(context.Background(), session, domain.RunTurnParams{
+		Prompt: "read hello.txt",
+		OnEvent: func(e domain.AgentEvent) {
+			events = append(events, e)
+		},
+	})
+	if err != nil {
+		t.Fatalf("RunTurn() error = %v", err)
+	}
+
+	// Exactly 1 token_usage (from second assistant, not from first or result).
+	var tokenUsageCount int
+	var firstUsage domain.AgentEvent
+	for _, e := range events {
+		if e.Type == domain.EventTokenUsage {
+			if tokenUsageCount == 0 {
+				firstUsage = e
+			}
 			tokenUsageCount++
 		}
 	}
@@ -860,8 +932,22 @@ exit 0
 		for i, e := range events {
 			eventTypes[i] = e.Type
 		}
-		t.Errorf("token_usage events = %d, want 1 (zero-usage assistant should still suppress result emission); events = %v",
-			tokenUsageCount, eventTypes)
+		t.Errorf("token_usage events = %d, want 1; events = %v", tokenUsageCount, eventTypes)
+	}
+	if firstUsage.Usage.OutputTokens <= 0 {
+		t.Errorf("EventTokenUsage.OutputTokens = %d, want > 0", firstUsage.Usage.OutputTokens)
+	}
+	if firstUsage.Usage.InputTokens <= 0 {
+		t.Errorf("EventTokenUsage.InputTokens = %d, want > 0", firstUsage.Usage.InputTokens)
+	}
+	if firstUsage.Usage.TotalTokens != firstUsage.Usage.InputTokens+firstUsage.Usage.OutputTokens {
+		t.Errorf("EventTokenUsage.TotalTokens = %d, want %d",
+			firstUsage.Usage.TotalTokens, firstUsage.Usage.InputTokens+firstUsage.Usage.OutputTokens)
+	}
+
+	// TurnResult.Usage comes from the result event (authoritative totals).
+	if result.Usage.TotalTokens <= 0 {
+		t.Errorf("TurnResult.Usage.TotalTokens = %d, want > 0", result.Usage.TotalTokens)
 	}
 }
 
