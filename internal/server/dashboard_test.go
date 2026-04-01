@@ -1051,6 +1051,112 @@ func TestBuildDashboardData_FallsBackToIdentifier(t *testing.T) {
 	}
 }
 
+// TestHandleDashboard_FooterCacheReadLabel verifies that the dashboard footer uses
+// the "Cache Read:" label (not the ambiguous "Cache:") and includes a tooltip
+// explaining the metric for users unfamiliar with prompt caching.
+func TestHandleDashboard_FooterCacheReadLabel(t *testing.T) {
+	t.Parallel()
+
+	snap := orchestrator.RuntimeSnapshotResult{
+		GeneratedAt: time.Date(2026, 3, 24, 12, 0, 0, 0, time.UTC),
+		AgentTotals: orchestrator.SnapshotAgentTotals{
+			InputTokens:     734,
+			OutputTokens:    280,
+			CacheReadTokens: 2077449,
+		},
+	}
+	ts := dashboardServer(t, fixedSnapshot(snap), "1.0.0", nil)
+
+	dr := getDashboard(t, ts, "/")
+
+	if dr.StatusCode != http.StatusOK {
+		t.Fatalf("GET / status = %d, want %d", dr.StatusCode, http.StatusOK)
+	}
+
+	// The footer must use "Cache Read:" as the label.
+	if !strings.Contains(dr.Body, "Cache Read:") {
+		t.Error(`footer body missing "Cache Read:" label`)
+	}
+
+	// The span must carry the tooltip explaining the metric.
+	wantTitle := `title="Prompt cache read tokens`
+	if !strings.Contains(dr.Body, wantTitle) {
+		t.Errorf("footer body missing tooltip attribute %q", wantTitle)
+	}
+
+	// The cache read token value must appear formatted.
+	if !strings.Contains(dr.Body, "2,077,449") {
+		t.Error(`footer body missing formatted cache read token count "2,077,449"`)
+	}
+}
+
+// TestHandleDashboard_SessionsCachedTokensTooltip verifies that the Running
+// Sessions table renders the cached token annotation with an explanatory tooltip
+// when CacheReadTokens is non-zero.
+func TestHandleDashboard_SessionsCachedTokensTooltip(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 3, 24, 12, 0, 0, 0, time.UTC)
+
+	tests := []struct {
+		name            string
+		cacheReadTokens int64
+		wantTooltip     bool
+		wantFormatted   string
+	}{
+		{
+			name:            "non-zero cache read tokens renders tooltip",
+			cacheReadTokens: 763850,
+			wantTooltip:     true,
+			wantFormatted:   "763,850",
+		},
+		{
+			name:            "zero cache read tokens omits annotation",
+			cacheReadTokens: 0,
+			wantTooltip:     false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			snap := orchestrator.RuntimeSnapshotResult{
+				GeneratedAt: now,
+				Running: []orchestrator.SnapshotRunningEntry{
+					{
+						IssueID:          "id-1",
+						Identifier:       "MT-1",
+						State:            "In Progress",
+						StartedAt:        now.Add(-5 * time.Minute),
+						AgentTotalTokens: 1000,
+						CacheReadTokens:  tt.cacheReadTokens,
+					},
+				},
+			}
+			ts := dashboardServer(t, fixedSnapshot(snap), "1.0.0", nil)
+
+			dr := getDashboard(t, ts, "/")
+
+			if dr.StatusCode != http.StatusOK {
+				t.Fatalf("GET / status = %d, want %d", dr.StatusCode, http.StatusOK)
+			}
+
+			// The <small> tag in the sessions table is guarded by {{if .CacheReadTokens}},
+			// so the tooltip only appears in the table rows when cached tokens are non-zero.
+			wantTitle := `<small title="Prompt cache read tokens`
+			gotTooltip := strings.Contains(dr.Body, wantTitle)
+			if gotTooltip != tt.wantTooltip {
+				t.Errorf("body contains sessions-table tooltip %q = %v, want %v", wantTitle, gotTooltip, tt.wantTooltip)
+			}
+
+			if tt.wantFormatted != "" && !strings.Contains(dr.Body, tt.wantFormatted) {
+				t.Errorf("body missing formatted cache read count %q", tt.wantFormatted)
+			}
+		})
+	}
+}
+
 func TestMapRunHistoryEntries_DisplayID(t *testing.T) {
 	t.Parallel()
 

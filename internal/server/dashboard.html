@@ -299,7 +299,10 @@
               <td class="text-right">{{.APIRequestCount}}</td>
               <td class="text-right">
                 {{fmtInt .TotalTokens}}{{if .CacheReadTokens}}
-                <small>({{fmtInt .CacheReadTokens}} cached)</small>{{end}}
+                <small
+                  title="Prompt cache read tokens — served from cache, not reprocessed"
+                  >({{fmtInt .CacheReadTokens}} cached)</small
+                >{{end}}
               </td>
               <td class="text-right">{{.ToolTimePct}}</td>
               <td class="text-right">{{.APITimePct}}</td>
@@ -380,8 +383,12 @@
     <footer>
       <div class="aggregate">
         Agent runtime: {{.RuntimeDisplay}} &middot; Input: {{fmtInt
-        .InputTokens}} &middot; Cache: {{fmtInt .CacheReadTokens}} &middot;
-        Output: {{fmtInt .OutputTokens}}
+        .InputTokens}} &middot;
+        <span
+          title="Prompt cache read tokens — served from cache, not reprocessed"
+          >Cache Read: {{fmtInt .CacheReadTokens}}</span
+        >
+        &middot; Output: {{fmtInt .OutputTokens}}
       </div>
       <div>Auto-refresh every 5s</div>
     </footer>
