@@ -27,15 +27,15 @@ func SortForDispatch(issues []domain.Issue) []domain.Issue {
 // sorting. Returns negative if a should sort before b, positive if after,
 // zero if equal.
 func compareDispatchOrder(a, b domain.Issue) int {
-	// Key 1: priority ascending, nil last.
+	// Priority ascending, nil last.
 	if c := comparePriority(a.Priority, b.Priority); c != 0 {
 		return c
 	}
-	// Key 2: created_at oldest first, empty last.
+	// Created-at oldest first, empty last.
 	if c := compareCreatedAt(a.CreatedAt, b.CreatedAt); c != 0 {
 		return c
 	}
-	// Key 3: identifier lexicographic tiebreaker.
+	// Identifier lexicographic tiebreaker.
 	return cmp.Compare(a.Identifier, b.Identifier)
 }
 
@@ -77,7 +77,7 @@ func compareCreatedAt(a, b string) int {
 // per-state slot limits) are not included; the dispatch loop checks slot
 // availability incrementally between dispatches via [HasAvailableSlots].
 func ShouldDispatch(issue domain.Issue, state *State, activeStates, terminalStates []string) bool {
-	// Rule 1: required fields.
+	// Issues missing required fields are not eligible for dispatch.
 	if issue.ID == "" || issue.Identifier == "" || issue.Title == "" || issue.State == "" {
 		return false
 	}
@@ -86,7 +86,7 @@ func ShouldDispatch(issue domain.Issue, state *State, activeStates, terminalStat
 	terminalSet := stateSet(terminalStates)
 	normalizedState := strings.ToLower(issue.State)
 
-	// Rule 2: state must be active and not terminal.
+	// Issue state must be active and not terminal.
 	if _, active := activeSet[normalizedState]; !active {
 		return false
 	}
@@ -94,25 +94,24 @@ func ShouldDispatch(issue domain.Issue, state *State, activeStates, terminalStat
 		return false
 	}
 
-	// Rule 3: not already running.
+	// Already-running issues cannot be dispatched again.
 	if _, running := state.Running[issue.ID]; running {
 		return false
 	}
 
-	// Rule 4: not already claimed.
+	// Claimed issues are pending dispatch or retry and cannot be re-dispatched.
 	if _, claimed := state.Claimed[issue.ID]; claimed {
 		return false
 	}
 
-	// Rule 4b: effort budget exhausted.
+	// Issues that exhausted their effort budget are blocked from dispatch.
 	if _, exhausted := state.BudgetExhausted[issue.ID]; exhausted {
 		return false
 	}
 
-	// Rule 5: blocker rule — applies to issues in an active non-running
-	// state. Rules 2 and 3 guarantee that precondition: by this point the
-	// issue's state is active (Rule 2) and the issue is not in the Running
-	// map (Rule 3). Any non-terminal blocker blocks dispatch.
+	// Blocker rule: any non-terminal blocker blocks dispatch. The active-state
+	// and not-running guards above guarantee the precondition that the issue
+	// is in an active non-running state.
 	if isBlockedByNonTerminalSet(issue, terminalSet) {
 		return false
 	}
@@ -125,14 +124,14 @@ func ShouldDispatch(issue domain.Issue, state *State, activeStates, terminalStat
 // candidate. activeSet and terminalSet must contain lowercase state names
 // built via [stateSet].
 func ShouldDispatchWithSets(issue domain.Issue, state *State, activeSet, terminalSet map[string]struct{}) bool {
-	// Rule 1: required fields.
+	// Issues missing required fields are not eligible for dispatch.
 	if issue.ID == "" || issue.Identifier == "" || issue.Title == "" || issue.State == "" {
 		return false
 	}
 
 	normalizedState := strings.ToLower(issue.State)
 
-	// Rule 2: state must be active and not terminal.
+	// Issue state must be active and not terminal.
 	if _, active := activeSet[normalizedState]; !active {
 		return false
 	}
@@ -140,22 +139,22 @@ func ShouldDispatchWithSets(issue domain.Issue, state *State, activeSet, termina
 		return false
 	}
 
-	// Rule 3: not already running.
+	// Already-running issues cannot be dispatched again.
 	if _, running := state.Running[issue.ID]; running {
 		return false
 	}
 
-	// Rule 4: not already claimed.
+	// Claimed issues are pending dispatch or retry and cannot be re-dispatched.
 	if _, claimed := state.Claimed[issue.ID]; claimed {
 		return false
 	}
 
-	// Rule 4b: effort budget exhausted.
+	// Issues that exhausted their effort budget are blocked from dispatch.
 	if _, exhausted := state.BudgetExhausted[issue.ID]; exhausted {
 		return false
 	}
 
-	// Rule 5: blocker rule.
+	// Any non-terminal blocker blocks dispatch.
 	if isBlockedByNonTerminalSet(issue, terminalSet) {
 		return false
 	}
