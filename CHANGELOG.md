@@ -25,6 +25,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   removed during transitions
 - Rename dashboard footer cache label from "Cache:" to "Cache Read:" and
   add explanatory tooltips in the footer and Running Sessions table
+- Defer `token_usage` event emission in the Claude adapter when an
+  assistant message carries zero output tokens (tool_use-only messages
+  in Claude Code 2.x `stream-json` format); the adapter now accumulates
+  input tokens and falls back to the result event which carries correct
+  totals
 
 ### Migrations
 
