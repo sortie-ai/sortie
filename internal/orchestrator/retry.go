@@ -162,16 +162,18 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 				slog.Any("error", countErr),
 			)
 		} else if count >= params.MaxSessions {
-			log.Warn("effort budget exhausted, releasing claim",
+			log.Warn("effort budget exhausted, blocking re-dispatch",
 				slog.Int("count", count),
 				slog.Int("max_sessions", params.MaxSessions),
 			)
+			state.BudgetExhausted[issueID] = struct{}{}
 			delete(state.Claimed, issueID)
 			if err := params.Store.DeleteRetryEntry(ctx, issueID); err != nil {
 				log.Error("failed to delete retry entry after budget exhaustion",
 					slog.Any("error", err),
 				)
 			}
+			metrics.IncDispatches(outcomeBudgetExhausted)
 			return
 		}
 	}

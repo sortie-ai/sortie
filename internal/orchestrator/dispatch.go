@@ -104,6 +104,11 @@ func ShouldDispatch(issue domain.Issue, state *State, activeStates, terminalStat
 		return false
 	}
 
+	// Rule 4b: effort budget exhausted.
+	if _, exhausted := state.BudgetExhausted[issue.ID]; exhausted {
+		return false
+	}
+
 	// Rule 5: blocker rule — applies to issues in an active non-running
 	// state. Rules 2 and 3 guarantee that precondition: by this point the
 	// issue's state is active (Rule 2) and the issue is not in the Running
@@ -142,6 +147,11 @@ func ShouldDispatchWithSets(issue domain.Issue, state *State, activeSet, termina
 
 	// Rule 4: not already claimed.
 	if _, claimed := state.Claimed[issue.ID]; claimed {
+		return false
+	}
+
+	// Rule 4b: effort budget exhausted.
+	if _, exhausted := state.BudgetExhausted[issue.ID]; exhausted {
 		return false
 	}
 

@@ -79,6 +79,9 @@ type stubStore struct {
 	sessions        []persistence.SessionMetadata
 	savedRetries    []persistence.RetryEntry
 	deletedRetryIDs []string
+	// Budget exhaustion query configuration (Rule 4b / per-tick rebuild).
+	budgetExhaustedIDs []string
+	budgetExhaustedErr error
 }
 
 func (s *stubStore) AppendRunHistory(_ context.Context, run persistence.RunHistory) (persistence.RunHistory, error) {
@@ -119,6 +122,17 @@ func (s *stubStore) DeleteRetryEntry(_ context.Context, issueID string) error {
 
 func (s *stubStore) CountRunHistoryByIssue(_ context.Context, _ string) (int, error) {
 	return 0, nil
+}
+
+func (s *stubStore) QueryBudgetExhaustedIssues(_ context.Context, _ []string, _ int) ([]string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.budgetExhaustedErr != nil {
+		return nil, s.budgetExhaustedErr
+	}
+	result := make([]string, len(s.budgetExhaustedIDs))
+	copy(result, s.budgetExhaustedIDs)
+	return result, nil
 }
 
 // stubObserver implements [Observer] with an atomic call counter.
@@ -275,6 +289,25 @@ func TestShouldDispatchWithSets(t *testing.T) {
 			name:      "second active state eligible",
 			issue:     domain.Issue{ID: "1", Identifier: "X-1", Title: "T", State: "In Progress"},
 			activeSet: activeSet, terminalS: terminalSet,
+			want: true,
+		},
+		// Rule 4b: effort budget exhausted.
+		{
+			name:      "budget exhausted blocks dispatch",
+			issue:     baseIssue,
+			activeSet: activeSet, terminalS: terminalSet,
+			setupState: func(s *State) {
+				s.BudgetExhausted[baseIssue.ID] = struct{}{}
+			},
+			want: false,
+		},
+		{
+			name:      "budget exhausted for different ID allows dispatch",
+			issue:     baseIssue,
+			activeSet: activeSet, terminalS: terminalSet,
+			setupState: func(s *State) {
+				s.BudgetExhausted["other-id"] = struct{}{}
+			},
 			want: true,
 		},
 	}
@@ -3352,5 +3385,192 @@ func TestRefreshDrainedDuringShutdown(t *testing.T) {
 	// After drain completes, RefreshFunc must return false.
 	if refreshFn() {
 		t.Error("RefreshFunc() = true after drain, want false")
+	}
+}
+
+// --- Budget Exhaustion Tick Tests ---
+
+// budgetTickConfig returns a workflow manager configured for per-tick
+// budget exhaustion tests.
+func budgetTickConfig(maxSessions int) *stubWorkflowManager {
+	cfg := config.ServiceConfig{
+		Tracker: config.TrackerConfig{
+			Kind:           "mock",
+			APIKey:         "key",
+			ActiveStates:   []string{"To Do"},
+			TerminalStates: []string{"Done"},
+		},
+		Polling: config.PollingConfig{IntervalMS: 60000},
+		Agent: config.AgentConfig{
+			Kind:                "mock",
+			MaxConcurrentAgents: 10,
+			MaxSessions:         maxSessions,
+		},
+	}
+	return &stubWorkflowManager{config: cfg}
+}
+
+// budgetOrchestrator builds an orchestrator wired for budget-exhaustion tick tests.
+func budgetOrchestrator(state *State, wm *stubWorkflowManager, store *stubStore, tracker *candidateTrackerAdapter) *Orchestrator {
+	regs := passingPreflightRegistries()
+	regs.ReloadWorkflow = func() error { return nil }
+	regs.ConfigFunc = wm.Config
+	return NewOrchestrator(OrchestratorParams{
+		State:           state,
+		Logger:          discardLogger(),
+		TrackerAdapter:  tracker,
+		AgentAdapter:    &mockAgentAdapter{},
+		WorkflowManager: wm,
+		Store:           store,
+		PreflightParams: regs,
+	})
+}
+
+func TestHandleTick_BudgetExhaustionRebuildsState(t *testing.T) {
+	t.Parallel()
+
+	issue := domain.Issue{ID: "iss-1", Identifier: "TEST-1", Title: "title", State: "To Do"}
+
+	t.Run("store returns exhausted IDs state populated", func(t *testing.T) {
+		t.Parallel()
+
+		wm := budgetTickConfig(3)
+		store := &stubStore{budgetExhaustedIDs: []string{issue.ID}}
+		state := NewState(60000, 10, nil, AgentTotals{})
+		tracker := &candidateTrackerAdapter{
+			mockTrackerAdapter: &mockTrackerAdapter{},
+			fetchCandidatesFn:  func(_ context.Context) ([]domain.Issue, error) { return []domain.Issue{issue}, nil },
+		}
+
+		budgetOrchestrator(state, wm, store, tracker).handleTick(context.Background())
+
+		if _, ok := state.BudgetExhausted[issue.ID]; !ok {
+			t.Errorf("BudgetExhausted[%s] missing after tick, want present", issue.ID)
+		}
+	})
+
+	t.Run("exhausted issue not dispatched", func(t *testing.T) {
+		t.Parallel()
+
+		wm := budgetTickConfig(3)
+		store := &stubStore{budgetExhaustedIDs: []string{issue.ID}}
+		state := NewState(60000, 10, nil, AgentTotals{})
+		tracker := &candidateTrackerAdapter{
+			mockTrackerAdapter: &mockTrackerAdapter{},
+			fetchCandidatesFn:  func(_ context.Context) ([]domain.Issue, error) { return []domain.Issue{issue}, nil },
+		}
+
+		budgetOrchestrator(state, wm, store, tracker).handleTick(context.Background())
+
+		if _, running := state.Running[issue.ID]; running {
+			t.Errorf("Running[%s] present, want absent (budget exhausted)", issue.ID)
+		}
+	})
+
+	t.Run("store error retains previous BudgetExhausted", func(t *testing.T) {
+		t.Parallel()
+
+		wm := budgetTickConfig(3)
+		store := &stubStore{budgetExhaustedErr: fmt.Errorf("db error")}
+		state := NewState(60000, 10, nil, AgentTotals{})
+		state.BudgetExhausted[issue.ID] = struct{}{} // pre-populated
+		tracker := &candidateTrackerAdapter{
+			mockTrackerAdapter: &mockTrackerAdapter{},
+			fetchCandidatesFn:  func(_ context.Context) ([]domain.Issue, error) { return []domain.Issue{issue}, nil },
+		}
+
+		budgetOrchestrator(state, wm, store, tracker).handleTick(context.Background())
+
+		// Store error → retains the previous set without clearing.
+		if _, ok := state.BudgetExhausted[issue.ID]; !ok {
+			t.Errorf("BudgetExhausted[%s] cleared on store error, want retained", issue.ID)
+		}
+	})
+
+	t.Run("max_sessions zero clears BudgetExhausted", func(t *testing.T) {
+		t.Parallel()
+
+		wm := budgetTickConfig(0) // MaxSessions=0 → unlimited
+		store := &stubStore{}
+		state := NewState(60000, 10, nil, AgentTotals{})
+		state.BudgetExhausted[issue.ID] = struct{}{} // pre-populated
+		tracker := &candidateTrackerAdapter{
+			mockTrackerAdapter: &mockTrackerAdapter{},
+			fetchCandidatesFn:  func(_ context.Context) ([]domain.Issue, error) { return []domain.Issue{issue}, nil },
+		}
+
+		budgetOrchestrator(state, wm, store, tracker).handleTick(context.Background())
+
+		if _, ok := state.BudgetExhausted[issue.ID]; ok {
+			t.Errorf("BudgetExhausted[%s] remains with MaxSessions=0, want cleared", issue.ID)
+		}
+	})
+
+	t.Run("empty candidate list skips query and retains previous set", func(t *testing.T) {
+		t.Parallel()
+
+		wm := budgetTickConfig(3)
+		store := &stubStore{}
+		state := NewState(60000, 10, nil, AgentTotals{})
+		state.BudgetExhausted[issue.ID] = struct{}{} // pre-populated
+		tracker := &candidateTrackerAdapter{
+			mockTrackerAdapter: &mockTrackerAdapter{},
+			fetchCandidatesFn:  func(_ context.Context) ([]domain.Issue, error) { return nil, nil },
+		}
+
+		budgetOrchestrator(state, wm, store, tracker).handleTick(context.Background())
+
+		// No candidates → query skipped → previous set retained.
+		if _, ok := state.BudgetExhausted[issue.ID]; !ok {
+			t.Errorf("BudgetExhausted[%s] cleared on empty candidate list, want retained", issue.ID)
+		}
+	})
+}
+
+// TestBudgetExhaustionPreventsRedispatch verifies that an issue whose budget is
+// exhausted in the persistence store is not dispatched on a fresh-state tick,
+// simulating an orchestrator restart where in-memory state was reset.
+func TestBudgetExhaustionPreventsRedispatch(t *testing.T) {
+	t.Parallel()
+
+	issue := domain.Issue{ID: "iss-redisp", Identifier: "PROJ-1", Title: "Work", State: "To Do"}
+	wm := budgetTickConfig(3)
+	store := &stubStore{budgetExhaustedIDs: []string{issue.ID}}
+	state := NewState(60000, 10, nil, AgentTotals{}) // fresh; BudgetExhausted is empty
+	tracker := &candidateTrackerAdapter{
+		mockTrackerAdapter: &mockTrackerAdapter{},
+		fetchCandidatesFn:  func(_ context.Context) ([]domain.Issue, error) { return []domain.Issue{issue}, nil },
+	}
+
+	budgetOrchestrator(state, wm, store, tracker).handleTick(context.Background())
+
+	if _, running := state.Running[issue.ID]; running {
+		t.Error("budget-exhausted issue dispatched on fresh-state tick, want blocked")
+	}
+	if _, exhausted := state.BudgetExhausted[issue.ID]; !exhausted {
+		t.Error("BudgetExhausted missing after tick, want rebuilt from store")
+	}
+}
+
+// TestBudgetExhaustionClearsWhenMaxSessionsZero verifies that setting
+// max_sessions=0 on a tick clears the BudgetExhausted set, unblocking issues
+// that were previously blocked.
+func TestBudgetExhaustionClearsWhenMaxSessionsZero(t *testing.T) {
+	t.Parallel()
+
+	issue := domain.Issue{ID: "iss-clear", Identifier: "PROJ-2", Title: "Retry", State: "To Do"}
+	wm := budgetTickConfig(0) // max_sessions=0 → all issues eligible
+	store := &stubStore{}
+	state := NewState(60000, 10, nil, AgentTotals{})
+	state.BudgetExhausted[issue.ID] = struct{}{} // was previously blocked
+	tracker := &candidateTrackerAdapter{
+		mockTrackerAdapter: &mockTrackerAdapter{},
+		fetchCandidatesFn:  func(_ context.Context) ([]domain.Issue, error) { return []domain.Issue{issue}, nil },
+	}
+
+	budgetOrchestrator(state, wm, store, tracker).handleTick(context.Background())
+
+	if _, ok := state.BudgetExhausted[issue.ID]; ok {
+		t.Errorf("BudgetExhausted[%s] still set after MaxSessions=0 tick, want cleared", issue.ID)
 	}
 }

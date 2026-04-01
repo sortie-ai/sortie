@@ -31,6 +31,7 @@ type OrchestratorStore interface {
 	SaveRetryEntry(ctx context.Context, entry persistence.RetryEntry) error
 	DeleteRetryEntry(ctx context.Context, issueID string) error
 	CountRunHistoryByIssue(ctx context.Context, issueID string) (int, error)
+	QueryBudgetExhaustedIssues(ctx context.Context, candidateIDs []string, maxSessions int) ([]string, error)
 }
 
 // Observer receives notifications when orchestrator state changes.
@@ -362,6 +363,29 @@ func (o *Orchestrator) handleTick(ctx context.Context) {
 
 	// Step 7: sort for dispatch.
 	sorted := SortForDispatch(issues)
+
+	// Step 7b: rebuild the BudgetExhausted set from run_history.
+	// One batch query per tick, scoped to the candidate set.
+	if cfg.Agent.MaxSessions > 0 && len(sorted) > 0 {
+		candidateIDs := make([]string, len(sorted))
+		for i, issue := range sorted {
+			candidateIDs[i] = issue.ID
+		}
+		exhaustedIDs, qErr := o.store.QueryBudgetExhaustedIssues(ctx, candidateIDs, cfg.Agent.MaxSessions)
+		if qErr != nil {
+			o.logger.Warn("budget exhaustion query failed, retaining previous set",
+				slog.Any("error", qErr),
+			)
+		} else {
+			fresh := make(map[string]struct{}, len(exhaustedIDs))
+			for _, id := range exhaustedIDs {
+				fresh[id] = struct{}{}
+			}
+			o.state.BudgetExhausted = fresh
+		}
+	} else if cfg.Agent.MaxSessions == 0 {
+		o.state.BudgetExhausted = make(map[string]struct{})
+	}
 
 	// Step 8: pre-build state sets once for the dispatch loop.
 	activeSet := stateSet(cfg.Tracker.ActiveStates)

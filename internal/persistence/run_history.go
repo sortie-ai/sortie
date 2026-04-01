@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 )
 
 // RunHistory represents a single completed run attempt persisted in the
@@ -165,4 +166,46 @@ func (s *Store) CountRunHistoryByIssue(ctx context.Context, issueID string) (int
 		return 0, fmt.Errorf("count run history by issue %q: %w", issueID, err)
 	}
 	return count, nil
+}
+
+// QueryBudgetExhaustedIssues returns issue IDs from candidateIDs whose
+// run_history entry count meets or exceeds maxSessions. Returns an empty
+// non-nil slice when no issues qualify or candidateIDs is empty.
+func (s *Store) QueryBudgetExhaustedIssues(ctx context.Context, candidateIDs []string, maxSessions int) ([]string, error) {
+	if len(candidateIDs) == 0 {
+		return []string{}, nil
+	}
+
+	placeholders := strings.Repeat("?,", len(candidateIDs))
+	placeholders = placeholders[:len(placeholders)-1] // trim trailing comma
+
+	args := make([]any, 0, len(candidateIDs)+1)
+	for _, id := range candidateIDs {
+		args = append(args, id)
+	}
+	args = append(args, maxSessions)
+
+	query := fmt.Sprintf( //nolint:gosec // placeholders is "?,?,..." built from len(candidateIDs); no user data in format string
+		`SELECT issue_id FROM run_history WHERE issue_id IN (%s) GROUP BY issue_id HAVING COUNT(*) >= ?`,
+		placeholders,
+	)
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query budget exhausted issues: %w", err)
+	}
+	defer rows.Close() //nolint:errcheck // read-only query; close error is non-actionable
+
+	result := []string{}
+	for rows.Next() {
+		var issueID string
+		if err := rows.Scan(&issueID); err != nil {
+			return nil, fmt.Errorf("scan budget exhausted issue: %w", err)
+		}
+		result = append(result, issueID)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("query budget exhausted issues: %w", err)
+	}
+	return result, nil
 }

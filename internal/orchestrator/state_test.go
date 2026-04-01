@@ -94,6 +94,9 @@ func TestNewState(t *testing.T) {
 			if s.Completed == nil {
 				t.Fatal("Completed = nil, want non-nil")
 			}
+			if s.BudgetExhausted == nil {
+				t.Fatal("BudgetExhausted = nil, want non-nil")
+			}
 
 			if tt.checkAlias {
 				tt.maxConcurrentByState["in progress"] = 3
@@ -672,6 +675,65 @@ func TestRuntimeSnapshot(t *testing.T) {
 		}
 		if snap.APITimeMs != 0 {
 			t.Errorf("APITimeMs = %d, want 0", snap.APITimeMs)
+		}
+	})
+
+	t.Run("empty BudgetExhausted produces zero count and nil slice", func(t *testing.T) {
+		t.Parallel()
+
+		state := NewState(5000, 10, nil, AgentTotals{})
+
+		result := RuntimeSnapshot(state, fixedNow)
+
+		if result.BudgetExhaustedCount != 0 {
+			t.Errorf("BudgetExhaustedCount = %d, want 0", result.BudgetExhaustedCount)
+		}
+		if result.BudgetExhausted != nil {
+			t.Errorf("BudgetExhausted = %v, want nil", result.BudgetExhausted)
+		}
+	})
+
+	t.Run("non-empty BudgetExhausted sorted and counted", func(t *testing.T) {
+		t.Parallel()
+
+		state := NewState(5000, 10, nil, AgentTotals{})
+		// Insert out-of-order to verify sorting.
+		state.BudgetExhausted["ISS-C"] = struct{}{}
+		state.BudgetExhausted["ISS-A"] = struct{}{}
+		state.BudgetExhausted["ISS-B"] = struct{}{}
+
+		result := RuntimeSnapshot(state, fixedNow)
+
+		if result.BudgetExhaustedCount != 3 {
+			t.Errorf("BudgetExhaustedCount = %d, want 3", result.BudgetExhaustedCount)
+		}
+		want := []string{"ISS-A", "ISS-B", "ISS-C"}
+		if len(result.BudgetExhausted) != len(want) {
+			t.Fatalf("len(BudgetExhausted) = %d, want %d", len(result.BudgetExhausted), len(want))
+		}
+		for i, id := range want {
+			if result.BudgetExhausted[i] != id {
+				t.Errorf("BudgetExhausted[%d] = %q, want %q", i, result.BudgetExhausted[i], id)
+			}
+		}
+	})
+
+	t.Run("BudgetExhausted snapshot is a copy isolated from mutation", func(t *testing.T) {
+		t.Parallel()
+
+		state := NewState(5000, 10, nil, AgentTotals{})
+		state.BudgetExhausted["ISS-X"] = struct{}{}
+
+		result := RuntimeSnapshot(state, fixedNow)
+
+		// Mutate source after snapshot.
+		state.BudgetExhausted["ISS-Y"] = struct{}{}
+
+		if result.BudgetExhaustedCount != 1 {
+			t.Errorf("BudgetExhaustedCount after source mutation = %d, want 1 (snapshot isolation)", result.BudgetExhaustedCount)
+		}
+		if len(result.BudgetExhausted) != 1 {
+			t.Errorf("len(BudgetExhausted) after source mutation = %d, want 1 (snapshot isolation)", len(result.BudgetExhausted))
 		}
 	})
 }

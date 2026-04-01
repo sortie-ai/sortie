@@ -715,6 +715,10 @@ func TestHandleRetryTimer(t *testing.T) {
 				if _, running := state.Running[id]; running {
 					t.Errorf("Running[%s] present, want absent (budget exhausted)", id)
 				}
+				// BudgetExhausted set must contain this issue.
+				if _, exhausted := state.BudgetExhausted[id]; !exhausted {
+					t.Errorf("BudgetExhausted[%s] missing, want present after budget exhaustion", id)
+				}
 				// Tracker never called — budget check runs before fetch.
 				if tracker.fetchCount != 0 {
 					t.Errorf("FetchCandidateIssues call count = %d, want 0", tracker.fetchCount)
@@ -1188,5 +1192,41 @@ func TestHandleRetryTimer_WorkflowFilePropagated(t *testing.T) {
 	}
 	if running.WorkflowFile != "infra.WORKFLOW.md" {
 		t.Errorf("Running[ISS-WF].WorkflowFile = %q, want %q", running.WorkflowFile, "infra.WORKFLOW.md")
+	}
+}
+
+// TestHandleRetryTimer_BudgetExhaustedBlocksShouldDispatch verifies the composed
+// behavior: after HandleRetryTimer marks an issue as budget-exhausted, ShouldDispatch
+// returns false for that issue and the IncDispatches metric is recorded.
+func TestHandleRetryTimer_BudgetExhaustedBlocksShouldDispatch(t *testing.T) {
+	t.Parallel()
+
+	const id = "ISS-COMP"
+	spy := &spyMetrics{}
+	state := retryState(t, id, "PROJ-COMP", 2)
+	store := &mockRetryStore{runHistoryCount: 3}
+	tracker := &mockRetryTracker{
+		candidates: []domain.Issue{candidateIssue(id, "PROJ-COMP", "To Do")},
+	}
+
+	params := defaultRetryParams(t, store, tracker)
+	params.MaxSessions = 3
+	params.Metrics = spy
+
+	HandleRetryTimer(state, id, params)
+
+	// BudgetExhausted must be set after the budget-exhaustion path.
+	if _, exhausted := state.BudgetExhausted[id]; !exhausted {
+		t.Fatalf("BudgetExhausted[%s] missing after HandleRetryTimer budget exhaustion", id)
+	}
+
+	// IncDispatches("budget_exhausted") must have been called exactly once.
+	if len(spy.dispatches) != 1 || spy.dispatches[0] != outcomeBudgetExhausted {
+		t.Errorf("dispatches = %v, want [%q]", spy.dispatches, outcomeBudgetExhausted)
+	}
+
+	// ShouldDispatch must return false because BudgetExhausted is set.
+	if ShouldDispatch(candidateIssue(id, "PROJ-COMP", "To Do"), state, params.ActiveStates, params.TerminalStates) {
+		t.Error("ShouldDispatch() = true after budget exhaustion, want false")
 	}
 }

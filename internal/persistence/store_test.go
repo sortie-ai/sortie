@@ -1563,6 +1563,184 @@ func TestCountRunHistoryByIssue(t *testing.T) {
 	})
 }
 
+// --- QueryBudgetExhaustedIssues Tests ---
+
+func TestQueryBudgetExhaustedIssues(t *testing.T) {
+	t.Parallel()
+
+	t.Run("empty candidateIDs returns empty slice without DB query", func(t *testing.T) {
+		t.Parallel()
+		s := openTestStore(t)
+		migrateOrFatal(t, s)
+
+		result, err := s.QueryBudgetExhaustedIssues(context.Background(), []string{}, 3)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(result) != 0 {
+			t.Errorf("result = %v, want empty slice", result)
+		}
+	})
+
+	t.Run("candidates with no run history returns empty", func(t *testing.T) {
+		t.Parallel()
+		s := openTestStore(t)
+		migrateOrFatal(t, s)
+
+		result, err := s.QueryBudgetExhaustedIssues(context.Background(), []string{"ISS-A", "ISS-B"}, 3)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(result) != 0 {
+			t.Errorf("result = %v, want empty", result)
+		}
+	})
+
+	t.Run("candidate with count below maxSessions not returned", func(t *testing.T) {
+		t.Parallel()
+		s := openTestStore(t)
+		migrateOrFatal(t, s)
+
+		for i := 1; i <= 2; i++ {
+			run := newTestRun(i)
+			run.IssueID = "ISS-UNDER"
+			appendOrFatal(t, s, run)
+		}
+
+		result, err := s.QueryBudgetExhaustedIssues(context.Background(), []string{"ISS-UNDER"}, 3)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(result) != 0 {
+			t.Errorf("result = %v, want empty (count 2 < maxSessions 3)", result)
+		}
+	})
+
+	t.Run("candidate with count equal to maxSessions is returned", func(t *testing.T) {
+		t.Parallel()
+		s := openTestStore(t)
+		migrateOrFatal(t, s)
+
+		for i := 1; i <= 3; i++ {
+			run := newTestRun(i)
+			run.IssueID = "ISS-EXACT"
+			appendOrFatal(t, s, run)
+		}
+
+		result, err := s.QueryBudgetExhaustedIssues(context.Background(), []string{"ISS-EXACT"}, 3)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(result) != 1 || result[0] != "ISS-EXACT" {
+			t.Errorf("result = %v, want [ISS-EXACT]", result)
+		}
+	})
+
+	t.Run("candidate with count exceeding maxSessions is returned", func(t *testing.T) {
+		t.Parallel()
+		s := openTestStore(t)
+		migrateOrFatal(t, s)
+
+		for i := 1; i <= 5; i++ {
+			run := newTestRun(i)
+			run.IssueID = "ISS-OVER"
+			appendOrFatal(t, s, run)
+		}
+
+		result, err := s.QueryBudgetExhaustedIssues(context.Background(), []string{"ISS-OVER"}, 3)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(result) != 1 || result[0] != "ISS-OVER" {
+			t.Errorf("result = %v, want [ISS-OVER]", result)
+		}
+	})
+
+	t.Run("mixed candidates only qualifying ones returned", func(t *testing.T) {
+		t.Parallel()
+		s := openTestStore(t)
+		migrateOrFatal(t, s)
+
+		// ISS-EXHAUST: 3 runs (exhausted), ISS-OK: 2 runs (not), ISS-NONE: 0 runs.
+		for i := 1; i <= 3; i++ {
+			run := newTestRun(i)
+			run.IssueID = "ISS-EXHAUST"
+			appendOrFatal(t, s, run)
+		}
+		for i := 4; i <= 5; i++ {
+			run := newTestRun(i)
+			run.IssueID = "ISS-OK"
+			appendOrFatal(t, s, run)
+		}
+
+		result, err := s.QueryBudgetExhaustedIssues(
+			context.Background(),
+			[]string{"ISS-EXHAUST", "ISS-OK", "ISS-NONE"},
+			3,
+		)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(result) != 1 || result[0] != "ISS-EXHAUST" {
+			t.Errorf("result = %v, want [ISS-EXHAUST]", result)
+		}
+	})
+
+	t.Run("maxSessions 1 returns candidate with one or more runs", func(t *testing.T) {
+		t.Parallel()
+		s := openTestStore(t)
+		migrateOrFatal(t, s)
+
+		run := newTestRun(1)
+		run.IssueID = "ISS-SINGLE"
+		appendOrFatal(t, s, run)
+
+		result, err := s.QueryBudgetExhaustedIssues(context.Background(), []string{"ISS-SINGLE"}, 1)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(result) != 1 || result[0] != "ISS-SINGLE" {
+			t.Errorf("result = %v, want [ISS-SINGLE]", result)
+		}
+	})
+
+	t.Run("non-candidate issues in run_history are excluded", func(t *testing.T) {
+		t.Parallel()
+		s := openTestStore(t)
+		migrateOrFatal(t, s)
+
+		// ISS-NOTASKED has run history but is NOT in candidateIDs.
+		for i := 1; i <= 5; i++ {
+			run := newTestRun(i)
+			run.IssueID = "ISS-NOTASKED"
+			appendOrFatal(t, s, run)
+		}
+
+		result, err := s.QueryBudgetExhaustedIssues(context.Background(), []string{"ISS-CANDIDATE"}, 3)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(result) != 0 {
+			t.Errorf("result = %v, want empty (ISS-NOTASKED not in candidateIDs)", result)
+		}
+	})
+
+	t.Run("closed DB returns error", func(t *testing.T) {
+		t.Parallel()
+		s := openTestStore(t)
+		migrateOrFatal(t, s)
+
+		if err := s.db.Close(); err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+
+		_, err := s.QueryBudgetExhaustedIssues(context.Background(), []string{"ISS-A"}, 3)
+		if err == nil {
+			t.Fatal("expected error from closed DB, got nil")
+		}
+	})
+}
+
 // --- Health check tests ---
 
 func TestPing_OpenStore(t *testing.T) {
