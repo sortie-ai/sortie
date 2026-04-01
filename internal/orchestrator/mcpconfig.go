@@ -46,7 +46,11 @@ func GenerateMCPConfig(params MCPConfigParams) (string, error) {
 	entry := map[string]any{
 		"type":    "stdio",
 		"command": params.BinaryPath,
-		"args":    []string{"mcp-server", "--workflow", params.WorkflowPath},
+		// WorkflowPath is an absolute path supplied by the orchestrator at
+		// workspace allocation time. The agent runtime already operates within
+		// the workspace directory and has full access to the filesystem, so
+		// passing the absolute workflow path here does not expand its access.
+		"args": []string{"mcp-server", "--workflow", params.WorkflowPath},
 		"env": map[string]string{
 			"SORTIE_ISSUE_ID":         params.IssueID,
 			"SORTIE_ISSUE_IDENTIFIER": params.Identifier,
