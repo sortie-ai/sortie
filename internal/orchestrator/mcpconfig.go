@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 // MCPConfigParams holds the inputs for [GenerateMCPConfig].
@@ -33,6 +34,16 @@ type MCPConfigParams struct {
 	// OperatorMCPConfigPath is the path to the operator-provided MCP
 	// config file. Empty when no operator config is specified.
 	OperatorMCPConfigPath string
+
+	// ProcessEnv carries SORTIE_*-prefixed environment variables from
+	// the orchestrator's process environment. These are merged into the
+	// MCP config env block so the MCP server can resolve $VAR
+	// indirection in the workflow file (e.g., tracker credentials).
+	//
+	// Per-session variables (IssueID, Identifier, WorkspacePath,
+	// DBPath, SessionID) take precedence over same-named keys in
+	// ProcessEnv.
+	ProcessEnv map[string]string
 }
 
 // GenerateMCPConfig creates the merged MCP config file for the workspace
@@ -43,6 +54,19 @@ type MCPConfigParams struct {
 // error if the operator's config is unreadable, contains invalid
 // JSON, or contains a server named "sortie-tools" (name collision).
 func GenerateMCPConfig(params MCPConfigParams) (string, error) {
+	// Build the env block with a two-layer merge: process-level SORTIE_*
+	// variables first (lower precedence), then per-session variables
+	// (higher precedence, always win).
+	env := make(map[string]string, len(params.ProcessEnv)+5)
+	for k, v := range params.ProcessEnv {
+		env[k] = v
+	}
+	env["SORTIE_ISSUE_ID"] = params.IssueID
+	env["SORTIE_ISSUE_IDENTIFIER"] = params.Identifier
+	env["SORTIE_WORKSPACE"] = params.WorkspacePath
+	env["SORTIE_DB_PATH"] = params.DBPath
+	env["SORTIE_SESSION_ID"] = params.SessionID
+
 	entry := map[string]any{
 		"type":    "stdio",
 		"command": params.BinaryPath,
@@ -51,13 +75,7 @@ func GenerateMCPConfig(params MCPConfigParams) (string, error) {
 		// the workspace directory and has full access to the filesystem, so
 		// passing the absolute workflow path here does not expand its access.
 		"args": []string{"mcp-server", "--workflow", params.WorkflowPath},
-		"env": map[string]string{
-			"SORTIE_ISSUE_ID":         params.IssueID,
-			"SORTIE_ISSUE_IDENTIFIER": params.Identifier,
-			"SORTIE_WORKSPACE":        params.WorkspacePath,
-			"SORTIE_DB_PATH":          params.DBPath,
-			"SORTIE_SESSION_ID":       params.SessionID,
-		},
+		"env":  env,
 	}
 
 	var merged map[string]any
@@ -121,4 +139,19 @@ func GenerateMCPConfig(params MCPConfigParams) (string, error) {
 	}
 
 	return outPath, nil
+}
+
+// CollectSortieEnv scans the process environment and returns all
+// variables with the "SORTIE_" prefix as a key-value map. Used to
+// populate [MCPConfigParams].ProcessEnv so the MCP server receives
+// credential and configuration variables needed for $VAR resolution.
+func CollectSortieEnv() map[string]string {
+	result := make(map[string]string)
+	for _, entry := range os.Environ() {
+		key, value, ok := strings.Cut(entry, "=")
+		if ok && strings.HasPrefix(key, "SORTIE_") {
+			result[key] = value
+		}
+	}
+	return result
 }

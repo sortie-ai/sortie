@@ -307,4 +307,99 @@ func TestGenerateMCPConfig(t *testing.T) {
 			t.Fatal("GenerateMCPConfig() = nil, want error when mcpServers is not an object")
 		}
 	})
+
+	t.Run("process_env_propagated_to_env_block", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		p := mcpParams(dir)
+		p.ProcessEnv = map[string]string{
+			"SORTIE_TRACKER_API_KEY": "secret-key",
+			"SORTIE_ENV_FILE":        "/opt/secret.env",
+		}
+		_, err := GenerateMCPConfig(p)
+		if err != nil {
+			t.Fatalf("GenerateMCPConfig: %v", err)
+		}
+
+		env, ok := sortieEntry(t, readMCPConfig(t, dir))["env"].(map[string]any)
+		if !ok {
+			t.Fatal("env is not an object")
+		}
+
+		// Process-level vars reach the env block.
+		if got, _ := env["SORTIE_TRACKER_API_KEY"].(string); got != "secret-key" {
+			t.Errorf("SORTIE_TRACKER_API_KEY = %q, want %q", got, "secret-key")
+		}
+		if got, _ := env["SORTIE_ENV_FILE"].(string); got != "/opt/secret.env" {
+			t.Errorf("SORTIE_ENV_FILE = %q, want %q", got, "/opt/secret.env")
+		}
+
+		// Per-session vars are also present and correct.
+		for k, want := range map[string]string{
+			"SORTIE_ISSUE_ID":         p.IssueID,
+			"SORTIE_ISSUE_IDENTIFIER": p.Identifier,
+			"SORTIE_WORKSPACE":        p.WorkspacePath,
+			"SORTIE_DB_PATH":          p.DBPath,
+			"SORTIE_SESSION_ID":       p.SessionID,
+		} {
+			if got, _ := env[k].(string); got != want {
+				t.Errorf("env[%q] = %q, want %q", k, got, want)
+			}
+		}
+
+		// 5 per-session + 2 process-level.
+		if len(env) != 7 {
+			t.Errorf("env key count = %d, want 7: %v", len(env), env)
+		}
+	})
+
+	t.Run("session_vars_override_process_env", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		p := mcpParams(dir)
+		p.ProcessEnv = map[string]string{
+			"SORTIE_ISSUE_ID":   "stale-id",
+			"SORTIE_SESSION_ID": "stale-session",
+		}
+		_, err := GenerateMCPConfig(p)
+		if err != nil {
+			t.Fatalf("GenerateMCPConfig: %v", err)
+		}
+
+		env, ok := sortieEntry(t, readMCPConfig(t, dir))["env"].(map[string]any)
+		if !ok {
+			t.Fatal("env is not an object")
+		}
+
+		// Per-session values win over stale process-env values.
+		if got, _ := env["SORTIE_ISSUE_ID"].(string); got != p.IssueID {
+			t.Errorf("SORTIE_ISSUE_ID = %q, want %q (per-session wins)", got, p.IssueID)
+		}
+		if got, _ := env["SORTIE_SESSION_ID"].(string); got != p.SessionID {
+			t.Errorf("SORTIE_SESSION_ID = %q, want %q (per-session wins)", got, p.SessionID)
+		}
+
+		// Overwritten keys do not inflate the map; count stays at 5.
+		if len(env) != 5 {
+			t.Errorf("env key count = %d, want 5: %v", len(env), env)
+		}
+	})
+}
+
+func TestCollectSortieEnv(t *testing.T) {
+	// t.Setenv cannot be used with t.Parallel.
+
+	t.Run("collect_sortie_env_filters_prefix", func(t *testing.T) {
+		t.Setenv("SORTIE_X", "x-val")
+		t.Setenv("OTHER_Y", "y-val")
+
+		got := CollectSortieEnv()
+
+		if v, ok := got["SORTIE_X"]; !ok || v != "x-val" {
+			t.Errorf("SORTIE_X = %q, want %q", got["SORTIE_X"], "x-val")
+		}
+		if _, present := got["OTHER_Y"]; present {
+			t.Error("OTHER_Y present in CollectSortieEnv() result, want filtered out")
+		}
+	})
 }

@@ -434,6 +434,7 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 			DBPath:                deps.DBPath,
 			SessionID:             "",
 			OperatorMCPConfigPath: operatorPath,
+			ProcessEnv:            CollectSortieEnv(),
 		})
 		if genErr != nil {
 			finishWorkspace()
