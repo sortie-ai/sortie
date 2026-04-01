@@ -14,6 +14,7 @@ func TestExtractState(t *testing.T) {
 		nativeState    string
 		activeStates   []string
 		terminalStates []string
+		handoffState   string
 		want           string
 	}{
 		{
@@ -22,6 +23,7 @@ func TestExtractState(t *testing.T) {
 			nativeState:    "open",
 			activeStates:   active,
 			terminalStates: terminal,
+			handoffState:   "",
 			want:           "in-progress",
 		},
 		{
@@ -30,6 +32,7 @@ func TestExtractState(t *testing.T) {
 			nativeState:    "closed",
 			activeStates:   active,
 			terminalStates: terminal,
+			handoffState:   "",
 			want:           "done",
 		},
 		{
@@ -40,6 +43,7 @@ func TestExtractState(t *testing.T) {
 			nativeState:    "open",
 			activeStates:   active,
 			terminalStates: terminal,
+			handoffState:   "",
 			want:           "backlog",
 		},
 		{
@@ -49,6 +53,7 @@ func TestExtractState(t *testing.T) {
 			nativeState:    "open",
 			activeStates:   active,
 			terminalStates: terminal,
+			handoffState:   "",
 			want:           "backlog",
 		},
 		{
@@ -58,6 +63,7 @@ func TestExtractState(t *testing.T) {
 			nativeState:    "open",
 			activeStates:   active,
 			terminalStates: terminal,
+			handoffState:   "",
 			want:           "backlog",
 		},
 		{
@@ -67,6 +73,7 @@ func TestExtractState(t *testing.T) {
 			nativeState:    "closed",
 			activeStates:   active,
 			terminalStates: terminal,
+			handoffState:   "",
 			want:           "done",
 		},
 		{
@@ -76,6 +83,7 @@ func TestExtractState(t *testing.T) {
 			nativeState:    "open",
 			activeStates:   nil,
 			terminalStates: nil,
+			handoffState:   "",
 			want:           "open",
 		},
 		{
@@ -85,6 +93,50 @@ func TestExtractState(t *testing.T) {
 			nativeState:    "open",
 			activeStates:   active,
 			terminalStates: terminal,
+			handoffState:   "",
+			want:           "in-progress",
+		},
+		{
+			// Handoff label on an open issue returns the handoff state, not activeStates[0].
+			// This prevents FetchCandidateIssues from treating the issue as dispatchable.
+			name:           "handoff label only open issue",
+			labels:         []githubLabel{{Name: "review"}},
+			nativeState:    "open",
+			activeStates:   []string{"backlog", "in-progress"},
+			terminalStates: []string{"done"},
+			handoffState:   "review",
+			want:           "review",
+		},
+		{
+			// Case-insensitive: uppercase label on issue matches lowercase handoffState config.
+			name:           "handoff label uppercase open issue",
+			labels:         []githubLabel{{Name: "REVIEW"}},
+			nativeState:    "open",
+			activeStates:   []string{"backlog", "in-progress"},
+			terminalStates: []string{"done"},
+			handoffState:   "review",
+			want:           "review",
+		},
+		{
+			// When handoffState is empty, an unrecognized label on an open issue
+			// still falls back to activeStates[0] — pre-fix behavior preserved.
+			name:           "handoff not configured falls back to active",
+			labels:         []githubLabel{{Name: "review"}},
+			nativeState:    "open",
+			activeStates:   []string{"backlog", "in-progress"},
+			terminalStates: []string{"done"},
+			handoffState:   "",
+			want:           "backlog",
+		},
+		{
+			// Active state scan happens before handoff; active label wins regardless
+			// of label order returned by the GitHub API.
+			name:           "active label beats handoff when both present",
+			labels:         []githubLabel{{Name: "in-progress"}, {Name: "review"}},
+			nativeState:    "open",
+			activeStates:   []string{"backlog", "in-progress"},
+			terminalStates: []string{"done"},
+			handoffState:   "review",
 			want:           "in-progress",
 		},
 	}
@@ -93,7 +145,7 @@ func TestExtractState(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			got := extractState(tt.labels, tt.nativeState, tt.activeStates, tt.terminalStates)
+			got := extractState(tt.labels, tt.nativeState, tt.activeStates, tt.terminalStates, tt.handoffState)
 			if got != tt.want {
 				t.Errorf("extractState() = %q, want %q", got, tt.want)
 			}
@@ -173,6 +225,7 @@ func TestFindCurrentStateLabel(t *testing.T) {
 		labels         []githubLabel
 		activeStates   []string
 		terminalStates []string
+		handoffState   string
 		want           string
 	}{
 		{
@@ -180,6 +233,7 @@ func TestFindCurrentStateLabel(t *testing.T) {
 			labels:         []githubLabel{{Name: "in-progress"}, {Name: "bug"}},
 			activeStates:   active,
 			terminalStates: terminal,
+			handoffState:   "",
 			want:           "in-progress",
 		},
 		{
@@ -187,6 +241,7 @@ func TestFindCurrentStateLabel(t *testing.T) {
 			labels:         []githubLabel{{Name: "done"}},
 			activeStates:   active,
 			terminalStates: terminal,
+			handoffState:   "",
 			want:           "done",
 		},
 		{
@@ -194,6 +249,7 @@ func TestFindCurrentStateLabel(t *testing.T) {
 			labels:         []githubLabel{{Name: "BACKLOG"}},
 			activeStates:   active,
 			terminalStates: terminal,
+			handoffState:   "",
 			want:           "backlog",
 		},
 		{
@@ -201,6 +257,7 @@ func TestFindCurrentStateLabel(t *testing.T) {
 			labels:         []githubLabel{{Name: "bug"}, {Name: "priority"}},
 			activeStates:   active,
 			terminalStates: terminal,
+			handoffState:   "",
 			want:           "",
 		},
 		{
@@ -208,7 +265,46 @@ func TestFindCurrentStateLabel(t *testing.T) {
 			labels:         nil,
 			activeStates:   active,
 			terminalStates: terminal,
+			handoffState:   "",
 			want:           "",
+		},
+		{
+			// Handoff label present and handoffState configured → handoff state returned.
+			name:           "handoff state label found",
+			labels:         []githubLabel{{Name: "review"}},
+			activeStates:   []string{"backlog", "in-progress"},
+			terminalStates: []string{"done"},
+			handoffState:   "review",
+			want:           "review",
+		},
+		{
+			// Case-insensitive: uppercase label matches lowercase handoffState config.
+			name:           "handoff label uppercase found",
+			labels:         []githubLabel{{Name: "REVIEW"}},
+			activeStates:   []string{"backlog", "in-progress"},
+			terminalStates: []string{"done"},
+			handoffState:   "review",
+			want:           "review",
+		},
+		{
+			// When handoffState is empty, a label that matches no configured state
+			// returns empty (no fallback inside findCurrentStateLabel).
+			name:           "handoff not configured returns empty",
+			labels:         []githubLabel{{Name: "review"}},
+			activeStates:   []string{"backlog"},
+			terminalStates: []string{"done"},
+			handoffState:   "",
+			want:           "",
+		},
+		{
+			// Active scan precedes handoff scan; active label wins regardless of
+			// the order GitHub returns labels in the API response.
+			name:           "active beats handoff when both present",
+			labels:         []githubLabel{{Name: "in-progress"}, {Name: "review"}},
+			activeStates:   []string{"backlog", "in-progress"},
+			terminalStates: []string{"done"},
+			handoffState:   "review",
+			want:           "in-progress",
 		},
 	}
 
@@ -216,7 +312,7 @@ func TestFindCurrentStateLabel(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			got := findCurrentStateLabel(tt.labels, tt.activeStates, tt.terminalStates)
+			got := findCurrentStateLabel(tt.labels, tt.activeStates, tt.terminalStates, tt.handoffState)
 			if got != tt.want {
 				t.Errorf("findCurrentStateLabel() = %q, want %q", got, tt.want)
 			}

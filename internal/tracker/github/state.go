@@ -3,12 +3,13 @@ package github
 import "strings"
 
 // extractState derives the Sortie state from GitHub issue labels by
-// scanning configured active and terminal states in config order.
-// The first label match wins. When no state label is found, the
-// function falls back to the first configured state matching the
+// scanning configured active, terminal, and handoff states in config
+// order. The first label match wins. When no state label is found,
+// the function falls back to the first configured state matching the
 // native open/closed status, or passes through the native state
-// unchanged as a last resort.
-func extractState(labels []githubLabel, nativeState string, activeStates, terminalStates []string) string {
+// unchanged as a last resort. Pass an empty handoffState when handoff
+// is not configured.
+func extractState(labels []githubLabel, nativeState string, activeStates, terminalStates []string, handoffState string) string {
 	lowerSet := make(map[string]struct{}, len(labels))
 	for _, l := range labels {
 		lowerSet[strings.ToLower(l.Name)] = struct{}{}
@@ -23,6 +24,12 @@ func extractState(labels []githubLabel, nativeState string, activeStates, termin
 	for _, s := range terminalStates {
 		if _, ok := lowerSet[s]; ok {
 			return s
+		}
+	}
+
+	if handoffState != "" {
+		if _, ok := lowerSet[handoffState]; ok {
+			return handoffState
 		}
 	}
 
@@ -58,23 +65,33 @@ func isActiveState(state string, activeStates []string) bool {
 	return false
 }
 
-// findCurrentStateLabel returns the first issue label (lowercased)
-// that matches any configured active or terminal state. Returns an
-// empty string when no state label is found.
-func findCurrentStateLabel(labels []githubLabel, activeStates, terminalStates []string) string {
-	all := make(map[string]struct{}, len(activeStates)+len(terminalStates))
-	for _, s := range activeStates {
-		all[s] = struct{}{}
-	}
-	for _, s := range terminalStates {
-		all[s] = struct{}{}
+// findCurrentStateLabel returns the first configured state (active,
+// then terminal, then handoff — config order) whose label is present
+// on the issue. Returns an empty string when no state label is found.
+// Pass an empty handoffState when handoff is not configured.
+func findCurrentStateLabel(labels []githubLabel, activeStates, terminalStates []string, handoffState string) string {
+	lowerSet := make(map[string]struct{}, len(labels))
+	for _, l := range labels {
+		lowerSet[strings.ToLower(l.Name)] = struct{}{}
 	}
 
-	for _, l := range labels {
-		lower := strings.ToLower(l.Name)
-		if _, ok := all[lower]; ok {
-			return lower
+	for _, s := range activeStates {
+		if _, ok := lowerSet[s]; ok {
+			return s
 		}
 	}
+
+	for _, s := range terminalStates {
+		if _, ok := lowerSet[s]; ok {
+			return s
+		}
+	}
+
+	if handoffState != "" {
+		if _, ok := lowerSet[handoffState]; ok {
+			return handoffState
+		}
+	}
+
 	return ""
 }

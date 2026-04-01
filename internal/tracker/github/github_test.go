@@ -270,6 +270,73 @@ func TestNewGitHubAdapter_DoesNotMutateConfigSlices(t *testing.T) {
 	}
 }
 
+func TestNewGitHubAdapter_HandoffStateExtraction(t *testing.T) {
+	t.Parallel()
+
+	// Positive cases: the handoff state must be accepted as a valid transition
+	// target, proving the field was extracted and stored correctly.
+	t.Run("trimmed and lowercased", func(t *testing.T) {
+		t.Parallel()
+
+		// Issue currently has the handoff label, native state open.
+		ts := newTransitionServer(t, 1, "review", "open")
+		cfg := validConfig(ts.srv.URL)
+		cfg["active_states"] = []any{"backlog", "in-progress"}
+		cfg["terminal_states"] = []any{"done"}
+		cfg["handoff_state"] = "  Review  " // whitespace + mixed-case
+		a := mustAdapter(t, cfg)
+
+		// TransitionIssue to the handoff state must not return ErrTrackerPayload.
+		if err := a.TransitionIssue(context.Background(), "1", "review"); err != nil {
+			t.Fatalf("TransitionIssue(review) with handoff_state=\"  Review  \": %v", err)
+		}
+	})
+
+	t.Run("already lowercase", func(t *testing.T) {
+		t.Parallel()
+
+		ts := newTransitionServer(t, 1, "review", "open")
+		cfg := validConfig(ts.srv.URL)
+		cfg["active_states"] = []any{"backlog", "in-progress"}
+		cfg["terminal_states"] = []any{"done"}
+		cfg["handoff_state"] = "review"
+		a := mustAdapter(t, cfg)
+
+		if err := a.TransitionIssue(context.Background(), "1", "review"); err != nil {
+			t.Fatalf("TransitionIssue(review) with handoff_state=\"review\": %v", err)
+		}
+	})
+
+	// Negative cases: when handoffState is empty or absent, calling
+	// TransitionIssue with a value not in active or terminal must still
+	// return ErrTrackerPayload (no unintended bypass).
+	t.Run("empty string preserves rejection", func(t *testing.T) {
+		t.Parallel()
+
+		cfg := validConfig("http://localhost")
+		cfg["active_states"] = []any{"backlog"}
+		cfg["terminal_states"] = []any{"done"}
+		cfg["handoff_state"] = ""
+		a := mustAdapter(t, cfg)
+
+		err := a.TransitionIssue(context.Background(), "1", "review")
+		assertTrackerErrorKind(t, err, domain.ErrTrackerPayload)
+	})
+
+	t.Run("key absent preserves rejection", func(t *testing.T) {
+		t.Parallel()
+
+		cfg := validConfig("http://localhost")
+		cfg["active_states"] = []any{"backlog"}
+		cfg["terminal_states"] = []any{"done"}
+		// handoff_state key omitted entirely.
+		a := mustAdapter(t, cfg)
+
+		err := a.TransitionIssue(context.Background(), "1", "review")
+		assertTrackerErrorKind(t, err, domain.ErrTrackerPayload)
+	})
+}
+
 // --- FetchCandidateIssues ---
 
 func TestFetchCandidateIssues_FiltersPullRequests(t *testing.T) {
@@ -1237,6 +1304,80 @@ func TestTransitionIssue_InvalidTargetState(t *testing.T) {
 	// "unknown" is not in the default active or terminal state lists.
 	a := mustAdapter(t, validConfig("http://localhost"))
 	err := a.TransitionIssue(context.Background(), "1", "unknown")
+	assertTrackerErrorKind(t, err, domain.ErrTrackerPayload)
+}
+
+func TestTransitionIssue_HandoffToActive(t *testing.T) {
+	t.Parallel()
+
+	// Issue currently carries the handoff label ("review"), native state open.
+	// TransitionIssue to an active state must DELETE the handoff label and
+	// POST the active label. No PATCH needed (already open).
+	ts := newTransitionServer(t, 10, "review", "open")
+	cfg := validConfig(ts.srv.URL)
+	cfg["active_states"] = []any{"backlog", "in-progress"}
+	cfg["terminal_states"] = []any{"done"}
+	cfg["handoff_state"] = "review"
+	a := mustAdapter(t, cfg)
+
+	if err := a.TransitionIssue(context.Background(), "10", "in-progress"); err != nil {
+		t.Fatalf("TransitionIssue: %v", err)
+	}
+
+	if got := atomic.LoadInt32(&ts.deleteCount); got != 1 {
+		t.Errorf("DELETE count = %d, want 1 (stale handoff label must be removed)", got)
+	}
+	if got := atomic.LoadInt32(&ts.postCount); got != 1 {
+		t.Errorf("POST count = %d, want 1 (active label must be added)", got)
+	}
+	if got := atomic.LoadInt32(&ts.patchCount); got != 0 {
+		t.Errorf("PATCH count = %d, want 0 (issue already open, no native state change)", got)
+	}
+}
+
+func TestTransitionIssue_HandoffAsTarget(t *testing.T) {
+	t.Parallel()
+
+	// Issue currently carries an active label ("in-progress"), native state open.
+	// TransitionIssue to the handoff state must:
+	//   - Be accepted (not rejected as ErrTrackerPayload).
+	//   - DELETE the active label.
+	//   - POST the handoff label.
+	//   - Not PATCH native state (handoff issues stay open).
+	ts := newTransitionServer(t, 11, "in-progress", "open")
+	cfg := validConfig(ts.srv.URL)
+	cfg["active_states"] = []any{"backlog", "in-progress"}
+	cfg["terminal_states"] = []any{"done"}
+	cfg["handoff_state"] = "review"
+	a := mustAdapter(t, cfg)
+
+	if err := a.TransitionIssue(context.Background(), "11", "review"); err != nil {
+		t.Fatalf("TransitionIssue: %v", err)
+	}
+
+	if got := atomic.LoadInt32(&ts.deleteCount); got != 1 {
+		t.Errorf("DELETE count = %d, want 1 (active label must be removed)", got)
+	}
+	if got := atomic.LoadInt32(&ts.postCount); got != 1 {
+		t.Errorf("POST count = %d, want 1 (handoff label must be added)", got)
+	}
+	if got := atomic.LoadInt32(&ts.patchCount); got != 0 {
+		t.Errorf("PATCH count = %d, want 0 (handoff state never changes native open/closed)", got)
+	}
+}
+
+func TestTransitionIssue_UnknownStateWithHandoffConfigured(t *testing.T) {
+	t.Parallel()
+
+	// When handoff_state is configured, states outside the three valid categories
+	// (active, terminal, handoff) must still be rejected.
+	cfg := validConfig("http://localhost")
+	cfg["active_states"] = []any{"backlog"}
+	cfg["terminal_states"] = []any{"done"}
+	cfg["handoff_state"] = "review"
+	a := mustAdapter(t, cfg)
+
+	err := a.TransitionIssue(context.Background(), "1", "unknown-state")
 	assertTrackerErrorKind(t, err, domain.ErrTrackerPayload)
 }
 
