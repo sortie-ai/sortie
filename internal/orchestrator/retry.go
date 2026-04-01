@@ -173,7 +173,6 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 					slog.Any("error", err),
 				)
 			}
-			metrics.IncDispatches(outcomeBudgetExhausted)
 			return
 		}
 	}

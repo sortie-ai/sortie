@@ -1220,9 +1220,9 @@ func TestHandleRetryTimer_BudgetExhaustedBlocksShouldDispatch(t *testing.T) {
 		t.Fatalf("BudgetExhausted[%s] missing after HandleRetryTimer budget exhaustion", id)
 	}
 
-	// IncDispatches("budget_exhausted") must have been called exactly once.
-	if len(spy.dispatches) != 1 || spy.dispatches[0] != outcomeBudgetExhausted {
-		t.Errorf("dispatches = %v, want [%q]", spy.dispatches, outcomeBudgetExhausted)
+	// Budget exhaustion must not emit a dispatch metric — no actual dispatch occurs.
+	if len(spy.dispatches) != 0 {
+		t.Errorf("dispatches = %v, want [] (budget exhaustion is not a dispatch)", spy.dispatches)
 	}
 
 	// ShouldDispatch must return false because BudgetExhausted is set.
