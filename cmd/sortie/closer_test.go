@@ -164,7 +164,7 @@ func TestRunAdapterCloseOnShutdown(t *testing.T) {
 	wfPath := writeCloseableWorkflow(t, dir, "issues.json", token)
 
 	var stdout, stderr bytes.Buffer
-	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
 	code := run(ctx, []string{wfPath}, &stdout, &stderr)

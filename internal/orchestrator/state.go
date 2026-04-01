@@ -19,8 +19,6 @@ const (
 	outcomeError   = "error"
 	outcomeSkipped = "skipped"
 
-	outcomeBudgetExhausted = "budget_exhausted"
-
 	exitTypeNormal    = "normal"
 	exitTypeError     = "error"
 	exitTypeCancelled = "cancelled"
