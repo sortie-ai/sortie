@@ -756,8 +756,8 @@ func TestHandleWorkerExit_RunHistoryFields(t *testing.T) {
 	if rh.Identifier != "PROJ-42" {
 		t.Errorf("RunHistory.Identifier = %q, want %q", rh.Identifier, "PROJ-42")
 	}
-	if rh.Attempt != 2 {
-		t.Errorf("RunHistory.Attempt = %d, want 2", rh.Attempt)
+	if rh.Attempt != 3 {
+		t.Errorf("RunHistory.Attempt = %d, want 3", rh.Attempt)
 	}
 	if rh.AgentAdapter != "claude-code" {
 		t.Errorf("RunHistory.AgentAdapter = %q, want %q", rh.AgentAdapter, "claude-code")

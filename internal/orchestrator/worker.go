@@ -138,12 +138,11 @@ type WorkerDeps struct {
 	Metrics domain.Metrics
 }
 
-// normalizeAttempt converts the nullable attempt to a 1-based plain
-// integer. nil (first dispatch) returns 1; non-nil returns the
-// dereferenced value.
+// normalizeAttempt converts the nullable attempt to a plain integer.
+// nil returns 0; non-nil returns the dereferenced value.
 func normalizeAttempt(attempt *int) int {
 	if attempt == nil {
-		return 1
+		return 0
 	}
 	return *attempt
 }

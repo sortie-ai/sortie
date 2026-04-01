@@ -247,7 +247,7 @@ func TestNormalizeAttempt(t *testing.T) {
 		attempt *int
 		want    int
 	}{
-		{name: "nil returns 1", attempt: nil, want: 1},
+		{name: "nil returns 0", attempt: nil, want: 0},
 		{name: "ptr(0) returns 0", attempt: intPtr(0), want: 0},
 		{name: "ptr(1) returns 1", attempt: intPtr(1), want: 1},
 		{name: "ptr(5) returns 5", attempt: intPtr(5), want: 5},
