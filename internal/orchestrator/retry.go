@@ -143,6 +143,7 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 		ScheduleRetry(state, ScheduleRetryParams{
 			IssueID:    issueID,
 			Identifier: popped.Identifier,
+			DisplayID:  popped.DisplayID,
 			Attempt:    popped.Attempt,
 			DelayMS:    delayMS,
 			Error:      popped.Error,
@@ -192,6 +193,7 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 		ScheduleRetry(state, ScheduleRetryParams{
 			IssueID:    issueID,
 			Identifier: popped.Identifier,
+			DisplayID:  popped.DisplayID,
 			Attempt:    nextAttempt,
 			DelayMS:    delayMS,
 			Error:      "retry poll failed",
@@ -252,6 +254,7 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 		ScheduleRetry(state, ScheduleRetryParams{
 			IssueID:    issueID,
 			Identifier: popped.Identifier,
+			DisplayID:  popped.DisplayID,
 			Attempt:    nextAttempt,
 			DelayMS:    delayMS,
 			Error:      "no available orchestrator slots",
@@ -279,6 +282,7 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 			ScheduleRetry(state, ScheduleRetryParams{
 				IssueID:    issueID,
 				Identifier: popped.Identifier,
+				DisplayID:  popped.DisplayID,
 				Attempt:    nextAttempt,
 				DelayMS:    delayMS,
 				Error:      "no available SSH hosts",

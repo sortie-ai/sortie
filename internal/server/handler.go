@@ -30,22 +30,23 @@ type stateCounts struct {
 }
 
 type runningEntryResponse struct {
-	IssueID         string         `json:"issue_id"`
-	IssueIdentifier string         `json:"issue_identifier"`
-	State           string         `json:"state"`
-	SessionID       string         `json:"session_id"`
-	TurnCount       int            `json:"turn_count"`
-	LastEvent       string         `json:"last_event"`
-	LastMessage     string         `json:"last_message"`
-	StartedAt       time.Time      `json:"started_at"`
-	LastEventAt     time.Time      `json:"last_event_at"`
-	WorkspacePath   string         `json:"workspace_path"`
-	Tokens          tokenInfo      `json:"tokens"`
-	ModelName       string         `json:"model_name,omitempty"`
-	APIRequestCount int            `json:"api_request_count"`
-	RequestsByModel map[string]int `json:"requests_by_model,omitempty"`
-	ToolTimePercent *float64       `json:"tool_time_percent"`
-	APITimePercent  *float64       `json:"api_time_percent"`
+	IssueID           string         `json:"issue_id"`
+	IssueIdentifier   string         `json:"issue_identifier"`
+	DisplayIdentifier string         `json:"display_identifier,omitempty"`
+	State             string         `json:"state"`
+	SessionID         string         `json:"session_id"`
+	TurnCount         int            `json:"turn_count"`
+	LastEvent         string         `json:"last_event"`
+	LastMessage       string         `json:"last_message"`
+	StartedAt         time.Time      `json:"started_at"`
+	LastEventAt       time.Time      `json:"last_event_at"`
+	WorkspacePath     string         `json:"workspace_path"`
+	Tokens            tokenInfo      `json:"tokens"`
+	ModelName         string         `json:"model_name,omitempty"`
+	APIRequestCount   int            `json:"api_request_count"`
+	RequestsByModel   map[string]int `json:"requests_by_model,omitempty"`
+	ToolTimePercent   *float64       `json:"tool_time_percent"`
+	APITimePercent    *float64       `json:"api_time_percent"`
 }
 
 type tokenInfo struct {
@@ -56,11 +57,12 @@ type tokenInfo struct {
 }
 
 type retryEntryResponse struct {
-	IssueID         string    `json:"issue_id"`
-	IssueIdentifier string    `json:"issue_identifier"`
-	Attempt         int       `json:"attempt"`
-	DueAt           time.Time `json:"due_at"`
-	Error           string    `json:"error"`
+	IssueID           string    `json:"issue_id"`
+	IssueIdentifier   string    `json:"issue_identifier"`
+	DisplayIdentifier string    `json:"display_identifier,omitempty"`
+	Attempt           int       `json:"attempt"`
+	DueAt             time.Time `json:"due_at"`
+	Error             string    `json:"error"`
 }
 
 type issueDetailResponse struct {
@@ -104,22 +106,18 @@ type errorDetail struct {
 // --- Wire-type constructors ---
 
 func toRunningEntryResponse(e orchestrator.SnapshotRunningEntry, nowArgs ...time.Time) runningEntryResponse {
-	displayID := e.Identifier
-	if e.DisplayID != "" {
-		displayID = e.DisplayID
-	}
-
 	resp := runningEntryResponse{
-		IssueID:         e.IssueID,
-		IssueIdentifier: displayID,
-		State:           e.State,
-		SessionID:       e.SessionID,
-		TurnCount:       e.TurnCount,
-		LastEvent:       string(e.LastAgentEvent),
-		LastMessage:     e.LastAgentMessage,
-		StartedAt:       e.StartedAt.UTC(),
-		LastEventAt:     e.LastAgentTimestamp.UTC(),
-		WorkspacePath:   e.WorkspacePath,
+		IssueID:           e.IssueID,
+		IssueIdentifier:   e.Identifier,
+		DisplayIdentifier: e.DisplayID,
+		State:             e.State,
+		SessionID:         e.SessionID,
+		TurnCount:         e.TurnCount,
+		LastEvent:         string(e.LastAgentEvent),
+		LastMessage:       e.LastAgentMessage,
+		StartedAt:         e.StartedAt.UTC(),
+		LastEventAt:       e.LastAgentTimestamp.UTC(),
+		WorkspacePath:     e.WorkspacePath,
 		Tokens: tokenInfo{
 			InputTokens:     e.AgentInputTokens,
 			OutputTokens:    e.AgentOutputTokens,
@@ -148,17 +146,13 @@ func toRunningEntryResponse(e orchestrator.SnapshotRunningEntry, nowArgs ...time
 }
 
 func toRetryEntryResponse(e orchestrator.SnapshotRetryEntry) retryEntryResponse {
-	displayID := e.Identifier
-	if e.DisplayID != "" {
-		displayID = e.DisplayID
-	}
-
 	return retryEntryResponse{
-		IssueID:         e.IssueID,
-		IssueIdentifier: displayID,
-		Attempt:         e.Attempt,
-		DueAt:           time.UnixMilli(e.DueAtMS).UTC(),
-		Error:           e.Error,
+		IssueID:           e.IssueID,
+		IssueIdentifier:   e.Identifier,
+		DisplayIdentifier: e.DisplayID,
+		Attempt:           e.Attempt,
+		DueAt:             time.UnixMilli(e.DueAtMS).UTC(),
+		Error:             e.Error,
 	}
 }
 
