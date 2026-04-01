@@ -43,7 +43,7 @@ agent sessions.
 Chosen option: **MCP stdio sidecar launched by the agent runtime via config file**, because
 it satisfies all five drivers with the lowest implementation and operational complexity.
 
-The worker generates a temporary `mcp-config.json` in the workspace directory and passes its
+The worker generates a temporary `.sortie/mcp.json` in the workspace directory and passes its
 path to the agent via the `--mcp-config` flag (Claude Code) or `--additional-mcp-config`
 (Copilot CLI). The agent runtime reads this configuration and spawns `sortie mcp-server` as
 its own child process — the worker does not manage the MCP server lifecycle directly. This is
@@ -57,7 +57,7 @@ with session context).
 The MCP server receives configuration through three channels, split by kind:
 
 - **Per-session context** (issue ID, workspace path, database path, session ID) reaches the
-  server through the `env` field in `mcp-config.json`. The worker writes these values at
+  server through the `env` field in `.sortie/mcp.json`. The worker writes these values at
   config generation time. These are non-secret session metadata — safe to persist in the
   workspace directory.
 - **Tracker credentials** reach the server through inherited environment variables. The
@@ -90,7 +90,7 @@ MCP server needs `SORTIE_DB_PATH` to open a read-only SQLite connection for Tier
 and `SORTIE_SESSION_ID` to scope run-history queries to the current session.
 
 Per-session variables (the first five rows) are computed by the worker at config generation
-time and written into the `env` field of `mcp-config.json`. They do not exist in the
+time and written into the `env` field of `.sortie/mcp.json`. They do not exist in the
 orchestrator's process environment — multiple workers run concurrently with different values
 for each session. The config file `env` field is the correct delivery mechanism: the agent
 runtime reads it and sets these variables on the MCP server child process at spawn time.
@@ -106,7 +106,7 @@ WORKFLOW.md file, not in the config `env` field. This three-way separation keeps
 channel appropriately scoped: session metadata in the config `env` field, credentials in
 inherited environment, tracker structure in the workflow file.
 
-The `mcp-config.json` file written to disk uses the standard MCP configuration format:
+The `.sortie/mcp.json` file written to disk uses the standard MCP configuration format:
 
 ```json
 {
@@ -141,7 +141,7 @@ orchestrator's cwd.
 The file MUST NOT contain credential values. The `env` field contains per-session context
 variables (non-secret metadata) — never inline secret values such as API keys or tokens.
 Credentials reach the MCP server through inherited environment variables, not through the
-config file. This ensures that `mcp-config.json` is safe to persist in the workspace
+config file. This ensures that `.sortie/mcp.json` is safe to persist in the workspace
 directory without leaking credentials.
 
 ### MCP config merging with operator-provided servers
@@ -161,7 +161,7 @@ The worker MUST merge both configurations into a single file:
 3. If the operator's config already contains a server named `sortie-tools`, the worker
    fails the attempt with a validation error — name collisions indicate a
    misconfiguration that must be resolved by the operator.
-4. The worker writes the merged config to `mcp-config.json` in the workspace directory and
+4. The worker writes the merged config to `.sortie/mcp.json` in the workspace directory and
    passes its path to the agent via the adapter's MCP config flag.
 
 When the operator does not specify `mcp_config`, the worker writes a file containing only
@@ -338,7 +338,7 @@ Beyond the agent-agnostic violation, two further problems apply:
 
 - Any MCP-compatible agent works without adapter-specific tool integration code.
 - Process isolation: a tool crash or timeout does not affect the orchestrator process.
-- The `mcp-config.json` file is a standard MCP artifact; agents that support `--mcp-config`
+- The `.sortie/mcp.json` file is a standard MCP artifact; agents that support `--mcp-config`
   require zero custom wiring.
 - Stdio transport eliminates lifecycle management complexity — no port allocation, no
   explicit shutdown, no orphan cleanup.
@@ -361,7 +361,7 @@ design does not address:
 1. **Binary availability.** The `sortie` binary must be installed on each remote host so the
    agent runtime can spawn `sortie mcp-server`. Appendix A already requires "coding-agent
    executable" on the remote host; the MCP server extends this to include the `sortie` binary.
-2. **Config file delivery.** The worker generates `mcp-config.json` locally, but in SSH mode
+2. **Config file delivery.** The worker generates `.sortie/mcp.json` locally, but in SSH mode
    `workspace.root` is interpreted on the remote host. The config file must be written to the
    remote workspace before the agent launches.
 3. **Environment variable forwarding.** The current SSH transport (`sshutil.BuildSSHArgs`)

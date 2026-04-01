@@ -733,7 +733,7 @@ This prevents workspace-controlled MCP servers from interfering with Sortie-mana
 
 ### Sortie adapter usage
 
-The worker writes a temporary `mcp-config.json` to the workspace directory containing the
+The worker writes a temporary `.sortie/mcp.json` to the workspace directory containing the
 `sortie mcp-server` stdio declaration. If the operator also specifies `claude-code.mcp_config`
 in WORKFLOW.md, the worker merges both server sets into a single file — Claude Code accepts
 only one `--mcp-config` path. A name collision on the `sortie-tools` key fails the attempt.

@@ -824,7 +824,7 @@ Use `--disable-builtin-mcps` to disable all built-in MCP servers, or
 
 ### Sortie adapter usage
 
-The worker writes a temporary `mcp-config.json` to the workspace directory and passes
+The worker writes a temporary `.sortie/mcp.json` to the workspace directory and passes
 its path via `--additional-mcp-config`. If the operator also specifies
 `copilot-cli.mcp_config` in WORKFLOW.md, the worker merges both server sets into a single
 file. A name collision on the `sortie-tools` key fails the attempt. Credential values are
