@@ -4,9 +4,12 @@
 // normalized to domain types with labels lowercased, nil priority
 // (GitHub has no native priority), and label-based state derivation.
 // State is determined by scanning issue labels against configured
-// active_states and terminal_states in config order; the first match
-// wins. Comments are Markdown pass-through (no ADF conversion).
-// Registered under kind "github" via an init function.
+// active_states, terminal_states, and the optional handoff_state in
+// config order; the first label match wins. When handoff_state is
+// configured, state derivation and label removal during transitions
+// treat it as a recognized state label. Comments are Markdown
+// pass-through (no ADF conversion). Registered under kind "github"
+// via an init function.
 //
 // Unlike the Jira adapter, this adapter stores both activeStates and
 // terminalStates. Jira has native workflow states that the adapter
@@ -72,6 +75,8 @@ type GitHubAdapter struct {
 // Required config keys: "api_key" (personal access token or fine-grained
 // token), "project" (owner/repo format). Optional: "endpoint" (defaults
 // to https://api.github.com), "active_states", "terminal_states",
+// "handoff_state" (single state name recognized as a valid transition
+// target and state label; normalized to lowercase),
 // "query_filter", "user_agent", "etag_cache_size" (int, default 1000;
 // set to 0 to disable ETag caching).
 func NewGitHubAdapter(config map[string]any) (domain.TrackerAdapter, error) {
