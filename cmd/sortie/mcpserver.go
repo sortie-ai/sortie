@@ -29,7 +29,7 @@ func runMCPServer(ctx context.Context, args []string, stdout io.Writer, stderr i
 		fmt.Fprintln(stderr)                                                                           //nolint:errcheck // stderr write failure is unrecoverable
 		fmt.Fprintln(stderr, "Start an MCP stdio server that exposes registered agent tools over")     //nolint:errcheck // stderr write failure is unrecoverable
 		fmt.Fprintln(stderr, "JSON-RPC on stdin/stdout. Intended to be launched by an MCP-compatible") //nolint:errcheck // stderr write failure is unrecoverable
-		fmt.Fprintln(stderr, "agent runtime via mcp-config.json, not run manually.")                   //nolint:errcheck // stderr write failure is unrecoverable
+		fmt.Fprintln(stderr, "agent runtime via the generated MCP config, not run manually.")          //nolint:errcheck // stderr write failure is unrecoverable
 		fmt.Fprintln(stderr)                                                                           //nolint:errcheck // stderr write failure is unrecoverable
 		fmt.Fprintln(stderr, "Flags:")                                                                 //nolint:errcheck // stderr write failure is unrecoverable
 		fmt.Fprintln(stderr, "  --workflow    Absolute path to the WORKFLOW.md file (required)")       //nolint:errcheck // stderr write failure is unrecoverable

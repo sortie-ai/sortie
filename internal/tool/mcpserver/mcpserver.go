@@ -132,7 +132,8 @@ func NewServer(registry *domain.ToolRegistry, r io.Reader, w io.Writer, logger *
 // (stdin closed). Context cancellation is checked between messages;
 // a blocked read is not interrupted until the next line arrives or
 // the reader closes. Returns nil on clean shutdown (EOF or context
-// cancellation), or an error on unexpected read/write failures.
+// cancellation), or an error on unexpected read failures. Write
+// errors are logged but do not terminate the loop.
 func (s *Server) Serve(ctx context.Context) error {
 	scanner := bufio.NewScanner(s.reader)
 	buf := make([]byte, 0, 64*1024)
