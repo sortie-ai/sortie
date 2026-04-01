@@ -950,6 +950,83 @@ func TestQueryRecentRunHistory_TurnsCompleted(t *testing.T) {
 	}
 }
 
+func TestAppendRunHistory_DisplayIDRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	s := openTestStore(t)
+	migrateOrFatal(t, s)
+	ctx := context.Background()
+
+	run := newTestRun(1)
+	run.DisplayID = "owner/repo#1"
+	got := appendOrFatal(t, s, run)
+
+	if got.DisplayID != "owner/repo#1" {
+		t.Errorf("AppendRunHistory returned DisplayID = %q, want %q", got.DisplayID, "owner/repo#1")
+	}
+
+	entries, err := s.QueryRunHistoryByIssue(ctx, run.IssueID)
+	if err != nil {
+		t.Fatalf("QueryRunHistoryByIssue: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("got %d entries, want 1", len(entries))
+	}
+	if entries[0].DisplayID != "owner/repo#1" {
+		t.Errorf("QueryRunHistoryByIssue DisplayID = %q, want %q", entries[0].DisplayID, "owner/repo#1")
+	}
+}
+
+func TestAppendRunHistory_EmptyDisplayIDRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	s := openTestStore(t)
+	migrateOrFatal(t, s)
+	ctx := context.Background()
+
+	// Jira-style run: DisplayID is empty (Identifier is self-explanatory).
+	run := newTestRun(1)
+	got := appendOrFatal(t, s, run)
+
+	if got.DisplayID != "" {
+		t.Errorf("AppendRunHistory returned DisplayID = %q, want empty string", got.DisplayID)
+	}
+
+	entries, err := s.QueryRunHistoryByIssue(ctx, run.IssueID)
+	if err != nil {
+		t.Fatalf("QueryRunHistoryByIssue: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("got %d entries, want 1", len(entries))
+	}
+	if entries[0].DisplayID != "" {
+		t.Errorf("QueryRunHistoryByIssue DisplayID = %q, want empty string for NULL column", entries[0].DisplayID)
+	}
+}
+
+func TestQueryRecentRunHistory_DisplayIDRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	s := openTestStore(t)
+	migrateOrFatal(t, s)
+	ctx := context.Background()
+
+	run := newTestRun(1)
+	run.DisplayID = "sortie-ai/sortie#42"
+	appendOrFatal(t, s, run)
+
+	entries, err := s.QueryRecentRunHistory(ctx, 1, 0)
+	if err != nil {
+		t.Fatalf("QueryRecentRunHistory: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("got %d entries, want 1", len(entries))
+	}
+	if entries[0].DisplayID != "sortie-ai/sortie#42" {
+		t.Errorf("QueryRecentRunHistory DisplayID = %q, want %q", entries[0].DisplayID, "sortie-ai/sortie#42")
+	}
+}
+
 // --- Session Metadata Tests ---
 
 func TestUpsertSessionMetadata(t *testing.T) {

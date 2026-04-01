@@ -16,6 +16,13 @@ type Issue struct {
 	// used for logs and workspace naming.
 	Identifier string
 
+	// DisplayID is the qualified form of Identifier for
+	// dashboard and API display. For trackers where Identifier alone
+	// is ambiguous (e.g. GitHub issue numbers), the adapter sets this
+	// to a qualified form such as "owner/repo#9". Empty means
+	// Identifier is already display-ready.
+	DisplayID string
+
 	// Title is the issue summary/title.
 	Title string
 

@@ -736,6 +736,69 @@ func TestRuntimeSnapshot(t *testing.T) {
 			t.Errorf("len(BudgetExhausted) after source mutation = %d, want 1 (snapshot isolation)", len(result.BudgetExhausted))
 		}
 	})
+
+	t.Run("DisplayID propagated from Issue.DisplayID to running snapshot", func(t *testing.T) {
+		t.Parallel()
+
+		state := NewState(5000, 10, nil, AgentTotals{})
+		state.Running["gh-9"] = &RunningEntry{
+			Identifier: "9",
+			Issue:      domain.Issue{ID: "gh-9", State: "In Progress", DisplayID: "owner/repo#9"},
+			StartedAt:  fixedNow.Add(-30 * time.Second),
+		}
+
+		result := RuntimeSnapshot(state, fixedNow)
+
+		if len(result.Running) != 1 {
+			t.Fatalf("len(Running) = %d, want 1", len(result.Running))
+		}
+		if result.Running[0].DisplayID != "owner/repo#9" {
+			t.Errorf("Running[0].DisplayID = %q, want %q", result.Running[0].DisplayID, "owner/repo#9")
+		}
+	})
+
+	t.Run("empty Issue.DisplayID produces empty DisplayID in running snapshot", func(t *testing.T) {
+		t.Parallel()
+
+		state := NewState(5000, 10, nil, AgentTotals{})
+		state.Running["jira-1"] = &RunningEntry{
+			Identifier: "PROJ-1",
+			Issue:      domain.Issue{ID: "jira-1", State: "In Progress", DisplayID: ""},
+			StartedAt:  fixedNow.Add(-10 * time.Second),
+		}
+
+		result := RuntimeSnapshot(state, fixedNow)
+
+		if len(result.Running) != 1 {
+			t.Fatalf("len(Running) = %d, want 1", len(result.Running))
+		}
+		if result.Running[0].DisplayID != "" {
+			t.Errorf("Running[0].DisplayID = %q, want empty string", result.Running[0].DisplayID)
+		}
+	})
+
+	t.Run("DisplayID propagated from RetryEntry to retrying snapshot", func(t *testing.T) {
+		t.Parallel()
+
+		state := NewState(5000, 10, nil, AgentTotals{})
+		state.RetryAttempts["gh-7"] = &RetryEntry{
+			IssueID:    "gh-7",
+			Identifier: "7",
+			DisplayID:  "owner/repo#7",
+			Attempt:    1,
+			DueAtMS:    fixedNow.Add(5 * time.Minute).UnixMilli(),
+			Error:      "timeout",
+		}
+
+		result := RuntimeSnapshot(state, fixedNow)
+
+		if len(result.Retrying) != 1 {
+			t.Fatalf("len(Retrying) = %d, want 1", len(result.Retrying))
+		}
+		if result.Retrying[0].DisplayID != "owner/repo#7" {
+			t.Errorf("Retrying[0].DisplayID = %q, want %q", result.Retrying[0].DisplayID, "owner/repo#7")
+		}
+	})
 }
 
 func TestRuntimeSnapshot_WorkflowFile(t *testing.T) {

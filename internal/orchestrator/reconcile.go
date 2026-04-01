@@ -147,6 +147,7 @@ func reconcileStalled(state *State, params ReconcileParams, log *slog.Logger, ct
 			ScheduleRetry(state, ScheduleRetryParams{
 				IssueID:    issueID,
 				Identifier: entry.Identifier,
+				DisplayID:  entry.Issue.DisplayID,
 				Attempt:    nextAttempt,
 				DelayMS:    delayMS,
 				Error:      "stall timeout exceeded",

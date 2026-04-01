@@ -198,6 +198,7 @@ func HandleWorkerExit(state *State, result WorkerResult, params HandleWorkerExit
 	runHistory := persistence.RunHistory{
 		IssueID:        result.IssueID,
 		Identifier:     result.Identifier,
+		DisplayID:      entry.Issue.DisplayID,
 		Attempt:        normalizeAttempt(entry.RetryAttempt) + 1,
 		AgentAdapter:   result.AgentAdapter,
 		Workspace:      result.WorkspacePath,
@@ -282,6 +283,7 @@ func HandleWorkerExit(state *State, result WorkerResult, params HandleWorkerExit
 				ScheduleRetry(state, ScheduleRetryParams{
 					IssueID:     result.IssueID,
 					Identifier:  result.Identifier,
+					DisplayID:   entry.Issue.DisplayID,
 					Attempt:     NextAttempt(entry.RetryAttempt),
 					DelayMS:     continuationDelayMS,
 					Error:       "",
@@ -298,6 +300,7 @@ func HandleWorkerExit(state *State, result WorkerResult, params HandleWorkerExit
 				ScheduleRetry(state, ScheduleRetryParams{
 					IssueID:     result.IssueID,
 					Identifier:  result.Identifier,
+					DisplayID:   entry.Issue.DisplayID,
 					Attempt:     NextAttempt(entry.RetryAttempt),
 					DelayMS:     continuationDelayMS,
 					Error:       "",
@@ -320,6 +323,7 @@ func HandleWorkerExit(state *State, result WorkerResult, params HandleWorkerExit
 			ScheduleRetry(state, ScheduleRetryParams{
 				IssueID:     result.IssueID,
 				Identifier:  result.Identifier,
+				DisplayID:   entry.Issue.DisplayID,
 				Attempt:     NextAttempt(entry.RetryAttempt),
 				DelayMS:     continuationDelayMS,
 				Error:       "",
@@ -366,6 +370,7 @@ func HandleWorkerExit(state *State, result WorkerResult, params HandleWorkerExit
 			ScheduleRetry(state, ScheduleRetryParams{
 				IssueID:     result.IssueID,
 				Identifier:  result.Identifier,
+				DisplayID:   entry.Issue.DisplayID,
 				Attempt:     nextAttempt,
 				DelayMS:     delayMS,
 				Error:       errMsg,

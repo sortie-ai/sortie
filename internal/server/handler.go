@@ -104,9 +104,14 @@ type errorDetail struct {
 // --- Wire-type constructors ---
 
 func toRunningEntryResponse(e orchestrator.SnapshotRunningEntry, nowArgs ...time.Time) runningEntryResponse {
+	displayID := e.Identifier
+	if e.DisplayID != "" {
+		displayID = e.DisplayID
+	}
+
 	resp := runningEntryResponse{
 		IssueID:         e.IssueID,
-		IssueIdentifier: e.Identifier,
+		IssueIdentifier: displayID,
 		State:           e.State,
 		SessionID:       e.SessionID,
 		TurnCount:       e.TurnCount,
@@ -143,9 +148,14 @@ func toRunningEntryResponse(e orchestrator.SnapshotRunningEntry, nowArgs ...time
 }
 
 func toRetryEntryResponse(e orchestrator.SnapshotRetryEntry) retryEntryResponse {
+	displayID := e.Identifier
+	if e.DisplayID != "" {
+		displayID = e.DisplayID
+	}
+
 	return retryEntryResponse{
 		IssueID:         e.IssueID,
-		IssueIdentifier: e.Identifier,
+		IssueIdentifier: displayID,
 		Attempt:         e.Attempt,
 		DueAt:           time.UnixMilli(e.DueAtMS).UTC(),
 		Error:           e.Error,

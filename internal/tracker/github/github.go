@@ -208,6 +208,7 @@ func (a *GitHubAdapter) fetchCandidatesViaIssues(ctx context.Context) ([]domain.
 			continue
 		}
 		issue := normalizeIssue(gi, a.activeStates, a.terminalStates)
+		a.qualifyDisplayID(&issue)
 		if _, ok := activeSet[issue.State]; !ok {
 			continue
 		}
@@ -238,6 +239,7 @@ func (a *GitHubAdapter) fetchCandidatesViaIssues(ctx context.Context) ([]domain.
 				continue
 			}
 			issue := normalizeIssue(gi, a.activeStates, a.terminalStates)
+			a.qualifyDisplayID(&issue)
 			if _, ok := activeSet[issue.State]; !ok {
 				continue
 			}
@@ -299,6 +301,7 @@ func (a *GitHubAdapter) fetchCandidatesViaSearch(ctx context.Context) ([]domain.
 			continue
 		}
 		issue := normalizeIssue(gi, a.activeStates, a.terminalStates)
+		a.qualifyDisplayID(&issue)
 		if _, ok := activeSet[issue.State]; !ok {
 			continue
 		}
@@ -329,6 +332,7 @@ func (a *GitHubAdapter) fetchCandidatesViaSearch(ctx context.Context) ([]domain.
 				continue
 			}
 			issue := normalizeIssue(gi, a.activeStates, a.terminalStates)
+			a.qualifyDisplayID(&issue)
 			if _, ok := activeSet[issue.State]; !ok {
 				continue
 			}
@@ -387,6 +391,7 @@ func (a *GitHubAdapter) FetchIssueByID(ctx context.Context, issueID string) (dom
 	}
 
 	issue := normalizeIssue(gi, a.activeStates, a.terminalStates)
+	a.qualifyDisplayID(&issue)
 
 	// Step 2: Fetch blockers (dependencies/blocked_by).
 	issue.BlockedBy, err = a.fetchBlockers(ctx, issueID)
@@ -582,6 +587,7 @@ func (a *GitHubAdapter) fetchOpenIssuesByStates(ctx context.Context, stateSet ma
 			continue
 		}
 		issue := normalizeIssue(gi, a.activeStates, a.terminalStates)
+		a.qualifyDisplayID(&issue)
 		if _, ok := stateSet[issue.State]; !ok {
 			continue
 		}
@@ -614,6 +620,7 @@ func (a *GitHubAdapter) fetchOpenIssuesByStates(ctx context.Context, stateSet ma
 				continue
 			}
 			issue := normalizeIssue(gi, a.activeStates, a.terminalStates)
+			a.qualifyDisplayID(&issue)
 			if _, ok := stateSet[issue.State]; !ok {
 				continue
 			}
@@ -669,6 +676,7 @@ func (a *GitHubAdapter) fetchClosedIssuesByLabel(ctx context.Context, label stri
 			continue
 		}
 		issue := normalizeIssue(gi, a.activeStates, a.terminalStates)
+		a.qualifyDisplayID(&issue)
 		if _, dup := seen[issue.Identifier]; dup {
 			continue
 		}
@@ -698,6 +706,7 @@ func (a *GitHubAdapter) fetchClosedIssuesByLabel(ctx context.Context, label stri
 				continue
 			}
 			issue := normalizeIssue(gi, a.activeStates, a.terminalStates)
+			a.qualifyDisplayID(&issue)
 			if _, dup := seen[issue.Identifier]; dup {
 				continue
 			}

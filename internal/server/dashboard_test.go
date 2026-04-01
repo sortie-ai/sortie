@@ -964,3 +964,139 @@ func TestHandleDashboard_NoRunHistoryFn(t *testing.T) {
 		t.Error("body contains 'Run History', want omitted when RunHistoryFn is nil")
 	}
 }
+
+func TestBuildDashboardData_DisplayID(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 3, 24, 12, 0, 0, 0, time.UTC)
+	snap := orchestrator.RuntimeSnapshotResult{
+		GeneratedAt: now,
+		Running: []orchestrator.SnapshotRunningEntry{
+			{
+				IssueID:    "id-9",
+				Identifier: "9",
+				DisplayID:  "owner/repo#9",
+				State:      "In Progress",
+				StartedAt:  now.Add(-1 * time.Minute),
+			},
+		},
+		Retrying: []orchestrator.SnapshotRetryEntry{
+			{
+				IssueID:    "id-7",
+				Identifier: "7",
+				DisplayID:  "owner/repo#7",
+				Attempt:    1,
+				DueAtMS:    now.Add(1 * time.Minute).UnixMilli(),
+				Error:      "timeout",
+			},
+		},
+	}
+
+	data := buildDashboardData(snap, "1.0.0", now.Add(-1*time.Hour), nil, now)
+
+	if len(data.Running) != 1 {
+		t.Fatalf("len(Running) = %d, want 1", len(data.Running))
+	}
+	if data.Running[0].Identifier != "owner/repo#9" {
+		t.Errorf("Running[0].Identifier = %q, want %q", data.Running[0].Identifier, "owner/repo#9")
+	}
+	if len(data.Retrying) != 1 {
+		t.Fatalf("len(Retrying) = %d, want 1", len(data.Retrying))
+	}
+	if data.Retrying[0].Identifier != "owner/repo#7" {
+		t.Errorf("Retrying[0].Identifier = %q, want %q", data.Retrying[0].Identifier, "owner/repo#7")
+	}
+}
+
+func TestBuildDashboardData_FallsBackToIdentifier(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 3, 24, 12, 0, 0, 0, time.UTC)
+	snap := orchestrator.RuntimeSnapshotResult{
+		GeneratedAt: now,
+		Running: []orchestrator.SnapshotRunningEntry{
+			{
+				IssueID:    "id-PROJ-42",
+				Identifier: "PROJ-42",
+				DisplayID:  "",
+				State:      "In Progress",
+				StartedAt:  now.Add(-1 * time.Minute),
+			},
+		},
+		Retrying: []orchestrator.SnapshotRetryEntry{
+			{
+				IssueID:    "id-PROJ-43",
+				Identifier: "PROJ-43",
+				DisplayID:  "",
+				Attempt:    2,
+				DueAtMS:    now.Add(30 * time.Second).UnixMilli(),
+				Error:      "no slots",
+			},
+		},
+	}
+
+	data := buildDashboardData(snap, "1.0.0", now.Add(-1*time.Hour), nil, now)
+
+	if len(data.Running) != 1 {
+		t.Fatalf("len(Running) = %d, want 1", len(data.Running))
+	}
+	if data.Running[0].Identifier != "PROJ-42" {
+		t.Errorf("Running[0].Identifier = %q, want %q", data.Running[0].Identifier, "PROJ-42")
+	}
+	if len(data.Retrying) != 1 {
+		t.Fatalf("len(Retrying) = %d, want 1", len(data.Retrying))
+	}
+	if data.Retrying[0].Identifier != "PROJ-43" {
+		t.Errorf("Retrying[0].Identifier = %q, want %q", data.Retrying[0].Identifier, "PROJ-43")
+	}
+}
+
+func TestMapRunHistoryEntries_DisplayID(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		identifier string
+		displayID  string
+		wantID     string
+	}{
+		{
+			name:       "DisplayID set — used as Identifier",
+			identifier: "42",
+			displayID:  "owner/repo#42",
+			wantID:     "owner/repo#42",
+		},
+		{
+			name:       "DisplayID empty — falls back to Identifier",
+			identifier: "PROJ-99",
+			displayID:  "",
+			wantID:     "PROJ-99",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			runs := []RunHistoryEntry{
+				{
+					Identifier:  tt.identifier,
+					DisplayID:   tt.displayID,
+					Attempt:     1,
+					Status:      "succeeded",
+					StartedAt:   "2026-03-24T10:00:00Z",
+					CompletedAt: "2026-03-24T10:05:00Z",
+				},
+			}
+
+			got := mapRunHistoryEntries(runs)
+
+			if len(got) != 1 {
+				t.Fatalf("len = %d, want 1", len(got))
+			}
+			if got[0].Identifier != tt.wantID {
+				t.Errorf("Identifier = %q, want %q", got[0].Identifier, tt.wantID)
+			}
+		})
+	}
+}

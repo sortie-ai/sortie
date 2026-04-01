@@ -415,6 +415,7 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 				for i, r := range runs {
 					out[i] = server.RunHistoryEntry{
 						Identifier:     r.Identifier,
+						DisplayID:      r.DisplayID,
 						Attempt:        r.Attempt,
 						Status:         r.Status,
 						WorkflowFile:   r.WorkflowFile,

@@ -42,6 +42,7 @@ type RunHistoryFunc func(ctx context.Context, limit int) ([]RunHistoryEntry, err
 // Decoupled from persistence types to avoid leaking internal packages.
 type RunHistoryEntry struct {
 	Identifier     string
+	DisplayID      string
 	Attempt        int
 	Status         string
 	WorkflowFile   string

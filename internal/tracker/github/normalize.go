@@ -60,6 +60,9 @@ type searchResponse struct {
 // Parent, Comments, and BlockedBy are set to list-path defaults (nil,
 // nil, empty slice respectively); callers requiring full population
 // must use [GitHubAdapter.FetchIssueByID].
+//
+// DisplayID is left empty; callers that know the repository
+// owner and name should set it to "owner/repo#N" after normalization.
 func normalizeIssue(gi githubIssue, activeStates, terminalStates []string) domain.Issue {
 	num := strconv.Itoa(gi.Number)
 
@@ -101,6 +104,12 @@ func normalizeIssue(gi githubIssue, activeStates, terminalStates []string) domai
 		CreatedAt:   gi.CreatedAt,
 		UpdatedAt:   gi.UpdatedAt,
 	}
+}
+
+// qualifyDisplayID sets DisplayID to "owner/repo#N" so
+// dashboard and API consumers see a fully qualified reference.
+func (a *GitHubAdapter) qualifyDisplayID(issue *domain.Issue) {
+	issue.DisplayID = a.owner + "/" + a.repo + "#" + issue.Identifier
 }
 
 // normalizeBlockers converts blocker issue responses to

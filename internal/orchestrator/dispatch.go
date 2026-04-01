@@ -222,6 +222,7 @@ func CancelRetry(state *State, issueID string) {
 type ScheduleRetryParams struct {
 	IssueID     string
 	Identifier  string
+	DisplayID   string
 	Attempt     int   // 1-based retry attempt number.
 	DelayMS     int64 // Delay before timer fires, in milliseconds.
 	Error       string
@@ -260,6 +261,7 @@ func ScheduleRetry(state *State, params ScheduleRetryParams, onFire func(issueID
 	state.RetryAttempts[params.IssueID] = &RetryEntry{
 		IssueID:          params.IssueID,
 		Identifier:       params.Identifier,
+		DisplayID:        params.DisplayID,
 		Attempt:          params.Attempt,
 		DueAtMS:          dueAtMS,
 		Error:            params.Error,

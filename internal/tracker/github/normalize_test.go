@@ -1,6 +1,7 @@
 package github
 
 import (
+	"strconv"
 	"testing"
 
 	"github.com/sortie-ai/sortie/internal/domain"
@@ -205,6 +206,64 @@ func TestNormalizeIssue_IDEqualsIdentifier(t *testing.T) {
 	}
 	if got.ID != got.Identifier {
 		t.Errorf("ID %q != Identifier %q", got.ID, got.Identifier)
+	}
+}
+
+func TestNormalizeIssue_DisplayIDEmpty(t *testing.T) {
+	t.Parallel()
+
+	gi := githubIssue{Number: 42, State: "open"}
+	got := normalizeIssue(gi, nil, nil)
+
+	// normalizeIssue must leave DisplayID empty; callers are responsible for
+	// calling qualifyDisplayID to set the qualified form.
+	if got.DisplayID != "" {
+		t.Errorf("DisplayID = %q, want empty string after normalizeIssue", got.DisplayID)
+	}
+}
+
+func TestQualifyDisplayID(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		owner  string
+		repo   string
+		num    int
+		wantID string
+	}{
+		{
+			name:   "standard owner/repo#N format",
+			owner:  "my-org",
+			repo:   "my-repo",
+			num:    9,
+			wantID: "my-org/my-repo#9",
+		},
+		{
+			name:   "dotted repo name",
+			owner:  "sortie-ai",
+			repo:   "sortie.test",
+			num:    100,
+			wantID: "sortie-ai/sortie.test#100",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			a := &GitHubAdapter{owner: tt.owner, repo: tt.repo}
+			issue := domain.Issue{
+				ID:         strconv.Itoa(tt.num),
+				Identifier: strconv.Itoa(tt.num),
+			}
+
+			a.qualifyDisplayID(&issue)
+
+			if issue.DisplayID != tt.wantID {
+				t.Errorf("DisplayID = %q, want %q", issue.DisplayID, tt.wantID)
+			}
+		})
 	}
 }
 

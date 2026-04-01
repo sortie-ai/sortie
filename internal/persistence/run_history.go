@@ -14,6 +14,7 @@ type RunHistory struct {
 	ID             int64   // Auto-increment primary key; zero on insert, set on read.
 	IssueID        string  // Tracker-internal issue ID.
 	Identifier     string  // Human-readable ticket key (e.g. "PROJ-42").
+	DisplayID      string  // Qualified display form (e.g. "owner/repo#9"); empty when Identifier is self-explanatory.
 	Attempt        int     // Attempt number at time of run (1-based).
 	AgentAdapter   string  // Agent adapter kind used (e.g. "claude-code", "mock").
 	Workspace      string  // Workspace path used for this run.
@@ -39,11 +40,16 @@ func (s *Store) AppendRunHistory(ctx context.Context, run RunHistory) (RunHistor
 		wfVal = sql.NullString{String: run.WorkflowFile, Valid: true}
 	}
 
+	dispIDVal := sql.NullString{}
+	if run.DisplayID != "" {
+		dispIDVal = sql.NullString{String: run.DisplayID, Valid: true}
+	}
+
 	res, err := s.db.ExecContext(ctx,
 		`INSERT INTO run_history
-			(issue_id, identifier, attempt, agent_adapter, workspace, started_at, completed_at, status, error, workflow_file, turns_completed)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		run.IssueID, run.Identifier, run.Attempt, run.AgentAdapter,
+			(issue_id, identifier, display_identifier, attempt, agent_adapter, workspace, started_at, completed_at, status, error, workflow_file, turns_completed)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		run.IssueID, run.Identifier, dispIDVal, run.Attempt, run.AgentAdapter,
 		run.Workspace, run.StartedAt, run.CompletedAt, run.Status, errVal, wfVal,
 		run.TurnsCompleted,
 	)
@@ -64,7 +70,7 @@ func (s *Store) AppendRunHistory(ctx context.Context, run RunHistory) (RunHistor
 // slice when no entries exist.
 func (s *Store) QueryRunHistoryByIssue(ctx context.Context, issueID string) ([]RunHistory, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT id, issue_id, identifier, attempt, agent_adapter, workspace,
+		`SELECT id, issue_id, identifier, display_identifier, attempt, agent_adapter, workspace,
 			started_at, completed_at, status, error, workflow_file, turns_completed
 		FROM run_history
 		WHERE issue_id = ?
@@ -77,9 +83,9 @@ func (s *Store) QueryRunHistoryByIssue(ctx context.Context, issueID string) ([]R
 	entries := []RunHistory{}
 	for rows.Next() {
 		var r RunHistory
-		var errVal, wfVal sql.NullString
+		var errVal, wfVal, dispIDVal sql.NullString
 		if err := rows.Scan(
-			&r.ID, &r.IssueID, &r.Identifier, &r.Attempt, &r.AgentAdapter,
+			&r.ID, &r.IssueID, &r.Identifier, &dispIDVal, &r.Attempt, &r.AgentAdapter,
 			&r.Workspace, &r.StartedAt, &r.CompletedAt, &r.Status, &errVal, &wfVal,
 			&r.TurnsCompleted,
 		); err != nil {
@@ -91,6 +97,9 @@ func (s *Store) QueryRunHistoryByIssue(ctx context.Context, issueID string) ([]R
 		}
 		if wfVal.Valid {
 			r.WorkflowFile = wfVal.String
+		}
+		if dispIDVal.Valid {
+			r.DisplayID = dispIDVal.String
 		}
 		entries = append(entries, r)
 	}
@@ -114,7 +123,7 @@ func (s *Store) QueryRecentRunHistory(ctx context.Context, limit int, afterID in
 	var err error
 	if afterID > 0 {
 		rows, err = s.db.QueryContext(ctx,
-			`SELECT id, issue_id, identifier, attempt, agent_adapter, workspace,
+			`SELECT id, issue_id, identifier, display_identifier, attempt, agent_adapter, workspace,
 				started_at, completed_at, status, error, workflow_file, turns_completed
 			FROM run_history
 			WHERE id < ?
@@ -122,7 +131,7 @@ func (s *Store) QueryRecentRunHistory(ctx context.Context, limit int, afterID in
 			LIMIT ?`, afterID, limit)
 	} else {
 		rows, err = s.db.QueryContext(ctx,
-			`SELECT id, issue_id, identifier, attempt, agent_adapter, workspace,
+			`SELECT id, issue_id, identifier, display_identifier, attempt, agent_adapter, workspace,
 				started_at, completed_at, status, error, workflow_file, turns_completed
 			FROM run_history
 			ORDER BY id DESC
@@ -136,9 +145,9 @@ func (s *Store) QueryRecentRunHistory(ctx context.Context, limit int, afterID in
 	entries := []RunHistory{}
 	for rows.Next() {
 		var r RunHistory
-		var errVal, wfVal sql.NullString
+		var errVal, wfVal, dispIDVal sql.NullString
 		if err := rows.Scan(
-			&r.ID, &r.IssueID, &r.Identifier, &r.Attempt, &r.AgentAdapter,
+			&r.ID, &r.IssueID, &r.Identifier, &dispIDVal, &r.Attempt, &r.AgentAdapter,
 			&r.Workspace, &r.StartedAt, &r.CompletedAt, &r.Status, &errVal, &wfVal,
 			&r.TurnsCompleted,
 		); err != nil {
@@ -150,6 +159,9 @@ func (s *Store) QueryRecentRunHistory(ctx context.Context, limit int, afterID in
 		}
 		if wfVal.Valid {
 			r.WorkflowFile = wfVal.String
+		}
+		if dispIDVal.Valid {
+			r.DisplayID = dispIDVal.String
 		}
 		entries = append(entries, r)
 	}

@@ -203,6 +203,7 @@ type RunningEntry struct {
 type RetryEntry struct {
 	IssueID     string
 	Identifier  string
+	DisplayID   string
 	Attempt     int
 	DueAtMS     int64
 	Error       string
@@ -331,6 +332,7 @@ func RunningCountByState(running map[string]*RunningEntry, state string) int {
 type SnapshotRunningEntry struct {
 	IssueID            string                `json:"issue_id"`
 	Identifier         string                `json:"issue_identifier"`
+	DisplayID          string                `json:"display_identifier,omitempty"`
 	State              string                `json:"state"`
 	SessionID          string                `json:"session_id"`
 	TurnCount          int                   `json:"turn_count"`
@@ -357,6 +359,7 @@ type SnapshotRunningEntry struct {
 type SnapshotRetryEntry struct {
 	IssueID    string `json:"issue_id"`
 	Identifier string `json:"issue_identifier"`
+	DisplayID  string `json:"display_identifier,omitempty"`
 	Attempt    int    `json:"attempt"`
 	DueAtMS    int64  `json:"due_at_ms"`
 	Error      string `json:"error"`
@@ -440,6 +443,7 @@ func RuntimeSnapshot(state *State, now time.Time) RuntimeSnapshotResult {
 		result.Running = append(result.Running, SnapshotRunningEntry{
 			IssueID:            entry.Issue.ID,
 			Identifier:         entry.Identifier,
+			DisplayID:          entry.Issue.DisplayID,
 			State:              entry.Issue.State,
 			SessionID:          entry.SessionID,
 			TurnCount:          entry.TurnCount,
@@ -474,6 +478,7 @@ func RuntimeSnapshot(state *State, now time.Time) RuntimeSnapshotResult {
 		result.Retrying = append(result.Retrying, SnapshotRetryEntry{
 			IssueID:    entry.IssueID,
 			Identifier: entry.Identifier,
+			DisplayID:  entry.DisplayID,
 			Attempt:    entry.Attempt,
 			DueAtMS:    entry.DueAtMS,
 			Error:      entry.Error,
