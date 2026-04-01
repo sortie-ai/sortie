@@ -20,8 +20,12 @@ var migration002SQL string
 //go:embed sql/003_workflow_file.sql
 var migration003SQL string
 
+//go:embed sql/004_run_history_turns.sql
+var migration004SQL string
+
 var migrations = []Migration{
 	{Version: 1, Description: "core persistence tables", SQL: migration001SQL},
 	{Version: 2, Description: "extended token metrics", SQL: migration002SQL},
 	{Version: 3, Description: "workflow file in run history", SQL: migration003SQL},
+	{Version: 4, Description: "turns completed in run history", SQL: migration004SQL},
 }

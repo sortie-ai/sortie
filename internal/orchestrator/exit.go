@@ -194,16 +194,17 @@ func HandleWorkerExit(state *State, result WorkerResult, params HandleWorkerExit
 	attempt := normalizeAttempt(entry.RetryAttempt)
 
 	runHistory := persistence.RunHistory{
-		IssueID:      result.IssueID,
-		Identifier:   result.Identifier,
-		Attempt:      attempt,
-		AgentAdapter: result.AgentAdapter,
-		Workspace:    result.WorkspacePath,
-		StartedAt:    entry.StartedAt.Format(time.RFC3339),
-		CompletedAt:  now.Format(time.RFC3339),
-		Status:       status,
-		Error:        errorStringPtr(result.Error),
-		WorkflowFile: entry.WorkflowFile,
+		IssueID:        result.IssueID,
+		Identifier:     result.Identifier,
+		Attempt:        attempt,
+		AgentAdapter:   result.AgentAdapter,
+		Workspace:      result.WorkspacePath,
+		StartedAt:      entry.StartedAt.Format(time.RFC3339),
+		CompletedAt:    now.Format(time.RFC3339),
+		Status:         status,
+		Error:          errorStringPtr(result.Error),
+		WorkflowFile:   entry.WorkflowFile,
+		TurnsCompleted: result.TurnsCompleted,
 	}
 	if _, err := params.Store.AppendRunHistory(ctx, runHistory); err != nil {
 		log.Error("failed to persist run history",

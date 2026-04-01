@@ -10,17 +10,18 @@ import (
 // run_history table. The ID field is assigned by the database on insert and
 // should be left zero when calling [Store.AppendRunHistory].
 type RunHistory struct {
-	ID           int64   // Auto-increment primary key; zero on insert, set on read.
-	IssueID      string  // Tracker-internal issue ID.
-	Identifier   string  // Human-readable ticket key (e.g. "PROJ-42").
-	Attempt      int     // Attempt number at time of run (1-based).
-	AgentAdapter string  // Agent adapter kind used (e.g. "claude-code", "mock").
-	Workspace    string  // Workspace path used for this run.
-	StartedAt    string  // ISO-8601 timestamp of run start.
-	CompletedAt  string  // ISO-8601 timestamp of run completion.
-	Status       string  // Terminal status: "succeeded", "failed", "timed_out", "stalled", etc.
-	Error        *string // Error message if failed; nil on success.
-	WorkflowFile string  // Base filename of the WORKFLOW.md file; empty for pre-migration rows.
+	ID             int64   // Auto-increment primary key; zero on insert, set on read.
+	IssueID        string  // Tracker-internal issue ID.
+	Identifier     string  // Human-readable ticket key (e.g. "PROJ-42").
+	Attempt        int     // Attempt number at time of run (1-based).
+	AgentAdapter   string  // Agent adapter kind used (e.g. "claude-code", "mock").
+	Workspace      string  // Workspace path used for this run.
+	StartedAt      string  // ISO-8601 timestamp of run start.
+	CompletedAt    string  // ISO-8601 timestamp of run completion.
+	Status         string  // Terminal status: "succeeded", "failed", "timed_out", "stalled", etc.
+	Error          *string // Error message if failed; nil on success.
+	WorkflowFile   string  // Base filename of the WORKFLOW.md file; empty for pre-migration rows.
+	TurnsCompleted int     // Number of coding turns completed in this run.
 }
 
 // AppendRunHistory inserts a completed run attempt into run_history. The ID
@@ -39,10 +40,11 @@ func (s *Store) AppendRunHistory(ctx context.Context, run RunHistory) (RunHistor
 
 	res, err := s.db.ExecContext(ctx,
 		`INSERT INTO run_history
-			(issue_id, identifier, attempt, agent_adapter, workspace, started_at, completed_at, status, error, workflow_file)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			(issue_id, identifier, attempt, agent_adapter, workspace, started_at, completed_at, status, error, workflow_file, turns_completed)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		run.IssueID, run.Identifier, run.Attempt, run.AgentAdapter,
 		run.Workspace, run.StartedAt, run.CompletedAt, run.Status, errVal, wfVal,
+		run.TurnsCompleted,
 	)
 	if err != nil {
 		return RunHistory{}, fmt.Errorf("append run history for %q: %w", run.IssueID, err)
@@ -62,7 +64,7 @@ func (s *Store) AppendRunHistory(ctx context.Context, run RunHistory) (RunHistor
 func (s *Store) QueryRunHistoryByIssue(ctx context.Context, issueID string) ([]RunHistory, error) {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT id, issue_id, identifier, attempt, agent_adapter, workspace,
-			started_at, completed_at, status, error, workflow_file
+			started_at, completed_at, status, error, workflow_file, turns_completed
 		FROM run_history
 		WHERE issue_id = ?
 		ORDER BY id DESC`, issueID)
@@ -78,6 +80,7 @@ func (s *Store) QueryRunHistoryByIssue(ctx context.Context, issueID string) ([]R
 		if err := rows.Scan(
 			&r.ID, &r.IssueID, &r.Identifier, &r.Attempt, &r.AgentAdapter,
 			&r.Workspace, &r.StartedAt, &r.CompletedAt, &r.Status, &errVal, &wfVal,
+			&r.TurnsCompleted,
 		); err != nil {
 			return nil, fmt.Errorf("scan run history: %w", err)
 		}
@@ -111,7 +114,7 @@ func (s *Store) QueryRecentRunHistory(ctx context.Context, limit int, afterID in
 	if afterID > 0 {
 		rows, err = s.db.QueryContext(ctx,
 			`SELECT id, issue_id, identifier, attempt, agent_adapter, workspace,
-				started_at, completed_at, status, error, workflow_file
+				started_at, completed_at, status, error, workflow_file, turns_completed
 			FROM run_history
 			WHERE id < ?
 			ORDER BY id DESC
@@ -119,7 +122,7 @@ func (s *Store) QueryRecentRunHistory(ctx context.Context, limit int, afterID in
 	} else {
 		rows, err = s.db.QueryContext(ctx,
 			`SELECT id, issue_id, identifier, attempt, agent_adapter, workspace,
-				started_at, completed_at, status, error, workflow_file
+				started_at, completed_at, status, error, workflow_file, turns_completed
 			FROM run_history
 			ORDER BY id DESC
 			LIMIT ?`, limit)
@@ -136,6 +139,7 @@ func (s *Store) QueryRecentRunHistory(ctx context.Context, limit int, afterID in
 		if err := rows.Scan(
 			&r.ID, &r.IssueID, &r.Identifier, &r.Attempt, &r.AgentAdapter,
 			&r.Workspace, &r.StartedAt, &r.CompletedAt, &r.Status, &errVal, &wfVal,
+			&r.TurnsCompleted,
 		); err != nil {
 			return nil, fmt.Errorf("scan run history: %w", err)
 		}

@@ -140,10 +140,9 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 		}
 	})
 
-	// Phase 1: early logging setup (before workflow load).
-	// If the CLI flag is set, validate and apply it immediately so all
-	// subsequent output (including workflow loading) respects the
-	// operator's choice. Otherwise, start at the default info level.
+	// Early logging setup before workflow load — if the CLI flag is set,
+	// apply it immediately so all subsequent output respects the operator's
+	// choice. Otherwise, start at the default info level.
 	var effectiveLevel = slog.LevelInfo
 	if logLevelSet {
 		lvl, err := logging.ParseLevel(*logLevel)
@@ -188,8 +187,8 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 	// the validated configuration.
 	cfg := mgr.Config()
 
-	// Phase 2: post-config log level adjustment. When the CLI flag was
-	// not set, check the workflow extensions for a logging.level key.
+	// Post-config log level adjustment. When the CLI flag was not set,
+	// check the workflow extensions for a logging.level key.
 	if !logLevelSet {
 		lvl, err := resolveLogLevel("", false, cfg.Extensions)
 		if err != nil {
@@ -415,13 +414,14 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 				out := make([]server.RunHistoryEntry, len(runs))
 				for i, r := range runs {
 					out[i] = server.RunHistoryEntry{
-						Identifier:   r.Identifier,
-						Attempt:      r.Attempt,
-						Status:       r.Status,
-						WorkflowFile: r.WorkflowFile,
-						StartedAt:    r.StartedAt,
-						CompletedAt:  r.CompletedAt,
-						Error:        r.Error,
+						Identifier:     r.Identifier,
+						Attempt:        r.Attempt,
+						Status:         r.Status,
+						WorkflowFile:   r.WorkflowFile,
+						StartedAt:      r.StartedAt,
+						CompletedAt:    r.CompletedAt,
+						Error:          r.Error,
+						TurnsCompleted: r.TurnsCompleted,
 					}
 				}
 				return out, nil
@@ -836,9 +836,9 @@ func runValidate(_ context.Context, args []string, stdout io.Writer, stderr io.W
 		AgentRegistry:   registry.Agents,
 	}
 
-	result := orchestrator.ValidateDispatchConfig(preflightParams)
+	validation := orchestrator.ValidateDispatchConfig(preflightParams)
 
-	for _, w := range result.Warnings {
+	for _, w := range validation.Warnings {
 		warningDiags = append(warningDiags, validateDiag{
 			Severity: "warning",
 			Check:    w.Check,
@@ -846,8 +846,8 @@ func runValidate(_ context.Context, args []string, stdout io.Writer, stderr io.W
 		})
 	}
 
-	if !result.OK() {
-		emitDiags(stdout, stderr, *format, mapPreflightErrors(result.Errors), warningDiags)
+	if !validation.OK() {
+		emitDiags(stdout, stderr, *format, mapPreflightErrors(validation.Errors), warningDiags)
 		return 1
 	}
 

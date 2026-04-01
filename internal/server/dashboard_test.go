@@ -799,6 +799,7 @@ func TestMapRunHistoryEntries(t *testing.T) {
 		wantWF       string
 		wantDuration string
 		wantError    string
+		wantTurns    int
 	}{
 		{
 			name: "non-empty workflow file passed through",
@@ -813,6 +814,7 @@ func TestMapRunHistoryEntries(t *testing.T) {
 			wantWF:       "WORKFLOW.md",
 			wantDuration: "30s",
 			wantError:    "",
+			wantTurns:    0,
 		},
 		{
 			name: "empty workflow file becomes em dash",
@@ -827,6 +829,7 @@ func TestMapRunHistoryEntries(t *testing.T) {
 			wantWF:       "\u2014",
 			wantDuration: "1m 0s",
 			wantError:    "",
+			wantTurns:    0,
 		},
 		{
 			name: "non-nil error extracted",
@@ -842,6 +845,7 @@ func TestMapRunHistoryEntries(t *testing.T) {
 			wantWF:       "backend.WORKFLOW.md",
 			wantDuration: "2m 0s",
 			wantError:    "agent crashed",
+			wantTurns:    0,
 		},
 		{
 			name: "invalid RFC3339 dates produce empty duration",
@@ -856,6 +860,23 @@ func TestMapRunHistoryEntries(t *testing.T) {
 			wantWF:       "WORKFLOW.md",
 			wantDuration: "",
 			wantError:    "",
+			wantTurns:    0,
+		},
+		{
+			name: "turns completed mapped from TurnsCompleted",
+			input: RunHistoryEntry{
+				Identifier:     "MT-5",
+				Attempt:        1,
+				Status:         "succeeded",
+				WorkflowFile:   "WORKFLOW.md",
+				StartedAt:      "2026-03-24T10:00:00Z",
+				CompletedAt:    "2026-03-24T10:00:10Z",
+				TurnsCompleted: 8,
+			},
+			wantWF:       "WORKFLOW.md",
+			wantDuration: "10s",
+			wantError:    "",
+			wantTurns:    8,
 		},
 	}
 
@@ -877,6 +898,9 @@ func TestMapRunHistoryEntries(t *testing.T) {
 			}
 			if e.Error != tt.wantError {
 				t.Errorf("Error = %q, want %q", e.Error, tt.wantError)
+			}
+			if e.Turns != tt.wantTurns {
+				t.Errorf("Turns = %d, want %d", e.Turns, tt.wantTurns)
 			}
 		})
 	}
@@ -915,7 +939,7 @@ func TestHandleDashboard_RunHistory(t *testing.T) {
 	if dr.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, want %d", dr.StatusCode, http.StatusOK)
 	}
-	for _, want := range []string{"MT-100", "backend.WORKFLOW.md", "Run History"} {
+	for _, want := range []string{"MT-100", "backend.WORKFLOW.md", "Run History", "Turns"} {
 		if !strings.Contains(dr.Body, want) {
 			t.Errorf("body missing %q", want)
 		}
