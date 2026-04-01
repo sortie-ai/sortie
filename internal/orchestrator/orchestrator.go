@@ -20,6 +20,7 @@ type WorkflowManager interface {
 	Config() config.ServiceConfig
 	PromptTemplate() *prompt.Template
 	Reload() error
+	WorkflowAbsPath() string
 }
 
 // OrchestratorStore is the persistence interface required by the
@@ -76,6 +77,11 @@ type OrchestratorParams struct {
 	// RunningEntry and persisted in run_history. If nil, defaults to
 	// empty string.
 	WorkflowFileFunc func() string
+
+	// DBPath is the absolute path to the SQLite database file. Passed
+	// to the MCP server via the config env field. Empty disables
+	// SORTIE_DB_PATH in the MCP config.
+	DBPath string
 }
 
 // Orchestrator owns the poll-and-dispatch event loop and all runtime
@@ -106,6 +112,7 @@ type Orchestrator struct {
 	draining         atomic.Bool
 	hostPool         *HostPool
 	workflowFileFunc func() string
+	dbPath           string
 
 	// sshStrictHostKeyChecking is the current effective OpenSSH
 	// StrictHostKeyChecking value. Written by handleTick on every
@@ -176,6 +183,7 @@ func NewOrchestrator(params OrchestratorParams) *Orchestrator {
 		toolRegistry:     params.ToolRegistry,
 		hostPool:         hostPool,
 		workflowFileFunc: params.WorkflowFileFunc,
+		dbPath:           params.DBPath,
 	}
 	// Startup preflight must have passed for the orchestrator to be
 	// constructed, so the initial value is true.
@@ -441,6 +449,8 @@ func (o *Orchestrator) makeWorkerFn(resumeSessionID string, sshHost string) Work
 			SSHHost:                  sshHost,
 			SSHStrictHostKeyChecking: strictHostKeyChecking,
 			Metrics:                  o.metrics,
+			WorkflowPath:             o.workflowManager.WorkflowAbsPath(),
+			DBPath:                   o.dbPath,
 		}
 
 		RunWorkerAttempt(ctx, issue, attempt, deps)

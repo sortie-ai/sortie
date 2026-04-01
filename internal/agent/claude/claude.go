@@ -83,6 +83,9 @@ type sessionState struct {
 	// value. Empty means accept-new.
 	sshStrictHostKeyChecking string
 
+	// mcpConfigPath is the worker-generated MCP config file path.
+	mcpConfigPath string
+
 	// mu guards proc and waitCh for concurrent access from
 	// StopSession and the cmd.Cancel callback.
 	mu     sync.Mutex
@@ -187,6 +190,7 @@ func (a *ClaudeCodeAdapter) StartSession(_ context.Context, params domain.StartS
 		sshHost:                  sshHost,
 		remoteCommand:            remoteCommand,
 		sshStrictHostKeyChecking: params.SSHStrictHostKeyChecking,
+		mcpConfigPath:            params.MCPConfigPath,
 	}
 
 	return domain.Session{

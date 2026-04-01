@@ -92,7 +92,9 @@ func buildArgs(state *sessionState, prompt string, pt passthroughConfig) []strin
 	if pt.ExcludedTools != "" {
 		args = append(args, "--excluded-tools", pt.ExcludedTools)
 	}
-	if pt.MCPConfig != "" {
+	if state.mcpConfigPath != "" {
+		args = append(args, "--additional-mcp-config", state.mcpConfigPath)
+	} else if pt.MCPConfig != "" {
 		args = append(args, "--additional-mcp-config", pt.MCPConfig)
 	}
 	if pt.DisableBuiltinMCPs {

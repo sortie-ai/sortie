@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -135,6 +137,16 @@ type WorkerDeps struct {
 	// Always non-nil: NewOrchestrator falls back to NoopMetrics
 	// before wiring WorkerDeps via makeWorkerFn.
 	Metrics domain.Metrics
+
+	// WorkflowPath is the absolute path to the active WORKFLOW.md
+	// file. Used by MCP config generation to pass --workflow to the
+	// mcp-server subcommand. Empty disables MCP config generation.
+	WorkflowPath string
+
+	// DBPath is the absolute path to the SQLite database file.
+	// Passed to the MCP server via the config env field for future
+	// Tier 1 tool access.
+	DBPath string
 }
 
 // normalizeAttempt converts the nullable attempt to a plain integer.
@@ -283,6 +295,7 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 	var turnsCompleted int
 	var session domain.Session
 	var sessionStarted bool
+	var mcpConfigPath string
 
 	defer func() {
 		if r := recover(); r != nil {
@@ -363,6 +376,85 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 		})
 	}
 
+	// Phase 1.5: MCP Config Generation.
+	if deps.WorkflowPath == "" {
+		logger.Debug("workflow path empty, skipping MCP config generation")
+	} else {
+		execPath, execErr := os.Executable()
+		if execErr != nil {
+			finishWorkspace()
+			reported = true
+			deps.OnExit(issue.ID, WorkerResult{
+				IssueID:       issue.ID,
+				Identifier:    issue.Identifier,
+				ExitKind:      WorkerExitError,
+				Error:         fmt.Errorf("MCP config generation: resolve executable: %w", execErr),
+				WorkspacePath: wsResult.Path,
+				AgentAdapter:  cfg.Agent.Kind,
+				Attempt:       attempt,
+				SSHHost:       deps.SSHHost,
+			})
+			return
+		}
+
+		execPath, execErr = filepath.EvalSymlinks(execPath)
+		if execErr != nil {
+			finishWorkspace()
+			reported = true
+			deps.OnExit(issue.ID, WorkerResult{
+				IssueID:       issue.ID,
+				Identifier:    issue.Identifier,
+				ExitKind:      WorkerExitError,
+				Error:         fmt.Errorf("MCP config generation: resolve symlinks: %w", execErr),
+				WorkspacePath: wsResult.Path,
+				AgentAdapter:  cfg.Agent.Kind,
+				Attempt:       attempt,
+				SSHHost:       deps.SSHHost,
+			})
+			return
+		}
+
+		// Resolve operator MCP config path from extensions.
+		var operatorPath string
+		if extMap, ok := cfg.Extensions[cfg.Agent.Kind].(map[string]any); ok {
+			if v, ok := extMap["mcp_config"].(string); ok {
+				operatorPath = v
+			}
+		}
+		if operatorPath != "" && !filepath.IsAbs(operatorPath) {
+			operatorPath = filepath.Join(filepath.Dir(deps.WorkflowPath), operatorPath)
+		}
+
+		generatedPath, genErr := GenerateMCPConfig(MCPConfigParams{
+			BinaryPath:            execPath,
+			WorkflowPath:          deps.WorkflowPath,
+			WorkspacePath:         wsResult.Path,
+			IssueID:               issue.ID,
+			Identifier:            issue.Identifier,
+			DBPath:                deps.DBPath,
+			SessionID:             "",
+			OperatorMCPConfigPath: operatorPath,
+		})
+		if genErr != nil {
+			finishWorkspace()
+			reported = true
+			deps.OnExit(issue.ID, WorkerResult{
+				IssueID:       issue.ID,
+				Identifier:    issue.Identifier,
+				ExitKind:      WorkerExitError,
+				Error:         fmt.Errorf("MCP config generation: %w", genErr),
+				WorkspacePath: wsResult.Path,
+				AgentAdapter:  cfg.Agent.Kind,
+				Attempt:       attempt,
+				SSHHost:       deps.SSHHost,
+			})
+			return
+		}
+
+		mcpConfigPath = generatedPath
+		logger.Info("MCP config written", slog.String("mcp_config_path", generatedPath))
+	}
+
 	// Check context between workspace preparation and session start.
 	if ctx.Err() != nil {
 		finishWorkspace()
@@ -386,6 +478,7 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 		ResumeSessionID:          deps.ResumeSessionID,
 		SSHHost:                  deps.SSHHost,
 		SSHStrictHostKeyChecking: deps.SSHStrictHostKeyChecking,
+		MCPConfigPath:            mcpConfigPath,
 	})
 	if err != nil {
 		finishWorkspace()
