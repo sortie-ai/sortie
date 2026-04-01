@@ -30,6 +30,7 @@ type stubWorkflowManager struct {
 	config   config.ServiceConfig
 	template *prompt.Template
 	reloadFn func() error
+	absPath  string
 }
 
 func (s *stubWorkflowManager) Config() config.ServiceConfig {
@@ -52,6 +53,12 @@ func (s *stubWorkflowManager) Reload() error {
 		return fn()
 	}
 	return nil
+}
+
+func (s *stubWorkflowManager) WorkflowAbsPath() string {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.absPath
 }
 
 func (s *stubWorkflowManager) setConfig(cfg config.ServiceConfig) {

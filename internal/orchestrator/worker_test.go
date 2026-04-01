@@ -2066,6 +2066,105 @@ func TestRunWorkerAttempt_DispatchTransition(t *testing.T) {
 	})
 }
 
+// TestRunWorkerAttempt_MCPConfig covers Phase 1.5: MCP config generation
+// is skipped when WorkflowPath is empty, and the generated config path is
+// forwarded to StartSessionParams when WorkflowPath is non-empty.
+func TestRunWorkerAttempt_MCPConfig(t *testing.T) {
+	t.Parallel()
+
+	t.Run("skipped_when_workflow_path_empty", func(t *testing.T) {
+		t.Parallel()
+
+		tmpDir := t.TempDir()
+		cfg := defaultWorkerConfig(tmpDir)
+		cfg.Agent.MaxTurns = 1
+
+		var capturedMCPConfigPath atomic.Value
+		ec := newExitCapture()
+
+		deps := WorkerDeps{
+			TrackerAdapter: &mockTrackerAdapter{},
+			AgentAdapter: &mockAgentAdapter{
+				startSessionFn: func(_ context.Context, params domain.StartSessionParams) (domain.Session, error) {
+					capturedMCPConfigPath.Store(params.MCPConfigPath)
+					return domain.Session{ID: "sess-1"}, nil
+				},
+			},
+			ConfigFunc:         func() config.ServiceConfig { return cfg },
+			PromptTemplateFunc: func() *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
+			OnEvent:            func(_ string, _ domain.AgentEvent) {},
+			OnExit:             ec.onExit,
+			Logger:             discardLogger(),
+			WorkflowPath:       "", // empty → MCP config skipped
+		}
+
+		RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
+		result := ec.waitResult(t)
+
+		if result.ExitKind != WorkerExitNormal {
+			t.Fatalf("ExitKind = %q, want %q", result.ExitKind, WorkerExitNormal)
+		}
+
+		got, _ := capturedMCPConfigPath.Load().(string)
+		if got != "" {
+			t.Errorf("StartSessionParams.MCPConfigPath = %q, want empty (workflow path not set)", got)
+		}
+
+		// Verify the .sortie directory was NOT created.
+		sortieDir := filepath.Join(result.WorkspacePath, ".sortie")
+		if _, err := os.Stat(sortieDir); !os.IsNotExist(err) {
+			t.Errorf(".sortie dir %q exists, want absent when MCP config skipped", sortieDir)
+		}
+	})
+
+	t.Run("mcp_config_path_populated_in_start_session_params", func(t *testing.T) {
+		t.Parallel()
+
+		tmpDir := t.TempDir()
+		cfg := defaultWorkerConfig(tmpDir)
+		cfg.Agent.MaxTurns = 1
+
+		var capturedMCPConfigPath atomic.Value
+		ec := newExitCapture()
+
+		deps := WorkerDeps{
+			TrackerAdapter: &mockTrackerAdapter{},
+			AgentAdapter: &mockAgentAdapter{
+				startSessionFn: func(_ context.Context, params domain.StartSessionParams) (domain.Session, error) {
+					capturedMCPConfigPath.Store(params.MCPConfigPath)
+					return domain.Session{ID: "sess-1"}, nil
+				},
+			},
+			ConfigFunc:         func() config.ServiceConfig { return cfg },
+			PromptTemplateFunc: func() *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
+			OnEvent:            func(_ string, _ domain.AgentEvent) {},
+			OnExit:             ec.onExit,
+			Logger:             discardLogger(),
+			WorkflowPath:       "/fake/WORKFLOW.md", // non-empty → MCP config generated
+		}
+
+		RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
+		result := ec.waitResult(t)
+
+		if result.ExitKind != WorkerExitNormal {
+			t.Fatalf("ExitKind = %q, want %q", result.ExitKind, WorkerExitNormal)
+		}
+
+		got, _ := capturedMCPConfigPath.Load().(string)
+		if got == "" {
+			t.Fatal("StartSessionParams.MCPConfigPath is empty, want non-empty")
+		}
+		if !strings.HasSuffix(got, filepath.Join(".sortie", "mcp.json")) {
+			t.Errorf("MCPConfigPath = %q, want suffix %q", got, filepath.Join(".sortie", "mcp.json"))
+		}
+
+		// Confirm the file actually exists on disk.
+		if _, err := os.Stat(got); err != nil {
+			t.Errorf("mcp.json not found at %q: %v", got, err)
+		}
+	})
+}
+
 func TestBuildDispatchComment(t *testing.T) {
 	t.Parallel()
 
