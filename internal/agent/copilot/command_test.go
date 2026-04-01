@@ -283,6 +283,27 @@ func TestBuildArgs(t *testing.T) {
 				assertNoFlag(t, args, "--experimental")
 			},
 		},
+		{
+			// Worker-generated path takes priority over operator-configured path.
+			name:   "worker mcp config takes priority over operator",
+			state:  &sessionState{mcpConfigPath: "/ws/.sortie/mcp.json"},
+			prompt: "p",
+			pt:     passthroughConfig{MCPConfig: "/op/mcp.json"},
+			check: func(t *testing.T, args []string) {
+				t.Helper()
+				assertHasArgPair(t, args, "--additional-mcp-config", "/ws/.sortie/mcp.json")
+			},
+		},
+		{
+			name:   "worker mcp config used when operator config absent",
+			state:  &sessionState{mcpConfigPath: "/ws/.sortie/mcp.json"},
+			prompt: "p",
+			pt:     passthroughConfig{},
+			check: func(t *testing.T, args []string) {
+				t.Helper()
+				assertHasArgPair(t, args, "--additional-mcp-config", "/ws/.sortie/mcp.json")
+			},
+		},
 	}
 
 	for _, tt := range tests {
