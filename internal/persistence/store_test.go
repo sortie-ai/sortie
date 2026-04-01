@@ -875,6 +875,81 @@ func TestQueryRecentRunHistory_WorkflowFileRoundTrip(t *testing.T) {
 	}
 }
 
+func TestAppendRunHistory_TurnsCompleted(t *testing.T) {
+	t.Parallel()
+
+	s := openTestStore(t)
+	migrateOrFatal(t, s)
+	ctx := context.Background()
+
+	run := newTestRun(1)
+	run.TurnsCompleted = 7
+	got := appendOrFatal(t, s, run)
+
+	if got.TurnsCompleted != 7 {
+		t.Errorf("AppendRunHistory returned TurnsCompleted = %d, want 7", got.TurnsCompleted)
+	}
+
+	entries, err := s.QueryRunHistoryByIssue(ctx, run.IssueID)
+	if err != nil {
+		t.Fatalf("QueryRunHistoryByIssue: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("got %d entries, want 1", len(entries))
+	}
+	if entries[0].TurnsCompleted != 7 {
+		t.Errorf("QueryRunHistoryByIssue TurnsCompleted = %d, want 7", entries[0].TurnsCompleted)
+	}
+}
+
+func TestAppendRunHistory_TurnsCompleted_Zero(t *testing.T) {
+	t.Parallel()
+
+	s := openTestStore(t)
+	migrateOrFatal(t, s)
+	ctx := context.Background()
+
+	// Zero turns (e.g. workspace prep failed immediately) must be stored and
+	// read back as 0, not as NULL or some other sentinel.
+	run := newTestRun(1)
+	run.TurnsCompleted = 0
+	appendOrFatal(t, s, run)
+
+	entries, err := s.QueryRunHistoryByIssue(ctx, run.IssueID)
+	if err != nil {
+		t.Fatalf("QueryRunHistoryByIssue: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("got %d entries, want 1", len(entries))
+	}
+	if entries[0].TurnsCompleted != 0 {
+		t.Errorf("QueryRunHistoryByIssue TurnsCompleted = %d, want 0", entries[0].TurnsCompleted)
+	}
+}
+
+func TestQueryRecentRunHistory_TurnsCompleted(t *testing.T) {
+	t.Parallel()
+
+	s := openTestStore(t)
+	migrateOrFatal(t, s)
+	ctx := context.Background()
+
+	run := newTestRun(1)
+	run.TurnsCompleted = 12
+	appendOrFatal(t, s, run)
+
+	entries, err := s.QueryRecentRunHistory(ctx, 1, 0)
+	if err != nil {
+		t.Fatalf("QueryRecentRunHistory: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("got %d entries, want 1", len(entries))
+	}
+	if entries[0].TurnsCompleted != 12 {
+		t.Errorf("QueryRecentRunHistory TurnsCompleted = %d, want 12", entries[0].TurnsCompleted)
+	}
+}
+
 // --- Session Metadata Tests ---
 
 func TestUpsertSessionMetadata(t *testing.T) {
