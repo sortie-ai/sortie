@@ -94,11 +94,14 @@ orchestrator's process environment — multiple workers run concurrently with di
 for each session. The config file `env` field is the correct delivery mechanism: the agent
 runtime reads it and sets these variables on the MCP server child process at spawn time.
 
-Tracker credentials are whichever variables the configured `TrackerAdapter` requires (e.g.,
-`GITHUB_TOKEN`, Jira API key). These are set by the operator in the orchestrator's process
-environment. The worker scans `os.Environ()` for all `SORTIE_*`-prefixed variables and
+Tracker credentials are `SORTIE_*`-prefixed variables that the configured `TrackerAdapter`
+requires (e.g., `SORTIE_TRACKER_API_KEY`). Only variables with the `SORTIE_` prefix are
+propagated — the worker scans `os.Environ()` for all `SORTIE_*`-prefixed variables and
 writes them into the `env` block of `.sortie/mcp.json`. The agent runtime reads this field
-and sets these variables on the MCP server child process at spawn time.
+and sets these variables on the MCP server child process at spawn time. When the operator
+uses `--env-file`, the CLI entry point exports the resolved absolute path as
+`SORTIE_ENV_FILE` into the process environment, so the MCP server can locate and load the
+`.env` file through its own `applyEnvOverrides` mechanism.
 
 Tracker configuration is workflow-level and stable across sessions — it belongs in the
 WORKFLOW.md file, not in the config `env` field. This two-channel separation keeps each

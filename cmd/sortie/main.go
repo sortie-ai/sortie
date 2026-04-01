@@ -132,6 +132,17 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 
 	if *envFile != "" {
 		config.SetDotEnvPath(*envFile)
+		// Resolve to absolute and export to the process environment so
+		// CollectSortieEnv propagates the path to the MCP server via
+		// the config env block. The MCP server's working directory
+		// differs from the orchestrator's, so a relative path would
+		// not resolve correctly.
+		if abs, err := filepath.Abs(*envFile); err == nil {
+			if err := os.Setenv("SORTIE_ENV_FILE", abs); err != nil {
+				fmt.Fprintf(stderr, "sortie: setting SORTIE_ENV_FILE: %s\n", err) //nolint:errcheck // stderr write failure is unrecoverable
+				return 1
+			}
+		}
 	}
 
 	var portSet, logLevelSet bool
