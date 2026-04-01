@@ -517,6 +517,93 @@ func TestToRetryEntryResponse(t *testing.T) {
 	}
 }
 
+func TestToRunningEntryResponse_DisplayID(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		id     string
+		dispID string
+		wantID string
+	}{
+		{
+			name:   "DisplayID set — used as IssueIdentifier",
+			id:     "42",
+			dispID: "owner/repo#42",
+			wantID: "owner/repo#42",
+		},
+		{
+			name:   "DisplayID empty — falls back to Identifier",
+			id:     "PROJ-99",
+			dispID: "",
+			wantID: "PROJ-99",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			entry := orchestrator.SnapshotRunningEntry{
+				IssueID:    "issue-x",
+				Identifier: tt.id,
+				DisplayID:  tt.dispID,
+			}
+
+			got := toRunningEntryResponse(entry)
+
+			if got.IssueIdentifier != tt.wantID {
+				t.Errorf("IssueIdentifier = %q, want %q", got.IssueIdentifier, tt.wantID)
+			}
+		})
+	}
+}
+
+func TestToRetryEntryResponse_DisplayID(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		id     string
+		dispID string
+		wantID string
+	}{
+		{
+			name:   "DisplayID set — used as IssueIdentifier",
+			id:     "42",
+			dispID: "owner/repo#42",
+			wantID: "owner/repo#42",
+		},
+		{
+			name:   "DisplayID empty — falls back to Identifier",
+			id:     "PROJ-42",
+			dispID: "",
+			wantID: "PROJ-42",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			entry := orchestrator.SnapshotRetryEntry{
+				IssueID:    "issue-y",
+				Identifier: tt.id,
+				DisplayID:  tt.dispID,
+				Attempt:    1,
+				DueAtMS:    time.Date(2026, 3, 24, 12, 0, 0, 0, time.UTC).UnixMilli(),
+				Error:      "timeout",
+			}
+
+			got := toRetryEntryResponse(entry)
+
+			if got.IssueIdentifier != tt.wantID {
+				t.Errorf("IssueIdentifier = %q, want %q", got.IssueIdentifier, tt.wantID)
+			}
+		})
+	}
+}
+
 func TestToStateResponse(t *testing.T) {
 	t.Parallel()
 
