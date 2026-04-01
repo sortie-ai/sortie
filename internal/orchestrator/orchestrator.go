@@ -79,8 +79,8 @@ type OrchestratorParams struct {
 	WorkflowFileFunc func() string
 
 	// DBPath is the absolute path to the SQLite database file. Passed
-	// to the MCP server via the config env field. Empty disables
-	// SORTIE_DB_PATH in the MCP config.
+	// to the MCP server via the config env field. If empty,
+	// SORTIE_DB_PATH is set to the empty string in the MCP config.
 	DBPath string
 }
 

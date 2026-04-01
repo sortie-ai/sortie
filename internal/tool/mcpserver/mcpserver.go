@@ -129,8 +129,10 @@ func NewServer(registry *domain.ToolRegistry, r io.Reader, w io.Writer, logger *
 
 // Serve reads JSON-RPC requests from the reader in a loop and writes
 // responses to the writer. It blocks until the reader returns io.EOF
-// (stdin closed) or the context is cancelled. Returns nil on clean
-// shutdown (EOF), or an error on unexpected read/write failures.
+// (stdin closed). Context cancellation is checked between messages;
+// a blocked read is not interrupted until the next line arrives or
+// the reader closes. Returns nil on clean shutdown (EOF or context
+// cancellation), or an error on unexpected read/write failures.
 func (s *Server) Serve(ctx context.Context) error {
 	scanner := bufio.NewScanner(s.reader)
 	buf := make([]byte, 0, 64*1024)

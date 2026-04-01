@@ -452,7 +452,7 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 		}
 
 		mcpConfigPath = generatedPath
-		logger.Info("MCP config written", slog.String("mcp_config_path", generatedPath))
+		logger.Info("mcp config written", slog.String("mcp_config_path", generatedPath))
 	}
 
 	// Check context between workspace preparation and session start.

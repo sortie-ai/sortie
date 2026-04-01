@@ -35,9 +35,8 @@ type MCPConfigParams struct {
 	OperatorMCPConfigPath string
 }
 
-// GenerateMCPConfig creates the merged MCP config file at
-// <workspacePath>/.sortie/mcp.json. Returns the absolute path to the
-// written file.
+// GenerateMCPConfig creates the merged MCP config file for the workspace
+// and returns the absolute path to the written file.
 //
 // If OperatorMCPConfigPath is non-empty, the operator's config is
 // read, parsed, and merged with the sortie-tools entry. Returns an

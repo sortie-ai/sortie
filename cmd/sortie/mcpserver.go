@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"path/filepath"
 
 	"github.com/sortie-ai/sortie/internal/config"
 	"github.com/sortie-ai/sortie/internal/domain"
@@ -44,6 +45,11 @@ func runMCPServer(ctx context.Context, args []string, stdout io.Writer, stderr i
 
 	if *workflowFlag == "" {
 		fmt.Fprintln(stderr, "sortie mcp-server: --workflow flag is required") //nolint:errcheck // stderr write failure is unrecoverable
+		return 1
+	}
+
+	if !filepath.IsAbs(*workflowFlag) {
+		fmt.Fprintln(stderr, "sortie mcp-server: --workflow must be an absolute path") //nolint:errcheck // stderr write failure is unrecoverable
 		return 1
 	}
 
