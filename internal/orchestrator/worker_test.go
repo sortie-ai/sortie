@@ -2163,6 +2163,271 @@ func TestRunWorkerAttempt_MCPConfig(t *testing.T) {
 			t.Errorf("mcp.json not found at %q: %v", got, err)
 		}
 	})
+
+	// Phase 1.5 error path: GenerateMCPConfig failure must be fatal to the attempt.
+	// Triggered by an operator config that contains the reserved name "sortie-tools".
+	t.Run("generate_fails_fatal_to_attempt", func(t *testing.T) {
+		t.Parallel()
+
+		tmpDir := t.TempDir()
+		cfg := defaultWorkerConfig(tmpDir)
+		cfg.Agent.MaxTurns = 1
+
+		// Operator config contains a reserved "sortie-tools" entry → name collision.
+		operatorPath := filepath.Join(tmpDir, "op-mcp.json")
+		collision := map[string]any{
+			"mcpServers": map[string]any{
+				"sortie-tools": map[string]any{"type": "stdio", "command": "/other"},
+			},
+		}
+		collisionData, _ := json.Marshal(collision)
+		if err := os.WriteFile(operatorPath, collisionData, 0o600); err != nil {
+			t.Fatalf("WriteFile operator config: %v", err)
+		}
+
+		cfg.Extensions = map[string]any{
+			"mock": map[string]any{"mcp_config": operatorPath},
+		}
+
+		var startCalled atomic.Bool
+		ec := newExitCapture()
+
+		deps := WorkerDeps{
+			TrackerAdapter: &mockTrackerAdapter{},
+			AgentAdapter: &mockAgentAdapter{
+				startSessionFn: func(_ context.Context, _ domain.StartSessionParams) (domain.Session, error) {
+					startCalled.Store(true)
+					return domain.Session{ID: "sess-1"}, nil
+				},
+			},
+			ConfigFunc:         func() config.ServiceConfig { return cfg },
+			PromptTemplateFunc: func() *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
+			OnEvent:            func(_ string, _ domain.AgentEvent) {},
+			OnExit:             ec.onExit,
+			Logger:             discardLogger(),
+			WorkflowPath:       "/fake/WORKFLOW.md",
+		}
+
+		RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
+		result := ec.waitResult(t)
+
+		if result.ExitKind != WorkerExitError {
+			t.Errorf("ExitKind = %q, want %q", result.ExitKind, WorkerExitError)
+		}
+		if result.Error == nil {
+			t.Fatal("Error is nil, want non-nil")
+		}
+		if !strings.Contains(result.Error.Error(), "MCP config generation") {
+			t.Errorf("Error = %q, want to contain %q", result.Error, "MCP config generation")
+		}
+		if result.WorkspacePath == "" {
+			t.Error("WorkspacePath is empty, want non-empty (workspace was prepared before Phase 1.5)")
+		}
+		if startCalled.Load() {
+			t.Error("StartSession was called, want no call after MCP config generation failure")
+		}
+	})
+
+	// Phase 1.5 extension lookup: operator mcp_config from cfg.Extensions[agentKind]
+	// must be merged into the generated .sortie/mcp.json.
+	t.Run("operator_config_merged_from_extensions", func(t *testing.T) {
+		t.Parallel()
+
+		tmpDir := t.TempDir()
+		cfg := defaultWorkerConfig(tmpDir)
+		cfg.Agent.MaxTurns = 1
+
+		// Write a valid operator config with a distinct server entry.
+		operatorPath := filepath.Join(tmpDir, "op-mcp.json")
+		opConfig := map[string]any{
+			"mcpServers": map[string]any{
+				"my-custom-tool": map[string]any{"type": "stdio", "command": "/usr/bin/my-tool"},
+			},
+		}
+		opData, _ := json.Marshal(opConfig)
+		if err := os.WriteFile(operatorPath, opData, 0o600); err != nil {
+			t.Fatalf("WriteFile operator config: %v", err)
+		}
+
+		cfg.Extensions = map[string]any{
+			"mock": map[string]any{"mcp_config": operatorPath},
+		}
+
+		var capturedMCPConfigPath atomic.Value
+		ec := newExitCapture()
+
+		deps := WorkerDeps{
+			TrackerAdapter: &mockTrackerAdapter{},
+			AgentAdapter: &mockAgentAdapter{
+				startSessionFn: func(_ context.Context, params domain.StartSessionParams) (domain.Session, error) {
+					capturedMCPConfigPath.Store(params.MCPConfigPath)
+					return domain.Session{ID: "sess-1"}, nil
+				},
+			},
+			ConfigFunc:         func() config.ServiceConfig { return cfg },
+			PromptTemplateFunc: func() *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
+			OnEvent:            func(_ string, _ domain.AgentEvent) {},
+			OnExit:             ec.onExit,
+			Logger:             discardLogger(),
+			WorkflowPath:       "/fake/WORKFLOW.md",
+		}
+
+		RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
+		result := ec.waitResult(t)
+
+		if result.ExitKind != WorkerExitNormal {
+			t.Fatalf("ExitKind = %q, want %q", result.ExitKind, WorkerExitNormal)
+		}
+
+		mcpPath, _ := capturedMCPConfigPath.Load().(string)
+		if mcpPath == "" {
+			t.Fatal("MCPConfigPath is empty")
+		}
+
+		rawData, err := os.ReadFile(mcpPath)
+		if err != nil {
+			t.Fatalf("ReadFile(%q): %v", mcpPath, err)
+		}
+		var merged map[string]any
+		if err := json.Unmarshal(rawData, &merged); err != nil {
+			t.Fatalf("Unmarshal mcp.json: %v", err)
+		}
+		servers, ok := merged["mcpServers"].(map[string]any)
+		if !ok {
+			t.Fatalf("mcpServers is not an object: %v", merged["mcpServers"])
+		}
+		if _, ok := servers["sortie-tools"]; !ok {
+			t.Error("sortie-tools missing from merged config")
+		}
+		if _, ok := servers["my-custom-tool"]; !ok {
+			t.Error("my-custom-tool missing from merged config (operator entry was not preserved)")
+		}
+	})
+
+	// Phase 1.5 path resolution: a relative mcp_config extension value must be
+	// resolved relative to the directory containing deps.WorkflowPath.
+	t.Run("relative_operator_path_resolved_from_workflow_dir", func(t *testing.T) {
+		t.Parallel()
+
+		// workflowDir acts as the directory containing WORKFLOW.md.
+		workflowDir := t.TempDir()
+		workspaceTmpDir := t.TempDir()
+		cfg := defaultWorkerConfig(workspaceTmpDir)
+		cfg.Agent.MaxTurns = 1
+
+		// Operator config placed in workflowDir with a relative name.
+		relName := "op.json"
+		opData, _ := json.Marshal(map[string]any{
+			"mcpServers": map[string]any{
+				"relative-tool": map[string]any{"type": "stdio", "command": "/bin/rel"},
+			},
+		})
+		if err := os.WriteFile(filepath.Join(workflowDir, relName), opData, 0o600); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+
+		cfg.Extensions = map[string]any{
+			// Relative path — worker must resolve it via filepath.Dir(WorkflowPath).
+			"mock": map[string]any{"mcp_config": relName},
+		}
+
+		var capturedMCPConfigPath atomic.Value
+		ec := newExitCapture()
+
+		deps := WorkerDeps{
+			TrackerAdapter: &mockTrackerAdapter{},
+			AgentAdapter: &mockAgentAdapter{
+				startSessionFn: func(_ context.Context, params domain.StartSessionParams) (domain.Session, error) {
+					capturedMCPConfigPath.Store(params.MCPConfigPath)
+					return domain.Session{ID: "sess-1"}, nil
+				},
+			},
+			ConfigFunc:         func() config.ServiceConfig { return cfg },
+			PromptTemplateFunc: func() *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
+			OnEvent:            func(_ string, _ domain.AgentEvent) {},
+			OnExit:             ec.onExit,
+			Logger:             discardLogger(),
+			// WorkflowPath is inside workflowDir; the file itself need not exist.
+			WorkflowPath: filepath.Join(workflowDir, "WORKFLOW.md"),
+		}
+
+		RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
+		result := ec.waitResult(t)
+
+		if result.ExitKind != WorkerExitNormal {
+			t.Fatalf("ExitKind = %q, want %q", result.ExitKind, WorkerExitNormal)
+		}
+
+		mcpPath, _ := capturedMCPConfigPath.Load().(string)
+		rawData, err := os.ReadFile(mcpPath)
+		if err != nil {
+			t.Fatalf("ReadFile(%q): %v", mcpPath, err)
+		}
+		var merged map[string]any
+		if err := json.Unmarshal(rawData, &merged); err != nil {
+			t.Fatalf("Unmarshal mcp.json: %v", err)
+		}
+		servers, _ := merged["mcpServers"].(map[string]any)
+		if _, ok := servers["relative-tool"]; !ok {
+			t.Errorf("relative-tool missing from merged config: relative operator path was not resolved from workflow dir")
+		}
+	})
+
+	// Phase 1.5 env forwarding: deps.DBPath must appear as SORTIE_DB_PATH in the
+	// generated config's env block.
+	t.Run("dbpath_forwarded_to_mcp_config_env", func(t *testing.T) {
+		t.Parallel()
+
+		tmpDir := t.TempDir()
+		cfg := defaultWorkerConfig(tmpDir)
+		cfg.Agent.MaxTurns = 1
+
+		const testDBPath = "/var/sortie/test.sqlite"
+
+		var capturedMCPConfigPath atomic.Value
+		ec := newExitCapture()
+
+		deps := WorkerDeps{
+			TrackerAdapter: &mockTrackerAdapter{},
+			AgentAdapter: &mockAgentAdapter{
+				startSessionFn: func(_ context.Context, params domain.StartSessionParams) (domain.Session, error) {
+					capturedMCPConfigPath.Store(params.MCPConfigPath)
+					return domain.Session{ID: "sess-1"}, nil
+				},
+			},
+			ConfigFunc:         func() config.ServiceConfig { return cfg },
+			PromptTemplateFunc: func() *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
+			OnEvent:            func(_ string, _ domain.AgentEvent) {},
+			OnExit:             ec.onExit,
+			Logger:             discardLogger(),
+			WorkflowPath:       "/fake/WORKFLOW.md",
+			DBPath:             testDBPath,
+		}
+
+		RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
+		result := ec.waitResult(t)
+
+		if result.ExitKind != WorkerExitNormal {
+			t.Fatalf("ExitKind = %q, want %q", result.ExitKind, WorkerExitNormal)
+		}
+
+		mcpPath, _ := capturedMCPConfigPath.Load().(string)
+		rawData, err := os.ReadFile(mcpPath)
+		if err != nil {
+			t.Fatalf("ReadFile(%q): %v", mcpPath, err)
+		}
+		var mcpCfg map[string]any
+		if err := json.Unmarshal(rawData, &mcpCfg); err != nil {
+			t.Fatalf("Unmarshal mcp.json: %v", err)
+		}
+		servers, _ := mcpCfg["mcpServers"].(map[string]any)
+		sortieEntry, _ := servers["sortie-tools"].(map[string]any)
+		env, _ := sortieEntry["env"].(map[string]any)
+
+		if got := env["SORTIE_DB_PATH"]; got != testDBPath {
+			t.Errorf("env[SORTIE_DB_PATH] = %q, want %q", got, testDBPath)
+		}
+	})
 }
 
 func TestBuildDispatchComment(t *testing.T) {
