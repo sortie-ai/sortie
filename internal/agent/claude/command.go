@@ -93,7 +93,9 @@ func buildArgs(state *sessionState, prompt string, pt passthroughConfig) []strin
 	if pt.SystemPrompt != "" {
 		args = append(args, "--append-system-prompt", pt.SystemPrompt)
 	}
-	if pt.MCPConfig != "" {
+	if state.mcpConfigPath != "" {
+		args = append(args, "--mcp-config", state.mcpConfigPath)
+	} else if pt.MCPConfig != "" {
 		args = append(args, "--mcp-config", pt.MCPConfig)
 	}
 	if !pt.SessionPersistence {

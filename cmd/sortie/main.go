@@ -80,6 +80,9 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 	if len(args) > 0 && args[0] == "validate" {
 		return runValidate(ctx, args[1:], stdout, stderr)
 	}
+	if len(args) > 0 && args[0] == "mcp-server" {
+		return runMCPServer(ctx, args[1:], stdout, stderr)
+	}
 
 	fs := flag.NewFlagSet("sortie", flag.ContinueOnError)
 	fs.SetOutput(stderr)
@@ -95,8 +98,9 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 	// flag package accepts both forms regardless of how they are displayed.
 	singleDashFlags := map[string]bool{"dumpversion": true}
 	fs.Usage = func() {
-		fmt.Fprintf(fs.Output(), "Usage: sortie [flags] [workflow-path]\n")                                 //nolint:errcheck // stderr write failure is unrecoverable
-		fmt.Fprintf(fs.Output(), "       sortie validate [--format text|json] [workflow-path]\n\nFlags:\n") //nolint:errcheck // stderr write failure is unrecoverable
+		fmt.Fprintf(fs.Output(), "Usage: sortie [flags] [workflow-path]\n")                       //nolint:errcheck // stderr write failure is unrecoverable
+		fmt.Fprintf(fs.Output(), "       sortie validate [--format text|json] [workflow-path]\n") //nolint:errcheck // stderr write failure is unrecoverable
+		fmt.Fprintf(fs.Output(), "       sortie mcp-server --workflow <path>\n\nFlags:\n")        //nolint:errcheck // stderr write failure is unrecoverable
 		fs.VisitAll(func(f *flag.Flag) {
 			prefix := "--"
 			if singleDashFlags[f.Name] {
@@ -390,6 +394,7 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 		Metrics:          orchMetrics,
 		ToolRegistry:     toolRegistry,
 		WorkflowFileFunc: mgr.FilePath,
+		DBPath:           dbPath,
 	})
 
 	var srv *server.Server

@@ -76,6 +76,9 @@ type sessionState struct {
 	// value. Empty means accept-new.
 	sshStrictHostKeyChecking string
 
+	// mcpConfigPath is the worker-generated MCP config file path.
+	mcpConfigPath string
+
 	// fallbackToContinue is set when a turn completes without a
 	// result event containing a sessionId. On the next turn,
 	// buildArgs uses --continue instead of --resume.
@@ -202,6 +205,7 @@ func (a *CopilotAdapter) StartSession(ctx context.Context, params domain.StartSe
 		sshHost:                  sshHost,
 		remoteCommand:            remoteCommand,
 		sshStrictHostKeyChecking: params.SSHStrictHostKeyChecking,
+		mcpConfigPath:            params.MCPConfigPath,
 	}
 
 	return domain.Session{

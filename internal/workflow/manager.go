@@ -117,6 +117,12 @@ func (m *Manager) FilePath() string {
 	return filepath.Base(m.path)
 }
 
+// WorkflowAbsPath returns the absolute path to the workflow file.
+// The returned value is immutable after construction.
+func (m *Manager) WorkflowAbsPath() string {
+	return m.path
+}
+
 // LastLoadError returns the error from the most recent reload attempt,
 // or nil if the last reload succeeded. Safe for concurrent use.
 func (m *Manager) LastLoadError() error {
