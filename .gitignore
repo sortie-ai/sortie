@@ -21,16 +21,13 @@ profile.cov
 go.work
 go.work.sum
 
-# Application and docker compose environment variables.
+# Application environment variables.
 /.env
+/.env.*
 
 # Build output
 /sortie
-*.exe
-*.exe~
-*.dll
-*.so
-*.dylib
+/sortie.exe
 
 .sortie.db
 .sortie.db-shm
