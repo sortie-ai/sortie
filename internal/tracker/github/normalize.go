@@ -108,7 +108,11 @@ func normalizeIssue(gi githubIssue, activeStates, terminalStates []string) domai
 
 // qualifyDisplayID sets DisplayID to "owner/repo#N" so
 // dashboard and API consumers see a fully qualified reference.
+// It is idempotent: an already-qualified DisplayID is not overwritten.
 func (a *GitHubAdapter) qualifyDisplayID(issue *domain.Issue) {
+	if issue.DisplayID != "" {
+		return
+	}
 	issue.DisplayID = a.owner + "/" + a.repo + "#" + issue.Identifier
 }
 
