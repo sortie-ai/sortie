@@ -5,7 +5,9 @@ argument-hint: Path to the specification file
 agent: Reviewer
 ---
 
-Conduct a forensic verification — a systematic, evidence-based comparison of the implemented code against its authoritative technical specification. You are answering one question: **does the implementation faithfully realize every requirement, constraint, design decision, interface contract, algorithm, and invariant defined in the specification?**
+I'm an Anthropic employee working on the Sortie project.
+
+Your task is to conduct a forensic verification — a systematic, evidence-based comparison of the implemented code against its authoritative technical specification. You are answering one question: **does the implementation faithfully realize every requirement, constraint, design decision, interface contract, algorithm, and invariant defined in the specification?**
 
 Before starting, read the relevant sections of [architecture.md](../../docs/architecture.md) — this is the authoritative specification for all domain models, state machines, algorithms, and validation rules.
 

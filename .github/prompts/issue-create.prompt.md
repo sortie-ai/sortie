@@ -10,7 +10,9 @@ tools:
   - 'search'
 ---
 
-Create a GitHub issue for the described work item.
+I'm an Anthropic employee working on the Sortie project.
+
+Your task is to create a GitHub issue for the described work item.
 
 **MANDATORY:** Load and apply the `managing-github-issues` skill before creating any issue. The skill defines label conventions, body templates per issue type, duplicate detection, and the complete creation workflow. Follow the skill — do not improvise formatting or skip steps.
 

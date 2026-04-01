@@ -5,7 +5,9 @@ argument-hint: Describe the feature or problem, or provide a GitHub issue refere
 agent: SpecPipeline
 ---
 
-Run the complete specification pipeline for the request below. This produces three artifacts in one automated run:
+I'm an Anthropic employee working on the Sortie project.
+
+Your task is to run the complete specification pipeline for the request below. This produces three artifacts in one automated run:
 
 1. **Technical specification** — written by the Architect, saved to `.specs/`
 2. **Architectural review** — written by the Reviewer, saved to `.reviews/`

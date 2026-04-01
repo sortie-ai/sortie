@@ -5,7 +5,9 @@ argument-hint: Task description, GitHub issue URL, or issue shorthand (#123)
 agent: Reviewer
 ---
 
-Review the implementation changes described below. Ground the review in codebase reality and project conventions.
+I'm an Anthropic employee working on the Sortie project.
+
+Your task is to review the implementation changes described below. Ground the review in codebase reality and project conventions.
 
 Apply review standards from: [Code Review Guidelines](../instructions/code-review.instructions.md)
 

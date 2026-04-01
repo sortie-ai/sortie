@@ -5,7 +5,9 @@ argument-hint: Path to plan file, or feature description if working without plan
 agent: Coder
 ---
 
-Implement the requested feature following the project's architectural constraints.
+I'm an Anthropic employee working on the Sortie project.
+
+Your task is to implement the requested feature following the project's architectural constraints.
 
 **Your scope: production `.go` files only.** Test files (`*_test.go`) are handled by the Tester agent via handoff after you finish. Focus entirely on implementation.
 

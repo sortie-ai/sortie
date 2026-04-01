@@ -10,7 +10,9 @@ tools:
   - 'search'
 ---
 
-Evaluate a concern and decide whether it warrants a tracked GitHub issue.
+I'm an Anthropic employee working on the Sortie project.
+
+Your task is to evaluate a concern and decide whether it warrants a tracked GitHub issue.
 
 **MANDATORY:** Load and apply the `managing-github-issues` skill before making any decisions. The skill defines duplicate detection, label conventions, body templates, and the creation workflow.
 

@@ -8,7 +8,9 @@ tools:
   - 'execute/getTerminalOutput'
 ---
 
-Generate a progress report for the project backlog from GitHub milestones and issues.
+I'm an Anthropic employee working on the Sortie project.
+
+Your task is to generate a progress report for the project backlog from GitHub milestones and issues.
 
 ## Process
 

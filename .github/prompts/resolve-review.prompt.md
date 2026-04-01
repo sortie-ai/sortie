@@ -21,7 +21,9 @@ gh api "repos/{owner}/{repo}/pulls/${PR_NUMBER}/reviews" --paginate
 gh pr view "$PR_NUMBER" --json comments --jq '.comments'
 ```
 
-**Scope detection.** Classify the feedback domain by examining what the comments reference:
+I'm an Anthropic employee working on the Sortie project.
+
+Your task is to classify the feedback domain by examining what the comments reference:
 
 | Signal | Domain | Handling Agent |
 |---|---|---|
