@@ -97,9 +97,9 @@ type PreflightParams struct {
 func ValidateDispatchConfig(params PreflightParams) PreflightResult {
 	var errs []PreflightError
 
-	// Check 1: Workflow file can be loaded and parsed. When the
-	// reload fails, remaining checks are skipped because ConfigFunc
-	// would return stale (or default) config, making those results
+	// Workflow file must be loadable and parseable. When the reload
+	// fails, remaining checks are skipped because ConfigFunc would
+	// return stale (or default) config, making those results
 	// misleading. The operator must fix the workflow file first.
 	if err := params.ReloadWorkflow(); err != nil {
 		errs = append(errs, PreflightError{
@@ -111,7 +111,7 @@ func ValidateDispatchConfig(params PreflightParams) PreflightResult {
 
 	cfg := params.ConfigFunc()
 
-	// Check 2: tracker.kind is present.
+	// Tracker kind must be set for any subsequent tracker validation.
 	if cfg.Tracker.Kind == "" {
 		errs = append(errs, PreflightError{
 			Check:   "tracker.kind",
@@ -119,12 +119,12 @@ func ValidateDispatchConfig(params PreflightParams) PreflightResult {
 		})
 	}
 
-	// Checks 3–5b share a single Meta() lookup for the tracker kind.
+	// Tracker-specific validations share a single Meta() lookup.
 	var warns []PreflightWarning
 	if cfg.Tracker.Kind != "" {
 		trackerMeta := params.TrackerRegistry.Meta(cfg.Tracker.Kind)
 
-		// Check 3: tracker.api_key when required by the adapter.
+		// API key is mandatory for adapters that declare it required.
 		if trackerMeta.RequiresAPIKey && cfg.Tracker.APIKey == "" {
 			errs = append(errs, PreflightError{
 				Check: "tracker.api_key",
@@ -133,7 +133,7 @@ func ValidateDispatchConfig(params PreflightParams) PreflightResult {
 			})
 		}
 
-		// Check 4: tracker.project when required by the adapter.
+		// Project is mandatory for adapters that declare it required.
 		if trackerMeta.RequiresProject && cfg.Tracker.Project == "" {
 			errs = append(errs, PreflightError{
 				Check:   "tracker.project",
@@ -141,7 +141,7 @@ func ValidateDispatchConfig(params PreflightParams) PreflightResult {
 			})
 		}
 
-		// Check 5: Tracker adapter registered and available.
+		// Tracker adapter must be registered in the registry.
 		if _, err := params.TrackerRegistry.Get(cfg.Tracker.Kind); err != nil {
 			errs = append(errs, PreflightError{
 				Check:   "tracker_adapter",
@@ -149,7 +149,7 @@ func ValidateDispatchConfig(params PreflightParams) PreflightResult {
 			})
 		}
 
-		// Check 5b: Adapter-specific tracker config validation.
+		// Adapter-specific tracker config validation, if provided.
 		if trackerMeta.ValidateTrackerConfig != nil {
 			fields := registry.TrackerConfigFields{
 				Kind:            cfg.Tracker.Kind,
@@ -172,7 +172,7 @@ func ValidateDispatchConfig(params PreflightParams) PreflightResult {
 		}
 	}
 
-	// Check 6: agent.kind is present.
+	// Agent kind must be set for any subsequent agent validation.
 	if cfg.Agent.Kind == "" {
 		errs = append(errs, PreflightError{
 			Check:   "agent.kind",
@@ -180,7 +180,7 @@ func ValidateDispatchConfig(params PreflightParams) PreflightResult {
 		})
 	}
 
-	// Check 7: agent.command when required by the adapter.
+	// Command is mandatory for adapters that declare it required.
 	if cfg.Agent.Kind != "" && params.AgentRegistry.Meta(cfg.Agent.Kind).RequiresCommand {
 		if cfg.Agent.Command == "" {
 			errs = append(errs, PreflightError{
@@ -190,7 +190,7 @@ func ValidateDispatchConfig(params PreflightParams) PreflightResult {
 		}
 	}
 
-	// Check 8: Agent adapter registered and available.
+	// Agent adapter must be registered in the registry.
 	if cfg.Agent.Kind != "" {
 		if _, err := params.AgentRegistry.Get(cfg.Agent.Kind); err != nil {
 			errs = append(errs, PreflightError{
@@ -200,7 +200,7 @@ func ValidateDispatchConfig(params PreflightParams) PreflightResult {
 		}
 	}
 
-	// Check 9: workspace root is writable.
+	// Workspace root must exist and be writable.
 	if cfg.Workspace.Root != "" {
 		if err := checkWorkspaceRootWritable(cfg.Workspace.Root); err != nil {
 			errs = append(errs, PreflightError{

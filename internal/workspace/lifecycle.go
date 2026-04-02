@@ -99,47 +99,47 @@ func Prepare(ctx context.Context, params PrepareParams) (PrepareResult, error) {
 		logger = slog.Default()
 	}
 
-	result, err := Ensure(params.Root, params.Identifier)
+	wsResult, err := Ensure(params.Root, params.Identifier)
 	if err != nil {
 		return PrepareResult{}, err
 	}
 
-	env := HookEnv(params.IssueID, params.Identifier, result.Path, params.Attempt, params.SSHHost)
+	env := HookEnv(params.IssueID, params.Identifier, wsResult.Path, params.Attempt, params.SSHHost)
 
-	if result.CreatedNow && params.AfterCreate != "" {
-		logger.InfoContext(ctx, "running hook", slog.String("hook", "after_create"), slog.String("workspace", result.Path))
+	if wsResult.CreatedNow && params.AfterCreate != "" {
+		logger.InfoContext(ctx, "running hook", slog.String("hook", "after_create"), slog.String("workspace", wsResult.Path))
 		_, hookErr := RunHook(ctx, HookParams{
 			Script:    params.AfterCreate,
-			Dir:       result.Path,
+			Dir:       wsResult.Path,
 			Env:       env,
 			TimeoutMS: params.HookTimeoutMS,
 		})
 		if hookErr != nil {
 			logger.WarnContext(ctx, "after_create hook failed, rolling back workspace",
-				slog.String("workspace", result.Path), slog.Any("error", hookErr))
-			if rmErr := os.RemoveAll(result.Path); rmErr != nil {
+				slog.String("workspace", wsResult.Path), slog.Any("error", hookErr))
+			if rmErr := os.RemoveAll(wsResult.Path); rmErr != nil {
 				logger.ErrorContext(ctx, "workspace rollback failed after after_create hook error",
-					slog.String("workspace", result.Path), slog.Any("rollback_error", rmErr))
+					slog.String("workspace", wsResult.Path), slog.Any("rollback_error", rmErr))
 			}
 			return PrepareResult{}, hookErr
 		}
 	}
 
 	if params.BeforeRun != "" {
-		logger.InfoContext(ctx, "running hook", slog.String("hook", "before_run"), slog.String("workspace", result.Path))
+		logger.InfoContext(ctx, "running hook", slog.String("hook", "before_run"), slog.String("workspace", wsResult.Path))
 		_, hookErr := RunHook(ctx, HookParams{
 			Script:    params.BeforeRun,
-			Dir:       result.Path,
+			Dir:       wsResult.Path,
 			Env:       env,
 			TimeoutMS: params.HookTimeoutMS,
 		})
 		if hookErr != nil {
-			logger.WarnContext(ctx, "before_run hook failed", slog.String("workspace", result.Path), slog.Any("error", hookErr))
+			logger.WarnContext(ctx, "before_run hook failed", slog.String("workspace", wsResult.Path), slog.Any("error", hookErr))
 			return PrepareResult{}, hookErr
 		}
 	}
 
-	return PrepareResult(result), nil
+	return PrepareResult(wsResult), nil
 }
 
 // FinishParams holds the inputs for post-agent-run hook execution.
@@ -418,7 +418,7 @@ type CleanupTerminalResult struct {
 // workspace does not prevent cleanup of others. Individual errors are
 // collected in [CleanupTerminalResult.Errors].
 func CleanupTerminal(ctx context.Context, params CleanupTerminalParams) CleanupTerminalResult {
-	result := CleanupTerminalResult{
+	cleanup := CleanupTerminalResult{
 		Removed: make([]string, 0, len(params.Identifiers)),
 		Errors:  make(map[string]error),
 	}
@@ -440,7 +440,6 @@ func CleanupTerminal(ctx context.Context, params CleanupTerminalParams) CleanupT
 			Root:          params.Root,
 			Identifier:    identifier,
 			IssueID:       issueID,
-			Attempt:       0,
 			BeforeRemove:  params.BeforeRemove,
 			HookTimeoutMS: params.HookTimeoutMS,
 			Logger:        logger,
@@ -448,13 +447,13 @@ func CleanupTerminal(ctx context.Context, params CleanupTerminalParams) CleanupT
 		if err != nil {
 			logger.WarnContext(ctx, "workspace cleanup failed",
 				slog.String("identifier", identifier), slog.Any("error", err))
-			result.Errors[identifier] = err
+			cleanup.Errors[identifier] = err
 		} else {
 			logger.InfoContext(ctx, "workspace cleaned",
 				slog.String("identifier", identifier))
-			result.Removed = append(result.Removed, identifier)
+			cleanup.Removed = append(cleanup.Removed, identifier)
 		}
 	}
 
-	return result
+	return cleanup
 }

@@ -31,7 +31,7 @@ func parseDotEnv(path string) (map[string]string, error) {
 	}
 	defer f.Close() //nolint:errcheck // read-only file, close error is harmless
 
-	result := make(map[string]string)
+	pairs := make(map[string]string)
 	scanner := bufio.NewScanner(f)
 	lineNum := 0
 
@@ -43,13 +43,13 @@ func parseDotEnv(path string) (map[string]string, error) {
 			continue
 		}
 
-		eqIdx := strings.IndexByte(line, '=')
-		if eqIdx < 0 {
+		key, val, ok := strings.Cut(line, "=")
+		if !ok {
 			return nil, fmt.Errorf("dotenv %s:%d: missing '=' in line", path, lineNum)
 		}
 
-		key := strings.TrimSpace(line[:eqIdx])
-		val := strings.TrimSpace(line[eqIdx+1:])
+		key = strings.TrimSpace(key)
+		val = strings.TrimSpace(val)
 
 		if !validKeyRe.MatchString(key) {
 			return nil, fmt.Errorf("dotenv %s:%d: invalid key %q", path, lineNum, key)
@@ -64,7 +64,7 @@ func parseDotEnv(path string) (map[string]string, error) {
 		}
 
 		if strings.HasPrefix(key, "SORTIE_") {
-			result[key] = val
+			pairs[key] = val
 		}
 	}
 
@@ -72,5 +72,5 @@ func parseDotEnv(path string) (map[string]string, error) {
 		return nil, fmt.Errorf("dotenv %s: %w", path, err)
 	}
 
-	return result, nil
+	return pairs, nil
 }

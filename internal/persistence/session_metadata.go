@@ -28,9 +28,9 @@ type SessionMetadata struct {
 // issue. If an entry with the same IssueID already exists, all fields are
 // updated.
 func (s *Store) UpsertSessionMetadata(ctx context.Context, meta SessionMetadata) error {
-	pidVal := sql.NullString{}
+	var nullPID sql.NullString
 	if meta.AgentPID != nil {
-		pidVal = sql.NullString{String: *meta.AgentPID, Valid: true}
+		nullPID = sql.NullString{String: *meta.AgentPID, Valid: true}
 	}
 
 	_, err := s.db.ExecContext(ctx,
@@ -48,7 +48,7 @@ func (s *Store) UpsertSessionMetadata(ctx context.Context, meta SessionMetadata)
 			model_name        = excluded.model_name,
 			api_request_count = excluded.api_request_count,
 			updated_at        = excluded.updated_at`,
-		meta.IssueID, meta.SessionID, pidVal,
+		meta.IssueID, meta.SessionID, nullPID,
 		meta.InputTokens, meta.OutputTokens, meta.TotalTokens,
 		meta.CacheReadTokens, meta.ModelName, meta.APIRequestCount, meta.UpdatedAt,
 	)
@@ -63,14 +63,14 @@ func (s *Store) UpsertSessionMetadata(ctx context.Context, meta SessionMetadata)
 // and false if no entry exists.
 func (s *Store) LoadSessionMetadata(ctx context.Context, issueID string) (SessionMetadata, bool, error) {
 	var m SessionMetadata
-	var pidVal sql.NullString
+	var nullPID sql.NullString
 
 	err := s.db.QueryRowContext(ctx,
 		`SELECT issue_id, session_id, agent_pid, input_tokens, output_tokens, total_tokens,
 		        cache_read_tokens, model_name, api_request_count, updated_at
 		FROM session_metadata
 		WHERE issue_id = ?`, issueID,
-	).Scan(&m.IssueID, &m.SessionID, &pidVal,
+	).Scan(&m.IssueID, &m.SessionID, &nullPID,
 		&m.InputTokens, &m.OutputTokens, &m.TotalTokens,
 		&m.CacheReadTokens, &m.ModelName, &m.APIRequestCount, &m.UpdatedAt)
 
@@ -80,8 +80,8 @@ func (s *Store) LoadSessionMetadata(ctx context.Context, issueID string) (Sessio
 	if err != nil {
 		return SessionMetadata{}, false, fmt.Errorf("load session metadata %q: %w", issueID, err)
 	}
-	if pidVal.Valid {
-		v := pidVal.String
+	if nullPID.Valid {
+		v := nullPID.String
 		m.AgentPID = &v
 	}
 	return m, true, nil
@@ -104,14 +104,14 @@ func (s *Store) LoadAllSessionMetadata(ctx context.Context) ([]SessionMetadata, 
 	entries := []SessionMetadata{}
 	for rows.Next() {
 		var m SessionMetadata
-		var pidVal sql.NullString
-		if err := rows.Scan(&m.IssueID, &m.SessionID, &pidVal,
+		var nullPID sql.NullString
+		if err := rows.Scan(&m.IssueID, &m.SessionID, &nullPID,
 			&m.InputTokens, &m.OutputTokens, &m.TotalTokens,
 			&m.CacheReadTokens, &m.ModelName, &m.APIRequestCount, &m.UpdatedAt); err != nil {
 			return nil, fmt.Errorf("scan session metadata: %w", err)
 		}
-		if pidVal.Valid {
-			v := pidVal.String
+		if nullPID.Valid {
+			v := nullPID.String
 			m.AgentPID = &v
 		}
 		entries = append(entries, m)

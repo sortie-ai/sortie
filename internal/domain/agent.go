@@ -25,7 +25,7 @@ const (
 	// EventTurnFailed indicates the turn finished with a failure.
 	EventTurnFailed AgentEventType = "turn_failed"
 
-	// EventTurnCancelled indicates the turn was cancelled.
+	// EventTurnCancelled indicates the turn was canceled.
 	EventTurnCancelled AgentEventType = "turn_cancelled"
 
 	// EventTurnEndedWithError indicates the turn ended due to an

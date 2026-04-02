@@ -176,13 +176,13 @@ type RetryClassification struct {
 func (k TrackerErrorKind) RetryClassification() RetryClassification {
 	switch k {
 	case ErrUnsupportedTrackerKind, ErrMissingTrackerAPIKey, ErrMissingTrackerProject:
-		return RetryClassification{Retryable: false, Backoff: BackoffNone}
+		return RetryClassification{Backoff: BackoffNone}
 	case ErrTrackerAuth:
-		return RetryClassification{Retryable: false, Backoff: BackoffNone}
+		return RetryClassification{Backoff: BackoffNone}
 	case ErrTrackerNotFound:
-		return RetryClassification{Retryable: false, Backoff: BackoffNone}
+		return RetryClassification{Backoff: BackoffNone}
 	case ErrTrackerPayload:
-		return RetryClassification{Retryable: false, Backoff: BackoffNone}
+		return RetryClassification{Backoff: BackoffNone}
 	case ErrTrackerTransport, ErrTrackerAPI, ErrTrackerMissingCursor:
 		return RetryClassification{Retryable: true, Backoff: BackoffExponential}
 	default:
@@ -196,14 +196,14 @@ func (k TrackerErrorKind) RetryClassification() RetryClassification {
 func (k AgentErrorKind) RetryClassification() RetryClassification {
 	switch k {
 	case ErrAgentNotFound, ErrInvalidWorkspaceCwd:
-		return RetryClassification{Retryable: false, Backoff: BackoffNone}
+		return RetryClassification{Backoff: BackoffNone}
 	// Stall-induced cancellations are retried by the reconciliation path,
 	// not by the generic retry classification. The exit handler for
 	// cancelled workers should only perform bookkeeping.
 	case ErrTurnCancelled:
-		return RetryClassification{Retryable: false, Backoff: BackoffNone}
+		return RetryClassification{Backoff: BackoffNone}
 	case ErrTurnInputRequired:
-		return RetryClassification{Retryable: false, Backoff: BackoffNone}
+		return RetryClassification{Backoff: BackoffNone}
 	case ErrResponseTimeout, ErrTurnTimeout, ErrPortExit, ErrResponseError, ErrTurnFailed:
 		return RetryClassification{Retryable: true, Backoff: BackoffExponential}
 	default:

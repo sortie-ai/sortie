@@ -66,7 +66,6 @@ type mockToolCall struct {
 func NewMockAdapter(config map[string]any) (domain.AgentAdapter, error) {
 	m := &MockAdapter{
 		sessionID:           "mock-session-001",
-		agentPID:            "",
 		eventsPerTurn:       3,
 		inputTokensPerTurn:  100,
 		outputTokensPerTurn: 50,
@@ -89,8 +88,8 @@ func NewMockAdapter(config map[string]any) (domain.AgentAdapter, error) {
 		switch v := raw.(type) {
 		case []any:
 			outcomes := make([]string, 0, len(v))
-			for _, item := range v {
-				if s, ok := item.(string); ok {
+			for _, raw := range v {
+				if s, ok := raw.(string); ok {
 					outcomes = append(outcomes, s)
 				}
 			}
@@ -113,9 +112,9 @@ func NewMockAdapter(config map[string]any) (domain.AgentAdapter, error) {
 
 	m.apiDurationMS = int64FromConfig(config, "api_duration_ms", 0)
 	if raw, ok := config["tool_calls"]; ok {
-		if items, ok := raw.([]any); ok {
-			for _, item := range items {
-				if tc, ok := item.(map[string]any); ok {
+		if rawCalls, ok := raw.([]any); ok {
+			for _, rawCall := range rawCalls {
+				if tc, ok := rawCall.(map[string]any); ok {
 					name, _ := tc["tool_name"].(string)
 					dur := int64FromConfig(tc, "duration_ms", 0)
 					tcError, _ := tc["error"].(bool)
@@ -201,8 +200,7 @@ func (m *MockAdapter) RunTurn(ctx context.Context, session domain.Session, param
 		Message:   "mock session started",
 	})
 
-	// Emit N notification events.
-	for i := 0; i < m.eventsPerTurn; i++ {
+	for i := range m.eventsPerTurn {
 		params.OnEvent(domain.AgentEvent{
 			Type:      domain.EventNotification,
 			Timestamp: time.Now().UTC(),
@@ -210,7 +208,6 @@ func (m *MockAdapter) RunTurn(ctx context.Context, session domain.Session, param
 		})
 	}
 
-	// Compute cumulative token usage.
 	cumulativeInput := int64(currentIndex+1) * int64(m.inputTokensPerTurn)
 	cumulativeOutput := int64(currentIndex+1) * int64(m.outputTokensPerTurn)
 	cumulativeCacheRead := int64(currentIndex+1) * int64(m.cacheReadTokensPerTurn)
@@ -221,7 +218,6 @@ func (m *MockAdapter) RunTurn(ctx context.Context, session domain.Session, param
 		CacheReadTokens: cumulativeCacheRead,
 	}
 
-	// Emit token_usage event.
 	tokenEvt := domain.AgentEvent{
 		Type:      domain.EventTokenUsage,
 		Timestamp: time.Now().UTC(),
@@ -234,7 +230,6 @@ func (m *MockAdapter) RunTurn(ctx context.Context, session domain.Session, param
 	}
 	params.OnEvent(tokenEvt)
 
-	// Emit tool_result events for configured tool calls.
 	for _, tc := range m.toolCalls {
 		params.OnEvent(domain.AgentEvent{
 			Type:           domain.EventToolResult,
@@ -246,7 +241,6 @@ func (m *MockAdapter) RunTurn(ctx context.Context, session domain.Session, param
 		})
 	}
 
-	// Map outcome to terminal event and emit it.
 	exitReason, errKind, isError := outcomeToEvent(outcome)
 	params.OnEvent(domain.AgentEvent{
 		Type:      exitReason,
@@ -254,20 +248,20 @@ func (m *MockAdapter) RunTurn(ctx context.Context, session domain.Session, param
 		Message:   fmt.Sprintf("mock turn %s", outcome),
 	})
 
-	result := domain.TurnResult{
+	turnResult := domain.TurnResult{
 		SessionID:  session.ID,
 		ExitReason: exitReason,
 		Usage:      usage,
 	}
 
 	if isError {
-		return result, &domain.AgentError{
+		return turnResult, &domain.AgentError{
 			Kind:    errKind,
 			Message: fmt.Sprintf("mock turn %s", outcome),
 		}
 	}
 
-	return result, nil
+	return turnResult, nil
 }
 
 // StopSession returns nil or an error when configured with stop_error.

@@ -87,13 +87,13 @@ func GenerateMCPConfig(params MCPConfigParams) (string, error) {
 			},
 		}
 	} else {
-		data, err := os.ReadFile(params.OperatorMCPConfigPath)
+		configRaw, err := os.ReadFile(params.OperatorMCPConfigPath)
 		if err != nil {
 			return "", fmt.Errorf("reading operator MCP config: %w", err)
 		}
 
 		var parsed map[string]any
-		if err := json.Unmarshal(data, &parsed); err != nil {
+		if err := json.Unmarshal(configRaw, &parsed); err != nil {
 			return "", fmt.Errorf("parsing operator MCP config: %w", err)
 		}
 
@@ -123,7 +123,7 @@ func GenerateMCPConfig(params MCPConfigParams) (string, error) {
 		return "", fmt.Errorf("creating .sortie directory: %w", err)
 	}
 
-	data, err := json.MarshalIndent(merged, "", "  ")
+	encoded, err := json.MarshalIndent(merged, "", "  ")
 	if err != nil {
 		return "", fmt.Errorf("marshalling MCP config: %w", err)
 	}
@@ -131,7 +131,7 @@ func GenerateMCPConfig(params MCPConfigParams) (string, error) {
 	tmpPath := filepath.Join(dir, "mcp.json.tmp")
 	outPath := filepath.Join(dir, "mcp.json")
 
-	if err := os.WriteFile(tmpPath, data, 0o600); err != nil {
+	if err := os.WriteFile(tmpPath, encoded, 0o600); err != nil {
 		return "", fmt.Errorf("writing MCP config temp file: %w", err)
 	}
 	if err := os.Rename(tmpPath, outPath); err != nil {
@@ -146,12 +146,12 @@ func GenerateMCPConfig(params MCPConfigParams) (string, error) {
 // populate [MCPConfigParams].ProcessEnv so the MCP server receives
 // credential and configuration variables needed for $VAR resolution.
 func CollectSortieEnv() map[string]string {
-	result := make(map[string]string)
+	env := make(map[string]string)
 	for _, entry := range os.Environ() {
 		key, value, ok := strings.Cut(entry, "=")
 		if ok && strings.HasPrefix(key, "SORTIE_") {
-			result[key] = value
+			env[key] = value
 		}
 	}
-	return result
+	return env
 }

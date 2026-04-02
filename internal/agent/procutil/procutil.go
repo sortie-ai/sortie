@@ -12,8 +12,9 @@ import (
 )
 
 // ExtractExitCode returns the process exit code from an
-// [*exec.ExitError], or -1 if the error is not an ExitError. Returns
-// 0 when err is nil.
+// [*exec.ExitError], or -1 if the error is not an ExitError.
+//
+// Returns 0 when err is nil.
 func ExtractExitCode(err error) int {
 	if err == nil {
 		return 0
@@ -26,6 +27,7 @@ func ExtractExitCode(err error) int {
 }
 
 // WasSignaled reports whether the process was terminated by a signal.
+//
 // Returns false when err is nil or is not an [*exec.ExitError].
 func WasSignaled(err error) bool {
 	var exitErr *exec.ExitError
@@ -40,9 +42,10 @@ func WasSignaled(err error) bool {
 }
 
 // DrainStderr reads from r line by line and logs each line at debug
-// level using logger. Returns when r reaches EOF or encounters an
-// error. Intended to run as a goroutine draining a subprocess stderr
-// pipe.
+// level using logger.
+//
+// Returns when r reaches EOF or encounters an error. Intended to run
+// as a goroutine draining a subprocess stderr pipe.
 func DrainStderr(r io.Reader, logger *slog.Logger) {
 	if logger == nil {
 		logger = slog.Default()

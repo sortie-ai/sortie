@@ -1206,14 +1206,14 @@ func TestHandleAgentEvent_ToolCallLogging(t *testing.T) {
 			"session_id=" + sessionID,
 			"tool=Bash",
 			"duration_ms=150",
-			"result=success",
+			"outcome=success",
 		} {
 			if !strings.Contains(out, want) {
 				t.Errorf("log output missing %q\ngot: %s", want, out)
 			}
 		}
-		if strings.Contains(out, "error=") {
-			t.Errorf("log output contains error= on success path\ngot: %s", out)
+		if strings.Contains(out, "tool_error=") {
+			t.Errorf("log output contains tool_error= on success path\ngot: %s", out)
 		}
 	})
 
@@ -1242,8 +1242,8 @@ func TestHandleAgentEvent_ToolCallLogging(t *testing.T) {
 			"level=INFO",
 			"tool call completed",
 			"tool=Bash",
-			"result=error",
-			`error="command failed"`,
+			"outcome=error",
+			`tool_error="command failed"`,
 		} {
 			if !strings.Contains(out, want) {
 				t.Errorf("log output missing %q\ngot: %s", want, out)
@@ -1272,8 +1272,8 @@ func TestHandleAgentEvent_ToolCallLogging(t *testing.T) {
 		}, logger, spy)
 
 		out := buf.String()
-		if !strings.Contains(out, `error="tool returned error"`) {
-			t.Errorf("log output missing fallback error message\ngot: %s", out)
+		if !strings.Contains(out, `tool_error="tool returned error"`) {
+			t.Errorf("log output missing fallback tool_error message\ngot: %s", out)
 		}
 	})
 

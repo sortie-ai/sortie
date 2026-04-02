@@ -52,7 +52,6 @@ func buildArgs(state *sessionState, prompt string, pt passthroughConfig) []strin
 		"--verbose",
 	}
 
-	// Permission handling.
 	if pt.PermissionMode != "" {
 		args = append(args, "--permission-mode", pt.PermissionMode)
 	} else {
@@ -68,7 +67,6 @@ func buildArgs(state *sessionState, prompt string, pt passthroughConfig) []strin
 		args = append(args, "--resume", state.claudeSessionID)
 	}
 
-	// Optional pass-through flags.
 	if pt.Model != "" {
 		args = append(args, "--model", pt.Model)
 	}
@@ -119,8 +117,6 @@ func newUUID() string {
 		buf[0:4], buf[4:6], buf[6:8], buf[8:10], buf[10:16])
 }
 
-// stringFrom extracts a string value from config by key. Returns
-// empty string if the key is absent or not a string.
 func stringFrom(config map[string]any, key string) string {
 	v, ok := config[key].(string)
 	if !ok {
@@ -168,8 +164,6 @@ func floatFrom(config map[string]any, key string, defaultVal float64) float64 {
 	}
 }
 
-// boolFrom extracts a boolean value from config by key. Returns
-// defaultVal if absent or wrong type.
 func boolFrom(config map[string]any, key string, defaultVal bool) bool {
 	v, ok := config[key].(bool)
 	if !ok {

@@ -122,7 +122,7 @@ func (a *ClaudeCodeAdapter) StartSession(_ context.Context, params domain.StartS
 		}
 	}
 
-	info, err := os.Stat(absPath)
+	fi, err := os.Stat(absPath)
 	if err != nil {
 		return domain.Session{}, &domain.AgentError{
 			Kind:    domain.ErrInvalidWorkspaceCwd,
@@ -130,7 +130,7 @@ func (a *ClaudeCodeAdapter) StartSession(_ context.Context, params domain.StartS
 			Err:     err,
 		}
 	}
-	if !info.IsDir() {
+	if !fi.IsDir() {
 		return domain.Session{}, &domain.AgentError{
 			Kind:    domain.ErrInvalidWorkspaceCwd,
 			Message: "workspace path is not a directory",
@@ -289,7 +289,6 @@ func (a *ClaudeCodeAdapter) RunTurn(ctx context.Context, session domain.Session,
 
 	go procutil.DrainStderr(stderrPipe, logger)
 
-	// Read and parse stdout line by line.
 	scanner := bufio.NewScanner(stdoutPipe)
 	scanner.Buffer(make([]byte, 0, 64*1024), 10*1024*1024)
 
@@ -462,7 +461,6 @@ func (a *ClaudeCodeAdapter) RunTurn(ctx context.Context, session domain.Session,
 		}
 	}
 
-	// Check scanner error (e.g., buffer overflow).
 	if scanErr := scanner.Err(); scanErr != nil {
 		cancelCmd()
 		cmd.Wait() //nolint:errcheck,gosec // best-effort reap; exit code is irrelevant on scanner failure
@@ -509,12 +507,11 @@ func (a *ClaudeCodeAdapter) RunTurn(ctx context.Context, session domain.Session,
 			}
 	}
 
-	// Wait for process to exit. cmd.Wait is the sole waiter;
-	// StopSession only signals and waits on waitCh.
+	// cmd.Wait is the sole waiter; StopSession only signals and
+	// waits on waitCh.
 	waitErr := cmd.Wait()
 	close(waitCh)
 
-	// Clear subprocess reference.
 	state.mu.Lock()
 	state.proc = nil
 	state.waitCh = nil
@@ -522,7 +519,6 @@ func (a *ClaudeCodeAdapter) RunTurn(ctx context.Context, session domain.Session,
 
 	now := time.Now().UTC()
 
-	// Determine exit reason.
 	if ctx.Err() != nil {
 		params.OnEvent(domain.AgentEvent{
 			Type:      domain.EventTurnCancelled,
@@ -654,7 +650,6 @@ func (a *ClaudeCodeAdapter) StopSession(ctx context.Context, session domain.Sess
 		return nil
 	}
 
-	// Send SIGTERM for graceful shutdown.
 	_ = proc.Signal(syscall.SIGTERM) //nolint:errcheck // best-effort signal; process may already be dead
 
 	select {
@@ -699,14 +694,14 @@ func toolResultText(block rawContentBlock) string {
 	if err := json.Unmarshal(block.Content, &s); err == nil && s != "" {
 		return s
 	}
-	var items []struct {
+	var contentObjects []struct {
 		Type string `json:"type"`
 		Text string `json:"text"`
 	}
-	if err := json.Unmarshal(block.Content, &items); err == nil {
-		for _, item := range items {
-			if item.Type == "text" && item.Text != "" {
-				return item.Text
+	if err := json.Unmarshal(block.Content, &contentObjects); err == nil {
+		for _, co := range contentObjects {
+			if co.Type == "text" && co.Text != "" {
+				return co.Text
 			}
 		}
 	}
@@ -714,19 +709,13 @@ func toolResultText(block rawContentBlock) string {
 }
 
 // stripClaudeMarkup removes Claude Code-specific markup from a raw error
-// string before it reaches [domain.AgentEvent.Message]. Two cleanups are
-// applied in sequence:
-//
-//  1. If s is wrapped in a <tool_use_error>…</tool_use_error> envelope
-//     (Claude Code's internal error protocol), the envelope is removed and
-//     the inner content is returned. Only the outermost wrapper is stripped;
-//     inner angle brackets are left intact.
-//
-//  2. ANSI SGR escape sequences (e.g. \x1b[31m…\x1b[0m) are removed so that
-//     structured log fields contain plain text that grep can match directly.
-//
-// The function degrades gracefully: if neither condition applies the original
-// string is returned unchanged.
+// string before it reaches [domain.AgentEvent.Message]. First, if s is
+// wrapped in a <tool_use_error>…</tool_use_error> envelope (Claude Code's
+// internal error protocol), the outermost wrapper is stripped and the inner
+// content is kept; inner angle brackets are left intact. Then, ANSI SGR
+// escape sequences (e.g. \x1b[31m…\x1b[0m) are removed so that structured
+// log fields contain plain text that grep can match directly. If neither
+// condition applies the original string is returned unchanged.
 func stripClaudeMarkup(s string) string {
 	s = strings.TrimSpace(s)
 	const open = "<tool_use_error>"
@@ -755,14 +744,12 @@ func tailBytes(s string, n int) string {
 
 // truncateToolError returns s within maxLen bytes, preserving the most useful
 // content for operator log inspection. When s fits in maxLen it is returned
-// unchanged. For longer strings the algorithm is first-line-plus-tail:
-//
-//   - The first line of s (up to the first '\n') is kept as a header — for
-//     CLI tools this is typically an exit-code line such as "Exit code 2".
-//   - The omission marker "\n...\n" separates the header from the tail.
-//   - The remaining byte budget after the header and marker is filled by the
-//     last bytes of s[after first line], so that failure lines at the tail
-//     (e.g. "FAIL pkg 0.5s") are always included.
+// unchanged. For longer strings the algorithm is first-line-plus-tail: the
+// first line of s (up to the first '\n') is kept as a header — for CLI tools
+// this is typically an exit-code line such as "Exit code 2". The omission
+// marker "\n...\n" separates the header from the tail, and the remaining byte
+// budget is filled by the last bytes of s after the first line, so that
+// failure lines at the tail (e.g. "FAIL pkg 0.5s") are always included.
 //
 // When no newline is present, or when the first line alone exceeds the budget,
 // tailBytes(s, maxLen) is returned instead. All truncation respects UTF-8 rune

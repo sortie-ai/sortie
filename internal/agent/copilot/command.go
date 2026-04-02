@@ -65,7 +65,6 @@ func buildArgs(state *sessionState, prompt string, pt passthroughConfig) []strin
 		args = append(args, "--resume", state.copilotSessionID)
 	}
 
-	// Optional pass-through flags.
 	if pt.Model != "" {
 		args = append(args, "--model", pt.Model)
 	}
@@ -110,8 +109,6 @@ func buildArgs(state *sessionState, prompt string, pt passthroughConfig) []strin
 	return args
 }
 
-// stringFrom extracts a string value from config by key. Returns
-// empty string if the key is absent or not a string.
 func stringFrom(config map[string]any, key string) string {
 	v, ok := config[key].(string)
 	if !ok {
@@ -142,8 +139,6 @@ func intFrom(config map[string]any, key string, defaultVal int) int {
 	}
 }
 
-// boolFrom extracts a boolean value from config by key. Returns
-// defaultVal if absent or wrong type.
 func boolFrom(config map[string]any, key string, defaultVal bool) bool {
 	v, ok := config[key].(bool)
 	if !ok {

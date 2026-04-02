@@ -14,8 +14,6 @@ func escapeJQLString(s string) string {
 	return strings.ReplaceAll(s, `"`, "")
 }
 
-// buildStatusIN formats a list of status names as a JQL IN clause
-// value. Each status is sanitized and double-quoted.
 func buildStatusIN(states []string) string {
 	quoted := make([]string, len(states))
 	for i, s := range states {
@@ -24,8 +22,6 @@ func buildStatusIN(states []string) string {
 	return strings.Join(quoted, ", ")
 }
 
-// buildCandidateJQL builds the JQL for fetching candidate issues in
-// active states, ordered by priority then creation time.
 func buildCandidateJQL(project string, states []string, queryFilter string) string {
 	jql := fmt.Sprintf(`project = "%s" AND status IN (%s)`,
 		escapeJQLString(project), buildStatusIN(states))
@@ -36,8 +32,8 @@ func buildCandidateJQL(project string, states []string, queryFilter string) stri
 	return jql
 }
 
-// buildStatesFetchJQL builds the JQL for fetching issues by states,
-// ordered by creation time. Used for terminal cleanup.
+// Used by terminal-state cleanup to find issues that have already been
+// processed but may still have running sessions to reconcile.
 func buildStatesFetchJQL(project string, states []string, queryFilter string) string {
 	jql := fmt.Sprintf(`project = "%s" AND status IN (%s)`,
 		escapeJQLString(project), buildStatusIN(states))
@@ -48,10 +44,8 @@ func buildStatesFetchJQL(project string, states []string, queryFilter string) st
 	return jql
 }
 
-// buildKeyINJQL builds the JQL for fetching issues by their keys
-// (human-readable identifiers like "PROJ-123").
-// The queryFilter is intentionally not applied — these issues already
-// passed filtering at dispatch time.
+// queryFilter is intentionally omitted — these issues already passed
+// filtering at dispatch time.
 func buildKeyINJQL(keys []string) string {
 	quoted := make([]string, len(keys))
 	for i, k := range keys {
@@ -60,12 +54,10 @@ func buildKeyINJQL(keys []string) string {
 	return fmt.Sprintf("key IN (%s) ORDER BY key ASC", strings.Join(quoted, ", "))
 }
 
-// buildIDINJQL builds JQL for fetching issues by their internal numeric
-// IDs. Non-numeric IDs are skipped rather than silently sanitized, so
-// caller bugs (e.g. passing a Jira key like "PROJ-123" instead of the
-// numeric ID) surface as missing results instead of querying the wrong
-// issue. Returns an empty string when no valid IDs remain, allowing
-// the caller to short-circuit without sending invalid JQL to Jira.
+// Non-numeric IDs are skipped so caller bugs (e.g. passing a Jira key
+// instead of the numeric ID) surface as missing results rather than
+// querying the wrong issue. Returns an empty string when no valid IDs
+// remain, letting the caller short-circuit.
 func buildIDINJQL(ids []string) string {
 	valid := make([]string, 0, len(ids))
 	for _, id := range ids {
@@ -80,7 +72,6 @@ func buildIDINJQL(ids []string) string {
 	return fmt.Sprintf("id IN (%s) ORDER BY key ASC", strings.Join(valid, ", "))
 }
 
-// isNumericID reports whether s is a non-empty string of ASCII digits.
 func isNumericID(s string) bool {
 	if s == "" {
 		return false

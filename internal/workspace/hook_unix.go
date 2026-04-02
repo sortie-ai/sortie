@@ -36,7 +36,7 @@ var allowedEnvKeys = map[string]bool{
 // override take precedence over same-named parent variables.
 func hookEnv(override map[string]string) []string {
 	parent := os.Environ()
-	result := make([]string, 0, len(allowedEnvKeys)+len(override))
+	env := make([]string, 0, len(allowedEnvKeys)+len(override))
 	for _, entry := range parent {
 		k, _, _ := strings.Cut(entry, "=")
 		if !allowedEnvKeys[k] && !strings.HasPrefix(k, "SORTIE_") {
@@ -45,12 +45,12 @@ func hookEnv(override map[string]string) []string {
 		if _, dup := override[k]; dup {
 			continue
 		}
-		result = append(result, entry)
+		env = append(env, entry)
 	}
 	for k, v := range override {
-		result = append(result, k+"="+v)
+		env = append(env, k+"="+v)
 	}
-	return result
+	return env
 }
 
 // RunHook executes a shell hook script in the specified workspace

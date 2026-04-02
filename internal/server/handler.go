@@ -12,8 +12,6 @@ import (
 	"github.com/sortie-ai/sortie/internal/orchestrator"
 )
 
-// --- Wire types for JSON serialization ---
-
 // stateResponse is the JSON wire format for GET /api/v1/state.
 type stateResponse struct {
 	GeneratedAt time.Time                        `json:"generated_at"`
@@ -103,8 +101,6 @@ type errorDetail struct {
 	Message string `json:"message"`
 }
 
-// --- Wire-type constructors ---
-
 func toRunningEntryResponse(e orchestrator.SnapshotRunningEntry, nowArgs ...time.Time) runningEntryResponse {
 	resp := runningEntryResponse{
 		IssueID:           e.IssueID,
@@ -185,8 +181,6 @@ func toStateResponse(snap orchestrator.RuntimeSnapshotResult) stateResponse {
 	}
 }
 
-// --- JSON helpers ---
-
 func writeJSON(w http.ResponseWriter, logger *slog.Logger, status int, v any) {
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(v); err != nil {
@@ -208,8 +202,6 @@ func writeErrorJSON(w http.ResponseWriter, logger *slog.Logger, status int, code
 		Error: errorDetail{Code: code, Message: message},
 	})
 }
-
-// --- Route dispatchers (method enforcement with JSON 405) ---
 
 func (s *Server) routeState(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
@@ -234,8 +226,6 @@ func (s *Server) routeIssueDetail(w http.ResponseWriter, r *http.Request) {
 	}
 	s.handleIssueDetail(w, r)
 }
-
-// --- Handlers ---
 
 func (s *Server) handleState(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
@@ -359,8 +349,6 @@ func (s *Server) methodNotAllowed(w http.ResponseWriter, r *http.Request, allowe
 		fmt.Sprintf("method %s is not allowed on this endpoint", r.Method))
 }
 
-// --- Issue detail builder ---
-
 func buildIssueDetail(identifier string, snap orchestrator.RuntimeSnapshotResult) *issueDetailResponse {
 	var runEntry *runningEntryResponse
 	var retryEntry *retryEntryResponse
@@ -437,8 +425,6 @@ func buildIssueDetail(identifier string, snap orchestrator.RuntimeSnapshotResult
 	}
 }
 
-// --- Health endpoint wire types ---
-
 // healthResponse is the JSON wire format for GET /livez.
 type healthResponse struct {
 	Status string `json:"status"`
@@ -451,8 +437,6 @@ type readyResponse struct {
 	UptimeSeconds float64           `json:"uptime_seconds"`
 	Checks        map[string]string `json:"checks"`
 }
-
-// --- Health endpoint handlers ---
 
 func (s *Server) handleLivez(w http.ResponseWriter, _ *http.Request) {
 	if s.drainingFlag.Load() {

@@ -13,15 +13,11 @@ import (
 // dir/name and returns the absolute path.
 //
 // The script is written via a child process to avoid the ETXTBSY race on
-// Linux (golang/go#22315). In a multithreaded process, fork() duplicates all
-// parent file descriptors into the child. If one goroutine holds a write FD on
-// a file while another goroutine forks for an unrelated exec, the forked child
-// inherits that write FD. Even after the parent closes the FD, the child
-// retains it until exec() closes CLOEXEC descriptors. Any attempt to exec the
-// file during that window fails with ETXTBSY because the kernel sees
-// i_writecount > 0 on the inode. Delegating the write to a subprocess means
-// the parent never opens a write FD on the executable, eliminating the race at
-// its root rather than masking it with retries.
+// Linux: in a multithreaded process, a write FD held by one goroutine can
+// survive across fork() into a child spawned by another goroutine, causing
+// ETXTBSY when the file is exec'd before the inherited descriptor closes.
+// Delegating the write to a subprocess means the parent never opens a write FD
+// on the executable, eliminating the race at its root. See golang/go#22315.
 func WriteScript(t *testing.T, dir, name, content string) string {
 	t.Helper()
 	path := filepath.Join(dir, name)

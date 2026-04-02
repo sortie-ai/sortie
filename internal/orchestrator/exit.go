@@ -107,12 +107,12 @@ type HandleWorkerExitParams struct {
 // running entry, updates runtime totals, persists the run to SQLite, and
 // schedules the appropriate retry. Must be called from the orchestrator's
 // single-writer event loop.
-func HandleWorkerExit(state *State, result WorkerResult, params HandleWorkerExitParams) {
+func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWorkerExitParams) {
 	log := params.Logger
 	if log == nil {
 		log = slog.Default()
 	}
-	log = logging.WithIssue(log, result.IssueID, result.Identifier)
+	log = logging.WithIssue(log, workerResult.IssueID, workerResult.Identifier)
 
 	metrics := params.Metrics
 	if metrics == nil {
@@ -124,24 +124,24 @@ func HandleWorkerExit(state *State, result WorkerResult, params HandleWorkerExit
 		ctx = context.Background()
 	}
 
-	entry, exists := state.Running[result.IssueID]
+	entry, exists := state.Running[workerResult.IssueID]
 	if !exists {
 		log.Warn("worker exit for unknown issue")
 		return
 	}
-	delete(state.Running, result.IssueID)
+	delete(state.Running, workerResult.IssueID)
 
 	// Release the SSH host slot so it becomes available for other issues.
 	// ReleaseHost is a no-op when issueID has no assignment, so calling
 	// it unconditionally is safe and more robust than gating on SSHHost.
 	if params.HostPool != nil {
-		params.HostPool.ReleaseHost(result.IssueID)
+		params.HostPool.ReleaseHost(workerResult.IssueID)
 	}
 
 	// Enrich with session context now that both sources are available.
-	// Prefer result.SessionID (authoritative from the adapter) over
+	// Prefer workerResult.SessionID (authoritative from the adapter) over
 	// entry.SessionID (depends on EventSessionStarted processing order).
-	if sid := result.SessionID; sid != "" {
+	if sid := workerResult.SessionID; sid != "" {
 		log = logging.WithSession(log, sid)
 	} else if entry.SessionID != "" {
 		log = logging.WithSession(log, entry.SessionID)
@@ -150,8 +150,8 @@ func HandleWorkerExit(state *State, result WorkerResult, params HandleWorkerExit
 	// Capture the actual workspace path from the worker result so that
 	// PendingCleanup operates on the real directory, not a path
 	// reconstructed from potentially-changed config.
-	if entry.WorkspacePath == "" && result.WorkspacePath != "" {
-		entry.WorkspacePath = result.WorkspacePath
+	if entry.WorkspacePath == "" && workerResult.WorkspacePath != "" {
+		entry.WorkspacePath = workerResult.WorkspacePath
 	}
 
 	// Deferred workspace cleanup: reconciliation marks terminal issues with
@@ -162,7 +162,7 @@ func HandleWorkerExit(state *State, result WorkerResult, params HandleWorkerExit
 		if err := workspace.CleanupByPath(ctx, workspace.CleanupByPathParams{
 			Path:          entry.WorkspacePath,
 			Identifier:    entry.Identifier,
-			IssueID:       result.IssueID,
+			IssueID:       workerResult.IssueID,
 			Attempt:       normalizeAttempt(entry.RetryAttempt),
 			BeforeRemove:  params.BeforeRemoveHook,
 			HookTimeoutMS: params.HookTimeoutMS,
@@ -185,29 +185,29 @@ func HandleWorkerExit(state *State, result WorkerResult, params HandleWorkerExit
 	}
 	state.AgentTotals.SecondsRunning += elapsed
 
-	exitType := mapExitKindToExitType(result.ExitKind)
+	exitType := mapExitKindToExitType(workerResult.ExitKind)
 	metrics.IncWorkerExits(exitType)
 	metrics.ObserveWorkerDuration(exitType, elapsed)
 	metrics.AddAgentRuntime(elapsed)
 
-	status := mapExitKindToStatus(result.ExitKind)
+	status := mapExitKindToStatus(workerResult.ExitKind)
 
 	// RunHistory.Attempt is 1-based for display: first dispatch = 1,
 	// first retry = 2, etc. normalizeAttempt returns the 0-based retry
 	// counter (nil → 0), so add 1 for the overall run attempt number.
 	runHistory := persistence.RunHistory{
-		IssueID:        result.IssueID,
-		Identifier:     result.Identifier,
+		IssueID:        workerResult.IssueID,
+		Identifier:     workerResult.Identifier,
 		DisplayID:      entry.Issue.DisplayID,
 		Attempt:        normalizeAttempt(entry.RetryAttempt) + 1,
-		AgentAdapter:   result.AgentAdapter,
-		Workspace:      result.WorkspacePath,
+		AgentAdapter:   workerResult.AgentAdapter,
+		Workspace:      workerResult.WorkspacePath,
 		StartedAt:      entry.StartedAt.Format(time.RFC3339),
 		CompletedAt:    now.Format(time.RFC3339),
 		Status:         status,
-		Error:          errorStringPtr(result.Error),
+		Error:          errorStringPtr(workerResult.Error),
 		WorkflowFile:   entry.WorkflowFile,
-		TurnsCompleted: result.TurnsCompleted,
+		TurnsCompleted: workerResult.TurnsCompleted,
 	}
 	if _, err := params.Store.AppendRunHistory(ctx, runHistory); err != nil {
 		log.Error("failed to persist run history",
@@ -231,15 +231,15 @@ func HandleWorkerExit(state *State, result WorkerResult, params HandleWorkerExit
 	}
 
 	// Persist session metadata so per-session token data survives restarts.
-	// Prefer result.SessionID: the worker carries the authoritative value
+	// Prefer workerResult.SessionID: the worker carries the authoritative value
 	// directly from the adapter, while entry.SessionID depends on
 	// EventSessionStarted having been processed before exit.
-	sessionID := result.SessionID
+	sessionID := workerResult.SessionID
 	if sessionID == "" {
 		sessionID = entry.SessionID
 	}
 	sessionMeta := persistence.SessionMetadata{
-		IssueID:         result.IssueID,
+		IssueID:         workerResult.IssueID,
 		SessionID:       sessionID,
 		InputTokens:     entry.AgentInputTokens,
 		OutputTokens:    entry.AgentOutputTokens,
@@ -261,9 +261,9 @@ func HandleWorkerExit(state *State, result WorkerResult, params HandleWorkerExit
 	retryScheduled := false
 	nextAttempt := 0
 
-	switch result.ExitKind {
+	switch workerResult.ExitKind {
 	case WorkerExitNormal:
-		state.Completed[result.IssueID] = struct{}{}
+		state.Completed[workerResult.IssueID] = struct{}{}
 
 		// Determine whether the issue is still in an active tracker state.
 		// When ActiveStates is nil or empty, default to true (pessimistic —
@@ -281,30 +281,30 @@ func HandleWorkerExit(state *State, result WorkerResult, params HandleWorkerExit
 				)
 				metrics.IncHandoffTransitions(handoffError)
 				ScheduleRetry(state, ScheduleRetryParams{
-					IssueID:     result.IssueID,
-					Identifier:  result.Identifier,
+					IssueID:     workerResult.IssueID,
+					Identifier:  workerResult.Identifier,
 					DisplayID:   entry.Issue.DisplayID,
 					Attempt:     NextAttempt(entry.RetryAttempt),
 					DelayMS:     continuationDelayMS,
 					Error:       "",
-					LastSSHHost: result.SSHHost,
+					LastSSHHost: workerResult.SSHHost,
 				}, params.OnRetryFire)
 				metrics.IncRetries(triggerContinuation)
 				retryScheduled = true
-			} else if err := params.TrackerAdapter.TransitionIssue(ctx, result.IssueID, params.HandoffState); err != nil {
+			} else if err := params.TrackerAdapter.TransitionIssue(ctx, workerResult.IssueID, params.HandoffState); err != nil {
 				log.Warn("handoff transition failed, scheduling continuation retry",
 					slog.String("handoff_state", params.HandoffState),
 					slog.Any("error", err),
 				)
 				metrics.IncHandoffTransitions(handoffError)
 				ScheduleRetry(state, ScheduleRetryParams{
-					IssueID:     result.IssueID,
-					Identifier:  result.Identifier,
+					IssueID:     workerResult.IssueID,
+					Identifier:  workerResult.Identifier,
 					DisplayID:   entry.Issue.DisplayID,
 					Attempt:     NextAttempt(entry.RetryAttempt),
 					DelayMS:     continuationDelayMS,
 					Error:       "",
-					LastSSHHost: result.SSHHost,
+					LastSSHHost: workerResult.SSHHost,
 				}, params.OnRetryFire)
 				metrics.IncRetries(triggerContinuation)
 				retryScheduled = true
@@ -313,21 +313,21 @@ func HandleWorkerExit(state *State, result WorkerResult, params HandleWorkerExit
 					slog.String("handoff_state", params.HandoffState),
 				)
 				metrics.IncHandoffTransitions(handoffSuccess)
-				CancelRetry(state, result.IssueID)
-				delete(state.Claimed, result.IssueID)
+				CancelRetry(state, workerResult.IssueID)
+				delete(state.Claimed, workerResult.IssueID)
 			}
 
 		case issueIsActive:
 			// No handoff configured but issue is still active:
 			// schedule continuation retry (existing behavior).
 			ScheduleRetry(state, ScheduleRetryParams{
-				IssueID:     result.IssueID,
-				Identifier:  result.Identifier,
+				IssueID:     workerResult.IssueID,
+				Identifier:  workerResult.Identifier,
 				DisplayID:   entry.Issue.DisplayID,
 				Attempt:     NextAttempt(entry.RetryAttempt),
 				DelayMS:     continuationDelayMS,
 				Error:       "",
-				LastSSHHost: result.SSHHost,
+				LastSSHHost: workerResult.SSHHost,
 			}, params.OnRetryFire)
 			metrics.IncRetries(triggerContinuation)
 			retryScheduled = true
@@ -338,56 +338,56 @@ func HandleWorkerExit(state *State, result WorkerResult, params HandleWorkerExit
 			if params.HandoffState != "" {
 				metrics.IncHandoffTransitions(handoffSkipped)
 			}
-			CancelRetry(state, result.IssueID)
-			delete(state.Claimed, result.IssueID)
+			CancelRetry(state, workerResult.IssueID)
+			delete(state.Claimed, workerResult.IssueID)
 		}
 
 	case WorkerExitCancelled:
 		// Only release the claim if no retry has been pre-scheduled by
 		// reconciliation stall detection. A pre-scheduled retry needs the
 		// claim to prevent duplicate dispatch.
-		if _, hasRetry := state.RetryAttempts[result.IssueID]; !hasRetry {
-			delete(state.Claimed, result.IssueID)
+		if _, hasRetry := state.RetryAttempts[workerResult.IssueID]; !hasRetry {
+			delete(state.Claimed, workerResult.IssueID)
 		}
 
 	default: // WorkerExitError and any unknown kind
-		classification := classifyWorkerError(result.Error)
+		classification := classifyWorkerError(workerResult.Error)
 		if classification.Retryable {
 			nextAttempt = NextAttempt(entry.RetryAttempt)
 			delayMS := computeBackoffDelay(nextAttempt, params.MaxRetryBackoffMS)
 
 			log.Warn("worker run failed, scheduling retry",
-				slog.Any("error", result.Error),
+				slog.Any("error", workerResult.Error),
 				slog.Int("next_attempt", nextAttempt),
 				slog.Int64("delay_ms", delayMS),
 			)
 
 			var errMsg string
-			if result.Error != nil {
-				errMsg = "worker exited: " + result.Error.Error()
+			if workerResult.Error != nil {
+				errMsg = "worker exited: " + workerResult.Error.Error()
 			}
 
 			ScheduleRetry(state, ScheduleRetryParams{
-				IssueID:     result.IssueID,
-				Identifier:  result.Identifier,
+				IssueID:     workerResult.IssueID,
+				Identifier:  workerResult.Identifier,
 				DisplayID:   entry.Issue.DisplayID,
 				Attempt:     nextAttempt,
 				DelayMS:     delayMS,
 				Error:       errMsg,
-				LastSSHHost: result.SSHHost,
+				LastSSHHost: workerResult.SSHHost,
 			}, params.OnRetryFire)
 			metrics.IncRetries(triggerError)
 			retryScheduled = true
 		} else {
 			log.Error("worker run failed, non-retryable, releasing claim",
-				slog.Any("error", result.Error),
+				slog.Any("error", workerResult.Error),
 			)
-			delete(state.Claimed, result.IssueID)
+			delete(state.Claimed, workerResult.IssueID)
 		}
 	}
 
 	if retryScheduled {
-		if retryEntry, ok := state.RetryAttempts[result.IssueID]; ok {
+		if retryEntry, ok := state.RetryAttempts[workerResult.IssueID]; ok {
 			pEntry := persistence.RetryEntry{
 				IssueID:    retryEntry.IssueID,
 				Identifier: retryEntry.Identifier,
@@ -409,7 +409,7 @@ func HandleWorkerExit(state *State, result WorkerResult, params HandleWorkerExit
 	var commentText string
 	var lifecycle string
 
-	sessionID = result.SessionID
+	sessionID = workerResult.SessionID
 	if sessionID == "" {
 		sessionID = entry.SessionID
 	}
@@ -418,23 +418,23 @@ func HandleWorkerExit(state *State, result WorkerResult, params HandleWorkerExit
 		runDuration = 0
 	}
 
-	switch result.ExitKind {
+	switch workerResult.ExitKind {
 	case WorkerExitNormal:
 		if params.CommentsConfig.OnCompletion {
-			commentText = buildCompletionComment(sessionID, runDuration, result.TurnsCompleted, retryScheduled)
+			commentText = buildCompletionComment(sessionID, runDuration, workerResult.TurnsCompleted, retryScheduled)
 			lifecycle = "completion"
 		}
 	case WorkerExitCancelled:
 		// No comment on cancellation.
 	default:
 		if params.CommentsConfig.OnFailure {
-			commentText = buildFailureComment(sessionID, runDuration, result.Error, retryScheduled, nextAttempt)
+			commentText = buildFailureComment(sessionID, runDuration, workerResult.Error, retryScheduled, nextAttempt)
 			lifecycle = "failure"
 		}
 	}
 
 	if commentText != "" && params.TrackerAdapter != nil {
-		issueID := result.IssueID
+		issueID := workerResult.IssueID
 		tracker := params.TrackerAdapter
 		m := metrics
 		commentLog := log

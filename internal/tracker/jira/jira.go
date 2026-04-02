@@ -202,7 +202,7 @@ func (a *JiraAdapter) FetchIssueStatesByIDs(ctx context.Context, issueIDs []stri
 		return map[string]string{}, nil
 	}
 
-	result := make(map[string]string, len(issueIDs))
+	statesByID := make(map[string]string, len(issueIDs))
 
 	var requested bool
 
@@ -212,10 +212,7 @@ func (a *JiraAdapter) FetchIssueStatesByIDs(ctx context.Context, issueIDs []stri
 			return nil, ctx.Err()
 		}
 
-		end := start + batchSize
-		if end > len(issueIDs) {
-			end = len(issueIDs)
-		}
+		end := min(start+batchSize, len(issueIDs))
 		batch := issueIDs[start:end]
 
 		jql := buildIDINJQL(batch)
@@ -229,14 +226,14 @@ func (a *JiraAdapter) FetchIssueStatesByIDs(ctx context.Context, issueIDs []stri
 			return nil, err
 		}
 		for _, iss := range issues {
-			result[iss.ID] = iss.State
+			statesByID[iss.ID] = iss.State
 		}
 	}
 
 	if requested {
 		a.incTrackerRequest("fetch_states_by_ids", "success")
 	}
-	return result, nil
+	return statesByID, nil
 }
 
 // FetchIssueStatesByIdentifiers returns the current state for each
@@ -249,7 +246,7 @@ func (a *JiraAdapter) FetchIssueStatesByIdentifiers(ctx context.Context, identif
 		return map[string]string{}, nil
 	}
 
-	result := make(map[string]string, len(identifiers))
+	statesByKey := make(map[string]string, len(identifiers))
 
 	for start := 0; start < len(identifiers); start += batchSize {
 		if ctx.Err() != nil {
@@ -257,10 +254,7 @@ func (a *JiraAdapter) FetchIssueStatesByIdentifiers(ctx context.Context, identif
 			return nil, ctx.Err()
 		}
 
-		end := start + batchSize
-		if end > len(identifiers) {
-			end = len(identifiers)
-		}
+		end := min(start+batchSize, len(identifiers))
 		batch := identifiers[start:end]
 
 		jql := buildKeyINJQL(batch)
@@ -270,12 +264,12 @@ func (a *JiraAdapter) FetchIssueStatesByIdentifiers(ctx context.Context, identif
 			return nil, err
 		}
 		for _, iss := range issues {
-			result[iss.Identifier] = iss.State
+			statesByKey[iss.Identifier] = iss.State
 		}
 	}
 
 	a.incTrackerRequest("fetch_states_by_identifiers", "success")
-	return result, nil
+	return statesByKey, nil
 }
 
 // FetchIssueComments returns comments for the specified issue.
@@ -400,7 +394,7 @@ func (a *JiraAdapter) incTrackerRequest(operation, result string) {
 // paginatedSearch executes a cursor-based paginated JQL search and
 // returns all normalized issues. Comments are set to nil.
 func (a *JiraAdapter) paginatedSearch(ctx context.Context, jql, fields string) ([]domain.Issue, error) {
-	var result []domain.Issue
+	var issues []domain.Issue
 	var nextPageToken string
 
 	for {
@@ -434,7 +428,7 @@ func (a *JiraAdapter) paginatedSearch(ctx context.Context, jql, fields string) (
 		for _, ji := range sr.Issues {
 			issue := normalizeSearchIssue(a.endpoint, ji)
 			issue.Comments = nil
-			result = append(result, issue)
+			issues = append(issues, issue)
 		}
 
 		if sr.NextPageToken == "" {
@@ -443,10 +437,10 @@ func (a *JiraAdapter) paginatedSearch(ctx context.Context, jql, fields string) (
 		nextPageToken = sr.NextPageToken
 	}
 
-	if result == nil {
-		result = []domain.Issue{}
+	if issues == nil {
+		issues = []domain.Issue{}
 	}
-	return result, nil
+	return issues, nil
 }
 
 // fetchComments retrieves all comments for an issue using offset-based
@@ -500,8 +494,6 @@ func (a *JiraAdapter) fetchComments(ctx context.Context, issueID string) ([]doma
 	return normalizeComments(allComments), nil
 }
 
-// isNotFound checks whether an error is a TrackerError with kind
-// ErrTrackerNotFound (HTTP 404).
 func isNotFound(err error) bool {
 	te, ok := err.(*domain.TrackerError)
 	return ok && te.Kind == domain.ErrTrackerNotFound
@@ -513,13 +505,13 @@ func isNotFound(err error) bool {
 func extractStringSlice(v any) []string {
 	switch s := v.(type) {
 	case []any:
-		result := make([]string, 0, len(s))
-		for _, item := range s {
-			if str, ok := item.(string); ok {
-				result = append(result, str)
+		strs := make([]string, 0, len(s))
+		for _, elem := range s {
+			if str, ok := elem.(string); ok {
+				strs = append(strs, str)
 			}
 		}
-		return result
+		return strs
 	case []string:
 		return s
 	default:

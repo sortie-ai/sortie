@@ -3,7 +3,7 @@ package workflow
 import "fmt"
 
 // ErrorKind classifies workflow loading failures into one of the
-// recognised error categories. Callers can switch on Kind to determine
+// recognized error categories. Callers can switch on Kind to determine
 // recovery strategy without string-matching error messages.
 type ErrorKind int
 

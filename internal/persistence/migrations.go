@@ -1,6 +1,6 @@
 package persistence
 
-import _ "embed"
+import _ "embed" // enables //go:embed directives for SQL migration files
 
 // Migration represents a single numbered schema migration. Migrations are
 // applied sequentially by [Store.Migrate]. The SQL field may contain multiple

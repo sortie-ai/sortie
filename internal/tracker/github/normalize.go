@@ -57,9 +57,9 @@ type searchResponse struct {
 // normalizeIssue maps a GitHub API issue response to a [domain.Issue].
 // The ID and Identifier are both set to the issue number since the
 // GitHub REST API indexes issues by number, not by global integer ID.
-// Parent, Comments, and BlockedBy are set to list-path defaults (nil,
-// nil, empty slice respectively); callers requiring full population
-// must use [GitHubAdapter.FetchIssueByID].
+// Parent and Comments remain at their zero values; BlockedBy is
+// initialized to a non-nil empty slice. Callers requiring full
+// population must use [GitHubAdapter.FetchIssueByID].
 //
 // DisplayID is left empty; callers that know the repository
 // owner and name should set it to "owner/repo#N" after normalization.
@@ -91,15 +91,11 @@ func normalizeIssue(gi githubIssue, activeStates, terminalStates []string, hando
 		Identifier:  num,
 		Title:       gi.Title,
 		Description: desc,
-		Priority:    nil,
 		State:       extractState(gi.Labels, gi.State, activeStates, terminalStates, handoffState),
-		BranchName:  "",
 		URL:         gi.HTMLURL,
 		Labels:      labels,
 		Assignee:    assignee,
 		IssueType:   issueType,
-		Parent:      nil,
-		Comments:    nil,
 		BlockedBy:   []domain.BlockerRef{},
 		CreatedAt:   gi.CreatedAt,
 		UpdatedAt:   gi.UpdatedAt,
@@ -120,32 +116,32 @@ func (a *GitHubAdapter) qualifyDisplayID(issue *domain.Issue) {
 // [domain.BlockerRef] values. Returns a non-nil empty slice when
 // input is empty.
 func normalizeBlockers(blockers []githubIssue, activeStates, terminalStates []string, handoffState string) []domain.BlockerRef {
-	result := make([]domain.BlockerRef, 0, len(blockers))
+	refs := make([]domain.BlockerRef, 0, len(blockers))
 	for _, b := range blockers {
 		num := strconv.Itoa(b.Number)
-		result = append(result, domain.BlockerRef{
+		refs = append(refs, domain.BlockerRef{
 			ID:         num,
 			Identifier: num,
 			State:      extractState(b.Labels, b.State, activeStates, terminalStates, handoffState),
 		})
 	}
-	return result
+	return refs
 }
 
 // normalizeComments converts GitHub comment responses to
 // [domain.Comment] values. Returns a non-nil empty slice when input
 // is empty.
 func normalizeComments(comments []githubComment) []domain.Comment {
-	result := make([]domain.Comment, 0, len(comments))
+	normalized := make([]domain.Comment, 0, len(comments))
 	for _, c := range comments {
-		result = append(result, domain.Comment{
+		normalized = append(normalized, domain.Comment{
 			ID:        strconv.FormatInt(c.ID, 10),
 			Author:    c.User.Login,
 			Body:      c.Body,
 			CreatedAt: c.CreatedAt,
 		})
 	}
-	return result
+	return normalized
 }
 
 // isPullRequest returns true when the GitHub API entry represents a

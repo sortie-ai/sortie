@@ -12,7 +12,7 @@ import (
 	"strings"
 )
 
-// Setup initialises the process-wide default logger. The resulting
+// Setup initializes the process-wide default logger. The resulting
 // [slog.TextHandler] writes key=value records to w at the given minimum
 // level. After Setup returns, [slog.Default] and the top-level slog
 // functions (Info, Warn, …) use this logger. Setup is intended to be

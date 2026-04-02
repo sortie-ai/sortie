@@ -104,11 +104,10 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 		ctx = context.Background()
 	}
 
-	// Step 1: Pop the retry entry. If missing, the timer raced with a
-	// cancellation or a subsequent ScheduleRetry — no-op. If the entry
-	// was replaced by a newer ScheduleRetry after this timer's goroutine
-	// was already enqueued, skip to let the replacement timer fire at the
-	// correct time.
+	// Pop the retry entry. If missing, the timer raced with a cancellation
+	// or a subsequent ScheduleRetry — no-op. If the entry was replaced by
+	// a newer ScheduleRetry after this timer's goroutine was already
+	// enqueued, skip to let the replacement timer fire at the correct time.
 	popped, exists := state.RetryAttempts[issueID]
 	if !exists {
 		log.Debug("retry timer for unknown entry",
@@ -178,7 +177,7 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 		}
 	}
 
-	// Step 2: Re-fetch active candidates from the tracker.
+	// Re-fetch active candidates from the tracker.
 	candidates, err := params.TrackerAdapter.FetchCandidateIssues(ctx)
 	if err != nil {
 		nextAttempt := popped.Attempt + 1
@@ -204,7 +203,7 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 		return
 	}
 
-	// Step 3: Find the issue by ID in fetched candidates.
+	// Locate the issue by ID in the fetched candidates.
 	issue, found := findIssueByID(candidates, issueID)
 	if !found {
 		log.Info("issue no longer active, releasing claim")
@@ -218,7 +217,7 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 		return
 	}
 
-	// Step 3b: Validate retry eligibility — required fields, terminal
+	// Validate retry eligibility — required fields, terminal
 	// state exclusion, and blocker rule. FetchCandidateIssues returns
 	// active-state issues, but a mis-configured active_states list or an
 	// adapter that returns terminal issues would bypass the normal
@@ -240,7 +239,7 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 		return
 	}
 
-	// Step 4: Check slot availability for the issue's state.
+	// Check slot availability for the issue's state.
 	if !HasAvailableSlots(state, issue.State) {
 		nextAttempt := popped.Attempt + 1
 		delayMS := computeBackoffDelay(nextAttempt, params.MaxRetryBackoffMS)
@@ -265,7 +264,7 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 		return
 	}
 
-	// Step 4b: Acquire SSH host with preference from the previous attempt.
+	// Acquire SSH host with preference from the previous attempt.
 	var host string
 	if params.HostPool != nil && params.HostPool.IsSSHEnabled() {
 		var ok bool
@@ -298,7 +297,7 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 		panic("HandleRetryTimer: nil MakeWorkerFn")
 	}
 
-	// Step 5: Dispatch the issue with the popped entry's attempt number.
+	// Dispatch the issue with the popped entry's attempt number.
 	// Pass the popped attempt as-is; NextAttempt increments only on the
 	// next worker exit, not at dispatch time.
 	attempt := popped.Attempt

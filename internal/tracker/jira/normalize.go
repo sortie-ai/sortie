@@ -176,18 +176,18 @@ func extractBlockers(links []jiraIssueLink) []domain.BlockerRef {
 // values. ADF bodies are flattened to plain text. Nil author fields
 // produce an empty author string.
 func normalizeComments(comments []jiraComment) []domain.Comment {
-	result := make([]domain.Comment, len(comments))
+	normalized := make([]domain.Comment, len(comments))
 	for i, c := range comments {
-		result[i] = domain.Comment{
+		normalized[i] = domain.Comment{
 			ID:        c.ID,
 			Body:      flattenADF(unmarshalADF(c.Body)),
 			CreatedAt: c.Created,
 		}
 		if c.Author != nil {
-			result[i].Author = c.Author.DisplayName
+			normalized[i].Author = c.Author.DisplayName
 		}
 	}
-	return result
+	return normalized
 }
 
 // unmarshalADF decodes a json.RawMessage into an any value suitable

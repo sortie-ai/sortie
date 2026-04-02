@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"log/slog"
+	"maps"
 
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/logging"
@@ -87,11 +88,11 @@ func HandleAgentEvent(state *State, issueID string, event domain.AgentEvent, log
 	// with a known tool name. Empty ToolName is a defensive guard —
 	// well-behaved adapters always populate it.
 	if event.Type == domain.EventToolResult && event.ToolName != "" {
-		result := outcomeSuccess
+		outcome := outcomeSuccess
 		if event.ToolError {
-			result = outcomeError
+			outcome = outcomeError
 		}
-		metrics.IncToolCalls(event.ToolName, result)
+		metrics.IncToolCalls(event.ToolName, outcome)
 
 		if event.ToolError {
 			errMsg := event.Message
@@ -101,14 +102,14 @@ func HandleAgentEvent(state *State, issueID string, event domain.AgentEvent, log
 			log.Info("tool call completed",
 				slog.String("tool", event.ToolName),
 				slog.Int64("duration_ms", event.ToolDurationMS),
-				slog.String("result", result),
-				slog.String("error", errMsg),
+				slog.String("outcome", outcome),
+				slog.String("tool_error", errMsg),
 			)
 		} else {
 			log.Info("tool call completed",
 				slog.String("tool", event.ToolName),
 				slog.Int64("duration_ms", event.ToolDurationMS),
-				slog.String("result", result),
+				slog.String("outcome", outcome),
 			)
 		}
 	}
@@ -177,7 +178,7 @@ func HandleAgentEvent(state *State, issueID string, event domain.AgentEvent, log
 
 	// Snapshot the rate-limit payload when present. The worker's
 	// OnEvent relay already defensive-copies the map before it crosses
-	// the goroutine boundary. The second shallowCopyMap here is
+	// the goroutine boundary. The second maps.Clone here is
 	// defense-in-depth: it isolates the stored snapshot from any
 	// top-level mutation of event.RateLimits within this function or
 	// future callers.
@@ -187,7 +188,7 @@ func HandleAgentEvent(state *State, issueID string, event domain.AgentEvent, log
 		// delivery.
 		if state.AgentRateLimits == nil || !event.Timestamp.Before(state.AgentRateLimits.ReceivedAt) {
 			state.AgentRateLimits = &RateLimitSnapshot{
-				Data:       shallowCopyMap(event.RateLimits),
+				Data:       maps.Clone(event.RateLimits),
 				ReceivedAt: event.Timestamp,
 			}
 		}
@@ -219,15 +220,4 @@ func HandleAgentEvent(state *State, issueID string, event domain.AgentEvent, log
 			slog.Any("event_type", event.Type),
 		)
 	}
-}
-
-// shallowCopyMap allocates a new map containing all top-level key–value
-// pairs from src. The copy isolates the stored snapshot from top-level
-// mutations of the original map; nested mutable values are aliased.
-func shallowCopyMap(src map[string]any) map[string]any {
-	dst := make(map[string]any, len(src))
-	for k, v := range src {
-		dst[k] = v
-	}
-	return dst
 }

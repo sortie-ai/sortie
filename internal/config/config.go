@@ -241,8 +241,6 @@ func NewServiceConfig(raw map[string]any) (ServiceConfig, error) {
 	}, nil
 }
 
-// --- section builders ---
-
 func buildTrackerConfig(m map[string]any, envKeys map[string]bool) TrackerConfig {
 	commentsMap := extractSubMap(m, "comments")
 
@@ -456,8 +454,6 @@ func buildAgentConfig(m map[string]any) (AgentConfig, error) {
 	}, nil
 }
 
-// --- resolution helpers ---
-
 // validateHandoffState checks that handoffState does not collide with
 // active or terminal states. Returns a *ConfigError on violation.
 func validateHandoffState(handoffState string, activeStates, terminalStates []string) error {
@@ -500,14 +496,14 @@ func validateInProgressState(inProgressState string, activeStates, terminalState
 			}
 		}
 	}
-	inActive := false
+	isActive := false
 	for _, s := range activeStates {
 		if strings.ToLower(s) == lower {
-			inActive = true
+			isActive = true
 			break
 		}
 	}
-	if !inActive {
+	if !isActive {
 		return &ConfigError{
 			Field:   "tracker.in_progress_state",
 			Message: fmt.Sprintf("%q is not in active_states; reconciliation would immediately cancel the worker", inProgressState),
@@ -522,40 +518,38 @@ func validateInProgressState(inProgressState string, activeStates, terminalState
 	return nil
 }
 
-func resolveEnv(val string) string {
-	return os.ExpandEnv(val)
+func resolveEnv(s string) string {
+	return os.ExpandEnv(s)
 }
 
 // resolveEnvRef performs targeted environment variable resolution: it
 // expands the value only when the entire string is an env var reference
 // ($VAR or ${VAR}). Mixed content such as URIs with embedded
 // $-references is returned unchanged to avoid destructive rewriting.
-func resolveEnvRef(val string) string {
-	trimmed := strings.TrimSpace(val)
+func resolveEnvRef(s string) string {
+	trimmed := strings.TrimSpace(s)
 	if strings.HasPrefix(trimmed, "$") {
 		return os.ExpandEnv(trimmed)
 	}
-	return val
+	return s
 }
 
-func expandPath(val string, expandEnv bool) (string, error) {
-	if val == "" {
+func expandPath(p string, expandEnv bool) (string, error) {
+	if p == "" {
 		return "", nil
 	}
-	if val == "~" || strings.HasPrefix(val, "~/") {
+	if p == "~" || strings.HasPrefix(p, "~/") {
 		home, err := os.UserHomeDir()
 		if err != nil {
 			return "", fmt.Errorf("cannot expand ~: %w", err)
 		}
-		val = filepath.Join(home, val[1:])
+		p = filepath.Join(home, p[1:])
 	}
 	if expandEnv {
-		return os.ExpandEnv(val), nil
+		return os.ExpandEnv(p), nil
 	}
-	return val, nil
+	return p, nil
 }
-
-// --- coercion helpers ---
 
 // coerceBool returns the boolean value for key in m. Returns false when
 // the key is absent, the value is nil, or the value is not a bool type.
@@ -574,8 +568,8 @@ func coerceBool(m map[string]any, key string) bool {
 	return b
 }
 
-func coerceInt(val any) (int, error) {
-	switch v := val.(type) {
+func coerceInt(x any) (int, error) {
+	switch v := x.(type) {
 	case int:
 		return v, nil
 	case int64:
@@ -590,7 +584,7 @@ func coerceInt(val any) (int, error) {
 	case string:
 		return strconv.Atoi(strings.TrimSpace(v))
 	default:
-		return 0, fmt.Errorf("unsupported type %T", val)
+		return 0, fmt.Errorf("unsupported type %T", x)
 	}
 }
 
@@ -620,8 +614,6 @@ func coerceIntFieldSafe(m map[string]any, key string) (int, error) {
 	}
 	return coerceInt(v)
 }
-
-// --- extraction helpers ---
 
 func extractSubMap(raw map[string]any, key string) map[string]any {
 	if raw == nil {
@@ -653,24 +645,24 @@ func extractString(m map[string]any, key string) string {
 	return s
 }
 
-func extractStringSlice(val any) []string {
-	if val == nil {
+func extractStringSlice(raw any) []string {
+	if raw == nil {
 		return nil
 	}
 	// yaml.v3 decodes lists as []any, not []string.
-	slice, ok := val.([]any)
+	slice, ok := raw.([]any)
 	if !ok {
 		return nil
 	}
-	result := make([]string, 0, len(slice))
-	for _, item := range slice {
-		if s, ok := item.(string); ok {
-			result = append(result, s)
+	strs := make([]string, 0, len(slice))
+	for _, elem := range slice {
+		if s, ok := elem.(string); ok {
+			strs = append(strs, s)
 		} else {
-			result = append(result, fmt.Sprintf("%v", item))
+			strs = append(strs, fmt.Sprintf("%v", elem))
 		}
 	}
-	return result
+	return strs
 }
 
 func mapVal(m map[string]any, key string) any {
@@ -680,21 +672,21 @@ func mapVal(m map[string]any, key string) any {
 	return m[key]
 }
 
-func normalizeByStateMap(val any) map[string]int {
-	result := make(map[string]int)
-	if val == nil {
-		return result
+func normalizeByStateMap(raw any) map[string]int {
+	byState := make(map[string]int)
+	if raw == nil {
+		return byState
 	}
-	rawMap, ok := val.(map[string]any)
+	rawMap, ok := raw.(map[string]any)
 	if !ok {
-		return result
+		return byState
 	}
 	for key, v := range rawMap {
 		n, err := coerceInt(v)
 		if err != nil || n <= 0 {
 			continue
 		}
-		result[strings.ToLower(key)] = n
+		byState[strings.ToLower(key)] = n
 	}
-	return result
+	return byState
 }

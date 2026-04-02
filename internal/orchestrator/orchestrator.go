@@ -1,3 +1,5 @@
+// Package orchestrator implements the coordination layer: polling,
+// dispatch, concurrency control, retry scheduling, and reconciliation.
 package orchestrator
 
 import (
@@ -219,9 +221,9 @@ func (o *Orchestrator) Run(ctx context.Context) {
 			o.handleTick(ctx)
 			tickTimer.Reset(time.Duration(o.state.PollIntervalMS) * time.Millisecond)
 
-		case result := <-o.workerExitCh:
+		case workerExit := <-o.workerExitCh:
 			cfg := o.workflowManager.Config()
-			HandleWorkerExit(o.state, result, HandleWorkerExitParams{
+			HandleWorkerExit(o.state, workerExit, HandleWorkerExitParams{
 				Store:             o.store,
 				MaxRetryBackoffMS: cfg.Agent.MaxRetryBackoffMS,
 				OnRetryFire:       o.onRetryFire,
@@ -308,32 +310,28 @@ func (o *Orchestrator) handleTick(ctx context.Context) {
 		o.updateGauges(time.Now())
 	}()
 
-	// Step 1: dispatch preflight validation. This triggers a
-	// defensive Reload() of the workflow file, ensuring the config
-	// snapshot returned by Config() below reflects the latest disk
-	// state.
+	// Preflight triggers a defensive Reload() so the config snapshot
+	// below reflects the latest disk state.
 	validation := ValidateDispatchConfig(o.preflightParams)
 	o.preflightOK.Store(validation.OK())
 
-	// Step 2: read fresh config unconditionally. On reload failure
-	// the workflow manager retains last-known-good config, so
-	// Config() always returns a usable snapshot.
+	// On reload failure the workflow manager retains last-known-good
+	// config, so Config() always returns a usable snapshot.
 	cfg := o.workflowManager.Config()
 
-	// Step 3: apply config to state (unconditional — not gated on
-	// preflight success).
+	// Apply config to state unconditionally — not gated on preflight
+	// success.
 	o.state.PollIntervalMS = cfg.Polling.IntervalMS
 	o.state.MaxConcurrentAgents = cfg.Agent.MaxConcurrentAgents
 	o.state.MaxConcurrentByState = cfg.Agent.MaxConcurrentByState
 
-	// Step 3b: update host pool from config extensions.
+	// Update host pool from config extensions.
 	wc := ParseWorkerConfig(cfg.Extensions)
 	o.hostPool.Update(wc.SSHHosts, wc.MaxPerHost)
 	o.sshStrictHostKeyChecking = wc.SSHStrictHostKeyChecking
 
-	// Step 4: reconcile running issues with fresh config. Runs
-	// unconditionally so in-flight workers are monitored even when
-	// dispatch is skipped.
+	// Reconcile running issues unconditionally so in-flight workers
+	// are monitored even when dispatch is skipped.
 	ReconcileRunningIssues(o.state, ReconcileParams{
 		TrackerAdapter:    o.trackerAdapter,
 		ActiveStates:      cfg.Tracker.ActiveStates,
@@ -347,8 +345,8 @@ func (o *Orchestrator) handleTick(ctx context.Context) {
 		Metrics:           o.metrics,
 	})
 
-	// Step 5: if preflight failed, skip dispatch but still notify
-	// observers so the UI reflects the reconciliation outcome.
+	// On preflight failure, skip dispatch but still notify observers
+	// so the UI reflects the reconciliation outcome.
 	if !validation.OK() {
 		pollResult = outcomeError
 		o.logger.Error("dispatch preflight failed",
@@ -358,7 +356,7 @@ func (o *Orchestrator) handleTick(ctx context.Context) {
 		return
 	}
 
-	// Step 6: fetch candidate issues.
+	// Fetch candidate issues from the tracker.
 	issues, err := o.trackerAdapter.FetchCandidateIssues(ctx)
 	if err != nil {
 		pollResult = outcomeError
@@ -369,11 +367,10 @@ func (o *Orchestrator) handleTick(ctx context.Context) {
 		return
 	}
 
-	// Step 7: sort for dispatch.
 	sorted := SortForDispatch(issues)
 
-	// Step 7b: rebuild the BudgetExhausted set from run_history.
-	// One batch query per tick, scoped to the candidate set.
+	// Rebuild the BudgetExhausted set from run_history. One batch
+	// query per tick, scoped to the candidate set.
 	if cfg.Agent.MaxSessions > 0 && len(sorted) > 0 {
 		candidateIDs := make([]string, len(sorted))
 		for i, issue := range sorted {
@@ -395,13 +392,13 @@ func (o *Orchestrator) handleTick(ctx context.Context) {
 		o.state.BudgetExhausted = make(map[string]struct{})
 	}
 
-	// Step 8: pre-build state sets once for the dispatch loop.
+	// Pre-build state sets once for the dispatch loop.
 	activeSet := stateSet(cfg.Tracker.ActiveStates)
 	terminalSet := stateSet(cfg.Tracker.TerminalStates)
 
-	// Step 9: dispatch loop. Break only when global capacity is
-	// exhausted; skip individual issues whose per-state limit is full
-	// so issues in other states can still be dispatched.
+	// Break only when global capacity is exhausted; skip individual
+	// issues whose per-state limit is full so issues in other states
+	// can still be dispatched.
 	var dispatched int
 	for _, issue := range sorted {
 		if GlobalAvailableSlots(o.state.MaxConcurrentAgents, len(o.state.Running)) == 0 {
@@ -518,10 +515,9 @@ func (o *Orchestrator) activateReconstructedRetries() {
 			continue
 		}
 		if entry.scheduledDelayMS > 0 {
-			id := issueID
 			entry.TimerHandle = time.AfterFunc(
 				time.Duration(entry.scheduledDelayMS)*time.Millisecond,
-				func() { o.onRetryFire(id) },
+				func() { o.onRetryFire(issueID) },
 			)
 		} else {
 			o.retryTimerCh <- issueID
@@ -564,9 +560,9 @@ func (o *Orchestrator) drainRunningWorkers() {
 
 	for len(o.state.Running) > 0 {
 		select {
-		case result := <-o.workerExitCh:
+		case workerExit := <-o.workerExitCh:
 			cfg := o.workflowManager.Config()
-			HandleWorkerExit(o.state, result, HandleWorkerExitParams{
+			HandleWorkerExit(o.state, workerExit, HandleWorkerExitParams{
 				Store:             o.store,
 				MaxRetryBackoffMS: cfg.Agent.MaxRetryBackoffMS,
 				OnRetryFire:       func(string) {}, // no-op: prevent retry fire events from reaching the event loop during drain

@@ -2217,14 +2217,14 @@ func TestRunWorkerAttempt_MCPConfig(t *testing.T) {
 		if result.Error == nil {
 			t.Fatal("Error is nil, want non-nil")
 		}
-		if !strings.Contains(result.Error.Error(), "MCP config generation") {
-			t.Errorf("Error = %q, want to contain %q", result.Error, "MCP config generation")
+		if !strings.Contains(result.Error.Error(), "mcp config generation") {
+			t.Errorf("Error = %q, want to contain %q", result.Error, "mcp config generation")
 		}
 		if result.WorkspacePath == "" {
 			t.Error("WorkspacePath is empty, want non-empty (workspace was prepared before Phase 1.5)")
 		}
 		if startCalled.Load() {
-			t.Error("StartSession was called, want no call after MCP config generation failure")
+			t.Error("StartSession was called, want no call after mcp config generation failure")
 		}
 	})
 

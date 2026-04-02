@@ -112,15 +112,15 @@ func applyEnvOverrides(raw map[string]any) (map[string]bool, error) {
 	envKeys := make(map[string]bool)
 
 	for _, ov := range envOverrides {
-		val := os.Getenv(ov.EnvVar)
-		if val == "" && dotenv != nil {
-			val = dotenv[ov.EnvVar]
+		envStr := os.Getenv(ov.EnvVar)
+		if envStr == "" && dotenv != nil {
+			envStr = dotenv[ov.EnvVar]
 		}
-		if val == "" {
+		if envStr == "" {
 			continue
 		}
 
-		coerced, err := ov.Coerce(val)
+		coerced, err := ov.Coerce(envStr)
 		if err != nil {
 			fieldPath := ov.Field
 			if ov.Section != "" {
@@ -147,10 +147,10 @@ func applyEnvOverrides(raw map[string]any) (map[string]bool, error) {
 
 		if strings.Contains(ov.Field, ".") {
 			// Nested field (e.g. "comments.on_dispatch" under "tracker").
-			parts := strings.SplitN(ov.Field, ".", 2)
+			parent, child, _ := strings.Cut(ov.Field, ".")
 			secMap := ensureSubMap(raw, ov.Section)
-			subMap := ensureSubMap(secMap, parts[0])
-			subMap[parts[1]] = coerced
+			subMap := ensureSubMap(secMap, parent)
+			subMap[child] = coerced
 			envKeys[ov.Section+"."+ov.Field] = true
 			continue
 		}
@@ -186,43 +186,41 @@ func ensureSubMap(m map[string]any, key string) map[string]any {
 	return v
 }
 
-// --- coercion functions for env override values ---
-
-func coerceString(val string) (any, error) {
-	return val, nil
+func coerceString(s string) (any, error) {
+	return s, nil
 }
 
-func coerceEnvInt(val string) (any, error) {
-	trimmed := strings.TrimSpace(val)
+func coerceEnvInt(s string) (any, error) {
+	trimmed := strings.TrimSpace(s)
 	n, err := strconv.Atoi(trimmed)
 	if err != nil {
-		return nil, fmt.Errorf("invalid integer value: %s", val)
+		return nil, fmt.Errorf("invalid integer value: %s", s)
 	}
 	return n, nil
 }
 
-func coerceCSVList(val string) (any, error) {
-	if val == "" {
+func coerceCSVList(s string) (any, error) {
+	if s == "" {
 		return []any{}, nil
 	}
-	parts := strings.Split(val, ",")
-	result := make([]any, 0, len(parts))
+	parts := strings.Split(s, ",")
+	elems := make([]any, 0, len(parts))
 	for _, p := range parts {
 		trimmed := strings.TrimSpace(p)
 		if trimmed != "" {
-			result = append(result, trimmed)
+			elems = append(elems, trimmed)
 		}
 	}
-	return result, nil
+	return elems, nil
 }
 
-func coerceEnvBool(val string) (any, error) {
-	switch strings.ToLower(strings.TrimSpace(val)) {
+func coerceEnvBool(s string) (any, error) {
+	switch strings.ToLower(strings.TrimSpace(s)) {
 	case "true", "1":
 		return true, nil
 	case "false", "0":
 		return false, nil
 	default:
-		return nil, fmt.Errorf("invalid boolean value: %s (expected true/false/1/0)", val)
+		return nil, fmt.Errorf("invalid boolean value: %s (expected true/false/1/0)", s)
 	}
 }

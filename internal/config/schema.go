@@ -35,8 +35,7 @@ type SectionSchema struct {
 }
 
 // knownFieldsRegistry enumerates the known sub-keys for each top-level
-// config section. Derived from architecture Section 5.3.1–5.3.6 and the
-// TrackerCommentsConfig struct in config.go.
+// config section.
 var knownFieldsRegistry = map[string]SectionSchema{
 	"tracker": {
 		Fields: []FieldDef{
@@ -140,7 +139,7 @@ func ValidateFrontMatter(raw map[string]any, cfg ServiceConfig) []FrontMatterWar
 		recognized[cfg.Agent.Kind] = true
 	}
 
-	// Phase 1: Unknown top-level keys.
+	// Flag top-level keys not in the recognized set.
 	topKeys := maputil.SortedKeys(raw)
 	for _, key := range topKeys {
 		if !recognized[key] {
@@ -152,13 +151,13 @@ func ValidateFrontMatter(raw map[string]any, cfg ServiceConfig) []FrontMatterWar
 		}
 	}
 
-	// Phase 2 & 3: Iterate sections in deterministic order.
+	// Validate sub-keys and value types within each known section.
 	sectionNames := maputil.SortedKeys(knownFieldsRegistry)
 	for _, sectionName := range sectionNames {
 		schema := knownFieldsRegistry[sectionName]
 
-		// Phase 3 (section-level type check): if section value is present
-		// but not a map, warn and skip sub-key analysis.
+		// If the section value is present but not a map, warn and skip
+		// sub-key analysis.
 		sectionVal, sectionExists := raw[sectionName]
 		if !sectionExists || sectionVal == nil {
 			continue
@@ -185,7 +184,7 @@ func ValidateFrontMatter(raw map[string]any, cfg ServiceConfig) []FrontMatterWar
 			adapterKind = extractString(sectionMap, "kind")
 		}
 
-		// Phase 2: Unknown sub-keys.
+		// Flag sub-keys not recognized by the section schema.
 		subKeys := maputil.SortedKeys(sectionMap)
 		for _, key := range subKeys {
 			if knownNames[key] {
@@ -201,7 +200,7 @@ func ValidateFrontMatter(raw map[string]any, cfg ServiceConfig) []FrontMatterWar
 			})
 		}
 
-		// Phase 2b: Nested sub-keys (e.g. tracker.comments).
+		// Flag unknown keys within nested map fields (e.g. tracker.comments).
 		for _, field := range schema.Fields {
 			if field.Nested == nil {
 				continue
@@ -226,7 +225,7 @@ func ValidateFrontMatter(raw map[string]any, cfg ServiceConfig) []FrontMatterWar
 			}
 		}
 
-		// Phase 3: Type mismatch for individual fields.
+		// Check value types for individual fields within this section.
 		for _, field := range schema.Fields {
 			v, exists := sectionMap[field.Name]
 			if !exists || v == nil {
@@ -265,7 +264,7 @@ func ValidateFrontMatter(raw map[string]any, cfg ServiceConfig) []FrontMatterWar
 		}
 	}
 
-	// Phase 3: Top-level db_path type check.
+	// Validate db_path is a string when present.
 	if v, exists := raw["db_path"]; exists && v != nil {
 		if _, ok := v.(string); !ok {
 			warnings = append(warnings, FrontMatterWarning{
@@ -276,7 +275,7 @@ func ValidateFrontMatter(raw map[string]any, cfg ServiceConfig) []FrontMatterWar
 		}
 	}
 
-	// Phase 3b: Semantic value warnings.
+	// Emit semantic warnings for values that are type-correct but invalid.
 	warnings = checkHooksTimeoutSemantic(warnings, raw)
 	warnings = checkByStateSemantic(warnings, raw)
 
@@ -316,7 +315,7 @@ func checkHooksTimeoutSemantic(warnings []FrontMatterWarning, raw map[string]any
 	}
 	n, err := coerceInt(v)
 	if err != nil {
-		return warnings // already caught by Phase 3 type mismatch
+		return warnings // type mismatch already reported
 	}
 	if n <= 0 {
 		warnings = append(warnings, FrontMatterWarning{
@@ -342,7 +341,7 @@ func checkByStateSemantic(warnings []FrontMatterWarning, raw map[string]any) []F
 	}
 	byStateMap, ok := byStateVal.(map[string]any)
 	if !ok {
-		return warnings // already caught by Phase 3 type mismatch
+		return warnings // type mismatch already reported
 	}
 	stateKeys := maputil.SortedKeys(byStateMap)
 	for _, stateKey := range stateKeys {

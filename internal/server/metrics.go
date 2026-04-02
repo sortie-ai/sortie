@@ -15,13 +15,11 @@ var _ domain.Metrics = (*PromMetrics)(nil)
 type PromMetrics struct {
 	registry *prometheus.Registry
 
-	// Gauges
 	sessionsRunning       prometheus.Gauge
 	sessionsRetrying      prometheus.Gauge
 	slotsAvailable        prometheus.Gauge
 	activeSessionsElapsed prometheus.Gauge
 
-	// Counters
 	tokensTotal           *prometheus.CounterVec
 	agentRuntimeTotal     prometheus.Counter
 	dispatchesTotal       *prometheus.CounterVec
@@ -35,11 +33,9 @@ type PromMetrics struct {
 	trackerCommentsTotal  *prometheus.CounterVec
 	toolCallsTotal        *prometheus.CounterVec
 
-	// Histograms
 	pollDuration   prometheus.Histogram
 	workerDuration *prometheus.HistogramVec
 
-	// SSH host usage
 	sshHostUsage *prometheus.GaugeVec
 }
 
@@ -234,8 +230,6 @@ func (p *PromMetrics) Registry() *prometheus.Registry {
 	return p.registry
 }
 
-// --- Gauges ---
-
 // SetRunningSessions records the current number of running agent sessions.
 func (p *PromMetrics) SetRunningSessions(n int) {
 	p.sessionsRunning.Set(float64(n))
@@ -256,8 +250,6 @@ func (p *PromMetrics) SetAvailableSlots(n int) {
 func (p *PromMetrics) SetActiveSessionsElapsed(seconds float64) {
 	p.activeSessionsElapsed.Set(seconds)
 }
-
-// --- Counters ---
 
 // AddTokens increments the cumulative token counter by count. Negative
 // values are silently clamped to zero to prevent Prometheus counter panics.
@@ -298,36 +290,34 @@ func (p *PromMetrics) IncReconciliationActions(action string) {
 }
 
 // IncPollCycles increments the poll tick outcome counter.
-func (p *PromMetrics) IncPollCycles(result string) {
-	p.pollCyclesTotal.WithLabelValues(result).Inc()
+func (p *PromMetrics) IncPollCycles(outcome string) {
+	p.pollCyclesTotal.WithLabelValues(outcome).Inc()
 }
 
 // IncTrackerRequests increments the tracker adapter API call counter.
-func (p *PromMetrics) IncTrackerRequests(operation, result string) {
-	p.trackerRequestsTotal.WithLabelValues(operation, result).Inc()
+func (p *PromMetrics) IncTrackerRequests(operation, outcome string) {
+	p.trackerRequestsTotal.WithLabelValues(operation, outcome).Inc()
 }
 
 // IncHandoffTransitions increments the handoff state transition outcome counter.
-func (p *PromMetrics) IncHandoffTransitions(result string) {
-	p.handoffTransitions.WithLabelValues(result).Inc()
+func (p *PromMetrics) IncHandoffTransitions(outcome string) {
+	p.handoffTransitions.WithLabelValues(outcome).Inc()
 }
 
 // IncDispatchTransitions increments the dispatch-time in-progress transition counter.
-func (p *PromMetrics) IncDispatchTransitions(result string) {
-	p.dispatchTransitions.WithLabelValues(result).Inc()
+func (p *PromMetrics) IncDispatchTransitions(outcome string) {
+	p.dispatchTransitions.WithLabelValues(outcome).Inc()
 }
 
 // IncTrackerComments increments the tracker comment attempt counter.
-func (p *PromMetrics) IncTrackerComments(lifecycle, result string) {
-	p.trackerCommentsTotal.WithLabelValues(lifecycle, result).Inc()
+func (p *PromMetrics) IncTrackerComments(lifecycle, outcome string) {
+	p.trackerCommentsTotal.WithLabelValues(lifecycle, outcome).Inc()
 }
 
 // IncToolCalls increments the tool call completion counter.
-func (p *PromMetrics) IncToolCalls(tool, result string) {
-	p.toolCallsTotal.WithLabelValues(tool, result).Inc()
+func (p *PromMetrics) IncToolCalls(tool, outcome string) {
+	p.toolCallsTotal.WithLabelValues(tool, outcome).Inc()
 }
-
-// --- Histograms ---
 
 // ObservePollDuration records the duration of a complete poll cycle in seconds.
 func (p *PromMetrics) ObservePollDuration(seconds float64) {

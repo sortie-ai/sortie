@@ -85,7 +85,7 @@ func (a *FileAdapter) FetchCandidateIssues(_ context.Context) ([]domain.Issue, e
 	a.mu.RLock()
 	defer a.mu.RUnlock()
 
-	result := make([]domain.Issue, 0, len(raws))
+	issues := make([]domain.Issue, 0, len(raws))
 	for _, raw := range raws {
 		raw = a.applyOverride(raw)
 		if len(a.activeStates) > 0 && !a.activeStates[strings.ToLower(raw.State)] {
@@ -93,10 +93,10 @@ func (a *FileAdapter) FetchCandidateIssues(_ context.Context) ([]domain.Issue, e
 		}
 		iss := normalize(raw)
 		iss.Comments = nil
-		result = append(result, iss)
+		issues = append(issues, iss)
 	}
 	a.incTrackerRequest("fetch_candidates", "success")
-	return result, nil
+	return issues, nil
 }
 
 // FetchIssueByID returns a single fully-populated issue including
@@ -154,17 +154,17 @@ func (a *FileAdapter) FetchIssuesByStates(_ context.Context, states []string) ([
 		stateSet[strings.ToLower(s)] = true
 	}
 
-	result := make([]domain.Issue, 0, len(raws))
+	issues := make([]domain.Issue, 0, len(raws))
 	for _, raw := range raws {
 		raw = a.applyOverride(raw)
 		if stateSet[strings.ToLower(raw.State)] {
 			iss := normalize(raw)
 			iss.Comments = nil
-			result = append(result, iss)
+			issues = append(issues, iss)
 		}
 	}
 	a.incTrackerRequest("fetch_by_states", "success")
-	return result, nil
+	return issues, nil
 }
 
 // FetchIssueStatesByIDs returns the current state for each requested
@@ -188,15 +188,15 @@ func (a *FileAdapter) FetchIssueStatesByIDs(_ context.Context, issueIDs []string
 		wanted[id] = true
 	}
 
-	result := make(map[string]string, len(issueIDs))
+	states := make(map[string]string, len(issueIDs))
 	for _, raw := range raws {
 		if wanted[raw.ID] {
 			raw = a.applyOverride(raw)
-			result[raw.ID] = raw.State
+			states[raw.ID] = raw.State
 		}
 	}
 	a.incTrackerRequest("fetch_states_by_ids", "success")
-	return result, nil
+	return states, nil
 }
 
 // FetchIssueStatesByIdentifiers returns the current state for each
@@ -221,15 +221,15 @@ func (a *FileAdapter) FetchIssueStatesByIdentifiers(_ context.Context, identifie
 		wanted[id] = true
 	}
 
-	result := make(map[string]string, len(identifiers))
+	states := make(map[string]string, len(identifiers))
 	for _, raw := range raws {
 		if wanted[raw.Identifier] {
 			raw = a.applyOverride(raw)
-			result[raw.Identifier] = raw.State
+			states[raw.Identifier] = raw.State
 		}
 	}
 	a.incTrackerRequest("fetch_states_by_identifiers", "success")
-	return result, nil
+	return states, nil
 }
 
 // FetchIssueComments returns comments for the specified issue.
@@ -351,9 +351,9 @@ func (a *FileAdapter) SetMetrics(m domain.Metrics) {
 	a.metrics = m
 }
 
-func (a *FileAdapter) incTrackerRequest(operation, result string) {
+func (a *FileAdapter) incTrackerRequest(operation, outcome string) {
 	if a.metrics != nil {
-		a.metrics.IncTrackerRequests(operation, result)
+		a.metrics.IncTrackerRequests(operation, outcome)
 	}
 }
 
@@ -366,8 +366,6 @@ func (a *FileAdapter) applyOverride(raw rawIssue) rawIssue {
 	}
 	return raw
 }
-
-// --- unexported helpers ---
 
 type rawIssue struct {
 	ID          string          `json:"id"`
@@ -407,7 +405,7 @@ type rawBlockerRef struct {
 }
 
 func loadIssues(path string) ([]rawIssue, error) {
-	data, err := os.ReadFile(path) //nolint:gosec // G304: path is from trusted adapter configuration
+	contents, err := os.ReadFile(path) //nolint:gosec // G304: path is from trusted adapter configuration
 	if err != nil {
 		return nil, &domain.TrackerError{
 			Kind:    domain.ErrTrackerPayload,
@@ -417,7 +415,7 @@ func loadIssues(path string) ([]rawIssue, error) {
 	}
 
 	var raws []rawIssue
-	if err := json.Unmarshal(data, &raws); err != nil {
+	if err := json.Unmarshal(contents, &raws); err != nil {
 		return nil, &domain.TrackerError{
 			Kind:    domain.ErrTrackerPayload,
 			Message: fmt.Sprintf("failed to parse file: %s", path),
@@ -510,8 +508,8 @@ func extractStringSlice(val any) []string {
 	switch v := val.(type) {
 	case []any:
 		out := make([]string, 0, len(v))
-		for _, item := range v {
-			if s, ok := item.(string); ok {
+		for _, elem := range v {
+			if s, ok := elem.(string); ok {
 				out = append(out, s)
 			}
 		}

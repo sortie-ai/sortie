@@ -1,9 +1,10 @@
 package domain
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
-	"sort"
+	"slices"
 )
 
 // AgentTool defines a client-side tool that Sortie exposes to agents
@@ -75,14 +76,14 @@ func (r *ToolRegistry) Get(name string) (AgentTool, bool) {
 // slice is a snapshot; mutations to the registry after List returns
 // are not reflected.
 func (r *ToolRegistry) List() []AgentTool {
-	result := make([]AgentTool, 0, len(r.tools))
+	registered := make([]AgentTool, 0, len(r.tools))
 	for _, t := range r.tools {
-		result = append(result, t)
+		registered = append(registered, t)
 	}
-	sort.Slice(result, func(i, j int) bool {
-		return result[i].Name() < result[j].Name()
+	slices.SortFunc(registered, func(a, b AgentTool) int {
+		return cmp.Compare(a.Name(), b.Name())
 	})
-	return result
+	return registered
 }
 
 // Len returns the number of registered tools.

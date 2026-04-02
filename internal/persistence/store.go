@@ -18,8 +18,9 @@ type Store struct {
 }
 
 // Open creates or opens a SQLite database at the given path and enables WAL
-// journal mode. Use ":memory:" for an in-memory database (useful for testing).
-// The caller must call [Store.Close] when the store is no longer needed.
+// journal mode. The path ":memory:" produces an in-memory database suitable
+// for testing. The caller must call [Store.Close] when the store is no longer
+// needed.
 func Open(ctx context.Context, path string) (*Store, error) {
 	db, err := sql.Open("sqlite", path)
 	if err != nil {

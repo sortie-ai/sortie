@@ -3,7 +3,7 @@
 // obtain deterministic iteration over map keys.
 package maputil
 
-import "sort"
+import "slices"
 
 // SortedKeys returns the keys of m in sorted order for deterministic
 // iteration.
@@ -12,6 +12,6 @@ func SortedKeys[V any](m map[string]V) []string {
 	for k := range m {
 		keys = append(keys, k)
 	}
-	sort.Strings(keys)
+	slices.Sort(keys)
 	return keys
 }

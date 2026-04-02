@@ -158,11 +158,11 @@ func (a *analyzer) checkFieldNode(ident []string, scopeDepth int) {
 	}
 	_, isTopLevel := topLevelKeys[ident[0]]
 
-	// Check 1: dot-context misuse inside range/with. The early return
-	// is intentional: when dot is redefined, the entire expression is
-	// suspect, so sub-field validation (Check 3) is skipped. Emitting
-	// both would be noise — the operator must fix the dot reference
-	// first, which may change the sub-field chain entirely.
+	// Dot-context misuse inside range/with. The early return is
+	// intentional: when dot is redefined, the entire expression is
+	// suspect, so sub-field validation is skipped. Emitting both would
+	// be noise — the operator must fix the dot reference first, which
+	// may change the sub-field chain entirely.
 	if scopeDepth > 0 && isTopLevel {
 		expr := "." + strings.Join(ident, ".")
 		a.warnings = append(a.warnings, TemplateWarning{
@@ -175,7 +175,7 @@ func (a *analyzer) checkFieldNode(ident []string, scopeDepth int) {
 		return
 	}
 
-	// Check 2: unknown top-level variable (only at scope depth 0).
+	// Unknown top-level variable (only at scope depth 0).
 	if scopeDepth == 0 && !isTopLevel {
 		expr := "." + strings.Join(ident, ".")
 		a.warnings = append(a.warnings, TemplateWarning{
@@ -186,7 +186,7 @@ func (a *analyzer) checkFieldNode(ident []string, scopeDepth int) {
 		return
 	}
 
-	// Check 3: unknown sub-field of a known top-level key.
+	// Unknown sub-field of a known top-level key.
 	if isTopLevel {
 		a.validateFieldChain(ident, "."+strings.Join(ident, "."))
 	}
@@ -199,7 +199,7 @@ func (a *analyzer) checkVariableNode(ident []string, scopeDepth int) {
 	}
 	_, isTopLevel := topLevelKeys[ident[0]]
 
-	// Check 2: unknown top-level via $ (scope-independent).
+	// Unknown top-level via $ (scope-independent).
 	if !isTopLevel {
 		expr := "$." + strings.Join(ident, ".")
 		a.warnings = append(a.warnings, TemplateWarning{
@@ -210,7 +210,7 @@ func (a *analyzer) checkVariableNode(ident []string, scopeDepth int) {
 		return
 	}
 
-	// Check 3: unknown sub-field via $ chain.
+	// Unknown sub-field via $ chain.
 	if isTopLevel {
 		a.validateFieldChain(ident, "$."+strings.Join(ident, "."))
 	}
@@ -234,7 +234,7 @@ func (a *analyzer) validateFieldChain(ident []string, nodeText string) {
 		return
 	}
 
-	// Check level 2: sub-field of known top-level key.
+	// Sub-field of known top-level key.
 	subField := ident[1]
 	nestedSchema, exists := schema[subField]
 	if !exists {
@@ -251,7 +251,7 @@ func (a *analyzer) validateFieldChain(ident []string, nodeText string) {
 		return
 	}
 
-	// Check level 3: nested sub-field (e.g. .issue.parent.identifier).
+	// Nested sub-field (e.g. .issue.parent.identifier).
 	if nestedSchema == nil {
 		a.warnings = append(a.warnings, TemplateWarning{
 			Kind:    WarnUnknownField,

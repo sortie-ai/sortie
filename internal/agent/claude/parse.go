@@ -69,7 +69,7 @@ type rawAssistantMessage struct {
 	Content []rawContentBlock `json:"content,omitempty"`
 }
 
-// rawAssistantMessageMeta extracts the model and per-request usage
+// rawAssistantMessageMeta holds the model and per-request usage
 // from an assistant event's message object.
 type rawAssistantMessageMeta struct {
 	Model string    `json:"model,omitempty"`
@@ -154,8 +154,6 @@ func formatAPIRetry(event rawEvent) string {
 		event.ErrorStatus, event.ErrorField)
 }
 
-// summary returns a generic one-line summary from an event's type,
-// subtype, and error fields.
 func (e rawEvent) summary() string {
 	if e.Subtype != "" {
 		return fmt.Sprintf("%s/%s", e.Type, e.Subtype)

@@ -49,8 +49,6 @@ type jsonRPCError struct {
 	Data    any    `json:"data,omitempty"`
 }
 
-// MCP initialize response types.
-
 type initializeResult struct {
 	ProtocolVersion string       `json:"protocolVersion"`
 	Capabilities    capabilities `json:"capabilities"`
@@ -70,8 +68,6 @@ type serverInfo struct {
 	Version string `json:"version"`
 }
 
-// MCP tools/list response types.
-
 type mcpTool struct {
 	Name        string          `json:"name"`
 	Description string          `json:"description,omitempty"`
@@ -81,8 +77,6 @@ type mcpTool struct {
 type toolsListResult struct {
 	Tools []mcpTool `json:"tools"`
 }
-
-// MCP tools/call request and response types.
 
 type toolsCallParams struct {
 	Name      string          `json:"name"`
@@ -231,7 +225,7 @@ func (s *Server) handleToolsCall(ctx context.Context, id json.RawMessage, params
 		return errorResponse(id, codeInvalidParams, fmt.Sprintf("invalid params: unknown tool %q", p.Name))
 	}
 
-	result, err := tool.Execute(ctx, p.Arguments)
+	output, err := tool.Execute(ctx, p.Arguments)
 	if err != nil {
 		return jsonRPCResponse{
 			JSONRPC: "2.0",
@@ -247,19 +241,19 @@ func (s *Server) handleToolsCall(ctx context.Context, id json.RawMessage, params
 		JSONRPC: "2.0",
 		ID:      id,
 		Result: toolCallResult{
-			Content: []toolContent{{Type: "text", Text: string(result)}},
+			Content: []toolContent{{Type: "text", Text: string(output)}},
 		},
 	}
 }
 
 func (s *Server) writeResponse(resp jsonRPCResponse) {
-	data, err := json.Marshal(resp)
+	encoded, err := json.Marshal(resp)
 	if err != nil {
 		s.logger.Error("failed to marshal JSON-RPC response", slog.Any("error", err))
 		return
 	}
-	data = append(data, '\n')
-	if _, err := s.writer.Write(data); err != nil {
+	encoded = append(encoded, '\n')
+	if _, err := s.writer.Write(encoded); err != nil {
 		s.logger.Error("failed to write JSON-RPC response", slog.Any("error", err))
 	}
 }

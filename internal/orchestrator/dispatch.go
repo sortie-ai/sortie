@@ -109,9 +109,7 @@ func ShouldDispatch(issue domain.Issue, state *State, activeStates, terminalStat
 		return false
 	}
 
-	// Blocker rule: any non-terminal blocker blocks dispatch. The active-state
-	// and not-running guards above guarantee the precondition that the issue
-	// is in an active non-running state.
+	// Any non-terminal blocker blocks dispatch.
 	if isBlockedByNonTerminalSet(issue, terminalSet) {
 		return false
 	}

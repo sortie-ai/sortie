@@ -1,15 +1,14 @@
 package domain
 
 // Metrics abstracts metric recording so the orchestrator and adapter
-// packages remain decoupled from any concrete telemetry library. The
-// Observability Layer (internal/server) provides a Prometheus-backed
+// packages remain decoupled from any concrete telemetry library.
+//
+// The observability layer (internal/server) provides a Prometheus-backed
 // implementation; a [NoopMetrics] implementation is provided for use
 // when the HTTP server is disabled and in unit tests. All methods
 // must be safe for concurrent use. Implementations must not block or
 // perform I/O beyond in-memory counter/gauge mutation.
 type Metrics interface {
-	// --- Gauges (point-in-time state) ---
-
 	// SetRunningSessions records the current number of running agent
 	// sessions (sortie_sessions_running gauge).
 	SetRunningSessions(n int)
@@ -26,8 +25,6 @@ type Metrics interface {
 	// seconds across all running sessions
 	// (sortie_active_sessions_elapsed_seconds gauge).
 	SetActiveSessionsElapsed(seconds float64)
-
-	// --- Counters (monotonically increasing) ---
 
 	// AddTokens increments the cumulative token counter by count.
 	// tokenType is "input", "output", or "cache_read"
@@ -93,8 +90,6 @@ type Metrics interface {
 	// (sortie_tool_calls_total{tool,result} counter).
 	IncToolCalls(tool string, result string)
 
-	// --- Histograms (distributions) ---
-
 	// ObservePollDuration records the duration of a complete poll
 	// cycle in seconds (sortie_poll_duration_seconds histogram).
 	ObservePollDuration(seconds float64)
@@ -110,9 +105,10 @@ type Metrics interface {
 	SetSSHHostUsage(host string, count int)
 }
 
-// NoopMetrics is a [Metrics] implementation where every method is a
-// no-op. Used when the HTTP server is disabled and in unit tests that
-// do not assert on metric values.
+// NoopMetrics is a [Metrics] implementation where every method is a no-op.
+//
+// Used when the HTTP server is disabled and in unit tests that do not
+// assert on metric values.
 type NoopMetrics struct{}
 
 var _ Metrics = (*NoopMetrics)(nil)
@@ -138,10 +134,12 @@ func (*NoopMetrics) ObserveWorkerDuration(string, float64) {}
 func (*NoopMetrics) SetSSHHostUsage(string, int)           {}
 
 // MetricsSetter is implemented by adapters that accept a [Metrics]
-// recorder for self-instrumentation. The wiring code calls SetMetrics
-// after adapter construction, before orchestrator operations; some
-// startup cleanup calls on the adapter may run before metrics are
-// configured. Not safe to call concurrently with adapter operations.
+// recorder for self-instrumentation.
+//
+// The wiring code calls SetMetrics after adapter construction, before
+// orchestrator operations; some startup cleanup calls on the adapter
+// may run before metrics are configured. Not safe to call concurrently
+// with adapter operations.
 type MetricsSetter interface {
 	SetMetrics(m Metrics)
 }

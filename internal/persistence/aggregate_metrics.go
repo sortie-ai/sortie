@@ -12,13 +12,13 @@ import (
 // (e.g., "agent_totals"). These counters survive process restarts and are
 // restored during startup recovery.
 type AggregateMetrics struct {
-	Key             string  // Metric key (primary key, e.g. "agent_totals").
-	InputTokens     int64   // Cumulative input tokens.
-	OutputTokens    int64   // Cumulative output tokens.
-	TotalTokens     int64   // Cumulative total tokens.
-	CacheReadTokens int64   // Cumulative cache-read tokens.
-	SecondsRunning  float64 // Cumulative runtime seconds.
-	UpdatedAt       string  // ISO-8601 timestamp of last update.
+	Key             string // Primary key identifying the metric category (e.g. "agent_totals").
+	InputTokens     int64
+	OutputTokens    int64
+	TotalTokens     int64
+	CacheReadTokens int64
+	SecondsRunning  float64
+	UpdatedAt       string // ISO-8601 timestamp of last update.
 }
 
 // UpsertAggregateMetrics inserts or replaces aggregate metrics for the given

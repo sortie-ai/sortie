@@ -15,7 +15,7 @@ import (
 
 // utf8BOM is the byte-order mark that Windows Notepad and some editors
 // prepend to UTF-8 files. It must be stripped before delimiter detection
-// or the opening "---" will not be recognised.
+// or the opening "---" will not be recognized.
 const utf8BOM = "\xef\xbb\xbf"
 
 // Workflow holds the two payloads extracted from a workflow file: the
@@ -73,7 +73,7 @@ func Load(path string) (Workflow, error) {
 	if !ok {
 		if parsed == nil {
 			// Empty or comment-only YAML between delimiters. Treat as empty
-			// config rather than an error — this matches the behaviour of
+			// config rather than an error — this matches the behavior of
 			// Hugo, Jekyll, and Astro for files like "---\n---\n".
 			config = make(map[string]any)
 		} else {

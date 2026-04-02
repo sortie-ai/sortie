@@ -57,7 +57,6 @@ func (c *etagCache) put(path, etag, state string) {
 
 	now := c.clock.Add(1)
 
-	// If path already exists, update in place.
 	if _, exists := c.entries[path]; exists {
 		c.entries[path] = etagEntry{etag: etag, state: state, accessedAt: now}
 		return

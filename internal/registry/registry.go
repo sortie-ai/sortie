@@ -6,7 +6,7 @@ package registry
 
 import (
 	"fmt"
-	"sort"
+	"slices"
 	"strings"
 	"sync"
 
@@ -175,13 +175,13 @@ func (r *Registry[T]) Kinds() []string {
 }
 
 // sortedKinds collects and sorts the registered kind strings. The
-// caller must hold r.mu (read or write).
+// caller must hold r.mu (read or write). Always returns a non-nil slice.
 func (r *Registry[T]) sortedKinds() []string {
 	kinds := make([]string, 0, len(r.adapters))
 	for k := range r.adapters {
 		kinds = append(kinds, k)
 	}
-	sort.Strings(kinds)
+	slices.Sort(kinds)
 	return kinds
 }
 

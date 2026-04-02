@@ -3,7 +3,7 @@ package github
 import (
 	"fmt"
 	"os"
-	"sort"
+	"slices"
 	"strings"
 
 	"github.com/sortie-ai/sortie/internal/registry"
@@ -25,9 +25,9 @@ func validateConfig(fields registry.TrackerConfigFields) []registry.ValidationDi
 }
 
 // validateProject checks that tracker.project is in owner/repo
-// format. Empty project is skipped (generic preflight Check 4
-// handles the required-field case). Validation uses the raw value
-// without trimming so behavior matches [NewGitHubAdapter].
+// format. Empty project is skipped because the required-field check
+// runs earlier in the preflight pipeline. Validation uses the raw
+// value without trimming so behavior matches [NewGitHubAdapter].
 func validateProject(project string) []registry.ValidationDiag {
 	if project == "" {
 		return nil
@@ -41,9 +41,7 @@ func validateProject(project string) []registry.ValidationDiag {
 		}}
 	}
 
-	parts := strings.SplitN(project, "/", 2)
-	owner := parts[0]
-	repo := parts[1]
+	owner, repo, _ := strings.Cut(project, "/")
 
 	if owner == "" || repo == "" {
 		return []registry.ValidationDiag{{
@@ -110,7 +108,7 @@ func validateStateOverlap(fields registry.TrackerConfigFields) []registry.Valida
 	activeSet := toLowerSet(fields.ActiveStates)
 	terminalSet := toLowerSet(fields.TerminalStates)
 
-	// 5a: active_states ∩ terminal_states.
+	// Detect labels present in both active and terminal sets.
 	var overlap []string
 	for label := range activeSet {
 		if strings.TrimSpace(label) == "" {
@@ -120,7 +118,7 @@ func validateStateOverlap(fields registry.TrackerConfigFields) []registry.Valida
 			overlap = append(overlap, label)
 		}
 	}
-	sort.Strings(overlap)
+	slices.Sort(overlap)
 	for _, label := range overlap {
 		diags = append(diags, registry.ValidationDiag{
 			Severity: "warning",
@@ -129,7 +127,7 @@ func validateStateOverlap(fields registry.TrackerConfigFields) []registry.Valida
 		})
 	}
 
-	// 5b: handoff_state collisions.
+	// Handoff state must not overlap with active or terminal sets.
 	if hs := strings.ToLower(strings.TrimSpace(fields.HandoffState)); hs != "" {
 		if _, ok := activeSet[hs]; ok {
 			diags = append(diags, registry.ValidationDiag{
@@ -147,7 +145,7 @@ func validateStateOverlap(fields registry.TrackerConfigFields) []registry.Valida
 		}
 	}
 
-	// 5c: in_progress_state collisions.
+	// In-progress state must not collide with terminal or handoff states.
 	if ips := strings.ToLower(strings.TrimSpace(fields.InProgressState)); ips != "" {
 		if _, ok := terminalSet[ips]; ok {
 			diags = append(diags, registry.ValidationDiag{

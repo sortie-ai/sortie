@@ -25,7 +25,6 @@ func PopulateRetries(state *State, entries []persistence.PendingRetry) {
 			Attempt:          e.Attempt,
 			DueAtMS:          e.DueAtMs,
 			Error:            errStr,
-			TimerHandle:      nil,
 			scheduledDelayMS: pending.RemainingMs,
 		}
 		state.Claimed[e.IssueID] = struct{}{}

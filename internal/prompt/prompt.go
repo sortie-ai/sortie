@@ -18,8 +18,7 @@ import (
 
 // RunContext carries per-turn metadata passed to the prompt template as
 // the "run" variable. Converted to a map with snake_case keys before
-// template execution so workflow authors write {{ .run.turn_number }}
-// matching the architecture doc verbatim.
+// template execution so workflow authors write {{ .run.turn_number }}.
 type RunContext struct {
 	TurnNumber     int
 	MaxTurns       int
@@ -28,7 +27,7 @@ type RunContext struct {
 
 // runContextToMap converts a [RunContext] to the map representation used
 // as the "run" template variable. Keys use snake_case to match the
-// architecture doc naming convention.
+// prompt contract exposed to workflow authors.
 func runContextToMap(rc RunContext) map[string]any {
 	return map[string]any{
 		"turn_number":     rc.TurnNumber,
@@ -122,14 +121,14 @@ func Parse(body, source string, frontMatterLines int) (*Template, error) {
 // Kind [ErrTemplateRender] on failure, with line numbers adjusted to
 // WORKFLOW.md-relative positions.
 func (t *Template) Render(issue map[string]any, attempt any, run RunContext) (string, error) {
-	data := map[string]any{
+	templateVars := map[string]any{
 		"issue":   issue,
 		"attempt": attempt,
 		"run":     runContextToMap(run),
 	}
 
 	var buf bytes.Buffer
-	if err := t.tmpl.Execute(&buf, data); err != nil {
+	if err := t.tmpl.Execute(&buf, templateVars); err != nil {
 		line := extractTemplateLine(err)
 		if line > 0 {
 			line += t.frontMatterLines

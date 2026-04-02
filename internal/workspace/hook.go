@@ -15,8 +15,7 @@ const MaxHookOutputBytes = 256 * 1024
 // included in error messages.
 const maxScriptDisplayLen = 200
 
-// HookParams holds the inputs for a single hook invocation. Construct
-// this from orchestrator state at each hook call site.
+// HookParams holds the inputs for a single hook invocation.
 type HookParams struct {
 	// Script is the shell script body to execute via "sh -c".
 	// Must be non-empty.
@@ -27,8 +26,8 @@ type HookParams struct {
 	Dir string
 
 	// Env holds the SORTIE_* environment variables injected into the
-	// hook subprocess. Callers construct this map from orchestrator
-	// state; [RunHook] does not populate it.
+	// hook subprocess. The map is populated by the caller; [RunHook]
+	// does not modify or extend it.
 	Env map[string]string
 
 	// TimeoutMS is the maximum execution time in milliseconds.
@@ -83,7 +82,6 @@ func (lb *limitedBuffer) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
-// String returns the buffered content as a string.
 func (lb *limitedBuffer) String() string {
 	lb.mu.Lock()
 	defer lb.mu.Unlock()

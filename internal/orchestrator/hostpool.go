@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"log/slog"
+	"slices"
 	"strings"
 )
 
@@ -119,7 +120,6 @@ func (hp *HostPool) Update(hosts []string, maxPerHost int) {
 	hp.maxPerHost = maxPerHost
 	hp.hosts = deduped
 
-	// Initialize usage for new hosts.
 	for _, h := range deduped {
 		if _, ok := hp.usage[h]; !ok {
 			hp.usage[h] = 0
@@ -158,14 +158,8 @@ func (hp *HostPool) Snapshot() map[string]int {
 	return snap
 }
 
-// isConfigured reports whether host is in the current host list.
 func (hp *HostPool) isConfigured(host string) bool {
-	for _, h := range hp.hosts {
-		if h == host {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(hp.hosts, host)
 }
 
 func (hp *HostPool) hasHostCapacity(host string) bool {
@@ -187,7 +181,7 @@ func deduplicateHosts(hosts []string) []string {
 		return nil
 	}
 	seen := make(map[string]struct{}, len(hosts))
-	result := make([]string, 0, len(hosts))
+	deduped := make([]string, 0, len(hosts))
 	for _, h := range hosts {
 		if h == "" {
 			continue
@@ -196,12 +190,12 @@ func deduplicateHosts(hosts []string) []string {
 			continue
 		}
 		seen[h] = struct{}{}
-		result = append(result, h)
+		deduped = append(deduped, h)
 	}
-	if len(result) == 0 {
+	if len(deduped) == 0 {
 		return nil
 	}
-	return result
+	return deduped
 }
 
 // WorkerConfig holds parsed worker extension configuration.
@@ -284,7 +278,7 @@ func parseSSHStrictHostKeyChecking(workerMap map[string]any) string {
 
 	s, ok := raw.(string)
 	if !ok {
-		slog.Warn("ssh_strict_host_key_checking must be a string, using default",
+		slog.Warn("received non-string ssh_strict_host_key_checking, using default",
 			slog.String("default", "accept-new"),
 		)
 		return ""
@@ -295,7 +289,7 @@ func parseSSHStrictHostKeyChecking(workerMap map[string]any) string {
 	case "accept-new", "yes", "no":
 		return normalized
 	default:
-		slog.Warn("invalid ssh_strict_host_key_checking value, using default",
+		slog.Warn("rejected unrecognized ssh_strict_host_key_checking value",
 			slog.String("value", s),
 			slog.String("default", "accept-new"),
 		)

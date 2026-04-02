@@ -182,19 +182,21 @@ func Ensure(root, identifier string) (EnsureResult, error) {
 
 	// Atomic creation of the workspace directory. Only the successful
 	// Mkdir caller gets CreatedNow=true, eliminating TOCTOU races.
-	if err := os.Mkdir(pr.Path, 0o750); err == nil {
+	mkdirErr := os.Mkdir(pr.Path, 0o750)
+	if mkdirErr == nil {
 		return EnsureResult{Key: pr.Key, Path: pr.Path, CreatedNow: true}, nil
-	} else if !errors.Is(err, fs.ErrExist) {
+	}
+	if !errors.Is(mkdirErr, fs.ErrExist) {
 		return EnsureResult{}, &PathError{
 			Op:         "create",
 			Root:       root,
 			Identifier: identifier,
-			Err:        err,
+			Err:        mkdirErr,
 		}
 	}
 
 	// Path already exists — verify it is a directory.
-	info, statErr := os.Lstat(pr.Path)
+	fi, statErr := os.Lstat(pr.Path)
 	if statErr != nil {
 		return EnsureResult{}, &PathError{
 			Op:         "stat",
@@ -204,8 +206,8 @@ func Ensure(root, identifier string) (EnsureResult, error) {
 		}
 	}
 
-	if info.IsDir() {
-		return EnsureResult{Key: pr.Key, Path: pr.Path, CreatedNow: false}, nil
+	if fi.IsDir() {
+		return EnsureResult{Key: pr.Key, Path: pr.Path}, nil
 	}
 
 	// Non-directory entry at workspace path — hard error.

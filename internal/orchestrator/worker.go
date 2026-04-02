@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -176,9 +177,6 @@ func isTurnSuccess(reason domain.AgentEventType) bool {
 
 // toDomainAgentConfig converts a config-layer AgentConfig to the
 // domain-layer AgentConfig expected by agent adapters.
-//
-// Update this function when adding fields to config.AgentConfig or
-// domain.AgentConfig.
 func toDomainAgentConfig(c config.AgentConfig) domain.AgentConfig {
 	return domain.AgentConfig{
 		Kind:           c.Kind,
@@ -236,6 +234,9 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 	tmpl := deps.PromptTemplateFunc()
 	attemptInt := normalizeAttempt(attempt)
 	logger := deps.Logger
+	if logger == nil {
+		logger = slog.Default()
+	}
 
 	if deps.Metrics == nil {
 		deps.Metrics = &domain.NoopMetrics{}
@@ -246,7 +247,7 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 	// Failure is non-fatal — the worker continues regardless.
 	if cfg.Tracker.InProgressState != "" {
 		if strings.EqualFold(issue.State, cfg.Tracker.InProgressState) {
-			logger.Debug("issue already in in-progress state, skipping transition",
+			logger.Debug("skipped in-progress transition, issue already in target state",
 				slog.String("issue_state", issue.State),
 				slog.String("in_progress_state", cfg.Tracker.InProgressState),
 			)
@@ -357,9 +358,8 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 	workspacePath = wsResult.Path
 	logger.Info("workspace prepared", slog.String("workspace", wsResult.Path))
 
-	// finishWorkspace is a helper that runs the after_run hook
-	// best-effort. Called on every exit path after successful
-	// workspace preparation.
+	// finishWorkspace runs the after_run hook best-effort on every exit
+	// path after successful workspace preparation.
 	finishWorkspace := func() {
 		workspace.Finish(ctx, workspace.FinishParams{
 			Path:          wsResult.Path,
@@ -373,9 +373,9 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 		})
 	}
 
-	// Phase 1.5: MCP Config Generation.
+	// Generate MCP config so the agent session can invoke Sortie tools.
 	if deps.WorkflowPath == "" {
-		logger.Debug("workflow path empty, skipping MCP config generation")
+		logger.Debug("skipped mcp config generation, workflow path empty")
 	} else {
 		execPath, execErr := os.Executable()
 		if execErr != nil {
@@ -385,7 +385,7 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 				IssueID:       issue.ID,
 				Identifier:    issue.Identifier,
 				ExitKind:      WorkerExitError,
-				Error:         fmt.Errorf("MCP config generation: resolve executable: %w", execErr),
+				Error:         fmt.Errorf("mcp config generation: resolve executable: %w", execErr),
 				WorkspacePath: wsResult.Path,
 				AgentAdapter:  cfg.Agent.Kind,
 				Attempt:       attempt,
@@ -402,7 +402,7 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 				IssueID:       issue.ID,
 				Identifier:    issue.Identifier,
 				ExitKind:      WorkerExitError,
-				Error:         fmt.Errorf("MCP config generation: resolve symlinks: %w", execErr),
+				Error:         fmt.Errorf("mcp config generation: resolve symlinks: %w", execErr),
 				WorkspacePath: wsResult.Path,
 				AgentAdapter:  cfg.Agent.Kind,
 				Attempt:       attempt,
@@ -440,7 +440,7 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 				IssueID:       issue.ID,
 				Identifier:    issue.Identifier,
 				ExitKind:      WorkerExitError,
-				Error:         fmt.Errorf("MCP config generation: %w", genErr),
+				Error:         fmt.Errorf("mcp config generation: %w", genErr),
 				WorkspacePath: wsResult.Path,
 				AgentAdapter:  cfg.Agent.Kind,
 				Attempt:       attempt,
@@ -469,7 +469,6 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 		return
 	}
 
-	// Start the agent session inside the prepared workspace.
 	session, err = deps.AgentAdapter.StartSession(ctx, domain.StartSessionParams{
 		WorkspacePath:            wsResult.Path,
 		AgentConfig:              toDomainAgentConfig(cfg.Agent),
@@ -501,7 +500,7 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 	// Execute turns until the issue leaves an active state or max_turns is reached.
 	maxTurns := cfg.Agent.MaxTurns
 	if maxTurns < 1 {
-		logger.Warn("agent max_turns is less than 1; clamping to 1", slog.Int("configured_max_turns", cfg.Agent.MaxTurns))
+		logger.Warn("clamped agent max_turns to 1", slog.Int("configured_max_turns", cfg.Agent.MaxTurns))
 		maxTurns = 1
 	}
 	turnNumber := 1
@@ -530,14 +529,12 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 			return
 		}
 
-		// Append tool advertisement on the first turn only.
 		if turnNumber == 1 && deps.ToolRegistry != nil && deps.ToolRegistry.Len() > 0 {
 			rendered += "\n\n" + buildToolAdvertisement(deps.ToolRegistry, cfg.Tracker.Project)
 		}
 
 		logger.Info("turn started", slog.Int("turn_number", turnNumber), slog.Int("max_turns", maxTurns))
 
-		// Send the rendered prompt to the agent and wait for completion.
 		turnResult, err := deps.AgentAdapter.RunTurn(ctx, session, domain.RunTurnParams{
 			Prompt: rendered,
 			Issue:  issue,
@@ -547,7 +544,7 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 				// the goroutine boundary ensures the orchestrator never
 				// iterates a map that the adapter may still mutate.
 				if event.RateLimits != nil {
-					event.RateLimits = shallowCopyMap(event.RateLimits)
+					event.RateLimits = maps.Clone(event.RateLimits)
 				}
 				deps.OnEvent(issue.ID, event)
 			},
@@ -637,7 +634,6 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 		turnNumber++
 	}
 
-	// Tear down the session and workspace before reporting success.
 	stopSessionBestEffort(ctx, deps.AgentAdapter, session, cfg, logger)
 	finishWorkspace()
 

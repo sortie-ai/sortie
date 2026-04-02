@@ -26,7 +26,6 @@ type rawEvent struct {
 	Usage     *rawUsage `json:"usage,omitempty"`
 }
 
-// rawUsage holds usage counters from the result event.
 type rawUsage struct {
 	PremiumRequests int64          `json:"premiumRequests"`
 	TotalAPIDurMS   int64          `json:"totalApiDurationMs"`
@@ -34,14 +33,12 @@ type rawUsage struct {
 	CodeChanges     *rawCodeChange `json:"codeChanges,omitempty"`
 }
 
-// rawCodeChange holds code change stats from the result event.
 type rawCodeChange struct {
 	LinesAdded    int      `json:"linesAdded"`
 	LinesRemoved  int      `json:"linesRemoved"`
 	FilesModified []string `json:"filesModified"`
 }
 
-// assistantMessageData holds fields parsed from assistant.message data.
 type assistantMessageData struct {
 	MessageID    string           `json:"messageId"`
 	Content      string           `json:"content"`
@@ -49,7 +46,6 @@ type assistantMessageData struct {
 	OutputTokens int64            `json:"outputTokens"`
 }
 
-// rawToolRequest holds a tool request inside an assistant.message.
 type rawToolRequest struct {
 	ToolCallID       string          `json:"toolCallId"`
 	Name             string          `json:"name"`
@@ -57,8 +53,6 @@ type rawToolRequest struct {
 	IntentionSummary string          `json:"intentionSummary,omitempty"`
 }
 
-// toolExecutionData holds fields parsed from tool.execution_start
-// and tool.execution_complete events.
 type toolExecutionData struct {
 	ToolCallID    string          `json:"toolCallId"`
 	ToolName      string          `json:"toolName"`
@@ -70,19 +64,16 @@ type toolExecutionData struct {
 	ToolTelemetry json.RawMessage `json:"toolTelemetry,omitempty"`
 }
 
-// sessionInfoData holds fields from session.info or session.warning events.
 type sessionInfoData struct {
 	InfoType string `json:"infoType,omitempty"`
 	Message  string `json:"message,omitempty"`
 }
 
-// sessionWarningData holds fields from session.warning events.
 type sessionWarningData struct {
 	WarningType string `json:"warningType,omitempty"`
 	Message     string `json:"message,omitempty"`
 }
 
-// sessionTaskCompleteData holds fields from session.task_complete events.
 type sessionTaskCompleteData struct {
 	Summary string `json:"summary,omitempty"`
 	Success bool   `json:"success"`
@@ -98,8 +89,6 @@ func parseEvent(line []byte) (rawEvent, error) {
 	return ev, nil
 }
 
-// parseAssistantMessageData extracts assistant message fields from a
-// rawEvent Data payload.
 func parseAssistantMessageData(data json.RawMessage) (assistantMessageData, error) {
 	var d assistantMessageData
 	if err := json.Unmarshal(data, &d); err != nil {
@@ -108,8 +97,6 @@ func parseAssistantMessageData(data json.RawMessage) (assistantMessageData, erro
 	return d, nil
 }
 
-// parseToolExecutionData extracts tool execution fields from a
-// rawEvent Data payload.
 func parseToolExecutionData(data json.RawMessage) (toolExecutionData, error) {
 	var d toolExecutionData
 	if err := json.Unmarshal(data, &d); err != nil {
@@ -118,8 +105,6 @@ func parseToolExecutionData(data json.RawMessage) (toolExecutionData, error) {
 	return d, nil
 }
 
-// parseSessionInfoData extracts session info fields from a rawEvent
-// Data payload.
 func parseSessionInfoData(data json.RawMessage) (sessionInfoData, error) {
 	var d sessionInfoData
 	if err := json.Unmarshal(data, &d); err != nil {
@@ -128,8 +113,6 @@ func parseSessionInfoData(data json.RawMessage) (sessionInfoData, error) {
 	return d, nil
 }
 
-// parseSessionWarningData extracts session warning fields from a
-// rawEvent Data payload.
 func parseSessionWarningData(data json.RawMessage) (sessionWarningData, error) {
 	var d sessionWarningData
 	if err := json.Unmarshal(data, &d); err != nil {
@@ -138,8 +121,6 @@ func parseSessionWarningData(data json.RawMessage) (sessionWarningData, error) {
 	return d, nil
 }
 
-// parseSessionTaskCompleteData extracts task completion fields from a
-// rawEvent Data payload.
 func parseSessionTaskCompleteData(data json.RawMessage) (sessionTaskCompleteData, error) {
 	var d sessionTaskCompleteData
 	if err := json.Unmarshal(data, &d); err != nil {
@@ -173,15 +154,11 @@ func summarizeAssistantMessage(data assistantMessageData) string {
 // event.
 func normalizeUsage(_ *rawUsage, cumulativeOutput int64) domain.TokenUsage {
 	return domain.TokenUsage{
-		InputTokens:     0,
-		OutputTokens:    cumulativeOutput,
-		TotalTokens:     cumulativeOutput,
-		CacheReadTokens: 0,
+		OutputTokens: cumulativeOutput,
+		TotalTokens:  cumulativeOutput,
 	}
 }
 
-// truncate returns s truncated to maxLen runes with a "…" suffix if
-// truncation occurred.
 func truncate(s string, maxLen int) string {
 	if utf8.RuneCountInString(s) <= maxLen {
 		return s

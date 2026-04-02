@@ -51,7 +51,6 @@ func (t *TrackerAPITool) Description() string {
 		"and transition_issue operations."
 }
 
-// inputSchema is the static JSON Schema for the tool's input.
 var inputSchema = json.RawMessage(`{
   "type": "object",
   "properties": {
@@ -82,7 +81,6 @@ func (t *TrackerAPITool) InputSchema() json.RawMessage {
 	return out
 }
 
-// toolInput is the parsed input for Execute.
 type toolInput struct {
 	Operation   string `json:"operation"`
 	IssueID     string `json:"issue_id,omitempty"`
@@ -169,9 +167,9 @@ func (t *TrackerAPITool) fetchComments(ctx context.Context, issueID string) (jso
 		return mapTrackerError(err), nil
 	}
 
-	data := make([]map[string]any, len(comments))
+	commentMaps := make([]map[string]any, len(comments))
 	for i, c := range comments {
-		data[i] = map[string]any{
+		commentMaps[i] = map[string]any{
 			"id":         c.ID,
 			"author":     c.Author,
 			"body":       c.Body,
@@ -179,7 +177,7 @@ func (t *TrackerAPITool) fetchComments(ctx context.Context, issueID string) (jso
 		}
 	}
 
-	return successResult(data), nil
+	return successResult(commentMaps), nil
 }
 
 func (t *TrackerAPITool) searchIssues(ctx context.Context) (json.RawMessage, error) {
@@ -188,12 +186,12 @@ func (t *TrackerAPITool) searchIssues(ctx context.Context) (json.RawMessage, err
 		return mapTrackerError(err), nil
 	}
 
-	data := make([]map[string]any, len(issues))
+	issueMaps := make([]map[string]any, len(issues))
 	for i := range issues {
-		data[i] = issues[i].ToTemplateMap()
+		issueMaps[i] = issues[i].ToTemplateMap()
 	}
 
-	return successResult(data), nil
+	return successResult(issueMaps), nil
 }
 
 func (t *TrackerAPITool) transitionIssue(ctx context.Context, issueID, targetState string) (json.RawMessage, error) {
@@ -265,20 +263,20 @@ func mapTrackerError(err error) json.RawMessage {
 // marshal failure (programming error — only called with JSON-safe
 // map values).
 func successResult(data any) json.RawMessage {
-	result, err := json.Marshal(map[string]any{
+	raw, err := json.Marshal(map[string]any{
 		"success": true,
 		"data":    data,
 	})
 	if err != nil {
 		panic(fmt.Sprintf("trackerapi: marshal success result: %v", err))
 	}
-	return result
+	return raw
 }
 
 // errorResult marshals an error response envelope. Panics on marshal
 // failure (should never happen with string inputs).
 func errorResult(kind, message string) json.RawMessage {
-	result, err := json.Marshal(map[string]any{
+	raw, err := json.Marshal(map[string]any{
 		"success": false,
 		"error": map[string]string{
 			"kind":    kind,
@@ -288,5 +286,5 @@ func errorResult(kind, message string) json.RawMessage {
 	if err != nil {
 		panic(fmt.Sprintf("trackerapi: marshal error result: %v", err))
 	}
-	return result
+	return raw
 }

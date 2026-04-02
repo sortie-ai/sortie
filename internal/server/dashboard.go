@@ -2,12 +2,13 @@ package server
 
 import (
 	"bytes"
-	_ "embed"
+	"cmp"
+	_ "embed" // required for //go:embed directives
 	"fmt"
 	"log/slog"
 	"net/http"
 	"net/url"
-	"sort"
+	"slices"
 	"strconv"
 	"time"
 
@@ -210,8 +211,8 @@ func buildDashboardData(
 	// Copy and sort running entries by StartedAt ascending before mapping.
 	sortedRunning := make([]orchestrator.SnapshotRunningEntry, len(snap.Running))
 	copy(sortedRunning, snap.Running)
-	sort.Slice(sortedRunning, func(i, j int) bool {
-		return sortedRunning[i].StartedAt.Before(sortedRunning[j].StartedAt)
+	slices.SortFunc(sortedRunning, func(a, b orchestrator.SnapshotRunningEntry) int {
+		return a.StartedAt.Compare(b.StartedAt)
 	})
 	running := make([]dashboardRunningEntry, len(sortedRunning))
 	hasSSH := false
@@ -264,8 +265,8 @@ func buildDashboardData(
 	// Copy and sort retry entries by DueAtMS ascending before mapping.
 	sortedRetrying := make([]orchestrator.SnapshotRetryEntry, len(snap.Retrying))
 	copy(sortedRetrying, snap.Retrying)
-	sort.Slice(sortedRetrying, func(i, j int) bool {
-		return sortedRetrying[i].DueAtMS < sortedRetrying[j].DueAtMS
+	slices.SortFunc(sortedRetrying, func(a, b orchestrator.SnapshotRetryEntry) int {
+		return cmp.Compare(a.DueAtMS, b.DueAtMS)
 	})
 	retrying := make([]dashboardRetryEntry, len(sortedRetrying))
 	for i, e := range sortedRetrying {

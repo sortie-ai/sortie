@@ -1,10 +1,9 @@
-// Package orchestrator implements the coordination layer: polling,
-// dispatch, concurrency control, retry scheduling, and reconciliation.
 package orchestrator
 
 import (
 	"context"
-	"sort"
+	"maps"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -274,8 +273,8 @@ type State struct {
 	// has reached or exceeded the configured max_sessions budget.
 	// Rebuilt from a batch SQLite query at the start of each poll tick
 	// when max_sessions > 0. Updated inline by [HandleRetryTimer] on
-	// budget exhaustion. [ShouldDispatch] checks this set as dispatch
-	// gate Rule 4b. Cleared when max_sessions is 0.
+	// budget exhaustion. [ShouldDispatch] checks this set as a dispatch
+	// gate. Cleared when max_sessions is 0.
 	BudgetExhausted map[string]struct{}
 
 	// AgentTotals holds aggregate token counts and cumulative runtime seconds
@@ -425,7 +424,7 @@ func ActiveElapsedSeconds(state *State, now time.Time) float64 {
 // is not safe for concurrent access.
 func RuntimeSnapshot(state *State, now time.Time) RuntimeSnapshotResult {
 	now = now.UTC()
-	result := RuntimeSnapshotResult{
+	snap := RuntimeSnapshotResult{
 		GeneratedAt: now,
 		Running:     make([]SnapshotRunningEntry, 0, len(state.Running)),
 		Retrying:    make([]SnapshotRetryEntry, 0, len(state.RetryAttempts)),
@@ -433,14 +432,14 @@ func RuntimeSnapshot(state *State, now time.Time) RuntimeSnapshotResult {
 
 	var activeElapsedTotal float64
 	for _, entry := range state.Running {
-		var rbm map[string]int
+		var modelRequests map[string]int
 		if entry.RequestsByModel != nil {
-			rbm = make(map[string]int, len(entry.RequestsByModel))
+			modelRequests = make(map[string]int, len(entry.RequestsByModel))
 			for k, v := range entry.RequestsByModel {
-				rbm[k] = v
+				modelRequests[k] = v
 			}
 		}
-		result.Running = append(result.Running, SnapshotRunningEntry{
+		snap.Running = append(snap.Running, SnapshotRunningEntry{
 			IssueID:            entry.Issue.ID,
 			Identifier:         entry.Identifier,
 			DisplayID:          entry.Issue.DisplayID,
@@ -457,7 +456,7 @@ func RuntimeSnapshot(state *State, now time.Time) RuntimeSnapshotResult {
 			CacheReadTokens:    entry.CacheReadTokens,
 			ModelName:          entry.ModelName,
 			APIRequestCount:    entry.APIRequestCount,
-			RequestsByModel:    rbm,
+			RequestsByModel:    modelRequests,
 			WorkspacePath:      entry.WorkspacePath,
 			SSHHost:            entry.SSHHost,
 			ToolTimeMs:         entry.ToolTimeMs,
@@ -475,7 +474,7 @@ func RuntimeSnapshot(state *State, now time.Time) RuntimeSnapshotResult {
 	}
 
 	for _, entry := range state.RetryAttempts {
-		result.Retrying = append(result.Retrying, SnapshotRetryEntry{
+		snap.Retrying = append(snap.Retrying, SnapshotRetryEntry{
 			IssueID:    entry.IssueID,
 			Identifier: entry.Identifier,
 			DisplayID:  entry.DisplayID,
@@ -485,7 +484,7 @@ func RuntimeSnapshot(state *State, now time.Time) RuntimeSnapshotResult {
 		})
 	}
 
-	result.AgentTotals = SnapshotAgentTotals{
+	snap.AgentTotals = SnapshotAgentTotals{
 		InputTokens:     state.AgentTotals.InputTokens,
 		OutputTokens:    state.AgentTotals.OutputTokens,
 		TotalTokens:     state.AgentTotals.TotalTokens,
@@ -493,19 +492,19 @@ func RuntimeSnapshot(state *State, now time.Time) RuntimeSnapshotResult {
 		SecondsRunning:  state.AgentTotals.SecondsRunning + activeElapsedTotal,
 	}
 
-	result.BudgetExhaustedCount = len(state.BudgetExhausted)
+	snap.BudgetExhaustedCount = len(state.BudgetExhausted)
 	if len(state.BudgetExhausted) > 0 {
 		ids := make([]string, 0, len(state.BudgetExhausted))
 		for id := range state.BudgetExhausted {
 			ids = append(ids, id)
 		}
-		sort.Strings(ids)
-		result.BudgetExhausted = ids
+		slices.Sort(ids)
+		snap.BudgetExhausted = ids
 	}
 
 	if state.AgentRateLimits != nil {
-		result.RateLimits = shallowCopyMap(state.AgentRateLimits.Data)
+		snap.RateLimits = maps.Clone(state.AgentRateLimits.Data)
 	}
 
-	return result
+	return snap
 }

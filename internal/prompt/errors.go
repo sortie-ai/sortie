@@ -20,10 +20,12 @@ const (
 	ErrTemplateRender
 )
 
-// TemplateError represents a structured prompt template failure. Use
-// [errors.As] to extract it from the error returned by [Parse] or
-// [Template.Render], then inspect Kind for programmatic handling and
-// Line for operator-facing diagnostics.
+// TemplateError represents a structured prompt template failure.
+//
+// It wraps the underlying cause so [errors.As] can extract it from errors
+// returned by [Parse] or [Template.Render]. Kind distinguishes
+// dispatch-blocking parse failures from per-attempt render failures, and
+// Line provides the operator-facing source location.
 type TemplateError struct {
 	// Kind distinguishes parse errors (dispatch-blocking) from render
 	// errors (per-attempt).

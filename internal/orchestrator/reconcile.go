@@ -67,11 +67,11 @@ type ReconcileParams struct {
 // state for all running issues. Intended to be called from the poll tick
 // before dispatch; wiring into the event loop is done by the caller.
 //
-// Part A cancels workers that have exceeded the configured stall timeout
-// and schedules exponential-backoff retries. Part B queries the tracker
-// for current issue states: terminal issues are marked for workspace
-// cleanup, active issues get their in-memory snapshot updated, and
-// non-active/non-terminal issues are cancelled without cleanup.
+// Stall detection cancels workers that have exceeded the configured stall
+// timeout and schedules exponential-backoff retries. Tracker state refresh
+// queries the tracker for current issue states: terminal issues are marked
+// for workspace cleanup, active issues get their in-memory snapshot updated,
+// and non-active/non-terminal issues are cancelled without cleanup.
 //
 // Running entries are never removed by reconciliation. Cancelled workers
 // exit asynchronously and are processed by [HandleWorkerExit].
@@ -96,16 +96,16 @@ func ReconcileRunningIssues(state *State, params ReconcileParams) {
 		now = params.NowFunc().UTC()
 	}
 
-	// Part A: stall detection.
+	// Cancel stalled workers and schedule exponential-backoff retries.
 	reconcileStalled(state, params, log, ctx, now, metrics)
 
-	// Part B: tracker state refresh.
+	// Refresh issue states from the tracker and stop workers for
+	// terminal or non-active issues.
 	reconcileTrackerState(state, params, log, ctx, metrics)
 }
 
-// reconcileStalled implements Part A: stall detection. For each running
-// entry whose last activity exceeds the stall timeout, the worker is
-// cancelled and an exponential-backoff retry is scheduled.
+// reconcileStalled cancels running entries whose last activity exceeds the
+// stall timeout and schedules an exponential-backoff retry for each.
 func reconcileStalled(state *State, params ReconcileParams, log *slog.Logger, ctx context.Context, now time.Time, metrics domain.Metrics) {
 	if params.StallTimeoutMS <= 0 {
 		return
@@ -141,45 +141,45 @@ func reconcileStalled(state *State, params ReconcileParams, log *slog.Logger, ct
 				slog.Int("current_attempt", existing.Attempt),
 				slog.Int("next_attempt", nextAttempt),
 			)
-		} else {
-			delayMS := computeBackoffDelay(nextAttempt, params.MaxRetryBackoffMS)
-
-			ScheduleRetry(state, ScheduleRetryParams{
-				IssueID:    issueID,
-				Identifier: entry.Identifier,
-				DisplayID:  entry.Issue.DisplayID,
-				Attempt:    nextAttempt,
-				DelayMS:    delayMS,
-				Error:      "stall timeout exceeded",
-			}, params.OnRetryFire)
-			metrics.IncRetries(triggerStall)
-
-			if retryEntry, ok := state.RetryAttempts[issueID]; ok {
-				pEntry := persistence.RetryEntry{
-					IssueID:    retryEntry.IssueID,
-					Identifier: retryEntry.Identifier,
-					Attempt:    retryEntry.Attempt,
-					DueAtMs:    retryEntry.DueAtMS,
-					Error:      stringPtr(retryEntry.Error),
-				}
-				if err := params.Store.SaveRetryEntry(ctx, pEntry); err != nil {
-					entryLog.Error("failed to persist stall retry entry",
-						slog.Any("error", err),
-					)
-				}
-			}
-
-			entryLog.Warn("stall detected, cancelling worker",
-				slog.Int64("elapsed_ms", elapsedMS),
-				slog.Int("stall_timeout_ms", params.StallTimeoutMS),
-			)
+			continue
 		}
+
+		delayMS := computeBackoffDelay(nextAttempt, params.MaxRetryBackoffMS)
+
+		ScheduleRetry(state, ScheduleRetryParams{
+			IssueID:    issueID,
+			Identifier: entry.Identifier,
+			DisplayID:  entry.Issue.DisplayID,
+			Attempt:    nextAttempt,
+			DelayMS:    delayMS,
+			Error:      "stall timeout exceeded",
+		}, params.OnRetryFire)
+		metrics.IncRetries(triggerStall)
+
+		if retryEntry, ok := state.RetryAttempts[issueID]; ok {
+			pEntry := persistence.RetryEntry{
+				IssueID:    retryEntry.IssueID,
+				Identifier: retryEntry.Identifier,
+				Attempt:    retryEntry.Attempt,
+				DueAtMs:    retryEntry.DueAtMS,
+				Error:      stringPtr(retryEntry.Error),
+			}
+			if err := params.Store.SaveRetryEntry(ctx, pEntry); err != nil {
+				entryLog.Error("failed to persist stall retry entry",
+					slog.Any("error", err),
+				)
+			}
+		}
+
+		entryLog.Warn("stall detected, cancelling worker",
+			slog.Int64("elapsed_ms", elapsedMS),
+			slog.Int("stall_timeout_ms", params.StallTimeoutMS),
+		)
 	}
 }
 
-// reconcileTrackerState implements Part B: tracker state refresh. It
-// fetches current issue states for all running IDs and cancels workers
-// whose issues are terminal or no longer active.
+// reconcileTrackerState fetches current issue states for all running IDs
+// and cancels workers whose issues are terminal or no longer active.
 func reconcileTrackerState(state *State, params ReconcileParams, log *slog.Logger, ctx context.Context, metrics domain.Metrics) {
 	if len(state.Running) == 0 {
 		return

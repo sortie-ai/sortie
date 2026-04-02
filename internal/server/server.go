@@ -41,14 +41,24 @@ type RunHistoryFunc func(ctx context.Context, limit int) ([]RunHistoryEntry, err
 // RunHistoryEntry is a server-layer view of a completed run attempt.
 // Decoupled from persistence types to avoid leaking internal packages.
 type RunHistoryEntry struct {
-	Identifier     string
-	DisplayID      string
-	Attempt        int
-	Status         string
-	WorkflowFile   string
-	StartedAt      string
-	CompletedAt    string
-	Error          *string
+	// Identifier is the tracker-assigned issue identifier (e.g., "PROJ-123").
+	Identifier string
+	// DisplayID is the short display label shown on the dashboard.
+	DisplayID string
+	// Attempt is the one-based retry attempt number.
+	Attempt int
+	// Status is the terminal outcome (e.g., "success", "failure").
+	Status string
+	// WorkflowFile is the path to the workflow definition used.
+	WorkflowFile string
+	// StartedAt is the formatted start timestamp.
+	StartedAt string
+	// CompletedAt is the formatted completion timestamp.
+	CompletedAt string
+	// Error holds the error message when Status indicates failure.
+	// Nil when no error occurred.
+	Error *string
+	// TurnsCompleted is the number of agent turns completed before exit.
 	TurnsCompleted int
 }
 
@@ -175,19 +185,19 @@ func New(params Params) *Server {
 		runHistoryFn:     params.RunHistoryFn,
 	}
 
-	// Dashboard route. Method-specific pattern so non-GET methods
-	// receive the default 405 response from Go's ServeMux.
+	// Method-specific pattern so non-GET methods receive the default
+	// 405 response from Go's ServeMux.
 	mux.HandleFunc("GET /{$}", s.handleDashboard)
 	mux.HandleFunc("GET /favicon.ico", handleFavicon)
 
-	// Health probe routes. Method-specific patterns ensure non-GET
-	// methods receive the default 405 response from Go's ServeMux.
+	// Method-specific patterns ensure non-GET methods receive the
+	// default 405 response from Go's ServeMux.
 	mux.HandleFunc("GET /livez", s.handleLivez)
 	mux.HandleFunc("GET /readyz", s.handleReadyz)
 
-	// API routes. Use method-agnostic patterns with internal method
-	// checking so 405 responses use JSON error envelopes instead of
-	// the default plain-text body from Go's ServeMux.
+	// Method-agnostic patterns with internal method checking ensure
+	// 405 responses use JSON error envelopes instead of the default
+	// plain-text body from Go's ServeMux.
 	mux.HandleFunc("/api/v1/state", s.routeState)
 	mux.HandleFunc("/api/v1/refresh", s.routeRefresh)
 	mux.HandleFunc("/api/v1/{identifier}", s.routeIssueDetail)
@@ -249,6 +259,5 @@ func (s *Server) SetDraining() {
 	s.drainingFlag.Store(true)
 }
 
-// OnStateChange satisfies [orchestrator.Observer]. Currently a no-op;
-// reserved for future SSE push or dashboard cache invalidation.
+// OnStateChange satisfies [orchestrator.Observer]. Currently a no-op.
 func (s *Server) OnStateChange() {}

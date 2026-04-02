@@ -316,7 +316,7 @@ func classifyHTTPError(resp *http.Response, method, path string) error {
 		}
 
 	case resp.StatusCode == http.StatusForbidden:
-		// Three-tier 403 disambiguation per spec Section 3.5.
+		// Disambiguate 403: primary rate limit, secondary rate limit, or insufficient permissions.
 		if resp.Header.Get("X-Ratelimit-Remaining") == "0" {
 			return &domain.TrackerError{
 				Kind:    domain.ErrTrackerAPI,

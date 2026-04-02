@@ -120,7 +120,7 @@ func (a *CopilotAdapter) StartSession(ctx context.Context, params domain.StartSe
 		}
 	}
 
-	info, err := os.Stat(absPath)
+	fi, err := os.Stat(absPath)
 	if err != nil {
 		return domain.Session{}, &domain.AgentError{
 			Kind:    domain.ErrInvalidWorkspaceCwd,
@@ -128,7 +128,7 @@ func (a *CopilotAdapter) StartSession(ctx context.Context, params domain.StartSe
 			Err:     err,
 		}
 	}
-	if !info.IsDir() {
+	if !fi.IsDir() {
 		return domain.Session{}, &domain.AgentError{
 			Kind:    domain.ErrInvalidWorkspaceCwd,
 			Message: "workspace path is not a directory",
@@ -346,7 +346,6 @@ func (a *CopilotAdapter) RunTurn(ctx context.Context, session domain.Session, pa
 
 	go procutil.DrainStderr(stderrPipe, logger)
 
-	// Read and parse stdout line by line.
 	scanner := bufio.NewScanner(stdoutPipe)
 	scanner.Buffer(make([]byte, 0, 64*1024), 10*1024*1024)
 
@@ -507,7 +506,6 @@ func (a *CopilotAdapter) RunTurn(ctx context.Context, session domain.Session, pa
 		}
 	}
 
-	// Check scanner error (e.g., buffer overflow).
 	if scanErr := scanner.Err(); scanErr != nil {
 		cancelCmd()
 		cmd.Wait() //nolint:errcheck,gosec // best-effort reap; exit code is irrelevant on scanner failure
@@ -554,11 +552,9 @@ func (a *CopilotAdapter) RunTurn(ctx context.Context, session domain.Session, pa
 			}
 	}
 
-	// Wait for process to exit.
 	waitErr := cmd.Wait()
 	close(waitCh)
 
-	// Clear subprocess reference.
 	state.mu.Lock()
 	state.proc = nil
 	state.waitCh = nil
@@ -572,7 +568,6 @@ func (a *CopilotAdapter) RunTurn(ctx context.Context, session domain.Session, pa
 	}
 	usage := normalizeUsage(resultUsage, cumulativeOutputTokens)
 
-	// Determine exit reason.
 	if ctx.Err() != nil {
 		params.OnEvent(domain.AgentEvent{
 			Type:      domain.EventTurnCancelled,
@@ -721,16 +716,17 @@ func (a *CopilotAdapter) StopSession(ctx context.Context, session domain.Session
 	}
 
 	// Send SIGTERM for graceful shutdown.
-	_ = proc.Signal(syscall.SIGTERM) //nolint:errcheck // best-effort signal; process may already be dead
+	// Process may already be dead; signal is best-effort.
+	_ = proc.Signal(syscall.SIGTERM)
 
 	select {
 	case <-waitCh:
 		return nil
 	case <-time.After(5 * time.Second):
-		_ = proc.Kill() //nolint:errcheck // best-effort kill
+		_ = proc.Kill()
 		return nil
 	case <-ctx.Done():
-		_ = proc.Kill() //nolint:errcheck // best-effort kill
+		_ = proc.Kill()
 		return ctx.Err()
 	}
 }

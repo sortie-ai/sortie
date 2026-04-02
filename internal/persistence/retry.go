@@ -104,13 +104,13 @@ func (s *Store) LoadRetryEntriesForRecovery(ctx context.Context, nowMs int64) ([
 		return nil, fmt.Errorf("load retry entries for recovery: %w", err)
 	}
 
-	result := make([]PendingRetry, len(entries))
+	pending := make([]PendingRetry, len(entries))
 	for i, e := range entries {
 		remaining := e.DueAtMs - nowMs
 		if remaining < 0 {
 			remaining = 0
 		}
-		result[i] = PendingRetry{Entry: e, RemainingMs: remaining}
+		pending[i] = PendingRetry{Entry: e, RemainingMs: remaining}
 	}
-	return result, nil
+	return pending, nil
 }

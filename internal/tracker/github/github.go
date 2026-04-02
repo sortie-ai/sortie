@@ -96,14 +96,8 @@ func NewGitHubAdapter(config map[string]any) (domain.TrackerAdapter, error) {
 		}
 	}
 
-	if strings.Count(project, "/") != 1 {
-		return nil, &domain.TrackerError{
-			Kind:    domain.ErrTrackerPayload,
-			Message: "project must be in owner/repo format",
-		}
-	}
-	parts := strings.SplitN(project, "/", 2)
-	if parts[0] == "" || parts[1] == "" {
+	owner, repo, ok := strings.Cut(project, "/")
+	if !ok || owner == "" || repo == "" || strings.Contains(repo, "/") {
 		return nil, &domain.TrackerError{
 			Kind:    domain.ErrTrackerPayload,
 			Message: "project must be in owner/repo format",
@@ -160,8 +154,8 @@ func NewGitHubAdapter(config map[string]any) (domain.TrackerAdapter, error) {
 
 	return &GitHubAdapter{
 		client:         newGitHubClient(endpoint, apiKey, userAgent),
-		owner:          parts[0],
-		repo:           parts[1],
+		owner:          owner,
+		repo:           repo,
 		activeStates:   activeStates,
 		terminalStates: terminalStates,
 		handoffState:   handoffState,
@@ -212,7 +206,7 @@ func (a *GitHubAdapter) fetchCandidatesViaIssues(ctx context.Context) ([]domain.
 		activeSet[s] = struct{}{}
 	}
 
-	var result []domain.Issue
+	var issues []domain.Issue
 	for _, gi := range raw {
 		if isPullRequest(gi) {
 			continue
@@ -223,7 +217,7 @@ func (a *GitHubAdapter) fetchCandidatesViaIssues(ctx context.Context) ([]domain.
 			continue
 		}
 		issue.Comments = nil
-		result = append(result, issue)
+		issues = append(issues, issue)
 	}
 
 	pageCount := 1
@@ -254,7 +248,7 @@ func (a *GitHubAdapter) fetchCandidatesViaIssues(ctx context.Context) ([]domain.
 				continue
 			}
 			issue.Comments = nil
-			result = append(result, issue)
+			issues = append(issues, issue)
 		}
 	}
 
@@ -264,11 +258,11 @@ func (a *GitHubAdapter) fetchCandidatesViaIssues(ctx context.Context) ([]domain.
 			slog.String("endpoint", path))
 	}
 
-	if result == nil {
-		result = []domain.Issue{}
+	if issues == nil {
+		issues = []domain.Issue{}
 	}
 	a.incTrackerRequest("fetch_candidates", "success")
-	return result, nil
+	return issues, nil
 }
 
 func (a *GitHubAdapter) fetchCandidatesViaSearch(ctx context.Context) ([]domain.Issue, error) {
@@ -305,7 +299,7 @@ func (a *GitHubAdapter) fetchCandidatesViaSearch(ctx context.Context) ([]domain.
 		activeSet[s] = struct{}{}
 	}
 
-	var result []domain.Issue
+	var issues []domain.Issue
 	for _, gi := range sr.Items {
 		if isPullRequest(gi) {
 			continue
@@ -316,7 +310,7 @@ func (a *GitHubAdapter) fetchCandidatesViaSearch(ctx context.Context) ([]domain.
 			continue
 		}
 		issue.Comments = nil
-		result = append(result, issue)
+		issues = append(issues, issue)
 	}
 
 	pageCount := 1
@@ -347,7 +341,7 @@ func (a *GitHubAdapter) fetchCandidatesViaSearch(ctx context.Context) ([]domain.
 				continue
 			}
 			issue.Comments = nil
-			result = append(result, issue)
+			issues = append(issues, issue)
 		}
 	}
 
@@ -357,11 +351,11 @@ func (a *GitHubAdapter) fetchCandidatesViaSearch(ctx context.Context) ([]domain.
 			slog.String("endpoint", "/search/issues"))
 	}
 
-	if result == nil {
-		result = []domain.Issue{}
+	if issues == nil {
+		issues = []domain.Issue{}
 	}
 	a.incTrackerRequest("fetch_candidates", "success")
-	return result, nil
+	return issues, nil
 }
 
 // FetchIssueByID returns a fully populated issue including comments,
@@ -369,7 +363,7 @@ func (a *GitHubAdapter) fetchCandidatesViaSearch(ctx context.Context) ([]domain.
 func (a *GitHubAdapter) FetchIssueByID(ctx context.Context, issueID string) (domain.Issue, error) {
 	basePath := "/repos/" + a.owner + "/" + a.repo + "/issues/" + url.PathEscape(issueID)
 
-	// Step 1: Fetch the issue itself.
+	// Fetch the issue itself.
 	body, _, err := a.client.do(ctx, "GET", basePath, nil)
 	if err != nil {
 		a.incTrackerRequest("fetch_issue", "error")
@@ -403,21 +397,21 @@ func (a *GitHubAdapter) FetchIssueByID(ctx context.Context, issueID string) (dom
 	issue := normalizeIssue(gi, a.activeStates, a.terminalStates, a.handoffState)
 	a.qualifyDisplayID(&issue)
 
-	// Step 2: Fetch blockers (dependencies/blocked_by).
+	// Fetch blockers (dependencies/blocked_by).
 	issue.BlockedBy, err = a.fetchBlockers(ctx, issueID)
 	if err != nil {
 		a.incTrackerRequest("fetch_issue", "error")
 		return domain.Issue{}, err
 	}
 
-	// Step 3: Fetch parent.
+	// Fetch parent.
 	issue.Parent, err = a.fetchParent(ctx, issueID)
 	if err != nil {
 		a.incTrackerRequest("fetch_issue", "error")
 		return domain.Issue{}, err
 	}
 
-	// Step 4: Fetch comments.
+	// Fetch comments.
 	comments, err := a.fetchAllComments(ctx, issueID)
 	if err != nil {
 		a.incTrackerRequest("fetch_issue", "error")
@@ -534,7 +528,7 @@ func (a *GitHubAdapter) FetchIssuesByStates(ctx context.Context, states []string
 		}
 	}
 
-	var result []domain.Issue
+	var matched []domain.Issue
 	seen := make(map[string]struct{})
 
 	// Active/unknown states: issues endpoint with client-side filtering.
@@ -544,7 +538,7 @@ func (a *GitHubAdapter) FetchIssuesByStates(ctx context.Context, states []string
 			a.incTrackerRequest("fetch_by_states", "error")
 			return nil, err
 		}
-		result = append(result, issues...)
+		matched = append(matched, issues...)
 	}
 
 	// Terminal states: search endpoint with server-side label filtering.
@@ -559,14 +553,14 @@ func (a *GitHubAdapter) FetchIssuesByStates(ctx context.Context, states []string
 			a.incTrackerRequest("fetch_by_states", "error")
 			return nil, err
 		}
-		result = append(result, issues...)
+		matched = append(matched, issues...)
 	}
 
-	if result == nil {
-		result = []domain.Issue{}
+	if matched == nil {
+		matched = []domain.Issue{}
 	}
 	a.incTrackerRequest("fetch_by_states", "success")
-	return result, nil
+	return matched, nil
 }
 
 func (a *GitHubAdapter) fetchOpenIssuesByStates(ctx context.Context, stateSet map[string]struct{}, seen map[string]struct{}) ([]domain.Issue, error) {
@@ -583,7 +577,7 @@ func (a *GitHubAdapter) fetchOpenIssuesByStates(ctx context.Context, stateSet ma
 		return nil, err
 	}
 
-	var result []domain.Issue
+	var issues []domain.Issue
 	var raw []githubIssue
 	if err := json.Unmarshal(body, &raw); err != nil {
 		return nil, &domain.TrackerError{
@@ -605,7 +599,7 @@ func (a *GitHubAdapter) fetchOpenIssuesByStates(ctx context.Context, stateSet ma
 			continue
 		}
 		issue.Comments = nil
-		result = append(result, issue)
+		issues = append(issues, issue)
 		seen[issue.Identifier] = struct{}{}
 	}
 
@@ -638,7 +632,7 @@ func (a *GitHubAdapter) fetchOpenIssuesByStates(ctx context.Context, stateSet ma
 				continue
 			}
 			issue.Comments = nil
-			result = append(result, issue)
+			issues = append(issues, issue)
 			seen[issue.Identifier] = struct{}{}
 		}
 	}
@@ -650,7 +644,7 @@ func (a *GitHubAdapter) fetchOpenIssuesByStates(ctx context.Context, stateSet ma
 			slog.String("state", "open"))
 	}
 
-	return result, nil
+	return issues, nil
 }
 
 func (a *GitHubAdapter) fetchClosedIssuesByLabel(ctx context.Context, label string, seen map[string]struct{}) ([]domain.Issue, error) {
@@ -680,7 +674,7 @@ func (a *GitHubAdapter) fetchClosedIssuesByLabel(ctx context.Context, label stri
 			slog.String("label", label))
 	}
 
-	var result []domain.Issue
+	var issues []domain.Issue
 	for _, gi := range sr.Items {
 		if isPullRequest(gi) {
 			continue
@@ -691,7 +685,7 @@ func (a *GitHubAdapter) fetchClosedIssuesByLabel(ctx context.Context, label stri
 			continue
 		}
 		issue.Comments = nil
-		result = append(result, issue)
+		issues = append(issues, issue)
 		seen[issue.Identifier] = struct{}{}
 	}
 
@@ -721,7 +715,7 @@ func (a *GitHubAdapter) fetchClosedIssuesByLabel(ctx context.Context, label stri
 				continue
 			}
 			issue.Comments = nil
-			result = append(result, issue)
+			issues = append(issues, issue)
 			seen[issue.Identifier] = struct{}{}
 		}
 	}
@@ -733,33 +727,33 @@ func (a *GitHubAdapter) fetchClosedIssuesByLabel(ctx context.Context, label stri
 			slog.String("label", label))
 	}
 
-	return result, nil
+	return issues, nil
 }
 
 // FetchIssueStatesByIDs returns the current state for each requested
 // issue ID. Since ID and Identifier are both the issue number, this
 // delegates to [GitHubAdapter.fetchStatesByNumbers].
 func (a *GitHubAdapter) FetchIssueStatesByIDs(ctx context.Context, issueIDs []string) (map[string]string, error) {
-	result, err := a.fetchStatesByNumbers(ctx, issueIDs)
+	states, err := a.fetchStatesByNumbers(ctx, issueIDs)
 	if err != nil {
 		a.incTrackerRequest("fetch_states_by_ids", "error")
 		return nil, err
 	}
 	a.incTrackerRequest("fetch_states_by_ids", "success")
-	return result, nil
+	return states, nil
 }
 
 // FetchIssueStatesByIdentifiers returns the current state for each
 // requested issue identifier. Since ID and Identifier are both the
 // issue number, this delegates to [GitHubAdapter.fetchStatesByNumbers].
 func (a *GitHubAdapter) FetchIssueStatesByIdentifiers(ctx context.Context, identifiers []string) (map[string]string, error) {
-	result, err := a.fetchStatesByNumbers(ctx, identifiers)
+	states, err := a.fetchStatesByNumbers(ctx, identifiers)
 	if err != nil {
 		a.incTrackerRequest("fetch_states_by_identifiers", "error")
 		return nil, err
 	}
 	a.incTrackerRequest("fetch_states_by_identifiers", "success")
-	return result, nil
+	return states, nil
 }
 
 func (a *GitHubAdapter) fetchStatesByNumbers(ctx context.Context, numbers []string) (map[string]string, error) {
@@ -767,7 +761,7 @@ func (a *GitHubAdapter) fetchStatesByNumbers(ctx context.Context, numbers []stri
 		return map[string]string{}, nil
 	}
 
-	result := make(map[string]string, len(numbers))
+	states := make(map[string]string, len(numbers))
 	for _, num := range numbers {
 		if ctx.Err() != nil {
 			return nil, ctx.Err()
@@ -786,7 +780,7 @@ func (a *GitHubAdapter) fetchStatesByNumbers(ctx context.Context, numbers []stri
 
 		if notModified && cacheHit {
 			a.etagCache.touch(path)
-			result[num] = cachedState
+			states[num] = cachedState
 			continue
 		}
 
@@ -807,10 +801,10 @@ func (a *GitHubAdapter) fetchStatesByNumbers(ctx context.Context, numbers []stri
 			a.etagCache.put(path, responseETag, state)
 		}
 
-		result[num] = state
+		states[num] = state
 	}
 
-	return result, nil
+	return states, nil
 }
 
 // FetchIssueComments returns comments for the specified issue.
@@ -898,7 +892,7 @@ func (a *GitHubAdapter) TransitionIssue(ctx context.Context, issueID string, tar
 
 	basePath := "/repos/" + a.owner + "/" + a.repo + "/issues/" + url.PathEscape(issueID)
 
-	// Step 1: Fetch current issue to read labels and native state.
+	// Fetch current issue to read labels and native state.
 	body, _, err := a.client.do(ctx, "GET", basePath, nil)
 	if err != nil {
 		a.incTrackerRequest("transition", "error")
@@ -918,7 +912,7 @@ func (a *GitHubAdapter) TransitionIssue(ctx context.Context, issueID string, tar
 	currentLabel := findCurrentStateLabel(gi.Labels, a.activeStates, a.terminalStates, a.handoffState)
 	currentNative := gi.State
 
-	// Step 2: Remove old state label if present and different.
+	// Remove old state label if present and different.
 	if currentLabel != "" && currentLabel != targetLower {
 		labelPath := basePath + "/labels/" + url.PathEscape(currentLabel)
 		err := a.client.doNoBody(ctx, "DELETE", labelPath)
@@ -928,7 +922,7 @@ func (a *GitHubAdapter) TransitionIssue(ctx context.Context, issueID string, tar
 		}
 	}
 
-	// Step 3: Add target state label if different from current.
+	// Add target state label if different from current.
 	if currentLabel != targetLower {
 		payload, err := json.Marshal(map[string][]string{"labels": {targetLower}})
 		if err != nil {
@@ -945,7 +939,7 @@ func (a *GitHubAdapter) TransitionIssue(ctx context.Context, issueID string, tar
 		}
 	}
 
-	// Step 4: Open/close the issue if the native state needs to change.
+	// Open/close the issue if the native state needs to change.
 	if isTerminalState(targetLower, a.terminalStates) && currentNative == "open" {
 		payload, err := json.Marshal(map[string]any{"state": "closed", "state_reason": "completed"})
 		if err != nil {
@@ -1012,9 +1006,9 @@ func (a *GitHubAdapter) SetMetrics(m domain.Metrics) {
 	a.metrics = m
 }
 
-func (a *GitHubAdapter) incTrackerRequest(operation, result string) {
+func (a *GitHubAdapter) incTrackerRequest(operation, outcome string) {
 	if a.metrics != nil {
-		a.metrics.IncTrackerRequests(operation, result)
+		a.metrics.IncTrackerRequests(operation, outcome)
 	}
 }
 
@@ -1031,13 +1025,13 @@ func isNotFound(err error) bool {
 func extractStringSlice(v any) []string {
 	switch s := v.(type) {
 	case []any:
-		result := make([]string, 0, len(s))
-		for _, item := range s {
-			if str, ok := item.(string); ok {
-				result = append(result, str)
+		strs := make([]string, 0, len(s))
+		for _, elem := range s {
+			if str, ok := elem.(string); ok {
+				strs = append(strs, str)
 			}
 		}
-		return result
+		return strs
 	case []string:
 		return s
 	default:

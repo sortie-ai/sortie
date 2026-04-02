@@ -2,9 +2,9 @@ package workspace
 
 import "fmt"
 
-// PathError represents a workspace operation failure. Use [errors.As]
-// to extract it from errors returned by [SanitizeKey], [ComputePath],
-// or [Ensure], then inspect Op for programmatic handling.
+// PathError represents a workspace operation failure returned by [SanitizeKey],
+// [ComputePath], or [Ensure]. Op identifies the failed operation for
+// programmatic handling; [errors.As] extracts it from wrapped errors.
 type PathError struct {
 	// Op describes the failed operation: "sanitize", "resolve",
 	// "containment", "create", "stat", or "conflict".
@@ -41,9 +41,9 @@ func (e *PathError) Unwrap() error {
 	return e.Err
 }
 
-// HookError represents a hook execution failure. Use [errors.As] to
-// extract it from errors returned by [RunHook], then inspect Op for
-// programmatic handling.
+// HookError represents a hook execution failure returned by [RunHook].
+// Op identifies the failure mode for programmatic handling; [errors.As]
+// extracts it from wrapped errors.
 type HookError struct {
 	// Op describes the failure mode: "validate", "start", "run", or
 	// "timeout".

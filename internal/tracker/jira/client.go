@@ -39,7 +39,7 @@ func newJiraClient(baseURL, email, token, userAgent string) *jiraClient {
 const maxErrorBody = 512
 
 // classifyHTTPError maps a non-success HTTP response to a
-// [*domain.TrackerError]. The method and path are included in the
+// [domain.TrackerError]. The method and path are included in the
 // error message for diagnostics. The response body is read up to
 // [maxErrorBody] bytes for the error detail.
 func classifyHTTPError(resp *http.Response, method, path string) error {

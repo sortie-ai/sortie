@@ -4,7 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 )
@@ -27,7 +27,7 @@ func (s *Store) Migrate(ctx context.Context) error {
 	for i, m := range migrations {
 		versions[i] = m.Version
 	}
-	if !sort.IntsAreSorted(versions) {
+	if !slices.IsSorted(versions) {
 		return fmt.Errorf("migrations are not sorted by version: %v", versions)
 	}
 

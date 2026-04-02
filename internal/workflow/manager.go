@@ -18,13 +18,12 @@ import (
 const debounceInterval = 50 * time.Millisecond
 
 // ValidateFunc is a caller-supplied validation function invoked after
-// [config.NewServiceConfig] succeeds and before config promotion. If it
-// returns a non-nil error, the new config is rejected and the
-// last-known-good config is retained. This allows the caller to enforce
-// domain-level invariants without leaking domain knowledge into the
-// Manager. Implementations must be safe for concurrent use and must
-// treat the supplied [config.ServiceConfig] as read-only; they must not
-// mutate the config value or any data reachable from it.
+// [config.NewServiceConfig] succeeds and before config promotion.
+//
+// If it returns a non-nil error the new config is rejected and the
+// last-known-good config is retained. Implementations must be safe for
+// concurrent use and must treat the supplied [config.ServiceConfig] as
+// read-only.
 type ValidateFunc func(config.ServiceConfig) error
 
 // ManagerOption configures optional behavior on [NewManager].
@@ -37,9 +36,9 @@ func WithValidateFunc(fn ValidateFunc) ManagerOption {
 }
 
 // Manager watches a workflow file for changes and maintains the current
-// effective configuration. Obtain the latest config and prompt template
-// via [Manager.Config] and [Manager.PromptTemplate]. Safe for concurrent
-// use.
+// effective configuration. The latest config and prompt template are
+// available via [Manager.Config] and [Manager.PromptTemplate]. Safe for
+// concurrent use.
 type Manager struct {
 	path         string
 	logger       *slog.Logger
@@ -172,7 +171,7 @@ func (m *Manager) Reload() error {
 // orchestrator's defensive re-validation before dispatch covers that gap.
 func (m *Manager) Start(ctx context.Context) error {
 	if !m.started.CompareAndSwap(false, true) {
-		return fmt.Errorf("workflow.Manager: Start called more than once")
+		return fmt.Errorf("start called more than once")
 	}
 	w, err := fsnotify.NewWatcher()
 	if err != nil {
@@ -275,9 +274,7 @@ func (m *Manager) reload() {
 	m.logger.Info("workflow reloaded", slog.String("path", m.path))
 }
 
-// loadPipeline runs the full Load → NewServiceConfig → Parse pipeline
-// and returns the results. Factored out to share between reload and
-// Reload.
+// loadPipeline runs the full Load → NewServiceConfig → Parse pipeline.
 func (m *Manager) loadPipeline() (config.ServiceConfig, *prompt.Template, error) {
 	wf, err := Load(m.path)
 	if err != nil {

@@ -121,9 +121,7 @@ type Comment struct {
 }
 
 // ToTemplateMap converts the Issue to a map[string]any with snake_case
-// keys matching the architecture specification field names. The result
-// is suitable for passing to prompt template rendering as the "issue"
-// variable.
+// keys suitable for prompt template rendering as the "issue" variable.
 func (iss *Issue) ToTemplateMap() map[string]any {
 	var priority any
 	if iss.Priority != nil {

@@ -7,8 +7,8 @@ import (
 	"errors"
 )
 
-// RunHook is not supported on non-POSIX platforms. Hook scripts
-// require "sh -c" which is inherently POSIX-scoped.
+// RunHook returns an error on non-POSIX platforms. Hook scripts require
+// "sh -c" execution, which is inherently POSIX-scoped.
 func RunHook(_ context.Context, params HookParams) (HookResult, error) {
 	return HookResult{}, &HookError{
 		Op:       "start",

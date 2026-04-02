@@ -1,6 +1,9 @@
 package github
 
-import "strings"
+import (
+	"slices"
+	"strings"
+)
 
 // extractState derives the Sortie state from GitHub issue labels by
 // scanning configured active, terminal, and handoff states in config
@@ -43,26 +46,12 @@ func extractState(labels []githubLabel, nativeState string, activeStates, termin
 	return nativeState
 }
 
-// isTerminalState returns true when the given lowercased state
-// appears in terminalStates.
 func isTerminalState(state string, terminalStates []string) bool {
-	for _, s := range terminalStates {
-		if s == state {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(terminalStates, state)
 }
 
-// isActiveState returns true when the given lowercased state appears
-// in activeStates.
 func isActiveState(state string, activeStates []string) bool {
-	for _, s := range activeStates {
-		if s == state {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(activeStates, state)
 }
 
 // findCurrentStateLabel returns the first configured state (active,

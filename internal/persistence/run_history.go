@@ -193,7 +193,7 @@ func (s *Store) QueryBudgetExhaustedIssues(ctx context.Context, candidateIDs []s
 	}
 
 	placeholders := strings.Repeat("?,", len(candidateIDs))
-	placeholders = placeholders[:len(placeholders)-1] // trim trailing comma
+	placeholders = placeholders[:len(placeholders)-1]
 
 	args := make([]any, 0, len(candidateIDs)+1)
 	for _, id := range candidateIDs {
@@ -212,16 +212,16 @@ func (s *Store) QueryBudgetExhaustedIssues(ctx context.Context, candidateIDs []s
 	}
 	defer rows.Close() //nolint:errcheck // read-only query; close error is non-actionable
 
-	result := []string{}
+	exhaustedIDs := []string{}
 	for rows.Next() {
 		var issueID string
 		if err := rows.Scan(&issueID); err != nil {
 			return nil, fmt.Errorf("scan budget exhausted issue: %w", err)
 		}
-		result = append(result, issueID)
+		exhaustedIDs = append(exhaustedIDs, issueID)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("query budget exhausted issues: %w", err)
 	}
-	return result, nil
+	return exhaustedIDs, nil
 }
