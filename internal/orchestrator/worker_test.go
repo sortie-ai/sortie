@@ -2162,6 +2162,16 @@ func TestRunWorkerAttempt_MCPConfig(t *testing.T) {
 		if _, err := os.Stat(got); err != nil {
 			t.Errorf("mcp.json not found at %q: %v", got, err)
 		}
+
+		// Confirm the gitignore was also written alongside mcp.json.
+		gitignorePath := filepath.Join(filepath.Dir(got), ".gitignore")
+		giData, err := os.ReadFile(gitignorePath)
+		if err != nil {
+			t.Fatalf(".sortie/.gitignore not found: %v", err)
+		}
+		if string(giData) != "*\n" {
+			t.Errorf(".sortie/.gitignore = %q, want %q", string(giData), "*\n")
+		}
 	})
 
 	// Phase 1.5 error path: GenerateMCPConfig failure must be fatal to the attempt.

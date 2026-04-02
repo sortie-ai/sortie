@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -382,6 +383,71 @@ func TestGenerateMCPConfig(t *testing.T) {
 		// Overwritten keys do not inflate the map; count stays at 5.
 		if len(env) != 5 {
 			t.Errorf("env key count = %d, want 5: %v", len(env), env)
+		}
+	})
+
+	t.Run("gitignore_created_in_sortie_dir", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+
+		_, err := GenerateMCPConfig(mcpParams(dir))
+		if err != nil {
+			t.Fatalf("GenerateMCPConfig: %v", err)
+		}
+
+		path := filepath.Join(dir, ".sortie", ".gitignore")
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf(".sortie/.gitignore not found: %v", err)
+		}
+		if got := string(data); got != "*\n" {
+			t.Errorf(".sortie/.gitignore content = %q, want %q", got, "*\n")
+		}
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatalf("os.Stat(.sortie/.gitignore): %v", err)
+		}
+		if got := info.Mode().Perm(); got != 0o644 {
+			t.Errorf(".sortie/.gitignore permissions = %04o, want %04o", got, 0o644)
+		}
+	})
+
+	t.Run("gitignore_idempotent_on_repeated_calls", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+
+		if _, err := GenerateMCPConfig(mcpParams(dir)); err != nil {
+			t.Fatalf("GenerateMCPConfig (first call): %v", err)
+		}
+		if _, err := GenerateMCPConfig(mcpParams(dir)); err != nil {
+			t.Fatalf("GenerateMCPConfig (second call): %v", err)
+		}
+
+		data, err := os.ReadFile(filepath.Join(dir, ".sortie", ".gitignore"))
+		if err != nil {
+			t.Fatalf(".sortie/.gitignore not found after second call: %v", err)
+		}
+		if got := string(data); got != "*\n" {
+			t.Errorf(".sortie/.gitignore content after second call = %q, want %q", got, "*\n")
+		}
+	})
+
+	t.Run("gitignore_write_failure_propagates_error", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+
+		// Place a directory at the gitignore path so os.WriteFile fails.
+		blockPath := filepath.Join(dir, ".sortie", ".gitignore")
+		if err := os.MkdirAll(blockPath, 0o750); err != nil {
+			t.Fatalf("MkdirAll (blocker): %v", err)
+		}
+
+		_, err := GenerateMCPConfig(mcpParams(dir))
+		if err == nil {
+			t.Fatal("GenerateMCPConfig() = nil, want error when .gitignore path is a directory")
+		}
+		if !strings.Contains(err.Error(), "writing .sortie gitignore") {
+			t.Errorf("error = %q, want to contain %q", err.Error(), "writing .sortie gitignore")
 		}
 	})
 }
