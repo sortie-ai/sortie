@@ -64,7 +64,7 @@ Delegate to the **Reviewer** subagent. Your prompt to the Reviewer must include:
 2. The instruction to ground the review in project context by reading `AGENTS.md`, `docs/architecture.md`, and `docs/decisions/`
 3. The instruction to study codebase structure and existing patterns before evaluating
 4. The instruction to classify each finding as **Critical**, **Significant**, or **Observation**
-5. The output path: `.reviews/Review-{SPEC_NAME}.md` (strip the `Spec-` prefix from the spec filename)
+5. The output path: `.reviews/Review-{TASK_NAME}.md`
 6. The instruction to apply review standards from `.github/instructions/code-review.instructions.md`
 7. The instruction to **report the exact file path** of the created review
 
@@ -98,18 +98,22 @@ Critical findings represent safety violations, data loss risks, or fundamental c
 2. After revision, delegate a **focused re-review** to the Reviewer. The re-review prompt must include:
    - The revised spec file path
    - The original review file path (for comparison)
-   - The instruction: _"Re-review the specification. Focus on whether the previously identified Critical findings have been resolved. Classify any remaining issues. Write the re-review to `.reviews/Review-{SPEC_NAME}-r2.md`."_
+   - The instruction: _"Re-review the specification. Focus on whether the previously identified Critical findings have been resolved. Classify any remaining issues. Write the re-review to `.reviews/Review-{TASK_NAME}-r2.md`."_
 3. Read the re-review. Count remaining Critical findings.
 
 **If zero Critical findings remain after Cycle 1** — proceed to Phase 4.
 
 **If Critical findings persist, enter Cycle 2:**
-1. Delegate a second revision to the Architect. The prompt must include both the spec and the re-review (`-r2`) file path.
-2. After the second revision, count Critical findings from the `-r2` review that the Architect reported addressing.
+1. Delegate a second revision to the Architect. The prompt must include both the spec and the `-r2` re-review file path.
+2. After revision, delegate a **second focused re-review** to the Reviewer. The re-review prompt must include:
+   - The twice-revised spec file path
+   - The `-r2` review file path (showing which Critical findings remained after Cycle 1)
+   - The instruction: _"Re-review the specification. Focus on whether the remaining Critical findings from the `-r2` review have been resolved. Classify any remaining issues. Write the re-review to `.reviews/Review-{TASK_NAME}-r3.md`."_
+3. Read the `-r3` re-review. Count remaining Critical findings.
 
 **After Cycle 2, unconditionally proceed to Phase 4 or halt:**
-- If the Architect confirmed all Critical findings were addressed — proceed to Phase 4.
-- If the Architect could not resolve one or more Critical findings (reported them as unresolvable or out of scope) — **halt the pipeline**. Do not create an implementation plan. Produce the Halted summary (see Phase 5) and recommend the **Refine Specification** handoff.
+- If zero Critical findings remain in the `-r3` re-review — proceed to Phase 4.
+- If one or more Critical findings remain — **halt the pipeline**. Do not create an implementation plan. Produce the Halted summary (see Phase 5) and recommend the **Refine Specification** handoff.
 
 **Hard ceiling: 2 revision cycles.** This prevents infinite loops while giving Critical defects a fair chance at resolution.
 
@@ -134,11 +138,11 @@ After all phases complete, produce a structured summary:
 ### Artifacts
 - **Spec**: [path]
 - **Review**: [path]
-- **Re-review**: [path, if performed]
+- **Re-review**: [path(s), if performed]
 - **Plan**: [path]
 
 ### Review Outcome
-- [Number] Critical / [Number] Significant / [Number] Observations
+- [Number] Critical / [Number] Significant / [Number] Observations (from latest review artifact)
 - Revision cycles: [0 / 1 / 2]
 - [If revised: one-line summary of what changed per cycle]
 
@@ -157,14 +161,14 @@ If the pipeline was halted due to unresolved Critical findings, use this summary
 ### Artifacts
 - **Spec**: [path]
 - **Review**: [path]
-- **Re-review**: [path]
+- **Re-review**: [paths]
 - **Plan**: not created
 
 ### Reason
 Critical findings could not be resolved after 2 revision cycles.
 
 ### Unresolved Critical Findings
-- [List each unresolved Critical finding with a one-line description]
+- [List each unresolved Critical finding from the `-r3` review]
 
 ### Next Steps
 Use the **Refine Specification** handoff to address the unresolved findings manually, or rethink the approach.
