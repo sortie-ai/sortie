@@ -67,11 +67,15 @@ added or renamed between sessions.
 
 ## Milestone conventions
 
-Every issue must belong to a milestone — it is the primary organizational
-axis. The user may refer to milestones by shorthand ("M10", "milestone 10").
-Match the shorthand against the full titles from the taxonomy output.
+Milestones are the primary organizational axis. The user may refer to
+milestones by shorthand ("M10", "milestone 10"). Match the shorthand against
+the full titles from the taxonomy output.
 
-If the user omits the milestone, ask. Do not guess.
+If the user specifies a milestone, use the exact full title from taxonomy.
+If the user omits the milestone, try to pick the best-fitting open milestone
+based on the issue's theme. If no milestone fits well, create the issue
+**without** a milestone — omit `--milestone` entirely. Do not block creation
+or ask the user to pick one.
 
 ## Before creating an issue
 
@@ -311,7 +315,7 @@ Before executing `gh issue create`, verify:
 - [ ] Title: imperative, under 80 chars, no trailing period
 - [ ] Issue type set via GraphQL `updateIssue` with `node_id` from taxonomy
 - [ ] At least one `area:` label from taxonomy
-- [ ] Milestone set using full title from taxonomy
+- [ ] Milestone set using full title from taxonomy, or omitted if no milestone fits
 - [ ] Body matches the template for its issue type
 - [ ] Verification criteria present and testable
 - [ ] No private information (usernames, keys, internal URLs)
@@ -324,7 +328,7 @@ Before executing `gh issue create`, verify:
 | Error | Recovery |
 |---|---|
 | Issue type not found | Re-run taxonomy script; use exact `node_id` from output |
-| Milestone not found | Re-run taxonomy script; use exact title from output |
+| Milestone not found | Re-run taxonomy script; if still no match, create issue without `--milestone` |
 | Label not found | Re-run taxonomy script; label may have been renamed |
 | Project not found | `gh project list --owner sortie-ai` to verify name |
 | HTTP 403 | `gh auth refresh -s project` to add project scope |
