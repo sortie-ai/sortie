@@ -16,7 +16,6 @@ tools:
   - read
   - search
   - todo
-  - sortie-kb/*
   - "com.atlassian/atlassian-mcp-server/getJiraIssue"
 agents:
   - Coder

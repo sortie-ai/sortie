@@ -10,7 +10,6 @@ tools:
   - read
   - edit
   - search
-  - sortie-kb/*
 handoffs:
   - label: Start Implementation
     agent: Coder

@@ -13,7 +13,6 @@ tools:
   - search
   - web
   - context7/*
-  - sortie-kb/*
   -  "com.atlassian/atlassian-mcp-server/fetchAtlassian"
   -  "com.atlassian/atlassian-mcp-server/getConfluencePage"
   -  "com.atlassian/atlassian-mcp-server/getConfluencePageDescendants"
