@@ -300,6 +300,40 @@ func TestReadStatusFile_SymlinkToFileInsideWorkspace(t *testing.T) {
 	}
 }
 
+func TestReadStatusFile_DotSortieLstatErrorLogsWarn(t *testing.T) {
+	t.Parallel()
+
+	if os.Getuid() == 0 {
+		t.Skip("skipping: test requires non-root to enforce directory permissions")
+	}
+
+	wsPath := t.TempDir()
+	writeStatusFile(t, wsPath, []byte("blocked\n"))
+	dotSortiePath := filepath.Join(wsPath, ".sortie")
+	// Removing all permissions from .sortie prevents os.Lstat from traversing
+	// into it, causing isSymlink(".sortie/status") to fail with EACCES.
+	if err := os.Chmod(dotSortiePath, 0o000); err != nil {
+		t.Fatalf("chmod: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = os.Chmod(dotSortiePath, 0o755)
+	})
+
+	var logBuf bytes.Buffer
+	got := ReadStatusFile(wsPath, captureLogger(&logBuf))
+
+	if got != StatusNone {
+		t.Errorf("ReadStatusFile() = %q, want %q", got, StatusNone)
+	}
+	log := logBuf.String()
+	if !strings.Contains(log, "failed to stat") {
+		t.Errorf("log = %q, want to contain %q", log, "failed to stat")
+	}
+	if !strings.Contains(log, "level=WARN") {
+		t.Errorf("log = %q, want level=WARN", log)
+	}
+}
+
 // --- TestIsRecognized ---
 
 func TestStatusSignal_IsRecognized(t *testing.T) {
@@ -490,6 +524,37 @@ func TestCleanupStatusFile(t *testing.T) {
 		}
 		if !strings.Contains(logBuf.String(), "symlink detected at .sortie directory") {
 			t.Errorf("log = %q, want to contain %q", logBuf.String(), "symlink detected at .sortie directory")
+		}
+	})
+
+	t.Run("remove fails logs warn", func(t *testing.T) {
+		t.Parallel()
+
+		if os.Getuid() == 0 {
+			t.Skip("skipping: test requires non-root to enforce directory permissions")
+		}
+
+		wsPath := t.TempDir()
+		writeStatusFile(t, wsPath, []byte("blocked\n"))
+		dotSortiePath := filepath.Join(wsPath, ".sortie")
+		// Remove write permission from .sortie so os.Remove on the status
+		// file fails with EACCES; execute is retained so Lstat can traverse.
+		if err := os.Chmod(dotSortiePath, 0o555); err != nil {
+			t.Fatalf("chmod: %v", err)
+		}
+		t.Cleanup(func() {
+			_ = os.Chmod(dotSortiePath, 0o755)
+		})
+
+		var logBuf bytes.Buffer
+		CleanupStatusFile(wsPath, captureLogger(&logBuf))
+
+		log := logBuf.String()
+		if !strings.Contains(log, "status file cleanup failed") {
+			t.Errorf("log = %q, want to contain %q", log, "status file cleanup failed")
+		}
+		if !strings.Contains(log, "level=WARN") {
+			t.Errorf("log = %q, want level=WARN", log)
 		}
 	})
 }
