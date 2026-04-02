@@ -54,6 +54,31 @@ func Open(ctx context.Context, path string) (*Store, error) {
 	return &Store{db: db}, nil
 }
 
+// OpenReadOnly opens an existing SQLite database at the given path in
+// read-only mode by appending ?mode=ro to the DSN. It does not set WAL
+// journal mode or run migrations — the database is assumed to be already
+// initialized by the orchestrator's [Open] + [Store.Migrate] sequence.
+// Write operations on the returned [Store] will fail at the driver level
+// with an SQLITE_READONLY error.
+//
+// The caller must call [Store.Close] when the store is no longer needed.
+func OpenReadOnly(ctx context.Context, path string) (*Store, error) {
+	dsn := "file:" + path + "?mode=ro"
+	db, err := sql.Open("sqlite", dsn)
+	if err != nil {
+		return nil, fmt.Errorf("open sqlite read-only %q: %w", path, err)
+	}
+
+	db.SetMaxOpenConns(1)
+
+	if err := db.PingContext(ctx); err != nil {
+		db.Close() //nolint:errcheck,gosec // best-effort cleanup on open failure
+		return nil, fmt.Errorf("ping sqlite read-only %q: %w", path, err)
+	}
+
+	return &Store{db: db}, nil
+}
+
 // Close closes the underlying database connection.
 func (s *Store) Close() error {
 	return s.db.Close()
