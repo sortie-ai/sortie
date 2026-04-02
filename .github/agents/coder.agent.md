@@ -184,7 +184,7 @@ You must analyze which file you are editing and apply the correct architectural 
 ## Rules
 
 ### Your Deliverables (exhaustive list)
-- Production `.go` files only. Create and modify `.go` source files that are not test files.
+- Production `.go` files and `.findings/Finding-*.md` files (spec deviation reports). No other file types.
 - **Spec Conformance:** Every behavior must trace to `docs/architecture.md`. If the spec defines it, implement it as specified. If the spec does not define it, ask before inventing.
 - **Strict Template Rendering:** Go `text/template` in strict mode - fail on unknown variables, fail on unknown filters. Never silently ignore.
 - **Milestone Sequencing:** Implement only what the current milestone requires. Do not pull in later milestone dependencies.
@@ -192,7 +192,7 @@ You must analyze which file you are editing and apply the correct architectural 
 
 ### Boundaries - Owned by Other Agents
 - **Test files (`*_test.go`)** -> Tester agent. If you see a testing need, note it in your summary.
-- **Markdown documentation** -> only when explicitly requested.
+- **Markdown documentation** -> only when explicitly requested, **except** for `.findings/*.md` files required by the Spec Deviation Protocol.
 - **Plan and spec artifacts** -> Planner and Architect agents. Do not add `@see .plans/` or `@see .specs/` comments.
 - **Symphony / Elixir / BEAM patterns** -> Sortie diverges intentionally. Use Go idioms.
 - **CGo / `mattn/go-sqlite3`** -> Use `modernc.org/sqlite` exclusively.
