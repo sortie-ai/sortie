@@ -42,8 +42,9 @@ func (s StatusSignal) IsRecognized() bool {
 // headroom while bounding memory usage.
 const statusFileMaxBytes = 1024
 
-// isSymlink returns true if the file at path is a symbolic link.
-// Returns false when the path does not exist or Lstat fails.
+// isSymlink reports whether the file at path is a symbolic link.
+// The caller must handle the returned error; non-existence is
+// reported as a non-nil error wrapping [fs.ErrNotExist].
 func isSymlink(path string) (bool, error) {
 	fi, err := os.Lstat(path)
 	if err != nil {
@@ -59,7 +60,12 @@ func rejectStatusSymlinks(workspacePath string, logger *slog.Logger) bool {
 
 	symlink, err := isSymlink(dotSortiePath)
 	if err != nil {
-		// If .sortie doesn't exist, the status file cannot exist either.
+		if !errors.Is(err, fs.ErrNotExist) {
+			logger.Warn("failed to stat .sortie directory",
+				slog.String("workspace", workspacePath),
+				slog.Any("error", err),
+			)
+		}
 		return !errors.Is(err, fs.ErrNotExist)
 	}
 	if symlink {
@@ -72,6 +78,12 @@ func rejectStatusSymlinks(workspacePath string, logger *slog.Logger) bool {
 	statusPath := filepath.Join(dotSortiePath, "status")
 	symlink, err = isSymlink(statusPath)
 	if err != nil {
+		if !errors.Is(err, fs.ErrNotExist) {
+			logger.Warn("failed to stat .sortie/status",
+				slog.String("workspace", workspacePath),
+				slog.Any("error", err),
+			)
+		}
 		return !errors.Is(err, fs.ErrNotExist)
 	}
 	if symlink {
@@ -161,7 +173,7 @@ func CleanupStatusFile(workspacePath string, logger *slog.Logger) {
 
 	statusPath := filepath.Join(workspacePath, ".sortie", "status")
 	if err := os.Remove(statusPath); err != nil && !errors.Is(err, fs.ErrNotExist) {
-		logger.Debug("status file cleanup failed",
+		logger.Warn("status file cleanup failed",
 			slog.String("workspace", workspacePath),
 			slog.Any("error", err),
 		)
