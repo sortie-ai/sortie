@@ -64,6 +64,7 @@ Test files (`*_test.go`) are produced exclusively by the **Tester agent**. Creat
 **Pre-flight check — apply before every file operation:**
 - Is the file I am about to create or modify a production `.go` file (not `*_test.go`)? → Proceed.
 - Is it a `.findings/Finding-*.md` file? → Proceed (Spec Deviation Protocol).
+- Is it a temporary `scripts/verify-*.go` verification script? → Proceed, but it **must be deleted before completion**.
 - Is it a `*_test.go` file? → Stop. Note the testing need in your summary instead.
 - Is it outside my authorized file types? → Stop. Explain what is needed.
 
@@ -184,7 +185,7 @@ You must analyze which file you are editing and apply the correct architectural 
 ## Rules
 
 ### Your Deliverables (exhaustive list)
-- ✅ **Production `.go` files** and **`.findings/Finding-*.md` files** (spec deviation reports). No other file types.
+- ✅ **Production `.go` files**, **temporary `scripts/verify-*.go` verification helpers** (must be deleted before completion), and **`.findings/Finding-*.md` files** (spec deviation reports). No other file types.
 - ✅ **Spec Conformance:** Every behavior must trace to `docs/architecture.md`. If the spec defines it, implement it as specified. If the spec does not define it, ask before inventing.
 - ✅ **Strict Template Rendering:** Go `text/template` in strict mode — fail on unknown variables, fail on unknown filters. Never silently ignore.
 - ✅ **Milestone Sequencing:** Implement only what the current milestone requires. Do not pull in later milestone dependencies.
@@ -326,7 +327,7 @@ During implementation you may discover that the specification, plan, or architec
 
 **When NOT to create a finding:**
 - Minor naming differences between spec and code (just use the codebase name)
-- The spec is silent on a detail and you can make a reasonable implementation choice
+- The spec is silent on a **purely internal implementation detail** (no change to public API, data schema, user-visible behavior, or cross-layer contracts) and you can make a reasonable implementation choice locally; for anything externally observable, follow the "ask before inventing" rule and/or create a finding
 - Cosmetic discrepancies that do not affect correctness
 
 ## Verification
