@@ -1,47 +1,104 @@
-.POSIX:
+# Makefile — build, test, and quality targets for Sortie.
+#
+# Run "make" or "make help" to see all targets and configurable variables.
+# Requires GNU make >= 3.81.
 
-MODULE   := github.com/sortie-ai/sortie
-VERSION  ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
-LDFLAGS  := -ldflags "-s -w -X main.Version=$(VERSION)"
+include default.mk
 
-GO           := go
-LINT         := golangci-lint
-COVERAGE_OUT  ?= coverage.out
-COVERAGE_HTML  = $(COVERAGE_OUT:.out=.html)
+# ── Building ──────────────────────────────────────────────────────────────────
 
-.PHONY: fmt lint style test test-coverage test-coverage-html build clean
+##@ Building
 
-## fmt: format all Go source files
-fmt:
-	$(LINT) fmt ./...
+.PHONY: build
+build: ## Compile the sortie binary into the repo root
+	$(GO) build $(BUILDFLAGS) -ldflags "$(LDFLAGS)" -o $(BIN) ./cmd/sortie
 
-## lint: run golangci-lint on all packages
-lint:
-	$(LINT) run ./...
+.PHONY: clean
+clean: ## Remove the binary and all coverage files
+	$(RM) $(BIN) $(COVERAGE_OUT) $(COVERAGE_HTML)
 
-## style: enforce style guidelines via Copilot CLI
-##   FLAGS: guideline selection, e.g. FLAGS="--codestyle --logging"
-##   FILE:  single file target, e.g. FILE=internal/domain/issue.go
-style:
-	sh scripts/enforce-style.sh $(FLAGS) $(FILE)
+# ── Testing ───────────────────────────────────────────────────────────────────
 
-## test: run tests (use PKG=./path/to/pkg and/or RUN=TestName to filter)
-test:
-	$(GO) test -race -count=1 $(if $(PKG),$(PKG),./...) $(if $(RUN),-run $(RUN),)
+##@ Testing
 
-## test-coverage: run tests with coverage profile and print coverage percentage
-test-coverage:
-	$(GO) test -race -count=1 -coverprofile=$(COVERAGE_OUT) $(if $(PKG),$(PKG),./...) $(if $(RUN),-run $(RUN),)
+.PHONY: test
+test: ## Run tests with the race detector (PKG=./path/to/pkg  RUN=TestFoo)
+	$(GO) test -race -count=1 \
+		$(if $(PKG),$(PKG),./...) \
+		$(if $(RUN),-run $(RUN),)
+
+.PHONY: test-coverage
+test-coverage: ## Run tests with coverage and print per-package percentages
+	$(GO) test -race -count=1 -covermode=atomic -coverprofile=$(COVERAGE_OUT) \
+		$(if $(PKG),$(PKG),./...) \
+		$(if $(RUN),-run $(RUN),)
 	$(GO) tool cover -func=$(COVERAGE_OUT)
 
-## test-coverage-html: generate HTML coverage report
-test-coverage-html: test-coverage
+.PHONY: test-coverage-html
+test-coverage-html: test-coverage ## Generate an HTML coverage report
 	$(GO) tool cover -html=$(COVERAGE_OUT) -o $(COVERAGE_HTML)
+	@printf '$(GREEN)Coverage report written to $(BOLD)$(COVERAGE_HTML)$(RESET)\n'
 
-## build: compile the sortie binary
-build:
-	$(GO) build $(LDFLAGS) -o sortie ./cmd/sortie
+# ── Quality ───────────────────────────────────────────────────────────────────
 
-## clean: remove build artifacts
-clean:
-	rm -f sortie $(COVERAGE_OUT) $(COVERAGE_HTML)
+##@ Quality
+
+.PHONY: fmt
+fmt: ## Format all Go source files
+	$(LINT) fmt ./...
+
+.PHONY: vet
+vet: ## Run go vet on all packages
+	$(GO) vet ./...
+
+.PHONY: lint
+lint: ## Run golangci-lint on all packages
+	$(LINT) run ./...
+
+.PHONY: tidy
+tidy: ## Tidy go.sum and prune stale entries from go.mod
+	$(GO) mod tidy
+
+.PHONY: style
+style: ## Enforce style guidelines via Copilot CLI  (FLAGS=…  FILE=path)
+	sh scripts/enforce-style.sh $(FLAGS) $(if $(FILE),'$(FILE)',)
+
+# ── Utilities ─────────────────────────────────────────────────────────────────
+
+##@ Utilities
+
+.PHONY: version
+version: ## Print the current version string
+	@printf '$(BOLD)$(BIN)$(RESET) version $(CYAN)$(VERSION)$(RESET)\n'
+
+.PHONY: help
+help: ## Show this help message and exit
+ifdef _COLORS_OK
+	@printf '\n'
+	@printf '$(CYAN)  ███████╗ ██████╗ ██████╗ ████████╗██╗███████╗$(RESET)\n'
+	@printf '$(CYAN)  ██╔════╝██╔═══██╗██╔══██╗╚══██╔══╝██║██╔════╝$(RESET)\n'
+	@printf '$(CYAN)  ███████╗██║   ██║██████╔╝   ██║   ██║█████╗  $(RESET)\n'
+	@printf '$(CYAN)  ╚════██║██║   ██║██╔══██╗   ██║   ██║██╔══╝  $(RESET)\n'
+	@printf '$(CYAN)  ███████║╚██████╔╝██║  ██║   ██║   ██║███████╗$(RESET)\n'
+	@printf '$(CYAN)  ╚══════╝ ╚═════╝ ╚═╝  ╚═╝   ╚═╝   ╚═╝╚══════╝$(RESET)\n'
+else
+	@printf '\n  Sortie\n'
+endif
+	@printf '  $(DIM)Turns issue tickets into autonomous sessions$(RESET)\n\n'
+	@printf '$(BOLD)Usage$(RESET)\n'
+	@printf '  make $(CYAN)<target>$(RESET) [$(CYAN)VAR=value$(RESET) ...]\n'
+	@awk -v bold='$(BOLD)' -v cmd='$(BOLD)$(YELLOW)' -v reset='$(RESET)' \
+		'BEGIN { FS = ":.*##" } \
+		/^##@/  { printf "\n%s%s%s\n", bold, substr($$0, 5), reset } \
+		/^[a-zA-Z0-9_][a-zA-Z0-9_-]*:.*## / \
+		        { printf "  %s%-24s%s %s\n", cmd, $$1, reset, $$2 }' \
+		$(MAKEFILE_LIST)
+	@printf '\n$(BOLD)Variables$(RESET)\n'
+	@printf '  $(CYAN)%-24s$(RESET) %s\n' \
+		'PKG'      ' Package filter for test targets (default: ./...)' \
+		'RUN'      ' Test name filter, passed to -run' \
+		'FLAGS'    ' Extra flags for the style target' \
+		'FILE'     ' Single file target for style' \
+		'VERSION'  ' Override version string (default: git describe)' \
+		'NO_COLOR' ' Disable color output (https://no-color.org/)'
+	@printf '\n'
