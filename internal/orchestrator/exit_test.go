@@ -2390,6 +2390,13 @@ func TestHandleWorkerExit_SoftStop(t *testing.T) {
 			t.Error("pre-existing RetryAttempts entry not removed by CancelRetry on soft-stop")
 		}
 
+		// CancelRetry must have stopped the timer, not only deleted the map entry.
+		// Stop() returns false when the timer was already stopped; true means it
+		// was still live — a bug where CancelRetry skipped the Stop() call.
+		if preexisting.TimerHandle.Stop() {
+			t.Error("timer was not stopped by CancelRetry: Stop() returned true (timer was still live)")
+		}
+
 		// Claim released and no new retry entry persisted.
 		if _, ok := state.Claimed["SS-6"]; ok {
 			t.Error("claim preserved after soft-stop with pre-existing retry, want released")
