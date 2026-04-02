@@ -186,6 +186,9 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 	state.AgentTotals.SecondsRunning += elapsed
 
 	exitType := mapExitKindToExitType(workerResult.ExitKind)
+	if workerResult.SoftStop {
+		exitType = exitTypeSoftStop
+	}
 	metrics.IncWorkerExits(exitType)
 	metrics.ObserveWorkerDuration(exitType, elapsed)
 	metrics.AddAgentRuntime(elapsed)
@@ -271,6 +274,16 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 		issueIsActive := len(params.ActiveStates) == 0 || isActiveState(entry.Issue.State, params.ActiveStates)
 
 		switch {
+		case workerResult.SoftStop:
+			// Agent signaled a recognized A2O status (blocked,
+			// needs-human-review). Suppress continuation retry and
+			// release the claim immediately.
+			log.Info("soft stop: suppressing continuation retry",
+				slog.String("reason", workerResult.SoftStopReason),
+			)
+			CancelRetry(state, workerResult.IssueID)
+			delete(state.Claimed, workerResult.IssueID)
+
 		case params.HandoffState != "" && issueIsActive:
 			// Handoff: issue is active and handoff_state is configured.
 			// Guard against nil TrackerAdapter (misconfiguration or test
@@ -421,7 +434,11 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 	switch workerResult.ExitKind {
 	case WorkerExitNormal:
 		if params.CommentsConfig.OnCompletion {
-			commentText = buildCompletionComment(sessionID, runDuration, workerResult.TurnsCompleted, retryScheduled)
+			if workerResult.SoftStop {
+				commentText = buildSoftStopComment(sessionID, runDuration, workerResult.TurnsCompleted, workerResult.SoftStopReason)
+			} else {
+				commentText = buildCompletionComment(sessionID, runDuration, workerResult.TurnsCompleted, retryScheduled)
+			}
 			lifecycle = "completion"
 		}
 	case WorkerExitCancelled:
@@ -580,4 +597,14 @@ func buildFailureComment(sessionID string, elapsed time.Duration, exitErr error,
 	}
 	return fmt.Sprintf("Sortie session failed.\nSession: %s\nDuration: %s\nError: %s\n%s",
 		sessionID, elapsed.Truncate(time.Second).String(), errStr, retryLine)
+}
+
+// buildSoftStopComment returns the tracker comment text for a worker
+// exit triggered by a recognized A2O status signal.
+func buildSoftStopComment(sessionID string, elapsed time.Duration, turnsCompleted int, reason string) string {
+	if sessionID == "" {
+		sessionID = "unknown"
+	}
+	return fmt.Sprintf("Sortie session completed (agent signaled: %s).\nSession: %s\nDuration: %s\nTurns: %d",
+		reason, sessionID, elapsed.Truncate(time.Second).String(), turnsCompleted)
 }
