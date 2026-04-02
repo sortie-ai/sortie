@@ -11,6 +11,10 @@ Your task is to transform the provided feature request into a technical specific
 
 Before writing anything, read the relevant sections of [architecture.md](../../docs/architecture.md) — this is the authoritative specification for all domain models, state machines, algorithms, and validation rules. Your spec must conform to it; do not invent behavior that contradicts the architecture document.
 
-Apply coding standards from: [Go documentation guidelines](../instructions/go-documentation.instructions.md)
+You MUST adhere to the following constraints:
+
+- [Go Code Style](../instructions/go-codestyle.instructions.md)
+- [Go Structured Logging](../instructions/go-logging.instructions.md)
+- [Go Documentation Guidelines](../instructions/go-documentation.instructions.md)
 
 ${input:request:Describe the feature or problem to specify}

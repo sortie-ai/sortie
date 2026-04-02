@@ -133,13 +133,12 @@ jobs:
     env:
       SORTIE_GITHUB_TEST: "1"
       SORTIE_GITHUB_TOKEN: ${{ secrets.SORTIE_GITHUB_TOKEN }}
-      SORTIE_GITHUB_PROJECT: ${{ secrets.SORTIE_GITHUB_PROJECT }}
+      SORTIE_GITHUB_PROJECT: sortie-ai/sortie-test
     steps:
       - name: Verify GitHub secrets are configured
         run: |
           missing=()
           [ -z "$SORTIE_GITHUB_TOKEN" ]   && missing+=("SORTIE_GITHUB_TOKEN")
-          [ -z "$SORTIE_GITHUB_PROJECT" ] && missing+=("SORTIE_GITHUB_PROJECT")
           if [ ${#missing[@]} -ne 0 ]; then
             echo "::error::Missing required secrets: ${missing[*]}"
             echo "Configure these in Settings → Secrets and variables → Actions"
