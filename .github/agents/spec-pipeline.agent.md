@@ -72,18 +72,46 @@ After the Reviewer subagent returns, search `.reviews/` for the created review. 
 
 ### Phase 3: Revise if Needed
 
-Read the review from Phase 2. Determine whether it contains **Critical risks** or **Significant concerns**.
+Read the review from Phase 2. Count **Critical** and **Significant** findings separately.
 
-**If Critical or Significant findings exist**, delegate revision to the **Architect** subagent. Your prompt must include:
+**Decision tree:**
+
+1. **No Critical and no Significant findings** — skip revision, proceed to Phase 4. Log this decision.
+2. **Significant findings only (zero Critical)** — delegate ONE revision to the Architect (see revision prompt below), then proceed to Phase 4. Do not re-review.
+3. **Any Critical findings present** — enter the Critical Resolution Loop (see below).
+
+#### Revision prompt
+
+Every revision delegation to the **Architect** must include:
 
 1. The spec file path
 2. The review file path
 3. The instruction: _"Read the review and revise the spec to address all Critical and Significant findings. Preserve the overall spec structure — make surgical revisions, do not rewrite sections that received no findings."_
 4. The instruction to report what was changed
 
-**If no Critical or Significant findings exist**, skip this phase and proceed directly to Phase 4. Log this decision.
+#### Critical Resolution Loop
 
-**Maximum 1 revision cycle.** Do not loop between review and revision. After one revision, move to planning regardless of remaining concerns. Note any unresolved Observations in the final summary.
+Critical findings represent safety violations, data loss risks, or fundamental correctness defects. They must not propagate into an implementation plan.
+
+**Cycle 1:**
+1. Delegate revision to the Architect with the revision prompt above.
+2. After revision, delegate a **focused re-review** to the Reviewer. The re-review prompt must include:
+   - The revised spec file path
+   - The original review file path (for comparison)
+   - The instruction: _"Re-review the specification. Focus on whether the previously identified Critical findings have been resolved. Classify any remaining issues. Write the re-review to `.reviews/Review-{SPEC_NAME}-r2.md`."_
+3. Read the re-review. Count remaining Critical findings.
+
+**If zero Critical findings remain after Cycle 1** — proceed to Phase 4.
+
+**If Critical findings persist, enter Cycle 2:**
+1. Delegate a second revision to the Architect. The prompt must include both the spec and the re-review (`-r2`) file path.
+2. After the second revision, count Critical findings from the `-r2` review that the Architect reported addressing.
+
+**After Cycle 2, unconditionally proceed to Phase 4 or halt:**
+- If the Architect confirmed all Critical findings were addressed — proceed to Phase 4.
+- If the Architect could not resolve one or more Critical findings (reported them as unresolvable or out of scope) — **halt the pipeline**. Do not create an implementation plan. Produce the Halted summary (see Phase 5) and recommend the **Refine Specification** handoff.
+
+**Hard ceiling: 2 revision cycles.** This prevents infinite loops while giving Critical defects a fair chance at resolution.
 
 ### Phase 4: Create Implementation Plan
 
@@ -106,12 +134,13 @@ After all phases complete, produce a structured summary:
 ### Artifacts
 - **Spec**: [path]
 - **Review**: [path]
+- **Re-review**: [path, if performed]
 - **Plan**: [path]
 
 ### Review Outcome
 - [Number] Critical / [Number] Significant / [Number] Observations
-- Revision: [performed / not needed]
-- [If revised: one-line summary of what changed]
+- Revision cycles: [0 / 1 / 2]
+- [If revised: one-line summary of what changed per cycle]
 
 ### Unresolved Observations
 - [List any Observations from the review that were not addressed, if any]
@@ -120,12 +149,33 @@ After all phases complete, produce a structured summary:
 Use the **Start Implementation** handoff to begin coding, or **Refine Specification** to iterate further.
 ```
 
+If the pipeline was halted due to unresolved Critical findings, use this summary instead:
+
+```
+## Specification Pipeline Halted
+
+### Artifacts
+- **Spec**: [path]
+- **Review**: [path]
+- **Re-review**: [path]
+- **Plan**: not created
+
+### Reason
+Critical findings could not be resolved after 2 revision cycles.
+
+### Unresolved Critical Findings
+- [List each unresolved Critical finding with a one-line description]
+
+### Next Steps
+Use the **Refine Specification** handoff to address the unresolved findings manually, or rethink the approach.
+```
+
 ## Rules
 
-1. **Create the todo list first.** Four tasks: Specify, Review, Revise (conditional), Plan. Mark each in-progress before starting and completed immediately after.
+1. **Create the todo list first.** Tasks: Specify, Review, Revise (conditional), Re-review (conditional), Plan. Mark each in-progress before starting and completed immediately after.
 2. **Pass the verbatim feature request.** Every subagent prompt must include the user's original request so the subagent has full context.
 3. **Verify artifacts exist.** After each subagent completes, confirm the expected file was created. If not, retry once with explicit file path instructions. If the second attempt also fails, report the failure and stop the pipeline.
 4. **Never write files.** You are the coordinator. Specs, reviews, and plans are written exclusively by subagents.
 5. **Never skip Phase 2.** Every specification gets reviewed, regardless of complexity.
-6. **One revision max.** After one review-revise cycle, proceed to planning. This prevents infinite loops.
+6. **Revision depth is severity-gated.** Significant-only findings get 1 revision, no re-review. Critical findings get up to 2 revision cycles with re-review after each. Unresolvable Critical findings halt the pipeline. This balances thoroughness against loop prevention.
 7. **Derive TASK_NAME consistently.** Use a concise, kebab-case name derived from the feature request. Use the same name across all artifact paths for traceability (e.g., `Spec-Template-Static-Analysis.md`, `Review-Template-Static-Analysis.md`, `Plan-Template-Static-Analysis.md`).
