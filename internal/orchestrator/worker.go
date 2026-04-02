@@ -616,6 +616,7 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 			logger.Info("agent signaled status, exiting worker",
 				slog.String("status", string(statusSignal)),
 				slog.Int("turns_completed", turnsCompleted),
+				slog.String("session_id", session.ID),
 			)
 			stopSessionBestEffort(ctx, deps.AgentAdapter, session, cfg, logger)
 			finishWorkspace()
