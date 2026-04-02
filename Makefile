@@ -45,7 +45,7 @@ test-coverage-html: test-coverage ## Generate an HTML coverage report
 
 .PHONY: fmt
 fmt: ## Format all Go source files
-	$(LINT) fmt ./...
+	$(LINTER) fmt ./...
 
 .PHONY: vet
 vet: ## Run go vet on all packages
@@ -53,7 +53,7 @@ vet: ## Run go vet on all packages
 
 .PHONY: lint
 lint: ## Run golangci-lint on all packages
-	$(LINT) run ./...
+	$(LINTER) run ./...
 
 .PHONY: tidy
 tidy: ## Tidy go.sum and prune stale entries from go.mod

@@ -27,8 +27,8 @@ VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 
 # ── Go toolchain ──────────────────────────────────────────────────────────────
 
-GO   ?= go
-LINT ?= golangci-lint
+GO      ?= go
+LINTER  ?= golangci-lint
 
 # ── Build flags ───────────────────────────────────────────────────────────────
 #
