@@ -1078,9 +1078,9 @@ func TestHandleWorkerExit_CleanupFailureNonFatal(t *testing.T) {
 	}
 }
 
-// PendingCleanup uses the actual workspace path from the worker
-// result, not a path reconstructed from config. This prevents orphaned
-// workspaces when workspace.root changes at runtime via dynamic config reload.
+// TestHandleWorkerExit_PendingCleanupUsesActualPath verifies that workspace
+// cleanup uses the path recorded by the worker, not a path recomputed from the
+// current config, preventing orphaned workspaces after a live config reload.
 func TestHandleWorkerExit_PendingCleanupUsesActualPath(t *testing.T) {
 	t.Parallel()
 
@@ -2351,6 +2351,92 @@ func TestHandleWorkerExit_SoftStop(t *testing.T) {
 		}
 		if strings.Contains(text, "re-queuing") {
 			t.Errorf("soft-stop comment should not contain %q\ngot: %q", "re-queuing", text)
+		}
+	})
+
+	// CancelRetry removes a pre-existing RetryAttempts entry when soft-stop fires,
+	// even when a retry was pre-scheduled (e.g. from a stall-timeout reschedule)
+	// before the agent exited.
+	t.Run("cancels_preexisting_retry_entry", func(t *testing.T) {
+		t.Parallel()
+
+		store := &mockExitStore{}
+		state := exitState(t, "SS-6", nil)
+		// Seed a pre-existing retry entry, simulating a stall-timeout
+		// reschedule that arrived before the worker soft-stop result.
+		preexisting := &RetryEntry{
+			IssueID:    "SS-6",
+			Identifier: "SS-6-ident",
+			Attempt:    2,
+			// Use a long-lived timer so it does not fire during the test.
+			TimerHandle: time.AfterFunc(1*time.Hour, func() {}),
+		}
+		state.RetryAttempts["SS-6"] = preexisting
+		params := defaultExitParams(t, store)
+		params.ActiveStates = []string{"In Progress"}
+		state.Running["SS-6"].Issue.State = "In Progress"
+
+		HandleWorkerExit(state, WorkerResult{
+			IssueID:        "SS-6",
+			Identifier:     "SS-6-ident",
+			ExitKind:       WorkerExitNormal,
+			AgentAdapter:   "mock",
+			SoftStop:       true,
+			SoftStopReason: "blocked",
+		}, params)
+
+		// CancelRetry must have removed the pre-existing entry.
+		if _, ok := state.RetryAttempts["SS-6"]; ok {
+			t.Error("pre-existing RetryAttempts entry not removed by CancelRetry on soft-stop")
+		}
+
+		// Claim released and no new retry entry persisted.
+		if _, ok := state.Claimed["SS-6"]; ok {
+			t.Error("claim preserved after soft-stop with pre-existing retry, want released")
+		}
+		if len(store.retryEntries) != 0 {
+			t.Errorf("SaveRetryEntry called %d times, want 0", len(store.retryEntries))
+		}
+	})
+
+	// SoftStop is checked before the handoff branch in the inner switch, so a
+	// configured HandoffState must not trigger a tracker transition when SoftStop
+	// is true.
+	t.Run("handoff_skipped_when_soft_stop", func(t *testing.T) {
+		t.Parallel()
+
+		store := &mockExitStore{}
+		tracker := &mockTrackerAdapter{}
+		state := exitState(t, "SS-7", nil)
+		state.Running["SS-7"].Issue.State = "In Progress"
+		params := defaultExitParams(t, store)
+		params.ActiveStates = []string{"In Progress"}
+		params.HandoffState = "In Review"
+		params.TrackerAdapter = tracker
+
+		HandleWorkerExit(state, WorkerResult{
+			IssueID:        "SS-7",
+			Identifier:     "SS-7-ident",
+			ExitKind:       WorkerExitNormal,
+			AgentAdapter:   "mock",
+			SoftStop:       true,
+			SoftStopReason: "blocked",
+		}, params)
+
+		// Handoff must not have been attempted.
+		if len(tracker.transitionCalls) != 0 {
+			t.Errorf("TransitionIssue called %d times, want 0 (handoff must be skipped when SoftStop is true)",
+				len(tracker.transitionCalls))
+		}
+
+		// Claim released.
+		if _, ok := state.Claimed["SS-7"]; ok {
+			t.Error("claim preserved after soft-stop, want released")
+		}
+
+		// No retry scheduled.
+		if _, ok := state.RetryAttempts["SS-7"]; ok {
+			t.Error("retry scheduled after soft-stop with handoff configured, want suppressed")
 		}
 	})
 }
