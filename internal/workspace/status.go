@@ -104,7 +104,7 @@ func ReadStatusFile(workspacePath string, logger *slog.Logger) StatusSignal {
 
 	statusPath := filepath.Join(workspacePath, ".sortie", "status")
 
-	f, err := os.Open(statusPath)
+	f, err := os.Open(statusPath) //nolint:gosec // path assembled from operator-controlled workspace root and literal .sortie/status; Lstat checks precede this open
 	if err != nil {
 		if !errors.Is(err, fs.ErrNotExist) {
 			logger.Warn("failed to open .sortie/status",
@@ -114,7 +114,7 @@ func ReadStatusFile(workspacePath string, logger *slog.Logger) StatusSignal {
 		}
 		return StatusNone
 	}
-	defer f.Close()
+	defer f.Close() //nolint:errcheck // read-only file; close error is not actionable after data is read
 
 	data, err := io.ReadAll(io.LimitReader(f, statusFileMaxBytes))
 	if err != nil {
