@@ -17,6 +17,7 @@ tools:
   - search
   - todo
   - sortie-kb/*
+  - "com.atlassian/atlassian-mcp-server/getJiraIssue"
 agents:
   - Coder
   - Tester
@@ -54,7 +55,7 @@ Then determine what was provided and choose a route.
 | Path to a `.plans/Plan-*.md` file | **Plan-driven** | Read the plan. Proceed to Phase 1 with the plan as the primary input. |
 | Path to a `.specs/Spec-*.md` file (no plan) | **Spec-driven** | The spec exists but has no plan yet. This pipeline does not create plans. Recommend the **Create Specification First** handoff (which includes planning) or ask the user to run `/makePlan` first. Stop. |
 | GitHub issue URL or `#N` shorthand | **Issue-driven** | Run `gh issue view <ref> --json title,body,labels` to fetch details. Assess scope (see below). |
-| Jira issue ID or URL | **Issue-driven** | Fetch via Atlassian MCP. Assess scope (see below). |
+| Jira issue ID or URL | **Issue-driven** | Fetch via `getJiraIssue` MCP tool. Assess scope (see below). |
 | Raw feature description or bug report | **Description-driven** | Assess scope (see below). |
 
 #### Scope Assessment (for issue-driven and description-driven routes)
