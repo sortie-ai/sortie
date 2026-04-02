@@ -53,8 +53,7 @@ func runMCPServer(ctx context.Context, args []string, stdout io.Writer, stderr i
 		return 1
 	}
 
-	logging.Setup(stderr, slog.LevelInfo)
-	logger := slog.Default()
+	logger := logging.Setup(stderr, slog.LevelInfo)
 
 	wf, err := workflow.Load(*workflowFlag)
 	if err != nil {
