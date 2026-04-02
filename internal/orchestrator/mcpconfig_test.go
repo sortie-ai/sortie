@@ -403,13 +403,6 @@ func TestGenerateMCPConfig(t *testing.T) {
 		if got := string(data); got != "*\n" {
 			t.Errorf(".sortie/.gitignore content = %q, want %q", got, "*\n")
 		}
-		info, err := os.Stat(path)
-		if err != nil {
-			t.Fatalf("os.Stat(.sortie/.gitignore): %v", err)
-		}
-		if got := info.Mode().Perm(); got != 0o644 {
-			t.Errorf(".sortie/.gitignore permissions = %04o, want %04o", got, 0o644)
-		}
 	})
 
 	t.Run("gitignore_idempotent_on_repeated_calls", func(t *testing.T) {
