@@ -61,6 +61,11 @@ type PrepareParams struct {
 	// SSHHost is the SSH destination host for the worker. When non-empty,
 	// hooks receive SORTIE_SSH_HOST in their environment.
 	SSHHost string
+
+	// PreRunFunc is an optional callback invoked after directory creation
+	// (and the after_create hook, if applicable) but before the before_run
+	// hook. Receives the resolved workspace path. Nil means no-op.
+	PreRunFunc func(workspacePath string)
 }
 
 // PrepareResult holds the outcome of successful workspace preparation.
@@ -123,6 +128,10 @@ func Prepare(ctx context.Context, params PrepareParams) (PrepareResult, error) {
 			}
 			return PrepareResult{}, hookErr
 		}
+	}
+
+	if params.PreRunFunc != nil {
+		params.PreRunFunc(wsResult.Path)
 	}
 
 	if params.BeforeRun != "" {
