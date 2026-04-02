@@ -1034,3 +1034,129 @@ func TestCleanupTerminal(t *testing.T) {
 		assertFileNotExists(t, filepath.Join(root, "TERMINAL-2"))
 	})
 }
+
+// TestPrepare_PreRunFunc covers the PreRunFunc callback added to PrepareParams.
+func TestPrepare_PreRunFunc(t *testing.T) {
+	t.Parallel()
+
+	t.Run("called with workspace path on new workspace", func(t *testing.T) {
+		t.Parallel()
+
+		root := t.TempDir()
+		var capturedPath string
+
+		result, err := Prepare(context.Background(), PrepareParams{
+			Root:          root,
+			Identifier:    "PRE-1",
+			IssueID:       "id-pre-1",
+			Attempt:       0,
+			HookTimeoutMS: 5000,
+			PreRunFunc: func(wsPath string) {
+				capturedPath = wsPath
+			},
+		})
+		if err != nil {
+			t.Fatalf("Prepare() error: %v", err)
+		}
+
+		if capturedPath == "" {
+			t.Fatal("PreRunFunc was not called")
+		}
+		if capturedPath != result.Path {
+			t.Errorf("PreRunFunc path = %q, want %q", capturedPath, result.Path)
+		}
+	})
+
+	t.Run("ordering: after after_create, before before_run", func(t *testing.T) {
+		t.Parallel()
+
+		root := t.TempDir()
+
+		var afterCreateExistsAtPreRun bool
+		var beforeRunExistsAtPreRun bool
+
+		result, err := Prepare(context.Background(), PrepareParams{
+			Root:          root,
+			Identifier:    "PRE-2",
+			IssueID:       "id-pre-2",
+			Attempt:       0,
+			AfterCreate:   `touch "$SORTIE_WORKSPACE/.after_create_marker"`,
+			BeforeRun:     `touch "$SORTIE_WORKSPACE/.before_run_marker"`,
+			HookTimeoutMS: 5000,
+			PreRunFunc: func(wsPath string) {
+				_, err1 := os.Stat(filepath.Join(wsPath, ".after_create_marker"))
+				afterCreateExistsAtPreRun = err1 == nil
+				_, err2 := os.Stat(filepath.Join(wsPath, ".before_run_marker"))
+				beforeRunExistsAtPreRun = err2 == nil
+			},
+		})
+		if err != nil {
+			t.Fatalf("Prepare() error: %v", err)
+		}
+		if !result.CreatedNow {
+			t.Fatal("expected workspace to be freshly created")
+		}
+
+		if !afterCreateExistsAtPreRun {
+			t.Error("after_create marker not present when PreRunFunc ran, want present")
+		}
+		if beforeRunExistsAtPreRun {
+			t.Error("before_run marker already present when PreRunFunc ran, want absent")
+		}
+
+		// Verify before_run ran after PreRunFunc.
+		assertFileExists(t, filepath.Join(result.Path, ".before_run_marker"))
+	})
+
+	t.Run("called even when workspace already exists", func(t *testing.T) {
+		t.Parallel()
+
+		root := t.TempDir()
+		// First call creates the workspace.
+		_, err := Prepare(context.Background(), PrepareParams{
+			Root:          root,
+			Identifier:    "PRE-3",
+			IssueID:       "id-pre-3",
+			HookTimeoutMS: 5000,
+		})
+		if err != nil {
+			t.Fatalf("first Prepare() error: %v", err)
+		}
+
+		var callCount int
+		// Second call: workspace exists, after_create is skipped.
+		_, err = Prepare(context.Background(), PrepareParams{
+			Root:          root,
+			Identifier:    "PRE-3",
+			IssueID:       "id-pre-3",
+			HookTimeoutMS: 5000,
+			PreRunFunc: func(_ string) {
+				callCount++
+			},
+		})
+		if err != nil {
+			t.Fatalf("second Prepare() error: %v", err)
+		}
+
+		if callCount != 1 {
+			t.Errorf("PreRunFunc call count = %d, want 1 on re-prepare", callCount)
+		}
+	})
+
+	t.Run("nil PreRunFunc is no-op", func(t *testing.T) {
+		t.Parallel()
+
+		root := t.TempDir()
+		// Must not panic with nil PreRunFunc.
+		_, err := Prepare(context.Background(), PrepareParams{
+			Root:          root,
+			Identifier:    "PRE-4",
+			IssueID:       "id-pre-4",
+			HookTimeoutMS: 5000,
+			PreRunFunc:    nil,
+		})
+		if err != nil {
+			t.Fatalf("Prepare() with nil PreRunFunc error: %v", err)
+		}
+	})
+}
