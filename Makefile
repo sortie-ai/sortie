@@ -19,9 +19,11 @@ fmt:
 lint:
 	$(LINT) run ./...
 
-## style: enforce code style and documentation rules (FILE=path to target a single file)
+## style: enforce style guidelines via Copilot CLI
+##   FLAGS: guideline selection, e.g. FLAGS="--codestyle --logging"
+##   FILE:  single file target, e.g. FILE=internal/domain/issue.go
 style:
-	sh scripts/enforce-style.sh $(FILE)
+	sh scripts/enforce-style.sh $(FLAGS) $(FILE)
 
 ## test: run tests (use PKG=./path/to/pkg and/or RUN=TestName to filter)
 test:
