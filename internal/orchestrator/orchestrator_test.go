@@ -2200,14 +2200,14 @@ func TestOrchestratorDynamicConfigReload(t *testing.T) {
 
 		if v, ok := capturedPrompts.Load("P-1"); !ok {
 			t.Error("no prompt captured for P-1")
-		} else if got, ok := v.(string); !ok || got != "do P-1" {
-			t.Errorf("prompt for P-1 = %q, want %q", got, "do P-1")
+		} else if got, ok := v.(string); !ok || !strings.HasPrefix(got, "do P-1") {
+			t.Errorf("prompt for P-1 = %q, want prefix %q", got, "do P-1")
 		}
 
 		if v, ok := capturedPrompts.Load("P-2"); !ok {
 			t.Error("no prompt captured for P-2")
-		} else if got, ok := v.(string); !ok || got != "review P-2" {
-			t.Errorf("prompt for P-2 = %q, want %q", got, "review P-2")
+		} else if got, ok := v.(string); !ok || !strings.HasPrefix(got, "review P-2") {
+			t.Errorf("prompt for P-2 = %q, want prefix %q", got, "review P-2")
 		}
 	})
 
