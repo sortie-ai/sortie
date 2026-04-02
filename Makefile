@@ -9,7 +9,7 @@ LINT         := golangci-lint
 COVERAGE_OUT  ?= coverage.out
 COVERAGE_HTML  = $(COVERAGE_OUT:.out=.html)
 
-.PHONY: fmt lint test test-coverage test-coverage-html build clean
+.PHONY: fmt lint style test test-coverage test-coverage-html build clean
 
 ## fmt: format all Go source files
 fmt:
@@ -18,6 +18,10 @@ fmt:
 ## lint: run golangci-lint on all packages
 lint:
 	$(LINT) run ./...
+
+## style: enforce code style and documentation rules (FILE=path to target a single file)
+style:
+	sh scripts/enforce-style.sh $(FILE)
 
 ## test: run tests (use PKG=./path/to/pkg and/or RUN=TestName to filter)
 test:
