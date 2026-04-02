@@ -16,7 +16,7 @@ const DefaultContinuationPrompt = "Continue working on this task. Review the cur
 // RuntimeStatusSuffix is a fixed instruction string appended to the agent
 // prompt on the first turn of each worker run. It informs the agent of
 // the A2O status-signaling protocol for reporting blocked or
-// review-needed status via the .sortie/status file.
+// needs-human-review status via the .sortie/status file.
 //
 // Continuation turns omit this suffix because the instruction persists
 // in the agent's conversation history from turn 1.
