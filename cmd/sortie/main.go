@@ -167,8 +167,7 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 		}
 		effectiveLevel = lvl
 	}
-	logging.Setup(stderr, effectiveLevel)
-	logger := slog.Default()
+	logger := logging.Setup(stderr, effectiveLevel)
 
 	mgr, err := workflow.NewManager(path, logger,
 		workflow.WithValidateFunc(orchestrator.ValidateConfigForPromotion))
@@ -212,8 +211,7 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 		}
 		if lvl != slog.LevelInfo {
 			effectiveLevel = lvl
-			logging.Setup(stderr, effectiveLevel)
-			logger = slog.Default()
+			logger = logging.Setup(stderr, effectiveLevel)
 		}
 	}
 
