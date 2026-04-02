@@ -126,7 +126,7 @@ func GenerateMCPConfig(params MCPConfigParams) (string, error) {
 	// Exclude all .sortie/ contents from git. Written on every call so
 	// it is restored if an agent or hook removes it between runs.
 	gitignorePath := filepath.Join(dir, ".gitignore")
-	if err := os.WriteFile(gitignorePath, []byte("*\n"), 0o644); err != nil { //nolint:gosec // G306: gitignore contains no secrets, just the glob pattern "*"
+	if err := os.WriteFile(gitignorePath, []byte("*\n"), 0o600); err != nil {
 		return "", fmt.Errorf("writing .sortie gitignore: %w", err)
 	}
 
