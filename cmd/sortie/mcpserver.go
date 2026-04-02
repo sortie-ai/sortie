@@ -15,6 +15,7 @@ import (
 	"github.com/sortie-ai/sortie/internal/logging"
 	"github.com/sortie-ai/sortie/internal/registry"
 	"github.com/sortie-ai/sortie/internal/tool/mcpserver"
+	"github.com/sortie-ai/sortie/internal/tool/status"
 	"github.com/sortie-ai/sortie/internal/tool/trackerapi"
 	"github.com/sortie-ai/sortie/internal/workflow"
 )
@@ -98,6 +99,9 @@ func runMCPServer(ctx context.Context, args []string, stdout io.Writer, stderr i
 	toolRegistry := domain.NewToolRegistry()
 	if trackerAdapter != nil && cfg.Tracker.Project != "" {
 		toolRegistry.Register(trackerapi.New(trackerAdapter, cfg.Tracker.Project))
+	}
+	if workspacePath := os.Getenv("SORTIE_WORKSPACE"); workspacePath != "" {
+		toolRegistry.Register(status.New(workspacePath))
 	}
 
 	srv := mcpserver.NewServer(toolRegistry, os.Stdin, stdout, logger, Version)
