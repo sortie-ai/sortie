@@ -10,6 +10,7 @@ package copilot
 
 import (
 	"bufio"
+	"cmp"
 	"context"
 	"fmt"
 	"io"
@@ -135,10 +136,7 @@ func (a *CopilotAdapter) StartSession(ctx context.Context, params domain.StartSe
 		}
 	}
 
-	command := params.AgentConfig.Command
-	if command == "" {
-		command = "copilot"
-	}
+	command := cmp.Or(params.AgentConfig.Command, "copilot")
 
 	var resolvedPath string
 	var sshHost string
@@ -257,7 +255,10 @@ func (a *CopilotAdapter) RunTurn(ctx context.Context, session domain.Session, pa
 		panic("copilot: OnEvent must be non-nil")
 	}
 
-	state := session.Internal.(*sessionState)
+	state, ok := session.Internal.(*sessionState)
+	if !ok {
+		return domain.TurnResult{}, fmt.Errorf("unexpected session internal type %T", session.Internal)
+	}
 	baseLogger := slog.Default().With(slog.String("component", "copilot-adapter"))
 	logger := logging.WithSession(baseLogger, state.copilotSessionID)
 
@@ -703,7 +704,10 @@ func (a *CopilotAdapter) RunTurn(ctx context.Context, session domain.Session, pa
 // Sends SIGTERM, waits up to 5 seconds, then sends SIGKILL. Safe to
 // call when no subprocess is running.
 func (a *CopilotAdapter) StopSession(ctx context.Context, session domain.Session) error {
-	state := session.Internal.(*sessionState)
+	state, ok := session.Internal.(*sessionState)
+	if !ok {
+		return fmt.Errorf("unexpected session internal type %T", session.Internal)
+	}
 
 	state.mu.Lock()
 	proc := state.proc
