@@ -8,6 +8,7 @@ package claude
 
 import (
 	"bufio"
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -137,10 +138,7 @@ func (a *ClaudeCodeAdapter) StartSession(_ context.Context, params domain.StartS
 		}
 	}
 
-	command := params.AgentConfig.Command
-	if command == "" {
-		command = "claude"
-	}
+	command := cmp.Or(params.AgentConfig.Command, "claude")
 
 	var resolvedPath string
 	var sshHost string
@@ -213,7 +211,13 @@ func (a *ClaudeCodeAdapter) RunTurn(ctx context.Context, session domain.Session,
 		panic("claude: OnEvent must be non-nil")
 	}
 
-	state := session.Internal.(*sessionState)
+	state, ok := session.Internal.(*sessionState)
+	if !ok {
+		return domain.TurnResult{}, &domain.AgentError{
+			Kind:    domain.ErrPortExit,
+			Message: fmt.Sprintf("unexpected session internal type %T", session.Internal),
+		}
+	}
 	logger := logging.WithSession(slog.Default().With(slog.String("component", "claude-adapter")), state.claudeSessionID)
 
 	args := buildArgs(state, params.Prompt, a.passthrough)
@@ -638,7 +642,10 @@ func (a *ClaudeCodeAdapter) RunTurn(ctx context.Context, session domain.Session,
 // Sends SIGTERM, waits up to 5 seconds, then sends SIGKILL. Safe to
 // call when no subprocess is running.
 func (a *ClaudeCodeAdapter) StopSession(ctx context.Context, session domain.Session) error {
-	state := session.Internal.(*sessionState)
+	state, ok := session.Internal.(*sessionState)
+	if !ok {
+		return fmt.Errorf("unexpected session internal type %T", session.Internal)
+	}
 
 	state.mu.Lock()
 	proc := state.proc
