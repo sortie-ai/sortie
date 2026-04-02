@@ -2,14 +2,14 @@
 name: ImplPipeline
 description: >
   Automated implementation pipeline: implement -> check findings -> test.
-  Intelligently routes based on input: executes a plan, implements from a spec,
-  resolves a GitHub/Jira issue, or builds from a raw description. Detects spec
-  deviations and halts before testing if the specification needs revision.
+  Intelligently routes based on input: executes a plan, resolves a GitHub/Jira
+  issue, or builds from a raw description. Detects spec deviations and halts
+  before testing if the specification needs revision.
   Use when asked to run the full implementation pipeline, implement and test
   a feature end-to-end, or execute a plan with automated testing.
   Do NOT use for standalone implementation or standalone testing - use
   the individual agents directly for those tasks.
-argument-hint: Plan path, spec path, issue reference, or feature description
+argument-hint: Plan path, issue reference, or feature description
 tools:
   - execute
   - agent
