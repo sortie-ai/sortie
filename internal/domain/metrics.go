@@ -41,7 +41,7 @@ type Metrics interface {
 	IncDispatches(outcome string)
 
 	// IncWorkerExits increments the worker exit counter.
-	// exitType is "normal", "error", or "cancelled"
+	// exitType is "normal", "error", "cancelled", or "soft_stop"
 	// (sortie_worker_exits_total{exit_type} counter).
 	IncWorkerExits(exitType string)
 
