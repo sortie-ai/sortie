@@ -2678,3 +2678,216 @@ func TestRunWorkerAttempt_DispatchComment(t *testing.T) {
 		}
 	})
 }
+
+// TestRunWorkerAttempt_A2OStatusSignal covers the A2O status file integration
+// inside the RunWorkerAttempt turn loop: blocked/needs-human-review signals
+// trigger a soft stop, absent signals allow the loop to continue, and
+// stale status files from a previous run are cleaned before dispatch.
+func TestRunWorkerAttempt_A2OStatusSignal(t *testing.T) {
+	t.Parallel()
+
+	t.Run("blocked_signal_exits_with_soft_stop", func(t *testing.T) {
+		t.Parallel()
+
+		tmpDir := t.TempDir()
+		cfg := defaultWorkerConfig(tmpDir)
+		cfg.Agent.MaxTurns = 5
+
+		// Capture the workspace path from StartSession to write the status
+		// file in RunTurn without knowing the path ahead of time.
+		var wsPath atomic.Value
+		ec := newExitCapture()
+
+		deps := WorkerDeps{
+			TrackerAdapter: &mockTrackerAdapter{},
+			AgentAdapter: &mockAgentAdapter{
+				startSessionFn: func(_ context.Context, params domain.StartSessionParams) (domain.Session, error) {
+					wsPath.Store(params.WorkspacePath)
+					return domain.Session{ID: "sess-1"}, nil
+				},
+				runTurnFn: func(_ context.Context, session domain.Session, _ domain.RunTurnParams) (domain.TurnResult, error) {
+					if p, ok := wsPath.Load().(string); ok && p != "" {
+						statusDir := filepath.Join(p, ".sortie")
+						if err := os.MkdirAll(statusDir, 0o755); err == nil {
+							_ = os.WriteFile(filepath.Join(statusDir, "status"), []byte("blocked\n"), 0o644)
+						}
+					}
+					return domain.TurnResult{SessionID: session.ID, ExitReason: domain.EventTurnCompleted}, nil
+				},
+			},
+			ConfigFunc:         func() config.ServiceConfig { return cfg },
+			PromptTemplateFunc: func() *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
+			OnEvent:            func(_ string, _ domain.AgentEvent) {},
+			OnExit:             ec.onExit,
+			Logger:             discardLogger(),
+		}
+
+		RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
+
+		result := ec.waitResult(t)
+		if result.ExitKind != WorkerExitNormal {
+			t.Errorf("ExitKind = %q, want %q", result.ExitKind, WorkerExitNormal)
+		}
+		if !result.SoftStop {
+			t.Error("SoftStop = false, want true (agent wrote 'blocked')")
+		}
+		if result.SoftStopReason != "blocked" {
+			t.Errorf("SoftStopReason = %q, want %q", result.SoftStopReason, "blocked")
+		}
+		if result.TurnsCompleted != 1 {
+			t.Errorf("TurnsCompleted = %d, want 1 (stopped after first turn with blocked signal)", result.TurnsCompleted)
+		}
+		if result.WorkspacePath == "" {
+			t.Error("WorkspacePath is empty, want non-empty")
+		}
+	})
+
+	t.Run("needs_human_review_signal_exits_with_soft_stop", func(t *testing.T) {
+		t.Parallel()
+
+		tmpDir := t.TempDir()
+		cfg := defaultWorkerConfig(tmpDir)
+		cfg.Agent.MaxTurns = 5
+
+		var wsPath atomic.Value
+		ec := newExitCapture()
+
+		deps := WorkerDeps{
+			TrackerAdapter: &mockTrackerAdapter{},
+			AgentAdapter: &mockAgentAdapter{
+				startSessionFn: func(_ context.Context, params domain.StartSessionParams) (domain.Session, error) {
+					wsPath.Store(params.WorkspacePath)
+					return domain.Session{ID: "sess-1"}, nil
+				},
+				runTurnFn: func(_ context.Context, session domain.Session, _ domain.RunTurnParams) (domain.TurnResult, error) {
+					if p, ok := wsPath.Load().(string); ok && p != "" {
+						statusDir := filepath.Join(p, ".sortie")
+						if err := os.MkdirAll(statusDir, 0o755); err == nil {
+							_ = os.WriteFile(filepath.Join(statusDir, "status"), []byte("needs-human-review\n"), 0o644)
+						}
+					}
+					return domain.TurnResult{SessionID: session.ID, ExitReason: domain.EventTurnCompleted}, nil
+				},
+			},
+			ConfigFunc:         func() config.ServiceConfig { return cfg },
+			PromptTemplateFunc: func() *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
+			OnEvent:            func(_ string, _ domain.AgentEvent) {},
+			OnExit:             ec.onExit,
+			Logger:             discardLogger(),
+		}
+
+		RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
+
+		result := ec.waitResult(t)
+		if result.ExitKind != WorkerExitNormal {
+			t.Errorf("ExitKind = %q, want %q", result.ExitKind, WorkerExitNormal)
+		}
+		if !result.SoftStop {
+			t.Error("SoftStop = false, want true (agent wrote 'needs-human-review')")
+		}
+		if result.SoftStopReason != "needs-human-review" {
+			t.Errorf("SoftStopReason = %q, want %q", result.SoftStopReason, "needs-human-review")
+		}
+		if result.TurnsCompleted != 1 {
+			t.Errorf("TurnsCompleted = %d, want 1", result.TurnsCompleted)
+		}
+	})
+
+	t.Run("absent_signal_does_not_trigger_soft_stop", func(t *testing.T) {
+		t.Parallel()
+
+		tmpDir := t.TempDir()
+		cfg := defaultWorkerConfig(tmpDir)
+		cfg.Agent.MaxTurns = 2
+
+		var fetchStatesCalled atomic.Int64
+		ec := newExitCapture()
+
+		deps := WorkerDeps{
+			TrackerAdapter: &mockTrackerAdapter{
+				fetchStatesFn: func(_ context.Context, ids []string) (map[string]string, error) {
+					fetchStatesCalled.Add(1)
+					result := make(map[string]string, len(ids))
+					for _, id := range ids {
+						result[id] = "To Do"
+					}
+					return result, nil
+				},
+			},
+			AgentAdapter:       &mockAgentAdapter{},
+			ConfigFunc:         func() config.ServiceConfig { return cfg },
+			PromptTemplateFunc: func() *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
+			OnEvent:            func(_ string, _ domain.AgentEvent) {},
+			OnExit:             ec.onExit,
+			Logger:             discardLogger(),
+		}
+
+		RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
+
+		result := ec.waitResult(t)
+		if result.ExitKind != WorkerExitNormal {
+			t.Errorf("ExitKind = %q, want %q", result.ExitKind, WorkerExitNormal)
+		}
+		if result.SoftStop {
+			t.Error("SoftStop = true, want false (no status file written)")
+		}
+		if result.SoftStopReason != "" {
+			t.Errorf("SoftStopReason = %q, want empty", result.SoftStopReason)
+		}
+		if result.TurnsCompleted != 2 {
+			t.Errorf("TurnsCompleted = %d, want 2 (ran all max_turns)", result.TurnsCompleted)
+		}
+		// FetchIssueStatesByIDs was called (signal check happens before state refresh).
+		if fetchStatesCalled.Load() == 0 {
+			t.Error("FetchIssueStatesByIDs not called; want called when no status signal")
+		}
+	})
+
+	t.Run("stale_status_cleaned_before_dispatch", func(t *testing.T) {
+		t.Parallel()
+
+		tmpDir := t.TempDir()
+		cfg := defaultWorkerConfig(tmpDir)
+		cfg.Agent.MaxTurns = 1
+
+		// Pre-create the workspace and write a stale status file to simulate
+		// a previous worker run that left "blocked" behind.
+		wsPath := filepath.Join(tmpDir, "TEST-1")
+		statusDir := filepath.Join(wsPath, ".sortie")
+		if err := os.MkdirAll(statusDir, 0o755); err != nil {
+			t.Fatalf("MkdirAll: %v", err)
+		}
+		staleStatus := filepath.Join(statusDir, "status")
+		if err := os.WriteFile(staleStatus, []byte("blocked\n"), 0o644); err != nil {
+			t.Fatalf("WriteFile(stale status): %v", err)
+		}
+
+		ec := newExitCapture()
+
+		deps := WorkerDeps{
+			// runTurnFn writes nothing; the stale file should be gone by now.
+			TrackerAdapter:     &mockTrackerAdapter{},
+			AgentAdapter:       &mockAgentAdapter{},
+			ConfigFunc:         func() config.ServiceConfig { return cfg },
+			PromptTemplateFunc: func() *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
+			OnEvent:            func(_ string, _ domain.AgentEvent) {},
+			OnExit:             ec.onExit,
+			Logger:             discardLogger(),
+		}
+
+		RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
+
+		result := ec.waitResult(t)
+		if result.ExitKind != WorkerExitNormal {
+			t.Errorf("ExitKind = %q, want %q", result.ExitKind, WorkerExitNormal)
+		}
+		// The stale file was cleaned by PreRunFunc before the turn ran,
+		// so ReadStatusFile finds nothing → SoftStop must be false.
+		if result.SoftStop {
+			t.Error("SoftStop = true, want false (stale status should have been cleaned by PreRunFunc)")
+		}
+		if result.TurnsCompleted != 1 {
+			t.Errorf("TurnsCompleted = %d, want 1", result.TurnsCompleted)
+		}
+	})
+}

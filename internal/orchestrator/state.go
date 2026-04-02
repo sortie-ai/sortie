@@ -21,6 +21,7 @@ const (
 	exitTypeNormal    = "normal"
 	exitTypeError     = "error"
 	exitTypeCancelled = "cancelled"
+	exitTypeSoftStop  = "soft_stop"
 
 	triggerError        = "error"
 	triggerContinuation = "continuation"

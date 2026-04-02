@@ -2178,3 +2178,262 @@ func TestHandleWorkerExit_TurnsCompletedZeroWhenNoTurnsRan(t *testing.T) {
 		t.Errorf("RunHistory.TurnsCompleted = %d, want 0 when no turns ran", store.runHistories[0].TurnsCompleted)
 	}
 }
+
+// --- Soft-stop tests ---
+
+// TestHandleWorkerExit_SoftStop verifies the A2O soft-stop exit path:
+// claim released, no retry scheduled, added to Completed, metrics use
+// "soft_stop" exit type, and the run history status is "succeeded".
+func TestHandleWorkerExit_SoftStop(t *testing.T) {
+	t.Parallel()
+
+	t.Run("releases_claim_suppresses_retry", func(t *testing.T) {
+		t.Parallel()
+
+		store := &mockExitStore{}
+		state := exitState(t, "SS-1", nil)
+		state.Running["SS-1"].Issue.State = "In Progress"
+		params := defaultExitParams(t, store)
+		// Set ActiveStates so issue is active; without soft-stop this would
+		// trigger a continuation retry.
+		params.ActiveStates = []string{"In Progress"}
+
+		HandleWorkerExit(state, WorkerResult{
+			IssueID:        "SS-1",
+			Identifier:     "SS-1-ident",
+			ExitKind:       WorkerExitNormal,
+			AgentAdapter:   "mock",
+			SoftStop:       true,
+			SoftStopReason: "blocked",
+		}, params)
+
+		// Claim released on soft-stop.
+		if _, ok := state.Claimed["SS-1"]; ok {
+			t.Error("claim preserved after soft-stop, want released")
+		}
+
+		// No continuation retry scheduled.
+		if _, ok := state.RetryAttempts["SS-1"]; ok {
+			t.Error("retry scheduled after soft-stop, want suppressed")
+		}
+
+		// Added to Completed.
+		if _, ok := state.Completed["SS-1"]; !ok {
+			t.Error("issue not added to Completed set after soft-stop")
+		}
+
+		// No retry entry persisted.
+		if len(store.retryEntries) != 0 {
+			t.Errorf("SaveRetryEntry called %d times, want 0", len(store.retryEntries))
+		}
+	})
+
+	t.Run("run_history_status_is_succeeded", func(t *testing.T) {
+		t.Parallel()
+
+		store := &mockExitStore{}
+		state := exitState(t, "SS-2", nil)
+		params := defaultExitParams(t, store)
+
+		HandleWorkerExit(state, WorkerResult{
+			IssueID:        "SS-2",
+			Identifier:     "SS-2-ident",
+			ExitKind:       WorkerExitNormal,
+			AgentAdapter:   "mock",
+			TurnsCompleted: 3,
+			SoftStop:       true,
+			SoftStopReason: "blocked",
+		}, params)
+
+		if len(store.runHistories) != 1 {
+			t.Fatalf("AppendRunHistory called %d times, want 1", len(store.runHistories))
+		}
+		if store.runHistories[0].Status != "succeeded" {
+			t.Errorf("RunHistory.Status = %q, want %q", store.runHistories[0].Status, "succeeded")
+		}
+		if store.runHistories[0].TurnsCompleted != 3 {
+			t.Errorf("RunHistory.TurnsCompleted = %d, want 3", store.runHistories[0].TurnsCompleted)
+		}
+	})
+
+	t.Run("metrics_worker_exit_is_soft_stop_not_normal", func(t *testing.T) {
+		t.Parallel()
+
+		store := &mockExitStore{}
+		spy := &spyMetrics{}
+		state := exitState(t, "SS-3", nil)
+		params := defaultExitParams(t, store)
+		params.Metrics = spy
+
+		HandleWorkerExit(state, WorkerResult{
+			IssueID:        "SS-3",
+			Identifier:     "SS-3-ident",
+			ExitKind:       WorkerExitNormal,
+			AgentAdapter:   "mock",
+			SoftStop:       true,
+			SoftStopReason: "needs-human-review",
+		}, params)
+
+		spy.mu.Lock()
+		exits := append([]string(nil), spy.workerExits...)
+		spy.mu.Unlock()
+
+		if len(exits) != 1 {
+			t.Fatalf("IncWorkerExits called %d times, want 1", len(exits))
+		}
+		if exits[0] != exitTypeSoftStop {
+			t.Errorf("IncWorkerExits(%q), want %q", exits[0], exitTypeSoftStop)
+		}
+	})
+
+	t.Run("normal_exit_without_soft_stop_still_schedules_retry", func(t *testing.T) {
+		t.Parallel()
+
+		// Regression guard: SoftStop=false + active issue → continuation retry.
+		store := &mockExitStore{}
+		state := exitState(t, "SS-4", nil)
+		state.Running["SS-4"].Issue.State = "In Progress"
+		params := defaultExitParams(t, store)
+		params.ActiveStates = []string{"In Progress"}
+
+		HandleWorkerExit(state, WorkerResult{
+			IssueID:      "SS-4",
+			Identifier:   "SS-4-ident",
+			ExitKind:     WorkerExitNormal,
+			AgentAdapter: "mock",
+			SoftStop:     false,
+		}, params)
+
+		if _, ok := state.RetryAttempts["SS-4"]; !ok {
+			t.Error("retry not scheduled for normal exit with active issue, regression guard failed")
+		}
+		if _, ok := state.Claimed["SS-4"]; !ok {
+			t.Error("claim released after normal exit with retry, want preserved")
+		}
+	})
+
+	t.Run("soft_stop_posts_comment_when_on_completion_enabled", func(t *testing.T) {
+		t.Parallel()
+
+		store := &mockExitStore{}
+		tracker := &mockTrackerAdapter{}
+		spy := newCommentAwareMetrics()
+
+		state := exitState(t, "SS-5", nil)
+		params := exitParamsWithComments(t, store, tracker, config.TrackerCommentsConfig{OnCompletion: true})
+		params.Metrics = spy
+
+		HandleWorkerExit(state, WorkerResult{
+			IssueID:        "SS-5",
+			Identifier:     "SS-5-ident",
+			ExitKind:       WorkerExitNormal,
+			SessionID:      "ses-ss5",
+			TurnsCompleted: 2,
+			AgentAdapter:   "mock",
+			SoftStop:       true,
+			SoftStopReason: "blocked",
+		}, params)
+
+		spy.waitComment(t)
+
+		if len(tracker.commentCalls) != 1 {
+			t.Fatalf("CommentIssue call count = %d, want 1", len(tracker.commentCalls))
+		}
+		text := tracker.commentCalls[0].Text
+		for _, want := range []string{
+			"agent signaled: blocked",
+			"ses-ss5",
+			"Turns: 2",
+		} {
+			if !strings.Contains(text, want) {
+				t.Errorf("soft-stop comment missing %q\ngot: %q", want, text)
+			}
+		}
+		if strings.Contains(text, "re-queuing") {
+			t.Errorf("soft-stop comment should not contain %q\ngot: %q", "re-queuing", text)
+		}
+	})
+}
+
+// TestBuildSoftStopComment verifies the format of the soft-stop comment string.
+func TestBuildSoftStopComment(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name           string
+		sessionID      string
+		elapsed        time.Duration
+		turnsCompleted int
+		reason         string
+		wantContains   []string
+		wantAbsent     []string
+	}{
+		{
+			name:           "blocked reason",
+			sessionID:      "ses-abc",
+			elapsed:        60 * time.Second,
+			turnsCompleted: 3,
+			reason:         "blocked",
+			wantContains: []string{
+				"Sortie session completed (agent signaled: blocked).",
+				"ses-abc",
+				"1m0s",
+				"Turns: 3",
+			},
+		},
+		{
+			name:           "needs-human-review reason",
+			sessionID:      "ses-xyz",
+			elapsed:        90 * time.Second,
+			turnsCompleted: 5,
+			reason:         "needs-human-review",
+			wantContains: []string{
+				"agent signaled: needs-human-review",
+				"ses-xyz",
+				"1m30s",
+				"Turns: 5",
+			},
+		},
+		{
+			name:           "empty session ID replaced with unknown",
+			sessionID:      "",
+			elapsed:        10 * time.Second,
+			turnsCompleted: 1,
+			reason:         "blocked",
+			wantContains:   []string{"unknown"},
+		},
+		{
+			name:           "sub-second elapsed truncated",
+			sessionID:      "ses-short",
+			elapsed:        500 * time.Millisecond,
+			turnsCompleted: 0,
+			reason:         "blocked",
+			wantContains:   []string{"0s"},
+		},
+		{
+			name:           "not re-queuing",
+			sessionID:      "ses-def",
+			elapsed:        30 * time.Second,
+			turnsCompleted: 2,
+			reason:         "blocked",
+			wantAbsent:     []string{"re-queuing"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := buildSoftStopComment(tt.sessionID, tt.elapsed, tt.turnsCompleted, tt.reason)
+			for _, want := range tt.wantContains {
+				if !strings.Contains(got, want) {
+					t.Errorf("buildSoftStopComment() missing %q\ngot: %q", want, got)
+				}
+			}
+			for _, absent := range tt.wantAbsent {
+				if strings.Contains(got, absent) {
+					t.Errorf("buildSoftStopComment() should not contain %q\ngot: %q", absent, got)
+				}
+			}
+		})
+	}
+}

@@ -76,6 +76,16 @@ type WorkerResult struct {
 	// execution. Copied from [WorkerDeps] at exit for host pool release.
 	SSHHost string
 
+	// SoftStop is true when the worker exited because it read a
+	// recognized A2O status signal from .sortie/status. The exit
+	// handler uses this to suppress continuation retry scheduling.
+	SoftStop bool
+
+	// SoftStopReason is the status token that triggered the soft stop
+	// (e.g., "blocked", "needs-human-review"). Empty when SoftStop is
+	// false.
+	SoftStopReason string
+
 	// StartedAt is copied from the RunningEntry (set by DispatchIssue).
 	// The worker does not set this — it is populated by the exit
 	// handler from the running map entry.
@@ -340,6 +350,9 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 		HookTimeoutMS: cfg.Hooks.TimeoutMS,
 		Logger:        logger,
 		SSHHost:       deps.SSHHost,
+		PreRunFunc: func(wsPath string) {
+			workspace.CleanupStatusFile(wsPath, logger)
+		},
 	})
 	if err != nil {
 		reported = true
@@ -592,6 +605,33 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 				AgentAdapter:   cfg.Agent.Kind,
 				Attempt:        attempt,
 				SSHHost:        deps.SSHHost,
+			})
+			return
+		}
+
+		// A2O status file read: detect agent-reported blockage before
+		// making a tracker API call that would be wasted.
+		statusSignal := workspace.ReadStatusFile(wsResult.Path, logger)
+		if statusSignal.IsRecognized() {
+			logger.Info("agent signaled status, exiting worker",
+				slog.String("status", string(statusSignal)),
+				slog.Int("turns_completed", turnsCompleted),
+			)
+			stopSessionBestEffort(ctx, deps.AgentAdapter, session, cfg, logger)
+			finishWorkspace()
+			reported = true
+			deps.OnExit(issue.ID, WorkerResult{
+				IssueID:        issue.ID,
+				Identifier:     issue.Identifier,
+				ExitKind:       WorkerExitNormal,
+				TurnsCompleted: turnsCompleted,
+				SessionID:      session.ID,
+				WorkspacePath:  wsResult.Path,
+				AgentAdapter:   cfg.Agent.Kind,
+				Attempt:        attempt,
+				SSHHost:        deps.SSHHost,
+				SoftStop:       true,
+				SoftStopReason: string(statusSignal),
 			})
 			return
 		}
