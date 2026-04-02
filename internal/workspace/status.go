@@ -8,8 +8,6 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"strings"
-	"syscall"
 )
 
 // StatusSignal represents the parsed A2O status file value. The
@@ -44,48 +42,76 @@ func (s StatusSignal) IsRecognized() bool {
 // headroom while bounding memory usage.
 const statusFileMaxBytes = 1024
 
+// isSymlink returns true if the file at path is a symbolic link.
+// Returns false when the path does not exist or Lstat fails.
+func isSymlink(path string) (bool, error) {
+	fi, err := os.Lstat(path)
+	if err != nil {
+		return false, err
+	}
+	return fi.Mode()&os.ModeSymlink != 0, nil
+}
+
+// rejectStatusSymlinks checks .sortie/ and .sortie/status for
+// symlinks. Returns true if either component is a symbolic link.
+func rejectStatusSymlinks(workspacePath string, logger *slog.Logger) bool {
+	dotSortiePath := filepath.Join(workspacePath, ".sortie")
+
+	symlink, err := isSymlink(dotSortiePath)
+	if err != nil {
+		// If .sortie doesn't exist, the status file cannot exist either.
+		return !errors.Is(err, fs.ErrNotExist)
+	}
+	if symlink {
+		logger.Warn("symlink detected at .sortie directory, rejecting status file",
+			slog.String("workspace", workspacePath),
+		)
+		return true
+	}
+
+	statusPath := filepath.Join(dotSortiePath, "status")
+	symlink, err = isSymlink(statusPath)
+	if err != nil {
+		return !errors.Is(err, fs.ErrNotExist)
+	}
+	if symlink {
+		logger.Warn("symlink detected at .sortie/status, rejecting status file",
+			slog.String("workspace", workspacePath),
+		)
+		return true
+	}
+
+	return false
+}
+
 // ReadStatusFile reads the A2O status file from the workspace
 // directory and returns the parsed status signal. The file path is
 // <workspacePath>/.sortie/status.
 //
 // Returns [StatusNone] when the file is absent, unreadable, empty
-// after trimming, or when the resolved path escapes the workspace
-// (symlink traversal). Read errors are logged at warn level; the
-// function never returns an error to the caller. All failure modes
-// degrade to StatusNone.
+// after trimming, or when either .sortie/ or status is a symbolic
+// link. Read errors are logged at warn level; the function never
+// returns an error to the caller. All failure modes degrade to
+// StatusNone.
 func ReadStatusFile(workspacePath string, logger *slog.Logger) StatusSignal {
 	if logger == nil {
 		logger = slog.Default()
 	}
 
+	if rejectStatusSymlinks(workspacePath, logger) {
+		return StatusNone
+	}
+
 	statusPath := filepath.Join(workspacePath, ".sortie", "status")
 
-	resolved, err := filepath.EvalSymlinks(statusPath)
+	f, err := os.Open(statusPath)
 	if err != nil {
 		if !errors.Is(err, fs.ErrNotExist) {
-			logger.Warn("status file path resolution failed",
+			logger.Warn("failed to open .sortie/status",
 				slog.String("workspace", workspacePath),
 				slog.Any("error", err),
 			)
 		}
-		return StatusNone
-	}
-
-	wsPrefix := filepath.Clean(workspacePath) + string(filepath.Separator)
-	if !strings.HasPrefix(resolved, wsPrefix) {
-		logger.Warn("status file resolves outside workspace",
-			slog.String("workspace", workspacePath),
-			slog.String("resolved", resolved),
-		)
-		return StatusNone
-	}
-
-	f, err := os.OpenFile(resolved, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
-	if err != nil {
-		logger.Warn("failed to open .sortie/status",
-			slog.String("workspace", workspacePath),
-			slog.Any("error", err),
-		)
 		return StatusNone
 	}
 	defer f.Close()
@@ -121,37 +147,20 @@ func ReadStatusFile(workspacePath string, logger *slog.Logger) StatusSignal {
 
 // CleanupStatusFile removes the .sortie/status file from the
 // workspace directory if it exists. The removal is best-effort:
-// errors are logged and ignored, never propagated. The resolved
-// file path is validated to be inside the workspace before
-// deletion (symlink escape prevention).
+// errors are logged and ignored, never propagated. Symlinks at
+// either .sortie/ or status are rejected via Lstat — the file is
+// not removed and a warning is logged.
 func CleanupStatusFile(workspacePath string, logger *slog.Logger) {
 	if logger == nil {
 		logger = slog.Default()
 	}
 
+	if rejectStatusSymlinks(workspacePath, logger) {
+		return
+	}
+
 	statusPath := filepath.Join(workspacePath, ".sortie", "status")
-
-	resolved, err := filepath.EvalSymlinks(statusPath)
-	if err != nil {
-		if !errors.Is(err, fs.ErrNotExist) {
-			logger.Debug("status file cleanup: path resolution failed",
-				slog.String("workspace", workspacePath),
-				slog.Any("error", err),
-			)
-		}
-		return
-	}
-
-	wsPrefix := filepath.Clean(workspacePath) + string(filepath.Separator)
-	if !strings.HasPrefix(resolved, wsPrefix) {
-		logger.Warn("status file resolves outside workspace, skipping cleanup",
-			slog.String("workspace", workspacePath),
-			slog.String("resolved", resolved),
-		)
-		return
-	}
-
-	if err := os.Remove(resolved); err != nil && !errors.Is(err, fs.ErrNotExist) {
+	if err := os.Remove(statusPath); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		logger.Debug("status file cleanup failed",
 			slog.String("workspace", workspacePath),
 			slog.Any("error", err),

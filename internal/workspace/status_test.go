@@ -236,8 +236,8 @@ func TestReadStatusFile_SymlinkAtDotSortie(t *testing.T) {
 	if got != StatusNone {
 		t.Errorf("ReadStatusFile() = %q, want %q (symlink escape)", got, StatusNone)
 	}
-	if !strings.Contains(logBuf.String(), "outside workspace") {
-		t.Errorf("log = %q, want to contain %q", logBuf.String(), "outside workspace")
+	if !strings.Contains(logBuf.String(), "symlink detected at .sortie directory") {
+		t.Errorf("log = %q, want to contain %q", logBuf.String(), "symlink detected at .sortie directory")
 	}
 }
 
@@ -265,17 +265,16 @@ func TestReadStatusFile_SymlinkAtStatusFile(t *testing.T) {
 	if got != StatusNone {
 		t.Errorf("ReadStatusFile() = %q, want %q (status symlink escape)", got, StatusNone)
 	}
-	if !strings.Contains(logBuf.String(), "outside workspace") {
-		t.Errorf("log = %q, want to contain %q", logBuf.String(), "outside workspace")
+	if !strings.Contains(logBuf.String(), "symlink detected at .sortie/status") {
+		t.Errorf("log = %q, want to contain %q", logBuf.String(), "symlink detected at .sortie/status")
 	}
 }
 
 func TestReadStatusFile_SymlinkToFileInsideWorkspace(t *testing.T) {
 	t.Parallel()
 
-	// A symlink that resolves to a file inside the workspace is rejected by
-	// O_NOFOLLOW at open time, which is the defense-in-depth after
-	// EvalSymlinks succeeds and the resolved path passes containment.
+	// Regression: a status symlink pointing inside the workspace was previously
+	// accepted; Lstat rejection must catch it regardless of target location.
 	wsPath := t.TempDir()
 	makeDotSortieDir(t, wsPath)
 
@@ -285,21 +284,19 @@ func TestReadStatusFile_SymlinkToFileInsideWorkspace(t *testing.T) {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
-	// status is a symlink pointing to a file that *is* inside the workspace.
-	// EvalSymlinks will resolve to realFile; containment passes.
-	// O_NOFOLLOW is irrelevant here because EvalSymlinks already resolved the
-	// path — the open call targets the real inode directly (no symlink to follow).
+	// status is a symlink pointing to a file inside the workspace.
 	statusPath := filepath.Join(wsPath, ".sortie", "status")
 	if err := os.Symlink(realFile, statusPath); err != nil {
 		t.Fatalf("Symlink: %v", err)
 	}
 
-	// The resolved path (realFile) is inside the workspace, so containment
-	// passes. O_NOFOLLOW applies to the opened path; since we open the
-	// resolved (real) path, no extra symlink is traversed — result is StatusBlocked.
-	got := ReadStatusFile(wsPath, slog.Default())
-	if got != StatusBlocked {
-		t.Errorf("ReadStatusFile() = %q, want %q (intra-workspace symlink resolves fine)", got, StatusBlocked)
+	var logBuf bytes.Buffer
+	got := ReadStatusFile(wsPath, captureLogger(&logBuf))
+	if got != StatusNone {
+		t.Errorf("ReadStatusFile() = %q, want %q (intra-workspace symlink must be rejected)", got, StatusNone)
+	}
+	if !strings.Contains(logBuf.String(), "symlink detected at .sortie/status") {
+		t.Errorf("log = %q, want to contain %q", logBuf.String(), "symlink detected at .sortie/status")
 	}
 }
 
@@ -390,8 +387,8 @@ func TestCleanupStatusFile(t *testing.T) {
 		if _, err := os.Stat(outsideStatus); err != nil {
 			t.Errorf("outside status file was removed, want preserved: %v", err)
 		}
-		if !strings.Contains(logBuf.String(), "outside workspace") {
-			t.Errorf("log = %q, want to contain %q", logBuf.String(), "outside workspace")
+		if !strings.Contains(logBuf.String(), "symlink detected at .sortie directory") {
+			t.Errorf("log = %q, want to contain %q", logBuf.String(), "symlink detected at .sortie directory")
 		}
 	})
 
@@ -419,8 +416,8 @@ func TestCleanupStatusFile(t *testing.T) {
 		if _, err := os.Stat(outsideFile); err != nil {
 			t.Errorf("outside file was removed, want preserved: %v", err)
 		}
-		if !strings.Contains(logBuf.String(), "outside workspace") {
-			t.Errorf("log = %q, want to contain %q", logBuf.String(), "outside workspace")
+		if !strings.Contains(logBuf.String(), "symlink detected at .sortie/status") {
+			t.Errorf("log = %q, want to contain %q", logBuf.String(), "symlink detected at .sortie/status")
 		}
 	})
 
@@ -428,5 +425,71 @@ func TestCleanupStatusFile(t *testing.T) {
 		t.Parallel()
 		wsPath := t.TempDir()
 		CleanupStatusFile(wsPath, nil)
+	})
+
+	t.Run("status is symlink inside workspace skips cleanup", func(t *testing.T) {
+		t.Parallel()
+
+		// Regression: a symlink at status that resolves inside the workspace
+		// must not be followed during cleanup — the symlink target must be preserved.
+		wsPath := t.TempDir()
+		makeDotSortieDir(t, wsPath)
+
+		// Real file inside the workspace.
+		realFile := filepath.Join(wsPath, "real_status")
+		if err := os.WriteFile(realFile, []byte("blocked\n"), 0o644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+
+		// status is a symlink pointing inside the workspace.
+		statusLink := filepath.Join(wsPath, ".sortie", "status")
+		if err := os.Symlink(realFile, statusLink); err != nil {
+			t.Fatalf("Symlink: %v", err)
+		}
+
+		var logBuf bytes.Buffer
+		CleanupStatusFile(wsPath, captureLogger(&logBuf))
+
+		// The symlink target inside the workspace must NOT have been deleted.
+		if _, err := os.Stat(realFile); err != nil {
+			t.Errorf("intra-workspace symlink target was removed, want preserved: %v", err)
+		}
+		if !strings.Contains(logBuf.String(), "symlink detected at .sortie/status") {
+			t.Errorf("log = %q, want to contain %q", logBuf.String(), "symlink detected at .sortie/status")
+		}
+	})
+
+	t.Run("dot-sortie is symlink inside workspace skips cleanup", func(t *testing.T) {
+		t.Parallel()
+
+		// Regression: a .sortie symlink pointing inside the workspace must also
+		// be rejected — nothing in the target directory may be removed.
+		wsPath := t.TempDir()
+
+		// Real directory with a status file, both inside the workspace.
+		realDir := filepath.Join(wsPath, "real_sortie")
+		if err := os.MkdirAll(realDir, 0o755); err != nil {
+			t.Fatalf("MkdirAll: %v", err)
+		}
+		realStatus := filepath.Join(realDir, "status")
+		if err := os.WriteFile(realStatus, []byte("blocked\n"), 0o644); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+
+		// .sortie is a symlink pointing to the real directory inside the workspace.
+		if err := os.Symlink(realDir, filepath.Join(wsPath, ".sortie")); err != nil {
+			t.Fatalf("Symlink: %v", err)
+		}
+
+		var logBuf bytes.Buffer
+		CleanupStatusFile(wsPath, captureLogger(&logBuf))
+
+		// The file inside the target directory must NOT have been removed.
+		if _, err := os.Stat(realStatus); err != nil {
+			t.Errorf("target status file was removed, want preserved: %v", err)
+		}
+		if !strings.Contains(logBuf.String(), "symlink detected at .sortie directory") {
+			t.Errorf("log = %q, want to contain %q", logBuf.String(), "symlink detected at .sortie directory")
+		}
 	})
 }
