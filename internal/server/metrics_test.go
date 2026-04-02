@@ -281,9 +281,10 @@ func TestPromMetricsCounters(t *testing.T) {
 		m.IncWorkerExits("normal")
 		m.IncWorkerExits("error")
 		m.IncWorkerExits("cancelled")
+		m.IncWorkerExits("soft_stop")
 
 		families := gatherFamilies(t, m)
-		for _, exitType := range []string{"normal", "error", "cancelled"} {
+		for _, exitType := range []string{"normal", "error", "cancelled", "soft_stop"} {
 			if got := counterValue(t, families, "sortie_worker_exits_total", map[string]string{"exit_type": exitType}); got != 1 {
 				t.Errorf("sortie_worker_exits_total{exit_type=%s} = %v, want 1", exitType, got)
 			}

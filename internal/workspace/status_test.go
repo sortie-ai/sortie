@@ -13,7 +13,7 @@ import (
 
 // --- Helpers ---
 
-// captureLogger returns an slog.Logger that writes to a buffer and the buffer.
+// captureLogger returns an slog.Logger that writes to the provided buffer.
 func captureLogger(buf *bytes.Buffer) *slog.Logger {
 	return slog.New(slog.NewTextHandler(buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
 }
