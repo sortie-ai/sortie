@@ -278,7 +278,7 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 			// Agent signaled a recognized A2O status (blocked,
 			// needs-human-review). Suppress continuation retry and
 			// release the claim immediately.
-			log.Info("soft stop: suppressing continuation retry",
+			log.Info("continuation retry suppressed",
 				slog.String("reason", workerResult.SoftStopReason),
 			)
 			CancelRetry(state, workerResult.IssueID)

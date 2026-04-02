@@ -609,8 +609,8 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 			return
 		}
 
-		// A2O status file read: detect agent-reported blockage before
-		// making a tracker API call that would be wasted.
+		// Read the A2O status file to detect agent-reported blockage
+		// before making a tracker API call that would be wasted.
 		statusSignal := workspace.ReadStatusFile(wsResult.Path, logger)
 		if statusSignal.IsRecognized() {
 			logger.Info("agent signaled status, exiting worker",

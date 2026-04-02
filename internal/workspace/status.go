@@ -54,7 +54,8 @@ func isSymlink(path string) (bool, error) {
 }
 
 // rejectStatusSymlinks checks .sortie/ and .sortie/status for
-// symlinks. Returns true if either component is a symbolic link.
+// symlinks. It returns true if either component is a symbolic link or
+// if a non-ENOENT error occurs while statting either path.
 func rejectStatusSymlinks(workspacePath string, logger *slog.Logger) bool {
 	dotSortiePath := filepath.Join(workspacePath, ".sortie")
 
