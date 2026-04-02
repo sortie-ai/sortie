@@ -64,7 +64,7 @@ type PrepareParams struct {
 
 	// PreRunFunc is an optional callback invoked after directory creation
 	// (and the after_create hook, if applicable) but before the before_run
-	// hook. Receives the resolved workspace path. Nil means no-op.
+	// hook. Receives the absolute workspace path. Nil means no-op.
 	PreRunFunc func(workspacePath string)
 }
 

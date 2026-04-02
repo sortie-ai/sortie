@@ -13,6 +13,7 @@ import (
 
 	"github.com/sortie-ai/sortie/internal/config"
 	"github.com/sortie-ai/sortie/internal/domain"
+	"github.com/sortie-ai/sortie/internal/logging"
 	"github.com/sortie-ai/sortie/internal/prompt"
 	"github.com/sortie-ai/sortie/internal/workspace"
 )
@@ -508,7 +509,8 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 
 	sessionStarted = true
 	sessionID = session.ID
-	logger.Info("agent session started", slog.String("session_id", session.ID))
+	logger = logging.WithSession(logger, session.ID)
+	logger.Info("agent session started")
 
 	// Execute turns until the issue leaves an active state or max_turns is reached.
 	maxTurns := cfg.Agent.MaxTurns
@@ -616,7 +618,6 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 			logger.Info("agent signaled status, exiting worker",
 				slog.String("status", string(statusSignal)),
 				slog.Int("turns_completed", turnsCompleted),
-				slog.String("session_id", session.ID),
 			)
 			stopSessionBestEffort(ctx, deps.AgentAdapter, session, cfg, logger)
 			finishWorkspace()
