@@ -445,6 +445,57 @@ func TestGenerateMCPConfig(t *testing.T) {
 	})
 }
 
+func TestGenerateMCPConfig_Attempt(t *testing.T) {
+	t.Parallel()
+
+	t.Run("attempt_written_to_env_when_non_nil", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		p := mcpParams(dir)
+		p.Attempt = intPtr(2)
+
+		_, err := GenerateMCPConfig(p)
+		if err != nil {
+			t.Fatalf("GenerateMCPConfig: %v", err)
+		}
+
+		entry := sortieEntry(t, readMCPConfig(t, dir))
+		env, ok := entry["env"].(map[string]any)
+		if !ok {
+			t.Fatalf("env is not an object: %v", entry["env"])
+		}
+
+		if got, ok := env["SORTIE_ATTEMPT"].(string); !ok || got != "2" {
+			t.Errorf("env[%q] = %q, want %q", "SORTIE_ATTEMPT", env["SORTIE_ATTEMPT"], "2")
+		}
+		if len(env) != 6 {
+			t.Errorf("env key count = %d, want 6: %v", len(env), env)
+		}
+	})
+
+	t.Run("attempt_absent_from_env_when_nil", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		p := mcpParams(dir)
+		p.Attempt = nil
+
+		_, err := GenerateMCPConfig(p)
+		if err != nil {
+			t.Fatalf("GenerateMCPConfig: %v", err)
+		}
+
+		entry := sortieEntry(t, readMCPConfig(t, dir))
+		env, ok := entry["env"].(map[string]any)
+		if !ok {
+			t.Fatalf("env is not an object: %v", entry["env"])
+		}
+
+		if _, present := env["SORTIE_ATTEMPT"]; present {
+			t.Errorf("env[%q] = %v, want key absent when Attempt is nil", "SORTIE_ATTEMPT", env["SORTIE_ATTEMPT"])
+		}
+	})
+}
+
 func TestCollectSortieEnv(t *testing.T) {
 	// t.Setenv cannot be used with t.Parallel.
 
