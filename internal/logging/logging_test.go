@@ -60,20 +60,28 @@ func TestParseLevel(t *testing.T) {
 }
 
 func TestSetup(t *testing.T) {
+	// Not parallel: mutates the process-wide slog default.
 	var buf bytes.Buffer
-	logging.Setup(&buf, slog.LevelInfo)
+	logger := logging.Setup(&buf, slog.LevelInfo)
 
-	slog.Default().Info("startup complete")
-	output := buf.String()
-
-	if !strings.Contains(output, "startup complete") {
-		t.Errorf("Setup() output = %q, want containing %q", output, "startup complete")
+	// The returned logger must write to buf.
+	logger.Info("from returned logger")
+	if !strings.Contains(buf.String(), "from returned logger") {
+		t.Errorf("returned logger output = %q, want containing %q", buf.String(), "from returned logger")
 	}
 
+	// slog.Default() must write to the same buf (identical handler).
 	buf.Reset()
-	slog.Default().Debug("should be filtered")
+	slog.Default().Info("from slog.Default")
+	if !strings.Contains(buf.String(), "from slog.Default") {
+		t.Errorf("slog.Default() output = %q, want containing %q", buf.String(), "from slog.Default")
+	}
+
+	// Level filter: DEBUG must be suppressed at LevelInfo.
+	buf.Reset()
+	logger.Debug("should be filtered")
 	if buf.Len() != 0 {
-		t.Errorf("Setup(LevelInfo) wrote DEBUG message: %q, want empty", buf.String())
+		t.Errorf("Setup(LevelInfo) wrote DEBUG message via returned logger: %q, want empty", buf.String())
 	}
 }
 
