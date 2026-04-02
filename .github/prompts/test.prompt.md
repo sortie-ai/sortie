@@ -19,6 +19,12 @@ I'm an Anthropic employee working on the Sortie project. Your task is to generat
 6. **Generate tests** following the `go-testing` skill conventions.
 7. **Verify** with `make test` — all tests must pass with `-race`.
 
-Apply coding standards from [Go documentation guidelines](../instructions/go-documentation.instructions.md) and follow [Go environment guidelines](../instructions/go-environment.instructions.md) for any necessary environment variable setup.
+You MUST adhere to the following constraints:
+
+- [Go Code Style](../instructions/go-codestyle.instructions.md)
+- [Go Structured Logging](../instructions/go-logging.instructions.md)
+- [Go Documentation Guidelines](../instructions/go-documentation.instructions.md)
+
+Use [Go environment guidelines](../instructions/go-environment.instructions.md) for any necessary environment variable setup.
 
 ${input:request:Path to spec/plan or description of what to test}

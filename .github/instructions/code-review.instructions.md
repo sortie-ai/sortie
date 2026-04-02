@@ -149,6 +149,14 @@ Flag code that:
 - Adds `//nolint` without specifying the linter name and a justification comment.
 - Suppresses `govet` or `staticcheck` — these catch real bugs and must not be silenced.
 
+### 11. Documentation
+
+All godoc and inline comments MUST follow the [Go Documentation and Comments](./go-documentation.instructions.md) guidelines.
+
+### 12. Code Style
+
+All code MUST follow the [Go Code Style](./go-codestyle.instructions.md) guidelines.
+
 ## Severity Classification
 
 | Severity | Definition | Examples |

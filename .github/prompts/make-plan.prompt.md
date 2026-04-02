@@ -13,6 +13,10 @@ Before planning, read the relevant sections of [architecture.md](../../docs/arch
 
 Follow your planning process and output format rules strictly.
 
-Apply coding standards from: [Go environment guidelines](../instructions/go-environment.instructions.md)
+You MUST adhere to the following constraints:
+
+- [Go Code Style](../instructions/go-codestyle.instructions.md)
+- [Go Structured Logging](../instructions/go-logging.instructions.md)
+- [Go Documentation Guidelines](../instructions/go-documentation.instructions.md)
 
 ${input:request:Path to spec file or feature description}
