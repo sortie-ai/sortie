@@ -13,7 +13,9 @@ import (
 	"github.com/sortie-ai/sortie/internal/config"
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/logging"
+	"github.com/sortie-ai/sortie/internal/persistence"
 	"github.com/sortie-ai/sortie/internal/registry"
+	"github.com/sortie-ai/sortie/internal/tool/history"
 	"github.com/sortie-ai/sortie/internal/tool/mcpserver"
 	"github.com/sortie-ai/sortie/internal/tool/status"
 	"github.com/sortie-ai/sortie/internal/tool/trackerapi"
@@ -103,6 +105,19 @@ func runMCPServer(ctx context.Context, args []string, stdout io.Writer, stderr i
 	if workspacePath := os.Getenv("SORTIE_WORKSPACE"); workspacePath != "" {
 		toolRegistry.Register(status.New(workspacePath))
 	}
+	if dbPath := os.Getenv("SORTIE_DB_PATH"); dbPath != "" {
+		if issueID := os.Getenv("SORTIE_ISSUE_ID"); issueID != "" {
+			store, storeErr := persistence.OpenReadOnly(ctx, dbPath)
+			if storeErr != nil {
+				logger.Warn("failed to open read-only db for workspace_history",
+					slog.String("db_path", dbPath),
+					slog.Any("error", storeErr))
+			} else {
+				defer store.Close() //nolint:errcheck // best-effort cleanup at shutdown
+				toolRegistry.Register(history.New(buildHistoryQuery(store), issueID))
+			}
+		}
+	}
 
 	srv := mcpserver.NewServer(toolRegistry, os.Stdin, stdout, logger, Version)
 	if err := srv.Serve(ctx); err != nil {
@@ -111,4 +126,28 @@ func runMCPServer(ctx context.Context, args []string, stdout io.Writer, stderr i
 	}
 
 	return 0
+}
+
+func buildHistoryQuery(store *persistence.Store) history.QueryFunc {
+	return func(ctx context.Context, issueID string, limit int) ([]history.Entry, error) {
+		rows, err := store.QueryRunHistoryByIssue(ctx, issueID)
+		if err != nil {
+			return nil, err
+		}
+		if limit > 0 && len(rows) > limit {
+			rows = rows[:limit]
+		}
+		entries := make([]history.Entry, len(rows))
+		for i, r := range rows {
+			entries[i] = history.Entry{
+				Attempt:      r.Attempt,
+				AgentAdapter: r.AgentAdapter,
+				StartedAt:    r.StartedAt,
+				CompletedAt:  r.CompletedAt,
+				Status:       r.Status,
+				Error:        r.Error,
+			}
+		}
+		return entries, nil
+	}
 }

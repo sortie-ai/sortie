@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -2116,5 +2117,114 @@ func TestUpsertAggregateMetrics_CacheReadTokensUpdate(t *testing.T) {
 	}
 	if got.CacheReadTokens != 9999 {
 		t.Errorf("CacheReadTokens = %d, want 9999", got.CacheReadTokens)
+	}
+}
+
+func TestOpenReadOnly(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "test.db")
+
+	// Create and migrate a file-backed database via the standard Open path.
+	s, err := Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("Open(%q): %v", dbPath, err)
+	}
+	if err := s.Migrate(ctx); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	closeStore(t, s)
+
+	// Re-open in read-only mode and verify the connection is alive.
+	ro, err := OpenReadOnly(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("OpenReadOnly(%q): %v", dbPath, err)
+	}
+	defer closeStore(t, ro)
+
+	if err := ro.Ping(ctx); err != nil {
+		t.Fatalf("Ping on read-only store: %v", err)
+	}
+}
+
+func TestOpenReadOnly_RejectWrite(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "test.db")
+
+	// Create and migrate a file-backed database.
+	s, err := Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("Open(%q): %v", dbPath, err)
+	}
+	if err := s.Migrate(ctx); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	closeStore(t, s)
+
+	// Re-open in read-only mode.
+	ro, err := OpenReadOnly(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("OpenReadOnly(%q): %v", dbPath, err)
+	}
+	defer closeStore(t, ro)
+
+	// Any mutation must be rejected by the driver with an SQLITE_READONLY error.
+	_, writeErr := ro.db.ExecContext(ctx,
+		`INSERT INTO run_history
+			(issue_id, identifier, attempt, agent_adapter, workspace, started_at, completed_at, status)
+		VALUES ('x', 'x', 1, 'mock', '/ws', '2026-01-01T00:00:00Z', '2026-01-01T00:00:01Z', 'succeeded')`)
+	if writeErr == nil {
+		t.Fatal("ExecContext on read-only store succeeded, want SQLITE_READONLY error")
+	}
+	if !strings.Contains(strings.ToLower(writeErr.Error()), "readonly") {
+		t.Errorf("write error = %q, want to contain %q", writeErr.Error(), "readonly")
+	}
+}
+
+func TestOpenReadOnly_ReadsExistingData(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "test.db")
+
+	// Create, migrate, insert one row, then close.
+	s, err := Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("Open(%q): %v", dbPath, err)
+	}
+	if err := s.Migrate(ctx); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+	run := newTestRun(1)
+	if _, err := s.AppendRunHistory(ctx, run); err != nil {
+		t.Fatalf("AppendRunHistory: %v", err)
+	}
+	closeStore(t, s)
+
+	// Re-open read-only and verify the inserted row is visible.
+	ro, err := OpenReadOnly(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("OpenReadOnly(%q): %v", dbPath, err)
+	}
+	defer closeStore(t, ro)
+
+	entries, err := ro.QueryRunHistoryByIssue(ctx, run.IssueID)
+	if err != nil {
+		t.Fatalf("QueryRunHistoryByIssue: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("len(entries) = %d, want 1", len(entries))
+	}
+	if entries[0].IssueID != run.IssueID {
+		t.Errorf("IssueID = %q, want %q", entries[0].IssueID, run.IssueID)
+	}
+	if entries[0].Identifier != run.Identifier {
+		t.Errorf("Identifier = %q, want %q", entries[0].Identifier, run.Identifier)
 	}
 }
