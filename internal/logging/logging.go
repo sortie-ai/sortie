@@ -12,17 +12,23 @@ import (
 	"strings"
 )
 
-// Setup initializes the process-wide default logger. The resulting
-// [slog.TextHandler] writes key=value records to w at the given minimum
-// level. After Setup returns, [slog.Default] and the top-level slog
-// functions (Info, Warn, …) use this logger. Setup is intended to be
-// called once during service startup; subsequent calls replace the
-// default silently.
-func Setup(w io.Writer, level slog.Level) {
+// Setup initializes the process-wide default logger and returns it. The
+// resulting [slog.TextHandler] writes key=value records to w at the given
+// minimum level. After Setup returns, [slog.Default] and the top-level slog
+// functions (Info, Warn, …) use this logger. Setup is intended to be called
+// once during service startup; subsequent calls replace the default silently.
+//
+// The returned logger is identical to [slog.Default] immediately after the
+// call. Callers that need a logger bound to w should use the return value
+// rather than calling [slog.Default] afterward to avoid a race when multiple
+// goroutines call Setup concurrently.
+func Setup(w io.Writer, level slog.Level) *slog.Logger {
 	handler := slog.NewTextHandler(w, &slog.HandlerOptions{
 		Level: level,
 	})
-	slog.SetDefault(slog.New(handler))
+	l := slog.New(handler)
+	slog.SetDefault(l)
+	return l
 }
 
 // ParseLevel converts a case-insensitive level name to the
