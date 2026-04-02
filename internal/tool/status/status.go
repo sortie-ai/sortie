@@ -18,6 +18,8 @@ import (
 
 var _ domain.AgentTool = (*StatusTool)(nil)
 
+const maxStateFileBytes = 4096
+
 var inputSchema = json.RawMessage(`{
   "type": "object",
   "properties": {},
@@ -96,6 +98,17 @@ func (t *StatusTool) InputSchema() json.RawMessage {
 // unreadable, or contains invalid JSON. The Go error return is non-nil
 // only for internal marshal failures.
 func (t *StatusTool) Execute(_ context.Context, _ json.RawMessage) (json.RawMessage, error) {
+	fi, err := os.Lstat(t.stateFilePath)
+	if err != nil {
+		return errorResponse("state file unavailable: " + err.Error())
+	}
+	if fi.Mode()&os.ModeSymlink != 0 {
+		return errorResponse("state file is a symlink")
+	}
+	if fi.Size() > maxStateFileBytes {
+		return errorResponse("state file exceeds size limit")
+	}
+
 	data, err := os.ReadFile(t.stateFilePath)
 	if err != nil {
 		return errorResponse("state file unavailable: " + err.Error())

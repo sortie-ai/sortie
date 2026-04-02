@@ -33,9 +33,8 @@ type MCPConfigParams struct {
 	SessionID string
 
 	// Attempt is the retry attempt number for this worker session.
-	// Nil on the first run; non-nil (>= 1) on retries and
-	// continuations. When non-nil, written to the env block as
-	// SORTIE_ATTEMPT.
+	// Nil on the first run; non-nil on retries and continuations.
+	// When non-nil, written to the env block as SORTIE_ATTEMPT.
 	Attempt *int
 
 	// OperatorMCPConfigPath is the path to the operator-provided MCP

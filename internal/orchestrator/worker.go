@@ -53,12 +53,27 @@ type workerState struct {
 // .sortie/state.json inside the workspace. The write uses a
 // temp-file-plus-rename pattern so readers never observe a partial
 // write. Errors are returned to the caller, which logs and continues.
+//
+// The .sortie directory is validated with Lstat to reject symlinks;
+// an agent that replaces .sortie with a symlink cannot trick the
+// orchestrator into writing outside the workspace.
 func writeWorkerState(workspacePath string, state workerState) error {
+	dir := filepath.Join(workspacePath, ".sortie")
+	fi, err := os.Lstat(dir)
+	if err != nil {
+		return fmt.Errorf("stat .sortie dir: %w", err)
+	}
+	if fi.Mode()&os.ModeSymlink != 0 {
+		return fmt.Errorf(".sortie is a symlink, refusing to write state file")
+	}
+	if !fi.IsDir() {
+		return fmt.Errorf(".sortie is not a directory")
+	}
+
 	data, err := json.Marshal(state)
 	if err != nil {
 		return fmt.Errorf("marshal worker state: %w", err)
 	}
-	dir := filepath.Join(workspacePath, ".sortie")
 	tmpPath := filepath.Join(dir, "state.json.tmp")
 	outPath := filepath.Join(dir, "state.json")
 	if err := os.WriteFile(tmpPath, data, 0o600); err != nil {
@@ -568,30 +583,34 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 	turnNumber := 1
 	activeStates := cfg.Tracker.ActiveStates
 
-	if err := writeWorkerState(wsResult.Path, workerState{
-		TurnNumber: 0,
-		MaxTurns:   maxTurns,
-		Attempt:    attempt,
-		StartedAt:  sessionStartedAt.Format(time.RFC3339Nano),
-	}); err != nil {
-		logger.Warn("failed to write status state file at session start", slog.Any("error", err))
+	if mcpConfigPath != "" {
+		if err := writeWorkerState(wsResult.Path, workerState{
+			TurnNumber: 0,
+			MaxTurns:   maxTurns,
+			Attempt:    attempt,
+			StartedAt:  sessionStartedAt.Format(time.RFC3339Nano),
+		}); err != nil {
+			logger.Warn("failed to write status state file at session start", slog.Any("error", err))
+		}
 	}
 
 	for {
-		if err := writeWorkerState(wsResult.Path, workerState{
-			TurnNumber:      turnNumber,
-			MaxTurns:        maxTurns,
-			Attempt:         attempt,
-			StartedAt:       sessionStartedAt.Format(time.RFC3339Nano),
-			InputTokens:     localInputTokens,
-			OutputTokens:    localOutputTokens,
-			TotalTokens:     localTotalTokens,
-			CacheReadTokens: localCacheReadTokens,
-		}); err != nil {
-			logger.Warn("failed to write status state file at turn start",
-				slog.Int("turn_number", turnNumber),
-				slog.Any("error", err),
-			)
+		if mcpConfigPath != "" {
+			if err := writeWorkerState(wsResult.Path, workerState{
+				TurnNumber:      turnNumber,
+				MaxTurns:        maxTurns,
+				Attempt:         attempt,
+				StartedAt:       sessionStartedAt.Format(time.RFC3339Nano),
+				InputTokens:     localInputTokens,
+				OutputTokens:    localOutputTokens,
+				TotalTokens:     localTotalTokens,
+				CacheReadTokens: localCacheReadTokens,
+			}); err != nil {
+				logger.Warn("failed to write status state file at turn start",
+					slog.Int("turn_number", turnNumber),
+					slog.Any("error", err),
+				)
+			}
 		}
 
 		// Render the prompt template for this turn.
@@ -650,17 +669,19 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 					localLastTotalTokens = max(localLastTotalTokens, event.Usage.TotalTokens)
 					localLastCacheReadTokens = max(localLastCacheReadTokens, event.Usage.CacheReadTokens)
 
-					if err := writeWorkerState(wsResult.Path, workerState{
-						TurnNumber:      turnNumber,
-						MaxTurns:        maxTurns,
-						Attempt:         attempt,
-						StartedAt:       sessionStartedAt.Format(time.RFC3339Nano),
-						InputTokens:     localInputTokens,
-						OutputTokens:    localOutputTokens,
-						TotalTokens:     localTotalTokens,
-						CacheReadTokens: localCacheReadTokens,
-					}); err != nil {
-						logger.Warn("failed to write status state file on token event", slog.Any("error", err))
+					if mcpConfigPath != "" {
+						if err := writeWorkerState(wsResult.Path, workerState{
+							TurnNumber:      turnNumber,
+							MaxTurns:        maxTurns,
+							Attempt:         attempt,
+							StartedAt:       sessionStartedAt.Format(time.RFC3339Nano),
+							InputTokens:     localInputTokens,
+							OutputTokens:    localOutputTokens,
+							TotalTokens:     localTotalTokens,
+							CacheReadTokens: localCacheReadTokens,
+						}); err != nil {
+							logger.Warn("failed to write status state file on token event", slog.Any("error", err))
+						}
 					}
 				}
 				deps.OnEvent(issue.ID, event)
