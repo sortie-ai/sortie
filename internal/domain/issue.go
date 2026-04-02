@@ -47,8 +47,8 @@ type Issue struct {
 	// when absent.
 	URL string
 
-	// Labels are normalized to lowercase by the adapter. Non-nil
-	// empty slice when no labels exist.
+	// Labels contains the issue's labels, normalized to lowercase by
+	// the adapter. Non-nil empty slice when no labels exist.
 	Labels []string
 
 	// Assignee is the identity string as provided by the tracker.
@@ -81,7 +81,7 @@ type Issue struct {
 }
 
 // BlockerRef identifies an issue that blocks the parent issue.
-// Populated from inverse "blocks" relations in the tracker.
+// Adapters populate values from inverse "blocks" relations in the tracker.
 type BlockerRef struct {
 	// ID is the tracker-internal ID. Empty string when unavailable.
 	ID string
