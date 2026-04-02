@@ -13,6 +13,22 @@ import (
 // such branching.
 const DefaultContinuationPrompt = "Continue working on this task. Review the current state of your work, check what remains to be done, and proceed with the next step. If you believe the task is complete, verify your changes and confirm completion."
 
+// RuntimeStatusSuffix is a fixed instruction string appended to the agent
+// prompt on the first turn of each worker run. It informs the agent of
+// the A2O status-signaling protocol for reporting blocked or
+// review-needed status via the .sortie/status file.
+//
+// Continuation turns omit this suffix because the instruction persists
+// in the agent's conversation history from turn 1.
+const RuntimeStatusSuffix = `If you determine that you cannot make further progress on this task without human
+intervention, or if your work is complete and requires human review, signal the
+orchestrator by running:
+
+    mkdir -p .sortie && echo "blocked" > .sortie/status
+
+Use "blocked" when you cannot proceed. Use "needs-human-review" when your work is
+complete and awaiting review. Do not write this file during normal productive work.`
+
 // BuildTurnPrompt returns the rendered prompt for a single turn within a
 // worker session. turnNumber 1 is the initial turn; turnNumber 2 and above
 // are continuation turns. If a continuation turn renders to empty output,

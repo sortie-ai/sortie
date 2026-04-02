@@ -544,8 +544,11 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 			return
 		}
 
-		if turnNumber == 1 && deps.ToolRegistry != nil && deps.ToolRegistry.Len() > 0 {
-			rendered += "\n\n" + buildToolAdvertisement(deps.ToolRegistry, cfg.Tracker.Project)
+		if turnNumber == 1 {
+			if deps.ToolRegistry != nil && deps.ToolRegistry.Len() > 0 {
+				rendered += "\n\n" + buildToolAdvertisement(deps.ToolRegistry, cfg.Tracker.Project)
+			}
+			rendered += "\n\n" + prompt.RuntimeStatusSuffix
 		}
 
 		logger.Info("turn started", slog.Int("turn_number", turnNumber), slog.Int("max_turns", maxTurns))

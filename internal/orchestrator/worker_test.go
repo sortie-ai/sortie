@@ -2891,3 +2891,231 @@ func TestRunWorkerAttempt_A2OStatusSignal(t *testing.T) {
 		}
 	})
 }
+
+// TestRuntimeStatusSuffixInjection verifies the first-turn-only injection of
+// prompt.RuntimeStatusSuffix into the prompt passed to RunTurn, including
+// ordering relative to tool advertisement and the absence of the suffix on
+// continuation turns.
+func TestRuntimeStatusSuffixInjection(t *testing.T) {
+	t.Parallel()
+
+	// writeSoftStop writes "blocked" to the .sortie/status file inside the
+	// given workspace path so the worker exits cleanly after one turn.
+	writeSoftStop := func(wsPath string) {
+		statusDir := filepath.Join(wsPath, ".sortie")
+		if err := os.MkdirAll(statusDir, 0o755); err == nil {
+			_ = os.WriteFile(filepath.Join(statusDir, "status"), []byte("blocked\n"), 0o644)
+		}
+	}
+
+	t.Run("first_turn_contains_suffix", func(t *testing.T) {
+		t.Parallel()
+
+		tmpDir := t.TempDir()
+		cfg := defaultWorkerConfig(tmpDir)
+		cfg.Agent.MaxTurns = 5
+
+		var wsPath atomic.Value
+		var capturedPrompt string
+		var mu sync.Mutex
+		ec := newExitCapture()
+
+		deps := WorkerDeps{
+			TrackerAdapter: &mockTrackerAdapter{},
+			AgentAdapter: &mockAgentAdapter{
+				startSessionFn: func(_ context.Context, params domain.StartSessionParams) (domain.Session, error) {
+					wsPath.Store(params.WorkspacePath)
+					return domain.Session{ID: "sess-1"}, nil
+				},
+				runTurnFn: func(_ context.Context, session domain.Session, params domain.RunTurnParams) (domain.TurnResult, error) {
+					mu.Lock()
+					capturedPrompt = params.Prompt
+					mu.Unlock()
+					if p, ok := wsPath.Load().(string); ok && p != "" {
+						writeSoftStop(p)
+					}
+					return domain.TurnResult{SessionID: session.ID, ExitReason: domain.EventTurnCompleted}, nil
+				},
+			},
+			ConfigFunc:         func() config.ServiceConfig { return cfg },
+			PromptTemplateFunc: func() *prompt.Template { return mustParseTemplate(t, "do work on {{ .issue.title }}") },
+			OnEvent:            func(_ string, _ domain.AgentEvent) {},
+			OnExit:             ec.onExit,
+			Logger:             discardLogger(),
+		}
+
+		RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
+
+		ec.waitResult(t)
+
+		mu.Lock()
+		p := capturedPrompt
+		mu.Unlock()
+
+		if !strings.Contains(p, prompt.RuntimeStatusSuffix) {
+			t.Errorf("first-turn prompt missing RuntimeStatusSuffix:\n%s", p)
+		}
+	})
+
+	t.Run("suffix_after_tool_advertisement", func(t *testing.T) {
+		t.Parallel()
+
+		tmpDir := t.TempDir()
+		cfg := defaultWorkerConfig(tmpDir)
+		cfg.Agent.MaxTurns = 5
+		cfg.Tracker.Project = "TESTPROJ"
+
+		var wsPath atomic.Value
+		var capturedPrompt string
+		var mu sync.Mutex
+		ec := newExitCapture()
+
+		reg := domain.NewToolRegistry()
+		reg.Register(&stubAgentTool{toolName: "tracker_api", desc: "Query issues"})
+
+		deps := WorkerDeps{
+			TrackerAdapter: &mockTrackerAdapter{},
+			AgentAdapter: &mockAgentAdapter{
+				startSessionFn: func(_ context.Context, params domain.StartSessionParams) (domain.Session, error) {
+					wsPath.Store(params.WorkspacePath)
+					return domain.Session{ID: "sess-1"}, nil
+				},
+				runTurnFn: func(_ context.Context, session domain.Session, params domain.RunTurnParams) (domain.TurnResult, error) {
+					mu.Lock()
+					capturedPrompt = params.Prompt
+					mu.Unlock()
+					if p, ok := wsPath.Load().(string); ok && p != "" {
+						writeSoftStop(p)
+					}
+					return domain.TurnResult{SessionID: session.ID, ExitReason: domain.EventTurnCompleted}, nil
+				},
+			},
+			ConfigFunc:         func() config.ServiceConfig { return cfg },
+			PromptTemplateFunc: func() *prompt.Template { return mustParseTemplate(t, "do work on {{ .issue.title }}") },
+			OnEvent:            func(_ string, _ domain.AgentEvent) {},
+			OnExit:             ec.onExit,
+			Logger:             discardLogger(),
+			ToolRegistry:       reg,
+		}
+
+		RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
+
+		ec.waitResult(t)
+
+		mu.Lock()
+		p := capturedPrompt
+		mu.Unlock()
+
+		toolIdx := strings.Index(p, "## Available Sortie tools")
+		if toolIdx < 0 {
+			t.Fatalf("first-turn prompt missing tool advertisement header:\n%s", p)
+		}
+		suffixIdx := strings.Index(p, prompt.RuntimeStatusSuffix)
+		if suffixIdx < 0 {
+			t.Fatalf("first-turn prompt missing RuntimeStatusSuffix:\n%s", p)
+		}
+		if suffixIdx <= toolIdx {
+			t.Errorf("RuntimeStatusSuffix (idx=%d) must appear after tool advertisement (idx=%d)", suffixIdx, toolIdx)
+		}
+	})
+
+	t.Run("continuation_turn_omits_suffix", func(t *testing.T) {
+		t.Parallel()
+
+		tmpDir := t.TempDir()
+		cfg := defaultWorkerConfig(tmpDir)
+		cfg.Agent.MaxTurns = 2
+
+		var prompts [2]string
+		var turnCounter atomic.Int64
+		var mu sync.Mutex
+		ec := newExitCapture()
+
+		deps := WorkerDeps{
+			TrackerAdapter: &mockTrackerAdapter{},
+			AgentAdapter: &mockAgentAdapter{
+				runTurnFn: func(_ context.Context, session domain.Session, params domain.RunTurnParams) (domain.TurnResult, error) {
+					n := turnCounter.Add(1)
+					mu.Lock()
+					if n <= 2 {
+						prompts[n-1] = params.Prompt
+					}
+					mu.Unlock()
+					return domain.TurnResult{SessionID: session.ID, ExitReason: domain.EventTurnCompleted}, nil
+				},
+			},
+			ConfigFunc:         func() config.ServiceConfig { return cfg },
+			PromptTemplateFunc: func() *prompt.Template { return mustParseTemplate(t, "turn={{ .run.turn_number }}") },
+			OnEvent:            func(_ string, _ domain.AgentEvent) {},
+			OnExit:             ec.onExit,
+			Logger:             discardLogger(),
+		}
+
+		RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
+
+		result := ec.waitResult(t)
+		if result.TurnsCompleted != 2 {
+			t.Fatalf("TurnsCompleted = %d, want 2", result.TurnsCompleted)
+		}
+
+		mu.Lock()
+		p1, p2 := prompts[0], prompts[1]
+		mu.Unlock()
+
+		if !strings.Contains(p1, prompt.RuntimeStatusSuffix) {
+			t.Errorf("turn 1 prompt missing RuntimeStatusSuffix:\n%s", p1)
+		}
+		if strings.Contains(p2, prompt.RuntimeStatusSuffix) {
+			t.Errorf("turn 2 prompt must not contain RuntimeStatusSuffix:\n%s", p2)
+		}
+	})
+
+	t.Run("empty_template_first_turn_contains_suffix", func(t *testing.T) {
+		t.Parallel()
+
+		tmpDir := t.TempDir()
+		cfg := defaultWorkerConfig(tmpDir)
+		cfg.Agent.MaxTurns = 5
+
+		var wsPath atomic.Value
+		var capturedPrompt string
+		var mu sync.Mutex
+		ec := newExitCapture()
+
+		deps := WorkerDeps{
+			TrackerAdapter: &mockTrackerAdapter{},
+			AgentAdapter: &mockAgentAdapter{
+				startSessionFn: func(_ context.Context, params domain.StartSessionParams) (domain.Session, error) {
+					wsPath.Store(params.WorkspacePath)
+					return domain.Session{ID: "sess-1"}, nil
+				},
+				runTurnFn: func(_ context.Context, session domain.Session, params domain.RunTurnParams) (domain.TurnResult, error) {
+					mu.Lock()
+					capturedPrompt = params.Prompt
+					mu.Unlock()
+					if p, ok := wsPath.Load().(string); ok && p != "" {
+						writeSoftStop(p)
+					}
+					return domain.TurnResult{SessionID: session.ID, ExitReason: domain.EventTurnCompleted}, nil
+				},
+			},
+			ConfigFunc:         func() config.ServiceConfig { return cfg },
+			PromptTemplateFunc: func() *prompt.Template { return mustParseTemplate(t, "") },
+			OnEvent:            func(_ string, _ domain.AgentEvent) {},
+			OnExit:             ec.onExit,
+			Logger:             discardLogger(),
+		}
+
+		RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
+
+		ec.waitResult(t)
+
+		mu.Lock()
+		p := capturedPrompt
+		mu.Unlock()
+
+		if !strings.Contains(p, prompt.RuntimeStatusSuffix) {
+			t.Errorf("first-turn prompt missing RuntimeStatusSuffix with empty template:\n%s", p)
+		}
+	})
+}
