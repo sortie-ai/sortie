@@ -3,24 +3,88 @@
 # requirement documents, then format with golangci-lint fmt.
 #
 # Usage:
-#   scripts/enforce-style.sh                   # all non-test files under internal/
-#   scripts/enforce-style.sh <file>            # single file
+#   scripts/enforce-style.sh [OPTIONS] [FILE]
+#
+# Options:
+#   --codestyle      apply go-codestyle rules
+#   --documentation  apply go-documentation rules
+#   --logging        apply go-logging rules
+#   --help           show this message and exit
+#
+# When no guideline flag is given, all three are applied.
+# FILE, if provided, limits processing to that single file instead of scanning
+# every non-test file under internal/.
 set -eu
 
-die() { printf 'error: %s\n' "$*" >&2; exit 1; }
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+die()   { printf 'error: %s\n' "$*" >&2; exit 1; }
+
+usage() {
+    cat <<EOF
+Usage: $(basename "$0") [OPTIONS] [FILE]
+
+Run Copilot CLI on Go source files to enforce style guidelines, then format
+with golangci-lint fmt.
+
+Options:
+  --codestyle      apply go-codestyle rules
+  --documentation  apply go-documentation rules
+  --logging        apply go-logging rules
+  --help           show this message and exit
+
+When no guideline flag is given, all three are applied.
+FILE limits processing to a single file instead of all non-test files under
+internal/.
+
+Examples:
+  $(basename "$0")
+  $(basename "$0") --codestyle --logging
+  $(basename "$0") internal/orchestrator/dispatch.go
+  $(basename "$0") --documentation internal/orchestrator/dispatch.go
+EOF
+}
+
+# ---------------------------------------------------------------------------
+# Argument parsing
+# ---------------------------------------------------------------------------
+use_codestyle=0
+use_documentation=0
+use_logging=0
+target=''
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --codestyle)     use_codestyle=1 ;;
+        --documentation) use_documentation=1 ;;
+        --logging)       use_logging=1 ;;
+        --help)          usage; exit 0 ;;
+        --*)             die "unknown option: $1" ;;
+        *)
+            [ -n "$target" ] && die "unexpected argument: $1"
+            target="$1"
+            ;;
+    esac
+    shift
+done
+
+# Default: all guidelines when none are explicitly selected.
+if [ "$use_codestyle" -eq 0 ] && [ "$use_documentation" -eq 0 ] && [ "$use_logging" -eq 0 ]; then
+    use_codestyle=1
+    use_documentation=1
+    use_logging=1
+fi
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
-# Save the optional target before set -- replaces positional parameters.
-target="${1:-}"
-
 # ---------------------------------------------------------------------------
-# Requirement documents — add or remove paths here.
+# Build the requirements list from selected flags.
 # ---------------------------------------------------------------------------
-set -- \
-    "$REPO_ROOT/.github/instructions/go-codestyle.instructions.md" \
-    "$REPO_ROOT/.github/instructions/go-documentation.instructions.md" \
-    "$REPO_ROOT/.github/instructions/go-logging.instructions.md"
+set --
+[ "$use_codestyle" -eq 1 ]     && set -- "$@" "$REPO_ROOT/.github/instructions/go-codestyle.instructions.md"
+[ "$use_documentation" -eq 1 ] && set -- "$@" "$REPO_ROOT/.github/instructions/go-documentation.instructions.md"
+[ "$use_logging" -eq 1 ]       && set -- "$@" "$REPO_ROOT/.github/instructions/go-logging.instructions.md"
 
 for req in "$@"; do
     [ -f "$req" ] || die "requirements file not found: $req"
@@ -37,8 +101,7 @@ req_list=$(
 )
 
 # ---------------------------------------------------------------------------
-# Build the file list: single file from argument, or all non-test files under
-# internal/ discovered via find.
+# Build the file list.
 # ---------------------------------------------------------------------------
 tmpfile=$(mktemp)
 trap 'rm -f "$tmpfile"' EXIT INT TERM
