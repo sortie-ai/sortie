@@ -107,7 +107,7 @@ func handleCIFailure(
 
 	CancelRetry(state, pending.IssueID)
 
-	nextAttempt := pending.Attempt + 1
+	nextAttempt := pending.Attempt
 
 	ScheduleRetry(state, ScheduleRetryParams{
 		IssueID:          pending.IssueID,
