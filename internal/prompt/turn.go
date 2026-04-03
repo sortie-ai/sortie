@@ -35,7 +35,7 @@ complete and awaiting review. Do not write this file during normal productive wo
 // [DefaultContinuationPrompt] is returned as a fallback.
 //
 // Safe for concurrent use because the underlying [Template.Render] is safe.
-func BuildTurnPrompt(tmpl *Template, issue map[string]any, attempt any, turnNumber, maxTurns int) (string, error) {
+func BuildTurnPrompt(tmpl *Template, issue map[string]any, attempt any, turnNumber, maxTurns int, opts ...RenderOption) (string, error) {
 	if turnNumber < 1 {
 		return "", fmt.Errorf("invalid turn number %d: must be >= 1", turnNumber)
 	}
@@ -47,7 +47,7 @@ func BuildTurnPrompt(tmpl *Template, issue map[string]any, attempt any, turnNumb
 		IsContinuation: isContinuation,
 	}
 
-	rendered, err := tmpl.Render(issue, attempt, rc)
+	rendered, err := tmpl.Render(issue, attempt, rc, opts...)
 	if err != nil {
 		return "", err
 	}

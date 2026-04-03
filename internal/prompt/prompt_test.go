@@ -480,3 +480,87 @@ func TestRender_Concurrent(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+func TestRender_WithCIFailure(t *testing.T) {
+	t.Parallel()
+
+	t.Run("DefaultNil_NoError", func(t *testing.T) {
+		t.Parallel()
+		// Template uses ci_failure in a conditional; default nil must not trigger
+		// missingkey=error and must evaluate the block as falsy.
+		tmpl, err := Parse(`{{ if .ci_failure }}FAIL{{ end }}`, "WORKFLOW.md", 0)
+		if err != nil {
+			t.Fatalf("parse: %v", err)
+		}
+		got, err := tmpl.Render(map[string]any{"title": "t"}, nil, RunContext{TurnNumber: 1, MaxTurns: 5})
+		if err != nil {
+			t.Fatalf("render with default ci_failure=nil: %v", err)
+		}
+		if got != "" {
+			t.Errorf("rendered %q, want empty string when ci_failure is nil", got)
+		}
+	})
+
+	t.Run("WithCIFailure_nil_Falsy", func(t *testing.T) {
+		t.Parallel()
+		tmpl, err := Parse(`{{ if .ci_failure }}FAIL{{ end }}`, "WORKFLOW.md", 0)
+		if err != nil {
+			t.Fatalf("parse: %v", err)
+		}
+		got, err := tmpl.Render(
+			map[string]any{"title": "t"}, nil,
+			RunContext{TurnNumber: 1, MaxTurns: 5},
+			WithCIFailure(nil),
+		)
+		if err != nil {
+			t.Fatalf("render with WithCIFailure(nil): %v", err)
+		}
+		if got != "" {
+			t.Errorf("rendered %q, want empty string when WithCIFailure(nil)", got)
+		}
+	})
+
+	t.Run("WithCIFailure_map_Truthy", func(t *testing.T) {
+		t.Parallel()
+		tmpl, err := Parse(
+			`{{ if .ci_failure }}{{ index .ci_failure "status" }}{{ end }}`,
+			"WORKFLOW.md", 0,
+		)
+		if err != nil {
+			t.Fatalf("parse: %v", err)
+		}
+		got, err := tmpl.Render(
+			map[string]any{"title": "t"}, nil,
+			RunContext{TurnNumber: 1, MaxTurns: 5},
+			WithCIFailure(map[string]any{"status": "failing"}),
+		)
+		if err != nil {
+			t.Fatalf("render with ci_failure map: %v", err)
+		}
+		if got != "failing" {
+			t.Errorf("rendered %q, want %q", got, "failing")
+		}
+	})
+
+	t.Run("BuildTurnPrompt_CIFailureForwarded", func(t *testing.T) {
+		t.Parallel()
+		tmpl, err := Parse(
+			`{{ if .ci_failure }}ci={{ index .ci_failure "count" }}{{ end }}`,
+			"WORKFLOW.md", 0,
+		)
+		if err != nil {
+			t.Fatalf("parse: %v", err)
+		}
+		got, err := BuildTurnPrompt(
+			tmpl,
+			map[string]any{"title": "t"}, nil, 1, 5,
+			WithCIFailure(map[string]any{"count": 3}),
+		)
+		if err != nil {
+			t.Fatalf("BuildTurnPrompt: %v", err)
+		}
+		if !strings.Contains(got, "ci=3") {
+			t.Errorf("BuildTurnPrompt output %q missing %q", got, "ci=3")
+		}
+	})
+}
