@@ -192,6 +192,13 @@ func (p *GitHubCIProvider) fetchAllCheckRuns(ctx context.Context, ref string) ([
 		pages++
 	}
 
+	if nextURL != "" {
+		slog.WarnContext(ctx, "check runs response truncated at page limit",
+			slog.Int("pages_fetched", pages),
+			slog.Int("max_pages", maxCIPages),
+			slog.String("ref", ref))
+	}
+
 	return allRuns, nil
 }
 
@@ -208,9 +215,9 @@ func (p *GitHubCIProvider) fetchLogExcerpt(ctx context.Context, failing githubCh
 
 	body, err := p.client.doRawGet(ctx, path, maxLogBytes)
 	if err != nil {
-		slog.WarnContext(ctx, "fetching job log",
+		slog.WarnContext(ctx, "failed to fetch job log",
 			slog.Int64("job_id", failing.ID),
-			slog.String("error", err.Error()))
+			slog.Any("error", err))
 		return ""
 	}
 
