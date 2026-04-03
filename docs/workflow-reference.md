@@ -21,6 +21,7 @@
   - [2.5 `hooks` — Workspace Lifecycle Hooks](#25-hooks--workspace-lifecycle-hooks)
   - [2.6 `agent` — Coding Agent Configuration](#26-agent--coding-agent-configuration)
   - [2.7 `db_path` — SQLite Database Path](#27-db_path--sqlite-database-path)
+  - [2.8 `ci_feedback` — CI Feedback Loop](#28-ci_feedback--ci-feedback-loop)
 - [3. Environment Variable Overrides](#3-environment-variable-overrides)
   - [3.1 Source Precedence](#31-source-precedence)
   - [3.2 Curated Variable List](#32-curated-variable-list)
@@ -136,7 +137,7 @@ After parsing, the loader produces a struct with three fields:
 
 ### 2.1 Top-Level Keys
 
-The core schema recognizes six top-level keys:
+The core schema recognizes seven top-level keys:
 
 ```yaml
 tracker: # Issue tracker connection and query settings
@@ -145,6 +146,7 @@ workspace: # Workspace root path
 hooks: # Workspace lifecycle hook scripts
 agent: # Coding agent adapter, timeouts, and limits
 db_path: # SQLite database file path
+ci_feedback: # CI failure feedback loop (optional)
 ```
 
 **Unknown top-level keys are ignored** by the core schema for forward compatibility. They
@@ -401,6 +403,52 @@ connection. A restart is required to change the database file.
 
 ---
 
+### 2.8 `ci_feedback` — CI Feedback Loop
+
+```yaml
+ci_feedback:
+  kind: github
+  max_retries: 2
+  max_log_lines: 50
+  escalation: label
+  escalation_label: needs-human
+```
+
+| Field              | Type   | Required              | Default        | Dynamic Reload  | Description                                                                                                           |
+| ------------------ | ------ | --------------------- | -------------- | --------------- | --------------------------------------------------------------------------------------------------------------------- |
+| `kind`             | string | **Yes** (to activate) | _(absent)_     | Future dispatches | CI status provider adapter identifier (e.g., `github`). When absent or empty, CI feedback is disabled entirely.       |
+| `max_retries`      | int    | No                    | `2`            | Future dispatches | Maximum CI-fix continuation dispatches per issue before escalation. `0` means escalate immediately on first CI failure. Must be non-negative. |
+| `max_log_lines`    | int    | No                    | `50`           | Future dispatches | Maximum lines to fetch from the first failing CI check log. `0` disables log fetching. Must be non-negative.          |
+| `escalation`       | string | No                    | `label`        | Future dispatches | Action when `max_retries` is exceeded. Valid values: `"label"` (add a label to the issue), `"comment"` (post a comment on the issue). |
+| `escalation_label` | string | No                    | `needs-human`  | Future dispatches | Label applied to the issue when `escalation` is `"label"`.                                                            |
+
+**Activation pattern:** CI feedback has no `enabled` flag. The feature is active when
+`ci_feedback.kind` is present and non-empty. Omit the entire `ci_feedback` section to
+disable the feature:
+
+```yaml
+# CI feedback disabled — section omitted entirely
+# ci_feedback:
+#   kind: github
+```
+
+**SCM coordinates:** Owner, repository, and token are not part of `ci_feedback`. They
+live in the adapter pass-through block (e.g., the existing `github:` top-level section)
+and are shared with the tracker adapter when both use the same SCM provider.
+
+**Validation rules:**
+
+- `max_retries` must be non-negative. Negative values are rejected with a configuration
+  error.
+- `max_log_lines` must be non-negative. Negative values are rejected with a configuration
+  error.
+- `escalation` must be `"label"` or `"comment"`. Other values are rejected with a
+  configuration error.
+- When `kind` is absent or empty, all other fields in the section are ignored and the
+  `CIFeedbackConfig` is a zero value.
+
+---
+
 ## 3. Environment Variable Overrides
 
 Sortie supports a curated set of `SORTIE_*` environment variables that override YAML front
@@ -472,6 +520,15 @@ Each variable maps to exactly one config field. The naming convention is
 | `SORTIE_AGENT_MAX_TURNS`             | `agent.max_turns`             | int    |       |
 | `SORTIE_AGENT_MAX_RETRY_BACKOFF_MS`  | `agent.max_retry_backoff_ms`  | int    |       |
 | `SORTIE_AGENT_MAX_SESSIONS`          | `agent.max_sessions`          | int    |       |
+
+#### CI Feedback
+
+| Environment variable                    | Config field                   | Type   | Notes |
+| --------------------------------------- | ------------------------------ | ------ | ----- |
+| `SORTIE_CI_FEEDBACK_KIND`               | `ci_feedback.kind`             | string |       |
+| `SORTIE_CI_FEEDBACK_MAX_RETRIES`        | `ci_feedback.max_retries`      | int    |       |
+| `SORTIE_CI_FEEDBACK_MAX_LOG_LINES`      | `ci_feedback.max_log_lines`    | int    |       |
+| `SORTIE_CI_FEEDBACK_ESCALATION`         | `ci_feedback.escalation`       | string |       |
 
 #### Top-level
 
@@ -578,6 +635,7 @@ as an environment variable reference.
 | `hooks.before_remove`                  | Same as above                                                   |
 | `hooks.timeout_ms`                     | Low-risk tuning; hooks are rarely changed per-environment       |
 | `agent.max_concurrent_agents_by_state` | Complex map type; no clean single-value representation          |
+| `ci_feedback.escalation_label`         | Low-risk default; rarely differs per environment                |
 | Extensions (`server`, `worker`, etc.)  | Extension-defined; would couple core env parsing to extensions  |
 | `logging.level` (via extensions)       | Resolved from `--log-level` flag; not part of typed config layer |
 
@@ -1465,6 +1523,11 @@ re-applies configuration and prompt template without restart.
 | `agent.max_concurrent_agents_by_state` | **Immediate** — affects subsequent dispatch decisions.                                         |
 | `agent.max_sessions`                   | **Immediate** — affects future retry timer evaluations.                                        |
 | `db_path`                              | **No effect** — requires restart. In-memory config updated, but database connection unchanged. |
+| `ci_feedback.kind`                     | Future dispatches.                                                                             |
+| `ci_feedback.max_retries`              | Future dispatches.                                                                             |
+| `ci_feedback.max_log_lines`            | Future dispatches.                                                                             |
+| `ci_feedback.escalation`               | Future dispatches.                                                                             |
+| `ci_feedback.escalation_label`         | Future dispatches.                                                                             |
 | `server.port`                          | **No effect** — requires restart.                                                              |
 | `logging.level`                        | **No effect** — requires restart.                                                              |
 | Prompt template                        | Future worker attempts (including continuation retries), not in-flight continuation turns.     |
@@ -1539,6 +1602,11 @@ Each error identifies the offending field path.
 | `config: workspace.root: cannot expand ~: <err>`                                | Home directory expansion failed.                                         | Check that the `HOME` environment variable is set.                                                                                   |
 | `config: db_path: expected string, got <type>`                                  | `db_path` is not a string value.                                         | Use a string path value, quoted if necessary.                                                                                        |
 | `config: db_path: resolved to empty (check environment variable)`               | `$VAR` reference resolved to empty.                                      | Set the environment variable or use a literal path.                                                                                  |
+| `config: ci_feedback.max_retries: invalid integer value: <val>`                 | Non-integer value for `max_retries`.                                     | Use a plain integer (e.g., `2`).                                                                                                     |
+| `config: ci_feedback.max_retries: must be non-negative`                         | Negative value for `max_retries`.                                        | Use `0` (escalate immediately) or a positive integer.                                                                                |
+| `config: ci_feedback.max_log_lines: invalid integer value: <val>`               | Non-integer value for `max_log_lines`.                                   | Use a plain integer (e.g., `50`).                                                                                                    |
+| `config: ci_feedback.max_log_lines: must be non-negative`                       | Negative value for `max_log_lines`.                                      | Use `0` (disable log fetching) or a positive integer.                                                                                |
+| `config: ci_feedback.escalation: must be "label" or "comment", got "<val>"`     | Invalid escalation strategy.                                             | Use `"label"` or `"comment"`.                                                                                                        |
 
 ### 9.3 Environment Variable Errors
 
@@ -1609,6 +1677,11 @@ lists the `SORTIE_*` variable that overrides the field, or "—" if not overrida
 | `agent.max_concurrent_agents_by_state`  | `map[string]int` | `{}`                         | —                                        | Keys lowercased; dynamic reload                                                        |
 | `agent.max_sessions`                    | integer          | `0`                          | `SORTIE_AGENT_MAX_SESSIONS`              | Unlimited; dynamic reload                                                              |
 | `db_path`                               | path             | `.sortie.db`                 | `SORTIE_DB_PATH`                         | Restart required; `$VAR` skipped for env-sourced values                                |
+| `ci_feedback.kind`                      | string           | _(absent)_                   | `SORTIE_CI_FEEDBACK_KIND`                | Absent = disabled; no `enabled` flag                                                   |
+| `ci_feedback.max_retries`               | int              | `2`                          | `SORTIE_CI_FEEDBACK_MAX_RETRIES`         | `0` = escalate immediately; must be non-negative                                       |
+| `ci_feedback.max_log_lines`             | int              | `50`                         | `SORTIE_CI_FEEDBACK_MAX_LOG_LINES`       | `0` = disable log fetching; must be non-negative                                       |
+| `ci_feedback.escalation`                | string           | `label`                      | `SORTIE_CI_FEEDBACK_ESCALATION`          | `"label"` or `"comment"`                                                               |
+| `ci_feedback.escalation_label`          | string           | `needs-human`                | —                                        | Applied when `escalation` is `"label"`                                                 |
 | **Extensions**                          |                  |                              |                                          |                                                                                        |
 | `server.port`                           | integer          | _(absent)_                   | —                                        | CLI `--port` overrides                                                                 |
 | `logging.level`                         | string           | `info`                       | —                                        | CLI `--log-level` overrides                                                            |
@@ -1723,6 +1796,16 @@ claude-code:
   model: claude-sonnet-4-20250514 # Model for agent sessions
   max_turns: 50 # CLI --max-turns (distinct from agent.max_turns)
   max_budget_usd: 5 # Per-session cost cap
+
+# ─── CI Feedback ───────────────────────────────────────────────
+# Omit this section entirely to disable CI feedback.
+# SCM coordinates (owner, repo, token) live in the github: adapter block.
+ci_feedback:
+  kind: github # Activate CI feedback via GitHub Checks API
+  max_retries: 2 # CI-fix attempts before escalation
+  max_log_lines: 50 # Lines from first failing check log
+  escalation: label # "label" or "comment" on exhaustion
+  escalation_label: needs-human # Label added when escalation is "label"
 
 # ─── Server ────────────────────────────────────────────────────
 server:
