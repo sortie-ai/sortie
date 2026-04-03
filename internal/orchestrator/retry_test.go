@@ -1167,7 +1167,7 @@ func TestIsStaleRetryTimer(t *testing.T) {
 func TestHandleRetryTimer_WorkflowFilePropagated(t *testing.T) {
 	t.Parallel()
 
-	// Section 9.6: WorkflowFile captured at dispatch should appear on the
+	// WorkflowFile captured at dispatch should appear on the
 	// RunningEntry so it is persisted by HandleWorkerExit.
 	store := &mockRetryStore{}
 	tracker := &mockRetryTracker{

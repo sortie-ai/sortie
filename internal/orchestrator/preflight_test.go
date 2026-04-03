@@ -785,7 +785,7 @@ func TestValidateDispatchConfig_WorkspaceRootWritable(t *testing.T) {
 			noChecks: []string{"workspace.root_writable"},
 		},
 		{
-			// Section 8.2: errors are collected, not short-circuited.
+			// Errors are collected, not short-circuited.
 			name: "collected with other errors",
 			setup: func(t *testing.T, p *PreflightParams) {
 				t.Helper()

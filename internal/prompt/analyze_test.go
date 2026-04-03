@@ -211,7 +211,7 @@ func TestAnalyzeTemplate(t *testing.T) {
 			body:      `{{ if .attempt }}retry{{ else }}{{ .issue.title }}{{ end }}`,
 			wantCount: 0,
 		},
-		// Section 8.2: range body triggers both dot-context warnings (two
+		// Range body triggers both dot-context warnings (two
 		// separate FieldNode references — both are top-level keys inside range).
 		{
 			name:      "MultipleWarnings",

@@ -430,7 +430,7 @@ func TestValidateStateOverlap(t *testing.T) {
 func TestValidateConfig(t *testing.T) {
 	t.Parallel()
 
-	// Section 3.6: fully valid fields should produce zero diagnostics.
+	// Fully valid fields should produce zero diagnostics.
 	fields := registry.TrackerConfigFields{
 		Kind:           "github",
 		Project:        "owner/repo",
