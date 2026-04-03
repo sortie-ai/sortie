@@ -458,15 +458,17 @@ func TestBuildCIEscalationComment(t *testing.T) {
 		{
 			name: "only failure check runs included",
 			result: domain.CIResult{
-				FailingCount: 1,
+				FailingCount: 3,
 				CheckRuns: []domain.CheckRun{
 					{Name: "lint", Status: domain.CheckRunStatusCompleted, Conclusion: domain.CheckConclusionSuccess},
 					{Name: "test", Status: domain.CheckRunStatusCompleted, Conclusion: domain.CheckConclusionFailure},
+					{Name: "deploy", Status: domain.CheckRunStatusCompleted, Conclusion: domain.CheckConclusionTimedOut},
+					{Name: "e2e", Status: domain.CheckRunStatusCompleted, Conclusion: domain.CheckConclusionCancelled},
 				},
 			},
 			ref:            "feature/x",
 			attempts:       2,
-			wantContains:   []string{"test"},
+			wantContains:   []string{"test", "deploy", "e2e"},
 			wantNotContain: []string{"lint"},
 		},
 		{
