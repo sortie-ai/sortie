@@ -602,3 +602,82 @@ func TestPromMetricsDedicatedRegistry(t *testing.T) {
 		}
 	}
 }
+
+func TestPromMetrics_CICounters(t *testing.T) {
+	t.Parallel()
+
+	t.Run("IncCIStatusChecks_Passing", func(t *testing.T) {
+		t.Parallel()
+		m := newTestMetrics(t)
+		m.IncCIStatusChecks("passing")
+		families := gatherFamilies(t, m)
+		got := counterValue(t, families, "sortie_ci_status_checks_total", map[string]string{"result": "passing"})
+		if got != 1 {
+			t.Errorf("sortie_ci_status_checks_total{result=passing} = %v, want 1", got)
+		}
+	})
+
+	t.Run("IncCIStatusChecks_Failing_Twice", func(t *testing.T) {
+		t.Parallel()
+		m := newTestMetrics(t)
+		m.IncCIStatusChecks("failing")
+		m.IncCIStatusChecks("failing")
+		families := gatherFamilies(t, m)
+		got := counterValue(t, families, "sortie_ci_status_checks_total", map[string]string{"result": "failing"})
+		if got != 2 {
+			t.Errorf("sortie_ci_status_checks_total{result=failing} = %v, want 2", got)
+		}
+	})
+
+	t.Run("IncCIStatusChecks_MultipleLabels", func(t *testing.T) {
+		t.Parallel()
+		m := newTestMetrics(t)
+		m.IncCIStatusChecks("passing")
+		m.IncCIStatusChecks("pending")
+		m.IncCIStatusChecks("error")
+		families := gatherFamilies(t, m)
+		for _, result := range []string{"passing", "pending", "error"} {
+			got := counterValue(t, families, "sortie_ci_status_checks_total", map[string]string{"result": result})
+			if got != 1 {
+				t.Errorf("sortie_ci_status_checks_total{result=%s} = %v, want 1", result, got)
+			}
+		}
+	})
+
+	t.Run("IncCIEscalations_Label", func(t *testing.T) {
+		t.Parallel()
+		m := newTestMetrics(t)
+		m.IncCIEscalations("label")
+		families := gatherFamilies(t, m)
+		got := counterValue(t, families, "sortie_ci_escalations_total", map[string]string{"action": "label"})
+		if got != 1 {
+			t.Errorf("sortie_ci_escalations_total{action=label} = %v, want 1", got)
+		}
+	})
+
+	t.Run("IncCIEscalations_Comment", func(t *testing.T) {
+		t.Parallel()
+		m := newTestMetrics(t)
+		m.IncCIEscalations("comment")
+		families := gatherFamilies(t, m)
+		got := counterValue(t, families, "sortie_ci_escalations_total", map[string]string{"action": "comment"})
+		if got != 1 {
+			t.Errorf("sortie_ci_escalations_total{action=comment} = %v, want 1", got)
+		}
+	})
+
+	t.Run("IncCIEscalations_BothActions_Independent", func(t *testing.T) {
+		t.Parallel()
+		m := newTestMetrics(t)
+		m.IncCIEscalations("label")
+		m.IncCIEscalations("label")
+		m.IncCIEscalations("comment")
+		families := gatherFamilies(t, m)
+		if got := counterValue(t, families, "sortie_ci_escalations_total", map[string]string{"action": "label"}); got != 2 {
+			t.Errorf("sortie_ci_escalations_total{action=label} = %v, want 2", got)
+		}
+		if got := counterValue(t, families, "sortie_ci_escalations_total", map[string]string{"action": "comment"}); got != 1 {
+			t.Errorf("sortie_ci_escalations_total{action=comment} = %v, want 1", got)
+		}
+	})
+}

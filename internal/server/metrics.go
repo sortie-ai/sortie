@@ -32,6 +32,8 @@ type PromMetrics struct {
 	dispatchTransitions   *prometheus.CounterVec
 	trackerCommentsTotal  *prometheus.CounterVec
 	toolCallsTotal        *prometheus.CounterVec
+	ciStatusChecksTotal   *prometheus.CounterVec
+	ciEscalationsTotal    *prometheus.CounterVec
 
 	pollDuration   prometheus.Histogram
 	workerDuration *prometheus.HistogramVec
@@ -176,6 +178,18 @@ func NewPromMetrics(version, goVersion string) *PromMetrics {
 		Help:      "Current session count per SSH host.",
 	}, []string{"host"})
 
+	ciStatusChecksTotal := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: "sortie",
+		Name:      "ci_status_checks_total",
+		Help:      "CI status check outcomes.",
+	}, []string{"result"})
+
+	ciEscalationsTotal := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: "sortie",
+		Name:      "ci_escalations_total",
+		Help:      "CI escalation actions taken.",
+	}, []string{"action"})
+
 	reg.MustRegister(
 		sessionsRunning,
 		sessionsRetrying,
@@ -197,6 +211,8 @@ func NewPromMetrics(version, goVersion string) *PromMetrics {
 		workerDuration,
 		buildInfo,
 		sshHostUsage,
+		ciStatusChecksTotal,
+		ciEscalationsTotal,
 	)
 
 	return &PromMetrics{
@@ -220,6 +236,8 @@ func NewPromMetrics(version, goVersion string) *PromMetrics {
 		pollDuration:          pollDuration,
 		workerDuration:        workerDuration,
 		sshHostUsage:          sshHostUsage,
+		ciStatusChecksTotal:   ciStatusChecksTotal,
+		ciEscalationsTotal:    ciEscalationsTotal,
 	}
 }
 
@@ -332,4 +350,14 @@ func (p *PromMetrics) ObserveWorkerDuration(exitType string, seconds float64) {
 // SetSSHHostUsage records the current session count for the given SSH host.
 func (p *PromMetrics) SetSSHHostUsage(host string, count int) {
 	p.sshHostUsage.WithLabelValues(host).Set(float64(count))
+}
+
+// IncCIStatusChecks increments the CI status check outcome counter.
+func (p *PromMetrics) IncCIStatusChecks(result string) {
+	p.ciStatusChecksTotal.WithLabelValues(result).Inc()
+}
+
+// IncCIEscalations increments the CI escalation action counter.
+func (p *PromMetrics) IncCIEscalations(action string) {
+	p.ciEscalationsTotal.WithLabelValues(action).Inc()
 }
