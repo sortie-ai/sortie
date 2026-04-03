@@ -269,6 +269,16 @@ type PendingCICheckEntry struct {
 
 	// CreatedAt is the UTC time the entry was created.
 	CreatedAt time.Time
+
+	// PendingAttempts is the number of times the entry has been
+	// re-enqueued without a definitive CI result (pending status or
+	// transient fetch error). Used to compute exponential backoff.
+	PendingAttempts int
+
+	// PendingRetryAt is the earliest UTC time at which reconcileCIStatus
+	// should call FetchCIStatus again. Zero means the entry is ready
+	// immediately (first check or explicit reset).
+	PendingRetryAt time.Time
 }
 
 // State is the single authoritative runtime state owned by the orchestrator.

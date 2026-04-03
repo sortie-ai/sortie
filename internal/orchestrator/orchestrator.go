@@ -353,6 +353,7 @@ func (o *Orchestrator) handleTick(ctx context.Context) {
 		Metrics:           o.metrics,
 		CIProvider:        o.ciProvider,
 		CIFeedback:        cfg.CIFeedback,
+		CIPendingTTL:      ciPendingDefaultTTL,
 	})
 
 	// On preflight failure, skip dispatch but still notify observers
