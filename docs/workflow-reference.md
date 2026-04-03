@@ -414,13 +414,13 @@ ci_feedback:
   escalation_label: needs-human
 ```
 
-| Field              | Type   | Required              | Default        | Dynamic Reload  | Description                                                                                                           |
-| ------------------ | ------ | --------------------- | -------------- | --------------- | --------------------------------------------------------------------------------------------------------------------- |
-| `kind`             | string | **Yes** (to activate) | _(absent)_     | Future dispatches | CI status provider adapter identifier (e.g., `github`). When absent or empty, CI feedback is disabled entirely.       |
-| `max_retries`      | int    | No                    | `2`            | Future dispatches | Maximum CI-fix continuation dispatches per issue before escalation. `0` means escalate immediately on first CI failure. Must be non-negative. |
-| `max_log_lines`    | int    | No                    | `50`           | Future dispatches | Maximum lines to fetch from the first failing CI check log. `0` disables log fetching. Must be non-negative.          |
-| `escalation`       | string | No                    | `label`        | Future dispatches | Action when `max_retries` is exceeded. Valid values: `"label"` (add a label to the issue), `"comment"` (post a comment on the issue). |
-| `escalation_label` | string | No                    | `needs-human`  | Future dispatches | Label applied to the issue when `escalation` is `"label"`.                                                            |
+| Field              | Type    | Required              | Default        | Dynamic Reload    | Description                                                                                                           |
+| ------------------ | ------- | --------------------- | -------------- | ----------------- | --------------------------------------------------------------------------------------------------------------------- |
+| `kind`             | string  | **Yes** (to activate) | _(absent)_     | Requires restart  | CI status provider adapter identifier (e.g., `github`). When absent or empty, CI feedback is disabled entirely.       |
+| `max_retries`      | integer | No                    | `2`            | Future dispatches | Maximum CI-fix continuation dispatches per issue before escalation. `0` means escalate immediately on first CI failure. Must be non-negative. |
+| `max_log_lines`    | integer | No                    | `50`           | Requires restart  | Maximum lines to fetch from the first failing CI check log. `0` disables log fetching. Must be non-negative.          |
+| `escalation`       | string  | No                    | `label`        | Future dispatches | Action when `max_retries` is exceeded. Valid values: `"label"` (add a label to the issue), `"comment"` (post a comment on the issue). |
+| `escalation_label` | string  | No                    | `needs-human`  | Future dispatches | Label applied to the issue when `escalation` is `"label"`.                                                            |
 
 **Activation pattern:** CI feedback has no `enabled` flag. The feature is active when
 `ci_feedback.kind` is present and non-empty. Omit the entire `ci_feedback` section to
@@ -1514,9 +1514,9 @@ re-applies configuration and prompt template without restart.
 | `agent.max_concurrent_agents_by_state` | **Immediate** — affects subsequent dispatch decisions.                                         |
 | `agent.max_sessions`                   | **Immediate** — affects future retry timer evaluations.                                        |
 | `db_path`                              | **No effect** — requires restart. In-memory config updated, but database connection unchanged. |
-| `ci_feedback.kind`                     | Future dispatches.                                                                             |
+| `ci_feedback.kind`                     | **No effect** — requires restart. CI provider is created once at process start.                |
 | `ci_feedback.max_retries`              | Future dispatches.                                                                             |
-| `ci_feedback.max_log_lines`            | Future dispatches.                                                                             |
+| `ci_feedback.max_log_lines`            | **No effect** — requires restart. CI provider is created once at process start.                |
 | `ci_feedback.escalation`               | Future dispatches.                                                                             |
 | `ci_feedback.escalation_label`         | Future dispatches.                                                                             |
 | `server.port`                          | **No effect** — requires restart.                                                              |
@@ -1668,9 +1668,9 @@ lists the `SORTIE_*` variable that overrides the field, or "—" if not overrida
 | `agent.max_concurrent_agents_by_state`  | `map[string]int` | `{}`                         | —                                        | Keys lowercased; dynamic reload                                                        |
 | `agent.max_sessions`                    | integer          | `0`                          | `SORTIE_AGENT_MAX_SESSIONS`              | Unlimited; dynamic reload                                                              |
 | `db_path`                               | path             | `.sortie.db`                 | `SORTIE_DB_PATH`                         | Restart required; `$VAR` skipped for env-sourced values                                |
-| `ci_feedback.kind`                      | string           | _(absent)_                   | —                                        | Absent = disabled; no `enabled` flag                                                   |
-| `ci_feedback.max_retries`               | int              | `2`                          | —                                        | `0` = escalate immediately; must be non-negative                                       |
-| `ci_feedback.max_log_lines`             | int              | `50`                         | —                                        | `0` = disable log fetching; must be non-negative                                       |
+| `ci_feedback.kind`                      | string           | _(absent)_                   | —                                        | Absent = disabled; restart required                                                    |
+| `ci_feedback.max_retries`               | integer          | `2`                          | —                                        | `0` = escalate immediately; must be non-negative                                       |
+| `ci_feedback.max_log_lines`             | integer          | `50`                         | —                                        | `0` = disable log fetching; restart required                                           |
 | `ci_feedback.escalation`                | string           | `label`                      | —                                        | `"label"` or `"comment"`                                                               |
 | `ci_feedback.escalation_label`          | string           | `needs-human`                | —                                        | Applied when `escalation` is `"label"`                                                 |
 | **Extensions**                          |                  |                              |                                          |                                                                                        |
