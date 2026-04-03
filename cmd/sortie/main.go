@@ -404,6 +404,9 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 		}
 		adapterCfgMap := make(map[string]any)
 		mergeExtensions(adapterCfgMap, cfg.Extensions, cfg.CIFeedback.Kind)
+		if cfg.CIFeedback.Kind == cfg.Tracker.Kind {
+			mergeTrackerCredentials(adapterCfgMap, cfg.Tracker)
+		}
 		ciProvider, ciErr = ciCtor(cfg.CIFeedback.MaxLogLines, adapterCfgMap)
 		if ciErr != nil {
 			logger.Error("failed to construct CI provider",
@@ -580,6 +583,23 @@ func mergeExtensions(dst map[string]any, extensions map[string]any, kind string)
 		if _, exists := dst[k]; !exists {
 			dst[k] = v
 		}
+	}
+}
+
+// mergeTrackerCredentials copies api_key, project, and endpoint from
+// the tracker config into dst when the corresponding key is absent.
+// Called only when the CI provider kind matches the tracker kind so
+// that shared-platform credentials flow to the CI adapter without
+// operator duplication.
+func mergeTrackerCredentials(dst map[string]any, tc config.TrackerConfig) {
+	if _, ok := dst["api_key"]; !ok && tc.APIKey != "" {
+		dst["api_key"] = tc.APIKey
+	}
+	if _, ok := dst["project"]; !ok && tc.Project != "" {
+		dst["project"] = tc.Project
+	}
+	if _, ok := dst["endpoint"]; !ok && tc.Endpoint != "" {
+		dst["endpoint"] = tc.Endpoint
 	}
 }
 

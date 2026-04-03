@@ -747,6 +747,182 @@ func TestMergeExtensions(t *testing.T) {
 	})
 }
 
+// --- mergeTrackerCredentials tests ---
+
+func TestMergeTrackerCredentials(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		dst     map[string]any
+		tc      config.TrackerConfig
+		wantLen int
+		want    map[string]any
+	}{
+		{
+			name: "sets all three keys when dst is empty",
+			dst:  map[string]any{},
+			tc:   config.TrackerConfig{APIKey: "tok", Project: "PROJ", Endpoint: "https://api.example.com"},
+			want: map[string]any{
+				"api_key":  "tok",
+				"project":  "PROJ",
+				"endpoint": "https://api.example.com",
+			},
+		},
+		{
+			name: "skips keys already present in dst",
+			dst: map[string]any{
+				"api_key":  "existing",
+				"project":  "existing",
+				"endpoint": "existing",
+			},
+			tc: config.TrackerConfig{APIKey: "new", Project: "new", Endpoint: "new"},
+			want: map[string]any{
+				"api_key":  "existing",
+				"project":  "existing",
+				"endpoint": "existing",
+			},
+		},
+		{
+			name:    "skips empty tracker fields",
+			dst:     map[string]any{},
+			tc:      config.TrackerConfig{APIKey: "", Project: "", Endpoint: ""},
+			want:    map[string]any{},
+			wantLen: 0,
+		},
+		{
+			name: "sets only api_key and project when endpoint empty",
+			dst:  map[string]any{},
+			tc:   config.TrackerConfig{APIKey: "tok", Project: "PROJ", Endpoint: ""},
+			want: map[string]any{
+				"api_key": "tok",
+				"project": "PROJ",
+			},
+		},
+		{
+			name: "partial dst: sets only absent keys",
+			dst:  map[string]any{"api_key": "kept"},
+			tc:   config.TrackerConfig{APIKey: "ignored", Project: "PROJ", Endpoint: "https://api.example.com"},
+			want: map[string]any{
+				"api_key":  "kept",
+				"project":  "PROJ",
+				"endpoint": "https://api.example.com",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			mergeTrackerCredentials(tt.dst, tt.tc)
+
+			if tt.wantLen > 0 && len(tt.dst) != tt.wantLen {
+				t.Errorf("len(dst) = %d, want %d", len(tt.dst), tt.wantLen)
+			}
+			for k, wantVal := range tt.want {
+				if got, ok := tt.dst[k]; !ok {
+					t.Errorf("dst[%q] missing, want %q", k, wantVal)
+				} else if got != wantVal {
+					t.Errorf("dst[%q] = %q, want %q", k, got, wantVal)
+				}
+			}
+			for k := range tt.dst {
+				if _, ok := tt.want[k]; !ok {
+					t.Errorf("dst has unexpected key %q", k)
+				}
+			}
+		})
+	}
+}
+
+func TestMergeTrackerCredentialsExtensionsWin(t *testing.T) {
+	t.Parallel()
+
+	// Extensions key wins over tracker key.
+	dst := map[string]any{}
+	mergeExtensions(dst, map[string]any{"github": map[string]any{"api_key": "ext-tok"}}, "github")
+	mergeTrackerCredentials(dst, config.TrackerConfig{APIKey: "tracker-tok", Project: "PROJ"})
+
+	if got := dst["api_key"]; got != "ext-tok" {
+		t.Errorf("api_key = %q, want %q (extensions value must win)", got, "ext-tok")
+	}
+	if got := dst["project"]; got != "PROJ" {
+		t.Errorf("project = %q, want %q (tracker value fills absent key)", got, "PROJ")
+	}
+}
+
+// --- Kind-match guard wiring tests ---
+
+func TestKindMatchGuardWiring(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		trackerKind string
+		ciKind      string
+		tc          config.TrackerConfig
+		extensions  map[string]any
+		wantKeys    map[string]any
+		absentKeys  []string
+	}{
+		{
+			name:        "kinds match with no extensions",
+			trackerKind: "github",
+			ciKind:      "github",
+			tc:          config.TrackerConfig{APIKey: "gh-tok", Project: "sortie-ai/sortie"},
+			extensions:  map[string]any{},
+			wantKeys: map[string]any{
+				"api_key": "gh-tok",
+				"project": "sortie-ai/sortie",
+			},
+		},
+		{
+			name:        "kinds match with extensions override",
+			trackerKind: "github",
+			ciKind:      "github",
+			tc:          config.TrackerConfig{APIKey: "tok1", Project: "sortie-ai/sortie"},
+			extensions:  map[string]any{"github": map[string]any{"api_key": "tok2"}},
+			wantKeys: map[string]any{
+				"api_key": "tok2",
+			},
+		},
+		{
+			name:        "kinds differ",
+			trackerKind: "jira",
+			ciKind:      "github",
+			tc:          config.TrackerConfig{APIKey: "jira-tok"},
+			extensions:  map[string]any{},
+			absentKeys:  []string{"api_key"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			adapterCfgMap := make(map[string]any)
+			mergeExtensions(adapterCfgMap, tt.extensions, tt.ciKind)
+			if tt.ciKind == tt.trackerKind {
+				mergeTrackerCredentials(adapterCfgMap, tt.tc)
+			}
+
+			for k, wantVal := range tt.wantKeys {
+				if got, ok := adapterCfgMap[k]; !ok {
+					t.Errorf("adapterCfgMap[%q] missing, want %q", k, wantVal)
+				} else if got != wantVal {
+					t.Errorf("adapterCfgMap[%q] = %q, want %q", k, got, wantVal)
+				}
+			}
+			for _, k := range tt.absentKeys {
+				if _, ok := adapterCfgMap[k]; ok {
+					t.Errorf("adapterCfgMap[%q] present, want absent", k)
+				}
+			}
+		})
+	}
+}
+
 // --- Quick-start documentation integration test ---
 
 // quickStartWorkflow returns WORKFLOW.md content matching the
