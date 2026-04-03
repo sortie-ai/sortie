@@ -58,6 +58,14 @@ func reconcileCIStatus(state *State, params ReconcileParams, log *slog.Logger, c
 
 		case domain.CIStatusFailing:
 			handleCIFailure(state, params, pending, result, ref, entryLog, ctx, metrics)
+
+		default:
+			entryLog.Warn("CI status provider returned unrecognized status, re-enqueueing",
+				slog.String("status", string(result.Status)),
+				slog.String("ref", ref),
+			)
+			metrics.IncCIStatusChecks("error")
+			state.PendingCICheck[issueID] = pending
 		}
 	}
 }
