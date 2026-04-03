@@ -491,4 +491,15 @@ func TestPackageLevelRegistries(t *testing.T) {
 			t.Fatal("Agents.Kinds() returned nil, want non-nil slice")
 		}
 	})
+
+	t.Run("CIProviders", func(t *testing.T) {
+		t.Parallel()
+
+		if CIProviders == nil {
+			t.Fatal("CIProviders is nil")
+		}
+		if kinds := CIProviders.Kinds(); kinds == nil {
+			t.Fatal("CIProviders.Kinds() returned nil, want non-nil slice")
+		}
+	})
 }
