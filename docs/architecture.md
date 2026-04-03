@@ -113,6 +113,14 @@ Important boundary:
 9. `Logging`
    - Emits structured runtime logs to one or more configured sinks.
 
+10. `CI Status Provider`
+    - Fetches CI pipeline status for a given git ref.
+    - Returns a normalized result including aggregate status, individual check runs, and an optional
+      truncated log excerpt from the first failing check.
+    - Read-only, single-method contract (`FetchCIStatus`); does not manage CI pipelines or trigger
+      builds.
+    - Activated by `ci_feedback.kind` presence in workflow front matter.
+
 ### 3.2 Abstraction Levels
 
 Sortie is organized into these layers:
@@ -131,10 +139,11 @@ Sortie is organized into these layers:
 4. `Execution Layer` (workspace + agent subprocess)
    - Filesystem lifecycle, workspace preparation, coding-agent protocol.
 
-5. `Integration Layer` (tracker and agent adapters)
-   - API calls and normalization for tracker data; session lifecycle for agent runtimes.
-   - Multiple adapters per dimension: tracker adapters (Jira, Linear, …) and agent adapters
-     (Claude Code, Codex, …).
+5. `Integration Layer` (tracker adapters, agent adapters, and CI status providers)
+   - API calls and normalization for tracker data; session lifecycle for agent runtimes; CI
+     pipeline status queries.
+   - Multiple adapters per dimension: tracker adapters (Jira, GitHub, …), agent adapters
+     (Claude Code, Codex, …), and CI status providers (GitHub Checks, …).
 
 6. `Observability Layer` (logs + status surface)
    - Operator visibility into orchestrator and agent behavior.
@@ -153,6 +162,8 @@ Sortie is organized into these layers:
 - Metrics exposition library (`github.com/prometheus/client_golang`) for the Prometheus
   `/metrics` endpoint when the HTTP server is enabled. Pure Go; does not require an external
   Prometheus server. See ADR-0008.
+- CI platform API (GitHub Checks API for `ci_feedback.kind: github`, with additional providers
+  registered separately). Only required when `ci_feedback.kind` is configured.
 
 ## 4. Core Domain Model
 
@@ -307,6 +318,11 @@ Fields:
 - `completed` (set of issue IDs; bookkeeping only, not dispatch gating)
 - `agent_totals` (aggregate tokens + runtime seconds)
 - `agent_rate_limits` (latest rate-limit snapshot from agent events)
+- `ci_fix_attempts` (map `issue_id -> integer`; number of CI-fix continuations dispatched;
+  reset when the issue leaves the running/retry maps; runtime-only, not persisted)
+- `pending_ci_check` (map `issue_id -> PendingCICheckEntry`; populated by worker exit on normal
+  exits with SCM metadata when a CI status provider is configured; consumed by CI reconciliation;
+  runtime-only, not persisted)
 
 ### 4.2 Stable Identifiers and Normalization Rules
 
@@ -368,6 +384,7 @@ Top-level keys:
 - `workspace`
 - `hooks`
 - `agent`
+- `ci_feedback`
 - `db_path`
 
 Unknown keys should be ignored for forward compatibility.
@@ -535,7 +552,44 @@ core. For example, a Codex adapter may accept `codex.approval_policy` and
 `codex.thread_sandbox`; a Claude Code adapter may accept `claude-code.permission_mode`.
 The orchestrator forwards the entire sub-object to the adapter without validation.
 
-#### 5.3.6 `db_path` (string, optional)
+#### 5.3.6 `ci_feedback` (object, optional)
+
+CI feedback loop configuration. Feature activation follows the same pattern as other optional
+sections (`server.port`, `worker.ssh_hosts`): presence of the `kind` field activates the feature;
+there is no separate `enabled` flag. When the section is absent or `kind` is empty, CI feedback is
+disabled and no `CIStatusProvider` is constructed.
+
+Fields:
+
+- `kind` (string)
+  - Identifies the CI status provider adapter (e.g. `github`). Empty string or absent means CI
+    feedback is disabled.
+  - The orchestrator resolves the adapter via the CI provider registry at startup.
+- `max_retries` (integer)
+  - Maximum number of CI-fix continuation dispatches per issue before escalation.
+  - Default: `2`. Zero means escalate immediately on first CI failure (no fix attempts).
+  - MUST be non-negative; negative values are rejected with a configuration error.
+- `max_log_lines` (integer)
+  - Maximum number of log tail lines fetched from the first failing check run for prompt
+    injection.
+  - Default: `50`. Zero disables log fetching.
+  - MUST be non-negative; negative values are rejected with a configuration error.
+- `escalation` (string)
+  - Action taken when `max_retries` is exceeded.
+  - Valid values: `label` (default), `comment`.
+  - `label`: adds `escalation_label` to the tracker issue.
+  - `comment`: posts a plain-text escalation comment listing failing checks and the ref.
+  - Invalid values are rejected with a configuration error.
+- `escalation_label` (string)
+  - Label applied when escalation is `label`.
+  - Default: `needs-human`.
+
+The CI provider adapter receives `max_log_lines` and the tracker adapter's pass-through config
+(API key, project, endpoint) for authentication and repository resolution. The orchestrator merges
+tracker credentials into the CI adapter config when the tracker and CI feedback `kind` values
+match.
+
+#### 5.3.7 `db_path` (string, optional)
 
 Filesystem path for the SQLite database file.
 
@@ -717,6 +771,15 @@ This section is intentionally redundant so a coding agent can implement the conf
 - `agent.max_retry_backoff_ms`: integer, default `300000` (5m)
 - `agent.max_concurrent_agents_by_state`: map of positive integers, default `{}`
 - `agent.max_sessions`: integer, default `0` (unlimited)
+- `ci_feedback.kind`: string, optional; identifies the CI status provider adapter; presence
+  activates CI feedback
+- `ci_feedback.max_retries`: integer, default `2`; CI-fix continuation attempts before escalation
+- `ci_feedback.max_log_lines`: integer, default `50`; log tail lines from failing checks (`0`
+  disables)
+- `ci_feedback.escalation`: string, default `label`; action on retry exhaustion (`label` or
+  `comment`)
+- `ci_feedback.escalation_label`: string, default `needs-human`; label applied during `label`
+  escalation
 - `server.port` (extension): integer, optional; enables the HTTP server, `0` may be used for
   ephemeral local bind, and CLI `--port` overrides it
 - `db_path`: path, default `.sortie.db` next to `WORKFLOW.md`; supports `$VAR` and `~`
@@ -797,6 +860,9 @@ Distinct terminal reasons are important because retry logic and logs differ.
   - Persist completed run attempt to SQLite.
   - Schedule continuation retry (attempt `1`) after the worker exhausts or finishes its in-process
     turn loop.
+  - When a CI status provider is configured, the workspace contains SCM metadata
+    (`.sortie/scm.json` with a non-empty `branch`), and the issue is still claimed: record a
+    pending CI check entry for reconciliation.
 
 - `Worker Exit (abnormal)`
   - Remove running entry.
@@ -815,6 +881,14 @@ Distinct terminal reasons are important because retry logic and logs differ.
 
 - `Stall Timeout`
   - Kill worker and schedule retry.
+
+- `CI Status Failing`
+  - Persist CI failure run history.
+  - Increment CI fix attempt counter.
+  - If within `ci_feedback.max_retries`: cancel the existing continuation retry, schedule a
+    CI-fix dispatch with failure context injected into the prompt.
+  - If retries exhausted: escalate (add label or post comment per `ci_feedback.escalation`),
+    cancel retry, release claim.
 
 ### 7.4 Idempotency and Recovery Rules
 
@@ -956,6 +1030,15 @@ Part B: Tracker state refresh
   - If tracker state is neither active nor terminal: terminate worker without workspace cleanup.
 - If state refresh fails, keep workers running and try again on the next tick.
 
+Part C: CI status reconciliation (when `ci_feedback.kind` is configured)
+
+- For each entry in `pending_ci_check`:
+  - Call `CIStatusProvider.FetchCIStatus` with the SCM ref (SHA preferred, branch as fallback).
+  - If the call fails: log a warning, re-enqueue the entry, and continue to the next entry.
+  - If status is `passing`: clear CI fix attempts for the issue.
+  - If status is `pending`: re-enqueue the entry for the next tick.
+  - If status is `failing`: handle as a CI failure (see Section 7.3, "CI Status Failing").
+
 ### 8.6 Startup Terminal Workspace Cleanup
 
 When Sortie starts:
@@ -1046,7 +1129,34 @@ Failure semantics:
 - `after_run` failure or timeout is logged and ignored.
 - `before_remove` failure or timeout is logged and ignored.
 
-### 9.5 Safety Invariants
+### 9.5 Workspace SCM metadata (`.sortie/scm.json`)
+
+The `.sortie/scm.json` file is a workspace-level file that carries SCM metadata written by the
+agent, a post-push hook, or any process running inside the workspace. The orchestrator reads this
+file after a normal worker exit to determine the git ref for CI status queries. The file is shared
+infrastructure — CI feedback reads it today; future PR automation and review-feedback features will
+consume the same contract.
+
+`SCMMetadata` fields:
+
+- `branch` (string, required): the branch name (e.g. `feature/PROJ-42`). If empty or absent, the
+  file is treated as missing and CI status queries are skipped.
+- `sha` (string, optional): the commit SHA at push time. When present, the orchestrator passes
+  this to `CIStatusProvider.FetchCIStatus` instead of the branch name for deterministic results.
+- `pushed_at` (string, optional): ISO-8601 timestamp of the push. Used by the orchestrator to
+  skip CI checks for stale pushes.
+
+Safety and parsing rules:
+
+- Maximum file size: 4096 bytes. Oversized files are rejected and logged at warn level.
+- Symlink rejection: both `.sortie/` and `.sortie/scm.json` are checked via `Lstat` before
+  reading. If either is a symbolic link, the file is rejected and logged at warn level. This
+  prevents symlink-based path escape attacks.
+- Malformed JSON is rejected and logged at warn level.
+- The function never returns an error to the caller; all failure modes degrade gracefully to a
+  zero-value metadata struct (CI queries are skipped).
+
+### 9.6 Safety Invariants
 
 This is the most important portability constraint.
 
@@ -1446,6 +1556,175 @@ Sortie does not require first-class tracker write APIs in the orchestrator.
   orchestrator business logic. `tracker_api` executes tracker operations through agent-initiated
   tool calls, not orchestrator-driven writes.
 
+## 11A. CI Feedback Contract
+
+This section defines the CI status provider interface and the orchestrator's CI feedback loop.
+The CI feedback system is a read-only integration: it queries CI pipeline status for git refs
+and injects failure context into agent continuation prompts. It does not trigger builds, manage
+pipelines, or write CI configuration.
+
+### Naming convention
+
+CI status providers use the `*Provider` suffix rather than `*Adapter`. The distinction is
+intentional: a provider is a read-only, single-method contract (`FetchCIStatus`), while an adapter
+(tracker, agent) manages a full lifecycle with multiple operations and bidirectional state. The
+naming signals to implementers that the contract surface is minimal.
+
+### 11A.1 CIStatusProvider interface
+
+```go
+type CIStatusProvider interface {
+    FetchCIStatus(ctx context.Context, ref string) (CIResult, error)
+}
+```
+
+- `ref` is a git ref string (branch name or commit SHA). Adapters that require a full commit SHA
+  MUST resolve branch names to SHAs internally.
+- Returns a `CIResult` on success or a `*CIError` on failure. All error categories are non-fatal
+  from the orchestrator's perspective.
+- Implementations MUST be safe for concurrent use. The orchestrator's reconcile loop may call
+  `FetchCIStatus` for multiple workspaces concurrently.
+
+### 11A.2 CIResult structure
+
+```text
+CIResult:
+  status:        CIStatus         # aggregate pipeline status
+  check_runs:    []CheckRun       # individual check runs
+  log_excerpt:   string           # truncated log from first failing check
+  failing_count: int              # precomputed count of failing check runs
+  ref:           string           # echoed git ref for observability
+```
+
+`CIStatus` is an enum with three values:
+
+| Value | Meaning |
+|-------|---------|
+| `pending` | CI checks are still running or no checks have been reported. |
+| `passing` | All checks completed successfully. |
+| `failing` | At least one check completed with a failure conclusion. |
+
+Each `CheckRun` contains:
+
+- `name`: check name as defined by the CI platform (e.g. `test`, `lint`, `build`).
+- `status`: execution status (`queued`, `in_progress`, `completed`).
+- `conclusion`: normalized outcome (`success`, `failure`, `cancelled`, `timed_out`, `neutral`,
+  `skipped`, `pending`). Meaningful only when status is `completed`. Unknown or unmappable
+  platform conclusions map to `pending`.
+- `details_url`: web URL to the check run's detail page. Empty string when unavailable.
+
+`log_excerpt` handling:
+
+- CI logs may contain secrets accidentally printed by build scripts. Adapters MUST truncate to
+  the configured `max_log_lines` and SHOULD strip ANSI escape sequences.
+- Consumers MUST NOT persist log excerpts to the database or expose them via unauthenticated API
+  endpoints.
+- The orchestrator omits the log section from the continuation prompt when `log_excerpt` is empty.
+
+`CIResult.ToTemplateMap()` converts the result to a `map[string]any` with snake_case keys
+(`status`, `check_runs`, `log_excerpt`, `failing_count`, `ref`) for use as the `ci_failure`
+prompt template variable (Section 12.1).
+
+### 11A.3 CIError type
+
+```text
+CIError:
+  kind:    CIErrorKind    # normalized error category
+  message: string         # operator-friendly description
+  err:     error          # underlying error (may be nil)
+```
+
+Error categories:
+
+| Kind | Meaning |
+|------|---------|
+| `ci_transport_error` | Network or transport failure (connection, DNS, TLS). |
+| `ci_auth_error` | Authentication or authorization failure (expired token, insufficient scopes). |
+| `ci_api_error` | Non-success HTTP status or API-level error (rate limiting, server error). |
+| `ci_not_found` | Requested ref or repository does not exist (HTTP 404). |
+| `ci_payload_error` | Malformed or unexpected response structure. |
+
+`CIError` implements `Error()` and `Unwrap()` for use with `errors.Is`/`errors.As`.
+
+Orchestrator behavior on CI errors:
+
+- Log a warning with the ref and error category.
+- Re-enqueue the pending CI check entry for the next reconciliation tick.
+- Increment `sortie_ci_status_checks_total{result="error"}`.
+
+### 11A.4 Reconcile loop integration
+
+CI status reconciliation runs as Part C of active run reconciliation (Section 8.5), after tracker
+state refresh. The flow is:
+
+1. Skip entirely when `ci_feedback.kind` is not configured (no `CIStatusProvider` constructed).
+2. For each entry in `pending_ci_check`:
+   a. Remove the entry from the map (prevents reprocessing within the same tick).
+   b. Call `CIStatusProvider.FetchCIStatus` with the SCM ref (SHA preferred, branch as fallback).
+   c. On fetch error: re-enqueue the entry; continue.
+   d. On `passing`: clear `ci_fix_attempts` for the issue.
+   e. On `pending`: re-enqueue the entry.
+   f. On `failing`: handle CI failure (see Section 11A.5).
+
+### 11A.5 CI failure handling
+
+When CI status is `failing`:
+
+1. Persist a CI-failure run history entry (`status: ci_failed`).
+2. Increment `ci_fix_attempts[issue_id]`.
+3. If `ci_fix_attempts` exceeds `ci_feedback.max_retries`: escalate (Section 11A.6).
+4. Otherwise:
+   a. Convert `CIResult` to a template map via `ToTemplateMap()`.
+   b. Cancel the existing continuation retry for the issue.
+   c. Schedule a CI-fix dispatch carrying the CI failure context. The retry entry's
+      `CIFailureContext` field carries the map through the timer to the worker goroutine.
+   d. The worker injects the context into the prompt on turn 1 via `prompt.WithCIFailure`.
+
+CI-fix dispatches count toward the regular retry machinery but use a fixed delay rather than
+exponential backoff.
+
+### 11A.6 Escalation behavior
+
+When `ci_fix_attempts` exceeds `ci_feedback.max_retries`:
+
+- `escalation: label` (default): add `escalation_label` (default `needs-human`) to the tracker
+  issue via `TrackerAdapter.AddLabel`. The label call runs in a detached goroutine with a 30-second
+  timeout.
+- `escalation: comment`: post a plain-text comment listing the ref, attempt count, failing check
+  names, conclusions, and details URLs. The comment call runs in a detached goroutine with a
+  30-second timeout.
+
+After escalation:
+
+- Cancel any pending retry for the issue.
+- Delete the persisted retry entry from SQLite.
+- Release the claim (`delete claimed[issue_id]`).
+- Clear `ci_fix_attempts[issue_id]`.
+
+Escalation failures are logged and counted (`sortie_ci_escalations_total{action="error"}`) but do
+not block claim release.
+
+### 11A.7 Adapter registration
+
+CI status providers register via the CI provider registry using `init()` functions, following the
+same pattern as tracker and agent adapters:
+
+```go
+func init() {
+    registry.CIProviders.Register("github", NewGitHubCIProvider)
+}
+```
+
+The `CIProviderConstructor` signature is:
+
+```go
+type CIProviderConstructor func(maxLogLines int, adapterConfig map[string]any) (domain.CIStatusProvider, error)
+```
+
+The `maxLogLines` parameter comes from `ci_feedback.max_log_lines`. The `adapterConfig` parameter
+is the tracker adapter's pass-through config with merged credentials (API key, project, endpoint)
+when the tracker and CI feedback `kind` values match.
+
 ## 12. Prompt Construction and Context Assembly
 
 ### 12.1 Inputs
@@ -1456,6 +1735,21 @@ Inputs to prompt rendering:
 - normalized `issue` object
 - optional `attempt` integer (retry/continuation metadata)
 - `run` object: `turn_number`, `max_turns`, `is_continuation`
+- `ci_failure` (map or nil): CI failure context injected into CI-fix continuation prompts via
+  `CIResult.ToTemplateMap()`. Nil on initial dispatch and non-CI retries. When non-nil, contains:
+  - `status`: aggregate CI pipeline status string (`failing`)
+  - `check_runs`: list of individual check run maps (each with `name`, `status`, `conclusion`,
+    `details_url`)
+  - `log_excerpt`: truncated log from the first failing check (empty string when unavailable)
+  - `failing_count`: number of check runs with a failure conclusion
+  - `ref`: the git ref that was queried
+
+CI failure context is injected only on turn 1 of a CI-fix dispatch. The worker reads the context
+from the dispatch site (carried via `context.WithValue` or the retry entry's `CIFailureContext`
+field) and passes it to `prompt.WithCIFailure`. Templates SHOULD use a conditional guard:
+`{{ if .ci_failure }}...{{ end }}`. When `ci_failure` is nil, the template variable is still
+present in the data map (set to nil) so strict `missingkey=error` evaluation does not reject
+templates that reference the field.
 
 ### 12.2 Rendering Rules
 
@@ -1795,6 +2089,8 @@ Defined metrics (label sets and buckets are specified here; see ADR-0008 for his
 | `sortie_handoff_transitions_total{result}` | Counter | Handoff-state transition attempts, partitioned by result (`success`, `error`, `skipped`). |
 | `sortie_dispatch_transitions_total{result}` | Counter | Dispatch-time in-progress transition attempts, partitioned by result (`success`, `error`, `skipped`). `skipped` indicates the issue was already in the target state. |
 | `sortie_tool_calls_total{tool,result}` | Counter | Agent tool call completions, partitioned by tool name and result (`success`, `error`). |
+| `sortie_ci_status_checks_total{result}` | Counter | CI status check outcomes, partitioned by result (`passing`, `pending`, `failing`, `error`). |
+| `sortie_ci_escalations_total{action}` | Counter | CI escalation actions when fix retries are exhausted, partitioned by action (`label`, `comment`, `error`). |
 | `sortie_poll_duration_seconds` | Histogram | Wall-clock time per poll cycle; buckets via `ExponentialBuckets(0.1, 2, 10)` (0.1 s–51.2 s). |
 | `sortie_worker_duration_seconds{exit_type}` | Histogram | Worker session wall-clock time; buckets via `ExponentialBuckets(10, 2, 12)` (10 s–5.7 h). |
 | `sortie_build_info{version,go_version}` | Gauge | Always `1`; carries build metadata as labels. |
@@ -1834,6 +2130,11 @@ Defined metrics (label sets and buckets are specified here; see ADR-0008 for his
    - Dashboard render errors
    - Log sink configuration failure
 
+6. `CI Feedback Failures`
+   - CI status fetch errors (transport, auth, API, not-found, payload)
+   - Escalation failures (label or comment write to tracker)
+   - Missing or malformed `.sortie/scm.json`
+
 ### 14.2 Recovery Behavior
 
 - Dispatch validation failures:
@@ -1854,6 +2155,11 @@ Defined metrics (label sets and buckets are specified here; see ADR-0008 for his
 
 - Dashboard/log failures:
   - Do not crash the orchestrator.
+
+- CI feedback failures:
+  - CI status fetch failure: re-enqueue pending check for next tick.
+  - Escalation failure: log and count error, but release claim anyway.
+  - Missing/malformed SCM metadata: skip CI check silently (degrade to no-CI behavior).
 
 ### 14.3 Partial State Recovery (Restart)
 
@@ -2038,11 +2344,13 @@ function reconcile_running_issues(state):
 
   running_ids = keys(state.running)
   if running_ids is empty:
+    state = reconcile_ci_status(state)
     return state
 
   refreshed = tracker.fetch_issue_states_by_ids(running_ids)
   if refreshed failed:
     log_debug("keep workers running")
+    state = reconcile_ci_status(state)
     return state
 
   for issue in refreshed:
@@ -2052,6 +2360,34 @@ function reconcile_running_issues(state):
       state.running[issue.id].issue = issue
     else:
       state = terminate_running_issue(state, issue.id, cleanup_workspace=false)
+
+  state = reconcile_ci_status(state)
+  return state
+```
+
+```text
+function reconcile_ci_status(state):
+  if ci_provider is nil:
+    return state
+
+  for issue_id, pending in state.pending_ci_check:
+    delete(state.pending_ci_check, issue_id)
+
+    ref = pending.sha or pending.branch
+    result, err = ci_provider.fetch_ci_status(ref)
+
+    if err:
+      log_warn("CI status fetch failed, will retry next tick")
+      state.pending_ci_check[issue_id] = pending
+      continue
+
+    switch result.status:
+      case "passing":
+        delete(state.ci_fix_attempts, issue_id)
+      case "pending":
+        state.pending_ci_check[issue_id] = pending
+      case "failing":
+        handle_ci_failure(state, pending, result)
 
   return state
 ```
@@ -2185,6 +2521,16 @@ on_worker_exit(issue_id, reason, state):
       identifier: running_entry.identifier,
       delay_type: continuation
     })
+
+    # Enqueue CI check when provider is configured and workspace has SCM metadata
+    if ci_provider is not nil and workspace_path is not empty:
+      if issue_id in state.claimed:
+        scm = read_scm_metadata(workspace_path)
+        if scm.branch is not empty:
+          state.pending_ci_check[issue_id] = {
+            issue_id, identifier, display_id, attempt,
+            branch: scm.branch, sha: scm.sha
+          }
   else:
     state = schedule_retry(state, issue_id, next_attempt_from(running_entry), {
       identifier: running_entry.identifier,
@@ -2316,6 +2662,15 @@ Unless otherwise noted, Sections 17.1 through 17.7 are `Core Conformance`. Bulle
 - If a snapshot API is implemented, it returns running rows, retry rows, token totals, and rate
   limits
 - If a snapshot API is implemented, timeout/unavailable cases are surfaced
+- CI status reconciliation is skipped when `ci_feedback.kind` is not configured
+- CI status passing clears CI fix attempts for the issue
+- CI status pending re-enqueues the pending check for the next tick
+- CI status failing within `max_retries` schedules a CI-fix dispatch with failure context
+- CI status failing beyond `max_retries` escalates (label or comment) and releases the claim
+- CI failure context is injected into turn 1 prompt via `prompt.WithCIFailure`
+- Escalation label failure is logged but does not block claim release
+- `.sortie/scm.json` symlink rejection prevents CI check enqueue
+- `.sortie/scm.json` oversized or malformed files degrade to no-CI behavior
 
 ### 17.5 Coding-Agent Adapter Client
 
