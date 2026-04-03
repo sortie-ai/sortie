@@ -75,11 +75,11 @@ var templateFieldSchema = map[string]map[string]map[string]bool{
 	},
 	"attempt": nil,
 	"ci_failure": {
-		"status":      nil,
-		"check_runs":  nil,
-		"commit_sha":  nil,
-		"details_url": nil,
-		"summary":     nil,
+		"status":        nil,
+		"check_runs":    {"name": true, "status": true, "conclusion": true, "details_url": true},
+		"log_excerpt":   nil,
+		"failing_count": nil,
+		"ref":           nil,
 	},
 }
 
