@@ -211,6 +211,8 @@ func (p *GitHubCIProvider) fetchLogExcerpt(ctx context.Context, failing githubCh
 		return ""
 	}
 
+	// GitHub Actions creates check runs 1:1 with workflow jobs, so the
+	// check run ID doubles as the job ID for the Actions logs endpoint.
 	path := fmt.Sprintf("/repos/%s/%s/actions/jobs/%d/logs", p.owner, p.repo, failing.ID)
 
 	body, err := p.client.doRawGet(ctx, path, maxLogBytes)
@@ -254,6 +256,16 @@ func mapCheckConclusion(c *string) domain.CheckConclusion {
 		return domain.CheckConclusionNeutral
 	case "skipped":
 		return domain.CheckConclusionSkipped
+	case "action_required":
+		// GitHub sets action_required on completed check runs that need
+		// manual approval (e.g. code scanning alerts). The agent cannot
+		// perform UI actions, so this is a blocking failure.
+		return domain.CheckConclusionFailure
+	case "stale":
+		// A stale check run was superseded by a newer push. Treat as
+		// pending because the replacement check run will provide the
+		// authoritative conclusion.
+		return domain.CheckConclusionPending
 	default:
 		return domain.CheckConclusionPending
 	}
