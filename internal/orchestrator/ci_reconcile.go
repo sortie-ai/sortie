@@ -67,7 +67,7 @@ func reconcileCIStatus(state *State, params ReconcileParams, log *slog.Logger, c
 		entryLog := logging.WithIssue(log, issueID, pending.Identifier)
 
 		if ttl > 0 && now.Sub(pending.CreatedAt) > ttl {
-			entryLog.Warn("CI pending entry exceeded TTL, dropping",
+			entryLog.Warn("ci pending entry exceeded ttl, dropping",
 				slog.Int64("ttl_ms", int64(ttl/time.Millisecond)),
 				slog.Int64("age_ms", int64(now.Sub(pending.CreatedAt)/time.Millisecond)),
 			)
@@ -86,13 +86,16 @@ func reconcileCIStatus(state *State, params ReconcileParams, log *slog.Logger, c
 
 		result, err := params.CIProvider.FetchCIStatus(ctx, ref)
 		if err != nil {
-			entryLog.Warn("CI status fetch failed, will retry next tick",
+			pending.PendingAttempts++
+			delay := computeCIPendingDelay(pending.PendingAttempts)
+			pending.PendingRetryAt = now.Add(delay)
+			entryLog.Warn("ci status fetch failed, retrying with backoff",
 				slog.String("ref", ref),
 				slog.Any("error", err),
+				slog.Int("pending_attempts", pending.PendingAttempts),
+				slog.Int64("retry_after_ms", int64(delay/time.Millisecond)),
 			)
 			metrics.IncCIStatusChecks("error")
-			pending.PendingAttempts++
-			pending.PendingRetryAt = now.Add(computeCIPendingDelay(pending.PendingAttempts))
 			state.PendingCICheck[issueID] = pending
 			continue
 		}

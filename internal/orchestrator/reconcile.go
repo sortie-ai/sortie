@@ -73,12 +73,12 @@ type ReconcileParams struct {
 	CIFeedback config.CIFeedbackConfig
 
 	// CIPendingTTL is the maximum age of a PendingCICheck entry before
-	// it is silently dropped. Protects against indefinite spinning when
-	// the CI provider is unreachable and no new worker exit refreshes
-	// the entry. Zero or negative disables TTL enforcement entirely.
-	// Production callers should set this to a positive value (e.g.
-	// [ciPendingDefaultTTL]); test helpers that do not set NowFunc may
-	// leave it zero to preserve legacy behaviour.
+	// it is dropped and a warning is logged. Protects against indefinite
+	// spinning when the CI provider is unreachable and no new worker exit
+	// refreshes the entry. Zero or negative disables TTL enforcement
+	// entirely. Production callers should set this to a positive value
+	// (e.g. [ciPendingDefaultTTL]); test helpers that do not set NowFunc
+	// may leave it zero to preserve legacy behavior.
 	CIPendingTTL time.Duration
 }
 
