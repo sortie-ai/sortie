@@ -137,14 +137,14 @@ Where:
 
 - `<workspace_root>` is the configured `workspace.root` value (architecture Section 5.3.3).
 - `<sanitized_issue_identifier>` is the issue identifier sanitized to the character class
-  `[A-Za-z0-9._-]` (architecture Section 9.5, Invariant 3).
+  `[A-Za-z0-9._-]` (architecture Section 9.6, Invariant 3).
 - `.sortie/` is a reserved directory namespace within the per-issue workspace.
 - `status` is the canonical filename.
 
 The `.sortie/` directory is not created by the orchestrator. The agent creates it as needed.
 
 Relative to the agent's working directory (which MUST equal the per-issue workspace path per
-architecture Section 9.5, Invariant 1), the file path is:
+architecture Section 9.6, Invariant 1), the file path is:
 
 ```
 .sortie/status
@@ -641,7 +641,7 @@ manually.
 ### 7.2 Path containment
 
 The `.sortie/status` file resides within the per-issue workspace directory, which is itself
-contained under `workspace.root` (architecture Section 9.5). The orchestrator reads only this
+contained under `workspace.root` (architecture Section 9.6). The orchestrator reads only this
 specific path. No user-controlled input influences the path construction beyond the issue
 identifier, which is sanitized to `[A-Za-z0-9._-]`.
 
@@ -649,7 +649,7 @@ The orchestrator MUST NOT follow symbolic links when reading the status file. A 
 status file path, the `.sortie/` directory, or any intermediate component MUST be treated as a
 read error (Section 2.6): log a warning, treat as absent.
 
-This requirement extends the workspace safety model (architecture Section 9.5) into the
+This requirement extends the workspace safety model (architecture Section 9.6) into the
 `.sortie/` namespace. Existing workspace path validation covers the workspace root and per-issue
 directory; the symlink check here adds coverage for files created by the agent inside the
 workspace. Implementation requires `Lstat` checks on the path components leading to the status

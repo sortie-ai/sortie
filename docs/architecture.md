@@ -584,10 +584,10 @@ Fields:
   - Label applied when escalation is `label`.
   - Default: `needs-human`.
 
-The CI provider adapter receives `max_log_lines` and the tracker adapter's pass-through config
-(API key, project, endpoint) for authentication and repository resolution. The orchestrator merges
-tracker credentials into the CI adapter config when the tracker and CI feedback `kind` values
-match.
+The CI provider adapter receives `max_log_lines` and the pass-through config sub-object named by
+`ci_feedback.kind` from `Extensions[kind]`. The orchestrator merges tracker credentials (API key,
+project, endpoint) into that CI adapter config only when the tracker and CI feedback `kind`
+values match.
 
 #### 5.3.7 `db_path` (string, optional)
 
@@ -1133,9 +1133,8 @@ Failure semantics:
 
 The `.sortie/scm.json` file is a workspace-level file that carries SCM metadata written by the
 agent, a post-push hook, or any process running inside the workspace. The orchestrator reads this
-file after a normal worker exit to determine the git ref for CI status queries. The file is shared
-infrastructure — CI feedback reads it today; future PR automation and review-feedback features will
-consume the same contract.
+file after a normal worker exit to determine the git ref for CI status queries. The file is a
+shared workspace-level SCM metadata contract that CI feedback reads and other features can reuse.
 
 `SCMMetadata` fields:
 
@@ -1143,8 +1142,9 @@ consume the same contract.
   file is treated as missing and CI status queries are skipped.
 - `sha` (string, optional): the commit SHA at push time. When present, the orchestrator passes
   this to `CIStatusProvider.FetchCIStatus` instead of the branch name for deterministic results.
-- `pushed_at` (string, optional): ISO-8601 timestamp of the push. Used by the orchestrator to
-  skip CI checks for stale pushes.
+- `pushed_at` (string, optional): ISO-8601 timestamp of the push. This field is reserved metadata
+  for producers and future consumers of `.sortie/scm.json`. The orchestrator does not use it for
+  CI gating today.
 
 Safety and parsing rules:
 
@@ -1722,8 +1722,9 @@ type CIProviderConstructor func(maxLogLines int, adapterConfig map[string]any) (
 ```
 
 The `maxLogLines` parameter comes from `ci_feedback.max_log_lines`. The `adapterConfig` parameter
-is the tracker adapter's pass-through config with merged credentials (API key, project, endpoint)
-when the tracker and CI feedback `kind` values match.
+comes from the `extensions` sub-object keyed by `ci_feedback.kind`. Startup merges tracker
+credentials (API key, project, endpoint) into that config only when `tracker.kind` and
+`ci_feedback.kind` match.
 
 ## 12. Prompt Construction and Context Assembly
 
@@ -2792,7 +2793,7 @@ Use the same validation profiles as Section 17:
 
 Sortie uses an embedded SQLite database for durable state. The database file path defaults to
 `.sortie.db` in the same directory as `WORKFLOW.md` and can be overridden with the `db_path`
-front matter field (see Section 5.3.6). On startup, Sortie opens or creates the database and
+front matter field (see Section 5.3.7). On startup, Sortie opens or creates the database and
 runs all pending schema migrations before beginning normal operation.
 
 ### 19.2 Tables
