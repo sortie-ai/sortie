@@ -220,6 +220,7 @@ func (o *Orchestrator) Run(ctx context.Context) {
 			o.draining.Store(true)
 			tickTimer.Stop()
 			o.drainRunningWorkers()
+			o.drainTrackerOps()
 			o.cancelRetryTimers()
 			return
 
@@ -605,19 +606,33 @@ func (o *Orchestrator) drainRunningWorkers() {
 			o.logger.Warn("drain timeout exceeded, abandoning workers",
 				slog.Int("remaining", len(o.state.Running)),
 			)
-			o.drainTrackerOps()
 			return
 		}
 	}
 
-	o.drainTrackerOps()
 }
 
+// trackerOpsDrainTimeout bounds how long shutdown waits for in-flight
+// tracker API goroutines. Set slightly above the 30-second context
+// timeout used by the goroutines themselves.
+const trackerOpsDrainTimeout = 35 * time.Second
+
 // drainTrackerOps waits for all in-flight fire-and-forget tracker API
-// goroutines (comments, labels) to complete. Called after worker drain
-// so best-effort tracker operations are not orphaned on process exit.
+// goroutines (comments, labels) to complete. The wait is bounded so a
+// stuck adapter cannot block process exit indefinitely. Called from
+// Run after drainRunningWorkers regardless of whether workers existed.
 func (o *Orchestrator) drainTrackerOps() {
-	o.state.TrackerOpsWg.Wait()
+	done := make(chan struct{})
+	go func() {
+		o.state.TrackerOpsWg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(trackerOpsDrainTimeout):
+		o.logger.Warn("tracker ops drain timeout exceeded, abandoning in-flight calls")
+	}
 }
 
 // cancelRetryTimers stops all pending retry timers to prevent late fires
