@@ -97,7 +97,7 @@ func TestMapCheckConclusion(t *testing.T) {
 		{"timed_out", str("timed_out"), domain.CheckConclusionTimedOut},
 		{"neutral", str("neutral"), domain.CheckConclusionNeutral},
 		{"skipped", str("skipped"), domain.CheckConclusionSkipped},
-		{"action_required returns Pending", str("action_required"), domain.CheckConclusionPending},
+		{"action_required returns Failure", str("action_required"), domain.CheckConclusionFailure},
 		{"stale returns Pending", str("stale"), domain.CheckConclusionPending},
 		{"unknown returns Pending", str("unknown_val"), domain.CheckConclusionPending},
 	}
