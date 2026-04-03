@@ -856,3 +856,106 @@ func TestDoConditional_WeakETag(t *testing.T) {
 		t.Errorf("etag = %q, want %q", etag, `W/"weaketag"`)
 	}
 }
+
+// --- doRawGet ---
+
+func TestDoRawGet_Success(t *testing.T) {
+	t.Parallel()
+
+	const want = "hello from the server"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(want)) //nolint:errcheck // test helper
+	}))
+	defer srv.Close()
+
+	c := newTestClient(t, srv.URL)
+	got, err := c.doRawGet(context.Background(), "/repos/o/r/actions/jobs/1/logs", 1<<20)
+	if err != nil {
+		t.Fatalf("doRawGet: %v", err)
+	}
+	if string(got) != want {
+		t.Errorf("doRawGet body = %q, want %q", string(got), want)
+	}
+}
+
+func TestDoRawGet_BodyTruncation(t *testing.T) {
+	t.Parallel()
+
+	const maxBytes = 10
+	body := strings.Repeat("x", 100)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(body)) //nolint:errcheck // test helper
+	}))
+	defer srv.Close()
+
+	c := newTestClient(t, srv.URL)
+	got, err := c.doRawGet(context.Background(), "/repos/o/r/actions/jobs/1/logs", maxBytes)
+	if err != nil {
+		t.Fatalf("doRawGet: %v", err)
+	}
+	if int64(len(got)) != maxBytes {
+		t.Errorf("doRawGet body len = %d, want exactly %d (truncated)", len(got), maxBytes)
+	}
+}
+
+func TestDoRawGet_Non200(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		status   int
+		wantKind domain.TrackerErrorKind
+	}{
+		{"401 unauthorized", http.StatusUnauthorized, domain.ErrTrackerAuth},
+		{"404 not found", http.StatusNotFound, domain.ErrTrackerNotFound},
+		{"500 server error", http.StatusInternalServerError, domain.ErrTrackerTransport},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(tt.status)
+			}))
+			defer srv.Close()
+
+			c := newTestClient(t, srv.URL)
+			_, err := c.doRawGet(context.Background(), "/repos/o/r/actions/jobs/1/logs", 1<<20)
+			assertClientError(t, err, tt.wantKind)
+		})
+	}
+}
+
+func TestDoRawGet_ContextCancelled(t *testing.T) {
+	t.Parallel()
+
+	started := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		close(started)
+		<-r.Context().Done()
+	}))
+	defer srv.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	c := newTestClient(t, srv.URL)
+
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := c.doRawGet(ctx, "/repos/o/r/actions/jobs/1/logs", 1<<20)
+		errCh <- err
+	}()
+
+	<-started
+	cancel()
+
+	err := <-errCh
+	if err == nil {
+		t.Fatal("doRawGet: expected error after context cancel, got nil")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("doRawGet error = %v, want context.Canceled", err)
+	}
+}

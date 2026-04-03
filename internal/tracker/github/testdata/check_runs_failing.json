@@ -1,0 +1,21 @@
+{
+  "total_count": 2,
+  "check_runs": [
+    {
+      "id": 2001,
+      "name": "test",
+      "status": "completed",
+      "conclusion": "failure",
+      "html_url": "https://github.com/owner/repo/runs/2001",
+      "app": { "slug": "github-actions" }
+    },
+    {
+      "id": 2002,
+      "name": "lint",
+      "status": "completed",
+      "conclusion": "success",
+      "html_url": "https://github.com/owner/repo/runs/2002",
+      "app": { "slug": "github-actions" }
+    }
+  ]
+}

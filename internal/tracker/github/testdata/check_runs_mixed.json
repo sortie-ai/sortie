@@ -1,0 +1,29 @@
+{
+  "total_count": 3,
+  "check_runs": [
+    {
+      "id": 5001,
+      "name": "test",
+      "status": "completed",
+      "conclusion": "failure",
+      "html_url": "https://github.com/owner/repo/runs/5001",
+      "app": { "slug": "github-actions" }
+    },
+    {
+      "id": 5002,
+      "name": "lint",
+      "status": "completed",
+      "conclusion": "success",
+      "html_url": "https://github.com/owner/repo/runs/5002",
+      "app": { "slug": "github-actions" }
+    },
+    {
+      "id": 5003,
+      "name": "deploy",
+      "status": "in_progress",
+      "conclusion": null,
+      "html_url": "https://github.com/owner/repo/runs/5003",
+      "app": { "slug": "github-actions" }
+    }
+  ]
+}

@@ -415,3 +415,52 @@ func parseLinkNext(header string) string {
 
 	return ""
 }
+
+// doRawGet executes a GET request and returns the response body as
+// raw bytes. Reads up to maxBytes from the body to prevent memory
+// exhaustion. Used for log fetching where the response is text, not
+// JSON. Follows redirects via the default http.Client behavior.
+func (c *githubClient) doRawGet(ctx context.Context, path string, maxBytes int64) ([]byte, error) {
+	reqURL := c.baseURL + path
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil) //nolint:gosec // URL is constructed from operator-configured base URL + internal API paths, not user data
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		return nil, &domain.TrackerError{
+			Kind:    domain.ErrTrackerTransport,
+			Message: fmt.Sprintf("failed to build request: GET %s", path),
+			Err:     err,
+		}
+	}
+
+	c.setHeaders(req)
+
+	resp, err := c.httpClient.Do(req) //nolint:gosec // controlled URL, see above
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		return nil, &domain.TrackerError{
+			Kind:    domain.ErrTrackerTransport,
+			Message: fmt.Sprintf("GET %s: network error", path),
+			Err:     err,
+		}
+	}
+	defer resp.Body.Close() //nolint:errcheck // best-effort cleanup on response body
+
+	if resp.StatusCode == http.StatusOK {
+		body, err := io.ReadAll(io.LimitReader(resp.Body, maxBytes))
+		if err != nil {
+			return nil, &domain.TrackerError{
+				Kind:    domain.ErrTrackerTransport,
+				Message: "failed to read response body",
+				Err:     err,
+			}
+		}
+		return body, nil
+	}
+
+	return nil, classifyHTTPError(resp, http.MethodGet, path)
+}
