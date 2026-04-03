@@ -644,3 +644,208 @@ func TestEscalateCIFailure_CommentTracksTrackerOps(t *testing.T) {
 		t.Fatal("TrackerOpsWg.Wait() did not return after CommentIssue goroutine completed")
 	}
 }
+
+// --- Backoff and TTL tests ---
+
+func TestComputeCIPendingDelay(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		attempts int
+		want     time.Duration
+	}{
+		{"attempt 0 is immediate", 0, 0},
+		{"attempt 1 is base×2", 1, 20 * time.Second},
+		{"attempt 2 is base×4", 2, 40 * time.Second},
+		{"attempt 3 is base×8", 3, 80 * time.Second},
+		{"attempt 4 is base×16", 4, 160 * time.Second},
+		{"attempt 5 is capped at 5 minutes", 5, 5 * time.Minute},
+		{"large attempt is capped at 5 minutes", 100, 5 * time.Minute},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := computeCIPendingDelay(tt.attempts)
+			if got != tt.want {
+				t.Errorf("computeCIPendingDelay(%d) = %v, want %v", tt.attempts, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestReconcileCIStatus_BackoffSkip(t *testing.T) {
+	t.Parallel()
+
+	now := ciBaseTime
+	futureRetry := now.Add(2 * time.Minute)
+
+	entry := newPendingEntry("ISS-SKIP-1", "ISS-SKIP-1-ident", "feature/skip", 1)
+	entry.PendingAttempts = 2
+	entry.PendingRetryAt = futureRetry
+
+	state := NewState(5000, 4, nil, AgentTotals{})
+	state.PendingCICheck["ISS-SKIP-1"] = entry
+	state.Claimed["ISS-SKIP-1"] = struct{}{}
+
+	store := &ciReconcileStore{}
+	metrics := newCIMetricsSpy()
+	ci := &mockCIProvider{}
+	params := ciParams(t, store, ci, nil)
+	params.NowFunc = func() time.Time { return now }
+
+	reconcileCIStatus(state, params, discardLogger(), context.Background(), metrics)
+
+	// FetchCIStatus must not be called when PendingRetryAt is in the future.
+	if ci.calls != 0 {
+		t.Errorf("FetchCIStatus called %d times during backoff window; want 0", ci.calls)
+	}
+
+	// Entry must be re-enqueued with identical PendingAttempts and PendingRetryAt.
+	got, ok := state.PendingCICheck["ISS-SKIP-1"]
+	if !ok {
+		t.Fatal("PendingCICheck entry dropped during backoff skip; want re-enqueued")
+	}
+	if got.PendingAttempts != 2 {
+		t.Errorf("PendingAttempts = %d, want 2 (unchanged)", got.PendingAttempts)
+	}
+	if !got.PendingRetryAt.Equal(futureRetry) {
+		t.Errorf("PendingRetryAt = %v, want %v (unchanged)", got.PendingRetryAt, futureRetry)
+	}
+}
+
+func TestReconcileCIStatus_BackoffIncrements_OnPending(t *testing.T) {
+	t.Parallel()
+
+	now := ciBaseTime
+
+	entry := newPendingEntry("ISS-BIP-1", "ISS-BIP-1-ident", "feature/wip", 1)
+	entry.PendingAttempts = 2
+
+	state := NewState(5000, 4, nil, AgentTotals{})
+	state.PendingCICheck["ISS-BIP-1"] = entry
+	state.Claimed["ISS-BIP-1"] = struct{}{}
+
+	store := &ciReconcileStore{}
+	metrics := newCIMetricsSpy()
+	ci := &mockCIProvider{result: domain.CIResult{Status: domain.CIStatusPending}}
+	params := ciParams(t, store, ci, nil)
+	params.NowFunc = func() time.Time { return now }
+
+	reconcileCIStatus(state, params, discardLogger(), context.Background(), metrics)
+
+	got, ok := state.PendingCICheck["ISS-BIP-1"]
+	if !ok {
+		t.Fatal("PendingCICheck entry not re-enqueued after CIStatusPending; want re-enqueued")
+	}
+
+	wantAttempts := 3
+	if got.PendingAttempts != wantAttempts {
+		t.Errorf("PendingAttempts = %d, want %d", got.PendingAttempts, wantAttempts)
+	}
+
+	wantRetryAt := now.Add(computeCIPendingDelay(wantAttempts))
+	if !got.PendingRetryAt.Equal(wantRetryAt) {
+		t.Errorf("PendingRetryAt = %v, want %v", got.PendingRetryAt, wantRetryAt)
+	}
+
+	if metrics.ciStatusChecks["pending"] != 1 {
+		t.Errorf(`IncCIStatusChecks("pending") = %d, want 1`, metrics.ciStatusChecks["pending"])
+	}
+}
+
+func TestReconcileCIStatus_BackoffIncrements_OnError(t *testing.T) {
+	t.Parallel()
+
+	now := ciBaseTime
+
+	entry := newPendingEntry("ISS-BIE-1", "ISS-BIE-1-ident", "feature/err", 1)
+	entry.PendingAttempts = 1
+
+	state := NewState(5000, 4, nil, AgentTotals{})
+	state.PendingCICheck["ISS-BIE-1"] = entry
+	state.Claimed["ISS-BIE-1"] = struct{}{}
+
+	store := &ciReconcileStore{}
+	metrics := newCIMetricsSpy()
+	ci := &mockCIProvider{err: errors.New("transient network error")}
+	params := ciParams(t, store, ci, nil)
+	params.NowFunc = func() time.Time { return now }
+
+	reconcileCIStatus(state, params, discardLogger(), context.Background(), metrics)
+
+	got, ok := state.PendingCICheck["ISS-BIE-1"]
+	if !ok {
+		t.Fatal("PendingCICheck entry not re-enqueued after fetch error; want re-enqueued")
+	}
+
+	wantAttempts := 2
+	if got.PendingAttempts != wantAttempts {
+		t.Errorf("PendingAttempts = %d, want %d", got.PendingAttempts, wantAttempts)
+	}
+
+	wantRetryAt := now.Add(computeCIPendingDelay(wantAttempts))
+	if !got.PendingRetryAt.Equal(wantRetryAt) {
+		t.Errorf("PendingRetryAt = %v, want %v", got.PendingRetryAt, wantRetryAt)
+	}
+
+	if metrics.ciStatusChecks["error"] != 1 {
+		t.Errorf(`IncCIStatusChecks("error") = %d, want 1`, metrics.ciStatusChecks["error"])
+	}
+}
+
+func TestReconcileCIStatus_TTLExpiry(t *testing.T) {
+	t.Parallel()
+
+	const ttl = 30 * time.Minute
+
+	tests := []struct {
+		name        string
+		age         time.Duration
+		wantDropped bool
+	}{
+		{"entry within TTL is kept", ttl - time.Second, false},
+		{"entry exactly at TTL boundary is kept", ttl, false},
+		{"entry just past TTL is dropped", ttl + time.Millisecond, true},
+		{"entry well past TTL is dropped", 2 * ttl, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			createdAt := ciBaseTime
+			now := createdAt.Add(tt.age)
+
+			entry := newPendingEntry("ISS-TTL-1", "ISS-TTL-1-ident", "main", 1)
+			entry.CreatedAt = createdAt
+
+			state := NewState(5000, 4, nil, AgentTotals{})
+			state.PendingCICheck["ISS-TTL-1"] = entry
+			state.Claimed["ISS-TTL-1"] = struct{}{}
+
+			store := &ciReconcileStore{}
+			metrics := newCIMetricsSpy()
+			ci := &mockCIProvider{result: domain.CIResult{Status: domain.CIStatusPending}}
+			params := ciParams(t, store, ci, nil)
+			params.NowFunc = func() time.Time { return now }
+			params.CIPendingTTL = ttl
+
+			reconcileCIStatus(state, params, discardLogger(), context.Background(), metrics)
+
+			_, stillPresent := state.PendingCICheck["ISS-TTL-1"]
+
+			if tt.wantDropped && stillPresent {
+				t.Error("PendingCICheck entry not dropped after TTL expiry; want dropped")
+			}
+			if !tt.wantDropped && !stillPresent {
+				t.Error("PendingCICheck entry dropped before TTL expiry; want kept")
+			}
+			if tt.wantDropped && ci.calls != 0 {
+				t.Errorf("FetchCIStatus called %d times after TTL expiry; want 0", ci.calls)
+			}
+		})
+	}
+}

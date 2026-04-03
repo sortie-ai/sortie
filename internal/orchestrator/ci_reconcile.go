@@ -12,18 +12,72 @@ import (
 	"github.com/sortie-ai/sortie/internal/persistence"
 )
 
+// ciPendingBackoffBase is the base interval for CI-pending exponential backoff.
+// Each re-enqueue on a pending or error result doubles the previous interval.
+const ciPendingBackoffBase = 10 * time.Second
+
+// ciPendingBackoffCap is the maximum interval between CI status checks.
+const ciPendingBackoffCap = 5 * time.Minute
+
+// ciPendingDefaultTTL is the default lifetime of a PendingCICheck entry.
+// Entries older than this are dropped on the next reconcile tick.
+const ciPendingDefaultTTL = 30 * time.Minute
+
+// computeCIPendingDelay returns the backoff delay for a CI pending re-check
+// at the given attempt count. Attempt 0 returns zero (immediate). Each
+// subsequent attempt returns ciPendingBackoffBase * 2^attempts, capped at
+// ciPendingBackoffCap.
+func computeCIPendingDelay(attempts int) time.Duration {
+	if attempts <= 0 {
+		return 0
+	}
+	shift := uint(attempts)
+	if shift > 30 {
+		return ciPendingBackoffCap
+	}
+	delay := ciPendingBackoffBase * (1 << shift)
+	if delay > ciPendingBackoffCap || delay < 0 {
+		return ciPendingBackoffCap
+	}
+	return delay
+}
+
 // reconcileCIStatus polls CI status for each entry in state.PendingCICheck.
 // Called from ReconcileRunningIssues after reconcileTrackerState. Skipped
 // entirely when params.CIProvider is nil.
+//
+// Entries that are not yet due (PendingRetryAt in the future) are re-enqueued
+// without making an API call, applying exponential backoff. Entries older
+// than the configured TTL are dropped and a warning is logged.
 func reconcileCIStatus(state *State, params ReconcileParams, log *slog.Logger, ctx context.Context, metrics domain.Metrics) {
 	if params.CIProvider == nil {
 		return
 	}
 
+	now := time.Now().UTC()
+	if params.NowFunc != nil {
+		now = params.NowFunc().UTC()
+	}
+
+	ttl := params.CIPendingTTL
+
 	for issueID, pending := range state.PendingCICheck {
 		delete(state.PendingCICheck, issueID)
 
 		entryLog := logging.WithIssue(log, issueID, pending.Identifier)
+
+		if ttl > 0 && now.Sub(pending.CreatedAt) > ttl {
+			entryLog.Warn("CI pending entry exceeded TTL, dropping",
+				slog.Int64("ttl_ms", int64(ttl/time.Millisecond)),
+				slog.Int64("age_ms", int64(now.Sub(pending.CreatedAt)/time.Millisecond)),
+			)
+			continue
+		}
+
+		if now.Before(pending.PendingRetryAt) {
+			state.PendingCICheck[issueID] = pending
+			continue
+		}
 
 		ref := pending.SHA
 		if ref == "" {
@@ -37,6 +91,8 @@ func reconcileCIStatus(state *State, params ReconcileParams, log *slog.Logger, c
 				slog.Any("error", err),
 			)
 			metrics.IncCIStatusChecks("error")
+			pending.PendingAttempts++
+			pending.PendingRetryAt = now.Add(computeCIPendingDelay(pending.PendingAttempts))
 			state.PendingCICheck[issueID] = pending
 			continue
 		}
@@ -51,9 +107,14 @@ func reconcileCIStatus(state *State, params ReconcileParams, log *slog.Logger, c
 			)
 
 		case domain.CIStatusPending:
+			pending.PendingAttempts++
+			delay := computeCIPendingDelay(pending.PendingAttempts)
+			pending.PendingRetryAt = now.Add(delay)
 			state.PendingCICheck[issueID] = pending
-			entryLog.Debug("CI pending, will re-check next tick",
+			entryLog.Debug("CI pending, will re-check after backoff",
 				slog.String("ref", ref),
+				slog.Int("pending_attempts", pending.PendingAttempts),
+				slog.Int64("retry_after_ms", int64(delay/time.Millisecond)),
 			)
 
 		case domain.CIStatusFailing:
@@ -65,6 +126,8 @@ func reconcileCIStatus(state *State, params ReconcileParams, log *slog.Logger, c
 				slog.String("ref", ref),
 			)
 			metrics.IncCIStatusChecks("error")
+			pending.PendingAttempts++
+			pending.PendingRetryAt = now.Add(computeCIPendingDelay(pending.PendingAttempts))
 			state.PendingCICheck[issueID] = pending
 		}
 	}
