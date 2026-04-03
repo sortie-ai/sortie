@@ -386,7 +386,8 @@ func (a *JiraAdapter) SetMetrics(m domain.Metrics) {
 }
 
 // AddLabel adds a label to the specified issue via the Jira REST API.
-// Returns nil if the call fails; label operations are non-fatal.
+// Returns an error if the request fails; the orchestrator treats AddLabel
+// errors as non-fatal.
 func (a *JiraAdapter) AddLabel(ctx context.Context, issueID string, label string) error {
 	path := "/rest/api/3/issue/" + url.PathEscape(issueID)
 

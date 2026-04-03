@@ -430,14 +430,14 @@ func TestBuildCIEscalationComment(t *testing.T) {
 			ref:      "abc1234",
 			attempts: 3,
 			wantContains: []string{
-				"CI Failure Escalation",
+				"CI fix retries exhausted",
 				"abc1234",
-				"3 automated fix attempt(s)",
+				"3 CI-fix continuation(s)",
 				"Failing checks:",
 				"2",
 				"test",
 				"https://ci.example.com/runs/42",
-				"Human intervention required",
+				"Manual intervention required",
 			},
 		},
 		{
@@ -449,10 +449,10 @@ func TestBuildCIEscalationComment(t *testing.T) {
 			ref:      "main",
 			attempts: 1,
 			wantContains: []string{
-				"CI Failure Escalation",
+				"CI fix retries exhausted",
 				"main",
-				"1 automated fix attempt(s)",
-				"Human intervention required",
+				"1 CI-fix continuation(s)",
+				"Manual intervention required",
 			},
 		},
 		{

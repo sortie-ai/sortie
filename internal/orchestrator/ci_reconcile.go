@@ -213,27 +213,28 @@ func escalateCIFailure(
 	delete(state.CIFixAttempts, pending.IssueID)
 }
 
-// buildCIEscalationComment builds a human-readable escalation comment for
-// CI failures that exceeded the retry budget.
+// buildCIEscalationComment builds a plain-text escalation comment for
+// CI failures that exceeded the retry budget. Plain text is used so the
+// comment renders consistently across all tracker adapters.
 func buildCIEscalationComment(result domain.CIResult, ref string, attempts int) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "🚨 **CI Failure Escalation**\n\n")
-	fmt.Fprintf(&b, "CI checks failed on ref `%s` after %d automated fix attempt(s).\n\n", ref, attempts)
+	fmt.Fprintf(&b, "CI fix retries exhausted\n\n")
+	fmt.Fprintf(&b, "Sortie attempted %d CI-fix continuation(s) on ref %s but CI is still failing.\n\n", attempts, ref)
 
 	if result.FailingCount > 0 {
-		fmt.Fprintf(&b, "**Failing checks:** %d\n", result.FailingCount)
+		fmt.Fprintf(&b, "Failing checks: %d\n", result.FailingCount)
 	}
 
 	for _, cr := range result.CheckRuns {
 		if cr.Conclusion == domain.CheckConclusionFailure {
-			fmt.Fprintf(&b, "- **%s**: %s", cr.Name, cr.Conclusion)
+			fmt.Fprintf(&b, "- %s: %s", cr.Name, cr.Conclusion)
 			if cr.DetailsURL != "" {
-				fmt.Fprintf(&b, " ([details](%s))", cr.DetailsURL)
+				fmt.Fprintf(&b, " (details: %s)", cr.DetailsURL)
 			}
 			b.WriteString("\n")
 		}
 	}
 
-	b.WriteString("\nHuman intervention required.")
+	b.WriteString("\nManual intervention required.")
 	return b.String()
 }

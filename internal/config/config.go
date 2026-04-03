@@ -483,6 +483,21 @@ func buildCIFeedbackConfig(m map[string]any) (CIFeedbackConfig, error) {
 	if err != nil {
 		return CIFeedbackConfig{}, err
 	}
+	if _, exists := m["max_log_lines"]; !exists {
+		maxLogLines = 50
+	}
+	if maxRetries < 0 {
+		return CIFeedbackConfig{}, &ConfigError{
+			Field:   "ci_feedback.max_retries",
+			Message: "must be non-negative",
+		}
+	}
+	if maxLogLines < 0 {
+		return CIFeedbackConfig{}, &ConfigError{
+			Field:   "ci_feedback.max_log_lines",
+			Message: "must be non-negative",
+		}
+	}
 
 	escalation := extractString(m, "escalation")
 	if escalation == "" {
