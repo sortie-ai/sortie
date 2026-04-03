@@ -44,6 +44,10 @@ func (m *mockTrackerAdapter) CommentIssue(_ context.Context, _ string, _ string)
 	return nil
 }
 
+func (m *mockTrackerAdapter) AddLabel(_ context.Context, _ string, _ string) error {
+	return nil
+}
+
 func TestTrackerErrorKind_Values(t *testing.T) {
 	t.Parallel()
 

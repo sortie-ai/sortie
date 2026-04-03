@@ -103,6 +103,16 @@ type Metrics interface {
 	// SetSSHHostUsage records the current session count for the
 	// given SSH host (sortie_ssh_host_usage{host} gauge).
 	SetSSHHostUsage(host string, count int)
+
+	// IncCIStatusChecks increments the CI status check counter.
+	// result is "passing", "pending", "failing", or "error"
+	// (sortie_ci_status_checks_total{result} counter).
+	IncCIStatusChecks(result string)
+
+	// IncCIEscalations increments the CI escalation counter.
+	// action is "label", "comment", or "error"
+	// (sortie_ci_escalations_total{action} counter).
+	IncCIEscalations(action string)
 }
 
 // NoopMetrics is a [Metrics] implementation where every method is a no-op.
@@ -132,6 +142,8 @@ func (*NoopMetrics) IncToolCalls(string, string)           {}
 func (*NoopMetrics) ObservePollDuration(float64)           {}
 func (*NoopMetrics) ObserveWorkerDuration(string, float64) {}
 func (*NoopMetrics) SetSSHHostUsage(string, int)           {}
+func (*NoopMetrics) IncCIStatusChecks(string)              {}
+func (*NoopMetrics) IncCIEscalations(string)               {}
 
 // MetricsSetter is implemented by adapters that accept a [Metrics]
 // recorder for self-instrumentation.
