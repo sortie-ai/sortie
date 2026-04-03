@@ -24,6 +24,10 @@ type ServiceConfig struct {
 	Hooks     HooksConfig
 	Agent     AgentConfig
 
+	// CIFeedback holds CI feedback provider selection and tuning.
+	// Zero-value (Kind == "") means CI feedback is disabled.
+	CIFeedback CIFeedbackConfig
+
 	// DBPath is the environment- and tilde-expanded path for the SQLite
 	// database. It may be relative; callers resolve it against the
 	// WORKFLOW.md directory. Empty string means the caller should apply
@@ -99,12 +103,13 @@ type AgentConfig struct {
 // knownTopLevelKeys enumerates the front matter keys consumed by the
 // core schema. Anything else is collected into Extensions.
 var knownTopLevelKeys = map[string]bool{
-	"tracker":   true,
-	"polling":   true,
-	"workspace": true,
-	"hooks":     true,
-	"agent":     true,
-	"db_path":   true,
+	"tracker":     true,
+	"polling":     true,
+	"workspace":   true,
+	"hooks":       true,
+	"agent":       true,
+	"db_path":     true,
+	"ci_feedback": true,
 }
 
 // NewServiceConfig converts a raw front matter map into a validated
@@ -223,6 +228,11 @@ func NewServiceConfig(raw map[string]any) (ServiceConfig, error) {
 		return ServiceConfig{}, err
 	}
 
+	ciFeedback, err := buildCIFeedbackConfig(extractSubMap(raw, "ci_feedback"))
+	if err != nil {
+		return ServiceConfig{}, err
+	}
+
 	extensions := make(map[string]any)
 	for k, v := range raw {
 		if !knownTopLevelKeys[k] {
@@ -236,6 +246,7 @@ func NewServiceConfig(raw map[string]any) (ServiceConfig, error) {
 		Workspace:  workspace,
 		Hooks:      hooks,
 		Agent:      agent,
+		CIFeedback: ciFeedback,
 		DBPath:     dbPath,
 		Extensions: extensions,
 	}, nil
@@ -451,6 +462,50 @@ func buildAgentConfig(m map[string]any) (AgentConfig, error) {
 		MaxRetryBackoffMS:    maxRetryBackoff,
 		MaxConcurrentByState: byState,
 		MaxSessions:          maxSessions,
+	}, nil
+}
+
+func buildCIFeedbackConfig(m map[string]any) (CIFeedbackConfig, error) {
+	kind := extractString(m, "kind")
+	if kind == "" {
+		return CIFeedbackConfig{}, nil
+	}
+
+	maxRetries, err := coerceIntField(m, "max_retries", "ci_feedback.max_retries")
+	if err != nil {
+		return CIFeedbackConfig{}, err
+	}
+	if _, exists := m["max_retries"]; !exists {
+		maxRetries = 2
+	}
+
+	maxLogLines, err := coerceIntField(m, "max_log_lines", "ci_feedback.max_log_lines")
+	if err != nil {
+		return CIFeedbackConfig{}, err
+	}
+
+	escalation := extractString(m, "escalation")
+	if escalation == "" {
+		escalation = "label"
+	}
+	if escalation != "label" && escalation != "comment" {
+		return CIFeedbackConfig{}, &ConfigError{
+			Field:   "ci_feedback.escalation",
+			Message: fmt.Sprintf("must be \"label\" or \"comment\", got %q", escalation),
+		}
+	}
+
+	escalationLabel := extractString(m, "escalation_label")
+	if escalationLabel == "" {
+		escalationLabel = "needs-human"
+	}
+
+	return CIFeedbackConfig{
+		Kind:            kind,
+		MaxRetries:      maxRetries,
+		MaxLogLines:     maxLogLines,
+		Escalation:      escalation,
+		EscalationLabel: escalationLabel,
 	}, nil
 }
 
@@ -678,12 +733,26 @@ type CIFeedbackConfig struct {
 	// Empty string means CI feedback is disabled.
 	Kind string
 
+	// MaxRetries is the maximum number of CI-fix continuation dispatches
+	// per issue before escalation. Default 2. Zero means no retries
+	// (escalate immediately on first CI failure).
+	MaxRetries int
+
 	// MaxLogLines controls log excerpt fetching for failing CI checks.
 	// Positive value: fetch up to N lines from the first failing check.
 	// Zero: disable log fetching. The parsing layer resolves absent
 	// YAML keys to the adapter default before storing; after parsing,
 	// zero unambiguously means disabled.
 	MaxLogLines int
+
+	// Escalation controls what happens when max_retries is exceeded.
+	// Valid values: "label" (default) adds a label to the issue,
+	// "comment" posts a comment on the issue.
+	Escalation string
+
+	// EscalationLabel is the label applied when escalation is "label".
+	// Default "needs-human".
+	EscalationLabel string
 }
 
 func normalizeByStateMap(raw any) map[string]int {

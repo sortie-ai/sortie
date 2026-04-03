@@ -90,6 +90,15 @@ var knownFieldsRegistry = map[string]SectionSchema{
 		},
 		AllowAdapterPassthrough: true,
 	},
+	"ci_feedback": {
+		Fields: []FieldDef{
+			{Name: "kind", Type: FieldString},
+			{Name: "max_retries", Type: FieldInt},
+			{Name: "max_log_lines", Type: FieldInt},
+			{Name: "escalation", Type: FieldString},
+			{Name: "escalation_label", Type: FieldString},
+		},
+	},
 }
 
 // staticKnownExtensionKeys lists extension top-level keys defined by
