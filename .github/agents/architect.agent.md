@@ -133,7 +133,7 @@ Produce a Markdown document in `.specs/Spec-{TASK_NAME_OR_JIRA_ID}.md`.
 
 | Risk | Severity | Mitigation |
 |---|---|---|
-| *e.g., Workspace path escape* | Critical | *Path containment check per Section 9.5* |
+| *e.g., Workspace path escape* | Critical | *Path containment check per Section 9.6* |
 | ... | ... | ... |
 
 ### 6. File Structure Summary

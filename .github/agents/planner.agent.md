@@ -48,7 +48,7 @@ The plan must ensure the code is implemented atomically, linearly, and adheres t
       * *Good:* "Validate workspace path is under workspace root. If not, return `invalid_workspace_cwd` error."
 5. ✅ **FILE PATHS:** Be explicit about where files go. Use the `internal/` package convention (e.g., `internal/domain/`, `internal/workflow/`, `internal/config/`, `internal/orchestrator/`).
 6. ✅ **CHECKBOXES:** All implementation steps must use the Markdown checkbox format: `- [ ] Step description`.
-7. ✅ **SPEC REFERENCES:** Cite the relevant architecture doc section for every step that traces to the spec (e.g., "per Section 9.5").
+7. ✅ **SPEC REFERENCES:** Cite the relevant architecture doc section for every step that traces to the spec (e.g., "per Section 9.6").
 8. ❌ **NO SYMPHONY PATTERNS:** Do not reference OpenAI Symphony, Elixir, or BEAM patterns. Sortie diverges intentionally.
 9. ❌ **NO GENERIC NAMING VIOLATIONS:** Steps in orchestrator core use `agent_*`, `tracker_*`, `session_*`. Integration-specific names (`jira_*`, `claude_*`) appear only inside adapter package steps.
 
@@ -112,7 +112,7 @@ Produce a Markdown checklist in `.plans/Plan-{TASK_NAME_OR_JIRA_ID}.md`. Group s
 
 - [ ] Implement workspace key sanitization (`[A-Za-z0-9._-]` only, per Section 4.2)
   - **File:** `internal/workspace/...`
-- [ ] Implement workspace path computation with root containment check (per Section 9.5)
+- [ ] Implement workspace path computation with root containment check (per Section 9.6)
 - [ ] Implement workspace creation and reuse logic (per Section 9.2)
 - [ ] Implement hook execution: shell scripts with timeout, env vars, output truncation (per Section 9.4)
 - [ ] Implement full lifecycle: `after_create` → `before_run` → `after_run` → `before_remove`

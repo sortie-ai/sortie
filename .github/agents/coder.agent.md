@@ -125,7 +125,7 @@ You must analyze which file you are editing and apply the correct architectural 
     - **Context:** Workspace lifecycle — path computation, sanitization, containment validation, creation/reuse, hook execution.
     - ✅ **ALLOWED:** Filesystem operations, shell hook execution (`sh -c`), path manipulation.
     - ❌ **FORBIDDEN:** Importing adapter packages. Weakening path containment or sanitization.
-    - **CRITICAL SAFETY RULES (per Section 9.5):**
+    - **CRITICAL SAFETY RULES (per Section 9.6):**
       - Workspace path MUST be under workspace root (absolute path prefix check after normalization).
       - Workspace key: replace any character not in `[A-Za-z0-9._-]` with `_`.
       - Reject symlink escapes.
