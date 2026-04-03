@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/sortie-ai/sortie/internal/config"
 	"github.com/sortie-ai/sortie/internal/domain"
 )
 
@@ -36,6 +37,21 @@ type AgentConstructor func(config map[string]any) (domain.AgentAdapter, error)
 // register themselves via [Registry.Register] in their init functions;
 // the orchestrator resolves adapters via [Registry.Get] at runtime.
 var Agents = NewRegistry[AgentConstructor]("agent")
+
+// CIProviderConstructor creates a [domain.CIStatusProvider] from typed
+// feature configuration and opaque adapter-specific configuration. The
+// featureConfig parameter carries the parsed ci_feedback section (kind,
+// max_log_lines). The adapterConfig parameter is the raw map from the
+// adapter's pass-through config sub-object (e.g. Extensions["github"]).
+// Implementations must validate adapterConfig and return an error if
+// required fields are missing.
+type CIProviderConstructor func(featureConfig config.CIFeedbackConfig, adapterConfig map[string]any) (domain.CIStatusProvider, error)
+
+// CIProviders is the default CI status provider registry. Adapter
+// packages register themselves via [Registry.Register] in their init
+// functions; the orchestrator resolves adapters via [Registry.Get] at
+// runtime.
+var CIProviders = NewRegistry[CIProviderConstructor]("ci_provider")
 
 // TrackerConfigFields holds the config values passed to adapter
 // validation functions. This is a plain data struct that avoids
