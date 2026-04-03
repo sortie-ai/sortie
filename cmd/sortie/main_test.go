@@ -753,11 +753,10 @@ func TestMergeTrackerCredentials(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name    string
-		dst     map[string]any
-		tc      config.TrackerConfig
-		wantLen int
-		want    map[string]any
+		name string
+		dst  map[string]any
+		tc   config.TrackerConfig
+		want map[string]any
 	}{
 		{
 			name: "sets all three keys when dst is empty",
@@ -784,11 +783,10 @@ func TestMergeTrackerCredentials(t *testing.T) {
 			},
 		},
 		{
-			name:    "skips empty tracker fields",
-			dst:     map[string]any{},
-			tc:      config.TrackerConfig{APIKey: "", Project: "", Endpoint: ""},
-			want:    map[string]any{},
-			wantLen: 0,
+			name: "skips empty tracker fields",
+			dst:  map[string]any{},
+			tc:   config.TrackerConfig{APIKey: "", Project: "", Endpoint: ""},
+			want: map[string]any{},
 		},
 		{
 			name: "sets only api_key and project when endpoint empty",
@@ -817,9 +815,6 @@ func TestMergeTrackerCredentials(t *testing.T) {
 
 			mergeTrackerCredentials(tt.dst, tt.tc)
 
-			if tt.wantLen > 0 && len(tt.dst) != tt.wantLen {
-				t.Errorf("len(dst) = %d, want %d", len(tt.dst), tt.wantLen)
-			}
 			for k, wantVal := range tt.want {
 				if got, ok := tt.dst[k]; !ok {
 					t.Errorf("dst[%q] missing, want %q", k, wantVal)
