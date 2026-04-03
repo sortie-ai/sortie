@@ -38,9 +38,10 @@ type TemplateWarning struct {
 
 // topLevelKeys is the set of recognized top-level template variables.
 var topLevelKeys = map[string]struct{}{
-	"issue":   {},
-	"attempt": {},
-	"run":     {},
+	"issue":      {},
+	"attempt":    {},
+	"run":        {},
+	"ci_failure": {},
 }
 
 // templateFieldSchema defines valid sub-fields for each top-level
@@ -73,6 +74,13 @@ var templateFieldSchema = map[string]map[string]map[string]bool{
 		"is_continuation": nil,
 	},
 	"attempt": nil,
+	"ci_failure": {
+		"status":      nil,
+		"check_runs":  nil,
+		"commit_sha":  nil,
+		"details_url": nil,
+		"summary":     nil,
+	},
 }
 
 // AnalyzeTemplate performs static analysis on a parsed template and

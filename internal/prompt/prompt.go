@@ -115,16 +115,36 @@ func Parse(body, source string, frontMatterLines int) (*Template, error) {
 	}, nil
 }
 
+// RenderOption applies optional overrides to the template data map
+// before execution. Use [WithCIFailure] to inject CI failure context.
+type RenderOption func(m map[string]any)
+
+// WithCIFailure returns a [RenderOption] that sets the "ci_failure"
+// template variable to the provided map. Pass nil to explicitly clear
+// (which is also the default when no option is supplied).
+func WithCIFailure(data map[string]any) RenderOption {
+	return func(m map[string]any) {
+		m["ci_failure"] = data
+	}
+}
+
 // Render executes the template with the given inputs and returns the
-// rendered prompt string. The data map contains exactly three top-level
-// keys: "issue", "attempt", and "run". Returns a [*TemplateError] with
-// Kind [ErrTemplateRender] on failure, with line numbers adjusted to
-// WORKFLOW.md-relative positions.
-func (t *Template) Render(issue map[string]any, attempt any, run RunContext) (string, error) {
+// rendered prompt string. The data map contains the top-level keys
+// "issue", "attempt", "run", and "ci_failure". The ci_failure key
+// defaults to nil when no [RenderOption] overrides it, ensuring
+// missingkey=error does not reject templates that reference the field.
+// Returns a [*TemplateError] with Kind [ErrTemplateRender] on failure,
+// with line numbers adjusted to WORKFLOW.md-relative positions.
+func (t *Template) Render(issue map[string]any, attempt any, run RunContext, opts ...RenderOption) (string, error) {
 	templateVars := map[string]any{
-		"issue":   issue,
-		"attempt": attempt,
-		"run":     runContextToMap(run),
+		"issue":      issue,
+		"attempt":    attempt,
+		"run":        runContextToMap(run),
+		"ci_failure": nil,
+	}
+
+	for _, opt := range opts {
+		opt(templateVars)
 	}
 
 	var buf bytes.Buffer

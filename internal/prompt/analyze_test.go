@@ -332,7 +332,7 @@ func TestTemplateFieldSchemaMatchesDomain(t *testing.T) {
 	t.Parallel()
 
 	// Verify templateFieldSchema has exactly the three expected top-level keys.
-	wantTopLevel := []string{"issue", "attempt", "run"}
+	wantTopLevel := []string{"issue", "attempt", "run", "ci_failure"}
 	if len(templateFieldSchema) != len(wantTopLevel) {
 		t.Errorf("templateFieldSchema has %d top-level keys, want %d (%v)",
 			len(templateFieldSchema), len(wantTopLevel), wantTopLevel)
