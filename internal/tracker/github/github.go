@@ -1006,6 +1006,28 @@ func (a *GitHubAdapter) SetMetrics(m domain.Metrics) {
 	a.metrics = m
 }
 
+// AddLabel adds a label to the specified issue via the GitHub Labels API.
+func (a *GitHubAdapter) AddLabel(ctx context.Context, issueID string, label string) error {
+	path := "/repos/" + a.owner + "/" + a.repo + "/issues/" + url.PathEscape(issueID) + "/labels"
+
+	payload, err := json.Marshal(map[string][]string{"labels": {label}})
+	if err != nil {
+		a.incTrackerRequest("add_label", "error")
+		return &domain.TrackerError{
+			Kind:    domain.ErrTrackerPayload,
+			Message: "failed to marshal label payload",
+			Err:     err,
+		}
+	}
+
+	if _, err := a.client.doJSON(ctx, "POST", path, bytes.NewReader(payload)); err != nil {
+		a.incTrackerRequest("add_label", "error")
+		return err
+	}
+	a.incTrackerRequest("add_label", "success")
+	return nil
+}
+
 func (a *GitHubAdapter) incTrackerRequest(operation, outcome string) {
 	if a.metrics != nil {
 		a.metrics.IncTrackerRequests(operation, outcome)

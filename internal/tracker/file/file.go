@@ -351,6 +351,12 @@ func (a *FileAdapter) SetMetrics(m domain.Metrics) {
 	a.metrics = m
 }
 
+// AddLabel is a no-op for the file adapter. File-based issues do not
+// support labels.
+func (a *FileAdapter) AddLabel(_ context.Context, _ string, _ string) error {
+	return nil
+}
+
 func (a *FileAdapter) incTrackerRequest(operation, outcome string) {
 	if a.metrics != nil {
 		a.metrics.IncTrackerRequests(operation, outcome)

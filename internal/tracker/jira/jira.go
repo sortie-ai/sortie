@@ -385,6 +385,36 @@ func (a *JiraAdapter) SetMetrics(m domain.Metrics) {
 	a.metrics = m
 }
 
+// AddLabel adds a label to the specified issue via the Jira REST API.
+// Returns nil if the call fails; label operations are non-fatal.
+func (a *JiraAdapter) AddLabel(ctx context.Context, issueID string, label string) error {
+	path := "/rest/api/3/issue/" + url.PathEscape(issueID)
+
+	payload, err := json.Marshal(map[string]any{
+		"update": map[string]any{
+			"labels": []map[string]any{
+				{"add": label},
+			},
+		},
+	})
+	if err != nil {
+		a.incTrackerRequest("add_label", "error")
+		return &domain.TrackerError{
+			Kind:    domain.ErrTrackerPayload,
+			Message: "failed to marshal label payload",
+			Err:     err,
+		}
+	}
+
+	_, err = a.client.doJSON(ctx, "PUT", path, bytes.NewReader(payload))
+	if err != nil {
+		a.incTrackerRequest("add_label", "error")
+		return err
+	}
+	a.incTrackerRequest("add_label", "success")
+	return nil
+}
+
 func (a *JiraAdapter) incTrackerRequest(operation, result string) {
 	if a.metrics != nil {
 		a.metrics.IncTrackerRequests(operation, result)
