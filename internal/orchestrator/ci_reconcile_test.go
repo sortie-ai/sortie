@@ -505,3 +505,142 @@ func TestBuildCIEscalationComment(t *testing.T) {
 		})
 	}
 }
+
+// --- TrackerOpsWg lifecycle tests ---
+
+// blockingCITracker is a TrackerAdapter whose AddLabel and CommentIssue
+// methods block on channel gates. Used to pace fire-and-forget goroutines
+// spawned by escalateCIFailure so TrackerOpsWg tracking can be verified.
+type blockingCITracker struct {
+	addLabelGate chan struct{} // if non-nil, AddLabel blocks until closed
+	commentGate  chan struct{} // if non-nil, CommentIssue blocks until closed
+}
+
+var _ domain.TrackerAdapter = (*blockingCITracker)(nil)
+
+func (b *blockingCITracker) FetchIssuesByStates(_ context.Context, _ []string) ([]domain.Issue, error) {
+	return nil, nil
+}
+func (b *blockingCITracker) FetchCandidateIssues(_ context.Context) ([]domain.Issue, error) {
+	return nil, nil
+}
+func (b *blockingCITracker) FetchIssueByID(_ context.Context, _ string) (domain.Issue, error) {
+	return domain.Issue{}, nil
+}
+func (b *blockingCITracker) FetchIssueStatesByIDs(_ context.Context, _ []string) (map[string]string, error) {
+	return nil, nil
+}
+func (b *blockingCITracker) FetchIssueStatesByIdentifiers(_ context.Context, _ []string) (map[string]string, error) {
+	return nil, nil
+}
+func (b *blockingCITracker) FetchIssueComments(_ context.Context, _ string) ([]domain.Comment, error) {
+	return nil, nil
+}
+func (b *blockingCITracker) TransitionIssue(_ context.Context, _ string, _ string) error {
+	return nil
+}
+func (b *blockingCITracker) AddLabel(ctx context.Context, _ string, _ string) error {
+	if b.addLabelGate != nil {
+		select {
+		case <-b.addLabelGate:
+		case <-ctx.Done():
+		}
+	}
+	return nil
+}
+func (b *blockingCITracker) CommentIssue(ctx context.Context, _ string, _ string) error {
+	if b.commentGate != nil {
+		select {
+		case <-b.commentGate:
+		case <-ctx.Done():
+		}
+	}
+	return nil
+}
+
+// TestEscalateCIFailure_LabelTracksTrackerOps verifies that the AddLabel
+// goroutine spawned by the label escalation path increments TrackerOpsWg
+// before starting and decrements it on return, so Wait() blocks during the
+// call and resolves once it completes.
+func TestEscalateCIFailure_LabelTracksTrackerOps(t *testing.T) {
+	t.Parallel()
+
+	gate := make(chan struct{})
+	tracker := &blockingCITracker{addLabelGate: gate}
+
+	// CIFixAttempts=2 with maxRetries=2 means next increment (→3) exceeds
+	// the limit and triggers escalation.
+	state := stateWithPendingCICheck(t, "ESC-WG-1", "main/broken", 3)
+	state.CIFixAttempts["ESC-WG-1"] = 2
+	store := &ciReconcileStore{}
+	metrics := newCIMetricsSpy()
+	ci := &mockCIProvider{result: domain.CIResult{Status: domain.CIStatusFailing}}
+	params := ciParams(t, store, ci, tracker)
+	// defaultCIFeedback sets escalation: "label".
+
+	reconcileCIStatus(state, params, discardLogger(), context.Background(), metrics)
+
+	waitDone := make(chan struct{})
+	go func() {
+		state.TrackerOpsWg.Wait()
+		close(waitDone)
+	}()
+
+	// TrackerOpsWg must not resolve while AddLabel blocks on the gate.
+	select {
+	case <-waitDone:
+		t.Fatal("TrackerOpsWg.Wait() returned before AddLabel goroutine completed")
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	// Release the gate to let AddLabel return and Done() fire.
+	close(gate)
+
+	select {
+	case <-waitDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("TrackerOpsWg.Wait() did not return after AddLabel goroutine completed")
+	}
+}
+
+// TestEscalateCIFailure_CommentTracksTrackerOps verifies that the
+// CommentIssue goroutine spawned by the comment escalation path increments
+// TrackerOpsWg before starting and decrements it on return.
+func TestEscalateCIFailure_CommentTracksTrackerOps(t *testing.T) {
+	t.Parallel()
+
+	gate := make(chan struct{})
+	tracker := &blockingCITracker{commentGate: gate}
+
+	state := stateWithPendingCICheck(t, "ESC-WG-2", "feature/broken", 2)
+	state.CIFixAttempts["ESC-WG-2"] = 2
+	store := &ciReconcileStore{}
+	metrics := newCIMetricsSpy()
+	ci := &mockCIProvider{result: domain.CIResult{Status: domain.CIStatusFailing}}
+	params := ciParams(t, store, ci, tracker)
+	params.CIFeedback.Escalation = "comment"
+
+	reconcileCIStatus(state, params, discardLogger(), context.Background(), metrics)
+
+	waitDone := make(chan struct{})
+	go func() {
+		state.TrackerOpsWg.Wait()
+		close(waitDone)
+	}()
+
+	// TrackerOpsWg must not resolve while CommentIssue blocks on the gate.
+	select {
+	case <-waitDone:
+		t.Fatal("TrackerOpsWg.Wait() returned before CommentIssue goroutine completed")
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	// Release the gate to let CommentIssue return and Done() fire.
+	close(gate)
+
+	select {
+	case <-waitDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("TrackerOpsWg.Wait() did not return after CommentIssue goroutine completed")
+	}
+}

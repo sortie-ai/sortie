@@ -285,6 +285,12 @@ type State struct {
 	// group to ensure all goroutines have completed before cleanup.
 	WorkerWg sync.WaitGroup
 
+	// TrackerOpsWg tracks fire-and-forget goroutines that perform
+	// best-effort tracker API calls (comments, labels). Drained after
+	// worker shutdown completes so these goroutines are not orphaned
+	// on process exit.
+	TrackerOpsWg sync.WaitGroup
+
 	// PollIntervalMS is the current effective poll interval from config.
 	PollIntervalMS int
 

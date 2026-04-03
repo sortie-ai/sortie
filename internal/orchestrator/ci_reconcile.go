@@ -171,7 +171,9 @@ func escalateCIFailure(
 			m := metrics
 			escalLog := log
 
+			state.TrackerOpsWg.Add(1)
 			go func() {
+				defer state.TrackerOpsWg.Done()
 				dctx, cancel := context.WithTimeout(
 					context.WithoutCancel(ctx), 30*time.Second)
 				defer cancel()
@@ -194,7 +196,9 @@ func escalateCIFailure(
 			escalLog := log
 			ct := commentText
 
+			state.TrackerOpsWg.Add(1)
 			go func() {
+				defer state.TrackerOpsWg.Done()
 				dctx, cancel := context.WithTimeout(
 					context.WithoutCancel(ctx), 30*time.Second)
 				defer cancel()

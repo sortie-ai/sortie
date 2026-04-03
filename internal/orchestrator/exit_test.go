@@ -2692,3 +2692,55 @@ func TestHandleWorkerExit_CIProvider_SoftStop_NoPendingCICheck(t *testing.T) {
 		t.Error("PendingCICheck populated after SoftStop; want absent (claim released before CI check)")
 	}
 }
+
+// --- TrackerOpsWg lifecycle tests ---
+
+// TestHandleWorkerExit_TrackerOpsWgDrains verifies that TrackerOpsWg.Add(1)
+// is called before the comment goroutine starts and TrackerOpsWg.Done() is
+// called when CommentIssue returns, so Wait() blocks during the call and
+// unblocks once it completes.
+func TestHandleWorkerExit_TrackerOpsWgDrains(t *testing.T) {
+	t.Parallel()
+
+	gate := make(chan struct{})
+	tracker := &mockTrackerAdapter{
+		commentIssueFn: func(_ context.Context, _, _ string) error {
+			<-gate
+			return nil
+		},
+	}
+
+	store := &mockExitStore{}
+	state := exitState(t, "WG-EXIT-1", nil)
+	params := exitParamsWithComments(t, store, tracker, config.TrackerCommentsConfig{OnCompletion: true})
+
+	HandleWorkerExit(state, WorkerResult{
+		IssueID:      "WG-EXIT-1",
+		Identifier:   "WG-EXIT-1-ident",
+		ExitKind:     WorkerExitNormal,
+		SessionID:    "ses-wg-exit",
+		AgentAdapter: "mock",
+	}, params)
+
+	waitDone := make(chan struct{})
+	go func() {
+		state.TrackerOpsWg.Wait()
+		close(waitDone)
+	}()
+
+	// TrackerOpsWg must not resolve while CommentIssue blocks on the gate.
+	select {
+	case <-waitDone:
+		t.Fatal("TrackerOpsWg.Wait() returned before CommentIssue goroutine completed")
+	case <-time.After(20 * time.Millisecond):
+	}
+
+	// Release the gate to let CommentIssue return and Done() fire.
+	close(gate)
+
+	select {
+	case <-waitDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("TrackerOpsWg.Wait() did not return after CommentIssue goroutine completed")
+	}
+}

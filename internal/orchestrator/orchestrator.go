@@ -605,9 +605,19 @@ func (o *Orchestrator) drainRunningWorkers() {
 			o.logger.Warn("drain timeout exceeded, abandoning workers",
 				slog.Int("remaining", len(o.state.Running)),
 			)
+			o.drainTrackerOps()
 			return
 		}
 	}
+
+	o.drainTrackerOps()
+}
+
+// drainTrackerOps waits for all in-flight fire-and-forget tracker API
+// goroutines (comments, labels) to complete. Called after worker drain
+// so best-effort tracker operations are not orphaned on process exit.
+func (o *Orchestrator) drainTrackerOps() {
+	o.state.TrackerOpsWg.Wait()
 }
 
 // cancelRetryTimers stops all pending retry timers to prevent late fires

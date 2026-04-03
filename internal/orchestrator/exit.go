@@ -490,7 +490,9 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 		lc := lifecycle
 		ct := commentText
 
+		state.TrackerOpsWg.Add(1)
 		go func() {
+			defer state.TrackerOpsWg.Done()
 			dctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 			defer cancel()
 
