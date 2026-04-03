@@ -2530,3 +2530,165 @@ func TestBuildSoftStopComment(t *testing.T) {
 		})
 	}
 }
+
+// --- CI provider tests for HandleWorkerExit ---
+
+// writeSCMMetadata writes a minimal .sortie/scm.json to the given workspace
+// directory so that workspace.ReadSCMMetadata can read it.
+func writeSCMMetadata(t *testing.T, wsPath, branch, sha string) {
+	t.Helper()
+	dotSortie := filepath.Join(wsPath, ".sortie")
+	if err := os.MkdirAll(dotSortie, 0o750); err != nil {
+		t.Fatalf("MkdirAll .sortie: %v", err)
+	}
+	content := fmt.Sprintf(`{"branch":%q,"sha":%q}`, branch, sha)
+	if err := os.WriteFile(filepath.Join(dotSortie, "scm.json"), []byte(content), 0o600); err != nil {
+		t.Fatalf("WriteFile scm.json: %v", err)
+	}
+}
+
+// ciProviderStubExit is a minimal CIStatusProvider for exit tests; FetchCIStatus
+// must not be called by HandleWorkerExit (that is reconcileCIStatus's job).
+type ciProviderStubExit struct{}
+
+func (c *ciProviderStubExit) FetchCIStatus(_ context.Context, _ string) (domain.CIResult, error) {
+	panic("FetchCIStatus must not be called by HandleWorkerExit")
+}
+
+func TestHandleWorkerExit_CIProvider_PopulatesPendingCICheck(t *testing.T) {
+	t.Parallel()
+
+	wsPath := t.TempDir()
+	writeSCMMetadata(t, wsPath, "feature/ci-test", "abc123")
+
+	store := &mockExitStore{}
+	state := exitState(t, "CI-ISS-1", nil)
+	params := defaultExitParams(t, store)
+	params.CIProvider = &ciProviderStubExit{}
+
+	HandleWorkerExit(state, WorkerResult{
+		IssueID:       "CI-ISS-1",
+		Identifier:    "CI-ISS-1-ident",
+		ExitKind:      WorkerExitNormal,
+		AgentAdapter:  "mock",
+		WorkspacePath: wsPath,
+	}, params)
+
+	entry, ok := state.PendingCICheck["CI-ISS-1"]
+	if !ok {
+		t.Fatal("PendingCICheck[CI-ISS-1] missing; want entry after normal exit with branch")
+	}
+	if entry.Branch != "feature/ci-test" {
+		t.Errorf("PendingCICheck.Branch = %q, want %q", entry.Branch, "feature/ci-test")
+	}
+	if entry.SHA != "abc123" {
+		t.Errorf("PendingCICheck.SHA = %q, want %q", entry.SHA, "abc123")
+	}
+	if entry.IssueID != "CI-ISS-1" {
+		t.Errorf("PendingCICheck.IssueID = %q, want %q", entry.IssueID, "CI-ISS-1")
+	}
+}
+
+func TestHandleWorkerExit_CIProvider_NilProvider_NoPendingCICheck(t *testing.T) {
+	t.Parallel()
+
+	wsPath := t.TempDir()
+	writeSCMMetadata(t, wsPath, "feature/ci-test", "abc123")
+
+	store := &mockExitStore{}
+	state := exitState(t, "CI-ISS-2", nil)
+	params := defaultExitParams(t, store)
+	params.CIProvider = nil // no CI provider
+
+	HandleWorkerExit(state, WorkerResult{
+		IssueID:       "CI-ISS-2",
+		Identifier:    "CI-ISS-2-ident",
+		ExitKind:      WorkerExitNormal,
+		AgentAdapter:  "mock",
+		WorkspacePath: wsPath,
+	}, params)
+
+	if _, ok := state.PendingCICheck["CI-ISS-2"]; ok {
+		t.Error("PendingCICheck populated when CIProvider is nil; want absent")
+	}
+}
+
+func TestHandleWorkerExit_CIProvider_EmptyWorkspace_NoPendingCICheck(t *testing.T) {
+	t.Parallel()
+
+	store := &mockExitStore{}
+	state := exitState(t, "CI-ISS-3", nil)
+	params := defaultExitParams(t, store)
+	params.CIProvider = &ciProviderStubExit{}
+
+	// WorkspacePath is empty — worker exited before workspace preparation.
+	HandleWorkerExit(state, WorkerResult{
+		IssueID:       "CI-ISS-3",
+		Identifier:    "CI-ISS-3-ident",
+		ExitKind:      WorkerExitNormal,
+		AgentAdapter:  "mock",
+		WorkspacePath: "",
+	}, params)
+
+	if _, ok := state.PendingCICheck["CI-ISS-3"]; ok {
+		t.Error("PendingCICheck populated for empty workspace; want absent")
+	}
+}
+
+func TestHandleWorkerExit_CIProvider_NoBranchInSCM_NoPendingCICheck(t *testing.T) {
+	t.Parallel()
+
+	wsPath := t.TempDir()
+	// Write SCM metadata without a branch (empty branch field).
+	dotSortie := filepath.Join(wsPath, ".sortie")
+	if err := os.MkdirAll(dotSortie, 0o750); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dotSortie, "scm.json"), []byte(`{"branch":"","sha":"abc"}`), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	store := &mockExitStore{}
+	state := exitState(t, "CI-ISS-4", nil)
+	params := defaultExitParams(t, store)
+	params.CIProvider = &ciProviderStubExit{}
+
+	HandleWorkerExit(state, WorkerResult{
+		IssueID:       "CI-ISS-4",
+		Identifier:    "CI-ISS-4-ident",
+		ExitKind:      WorkerExitNormal,
+		AgentAdapter:  "mock",
+		WorkspacePath: wsPath,
+	}, params)
+
+	if _, ok := state.PendingCICheck["CI-ISS-4"]; ok {
+		t.Error("PendingCICheck populated when SCM branch is empty; want absent")
+	}
+}
+
+func TestHandleWorkerExit_CIProvider_SoftStop_NoPendingCICheck(t *testing.T) {
+	t.Parallel()
+
+	wsPath := t.TempDir()
+	writeSCMMetadata(t, wsPath, "feature/ci-test", "sha999")
+
+	store := &mockExitStore{}
+	state := exitState(t, "CI-ISS-5", nil)
+	params := defaultExitParams(t, store)
+	params.CIProvider = &ciProviderStubExit{}
+
+	// SoftStop: claim is released before the CI check; PendingCICheck must not be populated.
+	HandleWorkerExit(state, WorkerResult{
+		IssueID:        "CI-ISS-5",
+		Identifier:     "CI-ISS-5-ident",
+		ExitKind:       WorkerExitNormal,
+		SoftStop:       true,
+		SoftStopReason: "blocked",
+		AgentAdapter:   "mock",
+		WorkspacePath:  wsPath,
+	}, params)
+
+	if _, ok := state.PendingCICheck["CI-ISS-5"]; ok {
+		t.Error("PendingCICheck populated after SoftStop; want absent (claim released before CI check)")
+	}
+}

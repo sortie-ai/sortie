@@ -27,6 +27,7 @@ const (
 	triggerContinuation = "continuation"
 	triggerTimer        = "timer"
 	triggerStall        = "stall"
+	triggerCIFix        = "ci_fix"
 
 	actionStop    = "stop"
 	actionCleanup = "cleanup"
@@ -193,6 +194,11 @@ type RunningEntry struct {
 	// milliseconds, accumulated from any agent event carrying
 	// APIDurationMS > 0.
 	APITimeMs int64
+
+	// CIFailureContext carries CI failure data from a ci_fix retry into
+	// the worker session. Populated by HandleRetryTimer when the retry
+	// trigger is triggerCIFix. Nil for normal dispatches and non-CI retries.
+	CIFailureContext map[string]any
 }
 
 // RetryEntry holds the runtime state for a pending retry. The persisted
@@ -226,6 +232,43 @@ type RetryEntry struct {
 	// timer fired before its intended moment, indicating a stale callback
 	// from a replaced timer.
 	scheduledDelayMS int64
+
+	// CIFailureContext carries CI failure data for template injection on
+	// the first turn of the retry worker. Populated by reconcileCIStatus
+	// when scheduling a ci_fix retry. Nil for non-CI retries.
+	CIFailureContext map[string]any
+}
+
+// PendingCICheckEntry records that an issue's worker exited normally and
+// its CI status should be polled on the next reconcile tick. If CI is
+// failing, the reconcile loop either redispatches with failure context
+// or escalates. Runtime-only (not persisted to SQLite).
+type PendingCICheckEntry struct {
+	// IssueID is the domain issue ID.
+	IssueID string
+
+	// Identifier is the human-readable ticket key (e.g. "MT-649").
+	Identifier string
+
+	// DisplayID is the display identifier passed through to dispatch.
+	DisplayID string
+
+	// Attempt is the overall run attempt number from the completed worker.
+	Attempt int
+
+	// Branch is the git branch name from SCM metadata.
+	Branch string
+
+	// SHA is the git commit SHA from SCM metadata. When non-empty, used
+	// as the ref for CIStatusProvider.FetchCIStatus.
+	SHA string
+
+	// LastSSHHost is the SSH host from the completed worker, used for
+	// host preference on CI-fix redispatch.
+	LastSSHHost string
+
+	// CreatedAt is the UTC time the entry was created.
+	CreatedAt time.Time
 }
 
 // State is the single authoritative runtime state owned by the orchestrator.
@@ -286,6 +329,34 @@ type State struct {
 	// AgentRateLimits is the most recent rate-limit payload received from
 	// any agent event. Nil when no rate-limit data has been observed.
 	AgentRateLimits *RateLimitSnapshot
+
+	// CIFixAttempts maps issue ID to the number of CI-fix continuations
+	// dispatched for that issue. Reset when the issue leaves the Running
+	// or RetryAttempts maps. Runtime-only (not persisted).
+	CIFixAttempts map[string]int
+
+	// PendingCICheck maps issue ID to a PendingCICheckEntry. Populated by
+	// HandleWorkerExit when a normal exit occurs and a CIStatusProvider is
+	// available. Consumed by reconcileCIStatus during the reconcile tick.
+	// Runtime-only (not persisted).
+	PendingCICheck map[string]*PendingCICheckEntry
+}
+
+// ciFailureCtxKey is the context key for CI failure data passed from
+// the dispatch site to the worker goroutine via context.WithValue.
+type ciFailureCtxKey struct{}
+
+// WithCIFailureContext returns a child context carrying CI failure data
+// for prompt injection. The worker reads this with [CIFailureFromContext].
+func WithCIFailureContext(ctx context.Context, data map[string]any) context.Context {
+	return context.WithValue(ctx, ciFailureCtxKey{}, data)
+}
+
+// CIFailureFromContext extracts the CI failure map injected by
+// [WithCIFailureContext]. Returns nil when no CI failure data is present.
+func CIFailureFromContext(ctx context.Context) map[string]any {
+	v, _ := ctx.Value(ciFailureCtxKey{}).(map[string]any)
+	return v
 }
 
 // NewState creates an initialized [State] with empty collections and the
@@ -307,6 +378,8 @@ func NewState(pollIntervalMS, maxConcurrentAgents int, maxConcurrentByState map[
 		Completed:            make(map[string]struct{}),
 		BudgetExhausted:      make(map[string]struct{}),
 		AgentTotals:          totals,
+		CIFixAttempts:        make(map[string]int),
+		PendingCICheck:       make(map[string]*PendingCICheckEntry),
 	}
 }
 

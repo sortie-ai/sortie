@@ -85,6 +85,10 @@ type OrchestratorParams struct {
 	// to the MCP server via the config env field. If empty,
 	// SORTIE_DB_PATH is set to the empty string in the MCP config.
 	DBPath string
+
+	// CIProvider is the CI status provider for CI failure detection.
+	// Nil when CI feedback is not configured.
+	CIProvider domain.CIStatusProvider
 }
 
 // Orchestrator owns the poll-and-dispatch event loop and all runtime
@@ -116,6 +120,7 @@ type Orchestrator struct {
 	hostPool         *HostPool
 	workflowFileFunc func() string
 	dbPath           string
+	ciProvider       domain.CIStatusProvider
 
 	// sshStrictHostKeyChecking is the current effective OpenSSH
 	// StrictHostKeyChecking value. Written by handleTick on every
@@ -187,6 +192,7 @@ func NewOrchestrator(params OrchestratorParams) *Orchestrator {
 		hostPool:         hostPool,
 		workflowFileFunc: params.WorkflowFileFunc,
 		dbPath:           params.DBPath,
+		ciProvider:       params.CIProvider,
 	}
 	// Startup preflight must have passed for the orchestrator to be
 	// constructed, so the initial value is true.
@@ -237,6 +243,7 @@ func (o *Orchestrator) Run(ctx context.Context) {
 				Metrics:           o.metrics,
 				HostPool:          o.hostPool,
 				CommentsConfig:    cfg.Tracker.Comments,
+				CIProvider:        o.ciProvider,
 			})
 			o.updateGauges(time.Now())
 			o.notifyObservers()
@@ -343,6 +350,8 @@ func (o *Orchestrator) handleTick(ctx context.Context) {
 		Ctx:               ctx,
 		Logger:            o.logger,
 		Metrics:           o.metrics,
+		CIProvider:        o.ciProvider,
+		CIFeedback:        cfg.CIFeedback,
 	})
 
 	// On preflight failure, skip dispatch but still notify observers
@@ -576,6 +585,7 @@ func (o *Orchestrator) drainRunningWorkers() {
 				Metrics:           o.metrics,
 				HostPool:          o.hostPool,
 				CommentsConfig:    cfg.Tracker.Comments,
+				CIProvider:        o.ciProvider,
 			})
 			o.updateGauges(time.Now())
 			o.notifyObservers()

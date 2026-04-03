@@ -183,6 +183,10 @@ func (s *spyMetrics) IncTrackerComments(lifecycle string, result string) {
 	s.trackerComments = append(s.trackerComments, trackerCommentCall{lifecycle, result})
 }
 
+func (s *spyMetrics) IncCIStatusChecks(_ string) {}
+
+func (s *spyMetrics) IncCIEscalations(_ string) {}
+
 // --- Tests ---
 
 func TestActiveElapsedSeconds(t *testing.T) {

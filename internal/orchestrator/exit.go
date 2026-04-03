@@ -101,6 +101,11 @@ type HandleWorkerExitParams struct {
 	// HostPool is the SSH host pool for releasing hosts on worker exit.
 	// If nil, no host pool release occurs (local-mode or tests).
 	HostPool *HostPool
+
+	// CIProvider is the CI status provider. When non-nil, HandleWorkerExit
+	// populates state.PendingCICheck on normal exits so the reconcile loop
+	// can poll CI status.
+	CIProvider domain.CIStatusProvider
 }
 
 // HandleWorkerExit processes a worker's terminal outcome. It removes the
@@ -353,6 +358,33 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 			}
 			CancelRetry(state, workerResult.IssueID)
 			delete(state.Claimed, workerResult.IssueID)
+		}
+
+		// Record a pending CI check when the CI provider is configured and
+		// the worker produced workspace SCM metadata. Skipped when:
+		//   - SoftStop (claim already released, no further action)
+		//   - Successful handoff (claim released, issue handed to human)
+		//   - No workspace path (worker exited before workspace prep)
+		if params.CIProvider != nil && workerResult.WorkspacePath != "" {
+			if _, stillClaimed := state.Claimed[workerResult.IssueID]; stillClaimed {
+				scm := workspace.ReadSCMMetadata(workerResult.WorkspacePath, log)
+				if scm.Branch != "" {
+					nowCI := time.Now().UTC()
+					if params.NowFunc != nil {
+						nowCI = params.NowFunc().UTC()
+					}
+					state.PendingCICheck[workerResult.IssueID] = &PendingCICheckEntry{
+						IssueID:     workerResult.IssueID,
+						Identifier:  workerResult.Identifier,
+						DisplayID:   entry.Issue.DisplayID,
+						Attempt:     normalizeAttempt(entry.RetryAttempt) + 1,
+						Branch:      scm.Branch,
+						SHA:         scm.SHA,
+						LastSSHHost: workerResult.SSHHost,
+						CreatedAt:   nowCI,
+					}
+				}
+			}
 		}
 
 	case WorkerExitCancelled:

@@ -301,9 +301,14 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 	// Pass the popped attempt as-is; NextAttempt increments only on the
 	// next worker exit, not at dispatch time.
 	attempt := popped.Attempt
-	DispatchIssue(ctx, state, issue, &attempt, host, params.MakeWorkerFn("", host))
+	dispatchCtx := ctx
+	if popped.CIFailureContext != nil {
+		dispatchCtx = WithCIFailureContext(ctx, popped.CIFailureContext)
+	}
+	DispatchIssue(dispatchCtx, state, issue, &attempt, host, params.MakeWorkerFn("", host))
 	if entry := state.Running[issue.ID]; entry != nil {
 		entry.WorkflowFile = params.WorkflowFile
+		entry.CIFailureContext = popped.CIFailureContext
 	}
 	metrics.IncDispatches(outcomeSuccess)
 

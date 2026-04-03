@@ -6,6 +6,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/sortie-ai/sortie/internal/config"
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/logging"
 	"github.com/sortie-ai/sortie/internal/persistence"
@@ -17,6 +18,7 @@ import (
 type ReconcileStore interface {
 	SaveRetryEntry(ctx context.Context, entry persistence.RetryEntry) error
 	DeleteRetryEntry(ctx context.Context, issueID string) error
+	AppendRunHistory(ctx context.Context, run persistence.RunHistory) (persistence.RunHistory, error)
 }
 
 // ReconcileParams holds the dependencies for [ReconcileRunningIssues] that
@@ -61,6 +63,14 @@ type ReconcileParams struct {
 	// Metrics records instrumentation counters for reconciliation events.
 	// If nil, defaults to [domain.NoopMetrics].
 	Metrics domain.Metrics
+
+	// CIProvider is the CI status provider. When non-nil, the reconcile
+	// loop polls CI status for issues in state.PendingCICheck.
+	CIProvider domain.CIStatusProvider
+
+	// CIFeedback holds CI feedback tuning (max retries, escalation mode).
+	// Only read when CIProvider is non-nil.
+	CIFeedback config.CIFeedbackConfig
 }
 
 // ReconcileRunningIssues detects stalled workers and refreshes tracker
@@ -102,6 +112,9 @@ func ReconcileRunningIssues(state *State, params ReconcileParams) {
 	// Refresh issue states from the tracker and stop workers for
 	// terminal or non-active issues.
 	reconcileTrackerState(state, params, log, ctx, metrics)
+
+	// Poll CI status for issues with pending CI checks.
+	reconcileCIStatus(state, params, log, ctx, metrics)
 }
 
 // reconcileStalled cancels running entries whose last activity exceeds the

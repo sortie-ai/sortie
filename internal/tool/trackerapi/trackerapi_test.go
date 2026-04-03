@@ -66,7 +66,9 @@ func (m *mockTrackerAdapter) CommentIssue(_ context.Context, _ string, _ string)
 	return nil
 }
 
-// --- test helpers ---
+func (m *mockTrackerAdapter) AddLabel(_ context.Context, _ string, _ string) error {
+	return nil
+}
 
 // projIssue returns an issue with the given identifier in project PROJ.
 func projIssue(id, identifier string) domain.Issue {

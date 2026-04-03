@@ -225,6 +225,10 @@ type ScheduleRetryParams struct {
 	DelayMS     int64 // Delay before timer fires, in milliseconds.
 	Error       string
 	LastSSHHost string // Runtime-only: SSH host from previous attempt for retry affinity.
+
+	// CIFailureContext carries CI failure data to inject into the prompt
+	// template on the first turn of the retry worker. Nil for non-CI retries.
+	CIFailureContext map[string]any
 }
 
 // ScheduleRetry cancels any existing retry for the issue, creates a new
@@ -265,6 +269,7 @@ func ScheduleRetry(state *State, params ScheduleRetryParams, onFire func(issueID
 		Error:            params.Error,
 		TimerHandle:      timer,
 		LastSSHHost:      params.LastSSHHost,
+		CIFailureContext: params.CIFailureContext,
 		scheduledAt:      time.Now(),
 		scheduledDelayMS: delayMS,
 	}

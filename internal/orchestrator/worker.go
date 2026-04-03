@@ -208,6 +208,11 @@ type WorkerDeps struct {
 	// Passed to the MCP server via the config env field for future
 	// Tier 1 tool access.
 	DBPath string
+
+	// CIFailureContext carries CI failure data to inject into the prompt
+	// template on the first turn. Non-nil only for CI-fix continuation
+	// dispatches. Nil for normal dispatches and non-CI retries.
+	CIFailureContext map[string]any
 }
 
 // normalizeAttempt converts the nullable attempt to a plain integer.
@@ -615,7 +620,17 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 
 		// Render the prompt template for this turn.
 		issueMap := issue.ToTemplateMap()
-		rendered, err := prompt.BuildTurnPrompt(tmpl, issueMap, attemptInt, turnNumber, maxTurns)
+		var renderOpts []prompt.RenderOption
+		if turnNumber == 1 {
+			ciCtx := deps.CIFailureContext
+			if ciCtx == nil {
+				ciCtx = CIFailureFromContext(ctx)
+			}
+			if ciCtx != nil {
+				renderOpts = append(renderOpts, prompt.WithCIFailure(ciCtx))
+			}
+		}
+		rendered, err := prompt.BuildTurnPrompt(tmpl, issueMap, attemptInt, turnNumber, maxTurns, renderOpts...)
 		if err != nil {
 			stopSessionBestEffort(ctx, deps.AgentAdapter, session, cfg, logger)
 			finishWorkspace()

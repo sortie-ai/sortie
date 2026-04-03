@@ -35,6 +35,10 @@ func (m *mockReconcileStore) DeleteRetryEntry(_ context.Context, issueID string)
 	return m.deleteRetryEntryErr
 }
 
+func (m *mockReconcileStore) AppendRunHistory(_ context.Context, run persistence.RunHistory) (persistence.RunHistory, error) {
+	return run, nil
+}
+
 // mockReconcileTracker implements domain.TrackerAdapter for reconcile tests.
 // Only FetchIssueStatesByIDs is exercised; the other methods panic if called.
 type mockReconcileTracker struct {
@@ -74,6 +78,10 @@ func (m *mockReconcileTracker) TransitionIssue(context.Context, string, string) 
 
 func (m *mockReconcileTracker) CommentIssue(context.Context, string, string) error {
 	panic("CommentIssue must not be called by ReconcileRunningIssues")
+}
+
+func (m *mockReconcileTracker) AddLabel(context.Context, string, string) error {
+	panic("AddLabel must not be called by ReconcileRunningIssues")
 }
 
 // --- Test helpers ---

@@ -391,6 +391,34 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 		toolRegistry.Register(trackerapi.New(trackerAdapter, cfg.Tracker.Project))
 	}
 
+	// Resolve CI status provider when ci_feedback.kind is configured.
+	var ciProvider domain.CIStatusProvider
+	if cfg.CIFeedback.Kind != "" {
+		ciCtor, ciErr := registry.CIProviders.Get(cfg.CIFeedback.Kind)
+		if ciErr != nil {
+			logger.Error("unknown CI provider kind",
+				slog.String("kind", cfg.CIFeedback.Kind),
+				slog.Any("error", ciErr),
+			)
+			return 1
+		}
+		adapterCfgMap := make(map[string]any)
+		mergeExtensions(adapterCfgMap, cfg.Extensions, cfg.CIFeedback.Kind)
+		ciProvider, ciErr = ciCtor(cfg.CIFeedback.MaxLogLines, adapterCfgMap)
+		if ciErr != nil {
+			logger.Error("failed to construct CI provider",
+				slog.String("kind", cfg.CIFeedback.Kind),
+				slog.Any("error", ciErr),
+			)
+			return 1
+		}
+		logger.Info("CI feedback enabled",
+			slog.String("kind", cfg.CIFeedback.Kind),
+			slog.Int("max_retries", cfg.CIFeedback.MaxRetries),
+			slog.String("escalation", cfg.CIFeedback.Escalation),
+		)
+	}
+
 	o := orchestrator.NewOrchestrator(orchestrator.OrchestratorParams{
 		State:            state,
 		Logger:           logger,
@@ -403,6 +431,7 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 		ToolRegistry:     toolRegistry,
 		WorkflowFileFunc: mgr.FilePath,
 		DBPath:           dbPath,
+		CIProvider:       ciProvider,
 	})
 
 	var srv *server.Server

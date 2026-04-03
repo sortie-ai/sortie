@@ -42,6 +42,10 @@ func (m *mockRetryStore) CountRunHistoryByIssue(_ context.Context, issueID strin
 	return m.runHistoryCount, m.countRunHistoryByIssueErr
 }
 
+func (m *mockRetryStore) AppendRunHistory(_ context.Context, run persistence.RunHistory) (persistence.RunHistory, error) {
+	return run, nil
+}
+
 // mockRetryTracker implements domain.TrackerAdapter for retry timer tests.
 // Only FetchCandidateIssues is used by HandleRetryTimer; the remaining
 // methods panic if called.
@@ -84,6 +88,10 @@ func (m *mockRetryTracker) TransitionIssue(context.Context, string, string) erro
 
 func (m *mockRetryTracker) CommentIssue(context.Context, string, string) error {
 	panic("CommentIssue must not be called by HandleRetryTimer")
+}
+
+func (m *mockRetryTracker) AddLabel(context.Context, string, string) error {
+	panic("AddLabel must not be called by HandleRetryTimer")
 }
 
 // --- Test helpers ---
@@ -1228,5 +1236,86 @@ func TestHandleRetryTimer_BudgetExhaustedBlocksShouldDispatch(t *testing.T) {
 	// ShouldDispatch must return false because BudgetExhausted is set.
 	if ShouldDispatch(candidateIssue(id, "PROJ-COMP", "To Do"), state, params.ActiveStates, params.TerminalStates) {
 		t.Error("ShouldDispatch() = true after budget exhaustion, want false")
+	}
+}
+
+func TestHandleRetryTimer_CIFailureContextPropagated(t *testing.T) {
+	t.Parallel()
+
+	// CI failure context carried on the retry entry should be forwarded to
+	// the running entry so the worker can inject it into the turn prompt.
+	const id = "ISS-CI-RETRY"
+	ciContext := map[string]any{
+		"status":        "failing",
+		"failing_count": 3,
+		"ref":           "feature/fix",
+	}
+
+	state := NewState(5000, 4, nil, AgentTotals{})
+	state.Claimed[id] = struct{}{}
+	state.RetryAttempts[id] = &RetryEntry{
+		IssueID:          id,
+		Identifier:       id,
+		Attempt:          2,
+		CIFailureContext: ciContext,
+	}
+
+	store := &mockRetryStore{}
+	tracker := &mockRetryTracker{
+		candidates: []domain.Issue{candidateIssue(id, id, "In Progress")},
+	}
+	params := defaultRetryParams(t, store, tracker)
+
+	HandleRetryTimer(state, id, params)
+
+	t.Cleanup(func() { state.WorkerWg.Wait() })
+
+	entry, ok := state.Running[id]
+	if !ok {
+		t.Fatal("issue not dispatched; state.Running[id] missing")
+	}
+	if entry.CIFailureContext == nil {
+		t.Fatal("RunningEntry.CIFailureContext is nil; want CI failure map")
+	}
+	if entry.CIFailureContext["status"] != "failing" {
+		t.Errorf("CIFailureContext[status] = %v, want %q", entry.CIFailureContext["status"], "failing")
+	}
+	if entry.CIFailureContext["failing_count"] != 3 {
+		t.Errorf("CIFailureContext[failing_count] = %v, want 3", entry.CIFailureContext["failing_count"])
+	}
+}
+
+func TestHandleRetryTimer_NilCIFailureContext_NotPropagated(t *testing.T) {
+	t.Parallel()
+
+	// When the retry entry carries no CI failure context, the running entry
+	// must not have one set either (field stays nil; no accidental injection).
+	const id = "ISS-NO-CI"
+
+	state := NewState(5000, 4, nil, AgentTotals{})
+	state.Claimed[id] = struct{}{}
+	state.RetryAttempts[id] = &RetryEntry{
+		IssueID:          id,
+		Identifier:       id,
+		Attempt:          1,
+		CIFailureContext: nil, // explicit nil
+	}
+
+	store := &mockRetryStore{}
+	tracker := &mockRetryTracker{
+		candidates: []domain.Issue{candidateIssue(id, id, "In Progress")},
+	}
+	params := defaultRetryParams(t, store, tracker)
+
+	HandleRetryTimer(state, id, params)
+
+	t.Cleanup(func() { state.WorkerWg.Wait() })
+
+	entry, ok := state.Running[id]
+	if !ok {
+		t.Fatal("issue not dispatched; state.Running[id] missing")
+	}
+	if entry.CIFailureContext != nil {
+		t.Errorf("RunningEntry.CIFailureContext = %v, want nil", entry.CIFailureContext)
 	}
 }

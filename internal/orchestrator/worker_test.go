@@ -171,6 +171,10 @@ func (m *mockTrackerAdapter) CommentIssue(ctx context.Context, issueID string, t
 	return nil
 }
 
+func (m *mockTrackerAdapter) AddLabel(_ context.Context, _ string, _ string) error {
+	return nil
+}
+
 // stubAgentTool is a minimal domain.AgentTool for worker tests.
 type stubAgentTool struct {
 	toolName string
