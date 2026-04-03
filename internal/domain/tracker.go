@@ -96,4 +96,11 @@ type TrackerAdapter interface {
 	//
 	// All errors are non-fatal — the orchestrator logs WARN and continues.
 	CommentIssue(ctx context.Context, issueID string, text string) error
+
+	// AddLabel adds a label to the specified issue. Used for CI failure
+	// escalation. Returns nil on success.
+	//
+	// Adapters that do not support labels return nil (no-op) rather
+	// than an error. The orchestrator treats all errors as non-fatal.
+	AddLabel(ctx context.Context, issueID string, label string) error
 }
