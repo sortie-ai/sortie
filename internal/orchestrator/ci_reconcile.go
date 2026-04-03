@@ -226,7 +226,8 @@ func buildCIEscalationComment(result domain.CIResult, ref string, attempts int) 
 	}
 
 	for _, cr := range result.CheckRuns {
-		if cr.Conclusion == domain.CheckConclusionFailure {
+		switch cr.Conclusion {
+		case domain.CheckConclusionFailure, domain.CheckConclusionTimedOut, domain.CheckConclusionCancelled:
 			fmt.Fprintf(&b, "- %s: %s", cr.Name, cr.Conclusion)
 			if cr.DetailsURL != "" {
 				fmt.Fprintf(&b, " (details: %s)", cr.DetailsURL)
