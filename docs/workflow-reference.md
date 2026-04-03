@@ -521,15 +521,6 @@ Each variable maps to exactly one config field. The naming convention is
 | `SORTIE_AGENT_MAX_RETRY_BACKOFF_MS`  | `agent.max_retry_backoff_ms`  | int    |       |
 | `SORTIE_AGENT_MAX_SESSIONS`          | `agent.max_sessions`          | int    |       |
 
-#### CI Feedback
-
-| Environment variable                    | Config field                   | Type   | Notes |
-| --------------------------------------- | ------------------------------ | ------ | ----- |
-| `SORTIE_CI_FEEDBACK_KIND`               | `ci_feedback.kind`             | string |       |
-| `SORTIE_CI_FEEDBACK_MAX_RETRIES`        | `ci_feedback.max_retries`      | int    |       |
-| `SORTIE_CI_FEEDBACK_MAX_LOG_LINES`      | `ci_feedback.max_log_lines`    | int    |       |
-| `SORTIE_CI_FEEDBACK_ESCALATION`         | `ci_feedback.escalation`       | string |       |
-
 #### Top-level
 
 | Environment variable | Config field | Type   | Notes                                 |
@@ -1677,10 +1668,10 @@ lists the `SORTIE_*` variable that overrides the field, or "—" if not overrida
 | `agent.max_concurrent_agents_by_state`  | `map[string]int` | `{}`                         | —                                        | Keys lowercased; dynamic reload                                                        |
 | `agent.max_sessions`                    | integer          | `0`                          | `SORTIE_AGENT_MAX_SESSIONS`              | Unlimited; dynamic reload                                                              |
 | `db_path`                               | path             | `.sortie.db`                 | `SORTIE_DB_PATH`                         | Restart required; `$VAR` skipped for env-sourced values                                |
-| `ci_feedback.kind`                      | string           | _(absent)_                   | `SORTIE_CI_FEEDBACK_KIND`                | Absent = disabled; no `enabled` flag                                                   |
-| `ci_feedback.max_retries`               | int              | `2`                          | `SORTIE_CI_FEEDBACK_MAX_RETRIES`         | `0` = escalate immediately; must be non-negative                                       |
-| `ci_feedback.max_log_lines`             | int              | `50`                         | `SORTIE_CI_FEEDBACK_MAX_LOG_LINES`       | `0` = disable log fetching; must be non-negative                                       |
-| `ci_feedback.escalation`                | string           | `label`                      | `SORTIE_CI_FEEDBACK_ESCALATION`          | `"label"` or `"comment"`                                                               |
+| `ci_feedback.kind`                      | string           | _(absent)_                   | —                                        | Absent = disabled; no `enabled` flag                                                   |
+| `ci_feedback.max_retries`               | int              | `2`                          | —                                        | `0` = escalate immediately; must be non-negative                                       |
+| `ci_feedback.max_log_lines`             | int              | `50`                         | —                                        | `0` = disable log fetching; must be non-negative                                       |
+| `ci_feedback.escalation`                | string           | `label`                      | —                                        | `"label"` or `"comment"`                                                               |
 | `ci_feedback.escalation_label`          | string           | `needs-human`                | —                                        | Applied when `escalation` is `"label"`                                                 |
 | **Extensions**                          |                  |                              |                                          |                                                                                        |
 | `server.port`                           | integer          | _(absent)_                   | —                                        | CLI `--port` overrides                                                                 |
