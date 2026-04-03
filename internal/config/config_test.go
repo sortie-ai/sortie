@@ -1202,3 +1202,101 @@ func TestNewServiceConfigEnvOverrides(t *testing.T) {
 		assertStringEqual(t, "Tracker.APIKey", "secret_tok_xyz", cfg.Tracker.APIKey)
 	})
 }
+
+func TestNewServiceConfig_CIFeedback(t *testing.T) {
+	t.Parallel()
+
+	t.Run("Absent/ZeroValue", func(t *testing.T) {
+		t.Parallel()
+		cfg, err := NewServiceConfig(map[string]any{})
+		if err != nil {
+			t.Fatalf("NewServiceConfig: %v", err)
+		}
+		if cfg.CIFeedback != (CIFeedbackConfig{}) {
+			t.Errorf("CIFeedback = %+v, want zero value when ci_feedback absent", cfg.CIFeedback)
+		}
+	})
+
+	t.Run("KindWithDefaults", func(t *testing.T) {
+		t.Parallel()
+		cfg, err := NewServiceConfig(map[string]any{
+			"ci_feedback": map[string]any{"kind": "github"},
+		})
+		if err != nil {
+			t.Fatalf("NewServiceConfig: %v", err)
+		}
+		assertStringEqual(t, "CIFeedback.Kind", "github", cfg.CIFeedback.Kind)
+		assertIntEqual(t, "CIFeedback.MaxRetries", 2, cfg.CIFeedback.MaxRetries)
+		assertStringEqual(t, "CIFeedback.Escalation", "label", cfg.CIFeedback.Escalation)
+		assertStringEqual(t, "CIFeedback.EscalationLabel", "needs-human", cfg.CIFeedback.EscalationLabel)
+	})
+
+	t.Run("ExplicitMaxRetries", func(t *testing.T) {
+		t.Parallel()
+		cfg, err := NewServiceConfig(map[string]any{
+			"ci_feedback": map[string]any{"kind": "github", "max_retries": 5},
+		})
+		if err != nil {
+			t.Fatalf("NewServiceConfig: %v", err)
+		}
+		assertIntEqual(t, "CIFeedback.MaxRetries", 5, cfg.CIFeedback.MaxRetries)
+	})
+
+	t.Run("ValidEscalation/Comment", func(t *testing.T) {
+		t.Parallel()
+		cfg, err := NewServiceConfig(map[string]any{
+			"ci_feedback": map[string]any{"kind": "github", "escalation": "comment"},
+		})
+		if err != nil {
+			t.Fatalf("NewServiceConfig: %v", err)
+		}
+		assertStringEqual(t, "CIFeedback.Escalation", "comment", cfg.CIFeedback.Escalation)
+	})
+
+	t.Run("ValidEscalation/Label", func(t *testing.T) {
+		t.Parallel()
+		cfg, err := NewServiceConfig(map[string]any{
+			"ci_feedback": map[string]any{"kind": "github", "escalation": "label"},
+		})
+		if err != nil {
+			t.Fatalf("NewServiceConfig: %v", err)
+		}
+		assertStringEqual(t, "CIFeedback.Escalation", "label", cfg.CIFeedback.Escalation)
+	})
+
+	t.Run("InvalidEscalation/Rejected", func(t *testing.T) {
+		t.Parallel()
+		_, err := NewServiceConfig(map[string]any{
+			"ci_feedback": map[string]any{"kind": "github", "escalation": "slack"},
+		})
+		assertConfigErrorField(t, err, "ci_feedback.escalation")
+	})
+
+	t.Run("CustomEscalationLabel", func(t *testing.T) {
+		t.Parallel()
+		cfg, err := NewServiceConfig(map[string]any{
+			"ci_feedback": map[string]any{
+				"kind":             "github",
+				"escalation":       "label",
+				"escalation_label": "blocked-by-ci",
+			},
+		})
+		if err != nil {
+			t.Fatalf("NewServiceConfig: %v", err)
+		}
+		assertStringEqual(t, "CIFeedback.EscalationLabel", "blocked-by-ci", cfg.CIFeedback.EscalationLabel)
+	})
+
+	t.Run("NotLeakedToExtensions", func(t *testing.T) {
+		t.Parallel()
+		cfg, err := NewServiceConfig(map[string]any{
+			"ci_feedback": map[string]any{"kind": "github"},
+		})
+		if err != nil {
+			t.Fatalf("NewServiceConfig: %v", err)
+		}
+		if _, ok := cfg.Extensions["ci_feedback"]; ok {
+			t.Error("ci_feedback leaked into cfg.Extensions; want absent")
+		}
+	})
+}
