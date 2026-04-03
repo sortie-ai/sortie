@@ -120,7 +120,7 @@ func TestCIResult_ToTemplateMap_PassingNoChecks(t *testing.T) {
 func TestCIResult_ToTemplateMap_NilCheckRuns(t *testing.T) {
 	t.Parallel()
 
-	// Section 3.5: nil CheckRuns must never produce a nil template value.
+	// Nil CheckRuns must produce a non-nil empty slice in the template map.
 	r := CIResult{
 		Status:    CIStatusPending,
 		CheckRuns: nil,
