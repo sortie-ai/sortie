@@ -672,6 +672,20 @@ func mapVal(m map[string]any, key string) any {
 	return m[key]
 }
 
+// CIFeedbackConfig holds CI feedback provider selection and tuning.
+type CIFeedbackConfig struct {
+	// Kind identifies the CI status provider adapter (e.g. "github").
+	// Empty string means CI feedback is disabled.
+	Kind string
+
+	// MaxLogLines controls log excerpt fetching for failing CI checks.
+	// Positive value: fetch up to N lines from the first failing check.
+	// Zero: disable log fetching. The parsing layer resolves absent
+	// YAML keys to the adapter default before storing; after parsing,
+	// zero unambiguously means disabled.
+	MaxLogLines int
+}
+
 func normalizeByStateMap(raw any) map[string]int {
 	byState := make(map[string]int)
 	if raw == nil {
