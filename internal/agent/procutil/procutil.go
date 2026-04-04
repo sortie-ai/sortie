@@ -92,7 +92,12 @@ func (c *StderrCollector) Lines() []string {
 // each collected line at WARN level using logger. Intended for
 // surfacing agent subprocess diagnostics (e.g., startup rejections)
 // without requiring DEBUG logging.
+//
+// If logger is nil, WarnLines uses [slog.Default].
 func (c *StderrCollector) WarnLines(logger *slog.Logger) {
+	if logger == nil {
+		logger = slog.Default()
+	}
 	for _, line := range c.Lines() {
 		logger.Warn("agent stderr", slog.String("line", line))
 	}
