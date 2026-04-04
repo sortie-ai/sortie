@@ -93,12 +93,31 @@ func (c *StderrCollector) Lines() []string {
 // surfacing agent subprocess diagnostics (e.g., startup rejections)
 // without requiring DEBUG logging.
 //
+// Callers that manage an [*exec.Cmd] MUST call [StderrCollector.Lines]
+// before calling [exec.Cmd.Wait]; [exec.Cmd.Wait] closes the pipe read
+// end, which can prevent the drain goroutine from reading buffered data.
+// Use [EmitWarnLines] with the result of [StderrCollector.Lines] to log
+// pre-collected lines after [exec.Cmd.Wait] returns.
+//
 // If logger is nil, WarnLines uses [slog.Default].
 func (c *StderrCollector) WarnLines(logger *slog.Logger) {
 	if logger == nil {
 		logger = slog.Default()
 	}
-	for _, line := range c.Lines() {
+	EmitWarnLines(c.Lines(), logger)
+}
+
+// EmitWarnLines re-emits each line in lines at WARN level with the
+// "agent stderr" message. Pass pre-collected lines obtained from
+// [StderrCollector.Lines] when stderr must be drained before
+// [exec.Cmd.Wait] is called.
+//
+// If logger is nil, EmitWarnLines uses [slog.Default].
+func EmitWarnLines(lines []string, logger *slog.Logger) {
+	if logger == nil {
+		logger = slog.Default()
+	}
+	for _, line := range lines {
 		logger.Warn("agent stderr", slog.String("line", line))
 	}
 }

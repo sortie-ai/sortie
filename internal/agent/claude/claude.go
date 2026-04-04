@@ -467,7 +467,8 @@ func (a *ClaudeCodeAdapter) RunTurn(ctx context.Context, session domain.Session,
 
 	if scanErr := scanner.Err(); scanErr != nil {
 		cancelCmd()
-		cmd.Wait() //nolint:errcheck,gosec // best-effort reap; exit code is irrelevant on scanner failure
+		stderrLines := stderrCollector.Lines() // drain before cmd.Wait() closes the pipe
+		cmd.Wait()                             //nolint:errcheck,gosec // best-effort reap; exit code is irrelevant on scanner failure
 		close(waitCh)
 		state.mu.Lock()
 		state.proc = nil
@@ -494,7 +495,7 @@ func (a *ClaudeCodeAdapter) RunTurn(ctx context.Context, session domain.Session,
 				}
 		}
 
-		stderrCollector.WarnLines(logger)
+		procutil.EmitWarnLines(stderrLines, logger)
 		now := time.Now().UTC()
 		params.OnEvent(domain.AgentEvent{
 			Type:      domain.EventTurnFailed,
@@ -511,6 +512,11 @@ func (a *ClaudeCodeAdapter) RunTurn(ctx context.Context, session domain.Session,
 				Err:     scanErr,
 			}
 	}
+
+	// Drain stderr before cmd.Wait() to avoid losing buffered data:
+	// cmd.Wait() closes the pipe read end, which can prevent the drain
+	// goroutine from reading data that the process already wrote.
+	stderrLines := stderrCollector.Lines()
 
 	// cmd.Wait is the sole waiter; StopSession only signals and
 	// waits on waitCh.
@@ -544,7 +550,7 @@ func (a *ClaudeCodeAdapter) RunTurn(ctx context.Context, session domain.Session,
 	exitCode := procutil.ExtractExitCode(waitErr)
 
 	if exitCode == 127 {
-		stderrCollector.WarnLines(logger)
+		procutil.EmitWarnLines(stderrLines, logger)
 		params.OnEvent(domain.AgentEvent{
 			Type:      domain.EventTurnFailed,
 			Timestamp: now,
@@ -596,7 +602,7 @@ func (a *ClaudeCodeAdapter) RunTurn(ctx context.Context, session domain.Session,
 				Usage:      usage,
 			}, nil
 		}
-		stderrCollector.WarnLines(logger)
+		procutil.EmitWarnLines(stderrLines, logger)
 		params.OnEvent(domain.AgentEvent{
 			Type:          domain.EventTurnFailed,
 			Timestamp:     now,
@@ -614,7 +620,7 @@ func (a *ClaudeCodeAdapter) RunTurn(ctx context.Context, session domain.Session,
 	}
 
 	if exitCode != 0 {
-		stderrCollector.WarnLines(logger)
+		procutil.EmitWarnLines(stderrLines, logger)
 		params.OnEvent(domain.AgentEvent{
 			Type:      domain.EventTurnFailed,
 			Timestamp: now,

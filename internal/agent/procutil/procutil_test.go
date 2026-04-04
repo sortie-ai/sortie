@@ -262,3 +262,63 @@ func TestStderrCollector_WarnLines_NilLogger(t *testing.T) {
 
 	// No assertion on output — the test verifies the nil guard does not panic.
 }
+
+func TestEmitWarnLines(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		lines    []string
+		wantWarn []string
+	}{
+		{
+			name:     "nil slice produces no WARN",
+			lines:    nil,
+			wantWarn: nil,
+		},
+		{
+			name:     "empty slice produces no WARN",
+			lines:    []string{},
+			wantWarn: nil,
+		},
+		{
+			name:     "single line re-emitted at WARN",
+			lines:    []string{"startup rejected: no license"},
+			wantWarn: []string{"startup rejected: no license"},
+		},
+		{
+			name:     "multiple lines all re-emitted at WARN",
+			lines:    []string{"error one", "error two"},
+			wantWarn: []string{"error one", "error two"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			var buf bytes.Buffer
+			handler := slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})
+			logger := slog.New(handler)
+
+			EmitWarnLines(tt.lines, logger)
+
+			output := buf.String()
+			for _, want := range tt.wantWarn {
+				if !strings.Contains(output, want) {
+					t.Errorf("EmitWarnLines() output missing %q; got: %s", want, output)
+				}
+			}
+			if len(tt.wantWarn) == 0 && output != "" {
+				t.Errorf("EmitWarnLines() produced output for empty input; got: %s", output)
+			}
+		})
+	}
+}
+
+func TestEmitWarnLines_NilLogger(t *testing.T) {
+	t.Parallel()
+
+	// Must not panic when logger is nil — falls back to slog.Default().
+	EmitWarnLines([]string{"test line"}, nil)
+}
