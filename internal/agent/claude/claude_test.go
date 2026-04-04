@@ -5,10 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 	"unicode/utf8"
@@ -2314,5 +2316,233 @@ exit 0
 	}
 	if !foundTurnCompleted {
 		t.Error("no turn_completed event found")
+	}
+}
+
+// logSpyEntry holds a single log record captured by [logSpy].
+type logSpyEntry struct {
+	level slog.Level
+	msg   string
+	line  string // value of the "line" slog.Attr, if present
+}
+
+// logSpy is a [slog.Handler] that records every log record. It returns
+// itself from [WithAttrs] and [WithGroup] so that all loggers derived
+// from a spy-backed [slog.Logger] funnel into the same record slice.
+type logSpy struct {
+	mu      sync.Mutex
+	entries []logSpyEntry
+}
+
+func (s *logSpy) Enabled(_ context.Context, _ slog.Level) bool { return true }
+
+func (s *logSpy) Handle(_ context.Context, r slog.Record) error {
+	e := logSpyEntry{level: r.Level, msg: r.Message}
+	r.Attrs(func(a slog.Attr) bool {
+		if a.Key == "line" {
+			e.line = a.Value.String()
+		}
+		return true
+	})
+	s.mu.Lock()
+	s.entries = append(s.entries, e)
+	s.mu.Unlock()
+	return nil
+}
+
+func (s *logSpy) WithAttrs(_ []slog.Attr) slog.Handler { return s }
+func (s *logSpy) WithGroup(_ string) slog.Handler      { return s }
+
+// warnLines returns the "line" attr values from every record logged at
+// WARN with message "agent stderr".
+func (s *logSpy) warnLines() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []string
+	for _, e := range s.entries {
+		if e.level == slog.LevelWarn && e.msg == "agent stderr" {
+			out = append(out, e.line)
+		}
+	}
+	return out
+}
+
+// installLogSpy replaces [slog.Default] with a spy logger for the
+// duration of the test. The original default is restored via
+// [testing.T.Cleanup].
+func installLogSpy(t *testing.T) *logSpy {
+	t.Helper()
+	spy := &logSpy{}
+	orig := slog.Default()
+	slog.SetDefault(slog.New(spy))
+	t.Cleanup(func() { slog.SetDefault(orig) })
+	return spy
+}
+
+// TestRunTurn_StderrWarnOnExitCode127 verifies that when the subprocess
+// writes to stderr and exits with code 127, the stderr lines are
+// re-emitted at WARN level.
+func TestRunTurn_StderrWarnOnExitCode127(t *testing.T) {
+	// No t.Parallel(): installs a global slog default.
+	spy := installLogSpy(t)
+
+	tmpDir := t.TempDir()
+	script := writeScript(t, tmpDir, `
+echo "license check failed: no valid license" >&2
+exit 127
+`)
+
+	adapter, _ := NewClaudeCodeAdapter(map[string]any{})
+	session, err := adapter.StartSession(context.Background(), domain.StartSessionParams{
+		WorkspacePath: tmpDir,
+		AgentConfig:   domain.AgentConfig{Command: script},
+	})
+	if err != nil {
+		t.Fatalf("StartSession() error = %v", err)
+	}
+
+	result, runErr := adapter.RunTurn(context.Background(), session, domain.RunTurnParams{
+		Prompt:  "do the thing",
+		OnEvent: func(domain.AgentEvent) {},
+	})
+	if result.ExitReason != domain.EventTurnFailed {
+		t.Errorf("ExitReason = %q, want %q", result.ExitReason, domain.EventTurnFailed)
+	}
+	var agentErr *domain.AgentError
+	if !errors.As(runErr, &agentErr) || agentErr.Kind != domain.ErrAgentNotFound {
+		t.Errorf("error = %v, want AgentError{Kind: %q}", runErr, domain.ErrAgentNotFound)
+	}
+
+	warnLines := spy.warnLines()
+	if len(warnLines) == 0 {
+		t.Fatal("no WARN lines emitted for stderr on exit code 127")
+	}
+	if !strings.Contains(warnLines[0], "license check failed") {
+		t.Errorf("WARN line = %q, want it to contain \"license check failed\"", warnLines[0])
+	}
+}
+
+// TestRunTurn_StderrWarnOnResultError verifies that when the subprocess
+// emits a result event with is_error:true, the stderr lines are
+// re-emitted at WARN level.
+func TestRunTurn_StderrWarnOnResultError(t *testing.T) {
+	// No t.Parallel(): installs a global slog default.
+	spy := installLogSpy(t)
+
+	tmpDir := t.TempDir()
+	script := writeScript(t, tmpDir, `
+echo "max context window reached" >&2
+cat <<'JSONL'
+{"type":"system","subtype":"init","session_id":"warn-err-sess","cwd":"/tmp"}
+{"type":"result","subtype":"error_max_turns","result":"","is_error":true,"usage":{"input_tokens":100,"output_tokens":50},"session_id":"warn-err-sess"}
+JSONL
+`)
+
+	adapter, _ := NewClaudeCodeAdapter(map[string]any{})
+	session, err := adapter.StartSession(context.Background(), domain.StartSessionParams{
+		WorkspacePath: tmpDir,
+		AgentConfig:   domain.AgentConfig{Command: script},
+	})
+	if err != nil {
+		t.Fatalf("StartSession() error = %v", err)
+	}
+
+	result, _ := adapter.RunTurn(context.Background(), session, domain.RunTurnParams{
+		Prompt:  "do the thing",
+		OnEvent: func(domain.AgentEvent) {},
+	})
+	if result.ExitReason != domain.EventTurnFailed {
+		t.Errorf("ExitReason = %q, want %q", result.ExitReason, domain.EventTurnFailed)
+	}
+
+	warnLines := spy.warnLines()
+	if len(warnLines) == 0 {
+		t.Fatal("no WARN lines emitted for stderr on result is_error=true")
+	}
+	if !strings.Contains(warnLines[0], "max context window reached") {
+		t.Errorf("WARN line = %q, want it to contain \"max context window reached\"", warnLines[0])
+	}
+}
+
+// TestRunTurn_StderrWarnOnNonZeroExit verifies that when the subprocess
+// exits with a non-zero code (not 127) and no result event, the stderr
+// lines are re-emitted at WARN level.
+func TestRunTurn_StderrWarnOnNonZeroExit(t *testing.T) {
+	// No t.Parallel(): installs a global slog default.
+	spy := installLogSpy(t)
+
+	tmpDir := t.TempDir()
+	script := writeScript(t, tmpDir, `
+echo "internal agent panic" >&2
+exit 1
+`)
+
+	adapter, _ := NewClaudeCodeAdapter(map[string]any{})
+	session, err := adapter.StartSession(context.Background(), domain.StartSessionParams{
+		WorkspacePath: tmpDir,
+		AgentConfig:   domain.AgentConfig{Command: script},
+	})
+	if err != nil {
+		t.Fatalf("StartSession() error = %v", err)
+	}
+
+	result, runErr := adapter.RunTurn(context.Background(), session, domain.RunTurnParams{
+		Prompt:  "do the thing",
+		OnEvent: func(domain.AgentEvent) {},
+	})
+	if result.ExitReason != domain.EventTurnFailed {
+		t.Errorf("ExitReason = %q, want %q", result.ExitReason, domain.EventTurnFailed)
+	}
+	var agentErr *domain.AgentError
+	if !errors.As(runErr, &agentErr) || agentErr.Kind != domain.ErrPortExit {
+		t.Errorf("error = %v, want AgentError{Kind: %q}", runErr, domain.ErrPortExit)
+	}
+
+	warnLines := spy.warnLines()
+	if len(warnLines) == 0 {
+		t.Fatal("no WARN lines emitted for stderr on non-zero exit")
+	}
+	if !strings.Contains(warnLines[0], "internal agent panic") {
+		t.Errorf("WARN line = %q, want it to contain \"internal agent panic\"", warnLines[0])
+	}
+}
+
+// TestRunTurn_StderrNoWarnOnSuccess verifies that when the subprocess
+// succeeds, stderr lines are not re-emitted at WARN level.
+func TestRunTurn_StderrNoWarnOnSuccess(t *testing.T) {
+	// No t.Parallel(): installs a global slog default.
+	spy := installLogSpy(t)
+
+	tmpDir := t.TempDir()
+	script := writeScript(t, tmpDir, `
+echo "minor diagnostic" >&2
+cat <<'JSONL'
+{"type":"system","subtype":"init","session_id":"no-warn-success","cwd":"/tmp"}
+{"type":"result","subtype":"success","result":"Done.","is_error":false,"usage":{"input_tokens":100,"output_tokens":50},"session_id":"no-warn-success"}
+JSONL
+`)
+
+	adapter, _ := NewClaudeCodeAdapter(map[string]any{})
+	session, err := adapter.StartSession(context.Background(), domain.StartSessionParams{
+		WorkspacePath: tmpDir,
+		AgentConfig:   domain.AgentConfig{Command: script},
+	})
+	if err != nil {
+		t.Fatalf("StartSession() error = %v", err)
+	}
+
+	result, err := adapter.RunTurn(context.Background(), session, domain.RunTurnParams{
+		Prompt:  "do the thing",
+		OnEvent: func(domain.AgentEvent) {},
+	})
+	if err != nil {
+		t.Fatalf("RunTurn() error = %v", err)
+	}
+	if result.ExitReason != domain.EventTurnCompleted {
+		t.Errorf("ExitReason = %q, want %q", result.ExitReason, domain.EventTurnCompleted)
+	}
+
+	if warnLines := spy.warnLines(); len(warnLines) != 0 {
+		t.Errorf("success path produced %d WARN lines for stderr, want 0; got %v", len(warnLines), warnLines)
 	}
 }

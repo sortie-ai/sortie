@@ -41,22 +41,59 @@ func WasSignaled(err error) bool {
 	return status.Signaled()
 }
 
-// DrainStderr reads from r line by line and logs each line at debug
-// level using logger.
-//
-// Returns when r reaches EOF or encounters an error. Intended to run
-// as a goroutine draining a subprocess stderr pipe.
-func DrainStderr(r io.Reader, logger *slog.Logger) {
+// StderrCollector drains a reader line by line, logging each at DEBUG
+// level while collecting lines for later retrieval. Use
+// [NewStderrCollector] to start the drain goroutine and
+// [StderrCollector.Lines] to retrieve collected output after the
+// subprocess exits.
+type StderrCollector struct {
+	lines  []string
+	done   chan struct{}
+	logger *slog.Logger
+}
+
+// NewStderrCollector starts a goroutine that drains r line by line,
+// logging each line at DEBUG level, and collecting them for later
+// retrieval via [StderrCollector.Lines].
+func NewStderrCollector(r io.Reader, logger *slog.Logger) *StderrCollector {
 	if logger == nil {
 		logger = slog.Default()
 	}
+	c := &StderrCollector{
+		done:   make(chan struct{}),
+		logger: logger,
+	}
+	go c.drain(r)
+	return c
+}
 
+func (c *StderrCollector) drain(r io.Reader) {
+	defer close(c.done)
 	scanner := bufio.NewScanner(r)
 	for scanner.Scan() {
-		logger.Debug("agent stderr", slog.String("line", scanner.Text()))
+		line := scanner.Text()
+		c.logger.Debug("agent stderr", slog.String("line", line))
+		c.lines = append(c.lines, line)
 	}
-
 	if err := scanner.Err(); err != nil {
-		logger.Debug("agent stderr drain failed", slog.Any("error", err))
+		c.logger.Debug("agent stderr drain failed", slog.Any("error", err))
+	}
+}
+
+// Lines blocks until the drain goroutine finishes and returns all
+// collected stderr lines. Safe to call after the subprocess has
+// exited.
+func (c *StderrCollector) Lines() []string {
+	<-c.done
+	return c.lines
+}
+
+// WarnLines blocks until the drain goroutine finishes, then re-emits
+// each collected line at WARN level using logger. Intended for
+// surfacing agent subprocess diagnostics (e.g., startup rejections)
+// without requiring DEBUG logging.
+func (c *StderrCollector) WarnLines(logger *slog.Logger) {
+	for _, line := range c.Lines() {
+		logger.Warn("agent stderr", slog.String("line", line))
 	}
 }

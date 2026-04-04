@@ -119,7 +119,7 @@ func TestWasSignaled(t *testing.T) {
 	}
 }
 
-func TestDrainStderr(t *testing.T) {
+func TestStderrCollector(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -128,65 +128,127 @@ func TestDrainStderr(t *testing.T) {
 		wantLines []string
 	}{
 		{
-			name:      "empty input logs nothing",
+			name:      "empty reader returns nil",
 			input:     "",
 			wantLines: nil,
 		},
 		{
-			name:      "single line is logged",
-			input:     "start failed\n",
-			wantLines: []string{"start failed"},
+			name:      "single line collected",
+			input:     "startup failed\n",
+			wantLines: []string{"startup failed"},
 		},
 		{
-			name:      "multiple lines are all logged",
-			input:     "line one\nline two\nline three\n",
-			wantLines: []string{"line one", "line two", "line three"},
-		},
-		{
-			name:      "session ID in line is logged verbatim",
-			input:     "Session ID: abc-def-123\nconnected\n",
-			wantLines: []string{"Session ID: abc-def-123", "connected"},
+			name:      "multiple lines collected in order",
+			input:     "error one\nerror two\nerror three\n",
+			wantLines: []string{"error one", "error two", "error three"},
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			var buf bytes.Buffer
-			logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
-
-			DrainStderr(strings.NewReader(tt.input), logger)
-
-			output := buf.String()
-			for _, want := range tt.wantLines {
-				if !strings.Contains(output, want) {
-					t.Errorf("DrainStderr log output does not contain %q; got: %s", want, output)
-				}
+			c := NewStderrCollector(strings.NewReader(tt.input), slog.Default())
+			got := c.Lines()
+			if len(got) != len(tt.wantLines) {
+				t.Fatalf("Lines() = %v, want %v", got, tt.wantLines)
 			}
-			if len(tt.wantLines) == 0 && output != "" {
-				t.Errorf("DrainStderr log output = %q, want empty for empty input", output)
+			for i, want := range tt.wantLines {
+				if got[i] != want {
+					t.Errorf("Lines()[%d] = %q, want %q", i, got[i], want)
+				}
 			}
 		})
 	}
 }
 
-func TestDrainStderr_NilLogger(t *testing.T) {
+func TestStderrCollector_LogsDebug(t *testing.T) {
 	t.Parallel()
-	// Verifies that nil logger falls back to slog.Default() and does not panic.
-	DrainStderr(strings.NewReader("some output\n"), nil)
+
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	c := NewStderrCollector(strings.NewReader("worker error\nnetwork timeout\n"), logger)
+	_ = c.Lines()
+
+	output := buf.String()
+	for _, line := range []string{"worker error", "network timeout"} {
+		if !strings.Contains(output, line) {
+			t.Errorf("StderrCollector log missing %q; output: %s", line, output)
+		}
+	}
+	if strings.Contains(output, "WARN") {
+		t.Errorf("StderrCollector logged at WARN during drain; want DEBUG only; output: %s", output)
+	}
 }
 
-func TestDrainStderr_ScannerError(t *testing.T) {
+func TestStderrCollector_NilLogger(t *testing.T) {
 	t.Parallel()
-	// A line longer than bufio.MaxScanTokenSize triggers scanner.Err() != nil.
-	// Verify the error is logged rather than silently dropped.
+	c := NewStderrCollector(strings.NewReader("some output\n"), nil)
+	got := c.Lines()
+	if len(got) != 1 || got[0] != "some output" {
+		t.Errorf("Lines() = %v, want [\"some output\"]", got)
+	}
+}
+
+func TestStderrCollector_ScannerError(t *testing.T) {
+	t.Parallel()
 	longLine := strings.Repeat("x", bufio.MaxScanTokenSize+1)
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
 
-	DrainStderr(strings.NewReader(longLine), logger)
+	c := NewStderrCollector(strings.NewReader(longLine), logger)
+	_ = c.Lines()
 
 	if !strings.Contains(buf.String(), "agent stderr drain failed") {
-		t.Errorf("DrainStderr did not log scanner error; output = %q", buf.String())
+		t.Errorf("StderrCollector did not log scanner error; output = %q", buf.String())
+	}
+}
+
+func TestStderrCollector_WarnLines(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		input    string
+		wantWarn []string
+	}{
+		{
+			name:     "empty collector produces no WARN",
+			input:    "",
+			wantWarn: nil,
+		},
+		{
+			name:     "single line re-emitted at WARN",
+			input:    "startup rejected: no license\n",
+			wantWarn: []string{"startup rejected: no license"},
+		},
+		{
+			name:     "multiple lines all re-emitted at WARN",
+			input:    "error one\nerror two\n",
+			wantWarn: []string{"error one", "error two"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			var buf bytes.Buffer
+			handler := slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})
+			logger := slog.New(handler)
+
+			c := NewStderrCollector(strings.NewReader(tt.input), slog.Default())
+			c.WarnLines(logger)
+
+			output := buf.String()
+			for _, want := range tt.wantWarn {
+				if !strings.Contains(output, want) {
+					t.Errorf("WarnLines() output missing %q; got: %s", want, output)
+				}
+			}
+			if len(tt.wantWarn) == 0 && output != "" {
+				t.Errorf("WarnLines() produced output for empty collector; got: %s", output)
+			}
+		})
 	}
 }
