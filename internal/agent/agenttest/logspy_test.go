@@ -208,8 +208,7 @@ func TestInstallLogSpy_SetsDefault(t *testing.T) {
 }
 
 func TestRequireWarnLines_ReturnsLines(t *testing.T) {
-	t.Parallel()
-
+	// Not parallel — InstallLogSpy mutates the global slog.Default.
 	spy := agenttest.InstallLogSpy(t)
 	slog.Default().Warn("agent stderr", slog.String("line", "startup rejected: no license"))
 
