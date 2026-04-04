@@ -84,10 +84,10 @@ func InstallLogSpy(t *testing.T) *LogSpy {
 	return spy
 }
 
-// RequireWarnLines is a test helper that asserts the spy captured at
-// least one WARN "agent stderr" line. On failure it dumps all captured
-// entries to aid CI debugging.
-func RequireWarnLines(t *testing.T, spy *LogSpy, context string) []string {
+// RequireWarnLines asserts that spy captured at least one WARN
+// "agent stderr" line and returns the matched lines. On failure it
+// dumps all captured entries to aid CI debugging.
+func RequireWarnLines(t *testing.T, spy *LogSpy, label string) []string {
 	t.Helper()
 	lines := spy.WarnLines()
 	if len(lines) > 0 {
@@ -95,7 +95,7 @@ func RequireWarnLines(t *testing.T, spy *LogSpy, context string) []string {
 	}
 	entries := spy.Entries()
 	t.Fatalf("no WARN lines emitted for stderr on %s; spy captured %d entries: %s",
-		context, len(entries), formatEntries(entries))
+		label, len(entries), formatEntries(entries))
 	return nil // unreachable
 }
 
