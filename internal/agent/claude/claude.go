@@ -291,7 +291,7 @@ func (a *ClaudeCodeAdapter) RunTurn(ctx context.Context, session domain.Session,
 
 	state.turnCount++
 
-	go procutil.DrainStderr(stderrPipe, logger)
+	stderrCollector := procutil.NewStderrCollector(stderrPipe, logger)
 
 	scanner := bufio.NewScanner(stdoutPipe)
 	scanner.Buffer(make([]byte, 0, 64*1024), 10*1024*1024)
@@ -494,6 +494,7 @@ func (a *ClaudeCodeAdapter) RunTurn(ctx context.Context, session domain.Session,
 				}
 		}
 
+		stderrCollector.WarnLines(logger)
 		now := time.Now().UTC()
 		params.OnEvent(domain.AgentEvent{
 			Type:      domain.EventTurnFailed,
@@ -543,6 +544,7 @@ func (a *ClaudeCodeAdapter) RunTurn(ctx context.Context, session domain.Session,
 	exitCode := procutil.ExtractExitCode(waitErr)
 
 	if exitCode == 127 {
+		stderrCollector.WarnLines(logger)
 		params.OnEvent(domain.AgentEvent{
 			Type:      domain.EventTurnFailed,
 			Timestamp: now,
@@ -594,6 +596,7 @@ func (a *ClaudeCodeAdapter) RunTurn(ctx context.Context, session domain.Session,
 				Usage:      usage,
 			}, nil
 		}
+		stderrCollector.WarnLines(logger)
 		params.OnEvent(domain.AgentEvent{
 			Type:          domain.EventTurnFailed,
 			Timestamp:     now,
@@ -611,6 +614,7 @@ func (a *ClaudeCodeAdapter) RunTurn(ctx context.Context, session domain.Session,
 	}
 
 	if exitCode != 0 {
+		stderrCollector.WarnLines(logger)
 		params.OnEvent(domain.AgentEvent{
 			Type:      domain.EventTurnFailed,
 			Timestamp: now,
