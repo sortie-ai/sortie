@@ -98,7 +98,7 @@ Structured logs are the safety net: when the HTTP server is disabled, when Prome
 scraping, when the dashboard is not open — logs are always there. They are the audit trail,
 the forensic record, and the first place an operator looks when something goes wrong.
 
-### Tier 2: Embedded JSON API + HTML Dashboard (Opt-In via `--port` or `server.port`)
+### Tier 2: Embedded JSON API + HTML Dashboard (Default on Port 7678)
 
 The embedded HTTP server specified in architecture Section 13.7 provides:
 
@@ -106,7 +106,7 @@ The embedded HTTP server specified in architecture Section 13.7 provides:
   operational triggers.
 - **HTML Dashboard** (`/`) for browser-based monitoring with zero external tools.
 
-This tier is enabled when a port is configured and serves Sortie-specific data that has no
+This tier is enabled by default on port 7678 and serves Sortie-specific data that has no
 standard metric equivalent: workspace paths, agent event messages, retry queue reasons,
 `.sortie/status` values, run history context, and per-issue debugging detail. It satisfies
 the architecture's runtime snapshot requirement (Section 13.3) and the human-readable status
@@ -115,7 +115,7 @@ surface requirement (Section 13.4).
 The JSON API shapes conform to the endpoints and recommended baseline shapes in architecture
 Section 13.7.2.
 
-### Tier 3: Prometheus `/metrics` Endpoint (Opt-In, Co-located with HTTP Server)
+### Tier 3: Prometheus `/metrics` Endpoint (Co-located with HTTP Server)
 
 When the HTTP server is enabled, Sortie exposes a standard Prometheus metrics endpoint at
 `/metrics`. This endpoint is served by a handler constructed with

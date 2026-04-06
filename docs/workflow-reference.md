@@ -31,7 +31,7 @@
   - [3.6 Fields Not Overridable via Env](#36-fields-not-overridable-via-env)
   - [3.7 Dynamic Reload](#37-dynamic-reload)
 - [4. Extensions](#4-extensions)
-  - [4.1 `server.port` — HTTP Server](#41-serverport--http-server)
+  - [4.1 HTTP Server (`server.port`, `server.host`)](#41-http-server-serverport-serverhost)
   - [4.2 `logging.level` — Log Verbosity](#42-logginglevel--log-verbosity)
   - [4.3 `worker` — SSH Worker Extension](#43-worker--ssh-worker-extension)
   - [4.4 Adapter-Specific Pass-Through Config](#44-adapter-specific-pass-through-config)
@@ -653,21 +653,24 @@ The front matter is extensible. Unknown top-level keys are collected into an `Ex
 map and are not validated by the core schema. Extensions should document their own field
 schemas, defaults, and reload behavior.
 
-### 4.1 `server.port` — HTTP Server
+### 4.1 HTTP Server (`server.port`, `server.host`)
 
 ```yaml
 server:
-  port: 8642
+  port: 9090
+  host: "0.0.0.0"
 ```
 
-| Field         | Type    | Required | Default                      | Dynamic Reload            | Description                                                  |
-| ------------- | ------- | -------- | ---------------------------- | ------------------------- | ------------------------------------------------------------ |
-| `server.port` | integer | No       | _(absent — server disabled)_ | **No** — requires restart | TCP port for the embedded HTTP observability server.          |
+| Field         | Type        | Required | Default     | Dynamic Reload            | Description                                                                     |
+| ------------- | ----------- | -------- | ----------- | ------------------------- | ------------------------------------------------------------------------------- |
+| `server.port` | integer     | No       | `7678`      | **No** — requires restart | TCP port for the embedded HTTP observability server. `0` disables the server.    |
+| `server.host` | string (IP) | No       | `127.0.0.1` | **No** — requires restart | Bind address for the HTTP server. Must be a parseable IP address.               |
 
-When `server.port` is set (or `--port` is passed on the CLI), Sortie starts an HTTP
-server on `127.0.0.1:<port>` exposing a JSON API for runtime observability and
-operational control. The CLI `--port` flag takes precedence over `server.port`.
-Port `0` requests an ephemeral OS-assigned port.
+Sortie starts an HTTP server by default on `127.0.0.1:7678` for runtime observability
+and operational control. `server.port` overrides the default port; `server.host`
+overrides the default bind address. CLI `--port` and `--host` flags take precedence
+over their extension counterparts. Port `0` disables the server entirely (no TCP
+listener, no Prometheus metrics).
 
 #### API Endpoints
 
@@ -1520,6 +1523,7 @@ re-applies configuration and prompt template without restart.
 | `ci_feedback.escalation`               | Future dispatches.                                                                             |
 | `ci_feedback.escalation_label`         | Future dispatches.                                                                             |
 | `server.port`                          | **No effect** — requires restart.                                                              |
+| `server.host`                          | **No effect** — requires restart.                                                              |
 | `logging.level`                        | **No effect** — requires restart.                                                              |
 | Prompt template                        | Future worker attempts (including continuation retries), not in-flight continuation turns.     |
 
@@ -1674,7 +1678,8 @@ lists the `SORTIE_*` variable that overrides the field, or "—" if not overrida
 | `ci_feedback.escalation`                | string           | `label`                      | —                                        | `"label"` or `"comment"`                                                               |
 | `ci_feedback.escalation_label`          | string           | `needs-human`                | —                                        | Applied when `escalation` is `"label"`                                                 |
 | **Extensions**                          |                  |                              |                                          |                                                                                        |
-| `server.port`                           | integer          | _(absent)_                   | —                                        | CLI `--port` overrides                                                                 |
+| `server.port`                           | integer          | `7678`                       | —                                        | CLI `--port` overrides; `0` disables server                                    |
+| `server.host`                           | string (IP)      | `127.0.0.1`                  | —                                        | CLI `--host` overrides                                                         |
 | `logging.level`                         | string           | `info`                       | —                                        | CLI `--log-level` overrides                                                            |
 | `worker.ssh_hosts`                      | `[string]`       | _(absent)_                   | —                                        | SSH host targets; dynamic reload                                                       |
 | `worker.max_concurrent_agents_per_host` | integer          | _(absent)_                   | —                                        | Per-host cap; dynamic reload                                                           |

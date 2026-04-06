@@ -395,7 +395,10 @@ Note:
   (for example `server`) without changing the core schema above.
 - Extensions should document their field schema, defaults, validation rules, and whether changes
   apply dynamically or require restart.
-- Common extension: `server.port` (integer) enables the HTTP server described in Section 13.7.
+- Common extensions: `server.port` (integer) overrides the default HTTP server port (7678);
+  `server.host` (string, IP address) overrides the default bind address (`127.0.0.1`). The
+  HTTP server starts unconditionally unless `server.port` or `--port` is `0`. See Section
+  13.7 for full semantics.
 
 #### 5.3.1 `tracker` (object)
 
@@ -780,8 +783,11 @@ This section is intentionally redundant so a coding agent can implement the conf
   `comment`)
 - `ci_feedback.escalation_label`: string, default `needs-human`; label applied during `label`
   escalation
-- `server.port` (extension): integer, optional; enables the HTTP server, `0` may be used for
-  ephemeral local bind, and CLI `--port` overrides it
+- `server.port` (extension): integer, optional; overrides the default server port (7678);
+  `0` disables the HTTP server; CLI `--port` takes precedence
+- `server.host` (extension): string (IP address), optional; overrides the default bind
+  address (`127.0.0.1`); must be a parseable IP; CLI `--host` takes precedence; restart
+  required
 - `db_path`: path, default `.sortie.db` next to `WORKFLOW.md`; supports `$VAR` and `~`
   expansion; requires restart to take effect
 
@@ -1883,23 +1889,28 @@ If implemented:
 
 ### 13.7 HTTP Server
 
-Sortie includes an embedded HTTP server for observability and operational control. The server is
-enabled when a port is configured (via CLI `--port` or `server.port` in `WORKFLOW.md`) and is not
-required for orchestrator correctness.
+Sortie includes an embedded HTTP server for observability and operational control. The
+server starts unconditionally on port **7678** unless explicitly disabled. It is not
+required for orchestrator correctness, but its absence silently removes health probes,
+Prometheus metrics, and the dashboard.
 
-Enablement:
+Enablement and configuration:
 
-- Start the HTTP server when a CLI `--port` argument is provided.
-- Start the HTTP server when `server.port` is present in `WORKFLOW.md` front matter.
-- `server.port` is extension configuration and is intentionally not part of the core front-matter
-  schema in Section 5.3.
-- Precedence: CLI `--port` overrides `server.port` when both are present.
-- `server.port` must be an integer. Positive values bind that port. `0` may be used to request an
-  ephemeral port for local development and tests.
-- Sortie binds loopback by default (`127.0.0.1` or host equivalent) unless explicitly configured
-  otherwise.
-- Changes to HTTP listener settings (for example `server.port`) do not need to hot-rebind;
-  restart-required behavior is conformant.
+- The HTTP server starts by default on `127.0.0.1:7678` with no flags required.
+- `--port N` overrides the listening port. Port `0` disables the server entirely.
+- `--host ADDR` overrides the bind address. `ADDR` must be a parseable IP address.
+  Default: `127.0.0.1`. Container deployments use `0.0.0.0`.
+- `server.port` and `server.host` extension keys provide the same overrides via workflow
+  front matter. CLI flags take precedence over extension keys.
+- `server.port` must be an integer in the range 1–65535, or `0` to disable.
+- `server.host` must be a parseable IP address string. DNS hostnames are not accepted.
+- When the default port (7678) is occupied and the operator did not explicitly request a
+  port (`--port` absent, `server.port` extension absent), Sortie logs a warning and starts
+  without the HTTP server; the orchestrator continues normally. When the operator explicitly
+  requested a port (via `--port` or `server.port`) and it is already in use, Sortie exits
+  with code 1 and a descriptive error. No automatic port selection occurs.
+- The `--dry-run` flag suppresses server startup regardless of port or host settings.
+- Changes to HTTP listener settings require restart (hot-rebind is not supported).
 
 #### 13.7.1 Human-Readable Dashboard (`/`)
 

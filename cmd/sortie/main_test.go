@@ -14,6 +14,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -77,6 +78,21 @@ func writeIssuesFixture(t *testing.T, dir string) {
 	if err := os.WriteFile(filepath.Join(dir, "issues.json"), data, 0o644); err != nil {
 		t.Fatal(err)
 	}
+}
+
+// freePort returns a TCP port number that is currently unbound on the
+// loopback interface. There is an inherent race between the close and
+// the subsequent Listen call in the code under test; this is acceptable
+// for unit tests where contention is negligible.
+func freePort(t *testing.T) int {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("freePort: %v", err)
+	}
+	port := ln.Addr().(*net.TCPAddr).Port
+	ln.Close() //nolint:errcheck // best-effort close
+	return port
 }
 
 // setupRunDir creates a temp directory with WORKFLOW.md and issues.json
@@ -237,17 +253,18 @@ func TestRunAlreadyCancelledContext(t *testing.T) {
 
 func TestRunPortFlagLogged(t *testing.T) {
 	wfPath := setupRunDir(t)
+	port := freePort(t)
 
 	var stdout, stderr bytes.Buffer
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	code := run(ctx, []string{"--port", "0", wfPath}, &stdout, &stderr)
+	code := run(ctx, []string{"--port", strconv.Itoa(port), wfPath}, &stdout, &stderr)
 	if code != 0 {
 		t.Fatalf("exit code = %d, want 0; stderr: %s", code, stderr.String())
 	}
-	if !strings.Contains(stderr.String(), "port=0") {
-		t.Errorf("stderr = %q, want to contain %q", stderr.String(), "port=0")
+	if !strings.Contains(stderr.String(), "server_addr=") {
+		t.Errorf("stderr = %q, want to contain %q", stderr.String(), "server_addr=")
 	}
 	if !strings.Contains(stderr.String(), "http server listening") {
 		t.Errorf("stderr = %q, want to contain %q", stderr.String(), "http server listening")
@@ -1092,11 +1109,11 @@ func TestResolveServerPort(t *testing.T) {
 			portFlagSet: true,
 			extensions:  nil,
 			wantPort:    0,
-			wantEnabled: true,
+			wantEnabled: false,
 		},
 		{
 			name:        "extensions int port",
-			portFlag:    0,
+			portFlag:    7678,
 			portFlagSet: false,
 			extensions:  map[string]any{"server": map[string]any{"port": 8080}},
 			wantPort:    8080,
@@ -1104,7 +1121,7 @@ func TestResolveServerPort(t *testing.T) {
 		},
 		{
 			name:        "extensions float64 port (JSON decode)",
-			portFlag:    0,
+			portFlag:    7678,
 			portFlagSet: false,
 			extensions:  map[string]any{"server": map[string]any{"port": float64(8080)}},
 			wantPort:    8080,
@@ -1112,43 +1129,44 @@ func TestResolveServerPort(t *testing.T) {
 		},
 		{
 			name:        "no server in extensions",
-			portFlag:    0,
+			portFlag:    7678,
 			portFlagSet: false,
 			extensions:  map[string]any{},
-			wantPort:    0,
-			wantEnabled: false,
+			wantPort:    7678,
+			wantEnabled: true,
 		},
 		{
 			name:        "nil extensions",
-			portFlag:    0,
+			portFlag:    7678,
 			portFlagSet: false,
 			extensions:  nil,
-			wantPort:    0,
-			wantEnabled: false,
+			wantPort:    7678,
+			wantEnabled: true,
 		},
 		{
 			name:        "server extension without port key",
-			portFlag:    0,
+			portFlag:    7678,
 			portFlagSet: false,
 			extensions:  map[string]any{"server": map[string]any{"other": "value"}},
-			wantPort:    0,
-			wantEnabled: false,
+			wantPort:    7678,
+			wantEnabled: true,
 		},
 		{
 			name:        "server extension port is string (unsupported type)",
-			portFlag:    0,
+			portFlag:    7678,
 			portFlagSet: false,
 			extensions:  map[string]any{"server": map[string]any{"port": "8080"}},
 			wantPort:    0,
 			wantEnabled: false,
+			wantErr:     true,
 		},
 		{
 			name:        "server extension is not a map",
-			portFlag:    0,
+			portFlag:    7678,
 			portFlagSet: false,
 			extensions:  map[string]any{"server": "not-a-map"},
-			wantPort:    0,
-			wantEnabled: false,
+			wantPort:    7678,
+			wantEnabled: true,
 		},
 
 		// --- Boundary and invalid port regression tests ---
@@ -1185,7 +1203,7 @@ func TestResolveServerPort(t *testing.T) {
 		},
 		{
 			name:        "extensions fractional float64 rejected",
-			portFlag:    0,
+			portFlag:    7678,
 			portFlagSet: false,
 			extensions:  map[string]any{"server": map[string]any{"port": float64(8080.9)}},
 			wantPort:    0,
@@ -1194,7 +1212,7 @@ func TestResolveServerPort(t *testing.T) {
 		},
 		{
 			name:        "extensions float64 above 65535 rejected",
-			portFlag:    0,
+			portFlag:    7678,
 			portFlagSet: false,
 			extensions:  map[string]any{"server": map[string]any{"port": float64(99999)}},
 			wantPort:    0,
@@ -1203,7 +1221,7 @@ func TestResolveServerPort(t *testing.T) {
 		},
 		{
 			name:        "extensions negative int rejected",
-			portFlag:    0,
+			portFlag:    7678,
 			portFlagSet: false,
 			extensions:  map[string]any{"server": map[string]any{"port": -1}},
 			wantPort:    0,
@@ -1212,7 +1230,7 @@ func TestResolveServerPort(t *testing.T) {
 		},
 		{
 			name:        "extensions int above 65535 rejected",
-			portFlag:    0,
+			portFlag:    7678,
 			portFlagSet: false,
 			extensions:  map[string]any{"server": map[string]any{"port": 70000}},
 			wantPort:    0,
@@ -1221,7 +1239,7 @@ func TestResolveServerPort(t *testing.T) {
 		},
 		{
 			name:        "extensions int exactly 65535 accepted",
-			portFlag:    0,
+			portFlag:    7678,
 			portFlagSet: false,
 			extensions:  map[string]any{"server": map[string]any{"port": 65535}},
 			wantPort:    65535,
@@ -1229,11 +1247,68 @@ func TestResolveServerPort(t *testing.T) {
 		},
 		{
 			name:        "extensions float64 exactly 65535 accepted",
-			portFlag:    0,
+			portFlag:    7678,
 			portFlagSet: false,
 			extensions:  map[string]any{"server": map[string]any{"port": float64(65535)}},
 			wantPort:    65535,
 			wantEnabled: true,
+		},
+		{
+			name:        "no flags no extension returns default",
+			portFlag:    7678,
+			portFlagSet: false,
+			extensions:  nil,
+			wantPort:    7678,
+			wantEnabled: true,
+		},
+		{
+			name:        "extension port 0 disables server",
+			portFlag:    7678,
+			portFlagSet: false,
+			extensions:  map[string]any{"server": map[string]any{"port": 0}},
+			wantPort:    0,
+			wantEnabled: false,
+		},
+		{
+			name:        "flag port 0 disables regardless of extension",
+			portFlag:    0,
+			portFlagSet: true,
+			extensions:  map[string]any{"server": map[string]any{"port": 8080}},
+			wantPort:    0,
+			wantEnabled: false,
+		},
+		{
+			name:        "extension overrides default when no flag",
+			portFlag:    7678,
+			portFlagSet: false,
+			extensions:  map[string]any{"server": map[string]any{"port": 9090}},
+			wantPort:    9090,
+			wantEnabled: true,
+		},
+		{
+			name:        "flag overrides extension",
+			portFlag:    9090,
+			portFlagSet: true,
+			extensions:  map[string]any{"server": map[string]any{"port": 8080}},
+			wantPort:    9090,
+			wantEnabled: true,
+		},
+		{
+			name:        "extension float64 port 0 disables",
+			portFlag:    7678,
+			portFlagSet: false,
+			extensions:  map[string]any{"server": map[string]any{"port": float64(0)}},
+			wantPort:    0,
+			wantEnabled: false,
+		},
+		{
+			name:        "extension port is string type returns error",
+			portFlag:    7678,
+			portFlagSet: false,
+			extensions:  map[string]any{"server": map[string]any{"port": "8080"}},
+			wantPort:    0,
+			wantEnabled: false,
+			wantErr:     true,
 		},
 	}
 
@@ -1250,6 +1325,115 @@ func TestResolveServerPort(t *testing.T) {
 			}
 			if (gotErr != nil) != tt.wantErr {
 				t.Errorf("resolveServerPort() err = %v, wantErr %v", gotErr, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestResolveServerHost(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		hostFlag    string
+		hostFlagSet bool
+		extensions  map[string]any
+		wantHost    string
+		wantErr     bool
+	}{
+		{
+			name:        "default when no flag and no extension",
+			hostFlag:    "127.0.0.1",
+			hostFlagSet: false,
+			extensions:  nil,
+			wantHost:    "127.0.0.1",
+		},
+		{
+			name:        "flag overrides default",
+			hostFlag:    "0.0.0.0",
+			hostFlagSet: true,
+			extensions:  nil,
+			wantHost:    "0.0.0.0",
+		},
+		{
+			name:        "extension overrides default",
+			hostFlag:    "127.0.0.1",
+			hostFlagSet: false,
+			extensions:  map[string]any{"server": map[string]any{"host": "0.0.0.0"}},
+			wantHost:    "0.0.0.0",
+		},
+		{
+			name:        "flag wins over extension",
+			hostFlag:    "10.0.0.1",
+			hostFlagSet: true,
+			extensions:  map[string]any{"server": map[string]any{"host": "0.0.0.0"}},
+			wantHost:    "10.0.0.1",
+		},
+		{
+			name:        "extension not a string returns error",
+			hostFlag:    "127.0.0.1",
+			hostFlagSet: false,
+			extensions:  map[string]any{"server": map[string]any{"host": 123}},
+			wantHost:    "",
+			wantErr:     true,
+		},
+		{
+			name:        "extension invalid IP returns error",
+			hostFlag:    "127.0.0.1",
+			hostFlagSet: false,
+			extensions:  map[string]any{"server": map[string]any{"host": "not-an-ip"}},
+			wantHost:    "",
+			wantErr:     true,
+		},
+		{
+			name:        "extension empty string returns error",
+			hostFlag:    "127.0.0.1",
+			hostFlagSet: false,
+			extensions:  map[string]any{"server": map[string]any{"host": ""}},
+			wantHost:    "",
+			wantErr:     true,
+		},
+		{
+			name:        "flag invalid IP returns error",
+			hostFlag:    "hostname",
+			hostFlagSet: true,
+			extensions:  nil,
+			wantHost:    "",
+			wantErr:     true,
+		},
+		{
+			name:        "absent server key returns default",
+			hostFlag:    "127.0.0.1",
+			hostFlagSet: false,
+			extensions:  map[string]any{"tracker": map[string]any{"kind": "file"}},
+			wantHost:    "127.0.0.1",
+		},
+		{
+			name:        "server extension not a map returns default",
+			hostFlag:    "127.0.0.1",
+			hostFlagSet: false,
+			extensions:  map[string]any{"server": "not-map"},
+			wantHost:    "127.0.0.1",
+		},
+		{
+			name:        "absent host key returns default",
+			hostFlag:    "127.0.0.1",
+			hostFlagSet: false,
+			extensions:  map[string]any{"server": map[string]any{"port": 8080}},
+			wantHost:    "127.0.0.1",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			gotHost, gotErr := resolveServerHost(tt.hostFlag, tt.hostFlagSet, tt.extensions)
+			if gotHost != tt.wantHost {
+				t.Errorf("resolveServerHost() host = %q, want %q", gotHost, tt.wantHost)
+			}
+			if (gotErr != nil) != tt.wantErr {
+				t.Errorf("resolveServerHost() err = %v, wantErr %v", gotErr, tt.wantErr)
 			}
 		})
 	}
@@ -2468,9 +2652,10 @@ func TestRunServerShutdownError(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	port := strconv.Itoa(freePort(t))
 	result := make(chan int, 1)
 	go func() {
-		result <- run(ctx, []string{"--port", "0", wfPath}, io.Discard, &stderr)
+		result <- run(ctx, []string{"--port", port, wfPath}, io.Discard, &stderr)
 	}()
 
 	// Wait until the HTTP server reports its bound address.
@@ -3404,5 +3589,165 @@ func TestValidateGitHubTokenHintWarning(t *testing.T) {
 	}
 	if !foundWarn {
 		t.Errorf("validateOutput.Warnings = %v, want entry with check %q", out.Warnings, "tracker.api_key.github_token_hint")
+	}
+}
+
+// --- HTTP Server Always-On integration tests ---
+
+func TestRunDefaultServerAddr(t *testing.T) {
+	// No t.Parallel: setupRunDir calls t.Chdir.
+	wfPath := setupRunDir(t)
+	port := freePort(t)
+
+	var stdout, stderr bytes.Buffer
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	code := run(ctx, []string{"--port", strconv.Itoa(port), wfPath}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr: %s", code, stderr.String())
+	}
+	want := "server_addr=127.0.0.1:" + strconv.Itoa(port)
+	if !strings.Contains(stderr.String(), want) {
+		t.Errorf("stderr = %q, want to contain %q", stderr.String(), want)
+	}
+}
+
+func TestRunPortZeroDisablesServer(t *testing.T) {
+	// No t.Parallel: setupRunDir calls t.Chdir.
+	wfPath := setupRunDir(t)
+
+	var stdout, stderr bytes.Buffer
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	code := run(ctx, []string{"--port", "0", wfPath}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr: %s", code, stderr.String())
+	}
+	if strings.Contains(stderr.String(), "server_addr") {
+		t.Errorf("stderr = %q, must not contain %q (server is disabled)", stderr.String(), "server_addr")
+	}
+}
+
+func TestRunCustomHost(t *testing.T) {
+	// No t.Parallel: setupRunDir calls t.Chdir.
+	wfPath := setupRunDir(t)
+	port := freePort(t)
+
+	var stdout, stderr bytes.Buffer
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	code := run(ctx, []string{"--host", "0.0.0.0", "--port", strconv.Itoa(port), wfPath}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr: %s", code, stderr.String())
+	}
+	want := "server_addr=0.0.0.0:" + strconv.Itoa(port)
+	if !strings.Contains(stderr.String(), want) {
+		t.Errorf("stderr = %q, want to contain %q", stderr.String(), want)
+	}
+}
+
+func TestRunCustomHostAndPort(t *testing.T) {
+	// No t.Parallel: setupRunDir calls t.Chdir.
+	wfPath := setupRunDir(t)
+	port := freePort(t)
+
+	var stdout, stderr bytes.Buffer
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	code := run(ctx, []string{"--host", "0.0.0.0", "--port", strconv.Itoa(port), wfPath}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr: %s", code, stderr.String())
+	}
+	want := "server_addr=0.0.0.0:" + strconv.Itoa(port)
+	if !strings.Contains(stderr.String(), want) {
+		t.Errorf("stderr = %q, want to contain %q", stderr.String(), want)
+	}
+}
+
+func TestRunDefaultPortInUseImplicit(t *testing.T) {
+	// No t.Parallel: binds port 7678; cannot run concurrently with other
+	// tests that use the default HTTP server port.
+	wfPath := setupRunDir(t)
+
+	ln, err := net.Listen("tcp", "127.0.0.1:7678")
+	if err != nil {
+		t.Skipf("cannot pre-bind port 7678 (already in use); skipping implicit-port test: %v", err)
+	}
+	t.Cleanup(func() { ln.Close() }) //nolint:errcheck // best-effort cleanup
+
+	var stdout, stderr bytes.Buffer
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	code := run(ctx, []string{wfPath}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0 (graceful degradation on implicit default port); stderr: %s", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "http server listen failed; running without HTTP server") {
+		t.Errorf("stderr = %q, want to contain %q", stderr.String(), "http server listen failed; running without HTTP server")
+	}
+}
+
+func TestRunExplicitPortInUse(t *testing.T) {
+	// No t.Parallel: setupRunDir calls t.Chdir.
+	wfPath := setupRunDir(t)
+
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("net.Listen: %v", err)
+	}
+	occupiedPort := ln.Addr().(*net.TCPAddr).Port
+	t.Cleanup(func() { ln.Close() }) //nolint:errcheck // best-effort cleanup
+
+	var stdout, stderr bytes.Buffer
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	code := run(ctx, []string{"--port", strconv.Itoa(occupiedPort), wfPath}, &stdout, &stderr)
+	if code != 1 {
+		t.Fatalf("exit code = %d, want 1; stderr: %s", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "http server listen failed") {
+		t.Errorf("stderr = %q, want to contain %q", stderr.String(), "http server listen failed")
+	}
+}
+
+func TestRunInvalidHost(t *testing.T) {
+	// No t.Parallel: setupRunDir calls t.Chdir.
+	wfPath := setupRunDir(t)
+
+	var stdout, stderr bytes.Buffer
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	code := run(ctx, []string{"--host", "invalid", wfPath}, &stdout, &stderr)
+	if code != 1 {
+		t.Fatalf("exit code = %d, want 1; stderr: %s", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "not a valid IP address") {
+		t.Errorf("stderr = %q, want to contain %q", stderr.String(), "not a valid IP address")
+	}
+}
+
+func TestRunDryRunNoServer(t *testing.T) {
+	// No t.Parallel: setupRunDir calls t.Chdir.
+	wfPath := setupRunDir(t)
+
+	var stdout, stderr bytes.Buffer
+	ctx := context.Background()
+
+	code := run(ctx, []string{"--dry-run", wfPath}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr: %s", code, stderr.String())
+	}
+	if strings.Contains(stderr.String(), "server_addr") {
+		t.Errorf("stderr = %q, must not contain %q (no server in dry-run mode)", stderr.String(), "server_addr")
+	}
+	if !strings.Contains(stderr.String(), "dry-run") {
+		t.Errorf("stderr = %q, want to contain %q", stderr.String(), "dry-run")
 	}
 }
