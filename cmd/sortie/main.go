@@ -1,8 +1,9 @@
 // Package main is the entry point for the Sortie orchestration service.
 // The binary accepts an optional positional workflow file path (default
-// ./WORKFLOW.md), a --log-level flag to control log verbosity, a --port
-// flag for the HTTP observability server, and a "validate" subcommand
-// for offline workflow file validation.
+// ./WORKFLOW.md), a --log-level flag to control log verbosity, --port
+// and --host flags for the HTTP observability server, and a "validate"
+// subcommand for offline workflow file validation. The HTTP server starts
+// by default on port 7678; --port 0 disables it.
 // Start with [run] for the complete startup and shutdown lifecycle.
 package main
 
@@ -20,6 +21,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -43,6 +45,11 @@ import (
 	_ "github.com/sortie-ai/sortie/internal/tracker/file"
 	_ "github.com/sortie-ai/sortie/internal/tracker/github"
 	_ "github.com/sortie-ai/sortie/internal/tracker/jira"
+)
+
+const (
+	defaultServerPort = 7678
+	defaultServerHost = "127.0.0.1"
 )
 
 // serverShutdownTimeout controls how long [run] waits for the HTTP server
@@ -88,7 +95,8 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 	fs.SetOutput(stderr)
 	logLevel := fs.String("log-level", "", `Log verbosity: "debug", "info", "warn", "error" (default "info")`)
 	dryRun := fs.Bool("dry-run", false, "Run one poll cycle without spawning agents or writing to the database, then exit")
-	port := fs.Int("port", 0, "HTTP server port")
+	port := fs.Int("port", defaultServerPort, "HTTP server port (0 to disable)")
+	host := fs.String("host", defaultServerHost, "HTTP server bind address (IP address)")
 	envFile := fs.String("env-file", "", "Path to .env file for config overrides")
 	showVersion := fs.Bool("version", false, "Print program's version information and quit")
 	dumpVersion := fs.Bool("dumpversion", false, "Print the version of the program and don't do anything else")
@@ -145,11 +153,13 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 		}
 	}
 
-	var portSet, logLevelSet bool
+	var portFlagSet, hostFlagSet, logLevelSet bool
 	fs.Visit(func(f *flag.Flag) {
 		switch f.Name {
 		case "port":
-			portSet = true
+			portFlagSet = true
+		case "host":
+			hostFlagSet = true
 		case "log-level":
 			logLevelSet = true
 		}
@@ -215,12 +225,24 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 		}
 	}
 
+	serverPort, serverEnabled, portErr := resolveServerPort(*port, portFlagSet, cfg.Extensions)
+	if portErr != nil {
+		logger.Error("server port configuration error", slog.Any("error", portErr))
+		return 1
+	}
+
+	serverHost, hostErr := resolveServerHost(*host, hostFlagSet, cfg.Extensions)
+	if hostErr != nil {
+		logger.Error("server host configuration error", slog.Any("error", hostErr))
+		return 1
+	}
+
 	logAttrs := []any{
 		slog.String("version", Version),
 		slog.String("workflow_path", path),
 	}
-	if portSet && !*dryRun {
-		logAttrs = append(logAttrs, slog.Int("port", *port))
+	if serverEnabled && !*dryRun {
+		logAttrs = append(logAttrs, slog.String("server_addr", net.JoinHostPort(serverHost, strconv.Itoa(serverPort))))
 	}
 	if effectiveLevel != slog.LevelInfo {
 		logAttrs = append(logAttrs, slog.String("log_level", effectiveLevel.String()))
@@ -229,10 +251,6 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 		logger.Info("sortie dry-run starting", logAttrs...)
 	} else {
 		logger.Info("sortie starting", logAttrs...)
-	}
-
-	if *dryRun && portSet {
-		logger.Debug("dry-run: --port flag ignored, HTTP server not started")
 	}
 
 	// --- Tracker adapter construction (shared by normal and dry-run paths) ---
@@ -361,30 +379,15 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 		}
 	}
 
-	// --- Server port resolution ---
-
-	serverPort, serverEnabled, portErr := resolveServerPort(*port, portSet, cfg.Extensions)
-	if portErr != nil {
-		logger.Error("server port configuration error", slog.Any("error", portErr))
-		return 1
-	}
-
 	// --- Orchestrator construction and event loop ---
 
 	logger.Info("sortie started")
 
-	// Create Prometheus metrics early so the orchestrator can record
-	// counters and gauges from its first tick.
+	// Metrics and server are wired after a successful listen so that
+	// graceful degradation on port conflict does not leave dead
+	// references to unused Prometheus collectors.
 	var orchMetrics domain.Metrics
 	var promMetrics *server.PromMetrics
-	if serverEnabled {
-		promMetrics = server.NewPromMetrics(Version, runtime.Version())
-		orchMetrics = promMetrics
-	}
-
-	if ms, ok := trackerAdapter.(domain.MetricsSetter); ok && orchMetrics != nil {
-		ms.SetMetrics(orchMetrics)
-	}
 
 	toolRegistry := domain.NewToolRegistry()
 	if cfg.Tracker.Project != "" {
@@ -422,6 +425,41 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 		)
 	}
 
+	// Attempt to bind the HTTP server before constructing metrics so
+	// that graceful degradation on an implicit default port conflict
+	// skips Prometheus collector creation entirely.
+	var ln net.Listener
+	portIsImplicit := !portFlagSet && !hasServerPortExtension(cfg.Extensions)
+	if serverEnabled {
+		addr := net.JoinHostPort(serverHost, strconv.Itoa(serverPort))
+		var listenErr error
+		ln, listenErr = (&net.ListenConfig{}).Listen(ctx, "tcp", addr)
+		if listenErr != nil {
+			if portIsImplicit {
+				logger.Warn("http server listen failed; running without HTTP server",
+					slog.String("addr", addr),
+					slog.Any("error", listenErr),
+				)
+				serverEnabled = false
+			} else {
+				logger.Error("http server listen failed",
+					slog.String("addr", addr),
+					slog.Any("error", listenErr),
+				)
+				return 1
+			}
+		}
+	}
+
+	if serverEnabled {
+		promMetrics = server.NewPromMetrics(Version, runtime.Version())
+		orchMetrics = promMetrics
+	}
+
+	if ms, ok := trackerAdapter.(domain.MetricsSetter); ok && orchMetrics != nil {
+		ms.SetMetrics(orchMetrics)
+	}
+
 	o := orchestrator.NewOrchestrator(orchestrator.OrchestratorParams{
 		State:            state,
 		Logger:           logger,
@@ -439,7 +477,7 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 
 	var srv *server.Server
 	if serverEnabled {
-		addr := fmt.Sprintf("127.0.0.1:%d", serverPort)
+		addr := net.JoinHostPort(serverHost, strconv.Itoa(serverPort))
 		srv = server.New(server.Params{
 			SnapshotFn:       o.SnapshotFunc(),
 			RefreshFn:        o.RefreshFunc(),
@@ -475,12 +513,6 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 			},
 		})
 		o.AddObserver(srv)
-
-		ln, listenErr := (&net.ListenConfig{}).Listen(ctx, "tcp", addr)
-		if listenErr != nil {
-			logger.Error("http server listen failed", slog.Any("error", listenErr))
-			return 1
-		}
 
 		go func() {
 			logger.Info("http server listening",
@@ -620,24 +652,28 @@ func resolveDBPath(cfgPath, workflowDir string) string {
 // resolveServerPort determines the effective HTTP server port from the
 // CLI flag and workflow extensions. Returns the port, whether the
 // server should be started, and an error if an explicitly configured
-// port is invalid. When no port is configured, (0, false, nil) is
-// returned. Invalid ports (negative, above 65535, or non-integer
-// floats) return an error so callers can fail loudly.
+// port is invalid. When no port is configured, the default port is
+// returned with the server enabled. Port 0 disables the server.
 func resolveServerPort(portFlag int, portFlagSet bool, extensions map[string]any) (int, bool, error) {
 	if portFlagSet {
 		if portFlag < 0 || portFlag > 65535 {
 			return 0, false, fmt.Errorf("invalid --port value %d: must be between 0 and 65535", portFlag)
 		}
-		return portFlag, true, nil
+		return portFlag, portFlag != 0, nil
 	}
 
 	serverExt, ok := extensions["server"].(map[string]any)
 	if !ok {
-		return 0, false, nil
+		return defaultServerPort, true, nil
+	}
+
+	portVal, exists := serverExt["port"]
+	if !exists {
+		return defaultServerPort, true, nil
 	}
 
 	var port int
-	switch v := serverExt["port"].(type) {
+	switch v := portVal.(type) {
 	case int:
 		port = v
 	case float64:
@@ -646,13 +682,58 @@ func resolveServerPort(portFlag int, portFlagSet bool, extensions map[string]any
 		}
 		port = int(v)
 	default:
-		return 0, false, nil
+		return 0, false, fmt.Errorf("invalid server.port value: unsupported type %T, must be an integer", portVal)
 	}
 
 	if port < 0 || port > 65535 {
 		return 0, false, fmt.Errorf("invalid server.port value %d: must be between 0 and 65535", port)
 	}
-	return port, true, nil
+	return port, port != 0, nil
+}
+
+// resolveServerHost determines the effective HTTP server bind address
+// from the CLI flag and workflow extensions. Returns an error if the
+// resolved value is not a parseable IP address. When no host is
+// configured, the loopback address is returned.
+func resolveServerHost(hostFlag string, hostFlagSet bool, extensions map[string]any) (string, error) {
+	if hostFlagSet {
+		if net.ParseIP(hostFlag) == nil {
+			return "", fmt.Errorf("invalid --host value %q: not a valid IP address", hostFlag)
+		}
+		return hostFlag, nil
+	}
+
+	serverExt, ok := extensions["server"].(map[string]any)
+	if !ok {
+		return defaultServerHost, nil
+	}
+
+	hostVal, exists := serverExt["host"]
+	if !exists {
+		return defaultServerHost, nil
+	}
+
+	hostStr, ok := hostVal.(string)
+	if !ok {
+		return "", fmt.Errorf("invalid server.host value: unsupported type %T, must be a string", hostVal)
+	}
+
+	if net.ParseIP(hostStr) == nil {
+		return "", fmt.Errorf("invalid server.host value %q: not a valid IP address", hostStr)
+	}
+	return hostStr, nil
+}
+
+// hasServerPortExtension reports whether the extensions map contains a
+// server object with a port key. The check is presence-based: even
+// server.port matching the default counts as explicit configuration.
+func hasServerPortExtension(extensions map[string]any) bool {
+	serverExt, ok := extensions["server"].(map[string]any)
+	if !ok {
+		return false
+	}
+	_, exists := serverExt["port"]
+	return exists
 }
 
 // resolveLogLevel determines the effective log level from the CLI flag
