@@ -3594,7 +3594,7 @@ func TestValidateGitHubTokenHintWarning(t *testing.T) {
 
 // --- HTTP Server Always-On integration tests ---
 
-func TestRunDefaultServerAddr(t *testing.T) {
+func TestRunExplicitPortServerAddr(t *testing.T) {
 	// No t.Parallel: setupRunDir calls t.Chdir.
 	wfPath := setupRunDir(t)
 	port := freePort(t)
@@ -3631,25 +3631,6 @@ func TestRunPortZeroDisablesServer(t *testing.T) {
 }
 
 func TestRunCustomHost(t *testing.T) {
-	// No t.Parallel: setupRunDir calls t.Chdir.
-	wfPath := setupRunDir(t)
-	port := freePort(t)
-
-	var stdout, stderr bytes.Buffer
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	code := run(ctx, []string{"--host", "0.0.0.0", "--port", strconv.Itoa(port), wfPath}, &stdout, &stderr)
-	if code != 0 {
-		t.Fatalf("exit code = %d, want 0; stderr: %s", code, stderr.String())
-	}
-	want := "server_addr=0.0.0.0:" + strconv.Itoa(port)
-	if !strings.Contains(stderr.String(), want) {
-		t.Errorf("stderr = %q, want to contain %q", stderr.String(), want)
-	}
-}
-
-func TestRunCustomHostAndPort(t *testing.T) {
 	// No t.Parallel: setupRunDir calls t.Chdir.
 	wfPath := setupRunDir(t)
 	port := freePort(t)
