@@ -12,23 +12,52 @@ import (
 	"strings"
 )
 
-// Setup initializes the process-wide default logger and returns it. The
-// resulting [slog.TextHandler] writes key=value records to w at the given
-// minimum level. After Setup returns, [slog.Default] and the top-level slog
-// functions (Info, Warn, …) use this logger. Setup is intended to be called
-// once during service startup; subsequent calls replace the default silently.
+// Format controls the output encoding of the process-wide logger.
+type Format string
+
+const (
+	FormatText Format = "text"
+	FormatJSON Format = "json"
+)
+
+// Setup initializes the process-wide default logger and returns it. When
+// format is [FormatJSON], the logger uses [slog.NewJSONHandler] to emit
+// one JSON object per line; for any other value (including the zero value
+// and [FormatText]) it uses [slog.NewTextHandler] with key=value records.
+// After Setup returns, [slog.Default] and the top-level slog functions
+// (Info, Warn, …) use this logger. Setup is intended to be called once
+// during service startup; subsequent calls replace the default silently.
 //
 // The returned logger is identical to [slog.Default] immediately after the
 // call. Callers that need a logger bound to w should use the return value
 // rather than calling [slog.Default] afterward to avoid a race when multiple
 // goroutines call Setup concurrently.
-func Setup(w io.Writer, level slog.Level) *slog.Logger {
-	handler := slog.NewTextHandler(w, &slog.HandlerOptions{
-		Level: level,
-	})
+func Setup(w io.Writer, level slog.Level, format Format) *slog.Logger {
+	opts := &slog.HandlerOptions{Level: level}
+	var handler slog.Handler
+	if format == FormatJSON {
+		handler = slog.NewJSONHandler(w, opts)
+	} else {
+		handler = slog.NewTextHandler(w, opts)
+	}
 	l := slog.New(handler)
 	slog.SetDefault(l)
 	return l
+}
+
+// ParseFormat converts a case-insensitive format name to the
+// corresponding [Format]. Accepted names: "text", "json". Returns
+// an error for unrecognized names including the empty string.
+// Leading and trailing whitespace is not trimmed.
+func ParseFormat(s string) (Format, error) {
+	switch strings.ToLower(s) {
+	case "text":
+		return FormatText, nil
+	case "json":
+		return FormatJSON, nil
+	default:
+		return "", fmt.Errorf("unknown log format %q: accepted values are text, json", s)
+	}
 }
 
 // ParseLevel converts a case-insensitive level name to the

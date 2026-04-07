@@ -2,6 +2,7 @@ package logging_test
 
 import (
 	"bytes"
+	"encoding/json"
 	"log/slog"
 	"strings"
 	"testing"
@@ -62,7 +63,7 @@ func TestParseLevel(t *testing.T) {
 func TestSetup(t *testing.T) {
 	// Not parallel: mutates the process-wide slog default.
 	var buf bytes.Buffer
-	logger := logging.Setup(&buf, slog.LevelInfo)
+	logger := logging.Setup(&buf, slog.LevelInfo, logging.FormatText)
 
 	// The returned logger must write to buf.
 	logger.Info("from returned logger")
@@ -260,5 +261,112 @@ func TestWithSession_SpecialValues(t *testing.T) {
 				t.Errorf("WithSession(%q) output = %q, want containing %q", tt.sessionID, output, tt.want)
 			}
 		})
+	}
+}
+
+func TestParseFormat(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		input      string
+		wantFormat logging.Format
+		wantErr    bool
+	}{
+		{name: "text lowercase", input: "text", wantFormat: logging.FormatText},
+		{name: "text uppercase", input: "TEXT", wantFormat: logging.FormatText},
+		{name: "text mixed case", input: "Text", wantFormat: logging.FormatText},
+		{name: "json lowercase", input: "json", wantFormat: logging.FormatJSON},
+		{name: "json uppercase", input: "JSON", wantFormat: logging.FormatJSON},
+		{name: "json mixed case", input: "Json", wantFormat: logging.FormatJSON},
+		{name: "empty string", input: "", wantErr: true},
+		{name: "yaml rejected", input: "yaml", wantErr: true},
+		{name: "trailing space rejected", input: "json ", wantErr: true},
+		{name: "leading space rejected", input: " json", wantErr: true},
+		{name: "logfmt rejected", input: "logfmt", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := logging.ParseFormat(tt.input)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("ParseFormat(%q) = %v, want error", tt.input, got)
+				}
+				if !strings.Contains(err.Error(), "unknown log format") {
+					t.Errorf("ParseFormat(%q) error = %q, want to contain %q", tt.input, err.Error(), "unknown log format")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("ParseFormat(%q) unexpected error: %v", tt.input, err)
+			}
+			if got != tt.wantFormat {
+				t.Errorf("ParseFormat(%q) = %v, want %v", tt.input, got, tt.wantFormat)
+			}
+		})
+	}
+}
+
+func TestSetupJSON(t *testing.T) {
+	// Not parallel: mutates the process-wide slog default.
+	var buf bytes.Buffer
+	logger := logging.Setup(&buf, slog.LevelInfo, logging.FormatJSON)
+
+	// The returned logger must write valid JSON to buf.
+	logger.Info("from json setup", slog.String("key", "val"))
+
+	lines := strings.Split(buf.String(), "\n")
+	var nonEmpty []string
+	for _, l := range lines {
+		if l != "" {
+			nonEmpty = append(nonEmpty, l)
+		}
+	}
+
+	for _, line := range nonEmpty {
+		var obj map[string]any
+		if err := json.Unmarshal([]byte(line), &obj); err != nil {
+			t.Fatalf("line %q is not valid JSON: %v", line, err)
+		}
+		for _, key := range []string{"time", "level", "msg"} {
+			if _, ok := obj[key]; !ok {
+				t.Errorf("JSON line missing key %q: %v", key, obj)
+			}
+		}
+	}
+
+	if len(nonEmpty) > 0 {
+		var obj map[string]any
+		if err := json.Unmarshal([]byte(nonEmpty[0]), &obj); err == nil {
+			if obj["msg"] != "from json setup" {
+				t.Errorf("msg = %v, want %q", obj["msg"], "from json setup")
+			}
+			if obj["key"] != "val" {
+				t.Errorf("key = %v, want %q", obj["key"], "val")
+			}
+		}
+	}
+
+	// slog.Default() must also write JSON to the same buf.
+	buf.Reset()
+	slog.Default().Info("from slog.Default")
+	for _, line := range strings.Split(buf.String(), "\n") {
+		if line == "" {
+			continue
+		}
+		var obj map[string]any
+		if err := json.Unmarshal([]byte(line), &obj); err != nil {
+			t.Fatalf("slog.Default() line %q is not valid JSON: %v", line, err)
+		}
+	}
+
+	// DEBUG must be suppressed at LevelInfo.
+	buf.Reset()
+	logger.Debug("should be filtered")
+	if buf.Len() != 0 {
+		t.Errorf("Setup(LevelInfo) wrote DEBUG message via returned logger: %q, want empty", buf.String())
 	}
 }
