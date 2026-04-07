@@ -383,7 +383,6 @@ jobs:
             type=semver,pattern={{version}},value=${{ inputs.version }}
             type=semver,pattern={{major}}.{{minor}},value=${{ inputs.version }}
             type=semver,pattern={{major}},value=${{ inputs.version }},enable=${{ steps.prerelease.outputs.is_prerelease == 'false' }}
-            type=raw,value=latest,enable=${{ steps.prerelease.outputs.is_prerelease == 'false' }}
 
       - name: Build and push
         id: build
