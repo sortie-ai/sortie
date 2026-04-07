@@ -99,7 +99,7 @@ internal/
   prompt/              text/template rendering, strict mode
   registry/            adapter registration
   server/              HTTP API, dashboard, metrics
-  tool/                client-side tool framework (trackerapi/)
+  tool/                agent tools (trackerapi/, history/, mcpserver/, status/)
   tracker/             tracker adapters (jira/, github/, file/, etc.)
   workflow/            WORKFLOW.md parser, file watcher
   workspace/           filesystem isolation, path safety, hook execution
