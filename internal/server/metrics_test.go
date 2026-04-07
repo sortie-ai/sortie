@@ -125,8 +125,12 @@ func TestNewPromMetrics(t *testing.T) {
 	m.IncTrackerRequests("fetch_candidates", "success")
 	m.IncHandoffTransitions("success")
 	m.IncDispatchTransitions("success")
+	m.IncTrackerComments("dispatch", "success")
 	m.IncToolCalls("Bash", "success")
 	m.ObserveWorkerDuration("normal", 1)
+	m.SetSSHHostUsage("test-host", 1)
+	m.IncCIStatusChecks("passing")
+	m.IncCIEscalations("label")
 
 	families := gatherFamilies(t, m)
 
@@ -145,9 +149,13 @@ func TestNewPromMetrics(t *testing.T) {
 		"sortie_tracker_requests_total",
 		"sortie_handoff_transitions_total",
 		"sortie_dispatch_transitions_total",
+		"sortie_tracker_comments_total",
 		"sortie_tool_calls_total",
 		"sortie_poll_duration_seconds",
 		"sortie_worker_duration_seconds",
+		"sortie_ssh_host_usage",
+		"sortie_ci_status_checks_total",
+		"sortie_ci_escalations_total",
 		"sortie_build_info",
 	}
 
