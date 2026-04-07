@@ -13,7 +13,7 @@ a single file: `/usr/bin/sortie`. Consume it in a multi-stage build:
 ```dockerfile
 FROM ghcr.io/sortie-ai/sortie:latest AS sortie
 
-FROM node:22-slim
+FROM node:24-slim
 COPY --from=sortie /usr/bin/sortie /usr/bin/sortie
 # … install your agent, create a user, etc.
 ```
@@ -30,6 +30,11 @@ Every example Dockerfile creates a non-root `sortie` user (UID 1000):
 RUN useradd --create-home --shell /bin/bash --uid 1000 sortie
 USER sortie
 ```
+
+On `node:*-slim` base images, UID 1000 is already claimed by the `node` user.
+The example Dockerfiles remove it first with `userdel -r node` before creating
+the `sortie` user. Adapt this step if your base image uses a different UID
+layout.
 
 Even for agents that do not enforce this restriction, running as non-root is a
 security best practice.
@@ -104,7 +109,7 @@ docker build -t sortie .
 Inject a version string:
 
 ```sh
-docker build --build-arg VERSION=v1.3.0 -t sortie .
+docker build --build-arg VERSION=1.5.0 -t sortie .
 ```
 
 Build an agent-specific image (from the repository root):

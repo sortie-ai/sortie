@@ -33,7 +33,6 @@ codecov.yml
 .sortie.db-wal
 
 # Git config and attributes
-.gitignore
 .gitattributes
 
 # Build tools and configs

@@ -4,7 +4,7 @@
 # Usage:
 #
 #   docker build -t sortie .
-#   docker build --build-arg VERSION=v1.3.0 -t sortie .
+#   docker build --build-arg VERSION=1.5.0 -t sortie .
 #
 # Consume in your own Dockerfile:
 #
@@ -43,8 +43,9 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 
 # ── Runtime stage ─────────────────────────────────────────────────────────────
 
-FROM gcr.io/distroless/static-debian12:nonroot
+FROM gcr.io/distroless/static-debian13:nonroot
 
 COPY --from=builder /sortie /usr/bin/sortie
 
 ENTRYPOINT ["/usr/bin/sortie"]
+CMD ["--version"]
