@@ -1,0 +1,25 @@
+{
+  "recommendations": [
+    // ── Go ────────────────────────────────────────────────────────────────────
+    // Rich Go support: IntelliSense, debugging (Delve), testing, linting,
+    // code navigation. Official extension by the Go team at Google.
+    "golang.go",
+
+    // ── YAML ──────────────────────────────────────────────────────────────────
+    // YAML language support with JSON Schema validation. Covers GitHub Actions
+    // workflows, golangci-lint config, codecov.yml, K8s manifests, dependabot.
+    "redhat.vscode-yaml",
+
+    // ── Docker ────────────────────────────────────────────────────────────────
+    // Dockerfile and docker-compose syntax, linting, and IntelliSense.
+    "ms-azuretools.vscode-docker",
+
+    // ── GitHub Actions ────────────────────────────────────────────────────────
+    // Syntax highlighting, validation, and auto-complete for workflow files.
+    "github.vscode-github-actions",
+
+    // ── Shell ─────────────────────────────────────────────────────────────────
+    // ShellCheck integration for linting shell scripts (scripts/, Makefile hooks).
+    "timonwong.shellcheck"
+  ]
+}
