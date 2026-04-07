@@ -23,6 +23,7 @@ import (
 	"unicode"
 
 	"github.com/sortie-ai/sortie/internal/config"
+	"github.com/sortie-ai/sortie/internal/logging"
 )
 
 // minimalWorkflow returns a minimal valid WORKFLOW.md content that
@@ -3730,5 +3731,386 @@ func TestRunDryRunNoServer(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "dry-run") {
 		t.Errorf("stderr = %q, want to contain %q", stderr.String(), "dry-run")
+	}
+}
+
+// --- resolveLogFormat tests ---
+
+func TestResolveLogFormat(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		flagValue  string
+		flagSet    bool
+		extensions map[string]any
+		wantFormat logging.Format
+		wantErr    bool
+	}{
+		{
+			name:       "flag set: json",
+			flagValue:  "json",
+			flagSet:    true,
+			wantFormat: logging.FormatJSON,
+		},
+		{
+			name:       "flag set: text",
+			flagValue:  "text",
+			flagSet:    true,
+			wantFormat: logging.FormatText,
+		},
+		{
+			name:      "flag set: invalid",
+			flagValue: "bogus",
+			flagSet:   true,
+			wantErr:   true,
+		},
+		{
+			name:       "flag set overrides config",
+			flagValue:  "text",
+			flagSet:    true,
+			extensions: map[string]any{"logging": map[string]any{"format": "json"}},
+			wantFormat: logging.FormatText,
+		},
+		{
+			name:       "extension: json",
+			flagSet:    false,
+			extensions: map[string]any{"logging": map[string]any{"format": "json"}},
+			wantFormat: logging.FormatJSON,
+		},
+		{
+			name:       "extension: case insensitive",
+			flagSet:    false,
+			extensions: map[string]any{"logging": map[string]any{"format": "JSON"}},
+			wantFormat: logging.FormatJSON,
+		},
+		{
+			name:       "extension: invalid string",
+			flagSet:    false,
+			extensions: map[string]any{"logging": map[string]any{"format": "yaml"}},
+			wantErr:    true,
+		},
+		{
+			name:       "extension: non-string type (int)",
+			flagSet:    false,
+			extensions: map[string]any{"logging": map[string]any{"format": 42}},
+			wantErr:    true,
+		},
+		{
+			name:       "no logging block",
+			flagSet:    false,
+			extensions: map[string]any{},
+			wantFormat: logging.FormatText,
+		},
+		{
+			name:       "nil extensions",
+			flagSet:    false,
+			extensions: nil,
+			wantFormat: logging.FormatText,
+		},
+		{
+			name:       "logging block without format key",
+			flagSet:    false,
+			extensions: map[string]any{"logging": map[string]any{"level": "info"}},
+			wantFormat: logging.FormatText,
+		},
+		{
+			name:       "logging block is not a map",
+			flagSet:    false,
+			extensions: map[string]any{"logging": "not-a-map"},
+			wantFormat: logging.FormatText,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := resolveLogFormat(tt.flagValue, tt.flagSet, tt.extensions)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("resolveLogFormat(%q, %v, ...) = %v, want error", tt.flagValue, tt.flagSet, got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("resolveLogFormat(%q, %v, ...) unexpected error: %v", tt.flagValue, tt.flagSet, err)
+			}
+			if got != tt.wantFormat {
+				t.Errorf("resolveLogFormat(%q, %v, ...) = %v, want %v", tt.flagValue, tt.flagSet, got, tt.wantFormat)
+			}
+		})
+	}
+}
+
+// --- --log-format CLI flag integration tests ---
+
+// minimalWorkflowWithLogFormat returns a WORKFLOW.md with the given format
+// set in the logging.format extension key.
+func minimalWorkflowWithLogFormat(format string) []byte {
+	return []byte(fmt.Sprintf(`---
+polling:
+  interval_ms: 30000
+tracker:
+  kind: file
+  api_key: "unused"
+  active_states:
+    - To Do
+    - In Progress
+  terminal_states:
+    - Done
+agent:
+  kind: mock
+file:
+  path: issues.json
+logging:
+  format: %s
+---
+Do {{ .issue.title }}.
+`, format))
+}
+
+func TestRunLogFormatJSON(t *testing.T) {
+	wfPath := setupRunDir(t)
+
+	var stdout, stderr bytes.Buffer
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	code := run(ctx, []string{"--log-format", "json", wfPath}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr: %s", code, stderr.String())
+	}
+
+	foundStarting := false
+	for _, line := range strings.Split(stderr.String(), "\n") {
+		if line == "" {
+			continue
+		}
+		var obj map[string]any
+		if err := json.Unmarshal([]byte(line), &obj); err != nil {
+			t.Errorf("stderr line %q is not valid JSON: %v", line, err)
+			continue
+		}
+		if obj["msg"] == "sortie starting" {
+			foundStarting = true
+			if obj["log_format"] != "json" {
+				t.Errorf("sortie starting line: log_format = %v, want %q", obj["log_format"], "json")
+			}
+		}
+	}
+	if !foundStarting {
+		t.Errorf("stderr does not contain a JSON line with msg=%q", "sortie starting")
+	}
+}
+
+func TestRunLogFormatText(t *testing.T) {
+	wfPath := setupRunDir(t)
+
+	var stdout, stderr bytes.Buffer
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	code := run(ctx, []string{"--log-format", "text", wfPath}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr: %s", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "level=INFO") {
+		t.Errorf("stderr = %q, want to contain %q", stderr.String(), "level=INFO")
+	}
+	for _, line := range strings.Split(stderr.String(), "\n") {
+		if line != "" {
+			if strings.HasPrefix(line, "{") {
+				t.Errorf("first non-empty stderr line %q starts with '{', expected text format", line)
+			}
+			break
+		}
+	}
+}
+
+func TestRunLogFormatDefault(t *testing.T) {
+	wfPath := setupRunDir(t)
+
+	var stdout, stderr bytes.Buffer
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// No --log-format flag — default is text.
+	code := run(ctx, []string{wfPath}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr: %s", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "level=INFO") {
+		t.Errorf("stderr = %q, want to contain %q", stderr.String(), "level=INFO")
+	}
+	for _, line := range strings.Split(stderr.String(), "\n") {
+		if line != "" {
+			if strings.HasPrefix(line, "{") {
+				t.Errorf("first non-empty stderr line %q starts with '{', want text format by default", line)
+			}
+			break
+		}
+	}
+}
+
+func TestRunLogFormatInvalid(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	code := run(ctx, []string{"--log-format", "yaml"}, &stdout, &stderr)
+	if code != 1 {
+		t.Fatalf("exit code = %d, want 1", code)
+	}
+	if !strings.Contains(stderr.String(), `unknown log format "yaml"`) {
+		t.Errorf("stderr = %q, want to contain %q", stderr.String(), `unknown log format "yaml"`)
+	}
+}
+
+func TestRunLogFormatEmpty(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	ctx := context.Background()
+
+	code := run(ctx, []string{"--log-format", ""}, &stdout, &stderr)
+	if code != 1 {
+		t.Fatalf("exit code = %d, want 1", code)
+	}
+	if !strings.Contains(stderr.String(), "unknown log format") {
+		t.Errorf("stderr = %q, want to contain %q", stderr.String(), "unknown log format")
+	}
+}
+
+func TestRunLogFormatCaseInsensitive(t *testing.T) {
+	wfPath := setupRunDir(t)
+
+	var stdout, stderr bytes.Buffer
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	code := run(ctx, []string{"--log-format", "JSON", wfPath}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr: %s", code, stderr.String())
+	}
+	for _, line := range strings.Split(stderr.String(), "\n") {
+		if line == "" {
+			continue
+		}
+		var obj map[string]any
+		if err := json.Unmarshal([]byte(line), &obj); err != nil {
+			t.Errorf("stderr line %q is not valid JSON: %v", line, err)
+		}
+	}
+}
+
+func TestRunLogFormatFromExtension(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	writeIssuesFixture(t, dir)
+	wfPath := writeWorkflowFileWithContent(t, dir, minimalWorkflowWithLogFormat("json"))
+
+	var stdout, stderr bytes.Buffer
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	code := run(ctx, []string{wfPath}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr: %s", code, stderr.String())
+	}
+	for _, line := range strings.Split(stderr.String(), "\n") {
+		if line == "" {
+			continue
+		}
+		var obj map[string]any
+		if err := json.Unmarshal([]byte(line), &obj); err != nil {
+			t.Errorf("stderr line %q is not valid JSON: %v", line, err)
+		}
+	}
+}
+
+func TestRunLogFormatFlagOverridesExtension(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	writeIssuesFixture(t, dir)
+	// Extension requests json; flag requests text — flag must win.
+	wfPath := writeWorkflowFileWithContent(t, dir, minimalWorkflowWithLogFormat("json"))
+
+	var stdout, stderr bytes.Buffer
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	code := run(ctx, []string{"--log-format", "text", wfPath}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr: %s", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "level=INFO") {
+		t.Errorf("stderr = %q, want to contain %q (flag wins over extension)", stderr.String(), "level=INFO")
+	}
+	for _, line := range strings.Split(stderr.String(), "\n") {
+		if line != "" {
+			if strings.HasPrefix(line, "{") {
+				t.Errorf("first non-empty stderr line %q starts with '{', want text format (flag wins)", line)
+			}
+			break
+		}
+	}
+}
+
+func TestRunLogFormatExtensionInvalid(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	writeIssuesFixture(t, dir)
+	wfPath := writeWorkflowFileWithContent(t, dir, minimalWorkflowWithLogFormat("yaml"))
+
+	var stdout, stderr bytes.Buffer
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+
+	code := run(ctx, []string{wfPath}, &stdout, &stderr)
+	if code != 1 {
+		t.Fatalf("exit code = %d, want 1; stderr: %s", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "unknown log format") {
+		t.Errorf("stderr = %q, want to contain %q", stderr.String(), "unknown log format")
+	}
+}
+
+func TestRunLogFormatExtensionNonStringType(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	writeIssuesFixture(t, dir)
+
+	// YAML integer 42 decodes as int — resolveLogFormat must reject it.
+	content := []byte(`---
+polling:
+  interval_ms: 30000
+tracker:
+  kind: file
+  api_key: "unused"
+  active_states:
+    - To Do
+    - In Progress
+  terminal_states:
+    - Done
+agent:
+  kind: mock
+file:
+  path: issues.json
+logging:
+  format: 42
+---
+Do {{ .issue.title }}.
+`)
+	wfPath := writeWorkflowFileWithContent(t, dir, content)
+
+	var stdout, stderr bytes.Buffer
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+
+	code := run(ctx, []string{wfPath}, &stdout, &stderr)
+	if code != 1 {
+		t.Fatalf("exit code = %d, want 1; stderr: %s", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "invalid logging.format") {
+		t.Errorf("stderr = %q, want to contain %q", stderr.String(), "invalid logging.format")
 	}
 }

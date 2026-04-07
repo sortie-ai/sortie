@@ -1,6 +1,7 @@
 // Package main is the entry point for the Sortie orchestration service.
 // The binary accepts an optional positional workflow file path (default
-// ./WORKFLOW.md), a --log-level flag to control log verbosity, --port
+// ./WORKFLOW.md), a --log-level flag to control log verbosity,
+// a --log-format flag to select text or JSON output encoding, --port
 // and --host flags for the HTTP observability server, and a "validate"
 // subcommand for offline workflow file validation. The HTTP server starts
 // by default on port 7678; --port 0 disables it.
@@ -93,6 +94,7 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 
 	fs := flag.NewFlagSet("sortie", flag.ContinueOnError)
 	fs.SetOutput(stderr)
+	logFormat := fs.String("log-format", "", `Log output format: "text", "json" (default "text")`)
 	logLevel := fs.String("log-level", "", `Log verbosity: "debug", "info", "warn", "error" (default "info")`)
 	dryRun := fs.Bool("dry-run", false, "Run one poll cycle without spawning agents or writing to the database, then exit")
 	port := fs.Int("port", defaultServerPort, "HTTP server port (0 to disable)")
@@ -153,7 +155,7 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 		}
 	}
 
-	var portFlagSet, hostFlagSet, logLevelSet bool
+	var portFlagSet, hostFlagSet, logLevelSet, logFormatSet bool
 	fs.Visit(func(f *flag.Flag) {
 		switch f.Name {
 		case "port":
@@ -162,12 +164,14 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 			hostFlagSet = true
 		case "log-level":
 			logLevelSet = true
+		case "log-format":
+			logFormatSet = true
 		}
 	})
 
-	// Early logging setup before workflow load — if the CLI flag is set,
-	// apply it immediately so all subsequent output respects the operator's
-	// choice. Otherwise, start at the default info level.
+	// Early logging setup before workflow load — if the CLI flags are set,
+	// apply them immediately so all subsequent output respects the operator's
+	// choice. Otherwise, start at the default info level with text format.
 	var effectiveLevel = slog.LevelInfo
 	if logLevelSet {
 		lvl, err := logging.ParseLevel(*logLevel)
@@ -177,7 +181,16 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 		}
 		effectiveLevel = lvl
 	}
-	logger := logging.Setup(stderr, effectiveLevel)
+	var effectiveFormat = logging.FormatText
+	if logFormatSet {
+		parsedFmt, err := logging.ParseFormat(*logFormat)
+		if err != nil {
+			fmt.Fprintf(stderr, "sortie: %s\n", err) //nolint:errcheck // stderr write failure is unrecoverable
+			return 1
+		}
+		effectiveFormat = parsedFmt
+	}
+	logger := logging.Setup(stderr, effectiveLevel, effectiveFormat)
 
 	mgr, err := workflow.NewManager(path, logger,
 		workflow.WithValidateFunc(orchestrator.ValidateConfigForPromotion))
@@ -211,8 +224,9 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 	// the validated configuration.
 	cfg := mgr.Config()
 
-	// Post-config log level adjustment. When the CLI flag was not set,
-	// check the workflow extensions for a logging.level key.
+	// Post-config log level and format adjustment. When the CLI flags
+	// were not set, check the workflow extensions for logging overrides.
+	var needResetup bool
 	if !logLevelSet {
 		lvl, err := resolveLogLevel("", false, cfg.Extensions)
 		if err != nil {
@@ -221,8 +235,22 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 		}
 		if lvl != slog.LevelInfo {
 			effectiveLevel = lvl
-			logger = logging.Setup(stderr, effectiveLevel)
+			needResetup = true
 		}
+	}
+	if !logFormatSet {
+		resolvedFmt, err := resolveLogFormat("", false, cfg.Extensions)
+		if err != nil {
+			fmt.Fprintf(stderr, "sortie: %s\n", err) //nolint:errcheck // stderr write failure is unrecoverable
+			return 1
+		}
+		if resolvedFmt != logging.FormatText {
+			effectiveFormat = resolvedFmt
+			needResetup = true
+		}
+	}
+	if needResetup {
+		logger = logging.Setup(stderr, effectiveLevel, effectiveFormat)
 	}
 
 	serverPort, serverEnabled, portErr := resolveServerPort(*port, portFlagSet, cfg.Extensions)
@@ -246,6 +274,9 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 	}
 	if effectiveLevel != slog.LevelInfo {
 		logAttrs = append(logAttrs, slog.String("log_level", effectiveLevel.String()))
+	}
+	if effectiveFormat != logging.FormatText {
+		logAttrs = append(logAttrs, slog.String("log_format", string(effectiveFormat)))
 	}
 	if *dryRun {
 		logger.Info("sortie dry-run starting", logAttrs...)
@@ -760,6 +791,37 @@ func resolveLogLevel(flagValue string, flagSet bool, extensions map[string]any) 
 	}
 
 	return logging.ParseLevel(levelStr)
+}
+
+// resolveLogFormat determines the effective log output format from the CLI
+// flag and workflow extensions. Precedence: CLI flag > logging.format
+// extension > default (text). All map and type accesses use the comma-ok
+// idiom to avoid panics on unexpected extension shapes.
+func resolveLogFormat(flagValue string, flagSet bool, extensions map[string]any) (logging.Format, error) {
+	if flagSet {
+		return logging.ParseFormat(flagValue)
+	}
+
+	loggingRaw, ok := extensions["logging"]
+	if !ok {
+		return logging.FormatText, nil
+	}
+	loggingExt, ok := loggingRaw.(map[string]any)
+	if !ok {
+		return logging.FormatText, nil
+	}
+
+	formatRaw, ok := loggingExt["format"]
+	if !ok {
+		return logging.FormatText, nil
+	}
+
+	formatStr, ok := formatRaw.(string)
+	if !ok {
+		return "", fmt.Errorf("invalid logging.format: expected string, got %T", formatRaw)
+	}
+
+	return logging.ParseFormat(formatStr)
 }
 
 // --- Dry-run mode ---
