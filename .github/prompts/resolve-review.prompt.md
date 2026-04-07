@@ -63,7 +63,7 @@ Not every valid concern belongs in the current change. When you classify a comme
 
 Apply these filters in order:
 
-1. **Architecture conflict gate.** Read the relevant section of [architecture.md](../../docs/architecture.md). If the suggestion contradicts the spec's design intent — not just its current implementation — it does not belong in the backlog. Explain why in the summary and stop here.
+1. **Architecture conflict gate.** Read the relevant section of [Architecture](../../docs/architecture.md). If the suggestion contradicts the spec's design intent — not just its current implementation — it does not belong in the backlog. Explain why in the summary and stop here.
 2. **Duplicate check.** Search open issues for existing work that covers this concern, even partially. If one exists, note the issue number in the summary and stop here — do not create duplicates.
 3. **Scope test.** Would this realistically matter within the scope of open milestones? If it is aspirational work beyond the current roadmap's horizon, mention it in the summary as a future consideration and stop here.
 
@@ -130,7 +130,7 @@ Do NOT reply to comments that were Applied, Deferred, Already Addressed, Stale, 
 ## Guiding Principles
 
 1. **Quality is paramount.** Never apply a change that makes the work worse, regardless of who suggested it.
-2. **Respect the project's philosophy.** Changes must be consistent with established conventions. Reject suggestions that contradict architectural patterns defined in [architecture.md](../../docs/architecture.md).
+2. **Respect the project's philosophy.** Changes must be consistent with established conventions. Reject suggestions that contradict architectural patterns defined in [Architecture](../../docs/architecture.md).
 3. **Think like a maintainer, not a people-pleaser.** The goal is not to mark every comment as "resolved." The goal is to ship correct, maintainable work.
 4. **Be thorough but surgical.** Apply the minimum change that fully addresses the concern.
 5. **Explain every decision.** Document your reasoning for every apply, skip, or reject.

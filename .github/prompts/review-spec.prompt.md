@@ -9,7 +9,7 @@ I'm an Anthropic employee working on the Sortie project.
 
 Your task is to conduct an in-depth architectural review of the specification described below. Ground the review in codebase reality by studying project docs, existing patterns, and module structure before evaluating.
 
-Before writing anything, read the relevant sections of [architecture.md](../../docs/architecture.md) — this is the authoritative specification for all domain models, state machines, algorithms, and validation rules.
+Before writing anything, read the relevant sections of [Architecture](../../docs/architecture.md) — this is the authoritative specification for all domain models, state machines, algorithms, and validation rules.
 
 Apply review standards from: [Code Review Guidelines](../instructions/code-review.instructions.md)
 

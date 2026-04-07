@@ -11,7 +11,7 @@ Your task is to implement the requested feature following the project's architec
 
 **Your scope: production `.go` files only.** Test files (`*_test.go`) are handled by the Tester agent via handoff after you finish. Focus entirely on implementation.
 
-Before writing any code, read the relevant sections of [architecture.md](../../docs/architecture.md) — this is the authoritative specification. Drift from the spec is a bug.
+Before writing any code, read the relevant sections of [Architecture](../../docs/architecture.md) — this is the authoritative specification. Drift from the spec is a bug.
 
 **If a plan exists:** execute it strictly phase-by-phase. Complete each step, verify it compiles (`make build`) and passes lint (`make lint`), then proceed to the next. Do not skip steps or reorder phases.
 
