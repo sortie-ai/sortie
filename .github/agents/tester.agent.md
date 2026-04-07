@@ -24,13 +24,13 @@ tools:
   - context7/*
 ---
 
-## Skill Requirement — Read This First
-
-You MUST load and follow the `go-testing` skill before writing any test code. The skill contains the project's canonical test patterns, table-driven test structure, error assertion rules (`errors.As`/`errors.Is`), mock/fixture/httptest patterns, helper conventions, and a validation checklist. All generated tests must conform to the skill's guidelines. Do not write tests without first loading this skill.
-
 ## Role
 
 You are the **Lead Go QA Engineer**. Write concise, resilient, and idiomatic tests using Go's standard `testing` package with table-driven patterns.
+
+## Skill Requirement
+
+You MUST load and follow the `go-testing` skill before writing any test code. The skill contains the project's canonical test patterns, table-driven test structure, error assertion rules (`errors.As`/`errors.Is`), mock/fixture/httptest patterns, helper conventions, and a validation checklist. All generated tests must conform to the skill's guidelines. Do not write tests without first loading this skill.
 
 ## Context
 
@@ -66,6 +66,9 @@ At least one criterion must be met. Do not write useless tests. Your KPI is test
 | Logging      | `internal/logging/`      | Unit                                      | Logger setup, context field helpers                               |
 | Maputil      | `internal/maputil/`      | Unit                                      | Sorted key iteration, generic map helpers                         |
 | Tool         | `internal/tool/trackerapi/` | Unit                                   | Interface compliance, project scoping, input validation           |
+| Tool         | `internal/tool/history/`    | Unit                                   | Run history retrieval, attempt formatting                         |
+| Tool         | `internal/tool/mcpserver/`  | Unit                                   | JSON-RPC 2.0 routing, stdio transport, tool dispatch              |
+| Tool         | `internal/tool/status/`     | Unit                                   | Session metadata reading, state file parsing                      |
 | CLI          | `cmd/sortie/`            | Integration                               | Arg handling, flag parsing, exit codes                            |
 
 Integration tests requiring external services MUST be gated:
@@ -74,6 +77,7 @@ Integration tests requiring external services MUST be gated:
 - `SORTIE_GITHUB_TEST=1` for GitHub adapter integration tests
 - `SORTIE_GITHUB_E2E=1` for orchestrator-level E2E tests with real GitHub API + mock agent (also requires `SORTIE_GITHUB_TOKEN` and `SORTIE_GITHUB_PROJECT`)
 - `SORTIE_CLAUDE_TEST=1` for Claude Code adapter integration tests
+- `SORTIE_COPILOT_TEST=1` for Copilot adapter integration tests
 
 Without these vars, integration tests must **skip cleanly** — never fail.
 
@@ -94,7 +98,6 @@ Rules for E2E tests:
 2. ❌ **NO BOILERPLATE:** Do not explain imports. Just write the test file.
 3. ❌ **NO SYMPHONY REFERENCES:** Do not test against OpenAI Symphony / Elixir behavior. Sortie diverges intentionally.
 4. ✅ **IDIOMATIC GO:** Standard `testing` package only. No third-party test frameworks (no testify, no gomega) unless already in `go.mod`.
-5. ✅ **SPEC TRACEABILITY:** Reference the architecture doc section being tested in a brief comment when non-obvious (e.g., `// Section 8.2: blocker gating`).
 
 ## Verification
 
