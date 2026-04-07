@@ -1,0 +1,68 @@
+# Build artifacts
+dist/
+sortie
+sortie.exe
+*.test
+*.out
+coverage.*
+*.coverprofile
+profile.cov
+
+# Git
+.git
+.gitignore
+
+# IDE
+.vscode
+
+# Documentation
+docs/
+blog/
+website/
+*.md
+
+# CI and project config
+.github/
+.goreleaser.yaml
+.golangci.yml
+codecov.yml
+
+# SQLite state files
+.sortie.db
+.sortie.db-shm
+.sortie.db-wal
+
+# Git config and attributes
+.gitignore
+.gitattributes
+
+# Build tools and configs
+.tool-versions
+Makefile
+default.mk
+
+# Logs
+*.log
+
+# Environment files
+.env
+.env.*
+
+# Test fixtures and examples
+examples/
+workspaces/
+scripts/
+
+# Agent plans, specs, findings
+.findings/
+.plans/
+.reviews/
+.specs/
+.tasks/
+
+# Go workspace
+go.work
+go.work.sum
+
+# Install script
+install.sh
