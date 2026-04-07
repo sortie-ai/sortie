@@ -1,0 +1,18 @@
+# ClusterIP Service exposing the Sortie HTTP observability server.
+apiVersion: v1
+kind: Service
+metadata:
+  name: sortie
+  labels:
+    app.kubernetes.io/name: sortie
+    app.kubernetes.io/component: orchestrator
+    app.kubernetes.io/part-of: sortie
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: sortie
+  ports:
+    - name: http
+      port: 7678
+      targetPort: http
+      protocol: TCP

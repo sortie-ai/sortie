@@ -1,0 +1,103 @@
+# Sortie Deployment — single-replica with Recreate strategy.
+# SQLite requires exclusive filesystem access; do not increase replicas.
+#
+# The default image assumes you have built an agent-specific image using one
+# of the Dockerfiles in examples/docker/. The base distroless image
+# (ghcr.io/sortie-ai/sortie) does not bundle an agent.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sortie
+  labels:
+    app.kubernetes.io/name: sortie
+    app.kubernetes.io/component: orchestrator
+    app.kubernetes.io/part-of: sortie
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: sortie
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: sortie
+        app.kubernetes.io/component: orchestrator
+        app.kubernetes.io/part-of: sortie
+    spec:
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: sortie
+          # Replace with your own agent image built from examples/docker/.
+          image: sortie-claude:latest
+          args:
+            - "--host"
+            - "0.0.0.0"
+            - "--log-format"
+            - "json"
+            - "--data-dir"
+            - "/home/sortie/data"
+            - "/home/sortie/WORKFLOW.md"
+          ports:
+            - name: http
+              containerPort: 7678
+              protocol: TCP
+          envFrom:
+            - secretRef:
+                name: sortie-secrets
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          startupProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            failureThreshold: 30
+            periodSeconds: 2
+          livenessProbe:
+            httpGet:
+              path: /livez
+              port: http
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+            periodSeconds: 10
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          volumeMounts:
+            - name: data
+              mountPath: /home/sortie/data
+            - name: workflow
+              mountPath: /home/sortie/WORKFLOW.md
+              subPath: WORKFLOW.md
+              readOnly: true
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: sortie-data
+        - name: workflow
+          configMap:
+            name: sortie-workflow
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi
