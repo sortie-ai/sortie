@@ -16,7 +16,9 @@ import (
 type Format string
 
 const (
+	// FormatText selects key=value text output via [slog.NewTextHandler].
 	FormatText Format = "text"
+	// FormatJSON selects JSON output via [slog.NewJSONHandler].
 	FormatJSON Format = "json"
 )
 
