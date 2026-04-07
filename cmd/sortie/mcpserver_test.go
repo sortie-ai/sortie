@@ -24,6 +24,9 @@ func TestRunMCPServer_Help_ReturnsZero(t *testing.T) {
 	if code != 0 {
 		t.Errorf("runMCPServer(--help) = %d, want 0", code)
 	}
+	if !strings.Contains(stdout.String(), "--workflow PATH") {
+		t.Errorf("stdout = %q, want to contain %q", stdout.String(), "--workflow PATH")
+	}
 }
 
 func TestRunMCPServer_MissingWorkflow_ReturnsOne(t *testing.T) {
@@ -183,5 +186,21 @@ func TestMCPServer_StatusTool_Dispatch(t *testing.T) {
 	}
 	if got, ok := tokens["cache_read_tokens"].(float64); !ok || got != 800 {
 		t.Errorf("tokens.cache_read_tokens = %v, want 800", tokens["cache_read_tokens"])
+	}
+}
+
+func TestMCPServerShortHelp(t *testing.T) {
+	t.Parallel()
+
+	var stdout, stderr bytes.Buffer
+	code := runMCPServer(context.Background(), []string{"-h"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("runMCPServer([-h]) = %d, want 0", code)
+	}
+	if !strings.Contains(stdout.String(), "--workflow") {
+		t.Errorf("runMCPServer([-h]) stdout = %q, want to contain %q", stdout.String(), "--workflow")
+	}
+	if stderr.Len() != 0 {
+		t.Errorf("runMCPServer([-h]) stderr = %q, want empty", stderr.String())
 	}
 }

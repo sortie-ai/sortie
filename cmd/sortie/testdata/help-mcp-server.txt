@@ -1,0 +1,14 @@
+Start the MCP stdio server for agent-to-orchestrator communication.
+
+The server communicates over stdin/stdout using JSON-RPC per the Model
+Context Protocol specification. It is intended to be spawned by the
+agent runtime, not run manually.
+
+Usage:
+  sortie mcp-server [flags]
+
+Flags:
+  --workflow PATH   Path to workflow file (required)
+
+Global flags:
+  -h, --help        Print this help message and quit

@@ -177,7 +177,13 @@ func TestRunUnknownFlag(t *testing.T) {
 		t.Fatalf("exit code = %d, want 1", code)
 	}
 	if stderr.Len() == 0 {
-		t.Error("stderr should contain usage text")
+		t.Error("stderr should contain error message")
+	}
+	if !strings.Contains(stderr.String(), "sortie:") {
+		t.Errorf("stderr = %q, want to contain %q", stderr.String(), "sortie:")
+	}
+	if stdout.Len() != 0 {
+		t.Errorf("stdout = %q, want empty on error", stdout.String())
 	}
 }
 
@@ -1747,8 +1753,8 @@ func TestValidateHelp(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("run(validate --help) = %d, want 0", code)
 	}
-	if !strings.Contains(stderr.String(), "format") {
-		t.Errorf("stderr = %q, want usage text containing %q", stderr.String(), "format")
+	if !strings.Contains(stdout.String(), "format") {
+		t.Errorf("stdout = %q, want help text containing %q", stdout.String(), "format")
 	}
 }
 
@@ -4112,5 +4118,83 @@ Do {{ .issue.title }}.
 	}
 	if !strings.Contains(stderr.String(), "invalid logging.format") {
 		t.Errorf("stderr = %q, want to contain %q", stderr.String(), "invalid logging.format")
+	}
+}
+
+func TestRunShortHelp(t *testing.T) {
+	t.Parallel()
+
+	var stdout, stderr bytes.Buffer
+	ctx := context.Background()
+
+	code := run(ctx, []string{"-h"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("run([-h]) = %d, want 0", code)
+	}
+	if stdout.Len() == 0 {
+		t.Fatal("run([-h]) stdout is empty, want help text")
+	}
+	if !strings.Contains(stdout.String(), "Turn issue tracker tickets") {
+		t.Errorf("run([-h]) stdout = %q, want to contain %q", stdout.String(), "Turn issue tracker tickets")
+	}
+	if stderr.Len() != 0 {
+		t.Errorf("run([-h]) stderr = %q, want empty", stderr.String())
+	}
+}
+
+func TestRunShortVersion(t *testing.T) {
+	t.Parallel()
+
+	var stdout, stderr bytes.Buffer
+	ctx := context.Background()
+
+	code := run(ctx, []string{"-V"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("run([-V]) = %d, want 0", code)
+	}
+	if !strings.Contains(stdout.String(), "sortie ") {
+		t.Errorf("run([-V]) stdout = %q, want to contain %q", stdout.String(), "sortie ")
+	}
+	if !strings.Contains(stdout.String(), "Copyright") {
+		t.Errorf("run([-V]) stdout = %q, want to contain %q", stdout.String(), "Copyright")
+	}
+	if stderr.Len() != 0 {
+		t.Errorf("run([-V]) stderr = %q, want empty", stderr.String())
+	}
+}
+
+func TestRunLongHelp(t *testing.T) {
+	t.Parallel()
+
+	var stdout, stderr bytes.Buffer
+	ctx := context.Background()
+
+	code := run(ctx, []string{"--help"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("run([--help]) = %d, want 0", code)
+	}
+	if !strings.Contains(stdout.String(), "Turn issue tracker tickets") {
+		t.Errorf("run([--help]) stdout = %q, want to contain %q", stdout.String(), "Turn issue tracker tickets")
+	}
+	if stderr.Len() != 0 {
+		t.Errorf("run([--help]) stderr = %q, want empty", stderr.String())
+	}
+}
+
+func TestValidateShortHelp(t *testing.T) {
+	t.Parallel()
+
+	var stdout, stderr bytes.Buffer
+	ctx := context.Background()
+
+	code := run(ctx, []string{"validate", "-h"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("run([validate -h]) = %d, want 0", code)
+	}
+	if !strings.Contains(stdout.String(), "--format") {
+		t.Errorf("run([validate -h]) stdout = %q, want to contain %q", stdout.String(), "--format")
+	}
+	if stderr.Len() != 0 {
+		t.Errorf("run([validate -h]) stderr = %q, want empty", stderr.String())
 	}
 }

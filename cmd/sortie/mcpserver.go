@@ -23,23 +23,18 @@ import (
 )
 
 func runMCPServer(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer) int {
+	if containsHelpFlag(args) {
+		printMCPServerHelp(stdout)
+		return 0
+	}
+
 	fs := flag.NewFlagSet("sortie mcp-server", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	workflowFlag := fs.String("workflow", "", "Absolute path to the WORKFLOW.md file (required)")
 
-	fs.Usage = func() {
-		fmt.Fprintln(stderr, "Usage: sortie mcp-server --workflow <path>")                             //nolint:errcheck // stderr write failure is unrecoverable
-		fmt.Fprintln(stderr)                                                                           //nolint:errcheck // stderr write failure is unrecoverable
-		fmt.Fprintln(stderr, "Start an MCP stdio server that exposes registered agent tools over")     //nolint:errcheck // stderr write failure is unrecoverable
-		fmt.Fprintln(stderr, "JSON-RPC on stdin/stdout. Intended to be launched by an MCP-compatible") //nolint:errcheck // stderr write failure is unrecoverable
-		fmt.Fprintln(stderr, "agent runtime via the generated MCP config, not run manually.")          //nolint:errcheck // stderr write failure is unrecoverable
-		fmt.Fprintln(stderr)                                                                           //nolint:errcheck // stderr write failure is unrecoverable
-		fmt.Fprintln(stderr, "Flags:")                                                                 //nolint:errcheck // stderr write failure is unrecoverable
-		fmt.Fprintln(stderr, "  --workflow    Absolute path to the WORKFLOW.md file (required)")       //nolint:errcheck // stderr write failure is unrecoverable
-	}
-
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
+			printMCPServerHelp(stdout)
 			return 0
 		}
 		fmt.Fprintf(stderr, "sortie mcp-server: %s\n", err) //nolint:errcheck // stderr write failure is unrecoverable

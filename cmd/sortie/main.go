@@ -3,8 +3,9 @@
 // ./WORKFLOW.md), a --log-level flag to control log verbosity,
 // a --log-format flag to select text or JSON output encoding, --port
 // and --host flags for the HTTP observability server, and a "validate"
-// subcommand for offline workflow file validation. The HTTP server starts
-// by default on port 7678; --port 0 disables it.
+// subcommand for offline workflow file validation. Short aliases -h
+// (help) and -V (version) are supported alongside their long forms.
+// The HTTP server starts by default on port 7678; --port 0 disables it.
 // Start with [run] for the complete startup and shutdown lifecycle.
 package main
 
@@ -83,6 +84,19 @@ func main() {
 }
 
 func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer) int {
+	// Intercept short flags (-h, -V) before subcommand dispatch or flag
+	// parsing, because the flag package does not recognize single-dash
+	// aliases for long flags.
+	action, _ := interceptShortFlags(args)
+	if action == "help" {
+		printHelp(stdout)
+		return 0
+	}
+	if action == "version" {
+		fmt.Fprint(stdout, versionBanner()) //nolint:errcheck // stdout write failure is unrecoverable
+		return 0
+	}
+
 	// Subcommand dispatch — must occur before top-level flag parsing
 	// because subcommands define their own flag sets.
 	if len(args) > 0 && args[0] == "validate" {
@@ -93,7 +107,7 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 	}
 
 	fs := flag.NewFlagSet("sortie", flag.ContinueOnError)
-	fs.SetOutput(stderr)
+	fs.SetOutput(io.Discard)
 	logFormat := fs.String("log-format", "", `Log output format: "text", "json" (default "text")`)
 	logLevel := fs.String("log-level", "", `Log verbosity: "debug", "info", "warn", "error" (default "info")`)
 	dryRun := fs.Bool("dry-run", false, "Run one poll cycle without spawning agents or writing to the database, then exit")
@@ -103,24 +117,12 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 	showVersion := fs.Bool("version", false, "Print program's version information and quit")
 	dumpVersion := fs.Bool("dumpversion", false, "Print the version of the program and don't do anything else")
 
-	// Single-dash flags are a deliberate convention for -dumpversion (GCC
-	// style). All other flags use double-dash in help text. The stdlib
-	// flag package accepts both forms regardless of how they are displayed.
-	singleDashFlags := map[string]bool{"dumpversion": true}
-	fs.Usage = func() {
-		fmt.Fprintf(fs.Output(), "Usage: sortie [flags] [workflow-path]\n")                       //nolint:errcheck // stderr write failure is unrecoverable
-		fmt.Fprintf(fs.Output(), "       sortie validate [--format text|json] [workflow-path]\n") //nolint:errcheck // stderr write failure is unrecoverable
-		fmt.Fprintf(fs.Output(), "       sortie mcp-server --workflow <path>\n\nFlags:\n")        //nolint:errcheck // stderr write failure is unrecoverable
-		fs.VisitAll(func(f *flag.Flag) {
-			prefix := "--"
-			if singleDashFlags[f.Name] {
-				prefix = "-"
-			}
-			fmt.Fprintf(fs.Output(), "  %s%s\t%s\n", prefix, f.Name, f.Usage) //nolint:errcheck // stderr write failure is unrecoverable
-		})
-	}
-
 	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			printHelp(stdout)
+			return 0
+		}
+		fmt.Fprintf(stderr, "sortie: %s\n", err) //nolint:errcheck // stderr write failure is unrecoverable
 		return 1
 	}
 
@@ -951,21 +953,18 @@ type validateDiag struct {
 }
 
 func runValidate(_ context.Context, args []string, stdout io.Writer, stderr io.Writer) int {
+	if containsHelpFlag(args) {
+		printValidateHelp(stdout)
+		return 0
+	}
+
 	fs := flag.NewFlagSet("sortie validate", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	format := fs.String("format", "text", `Output format: "text" or "json"`)
 
-	fs.Usage = func() {
-		fmt.Fprintf(fs.Output(), "Usage: sortie validate [--format text|json] [workflow-path]\n\nFlags:\n") //nolint:errcheck // stderr write failure is unrecoverable
-		fs.VisitAll(func(f *flag.Flag) {
-			fmt.Fprintf(fs.Output(), "  --%s\t%s (default %q)\n", f.Name, f.Usage, f.DefValue) //nolint:errcheck // stderr write failure is unrecoverable
-		})
-	}
-
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
-			fs.SetOutput(stderr)
-			fs.Usage()
+			printValidateHelp(stdout)
 			return 0
 		}
 		emitDiags(stdout, stderr, *format, []validateDiag{{Severity: "error", Check: "args", Message: err.Error()}}, nil)

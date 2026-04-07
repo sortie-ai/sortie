@@ -1,0 +1,30 @@
+Turn issue tracker tickets into autonomous coding agent sessions.
+
+Usage:
+  sortie [flags] [workflow-path]
+  sortie <command> [flags]
+
+Commands:
+  validate     Validate a workflow file without running it
+  mcp-server   Start the MCP stdio server for agent-to-orchestrator communication
+
+Flags:
+  -h, --help                Print this help message and quit
+  -V, --version             Print program's version information and quit
+  -dumpversion              Print the version of the program and don't do anything else
+
+Run options:
+  --dry-run                 Run one poll cycle without spawning agents, then exit
+  --env-file PATH           Path to .env file for config overrides
+  --log-level LEVEL         Log verbosity: debug, info, warn, error (default: info)
+  --log-format FORMAT       Log output format: text, json (default: text)
+  --host ADDRESS            HTTP server bind address (default: 127.0.0.1)
+  --port PORT               HTTP server port, 0 to disable (default: 7678)
+
+Examples:
+  sortie WORKFLOW.md                     Run orchestrator with a workflow
+  sortie --dry-run WORKFLOW.md           Validate config and poll once without side effects
+  sortie validate --format json w.md     Check workflow syntax, output as JSON
+
+Learn more:
+  https://docs.sortie-ai.com

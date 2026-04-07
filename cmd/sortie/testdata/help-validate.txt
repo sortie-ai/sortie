@@ -1,0 +1,17 @@
+Validate a workflow file without running the orchestrator.
+
+Checks syntax, required fields, and adapter configuration. Exits with
+a non-zero code if validation fails.
+
+Usage:
+  sortie validate [flags] [workflow-path]
+
+Flags:
+  --format FORMAT   Output format: text, json (default: text)
+
+Global flags:
+  -h, --help        Print this help message and quit
+
+Examples:
+  sortie validate WORKFLOW.md
+  sortie validate --format json WORKFLOW.md
