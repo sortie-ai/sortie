@@ -46,6 +46,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `ci_escalations_total` added in dedicated CI Feedback and Integration
   rows. Uses `__inputs`/`DS_PROMETHEUS` pattern for portable data source
   selection.
+
 ### Fixed
 
 - Agent stderr is now surfaced at WARN level when a turn fails instead
