@@ -31,21 +31,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `CGO_ENABLED=0`, `-trimpath`, `-s -w`, tags `osusergo,netgo`.
 - `.dockerignore` excluding build artifacts, `.git`, test fixtures, and
   documentation.
-- Agent-specific example Dockerfiles: `examples/docker/claude-code.Dockerfile`
-  and `examples/docker/copilot.Dockerfile` with non-root user, health
-  checks, and volume mounts. `examples/docker/README.md` documents the
-  COPY pattern, tini/`--init`, and container deployment guidance.
-- Kubernetes deployment examples: `examples/k8s/deployment.yaml`
+- Agent-specific example Dockerfiles:
+  [`docker/claude-code.Dockerfile`](https://github.com/sortie-ai/sortie/blob/1.5.0/examples/docker/claude-code.Dockerfile)
+  and [`docker/copilot.Dockerfile`](https://github.com/sortie-ai/sortie/blob/1.5.0/examples/docker/copilot.Dockerfile)
+  with non-root user, health checks, and volume mounts.
+- Kubernetes deployment examples: [`k8s/deployment.yaml`](https://github.com/sortie-ai/sortie/blob/1.5.0/examples/k8s/deployment.yaml)
   (Recreate strategy, liveness/readiness probes on `/livez` and `/readyz`),
-  `examples/k8s/configmap.yaml`, `examples/k8s/service.yaml`,
-  `examples/k8s/pvc.yaml`, and `examples/k8s/README.md`.
-- Grafana dashboard template at `examples/grafana-dashboard.json`
+  [`k8s/configmap.yaml`](https://github.com/sortie-ai/sortie/blob/1.5.0/examples/k8s/configmap.yaml),
+  [`k8s/service.yaml`](https://github.com/sortie-ai/sortie/blob/1.5.0/examples/k8s/service.yaml),
+  [`k8s/pvc.yaml`](https://github.com/sortie-ai/sortie/blob/1.5.0/examples/k8s/pvc.yaml).
+- Grafana dashboard template at [`grafana-dashboard.json`](https://github.com/sortie-ai/sortie/blob/1.5.0/examples/grafana-dashboard.json)
   covering all 22 Prometheus metrics. Panels for `dispatch_transitions_total`,
   `tracker_comments_total`, `ci_status_checks_total`, and
   `ci_escalations_total` added in dedicated CI Feedback and Integration
   rows. Uses `__inputs`/`DS_PROMETHEUS` pattern for portable data source
   selection.
-
 ### Fixed
 
 - Agent stderr is now surfaced at WARN level when a turn fails instead
