@@ -7,6 +7,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-04-07
+
+### Added
+
+- Always-on HTTP server with default port 7678 (mnemonic: SORT on T9).
+  The server now starts unconditionally; the `--port` flag overrides the
+  default but no longer acts as an activation trigger. Pass `--port=0`
+  to disable. Prometheus metrics, health probes, and dashboard are
+  available out of the box without flags.
+- `--host` CLI flag and `server.host` workflow config field for
+  configurable bind address. Default `127.0.0.1`; container deployments
+  override with `--host 0.0.0.0`. Resolution order: CLI flag > config >
+  default.
+- `--log-format` CLI flag with values `text` (default) and `json`.
+  JSON format emits one JSON object per log line with `time`, `level`,
+  `msg`, and structured fields (`issue_id`, `session_id`, etc.) for
+  integration with Loki, Datadog, CloudWatch, and ELK.
+- Dockerfile: multi-stage build producing a distroless container image
+  with only `/usr/bin/sortie`. Users consume via
+  `COPY --from=ghcr.io/sortie-ai/sortie:latest /usr/bin/sortie /usr/bin/sortie`
+  in their own Dockerfile. Build flags match `.goreleaser.yaml`:
+  `CGO_ENABLED=0`, `-trimpath`, `-s -w`, tags `osusergo,netgo`.
+- `.dockerignore` excluding build artifacts, `.git`, test fixtures, and
+  documentation.
+- Agent-specific example Dockerfiles: `examples/docker/claude-code.Dockerfile`
+  and `examples/docker/copilot.Dockerfile` with non-root user, health
+  checks, and volume mounts. `examples/docker/README.md` documents the
+  COPY pattern, tini/`--init`, and container deployment guidance.
+- Kubernetes deployment examples: `examples/k8s/deployment.yaml`
+  (Recreate strategy, liveness/readiness probes on `/livez` and `/readyz`),
+  `examples/k8s/configmap.yaml`, `examples/k8s/service.yaml`,
+  `examples/k8s/pvc.yaml`, and `examples/k8s/README.md`.
+- Grafana dashboard template at `examples/grafana-dashboard.json`
+  covering all 22 Prometheus metrics. Panels for `dispatch_transitions_total`,
+  `tracker_comments_total`, `ci_status_checks_total`, and
+  `ci_escalations_total` added in dedicated CI Feedback and Integration
+  rows. Uses `__inputs`/`DS_PROMETHEUS` pattern for portable data source
+  selection.
+
+### Fixed
+
+- Agent stderr is now surfaced at WARN level when a turn fails instead
+  of DEBUG. Both Claude Code and Copilot CLI adapters buffer stderr
+  during a turn and log at WARN on non-zero exit, making startup
+  rejections (e.g., `--dangerously-skip-permissions` under root)
+  visible at default log level. Successful turns continue to log stderr
+  at DEBUG.
+
 ## [1.4.0] - 2026-04-04
 
 ### Added
@@ -483,6 +531,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Architecture Decision Records (ADR-0001 through ADR-0005).
 
 [Unreleased]: https://github.com/sortie-ai/sortie/compare/1.4.0...HEAD
+[1.5.0]: https://github.com/sortie-ai/sortie/compare/1.4.0...1.5.0
 [1.4.0]: https://github.com/sortie-ai/sortie/compare/1.3.0...1.4.0
 [1.3.0]: https://github.com/sortie-ai/sortie/compare/1.2.1...1.3.0
 [1.2.1]: https://github.com/sortie-ai/sortie/compare/1.2.0...1.2.1
