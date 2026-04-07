@@ -1,0 +1,16 @@
+# PersistentVolumeClaim for the Sortie SQLite database.
+# SQLite requires exclusive access — ReadWriteOnce is mandatory.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: sortie-data
+  labels:
+    app.kubernetes.io/name: sortie
+    app.kubernetes.io/component: orchestrator
+    app.kubernetes.io/part-of: sortie
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
