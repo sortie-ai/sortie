@@ -43,4 +43,4 @@ EXPOSE 7678
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
     CMD wget -qO /dev/null http://localhost:7678/readyz || exit 1
 
-ENTRYPOINT ["/usr/bin/sortie", "--host", "0.0.0.0"]
+ENTRYPOINT ["/usr/bin/sortie", "--host", "0.0.0.0", "--log-format", "json"]
