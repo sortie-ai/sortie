@@ -63,26 +63,34 @@ func TestGrafanaDashboardCoversAllMetrics(t *testing.T) {
 		t.Fatalf("reading grafana dashboard: %v", err)
 	}
 
+	type panelJSON struct {
+		Targets []struct {
+			Expr string `json:"expr"`
+		} `json:"targets"`
+		Panels []panelJSON `json:"panels"` // collapsed rows nest panels here
+	}
 	var dash struct {
-		Panels []struct {
-			Targets []struct {
-				Expr string `json:"expr"`
-			} `json:"targets"`
-		} `json:"panels"`
+		Panels []panelJSON `json:"panels"`
 	}
 	if err := json.Unmarshal(raw, &dash); err != nil {
 		t.Fatalf("parsing grafana dashboard JSON: %v", err)
 	}
 
-	// Collect all sortie_ base metric names referenced across all panels.
+	// Collect all sortie_ base metric names referenced across all panels,
+	// including panels nested inside collapsed rows.
 	referenced := make(map[string]bool, len(knownSortieMetrics))
-	for _, panel := range dash.Panels {
-		for _, target := range panel.Targets {
-			for _, match := range promqlMetricRE.FindAllString(target.Expr, -1) {
-				referenced[stripHistogramSuffix(match)] = true
+	var walkPanels func([]panelJSON)
+	walkPanels = func(panels []panelJSON) {
+		for _, panel := range panels {
+			for _, target := range panel.Targets {
+				for _, match := range promqlMetricRE.FindAllString(target.Expr, -1) {
+					referenced[stripHistogramSuffix(match)] = true
+				}
 			}
+			walkPanels(panel.Panels)
 		}
 	}
+	walkPanels(dash.Panels)
 
 	for _, name := range knownSortieMetrics {
 		if !referenced[name] {

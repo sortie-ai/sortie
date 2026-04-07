@@ -134,32 +134,7 @@ func TestNewPromMetrics(t *testing.T) {
 
 	families := gatherFamilies(t, m)
 
-	sortieMetrics := []string{
-		"sortie_sessions_running",
-		"sortie_sessions_retrying",
-		"sortie_slots_available",
-		"sortie_active_sessions_elapsed_seconds",
-		"sortie_tokens_total",
-		"sortie_agent_runtime_seconds_total",
-		"sortie_dispatches_total",
-		"sortie_worker_exits_total",
-		"sortie_retries_total",
-		"sortie_reconciliation_actions_total",
-		"sortie_poll_cycles_total",
-		"sortie_tracker_requests_total",
-		"sortie_handoff_transitions_total",
-		"sortie_dispatch_transitions_total",
-		"sortie_tracker_comments_total",
-		"sortie_tool_calls_total",
-		"sortie_poll_duration_seconds",
-		"sortie_worker_duration_seconds",
-		"sortie_ssh_host_usage",
-		"sortie_ci_status_checks_total",
-		"sortie_ci_escalations_total",
-		"sortie_build_info",
-	}
-
-	for _, name := range sortieMetrics {
+	for _, name := range knownSortieMetrics {
 		if _, ok := families[name]; !ok {
 			t.Errorf("expected metric family %q not found", name)
 		}
