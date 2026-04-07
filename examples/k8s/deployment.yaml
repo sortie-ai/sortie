@@ -43,9 +43,10 @@ spec:
             - "0.0.0.0"
             - "--log-format"
             - "json"
-            - "--data-dir"
-            - "/home/sortie/data"
-            - "/home/sortie/WORKFLOW.md"
+            - "/home/sortie/config/WORKFLOW.md"
+          env:
+            - name: SORTIE_DB_PATH
+              value: /home/sortie/data/.sortie.db
           ports:
             - name: http
               containerPort: 7678
@@ -53,6 +54,7 @@ spec:
           envFrom:
             - secretRef:
                 name: sortie-secrets
+                optional: false
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
@@ -86,8 +88,7 @@ spec:
             - name: data
               mountPath: /home/sortie/data
             - name: workflow
-              mountPath: /home/sortie/WORKFLOW.md
-              subPath: WORKFLOW.md
+              mountPath: /home/sortie/config
               readOnly: true
             - name: tmp
               mountPath: /tmp

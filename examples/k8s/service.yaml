@@ -11,6 +11,7 @@ spec:
   type: ClusterIP
   selector:
     app.kubernetes.io/name: sortie
+    app.kubernetes.io/component: orchestrator
   ports:
     - name: http
       port: 7678

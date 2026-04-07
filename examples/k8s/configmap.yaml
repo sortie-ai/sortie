@@ -29,8 +29,10 @@ data:
     polling:
       interval_ms: 45000
 
+    db_path: /home/sortie/data/.sortie.db
+
     workspace:
-      root: /home/sortie/workspaces
+      root: /home/sortie/data/workspaces
 
     agent:
       kind: claude-code
