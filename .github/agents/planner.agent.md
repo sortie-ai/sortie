@@ -10,18 +10,6 @@ tools:
   - read
   - edit
   - search
-handoffs:
-  - label: Start Implementation
-    agent: Coder
-    prompt: Execute the plan strictly phase by phase. STRICTLY follow your instructions.
-  - label: Review Plan
-    agent: Architect
-    prompt: |-
-      Perform a compliance check: compare the Implementation Plan against the Technical Specification.
-
-      1. Identify missing requirements or architectural violations.
-      2. Do NOT edit the plan file. Provide a list of discrepancies.
-      3. If any changes in plan are needed, generate a strict corrective prompt for the Planner agent.
 ---
 
 ## Role
