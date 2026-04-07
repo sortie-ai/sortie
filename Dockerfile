@@ -5,6 +5,7 @@
 #
 #   docker build -t sortie .
 #   docker build --build-arg VERSION=1.5.0 -t sortie .
+#   docker build --build-arg VERSION=1.5.0 --build-arg REVISION=$(git rev-parse HEAD) -t sortie .
 #
 # Consume in your own Dockerfile:
 #
@@ -44,6 +45,19 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 # ── Runtime stage ─────────────────────────────────────────────────────────────
 
 FROM gcr.io/distroless/static-debian13:nonroot
+
+ARG VERSION=dev
+ARG REVISION=""
+
+LABEL org.opencontainers.image.source="https://github.com/sortie-ai/sortie" \
+    org.opencontainers.image.title="sortie" \
+    org.opencontainers.image.description="Spec-first orchestration service for coding agents" \
+    org.opencontainers.image.url="https://github.com/sortie-ai/sortie" \
+    org.opencontainers.image.documentation="https://github.com/sortie-ai/sortie/blob/main/README.md" \
+    org.opencontainers.image.vendor="Sortie AI" \
+    org.opencontainers.image.licenses="Apache-2.0" \
+    org.opencontainers.image.version="${VERSION}" \
+    org.opencontainers.image.revision="${REVISION}"
 
 COPY --from=builder /sortie /usr/bin/sortie
 
