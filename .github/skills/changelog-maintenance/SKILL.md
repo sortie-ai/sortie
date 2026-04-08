@@ -50,9 +50,16 @@ git tag --sort=-version:refname | head -5
 git log --oneline -1 "$(git describe --tags --abbrev=0 2>/dev/null)"
 ```
 
-#### 2b: List merged PRs by milestone
+#### 2b: Determine the release window and list merged PRs
 
-PRs are the authoritative source. Use `gh pr list` filtered by milestone:
+First, find the date of the last tag — this is the start of the release window:
+
+```bash
+# Date of the last tag (use as the window start)
+git log -1 --format="%ai" "$(git describe --tags --abbrev=0 2>/dev/null)"
+```
+
+**Primary: milestone-based** (when milestones are set):
 
 ```bash
 # PRs in a specific milestone (e.g., M10)
@@ -61,14 +68,19 @@ gh pr list --state merged --limit 100 \
   --jq '.[] | select(.milestone != null and (.milestone.title | startswith("M10")))
         | "\(.number)\t\(.mergedAt | split("T")[0])\t\(.title)"' \
   | sort -t$'\t' -k2
-
-# PRs merged in the release window without a milestone
-gh pr list --state merged --limit 100 \
-  --json number,title,mergedAt,milestone \
-  --jq '.[] | select(.milestone == null)
-        | "\(.number)\t\(.mergedAt | split("T")[0])\t\(.title)"' \
-  | sort -t$'\t' -k2 | grep "YYYY-MM-DD_RANGE"
 ```
+
+**Fallback: date-based** (when milestones are not set, replace YYYY-MM-DD with the tag date):
+
+```bash
+gh pr list --state merged --limit 200 \
+  --json number,title,mergedAt,labels \
+  --jq '.[] | select(.mergedAt >= "YYYY-MM-DDT00:00:00Z")
+        | "\(.number)\t\(.mergedAt | split("T")[0])\t\(.title)"' \
+  | sort -t$'\t' -k2
+```
+
+When preparing a new release, the window is: tag date (exclusive) → today.
 
 #### 2c: Inspect individual PRs when needed
 
@@ -76,11 +88,16 @@ gh pr list --state merged --limit 100 \
 # PR title, body (scope/intent), and constituent commits
 gh pr view <NUMBER> --json title,body --jq '"\(.title)\n\(.body)"' | head -40
 gh pr view <NUMBER> --json commits --jq '.commits[].messageHeadline'
+
+# Extract linked issues from the PR body (Closes / Fixes / Resolves / Related to)
+gh pr view <NUMBER> --json body --jq '.body' \
+  | grep -oE '(Closes|Fixes|Resolves|Related to|Part of)[[:space:]]+#[0-9]+'
 ```
 
 Use the PR body's **Scope & Context** section to understand the user-facing
-impact. Do not rely on `git log --oneline` — it shows commits, not logical
-changes.
+impact. Note which issues the PR closes or references — these become part of
+the reference block in the changelog entry. Do not rely on `git log --oneline`
+— it shows commits, not logical changes.
 
 If the user describes changes verbally, use that as the primary source.
 
@@ -105,6 +122,7 @@ Apply the following filter to every commit or change before writing an entry.
 | Removal of feature or public interface                     | Operators must adapt before upgrading |
 | Performance improvement with measurable impact             | Operators benefit from upgrading      |
 | New or changed persistence schema (migration)              | Operators plan upgrade procedures     |
+| Changed CLI flags, env vars, or config file format         | Operators must update deployment config |
 
 **NEVER include — these are noise, not signal:**
 
@@ -148,15 +166,36 @@ Place every surviving entry under exactly one category:
 
 Writing rules:
 
-- **One bullet per merged PR.** A PR is one logical change regardless of how
-  many commits it contains. Review-feedback fixes, follow-up commits, and
-  sub-fixes within the same PR are folded into its single entry.
+- **One bullet per logical change between releases.** A logical change is
+  everything the operator or integrator observes as a single unit of value.
+  It may span multiple PRs and commits if they all deliver, refine, or fix
+  the same capability within the release window.
+- **Fold within-release churn.** If a feature is introduced in one PR and
+  then corrected, polished, or adjusted in subsequent PRs before the release
+  ships, all of that work produces **one** changelog entry describing the
+  final state. From the operator's perspective there was no intermediate
+  broken state — only the delivered result. Do not list each PR separately
+  when they collectively form one observable change.
 - **Fold sub-fixes into the feature entry.** If a PR introduces a feature and
   also fixes a bug discovered during its implementation (e.g., a race
   condition found while adding env overrides), describe the fix as part of
   the feature bullet — do not create a separate Fixed entry. Only create a
-  standalone Fixed entry when a PR's sole purpose is a bug fix.
-- Include the PR number parenthetically for traceability: `(#292)`.
+  standalone Fixed entry when a PR's sole purpose is a bug fix independent of
+  any in-progress feature.
+- Link every PR and issue parenthetically at the end of the bullet using full
+  GitHub URLs — plain `#NNN` is not clickable in rendered markdown. Determine
+  the repo URL from the comparison links at the bottom of CHANGELOG.md or via
+  `git remote get-url origin`.
+  - Issue: `[#NNN](https://github.com/OWNER/REPO/issues/NNN)`
+  - PR: `[#NNN](https://github.com/OWNER/REPO/pull/NNN)`
+  - When both an issue and its implementing PR are available, list both.
+  - When multiple issues or PRs are explicitly linked, list all of them.
+  - Multi-reference format — one reference per line inside the parens:
+    ```
+    ([#398](https://github.com/OWNER/REPO/issues/398),
+    [#403](https://github.com/OWNER/REPO/pull/403))
+    ```
+  - Single reference stays on the same line: `([#403](https://github.com/OWNER/REPO/pull/403))`.
 - Start each bullet with what changed, not with "Fixed" or "Added" (the heading
   already says that).
 - Be specific: "`coroutine 'main' was never awaited` bug after async migration"
@@ -242,7 +281,9 @@ To cut a release:
 
 | Anti-pattern | Why it's wrong | Correct approach |
 | --- | --- | --- |
-| One entry per commit | Commits are implementation steps, not logical changes. A 6-commit PR produces one changelog bullet. | Use `gh pr list` to enumerate PRs; write one bullet per PR. |
+| One entry per commit | Commits are implementation steps, not logical changes. A 6-commit PR produces one changelog bullet. | Use `gh pr list` to enumerate PRs; write one bullet per logical change. |
+| One entry per PR when multiple PRs deliver the same feature | Between releases, a feature PR plus its follow-up fix PRs are one observable change. Listing each separately implies the operator saw an intermediate broken state they never did. | Group all within-release PRs that touch the same capability into a single bullet describing the final result. |
 | Separate "Fixed" entry for a sub-fix within a feature PR | Inflates the changelog and obscures that the fix was part of the feature delivery. | Fold the fix into the feature's Added bullet (e.g., "…with race-safe access" instead of a separate Fixed entry). |
-| Using `git log --oneline` as the primary source | Produces commit-level noise: test commits, review feedback, merge commits, formatting fixes. | Query merged PRs via `gh pr list --state merged` filtered by milestone. |
-| Omitting PR numbers | Makes it hard to trace entries back to the code change. | Include `(#NNN)` in every entry. |
+| Using `git log --oneline` as the primary source | Produces commit-level noise: test commits, review feedback, merge commits, formatting fixes. | Query merged PRs via `gh pr list --state merged` filtered by milestone or date range since the last git tag. |
+| Plain `#NNN` references | Not clickable in rendered markdown — readers must manually construct the URL to navigate to the change. | Use `[#NNN](https://github.com/OWNER/REPO/pull/NNN)` for PRs and `[#NNN](https://github.com/OWNER/REPO/issues/NNN)` for issues. |
+| Omitting issue links | PR numbers alone lose the problem context; readers must search to understand what was fixed. | When a PR closes or references an issue, include both the issue link and the PR link. When multiple issues or PRs are explicitly linked, list all of them. |
