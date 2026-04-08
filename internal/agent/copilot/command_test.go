@@ -304,6 +304,16 @@ func TestBuildArgs(t *testing.T) {
 				assertHasArgPair(t, args, "--additional-mcp-config", "@/ws/.sortie/mcp.json")
 			},
 		},
+		{
+			name:   "whitespace-only operator mcp config omitted",
+			state:  &sessionState{},
+			prompt: "p",
+			pt:     passthroughConfig{MCPConfig: "   "},
+			check: func(t *testing.T, args []string) {
+				t.Helper()
+				assertNoFlag(t, args, "--additional-mcp-config")
+			},
+		},
 	}
 
 	for _, tt := range tests {

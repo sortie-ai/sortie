@@ -96,8 +96,8 @@ func buildArgs(state *sessionState, prompt string, pt passthroughConfig) []strin
 	}
 	if state.mcpConfigPath != "" {
 		args = append(args, "--additional-mcp-config", "@"+state.mcpConfigPath)
-	} else if pt.MCPConfig != "" {
-		args = append(args, "--additional-mcp-config", formatMCPConfigValue(pt.MCPConfig))
+	} else if v := formatMCPConfigValue(pt.MCPConfig); v != "" {
+		args = append(args, "--additional-mcp-config", v)
 	}
 	if pt.DisableBuiltinMCPs {
 		args = append(args, "--disable-builtin-mcps")
