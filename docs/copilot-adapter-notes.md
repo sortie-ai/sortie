@@ -580,7 +580,7 @@ is set.
 
 | Exit Code                | Meaning                                  | Adapter mapping                                   |
 | ------------------------ | ---------------------------------------- | ------------------------------------------------- |
-| 0                        | Success (task completed or autopilot ended normally) | `turn_completed`                        |
+| 0                        | Success (task completed or autopilot ended normally). If no `result` event was received and cumulative output tokens are zero, treated as `turn_failed` (no-output safety heuristic). | `turn_completed` or `turn_failed` (no-output heuristic) |
 | Non-zero                 | General error                            | `turn_failed`                                     |
 | 127                      | `copilot` binary not found               | `agent_not_found`                                 |
 | Signal (SIGTERM/SIGKILL) | Killed by adapter or OS                  | `turn_cancelled`                                  |
@@ -636,6 +636,11 @@ From [github/copilot-cli issues](https://github.com/github/copilot-cli/issues):
   The documented syntax for file input is `@<path>` (`github/copilot-cli#428`). Earlier
   versions (≤1.0.18) had an undocumented fallback that recognized bare paths; this fallback
   was removed. The Sortie adapter now uses the `@` prefix consistently.
+- **Config parsing errors exit 0 without output** (observed v1.0.21, fixed by PR #405 for
+  the `@` prefix case): When Copilot CLI fails to parse `--additional-mcp-config`, it exits 0
+  without emitting any JSONL events. The adapter's no-output heuristic detects this as
+  `turn_failed`. Operators should check WARN-level logs for the stderr content explaining the
+  parse failure.
 
 ---
 
