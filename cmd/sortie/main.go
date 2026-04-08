@@ -87,7 +87,7 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 	// Intercept short flags (-h, -V) before subcommand dispatch or flag
 	// parsing, because the flag package does not recognize single-dash
 	// aliases for long flags.
-	action, _ := interceptShortFlags(args)
+	action := interceptShortFlags(args)
 	if action == "help" {
 		printHelp(stdout)
 		return 0

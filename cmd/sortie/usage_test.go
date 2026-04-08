@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"os"
-	"reflect"
 	"testing"
 )
 
@@ -65,42 +64,31 @@ func TestInterceptShortFlags(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name           string
-		args           []string
-		wantAction     string
-		wantReturnArgs bool // true: remaining should equal args; false: remaining should be nil
+		name       string
+		args       []string
+		wantAction string
 	}{
-		{name: "-h", args: []string{"-h"}, wantAction: "help", wantReturnArgs: false},
-		{name: "-V", args: []string{"-V"}, wantAction: "version", wantReturnArgs: false},
-		{name: "-help", args: []string{"-help"}, wantAction: "help", wantReturnArgs: false},
-		{name: "-h after other flags", args: []string{"--dry-run", "-h"}, wantAction: "help", wantReturnArgs: false},
-		{name: "-V after other flags", args: []string{"--dry-run", "-V"}, wantAction: "version", wantReturnArgs: false},
-		{name: "validate before -h", args: []string{"validate", "-h"}, wantAction: "", wantReturnArgs: true},
-		{name: "mcp-server before -h", args: []string{"mcp-server", "-h"}, wantAction: "", wantReturnArgs: true},
-		{name: "-- before -h", args: []string{"--", "-h"}, wantAction: "", wantReturnArgs: true},
-		{name: "positional arg only", args: []string{"WORKFLOW.md"}, wantAction: "", wantReturnArgs: true},
-		{name: "empty args", args: []string{}, wantAction: "", wantReturnArgs: true},
-		{name: "-h before validate", args: []string{"-h", "validate"}, wantAction: "help", wantReturnArgs: false},
+		{name: "-h", args: []string{"-h"}, wantAction: "help"},
+		{name: "-V", args: []string{"-V"}, wantAction: "version"},
+		{name: "-help", args: []string{"-help"}, wantAction: "help"},
+		{name: "-h after other flags", args: []string{"--dry-run", "-h"}, wantAction: "help"},
+		{name: "-V after other flags", args: []string{"--dry-run", "-V"}, wantAction: "version"},
+		{name: "validate before -h", args: []string{"validate", "-h"}, wantAction: ""},
+		{name: "mcp-server before -h", args: []string{"mcp-server", "-h"}, wantAction: ""},
+		{name: "-- before -h", args: []string{"--", "-h"}, wantAction: ""},
+		{name: "positional arg only", args: []string{"WORKFLOW.md"}, wantAction: ""},
+		{name: "empty args", args: []string{}, wantAction: ""},
+		{name: "-h before validate", args: []string{"-h", "validate"}, wantAction: "help"},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			action, remaining := interceptShortFlags(tt.args)
+			action := interceptShortFlags(tt.args)
 
 			if action != tt.wantAction {
-				t.Errorf("interceptShortFlags(%v) action = %q, want %q", tt.args, action, tt.wantAction)
-			}
-
-			if tt.wantReturnArgs {
-				if !reflect.DeepEqual(remaining, tt.args) {
-					t.Errorf("interceptShortFlags(%v) remaining = %v, want original args %v", tt.args, remaining, tt.args)
-				}
-			} else {
-				if remaining != nil {
-					t.Errorf("interceptShortFlags(%v) remaining = %v, want nil", tt.args, remaining)
-				}
+				t.Errorf("interceptShortFlags(%v) = %q, want %q", tt.args, action, tt.wantAction)
 			}
 		})
 	}

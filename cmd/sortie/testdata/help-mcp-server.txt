@@ -8,7 +8,7 @@ Usage:
   sortie mcp-server [flags]
 
 Flags:
-  --workflow PATH   Path to workflow file (required)
+  --workflow PATH   Absolute path to workflow file (required)
 
 Global flags:
   -h, --help        Print this help message and quit

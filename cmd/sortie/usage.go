@@ -6,7 +6,7 @@ import (
 )
 
 func printHelp(w io.Writer) {
-	fmt.Fprint(w, //nolint:errcheck // stdout write failure is unrecoverable
+	fmt.Fprint(w, //nolint:errcheck // help output write failure is unrecoverable
 		`Turn issue tracker tickets into autonomous coding agent sessions.
 
 Usage:
@@ -41,7 +41,7 @@ Learn more:
 }
 
 func printValidateHelp(w io.Writer) {
-	fmt.Fprint(w, //nolint:errcheck // stdout write failure is unrecoverable
+	fmt.Fprint(w, //nolint:errcheck // help output write failure is unrecoverable
 		`Validate a workflow file without running the orchestrator.
 
 Checks syntax, required fields, and adapter configuration. Exits with
@@ -63,7 +63,7 @@ Examples:
 }
 
 func printMCPServerHelp(w io.Writer) {
-	fmt.Fprint(w, //nolint:errcheck // stdout write failure is unrecoverable
+	fmt.Fprint(w, //nolint:errcheck // help output write failure is unrecoverable
 		`Start the MCP stdio server for agent-to-orchestrator communication.
 
 The server communicates over stdin/stdout using JSON-RPC per the Model
@@ -74,7 +74,7 @@ Usage:
   sortie mcp-server [flags]
 
 Flags:
-  --workflow PATH   Path to workflow file (required)
+  --workflow PATH   Absolute path to workflow file (required)
 
 Global flags:
   -h, --help        Print this help message and quit
@@ -84,22 +84,22 @@ Global flags:
 // interceptShortFlags scans args for short help (-h, -help) and short
 // version (-V) flags before the flag package sees them. Subcommand
 // tokens and the POSIX "--" terminator stop the scan immediately.
-func interceptShortFlags(args []string) (action string, remaining []string) {
+func interceptShortFlags(args []string) string {
 	for _, arg := range args {
 		if arg == "validate" || arg == "mcp-server" {
-			return "", args
+			return ""
 		}
 		if arg == "--" {
-			return "", args
+			return ""
 		}
 		if arg == "-h" || arg == "-help" {
-			return "help", nil
+			return "help"
 		}
 		if arg == "-V" {
-			return "version", nil
+			return "version"
 		}
 	}
-	return "", args
+	return ""
 }
 
 // containsHelpFlag reports whether args contains a help flag (-h, -help,
