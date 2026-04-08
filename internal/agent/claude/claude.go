@@ -201,11 +201,13 @@ func (a *ClaudeCodeAdapter) StartSession(_ context.Context, params domain.StartS
 // and reading JSONL events from stdout. Events are delivered
 // synchronously via params.OnEvent.
 //
-// Subprocess lifecycle uses [exec.CommandContext] with [exec.Cmd].Cancel
-// set to send [syscall.SIGTERM] and [exec.Cmd].WaitDelay set to 5
-// seconds. This preserves the SIGTERM-first invariant: on context
-// cancellation the agent receives SIGTERM and has 5 seconds to flush
-// output before SIGKILL is sent automatically.
+// The subprocess is placed in its own process group via
+// [procutil.SetProcessGroup]. On context cancellation, [exec.Cmd].Cancel
+// sends SIGTERM to the entire process group via
+// [procutil.SignalProcessGroup], and [exec.Cmd].WaitDelay of 5 seconds
+// provides a grace period before Go sends SIGKILL to the group leader.
+// After [exec.Cmd.Wait] returns, a best-effort SIGKILL is sent to the
+// group to reap any children that survived SIGTERM.
 func (a *ClaudeCodeAdapter) RunTurn(ctx context.Context, session domain.Session, params domain.RunTurnParams) (domain.TurnResult, error) {
 	if params.OnEvent == nil {
 		panic("claude: OnEvent must be non-nil")
@@ -234,8 +236,9 @@ func (a *ClaudeCodeAdapter) RunTurn(ctx context.Context, session domain.Session,
 	} else {
 		cmd = exec.CommandContext(cmdCtx, state.command, args...) //nolint:gosec // args are constructed programmatically
 	}
+	procutil.SetProcessGroup(cmd)
 	cmd.Cancel = func() error {
-		return cmd.Process.Signal(syscall.SIGTERM)
+		return procutil.SignalProcessGroup(cmd.Process.Pid, syscall.SIGTERM)
 	}
 	cmd.WaitDelay = 5 * time.Second
 	cmd.Dir = state.workspacePath
@@ -467,8 +470,9 @@ func (a *ClaudeCodeAdapter) RunTurn(ctx context.Context, session domain.Session,
 
 	if scanErr := scanner.Err(); scanErr != nil {
 		cancelCmd()
-		stderrLines := stderrCollector.Lines() // drain before cmd.Wait() closes the pipe
-		cmd.Wait()                             //nolint:errcheck,gosec // best-effort reap; exit code is irrelevant on scanner failure
+		stderrLines := stderrCollector.Lines()     // drain before cmd.Wait() closes the pipe
+		cmd.Wait()                                 //nolint:errcheck,gosec // best-effort reap; exit code is irrelevant on scanner failure
+		procutil.KillProcessGroup(cmd.Process.Pid) //nolint:errcheck,gosec // best-effort cleanup of surviving group members
 		close(waitCh)
 		state.mu.Lock()
 		state.proc = nil
@@ -521,6 +525,7 @@ func (a *ClaudeCodeAdapter) RunTurn(ctx context.Context, session domain.Session,
 	// cmd.Wait is the sole waiter; StopSession only signals and
 	// waits on waitCh.
 	waitErr := cmd.Wait()
+	procutil.KillProcessGroup(cmd.Process.Pid) //nolint:errcheck,gosec // best-effort cleanup of surviving group members
 	close(waitCh)
 
 	state.mu.Lock()
@@ -685,16 +690,16 @@ func (a *ClaudeCodeAdapter) StopSession(ctx context.Context, session domain.Sess
 		return nil
 	}
 
-	_ = proc.Signal(syscall.SIGTERM) //nolint:errcheck // best-effort signal; process may already be dead
+	_ = procutil.SignalProcessGroup(proc.Pid, syscall.SIGTERM) //nolint:errcheck // best-effort signal; process may already be dead
 
 	select {
 	case <-waitCh:
 		return nil
 	case <-time.After(5 * time.Second):
-		_ = proc.Kill() //nolint:errcheck // best-effort kill
+		_ = procutil.KillProcessGroup(proc.Pid) //nolint:errcheck // best-effort kill
 		return nil
 	case <-ctx.Done():
-		_ = proc.Kill() //nolint:errcheck // best-effort kill
+		_ = procutil.KillProcessGroup(proc.Pid) //nolint:errcheck // best-effort kill
 		return ctx.Err()
 	}
 }
