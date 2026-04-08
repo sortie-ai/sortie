@@ -27,7 +27,7 @@ import (
 )
 
 // runTestTimeout is the context timeout used by tests that exercise the
-// full run() startup sequence. These tests verify startup behaviour
+// full run() startup sequence. These tests verify startup behavior
 // (logging, DB creation, flag parsing) and do not need to wait for a
 // poll cycle — the orchestrator shuts down as soon as the context
 // expires. Keep this short to avoid a cumulative 100+ second test suite.
