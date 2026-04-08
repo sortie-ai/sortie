@@ -258,7 +258,7 @@ func TestBuildArgs(t *testing.T) {
 				assertHasArgPair(t, args, "--deny-tool", "ask_user")
 				assertHasArgPair(t, args, "--available-tools", "bash")
 				assertHasArgPair(t, args, "--excluded-tools", "web_fetch")
-				assertHasArgPair(t, args, "--additional-mcp-config", "/path/to/mcp.json")
+				assertHasArgPair(t, args, "--additional-mcp-config", "@/path/to/mcp.json")
 				assertHasFlag(t, args, "--disable-builtin-mcps")
 				assertHasFlag(t, args, "--no-custom-instructions")
 				assertHasFlag(t, args, "--experimental")
@@ -291,7 +291,7 @@ func TestBuildArgs(t *testing.T) {
 			pt:     passthroughConfig{MCPConfig: "/op/mcp.json"},
 			check: func(t *testing.T, args []string) {
 				t.Helper()
-				assertHasArgPair(t, args, "--additional-mcp-config", "/ws/.sortie/mcp.json")
+				assertHasArgPair(t, args, "--additional-mcp-config", "@/ws/.sortie/mcp.json")
 			},
 		},
 		{
@@ -301,7 +301,7 @@ func TestBuildArgs(t *testing.T) {
 			pt:     passthroughConfig{},
 			check: func(t *testing.T, args []string) {
 				t.Helper()
-				assertHasArgPair(t, args, "--additional-mcp-config", "/ws/.sortie/mcp.json")
+				assertHasArgPair(t, args, "--additional-mcp-config", "@/ws/.sortie/mcp.json")
 			},
 		},
 	}
@@ -311,6 +311,62 @@ func TestBuildArgs(t *testing.T) {
 			t.Parallel()
 			got := buildArgs(tt.state, tt.prompt, tt.pt)
 			tt.check(t, got)
+		})
+	}
+}
+
+func TestFormatMCPConfigValue(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{
+			name:  "inline JSON passed as-is",
+			input: `{"mcpServers":{}}`,
+			want:  `{"mcpServers":{}}`,
+		},
+		{
+			name:  "inline JSON with leading whitespace is trimmed",
+			input: `  {"mcpServers":{}}`,
+			want:  `{"mcpServers":{}}`,
+		},
+		{
+			name:  "bare absolute path gets @ prefix",
+			input: "/path/to/mcp.json",
+			want:  "@/path/to/mcp.json",
+		},
+		{
+			name:  "bare relative path gets @ prefix",
+			input: "mcp.json",
+			want:  "@mcp.json",
+		},
+		{
+			name:  "at-prefixed path passed as-is",
+			input: "@/path/to/mcp.json",
+			want:  "@/path/to/mcp.json",
+		},
+		{
+			name:  "windows path gets @ prefix",
+			input: `C:\path\to\mcp.json`,
+			want:  `@C:\path\to\mcp.json`,
+		},
+		{
+			name:  "empty string stays empty",
+			input: "",
+			want:  "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := formatMCPConfigValue(tt.input)
+			if got != tt.want {
+				t.Errorf("formatMCPConfigValue(%q) = %q, want %q", tt.input, got, tt.want)
+			}
 		})
 	}
 }

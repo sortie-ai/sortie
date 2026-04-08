@@ -1,6 +1,9 @@
 package copilot
 
-import "strconv"
+import (
+	"strconv"
+	"strings"
+)
 
 // passthroughConfig holds Copilot CLI-specific settings extracted from
 // the "copilot-cli" sub-object in WORKFLOW.md. All fields are optional
@@ -92,9 +95,9 @@ func buildArgs(state *sessionState, prompt string, pt passthroughConfig) []strin
 		args = append(args, "--excluded-tools", pt.ExcludedTools)
 	}
 	if state.mcpConfigPath != "" {
-		args = append(args, "--additional-mcp-config", state.mcpConfigPath)
+		args = append(args, "--additional-mcp-config", "@"+state.mcpConfigPath)
 	} else if pt.MCPConfig != "" {
-		args = append(args, "--additional-mcp-config", pt.MCPConfig)
+		args = append(args, "--additional-mcp-config", formatMCPConfigValue(pt.MCPConfig))
 	}
 	if pt.DisableBuiltinMCPs {
 		args = append(args, "--disable-builtin-mcps")
@@ -145,4 +148,17 @@ func boolFrom(config map[string]any, key string, defaultVal bool) bool {
 		return defaultVal
 	}
 	return v
+}
+
+// formatMCPConfigValue prepares an operator-provided MCP config value
+// for the --additional-mcp-config flag. Inline JSON (value starting
+// with "{") is passed as-is. File paths are prefixed with "@" so the
+// Copilot CLI reads the file. Values already prefixed with "@" are
+// passed through unchanged.
+func formatMCPConfigValue(value string) string {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" || strings.HasPrefix(trimmed, "{") || strings.HasPrefix(trimmed, "@") {
+		return trimmed
+	}
+	return "@" + trimmed
 }
