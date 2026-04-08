@@ -1,6 +1,7 @@
 # GitHub Copilot CLI: Adapter Research Notes
 
 > GitHub Copilot CLI v1.0.x (npm `@github/copilot`, binary `copilot`), researched March 2026.
+> Updated April 2026 for v1.0.21 `--additional-mcp-config` path syntax correction.
 > Reference for implementing the Copilot CLI `AgentAdapter`.
 >
 > **Primary sources:** [CLI command reference][cli-ref], [CLI programmatic reference][cli-prog],
@@ -135,7 +136,7 @@ always set by the adapter; others are conditional.
 | `--model <model>`                  | Override the AI model (e.g., `claude-sonnet-4.5`, `gpt-5`).                                       | Optional. Adapter passes through if configured.                  |
 | `--agent <name>`                   | Use a specific custom agent for the session.                                                       | Optional. Agent routing.                                         |
 | `--no-ask-user`                    | Disable the `ask_user` tool. Agent works autonomously without requesting user input ([`copilot --help`][cli-help-ref]). | **(required)** Prevents stalls waiting for user input.           |
-| `--additional-mcp-config <json>`   | Add MCP server configuration for the session (inline JSON or path to file).                        | Optional. For tool extensions (e.g., `tracker_api`).             |
+| `--additional-mcp-config <json>`   | Add MCP server configuration for the session (inline JSON or `@<path>` to JSON file).              | Optional. For tool extensions (e.g., `tracker_api`).             |
 | `--disable-builtin-mcps`           | Disable all built-in MCP servers.                                                                  | Optional. For controlled environments.                           |
 | `--disable-mcp-server <name>`      | Disable a specific built-in MCP server.                                                            | Optional.                                                        |
 | `--no-custom-instructions`         | Disable loading custom instructions from workspace files.                                          | Optional. For deterministic behavior.                            |
@@ -630,6 +631,11 @@ From [github/copilot-cli issues](https://github.com/github/copilot-cli/issues):
 - **sessionStart hook fires after userPromptSubmitted** ([#2201](https://github.com/github/copilot-cli/issues/2201)):
   The `sessionStart` hook fires after `userPromptSubmitted`, not before. Provides real examples
   of event format in `events.jsonl`.
+- **`--additional-mcp-config` requires `@` prefix for file paths** (confirmed v1.0.21): Bare
+  file paths are parsed as inline JSON and fail with `Invalid JSON in --additional-mcp-config`.
+  The documented syntax for file input is `@<path>` (`github/copilot-cli#428`). Earlier
+  versions (≤1.0.18) had an undocumented fallback that recognized bare paths; this fallback
+  was removed. The Sortie adapter now uses the `@` prefix consistently.
 
 ---
 
@@ -785,8 +791,9 @@ the adapter should be aware that:
 ## MCP Server Configuration
 
 The `--additional-mcp-config <json>` flag adds MCP server declarations for the session.
-It accepts either inline JSON or a path to a JSON file. The format follows the standard
-MCP configuration schema with a top-level `mcpServers` object.
+It accepts inline JSON or `@<path>` referencing a JSON file. The `@` prefix is required
+for file paths — bare paths are parsed as inline JSON and fail. The format follows the
+standard MCP configuration schema with a top-level `mcpServers` object.
 
 ### File format
 
@@ -824,8 +831,9 @@ Use `--disable-builtin-mcps` to disable all built-in MCP servers, or
 
 ### Sortie adapter usage
 
-The worker writes a temporary `.sortie/mcp.json` to the workspace directory and passes
-its path via `--additional-mcp-config`. If the operator also specifies
+The worker writes `.sortie/mcp.json` to the workspace directory and passes it via
+`--additional-mcp-config @<path>` (the `@` prefix instructs the CLI to read the file).
+If the operator also specifies
 `copilot-cli.mcp_config` in WORKFLOW.md, the worker merges both server sets into a single
 file. A name collision on the `sortie-tools` key fails the attempt. Credential values are
 never written to this file — they reach the MCP server through inherited environment
@@ -897,7 +905,7 @@ sub-object in WORKFLOW.md:
 | `copilot-cli.denied_tools`                | string  | Space-separated tool deny list. Maps to `--deny-tool`.                           |
 | `copilot-cli.available_tools`             | string  | Space-separated available tools restriction. Maps to `--available-tools`.        |
 | `copilot-cli.excluded_tools`              | string  | Space-separated excluded tools. Maps to `--excluded-tools`.                      |
-| `copilot-cli.mcp_config`                  | string  | MCP server configuration (inline JSON or path). Maps to `--additional-mcp-config`. |
+| `copilot-cli.mcp_config`                  | string  | MCP server configuration (inline JSON or file path). The adapter adds the `@` prefix for file paths automatically. Maps to `--additional-mcp-config`. |
 | `copilot-cli.disable_builtin_mcps`        | boolean | If `true`, passes `--disable-builtin-mcps`. Default: `false`.                   |
 | `copilot-cli.no_custom_instructions`      | boolean | If `true`, passes `--no-custom-instructions`. Default: `false`.                 |
 | `copilot-cli.experimental`                | boolean | If `true`, passes `--experimental`. Default: `false`.                           |
