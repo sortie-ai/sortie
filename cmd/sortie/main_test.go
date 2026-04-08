@@ -26,6 +26,13 @@ import (
 	"github.com/sortie-ai/sortie/internal/logging"
 )
 
+// runTestTimeout is the context timeout used by tests that exercise the
+// full run() startup sequence. These tests verify startup behaviour
+// (logging, DB creation, flag parsing) and do not need to wait for a
+// poll cycle — the orchestrator shuts down as soon as the context
+// expires. Keep this short to avoid a cumulative 100+ second test suite.
+const runTestTimeout = 500 * time.Millisecond
+
 // minimalWorkflow returns a minimal valid WORKFLOW.md content that
 // includes tracker (file) and agent (mock) config needed for the
 // full startup sequence.
@@ -234,7 +241,7 @@ func TestRunValidWorkflowWithTimeout(t *testing.T) {
 	wfPath := setupRunDir(t)
 
 	var stdout, stderr bytes.Buffer
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), runTestTimeout)
 	defer cancel()
 
 	code := run(ctx, []string{wfPath}, &stdout, &stderr)
@@ -263,7 +270,7 @@ func TestRunPortFlagLogged(t *testing.T) {
 	port := freePort(t)
 
 	var stdout, stderr bytes.Buffer
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), runTestTimeout)
 	defer cancel()
 
 	code := run(ctx, []string{"--port", strconv.Itoa(port), wfPath}, &stdout, &stderr)
@@ -351,7 +358,7 @@ func TestRunDatabaseCreatedNextToWorkflow(t *testing.T) {
 	wfPath := writeWorkflowFile(t, workflowDir)
 
 	var stdout, stderr bytes.Buffer
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), runTestTimeout)
 	defer cancel()
 
 	code := run(ctx, []string{wfPath}, &stdout, &stderr)
@@ -394,7 +401,7 @@ Do {{ .issue.title }}.
 	}
 
 	var stdout, stderr bytes.Buffer
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), runTestTimeout)
 	defer cancel()
 
 	code := run(ctx, []string{wfPath}, &stdout, &stderr)
@@ -493,7 +500,7 @@ func TestRunDatabaseCustomPath(t *testing.T) {
 	wfPath := writeWorkflowFileWithDBPath(t, workflowDir, dbFile)
 
 	var stdout, stderr bytes.Buffer
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), runTestTimeout)
 	defer cancel()
 
 	code := run(ctx, []string{wfPath}, &stdout, &stderr)
@@ -529,7 +536,7 @@ func TestRunDatabaseRelativePath(t *testing.T) {
 	wfPath := writeWorkflowFileWithDBPath(t, workflowDir, "data/my.db")
 
 	var stdout, stderr bytes.Buffer
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), runTestTimeout)
 	defer cancel()
 
 	code := run(ctx, []string{wfPath}, &stdout, &stderr)
@@ -2749,7 +2756,7 @@ func TestRunReadOnlyWorkflowDir(t *testing.T) {
 	})
 
 	var stdout, stderr bytes.Buffer
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), runTestTimeout)
 	defer cancel()
 
 	wfPath := filepath.Join(workflowDir, "WORKFLOW.md")
@@ -2921,7 +2928,7 @@ func TestRunLogLevelDebug(t *testing.T) {
 	wfPath := setupRunDir(t)
 
 	var stdout, stderr bytes.Buffer
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), runTestTimeout)
 	defer cancel()
 
 	code := run(ctx, []string{"--log-level", "debug", wfPath}, &stdout, &stderr)
@@ -2940,7 +2947,7 @@ func TestRunLogLevelWarn(t *testing.T) {
 	wfPath := setupRunDir(t)
 
 	var stdout, stderr bytes.Buffer
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), runTestTimeout)
 	defer cancel()
 
 	code := run(ctx, []string{"--log-level", "warn", wfPath}, &stdout, &stderr)
@@ -2986,7 +2993,7 @@ func TestRunLogLevelFromExtension(t *testing.T) {
 	wfPath := writeWorkflowFileWithContent(t, dir, minimalWorkflowWithLogLevel("warn"))
 
 	var stdout, stderr bytes.Buffer
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), runTestTimeout)
 	defer cancel()
 
 	code := run(ctx, []string{wfPath}, &stdout, &stderr)
@@ -3007,7 +3014,7 @@ func TestRunLogLevelFlagOverridesExtension(t *testing.T) {
 	wfPath := writeWorkflowFileWithContent(t, dir, minimalWorkflowWithLogLevel("error"))
 
 	var stdout, stderr bytes.Buffer
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), runTestTimeout)
 	defer cancel()
 
 	code := run(ctx, []string{"--log-level", "debug", wfPath}, &stdout, &stderr)
@@ -3042,7 +3049,7 @@ func TestRunLogLevelDefault(t *testing.T) {
 	wfPath := setupRunDir(t)
 
 	var stdout, stderr bytes.Buffer
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), runTestTimeout)
 	defer cancel()
 
 	// No --log-level flag and no extension — default is info.
@@ -3607,7 +3614,7 @@ func TestRunExplicitPortServerAddr(t *testing.T) {
 	port := freePort(t)
 
 	var stdout, stderr bytes.Buffer
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), runTestTimeout)
 	defer cancel()
 
 	code := run(ctx, []string{"--port", strconv.Itoa(port), wfPath}, &stdout, &stderr)
@@ -3625,7 +3632,7 @@ func TestRunPortZeroDisablesServer(t *testing.T) {
 	wfPath := setupRunDir(t)
 
 	var stdout, stderr bytes.Buffer
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), runTestTimeout)
 	defer cancel()
 
 	code := run(ctx, []string{"--port", "0", wfPath}, &stdout, &stderr)
@@ -3643,7 +3650,7 @@ func TestRunCustomHost(t *testing.T) {
 	port := freePort(t)
 
 	var stdout, stderr bytes.Buffer
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), runTestTimeout)
 	defer cancel()
 
 	code := run(ctx, []string{"--host", "0.0.0.0", "--port", strconv.Itoa(port), wfPath}, &stdout, &stderr)
@@ -3668,7 +3675,7 @@ func TestRunDefaultPortInUseImplicit(t *testing.T) {
 	t.Cleanup(func() { ln.Close() }) //nolint:errcheck // best-effort cleanup
 
 	var stdout, stderr bytes.Buffer
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), runTestTimeout)
 	defer cancel()
 
 	code := run(ctx, []string{wfPath}, &stdout, &stderr)
@@ -3692,7 +3699,7 @@ func TestRunExplicitPortInUse(t *testing.T) {
 	t.Cleanup(func() { ln.Close() }) //nolint:errcheck // best-effort cleanup
 
 	var stdout, stderr bytes.Buffer
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), runTestTimeout)
 	defer cancel()
 
 	code := run(ctx, []string{"--port", strconv.Itoa(occupiedPort), wfPath}, &stdout, &stderr)
@@ -3709,7 +3716,7 @@ func TestRunInvalidHost(t *testing.T) {
 	wfPath := setupRunDir(t)
 
 	var stdout, stderr bytes.Buffer
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), runTestTimeout)
 	defer cancel()
 
 	code := run(ctx, []string{"--host", "invalid", wfPath}, &stdout, &stderr)
@@ -3880,7 +3887,7 @@ func TestRunLogFormatJSON(t *testing.T) {
 	wfPath := setupRunDir(t)
 
 	var stdout, stderr bytes.Buffer
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), runTestTimeout)
 	defer cancel()
 
 	code := run(ctx, []string{"--log-format", "json", wfPath}, &stdout, &stderr)
@@ -3914,7 +3921,7 @@ func TestRunLogFormatText(t *testing.T) {
 	wfPath := setupRunDir(t)
 
 	var stdout, stderr bytes.Buffer
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), runTestTimeout)
 	defer cancel()
 
 	code := run(ctx, []string{"--log-format", "text", wfPath}, &stdout, &stderr)
@@ -3938,7 +3945,7 @@ func TestRunLogFormatDefault(t *testing.T) {
 	wfPath := setupRunDir(t)
 
 	var stdout, stderr bytes.Buffer
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), runTestTimeout)
 	defer cancel()
 
 	// No --log-format flag — default is text.
@@ -3990,7 +3997,7 @@ func TestRunLogFormatCaseInsensitive(t *testing.T) {
 	wfPath := setupRunDir(t)
 
 	var stdout, stderr bytes.Buffer
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), runTestTimeout)
 	defer cancel()
 
 	code := run(ctx, []string{"--log-format", "JSON", wfPath}, &stdout, &stderr)
@@ -4015,7 +4022,7 @@ func TestRunLogFormatFromExtension(t *testing.T) {
 	wfPath := writeWorkflowFileWithContent(t, dir, minimalWorkflowWithLogFormat("json"))
 
 	var stdout, stderr bytes.Buffer
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), runTestTimeout)
 	defer cancel()
 
 	code := run(ctx, []string{wfPath}, &stdout, &stderr)
@@ -4041,7 +4048,7 @@ func TestRunLogFormatFlagOverridesExtension(t *testing.T) {
 	wfPath := writeWorkflowFileWithContent(t, dir, minimalWorkflowWithLogFormat("json"))
 
 	var stdout, stderr bytes.Buffer
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), runTestTimeout)
 	defer cancel()
 
 	code := run(ctx, []string{"--log-format", "text", wfPath}, &stdout, &stderr)
