@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.1] - 2026-04-08
+
+### Added
+
+- GNU-style CLI help output with grouped sections, column-aligned
+  descriptions, usage examples, and a "Learn more" link. Short aliases
+  `-h` (help) and `-V` (version) are now recognized. Help text prints
+  to stdout instead of stderr. Covers all three commands: `sortie`,
+  `sortie validate`, `sortie mcp-server`.
+  ([#398](https://github.com/sortie-ai/sortie/issues/398),
+  [#403](https://github.com/sortie-ai/sortie/pull/403))
+
+### Fixed
+
+- Copilot CLI adapter: prefix `--additional-mcp-config` file paths with
+  `@` to match the documented Copilot CLI syntax. Bare file paths
+  worked in Copilot CLI ≤1.0.18 via an undocumented fallback that was
+  removed in v1.0.21, causing `Invalid JSON in --additional-mcp-config`
+  on every turn. Operator-provided `copilot-cli.mcp_config` values are
+  now auto-detected: inline JSON is passed unchanged, `@`-prefixed
+  paths are preserved, and bare file paths receive the `@` prefix
+  automatically.
+  ([#404](https://github.com/sortie-ai/sortie/issues/404),
+  [#405](https://github.com/sortie-ai/sortie/pull/405))
+- Agent adapters: reclassify exit-code-0 turns with zero output tokens
+  and no `result` event as `turn_failed` instead of `turn_completed`.
+  Previously, when an agent subprocess crashed immediately (e.g., MCP
+  config parse error) but exited 0, all turns were counted as
+  successful, causing the orchestrator to exhaust `max_turns` and
+  trigger a false-positive handoff transition. Failed turns now retry
+  with exponential backoff. Applies to both Claude Code and Copilot CLI
+  adapters.
+  ([#404](https://github.com/sortie-ai/sortie/issues/404),
+  [#406](https://github.com/sortie-ai/sortie/pull/406))
+
 ## [1.5.0] - 2026-04-07
 
 ### Added
@@ -531,7 +566,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   execution via GitHub Actions.
 - Architecture Decision Records (ADR-0001 through ADR-0005).
 
-[Unreleased]: https://github.com/sortie-ai/sortie/compare/1.4.0...HEAD
+[Unreleased]: https://github.com/sortie-ai/sortie/compare/1.5.1...HEAD
+[1.5.1]: https://github.com/sortie-ai/sortie/compare/1.5.0...1.5.1
 [1.5.0]: https://github.com/sortie-ai/sortie/compare/1.4.0...1.5.0
 [1.4.0]: https://github.com/sortie-ai/sortie/compare/1.3.0...1.4.0
 [1.3.0]: https://github.com/sortie-ai/sortie/compare/1.2.1...1.3.0
