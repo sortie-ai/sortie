@@ -1451,7 +1451,7 @@ exit 0
 	}
 }
 
-func TestRunTurn_NoResultExitZero(t *testing.T) {
+func TestRunTurn_NoOutputExitZero(t *testing.T) {
 	t.Parallel()
 
 	tmpDir := t.TempDir()
@@ -1474,11 +1474,103 @@ exit 0
 		Prompt:  "test",
 		OnEvent: func(domain.AgentEvent) {},
 	})
+	var agentErr *domain.AgentError
+	if !errors.As(err, &agentErr) || agentErr.Kind != domain.ErrTurnFailed {
+		t.Fatalf("expected AgentError{Kind: %q}, got %v", domain.ErrTurnFailed, err)
+	}
+	if result.ExitReason != domain.EventTurnFailed {
+		t.Errorf("ExitReason = %q, want %q", result.ExitReason, domain.EventTurnFailed)
+	}
+}
+
+func TestRunTurn_PartialOutputNoResultExitZero(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	script := writeScript(t, tmpDir, `
+echo '{"type":"system","subtype":"init","session_id":"partial","cwd":"/tmp"}'
+echo '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"hello"}],"usage":{"input_tokens":10,"output_tokens":42,"cache_read_input_tokens":0},"model":"claude-sonnet-4-20250514"}}'
+exit 0
+`)
+
+	adapter, _ := NewClaudeCodeAdapter(map[string]any{})
+	session, err := adapter.StartSession(context.Background(), domain.StartSessionParams{
+		WorkspacePath: tmpDir,
+		AgentConfig:   domain.AgentConfig{Command: script},
+	})
 	if err != nil {
-		t.Fatalf("expected nil error for exit 0 without result, got %v", err)
+		t.Fatal(err)
+	}
+
+	var events []domain.AgentEvent
+	result, err := adapter.RunTurn(context.Background(), session, domain.RunTurnParams{
+		Prompt:  "test",
+		OnEvent: func(e domain.AgentEvent) { events = append(events, e) },
+	})
+	if err != nil {
+		t.Fatalf("expected nil error for partial output exit 0, got %v", err)
 	}
 	if result.ExitReason != domain.EventTurnCompleted {
 		t.Errorf("ExitReason = %q, want %q", result.ExitReason, domain.EventTurnCompleted)
+	}
+	foundCompleted := false
+	for _, e := range events {
+		if e.Type == domain.EventTurnCompleted {
+			foundCompleted = true
+			break
+		}
+	}
+	if !foundCompleted {
+		t.Error("EventTurnCompleted not delivered for partial-output exit 0")
+	}
+	const wantTokens int64 = 42
+	if result.Usage.OutputTokens != wantTokens {
+		t.Errorf("Usage.OutputTokens = %d, want %d", result.Usage.OutputTokens, wantTokens)
+	}
+}
+
+func TestRunTurn_StderrWarnOnNoOutputExitZero(t *testing.T) {
+	// No t.Parallel(): installs a global slog default.
+	spy := agenttest.InstallLogSpy(t)
+
+	tmpDir := t.TempDir()
+	script := writeScript(t, tmpDir, `
+echo 'MCP config parse error: unexpected token' >&2
+echo '{"type":"system","subtype":"init","session_id":"noout","cwd":"/tmp"}'
+exit 0
+`)
+
+	adapter, _ := NewClaudeCodeAdapter(map[string]any{})
+	session, err := adapter.StartSession(context.Background(), domain.StartSessionParams{
+		WorkspacePath: tmpDir,
+		AgentConfig:   domain.AgentConfig{Command: script},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	result, runErr := adapter.RunTurn(context.Background(), session, domain.RunTurnParams{
+		Prompt:  "test",
+		OnEvent: func(domain.AgentEvent) {},
+	})
+	if result.ExitReason != domain.EventTurnFailed {
+		t.Errorf("ExitReason = %q, want %q", result.ExitReason, domain.EventTurnFailed)
+	}
+	var agentErr *domain.AgentError
+	if !errors.As(runErr, &agentErr) || agentErr.Kind != domain.ErrTurnFailed {
+		t.Errorf("error = %v, want AgentError{Kind: %q}", runErr, domain.ErrTurnFailed)
+	}
+
+	warnLines := agenttest.RequireWarnLines(t, spy, "agent exited without producing output")
+	found := false
+	for _, line := range warnLines {
+		if strings.Contains(line, "MCP config parse error") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("WARN lines %v do not contain \"MCP config parse error\"", warnLines)
 	}
 }
 

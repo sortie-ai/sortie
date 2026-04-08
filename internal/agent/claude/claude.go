@@ -636,7 +636,25 @@ func (a *ClaudeCodeAdapter) RunTurn(ctx context.Context, session domain.Session,
 			}
 	}
 
-	// No result event and exit code 0 — treat as success.
+	// No result event and exit code 0.
+	if cumulativeOutput == 0 {
+		procutil.EmitWarnLines(stderrLines, logger)
+		logger.Warn("agent exited without producing output, treating as failure")
+		params.OnEvent(domain.AgentEvent{
+			Type:      domain.EventTurnFailed,
+			Timestamp: now,
+			Message:   "agent exited without producing output",
+		})
+		return domain.TurnResult{
+				SessionID:  state.claudeSessionID,
+				ExitReason: domain.EventTurnFailed,
+				Usage:      usage,
+			}, &domain.AgentError{
+				Kind:    domain.ErrTurnFailed,
+				Message: "agent exited without producing output",
+			}
+	}
+
 	params.OnEvent(domain.AgentEvent{
 		Type:      domain.EventTurnCompleted,
 		Timestamp: now,

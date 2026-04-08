@@ -583,6 +583,88 @@ func TestRunTurn_NonZeroExitNoResult(t *testing.T) {
 	}
 }
 
+func TestRunTurn_NoOutputExitZero(t *testing.T) {
+	t.Setenv("GH_TOKEN", "test-token-for-unit-test")
+
+	adapter, session := newTestSession(t, t.TempDir())
+	state := session.Internal.(*sessionState)
+	state.command = fakeCopilotBinaryWithOutput(t, "", 0)
+
+	var events []domain.AgentEvent
+	result, err := adapter.RunTurn(context.Background(), session, domain.RunTurnParams{
+		OnEvent: func(e domain.AgentEvent) { events = append(events, e) },
+	})
+
+	if result.ExitReason != domain.EventTurnFailed {
+		t.Errorf("ExitReason = %q, want %q", result.ExitReason, domain.EventTurnFailed)
+	}
+	requireAgentError(t, err, domain.ErrTurnFailed)
+	if !hasEventType(events, domain.EventTurnFailed) {
+		t.Error("EventTurnFailed not delivered for no-output exit 0")
+	}
+}
+
+func TestRunTurn_PartialOutputNoResultExitZero(t *testing.T) {
+	t.Setenv("GH_TOKEN", "test-token-for-unit-test")
+
+	adapter, session := newTestSession(t, t.TempDir())
+	state := session.Internal.(*sessionState)
+
+	const jsonl = `{"type":"assistant.message","timestamp":"2026-04-08T00:00:00Z","data":{"role":"assistant","content":"hello","outputTokens":42}}` + "\n"
+	state.command = fakeCopilotBinaryWithOutput(t, jsonl, 0)
+
+	var events []domain.AgentEvent
+	result, err := adapter.RunTurn(context.Background(), session, domain.RunTurnParams{
+		OnEvent: func(e domain.AgentEvent) { events = append(events, e) },
+	})
+
+	if err != nil {
+		t.Fatalf("expected nil error for partial output exit 0, got %v", err)
+	}
+	if result.ExitReason != domain.EventTurnCompleted {
+		t.Errorf("ExitReason = %q, want %q", result.ExitReason, domain.EventTurnCompleted)
+	}
+	if !hasEventType(events, domain.EventTurnCompleted) {
+		t.Error("EventTurnCompleted not delivered for partial-output exit 0")
+	}
+	const wantTokens int64 = 42
+	if result.Usage.OutputTokens != wantTokens {
+		t.Errorf("Usage.OutputTokens = %d, want %d", result.Usage.OutputTokens, wantTokens)
+	}
+}
+
+func TestRunTurn_StderrWarnOnNoOutputExitZero(t *testing.T) {
+	// No t.Parallel(): installs a global slog default.
+	spy := agenttest.InstallLogSpy(t)
+	t.Setenv("GH_TOKEN", "test-token-for-unit-test")
+
+	adapter, session := newTestSession(t, t.TempDir())
+	state := session.Internal.(*sessionState)
+	state.command = fakeCopilotBinaryWithStderrAndExit(t, "Invalid JSON in --additional-mcp-config", 0)
+
+	var events []domain.AgentEvent
+	result, err := adapter.RunTurn(context.Background(), session, domain.RunTurnParams{
+		Prompt:  "do the thing",
+		OnEvent: func(e domain.AgentEvent) { events = append(events, e) },
+	})
+	if result.ExitReason != domain.EventTurnFailed {
+		t.Errorf("ExitReason = %q, want %q", result.ExitReason, domain.EventTurnFailed)
+	}
+	requireAgentError(t, err, domain.ErrTurnFailed)
+
+	warnLines := agenttest.RequireWarnLines(t, spy, "agent exited without producing output")
+	found := false
+	for _, line := range warnLines {
+		if strings.Contains(line, "Invalid JSON") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("WARN lines %v do not contain \"Invalid JSON\"", warnLines)
+	}
+}
+
 func TestRunTurn_ContextCancelled(t *testing.T) {
 	// t.Setenv is incompatible with t.Parallel.
 	t.Setenv("GH_TOKEN", "test-token-for-unit-test")

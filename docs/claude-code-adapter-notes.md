@@ -600,7 +600,7 @@ The adapter could expose this via the `claude-code.allowed_tools` pass-through c
 
 | Exit Code                | Meaning                                              | Adapter mapping                                   |
 | ------------------------ | ---------------------------------------------------- | ------------------------------------------------- |
-| 0                        | Success (check `subtype`/`is_error` in result event) | `turn_completed` or `turn_failed` based on result |
+| 0                        | Success (check `subtype`/`is_error` in result event). If no `result` event was received and cumulative output tokens are zero, treated as `turn_failed` (no-output safety heuristic). | `turn_completed` or `turn_failed` based on result / no-output heuristic |
 | 1                        | General error                                        | `turn_failed`                                     |
 | Non-zero (other)         | Unexpected failure                                   | `turn_failed`                                     |
 | 127                      | `claude` binary not found                            | `agent_not_found`                                 |
