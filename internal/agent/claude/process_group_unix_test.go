@@ -54,13 +54,31 @@ func pollPIDFile(t *testing.T, pidFile string, timeout time.Duration) int {
 	return 0
 }
 
-// assertProcessDead polls until syscall.Kill(pid, 0) returns an error
-// (signaling the process is gone) or the timeout expires.
+// isZombie reports whether pid is a zombie process by reading
+// /proc/<pid>/stat. Returns false if the file cannot be read.
+func isZombie(pid int) bool {
+	data, err := os.ReadFile(fmt.Sprintf("/proc/%d/stat", pid))
+	if err != nil {
+		return false
+	}
+	// Format: "<pid> (<comm>) <state> ...". State follows the closing paren.
+	if i := strings.LastIndex(string(data), ")"); i >= 0 && i+2 < len(data) {
+		return data[i+2] == 'Z'
+	}
+	return false
+}
+
+// assertProcessDead polls until the process is gone or a zombie (effectively
+// dead, awaiting reap) or the timeout expires. Zombies still satisfy
+// kill(pid, 0) so we also check /proc/<pid>/stat to avoid flaky failures.
 func assertProcessDead(t *testing.T, pid int, timeout time.Duration) {
 	t.Helper()
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
 		if err := syscall.Kill(pid, 0); err != nil {
+			return
+		}
+		if isZombie(pid) {
 			return
 		}
 		time.Sleep(20 * time.Millisecond)
