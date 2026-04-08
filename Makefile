@@ -23,9 +23,7 @@ clean: ## Remove the binary and all coverage files
 
 .PHONY: test
 test: ## Run tests with the race detector (PKG=./path/to/pkg  RUN=TestFoo)
-	$(GO) test -race -count=1 \
-		$(if $(PKG),$(PKG),./...) \
-		$(if $(RUN),-run $(RUN),)
+	$(GO) test -race -count=1 $(if $(PKG),$(PKG),./...) $(if $(RUN),-run $(RUN),)
 
 .PHONY: test-coverage
 test-coverage: ## Run tests with coverage and print per-package percentages

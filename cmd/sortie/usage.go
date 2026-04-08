@@ -14,8 +14,8 @@ Usage:
   sortie <command> [flags]
 
 Commands:
-  validate                    Validate a workflow file without running it
-  mcp-server                  Start the MCP stdio server for agent-to-orchestrator communication
+  validate                  Validate a workflow file without running it
+  mcp-server                Start the MCP stdio server for agent-to-orchestrator communication
 
 Flags:
   -h, --help                Print this help message and quit
