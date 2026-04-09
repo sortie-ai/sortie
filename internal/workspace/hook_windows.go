@@ -61,22 +61,27 @@ func RunHook(ctx context.Context, params HookParams) (HookResult, error) {
 	job, jobErr := createHookJobObject(cmd.Process.Pid)
 	if jobErr != nil {
 		slog.Warn("hook job object creation failed; child tree may survive timeout",
+			slog.String("dir", params.Dir),
+			slog.Int("timeout_ms", params.TimeoutMS),
 			slog.Any("error", jobErr))
 	}
 
 	if job != 0 {
 		var closeJob sync.Once
-		releaseJob := func() {
-			closeJob.Do(func() {
-				windows.TerminateJobObject(job, 1)
-				windows.CloseHandle(job)
-			})
+		closeHandle := func() {
+			closeJob.Do(func() { windows.CloseHandle(job) })
 		}
 		cmd.Cancel = func() error {
-			releaseJob()
+			// On cancellation/timeout, actively terminate the tree
+			// before closing the handle.
+			windows.TerminateJobObject(job, 0xC000013A)
+			closeHandle()
 			return nil
 		}
-		defer releaseJob()
+		// On the happy path, just close the handle.
+		// KILL_ON_JOB_CLOSE ensures any stray background children
+		// are still cleaned up when the handle is released.
+		defer closeHandle()
 	}
 
 	cmd.WaitDelay = 3 * time.Second
