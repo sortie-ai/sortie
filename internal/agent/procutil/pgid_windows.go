@@ -66,7 +66,7 @@ func SignalGraceful(pid int) error {
 // can distinguish "killed by us" from normal non-zero exits. Exit
 // code 1 cannot be used because it is the most common legitimate
 // failure code on Windows.
-const jobTerminateExitCode = 0xC000013A
+const jobTerminateExitCode uint32 = 0xC000013A
 
 // KillProcessGroup terminates all processes in the Job Object
 // associated with pid. If no Job Object is registered (degraded
