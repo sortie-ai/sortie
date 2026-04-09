@@ -99,13 +99,17 @@ func (lb *limitedBuffer) String() string {
 func hookEnv(override map[string]string) []string {
 	parent := os.Environ()
 	env := make([]string, 0, len(allowedEnvKeys)+len(override))
+	overrideNorm := make(map[string]bool, len(override))
+	for k := range override {
+		overrideNorm[normalizeEnvKey(k)] = true
+	}
 	for _, entry := range parent {
 		k, _, _ := strings.Cut(entry, "=")
 		norm := normalizeEnvKey(k)
 		if !allowedEnvKeys[norm] && !strings.HasPrefix(norm, "SORTIE_") {
 			continue
 		}
-		if _, dup := override[k]; dup {
+		if overrideNorm[norm] {
 			continue
 		}
 		env = append(env, entry)

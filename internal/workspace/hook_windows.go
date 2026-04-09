@@ -36,7 +36,7 @@ func RunHook(ctx context.Context, params HookParams) (HookResult, error) {
 	hookCtx, cancel := context.WithTimeout(ctx, time.Duration(params.TimeoutMS)*time.Millisecond)
 	defer cancel()
 
-	cmd := exec.CommandContext(hookCtx, "cmd.exe", "/C", params.Script)
+	cmd := exec.CommandContext(hookCtx, "cmd.exe", "/C", params.Script) //nolint:gosec // G204: hook scripts are from trusted workflow configuration
 	cmd.Dir = params.Dir
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		CreationFlags: windows.CREATE_NEW_PROCESS_GROUP,

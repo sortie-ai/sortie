@@ -13,10 +13,13 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// jobEntry holds the Windows Job Object handle associated with a
-// process.
+// jobEntry holds the Windows Job Object handle and the process
+// reference associated with a managed process. The proc field is
+// always set by AssignProcess; the job field is zero when Job Object
+// creation failed (degraded mode).
 type jobEntry struct {
-	job windows.Handle
+	job  windows.Handle
+	proc *os.Process
 }
 
 // jobs maps PIDs to their Job Object entries. Concurrent access is
@@ -69,8 +72,11 @@ func SignalGraceful(pid int) error {
 const jobTerminateExitCode uint32 = 0xC000013A
 
 // KillProcessGroup terminates all processes in the Job Object
-// associated with pid. If no Job Object is registered (degraded
-// mode), falls back to killing the single process by PID.
+// associated with pid. If AssignProcess succeeded but the Job Object
+// handle is for some reason zero (should not happen), falls back to
+// killing the single process via its stored *os.Process reference.
+// If no entry is registered (AssignProcess was never called), returns
+// nil — the process either already exited or was never started.
 //
 // LoadAndDelete atomicity ensures exactly one concurrent caller gets
 // the handle when RunTurn and StopSession race.
@@ -78,23 +84,16 @@ func KillProcessGroup(pid int) error {
 	v, ok := jobs.LoadAndDelete(pid)
 	if ok {
 		entry := v.(*jobEntry)
-		err := windows.TerminateJobObject(entry.job, jobTerminateExitCode)
-		windows.CloseHandle(entry.job)
-		return err
+		if entry.job != 0 {
+			err := windows.TerminateJobObject(entry.job, jobTerminateExitCode)
+			windows.CloseHandle(entry.job)
+			return err
+		}
+		if entry.proc != nil {
+			return entry.proc.Kill()
+		}
 	}
-
-	// Degraded mode: no Job Object registered. The process may have
-	// exited before AssignProcess or AssignProcess itself failed. In
-	// this mode, os.FindProcess always succeeds on Windows (does not
-	// check liveness), so p.Kill() could target a reused PID. The
-	// risk is acceptable because this path fires only in a degraded
-	// configuration and adapters call KillProcessGroup immediately
-	// after cmd.Wait().
-	p, err := os.FindProcess(pid)
-	if err != nil {
-		return nil
-	}
-	return p.Kill()
+	return nil
 }
 
 // AssignProcess creates an anonymous Job Object with
@@ -106,9 +105,10 @@ func KillProcessGroup(pid int) error {
 // Must be called after [exec.Cmd.Start] and before any signal/kill
 // operation. On failure, returns an error; callers should log at WARN
 // and continue without Job Object protection.
-func AssignProcess(pid int, _ *os.Process) error {
+func AssignProcess(pid int, proc *os.Process) error {
 	job, err := windows.CreateJobObject(nil, nil)
 	if err != nil {
+		jobs.Store(pid, &jobEntry{proc: proc})
 		return fmt.Errorf("CreateJobObject: %w", err)
 	}
 
@@ -122,6 +122,7 @@ func AssignProcess(pid int, _ *os.Process) error {
 	)
 	if err != nil {
 		windows.CloseHandle(job)
+		jobs.Store(pid, &jobEntry{proc: proc})
 		return fmt.Errorf("SetInformationJobObject: %w", err)
 	}
 
@@ -132,6 +133,7 @@ func AssignProcess(pid int, _ *os.Process) error {
 	)
 	if err != nil {
 		windows.CloseHandle(job)
+		jobs.Store(pid, &jobEntry{proc: proc})
 		return fmt.Errorf("OpenProcess: %w", err)
 	}
 
@@ -139,10 +141,11 @@ func AssignProcess(pid int, _ *os.Process) error {
 	windows.CloseHandle(processHandle)
 	if err != nil {
 		windows.CloseHandle(job)
+		jobs.Store(pid, &jobEntry{proc: proc})
 		return fmt.Errorf("AssignProcessToJobObject: %w", err)
 	}
 
-	jobs.Store(pid, &jobEntry{job: job})
+	jobs.Store(pid, &jobEntry{job: job, proc: proc})
 	return nil
 }
 
@@ -152,6 +155,8 @@ func CleanupProcess(pid int) {
 	v, ok := jobs.LoadAndDelete(pid)
 	if ok {
 		entry := v.(*jobEntry)
-		windows.CloseHandle(entry.job)
+		if entry.job != 0 {
+			windows.CloseHandle(entry.job)
+		}
 	}
 }
