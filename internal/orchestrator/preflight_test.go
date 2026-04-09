@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -666,6 +667,9 @@ func TestValidateConfigForPromotion(t *testing.T) {
 }
 
 func TestValidateDispatchConfig_WorkspaceRootWritable(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows does not enforce POSIX file permission bits")
+	}
 	t.Parallel()
 
 	// serviceConfigWithRoot returns a valid ServiceConfig with the given workspace root.

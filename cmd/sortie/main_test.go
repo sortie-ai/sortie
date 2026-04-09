@@ -14,6 +14,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -419,6 +420,9 @@ Do {{ .issue.title }}.
 // --- resolveDBPath tests ---
 
 func TestResolveDBPath(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("test uses POSIX path conventions")
+	}
 	t.Parallel()
 
 	tests := []struct {
@@ -492,6 +496,9 @@ Do {{ .issue.title }}.
 }
 
 func TestRunDatabaseCustomPath(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("YAML double-quoted strings interpret backslash path separators as escape sequences")
+	}
 	workflowDir := t.TempDir()
 	dbDir := t.TempDir()
 
@@ -2577,6 +2584,9 @@ func TestRunValidateJSONSuccessStdoutFails(t *testing.T) {
 //
 // Subprocess mode is activated by SORTIE_TEST_SIGINT_HELPER=1.
 func TestRunSIGINTCleanShutdown(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("SIGINT is not supported on Windows")
+	}
 	if os.Getenv("SORTIE_TEST_SIGINT_HELPER") == "1" {
 		// --- subprocess ---
 		// This code runs as a subprocess when the parent test injects the
@@ -2736,6 +2746,9 @@ func TestRunServerShutdownError(t *testing.T) {
 // directory has no write permission.
 func TestRunReadOnlyWorkflowDir(t *testing.T) {
 	// No t.Parallel: calls t.Chdir via setupRunDir, and mutates permissions.
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows does not enforce POSIX file permission bits")
+	}
 	if os.Getuid() == 0 {
 		t.Skip("skipping: root bypasses filesystem permission checks")
 	}

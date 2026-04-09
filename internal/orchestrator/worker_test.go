@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -1065,6 +1066,9 @@ func TestRunWorkerAttempt(t *testing.T) {
 	})
 
 	t.Run("panic_after_workspace_calls_finish", func(t *testing.T) {
+		if runtime.GOOS == "windows" {
+			t.Skip("after_run hook uses touch command")
+		}
 		t.Parallel()
 
 		tmpDir := t.TempDir()

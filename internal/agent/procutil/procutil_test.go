@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log/slog"
 	"os/exec"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -29,6 +30,9 @@ func signalledErr(t *testing.T) error {
 }
 
 func TestExtractExitCode(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("subtests require /bin/sh")
+	}
 	t.Parallel()
 
 	tests := []struct {
@@ -76,6 +80,9 @@ func TestExtractExitCode(t *testing.T) {
 }
 
 func TestWasSignaled(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("subtests require /bin/sh and POSIX signals")
+	}
 	t.Parallel()
 
 	tests := []struct {
