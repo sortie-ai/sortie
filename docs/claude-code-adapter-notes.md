@@ -143,8 +143,12 @@ are always set by the adapter; others are conditional.
 Per architecture Section 10.7, the adapter launches:
 
 ```
+# POSIX (Linux / macOS)
 sh -c '<agent.command> -p "$1" --output-format stream-json --verbose --dangerously-skip-permissions ${2:+--resume "$2"}' -- "$prompt" "$session_id"
 ```
+
+On Windows, the adapter invokes the CLI directly without a shell wrapper. The subprocess receives
+`CREATE_NEW_PROCESS_GROUP` and is assigned to a Job Object for process tree management.
 
 > **Shell safety:** The prompt must not be interpolated directly into the `sh -c` string.
 > Pass it as a positional parameter (`$1`) to avoid injection via shell metacharacters
@@ -453,7 +457,9 @@ deferring creation of the Node.js subprocess until `RunTurn`.
 1. Build the CLI command:
    - Turn 1: `claude -p "<prompt>" --output-format stream-json --verbose --dangerously-skip-permissions [--session-id <uuid>]`
    - Turn 2+: append `--resume <session_id>` to continue the conversation.
-2. Launch subprocess with `sh -c <command>`, cwd = workspace path.
+2. Launch subprocess (POSIX: `sh -c <command>`; Windows: direct invocation), cwd = workspace path.
+   The subprocess is placed in its own process group and assigned to platform-specific
+   process tree management (Unix process groups / Windows Job Objects).
 3. Read stdout line by line, parse each JSON event, and deliver to `OnEvent` callback.
 4. On each event, update the stall detection timer.
 5. When the process exits:
@@ -469,10 +475,12 @@ deferring creation of the Node.js subprocess until `RunTurn`.
 
 ### `StopSession`
 
-1. If a subprocess is running, send `SIGTERM`.
-2. Wait briefly (e.g., 5 seconds) for clean exit.
-3. If still running, send `SIGKILL`.
-4. Clean up file descriptors and goroutines.
+1. If a subprocess is running, send a platform-appropriate graceful shutdown signal to the
+   process group (POSIX: `SIGTERM`; Windows: `CTRL_BREAK_EVENT`).
+2. Wait briefly (5 seconds) for clean exit.
+3. If still running, force-terminate the process tree (POSIX: `SIGKILL` to process group;
+   Windows: `TerminateJobObject`).
+4. Clean up file descriptors, goroutines, and platform-specific process group resources.
 
 ### `EventStream`
 

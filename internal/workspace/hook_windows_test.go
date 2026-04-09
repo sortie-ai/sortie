@@ -78,7 +78,11 @@ func TestRunHook_Cwd(t *testing.T) {
 	}
 
 	got := strings.TrimSpace(result.Output)
-	// Normalise both sides to uppercase for case-insensitive comparison.
+	// %CD% may return an 8.3 short name (e.g. RUNNER~1) on Windows CI.
+	// EvalSymlinks expands short names to long names via GetFinalPathNameByHandle.
+	if resolved, err2 := filepath.EvalSymlinks(got); err2 == nil {
+		got = resolved
+	}
 	if !strings.EqualFold(got, realDir) {
 		t.Errorf("%%CD%% = %q, want %q", got, realDir)
 	}
@@ -106,9 +110,10 @@ func TestRunHook_NonZeroExit(t *testing.T) {
 func TestRunHook_Timeout(t *testing.T) {
 	t.Parallel()
 
-	// "pause" waits for a key press indefinitely — guaranteed to time out.
+	// "ping -n 30" blocks for ~29 s via the network timer, not stdin, so it
+	// reliably times out even when stdin is /dev/null (the Go exec default).
 	_, err := RunHook(context.Background(), HookParams{
-		Script:    "pause",
+		Script:    "ping -n 30 127.0.0.1",
 		Dir:       t.TempDir(),
 		Env:       map[string]string{},
 		TimeoutMS: 200,
@@ -126,10 +131,11 @@ func TestRunHook_Timeout(t *testing.T) {
 func TestRunHook_ProcessTreeKill(t *testing.T) {
 	t.Parallel()
 
-	// The script spawns a detached background child via "start /b" then
-	// blocks itself. The Job Object created in RunHook ensures both the
-	// outer cmd.exe and its child are terminated when the timeout fires.
-	script := "start /b cmd.exe /C pause & pause"
+	// Spawn a background child and block the parent both with ping (not pause).
+	// pause exits immediately when stdin is /dev/null; ping blocks on the
+	// network timer regardless of stdin. Both processes must be killed by the
+	// Job Object when the timeout fires.
+	script := "start /b ping.exe -n 30 127.0.0.1 & ping -n 30 127.0.0.1"
 
 	start := time.Now()
 	_, err := RunHook(context.Background(), HookParams{
