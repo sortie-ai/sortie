@@ -133,7 +133,23 @@ func runSingleVerification(ctx context.Context, command, workspacePath string, t
 	}
 	go readLimited(stdoutPipe, &stdoutBuf)
 	go readLimited(stderrPipe, &stderrBuf)
+
+	// On some platforms (notably Windows with MSYS2 shells), the write
+	// end of the stdout/stderr pipes may not close promptly when the
+	// process is killed via context cancellation. Explicitly close the
+	// read ends when the context expires so that the drain goroutines
+	// are unblocked and wg.Wait() can return.
+	drainDone := make(chan struct{})
+	go func() {
+		select {
+		case <-cmdCtx.Done():
+			stdoutPipe.Close()
+			stderrPipe.Close()
+		case <-drainDone:
+		}
+	}()
 	wg.Wait()
+	close(drainDone)
 
 	err := cmd.Wait()
 	duration := time.Since(start)
