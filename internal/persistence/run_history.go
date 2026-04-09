@@ -108,8 +108,8 @@ func (s *Store) QueryRunHistoryByIssue(ctx context.Context, issueID string) ([]R
 			r.DisplayID = dispIDVal.String
 		}
 		if reviewMetaVal.Valid {
-			s := reviewMetaVal.String
-			r.ReviewMetadata = &s
+			metaJSON := reviewMetaVal.String
+			r.ReviewMetadata = &metaJSON
 		}
 		entries = append(entries, r)
 	}
@@ -174,8 +174,8 @@ func (s *Store) QueryRecentRunHistory(ctx context.Context, limit int, afterID in
 			r.DisplayID = dispIDVal.String
 		}
 		if reviewMetaVal.Valid {
-			s := reviewMetaVal.String
-			r.ReviewMetadata = &s
+			metaJSON := reviewMetaVal.String
+			r.ReviewMetadata = &metaJSON
 		}
 		entries = append(entries, r)
 	}

@@ -1354,7 +1354,7 @@ func TestNewServiceConfig_SelfReview(t *testing.T) {
 	t.Run("MaxIterations_Below1", func(t *testing.T) {
 		t.Parallel()
 		_, err := NewServiceConfig(map[string]any{
-			"self_review": map[string]any{"max_iterations": 0},
+			"self_review": map[string]any{"enabled": true, "verification_commands": []any{"echo ok"}, "max_iterations": 0},
 		})
 		assertConfigErrorField(t, err, "self_review.max_iterations")
 	})
@@ -1362,7 +1362,7 @@ func TestNewServiceConfig_SelfReview(t *testing.T) {
 	t.Run("MaxIterations_Above10", func(t *testing.T) {
 		t.Parallel()
 		_, err := NewServiceConfig(map[string]any{
-			"self_review": map[string]any{"max_iterations": 11},
+			"self_review": map[string]any{"enabled": true, "verification_commands": []any{"echo ok"}, "max_iterations": 11},
 		})
 		assertConfigErrorField(t, err, "self_review.max_iterations")
 	})
@@ -1371,7 +1371,7 @@ func TestNewServiceConfig_SelfReview(t *testing.T) {
 		t.Parallel()
 		for _, n := range []int{1, 10} {
 			cfg, err := NewServiceConfig(map[string]any{
-				"self_review": map[string]any{"max_iterations": n},
+				"self_review": map[string]any{"enabled": true, "verification_commands": []any{"echo ok"}, "max_iterations": n},
 			})
 			if err != nil {
 				t.Fatalf("max_iterations=%d: unexpected error: %v", n, err)
@@ -1383,7 +1383,7 @@ func TestNewServiceConfig_SelfReview(t *testing.T) {
 	t.Run("Reviewer_Invalid", func(t *testing.T) {
 		t.Parallel()
 		_, err := NewServiceConfig(map[string]any{
-			"self_review": map[string]any{"reviewer": "other-agent"},
+			"self_review": map[string]any{"enabled": true, "verification_commands": []any{"echo ok"}, "reviewer": "other-agent"},
 		})
 		assertConfigErrorField(t, err, "self_review.reviewer")
 	})
@@ -1391,7 +1391,7 @@ func TestNewServiceConfig_SelfReview(t *testing.T) {
 	t.Run("Reviewer_Same", func(t *testing.T) {
 		t.Parallel()
 		cfg, err := NewServiceConfig(map[string]any{
-			"self_review": map[string]any{"reviewer": "same"},
+			"self_review": map[string]any{"enabled": true, "verification_commands": []any{"echo ok"}, "reviewer": "same"},
 		})
 		if err != nil {
 			t.Fatalf("NewServiceConfig: %v", err)
@@ -1403,6 +1403,8 @@ func TestNewServiceConfig_SelfReview(t *testing.T) {
 		t.Parallel()
 		cfg, err := NewServiceConfig(map[string]any{
 			"self_review": map[string]any{
+				"enabled":                 true,
+				"verification_commands":   []any{"echo ok"},
 				"max_iterations":          "5",
 				"verification_timeout_ms": float64(60000),
 				"max_diff_bytes":          "51200",
@@ -1414,6 +1416,23 @@ func TestNewServiceConfig_SelfReview(t *testing.T) {
 		assertIntEqual(t, "SelfReview.MaxIterations", 5, cfg.SelfReview.MaxIterations)
 		assertIntEqual(t, "SelfReview.VerificationTimeoutMS", 60000, cfg.SelfReview.VerificationTimeoutMS)
 		assertIntEqual(t, "SelfReview.MaxDiffBytes", 51200, cfg.SelfReview.MaxDiffBytes)
+	})
+
+	t.Run("Disabled_SkipsValidation", func(t *testing.T) {
+		t.Parallel()
+		cfg, err := NewServiceConfig(map[string]any{
+			"self_review": map[string]any{
+				"enabled":        false,
+				"max_iterations": 0,
+				"reviewer":       "nonexistent",
+			},
+		})
+		if err != nil {
+			t.Fatalf("Disabled self_review with invalid fields should not error: %v", err)
+		}
+		if cfg.SelfReview.Enabled {
+			t.Error("SelfReview.Enabled = true, want false")
+		}
 	})
 
 	t.Run("SchemaUnknownKey", func(t *testing.T) {
