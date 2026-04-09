@@ -125,10 +125,10 @@ func TestSignalGraceful_ConsoleProcess(t *testing.T) {
 	// process is terminated by CTRL_BREAK_EVENT.
 	const statusControlCExit = uint32(0xC000013A)
 
-	// Use ping as a long-running process. It blocks via the network
-	// timer and works in non-interactive environments where timeout.exe
-	// and pause exit immediately.
-	cmd := exec.Command("cmd.exe", "/C", "ping -n 31 127.0.0.1 >nul")
+	// Launch ping directly (not via cmd.exe) so that ping.exe IS the
+	// process group leader and receives CTRL_BREAK_EVENT without
+	// cmd.exe intercepting or swallowing the signal.
+	cmd := exec.Command("ping", "-n", "31", "127.0.0.1")
 	SetProcessGroup(cmd)
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("cmd.Start() = %v", err)
