@@ -253,6 +253,7 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 	}
 	if needResetup {
 		logger = logging.Setup(stderr, effectiveLevel, effectiveFormat)
+		mgr.SetLogger(logger)
 	}
 
 	serverPort, serverEnabled, portErr := resolveServerPort(*port, portFlagSet, cfg.Extensions)

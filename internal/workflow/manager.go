@@ -130,6 +130,26 @@ func (m *Manager) LastLoadError() error {
 	return m.lastLoadErr
 }
 
+func (m *Manager) currentLogger() *slog.Logger {
+	m.mu.RLock()
+	l := m.logger
+	m.mu.RUnlock()
+	return l
+}
+
+// SetLogger replaces the logger used for reload diagnostics and watcher
+// errors. Safe for concurrent use — the file-watcher goroutine may be
+// running. A nil argument is treated as [slog.Default]. After return,
+// all subsequent log calls from the watcher use the new logger.
+func (m *Manager) SetLogger(logger *slog.Logger) {
+	if logger == nil {
+		logger = slog.Default()
+	}
+	m.mu.Lock()
+	m.logger = logger
+	m.mu.Unlock()
+}
+
 // Reload synchronously re-reads the workflow file, parses config and
 // prompt, and swaps the effective values. On error the previous config
 // is retained and the error is returned. This supports the orchestrator's
@@ -238,7 +258,7 @@ func (m *Manager) watch(ctx context.Context) {
 			if !ok {
 				return
 			}
-			m.logger.Error("workflow watcher error", slog.Any("error", err))
+			m.currentLogger().Error("workflow watcher error", slog.Any("error", err))
 		case <-timer.C:
 			m.reload()
 		}
@@ -246,9 +266,10 @@ func (m *Manager) watch(ctx context.Context) {
 }
 
 func (m *Manager) reload() {
+	logger := m.currentLogger()
 	cfg, tmpl, err := m.loadPipeline()
 	if err != nil {
-		m.logger.Error("workflow reload failed", slog.Any("error", err), slog.String("path", m.path))
+		logger.Error("workflow reload failed", slog.Any("error", err), slog.String("path", m.path))
 		m.mu.Lock()
 		m.lastLoadErr = err
 		m.mu.Unlock()
@@ -257,7 +278,7 @@ func (m *Manager) reload() {
 
 	if m.validateFunc != nil {
 		if err := m.validateFunc(cfg); err != nil {
-			m.logger.Error("workflow reload rejected by validation",
+			logger.Error("workflow reload rejected by validation",
 				slog.Any("error", err), slog.String("path", m.path))
 			m.mu.Lock()
 			m.lastLoadErr = err
@@ -271,7 +292,7 @@ func (m *Manager) reload() {
 	m.currentPrompt = tmpl
 	m.lastLoadErr = nil
 	m.mu.Unlock()
-	m.logger.Info("workflow reloaded", slog.String("path", m.path))
+	logger.Info("workflow reloaded", slog.String("path", m.path))
 }
 
 // loadPipeline runs the full Load → NewServiceConfig → Parse pipeline.

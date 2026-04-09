@@ -1,12 +1,14 @@
 package workflow
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -699,4 +701,109 @@ func TestManager_ReloadNonEmptyActiveEmptyTerminalPromotes(t *testing.T) {
 	if got := mgr.Config().Tracker.ActiveStates; len(got) != 1 || got[0] != "In Progress" {
 		t.Errorf("Config().Tracker.ActiveStates = %v, want [In Progress]", got)
 	}
+}
+
+func TestManager_SetLogger(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "WORKFLOW.md")
+	mustWriteFile(t, path, validWorkflow(5000))
+
+	var bufA, bufB bytes.Buffer
+	loggerA := slog.New(slog.NewTextHandler(&bufA, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	loggerB := slog.New(slog.NewTextHandler(&bufB, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	mgr, err := NewManager(path, loggerA)
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+
+	mgr.SetLogger(loggerB)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := mgr.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	time.Sleep(50 * time.Millisecond)
+
+	writeWorkflow(t, path, []byte("---\n[[[invalid\n---\nprompt\n"))
+
+	ok := pollUntil(func() bool { return mgr.LastLoadError() != nil })
+	if !ok {
+		t.Fatal("reload of invalid file was not detected within timeout")
+	}
+
+	// Stop before reading buffers to ensure the watcher goroutine has exited
+	// and no concurrent writes remain.
+	mgr.Stop()
+
+	if !strings.Contains(bufB.String(), "workflow reload failed") {
+		t.Errorf("loggerB output does not contain %q: %s", "workflow reload failed", bufB.String())
+	}
+	if strings.Contains(bufA.String(), "workflow reload failed") {
+		t.Errorf("loggerA output unexpectedly contains %q: %s", "workflow reload failed", bufA.String())
+	}
+}
+
+func TestManager_SetLoggerNil(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "WORKFLOW.md")
+	mustWriteFile(t, path, validWorkflow(5000))
+
+	mgr, err := NewManager(path, testLogger())
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	defer mgr.Stop()
+
+	mgr.SetLogger(nil)
+
+	if mgr.LastLoadError() != nil {
+		t.Errorf("LastLoadError() = %v, want nil", mgr.LastLoadError())
+	}
+}
+
+func TestManager_SetLoggerConcurrentWithReload(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "WORKFLOW.md")
+	mustWriteFile(t, path, validWorkflow(5000))
+
+	mgr, err := NewManager(path, testLogger())
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := mgr.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	time.Sleep(50 * time.Millisecond)
+
+	var stop atomic.Bool
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		for !stop.Load() {
+			mgr.SetLogger(testLogger())
+		}
+	}()
+
+	for i := range 5 {
+		writeWorkflow(t, path, validWorkflow(5000+i))
+		time.Sleep(40 * time.Millisecond)
+	}
+
+	stop.Store(true)
+	wg.Wait()
+	mgr.Stop()
 }
