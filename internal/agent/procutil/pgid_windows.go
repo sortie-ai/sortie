@@ -61,6 +61,13 @@ func SignalGraceful(pid int) error {
 	return SignalProcessGroup(pid, syscall.SIGTERM)
 }
 
+// jobTerminateExitCode is the exit code passed to TerminateJobObject.
+// STATUS_CONTROL_C_EXIT (0xC000013A) is used so that [WasSignaled]
+// can distinguish "killed by us" from normal non-zero exits. Exit
+// code 1 cannot be used because it is the most common legitimate
+// failure code on Windows.
+const jobTerminateExitCode = 0xC000013A
+
 // KillProcessGroup terminates all processes in the Job Object
 // associated with pid. If no Job Object is registered (degraded
 // mode), falls back to killing the single process by PID.
@@ -71,7 +78,7 @@ func KillProcessGroup(pid int) error {
 	v, ok := jobs.LoadAndDelete(pid)
 	if ok {
 		entry := v.(*jobEntry)
-		err := windows.TerminateJobObject(entry.job, 1)
+		err := windows.TerminateJobObject(entry.job, jobTerminateExitCode)
 		windows.CloseHandle(entry.job)
 		return err
 	}

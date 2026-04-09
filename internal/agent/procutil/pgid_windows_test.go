@@ -82,7 +82,9 @@ func TestKillProcessGroup_KillsChildAndGrandchild(t *testing.T) {
 
 	// Spawn cmd.exe that runs a background child via "start /b".
 	// The Job Object with KILL_ON_JOB_CLOSE terminates all descendants.
-	cmd := exec.Command("cmd.exe", "/C", "start /b cmd.exe /C pause & pause")
+	// Use ping instead of pause because pause exits immediately when
+	// stdin is closed (the Go exec default).
+	cmd := exec.Command("cmd.exe", "/C", "start /b ping -n 30 127.0.0.1 >nul & ping -n 30 127.0.0.1 >nul")
 	SetProcessGroup(cmd)
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("cmd.Start() = %v", err)
@@ -121,7 +123,7 @@ func TestSignalGraceful_ConsoleProcess(t *testing.T) {
 	// process is terminated by CTRL_BREAK_EVENT.
 	const statusControlCExit = uint32(0xC000013A)
 
-	cmd := exec.Command("cmd.exe", "/C", "pause")
+	cmd := exec.Command("cmd.exe", "/C", "ping -n 30 127.0.0.1 >nul")
 	SetProcessGroup(cmd)
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("cmd.Start() = %v", err)
@@ -158,5 +160,52 @@ func TestSignalGraceful_ConsoleProcess(t *testing.T) {
 		_ = KillProcessGroup(pid)
 		<-done
 		t.Fatal("process did not exit within grace period after SignalGraceful")
+	}
+}
+
+func TestWasSignaled_NormalExit1_NotSignaled(t *testing.T) {
+	t.Parallel()
+
+	// A normal "exit 1" must NOT be classified as signaled.
+	cmd := exec.Command("cmd.exe", "/C", "exit 1")
+	err := cmd.Run()
+	if err == nil {
+		t.Fatal("cmd.Run() = nil, want exit error")
+	}
+	if WasSignaled(err) {
+		t.Errorf("WasSignaled(exit 1) = true, want false")
+	}
+}
+
+func TestWasSignaled_JobTermination_IsSignaled(t *testing.T) {
+	t.Parallel()
+
+	// A process killed via KillProcessGroup (Job Object with
+	// STATUS_CONTROL_C_EXIT exit code) must be classified as signaled.
+	cmd := exec.Command("cmd.exe", "/C", "timeout /t 30 >nul")
+	SetProcessGroup(cmd)
+	if err := cmd.Start(); err != nil {
+		t.Fatalf("cmd.Start() = %v", err)
+	}
+	pid := cmd.Process.Pid
+
+	if err := AssignProcess(pid, cmd.Process); err != nil {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+		t.Fatalf("AssignProcess() = %v", err)
+	}
+
+	time.Sleep(100 * time.Millisecond)
+
+	if err := KillProcessGroup(pid); err != nil {
+		t.Fatalf("KillProcessGroup() = %v", err)
+	}
+
+	waitErr := cmd.Wait()
+	if waitErr == nil {
+		t.Fatal("cmd.Wait() = nil, want exit error after Job Object termination")
+	}
+	if !WasSignaled(waitErr) {
+		t.Errorf("WasSignaled(job-terminated) = false, want true")
 	}
 }
