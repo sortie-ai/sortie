@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Windows process lifecycle support for agent adapters and workspace hooks.
+  Agent subprocesses are now placed in Windows Job Objects with
+  `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`, enabling full process tree cleanup on
+  timeout or cancellation. Graceful shutdown sends `CTRL_BREAK_EVENT` to the
+  process group; force-terminate uses `TerminateJobObject`. Workspace hooks
+  execute via `cmd.exe /C` on Windows with their own Job Object for timeout
+  enforcement. The `procutil` package exposes three new cross-platform
+  functions — `SignalGraceful`, `AssignProcess`, and `CleanupProcess` — and
+  `WasSignaled` is now platform-aware. Adapters no longer reference
+  `syscall.SIGTERM` directly.
+  ([#391](https://github.com/sortie-ai/sortie/issues/391),
+  [#409](https://github.com/sortie-ai/sortie/pull/409))
+
 ## [1.5.1] - 2026-04-08
 
 ### Added

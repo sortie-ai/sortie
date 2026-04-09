@@ -206,9 +206,12 @@ backed by `apply_patch`), `create`, `apply_patch`, `glob`, `grep`, `web_fetch`, 
 Per architecture Section 10.7, the adapter launches:
 
 ```
-# POSIX (Linux / macOS). On Windows, use cmd.exe /C or PowerShell equivalent.
+# POSIX (Linux / macOS)
 sh -c 'copilot -p "$1" --output-format json -s --allow-all --autopilot --no-ask-user --max-autopilot-continues "$2" ${3:+--resume "$3"}' -- "$prompt" "$max_continues" "$session_id"
 ```
+
+On Windows, the adapter invokes the CLI directly without a shell wrapper. The subprocess receives
+`CREATE_NEW_PROCESS_GROUP` and is assigned to a Job Object for process tree management.
 
 > **Shell safety:** The prompt must not be interpolated directly into the `sh -c` string. Pass
 > it as a positional parameter (`$1`) to avoid injection via shell metacharacters in
@@ -435,7 +438,9 @@ logical Copilot CLI session, while deferring creation of the Node.js subprocess 
    - Turn 1: `copilot -p "<prompt>" --output-format json -s --allow-all --autopilot
      --no-ask-user --max-autopilot-continues <N>`
    - Turn 2+: append `--resume <session_id>` to continue the conversation.
-2. Launch subprocess with `sh -c <command>`, cwd = workspace path.
+2. Launch subprocess (POSIX: `sh -c <command>`; Windows: direct invocation), cwd = workspace path.
+   The subprocess is placed in its own process group and assigned to platform-specific
+   process tree management (Unix process groups / Windows Job Objects).
 3. Read stdout line by line, parse each JSON event, and deliver to `OnEvent` callback.
 4. On each event, update the stall detection timer.
 5. When the process exits:
@@ -447,10 +452,12 @@ logical Copilot CLI session, while deferring creation of the Node.js subprocess 
 
 ### `StopSession`
 
-1. If a subprocess is running, send `SIGTERM`.
-2. Wait briefly (e.g., 5 seconds) for clean exit.
-3. If still running, send `SIGKILL`.
-4. Clean up file descriptors and goroutines.
+1. If a subprocess is running, send a platform-appropriate graceful shutdown signal to the
+   process group (POSIX: `SIGTERM`; Windows: `CTRL_BREAK_EVENT`).
+2. Wait briefly (5 seconds) for clean exit.
+3. If still running, force-terminate the process tree (POSIX: `SIGKILL` to process group;
+   Windows: `TerminateJobObject`).
+4. Clean up file descriptors, goroutines, and platform-specific process group resources.
 
 ### `EventStream`
 
@@ -529,8 +536,8 @@ The adapter must respect `context.Context` cancellation:
 
 - `RunTurn` receives a context. If the context is cancelled (e.g., due to tracker reconciliation
   finding the issue is terminal), the adapter must kill the subprocess promptly.
-- Use `cmd.Process.Signal(syscall.SIGTERM)` followed by a grace period, then
-  `cmd.Process.Kill()`.
+- The adapter sends a graceful shutdown signal to the process group, followed by a grace period,
+  then force-terminates the process tree. Platform-specific details are handled by `procutil`.
 
 ---
 
@@ -583,7 +590,7 @@ is set.
 | 0                        | Success (task completed or autopilot ended normally). If no `result` event was received and cumulative output tokens are zero, treated as `turn_failed` (no-output safety heuristic). | `turn_completed` or `turn_failed` (no-output heuristic) |
 | Non-zero                 | General error                            | `turn_failed`                                     |
 | 127                      | `copilot` binary not found               | `agent_not_found`                                 |
-| Signal (SIGTERM/SIGKILL) | Killed by adapter or OS                  | `turn_cancelled`                                  |
+| Signal (graceful/force)  | Killed by adapter or OS                  | `turn_cancelled`                                  |
 
 > **Gap:** Copilot CLI does not document specific exit codes for different failure modes (unlike
 > Claude Code which uses exit code 1 for general errors). The adapter should treat any non-zero
@@ -1125,8 +1132,8 @@ adapter.
    death as `turn_cancelled`.
 6. **Token tracking:** Extract `outputTokens` from `assistant.message` events and
    `premiumRequests` from the `result` event. For input token counts, enable OTel.
-7. **Timeout:** Enforce `turn_timeout_ms` via context deadline + SIGTERM/SIGKILL.
-8. **StopSession:** Kill subprocess if running (SIGTERM → grace → SIGKILL).
+7. **Timeout:** Enforce `turn_timeout_ms` via context deadline + graceful signal → force-terminate.
+8. **StopSession:** Kill subprocess if running (graceful signal → grace → force-terminate).
 9. **Error mapping:** Check exit code and stderr output. Map to architecture error categories.
 10. **Session continuity:** Use `--resume <session_id>` for multi-turn conversations.
 11. **Permissions:** Default to `--allow-all --no-ask-user` for headless operation.
