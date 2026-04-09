@@ -89,9 +89,10 @@ When preparing a new release, the window is: tag date (exclusive) → today.
 gh pr view <NUMBER> --json title,body --jq '"\(.title)\n\(.body)"' | head -40
 gh pr view <NUMBER> --json commits --jq '.commits[].messageHeadline'
 
-# Extract linked issues from the PR body (Closes / Fixes / Resolves / Related to)
+# Extract linked issues from the PR body (all GitHub closing keywords, case-insensitive;
+# handles optional markdown bold, optional colon, cross-repo owner/repo#N, multiple per line)
 gh pr view <NUMBER> --json body --jq '.body' \
-  | grep -oE '(Closes|Fixes|Resolves|Related to|Part of)[[:space:]]+#[0-9]+'
+  | grep -ioE '\*{0,2}(close[ds]?|fix(e[ds])?|resolve[ds]?|related|part of)[^:#*]*:?\*{0,2}[[:space:]]+([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)?#[0-9]+'
 ```
 
 Use the PR body's **Scope & Context** section to understand the user-facing
