@@ -123,7 +123,7 @@ func TestSignalGraceful_ConsoleProcess(t *testing.T) {
 	// process is terminated by CTRL_BREAK_EVENT.
 	const statusControlCExit = uint32(0xC000013A)
 
-	cmd := exec.Command("cmd.exe", "/C", "ping -n 30 127.0.0.1 >nul")
+	cmd := exec.Command("cmd.exe", "/C", "timeout /t 30 /nobreak >nul")
 	SetProcessGroup(cmd)
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("cmd.Start() = %v", err)
