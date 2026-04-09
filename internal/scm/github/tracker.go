@@ -1,15 +1,10 @@
-// Package github implements [domain.TrackerAdapter] for the GitHub
-// REST API (version 2026-03-10). Issues are fetched via the issues
-// list endpoint (or search endpoint when query_filter is configured),
-// normalized to domain types with labels lowercased, nil priority
-// (GitHub has no native priority), and label-based state derivation.
-// State is determined by scanning issue labels against configured
-// active_states, terminal_states, and the optional handoff_state in
-// config order; the first label match wins. When handoff_state is
-// configured, state derivation and label removal during transitions
-// treat it as a recognized state label. Comments are Markdown
-// pass-through (no ADF conversion). Registered under kind "github"
-// via an init function.
+// Package github provides GitHub SCM adapter implementations for Sortie.
+// The package includes [GitHubAdapter], which implements [domain.TrackerAdapter]
+// against the GitHub Issues and Labels REST API, and [GitHubCIProvider], which
+// implements [domain.CIStatusProvider] against the GitHub Checks API. Both
+// adapters share the internal HTTP client ([githubClient]) and ETag cache
+// ([etagCache]). Start with [NewGitHubAdapter] for tracker integration or
+// [NewGitHubCIProvider] for CI status queries.
 //
 // Unlike the Jira adapter, this adapter stores both activeStates and
 // terminalStates. Jira has native workflow states that the adapter

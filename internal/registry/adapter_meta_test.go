@@ -8,8 +8,8 @@ import (
 	// Trigger adapter init() registrations.
 	_ "github.com/sortie-ai/sortie/internal/agent/claude"
 	_ "github.com/sortie-ai/sortie/internal/agent/mock"
+	_ "github.com/sortie-ai/sortie/internal/scm/github"
 	_ "github.com/sortie-ai/sortie/internal/tracker/file"
-	_ "github.com/sortie-ai/sortie/internal/tracker/github"
 	_ "github.com/sortie-ai/sortie/internal/tracker/jira"
 )
 

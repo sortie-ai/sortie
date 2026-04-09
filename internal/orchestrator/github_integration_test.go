@@ -18,7 +18,7 @@ import (
 	"github.com/sortie-ai/sortie/internal/registry"
 
 	_ "github.com/sortie-ai/sortie/internal/agent/mock"
-	_ "github.com/sortie-ai/sortie/internal/tracker/github"
+	_ "github.com/sortie-ai/sortie/internal/scm/github"
 )
 
 // --- GitHub E2E test helpers ---

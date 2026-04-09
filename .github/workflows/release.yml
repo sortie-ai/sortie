@@ -155,7 +155,7 @@ jobs:
           go-version-file: go.mod
 
       - name: Run integration tests
-        run: go test -race -count=1 -v -run 'Integration' ./internal/tracker/github/...
+        run: go test -race -count=1 -v -run 'Integration' ./internal/scm/github/...
 
   test-e2e-github:
     name: "E2E: GitHub orchestrator"
