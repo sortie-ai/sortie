@@ -12,9 +12,9 @@ import (
 	"github.com/sortie-ai/sortie/internal/persistence"
 )
 
-// ciPendingBackoffBase is the base interval for CI-pending exponential backoff.
-// Each re-enqueue on a pending or error result doubles the previous interval.
-const ciPendingBackoffBase = 10 * time.Second
+// ciPendingBackoffBaseDefault is the fallback base interval for CI-pending
+// exponential backoff when the configured poll interval is zero or negative.
+const ciPendingBackoffBaseDefault = 10 * time.Second
 
 // ciPendingBackoffCap is the maximum interval between CI status checks.
 const ciPendingBackoffCap = 5 * time.Minute
@@ -25,9 +25,12 @@ const ciPendingDefaultTTL = 30 * time.Minute
 
 // computeCIPendingDelay returns the backoff delay for a CI pending re-check
 // at the given attempt count. Attempt 0 returns zero (immediate). Each
-// subsequent attempt returns ciPendingBackoffBase * 2^attempts, capped at
-// ciPendingBackoffCap.
-func computeCIPendingDelay(attempts int) time.Duration {
+// subsequent attempt returns base * 2^attempts, capped at ciPendingBackoffCap.
+// If base is zero or negative, [ciPendingBackoffBaseDefault] is used.
+func computeCIPendingDelay(base time.Duration, attempts int) time.Duration {
+	if base <= 0 {
+		base = ciPendingBackoffBaseDefault
+	}
 	if attempts <= 0 {
 		return 0
 	}
@@ -35,7 +38,7 @@ func computeCIPendingDelay(attempts int) time.Duration {
 	if shift > 30 {
 		return ciPendingBackoffCap
 	}
-	delay := ciPendingBackoffBase * (1 << shift)
+	delay := base * (1 << shift)
 	if delay > ciPendingBackoffCap || delay < 0 {
 		return ciPendingBackoffCap
 	}
@@ -60,6 +63,7 @@ func reconcileCIStatus(state *State, params ReconcileParams, log *slog.Logger, c
 	}
 
 	ttl := params.CIPendingTTL
+	base := time.Duration(state.PollIntervalMS) * time.Millisecond
 
 	for issueID, pending := range state.PendingCICheck {
 		delete(state.PendingCICheck, issueID)
@@ -87,7 +91,7 @@ func reconcileCIStatus(state *State, params ReconcileParams, log *slog.Logger, c
 		result, err := params.CIProvider.FetchCIStatus(ctx, ref)
 		if err != nil {
 			pending.PendingAttempts++
-			delay := computeCIPendingDelay(pending.PendingAttempts)
+			delay := computeCIPendingDelay(base, pending.PendingAttempts)
 			pending.PendingRetryAt = now.Add(delay)
 			entryLog.Warn("ci status fetch failed, retrying with backoff",
 				slog.String("ref", ref),
@@ -111,7 +115,7 @@ func reconcileCIStatus(state *State, params ReconcileParams, log *slog.Logger, c
 
 		case domain.CIStatusPending:
 			pending.PendingAttempts++
-			delay := computeCIPendingDelay(pending.PendingAttempts)
+			delay := computeCIPendingDelay(base, pending.PendingAttempts)
 			pending.PendingRetryAt = now.Add(delay)
 			state.PendingCICheck[issueID] = pending
 			entryLog.Debug("CI pending, will re-check after backoff",
@@ -130,7 +134,7 @@ func reconcileCIStatus(state *State, params ReconcileParams, log *slog.Logger, c
 			)
 			metrics.IncCIStatusChecks("error")
 			pending.PendingAttempts++
-			pending.PendingRetryAt = now.Add(computeCIPendingDelay(pending.PendingAttempts))
+			pending.PendingRetryAt = now.Add(computeCIPendingDelay(base, pending.PendingAttempts))
 			state.PendingCICheck[issueID] = pending
 		}
 	}
