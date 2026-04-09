@@ -749,22 +749,48 @@ func TestManager_SetLogger(t *testing.T) {
 }
 
 func TestManager_SetLoggerNil(t *testing.T) {
-	t.Parallel()
-
+	// No t.Parallel — this test mutates the global slog.Default.
 	dir := t.TempDir()
 	path := filepath.Join(dir, "WORKFLOW.md")
 	mustWriteFile(t, path, validWorkflow(5000))
 
-	mgr, err := NewManager(path, testLogger())
+	var explicitBuf, defaultBuf bytes.Buffer
+	explicitLogger := slog.New(slog.NewTextHandler(&explicitBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	defaultLogger := slog.New(slog.NewTextHandler(&defaultBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	prevDefault := slog.Default()
+	slog.SetDefault(defaultLogger)
+	defer slog.SetDefault(prevDefault)
+
+	mgr, err := NewManager(path, explicitLogger)
 	if err != nil {
 		t.Fatalf("NewManager: %v", err)
 	}
-	defer mgr.Stop()
 
 	mgr.SetLogger(nil)
 
-	if mgr.LastLoadError() != nil {
-		t.Errorf("LastLoadError() = %v, want nil", mgr.LastLoadError())
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := mgr.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+
+	time.Sleep(50 * time.Millisecond)
+
+	writeWorkflow(t, path, []byte("---\n[[[invalid\n---\nprompt\n"))
+
+	ok := pollUntil(func() bool { return mgr.LastLoadError() != nil })
+	if !ok {
+		t.Fatal("reload of invalid file was not detected within timeout")
+	}
+
+	mgr.Stop()
+
+	if !strings.Contains(defaultBuf.String(), "workflow reload failed") {
+		t.Errorf("default logger output does not contain %q: %s", "workflow reload failed", defaultBuf.String())
+	}
+	if strings.Contains(explicitBuf.String(), "workflow reload failed") {
+		t.Errorf("explicit logger output unexpectedly contains %q: %s", "workflow reload failed", explicitBuf.String())
 	}
 }
 
