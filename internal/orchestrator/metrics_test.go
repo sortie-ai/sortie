@@ -187,6 +187,14 @@ func (s *spyMetrics) IncCIStatusChecks(_ string) {}
 
 func (s *spyMetrics) IncCIEscalations(_ string) {}
 
+func (s *spyMetrics) IncSelfReviewIterations(_ string) {}
+
+func (s *spyMetrics) IncSelfReviewSessions(_ string) {}
+
+func (s *spyMetrics) ObserveSelfReviewVerificationDuration(_ string, _ float64) {}
+
+func (s *spyMetrics) IncSelfReviewCapReached() {}
+
 // --- Tests ---
 
 func TestActiveElapsedSeconds(t *testing.T) {

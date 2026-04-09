@@ -199,6 +199,14 @@ type RunningEntry struct {
 	// the worker session. Populated by HandleRetryTimer when the retry
 	// trigger is triggerCIFix. Nil for normal dispatches and non-CI retries.
 	CIFailureContext map[string]any
+
+	// SelfReviewActive is true when the worker is in the self-review phase.
+	// Mutated only by the event loop via selfReviewCh.
+	SelfReviewActive bool
+
+	// SelfReviewIteration is the current review iteration (0 when not in review).
+	// Mutated only by the event loop via selfReviewCh.
+	SelfReviewIteration int
 }
 
 // RetryEntry holds the runtime state for a pending retry. The persisted
@@ -419,28 +427,30 @@ func RunningCountByState(running map[string]*RunningEntry, state string) int {
 // SnapshotRunningEntry is a read-only view of a single running session
 // for observability consumers. Produced by [RuntimeSnapshot].
 type SnapshotRunningEntry struct {
-	IssueID            string                `json:"issue_id"`
-	Identifier         string                `json:"issue_identifier"`
-	DisplayID          string                `json:"display_identifier,omitempty"`
-	State              string                `json:"state"`
-	SessionID          string                `json:"session_id"`
-	TurnCount          int                   `json:"turn_count"`
-	LastAgentEvent     domain.AgentEventType `json:"last_event"`
-	LastAgentTimestamp time.Time             `json:"last_event_at"`
-	LastAgentMessage   string                `json:"last_message"`
-	StartedAt          time.Time             `json:"started_at"`
-	AgentInputTokens   int64                 `json:"input_tokens"`
-	AgentOutputTokens  int64                 `json:"output_tokens"`
-	AgentTotalTokens   int64                 `json:"total_tokens"`
-	CacheReadTokens    int64                 `json:"cache_read_tokens"`
-	ModelName          string                `json:"model_name,omitempty"`
-	APIRequestCount    int                   `json:"api_request_count"`
-	RequestsByModel    map[string]int        `json:"requests_by_model,omitempty"`
-	WorkspacePath      string                `json:"workspace_path"`
-	SSHHost            string                `json:"ssh_host,omitempty"`
-	ToolTimeMs         int64                 `json:"tool_time_ms"`
-	APITimeMs          int64                 `json:"api_time_ms"`
-	WorkflowFile       string                `json:"workflow_file,omitempty"`
+	IssueID             string                `json:"issue_id"`
+	Identifier          string                `json:"issue_identifier"`
+	DisplayID           string                `json:"display_identifier,omitempty"`
+	State               string                `json:"state"`
+	SessionID           string                `json:"session_id"`
+	TurnCount           int                   `json:"turn_count"`
+	LastAgentEvent      domain.AgentEventType `json:"last_event"`
+	LastAgentTimestamp  time.Time             `json:"last_event_at"`
+	LastAgentMessage    string                `json:"last_message"`
+	StartedAt           time.Time             `json:"started_at"`
+	AgentInputTokens    int64                 `json:"input_tokens"`
+	AgentOutputTokens   int64                 `json:"output_tokens"`
+	AgentTotalTokens    int64                 `json:"total_tokens"`
+	CacheReadTokens     int64                 `json:"cache_read_tokens"`
+	ModelName           string                `json:"model_name,omitempty"`
+	APIRequestCount     int                   `json:"api_request_count"`
+	RequestsByModel     map[string]int        `json:"requests_by_model,omitempty"`
+	WorkspacePath       string                `json:"workspace_path"`
+	SSHHost             string                `json:"ssh_host,omitempty"`
+	ToolTimeMs          int64                 `json:"tool_time_ms"`
+	APITimeMs           int64                 `json:"api_time_ms"`
+	WorkflowFile        string                `json:"workflow_file,omitempty"`
+	SelfReviewActive    bool                  `json:"self_review_active,omitempty"`
+	SelfReviewIteration int                   `json:"self_review_iteration,omitempty"`
 }
 
 // SnapshotRetryEntry is a read-only view of a pending retry for
@@ -530,28 +540,30 @@ func RuntimeSnapshot(state *State, now time.Time) RuntimeSnapshotResult {
 			}
 		}
 		snap.Running = append(snap.Running, SnapshotRunningEntry{
-			IssueID:            entry.Issue.ID,
-			Identifier:         entry.Identifier,
-			DisplayID:          entry.Issue.DisplayID,
-			State:              entry.Issue.State,
-			SessionID:          entry.SessionID,
-			TurnCount:          entry.TurnCount,
-			LastAgentEvent:     entry.LastAgentEvent,
-			LastAgentTimestamp: entry.LastAgentTimestamp,
-			LastAgentMessage:   entry.LastAgentMessage,
-			StartedAt:          entry.StartedAt,
-			AgentInputTokens:   entry.AgentInputTokens,
-			AgentOutputTokens:  entry.AgentOutputTokens,
-			AgentTotalTokens:   entry.AgentTotalTokens,
-			CacheReadTokens:    entry.CacheReadTokens,
-			ModelName:          entry.ModelName,
-			APIRequestCount:    entry.APIRequestCount,
-			RequestsByModel:    modelRequests,
-			WorkspacePath:      entry.WorkspacePath,
-			SSHHost:            entry.SSHHost,
-			ToolTimeMs:         entry.ToolTimeMs,
-			APITimeMs:          entry.APITimeMs,
-			WorkflowFile:       entry.WorkflowFile,
+			IssueID:             entry.Issue.ID,
+			Identifier:          entry.Identifier,
+			DisplayID:           entry.Issue.DisplayID,
+			State:               entry.Issue.State,
+			SessionID:           entry.SessionID,
+			TurnCount:           entry.TurnCount,
+			LastAgentEvent:      entry.LastAgentEvent,
+			LastAgentTimestamp:  entry.LastAgentTimestamp,
+			LastAgentMessage:    entry.LastAgentMessage,
+			StartedAt:           entry.StartedAt,
+			AgentInputTokens:    entry.AgentInputTokens,
+			AgentOutputTokens:   entry.AgentOutputTokens,
+			AgentTotalTokens:    entry.AgentTotalTokens,
+			CacheReadTokens:     entry.CacheReadTokens,
+			ModelName:           entry.ModelName,
+			APIRequestCount:     entry.APIRequestCount,
+			RequestsByModel:     modelRequests,
+			WorkspacePath:       entry.WorkspacePath,
+			SSHHost:             entry.SSHHost,
+			ToolTimeMs:          entry.ToolTimeMs,
+			APITimeMs:           entry.APITimeMs,
+			WorkflowFile:        entry.WorkflowFile,
+			SelfReviewActive:    entry.SelfReviewActive,
+			SelfReviewIteration: entry.SelfReviewIteration,
 		})
 
 		if !entry.StartedAt.IsZero() {

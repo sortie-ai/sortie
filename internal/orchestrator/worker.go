@@ -135,6 +135,11 @@ type WorkerResult struct {
 	// false.
 	SoftStopReason string
 
+	// ReviewMetadata summarizes the self-review loop outcome.
+	// Nil when self-review is disabled or the worker exited before
+	// the review phase.
+	ReviewMetadata *domain.ReviewMetadata
+
 	// StartedAt is copied from the RunningEntry (set by DispatchIssue).
 	// The worker does not set this — it is populated by the exit
 	// handler from the running map entry.
@@ -213,6 +218,11 @@ type WorkerDeps struct {
 	// template on the first turn. Non-nil only for CI-fix continuation
 	// dispatches. Nil for normal dispatches and non-CI retries.
 	CIFailureContext map[string]any
+
+	// OnProgress relays self-review progress to the orchestrator's event
+	// loop. Called from the worker goroutine; must be safe for concurrent
+	// use. May be nil when self-review is not configured.
+	OnProgress func(selfReviewProgressMsg)
 }
 
 // normalizeAttempt converts the nullable attempt to a plain integer.
@@ -814,8 +824,53 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 		turnNumber++
 	}
 
+	// Self-review phase: run verification commands and iterate with the
+	// agent before final exit. Re-read config for dynamic reload.
+	reviewCfg := deps.ConfigFunc()
+	var reviewMeta *domain.ReviewMetadata
+
+	if reviewCfg.SelfReview.Enabled && isActiveState(issue.State, activeStates) && ctx.Err() == nil {
+		reviewMeta = runSelfReviewLoop(ctx, RunSelfReviewParams{
+			Session:        session,
+			Issue:          issue,
+			WorkspacePath:  wsResult.Path,
+			Config:         reviewCfg.SelfReview,
+			AgentAdapter:   deps.AgentAdapter,
+			OnEvent:        deps.OnEvent,
+			OnProgress:     deps.OnProgress,
+			Logger:         logger,
+			Metrics:        deps.Metrics,
+			TurnsCompleted: &turnsCompleted,
+		})
+	}
+
+	selfReviewStatus := "disabled"
+	selfReviewSummaryPath := ""
+	if reviewMeta != nil {
+		switch {
+		case reviewMeta.FinalVerdict == "pass":
+			selfReviewStatus = "passed"
+		case reviewMeta.CapReached:
+			selfReviewStatus = "cap_reached"
+		default:
+			selfReviewStatus = "error"
+		}
+		selfReviewSummaryPath = filepath.Join(wsResult.Path, ".sortie", "review_summary.md")
+	}
+
 	stopSessionBestEffort(ctx, deps.AgentAdapter, session, cfg, logger)
-	finishWorkspace()
+	workspace.Finish(ctx, workspace.FinishParams{
+		Path:                  wsResult.Path,
+		Identifier:            issue.Identifier,
+		IssueID:               issue.ID,
+		Attempt:               attemptInt,
+		AfterRun:              cfg.Hooks.AfterRun,
+		HookTimeoutMS:         cfg.Hooks.TimeoutMS,
+		Logger:                logger,
+		SSHHost:               deps.SSHHost,
+		SelfReviewStatus:      selfReviewStatus,
+		SelfReviewSummaryPath: selfReviewSummaryPath,
+	})
 
 	logger.Info("worker exiting",
 		slog.Any("exit_kind", WorkerExitNormal),
@@ -833,6 +888,7 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 		AgentAdapter:   cfg.Agent.Kind,
 		Attempt:        attempt,
 		SSHHost:        deps.SSHHost,
+		ReviewMetadata: reviewMeta,
 	})
 }
 

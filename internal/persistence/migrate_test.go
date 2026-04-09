@@ -197,6 +197,7 @@ func TestMigrate_ColumnCorrectness(t *testing.T) {
 				{"workflow_file", "TEXT", false, 0},
 				{"turns_completed", "INTEGER", true, 0},
 				{"display_identifier", "TEXT", false, 0},
+				{"review_metadata", "TEXT", false, 0},
 			},
 		},
 		{

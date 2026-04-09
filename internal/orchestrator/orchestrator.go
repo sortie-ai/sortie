@@ -108,6 +108,7 @@ type Orchestrator struct {
 	workerExitCh chan WorkerResult
 	retryTimerCh chan string
 	agentEventCh chan agentEventMsg
+	selfReviewCh chan selfReviewProgressMsg
 	snapshotCh   chan snapshotRequest
 	refreshCh    chan struct{}
 
@@ -183,6 +184,7 @@ func NewOrchestrator(params OrchestratorParams) *Orchestrator {
 		workerExitCh:     make(chan WorkerResult, exitBuf),
 		retryTimerCh:     make(chan string, retryBuf),
 		agentEventCh:     make(chan agentEventMsg, eventBuf),
+		selfReviewCh:     make(chan selfReviewProgressMsg, eventBuf),
 		snapshotCh:       make(chan snapshotRequest, 4),
 		refreshCh:        make(chan struct{}, 1),
 		preflightParams:  params.PreflightParams,
@@ -271,6 +273,12 @@ func (o *Orchestrator) Run(ctx context.Context) {
 
 		case msg := <-o.agentEventCh:
 			HandleAgentEvent(o.state, msg.IssueID, msg.Event, o.logger, o.metrics)
+
+		case msg := <-o.selfReviewCh:
+			if entry, ok := o.state.Running[msg.IssueID]; ok {
+				entry.SelfReviewActive = msg.Message != "self_review_done"
+				entry.SelfReviewIteration = msg.Iteration
+			}
 
 		case req := <-o.snapshotCh:
 			snap := RuntimeSnapshot(o.state, time.Now())
@@ -474,6 +482,15 @@ func (o *Orchestrator) makeWorkerFn(resumeSessionID string, sshHost string) Work
 			},
 			OnExit: func(issueID string, result WorkerResult) {
 				o.workerExitCh <- result
+			},
+			OnProgress: func(msg selfReviewProgressMsg) {
+				select {
+				case o.selfReviewCh <- msg:
+				default:
+					logger.Warn("self-review progress channel full, dropping",
+						slog.String("issue_id", msg.IssueID),
+					)
+				}
 			},
 			ResumeSessionID:          resumeSessionID,
 			Logger:                   logger,
