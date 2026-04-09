@@ -8,7 +8,6 @@ import (
 	"io"
 	"log/slog"
 	"os/exec"
-	"syscall"
 )
 
 // ExtractExitCode returns the process exit code from an
@@ -24,21 +23,6 @@ func ExtractExitCode(err error) int {
 		return exitErr.ExitCode()
 	}
 	return -1
-}
-
-// WasSignaled reports whether the process was terminated by a signal.
-//
-// Returns false when err is nil or is not an [*exec.ExitError].
-func WasSignaled(err error) bool {
-	var exitErr *exec.ExitError
-	if !errors.As(err, &exitErr) {
-		return false
-	}
-	status, ok := exitErr.Sys().(syscall.WaitStatus)
-	if !ok {
-		return false
-	}
-	return status.Signaled()
 }
 
 // StderrCollector drains a reader line by line, logging each at DEBUG

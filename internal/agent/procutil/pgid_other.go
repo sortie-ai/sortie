@@ -1,4 +1,4 @@
-//go:build !unix
+//go:build !unix && !windows
 
 package procutil
 
@@ -38,3 +38,16 @@ func KillProcessGroup(pid int) error {
 	}
 	return p.Kill()
 }
+
+// SignalGraceful sends a graceful shutdown signal to the process
+// identified by pid. On unsupported platforms this delegates to
+// [SignalProcessGroup] with SIGTERM, which may not be supported.
+func SignalGraceful(pid int) error {
+	return SignalProcessGroup(pid, syscall.SIGTERM)
+}
+
+// AssignProcess is a no-op on unsupported platforms.
+func AssignProcess(_ int, _ *os.Process) error { return nil }
+
+// CleanupProcess is a no-op on unsupported platforms.
+func CleanupProcess(_ int) {}

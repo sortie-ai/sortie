@@ -21,7 +21,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 
 	"github.com/sortie-ai/sortie/internal/agent/procutil"
@@ -247,11 +246,12 @@ func checkAuth(ctx context.Context) error {
 //
 // The subprocess is placed in its own process group via
 // [procutil.SetProcessGroup]. On context cancellation, [exec.Cmd].Cancel
-// sends SIGTERM to the entire process group via
-// [procutil.SignalProcessGroup], and [exec.Cmd].WaitDelay of 5 seconds
-// provides a grace period before Go sends SIGKILL to the group leader.
-// After [exec.Cmd.Wait] returns, a best-effort SIGKILL is sent to the
-// group to reap any children that survived SIGTERM.
+// sends a platform-appropriate graceful shutdown signal to the entire
+// process group via [procutil.SignalGraceful], and [exec.Cmd].WaitDelay
+// of 5 seconds provides a grace period before Go force-kills the group
+// leader. After [exec.Cmd.Wait] returns, a best-effort force kill is
+// sent to the group via [procutil.KillProcessGroup] to reap any
+// children that survived the graceful signal.
 func (a *CopilotAdapter) RunTurn(ctx context.Context, session domain.Session, params domain.RunTurnParams) (domain.TurnResult, error) {
 	if params.OnEvent == nil {
 		panic("copilot: OnEvent must be non-nil")
@@ -280,7 +280,7 @@ func (a *CopilotAdapter) RunTurn(ctx context.Context, session domain.Session, pa
 	}
 	procutil.SetProcessGroup(cmd)
 	cmd.Cancel = func() error {
-		return procutil.SignalProcessGroup(cmd.Process.Pid, syscall.SIGTERM)
+		return procutil.SignalGraceful(cmd.Process.Pid)
 	}
 	cmd.WaitDelay = 5 * time.Second
 	cmd.Dir = state.workspacePath
@@ -328,6 +328,9 @@ func (a *CopilotAdapter) RunTurn(ctx context.Context, session domain.Session, pa
 			Message: "failed to start subprocess",
 			Err:     err,
 		}
+	}
+	if assignErr := procutil.AssignProcess(cmd.Process.Pid, cmd.Process); assignErr != nil {
+		logger.Warn("process group assignment failed", slog.Any("error", assignErr))
 	}
 	state.proc = cmd.Process
 	state.waitCh = make(chan struct{})
@@ -515,6 +518,7 @@ func (a *CopilotAdapter) RunTurn(ctx context.Context, session domain.Session, pa
 		stderrLines := stderrCollector.Lines()     // drain before cmd.Wait() closes the pipe
 		cmd.Wait()                                 //nolint:errcheck,gosec // best-effort reap; exit code is irrelevant on scanner failure
 		procutil.KillProcessGroup(cmd.Process.Pid) //nolint:errcheck,gosec // best-effort cleanup of surviving group members
+		procutil.CleanupProcess(cmd.Process.Pid)
 		close(waitCh)
 		state.mu.Lock()
 		state.proc = nil
@@ -566,6 +570,7 @@ func (a *CopilotAdapter) RunTurn(ctx context.Context, session domain.Session, pa
 
 	waitErr := cmd.Wait()
 	procutil.KillProcessGroup(cmd.Process.Pid) //nolint:errcheck,gosec // best-effort cleanup of surviving group members
+	procutil.CleanupProcess(cmd.Process.Pid)
 	close(waitCh)
 
 	state.mu.Lock()
@@ -734,8 +739,10 @@ func (a *CopilotAdapter) RunTurn(ctx context.Context, session domain.Session, pa
 }
 
 // StopSession terminates a running Copilot CLI subprocess gracefully.
-// Sends SIGTERM, waits up to 5 seconds, then sends SIGKILL. Safe to
-// call when no subprocess is running.
+// Sends a platform-appropriate graceful shutdown signal via
+// [procutil.SignalGraceful], waits up to 5 seconds, then force-kills
+// the process group via [procutil.KillProcessGroup]. Safe to call when
+// no subprocess is running.
 func (a *CopilotAdapter) StopSession(ctx context.Context, session domain.Session) error {
 	state, ok := session.Internal.(*sessionState)
 	if !ok {
@@ -752,9 +759,9 @@ func (a *CopilotAdapter) StopSession(ctx context.Context, session domain.Session
 		return nil
 	}
 
-	// Send SIGTERM to the entire process group for graceful shutdown.
-	// Process may already be dead; signal is best-effort.
-	_ = procutil.SignalProcessGroup(proc.Pid, syscall.SIGTERM)
+	// Send a graceful shutdown signal to the process group. Process
+	// may already be dead; signal is best-effort.
+	_ = procutil.SignalGraceful(proc.Pid)
 
 	select {
 	case <-waitCh:

@@ -2,6 +2,10 @@ package workspace
 
 import (
 	"bytes"
+	"errors"
+	"fmt"
+	"os"
+	"strings"
 	"sync"
 )
 
@@ -86,4 +90,78 @@ func (lb *limitedBuffer) String() string {
 	lb.mu.Lock()
 	defer lb.mu.Unlock()
 	return lb.buf.String()
+}
+
+// hookEnv builds a restricted environment for the hook subprocess.
+// Only variables in allowedEnvKeys and variables whose name starts
+// with "SORTIE_" are inherited from the parent process. Variables in
+// override take precedence over same-named parent variables.
+func hookEnv(override map[string]string) []string {
+	parent := os.Environ()
+	env := make([]string, 0, len(allowedEnvKeys)+len(override))
+	for _, entry := range parent {
+		k, _, _ := strings.Cut(entry, "=")
+		if !allowedEnvKeys[k] && !strings.HasPrefix(k, "SORTIE_") {
+			continue
+		}
+		if _, dup := override[k]; dup {
+			continue
+		}
+		env = append(env, entry)
+	}
+	for k, v := range override {
+		env = append(env, k+"="+v)
+	}
+	return env
+}
+
+// validateParams checks HookParams preconditions and returns a
+// *HookError with Op "validate" on any violation.
+func validateParams(params HookParams) error {
+	if params.Script == "" {
+		return &HookError{
+			Op:       "validate",
+			Script:   "",
+			ExitCode: -1,
+			Err:      errors.New("script must not be empty"),
+		}
+	}
+
+	if params.Dir == "" {
+		return &HookError{
+			Op:       "validate",
+			Script:   truncateScript(params.Script),
+			ExitCode: -1,
+			Err:      errors.New("dir must not be empty"),
+		}
+	}
+
+	info, err := os.Stat(params.Dir)
+	if err != nil {
+		return &HookError{
+			Op:       "validate",
+			Script:   truncateScript(params.Script),
+			ExitCode: -1,
+			Err:      fmt.Errorf("dir %q: %w", params.Dir, err),
+		}
+	}
+	if !info.IsDir() {
+		return &HookError{
+			Op:       "validate",
+			Script:   truncateScript(params.Script),
+			ExitCode: -1,
+			Err:      fmt.Errorf("dir %q: not a directory", params.Dir),
+		}
+	}
+
+	if params.TimeoutMS <= 0 {
+		return &HookError{
+			Op:       "validate",
+			Script:   truncateScript(params.Script),
+			ExitCode: -1,
+			Err:      errors.New("timeout_ms must be positive"),
+		}
+	}
+
+	return nil
 }

@@ -53,6 +53,16 @@ func TestSignalProcessGroup_ESRCH(t *testing.T) {
 	}
 }
 
+func TestSignalGraceful_ESRCH(t *testing.T) {
+	t.Parallel()
+
+	// math.MaxInt32 is an implausible PID; ESRCH is silently swallowed.
+	err := SignalGraceful(math.MaxInt32)
+	if err != nil {
+		t.Errorf("SignalGraceful(MaxInt32) = %v, want nil (ESRCH must be suppressed)", err)
+	}
+}
+
 func TestSignalProcessGroup_LiveProcess(t *testing.T) {
 	t.Parallel()
 

@@ -20,7 +20,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 	"unicode/utf8"
 
@@ -203,11 +202,12 @@ func (a *ClaudeCodeAdapter) StartSession(_ context.Context, params domain.StartS
 //
 // The subprocess is placed in its own process group via
 // [procutil.SetProcessGroup]. On context cancellation, [exec.Cmd].Cancel
-// sends SIGTERM to the entire process group via
-// [procutil.SignalProcessGroup], and [exec.Cmd].WaitDelay of 5 seconds
-// provides a grace period before Go sends SIGKILL to the group leader.
-// After [exec.Cmd.Wait] returns, a best-effort SIGKILL is sent to the
-// group to reap any children that survived SIGTERM.
+// sends a platform-appropriate graceful shutdown signal to the entire
+// process group via [procutil.SignalGraceful], and [exec.Cmd].WaitDelay
+// of 5 seconds provides a grace period before Go force-kills the group
+// leader. After [exec.Cmd.Wait] returns, a best-effort force kill is
+// sent to the group via [procutil.KillProcessGroup] to reap any
+// children that survived the graceful signal.
 func (a *ClaudeCodeAdapter) RunTurn(ctx context.Context, session domain.Session, params domain.RunTurnParams) (domain.TurnResult, error) {
 	if params.OnEvent == nil {
 		panic("claude: OnEvent must be non-nil")
@@ -238,7 +238,7 @@ func (a *ClaudeCodeAdapter) RunTurn(ctx context.Context, session domain.Session,
 	}
 	procutil.SetProcessGroup(cmd)
 	cmd.Cancel = func() error {
-		return procutil.SignalProcessGroup(cmd.Process.Pid, syscall.SIGTERM)
+		return procutil.SignalGraceful(cmd.Process.Pid)
 	}
 	cmd.WaitDelay = 5 * time.Second
 	cmd.Dir = state.workspacePath
@@ -286,6 +286,9 @@ func (a *ClaudeCodeAdapter) RunTurn(ctx context.Context, session domain.Session,
 			Message: "failed to start subprocess",
 			Err:     err,
 		}
+	}
+	if assignErr := procutil.AssignProcess(cmd.Process.Pid, cmd.Process); assignErr != nil {
+		logger.Warn("process group assignment failed", slog.Any("error", assignErr))
 	}
 	state.proc = cmd.Process
 	state.waitCh = make(chan struct{})
@@ -473,6 +476,7 @@ func (a *ClaudeCodeAdapter) RunTurn(ctx context.Context, session domain.Session,
 		stderrLines := stderrCollector.Lines()     // drain before cmd.Wait() closes the pipe
 		cmd.Wait()                                 //nolint:errcheck,gosec // best-effort reap; exit code is irrelevant on scanner failure
 		procutil.KillProcessGroup(cmd.Process.Pid) //nolint:errcheck,gosec // best-effort cleanup of surviving group members
+		procutil.CleanupProcess(cmd.Process.Pid)
 		close(waitCh)
 		state.mu.Lock()
 		state.proc = nil
@@ -526,6 +530,7 @@ func (a *ClaudeCodeAdapter) RunTurn(ctx context.Context, session domain.Session,
 	// waits on waitCh.
 	waitErr := cmd.Wait()
 	procutil.KillProcessGroup(cmd.Process.Pid) //nolint:errcheck,gosec // best-effort cleanup of surviving group members
+	procutil.CleanupProcess(cmd.Process.Pid)
 	close(waitCh)
 
 	state.mu.Lock()
@@ -672,8 +677,10 @@ func (a *ClaudeCodeAdapter) RunTurn(ctx context.Context, session domain.Session,
 }
 
 // StopSession terminates a running Claude Code subprocess gracefully.
-// Sends SIGTERM, waits up to 5 seconds, then sends SIGKILL. Safe to
-// call when no subprocess is running.
+// Sends a platform-appropriate graceful shutdown signal via
+// [procutil.SignalGraceful], waits up to 5 seconds, then force-kills
+// the process group via [procutil.KillProcessGroup]. Safe to call when
+// no subprocess is running.
 func (a *ClaudeCodeAdapter) StopSession(ctx context.Context, session domain.Session) error {
 	state, ok := session.Internal.(*sessionState)
 	if !ok {
@@ -690,7 +697,7 @@ func (a *ClaudeCodeAdapter) StopSession(ctx context.Context, session domain.Sess
 		return nil
 	}
 
-	_ = procutil.SignalProcessGroup(proc.Pid, syscall.SIGTERM) //nolint:errcheck // best-effort signal; process may already be dead
+	_ = procutil.SignalGraceful(proc.Pid) //nolint:errcheck // best-effort signal; process may already be dead
 
 	select {
 	case <-waitCh:

@@ -6,52 +6,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"os/exec"
-	"strings"
 	"syscall"
 	"time"
 )
-
-// allowedEnvKeys lists the parent-process environment variables that
-// hook subprocesses are permitted to inherit. All other variables are
-// stripped so that secrets (e.g., JIRA_API_TOKEN, cloud credentials)
-// are not present in the hook subprocess environment unless explicitly injected.
-var allowedEnvKeys = map[string]bool{
-	"PATH":          true,
-	"HOME":          true,
-	"SHELL":         true,
-	"TMPDIR":        true,
-	"USER":          true,
-	"LOGNAME":       true,
-	"TERM":          true,
-	"LANG":          true,
-	"LC_ALL":        true,
-	"SSH_AUTH_SOCK": true,
-}
-
-// hookEnv builds a restricted environment for the hook subprocess.
-// Only variables in [allowedEnvKeys] and variables whose name starts
-// with "SORTIE_" are inherited from the parent process. Variables in
-// override take precedence over same-named parent variables.
-func hookEnv(override map[string]string) []string {
-	parent := os.Environ()
-	env := make([]string, 0, len(allowedEnvKeys)+len(override))
-	for _, entry := range parent {
-		k, _, _ := strings.Cut(entry, "=")
-		if !allowedEnvKeys[k] && !strings.HasPrefix(k, "SORTIE_") {
-			continue
-		}
-		if _, dup := override[k]; dup {
-			continue
-		}
-		env = append(env, entry)
-	}
-	for k, v := range override {
-		env = append(env, k+"="+v)
-	}
-	return env
-}
 
 // RunHook executes a shell hook script in the specified workspace
 // directory, enforcing a timeout and capturing output. The parent
@@ -114,10 +72,9 @@ func RunHook(ctx context.Context, params HookParams) (HookResult, error) {
 		return HookResult{Output: output}, nil
 	}
 
-	// ORDERING INVARIANT: Check context error BEFORE *exec.ExitError.
-	// A process killed by SIGKILL (timeout) also produces an ExitError
-	// with signal status. Checking context first ensures correct
-	// classification. Do not reorder these blocks.
+	// Check context error BEFORE *exec.ExitError. A process killed by
+	// SIGKILL (timeout) also produces an ExitError with signal status.
+	// Checking context first ensures correct classification.
 	if hookCtx.Err() == context.DeadlineExceeded {
 		return HookResult{}, &HookError{
 			Op:       "timeout",
@@ -156,55 +113,4 @@ func RunHook(ctx context.Context, params HookParams) (HookResult, error) {
 		Output:   output,
 		Err:      err,
 	}
-}
-
-// validateParams checks HookParams preconditions and returns a
-// *HookError with Op "validate" on any violation.
-func validateParams(params HookParams) error {
-	if params.Script == "" {
-		return &HookError{
-			Op:       "validate",
-			Script:   "",
-			ExitCode: -1,
-			Err:      errors.New("script must not be empty"),
-		}
-	}
-
-	if params.Dir == "" {
-		return &HookError{
-			Op:       "validate",
-			Script:   truncateScript(params.Script),
-			ExitCode: -1,
-			Err:      errors.New("dir must not be empty"),
-		}
-	}
-
-	info, err := os.Stat(params.Dir)
-	if err != nil {
-		return &HookError{
-			Op:       "validate",
-			Script:   truncateScript(params.Script),
-			ExitCode: -1,
-			Err:      fmt.Errorf("dir %q: %w", params.Dir, err),
-		}
-	}
-	if !info.IsDir() {
-		return &HookError{
-			Op:       "validate",
-			Script:   truncateScript(params.Script),
-			ExitCode: -1,
-			Err:      fmt.Errorf("dir %q: not a directory", params.Dir),
-		}
-	}
-
-	if params.TimeoutMS <= 0 {
-		return &HookError{
-			Op:       "validate",
-			Script:   truncateScript(params.Script),
-			ExitCode: -1,
-			Err:      errors.New("timeout_ms must be positive"),
-		}
-	}
-
-	return nil
 }

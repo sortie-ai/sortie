@@ -4,6 +4,7 @@ package procutil
 
 import (
 	"errors"
+	"os"
 	"os/exec"
 	"syscall"
 )
@@ -34,3 +35,16 @@ func SignalProcessGroup(pid int, sig syscall.Signal) error {
 func KillProcessGroup(pid int) error {
 	return SignalProcessGroup(pid, syscall.SIGKILL)
 }
+
+// SignalGraceful sends SIGTERM to the entire process group led by pid.
+func SignalGraceful(pid int) error {
+	return SignalProcessGroup(pid, syscall.SIGTERM)
+}
+
+// AssignProcess is a no-op on Unix. Process group membership is
+// established at fork time via Setpgid.
+func AssignProcess(_ int, _ *os.Process) error { return nil }
+
+// CleanupProcess is a no-op on Unix. Process group resources are
+// managed by the kernel.
+func CleanupProcess(_ int) {}
