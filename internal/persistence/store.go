@@ -51,6 +51,16 @@ func Open(ctx context.Context, path string) (*Store, error) {
 		return nil, fmt.Errorf("expected journal_mode wal or memory, got %q", mode)
 	}
 
+	// Use NORMAL synchronous mode, which is the SQLite-recommended
+	// setting for WAL. FULL (the default) adds an extra fsync after
+	// every transaction commit; NORMAL skips that sync while remaining
+	// safe from corruption. Only power-loss durability is reduced,
+	// which is acceptable for retry queues, run history, and metrics.
+	if _, err := db.ExecContext(ctx, "PRAGMA synchronous=NORMAL"); err != nil {
+		db.Close() //nolint:errcheck,gosec // best-effort cleanup on open failure
+		return nil, fmt.Errorf("set synchronous=NORMAL: %w", err)
+	}
+
 	return &Store{db: db}, nil
 }
 
