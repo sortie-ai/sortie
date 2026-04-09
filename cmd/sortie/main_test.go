@@ -38,7 +38,7 @@ import (
 // schema migrations can exceed the default 500 ms deadline.
 var runTestTimeout = func() time.Duration {
 	if runtime.GOOS == "windows" {
-		return 3 * time.Second
+		return 10 * time.Second
 	}
 	return 500 * time.Millisecond
 }()
