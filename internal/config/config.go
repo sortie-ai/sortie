@@ -547,6 +547,18 @@ func buildSelfReviewConfig(m map[string]any) (SelfReviewConfig, error) {
 
 	enabled := coerceBool(m, "enabled")
 
+	// When self_review is disabled, return defaults without validating
+	// other fields so operators are not surprised by config errors for
+	// a feature they opted out of.
+	if !enabled {
+		return SelfReviewConfig{
+			MaxIterations:         3,
+			VerificationTimeoutMS: 120000,
+			MaxDiffBytes:          102400,
+			Reviewer:              "same",
+		}, nil
+	}
+
 	maxIter := 3
 	if v, exists := m["max_iterations"]; exists && v != nil {
 		parsed, err := coerceInt(v)

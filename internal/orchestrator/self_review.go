@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/sortie-ai/sortie/internal/agent/procutil"
@@ -44,7 +45,7 @@ type RunSelfReviewParams struct {
 // maxVerdictFileBytes is the cap on .sortie/review_verdict.json reads.
 const maxVerdictFileBytes = 65536
 
-func generateWorkspaceDiff(ctx context.Context, workspacePath string, maxDiffBytes int) (string, bool, error) {
+func generateWorkspaceDiff(ctx context.Context, workspacePath string, maxDiffBytes int) (diff string, originalSize int, truncated bool, err error) {
 	// Stage intent-to-add so new files appear in the diff.
 	intentCmd := exec.CommandContext(ctx, "git", "add", "--intent-to-add", ".")
 	intentCmd.Dir = workspacePath
@@ -52,25 +53,25 @@ func generateWorkspaceDiff(ctx context.Context, workspacePath string, maxDiffByt
 
 	cmd := exec.CommandContext(ctx, "git", "diff", "HEAD")
 	cmd.Dir = workspacePath
-	output, err := cmd.CombinedOutput()
-	if err != nil {
+	output, cmdErr := cmd.CombinedOutput()
+	if cmdErr != nil {
 		// Fallback: try without HEAD (empty repo with staged files).
 		cmd2 := exec.CommandContext(ctx, "git", "diff")
 		cmd2.Dir = workspacePath
 		output2, err2 := cmd2.CombinedOutput()
 		if err2 != nil {
-			return "", false, fmt.Errorf("git diff failed: %w (fallback: %w)", err, err2)
+			return "", 0, false, fmt.Errorf("git diff failed: %w (fallback: %w)", cmdErr, err2)
 		}
 		output = output2
 	}
 
-	truncated := false
+	originalSize = len(output)
 	if maxDiffBytes > 0 && len(output) > maxDiffBytes {
 		output = output[:maxDiffBytes]
 		truncated = true
 	}
 
-	return string(output), truncated, nil
+	return string(output), originalSize, truncated, nil
 }
 
 func runSingleVerification(ctx context.Context, command, workspacePath string, timeoutMS int, logger *slog.Logger, metrics domain.Metrics) domain.VerificationResult {
@@ -121,13 +122,18 @@ func runSingleVerification(ctx context.Context, command, workspacePath string, t
 		}
 	}
 
-	// Read stdout and stderr with limits.
+	// Drain stdout and stderr concurrently to avoid deadlock when either
+	// pipe fills its OS buffer while the other is not being read.
+	var wg sync.WaitGroup
+	wg.Add(2)
 	readLimited := func(r io.Reader, w *strings.Builder) {
+		defer wg.Done()
 		limited := io.LimitReader(r, domain.MaxVerificationOutputBytes)
 		_, _ = io.Copy(w, limited)
 	}
-	readLimited(stdoutPipe, &stdoutBuf)
-	readLimited(stderrPipe, &stderrBuf)
+	go readLimited(stdoutPipe, &stdoutBuf)
+	go readLimited(stderrPipe, &stderrBuf)
+	wg.Wait()
 
 	err := cmd.Wait()
 	duration := time.Since(start)
@@ -136,7 +142,7 @@ func runSingleVerification(ctx context.Context, command, workspacePath string, t
 
 	if cmdCtx.Err() == context.DeadlineExceeded {
 		if cmd.Process != nil {
-			_ = procutil.SignalProcessGroup(cmd.Process.Pid, 9) // SIGKILL
+			_ = procutil.KillProcessGroup(cmd.Process.Pid)
 		}
 		logger.Info("verification command timed out",
 			slog.String("command", command),
@@ -194,10 +200,23 @@ func readReviewVerdict(workspacePath string) (*domain.ReviewVerdict, string, str
 	}
 
 	path := filepath.Join(dir, "review_verdict.json")
-	f, err := os.Open(path) //nolint:gosec // path is constructed from operator-controlled workspace root
-	if os.IsNotExist(err) {
-		return nil, "", "verdict file not found"
+
+	// Reject symlinked verdict files to prevent reading arbitrary host files.
+	fileFI, fileErr := os.Lstat(path)
+	if fileErr != nil {
+		if os.IsNotExist(fileErr) {
+			return nil, "", "verdict file not found"
+		}
+		return nil, "", fmt.Sprintf("verdict stat error: %v", fileErr)
 	}
+	if fileFI.Mode()&os.ModeSymlink != 0 {
+		return nil, "", "refusing to read symlinked verdict file"
+	}
+	if !fileFI.Mode().IsRegular() {
+		return nil, "", "verdict path is not a regular file"
+	}
+
+	f, err := os.Open(path) //nolint:gosec // path is constructed from operator-controlled workspace root
 	if err != nil {
 		return nil, "", fmt.Sprintf("verdict open error: %v", err)
 	}
@@ -427,15 +446,11 @@ func runSelfReviewLoop(ctx context.Context, params RunSelfReviewParams) *domain.
 			break
 		}
 
-		diff, truncated, diffErr := generateWorkspaceDiff(ctx, params.WorkspacePath, params.Config.MaxDiffBytes)
+		diff, diffSize, truncated, diffErr := generateWorkspaceDiff(ctx, params.WorkspacePath, params.Config.MaxDiffBytes)
 		if diffErr != nil {
 			logger.Warn("self-review diff generation failed", slog.Any("error", diffErr))
 			diff = ""
-		}
-
-		diffSize := len(diff)
-		if truncated {
-			diffSize = params.Config.MaxDiffBytes
+			diffSize = 0
 		}
 
 		var verificationResults []domain.VerificationResult
@@ -449,8 +464,23 @@ func runSelfReviewLoop(ctx context.Context, params RunSelfReviewParams) *domain.
 
 		reviewPrompt := assembleReviewPrompt(params.Issue, diff, truncated, verificationResults, i, maxIter)
 
-		// Remove previous verdict file before the review turn.
-		_ = os.Remove(filepath.Join(params.WorkspacePath, ".sortie", "review_verdict.json"))
+		// Remove previous verdict file only when .sortie is a real directory.
+		sortieDirPath := filepath.Join(params.WorkspacePath, ".sortie")
+		sortieInfo, sortieErr := os.Lstat(sortieDirPath)
+		if sortieErr == nil {
+			if sortieInfo.Mode()&os.ModeSymlink == 0 && sortieInfo.IsDir() {
+				_ = os.Remove(filepath.Join(sortieDirPath, "review_verdict.json"))
+			} else {
+				logger.Warn("self-review verdict cleanup skipped: .sortie is a symlink or not a directory",
+					slog.Int("iteration", i),
+				)
+			}
+		} else if !os.IsNotExist(sortieErr) {
+			logger.Warn("self-review verdict cleanup failed",
+				slog.Int("iteration", i),
+				slog.Any("error", sortieErr),
+			)
+		}
 
 		_, turnErr := params.AgentAdapter.RunTurn(ctx, params.Session, domain.RunTurnParams{
 			Prompt: reviewPrompt,

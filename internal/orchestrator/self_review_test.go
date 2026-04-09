@@ -659,9 +659,16 @@ func TestRunVerification_OutputTruncation(t *testing.T) {
 	t.Parallel()
 
 	wsPath := t.TempDir()
-	// Generate stdout that exceeds MaxVerificationOutputBytes.
+
+	// Generate stdout that exceeds MaxVerificationOutputBytes using
+	// only POSIX shell builtins, avoiding a python3 dependency.
 	bigCount := domain.MaxVerificationOutputBytes + 1024
-	cmd := fmt.Sprintf("python3 -c \"import sys; sys.stdout.write('x' * %d)\"", bigCount)
+	outputPath := filepath.Join(wsPath, "verification-output.txt")
+	if err := os.WriteFile(outputPath, []byte(strings.Repeat("x", bigCount)), 0o600); err != nil {
+		t.Fatalf("WriteFile(%q): %v", outputPath, err)
+	}
+
+	cmd := fmt.Sprintf("cat %q", outputPath)
 	result := runSingleVerification(context.Background(), cmd, wsPath, 10000, discardLogger(), &domain.NoopMetrics{})
 
 	if len(result.Stdout) > int(domain.MaxVerificationOutputBytes) {
@@ -690,7 +697,7 @@ func TestGenerateDiff_EmptyDiff(t *testing.T) {
 	wsPath := t.TempDir()
 	initGitRepo(t, wsPath)
 
-	diff, truncated, err := generateWorkspaceDiff(context.Background(), wsPath, 102400)
+	diff, _, truncated, err := generateWorkspaceDiff(context.Background(), wsPath, 102400)
 
 	if err != nil {
 		t.Fatalf("generateWorkspaceDiff: %v", err)
@@ -721,7 +728,7 @@ func TestGenerateDiff_ModifiedFile(t *testing.T) {
 		t.Fatalf("WriteFile modify: %v", err)
 	}
 
-	diff, _, err := generateWorkspaceDiff(context.Background(), wsPath, 102400)
+	diff, _, _, err := generateWorkspaceDiff(context.Background(), wsPath, 102400)
 
 	if err != nil {
 		t.Fatalf("generateWorkspaceDiff: %v", err)
@@ -750,7 +757,7 @@ func TestGenerateDiff_Truncation(t *testing.T) {
 	}
 
 	const maxBytes = 50
-	diff, truncated, err := generateWorkspaceDiff(context.Background(), wsPath, maxBytes)
+	diff, _, truncated, err := generateWorkspaceDiff(context.Background(), wsPath, maxBytes)
 
 	if err != nil {
 		t.Fatalf("generateWorkspaceDiff: %v", err)
@@ -770,7 +777,7 @@ func TestGenerateDiff_NoGit(t *testing.T) {
 
 	wsPath := t.TempDir()
 
-	_, _, err := generateWorkspaceDiff(context.Background(), wsPath, 102400)
+	_, _, _, err := generateWorkspaceDiff(context.Background(), wsPath, 102400)
 
 	if err == nil {
 		t.Error("generateWorkspaceDiff with non-git dir: expected error, got nil")

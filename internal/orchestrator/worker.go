@@ -855,7 +855,10 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 		default:
 			selfReviewStatus = "error"
 		}
-		selfReviewSummaryPath = filepath.Join(wsResult.Path, ".sortie", "review_summary.md")
+		reviewSummaryPath := filepath.Join(wsResult.Path, ".sortie", "review_summary.md")
+		if _, statErr := os.Stat(reviewSummaryPath); statErr == nil {
+			selfReviewSummaryPath = reviewSummaryPath
+		}
 	}
 
 	stopSessionBestEffort(ctx, deps.AgentAdapter, session, cfg, logger)
