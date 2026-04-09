@@ -99,6 +99,16 @@ var knownFieldsRegistry = map[string]SectionSchema{
 			{Name: "escalation_label", Type: FieldString},
 		},
 	},
+	"self_review": {
+		Fields: []FieldDef{
+			{Name: "enabled", Type: FieldBool},
+			{Name: "max_iterations", Type: FieldInt},
+			{Name: "verification_commands", Type: FieldStringList},
+			{Name: "verification_timeout_ms", Type: FieldInt},
+			{Name: "max_diff_bytes", Type: FieldInt},
+			{Name: "reviewer", Type: FieldString},
+		},
+	},
 }
 
 // staticKnownExtensionKeys lists extension top-level keys defined by

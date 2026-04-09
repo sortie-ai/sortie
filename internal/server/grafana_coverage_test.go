@@ -37,6 +37,10 @@ var knownSortieMetrics = []string{
 	"sortie_ssh_host_usage",
 	"sortie_ci_status_checks_total",
 	"sortie_ci_escalations_total",
+	"sortie_self_review_iterations_total",
+	"sortie_self_review_sessions_total",
+	"sortie_self_review_verification_duration_seconds",
+	"sortie_self_review_cap_reached_total",
 }
 
 // stripHistogramSuffix removes PromQL-specific histogram suffixes so that

@@ -113,6 +113,26 @@ type Metrics interface {
 	// action is "label", "comment", or "error"
 	// (sortie_ci_escalations_total{action} counter).
 	IncCIEscalations(action string)
+
+	// IncSelfReviewIterations increments the review iteration counter.
+	// verdict is "pass", "iterate", or "none"
+	// (sortie_self_review_iterations_total{verdict} counter).
+	IncSelfReviewIterations(verdict string)
+
+	// IncSelfReviewSessions increments the review session counter.
+	// finalVerdict is "pass", "iterate", or "none"
+	// (sortie_self_review_sessions_total{final_verdict} counter).
+	IncSelfReviewSessions(finalVerdict string)
+
+	// ObserveSelfReviewVerificationDuration records the duration of a
+	// single verification command in seconds.
+	// command is truncated to the first 64 characters before use as label
+	// (sortie_self_review_verification_duration_seconds{command} histogram).
+	ObserveSelfReviewVerificationDuration(command string, seconds float64)
+
+	// IncSelfReviewCapReached increments the cap-reached counter
+	// (sortie_self_review_cap_reached_total counter).
+	IncSelfReviewCapReached()
 }
 
 // NoopMetrics is a [Metrics] implementation where every method is a no-op.
@@ -123,27 +143,31 @@ type NoopMetrics struct{}
 
 var _ Metrics = (*NoopMetrics)(nil)
 
-func (*NoopMetrics) SetRunningSessions(int)                {}
-func (*NoopMetrics) SetRetryingSessions(int)               {}
-func (*NoopMetrics) SetAvailableSlots(int)                 {}
-func (*NoopMetrics) SetActiveSessionsElapsed(float64)      {}
-func (*NoopMetrics) AddTokens(string, int64)               {}
-func (*NoopMetrics) AddAgentRuntime(float64)               {}
-func (*NoopMetrics) IncDispatches(string)                  {}
-func (*NoopMetrics) IncWorkerExits(string)                 {}
-func (*NoopMetrics) IncRetries(string)                     {}
-func (*NoopMetrics) IncReconciliationActions(string)       {}
-func (*NoopMetrics) IncPollCycles(string)                  {}
-func (*NoopMetrics) IncTrackerRequests(string, string)     {}
-func (*NoopMetrics) IncHandoffTransitions(string)          {}
-func (*NoopMetrics) IncDispatchTransitions(string)         {}
-func (*NoopMetrics) IncTrackerComments(string, string)     {}
-func (*NoopMetrics) IncToolCalls(string, string)           {}
-func (*NoopMetrics) ObservePollDuration(float64)           {}
-func (*NoopMetrics) ObserveWorkerDuration(string, float64) {}
-func (*NoopMetrics) SetSSHHostUsage(string, int)           {}
-func (*NoopMetrics) IncCIStatusChecks(string)              {}
-func (*NoopMetrics) IncCIEscalations(string)               {}
+func (*NoopMetrics) SetRunningSessions(int)                                {}
+func (*NoopMetrics) SetRetryingSessions(int)                               {}
+func (*NoopMetrics) SetAvailableSlots(int)                                 {}
+func (*NoopMetrics) SetActiveSessionsElapsed(float64)                      {}
+func (*NoopMetrics) AddTokens(string, int64)                               {}
+func (*NoopMetrics) AddAgentRuntime(float64)                               {}
+func (*NoopMetrics) IncDispatches(string)                                  {}
+func (*NoopMetrics) IncWorkerExits(string)                                 {}
+func (*NoopMetrics) IncRetries(string)                                     {}
+func (*NoopMetrics) IncReconciliationActions(string)                       {}
+func (*NoopMetrics) IncPollCycles(string)                                  {}
+func (*NoopMetrics) IncTrackerRequests(string, string)                     {}
+func (*NoopMetrics) IncHandoffTransitions(string)                          {}
+func (*NoopMetrics) IncDispatchTransitions(string)                         {}
+func (*NoopMetrics) IncTrackerComments(string, string)                     {}
+func (*NoopMetrics) IncToolCalls(string, string)                           {}
+func (*NoopMetrics) ObservePollDuration(float64)                           {}
+func (*NoopMetrics) ObserveWorkerDuration(string, float64)                 {}
+func (*NoopMetrics) SetSSHHostUsage(string, int)                           {}
+func (*NoopMetrics) IncCIStatusChecks(string)                              {}
+func (*NoopMetrics) IncCIEscalations(string)                               {}
+func (*NoopMetrics) IncSelfReviewIterations(string)                        {}
+func (*NoopMetrics) IncSelfReviewSessions(string)                          {}
+func (*NoopMetrics) ObserveSelfReviewVerificationDuration(string, float64) {}
+func (*NoopMetrics) IncSelfReviewCapReached()                              {}
 
 // MetricsSetter is implemented by adapters that accept a [Metrics]
 // recorder for self-instrumentation.

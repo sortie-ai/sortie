@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -2742,5 +2743,78 @@ func TestHandleWorkerExit_TrackerOpsWgDrains(t *testing.T) {
 	case <-waitDone:
 	case <-time.After(2 * time.Second):
 		t.Fatal("TrackerOpsWg.Wait() did not return after CommentIssue goroutine completed")
+	}
+}
+
+func TestHandleWorkerExit_ReviewMetadata_Persisted(t *testing.T) {
+	t.Parallel()
+
+	store := &mockExitStore{}
+	state := exitState(t, "RM-1", nil)
+	params := defaultExitParams(t, store)
+
+	meta := &domain.ReviewMetadata{
+		Enabled:         true,
+		TotalIterations: 2,
+		FinalVerdict:    "pass",
+		CapReached:      false,
+		Iterations: []domain.ReviewIterationRecord{
+			{Iteration: 1, Verdict: "iterate"},
+			{Iteration: 2, Verdict: "pass"},
+		},
+	}
+
+	HandleWorkerExit(state, WorkerResult{
+		IssueID:        "RM-1",
+		Identifier:     "RM-1-ident",
+		ExitKind:       WorkerExitNormal,
+		AgentAdapter:   "mock",
+		ReviewMetadata: meta,
+	}, params)
+
+	if len(store.runHistories) != 1 {
+		t.Fatalf("AppendRunHistory called %d times, want 1", len(store.runHistories))
+	}
+
+	rh := store.runHistories[0]
+	if rh.ReviewMetadata == nil {
+		t.Fatal("RunHistory.ReviewMetadata = nil, want non-nil JSON string")
+	}
+
+	var got domain.ReviewMetadata
+	if err := json.Unmarshal([]byte(*rh.ReviewMetadata), &got); err != nil {
+		t.Fatalf("unmarshal RunHistory.ReviewMetadata: %v", err)
+	}
+	if got.FinalVerdict != "pass" {
+		t.Errorf("ReviewMetadata.FinalVerdict = %q, want %q", got.FinalVerdict, "pass")
+	}
+	if got.TotalIterations != 2 {
+		t.Errorf("ReviewMetadata.TotalIterations = %d, want 2", got.TotalIterations)
+	}
+	if got.CapReached {
+		t.Error("ReviewMetadata.CapReached = true, want false")
+	}
+}
+
+func TestHandleWorkerExit_ReviewMetadata_Nil(t *testing.T) {
+	t.Parallel()
+
+	store := &mockExitStore{}
+	state := exitState(t, "RM-2", nil)
+	params := defaultExitParams(t, store)
+
+	HandleWorkerExit(state, WorkerResult{
+		IssueID:        "RM-2",
+		Identifier:     "RM-2-ident",
+		ExitKind:       WorkerExitNormal,
+		AgentAdapter:   "mock",
+		ReviewMetadata: nil,
+	}, params)
+
+	if len(store.runHistories) != 1 {
+		t.Fatalf("AppendRunHistory called %d times, want 1", len(store.runHistories))
+	}
+	if store.runHistories[0].ReviewMetadata != nil {
+		t.Errorf("RunHistory.ReviewMetadata = %q, want nil", *store.runHistories[0].ReviewMetadata)
 	}
 }

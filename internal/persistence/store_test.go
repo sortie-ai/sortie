@@ -2228,3 +2228,64 @@ func TestOpenReadOnly_ReadsExistingData(t *testing.T) {
 		t.Errorf("Identifier = %q, want %q", entries[0].Identifier, run.Identifier)
 	}
 }
+
+func TestAppendRunHistory_ReviewMetadata_RoundTrip(t *testing.T) {
+	t.Parallel()
+
+	s := openTestStore(t)
+	migrateOrFatal(t, s)
+	ctx := context.Background()
+
+	meta := `{"enabled":true,"iterations":[],"total_iterations":1,"final_verdict":"pass","cap_reached":false}`
+	run := newTestRun(100)
+	run.ReviewMetadata = &meta
+
+	got := appendOrFatal(t, s, run)
+	if got.ReviewMetadata == nil {
+		t.Fatal("ReviewMetadata = nil after insert, want non-nil")
+	}
+	if *got.ReviewMetadata != meta {
+		t.Errorf("ReviewMetadata = %q, want %q", *got.ReviewMetadata, meta)
+	}
+
+	entries, err := s.QueryRunHistoryByIssue(ctx, run.IssueID)
+	if err != nil {
+		t.Fatalf("QueryRunHistoryByIssue: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("entries len = %d, want 1", len(entries))
+	}
+	if entries[0].ReviewMetadata == nil {
+		t.Fatal("queried ReviewMetadata = nil, want non-nil")
+	}
+	if *entries[0].ReviewMetadata != meta {
+		t.Errorf("queried ReviewMetadata = %q, want %q", *entries[0].ReviewMetadata, meta)
+	}
+}
+
+func TestAppendRunHistory_ReviewMetadata_Null(t *testing.T) {
+	t.Parallel()
+
+	s := openTestStore(t)
+	migrateOrFatal(t, s)
+	ctx := context.Background()
+
+	run := newTestRun(101)
+	// ReviewMetadata is nil — self-review did not run.
+
+	got := appendOrFatal(t, s, run)
+	if got.ReviewMetadata != nil {
+		t.Errorf("ReviewMetadata = %q, want nil", *got.ReviewMetadata)
+	}
+
+	entries, err := s.QueryRunHistoryByIssue(ctx, run.IssueID)
+	if err != nil {
+		t.Fatalf("QueryRunHistoryByIssue: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("entries len = %d, want 1", len(entries))
+	}
+	if entries[0].ReviewMetadata != nil {
+		t.Errorf("queried ReviewMetadata = %q, want nil", *entries[0].ReviewMetadata)
+	}
+}

@@ -177,6 +177,14 @@ type FinishParams struct {
 	// SSHHost is the SSH destination host. When non-empty, hooks receive
 	// SORTIE_SSH_HOST in their environment.
 	SSHHost string
+
+	// SelfReviewStatus is the self-review outcome for hook env.
+	// "disabled", "passed", "cap_reached", or "error". Empty treated as "disabled".
+	SelfReviewStatus string
+
+	// SelfReviewSummaryPath is the absolute path to .sortie/review_summary.md.
+	// Empty when self-review did not run or the summary was not written.
+	SelfReviewSummaryPath string
 }
 
 // Finish runs the after_run hook if configured. Failure is logged and
@@ -198,6 +206,15 @@ func Finish(ctx context.Context, params FinishParams) {
 
 	detachedCtx := context.WithoutCancel(ctx)
 	env := HookEnv(params.IssueID, params.Identifier, params.Path, params.Attempt, params.SSHHost)
+
+	reviewStatus := params.SelfReviewStatus
+	if reviewStatus == "" {
+		reviewStatus = "disabled"
+	}
+	env["SORTIE_SELF_REVIEW_STATUS"] = reviewStatus
+	if params.SelfReviewSummaryPath != "" {
+		env["SORTIE_SELF_REVIEW_SUMMARY_PATH"] = params.SelfReviewSummaryPath
+	}
 
 	logger.InfoContext(ctx, "running hook", slog.String("hook", "after_run"), slog.String("workspace", params.Path))
 	_, hookErr := RunHook(detachedCtx, HookParams{

@@ -131,6 +131,10 @@ func TestNewPromMetrics(t *testing.T) {
 	m.SetSSHHostUsage("test-host", 1)
 	m.IncCIStatusChecks("passing")
 	m.IncCIEscalations("label")
+	m.IncSelfReviewIterations("pass")
+	m.IncSelfReviewSessions("pass")
+	m.ObserveSelfReviewVerificationDuration("go test ./...", 1.5)
+	m.IncSelfReviewCapReached()
 
 	families := gatherFamilies(t, m)
 

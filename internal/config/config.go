@@ -28,6 +28,10 @@ type ServiceConfig struct {
 	// Zero-value (Kind == "") means CI feedback is disabled.
 	CIFeedback CIFeedbackConfig
 
+	// SelfReview holds self-review loop configuration.
+	// Zero-value (Enabled == false) means self-review is disabled.
+	SelfReview SelfReviewConfig
+
 	// DBPath is the environment- and tilde-expanded path for the SQLite
 	// database. It may be relative; callers resolve it against the
 	// WORKFLOW.md directory. Empty string means the caller should apply
@@ -110,6 +114,7 @@ var knownTopLevelKeys = map[string]bool{
 	"agent":       true,
 	"db_path":     true,
 	"ci_feedback": true,
+	"self_review": true,
 }
 
 // NewServiceConfig converts a raw front matter map into a validated
@@ -233,6 +238,11 @@ func NewServiceConfig(raw map[string]any) (ServiceConfig, error) {
 		return ServiceConfig{}, err
 	}
 
+	selfReview, err := buildSelfReviewConfig(extractSubMap(raw, "self_review"))
+	if err != nil {
+		return ServiceConfig{}, err
+	}
+
 	extensions := make(map[string]any)
 	for k, v := range raw {
 		if !knownTopLevelKeys[k] {
@@ -247,6 +257,7 @@ func NewServiceConfig(raw map[string]any) (ServiceConfig, error) {
 		Hooks:      hooks,
 		Agent:      agent,
 		CIFeedback: ciFeedback,
+		SelfReview: selfReview,
 		DBPath:     dbPath,
 		Extensions: extensions,
 	}, nil
@@ -524,6 +535,90 @@ func buildCIFeedbackConfig(m map[string]any) (CIFeedbackConfig, error) {
 	}, nil
 }
 
+func buildSelfReviewConfig(m map[string]any) (SelfReviewConfig, error) {
+	if len(m) == 0 {
+		return SelfReviewConfig{
+			MaxIterations:         3,
+			VerificationTimeoutMS: 120000,
+			MaxDiffBytes:          102400,
+			Reviewer:              "same",
+		}, nil
+	}
+
+	enabled := coerceBool(m, "enabled")
+
+	maxIter := 3
+	if v, exists := m["max_iterations"]; exists && v != nil {
+		parsed, err := coerceInt(v)
+		if err != nil {
+			return SelfReviewConfig{}, &ConfigError{
+				Field:   "self_review.max_iterations",
+				Message: fmt.Sprintf("invalid integer value: %v", v),
+			}
+		}
+		maxIter = parsed
+	}
+	if maxIter < 1 || maxIter > 10 {
+		return SelfReviewConfig{}, &ConfigError{
+			Field:   "self_review.max_iterations",
+			Message: "must be between 1 and 10",
+		}
+	}
+
+	verificationCommands := extractStringSlice(mapVal(m, "verification_commands"))
+
+	if enabled && len(verificationCommands) == 0 {
+		return SelfReviewConfig{}, &ConfigError{
+			Field:   "self_review.verification_commands",
+			Message: "required when self_review is enabled",
+		}
+	}
+
+	timeoutMS := 120000
+	if v, exists := m["verification_timeout_ms"]; exists && v != nil {
+		parsed, err := coerceInt(v)
+		if err != nil {
+			return SelfReviewConfig{}, &ConfigError{
+				Field:   "self_review.verification_timeout_ms",
+				Message: fmt.Sprintf("invalid integer value: %v", v),
+			}
+		}
+		timeoutMS = parsed
+	}
+
+	maxDiffBytes := 102400
+	if v, exists := m["max_diff_bytes"]; exists && v != nil {
+		parsed, err := coerceInt(v)
+		if err != nil {
+			return SelfReviewConfig{}, &ConfigError{
+				Field:   "self_review.max_diff_bytes",
+				Message: fmt.Sprintf("invalid integer value: %v", v),
+			}
+		}
+		maxDiffBytes = parsed
+	}
+
+	reviewer := "same"
+	if v := extractString(m, "reviewer"); v != "" {
+		reviewer = v
+	}
+	if reviewer != "same" {
+		return SelfReviewConfig{}, &ConfigError{
+			Field:   "self_review.reviewer",
+			Message: "only \"same\" is supported",
+		}
+	}
+
+	return SelfReviewConfig{
+		Enabled:               enabled,
+		MaxIterations:         maxIter,
+		VerificationCommands:  verificationCommands,
+		VerificationTimeoutMS: timeoutMS,
+		MaxDiffBytes:          maxDiffBytes,
+		Reviewer:              reviewer,
+	}, nil
+}
+
 // validateHandoffState checks that handoffState does not collide with
 // active or terminal states. Returns a *ConfigError on violation.
 func validateHandoffState(handoffState string, activeStates, terminalStates []string) error {
@@ -740,6 +835,33 @@ func mapVal(m map[string]any, key string) any {
 		return nil
 	}
 	return m[key]
+}
+
+// SelfReviewConfig holds self-review loop configuration. When Enabled
+// is false (the default), self-review is disabled and adds zero overhead.
+type SelfReviewConfig struct {
+	// Enabled activates the self-review loop. Default false.
+	Enabled bool
+
+	// MaxIterations is the hard cap on review iterations. Default 3.
+	// Range [1, 10].
+	MaxIterations int
+
+	// VerificationCommands is the list of shell commands to run during
+	// each review iteration. Required and non-empty when Enabled is true.
+	VerificationCommands []string
+
+	// VerificationTimeoutMS is the per-command timeout in milliseconds.
+	// Default 120000 (2 minutes).
+	VerificationTimeoutMS int
+
+	// MaxDiffBytes is the maximum number of bytes to include in the diff
+	// output sent to the agent. Default 102400 (100 KB).
+	MaxDiffBytes int
+
+	// Reviewer controls which agent runs the review turns.
+	// "same" (default and only supported value): reuse the existing session.
+	Reviewer string
 }
 
 // CIFeedbackConfig holds CI feedback provider selection and tuning.

@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -216,6 +217,15 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 		Error:          errorStringPtr(workerResult.Error),
 		WorkflowFile:   entry.WorkflowFile,
 		TurnsCompleted: workerResult.TurnsCompleted,
+	}
+	if workerResult.ReviewMetadata != nil {
+		data, marshalErr := json.Marshal(workerResult.ReviewMetadata)
+		if marshalErr != nil {
+			log.Warn("failed to marshal review metadata", slog.Any("error", marshalErr))
+		} else {
+			s := string(data)
+			runHistory.ReviewMetadata = &s
+		}
 	}
 	if _, err := params.Store.AppendRunHistory(ctx, runHistory); err != nil {
 		log.Error("failed to persist run history",

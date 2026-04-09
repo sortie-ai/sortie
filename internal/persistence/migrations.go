@@ -29,6 +29,9 @@ var migration005SQL string
 //go:embed sql/006_display_identifier.sql
 var migration006SQL string
 
+//go:embed sql/007_self_review.sql
+var migration007SQL string
+
 var migrations = []Migration{
 	{Version: 1, Description: "core persistence tables", SQL: migration001SQL},
 	{Version: 2, Description: "extended token metrics", SQL: migration002SQL},
@@ -36,4 +39,5 @@ var migrations = []Migration{
 	{Version: 4, Description: "run_history issue_id index", SQL: migration004SQL},
 	{Version: 5, Description: "turns completed in run history", SQL: migration005SQL},
 	{Version: 6, Description: "display identifier in run history", SQL: migration006SQL},
+	{Version: 7, Description: "self-review metadata in run history", SQL: migration007SQL},
 }

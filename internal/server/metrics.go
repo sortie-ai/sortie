@@ -35,6 +35,11 @@ type PromMetrics struct {
 	ciStatusChecksTotal   *prometheus.CounterVec
 	ciEscalationsTotal    *prometheus.CounterVec
 
+	selfReviewIterationsTotal      *prometheus.CounterVec
+	selfReviewSessionsTotal        *prometheus.CounterVec
+	selfReviewVerificationDuration *prometheus.HistogramVec
+	selfReviewCapReachedTotal      prometheus.Counter
+
 	pollDuration   prometheus.Histogram
 	workerDuration *prometheus.HistogramVec
 
@@ -190,6 +195,31 @@ func NewPromMetrics(version, goVersion string) *PromMetrics {
 		Help:      "CI escalation actions taken.",
 	}, []string{"action"})
 
+	selfReviewIterationsTotal := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: "sortie",
+		Name:      "self_review_iterations_total",
+		Help:      "Self-review iterations by verdict.",
+	}, []string{"verdict"})
+
+	selfReviewSessionsTotal := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: "sortie",
+		Name:      "self_review_sessions_total",
+		Help:      "Self-review sessions by final verdict.",
+	}, []string{"final_verdict"})
+
+	selfReviewVerificationDuration := prometheus.NewHistogramVec(prometheus.HistogramOpts{
+		Namespace: "sortie",
+		Name:      "self_review_verification_duration_seconds",
+		Help:      "Per-command verification duration.",
+		Buckets:   prometheus.ExponentialBuckets(10, 2, 12),
+	}, []string{"command"})
+
+	selfReviewCapReachedTotal := prometheus.NewCounter(prometheus.CounterOpts{
+		Namespace: "sortie",
+		Name:      "self_review_cap_reached_total",
+		Help:      "Self-review sessions that hit the iteration cap.",
+	})
+
 	reg.MustRegister(
 		sessionsRunning,
 		sessionsRetrying,
@@ -213,31 +243,39 @@ func NewPromMetrics(version, goVersion string) *PromMetrics {
 		sshHostUsage,
 		ciStatusChecksTotal,
 		ciEscalationsTotal,
+		selfReviewIterationsTotal,
+		selfReviewSessionsTotal,
+		selfReviewVerificationDuration,
+		selfReviewCapReachedTotal,
 	)
 
 	return &PromMetrics{
-		registry:              reg,
-		sessionsRunning:       sessionsRunning,
-		sessionsRetrying:      sessionsRetrying,
-		slotsAvailable:        slotsAvailable,
-		activeSessionsElapsed: activeSessionsElapsed,
-		tokensTotal:           tokensTotal,
-		agentRuntimeTotal:     agentRuntimeTotal,
-		dispatchesTotal:       dispatchesTotal,
-		workerExitsTotal:      workerExitsTotal,
-		retriesTotal:          retriesTotal,
-		reconciliationActions: reconciliationActions,
-		pollCyclesTotal:       pollCyclesTotal,
-		trackerRequestsTotal:  trackerRequestsTotal,
-		handoffTransitions:    handoffTransitions,
-		dispatchTransitions:   dispatchTransitions,
-		trackerCommentsTotal:  trackerCommentsTotal,
-		toolCallsTotal:        toolCallsTotal,
-		pollDuration:          pollDuration,
-		workerDuration:        workerDuration,
-		sshHostUsage:          sshHostUsage,
-		ciStatusChecksTotal:   ciStatusChecksTotal,
-		ciEscalationsTotal:    ciEscalationsTotal,
+		registry:                       reg,
+		sessionsRunning:                sessionsRunning,
+		sessionsRetrying:               sessionsRetrying,
+		slotsAvailable:                 slotsAvailable,
+		activeSessionsElapsed:          activeSessionsElapsed,
+		tokensTotal:                    tokensTotal,
+		agentRuntimeTotal:              agentRuntimeTotal,
+		dispatchesTotal:                dispatchesTotal,
+		workerExitsTotal:               workerExitsTotal,
+		retriesTotal:                   retriesTotal,
+		reconciliationActions:          reconciliationActions,
+		pollCyclesTotal:                pollCyclesTotal,
+		trackerRequestsTotal:           trackerRequestsTotal,
+		handoffTransitions:             handoffTransitions,
+		dispatchTransitions:            dispatchTransitions,
+		trackerCommentsTotal:           trackerCommentsTotal,
+		toolCallsTotal:                 toolCallsTotal,
+		pollDuration:                   pollDuration,
+		workerDuration:                 workerDuration,
+		sshHostUsage:                   sshHostUsage,
+		ciStatusChecksTotal:            ciStatusChecksTotal,
+		ciEscalationsTotal:             ciEscalationsTotal,
+		selfReviewIterationsTotal:      selfReviewIterationsTotal,
+		selfReviewSessionsTotal:        selfReviewSessionsTotal,
+		selfReviewVerificationDuration: selfReviewVerificationDuration,
+		selfReviewCapReachedTotal:      selfReviewCapReachedTotal,
 	}
 }
 
@@ -360,4 +398,28 @@ func (p *PromMetrics) IncCIStatusChecks(result string) {
 // IncCIEscalations increments the CI escalation action counter.
 func (p *PromMetrics) IncCIEscalations(action string) {
 	p.ciEscalationsTotal.WithLabelValues(action).Inc()
+}
+
+// IncSelfReviewIterations increments the review iteration counter.
+func (p *PromMetrics) IncSelfReviewIterations(verdict string) {
+	p.selfReviewIterationsTotal.WithLabelValues(verdict).Inc()
+}
+
+// IncSelfReviewSessions increments the review session counter.
+func (p *PromMetrics) IncSelfReviewSessions(finalVerdict string) {
+	p.selfReviewSessionsTotal.WithLabelValues(finalVerdict).Inc()
+}
+
+// ObserveSelfReviewVerificationDuration records the duration of a
+// verification command.
+func (p *PromMetrics) ObserveSelfReviewVerificationDuration(command string, seconds float64) {
+	if len(command) > 64 {
+		command = command[:64]
+	}
+	p.selfReviewVerificationDuration.WithLabelValues(command).Observe(seconds)
+}
+
+// IncSelfReviewCapReached increments the cap-reached counter.
+func (p *PromMetrics) IncSelfReviewCapReached() {
+	p.selfReviewCapReachedTotal.Inc()
 }

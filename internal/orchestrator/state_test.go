@@ -852,3 +852,67 @@ func TestRuntimeSnapshot_WorkflowFile(t *testing.T) {
 		})
 	}
 }
+
+func TestRuntimeSnapshot_SelfReviewFields(t *testing.T) {
+	t.Parallel()
+
+	fixedNow := time.Date(2026, 3, 24, 12, 0, 0, 0, time.UTC)
+
+	tests := []struct {
+		name            string
+		active          bool
+		iteration       int
+		wantSRActive    bool
+		wantSRIteration int
+	}{
+		{
+			name:            "not in self-review phase",
+			active:          false,
+			iteration:       0,
+			wantSRActive:    false,
+			wantSRIteration: 0,
+		},
+		{
+			name:            "self-review active iteration 1",
+			active:          true,
+			iteration:       1,
+			wantSRActive:    true,
+			wantSRIteration: 1,
+		},
+		{
+			name:            "self-review active iteration 3",
+			active:          true,
+			iteration:       3,
+			wantSRActive:    true,
+			wantSRIteration: 3,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			state := NewState(5000, 4, nil, AgentTotals{})
+			state.Running["ISS-SR"] = &RunningEntry{
+				Identifier:          "PROJ-99",
+				Issue:               domain.Issue{ID: "ISS-SR", State: "In Progress"},
+				StartedAt:           fixedNow.Add(-2 * time.Minute),
+				SelfReviewActive:    tt.active,
+				SelfReviewIteration: tt.iteration,
+			}
+
+			result := RuntimeSnapshot(state, fixedNow)
+
+			if len(result.Running) != 1 {
+				t.Fatalf("len(Running) = %d, want 1", len(result.Running))
+			}
+			got := result.Running[0]
+			if got.SelfReviewActive != tt.wantSRActive {
+				t.Errorf("SelfReviewActive = %v, want %v", got.SelfReviewActive, tt.wantSRActive)
+			}
+			if got.SelfReviewIteration != tt.wantSRIteration {
+				t.Errorf("SelfReviewIteration = %d, want %d", got.SelfReviewIteration, tt.wantSRIteration)
+			}
+		})
+	}
+}

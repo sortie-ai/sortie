@@ -463,6 +463,104 @@ func TestFinish(t *testing.T) {
 
 		assertFileExists(t, marker)
 	})
+
+	t.Run("SORTIE_SELF_REVIEW_STATUS defaults to disabled", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		out := filepath.Join(dir, "sr_status.txt")
+
+		Finish(context.Background(), FinishParams{
+			Path:             dir,
+			Identifier:       "F-SR-1",
+			IssueID:          "id-sr-1",
+			Attempt:          1,
+			AfterRun:         `echo -n "$SORTIE_SELF_REVIEW_STATUS" > "` + out + `"`,
+			HookTimeoutMS:    5000,
+			SelfReviewStatus: "", // empty → "disabled"
+		})
+
+		data, err := os.ReadFile(out)
+		if err != nil {
+			t.Fatalf("reading %q: %v", out, err)
+		}
+		if string(data) != "disabled" {
+			t.Errorf("SORTIE_SELF_REVIEW_STATUS = %q, want %q", string(data), "disabled")
+		}
+	})
+
+	t.Run("SORTIE_SELF_REVIEW_STATUS passed when set", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		out := filepath.Join(dir, "sr_status.txt")
+
+		Finish(context.Background(), FinishParams{
+			Path:             dir,
+			Identifier:       "F-SR-2",
+			IssueID:          "id-sr-2",
+			Attempt:          1,
+			AfterRun:         `echo -n "$SORTIE_SELF_REVIEW_STATUS" > "` + out + `"`,
+			HookTimeoutMS:    5000,
+			SelfReviewStatus: "passed",
+		})
+
+		data, err := os.ReadFile(out)
+		if err != nil {
+			t.Fatalf("reading %q: %v", out, err)
+		}
+		if string(data) != "passed" {
+			t.Errorf("SORTIE_SELF_REVIEW_STATUS = %q, want %q", string(data), "passed")
+		}
+	})
+
+	t.Run("SORTIE_SELF_REVIEW_SUMMARY_PATH set when non-empty", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		out := filepath.Join(dir, "sr_summary.txt")
+		summaryPath := "/workspace/.sortie/review_summary.md"
+
+		Finish(context.Background(), FinishParams{
+			Path:                  dir,
+			Identifier:            "F-SR-3",
+			IssueID:               "id-sr-3",
+			Attempt:               1,
+			AfterRun:              `echo -n "$SORTIE_SELF_REVIEW_SUMMARY_PATH" > "` + out + `"`,
+			HookTimeoutMS:         5000,
+			SelfReviewStatus:      "passed",
+			SelfReviewSummaryPath: summaryPath,
+		})
+
+		data, err := os.ReadFile(out)
+		if err != nil {
+			t.Fatalf("reading %q: %v", out, err)
+		}
+		if string(data) != summaryPath {
+			t.Errorf("SORTIE_SELF_REVIEW_SUMMARY_PATH = %q, want %q", string(data), summaryPath)
+		}
+	})
+
+	t.Run("SORTIE_SELF_REVIEW_SUMMARY_PATH absent when empty", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		out := filepath.Join(dir, "sr_summary.txt")
+
+		// Write "PRESENT" only if the env var exists and is non-empty.
+		Finish(context.Background(), FinishParams{
+			Path:                  dir,
+			Identifier:            "F-SR-4",
+			IssueID:               "id-sr-4",
+			Attempt:               1,
+			AfterRun:              `[ -n "$SORTIE_SELF_REVIEW_SUMMARY_PATH" ] && echo -n "PRESENT" > "` + out + `" || true`,
+			HookTimeoutMS:         5000,
+			SelfReviewStatus:      "disabled",
+			SelfReviewSummaryPath: "",
+		})
+
+		// File should not be created (env var absent or empty).
+		if _, err := os.Stat(out); !os.IsNotExist(err) {
+			data, _ := os.ReadFile(out)
+			t.Errorf("SORTIE_SELF_REVIEW_SUMMARY_PATH should be absent, but hook saw it; content = %q", data)
+		}
+	})
 }
 
 func TestCleanup(t *testing.T) {
