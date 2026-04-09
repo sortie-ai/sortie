@@ -137,7 +137,7 @@ After parsing, the loader produces a struct with three fields:
 
 ### 2.1 Top-Level Keys
 
-The core schema recognizes seven top-level keys:
+The core schema recognizes eight top-level keys:
 
 ```yaml
 tracker: # Issue tracker connection and query settings
@@ -147,6 +147,7 @@ hooks: # Workspace lifecycle hook scripts
 agent: # Coding agent adapter, timeouts, and limits
 db_path: # SQLite database file path
 ci_feedback: # CI failure feedback loop (optional)
+self_review: # Self-review verification loop (optional)
 ```
 
 **Unknown top-level keys are ignored** by the core schema for forward compatibility. They
@@ -449,6 +450,52 @@ and are shared with the tracker adapter when both use the same SCM provider.
 
 ---
 
+### 2.9 `self_review` — Self-Review Configuration
+
+```yaml
+self_review:
+  enabled: true
+  max_iterations: 3
+  verification_commands:
+    - "go test ./..."
+    - "go vet ./..."
+  verification_timeout_ms: 120000
+  max_diff_bytes: 102400
+  reviewer: same
+```
+
+The self-review section configures an optional post-coding verification and iterative
+review phase. When enabled, the orchestrator runs verification commands after the coding
+turn loop, generates a workspace diff, and presents both to the agent for a structured
+verdict. If the agent identifies issues ("iterate"), a fix turn runs and the cycle repeats
+up to `max_iterations`.
+
+| Key                        | Type     | Required           | Default    | Description                                                       |
+| -------------------------- | -------- | ------------------ | ---------- | ----------------------------------------------------------------- |
+| `enabled`                  | boolean  | No                 | `false`    | Activates the self-review loop.                                   |
+| `max_iterations`           | integer  | No                 | `3`        | Hard cap on review iterations. Range: 1–10.                       |
+| `verification_commands`    | [string] | When `enabled: true` | —        | Shell commands to run during each review iteration.               |
+| `verification_timeout_ms`  | integer  | No                 | `120000`   | Per-command timeout in milliseconds.                              |
+| `max_diff_bytes`           | integer  | No                 | `102400`   | Max bytes of diff to include in review prompt.                    |
+| `reviewer`                 | string   | No                 | `"same"`   | Which agent reviews. Only `"same"` in v1.                         |
+
+**Turn Accounting:** `max_iterations: N` means up to `2N − 1` additional agent turns
+(N review turns + N−1 fix turns). For the default `max_iterations: 3`, this is up to 5
+additional turns beyond the coding turn loop. Plan token budgets accordingly.
+
+**Validation rules:**
+
+- When `enabled` is `true`, `verification_commands` must be a non-empty list. An empty list
+  is rejected with a configuration error.
+- `max_iterations` must be in the range [1, 10]. Values outside this range are rejected with
+  a configuration error.
+- `reviewer` must be `"same"`. Other values are reserved for future use and are rejected
+  with a configuration error.
+- When `enabled` is `false` or the section is absent, all other fields are ignored and the
+  self-review phase adds zero overhead.
+
+---
+
 ## 3. Environment Variable Overrides
 
 Sortie supports a curated set of `SORTIE_*` environment variables that override YAML front
@@ -627,6 +674,7 @@ as an environment variable reference.
 | `hooks.timeout_ms`                     | Low-risk tuning; hooks are rarely changed per-environment       |
 | `agent.max_concurrent_agents_by_state` | Complex map type; no clean single-value representation          |
 | `ci_feedback.escalation_label`         | Low-risk default; rarely differs per environment                |
+| `self_review.*`                        | Verification commands are security-sensitive privileged configuration that must come from the version-controlled WORKFLOW.md |
 | Extensions (`server`, `worker`, etc.)  | Extension-defined; would couple core env parsing to extensions  |
 | `logging.level` (via extensions)       | Resolved from `--log-level` flag; not part of typed config layer |
 
@@ -1402,12 +1450,14 @@ Issue dispatched
 
 All hooks receive the following environment variables:
 
-| Variable                  | Description                                         |
-| ------------------------- | --------------------------------------------------- |
-| `SORTIE_ISSUE_ID`         | Stable tracker-internal issue ID.                   |
-| `SORTIE_ISSUE_IDENTIFIER` | Human-readable ticket key (e.g., `PROJ-123`).       |
-| `SORTIE_WORKSPACE`        | Absolute path to the per-issue workspace directory. |
-| `SORTIE_ATTEMPT`          | Current attempt number (integer).                   |
+| Variable                          | Description                                                                                                                      |
+| --------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| `SORTIE_ISSUE_ID`                 | Stable tracker-internal issue ID.                                                                                                |
+| `SORTIE_ISSUE_IDENTIFIER`         | Human-readable ticket key (e.g., `PROJ-123`).                                                                                    |
+| `SORTIE_WORKSPACE`                | Absolute path to the per-issue workspace directory.                                                                              |
+| `SORTIE_ATTEMPT`                  | Current attempt number (integer).                                                                                                |
+| `SORTIE_SELF_REVIEW_STATUS`       | Self-review outcome for the current run: `"disabled"`, `"passed"`, `"cap_reached"`, or `"error"`. Set on all `after_run` hook invocations. |
+| `SORTIE_SELF_REVIEW_SUMMARY_PATH` | Absolute path to `.sortie/review_summary.md` in the workspace. Absent when self-review did not run or the summary file was not written.   |
 
 These allow hooks to make decisions without parsing orchestrator internals.
 
@@ -1677,6 +1727,12 @@ lists the `SORTIE_*` variable that overrides the field, or "—" if not overrida
 | `ci_feedback.max_log_lines`             | integer          | `50`                         | —                                        | `0` = disable log fetching; restart required                                           |
 | `ci_feedback.escalation`                | string           | `label`                      | —                                        | `"label"` or `"comment"`                                                               |
 | `ci_feedback.escalation_label`          | string           | `needs-human`                | —                                        | Applied when `escalation` is `"label"`                                                 |
+| `self_review.enabled`                   | boolean          | `false`                      | —                                        | Activates self-review loop                                                             |
+| `self_review.max_iterations`            | integer          | `3`                          | —                                        | Range [1, 10]; up to `2N−1` extra turns                                                |
+| `self_review.verification_commands`     | `[string]`       | _(required when enabled)_    | —                                        | Shell commands for verification                                                        |
+| `self_review.verification_timeout_ms`   | integer          | `120000`                     | —                                        | Per-command timeout                                                                    |
+| `self_review.max_diff_bytes`            | integer          | `102400`                     | —                                        | Diff truncation limit                                                                  |
+| `self_review.reviewer`                  | string           | `"same"`                     | —                                        | Only `"same"` in v1                                                                    |
 | **Extensions**                          |                  |                              |                                          |                                                                                        |
 | `server.port`                           | integer          | `7678`                       | —                                        | CLI `--port` overrides; `0` disables server                                    |
 | `server.host`                           | string (IP)      | `127.0.0.1`                  | —                                        | CLI `--host` overrides                                                         |
@@ -1876,6 +1932,51 @@ Diagnose the root cause before making changes.
 
 {{ .issue.parent.identifier }}
 {{ end }}
+```
+
+---
+
+### 11.3 Self-Review with Go Verification
+
+A workflow enabling automated self-review after each coding session:
+
+```yaml
+---
+tracker:
+  kind: jira
+  endpoint: $SORTIE_JIRA_ENDPOINT
+  api_key: $SORTIE_JIRA_API_KEY
+  project: PROJ
+  active_states: [To Do, In Progress]
+  terminal_states: [Done]
+
+agent:
+  kind: claude-code
+  max_turns: 10
+
+# ─── Self-Review ───────────────────────────────────────────────
+# After the coding turn loop, run verification and let the agent
+# review its own work. Up to 3 iterations (5 additional turns).
+self_review:
+  enabled: true
+  max_iterations: 3           # 3 review rounds = up to 5 extra turns
+  verification_commands:
+    - "make fmt"              # Format check
+    - "make lint"             # Static analysis
+    - "make test"             # Full test suite
+  verification_timeout_ms: 180000  # 3 min per command
+  max_diff_bytes: 102400      # 100 KB diff cap
+  reviewer: same              # Reuse the same agent session
+
+hooks:
+  after_run: |
+    echo "Self-review status: $SORTIE_SELF_REVIEW_STATUS"
+    if [ -f "$SORTIE_SELF_REVIEW_SUMMARY_PATH" ]; then
+      cat "$SORTIE_SELF_REVIEW_SUMMARY_PATH"
+    fi
+---
+
+Fix {{ .issue.identifier }}: {{ .issue.title }}
 ```
 
 ---

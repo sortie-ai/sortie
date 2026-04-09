@@ -99,6 +99,9 @@ Important boundary:
    - Builds prompt from issue + workflow template.
    - Launches the coding agent session via the configured agent adapter.
    - Relays agent updates back to the orchestrator.
+   - Optionally runs a bounded self-review loop after the coding turn loop completes:
+     configurable verification commands, workspace diff generation, and structured
+     agent feedback for iterative fix cycles. Opt-in; disabled by default.
 
 7. `Persistence Layer`
    - SQLite database for retry queues, session metadata, workspace registry, token accounting, and
@@ -608,6 +611,37 @@ Filesystem path for the SQLite database file.
 - Changes to `db_path` during dynamic reload update the in-memory config but have no
   effect on the already-open database connection; a restart is required.
 
+#### 5.3.8 `self_review` (object, optional)
+
+Self-review loop configuration. When `enabled` is true and `verification_commands` is
+non-empty, the orchestrator runs a bounded review-fix cycle after the coding turn loop
+completes. Each iteration executes verification commands, generates a workspace diff, and
+presents both to the agent for a structured verdict. Disabled by default; zero overhead
+when disabled.
+
+Fields:
+
+- `enabled` (boolean)
+  - Activates the self-review loop. Default: `false`.
+  - When `true`, `verification_commands` must be non-empty or a configuration error is
+    raised.
+- `max_iterations` (integer)
+  - Hard cap on review iterations. Default: `3`. Range: [1, 10].
+  - Each iteration consists of a review turn and (if the verdict is `iterate`) a fix turn.
+    `max_iterations: N` means up to `2N − 1` additional agent turns.
+- `verification_commands` (list of strings)
+  - Shell commands executed during each review iteration. Required when `enabled` is true.
+  - Each command runs in its own subprocess with the workspace as `cwd`, process group
+    isolation, and per-command timeout.
+- `verification_timeout_ms` (integer)
+  - Per-command timeout in milliseconds. Default: `120000` (2 minutes).
+- `max_diff_bytes` (integer)
+  - Maximum bytes of workspace diff included in the review prompt. Default: `102400`
+    (100 KB). Diffs exceeding this limit are truncated with a marker.
+- `reviewer` (string)
+  - Which agent performs the review. Default: `"same"`. Only `"same"` (reuse the current
+    session) is supported in v1.
+
 ### 5.4 Prompt Template Contract
 
 The Markdown body of `WORKFLOW.md` is the per-issue prompt template.
@@ -783,6 +817,12 @@ This section is intentionally redundant so a coding agent can implement the conf
   `comment`)
 - `ci_feedback.escalation_label`: string, default `needs-human`; label applied during `label`
   escalation
+- `self_review.enabled`: boolean, default `false`; activates the self-review loop
+- `self_review.max_iterations`: integer, default `3`, range [1, 10]; review iteration cap
+- `self_review.verification_commands`: list of strings, required when enabled; shell commands
+- `self_review.verification_timeout_ms`: integer, default `120000`; per-command timeout
+- `self_review.max_diff_bytes`: integer, default `102400`; diff truncation limit
+- `self_review.reviewer`: string, default `"same"`; only `"same"` supported in v1
 - `server.port` (extension): integer, optional; overrides the default server port (7678);
   `0` disables the HTTP server; CLI `--port` takes precedence
 - `server.host` (extension): string (IP address), optional; overrides the default bind
@@ -841,12 +881,14 @@ A run attempt transitions through these phases:
 3. `LaunchingAgentProcess`
 4. `InitializingSession`
 5. `StreamingTurn`
-6. `Finishing`
-7. `Succeeded`
-8. `Failed`
-9. `TimedOut`
-10. `Stalled`
-11. `CanceledByReconciliation`
+6. `SelfReviewing` — entered only when `self_review.enabled` is true and the coding turn
+   loop completed successfully (not on turn failure).
+7. `Finishing`
+8. `Succeeded`
+9. `Failed`
+10. `TimedOut`
+11. `Stalled`
+12. `CanceledByReconciliation`
 
 Distinct terminal reasons are important because retry logic and logs differ.
 
@@ -1137,6 +1179,18 @@ Failure semantics:
 - `before_run` failure or timeout is fatal to the current run attempt.
 - `after_run` failure or timeout is logged and ignored.
 - `before_remove` failure or timeout is logged and ignored.
+
+Hook environment variables (available to all hooks):
+
+- `SORTIE_ISSUE_ID` — tracker-internal issue ID.
+- `SORTIE_ISSUE_IDENTIFIER` — human-readable ticket key.
+- `SORTIE_WORKSPACE` — absolute path to the per-issue workspace directory.
+- `SORTIE_ATTEMPT` — current attempt number.
+- `SORTIE_SELF_REVIEW_STATUS` — self-review outcome for the current run: `"disabled"`,
+  `"passed"`, `"cap_reached"`, or `"error"`. Set on all `after_run` hook invocations.
+  Defaults to `"disabled"` when self-review is not configured.
+- `SORTIE_SELF_REVIEW_SUMMARY_PATH` — absolute path to `.sortie/review_summary.md` in
+  the workspace. Absent when self-review did not run or summary was not written.
 
 ### 9.5 Workspace SCM metadata (`.sortie/scm.json`)
 
@@ -2539,8 +2593,28 @@ function run_agent_attempt(issue, attempt, orchestrator_channel):
 
     turn_number = turn_number + 1
 
+  // Self-review phase (between turn loop exit and session teardown).
+  review_metadata = null
+  cfg = current_config()  // re-read for dynamic reload
+  if cfg.self_review.enabled AND issue.state is active AND context not cancelled:
+    review_metadata = run_self_review_loop(
+      session, workspace, issue, cfg.self_review, agent_adapter, orchestrator_channel
+    )
+
+  self_review_status = "disabled"
+  if review_metadata != null:
+    if review_metadata.final_verdict == "pass":
+      self_review_status = "passed"
+    else if review_metadata.cap_reached:
+      self_review_status = "cap_reached"
+    else:
+      self_review_status = "error"
+
   agent_adapter.stop_session(session)
-  run_hook_best_effort("after_run", workspace.path)
+  run_hook_best_effort("after_run", workspace.path, {
+    SORTIE_SELF_REVIEW_STATUS: self_review_status,
+    SORTIE_SELF_REVIEW_SUMMARY_PATH: workspace.path + "/.sortie/review_summary.md"
+  })
 
   exit_normal()
 ```
@@ -2709,6 +2783,14 @@ Unless otherwise noted, Sections 17.1 through 17.7 are `Core Conformance`. Bulle
 - Escalation label failure is logged but does not block claim release
 - `.sortie/scm.json` symlink rejection prevents CI check enqueue
 - `.sortie/scm.json` oversized or malformed files degrade to no-CI behavior
+- Self-review disabled adds zero overhead (no review turns, no review metadata)
+- Self-review runs verification commands and passes results to agent
+- Review verdict "pass" terminates loop
+- Review verdict "iterate" triggers fix turn and next iteration
+- Iteration cap enforced; worker exits with cap_reached metadata
+- Missing verdict treated as iterate (non-final) / pass (final)
+- Verification command timeout does not block remaining commands
+- Review progress visible in runtime snapshot via selfReviewCh
 
 ### 17.5 Coding-Agent Adapter Client
 
@@ -2859,8 +2941,9 @@ Note: `timer_handle` is runtime-only and is not stored.
 | `workspace`     | TEXT    | Workspace path                            |
 | `started_at`    | TEXT    | ISO-8601 timestamp                        |
 | `completed_at`  | TEXT    | ISO-8601 timestamp                        |
-| `status`        | TEXT    | Terminal status (succeeded, failed, etc.) |
-| `error`         | TEXT    | Error message if failed, may be null      |
+| `status`          | TEXT    | Terminal status (succeeded, failed, etc.) |
+| `error`           | TEXT    | Error message if failed, may be null      |
+| `review_metadata` | TEXT    | JSON-encoded self-review metadata, may be null (migration 007) |
 
 **`session_metadata`** — last known session metadata per issue (for observability and debug)
 
@@ -2943,6 +3026,41 @@ channel only.
 The full protocol specification — including file format, parsing rules, read timing, cleanup
 obligations, versioning, security considerations, and design rationale — is in
 [agent-to-orchestrator-protocol.md](agent-to-orchestrator-protocol.md).
+
+### 21.2 `.sortie/review_verdict.json`
+
+During the self-review phase, the agent writes a structured review verdict to
+`.sortie/review_verdict.json`. The orchestrator reads this file after each review turn to
+determine the next action.
+
+JSON schema:
+
+```json
+{
+  "verdict": "pass | iterate",
+  "issues": [
+    {
+      "file": "path/to/file.go",
+      "line": 42,
+      "severity": "error | warning | info",
+      "message": "Description of the issue"
+    }
+  ]
+}
+```
+
+- `verdict` (string): `"pass"` ends the review loop; `"iterate"` requests a fix turn.
+  Unrecognized values are normalized to `"iterate"`.
+- `issues` (array, optional): structured list of review findings for the fix prompt.
+
+Safety rules:
+
+- Maximum file size: 65536 bytes (64 KB). Oversized files are rejected.
+- Symlink protection: both `.sortie/` and `.sortie/review_verdict.json` are checked via
+  `Lstat` before reading. If either is a symbolic link, the file is rejected. This follows
+  the same pattern as `.sortie/status` (Section 21.1).
+- Missing verdict file on a non-final iteration is treated as `"iterate"`. Missing verdict
+  file on the final iteration is treated as `"pass"`.
 
 ## Appendix A. SSH Worker Extension (Optional)
 

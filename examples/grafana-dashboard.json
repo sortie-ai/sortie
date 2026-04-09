@@ -1570,6 +1570,177 @@
     },
     {
       "collapsed": false,
+      "gridPos": { "h": 1, "w": 24, "x": 0, "y": 83 },
+      "id": 30,
+      "title": "Self-Review",
+      "type": "row"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "showPoints": "auto"
+          }
+        }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 84 },
+      "id": 31,
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom" },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "editorMode": "code",
+          "expr": "sum(rate(sortie_self_review_iterations_total[5m])) by (verdict)",
+          "legendFormat": "{{verdict}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Self-Review Iterations",
+      "description": "Self-review iterations per second by verdict (pass, iterate, none).",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "showPoints": "auto"
+          }
+        }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 84 },
+      "id": 32,
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom" },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "editorMode": "code",
+          "expr": "sum(rate(sortie_self_review_sessions_total[5m])) by (final_verdict)",
+          "legendFormat": "{{final_verdict}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Self-Review Sessions",
+      "description": "Self-review sessions per second by final verdict.",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "showPoints": "auto"
+          }
+        }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 92 },
+      "id": 33,
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom" },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.95, sum(rate(sortie_self_review_verification_duration_seconds_bucket[5m])) by (le, command))",
+          "legendFormat": "p95 {{command}}",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Self-Review Verification Duration",
+      "description": "P95 verification command duration by command.",
+      "type": "timeseries"
+    },
+    {
+      "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" },
+          "custom": {
+            "axisBorderShow": false,
+            "axisCenteredZero": false,
+            "axisColorMode": "text",
+            "axisLabel": "",
+            "axisPlacement": "auto",
+            "barAlignment": 0,
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "showPoints": "auto"
+          }
+        }
+      },
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 92 },
+      "id": 34,
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom" },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      },
+      "targets": [
+        {
+          "datasource": { "type": "prometheus", "uid": "${DS_PROMETHEUS}" },
+          "editorMode": "code",
+          "expr": "sum(rate(sortie_self_review_cap_reached_total[5m]))",
+          "legendFormat": "cap_reached",
+          "range": true,
+          "refId": "A"
+        }
+      ],
+      "title": "Self-Review Cap Reached",
+      "description": "Rate of self-review sessions that hit the iteration cap.",
+      "type": "timeseries"
+    },
+    {
+      "collapsed": false,
       "gridPos": { "h": 1, "w": 24, "x": 0, "y": 85 },
       "id": 21,
       "title": "Agent",
