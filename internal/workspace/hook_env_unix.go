@@ -2,6 +2,10 @@
 
 package workspace
 
+// normalizeEnvKey returns key unchanged on Unix where environment
+// variable names are case-sensitive.
+func normalizeEnvKey(key string) string { return key }
+
 // allowedEnvKeys lists the parent-process environment variables that
 // hook subprocesses are permitted to inherit. All other variables are
 // stripped so that secrets are not present in the hook subprocess

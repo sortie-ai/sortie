@@ -28,7 +28,7 @@ var jobs sync.Map // map[int]*jobEntry
 // [syscall.SysProcAttr] fields are preserved.
 //
 // CREATE_NEW_PROCESS_GROUP gives the child a new console process
-// group ID equal to its PID, enabling [GenerateConsoleCtrlEvent] to
+// group ID equal to its PID, enabling GenerateConsoleCtrlEvent to
 // target the tree precisely without affecting the orchestrator.
 func SetProcessGroup(cmd *exec.Cmd) {
 	if cmd.SysProcAttr == nil {

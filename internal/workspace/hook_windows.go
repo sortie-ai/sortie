@@ -74,9 +74,9 @@ func RunHook(ctx context.Context, params HookParams) (HookResult, error) {
 		cmd.Cancel = func() error {
 			// On cancellation/timeout, actively terminate the tree
 			// before closing the handle.
-			windows.TerminateJobObject(job, 0xC000013A)
+			err := windows.TerminateJobObject(job, 0xC000013A)
 			closeHandle()
-			return nil
+			return err
 		}
 		// On the happy path, just close the handle.
 		// KILL_ON_JOB_CLOSE ensures any stray background children

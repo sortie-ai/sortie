@@ -101,7 +101,8 @@ func hookEnv(override map[string]string) []string {
 	env := make([]string, 0, len(allowedEnvKeys)+len(override))
 	for _, entry := range parent {
 		k, _, _ := strings.Cut(entry, "=")
-		if !allowedEnvKeys[k] && !strings.HasPrefix(k, "SORTIE_") {
+		norm := normalizeEnvKey(k)
+		if !allowedEnvKeys[norm] && !strings.HasPrefix(norm, "SORTIE_") {
 			continue
 		}
 		if _, dup := override[k]; dup {

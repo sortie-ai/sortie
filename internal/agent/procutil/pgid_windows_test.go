@@ -3,6 +3,7 @@
 package procutil
 
 import (
+	"errors"
 	"os/exec"
 	"syscall"
 	"testing"
@@ -49,7 +50,8 @@ func TestAssignProcess_CleanupProcess_Idempotent(t *testing.T) {
 	t.Parallel()
 
 	// Use a process that stays alive long enough for AssignProcess to succeed.
-	cmd := exec.Command("cmd.exe", "/C", "timeout /t 5 >nul")
+	// ping reliably blocks in non-interactive environments.
+	cmd := exec.Command("cmd.exe", "/C", "ping -n 10 127.0.0.1 >nul")
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("cmd.Start() = %v", err)
 	}
@@ -123,7 +125,10 @@ func TestSignalGraceful_ConsoleProcess(t *testing.T) {
 	// process is terminated by CTRL_BREAK_EVENT.
 	const statusControlCExit = uint32(0xC000013A)
 
-	cmd := exec.Command("cmd.exe", "/C", "timeout /t 30 /nobreak >nul")
+	// Use ping as a long-running process. It blocks via the network
+	// timer and works in non-interactive environments where timeout.exe
+	// and pause exit immediately.
+	cmd := exec.Command("cmd.exe", "/C", "ping -n 31 127.0.0.1 >nul")
 	SetProcessGroup(cmd)
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("cmd.Start() = %v", err)
@@ -133,7 +138,7 @@ func TestSignalGraceful_ConsoleProcess(t *testing.T) {
 	if err := AssignProcess(pid, cmd.Process); err != nil {
 		_ = cmd.Process.Kill()
 		_ = cmd.Wait()
-		t.Fatalf("AssignProcess() = %v, want nil", err)
+		t.Fatalf("AssignProcess() = %v", err)
 	}
 	t.Cleanup(func() { CleanupProcess(pid) })
 
@@ -182,7 +187,9 @@ func TestWasSignaled_JobTermination_IsSignaled(t *testing.T) {
 
 	// A process killed via KillProcessGroup (Job Object with
 	// STATUS_CONTROL_C_EXIT exit code) must be classified as signaled.
-	cmd := exec.Command("cmd.exe", "/C", "timeout /t 30 >nul")
+	// Use ping as a long-running process that reliably blocks in
+	// non-interactive environments.
+	cmd := exec.Command("cmd.exe", "/C", "ping -n 31 127.0.0.1 >nul")
 	SetProcessGroup(cmd)
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("cmd.Start() = %v", err)
@@ -195,7 +202,7 @@ func TestWasSignaled_JobTermination_IsSignaled(t *testing.T) {
 		t.Fatalf("AssignProcess() = %v", err)
 	}
 
-	time.Sleep(100 * time.Millisecond)
+	time.Sleep(200 * time.Millisecond)
 
 	if err := KillProcessGroup(pid); err != nil {
 		t.Fatalf("KillProcessGroup() = %v", err)
@@ -204,6 +211,12 @@ func TestWasSignaled_JobTermination_IsSignaled(t *testing.T) {
 	waitErr := cmd.Wait()
 	if waitErr == nil {
 		t.Fatal("cmd.Wait() = nil, want exit error after Job Object termination")
+	}
+	var exitErr *exec.ExitError
+	if errors.As(waitErr, &exitErr) {
+		t.Logf("ExitCode() = %d (0x%X), ExitError = %v", exitErr.ExitCode(), uint32(exitErr.ExitCode()), exitErr)
+	} else {
+		t.Logf("waitErr type = %T, value = %v", waitErr, waitErr)
 	}
 	if !WasSignaled(waitErr) {
 		t.Errorf("WasSignaled(job-terminated) = false, want true")
