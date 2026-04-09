@@ -668,11 +668,121 @@ func TestComputeCIPendingDelay(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			got := computeCIPendingDelay(tt.attempts)
+			got := computeCIPendingDelay(ciPendingBackoffBaseDefault, tt.attempts)
 			if got != tt.want {
-				t.Errorf("computeCIPendingDelay(%d) = %v, want %v", tt.attempts, got, tt.want)
+				t.Errorf("computeCIPendingDelay(ciPendingBackoffBaseDefault, %d) = %v, want %v", tt.attempts, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestComputeCIPendingDelay_CustomBase(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		base     time.Duration
+		attempts int
+		want     time.Duration
+	}{
+		// 5s base: 5s * 2^n
+		{"5s base attempt 1", 5 * time.Second, 1, 10 * time.Second},
+		{"5s base attempt 2", 5 * time.Second, 2, 20 * time.Second},
+		{"5s base attempt 3", 5 * time.Second, 3, 40 * time.Second},
+		{"5s base attempt 4", 5 * time.Second, 4, 80 * time.Second},
+		{"5s base attempt 5", 5 * time.Second, 5, 160 * time.Second},
+		{"5s base attempt 6 capped", 5 * time.Second, 6, ciPendingBackoffCap},
+		// 30s base: 30s * 2^n
+		{"30s base attempt 1", 30 * time.Second, 1, 60 * time.Second},
+		{"30s base attempt 2", 30 * time.Second, 2, 120 * time.Second},
+		{"30s base attempt 3", 30 * time.Second, 3, 240 * time.Second},
+		{"30s base attempt 4 capped", 30 * time.Second, 4, ciPendingBackoffCap},
+		{"30s base attempt 5 capped", 30 * time.Second, 5, ciPendingBackoffCap},
+		// 60s base: 60s * 2^n
+		{"60s base attempt 1", 60 * time.Second, 1, 120 * time.Second},
+		{"60s base attempt 2", 60 * time.Second, 2, 240 * time.Second},
+		{"60s base attempt 3 capped", 60 * time.Second, 3, ciPendingBackoffCap},
+		// large base already exceeds cap on attempt 1
+		{"4m base attempt 1 capped", 4 * time.Minute, 1, ciPendingBackoffCap},
+		// large attempt value always caps regardless of base
+		{"large attempt capped", 30 * time.Second, 100, ciPendingBackoffCap},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := computeCIPendingDelay(tt.base, tt.attempts)
+			if got != tt.want {
+				t.Errorf("computeCIPendingDelay(%v, %d) = %v, want %v", tt.base, tt.attempts, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestComputeCIPendingDelay_ZeroBase(t *testing.T) {
+	t.Parallel()
+
+	// Zero and negative base must fall back to ciPendingBackoffBaseDefault.
+	bases := []time.Duration{0, -1 * time.Second, -5 * time.Second}
+
+	for _, base := range bases {
+		t.Run(base.String(), func(t *testing.T) {
+			t.Parallel()
+
+			for attempts := 0; attempts <= 5; attempts++ {
+				got := computeCIPendingDelay(base, attempts)
+				want := computeCIPendingDelay(ciPendingBackoffBaseDefault, attempts)
+				if got != want {
+					t.Errorf("computeCIPendingDelay(%v, %d) = %v, want %v (same as default base)", base, attempts, got, want)
+				}
+			}
+		})
+	}
+}
+
+func TestReconcileCIStatus_BackoffUsesStatePollInterval(t *testing.T) {
+	t.Parallel()
+
+	now := ciBaseTime
+
+	// Use a non-default poll interval of 30s (30000ms).
+	entry := newPendingEntry("ISS-PPI-1", "ISS-PPI-1-ident", "feature/ppi", 1)
+	entry.PendingAttempts = 1
+
+	state := NewState(30000, 4, nil, AgentTotals{})
+	state.PendingCICheck["ISS-PPI-1"] = entry
+	state.Claimed["ISS-PPI-1"] = struct{}{}
+
+	store := &ciReconcileStore{}
+	metrics := newCIMetricsSpy()
+	ci := &mockCIProvider{result: domain.CIResult{Status: domain.CIStatusPending}}
+	params := ciParams(t, store, ci, nil)
+	params.NowFunc = func() time.Time { return now }
+
+	reconcileCIStatus(state, params, discardLogger(), context.Background(), metrics)
+
+	got, ok := state.PendingCICheck["ISS-PPI-1"]
+	if !ok {
+		t.Fatal("PendingCICheck entry not re-enqueued after CIStatusPending; want re-enqueued")
+	}
+
+	wantAttempts := 2
+	if got.PendingAttempts != wantAttempts {
+		t.Errorf("PendingAttempts = %d, want %d", got.PendingAttempts, wantAttempts)
+	}
+
+	// With a 30s poll interval, retry at = now + 30s * 2^2 = now + 120s.
+	wantDelay := computeCIPendingDelay(30*time.Second, wantAttempts)
+	wantRetryAt := now.Add(wantDelay)
+	if !got.PendingRetryAt.Equal(wantRetryAt) {
+		t.Errorf("PendingRetryAt = %v, want %v (30s base backoff)", got.PendingRetryAt, wantRetryAt)
+	}
+
+	// Confirm it is NOT the old 10s-based schedule.
+	oldSchedule := now.Add(computeCIPendingDelay(ciPendingBackoffBaseDefault, wantAttempts))
+	if got.PendingRetryAt.Equal(oldSchedule) {
+		t.Errorf("PendingRetryAt = %v matches old 10s-base schedule; want 30s-base schedule", got.PendingRetryAt)
 	}
 }
 
@@ -746,7 +856,7 @@ func TestReconcileCIStatus_BackoffIncrements_OnPending(t *testing.T) {
 		t.Errorf("PendingAttempts = %d, want %d", got.PendingAttempts, wantAttempts)
 	}
 
-	wantRetryAt := now.Add(computeCIPendingDelay(wantAttempts))
+	wantRetryAt := now.Add(computeCIPendingDelay(5*time.Second, wantAttempts))
 	if !got.PendingRetryAt.Equal(wantRetryAt) {
 		t.Errorf("PendingRetryAt = %v, want %v", got.PendingRetryAt, wantRetryAt)
 	}
@@ -786,7 +896,7 @@ func TestReconcileCIStatus_BackoffIncrements_OnError(t *testing.T) {
 		t.Errorf("PendingAttempts = %d, want %d", got.PendingAttempts, wantAttempts)
 	}
 
-	wantRetryAt := now.Add(computeCIPendingDelay(wantAttempts))
+	wantRetryAt := now.Add(computeCIPendingDelay(5*time.Second, wantAttempts))
 	if !got.PendingRetryAt.Equal(wantRetryAt) {
 		t.Errorf("PendingRetryAt = %v, want %v", got.PendingRetryAt, wantRetryAt)
 	}
