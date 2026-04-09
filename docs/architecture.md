@@ -1125,6 +1125,9 @@ Execution contract:
   `cwd`.
 - On POSIX systems, `sh -c <script>` is the conforming default; `bash -lc <script>` may be used
   when a login shell environment is required.
+- On Windows, `cmd.exe /C <script>` is the conforming default. The hook subprocess is assigned to
+  a Job Object with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` so that timeout-triggered termination
+  kills the entire process tree, not just the direct child.
 - Hook timeout uses `hooks.timeout_ms`; default: `60000 ms`.
 - Log hook start, failures, and timeouts.
 
@@ -1461,16 +1464,39 @@ Note:
 ### 10.7 Local Subprocess Launch Contract
 
 This subsection applies only to adapters that launch a local subprocess (e.g., Claude Code,
-Codex). HTTP-based and remote adapters define their own connection semantics.
+Copilot CLI). HTTP-based and remote adapters define their own connection semantics.
 
 When `agent.kind` requires a local subprocess:
 
 - Command: `agent.command`
-- Invocation: `sh -c <agent.command>` (or `bash -lc` when a login shell is required by the agent)
-  - The shell used for invocation is configurable to support minimal Docker images and CI
+- Invocation:
+  - POSIX: `sh -c <agent.command>` (or `bash -lc` when a login shell is required by the agent).
+    The shell used for invocation is configurable to support minimal Docker images and CI
     environments where bash may not be present.
+  - Windows: the adapter invokes the command directly (no shell wrapper). The subprocess receives
+    `CREATE_NEW_PROCESS_GROUP` so it can be signaled independently of the orchestrator.
 - Working directory: workspace path
 - Stdout/stderr: separate streams
+
+Process group isolation:
+
+- The adapter MUST place the subprocess in its own process group before starting it.
+  - POSIX: `Setpgid = true` (new process group at fork time).
+  - Windows: `CREATE_NEW_PROCESS_GROUP` creation flag, followed by Job Object assignment after
+    process start. The Job Object is configured with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` so
+    the entire process tree is terminated if the orchestrator crashes.
+
+Graceful shutdown sequence:
+
+- On context cancellation or `StopSession`, the adapter sends a platform-appropriate graceful
+  shutdown signal to the process group:
+  - POSIX: `SIGTERM` to the process group (`kill(-pgid, SIGTERM)`).
+  - Windows: `CTRL_BREAK_EVENT` via `GenerateConsoleCtrlEvent` to the process group.
+- After a grace period (default 5 seconds), force-terminate the process tree:
+  - POSIX: `SIGKILL` to the process group.
+  - Windows: `TerminateJobObject` to kill all processes in the Job Object.
+- After `cmd.Wait()` returns, a best-effort force kill is sent to the process group to reap any
+  children that survived the graceful signal.
 
 Recommended additional process settings:
 
