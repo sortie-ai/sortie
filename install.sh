@@ -48,6 +48,14 @@ detect_platform() {
         aarch64|arm64) ARCH=arm64 ;;
         *)             die "unsupported architecture: $ARCH" ;;
     esac
+
+    # On macOS, detect Rosetta 2: if the shell runs as x86_64 under translation
+    # on an Apple Silicon Mac, prefer the native arm64 binary.
+    if [ "$OS" = "darwin" ] && [ "$ARCH" = "amd64" ]; then
+        if [ "$(sysctl -n sysctl.proc_translated 2>/dev/null)" = "1" ]; then
+            ARCH=arm64
+        fi
+    fi
 }
 
 # ── HTTP abstraction ──────────────────────────────────────────────────────────
