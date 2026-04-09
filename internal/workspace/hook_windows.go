@@ -16,6 +16,12 @@ import (
 	"golang.org/x/sys/windows"
 )
 
+// statusControlCExit is the Windows NTSTATUS code for
+// STATUS_CONTROL_C_EXIT (0xC000013A). It is used as the exit code
+// when terminating a Job Object so the outcome is distinguishable
+// from normal non-zero exits.
+const statusControlCExit uint32 = 0xC000013A
+
 // RunHook executes a hook script via cmd.exe on Windows, enforcing a
 // timeout and capturing output. The subprocess is placed in a Job
 // Object with KILL_ON_JOB_CLOSE so that the entire process tree is
@@ -74,7 +80,7 @@ func RunHook(ctx context.Context, params HookParams) (HookResult, error) {
 		cmd.Cancel = func() error {
 			// On cancellation/timeout, actively terminate the tree
 			// before closing the handle.
-			err := windows.TerminateJobObject(job, 0xC000013A)
+			err := windows.TerminateJobObject(job, statusControlCExit)
 			closeHandle()
 			return err
 		}
