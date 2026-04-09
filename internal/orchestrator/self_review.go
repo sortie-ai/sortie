@@ -10,7 +10,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/sortie-ai/sortie/internal/agent/procutil"
@@ -44,6 +43,29 @@ type RunSelfReviewParams struct {
 
 // maxVerdictFileBytes is the cap on .sortie/review_verdict.json reads.
 const maxVerdictFileBytes = 65536
+
+// cappedWriter captures up to max bytes of written data, silently
+// discarding excess. Write always reports the full input length so the
+// writing subprocess never blocks on a full pipe buffer.
+type cappedWriter struct {
+	buf strings.Builder
+	max int
+}
+
+func (w *cappedWriter) Write(p []byte) (int, error) {
+	if w.buf.Len() < w.max {
+		remaining := w.max - w.buf.Len()
+		if remaining > len(p) {
+			remaining = len(p)
+		}
+		w.buf.Write(p[:remaining])
+	}
+	return len(p), nil
+}
+
+func (w *cappedWriter) String() string {
+	return w.buf.String()
+}
 
 func generateWorkspaceDiff(ctx context.Context, workspacePath string, maxDiffBytes int) (diff string, originalSize int, truncated bool, err error) {
 	// Stage intent-to-add so new files appear in the diff.
@@ -88,24 +110,20 @@ func runSingleVerification(ctx context.Context, command, workspacePath string, t
 	cmd.Dir = workspacePath
 	procutil.SetProcessGroup(cmd)
 
-	var stdoutBuf, stderrBuf strings.Builder
+	// Use cappedWriter for stdout/stderr instead of StdoutPipe/StderrPipe.
+	// On Windows, ReadFile on a pipe can remain blocked after the subprocess
+	// is killed, causing wg.Wait() to hang before cmd.Wait() is reached.
+	// Assigning direct writers lets Go manage the internal pipe goroutines
+	// and WaitDelay ensures Wait returns even if those goroutines are stuck.
+	var stdoutBuf, stderrBuf cappedWriter
+	stdoutBuf.max = int(domain.MaxVerificationOutputBytes)
+	stderrBuf.max = int(domain.MaxVerificationOutputBytes)
+	cmd.Stdout = &stdoutBuf
+	cmd.Stderr = &stderrBuf
 
-	stdoutPipe, pipeErr := cmd.StdoutPipe()
-	if pipeErr != nil {
-		return domain.VerificationResult{
-			Command:        command,
-			ExitCode:       -1,
-			ExecutionError: pipeErr.Error(),
-		}
-	}
-	stderrPipe, pipeErr := cmd.StderrPipe()
-	if pipeErr != nil {
-		return domain.VerificationResult{
-			Command:        command,
-			ExitCode:       -1,
-			ExecutionError: pipeErr.Error(),
-		}
-	}
+	// WaitDelay lets cmd.Wait return after process termination even when
+	// internal I/O goroutines are still blocked on pipe reads (Windows).
+	cmd.WaitDelay = 5 * time.Second
 
 	start := time.Now()
 	if err := cmd.Start(); err != nil {
@@ -121,35 +139,6 @@ func runSingleVerification(ctx context.Context, command, workspacePath string, t
 			ExecutionError: err.Error(),
 		}
 	}
-
-	// Drain stdout and stderr concurrently to avoid deadlock when either
-	// pipe fills its OS buffer while the other is not being read.
-	var wg sync.WaitGroup
-	wg.Add(2)
-	readLimited := func(r io.Reader, w *strings.Builder) {
-		defer wg.Done()
-		limited := io.LimitReader(r, domain.MaxVerificationOutputBytes)
-		_, _ = io.Copy(w, limited)
-	}
-	go readLimited(stdoutPipe, &stdoutBuf)
-	go readLimited(stderrPipe, &stderrBuf)
-
-	// On some platforms (notably Windows with MSYS2 shells), the write
-	// end of the stdout/stderr pipes may not close promptly when the
-	// process is killed via context cancellation. Explicitly close the
-	// read ends when the context expires so that the drain goroutines
-	// are unblocked and wg.Wait() can return.
-	drainDone := make(chan struct{})
-	go func() {
-		select {
-		case <-cmdCtx.Done():
-			stdoutPipe.Close()
-			stderrPipe.Close()
-		case <-drainDone:
-		}
-	}()
-	wg.Wait()
-	close(drainDone)
 
 	err := cmd.Wait()
 	duration := time.Since(start)
