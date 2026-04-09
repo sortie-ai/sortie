@@ -3050,7 +3050,7 @@ JSON schema:
 ```
 
 - `verdict` (string): `"pass"` ends the review loop; `"iterate"` requests a fix turn.
-  Unrecognized values are normalized to `"iterate"`.
+  Any other value is rejected as invalid.
 - `issues` (array, optional): structured list of review findings for the fix prompt.
 
 Safety rules:
@@ -3059,8 +3059,9 @@ Safety rules:
 - Symlink protection: both `.sortie/` and `.sortie/review_verdict.json` are checked via
   `Lstat` before reading. If either is a symbolic link, the file is rejected. This follows
   the same pattern as `.sortie/status` (Section 21.1).
-- Missing verdict file on a non-final iteration is treated as `"iterate"`. Missing verdict
-  file on the final iteration is treated as `"pass"`.
+- Missing or invalid verdict content on a non-final iteration is treated as `"iterate"`.
+  Missing or invalid verdict content on the final iteration does not count as `"pass"`; the
+  run ends with no final verdict recorded and `CapReached=true`.
 
 ## Appendix A. SSH Worker Extension (Optional)
 

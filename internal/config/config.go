@@ -597,6 +597,12 @@ func buildSelfReviewConfig(m map[string]any) (SelfReviewConfig, error) {
 		}
 		timeoutMS = parsed
 	}
+	if timeoutMS <= 0 {
+		return SelfReviewConfig{}, &ConfigError{
+			Field:   "self_review.verification_timeout_ms",
+			Message: "must be greater than 0",
+		}
+	}
 
 	maxDiffBytes := 102400
 	if v, exists := m["max_diff_bytes"]; exists && v != nil {
@@ -608,6 +614,12 @@ func buildSelfReviewConfig(m map[string]any) (SelfReviewConfig, error) {
 			}
 		}
 		maxDiffBytes = parsed
+	}
+	if maxDiffBytes <= 0 {
+		return SelfReviewConfig{}, &ConfigError{
+			Field:   "self_review.max_diff_bytes",
+			Message: "must be greater than 0",
+		}
 	}
 
 	reviewer := "same"

@@ -276,8 +276,13 @@ func (o *Orchestrator) Run(ctx context.Context) {
 
 		case msg := <-o.selfReviewCh:
 			if entry, ok := o.state.Running[msg.IssueID]; ok {
-				entry.SelfReviewActive = msg.Message != "self_review_done"
-				entry.SelfReviewIteration = msg.Iteration
+				if msg.Message == "self_review_done" {
+					entry.SelfReviewActive = false
+					entry.SelfReviewIteration = 0
+				} else {
+					entry.SelfReviewActive = true
+					entry.SelfReviewIteration = msg.Iteration
+				}
 			}
 
 		case req := <-o.snapshotCh:

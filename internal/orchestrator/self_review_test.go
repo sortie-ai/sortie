@@ -881,9 +881,8 @@ func TestSelfReviewLoop_IterateThenPass(t *testing.T) {
 	if meta.CapReached {
 		t.Error("CapReached = true, want false")
 	}
-	// review turn 1 + fix turn 1 + review turn 2 = 3 agent RunTurn calls,
-	// but TurnsCompleted counts only completed turns (not fix turn that led to re-review).
-	// Each iteration increments TurnsCompleted once per review turn and once per fix turn.
+	// review turn 1 + fix turn 1 + review turn 2 = 3 completed agent turns.
+	// TurnsCompleted includes both review turns and the intervening fix turn.
 	if turns != 3 {
 		t.Errorf("TurnsCompleted = %d, want 3", turns)
 	}

@@ -334,12 +334,18 @@ func assembleReviewPrompt(issue domain.Issue, diff string, truncated bool, vresu
 	return sb.String()
 }
 
-func buildFixPrompt(verdict *domain.ReviewVerdict, _ string, iteration, maxIterations int) string {
+func buildFixPrompt(verdict *domain.ReviewVerdict, parseErr string, iteration, maxIterations int) string {
 	var sb strings.Builder
 
 	fmt.Fprintf(&sb, "## Self-Review Fix: Iteration %d of %d\n\n", iteration, maxIterations)
 	sb.WriteString("The self-review identified issues that need to be fixed. Your previous review feedback\n")
 	sb.WriteString("is in your conversation history above.\n\n")
+
+	if parseErr != "" {
+		sb.WriteString("The orchestrator could not parse your previous review verdict.\n")
+		sb.WriteString("Ensure `.sortie/review_verdict.json` is present and valid JSON with a `verdict` field set to `pass` or `iterate`.\n")
+		fmt.Fprintf(&sb, "Parse error: %s\n\n", parseErr)
+	}
 
 	if verdict != nil && len(verdict.Issues) > 0 {
 		sb.WriteString("Focus on these issues:\n")
