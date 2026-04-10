@@ -309,7 +309,9 @@ func TestHandleRetryTimer(t *testing.T) {
 			issueID: "ISS-2",
 			state: func(t *testing.T, id string) *State {
 				t.Helper()
-				return retryState(t, id, id, 2)
+				state := retryState(t, id, id, 2)
+				state.RetryAttempts[id].ReactionKind = ReactionKindCI
+				return state
 			},
 			store: func() *mockRetryStore { return &mockRetryStore{} },
 			tracker: func(_ string) *mockRetryTracker {
@@ -358,6 +360,10 @@ func TestHandleRetryTimer(t *testing.T) {
 				if len(store.deletedIssueID) != 0 {
 					t.Errorf("DeleteRetryEntry call count = %d, want 0", len(store.deletedIssueID))
 				}
+				// ReactionKind preserved across reschedule.
+				if entry.ReactionKind != ReactionKindCI {
+					t.Errorf("RetryAttempts[%s].ReactionKind = %q, want %q", id, entry.ReactionKind, ReactionKindCI)
+				}
 			},
 		},
 		{
@@ -402,6 +408,7 @@ func TestHandleRetryTimer(t *testing.T) {
 			state: func(t *testing.T, id string) *State {
 				t.Helper()
 				state := retryState(t, id, id, 1)
+				state.RetryAttempts[id].ReactionKind = ReactionKindCI
 				// Fill the single slot with another running issue.
 				state.MaxConcurrentAgents = 1
 				state.Running["OTHER-1"] = &RunningEntry{
@@ -449,6 +456,10 @@ func TestHandleRetryTimer(t *testing.T) {
 				}
 				if store.savedEntries[0].Attempt != 2 {
 					t.Errorf("saved entry Attempt = %d, want 2", store.savedEntries[0].Attempt)
+				}
+				// ReactionKind preserved across reschedule.
+				if entry.ReactionKind != ReactionKindCI {
+					t.Errorf("RetryAttempts[%s].ReactionKind = %q, want %q", id, entry.ReactionKind, ReactionKindCI)
 				}
 			},
 		},
@@ -1048,6 +1059,7 @@ func TestHandleRetryTimer_SSHHostAcquisition(t *testing.T) {
 		}
 
 		state := retryState(t, "ISS-FULL", "ISS-FULL", 1)
+		state.RetryAttempts["ISS-FULL"].ReactionKind = ReactionKindCI
 		params := defaultRetryParams(t, store, tracker)
 		params.HostPool = hp
 
@@ -1068,6 +1080,10 @@ func TestHandleRetryTimer_SSHHostAcquisition(t *testing.T) {
 		}
 		if entry.Error != "no available SSH hosts" {
 			t.Errorf("rescheduled Error = %q, want %q", entry.Error, "no available SSH hosts")
+		}
+		// ReactionKind preserved across reschedule.
+		if entry.ReactionKind != ReactionKindCI {
+			t.Errorf("rescheduled ReactionKind = %q, want %q", entry.ReactionKind, ReactionKindCI)
 		}
 		if entry.TimerHandle != nil {
 			entry.TimerHandle.Stop()
