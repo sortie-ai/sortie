@@ -88,6 +88,9 @@ func reconcileReviewComments(state *State, params ReconcileParams, log *slog.Log
 		if err != nil {
 			pending.PendingAttempts++
 			delay := computeReviewPendingDelay(pending.PendingAttempts)
+			if delay < pollInterval {
+				delay = pollInterval
+			}
 			pending.PendingRetryAt = now.Add(delay)
 			state.PendingReactions[key] = pending
 			entryLog.Warn("review fetch failed, retrying with backoff",
@@ -194,7 +197,10 @@ func reconcileReviewComments(state *State, params ReconcileParams, log *slog.Log
 }
 
 // computeReviewPendingDelay returns the backoff delay for a review
-// pending re-check at the given attempt count.
+// pending re-check at the given attempt count. Attempt 0 returns zero
+// (immediate). Each subsequent attempt returns
+// reviewPendingBackoffBase * 2^attempts, capped at
+// [reviewPendingBackoffCap].
 func computeReviewPendingDelay(attempts int) time.Duration {
 	if attempts <= 0 {
 		return 0

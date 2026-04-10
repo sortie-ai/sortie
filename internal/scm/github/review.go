@@ -204,7 +204,10 @@ func (a *GitHubSCMAdapter) fetchAllReviews(ctx context.Context, prNumber int, ow
 
 	if nextURL != "" {
 		slog.WarnContext(ctx, "reviews response truncated at page limit",
-			slog.Int("pages_fetched", len(all)/100+1),
+			slog.String("owner", owner),
+			slog.String("repo", repo),
+			slog.Int("pr_number", prNumber),
+			slog.Int("items_fetched", len(all)),
 			slog.Int("max_pages", maxReviewPages))
 	}
 
@@ -245,7 +248,11 @@ func (a *GitHubSCMAdapter) fetchReviewComments(ctx context.Context, prNumber int
 
 	if nextURL != "" {
 		slog.WarnContext(ctx, "review comments response truncated at page limit",
+			slog.String("owner", owner),
+			slog.String("repo", repo),
+			slog.Int("pr_number", prNumber),
 			slog.Int64("review_id", reviewID),
+			slog.Int("items_fetched", len(all)),
 			slog.Int("max_pages", maxReviewPages))
 	}
 
