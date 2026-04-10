@@ -12,10 +12,10 @@
   "explorer.fileNesting.patterns": {
     "*.go": "${capture}_test.go, ${capture}_integration_test.go",
     "go.mod": "go.sum",
-    "codecov.yml": "coverage.html, coverage.json, coverage.xml, coverage.out",
-    ".env": ".env, .env.*",
-    "Dockerfile": "Dockerfile, compose.yml, docker-compose.yml, .dockerignore",
-    "AGENTS.md": "AGENTS.md, CLAUDE.md"
+    "codecov.yml": "coverage.*",
+    ".env": ".env.*",
+    "Dockerfile": "compose.yml, docker-compose.yml, .dockerignore",
+    "AGENTS.md": "CLAUDE.md"
   },
 
   // ── GitHub Copilot Custom Instructions ─────────────────────────────────────
