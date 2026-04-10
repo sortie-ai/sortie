@@ -1577,3 +1577,325 @@ func TestNewServiceConfig_SelfReview(t *testing.T) {
 		}
 	})
 }
+
+// TestPopulateCIFeedbackFromReactions exercises the bridge function that
+// maps a ReactionConfig for the "ci_failure" kind into a CIFeedbackConfig.
+func TestPopulateCIFeedbackFromReactions(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		rc        ReactionConfig
+		want      CIFeedbackConfig
+		wantErr   bool
+		wantField string
+	}{
+		{
+			name: "ProviderMapsToKind",
+			rc: ReactionConfig{
+				Provider:        "github-actions",
+				MaxRetries:      2,
+				Escalation:      "label",
+				EscalationLabel: "needs-human",
+			},
+			want: CIFeedbackConfig{
+				Kind:            "github-actions",
+				MaxRetries:      2,
+				MaxLogLines:     50,
+				Escalation:      "label",
+				EscalationLabel: "needs-human",
+			},
+		},
+		{
+			name: "MaxLogLinesDefault",
+			rc: ReactionConfig{
+				Provider: "github-actions",
+				Extra:    nil,
+			},
+			want: CIFeedbackConfig{
+				Kind:        "github-actions",
+				MaxLogLines: 50,
+			},
+		},
+		{
+			name: "MaxLogLinesFromExtra",
+			rc: ReactionConfig{
+				Provider: "github-actions",
+				Extra:    map[string]any{"max_log_lines": 100},
+			},
+			want: CIFeedbackConfig{
+				Kind:        "github-actions",
+				MaxLogLines: 100,
+			},
+		},
+		{
+			name: "MaxLogLinesFromExtraFloat64",
+			rc: ReactionConfig{
+				Provider: "github",
+				Extra:    map[string]any{"max_log_lines": float64(200)},
+			},
+			want: CIFeedbackConfig{
+				Kind:        "github",
+				MaxLogLines: 200,
+			},
+		},
+		{
+			name: "MaxLogLinesNegative",
+			rc: ReactionConfig{
+				Provider: "github-actions",
+				Extra:    map[string]any{"max_log_lines": -1},
+			},
+			wantErr:   true,
+			wantField: "reactions.ci_failure.max_log_lines",
+		},
+		{
+			name: "MaxLogLinesNonInteger",
+			rc: ReactionConfig{
+				Provider: "github-actions",
+				Extra:    map[string]any{"max_log_lines": "abc"},
+			},
+			wantErr:   true,
+			wantField: "reactions.ci_failure.max_log_lines",
+		},
+		{
+			name: "EmptyProviderReturnsZero",
+			rc:   ReactionConfig{Provider: ""},
+			want: CIFeedbackConfig{},
+		},
+		{
+			name: "EscalationAndLabelPassThrough",
+			rc: ReactionConfig{
+				Provider:        "circle-ci",
+				Escalation:      "comment",
+				EscalationLabel: "blocked",
+				MaxRetries:      5,
+			},
+			want: CIFeedbackConfig{
+				Kind:            "circle-ci",
+				MaxRetries:      5,
+				MaxLogLines:     50,
+				Escalation:      "comment",
+				EscalationLabel: "blocked",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := populateCIFeedbackFromReactions(tt.rc)
+
+			if tt.wantErr {
+				assertConfigErrorField(t, err, tt.wantField)
+				return
+			}
+			if err != nil {
+				t.Fatalf("populateCIFeedbackFromReactions() unexpected error: %v", err)
+			}
+			if got != tt.want {
+				t.Errorf("populateCIFeedbackFromReactions() = %+v, want %+v", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestCIFailureMigration verifies the full precedence logic for the
+// reactions.ci_failure → CIFeedback migration path through NewServiceConfig.
+func TestCIFailureMigration(t *testing.T) {
+	t.Parallel()
+
+	t.Run("Reactions/CIFailure/ProviderMapsToKind", func(t *testing.T) {
+		t.Parallel()
+		cfg, err := NewServiceConfig(map[string]any{
+			"reactions": map[string]any{
+				"ci_failure": map[string]any{
+					"provider": "github-actions",
+				},
+			},
+		})
+		if err != nil {
+			t.Fatalf("NewServiceConfig: %v", err)
+		}
+		assertStringEqual(t, "CIFeedback.Kind", "github-actions", cfg.CIFeedback.Kind)
+	})
+
+	t.Run("Reactions/CIFailure/MaxLogLinesFromExtra", func(t *testing.T) {
+		t.Parallel()
+		cfg, err := NewServiceConfig(map[string]any{
+			"reactions": map[string]any{
+				"ci_failure": map[string]any{
+					"provider":      "github-actions",
+					"max_log_lines": 100,
+				},
+			},
+		})
+		if err != nil {
+			t.Fatalf("NewServiceConfig: %v", err)
+		}
+		assertIntEqual(t, "CIFeedback.MaxLogLines", 100, cfg.CIFeedback.MaxLogLines)
+	})
+
+	t.Run("Reactions/CIFailure/MaxLogLinesDefault", func(t *testing.T) {
+		t.Parallel()
+		cfg, err := NewServiceConfig(map[string]any{
+			"reactions": map[string]any{
+				"ci_failure": map[string]any{
+					"provider": "github-actions",
+				},
+			},
+		})
+		if err != nil {
+			t.Fatalf("NewServiceConfig: %v", err)
+		}
+		assertIntEqual(t, "CIFeedback.MaxLogLines", 50, cfg.CIFeedback.MaxLogLines)
+	})
+
+	t.Run("Reactions/CIFailure/MaxLogLinesNegative", func(t *testing.T) {
+		t.Parallel()
+		_, err := NewServiceConfig(map[string]any{
+			"reactions": map[string]any{
+				"ci_failure": map[string]any{
+					"provider":      "github-actions",
+					"max_log_lines": -1,
+				},
+			},
+		})
+		assertConfigErrorField(t, err, "reactions.ci_failure.max_log_lines")
+	})
+
+	t.Run("Reactions/CIFailure/MaxLogLinesNonInteger", func(t *testing.T) {
+		t.Parallel()
+		_, err := NewServiceConfig(map[string]any{
+			"reactions": map[string]any{
+				"ci_failure": map[string]any{
+					"provider":      "github-actions",
+					"max_log_lines": "abc",
+				},
+			},
+		})
+		assertConfigErrorField(t, err, "reactions.ci_failure.max_log_lines")
+	})
+
+	t.Run("Reactions/CIFailure/RemovedFromReactionsMap", func(t *testing.T) {
+		t.Parallel()
+		cfg, err := NewServiceConfig(map[string]any{
+			"reactions": map[string]any{
+				"ci_failure": map[string]any{
+					"provider": "github-actions",
+				},
+			},
+		})
+		if err != nil {
+			t.Fatalf("NewServiceConfig: %v", err)
+		}
+		if _, ok := cfg.Reactions["ci_failure"]; ok {
+			t.Error("Reactions[\"ci_failure\"] still present; want removed after migration")
+		}
+	})
+
+	t.Run("Reactions/CIFailure/OtherReactionsPreserved", func(t *testing.T) {
+		t.Parallel()
+		cfg, err := NewServiceConfig(map[string]any{
+			"reactions": map[string]any{
+				"ci_failure": map[string]any{
+					"provider": "github-actions",
+				},
+				"review_comments": map[string]any{
+					"max_retries": 3,
+				},
+			},
+		})
+		if err != nil {
+			t.Fatalf("NewServiceConfig: %v", err)
+		}
+		if _, ok := cfg.Reactions["review_comments"]; !ok {
+			t.Error("Reactions[\"review_comments\"] missing; want preserved")
+		}
+	})
+
+	t.Run("Reactions/CIFailure/EmptyProvider", func(t *testing.T) {
+		t.Parallel()
+		cfg, err := NewServiceConfig(map[string]any{
+			"reactions": map[string]any{
+				"ci_failure": map[string]any{},
+			},
+		})
+		if err != nil {
+			t.Fatalf("NewServiceConfig: %v", err)
+		}
+		assertStringEqual(t, "CIFeedback.Kind", "", cfg.CIFeedback.Kind)
+	})
+
+	t.Run("Precedence/BothPresent/ReactionsWins", func(t *testing.T) {
+		t.Parallel()
+		cfg, err := NewServiceConfig(map[string]any{
+			"ci_feedback": map[string]any{
+				"kind":        "circle-ci",
+				"max_retries": 1,
+			},
+			"reactions": map[string]any{
+				"ci_failure": map[string]any{
+					"provider":         "github-actions",
+					"max_retries":      4,
+					"max_log_lines":    75,
+					"escalation":       "comment",
+					"escalation_label": "ci-blocked",
+				},
+			},
+		})
+		if err != nil {
+			t.Fatalf("NewServiceConfig: %v", err)
+		}
+		assertStringEqual(t, "CIFeedback.Kind", "github-actions", cfg.CIFeedback.Kind)
+		assertIntEqual(t, "CIFeedback.MaxRetries", 4, cfg.CIFeedback.MaxRetries)
+		assertIntEqual(t, "CIFeedback.MaxLogLines", 75, cfg.CIFeedback.MaxLogLines)
+		assertStringEqual(t, "CIFeedback.Escalation", "comment", cfg.CIFeedback.Escalation)
+		assertStringEqual(t, "CIFeedback.EscalationLabel", "ci-blocked", cfg.CIFeedback.EscalationLabel)
+	})
+
+	t.Run("Precedence/CIFeedbackOnly", func(t *testing.T) {
+		t.Parallel()
+		cfg, err := NewServiceConfig(map[string]any{
+			"ci_feedback": map[string]any{
+				"kind":        "github",
+				"max_retries": 3,
+			},
+		})
+		if err != nil {
+			t.Fatalf("NewServiceConfig: %v", err)
+		}
+		assertStringEqual(t, "CIFeedback.Kind", "github", cfg.CIFeedback.Kind)
+		assertIntEqual(t, "CIFeedback.MaxRetries", 3, cfg.CIFeedback.MaxRetries)
+	})
+
+	t.Run("Precedence/NeitherPresent", func(t *testing.T) {
+		t.Parallel()
+		cfg, err := NewServiceConfig(map[string]any{})
+		if err != nil {
+			t.Fatalf("NewServiceConfig: %v", err)
+		}
+		if cfg.CIFeedback != (CIFeedbackConfig{}) {
+			t.Errorf("CIFeedback = %+v, want zero value when neither section present", cfg.CIFeedback)
+		}
+	})
+
+	t.Run("Provider/ParsedForNonCIReaction", func(t *testing.T) {
+		t.Parallel()
+		cfg, err := NewServiceConfig(map[string]any{
+			"reactions": map[string]any{
+				"review_comments": map[string]any{
+					"provider": "github",
+				},
+			},
+		})
+		if err != nil {
+			t.Fatalf("NewServiceConfig: %v", err)
+		}
+		rc, ok := cfg.Reactions["review_comments"]
+		if !ok {
+			t.Fatal("Reactions[\"review_comments\"] missing")
+		}
+		assertStringEqual(t, "Reactions[review_comments].Provider", "github", rc.Provider)
+	})
+}

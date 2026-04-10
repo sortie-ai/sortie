@@ -6,6 +6,7 @@ package config
 
 import (
 	"fmt"
+	"log/slog"
 	"math"
 	"os"
 	"path/filepath"
@@ -35,8 +36,9 @@ type ServiceConfig struct {
 
 	// Reactions maps reaction kind to its configuration. An empty map
 	// means no reactions are configured. Keys are lowercase kind strings
-	// (e.g. "review_comments"). The existing ci_feedback section is not
-	// represented here; CI configuration uses the CIFeedback field.
+	// (e.g. "review_comments"). The "ci_failure" key, if present in
+	// YAML, is consumed into the CIFeedback field and removed from this
+	// map.
 	Reactions map[string]ReactionConfig
 
 	// DBPath is the environment- and tilde-expanded path for the SQLite
@@ -246,6 +248,8 @@ func NewServiceConfig(raw map[string]any) (ServiceConfig, error) {
 		return ServiceConfig{}, err
 	}
 
+	hasCIFeedbackSection := raw["ci_feedback"] != nil
+
 	selfReview, err := buildSelfReviewConfig(extractSubMap(raw, "self_review"))
 	if err != nil {
 		return ServiceConfig{}, err
@@ -254,6 +258,18 @@ func NewServiceConfig(raw map[string]any) (ServiceConfig, error) {
 	reactions, err := buildReactionsConfig(extractSubMap(raw, "reactions"))
 	if err != nil {
 		return ServiceConfig{}, err
+	}
+
+	if ciReaction, ok := reactions["ci_failure"]; ok {
+		ciFeedback, err = populateCIFeedbackFromReactions(ciReaction)
+		if err != nil {
+			return ServiceConfig{}, err
+		}
+		if hasCIFeedbackSection {
+			slog.Warn("ci_feedback section is deprecated; using reactions.ci_failure instead",
+				slog.String("hint", "remove the ci_feedback section from your WORKFLOW.md"))
+		}
+		delete(reactions, "ci_failure")
 	}
 
 	extensions := make(map[string]any)
@@ -546,6 +562,43 @@ func buildCIFeedbackConfig(m map[string]any) (CIFeedbackConfig, error) {
 		MaxLogLines:     maxLogLines,
 		Escalation:      escalation,
 		EscalationLabel: escalationLabel,
+	}, nil
+}
+
+// populateCIFeedbackFromReactions converts a ReactionConfig for the
+// "ci_failure" reaction kind into a CIFeedbackConfig. Provider maps to
+// Kind, MaxRetries/Escalation/EscalationLabel pass through directly,
+// and MaxLogLines is read from Extra["max_log_lines"] with a default
+// of 50. An empty Provider returns a zero CIFeedbackConfig (CI disabled).
+func populateCIFeedbackFromReactions(rc ReactionConfig) (CIFeedbackConfig, error) {
+	if rc.Provider == "" {
+		return CIFeedbackConfig{}, nil
+	}
+
+	maxLogLines := 50
+	if raw, ok := rc.Extra["max_log_lines"]; ok && raw != nil {
+		parsed, err := coerceInt(raw)
+		if err != nil {
+			return CIFeedbackConfig{}, &ConfigError{
+				Field:   "reactions.ci_failure.max_log_lines",
+				Message: fmt.Sprintf("invalid integer value: %v", raw),
+			}
+		}
+		maxLogLines = parsed
+	}
+	if maxLogLines < 0 {
+		return CIFeedbackConfig{}, &ConfigError{
+			Field:   "reactions.ci_failure.max_log_lines",
+			Message: "must be non-negative",
+		}
+	}
+
+	return CIFeedbackConfig{
+		Kind:            rc.Provider,
+		MaxRetries:      rc.MaxRetries,
+		MaxLogLines:     maxLogLines,
+		Escalation:      rc.Escalation,
+		EscalationLabel: rc.EscalationLabel,
 	}, nil
 }
 
@@ -932,6 +985,12 @@ type CIFeedbackConfig struct {
 
 // ReactionConfig holds per-kind configuration for a single reaction type.
 type ReactionConfig struct {
+	// Provider identifies the external system adapter for this reaction
+	// kind (e.g. "github-actions" for CI failure reactions). Empty string
+	// means no provider is configured and the reaction is disabled for
+	// provider-dependent kinds.
+	Provider string
+
 	// MaxRetries is the maximum number of fix continuation dispatches
 	// per issue before escalation. Default: 2.
 	MaxRetries int
@@ -956,6 +1015,7 @@ var reactionKeyPattern = regexp.MustCompile(`^[a-z][a-z0-9_-]*$`)
 // knownReactionFields enumerates keys consumed by buildReactionsConfig
 // per-kind parsing. Anything else is collected into Extra.
 var knownReactionFields = map[string]bool{
+	"provider":         true,
 	"max_retries":      true,
 	"escalation":       true,
 	"escalation_label": true,
@@ -1024,7 +1084,10 @@ func buildReactionsConfig(m map[string]any) (map[string]ReactionConfig, error) {
 			}
 		}
 
+		provider := extractString(vm, "provider")
+
 		result[k] = ReactionConfig{
+			Provider:        provider,
 			MaxRetries:      maxRetries,
 			Escalation:      escalation,
 			EscalationLabel: escalationLabel,
