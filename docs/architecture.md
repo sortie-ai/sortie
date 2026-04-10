@@ -321,11 +321,12 @@ Fields:
 - `completed` (set of issue IDs; bookkeeping only, not dispatch gating)
 - `agent_totals` (aggregate tokens + runtime seconds)
 - `agent_rate_limits` (latest rate-limit snapshot from agent events)
-- `ci_fix_attempts` (map `issue_id -> integer`; number of CI-fix continuations dispatched;
-  reset when the issue leaves the running/retry maps; runtime-only, not persisted)
-- `pending_ci_check` (map `issue_id -> PendingCICheckEntry`; populated by worker exit on normal
-  exits with SCM metadata when a CI status provider is configured; consumed by CI reconciliation;
+- `reaction_attempts` (map `issue_id:kind -> integer`; number of reaction-fix continuations
+  dispatched per issue and reaction kind; reset when the issue leaves the running/retry maps;
   runtime-only, not persisted)
+- `pending_reactions` (map `issue_id:kind -> PendingReaction`; populated by worker exit on normal
+  exits with SCM metadata when a CI status provider is configured; consumed by per-kind reconcile
+  functions during the reconcile tick; runtime-only, not persisted)
 
 ### 4.2 Stable Identifiers and Normalization Rules
 
@@ -1080,10 +1081,10 @@ Part B: Tracker state refresh
 
 Part C: CI status reconciliation (when `ci_feedback.kind` is configured)
 
-- For each entry in `pending_ci_check`:
+- For each entry in `pending_reactions` with kind `ci`:
   - Call `CIStatusProvider.FetchCIStatus` with the SCM ref (SHA preferred, branch as fallback).
   - If the call fails: log a warning, re-enqueue the entry, and continue to the next entry.
-  - If status is `passing`: clear CI fix attempts for the issue.
+  - If status is `passing`: clear reaction attempts for the issue and kind.
   - If status is `pending`: re-enqueue the entry for the next tick.
   - If status is `failing`: handle as a CI failure (see Section 7.3, "CI Status Failing").
 
@@ -1747,11 +1748,11 @@ CI status reconciliation runs as Part C of active run reconciliation (Section 8.
 state refresh. The flow is:
 
 1. Skip entirely when `ci_feedback.kind` is not configured (no `CIStatusProvider` constructed).
-2. For each entry in `pending_ci_check`:
+2. For each entry in `pending_reactions` with kind `ci`:
    a. Remove the entry from the map (prevents reprocessing within the same tick).
    b. Call `CIStatusProvider.FetchCIStatus` with the SCM ref (SHA preferred, branch as fallback).
    c. On fetch error: re-enqueue the entry; continue.
-   d. On `passing`: clear `ci_fix_attempts` for the issue.
+   d. On `passing`: clear `reaction_attempts` for the issue and kind.
    e. On `pending`: re-enqueue the entry.
    f. On `failing`: handle CI failure (see Section 11A.5).
 
@@ -1760,21 +1761,21 @@ state refresh. The flow is:
 When CI status is `failing`:
 
 1. Persist a CI-failure run history entry (`status: ci_failed`).
-2. Increment `ci_fix_attempts[issue_id]`.
-3. If `ci_fix_attempts` exceeds `ci_feedback.max_retries`: escalate (Section 11A.6).
+2. Increment `reaction_attempts[issue_id:ci]`.
+3. If `reaction_attempts[issue_id:ci]` exceeds `ci_feedback.max_retries`: escalate (Section 11A.6).
 4. Otherwise:
    a. Convert `CIResult` to a template map via `ToTemplateMap()`.
    b. Cancel the existing continuation retry for the issue.
    c. Schedule a CI-fix dispatch carrying the CI failure context. The retry entry's
-      `CIFailureContext` field carries the map through the timer to the worker goroutine.
-   d. The worker injects the context into the prompt on turn 1 via `prompt.WithCIFailure`.
+      `ContinuationContext` field carries the map through the timer to the worker goroutine.
+   d. The worker injects the context into the prompt on turn 1 via `prompt.WithContinuationContext`.
 
 CI-fix dispatches count toward the regular retry machinery but use a fixed delay rather than
 exponential backoff.
 
 ### 11A.6 Escalation behavior
 
-When `ci_fix_attempts` exceeds `ci_feedback.max_retries`:
+When `reaction_attempts[issue_id:ci]` exceeds `ci_feedback.max_retries`:
 
 - `escalation: label` (default): add `escalation_label` (default `needs-human`) to the tracker
   issue via `TrackerAdapter.AddLabel`. The label call runs in a detached goroutine with a 30-second
@@ -1788,7 +1789,7 @@ After escalation:
 - Cancel any pending retry for the issue.
 - Delete the persisted retry entry from SQLite.
 - Release the claim (`delete claimed[issue_id]`).
-- Clear `ci_fix_attempts[issue_id]`.
+- Clear all `reaction_attempts` and `pending_reactions` entries for the issue.
 
 Escalation failures are logged and counted (`sortie_ci_escalations_total{action="error"}`) but do
 not block claim release.
@@ -1835,8 +1836,8 @@ Inputs to prompt rendering:
   - `ref`: the git ref that was queried
 
 CI failure context is injected only on turn 1 of a CI-fix dispatch. The worker reads the context
-from the dispatch site (carried via `context.WithValue` or the retry entry's `CIFailureContext`
-field) and passes it to `prompt.WithCIFailure`. Templates SHOULD use a conditional guard:
+from the dispatch site (carried via `context.WithValue` or the retry entry's `ContinuationContext`
+field) and passes it to `prompt.WithContinuationContext`. Templates SHOULD use a conditional guard:
 `{{ if .ci_failure }}...{{ end }}`. When `ci_failure` is nil, the template variable is still
 present in the data map (set to nil) so strict `missingkey=error` evaluation does not reject
 templates that reference the field.
@@ -2465,22 +2466,22 @@ function reconcile_ci_status(state):
   if ci_provider is nil:
     return state
 
-  for issue_id, pending in state.pending_ci_check:
-    delete(state.pending_ci_check, issue_id)
+  for key, pending in state.pending_reactions where pending.kind == "ci":
+    delete(state.pending_reactions, key)
 
     ref = pending.sha or pending.branch
     result, err = ci_provider.fetch_ci_status(ref)
 
     if err:
       log_warn("CI status fetch failed, will retry next tick")
-      state.pending_ci_check[issue_id] = pending
+      state.pending_reactions[key] = pending
       continue
 
     switch result.status:
       case "passing":
-        delete(state.ci_fix_attempts, issue_id)
+        delete(state.reaction_attempts, key)
       case "pending":
-        state.pending_ci_check[issue_id] = pending
+        state.pending_reactions[key] = pending
       case "failing":
         handle_ci_failure(state, pending, result)
 
@@ -2642,9 +2643,10 @@ on_worker_exit(issue_id, reason, state):
       if issue_id in state.claimed:
         scm = read_scm_metadata(workspace_path)
         if scm.branch is not empty:
-          state.pending_ci_check[issue_id] = {
+          rkey = reaction_key(issue_id, "ci")
+          state.pending_reactions[rkey] = {
             issue_id, identifier, display_id, attempt,
-            branch: scm.branch, sha: scm.sha
+            kind: "ci", branch: scm.branch, sha: scm.sha
           }
   else:
     state = schedule_retry(state, issue_id, next_attempt_from(running_entry), {
@@ -2782,7 +2784,7 @@ Unless otherwise noted, Sections 17.1 through 17.7 are `Core Conformance`. Bulle
 - CI status pending re-enqueues the pending check for the next tick
 - CI status failing within `max_retries` schedules a CI-fix dispatch with failure context
 - CI status failing beyond `max_retries` escalates (label or comment) and releases the claim
-- CI failure context is injected into turn 1 prompt via `prompt.WithCIFailure`
+- CI failure context is injected into turn 1 prompt via `prompt.WithContinuationContext`
 - Escalation label failure is logged but does not block claim release
 - `.sortie/scm.json` symlink rejection prevents CI check enqueue
 - `.sortie/scm.json` oversized or malformed files degrade to no-CI behavior
