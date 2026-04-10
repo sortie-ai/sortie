@@ -188,7 +188,7 @@ func TestRunAdapterCloseNotCalledForNonClosers(t *testing.T) {
 	wfPath := setupRunDir(t)
 
 	var stdout, stderr bytes.Buffer
-	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), runTestTimeout)
 	defer cancel()
 
 	code := run(ctx, []string{wfPath}, &stdout, &stderr)

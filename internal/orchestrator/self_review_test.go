@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -642,6 +643,13 @@ func TestRunVerification_Timeout(t *testing.T) {
 
 func TestRunVerification_CommandNotFound(t *testing.T) {
 	t.Parallel()
+	if runtime.GOOS == "windows" {
+		// Git Bash sh.exe startup overhead plus named-pipe drain time
+		// races the 5 s cmdCtx deadline, producing TimedOut = true
+		// non-deterministically. The behaviour under test is POSIX exit-127
+		// semantics, which don't apply natively on Windows.
+		t.Skip("sh command-not-found timing is unreliable on Windows")
+	}
 
 	wsPath := t.TempDir()
 	// sh returns exit 127 when a command is not found.
