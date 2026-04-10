@@ -32,6 +32,9 @@ var migration006SQL string
 //go:embed sql/007_self_review.sql
 var migration007SQL string
 
+//go:embed sql/008_reaction_fingerprints.sql
+var migration008SQL string
+
 var migrations = []Migration{
 	{Version: 1, Description: "core persistence tables", SQL: migration001SQL},
 	{Version: 2, Description: "extended token metrics", SQL: migration002SQL},
@@ -40,4 +43,5 @@ var migrations = []Migration{
 	{Version: 5, Description: "turns completed in run history", SQL: migration005SQL},
 	{Version: 6, Description: "display identifier in run history", SQL: migration006SQL},
 	{Version: 7, Description: "self-review metadata in run history", SQL: migration007SQL},
+	{Version: 8, Description: "reaction fingerprints for cross-restart dedup", SQL: migration008SQL},
 }
