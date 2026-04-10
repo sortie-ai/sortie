@@ -1450,14 +1450,19 @@ Issue dispatched
 
 All hooks receive the following environment variables:
 
-| Variable                          | Description                                                                                                                      |
-| --------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
-| `SORTIE_ISSUE_ID`                 | Stable tracker-internal issue ID.                                                                                                |
-| `SORTIE_ISSUE_IDENTIFIER`         | Human-readable ticket key (e.g., `PROJ-123`).                                                                                    |
-| `SORTIE_WORKSPACE`                | Absolute path to the per-issue workspace directory.                                                                              |
-| `SORTIE_ATTEMPT`                  | Current attempt number (integer).                                                                                                |
-| `SORTIE_SELF_REVIEW_STATUS`       | Self-review outcome for the current run: `"disabled"`, `"passed"`, `"cap_reached"`, or `"error"`. Set on all `after_run` hook invocations. |
-| `SORTIE_SELF_REVIEW_SUMMARY_PATH` | Absolute path to `.sortie/review_summary.md` in the workspace. Absent when self-review did not run or the summary file was not written.   |
+| Variable                  | Description                                           |
+| ------------------------- | ----------------------------------------------------- |
+| `SORTIE_ISSUE_ID`         | Stable tracker-internal issue ID.                     |
+| `SORTIE_ISSUE_IDENTIFIER` | Human-readable ticket key (e.g., `PROJ-123`).         |
+| `SORTIE_WORKSPACE`        | Absolute path to the per-issue workspace directory.   |
+| `SORTIE_ATTEMPT`          | Current attempt number (integer).                     |
+
+`after_run` hooks also receive the following environment variables:
+
+| Variable                          | Description                                                                                                    |
+| --------------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| `SORTIE_SELF_REVIEW_STATUS`       | Self-review outcome for the current run: `"disabled"`, `"passed"`, `"cap_reached"`, or `"error"`.            |
+| `SORTIE_SELF_REVIEW_SUMMARY_PATH` | Absolute path to `.sortie/review_summary.md` in the workspace. Absent when self-review did not run or the summary file was not written. |
 
 These allow hooks to make decisions without parsing orchestrator internals.
 
