@@ -195,6 +195,10 @@ func (s *spyMetrics) ObserveSelfReviewVerificationDuration(_ string, _ float64) 
 
 func (s *spyMetrics) IncSelfReviewCapReached() {}
 
+func (s *spyMetrics) IncReviewChecks(_ string) {}
+
+func (s *spyMetrics) IncReviewEscalations(_ string) {}
+
 // --- Tests ---
 
 func TestActiveElapsedSeconds(t *testing.T) {

@@ -133,6 +133,16 @@ type Metrics interface {
 	// IncSelfReviewCapReached increments the cap-reached counter
 	// (sortie_self_review_cap_reached_total counter).
 	IncSelfReviewCapReached()
+
+	// IncReviewChecks increments the review comment check counter.
+	// result is "dispatched", "error", or "skipped"
+	// (sortie_review_checks_total{result} counter).
+	IncReviewChecks(result string)
+
+	// IncReviewEscalations increments the review escalation counter.
+	// action is "label", "comment", or "error"
+	// (sortie_review_escalations_total{action} counter).
+	IncReviewEscalations(action string)
 }
 
 // NoopMetrics is a [Metrics] implementation where every method is a no-op.
@@ -168,6 +178,8 @@ func (*NoopMetrics) IncSelfReviewIterations(string)                        {}
 func (*NoopMetrics) IncSelfReviewSessions(string)                          {}
 func (*NoopMetrics) ObserveSelfReviewVerificationDuration(string, float64) {}
 func (*NoopMetrics) IncSelfReviewCapReached()                              {}
+func (*NoopMetrics) IncReviewChecks(string)                                {}
+func (*NoopMetrics) IncReviewEscalations(string)                           {}
 
 // MetricsSetter is implemented by adapters that accept a [Metrics]
 // recorder for self-instrumentation.

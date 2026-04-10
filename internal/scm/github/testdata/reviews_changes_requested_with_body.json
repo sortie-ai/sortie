@@ -1,0 +1,12 @@
+[
+  {
+    "id": 10,
+    "state": "CHANGES_REQUESTED",
+    "body": "Please fix these issues before merging.",
+    "user": {
+      "login": "alice",
+      "type": "User"
+    },
+    "submitted_at": "2026-04-01T10:00:00Z"
+  }
+]

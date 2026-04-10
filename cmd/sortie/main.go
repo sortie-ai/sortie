@@ -459,6 +459,50 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 		)
 	}
 
+	// Resolve SCM adapter when reactions.review_comments is configured.
+	var scmAdapter domain.SCMAdapter
+	var reviewConfig orchestrator.ReviewReactionConfig
+	if rc, ok := cfg.Reactions["review_comments"]; ok && rc.Provider != "" {
+		scmCtor, scmErr := registry.SCMAdapters.Get(rc.Provider)
+		if scmErr != nil {
+			logger.Error("unknown SCM adapter kind",
+				slog.String("kind", rc.Provider),
+				slog.Any("error", scmErr),
+			)
+			return 1
+		}
+		adapterCfgMap := make(map[string]any)
+		mergeExtensions(adapterCfgMap, cfg.Extensions, rc.Provider)
+		if rc.Provider == cfg.Tracker.Kind {
+			mergeTrackerCredentials(adapterCfgMap, cfg.Tracker)
+		}
+		for k, v := range rc.Extra {
+			if _, exists := adapterCfgMap[k]; !exists {
+				adapterCfgMap[k] = v
+			}
+		}
+		scmAdapter, scmErr = scmCtor(adapterCfgMap)
+		if scmErr != nil {
+			logger.Error("failed to construct SCM adapter",
+				slog.String("kind", rc.Provider),
+				slog.Any("error", scmErr),
+			)
+			return 1
+		}
+		reviewConfig, scmErr = orchestrator.BuildReviewReactionConfig(rc)
+		if scmErr != nil {
+			logger.Error("invalid review reaction config",
+				slog.Any("error", scmErr),
+			)
+			return 1
+		}
+		logger.Info("review comment routing enabled",
+			slog.String("kind", rc.Provider),
+			slog.Int("max_continuation_turns", reviewConfig.MaxContinuationTurns),
+			slog.Int("poll_interval_ms", reviewConfig.PollIntervalMS),
+		)
+	}
+
 	// Attempt to bind the HTTP server before constructing metrics so
 	// that graceful degradation on an implicit default port conflict
 	// skips Prometheus collector creation entirely.
@@ -507,6 +551,8 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 		WorkflowFileFunc: mgr.FilePath,
 		DBPath:           dbPath,
 		CIProvider:       ciProvider,
+		SCMAdapter:       scmAdapter,
+		ReviewConfig:     reviewConfig,
 	})
 
 	var srv *server.Server

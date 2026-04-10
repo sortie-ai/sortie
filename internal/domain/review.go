@@ -1,5 +1,40 @@
 package domain
 
+import "time"
+
+// ReviewComment represents a single human review comment on a PR.
+type ReviewComment struct {
+	// ID is the SCM-platform comment identifier (e.g. GitHub comment ID).
+	ID string
+
+	// FilePath is the file the comment is attached to. Empty for
+	// PR-level (non-inline) review comments.
+	FilePath string
+
+	// StartLine is the first line of the commented range. Zero when
+	// the comment is not attached to a specific line.
+	StartLine int
+
+	// EndLine is the last line of the commented range. Zero when the
+	// comment spans a single line (use StartLine) or is not inline.
+	EndLine int
+
+	// Reviewer is the username of the comment author.
+	Reviewer string
+
+	// Body is the comment text.
+	Body string
+
+	// SubmittedAt is the UTC timestamp when the comment was created
+	// on the SCM platform. Used by the orchestrator to drive debounce
+	// gating.
+	SubmittedAt time.Time
+
+	// Outdated indicates the commented code has been modified by a
+	// subsequent push. The SCM adapter sets this from platform metadata.
+	Outdated bool
+}
+
 // MaxVerificationOutputBytes is the per-stream cap on stdout and stderr
 // captured from each verification command during the self-review loop.
 // This prevents a runaway test suite from consuming unbounded memory.

@@ -94,6 +94,14 @@ type OrchestratorParams struct {
 	// CIProvider is the CI status provider for CI failure detection.
 	// Nil when CI feedback is not configured.
 	CIProvider domain.CIStatusProvider
+
+	// SCMAdapter is the SCM adapter for review comment routing.
+	// Nil when review comment routing is not configured.
+	SCMAdapter domain.SCMAdapter
+
+	// ReviewConfig holds validated review reaction configuration.
+	// Zero value when SCMAdapter is nil.
+	ReviewConfig ReviewReactionConfig
 }
 
 // Orchestrator owns the poll-and-dispatch event loop and all runtime
@@ -127,6 +135,8 @@ type Orchestrator struct {
 	workflowFileFunc func() string
 	dbPath           string
 	ciProvider       domain.CIStatusProvider
+	scmAdapter       domain.SCMAdapter
+	reviewConfig     ReviewReactionConfig
 
 	// sshStrictHostKeyChecking is the current effective OpenSSH
 	// StrictHostKeyChecking value. Written by handleTick on every
@@ -200,6 +210,8 @@ func NewOrchestrator(params OrchestratorParams) *Orchestrator {
 		workflowFileFunc: params.WorkflowFileFunc,
 		dbPath:           params.DBPath,
 		ciProvider:       params.CIProvider,
+		scmAdapter:       params.SCMAdapter,
+		reviewConfig:     params.ReviewConfig,
 	}
 	// Startup preflight must have passed for the orchestrator to be
 	// constructed, so the initial value is true.
@@ -252,6 +264,7 @@ func (o *Orchestrator) Run(ctx context.Context) {
 				HostPool:          o.hostPool,
 				CommentsConfig:    cfg.Tracker.Comments,
 				CIProvider:        o.ciProvider,
+				SCMAdapter:        o.scmAdapter,
 			})
 			o.updateGauges(time.Now())
 			o.notifyObservers()
@@ -372,6 +385,9 @@ func (o *Orchestrator) handleTick(ctx context.Context) {
 		CIProvider:        o.ciProvider,
 		CIFeedback:        cfg.CIFeedback,
 		CIPendingTTL:      ciPendingDefaultTTL,
+		SCMAdapter:        o.scmAdapter,
+		ReviewConfig:      o.reviewConfig,
+		ReviewPendingTTL:  reviewPendingDefaultTTL,
 	})
 
 	// On preflight failure, skip dispatch but still notify observers

@@ -85,6 +85,18 @@ type ReconcileParams struct {
 	// (e.g. [ciPendingDefaultTTL]); test helpers that do not set NowFunc
 	// may leave it zero to preserve legacy behavior.
 	CIPendingTTL time.Duration
+
+	// SCMAdapter provides review comment fetching. When non-nil, the
+	// reconcile loop polls review comments for issues with PR metadata.
+	SCMAdapter domain.SCMAdapter
+
+	// ReviewConfig holds review reaction configuration. Only read when
+	// SCMAdapter is non-nil.
+	ReviewConfig ReviewReactionConfig
+
+	// ReviewPendingTTL is the maximum age of a review PendingReaction
+	// entry before it is dropped. Zero disables TTL enforcement.
+	ReviewPendingTTL time.Duration
 }
 
 // ReconcileRunningIssues detects stalled workers and refreshes tracker
@@ -129,6 +141,9 @@ func ReconcileRunningIssues(state *State, params ReconcileParams) {
 
 	// Poll CI status for issues with pending CI checks.
 	reconcileCIStatus(state, params, log, ctx, metrics)
+
+	// Poll review comments for issues with pending review reactions.
+	reconcileReviewComments(state, params, log, ctx, metrics)
 }
 
 // reconcileStalled cancels running entries whose last activity exceeds the

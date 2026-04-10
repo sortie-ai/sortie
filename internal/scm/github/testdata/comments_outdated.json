@@ -1,0 +1,15 @@
+[
+  {
+    "id": 200,
+    "path": "internal/old.go",
+    "start_line": null,
+    "line": 5,
+    "position": null,
+    "body": "This comment refers to outdated code.",
+    "user": {
+      "login": "alice",
+      "type": "User"
+    },
+    "created_at": "2026-04-01T09:00:00Z"
+  }
+]

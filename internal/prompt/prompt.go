@@ -124,7 +124,7 @@ type RenderOption func(m map[string]any)
 // reaction continuation context. Each key receives a nil default in
 // [Template.Render] so templates using missingkey=error do not reject
 // references to absent reaction types.
-var continuationKeys = []string{"ci_failure"}
+var continuationKeys = []string{"ci_failure", "review_comments"}
 
 // isContinuationKey reports whether key is a registered continuation
 // template variable name.

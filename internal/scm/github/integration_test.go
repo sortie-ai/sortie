@@ -2,9 +2,13 @@ package github
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
+
+	"github.com/sortie-ai/sortie/internal/domain"
 )
 
 // skipUnlessGitHubIntegration skips the test unless SORTIE_GITHUB_TEST=1.
@@ -132,4 +136,81 @@ func TestIntegration_FetchIssueStatesByIDs(t *testing.T) {
 		t.Errorf("issue %q has empty state", issueID)
 	}
 	t.Logf("issue %s state = %q", issueID, state)
+}
+
+func TestFetchPendingReviews_Integration(t *testing.T) {
+	skipUnlessGitHubIntegration(t)
+
+	prEnv := os.Getenv("SORTIE_GITHUB_PR_NUMBER")
+	if prEnv == "" {
+		t.Skip("skipping: SORTIE_GITHUB_PR_NUMBER not set; set to a PR number with CHANGES_REQUESTED reviews")
+	}
+
+	var prNumber int
+	if _, err := fmt.Sscanf(prEnv, "%d", &prNumber); err != nil {
+		t.Fatalf("SORTIE_GITHUB_PR_NUMBER=%q is not a valid integer: %v", prEnv, err)
+	}
+
+	project := os.Getenv("SORTIE_GITHUB_PROJECT")
+	parts := strings.SplitN(project, "/", 2)
+	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+		t.Fatalf("SORTIE_GITHUB_PROJECT=%q must be owner/repo", project)
+	}
+	owner, repo := parts[0], parts[1]
+
+	a, err := NewGitHubSCMAdapter(map[string]any{
+		"api_key": os.Getenv("SORTIE_GITHUB_TOKEN"),
+	})
+	if err != nil {
+		t.Fatalf("NewGitHubSCMAdapter: %v", err)
+	}
+
+	comments, err := a.FetchPendingReviews(context.Background(), prNumber, owner, repo)
+	if err != nil {
+		t.Fatalf("FetchPendingReviews(PR #%d): %v", prNumber, err)
+	}
+
+	t.Logf("fetched %d review comments from PR #%d", len(comments), prNumber)
+
+	// Bot comments must be excluded.
+	for _, c := range comments {
+		if strings.EqualFold(c.Reviewer, "bot") || strings.HasSuffix(c.Reviewer, "[bot]") {
+			t.Errorf("bot comment not filtered: reviewer=%q", c.Reviewer)
+		}
+		if c.ID == "" {
+			t.Error("comment has empty ID")
+		}
+	}
+}
+
+func TestFetchPendingReviews_Integration_NotFound(t *testing.T) {
+	skipUnlessGitHubIntegration(t)
+
+	project := os.Getenv("SORTIE_GITHUB_PROJECT")
+	parts := strings.SplitN(project, "/", 2)
+	if len(parts) != 2 {
+		t.Fatalf("SORTIE_GITHUB_PROJECT=%q must be owner/repo", project)
+	}
+	owner, repo := parts[0], parts[1]
+
+	a, err := NewGitHubSCMAdapter(map[string]any{
+		"api_key": os.Getenv("SORTIE_GITHUB_TOKEN"),
+	})
+	if err != nil {
+		t.Fatalf("NewGitHubSCMAdapter: %v", err)
+	}
+
+	// PR 999999 is very unlikely to exist.
+	_, err = a.FetchPendingReviews(context.Background(), 999999, owner, repo)
+	if err == nil {
+		t.Skip("PR 999999 unexpectedly exists; skipping not-found assertion")
+	}
+
+	var se *domain.SCMError
+	if !errors.As(err, &se) {
+		t.Fatalf("expected *domain.SCMError, got %T: %v", err, err)
+	}
+	if se.Kind != domain.ErrSCMNotFound {
+		t.Errorf("SCMError.Kind = %q, want %q", se.Kind, domain.ErrSCMNotFound)
+	}
 }

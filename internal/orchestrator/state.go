@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"maps"
 	"slices"
@@ -9,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/sortie-ai/sortie/internal/config"
 	"github.com/sortie-ai/sortie/internal/domain"
 )
 
@@ -258,6 +260,10 @@ type RetryEntry struct {
 // ReactionKindCI is the reaction kind constant for CI failure reactions.
 const ReactionKindCI = "ci"
 
+// ReactionKindReview is the reaction kind constant for PR review comment
+// reactions.
+const ReactionKindReview = "review"
+
 // ReactionKey returns the composite map key for a pending reaction.
 // Callers must not pass IDs containing colons; the delimiter is a plain
 // colon between issueID and kind.
@@ -319,6 +325,43 @@ type CIReactionData struct {
 	// SHA is the git commit SHA from SCM metadata. When non-empty, used
 	// as the ref for CIStatusProvider.FetchCIStatus.
 	SHA string
+}
+
+// ReviewReactionData holds review-specific fields for a pending review
+// reaction. Stored in [PendingReaction.KindData] for reactions with
+// Kind == [ReactionKindReview]. Owner and Repo are sourced from
+// [domain.SCMMetadata] (written by the agent to scm.json), never from
+// the tracker project configuration.
+type ReviewReactionData struct {
+	// PRNumber is the pull request number.
+	PRNumber int
+
+	// Owner is the repository owner.
+	Owner string
+
+	// Repo is the repository name.
+	Repo string
+
+	// Branch is the git branch name.
+	Branch string
+
+	// SHA is the git commit SHA at the last known push.
+	SHA string
+
+	// LastEventAt is the UTC timestamp of the most recently detected
+	// review comment. Used for debounce gating.
+	LastEventAt time.Time
+}
+
+// ReviewReactionConfig holds validated review-specific configuration
+// extracted from [config.ReactionConfig] at startup.
+type ReviewReactionConfig struct {
+	MaxRetries           int
+	Escalation           string
+	EscalationLabel      string
+	PollIntervalMS       int
+	DebounceMS           int
+	MaxContinuationTurns int
 }
 
 // State is the single authoritative runtime state owned by the orchestrator.
@@ -674,4 +717,78 @@ func RuntimeSnapshot(state *State, now time.Time) RuntimeSnapshotResult {
 	}
 
 	return snap
+}
+
+// BuildReviewReactionConfig extracts and validates review-specific
+// configuration from a [config.ReactionConfig]. Returns an error for
+// invalid values.
+func BuildReviewReactionConfig(rc config.ReactionConfig) (ReviewReactionConfig, error) {
+	cfg := ReviewReactionConfig{
+		MaxRetries:           rc.MaxRetries,
+		Escalation:           rc.Escalation,
+		EscalationLabel:      rc.EscalationLabel,
+		PollIntervalMS:       120000,
+		DebounceMS:           60000,
+		MaxContinuationTurns: 3,
+	}
+
+	if cfg.Escalation == "" {
+		cfg.Escalation = "label"
+	}
+	if cfg.Escalation != "label" && cfg.Escalation != "comment" {
+		return ReviewReactionConfig{}, fmt.Errorf("invalid escalation %q: must be \"label\" or \"comment\"", cfg.Escalation)
+	}
+
+	if cfg.EscalationLabel == "" {
+		cfg.EscalationLabel = "needs-human"
+	}
+
+	if v, ok := rc.Extra["poll_interval_ms"]; ok {
+		n, err := toInt(v)
+		if err != nil {
+			return ReviewReactionConfig{}, fmt.Errorf("invalid poll_interval_ms: %w", err)
+		}
+		if n < 30000 {
+			return ReviewReactionConfig{}, fmt.Errorf("poll_interval_ms must be >= 30000, got %d", n)
+		}
+		cfg.PollIntervalMS = n
+	}
+
+	if v, ok := rc.Extra["debounce_ms"]; ok {
+		n, err := toInt(v)
+		if err != nil {
+			return ReviewReactionConfig{}, fmt.Errorf("invalid debounce_ms: %w", err)
+		}
+		if n < 0 {
+			return ReviewReactionConfig{}, fmt.Errorf("debounce_ms must be non-negative, got %d", n)
+		}
+		cfg.DebounceMS = n
+	}
+
+	if v, ok := rc.Extra["max_continuation_turns"]; ok {
+		n, err := toInt(v)
+		if err != nil {
+			return ReviewReactionConfig{}, fmt.Errorf("invalid max_continuation_turns: %w", err)
+		}
+		if n <= 0 {
+			return ReviewReactionConfig{}, fmt.Errorf("max_continuation_turns must be positive, got %d", n)
+		}
+		cfg.MaxContinuationTurns = n
+	}
+
+	return cfg, nil
+}
+
+// toInt converts a YAML-decoded value (typically int or float64) to int.
+func toInt(v any) (int, error) {
+	switch n := v.(type) {
+	case int:
+		return n, nil
+	case float64:
+		return int(n), nil
+	case int64:
+		return int(n), nil
+	default:
+		return 0, fmt.Errorf("expected numeric value, got %T", v)
+	}
 }

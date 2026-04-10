@@ -52,6 +52,19 @@ type CIProviderConstructor func(maxLogLines int, adapterConfig map[string]any) (
 // runtime.
 var CIProviders = NewRegistry[CIProviderConstructor]("ci_provider")
 
+// SCMAdapterConstructor creates a [domain.SCMAdapter] from opaque
+// adapter-specific configuration. The adapterConfig parameter is the
+// raw map from the adapter's pass-through config sub-object (merged
+// tracker credentials when tracker kind matches, plus reaction Extra
+// fields). Implementations must validate adapterConfig and return an
+// error if required fields are missing.
+type SCMAdapterConstructor func(adapterConfig map[string]any) (domain.SCMAdapter, error)
+
+// SCMAdapters is the default SCM adapter registry. Adapter packages
+// register themselves via [Registry.Register] in their init functions;
+// the orchestrator resolves adapters via [Registry.Get] at runtime.
+var SCMAdapters = NewRegistry[SCMAdapterConstructor]("scm")
+
 // TrackerConfigFields holds the config values passed to adapter
 // validation functions. This is a plain data struct that avoids
 // coupling the registry package to the config package.

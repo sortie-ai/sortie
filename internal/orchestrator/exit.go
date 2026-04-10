@@ -107,6 +107,12 @@ type HandleWorkerExitParams struct {
 	// populates state.PendingReactions on normal exits so the reconcile
 	// loop can poll CI status.
 	CIProvider domain.CIStatusProvider
+
+	// SCMAdapter is the SCM adapter for review comment features. When
+	// non-nil and workspace SCM metadata includes a PR number with
+	// Owner and Repo, a pending review reaction is created on normal
+	// worker exit.
+	SCMAdapter domain.SCMAdapter
 }
 
 // HandleWorkerExit processes a worker's terminal outcome. It removes the
@@ -396,6 +402,41 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 							Branch: scm.Branch,
 							SHA:    scm.SHA,
 						},
+					}
+				}
+			}
+		}
+
+		// Record a pending review check when the SCM adapter is configured
+		// and the workspace has PR metadata with SCM repository identity.
+		if params.SCMAdapter != nil && workerResult.WorkspacePath != "" {
+			if _, stillClaimed := state.Claimed[workerResult.IssueID]; stillClaimed {
+				scm := workspace.ReadSCMMetadata(workerResult.WorkspacePath, log)
+				if scm.PRNumber > 0 && scm.Branch != "" && scm.Owner != "" && scm.Repo != "" {
+					nowReview := time.Now().UTC()
+					if params.NowFunc != nil {
+						nowReview = params.NowFunc().UTC()
+					}
+					rkey := ReactionKey(workerResult.IssueID, ReactionKindReview)
+					// Only create if not already present to preserve
+					// in-progress debounce state.
+					if _, exists := state.PendingReactions[rkey]; !exists {
+						state.PendingReactions[rkey] = &PendingReaction{
+							IssueID:     workerResult.IssueID,
+							Identifier:  workerResult.Identifier,
+							DisplayID:   entry.Issue.DisplayID,
+							Attempt:     normalizeAttempt(entry.RetryAttempt) + 1,
+							Kind:        ReactionKindReview,
+							LastSSHHost: workerResult.SSHHost,
+							CreatedAt:   nowReview,
+							KindData: &ReviewReactionData{
+								PRNumber: scm.PRNumber,
+								Owner:    scm.Owner,
+								Repo:     scm.Repo,
+								Branch:   scm.Branch,
+								SHA:      scm.SHA,
+							},
+						}
 					}
 				}
 			}

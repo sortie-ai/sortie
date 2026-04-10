@@ -20,20 +20,22 @@ type PromMetrics struct {
 	slotsAvailable        prometheus.Gauge
 	activeSessionsElapsed prometheus.Gauge
 
-	tokensTotal           *prometheus.CounterVec
-	agentRuntimeTotal     prometheus.Counter
-	dispatchesTotal       *prometheus.CounterVec
-	workerExitsTotal      *prometheus.CounterVec
-	retriesTotal          *prometheus.CounterVec
-	reconciliationActions *prometheus.CounterVec
-	pollCyclesTotal       *prometheus.CounterVec
-	trackerRequestsTotal  *prometheus.CounterVec
-	handoffTransitions    *prometheus.CounterVec
-	dispatchTransitions   *prometheus.CounterVec
-	trackerCommentsTotal  *prometheus.CounterVec
-	toolCallsTotal        *prometheus.CounterVec
-	ciStatusChecksTotal   *prometheus.CounterVec
-	ciEscalationsTotal    *prometheus.CounterVec
+	tokensTotal            *prometheus.CounterVec
+	agentRuntimeTotal      prometheus.Counter
+	dispatchesTotal        *prometheus.CounterVec
+	workerExitsTotal       *prometheus.CounterVec
+	retriesTotal           *prometheus.CounterVec
+	reconciliationActions  *prometheus.CounterVec
+	pollCyclesTotal        *prometheus.CounterVec
+	trackerRequestsTotal   *prometheus.CounterVec
+	handoffTransitions     *prometheus.CounterVec
+	dispatchTransitions    *prometheus.CounterVec
+	trackerCommentsTotal   *prometheus.CounterVec
+	toolCallsTotal         *prometheus.CounterVec
+	ciStatusChecksTotal    *prometheus.CounterVec
+	ciEscalationsTotal     *prometheus.CounterVec
+	reviewChecksTotal      *prometheus.CounterVec
+	reviewEscalationsTotal *prometheus.CounterVec
 
 	selfReviewIterationsTotal      *prometheus.CounterVec
 	selfReviewSessionsTotal        *prometheus.CounterVec
@@ -195,6 +197,18 @@ func NewPromMetrics(version, goVersion string) *PromMetrics {
 		Help:      "CI escalation actions taken.",
 	}, []string{"action"})
 
+	reviewChecksTotal := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: "sortie",
+		Name:      "review_checks_total",
+		Help:      "Review comment check outcomes.",
+	}, []string{"result"})
+
+	reviewEscalationsTotal := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: "sortie",
+		Name:      "review_escalations_total",
+		Help:      "Review reaction escalation outcomes.",
+	}, []string{"action"})
+
 	selfReviewIterationsTotal := prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: "sortie",
 		Name:      "self_review_iterations_total",
@@ -243,6 +257,8 @@ func NewPromMetrics(version, goVersion string) *PromMetrics {
 		sshHostUsage,
 		ciStatusChecksTotal,
 		ciEscalationsTotal,
+		reviewChecksTotal,
+		reviewEscalationsTotal,
 		selfReviewIterationsTotal,
 		selfReviewSessionsTotal,
 		selfReviewVerificationDuration,
@@ -272,6 +288,8 @@ func NewPromMetrics(version, goVersion string) *PromMetrics {
 		sshHostUsage:                   sshHostUsage,
 		ciStatusChecksTotal:            ciStatusChecksTotal,
 		ciEscalationsTotal:             ciEscalationsTotal,
+		reviewChecksTotal:              reviewChecksTotal,
+		reviewEscalationsTotal:         reviewEscalationsTotal,
 		selfReviewIterationsTotal:      selfReviewIterationsTotal,
 		selfReviewSessionsTotal:        selfReviewSessionsTotal,
 		selfReviewVerificationDuration: selfReviewVerificationDuration,
@@ -398,6 +416,16 @@ func (p *PromMetrics) IncCIStatusChecks(result string) {
 // IncCIEscalations increments the CI escalation action counter.
 func (p *PromMetrics) IncCIEscalations(action string) {
 	p.ciEscalationsTotal.WithLabelValues(action).Inc()
+}
+
+// IncReviewChecks increments the review comment check outcome counter.
+func (p *PromMetrics) IncReviewChecks(result string) {
+	p.reviewChecksTotal.WithLabelValues(result).Inc()
+}
+
+// IncReviewEscalations increments the review escalation action counter.
+func (p *PromMetrics) IncReviewEscalations(action string) {
+	p.reviewEscalationsTotal.WithLabelValues(action).Inc()
 }
 
 // IncSelfReviewIterations increments the review iteration counter.
