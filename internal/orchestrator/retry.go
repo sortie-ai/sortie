@@ -302,13 +302,13 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 	// next worker exit, not at dispatch time.
 	attempt := popped.Attempt
 	dispatchCtx := ctx
-	if popped.CIFailureContext != nil {
-		dispatchCtx = WithCIFailureContext(ctx, popped.CIFailureContext)
+	if popped.ContinuationContext != nil {
+		dispatchCtx = WithContinuationContext(ctx, popped.ContinuationContext)
 	}
 	DispatchIssue(dispatchCtx, state, issue, &attempt, host, params.MakeWorkerFn("", host))
 	if entry := state.Running[issue.ID]; entry != nil {
 		entry.WorkflowFile = params.WorkflowFile
-		entry.CIFailureContext = popped.CIFailureContext
+		entry.ContinuationContext = popped.ContinuationContext
 	}
 	metrics.IncDispatches(outcomeSuccess)
 

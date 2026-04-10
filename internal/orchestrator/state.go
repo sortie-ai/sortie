@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"log/slog"
 	"maps"
 	"slices"
 	"strings"
@@ -195,10 +196,10 @@ type RunningEntry struct {
 	// APIDurationMS > 0.
 	APITimeMs int64
 
-	// CIFailureContext carries CI failure data from a ci_fix retry into
-	// the worker session. Populated by HandleRetryTimer when the retry
-	// trigger is triggerCIFix. Nil for normal dispatches and non-CI retries.
-	CIFailureContext map[string]any
+	// ContinuationContext carries reaction continuation data from a retry
+	// into the worker session. Populated by HandleRetryTimer when the
+	// retry carries reaction context. Nil for normal dispatches.
+	ContinuationContext map[string]any
 
 	// SelfReviewActive is true when the worker is in the self-review phase.
 	// Mutated only by the event loop via selfReviewCh.
@@ -241,17 +242,29 @@ type RetryEntry struct {
 	// from a replaced timer.
 	scheduledDelayMS int64
 
-	// CIFailureContext carries CI failure data for template injection on
-	// the first turn of the retry worker. Populated by reconcileCIStatus
-	// when scheduling a ci_fix retry. Nil for non-CI retries.
-	CIFailureContext map[string]any
+	// ContinuationContext carries reaction continuation data for template
+	// injection on the first turn of the retry worker. Populated by
+	// reconcile functions when scheduling a continuation retry. Nil for
+	// non-reaction retries.
+	ContinuationContext map[string]any
 }
 
-// PendingCICheckEntry records that an issue's worker exited normally and
-// its CI status should be polled on the next reconcile tick. If CI is
-// failing, the reconcile loop either redispatches with failure context
-// or escalates. Runtime-only (not persisted to SQLite).
-type PendingCICheckEntry struct {
+// ReactionKindCI is the reaction kind constant for CI failure reactions.
+const ReactionKindCI = "ci"
+
+// ReactionKey returns the composite map key for a pending reaction.
+// Callers must not pass IDs containing colons; the delimiter is a plain
+// colon between issueID and kind.
+func ReactionKey(issueID, kind string) string {
+	return issueID + ":" + kind
+}
+
+// PendingReaction records that an issue needs external signal
+// reconciliation. Created by worker exit handlers or external event
+// receivers. Consumed by per-kind reconcile functions during the
+// reconcile tick. Runtime-only (not persisted to SQLite — cross-restart
+// deduplication uses reaction_fingerprints).
+type PendingReaction struct {
 	// IssueID is the domain issue ID.
 	IssueID string
 
@@ -264,29 +277,42 @@ type PendingCICheckEntry struct {
 	// Attempt is the overall run attempt number from the completed worker.
 	Attempt int
 
-	// Branch is the git branch name from SCM metadata.
-	Branch string
-
-	// SHA is the git commit SHA from SCM metadata. When non-empty, used
-	// as the ref for CIStatusProvider.FetchCIStatus.
-	SHA string
+	// Kind is the reaction type constant (e.g. ReactionKindCI).
+	Kind string
 
 	// LastSSHHost is the SSH host from the completed worker, used for
-	// host preference on CI-fix redispatch.
+	// host preference on fix redispatch.
 	LastSSHHost string
 
 	// CreatedAt is the UTC time the entry was created.
 	CreatedAt time.Time
 
 	// PendingAttempts is the number of times the entry has been
-	// re-enqueued without a definitive CI result (pending status or
+	// re-enqueued without a definitive result (pending status or
 	// transient fetch error). Used to compute exponential backoff.
 	PendingAttempts int
 
-	// PendingRetryAt is the earliest UTC time at which reconcileCIStatus
-	// should call FetchCIStatus again. Zero means the entry is ready
-	// immediately (first check or explicit reset).
+	// PendingRetryAt is the earliest UTC time at which the reconcile
+	// function should poll again. Zero means ready immediately.
 	PendingRetryAt time.Time
+
+	// KindData holds kind-specific typed data. CI reactions use
+	// [*CIReactionData]; future reaction types define their own structs.
+	// The reconcile function for each kind is responsible for a single
+	// type assertion at the top of its loop body.
+	KindData any
+}
+
+// CIReactionData holds CI-specific fields for a pending CI reaction.
+// Stored in [PendingReaction.KindData] for reactions with Kind ==
+// [ReactionKindCI].
+type CIReactionData struct {
+	// Branch is the git branch name from SCM metadata.
+	Branch string
+
+	// SHA is the git commit SHA from SCM metadata. When non-empty, used
+	// as the ref for CIStatusProvider.FetchCIStatus.
+	SHA string
 }
 
 // State is the single authoritative runtime state owned by the orchestrator.
@@ -354,33 +380,66 @@ type State struct {
 	// any agent event. Nil when no rate-limit data has been observed.
 	AgentRateLimits *RateLimitSnapshot
 
-	// CIFixAttempts maps issue ID to the number of CI-fix continuations
-	// dispatched for that issue. Reset when the issue leaves the Running
-	// or RetryAttempts maps. Runtime-only (not persisted).
-	CIFixAttempts map[string]int
-
-	// PendingCICheck maps issue ID to a PendingCICheckEntry. Populated by
-	// HandleWorkerExit when a normal exit occurs and a CIStatusProvider is
-	// available. Consumed by reconcileCIStatus during the reconcile tick.
+	// ReactionAttempts maps composite key (issueID:kind) to the number of
+	// reaction-triggered continuations dispatched for that combination.
+	// Reset when the issue leaves the Running or RetryAttempts maps.
 	// Runtime-only (not persisted).
-	PendingCICheck map[string]*PendingCICheckEntry
+	ReactionAttempts map[string]int
+
+	// PendingReactions maps composite key (issueID:kind) to a
+	// [PendingReaction]. Populated by [HandleWorkerExit] when a normal
+	// exit occurs and a reaction provider is configured. Consumed by
+	// per-kind reconcile functions during the reconcile tick. Runtime-only
+	// (not persisted).
+	PendingReactions map[string]*PendingReaction
 }
 
-// ciFailureCtxKey is the context key for CI failure data passed from
-// the dispatch site to the worker goroutine via context.WithValue.
-type ciFailureCtxKey struct{}
+// continuationCtxKey is the context key for reaction continuation data
+// passed from the dispatch site to the worker goroutine via
+// context.WithValue.
+type continuationCtxKey struct{}
 
-// WithCIFailureContext returns a child context carrying CI failure data
-// for prompt injection. The worker reads this with [CIFailureFromContext].
-func WithCIFailureContext(ctx context.Context, data map[string]any) context.Context {
-	return context.WithValue(ctx, ciFailureCtxKey{}, data)
+// WithContinuationContext returns a child context carrying reaction
+// continuation data for prompt injection. The worker reads this with
+// [ContinuationFromContext].
+func WithContinuationContext(ctx context.Context, data map[string]any) context.Context {
+	return context.WithValue(ctx, continuationCtxKey{}, data)
 }
 
-// CIFailureFromContext extracts the CI failure map injected by
-// [WithCIFailureContext]. Returns nil when no CI failure data is present.
-func CIFailureFromContext(ctx context.Context) map[string]any {
-	v, _ := ctx.Value(ciFailureCtxKey{}).(map[string]any)
+// ContinuationFromContext extracts the continuation map injected by
+// [WithContinuationContext]. Returns nil when no continuation data is
+// present.
+func ContinuationFromContext(ctx context.Context) map[string]any {
+	v, _ := ctx.Value(continuationCtxKey{}).(map[string]any)
 	return v
+}
+
+// ClearReactionsForIssue removes all PendingReactions and
+// ReactionAttempts entries whose key starts with the given issue ID
+// prefix, and deletes the corresponding reaction_fingerprints rows from
+// SQLite. The SQLite call is best-effort: a failure is logged at warn
+// level but does not block the caller.
+func ClearReactionsForIssue(ctx context.Context, state *State, store ReconcileStore, issueID string, log *slog.Logger) {
+	prefix := issueID + ":"
+	for key := range state.PendingReactions {
+		if strings.HasPrefix(key, prefix) {
+			delete(state.PendingReactions, key)
+		}
+	}
+	for key := range state.ReactionAttempts {
+		if strings.HasPrefix(key, prefix) {
+			delete(state.ReactionAttempts, key)
+		}
+	}
+	if err := store.DeleteReactionFingerprintsByIssue(ctx, issueID); err != nil {
+		if log == nil {
+			log = slog.Default()
+		}
+		log.WarnContext(ctx, "failed to delete reaction fingerprints",
+			slog.String("issue_id", issueID),
+			slog.Any("error", err),
+		)
+	}
 }
 
 // NewState creates an initialized [State] with empty collections and the
@@ -402,8 +461,8 @@ func NewState(pollIntervalMS, maxConcurrentAgents int, maxConcurrentByState map[
 		Completed:            make(map[string]struct{}),
 		BudgetExhausted:      make(map[string]struct{}),
 		AgentTotals:          totals,
-		CIFixAttempts:        make(map[string]int),
-		PendingCICheck:       make(map[string]*PendingCICheckEntry),
+		ReactionAttempts:     make(map[string]int),
+		PendingReactions:     make(map[string]*PendingReaction),
 	}
 }
 
