@@ -856,8 +856,12 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 			selfReviewStatus = "error"
 		}
 		reviewSummaryPath := filepath.Join(wsResult.Path, ".sortie", "review_summary.md")
-		if _, statErr := os.Stat(reviewSummaryPath); statErr == nil {
-			selfReviewSummaryPath = reviewSummaryPath
+		sortieDirInfo, dirErr := os.Lstat(filepath.Join(wsResult.Path, ".sortie"))
+		if dirErr == nil && sortieDirInfo.Mode()&os.ModeSymlink == 0 && sortieDirInfo.IsDir() {
+			summaryInfo, sumErr := os.Lstat(reviewSummaryPath)
+			if sumErr == nil && summaryInfo.Mode()&os.ModeSymlink == 0 && summaryInfo.Mode().IsRegular() {
+				selfReviewSummaryPath = reviewSummaryPath
+			}
 		}
 	}
 

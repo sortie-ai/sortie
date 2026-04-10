@@ -1180,15 +1180,18 @@ Failure semantics:
 - `after_run` failure or timeout is logged and ignored.
 - `before_remove` failure or timeout is logged and ignored.
 
-Hook environment variables (available to all hooks):
+Hook environment variables available to all hooks:
 
 - `SORTIE_ISSUE_ID` — tracker-internal issue ID.
 - `SORTIE_ISSUE_IDENTIFIER` — human-readable ticket key.
 - `SORTIE_WORKSPACE` — absolute path to the per-issue workspace directory.
 - `SORTIE_ATTEMPT` — current attempt number.
+
+Hook environment variables available only to `after_run`:
+
 - `SORTIE_SELF_REVIEW_STATUS` — self-review outcome for the current run: `"disabled"`,
-  `"passed"`, `"cap_reached"`, or `"error"`. Set on all `after_run` hook invocations.
-  Defaults to `"disabled"` when self-review is not configured.
+  `"passed"`, `"cap_reached"`, or `"error"`. Defaults to `"disabled"` when self-review
+  is not configured.
 - `SORTIE_SELF_REVIEW_SUMMARY_PATH` — absolute path to `.sortie/review_summary.md` in
   the workspace. Absent when self-review did not run or summary was not written.
 

@@ -43,7 +43,7 @@ func runGit(t *testing.T, dir string, args ...string) {
 	}
 }
 
-// initGitRepo creates a bare git repo in dir with an empty initial commit.
+// initGitRepo creates a git repo in dir with an empty initial commit.
 func initGitRepo(t *testing.T, dir string) {
 	t.Helper()
 	runGit(t, dir, "init")
