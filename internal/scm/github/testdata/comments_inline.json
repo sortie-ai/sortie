@@ -1,0 +1,15 @@
+[
+  {
+    "id": 100,
+    "path": "internal/handler.go",
+    "start_line": 10,
+    "line": 12,
+    "position": 5,
+    "body": "This function is too long. Please extract a helper.",
+    "user": {
+      "login": "alice",
+      "type": "User"
+    },
+    "created_at": "2026-04-01T10:05:00Z"
+  }
+]

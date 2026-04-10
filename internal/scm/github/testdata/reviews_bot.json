@@ -1,0 +1,12 @@
+[
+  {
+    "id": 30,
+    "state": "CHANGES_REQUESTED",
+    "body": "Automated feedback from linter.",
+    "user": {
+      "login": "github-actions[bot]",
+      "type": "Bot"
+    },
+    "submitted_at": "2026-04-01T10:00:00Z"
+  }
+]
