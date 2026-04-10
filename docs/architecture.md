@@ -122,7 +122,17 @@ Important boundary:
       truncated log excerpt from the first failing check.
     - Read-only, single-method contract (`FetchCIStatus`); does not manage CI pipelines or trigger
       builds.
-    - Activated by `ci_feedback.kind` presence in workflow front matter.
+    - Activated by `ci_feedback.kind` or `reactions.ci_failure.provider` presence in workflow
+      front matter.
+
+11. `SCM Adapter`
+    - Provides read-only access to SCM platform features beyond CI status: PR review comment
+      fetching, review state queries.
+    - Read-only, multi-method contract (`FetchPendingReviews`); does not create PRs, push code,
+      or manage branches.
+    - Activated by `reactions.review_comments.provider` presence in workflow front matter.
+    - Distinct from CI Status Provider: the CI provider queries pipeline status for a git ref;
+      the SCM adapter queries PR-level data (reviews, comments) for a pull request number.
 
 ### 3.2 Abstraction Levels
 
@@ -142,11 +152,12 @@ Sortie is organized into these layers:
 4. `Execution Layer` (workspace + agent subprocess)
    - Filesystem lifecycle, workspace preparation, coding-agent protocol.
 
-5. `Integration Layer` (tracker adapters, agent adapters, and CI status providers)
+5. `Integration Layer` (tracker adapters, agent adapters, CI status providers, and SCM adapters)
    - API calls and normalization for tracker data; session lifecycle for agent runtimes; CI
-     pipeline status queries.
+     pipeline status queries; PR review comment fetching.
    - Multiple adapters per dimension: tracker adapters (Jira, GitHub, …), agent adapters
-     (Claude Code, Codex, …), and CI status providers (GitHub Checks, …).
+     (Claude Code, Codex, …), CI status providers (GitHub Checks, …), and SCM adapters
+     (GitHub, …).
 
 6. `Observability Layer` (logs + status surface)
    - Operator visibility into orchestrator and agent behavior.
@@ -165,8 +176,11 @@ Sortie is organized into these layers:
 - Metrics exposition library (`github.com/prometheus/client_golang`) for the Prometheus
   `/metrics` endpoint when the HTTP server is enabled. Pure Go; does not require an external
   Prometheus server. See ADR-0008.
-- CI platform API (GitHub Checks API for `ci_feedback.kind: github`, with additional providers
-  registered separately). Only required when `ci_feedback.kind` is configured.
+- CI platform API (GitHub Checks API for `ci_feedback.kind: github` or `reactions.ci_failure.provider: github`,
+  with additional providers registered separately). Only required when CI feedback is configured.
+- SCM platform API (GitHub REST API for `reactions.review_comments.provider: github`, with
+  additional adapters registered separately). Only required when `reactions.review_comments` is
+  configured.
 
 ## 4. Core Domain Model
 
@@ -325,8 +339,9 @@ Fields:
   dispatched per issue and reaction kind; reset when the issue leaves the running/retry maps;
   runtime-only, not persisted)
 - `pending_reactions` (map `issue_id:kind -> PendingReaction`; populated by worker exit on normal
-  exits with SCM metadata when a CI status provider is configured; consumed by per-kind reconcile
-  functions during the reconcile tick; runtime-only, not persisted)
+  exits with SCM metadata when a CI status provider or SCM adapter is configured; consumed by
+  per-kind reconcile functions during the reconcile tick — `reconcile_ci_status` for kind `ci`,
+  `reconcile_review_comments` for kind `review`; runtime-only, not persisted)
 
 ### 4.2 Stable Identifiers and Normalization Rules
 
@@ -388,7 +403,8 @@ Top-level keys:
 - `workspace`
 - `hooks`
 - `agent`
-- `ci_feedback`
+- `ci_feedback` (deprecated; use `reactions.ci_failure` instead)
+- `reactions`
 - `db_path`
 
 Unknown keys should be ignored for forward compatibility.
@@ -559,7 +575,11 @@ core. For example, a Codex adapter may accept `codex.approval_policy` and
 `codex.thread_sandbox`; a Claude Code adapter may accept `claude-code.permission_mode`.
 The orchestrator forwards the entire sub-object to the adapter without validation.
 
-#### 5.3.6 `ci_feedback` (object, optional)
+#### 5.3.6 `ci_feedback` (object, optional, **deprecated**)
+
+**Deprecated.** Use `reactions.ci_failure` instead (Section 5.3.9). When both `ci_feedback` and
+`reactions.ci_failure` are present, `reactions.ci_failure` takes precedence and a deprecation
+warning is logged.
 
 CI feedback loop configuration. Feature activation follows the same pattern as other optional
 sections (`server.port`, `worker.ssh_hosts`): presence of the `kind` field activates the feature;
@@ -642,6 +662,79 @@ Fields:
 - `reviewer` (string)
   - Which agent performs the review. Default: `"same"`. Only `"same"` (reuse the current
     session) is supported in v1.
+
+#### 5.3.9 `reactions` (object, optional)
+
+Reaction configuration. Each key under `reactions` identifies a reaction kind (e.g.
+`ci_failure`, `review_comments`). The orchestrator creates pending reaction entries on normal
+worker exit and processes them during the reconcile tick. Reaction kinds are extensible: unknown
+kind keys are parsed into a generic `ReactionConfig` and made available to future consumers.
+
+The `reactions` section supersedes the deprecated `ci_feedback` top-level key. When both
+`ci_feedback` and `reactions.ci_failure` are present, `reactions.ci_failure` takes precedence
+and a deprecation warning is logged.
+
+**Common fields per reaction kind:**
+
+Each reaction kind sub-object shares a common field schema:
+
+- `provider` (string)
+  - Identifies the external system adapter for this reaction kind (e.g. `github`). Empty string
+    or absent means the reaction kind is disabled.
+- `max_retries` (integer)
+  - Maximum fix continuation dispatches per issue before escalation. Default: `2`.
+  - MUST be non-negative; negative values are rejected with a configuration error.
+- `escalation` (string)
+  - Action when `max_retries` is exceeded. Valid values: `label` (default), `comment`.
+- `escalation_label` (string)
+  - Label applied when `escalation` is `label`. Default: `needs-human`.
+
+Remaining keys within a kind sub-object are collected into an `Extra` map for kind-specific
+consumption.
+
+**Reaction kind: `ci_failure`**
+
+Equivalent to the deprecated `ci_feedback` section. See Section 11A for the CI feedback contract.
+Extra fields:
+
+- `max_log_lines` (integer, via Extra): maximum CI log tail lines. Default: `50`.
+
+**Reaction kind: `review_comments`**
+
+PR review comment routing. When configured, the orchestrator polls for human `CHANGES_REQUESTED`
+review comments on Sortie-created PRs and dispatches continuation turns so the agent can address
+the feedback. See Section 11B for the full contract.
+
+Extra fields:
+
+- `poll_interval_ms` (integer, via Extra): polling interval for review comments. Default:
+  `120000` (2 minutes). Minimum: `30000`.
+- `debounce_ms` (integer, via Extra): debounce window after the last detected comment before
+  dispatching. Default: `60000` (60 seconds). MUST be non-negative.
+- `max_continuation_turns` (integer, via Extra): maximum review-fix continuation dispatches per
+  issue before escalation. Default: `3`. MUST be positive.
+
+Example:
+
+```yaml
+reactions:
+  review_comments:
+    provider: github
+    max_retries: 2
+    escalation: label
+    escalation_label: needs-human
+    poll_interval_ms: 120000
+    debounce_ms: 60000
+    max_continuation_turns: 3
+```
+
+**Validation rules:**
+
+- Reaction kind keys MUST match `[a-z][a-z0-9_-]*`.
+- Invalid kind keys are rejected with a configuration error.
+- Per-kind common fields follow the same validation as the deprecated `ci_feedback` equivalents.
+- Extra fields are kind-specific; the orchestrator validates them when constructing the
+  kind-specific config (e.g. `BuildReviewReactionConfig`).
 
 ### 5.4 Prompt Template Contract
 
@@ -809,8 +902,8 @@ This section is intentionally redundant so a coding agent can implement the conf
 - `agent.max_retry_backoff_ms`: integer, default `300000` (5m)
 - `agent.max_concurrent_agents_by_state`: map of positive integers, default `{}`
 - `agent.max_sessions`: integer, default `0` (unlimited)
-- `ci_feedback.kind`: string, optional; identifies the CI status provider adapter; presence
-  activates CI feedback
+- `ci_feedback.kind`: string, optional, **deprecated**; identifies the CI status provider adapter;
+  presence activates CI feedback; use `reactions.ci_failure` instead
 - `ci_feedback.max_retries`: integer, default `2`; CI-fix continuation attempts before escalation
 - `ci_feedback.max_log_lines`: integer, default `50`; log tail lines from failing checks (`0`
   disables)
@@ -818,6 +911,13 @@ This section is intentionally redundant so a coding agent can implement the conf
   `comment`)
 - `ci_feedback.escalation_label`: string, default `needs-human`; label applied during `label`
   escalation
+- `reactions.<kind>.provider`: string, optional; adapter identifier; absent = disabled
+- `reactions.<kind>.max_retries`: integer, default `2`; fix continuation attempts before escalation
+- `reactions.<kind>.escalation`: string, default `label`; `label` or `comment`
+- `reactions.<kind>.escalation_label`: string, default `needs-human`
+- `reactions.review_comments.poll_interval_ms`: integer, default `120000` (2 min); minimum `30000`
+- `reactions.review_comments.debounce_ms`: integer, default `60000` (60 sec); non-negative
+- `reactions.review_comments.max_continuation_turns`: integer, default `3`; positive
 - `self_review.enabled`: boolean, default `false`; activates the self-review loop
 - `self_review.max_iterations`: integer, default `3`, range [1, 10]; review iteration cap
 - `self_review.verification_commands`: list of strings, required when enabled; shell commands
@@ -912,6 +1012,10 @@ Distinct terminal reasons are important because retry logic and logs differ.
   - When a CI status provider is configured, the workspace contains SCM metadata
     (`.sortie/scm.json` with a non-empty `branch`), and the issue is still claimed: record a
     pending CI check entry for reconciliation.
+  - When an SCM adapter is configured, the workspace contains SCM metadata with
+    `pr_number > 0`, non-empty `owner`, and non-empty `repo`, and the issue is still claimed:
+    record a pending review comment entry for reconciliation. Only created if no entry already
+    exists (preserves in-progress debounce state).
 
 - `Worker Exit (abnormal)`
   - Remove running entry.
@@ -934,10 +1038,21 @@ Distinct terminal reasons are important because retry logic and logs differ.
 - `CI Status Failing`
   - Persist CI failure run history.
   - Increment CI fix attempt counter.
-  - If within `ci_feedback.max_retries`: cancel the existing continuation retry, schedule a
-    CI-fix dispatch with failure context injected into the prompt.
-  - If retries exhausted: escalate (add label or post comment per `ci_feedback.escalation`),
+  - If within `ci_feedback.max_retries` (or `reactions.ci_failure.max_retries`): cancel the
+    existing continuation retry, schedule a CI-fix dispatch with failure context injected into
+    the prompt.
+  - If retries exhausted: escalate (add label or post comment per escalation config),
     cancel retry, release claim.
+
+- `Review Comments Detected`
+  - Compute fingerprint from non-outdated review comment IDs.
+  - If fingerprint is unchanged and already dispatched: skip.
+  - If within debounce window: defer to next tick.
+  - If within `reactions.review_comments.max_continuation_turns`: cancel the existing
+    continuation retry, schedule a review-fix dispatch with review comment context injected
+    into the prompt.
+  - If continuation turns exhausted: escalate (add label or post comment per escalation
+    config), cancel retry, release claim.
 
 ### 7.4 Idempotency and Recovery Rules
 
@@ -1060,7 +1175,7 @@ Note:
 
 ### 8.5 Active Run Reconciliation
 
-Reconciliation runs every tick and has two parts.
+Reconciliation runs every tick and has four parts.
 
 Part A: Stall detection
 
@@ -1079,7 +1194,7 @@ Part B: Tracker state refresh
   - If tracker state is neither active nor terminal: terminate worker without workspace cleanup.
 - If state refresh fails, keep workers running and try again on the next tick.
 
-Part C: CI status reconciliation (when `ci_feedback.kind` is configured)
+Part C: CI status reconciliation (when `ci_feedback.kind` or `reactions.ci_failure` is configured)
 
 - For each entry in `pending_reactions` with kind `ci`:
   - Call `CIStatusProvider.FetchCIStatus` with the SCM ref (SHA preferred, branch as fallback).
@@ -1087,6 +1202,26 @@ Part C: CI status reconciliation (when `ci_feedback.kind` is configured)
   - If status is `passing`: clear reaction attempts for the issue and kind.
   - If status is `pending`: re-enqueue the entry for the next tick.
   - If status is `failing`: handle as a CI failure (see Section 7.3, "CI Status Failing").
+
+Part D: Review comment reconciliation (when `reactions.review_comments` is configured)
+
+- Skip entirely when no SCM adapter is configured (no `reactions.review_comments.provider`).
+- For each entry in `pending_reactions` with kind `review`:
+  - Remove entry from the map (prevents reprocessing within the same tick).
+  - Respect `PendingRetryAt` poll throttle: if not yet due, re-enqueue and continue.
+  - Check continuation turn cap (`reactions.review_comments.max_continuation_turns`): if
+    exceeded, escalate (Section 11B.4) and continue.
+  - Call `SCMAdapter.FetchPendingReviews` with the PR number, owner, and repo from
+    `ReviewReactionData`.
+  - If the call fails: increment backoff counter, set `PendingRetryAt` with exponential
+    backoff, re-enqueue, and continue.
+  - Filter out outdated comments. Compute max timestamp for debounce gating.
+  - If no actionable comments: re-enqueue with poll interval delay.
+  - Build fingerprint from sorted non-outdated comment IDs (SHA-256 hash).
+  - Check `reaction_fingerprints` table: if fingerprint matches and is marked dispatched, skip.
+  - If within debounce window (`now - LastEventAt < debounce_ms`): defer and re-enqueue.
+  - Otherwise: mark dispatched in `reaction_fingerprints`, cancel existing retry, schedule a
+    review-fix dispatch with review comment context, increment `reaction_attempts`.
 
 ### 8.6 Startup Terminal Workspace Cleanup
 
@@ -1200,18 +1335,30 @@ Hook environment variables available only to `after_run`:
 
 The `.sortie/scm.json` file is a workspace-level file that carries SCM metadata written by the
 agent, a post-push hook, or any process running inside the workspace. The orchestrator reads this
-file after a normal worker exit to determine the git ref for CI status queries. The file is a
-shared workspace-level SCM metadata contract that CI feedback reads and other features can reuse.
+file after a normal worker exit to determine the git ref for CI status queries and the PR identity
+for review comment polling. The file is a shared workspace-level SCM metadata contract that CI
+feedback, review comment routing, and other features can reuse.
 
 `SCMMetadata` fields:
 
-- `branch` (string, required): the branch name (e.g. `feature/PROJ-42`). If empty or absent, the
-  file is treated as missing and CI status queries are skipped.
+- `branch` (string, required for CI): the branch name (e.g. `feature/PROJ-42`). If empty or
+  absent, the file is treated as missing and CI status queries are skipped.
 - `sha` (string, optional): the commit SHA at push time. When present, the orchestrator passes
   this to `CIStatusProvider.FetchCIStatus` instead of the branch name for deterministic results.
 - `pushed_at` (string, optional): ISO-8601 timestamp of the push. This field is reserved metadata
   for producers and future consumers of `.sortie/scm.json`. The orchestrator does not use it for
   CI gating today.
+- `pr_number` (integer, optional): the pull request number associated with this branch. Zero or
+  absent when no PR has been created. Written by the agent or post-push hook. When positive and
+  `owner` and `repo` are non-empty, the orchestrator creates a pending review comment reaction
+  on normal worker exit. Review polling is skipped when `pr_number` is `0`.
+- `owner` (string, optional): the SCM repository owner (e.g. GitHub org or user). Written by
+  the agent alongside `pr_number`. Required for review comment polling; when empty, review
+  polling is skipped. The `owner` field is the authoritative source of SCM repository identity —
+  it is never derived from the tracker project configuration, which may be a Jira key or other
+  non-SCM identifier.
+- `repo` (string, optional): the SCM repository name. Written by the agent alongside
+  `pr_number`. Required for review comment polling; when empty, review polling is skipped.
 
 Safety and parsing rules:
 
@@ -1747,7 +1894,8 @@ Orchestrator behavior on CI errors:
 CI status reconciliation runs as Part C of active run reconciliation (Section 8.5), after tracker
 state refresh. The flow is:
 
-1. Skip entirely when `ci_feedback.kind` is not configured (no `CIStatusProvider` constructed).
+1. Skip entirely when neither `ci_feedback.kind` nor `reactions.ci_failure.provider` is configured
+   (no `CIStatusProvider` constructed).
 2. For each entry in `pending_reactions` with kind `ci`:
    a. Remove the entry from the map (prevents reprocessing within the same tick).
    b. Call `CIStatusProvider.FetchCIStatus` with the SCM ref (SHA preferred, branch as fallback).
@@ -1816,6 +1964,194 @@ comes from the `extensions` sub-object keyed by `ci_feedback.kind`. Startup merg
 credentials (API key, project, endpoint) into that config only when `tracker.kind` and
 `ci_feedback.kind` match.
 
+## 11B. PR Review Comment Feedback Contract
+
+This section defines the SCM adapter interface for PR review comment fetching and the
+orchestrator's review comment feedback loop. Review comment routing is a read-only integration: it
+queries human review comments on Sortie-created PRs and injects structured context into agent
+continuation prompts. It does not create PRs, approve reviews, or resolve comments.
+
+### Naming convention
+
+SCM adapters use the `*Adapter` suffix rather than `*Provider`. The distinction matches the
+tracker and agent naming: an adapter manages a broader integration surface with multiple
+operations and may carry per-instance state (HTTP client, auth token). The current contract
+is single-method (`FetchPendingReviews`) but the interface is designed for future expansion
+(e.g. `PostComment`, `RequestReReview`).
+
+### 11B.1 SCMAdapter interface
+
+```go
+type SCMAdapter interface {
+    FetchPendingReviews(ctx context.Context, prNumber int, owner, repo string) ([]ReviewComment, error)
+}
+```
+
+- `prNumber` is the pull request number. `owner` and `repo` identify the repository. These
+  values are sourced from `SCMMetadata` (written by the agent to `.sortie/scm.json`), never
+  from the tracker project configuration.
+- Returns a non-nil (possibly empty) `[]ReviewComment` on success or a `*SCMError` on failure.
+- Implementations MUST be safe for concurrent use.
+- Only comments from `CHANGES_REQUESTED` reviews are returned. Approved reviews, comment-only
+  reviews, and bot comments (`user.type == "Bot"`) are excluded.
+
+### 11B.2 ReviewComment structure
+
+```text
+ReviewComment:
+  id:           string      # SCM-platform comment identifier
+  file_path:    string      # file the comment is attached to; empty for PR-level comments
+  start_line:   int         # first line of commented range; 0 for non-inline comments
+  end_line:     int         # last line of commented range; 0 for single-line or non-inline
+  reviewer:     string      # username of the comment author
+  body:         string      # comment text
+  submitted_at: time.Time   # UTC timestamp from the platform
+  outdated:     bool        # true when the commented code was modified by a subsequent push
+```
+
+### 11B.3 SCMError type
+
+```text
+SCMError:
+  kind:    SCMErrorKind    # normalized error category
+  message: string          # operator-friendly description
+  err:     error           # underlying error (may be nil)
+```
+
+Error categories:
+
+| Kind | Meaning |
+|------|---------|
+| `scm_transport_error` | Network or transport failure. |
+| `scm_auth_error` | Authentication or authorization failure. |
+| `scm_api_error` | Non-success HTTP status or API-level error. |
+| `scm_not_found` | PR or repository does not exist. |
+| `scm_payload_error` | Malformed or unexpected response structure. |
+
+`SCMError` implements `Error()` and `Unwrap()` for use with `errors.Is`/`errors.As`.
+
+Orchestrator behavior on SCM errors:
+
+- Log a warning with the PR number and error category.
+- Increment backoff counter and set `PendingRetryAt` with exponential backoff.
+- Re-enqueue the pending review entry.
+- Increment `sortie_review_checks_total{result="error"}`.
+
+### 11B.4 Reconcile loop integration
+
+Review comment reconciliation runs as Part D of active run reconciliation (Section 8.5), after
+CI status reconciliation. The flow is:
+
+1. Skip entirely when `reactions.review_comments` is not configured (no `SCMAdapter`
+   constructed).
+2. For each entry in `pending_reactions` with kind `review`:
+   a. Remove the entry from the map (prevents reprocessing within the same tick).
+   b. Respect `PendingRetryAt` poll throttle: if `now < PendingRetryAt`, re-enqueue and continue.
+   c. Check continuation turn cap: if `reaction_attempts[issue_id:review]` >=
+      `max_continuation_turns`, escalate (Section 11B.6) and continue.
+   d. Call `SCMAdapter.FetchPendingReviews(ctx, pr_number, owner, repo)`.
+   e. On fetch error: increment backoff, set `PendingRetryAt`, re-enqueue, continue.
+   f. Filter outdated comments. Compute max `submitted_at` timestamp for debounce.
+   g. If no actionable comments: re-enqueue with poll interval delay and continue.
+   h. Build fingerprint: `sha256(sorted(comment_id_1, comment_id_2, ...))` of non-outdated IDs.
+   i. Upsert fingerprint in `reaction_fingerprints` (kind `review`). If stored fingerprint
+      matches and is marked dispatched: skip, re-enqueue with poll interval delay.
+   j. If `now - LastEventAt < debounce_ms`: set `PendingRetryAt = LastEventAt + debounce_ms`,
+      re-enqueue.
+   k. Mark dispatched in `reaction_fingerprints` synchronously (prevents duplicate dispatch on
+      entry recreation by concurrent worker exit).
+   l. Cancel existing retry for the issue.
+   m. Schedule review-fix dispatch with `ContinuationContext{"review_comments": [...]}`.
+   n. Increment `reaction_attempts[issue_id:review]`.
+
+### 11B.5 Review comment handling
+
+When actionable review comments are detected and debounce has elapsed:
+
+1. Build a template map from actionable comments (Section 12.1).
+2. Cancel existing continuation retry for the issue.
+3. Schedule a review-fix dispatch carrying the review comment context via `ContinuationContext`.
+4. The worker injects the context into the prompt on turn 1 via `prompt.WithContinuationContext`.
+
+Review-fix dispatches count toward the regular retry machinery but use a fixed delay rather than
+exponential backoff.
+
+### 11B.6 Escalation behavior
+
+When `reaction_attempts[issue_id:review]` reaches `max_continuation_turns`:
+
+- `escalation: label` (default): add `escalation_label` (default `needs-human`) to the tracker
+  issue via `TrackerAdapter.AddLabel`. The label call runs in a detached goroutine with a 30-second
+  timeout.
+- `escalation: comment`: post a plain-text comment:
+  ```
+  Review fix continuation turns exhausted for PR #{pr_number} on branch {branch}.
+  {turn_count} continuation turns attempted. Remaining review comments require human attention.
+  ```
+
+After escalation:
+
+- Cancel any pending retry for the issue.
+- Delete the persisted retry entry from SQLite.
+- Release the claim (`delete claimed[issue_id]`).
+- Clear all `reaction_attempts` and `pending_reactions` entries for the issue.
+
+Escalation failures are logged and counted (`sortie_review_escalations_total{action="error"}`)
+but do not block claim release.
+
+### 11B.7 Fingerprint and debounce
+
+The fingerprint is a deterministic hash of the current set of actionable review comments:
+
+```text
+fingerprint = sha256(sorted(comment_id_1, comment_id_2, ...))
+```
+
+Only non-outdated comment IDs are included. This means:
+
+- New comments → fingerprint changes → dispatch triggered.
+- Comment resolved/outdated → fingerprint changes → dispatch triggered with remaining comments.
+- Same comments, no changes → fingerprint unchanged → skip.
+
+The fingerprint is stored in `reaction_fingerprints` (Section 19.2) with kind `review`.
+
+Debounce uses `PendingRetryAt` — the same mechanism as CI pending backoff. When review comments
+are detected but the newest comment timestamp is within the debounce window
+(`reactions.review_comments.debounce_ms`):
+
+1. Set `LastEventAt` to the maximum `submitted_at` among fetched comments.
+2. Set `PendingRetryAt = LastEventAt + debounce_ms`.
+3. Re-enqueue the entry. The next reconcile tick re-checks after the debounce window expires.
+
+### 11B.8 Adapter registration
+
+SCM adapters register via the SCM adapter registry using `init()` functions:
+
+```go
+func init() {
+    registry.SCMAdapters.Register("github", NewGitHubSCMAdapter)
+}
+```
+
+The `SCMAdapterConstructor` signature is:
+
+```go
+type SCMAdapterConstructor func(adapterConfig map[string]any) (domain.SCMAdapter, error)
+```
+
+The `adapterConfig` parameter receives the merged config: `reactions.review_comments.Extra`
+plus tracker credentials (API key, endpoint) when `tracker.kind` and the review comments
+provider match.
+
+### 11B.9 Scope filtering
+
+Review comment reconciliation only processes PRs created by Sortie:
+
+1. `SCMMetadata.pr_number > 0` — only workspaces where the agent created a PR have this field.
+   Since `.sortie/scm.json` is written by the agent inside a Sortie-managed workspace, this is
+   inherently scoped.
+2. Claimed check: only issues in `claimed` get review polling. Released issues are not polled.
+
 ## 12. Prompt Construction and Context Assembly
 
 ### 12.1 Inputs
@@ -1841,6 +2177,22 @@ field) and passes it to `prompt.WithContinuationContext`. Templates SHOULD use a
 `{{ if .ci_failure }}...{{ end }}`. When `ci_failure` is nil, the template variable is still
 present in the data map (set to nil) so strict `missingkey=error` evaluation does not reject
 templates that reference the field.
+
+- `review_comments` (list of maps or nil): review comment context injected into review-fix
+  continuation prompts. Nil on initial dispatch and non-review retries. When non-nil, each
+  element contains:
+  - `id`: SCM-platform comment identifier
+  - `file`: file path the comment is attached to (empty for PR-level comments)
+  - `start_line`: first line of commented range (0 for non-inline)
+  - `end_line`: last line of commented range (0 for single-line or non-inline)
+  - `reviewer`: username of the comment author
+  - `body`: comment text
+
+Review comment context is injected only on turn 1 of a review-fix dispatch, following the same
+`ContinuationContext` pathway as CI failure context. Templates SHOULD use a conditional guard:
+`{{ if .review_comments }}...{{ end }}`. When `review_comments` is nil, the template variable is
+still present in the data map (set to nil) so strict `missingkey=error` evaluation does not
+reject templates that reference the field.
 
 ### 12.2 Rendering Rules
 
@@ -2187,6 +2539,8 @@ Defined metrics (label sets and buckets are specified here; see ADR-0008 for his
 | `sortie_tool_calls_total{tool,result}` | Counter | Agent tool call completions, partitioned by tool name and result (`success`, `error`). |
 | `sortie_ci_status_checks_total{result}` | Counter | CI status check outcomes, partitioned by result (`passing`, `pending`, `failing`, `error`). |
 | `sortie_ci_escalations_total{action}` | Counter | CI escalation actions when fix retries are exhausted, partitioned by action (`label`, `comment`, `error`). |
+| `sortie_review_checks_total{result}` | Counter | Review comment check outcomes, partitioned by result (`dispatched`, `error`, `skipped`). |
+| `sortie_review_escalations_total{action}` | Counter | Review escalation actions when continuation turns are exhausted, partitioned by action (`label`, `comment`, `error`). |
 | `sortie_poll_duration_seconds` | Histogram | Wall-clock time per poll cycle; buckets via `ExponentialBuckets(0.1, 2, 10)` (0.1 s–51.2 s). |
 | `sortie_worker_duration_seconds{exit_type}` | Histogram | Worker session wall-clock time; buckets via `ExponentialBuckets(10, 2, 12)` (10 s–5.7 h). |
 | `sortie_build_info{version,go_version}` | Gauge | Always `1`; carries build metadata as labels. |
@@ -2441,12 +2795,14 @@ function reconcile_running_issues(state):
   running_ids = keys(state.running)
   if running_ids is empty:
     state = reconcile_ci_status(state)
+    state = reconcile_review_comments(state)
     return state
 
   refreshed = tracker.fetch_issue_states_by_ids(running_ids)
   if refreshed failed:
     log_debug("keep workers running")
     state = reconcile_ci_status(state)
+    state = reconcile_review_comments(state)
     return state
 
   for issue in refreshed:
@@ -2458,6 +2814,7 @@ function reconcile_running_issues(state):
       state = terminate_running_issue(state, issue.id, cleanup_workspace=false)
 
   state = reconcile_ci_status(state)
+  state = reconcile_review_comments(state)
   return state
 ```
 
@@ -2484,6 +2841,80 @@ function reconcile_ci_status(state):
         state.pending_reactions[key] = pending
       case "failing":
         handle_ci_failure(state, pending, result)
+
+  return state
+```
+
+```text
+function reconcile_review_comments(state):
+  if scm_adapter is nil:
+    return state
+
+  now = utc_now()
+
+  for key, pending in state.pending_reactions where pending.kind == "review":
+    delete(state.pending_reactions, key)
+    data = pending.kind_data  # ReviewReactionData
+
+    # Poll throttle
+    if now < pending.pending_retry_at:
+      state.pending_reactions[key] = pending
+      continue
+
+    # Continuation turn cap
+    rkey = reaction_key(pending.issue_id, "review")
+    turn_count = state.reaction_attempts[rkey]
+    if turn_count >= review_config.max_continuation_turns:
+      escalate_review_failure(state, pending, turn_count)
+      continue
+
+    # Fetch reviews from SCM adapter
+    comments, err = scm_adapter.fetch_pending_reviews(data.pr_number, data.owner, data.repo)
+    if err:
+      pending.pending_attempts++
+      pending.pending_retry_at = now + backoff(pending.pending_attempts)
+      state.pending_reactions[key] = pending
+      log_warn("review fetch failed, retrying with backoff")
+      continue
+
+    # Filter outdated, compute debounce timestamp
+    actionable = filter(comments, c -> not c.outdated)
+    max_time = max(c.submitted_at for c in actionable)
+
+    if len(actionable) == 0:
+      pending.pending_retry_at = now + poll_interval
+      state.pending_reactions[key] = pending
+      continue
+
+    # Fingerprint from sorted non-outdated comment IDs
+    fingerprint = sha256(sorted(c.id for c in actionable))
+
+    # Dedup via reaction_fingerprints table
+    store.upsert_reaction_fingerprint(pending.issue_id, "review", fingerprint)
+    stored_fp, dispatched = store.get_reaction_fingerprint(pending.issue_id, "review")
+    if stored_fp == fingerprint and dispatched:
+      pending.pending_retry_at = now + poll_interval
+      state.pending_reactions[key] = pending
+      continue
+
+    # Debounce
+    if max_time is set and now - max_time < debounce_ms:
+      pending.pending_retry_at = max_time + debounce_ms
+      state.pending_reactions[key] = pending
+      continue
+
+    # Mark dispatched synchronously before scheduling retry
+    store.mark_reaction_dispatched(pending.issue_id, "review")
+
+    review_context = build_review_template_map(actionable)
+    cancel_retry(state, pending.issue_id)
+    schedule_retry(state, pending.issue_id, pending.attempt, {
+      identifier: pending.identifier,
+      delay_type: continuation,
+      continuation_context: {"review_comments": review_context},
+      reaction_kind: "review"
+    })
+    state.reaction_attempts[rkey]++
 
   return state
 ```
@@ -2648,6 +3079,21 @@ on_worker_exit(issue_id, reason, state):
             issue_id, identifier, display_id, attempt,
             kind: "ci", branch: scm.branch, sha: scm.sha
           }
+
+    # Enqueue review check when SCM adapter is configured and workspace has PR metadata
+    if scm_adapter is not nil and workspace_path is not empty:
+      if issue_id in state.claimed:
+        scm = read_scm_metadata(workspace_path)
+        if scm.pr_number > 0 and scm.owner is not empty and scm.repo is not empty:
+          rkey = reaction_key(issue_id, "review")
+          # Only create if not already present (preserves in-progress debounce)
+          if rkey not in state.pending_reactions:
+            state.pending_reactions[rkey] = {
+              issue_id, identifier, display_id, attempt,
+              kind: "review",
+              pr_number: scm.pr_number, owner: scm.owner, repo: scm.repo,
+              branch: scm.branch, sha: scm.sha
+            }
   else:
     state = schedule_retry(state, issue_id, next_attempt_from(running_entry), {
       identifier: running_entry.identifier,
@@ -2779,7 +3225,8 @@ Unless otherwise noted, Sections 17.1 through 17.7 are `Core Conformance`. Bulle
 - If a snapshot API is implemented, it returns running rows, retry rows, token totals, and rate
   limits
 - If a snapshot API is implemented, timeout/unavailable cases are surfaced
-- CI status reconciliation is skipped when `ci_feedback.kind` is not configured
+- CI status reconciliation is skipped when neither `ci_feedback.kind` nor `reactions.ci_failure`
+  is configured
 - CI status passing clears CI fix attempts for the issue
 - CI status pending re-enqueues the pending check for the next tick
 - CI status failing within `max_retries` schedules a CI-fix dispatch with failure context
@@ -2788,6 +3235,20 @@ Unless otherwise noted, Sections 17.1 through 17.7 are `Core Conformance`. Bulle
 - Escalation label failure is logged but does not block claim release
 - `.sortie/scm.json` symlink rejection prevents CI check enqueue
 - `.sortie/scm.json` oversized or malformed files degrade to no-CI behavior
+- Review comment reconciliation is skipped when `reactions.review_comments` is not configured
+- Review comment poll throttle respected (PendingRetryAt in future → skip)
+- Review comment fetch error increments backoff and re-enqueues
+- No actionable review comments re-enqueues with poll interval delay
+- Review comment fingerprint unchanged and dispatched → skip
+- Review comment fingerprint changed, debounce not elapsed → defer
+- Review comment fingerprint changed, debounce elapsed → dispatch with review context
+- Review comment continuation turn cap exceeded → escalate and release claim
+- Review comment outdated comments filtered before fingerprint computation
+- Review comment context injected into turn 1 prompt via `prompt.WithContinuationContext`
+- Review escalation failure is logged but does not block claim release
+- Worker exit with `scm.json` containing `pr_number > 0`, `owner`, and `repo` creates review
+  pending reaction; missing fields degrade to no-review behavior
+- Worker exit does not overwrite existing pending review entry (preserves debounce state)
 - Self-review disabled adds zero overhead (no review turns, no review metadata)
 - Self-review runs verification commands and passes results to agent
 - Review verdict "pass" terminates loop
@@ -2976,6 +3437,20 @@ Note: `timer_handle` is runtime-only and is not stored.
 | `cache_read_tokens` | INTEGER | Cumulative cache-read tokens (migration 002) |
 | `seconds_running`   | REAL    | Cumulative runtime seconds        |
 | `updated_at`        | TEXT    | ISO-8601 timestamp                |
+
+**`reaction_fingerprints`** — cross-restart reaction deduplication (migration 008)
+
+| Column        | Type    | Notes                                                         |
+| ------------- | ------- | ------------------------------------------------------------- |
+| `issue_id`    | TEXT    | Tracker-internal issue ID (composite PK with `kind`)          |
+| `kind`        | TEXT    | Reaction kind (`ci`, `review`)                                |
+| `fingerprint` | TEXT    | Deterministic hash of the current reaction state              |
+| `dispatched`  | INTEGER | `1` when a fix dispatch has been sent for this fingerprint    |
+| `updated_at`  | TEXT    | ISO-8601 timestamp                                            |
+
+Primary key: `(issue_id, kind)`. Upserts reset `dispatched` to `0` when the fingerprint value
+changes (new comments detected). Used by CI and review reconcile functions to prevent duplicate
+dispatches across restarts.
 
 ### 19.3 Migration Strategy
 

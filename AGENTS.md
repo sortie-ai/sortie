@@ -12,7 +12,7 @@ Spec-first, agent-developed orchestration service. The architecture document is 
 
 ## Gotchas
 
-- **Architecture doc is the spec.** `docs/architecture.md` (~2600 lines) defines every entity, state machine, algorithm, and validation rule. Read the relevant section before implementing anything. Drift from the spec is a bug.
+- **Architecture doc is the spec.** `docs/architecture.md` (~3600 lines) defines every entity, state machine, algorithm, and validation rule. Read the relevant section before implementing anything. Drift from the spec is a bug.
 - **Symphony is prior art, not a template.** Sortie derives from OpenAI Symphony but diverges intentionally (Go instead of Elixir, SQLite persistence, adapter interfaces). Do not copy Symphony patterns or Elixir idioms.
 - **Workspace safety invariants are security boundaries.** Path containment under workspace root, sanitized workspace keys (`[A-Za-z0-9._-]` only), and cwd validation before agent launch are mandatory — not suggestions. See architecture Section 9.6.
 - **Generic naming in core code.** Use `agent_*`, `tracker_*`, `session_*` in orchestrator core. Never `jira_*`, `claude_*`, `codex_*` outside their adapter packages.

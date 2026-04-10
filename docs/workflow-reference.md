@@ -21,7 +21,9 @@
   - [2.5 `hooks` — Workspace Lifecycle Hooks](#25-hooks--workspace-lifecycle-hooks)
   - [2.6 `agent` — Coding Agent Configuration](#26-agent--coding-agent-configuration)
   - [2.7 `db_path` — SQLite Database Path](#27-db_path--sqlite-database-path)
-  - [2.8 `ci_feedback` — CI Feedback Loop](#28-ci_feedback--ci-feedback-loop)
+  - [2.8 `ci_feedback` — CI Feedback Loop (deprecated)](#28-ci_feedback--ci-feedback-loop-deprecated)
+  - [2.9 `self_review` — Self-Review Configuration](#29-self_review--self-review-configuration)
+  - [2.10 `reactions` — Reaction-Based Feedback Loops](#210-reactions--reaction-based-feedback-loops)
 - [3. Environment Variable Overrides](#3-environment-variable-overrides)
   - [3.1 Source Precedence](#31-source-precedence)
   - [3.2 Curated Variable List](#32-curated-variable-list)
@@ -137,7 +139,7 @@ After parsing, the loader produces a struct with three fields:
 
 ### 2.1 Top-Level Keys
 
-The core schema recognizes eight top-level keys:
+The core schema recognizes nine top-level keys:
 
 ```yaml
 tracker: # Issue tracker connection and query settings
@@ -146,7 +148,8 @@ workspace: # Workspace root path
 hooks: # Workspace lifecycle hook scripts
 agent: # Coding agent adapter, timeouts, and limits
 db_path: # SQLite database file path
-ci_feedback: # CI failure feedback loop (optional)
+ci_feedback: # CI failure feedback loop (deprecated; use reactions.ci_failure)
+reactions: # Reaction-based feedback loops (CI failure, review comments)
 self_review: # Self-review verification loop (optional)
 ```
 
@@ -404,7 +407,11 @@ connection. A restart is required to change the database file.
 
 ---
 
-### 2.8 `ci_feedback` — CI Feedback Loop
+### 2.8 `ci_feedback` — CI Feedback Loop (**deprecated**)
+
+> **Deprecated.** Use `reactions.ci_failure` instead (Section 2.10). When both `ci_feedback`
+> and `reactions.ci_failure` are present, `reactions.ci_failure` takes precedence and a
+> deprecation warning is logged at startup.
 
 ```yaml
 ci_feedback:
@@ -493,6 +500,120 @@ additional turns beyond the coding turn loop. Plan token budgets accordingly.
   with a configuration error.
 - When `enabled` is `false` or the section is absent, all other fields are ignored and the
   self-review phase adds zero overhead.
+
+---
+
+### 2.10 `reactions` — Reaction-Based Feedback Loops
+
+```yaml
+reactions:
+  review_comments:
+    provider: github
+    max_retries: 2
+    escalation: label
+    escalation_label: needs-human
+    poll_interval_ms: 120000
+    debounce_ms: 60000
+    max_continuation_turns: 3
+```
+
+The `reactions` section configures feedback loops that respond to external events (CI
+failures, PR review comments) by dispatching continuation turns to the agent. Each key
+under `reactions` identifies a reaction kind.
+
+**Common fields** (shared across all reaction kinds):
+
+| Field              | Type    | Required              | Default       | Dynamic Reload    | Description                                                                                     |
+| ------------------ | ------- | --------------------- | ------------- | ----------------- | ----------------------------------------------------------------------------------------------- |
+| `provider`         | string  | **Yes** (to activate) | _(absent)_    | Requires restart  | Adapter identifier (e.g. `github`). When absent or empty, the reaction kind is disabled.        |
+| `max_retries`      | integer | No                    | `2`           | Future dispatches | Maximum fix continuation dispatches per issue before escalation. Must be non-negative.           |
+| `escalation`       | string  | No                    | `label`       | Future dispatches | Action when retries are exhausted. Valid: `"label"`, `"comment"`.                                |
+| `escalation_label` | string  | No                    | `needs-human` | Future dispatches | Label applied when `escalation` is `"label"`.                                                    |
+
+Remaining keys within a kind sub-object are kind-specific and collected into an `Extra` map.
+
+#### Reaction kind: `ci_failure`
+
+Equivalent to the deprecated `ci_feedback` section. Configures the CI failure feedback
+loop. The orchestrator polls CI status for Sortie-created branches and dispatches
+continuation turns when CI fails.
+
+Additional fields (via Extra):
+
+| Field           | Type    | Default | Dynamic Reload   | Description                                                           |
+| --------------- | ------- | ------- | ---------------- | --------------------------------------------------------------------- |
+| `max_log_lines` | integer | `50`    | Requires restart | Maximum CI log tail lines for prompt injection. `0` disables.         |
+
+Example:
+
+```yaml
+reactions:
+  ci_failure:
+    provider: github
+    max_retries: 2
+    max_log_lines: 50
+    escalation: label
+    escalation_label: needs-human
+```
+
+#### Reaction kind: `review_comments`
+
+PR review comment routing. When configured, the orchestrator polls for human
+`CHANGES_REQUESTED` review comments on Sortie-created PRs and dispatches continuation
+turns so the agent can address the feedback.
+
+Additional fields (via Extra):
+
+| Field                    | Type    | Default  | Dynamic Reload    | Description                                                                                               |
+| ------------------------ | ------- | -------- | ----------------- | --------------------------------------------------------------------------------------------------------- |
+| `poll_interval_ms`       | integer | `120000` | Future dispatches | Polling interval for review comments. Minimum: `30000` (30 sec).                                          |
+| `debounce_ms`            | integer | `60000`  | Future dispatches | Debounce window after the last detected comment before dispatching. Must be non-negative.                 |
+| `max_continuation_turns` | integer | `3`      | Future dispatches | Maximum review-fix continuation dispatches per issue before escalation. Must be positive.                  |
+
+**Activation:** The `reactions.review_comments` block is active when `provider` is present
+and non-empty. Agent-created PRs MUST write `pr_number`, `owner`, and `repo` to
+`.sortie/scm.json` in the workspace for review polling to activate.
+
+**SCM coordinates:** The `owner` and `repo` values are sourced from `.sortie/scm.json`
+(written by the agent), not from the tracker project configuration. This decouples SCM
+repository identity from the tracker project identifier.
+
+**Debounce behavior:** When review comments are detected but the newest comment timestamp
+is within the debounce window, dispatch is deferred. This ensures the reviewer has finished
+their full review before the agent starts addressing comments.
+
+**Fingerprint dedup:** The orchestrator computes a SHA-256 fingerprint from sorted
+non-outdated comment IDs. If the fingerprint has not changed since the last dispatch,
+no new continuation is triggered. Fingerprints are persisted across restarts in the
+`reaction_fingerprints` SQLite table.
+
+**Escalation:** When `max_continuation_turns` is exhausted, the orchestrator applies the
+configured escalation action (label or comment) and releases the claim.
+
+Example:
+
+```yaml
+reactions:
+  review_comments:
+    provider: github
+    max_retries: 2
+    escalation: label
+    escalation_label: needs-human
+    poll_interval_ms: 120000
+    debounce_ms: 60000
+    max_continuation_turns: 3
+```
+
+**Validation rules:**
+
+- Reaction kind keys must match `[a-z][a-z0-9_-]*`. Invalid keys are rejected with a
+  configuration error.
+- `max_retries` must be non-negative for all kinds.
+- `escalation` must be `"label"` or `"comment"` for all kinds.
+- `poll_interval_ms` must be >= `30000` for `review_comments`.
+- `debounce_ms` must be non-negative for `review_comments`.
+- `max_continuation_turns` must be positive for `review_comments`.
+- When `provider` is absent or empty, all other fields in the kind sub-object are ignored.
 
 ---
 
@@ -1218,7 +1339,9 @@ template.New("prompt").
 
 ### 5.2 Template Input Variables
 
-The data map passed to `Execute` contains exactly **three top-level keys**:
+The data map passed to `Execute` contains **three core top-level keys** (`issue`, `attempt`,
+`run`) plus **continuation context keys** (`ci_failure`, `review_comments`) that are `nil` by
+default and populated on reaction-triggered dispatches:
 
 #### `issue` — Normalized Issue Object
 
@@ -1263,6 +1386,55 @@ evaluates to `false`, and on retries it is `>= 1`, so `{{ if .attempt }}` evalua
 | `.run.turn_number`     | integer | Current turn number within the session.                                                                            |
 | `.run.max_turns`       | integer | Configured maximum turns per session.                                                                              |
 | `.run.is_continuation` | boolean | `true` when this is a continuation turn within a multi-turn session (not the first turn, not a retry after error). |
+
+#### `ci_failure` — CI Failure Context (continuation key)
+
+Non-nil only on turn 1 of a CI-fix continuation dispatch. Contains CI failure details
+from `CIResult.ToTemplateMap()`:
+
+| Field                     | Type            | Description                                              |
+| ------------------------- | --------------- | -------------------------------------------------------- |
+| `.ci_failure.status`      | string          | Aggregate CI pipeline status (`"failing"`).              |
+| `.ci_failure.check_runs`  | list of maps    | Individual check runs with `name`, `status`, `conclusion`, `details_url`. |
+| `.ci_failure.log_excerpt` | string          | Truncated log from the first failing check.              |
+| `.ci_failure.failing_count` | integer       | Number of failing check runs.                            |
+| `.ci_failure.ref`         | string          | The git ref that was queried.                            |
+
+When `nil` (default on non-CI dispatches), `{{ if .ci_failure }}` evaluates to `false`.
+
+#### `review_comments` — Review Comment Context (continuation key)
+
+Non-nil only on turn 1 of a review-fix continuation dispatch. Contains a list of human
+review comments from `CHANGES_REQUESTED` PR reviews:
+
+| Field (per element)           | Type    | Description                                              |
+| ----------------------------- | ------- | -------------------------------------------------------- |
+| `.review_comments[].id`       | string  | SCM-platform comment identifier.                         |
+| `.review_comments[].file`     | string  | File path (empty for PR-level comments).                 |
+| `.review_comments[].start_line` | integer | First line of commented range (0 for non-inline).       |
+| `.review_comments[].end_line` | integer | Last line of commented range (0 for single-line or non-inline). |
+| `.review_comments[].reviewer` | string  | Username of the comment author.                          |
+| `.review_comments[].body`     | string  | Comment text.                                            |
+
+When `nil` (default on non-review dispatches), `{{ if .review_comments }}` evaluates to
+`false`.
+
+**Template pattern for review comments:**
+
+```
+{{ if .review_comments }}
+## Review Comments to Address
+
+The following review comments were left on the PR. Address each one:
+
+{{ range .review_comments }}
+### {{ .reviewer }} on {{ .file }}{{ if .start_line }} (line {{ .start_line }}{{ if .end_line }}-{{ .end_line }}{{ end }}){{ end }}
+
+{{ .body }}
+
+{{ end }}
+{{ end }}
+```
 
 ### 5.3 Built-in Functions (FuncMap)
 
@@ -1576,7 +1748,14 @@ re-applies configuration and prompt template without restart.
 | `ci_feedback.max_retries`              | Future dispatches.                                                                             |
 | `ci_feedback.max_log_lines`            | **No effect** — requires restart. CI provider is created once at process start.                |
 | `ci_feedback.escalation`               | Future dispatches.                                                                             |
-| `ci_feedback.escalation_label`         | Future dispatches.                                                                             |
+| `ci_feedback.escalation_label`                  | Future dispatches.                                                                             |
+| `reactions.<kind>.provider`                     | **No effect** — requires restart. Adapters are created once at process start.                  |
+| `reactions.<kind>.max_retries`                  | Future dispatches.                                                                             |
+| `reactions.<kind>.escalation`                   | Future dispatches.                                                                             |
+| `reactions.<kind>.escalation_label`             | Future dispatches.                                                                             |
+| `reactions.review_comments.poll_interval_ms`    | Future dispatches.                                                                             |
+| `reactions.review_comments.debounce_ms`         | Future dispatches.                                                                             |
+| `reactions.review_comments.max_continuation_turns` | Future dispatches.                                                                          |
 | `server.port`                          | **No effect** — requires restart.                                                              |
 | `server.host`                          | **No effect** — requires restart.                                                              |
 | `logging.level`                        | **No effect** — requires restart.                                                              |
@@ -1727,11 +1906,18 @@ lists the `SORTIE_*` variable that overrides the field, or "—" if not overrida
 | `agent.max_concurrent_agents_by_state`  | `map[string]int` | `{}`                         | —                                        | Keys lowercased; dynamic reload                                                        |
 | `agent.max_sessions`                    | integer          | `0`                          | `SORTIE_AGENT_MAX_SESSIONS`              | Unlimited; dynamic reload                                                              |
 | `db_path`                               | path             | `.sortie.db`                 | `SORTIE_DB_PATH`                         | Restart required; `$VAR` skipped for env-sourced values                                |
-| `ci_feedback.kind`                      | string           | _(absent)_                   | —                                        | Absent = disabled; restart required                                                    |
-| `ci_feedback.max_retries`               | integer          | `2`                          | —                                        | `0` = escalate immediately; must be non-negative                                       |
-| `ci_feedback.max_log_lines`             | integer          | `50`                         | —                                        | `0` = disable log fetching; restart required                                           |
-| `ci_feedback.escalation`                | string           | `label`                      | —                                        | `"label"` or `"comment"`                                                               |
-| `ci_feedback.escalation_label`          | string           | `needs-human`                | —                                        | Applied when `escalation` is `"label"`                                                 |
+| `ci_feedback.kind`                      | string           | _(absent)_                   | —                                        | **Deprecated;** absent = disabled; restart required                                    |
+| `ci_feedback.max_retries`               | integer          | `2`                          | —                                        | **Deprecated;** `0` = escalate immediately; non-negative                               |
+| `ci_feedback.max_log_lines`             | integer          | `50`                         | —                                        | **Deprecated;** `0` = disable log fetching; restart required                           |
+| `ci_feedback.escalation`                | string           | `label`                      | —                                        | **Deprecated;** `"label"` or `"comment"`                                               |
+| `ci_feedback.escalation_label`          | string           | `needs-human`                | —                                        | **Deprecated;** applied when `escalation` is `"label"`                                 |
+| `reactions.<kind>.provider`             | string           | _(absent)_                   | —                                        | Adapter identifier; absent = disabled; restart required                                |
+| `reactions.<kind>.max_retries`          | integer          | `2`                          | —                                        | Fix continuations before escalation; non-negative                                      |
+| `reactions.<kind>.escalation`           | string           | `label`                      | —                                        | `"label"` or `"comment"`                                                               |
+| `reactions.<kind>.escalation_label`     | string           | `needs-human`                | —                                        | Applied when `escalation` is `"label"`                                                 |
+| `reactions.review_comments.poll_interval_ms` | integer     | `120000`                     | —                                        | Review poll interval; min `30000`                                                      |
+| `reactions.review_comments.debounce_ms` | integer          | `60000`                      | —                                        | Debounce after last comment; non-negative                                              |
+| `reactions.review_comments.max_continuation_turns` | integer | `3`                        | —                                        | Review-fix turns before escalation; positive                                           |
 | `self_review.enabled`                   | boolean          | `false`                      | —                                        | Activates self-review loop                                                             |
 | `self_review.max_iterations`            | integer          | `3`                          | —                                        | Range [1, 10]; up to `2N−1` extra turns                                                |
 | `self_review.verification_commands`     | `[string]`       | _(required when enabled)_    | —                                        | Shell commands for verification                                                        |
@@ -1863,6 +2049,23 @@ ci_feedback:
   max_log_lines: 50 # Lines from first failing check log
   escalation: label # "label" or "comment" on exhaustion
   escalation_label: needs-human # Label added when escalation is "label"
+
+# ─── Reactions (preferred over ci_feedback) ────────────────────
+# reactions:
+#   ci_failure:
+#     provider: github
+#     max_retries: 2
+#     max_log_lines: 50
+#     escalation: label
+#     escalation_label: needs-human
+#   review_comments:
+#     provider: github
+#     max_retries: 2
+#     escalation: label
+#     escalation_label: needs-human
+#     poll_interval_ms: 120000  # 2-minute review poll cycle
+#     debounce_ms: 60000        # 60s debounce after last comment
+#     max_continuation_turns: 3 # Max review-fix dispatches
 
 # ─── Server ────────────────────────────────────────────────────
 server:
