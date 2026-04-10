@@ -779,12 +779,15 @@ func BuildReviewReactionConfig(rc config.ReactionConfig) (ReviewReactionConfig, 
 }
 
 // toInt converts a YAML-decoded value (typically int or float64) to int.
-// Fractional float64 values are rejected.
+// Fractional, NaN, and infinite float64 values are rejected.
 func toInt(v any) (int, error) {
 	switch n := v.(type) {
 	case int:
 		return n, nil
 	case float64:
+		if math.IsNaN(n) || math.IsInf(n, 0) {
+			return 0, fmt.Errorf("expected finite numeric value, got %v", n)
+		}
 		if n != math.Trunc(n) {
 			return 0, fmt.Errorf("expected integer value, got fractional %v", n)
 		}

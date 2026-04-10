@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/url"
 	"strconv"
 	"strings"
@@ -200,6 +201,13 @@ func (a *GitHubSCMAdapter) fetchAllReviews(ctx context.Context, prNumber int, ow
 			return nil, toSCMError(err)
 		}
 	}
+
+	if nextURL != "" {
+		slog.WarnContext(ctx, "reviews response truncated at page limit",
+			slog.Int("pages_fetched", len(all)/100+1),
+			slog.Int("max_pages", maxReviewPages))
+	}
+
 	return all, nil
 }
 
@@ -234,6 +242,13 @@ func (a *GitHubSCMAdapter) fetchReviewComments(ctx context.Context, prNumber int
 			return nil, toSCMError(err)
 		}
 	}
+
+	if nextURL != "" {
+		slog.WarnContext(ctx, "review comments response truncated at page limit",
+			slog.Int64("review_id", reviewID),
+			slog.Int("max_pages", maxReviewPages))
+	}
+
 	return all, nil
 }
 
@@ -266,6 +281,6 @@ func toSCMError(err error) *domain.SCMError {
 	return &domain.SCMError{
 		Kind:    scmKind,
 		Message: te.Message,
-		Err:     te.Err,
+		Err:     err,
 	}
 }
