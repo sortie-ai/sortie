@@ -4,6 +4,20 @@
     "**/CODEOWNERS": "plaintext"
   },
 
+  // ── Explorer: File Nesting ──────────────────────────────────────────────────
+  // Collapses related artifacts under their logical parent in the sidebar,
+  // reducing visual noise without hiding anything from the file system.
+  "explorer.fileNesting.enabled": true,
+  "explorer.fileNesting.expand": false,
+  "explorer.fileNesting.patterns": {
+    "*.go": "${capture}_test.go, ${capture}_integration_test.go",
+    "go.mod": "go.sum",
+    "codecov.yml": "coverage.html, coverage.json, coverage.xml, coverage.out",
+    ".env": ".env, .env.*",
+    "Dockerfile": "Dockerfile, compose.yml, docker-compose.yml, .dockerignore",
+    "AGENTS.md": "AGENTS.md, CLAUDE.md"
+  },
+
   // ── GitHub Copilot Custom Instructions ─────────────────────────────────────
   // Custom instruction files for code review for the current selection.
   // See: https://code.visualstudio.com/docs/copilot/customization/custom-instructions
