@@ -28,7 +28,9 @@ func testLogger() *slog.Logger {
 }
 
 // writeWorkflow overwrites path atomically via write-to-temp + rename,
-// matching the pattern used by many editors.
+// matching the pattern used by many editors. On Windows the rename can
+// fail with "Access is denied" when fsnotify holds a handle on the
+// target; the helper retries a few times with a brief back-off.
 func writeWorkflow(t *testing.T, path string, content []byte) {
 	t.Helper()
 	dir := filepath.Dir(path)
@@ -36,9 +38,15 @@ func writeWorkflow(t *testing.T, path string, content []byte) {
 	if err := os.WriteFile(tmp, content, 0o644); err != nil {
 		t.Fatalf("write temp file: %v", err)
 	}
-	if err := os.Rename(tmp, path); err != nil {
-		t.Fatalf("rename temp to target: %v", err)
+	var err error
+	for range 5 {
+		err = os.Rename(tmp, path)
+		if err == nil {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
+	t.Fatalf("rename temp to target: %v", err)
 }
 
 // pollUntil calls fn repeatedly until it returns true or a 3-second
