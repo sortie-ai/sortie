@@ -214,10 +214,10 @@ type WorkerDeps struct {
 	// Tier 1 tool access.
 	DBPath string
 
-	// CIFailureContext carries CI failure data to inject into the prompt
-	// template on the first turn. Non-nil only for CI-fix continuation
-	// dispatches. Nil for normal dispatches and non-CI retries.
-	CIFailureContext map[string]any
+	// ContinuationContext carries reaction continuation data to inject
+	// into the prompt template on the first turn. Non-nil only for
+	// reaction-triggered continuation dispatches.
+	ContinuationContext map[string]any
 
 	// OnProgress relays self-review progress to the orchestrator's event
 	// loop. Called from the worker goroutine; must be safe for concurrent
@@ -632,12 +632,12 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 		issueMap := issue.ToTemplateMap()
 		var renderOpts []prompt.RenderOption
 		if turnNumber == 1 {
-			ciCtx := deps.CIFailureContext
-			if ciCtx == nil {
-				ciCtx = CIFailureFromContext(ctx)
+			contCtx := deps.ContinuationContext
+			if contCtx == nil {
+				contCtx = ContinuationFromContext(ctx)
 			}
-			if ciCtx != nil {
-				renderOpts = append(renderOpts, prompt.WithCIFailure(ciCtx))
+			if contCtx != nil {
+				renderOpts = append(renderOpts, prompt.WithContinuationContext(contCtx))
 			}
 		}
 		rendered, err := prompt.BuildTurnPrompt(tmpl, issueMap, attemptInt, turnNumber, maxTurns, renderOpts...)

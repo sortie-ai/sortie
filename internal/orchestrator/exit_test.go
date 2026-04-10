@@ -2556,7 +2556,7 @@ func (c *ciProviderStubExit) FetchCIStatus(_ context.Context, _ string) (domain.
 	panic("FetchCIStatus must not be called by HandleWorkerExit")
 }
 
-func TestHandleWorkerExit_CIProvider_PopulatesPendingCICheck(t *testing.T) {
+func TestHandleWorkerExit_CIProvider_PopulatesPendingReaction(t *testing.T) {
 	t.Parallel()
 
 	wsPath := t.TempDir()
@@ -2575,22 +2575,27 @@ func TestHandleWorkerExit_CIProvider_PopulatesPendingCICheck(t *testing.T) {
 		WorkspacePath: wsPath,
 	}, params)
 
-	entry, ok := state.PendingCICheck["CI-ISS-1"]
+	rkey := ReactionKey("CI-ISS-1", ReactionKindCI)
+	entry, ok := state.PendingReactions[rkey]
 	if !ok {
-		t.Fatal("PendingCICheck[CI-ISS-1] missing; want entry after normal exit with branch")
+		t.Fatal("PendingReactions[CI-ISS-1:ci] missing; want entry after normal exit with branch")
 	}
-	if entry.Branch != "feature/ci-test" {
-		t.Errorf("PendingCICheck.Branch = %q, want %q", entry.Branch, "feature/ci-test")
+	ciData, ok := entry.KindData.(*CIReactionData)
+	if !ok {
+		t.Fatal("KindData is not *CIReactionData")
 	}
-	if entry.SHA != "abc123" {
-		t.Errorf("PendingCICheck.SHA = %q, want %q", entry.SHA, "abc123")
+	if ciData.Branch != "feature/ci-test" {
+		t.Errorf("CIReactionData.Branch = %q, want %q", ciData.Branch, "feature/ci-test")
+	}
+	if ciData.SHA != "abc123" {
+		t.Errorf("CIReactionData.SHA = %q, want %q", ciData.SHA, "abc123")
 	}
 	if entry.IssueID != "CI-ISS-1" {
-		t.Errorf("PendingCICheck.IssueID = %q, want %q", entry.IssueID, "CI-ISS-1")
+		t.Errorf("PendingReaction.IssueID = %q, want %q", entry.IssueID, "CI-ISS-1")
 	}
 }
 
-func TestHandleWorkerExit_CIProvider_NilProvider_NoPendingCICheck(t *testing.T) {
+func TestHandleWorkerExit_CIProvider_NilProvider_NoPendingReaction(t *testing.T) {
 	t.Parallel()
 
 	wsPath := t.TempDir()
@@ -2609,12 +2614,12 @@ func TestHandleWorkerExit_CIProvider_NilProvider_NoPendingCICheck(t *testing.T) 
 		WorkspacePath: wsPath,
 	}, params)
 
-	if _, ok := state.PendingCICheck["CI-ISS-2"]; ok {
-		t.Error("PendingCICheck populated when CIProvider is nil; want absent")
+	if _, ok := state.PendingReactions[ReactionKey("CI-ISS-2", ReactionKindCI)]; ok {
+		t.Error("PendingReactions populated when CIProvider is nil; want absent")
 	}
 }
 
-func TestHandleWorkerExit_CIProvider_EmptyWorkspace_NoPendingCICheck(t *testing.T) {
+func TestHandleWorkerExit_CIProvider_EmptyWorkspace_NoPendingReaction(t *testing.T) {
 	t.Parallel()
 
 	store := &mockExitStore{}
@@ -2631,12 +2636,12 @@ func TestHandleWorkerExit_CIProvider_EmptyWorkspace_NoPendingCICheck(t *testing.
 		WorkspacePath: "",
 	}, params)
 
-	if _, ok := state.PendingCICheck["CI-ISS-3"]; ok {
-		t.Error("PendingCICheck populated for empty workspace; want absent")
+	if _, ok := state.PendingReactions[ReactionKey("CI-ISS-3", ReactionKindCI)]; ok {
+		t.Error("PendingReactions populated for empty workspace; want absent")
 	}
 }
 
-func TestHandleWorkerExit_CIProvider_NoBranchInSCM_NoPendingCICheck(t *testing.T) {
+func TestHandleWorkerExit_CIProvider_NoBranchInSCM_NoPendingReaction(t *testing.T) {
 	t.Parallel()
 
 	wsPath := t.TempDir()
@@ -2662,12 +2667,12 @@ func TestHandleWorkerExit_CIProvider_NoBranchInSCM_NoPendingCICheck(t *testing.T
 		WorkspacePath: wsPath,
 	}, params)
 
-	if _, ok := state.PendingCICheck["CI-ISS-4"]; ok {
-		t.Error("PendingCICheck populated when SCM branch is empty; want absent")
+	if _, ok := state.PendingReactions[ReactionKey("CI-ISS-4", ReactionKindCI)]; ok {
+		t.Error("PendingReactions populated when SCM branch is empty; want absent")
 	}
 }
 
-func TestHandleWorkerExit_CIProvider_SoftStop_NoPendingCICheck(t *testing.T) {
+func TestHandleWorkerExit_CIProvider_SoftStop_NoPendingReaction(t *testing.T) {
 	t.Parallel()
 
 	wsPath := t.TempDir()
@@ -2678,7 +2683,7 @@ func TestHandleWorkerExit_CIProvider_SoftStop_NoPendingCICheck(t *testing.T) {
 	params := defaultExitParams(t, store)
 	params.CIProvider = &ciProviderStubExit{}
 
-	// SoftStop: claim is released before the CI check; PendingCICheck must not be populated.
+	// SoftStop: claim is released before the CI check; PendingReactions must not be populated.
 	HandleWorkerExit(state, WorkerResult{
 		IssueID:        "CI-ISS-5",
 		Identifier:     "CI-ISS-5-ident",
@@ -2689,8 +2694,8 @@ func TestHandleWorkerExit_CIProvider_SoftStop_NoPendingCICheck(t *testing.T) {
 		WorkspacePath:  wsPath,
 	}, params)
 
-	if _, ok := state.PendingCICheck["CI-ISS-5"]; ok {
-		t.Error("PendingCICheck populated after SoftStop; want absent (claim released before CI check)")
+	if _, ok := state.PendingReactions[ReactionKey("CI-ISS-5", ReactionKindCI)]; ok {
+		t.Error("PendingReactions populated after SoftStop; want absent (claim released before CI check)")
 	}
 }
 

@@ -35,6 +35,11 @@ type OrchestratorStore interface {
 	DeleteRetryEntry(ctx context.Context, issueID string) error
 	CountRunHistoryByIssue(ctx context.Context, issueID string) (int, error)
 	QueryBudgetExhaustedIssues(ctx context.Context, candidateIDs []string, maxSessions int) ([]string, error)
+	DeleteReactionFingerprintsByIssue(ctx context.Context, issueID string) error
+	UpsertReactionFingerprint(ctx context.Context, issueID, kind, fingerprint string) error
+	GetReactionFingerprint(ctx context.Context, issueID, kind string) (fingerprint string, dispatched bool, err error)
+	MarkReactionDispatched(ctx context.Context, issueID, kind string) error
+	DeleteReactionFingerprint(ctx context.Context, issueID, kind string) error
 }
 
 // Observer receives notifications when orchestrator state changes.

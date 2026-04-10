@@ -36,9 +36,23 @@ type ciReconcileStore struct {
 	deletedIssueIDs []string
 	runHistories    []persistence.RunHistory
 
-	saveRetryEntryErr   error
-	deleteRetryEntryErr error
-	appendRunHistoryErr error
+	saveRetryEntryErr                    error
+	deleteRetryEntryErr                  error
+	appendRunHistoryErr                  error
+	deleteReactionFingerprintsByIssueErr error
+
+	// Fingerprint dedup fields.
+	upsertFingerprintCalls int
+	getFingerprintCalls    int
+	markDispatchedCalls    int
+	deleteFingerprintCalls int
+
+	upsertFingerprintErr     error
+	getFingerprintResult     string
+	getFingerprintDispatched bool
+	getFingerprintErr        error
+	markDispatchedErr        error
+	deleteFingerprintErr     error
 }
 
 var _ ReconcileStore = (*ciReconcileStore)(nil)
@@ -56,6 +70,30 @@ func (s *ciReconcileStore) DeleteRetryEntry(_ context.Context, issueID string) e
 func (s *ciReconcileStore) AppendRunHistory(_ context.Context, run persistence.RunHistory) (persistence.RunHistory, error) {
 	s.runHistories = append(s.runHistories, run)
 	return run, s.appendRunHistoryErr
+}
+
+func (s *ciReconcileStore) DeleteReactionFingerprintsByIssue(_ context.Context, _ string) error {
+	return s.deleteReactionFingerprintsByIssueErr
+}
+
+func (s *ciReconcileStore) UpsertReactionFingerprint(_ context.Context, _, _, _ string) error {
+	s.upsertFingerprintCalls++
+	return s.upsertFingerprintErr
+}
+
+func (s *ciReconcileStore) GetReactionFingerprint(_ context.Context, _, _ string) (string, bool, error) {
+	s.getFingerprintCalls++
+	return s.getFingerprintResult, s.getFingerprintDispatched, s.getFingerprintErr
+}
+
+func (s *ciReconcileStore) MarkReactionDispatched(_ context.Context, _, _ string) error {
+	s.markDispatchedCalls++
+	return s.markDispatchedErr
+}
+
+func (s *ciReconcileStore) DeleteReactionFingerprint(_ context.Context, _, _ string) error {
+	s.deleteFingerprintCalls++
+	return s.deleteFingerprintErr
 }
 
 // ciTrackerStub is a no-panic TrackerAdapter for CI reconcile tests.
@@ -123,16 +161,18 @@ func (s *ciMetricsSpy) IncRetries(trigger string)       { s.retriesByTrigger[tri
 // ciBaseTime is a fixed reference for CI reconcile tests.
 var ciBaseTime = time.Date(2026, 4, 1, 9, 0, 0, 0, time.UTC)
 
-// newPendingEntry builds a PendingCICheckEntry for a test issue.
-func newPendingEntry(issueID, identifier, branch string, attempt int) *PendingCICheckEntry {
-	return &PendingCICheckEntry{
+// newPendingEntry builds a PendingReaction for a test CI issue.
+func newPendingEntry(issueID, identifier, branch string, attempt int) *PendingReaction {
+	return &PendingReaction{
 		IssueID:    issueID,
 		Identifier: identifier,
 		DisplayID:  identifier,
 		Attempt:    attempt,
-		Branch:     branch,
-		SHA:        "",
+		Kind:       ReactionKindCI,
 		CreatedAt:  ciBaseTime,
+		KindData: &CIReactionData{
+			Branch: branch,
+		},
 	}
 }
 
@@ -146,11 +186,12 @@ func defaultCIFeedback() config.CIFeedbackConfig {
 	}
 }
 
-// stateWithPendingCICheck creates a State with one PendingCICheck entry.
-func stateWithPendingCICheck(t *testing.T, issueID, branch string, attempt int) *State {
+// stateWithPendingReaction creates a State with one CI PendingReaction entry.
+func stateWithPendingReaction(t *testing.T, issueID, branch string, attempt int) *State {
 	t.Helper()
 	s := NewState(5000, 4, nil, AgentTotals{})
-	s.PendingCICheck[issueID] = newPendingEntry(issueID, issueID+"-ident", branch, attempt)
+	rkey := ReactionKey(issueID, ReactionKindCI)
+	s.PendingReactions[rkey] = newPendingEntry(issueID, issueID+"-ident", branch, attempt)
 	s.Claimed[issueID] = struct{}{}
 	return s
 }
@@ -176,7 +217,7 @@ func ciParams(t *testing.T, store *ciReconcileStore, ci domain.CIStatusProvider,
 func TestReconcileCIStatus_NilProvider(t *testing.T) {
 	t.Parallel()
 
-	state := stateWithPendingCICheck(t, "ISS-CI-1", "feature/fix", 1)
+	state := stateWithPendingReaction(t, "ISS-CI-1", "feature/fix", 1)
 	store := &ciReconcileStore{}
 	metrics := newCIMetricsSpy()
 	params := ciParams(t, store, nil, nil)
@@ -184,8 +225,8 @@ func TestReconcileCIStatus_NilProvider(t *testing.T) {
 	reconcileCIStatus(state, params, discardLogger(), context.Background(), metrics)
 
 	// nil CIProvider: entire phase is a no-op.
-	if _, ok := state.PendingCICheck["ISS-CI-1"]; !ok {
-		t.Error("PendingCICheck entry consumed when CIProvider is nil; want no-op")
+	if _, ok := state.PendingReactions[ReactionKey("ISS-CI-1", ReactionKindCI)]; !ok {
+		t.Error("PendingReactions entry consumed when CIProvider is nil; want no-op")
 	}
 	if len(metrics.ciStatusChecks) != 0 {
 		t.Errorf("IncCIStatusChecks called with nil provider; want no calls")
@@ -198,7 +239,7 @@ func TestReconcileCIStatus_NilProvider(t *testing.T) {
 func TestReconcileCIStatus_FetchError_ReEnqueues(t *testing.T) {
 	t.Parallel()
 
-	state := stateWithPendingCICheck(t, "ISS-CI-2", "main", 1)
+	state := stateWithPendingReaction(t, "ISS-CI-2", "main", 1)
 	store := &ciReconcileStore{}
 	metrics := newCIMetricsSpy()
 	ci := &mockCIProvider{err: errors.New("network timeout")}
@@ -206,8 +247,8 @@ func TestReconcileCIStatus_FetchError_ReEnqueues(t *testing.T) {
 
 	reconcileCIStatus(state, params, discardLogger(), context.Background(), metrics)
 
-	if _, ok := state.PendingCICheck["ISS-CI-2"]; !ok {
-		t.Error("PendingCICheck entry dropped on FetchCIStatus error; want re-enqueued")
+	if _, ok := state.PendingReactions[ReactionKey("ISS-CI-2", ReactionKindCI)]; !ok {
+		t.Error("PendingReactions entry dropped on FetchCIStatus error; want re-enqueued")
 	}
 	if metrics.ciStatusChecks["error"] != 1 {
 		t.Errorf(`IncCIStatusChecks("error") = %d, want 1`, metrics.ciStatusChecks["error"])
@@ -217,11 +258,11 @@ func TestReconcileCIStatus_FetchError_ReEnqueues(t *testing.T) {
 	}
 }
 
-func TestReconcileCIStatus_Passing_ClearsCIFixAttempts(t *testing.T) {
+func TestReconcileCIStatus_Passing_ClearsReactionAttempts(t *testing.T) {
 	t.Parallel()
 
-	state := stateWithPendingCICheck(t, "ISS-CI-3", "feature/done", 1)
-	state.CIFixAttempts["ISS-CI-3"] = 1 // pre-seeded
+	state := stateWithPendingReaction(t, "ISS-CI-3", "feature/done", 1)
+	state.ReactionAttempts[ReactionKey("ISS-CI-3", ReactionKindCI)] = 1 // pre-seeded
 	store := &ciReconcileStore{}
 	metrics := newCIMetricsSpy()
 	ci := &mockCIProvider{result: domain.CIResult{Status: domain.CIStatusPassing}}
@@ -229,11 +270,11 @@ func TestReconcileCIStatus_Passing_ClearsCIFixAttempts(t *testing.T) {
 
 	reconcileCIStatus(state, params, discardLogger(), context.Background(), metrics)
 
-	if _, ok := state.PendingCICheck["ISS-CI-3"]; ok {
-		t.Error("PendingCICheck entry still present after passing; want consumed")
+	if _, ok := state.PendingReactions[ReactionKey("ISS-CI-3", ReactionKindCI)]; ok {
+		t.Error("PendingReactions entry still present after passing; want consumed")
 	}
-	if _, ok := state.CIFixAttempts["ISS-CI-3"]; ok {
-		t.Error("CIFixAttempts not cleared after CI passing; want cleared")
+	if _, ok := state.ReactionAttempts[ReactionKey("ISS-CI-3", ReactionKindCI)]; ok {
+		t.Error("ReactionAttempts not cleared after CI passing; want cleared")
 	}
 	if _, ok := state.RetryAttempts["ISS-CI-3"]; ok {
 		t.Error("retry scheduled after CI passing; want none")
@@ -246,7 +287,7 @@ func TestReconcileCIStatus_Passing_ClearsCIFixAttempts(t *testing.T) {
 func TestReconcileCIStatus_Pending_ReEnqueues(t *testing.T) {
 	t.Parallel()
 
-	state := stateWithPendingCICheck(t, "ISS-CI-4", "feature/wip", 1)
+	state := stateWithPendingReaction(t, "ISS-CI-4", "feature/wip", 1)
 	store := &ciReconcileStore{}
 	metrics := newCIMetricsSpy()
 	ci := &mockCIProvider{result: domain.CIResult{Status: domain.CIStatusPending}}
@@ -254,8 +295,8 @@ func TestReconcileCIStatus_Pending_ReEnqueues(t *testing.T) {
 
 	reconcileCIStatus(state, params, discardLogger(), context.Background(), metrics)
 
-	if _, ok := state.PendingCICheck["ISS-CI-4"]; !ok {
-		t.Error("PendingCICheck entry not re-enqueued after pending; want re-enqueued")
+	if _, ok := state.PendingReactions[ReactionKey("ISS-CI-4", ReactionKindCI)]; !ok {
+		t.Error("PendingReactions entry not re-enqueued after pending; want re-enqueued")
 	}
 	if _, ok := state.RetryAttempts["ISS-CI-4"]; ok {
 		t.Error("retry scheduled after CI pending; want none")
@@ -268,8 +309,8 @@ func TestReconcileCIStatus_Pending_ReEnqueues(t *testing.T) {
 func TestReconcileCIStatus_Failing_UnderMaxRetries(t *testing.T) {
 	t.Parallel()
 
-	// CIFixAttempts starts at 0; maxRetries=2 → no escalation after increment to 1.
-	state := stateWithPendingCICheck(t, "ISS-CI-5", "feature/break", 1)
+	// ReactionAttempts starts at 0; maxRetries=2 → no escalation after increment to 1.
+	state := stateWithPendingReaction(t, "ISS-CI-5", "feature/break", 1)
 	store := &ciReconcileStore{}
 	metrics := newCIMetricsSpy()
 	ci := &mockCIProvider{result: domain.CIResult{
@@ -284,8 +325,8 @@ func TestReconcileCIStatus_Failing_UnderMaxRetries(t *testing.T) {
 	reconcileCIStatus(state, params, discardLogger(), context.Background(), metrics)
 
 	// Entry consumed (not re-enqueued as pending-check).
-	if _, ok := state.PendingCICheck["ISS-CI-5"]; ok {
-		t.Error("PendingCICheck entry re-enqueued on CI failure; want consumed")
+	if _, ok := state.PendingReactions[ReactionKey("ISS-CI-5", ReactionKindCI)]; ok {
+		t.Error("PendingReactions entry re-enqueued on CI failure; want consumed")
 	}
 
 	// RunHistory appended with "ci_failed".
@@ -309,13 +350,13 @@ func TestReconcileCIStatus_Failing_UnderMaxRetries(t *testing.T) {
 	if !ok {
 		t.Fatal("retry not scheduled after CI failure; want scheduled")
 	}
-	if entry.CIFailureContext == nil {
-		t.Error("RetryEntry.CIFailureContext is nil; want CI failure map")
+	if entry.ContinuationContext == nil {
+		t.Error("RetryEntry.ContinuationContext is nil; want continuation map")
 	}
 
-	// CIFixAttempts incremented.
-	if state.CIFixAttempts["ISS-CI-5"] != 1 {
-		t.Errorf("CIFixAttempts[ISS-CI-5] = %d, want 1", state.CIFixAttempts["ISS-CI-5"])
+	// ReactionAttempts incremented.
+	if state.ReactionAttempts[ReactionKey("ISS-CI-5", ReactionKindCI)] != 1 {
+		t.Errorf("ReactionAttempts[ISS-CI-5] = %d, want 1", state.ReactionAttempts[ReactionKey("ISS-CI-5", ReactionKindCI)])
 	}
 
 	// Metrics.
@@ -335,9 +376,9 @@ func TestReconcileCIStatus_Failing_UnderMaxRetries(t *testing.T) {
 func TestReconcileCIStatus_Failing_ExceedsMaxRetries_Escalates(t *testing.T) {
 	t.Parallel()
 
-	// CIFixAttempts at 2; after increment → 3 > maxRetries(2) → escalate.
-	state := stateWithPendingCICheck(t, "ISS-CI-6", "feature/broken", 3)
-	state.CIFixAttempts["ISS-CI-6"] = 2
+	// ReactionAttempts at 2; after increment → 3 > maxRetries(2) → escalate.
+	state := stateWithPendingReaction(t, "ISS-CI-6", "feature/broken", 3)
+	state.ReactionAttempts[ReactionKey("ISS-CI-6", ReactionKindCI)] = 2
 	store := &ciReconcileStore{}
 	metrics := newCIMetricsSpy()
 	tracker := &ciTrackerStub{}
@@ -359,9 +400,9 @@ func TestReconcileCIStatus_Failing_ExceedsMaxRetries_Escalates(t *testing.T) {
 		t.Error("claim not released after CI escalation; want released")
 	}
 
-	// CIFixAttempts cleared.
-	if _, ok := state.CIFixAttempts["ISS-CI-6"]; ok {
-		t.Error("CIFixAttempts not cleared after escalation; want cleared")
+	// ReactionAttempts cleared.
+	if _, ok := state.ReactionAttempts[ReactionKey("ISS-CI-6", ReactionKindCI)]; ok {
+		t.Error("ReactionAttempts not cleared after escalation; want cleared")
 	}
 
 	// Escalation metric incremented (label mode from defaultCIFeedback).
@@ -383,8 +424,8 @@ func TestReconcileCIStatus_Failing_ExceedsMaxRetries_Escalates(t *testing.T) {
 func TestReconcileCIStatus_Failing_CommentEscalation(t *testing.T) {
 	t.Parallel()
 
-	state := stateWithPendingCICheck(t, "ISS-CI-7", "main", 1)
-	state.CIFixAttempts["ISS-CI-7"] = 2
+	state := stateWithPendingReaction(t, "ISS-CI-7", "main", 1)
+	state.ReactionAttempts[ReactionKey("ISS-CI-7", ReactionKindCI)] = 2
 	store := &ciReconcileStore{}
 	metrics := newCIMetricsSpy()
 	tracker := &ciTrackerStub{}
@@ -568,10 +609,10 @@ func TestEscalateCIFailure_LabelTracksTrackerOps(t *testing.T) {
 	gate := make(chan struct{})
 	tracker := &blockingCITracker{addLabelGate: gate}
 
-	// CIFixAttempts=2 with maxRetries=2 means next increment (→3) exceeds
+	// ReactionAttempts=2 with maxRetries=2 means next increment (→3) exceeds
 	// the limit and triggers escalation.
-	state := stateWithPendingCICheck(t, "ESC-WG-1", "main/broken", 3)
-	state.CIFixAttempts["ESC-WG-1"] = 2
+	state := stateWithPendingReaction(t, "ESC-WG-1", "main/broken", 3)
+	state.ReactionAttempts[ReactionKey("ESC-WG-1", ReactionKindCI)] = 2
 	store := &ciReconcileStore{}
 	metrics := newCIMetricsSpy()
 	ci := &mockCIProvider{result: domain.CIResult{Status: domain.CIStatusFailing}}
@@ -612,8 +653,8 @@ func TestEscalateCIFailure_CommentTracksTrackerOps(t *testing.T) {
 	gate := make(chan struct{})
 	tracker := &blockingCITracker{commentGate: gate}
 
-	state := stateWithPendingCICheck(t, "ESC-WG-2", "feature/broken", 2)
-	state.CIFixAttempts["ESC-WG-2"] = 2
+	state := stateWithPendingReaction(t, "ESC-WG-2", "feature/broken", 2)
+	state.ReactionAttempts[ReactionKey("ESC-WG-2", ReactionKindCI)] = 2
 	store := &ciReconcileStore{}
 	metrics := newCIMetricsSpy()
 	ci := &mockCIProvider{result: domain.CIResult{Status: domain.CIStatusFailing}}
@@ -751,7 +792,7 @@ func TestReconcileCIStatus_BackoffUsesStatePollInterval(t *testing.T) {
 	entry.PendingAttempts = 1
 
 	state := NewState(30000, 4, nil, AgentTotals{})
-	state.PendingCICheck["ISS-PPI-1"] = entry
+	state.PendingReactions[ReactionKey("ISS-PPI-1", ReactionKindCI)] = entry
 	state.Claimed["ISS-PPI-1"] = struct{}{}
 
 	store := &ciReconcileStore{}
@@ -762,9 +803,9 @@ func TestReconcileCIStatus_BackoffUsesStatePollInterval(t *testing.T) {
 
 	reconcileCIStatus(state, params, discardLogger(), context.Background(), metrics)
 
-	got, ok := state.PendingCICheck["ISS-PPI-1"]
+	got, ok := state.PendingReactions[ReactionKey("ISS-PPI-1", ReactionKindCI)]
 	if !ok {
-		t.Fatal("PendingCICheck entry not re-enqueued after CIStatusPending; want re-enqueued")
+		t.Fatal("PendingReactions entry not re-enqueued after CIStatusPending; want re-enqueued")
 	}
 
 	wantAttempts := 2
@@ -797,7 +838,7 @@ func TestReconcileCIStatus_BackoffSkip(t *testing.T) {
 	entry.PendingRetryAt = futureRetry
 
 	state := NewState(5000, 4, nil, AgentTotals{})
-	state.PendingCICheck["ISS-SKIP-1"] = entry
+	state.PendingReactions[ReactionKey("ISS-SKIP-1", ReactionKindCI)] = entry
 	state.Claimed["ISS-SKIP-1"] = struct{}{}
 
 	store := &ciReconcileStore{}
@@ -814,9 +855,9 @@ func TestReconcileCIStatus_BackoffSkip(t *testing.T) {
 	}
 
 	// Entry must be re-enqueued with identical PendingAttempts and PendingRetryAt.
-	got, ok := state.PendingCICheck["ISS-SKIP-1"]
+	got, ok := state.PendingReactions[ReactionKey("ISS-SKIP-1", ReactionKindCI)]
 	if !ok {
-		t.Fatal("PendingCICheck entry dropped during backoff skip; want re-enqueued")
+		t.Fatal("PendingReactions entry dropped during backoff skip; want re-enqueued")
 	}
 	if got.PendingAttempts != 2 {
 		t.Errorf("PendingAttempts = %d, want 2 (unchanged)", got.PendingAttempts)
@@ -835,7 +876,7 @@ func TestReconcileCIStatus_BackoffIncrements_OnPending(t *testing.T) {
 	entry.PendingAttempts = 2
 
 	state := NewState(5000, 4, nil, AgentTotals{})
-	state.PendingCICheck["ISS-BIP-1"] = entry
+	state.PendingReactions[ReactionKey("ISS-BIP-1", ReactionKindCI)] = entry
 	state.Claimed["ISS-BIP-1"] = struct{}{}
 
 	store := &ciReconcileStore{}
@@ -846,9 +887,9 @@ func TestReconcileCIStatus_BackoffIncrements_OnPending(t *testing.T) {
 
 	reconcileCIStatus(state, params, discardLogger(), context.Background(), metrics)
 
-	got, ok := state.PendingCICheck["ISS-BIP-1"]
+	got, ok := state.PendingReactions[ReactionKey("ISS-BIP-1", ReactionKindCI)]
 	if !ok {
-		t.Fatal("PendingCICheck entry not re-enqueued after CIStatusPending; want re-enqueued")
+		t.Fatal("PendingReactions entry not re-enqueued after CIStatusPending; want re-enqueued")
 	}
 
 	wantAttempts := 3
@@ -875,7 +916,7 @@ func TestReconcileCIStatus_BackoffIncrements_OnError(t *testing.T) {
 	entry.PendingAttempts = 1
 
 	state := NewState(5000, 4, nil, AgentTotals{})
-	state.PendingCICheck["ISS-BIE-1"] = entry
+	state.PendingReactions[ReactionKey("ISS-BIE-1", ReactionKindCI)] = entry
 	state.Claimed["ISS-BIE-1"] = struct{}{}
 
 	store := &ciReconcileStore{}
@@ -886,9 +927,9 @@ func TestReconcileCIStatus_BackoffIncrements_OnError(t *testing.T) {
 
 	reconcileCIStatus(state, params, discardLogger(), context.Background(), metrics)
 
-	got, ok := state.PendingCICheck["ISS-BIE-1"]
+	got, ok := state.PendingReactions[ReactionKey("ISS-BIE-1", ReactionKindCI)]
 	if !ok {
-		t.Fatal("PendingCICheck entry not re-enqueued after fetch error; want re-enqueued")
+		t.Fatal("PendingReactions entry not re-enqueued after fetch error; want re-enqueued")
 	}
 
 	wantAttempts := 2
@@ -933,7 +974,7 @@ func TestReconcileCIStatus_TTLExpiry(t *testing.T) {
 			entry.CreatedAt = createdAt
 
 			state := NewState(5000, 4, nil, AgentTotals{})
-			state.PendingCICheck["ISS-TTL-1"] = entry
+			state.PendingReactions[ReactionKey("ISS-TTL-1", ReactionKindCI)] = entry
 			state.Claimed["ISS-TTL-1"] = struct{}{}
 
 			store := &ciReconcileStore{}
@@ -945,17 +986,168 @@ func TestReconcileCIStatus_TTLExpiry(t *testing.T) {
 
 			reconcileCIStatus(state, params, discardLogger(), context.Background(), metrics)
 
-			_, stillPresent := state.PendingCICheck["ISS-TTL-1"]
+			_, stillPresent := state.PendingReactions[ReactionKey("ISS-TTL-1", ReactionKindCI)]
 
 			if tt.wantDropped && stillPresent {
-				t.Error("PendingCICheck entry not dropped after TTL expiry; want dropped")
+				t.Error("PendingReactions entry not dropped after TTL expiry; want dropped")
 			}
 			if !tt.wantDropped && !stillPresent {
-				t.Error("PendingCICheck entry dropped before TTL expiry; want kept")
+				t.Error("PendingReactions entry dropped before TTL expiry; want kept")
 			}
 			if tt.wantDropped && ci.calls != 0 {
 				t.Errorf("FetchCIStatus called %d times after TTL expiry; want 0", ci.calls)
 			}
 		})
+	}
+}
+
+// --- Fingerprint dedup tests ---
+
+// TestReconcileCIStatus_DedupSkip verifies that when GetReactionFingerprint
+// returns the current ref with dispatched=true, the entry is consumed without
+// calling FetchCIStatus.
+func TestReconcileCIStatus_DedupSkip(t *testing.T) {
+	t.Parallel()
+
+	const ref = "sha-already-done"
+	state := stateWithPendingReaction(t, "ISS-FP-1", ref, 1)
+	store := &ciReconcileStore{
+		getFingerprintResult:     ref,
+		getFingerprintDispatched: true,
+	}
+	metrics := newCIMetricsSpy()
+	ci := &mockCIProvider{}
+	params := ciParams(t, store, ci, nil)
+
+	reconcileCIStatus(state, params, discardLogger(), context.Background(), metrics)
+
+	if ci.calls != 0 {
+		t.Errorf("FetchCIStatus called %d times when entry already dispatched; want 0", ci.calls)
+	}
+	if _, ok := state.PendingReactions[ReactionKey("ISS-FP-1", ReactionKindCI)]; ok {
+		t.Error("PendingReactions entry still present after dedup skip; want consumed")
+	}
+	if store.upsertFingerprintCalls != 1 {
+		t.Errorf("UpsertReactionFingerprint calls = %d, want 1", store.upsertFingerprintCalls)
+	}
+	if store.getFingerprintCalls != 1 {
+		t.Errorf("GetReactionFingerprint calls = %d, want 1", store.getFingerprintCalls)
+	}
+}
+
+// TestReconcileCIStatus_FingerprintReset verifies that when the stored
+// fingerprint differs from the current ref (ref changed), UpsertReactionFingerprint
+// is called and reconciliation proceeds (FetchCIStatus is called).
+func TestReconcileCIStatus_FingerprintReset(t *testing.T) {
+	t.Parallel()
+
+	// Store returns old ref as dispatched; entry's branch is the new ref.
+	const newRef = "sha-new"
+	state := stateWithPendingReaction(t, "ISS-FP-2", newRef, 1)
+	store := &ciReconcileStore{
+		getFingerprintResult:     "sha-old",
+		getFingerprintDispatched: true,
+	}
+	metrics := newCIMetricsSpy()
+	ci := &mockCIProvider{result: domain.CIResult{Status: domain.CIStatusPassing}}
+	params := ciParams(t, store, ci, nil)
+
+	reconcileCIStatus(state, params, discardLogger(), context.Background(), metrics)
+
+	if ci.calls != 1 {
+		t.Errorf("FetchCIStatus calls = %d, want 1 (ref changed, dedup must not skip)", ci.calls)
+	}
+	if store.upsertFingerprintCalls != 1 {
+		t.Errorf("UpsertReactionFingerprint calls = %d, want 1", store.upsertFingerprintCalls)
+	}
+}
+
+// TestReconcileCIStatus_Passing_DeletesFingerprint verifies that on a
+// CI-passing result DeleteReactionFingerprint is called.
+func TestReconcileCIStatus_Passing_DeletesFingerprint(t *testing.T) {
+	t.Parallel()
+
+	state := stateWithPendingReaction(t, "ISS-FP-3", "sha-pass", 1)
+	store := &ciReconcileStore{}
+	metrics := newCIMetricsSpy()
+	ci := &mockCIProvider{result: domain.CIResult{Status: domain.CIStatusPassing}}
+	params := ciParams(t, store, ci, nil)
+
+	reconcileCIStatus(state, params, discardLogger(), context.Background(), metrics)
+
+	if store.deleteFingerprintCalls != 1 {
+		t.Errorf("DeleteReactionFingerprint calls = %d, want 1 on CI pass", store.deleteFingerprintCalls)
+	}
+}
+
+// TestReconcileCIStatus_FingerprintGetError_Continues verifies that when
+// GetReactionFingerprint returns an error the reconcile loop continues and
+// FetchCIStatus is still called (best-effort dedup pattern).
+func TestReconcileCIStatus_FingerprintGetError_Continues(t *testing.T) {
+	t.Parallel()
+
+	state := stateWithPendingReaction(t, "ISS-FP-4", "sha-fperr", 1)
+	store := &ciReconcileStore{
+		getFingerprintErr: errors.New("db unavailable"),
+	}
+	metrics := newCIMetricsSpy()
+	ci := &mockCIProvider{result: domain.CIResult{Status: domain.CIStatusPassing}}
+	params := ciParams(t, store, ci, nil)
+
+	reconcileCIStatus(state, params, discardLogger(), context.Background(), metrics)
+
+	if ci.calls != 1 {
+		t.Errorf("FetchCIStatus calls = %d, want 1 even when GetReactionFingerprint errors", ci.calls)
+	}
+}
+
+// TestReconcileCIStatus_Failing_MarksDispatched verifies that after scheduling
+// a CI-fix retry, MarkReactionDispatched is called.
+func TestReconcileCIStatus_Failing_MarksDispatched(t *testing.T) {
+	t.Parallel()
+
+	// ReactionAttempts=0 → under maxRetries=2, so handleCIFailure schedules retry.
+	state := stateWithPendingReaction(t, "ISS-FP-5", "sha-fail", 1)
+	store := &ciReconcileStore{}
+	metrics := newCIMetricsSpy()
+	ci := &mockCIProvider{result: domain.CIResult{Status: domain.CIStatusFailing, FailingCount: 1}}
+	params := ciParams(t, store, ci, nil)
+
+	reconcileCIStatus(state, params, discardLogger(), context.Background(), metrics)
+
+	if store.markDispatchedCalls != 1 {
+		t.Errorf("MarkReactionDispatched calls = %d, want 1 after CI failure dispatch", store.markDispatchedCalls)
+	}
+	// Retry must have been scheduled.
+	if _, ok := state.RetryAttempts["ISS-FP-5"]; !ok {
+		t.Error("retry not scheduled after CI failure; want scheduled")
+	}
+}
+
+// TestEscalateCIFailure_DeletesFingerprint verifies that escalateCIFailure
+// calls DeleteReactionFingerprint after clearing reactions.
+func TestEscalateCIFailure_DeletesFingerprint(t *testing.T) {
+	t.Parallel()
+
+	// ReactionAttempts=2, maxRetries=2 → next increment (→3) triggers escalation.
+	state := stateWithPendingReaction(t, "ISS-FP-6", "sha-escal", 3)
+	state.ReactionAttempts[ReactionKey("ISS-FP-6", ReactionKindCI)] = 2
+	store := &ciReconcileStore{}
+	metrics := newCIMetricsSpy()
+	tracker := &ciTrackerStub{}
+	ci := &mockCIProvider{result: domain.CIResult{Status: domain.CIStatusFailing, FailingCount: 1}}
+	params := ciParams(t, store, ci, tracker)
+
+	reconcileCIStatus(state, params, discardLogger(), context.Background(), metrics)
+
+	// Wait for any escalation goroutine to finish.
+	state.TrackerOpsWg.Wait()
+
+	if store.deleteFingerprintCalls != 1 {
+		t.Errorf("DeleteReactionFingerprint calls = %d, want 1 during CI escalation", store.deleteFingerprintCalls)
+	}
+	// Claim must be released.
+	if _, ok := state.Claimed["ISS-FP-6"]; ok {
+		t.Error("claim not released after escalation")
 	}
 }

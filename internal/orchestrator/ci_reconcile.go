@@ -19,7 +19,7 @@ const ciPendingBackoffBaseDefault = 10 * time.Second
 // ciPendingBackoffCap is the maximum interval between CI status checks.
 const ciPendingBackoffCap = 5 * time.Minute
 
-// ciPendingDefaultTTL is the default lifetime of a PendingCICheck entry.
+// ciPendingDefaultTTL is the default lifetime of a PendingReaction entry.
 // Entries older than this are dropped on the next reconcile tick.
 const ciPendingDefaultTTL = 30 * time.Minute
 
@@ -45,13 +45,13 @@ func computeCIPendingDelay(base time.Duration, attempts int) time.Duration {
 	return delay
 }
 
-// reconcileCIStatus polls CI status for each entry in state.PendingCICheck.
-// Called from ReconcileRunningIssues after reconcileTrackerState. Skipped
-// entirely when params.CIProvider is nil.
+// reconcileCIStatus polls CI status for each CI-kind entry in
+// state.PendingReactions. Called from ReconcileRunningIssues after
+// reconcileTrackerState. Skipped entirely when params.CIProvider is nil.
 //
-// Entries that are not yet due (PendingRetryAt in the future) are re-enqueued
-// without making an API call, applying exponential backoff. Entries older
-// than the configured TTL are dropped and a warning is logged.
+// Entries that are not yet due (PendingRetryAt in the future) are
+// re-enqueued without making an API call, applying exponential backoff.
+// Entries older than the configured TTL are dropped and a warning is logged.
 func reconcileCIStatus(state *State, params ReconcileParams, log *slog.Logger, ctx context.Context, metrics domain.Metrics) {
 	if params.CIProvider == nil {
 		return
@@ -65,10 +65,22 @@ func reconcileCIStatus(state *State, params ReconcileParams, log *slog.Logger, c
 	ttl := params.CIPendingTTL
 	base := time.Duration(state.PollIntervalMS) * time.Millisecond
 
-	for issueID, pending := range state.PendingCICheck {
-		delete(state.PendingCICheck, issueID)
+	for key, pending := range state.PendingReactions {
+		if pending.Kind != ReactionKindCI {
+			continue
+		}
+		delete(state.PendingReactions, key)
 
-		entryLog := logging.WithIssue(log, issueID, pending.Identifier)
+		ciData, ok := pending.KindData.(*CIReactionData)
+		if !ok {
+			log.ErrorContext(ctx, "unexpected KindData type for CI reaction",
+				slog.String("issue_id", pending.IssueID),
+				slog.String("type", fmt.Sprintf("%T", pending.KindData)),
+			)
+			continue
+		}
+
+		entryLog := logging.WithIssue(log, pending.IssueID, pending.Identifier)
 
 		if ttl > 0 && now.Sub(pending.CreatedAt) > ttl {
 			entryLog.Warn("ci pending entry exceeded ttl, dropping",
@@ -79,13 +91,33 @@ func reconcileCIStatus(state *State, params ReconcileParams, log *slog.Logger, c
 		}
 
 		if now.Before(pending.PendingRetryAt) {
-			state.PendingCICheck[issueID] = pending
+			state.PendingReactions[key] = pending
 			continue
 		}
 
-		ref := pending.SHA
+		ref := ciData.SHA
 		if ref == "" {
-			ref = pending.Branch
+			ref = ciData.Branch
+		}
+
+		// Fingerprint dedup: upsert the fingerprint row (resets dispatched
+		// when the ref changes) and skip entries already dispatched for this
+		// exact ref. Errors are non-fatal — best-effort dedup.
+		if err := params.Store.UpsertReactionFingerprint(ctx, pending.IssueID, ReactionKindCI, ref); err != nil {
+			entryLog.Warn("failed to upsert reaction fingerprint",
+				slog.Any("error", err),
+			)
+		}
+		storedFP, dispatched, fpErr := params.Store.GetReactionFingerprint(ctx, pending.IssueID, ReactionKindCI)
+		if fpErr != nil {
+			entryLog.Warn("failed to get reaction fingerprint, proceeding without dedup",
+				slog.Any("error", fpErr),
+			)
+		} else if storedFP == ref && dispatched {
+			entryLog.Debug("CI reaction already dispatched for this ref, skipping",
+				slog.String("ref", ref),
+			)
+			continue
 		}
 
 		result, err := params.CIProvider.FetchCIStatus(ctx, ref)
@@ -100,15 +132,22 @@ func reconcileCIStatus(state *State, params ReconcileParams, log *slog.Logger, c
 				slog.Int64("retry_after_ms", int64(delay/time.Millisecond)),
 			)
 			metrics.IncCIStatusChecks("error")
-			state.PendingCICheck[issueID] = pending
+			state.PendingReactions[key] = pending
 			continue
 		}
 
 		metrics.IncCIStatusChecks(string(result.Status))
 
+		rkey := ReactionKey(pending.IssueID, ReactionKindCI)
+
 		switch result.Status {
 		case domain.CIStatusPassing:
-			delete(state.CIFixAttempts, issueID)
+			delete(state.ReactionAttempts, rkey)
+			if err := params.Store.DeleteReactionFingerprint(ctx, pending.IssueID, ReactionKindCI); err != nil {
+				entryLog.Warn("failed to delete reaction fingerprint on CI pass",
+					slog.Any("error", err),
+				)
+			}
 			entryLog.Info("CI passing, no action needed",
 				slog.String("ref", ref),
 			)
@@ -117,7 +156,7 @@ func reconcileCIStatus(state *State, params ReconcileParams, log *slog.Logger, c
 			pending.PendingAttempts++
 			delay := computeCIPendingDelay(base, pending.PendingAttempts)
 			pending.PendingRetryAt = now.Add(delay)
-			state.PendingCICheck[issueID] = pending
+			state.PendingReactions[key] = pending
 			entryLog.Debug("CI pending, will re-check after backoff",
 				slog.String("ref", ref),
 				slog.Int("pending_attempts", pending.PendingAttempts),
@@ -135,7 +174,7 @@ func reconcileCIStatus(state *State, params ReconcileParams, log *slog.Logger, c
 			metrics.IncCIStatusChecks("error")
 			pending.PendingAttempts++
 			pending.PendingRetryAt = now.Add(computeCIPendingDelay(base, pending.PendingAttempts))
-			state.PendingCICheck[issueID] = pending
+			state.PendingReactions[key] = pending
 		}
 	}
 }
@@ -146,7 +185,7 @@ func reconcileCIStatus(state *State, params ReconcileParams, log *slog.Logger, c
 func handleCIFailure(
 	state *State,
 	params ReconcileParams,
-	pending *PendingCICheckEntry,
+	pending *PendingReaction,
 	result domain.CIResult,
 	ref string,
 	log *slog.Logger,
@@ -171,8 +210,9 @@ func handleCIFailure(
 		)
 	}
 
-	state.CIFixAttempts[pending.IssueID]++
-	attempts := state.CIFixAttempts[pending.IssueID]
+	rkey := ReactionKey(pending.IssueID, ReactionKindCI)
+	state.ReactionAttempts[rkey]++
+	attempts := state.ReactionAttempts[rkey]
 
 	maxRetries := params.CIFeedback.MaxRetries
 
@@ -188,16 +228,24 @@ func handleCIFailure(
 	nextAttempt := pending.Attempt
 
 	ScheduleRetry(state, ScheduleRetryParams{
-		IssueID:          pending.IssueID,
-		Identifier:       pending.Identifier,
-		DisplayID:        pending.DisplayID,
-		Attempt:          nextAttempt,
-		DelayMS:          continuationDelayMS,
-		Error:            "",
-		LastSSHHost:      pending.LastSSHHost,
-		CIFailureContext: ciContext,
+		IssueID:     pending.IssueID,
+		Identifier:  pending.Identifier,
+		DisplayID:   pending.DisplayID,
+		Attempt:     nextAttempt,
+		DelayMS:     continuationDelayMS,
+		Error:       "",
+		LastSSHHost: pending.LastSSHHost,
+		ContinuationContext: map[string]any{
+			"ci_failure": ciContext,
+		},
 	}, params.OnRetryFire)
 	metrics.IncRetries(triggerCIFix)
+
+	if err := params.Store.MarkReactionDispatched(ctx, pending.IssueID, ReactionKindCI); err != nil {
+		log.Warn("failed to mark reaction fingerprint dispatched",
+			slog.Any("error", err),
+		)
+	}
 
 	log.Info("CI failure detected, scheduling CI fix dispatch",
 		slog.String("ref", ref),
@@ -213,7 +261,7 @@ func handleCIFailure(
 func escalateCIFailure(
 	state *State,
 	params ReconcileParams,
-	pending *PendingCICheckEntry,
+	pending *PendingReaction,
 	result domain.CIResult,
 	ref string,
 	attempts int,
@@ -292,7 +340,13 @@ func escalateCIFailure(
 	}
 
 	delete(state.Claimed, pending.IssueID)
-	delete(state.CIFixAttempts, pending.IssueID)
+	ClearReactionsForIssue(ctx, state, params.Store, pending.IssueID, log)
+
+	if err := params.Store.DeleteReactionFingerprint(ctx, pending.IssueID, ReactionKindCI); err != nil {
+		log.Warn("failed to delete reaction fingerprint during CI escalation",
+			slog.Any("error", err),
+		)
+	}
 }
 
 // buildCIEscalationComment builds a plain-text escalation comment for

@@ -39,6 +39,26 @@ func (m *mockReconcileStore) AppendRunHistory(_ context.Context, run persistence
 	return run, nil
 }
 
+func (m *mockReconcileStore) DeleteReactionFingerprintsByIssue(_ context.Context, _ string) error {
+	return nil
+}
+
+func (m *mockReconcileStore) UpsertReactionFingerprint(_ context.Context, _, _, _ string) error {
+	return nil
+}
+
+func (m *mockReconcileStore) GetReactionFingerprint(_ context.Context, _, _ string) (string, bool, error) {
+	return "", false, nil
+}
+
+func (m *mockReconcileStore) MarkReactionDispatched(_ context.Context, _, _ string) error {
+	return nil
+}
+
+func (m *mockReconcileStore) DeleteReactionFingerprint(_ context.Context, _, _ string) error {
+	return nil
+}
+
 // mockReconcileTracker implements domain.TrackerAdapter for reconcile tests.
 // Only FetchIssueStatesByIDs is exercised; the other methods panic if called.
 type mockReconcileTracker struct {

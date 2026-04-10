@@ -142,6 +142,26 @@ func (s *stubStore) QueryBudgetExhaustedIssues(_ context.Context, _ []string, _ 
 	return result, nil
 }
 
+func (s *stubStore) DeleteReactionFingerprintsByIssue(_ context.Context, _ string) error {
+	return nil
+}
+
+func (s *stubStore) UpsertReactionFingerprint(_ context.Context, _, _, _ string) error {
+	return nil
+}
+
+func (s *stubStore) GetReactionFingerprint(_ context.Context, _, _ string) (string, bool, error) {
+	return "", false, nil
+}
+
+func (s *stubStore) MarkReactionDispatched(_ context.Context, _, _ string) error {
+	return nil
+}
+
+func (s *stubStore) DeleteReactionFingerprint(_ context.Context, _, _ string) error {
+	return nil
+}
+
 // stubObserver implements [Observer] with an atomic call counter.
 type stubObserver struct {
 	calls atomic.Int64

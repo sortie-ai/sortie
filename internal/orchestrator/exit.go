@@ -104,8 +104,8 @@ type HandleWorkerExitParams struct {
 	HostPool *HostPool
 
 	// CIProvider is the CI status provider. When non-nil, HandleWorkerExit
-	// populates state.PendingCICheck on normal exits so the reconcile loop
-	// can poll CI status.
+	// populates state.PendingReactions on normal exits so the reconcile
+	// loop can poll CI status.
 	CIProvider domain.CIStatusProvider
 }
 
@@ -383,15 +383,19 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 					if params.NowFunc != nil {
 						nowCI = params.NowFunc().UTC()
 					}
-					state.PendingCICheck[workerResult.IssueID] = &PendingCICheckEntry{
+					rkey := ReactionKey(workerResult.IssueID, ReactionKindCI)
+					state.PendingReactions[rkey] = &PendingReaction{
 						IssueID:     workerResult.IssueID,
 						Identifier:  workerResult.Identifier,
 						DisplayID:   entry.Issue.DisplayID,
 						Attempt:     normalizeAttempt(entry.RetryAttempt) + 1,
-						Branch:      scm.Branch,
-						SHA:         scm.SHA,
+						Kind:        ReactionKindCI,
 						LastSSHHost: workerResult.SSHHost,
 						CreatedAt:   nowCI,
+						KindData: &CIReactionData{
+							Branch: scm.Branch,
+							SHA:    scm.SHA,
+						},
 					}
 				}
 			}

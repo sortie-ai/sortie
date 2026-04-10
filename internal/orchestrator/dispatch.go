@@ -226,9 +226,10 @@ type ScheduleRetryParams struct {
 	Error       string
 	LastSSHHost string // Runtime-only: SSH host from previous attempt for retry affinity.
 
-	// CIFailureContext carries CI failure data to inject into the prompt
-	// template on the first turn of the retry worker. Nil for non-CI retries.
-	CIFailureContext map[string]any
+	// ContinuationContext carries reaction continuation data to inject
+	// into the prompt template on the first turn of the retry worker.
+	// Nil for non-reaction retries.
+	ContinuationContext map[string]any
 }
 
 // ScheduleRetry cancels any existing retry for the issue, creates a new
@@ -261,17 +262,17 @@ func ScheduleRetry(state *State, params ScheduleRetryParams, onFire func(issueID
 	})
 
 	state.RetryAttempts[params.IssueID] = &RetryEntry{
-		IssueID:          params.IssueID,
-		Identifier:       params.Identifier,
-		DisplayID:        params.DisplayID,
-		Attempt:          params.Attempt,
-		DueAtMS:          dueAtMS,
-		Error:            params.Error,
-		TimerHandle:      timer,
-		LastSSHHost:      params.LastSSHHost,
-		CIFailureContext: params.CIFailureContext,
-		scheduledAt:      time.Now(),
-		scheduledDelayMS: delayMS,
+		IssueID:             params.IssueID,
+		Identifier:          params.Identifier,
+		DisplayID:           params.DisplayID,
+		Attempt:             params.Attempt,
+		DueAtMS:             dueAtMS,
+		Error:               params.Error,
+		TimerHandle:         timer,
+		LastSSHHost:         params.LastSSHHost,
+		ContinuationContext: params.ContinuationContext,
+		scheduledAt:         time.Now(),
+		scheduledDelayMS:    delayMS,
 	}
 }
 

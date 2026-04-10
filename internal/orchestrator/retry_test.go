@@ -46,6 +46,26 @@ func (m *mockRetryStore) AppendRunHistory(_ context.Context, run persistence.Run
 	return run, nil
 }
 
+func (m *mockRetryStore) DeleteReactionFingerprintsByIssue(_ context.Context, _ string) error {
+	return nil
+}
+
+func (m *mockRetryStore) UpsertReactionFingerprint(_ context.Context, _, _, _ string) error {
+	return nil
+}
+
+func (m *mockRetryStore) GetReactionFingerprint(_ context.Context, _, _ string) (string, bool, error) {
+	return "", false, nil
+}
+
+func (m *mockRetryStore) MarkReactionDispatched(_ context.Context, _, _ string) error {
+	return nil
+}
+
+func (m *mockRetryStore) DeleteReactionFingerprint(_ context.Context, _, _ string) error {
+	return nil
+}
+
 // mockRetryTracker implements domain.TrackerAdapter for retry timer tests.
 // Only FetchCandidateIssues is used by HandleRetryTimer; the remaining
 // methods panic if called.
@@ -1239,25 +1259,27 @@ func TestHandleRetryTimer_BudgetExhaustedBlocksShouldDispatch(t *testing.T) {
 	}
 }
 
-func TestHandleRetryTimer_CIFailureContextPropagated(t *testing.T) {
+func TestHandleRetryTimer_ContinuationContextPropagated(t *testing.T) {
 	t.Parallel()
 
-	// CI failure context carried on the retry entry should be forwarded to
+	// Continuation context carried on the retry entry should be forwarded to
 	// the running entry so the worker can inject it into the turn prompt.
 	const id = "ISS-CI-RETRY"
-	ciContext := map[string]any{
-		"status":        "failing",
-		"failing_count": 3,
-		"ref":           "feature/fix",
+	contContext := map[string]any{
+		"ci_failure": map[string]any{
+			"status":        "failing",
+			"failing_count": 3,
+			"ref":           "feature/fix",
+		},
 	}
 
 	state := NewState(5000, 4, nil, AgentTotals{})
 	state.Claimed[id] = struct{}{}
 	state.RetryAttempts[id] = &RetryEntry{
-		IssueID:          id,
-		Identifier:       id,
-		Attempt:          2,
-		CIFailureContext: ciContext,
+		IssueID:             id,
+		Identifier:          id,
+		Attempt:             2,
+		ContinuationContext: contContext,
 	}
 
 	store := &mockRetryStore{}
@@ -1274,31 +1296,35 @@ func TestHandleRetryTimer_CIFailureContextPropagated(t *testing.T) {
 	if !ok {
 		t.Fatal("issue not dispatched; state.Running[id] missing")
 	}
-	if entry.CIFailureContext == nil {
-		t.Fatal("RunningEntry.CIFailureContext is nil; want CI failure map")
+	if entry.ContinuationContext == nil {
+		t.Fatal("RunningEntry.ContinuationContext is nil; want continuation map")
 	}
-	if entry.CIFailureContext["status"] != "failing" {
-		t.Errorf("CIFailureContext[status] = %v, want %q", entry.CIFailureContext["status"], "failing")
+	ciData, ok := entry.ContinuationContext["ci_failure"].(map[string]any)
+	if !ok {
+		t.Fatal("ContinuationContext[ci_failure] is not map[string]any")
 	}
-	if entry.CIFailureContext["failing_count"] != 3 {
-		t.Errorf("CIFailureContext[failing_count] = %v, want 3", entry.CIFailureContext["failing_count"])
+	if ciData["status"] != "failing" {
+		t.Errorf("ContinuationContext[ci_failure][status] = %v, want %q", ciData["status"], "failing")
+	}
+	if ciData["failing_count"] != 3 {
+		t.Errorf("ContinuationContext[ci_failure][failing_count] = %v, want 3", ciData["failing_count"])
 	}
 }
 
-func TestHandleRetryTimer_NilCIFailureContext_NotPropagated(t *testing.T) {
+func TestHandleRetryTimer_NilContinuationContext_NotPropagated(t *testing.T) {
 	t.Parallel()
 
-	// When the retry entry carries no CI failure context, the running entry
+	// When the retry entry carries no continuation context, the running entry
 	// must not have one set either (field stays nil; no accidental injection).
 	const id = "ISS-NO-CI"
 
 	state := NewState(5000, 4, nil, AgentTotals{})
 	state.Claimed[id] = struct{}{}
 	state.RetryAttempts[id] = &RetryEntry{
-		IssueID:          id,
-		Identifier:       id,
-		Attempt:          1,
-		CIFailureContext: nil, // explicit nil
+		IssueID:             id,
+		Identifier:          id,
+		Attempt:             1,
+		ContinuationContext: nil,
 	}
 
 	store := &mockRetryStore{}
@@ -1315,7 +1341,7 @@ func TestHandleRetryTimer_NilCIFailureContext_NotPropagated(t *testing.T) {
 	if !ok {
 		t.Fatal("issue not dispatched; state.Running[id] missing")
 	}
-	if entry.CIFailureContext != nil {
-		t.Errorf("RunningEntry.CIFailureContext = %v, want nil", entry.CIFailureContext)
+	if entry.ContinuationContext != nil {
+		t.Errorf("RunningEntry.ContinuationContext = %v, want nil", entry.ContinuationContext)
 	}
 }

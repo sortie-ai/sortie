@@ -481,7 +481,19 @@ func TestRender_Concurrent(t *testing.T) {
 	wg.Wait()
 }
 
-func TestRender_WithCIFailure(t *testing.T) {
+func TestWithContinuationContext_UnregisteredKeyPanics(t *testing.T) {
+	t.Parallel()
+
+	defer func() {
+		if r := recover(); r == nil {
+			t.Error("WithContinuationContext with unregistered key did not panic; want panic")
+		}
+	}()
+
+	WithContinuationContext(map[string]any{"unregistered_key": "value"})
+}
+
+func TestRender_WithContinuationContext(t *testing.T) {
 	t.Parallel()
 
 	t.Run("DefaultNil_NoError", func(t *testing.T) {
@@ -501,7 +513,7 @@ func TestRender_WithCIFailure(t *testing.T) {
 		}
 	})
 
-	t.Run("WithCIFailure_nil_Falsy", func(t *testing.T) {
+	t.Run("WithContinuationContext_nil_Falsy", func(t *testing.T) {
 		t.Parallel()
 		tmpl, err := Parse(`{{ if .ci_failure }}FAIL{{ end }}`, "WORKFLOW.md", 0)
 		if err != nil {
@@ -510,17 +522,17 @@ func TestRender_WithCIFailure(t *testing.T) {
 		got, err := tmpl.Render(
 			map[string]any{"title": "t"}, nil,
 			RunContext{TurnNumber: 1, MaxTurns: 5},
-			WithCIFailure(nil),
+			WithContinuationContext(map[string]any{"ci_failure": nil}),
 		)
 		if err != nil {
-			t.Fatalf("render with WithCIFailure(nil): %v", err)
+			t.Fatalf("render with WithContinuationContext(ci_failure=nil): %v", err)
 		}
 		if got != "" {
-			t.Errorf("rendered %q, want empty string when WithCIFailure(nil)", got)
+			t.Errorf("rendered %q, want empty string when WithContinuationContext(ci_failure=nil)", got)
 		}
 	})
 
-	t.Run("WithCIFailure_map_Truthy", func(t *testing.T) {
+	t.Run("WithContinuationContext_map_Truthy", func(t *testing.T) {
 		t.Parallel()
 		tmpl, err := Parse(
 			`{{ if .ci_failure }}{{ index .ci_failure "status" }}{{ end }}`,
@@ -532,7 +544,7 @@ func TestRender_WithCIFailure(t *testing.T) {
 		got, err := tmpl.Render(
 			map[string]any{"title": "t"}, nil,
 			RunContext{TurnNumber: 1, MaxTurns: 5},
-			WithCIFailure(map[string]any{"status": "failing"}),
+			WithContinuationContext(map[string]any{"ci_failure": map[string]any{"status": "failing"}}),
 		)
 		if err != nil {
 			t.Fatalf("render with ci_failure map: %v", err)
@@ -554,7 +566,7 @@ func TestRender_WithCIFailure(t *testing.T) {
 		got, err := BuildTurnPrompt(
 			tmpl,
 			map[string]any{"title": "t"}, nil, 1, 5,
-			WithCIFailure(map[string]any{"count": 3}),
+			WithContinuationContext(map[string]any{"ci_failure": map[string]any{"count": 3}}),
 		)
 		if err != nil {
 			t.Fatalf("BuildTurnPrompt: %v", err)

@@ -19,6 +19,11 @@ type ReconcileStore interface {
 	SaveRetryEntry(ctx context.Context, entry persistence.RetryEntry) error
 	DeleteRetryEntry(ctx context.Context, issueID string) error
 	AppendRunHistory(ctx context.Context, run persistence.RunHistory) (persistence.RunHistory, error)
+	DeleteReactionFingerprintsByIssue(ctx context.Context, issueID string) error
+	UpsertReactionFingerprint(ctx context.Context, issueID, kind, fingerprint string) error
+	GetReactionFingerprint(ctx context.Context, issueID, kind string) (fingerprint string, dispatched bool, err error)
+	MarkReactionDispatched(ctx context.Context, issueID, kind string) error
+	DeleteReactionFingerprint(ctx context.Context, issueID, kind string) error
 }
 
 // ReconcileParams holds the dependencies for [ReconcileRunningIssues] that
@@ -65,14 +70,14 @@ type ReconcileParams struct {
 	Metrics domain.Metrics
 
 	// CIProvider is the CI status provider. When non-nil, the reconcile
-	// loop polls CI status for issues in state.PendingCICheck.
+	// loop polls CI status for issues in state.PendingReactions.
 	CIProvider domain.CIStatusProvider
 
 	// CIFeedback holds CI feedback tuning (max retries, escalation mode).
 	// Only read when CIProvider is non-nil.
 	CIFeedback config.CIFeedbackConfig
 
-	// CIPendingTTL is the maximum age of a PendingCICheck entry before
+	// CIPendingTTL is the maximum age of a PendingReaction entry before
 	// it is dropped and a warning is logged. Protects against indefinite
 	// spinning when the CI provider is unreachable and no new worker exit
 	// refreshes the entry. Zero or negative disables TTL enforcement

@@ -116,15 +116,42 @@ func Parse(body, source string, frontMatterLines int) (*Template, error) {
 }
 
 // RenderOption applies optional overrides to the template data map
-// before execution. Use [WithCIFailure] to inject CI failure context.
+// before execution. Use [WithContinuationContext] to inject reaction
+// continuation data.
 type RenderOption func(m map[string]any)
 
-// WithCIFailure returns a [RenderOption] that sets the "ci_failure"
-// template variable to the provided map. Pass nil to explicitly clear
-// (which is also the default when no option is supplied).
-func WithCIFailure(data map[string]any) RenderOption {
+// continuationKeys lists all template variable names reserved for
+// reaction continuation context. Each key receives a nil default in
+// [Template.Render] so templates using missingkey=error do not reject
+// references to absent reaction types.
+var continuationKeys = []string{"ci_failure"}
+
+// isContinuationKey reports whether key is a registered continuation
+// template variable name.
+func isContinuationKey(key string) bool {
+	for _, k := range continuationKeys {
+		if k == key {
+			return true
+		}
+	}
+	return false
+}
+
+// WithContinuationContext returns a [RenderOption] that merges each
+// key from data into the template data map. Keys must be registered
+// in [continuationKeys]; passing an unregistered key panics
+// (programmer error: the reaction kind must register its template key
+// before use).
+func WithContinuationContext(data map[string]any) RenderOption {
+	for k := range data {
+		if !isContinuationKey(k) {
+			panic(fmt.Sprintf("prompt: continuation key %q is not in continuationKeys whitelist", k))
+		}
+	}
 	return func(m map[string]any) {
-		m["ci_failure"] = data
+		for k, v := range data {
+			m[k] = v
+		}
 	}
 }
 
@@ -137,10 +164,12 @@ func WithCIFailure(data map[string]any) RenderOption {
 // with line numbers adjusted to WORKFLOW.md-relative positions.
 func (t *Template) Render(issue map[string]any, attempt any, run RunContext, opts ...RenderOption) (string, error) {
 	templateVars := map[string]any{
-		"issue":      issue,
-		"attempt":    attempt,
-		"run":        runContextToMap(run),
-		"ci_failure": nil,
+		"issue":   issue,
+		"attempt": attempt,
+		"run":     runContextToMap(run),
+	}
+	for _, k := range continuationKeys {
+		templateVars[k] = nil
 	}
 
 	for _, opt := range opts {
