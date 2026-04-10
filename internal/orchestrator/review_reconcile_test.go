@@ -183,7 +183,6 @@ func stateWithReviewReaction(t *testing.T, issueID string, prNumber int) *State 
 // defaultReviewConfig returns a ReviewReactionConfig with sensible defaults.
 func defaultReviewConfig() ReviewReactionConfig {
 	return ReviewReactionConfig{
-		MaxRetries:           2,
 		Escalation:           "label",
 		EscalationLabel:      "needs-human",
 		PollIntervalMS:       60000,

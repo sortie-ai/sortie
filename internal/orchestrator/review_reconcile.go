@@ -49,7 +49,7 @@ func reconcileReviewComments(state *State, params ReconcileParams, log *slog.Log
 		}
 		delete(state.PendingReactions, key)
 
-		data, ok := pending.KindData.(*ReviewReactionData)
+		reviewData, ok := pending.KindData.(*ReviewReactionData)
 		if !ok {
 			log.ErrorContext(ctx, "unexpected KindData type for review reaction",
 				slog.String("issue_id", pending.IssueID),
@@ -79,12 +79,12 @@ func reconcileReviewComments(state *State, params ReconcileParams, log *slog.Log
 		rkey := ReactionKey(pending.IssueID, ReactionKindReview)
 		turnCount := state.ReactionAttempts[rkey]
 		if turnCount >= params.ReviewConfig.MaxContinuationTurns {
-			escalateReviewFailure(state, params, pending, turnCount, data, entryLog, ctx, metrics)
+			escalateReviewFailure(state, params, pending, turnCount, reviewData, entryLog, ctx, metrics)
 			continue
 		}
 
 		// Fetch reviews from SCM.
-		comments, err := params.SCMAdapter.FetchPendingReviews(ctx, data.PRNumber, data.Owner, data.Repo)
+		comments, err := params.SCMAdapter.FetchPendingReviews(ctx, reviewData.PRNumber, reviewData.Owner, reviewData.Repo)
 		if err != nil {
 			pending.PendingAttempts++
 			delay := computeReviewPendingDelay(pending.PendingAttempts)
@@ -115,7 +115,7 @@ func reconcileReviewComments(state *State, params ReconcileParams, log *slog.Log
 			}
 		}
 		if !maxTime.IsZero() {
-			data.LastEventAt = maxTime
+			reviewData.LastEventAt = maxTime
 		}
 
 		// No actionable comments — re-enqueue with poll interval delay.
@@ -148,8 +148,8 @@ func reconcileReviewComments(state *State, params ReconcileParams, log *slog.Log
 		}
 
 		// Debounce: if LastEventAt is recent, defer dispatch.
-		if !data.LastEventAt.IsZero() && now.Sub(data.LastEventAt) < debounceDuration {
-			pending.PendingRetryAt = data.LastEventAt.Add(debounceDuration)
+		if !reviewData.LastEventAt.IsZero() && now.Sub(reviewData.LastEventAt) < debounceDuration {
+			pending.PendingRetryAt = reviewData.LastEventAt.Add(debounceDuration)
 			state.PendingReactions[key] = pending
 			entryLog.Debug("review comments within debounce window, deferring")
 			continue
@@ -218,7 +218,7 @@ func escalateReviewFailure(
 	params ReconcileParams,
 	pending *PendingReaction,
 	turnCount int,
-	data *ReviewReactionData,
+	reviewData *ReviewReactionData,
 	log *slog.Logger,
 	ctx context.Context,
 	metrics domain.Metrics,
@@ -262,7 +262,7 @@ func escalateReviewFailure(
 		}
 
 	case "comment", "":
-		commentText := buildReviewEscalationComment(data, turnCount)
+		commentText := buildReviewEscalationComment(reviewData, turnCount)
 		if params.TrackerAdapter != nil {
 			issueID := pending.IssueID
 			tracker := params.TrackerAdapter
@@ -313,9 +313,9 @@ func escalateReviewFailure(
 
 // buildReviewEscalationComment builds a plain-text escalation comment
 // for review fixes that exceeded the turn budget.
-func buildReviewEscalationComment(data *ReviewReactionData, turnCount int) string {
+func buildReviewEscalationComment(reviewData *ReviewReactionData, turnCount int) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "Review fix continuation turns exhausted for PR #%d on branch %s.\n", data.PRNumber, data.Branch)
+	fmt.Fprintf(&b, "Review fix continuation turns exhausted for PR #%d on branch %s.\n", reviewData.PRNumber, reviewData.Branch)
 	fmt.Fprintf(&b, "%d continuation turns attempted. Remaining review comments require human attention.", turnCount)
 	return b.String()
 }

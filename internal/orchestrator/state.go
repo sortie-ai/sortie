@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
+	"math"
 	"slices"
 	"strings"
 	"sync"
@@ -356,7 +357,6 @@ type ReviewReactionData struct {
 // ReviewReactionConfig holds validated review-specific configuration
 // extracted from [config.ReactionConfig] at startup.
 type ReviewReactionConfig struct {
-	MaxRetries           int
 	Escalation           string
 	EscalationLabel      string
 	PollIntervalMS       int
@@ -724,7 +724,6 @@ func RuntimeSnapshot(state *State, now time.Time) RuntimeSnapshotResult {
 // invalid values.
 func BuildReviewReactionConfig(rc config.ReactionConfig) (ReviewReactionConfig, error) {
 	cfg := ReviewReactionConfig{
-		MaxRetries:           rc.MaxRetries,
 		Escalation:           rc.Escalation,
 		EscalationLabel:      rc.EscalationLabel,
 		PollIntervalMS:       120000,
@@ -780,11 +779,15 @@ func BuildReviewReactionConfig(rc config.ReactionConfig) (ReviewReactionConfig, 
 }
 
 // toInt converts a YAML-decoded value (typically int or float64) to int.
+// Fractional float64 values are rejected.
 func toInt(v any) (int, error) {
 	switch n := v.(type) {
 	case int:
 		return n, nil
 	case float64:
+		if n != math.Trunc(n) {
+			return 0, fmt.Errorf("expected integer value, got fractional %v", n)
+		}
 		return int(n), nil
 	case int64:
 		return int(n), nil

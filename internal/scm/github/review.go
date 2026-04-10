@@ -174,13 +174,13 @@ func (a *GitHubSCMAdapter) fetchAllReviews(ctx context.Context, prNumber int, ow
 	path := fmt.Sprintf("/repos/%s/%s/pulls/%d/reviews", url.PathEscape(owner), url.PathEscape(repo), prNumber)
 	params := url.Values{"per_page": {"100"}}
 
+	body, nextURL, err := a.client.do(ctx, "GET", path, params)
+	if err != nil {
+		return nil, toSCMError(err)
+	}
+
 	var all []githubReview
 	for page := 0; page < maxReviewPages; page++ {
-		body, linkNext, err := a.client.do(ctx, "GET", path, params)
-		if err != nil {
-			return nil, toSCMError(err)
-		}
-
 		var batch []githubReview
 		if err := json.Unmarshal(body, &batch); err != nil {
 			return nil, &domain.SCMError{
@@ -191,25 +191,13 @@ func (a *GitHubSCMAdapter) fetchAllReviews(ctx context.Context, prNumber int, ow
 		}
 		all = append(all, batch...)
 
-		if linkNext == "" {
+		if nextURL == "" {
 			break
 		}
-		// Switch to pagination via full URL.
-		body, linkNext, err = a.client.doURL(ctx, linkNext)
+
+		body, nextURL, err = a.client.doURL(ctx, nextURL)
 		if err != nil {
 			return nil, toSCMError(err)
-		}
-		var nextBatch []githubReview
-		if err := json.Unmarshal(body, &nextBatch); err != nil {
-			return nil, &domain.SCMError{
-				Kind:    domain.ErrSCMPayload,
-				Message: "failed to parse reviews pagination response",
-				Err:     err,
-			}
-		}
-		all = append(all, nextBatch...)
-		if linkNext == "" {
-			break
 		}
 	}
 	return all, nil
@@ -220,13 +208,13 @@ func (a *GitHubSCMAdapter) fetchReviewComments(ctx context.Context, prNumber int
 		url.PathEscape(owner), url.PathEscape(repo), prNumber, reviewID)
 	params := url.Values{"per_page": {"100"}}
 
+	body, nextURL, err := a.client.do(ctx, "GET", path, params)
+	if err != nil {
+		return nil, toSCMError(err)
+	}
+
 	var all []githubReviewComment
 	for page := 0; page < maxReviewPages; page++ {
-		body, linkNext, err := a.client.do(ctx, "GET", path, params)
-		if err != nil {
-			return nil, toSCMError(err)
-		}
-
 		var batch []githubReviewComment
 		if err := json.Unmarshal(body, &batch); err != nil {
 			return nil, &domain.SCMError{
@@ -237,24 +225,13 @@ func (a *GitHubSCMAdapter) fetchReviewComments(ctx context.Context, prNumber int
 		}
 		all = append(all, batch...)
 
-		if linkNext == "" {
+		if nextURL == "" {
 			break
 		}
-		body, linkNext, err = a.client.doURL(ctx, linkNext)
+
+		body, nextURL, err = a.client.doURL(ctx, nextURL)
 		if err != nil {
 			return nil, toSCMError(err)
-		}
-		var nextBatch []githubReviewComment
-		if err := json.Unmarshal(body, &nextBatch); err != nil {
-			return nil, &domain.SCMError{
-				Kind:    domain.ErrSCMPayload,
-				Message: "failed to parse review comments pagination response",
-				Err:     err,
-			}
-		}
-		all = append(all, nextBatch...)
-		if linkNext == "" {
-			break
 		}
 	}
 	return all, nil
