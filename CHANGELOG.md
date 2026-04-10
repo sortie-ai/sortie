@@ -7,20 +7,96 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.6.0] - 2026-04-10
+
 ### Added
 
+- Self-review loop before PR creation: the orchestrator generates a workspace
+  diff, executes configurable verification commands (tests, linters), assembles
+  a structured review prompt, and iterates with the agent up to a configurable
+  cap before proceeding. Opt-in via the `self_review:` block in WORKFLOW.md
+  front matter (`max_iterations`, `verify_commands`, `diff_max_bytes`).
+  ([#312](https://github.com/sortie-ai/sortie/issues/312),
+  [#413](https://github.com/sortie-ai/sortie/pull/413))
+- PR review comment routing: when a reviewer requests changes on an
+  agent-created PR, the orchestrator detects `CHANGES_REQUESTED` reviews,
+  extracts the review comments, and dispatches a continuation turn so the
+  agent can address feedback automatically. Configurable via
+  `reactions.review_comments` in WORKFLOW.md (`max_retries`, `debounce_ms`,
+  `escalation`, `escalation_label`). Includes `SCMAdapter` domain interface
+  for PR and review operations with a GitHub Checks/Reviews API
+  implementation.
+  ([#305](https://github.com/sortie-ai/sortie/issues/305),
+  [#425](https://github.com/sortie-ai/sortie/pull/425))
+- Unified `reactions` config block in WORKFLOW.md for event-driven
+  continuation triggers. `reactions.ci_failure` replaces the top-level
+  `ci_feedback` key (which remains supported for backward compatibility).
+  Each reaction type shares `provider`, `max_retries`, `escalation`, and
+  `escalation_label` fields.
+  ([#418](https://github.com/sortie-ai/sortie/issues/418),
+  [#422](https://github.com/sortie-ai/sortie/pull/422))
 - Windows process lifecycle support for agent adapters and workspace hooks.
   Agent subprocesses are now placed in Windows Job Objects with
   `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`, enabling full process tree cleanup on
   timeout or cancellation. Graceful shutdown sends `CTRL_BREAK_EVENT` to the
   process group; force-terminate uses `TerminateJobObject`. Workspace hooks
   execute via `cmd.exe /C` on Windows with their own Job Object for timeout
-  enforcement. The `procutil` package exposes three new cross-platform
-  functions — `SignalGraceful`, `AssignProcess`, and `CleanupProcess` — and
-  `WasSignaled` is now platform-aware. Adapters no longer reference
-  `syscall.SIGTERM` directly.
+  enforcement. The `procutil` package exposes cross-platform functions —
+  `SignalGraceful`, `AssignProcess`, `CleanupProcess`, `SetProcessGroup`,
+  `KillProcessGroup` — and `WasSignaled` is now platform-aware. Adapters
+  no longer reference `syscall.SIGTERM` directly.
+  ([#390](https://github.com/sortie-ai/sortie/issues/390),
+  [#391](https://github.com/sortie-ai/sortie/issues/391),
+  [#407](https://github.com/sortie-ai/sortie/pull/407),
+  [#409](https://github.com/sortie-ai/sortie/pull/409))
+
+### Changed
+
+- CI pending backoff base now derives from the operator-configured
+  `poll_interval` instead of a hardcoded 10 s default. A 30 s poll interval
+  produces a `(60 s, 120 s, 240 s, 300 s…)` backoff schedule. Falls back to
+  10 s when `poll_interval` is zero or negative.
+  ([#385](https://github.com/sortie-ai/sortie/issues/385),
+  [#411](https://github.com/sortie-ai/sortie/pull/411))
+
+### Deprecated
+
+- `ci_feedback` top-level config key in WORKFLOW.md. Use
+  `reactions.ci_failure` instead. The legacy key continues to work; when both
+  are present, `reactions.ci_failure` takes precedence.
+  ([#418](https://github.com/sortie-ai/sortie/issues/418),
+  [#422](https://github.com/sortie-ai/sortie/pull/422))
+
+### Fixed
+
+- Workflow Manager continued using the pre-reconfiguration logger after
+  `logging.level` was applied from WORKFLOW.md extensions, causing reload
+  diagnostics to use the wrong log level. The Manager now updates its
+  logger after every reconfiguration.
+  ([#394](https://github.com/sortie-ai/sortie/issues/394),
+  [#410](https://github.com/sortie-ai/sortie/pull/410))
+- Reaction dispatch fingerprinting: `MarkReactionDispatched` was called at
+  schedule time rather than actual dispatch time. If the process restarted
+  between scheduling and dispatch, the fingerprint was permanently marked
+  dispatched while the retry entry was lost, silencing future CI-fix
+  reactions for that SHA.
+  ([#420](https://github.com/sortie-ai/sortie/issues/420),
+  [#421](https://github.com/sortie-ai/sortie/pull/421))
+- Config: non-string YAML values in `reactions` fields (`provider`,
+  `escalation`, `escalation_label`) now produce a `ConfigError` instead of
+  silently coercing to an empty string.
+  ([#423](https://github.com/sortie-ai/sortie/issues/423),
+  [#424](https://github.com/sortie-ai/sortie/pull/424))
+- `install.sh`: detect Rosetta 2 on macOS and prefer the native `arm64`
+  binary over `amd64`.
   ([#391](https://github.com/sortie-ai/sortie/issues/391),
   [#409](https://github.com/sortie-ai/sortie/pull/409))
+
+### Migrations
+
+- 007: Add nullable `review_metadata TEXT` column to `run_history`
+- 008: Add `reaction_fingerprints` table for cross-restart reaction
+  deduplication
 
 ## [1.5.1] - 2026-04-08
 
@@ -581,7 +657,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   execution via GitHub Actions.
 - Architecture Decision Records (ADR-0001 through ADR-0005).
 
-[Unreleased]: https://github.com/sortie-ai/sortie/compare/1.5.1...HEAD
+[Unreleased]: https://github.com/sortie-ai/sortie/compare/1.6.0...HEAD
+[1.6.0]: https://github.com/sortie-ai/sortie/compare/1.5.1...1.6.0
 [1.5.1]: https://github.com/sortie-ai/sortie/compare/1.5.0...1.5.1
 [1.5.0]: https://github.com/sortie-ai/sortie/compare/1.4.0...1.5.0
 [1.4.0]: https://github.com/sortie-ai/sortie/compare/1.3.0...1.4.0
