@@ -441,3 +441,104 @@ func TestValidateFrontMatter(t *testing.T) {
 		})
 	}
 }
+
+// TestValidateFrontMatterReactions verifies that the reactions section with
+// AllowDynamicKeys=true never emits unknown_sub_key warnings for any reaction
+// kind keys, while still emitting type_mismatch when the top-level value is
+// not a map.
+func TestValidateFrontMatterReactions(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		raw        map[string]any
+		cfg        ServiceConfig
+		wantCount  int
+		wantChecks []string
+		wantFields []string
+	}{
+		{
+			name: "ci_failure key produces no unknown_sub_key warning",
+			raw: map[string]any{
+				"reactions": map[string]any{
+					"ci_failure": map[string]any{
+						"provider":      "github-actions",
+						"max_log_lines": 100,
+					},
+				},
+			},
+			wantCount: 0,
+		},
+		{
+			name: "arbitrary reaction kind key produces no warning",
+			raw: map[string]any{
+				"reactions": map[string]any{
+					"review_comments": map[string]any{
+						"max_retries": 3,
+						"custom_flag": "anything",
+					},
+				},
+			},
+			wantCount: 0,
+		},
+		{
+			name: "multiple reaction kinds produce no warnings",
+			raw: map[string]any{
+				"reactions": map[string]any{
+					"ci_failure":      map[string]any{"provider": "github-actions"},
+					"review_comments": map[string]any{"max_retries": 3},
+					"new_kind":        map[string]any{"arbitrary_key": "value"},
+				},
+			},
+			wantCount: 0,
+		},
+		{
+			name:       "reactions section as scalar emits type_mismatch",
+			raw:        map[string]any{"reactions": "not-a-map"},
+			wantCount:  1,
+			wantChecks: []string{"type_mismatch"},
+			wantFields: []string{"reactions"},
+		},
+		{
+			name:      "reactions section absent produces no warning",
+			raw:       map[string]any{},
+			wantCount: 0,
+		},
+		{
+			name: "tracker adapter passthrough unaffected by reactions AllowDynamicKeys",
+			raw: map[string]any{
+				"tracker": map[string]any{
+					"kind": "jira",
+					"jira": map[string]any{"foo": "bar"},
+				},
+				"reactions": map[string]any{
+					"ci_failure": map[string]any{"provider": "github-actions"},
+				},
+			},
+			cfg:       ServiceConfig{Tracker: TrackerConfig{Kind: "jira"}},
+			wantCount: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := ValidateFrontMatter(tt.raw, tt.cfg)
+
+			if len(got) != tt.wantCount {
+				t.Fatalf("ValidateFrontMatter() returned %d warnings, want %d\nwarnings: %+v", len(got), tt.wantCount, got)
+			}
+			for i, wantCheck := range tt.wantChecks {
+				if got[i].Check != wantCheck {
+					t.Errorf("warnings[%d].Check = %q, want %q", i, got[i].Check, wantCheck)
+				}
+			}
+			for i, wantField := range tt.wantFields {
+				if got[i].Field != wantField {
+					t.Errorf("warnings[%d].Field = %q, want %q", i, got[i].Field, wantField)
+				}
+			}
+		})
+	}
+}

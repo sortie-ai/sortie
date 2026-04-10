@@ -31,7 +31,8 @@ type FieldDef struct {
 // SectionSchema defines the known fields for one top-level config section.
 type SectionSchema struct {
 	Fields                  []FieldDef // recognized keys within this section
-	AllowAdapterPassthrough bool       // exempt adapter-kind sub-objects from unknown-key warnings
+	AllowAdapterPassthrough bool       // exempt the adapter-kind sub-object from unknown-key warnings
+	AllowDynamicKeys        bool       // skip all sub-key name and type validation (map-of-maps sections)
 }
 
 // knownFieldsRegistry enumerates the known sub-keys for each top-level
@@ -108,6 +109,10 @@ var knownFieldsRegistry = map[string]SectionSchema{
 			{Name: "max_diff_bytes", Type: FieldInt},
 			{Name: "reviewer", Type: FieldString},
 		},
+	},
+	"reactions": {
+		Fields:           []FieldDef{},
+		AllowDynamicKeys: true,
 	},
 }
 
@@ -188,6 +193,10 @@ func ValidateFrontMatter(raw map[string]any, cfg ServiceConfig) []FrontMatterWar
 				Field:   sectionName,
 				Message: fmt.Sprintf("expected map, got %T", sectionVal),
 			})
+			continue
+		}
+
+		if schema.AllowDynamicKeys {
 			continue
 		}
 
