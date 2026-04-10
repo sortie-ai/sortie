@@ -813,6 +813,117 @@ func TestNewServiceConfig(t *testing.T) {
 		})
 		assertConfigErrorField(t, err, "tracker.in_progress_state")
 	})
+
+	// --- Reactions subtests ---
+
+	t.Run("Reactions/Absent", func(t *testing.T) {
+		t.Parallel()
+		cfg, err := NewServiceConfig(map[string]any{})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if cfg.Reactions == nil {
+			t.Error("Reactions is nil, want non-nil empty map")
+		}
+		if len(cfg.Reactions) != 0 {
+			t.Errorf("Reactions length = %d, want 0", len(cfg.Reactions))
+		}
+	})
+
+	t.Run("Reactions/FutureKindParsed", func(t *testing.T) {
+		t.Parallel()
+		cfg, err := NewServiceConfig(map[string]any{
+			"reactions": map[string]any{
+				"review_comments": map[string]any{
+					"max_retries":      3,
+					"escalation":       "comment",
+					"escalation_label": "ci-escalated",
+				},
+			},
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		rc, ok := cfg.Reactions["review_comments"]
+		if !ok {
+			t.Fatal("Reactions missing key \"review_comments\"")
+		}
+		assertIntEqual(t, "Reactions[review_comments].MaxRetries", 3, rc.MaxRetries)
+		assertStringEqual(t, "Reactions[review_comments].Escalation", "comment", rc.Escalation)
+		assertStringEqual(t, "Reactions[review_comments].EscalationLabel", "ci-escalated", rc.EscalationLabel)
+	})
+
+	t.Run("Reactions/DefaultsApplied", func(t *testing.T) {
+		t.Parallel()
+		cfg, err := NewServiceConfig(map[string]any{
+			"reactions": map[string]any{
+				"ci": map[string]any{},
+			},
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		rc := cfg.Reactions["ci"]
+		assertIntEqual(t, "Reactions[ci].MaxRetries", 2, rc.MaxRetries)
+		assertStringEqual(t, "Reactions[ci].Escalation", "label", rc.Escalation)
+		assertStringEqual(t, "Reactions[ci].EscalationLabel", "needs-human", rc.EscalationLabel)
+	})
+
+	t.Run("Reactions/UnknownKeyStoredInExtra", func(t *testing.T) {
+		t.Parallel()
+		cfg, err := NewServiceConfig(map[string]any{
+			"reactions": map[string]any{
+				"ci": map[string]any{
+					"max_retries": 1,
+					"custom_flag": "value42",
+				},
+			},
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		rc := cfg.Reactions["ci"]
+		if rc.Extra == nil {
+			t.Fatal("Reactions[ci].Extra is nil, want map with unknown key")
+		}
+		if rc.Extra["custom_flag"] != "value42" {
+			t.Errorf("Reactions[ci].Extra[\"custom_flag\"] = %v, want %q", rc.Extra["custom_flag"], "value42")
+		}
+	})
+
+	t.Run("Reactions/InvalidMaxRetriesNegative", func(t *testing.T) {
+		t.Parallel()
+		_, err := NewServiceConfig(map[string]any{
+			"reactions": map[string]any{
+				"ci": map[string]any{
+					"max_retries": -1,
+				},
+			},
+		})
+		assertConfigErrorField(t, err, "reactions.ci.max_retries")
+	})
+
+	t.Run("Reactions/InvalidEscalationValue", func(t *testing.T) {
+		t.Parallel()
+		_, err := NewServiceConfig(map[string]any{
+			"reactions": map[string]any{
+				"ci": map[string]any{
+					"escalation": "email",
+				},
+			},
+		})
+		assertConfigErrorField(t, err, "reactions.ci.escalation")
+	})
+
+	t.Run("Reactions/InvalidKeyFormatUppercase", func(t *testing.T) {
+		t.Parallel()
+		_, err := NewServiceConfig(map[string]any{
+			"reactions": map[string]any{
+				"CI_Feedback": map[string]any{},
+			},
+		})
+		assertConfigErrorField(t, err, "reactions.CI_Feedback")
+	})
 }
 
 // --- test helpers ---
