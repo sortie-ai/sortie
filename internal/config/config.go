@@ -901,6 +901,21 @@ func extractString(m map[string]any, key string) string {
 	return s
 }
 
+func requireStringField(m map[string]any, key, fieldPath string) (string, bool, error) {
+	raw, exists := m[key]
+	if !exists || raw == nil {
+		return "", false, nil
+	}
+	s, ok := raw.(string)
+	if !ok {
+		return "", false, &ConfigError{
+			Field:   fieldPath,
+			Message: fmt.Sprintf("expected string, got %T", raw),
+		}
+	}
+	return s, true, nil
+}
+
 func extractStringSlice(raw any) []string {
 	if raw == nil {
 		return nil
@@ -1062,8 +1077,10 @@ func buildReactionsConfig(m map[string]any) (map[string]ReactionConfig, error) {
 		}
 
 		escalation := "label"
-		if raw := extractString(vm, "escalation"); raw != "" {
-			escalation = raw
+		if s, found, err := requireStringField(vm, "escalation", "reactions."+k+".escalation"); err != nil {
+			return nil, err
+		} else if found && s != "" {
+			escalation = s
 		}
 		if escalation != "label" && escalation != "comment" {
 			return nil, &ConfigError{
@@ -1073,8 +1090,10 @@ func buildReactionsConfig(m map[string]any) (map[string]ReactionConfig, error) {
 		}
 
 		escalationLabel := "needs-human"
-		if raw := extractString(vm, "escalation_label"); raw != "" {
-			escalationLabel = raw
+		if s, found, err := requireStringField(vm, "escalation_label", "reactions."+k+".escalation_label"); err != nil {
+			return nil, err
+		} else if found && s != "" {
+			escalationLabel = s
 		}
 
 		extra := make(map[string]any)
@@ -1084,7 +1103,10 @@ func buildReactionsConfig(m map[string]any) (map[string]ReactionConfig, error) {
 			}
 		}
 
-		provider := extractString(vm, "provider")
+		provider, _, err := requireStringField(vm, "provider", "reactions."+k+".provider")
+		if err != nil {
+			return nil, err
+		}
 
 		result[k] = ReactionConfig{
 			Provider:        provider,

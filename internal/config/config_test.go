@@ -924,6 +924,42 @@ func TestNewServiceConfig(t *testing.T) {
 		})
 		assertConfigErrorField(t, err, "reactions.CI_Feedback")
 	})
+
+	t.Run("Reactions/ProviderNonStringRejected", func(t *testing.T) {
+		t.Parallel()
+		_, err := NewServiceConfig(map[string]any{
+			"reactions": map[string]any{
+				"ci_failure": map[string]any{
+					"provider": 123,
+				},
+			},
+		})
+		assertConfigErrorField(t, err, "reactions.ci_failure.provider")
+	})
+
+	t.Run("Reactions/EscalationNonStringRejected", func(t *testing.T) {
+		t.Parallel()
+		_, err := NewServiceConfig(map[string]any{
+			"reactions": map[string]any{
+				"ci": map[string]any{
+					"escalation": true,
+				},
+			},
+		})
+		assertConfigErrorField(t, err, "reactions.ci.escalation")
+	})
+
+	t.Run("Reactions/EscalationLabelNonStringRejected", func(t *testing.T) {
+		t.Parallel()
+		_, err := NewServiceConfig(map[string]any{
+			"reactions": map[string]any{
+				"ci": map[string]any{
+					"escalation_label": 42,
+				},
+			},
+		})
+		assertConfigErrorField(t, err, "reactions.ci.escalation_label")
+	})
 }
 
 // --- test helpers ---
