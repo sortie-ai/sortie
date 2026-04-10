@@ -9,6 +9,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 )
@@ -31,6 +32,12 @@ type ServiceConfig struct {
 	// SelfReview holds self-review loop configuration.
 	// Zero-value (Enabled == false) means self-review is disabled.
 	SelfReview SelfReviewConfig
+
+	// Reactions maps reaction kind to its configuration. An empty map
+	// means no reactions are configured. Keys are lowercase kind strings
+	// (e.g. "review_comments"). The existing ci_feedback section is not
+	// represented here; CI configuration uses the CIFeedback field.
+	Reactions map[string]ReactionConfig
 
 	// DBPath is the environment- and tilde-expanded path for the SQLite
 	// database. It may be relative; callers resolve it against the
@@ -115,6 +122,7 @@ var knownTopLevelKeys = map[string]bool{
 	"db_path":     true,
 	"ci_feedback": true,
 	"self_review": true,
+	"reactions":   true,
 }
 
 // NewServiceConfig converts a raw front matter map into a validated
@@ -243,6 +251,11 @@ func NewServiceConfig(raw map[string]any) (ServiceConfig, error) {
 		return ServiceConfig{}, err
 	}
 
+	reactions, err := buildReactionsConfig(extractSubMap(raw, "reactions"))
+	if err != nil {
+		return ServiceConfig{}, err
+	}
+
 	extensions := make(map[string]any)
 	for k, v := range raw {
 		if !knownTopLevelKeys[k] {
@@ -258,6 +271,7 @@ func NewServiceConfig(raw map[string]any) (ServiceConfig, error) {
 		Agent:      agent,
 		CIFeedback: ciFeedback,
 		SelfReview: selfReview,
+		Reactions:  reactions,
 		DBPath:     dbPath,
 		Extensions: extensions,
 	}, nil
@@ -914,6 +928,110 @@ type CIFeedbackConfig struct {
 	// EscalationLabel is the label applied when escalation is "label".
 	// Default "needs-human".
 	EscalationLabel string
+}
+
+// ReactionConfig holds per-kind configuration for a single reaction type.
+type ReactionConfig struct {
+	// MaxRetries is the maximum number of fix continuation dispatches
+	// per issue before escalation. Default: 2.
+	MaxRetries int
+
+	// Escalation controls what happens when MaxRetries is exceeded.
+	// Valid values: "label" (default), "comment".
+	Escalation string
+
+	// EscalationLabel is the label applied when Escalation is "label".
+	// Default: "needs-human".
+	EscalationLabel string
+
+	// Extra holds kind-specific fields not covered by the common schema.
+	Extra map[string]any
+}
+
+// reactionKeyPattern matches valid reaction kind identifiers: a lowercase
+// letter followed by zero or more lowercase letters, digits, underscores,
+// or hyphens.
+var reactionKeyPattern = regexp.MustCompile(`^[a-z][a-z0-9_-]*$`)
+
+// knownReactionFields enumerates keys consumed by buildReactionsConfig
+// per-kind parsing. Anything else is collected into Extra.
+var knownReactionFields = map[string]bool{
+	"max_retries":      true,
+	"escalation":       true,
+	"escalation_label": true,
+}
+
+func buildReactionsConfig(m map[string]any) (map[string]ReactionConfig, error) {
+	result := make(map[string]ReactionConfig)
+	if len(m) == 0 {
+		return result, nil
+	}
+
+	for k, v := range m {
+		if !reactionKeyPattern.MatchString(k) {
+			return nil, &ConfigError{
+				Field:   "reactions." + k,
+				Message: "key must match [a-z][a-z0-9_-]*",
+			}
+		}
+
+		vm, ok := v.(map[string]any)
+		if !ok {
+			return nil, &ConfigError{
+				Field:   "reactions." + k,
+				Message: fmt.Sprintf("expected map, got %T", v),
+			}
+		}
+
+		maxRetries := 2
+		if raw, exists := vm["max_retries"]; exists && raw != nil {
+			parsed, parseErr := coerceInt(raw)
+			if parseErr != nil {
+				return nil, &ConfigError{
+					Field:   "reactions." + k + ".max_retries",
+					Message: fmt.Sprintf("invalid integer value: %v", raw),
+				}
+			}
+			maxRetries = parsed
+		}
+		if maxRetries < 0 {
+			return nil, &ConfigError{
+				Field:   "reactions." + k + ".max_retries",
+				Message: "must be non-negative",
+			}
+		}
+
+		escalation := "label"
+		if raw := extractString(vm, "escalation"); raw != "" {
+			escalation = raw
+		}
+		if escalation != "label" && escalation != "comment" {
+			return nil, &ConfigError{
+				Field:   "reactions." + k + ".escalation",
+				Message: fmt.Sprintf("must be \"label\" or \"comment\", got %q", escalation),
+			}
+		}
+
+		escalationLabel := "needs-human"
+		if raw := extractString(vm, "escalation_label"); raw != "" {
+			escalationLabel = raw
+		}
+
+		extra := make(map[string]any)
+		for ek, ev := range vm {
+			if !knownReactionFields[ek] {
+				extra[ek] = ev
+			}
+		}
+
+		result[k] = ReactionConfig{
+			MaxRetries:      maxRetries,
+			Escalation:      escalation,
+			EscalationLabel: escalationLabel,
+			Extra:           extra,
+		}
+	}
+	return result, nil
 }
 
 func normalizeByStateMap(raw any) map[string]int {
