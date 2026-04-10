@@ -247,6 +247,12 @@ type RetryEntry struct {
 	// reconcile functions when scheduling a continuation retry. Nil for
 	// non-reaction retries.
 	ContinuationContext map[string]any
+
+	// ReactionKind is the reaction type that triggered this retry (e.g.
+	// ReactionKindCI). Empty for non-reaction retries. When non-empty,
+	// HandleRetryTimer calls MarkReactionDispatched after successful
+	// dispatch. Runtime-only (not persisted to SQLite).
+	ReactionKind string
 }
 
 // ReactionKindCI is the reaction kind constant for CI failure reactions.

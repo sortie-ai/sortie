@@ -238,14 +238,9 @@ func handleCIFailure(
 		ContinuationContext: map[string]any{
 			"ci_failure": ciContext,
 		},
+		ReactionKind: ReactionKindCI,
 	}, params.OnRetryFire)
 	metrics.IncRetries(triggerCIFix)
-
-	if err := params.Store.MarkReactionDispatched(ctx, pending.IssueID, ReactionKindCI); err != nil {
-		log.Warn("failed to mark reaction fingerprint dispatched",
-			slog.Any("error", err),
-		)
-	}
 
 	log.Info("CI failure detected, scheduling CI fix dispatch",
 		slog.String("ref", ref),

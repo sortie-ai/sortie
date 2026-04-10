@@ -18,6 +18,7 @@ type RetryTimerStore interface {
 	SaveRetryEntry(ctx context.Context, entry persistence.RetryEntry) error
 	DeleteRetryEntry(ctx context.Context, issueID string) error
 	CountRunHistoryByIssue(ctx context.Context, issueID string) (int, error)
+	MarkReactionDispatched(ctx context.Context, issueID, kind string) error
 }
 
 // HandleRetryTimerParams holds the dependencies for [HandleRetryTimer]
@@ -140,12 +141,13 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 			slog.Int("attempt", popped.Attempt),
 		)
 		ScheduleRetry(state, ScheduleRetryParams{
-			IssueID:    issueID,
-			Identifier: popped.Identifier,
-			DisplayID:  popped.DisplayID,
-			Attempt:    popped.Attempt,
-			DelayMS:    delayMS,
-			Error:      popped.Error,
+			IssueID:      issueID,
+			Identifier:   popped.Identifier,
+			DisplayID:    popped.DisplayID,
+			Attempt:      popped.Attempt,
+			DelayMS:      delayMS,
+			Error:        popped.Error,
+			ReactionKind: popped.ReactionKind,
 		}, params.OnRetryFire)
 		persistRetryEntry(ctx, log, params.Store, state, issueID)
 		metrics.IncRetries(triggerTimer)
@@ -190,12 +192,13 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 		)
 
 		ScheduleRetry(state, ScheduleRetryParams{
-			IssueID:    issueID,
-			Identifier: popped.Identifier,
-			DisplayID:  popped.DisplayID,
-			Attempt:    nextAttempt,
-			DelayMS:    delayMS,
-			Error:      "retry poll failed",
+			IssueID:      issueID,
+			Identifier:   popped.Identifier,
+			DisplayID:    popped.DisplayID,
+			Attempt:      nextAttempt,
+			DelayMS:      delayMS,
+			Error:        "retry poll failed",
+			ReactionKind: popped.ReactionKind,
 		}, params.OnRetryFire)
 
 		persistRetryEntry(ctx, log, params.Store, state, issueID)
@@ -251,12 +254,13 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 		)
 
 		ScheduleRetry(state, ScheduleRetryParams{
-			IssueID:    issueID,
-			Identifier: popped.Identifier,
-			DisplayID:  popped.DisplayID,
-			Attempt:    nextAttempt,
-			DelayMS:    delayMS,
-			Error:      "no available orchestrator slots",
+			IssueID:      issueID,
+			Identifier:   popped.Identifier,
+			DisplayID:    popped.DisplayID,
+			Attempt:      nextAttempt,
+			DelayMS:      delayMS,
+			Error:        "no available orchestrator slots",
+			ReactionKind: popped.ReactionKind,
 		}, params.OnRetryFire)
 
 		persistRetryEntry(ctx, log, params.Store, state, issueID)
@@ -279,12 +283,13 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 			)
 
 			ScheduleRetry(state, ScheduleRetryParams{
-				IssueID:    issueID,
-				Identifier: popped.Identifier,
-				DisplayID:  popped.DisplayID,
-				Attempt:    nextAttempt,
-				DelayMS:    delayMS,
-				Error:      "no available SSH hosts",
+				IssueID:      issueID,
+				Identifier:   popped.Identifier,
+				DisplayID:    popped.DisplayID,
+				Attempt:      nextAttempt,
+				DelayMS:      delayMS,
+				Error:        "no available SSH hosts",
+				ReactionKind: popped.ReactionKind,
 			}, params.OnRetryFire)
 
 			persistRetryEntry(ctx, log, params.Store, state, issueID)
@@ -311,6 +316,18 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 		entry.ContinuationContext = popped.ContinuationContext
 	}
 	metrics.IncDispatches(outcomeSuccess)
+
+	// Mark the reaction fingerprint dispatched only after actual dispatch
+	// succeeds. Scoped to reaction-triggered retries; non-reaction retries
+	// have no fingerprint row to update.
+	if popped.ReactionKind != "" {
+		if err := params.Store.MarkReactionDispatched(ctx, issueID, popped.ReactionKind); err != nil {
+			log.Warn("failed to mark reaction dispatched after retry dispatch",
+				slog.String("kind", popped.ReactionKind),
+				slog.Any("error", err),
+			)
+		}
+	}
 
 	log.Info("retried issue dispatched",
 		slog.Int("attempt", attempt),
