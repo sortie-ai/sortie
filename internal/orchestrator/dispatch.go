@@ -230,6 +230,11 @@ type ScheduleRetryParams struct {
 	// into the prompt template on the first turn of the retry worker.
 	// Nil for non-reaction retries.
 	ContinuationContext map[string]any
+
+	// ReactionKind is the reaction type that triggered this retry.
+	// Propagated to [RetryEntry.ReactionKind]. Empty for non-reaction
+	// retries.
+	ReactionKind string
 }
 
 // ScheduleRetry cancels any existing retry for the issue, creates a new
@@ -271,6 +276,7 @@ func ScheduleRetry(state *State, params ScheduleRetryParams, onFire func(issueID
 		TimerHandle:         timer,
 		LastSSHHost:         params.LastSSHHost,
 		ContinuationContext: params.ContinuationContext,
+		ReactionKind:        params.ReactionKind,
 		scheduledAt:         time.Now(),
 		scheduledDelayMS:    delayMS,
 	}

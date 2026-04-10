@@ -23,6 +23,11 @@ type mockRetryStore struct {
 	runHistoryCount           int
 	countRunHistoryByIssueErr error
 	countedIssueIDs           []string
+
+	markDispatchedCalls   int
+	markDispatchedIssueID string
+	markDispatchedKind    string
+	markDispatchedErr     error
 }
 
 var _ RetryTimerStore = (*mockRetryStore)(nil)
@@ -58,8 +63,11 @@ func (m *mockRetryStore) GetReactionFingerprint(_ context.Context, _, _ string) 
 	return "", false, nil
 }
 
-func (m *mockRetryStore) MarkReactionDispatched(_ context.Context, _, _ string) error {
-	return nil
+func (m *mockRetryStore) MarkReactionDispatched(_ context.Context, issueID, kind string) error {
+	m.markDispatchedCalls++
+	m.markDispatchedIssueID = issueID
+	m.markDispatchedKind = kind
+	return m.markDispatchedErr
 }
 
 func (m *mockRetryStore) DeleteReactionFingerprint(_ context.Context, _, _ string) error {
@@ -1343,5 +1351,159 @@ func TestHandleRetryTimer_NilContinuationContext_NotPropagated(t *testing.T) {
 	}
 	if entry.ContinuationContext != nil {
 		t.Errorf("RunningEntry.ContinuationContext = %v, want nil", entry.ContinuationContext)
+	}
+}
+
+func TestHandleRetryTimer_ContinuationDispatch_MarksReactionDispatched(t *testing.T) {
+	t.Parallel()
+
+	// A retry entry carrying ReactionKindCI must call MarkReactionDispatched
+	// after successful dispatch, recording the correct issue ID and kind.
+	const id = "ISS-CI-1"
+
+	state := NewState(5000, 4, nil, AgentTotals{})
+	state.Claimed[id] = struct{}{}
+	state.RetryAttempts[id] = &RetryEntry{
+		IssueID:             id,
+		Identifier:          id,
+		Attempt:             1,
+		ReactionKind:        ReactionKindCI,
+		ContinuationContext: map[string]any{"ci_failure": map[string]any{}},
+	}
+
+	store := &mockRetryStore{}
+	tracker := &mockRetryTracker{
+		candidates: []domain.Issue{candidateIssue(id, id, "In Progress")},
+	}
+	params := defaultRetryParams(t, store, tracker)
+
+	HandleRetryTimer(state, id, params)
+	t.Cleanup(func() { state.WorkerWg.Wait() })
+
+	if store.markDispatchedCalls != 1 {
+		t.Errorf("MarkReactionDispatched calls = %d, want 1", store.markDispatchedCalls)
+	}
+	if store.markDispatchedIssueID != id {
+		t.Errorf("MarkReactionDispatched issueID = %q, want %q", store.markDispatchedIssueID, id)
+	}
+	if store.markDispatchedKind != ReactionKindCI {
+		t.Errorf("MarkReactionDispatched kind = %q, want %q", store.markDispatchedKind, ReactionKindCI)
+	}
+	if _, ok := state.Running[id]; !ok {
+		t.Errorf("Running[%s] missing after dispatch, want present", id)
+	}
+}
+
+func TestHandleRetryTimer_NonReactionRetry_DoesNotMarkDispatched(t *testing.T) {
+	t.Parallel()
+
+	// A retry entry with empty ReactionKind (normal error retry) must not
+	// call MarkReactionDispatched even when dispatch succeeds.
+	const id = "ISS-ERR-1"
+
+	state := NewState(5000, 4, nil, AgentTotals{})
+	state.Claimed[id] = struct{}{}
+	state.RetryAttempts[id] = &RetryEntry{
+		IssueID:    id,
+		Identifier: id,
+		Attempt:    2,
+		// ReactionKind is intentionally empty — normal error retry.
+	}
+
+	store := &mockRetryStore{}
+	tracker := &mockRetryTracker{
+		candidates: []domain.Issue{candidateIssue(id, id, "To Do")},
+	}
+	params := defaultRetryParams(t, store, tracker)
+
+	HandleRetryTimer(state, id, params)
+	t.Cleanup(func() { state.WorkerWg.Wait() })
+
+	if store.markDispatchedCalls != 0 {
+		t.Errorf("MarkReactionDispatched calls = %d, want 0 for non-reaction retry", store.markDispatchedCalls)
+	}
+	if _, ok := state.Running[id]; !ok {
+		t.Errorf("Running[%s] missing after dispatch, want present", id)
+	}
+}
+
+func TestHandleRetryTimer_ReschedulePreservesReactionKind(t *testing.T) {
+	t.Parallel()
+
+	// When the running-guard triggers a reschedule (worker still active),
+	// ReactionKind must be preserved on the rescheduled entry so that the
+	// eventual dispatch can call MarkReactionDispatched.
+	const id = "ISS-CI-2"
+
+	state := NewState(5000, 4, nil, AgentTotals{})
+	state.Claimed[id] = struct{}{}
+	state.RetryAttempts[id] = &RetryEntry{
+		IssueID:      id,
+		Identifier:   id,
+		Attempt:      1,
+		ReactionKind: ReactionKindCI,
+	}
+	// Place issue in Running to trigger the running-guard reschedule path.
+	state.Running[id] = &RunningEntry{
+		Identifier: id,
+		Issue:      candidateIssue(id, id, "In Progress"),
+		StartedAt:  time.Now().UTC(),
+	}
+
+	store := &mockRetryStore{}
+	tracker := &mockRetryTracker{}
+	params := defaultRetryParams(t, store, tracker)
+
+	HandleRetryTimer(state, id, params)
+
+	if store.markDispatchedCalls != 0 {
+		t.Errorf("MarkReactionDispatched calls = %d, want 0 (reschedule, no dispatch)", store.markDispatchedCalls)
+	}
+
+	entry, ok := state.RetryAttempts[id]
+	if !ok {
+		t.Fatal("RetryAttempts[ISS-CI-2] missing, want rescheduled")
+	}
+	if entry.ReactionKind != ReactionKindCI {
+		t.Errorf("rescheduled RetryAttempts[%s].ReactionKind = %q, want %q", id, entry.ReactionKind, ReactionKindCI)
+	}
+	if entry.TimerHandle != nil {
+		entry.TimerHandle.Stop()
+	}
+}
+
+func TestHandleRetryTimer_ContinuationMarkDispatchedError(t *testing.T) {
+	t.Parallel()
+
+	// When MarkReactionDispatched returns an error, the dispatch is not
+	// rolled back — the issue remains in Running and the error is non-fatal.
+	const id = "ISS-CI-3"
+
+	state := NewState(5000, 4, nil, AgentTotals{})
+	state.Claimed[id] = struct{}{}
+	state.RetryAttempts[id] = &RetryEntry{
+		IssueID:             id,
+		Identifier:          id,
+		Attempt:             1,
+		ReactionKind:        ReactionKindCI,
+		ContinuationContext: map[string]any{"ci_failure": map[string]any{}},
+	}
+
+	store := &mockRetryStore{markDispatchedErr: errors.New("db locked")}
+	tracker := &mockRetryTracker{
+		candidates: []domain.Issue{candidateIssue(id, id, "In Progress")},
+	}
+	params := defaultRetryParams(t, store, tracker)
+
+	HandleRetryTimer(state, id, params)
+	t.Cleanup(func() { state.WorkerWg.Wait() })
+
+	// Attempt was made despite the error.
+	if store.markDispatchedCalls != 1 {
+		t.Errorf("MarkReactionDispatched calls = %d, want 1", store.markDispatchedCalls)
+	}
+	// Dispatch was not rolled back — issue still running.
+	if _, ok := state.Running[id]; !ok {
+		t.Errorf("Running[%s] missing after dispatch, want present (error is non-fatal)", id)
 	}
 }

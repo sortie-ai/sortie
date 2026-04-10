@@ -1101,9 +1101,10 @@ func TestReconcileCIStatus_FingerprintGetError_Continues(t *testing.T) {
 	}
 }
 
-// TestReconcileCIStatus_Failing_MarksDispatched verifies that after scheduling
-// a CI-fix retry, MarkReactionDispatched is called.
-func TestReconcileCIStatus_Failing_MarksDispatched(t *testing.T) {
+// TestReconcileCIStatus_Failing_DoesNotMarkDispatched verifies that
+// handleCIFailure no longer calls MarkReactionDispatched at schedule time.
+// The mark is deferred to HandleRetryTimer after actual dispatch.
+func TestReconcileCIStatus_Failing_DoesNotMarkDispatched(t *testing.T) {
 	t.Parallel()
 
 	// ReactionAttempts=0 → under maxRetries=2, so handleCIFailure schedules retry.
@@ -1115,10 +1116,11 @@ func TestReconcileCIStatus_Failing_MarksDispatched(t *testing.T) {
 
 	reconcileCIStatus(state, params, discardLogger(), context.Background(), metrics)
 
-	if store.markDispatchedCalls != 1 {
-		t.Errorf("MarkReactionDispatched calls = %d, want 1 after CI failure dispatch", store.markDispatchedCalls)
+	// MarkReactionDispatched must NOT be called at schedule time.
+	if store.markDispatchedCalls != 0 {
+		t.Errorf("MarkReactionDispatched calls = %d, want 0 (mark deferred to dispatch site)", store.markDispatchedCalls)
 	}
-	// Retry must have been scheduled.
+	// Retry must still be scheduled.
 	if _, ok := state.RetryAttempts["ISS-FP-5"]; !ok {
 		t.Error("retry not scheduled after CI failure; want scheduled")
 	}
