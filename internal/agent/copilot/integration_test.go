@@ -297,12 +297,11 @@ func TestIntegration_RunTurn_ContextCancellation(t *testing.T) {
 
 	onEvent, collected := collectEvents(t)
 
-	// Cancel after a short delay to interrupt the running turn.
-	shortCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	// Use a 2-second timeout: long enough for subprocess startup (~100ms)
+	// but well below the minimum API round-trip (~3-5s), ensuring the
+	// context always expires before the turn completes.
+	shortCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-
-	// A long-running prompt ensures the turn is still in progress when
-	// the context is cancelled.
 	result, err := adapter.RunTurn(shortCtx, session, domain.RunTurnParams{
 		Prompt:  "Count from 1 to 1000, printing each number on a new line. Do not stop early.",
 		OnEvent: onEvent,

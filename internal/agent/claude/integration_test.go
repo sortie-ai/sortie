@@ -288,7 +288,10 @@ func TestIntegration_RunTurn_ContextCancellation(t *testing.T) {
 		mu.Unlock()
 	}
 
-	shortCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	// Use a 2-second timeout: long enough for subprocess startup (~100ms)
+	// but well below the minimum Claude API round-trip (~3-5s), ensuring
+	// the context always expires before the turn completes.
+	shortCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
 	prompt := "Use the Bash tool to execute the command 'sleep 15'. Do nothing else."
