@@ -3601,3 +3601,655 @@ func TestBudgetExhaustionClearsWhenMaxSessionsZero(t *testing.T) {
 		t.Errorf("BudgetExhausted[%s] still set after MaxSessions=0 tick, want cleared", issue.ID)
 	}
 }
+
+// --- TestOrchestratorScenarios ---
+
+// TestOrchestratorScenarios covers dispatch-to-exit edge cases through the
+// real event loop: soft-stop signals, handoff transitions, handoff failures,
+// reconciliation cancellation, and re-dispatch prevention after handoff.
+func TestOrchestratorScenarios(t *testing.T) {
+	t.Parallel()
+
+	// handoffConfig returns a lifecycle config with HandoffState set to "In Review".
+	handoffConfig := func(tmpDir string) config.ServiceConfig {
+		cfg := lifecycleConfig(tmpDir)
+		cfg.Tracker.HandoffState = "In Review"
+		return cfg
+	}
+
+	// scenarioIssue returns a single dispatch-eligible issue.
+	scenarioIssue := func(id, identifier string) domain.Issue {
+		return domain.Issue{ID: id, Identifier: identifier, Title: "Scenario Issue", State: "To Do"}
+	}
+
+	// pollStore polls the store until cond returns true or the deadline fires.
+	pollStore := func(t *testing.T, store *stubStore, cond func(*stubStore) bool) {
+		t.Helper()
+		deadline := time.After(15 * time.Second)
+		for {
+			select {
+			case <-deadline:
+				t.Fatal("timed out polling store for expected condition")
+			default:
+			}
+			store.mu.Lock()
+			ok := cond(store)
+			store.mu.Unlock()
+			if ok {
+				return
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
+	}
+
+	// writeStatusFile creates .sortie/status in the given workspace directory.
+	// Both MkdirAll and WriteFile errors are intentionally ignored: the worker
+	// reads the file after RunTurn returns, so any write failure causes a
+	// StatusNone read (no soft-stop) rather than a test failure.
+	writeStatusFile := func(workspacePath, signal string) {
+		sortieDir := filepath.Join(workspacePath, ".sortie")
+		_ = os.MkdirAll(sortieDir, 0o755)
+		_ = os.WriteFile(filepath.Join(sortieDir, "status"), []byte(signal+"\n"), 0o644)
+	}
+
+	t.Run("soft_stop_needs_human_review_triggers_handoff", func(t *testing.T) {
+		t.Parallel()
+
+		tmpDir := t.TempDir()
+		cfg := handoffConfig(tmpDir)
+		tmpl := mustParseTemplate(t, "work on {{ .issue.identifier }}")
+		issue := scenarioIssue("hs-1", "HS-1")
+
+		// workspacePath is written by startSessionFn and read by runTurnFn.
+		// Both execute sequentially in the same worker goroutine — no race.
+		var workspacePath string
+
+		mockTracker := &mockTrackerAdapter{
+			fetchStatesFn: func(_ context.Context, ids []string) (map[string]string, error) {
+				result := make(map[string]string, len(ids))
+				for _, id := range ids {
+					result[id] = "To Do"
+				}
+				return result, nil
+			},
+		}
+
+		agent := &mockAgentAdapter{
+			startSessionFn: func(_ context.Context, params domain.StartSessionParams) (domain.Session, error) {
+				workspacePath = params.WorkspacePath
+				return domain.Session{ID: "sess-hs-1"}, nil
+			},
+			runTurnFn: func(_ context.Context, sess domain.Session, _ domain.RunTurnParams) (domain.TurnResult, error) {
+				writeStatusFile(workspacePath, "needs-human-review")
+				return domain.TurnResult{SessionID: sess.ID, ExitReason: domain.EventTurnCompleted}, nil
+			},
+		}
+
+		// Return the issue once; subsequent calls return nil to prevent re-dispatch
+		// after the claim is released.
+		var dispatched atomic.Bool
+		tracker := &candidateTrackerAdapter{
+			mockTrackerAdapter: mockTracker,
+			fetchCandidatesFn: func(_ context.Context) ([]domain.Issue, error) {
+				if dispatched.CompareAndSwap(false, true) {
+					return []domain.Issue{issue}, nil
+				}
+				return nil, nil
+			},
+		}
+
+		wm := &stubWorkflowManager{config: cfg, template: tmpl}
+		store := &stubStore{}
+		regs := passingPreflightRegistries()
+		state := NewState(cfg.Polling.IntervalMS, cfg.Agent.MaxConcurrentAgents, nil, AgentTotals{})
+		o := NewOrchestrator(OrchestratorParams{
+			State:           state,
+			Logger:          discardLogger(),
+			TrackerAdapter:  tracker,
+			AgentAdapter:    agent,
+			WorkflowManager: wm,
+			Store:           store,
+			PreflightParams: PreflightParams{
+				ReloadWorkflow:  func() error { return nil },
+				ConfigFunc:      wm.Config,
+				TrackerRegistry: regs.TrackerRegistry,
+				AgentRegistry:   regs.AgentRegistry,
+			},
+		})
+
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan struct{})
+		go func() {
+			o.Run(ctx)
+			close(done)
+		}()
+
+		pollStore(t, store, func(s *stubStore) bool { return len(s.runHistories) >= 1 })
+
+		cancel()
+		<-done
+
+		if got := len(mockTracker.transitionCalls); got != 1 {
+			t.Errorf("transitionCalls = %d, want 1", got)
+		} else if mockTracker.transitionCalls[0].TargetState != "In Review" {
+			t.Errorf("transitionCalls[0].TargetState = %q, want %q",
+				mockTracker.transitionCalls[0].TargetState, "In Review")
+		}
+
+		if _, ok := state.Running[issue.ID]; ok {
+			t.Error("issue still in Running after handoff, want absent")
+		}
+		if _, ok := state.Claimed[issue.ID]; ok {
+			t.Error("issue still in Claimed after handoff, want absent")
+		}
+
+		store.mu.Lock()
+		retries := len(store.savedRetries)
+		histStatus := store.runHistories[0].Status
+		store.mu.Unlock()
+
+		if retries != 0 {
+			t.Errorf("savedRetries = %d, want 0", retries)
+		}
+		if histStatus != "succeeded" {
+			t.Errorf("run history status = %q, want %q", histStatus, "succeeded")
+		}
+	})
+
+	t.Run("soft_stop_blocked_no_handoff", func(t *testing.T) {
+		t.Parallel()
+
+		tmpDir := t.TempDir()
+		cfg := handoffConfig(tmpDir) // HandoffState configured but must NOT be called for "blocked"
+		tmpl := mustParseTemplate(t, "work on {{ .issue.identifier }}")
+		issue := scenarioIssue("bl-1", "BL-1")
+
+		var workspacePath string
+
+		mockTracker := &mockTrackerAdapter{
+			fetchStatesFn: func(_ context.Context, ids []string) (map[string]string, error) {
+				result := make(map[string]string, len(ids))
+				for _, id := range ids {
+					result[id] = "To Do"
+				}
+				return result, nil
+			},
+		}
+
+		agent := &mockAgentAdapter{
+			startSessionFn: func(_ context.Context, params domain.StartSessionParams) (domain.Session, error) {
+				workspacePath = params.WorkspacePath
+				return domain.Session{ID: "sess-bl-1"}, nil
+			},
+			runTurnFn: func(_ context.Context, sess domain.Session, _ domain.RunTurnParams) (domain.TurnResult, error) {
+				writeStatusFile(workspacePath, "blocked")
+				return domain.TurnResult{SessionID: sess.ID, ExitReason: domain.EventTurnCompleted}, nil
+			},
+		}
+
+		var dispatched atomic.Bool
+		tracker := &candidateTrackerAdapter{
+			mockTrackerAdapter: mockTracker,
+			fetchCandidatesFn: func(_ context.Context) ([]domain.Issue, error) {
+				if dispatched.CompareAndSwap(false, true) {
+					return []domain.Issue{issue}, nil
+				}
+				return nil, nil
+			},
+		}
+
+		wm := &stubWorkflowManager{config: cfg, template: tmpl}
+		store := &stubStore{}
+		regs := passingPreflightRegistries()
+		state := NewState(cfg.Polling.IntervalMS, cfg.Agent.MaxConcurrentAgents, nil, AgentTotals{})
+		o := NewOrchestrator(OrchestratorParams{
+			State:           state,
+			Logger:          discardLogger(),
+			TrackerAdapter:  tracker,
+			AgentAdapter:    agent,
+			WorkflowManager: wm,
+			Store:           store,
+			PreflightParams: PreflightParams{
+				ReloadWorkflow:  func() error { return nil },
+				ConfigFunc:      wm.Config,
+				TrackerRegistry: regs.TrackerRegistry,
+				AgentRegistry:   regs.AgentRegistry,
+			},
+		})
+
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan struct{})
+		go func() {
+			o.Run(ctx)
+			close(done)
+		}()
+
+		pollStore(t, store, func(s *stubStore) bool { return len(s.runHistories) >= 1 })
+
+		cancel()
+		<-done
+
+		// "blocked" takes the first switch case: suppresses retry, skips handoff.
+		if got := len(mockTracker.transitionCalls); got != 0 {
+			t.Errorf("transitionCalls = %d, want 0 (blocked skips handoff transition)", got)
+		}
+
+		if _, ok := state.Running[issue.ID]; ok {
+			t.Error("issue still in Running after blocked soft-stop, want absent")
+		}
+		if _, ok := state.Claimed[issue.ID]; ok {
+			t.Error("issue still in Claimed after blocked soft-stop, want absent")
+		}
+
+		store.mu.Lock()
+		retries := len(store.savedRetries)
+		store.mu.Unlock()
+		if retries != 0 {
+			t.Errorf("savedRetries = %d, want 0", retries)
+		}
+	})
+
+	t.Run("handoff_transition_failure_no_soft_stop_retries", func(t *testing.T) {
+		t.Parallel()
+
+		tmpDir := t.TempDir()
+		cfg := handoffConfig(tmpDir)
+		tmpl := mustParseTemplate(t, "work on {{ .issue.identifier }}")
+		issue := scenarioIssue("hf-1", "HF-1")
+
+		mockTracker := &mockTrackerAdapter{
+			transitionIssueFn: func(_ context.Context, _, _ string) error {
+				return fmt.Errorf("tracker unavailable")
+			},
+			fetchStatesFn: func(_ context.Context, ids []string) (map[string]string, error) {
+				result := make(map[string]string, len(ids))
+				for _, id := range ids {
+					result[id] = "To Do"
+				}
+				return result, nil
+			},
+		}
+
+		// Normal exit: no soft-stop signal written to .sortie/status.
+		agent := &mockAgentAdapter{
+			runTurnFn: func(_ context.Context, sess domain.Session, _ domain.RunTurnParams) (domain.TurnResult, error) {
+				return domain.TurnResult{SessionID: sess.ID, ExitReason: domain.EventTurnCompleted}, nil
+			},
+		}
+
+		var dispatched atomic.Bool
+		tracker := &candidateTrackerAdapter{
+			mockTrackerAdapter: mockTracker,
+			fetchCandidatesFn: func(_ context.Context) ([]domain.Issue, error) {
+				if dispatched.CompareAndSwap(false, true) {
+					return []domain.Issue{issue}, nil
+				}
+				return nil, nil
+			},
+		}
+
+		wm := &stubWorkflowManager{config: cfg, template: tmpl}
+		store := &stubStore{}
+		regs := passingPreflightRegistries()
+		state := NewState(cfg.Polling.IntervalMS, cfg.Agent.MaxConcurrentAgents, nil, AgentTotals{})
+		o := NewOrchestrator(OrchestratorParams{
+			State:           state,
+			Logger:          discardLogger(),
+			TrackerAdapter:  tracker,
+			AgentAdapter:    agent,
+			WorkflowManager: wm,
+			Store:           store,
+			PreflightParams: PreflightParams{
+				ReloadWorkflow:  func() error { return nil },
+				ConfigFunc:      wm.Config,
+				TrackerRegistry: regs.TrackerRegistry,
+				AgentRegistry:   regs.AgentRegistry,
+			},
+		})
+
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan struct{})
+		go func() {
+			o.Run(ctx)
+			close(done)
+		}()
+
+		// Poll for the retry entry: handoff failure schedules a continuation retry.
+		pollStore(t, store, func(s *stubStore) bool { return len(s.savedRetries) >= 1 })
+
+		cancel()
+		<-done
+
+		if got := len(mockTracker.transitionCalls); got != 1 {
+			t.Errorf("transitionCalls = %d, want 1", got)
+		}
+
+		store.mu.Lock()
+		retries := len(store.savedRetries)
+		store.mu.Unlock()
+		if retries == 0 {
+			t.Error("savedRetries empty, want >= 1 (handoff failure schedules continuation retry)")
+		}
+
+		// Claim retained: retry pending keeps the issue as claimed.
+		if _, ok := state.Claimed[issue.ID]; !ok {
+			t.Error("issue not in Claimed after handoff failure retry, want present")
+		}
+	})
+
+	t.Run("handoff_transition_failure_with_soft_stop_no_retry", func(t *testing.T) {
+		t.Parallel()
+
+		tmpDir := t.TempDir()
+		cfg := handoffConfig(tmpDir)
+		tmpl := mustParseTemplate(t, "work on {{ .issue.identifier }}")
+		issue := scenarioIssue("sf-1", "SF-1")
+
+		var workspacePath string
+
+		mockTracker := &mockTrackerAdapter{
+			transitionIssueFn: func(_ context.Context, _, _ string) error {
+				return fmt.Errorf("tracker unavailable")
+			},
+			fetchStatesFn: func(_ context.Context, ids []string) (map[string]string, error) {
+				result := make(map[string]string, len(ids))
+				for _, id := range ids {
+					result[id] = "To Do"
+				}
+				return result, nil
+			},
+		}
+
+		agent := &mockAgentAdapter{
+			startSessionFn: func(_ context.Context, params domain.StartSessionParams) (domain.Session, error) {
+				workspacePath = params.WorkspacePath
+				return domain.Session{ID: "sess-sf-1"}, nil
+			},
+			runTurnFn: func(_ context.Context, sess domain.Session, _ domain.RunTurnParams) (domain.TurnResult, error) {
+				writeStatusFile(workspacePath, "needs-human-review")
+				return domain.TurnResult{SessionID: sess.ID, ExitReason: domain.EventTurnCompleted}, nil
+			},
+		}
+
+		var dispatched atomic.Bool
+		tracker := &candidateTrackerAdapter{
+			mockTrackerAdapter: mockTracker,
+			fetchCandidatesFn: func(_ context.Context) ([]domain.Issue, error) {
+				if dispatched.CompareAndSwap(false, true) {
+					return []domain.Issue{issue}, nil
+				}
+				return nil, nil
+			},
+		}
+
+		wm := &stubWorkflowManager{config: cfg, template: tmpl}
+		store := &stubStore{}
+		regs := passingPreflightRegistries()
+		state := NewState(cfg.Polling.IntervalMS, cfg.Agent.MaxConcurrentAgents, nil, AgentTotals{})
+		o := NewOrchestrator(OrchestratorParams{
+			State:           state,
+			Logger:          discardLogger(),
+			TrackerAdapter:  tracker,
+			AgentAdapter:    agent,
+			WorkflowManager: wm,
+			Store:           store,
+			PreflightParams: PreflightParams{
+				ReloadWorkflow:  func() error { return nil },
+				ConfigFunc:      wm.Config,
+				TrackerRegistry: regs.TrackerRegistry,
+				AgentRegistry:   regs.AgentRegistry,
+			},
+		})
+
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan struct{})
+		go func() {
+			o.Run(ctx)
+			close(done)
+		}()
+
+		pollStore(t, store, func(s *stubStore) bool { return len(s.runHistories) >= 1 })
+
+		cancel()
+		<-done
+
+		// Handoff was attempted (one transition call).
+		if got := len(mockTracker.transitionCalls); got != 1 {
+			t.Errorf("transitionCalls = %d, want 1", got)
+		}
+
+		// Soft-stop + handoff failure: claim released WITHOUT scheduling retry.
+		store.mu.Lock()
+		retries := len(store.savedRetries)
+		store.mu.Unlock()
+		if retries != 0 {
+			t.Errorf("savedRetries = %d, want 0 (soft-stop+handoff failure releases claim without retry)", retries)
+		}
+
+		if _, ok := state.Claimed[issue.ID]; ok {
+			t.Error("issue still in Claimed after soft-stop+handoff failure, want absent")
+		}
+	})
+
+	t.Run("reconciliation_cancels_terminal_issue", func(t *testing.T) {
+		t.Parallel()
+
+		tmpDir := t.TempDir()
+		// Small polling interval so reconciliation fires while the worker is running.
+		cfg := lifecycleConfig(tmpDir)
+		cfg.Polling.IntervalMS = 100
+		tmpl := mustParseTemplate(t, "work on {{ .issue.identifier }}")
+		issue := scenarioIssue("rc-1", "RC-1")
+
+		mockTracker := &mockTrackerAdapter{
+			// Always report the issue as terminal so reconciliation marks PendingCleanup.
+			fetchStatesFn: func(_ context.Context, ids []string) (map[string]string, error) {
+				result := make(map[string]string, len(ids))
+				for _, id := range ids {
+					result[id] = "Done"
+				}
+				return result, nil
+			},
+		}
+
+		// Worker blocks until its context is cancelled by reconciliation.
+		agent := &mockAgentAdapter{
+			runTurnFn: func(ctx context.Context, sess domain.Session, _ domain.RunTurnParams) (domain.TurnResult, error) {
+				<-ctx.Done()
+				return domain.TurnResult{}, ctx.Err()
+			},
+		}
+
+		var dispatched atomic.Bool
+		tracker := &candidateTrackerAdapter{
+			mockTrackerAdapter: mockTracker,
+			fetchCandidatesFn: func(_ context.Context) ([]domain.Issue, error) {
+				if dispatched.CompareAndSwap(false, true) {
+					return []domain.Issue{issue}, nil
+				}
+				return nil, nil
+			},
+		}
+
+		wm := &stubWorkflowManager{config: cfg, template: tmpl}
+		store := &stubStore{}
+		regs := passingPreflightRegistries()
+		state := NewState(cfg.Polling.IntervalMS, cfg.Agent.MaxConcurrentAgents, nil, AgentTotals{})
+		o := NewOrchestrator(OrchestratorParams{
+			State:           state,
+			Logger:          discardLogger(),
+			TrackerAdapter:  tracker,
+			AgentAdapter:    agent,
+			WorkflowManager: wm,
+			Store:           store,
+			PreflightParams: PreflightParams{
+				ReloadWorkflow:  func() error { return nil },
+				ConfigFunc:      wm.Config,
+				TrackerRegistry: regs.TrackerRegistry,
+				AgentRegistry:   regs.AgentRegistry,
+			},
+		})
+
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan struct{})
+		go func() {
+			o.Run(ctx)
+			close(done)
+		}()
+
+		// Poll for a "cancelled" run history entry: evidence that reconciliation
+		// cancelled the worker and HandleWorkerExit ran.
+		pollStore(t, store, func(s *stubStore) bool {
+			for _, rh := range s.runHistories {
+				if rh.IssueID == issue.ID && rh.Status == "cancelled" {
+					return true
+				}
+			}
+			return false
+		})
+
+		cancel()
+		<-done
+
+		if _, ok := state.Running[issue.ID]; ok {
+			t.Error("issue still in Running after reconciliation cancel, want absent")
+		}
+
+		// PendingCleanup=true in HandleWorkerExit triggers workspace removal.
+		wsPath := filepath.Join(tmpDir, "RC-1")
+		if _, statErr := os.Stat(wsPath); !os.IsNotExist(statErr) {
+			t.Errorf("workspace dir %q still exists after PendingCleanup cleanup", wsPath)
+		}
+
+		store.mu.Lock()
+		var gotStatus string
+		for _, rh := range store.runHistories {
+			if rh.IssueID == issue.ID {
+				gotStatus = rh.Status
+				break
+			}
+		}
+		store.mu.Unlock()
+		if gotStatus != "cancelled" {
+			t.Errorf("run history status = %q, want %q", gotStatus, "cancelled")
+		}
+	})
+
+	t.Run("no_redispatch_after_handoff_to_non_active_state", func(t *testing.T) {
+		t.Parallel()
+
+		tmpDir := t.TempDir()
+		cfg := lifecycleConfig(tmpDir)
+		cfg.Tracker.HandoffState = "In Review"
+		cfg.Polling.IntervalMS = 100 // fast ticks to verify no re-dispatch
+		tmpl := mustParseTemplate(t, "work on {{ .issue.identifier }}")
+		issue := scenarioIssue("nd-1", "ND-1")
+
+		// handoffDone gates state visible to both event-loop callbacks.
+		// Written by transitionIssueFn; read by fetchCandidatesFn and fetchStatesFn.
+		// Both run sequentially in the event-loop goroutine — atomic for
+		// concurrent visibility with the test-goroutine poll below.
+		var handoffDone atomic.Bool
+
+		mockTracker := &mockTrackerAdapter{
+			transitionIssueFn: func(_ context.Context, _, _ string) error {
+				handoffDone.Store(true)
+				return nil
+			},
+			fetchStatesFn: func(_ context.Context, ids []string) (map[string]string, error) {
+				result := make(map[string]string, len(ids))
+				for _, id := range ids {
+					if handoffDone.Load() {
+						result[id] = "In Review"
+					} else {
+						result[id] = "To Do"
+					}
+				}
+				return result, nil
+			},
+		}
+
+		agent := &mockAgentAdapter{
+			runTurnFn: func(_ context.Context, sess domain.Session, _ domain.RunTurnParams) (domain.TurnResult, error) {
+				return domain.TurnResult{SessionID: sess.ID, ExitReason: domain.EventTurnCompleted}, nil
+			},
+		}
+
+		// After handoff, return the issue in "In Review" so ShouldDispatch filters it out.
+		tracker := &candidateTrackerAdapter{
+			mockTrackerAdapter: mockTracker,
+			fetchCandidatesFn: func(_ context.Context) ([]domain.Issue, error) {
+				issueState := "To Do"
+				if handoffDone.Load() {
+					issueState = "In Review"
+				}
+				return []domain.Issue{{
+					ID:         issue.ID,
+					Identifier: issue.Identifier,
+					Title:      issue.Title,
+					State:      issueState,
+				}}, nil
+			},
+		}
+
+		wm := &stubWorkflowManager{config: cfg, template: tmpl}
+		store := &stubStore{}
+		regs := passingPreflightRegistries()
+		state := NewState(cfg.Polling.IntervalMS, cfg.Agent.MaxConcurrentAgents, nil, AgentTotals{})
+		o := NewOrchestrator(OrchestratorParams{
+			State:           state,
+			Logger:          discardLogger(),
+			TrackerAdapter:  tracker,
+			AgentAdapter:    agent,
+			WorkflowManager: wm,
+			Store:           store,
+			PreflightParams: PreflightParams{
+				ReloadWorkflow:  func() error { return nil },
+				ConfigFunc:      wm.Config,
+				TrackerRegistry: regs.TrackerRegistry,
+				AgentRegistry:   regs.AgentRegistry,
+			},
+		})
+
+		ctx, cancel := context.WithCancel(context.Background())
+		done := make(chan struct{})
+		go func() {
+			o.Run(ctx)
+			close(done)
+		}()
+
+		// Wait for the handoff transition to complete.
+		deadline := time.After(15 * time.Second)
+		for !handoffDone.Load() {
+			select {
+			case <-deadline:
+				cancel()
+				<-done
+				t.Fatal("timed out waiting for handoff transition")
+			default:
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
+
+		// Allow several more ticks (≥5 at 100ms interval) to confirm no re-dispatch.
+		time.Sleep(500 * time.Millisecond)
+
+		cancel()
+		<-done
+
+		store.mu.Lock()
+		histCount := len(store.runHistories)
+		store.mu.Unlock()
+		if histCount != 1 {
+			t.Errorf("run history entries = %d, want 1 (issue must not be re-dispatched after handoff)", histCount)
+		}
+
+		if got := len(mockTracker.transitionCalls); got != 1 {
+			t.Errorf("transitionCalls = %d, want 1", got)
+		}
+
+		if _, ok := state.Running[issue.ID]; ok {
+			t.Error("issue still in Running after handoff, want absent")
+		}
+	})
+}
