@@ -2407,10 +2407,10 @@ func TestHandleWorkerExit_SoftStop(t *testing.T) {
 		}
 	})
 
-	// SoftStop is checked before the handoff branch in the inner switch, so a
-	// configured HandoffState must not trigger a tracker transition when SoftStop
-	// is true.
-	t.Run("handoff_skipped_when_soft_stop", func(t *testing.T) {
+	// The narrowed first case in the inner switch matches only SoftStopReason
+	// "blocked", so a configured HandoffState must not trigger a tracker
+	// transition when the reason is "blocked".
+	t.Run("handoff_skipped_when_blocked", func(t *testing.T) {
 		t.Parallel()
 
 		store := &mockExitStore{}
@@ -2445,6 +2445,243 @@ func TestHandleWorkerExit_SoftStop(t *testing.T) {
 		// No retry scheduled.
 		if _, ok := state.RetryAttempts["SS-7"]; ok {
 			t.Error("retry scheduled after soft-stop with handoff configured, want suppressed")
+		}
+	})
+
+	t.Run("needs_human_review_triggers_handoff", func(t *testing.T) {
+		t.Parallel()
+
+		store := &mockExitStore{}
+		tracker := &mockTrackerAdapter{}
+		spy := &spyMetrics{}
+		state := exitStateWithIssue(t, "SS-8", "In Progress")
+		params := defaultExitParams(t, store)
+		params.ActiveStates = []string{"In Progress"}
+		params.HandoffState = "In Review"
+		params.TrackerAdapter = tracker
+		params.Metrics = spy
+
+		HandleWorkerExit(state, WorkerResult{
+			IssueID:        "SS-8",
+			Identifier:     "SS-8-ident",
+			ExitKind:       WorkerExitNormal,
+			AgentAdapter:   "mock",
+			SoftStop:       true,
+			SoftStopReason: "needs-human-review",
+		}, params)
+
+		if len(tracker.transitionCalls) != 1 {
+			t.Fatalf("TransitionIssue called %d times, want 1", len(tracker.transitionCalls))
+		}
+		if tracker.transitionCalls[0].TargetState != "In Review" {
+			t.Errorf("TransitionIssue TargetState = %q, want %q", tracker.transitionCalls[0].TargetState, "In Review")
+		}
+
+		if _, ok := state.Claimed["SS-8"]; ok {
+			t.Error("claim preserved after needs-human-review handoff, want released")
+		}
+		if _, ok := state.RetryAttempts["SS-8"]; ok {
+			t.Error("retry scheduled after successful handoff, want suppressed")
+		}
+		if _, ok := state.Completed["SS-8"]; !ok {
+			t.Error("issue not added to Completed after needs-human-review handoff")
+		}
+		if len(store.retryEntries) != 0 {
+			t.Errorf("SaveRetryEntry called %d times, want 0", len(store.retryEntries))
+		}
+		if len(spy.handoffTransitions) != 1 || spy.handoffTransitions[0] != "success" {
+			t.Errorf("handoffTransitions = %v, want [success]", spy.handoffTransitions)
+		}
+	})
+
+	t.Run("needs_human_review_handoff_failure_no_retry", func(t *testing.T) {
+		t.Parallel()
+
+		store := &mockExitStore{}
+		tracker := &mockTrackerAdapter{
+			transitionIssueFn: func(_ context.Context, _, _ string) error {
+				return errors.New("jira unavailable")
+			},
+		}
+		spy := &spyMetrics{}
+		state := exitStateWithIssue(t, "SS-9", "In Progress")
+		params := defaultExitParams(t, store)
+		params.ActiveStates = []string{"In Progress"}
+		params.HandoffState = "In Review"
+		params.TrackerAdapter = tracker
+		params.Metrics = spy
+
+		HandleWorkerExit(state, WorkerResult{
+			IssueID:        "SS-9",
+			Identifier:     "SS-9-ident",
+			ExitKind:       WorkerExitNormal,
+			AgentAdapter:   "mock",
+			SoftStop:       true,
+			SoftStopReason: "needs-human-review",
+		}, params)
+
+		if len(tracker.transitionCalls) != 1 {
+			t.Fatalf("TransitionIssue called %d times, want 1", len(tracker.transitionCalls))
+		}
+		if _, ok := state.Claimed["SS-9"]; ok {
+			t.Error("claim preserved after needs-human-review handoff failure, want released")
+		}
+		if _, ok := state.RetryAttempts["SS-9"]; ok {
+			t.Error("retry scheduled after needs-human-review handoff failure, want suppressed")
+		}
+		if len(store.retryEntries) != 0 {
+			t.Errorf("SaveRetryEntry called %d times, want 0", len(store.retryEntries))
+		}
+		if _, ok := state.Completed["SS-9"]; !ok {
+			t.Error("issue not added to Completed after needs-human-review handoff failure")
+		}
+		if len(spy.handoffTransitions) != 1 || spy.handoffTransitions[0] != "error" {
+			t.Errorf("handoffTransitions = %v, want [error]", spy.handoffTransitions)
+		}
+		if len(spy.retries) != 0 {
+			t.Errorf("retries = %v, want [] (no retry on soft-stop handoff failure)", spy.retries)
+		}
+	})
+
+	t.Run("blocked_with_handoff_configured_skips_transition", func(t *testing.T) {
+		t.Parallel()
+
+		store := &mockExitStore{}
+		tracker := &mockTrackerAdapter{}
+		state := exitStateWithIssue(t, "SS-10", "In Progress")
+		params := defaultExitParams(t, store)
+		params.ActiveStates = []string{"In Progress"}
+		params.HandoffState = "In Review"
+		params.TrackerAdapter = tracker
+
+		HandleWorkerExit(state, WorkerResult{
+			IssueID:        "SS-10",
+			Identifier:     "SS-10-ident",
+			ExitKind:       WorkerExitNormal,
+			AgentAdapter:   "mock",
+			SoftStop:       true,
+			SoftStopReason: "blocked",
+		}, params)
+
+		if len(tracker.transitionCalls) != 0 {
+			t.Errorf("TransitionIssue called %d times, want 0 (blocked skips handoff)", len(tracker.transitionCalls))
+		}
+		if _, ok := state.Claimed["SS-10"]; ok {
+			t.Error("claim preserved after blocked soft-stop, want released")
+		}
+		if _, ok := state.RetryAttempts["SS-10"]; ok {
+			t.Error("retry scheduled after blocked soft-stop, want suppressed")
+		}
+		if _, ok := state.Completed["SS-10"]; !ok {
+			t.Error("issue not added to Completed after blocked soft-stop")
+		}
+	})
+
+	t.Run("needs_human_review_no_handoff_configured", func(t *testing.T) {
+		t.Parallel()
+
+		store := &mockExitStore{}
+		state := exitStateWithIssue(t, "SS-11", "In Progress")
+		params := defaultExitParams(t, store)
+		params.ActiveStates = []string{"In Progress"}
+
+		HandleWorkerExit(state, WorkerResult{
+			IssueID:        "SS-11",
+			Identifier:     "SS-11-ident",
+			ExitKind:       WorkerExitNormal,
+			AgentAdapter:   "mock",
+			SoftStop:       true,
+			SoftStopReason: "needs-human-review",
+		}, params)
+
+		if _, ok := state.Claimed["SS-11"]; ok {
+			t.Error("claim preserved after needs-human-review with no handoff, want released")
+		}
+		if _, ok := state.RetryAttempts["SS-11"]; ok {
+			t.Error("retry scheduled after needs-human-review with no handoff, want suppressed")
+		}
+		if _, ok := state.Completed["SS-11"]; !ok {
+			t.Error("issue not added to Completed after needs-human-review with no handoff")
+		}
+		if len(store.retryEntries) != 0 {
+			t.Errorf("SaveRetryEntry called %d times, want 0", len(store.retryEntries))
+		}
+	})
+
+	t.Run("unrecognized_soft_stop_reason_logs_warning", func(t *testing.T) {
+		t.Parallel()
+
+		var buf bytes.Buffer
+		store := &mockExitStore{}
+		state := exitStateWithIssue(t, "SS-12", "In Progress")
+		params := defaultExitParams(t, store)
+		params.ActiveStates = []string{"In Progress"}
+		params.Logger = debugLogger(t, &buf)
+
+		HandleWorkerExit(state, WorkerResult{
+			IssueID:        "SS-12",
+			Identifier:     "SS-12-ident",
+			ExitKind:       WorkerExitNormal,
+			AgentAdapter:   "mock",
+			SoftStop:       true,
+			SoftStopReason: "something-unexpected",
+		}, params)
+
+		if _, ok := state.Claimed["SS-12"]; ok {
+			t.Error("claim preserved after unrecognized soft-stop reason, want released")
+		}
+		if _, ok := state.RetryAttempts["SS-12"]; ok {
+			t.Error("retry scheduled after unrecognized soft-stop reason, want suppressed")
+		}
+		if _, ok := state.Completed["SS-12"]; !ok {
+			t.Error("issue not added to Completed after unrecognized soft-stop reason")
+		}
+		if !strings.Contains(buf.String(), "unrecognized soft-stop reason") {
+			t.Errorf("log output missing WARN for unrecognized soft-stop reason\ngot: %q", buf.String())
+		}
+		if !strings.Contains(buf.String(), "something-unexpected") {
+			t.Errorf("log output missing reason value\ngot: %q", buf.String())
+		}
+	})
+
+	t.Run("needs_human_review_nil_tracker_adapter_no_retry", func(t *testing.T) {
+		t.Parallel()
+
+		store := &mockExitStore{}
+		spy := &spyMetrics{}
+		state := exitStateWithIssue(t, "SS-13", "In Progress")
+		params := defaultExitParams(t, store)
+		params.ActiveStates = []string{"In Progress"}
+		params.HandoffState = "In Review"
+		params.TrackerAdapter = nil
+		params.Metrics = spy
+
+		HandleWorkerExit(state, WorkerResult{
+			IssueID:        "SS-13",
+			Identifier:     "SS-13-ident",
+			ExitKind:       WorkerExitNormal,
+			AgentAdapter:   "mock",
+			SoftStop:       true,
+			SoftStopReason: "needs-human-review",
+		}, params)
+
+		if _, ok := state.Claimed["SS-13"]; ok {
+			t.Error("claim preserved after nil adapter soft-stop, want released")
+		}
+		if _, ok := state.RetryAttempts["SS-13"]; ok {
+			t.Error("retry scheduled after nil adapter soft-stop, want suppressed")
+		}
+		if _, ok := state.Completed["SS-13"]; !ok {
+			t.Error("issue not added to Completed after nil adapter soft-stop")
+		}
+		if len(store.retryEntries) != 0 {
+			t.Errorf("SaveRetryEntry called %d times, want 0", len(store.retryEntries))
+		}
+		if len(spy.handoffTransitions) != 1 || spy.handoffTransitions[0] != "error" {
+			t.Errorf("handoffTransitions = %v, want [error]", spy.handoffTransitions)
+		}
+		if len(spy.retries) != 0 {
+			t.Errorf("retries = %v, want [] (no retry on nil adapter soft-stop)", spy.retries)
 		}
 	})
 }

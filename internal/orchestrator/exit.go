@@ -295,10 +295,9 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 		issueIsActive := len(params.ActiveStates) == 0 || isActiveState(entry.Issue.State, params.ActiveStates)
 
 		switch {
-		case workerResult.SoftStop:
-			// Agent signaled a recognized A2O status (blocked,
-			// needs-human-review). Suppress continuation retry and
-			// release the claim immediately.
+		case workerResult.SoftStop && workerResult.SoftStopReason == string(workspace.StatusBlocked):
+			// Blocked agents have no further work; suppress continuation
+			// retry and release the claim immediately.
 			log.Info("continuation retry suppressed",
 				slog.String("reason", workerResult.SoftStopReason),
 			)
@@ -314,34 +313,44 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 					slog.String("handoff_state", params.HandoffState),
 				)
 				metrics.IncHandoffTransitions(handoffError)
-				ScheduleRetry(state, ScheduleRetryParams{
-					IssueID:     workerResult.IssueID,
-					Identifier:  workerResult.Identifier,
-					DisplayID:   entry.Issue.DisplayID,
-					Attempt:     NextAttempt(entry.RetryAttempt),
-					DelayMS:     continuationDelayMS,
-					Error:       "",
-					LastSSHHost: workerResult.SSHHost,
-				}, params.OnRetryFire)
-				metrics.IncRetries(triggerContinuation)
-				retryScheduled = true
+				if workerResult.SoftStop {
+					CancelRetry(state, workerResult.IssueID)
+					delete(state.Claimed, workerResult.IssueID)
+				} else {
+					ScheduleRetry(state, ScheduleRetryParams{
+						IssueID:     workerResult.IssueID,
+						Identifier:  workerResult.Identifier,
+						DisplayID:   entry.Issue.DisplayID,
+						Attempt:     NextAttempt(entry.RetryAttempt),
+						DelayMS:     continuationDelayMS,
+						Error:       "",
+						LastSSHHost: workerResult.SSHHost,
+					}, params.OnRetryFire)
+					metrics.IncRetries(triggerContinuation)
+					retryScheduled = true
+				}
 			} else if err := params.TrackerAdapter.TransitionIssue(ctx, workerResult.IssueID, params.HandoffState); err != nil {
 				log.Warn("handoff transition failed, scheduling continuation retry",
 					slog.String("handoff_state", params.HandoffState),
 					slog.Any("error", err),
 				)
 				metrics.IncHandoffTransitions(handoffError)
-				ScheduleRetry(state, ScheduleRetryParams{
-					IssueID:     workerResult.IssueID,
-					Identifier:  workerResult.Identifier,
-					DisplayID:   entry.Issue.DisplayID,
-					Attempt:     NextAttempt(entry.RetryAttempt),
-					DelayMS:     continuationDelayMS,
-					Error:       "",
-					LastSSHHost: workerResult.SSHHost,
-				}, params.OnRetryFire)
-				metrics.IncRetries(triggerContinuation)
-				retryScheduled = true
+				if workerResult.SoftStop {
+					CancelRetry(state, workerResult.IssueID)
+					delete(state.Claimed, workerResult.IssueID)
+				} else {
+					ScheduleRetry(state, ScheduleRetryParams{
+						IssueID:     workerResult.IssueID,
+						Identifier:  workerResult.Identifier,
+						DisplayID:   entry.Issue.DisplayID,
+						Attempt:     NextAttempt(entry.RetryAttempt),
+						DelayMS:     continuationDelayMS,
+						Error:       "",
+						LastSSHHost: workerResult.SSHHost,
+					}, params.OnRetryFire)
+					metrics.IncRetries(triggerContinuation)
+					retryScheduled = true
+				}
 			} else {
 				log.Info("handoff transition succeeded, releasing claim",
 					slog.String("handoff_state", params.HandoffState),
@@ -350,6 +359,22 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 				CancelRetry(state, workerResult.IssueID)
 				delete(state.Claimed, workerResult.IssueID)
 			}
+
+		case workerResult.SoftStop:
+			// Catch-all for soft-stop reasons not handled above (e.g.,
+			// needs-human-review without handoff configured, or any
+			// future/unrecognized reason). Release the claim without retry.
+			if workerResult.SoftStopReason != string(workspace.StatusBlocked) &&
+				workerResult.SoftStopReason != string(workspace.StatusNeedsHumanReview) {
+				log.Warn("unrecognized soft-stop reason",
+					slog.String("reason", workerResult.SoftStopReason),
+				)
+			}
+			log.Info("continuation retry suppressed",
+				slog.String("reason", workerResult.SoftStopReason),
+			)
+			CancelRetry(state, workerResult.IssueID)
+			delete(state.Claimed, workerResult.IssueID)
 
 		case issueIsActive:
 			// No handoff configured but issue is still active:
