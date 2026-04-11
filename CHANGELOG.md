@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.6.1] - 2026-04-11
+
+### Added
+
+- Runtime terminal workspace sweep: workspace directories for issues that
+  reach a terminal tracker state after their worker has exited are now
+  cleaned up periodically by the event loop. This closes the gap between
+  the startup sweep and in-flight reconciliation, preventing unbounded
+  disk accumulation on long-running instances.
+  ([#428](https://github.com/sortie-ai/sortie/issues/428),
+  [#430](https://github.com/sortie-ai/sortie/pull/430))
+
+### Fixed
+
+- Orchestrator: `needs-human-review` soft-stop now correctly triggers the
+  handoff transition. Previously, the `SoftStop` branch in `HandleWorkerExit`
+  matched all soft-stop reasons before the handoff case was reached, leaving
+  the issue active and causing an infinite re-dispatch loop.
+  ([#426](https://github.com/sortie-ai/sortie/issues/426),
+  [#427](https://github.com/sortie-ai/sortie/pull/427))
+
 ## [1.6.0] - 2026-04-10
 
 ### Added
@@ -657,7 +678,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   execution via GitHub Actions.
 - Architecture Decision Records (ADR-0001 through ADR-0005).
 
-[Unreleased]: https://github.com/sortie-ai/sortie/compare/1.6.0...HEAD
+[Unreleased]: https://github.com/sortie-ai/sortie/compare/1.6.1...HEAD
+[1.6.1]: https://github.com/sortie-ai/sortie/compare/1.6.0...1.6.1
 [1.6.0]: https://github.com/sortie-ai/sortie/compare/1.5.1...1.6.0
 [1.5.1]: https://github.com/sortie-ai/sortie/compare/1.5.0...1.5.1
 [1.5.0]: https://github.com/sortie-ai/sortie/compare/1.4.0...1.5.0
