@@ -75,7 +75,7 @@ echo ""
 
 # Also show closed milestones count for context
 closed_count=$(gh api "repos/${REPO}/milestones?state=closed" --paginate \
-  -q '. | length' 2>/dev/null || echo "0")
+  -q '. | length' 2>/dev/null | awk '{s+=$1} END{print s+0}' || echo "0")
 echo "  (${closed_count} closed milestones omitted)"
 echo ""
 

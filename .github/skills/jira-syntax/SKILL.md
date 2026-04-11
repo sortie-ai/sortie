@@ -7,6 +7,8 @@ description: >
   create, update, or validate Jira ticket content. Handles bug report
   and feature request templates.
   Do NOT use for Jira API operations, JQL queries, or workflow transitions.
+metadata:
+  version: 2026-04-12
 ---
 
 # Jira wiki markup

@@ -5,6 +5,8 @@ description: >
   Handles atomic commits, branch safety, Conventional Commits format,
   and project style matching. Do NOT use for pushing, creating PRs,
   or branch management beyond safety checks.
+metadata:
+  version: 2026-04-12
 ---
 
 # Git Commit

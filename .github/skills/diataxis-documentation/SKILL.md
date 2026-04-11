@@ -1,6 +1,8 @@
 ---
 name: diataxis-documentation
 description: "Create, edit, and validate technical documentation using the Diataxis framework. Use when writing tutorials, how-to guides, reference docs, or explanations. Use when reviewing or auditing existing documentation for structural correctness. Use when deciding what type of document to write. Also use when the user mentions Diataxis, documentation quality, documentation types, or asks to write 'deep dive' articles, onboarding guides, API docs, or architectural explanations. Do NOT use for code comments, commit messages, changelogs, or README generation."
+metadata:
+  version: 2026-04-12
 ---
 
 # Diataxis Documentation Framework

@@ -5,6 +5,8 @@ description: >
   for review. Handles branch verification, change analysis, title and
   description generation, and gh pr create. Do NOT use for committing
   (use git-commit), pushing without PR, or reviewing existing PRs.
+metadata:
+  version: 2026-04-12
 ---
 
 # Creating a Pull Request

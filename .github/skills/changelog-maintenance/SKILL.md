@@ -5,6 +5,8 @@ description: >
   a release, or add entries for recent work. Handles CHANGELOG.md updates
   following Keep a Changelog format and Semantic Versioning. Do NOT use for
   committing (use git-commit) or creating release notes outside CHANGELOG.md.
+metadata:
+  version: 2026-04-12
 ---
 
 # Changelog Maintenance

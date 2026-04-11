@@ -1,6 +1,8 @@
 ---
 name: creating-agent-skills
 description: Use when creating, improving, comparing, evaluating or packaging Agent Skills following the agentskills.io specification. Also use when deciding whether a skill is the right solution vs MCP servers, custom instructions, AGENTS.md, or Cursor Rules. Handles SKILL.md authoring, frontmatter optimization, description writing, progressive disclosure, cross-platform compatibility, and distribution.
+metadata:
+  version: 2026-04-12
 ---
 
 # Creating Agent Skills

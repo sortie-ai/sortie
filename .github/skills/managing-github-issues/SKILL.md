@@ -9,6 +9,8 @@ description: >
   in any task-management context. Handles label/milestone assignment, duplicate
   detection, and project board integration. Do NOT use for pull requests (use
   creating-pr) or changelog entries (use changelog-maintenance).
+metadata:
+  version: 2026-04-12
 ---
 
 # Managing GitHub Issues
