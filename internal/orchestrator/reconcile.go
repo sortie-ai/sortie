@@ -10,6 +10,7 @@ import (
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/logging"
 	"github.com/sortie-ai/sortie/internal/persistence"
+	"github.com/sortie-ai/sortie/internal/workspace"
 )
 
 // ReconcileStore is the persistence interface required by
@@ -297,5 +298,142 @@ func reconcileTrackerState(state *State, params ReconcileParams, log *slog.Logge
 		entryLog.Info("stopping worker for non-active issue",
 			slog.String("state", stateName),
 		)
+	}
+}
+
+// sweepEveryNTicks is the number of poll ticks between terminal workspace
+// sweeps. At the default 10s poll interval this fires roughly every 10
+// minutes — frequent enough for eventual consistency, infrequent enough to
+// avoid unbounded tracker API load from orphaned non-terminal workspaces.
+const sweepEveryNTicks = 60
+
+// SweepTerminalWorkspacesParams holds the dependencies for
+// [SweepTerminalWorkspaces]. All fields except Logger and Metrics are
+// required; nil Logger defaults to [slog.Default] and nil Metrics defaults
+// to [domain.NoopMetrics].
+type SweepTerminalWorkspacesParams struct {
+	WorkspaceRoot    string
+	TrackerAdapter   domain.TrackerAdapter
+	TerminalStates   []string
+	BeforeRemoveHook string
+	HookTimeoutMS    int
+	Ctx              context.Context
+	Logger           *slog.Logger
+	Metrics          domain.Metrics
+}
+
+// SweepTerminalWorkspaces removes workspace directories for issues that
+// transitioned to a terminal state after their worker exited. It lists
+// workspace keys on disk, excludes any that belong to in-flight entries,
+// queries the tracker for the remaining identifiers, and cleans up those
+// whose state is terminal.
+func SweepTerminalWorkspaces(state *State, params SweepTerminalWorkspacesParams) {
+	log := params.Logger
+	if log == nil {
+		log = slog.Default()
+	}
+
+	metrics := params.Metrics
+	if metrics == nil {
+		metrics = &domain.NoopMetrics{}
+	}
+
+	keys, err := workspace.ListWorkspaceKeys(params.WorkspaceRoot)
+	if err != nil {
+		log.Warn("sweep: failed to list workspace keys",
+			slog.Any("error", err),
+		)
+		return
+	}
+	if len(keys) == 0 {
+		return
+	}
+
+	inFlightKeys := make(map[string]struct{})
+	for _, entry := range state.Running {
+		k, sErr := workspace.SanitizeKey(entry.Identifier)
+		if sErr != nil {
+			log.Warn("sweep: failed to sanitize running identifier",
+				slog.String("identifier", entry.Identifier),
+				slog.Any("error", sErr),
+			)
+			continue
+		}
+		inFlightKeys[k] = struct{}{}
+	}
+	for _, entry := range state.RetryAttempts {
+		k, sErr := workspace.SanitizeKey(entry.Identifier)
+		if sErr != nil {
+			log.Warn("sweep: failed to sanitize retry identifier",
+				slog.String("identifier", entry.Identifier),
+				slog.Any("error", sErr),
+			)
+			continue
+		}
+		inFlightKeys[k] = struct{}{}
+	}
+	for _, entry := range state.PendingReactions {
+		k, sErr := workspace.SanitizeKey(entry.Identifier)
+		if sErr != nil {
+			log.Warn("sweep: failed to sanitize pending reaction identifier",
+				slog.String("identifier", entry.Identifier),
+				slog.Any("error", sErr),
+			)
+			continue
+		}
+		inFlightKeys[k] = struct{}{}
+	}
+
+	unclaimedKeys := make([]string, 0, len(keys))
+	for _, key := range keys {
+		if _, ok := inFlightKeys[key]; !ok {
+			unclaimedKeys = append(unclaimedKeys, key)
+		}
+	}
+	if len(unclaimedKeys) == 0 {
+		return
+	}
+
+	statesByKey, err := params.TrackerAdapter.FetchIssueStatesByIdentifiers(params.Ctx, unclaimedKeys)
+	if err != nil {
+		log.Warn("sweep: failed to fetch issue states",
+			slog.Any("error", err),
+		)
+		return
+	}
+
+	terminalSet := make(map[string]struct{}, len(params.TerminalStates))
+	for _, s := range params.TerminalStates {
+		terminalSet[strings.ToLower(s)] = struct{}{}
+	}
+
+	var toClean []string
+	for _, key := range unclaimedKeys {
+		stateName, ok := statesByKey[key]
+		if !ok {
+			continue
+		}
+		if _, terminal := terminalSet[strings.ToLower(stateName)]; terminal {
+			toClean = append(toClean, key)
+		}
+	}
+	if len(toClean) == 0 {
+		return
+	}
+
+	log.Info("sweep: cleaning terminal workspaces",
+		slog.Int("count", len(toClean)),
+	)
+
+	result := workspace.CleanupTerminal(params.Ctx, workspace.CleanupTerminalParams{
+		Root:          params.WorkspaceRoot,
+		Identifiers:   toClean,
+		BeforeRemove:  params.BeforeRemoveHook,
+		HookTimeoutMS: params.HookTimeoutMS,
+		Logger:        log,
+	})
+
+	for range result.Removed {
+		metrics.IncReconciliationActions(actionSweepCleanup)
 	}
 }

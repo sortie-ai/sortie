@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
@@ -4252,4 +4253,133 @@ func TestOrchestratorScenarios(t *testing.T) {
 			t.Error("issue still in Running after handoff, want absent")
 		}
 	})
+}
+
+// sweepThrottleTracker is a test double for [TestHandleTickSweepThrottle].
+// It records invocations of FetchIssueStatesByIdentifiers and returns
+// configurable state data. All other methods return safe zero values so
+// that tick-loop side effects (reconcile, dispatch) do not panic.
+type sweepThrottleTracker struct {
+	mu          sync.Mutex
+	calls       int
+	statesByKey map[string]string
+}
+
+var _ domain.TrackerAdapter = (*sweepThrottleTracker)(nil)
+
+func (s *sweepThrottleTracker) FetchIssueStatesByIdentifiers(_ context.Context, _ []string) (map[string]string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.calls++
+	return s.statesByKey, nil
+}
+
+func (s *sweepThrottleTracker) callCount() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.calls
+}
+
+func (s *sweepThrottleTracker) FetchCandidateIssues(_ context.Context) ([]domain.Issue, error) {
+	return nil, nil
+}
+
+func (s *sweepThrottleTracker) FetchIssueByID(_ context.Context, _ string) (domain.Issue, error) {
+	return domain.Issue{}, nil
+}
+
+func (s *sweepThrottleTracker) FetchIssuesByStates(_ context.Context, _ []string) ([]domain.Issue, error) {
+	return nil, nil
+}
+
+func (s *sweepThrottleTracker) FetchIssueStatesByIDs(_ context.Context, _ []string) (map[string]string, error) {
+	return nil, nil
+}
+
+func (s *sweepThrottleTracker) FetchIssueComments(_ context.Context, _ string) ([]domain.Comment, error) {
+	return nil, nil
+}
+
+func (s *sweepThrottleTracker) TransitionIssue(_ context.Context, _, _ string) error { return nil }
+
+func (s *sweepThrottleTracker) CommentIssue(_ context.Context, _, _ string) error { return nil }
+
+func (s *sweepThrottleTracker) AddLabel(_ context.Context, _, _ string) error { return nil }
+
+// --- TestHandleTickSweepThrottle ---
+
+func TestHandleTickSweepThrottle(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	if err := os.Mkdir(filepath.Join(tmpDir, "PROJ-10"), 0o755); err != nil {
+		t.Fatalf("os.Mkdir PROJ-10: %v", err)
+	}
+
+	tracker := &sweepThrottleTracker{
+		statesByKey: map[string]string{"PROJ-10": "Done"},
+	}
+
+	cfg := config.ServiceConfig{
+		Tracker: config.TrackerConfig{
+			Kind:           "mock",
+			APIKey:         "test-key",
+			ActiveStates:   []string{"To Do"},
+			TerminalStates: []string{"Done"},
+		},
+		Polling:   config.PollingConfig{IntervalMS: 60000},
+		Workspace: config.WorkspaceConfig{Root: tmpDir},
+		Hooks:     config.HooksConfig{TimeoutMS: 5000},
+		Agent: config.AgentConfig{
+			Kind:                "mock",
+			Command:             "/usr/bin/agent",
+			MaxConcurrentAgents: 1,
+		},
+	}
+
+	wm := &stubWorkflowManager{config: cfg}
+	regs := passingPreflightRegistries()
+
+	state := NewState(60000, 1, nil, AgentTotals{})
+	o := NewOrchestrator(OrchestratorParams{
+		State:           state,
+		Logger:          discardLogger(),
+		TrackerAdapter:  tracker,
+		AgentAdapter:    &mockAgentAdapter{},
+		WorkflowManager: wm,
+		Store:           &stubStore{},
+		PreflightParams: PreflightParams{
+			ReloadWorkflow:  func() error { return nil },
+			ConfigFunc:      wm.Config,
+			TrackerRegistry: regs.TrackerRegistry,
+			AgentRegistry:   regs.AgentRegistry,
+		},
+	})
+
+	ctx := context.Background()
+
+	// Ticks 1 through sweepEveryNTicks-1: sweep must not fire.
+	for i := 0; i < sweepEveryNTicks-1; i++ {
+		o.handleTick(ctx)
+	}
+	if got := tracker.callCount(); got != 0 {
+		t.Errorf("FetchIssueStatesByIdentifiers called %d times before tick %d, want 0",
+			got, sweepEveryNTicks)
+	}
+
+	// Tick sweepEveryNTicks: sweep fires exactly once.
+	o.handleTick(ctx)
+	if got := tracker.callCount(); got != 1 {
+		t.Errorf("FetchIssueStatesByIdentifiers called %d times at tick %d, want 1",
+			got, sweepEveryNTicks)
+	}
+
+	wsPath := filepath.Join(tmpDir, "PROJ-10")
+	if _, err := os.Stat(wsPath); !errors.Is(err, os.ErrNotExist) {
+		t.Error("workspace PROJ-10 still exists after sweep, want removed")
+	}
+
+	if got := o.state.SweepTickCounter; got != 0 {
+		t.Errorf("SweepTickCounter = %d after sweep, want 0", got)
+	}
 }

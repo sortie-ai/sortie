@@ -33,9 +33,10 @@ const (
 	triggerStall        = "stall"
 	triggerCIFix        = "ci_fix"
 
-	actionStop    = "stop"
-	actionCleanup = "cleanup"
-	actionKeep    = "keep"
+	actionStop         = "stop"
+	actionCleanup      = "cleanup"
+	actionKeep         = "keep"
+	actionSweepCleanup = "sweep_cleanup"
 
 	handoffSuccess = "success"
 	handoffError   = "error"
@@ -441,6 +442,11 @@ type State struct {
 	// per-kind reconcile functions during the reconcile tick. Runtime-only
 	// (not persisted).
 	PendingReactions map[string]*PendingReaction
+
+	// SweepTickCounter tracks poll ticks since the last terminal workspace
+	// sweep. Incremented by handleTick; reset to zero when the sweep fires.
+	// Runtime-only (not persisted).
+	SweepTickCounter int
 }
 
 // continuationCtxKey is the context key for reaction continuation data

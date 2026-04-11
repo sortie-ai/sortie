@@ -4,6 +4,10 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"os"
+	"path/filepath"
+	"slices"
+	"sort"
 	"testing"
 	"time"
 
@@ -102,6 +106,57 @@ func (m *mockReconcileTracker) CommentIssue(context.Context, string, string) err
 
 func (m *mockReconcileTracker) AddLabel(context.Context, string, string) error {
 	panic("AddLabel must not be called by ReconcileRunningIssues")
+}
+
+// sweepTracker is a test double for [SweepTerminalWorkspaces]. Its
+// FetchIssueStatesByIdentifiers records the identifiers it receives and
+// returns the configured statesByKey map and fetchErr. All other methods
+// panic if called, matching the guard pattern in [mockReconcileTracker].
+type sweepTracker struct {
+	calledWith  []string          // copy of ids passed to FetchIssueStatesByIdentifiers
+	statesByKey map[string]string // keyed by workspace key (sanitized identifier)
+	fetchErr    error
+}
+
+var _ domain.TrackerAdapter = (*sweepTracker)(nil)
+
+func (s *sweepTracker) FetchIssueStatesByIdentifiers(_ context.Context, ids []string) (map[string]string, error) {
+	cp := make([]string, len(ids))
+	copy(cp, ids)
+	s.calledWith = cp
+	return s.statesByKey, s.fetchErr
+}
+
+func (s *sweepTracker) FetchCandidateIssues(context.Context) ([]domain.Issue, error) {
+	panic("FetchCandidateIssues must not be called by SweepTerminalWorkspaces")
+}
+
+func (s *sweepTracker) FetchIssueByID(context.Context, string) (domain.Issue, error) {
+	panic("FetchIssueByID must not be called by SweepTerminalWorkspaces")
+}
+
+func (s *sweepTracker) FetchIssuesByStates(context.Context, []string) ([]domain.Issue, error) {
+	panic("FetchIssuesByStates must not be called by SweepTerminalWorkspaces")
+}
+
+func (s *sweepTracker) FetchIssueStatesByIDs(context.Context, []string) (map[string]string, error) {
+	panic("FetchIssueStatesByIDs must not be called by SweepTerminalWorkspaces")
+}
+
+func (s *sweepTracker) FetchIssueComments(context.Context, string) ([]domain.Comment, error) {
+	panic("FetchIssueComments must not be called by SweepTerminalWorkspaces")
+}
+
+func (s *sweepTracker) TransitionIssue(context.Context, string, string) error {
+	panic("TransitionIssue must not be called by SweepTerminalWorkspaces")
+}
+
+func (s *sweepTracker) CommentIssue(context.Context, string, string) error {
+	panic("CommentIssue must not be called by SweepTerminalWorkspaces")
+}
+
+func (s *sweepTracker) AddLabel(context.Context, string, string) error {
+	panic("AddLabel must not be called by SweepTerminalWorkspaces")
 }
 
 // --- Test helpers ---
@@ -943,4 +998,272 @@ func TestReconcileStalled_WarnLogOnlyOnFirstTick(t *testing.T) {
 	if debugCount != 1 {
 		t.Errorf("Debug('stall retry already scheduled, skipping reschedule') emitted %d times, want 1", debugCount)
 	}
+}
+
+// --- SweepTerminalWorkspaces helpers ---
+
+// defaultSweepParams returns SweepTerminalWorkspacesParams with the given
+// root and tracker. TerminalStates, Ctx, Logger, and Metrics use
+// test-suitable defaults.
+func defaultSweepParams(t *testing.T, root string, tracker *sweepTracker) SweepTerminalWorkspacesParams {
+	t.Helper()
+	return SweepTerminalWorkspacesParams{
+		WorkspaceRoot:  root,
+		TrackerAdapter: tracker,
+		TerminalStates: []string{"Done"},
+		Ctx:            context.Background(),
+		Logger:         discardLogger(),
+		Metrics:        &domain.NoopMetrics{},
+	}
+}
+
+// mustMkdirSweep creates a directory under path or fatals the test.
+func mustMkdirSweep(t *testing.T, path string) {
+	t.Helper()
+	if err := os.Mkdir(path, 0o755); err != nil {
+		t.Fatalf("os.Mkdir(%q): %v", path, err)
+	}
+}
+
+// assertSweepDirExists fails if the directory at path does not exist.
+func assertSweepDirExists(t *testing.T, path string) {
+	t.Helper()
+	if _, err := os.Stat(path); err != nil {
+		t.Errorf("directory %q should exist: %v", path, err)
+	}
+}
+
+// assertSweepDirRemoved fails if path still exists on disk.
+func assertSweepDirRemoved(t *testing.T, path string) {
+	t.Helper()
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("path %q should have been removed, want ErrNotExist", path)
+	}
+}
+
+// --- TestSweepTerminalWorkspaces ---
+
+func TestSweepTerminalWorkspaces(t *testing.T) {
+	t.Parallel()
+
+	t.Run("EmptyWorkspaceRoot", func(t *testing.T) {
+		t.Parallel()
+
+		tracker := &sweepTracker{}
+		state := NewState(5000, 4, nil, AgentTotals{})
+		SweepTerminalWorkspaces(state, SweepTerminalWorkspacesParams{
+			WorkspaceRoot:  "",
+			TrackerAdapter: tracker,
+			TerminalStates: []string{"Done"},
+			Ctx:            context.Background(),
+			Logger:         discardLogger(),
+			Metrics:        &domain.NoopMetrics{},
+		})
+
+		if tracker.calledWith != nil {
+			t.Errorf("FetchIssueStatesByIdentifiers called with %v, want not called", tracker.calledWith)
+		}
+	})
+
+	t.Run("NoWorkspaceDirectories", func(t *testing.T) {
+		t.Parallel()
+
+		tmpDir := t.TempDir()
+		tracker := &sweepTracker{}
+		state := NewState(5000, 4, nil, AgentTotals{})
+
+		SweepTerminalWorkspaces(state, defaultSweepParams(t, tmpDir, tracker))
+
+		if tracker.calledWith != nil {
+			t.Errorf("FetchIssueStatesByIdentifiers called with %v, want not called", tracker.calledWith)
+		}
+	})
+
+	t.Run("AllRunning", func(t *testing.T) {
+		t.Parallel()
+
+		tmpDir := t.TempDir()
+		mustMkdirSweep(t, filepath.Join(tmpDir, "PROJ-1"))
+
+		tracker := &sweepTracker{}
+		state := NewState(5000, 4, nil, AgentTotals{})
+		state.Running["id1"] = &RunningEntry{Identifier: "PROJ-1"}
+
+		SweepTerminalWorkspaces(state, defaultSweepParams(t, tmpDir, tracker))
+
+		if tracker.calledWith != nil {
+			t.Errorf("FetchIssueStatesByIdentifiers called with %v, want not called", tracker.calledWith)
+		}
+		assertSweepDirExists(t, filepath.Join(tmpDir, "PROJ-1"))
+	})
+
+	t.Run("AllRetryAttempts", func(t *testing.T) {
+		t.Parallel()
+
+		tmpDir := t.TempDir()
+		mustMkdirSweep(t, filepath.Join(tmpDir, "PROJ-2"))
+
+		tracker := &sweepTracker{}
+		state := NewState(5000, 4, nil, AgentTotals{})
+		state.RetryAttempts["id2"] = &RetryEntry{Identifier: "PROJ-2"}
+
+		SweepTerminalWorkspaces(state, defaultSweepParams(t, tmpDir, tracker))
+
+		if tracker.calledWith != nil {
+			t.Errorf("FetchIssueStatesByIdentifiers called with %v, want not called", tracker.calledWith)
+		}
+		assertSweepDirExists(t, filepath.Join(tmpDir, "PROJ-2"))
+	})
+
+	t.Run("AllPendingReactions", func(t *testing.T) {
+		t.Parallel()
+
+		tmpDir := t.TempDir()
+		mustMkdirSweep(t, filepath.Join(tmpDir, "PROJ-3"))
+
+		tracker := &sweepTracker{}
+		state := NewState(5000, 4, nil, AgentTotals{})
+		state.PendingReactions["id3:ci"] = &PendingReaction{Identifier: "PROJ-3"}
+
+		SweepTerminalWorkspaces(state, defaultSweepParams(t, tmpDir, tracker))
+
+		if tracker.calledWith != nil {
+			t.Errorf("FetchIssueStatesByIdentifiers called with %v, want not called", tracker.calledWith)
+		}
+		assertSweepDirExists(t, filepath.Join(tmpDir, "PROJ-3"))
+	})
+
+	t.Run("SanitizeKeyError_Running", func(t *testing.T) {
+		t.Parallel()
+
+		tmpDir := t.TempDir()
+		mustMkdirSweep(t, filepath.Join(tmpDir, "PROJ-4"))
+
+		// Empty identifier fails SanitizeKey; the running entry is
+		// skipped when building inFlightKeys, leaving PROJ-4 unclaimed.
+		tracker := &sweepTracker{
+			statesByKey: map[string]string{"PROJ-4": "Done"},
+		}
+		state := NewState(5000, 4, nil, AgentTotals{})
+		state.Running["id1"] = &RunningEntry{Identifier: ""}
+
+		SweepTerminalWorkspaces(state, defaultSweepParams(t, tmpDir, tracker))
+
+		if tracker.calledWith == nil {
+			t.Fatal("FetchIssueStatesByIdentifiers not called, want called with [PROJ-4]")
+		}
+		got := append([]string(nil), tracker.calledWith...)
+		sort.Strings(got)
+		want := []string{"PROJ-4"}
+		if !slices.Equal(got, want) {
+			t.Errorf("FetchIssueStatesByIdentifiers received %v, want %v", got, want)
+		}
+		assertSweepDirRemoved(t, filepath.Join(tmpDir, "PROJ-4"))
+	})
+
+	t.Run("MixedRunningAndTerminal", func(t *testing.T) {
+		t.Parallel()
+
+		tmpDir := t.TempDir()
+		mustMkdirSweep(t, filepath.Join(tmpDir, "PROJ-5"))
+		mustMkdirSweep(t, filepath.Join(tmpDir, "PROJ-6"))
+
+		tracker := &sweepTracker{
+			statesByKey: map[string]string{"PROJ-6": "Done"},
+		}
+		state := NewState(5000, 4, nil, AgentTotals{})
+		state.Running["id5"] = &RunningEntry{Identifier: "PROJ-5"}
+
+		SweepTerminalWorkspaces(state, defaultSweepParams(t, tmpDir, tracker))
+
+		assertSweepDirExists(t, filepath.Join(tmpDir, "PROJ-5"))
+		assertSweepDirRemoved(t, filepath.Join(tmpDir, "PROJ-6"))
+	})
+
+	t.Run("MixedTerminalAndActive", func(t *testing.T) {
+		t.Parallel()
+
+		tmpDir := t.TempDir()
+		mustMkdirSweep(t, filepath.Join(tmpDir, "PROJ-7"))
+		mustMkdirSweep(t, filepath.Join(tmpDir, "PROJ-8"))
+
+		tracker := &sweepTracker{
+			statesByKey: map[string]string{
+				"PROJ-7": "Done",
+				"PROJ-8": "In Progress",
+			},
+		}
+		state := NewState(5000, 4, nil, AgentTotals{})
+
+		SweepTerminalWorkspaces(state, defaultSweepParams(t, tmpDir, tracker))
+
+		assertSweepDirRemoved(t, filepath.Join(tmpDir, "PROJ-7"))
+		assertSweepDirExists(t, filepath.Join(tmpDir, "PROJ-8"))
+	})
+
+	t.Run("TrackerFetchFailure", func(t *testing.T) {
+		t.Parallel()
+
+		tmpDir := t.TempDir()
+		mustMkdirSweep(t, filepath.Join(tmpDir, "PROJ-9"))
+
+		tracker := &sweepTracker{
+			fetchErr: errors.New("tracker unavailable"),
+		}
+		state := NewState(5000, 4, nil, AgentTotals{})
+
+		SweepTerminalWorkspaces(state, defaultSweepParams(t, tmpDir, tracker))
+
+		assertSweepDirExists(t, filepath.Join(tmpDir, "PROJ-9"))
+	})
+
+	t.Run("UnclaimedKeyMissingFromTracker", func(t *testing.T) {
+		t.Parallel()
+
+		tmpDir := t.TempDir()
+		mustMkdirSweep(t, filepath.Join(tmpDir, "PROJ-9"))
+
+		// Tracker returns an empty map; PROJ-9 is absent from it.
+		tracker := &sweepTracker{
+			statesByKey: map[string]string{},
+		}
+		state := NewState(5000, 4, nil, AgentTotals{})
+
+		SweepTerminalWorkspaces(state, defaultSweepParams(t, tmpDir, tracker))
+
+		assertSweepDirExists(t, filepath.Join(tmpDir, "PROJ-9"))
+	})
+
+	t.Run("MetricEmitted", func(t *testing.T) {
+		t.Parallel()
+
+		tmpDir := t.TempDir()
+		mustMkdirSweep(t, filepath.Join(tmpDir, "PROJ-10"))
+
+		tracker := &sweepTracker{
+			statesByKey: map[string]string{"PROJ-10": "Done"},
+		}
+		state := NewState(5000, 4, nil, AgentTotals{})
+
+		spy := &spyMetrics{}
+		params := defaultSweepParams(t, tmpDir, tracker)
+		params.Metrics = spy
+
+		SweepTerminalWorkspaces(state, params)
+
+		spy.mu.Lock()
+		acts := append([]string(nil), spy.reconciliationActs...)
+		spy.mu.Unlock()
+
+		var sweepCount int
+		for _, a := range acts {
+			if a == actionSweepCleanup {
+				sweepCount++
+			}
+		}
+		if sweepCount != 1 {
+			t.Errorf("IncReconciliationActions(%q) called %d times, want 1", actionSweepCleanup, sweepCount)
+		}
+		assertSweepDirRemoved(t, filepath.Join(tmpDir, "PROJ-10"))
+	})
 }

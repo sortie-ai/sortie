@@ -390,6 +390,23 @@ func (o *Orchestrator) handleTick(ctx context.Context) {
 		ReviewPendingTTL:  reviewPendingDefaultTTL,
 	})
 
+	// Sweep terminal workspaces periodically to catch issues that
+	// transitioned after their worker exited.
+	o.state.SweepTickCounter++
+	if o.state.SweepTickCounter >= sweepEveryNTicks {
+		o.state.SweepTickCounter = 0
+		SweepTerminalWorkspaces(o.state, SweepTerminalWorkspacesParams{
+			WorkspaceRoot:    cfg.Workspace.Root,
+			TrackerAdapter:   o.trackerAdapter,
+			TerminalStates:   cfg.Tracker.TerminalStates,
+			BeforeRemoveHook: cfg.Hooks.BeforeRemove,
+			HookTimeoutMS:    cfg.Hooks.TimeoutMS,
+			Ctx:              ctx,
+			Logger:           o.logger,
+			Metrics:          o.metrics,
+		})
+	}
+
 	// On preflight failure, skip dispatch but still notify observers
 	// so the UI reflects the reconciliation outcome.
 	if !validation.OK() {
