@@ -37,12 +37,12 @@ func TestResolveWorkflowPath(t *testing.T) {
 		{
 			name:    "single arg returns absolute",
 			args:    []string{"my-file.md"},
-			wantEnd: fmt.Sprintf("%s/my-file.md", cwd),
+			wantEnd: filepath.Join(cwd, "my-file.md"),
 		},
 		{
 			name:    "absolute arg returned as-is",
-			args:    []string{"/tmp/wf.md"},
-			wantEnd: "/tmp/wf.md",
+			args:    []string{filepath.Join(os.TempDir(), "wf.md")},
+			wantEnd: filepath.Join(os.TempDir(), "wf.md"),
 		},
 		{
 			name:    "two args returns error",
