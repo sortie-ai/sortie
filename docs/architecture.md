@@ -3494,9 +3494,12 @@ Recognized values:
 - `blocked` — agent signals it cannot proceed without human intervention. The orchestrator treats
   this as a soft stop: it completes the current turn normally but does not schedule continuation
   retries until the issue state changes in the tracker.
-- `needs-human-review` — agent signals that work is complete and requires review. Treated the
-  same as `blocked` from the orchestrator's perspective; the distinction is informational for
-  operators and status surfaces.
+- `needs-human-review` — agent signals that work is complete and requires review. Like `blocked`,
+  this value suppresses continuation retries and releases the issue claim. Unlike `blocked`, when
+  `tracker.handoff_state` is configured and the issue is in an active tracker state, the
+  orchestrator performs the handoff transition (Section 5.3.1). This ensures completed work moves
+  to a review state in the tracker, maintaining tracker-as-source-of-truth semantics. If
+  `tracker.handoff_state` is not configured, the behavior is identical to `blocked`.
 
 If the file is absent or contains an unrecognized value, it is ignored.
 
