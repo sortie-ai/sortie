@@ -38,11 +38,6 @@ Do {{ .issue.title }}.
 // an api_key referencing SORTIE_TEST_NONEXISTENT_VAR_198, which must be
 // unset (or empty) when the test runs. The jira adapter requires an API
 // key, so os.ExpandEnv resolving to "" triggers tracker.api_key preflight.
-
-// jiraEmptyAPIKeyWorkflow returns a workflow using the jira tracker with
-// an api_key referencing SORTIE_TEST_NONEXISTENT_VAR_198, which must be
-// unset (or empty) when the test runs. The jira adapter requires an API
-// key, so os.ExpandEnv resolving to "" triggers tracker.api_key preflight.
 func jiraEmptyAPIKeyWorkflow() []byte {
 	return []byte(`---
 polling:
@@ -429,11 +424,6 @@ func TestValidateDoesNotStartWatcher(t *testing.T) {
 		t.Errorf("run(validate) took %v, want < %v (possible watcher goroutine started)", elapsed, maxDuration)
 	}
 }
-
-// --- Front matter warning integration tests ---
-
-// typoTopLevelKeyWorkflow returns a workflow with the "trackers" typo at the
-// top level (unknown_key warning) and a valid tracker.kind so preflight passes.
 
 // --- Front matter warning integration tests ---
 

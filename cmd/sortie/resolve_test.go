@@ -1069,13 +1069,6 @@ func TestResolveServerHost(t *testing.T) {
 	}
 }
 
-// --- Validate subcommand tests (Plan Phase 5) ---
-
-// writeCustomWorkflowFile writes the given YAML front matter and prompt
-// body as a WORKFLOW.md in dir and returns the absolute path to the
-// created file. It calls filepath.Abs so the returned path is
-// absolute regardless of whether dir is relative or absolute.
-
 // --- resolveLogLevel tests ---
 
 func TestResolveLogLevel(t *testing.T) {

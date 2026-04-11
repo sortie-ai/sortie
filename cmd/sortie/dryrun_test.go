@@ -278,8 +278,8 @@ func TestRunDryRunSSHHostCapacity(t *testing.T) {
 
 	logs := stderr.String()
 
-	// Section 3.5: with max_concurrent_agents_per_host=1, only the first
-	// candidate acquires the SSH host; subsequent candidates are blocked.
+	// With max_concurrent_agents_per_host=1, only the first candidate
+	// acquires the SSH host; subsequent candidates are blocked.
 	dispatched := strings.Count(logs, "would_dispatch=true")
 	if dispatched > 1 {
 		t.Errorf("would_dispatch=true count = %d, want at most 1 (SSH host capacity=1)", dispatched)
