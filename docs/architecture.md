@@ -3492,8 +3492,9 @@ specific orchestrator behavior. Sortie reads this file after each turn completes
 Recognized values:
 
 - `blocked` — agent signals it cannot proceed without human intervention. The orchestrator treats
-  this as a soft stop: it completes the current turn normally but does not schedule continuation
-  retries until the issue state changes in the tracker.
+  this as a soft stop: it completes the current turn normally, suppresses continuation retries,
+  and releases the issue claim. The issue becomes eligible for re-dispatch on future tracker
+  polls under normal dispatch rules.
 - `needs-human-review` — agent signals that work is complete and requires review. Like `blocked`,
   this value suppresses continuation retries and releases the issue claim. Unlike `blocked`, when
   `tracker.handoff_state` is configured and the issue is in an active tracker state, the
