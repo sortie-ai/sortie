@@ -309,14 +309,17 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 			// Guard against nil TrackerAdapter (misconfiguration or test
 			// that sets HandoffState without providing an adapter).
 			if params.TrackerAdapter == nil {
-				log.Warn("handoff configured but tracker adapter is nil, scheduling continuation retry",
-					slog.String("handoff_state", params.HandoffState),
-				)
 				metrics.IncHandoffTransitions(handoffError)
 				if workerResult.SoftStop {
+					log.Warn("handoff configured but tracker adapter is nil, releasing claim",
+						slog.String("handoff_state", params.HandoffState),
+					)
 					CancelRetry(state, workerResult.IssueID)
 					delete(state.Claimed, workerResult.IssueID)
 				} else {
+					log.Warn("handoff configured but tracker adapter is nil, scheduling continuation retry",
+						slog.String("handoff_state", params.HandoffState),
+					)
 					ScheduleRetry(state, ScheduleRetryParams{
 						IssueID:     workerResult.IssueID,
 						Identifier:  workerResult.Identifier,
@@ -330,15 +333,19 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 					retryScheduled = true
 				}
 			} else if err := params.TrackerAdapter.TransitionIssue(ctx, workerResult.IssueID, params.HandoffState); err != nil {
-				log.Warn("handoff transition failed, scheduling continuation retry",
-					slog.String("handoff_state", params.HandoffState),
-					slog.Any("error", err),
-				)
 				metrics.IncHandoffTransitions(handoffError)
 				if workerResult.SoftStop {
+					log.Warn("handoff transition failed, releasing claim",
+						slog.String("handoff_state", params.HandoffState),
+						slog.Any("error", err),
+					)
 					CancelRetry(state, workerResult.IssueID)
 					delete(state.Claimed, workerResult.IssueID)
 				} else {
+					log.Warn("handoff transition failed, scheduling continuation retry",
+						slog.String("handoff_state", params.HandoffState),
+						slog.Any("error", err),
+					)
 					ScheduleRetry(state, ScheduleRetryParams{
 						IssueID:     workerResult.IssueID,
 						Identifier:  workerResult.Identifier,
