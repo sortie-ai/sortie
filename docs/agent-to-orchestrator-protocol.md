@@ -199,9 +199,16 @@ further automated action is appropriate. Typical causes include: a pull request 
 review, architectural decisions are embedded in the output that require validation, or the agent
 has low confidence in its solution.
 
-**Orchestrator behavior:** Identical to `blocked` from the orchestrator's perspective. The
-distinction is semantic: it is informational for operators and observability surfaces. Future
-orchestrator versions or operator tooling MAY differentiate their responses to these two values.
+**Orchestrator behavior:** Like `blocked`, this value triggers a soft stop: the turn loop breaks,
+continuation retries are suppressed, and the issue claim is released. Unlike `blocked`, when
+`tracker.handoff_state` is configured (architecture Section 5.3.1) and the issue is in an active
+tracker state, the orchestrator performs the handoff transition before releasing the claim. If the
+handoff transition fails (network error, permission denied, nil adapter), the orchestrator logs a
+warning and releases the claim without scheduling a retry.
+
+This distinction reflects the semantic difference between the two values: `blocked` means "I
+cannot proceed" (no completed work to hand off), while `needs-human-review` means "work is
+complete, ready for review" (completed work should be visible in the tracker via handoff).
 
 #### 2.3.3 Common orchestrator response
 
@@ -210,9 +217,13 @@ For both recognized values, the orchestrator:
 1. Completes the current turn normally (does not abort mid-turn).
 2. Breaks the turn loop (no further continuation turns in this worker run).
 3. Exits the worker run with a normal exit status.
-4. Releases the issue claim.
-5. Does NOT schedule a continuation retry (new worker run).
+4. Does NOT schedule a continuation retry (new worker run).
+5. Releases the issue claim.
 6. Logs the status token value at `info` level with the issue identifier.
+
+Additionally, for `needs-human-review` only: when `tracker.handoff_state` is configured and the
+issue is in an active tracker state, the orchestrator attempts the handoff transition between
+steps 3 and 5. See Section 2.3.2 for failure handling.
 
 The issue becomes eligible for re-dispatch only when a subsequent tracker poll detects a
 state change.
@@ -306,7 +317,7 @@ while true:
         log_info("agent signaled status", issue.id, status)
         stop_session()
         run_hook_best_effort("after_run", workspace.path)
-        exit_normal_no_retry()    // breaks turn loop AND suppresses post-exit retry
+        exit_normal_soft_stop(status)    // breaks turn loop; exit handler differentiates (Section 3.6)
     // --- END STATUS FILE READ ---
 
     refreshed_issue = tracker.fetch_issue_states_by_ids([issue.id])
@@ -406,26 +417,31 @@ mechanism is required.
 ### 3.6 Interaction with tracker handoff state
 
 The `.sortie/status` file protocol and the `tracker.handoff_state` configuration
-(architecture Section 5.3.1) are **independent mechanisms** that address different lifecycle
-phases:
+(architecture Section 5.3.1) are **complementary mechanisms** that interact during the worker
+exit phase. The status file value determines whether the handoff transition fires:
 
-| Mechanism | Trigger | Effect | Direction |
+| `.sortie/status` value | Worker exit | Handoff transition | Continuation retry |
 |---|---|---|---|
-| `tracker.handoff_state` | Worker run exits normally | Orchestrator transitions the issue to a target tracker state | Orchestrator → Tracker |
-| `.sortie/status` | Agent writes file during a turn | Orchestrator suppresses continuation retries | Agent → Orchestrator |
+| `needs-human-review` | Normal | Performed (if configured and issue is active) | Suppressed |
+| `blocked` | Normal | Skipped | Suppressed |
+| absent or unrecognized | Normal | Performed (if configured and issue is active) | Depends on handoff result |
+| (any) | Error | Skipped | Standard error retry |
 
-The status file does NOT trigger tracker state transitions. It does not replace, override, or
-interact with the handoff state mechanism. The two form a defense-in-depth posture:
+The semantic distinction drives the difference: `blocked` means the agent cannot proceed, so
+there is no completed work to hand off. `needs-human-review` means the agent completed its work
+and the issue should move to a review state in the tracker.
 
-- `handoff_state` handles the case where work completed successfully and the issue should move
-  to a review state in the tracker.
-- `.sortie/status` handles the case where the agent cannot proceed, independently of any tracker
-  state change.
+Both values suppress continuation retries and release the issue claim. The handoff transition is
+the only behavioral divergence between them.
 
-An agent may write `.sortie/status` as `blocked` even when a `handoff_state` is configured. In
-this case, the status file signal takes precedence for the retry decision (no continuation retry),
-and the handoff transition is not performed because the run exits via the soft-stop path rather
-than the normal completion path.
+When a `handoff_state` is configured and the agent writes `blocked`, the orchestrator skips the
+handoff transition entirely. The issue remains in its current tracker state. This is correct:
+blocked work should not advance in the tracker.
+
+When a `handoff_state` is configured and the agent writes `needs-human-review`, the orchestrator
+attempts the handoff transition. On success, the issue moves to the configured handoff state. On
+failure (network error, permission denied, nil adapter), the orchestrator logs a warning and
+releases the claim without scheduling a retry.
 
 ## 4. Prompt integration
 
