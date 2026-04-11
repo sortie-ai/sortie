@@ -4145,10 +4145,10 @@ func TestOrchestratorScenarios(t *testing.T) {
 		tmpl := mustParseTemplate(t, "work on {{ .issue.identifier }}")
 		issue := scenarioIssue("nd-1", "ND-1")
 
-		// handoffDone gates state visible to both event-loop callbacks.
-		// Written by transitionIssueFn; read by fetchCandidatesFn and fetchStatesFn.
-		// Both run sequentially in the event-loop goroutine — atomic for
-		// concurrent visibility with the test-goroutine poll below.
+		// handoffDone gates the tracker state returned after the handoff transition.
+		// It is written by transitionIssueFn and read by fetchStatesFn, which may run
+		// from the event loop or from worker-driven state refreshes. Atomic access
+		// also keeps the value visible to the test-goroutine poll below.
 		var handoffDone atomic.Bool
 
 		mockTracker := &mockTrackerAdapter{
