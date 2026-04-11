@@ -51,7 +51,7 @@ type Metrics interface {
 	IncRetries(trigger string)
 
 	// IncReconciliationActions increments the reconciliation outcome
-	// counter. action is "stop", "cleanup", or "keep"
+	// counter. action is "stop", "cleanup", "keep", or "sweep_cleanup"
 	// (sortie_reconciliation_actions_total{action} counter).
 	IncReconciliationActions(action string)
 

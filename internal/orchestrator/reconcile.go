@@ -302,9 +302,9 @@ func reconcileTrackerState(state *State, params ReconcileParams, log *slog.Logge
 }
 
 // sweepEveryNTicks is the number of poll ticks between terminal workspace
-// sweeps. At the default 10s poll interval this fires roughly every 10
-// minutes — frequent enough for eventual consistency, infrequent enough to
-// avoid unbounded tracker API load from orphaned non-terminal workspaces.
+// sweeps. Running this sweep every 60 ticks is frequent enough for eventual
+// consistency while avoiding unbounded tracker API load from orphaned
+// non-terminal workspaces.
 const sweepEveryNTicks = 60
 
 // SweepTerminalWorkspacesParams holds the dependencies for
