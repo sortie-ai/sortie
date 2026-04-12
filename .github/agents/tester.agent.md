@@ -57,7 +57,11 @@ At least one criterion must be met. Do not write useless tests. Your KPI is test
 | Config       | `internal/config/`       | Unit                                      | Template rendering, `$VAR` resolution, `~` expansion, validation  |
 | Persistence  | `internal/persistence/`  | Integration (in-memory SQLite)            | Migrations, CRUD, idempotent upserts, recovery                    |
 | Tracker      | `internal/tracker/*/`    | Unit (httptest) + Integration (env-gated) | Response normalization, pagination, error categories              |
+| SCM          | `internal/scm/*/`        | Unit (httptest) + Integration (env-gated) | SCM integration, response normalization, pagination               |
 | Agent        | `internal/agent/*/`      | Unit (fixtures) + Integration (env-gated) | Event parsing, token extraction, timeout handling                 |
+| Agent util   | `internal/agent/agenttest/` | (test helper)                          | Shared test helpers for agent adapter tests                       |
+| Agent util   | `internal/agent/procutil/`  | Unit                                   | Subprocess lifecycle, exit code extraction                        |
+| Agent util   | `internal/agent/sshutil/`   | Unit                                   | SSH invocation, shell quoting                                     |
 | Workspace    | `internal/workspace/`    | Unit + Integration (temp dirs)            | Path containment (**SECURITY**), symlink rejection, hook env vars |
 | Orchestrator | `internal/orchestrator/` | Unit (mock adapters) + E2E (env-gated)    | Dispatch order, concurrency, reconciliation, retry scheduling, full dispatch cycle with real adapters |
 | Server       | `internal/server/`       | Unit (httptest)                           | JSON serialization, endpoint routing, error envelopes, 405 handling |
@@ -65,6 +69,7 @@ At least one criterion must be met. Do not write useless tests. Your KPI is test
 | Registry     | `internal/registry/`     | Unit                                      | Adapter registration, duplicate detection, lookup                 |
 | Logging      | `internal/logging/`      | Unit                                      | Logger setup, context field helpers                               |
 | Maputil      | `internal/maputil/`      | Unit                                      | Sorted key iteration, generic map helpers                         |
+| Typeutil     | `internal/typeutil/`     | Unit                                      | Type coercion for loosely-typed JSON/YAML values                  |
 | Tool         | `internal/tool/trackerapi/` | Unit                                   | Interface compliance, project scoping, input validation           |
 | Tool         | `internal/tool/history/`    | Unit                                   | Run history retrieval, attempt formatting                         |
 | Tool         | `internal/tool/mcpserver/`  | Unit                                   | JSON-RPC 2.0 routing, stdio transport, tool dispatch              |
