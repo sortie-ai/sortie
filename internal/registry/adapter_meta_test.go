@@ -47,7 +47,10 @@ func TestAdapterMeta_RealRegistrations(t *testing.T) {
 			t.Run(tt.name, func(t *testing.T) {
 				t.Parallel()
 
-				meta, _ := registry.Trackers.Meta(tt.kind)
+				meta, ok := registry.Trackers.Meta(tt.kind)
+				if !ok {
+					t.Fatalf("Trackers.Meta(%q) reported not registered", tt.kind)
+				}
 
 				if meta.RequiresAPIKey != tt.wantAPIKey {
 					t.Errorf("Trackers.Meta(%q).RequiresAPIKey = %v, want %v", tt.kind, meta.RequiresAPIKey, tt.wantAPIKey)
@@ -82,7 +85,10 @@ func TestAdapterMeta_RealRegistrations(t *testing.T) {
 			t.Run(tt.name, func(t *testing.T) {
 				t.Parallel()
 
-				meta, _ := registry.Agents.Meta(tt.kind)
+				meta, ok := registry.Agents.Meta(tt.kind)
+				if !ok {
+					t.Fatalf("Agents.Meta(%q) reported not registered", tt.kind)
+				}
 
 				if meta.RequiresCommand != tt.wantCommand {
 					t.Errorf("Agents.Meta(%q).RequiresCommand = %v, want %v", tt.kind, meta.RequiresCommand, tt.wantCommand)
@@ -94,7 +100,10 @@ func TestAdapterMeta_RealRegistrations(t *testing.T) {
 	t.Run("github exposes ValidateTrackerConfig", func(t *testing.T) {
 		t.Parallel()
 
-		meta, _ := registry.Trackers.Meta("github")
+		meta, ok := registry.Trackers.Meta("github")
+		if !ok {
+			t.Fatal(`Trackers.Meta("github") reported not registered`)
+		}
 		if meta.ValidateTrackerConfig == nil {
 			t.Error(`Trackers.Meta("github").ValidateTrackerConfig = nil, want non-nil`)
 		}
