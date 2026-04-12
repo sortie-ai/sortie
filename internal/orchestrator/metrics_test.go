@@ -647,9 +647,7 @@ func TestHandleRetryTimerMetrics(t *testing.T) {
 		HandleRetryTimer(state, issueID, HandleRetryTimerParams{
 			Store: store,
 			TrackerAdapter: &mockRetryTracker{
-				candidates: []domain.Issue{
-					{ID: issueID, Identifier: "RT-1-ident", Title: "Test", State: "To Do"},
-				},
+				fetchedIssue: domain.Issue{ID: issueID, Identifier: "RT-1-ident", Title: "Test", State: "To Do"},
 			},
 			ActiveStates:      []string{"To Do"},
 			TerminalStates:    []string{"Done"},
@@ -755,9 +753,7 @@ func TestHandleRetryTimerMetrics(t *testing.T) {
 		HandleRetryTimer(state, issueID, HandleRetryTimerParams{
 			Store: store,
 			TrackerAdapter: &mockRetryTracker{
-				candidates: []domain.Issue{
-					{ID: issueID, Identifier: "RT-4-ident", Title: "Test", State: "To Do"},
-				},
+				fetchedIssue: domain.Issue{ID: issueID, Identifier: "RT-4-ident", Title: "Test", State: "To Do"},
 			},
 			ActiveStates:      []string{"To Do"},
 			TerminalStates:    []string{"Done"},

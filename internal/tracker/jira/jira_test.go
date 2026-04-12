@@ -1955,3 +1955,78 @@ func TestNewJiraAdapter_UserAgentFromConfig(t *testing.T) {
 		})
 	}
 }
+
+func TestFetchCandidateIssueByIDEquivalence(t *testing.T) {
+	t.Parallel()
+
+	issue1JSON := `{"id":"10001","key":"PROJ-1","fields":{"summary":"Auth feature","status":{"name":"To Do"},"priority":{"id":"2"},"labels":[],"assignee":null,"issuetype":{"name":"Story"},"parent":null,"issuelinks":[],"description":null,"created":"2025-01-01T00:00:00.000+0000","updated":"2025-01-01T00:00:00.000+0000"}}`
+	issue2JSON := `{"id":"10002","key":"PROJ-2","fields":{"summary":"Fix bug","status":{"name":"In Progress"},"priority":{"id":"1"},"labels":[],"assignee":null,"issuetype":{"name":"Bug"},"parent":null,"issuelinks":[],"description":null,"created":"2025-01-02T00:00:00.000+0000","updated":"2025-01-02T00:00:00.000+0000"}}`
+	searchResp := `{"issues":[` + issue1JSON + `,` + issue2JSON + `]}`
+	emptyComments := `{"comments":[],"total":0,"maxResults":50}`
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.HasSuffix(r.URL.Path, "/comment"):
+			w.Write([]byte(emptyComments)) //nolint:errcheck // test helper
+		case strings.HasSuffix(r.URL.Path, "/search/jql"):
+			w.Write([]byte(searchResp)) //nolint:errcheck // test helper
+		case strings.HasSuffix(r.URL.Path, "/issue/10001"):
+			w.Write([]byte(issue1JSON)) //nolint:errcheck // test helper
+		case strings.HasSuffix(r.URL.Path, "/issue/10002"):
+			w.Write([]byte(issue2JSON)) //nolint:errcheck // test helper
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	// Configure the adapter with active states matching the test issue states.
+	cfg := validConfig(srv.URL)
+	cfg["active_states"] = []any{"To Do", "In Progress"}
+	a := mustAdapter(t, cfg)
+	ctx := context.Background()
+
+	candidates, err := a.FetchCandidateIssues(ctx)
+	if err != nil {
+		t.Fatalf("FetchCandidateIssues: %v", err)
+	}
+	if len(candidates) != 2 {
+		t.Fatalf("FetchCandidateIssues: got %d issues, want 2", len(candidates))
+	}
+
+	candidateSet := make(map[string]bool, len(candidates))
+	for _, c := range candidates {
+		candidateSet[c.ID] = true
+	}
+
+	activeSet := make(map[string]bool, len(a.activeStates))
+	for _, s := range a.activeStates {
+		activeSet[strings.ToLower(s)] = true
+	}
+
+	// Equivalence: every candidate is also returned by FetchIssueByID with consistent state.
+	for _, candidate := range candidates {
+		issue, fetchErr := a.FetchIssueByID(ctx, candidate.ID)
+		if fetchErr != nil {
+			t.Errorf("issue %s: FetchIssueByID failed: %v", candidate.ID, fetchErr)
+			continue
+		}
+		if issue.ID != candidate.ID {
+			t.Errorf("issue %s: FetchIssueByID.ID = %q, want %q", candidate.ID, issue.ID, candidate.ID)
+		}
+		if issue.Identifier != candidate.Identifier {
+			t.Errorf("issue %s: FetchIssueByID.Identifier = %q, want %q", candidate.ID, issue.Identifier, candidate.Identifier)
+		}
+		if issue.State != candidate.State {
+			t.Errorf("issue %s: FetchIssueByID.State = %q, want %q (search vs detail differ)", candidate.ID, issue.State, candidate.State)
+		}
+		// Local active-state check must accept every candidate.
+		if !activeSet[strings.ToLower(issue.State)] {
+			t.Errorf("issue %s (state=%q): FetchCandidateIssues returned it but local active check rejects it", candidate.ID, issue.State)
+		}
+	}
+
+	// Negative: a 404 response from the server returns ErrTrackerNotFound.
+	_, err = a.FetchIssueByID(ctx, "99999")
+	assertTrackerErrorKind(t, err, domain.ErrTrackerNotFound)
+}
