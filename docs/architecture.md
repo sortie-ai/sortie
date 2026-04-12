@@ -1138,7 +1138,7 @@ Optional SSH host limit:
 Retry entry creation:
 
 - Cancel any existing retry timer for the same issue.
-- Store `attempt`, `identifier`, `error`, `due_at_ms`, and new timer handle.
+- Store `attempt`, `identifier`, `error`, `due_at_ms`, `session_id` (continuation retries propagate the session ID from the exiting worker; error and reaction retries leave it null), and new timer handle.
 
 Backoff formula:
 
@@ -3066,7 +3066,8 @@ on_worker_exit(issue_id, reason, state):
     state.completed.add(issue_id)  # bookkeeping only
     state = schedule_retry(state, issue_id, 1, {
       identifier: running_entry.identifier,
-      delay_type: continuation
+      delay_type: continuation,
+      session_id: running_entry.session_id
     })
 
     # Enqueue CI check when provider is configured and workspace has SCM metadata
@@ -3114,7 +3115,8 @@ on_retry_timer(issue_id, state):
   if fetch failed:
     return schedule_retry(state, issue_id, retry_entry.attempt + 1, {
       identifier: retry_entry.identifier,
-      error: "retry poll failed"
+      error: "retry poll failed",
+      session_id: retry_entry.session_id
     })
 
   issue = find_by_id(candidates, issue_id)
@@ -3125,10 +3127,12 @@ on_retry_timer(issue_id, state):
   if available_slots(state) == 0:
     return schedule_retry(state, issue_id, retry_entry.attempt + 1, {
       identifier: issue.identifier,
-      error: "no available orchestrator slots"
+      error: "no available orchestrator slots",
+      session_id: retry_entry.session_id
     })
 
-  return dispatch_issue(issue, state, attempt=retry_entry.attempt)
+  return dispatch_issue(issue, state, attempt=retry_entry.attempt,
+    resume_session_id=retry_entry.session_id)
 ```
 
 ## 17. Test and Validation Matrix
@@ -3392,6 +3396,7 @@ runs all pending schema migrations before beginning normal operation.
 | `attempt`    | INTEGER | Retry attempt number (1-based)                     |
 | `due_at_ms`  | INTEGER | Unix epoch milliseconds; used to reconstruct timer |
 | `error`      | TEXT    | Last error message, may be null                    |
+| `session_id` | TEXT    | Adapter-assigned session ID from previous attempt, may be null |
 
 Note: `timer_handle` is runtime-only and is not stored.
 
