@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"strings"
 	"time"
@@ -35,8 +36,8 @@ type HandleRetryTimerParams struct {
 	TrackerAdapter domain.TrackerAdapter
 
 	// ActiveStates is the current list of configured active issue states.
-	// Not used directly by HandleRetryTimer because presence in the
-	// candidate set returned by FetchCandidateIssues implies active state.
+	// Used by HandleRetryTimer to validate that the retried issue's current
+	// state is still active after the single-issue fetch.
 	ActiveStates []string
 
 	// TerminalStates is the current list of configured terminal issue
@@ -180,13 +181,29 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 		}
 	}
 
-	// Re-fetch active candidates from the tracker.
-	candidates, err := params.TrackerAdapter.FetchCandidateIssues(ctx)
+	// Re-validate the issue with a single tracker API call instead of a
+	// full candidate sweep. FetchIssueByID costs one API request regardless
+	// of how many active issues the tracker holds.
+	issue, err := params.TrackerAdapter.FetchIssueByID(ctx, issueID)
 	if err != nil {
+		var trackerErr *domain.TrackerError
+		if errors.As(err, &trackerErr) && trackerErr.Kind == domain.ErrTrackerNotFound {
+			log.Info("issue no longer exists in tracker, releasing claim")
+			delete(state.Claimed, issueID)
+
+			if delErr := params.Store.DeleteRetryEntry(ctx, issueID); delErr != nil {
+				log.Error("failed to delete retry entry from store",
+					slog.Any("error", delErr),
+				)
+			}
+			return
+		}
+
+		// Transient error (transport, API, payload): reschedule the retry.
 		nextAttempt := popped.Attempt + 1
 		delayMS := computeBackoffDelay(nextAttempt, params.MaxRetryBackoffMS)
 
-		log.Error("retry poll failed, rescheduling",
+		log.Error("retry issue fetch failed, rescheduling",
 			slog.Int("attempt", nextAttempt),
 			slog.Int64("delay_ms", delayMS),
 			slog.Any("error", err),
@@ -198,7 +215,7 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 			DisplayID:    popped.DisplayID,
 			Attempt:      nextAttempt,
 			DelayMS:      delayMS,
-			Error:        "retry poll failed",
+			Error:        "retry issue fetch failed",
 			SessionID:    popped.SessionID,
 			ReactionKind: popped.ReactionKind,
 		}, params.OnRetryFire)
@@ -208,10 +225,16 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 		return
 	}
 
-	// Locate the issue by ID in the fetched candidates.
-	issue, found := findIssueByID(candidates, issueID)
-	if !found {
-		log.Info("issue no longer active, releasing claim")
+	// Validate the issue's current state against the configured active states.
+	// This is the sole gate replacing the implicit activeStates filter that
+	// FetchCandidateIssues applied at the tracker level. The queryFilter
+	// (adapter-internal JQL or search fragment) is not re-evaluated here:
+	// retry eligibility uses the state constraint only.
+	activeSet := stateSet(params.ActiveStates)
+	if _, active := activeSet[strings.ToLower(issue.State)]; !active {
+		log.Info("issue no longer in active state, releasing claim",
+			slog.String("issue_state", issue.State),
+		)
 		delete(state.Claimed, issueID)
 
 		if err := params.Store.DeleteRetryEntry(ctx, issueID); err != nil {
@@ -222,12 +245,9 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 		return
 	}
 
-	// Validate retry eligibility — required fields, terminal
-	// state exclusion, and blocker rule. FetchCandidateIssues returns
-	// active-state issues, but a mis-configured active_states list or an
-	// adapter that returns terminal issues would bypass the normal
-	// ShouldDispatch terminal-state gate. The explicit check keeps the
-	// retry path consistent with the main dispatch path.
+	// Validate retry eligibility — required fields, terminal state
+	// exclusion (defense-in-depth), and the blocker rule. Keeps the
+	// retry dispatch path consistent with the main dispatch path.
 	terminalSet := stateSet(params.TerminalStates)
 	_, isTerminal := terminalSet[strings.ToLower(issue.State)]
 	if issue.ID == "" || issue.Identifier == "" || issue.Title == "" || issue.State == "" ||
@@ -382,16 +402,4 @@ func persistRetryEntry(ctx context.Context, log *slog.Logger, store RetryTimerSt
 			slog.Any("error", err),
 		)
 	}
-}
-
-// findIssueByID performs a linear scan of the candidate list looking for
-// an issue whose ID matches the given id. Returns the issue and true if
-// found, or a zero-value Issue and false otherwise.
-func findIssueByID(issues []domain.Issue, id string) (domain.Issue, bool) {
-	for _, issue := range issues {
-		if issue.ID == id {
-			return issue, true
-		}
-	}
-	return domain.Issue{}, false
 }

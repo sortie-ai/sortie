@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 
@@ -1268,4 +1269,51 @@ func TestCommentIssue(t *testing.T) {
 			t.Errorf("comment count = %d, want 21", len(comments))
 		}
 	})
+}
+
+func TestFetchCandidateIssueByIDEquivalence(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	activeStates := []any{"to do", "in progress"}
+	a := newAdapter(t, fixture("basic.json"), activeStates)
+
+	candidates, err := a.FetchCandidateIssues(ctx)
+	if err != nil {
+		t.Fatalf("FetchCandidateIssues: %v", err)
+	}
+
+	candidateSet := make(map[string]bool, len(candidates))
+	for _, c := range candidates {
+		candidateSet[c.ID] = true
+	}
+
+	activeSet := make(map[string]bool, len(activeStates))
+	for _, s := range activeStates {
+		activeSet[s.(string)] = true
+	}
+
+	// Equivalence: issue in candidates iff FetchIssueByID returns it without error
+	// and its state is in the configured active states.
+	allIDs := []string{"10001", "10002", "10003"}
+	for _, id := range allIDs {
+		issue, fetchErr := a.FetchIssueByID(ctx, id)
+		if fetchErr != nil {
+			// FetchIssueByID error means the issue must not be in candidates.
+			if candidateSet[id] {
+				t.Errorf("issue %s: in candidates but FetchIssueByID returned error: %v", id, fetchErr)
+			}
+			continue
+		}
+		inActive := activeSet[strings.ToLower(issue.State)]
+		inCandidates := candidateSet[id]
+		if inActive != inCandidates {
+			t.Errorf("issue %s (state=%q): in candidates=%v, in active states=%v \u2014 must be equal",
+				id, issue.State, inCandidates, inActive)
+		}
+	}
+
+	// Negative: non-existent ID returns ErrTrackerNotFound.
+	_, err = a.FetchIssueByID(ctx, "99999")
+	requireTrackerErrorKind(t, err, domain.ErrTrackerNotFound)
 }

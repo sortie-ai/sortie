@@ -2282,3 +2282,130 @@ func TestFetchIssueStatesByIDs_NetworkError_CachePreserved(t *testing.T) {
 		t.Errorf("third call result[\"30\"] = %q, want backlog (304 from preserved cache)", result3["30"])
 	}
 }
+
+func TestFetchCandidateIssueByIDEquivalence(t *testing.T) {
+	t.Parallel()
+
+	// Three cases:
+	// - Issue 1 ("backlog" label): active, returned by FetchCandidateIssues, local check accepts.
+	// - Issue 3 ("done" label): non-active, not returned by FetchCandidateIssues, local check rejects.
+	// - Issue 2 (pull request): skipped by FetchCandidateIssues, FetchIssueByID returns ErrTrackerNotFound.
+	issue1Body := issueJSON(1, "backlog", "open")
+	issue2PRBody := `{"id":200,"number":2,"title":"A PR","body":null,"state":"open","html_url":"https://github.com/owner/repo/pull/2","labels":[{"name":"in-progress"}],"assignees":[],"type":null,"pull_request":{},"created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z"}`
+	issue3Body := issueJSON(3, "done", "open")
+	issueListBody := "[" + issue1Body + "," + issue2PRBody + "," + issue3Body + "]"
+	emptyList := "[]"
+	emptyComments := "[]"
+
+	mux := http.NewServeMux()
+
+	// FetchCandidateIssues endpoint.
+	mux.HandleFunc("/repos/owner/repo/issues", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(issueListBody)) //nolint:errcheck // test helper
+	})
+
+	// Issue 1: active, exists.
+	mux.HandleFunc("/repos/owner/repo/issues/1/dependencies/blocked_by", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	})
+	mux.HandleFunc("/repos/owner/repo/issues/1/parent", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	})
+	mux.HandleFunc("/repos/owner/repo/issues/1/comments", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(emptyComments)) //nolint:errcheck // test helper
+	})
+	mux.HandleFunc("/repos/owner/repo/issues/1", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(issue1Body)) //nolint:errcheck // test helper
+	})
+
+	// Issue 2 (PR): FetchIssueByID returns ErrTrackerNotFound for PRs.
+	mux.HandleFunc("/repos/owner/repo/issues/2", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(issue2PRBody)) //nolint:errcheck // test helper
+	})
+
+	// Issue 3: non-active, exists.
+	mux.HandleFunc("/repos/owner/repo/issues/3/dependencies/blocked_by", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	})
+	mux.HandleFunc("/repos/owner/repo/issues/3/parent", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	})
+	mux.HandleFunc("/repos/owner/repo/issues/3/comments", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(emptyComments)) //nolint:errcheck // test helper
+	})
+	mux.HandleFunc("/repos/owner/repo/issues/3", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(issue3Body)) //nolint:errcheck // test helper
+	})
+
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	// Configure with active states matching the test labels.
+	cfg := validConfig(srv.URL)
+	cfg["active_states"] = []any{"backlog", "in-progress"}
+	cfg["terminal_states"] = []any{"done"}
+	a := mustAdapter(t, cfg)
+	ctx := context.Background()
+
+	candidates, err := a.FetchCandidateIssues(ctx)
+	if err != nil {
+		t.Fatalf("FetchCandidateIssues: %v", err)
+	}
+	// Only issue #1 (backlog) appears — PR (#2) filtered, done (#3) non-active.
+	if len(candidates) != 1 {
+		t.Fatalf("FetchCandidateIssues: got %d issues, want 1 (only backlog)", len(candidates))
+	}
+	if candidates[0].ID != "1" {
+		t.Errorf("candidates[0].ID = %q, want 1", candidates[0].ID)
+	}
+
+	activeSet := make(map[string]bool, len(a.activeStates))
+	for _, s := range a.activeStates {
+		activeSet[s] = true // GitHub adapter already lowercases
+	}
+
+	// Case 1: active issue — FetchIssueByID succeeds and local check accepts.
+	issue1, err := a.FetchIssueByID(ctx, "1")
+	if err != nil {
+		t.Fatalf("FetchIssueByID(1): %v", err)
+	}
+	if issue1.ID != candidates[0].ID {
+		t.Errorf("FetchIssueByID(1).ID = %q, want %q", issue1.ID, candidates[0].ID)
+	}
+	if issue1.State != candidates[0].State {
+		t.Errorf("FetchIssueByID(1).State = %q, want %q (detail vs candidate differ)", issue1.State, candidates[0].State)
+	}
+	if !activeSet[issue1.State] {
+		t.Errorf("issue 1 (state=%q): local active check rejects it but it was a candidate", issue1.State)
+	}
+
+	// Case 2: PR — FetchIssueByID returns ErrTrackerNotFound.
+	_, err = a.FetchIssueByID(ctx, "2")
+	assertTrackerErrorKind(t, err, domain.ErrTrackerNotFound)
+
+	// Case 3: non-active issue — FetchIssueByID succeeds but local check rejects.
+	issue3, err := a.FetchIssueByID(ctx, "3")
+	if err != nil {
+		t.Fatalf("FetchIssueByID(3): %v", err)
+	}
+	if issue3.State == "" {
+		t.Fatalf("FetchIssueByID(3).State is empty")
+	}
+	if activeSet[issue3.State] {
+		t.Errorf("issue 3 (state=%q): local active check accepts it but it was not a candidate", issue3.State)
+	}
+	// Verify issue 3 was not in candidates (ensuring the exclusion is consistent).
+	for _, c := range candidates {
+		if c.ID == "3" {
+			t.Errorf("issue 3 appeared in candidates, want excluded (non-active state)")
+		}
+	}
+
+	_ = emptyList // suppress unused warning
+}
