@@ -134,8 +134,8 @@ func TestStderrCollector_NilLogger(t *testing.T) {
 
 func TestStderrCollector_ScannerError(t *testing.T) {
 	t.Parallel()
-	// Feed a line that exceeds the 64 KiB initial buffer len (65536 bytes) so
-	// the scanner's grow path checks maxTokenSize and returns ErrTooLong.
+	// Feed a line that exceeds the configured 128-byte scanner max so the
+	// scanner returns ErrTooLong while draining stderr.
 	longLine := strings.Repeat("x", 65537)
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))

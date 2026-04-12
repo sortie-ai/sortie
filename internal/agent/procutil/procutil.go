@@ -50,9 +50,9 @@ func WithMaxLines(n int) CollectorOption {
 }
 
 // WithMaxBytes sets the total byte budget for retained stderr lines.
-// When the budget is exhausted, the collector continues draining and
-// logging lines but stops storing them. Zero or negative values are
-// ignored (default applies).
+// The collector continues draining and logging all lines, but skips
+// retaining any individual line whose storage would exceed the current
+// byte budget. Zero or negative values are ignored (default applies).
 func WithMaxBytes(n int) CollectorOption {
 	return func(cfg *collectorConfig) {
 		if n > 0 {
@@ -118,7 +118,9 @@ type StderrCollector struct {
 //
 // Options override the default scanner buffer size, line cap, and byte
 // budget. With no options the collector uses [DefaultScannerMaxSize],
-// [DefaultMaxLines], and [DefaultMaxBytes].
+// [DefaultMaxLines], and [DefaultMaxBytes], which means default
+// behavior includes truncation safeguards that were not present in
+// earlier versions.
 func NewStderrCollector(r io.Reader, logger *slog.Logger, opts ...CollectorOption) *StderrCollector {
 	if logger == nil {
 		logger = slog.Default()
@@ -207,6 +209,9 @@ func (c *StderrCollector) Lines() []string {
 
 	hasTail := c.tailFull || c.tailPos > 0
 	if len(c.head) == 0 && !hasTail {
+		if c.dropped > 0 {
+			return []string{fmt.Sprintf(droppedMarkerFmt, c.dropped)}
+		}
 		return nil
 	}
 
