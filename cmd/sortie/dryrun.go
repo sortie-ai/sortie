@@ -32,6 +32,9 @@ func runDryRun(ctx context.Context, cfg config.ServiceConfig, logger *slog.Logge
 	)
 
 	wc := orchestrator.ParseWorkerConfig(cfg.Extensions)
+	for _, w := range wc.Warnings {
+		logger.LogAttrs(ctx, slog.LevelWarn, w.Message, w.Attrs...) //nolint:sloglint // WorkerWarning.Message is one of two fixed string constants from parseSSHStrictHostKeyChecking
+	}
 	hostPool := orchestrator.NewHostPool(wc.SSHHosts, wc.MaxPerHost)
 
 	activeSet := dryRunStateSet(cfg.Tracker.ActiveStates)

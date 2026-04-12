@@ -198,6 +198,15 @@ func deduplicateHosts(hosts []string) []string {
 	return deduped
 }
 
+// WorkerWarning is a structured validation diagnostic produced by
+// [ParseWorkerConfig]. It carries a stable log message and typed
+// slog attributes so the caller can emit it through its scoped
+// logger without interpolating variable data into the message string.
+type WorkerWarning struct {
+	Message string
+	Attrs   []slog.Attr
+}
+
 // WorkerConfig holds parsed worker extension configuration.
 type WorkerConfig struct {
 	// SSHHosts is the list of SSH host strings for remote dispatch.
@@ -211,6 +220,12 @@ type WorkerConfig struct {
 	// value used when building SSH arguments for agent adapters.
 	// Valid values: "accept-new", "yes", "no". Empty means "accept-new".
 	SSHStrictHostKeyChecking string
+
+	// Warnings contains structured validation diagnostics produced
+	// during parsing. Empty when all values are valid or absent.
+	// The caller logs these through its scoped logger after
+	// change-detection.
+	Warnings []WorkerWarning
 }
 
 // ParseWorkerConfig parses worker extension configuration from the
@@ -256,43 +271,75 @@ func ParseWorkerConfig(extensions map[string]any) WorkerConfig {
 		}
 	}
 
-	strictHostKeyChecking := parseSSHStrictHostKeyChecking(workerMap)
+	strictHostKeyChecking, warn := parseSSHStrictHostKeyChecking(workerMap)
+
+	var warnings []WorkerWarning
+	if warn != nil {
+		warnings = append(warnings, *warn)
+	}
 
 	hosts = deduplicateHosts(hosts)
 	return WorkerConfig{
 		SSHHosts:                 hosts,
 		MaxPerHost:               maxPerHost,
 		SSHStrictHostKeyChecking: strictHostKeyChecking,
+		Warnings:                 warnings,
 	}
 }
 
 // parseSSHStrictHostKeyChecking extracts and validates the
 // ssh_strict_host_key_checking value from the worker extension map.
-// Returns one of "accept-new", "yes", "no", or empty string (meaning
-// the caller should use the default "accept-new" behavior).
-func parseSSHStrictHostKeyChecking(workerMap map[string]any) string {
+// Returns the normalized value (one of "accept-new", "yes", "no", or
+// empty for default) and a structured diagnostic. The diagnostic is
+// non-nil when the raw value has the wrong type or is unrecognized.
+func parseSSHStrictHostKeyChecking(workerMap map[string]any) (string, *WorkerWarning) {
 	raw, ok := workerMap["ssh_strict_host_key_checking"]
 	if !ok {
-		return ""
+		return "", nil
 	}
 
 	s, ok := raw.(string)
 	if !ok {
-		slog.Warn("received non-string ssh_strict_host_key_checking, using default",
-			slog.String("default", "accept-new"),
-		)
-		return ""
+		return "", &WorkerWarning{
+			Message: "received non-string ssh_strict_host_key_checking, using default",
+			Attrs:   []slog.Attr{slog.String("default", "accept-new")},
+		}
 	}
 
 	normalized := strings.ToLower(strings.TrimSpace(s))
 	switch normalized {
 	case "accept-new", "yes", "no":
-		return normalized
+		return normalized, nil
 	default:
-		slog.Warn("rejected unrecognized ssh_strict_host_key_checking value",
-			slog.String("value", s),
-			slog.String("default", "accept-new"),
-		)
-		return ""
+		return "", &WorkerWarning{
+			Message: "rejected unrecognized ssh_strict_host_key_checking value",
+			Attrs:   []slog.Attr{slog.String("value", s), slog.String("default", "accept-new")},
+		}
 	}
+}
+
+func workerWarningsEqual(a, b []WorkerWarning) bool {
+	if len(a) == 0 && len(b) == 0 {
+		return true
+	}
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i].Message != b[i].Message {
+			return false
+		}
+		if len(a[i].Attrs) != len(b[i].Attrs) {
+			return false
+		}
+		for j := range a[i].Attrs {
+			if a[i].Attrs[j].Key != b[i].Attrs[j].Key {
+				return false
+			}
+			if a[i].Attrs[j].Value.String() != b[i].Attrs[j].Value.String() {
+				return false
+			}
+		}
+	}
+	return true
 }

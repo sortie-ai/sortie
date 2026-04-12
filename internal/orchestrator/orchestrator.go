@@ -142,6 +142,8 @@ type Orchestrator struct {
 	// StrictHostKeyChecking value. Written by handleTick on every
 	// tick/reload; read by makeWorkerFn at dispatch time.
 	sshStrictHostKeyChecking string
+
+	prevWorkerWarnings []WorkerWarning
 }
 
 // NewOrchestrator creates an [Orchestrator] with all dependencies wired.
@@ -368,6 +370,13 @@ func (o *Orchestrator) handleTick(ctx context.Context) {
 	wc := ParseWorkerConfig(cfg.Extensions)
 	o.hostPool.Update(wc.SSHHosts, wc.MaxPerHost)
 	o.sshStrictHostKeyChecking = wc.SSHStrictHostKeyChecking
+
+	if !workerWarningsEqual(o.prevWorkerWarnings, wc.Warnings) {
+		for _, w := range wc.Warnings {
+			o.logger.LogAttrs(ctx, slog.LevelWarn, w.Message, w.Attrs...) //nolint:sloglint // WorkerWarning.Message is one of two fixed string constants from parseSSHStrictHostKeyChecking
+		}
+		o.prevWorkerWarnings = wc.Warnings
+	}
 
 	// Reconcile running issues unconditionally so in-flight workers
 	// are monitored even when dispatch is skipped.

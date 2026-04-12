@@ -4383,3 +4383,83 @@ func TestHandleTickSweepThrottle(t *testing.T) {
 		t.Errorf("SweepTickCounter = %d after sweep, want 0", got)
 	}
 }
+
+// --- TestHandleTick_WorkerWarningChangeDetection ---
+
+func TestHandleTick_WorkerWarningChangeDetection(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, nil))
+
+	cfg := config.ServiceConfig{
+		Tracker: config.TrackerConfig{
+			Kind:           "mock",
+			ActiveStates:   []string{"To Do"},
+			TerminalStates: []string{"Done"},
+		},
+		Polling:   config.PollingConfig{IntervalMS: 60000},
+		Workspace: config.WorkspaceConfig{Root: t.TempDir()},
+		Agent: config.AgentConfig{
+			Kind:                "mock",
+			MaxConcurrentAgents: 1,
+		},
+		Extensions: map[string]any{
+			"worker": map[string]any{
+				"ssh_strict_host_key_checking": "ask",
+			},
+		},
+	}
+
+	wm := &stubWorkflowManager{config: cfg}
+	state := NewState(60000, 1, nil, AgentTotals{})
+	o := NewOrchestrator(OrchestratorParams{
+		State:           state,
+		Logger:          logger,
+		TrackerAdapter:  &mockTrackerAdapter{},
+		AgentAdapter:    &mockAgentAdapter{},
+		WorkflowManager: wm,
+		Store:           &stubStore{},
+		PreflightParams: PreflightParams{
+			ReloadWorkflow: func() error { return errPreflightFailed },
+			ConfigFunc:     wm.Config,
+		},
+	})
+
+	ctx := context.Background()
+
+	const warnMsg = "rejected unrecognized ssh_strict_host_key_checking value"
+
+	// First tick: warning for "ask" must be logged.
+	o.handleTick(ctx)
+	// Second tick: same config, warning must be suppressed.
+	o.handleTick(ctx)
+	if got := strings.Count(buf.String(), warnMsg); got != 1 {
+		t.Errorf("warning count after two identical ticks = %d, want 1\nlog:\n%s", got, buf.String())
+	}
+
+	// Change to a different invalid value — a new warning must appear.
+	cfg.Extensions = map[string]any{
+		"worker": map[string]any{
+			"ssh_strict_host_key_checking": "strict",
+		},
+	}
+	wm.setConfig(cfg)
+	o.handleTick(ctx)
+	if got := strings.Count(buf.String(), warnMsg); got != 2 {
+		t.Errorf("warning count after changing value to 'strict' = %d, want 2\nlog:\n%s", got, buf.String())
+	}
+
+	// Change SSHHosts while keeping the same invalid value — warning must be suppressed.
+	cfg.Extensions = map[string]any{
+		"worker": map[string]any{
+			"ssh_strict_host_key_checking": "strict",
+			"ssh_hosts":                    []any{"host-a"},
+		},
+	}
+	wm.setConfig(cfg)
+	o.handleTick(ctx)
+	if got := strings.Count(buf.String(), warnMsg); got != 2 {
+		t.Errorf("warning count after changing SSHHosts only = %d, want 2\nlog:\n%s", got, buf.String())
+	}
+}

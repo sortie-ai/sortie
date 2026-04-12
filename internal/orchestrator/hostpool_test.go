@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"log/slog"
 	"testing"
 )
 
@@ -260,6 +261,7 @@ func TestParseWorkerConfig(t *testing.T) {
 		wantHosts                 []string
 		wantMaxPerHost            int
 		wantSSHStrictHostKeyCheck string
+		wantWarnings              []WorkerWarning
 	}{
 		{
 			name:       "nil extensions",
@@ -374,6 +376,12 @@ func TestParseWorkerConfig(t *testing.T) {
 				},
 			},
 			wantSSHStrictHostKeyCheck: "",
+			wantWarnings: []WorkerWarning{
+				{
+					Message: "rejected unrecognized ssh_strict_host_key_checking value",
+					Attrs:   []slog.Attr{slog.String("value", "ask"), slog.String("default", "accept-new")},
+				},
+			},
 		},
 		{
 			name: "wrong type integer falls back to empty",
@@ -383,6 +391,12 @@ func TestParseWorkerConfig(t *testing.T) {
 				},
 			},
 			wantSSHStrictHostKeyCheck: "",
+			wantWarnings: []WorkerWarning{
+				{
+					Message: "received non-string ssh_strict_host_key_checking, using default",
+					Attrs:   []slog.Attr{slog.String("default", "accept-new")},
+				},
+			},
 		},
 	}
 
@@ -405,6 +419,107 @@ func TestParseWorkerConfig(t *testing.T) {
 			}
 			if wc.SSHStrictHostKeyChecking != tt.wantSSHStrictHostKeyCheck {
 				t.Errorf("ParseWorkerConfig() SSHStrictHostKeyChecking = %q, want %q", wc.SSHStrictHostKeyChecking, tt.wantSSHStrictHostKeyCheck)
+			}
+			if len(wc.Warnings) != len(tt.wantWarnings) {
+				t.Fatalf("ParseWorkerConfig() Warnings count = %d, want %d", len(wc.Warnings), len(tt.wantWarnings))
+			}
+			for i, want := range tt.wantWarnings {
+				if wc.Warnings[i].Message != want.Message {
+					t.Errorf("Warnings[%d].Message = %q, want %q", i, wc.Warnings[i].Message, want.Message)
+				}
+				if len(wc.Warnings[i].Attrs) != len(want.Attrs) {
+					t.Fatalf("Warnings[%d].Attrs count = %d, want %d", i, len(wc.Warnings[i].Attrs), len(want.Attrs))
+				}
+				for j, wantAttr := range want.Attrs {
+					gotAttr := wc.Warnings[i].Attrs[j]
+					if gotAttr.Key != wantAttr.Key {
+						t.Errorf("Warnings[%d].Attrs[%d].Key = %q, want %q", i, j, gotAttr.Key, wantAttr.Key)
+					}
+					if gotAttr.Value.String() != wantAttr.Value.String() {
+						t.Errorf("Warnings[%d].Attrs[%d].Value = %q, want %q", i, j, gotAttr.Value.String(), wantAttr.Value.String())
+					}
+				}
+			}
+		})
+	}
+}
+
+func TestWorkerWarningsEqual(t *testing.T) {
+	t.Parallel()
+
+	attrValue := func(key, val string) slog.Attr { return slog.String(key, val) }
+
+	tests := []struct {
+		name string
+		a    []WorkerWarning
+		b    []WorkerWarning
+		want bool
+	}{
+		{
+			name: "both nil",
+			a:    nil,
+			b:    nil,
+			want: true,
+		},
+		{
+			name: "both empty",
+			a:    []WorkerWarning{},
+			b:    []WorkerWarning{},
+			want: true,
+		},
+		{
+			name: "nil vs empty",
+			a:    nil,
+			b:    []WorkerWarning{},
+			want: true,
+		},
+		{
+			name: "single warning identical",
+			a: []WorkerWarning{
+				{Message: "some warning", Attrs: []slog.Attr{attrValue("key", "val")}},
+			},
+			b: []WorkerWarning{
+				{Message: "some warning", Attrs: []slog.Attr{attrValue("key", "val")}},
+			},
+			want: true,
+		},
+		{
+			name: "same message different attr value",
+			a: []WorkerWarning{
+				{Message: "some warning", Attrs: []slog.Attr{attrValue("key", "val-a")}},
+			},
+			b: []WorkerWarning{
+				{Message: "some warning", Attrs: []slog.Attr{attrValue("key", "val-b")}},
+			},
+			want: false,
+		},
+		{
+			name: "different message",
+			a: []WorkerWarning{
+				{Message: "warning-a", Attrs: []slog.Attr{attrValue("k", "v")}},
+			},
+			b: []WorkerWarning{
+				{Message: "warning-b", Attrs: []slog.Attr{attrValue("k", "v")}},
+			},
+			want: false,
+		},
+		{
+			name: "different lengths",
+			a: []WorkerWarning{
+				{Message: "w", Attrs: []slog.Attr{attrValue("k", "v")}},
+			},
+			b:    []WorkerWarning{},
+			want: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := workerWarningsEqual(tt.a, tt.b)
+			if got != tt.want {
+				t.Errorf("workerWarningsEqual(%v, %v) = %t, want %t", tt.a, tt.b, got, tt.want)
 			}
 		})
 	}
