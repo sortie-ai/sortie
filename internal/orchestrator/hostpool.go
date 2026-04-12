@@ -336,7 +336,7 @@ func workerWarningsEqual(a, b []WorkerWarning) bool {
 			if a[i].Attrs[j].Key != b[i].Attrs[j].Key {
 				return false
 			}
-			if a[i].Attrs[j].Value.String() != b[i].Attrs[j].Value.String() {
+			if !a[i].Attrs[j].Value.Equal(b[i].Attrs[j].Value) {
 				return false
 			}
 		}
