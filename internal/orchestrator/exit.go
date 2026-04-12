@@ -328,6 +328,7 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 						DelayMS:     continuationDelayMS,
 						Error:       "",
 						LastSSHHost: workerResult.SSHHost,
+						SessionID:   sessionID,
 					}, params.OnRetryFire)
 					metrics.IncRetries(triggerContinuation)
 					retryScheduled = true
@@ -354,6 +355,7 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 						DelayMS:     continuationDelayMS,
 						Error:       "",
 						LastSSHHost: workerResult.SSHHost,
+						SessionID:   sessionID,
 					}, params.OnRetryFire)
 					metrics.IncRetries(triggerContinuation)
 					retryScheduled = true
@@ -394,6 +396,7 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 				DelayMS:     continuationDelayMS,
 				Error:       "",
 				LastSSHHost: workerResult.SSHHost,
+				SessionID:   sessionID,
 			}, params.OnRetryFire)
 			metrics.IncRetries(triggerContinuation)
 			retryScheduled = true
@@ -526,6 +529,7 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 				Attempt:    retryEntry.Attempt,
 				DueAtMs:    retryEntry.DueAtMS,
 				Error:      stringPtr(retryEntry.Error),
+				SessionID:  stringPtr(retryEntry.SessionID),
 			}
 			if err := params.Store.SaveRetryEntry(ctx, pEntry); err != nil {
 				log.Error("failed to persist retry entry",

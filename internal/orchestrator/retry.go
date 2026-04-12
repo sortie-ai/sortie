@@ -147,6 +147,7 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 			Attempt:      popped.Attempt,
 			DelayMS:      delayMS,
 			Error:        popped.Error,
+			SessionID:    popped.SessionID,
 			ReactionKind: popped.ReactionKind,
 		}, params.OnRetryFire)
 		persistRetryEntry(ctx, log, params.Store, state, issueID)
@@ -198,6 +199,7 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 			Attempt:      nextAttempt,
 			DelayMS:      delayMS,
 			Error:        "retry poll failed",
+			SessionID:    popped.SessionID,
 			ReactionKind: popped.ReactionKind,
 		}, params.OnRetryFire)
 
@@ -260,6 +262,7 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 			Attempt:      nextAttempt,
 			DelayMS:      delayMS,
 			Error:        "no available orchestrator slots",
+			SessionID:    popped.SessionID,
 			ReactionKind: popped.ReactionKind,
 		}, params.OnRetryFire)
 
@@ -289,6 +292,7 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 				Attempt:      nextAttempt,
 				DelayMS:      delayMS,
 				Error:        "no available SSH hosts",
+				SessionID:    popped.SessionID,
 				ReactionKind: popped.ReactionKind,
 			}, params.OnRetryFire)
 
@@ -310,7 +314,7 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 	if popped.ContinuationContext != nil {
 		dispatchCtx = WithContinuationContext(ctx, popped.ContinuationContext)
 	}
-	DispatchIssue(dispatchCtx, state, issue, &attempt, host, params.MakeWorkerFn("", host))
+	DispatchIssue(dispatchCtx, state, issue, &attempt, host, params.MakeWorkerFn(popped.SessionID, host))
 	if entry := state.Running[issue.ID]; entry != nil {
 		entry.WorkflowFile = params.WorkflowFile
 		entry.ContinuationContext = popped.ContinuationContext
@@ -371,6 +375,7 @@ func persistRetryEntry(ctx context.Context, log *slog.Logger, store RetryTimerSt
 		Attempt:    retryEntry.Attempt,
 		DueAtMs:    retryEntry.DueAtMS,
 		Error:      stringPtr(retryEntry.Error),
+		SessionID:  stringPtr(retryEntry.SessionID),
 	}
 	if err := store.SaveRetryEntry(ctx, pEntry); err != nil {
 		log.Error("failed to persist retry entry",

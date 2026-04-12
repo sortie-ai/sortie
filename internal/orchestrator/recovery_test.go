@@ -345,3 +345,60 @@ func TestActivateReconstructedRetries(t *testing.T) {
 		}
 	})
 }
+
+func TestPopulateRetries_SessionID(t *testing.T) {
+	t.Parallel()
+
+	sessID := "sess-abc"
+	state := NewState(5000, 4, nil, AgentTotals{})
+	entries := []persistence.PendingRetry{
+		{
+			Entry: persistence.RetryEntry{
+				IssueID:    "id-sess",
+				Identifier: "PROJ-SESS",
+				Attempt:    1,
+				DueAtMs:    10000,
+				SessionID:  &sessID,
+			},
+			RemainingMs: 5000,
+		},
+	}
+
+	PopulateRetries(state, entries)
+
+	got, ok := state.RetryAttempts["id-sess"]
+	if !ok {
+		t.Fatal("RetryAttempts[id-sess] missing after PopulateRetries")
+	}
+	if got.SessionID != sessID {
+		t.Errorf("PopulateRetries_SessionID: SessionID = %q, want %q", got.SessionID, sessID)
+	}
+}
+
+func TestPopulateRetries_SessionID_Nil(t *testing.T) {
+	t.Parallel()
+
+	state := NewState(5000, 4, nil, AgentTotals{})
+	entries := []persistence.PendingRetry{
+		{
+			Entry: persistence.RetryEntry{
+				IssueID:    "id-nosess",
+				Identifier: "PROJ-NOSESS",
+				Attempt:    1,
+				DueAtMs:    10000,
+				SessionID:  nil,
+			},
+			RemainingMs: 0,
+		},
+	}
+
+	PopulateRetries(state, entries)
+
+	got, ok := state.RetryAttempts["id-nosess"]
+	if !ok {
+		t.Fatal("RetryAttempts[id-nosess] missing after PopulateRetries")
+	}
+	if got.SessionID != "" {
+		t.Errorf("PopulateRetries_SessionID_Nil: SessionID = %q, want empty", got.SessionID)
+	}
+}
