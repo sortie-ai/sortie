@@ -1308,11 +1308,11 @@ func passingPreflightRegistries() PreflightParams {
 	return PreflightParams{
 		TrackerRegistry: &stubTrackerRegistry{
 			getFunc:  func(string) (registry.TrackerConstructor, error) { return nil, nil },
-			metaFunc: func(string) registry.AdapterMeta { return registry.AdapterMeta{} },
+			metaFunc: func(string) (registry.TrackerMeta, bool) { return registry.TrackerMeta{}, true },
 		},
 		AgentRegistry: &stubAgentRegistry{
 			getFunc:  func(string) (registry.AgentConstructor, error) { return nil, nil },
-			metaFunc: func(string) registry.AdapterMeta { return registry.AdapterMeta{} },
+			metaFunc: func(string) (registry.AgentMeta, bool) { return registry.AgentMeta{}, true },
 		},
 	}
 }

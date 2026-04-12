@@ -31,7 +31,7 @@ import (
 )
 
 func init() {
-	registry.Agents.RegisterWithMeta("claude-code", NewClaudeCodeAdapter, registry.AdapterMeta{
+	registry.Agents.RegisterWithMeta("claude-code", NewClaudeCodeAdapter, registry.AgentMeta{
 		RequiresCommand: true,
 	})
 }

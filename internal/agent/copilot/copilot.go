@@ -31,7 +31,7 @@ import (
 )
 
 func init() {
-	registry.Agents.RegisterWithMeta("copilot-cli", NewCopilotAdapter, registry.AdapterMeta{
+	registry.Agents.RegisterWithMeta("copilot-cli", NewCopilotAdapter, registry.AgentMeta{
 		RequiresCommand: true,
 	})
 }

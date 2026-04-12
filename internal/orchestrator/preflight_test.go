@@ -18,14 +18,14 @@ import (
 // PreflightParams with configurable Get and Meta behavior.
 type stubTrackerRegistry struct {
 	getFunc  func(string) (registry.TrackerConstructor, error)
-	metaFunc func(string) registry.AdapterMeta
+	metaFunc func(string) (registry.TrackerMeta, bool)
 }
 
 func (s *stubTrackerRegistry) Get(kind string) (registry.TrackerConstructor, error) {
 	return s.getFunc(kind)
 }
 
-func (s *stubTrackerRegistry) Meta(kind string) registry.AdapterMeta {
+func (s *stubTrackerRegistry) Meta(kind string) (registry.TrackerMeta, bool) {
 	return s.metaFunc(kind)
 }
 
@@ -33,14 +33,14 @@ func (s *stubTrackerRegistry) Meta(kind string) registry.AdapterMeta {
 // PreflightParams with configurable Get and Meta behavior.
 type stubAgentRegistry struct {
 	getFunc  func(string) (registry.AgentConstructor, error)
-	metaFunc func(string) registry.AdapterMeta
+	metaFunc func(string) (registry.AgentMeta, bool)
 }
 
 func (s *stubAgentRegistry) Get(kind string) (registry.AgentConstructor, error) {
 	return s.getFunc(kind)
 }
 
-func (s *stubAgentRegistry) Meta(kind string) registry.AdapterMeta {
+func (s *stubAgentRegistry) Meta(kind string) (registry.AgentMeta, bool) {
 	return s.metaFunc(kind)
 }
 
@@ -63,11 +63,11 @@ func validPreflightParams() PreflightParams {
 		},
 		TrackerRegistry: &stubTrackerRegistry{
 			getFunc:  func(string) (registry.TrackerConstructor, error) { return nil, nil },
-			metaFunc: func(string) registry.AdapterMeta { return registry.AdapterMeta{} },
+			metaFunc: func(string) (registry.TrackerMeta, bool) { return registry.TrackerMeta{}, true },
 		},
 		AgentRegistry: &stubAgentRegistry{
 			getFunc:  func(string) (registry.AgentConstructor, error) { return nil, nil },
-			metaFunc: func(string) registry.AdapterMeta { return registry.AdapterMeta{} },
+			metaFunc: func(string) (registry.AgentMeta, bool) { return registry.AgentMeta{}, true },
 		},
 	}
 }
@@ -191,8 +191,8 @@ func TestValidateDispatchConfig(t *testing.T) {
 				}
 				p.TrackerRegistry = &stubTrackerRegistry{
 					getFunc: func(string) (registry.TrackerConstructor, error) { return nil, nil },
-					metaFunc: func(string) registry.AdapterMeta {
-						return registry.AdapterMeta{RequiresAPIKey: true}
+					metaFunc: func(string) (registry.TrackerMeta, bool) {
+						return registry.TrackerMeta{RequiresAPIKey: true}, true
 					},
 				}
 			},
@@ -215,8 +215,8 @@ func TestValidateDispatchConfig(t *testing.T) {
 				}
 				p.TrackerRegistry = &stubTrackerRegistry{
 					getFunc: func(string) (registry.TrackerConstructor, error) { return nil, nil },
-					metaFunc: func(string) registry.AdapterMeta {
-						return registry.AdapterMeta{RequiresProject: true}
+					metaFunc: func(string) (registry.TrackerMeta, bool) {
+						return registry.TrackerMeta{RequiresProject: true}, true
 					},
 				}
 			},
@@ -239,8 +239,8 @@ func TestValidateDispatchConfig(t *testing.T) {
 				}
 				p.TrackerRegistry = &stubTrackerRegistry{
 					getFunc: func(string) (registry.TrackerConstructor, error) { return nil, nil },
-					metaFunc: func(string) registry.AdapterMeta {
-						return registry.AdapterMeta{RequiresProject: false}
+					metaFunc: func(string) (registry.TrackerMeta, bool) {
+						return registry.TrackerMeta{RequiresProject: false}, true
 					},
 				}
 			},
@@ -258,7 +258,7 @@ func TestValidateDispatchConfig(t *testing.T) {
 							Available: []string{},
 						}
 					},
-					metaFunc: func(string) registry.AdapterMeta { return registry.AdapterMeta{} },
+					metaFunc: func(string) (registry.TrackerMeta, bool) { return registry.TrackerMeta{}, true },
 				}
 			},
 			wantChecks: []string{"tracker_adapter"},
@@ -279,8 +279,8 @@ func TestValidateDispatchConfig(t *testing.T) {
 				}
 				p.AgentRegistry = &stubAgentRegistry{
 					getFunc: func(string) (registry.AgentConstructor, error) { return nil, nil },
-					metaFunc: func(string) registry.AdapterMeta {
-						return registry.AdapterMeta{RequiresCommand: true}
+					metaFunc: func(string) (registry.AgentMeta, bool) {
+						return registry.AgentMeta{RequiresCommand: true}, true
 					},
 				}
 			},
@@ -302,8 +302,8 @@ func TestValidateDispatchConfig(t *testing.T) {
 				}
 				p.AgentRegistry = &stubAgentRegistry{
 					getFunc: func(string) (registry.AgentConstructor, error) { return nil, nil },
-					metaFunc: func(string) registry.AdapterMeta {
-						return registry.AdapterMeta{RequiresCommand: false}
+					metaFunc: func(string) (registry.AgentMeta, bool) {
+						return registry.AgentMeta{RequiresCommand: false}, true
 					},
 				}
 			},
@@ -330,8 +330,8 @@ func TestValidateDispatchConfig(t *testing.T) {
 							Available: []string{},
 						}
 					},
-					metaFunc: func(string) registry.AdapterMeta {
-						return registry.AdapterMeta{RequiresCommand: true}
+					metaFunc: func(string) (registry.AgentMeta, bool) {
+						return registry.AgentMeta{RequiresCommand: true}, true
 					},
 				}
 			},
@@ -349,7 +349,7 @@ func TestValidateDispatchConfig(t *testing.T) {
 							Available: []string{},
 						}
 					},
-					metaFunc: func(string) registry.AdapterMeta { return registry.AdapterMeta{} },
+					metaFunc: func(string) (registry.AgentMeta, bool) { return registry.AgentMeta{}, true },
 				}
 			},
 			wantChecks: []string{"agent_adapter"},
@@ -368,7 +368,7 @@ func TestValidateDispatchConfig(t *testing.T) {
 							Available: []string{},
 						}
 					},
-					metaFunc: func(string) registry.AdapterMeta { return registry.AdapterMeta{} },
+					metaFunc: func(string) (registry.AgentMeta, bool) { return registry.AgentMeta{}, true },
 				}
 			},
 			wantChecks: []string{"tracker.kind", "agent.kind"},
@@ -398,8 +398,8 @@ func TestValidateDispatchConfig(t *testing.T) {
 				}
 				p.TrackerRegistry = &stubTrackerRegistry{
 					getFunc: func(string) (registry.TrackerConstructor, error) { return nil, nil },
-					metaFunc: func(string) registry.AdapterMeta {
-						return registry.AdapterMeta{RequiresAPIKey: false}
+					metaFunc: func(string) (registry.TrackerMeta, bool) {
+						return registry.TrackerMeta{RequiresAPIKey: false}, true
 					},
 				}
 			},
@@ -422,8 +422,8 @@ func TestValidateDispatchConfig(t *testing.T) {
 				}
 				p.TrackerRegistry = &stubTrackerRegistry{
 					getFunc: func(string) (registry.TrackerConstructor, error) { return nil, nil },
-					metaFunc: func(string) registry.AdapterMeta {
-						return registry.AdapterMeta{RequiresAPIKey: true}
+					metaFunc: func(string) (registry.TrackerMeta, bool) {
+						return registry.TrackerMeta{RequiresAPIKey: true}, true
 					},
 				}
 			},
@@ -445,11 +445,11 @@ func TestValidateDispatchConfig(t *testing.T) {
 				// Both registries return zero-value meta (simulating plain Register).
 				p.TrackerRegistry = &stubTrackerRegistry{
 					getFunc:  func(string) (registry.TrackerConstructor, error) { return nil, nil },
-					metaFunc: func(string) registry.AdapterMeta { return registry.AdapterMeta{} },
+					metaFunc: func(string) (registry.TrackerMeta, bool) { return registry.TrackerMeta{}, true },
 				}
 				p.AgentRegistry = &stubAgentRegistry{
 					getFunc:  func(string) (registry.AgentConstructor, error) { return nil, nil },
-					metaFunc: func(string) registry.AdapterMeta { return registry.AdapterMeta{} },
+					metaFunc: func(string) (registry.AgentMeta, bool) { return registry.AgentMeta{}, true },
 				}
 			},
 			wantOK:   true,
@@ -459,14 +459,14 @@ func TestValidateDispatchConfig(t *testing.T) {
 			modify: func(p *PreflightParams) {
 				p.TrackerRegistry = &stubTrackerRegistry{
 					getFunc: func(string) (registry.TrackerConstructor, error) { return nil, nil },
-					metaFunc: func(string) registry.AdapterMeta {
-						return registry.AdapterMeta{
+					metaFunc: func(string) (registry.TrackerMeta, bool) {
+						return registry.TrackerMeta{
 							ValidateTrackerConfig: func(_ registry.TrackerConfigFields) []registry.ValidationDiag {
 								return []registry.ValidationDiag{
 									{Severity: "error", Check: "test.adapter.check", Message: "adapter error"},
 								}
 							},
-						}
+						}, true
 					},
 				}
 			},
@@ -478,14 +478,14 @@ func TestValidateDispatchConfig(t *testing.T) {
 			modify: func(p *PreflightParams) {
 				p.TrackerRegistry = &stubTrackerRegistry{
 					getFunc: func(string) (registry.TrackerConstructor, error) { return nil, nil },
-					metaFunc: func(string) registry.AdapterMeta {
-						return registry.AdapterMeta{
+					metaFunc: func(string) (registry.TrackerMeta, bool) {
+						return registry.TrackerMeta{
 							ValidateTrackerConfig: func(_ registry.TrackerConfigFields) []registry.ValidationDiag {
 								return []registry.ValidationDiag{
 									{Severity: "warning", Check: "test.adapter.warn", Message: "adapter warning"},
 								}
 							},
-						}
+						}, true
 					},
 				}
 			},
@@ -498,8 +498,8 @@ func TestValidateDispatchConfig(t *testing.T) {
 			modify: func(p *PreflightParams) {
 				p.TrackerRegistry = &stubTrackerRegistry{
 					getFunc: func(string) (registry.TrackerConstructor, error) { return nil, nil },
-					metaFunc: func(string) registry.AdapterMeta {
-						return registry.AdapterMeta{} // ValidateTrackerConfig is nil
+					metaFunc: func(string) (registry.TrackerMeta, bool) {
+						return registry.TrackerMeta{}, true // ValidateTrackerConfig is nil
 					},
 				}
 			},

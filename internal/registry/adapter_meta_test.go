@@ -24,7 +24,6 @@ func TestAdapterMeta_RealRegistrations(t *testing.T) {
 			kind        string
 			wantAPIKey  bool
 			wantProject bool
-			wantCommand bool
 		}{
 			{
 				name:        "jira requires api_key and project",
@@ -48,16 +47,13 @@ func TestAdapterMeta_RealRegistrations(t *testing.T) {
 			t.Run(tt.name, func(t *testing.T) {
 				t.Parallel()
 
-				meta := registry.Trackers.Meta(tt.kind)
+				meta, _ := registry.Trackers.Meta(tt.kind)
 
 				if meta.RequiresAPIKey != tt.wantAPIKey {
 					t.Errorf("Trackers.Meta(%q).RequiresAPIKey = %v, want %v", tt.kind, meta.RequiresAPIKey, tt.wantAPIKey)
 				}
 				if meta.RequiresProject != tt.wantProject {
 					t.Errorf("Trackers.Meta(%q).RequiresProject = %v, want %v", tt.kind, meta.RequiresProject, tt.wantProject)
-				}
-				if meta.RequiresCommand != tt.wantCommand {
-					t.Errorf("Trackers.Meta(%q).RequiresCommand = %v, want %v", tt.kind, meta.RequiresCommand, tt.wantCommand)
 				}
 			})
 		}
@@ -69,8 +65,6 @@ func TestAdapterMeta_RealRegistrations(t *testing.T) {
 		tests := []struct {
 			name        string
 			kind        string
-			wantAPIKey  bool
-			wantProject bool
 			wantCommand bool
 		}{
 			{
@@ -88,14 +82,8 @@ func TestAdapterMeta_RealRegistrations(t *testing.T) {
 			t.Run(tt.name, func(t *testing.T) {
 				t.Parallel()
 
-				meta := registry.Agents.Meta(tt.kind)
+				meta, _ := registry.Agents.Meta(tt.kind)
 
-				if meta.RequiresAPIKey != tt.wantAPIKey {
-					t.Errorf("Agents.Meta(%q).RequiresAPIKey = %v, want %v", tt.kind, meta.RequiresAPIKey, tt.wantAPIKey)
-				}
-				if meta.RequiresProject != tt.wantProject {
-					t.Errorf("Agents.Meta(%q).RequiresProject = %v, want %v", tt.kind, meta.RequiresProject, tt.wantProject)
-				}
 				if meta.RequiresCommand != tt.wantCommand {
 					t.Errorf("Agents.Meta(%q).RequiresCommand = %v, want %v", tt.kind, meta.RequiresCommand, tt.wantCommand)
 				}
@@ -106,7 +94,7 @@ func TestAdapterMeta_RealRegistrations(t *testing.T) {
 	t.Run("github exposes ValidateTrackerConfig", func(t *testing.T) {
 		t.Parallel()
 
-		meta := registry.Trackers.Meta("github")
+		meta, _ := registry.Trackers.Meta("github")
 		if meta.ValidateTrackerConfig == nil {
 			t.Error(`Trackers.Meta("github").ValidateTrackerConfig = nil, want non-nil`)
 		}

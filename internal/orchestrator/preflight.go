@@ -77,14 +77,14 @@ type PreflightParams struct {
 	// for the configured tracker kind.
 	TrackerRegistry interface {
 		Get(kind string) (registry.TrackerConstructor, error)
-		Meta(kind string) registry.AdapterMeta
+		Meta(kind string) (registry.TrackerMeta, bool)
 	}
 
 	// AgentRegistry provides adapter lookup and metadata queries
 	// for the configured agent kind.
 	AgentRegistry interface {
 		Get(kind string) (registry.AgentConstructor, error)
-		Meta(kind string) registry.AdapterMeta
+		Meta(kind string) (registry.AgentMeta, bool)
 	}
 }
 
@@ -122,7 +122,7 @@ func ValidateDispatchConfig(params PreflightParams) PreflightResult {
 	// Tracker-specific validations share a single Meta() lookup.
 	var warns []PreflightWarning
 	if cfg.Tracker.Kind != "" {
-		trackerMeta := params.TrackerRegistry.Meta(cfg.Tracker.Kind)
+		trackerMeta, _ := params.TrackerRegistry.Meta(cfg.Tracker.Kind)
 
 		// API key is mandatory for adapters that declare it required.
 		if trackerMeta.RequiresAPIKey && cfg.Tracker.APIKey == "" {
@@ -181,8 +181,9 @@ func ValidateDispatchConfig(params PreflightParams) PreflightResult {
 	}
 
 	// Command is mandatory for adapters that declare it required.
-	if cfg.Agent.Kind != "" && params.AgentRegistry.Meta(cfg.Agent.Kind).RequiresCommand {
-		if cfg.Agent.Command == "" {
+	if cfg.Agent.Kind != "" {
+		agentMeta, _ := params.AgentRegistry.Meta(cfg.Agent.Kind)
+		if agentMeta.RequiresCommand && cfg.Agent.Command == "" {
 			errs = append(errs, PreflightError{
 				Check:   "agent.command",
 				Message: "agent.command is required for agent kind " + strconv.Quote(cfg.Agent.Kind),

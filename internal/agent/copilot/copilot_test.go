@@ -117,9 +117,9 @@ func TestRegistration(t *testing.T) {
 	}
 
 	// Verify RequiresCommand metadata is set.
-	meta := registry.Agents.Meta("copilot-cli")
+	meta, _ := registry.Agents.Meta("copilot-cli")
 	if !meta.RequiresCommand {
-		t.Error("AdapterMeta.RequiresCommand = false, want true")
+		t.Error("AgentMeta.RequiresCommand = false, want true")
 	}
 }
 

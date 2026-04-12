@@ -14,8 +14,13 @@ import (
 
 type testConstructor func() string
 
-func newTestRegistry() *Registry[testConstructor] {
-	return NewRegistry[testConstructor]("test")
+type testMeta struct {
+	RequiresProject bool
+	RequiresCommand bool
+}
+
+func newTestRegistry() *Registry[testConstructor, testMeta] {
+	return NewRegistry[testConstructor, testMeta]("test")
 }
 
 func dummyConstructor() testConstructor {
@@ -113,7 +118,7 @@ func TestRegister_Panics(t *testing.T) {
 	tests := []struct {
 		name    string
 		kind    string
-		setup   func(*Registry[testConstructor])
+		setup   func(*Registry[testConstructor, testMeta])
 		wantMsg string
 	}{
 		{
@@ -125,7 +130,7 @@ func TestRegister_Panics(t *testing.T) {
 		{
 			name: "duplicate kind",
 			kind: "dup",
-			setup: func(r *Registry[testConstructor]) {
+			setup: func(r *Registry[testConstructor, testMeta]) {
 				r.Register("dup", dummyConstructor())
 			},
 			wantMsg: "duplicate",
@@ -209,12 +214,15 @@ func TestRegisterWithMeta_AndMeta(t *testing.T) {
 		t.Parallel()
 
 		r := newTestRegistry()
-		r.RegisterWithMeta("alpha", dummyConstructor(), AdapterMeta{
+		r.RegisterWithMeta("alpha", dummyConstructor(), testMeta{
 			RequiresProject: true,
 			RequiresCommand: true,
 		})
 
-		got := r.Meta("alpha")
+		got, ok := r.Meta("alpha")
+		if !ok {
+			t.Fatalf("Meta(%q) ok = false, want true", "alpha")
+		}
 		if !got.RequiresProject {
 			t.Errorf("Meta(%q).RequiresProject = false, want true", "alpha")
 		}
@@ -227,7 +235,7 @@ func TestRegisterWithMeta_AndMeta(t *testing.T) {
 		t.Parallel()
 
 		r := newTestRegistry()
-		r.RegisterWithMeta("beta", dummyConstructor(), AdapterMeta{RequiresProject: true})
+		r.RegisterWithMeta("beta", dummyConstructor(), testMeta{RequiresProject: true})
 
 		got, err := r.Get("beta")
 		if err != nil {
@@ -244,7 +252,10 @@ func TestRegisterWithMeta_AndMeta(t *testing.T) {
 		r := newTestRegistry()
 		r.Register("gamma", dummyConstructor())
 
-		got := r.Meta("gamma")
+		got, ok := r.Meta("gamma")
+		if !ok {
+			t.Fatalf("Meta(%q) ok = false, want true for plain Register", "gamma")
+		}
 		if got.RequiresProject {
 			t.Errorf("Meta(%q).RequiresProject = true, want false for plain Register", "gamma")
 		}
@@ -258,7 +269,10 @@ func TestRegisterWithMeta_AndMeta(t *testing.T) {
 
 		r := newTestRegistry()
 
-		got := r.Meta("nonexistent")
+		got, ok := r.Meta("nonexistent")
+		if ok {
+			t.Errorf("Meta(%q) ok = true, want false for unregistered kind", "nonexistent")
+		}
 		if got.RequiresProject {
 			t.Errorf("Meta(%q).RequiresProject = true, want false for unregistered kind", "nonexistent")
 		}
@@ -274,7 +288,7 @@ func TestRegisterWithMeta_Panics(t *testing.T) {
 	tests := []struct {
 		name    string
 		kind    string
-		setup   func(*Registry[testConstructor])
+		setup   func(*Registry[testConstructor, testMeta])
 		wantMsg string
 	}{
 		{
@@ -286,15 +300,15 @@ func TestRegisterWithMeta_Panics(t *testing.T) {
 		{
 			name: "duplicate kind",
 			kind: "dup",
-			setup: func(r *Registry[testConstructor]) {
-				r.RegisterWithMeta("dup", dummyConstructor(), AdapterMeta{})
+			setup: func(r *Registry[testConstructor, testMeta]) {
+				r.RegisterWithMeta("dup", dummyConstructor(), testMeta{})
 			},
 			wantMsg: "duplicate",
 		},
 		{
 			name: "duplicate kind across Register and RegisterWithMeta",
 			kind: "dup",
-			setup: func(r *Registry[testConstructor]) {
+			setup: func(r *Registry[testConstructor, testMeta]) {
 				r.Register("dup", dummyConstructor())
 			},
 			wantMsg: "duplicate",
@@ -321,7 +335,7 @@ func TestRegisterWithMeta_Panics(t *testing.T) {
 				}
 			}()
 
-			r.RegisterWithMeta(tt.kind, dummyConstructor(), AdapterMeta{RequiresProject: true})
+			r.RegisterWithMeta(tt.kind, dummyConstructor(), testMeta{RequiresProject: true})
 		})
 	}
 }
@@ -410,7 +424,7 @@ func (m *mockTrackerAdapter) AddLabel(_ context.Context, _ string, _ string) err
 func TestTrackerRegistry(t *testing.T) {
 	t.Parallel()
 
-	r := NewRegistry[TrackerConstructor]("tracker")
+	r := NewRegistry[TrackerConstructor, TrackerMeta]("tracker")
 	r.Register("mock", func(_ map[string]any) (domain.TrackerAdapter, error) {
 		return &mockTrackerAdapter{}, nil
 	})
@@ -452,7 +466,7 @@ func (m *mockAgentAdapter) EventStream() <-chan domain.AgentEvent {
 func TestAgentRegistry(t *testing.T) {
 	t.Parallel()
 
-	r := NewRegistry[AgentConstructor]("agent")
+	r := NewRegistry[AgentConstructor, AgentMeta]("agent")
 	r.Register("mock", func(_ map[string]any) (domain.AgentAdapter, error) {
 		return &mockAgentAdapter{}, nil
 	})
