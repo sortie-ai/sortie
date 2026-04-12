@@ -193,6 +193,7 @@ Sortie is a single-binary Go service with this internal layout:
 | `internal/registry/`     | Support       | Adapter registration                                 |
 | `internal/logging/`      | Support       | Structured logging setup                             |
 | `internal/maputil/`      | Support       | Generic map helpers, sorted key iteration            |
+| `internal/typeutil/`     | Support       | Type coercion helpers for loosely-typed values        |
 | `internal/tool/trackerapi/` | Support    | Agent tool for tracker operations                    |
 | `internal/tool/history/`    | Support    | Agent tool for workspace run history                 |
 | `internal/tool/mcpserver/`  | Support    | MCP stdio server for tool dispatch                   |
