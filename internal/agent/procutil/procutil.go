@@ -5,10 +5,71 @@ package procutil
 import (
 	"bufio"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"os/exec"
 )
+
+const (
+	// DefaultScannerMaxSize is the maximum token size for the stderr
+	// bufio.Scanner, matching the stdout scanner in agent adapters.
+	DefaultScannerMaxSize = 10 * 1024 * 1024
+
+	// DefaultMaxLines is the maximum number of stderr lines retained
+	// in memory. When exceeded, the collector keeps the first half
+	// and last half, discarding the middle.
+	DefaultMaxLines = 1000
+
+	// DefaultMaxBytes is the total byte budget for retained stderr
+	// lines across head and tail combined.
+	DefaultMaxBytes = 5 * 1024 * 1024
+
+	droppedMarkerFmt = "... (%d lines discarded) ..."
+)
+
+type collectorConfig struct {
+	maxLines   int
+	maxBytes   int
+	scannerMax int
+}
+
+// CollectorOption configures a [StderrCollector].
+type CollectorOption func(*collectorConfig)
+
+// WithMaxLines sets the maximum number of stderr lines retained in
+// memory. When the line count exceeds n, the collector retains the
+// first n/2 and last n-n/2 lines, discarding the middle. Zero or
+// negative values are ignored (default applies).
+func WithMaxLines(n int) CollectorOption {
+	return func(cfg *collectorConfig) {
+		if n > 0 {
+			cfg.maxLines = n
+		}
+	}
+}
+
+// WithMaxBytes sets the total byte budget for retained stderr lines.
+// When the budget is exhausted, the collector continues draining and
+// logging lines but stops storing them. Zero or negative values are
+// ignored (default applies).
+func WithMaxBytes(n int) CollectorOption {
+	return func(cfg *collectorConfig) {
+		if n > 0 {
+			cfg.maxBytes = n
+		}
+	}
+}
+
+// WithScannerMax sets the maximum token size for the internal
+// bufio.Scanner. Zero or negative values are ignored (default applies).
+func WithScannerMax(n int) CollectorOption {
+	return func(cfg *collectorConfig) {
+		if n > 0 {
+			cfg.scannerMax = n
+		}
+	}
+}
 
 // ExtractExitCode returns the process exit code from an
 // [*exec.ExitError], or -1 if the error is not an ExitError.
@@ -30,22 +91,64 @@ func ExtractExitCode(err error) int {
 // [NewStderrCollector] to start the drain goroutine and
 // [StderrCollector.Lines] to retrieve collected output after the
 // subprocess exits.
+//
+// When the number of lines exceeds the configured maximum, the
+// collector retains the first half (head) and last half (tail ring
+// buffer), discarding the middle. A byte budget independently caps
+// total retained bytes. In both cases the collector continues draining
+// the reader to avoid blocking the subprocess.
 type StderrCollector struct {
-	lines  []string
-	done   chan struct{}
-	logger *slog.Logger
+	head       []string
+	tail       []string
+	tailPos    int
+	tailFull   bool
+	dropped    int
+	headCap    int
+	tailCap    int
+	maxBytes   int
+	bytesUsed  int
+	scannerMax int
+	done       chan struct{}
+	logger     *slog.Logger
 }
 
 // NewStderrCollector starts a goroutine that drains r line by line,
 // logging each line at DEBUG level, and collecting them for later
 // retrieval via [StderrCollector.Lines].
-func NewStderrCollector(r io.Reader, logger *slog.Logger) *StderrCollector {
+//
+// Options override the default scanner buffer size, line cap, and byte
+// budget. With no options the collector uses [DefaultScannerMaxSize],
+// [DefaultMaxLines], and [DefaultMaxBytes].
+func NewStderrCollector(r io.Reader, logger *slog.Logger, opts ...CollectorOption) *StderrCollector {
 	if logger == nil {
 		logger = slog.Default()
 	}
+
+	cfg := collectorConfig{}
+	for _, o := range opts {
+		o(&cfg)
+	}
+	if cfg.maxLines == 0 {
+		cfg.maxLines = DefaultMaxLines
+	}
+	if cfg.maxBytes == 0 {
+		cfg.maxBytes = DefaultMaxBytes
+	}
+	if cfg.scannerMax == 0 {
+		cfg.scannerMax = DefaultScannerMaxSize
+	}
+
+	headCap := cfg.maxLines / 2
+	tailCap := cfg.maxLines - headCap
+
 	c := &StderrCollector{
-		done:   make(chan struct{}),
-		logger: logger,
+		tail:       make([]string, tailCap),
+		headCap:    headCap,
+		tailCap:    tailCap,
+		maxBytes:   cfg.maxBytes,
+		scannerMax: cfg.scannerMax,
+		done:       make(chan struct{}),
+		logger:     logger,
 	}
 	go c.drain(r)
 	return c
@@ -54,10 +157,41 @@ func NewStderrCollector(r io.Reader, logger *slog.Logger) *StderrCollector {
 func (c *StderrCollector) drain(r io.Reader) {
 	defer close(c.done)
 	scanner := bufio.NewScanner(r)
+	scanner.Buffer(make([]byte, 0, 64*1024), c.scannerMax)
+
 	for scanner.Scan() {
 		line := scanner.Text()
 		c.logger.Debug("agent stderr", slog.String("line", line))
-		c.lines = append(c.lines, line)
+
+		if len(c.head) < c.headCap {
+			if c.bytesUsed+len(line) > c.maxBytes {
+				c.dropped++
+				continue
+			}
+			c.head = append(c.head, line)
+			c.bytesUsed += len(line)
+			continue
+		}
+
+		reclaimable := 0
+		if c.tailFull {
+			reclaimable = len(c.tail[c.tailPos])
+		}
+
+		if c.bytesUsed-reclaimable+len(line) > c.maxBytes {
+			c.dropped++
+			continue
+		}
+
+		if c.tailFull {
+			c.dropped++
+		}
+		c.tail[c.tailPos] = line
+		c.bytesUsed = c.bytesUsed - reclaimable + len(line)
+		c.tailPos = (c.tailPos + 1) % c.tailCap
+		if c.tailPos == 0 {
+			c.tailFull = true
+		}
 	}
 	if err := scanner.Err(); err != nil {
 		c.logger.Debug("agent stderr drain failed", slog.Any("error", err))
@@ -65,11 +199,39 @@ func (c *StderrCollector) drain(r io.Reader) {
 }
 
 // Lines blocks until the drain goroutine finishes and returns all
-// collected stderr lines. Safe to call after the subprocess has
-// exited.
+// collected stderr lines in chronological order. When lines were
+// discarded, a synthetic marker line is inserted between the head and
+// tail sections. Safe to call after the subprocess has exited.
 func (c *StderrCollector) Lines() []string {
 	<-c.done
-	return c.lines
+
+	hasTail := c.tailFull || c.tailPos > 0
+	if len(c.head) == 0 && !hasTail {
+		return nil
+	}
+
+	result := make([]string, len(c.head), len(c.head)+1+c.tailCap)
+	copy(result, c.head)
+
+	if c.dropped > 0 {
+		result = append(result, fmt.Sprintf(droppedMarkerFmt, c.dropped))
+	}
+
+	if c.tailFull {
+		result = append(result, c.tail[c.tailPos:]...)
+		result = append(result, c.tail[:c.tailPos]...)
+	} else {
+		result = append(result, c.tail[:c.tailPos]...)
+	}
+
+	return result
+}
+
+// Dropped blocks until the drain goroutine finishes and returns the
+// number of stderr lines discarded due to the line cap or byte budget.
+func (c *StderrCollector) Dropped() int {
+	<-c.done
+	return c.dropped
 }
 
 // WarnLines blocks until the drain goroutine finishes, then re-emits
