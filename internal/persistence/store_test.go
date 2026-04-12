@@ -452,9 +452,123 @@ func TestLoadRetryEntries_DeterministicTieBreak(t *testing.T) {
 	}
 }
 
-// --- Run History Tests ---
+func TestSaveAndLoadRetryEntry_SessionID(t *testing.T) {
+	t.Parallel()
 
-// newTestRun returns a RunHistory with all fields populated using the given
+	s := openTestStore(t)
+	migrateOrFatal(t, s)
+	ctx := context.Background()
+
+	sessID := "sess-abc"
+	entry := RetryEntry{
+		IssueID:    "ISS-1",
+		Identifier: "PROJ-1",
+		Attempt:    1,
+		DueAtMs:    1000,
+		SessionID:  &sessID,
+	}
+	if err := s.SaveRetryEntry(ctx, entry); err != nil {
+		t.Fatalf("SaveRetryEntry: %v", err)
+	}
+
+	entries, err := s.LoadRetryEntries(ctx)
+	if err != nil {
+		t.Fatalf("LoadRetryEntries: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("LoadRetryEntries count = %d, want 1", len(entries))
+	}
+	got := entries[0]
+	if got.SessionID == nil {
+		t.Fatal("SessionID = nil, want non-nil")
+	}
+	if *got.SessionID != sessID {
+		t.Errorf("SaveAndLoadRetryEntry_SessionID: SessionID = %q, want %q", *got.SessionID, sessID)
+	}
+}
+
+func TestSaveAndLoadRetryEntry_SessionID_Nil(t *testing.T) {
+	t.Parallel()
+
+	s := openTestStore(t)
+	migrateOrFatal(t, s)
+	ctx := context.Background()
+
+	entry := RetryEntry{
+		IssueID:    "ISS-NIL",
+		Identifier: "PROJ-NIL",
+		Attempt:    1,
+		DueAtMs:    2000,
+		SessionID:  nil,
+	}
+	if err := s.SaveRetryEntry(ctx, entry); err != nil {
+		t.Fatalf("SaveRetryEntry: %v", err)
+	}
+
+	entries, err := s.LoadRetryEntries(ctx)
+	if err != nil {
+		t.Fatalf("LoadRetryEntries: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("LoadRetryEntries count = %d, want 1", len(entries))
+	}
+	if entries[0].SessionID != nil {
+		t.Errorf("SaveAndLoadRetryEntry_SessionID_Nil: SessionID = %q, want nil", *entries[0].SessionID)
+	}
+}
+
+func TestSaveRetryEntry_Upsert_SessionID(t *testing.T) {
+	t.Parallel()
+
+	s := openTestStore(t)
+	migrateOrFatal(t, s)
+	ctx := context.Background()
+
+	// First upsert: SessionID nil.
+	entry1 := RetryEntry{
+		IssueID:    "ISS-UPS",
+		Identifier: "PROJ-UPS",
+		Attempt:    1,
+		DueAtMs:    3000,
+		SessionID:  nil,
+	}
+	if err := s.SaveRetryEntry(ctx, entry1); err != nil {
+		t.Fatalf("SaveRetryEntry (first): %v", err)
+	}
+
+	// Second upsert: same IssueID, now with a non-nil SessionID.
+	sessID := "sess-updated"
+	entry2 := RetryEntry{
+		IssueID:    "ISS-UPS",
+		Identifier: "PROJ-UPS",
+		Attempt:    2,
+		DueAtMs:    6000,
+		SessionID:  &sessID,
+	}
+	if err := s.SaveRetryEntry(ctx, entry2); err != nil {
+		t.Fatalf("SaveRetryEntry (upsert): %v", err)
+	}
+
+	entries, err := s.LoadRetryEntries(ctx)
+	if err != nil {
+		t.Fatalf("LoadRetryEntries: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("LoadRetryEntries count = %d, want 1", len(entries))
+	}
+	got := entries[0]
+	if got.Attempt != 2 {
+		t.Errorf("SaveRetryEntry_Upsert_SessionID: Attempt = %d, want 2", got.Attempt)
+	}
+	if got.SessionID == nil {
+		t.Fatal("SaveRetryEntry_Upsert_SessionID: SessionID = nil after upsert, want non-nil")
+	}
+	if *got.SessionID != sessID {
+		t.Errorf("SaveRetryEntry_Upsert_SessionID: SessionID = %q, want %q", *got.SessionID, sessID)
+	}
+}
+
+// --- Run History Tests ---
 // index for uniqueness. Error is nil (successful run).
 func newTestRun(i int) RunHistory {
 	return RunHistory{

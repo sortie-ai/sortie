@@ -179,6 +179,7 @@ func TestMigrate_ColumnCorrectness(t *testing.T) {
 				{"attempt", "INTEGER", true, 0},
 				{"due_at_ms", "INTEGER", true, 0},
 				{"error", "TEXT", false, 0},
+				{"session_id", "TEXT", false, 0},
 			},
 		},
 		{

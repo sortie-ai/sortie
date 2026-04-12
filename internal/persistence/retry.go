@@ -15,6 +15,7 @@ type RetryEntry struct {
 	Attempt    int     // Retry attempt number, 1-based.
 	DueAtMs    int64   // Unix epoch milliseconds when the retry timer should fire.
 	Error      *string // Last error message; nil when no error.
+	SessionID  *string // Adapter-assigned session identifier from the previous worker attempt. Nil when no session was established.
 }
 
 // PendingRetry pairs a persisted [RetryEntry] with the computed delay
@@ -34,15 +35,21 @@ func (s *Store) SaveRetryEntry(ctx context.Context, entry RetryEntry) error {
 		errVal = sql.NullString{String: *entry.Error, Valid: true}
 	}
 
+	ssnVal := sql.NullString{}
+	if entry.SessionID != nil {
+		ssnVal = sql.NullString{String: *entry.SessionID, Valid: true}
+	}
+
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO retry_entries (issue_id, identifier, attempt, due_at_ms, error)
-		VALUES (?, ?, ?, ?, ?)
+		`INSERT INTO retry_entries (issue_id, identifier, attempt, due_at_ms, error, session_id)
+		VALUES (?, ?, ?, ?, ?, ?)
 		ON CONFLICT (issue_id) DO UPDATE SET
 			identifier = excluded.identifier,
 			attempt    = excluded.attempt,
 			due_at_ms  = excluded.due_at_ms,
-			error      = excluded.error`,
-		entry.IssueID, entry.Identifier, entry.Attempt, entry.DueAtMs, errVal,
+			error      = excluded.error,
+			session_id = excluded.session_id`,
+		entry.IssueID, entry.Identifier, entry.Attempt, entry.DueAtMs, errVal, ssnVal,
 	)
 	if err != nil {
 		return fmt.Errorf("save retry entry %q: %w", entry.IssueID, err)
@@ -55,7 +62,7 @@ func (s *Store) SaveRetryEntry(ctx context.Context, entry RetryEntry) error {
 // (not nil) when no entries exist.
 func (s *Store) LoadRetryEntries(ctx context.Context) ([]RetryEntry, error) {
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT issue_id, identifier, attempt, due_at_ms, error
+		`SELECT issue_id, identifier, attempt, due_at_ms, error, session_id
 		FROM retry_entries
 		ORDER BY due_at_ms ASC, issue_id ASC`)
 	if err != nil {
@@ -67,12 +74,17 @@ func (s *Store) LoadRetryEntries(ctx context.Context) ([]RetryEntry, error) {
 	for rows.Next() {
 		var e RetryEntry
 		var errVal sql.NullString
-		if err := rows.Scan(&e.IssueID, &e.Identifier, &e.Attempt, &e.DueAtMs, &errVal); err != nil {
+		var ssnVal sql.NullString
+		if err := rows.Scan(&e.IssueID, &e.Identifier, &e.Attempt, &e.DueAtMs, &errVal, &ssnVal); err != nil {
 			return nil, fmt.Errorf("scan retry entry: %w", err)
 		}
 		if errVal.Valid {
 			s := errVal.String
 			e.Error = &s
+		}
+		if ssnVal.Valid {
+			s := ssnVal.String
+			e.SessionID = &s
 		}
 		entries = append(entries, e)
 	}
