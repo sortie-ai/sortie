@@ -7,6 +7,14 @@ Sortie turns issue tracker tickets into autonomous coding agent sessions. Engine
 
 Sortie assumes your coding agent already produces useful results when you run it manually. It handles scheduling, retry, isolation, and persistence around that agent — it does not improve the agent's output.
 
+## Install
+
+```bash
+curl -sSL https://get.sortie-ai.com/install.sh | sh
+```
+
+Or via Homebrew: `brew install sortie-ai/tap/sortie`
+
 ## The Problem
 
 Coding agents can handle routine engineering tasks — bug fixes, dependency updates, test coverage, feature work — when they have good system prompts, appropriate tool permissions, and have been tested on representative issues. But running validated agents at scale requires infrastructure that doesn't exist yet: isolated workspaces, retry logic, state reconciliation, tracker integration, cost tracking. Teams build this ad-hoc, poorly, and differently each time.
@@ -25,42 +33,19 @@ tracker:
   project: acme/billing-api
   query_filter: "label:agent-ready"
   active_states: [todo, in-progress]
-  in_progress_state: in-progress
-  terminal_states: [done, wontfix]
+  handoff_state: review
+  terminal_states: [done]
 
 agent:
   kind: claude-code
-  max_turns: 10
-  max_sessions: 3
   max_concurrent_agents: 4
-
-workspace:
-  root: ~/workspace/billing-api
-
-hooks:
-  after_create: |
-    git clone --depth 1 git@github.com:acme/billing-api.git .
-  before_run: |
-    git fetch origin main
-    git checkout -B "sortie/$SORTIE_ISSUE_IDENTIFIER" origin/main
-  after_run: |
-    git add -A && git diff --cached --quiet || \
-      git commit -m "sortie($SORTIE_ISSUE_IDENTIFIER): automated changes"
-    git push origin "sortie/$SORTIE_ISSUE_IDENTIFIER"
 ---
 
-You are a senior Go engineer working on the billing-api service.
+You are a senior engineer.
 
 ## {{ .issue.identifier }}: {{ .issue.title }}
 
 {{ .issue.description }}
-
-{{ if .run.is_continuation }}
-Resuming work — review workspace state before continuing.
-{{ end }}
-{{ if .attempt }}
-Retry attempt {{ .attempt }}. Check the workspace for partial work.
-{{ end }}
 ```
 
 Set `GITHUB_TOKEN` to a fine-grained PAT with **Issues: Read and write** permission
