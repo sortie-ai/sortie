@@ -16,6 +16,7 @@ import (
 
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/registry"
+	"github.com/sortie-ai/sortie/internal/typeutil"
 )
 
 func init() {
@@ -102,7 +103,7 @@ func NewJiraAdapter(config map[string]any) (domain.TrackerAdapter, error) {
 		}
 	}
 
-	activeStates := extractStringSlice(config["active_states"])
+	activeStates := typeutil.ExtractStringSlice(config["active_states"])
 	if len(activeStates) == 0 {
 		activeStates = defaultActiveStates
 	}
@@ -528,24 +529,4 @@ func (a *JiraAdapter) fetchComments(ctx context.Context, issueID string) ([]doma
 func isNotFound(err error) bool {
 	te, ok := err.(*domain.TrackerError)
 	return ok && te.Kind == domain.ErrTrackerNotFound
-}
-
-// extractStringSlice converts a value that may be []any (from JSON
-// unmarshaling) or []string (from typed config) to []string, skipping
-// non-string elements.
-func extractStringSlice(v any) []string {
-	switch s := v.(type) {
-	case []any:
-		strs := make([]string, 0, len(s))
-		for _, elem := range s {
-			if str, ok := elem.(string); ok {
-				strs = append(strs, str)
-			}
-		}
-		return strs
-	case []string:
-		return s
-	default:
-		return nil
-	}
 }

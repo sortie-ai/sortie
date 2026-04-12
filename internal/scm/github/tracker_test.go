@@ -1937,42 +1937,6 @@ func TestTransitionIssue_DeleteLabelIsNotFound(t *testing.T) {
 	}
 }
 
-// --- extractStringSlice ---
-
-func TestExtractStringSlice(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name  string
-		input any
-		want  []string
-	}{
-		{name: "nil", input: nil, want: nil},
-		{name: "[]any strings", input: []any{"A", "B"}, want: []string{"A", "B"}},
-		{name: "[]string", input: []string{"X", "Y"}, want: []string{"X", "Y"}},
-		{name: "[]any mixed types", input: []any{"ok", 42, "yes"}, want: []string{"ok", "yes"}},
-		{name: "[]any empty", input: []any{}, want: []string{}},
-		{name: "int type wrong", input: 42, want: nil},
-		{name: "string scalar wrong", input: "single", want: nil},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-
-			got := extractStringSlice(tt.input)
-			if len(got) != len(tt.want) {
-				t.Fatalf("extractStringSlice(%v) len = %d, want %d", tt.input, len(got), len(tt.want))
-			}
-			for i := range got {
-				if got[i] != tt.want[i] {
-					t.Errorf("extractStringSlice(%v)[%d] = %q, want %q", tt.input, i, got[i], tt.want[i])
-				}
-			}
-		})
-	}
-}
-
 // --- ETag cache constructor tests ---
 
 func TestNewGitHubAdapter_ETagCacheSizeDefault(t *testing.T) {

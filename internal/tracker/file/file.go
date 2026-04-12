@@ -18,6 +18,7 @@ import (
 
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/registry"
+	"github.com/sortie-ai/sortie/internal/typeutil"
 )
 
 func init() {
@@ -66,7 +67,7 @@ func NewFileAdapter(config map[string]any) (domain.TrackerAdapter, error) {
 
 	return &FileAdapter{
 		path:             path,
-		activeStates:     toStringSet(extractStringSlice(config["active_states"])),
+		activeStates:     toStringSet(typeutil.ExtractStringSlice(config["active_states"])),
 		overrides:        make(map[string]string),
 		commentOverrides: make(map[string][]domain.Comment),
 	}, nil
@@ -505,26 +506,6 @@ func normalize(raw rawIssue) domain.Issue {
 	}
 
 	return iss
-}
-
-// extractStringSlice safely extracts a []string from a value that may
-// be []any (as produced by YAML decoders) or []string. Non-string
-// elements are silently skipped.
-func extractStringSlice(val any) []string {
-	switch v := val.(type) {
-	case []any:
-		out := make([]string, 0, len(v))
-		for _, elem := range v {
-			if s, ok := elem.(string); ok {
-				out = append(out, s)
-			}
-		}
-		return out
-	case []string:
-		return v
-	default:
-		return nil
-	}
 }
 
 func toStringSet(ss []string) map[string]bool {

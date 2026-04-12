@@ -34,13 +34,15 @@ internal/workflow/     → internal/config, prompt            (no orchestrator, 
 internal/workspace/    → internal/domain, config, persistence
 internal/persistence/  → internal/domain, config
 internal/registry/     → internal/domain                   (adapter registration — no orchestrator, no persistence)
-internal/tracker/*/    → internal/domain, registry          (no cross-adapter imports)
+internal/tracker/*/    → internal/domain, registry, typeutil (no cross-adapter imports)
+internal/scm/*/        → internal/domain, registry, typeutil (no cross-adapter imports)
 internal/agent/*/      → internal/domain, registry, agent/procutil, agent/sshutil (no cross-adapter imports)
 internal/tool/*/        → internal/domain                  (agent tool implementations)
 internal/config/       → internal/domain, maputil          (no orchestrator, no persistence)
 internal/prompt/       → internal/domain, maputil          (no orchestrator, no persistence, no config)
 internal/domain/       → (nothing internal)                (pure types, interfaces, constants)
 internal/maputil/      → (nothing internal)                (generic map helpers)
+internal/typeutil/     → (nothing internal)                (type coercion helpers)
 internal/logging/      → (nothing internal)                (stdlib only)
 ```
 

@@ -28,6 +28,7 @@ import (
 
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/registry"
+	"github.com/sortie-ai/sortie/internal/typeutil"
 )
 
 func init() {
@@ -105,7 +106,7 @@ func NewGitHubAdapter(config map[string]any) (domain.TrackerAdapter, error) {
 	}
 	endpoint = strings.TrimRight(endpoint, "/")
 
-	activeRaw := extractStringSlice(config["active_states"])
+	activeRaw := typeutil.ExtractStringSlice(config["active_states"])
 	if len(activeRaw) == 0 {
 		activeRaw = defaultActiveStates
 	}
@@ -114,7 +115,7 @@ func NewGitHubAdapter(config map[string]any) (domain.TrackerAdapter, error) {
 		activeStates[i] = strings.ToLower(s)
 	}
 
-	terminalRaw := extractStringSlice(config["terminal_states"])
+	terminalRaw := typeutil.ExtractStringSlice(config["terminal_states"])
 	if len(terminalRaw) == 0 {
 		terminalRaw = defaultTerminalStates
 	}
@@ -1034,24 +1035,4 @@ func (a *GitHubAdapter) incTrackerRequest(operation, outcome string) {
 func isNotFound(err error) bool {
 	te, ok := err.(*domain.TrackerError)
 	return ok && te.Kind == domain.ErrTrackerNotFound
-}
-
-// extractStringSlice converts a value that may be []any (from JSON
-// unmarshaling) or []string (from typed config) to []string, skipping
-// non-string elements.
-func extractStringSlice(v any) []string {
-	switch s := v.(type) {
-	case []any:
-		strs := make([]string, 0, len(s))
-		for _, elem := range s {
-			if str, ok := elem.(string); ok {
-				strs = append(strs, str)
-			}
-		}
-		return strs
-	case []string:
-		return s
-	default:
-		return nil
-	}
 }
