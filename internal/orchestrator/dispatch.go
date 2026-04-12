@@ -225,6 +225,7 @@ type ScheduleRetryParams struct {
 	DelayMS     int64 // Delay before timer fires, in milliseconds.
 	Error       string
 	LastSSHHost string // Runtime-only: SSH host from previous attempt for retry affinity.
+	SessionID   string // Session identifier from previous attempt for cross-retry resume.
 
 	// ContinuationContext carries reaction continuation data to inject
 	// into the prompt template on the first turn of the retry worker.
@@ -270,6 +271,7 @@ func ScheduleRetry(state *State, params ScheduleRetryParams, onFire func(issueID
 		IssueID:             params.IssueID,
 		Identifier:          params.Identifier,
 		DisplayID:           params.DisplayID,
+		SessionID:           params.SessionID,
 		Attempt:             params.Attempt,
 		DueAtMS:             dueAtMS,
 		Error:               params.Error,

@@ -1523,3 +1523,78 @@ func TestHandleRetryTimer_ContinuationMarkDispatchedError(t *testing.T) {
 		t.Errorf("Running[%s] missing after dispatch, want present (error is non-fatal)", id)
 	}
 }
+
+func TestHandleRetryTimer_SessionID_PassedToMakeWorkerFn(t *testing.T) {
+	t.Parallel()
+
+	const id = "ISS-SESS"
+	const wantSessionID = "sess-abc"
+
+	state := retryState(t, id, id, 2)
+	state.RetryAttempts[id].SessionID = wantSessionID
+
+	store := &mockRetryStore{}
+	tracker := &mockRetryTracker{
+		candidates: []domain.Issue{candidateIssue(id, id, "In Progress")},
+	}
+	params := defaultRetryParams(t, store, tracker)
+
+	var gotSessionID string
+	ch := make(chan struct{}, 1)
+	params.MakeWorkerFn = func(resumeSessionID, _ string) WorkerFunc {
+		gotSessionID = resumeSessionID
+		return func(_ context.Context, _ domain.Issue, _ *int) {
+			ch <- struct{}{}
+		}
+	}
+
+	HandleRetryTimer(state, id, params)
+
+	select {
+	case <-ch:
+	case <-time.After(time.Second):
+		t.Fatal("worker did not execute within 1 second")
+	}
+
+	if gotSessionID != wantSessionID {
+		t.Errorf("MakeWorkerFn resumeSessionID = %q, want %q", gotSessionID, wantSessionID)
+	}
+}
+
+func TestHandleRetryTimer_Reschedule_PreservesSessionID(t *testing.T) {
+	t.Parallel()
+
+	const id = "ISS-SESS-RESCHEDULE"
+	const wantSessionID = "sess-preserve"
+
+	state := retryState(t, id, id, 2)
+	state.RetryAttempts[id].SessionID = wantSessionID
+	// Fill all slots so no dispatch occurs — forces the reschedule path.
+	state.MaxConcurrentAgents = 1
+	state.Running["OTHER-1"] = &RunningEntry{
+		Identifier: "OTHER-1",
+		Issue:      candidateIssue("OTHER-1", "OTHER-1", "To Do"),
+	}
+
+	store := &mockRetryStore{}
+	tracker := &mockRetryTracker{
+		candidates: []domain.Issue{
+			candidateIssue(id, id, "To Do"),
+			candidateIssue("OTHER-1", "OTHER-1", "To Do"),
+		},
+	}
+	params := defaultRetryParams(t, store, tracker)
+
+	HandleRetryTimer(state, id, params)
+
+	entry, ok := state.RetryAttempts[id]
+	if !ok {
+		t.Fatalf("RetryAttempts[%s] missing after no-slots reschedule, want present", id)
+	}
+	if entry.SessionID != wantSessionID {
+		t.Errorf("RetryAttempts[%s].SessionID = %q, want %q", id, entry.SessionID, wantSessionID)
+	}
+	if entry.TimerHandle != nil {
+		entry.TimerHandle.Stop()
+	}
+}

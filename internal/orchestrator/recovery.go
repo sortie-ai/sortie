@@ -19,9 +19,15 @@ func PopulateRetries(state *State, entries []persistence.PendingRetry) {
 			errStr = *e.Error
 		}
 
+		var sessionID string
+		if e.SessionID != nil {
+			sessionID = *e.SessionID
+		}
+
 		state.RetryAttempts[e.IssueID] = &RetryEntry{
 			IssueID:          e.IssueID,
 			Identifier:       e.Identifier,
+			SessionID:        sessionID,
 			Attempt:          e.Attempt,
 			DueAtMS:          e.DueAtMs,
 			Error:            errStr,

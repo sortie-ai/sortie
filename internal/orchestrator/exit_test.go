@@ -3060,3 +3060,88 @@ func TestHandleWorkerExit_ReviewMetadata_Nil(t *testing.T) {
 		t.Errorf("RunHistory.ReviewMetadata = %q, want nil", *store.runHistories[0].ReviewMetadata)
 	}
 }
+
+func TestHandleWorkerExit_ContinuationRetry_SessionID(t *testing.T) {
+	t.Parallel()
+
+	store := &mockExitStore{}
+	state := exitState(t, "SESS-1", nil)
+	params := defaultExitParams(t, store)
+
+	HandleWorkerExit(state, WorkerResult{
+		IssueID:      "SESS-1",
+		Identifier:   "SESS-1-ident",
+		ExitKind:     WorkerExitNormal,
+		AgentAdapter: "mock",
+		SessionID:    "sess-abc",
+	}, params)
+
+	entry, ok := state.RetryAttempts["SESS-1"]
+	if !ok {
+		t.Fatal("RetryAttempts[SESS-1] missing after normal exit, want continuation retry")
+	}
+	if entry.SessionID != "sess-abc" {
+		t.Errorf("RetryAttempts[SESS-1].SessionID = %q, want %q", entry.SessionID, "sess-abc")
+	}
+	if entry.TimerHandle != nil {
+		entry.TimerHandle.Stop()
+	}
+}
+
+func TestHandleWorkerExit_ContinuationRetry_SessionID_FromEntry(t *testing.T) {
+	t.Parallel()
+
+	store := &mockExitStore{}
+	state := exitState(t, "SESS-2", nil)
+	// Populate SessionID on the running entry (simulates EventSessionStarted
+	// having been processed before the worker exited).
+	state.Running["SESS-2"].SessionID = "sess-xyz"
+	params := defaultExitParams(t, store)
+
+	HandleWorkerExit(state, WorkerResult{
+		IssueID:      "SESS-2",
+		Identifier:   "SESS-2-ident",
+		ExitKind:     WorkerExitNormal,
+		AgentAdapter: "mock",
+		SessionID:    "", // authoritative source is empty; fall back to entry
+	}, params)
+
+	entry, ok := state.RetryAttempts["SESS-2"]
+	if !ok {
+		t.Fatal("RetryAttempts[SESS-2] missing after normal exit, want continuation retry")
+	}
+	if entry.SessionID != "sess-xyz" {
+		t.Errorf("RetryAttempts[SESS-2].SessionID = %q, want %q", entry.SessionID, "sess-xyz")
+	}
+	if entry.TimerHandle != nil {
+		entry.TimerHandle.Stop()
+	}
+}
+
+func TestHandleWorkerExit_ErrorRetry_NoSessionID(t *testing.T) {
+	t.Parallel()
+
+	store := &mockExitStore{}
+	state := exitState(t, "SESS-3", nil)
+	params := defaultExitParams(t, store)
+
+	HandleWorkerExit(state, WorkerResult{
+		IssueID:      "SESS-3",
+		Identifier:   "SESS-3-ident",
+		ExitKind:     WorkerExitError,
+		AgentAdapter: "mock",
+		SessionID:    "sess-abc",
+		Error:        fmt.Errorf("something transient"),
+	}, params)
+
+	entry, ok := state.RetryAttempts["SESS-3"]
+	if !ok {
+		t.Fatal("RetryAttempts[SESS-3] missing after error exit, want error retry")
+	}
+	if entry.SessionID != "" {
+		t.Errorf("RetryAttempts[SESS-3].SessionID = %q, want empty (error retries do not resume sessions)", entry.SessionID)
+	}
+	if entry.TimerHandle != nil {
+		entry.TimerHandle.Stop()
+	}
+}

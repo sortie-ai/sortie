@@ -223,6 +223,7 @@ type RetryEntry struct {
 	IssueID     string
 	Identifier  string
 	DisplayID   string
+	SessionID   string
 	Attempt     int
 	DueAtMS     int64
 	Error       string
