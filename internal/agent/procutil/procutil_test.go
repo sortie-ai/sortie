@@ -136,7 +136,7 @@ func TestStderrCollector_ScannerError(t *testing.T) {
 	t.Parallel()
 	// Feed a line that exceeds the configured 128-byte scanner max so the
 	// scanner returns ErrTooLong while draining stderr.
-	longLine := strings.Repeat("x", 65537)
+	longLine := strings.Repeat("x", 129)
 	var buf bytes.Buffer
 	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
 
