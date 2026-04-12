@@ -159,11 +159,7 @@ func NewStderrCollector(r io.Reader, logger *slog.Logger, opts ...CollectorOptio
 func (c *StderrCollector) drain(r io.Reader) {
 	defer close(c.done)
 	scanner := bufio.NewScanner(r)
-	initCap := 64 * 1024
-	if c.scannerMax < initCap {
-		initCap = c.scannerMax
-	}
-	scanner.Buffer(make([]byte, 0, initCap), c.scannerMax)
+	scanner.Buffer(make([]byte, 0, min(64*1024, c.scannerMax)), c.scannerMax)
 
 	for scanner.Scan() {
 		line := scanner.Text()
