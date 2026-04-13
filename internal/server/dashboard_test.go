@@ -1254,7 +1254,11 @@ func TestDashboard_RowsCollapsedByDefault(t *testing.T) {
 	ts := dashboardServer(t, fixedSnapshot(snap), "1.0.0", func() int { return 5 })
 	dr := getDashboard(t, ts, "/")
 
-	if strings.Contains(dr.Body, `aria-expanded="true" tabindex`) {
+	// Check for expanded rows in the rendered markup. The CSS and JS also
+	// contain the literal string aria-expanded="true" (in selectors and
+	// querySelector calls), so match the attribute in element context only.
+	if strings.Contains(dr.Body, `aria-expanded="true"
+`) || strings.Contains(dr.Body, `aria-expanded="true">`) {
 		t.Error(`accordion header has aria-expanded="true" — all rows must start collapsed`)
 	}
 	if strings.Contains(dr.Body, `row-detail open"`) || strings.Contains(dr.Body, `row-detail open `) {
