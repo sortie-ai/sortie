@@ -376,6 +376,7 @@
             <tr
               class="accordion-header{{if even $i}} row-even{{end}}"
               aria-expanded="false"
+              aria-controls="detail-running-{{$i}}"
               tabindex="0"
               role="button"
             >
@@ -388,7 +389,7 @@
               <td>{{$e.Duration}}</td>
               <td>{{$e.LastEvent}}</td>
             </tr>
-            <tr class="row-detail" aria-hidden="true">
+            <tr class="row-detail" id="detail-running-{{$i}}" aria-hidden="true">
               <td colspan="5">
                 <div class="detail-panel">
                   <dl class="detail-grid">
@@ -420,10 +421,7 @@
                       <dt>Tokens</dt>
                       <dd>
                         {{fmtInt $e.TotalTokens}}{{if $e.CacheReadTokens}}
-                        <small
-                          title="Prompt cache read tokens — served from cache, not reprocessed"
-                          >({{fmtInt $e.CacheReadTokens}} cached)</small
-                        >{{end}}
+                        <small title="Prompt cache read tokens — served from cache, not reprocessed">({{fmtInt $e.CacheReadTokens}} cached)</small>{{end}}
                       </dd>
                     </div>
                     <div class="detail-item">
@@ -462,6 +460,7 @@
             <tr
               class="accordion-header{{if even $i}} row-even{{end}}"
               aria-expanded="false"
+              aria-controls="detail-retry-{{$i}}"
               tabindex="0"
               role="button"
             >
@@ -471,7 +470,7 @@
               <td class="text-right">{{$e.Attempt}}</td>
               <td>{{$e.DueIn}}</td>
             </tr>
-            <tr class="row-detail" aria-hidden="true">
+            <tr class="row-detail" id="detail-retry-{{$i}}" aria-hidden="true">
               <td colspan="3">
                 <div class="detail-panel">
                   <dl class="detail-grid">
@@ -508,6 +507,7 @@
             <tr
               class="accordion-header{{if even $i}} row-even{{end}}"
               aria-expanded="false"
+              aria-controls="detail-history-{{$i}}"
               tabindex="0"
               role="button"
             >
@@ -518,7 +518,7 @@
               <td>{{$e.StartedAt}}</td>
               <td>{{$e.Duration}}</td>
             </tr>
-            <tr class="row-detail" aria-hidden="true">
+            <tr class="row-detail" id="detail-history-{{$i}}" aria-hidden="true">
               <td colspan="4">
                 <div class="detail-panel">
                   <dl class="detail-grid">

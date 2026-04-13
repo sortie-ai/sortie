@@ -1222,17 +1222,18 @@ func TestEvenTemplateFunc(t *testing.T) {
 	}).Parse(`{{if even .}}yes{{else}}no{{end}}`))
 
 	tests := []struct {
+		name  string
 		input int
 		want  string
 	}{
-		{0, "yes"},
-		{1, "no"},
-		{2, "yes"},
-		{3, "no"},
+		{"zero_is_even", 0, "yes"},
+		{"one_is_odd", 1, "no"},
+		{"two_is_even", 2, "yes"},
+		{"three_is_odd", 3, "no"},
 	}
 
 	for _, tt := range tests {
-		t.Run("", func(t *testing.T) {
+		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
 			var buf bytes.Buffer
