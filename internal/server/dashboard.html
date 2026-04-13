@@ -375,7 +375,7 @@
         </div>
         {{if .HasTokenRates}}
         <div class="card card-neutral">
-          <div class="card-number">{{if .EstimatedCostUSD}}{{.EstimatedCostUSD}}{{else}}$0.00{{end}}</div>
+          <div class="card-number">{{if .EstimatedCostUSD}}{{.EstimatedCostUSD}}{{else}}&mdash;{{end}}</div>
           <div class="card-label">{{.EstimatedCostLabel}}</div>
         </div>
         {{end}}
@@ -608,7 +608,7 @@
           >Cache Read: {{fmtInt .CacheReadTokens}}</span
         >
         &middot; Output: {{fmtInt .OutputTokens}}{{if .HasTokenRates}}
-        &middot; Est. Cost: {{if .EstimatedCostUSD}}{{.EstimatedCostUSD}}{{else}}$0.00{{end}}{{end}}
+        &middot; Est. Cost: {{if .EstimatedCostUSD}}{{.EstimatedCostUSD}}{{else}}&mdash;{{end}}{{end}}
       </div>
       {{if .HasTokenRates}}<div>Cost estimates are based on configured token rates and may differ from actual provider billing.</div>{{end}}
       <div>Auto-refresh every 5s</div>

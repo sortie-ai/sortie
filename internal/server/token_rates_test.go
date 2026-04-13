@@ -207,8 +207,8 @@ func TestParseTokenRates(t *testing.T) {
 
 			got, warnings := ParseTokenRates(tt.extensions)
 
-			if len(warnings) < tt.wantWarnings {
-				t.Errorf("ParseTokenRates warnings = %d, want >= %d: %v", len(warnings), tt.wantWarnings, warnings)
+			if len(warnings) != tt.wantWarnings {
+				t.Errorf("ParseTokenRates warnings = %d, want %d: %v", len(warnings), tt.wantWarnings, warnings)
 			}
 
 			if tt.wantNil {

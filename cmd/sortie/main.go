@@ -336,7 +336,7 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 	if serverEnabled {
 		tokenRates, trWarnings := server.ParseTokenRates(br.cfg.Extensions)
 		for _, w := range trWarnings {
-			br.logger.Warn("token rate config warning", slog.String("detail", w))
+			br.logger.Warn("skipped invalid token rate entry", slog.String("detail", w))
 		}
 
 		addr := net.JoinHostPort(br.serverHost, strconv.Itoa(br.serverPort))
