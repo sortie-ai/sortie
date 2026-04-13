@@ -377,6 +377,7 @@
               class="accordion-header{{if even $i}} row-even{{end}}"
               aria-expanded="false"
               aria-controls="detail-running-{{$i}}"
+              data-expand-key="running:{{$e.Identifier}}"
               tabindex="0"
               role="button"
             >
@@ -389,7 +390,11 @@
               <td>{{$e.Duration}}</td>
               <td>{{$e.LastEvent}}</td>
             </tr>
-            <tr class="row-detail" id="detail-running-{{$i}}" aria-hidden="true">
+            <tr
+              class="row-detail"
+              id="detail-running-{{$i}}"
+              aria-hidden="true"
+            >
               <td colspan="5">
                 <div class="detail-panel">
                   <dl class="detail-grid">
@@ -421,7 +426,10 @@
                       <dt>Tokens</dt>
                       <dd>
                         {{fmtInt $e.TotalTokens}}{{if $e.CacheReadTokens}}
-                        <small title="Prompt cache read tokens — served from cache, not reprocessed">({{fmtInt $e.CacheReadTokens}} cached)</small>{{end}}
+                        <small
+                          title="Prompt cache read tokens — served from cache, not reprocessed"
+                          >({{fmtInt $e.CacheReadTokens}} cached)</small
+                        >{{end}}
                       </dd>
                     </div>
                     <div class="detail-item">
@@ -461,6 +469,7 @@
               class="accordion-header{{if even $i}} row-even{{end}}"
               aria-expanded="false"
               aria-controls="detail-retry-{{$i}}"
+              data-expand-key="retry:{{$e.Identifier}}"
               tabindex="0"
               role="button"
             >
@@ -508,6 +517,7 @@
               class="accordion-header{{if even $i}} row-even{{end}}"
               aria-expanded="false"
               aria-controls="detail-history-{{$i}}"
+              data-expand-key="history:{{$e.Identifier}}:{{$e.Attempt}}"
               tabindex="0"
               role="button"
             >
@@ -518,7 +528,11 @@
               <td>{{$e.StartedAt}}</td>
               <td>{{$e.Duration}}</td>
             </tr>
-            <tr class="row-detail" id="detail-history-{{$i}}" aria-hidden="true">
+            <tr
+              class="row-detail"
+              id="detail-history-{{$i}}"
+              aria-hidden="true"
+            >
               <td colspan="4">
                 <div class="detail-panel">
                   <dl class="detail-grid">
@@ -568,18 +582,78 @@
       (function () {
         "use strict";
 
-        function toggleRow(headerRow) {
+        var STORAGE_KEY = "sortie-expanded";
+
+        function loadExpanded() {
+          try {
+            var raw = sessionStorage.getItem(STORAGE_KEY);
+            return raw ? JSON.parse(raw) : [];
+          } catch (e) {
+            return [];
+          }
+        }
+
+        function saveExpanded(keys) {
+          try {
+            sessionStorage.setItem(STORAGE_KEY, JSON.stringify(keys));
+          } catch (e) {
+            /* storage full or unavailable — silent */
+          }
+        }
+
+        function expandRow(headerRow) {
           var detail = headerRow.nextElementSibling;
           if (!detail || !detail.classList.contains("row-detail")) return;
+          headerRow.setAttribute("aria-expanded", "true");
+          detail.setAttribute("aria-hidden", "false");
+          detail.classList.add("open");
+        }
 
+        function collapseRow(headerRow) {
+          var detail = headerRow.nextElementSibling;
+          if (!detail || !detail.classList.contains("row-detail")) return;
+          headerRow.setAttribute("aria-expanded", "false");
+          detail.setAttribute("aria-hidden", "true");
+          detail.classList.remove("open");
+        }
+
+        function toggleRow(headerRow) {
           var expanded = headerRow.getAttribute("aria-expanded") === "true";
-          headerRow.setAttribute("aria-expanded", expanded ? "false" : "true");
-          detail.setAttribute("aria-hidden", expanded ? "true" : "false");
           if (expanded) {
-            detail.classList.remove("open");
+            collapseRow(headerRow);
           } else {
-            detail.classList.add("open");
+            expandRow(headerRow);
           }
+          syncStorage();
+        }
+
+        function syncStorage() {
+          var keys = [];
+          document
+            .querySelectorAll('.accordion-header[aria-expanded="true"]')
+            .forEach(function (row) {
+              var key = row.getAttribute("data-expand-key");
+              if (key) keys.push(key);
+            });
+          saveExpanded(keys);
+        }
+
+        // Restore expanded state from sessionStorage on page load.
+        var saved = loadExpanded();
+        if (saved.length > 0) {
+          var savedSet = {};
+          saved.forEach(function (k) {
+            savedSet[k] = true;
+          });
+          document
+            .querySelectorAll(".accordion-header[data-expand-key]")
+            .forEach(function (row) {
+              if (savedSet[row.getAttribute("data-expand-key")]) {
+                expandRow(row);
+              }
+            });
+          // Prune keys for rows no longer on the page.
+          syncStorage();
         }
 
         document.addEventListener("click", function (e) {
