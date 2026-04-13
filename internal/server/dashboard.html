@@ -444,7 +444,6 @@
                     </div>
                     <div class="detail-item">
                       <dt>Tokens</dt>
-                      <!-- prettier-ignore -->
                       <dd>{{fmtInt $e.TotalTokens}}{{if $e.CacheReadTokens}} <small title="Prompt cache read tokens — served from cache, not reprocessed">({{fmtInt $e.CacheReadTokens}} cached)</small>{{end}}</dd>
                     </div>
                     <div class="detail-item">
@@ -603,11 +602,11 @@
       (function () {
         "use strict";
 
-        var STORAGE_KEY = "sortie-expanded";
+        const STORAGE_KEY = "sortie-expanded";
 
         function loadExpanded() {
           try {
-            var raw = sessionStorage.getItem(STORAGE_KEY);
+            const raw = sessionStorage.getItem(STORAGE_KEY);
             return raw ? JSON.parse(raw) : [];
           } catch (e) {
             return [];
@@ -627,26 +626,27 @@
         }
 
         function expandRow(headerRow) {
-          var detail = headerRow.nextElementSibling;
+          const detail = headerRow.nextElementSibling;
           if (!detail || !detail.classList.contains("row-detail")) return;
-          var btn = getToggleButton(headerRow);
+          const btn = getToggleButton(headerRow);
           if (btn) btn.setAttribute("aria-expanded", "true");
           detail.setAttribute("aria-hidden", "false");
           detail.classList.add("open");
         }
 
         function collapseRow(headerRow) {
-          var detail = headerRow.nextElementSibling;
+          const detail = headerRow.nextElementSibling;
           if (!detail || !detail.classList.contains("row-detail")) return;
-          var btn = getToggleButton(headerRow);
+          const btn = getToggleButton(headerRow);
           if (btn) btn.setAttribute("aria-expanded", "false");
           detail.setAttribute("aria-hidden", "true");
           detail.classList.remove("open");
         }
 
         function toggleRow(headerRow) {
-          var btn = getToggleButton(headerRow);
-          var expanded = btn && btn.getAttribute("aria-expanded") === "true";
+          const btn = getToggleButton(headerRow);
+          const expanded =
+            btn && btn.getAttribute("aria-expanded") === "true";
           if (expanded) {
             collapseRow(headerRow);
           } else {
@@ -656,21 +656,21 @@
         }
 
         function syncStorage() {
-          var keys = [];
+          const keys = [];
           document
             .querySelectorAll('.accordion-toggle[aria-expanded="true"]')
             .forEach(function (btn) {
-              var row = btn.closest(".accordion-header");
-              var key = row && row.getAttribute("data-expand-key");
+              const row = btn.closest(".accordion-header");
+              const key = row && row.getAttribute("data-expand-key");
               if (key) keys.push(key);
             });
           saveExpanded(keys);
         }
 
         // Restore expanded state from sessionStorage on page load.
-        var saved = loadExpanded();
+        const saved = loadExpanded();
         if (saved.length > 0) {
-          var savedSet = {};
+          const savedSet = {};
           saved.forEach(function (k) {
             savedSet[k] = true;
           });
@@ -687,12 +687,12 @@
 
         document.addEventListener("click", function (e) {
           if (e.target.closest("a")) return;
-          var btn = e.target.closest(".accordion-toggle");
+          const btn = e.target.closest(".accordion-toggle");
           if (btn) {
             toggleRow(btn.closest(".accordion-header"));
             return;
           }
-          var header = e.target.closest(".accordion-header");
+          const header = e.target.closest(".accordion-header");
           if (header) toggleRow(header);
         });
       })();
