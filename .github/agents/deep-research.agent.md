@@ -13,12 +13,17 @@ description: >
 argument-hint: "What technology or concept do you want to understand?"
 model:
   - Claude Opus 4.6 (copilot)
+  - Gemini 3.1 Pro (Preview) (copilot)
   - Claude Sonnet 4.5 (copilot)
 tools:
   - web
   - read
   - search
   - context7/*
+  - execute/getTerminalOutput
+  - execute/killTerminal
+  - execute/sendToTerminal
+  - execute/runInTerminal
 ---
 
 # Deep Research Agent
