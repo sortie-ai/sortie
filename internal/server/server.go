@@ -167,6 +167,7 @@ func New(params Params) *Server {
 	tmpl := template.Must(
 		template.New("dashboard").Funcs(template.FuncMap{
 			"fmtInt": fmtInt,
+			"even":   func(i int) bool { return i%2 == 0 },
 		}).Parse(dashboardHTML),
 	)
 

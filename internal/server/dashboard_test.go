@@ -1,7 +1,9 @@
 package server
 
 import (
+	"bytes"
 	"context"
+	"html/template"
 	"io"
 	"log/slog"
 	"net/http"
@@ -129,6 +131,10 @@ func TestHandleDashboard_OK(t *testing.T) {
 		"In Progress",
 		"turn_completed",
 		"no available orchestrator slots",
+		"accordion-header",
+		"row-detail",
+		`aria-expanded="false"`,
+		"expand-indicator",
 	} {
 		if !strings.Contains(dr.Body, want) {
 			t.Errorf("body missing %q", want)
@@ -632,8 +638,9 @@ func TestDashboard_HTMLEscaping(t *testing.T) {
 	dr := getDashboard(t, ts, "/")
 
 	// html/template must escape the script tag.
-	if strings.Contains(dr.Body, "<script>") {
-		t.Error("body contains unescaped <script> tag — XSS vulnerability")
+	// Check for the XSS payload specifically; the legitimate accordion script block is also present.
+	if strings.Contains(dr.Body, "<script>alert") {
+		t.Error("body contains unescaped XSS payload — XSS vulnerability")
 	}
 	// The escaped version should be present.
 	if !strings.Contains(dr.Body, "&lt;script&gt;") {
@@ -939,7 +946,7 @@ func TestHandleDashboard_RunHistory(t *testing.T) {
 	if dr.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, want %d", dr.StatusCode, http.StatusOK)
 	}
-	for _, want := range []string{"MT-100", "backend.WORKFLOW.md", "Run History", "Turns"} {
+	for _, want := range []string{"MT-100", "backend.WORKFLOW.md", "Run History", "Turns", "accordion-header", "row-detail"} {
 		if !strings.Contains(dr.Body, want) {
 			t.Errorf("body missing %q", want)
 		}
@@ -1204,5 +1211,209 @@ func TestMapRunHistoryEntries_DisplayID(t *testing.T) {
 				t.Errorf("Identifier = %q, want %q", got[0].Identifier, tt.wantID)
 			}
 		})
+	}
+}
+
+func TestEvenTemplateFunc(t *testing.T) {
+	t.Parallel()
+
+	tmpl := template.Must(template.New("test").Funcs(template.FuncMap{
+		"even": func(i int) bool { return i%2 == 0 },
+	}).Parse(`{{if even .}}yes{{else}}no{{end}}`))
+
+	tests := []struct {
+		input int
+		want  string
+	}{
+		{0, "yes"},
+		{1, "no"},
+		{2, "yes"},
+		{3, "no"},
+	}
+
+	for _, tt := range tests {
+		t.Run("", func(t *testing.T) {
+			t.Parallel()
+
+			var buf bytes.Buffer
+			if err := tmpl.Execute(&buf, tt.input); err != nil {
+				t.Fatalf("Execute(%d): %v", tt.input, err)
+			}
+			if got := buf.String(); got != tt.want {
+				t.Errorf("even(%d) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestDashboard_RowsCollapsedByDefault(t *testing.T) {
+	t.Parallel()
+
+	snap := dashboardSnapshot()
+	ts := dashboardServer(t, fixedSnapshot(snap), "1.0.0", func() int { return 5 })
+	dr := getDashboard(t, ts, "/")
+
+	if strings.Contains(dr.Body, `aria-expanded="true" tabindex`) {
+		t.Error(`accordion header has aria-expanded="true" — all rows must start collapsed`)
+	}
+	if strings.Contains(dr.Body, `row-detail open"`) || strings.Contains(dr.Body, `row-detail open `) {
+		t.Error("body contains open detail row — all rows must start collapsed")
+	}
+}
+
+func TestDashboard_DetailPanelFields(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 3, 24, 12, 0, 0, 0, time.UTC)
+
+	t.Run("running session fields in detail panel", func(t *testing.T) {
+		t.Parallel()
+
+		snap := orchestrator.RuntimeSnapshotResult{
+			GeneratedAt: now,
+			Running: []orchestrator.SnapshotRunningEntry{
+				{
+					IssueID:          "id-dp",
+					Identifier:       "MT-DP",
+					State:            "In Progress",
+					StartedAt:        now.Add(-10 * time.Minute),
+					AgentTotalTokens: 5000,
+					ModelName:        "claude-sonnet-4-20250514",
+					WorkflowFile:     "backend.WORKFLOW.md",
+					ToolTimeMs:       12000,
+					APITimeMs:        45000,
+				},
+			},
+		}
+		ts := dashboardServer(t, fixedSnapshot(snap), "1.0.0", func() int { return 5 })
+		dr := getDashboard(t, ts, "/")
+
+		if dr.StatusCode != http.StatusOK {
+			t.Fatalf("status = %d, want %d", dr.StatusCode, http.StatusOK)
+		}
+		for _, want := range []string{"claude-sonnet-4-20250514", "backend.WORKFLOW.md"} {
+			if !strings.Contains(dr.Body, want) {
+				t.Errorf("body missing detail panel field %q", want)
+			}
+		}
+	})
+
+	t.Run("run history error appears in detail panel", func(t *testing.T) {
+		t.Parallel()
+
+		errMsg := "agent timed out"
+		srv := New(Params{
+			SnapshotFn: fixedSnapshot(orchestrator.RuntimeSnapshotResult{GeneratedAt: now}),
+			RefreshFn:  acceptingRefresh(),
+			Logger:     slog.New(slog.DiscardHandler),
+			StartedAt:  now.Add(-1 * time.Hour),
+			RunHistoryFn: func(_ context.Context, _ int) ([]RunHistoryEntry, error) {
+				return []RunHistoryEntry{
+					{
+						Identifier:  "MT-ERR",
+						Attempt:     2,
+						Status:      "failed",
+						StartedAt:   "2026-03-24T09:00:00Z",
+						CompletedAt: "2026-03-24T09:01:00Z",
+						Error:       &errMsg,
+					},
+				}, nil
+			},
+		})
+		ts := httptest.NewServer(srv.Mux())
+		t.Cleanup(ts.Close)
+
+		dr := getDashboard(t, ts, "/")
+		if !strings.Contains(dr.Body, "agent timed out") {
+			t.Error("body missing run history error message in detail panel")
+		}
+	})
+}
+
+func TestDashboard_StripingAlternates(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 3, 24, 12, 0, 0, 0, time.UTC)
+	snap := orchestrator.RuntimeSnapshotResult{
+		GeneratedAt: now,
+		Running: []orchestrator.SnapshotRunningEntry{
+			{IssueID: "id-1", Identifier: "MT-S1", State: "In Progress", StartedAt: now.Add(-3 * time.Minute)},
+			{IssueID: "id-2", Identifier: "MT-S2", State: "In Progress", StartedAt: now.Add(-2 * time.Minute)},
+			{IssueID: "id-3", Identifier: "MT-S3", State: "In Progress", StartedAt: now.Add(-1 * time.Minute)},
+		},
+	}
+
+	srv := New(Params{
+		SnapshotFn: fixedSnapshot(snap),
+		RefreshFn:  acceptingRefresh(),
+		Logger:     slog.New(slog.DiscardHandler),
+		StartedAt:  now.Add(-1 * time.Hour),
+		RunHistoryFn: func(_ context.Context, _ int) ([]RunHistoryEntry, error) {
+			return []RunHistoryEntry{
+				{Identifier: "MT-H1", Attempt: 1, Status: "succeeded", StartedAt: "2026-03-24T08:00:00Z", CompletedAt: "2026-03-24T08:01:00Z"},
+				{Identifier: "MT-H2", Attempt: 1, Status: "succeeded", StartedAt: "2026-03-24T08:01:00Z", CompletedAt: "2026-03-24T08:02:00Z"},
+				{Identifier: "MT-H3", Attempt: 1, Status: "succeeded", StartedAt: "2026-03-24T08:02:00Z", CompletedAt: "2026-03-24T08:03:00Z"},
+			}, nil
+		},
+	})
+	ts := httptest.NewServer(srv.Mux())
+	t.Cleanup(ts.Close)
+
+	dr := getDashboard(t, ts, "/")
+
+	if !strings.Contains(dr.Body, "row-even") {
+		t.Error("body missing row-even class — striping not applied")
+	}
+	if strings.Contains(dr.Body, "tr:nth-child") {
+		t.Error("body contains tr:nth-child — old CSS rule must be removed")
+	}
+}
+
+func TestDashboard_RunningSessionsIdentifierLinks(t *testing.T) {
+	t.Parallel()
+
+	snap := dashboardSnapshot()
+	ts := dashboardServer(t, fixedSnapshot(snap), "1.0.0", func() int { return 5 })
+	dr := getDashboard(t, ts, "/")
+
+	if !strings.Contains(dr.Body, "<a href=") {
+		t.Error("body missing anchor tag — running session identifier links not rendered")
+	}
+}
+
+func TestDashboard_DetailRowColspan(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 3, 24, 12, 0, 0, 0, time.UTC)
+	snap := orchestrator.RuntimeSnapshotResult{
+		GeneratedAt: now,
+		Running: []orchestrator.SnapshotRunningEntry{
+			{IssueID: "id-1", Identifier: "MT-CS1", State: "In Progress", StartedAt: now.Add(-1 * time.Minute)},
+		},
+		Retrying: []orchestrator.SnapshotRetryEntry{
+			{IssueID: "id-2", Identifier: "MT-CS2", Attempt: 1, DueAtMS: now.Add(1 * time.Minute).UnixMilli(), Error: "timeout"},
+		},
+	}
+
+	srv := New(Params{
+		SnapshotFn: fixedSnapshot(snap),
+		RefreshFn:  acceptingRefresh(),
+		Logger:     slog.New(slog.DiscardHandler),
+		StartedAt:  now.Add(-1 * time.Hour),
+		RunHistoryFn: func(_ context.Context, _ int) ([]RunHistoryEntry, error) {
+			return []RunHistoryEntry{
+				{Identifier: "MT-CS-H1", Attempt: 1, Status: "succeeded", StartedAt: "2026-03-24T08:00:00Z", CompletedAt: "2026-03-24T08:01:00Z"},
+			}, nil
+		},
+	})
+	ts := httptest.NewServer(srv.Mux())
+	t.Cleanup(ts.Close)
+
+	dr := getDashboard(t, ts, "/")
+
+	for _, want := range []string{`colspan="5"`, `colspan="3"`, `colspan="4"`} {
+		if !strings.Contains(dr.Body, want) {
+			t.Errorf("body missing %q — detail row colspan incorrect", want)
+		}
 	}
 }
