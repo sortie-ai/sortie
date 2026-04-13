@@ -18,6 +18,10 @@
     "AGENTS.md": "CLAUDE.md"
   },
 
+  "[html]": {
+    "editor.formatOnSave": false
+  },
+
   // ── GitHub Copilot Custom Instructions ─────────────────────────────────────
   // Custom instruction files for code review for the current selection.
   // See: https://code.visualstudio.com/docs/copilot/customization/custom-instructions
