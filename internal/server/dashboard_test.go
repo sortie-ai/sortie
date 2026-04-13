@@ -1422,3 +1422,104 @@ func TestDashboard_DetailRowColspan(t *testing.T) {
 		}
 	}
 }
+
+// TestHandleDashboard_AccordionToggleRefactor verifies that accordion rows use
+// a <button> in the first cell rather than role="button" on the <tr>. It covers
+// all three table sections (running, retrying, run history).
+func TestHandleDashboard_AccordionToggleRefactor(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 3, 24, 12, 0, 0, 0, time.UTC)
+	snap := orchestrator.RuntimeSnapshotResult{
+		GeneratedAt: now,
+		Running: []orchestrator.SnapshotRunningEntry{
+			// StartedAt ascending → R0 is index 0, R1 is index 1 after sort.
+			{IssueID: "id-r0", Identifier: "MT-R0", State: "In Progress", StartedAt: now.Add(-5 * time.Minute)},
+			{IssueID: "id-r1", Identifier: "MT-R1", State: "In Progress", StartedAt: now.Add(-3 * time.Minute)},
+		},
+		Retrying: []orchestrator.SnapshotRetryEntry{
+			{IssueID: "id-q0", Identifier: "MT-Q0", Attempt: 1, DueAtMS: now.Add(30 * time.Second).UnixMilli(), Error: "no slots"},
+		},
+	}
+
+	srv := New(Params{
+		SnapshotFn: fixedSnapshot(snap),
+		RefreshFn:  acceptingRefresh(),
+		Logger:     slog.New(slog.DiscardHandler),
+		StartedAt:  now.Add(-1 * time.Hour),
+		RunHistoryFn: func(_ context.Context, _ int) ([]RunHistoryEntry, error) {
+			return []RunHistoryEntry{
+				{Identifier: "MT-H0", Attempt: 1, Status: "succeeded", StartedAt: "2026-03-24T08:00:00Z", CompletedAt: "2026-03-24T08:01:00Z"},
+			}, nil
+		},
+	})
+	ts := httptest.NewServer(srv.Mux())
+	t.Cleanup(ts.Close)
+
+	dr := getDashboard(t, ts, "/")
+	if dr.StatusCode != http.StatusOK {
+		t.Fatalf("GET / status = %d, want %d", dr.StatusCode, http.StatusOK)
+	}
+	body := dr.Body
+
+	t.Run("no role=button on tr", func(t *testing.T) {
+		t.Parallel()
+		if strings.Contains(body, `role="button"`) {
+			t.Error(`body contains role="button" — must not appear after accordion toggle refactor`)
+		}
+	})
+
+	t.Run("accordion-toggle button present in every accordion-header row", func(t *testing.T) {
+		t.Parallel()
+		if !strings.Contains(body, `<button type="button" class="accordion-toggle"`) {
+			t.Error(`body missing <button type="button" class="accordion-toggle">`)
+		}
+		// 2 running + 1 retrying + 1 history = 4 accordion-toggle buttons.
+		const wantCount = 4
+		if got := strings.Count(body, `<button type="button" class="accordion-toggle"`); got != wantCount {
+			t.Errorf("accordion-toggle button count = %d, want %d", got, wantCount)
+		}
+	})
+
+	t.Run("aria-expanded=false is on button not on tr", func(t *testing.T) {
+		t.Parallel()
+		// Positive: aria-expanded must appear as a button attribute.
+		if !strings.Contains(body, `class="accordion-toggle" aria-expanded="false"`) {
+			t.Error(`body missing aria-expanded="false" on accordion-toggle button`)
+		}
+		// Negative: <tr elements must not carry aria-expanded.
+		// The old pattern placed aria-expanded directly on the <tr> alongside
+		// role="button"; its absence confirms the refactor is complete.
+		if strings.Contains(body, `tabindex="0"`) {
+			t.Error(`body contains tabindex="0" — must not appear after accordion toggle refactor`)
+		}
+	})
+
+	t.Run("aria-controls on button matches id of detail row", func(t *testing.T) {
+		t.Parallel()
+		// Each table section uses its own ID prefix with 0-based row counter.
+		pairs := [][2]string{
+			{`aria-controls="detail-running-0"`, `id="detail-running-0"`},
+			{`aria-controls="detail-running-1"`, `id="detail-running-1"`},
+			{`aria-controls="detail-retry-0"`, `id="detail-retry-0"`},
+			{`aria-controls="detail-history-0"`, `id="detail-history-0"`},
+		}
+		for _, pair := range pairs {
+			if !strings.Contains(body, pair[0]) {
+				t.Errorf("body missing button attribute %q", pair[0])
+			}
+			if !strings.Contains(body, pair[1]) {
+				t.Errorf("body missing detail row attribute %q", pair[1])
+			}
+		}
+	})
+
+	t.Run("no tabindex=0 on tr", func(t *testing.T) {
+		t.Parallel()
+		// tabindex="0" was only ever used on accordion <tr> rows; its absence
+		// confirms the attribute was removed from table rows.
+		if strings.Contains(body, `tabindex="0"`) {
+			t.Error(`body contains tabindex="0" — must not appear after accordion toggle refactor`)
+		}
+	})
+}

@@ -201,7 +201,18 @@
         background: inherit;
       }
 
-      .accordion-header:focus-visible {
+      .accordion-toggle {
+        background: none;
+        border: none;
+        padding: 0;
+        margin: 0;
+        font: inherit;
+        color: inherit;
+        cursor: pointer;
+        text-align: left;
+      }
+
+      .accordion-toggle:focus-visible {
         outline: 2px solid var(--color-link);
         outline-offset: -2px;
       }
@@ -215,7 +226,7 @@
         font-size: 0.7rem;
       }
 
-      .accordion-header[aria-expanded="true"] .expand-indicator {
+      .accordion-toggle[aria-expanded="true"] .expand-indicator {
         transform: rotate(90deg);
       }
 
@@ -293,7 +304,8 @@
       @media (prefers-reduced-motion: reduce) {
         .detail-panel,
         .expand-indicator,
-        .accordion-header {
+        .accordion-header,
+        .accordion-toggle {
           transition: none;
         }
       }
@@ -380,15 +392,18 @@
             {{range $i, $e := .Running}}
             <tr
               class="accordion-header{{if even $i}} row-even{{end}}"
-              aria-expanded="false"
-              aria-controls="detail-running-{{$i}}"
               data-expand-key="running:{{$e.Identifier}}"
-              tabindex="0"
-              role="button"
             >
               <td>
-                <span class="expand-indicator">&#9654;</span
-                ><a href="{{$e.DetailURL}}">{{$e.Identifier}}</a>
+                <button
+                  type="button"
+                  class="accordion-toggle"
+                  aria-expanded="false"
+                  aria-controls="detail-running-{{$i}}"
+                >
+                  <span class="expand-indicator">&#9654;</span
+                  ><a href="{{$e.DetailURL}}">{{$e.Identifier}}</a>
+                </button>
               </td>
               <td>{{$e.State}}</td>
               <td class="text-right">{{$e.TurnCount}}</td>
@@ -467,14 +482,17 @@
             {{range $i, $e := .Retrying}}
             <tr
               class="accordion-header{{if even $i}} row-even{{end}}"
-              aria-expanded="false"
-              aria-controls="detail-retry-{{$i}}"
               data-expand-key="retry:{{$e.Identifier}}"
-              tabindex="0"
-              role="button"
             >
               <td>
-                <span class="expand-indicator">&#9654;</span>{{$e.Identifier}}
+                <button
+                  type="button"
+                  class="accordion-toggle"
+                  aria-expanded="false"
+                  aria-controls="detail-retry-{{$i}}"
+                >
+                  <span class="expand-indicator">&#9654;</span>{{$e.Identifier}}
+                </button>
               </td>
               <td class="text-right">{{$e.Attempt}}</td>
               <td>{{$e.DueIn}}</td>
@@ -515,14 +533,17 @@
             {{range $i, $e := .RunHistory}}
             <tr
               class="accordion-header{{if even $i}} row-even{{end}}"
-              aria-expanded="false"
-              aria-controls="detail-history-{{$i}}"
               data-expand-key="history:{{$e.Identifier}}:{{$e.Attempt}}"
-              tabindex="0"
-              role="button"
             >
               <td>
-                <span class="expand-indicator">&#9654;</span>{{$e.Identifier}}
+                <button
+                  type="button"
+                  class="accordion-toggle"
+                  aria-expanded="false"
+                  aria-controls="detail-history-{{$i}}"
+                >
+                  <span class="expand-indicator">&#9654;</span>{{$e.Identifier}}
+                </button>
               </td>
               <td>{{$e.Status}}</td>
               <td>{{$e.StartedAt}}</td>
@@ -601,10 +622,15 @@
           }
         }
 
+        function getToggleButton(headerRow) {
+          return headerRow.querySelector(".accordion-toggle");
+        }
+
         function expandRow(headerRow) {
           var detail = headerRow.nextElementSibling;
           if (!detail || !detail.classList.contains("row-detail")) return;
-          headerRow.setAttribute("aria-expanded", "true");
+          var btn = getToggleButton(headerRow);
+          if (btn) btn.setAttribute("aria-expanded", "true");
           detail.setAttribute("aria-hidden", "false");
           detail.classList.add("open");
         }
@@ -612,13 +638,15 @@
         function collapseRow(headerRow) {
           var detail = headerRow.nextElementSibling;
           if (!detail || !detail.classList.contains("row-detail")) return;
-          headerRow.setAttribute("aria-expanded", "false");
+          var btn = getToggleButton(headerRow);
+          if (btn) btn.setAttribute("aria-expanded", "false");
           detail.setAttribute("aria-hidden", "true");
           detail.classList.remove("open");
         }
 
         function toggleRow(headerRow) {
-          var expanded = headerRow.getAttribute("aria-expanded") === "true";
+          var btn = getToggleButton(headerRow);
+          var expanded = btn && btn.getAttribute("aria-expanded") === "true";
           if (expanded) {
             collapseRow(headerRow);
           } else {
@@ -630,9 +658,10 @@
         function syncStorage() {
           var keys = [];
           document
-            .querySelectorAll('.accordion-header[aria-expanded="true"]')
-            .forEach(function (row) {
-              var key = row.getAttribute("data-expand-key");
+            .querySelectorAll('.accordion-toggle[aria-expanded="true"]')
+            .forEach(function (btn) {
+              var row = btn.closest(".accordion-header");
+              var key = row && row.getAttribute("data-expand-key");
               if (key) keys.push(key);
             });
           saveExpanded(keys);
@@ -658,17 +687,13 @@
 
         document.addEventListener("click", function (e) {
           if (e.target.closest("a")) return;
+          var btn = e.target.closest(".accordion-toggle");
+          if (btn) {
+            toggleRow(btn.closest(".accordion-header"));
+            return;
+          }
           var header = e.target.closest(".accordion-header");
           if (header) toggleRow(header);
-        });
-
-        document.addEventListener("keydown", function (e) {
-          if (e.key !== "Enter" && e.key !== " ") return;
-          var el = document.activeElement;
-          if (el && el.classList.contains("accordion-header")) {
-            e.preventDefault();
-            toggleRow(el);
-          }
         });
       })();
     </script>
