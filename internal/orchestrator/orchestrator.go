@@ -287,6 +287,7 @@ func (o *Orchestrator) Run(ctx context.Context) {
 				Metrics:           o.metrics,
 				HostPool:          o.hostPool,
 				WorkflowFile:      o.workflowFile(),
+				AgentKind:         cfg.Agent.Kind,
 			})
 			o.updateGauges(time.Now())
 			o.notifyObservers()
@@ -491,6 +492,7 @@ func (o *Orchestrator) handleTick(ctx context.Context) {
 		DispatchIssue(ctx, o.state, issue, nil, host, o.makeWorkerFn("", host))
 		if entry := o.state.Running[issue.ID]; entry != nil {
 			entry.WorkflowFile = o.workflowFile()
+			entry.AgentKind = cfg.Agent.Kind
 		}
 		o.metrics.IncDispatches(outcomeSuccess)
 		dispatched++

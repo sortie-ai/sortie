@@ -212,6 +212,11 @@ type RunningEntry struct {
 	// SelfReviewIteration is the current review iteration (0 when not in review).
 	// Mutated only by the event loop via selfReviewCh.
 	SelfReviewIteration int
+
+	// AgentKind is the adapter kind string (e.g. "claude-code") from the
+	// workflow config active at dispatch time. Used for token cost
+	// estimation on the dashboard.
+	AgentKind string
 }
 
 // RetryEntry holds the runtime state for a pending retry. The persisted
@@ -566,6 +571,7 @@ type SnapshotRunningEntry struct {
 	WorkflowFile        string                `json:"workflow_file,omitempty"`
 	SelfReviewActive    bool                  `json:"self_review_active,omitempty"`
 	SelfReviewIteration int                   `json:"self_review_iteration,omitempty"`
+	AgentKind           string                `json:"agent_kind,omitempty"`
 }
 
 // SnapshotRetryEntry is a read-only view of a pending retry for
@@ -679,6 +685,7 @@ func RuntimeSnapshot(state *State, now time.Time) RuntimeSnapshotResult {
 			WorkflowFile:        entry.WorkflowFile,
 			SelfReviewActive:    entry.SelfReviewActive,
 			SelfReviewIteration: entry.SelfReviewIteration,
+			AgentKind:           entry.AgentKind,
 		})
 
 		if !entry.StartedAt.IsZero() {

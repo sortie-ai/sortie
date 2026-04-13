@@ -373,6 +373,12 @@
           <div class="card-number">{{fmtInt .TotalTokens}}</div>
           <div class="card-label">Total Tokens</div>
         </div>
+        {{if .HasTokenRates}}
+        <div class="card card-neutral">
+          <div class="card-number">{{if .EstimatedCostUSD}}{{.EstimatedCostUSD}}{{else}}$0.00{{end}}</div>
+          <div class="card-label">{{.EstimatedCostLabel}}</div>
+        </div>
+        {{end}}
       </section>
 
       <section>
@@ -455,6 +461,12 @@
                       <dt>API Time</dt>
                       <dd>{{$e.APITimePct}}</dd>
                     </div>
+                    {{if $.HasTokenRates}}
+                    <div class="detail-item">
+                      <dt>Est. Cost</dt>
+                      <dd>{{if $e.EstimatedCostUSD}}{{$e.EstimatedCostUSD}}{{else}}&mdash;{{end}}</dd>
+                    </div>
+                    {{end}}
                   </dl>
                 </div>
               </td>
@@ -595,8 +607,10 @@
           title="Prompt cache read tokens — served from cache, not reprocessed"
           >Cache Read: {{fmtInt .CacheReadTokens}}</span
         >
-        &middot; Output: {{fmtInt .OutputTokens}}
+        &middot; Output: {{fmtInt .OutputTokens}}{{if .HasTokenRates}}
+        &middot; Est. Cost: {{if .EstimatedCostUSD}}{{.EstimatedCostUSD}}{{else}}$0.00{{end}}{{end}}
       </div>
+      {{if .HasTokenRates}}<div>Cost estimates are based on configured token rates and may differ from actual provider billing.</div>{{end}}
       <div>Auto-refresh every 5s</div>
     </footer>
     <script>

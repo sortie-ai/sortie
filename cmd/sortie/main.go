@@ -334,6 +334,11 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 
 	var srv *server.Server
 	if serverEnabled {
+		tokenRates, trWarnings := server.ParseTokenRates(br.cfg.Extensions)
+		for _, w := range trWarnings {
+			br.logger.Warn("token rate config warning", slog.String("detail", w))
+		}
+
 		addr := net.JoinHostPort(br.serverHost, strconv.Itoa(br.serverPort))
 		srv = server.New(server.Params{
 			SnapshotFn:       o.SnapshotFunc(),
@@ -347,6 +352,7 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 			DBPingFn:         func(ctx context.Context) error { return store.Ping(ctx) },
 			PreflightFn:      o.PreflightOK,
 			WorkflowLoadedFn: func() bool { return br.mgr.Config().Tracker.Kind != "" },
+			TokenRates:       tokenRates,
 			RunHistoryFn: func(ctx context.Context, limit int) ([]server.RunHistoryEntry, error) {
 				runs, err := store.QueryRecentRunHistory(ctx, limit, 0)
 				if err != nil {

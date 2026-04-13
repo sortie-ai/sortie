@@ -14,12 +14,13 @@ import (
 
 // stateResponse is the JSON wire format for GET /api/v1/state.
 type stateResponse struct {
-	GeneratedAt time.Time                        `json:"generated_at"`
-	Counts      stateCounts                      `json:"counts"`
-	Running     []runningEntryResponse           `json:"running"`
-	Retrying    []retryEntryResponse             `json:"retrying"`
-	AgentTotals orchestrator.SnapshotAgentTotals `json:"agent_totals"`
-	RateLimits  map[string]any                   `json:"rate_limits"`
+	GeneratedAt            time.Time                        `json:"generated_at"`
+	Counts                 stateCounts                      `json:"counts"`
+	Running                []runningEntryResponse           `json:"running"`
+	Retrying               []retryEntryResponse             `json:"retrying"`
+	AgentTotals            orchestrator.SnapshotAgentTotals `json:"agent_totals"`
+	RateLimits             map[string]any                   `json:"rate_limits"`
+	ActiveEstimatedCostUSD *float64                         `json:"active_estimated_cost_usd,omitempty"`
 }
 
 type stateCounts struct {
@@ -152,7 +153,7 @@ func toRetryEntryResponse(e orchestrator.SnapshotRetryEntry) retryEntryResponse 
 	}
 }
 
-func toStateResponse(snap orchestrator.RuntimeSnapshotResult) stateResponse {
+func toStateResponse(snap orchestrator.RuntimeSnapshotResult, tokenRates TokenRates) stateResponse {
 	running := make([]runningEntryResponse, 0, len(snap.Running))
 	for _, e := range snap.Running {
 		running = append(running, toRunningEntryResponse(e, snap.GeneratedAt))
@@ -168,7 +169,7 @@ func toStateResponse(snap orchestrator.RuntimeSnapshotResult) stateResponse {
 		rateLimits = map[string]any{}
 	}
 
-	return stateResponse{
+	resp := stateResponse{
 		GeneratedAt: snap.GeneratedAt.UTC(),
 		Counts: stateCounts{
 			Running:  len(running),
@@ -179,6 +180,27 @@ func toStateResponse(snap orchestrator.RuntimeSnapshotResult) stateResponse {
 		AgentTotals: snap.AgentTotals,
 		RateLimits:  rateLimits,
 	}
+
+	if len(tokenRates) > 0 {
+		var total float64
+		anySet := false
+		for _, e := range snap.Running {
+			if e.AgentKind == "" {
+				continue
+			}
+			if rc, ok := tokenRates[e.AgentKind]; ok {
+				if c := estimateCost(e.AgentInputTokens, e.AgentOutputTokens, e.CacheReadTokens, &rc); c != nil {
+					total += *c
+					anySet = true
+				}
+			}
+		}
+		if anySet {
+			resp.ActiveEstimatedCostUSD = &total
+		}
+	}
+
+	return resp
 }
 
 func writeJSON(w http.ResponseWriter, logger *slog.Logger, status int, v any) {
@@ -243,7 +265,7 @@ func (s *Server) handleState(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resp := toStateResponse(snap)
+	resp := toStateResponse(snap, s.tokenRates)
 	writeJSON(w, s.logger, http.StatusOK, resp)
 
 	s.logger.Debug("request served",

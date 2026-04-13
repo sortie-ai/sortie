@@ -120,9 +120,10 @@ var knownFieldsRegistry = map[string]SectionSchema{
 // the architecture spec. These are not core schema keys but are
 // recognized by Sortie's optional modules.
 var staticKnownExtensionKeys = map[string]bool{
-	"server":  true,
-	"logging": true,
-	"worker":  true,
+	"server":      true,
+	"logging":     true,
+	"worker":      true,
+	"token_rates": true,
 }
 
 // FrontMatterWarning represents a single advisory diagnostic from

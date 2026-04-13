@@ -120,6 +120,11 @@ type Params struct {
 	// dashboard. Called on each dashboard render. When nil, the run
 	// history section is omitted.
 	RunHistoryFn RunHistoryFunc
+
+	// TokenRates maps agent adapter kind strings to per-token USD
+	// rates for cost estimation on the dashboard. When nil or empty,
+	// the dashboard shows raw token counts without cost estimates.
+	TokenRates TokenRates
 }
 
 // Server is the embedded HTTP server for JSON API, dashboard, and
@@ -141,6 +146,7 @@ type Server struct {
 	preflightFn      func() bool
 	workflowLoadedFn func() bool
 	runHistoryFn     RunHistoryFunc
+	tokenRates       TokenRates
 }
 
 // Compile-time assertion: Server satisfies orchestrator.Observer.
@@ -166,8 +172,9 @@ func New(params Params) *Server {
 
 	tmpl := template.Must(
 		template.New("dashboard").Funcs(template.FuncMap{
-			"fmtInt": fmtInt,
-			"even":   func(i int) bool { return i%2 == 0 },
+			"fmtInt":  fmtInt,
+			"fmtCost": fmtCost,
+			"even":    func(i int) bool { return i%2 == 0 },
 		}).Parse(dashboardHTML),
 	)
 
@@ -184,6 +191,7 @@ func New(params Params) *Server {
 		preflightFn:      params.PreflightFn,
 		workflowLoadedFn: params.WorkflowLoadedFn,
 		runHistoryFn:     params.RunHistoryFn,
+		tokenRates:       params.TokenRates,
 	}
 
 	// Method-specific pattern so non-GET methods receive the default

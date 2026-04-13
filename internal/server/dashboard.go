@@ -47,23 +47,29 @@ type dashboardData struct {
 	InputTokens     int64
 	OutputTokens    int64
 	CacheReadTokens int64
+
+	// Cost estimation (conditional on configured token rates).
+	HasTokenRates      bool
+	EstimatedCostUSD   *string
+	EstimatedCostLabel string
 }
 
 type dashboardRunningEntry struct {
-	Identifier      string
-	State           string
-	TurnCount       int
-	Duration        string
-	LastEvent       string
-	TotalTokens     int64
-	CacheReadTokens int64
-	ModelName       string
-	APIRequestCount int
-	DetailURL       string
-	Host            string
-	ToolTimePct     string
-	APITimePct      string
-	WorkflowFile    string
+	Identifier       string
+	State            string
+	TurnCount        int
+	Duration         string
+	LastEvent        string
+	TotalTokens      int64
+	CacheReadTokens  int64
+	ModelName        string
+	APIRequestCount  int
+	DetailURL        string
+	Host             string
+	ToolTimePct      string
+	APITimePct       string
+	WorkflowFile     string
+	EstimatedCostUSD string
 }
 
 type dashboardRetryEntry struct {
@@ -171,6 +177,7 @@ func buildDashboardData(
 	startedAt time.Time,
 	slotFunc func() int,
 	now time.Time,
+	tokenRates TokenRates,
 ) dashboardData {
 	if version == "" {
 		version = "dev"
@@ -216,6 +223,9 @@ func buildDashboardData(
 	})
 	running := make([]dashboardRunningEntry, len(sortedRunning))
 	hasSSH := false
+	hasRates := len(tokenRates) > 0
+	var aggregateCost float64
+	aggregateCostSet := false
 	for i, e := range sortedRunning {
 		dur := snap.GeneratedAt.Sub(e.StartedAt)
 		if dur < 0 {
@@ -242,25 +252,45 @@ func buildDashboardData(
 			displayID = e.DisplayID
 		}
 
+		var entryCostStr string
+		if hasRates && e.AgentKind != "" {
+			if rc, ok := tokenRates[e.AgentKind]; ok {
+				if c := estimateCost(e.AgentInputTokens, e.AgentOutputTokens, e.CacheReadTokens, &rc); c != nil {
+					entryCostStr = fmtCost(*c)
+					aggregateCost += *c
+					aggregateCostSet = true
+				}
+			}
+		}
+
 		running[i] = dashboardRunningEntry{
-			Identifier:      displayID,
-			State:           e.State,
-			TurnCount:       e.TurnCount,
-			Duration:        formatDuration(dur),
-			LastEvent:       string(e.LastAgentEvent),
-			TotalTokens:     e.AgentTotalTokens,
-			CacheReadTokens: e.CacheReadTokens,
-			ModelName:       e.ModelName,
-			APIRequestCount: e.APIRequestCount,
-			DetailURL:       "/api/v1/" + url.PathEscape(e.Identifier),
-			Host:            e.SSHHost,
-			ToolTimePct:     toolPct,
-			APITimePct:      apiPct,
-			WorkflowFile:    e.WorkflowFile,
+			Identifier:       displayID,
+			State:            e.State,
+			TurnCount:        e.TurnCount,
+			Duration:         formatDuration(dur),
+			LastEvent:        string(e.LastAgentEvent),
+			TotalTokens:      e.AgentTotalTokens,
+			CacheReadTokens:  e.CacheReadTokens,
+			ModelName:        e.ModelName,
+			APIRequestCount:  e.APIRequestCount,
+			DetailURL:        "/api/v1/" + url.PathEscape(e.Identifier),
+			Host:             e.SSHHost,
+			ToolTimePct:      toolPct,
+			APITimePct:       apiPct,
+			WorkflowFile:     e.WorkflowFile,
+			EstimatedCostUSD: entryCostStr,
 		}
 	}
 	data.Running = running
 	data.HasSSH = hasSSH
+	data.HasTokenRates = hasRates
+	if hasRates {
+		data.EstimatedCostLabel = "Active Est. Cost (USD)"
+	}
+	if aggregateCostSet {
+		s := fmtCost(aggregateCost)
+		data.EstimatedCostUSD = &s
+	}
 
 	// Copy and sort retry entries by DueAtMS ascending before mapping.
 	sortedRetrying := make([]orchestrator.SnapshotRetryEntry, len(snap.Retrying))
@@ -352,7 +382,7 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	data := buildDashboardData(snap, s.version, s.startedAt, s.slotFunc, time.Now())
+	data := buildDashboardData(snap, s.version, s.startedAt, s.slotFunc, time.Now(), s.tokenRates)
 
 	if s.runHistoryFn != nil {
 		runs, err := s.runHistoryFn(r.Context(), 25)

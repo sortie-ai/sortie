@@ -83,6 +83,10 @@ type HandleRetryTimerParams struct {
 	// WorkflowFile is the base filename of the active WORKFLOW.md file.
 	// Recorded on the RunningEntry for observability.
 	WorkflowFile string
+
+	// AgentKind is the adapter kind string from the active workflow
+	// config. Recorded on the RunningEntry for cost estimation.
+	AgentKind string
 }
 
 // HandleRetryTimer processes a retry timer event for the given issue.
@@ -337,6 +341,7 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 	DispatchIssue(dispatchCtx, state, issue, &attempt, host, params.MakeWorkerFn(popped.SessionID, host))
 	if entry := state.Running[issue.ID]; entry != nil {
 		entry.WorkflowFile = params.WorkflowFile
+		entry.AgentKind = params.AgentKind
 		entry.ContinuationContext = popped.ContinuationContext
 	}
 	metrics.IncDispatches(outcomeSuccess)
