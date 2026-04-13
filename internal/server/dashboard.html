@@ -424,13 +424,8 @@
                     </div>
                     <div class="detail-item">
                       <dt>Tokens</dt>
-                      <dd>
-                        {{fmtInt $e.TotalTokens}}{{if $e.CacheReadTokens}}
-                        <small
-                          title="Prompt cache read tokens — served from cache, not reprocessed"
-                          >({{fmtInt $e.CacheReadTokens}} cached)</small
-                        >{{end}}
-                      </dd>
+                      <!-- prettier-ignore -->
+                      <dd>{{fmtInt $e.TotalTokens}}{{if $e.CacheReadTokens}} <small title="Prompt cache read tokens — served from cache, not reprocessed">({{fmtInt $e.CacheReadTokens}} cached)</small>{{end}}</dd>
                     </div>
                     <div class="detail-item">
                       <dt>Tool Time</dt>
