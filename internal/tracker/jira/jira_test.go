@@ -1994,11 +1994,6 @@ func TestFetchCandidateIssueByIDEquivalence(t *testing.T) {
 		t.Fatalf("FetchCandidateIssues: got %d issues, want 2", len(candidates))
 	}
 
-	candidateSet := make(map[string]bool, len(candidates))
-	for _, c := range candidates {
-		candidateSet[c.ID] = true
-	}
-
 	activeSet := make(map[string]bool, len(a.activeStates))
 	for _, s := range a.activeStates {
 		activeSet[strings.ToLower(s)] = true
