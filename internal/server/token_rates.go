@@ -2,8 +2,7 @@ package server
 
 import (
 	"fmt"
-	"strconv"
-	"strings"
+	"math"
 )
 
 // TokenRateConfig holds per-token-type USD rates for cost estimation.
@@ -66,6 +65,9 @@ func ParseTokenRates(extensions map[string]any) (TokenRates, []string) {
 			cfg.CacheReadPerMtok = v
 		}
 
+		if cfg.InputPerMtok == nil && cfg.OutputPerMtok == nil && cfg.CacheReadPerMtok == nil {
+			continue
+		}
 		rates[kind] = cfg
 	}
 
@@ -133,22 +135,14 @@ func estimateCost(input, output, cacheRead int64, rates *TokenRateConfig) *float
 
 // fmtCost formats a USD cost value as a string with two decimal places.
 // Values >= 1000 receive comma thousand separators (e.g. "$1,234.56").
+// Rounding is performed on the integer-cents representation to avoid
+// float splitting artifacts near boundaries (e.g. 999.999 → "$1,000.00").
 func fmtCost(v float64) string {
-	if v < 1000 {
-		return "$" + strconv.FormatFloat(v, 'f', 2, 64)
+	cents := int64(math.Round(v * 100))
+	dollars := cents / 100
+	remainder := cents % 100
+	if dollars >= 1000 {
+		return fmt.Sprintf("$%s.%02d", fmtInt(dollars), remainder)
 	}
-
-	// Format the integer part with commas, then append decimals.
-	intPart := int64(v)
-	frac := v - float64(intPart)
-
-	// Use fmtInt for the integer portion (with commas).
-	intStr := fmtInt(intPart)
-
-	// Format fractional part as two decimal digits.
-	fracStr := strconv.FormatFloat(frac, 'f', 2, 64)
-	// fracStr is "0.XX"; strip the leading "0".
-	fracStr = strings.TrimPrefix(fracStr, "0")
-
-	return "$" + intStr + fracStr
+	return fmt.Sprintf("$%d.%02d", dollars, remainder)
 }

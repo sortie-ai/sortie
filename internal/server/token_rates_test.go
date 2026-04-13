@@ -35,6 +35,15 @@ func TestParseTokenRates(t *testing.T) {
 			wantNil:    true,
 		},
 		{
+			name: "kind with empty map is skipped, no rates returned",
+			extensions: map[string]any{
+				"token_rates": map[string]any{
+					"claude": map[string]any{},
+				},
+			},
+			wantNil: true,
+		},
+		{
 			name: "single kind all three rates present",
 			extensions: map[string]any{
 				"token_rates": map[string]any{
@@ -111,6 +120,32 @@ func TestParseTokenRates(t *testing.T) {
 			wantRates: TokenRates{
 				"claude": TokenRateConfig{InputPerMtok: nil, OutputPerMtok: fptr(15.0)},
 			},
+		},
+		{
+			name: "empty kind alongside populated kind yields only populated kind",
+			extensions: map[string]any{
+				"token_rates": map[string]any{
+					"empty":  map[string]any{},
+					"claude": map[string]any{"input_per_mtok": 3.0},
+				},
+			},
+			wantNil: false,
+			wantRates: TokenRates{
+				"claude": TokenRateConfig{InputPerMtok: fptr(3.0)},
+			},
+		},
+		{
+			name: "kind with all negative rates is skipped",
+			extensions: map[string]any{
+				"token_rates": map[string]any{
+					"bad": map[string]any{
+						"input_per_mtok":  -1.0,
+						"output_per_mtok": -2.0,
+					},
+				},
+			},
+			wantNil:      true,
+			wantWarnings: 2,
 		},
 		{
 			name: "explicit zero rate produces non-nil pointer to 0.0",
@@ -336,6 +371,8 @@ func TestFmtCost(t *testing.T) {
 		{"small", 0.05, "$0.05"},
 		{"under 10", 9.99, "$9.99"},
 		{"under 1000", 999.99, "$999.99"},
+		{"rounds up to 1000 from below", 999.999, "$1,000.00"},
+		{"rounds up fractional near boundary", 1234.9999, "$1,235.00"},
 		{"exact 1000", 1000.00, "$1,000.00"},
 		{"mid four digits", 1234.56, "$1,234.56"},
 		{"five digits with cents", 10000.50, "$10,000.50"},
