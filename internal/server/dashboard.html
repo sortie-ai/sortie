@@ -400,10 +400,11 @@
                   class="accordion-toggle"
                   aria-expanded="false"
                   aria-controls="detail-running-{{$i}}"
+                  aria-label="Toggle details for {{$e.Identifier}}"
                 >
                   <span class="expand-indicator">&#9654;</span>
-                </button
-                ><a href="{{$e.DetailURL}}">{{$e.Identifier}}</a>
+                </button>
+                <a href="{{$e.DetailURL}}">{{$e.Identifier}}</a>
               </td>
               <td>{{$e.State}}</td>
               <td class="text-right">{{$e.TurnCount}}</td>
