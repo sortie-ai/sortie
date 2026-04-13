@@ -271,7 +271,7 @@ func TestBuildDashboardData(t *testing.T) {
 	t.Run("full snapshot", func(t *testing.T) {
 		t.Parallel()
 
-		data := buildDashboardData(snap, "0.2.0", startedAt, func() int { return 5 }, now)
+		data := buildDashboardData(snap, "0.2.0", startedAt, func() int { return 5 }, now, nil)
 
 		if data.Version != "0.2.0" {
 			t.Errorf("Version = %q, want %q", data.Version, "0.2.0")
@@ -333,7 +333,7 @@ func TestBuildDashboardData(t *testing.T) {
 	t.Run("empty version defaults to dev", func(t *testing.T) {
 		t.Parallel()
 
-		data := buildDashboardData(snap, "", startedAt, nil, now)
+		data := buildDashboardData(snap, "", startedAt, nil, now, nil)
 		if data.Version != "dev" {
 			t.Errorf("Version = %q, want %q", data.Version, "dev")
 		}
@@ -342,7 +342,7 @@ func TestBuildDashboardData(t *testing.T) {
 	t.Run("nil slotFunc yields zero available", func(t *testing.T) {
 		t.Parallel()
 
-		data := buildDashboardData(snap, "v1", startedAt, nil, now)
+		data := buildDashboardData(snap, "v1", startedAt, nil, now, nil)
 		if data.AvailableSlots != 0 {
 			t.Errorf("AvailableSlots = %d, want 0", data.AvailableSlots)
 		}
@@ -352,7 +352,7 @@ func TestBuildDashboardData(t *testing.T) {
 		t.Parallel()
 
 		// slotFunc returns 1 but 2 running → clamped to 0.
-		data := buildDashboardData(snap, "v1", startedAt, func() int { return 1 }, now)
+		data := buildDashboardData(snap, "v1", startedAt, func() int { return 1 }, now, nil)
 		if data.AvailableSlots != 0 {
 			t.Errorf("AvailableSlots = %d, want 0", data.AvailableSlots)
 		}
@@ -376,7 +376,7 @@ func TestBuildDashboardData(t *testing.T) {
 			},
 		}
 
-		data := buildDashboardData(timingSnap, "v1", startedAt, nil, now)
+		data := buildDashboardData(timingSnap, "v1", startedAt, nil, now, nil)
 
 		if len(data.Running) != 1 {
 			t.Fatalf("len(Running) = %d, want 1", len(data.Running))
@@ -405,7 +405,7 @@ func TestBuildDashboardData(t *testing.T) {
 			},
 		}
 
-		data := buildDashboardData(timingSnap, "v1", startedAt, nil, now)
+		data := buildDashboardData(timingSnap, "v1", startedAt, nil, now, nil)
 
 		if data.Running[0].ToolTimePct != "N/A" {
 			t.Errorf("ToolTimePct = %q, want %q", data.Running[0].ToolTimePct, "N/A")
@@ -431,7 +431,7 @@ func TestBuildDashboardData(t *testing.T) {
 			},
 		}
 
-		data := buildDashboardData(timingSnap, "v1", startedAt, nil, now)
+		data := buildDashboardData(timingSnap, "v1", startedAt, nil, now, nil)
 
 		if data.Running[0].ToolTimePct != "N/A" {
 			t.Errorf("ToolTimePct = %q, want %q (zero elapsed)", data.Running[0].ToolTimePct, "N/A")
@@ -457,7 +457,7 @@ func TestBuildDashboardData(t *testing.T) {
 			},
 		}
 
-		data := buildDashboardData(timingSnap, "v1", startedAt, nil, now)
+		data := buildDashboardData(timingSnap, "v1", startedAt, nil, now, nil)
 
 		if data.Running[0].ToolTimePct != "N/A" {
 			t.Errorf("ToolTimePct = %q, want %q (zero StartedAt)", data.Running[0].ToolTimePct, "N/A")
@@ -483,7 +483,7 @@ func TestBuildDashboardData(t *testing.T) {
 			},
 		}
 
-		data := buildDashboardData(midTurnSnap, "v1", startedAt, nil, now)
+		data := buildDashboardData(midTurnSnap, "v1", startedAt, nil, now, nil)
 
 		if len(data.Running) != 1 {
 			t.Fatalf("len(Running) = %d, want 1", len(data.Running))
@@ -737,7 +737,7 @@ func TestBuildDashboardData_ExtendedFields(t *testing.T) {
 		},
 	}
 
-	data := buildDashboardData(snap, "1.0.0", now.Add(-1*time.Hour), func() int { return 5 }, now)
+	data := buildDashboardData(snap, "1.0.0", now.Add(-1*time.Hour), func() int { return 5 }, now, nil)
 
 	if len(data.Running) != 1 {
 		t.Fatalf("len(Running) = %d, want 1", len(data.Running))
@@ -999,7 +999,7 @@ func TestBuildDashboardData_DisplayID(t *testing.T) {
 		},
 	}
 
-	data := buildDashboardData(snap, "1.0.0", now.Add(-1*time.Hour), nil, now)
+	data := buildDashboardData(snap, "1.0.0", now.Add(-1*time.Hour), nil, now, nil)
 
 	if len(data.Running) != 1 {
 		t.Fatalf("len(Running) = %d, want 1", len(data.Running))
@@ -1042,7 +1042,7 @@ func TestBuildDashboardData_FallsBackToIdentifier(t *testing.T) {
 		},
 	}
 
-	data := buildDashboardData(snap, "1.0.0", now.Add(-1*time.Hour), nil, now)
+	data := buildDashboardData(snap, "1.0.0", now.Add(-1*time.Hour), nil, now, nil)
 
 	if len(data.Running) != 1 {
 		t.Fatalf("len(Running) = %d, want 1", len(data.Running))
@@ -1524,4 +1524,237 @@ func TestHandleDashboard_AccordionToggleRefactor(t *testing.T) {
 			t.Error(`body contains tabindex="0" — must not appear after accordion toggle refactor`)
 		}
 	})
+}
+
+// --- Token-rate cost rendering ---
+
+func TestBuildDashboardData_TokenRates(t *testing.T) {
+	t.Parallel()
+
+	fptr := func(v float64) *float64 { return &v }
+	now := time.Date(2026, 3, 24, 12, 0, 0, 0, time.UTC)
+
+	rates := TokenRates{
+		"claude": TokenRateConfig{
+			InputPerMtok:  fptr(3.0),
+			OutputPerMtok: fptr(15.0),
+		},
+	}
+
+	t.Run("with rates and matching AgentKind computes aggregate cost", func(t *testing.T) {
+		t.Parallel()
+
+		// 2M input @ $3/Mtok = $6, 1M output @ $15/Mtok = $15 → $21
+		snap := orchestrator.RuntimeSnapshotResult{
+			GeneratedAt: now,
+			Running: []orchestrator.SnapshotRunningEntry{
+				{
+					Identifier:        "MT-1",
+					State:             "In Progress",
+					StartedAt:         now.Add(-5 * time.Minute),
+					AgentKind:         "claude",
+					AgentInputTokens:  2_000_000,
+					AgentOutputTokens: 1_000_000,
+				},
+			},
+		}
+
+		data := buildDashboardData(snap, "v1", now.Add(-1*time.Hour), nil, now, rates)
+
+		if !data.HasTokenRates {
+			t.Error("HasTokenRates = false, want true")
+		}
+		if data.EstimatedCostUSD == nil {
+			t.Fatal("EstimatedCostUSD = nil, want non-nil")
+		}
+		if *data.EstimatedCostUSD != "$21.00" {
+			t.Errorf("EstimatedCostUSD = %q, want %q", *data.EstimatedCostUSD, "$21.00")
+		}
+		if data.Running[0].EstimatedCostUSD != "$21.00" {
+			t.Errorf("Running[0].EstimatedCostUSD = %q, want %q", data.Running[0].EstimatedCostUSD, "$21.00")
+		}
+		if data.EstimatedCostLabel == "" {
+			t.Error("EstimatedCostLabel is empty, want non-empty")
+		}
+	})
+
+	t.Run("without token rates HasTokenRates is false", func(t *testing.T) {
+		t.Parallel()
+
+		snap := orchestrator.RuntimeSnapshotResult{
+			GeneratedAt: now,
+			Running: []orchestrator.SnapshotRunningEntry{
+				{
+					Identifier:        "MT-2",
+					State:             "In Progress",
+					StartedAt:         now.Add(-3 * time.Minute),
+					AgentKind:         "claude",
+					AgentInputTokens:  1_000_000,
+					AgentOutputTokens: 500_000,
+				},
+			},
+		}
+
+		data := buildDashboardData(snap, "v1", now.Add(-1*time.Hour), nil, now, nil)
+
+		if data.HasTokenRates {
+			t.Error("HasTokenRates = true, want false (nil rates)")
+		}
+		if data.EstimatedCostUSD != nil {
+			t.Errorf("EstimatedCostUSD = %q, want nil", *data.EstimatedCostUSD)
+		}
+	})
+
+	t.Run("rates configured but no matching AgentKind — cost nil", func(t *testing.T) {
+		t.Parallel()
+
+		snap := orchestrator.RuntimeSnapshotResult{
+			GeneratedAt: now,
+			Running: []orchestrator.SnapshotRunningEntry{
+				{
+					Identifier:        "MT-3",
+					State:             "In Progress",
+					StartedAt:         now.Add(-3 * time.Minute),
+					AgentKind:         "unknown-adapter",
+					AgentInputTokens:  1_000_000,
+					AgentOutputTokens: 500_000,
+				},
+			},
+		}
+
+		data := buildDashboardData(snap, "v1", now.Add(-1*time.Hour), nil, now, rates)
+
+		if !data.HasTokenRates {
+			t.Error("HasTokenRates = false, want true")
+		}
+		// No matching kind → no aggregate cost.
+		if data.EstimatedCostUSD != nil {
+			t.Errorf("EstimatedCostUSD = %q, want nil (no matching kind)", *data.EstimatedCostUSD)
+		}
+		// Per-entry cost string should be empty.
+		if data.Running[0].EstimatedCostUSD != "" {
+			t.Errorf("Running[0].EstimatedCostUSD = %q, want empty", data.Running[0].EstimatedCostUSD)
+		}
+	})
+
+	t.Run("zero tokens with rates shows $0.00", func(t *testing.T) {
+		t.Parallel()
+
+		snap := orchestrator.RuntimeSnapshotResult{
+			GeneratedAt: now,
+			Running: []orchestrator.SnapshotRunningEntry{
+				{
+					Identifier:        "MT-4",
+					State:             "In Progress",
+					StartedAt:         now.Add(-1 * time.Minute),
+					AgentKind:         "claude",
+					AgentInputTokens:  0,
+					AgentOutputTokens: 0,
+				},
+			},
+		}
+
+		data := buildDashboardData(snap, "v1", now.Add(-1*time.Hour), nil, now, rates)
+
+		if !data.HasTokenRates {
+			t.Error("HasTokenRates = false, want true")
+		}
+		if data.EstimatedCostUSD == nil {
+			t.Fatal("EstimatedCostUSD = nil, want \"$0.00\"")
+		}
+		if *data.EstimatedCostUSD != "$0.00" {
+			t.Errorf("EstimatedCostUSD = %q, want %q", *data.EstimatedCostUSD, "$0.00")
+		}
+	})
+}
+
+func TestHandleDashboard_WithTokenRates(t *testing.T) {
+	t.Parallel()
+
+	fptr := func(v float64) *float64 { return &v }
+	now := time.Date(2026, 3, 24, 12, 0, 0, 0, time.UTC)
+
+	snap := orchestrator.RuntimeSnapshotResult{
+		GeneratedAt: now,
+		Running: []orchestrator.SnapshotRunningEntry{
+			{
+				IssueID:           "id-cost-1",
+				Identifier:        "MT-COST",
+				State:             "In Progress",
+				StartedAt:         now.Add(-5 * time.Minute),
+				AgentKind:         "claude",
+				AgentInputTokens:  1_000_000,
+				AgentOutputTokens: 1_000_000,
+			},
+		},
+	}
+
+	srv := New(Params{
+		SnapshotFn: fixedSnapshot(snap),
+		RefreshFn:  acceptingRefresh(),
+		Logger:     slog.New(slog.DiscardHandler),
+		StartedAt:  now.Add(-1 * time.Hour),
+		TokenRates: TokenRates{
+			"claude": TokenRateConfig{
+				InputPerMtok:  fptr(3.0),
+				OutputPerMtok: fptr(15.0),
+			},
+		},
+	})
+	ts := httptest.NewServer(srv.Mux())
+	t.Cleanup(ts.Close)
+
+	dr := getDashboard(t, ts, "/")
+
+	if dr.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want %d", dr.StatusCode, http.StatusOK)
+	}
+
+	// Cost card, per-entry cost label, footer cost line, and disclaimer must all appear.
+	for _, want := range []string{
+		"Est. Cost",
+		"$",
+		"Cost estimates are based on configured token rates",
+	} {
+		if !strings.Contains(dr.Body, want) {
+			t.Errorf("body missing %q", want)
+		}
+	}
+}
+
+func TestHandleDashboard_WithoutTokenRates(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 3, 24, 12, 0, 0, 0, time.UTC)
+
+	snap := orchestrator.RuntimeSnapshotResult{
+		GeneratedAt: now,
+		Running: []orchestrator.SnapshotRunningEntry{
+			{
+				IssueID:           "id-nocost",
+				Identifier:        "MT-NOCOST",
+				State:             "In Progress",
+				StartedAt:         now.Add(-3 * time.Minute),
+				AgentKind:         "claude",
+				AgentInputTokens:  500_000,
+				AgentOutputTokens: 250_000,
+			},
+		},
+	}
+
+	// No TokenRates set → cost display suppressed.
+	ts := dashboardServer(t, fixedSnapshot(snap), "1.0.0", nil)
+
+	dr := getDashboard(t, ts, "/")
+
+	if dr.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want %d", dr.StatusCode, http.StatusOK)
+	}
+
+	if strings.Contains(dr.Body, "Est. Cost") {
+		t.Error("body contains 'Est. Cost' but no token rates configured")
+	}
+	if strings.Contains(dr.Body, "Cost estimates are based on configured token rates") {
+		t.Error("body contains cost disclaimer but no token rates configured")
+	}
 }

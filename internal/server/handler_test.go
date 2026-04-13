@@ -629,7 +629,7 @@ func TestToStateResponse(t *testing.T) {
 			AgentTotals: orchestrator.SnapshotAgentTotals{},
 		}
 
-		got := toStateResponse(snap)
+		got := toStateResponse(snap, nil)
 
 		if got.Running == nil {
 			t.Fatal("Running = nil, want non-nil empty slice")
@@ -664,7 +664,7 @@ func TestToStateResponse(t *testing.T) {
 			RateLimits:  nil,
 		}
 
-		got := toStateResponse(snap)
+		got := toStateResponse(snap, nil)
 
 		if got.RateLimits == nil {
 			t.Fatal("RateLimits = nil, want non-nil empty map")
@@ -688,13 +688,167 @@ func TestToStateResponse(t *testing.T) {
 			},
 		}
 
-		got := toStateResponse(snap)
+		got := toStateResponse(snap, nil)
 
 		if got.Counts.Running != 2 {
 			t.Errorf("Counts.Running = %d, want 2", got.Counts.Running)
 		}
 		if got.Counts.Retrying != 1 {
 			t.Errorf("Counts.Retrying = %d, want 1", got.Counts.Retrying)
+		}
+	})
+
+	t.Run("nil token rates — ActiveEstimatedCostUSD absent", func(t *testing.T) {
+		t.Parallel()
+
+		snap := orchestrator.RuntimeSnapshotResult{
+			GeneratedAt: time.Now().UTC(),
+			Running: []orchestrator.SnapshotRunningEntry{
+				{
+					IssueID:           "r",
+					Identifier:        "MT-R",
+					AgentKind:         "claude",
+					AgentInputTokens:  1_000_000,
+					AgentOutputTokens: 500_000,
+				},
+			},
+		}
+
+		got := toStateResponse(snap, nil)
+
+		if got.ActiveEstimatedCostUSD != nil {
+			t.Errorf("ActiveEstimatedCostUSD = %v, want nil", *got.ActiveEstimatedCostUSD)
+		}
+	})
+
+	t.Run("with token rates and matching AgentKind — cost computed", func(t *testing.T) {
+		t.Parallel()
+
+		fptr := func(v float64) *float64 { return &v }
+
+		// 2M input @ $3/Mtok = $6, 1M output @ $15/Mtok = $15 → $21
+		snap := orchestrator.RuntimeSnapshotResult{
+			GeneratedAt: time.Now().UTC(),
+			Running: []orchestrator.SnapshotRunningEntry{
+				{
+					IssueID:           "cost-1",
+					Identifier:        "MT-C1",
+					AgentKind:         "claude",
+					AgentInputTokens:  2_000_000,
+					AgentOutputTokens: 1_000_000,
+				},
+			},
+		}
+
+		rates := TokenRates{
+			"claude": TokenRateConfig{
+				InputPerMtok:  fptr(3.0),
+				OutputPerMtok: fptr(15.0),
+			},
+		}
+
+		got := toStateResponse(snap, rates)
+
+		if got.ActiveEstimatedCostUSD == nil {
+			t.Fatal("ActiveEstimatedCostUSD = nil, want non-nil")
+		}
+		want := 6.0 + 15.0 // $21
+		if diff := *got.ActiveEstimatedCostUSD - want; diff > 1e-9 || diff < -1e-9 {
+			t.Errorf("ActiveEstimatedCostUSD = %v, want %v", *got.ActiveEstimatedCostUSD, want)
+		}
+	})
+
+	t.Run("with token rates but no matching AgentKind — cost absent", func(t *testing.T) {
+		t.Parallel()
+
+		fptr := func(v float64) *float64 { return &v }
+
+		snap := orchestrator.RuntimeSnapshotResult{
+			GeneratedAt: time.Now().UTC(),
+			Running: []orchestrator.SnapshotRunningEntry{
+				{
+					IssueID:           "no-match",
+					Identifier:        "MT-NM",
+					AgentKind:         "other-adapter",
+					AgentInputTokens:  1_000_000,
+					AgentOutputTokens: 500_000,
+				},
+			},
+		}
+
+		rates := TokenRates{
+			"claude": TokenRateConfig{InputPerMtok: fptr(3.0)},
+		}
+
+		got := toStateResponse(snap, rates)
+
+		if got.ActiveEstimatedCostUSD != nil {
+			t.Errorf("ActiveEstimatedCostUSD = %v, want nil (no matching kind)", *got.ActiveEstimatedCostUSD)
+		}
+	})
+
+	t.Run("ActiveEstimatedCostUSD omitted from JSON when nil", func(t *testing.T) {
+		t.Parallel()
+
+		snap := orchestrator.RuntimeSnapshotResult{
+			GeneratedAt: time.Now().UTC(),
+		}
+
+		got := toStateResponse(snap, nil)
+		data, err := json.Marshal(got)
+		if err != nil {
+			t.Fatalf("json.Marshal: %v", err)
+		}
+
+		var decoded map[string]any
+		if err := json.Unmarshal(data, &decoded); err != nil {
+			t.Fatalf("json.Unmarshal: %v", err)
+		}
+
+		if _, exists := decoded["active_estimated_cost_usd"]; exists {
+			t.Error("JSON active_estimated_cost_usd present, want omitted (omitempty with nil pointer)")
+		}
+	})
+
+	t.Run("ActiveEstimatedCostUSD present in JSON when set", func(t *testing.T) {
+		t.Parallel()
+
+		fptr := func(v float64) *float64 { return &v }
+
+		snap := orchestrator.RuntimeSnapshotResult{
+			GeneratedAt: time.Now().UTC(),
+			Running: []orchestrator.SnapshotRunningEntry{
+				{
+					IssueID:           "json-cost",
+					Identifier:        "MT-JC",
+					AgentKind:         "claude",
+					AgentInputTokens:  1_000_000,
+					AgentOutputTokens: 0,
+				},
+			},
+		}
+
+		rates := TokenRates{
+			"claude": TokenRateConfig{InputPerMtok: fptr(5.0)},
+		}
+
+		got := toStateResponse(snap, rates)
+		data, err := json.Marshal(got)
+		if err != nil {
+			t.Fatalf("json.Marshal: %v", err)
+		}
+
+		var decoded map[string]any
+		if err := json.Unmarshal(data, &decoded); err != nil {
+			t.Fatalf("json.Unmarshal: %v", err)
+		}
+
+		costVal, exists := decoded["active_estimated_cost_usd"]
+		if !exists {
+			t.Fatal("JSON active_estimated_cost_usd missing, want present")
+		}
+		if costVal != float64(5.0) {
+			t.Errorf("JSON active_estimated_cost_usd = %v, want 5.0", costVal)
 		}
 	})
 }
