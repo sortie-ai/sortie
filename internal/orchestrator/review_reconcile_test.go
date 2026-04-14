@@ -851,6 +851,88 @@ func TestBuildReviewReactionConfig_InvalidEscalation(t *testing.T) {
 	}
 }
 
+// --- PollIntervalMS guard tests ---
+
+// TestReconcileReviewComments_ZeroPollInterval_NoActionableComments verifies
+// that a zero or negative PollIntervalMS falls back to reviewPendingBackoffBase
+// when re-enqueuing after receiving no actionable review comments.
+func TestReconcileReviewComments_ZeroPollInterval_NoActionableComments(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name           string
+		pollIntervalMS int
+	}{
+		{"zero poll interval", 0},
+		{"negative poll interval", -1000},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			state := stateWithReviewReaction(t, "ISS-R-ZP-NA", 10)
+			rkey := ReactionKey("ISS-R-ZP-NA", ReactionKindReview)
+			store := &reviewReconcileStore{}
+			metrics := newReviewMetricsSpy()
+			scm := &mockSCMAdapter{comments: []domain.ReviewComment{}}
+			params := reviewParams(store, scm, nil)
+			params.ReviewConfig.PollIntervalMS = tt.pollIntervalMS
+
+			reconcileReviewComments(state, params, discardLogger(), context.Background(), metrics)
+
+			entry, ok := state.PendingReactions[rkey]
+			if !ok {
+				t.Fatal("PendingReactions entry dropped with no actionable comments; want re-enqueued")
+			}
+			want := reviewBaseTime.Add(reviewPendingBackoffBase)
+			if !entry.PendingRetryAt.Equal(want) {
+				t.Errorf("reconcileReviewComments(PollIntervalMS=%d) PendingRetryAt = %v, want %v (reviewPendingBackoffBase fallback)",
+					tt.pollIntervalMS, entry.PendingRetryAt, want)
+			}
+		})
+	}
+}
+
+// TestReconcileReviewComments_ZeroPollInterval_AlreadyDispatched verifies
+// that a zero PollIntervalMS falls back to reviewPendingBackoffBase when
+// re-enqueuing after a fingerprint match with dispatched=true.
+func TestReconcileReviewComments_ZeroPollInterval_AlreadyDispatched(t *testing.T) {
+	t.Parallel()
+
+	state := stateWithReviewReaction(t, "ISS-R-ZP-D", 10)
+	rkey := ReactionKey("ISS-R-ZP-D", ReactionKindReview)
+
+	comments := []domain.ReviewComment{
+		{ID: "700", Body: "fix me", SubmittedAt: reviewBaseTime.Add(-5 * time.Minute)},
+	}
+	fp := buildReviewFingerprint(comments)
+
+	store := &reviewReconcileStore{
+		getFingerprintResult:     fp,
+		getFingerprintDispatched: true,
+	}
+	metrics := newReviewMetricsSpy()
+	scm := &mockSCMAdapter{comments: comments}
+	params := reviewParams(store, scm, nil)
+	params.ReviewConfig.PollIntervalMS = 0
+
+	reconcileReviewComments(state, params, discardLogger(), context.Background(), metrics)
+
+	entry, ok := state.PendingReactions[rkey]
+	if !ok {
+		t.Fatal("PendingReactions entry dropped for already-dispatched fingerprint; want re-enqueued")
+	}
+	want := reviewBaseTime.Add(reviewPendingBackoffBase)
+	if !entry.PendingRetryAt.Equal(want) {
+		t.Errorf("reconcileReviewComments(PollIntervalMS=0, dispatched=true) PendingRetryAt = %v, want %v (reviewPendingBackoffBase fallback)",
+			entry.PendingRetryAt, want)
+	}
+	if store.markDispatchedCalls != 0 {
+		t.Errorf("MarkReactionDispatched calls = %d, want 0 (already dispatched)", store.markDispatchedCalls)
+	}
+}
+
 // --- computeReviewPendingDelay tests ---
 
 func TestComputeReviewPendingDelay(t *testing.T) {
