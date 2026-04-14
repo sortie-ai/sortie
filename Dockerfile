@@ -18,6 +18,8 @@
 FROM --platform=$BUILDPLATFORM golang:1.26-bookworm AS builder
 
 ARG VERSION=dev
+ARG REVISION=unknown
+ARG BUILD_DATE=unknown
 ARG TARGETOS=linux
 ARG TARGETARCH
 
@@ -38,7 +40,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     go build \
     -trimpath \
     -tags osusergo,netgo \
-    -ldflags "-s -w -X main.Version=${VERSION}" \
+    -ldflags "-s -w -X main.Version=${VERSION} -X main.Commit=${REVISION} -X main.Date=${BUILD_DATE}" \
     -o /sortie \
     ./cmd/sortie
 

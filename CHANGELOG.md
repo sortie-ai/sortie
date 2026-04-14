@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- CLI: `--version` now outputs a single diagnostic line including commit SHA,
+  build date, Go version, and OS/architecture — e.g.
+  `sortie 1.7.0 (commit: a1b2c3d, built: 2026-04-15, go1.26.1, linux/amd64)`.
+  The previous GNU-style copyright/warranty block is removed. Build tooling
+  (`Makefile`, `Dockerfile`, `.goreleaser.yaml`, and the release workflow) now
+  injects `Commit` and `Date` via `-ldflags` at all build sites.
+
 ### Fixed
 
 - Orchestrator: `sortie_ci_escalations_total` over-counted during CI escalation.
@@ -16,8 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   phantom escalation that was never performed. Both defects are fixed; the metric
   now increments exactly once per operation outcome, matching the pattern in
   `escalateReviewFailure`.
-  ([#449](https://github.com/sortie-ai/sortie/issues/449),
-  [#450](https://github.com/sortie-ai/sortie/pull/450))
+  ([#449](https://github.com/sortie-ai/sortie/issues/449))
 
 ## [1.7.0] - 2026-04-13
 
@@ -28,29 +36,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   worker can resume the agent conversation instead of starting a fresh
   session. The session ID is persisted to SQLite and restored on startup
   recovery.
-  ([#207](https://github.com/sortie-ai/sortie/issues/207),
-  [#441](https://github.com/sortie-ai/sortie/pull/441))
+  ([#207](https://github.com/sortie-ai/sortie/issues/207))
 - Token usage cost estimation on the dashboard and JSON API: operators
   configure per-adapter token rates in WORKFLOW.md front matter
   (`token_rates` block); the dashboard surfaces per-session and aggregate
   USD cost estimates computed from running sessions. The JSON API includes
   `active_estimated_cost_usd` when token rates are configured.
-  ([#436](https://github.com/sortie-ai/sortie/issues/436),
-  [#446](https://github.com/sortie-ai/sortie/pull/446))
+  ([#436](https://github.com/sortie-ai/sortie/issues/436))
 - Dashboard accordion tables: Running Sessions, Retry Queue, and Run
   History tables use an expand/collapse accordion pattern. Primary status
   columns are visible at a glance; secondary detail expands on click.
   Expansion state survives the 5-second auto-refresh via sessionStorage.
   ([#432](https://github.com/sortie-ai/sortie/issues/432),
-  [#443](https://github.com/sortie-ai/sortie/pull/443),
-  [#444](https://github.com/sortie-ai/sortie/issues/444),
-  [#445](https://github.com/sortie-ai/sortie/pull/445))
+  [#444](https://github.com/sortie-ai/sortie/issues/444))
 - `StderrCollector` buffer hardening: agent stderr collection now uses a
   10 MiB scanner buffer cap and a head/tail ring-buffer retention strategy
   with a configurable byte budget, preventing silent line truncation and
   unbounded memory growth during long agent turns.
-  ([#387](https://github.com/sortie-ai/sortie/issues/387),
-  [#440](https://github.com/sortie-ai/sortie/pull/440))
+  ([#387](https://github.com/sortie-ai/sortie/issues/387))
 
 ### Changed
 
@@ -58,8 +61,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `FetchIssueByID` instead of scanning all candidate issues via
   `FetchCandidateIssues`, reducing each retry timer fire from O(pages)
   tracker API calls to exactly one.
-  ([#206](https://github.com/sortie-ai/sortie/issues/206),
-  [#442](https://github.com/sortie-ai/sortie/pull/442))
+  ([#206](https://github.com/sortie-ai/sortie/issues/206))
 
 ### Migrations
 
@@ -74,8 +76,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   cleaned up periodically by the event loop. This closes the gap between
   the startup sweep and in-flight reconciliation, preventing unbounded
   disk accumulation on long-running instances.
-  ([#428](https://github.com/sortie-ai/sortie/issues/428),
-  [#430](https://github.com/sortie-ai/sortie/pull/430))
+  ([#428](https://github.com/sortie-ai/sortie/issues/428))
 
 ### Fixed
 
@@ -83,8 +84,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   handoff transition. Previously, the `SoftStop` branch in `HandleWorkerExit`
   matched all soft-stop reasons before the handoff case was reached, leaving
   the issue active and causing an infinite re-dispatch loop.
-  ([#426](https://github.com/sortie-ai/sortie/issues/426),
-  [#427](https://github.com/sortie-ai/sortie/pull/427))
+  ([#426](https://github.com/sortie-ai/sortie/issues/426))
 
 ## [1.6.0] - 2026-04-10
 
@@ -95,8 +95,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a structured review prompt, and iterates with the agent up to a configurable
   cap before proceeding. Opt-in via the `self_review:` block in WORKFLOW.md
   front matter (`max_iterations`, `verify_commands`, `diff_max_bytes`).
-  ([#312](https://github.com/sortie-ai/sortie/issues/312),
-  [#413](https://github.com/sortie-ai/sortie/pull/413))
+  ([#312](https://github.com/sortie-ai/sortie/issues/312))
 - PR review comment routing: when a reviewer requests changes on an
   agent-created PR, the orchestrator detects `CHANGES_REQUESTED` reviews,
   extracts the review comments, and dispatches a continuation turn so the
@@ -105,15 +104,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `escalation`, `escalation_label`). Includes `SCMAdapter` domain interface
   for PR and review operations with a GitHub Checks/Reviews API
   implementation.
-  ([#305](https://github.com/sortie-ai/sortie/issues/305),
-  [#425](https://github.com/sortie-ai/sortie/pull/425))
+  ([#305](https://github.com/sortie-ai/sortie/issues/305))
 - Unified `reactions` config block in WORKFLOW.md for event-driven
   continuation triggers. `reactions.ci_failure` replaces the top-level
   `ci_feedback` key (which remains supported for backward compatibility).
   Each reaction type shares `provider`, `max_retries`, `escalation`, and
   `escalation_label` fields.
-  ([#418](https://github.com/sortie-ai/sortie/issues/418),
-  [#422](https://github.com/sortie-ai/sortie/pull/422))
+  ([#418](https://github.com/sortie-ai/sortie/issues/418))
 - Windows process lifecycle support for agent adapters and workspace hooks.
   Agent subprocesses are now placed in Windows Job Objects with
   `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`, enabling full process tree cleanup on
@@ -125,9 +122,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `KillProcessGroup` — and `WasSignaled` is now platform-aware. Adapters
   no longer reference `syscall.SIGTERM` directly.
   ([#390](https://github.com/sortie-ai/sortie/issues/390),
-  [#391](https://github.com/sortie-ai/sortie/issues/391),
-  [#407](https://github.com/sortie-ai/sortie/pull/407),
-  [#409](https://github.com/sortie-ai/sortie/pull/409))
+  [#391](https://github.com/sortie-ai/sortie/issues/391))
 
 ### Changed
 
@@ -135,16 +130,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `poll_interval` instead of a hardcoded 10 s default. A 30 s poll interval
   produces a `(60 s, 120 s, 240 s, 300 s…)` backoff schedule. Falls back to
   10 s when `poll_interval` is zero or negative.
-  ([#385](https://github.com/sortie-ai/sortie/issues/385),
-  [#411](https://github.com/sortie-ai/sortie/pull/411))
+  ([#385](https://github.com/sortie-ai/sortie/issues/385))
 
 ### Deprecated
 
 - `ci_feedback` top-level config key in WORKFLOW.md. Use
   `reactions.ci_failure` instead. The legacy key continues to work; when both
   are present, `reactions.ci_failure` takes precedence.
-  ([#418](https://github.com/sortie-ai/sortie/issues/418),
-  [#422](https://github.com/sortie-ai/sortie/pull/422))
+  ([#418](https://github.com/sortie-ai/sortie/issues/418))
 
 ### Fixed
 
@@ -152,24 +145,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `logging.level` was applied from WORKFLOW.md extensions, causing reload
   diagnostics to use the wrong log level. The Manager now updates its
   logger after every reconfiguration.
-  ([#394](https://github.com/sortie-ai/sortie/issues/394),
-  [#410](https://github.com/sortie-ai/sortie/pull/410))
+  ([#394](https://github.com/sortie-ai/sortie/issues/394))
 - Reaction dispatch fingerprinting: `MarkReactionDispatched` was called at
   schedule time rather than actual dispatch time. If the process restarted
   between scheduling and dispatch, the fingerprint was permanently marked
   dispatched while the retry entry was lost, silencing future CI-fix
   reactions for that SHA.
-  ([#420](https://github.com/sortie-ai/sortie/issues/420),
-  [#421](https://github.com/sortie-ai/sortie/pull/421))
+  ([#420](https://github.com/sortie-ai/sortie/issues/420))
 - Config: non-string YAML values in `reactions` fields (`provider`,
   `escalation`, `escalation_label`) now produce a `ConfigError` instead of
   silently coercing to an empty string.
-  ([#423](https://github.com/sortie-ai/sortie/issues/423),
-  [#424](https://github.com/sortie-ai/sortie/pull/424))
+  ([#423](https://github.com/sortie-ai/sortie/issues/423))
 - `install.sh`: detect Rosetta 2 on macOS and prefer the native `arm64`
   binary over `amd64`.
-  ([#391](https://github.com/sortie-ai/sortie/issues/391),
-  [#409](https://github.com/sortie-ai/sortie/pull/409))
+  ([#391](https://github.com/sortie-ai/sortie/issues/391))
 
 ### Migrations
 
@@ -186,8 +175,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `-h` (help) and `-V` (version) are now recognized. Help text prints
   to stdout instead of stderr. Covers all three commands: `sortie`,
   `sortie validate`, `sortie mcp-server`.
-  ([#398](https://github.com/sortie-ai/sortie/issues/398),
-  [#403](https://github.com/sortie-ai/sortie/pull/403))
+  ([#398](https://github.com/sortie-ai/sortie/issues/398))
 
 ### Fixed
 
@@ -199,8 +187,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   now auto-detected: inline JSON is passed unchanged, `@`-prefixed
   paths are preserved, and bare file paths receive the `@` prefix
   automatically.
-  ([#404](https://github.com/sortie-ai/sortie/issues/404),
-  [#405](https://github.com/sortie-ai/sortie/pull/405))
+  ([#404](https://github.com/sortie-ai/sortie/issues/404))
 - Agent adapters: reclassify exit-code-0 turns with zero output tokens
   and no `result` event as `turn_failed` instead of `turn_completed`.
   Previously, when an agent subprocess crashed immediately (e.g., MCP
@@ -209,8 +196,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   trigger a false-positive handoff transition. Failed turns now retry
   with exponential backoff. Applies to both Claude Code and Copilot CLI
   adapters.
-  ([#404](https://github.com/sortie-ai/sortie/issues/404),
-  [#406](https://github.com/sortie-ai/sortie/pull/406))
+  ([#404](https://github.com/sortie-ai/sortie/issues/404))
 
 ## [1.5.0] - 2026-04-07
 

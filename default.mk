@@ -24,6 +24,8 @@ BIN    := sortie
 # clones, detached HEADs without tags, or non-git directories.
 
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+COMMIT  ?= $(shell git rev-parse HEAD 2>/dev/null || echo unknown)
+DATE    ?= $(shell date -u +%Y-%m-%d)
 
 # ── Go toolchain ──────────────────────────────────────────────────────────────
 
@@ -37,7 +39,10 @@ LINTER  ?= golangci-lint
 # -X          embeds the version string at link time.
 
 GOFLAGS    ?=
-LDFLAGS    := -s -w -X main.Version=$(VERSION)
+LDFLAGS    := -s -w \
+    -X main.Version=$(VERSION) \
+    -X main.Commit=$(COMMIT) \
+    -X main.Date=$(DATE)
 BUILDFLAGS ?= -trimpath $(GOFLAGS)
 
 # ── Test and coverage ─────────────────────────────────────────────────────────

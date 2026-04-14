@@ -22,7 +22,11 @@ builds:
       - amd64
       - arm64
     ldflags:
-      - -s -w -X main.Version={{ .Version }}
+      - >-
+        -s -w
+        -X main.Version={{ .Version }}
+        -X main.Commit={{ .FullCommit }}
+        -X main.Date={{ .CommitDate }}
     flags:
       - -trimpath
     tags:

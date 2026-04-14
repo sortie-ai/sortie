@@ -130,11 +130,11 @@ func TestRunVersion(t *testing.T) {
 	if !strings.Contains(out, "sortie "+Version) {
 		t.Errorf("stdout = %q, want to contain %q", out, "sortie "+Version)
 	}
-	if !strings.Contains(out, "Copyright") {
-		t.Errorf("stdout = %q, want to contain %q", out, "Copyright")
+	if !strings.Contains(out, "commit:") {
+		t.Errorf("stdout = %q, want to contain %q", out, "commit:")
 	}
-	if !strings.Contains(out, "warranty") {
-		t.Errorf("stdout = %q, want to contain %q", out, "warranty")
+	if !strings.Contains(out, runtime.Version()) {
+		t.Errorf("stdout = %q, want to contain %q", out, runtime.Version())
 	}
 }
 
@@ -1289,8 +1289,8 @@ func TestRunShortVersion(t *testing.T) {
 	if !strings.Contains(stdout.String(), "sortie ") {
 		t.Errorf("run([-V]) stdout = %q, want to contain %q", stdout.String(), "sortie ")
 	}
-	if !strings.Contains(stdout.String(), "Copyright") {
-		t.Errorf("run([-V]) stdout = %q, want to contain %q", stdout.String(), "Copyright")
+	if !strings.Contains(stdout.String(), "commit:") {
+		t.Errorf("run([-V]) stdout = %q, want to contain %q", stdout.String(), "commit:")
 	}
 	if stderr.Len() != 0 {
 		t.Errorf("run([-V]) stderr = %q, want empty", stderr.String())

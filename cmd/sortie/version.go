@@ -1,15 +1,25 @@
 package main
 
-import "fmt"
+import (
+	"fmt"
+	"runtime"
+)
 
-// Version is set at build time via -ldflags.
-var Version = "dev"
+// Version, Commit, and Date are set at build time via -ldflags.
+var (
+	Version = "dev"
+	Commit  = "unknown"
+	Date    = "unknown"
+)
 
 func versionBanner() string {
-	return fmt.Sprintf(`sortie %s
-Copyright (C) 2026 Serghei Iakovlev <oss@serghei.pl>
+	return fmt.Sprintf("sortie %s (commit: %s, built: %s, %s, %s/%s)\n",
+		Version, shortCommit(Commit), Date, runtime.Version(), runtime.GOOS, runtime.GOARCH)
+}
 
-This is free software; see the source for copying conditions.  There is NO
-warranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.
-`, Version)
+func shortCommit(sha string) string {
+	if len(sha) > 7 {
+		return sha[:7]
+	}
+	return sha
 }
