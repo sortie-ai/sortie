@@ -16,7 +16,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   phantom escalation that was never performed. Both defects are fixed; the metric
   now increments exactly once per operation outcome, matching the pattern in
   `escalateReviewFailure`.
-  ([#449](https://github.com/sortie-ai/sortie/issues/449))
+  ([#449](https://github.com/sortie-ai/sortie/issues/449),
+  [#450](https://github.com/sortie-ai/sortie/pull/450))
 
 ## [1.7.0] - 2026-04-13
 
