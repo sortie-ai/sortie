@@ -34,7 +34,7 @@ You run up to five phases (0 through 4) in sequence. Track progress with #tool:t
 
 ### Phase 0: Assess Input
 
-**First action: clean stale findings.** Delete the `.findings/` directory if it exists (`rm -rf .findings/`). Findings are ephemeral artifacts scoped to a single pipeline run. Stale findings from previous runs must not contaminate the current run.
+**First action: clean stale findings.** Delete files from `.findings/` directory (`rm -f .findings/*.md`). Findings are ephemeral artifacts scoped to a single pipeline run. Stale findings from previous runs must not contaminate the current run.
 
 Then determine what was provided and choose a route.
 

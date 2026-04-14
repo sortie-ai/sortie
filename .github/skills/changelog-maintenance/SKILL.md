@@ -191,12 +191,13 @@ Writing rules:
   `git remote get-url origin`.
   - Issue: `[#NNN](https://github.com/OWNER/REPO/issues/NNN)`
   - PR: `[#NNN](https://github.com/OWNER/REPO/pull/NNN)`
-  - When both an issue and its implementing PR are available, list both.
-  - When multiple issues or PRs are explicitly linked, list all of them.
+  - When both an issue and its implementing PR are available, use issue.
+  - If only PR is available, link the PR.
+  - When multiple issues/PRs are explicitly linked, list all of them.
   - Multi-reference format — one reference per line inside the parens:
     ```
     ([#398](https://github.com/OWNER/REPO/issues/398),
-    [#403](https://github.com/OWNER/REPO/pull/403))
+    [#403](https://github.com/OWNER/REPO/issues/389))
     ```
   - Single reference stays on the same line: `([#403](https://github.com/OWNER/REPO/pull/403))`.
 - Start each bullet with what changed, not with "Fixed" or "Added" (the heading
