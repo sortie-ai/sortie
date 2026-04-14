@@ -103,6 +103,7 @@ type ciTrackerStub struct {
 	addLabelCalled    int
 	commentIssueCalls int
 	addLabelErr       error
+	commentIssueErr   error
 }
 
 var _ domain.TrackerAdapter = (*ciTrackerStub)(nil)
@@ -128,7 +129,7 @@ func (s *ciTrackerStub) FetchIssueComments(_ context.Context, _ string) ([]domai
 func (s *ciTrackerStub) TransitionIssue(_ context.Context, _ string, _ string) error { return nil }
 func (s *ciTrackerStub) CommentIssue(_ context.Context, _ string, _ string) error {
 	s.commentIssueCalls++
-	return nil
+	return s.commentIssueErr
 }
 func (s *ciTrackerStub) AddLabel(_ context.Context, _ string, _ string) error {
 	s.addLabelCalled++
@@ -405,6 +406,9 @@ func TestReconcileCIStatus_Failing_ExceedsMaxRetries_Escalates(t *testing.T) {
 		t.Error("ReactionAttempts not cleared after escalation; want cleared")
 	}
 
+	// Wait for the async escalation goroutine before reading metrics.
+	state.TrackerOpsWg.Wait()
+
 	// Escalation metric incremented (label mode from defaultCIFeedback).
 	if metrics.ciEscalations["label"] != 1 {
 		t.Errorf(`IncCIEscalations("label") = %d, want 1`, metrics.ciEscalations["label"])
@@ -434,6 +438,9 @@ func TestReconcileCIStatus_Failing_CommentEscalation(t *testing.T) {
 	params.CIFeedback.Escalation = "comment"
 
 	reconcileCIStatus(state, params, discardLogger(), context.Background(), metrics)
+
+	// Wait for the async escalation goroutine before reading metrics.
+	state.TrackerOpsWg.Wait()
 
 	if metrics.ciEscalations["comment"] != 1 {
 		t.Errorf(`IncCIEscalations("comment") = %d, want 1`, metrics.ciEscalations["comment"])
@@ -1123,6 +1130,103 @@ func TestReconcileCIStatus_Failing_DoesNotMarkDispatched(t *testing.T) {
 	// Retry must still be scheduled.
 	if _, ok := state.RetryAttempts["ISS-FP-5"]; !ok {
 		t.Error("retry not scheduled after CI failure; want scheduled")
+	}
+}
+
+// TestEscalateCIFailure_LabelFailure_IncrementsErrorMetric verifies that when
+// AddLabel returns an error the escalation goroutine increments
+// IncCIEscalations("error") and does not increment IncCIEscalations("label").
+func TestEscalateCIFailure_LabelFailure_IncrementsErrorMetric(t *testing.T) {
+	t.Parallel()
+
+	tracker := &ciTrackerStub{addLabelErr: errors.New("tracker unavailable")}
+
+	state := stateWithPendingReaction(t, "ESC-ERR-1", "main/broken", 3)
+	state.ReactionAttempts[ReactionKey("ESC-ERR-1", ReactionKindCI)] = 2
+	store := &ciReconcileStore{}
+	metrics := newCIMetricsSpy()
+	ci := &mockCIProvider{result: domain.CIResult{Status: domain.CIStatusFailing}}
+	params := ciParams(t, store, ci, tracker)
+	// defaultCIFeedback sets escalation: "label".
+
+	reconcileCIStatus(state, params, discardLogger(), context.Background(), metrics)
+	state.TrackerOpsWg.Wait()
+
+	if metrics.ciEscalations["error"] != 1 {
+		t.Errorf(`IncCIEscalations("error") = %d, want 1 on label tracker failure`, metrics.ciEscalations["error"])
+	}
+	if metrics.ciEscalations["label"] != 0 {
+		t.Errorf(`IncCIEscalations("label") = %d, want 0 on label tracker failure`, metrics.ciEscalations["label"])
+	}
+}
+
+// TestEscalateCIFailure_CommentFailure_IncrementsErrorMetric verifies that
+// when CommentIssue returns an error the escalation goroutine increments
+// IncCIEscalations("error") and does not increment IncCIEscalations("comment").
+func TestEscalateCIFailure_CommentFailure_IncrementsErrorMetric(t *testing.T) {
+	t.Parallel()
+
+	tracker := &ciTrackerStub{commentIssueErr: errors.New("tracker unavailable")}
+
+	state := stateWithPendingReaction(t, "ESC-ERR-2", "feature/broken", 2)
+	state.ReactionAttempts[ReactionKey("ESC-ERR-2", ReactionKindCI)] = 2
+	store := &ciReconcileStore{}
+	metrics := newCIMetricsSpy()
+	ci := &mockCIProvider{result: domain.CIResult{Status: domain.CIStatusFailing}}
+	params := ciParams(t, store, ci, tracker)
+	params.CIFeedback.Escalation = "comment"
+
+	reconcileCIStatus(state, params, discardLogger(), context.Background(), metrics)
+	state.TrackerOpsWg.Wait()
+
+	if metrics.ciEscalations["error"] != 1 {
+		t.Errorf(`IncCIEscalations("error") = %d, want 1 on comment tracker failure`, metrics.ciEscalations["error"])
+	}
+	if metrics.ciEscalations["comment"] != 0 {
+		t.Errorf(`IncCIEscalations("comment") = %d, want 0 on comment tracker failure`, metrics.ciEscalations["comment"])
+	}
+}
+
+// TestEscalateCIFailure_NilTracker_ZeroIncrements verifies that when
+// TrackerAdapter is nil the escalation path spawns no goroutine and
+// IncCIEscalations is never called.
+func TestEscalateCIFailure_NilTracker_ZeroIncrements(t *testing.T) {
+	t.Parallel()
+
+	state := stateWithPendingReaction(t, "ESC-NIL-1", "main/broken", 3)
+	state.ReactionAttempts[ReactionKey("ESC-NIL-1", ReactionKindCI)] = 2
+	store := &ciReconcileStore{}
+	metrics := newCIMetricsSpy()
+	ci := &mockCIProvider{result: domain.CIResult{Status: domain.CIStatusFailing}}
+	params := ciParams(t, store, ci, nil) // nil TrackerAdapter
+	// defaultCIFeedback sets escalation: "label".
+
+	reconcileCIStatus(state, params, discardLogger(), context.Background(), metrics)
+	state.TrackerOpsWg.Wait()
+
+	if len(metrics.ciEscalations) != 0 {
+		t.Errorf("IncCIEscalations called with nil TrackerAdapter; want zero increments, got %v", metrics.ciEscalations)
+	}
+}
+
+// TestEscalateCIFailure_NilTracker_ZeroIncrements_Comment verifies the same
+// zero-increment guarantee for the comment escalation path with nil tracker.
+func TestEscalateCIFailure_NilTracker_ZeroIncrements_Comment(t *testing.T) {
+	t.Parallel()
+
+	state := stateWithPendingReaction(t, "ESC-NIL-2", "feature/broken", 2)
+	state.ReactionAttempts[ReactionKey("ESC-NIL-2", ReactionKindCI)] = 2
+	store := &ciReconcileStore{}
+	metrics := newCIMetricsSpy()
+	ci := &mockCIProvider{result: domain.CIResult{Status: domain.CIStatusFailing}}
+	params := ciParams(t, store, ci, nil) // nil TrackerAdapter
+	params.CIFeedback.Escalation = "comment"
+
+	reconcileCIStatus(state, params, discardLogger(), context.Background(), metrics)
+	state.TrackerOpsWg.Wait()
+
+	if len(metrics.ciEscalations) != 0 {
+		t.Errorf("IncCIEscalations called with nil TrackerAdapter; want zero increments, got %v", metrics.ciEscalations)
 	}
 }
 

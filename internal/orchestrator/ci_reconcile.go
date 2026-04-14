@@ -270,8 +270,6 @@ func escalateCIFailure(
 		slog.Int("max_retries", params.CIFeedback.MaxRetries),
 	)
 
-	metrics.IncCIEscalations(params.CIFeedback.Escalation)
-
 	switch params.CIFeedback.Escalation {
 	case "label":
 		label := params.CIFeedback.EscalationLabel
@@ -283,6 +281,7 @@ func escalateCIFailure(
 			tracker := params.TrackerAdapter
 			m := metrics
 			escalLog := log
+			escalAction := params.CIFeedback.Escalation
 
 			state.TrackerOpsWg.Add(1)
 			go func() {
@@ -296,6 +295,8 @@ func escalateCIFailure(
 						slog.Any("error", err),
 					)
 					m.IncCIEscalations("error")
+				} else {
+					m.IncCIEscalations(escalAction)
 				}
 			}()
 		}
@@ -308,6 +309,10 @@ func escalateCIFailure(
 			m := metrics
 			escalLog := log
 			ct := commentText
+			escalAction := params.CIFeedback.Escalation
+			if escalAction == "" {
+				escalAction = "comment"
+			}
 
 			state.TrackerOpsWg.Add(1)
 			go func() {
@@ -321,6 +326,8 @@ func escalateCIFailure(
 						slog.Any("error", err),
 					)
 					m.IncCIEscalations("error")
+				} else {
+					m.IncCIEscalations(escalAction)
 				}
 			}()
 		}
