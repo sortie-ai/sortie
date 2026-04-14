@@ -361,6 +361,9 @@ jobs:
             echo "is_prerelease=false" >> "$GITHUB_OUTPUT"
           fi
 
+      - name: Set build date
+        run: echo "BUILD_DATE=$(date -u +%Y-%m-%d)" >> $GITHUB_ENV
+
       - name: Set up QEMU
         uses: docker/setup-qemu-action@ce360397dd3f832beb865e1373c09c0e9f86d70a # v4.0.0
 
@@ -397,6 +400,7 @@ jobs:
           build-args: |
             VERSION=${{ inputs.version }}
             REVISION=${{ github.sha }}
+            BUILD_DATE=${{ env.BUILD_DATE }}
           provenance: mode=max
           sbom: true
           cache-from: type=gha
