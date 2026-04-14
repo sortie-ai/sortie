@@ -41,6 +41,9 @@ func reconcileReviewComments(state *State, params ReconcileParams, log *slog.Log
 
 	ttl := params.ReviewPendingTTL
 	pollInterval := time.Duration(params.ReviewConfig.PollIntervalMS) * time.Millisecond
+	if pollInterval <= 0 {
+		pollInterval = reviewPendingBackoffBase
+	}
 	debounceDuration := time.Duration(params.ReviewConfig.DebounceMS) * time.Millisecond
 
 	for key, pending := range state.PendingReactions {
