@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Orchestrator: `sortie_ci_escalations_total` over-counted during CI escalation.
+  `escalateCIFailure` incremented the metric unconditionally before calling the
+  tracker API, then incremented again on error — producing two increments for one
+  failed operation. It also incremented when `TrackerAdapter` was nil, recording a
+  phantom escalation that was never performed. Both defects are fixed; the metric
+  now increments exactly once per operation outcome, matching the pattern in
+  `escalateReviewFailure`.
+  ([#449](https://github.com/sortie-ai/sortie/issues/449))
+
 ## [1.7.0] - 2026-04-13
 
 ### Added
