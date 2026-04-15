@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.7.1] - 2026-04-15
+
 ### Changed
 
 - CLI: `--version` now outputs a single diagnostic line including commit SHA,
@@ -722,7 +724,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   execution via GitHub Actions.
 - Architecture Decision Records (ADR-0001 through ADR-0005).
 
-[Unreleased]: https://github.com/sortie-ai/sortie/compare/1.7.0...HEAD
+[Unreleased]: https://github.com/sortie-ai/sortie/compare/1.7.1...HEAD
+[1.7.1]: https://github.com/sortie-ai/sortie/compare/1.7.0...1.7.1
 [1.7.0]: https://github.com/sortie-ai/sortie/compare/1.6.1...1.7.0
 [1.6.1]: https://github.com/sortie-ai/sortie/compare/1.6.0...1.6.1
 [1.6.0]: https://github.com/sortie-ai/sortie/compare/1.5.1...1.6.0
