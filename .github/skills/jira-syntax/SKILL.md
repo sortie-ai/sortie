@@ -8,7 +8,9 @@ description: >
   and feature request templates.
   Do NOT use for Jira API operations, JQL queries, or workflow transitions.
 metadata:
-  version: 2026-04-12
+  author: airSlate Inc.
+  version: "1.0"
+  category: project-management
 ---
 
 # Jira wiki markup
@@ -82,9 +84,14 @@ h3. Sprint progress
 
 ## Workflow
 
-### Step 1: Determine content type
+### Step 1: Determine delivery method and content type
 
-Choose the appropriate template based on the task:
+**Delivery method — choose one path and follow it exclusively:**
+
+- **Atlassian MCP tool** (`createJiraIssue`, `editJiraIssue`) — write in Markdown. The MCP server uses the v3 API and converts the `description` field from Markdown to ADF internally. Skip Steps 2 and 3, go directly to Step 4.
+- **Jira wiki editor or REST API v2** (`text/wiki` content type) — write in Jira wiki markup. Continue with Steps 2–4.
+
+**Content type — choose the appropriate template:**
 
 - **Bug report** — read `assets/bug-report.md`
 - **Feature request** — read `assets/feature-request.md`
@@ -125,5 +132,3 @@ If the script is unavailable, verify manually:
 ### Step 4: Submit
 
 Pass the validated content to the Jira API or paste it into the Jira editor. If an MCP tool or jira-communication skill is available, use it for submission. This skill handles syntax only.
-
-**Atlassian MCP tool compatibility:** The Atlassian MCP server (`editJiraIssue`, `createJiraIssue`) converts the `description` field from Markdown to ADF internally. When delivering content through this tool, write in Markdown, not in wiki markup. Wiki markup is correct for the Jira wiki editor and the REST API v2 (`text/wiki` content type), but the MCP tool uses the v3 API with ADF conversion from Markdown.
