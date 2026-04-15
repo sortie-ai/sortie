@@ -125,3 +125,5 @@ If the script is unavailable, verify manually:
 ### Step 4: Submit
 
 Pass the validated content to the Jira API or paste it into the Jira editor. If an MCP tool or jira-communication skill is available, use it for submission. This skill handles syntax only.
+
+**Atlassian MCP tool compatibility:** The Atlassian MCP server (`editJiraIssue`, `createJiraIssue`) converts the `description` field from Markdown to ADF internally. When delivering content through this tool, write in Markdown, not in wiki markup. Wiki markup is correct for the Jira wiki editor and the REST API v2 (`text/wiki` content type), but the MCP tool uses the v3 API with ADF conversion from Markdown.
