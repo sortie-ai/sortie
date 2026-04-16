@@ -96,8 +96,11 @@ type scanResult struct {
 
 // startScannerCh wraps scanner.Scan in a background goroutine and
 // delivers results on the returned channel. The goroutine exits when
-// the scanner reaches EOF / errors or when stop is closed. Callers
-// must not close the returned channel.
+// the scanner reaches EOF or returns an error. Closing stop only
+// interrupts delivery to scanCh; it does not unblock a scanner.Scan
+// call that is blocked on the underlying reader, so shutdown must also
+// close that reader or terminate the subprocess. Callers must not
+// close the returned channel.
 func startScannerCh(scanner *bufio.Scanner, stop <-chan struct{}) <-chan scanResult {
 	scanCh := make(chan scanResult, 1)
 	go func() {
