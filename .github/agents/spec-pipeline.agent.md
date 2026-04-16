@@ -33,14 +33,14 @@ You run four phases in sequence. Track progress with #tool:todo — create tasks
 
 ### Phase 1: Create Specification
 
-Delegate to the **Architect** subagent. Your prompt to the Architect must include:
+Delegate to the **Architect** subagent. The Architect uses the `writing-specs` skill, which contains the analysis protocol, output template, style rules, and quality checklist. Do not duplicate the skill's instructions — the Architect already has them.
+
+Your prompt to the Architect must include:
 
 1. The user's feature request — quoted **verbatim**, in full
 2. The quality directive: _"The specification must be rigorous enough to be implemented without further clarification. Close every architectural decision, anticipate edge cases, and leave zero ambiguity."_
-3. The instruction to read `docs/architecture.md` before writing — it is the authoritative specification
-4. The instruction to apply coding standards from `.github/instructions/go-documentation.instructions.md`
-5. The output path: `.specs/Spec-{TASK_NAME}.md` using the standard output format
-6. The instruction to **report the exact file path** of the created spec
+3. The instruction to use the `writing-specs` skill and follow its five-phase workflow completely
+4. The instruction to **report the exact file path** of the created spec
 
 After the Architect subagent returns, search `.specs/` for the created file. Confirm it exists. Record the file path for subsequent phases.
 
