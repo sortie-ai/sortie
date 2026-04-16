@@ -1,0 +1,8 @@
+{"id":1,"result":{"turn":{"id":"turn-001","status":"starting"}}}
+{"method":"turn/started","params":{"turnId":"turn-001"}}
+{"method":"some/unknown/method","params":{}}
+{"method":"turn/plan/updated","params":{}}
+{"method":"turn/diff/updated","params":{}}
+{"method":"item/agentMessage/delta","params":{}}
+{"method":"item/commandExecution/outputDelta","params":{}}
+{"method":"turn/completed","params":{"turn":{"id":"turn-001","status":"completed"},"usage":{}}}
