@@ -272,6 +272,9 @@ func (a *CodexAdapter) StartSession(ctx context.Context, params domain.StartSess
 		if state.stdin != nil {
 			state.stdin.Close() //nolint:errcheck,gosec // best-effort cleanup
 		}
+		if state.stdout != nil {
+			state.stdout.Close() //nolint:errcheck,gosec // unblock scanner.Scan on the read end
+		}
 		state.mu.Unlock()
 		procutil.KillProcessGroup(cmd.Process.Pid) //nolint:errcheck,gosec // best-effort cleanup
 		// Wait briefly for cleanup.
