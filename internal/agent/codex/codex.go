@@ -289,7 +289,13 @@ func (a *CodexAdapter) StartSession(ctx context.Context, params domain.StartSess
 	scanner := bufio.NewScanner(stdoutPipe)
 	scanner.Buffer(make([]byte, 0, 1<<20), 1<<20)
 
-	if err := initializeHandshake(ctx, state, scanner); err != nil {
+	// Create stopCh before the scanner goroutine so it is available
+	// to startScannerCh and to handshake error paths.
+	state.stopCh = make(chan struct{})
+	scanCh := startScannerCh(scanner, state.stopCh)
+
+	if err := initializeHandshake(ctx, state, scanCh); err != nil {
+		state.closeStop.Do(func() { close(state.stopCh) })
 		killOnError()
 		return domain.Session{}, &domain.AgentError{
 			Kind:    domain.ErrResponseError,
@@ -298,7 +304,8 @@ func (a *CodexAdapter) StartSession(ctx context.Context, params domain.StartSess
 		}
 	}
 
-	if err := authenticateIfNeeded(ctx, state, scanner); err != nil {
+	if err := authenticateIfNeeded(ctx, state, scanCh); err != nil {
+		state.closeStop.Do(func() { close(state.stopCh) })
 		killOnError()
 		var agentErr *domain.AgentError
 		if ok := isAgentError(err, &agentErr); ok {
@@ -313,7 +320,7 @@ func (a *CodexAdapter) StartSession(ctx context.Context, params domain.StartSess
 
 	var threadID string
 	if params.ResumeSessionID != "" {
-		if err := resumeThread(ctx, state, scanner, params.ResumeSessionID); err != nil {
+		if err := resumeThread(ctx, state, scanCh, params.ResumeSessionID); err != nil {
 			// Fallback to new thread on resume failure.
 			logger.Warn("thread resume failed, starting new thread",
 				slog.String("resume_id", params.ResumeSessionID),
@@ -322,8 +329,9 @@ func (a *CodexAdapter) StartSession(ctx context.Context, params domain.StartSess
 			if a.toolRegistry != nil {
 				tools = a.toolRegistry.List()
 			}
-			tid, startErr := startThread(ctx, state, scanner, a.passthrough, tools)
+			tid, startErr := startThread(ctx, state, scanCh, a.passthrough, tools)
 			if startErr != nil {
+				state.closeStop.Do(func() { close(state.stopCh) })
 				killOnError()
 				return domain.Session{}, &domain.AgentError{
 					Kind:    domain.ErrResponseError,
@@ -340,8 +348,9 @@ func (a *CodexAdapter) StartSession(ctx context.Context, params domain.StartSess
 		if a.toolRegistry != nil {
 			tools = a.toolRegistry.List()
 		}
-		tid, startErr := startThread(ctx, state, scanner, a.passthrough, tools)
+		tid, startErr := startThread(ctx, state, scanCh, a.passthrough, tools)
 		if startErr != nil {
+			state.closeStop.Do(func() { close(state.stopCh) })
 			killOnError()
 			return domain.Session{}, &domain.AgentError{
 				Kind:    domain.ErrResponseError,
@@ -356,23 +365,25 @@ func (a *CodexAdapter) StartSession(ctx context.Context, params domain.StartSess
 
 	state.msgCh = make(chan parsedMessage, 16)
 	state.readerDone = make(chan struct{})
-	state.stopCh = make(chan struct{})
 
 	go func() {
 		defer close(state.readerDone)
 		defer close(state.msgCh)
-		for scanner.Scan() {
-			msg := parseMessage(scanner.Bytes())
+		for result := range scanCh {
+			if result.EOF || result.Err != nil {
+				if result.Err != nil {
+					select {
+					case state.msgCh <- parsedMessage{Err: result.Err}:
+					case <-state.stopCh:
+					}
+				}
+				return
+			}
+			msg := parseMessage(result.Line)
 			select {
 			case state.msgCh <- msg:
 			case <-state.stopCh:
 				return
-			}
-		}
-		if err := scanner.Err(); err != nil {
-			select {
-			case state.msgCh <- parsedMessage{Err: err}:
-			case <-state.stopCh:
 			}
 		}
 	}()
