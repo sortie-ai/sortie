@@ -1,0 +1,3 @@
+{"id":5,"result":{"turn":{"id":"turn-002","status":"starting"}}}
+{"method":"turn/started","params":{"turnId":"turn-002"}}
+{"method":"turn/completed","params":{"turn":{"id":"turn-002","status":"failed","error":{"message":"Context window exceeded","codexErrorInfo":"ContextWindowExceeded"}},"usage":{"input_tokens":200000,"output_tokens":0,"cached_input_tokens":0}}}
