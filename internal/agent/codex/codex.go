@@ -177,6 +177,12 @@ func (a *CodexAdapter) StartSession(ctx context.Context, params domain.StartSess
 		// Local mode: the command may be "codex app-server" (with args).
 		// Split on first space to extract binary and arguments.
 		parts := strings.Fields(command)
+		if len(parts) == 0 {
+			return domain.Session{}, &domain.AgentError{
+				Kind:    domain.ErrAgentNotFound,
+				Message: "agent command is empty or whitespace-only",
+			}
+		}
 		resolved, lookErr := exec.LookPath(parts[0])
 		if lookErr != nil {
 			return domain.Session{}, &domain.AgentError{
