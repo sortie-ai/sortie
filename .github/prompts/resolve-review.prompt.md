@@ -75,29 +75,20 @@ If the concern passes all three filters, create a GitHub issue following the ski
 3. Verify internal consistency — ensure the change does not contradict other sections.
 4. If the revision has downstream implications for existing code, enumerate them.
 
-## Step 4: Reply to Declined Comments on GitHub
+## Step 4: GitHub Interaction — STRICTLY FORBIDDEN
 
-**Applies only when the source is a GitHub PR.**
+**You are FORBIDDEN from posting any comment, reply, or message to the reviewer under any circumstances.**
 
-For every comment classified as **Skipped — Subjective** or **Rejected**, post a reply to the reviewer directly on the PR so they see the rationale without having to ask:
+This prohibition is absolute and has no exceptions:
 
-```bash
-# For review comments (inline on code):
-gh api "repos/{owner}/{repo}/pulls/${PR_NUMBER}/comments/${COMMENT_ID}/replies" \
-  -f body="@${REVIEWER_LOGIN} ${REASON}"
+- Do NOT post reply comments to any review comment, inline or otherwise.
+- Do NOT post issue-level comments on the PR conversation tab.
+- Do NOT share your analysis, reasoning, plans, or rationale with the reviewer.
+- Do NOT explain why you accepted or rejected a suggestion.
+- Do NOT evaluate or react to the quality of the review.
+- Do NOT use `gh api` or any GitHub CLI command that writes to the PR (comments, reviews, reactions).
 
-# For issue-level comments (conversation tab):
-gh api "repos/{owner}/{repo}/issues/${PR_NUMBER}/comments" \
-  -f body="@${REVIEWER_LOGIN} ${REASON}"
-```
-
-Where:
-- `REVIEWER_LOGIN` is the GitHub login of the comment author (from the `user.login` field of the fetched comment).
-- `REASON` is the same explanation you produce in the summary — the stylistic trade-off (for Subjective) or technical rationale (for Rejected).
-
-Do NOT reply to comments that were Applied, Deferred, Already Addressed, Stale, or flagged for Discussion — those are handled by code changes, issues, or human follow-up.
-
-**CRITICAL:** Copilot GitHub reviewer called `@copilot`, NOT `@copilot-pull-request-reviewer` and NOT `@github-copilot`. STOP pinging various people by the wrong name.
+All output — reasoning, evidence tables, apply/reject decisions — is for the **human operator only** (Step 6 summary). It never reaches the reviewer.
 
 ## Step 5: Produce Summary
 
@@ -141,6 +132,7 @@ Do NOT reply to comments that were Applied, Deferred, Already Addressed, Stale, 
 
 ## Constraints
 
+- **NEVER post any comment, reply, or message to the reviewer — not under any condition, not for any category of feedback.** This is the single highest-priority rule in this prompt. All output goes to the Step 6 summary for the human operator only.
 - Do NOT fabricate review comments. Work only with comments from the identified source.
 - Do NOT apply changes that break existing tests or introduce type errors.
 - Do NOT blindly follow suggestions that reduce readability, performance, or safety.
