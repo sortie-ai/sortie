@@ -79,6 +79,15 @@ type sessionState struct {
 	stdin           io.WriteCloser
 	stdout          io.ReadCloser
 	stderrCollector *procutil.StderrCollector
+
+	// Session-scoped reader channels. The reader goroutine reads
+	// stdout after the handshake and delivers parsed messages to
+	// RunTurn via msgCh. stopCh is closed by StopSession to unblock
+	// the reader if msgCh is full. readerDone is closed by the reader
+	// when it exits.
+	msgCh      chan parsedMessage
+	readerDone chan struct{}
+	stopCh     chan struct{}
 }
 
 // NewCodexAdapter creates a [CodexAdapter] from adapter configuration.
@@ -343,6 +352,29 @@ func (a *CodexAdapter) StartSession(ctx context.Context, params domain.StartSess
 
 	state.threadID = threadID
 
+	state.msgCh = make(chan parsedMessage, 16)
+	state.readerDone = make(chan struct{})
+	state.stopCh = make(chan struct{})
+
+	go func() {
+		defer close(state.readerDone)
+		defer close(state.msgCh)
+		for scanner.Scan() {
+			msg := parseMessage(scanner.Bytes())
+			select {
+			case state.msgCh <- msg:
+			case <-state.stopCh:
+				return
+			}
+		}
+		if err := scanner.Err(); err != nil {
+			select {
+			case state.msgCh <- parsedMessage{Err: err}:
+			case <-state.stopCh:
+			}
+		}
+	}()
+
 	return domain.Session{
 		ID:       threadID,
 		AgentPID: strconv.Itoa(cmd.Process.Pid),
@@ -399,18 +431,39 @@ func (a *CodexAdapter) RunTurn(ctx context.Context, session domain.Session, para
 		}
 	}
 
-	// Read the turn/start response synchronously before entering the
-	// event loop. The stdout pipe is not yet shared with the
-	// background reader.
-	scanner := bufio.NewScanner(state.stdout)
-	scanner.Buffer(make([]byte, 0, 1<<20), 1<<20)
-
-	turnStartResp, err := readResponse(ctx, scanner, id)
-	if err != nil {
+	// Fast-path: return immediately if the context is already done.
+	if ctx.Err() != nil {
 		return domain.TurnResult{}, &domain.AgentError{
 			Kind:    domain.ErrPortExit,
-			Message: fmt.Sprintf("turn/start response: %v", err),
-			Err:     err,
+			Message: fmt.Sprintf("turn/start response: %v", ctx.Err()),
+			Err:     ctx.Err(),
+		}
+	}
+
+	// Wait for the turn/start response from the session-scoped reader.
+	var turnStartResp rpcResponse
+	for turnStartResp.ID == 0 {
+		select {
+		case <-ctx.Done():
+			return domain.TurnResult{}, &domain.AgentError{
+				Kind:    domain.ErrPortExit,
+				Message: fmt.Sprintf("turn/start response: %v", ctx.Err()),
+				Err:     ctx.Err(),
+			}
+		case msg, ok := <-state.msgCh:
+			if !ok {
+				return domain.TurnResult{}, &domain.AgentError{
+					Kind:    domain.ErrPortExit,
+					Message: "stdout closed before turn/start response",
+				}
+			}
+			if msg.Err != nil {
+				logger.Warn("ignoring unparseable stdout line", slog.Any("error", msg.Err))
+				continue
+			}
+			if msg.IsResponse && msg.Response.ID == id {
+				turnStartResp = msg.Response
+			}
 		}
 	}
 	if turnStartResp.Error != nil {
@@ -428,21 +481,6 @@ func (a *CodexAdapter) RunTurn(ctx context.Context, session domain.Session, para
 		logger.Warn("turn/start result unmarshal failed", slog.Any("error", err))
 	}
 	turnID := turnResult.Turn.ID
-
-	// Background reader goroutine: feeds parsed messages into a
-	// buffered channel so the event loop can select on ctx.Done()
-	// without blocking on a hung subprocess.
-	msgCh := make(chan parsedMessage, 16)
-	go func() {
-		defer close(msgCh)
-		for scanner.Scan() {
-			msg := parseMessage(scanner.Bytes())
-			msgCh <- msg
-		}
-		if err := scanner.Err(); err != nil {
-			msgCh <- parsedMessage{Err: err}
-		}
-	}()
 
 	inFlight := make(map[string]inFlightTool)
 	var usage domain.TokenUsage
@@ -468,7 +506,7 @@ func (a *CodexAdapter) RunTurn(ctx context.Context, session domain.Session, para
 			// Continue reading until turn/completed or channel close.
 			continue
 
-		case msg, ok := <-msgCh:
+		case msg, ok := <-state.msgCh:
 			if !ok {
 				// Channel closed — subprocess stdout ended.
 				toolWg.Wait()
@@ -753,6 +791,12 @@ func (a *CodexAdapter) StopSession(_ context.Context, session domain.Session) er
 		return fmt.Errorf("unexpected session internal type %T", session.Internal)
 	}
 
+	// Signal the reader goroutine to stop before closing stdin,
+	// preventing it from blocking on a full msgCh during teardown.
+	if state.stopCh != nil {
+		close(state.stopCh)
+	}
+
 	// Close stdin to signal EOF to the app-server.
 	state.mu.Lock()
 	if state.stdin != nil {
@@ -784,6 +828,15 @@ func (a *CodexAdapter) StopSession(_ context.Context, session domain.Session) er
 				case <-time.After(2 * time.Second):
 				}
 			}
+		}
+	}
+
+	// Wait for the reader goroutine to finish after process exit.
+	if state.readerDone != nil {
+		select {
+		case <-state.readerDone:
+		case <-time.After(2 * time.Second):
+			slog.Warn("reader goroutine did not exit after process termination")
 		}
 	}
 
