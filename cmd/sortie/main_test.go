@@ -25,16 +25,17 @@ import (
 // full run() startup sequence. These tests verify startup behavior
 // (logging, DB creation, flag parsing) and do not need to wait for a
 // poll cycle — the orchestrator shuts down as soon as the context
-// expires. Keep this short to avoid a cumulative 100+ second test suite.
+// expires.
 //
-// Windows CI runners need a longer budget because the pure-Go SQLite
-// driver (modernc.org/sqlite) performs slower disk I/O on NTFS, and
-// schema migrations can exceed the default 500 ms deadline.
+// The pure-Go SQLite driver (modernc.org/sqlite) is significantly slower
+// under the race detector and on resource-constrained CI runners, where
+// PRAGMA execution and schema migrations can exceed a sub-second budget.
+// Windows NTFS adds further disk I/O overhead.
 var runTestTimeout = func() time.Duration {
 	if runtime.GOOS == "windows" {
 		return 10 * time.Second
 	}
-	return 500 * time.Millisecond
+	return 2 * time.Second
 }()
 
 // minimalWorkflow returns a minimal valid WORKFLOW.md content that
