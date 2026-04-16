@@ -64,42 +64,16 @@ You are a senior engineer.
 {{ .issue.description }}
 ```
 
-Set `GITHUB_TOKEN` to a fine-grained PAT with **Issues: Read and write** permission
-scoped to the target repository. States are mapped to GitHub labels — create labels
-matching your `active_states` and `terminal_states` before starting Sortie. The
-`query_filter` scopes polling to issues with a specific label so Sortie only picks up
-work you explicitly mark as ready. See the
-[GitHub adapter reference](https://docs.sortie-ai.com/reference/adapter-github/) for
-full configuration details.
-
 Sortie watches this file, polls for matching issues, creates an isolated workspace
-for each, and launches Claude Code with the rendered prompt. It handles the rest:
+for each, and launches the agent with the rendered prompt. It handles the rest:
 stall detection, timeout enforcement, retries with backoff, state reconciliation
 with the tracker, and workspace cleanup when issues reach terminal states. Changes
 to the workflow are applied without restart.
 
-See [`examples/WORKFLOW.md`](examples/WORKFLOW.md?plain=1) for a complete example with
-all hooks, continuation guidance, and blocker handling.
-
-### Copilot CLI
-
-To use GitHub Copilot CLI instead of Claude Code, swap the agent block:
-
-```yaml
-agent:
-  kind: copilot-cli
-  max_turns: 5
-  max_concurrent_agents: 4
-
-copilot-cli:
-  model: gpt-5.3
-```
-
-The adapter requires a GitHub Copilot subscription and a valid GitHub token. See the
-[Copilot CLI adapter reference](https://docs.sortie-ai.com/reference/adapter-copilot/)
-for full configuration details and
-[`examples/WORKFLOW.copilot.md`](examples/WORKFLOW.copilot.md?plain=1) for a complete
-workflow.
+The `agent.kind` field selects which coding agent runs each session. Sortie ships
+adapters for Claude Code, Copilot, and Codex — switching is a one-line change.
+See the [adapter reference](https://docs.sortie-ai.com/reference/) for configuration
+details and [`examples/`](examples/) for complete workflow files.
 
 ## Architecture
 
@@ -112,9 +86,9 @@ distributed coordination. For full architectural details, see
 Issue trackers and coding agents are integrated through adapter interfaces. Adding support
 for a new tracker or agent is an additive change: implement the interface in a new package.
 
-Supported trackers: GitHub Issues and Jira. Supported agents: Claude Code and
-Copilot CLI. See [`docs/decisions/`](docs/decisions/) for detailed rationale on
-technology choices.
+Supported trackers: GitHub Issues and Jira. Supported agents: Claude Code, Copilot,
+and Codex. See [`docs/decisions/`](docs/decisions/) for detailed rationale on technology
+choices.
 
 ## Documentation
 
