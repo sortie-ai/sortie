@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
 # Outputs the next available ADR number(s) in docs/decisions/.
+# Works regardless of current working directory — resolves docs/decisions/
+# relative to this script's own location.
 #
 # Usage:
 #   next_adr_number.sh              # prints one number, e.g. 0004
@@ -11,7 +13,10 @@
 
 set -euo pipefail
 
-DECISIONS_DIR="docs/decisions"
+# Resolve docs/decisions/ relative to this script:
+# scripts/ → managing-adrs/ → skills/ → .github/ → <project root>/docs/decisions
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+DECISIONS_DIR="$SCRIPT_DIR/../../../../docs/decisions"
 COUNT=1
 
 while [[ $# -gt 0 ]]; do
@@ -22,7 +27,7 @@ while [[ $# -gt 0 ]]; do
 done
 
 if [[ ! -d "$DECISIONS_DIR" ]]; then
-  echo "Error: $DECISIONS_DIR not found. Run from repository root." >&2
+  echo "Error: docs/decisions/ not found at $DECISIONS_DIR" >&2
   exit 1
 fi
 
