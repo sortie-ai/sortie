@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.8.0] - 2026-04-17
+
+### Added
+
+- Codex CLI agent adapter: configure with `agent.kind: codex` for
+  autonomous issue-to-code workflows using OpenAI Codex CLI via the
+  `codex app-server` JSON-RPC 2.0 protocol. Supports the same structured
+  lifecycle as Claude Code and Copilot CLI adapters — event normalization,
+  token tracking, timeout enforcement, graceful SIGTERM→SIGKILL shutdown,
+  and session resume via `ResumeSessionID`. Tool calls are serialized
+  through a channel to prevent concurrent stdin corruption. Handshake
+  reads are cancellable via context, preventing stalled subprocesses from
+  hanging the worker indefinitely.
+  ([#238](https://github.com/sortie-ai/sortie/issues/238))
+
 ## [1.7.1] - 2026-04-15
 
 ### Changed
@@ -724,7 +739,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   execution via GitHub Actions.
 - Architecture Decision Records (ADR-0001 through ADR-0005).
 
-[Unreleased]: https://github.com/sortie-ai/sortie/compare/1.7.1...HEAD
+[Unreleased]: https://github.com/sortie-ai/sortie/compare/1.8.0...HEAD
+[1.8.0]: https://github.com/sortie-ai/sortie/compare/1.7.1...1.8.0
 [1.7.1]: https://github.com/sortie-ai/sortie/compare/1.7.0...1.7.1
 [1.7.0]: https://github.com/sortie-ai/sortie/compare/1.6.1...1.7.0
 [1.6.1]: https://github.com/sortie-ai/sortie/compare/1.6.0...1.6.1
