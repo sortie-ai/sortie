@@ -359,7 +359,7 @@ agent:
 
 | Field                            | Type                              | Required                            | Default         | Dynamic Reload                             | Description                                                                                                                                                                      |
 | -------------------------------- | --------------------------------- | ----------------------------------- | --------------- | ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `kind`                           | string                            | No                                  | `claude-code`   | Future dispatches                          | Agent adapter identifier. This codebase ships with the `claude-code` adapter. Other kinds (for example, HTTP-based adapters) are available only if you register them separately. |
+| `kind`                           | string                            | No                                  | `claude-code`   | Future dispatches                          | Agent adapter identifier. Built-in adapters: `claude-code`, `copilot-cli`, `codex`. Other kinds (for example, HTTP-based adapters) are available only if you register them separately. |
 | `command`                        | string (shell command)            | When adapter requires local process | Adapter-defined | Future dispatches                          | Shell command to launch the agent for adapters that run as a local subprocess (such as `claude-code`). Adapters that do not start a local process ignore this field.             |
 | `turn_timeout_ms`                | integer                           | No                                  | `3600000` (1h)  | Future worker attempts                     | Total timeout for a single agent turn.                                                                                                                                           |
 | `read_timeout_ms`                | integer                           | No                                  | `5000` (5s)     | Future worker attempts                     | Request/response timeout during startup and synchronous operations.                                                                                                              |
@@ -1271,11 +1271,15 @@ token_rates:
     input_per_mtok: 2.00
     output_per_mtok: 8.00
     cache_read_per_mtok: 0.20
+  codex:
+    input_per_mtok: 2.50
+    output_per_mtok: 10.00
+    cache_read_per_mtok: 0.25
 ```
 
 When `token_rates` is configured, the dashboard displays estimated USD cost for
 currently running sessions. Keys are agent adapter kind strings (e.g., `"claude-code"`,
-`"copilot-cli"`). All rates are in USD per 1 million tokens.
+`"copilot-cli"`, `"codex"`). All rates are in USD per 1 million tokens.
 
 When `token_rates` is absent or empty, the dashboard shows raw token counts without
 cost estimates.
@@ -1344,6 +1348,32 @@ to CLI flags.
 > limit controls how many turns the worker runs before exiting. The adapter limit controls
 > the Claude Code CLI's internal turn budget. They serve different purposes and should
 > typically have different values.
+
+**Codex adapter:**
+
+```yaml
+codex:
+  model: o3                       # Model override (e.g., "gpt-5.4", "o3")
+  effort: medium                  # Reasoning effort: "low", "medium", "high"
+  approval_policy: never          # "never" (default), "onRequest", "unlessTrusted", "always"
+  thread_sandbox: workspaceWrite  # "workspaceWrite" (default), "readOnly", "dangerFullAccess", "externalSandbox"
+  personality: concise            # Personality preset
+  skip_git_repo_check: false      # Skip git repo validation for non-git workspaces
+  turn_sandbox_policy:            # Per-turn sandbox policy override (optional)
+    networkAccess: true
+```
+
+The `codex` block is forwarded to the Codex adapter, which uses these fields
+when initializing the `codex app-server` subprocess and starting threads.
+
+The Codex adapter uses a persistent subprocess model: the app-server is launched
+once in `StartSession` and kept alive across turns, unlike the per-turn subprocess
+model used by `claude-code` and `copilot-cli`.
+
+> **Sandbox defaults:** When `thread_sandbox` is omitted, the adapter defaults to
+> `workspaceWrite` with `writableRoots` set to the workspace path and
+> `networkAccess: false`. Use `turn_sandbox_policy` to override specific sandbox
+> fields per turn.
 
 **Custom or future adapters (illustrative example):**
 
