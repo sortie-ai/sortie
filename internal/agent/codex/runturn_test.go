@@ -3,6 +3,7 @@
 package codex
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -36,13 +37,39 @@ func loadFixture(t *testing.T, name string) []byte {
 // for use in RunTurn and handleToolCall unit tests that do not launch a
 // real subprocess.
 func makeTestState(fixtureData []byte) *sessionState {
-	return &sessionState{
+	state := &sessionState{
 		threadID:      "thread-001",
 		workspacePath: "/tmp",
 		waitCh:        make(chan struct{}),
 		stdin:         nopWriteCloser{},
-		stdout:        io.NopCloser(bytes.NewReader(fixtureData)),
+		stdout:        io.NopCloser(bytes.NewReader(nil)),
+		msgCh:         make(chan parsedMessage, 16),
+		readerDone:    make(chan struct{}),
+		stopCh:        make(chan struct{}),
 	}
+
+	go func() {
+		defer close(state.readerDone)
+		defer close(state.msgCh)
+		scanner := bufio.NewScanner(bytes.NewReader(fixtureData))
+		scanner.Buffer(make([]byte, 0, 1<<20), 1<<20)
+		for scanner.Scan() {
+			msg := parseMessage(scanner.Bytes())
+			select {
+			case state.msgCh <- msg:
+			case <-state.stopCh:
+				return
+			}
+		}
+		if err := scanner.Err(); err != nil {
+			select {
+			case state.msgCh <- parsedMessage{Err: err}:
+			case <-state.stopCh:
+			}
+		}
+	}()
+
+	return state
 }
 
 // fakeSession wraps state in a domain.Session suitable for RunTurn.
@@ -201,6 +228,21 @@ func TestRunTurn_StdoutClosedBeforeTurnCompleted(t *testing.T) {
 	fixture := "{\"id\":1,\"result\":{\"turn\":{\"id\":\"turn-001\",\"status\":\"starting\"}}}\n" +
 		"{\"method\":\"turn/started\",\"params\":{}}\n"
 	state := makeTestState([]byte(fixture))
+	adapter, _ := NewCodexAdapter(map[string]any{})
+
+	_, err := adapter.RunTurn(context.Background(), fakeSession(state), domain.RunTurnParams{
+		Prompt:  "go",
+		OnEvent: func(domain.AgentEvent) {},
+	})
+	requireAgentError(t, err, domain.ErrPortExit)
+}
+
+func TestRunTurn_StdoutEOFBeforeTurnStartResponse(t *testing.T) {
+	t.Parallel()
+
+	// Empty fixture: msgCh closes before any turn/start response arrives.
+	// Tests the !ok path in the session-scoped response-wait loop.
+	state := makeTestState(nil)
 	adapter, _ := NewCodexAdapter(map[string]any{})
 
 	_, err := adapter.RunTurn(context.Background(), fakeSession(state), domain.RunTurnParams{
@@ -608,6 +650,75 @@ func TestStopSession_InvalidInternalType(t *testing.T) {
 	}
 }
 
+func TestRunTurn_MultiTurnNoRace(t *testing.T) {
+	t.Parallel()
+
+	fixture := "{\"id\":1,\"result\":{\"turn\":{\"id\":\"turn-001\",\"status\":\"starting\"}}}\n" +
+		"{\"method\":\"turn/started\",\"params\":{\"turnId\":\"turn-001\"}}\n" +
+		"{\"method\":\"turn/completed\",\"params\":{\"turn\":{\"id\":\"turn-001\",\"status\":\"completed\"},\"usage\":{\"input_tokens\":100,\"output_tokens\":50,\"cached_input_tokens\":10}}}\n" +
+		"{\"id\":2,\"result\":{\"turn\":{\"id\":\"turn-002\",\"status\":\"starting\"}}}\n" +
+		"{\"method\":\"turn/started\",\"params\":{\"turnId\":\"turn-002\"}}\n" +
+		"{\"method\":\"turn/completed\",\"params\":{\"turn\":{\"id\":\"turn-002\",\"status\":\"completed\"},\"usage\":{\"input_tokens\":200,\"output_tokens\":100,\"cached_input_tokens\":20}}}\n"
+
+	state := makeTestState([]byte(fixture))
+	adapter, _ := NewCodexAdapter(map[string]any{})
+	session := fakeSession(state)
+
+	result1, err := adapter.RunTurn(context.Background(), session, domain.RunTurnParams{
+		Prompt:  "first turn",
+		OnEvent: func(domain.AgentEvent) {},
+	})
+	if err != nil {
+		t.Fatalf("RunTurn(1) error = %v", err)
+	}
+	if result1.ExitReason != domain.EventTurnCompleted {
+		t.Errorf("RunTurn(1) ExitReason = %v, want %v", result1.ExitReason, domain.EventTurnCompleted)
+	}
+
+	result2, err := adapter.RunTurn(context.Background(), session, domain.RunTurnParams{
+		Prompt:  "second turn",
+		OnEvent: func(domain.AgentEvent) {},
+	})
+	if err != nil {
+		t.Fatalf("RunTurn(2) error = %v", err)
+	}
+	if result2.ExitReason != domain.EventTurnCompleted {
+		t.Errorf("RunTurn(2) ExitReason = %v, want %v", result2.ExitReason, domain.EventTurnCompleted)
+	}
+}
+
+func TestRunTurn_StdoutEOFBetweenTurns(t *testing.T) {
+	t.Parallel()
+
+	// One complete turn in the fixture. After the first RunTurn drains the
+	// channel, the reader goroutine closes msgCh on EOF. A second RunTurn
+	// call receives !ok immediately and returns ErrPortExit — the
+	// "stdout EOF between turns" behavior introduced by the session-scoped
+	// reader refactoring (previously undetected).
+	fixture := "{\"id\":1,\"result\":{\"turn\":{\"id\":\"turn-001\",\"status\":\"starting\"}}}\n" +
+		"{\"method\":\"turn/started\",\"params\":{\"turnId\":\"turn-001\"}}\n" +
+		"{\"method\":\"turn/completed\",\"params\":{\"turn\":{\"id\":\"turn-001\",\"status\":\"completed\"},\"usage\":{\"input_tokens\":10,\"output_tokens\":5,\"cached_input_tokens\":0}}}\n"
+
+	state := makeTestState([]byte(fixture))
+	adapter, _ := NewCodexAdapter(map[string]any{})
+	session := fakeSession(state)
+
+	if _, err := adapter.RunTurn(context.Background(), session, domain.RunTurnParams{
+		Prompt:  "first turn",
+		OnEvent: func(domain.AgentEvent) {},
+	}); err != nil {
+		t.Fatalf("RunTurn(1) unexpected error: %v", err)
+	}
+
+	// After the first turn, the fixture is exhausted and msgCh is closed.
+	// The second call must return ErrPortExit immediately.
+	_, err := adapter.RunTurn(context.Background(), session, domain.RunTurnParams{
+		Prompt:  "second turn",
+		OnEvent: func(domain.AgentEvent) {},
+	})
+	requireAgentError(t, err, domain.ErrPortExit)
+}
+
 func TestStopSession_NilState(t *testing.T) {
 	t.Parallel()
 
@@ -620,6 +731,31 @@ func TestStopSession_NilState(t *testing.T) {
 	err := adapter.StopSession(context.Background(), domain.Session{Internal: state})
 	if err != nil {
 		t.Fatalf("StopSession() error = %v", err)
+	}
+}
+
+func TestStopSession_WithActiveReaderGoroutine(t *testing.T) {
+	t.Parallel()
+
+	// Provide more messages than the channel buffer (16) so the reader
+	// goroutine is blocked on a channel send when StopSession closes stopCh.
+	line := []byte("{\"method\":\"turn/started\",\"params\":{}}\n")
+	state := makeTestState(bytes.Repeat(line, 20))
+	// Simulate the subprocess having already exited so waitCh does not block.
+	close(state.waitCh)
+
+	adapter, _ := NewCodexAdapter(map[string]any{})
+	err := adapter.StopSession(context.Background(), domain.Session{Internal: state})
+	if err != nil {
+		t.Fatalf("StopSession() error = %v", err)
+	}
+
+	// StopSession waits on readerDone internally; it must be closed on return.
+	select {
+	case <-state.readerDone:
+		// OK
+	default:
+		t.Error("readerDone should be closed after StopSession")
 	}
 }
 
