@@ -86,43 +86,81 @@ func sendResponse(state *sessionState, id int64, result any) error {
 	return nil
 }
 
-// readResponse reads JSONL lines from the scanner until a response
-// with the expected ID arrives or the context expires. Notifications
-// encountered during the wait are discarded.
-func readResponse(ctx context.Context, scanner *bufio.Scanner, expectedID int64) (rpcResponse, error) {
-	for {
-		if ctx.Err() != nil {
-			return rpcResponse{}, ctx.Err()
-		}
-		if !scanner.Scan() {
-			if err := scanner.Err(); err != nil {
-				return rpcResponse{}, fmt.Errorf("scanner error waiting for response id=%d: %w", expectedID, err)
-			}
-			return rpcResponse{}, fmt.Errorf("unexpected EOF waiting for response id=%d", expectedID)
-		}
+// scanResult carries one line from the background scanner goroutine,
+// or a terminal condition (EOF / error).
+type scanResult struct {
+	Line []byte
+	Err  error
+	EOF  bool
+}
 
-		msg := parseMessage(scanner.Bytes())
-		if msg.Err != nil {
-			slog.Debug("discarding malformed message during handshake", slog.Any("error", msg.Err))
-			continue
+// startScannerCh wraps scanner.Scan in a background goroutine and
+// delivers results on the returned channel. The goroutine exits when
+// the scanner reaches EOF / errors or when stop is closed. Callers
+// must not close the returned channel.
+func startScannerCh(scanner *bufio.Scanner, stop <-chan struct{}) <-chan scanResult {
+	scanCh := make(chan scanResult, 1)
+	go func() {
+		defer close(scanCh)
+		for scanner.Scan() {
+			line := make([]byte, len(scanner.Bytes()))
+			copy(line, scanner.Bytes())
+			select {
+			case scanCh <- scanResult{Line: line}:
+			case <-stop:
+				return
+			}
 		}
-		if msg.IsNotification {
-			slog.Debug("discarding notification during handshake",
-				slog.String("method", msg.Notification.Method))
-			continue
+		termResult := scanResult{EOF: true}
+		if err := scanner.Err(); err != nil {
+			termResult = scanResult{Err: err}
 		}
-		if msg.IsResponse && msg.Response.ID == expectedID {
-			return msg.Response, nil
+		select {
+		case scanCh <- termResult:
+		case <-stop:
 		}
-		slog.Debug("discarding response with unexpected id",
-			slog.Int64("got", msg.Response.ID),
-			slog.Int64("want", expectedID))
+	}()
+	return scanCh
+}
+
+// readResponse reads from scanCh until a response with the expected
+// ID arrives or the context expires. Notifications encountered during
+// the wait are discarded.
+func readResponse(ctx context.Context, scanCh <-chan scanResult, expectedID int64) (rpcResponse, error) {
+	for {
+		select {
+		case <-ctx.Done():
+			return rpcResponse{}, ctx.Err()
+		case result, ok := <-scanCh:
+			if !ok || result.EOF {
+				return rpcResponse{}, fmt.Errorf("unexpected EOF waiting for response id=%d", expectedID)
+			}
+			if result.Err != nil {
+				return rpcResponse{}, fmt.Errorf("scanner error waiting for response id=%d: %w", expectedID, result.Err)
+			}
+			msg := parseMessage(result.Line)
+			if msg.Err != nil {
+				slog.Debug("discarding malformed message during handshake", slog.Any("error", msg.Err))
+				continue
+			}
+			if msg.IsNotification {
+				slog.Debug("discarding notification during handshake",
+					slog.String("method", msg.Notification.Method))
+				continue
+			}
+			if msg.IsResponse && msg.Response.ID == expectedID {
+				return msg.Response, nil
+			}
+			slog.Debug("discarding response with unexpected id",
+				slog.Int64("got", msg.Response.ID),
+				slog.Int64("want", expectedID))
+		}
 	}
 }
 
 // initializeHandshake sends the initialize request and initialized
 // notification per the app-server protocol.
-func initializeHandshake(ctx context.Context, state *sessionState, scanner *bufio.Scanner) error {
+func initializeHandshake(ctx context.Context, state *sessionState, scanCh <-chan scanResult) error {
 	type clientInfo struct {
 		Name    string `json:"name"`
 		Title   string `json:"title"`
@@ -152,7 +190,7 @@ func initializeHandshake(ctx context.Context, state *sessionState, scanner *bufi
 		return fmt.Errorf("initialize: %w", err)
 	}
 
-	resp, err := readResponse(ctx, scanner, id)
+	resp, err := readResponse(ctx, scanCh, id)
 	if err != nil {
 		return fmt.Errorf("initialize response: %w", err)
 	}
@@ -168,13 +206,13 @@ func initializeHandshake(ctx context.Context, state *sessionState, scanner *bufi
 
 // authenticateIfNeeded checks the app-server auth state and performs
 // API key login if needed.
-func authenticateIfNeeded(ctx context.Context, state *sessionState, scanner *bufio.Scanner) error {
+func authenticateIfNeeded(ctx context.Context, state *sessionState, scanCh <-chan scanResult) error {
 	id, err := sendRequest(state, "account/read", map[string]any{"refreshToken": false})
 	if err != nil {
 		return fmt.Errorf("account/read: %w", err)
 	}
 
-	resp, err := readResponse(ctx, scanner, id)
+	resp, err := readResponse(ctx, scanCh, id)
 	if err != nil {
 		return fmt.Errorf("account/read response: %w", err)
 	}
@@ -207,8 +245,7 @@ func authenticateIfNeeded(ctx context.Context, state *sessionState, scanner *buf
 		return fmt.Errorf("account/login/start: %w", err)
 	}
 
-	// Read until login response and login/completed notification.
-	loginResp, err := readResponse(ctx, scanner, loginID)
+	loginResp, err := readResponse(ctx, scanCh, loginID)
 	if err != nil {
 		return fmt.Errorf("account/login/start response: %w", err)
 	}
@@ -219,8 +256,7 @@ func authenticateIfNeeded(ctx context.Context, state *sessionState, scanner *buf
 		}
 	}
 
-	// Wait for account/login/completed notification. Read lines
-	// until we find it.
+	// Wait for account/login/completed notification.
 	deadline := time.After(readTimeout(state))
 	for {
 		select {
@@ -228,37 +264,37 @@ func authenticateIfNeeded(ctx context.Context, state *sessionState, scanner *buf
 			return ctx.Err()
 		case <-deadline:
 			return fmt.Errorf("timeout waiting for account/login/completed")
-		default:
-		}
-		if !scanner.Scan() {
-			if err := scanner.Err(); err != nil {
-				return fmt.Errorf("scanner error waiting for login: %w", err)
+		case result, ok := <-scanCh:
+			if !ok || result.EOF {
+				return fmt.Errorf("unexpected EOF waiting for login")
 			}
-			return fmt.Errorf("unexpected EOF waiting for login")
-		}
-		msg := parseMessage(scanner.Bytes())
-		if msg.Err != nil {
-			continue
-		}
-		if msg.IsNotification && msg.Notification.Method == "account/login/completed" {
-			var loginNotif accountLoginNotification
-			if err := json.Unmarshal(msg.Notification.Params, &loginNotif); err != nil {
-				return fmt.Errorf("login notification unmarshal: %w", err)
+			if result.Err != nil {
+				return fmt.Errorf("scanner error waiting for login: %w", result.Err)
 			}
-			if !loginNotif.Success {
-				return &domain.AgentError{
-					Kind:    domain.ErrResponseError,
-					Message: "authentication failed",
+			msg := parseMessage(result.Line)
+			if msg.Err != nil {
+				continue
+			}
+			if msg.IsNotification && msg.Notification.Method == "account/login/completed" {
+				var loginNotif accountLoginNotification
+				if err := json.Unmarshal(msg.Notification.Params, &loginNotif); err != nil {
+					return fmt.Errorf("login notification unmarshal: %w", err)
 				}
+				if !loginNotif.Success {
+					return &domain.AgentError{
+						Kind:    domain.ErrResponseError,
+						Message: "authentication failed",
+					}
+				}
+				return nil
 			}
-			return nil
 		}
 	}
 }
 
 // startThread sends thread/start and waits for the thread/started
 // notification. Returns the thread ID.
-func startThread(ctx context.Context, state *sessionState, scanner *bufio.Scanner, pt passthroughConfig, tools []domain.AgentTool) (string, error) {
+func startThread(ctx context.Context, state *sessionState, scanCh <-chan scanResult, pt passthroughConfig, tools []domain.AgentTool) (string, error) {
 	approvalPolicy := pt.ApprovalPolicy
 	if approvalPolicy == "" {
 		approvalPolicy = "never"
@@ -291,7 +327,7 @@ func startThread(ctx context.Context, state *sessionState, scanner *bufio.Scanne
 		return "", fmt.Errorf("thread/start: %w", err)
 	}
 
-	resp, err := readResponse(ctx, scanner, id)
+	resp, err := readResponse(ctx, scanCh, id)
 	if err != nil {
 		return "", fmt.Errorf("thread/start response: %w", err)
 	}
@@ -318,26 +354,27 @@ func startThread(ctx context.Context, state *sessionState, scanner *bufio.Scanne
 			// Accept the thread ID even without the notification.
 			// Some app-server versions may not emit it.
 			return threadID, nil
-		default:
-		}
-		if !scanner.Scan() {
-			if scanErr := scanner.Err(); scanErr != nil {
-				slog.Debug("scanner error waiting for thread/started", slog.Any("error", scanErr))
+		case result, ok := <-scanCh:
+			if !ok || result.EOF {
+				return threadID, nil
 			}
-			return threadID, nil
-		}
-		msg := parseMessage(scanner.Bytes())
-		if msg.Err != nil {
-			continue
-		}
-		if msg.IsNotification && msg.Notification.Method == "thread/started" {
-			return threadID, nil
+			if result.Err != nil {
+				slog.Debug("scanner error waiting for thread/started", slog.Any("error", result.Err))
+				return threadID, nil
+			}
+			msg := parseMessage(result.Line)
+			if msg.Err != nil {
+				continue
+			}
+			if msg.IsNotification && msg.Notification.Method == "thread/started" {
+				return threadID, nil
+			}
 		}
 	}
 }
 
 // resumeThread sends thread/resume for an existing thread.
-func resumeThread(ctx context.Context, state *sessionState, scanner *bufio.Scanner, threadID string) error {
+func resumeThread(ctx context.Context, state *sessionState, scanCh <-chan scanResult, threadID string) error {
 	id, err := sendRequest(state, "thread/resume", map[string]any{
 		"threadId": threadID,
 	})
@@ -345,7 +382,7 @@ func resumeThread(ctx context.Context, state *sessionState, scanner *bufio.Scann
 		return fmt.Errorf("thread/resume: %w", err)
 	}
 
-	resp, err := readResponse(ctx, scanner, id)
+	resp, err := readResponse(ctx, scanCh, id)
 	if err != nil {
 		return fmt.Errorf("thread/resume response: %w", err)
 	}

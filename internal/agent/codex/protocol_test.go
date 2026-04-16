@@ -6,6 +6,7 @@ import (
 	"bufio"
 	"context"
 	"errors"
+	"io"
 	"strings"
 	"testing"
 	"time"
@@ -26,14 +27,12 @@ func TestSendNotification_WritesToStdin(t *testing.T) {
 func TestReadResponse_SkipsNotifications(t *testing.T) {
 	t.Parallel()
 
-	fixture := strings.NewReader(
-		"{\"method\":\"some/notification\",\"params\":{}}\n" +
-			"{\"id\":1,\"result\":{\"ok\":true}}\n",
+	scanCh := scanChanFromLines(
+		`{"method":"some/notification","params":{}}`,
+		`{"id":1,"result":{"ok":true}}`,
 	)
-	scanner := bufio.NewScanner(fixture)
-	scanner.Buffer(make([]byte, 0, 1<<20), 1<<20)
 
-	resp, err := readResponse(context.Background(), scanner, 1)
+	resp, err := readResponse(context.Background(), scanCh, 1)
 	if err != nil {
 		t.Fatalf("readResponse() error = %v", err)
 	}
@@ -45,14 +44,12 @@ func TestReadResponse_SkipsNotifications(t *testing.T) {
 func TestReadResponse_SkipsWrongID(t *testing.T) {
 	t.Parallel()
 
-	fixture := strings.NewReader(
-		"{\"id\":99,\"result\":{}}\n" + // wrong ID
-			"{\"id\":1,\"result\":{\"ok\":true}}\n",
+	scanCh := scanChanFromLines(
+		`{"id":99,"result":{}}`,
+		`{"id":1,"result":{"ok":true}}`,
 	)
-	scanner := bufio.NewScanner(fixture)
-	scanner.Buffer(make([]byte, 0, 1<<20), 1<<20)
 
-	resp, err := readResponse(context.Background(), scanner, 1)
+	resp, err := readResponse(context.Background(), scanCh, 1)
 	if err != nil {
 		t.Fatalf("readResponse() error = %v", err)
 	}
@@ -64,10 +61,9 @@ func TestReadResponse_SkipsWrongID(t *testing.T) {
 func TestReadResponse_UnexpectedEOF(t *testing.T) {
 	t.Parallel()
 
-	scanner := bufio.NewScanner(strings.NewReader(""))
-	scanner.Buffer(make([]byte, 0, 1<<20), 1<<20)
+	scanCh := scanChanFromLines() // immediate EOF
 
-	_, err := readResponse(context.Background(), scanner, 1)
+	_, err := readResponse(context.Background(), scanCh, 1)
 	if err == nil {
 		t.Fatal("readResponse() expected error on empty input, got nil")
 	}
@@ -82,10 +78,8 @@ func TestReadResponse_ContextCancelled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	scanner := bufio.NewScanner(strings.NewReader("{\"id\":1,\"result\":{}}\n"))
-	scanner.Buffer(make([]byte, 0, 1<<20), 1<<20)
-
-	_, err := readResponse(ctx, scanner, 1)
+	scanCh := make(chan scanResult) // no sender; ctx.Done() is the only ready case
+	_, err := readResponse(ctx, scanCh, 1)
 	if !errors.Is(err, context.Canceled) {
 		t.Errorf("readResponse() error = %v, want context.Canceled", err)
 	}
@@ -94,14 +88,12 @@ func TestReadResponse_ContextCancelled(t *testing.T) {
 func TestReadResponse_MalformedMessageSkipped(t *testing.T) {
 	t.Parallel()
 
-	fixture := strings.NewReader(
-		"not-valid-json\n" +
-			"{\"id\":1,\"result\":{\"ok\":true}}\n",
+	scanCh := scanChanFromLines(
+		"not-valid-json",
+		`{"id":1,"result":{"ok":true}}`,
 	)
-	scanner := bufio.NewScanner(fixture)
-	scanner.Buffer(make([]byte, 0, 1<<20), 1<<20)
 
-	resp, err := readResponse(context.Background(), scanner, 1)
+	resp, err := readResponse(context.Background(), scanCh, 1)
 	if err != nil {
 		t.Fatalf("readResponse() error = %v", err)
 	}
@@ -167,4 +159,58 @@ func TestStartSession_SSHBinaryNotFound(t *testing.T) {
 		AgentConfig:   domain.AgentConfig{Command: "codex app-server"},
 	})
 	requireAgentError(t, err, domain.ErrAgentNotFound)
+}
+
+func TestReadResponse_ContextCancelledWhileBlocked(t *testing.T) {
+	t.Parallel()
+
+	pr, pw := io.Pipe()
+	t.Cleanup(func() { _ = pr.Close(); _ = pw.Close() })
+
+	scanner := bufio.NewScanner(pr)
+	scanner.Buffer(make([]byte, 0, 1<<20), 1<<20)
+
+	stop := make(chan struct{})
+	t.Cleanup(func() { close(stop) })
+	scanCh := startScannerCh(scanner, stop)
+
+	// Pipe never writes; scanner goroutine blocks in pr.Read(). Only ctx.Done()
+	// will be ready in the select, so the result is deterministic.
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := readResponse(ctx, scanCh, 1)
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("readResponse() = %v, want context.Canceled", err)
+	}
+}
+
+func TestStartScannerCh_NoLeakOnContextCancel(t *testing.T) {
+	t.Parallel()
+
+	pr, pw := io.Pipe()
+	t.Cleanup(func() { _ = pr.Close(); _ = pw.Close() })
+
+	scanner := bufio.NewScanner(pr)
+	scanner.Buffer(make([]byte, 0, 1<<20), 1<<20)
+
+	stop := make(chan struct{})
+	scanCh := startScannerCh(scanner, stop)
+
+	// Close stop to signal the goroutine, then close the write end so that
+	// scanner.Scan unblocks and the goroutine can observe the stop signal.
+	close(stop)
+	_ = pw.Close()
+
+	deadline := time.After(time.Second)
+	for {
+		select {
+		case _, ok := <-scanCh:
+			if !ok {
+				return // channel closed — goroutine exited, no leak
+			}
+		case <-deadline:
+			t.Fatal("startScannerCh goroutine did not exit within 1s after stop closed")
+		}
+	}
 }
