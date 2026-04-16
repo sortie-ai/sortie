@@ -698,7 +698,9 @@ func (a *CodexAdapter) RunTurn(ctx context.Context, session domain.Session, para
 				})
 
 			case "item/tool/call":
-				a.handleToolCall(ctx, state, &toolWg, msg, toolEventCh, logger)
+				if evt := a.handleToolCall(ctx, state, &toolWg, msg, toolEventCh, logger); evt != nil {
+					params.OnEvent(*evt)
+				}
 
 			case "turn/plan/updated":
 				params.OnEvent(domain.AgentEvent{
@@ -725,9 +727,11 @@ func (a *CodexAdapter) RunTurn(ctx context.Context, session domain.Session, para
 // the ToolRegistry. The tool is executed asynchronously to avoid
 // blocking the event read loop. The provided WaitGroup is incremented
 // before launching the goroutine so RunTurn can wait for in-flight
-// tools before returning. Events are sent via toolEventCh so that
-// OnEvent is called exclusively from the RunTurn goroutine.
-func (a *CodexAdapter) handleToolCall(ctx context.Context, state *sessionState, wg *sync.WaitGroup, msg parsedMessage, toolEventCh chan<- domain.AgentEvent, logger *slog.Logger) {
+// tools before returning. Asynchronous tool completion events are sent
+// via toolEventCh. Synchronous early-return events (unsupported tool)
+// are returned directly so the caller can deliver them without risking
+// a channel send from the reader goroutine.
+func (a *CodexAdapter) handleToolCall(ctx context.Context, state *sessionState, wg *sync.WaitGroup, msg parsedMessage, toolEventCh chan<- domain.AgentEvent, logger *slog.Logger) *domain.AgentEvent {
 	now := time.Now().UTC()
 	requestID := msg.Response.ID
 
@@ -737,7 +741,7 @@ func (a *CodexAdapter) handleToolCall(ctx context.Context, state *sessionState, 
 		state.mu.Lock()
 		sendResponse(state, requestID, toolResultFor(false, "invalid tool call params")) //nolint:errcheck,gosec // best-effort error response
 		state.mu.Unlock()
-		return
+		return nil
 	}
 
 	toolName := tc.Tool
@@ -746,13 +750,12 @@ func (a *CodexAdapter) handleToolCall(ctx context.Context, state *sessionState, 
 		state.mu.Lock()
 		sendResponse(state, requestID, toolResultFor(false, fmt.Sprintf("unsupported tool: %s", toolName))) //nolint:errcheck,gosec // best-effort error response
 		state.mu.Unlock()
-		toolEventCh <- domain.AgentEvent{
+		return &domain.AgentEvent{
 			Type:      domain.EventUnsupportedToolCall,
 			Timestamp: now,
 			ToolName:  toolName,
 			Message:   fmt.Sprintf("no tool registry configured for tool %q", toolName),
 		}
-		return
 	}
 
 	tool, found := a.toolRegistry.Get(toolName)
@@ -760,13 +763,12 @@ func (a *CodexAdapter) handleToolCall(ctx context.Context, state *sessionState, 
 		state.mu.Lock()
 		sendResponse(state, requestID, toolResultFor(false, fmt.Sprintf("unsupported tool: %s", toolName))) //nolint:errcheck,gosec // best-effort error response
 		state.mu.Unlock()
-		toolEventCh <- domain.AgentEvent{
+		return &domain.AgentEvent{
 			Type:      domain.EventUnsupportedToolCall,
 			Timestamp: now,
 			ToolName:  toolName,
 			Message:   fmt.Sprintf("tool %q not registered", toolName),
 		}
-		return
 	}
 
 	wg.Add(1)
@@ -801,6 +803,7 @@ func (a *CodexAdapter) handleToolCall(ctx context.Context, state *sessionState, 
 			}
 		}
 	}()
+	return nil
 }
 
 // StopSession terminates the persistent app-server subprocess.
@@ -843,11 +846,9 @@ func (a *CodexAdapter) StopSession(_ context.Context, session domain.Session) er
 				procutil.KillProcessGroup(pid) //nolint:errcheck,gosec // best-effort force kill
 			}
 			// Wait again briefly for cleanup.
-			if waitCh != nil {
-				select {
-				case <-waitCh:
-				case <-time.After(2 * time.Second):
-				}
+			select {
+			case <-waitCh:
+			case <-time.After(2 * time.Second):
 			}
 		}
 	}

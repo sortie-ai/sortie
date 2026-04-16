@@ -499,13 +499,16 @@ func TestHandleToolCall_InvalidParams(t *testing.T) {
 	}
 
 	// Should not panic; writes an error response to stdin (discarded).
-	adapter.handleToolCall(context.Background(), state, &wg, msg, toolEventCh, slog.Default())
+	evt := adapter.handleToolCall(context.Background(), state, &wg, msg, toolEventCh, slog.Default())
 	wg.Wait()
 	close(toolEventCh)
 
 	var events []domain.AgentEvent
-	for evt := range toolEventCh {
-		events = append(events, evt)
+	if evt != nil {
+		events = append(events, *evt)
+	}
+	for e := range toolEventCh {
+		events = append(events, e)
 	}
 
 	// Invalid params: no event emitted (returns early after sendResponse).
@@ -531,13 +534,16 @@ func TestHandleToolCall_NilRegistryEmitsUnsupported(t *testing.T) {
 		},
 	}
 
-	adapter.handleToolCall(context.Background(), state, &wg, msg, toolEventCh, slog.Default())
+	evt := adapter.handleToolCall(context.Background(), state, &wg, msg, toolEventCh, slog.Default())
 	wg.Wait()
 	close(toolEventCh)
 
 	var events []domain.AgentEvent
-	for evt := range toolEventCh {
-		events = append(events, evt)
+	if evt != nil {
+		events = append(events, *evt)
+	}
+	for e := range toolEventCh {
+		events = append(events, e)
 	}
 
 	if e, ok := firstEventOfType(events, domain.EventUnsupportedToolCall); !ok {
@@ -565,13 +571,16 @@ func TestHandleToolCall_ToolNotFound(t *testing.T) {
 		},
 	}
 
-	adapter.handleToolCall(context.Background(), state, &wg, msg, toolEventCh, slog.Default())
+	evt := adapter.handleToolCall(context.Background(), state, &wg, msg, toolEventCh, slog.Default())
 	wg.Wait()
 	close(toolEventCh)
 
 	var events []domain.AgentEvent
-	for evt := range toolEventCh {
-		events = append(events, evt)
+	if evt != nil {
+		events = append(events, *evt)
+	}
+	for e := range toolEventCh {
+		events = append(events, e)
 	}
 
 	if _, ok := firstEventOfType(events, domain.EventUnsupportedToolCall); !ok {
