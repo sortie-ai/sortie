@@ -84,10 +84,12 @@ type sessionState struct {
 	// stdout after the handshake and delivers parsed messages to
 	// RunTurn via msgCh. stopCh is closed by StopSession to unblock
 	// the reader if msgCh is full. readerDone is closed by the reader
-	// when it exits.
+	// when it exits. closeStop guards against double-closing stopCh
+	// when StopSession is called more than once.
 	msgCh      chan parsedMessage
 	readerDone chan struct{}
 	stopCh     chan struct{}
+	closeStop  sync.Once
 }
 
 // NewCodexAdapter creates a [CodexAdapter] from adapter configuration.
@@ -793,9 +795,11 @@ func (a *CodexAdapter) StopSession(_ context.Context, session domain.Session) er
 
 	// Signal the reader goroutine to stop before closing stdin,
 	// preventing it from blocking on a full msgCh during teardown.
-	if state.stopCh != nil {
-		close(state.stopCh)
-	}
+	state.closeStop.Do(func() {
+		if state.stopCh != nil {
+			close(state.stopCh)
+		}
+	})
 
 	// Close stdin to signal EOF to the app-server.
 	state.mu.Lock()
@@ -836,7 +840,11 @@ func (a *CodexAdapter) StopSession(_ context.Context, session domain.Session) er
 		select {
 		case <-state.readerDone:
 		case <-time.After(2 * time.Second):
-			slog.Warn("reader goroutine did not exit after process termination")
+			logger := logging.WithSession(
+				slog.Default().With(slog.String("component", "codex-adapter")),
+				state.threadID,
+			)
+			logger.Warn("reader goroutine did not exit after process termination")
 		}
 	}
 
