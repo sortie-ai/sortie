@@ -1,7 +1,23 @@
-# Sortie
+<p align="center">
+  <img src="docs/assets/banner.jpg" alt="Sortie — Turn tracker tickets into agent sessions" width="100%">
+</p>
+
+<div align="center">
+
+
+**Your next sprint isn't capped by headcount.**
+
+The open-source coding agent orchestrator.<br/>
+Turn tracker tickets into autonomous agent sessions — pick any agent, any tracker, ship without standups.
 
 [![CI](https://github.com/sortie-ai/sortie/actions/workflows/ci.yml/badge.svg)](https://github.com/sortie-ai/sortie/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/sortie-ai/sortie/graph/badge.svg?token=K2TPXBCbvb)](https://codecov.io/gh/sortie-ai/sortie)
+
+[Documentation](https://docs.sortie-ai.com) · [Contributing](CONTRIBUTING.md)
+
+**English | [简体中文](README.zh-CN.md)**
+
+</div>
 
 Sortie turns issue tracker tickets into autonomous coding agent sessions. Engineers manage work at the ticket level. Agents handle implementation. Single binary, zero dependencies, SQLite persistence.
 
