@@ -320,7 +320,8 @@ The response matches `thread/start`. History is restored from the thread's JSONL
 ## Event stream
 
 After `turn/start`, the adapter reads JSONL notifications from stdout until `turn/completed`
-or `turn/failed` is received.
+is received. The `turn/completed` payload carries the final status for both successful and
+failed turns.
 
 ### Turn events
 
@@ -383,15 +384,22 @@ On failure, `turn.error` contains `{message, codexErrorInfo?, additionalDetails?
 
 ## Token usage tracking
 
-Token usage is available from `turn/completed` and `thread/tokenUsage/updated` events.
+On the app-server JSON-RPC surface, token usage is available from `turn/completed`
+and `thread/tokenUsage/updated` notifications.
 
-The `turn/completed` event includes usage in the turn payload:
+The `turn/completed` notification includes usage under `params`:
 
 ```json
-{"type": "turn.completed", "usage": {
-  "input_tokens": 24763,
-  "cached_input_tokens": 24448,
-  "output_tokens": 122
+{"method": "turn/completed", "params": {
+  "turn": {
+    "id": "turn_456",
+    "status": "completed",
+    "usage": {
+      "input_tokens": 24763,
+      "cached_input_tokens": 24448,
+      "output_tokens": 122
+    }
+  }
 }}
 ```
 
@@ -430,7 +438,7 @@ For Sortie's headless operation in sandboxed containers, two approaches:
 
 | Policy           | App-server value    | Behavior                                           |
 | ---------------- | ------------------- | -------------------------------------------------- |
-| Always approve   | `"never"`           | Never ask for approval. Auto-approve everything.   |
+| Never ask        | `"never"`           | Never ask for approval. Auto-approve everything.   |
 | On request       | `"onRequest"`       | Ask only when agent explicitly requests it.        |
 | Unless trusted   | `"unlessTrusted"`   | Ask for untrusted commands.                        |
 | Always ask       | `"always"`          | Ask for every action.                              |
@@ -440,7 +448,7 @@ and `turn/start`. This is equivalent to `--full-auto` or `--ask-for-approval nev
 mode.
 
 > **Security note:** `approvalPolicy: "never"` allows arbitrary command execution within the
-> sandbox boundary. Per OpenAI's guidance, this SHOULD only be used in sandboxed environments.
+> sandbox boundary. Per OpenAI's guidance, this should only be used in sandboxed environments.
 > Sortie's workspace isolation and hook system operate inside that sandbox as additional
 > defense-in-depth, but do not replace external container-level isolation.
 
@@ -573,7 +581,7 @@ The adapter dispatches to the configured `TrackerAdapter`, serializes the result
 }}
 ```
 
-The response MUST include `success` (boolean), `output` (string), and `contentItems` (array).
+The response includes `success` (boolean), `output` (string), and `contentItems` (array).
 This matches the dynamic tool response schema observed in Symphony's implementation.
 
 ---
@@ -648,7 +656,7 @@ If MCP configuration is needed, the adapter writes a temporary `mcp.json` to the
 `.codex/` directory before launching the app-server.
 
 When an enabled MCP server is configured with `required = true` and fails to initialize,
-`thread/start` fails instead of continuing without it. The adapter SHOULD NOT set
+`thread/start` fails instead of continuing without it. The adapter avoids setting
 `required = true` on MCP servers unless they are essential for the workflow.
 
 ---
@@ -811,7 +819,7 @@ issue, preventing this scenario.
 ## Known behavioral notes
 
 - **Git repository required:** Codex requires the working directory to be inside a Git
-  repository. The adapter MUST ensure workspaces are initialized as Git repos (or pass
+  repository. The adapter ensures workspaces are initialized as Git repos (or passes
   `--skip-git-repo-check` if configured). Symphony's workspace manager handles this via a
   `before_run` hook that initializes Git if needed.
 - **Context compaction:** Codex handles context window limits internally via background
