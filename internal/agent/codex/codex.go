@@ -487,10 +487,14 @@ func (a *CodexAdapter) RunTurn(ctx context.Context, session domain.Session, para
 	inFlight := make(map[string]inFlightTool)
 	var usage domain.TokenUsage
 	var toolWg sync.WaitGroup
+	toolEventCh := make(chan domain.AgentEvent, 8)
 	interrupted := false
 
 	for {
 		select {
+		case evt := <-toolEventCh:
+			params.OnEvent(evt)
+
 		case <-ctx.Done():
 			if !interrupted {
 				interrupted = true
@@ -511,7 +515,10 @@ func (a *CodexAdapter) RunTurn(ctx context.Context, session domain.Session, para
 		case msg, ok := <-state.msgCh:
 			if !ok {
 				// Channel closed — subprocess stdout ended.
-				toolWg.Wait()
+				go func() { toolWg.Wait(); close(toolEventCh) }()
+				for evt := range toolEventCh {
+					params.OnEvent(evt)
+				}
 				return domain.TurnResult{
 						SessionID:  state.threadID,
 						ExitReason: domain.EventTurnFailed,
@@ -528,7 +535,10 @@ func (a *CodexAdapter) RunTurn(ctx context.Context, session domain.Session, para
 					Timestamp: now,
 					Message:   msg.Err.Error(),
 				})
-				toolWg.Wait()
+				go func() { toolWg.Wait(); close(toolEventCh) }()
+				for evt := range toolEventCh {
+					params.OnEvent(evt)
+				}
 				return domain.TurnResult{
 						SessionID:  state.threadID,
 						ExitReason: domain.EventTurnFailed,
@@ -594,7 +604,10 @@ func (a *CodexAdapter) RunTurn(ctx context.Context, session domain.Session, para
 						Timestamp: now,
 						Usage:     usage,
 					})
-					toolWg.Wait()
+					go func() { toolWg.Wait(); close(toolEventCh) }()
+					for evt := range toolEventCh {
+						params.OnEvent(evt)
+					}
 					return domain.TurnResult{
 							SessionID:  state.threadID,
 							ExitReason: exitReason,
@@ -616,7 +629,10 @@ func (a *CodexAdapter) RunTurn(ctx context.Context, session domain.Session, para
 					Usage:     usage,
 				})
 
-				toolWg.Wait()
+				go func() { toolWg.Wait(); close(toolEventCh) }()
+				for evt := range toolEventCh {
+					params.OnEvent(evt)
+				}
 				return domain.TurnResult{
 					SessionID:  state.threadID,
 					ExitReason: exitReason,
@@ -682,7 +698,7 @@ func (a *CodexAdapter) RunTurn(ctx context.Context, session domain.Session, para
 				})
 
 			case "item/tool/call":
-				a.handleToolCall(ctx, state, &toolWg, msg, params.OnEvent, logger)
+				a.handleToolCall(ctx, state, &toolWg, msg, toolEventCh, logger)
 
 			case "turn/plan/updated":
 				params.OnEvent(domain.AgentEvent{
@@ -709,8 +725,9 @@ func (a *CodexAdapter) RunTurn(ctx context.Context, session domain.Session, para
 // the ToolRegistry. The tool is executed asynchronously to avoid
 // blocking the event read loop. The provided WaitGroup is incremented
 // before launching the goroutine so RunTurn can wait for in-flight
-// tools before returning.
-func (a *CodexAdapter) handleToolCall(ctx context.Context, state *sessionState, wg *sync.WaitGroup, msg parsedMessage, onEvent func(domain.AgentEvent), logger *slog.Logger) {
+// tools before returning. Events are sent via toolEventCh so that
+// OnEvent is called exclusively from the RunTurn goroutine.
+func (a *CodexAdapter) handleToolCall(ctx context.Context, state *sessionState, wg *sync.WaitGroup, msg parsedMessage, toolEventCh chan<- domain.AgentEvent, logger *slog.Logger) {
 	now := time.Now().UTC()
 	requestID := msg.Response.ID
 
@@ -729,12 +746,12 @@ func (a *CodexAdapter) handleToolCall(ctx context.Context, state *sessionState, 
 		state.mu.Lock()
 		sendResponse(state, requestID, toolResultFor(false, fmt.Sprintf("unsupported tool: %s", toolName))) //nolint:errcheck,gosec // best-effort error response
 		state.mu.Unlock()
-		onEvent(domain.AgentEvent{
+		toolEventCh <- domain.AgentEvent{
 			Type:      domain.EventUnsupportedToolCall,
 			Timestamp: now,
 			ToolName:  toolName,
 			Message:   fmt.Sprintf("no tool registry configured for tool %q", toolName),
-		})
+		}
 		return
 	}
 
@@ -743,12 +760,12 @@ func (a *CodexAdapter) handleToolCall(ctx context.Context, state *sessionState, 
 		state.mu.Lock()
 		sendResponse(state, requestID, toolResultFor(false, fmt.Sprintf("unsupported tool: %s", toolName))) //nolint:errcheck,gosec // best-effort error response
 		state.mu.Unlock()
-		onEvent(domain.AgentEvent{
+		toolEventCh <- domain.AgentEvent{
 			Type:      domain.EventUnsupportedToolCall,
 			Timestamp: now,
 			ToolName:  toolName,
 			Message:   fmt.Sprintf("tool %q not registered", toolName),
-		})
+		}
 		return
 	}
 
@@ -767,21 +784,21 @@ func (a *CodexAdapter) handleToolCall(ctx context.Context, state *sessionState, 
 		state.mu.Unlock()
 
 		if execErr != nil {
-			onEvent(domain.AgentEvent{
+			toolEventCh <- domain.AgentEvent{
 				Type:           domain.EventToolResult,
 				Timestamp:      time.Now().UTC(),
 				ToolName:       toolName,
 				ToolDurationMS: time.Since(start).Milliseconds(),
 				ToolError:      true,
 				Message:        execErr.Error(),
-			})
+			}
 		} else {
-			onEvent(domain.AgentEvent{
+			toolEventCh <- domain.AgentEvent{
 				Type:           domain.EventToolResult,
 				Timestamp:      time.Now().UTC(),
 				ToolName:       toolName,
 				ToolDurationMS: time.Since(start).Milliseconds(),
-			})
+			}
 		}
 	}()
 }

@@ -13,6 +13,7 @@ import (
 	"os"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/sortie-ai/sortie/internal/domain"
 )
@@ -486,7 +487,7 @@ func TestHandleToolCall_InvalidParams(t *testing.T) {
 	adapter := a.(*CodexAdapter)
 	state := makeTestState(nil)
 	var wg sync.WaitGroup
-	var events []domain.AgentEvent
+	toolEventCh := make(chan domain.AgentEvent, 8)
 
 	msg := parsedMessage{
 		IsNotification: true,
@@ -498,10 +499,14 @@ func TestHandleToolCall_InvalidParams(t *testing.T) {
 	}
 
 	// Should not panic; writes an error response to stdin (discarded).
-	adapter.handleToolCall(context.Background(), state, &wg, msg, func(e domain.AgentEvent) {
-		events = append(events, e)
-	}, slog.Default())
+	adapter.handleToolCall(context.Background(), state, &wg, msg, toolEventCh, slog.Default())
 	wg.Wait()
+	close(toolEventCh)
+
+	var events []domain.AgentEvent
+	for evt := range toolEventCh {
+		events = append(events, evt)
+	}
 
 	// Invalid params: no event emitted (returns early after sendResponse).
 	if len(events) != 0 {
@@ -516,7 +521,7 @@ func TestHandleToolCall_NilRegistryEmitsUnsupported(t *testing.T) {
 	adapter := a.(*CodexAdapter)
 	state := makeTestState(nil)
 	var wg sync.WaitGroup
-	var events []domain.AgentEvent
+	toolEventCh := make(chan domain.AgentEvent, 8)
 
 	msg := parsedMessage{
 		IsNotification: true,
@@ -526,10 +531,14 @@ func TestHandleToolCall_NilRegistryEmitsUnsupported(t *testing.T) {
 		},
 	}
 
-	adapter.handleToolCall(context.Background(), state, &wg, msg, func(e domain.AgentEvent) {
-		events = append(events, e)
-	}, slog.Default())
+	adapter.handleToolCall(context.Background(), state, &wg, msg, toolEventCh, slog.Default())
 	wg.Wait()
+	close(toolEventCh)
+
+	var events []domain.AgentEvent
+	for evt := range toolEventCh {
+		events = append(events, evt)
+	}
 
 	if e, ok := firstEventOfType(events, domain.EventUnsupportedToolCall); !ok {
 		t.Fatal("expected EventUnsupportedToolCall with nil registry")
@@ -546,7 +555,7 @@ func TestHandleToolCall_ToolNotFound(t *testing.T) {
 	adapter := a.(*CodexAdapter)
 	state := makeTestState(nil)
 	var wg sync.WaitGroup
-	var events []domain.AgentEvent
+	toolEventCh := make(chan domain.AgentEvent, 8)
 
 	msg := parsedMessage{
 		IsNotification: true,
@@ -556,10 +565,14 @@ func TestHandleToolCall_ToolNotFound(t *testing.T) {
 		},
 	}
 
-	adapter.handleToolCall(context.Background(), state, &wg, msg, func(e domain.AgentEvent) {
-		events = append(events, e)
-	}, slog.Default())
+	adapter.handleToolCall(context.Background(), state, &wg, msg, toolEventCh, slog.Default())
 	wg.Wait()
+	close(toolEventCh)
+
+	var events []domain.AgentEvent
+	for evt := range toolEventCh {
+		events = append(events, evt)
+	}
 
 	if _, ok := firstEventOfType(events, domain.EventUnsupportedToolCall); !ok {
 		t.Fatal("expected EventUnsupportedToolCall for unregistered tool")
@@ -575,7 +588,7 @@ func TestHandleToolCall_ToolSuccess(t *testing.T) {
 	adapter := a.(*CodexAdapter)
 	state := makeTestState(nil)
 	var wg sync.WaitGroup
-	var events []domain.AgentEvent
+	toolEventCh := make(chan domain.AgentEvent, 8)
 
 	msg := parsedMessage{
 		IsNotification: true,
@@ -585,10 +598,14 @@ func TestHandleToolCall_ToolSuccess(t *testing.T) {
 		},
 	}
 
-	adapter.handleToolCall(context.Background(), state, &wg, msg, func(e domain.AgentEvent) {
-		events = append(events, e)
-	}, slog.Default())
+	adapter.handleToolCall(context.Background(), state, &wg, msg, toolEventCh, slog.Default())
 	wg.Wait()
+	close(toolEventCh)
+
+	var events []domain.AgentEvent
+	for evt := range toolEventCh {
+		events = append(events, evt)
+	}
 
 	e, ok := firstEventOfType(events, domain.EventToolResult)
 	if !ok {
@@ -611,7 +628,7 @@ func TestHandleToolCall_ToolError(t *testing.T) {
 	adapter := a.(*CodexAdapter)
 	state := makeTestState(nil)
 	var wg sync.WaitGroup
-	var events []domain.AgentEvent
+	toolEventCh := make(chan domain.AgentEvent, 8)
 
 	msg := parsedMessage{
 		IsNotification: true,
@@ -621,10 +638,14 @@ func TestHandleToolCall_ToolError(t *testing.T) {
 		},
 	}
 
-	adapter.handleToolCall(context.Background(), state, &wg, msg, func(e domain.AgentEvent) {
-		events = append(events, e)
-	}, slog.Default())
+	adapter.handleToolCall(context.Background(), state, &wg, msg, toolEventCh, slog.Default())
 	wg.Wait()
+	close(toolEventCh)
+
+	var events []domain.AgentEvent
+	for evt := range toolEventCh {
+		events = append(events, evt)
+	}
 
 	e, ok := firstEventOfType(events, domain.EventToolResult)
 	if !ok {
@@ -765,11 +786,85 @@ type fakeTool struct {
 	name    string
 	result  json.RawMessage
 	execErr error
+	delay   time.Duration
 }
 
 func (f *fakeTool) Name() string                 { return f.name }
 func (f *fakeTool) Description() string          { return "fake tool for testing" }
 func (f *fakeTool) InputSchema() json.RawMessage { return json.RawMessage(`{}`) }
 func (f *fakeTool) Execute(_ context.Context, _ json.RawMessage) (json.RawMessage, error) {
+	if f.delay > 0 {
+		time.Sleep(f.delay)
+	}
 	return f.result, f.execErr
+}
+
+// --- Race-detection tests ---
+
+func TestHandleToolCall_EventsSerialized(t *testing.T) {
+	t.Parallel()
+
+	reg := domain.NewToolRegistry()
+	reg.Register(&fakeTool{name: "slow_tool", result: json.RawMessage(`"ok"`), delay: time.Millisecond})
+	a, _ := NewCodexAdapter(map[string]any{"tool_registry": reg})
+	adapter := a.(*CodexAdapter)
+	state := makeTestState(nil)
+	var wg sync.WaitGroup
+	toolEventCh := make(chan domain.AgentEvent, 8)
+
+	msg := parsedMessage{
+		IsNotification: true,
+		Response:       rpcResponse{ID: 1},
+		Notification: rpcNotification{
+			Params: json.RawMessage(`{"tool":"slow_tool","arguments":{}}`),
+		},
+	}
+
+	adapter.handleToolCall(context.Background(), state, &wg, msg, toolEventCh, slog.Default())
+	wg.Wait()
+	close(toolEventCh)
+
+	var events []domain.AgentEvent
+	for evt := range toolEventCh {
+		events = append(events, evt)
+	}
+
+	if len(events) != 1 {
+		t.Fatalf("expected 1 event, got %d", len(events))
+	}
+	if events[0].Type != domain.EventToolResult {
+		t.Errorf("event type = %v, want EventToolResult", events[0].Type)
+	}
+}
+
+func TestRunTurn_ToolCallEventSerialization(t *testing.T) {
+	t.Parallel()
+
+	reg := domain.NewToolRegistry()
+	reg.Register(&fakeTool{
+		name:   "create_issue",
+		result: json.RawMessage(`{"id":"42"}`),
+		delay:  time.Millisecond,
+	})
+	state := makeTestState(loadFixture(t, "runturn_tool_call.jsonl"))
+	adapter, _ := NewCodexAdapter(map[string]any{"tool_registry": reg})
+
+	var events []domain.AgentEvent
+	result, err := adapter.RunTurn(context.Background(), fakeSession(state), domain.RunTurnParams{
+		Prompt:  "use tool",
+		OnEvent: collectEvents(&events),
+	})
+
+	if err != nil {
+		t.Fatalf("RunTurn() error = %v", err)
+	}
+	if result.ExitReason != domain.EventTurnCompleted {
+		t.Errorf("ExitReason = %v, want EventTurnCompleted", result.ExitReason)
+	}
+	if _, ok := firstEventOfType(events, domain.EventToolResult); !ok {
+		t.Error("expected EventToolResult, not found")
+	}
+	if _, ok := firstEventOfType(events, domain.EventTokenUsage); !ok {
+		t.Error("expected EventTokenUsage, not found")
+	}
 }
