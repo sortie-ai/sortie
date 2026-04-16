@@ -440,6 +440,7 @@ func (a *CodexAdapter) RunTurn(ctx context.Context, session domain.Session, para
 
 	inFlight := make(map[string]inFlightTool)
 	var usage domain.TokenUsage
+	var toolWg sync.WaitGroup
 	interrupted := false
 
 	for {
@@ -451,12 +452,10 @@ func (a *CodexAdapter) RunTurn(ctx context.Context, session domain.Session, para
 				// request is not dropped by the already-cancelled
 				// parent context.
 				interruptCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-				state.mu.Lock()
 				sendRequest(state, "turn/interrupt", map[string]any{ //nolint:errcheck,gosec // best-effort interrupt
 					"threadId": state.threadID,
 					"turnId":   turnID,
 				})
-				state.mu.Unlock()
 				cancel()
 				_ = interruptCtx
 			}
@@ -466,6 +465,7 @@ func (a *CodexAdapter) RunTurn(ctx context.Context, session domain.Session, para
 		case msg, ok := <-msgCh:
 			if !ok {
 				// Channel closed — subprocess stdout ended.
+				toolWg.Wait()
 				return domain.TurnResult{
 						SessionID:  state.threadID,
 						ExitReason: domain.EventTurnFailed,
@@ -482,6 +482,7 @@ func (a *CodexAdapter) RunTurn(ctx context.Context, session domain.Session, para
 					Timestamp: now,
 					Message:   msg.Err.Error(),
 				})
+				toolWg.Wait()
 				return domain.TurnResult{
 						SessionID:  state.threadID,
 						ExitReason: domain.EventTurnFailed,
@@ -547,6 +548,7 @@ func (a *CodexAdapter) RunTurn(ctx context.Context, session domain.Session, para
 						Timestamp: now,
 						Usage:     usage,
 					})
+					toolWg.Wait()
 					return domain.TurnResult{
 							SessionID:  state.threadID,
 							ExitReason: exitReason,
@@ -568,6 +570,7 @@ func (a *CodexAdapter) RunTurn(ctx context.Context, session domain.Session, para
 					Usage:     usage,
 				})
 
+				toolWg.Wait()
 				return domain.TurnResult{
 					SessionID:  state.threadID,
 					ExitReason: exitReason,
@@ -633,7 +636,7 @@ func (a *CodexAdapter) RunTurn(ctx context.Context, session domain.Session, para
 				})
 
 			case "item/tool/call":
-				a.handleToolCall(ctx, state, msg, params.OnEvent, logger)
+				a.handleToolCall(ctx, state, &toolWg, msg, params.OnEvent, logger)
 
 			case "turn/plan/updated":
 				params.OnEvent(domain.AgentEvent{
@@ -658,8 +661,10 @@ func (a *CodexAdapter) RunTurn(ctx context.Context, session domain.Session, para
 
 // handleToolCall dispatches a dynamic tool call from the app-server to
 // the ToolRegistry. The tool is executed asynchronously to avoid
-// blocking the event read loop.
-func (a *CodexAdapter) handleToolCall(ctx context.Context, state *sessionState, msg parsedMessage, onEvent func(domain.AgentEvent), logger *slog.Logger) {
+// blocking the event read loop. The provided WaitGroup is incremented
+// before launching the goroutine so RunTurn can wait for in-flight
+// tools before returning.
+func (a *CodexAdapter) handleToolCall(ctx context.Context, state *sessionState, wg *sync.WaitGroup, msg parsedMessage, onEvent func(domain.AgentEvent), logger *slog.Logger) {
 	now := time.Now().UTC()
 	requestID := msg.Response.ID
 
@@ -701,15 +706,21 @@ func (a *CodexAdapter) handleToolCall(ctx context.Context, state *sessionState, 
 		return
 	}
 
+	wg.Add(1)
 	go func() {
+		defer wg.Done()
 		start := time.Now()
 		result, execErr := tool.Execute(ctx, tc.Arguments)
 
 		state.mu.Lock()
-		defer state.mu.Unlock()
-
 		if execErr != nil {
 			sendResponse(state, requestID, toolResultFor(false, execErr.Error())) //nolint:errcheck,gosec // best-effort error response
+		} else {
+			sendResponse(state, requestID, toolResultFor(true, string(result))) //nolint:errcheck,gosec // best-effort success response
+		}
+		state.mu.Unlock()
+
+		if execErr != nil {
 			onEvent(domain.AgentEvent{
 				Type:           domain.EventToolResult,
 				Timestamp:      time.Now().UTC(),
@@ -718,16 +729,14 @@ func (a *CodexAdapter) handleToolCall(ctx context.Context, state *sessionState, 
 				ToolError:      true,
 				Message:        execErr.Error(),
 			})
-			return
+		} else {
+			onEvent(domain.AgentEvent{
+				Type:           domain.EventToolResult,
+				Timestamp:      time.Now().UTC(),
+				ToolName:       toolName,
+				ToolDurationMS: time.Since(start).Milliseconds(),
+			})
 		}
-
-		sendResponse(state, requestID, toolResultFor(true, string(result))) //nolint:errcheck,gosec // best-effort success response
-		onEvent(domain.AgentEvent{
-			Type:           domain.EventToolResult,
-			Timestamp:      time.Now().UTC(),
-			ToolName:       toolName,
-			ToolDurationMS: time.Since(start).Milliseconds(),
-		})
 	}()
 }
 

@@ -13,11 +13,14 @@ import (
 )
 
 // sendRequest writes a JSON-RPC request to the app-server stdin.
-// The caller must hold state.mu when concurrent writes are possible.
-// Returns the request ID used.
+// It acquires state.mu internally to protect both the request ID
+// counter and the stdin write. Callers must not hold state.mu.
 func sendRequest(state *sessionState, method string, params any) (int64, error) {
+	state.mu.Lock()
 	state.nextRequestID++
 	id := state.nextRequestID
+	state.mu.Unlock()
+
 	req := rpcRequest{
 		Method: method,
 		ID:     id,
