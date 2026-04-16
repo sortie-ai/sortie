@@ -1,0 +1,5 @@
+{"id":1,"result":{"turn":{"id":"turn-001","status":"starting"}}}
+{"method":"turn/started","params":{"turnId":"turn-001"}}
+{"method":"item/started","params":{"item":{"id":"item-001","type":"commandExecution","command":"ls -la"}}}
+{"method":"item/completed","params":{"item":{"id":"item-001","type":"commandExecution","status":"completed"}}}
+{"method":"turn/completed","params":{"turn":{"id":"turn-001","status":"completed"},"usage":{"input_tokens":80,"output_tokens":20,"cached_input_tokens":0}}}

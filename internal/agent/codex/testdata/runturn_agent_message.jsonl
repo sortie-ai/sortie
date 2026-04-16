@@ -1,0 +1,4 @@
+{"id":1,"result":{"turn":{"id":"turn-001","status":"starting"}}}
+{"method":"turn/started","params":{"turnId":"turn-001"}}
+{"method":"item/completed","params":{"item":{"id":"item-001","type":"agentMessage","text":"Here is my analysis of the code.","status":"completed"}}}
+{"method":"turn/completed","params":{"turn":{"id":"turn-001","status":"completed"},"usage":{"input_tokens":50,"output_tokens":20,"cached_input_tokens":0}}}

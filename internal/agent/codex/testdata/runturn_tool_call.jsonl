@@ -1,0 +1,4 @@
+{"id":1,"result":{"turn":{"id":"turn-001","status":"starting"}}}
+{"method":"turn/started","params":{"turnId":"turn-001"}}
+{"id":99,"method":"item/tool/call","params":{"tool":"create_issue","arguments":{"title":"Bug","description":"Details"}}}
+{"method":"turn/completed","params":{"turn":{"id":"turn-001","status":"completed"},"usage":{"input_tokens":60,"output_tokens":30,"cached_input_tokens":0}}}
