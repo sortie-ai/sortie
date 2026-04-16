@@ -45,14 +45,14 @@ script — this prevents duplicate numbers when multiple ADRs are created in par
 **No number assigned** (standalone use):
 
 ```bash
-bash scripts/next_adr_number.sh
+bash .github/skills/managing-adrs/scripts/next_adr_number.sh
 # Output: 0004
 ```
 
 For batch allocation (multiple ADRs in one session):
 
 ```bash
-bash scripts/next_adr_number.sh --count 3
+bash .github/skills/managing-adrs/scripts/next_adr_number.sh --count 3
 # Output:
 # 0004
 # 0005
