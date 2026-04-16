@@ -1,0 +1,2 @@
+{"id":4,"result":{"thread":{"id":"thread-abc-123","status":"active"}}}
+{"method":"thread/started","params":{"threadId":"thread-abc-123"}}

@@ -1,0 +1,5 @@
+{"id":5,"result":{"turn":{"id":"turn-001","status":"starting"}}}
+{"method":"turn/started","params":{"turnId":"turn-001"}}
+{"method":"item/started","params":{"item":{"id":"item-001","type":"agentMessage"}}}
+{"method":"item/completed","params":{"item":{"id":"item-001","type":"agentMessage","text":"Task completed successfully.","status":"completed"}}}
+{"method":"turn/completed","params":{"turn":{"id":"turn-001","status":"completed"},"usage":{"input_tokens":100,"output_tokens":50,"cached_input_tokens":10}}}

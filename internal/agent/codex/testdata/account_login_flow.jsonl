@@ -1,0 +1,3 @@
+{"id":2,"result":{"account":null}}
+{"id":3,"result":{"success":true}}
+{"method":"account/login/completed","params":{"success":true}}
