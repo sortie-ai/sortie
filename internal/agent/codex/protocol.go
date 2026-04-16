@@ -321,6 +321,9 @@ func startThread(ctx context.Context, state *sessionState, scanner *bufio.Scanne
 		default:
 		}
 		if !scanner.Scan() {
+			if scanErr := scanner.Err(); scanErr != nil {
+				slog.Debug("scanner error waiting for thread/started", slog.Any("error", scanErr))
+			}
 			return threadID, nil
 		}
 		msg := parseMessage(scanner.Bytes())
@@ -377,9 +380,10 @@ func buildDynamicTools(tools []domain.AgentTool) []map[string]any {
 }
 
 // buildSandboxPolicy constructs the sandboxPolicy for turn/start.
-// writableRoots is always set to the workspace path. networkAccess
-// defaults to false. Operator overrides from TurnSandboxPolicy are
-// merged on top.
+// writableRoots defaults to the workspace path and networkAccess
+// defaults to false. Operator overrides from TurnSandboxPolicy
+// (WORKFLOW.md turn_sandbox_policy) are merged on top and may
+// replace any key, including writableRoots and networkAccess.
 func buildSandboxPolicy(state *sessionState, pt passthroughConfig) map[string]any {
 	sandboxType := pt.ThreadSandbox
 	if sandboxType == "" {
