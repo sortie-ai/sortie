@@ -1,1 +1,1 @@
-/home/ubuntu/work/sortie/AGENTS.md
+@AGENTS.md
