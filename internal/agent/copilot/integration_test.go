@@ -38,7 +38,7 @@ func skipUnlessCopilotIntegration(t *testing.T) {
 func integrationConfig() map[string]any {
 	model := os.Getenv("SORTIE_COPILOT_MODEL")
 	if model == "" {
-		model = "gpt-4.1-nano"
+		model = "gpt-4.1"
 	}
 	return map[string]any{
 		"max_autopilot_continues": float64(5),
