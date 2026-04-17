@@ -11,6 +11,7 @@ Build an agent-specific image from the repository root:
 
 ```sh
 docker build -f examples/docker/claude-code.Dockerfile -t sortie-claude .
+docker build -f examples/docker/codex.Dockerfile -t sortie-codex .
 docker build -f examples/docker/copilot.Dockerfile -t sortie-copilot .
 ```
 
@@ -30,6 +31,7 @@ docker run --rm --init \
 | File | Agent | Base image |
 |---|---|---|
 | `claude-code.Dockerfile` | Claude Code | `node:24-slim` |
+| `codex.Dockerfile` | OpenAI Codex CLI | `debian:bookworm-slim` |
 | `copilot.Dockerfile` | GitHub Copilot | `node:24-slim` |
 
 Each Dockerfile follows the same pattern: copy the Sortie binary from the
