@@ -264,6 +264,44 @@ jobs:
       - name: Run integration tests
         run: go test -race -count=1 -v -timeout 300s -run 'Integration' ./internal/agent/copilot/...
 
+  test-integration-codex:
+    name: "Integration: OpenAI Codex"
+    needs: [lint, test-unit]
+    runs-on: ubuntu-latest
+    env:
+      SORTIE_CODEX_TEST: "1"
+      CODEX_API_KEY: ${{ secrets.CODEX_API_KEY }}
+    steps:
+      - name: Verify Codex secrets are configured
+        run: |
+          missing=()
+          [ -z "$CODEX_API_KEY" ] && missing+=("CODEX_API_KEY")
+          if [ ${#missing[@]} -ne 0 ]; then
+            echo "::error::Missing required secrets: ${missing[*]}"
+            echo "Configure these in Settings → Secrets and variables → Actions"
+            exit 1
+          fi
+          echo "✓ All Codex secrets are present"
+
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Set up Go
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version-file: go.mod
+
+      - name: Set up Node.js
+        uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f # v6.3.0
+        with:
+          node-version: "22"
+
+      - name: Install GitHub Copilot CLI
+        run: npm install -g @openai/codex
+
+      - name: Run integration tests
+        run: go test -race -count=1 -v -timeout 300s -run 'Integration' ./internal/agent/codex/...
+
   release:
     name: Tag & Release
     needs:
@@ -274,6 +312,7 @@ jobs:
       - test-e2e-github
       - test-integration-claude
       - test-integration-copilot
+      - test-integration-codex
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
