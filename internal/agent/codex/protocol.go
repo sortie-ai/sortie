@@ -303,9 +303,9 @@ func startThread(ctx context.Context, state *sessionState, scanCh <-chan scanRes
 		approvalPolicy = "never"
 	}
 
-	sandbox := pt.ThreadSandbox
+	sandbox := normalizeSandbox(pt.ThreadSandbox)
 	if sandbox == "" {
-		sandbox = "workspaceWrite"
+		sandbox = "workspace-write"
 	}
 
 	params := map[string]any{
@@ -425,7 +425,7 @@ func buildDynamicTools(tools []domain.AgentTool) []map[string]any {
 // (WORKFLOW.md turn_sandbox_policy) are merged on top and may
 // replace any key, including writableRoots and networkAccess.
 func buildSandboxPolicy(state *sessionState, pt passthroughConfig) map[string]any {
-	sandboxType := pt.ThreadSandbox
+	sandboxType := denormalizeSandbox(pt.ThreadSandbox)
 	if sandboxType == "" {
 		sandboxType = "workspaceWrite"
 	}
@@ -442,6 +442,43 @@ func buildSandboxPolicy(state *sessionState, pt passthroughConfig) map[string]an
 		}
 	}
 	return policy
+}
+
+// normalizeSandbox maps user-friendly camelCase sandbox values from
+// WORKFLOW.md to the kebab-case wire format expected by the app-server
+// thread/start sandbox field. Values already in kebab-case are passed
+// through unchanged.
+func normalizeSandbox(s string) string {
+	switch s {
+	case "workspaceWrite":
+		return "workspace-write"
+	case "readOnly":
+		return "read-only"
+	case "dangerFullAccess":
+		return "danger-full-access"
+	case "externalSandbox":
+		return "external-sandbox"
+	default:
+		return s
+	}
+}
+
+// denormalizeSandbox maps kebab-case sandbox values to the camelCase wire
+// format expected by the app-server turn/start sandboxPolicy.type field.
+// Values already in camelCase are passed through unchanged.
+func denormalizeSandbox(s string) string {
+	switch s {
+	case "workspace-write":
+		return "workspaceWrite"
+	case "read-only":
+		return "readOnly"
+	case "danger-full-access":
+		return "dangerFullAccess"
+	case "external-sandbox":
+		return "externalSandbox"
+	default:
+		return s
+	}
 }
 
 // readTimeout returns the read timeout duration from the agent config,

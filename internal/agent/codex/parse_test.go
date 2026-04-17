@@ -461,6 +461,62 @@ func TestBuildDynamicTools(t *testing.T) {
 	})
 }
 
+func TestNormalizeSandbox(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"workspaceWrite", "workspace-write"},
+		{"readOnly", "read-only"},
+		{"dangerFullAccess", "danger-full-access"},
+		{"externalSandbox", "external-sandbox"},
+		{"workspace-write", "workspace-write"},
+		{"read-only", "read-only"},
+		{"", ""},
+		{"custom-value", "custom-value"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			t.Parallel()
+			got := normalizeSandbox(tt.input)
+			if got != tt.want {
+				t.Errorf("normalizeSandbox(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestDenormalizeSandbox(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"workspace-write", "workspaceWrite"},
+		{"read-only", "readOnly"},
+		{"danger-full-access", "dangerFullAccess"},
+		{"external-sandbox", "externalSandbox"},
+		{"workspaceWrite", "workspaceWrite"},
+		{"readOnly", "readOnly"},
+		{"", ""},
+		{"custom-value", "custom-value"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			t.Parallel()
+			got := denormalizeSandbox(tt.input)
+			if got != tt.want {
+				t.Errorf("denormalizeSandbox(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestBuildSandboxPolicy_Default(t *testing.T) {
 	t.Parallel()
 
