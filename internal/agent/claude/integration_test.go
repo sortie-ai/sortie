@@ -26,13 +26,14 @@ func skipUnlessIntegration(t *testing.T) {
 // repeated test runs.
 func integrationConfig(t *testing.T) map[string]any {
 	t.Helper()
-	cfg := map[string]any{
+	model := os.Getenv("SORTIE_CLAUDE_MODEL")
+	if model == "" {
+		model = "claude-haiku-4-5"
+	}
+	return map[string]any{
 		"session_persistence": false,
+		"model":               model,
 	}
-	if model := os.Getenv("SORTIE_CLAUDE_MODEL"); model != "" {
-		cfg["model"] = model
-	}
-	return cfg
 }
 
 // integrationCommand returns the Claude Code binary path from the

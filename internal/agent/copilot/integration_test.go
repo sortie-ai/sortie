@@ -36,13 +36,14 @@ func skipUnlessCopilotIntegration(t *testing.T) {
 
 // integrationConfig builds the adapter config map for integration tests.
 func integrationConfig() map[string]any {
-	cfg := map[string]any{
+	model := os.Getenv("SORTIE_COPILOT_MODEL")
+	if model == "" {
+		model = "claude-haiku-4-5"
+	}
+	return map[string]any{
 		"max_autopilot_continues": float64(5),
+		"model":                   model,
 	}
-	if model := os.Getenv("SORTIE_COPILOT_MODEL"); model != "" {
-		cfg["model"] = model
-	}
-	return cfg
 }
 
 // integrationCommand returns the Copilot CLI binary path from the
