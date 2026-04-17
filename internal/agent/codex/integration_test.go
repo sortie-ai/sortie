@@ -19,6 +19,7 @@ import (
 	"errors"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -270,7 +271,7 @@ func TestIntegration_RunTurn(t *testing.T) {
 
 	adapter := mustNewAdapter(t)
 	workspace := gitInitWorkspace(t)
-	if err := os.WriteFile(workspace+"/hello.txt", []byte("Hello"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(workspace, "hello.txt"), []byte("Hello"), 0o644); err != nil {
 		t.Fatalf("WriteFile: %v", err)
 	}
 
@@ -419,7 +420,9 @@ func TestIntegration_MultiTurn(t *testing.T) {
 
 	session := mustStartSession(t, ctx, adapter, workspace)
 	state := session.Internal.(*sessionState)
+	state.mu.Lock()
 	pidAfterStart := state.proc.Pid
+	state.mu.Unlock()
 
 	// Turn 1: must emit EventSessionStarted and complete successfully.
 	onEvent1, collected1 := makeEventCollector(t)

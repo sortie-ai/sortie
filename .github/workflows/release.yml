@@ -296,7 +296,7 @@ jobs:
         with:
           node-version: "22"
 
-      - name: Install GitHub Copilot CLI
+      - name: Install OpenAI Codex CLI
         run: npm install -g @openai/codex
 
       - name: Run integration tests
