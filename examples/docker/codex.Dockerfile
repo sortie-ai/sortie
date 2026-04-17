@@ -27,8 +27,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Install Codex CLI. The Rust binary is statically linked and does not
 # require Node.js.
-RUN curl -fsSL https://github.com/openai/codex/releases/latest/download/codex-linux-$(dpkg --print-architecture).tar.gz \
-    | tar -xz -C /usr/local/bin codex && \
+RUN set -eux; \
+    debian_arch="$(dpkg --print-architecture)"; \
+    case "${debian_arch}" in \
+    amd64) codex_arch="x86_64-unknown-linux-musl" ;; \
+    arm64) codex_arch="aarch64-unknown-linux-musl" ;; \
+    *) echo "unsupported Codex architecture: ${debian_arch}" >&2; exit 1 ;; \
+    esac; \
+    curl -fsSL "https://github.com/openai/codex/releases/latest/download/codex-${codex_arch}.tar.gz" \
+    | tar -xz -C /usr/local/bin codex; \
     chmod +x /usr/local/bin/codex
 
 # Create a non-root user.
