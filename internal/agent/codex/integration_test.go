@@ -8,6 +8,7 @@
 // Optional environment variables:
 //
 //	SORTIE_CODEX_COMMAND    override the default "codex app-server" binary command
+//	SORTIE_CODEX_MODEL      override the default "gpt-5.4-nano" model
 //
 // Run:
 //

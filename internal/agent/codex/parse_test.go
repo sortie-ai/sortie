@@ -479,7 +479,11 @@ func TestNormalizeSandbox(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		t.Run(tt.input, func(t *testing.T) {
+		name := tt.input
+		if name == "" {
+			name = "empty"
+		}
+		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			got := normalizeSandbox(tt.input)
 			if got != tt.want {
@@ -507,7 +511,11 @@ func TestDenormalizeSandbox(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		t.Run(tt.input, func(t *testing.T) {
+		name := tt.input
+		if name == "" {
+			name = "empty"
+		}
+		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 			got := denormalizeSandbox(tt.input)
 			if got != tt.want {
