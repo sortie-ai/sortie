@@ -226,7 +226,7 @@ Then:
   "model": "gpt-5.4",
   "cwd": "/var/sortie/workspaces/PROJ-123",
   "approvalPolicy": "never",
-  "sandbox": "workspaceWrite",
+  "sandbox": "workspace-write",
   "dynamicTools": [
     {
       "name": "tracker_api",
@@ -420,12 +420,16 @@ Normalization to Sortie's `{input_tokens, output_tokens, total_tokens}`:
 
 Codex enforces OS-level sandboxing (Seatbelt on macOS, bwrap + seccomp on Linux).
 
-| Sandbox mode          | `sandboxPolicy.type`  | Description                                    |
-| --------------------- | --------------------- | ---------------------------------------------- |
-| Read-only             | `readOnly`            | No file writes, no network.                    |
-| Workspace write       | `workspaceWrite`      | Writes allowed within workspace root. No network by default. |
-| Danger full access    | `dangerFullAccess`    | No sandbox. Full filesystem and network access. |
-| External sandbox      | `externalSandbox`     | Codex skips its sandbox; external enforcement assumed. |
+| Sandbox mode          | `thread/start` sandbox | `sandboxPolicy.type` | Description                                    |
+| --------------------- | ---------------------- | -------------------- | ---------------------------------------------- |
+| Read-only             | `read-only`            | `readOnly`           | No file writes, no network.                    |
+| Workspace write       | `workspace-write`      | `workspaceWrite`     | Writes allowed within workspace root. No network by default. |
+| Danger full access    | `danger-full-access`   | `dangerFullAccess`   | No sandbox. Full filesystem and network access. |
+| External sandbox      | `external-sandbox`     | `externalSandbox`    | Codex skips its sandbox; external enforcement assumed. |
+
+The app-server uses **kebab-case** for the `sandbox` field on `thread/start` and **camelCase**
+for `sandboxPolicy.type` on `turn/start`. The adapter's WORKFLOW.md config (`thread_sandbox`)
+accepts camelCase values and translates to the correct wire format for each endpoint.
 
 For Sortie's headless operation in sandboxed containers, two approaches:
 
@@ -747,7 +751,7 @@ $ codex app-server
 ← {"id":2,"result":{"account":{"type":"apiKey"},"requiresOpenaiAuth":false}}
 
 # 4. Start thread
-→ {"method":"thread/start","id":10,"params":{"model":"gpt-5.4","cwd":"/var/sortie/workspaces/PROJ-123","approvalPolicy":"never","sandbox":"workspaceWrite","dynamicTools":[{"name":"tracker_api","description":"Issue tracker operations","inputSchema":{"type":"object","required":["operation"],"properties":{"operation":{"type":"string"},"issue_id":{"type":"string"},"target_state":{"type":"string"}}}}]}}
+→ {"method":"thread/start","id":10,"params":{"model":"gpt-5.4","cwd":"/var/sortie/workspaces/PROJ-123","approvalPolicy":"never","sandbox":"workspace-write","dynamicTools":[{"name":"tracker_api","description":"Issue tracker operations","inputSchema":{"type":"object","required":["operation"],"properties":{"operation":{"type":"string"},"issue_id":{"type":"string"},"target_state":{"type":"string"}}}}]}}
 ← {"id":10,"result":{"thread":{"id":"thr_abc123"}}}
 ← {"method":"thread/started","params":{"thread":{"id":"thr_abc123"}}}
 
