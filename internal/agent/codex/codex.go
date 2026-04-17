@@ -457,7 +457,11 @@ func (a *CodexAdapter) RunTurn(ctx context.Context, session domain.Session, para
 	}
 
 	// Wait for the turn/start response from the session-scoped reader.
+	// Buffer any notifications (e.g. turn/started) that arrive before the
+	// response so they are not lost — they are replayed into the event
+	// loop below.
 	var turnStartResp rpcResponse
+	var buffered []parsedMessage
 	for turnStartResp.ID == 0 {
 		select {
 		case <-ctx.Done():
@@ -479,6 +483,8 @@ func (a *CodexAdapter) RunTurn(ctx context.Context, session domain.Session, para
 			}
 			if msg.IsResponse && msg.Response.ID == id {
 				turnStartResp = msg.Response
+			} else {
+				buffered = append(buffered, msg)
 			}
 		}
 	}
@@ -503,6 +509,42 @@ func (a *CodexAdapter) RunTurn(ctx context.Context, session domain.Session, para
 	var toolWg sync.WaitGroup
 	toolEventCh := make(chan domain.AgentEvent, 8)
 	interrupted := false
+
+	// Replay buffered notifications (received during the response-waiting
+	// loop above) before entering the main event loop. These are
+	// typically turn/started notifications that arrived before the
+	// turn/start response.
+	for _, m := range buffered {
+		if !m.IsNotification {
+			continue
+		}
+		now := time.Now().UTC()
+		method := m.Notification.Method
+		switch method {
+		case "turn/started":
+			if state.turnCount == 1 {
+				params.OnEvent(domain.AgentEvent{
+					Type:      domain.EventSessionStarted,
+					Timestamp: now,
+					SessionID: state.threadID,
+					AgentPID:  session.AgentPID,
+					Message:   "session started",
+				})
+			} else {
+				params.OnEvent(domain.AgentEvent{
+					Type:      domain.EventNotification,
+					Timestamp: now,
+					Message:   "turn started",
+				})
+			}
+		default:
+			params.OnEvent(domain.AgentEvent{
+				Type:      domain.EventNotification,
+				Timestamp: now,
+				Message:   method,
+			})
+		}
+	}
 
 	for {
 		select {
