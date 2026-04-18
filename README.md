@@ -19,7 +19,7 @@ Turn tracker tickets into autonomous agent sessions. Agent-agnostic, tracker-agn
 
 </div>
 
-Sortie assumes your coding agent already produces useful results when you run it manually. It handles scheduling, retry, isolation, and persistence around that agent. It does not improve the agent's output.
+Sortie assumes your coding agent already produces useful results when you run it manually. Around that agent it handles parallel scheduling, isolated workspaces, persistent state with retry, CI feedback, review comments, and cost tracking. Sortie does not improve the agent's output.
 
 ## Install
 
