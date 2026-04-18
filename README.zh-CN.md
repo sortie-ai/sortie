@@ -8,7 +8,7 @@
 **下一个迭代，不再受限于人力。**
 
 开源编程智能体编排器。<br/>
-将工单系统中的工单转化为自主编程智能体会话——自由选择智能体和工单系统，无需站会即可交付。
+将工单系统中的工单转化为自主编程智能体会话。智能体无关，工单系统无关，并行运行。
 
 [![CI](https://github.com/sortie-ai/sortie/actions/workflows/ci.yml/badge.svg)](https://github.com/sortie-ai/sortie/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/sortie-ai/sortie/graph/badge.svg?token=K2TPXBCbvb)](https://codecov.io/gh/sortie-ai/sortie)
@@ -19,9 +19,7 @@
 
 </div>
 
-Sortie 将工单系统中的工单转化为自主编程智能体会话。工程师在工单层面管理工作，智能体负责具体实现。单一二进制文件，零依赖，SQLite 持久化。
-
-Sortie 假定你的编程智能体在手动运行时已经能够产出有价值的成果。它负责处理调度、重试、隔离和持久化等围绕智能体的基础设施——而非提升智能体本身的输出质量。
+Sortie 假定你的编程智能体在手动运行时已经能够产出有价值的成果。它负责处理调度、重试、隔离和持久化等围绕智能体的基础设施。它不会提升智能体本身的输出质量。
 
 ## 安装
 

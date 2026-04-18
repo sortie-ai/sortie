@@ -8,7 +8,7 @@
 **Your next sprint isn't capped by headcount.**
 
 The open-source coding agent orchestrator.<br/>
-Turn tracker tickets into autonomous agent sessions — pick any agent, any tracker, ship without standups.
+Turn tracker tickets into autonomous agent sessions. Agent-agnostic, tracker-agnostic. Run in parallel.
 
 [![CI](https://github.com/sortie-ai/sortie/actions/workflows/ci.yml/badge.svg)](https://github.com/sortie-ai/sortie/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/sortie-ai/sortie/graph/badge.svg?token=K2TPXBCbvb)](https://codecov.io/gh/sortie-ai/sortie)
@@ -19,9 +19,7 @@ Turn tracker tickets into autonomous agent sessions — pick any agent, any trac
 
 </div>
 
-Sortie turns issue tracker tickets into autonomous coding agent sessions. Engineers manage work at the ticket level. Agents handle implementation. Single binary, zero dependencies, SQLite persistence.
-
-Sortie assumes your coding agent already produces useful results when you run it manually. It handles scheduling, retry, isolation, and persistence around that agent — it does not improve the agent's output.
+Sortie assumes your coding agent already produces useful results when you run it manually. It handles scheduling, retry, isolation, and persistence around that agent. It does not improve the agent's output.
 
 ## Install
 
