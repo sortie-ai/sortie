@@ -7,20 +7,19 @@ description: >
 argument-hint: Specify the source code file or module to test
 model: Claude Sonnet 4.6 (copilot)
 tools:
-  - execute/runInTerminal
   - execute/getTerminalOutput
-  - execute/testFailure
+  - execute/killTerminal
+  - execute/runInTerminal
   - read/readFile
-  - read/problems
-  - read/terminalLastCommand
-  - edit/createFile
   - edit/createDirectory
+  - edit/createFile
   - edit/editFiles
   - search/codebase
   - search/fileSearch
   - search/listDirectory
   - search/textSearch
   - search/usages
+  - todo
   - context7/*
 ---
 

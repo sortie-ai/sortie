@@ -9,10 +9,12 @@ description: >
   planning — use the individual agents directly for those tasks.
 argument-hint: Describe the feature or problem to specify
 tools:
-  - execute
+  - execute/getTerminalOutput
+  - execute/killTerminal
+  - execute/runInTerminal
+  - read/readFile
   - web
   - agent
-  - read
   - search
   - web
   - todo

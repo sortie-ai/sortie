@@ -12,18 +12,20 @@ description: >
   "research X", "investigate", "deep dive", "break down", or similar in any language.
 argument-hint: "What technology or concept do you want to understand?"
 model:
+  - GPT-5.4 (copilot)
   - Claude Opus 4.6 (copilot)
   - Gemini 3.1 Pro (Preview) (copilot)
-  - Claude Sonnet 4.5 (copilot)
 tools:
-  - web
-  - read
-  - search
-  - context7/*
   - execute/getTerminalOutput
   - execute/killTerminal
-  - execute/sendToTerminal
   - execute/runInTerminal
+  - read/readFile
+  - edit/createDirectory
+  - edit/createFile
+  - edit/editFiles
+  - web
+  - search
+  - context7/*
 ---
 
 # Deep Research Agent

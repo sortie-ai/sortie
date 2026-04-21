@@ -7,26 +7,17 @@ description: >
 argument-hint: Specify the execution plan step or file to implement
 model: Claude Opus 4.6 (copilot)
 tools:
-  - execute
-  - read
-  - edit
+  - execute/getTerminalOutput
+  - execute/killTerminal
+  - execute/runInTerminal
+  - read/readFile
+  - edit/createDirectory
+  - edit/createFile
+  - edit/editFiles
   - todo
   - search
   - web
   - context7/*
-  -  "com.atlassian/atlassian-mcp-server/fetch"
-  -  "com.atlassian/atlassian-mcp-server/getConfluencePage"
-  -  "com.atlassian/atlassian-mcp-server/getConfluencePageDescendants"
-  -  "com.atlassian/atlassian-mcp-server/getConfluenceSpaces"
-  -  "com.atlassian/atlassian-mcp-server/getJiraIssue"
-  -  "com.atlassian/atlassian-mcp-server/getJiraIssueRemoteIssueLinks"
-  -  "com.atlassian/atlassian-mcp-server/getJiraIssueTypeMetaWithFields"
-  -  "com.atlassian/atlassian-mcp-server/getJiraProjectIssueTypesMetadata"
-  -  "com.atlassian/atlassian-mcp-server/getPagesInConfluenceSpace"
-  -  "com.atlassian/atlassian-mcp-server/getVisibleJiraProjects"
-  -  "com.atlassian/atlassian-mcp-server/search"
-  -  "com.atlassian/atlassian-mcp-server/searchConfluenceUsingCql"
-  -  "com.atlassian/atlassian-mcp-server/searchJiraIssuesUsingJql"
 ---
 
 ## Role

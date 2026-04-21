@@ -11,14 +11,15 @@ description: >
   the individual agents directly for those tasks.
 argument-hint: Plan path, issue reference, or feature description
 tools:
-  - execute
+  - execute/getTerminalOutput
+  - execute/killTerminal
+  - execute/runInTerminal
+  - read/readFile
   - agent
-  - read
   - search
   - web
   - todo
   - context7/*
-  - "com.atlassian/atlassian-mcp-server/getJiraIssue"
 agents:
   - Coder
   - Tester

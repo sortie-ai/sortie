@@ -10,8 +10,10 @@ description: >
 argument-hint: Outline the goal or problem to plan
 model: Claude Sonnet 4.6 (copilot)
 tools:
-  - read
-  - edit
+  - read/readFile
+  - edit/createDirectory
+  - edit/createFile
+  - edit/editFiles
   - search
 ---
 
