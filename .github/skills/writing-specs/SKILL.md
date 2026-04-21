@@ -57,7 +57,7 @@ Use the template from [assets/spec-template.md](assets/spec-template.md) as the 
 5. **Risk Assessment** — identify risks with severity and mitigation. Security boundaries (workspace path containment, key sanitization, cwd validation) are always relevant when the feature touches workspace or filesystem operations.
 6. **File Structure Summary** — tree view of new/modified files with architecture layer annotations.
 
-Write the spec to `.specs/Spec-{TASK_NAME_OR_JIRA_ID}.md`.
+Write the spec to `.specs/Spec-{TASK_NAME}.md`.
 
 - Derive `TASK_NAME` as concise kebab-case from the feature request.
 - If a Jira ID is provided (e.g., `SORT-42`), use it: `Spec-SORT-42.md`.
