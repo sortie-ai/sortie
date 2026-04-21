@@ -46,7 +46,7 @@ A good plan is the compiled form of a spec: it removes ambiguity, sequences depe
 
 Before drafting, confirm you have:
 
-1. **A specification source.** Typically `.specs/Spec-{NAME}.md`, but may be a Jira issue, GitHub issue, or feature description pasted inline. If only a one-line request is given, stop and ask for the spec. Do not plan from assumptions.
+1. **A specification source.** Typically `.specs/Spec-{TASK_NAME}.md`, but may be a Jira issue, GitHub issue, or feature description pasted inline. If only a one-line request is given, stop and ask for the spec. Do not plan from assumptions.
 2. **The relevant sections of `docs/architecture.md`.** Every non-trivial step must trace back to an architecture section. If you cannot cite a section for a step, either the spec is wrong or the step is speculative.
 3. **The current file tree.** Run `tree -d -L 3 internal/` (or equivalent) to know where new code belongs before assigning file paths.
 
@@ -61,7 +61,7 @@ Copy this checklist into your response and mark items as you go. Each gate exist
 - [ ] Step 3 — Draft atomic steps using the template
 - [ ] Step 4 — Attach constraint checks per phase
 - [ ] Step 5 — Verify against the philosophy checklist
-- [ ] Step 6 — Write to `.plans/Plan-{NAME}.md` and report the path
+- [ ] Step 6 — Write to `.plans/Plan-{TASK_NAME}.md` and report the path
 
 ### Step 1 — Read spec, architecture refs, and file tree
 
@@ -113,7 +113,7 @@ At minimum, confirm:
 
 ### Step 6 — Write the file and report the path
 
-Write the plan to `.plans/Plan-{NAME}.md`. Derive `{NAME}`:
+Write the plan to `.plans/Plan-{TASK_NAME}.md`. Derive `{TASK_NAME}`:
 
 - If a Jira ID is present (e.g., `SORT-42`), use `Plan-SORT-42.md`.
 - If a GitHub issue number is present (e.g., `#238`), use `Plan-238-short-description.md`.

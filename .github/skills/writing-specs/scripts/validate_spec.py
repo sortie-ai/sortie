@@ -90,7 +90,7 @@ def validate(spec_path: str) -> list[dict]:
 
     # Check filename pattern
     if not re.match(r"Spec-[\w.-]+\.md$", path.name):
-        warn(f"Filename '{path.name}' does not match Spec-{{NAME}}.md pattern")
+        warn(f"Filename '{path.name}' does not match Spec-{{TASK_NAME}}.md pattern")
 
     # Check required sections
     section_patterns = [p for p, _ in REQUIRED_SECTIONS]

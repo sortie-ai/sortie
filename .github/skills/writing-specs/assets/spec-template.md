@@ -1,8 +1,17 @@
 # Spec: {Title}
 
-**GitHub Issue:** {#NNN or N/A}
-**Milestone:** {milestone name and prerequisite status}
-**Created:** {YYYY-MM-DD}
+<!--
+File name: .specs/Spec-{ID}-{kebab-case-slug}.md
+  - Jira ID present:       Spec-SORT-42.md
+  - GitHub issue present:  Spec-238-codex-agent-adapter.md
+  - Neither present:       Spec-agent-max-turns-passthrough-leak.md
+Keep the title under ~60 characters. Title in H1 matches the filename slug
+in human-readable form.
+-->
+
+**Created at:** {ISO timestamp} \
+**Issue ID:** {#NNN or SORT-NNN or N/A} \
+**Feature:** {One-sentence summary of the feature or change.}
 
 ---
 
@@ -18,13 +27,13 @@ Keep to 2-4 paragraphs. End with the Spec Compliance Check table.
 
 ### Spec Compliance Check
 
-| Principle                    | Aligned | Notes                                   |
-|------------------------------|---------|-----------------------------------------|
-| Architecture doc conformance | _/_ | Section reference(s) checked            |
-| ADR compatibility            | _/_ | Which ADRs checked and outcome          |
+| Principle                    | Aligned | Notes                                |
+|------------------------------|---------|--------------------------------------|
+| Architecture doc conformance | _/_ | Section reference(s) checked             |
+| ADR compatibility            | _/_ | Which ADRs checked and outcome           |
 | Milestone sequencing         | _/_ | Prerequisite milestones and their status |
-| Single-binary constraint     | _/_ | Dependencies added (if any)             |
-| Adapter boundary             | _/_ | Core vs adapter scope classification    |
+| Single-binary constraint     | _/_ | Dependencies added (if any)              |
+| Adapter boundary             | _/_ | Core vs adapter scope classification     |
 
 ---
 

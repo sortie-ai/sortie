@@ -1,7 +1,8 @@
 # Plan: {Short Title}
 
 <!--
-File name: .plans/Plan-{ID}-{kebab-case-slug}.md
+File name: if .specs/Spec-{TASK_NAME}.md is existent, use .plans/Plan-{TASK_NAME}.md; 
+otherwise, use the following strategy to derive the name: .plans/Plan-{ID}-{kebab-case-slug}.md
   - Jira ID present:       Plan-SORT-42.md
   - GitHub issue present:  Plan-238-codex-agent-adapter.md
   - Neither present:       Plan-agent-max-turns-passthrough-leak.md
@@ -9,11 +10,10 @@ Keep the title under ~60 characters. Title in H1 matches the filename slug
 in human-readable form.
 -->
 
-**Spec:** `.specs/Spec-{NAME}.md`
-**GitHub Issue:** {#NNN or N/A}
-**Milestone:** {M<N> — <milestone name>} ({prerequisite status})
-**Dependencies:** {prior plan IDs or "none"}
-**Architecture refs:** {Sections N.N, M.M}
+**Created at:** {ISO timestamp} \
+**Issue ID:** {#NNN or SORT-NNN or N/A} \
+**Feature:** {One-sentence summary of the feature or change.} \
+**Source spec:** `.specs/Spec-{TASK_NAME}.md`
 
 ---
 

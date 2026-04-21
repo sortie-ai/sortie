@@ -90,7 +90,7 @@ If any check fails, revise the spec before delivering.
 When `python3` is available, run structural validation:
 
 ```bash
-python3 .github/skills/writing-specs/scripts/validate_spec.py .specs/Spec-{NAME}.md
+python3 .github/skills/writing-specs/scripts/validate_spec.py .specs/Spec-{TASK_NAME}.md
 ```
 
 If the script is unavailable, manually verify:
