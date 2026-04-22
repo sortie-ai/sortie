@@ -105,11 +105,9 @@ Before writing the file, run every item in [references/philosophy-checklist.md](
 At minimum, confirm:
 
 - [ ] Every step traces to a specific architecture doc section or GitHub issue.
-- [ ] Adapter-specific details (`jira_*`, `claude_*`, `codex_*`) appear only inside adapter package steps.
 - [ ] The plan respects milestone sequencing — no steps depend on unbuilt foundations.
 - [ ] Workspace safety invariants (path containment, key sanitization, cwd validation) are explicit where applicable.
-- [ ] The dependency graph flows downward only (Domain ← Config ← Persistence ← Adapters ← Workspace ← Orchestrator ← CLI).
-- [ ] No function bodies, no test implementations, no SQL query strings — signatures and logic descriptions only.
+- [ ] The plan is the minimum viable work that meets the spec.
 
 ### Step 6 — Write the file and report the path
 

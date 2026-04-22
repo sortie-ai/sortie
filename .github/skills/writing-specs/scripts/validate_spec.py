@@ -6,10 +6,8 @@ Usage:
     validate_spec.py <path-to-spec.md>
 
 Checks:
-    - All six required sections are present and non-empty
-    - Spec Compliance Check table has five populated rows
+    - All five required sections are present and non-empty
     - At least one Mermaid code block exists
-    - Implementation steps have Verify conditions
     - Risk assessment table has at least one data row
     - File structure summary is present
     - No output style violations (function bodies, Symphony references)
@@ -25,17 +23,8 @@ REQUIRED_SECTIONS = [
     (r"##\s+1\.\s+Business Goal", "Section 1: Business Goal & Value"),
     (r"##\s+2\.\s+System Diagram", "Section 2: System Diagram (Mermaid)"),
     (r"##\s+3\.\s+Technical Architecture", "Section 3: Technical Architecture"),
-    (r"##\s+4\.\s+Implementation Steps", "Section 4: Implementation Steps"),
-    (r"##\s+5\.\s+Risk Assessment", "Section 5: Risk Assessment"),
-    (r"##\s+6\.\s+File Structure Summary", "Section 6: File Structure Summary"),
-]
-
-COMPLIANCE_ROWS = [
-    "architecture doc conformance",
-    "adr compatibility",
-    "milestone sequencing",
-    "single-binary constraint",
-    "adapter boundary",
+    (r"##\s+4\.\s+Risk Assessment", "Section 4: Risk Assessment"),
+    (r"##\s+5\.\s+File Structure Summary", "Section 5: File Structure Summary"),
 ]
 
 SYMPHONY_PATTERNS = [
@@ -106,39 +95,6 @@ def validate(spec_path: str) -> list[dict]:
             if len(body_clean) < 20:
                 error(f"Empty or minimal: {label}")
 
-    # Check Spec Compliance Check table
-    table_match = re.search(
-        r"###?\s+Spec Compliance Check", content, re.MULTILINE
-    )
-    if not table_match:
-        error("Missing: Spec Compliance Check table")
-    else:
-        table_region = content[table_match.end() : table_match.end() + 2000]
-        found_rows = 0
-        blank_cells = 0
-        for row_name in COMPLIANCE_ROWS:
-            if re.search(re.escape(row_name), table_region, re.IGNORECASE):
-                found_rows += 1
-                # Check for empty cells (pipes with only whitespace)
-                row_match = re.search(
-                    rf"\|[^|]*{re.escape(row_name)}[^|]*\|([^|]*)\|([^|]*)\|",
-                    table_region,
-                    re.IGNORECASE,
-                )
-                if row_match:
-                    aligned = row_match.group(1).strip()
-                    notes = row_match.group(2).strip()
-                    if not aligned or aligned in ("_/_", ""):
-                        blank_cells += 1
-                    if not notes or notes in ("_/_", ""):
-                        blank_cells += 1
-        if found_rows < len(COMPLIANCE_ROWS):
-            error(
-                f"Compliance table: {found_rows}/{len(COMPLIANCE_ROWS)} rows found"
-            )
-        if blank_cells > 0:
-            warn(f"Compliance table: {blank_cells} cell(s) appear unfilled")
-
     # Check Mermaid diagram
     mermaid_blocks = re.findall(r"```mermaid\s*\n(.+?)```", content, re.DOTALL)
     if not mermaid_blocks:
@@ -148,32 +104,14 @@ def validate(spec_path: str) -> list[dict]:
             if len(block.strip()) < 20:
                 warn(f"Mermaid block {i + 1} appears too short to be meaningful")
 
-    # Check implementation steps have Verify conditions
-    section4 = extract_section(
-        content,
-        r"##\s+4\.\s+Implementation Steps",
-        r"##\s+5\.\s+Risk Assessment",
-    )
-    if section4:
-        # Count numbered steps and verify conditions
-        steps = re.findall(r"^\d+\.\s+\*\*", section4, re.MULTILINE)
-        verifies = re.findall(r"\*\*Verify[:\*]", section4, re.IGNORECASE)
-        if steps and not verifies:
-            error("Implementation steps have no **Verify:** conditions")
-        elif steps and len(verifies) < len(steps):
-            warn(
-                f"Only {len(verifies)}/{len(steps)} implementation steps "
-                f"have **Verify:** conditions"
-            )
-
     # Check risk assessment table
-    section5 = extract_section(
+    risk_section = extract_section(
         content,
-        r"##\s+5\.\s+Risk Assessment",
-        r"##\s+6\.\s+File Structure Summary",
+        r"##\s+4\.\s+Risk Assessment",
+        r"##\s+5\.\s+File Structure Summary",
     )
-    if section5:
-        table_rows = re.findall(r"^\|[^|]+\|[^|]+\|[^|]+\|", section5, re.MULTILINE)
+    if risk_section:
+        table_rows = re.findall(r"^\|[^|]+\|[^|]+\|[^|]+\|", risk_section, re.MULTILINE)
         # Subtract header and separator rows
         data_rows = [
             r for r in table_rows if not re.match(r"^\|\s*[-:]+\s*\|", r)

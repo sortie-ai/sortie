@@ -44,18 +44,17 @@ Execute the seven-check analysis protocol before designing anything. Each check 
 
 > Read [references/analysis-protocol.md](references/analysis-protocol.md) for the full protocol with check descriptions and failure actions.
 
-Record findings from each check. These feed directly into the Spec Compliance Check table in the output.
+Record findings from each check.
 
 ### Phase 3: Specification Drafting
 
 Use the template from [assets/spec-template.md](assets/spec-template.md) as the output skeleton. Fill each section sequentially:
 
-1. **Business Goal & Value** — state the problem and why it matters. Map to the architecture doc's problem statement or a specific GitHub issue. Fill the Spec Compliance Check table using Phase 2 findings.
+1. **Business Goal & Value** — state the problem and why it matters. Map to the architecture doc's problem statement or a specific GitHub issue.
 2. **System Diagram** — create a Mermaid sequence or component diagram showing data flow through the system's layers.
 3. **Technical Architecture** — the core design section. Define Go interfaces, struct layouts, SQLite schema, state machine transitions, error categories, and adapter boundaries. See Output Style Rules below.
-4. **Implementation Steps** — ordered steps sized for single agent sessions. Every step must have a verify condition.
-5. **Risk Assessment** — identify risks with severity and mitigation. Security boundaries (workspace path containment, key sanitization, cwd validation) are always relevant when the feature touches workspace or filesystem operations.
-6. **File Structure Summary** — tree view of new/modified files with architecture layer annotations.
+4. **Risk Assessment** — identify risks with severity and mitigation. Security boundaries (workspace path containment, key sanitization, cwd validation) are always relevant when the feature touches workspace or filesystem operations.
+5. **File Structure Summary** — tree view of new/modified files with architecture layer annotations.
 
 Write the spec to `.specs/Spec-{TASK_NAME}.md`.
 
@@ -76,9 +75,7 @@ At minimum, confirm:
 - [ ] Every design decision traces to a specific architecture doc section
 - [ ] Go interfaces define contracts, not implementations
 - [ ] No implementation code — pseudo-code and signatures only
-- [ ] The compliance table is fully populated (no blank cells)
 - [ ] Mermaid diagram renders and matches the described data flow
-- [ ] Implementation steps have verify conditions
 - [ ] Risk assessment covers security boundaries when applicable
 - [ ] No Symphony/Elixir/BEAM patterns referenced
 - [ ] No generic naming violations (`jira_*`, `claude_*` outside adapter scope)
@@ -94,10 +91,8 @@ python3 .github/skills/writing-specs/scripts/validate_spec.py .specs/Spec-{TASK_
 ```
 
 If the script is unavailable, manually verify:
-- All six sections are present and non-empty
-- The compliance table has five rows with no blank Aligned/Notes cells
+- All five sections are present and non-empty
 - At least one Mermaid code block exists
-- Every implementation step has a `**Verify:**` condition
 - The risk assessment table has at least one row
 
 Report the spec file path after completion.
@@ -114,7 +109,7 @@ These rules are non-negotiable. Violations produce specs that mislead implemente
 4. **PSEUDO-CODE FOR ALGORITHMS.** For orchestration logic, use pseudo-code or step-by-step descriptions matching the style in architecture doc Section 16 (Reference Algorithms).
 5. **NO SYMPHONY PATTERNS.** Do not reference or replicate OpenAI Symphony, Elixir, or BEAM patterns. This project diverges intentionally.
 6. **NO GENERIC NAMING VIOLATIONS.** Core specs use `agent_*`, `tracker_*`, `session_*`. Never `jira_*`, `claude_*`, `codex_*` outside adapter package specs.
-7. **CITE THE SPEC.** Reference specific architecture doc sections (e.g., "per Section 7.3") for every design decision that traces to the spec.
+7. **CITE THE SPEC.** Reference specific `docs/architecture.md` sections using Markdown anchor-links (e.g., `[Section 9.6](../docs/architecture.md#96-workspace-safety)`) for every design decision that traces to the spec.
 
 ---
 

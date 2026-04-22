@@ -97,13 +97,12 @@ mapping to layer positions.
 
 ## Phase N: Verification and Cleanup
 
-*Confirm the cumulative output compiles, lints, and tests green.*
+*Per-phase `Verify:` steps already prove the code compiles, lints, and tests
+green. Do not duplicate those commands here. This phase covers only what
+earlier phases cannot: end-to-end behavior and environment hygiene.*
 
-- [ ] **N.1** Run `make lint` — zero warnings across affected packages.
-- [ ] **N.2** Run `make test` — all tests pass with `-race`. Existing test count preserved; new tests from the Tester agent pass.
-- [ ] **N.3** Run `make build` — produces a single static binary. Confirm the binary size has not unexpectedly ballooned (> ~10% change is a surprise worth investigating).
-- [ ] **N.4** Manual smoke check: {describe the minimal manual invocation that exercises the new behavior end-to-end, if applicable}.
-- [ ] **N.5** Confirm env-gated integration tests skip cleanly without their guard variable (`SORTIE_JIRA_TEST`, `SORTIE_GITHUB_TEST`, `SORTIE_CLAUDE_TEST`, `SORTIE_COPILOT_TEST`, `SORTIE_GITHUB_E2E`).
+- [ ] **N.1** Manual smoke check: {describe the minimal manual invocation that exercises the new behavior end-to-end, if applicable}.
+- [ ] **N.2** Confirm env-gated integration tests skip cleanly without their guard variable (`SORTIE_JIRA_TEST`, `SORTIE_GITHUB_TEST`, `SORTIE_CLAUDE_TEST`, `SORTIE_COPILOT_TEST`, `SORTIE_GITHUB_E2E`).
 
 ---
 
@@ -145,10 +144,6 @@ briefly say why. Do not delete items.
 -->
 
 - [ ] Every step traces to an architecture section, spec section, or issue.
-- [ ] Adapter-specific identifiers (`jira_*`, `claude_*`, `codex_*`, `copilot_*`) appear only inside adapter-package steps.
 - [ ] The plan respects milestone sequencing — no dependency on unbuilt foundations.
-- [ ] Every step has an executable `**Verify:**` condition.
 - [ ] Workspace safety invariants are explicit where applicable (path containment, key sanitization, cwd validation).
-- [ ] The dependency graph flows downward only (Domain ← Config ← Persistence ← Adapters ← Workspace ← Orchestrator ← CLI).
-- [ ] No function bodies, no test implementations, no SQL query strings — signatures and logic descriptions only.
 - [ ] The plan is the minimum viable work that meets the spec.

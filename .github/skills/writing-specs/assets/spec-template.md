@@ -22,18 +22,8 @@ Concise summary of WHAT we are solving and WHY. Map to the architecture doc's
 problem statement (Section 1) or a specific GitHub issue. State the user-facing
 or system-facing impact of NOT solving this.
 
-Keep to 2-4 paragraphs. End with the Spec Compliance Check table.
+Keep to 2-4 paragraphs.
 -->
-
-### Spec Compliance Check
-
-| Principle                    | Aligned | Notes                                |
-|------------------------------|---------|--------------------------------------|
-| Architecture doc conformance | _/_ | Section reference(s) checked             |
-| ADR compatibility            | _/_ | Which ADRs checked and outcome           |
-| Milestone sequencing         | _/_ | Prerequisite milestones and their status |
-| Single-binary constraint     | _/_ | Dependencies added (if any)              |
-| Adapter boundary             | _/_ | Core vs adapter scope classification     |
 
 ---
 
@@ -122,34 +112,11 @@ Delete this subsection if the feature is entirely within one layer.
 
 ---
 
-## 4. Implementation Steps
-
-<!--
-Ordered steps sized for single agent sessions. Each step MUST have a
-Verify condition that an implementer can execute to confirm the step
-is complete. Steps should follow the dependency order:
-Domain -> Config -> Persistence -> Adapters -> Workspace -> Orchestrator -> CLI
-
-Example step format:
-
-1. **Define the FooBar interface**
-   - File: `internal/domain/foobar.go`
-   - Add FooBar interface with methods X, Y, Z per Section N.N
-   - **Verify:** `go build ./internal/domain/...` compiles
-
-2. **Implement SQLite migration for foo_table**
-   - File: `internal/persistence/migrations/NNNN_create_foo.go`
-   - CREATE TABLE with columns per Section N.N
-   - **Verify:** `make test` passes; table exists after migration
--->
-
----
-
-## 5. Risk Assessment
+## 4. Risk Assessment
 
 | Risk                        | Severity | Mitigation                                   |
 |-----------------------------|----------|----------------------------------------------|
-| _e.g., workspace path escape_ | Critical | _Path containment check per Section 9.6_    |
+| _e.g., workspace path escape_ | Critical | _Path containment check per [Section 9.6](../docs/architecture.md#96-workspace-safety)_ |
 
 <!--
 Identify risks with severity (Critical / High / Medium / Low) and concrete
@@ -166,7 +133,7 @@ Always assess:
 
 ---
 
-## 6. File Structure Summary
+## 5. File Structure Summary
 
 <!--
 Tree view of ALL new and modified files, annotated with the architecture

@@ -37,14 +37,13 @@ If any requirement fails the "two engineers" test for unambiguity, rewrite it wi
 
 ## Structural Completeness
 
-All six sections must be present and substantive:
+All five sections must be present and substantive:
 
-- [ ] **Section 1 (Business Goal):** States the problem and its impact. Compliance table has all five rows populated — no blank Aligned or Notes cells.
+- [ ] **Section 1 (Business Goal):** States the problem and its impact.
 - [ ] **Section 2 (System Diagram):** Contains at least one Mermaid code block that renders. Diagram matches the data flow described in the text. Uses domain operation names, not implementation details.
 - [ ] **Section 3 (Technical Architecture):** Contains at least one of: Go interface definition, struct definition, or SQLite schema. Unused subsections are deleted, not left empty.
-- [ ] **Section 4 (Implementation Steps):** Every step has a **Verify:** condition. Steps follow dependency order (Domain -> Config -> Persistence -> Adapters -> Workspace -> Orchestrator -> CLI). Each step is sized for a single agent session.
-- [ ] **Section 5 (Risk Assessment):** Table has at least one row. Severity uses the scale: Critical / High / Medium / Low. Every Critical risk has a concrete mitigation, not "TBD".
-- [ ] **Section 6 (File Structure Summary):** Lists all new and modified files. Each file is annotated with its architecture layer.
+- [ ] **Section 4 (Risk Assessment):** Table has at least one row. Severity uses the scale: Critical / High / Medium / Low. Every Critical risk has a concrete mitigation, not "TBD".
+- [ ] **Section 5 (File Structure Summary):** Lists all new and modified files. Each file is annotated with its architecture layer.
 
 ---
 
@@ -57,7 +56,7 @@ All six sections must be present and substantive:
 - [ ] No OpenAI Symphony, Elixir, or BEAM patterns referenced
 - [ ] Core-scope names use `agent_*`, `tracker_*`, `session_*` only
 - [ ] Integration-specific names (`jira_*`, `claude_*`) appear only in adapter package scope
-- [ ] Architecture doc sections cited for every design decision (e.g., "per Section 7.3")
+- [ ] Architecture doc sections cited for every design decision using Markdown anchor-links (e.g., `[Section 9.6](../docs/architecture.md#96-workspace-safety)`)
 
 ---
 
@@ -79,5 +78,5 @@ These are the most frequent spec quality issues. Scan for them explicitly:
 2. **Missing error paths.** Every operation that can fail needs an explicit error category and behavior (retry, abort, skip, log-and-continue).
 3. **Implicit ordering.** If steps must execute in order, state it. If they can run concurrently, state that too.
 4. **Unspecified defaults.** Config fields without defaults are ambiguous. State the default value and the rationale.
-5. **Orphaned references.** If the spec cites "per Section X.Y" but that section does not exist in the architecture doc, the reference is wrong. Verify before delivering.
+5. **Orphaned references.** If the spec cites an architecture section (e.g., `[Section X.Y](../docs/architecture.md#xy-...)`) but that section does not exist in the architecture doc, the reference is wrong. Verify before delivering.
 6. **Oversized steps.** If an implementation step requires more than ~300 lines of code (exclude test code and documentation) or touches more than 3 files, decompose it further.

@@ -26,7 +26,7 @@ Check items by converting `- [ ]` to `- [x]` as you verify them. Do not include 
 
 ## Traceability
 
-- [ ] Every non-trivial step names either an architecture section (e.g. "per Section 9.6"), a spec section (e.g. "per Spec-SORT-42 Section 3.2"), or an issue (e.g. "closes #198").
+- [ ] Every non-trivial step names either an architecture section (e.g. `[Section 9.6](../docs/architecture.md#96-workspace-safety)`), a spec section (e.g. `[Section 3.2](../.specs/Spec-SORT-42.md#32-...)`), or an issue (e.g. "closes #198").
 - [ ] Every cited architecture section actually exists in `docs/architecture.md`. Orphaned citations misinform the Developer Agent.
 - [ ] Every cited spec section actually exists in the named spec file.
 - [ ] Citations are inline in the plan text, not copied into Go source comments.
@@ -104,7 +104,7 @@ The test: a senior engineer reading the plan says "this is the minimum to meet t
 
 - [ ] The plan file name follows the convention: `Plan-<ID>-<kebab-case-slug>.md` under `.plans/`, with `<ID>` being the Jira ID, GitHub issue number, or a concise task identifier.
 - [ ] The plan header lists the spec path, milestone, dependencies, and architecture refs (top-of-file metadata).
-- [ ] The final phase (Phase 8 / Verification) contains at minimum `make lint`, `make test`, `make build` — and nothing redundant that earlier phases should have verified.
+- [ ] The final phase (Phase 8 / Verification) covers end-to-end behavior and environment hygiene only. Do not duplicate `make lint`, `make test`, or `make build` — per-phase `Verify:` conditions already prove those pass.
 - [ ] The plan, in isolation, tells the Developer Agent everything needed to implement the feature without re-reading the spec. (The Developer Agent will still read the spec — but the plan should not require it for any individual step.)
 - [ ] Re-read the first and last phase. If either is under-specified or repetitive, fix it. First-and-last are where drift starts.
 

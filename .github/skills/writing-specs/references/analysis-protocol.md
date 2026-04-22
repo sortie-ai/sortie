@@ -15,7 +15,7 @@
 
 Seven checks, executed in order before designing anything. Each check gates the design — a failure must be resolved or explicitly flagged before the spec proceeds to drafting.
 
-Record a one-line finding for each check. These findings populate the Spec Compliance Check table in the output.
+Record a one-line finding for each check.
 
 ---
 
@@ -132,4 +132,4 @@ Analysis findings:
 7. Requirements source: [Jira fetched / no external source]
 ```
 
-These findings feed directly into the Spec Compliance Check table in Section 1 of the output template.
+These findings inform the design decisions made during spec drafting.
