@@ -14,8 +14,7 @@
     "go.mod": "go.sum",
     "codecov.yml": "coverage.*",
     ".env": ".env.*",
-    "Dockerfile": "compose.yml, docker-compose.yml, .dockerignore",
-    "AGENTS.md": "CLAUDE.md"
+    "Dockerfile": "compose.yml, docker-compose.yml, .dockerignore"
   },
 
   "[html]": {
