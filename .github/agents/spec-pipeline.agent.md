@@ -9,16 +9,12 @@ description: >
   planning — use the individual agents directly for those tasks.
 argument-hint: Describe the feature or problem to specify
 tools:
-  - execute/getTerminalOutput
-  - execute/killTerminal
-  - execute/runInTerminal
-  - read/readFile
-  - web
   - agent
-  - search
-  - web
+  - read/readFile
   - todo
-  - context7/*
+  - execute/runInTerminal
+  - github.vscode-pull-request-github/issue_fetch
+model: Claude Sonnet 4.6 (copilot)
 agents:
   - Architect
   - Reviewer

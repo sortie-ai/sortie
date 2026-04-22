@@ -11,15 +11,12 @@ description: >
   the individual agents directly for those tasks.
 argument-hint: Plan path, issue reference, or feature description
 tools:
-  - execute/getTerminalOutput
-  - execute/killTerminal
-  - execute/runInTerminal
-  - read/readFile
   - agent
-  - search
-  - web
+  - read/readFile
   - todo
-  - context7/*
+  - execute/runInTerminal
+  - github.vscode-pull-request-github/issue_fetch
+model: Claude Sonnet 4.6 (copilot)
 agents:
   - Coder
   - Tester
