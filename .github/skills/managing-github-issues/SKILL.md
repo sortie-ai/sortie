@@ -7,8 +7,7 @@ description: >
   Also use when the user says "create an issue", "file a bug", "open a ticket",
   "add to backlog", "search issues", "close issue", or mentions GitHub Issues
   in any task-management context. Handles label/milestone assignment, duplicate
-  detection, and project board integration. Do NOT use for pull requests (use
-  creating-pr) or changelog entries (use changelog-maintenance).
+  detection, and project board integration. Do NOT use for pull requests or changelog entries.
 metadata:
   version: 2026-04-12
 ---

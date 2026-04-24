@@ -20,7 +20,7 @@ Your task is to commit staged changes and manage pull requests (PR).
 
 ## Task
 
-- Use `git-commit` skill to create commits, create a branch, and `creating-pr` skill to open/change a PR with a meaningful title and description
+- Use `git-commit` skill to create commits, create a branch, and `create-pr` skill to open/change a PR with a meaningful title and description
 - Incorporate provided details or context about the changes
 - Detect whether you need to create a new PR or update an existing one based on context
 - Stage only relevant files — never `git add -A` without reviewing what would be included
@@ -31,7 +31,7 @@ Your task is to commit staged changes and manage pull requests (PR).
 
 **MANDATORY:** Before creating any PR:
 
-1. **Check for the PR template:** Use PR template provided by the `creating-pr` skill. You MUST follow it.
+1. **Check for the PR template:** Use PR template provided by the `create-pr` skill. You MUST follow it.
 2. **Read the template completely:** Read the entire template file to understand its structure
 3. **Follow the template exactly:** Structure the PR body to match the template's sections verbatim
    - Use the template headings as-is (including emojis if present)

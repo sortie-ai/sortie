@@ -12,8 +12,7 @@ description: >
   the GitHub Issues backlog, and emits a summary intended strictly for
   the human operator. The skill NEVER posts replies, reactions, or
   messages back to the reviewer. Do NOT use for authoring a new code
-  review (use reviewImpl), for security scans, or for opening a new PR
-  (use creating-pr).
+  review (use reviewImpl), for security scans, or for opening a new PR.
 metadata:
   version: 2026-04-17
 ---
@@ -376,7 +375,7 @@ comment and applying the minimum change that resolves it. Adjacent
 actions belong to other skills or to the human operator.
 
 - Do NOT commit or push. Leave the working tree modified; the
-  `git-commit` and `creating-pr` Agent Skills handle git state.
+  `git-commit` and `create-pr` Agent Skills handle git state.
 - Do NOT alter PR metadata — status, labels, assignees, reviewers,
   milestone, or branch protection settings.
 - Do NOT close, merge, approve, or reopen the PR.
