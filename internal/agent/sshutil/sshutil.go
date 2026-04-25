@@ -22,9 +22,10 @@ type SSHOptions struct {
 }
 
 // BuildSSHArgs constructs SSH invocation arguments for remote agent
-// execution. The workspace path sets the remote cwd via cd, and the
-// remote command with its arguments are shell-quoted into a single
-// remote command string.
+// execution. The workspace path sets the remote cwd via cd. remoteCommand
+// is treated as a pre-formed POSIX shell fragment and appended verbatim;
+// callers are responsible for any quoting within that fragment. agentArgs
+// are individually shell-quoted and appended after remoteCommand.
 //
 // SSH options applied (unless overridden via opts):
 //   - StrictHostKeyChecking=accept-new (TOFU) — configurable via opts
@@ -50,7 +51,7 @@ func BuildSSHArgs(host, workspacePath, remoteCommand string, agentArgs []string,
 
 	var parts []string
 	parts = append(parts, "cd", "--", ShellQuote(workspacePath), "&&")
-	parts = append(parts, ShellQuote(remoteCommand))
+	parts = append(parts, remoteCommand)
 	for _, arg := range agentArgs {
 		parts = append(parts, ShellQuote(arg))
 	}
