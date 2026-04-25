@@ -1,6 +1,9 @@
 package domain
 
-import "fmt"
+import (
+	"errors"
+	"fmt"
+)
 
 // TrackerErrorKind enumerates the normalized error categories that
 // tracker adapters map their native errors to. The orchestrator uses
@@ -71,6 +74,17 @@ func (e *TrackerError) Error() string {
 // [errors.As].
 func (e *TrackerError) Unwrap() error {
 	return e.Err
+}
+
+// IsNotFound reports whether err is a [*TrackerError] with Kind
+// [ErrTrackerNotFound]. It unwraps the error chain, so it returns true
+// even when the *TrackerError is wrapped by another error.
+func IsNotFound(err error) bool {
+	var te *TrackerError
+	if !errors.As(err, &te) {
+		return false
+	}
+	return te.Kind == ErrTrackerNotFound
 }
 
 // AgentErrorKind enumerates the normalized error categories that
