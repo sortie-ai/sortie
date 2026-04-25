@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sortie-ai/sortie/internal/agent/agentcore"
 	"github.com/sortie-ai/sortie/internal/domain"
 )
 
@@ -39,14 +40,14 @@ func loadFixture(t *testing.T, name string) []byte {
 // real subprocess.
 func makeTestState(fixtureData []byte) *sessionState {
 	state := &sessionState{
-		threadID:      "thread-001",
-		workspacePath: "/tmp",
-		waitCh:        make(chan struct{}),
-		stdin:         nopWriteCloser{},
-		stdout:        io.NopCloser(bytes.NewReader(nil)),
-		msgCh:         make(chan parsedMessage, 16),
-		readerDone:    make(chan struct{}),
-		stopCh:        make(chan struct{}),
+		threadID:   "thread-001",
+		target:     agentcore.LaunchTarget{WorkspacePath: "/tmp"},
+		waitCh:     make(chan struct{}),
+		stdin:      nopWriteCloser{},
+		stdout:     io.NopCloser(bytes.NewReader(nil)),
+		msgCh:      make(chan parsedMessage, 16),
+		readerDone: make(chan struct{}),
+		stopCh:     make(chan struct{}),
 	}
 
 	go func() {

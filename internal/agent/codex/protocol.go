@@ -309,7 +309,7 @@ func startThread(ctx context.Context, state *sessionState, scanCh <-chan scanRes
 	}
 
 	params := map[string]any{
-		"cwd":            state.workspacePath,
+		"cwd":            state.target.WorkspacePath,
 		"approvalPolicy": approvalPolicy,
 		"sandbox":        sandbox,
 	}
@@ -432,7 +432,7 @@ func buildSandboxPolicy(state *sessionState, pt passthroughConfig) map[string]an
 
 	policy := map[string]any{
 		"type":          sandboxType,
-		"writableRoots": []string{state.workspacePath},
+		"writableRoots": []string{state.target.WorkspacePath},
 		"networkAccess": false,
 	}
 

@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sortie-ai/sortie/internal/agent/agentcore"
 	"github.com/sortie-ai/sortie/internal/agent/agenttest"
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/registry"
@@ -253,17 +254,17 @@ func TestStartSession_NewSession(t *testing.T) {
 	if state.copilotSessionID != "" {
 		t.Errorf("state.copilotSessionID = %q, want empty for new session", state.copilotSessionID)
 	}
-	if state.workspacePath != workspace {
+	if state.target.WorkspacePath != workspace {
 		// t.TempDir() may return a path through a symlink; compare with os.Stat.
-		if state.workspacePath != filepath.Clean(workspace) {
-			t.Errorf("state.workspacePath = %q, want %q", state.workspacePath, workspace)
+		if state.target.WorkspacePath != filepath.Clean(workspace) {
+			t.Errorf("state.target.WorkspacePath = %q, want %q", state.target.WorkspacePath, workspace)
 		}
 	}
 	if state.fallbackToContinue {
 		t.Error("state.fallbackToContinue = true, want false for new session")
 	}
-	if state.sshHost != "" {
-		t.Errorf("state.sshHost = %q, want empty for local mode", state.sshHost)
+	if state.target.SSHHost != "" {
+		t.Errorf("state.target.SSHHost = %q, want empty for local mode", state.target.SSHHost)
 	}
 }
 
@@ -333,14 +334,14 @@ func TestStartSession_SSHMode(t *testing.T) {
 	}
 
 	state := session.Internal.(*sessionState)
-	if state.sshHost != "dev-host.example.com" {
-		t.Errorf("state.sshHost = %q, want %q", state.sshHost, "dev-host.example.com")
+	if state.target.SSHHost != "dev-host.example.com" {
+		t.Errorf("state.target.SSHHost = %q, want %q", state.target.SSHHost, "dev-host.example.com")
 	}
-	if state.remoteCommand != "copilot" {
-		t.Errorf("state.remoteCommand = %q, want %q", state.remoteCommand, "copilot")
+	if state.target.RemoteCommand != "copilot" {
+		t.Errorf("state.target.RemoteCommand = %q, want %q", state.target.RemoteCommand, "copilot")
 	}
-	if state.command != sshPath {
-		t.Errorf("state.command = %q, want %q (ssh binary)", state.command, sshPath)
+	if state.target.Command != sshPath {
+		t.Errorf("state.target.Command = %q, want %q (ssh binary)", state.target.Command, sshPath)
 	}
 	// Auth check is skipped in SSH mode.
 }
@@ -381,11 +382,11 @@ func TestStartSession_SSHHostWhitespaceOnly(t *testing.T) {
 	}
 
 	state := session.Internal.(*sessionState)
-	if state.sshHost != "" {
-		t.Errorf("state.sshHost = %q, want empty (whitespace-only SSHHost treated as local mode)", state.sshHost)
+	if state.target.SSHHost != "" {
+		t.Errorf("state.target.SSHHost = %q, want empty (whitespace-only SSHHost treated as local mode)", state.target.SSHHost)
 	}
-	if state.remoteCommand != "" {
-		t.Errorf("state.remoteCommand = %q, want empty for local mode", state.remoteCommand)
+	if state.target.RemoteCommand != "" {
+		t.Errorf("state.target.RemoteCommand = %q, want empty for local mode", state.target.RemoteCommand)
 	}
 }
 
@@ -492,7 +493,7 @@ func TestRunTurn_HappyPath(t *testing.T) {
 
 	adapter, session := newTestSession(t, t.TempDir())
 	state := session.Internal.(*sessionState)
-	state.command = fakeCopilotBinaryWithOutput(t, loadTestFixture(t, "simple_session.jsonl"), 0)
+	state.target.Command = fakeCopilotBinaryWithOutput(t, loadTestFixture(t, "simple_session.jsonl"), 0)
 
 	var events []domain.AgentEvent
 	result, err := adapter.RunTurn(context.Background(), session, domain.RunTurnParams{
@@ -556,7 +557,7 @@ func TestRunTurn_ExitCode127(t *testing.T) {
 
 	adapter, session := newTestSession(t, t.TempDir())
 	state := session.Internal.(*sessionState)
-	state.command = fakeCopilotBinaryWithOutput(t, "", 127)
+	state.target.Command = fakeCopilotBinaryWithOutput(t, "", 127)
 
 	var events []domain.AgentEvent
 	_, err := adapter.RunTurn(context.Background(), session, domain.RunTurnParams{
@@ -575,7 +576,7 @@ func TestRunTurn_NonZeroExitNoResult(t *testing.T) {
 
 	adapter, session := newTestSession(t, t.TempDir())
 	state := session.Internal.(*sessionState)
-	state.command = fakeCopilotBinaryWithOutput(t, "", 1)
+	state.target.Command = fakeCopilotBinaryWithOutput(t, "", 1)
 
 	var events []domain.AgentEvent
 	_, err := adapter.RunTurn(context.Background(), session, domain.RunTurnParams{
@@ -593,7 +594,7 @@ func TestRunTurn_NoOutputExitZero(t *testing.T) {
 
 	adapter, session := newTestSession(t, t.TempDir())
 	state := session.Internal.(*sessionState)
-	state.command = fakeCopilotBinaryWithOutput(t, "", 0)
+	state.target.Command = fakeCopilotBinaryWithOutput(t, "", 0)
 
 	var events []domain.AgentEvent
 	result, err := adapter.RunTurn(context.Background(), session, domain.RunTurnParams{
@@ -616,7 +617,7 @@ func TestRunTurn_PartialOutputNoResultExitZero(t *testing.T) {
 	state := session.Internal.(*sessionState)
 
 	const jsonl = `{"type":"assistant.message","timestamp":"2026-04-08T00:00:00Z","data":{"role":"assistant","content":"hello","outputTokens":42}}` + "\n"
-	state.command = fakeCopilotBinaryWithOutput(t, jsonl, 0)
+	state.target.Command = fakeCopilotBinaryWithOutput(t, jsonl, 0)
 
 	var events []domain.AgentEvent
 	result, err := adapter.RunTurn(context.Background(), session, domain.RunTurnParams{
@@ -645,7 +646,7 @@ func TestRunTurn_StderrWarnOnNoOutputExitZero(t *testing.T) {
 
 	adapter, session := newTestSession(t, t.TempDir())
 	state := session.Internal.(*sessionState)
-	state.command = fakeCopilotBinaryWithStderrAndExit(t, "Invalid JSON in --additional-mcp-config", 0)
+	state.target.Command = fakeCopilotBinaryWithStderrAndExit(t, "Invalid JSON in --additional-mcp-config", 0)
 
 	var events []domain.AgentEvent
 	result, err := adapter.RunTurn(context.Background(), session, domain.RunTurnParams{
@@ -675,7 +676,7 @@ func TestRunTurn_ContextCancelled(t *testing.T) {
 	t.Setenv("GH_TOKEN", "test-token-for-unit-test")
 
 	adapter, session := newTestSession(t, t.TempDir())
-	// state.command is fakeCopilotBinary: exits 0 immediately, no output.
+	// state.target.Command is fakeCopilotBinary: exits 0 immediately, no output.
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // pre-cancel before RunTurn
@@ -697,7 +698,7 @@ func TestRunTurn_MalformedLines(t *testing.T) {
 
 	adapter, session := newTestSession(t, t.TempDir())
 	state := session.Internal.(*sessionState)
-	state.command = fakeCopilotBinaryWithOutput(t, loadTestFixture(t, "malformed_lines.jsonl"), 0)
+	state.target.Command = fakeCopilotBinaryWithOutput(t, loadTestFixture(t, "malformed_lines.jsonl"), 0)
 
 	var events []domain.AgentEvent
 	_, err := adapter.RunTurn(context.Background(), session, domain.RunTurnParams{
@@ -718,7 +719,7 @@ func TestRunTurn_ToolUseEvents(t *testing.T) {
 
 	adapter, session := newTestSession(t, t.TempDir())
 	state := session.Internal.(*sessionState)
-	state.command = fakeCopilotBinaryWithOutput(t, loadTestFixture(t, "tool_use_session.jsonl"), 0)
+	state.target.Command = fakeCopilotBinaryWithOutput(t, loadTestFixture(t, "tool_use_session.jsonl"), 0)
 
 	var events []domain.AgentEvent
 	result, err := adapter.RunTurn(context.Background(), session, domain.RunTurnParams{
@@ -756,7 +757,7 @@ func TestRunTurn_NonZeroResultExitCode(t *testing.T) {
 
 	adapter, session := newTestSession(t, t.TempDir())
 	state := session.Internal.(*sessionState)
-	state.command = fakeCopilotBinaryWithOutput(t, failResultJSONL, 0)
+	state.target.Command = fakeCopilotBinaryWithOutput(t, failResultJSONL, 0)
 
 	var events []domain.AgentEvent
 	_, err := adapter.RunTurn(context.Background(), session, domain.RunTurnParams{
@@ -781,7 +782,7 @@ func TestRunTurn_TurnFailed_APIDurationMS(t *testing.T) {
 
 	adapter, session := newTestSession(t, t.TempDir())
 	state := session.Internal.(*sessionState)
-	state.command = fakeCopilotBinaryWithOutput(t, failJSONL, 0)
+	state.target.Command = fakeCopilotBinaryWithOutput(t, failJSONL, 0)
 
 	var events []domain.AgentEvent
 	_, err := adapter.RunTurn(context.Background(), session, domain.RunTurnParams{
@@ -867,7 +868,7 @@ func TestStopSession_NilProc(t *testing.T) {
 	// Bare session with no running subprocess (proc == nil).
 	session := domain.Session{
 		Internal: &sessionState{
-			workspacePath: t.TempDir(),
+			target: agentcore.LaunchTarget{WorkspacePath: t.TempDir()},
 		},
 	}
 	if err := adapter.StopSession(context.Background(), session); err != nil {
@@ -885,7 +886,7 @@ func TestStopSession_TerminatesProcess(t *testing.T) {
 
 	adapter, session := newTestSession(t, t.TempDir())
 	state := session.Internal.(*sessionState)
-	state.command = sleepBin
+	state.target.Command = sleepBin
 
 	processStarted := make(chan struct{}, 1)
 	runDone := make(chan struct{})
@@ -945,7 +946,7 @@ func TestRunTurn_StderrWarnOnExitCode127(t *testing.T) {
 
 	adapter, session := newTestSession(t, t.TempDir())
 	state := session.Internal.(*sessionState)
-	state.command = fakeCopilotBinaryWithStderrAndExit(t, "license check failed: no valid license", 127)
+	state.target.Command = fakeCopilotBinaryWithStderrAndExit(t, "license check failed: no valid license", 127)
 
 	result, runErr := adapter.RunTurn(context.Background(), session, domain.RunTurnParams{
 		Prompt:  "do the thing",
@@ -975,7 +976,7 @@ func TestRunTurn_StderrWarnOnNonZeroExit(t *testing.T) {
 
 	adapter, session := newTestSession(t, t.TempDir())
 	state := session.Internal.(*sessionState)
-	state.command = fakeCopilotBinaryWithStderrAndExit(t, "internal agent panic", 1)
+	state.target.Command = fakeCopilotBinaryWithStderrAndExit(t, "internal agent panic", 1)
 
 	result, runErr := adapter.RunTurn(context.Background(), session, domain.RunTurnParams{
 		Prompt:  "do the thing",
@@ -1015,7 +1016,7 @@ func TestRunTurn_StderrNoWarnOnSuccess(t *testing.T) {
 	if err := os.WriteFile(outFile, []byte(successJSONL+"\n"), 0o644); err != nil {
 		t.Fatalf("writing stdout file: %v", err)
 	}
-	state.command = agenttest.WriteScript(t, dir, "copilot",
+	state.target.Command = agenttest.WriteScript(t, dir, "copilot",
 		fmt.Sprintf("cat '%s' >&2\ncat '%s'", errFile, outFile))
 
 	result, err := adapter.RunTurn(context.Background(), session, domain.RunTurnParams{

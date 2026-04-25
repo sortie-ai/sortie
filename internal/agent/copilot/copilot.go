@@ -10,14 +10,12 @@ package copilot
 
 import (
 	"bufio"
-	"cmp"
 	"context"
 	"fmt"
 	"io"
 	"log/slog"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -29,7 +27,6 @@ import (
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/logging"
 	"github.com/sortie-ai/sortie/internal/registry"
-	"github.com/sortie-ai/sortie/internal/typeutil"
 )
 
 func init() {
@@ -53,23 +50,10 @@ type CopilotAdapter struct {
 // Internal. It tracks the Copilot CLI session ID and subprocess
 // handle across turns.
 type sessionState struct {
-	workspacePath    string
-	command          string
+	target           agentcore.LaunchTarget
 	copilotSessionID string
 	agentConfig      domain.AgentConfig
 	turnCount        int
-
-	// sshHost is the SSH destination for remote execution. Empty for
-	// local mode.
-	sshHost string
-
-	// remoteCommand is the agent command to run on the remote host.
-	// Empty for local mode.
-	remoteCommand string
-
-	// sshStrictHostKeyChecking is the OpenSSH StrictHostKeyChecking
-	// value. Empty means accept-new.
-	sshStrictHostKeyChecking string
 
 	// mcpConfigPath is the worker-generated MCP config file path.
 	mcpConfigPath string
@@ -95,79 +79,20 @@ func NewCopilotAdapter(config map[string]any) (domain.AgentAdapter, error) {
 	return &CopilotAdapter{passthrough: pt}, nil
 }
 
-// StartSession validates the workspace path, resolves the copilot
-// binary, and initializes per-session state. No subprocess is spawned;
-// that happens in [CopilotAdapter.RunTurn].
+// StartSession validates the workspace path, resolves the copilot binary, and
+// initializes per-session state. No subprocess is spawned; that happens in
+// [CopilotAdapter.RunTurn].
 func (a *CopilotAdapter) StartSession(ctx context.Context, params domain.StartSessionParams) (domain.Session, error) {
-	if params.WorkspacePath == "" {
-		return domain.Session{}, &domain.AgentError{
-			Kind:    domain.ErrInvalidWorkspaceCwd,
-			Message: "empty workspace path",
-		}
+	target, agentErr := agentcore.ResolveLaunchTarget(params, "copilot")
+	if agentErr != nil {
+		return domain.Session{}, agentErr
 	}
 
-	absPath, err := filepath.Abs(params.WorkspacePath)
-	if err != nil {
-		return domain.Session{}, &domain.AgentError{
-			Kind:    domain.ErrInvalidWorkspaceCwd,
-			Message: "cannot resolve workspace path",
-			Err:     err,
-		}
-	}
-
-	fi, err := os.Stat(absPath)
-	if err != nil {
-		return domain.Session{}, &domain.AgentError{
-			Kind:    domain.ErrInvalidWorkspaceCwd,
-			Message: "workspace path does not exist",
-			Err:     err,
-		}
-	}
-	if !fi.IsDir() {
-		return domain.Session{}, &domain.AgentError{
-			Kind:    domain.ErrInvalidWorkspaceCwd,
-			Message: "workspace path is not a directory",
-		}
-	}
-
-	command := cmp.Or(params.AgentConfig.Command, "copilot")
-
-	var resolvedPath string
-	var sshHost string
-	var remoteCommand string
-
-	sshHostTrimmed := strings.TrimSpace(params.SSHHost)
-	if sshHostTrimmed != "" {
-		// SSH mode: resolve "ssh" locally, skip local LookPath for
-		// the agent command (it resolves on the remote host).
-		sshPath, lookErr := exec.LookPath("ssh")
-		if lookErr != nil {
-			return domain.Session{}, &domain.AgentError{
-				Kind:    domain.ErrAgentNotFound,
-				Message: "ssh binary not found on orchestrator host",
-				Err:     lookErr,
-			}
-		}
-		resolvedPath = sshPath
-		sshHost = sshHostTrimmed
-		remoteCommand = command
-	} else {
-		var lookErr error
-		resolvedPath, lookErr = exec.LookPath(command)
-		if lookErr != nil {
-			return domain.Session{}, &domain.AgentError{
-				Kind:    domain.ErrAgentNotFound,
-				Message: fmt.Sprintf("agent command %q not found", command),
-				Err:     lookErr,
-			}
-		}
-
-		// Canary check: validate the binary is functional (Node.js
-		// 22+ runtime present). Use a 5-second timeout to avoid
-		// hanging on a broken installation.
+	// Canary check and auth preflight are local-mode only.
+	if target.RemoteCommand == "" {
 		canaryCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		defer cancel()
-		out, canaryErr := exec.CommandContext(canaryCtx, resolvedPath, "--version").CombinedOutput() //nolint:gosec // resolvedPath from LookPath
+		out, canaryErr := exec.CommandContext(canaryCtx, target.Command, "--version").CombinedOutput() //nolint:gosec // target.Command from LookPath
 		if canaryErr != nil {
 			return domain.Session{}, &domain.AgentError{
 				Kind:    domain.ErrAgentNotFound,
@@ -177,8 +102,6 @@ func (a *CopilotAdapter) StartSession(ctx context.Context, params domain.StartSe
 		}
 		slog.Debug("copilot version check passed", slog.String("version", strings.TrimSpace(string(out))))
 
-		// Authentication preflight: verify at least one GitHub
-		// authentication source is available.
 		if authErr := checkAuth(ctx); authErr != nil {
 			return domain.Session{}, authErr
 		}
@@ -190,14 +113,10 @@ func (a *CopilotAdapter) StartSession(ctx context.Context, params domain.StartSe
 	}
 
 	state := &sessionState{
-		workspacePath:            absPath,
-		command:                  resolvedPath,
-		copilotSessionID:         copilotSessionID,
-		agentConfig:              params.AgentConfig,
-		sshHost:                  sshHost,
-		remoteCommand:            remoteCommand,
-		sshStrictHostKeyChecking: params.SSHStrictHostKeyChecking,
-		mcpConfigPath:            params.MCPConfigPath,
+		target:           target,
+		copilotSessionID: copilotSessionID,
+		agentConfig:      params.AgentConfig,
+		mcpConfigPath:    params.MCPConfigPath,
 	}
 
 	return domain.Session{
@@ -265,20 +184,21 @@ func (a *CopilotAdapter) RunTurn(ctx context.Context, session domain.Session, pa
 	defer cancelCmd()
 
 	var cmd *exec.Cmd
-	if state.sshHost != "" {
-		sshArgs := sshutil.BuildSSHArgs(state.sshHost, state.workspacePath, state.remoteCommand, args, sshutil.SSHOptions{
-			StrictHostKeyChecking: state.sshStrictHostKeyChecking,
+	if state.target.RemoteCommand != "" {
+		sshArgs := sshutil.BuildSSHArgs(state.target.SSHHost, state.target.WorkspacePath, state.target.RemoteCommand, args, sshutil.SSHOptions{
+			StrictHostKeyChecking: state.target.SSHStrictHostKeyChecking,
 		})
-		cmd = exec.CommandContext(cmdCtx, state.command, sshArgs...) //nolint:gosec // args are constructed programmatically with shell quoting
+		cmd = exec.CommandContext(cmdCtx, state.target.Command, sshArgs...) //nolint:gosec // args are constructed programmatically with shell quoting
 	} else {
-		cmd = exec.CommandContext(cmdCtx, state.command, args...) //nolint:gosec // args are constructed programmatically
+		allArgs := append(state.target.Args, args...)                       //nolint:gocritic // intentional: target.Args has cap==len so append always allocates
+		cmd = exec.CommandContext(cmdCtx, state.target.Command, allArgs...) //nolint:gosec // args are constructed programmatically
 	}
 	procutil.SetProcessGroup(cmd)
 	cmd.Cancel = func() error {
 		return procutil.SignalGraceful(cmd.Process.Pid)
 	}
 	cmd.WaitDelay = 5 * time.Second
-	cmd.Dir = state.workspacePath
+	cmd.Dir = state.target.WorkspacePath
 	cmd.Env = os.Environ()
 
 	stdoutPipe, err := cmd.StdoutPipe()
@@ -304,11 +224,7 @@ func (a *CopilotAdapter) RunTurn(ctx context.Context, session domain.Session, pa
 	if err != nil {
 		state.mu.Unlock()
 		if ctx.Err() != nil {
-			params.OnEvent(domain.AgentEvent{
-				Type:      domain.EventTurnCancelled,
-				Timestamp: time.Now().UTC(),
-				Message:   "context cancelled",
-			})
+			agentcore.EmitTurnCancelled(params.OnEvent, "context cancelled")
 			return domain.TurnResult{
 					SessionID:  state.copilotSessionID,
 					ExitReason: domain.EventTurnCancelled,
@@ -337,14 +253,7 @@ func (a *CopilotAdapter) RunTurn(ctx context.Context, session domain.Session, pa
 	// Emit session_started before the scan loop begins. On turn 1
 	// the session ID is empty — this is an accepted tradeoff since
 	// Copilot CLI only reports the session ID in its result event.
-	now := time.Now().UTC()
-	params.OnEvent(domain.AgentEvent{
-		Type:      domain.EventSessionStarted,
-		Timestamp: now,
-		AgentPID:  strconv.Itoa(cmd.Process.Pid),
-		SessionID: state.copilotSessionID,
-		Message:   "session started",
-	})
+	agentcore.EmitSessionStarted(params.OnEvent, strconv.Itoa(cmd.Process.Pid), state.copilotSessionID)
 
 	stderrCollector := procutil.NewStderrCollector(stderrPipe, logger)
 
@@ -353,72 +262,49 @@ func (a *CopilotAdapter) RunTurn(ctx context.Context, session domain.Session, pa
 
 	var lastResult *rawEvent
 	inFlight := agentcore.NewToolTracker()
-	var cumulativeOutputTokens int64
+	acc := agentcore.NewUsageAccumulator()
 
 	for scanner.Scan() {
 		line := scanner.Bytes()
-		now = time.Now().UTC()
+		now := time.Now().UTC()
 
 		event, parseErr := parseEvent(line)
 		if parseErr != nil {
-			params.OnEvent(domain.AgentEvent{
-				Type:      domain.EventMalformed,
-				Timestamp: now,
-				Message:   typeutil.TruncateRunes(string(line), 500),
-			})
+			agentcore.EmitMalformed(params.OnEvent, line)
 			continue
 		}
 
 		switch event.Type {
 		case "assistant.message_delta":
 			// Stall timer reset; ephemeral streaming content.
-			params.OnEvent(domain.AgentEvent{
-				Type:      domain.EventNotification,
-				Timestamp: now,
-			})
+			agentcore.EmitNotification(params.OnEvent, "")
 
 		case "assistant.message":
 			if len(event.Data) > 0 {
 				msgData, dataErr := parseAssistantMessageData(event.Data)
 				if dataErr == nil {
-					cumulativeOutputTokens += msgData.OutputTokens
+					snapshot, _ := acc.AddDelta(0, msgData.OutputTokens, 0)
 					params.OnEvent(domain.AgentEvent{
 						Type:      domain.EventTokenUsage,
 						Timestamp: now,
-						Usage:     normalizeUsage(nil, cumulativeOutputTokens),
+						Usage:     snapshot,
 					})
-					params.OnEvent(domain.AgentEvent{
-						Type:      domain.EventNotification,
-						Timestamp: now,
-						Message:   summarizeAssistantMessage(msgData),
-					})
+					agentcore.EmitNotification(params.OnEvent, summarizeAssistantMessage(msgData))
 				} else {
 					logger.Debug("failed to parse assistant.message data", slog.Any("error", dataErr))
-					params.OnEvent(domain.AgentEvent{
-						Type:      domain.EventNotification,
-						Timestamp: now,
-						Message:   "assistant message",
-					})
+					agentcore.EmitNotification(params.OnEvent, "assistant message")
 				}
 			}
 
 		case "assistant.turn_start", "assistant.turn_end":
-			params.OnEvent(domain.AgentEvent{
-				Type:      domain.EventNotification,
-				Timestamp: now,
-				Message:   event.Type,
-			})
+			agentcore.EmitNotification(params.OnEvent, event.Type)
 
 		case "tool.execution_start":
 			if len(event.Data) > 0 {
 				toolData, dataErr := parseToolExecutionData(event.Data)
 				if dataErr == nil {
 					inFlight.Begin(toolData.ToolCallID, toolData.ToolName)
-					params.OnEvent(domain.AgentEvent{
-						Type:      domain.EventNotification,
-						Timestamp: now,
-						Message:   fmt.Sprintf("tool started: %s", toolData.ToolName),
-					})
+					agentcore.EmitNotification(params.OnEvent, fmt.Sprintf("tool started: %s", toolData.ToolName))
 				}
 			}
 
@@ -449,11 +335,7 @@ func (a *CopilotAdapter) RunTurn(ctx context.Context, session domain.Session, pa
 				}
 			}
 			logger.Warn("copilot session warning", slog.String("message", msg))
-			params.OnEvent(domain.AgentEvent{
-				Type:      domain.EventNotification,
-				Timestamp: now,
-				Message:   msg,
-			})
+			agentcore.EmitNotification(params.OnEvent, msg)
 
 		case "session.info":
 			msg := "session info"
@@ -463,11 +345,7 @@ func (a *CopilotAdapter) RunTurn(ctx context.Context, session domain.Session, pa
 					msg = infoData.Message
 				}
 			}
-			params.OnEvent(domain.AgentEvent{
-				Type:      domain.EventNotification,
-				Timestamp: now,
-				Message:   msg,
-			})
+			agentcore.EmitNotification(params.OnEvent, msg)
 
 		case "session.task_complete":
 			msg := "task complete"
@@ -477,11 +355,7 @@ func (a *CopilotAdapter) RunTurn(ctx context.Context, session domain.Session, pa
 					msg = taskData.Summary
 				}
 			}
-			params.OnEvent(domain.AgentEvent{
-				Type:      domain.EventNotification,
-				Timestamp: now,
-				Message:   msg,
-			})
+			agentcore.EmitNotification(params.OnEvent, msg)
 
 		case "session.mcp_server_status_changed", "session.mcp_servers_loaded",
 			"session.tools_updated", "user.message":
@@ -515,16 +389,11 @@ func (a *CopilotAdapter) RunTurn(ctx context.Context, session domain.Session, pa
 		// Context cancellation propagates through exec.CommandContext
 		// and can surface as a pipe read error. Treat as cancellation.
 		if ctx.Err() != nil {
-			now = time.Now().UTC()
-			params.OnEvent(domain.AgentEvent{
-				Type:      domain.EventTurnCancelled,
-				Timestamp: now,
-				Message:   "context cancelled",
-			})
+			agentcore.EmitTurnCancelled(params.OnEvent, "context cancelled")
 			return domain.TurnResult{
 					SessionID:  state.copilotSessionID,
 					ExitReason: domain.EventTurnCancelled,
-					Usage:      normalizeUsage(nil, cumulativeOutputTokens),
+					Usage:      acc.Snapshot(),
 				}, &domain.AgentError{
 					Kind:    domain.ErrTurnCancelled,
 					Message: "turn cancelled",
@@ -533,16 +402,11 @@ func (a *CopilotAdapter) RunTurn(ctx context.Context, session domain.Session, pa
 		}
 
 		procutil.EmitWarnLines(stderrLines, logger)
-		now = time.Now().UTC()
-		params.OnEvent(domain.AgentEvent{
-			Type:      domain.EventTurnFailed,
-			Timestamp: now,
-			Message:   "stdout read error: " + scanErr.Error(),
-		})
+		agentcore.EmitTurnFailed(params.OnEvent, "stdout read error: "+scanErr.Error(), 0)
 		return domain.TurnResult{
 				SessionID:  state.copilotSessionID,
 				ExitReason: domain.EventTurnFailed,
-				Usage:      normalizeUsage(nil, cumulativeOutputTokens),
+				Usage:      acc.Snapshot(),
 			}, &domain.AgentError{
 				Kind:    domain.ErrPortExit,
 				Message: "stdout scanner error",
@@ -565,20 +429,10 @@ func (a *CopilotAdapter) RunTurn(ctx context.Context, session domain.Session, pa
 	state.waitCh = nil
 	state.mu.Unlock()
 
-	now = time.Now().UTC()
-
-	var resultUsage *rawUsage
-	if lastResult != nil {
-		resultUsage = lastResult.Usage
-	}
-	usage := normalizeUsage(resultUsage, cumulativeOutputTokens)
+	usage := acc.Snapshot()
 
 	if ctx.Err() != nil {
-		params.OnEvent(domain.AgentEvent{
-			Type:      domain.EventTurnCancelled,
-			Timestamp: now,
-			Message:   "context cancelled",
-		})
+		agentcore.EmitTurnCancelled(params.OnEvent, "context cancelled")
 		return domain.TurnResult{
 				SessionID:  state.copilotSessionID,
 				ExitReason: domain.EventTurnCancelled,
@@ -594,11 +448,7 @@ func (a *CopilotAdapter) RunTurn(ctx context.Context, session domain.Session, pa
 
 	if exitCode == 127 {
 		procutil.EmitWarnLines(stderrLines, logger)
-		params.OnEvent(domain.AgentEvent{
-			Type:      domain.EventTurnFailed,
-			Timestamp: now,
-			Message:   "copilot binary not found",
-		})
+		agentcore.EmitTurnFailed(params.OnEvent, "copilot binary not found", 0)
 		return domain.TurnResult{
 				SessionID:  state.copilotSessionID,
 				ExitReason: domain.EventTurnFailed,
@@ -610,11 +460,7 @@ func (a *CopilotAdapter) RunTurn(ctx context.Context, session domain.Session, pa
 	}
 
 	if procutil.WasSignaled(waitErr) {
-		params.OnEvent(domain.AgentEvent{
-			Type:      domain.EventTurnCancelled,
-			Timestamp: now,
-			Message:   "killed by signal",
-		})
+		agentcore.EmitTurnCancelled(params.OnEvent, "killed by signal")
 		return domain.TurnResult{
 				SessionID:  state.copilotSessionID,
 				ExitReason: domain.EventTurnCancelled,
@@ -649,11 +495,7 @@ func (a *CopilotAdapter) RunTurn(ctx context.Context, session domain.Session, pa
 		}
 
 		if lastResult.ExitCode != nil && *lastResult.ExitCode == 0 {
-			params.OnEvent(domain.AgentEvent{
-				Type:          domain.EventTurnCompleted,
-				Timestamp:     now,
-				APIDurationMS: apiDurationMS,
-			})
+			agentcore.EmitTurnCompleted(params.OnEvent, "", apiDurationMS)
 			return domain.TurnResult{
 				SessionID:  state.copilotSessionID,
 				ExitReason: domain.EventTurnCompleted,
@@ -661,12 +503,7 @@ func (a *CopilotAdapter) RunTurn(ctx context.Context, session domain.Session, pa
 			}, nil
 		}
 		procutil.EmitWarnLines(stderrLines, logger)
-		params.OnEvent(domain.AgentEvent{
-			Type:          domain.EventTurnFailed,
-			Timestamp:     now,
-			Message:       "non-zero exit in result event",
-			APIDurationMS: apiDurationMS,
-		})
+		agentcore.EmitTurnFailed(params.OnEvent, "non-zero exit in result event", apiDurationMS)
 		return domain.TurnResult{
 				SessionID:  state.copilotSessionID,
 				ExitReason: domain.EventTurnFailed,
@@ -680,11 +517,7 @@ func (a *CopilotAdapter) RunTurn(ctx context.Context, session domain.Session, pa
 	// No result event.
 	if exitCode != 0 {
 		procutil.EmitWarnLines(stderrLines, logger)
-		params.OnEvent(domain.AgentEvent{
-			Type:      domain.EventTurnFailed,
-			Timestamp: now,
-			Message:   "non-zero exit",
-		})
+		agentcore.EmitTurnFailed(params.OnEvent, "non-zero exit", 0)
 		return domain.TurnResult{
 				SessionID:  state.copilotSessionID,
 				ExitReason: domain.EventTurnFailed,
@@ -696,14 +529,10 @@ func (a *CopilotAdapter) RunTurn(ctx context.Context, session domain.Session, pa
 	}
 
 	// No result event and exit code 0.
-	if cumulativeOutputTokens == 0 {
+	if acc.Snapshot().OutputTokens == 0 {
 		procutil.EmitWarnLines(stderrLines, logger)
 		logger.Warn("agent exited without producing output, treating as failure")
-		params.OnEvent(domain.AgentEvent{
-			Type:      domain.EventTurnFailed,
-			Timestamp: now,
-			Message:   "agent exited without producing output",
-		})
+		agentcore.EmitTurnFailed(params.OnEvent, "agent exited without producing output", 0)
 		return domain.TurnResult{
 				SessionID:  state.copilotSessionID,
 				ExitReason: domain.EventTurnFailed,
@@ -714,10 +543,7 @@ func (a *CopilotAdapter) RunTurn(ctx context.Context, session domain.Session, pa
 			}
 	}
 
-	params.OnEvent(domain.AgentEvent{
-		Type:      domain.EventTurnCompleted,
-		Timestamp: now,
-	})
+	agentcore.EmitTurnCompleted(params.OnEvent, "", 0)
 	return domain.TurnResult{
 		SessionID:  state.copilotSessionID,
 		ExitReason: domain.EventTurnCompleted,

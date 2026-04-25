@@ -1280,7 +1280,7 @@ func TestRunTurn_PanicsOnNilOnEvent(t *testing.T) {
 	adapter, _ := NewClaudeCodeAdapter(map[string]any{})
 	session := domain.Session{
 		ID:       "panic-test",
-		Internal: &sessionState{command: "/bin/sh", workspacePath: t.TempDir()},
+		Internal: &sessionState{target: agentcore.LaunchTarget{Command: "/bin/sh", WorkspacePath: t.TempDir()}},
 	}
 
 	defer func() {
