@@ -72,7 +72,7 @@ func TestTruncateRunes(t *testing.T) {
 		{name: "emoji counted as single rune", s: "ab🎉cd", maxLen: 3, want: "ab🎉…"},
 		{name: "maxLen zero returns ellipsis", s: "abc", maxLen: 0, want: "…"},
 		{name: "unicode two-byte runes", s: "héllo", maxLen: 4, want: "héll…"},
-		{name: "result rune count is maxLen plus one", s: strings("x", 20), maxLen: 5, want: strings("x", 5) + "…"},
+		{name: "result rune count is maxLen plus one", s: repeatString("x", 20), maxLen: 5, want: repeatString("x", 5) + "…"},
 	}
 
 	for _, tt := range tests {
@@ -89,8 +89,8 @@ func TestTruncateRunes(t *testing.T) {
 	}
 }
 
-// strings returns s repeated n times.
-func strings(s string, n int) string {
+// repeatString returns s repeated n times.
+func repeatString(s string, n int) string {
 	result := make([]byte, len(s)*n)
 	for i := range n {
 		copy(result[i*len(s):], s)
