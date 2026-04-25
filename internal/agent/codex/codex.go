@@ -22,11 +22,13 @@ import (
 	"sync"
 	"time"
 
+	"github.com/sortie-ai/sortie/internal/agent/agentcore"
 	"github.com/sortie-ai/sortie/internal/agent/procutil"
 	"github.com/sortie-ai/sortie/internal/agent/sshutil"
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/logging"
 	"github.com/sortie-ai/sortie/internal/registry"
+	"github.com/sortie-ai/sortie/internal/typeutil"
 )
 
 func init() {
@@ -37,13 +39,6 @@ func init() {
 
 // Compile-time interface satisfaction check.
 var _ domain.AgentAdapter = (*CodexAdapter)(nil)
-
-// inFlightTool tracks a tool execution that has started but whose
-// corresponding item/completed has not yet arrived.
-type inFlightTool struct {
-	Name      string
-	Timestamp time.Time
-}
 
 // CodexAdapter satisfies [domain.AgentAdapter] by managing a persistent
 // codex app-server subprocess. One adapter instance serves all
@@ -504,7 +499,7 @@ func (a *CodexAdapter) RunTurn(ctx context.Context, session domain.Session, para
 	}
 	turnID := turnResult.Turn.ID
 
-	inFlight := make(map[string]inFlightTool)
+	inFlight := agentcore.NewToolTracker()
 	var usage domain.TokenUsage
 	var toolWg sync.WaitGroup
 	toolEventCh := make(chan domain.AgentEvent, 8)
@@ -705,10 +700,7 @@ func (a *CodexAdapter) RunTurn(ctx context.Context, session domain.Session, para
 				switch item.Type {
 				case "commandExecution", "fileChange", "mcpToolCall", "dynamicToolCall":
 					toolName := cmp.Or(item.Command, item.Type)
-					inFlight[item.ID] = inFlightTool{
-						Name:      toolName,
-						Timestamp: time.Now(),
-					}
+					inFlight.Begin(item.ID, toolName)
 					params.OnEvent(domain.AgentEvent{
 						Type:      domain.EventNotification,
 						Timestamp: now,
@@ -729,21 +721,19 @@ func (a *CodexAdapter) RunTurn(ctx context.Context, session domain.Session, para
 					continue
 				}
 				item := ip.Item
-				if flight, exists := inFlight[item.ID]; exists {
-					dur := time.Since(flight.Timestamp).Milliseconds()
+				if toolName, durationMS, ok := inFlight.End(item.ID); ok {
 					params.OnEvent(domain.AgentEvent{
 						Type:           domain.EventToolResult,
 						Timestamp:      now,
-						ToolName:       flight.Name,
-						ToolDurationMS: dur,
+						ToolName:       toolName,
+						ToolDurationMS: durationMS,
 					})
-					delete(inFlight, item.ID)
 				}
 				if item.Type == "agentMessage" && item.Text != "" {
 					params.OnEvent(domain.AgentEvent{
 						Type:      domain.EventNotification,
 						Timestamp: now,
-						Message:   truncate(item.Text, 200),
+						Message:   typeutil.TruncateRunes(item.Text, 200),
 					})
 				}
 

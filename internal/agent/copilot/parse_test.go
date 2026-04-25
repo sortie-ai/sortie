@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/sortie-ai/sortie/internal/typeutil"
 )
 
 // scanFixtureLines reads non-empty lines from a testdata/ fixture file.
@@ -708,9 +710,9 @@ func TestTruncate(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			got := truncate(tt.s, tt.maxLen)
+			got := typeutil.TruncateRunes(tt.s, tt.maxLen)
 			if got != tt.want {
-				t.Errorf("truncate(%q, %d) = %q, want %q", tt.s, tt.maxLen, got, tt.want)
+				t.Errorf("TruncateRunes(%q, %d) = %q, want %q", tt.s, tt.maxLen, got, tt.want)
 			}
 		})
 	}

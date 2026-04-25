@@ -4,9 +4,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
-	"unicode/utf8"
 
 	"github.com/sortie-ai/sortie/internal/domain"
+	"github.com/sortie-ai/sortie/internal/typeutil"
 )
 
 // rawEvent is the intermediate representation of a Copilot CLI JSONL
@@ -134,7 +134,7 @@ func parseSessionTaskCompleteData(data json.RawMessage) (sessionTaskCompleteData
 // 200 runes; otherwise tool requests are listed by name.
 func summarizeAssistantMessage(data assistantMessageData) string {
 	if data.Content != "" {
-		return truncate(strings.TrimSpace(data.Content), 200)
+		return typeutil.TruncateRunes(strings.TrimSpace(data.Content), 200)
 	}
 	if len(data.ToolRequests) > 0 {
 		names := make([]string, len(data.ToolRequests))
@@ -157,12 +157,4 @@ func normalizeUsage(_ *rawUsage, cumulativeOutput int64) domain.TokenUsage {
 		OutputTokens: cumulativeOutput,
 		TotalTokens:  cumulativeOutput,
 	}
-}
-
-func truncate(s string, maxLen int) string {
-	if utf8.RuneCountInString(s) <= maxLen {
-		return s
-	}
-	runes := []rune(s)
-	return string(runes[:maxLen]) + "…"
 }

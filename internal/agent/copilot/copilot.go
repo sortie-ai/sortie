@@ -23,11 +23,13 @@ import (
 	"sync"
 	"time"
 
+	"github.com/sortie-ai/sortie/internal/agent/agentcore"
 	"github.com/sortie-ai/sortie/internal/agent/procutil"
 	"github.com/sortie-ai/sortie/internal/agent/sshutil"
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/logging"
 	"github.com/sortie-ai/sortie/internal/registry"
+	"github.com/sortie-ai/sortie/internal/typeutil"
 )
 
 func init() {
@@ -38,13 +40,6 @@ func init() {
 
 // Compile-time interface satisfaction check.
 var _ domain.AgentAdapter = (*CopilotAdapter)(nil)
-
-// inFlightTool tracks a tool execution that has started but whose
-// corresponding tool.execution_complete has not yet arrived.
-type inFlightTool struct {
-	Name      string
-	Timestamp time.Time
-}
 
 // CopilotAdapter satisfies [domain.AgentAdapter] by managing Copilot
 // CLI subprocesses. One adapter instance serves all concurrent
@@ -357,7 +352,7 @@ func (a *CopilotAdapter) RunTurn(ctx context.Context, session domain.Session, pa
 	scanner.Buffer(make([]byte, 0, 64*1024), 10*1024*1024)
 
 	var lastResult *rawEvent
-	inFlight := make(map[string]inFlightTool)
+	inFlight := agentcore.NewToolTracker()
 	var cumulativeOutputTokens int64
 
 	for scanner.Scan() {
@@ -369,7 +364,7 @@ func (a *CopilotAdapter) RunTurn(ctx context.Context, session domain.Session, pa
 			params.OnEvent(domain.AgentEvent{
 				Type:      domain.EventMalformed,
 				Timestamp: now,
-				Message:   truncate(string(line), 500),
+				Message:   typeutil.TruncateRunes(string(line), 500),
 			})
 			continue
 		}
@@ -418,10 +413,7 @@ func (a *CopilotAdapter) RunTurn(ctx context.Context, session domain.Session, pa
 			if len(event.Data) > 0 {
 				toolData, dataErr := parseToolExecutionData(event.Data)
 				if dataErr == nil {
-					inFlight[toolData.ToolCallID] = inFlightTool{
-						Name:      toolData.ToolName,
-						Timestamp: time.Now(),
-					}
+					inFlight.Begin(toolData.ToolCallID, toolData.ToolName)
 					params.OnEvent(domain.AgentEvent{
 						Type:      domain.EventNotification,
 						Timestamp: now,
@@ -434,14 +426,9 @@ func (a *CopilotAdapter) RunTurn(ctx context.Context, session domain.Session, pa
 			if len(event.Data) > 0 {
 				toolData, dataErr := parseToolExecutionData(event.Data)
 				if dataErr == nil {
-					toolName := toolData.ToolName
-					var durationMS int64
-					if entry, ok := inFlight[toolData.ToolCallID]; ok {
-						toolName = entry.Name
-						if d := time.Since(entry.Timestamp); d > 0 {
-							durationMS = d.Milliseconds()
-						}
-						delete(inFlight, toolData.ToolCallID)
+					toolName, durationMS, ok := inFlight.End(toolData.ToolCallID)
+					if !ok {
+						toolName = toolData.ToolName
 					}
 					params.OnEvent(domain.AgentEvent{
 						Type:           domain.EventToolResult,

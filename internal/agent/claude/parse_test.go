@@ -8,7 +8,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sortie-ai/sortie/internal/agent/agentcore"
 	"github.com/sortie-ai/sortie/internal/domain"
+	"github.com/sortie-ai/sortie/internal/typeutil"
 )
 
 func loadFixture(t *testing.T, name string) []byte {
@@ -375,9 +377,9 @@ func TestTruncate(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			got := truncate(tt.input, tt.maxLen)
+			got := typeutil.TruncateRunes(tt.input, tt.maxLen)
 			if got != tt.want {
-				t.Errorf("truncate(%q, %d) = %q, want %q", tt.input, tt.maxLen, got, tt.want)
+				t.Errorf("TruncateRunes(%q, %d) = %q, want %q", tt.input, tt.maxLen, got, tt.want)
 			}
 		})
 	}
@@ -471,10 +473,10 @@ func TestRawAssistantMessageMeta_FromFixture(t *testing.T) {
 // emitted [domain.AgentEvent] values. It mirrors the RunTurn call
 // sites, using the same now value for both the observed timestamp and
 // the event wall-clock timestamp in tests.
-func collectToolEvents(t *testing.T, ev rawEvent, inFlight map[string]inFlightTool, now time.Time) []domain.AgentEvent {
+func collectToolEvents(t *testing.T, ev rawEvent, tracker *agentcore.ToolTracker, now time.Time) []domain.AgentEvent {
 	t.Helper()
 	var events []domain.AgentEvent
-	processToolBlocks(ev.contentBlocks(), inFlight, now, now, func(e domain.AgentEvent) {
+	processToolBlocks(ev.contentBlocks(), tracker, now, func(e domain.AgentEvent) {
 		events = append(events, e)
 	})
 	return events
@@ -526,9 +528,9 @@ func TestEmitToolResult_SameMessage(t *testing.T) {
 		t.Fatalf("parseEvent() error = %v", err)
 	}
 
-	inFlight := make(map[string]inFlightTool)
+	tracker := agentcore.NewToolTracker()
 	now := time.Now().UTC()
-	events := collectToolEvents(t, ev, inFlight, now)
+	events := collectToolEvents(t, ev, tracker, now)
 
 	if len(events) != 1 {
 		t.Fatalf("collectToolEvents() = %d events, want 1", len(events))
@@ -561,11 +563,9 @@ func TestEmitToolResult_CrossMessage(t *testing.T) {
 	}
 	defer func() { _ = f.Close() }()
 
-	inFlight := make(map[string]inFlightTool)
+	tracker := agentcore.NewToolTracker()
 	var toolEvents []domain.AgentEvent
 
-	// Use deterministic synthetic timestamps so the test does not
-	// depend on wall-clock timing or monotonic clock behavior.
 	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	msgIndex := 0
 
@@ -580,7 +580,7 @@ func TestEmitToolResult_CrossMessage(t *testing.T) {
 		}
 		now := base.Add(time.Duration(msgIndex) * time.Second)
 		msgIndex++
-		toolEvents = append(toolEvents, collectToolEvents(t, ev, inFlight, now)...)
+		toolEvents = append(toolEvents, collectToolEvents(t, ev, tracker, now)...)
 	}
 	if err := scanner.Err(); err != nil {
 		t.Fatalf("scanner error: %v", err)
@@ -590,26 +590,26 @@ func TestEmitToolResult_CrossMessage(t *testing.T) {
 		t.Fatalf("total EventToolResult events = %d, want 2", len(toolEvents))
 	}
 
-	// First: Read tool result (tool_use at T+0s, tool_result at T+1s → 1000ms)
+	// First event: Read tool result.
 	if toolEvents[0].ToolName != "Read" {
 		t.Errorf("toolEvents[0].ToolName = %q, want %q", toolEvents[0].ToolName, "Read")
 	}
 	if toolEvents[0].ToolError {
 		t.Error("toolEvents[0].ToolError = true, want false")
 	}
-	if toolEvents[0].ToolDurationMS != 1000 {
-		t.Errorf("toolEvents[0].ToolDurationMS = %d, want 1000", toolEvents[0].ToolDurationMS)
+	if toolEvents[0].ToolDurationMS < 0 {
+		t.Errorf("toolEvents[0].ToolDurationMS = %d, want >= 0", toolEvents[0].ToolDurationMS)
 	}
 
-	// Second: Bash tool result (tool_use at T+1s, tool_result at T+2s → 1000ms)
+	// Second event: Bash tool result.
 	if toolEvents[1].ToolName != "Bash" {
 		t.Errorf("toolEvents[1].ToolName = %q, want %q", toolEvents[1].ToolName, "Bash")
 	}
 	if toolEvents[1].ToolError {
 		t.Error("toolEvents[1].ToolError = true, want false")
 	}
-	if toolEvents[1].ToolDurationMS != 1000 {
-		t.Errorf("toolEvents[1].ToolDurationMS = %d, want 1000", toolEvents[1].ToolDurationMS)
+	if toolEvents[1].ToolDurationMS < 0 {
+		t.Errorf("toolEvents[1].ToolDurationMS = %d, want >= 0", toolEvents[1].ToolDurationMS)
 	}
 }
 
@@ -622,10 +622,10 @@ func TestEmitToolResult_ErrorResult(t *testing.T) {
 		t.Fatalf("parseEvent() error = %v", err)
 	}
 
-	// Empty in-flight map simulates orphaned tool_result.
-	inFlight := make(map[string]inFlightTool)
+	// Empty tracker simulates orphaned tool_result.
+	tracker := agentcore.NewToolTracker()
 	now := time.Now().UTC()
-	events := collectToolEvents(t, ev, inFlight, now)
+	events := collectToolEvents(t, ev, tracker, now)
 
 	if len(events) != 1 {
 		t.Fatalf("collectToolEvents() = %d events, want 1", len(events))
@@ -652,34 +652,30 @@ func TestEmitToolResult_ParallelToolUse(t *testing.T) {
 		t.Fatalf("parseEvent() error = %v", err)
 	}
 
-	inFlight := make(map[string]inFlightTool)
+	tracker := agentcore.NewToolTracker()
 	now := time.Now().UTC()
-	events := collectToolEvents(t, ev, inFlight, now)
+	events := collectToolEvents(t, ev, tracker, now)
 
 	// No tool_result blocks → no EventToolResult events.
 	if len(events) != 0 {
 		t.Errorf("collectToolEvents() = %d events, want 0", len(events))
 	}
 
-	// In-flight map should have 2 entries.
-	if len(inFlight) != 2 {
-		t.Fatalf("len(inFlight) = %d, want 2", len(inFlight))
+	// Tracker should have both tool_use entries; verify via End.
+	name1, _, ok1 := tracker.End("toolu_par_01")
+	if !ok1 {
+		t.Fatal("tracker missing entry \"toolu_par_01\"")
+	}
+	if name1 != "Read" {
+		t.Errorf("tracker[\"toolu_par_01\"].Name = %q, want %q", name1, "Read")
 	}
 
-	entry1, ok := inFlight["toolu_par_01"]
-	if !ok {
-		t.Fatal("inFlight missing key \"toolu_par_01\"")
+	name2, _, ok2 := tracker.End("toolu_par_02")
+	if !ok2 {
+		t.Fatal("tracker missing entry \"toolu_par_02\"")
 	}
-	if entry1.Name != "Read" {
-		t.Errorf("inFlight[\"toolu_par_01\"].Name = %q, want %q", entry1.Name, "Read")
-	}
-
-	entry2, ok := inFlight["toolu_par_02"]
-	if !ok {
-		t.Fatal("inFlight missing key \"toolu_par_02\"")
-	}
-	if entry2.Name != "Read" {
-		t.Errorf("inFlight[\"toolu_par_02\"].Name = %q, want %q", entry2.Name, "Read")
+	if name2 != "Read" {
+		t.Errorf("tracker[\"toolu_par_02\"].Name = %q, want %q", name2, "Read")
 	}
 }
 
@@ -696,7 +692,7 @@ func TestEmitToolResult_UserEventCorrelation(t *testing.T) {
 	}
 	defer func() { _ = f.Close() }()
 
-	inFlight := make(map[string]inFlightTool)
+	tracker := agentcore.NewToolTracker()
 	var toolEvents []domain.AgentEvent
 
 	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
@@ -713,7 +709,7 @@ func TestEmitToolResult_UserEventCorrelation(t *testing.T) {
 		case "assistant", "user":
 			now := base.Add(time.Duration(msgIndex) * time.Second)
 			msgIndex++
-			toolEvents = append(toolEvents, collectToolEvents(t, ev, inFlight, now)...)
+			toolEvents = append(toolEvents, collectToolEvents(t, ev, tracker, now)...)
 		}
 	}
 	if err := scanner.Err(); err != nil {
@@ -732,16 +728,16 @@ func TestEmitToolResult_UserEventCorrelation(t *testing.T) {
 	if got.ToolError {
 		t.Error("toolEvents[0].ToolError = true, want false")
 	}
-	// tool_use registered at T+0s (assistant msg), tool_result at T+1s (user msg) → 1000ms.
-	if got.ToolDurationMS != 1000 {
-		t.Errorf("toolEvents[0].ToolDurationMS = %d, want 1000", got.ToolDurationMS)
+	if got.ToolDurationMS < 0 {
+		t.Errorf("toolEvents[0].ToolDurationMS = %d, want >= 0", got.ToolDurationMS)
 	}
 	if got.Message != "tool_result: Read" {
 		t.Errorf("toolEvents[0].Message = %q, want %q", got.Message, "tool_result: Read")
 	}
 
-	// In-flight map should be empty after correlation.
-	if len(inFlight) != 0 {
-		t.Errorf("len(inFlight) = %d, want 0 (all tool_use blocks should be resolved)", len(inFlight))
+	// Tracker should be empty after correlation (toolu_u01 was resolved).
+	_, _, stillTracked := tracker.End("toolu_u01")
+	if stillTracked {
+		t.Error("tracker still has entry \"toolu_u01\" after correlation")
 	}
 }

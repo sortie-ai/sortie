@@ -15,6 +15,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/sortie-ai/sortie/internal/agent/agentcore"
 	"github.com/sortie-ai/sortie/internal/agent/agenttest"
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/registry"
@@ -2080,12 +2081,11 @@ func TestProcessToolBlocks_XMLStripping(t *testing.T) {
 			Content:   json.RawMessage(xmlContent),
 		},
 	}
-	inFlight := map[string]inFlightTool{
-		"toolu_test01": {Name: "Edit", Timestamp: time.Now()},
-	}
+	tracker := agentcore.NewToolTracker()
+	tracker.Begin("toolu_test01", "Edit")
 
 	var events []domain.AgentEvent
-	processToolBlocks(blocks, inFlight, time.Now(), time.Now(), func(e domain.AgentEvent) {
+	processToolBlocks(blocks, tracker, time.Now(), func(e domain.AgentEvent) {
 		events = append(events, e)
 	})
 
@@ -2140,12 +2140,11 @@ func TestProcessToolBlocks_TailTruncation(t *testing.T) {
 			Content:   json.RawMessage(contentJSON),
 		},
 	}
-	inFlight := map[string]inFlightTool{
-		"toolu_tail01": {Name: "Bash", Timestamp: time.Now()},
-	}
+	tracker := agentcore.NewToolTracker()
+	tracker.Begin("toolu_tail01", "Bash")
 
 	var events []domain.AgentEvent
-	processToolBlocks(blocks, inFlight, time.Now(), time.Now(), func(e domain.AgentEvent) {
+	processToolBlocks(blocks, tracker, time.Now(), func(e domain.AgentEvent) {
 		events = append(events, e)
 	})
 
