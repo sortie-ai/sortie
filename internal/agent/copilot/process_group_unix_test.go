@@ -98,7 +98,7 @@ func TestRunTurn_ProcessGroupKill_ContextCancel(t *testing.T) {
 	adapter, session := newTestSession(t, workspace)
 
 	pidFile := filepath.Join(workspace, "child.pid")
-	session.Internal.(*sessionState).command = writeCopilotPgidScript(t, workspace, pidFile)
+	session.Internal.(*sessionState).target.Command = writeCopilotPgidScript(t, workspace, pidFile)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -145,7 +145,7 @@ func TestRunTurn_ProcessGroupKill_StopSession(t *testing.T) {
 	adapter, session := newTestSession(t, workspace)
 
 	pidFile := filepath.Join(workspace, "child.pid")
-	session.Internal.(*sessionState).command = writeCopilotPgidScript(t, workspace, pidFile)
+	session.Internal.(*sessionState).target.Command = writeCopilotPgidScript(t, workspace, pidFile)
 
 	type turnResult struct {
 		result domain.TurnResult

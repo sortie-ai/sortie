@@ -7,6 +7,7 @@ import (
 	"testing"
 	"unicode/utf8"
 
+	"github.com/sortie-ai/sortie/internal/agent/agentcore"
 	"github.com/sortie-ai/sortie/internal/domain"
 )
 
@@ -532,7 +533,7 @@ func TestDenormalizeSandbox(t *testing.T) {
 func TestBuildSandboxPolicy_Default(t *testing.T) {
 	t.Parallel()
 
-	state := &sessionState{workspacePath: "/workspace/abc"}
+	state := &sessionState{target: agentcore.LaunchTarget{WorkspacePath: "/workspace/abc"}}
 	policy := buildSandboxPolicy(state, passthroughConfig{})
 
 	if policy["type"] != "workspaceWrite" {
@@ -559,7 +560,7 @@ func TestBuildSandboxPolicy_Default(t *testing.T) {
 func TestBuildSandboxPolicy_Override(t *testing.T) {
 	t.Parallel()
 
-	state := &sessionState{workspacePath: "/workspace/abc"}
+	state := &sessionState{target: agentcore.LaunchTarget{WorkspacePath: "/workspace/abc"}}
 	pt := passthroughConfig{
 		ThreadSandbox: "dangerouslyUnrestricted",
 		TurnSandboxPolicy: map[string]any{

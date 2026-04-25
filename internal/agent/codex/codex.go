@@ -16,9 +16,7 @@ import (
 	"log/slog"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strconv"
-	"strings"
 	"sync"
 	"time"
 
@@ -53,18 +51,14 @@ type CodexAdapter struct {
 // Internal. It tracks the persistent app-server subprocess, thread
 // ID, and turn state across the session lifetime.
 type sessionState struct {
-	workspacePath string
-	command       string
-	agentConfig   domain.AgentConfig
-	turnCount     int
+	target      agentcore.LaunchTarget
+	agentConfig domain.AgentConfig
+	turnCount   int
 
 	threadID      string
 	nextRequestID int64
 
-	sshHost                  string
-	remoteCommand            string
-	sshStrictHostKeyChecking string
-	mcpConfigPath            string
+	mcpConfigPath string
 
 	// mu guards proc, waitCh, stdin, stdout, and stderrCollector for
 	// concurrent access from StopSession and the event read loop.
@@ -104,109 +98,33 @@ func NewCodexAdapter(config map[string]any) (domain.AgentAdapter, error) {
 	return adapter, nil
 }
 
-// StartSession validates the workspace path, resolves the codex
-// binary, launches the app-server subprocess, performs the
-// initialization handshake, authenticates if needed, and starts or
-// resumes a thread.
+// StartSession validates the workspace path, resolves the codex binary,
+// launches the app-server subprocess, performs the initialization handshake,
+// authenticates if needed, and starts or resumes a thread.
 func (a *CodexAdapter) StartSession(ctx context.Context, params domain.StartSessionParams) (domain.Session, error) {
-	if params.WorkspacePath == "" {
-		return domain.Session{}, &domain.AgentError{
-			Kind:    domain.ErrInvalidWorkspaceCwd,
-			Message: "empty workspace path",
-		}
+	target, agentErr := agentcore.ResolveLaunchTarget(params, "codex app-server")
+	if agentErr != nil {
+		return domain.Session{}, agentErr
 	}
-
-	absPath, err := filepath.Abs(params.WorkspacePath)
-	if err != nil {
-		return domain.Session{}, &domain.AgentError{
-			Kind:    domain.ErrInvalidWorkspaceCwd,
-			Message: "cannot resolve workspace path",
-			Err:     err,
-		}
-	}
-
-	fi, err := os.Stat(absPath)
-	if err != nil {
-		return domain.Session{}, &domain.AgentError{
-			Kind:    domain.ErrInvalidWorkspaceCwd,
-			Message: "workspace path does not exist",
-			Err:     err,
-		}
-	}
-	if !fi.IsDir() {
-		return domain.Session{}, &domain.AgentError{
-			Kind:    domain.ErrInvalidWorkspaceCwd,
-			Message: "workspace path is not a directory",
-		}
-	}
-
-	command := cmp.Or(params.AgentConfig.Command, "codex app-server")
 
 	state := &sessionState{
-		workspacePath:            absPath,
-		agentConfig:              params.AgentConfig,
-		sshStrictHostKeyChecking: params.SSHStrictHostKeyChecking,
-		mcpConfigPath:            params.MCPConfigPath,
+		target:        target,
+		agentConfig:   params.AgentConfig,
+		mcpConfigPath: params.MCPConfigPath,
 	}
 
-	var cmdPath string
-	var cmdArgs []string
-
-	sshHostTrimmed := strings.TrimSpace(params.SSHHost)
-	if sshHostTrimmed != "" {
-		sshPath, lookErr := exec.LookPath("ssh")
-		if lookErr != nil {
-			return domain.Session{}, &domain.AgentError{
-				Kind:    domain.ErrAgentNotFound,
-				Message: "ssh binary not found on orchestrator host",
-				Err:     lookErr,
-			}
-		}
-
-		// Build the remote command, prefixing CODEX_API_KEY if present
-		// so it reaches the remote shell.
-		remoteCmd := command
-		if apiKey := os.Getenv("CODEX_API_KEY"); apiKey != "" {
-			remoteCmd = fmt.Sprintf("CODEX_API_KEY=%s %s", sshutil.ShellQuote(apiKey), command)
-		}
-
-		sshArgs := sshutil.BuildSSHArgs(sshHostTrimmed, absPath, remoteCmd, nil, sshutil.SSHOptions{
-			StrictHostKeyChecking: params.SSHStrictHostKeyChecking,
+	var cmd *exec.Cmd
+	if target.RemoteCommand != "" {
+		remoteCmd := buildSSHRemoteCmd(target.RemoteCommand, os.Getenv("CODEX_API_KEY"))
+		sshArgs := sshutil.BuildSSHArgs(target.SSHHost, target.WorkspacePath, remoteCmd, nil, sshutil.SSHOptions{
+			StrictHostKeyChecking: target.SSHStrictHostKeyChecking,
 		})
-
-		cmdPath = sshPath
-		cmdArgs = sshArgs
-		state.command = sshPath
-		state.sshHost = sshHostTrimmed
-		state.remoteCommand = command
+		cmd = exec.CommandContext(ctx, target.Command, sshArgs...) //nolint:gosec // args are constructed programmatically with shell quoting
 	} else {
-		// Local mode: the command may be "codex app-server" (with args).
-		// Split on first space to extract binary and arguments.
-		parts := strings.Fields(command)
-		if len(parts) == 0 {
-			return domain.Session{}, &domain.AgentError{
-				Kind:    domain.ErrAgentNotFound,
-				Message: "agent command is empty or whitespace-only",
-			}
-		}
-		resolved, lookErr := exec.LookPath(parts[0])
-		if lookErr != nil {
-			return domain.Session{}, &domain.AgentError{
-				Kind:    domain.ErrAgentNotFound,
-				Message: fmt.Sprintf("agent command %q not found", parts[0]),
-				Err:     lookErr,
-			}
-		}
-		cmdPath = resolved
-		if len(parts) > 1 {
-			cmdArgs = parts[1:]
-		}
-		state.command = resolved
+		cmd = exec.CommandContext(ctx, target.Command, target.Args...) //nolint:gosec // args are constructed programmatically
 	}
-
-	cmd := exec.CommandContext(ctx, cmdPath, cmdArgs...) //nolint:gosec // args are constructed programmatically
 	procutil.SetProcessGroup(cmd)
-	cmd.Dir = absPath
+	cmd.Dir = target.WorkspacePath
 	cmd.Env = os.Environ()
 
 	stdinPipe, err := cmd.StdinPipe()
@@ -420,7 +338,7 @@ func (a *CodexAdapter) RunTurn(ctx context.Context, session domain.Session, para
 	turnParams := map[string]any{
 		"threadId": state.threadID,
 		"input":    []map[string]any{{"type": "text", "text": params.Prompt}},
-		"cwd":      state.workspacePath,
+		"cwd":      state.target.WorkspacePath,
 	}
 
 	if state.turnCount == 1 || a.passthrough.TurnSandboxPolicy != nil {
@@ -500,6 +418,7 @@ func (a *CodexAdapter) RunTurn(ctx context.Context, session domain.Session, para
 	turnID := turnResult.Turn.ID
 
 	inFlight := agentcore.NewToolTracker()
+	acc := agentcore.NewUsageAccumulator()
 	var usage domain.TokenUsage
 	var toolWg sync.WaitGroup
 	toolEventCh := make(chan domain.AgentEvent, 8)
@@ -513,31 +432,16 @@ func (a *CodexAdapter) RunTurn(ctx context.Context, session domain.Session, para
 		if !m.IsNotification {
 			continue
 		}
-		now := time.Now().UTC()
 		method := m.Notification.Method
 		switch method {
 		case "turn/started":
 			if state.turnCount == 1 {
-				params.OnEvent(domain.AgentEvent{
-					Type:      domain.EventSessionStarted,
-					Timestamp: now,
-					SessionID: state.threadID,
-					AgentPID:  session.AgentPID,
-					Message:   "session started",
-				})
+				agentcore.EmitSessionStarted(params.OnEvent, session.AgentPID, state.threadID)
 			} else {
-				params.OnEvent(domain.AgentEvent{
-					Type:      domain.EventNotification,
-					Timestamp: now,
-					Message:   "turn started",
-				})
+				agentcore.EmitNotification(params.OnEvent, "turn started")
 			}
 		default:
-			params.OnEvent(domain.AgentEvent{
-				Type:      domain.EventNotification,
-				Timestamp: now,
-				Message:   method,
-			})
+			agentcore.EmitNotification(params.OnEvent, method)
 		}
 	}
 
@@ -580,12 +484,7 @@ func (a *CodexAdapter) RunTurn(ctx context.Context, session domain.Session, para
 					}
 			}
 			if msg.Err != nil {
-				now := time.Now().UTC()
-				params.OnEvent(domain.AgentEvent{
-					Type:      domain.EventTurnFailed,
-					Timestamp: now,
-					Message:   msg.Err.Error(),
-				})
+				agentcore.EmitTurnFailed(params.OnEvent, msg.Err.Error(), 0)
 				go func() { toolWg.Wait(); close(toolEventCh) }()
 				for evt := range toolEventCh {
 					params.OnEvent(evt)
@@ -616,19 +515,9 @@ func (a *CodexAdapter) RunTurn(ctx context.Context, session domain.Session, para
 			switch method {
 			case "turn/started":
 				if state.turnCount == 1 {
-					params.OnEvent(domain.AgentEvent{
-						Type:      domain.EventSessionStarted,
-						Timestamp: now,
-						SessionID: state.threadID,
-						AgentPID:  session.AgentPID,
-						Message:   "session started",
-					})
+					agentcore.EmitSessionStarted(params.OnEvent, session.AgentPID, state.threadID)
 				} else {
-					params.OnEvent(domain.AgentEvent{
-						Type:      domain.EventNotification,
-						Timestamp: now,
-						Message:   "turn started",
-					})
+					agentcore.EmitNotification(params.OnEvent, "turn started")
 				}
 
 			case "turn/completed":
@@ -638,18 +527,14 @@ func (a *CodexAdapter) RunTurn(ctx context.Context, session domain.Session, para
 				}
 
 				if tc.Usage != nil {
-					usage = normalizeUsage(tc.Usage)
+					usage = acc.ReplaceCumulative(normalizeUsage(tc.Usage))
 				}
 				exitReason := mapTurnStatus(tc.Turn.Status)
 
 				if tc.Turn.Status == "failed" && tc.Turn.Error != nil {
 					kind := mapCodexErrorInfo(tc.Turn.Error.CodexErrorInfo)
 					errMsg := tc.Turn.Error.Message
-					params.OnEvent(domain.AgentEvent{
-						Type:      domain.EventTurnFailed,
-						Timestamp: now,
-						Message:   errMsg,
-					})
+					agentcore.EmitTurnFailed(params.OnEvent, errMsg, 0)
 					params.OnEvent(domain.AgentEvent{
 						Type:      domain.EventTokenUsage,
 						Timestamp: now,
@@ -669,11 +554,14 @@ func (a *CodexAdapter) RunTurn(ctx context.Context, session domain.Session, para
 						}
 				}
 
-				params.OnEvent(domain.AgentEvent{
-					Type:      exitReason,
-					Timestamp: now,
-					Message:   "turn " + tc.Turn.Status,
-				})
+				switch exitReason {
+				case domain.EventTurnCompleted:
+					agentcore.EmitTurnCompleted(params.OnEvent, "turn "+tc.Turn.Status, 0)
+				case domain.EventTurnCancelled:
+					agentcore.EmitTurnCancelled(params.OnEvent, "turn "+tc.Turn.Status)
+				default:
+					agentcore.EmitTurnFailed(params.OnEvent, "turn "+tc.Turn.Status, 0)
+				}
 				params.OnEvent(domain.AgentEvent{
 					Type:      domain.EventTokenUsage,
 					Timestamp: now,
@@ -701,17 +589,9 @@ func (a *CodexAdapter) RunTurn(ctx context.Context, session domain.Session, para
 				case "commandExecution", "fileChange", "mcpToolCall", "dynamicToolCall":
 					toolName := cmp.Or(item.Command, item.Type)
 					inFlight.Begin(item.ID, toolName)
-					params.OnEvent(domain.AgentEvent{
-						Type:      domain.EventNotification,
-						Timestamp: now,
-						Message:   summarizeItem(item.Type, item.ID),
-					})
+					agentcore.EmitNotification(params.OnEvent, summarizeItem(item.Type, item.ID))
 				default:
-					params.OnEvent(domain.AgentEvent{
-						Type:      domain.EventNotification,
-						Timestamp: now,
-						Message:   summarizeItem(item.Type, item.ID),
-					})
+					agentcore.EmitNotification(params.OnEvent, summarizeItem(item.Type, item.ID))
 				}
 
 			case "item/completed":
@@ -730,18 +610,11 @@ func (a *CodexAdapter) RunTurn(ctx context.Context, session domain.Session, para
 					})
 				}
 				if item.Type == "agentMessage" && item.Text != "" {
-					params.OnEvent(domain.AgentEvent{
-						Type:      domain.EventNotification,
-						Timestamp: now,
-						Message:   typeutil.TruncateRunes(item.Text, 200),
-					})
+					agentcore.EmitNotification(params.OnEvent, typeutil.TruncateRunes(item.Text, 200))
 				}
 
 			case "item/agentMessage/delta", "item/commandExecution/outputDelta":
-				params.OnEvent(domain.AgentEvent{
-					Type:      domain.EventNotification,
-					Timestamp: now,
-				})
+				agentcore.EmitNotification(params.OnEvent, "")
 
 			case "item/tool/call":
 				if evt := a.handleToolCall(ctx, state, &toolWg, msg, toolEventCh, logger); evt != nil {
@@ -749,11 +622,7 @@ func (a *CodexAdapter) RunTurn(ctx context.Context, session domain.Session, para
 				}
 
 			case "turn/plan/updated":
-				params.OnEvent(domain.AgentEvent{
-					Type:      domain.EventNotification,
-					Timestamp: now,
-					Message:   "plan updated",
-				})
+				agentcore.EmitNotification(params.OnEvent, "plan updated")
 
 			case "turn/diff/updated":
 				logger.Debug("diff updated")

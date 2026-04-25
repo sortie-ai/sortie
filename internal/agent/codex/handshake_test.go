@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sortie-ai/sortie/internal/agent/agentcore"
 	"github.com/sortie-ai/sortie/internal/domain"
 )
 
@@ -19,8 +20,8 @@ import (
 // It has a valid workspacePath and a discarding stdin.
 func handshakeState() *sessionState {
 	return &sessionState{
-		workspacePath: "/tmp",
-		stdin:         nopWriteCloser{},
+		target: agentcore.LaunchTarget{WorkspacePath: "/tmp"},
+		stdin:  nopWriteCloser{},
 	}
 }
 

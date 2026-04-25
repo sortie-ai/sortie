@@ -8,14 +8,12 @@ package claude
 
 import (
 	"bufio"
-	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -58,25 +56,11 @@ type ClaudeCodeAdapter struct {
 // Internal. It tracks the Claude Code session ID and subprocess
 // handle across turns.
 type sessionState struct {
-	workspacePath   string
-	command         string
+	target          agentcore.LaunchTarget
 	claudeSessionID string
 	isContinuation  bool
 	agentConfig     domain.AgentConfig
 	turnCount       int
-
-	// sshHost is the SSH destination for remote execution. Empty for
-	// local mode.
-	sshHost string
-
-	// remoteCommand is the agent command to run on the remote host
-	// when sshHost is non-empty. Empty for local mode. The local
-	// command field holds the resolved path to the ssh binary.
-	remoteCommand string
-
-	// sshStrictHostKeyChecking is the OpenSSH StrictHostKeyChecking
-	// value. Empty means accept-new.
-	sshStrictHostKeyChecking string
 
 	// mcpConfigPath is the worker-generated MCP config file path.
 	mcpConfigPath string
@@ -97,71 +81,13 @@ func NewClaudeCodeAdapter(config map[string]any) (domain.AgentAdapter, error) {
 	return &ClaudeCodeAdapter{passthrough: pt}, nil
 }
 
-// StartSession validates the workspace path, resolves the claude
-// binary, and initializes per-session state. No subprocess is spawned;
-// that happens in [ClaudeCodeAdapter.RunTurn].
+// StartSession validates the workspace path, resolves the claude binary, and
+// initializes per-session state. No subprocess is spawned; that happens in
+// [ClaudeCodeAdapter.RunTurn].
 func (a *ClaudeCodeAdapter) StartSession(_ context.Context, params domain.StartSessionParams) (domain.Session, error) {
-	if params.WorkspacePath == "" {
-		return domain.Session{}, &domain.AgentError{
-			Kind:    domain.ErrInvalidWorkspaceCwd,
-			Message: "empty workspace path",
-		}
-	}
-
-	absPath, err := filepath.Abs(params.WorkspacePath)
-	if err != nil {
-		return domain.Session{}, &domain.AgentError{
-			Kind:    domain.ErrInvalidWorkspaceCwd,
-			Message: "cannot resolve workspace path",
-			Err:     err,
-		}
-	}
-
-	fi, err := os.Stat(absPath)
-	if err != nil {
-		return domain.Session{}, &domain.AgentError{
-			Kind:    domain.ErrInvalidWorkspaceCwd,
-			Message: "workspace path does not exist",
-			Err:     err,
-		}
-	}
-	if !fi.IsDir() {
-		return domain.Session{}, &domain.AgentError{
-			Kind:    domain.ErrInvalidWorkspaceCwd,
-			Message: "workspace path is not a directory",
-		}
-	}
-
-	command := cmp.Or(params.AgentConfig.Command, "claude")
-
-	var resolvedPath string
-	var sshHost string
-	var remoteCommand string
-
-	if params.SSHHost != "" {
-		// SSH mode: resolve "ssh" locally, skip local LookPath for
-		// the agent command (it resolves on the remote host).
-		sshPath, lookErr := exec.LookPath("ssh")
-		if lookErr != nil {
-			return domain.Session{}, &domain.AgentError{
-				Kind:    domain.ErrAgentNotFound,
-				Message: "ssh binary not found on orchestrator host",
-				Err:     lookErr,
-			}
-		}
-		resolvedPath = sshPath
-		sshHost = params.SSHHost
-		remoteCommand = command
-	} else {
-		var lookErr error
-		resolvedPath, lookErr = exec.LookPath(command)
-		if lookErr != nil {
-			return domain.Session{}, &domain.AgentError{
-				Kind:    domain.ErrAgentNotFound,
-				Message: fmt.Sprintf("agent command %q not found", command),
-				Err:     lookErr,
-			}
-		}
+	target, agentErr := agentcore.ResolveLaunchTarget(params, "claude")
+	if agentErr != nil {
+		return domain.Session{}, agentErr
 	}
 
 	isContinuation := false
@@ -174,15 +100,11 @@ func (a *ClaudeCodeAdapter) StartSession(_ context.Context, params domain.StartS
 	}
 
 	state := &sessionState{
-		workspacePath:            absPath,
-		command:                  resolvedPath,
-		claudeSessionID:          sessionUUID,
-		isContinuation:           isContinuation,
-		agentConfig:              params.AgentConfig,
-		sshHost:                  sshHost,
-		remoteCommand:            remoteCommand,
-		sshStrictHostKeyChecking: params.SSHStrictHostKeyChecking,
-		mcpConfigPath:            params.MCPConfigPath,
+		target:          target,
+		claudeSessionID: sessionUUID,
+		isContinuation:  isContinuation,
+		agentConfig:     params.AgentConfig,
+		mcpConfigPath:   params.MCPConfigPath,
 	}
 
 	return domain.Session{
@@ -223,20 +145,21 @@ func (a *ClaudeCodeAdapter) RunTurn(ctx context.Context, session domain.Session,
 	defer cancelCmd()
 
 	var cmd *exec.Cmd
-	if state.sshHost != "" {
-		sshArgs := sshutil.BuildSSHArgs(state.sshHost, state.workspacePath, state.remoteCommand, args, sshutil.SSHOptions{
-			StrictHostKeyChecking: state.sshStrictHostKeyChecking,
+	if state.target.RemoteCommand != "" {
+		sshArgs := sshutil.BuildSSHArgs(state.target.SSHHost, state.target.WorkspacePath, state.target.RemoteCommand, args, sshutil.SSHOptions{
+			StrictHostKeyChecking: state.target.SSHStrictHostKeyChecking,
 		})
-		cmd = exec.CommandContext(cmdCtx, state.command, sshArgs...) //nolint:gosec // args are constructed programmatically with shell quoting
+		cmd = exec.CommandContext(cmdCtx, state.target.Command, sshArgs...) //nolint:gosec // args are constructed programmatically with shell quoting
 	} else {
-		cmd = exec.CommandContext(cmdCtx, state.command, args...) //nolint:gosec // args are constructed programmatically
+		allArgs := append(state.target.Args, args...)                       //nolint:gocritic // intentional: target.Args has cap==len so append always allocates
+		cmd = exec.CommandContext(cmdCtx, state.target.Command, allArgs...) //nolint:gosec // args are constructed programmatically
 	}
 	procutil.SetProcessGroup(cmd)
 	cmd.Cancel = func() error {
 		return procutil.SignalGraceful(cmd.Process.Pid)
 	}
 	cmd.WaitDelay = 5 * time.Second
-	cmd.Dir = state.workspacePath
+	cmd.Dir = state.target.WorkspacePath
 	cmd.Env = os.Environ()
 
 	stdoutPipe, err := cmd.StdoutPipe()
@@ -262,11 +185,7 @@ func (a *ClaudeCodeAdapter) RunTurn(ctx context.Context, session domain.Session,
 	if err != nil {
 		state.mu.Unlock()
 		if ctx.Err() != nil {
-			params.OnEvent(domain.AgentEvent{
-				Type:      domain.EventTurnCancelled,
-				Timestamp: time.Now().UTC(),
-				Message:   "context cancelled",
-			})
+			agentcore.EmitTurnCancelled(params.OnEvent, "context cancelled")
 			return domain.TurnResult{
 					SessionID:  state.claudeSessionID,
 					ExitReason: domain.EventTurnCancelled,
@@ -301,18 +220,12 @@ func (a *ClaudeCodeAdapter) RunTurn(ctx context.Context, session domain.Session,
 	var usage domain.TokenUsage
 	inFlight := agentcore.NewToolTracker()
 
-	// Cumulative accumulators for per-assistant-message token usage.
-	// Claude Code assistant message usage fields are per-request (not
-	// cumulative). The orchestrator delta algorithm requires cumulative
-	// values, so we accumulate here and emit cumulative totals.
+	acc := agentcore.NewUsageAccumulator()
 	var (
-		cumulativeInput     int64
-		cumulativeOutput    int64
-		cumulativeCacheRead int64
-		lastModel           string
-		emittedUsage        bool
-		apiCallStart        time.Time // monotonic timestamp of the last event before an API call
-		emittedAPITiming    bool      // true once per-request APIDurationMS has been emitted
+		lastModel        string
+		emittedUsage     bool
+		apiCallStart     time.Time // monotonic timestamp of the last event before an API call
+		emittedAPITiming bool      // true once per-request APIDurationMS has been emitted
 	)
 
 	for scanner.Scan() {
@@ -321,11 +234,7 @@ func (a *ClaudeCodeAdapter) RunTurn(ctx context.Context, session domain.Session,
 
 		event, parseErr := parseEvent(line)
 		if parseErr != nil {
-			params.OnEvent(domain.AgentEvent{
-				Type:      domain.EventMalformed,
-				Timestamp: now,
-				Message:   typeutil.TruncateRunes(string(line), 500),
-			})
+			agentcore.EmitMalformed(params.OnEvent, line)
 			continue
 		}
 
@@ -336,13 +245,7 @@ func (a *ClaudeCodeAdapter) RunTurn(ctx context.Context, session domain.Session,
 				if event.SessionID != "" {
 					state.claudeSessionID = event.SessionID
 				}
-				params.OnEvent(domain.AgentEvent{
-					Type:      domain.EventSessionStarted,
-					Timestamp: now,
-					AgentPID:  strconv.Itoa(cmd.Process.Pid),
-					SessionID: state.claudeSessionID,
-					Message:   "session started",
-				})
+				agentcore.EmitSessionStarted(params.OnEvent, strconv.Itoa(cmd.Process.Pid), state.claudeSessionID)
 				// The first API call is imminent. Start the monotonic timer.
 				// This first measurement includes agent initialization overhead
 				// (workspace scanning, .claude.json parsing, system prompt
@@ -351,17 +254,9 @@ func (a *ClaudeCodeAdapter) RunTurn(ctx context.Context, session domain.Session,
 				// overhead.
 				apiCallStart = time.Now()
 			case "api_retry":
-				params.OnEvent(domain.AgentEvent{
-					Type:      domain.EventNotification,
-					Timestamp: now,
-					Message:   formatAPIRetry(event),
-				})
+				agentcore.EmitNotification(params.OnEvent, formatAPIRetry(event))
 			default:
-				params.OnEvent(domain.AgentEvent{
-					Type:      domain.EventNotification,
-					Timestamp: now,
-					Message:   event.summary(),
-				})
+				agentcore.EmitNotification(params.OnEvent, event.summary())
 			}
 
 		case "assistant":
@@ -373,26 +268,18 @@ func (a *ClaudeCodeAdapter) RunTurn(ctx context.Context, session domain.Session,
 						lastModel = meta.Model
 					}
 					if meta.Usage != nil {
-						cumulativeInput += meta.Usage.InputTokens
-						cumulativeOutput += meta.Usage.OutputTokens
-						cumulativeCacheRead += meta.Usage.CacheReadInputTokens
+						snapshot, ready := acc.AddDelta(meta.Usage.InputTokens, meta.Usage.OutputTokens, meta.Usage.CacheReadInputTokens)
 						// Claude Code 2.x: tool_use-only assistant messages may
 						// carry output_tokens=0 (streaming message_start snapshot).
 						// Defer the token_usage event until cumulative output is
 						// non-zero so the orchestrator never receives an event
 						// claiming zero output tokens for a real API turn.
-						if cumulativeOutput > 0 {
-							cumulativeTotal := cumulativeInput + cumulativeOutput
-							usage = domain.TokenUsage{
-								InputTokens:     cumulativeInput,
-								OutputTokens:    cumulativeOutput,
-								TotalTokens:     cumulativeTotal,
-								CacheReadTokens: cumulativeCacheRead,
-							}
+						if ready {
+							usage = snapshot
 							tokenEvt := domain.AgentEvent{
 								Type:      domain.EventTokenUsage,
 								Timestamp: now,
-								Usage:     usage,
+								Usage:     snapshot,
 								Model:     lastModel,
 							}
 							if !apiCallStart.IsZero() {
@@ -418,11 +305,7 @@ func (a *ClaudeCodeAdapter) RunTurn(ctx context.Context, session domain.Session,
 			// ToolTracker.Begin stores time.Now() internally, so no separate
 			// monotonic timestamp is needed before calling processToolBlocks.
 			processToolBlocks(event.contentBlocks(), inFlight, now, params.OnEvent)
-			params.OnEvent(domain.AgentEvent{
-				Type:      domain.EventNotification,
-				Timestamp: now,
-				Message:   summarizeAssistant(event),
-			})
+			agentcore.EmitNotification(params.OnEvent, summarizeAssistant(event))
 
 		case "user":
 			// Claude Code emits tool results as user-role messages.
@@ -434,24 +317,23 @@ func (a *ClaudeCodeAdapter) RunTurn(ctx context.Context, session domain.Session,
 		case "result":
 			captured := event
 			lastResult = &captured
-			usage = normalizeUsage(event.Usage)
 			// Only emit token_usage from the result event when no
 			// per-assistant-message usage was already emitted. This
 			// avoids inflating APIRequestCount in the orchestrator.
 			if !emittedUsage {
+				usage = acc.ReplaceCumulative(normalizeUsage(event.Usage))
 				params.OnEvent(domain.AgentEvent{
 					Type:      domain.EventTokenUsage,
 					Timestamp: now,
 					Usage:     usage,
 					Model:     lastModel,
 				})
+			} else {
+				usage = acc.Snapshot()
 			}
 
 		case "stream_event":
-			params.OnEvent(domain.AgentEvent{
-				Type:      domain.EventNotification,
-				Timestamp: now,
-			})
+			agentcore.EmitNotification(params.OnEvent, "")
 
 		default:
 			params.OnEvent(domain.AgentEvent{
@@ -477,12 +359,7 @@ func (a *ClaudeCodeAdapter) RunTurn(ctx context.Context, session domain.Session,
 		// Context cancellation propagates through exec.CommandContext
 		// and can surface as a pipe read error. Treat as cancellation.
 		if ctx.Err() != nil {
-			now := time.Now().UTC()
-			params.OnEvent(domain.AgentEvent{
-				Type:      domain.EventTurnCancelled,
-				Timestamp: now,
-				Message:   "context cancelled",
-			})
+			agentcore.EmitTurnCancelled(params.OnEvent, "context cancelled")
 			return domain.TurnResult{
 					SessionID:  state.claudeSessionID,
 					ExitReason: domain.EventTurnCancelled,
@@ -495,12 +372,7 @@ func (a *ClaudeCodeAdapter) RunTurn(ctx context.Context, session domain.Session,
 		}
 
 		procutil.EmitWarnLines(stderrLines, logger)
-		now := time.Now().UTC()
-		params.OnEvent(domain.AgentEvent{
-			Type:      domain.EventTurnFailed,
-			Timestamp: now,
-			Message:   "stdout read error: " + scanErr.Error(),
-		})
+		agentcore.EmitTurnFailed(params.OnEvent, "stdout read error: "+scanErr.Error(), 0)
 		return domain.TurnResult{
 				SessionID:  state.claudeSessionID,
 				ExitReason: domain.EventTurnFailed,
@@ -529,14 +401,8 @@ func (a *ClaudeCodeAdapter) RunTurn(ctx context.Context, session domain.Session,
 	state.waitCh = nil
 	state.mu.Unlock()
 
-	now := time.Now().UTC()
-
 	if ctx.Err() != nil {
-		params.OnEvent(domain.AgentEvent{
-			Type:      domain.EventTurnCancelled,
-			Timestamp: now,
-			Message:   "context cancelled",
-		})
+		agentcore.EmitTurnCancelled(params.OnEvent, "context cancelled")
 		return domain.TurnResult{
 				SessionID:  state.claudeSessionID,
 				ExitReason: domain.EventTurnCancelled,
@@ -552,11 +418,7 @@ func (a *ClaudeCodeAdapter) RunTurn(ctx context.Context, session domain.Session,
 
 	if exitCode == 127 {
 		procutil.EmitWarnLines(stderrLines, logger)
-		params.OnEvent(domain.AgentEvent{
-			Type:      domain.EventTurnFailed,
-			Timestamp: now,
-			Message:   "claude binary not found",
-		})
+		agentcore.EmitTurnFailed(params.OnEvent, "claude binary not found", 0)
 		return domain.TurnResult{
 				SessionID:  state.claudeSessionID,
 				ExitReason: domain.EventTurnFailed,
@@ -568,11 +430,7 @@ func (a *ClaudeCodeAdapter) RunTurn(ctx context.Context, session domain.Session,
 	}
 
 	if procutil.WasSignaled(waitErr) {
-		params.OnEvent(domain.AgentEvent{
-			Type:      domain.EventTurnCancelled,
-			Timestamp: now,
-			Message:   "killed by signal",
-		})
+		agentcore.EmitTurnCancelled(params.OnEvent, "killed by signal")
 		return domain.TurnResult{
 				SessionID:  state.claudeSessionID,
 				ExitReason: domain.EventTurnCancelled,
@@ -591,12 +449,7 @@ func (a *ClaudeCodeAdapter) RunTurn(ctx context.Context, session domain.Session,
 			turnAPIDuration = lastResult.DurationAPI
 		}
 		if lastResult.Subtype == "success" && !lastResult.IsError {
-			params.OnEvent(domain.AgentEvent{
-				Type:          domain.EventTurnCompleted,
-				Timestamp:     now,
-				Message:       typeutil.TruncateRunes(lastResult.Result, 500),
-				APIDurationMS: turnAPIDuration,
-			})
+			agentcore.EmitTurnCompleted(params.OnEvent, typeutil.TruncateRunes(lastResult.Result, 500), turnAPIDuration)
 			return domain.TurnResult{
 				SessionID:  state.claudeSessionID,
 				ExitReason: domain.EventTurnCompleted,
@@ -604,12 +457,7 @@ func (a *ClaudeCodeAdapter) RunTurn(ctx context.Context, session domain.Session,
 			}, nil
 		}
 		procutil.EmitWarnLines(stderrLines, logger)
-		params.OnEvent(domain.AgentEvent{
-			Type:          domain.EventTurnFailed,
-			Timestamp:     now,
-			Message:       lastResult.Subtype,
-			APIDurationMS: turnAPIDuration,
-		})
+		agentcore.EmitTurnFailed(params.OnEvent, lastResult.Subtype, turnAPIDuration)
 		return domain.TurnResult{
 				SessionID:  state.claudeSessionID,
 				ExitReason: domain.EventTurnFailed,
@@ -622,11 +470,7 @@ func (a *ClaudeCodeAdapter) RunTurn(ctx context.Context, session domain.Session,
 
 	if exitCode != 0 {
 		procutil.EmitWarnLines(stderrLines, logger)
-		params.OnEvent(domain.AgentEvent{
-			Type:      domain.EventTurnFailed,
-			Timestamp: now,
-			Message:   "non-zero exit",
-		})
+		agentcore.EmitTurnFailed(params.OnEvent, "non-zero exit", 0)
 		return domain.TurnResult{
 				SessionID:  state.claudeSessionID,
 				ExitReason: domain.EventTurnFailed,
@@ -638,14 +482,10 @@ func (a *ClaudeCodeAdapter) RunTurn(ctx context.Context, session domain.Session,
 	}
 
 	// No result event and exit code 0.
-	if cumulativeOutput == 0 {
+	if acc.Snapshot().OutputTokens == 0 {
 		procutil.EmitWarnLines(stderrLines, logger)
 		logger.Warn("agent exited without producing output, treating as failure")
-		params.OnEvent(domain.AgentEvent{
-			Type:      domain.EventTurnFailed,
-			Timestamp: now,
-			Message:   "agent exited without producing output",
-		})
+		agentcore.EmitTurnFailed(params.OnEvent, "agent exited without producing output", 0)
 		return domain.TurnResult{
 				SessionID:  state.claudeSessionID,
 				ExitReason: domain.EventTurnFailed,
@@ -656,10 +496,7 @@ func (a *ClaudeCodeAdapter) RunTurn(ctx context.Context, session domain.Session,
 			}
 	}
 
-	params.OnEvent(domain.AgentEvent{
-		Type:      domain.EventTurnCompleted,
-		Timestamp: now,
-	})
+	agentcore.EmitTurnCompleted(params.OnEvent, "", 0)
 	return domain.TurnResult{
 		SessionID:  state.claudeSessionID,
 		ExitReason: domain.EventTurnCompleted,
