@@ -1,7 +1,8 @@
 // Package agentcore provides shared utilities used by agent adapter
 // packages. It must not import any specific adapter package (claude,
-// copilot, codex, etc.); its only allowed internal import is
-// internal/domain.
+// copilot, codex, etc.). Its allowed internal imports are
+// internal/domain, internal/agent/procutil, internal/agent/sshutil,
+// and internal/typeutil.
 package agentcore
 
 import "time"
