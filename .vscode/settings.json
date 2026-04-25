@@ -29,13 +29,6 @@
     { "file": ".github/instructions/code-review.instructions.md" }
   ],
 
-  // Custom instruction files for commit message generation.
-  // See: https://code.visualstudio.com/docs/copilot/customization/custom-instructions
-  // Note: As of 13 January 2026 this feature is in Experimental stage.
-  "github.copilot.chat.commitMessageGeneration.instructions": [
-    { "file": ".github/instructions/commit-messages.instructions.md" }
-  ],
-
   // Custom instruction files for pull request description generation.
   // See: https://code.visualstudio.com/docs/copilot/customization/custom-instructions
   // Note: As of 13 January 2026 this feature is in Experimental stage.
