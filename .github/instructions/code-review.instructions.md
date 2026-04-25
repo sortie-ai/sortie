@@ -36,7 +36,7 @@ internal/persistence/  → internal/domain, config
 internal/registry/     → internal/domain                   (adapter registration — no orchestrator, no persistence)
 internal/tracker/*/    → internal/domain, registry, typeutil (no cross-adapter imports)
 internal/scm/*/        → internal/domain, registry, typeutil (no cross-adapter imports)
-internal/agent/*/      → internal/domain, registry, agent/procutil, agent/sshutil (no cross-adapter imports)
+internal/agent/*/      → internal/domain, registry, agent/agentcore, agent/procutil, agent/sshutil, typeutil (no cross-adapter imports)
 internal/tool/*/        → internal/domain                  (agent tool implementations)
 internal/config/       → internal/domain, maputil          (no orchestrator, no persistence)
 internal/prompt/       → internal/domain, maputil          (no orchestrator, no persistence, no config)
