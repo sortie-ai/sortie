@@ -654,41 +654,6 @@ func TestSummarizeAssistantMessage(t *testing.T) {
 	}
 }
 
-func TestNormalizeUsage(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name             string
-		raw              *rawUsage
-		cumulativeOutput int64
-		wantOutput       int64
-	}{
-		{"zero tokens nil raw", nil, 0, 0},
-		{"some output tokens nil raw", nil, 42, 42},
-		{"large token count", nil, 100_000, 100_000},
-		{"non-nil raw does not change output", &rawUsage{PremiumRequests: 10, TotalAPIDurMS: 500}, 55, 55},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			got := normalizeUsage(tt.raw, tt.cumulativeOutput)
-			if got.InputTokens != 0 {
-				t.Errorf("normalizeUsage().InputTokens = %d, want 0", got.InputTokens)
-			}
-			if got.OutputTokens != tt.wantOutput {
-				t.Errorf("normalizeUsage().OutputTokens = %d, want %d", got.OutputTokens, tt.wantOutput)
-			}
-			if got.TotalTokens != tt.wantOutput {
-				t.Errorf("normalizeUsage().TotalTokens = %d, want %d", got.TotalTokens, tt.wantOutput)
-			}
-			if got.CacheReadTokens != 0 {
-				t.Errorf("normalizeUsage().CacheReadTokens = %d, want 0", got.CacheReadTokens)
-			}
-		})
-	}
-}
-
 func TestTruncate(t *testing.T) {
 	t.Parallel()
 

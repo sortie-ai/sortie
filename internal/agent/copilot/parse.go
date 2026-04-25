@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/typeutil"
 )
 
@@ -144,17 +143,4 @@ func summarizeAssistantMessage(data assistantMessageData) string {
 		return fmt.Sprintf("requesting %d tool(s): %s", len(data.ToolRequests), strings.Join(names, ", "))
 	}
 	return "assistant message"
-}
-
-// normalizeUsage converts raw usage counters and cumulative output
-// token data into a [domain.TokenUsage]. Input tokens are not
-// available from Copilot CLI JSONL output, so only output tokens are
-// populated. raw is accepted for forward compatibility with future
-// Copilot CLI versions that may include per-token counts in the result
-// event.
-func normalizeUsage(_ *rawUsage, cumulativeOutput int64) domain.TokenUsage {
-	return domain.TokenUsage{
-		OutputTokens: cumulativeOutput,
-		TotalTokens:  cumulativeOutput,
-	}
 }
