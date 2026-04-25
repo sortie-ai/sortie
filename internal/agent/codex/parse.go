@@ -3,9 +3,9 @@ package codex
 import (
 	"encoding/json"
 	"fmt"
-	"unicode/utf8"
 
 	"github.com/sortie-ai/sortie/internal/domain"
+	"github.com/sortie-ai/sortie/internal/typeutil"
 )
 
 // rpcRequest is a JSON-RPC 2.0 request sent to the app-server.
@@ -219,10 +219,10 @@ func mapCodexErrorInfo(info string) domain.AgentErrorKind {
 }
 
 // summarizeItem returns a short human-readable string for an item
-// event. Truncated to 200 characters.
+// event. Truncated to 200 runes.
 func summarizeItem(itemType, itemID string) string {
 	s := fmt.Sprintf("[%s] %s", itemType, itemID)
-	return truncate(s, 200)
+	return typeutil.TruncateRunes(s, 200)
 }
 
 // toolResultFor constructs the JSON-RPC result payload for a dynamic
@@ -235,13 +235,4 @@ func toolResultFor(success bool, output string) map[string]any {
 			{"type": "inputText", "text": output},
 		},
 	}
-}
-
-// truncate shortens s to maxLen runes if it exceeds that length.
-func truncate(s string, maxLen int) string {
-	if utf8.RuneCountInString(s) <= maxLen {
-		return s
-	}
-	runes := []rune(s)
-	return string(runes[:maxLen])
 }

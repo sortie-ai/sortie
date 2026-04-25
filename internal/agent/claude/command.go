@@ -4,6 +4,8 @@ import (
 	"crypto/rand"
 	"fmt"
 	"strconv"
+
+	"github.com/sortie-ai/sortie/internal/typeutil"
 )
 
 // passthroughConfig holds Claude Code-specific settings extracted from
@@ -28,17 +30,17 @@ type passthroughConfig struct {
 // defaults; SessionPersistence defaults to true.
 func parsePassthroughConfig(config map[string]any) passthroughConfig {
 	return passthroughConfig{
-		PermissionMode:     stringFrom(config, "permission_mode"),
-		Model:              stringFrom(config, "model"),
-		FallbackModel:      stringFrom(config, "fallback_model"),
-		MaxTurns:           intFrom(config, "max_turns", 0),
-		MaxBudgetUSD:       floatFrom(config, "max_budget_usd", 0),
-		Effort:             stringFrom(config, "effort"),
-		AllowedTools:       stringFrom(config, "allowed_tools"),
-		DisallowedTools:    stringFrom(config, "disallowed_tools"),
-		SystemPrompt:       stringFrom(config, "system_prompt"),
-		MCPConfig:          stringFrom(config, "mcp_config"),
-		SessionPersistence: boolFrom(config, "session_persistence", true),
+		PermissionMode:     typeutil.StringFrom(config, "permission_mode"),
+		Model:              typeutil.StringFrom(config, "model"),
+		FallbackModel:      typeutil.StringFrom(config, "fallback_model"),
+		MaxTurns:           typeutil.IntFrom(config, "max_turns", 0),
+		MaxBudgetUSD:       typeutil.FloatFrom(config, "max_budget_usd", 0),
+		Effort:             typeutil.StringFrom(config, "effort"),
+		AllowedTools:       typeutil.StringFrom(config, "allowed_tools"),
+		DisallowedTools:    typeutil.StringFrom(config, "disallowed_tools"),
+		SystemPrompt:       typeutil.StringFrom(config, "system_prompt"),
+		MCPConfig:          typeutil.StringFrom(config, "mcp_config"),
+		SessionPersistence: typeutil.BoolFrom(config, "session_persistence", true),
 	}
 }
 
@@ -115,59 +117,4 @@ func newUUID() string {
 	buf[8] = (buf[8] & 0x3f) | 0x80
 	return fmt.Sprintf("%08x-%04x-%04x-%04x-%012x",
 		buf[0:4], buf[4:6], buf[6:8], buf[8:10], buf[10:16])
-}
-
-func stringFrom(config map[string]any, key string) string {
-	v, ok := config[key].(string)
-	if !ok {
-		return ""
-	}
-	return v
-}
-
-// intFrom extracts an integer value from config by key. Handles both
-// int and float64 (JSON numbers decode as float64). Fractional
-// float64 values are rejected to prevent silent truncation. Returns
-// defaultVal if absent, wrong type, or fractional.
-func intFrom(config map[string]any, key string, defaultVal int) int {
-	raw, ok := config[key]
-	if !ok {
-		return defaultVal
-	}
-	switch v := raw.(type) {
-	case int:
-		return v
-	case float64:
-		if v != float64(int(v)) {
-			return defaultVal
-		}
-		return int(v)
-	default:
-		return defaultVal
-	}
-}
-
-// floatFrom extracts a float64 value from config by key. Returns
-// defaultVal if absent or wrong type.
-func floatFrom(config map[string]any, key string, defaultVal float64) float64 {
-	raw, ok := config[key]
-	if !ok {
-		return defaultVal
-	}
-	switch v := raw.(type) {
-	case float64:
-		return v
-	case int:
-		return float64(v)
-	default:
-		return defaultVal
-	}
-}
-
-func boolFrom(config map[string]any, key string, defaultVal bool) bool {
-	v, ok := config[key].(bool)
-	if !ok {
-		return defaultVal
-	}
-	return v
 }

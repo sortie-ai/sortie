@@ -4,9 +4,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
-	"unicode/utf8"
 
 	"github.com/sortie-ai/sortie/internal/domain"
+	"github.com/sortie-ai/sortie/internal/typeutil"
 )
 
 // rawEvent is the intermediate representation of a Claude Code JSONL
@@ -127,7 +127,7 @@ func summarizeAssistant(event rawEvent) string {
 		switch b.Type {
 		case "text":
 			if b.Text != "" {
-				parts = append(parts, truncate(b.Text, 200))
+				parts = append(parts, typeutil.TruncateRunes(b.Text, 200))
 			}
 		case "tool_use":
 			parts = append(parts, fmt.Sprintf("[tool: %s]", b.Name))
@@ -159,14 +159,4 @@ func (e rawEvent) summary() string {
 		return fmt.Sprintf("%s/%s", e.Type, e.Subtype)
 	}
 	return e.Type
-}
-
-// truncate returns s truncated to maxLen runes with a "…" suffix if
-// truncation occurred.
-func truncate(s string, maxLen int) string {
-	if utf8.RuneCountInString(s) <= maxLen {
-		return s
-	}
-	runes := []rune(s)
-	return string(runes[:maxLen]) + "…"
 }

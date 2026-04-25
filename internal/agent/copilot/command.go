@@ -3,6 +3,8 @@ package copilot
 import (
 	"strconv"
 	"strings"
+
+	"github.com/sortie-ai/sortie/internal/typeutil"
 )
 
 // passthroughConfig holds Copilot CLI-specific settings extracted from
@@ -27,17 +29,17 @@ type passthroughConfig struct {
 // defaults.
 func parsePassthroughConfig(config map[string]any) passthroughConfig {
 	return passthroughConfig{
-		Model:                 stringFrom(config, "model"),
-		MaxAutopilotContinues: intFrom(config, "max_autopilot_continues", 0),
-		Agent:                 stringFrom(config, "agent"),
-		AllowedTools:          stringFrom(config, "allowed_tools"),
-		DeniedTools:           stringFrom(config, "denied_tools"),
-		AvailableTools:        stringFrom(config, "available_tools"),
-		ExcludedTools:         stringFrom(config, "excluded_tools"),
-		MCPConfig:             stringFrom(config, "mcp_config"),
-		DisableBuiltinMCPs:    boolFrom(config, "disable_builtin_mcps", false),
-		NoCustomInstructions:  boolFrom(config, "no_custom_instructions", false),
-		Experimental:          boolFrom(config, "experimental", false),
+		Model:                 typeutil.StringFrom(config, "model"),
+		MaxAutopilotContinues: typeutil.IntFrom(config, "max_autopilot_continues", 0),
+		Agent:                 typeutil.StringFrom(config, "agent"),
+		AllowedTools:          typeutil.StringFrom(config, "allowed_tools"),
+		DeniedTools:           typeutil.StringFrom(config, "denied_tools"),
+		AvailableTools:        typeutil.StringFrom(config, "available_tools"),
+		ExcludedTools:         typeutil.StringFrom(config, "excluded_tools"),
+		MCPConfig:             typeutil.StringFrom(config, "mcp_config"),
+		DisableBuiltinMCPs:    typeutil.BoolFrom(config, "disable_builtin_mcps", false),
+		NoCustomInstructions:  typeutil.BoolFrom(config, "no_custom_instructions", false),
+		Experimental:          typeutil.BoolFrom(config, "experimental", false),
 	}
 }
 
@@ -110,44 +112,6 @@ func buildArgs(state *sessionState, prompt string, pt passthroughConfig) []strin
 	}
 
 	return args
-}
-
-func stringFrom(config map[string]any, key string) string {
-	v, ok := config[key].(string)
-	if !ok {
-		return ""
-	}
-	return v
-}
-
-// intFrom extracts an integer value from config by key. Handles both
-// int and float64 (JSON numbers decode as float64). Fractional
-// float64 values are rejected to prevent silent truncation. Returns
-// defaultVal if absent, wrong type, or fractional.
-func intFrom(config map[string]any, key string, defaultVal int) int {
-	raw, ok := config[key]
-	if !ok {
-		return defaultVal
-	}
-	switch v := raw.(type) {
-	case int:
-		return v
-	case float64:
-		if v != float64(int(v)) {
-			return defaultVal
-		}
-		return int(v)
-	default:
-		return defaultVal
-	}
-}
-
-func boolFrom(config map[string]any, key string, defaultVal bool) bool {
-	v, ok := config[key].(bool)
-	if !ok {
-		return defaultVal
-	}
-	return v
 }
 
 // formatMCPConfigValue prepares an operator-provided MCP config value

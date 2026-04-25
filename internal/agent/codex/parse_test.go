@@ -313,14 +313,18 @@ func TestSummarizeItem(t *testing.T) {
 		}
 	})
 
-	t.Run("long item truncated at 200 runes", func(t *testing.T) {
+	t.Run("long item truncated with ellipsis suffix", func(t *testing.T) {
 		t.Parallel()
 		// Prefix "[agentMessage] " is 15 chars; ID of 250 chars makes 265 total.
+		// TruncateRunes keeps first 200 runes then appends "…" (1 rune) → 201 runes.
 		longID := strings.Repeat("x", 250)
 		got := summarizeItem("agentMessage", longID)
 		runeCount := utf8.RuneCountInString(got)
-		if runeCount != 200 {
-			t.Errorf("summarizeItem() rune count = %d, want 200", runeCount)
+		if runeCount != 201 {
+			t.Errorf("summarizeItem() rune count = %d, want 201", runeCount)
+		}
+		if !strings.HasSuffix(got, "…") {
+			t.Errorf("summarizeItem() does not end with ellipsis: %q", got[max(0, len(got)-10):])
 		}
 	})
 

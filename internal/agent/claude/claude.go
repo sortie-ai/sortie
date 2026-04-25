@@ -23,11 +23,13 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/sortie-ai/sortie/internal/agent/agentcore"
 	"github.com/sortie-ai/sortie/internal/agent/procutil"
 	"github.com/sortie-ai/sortie/internal/agent/sshutil"
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/logging"
 	"github.com/sortie-ai/sortie/internal/registry"
+	"github.com/sortie-ai/sortie/internal/typeutil"
 )
 
 func init() {
@@ -43,13 +45,6 @@ var _ domain.AgentAdapter = (*ClaudeCodeAdapter)(nil)
 // tools for color and formatting (e.g. \x1b[31m, \x1b[0m). Compiled once at
 // program startup; applied inside stripClaudeMarkup.
 var ansiEscapeRE = regexp.MustCompile(`\x1b\[[0-9;]*[a-zA-Z]`)
-
-// inFlightTool tracks a tool_use block that has been seen but whose
-// corresponding tool_result has not yet arrived.
-type inFlightTool struct {
-	Name      string
-	Timestamp time.Time
-}
 
 // ClaudeCodeAdapter satisfies [domain.AgentAdapter] by managing Claude
 // Code CLI subprocesses. One adapter instance serves all concurrent
@@ -304,7 +299,7 @@ func (a *ClaudeCodeAdapter) RunTurn(ctx context.Context, session domain.Session,
 
 	var lastResult *rawEvent
 	var usage domain.TokenUsage
-	inFlight := make(map[string]inFlightTool)
+	inFlight := agentcore.NewToolTracker()
 
 	// Cumulative accumulators for per-assistant-message token usage.
 	// Claude Code assistant message usage fields are per-request (not
@@ -329,7 +324,7 @@ func (a *ClaudeCodeAdapter) RunTurn(ctx context.Context, session domain.Session,
 			params.OnEvent(domain.AgentEvent{
 				Type:      domain.EventMalformed,
 				Timestamp: now,
-				Message:   truncate(string(line), 500),
+				Message:   typeutil.TruncateRunes(string(line), 500),
 			})
 			continue
 		}
@@ -420,13 +415,9 @@ func (a *ClaudeCodeAdapter) RunTurn(ctx context.Context, session domain.Session,
 					}
 				}
 			}
-			// Use a monotonic timestamp for in-flight duration math.
-			// The wall-clock `now` (from .UTC()) has its monotonic
-			// reading stripped, so Sub() would depend on wall time and
-			// could go negative on clock adjustment. A separate
-			// time.Now() retains the monotonic component.
-			observed := time.Now()
-			processToolBlocks(event.contentBlocks(), inFlight, observed, now, params.OnEvent)
+			// ToolTracker.Begin stores time.Now() internally, so no separate
+			// monotonic timestamp is needed before calling processToolBlocks.
+			processToolBlocks(event.contentBlocks(), inFlight, now, params.OnEvent)
 			params.OnEvent(domain.AgentEvent{
 				Type:      domain.EventNotification,
 				Timestamp: now,
@@ -435,9 +426,9 @@ func (a *ClaudeCodeAdapter) RunTurn(ctx context.Context, session domain.Session,
 
 		case "user":
 			// Claude Code emits tool results as user-role messages.
-			// Correlate with the inFlight map populated from
+			// Correlate with the inFlight tracker populated from
 			// assistant tool_use blocks.
-			processToolBlocks(event.contentBlocks(), inFlight, time.Now(), now, params.OnEvent)
+			processToolBlocks(event.contentBlocks(), inFlight, now, params.OnEvent)
 			apiCallStart = time.Now() // next API call is imminent
 
 		case "result":
@@ -603,7 +594,7 @@ func (a *ClaudeCodeAdapter) RunTurn(ctx context.Context, session domain.Session,
 			params.OnEvent(domain.AgentEvent{
 				Type:          domain.EventTurnCompleted,
 				Timestamp:     now,
-				Message:       truncate(lastResult.Result, 500),
+				Message:       typeutil.TruncateRunes(lastResult.Result, 500),
 				APIDurationMS: turnAPIDuration,
 			})
 			return domain.TurnResult{
@@ -822,29 +813,22 @@ func truncateToolError(s string, maxLen int) string {
 // processToolBlocks scans content blocks for tool_use and tool_result
 // entries. tool_use blocks are registered in inFlight; tool_result
 // blocks are correlated against inFlight and emitted as
-// [domain.EventToolResult] via onEvent. The observed parameter is a
-// monotonic-capable timestamp for duration math; wallTime is the
+// [domain.EventToolResult] via onEvent. The wallTime parameter is the
 // wall-clock timestamp written into emitted events.
 func processToolBlocks(
 	blocks []rawContentBlock,
-	inFlight map[string]inFlightTool,
-	observed time.Time,
+	inFlight *agentcore.ToolTracker,
 	wallTime time.Time,
 	onEvent func(domain.AgentEvent),
 ) {
 	for _, block := range blocks {
 		if block.Type == "tool_use" && block.ID != "" {
-			inFlight[block.ID] = inFlightTool{Name: block.Name, Timestamp: observed}
+			inFlight.Begin(block.ID, block.Name)
 		}
 		if block.Type == "tool_result" {
-			toolName := "unknown"
-			var durationMS int64
-			if entry, ok := inFlight[block.ToolUseID]; ok {
-				toolName = entry.Name
-				if d := observed.Sub(entry.Timestamp); d > 0 {
-					durationMS = d.Milliseconds()
-				}
-				delete(inFlight, block.ToolUseID)
+			toolName, durationMS, ok := inFlight.End(block.ToolUseID)
+			if !ok {
+				toolName = "unknown"
 			}
 			msg := "tool_result: " + toolName
 			if block.IsError {
