@@ -31,13 +31,13 @@ func TestResolveBinary(t *testing.T) {
 			name:     "multi-token command with space",
 			command:  "codex app-server",
 			wantKind: domain.ErrAgentNotFound,
-			wantMsg:  `ResolveBinary requires a single command token, got "codex app-server"`,
+			wantMsg:  `agent command must be a single token, got "codex app-server"`,
 		},
 		{
 			name:     "multi-token command with tab",
 			command:  "codex\tapp-server",
 			wantKind: domain.ErrAgentNotFound,
-			wantMsg:  "ResolveBinary requires a single command token, got \"codex\\tapp-server\"",
+			wantMsg:  "agent command must be a single token, got \"codex\\tapp-server\"",
 		},
 	}
 
