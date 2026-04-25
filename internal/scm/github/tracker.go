@@ -363,7 +363,7 @@ func (a *GitHubAdapter) FetchIssueByID(ctx context.Context, issueID string) (dom
 	body, _, err := a.client.do(ctx, "GET", basePath, nil)
 	if err != nil {
 		a.incTrackerRequest("fetch_issue", "error")
-		if isNotFound(err) {
+		if domain.IsNotFound(err) {
 			return domain.Issue{}, &domain.TrackerError{
 				Kind:    domain.ErrTrackerNotFound,
 				Message: fmt.Sprintf("issue not found: %s", issueID),
@@ -425,7 +425,7 @@ func (a *GitHubAdapter) fetchBlockers(ctx context.Context, issueID string) ([]do
 
 	body, nextURL, err := a.client.do(ctx, "GET", path, params)
 	if err != nil {
-		if isNotFound(err) {
+		if domain.IsNotFound(err) {
 			return []domain.BlockerRef{}, nil
 		}
 		return nil, err
@@ -473,7 +473,7 @@ func (a *GitHubAdapter) fetchParent(ctx context.Context, issueID string) (*domai
 
 	body, _, err := a.client.do(ctx, "GET", path, nil)
 	if err != nil {
-		if isNotFound(err) {
+		if domain.IsNotFound(err) {
 			return nil, nil
 		}
 		return nil, err
@@ -768,7 +768,7 @@ func (a *GitHubAdapter) fetchStatesByNumbers(ctx context.Context, numbers []stri
 
 		body, responseETag, notModified, err := a.client.doConditional(ctx, "GET", path, nil, etag)
 		if err != nil {
-			if isNotFound(err) {
+			if domain.IsNotFound(err) {
 				continue
 			}
 			return nil, err
@@ -821,7 +821,7 @@ func (a *GitHubAdapter) fetchAllComments(ctx context.Context, issueNumber string
 
 	body, nextURL, err := a.client.do(ctx, "GET", path, params)
 	if err != nil {
-		if isNotFound(err) {
+		if domain.IsNotFound(err) {
 			return nil, &domain.TrackerError{
 				Kind:    domain.ErrTrackerNotFound,
 				Message: fmt.Sprintf("issue not found: %s", issueNumber),
@@ -912,7 +912,7 @@ func (a *GitHubAdapter) TransitionIssue(ctx context.Context, issueID string, tar
 	if currentLabel != "" && currentLabel != targetLower {
 		labelPath := basePath + "/labels/" + url.PathEscape(currentLabel)
 		err := a.client.doNoBody(ctx, "DELETE", labelPath)
-		if err != nil && !isNotFound(err) {
+		if err != nil && !domain.IsNotFound(err) {
 			a.incTrackerRequest("transition", "error")
 			return err
 		}
@@ -1028,11 +1028,4 @@ func (a *GitHubAdapter) incTrackerRequest(operation, outcome string) {
 	if a.metrics != nil {
 		a.metrics.IncTrackerRequests(operation, outcome)
 	}
-}
-
-// isNotFound checks whether an error is a TrackerError with kind
-// ErrTrackerNotFound (HTTP 404).
-func isNotFound(err error) bool {
-	te, ok := err.(*domain.TrackerError)
-	return ok && te.Kind == domain.ErrTrackerNotFound
 }

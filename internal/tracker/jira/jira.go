@@ -145,7 +145,7 @@ func (a *JiraAdapter) FetchIssueByID(ctx context.Context, issueID string) (domai
 	body, err := a.client.do(ctx, "GET", "/rest/api/3/issue/"+url.PathEscape(issueID), params)
 	if err != nil {
 		a.incTrackerRequest("fetch_issue", "error")
-		if isNotFound(err) {
+		if domain.IsNotFound(err) {
 			return domain.Issue{}, &domain.TrackerError{
 				Kind:    domain.ErrTrackerNotFound,
 				Message: fmt.Sprintf("issue not found: %s", issueID),
@@ -494,7 +494,7 @@ func (a *JiraAdapter) fetchComments(ctx context.Context, issueID string) ([]doma
 
 		body, err := a.client.do(ctx, "GET", "/rest/api/3/issue/"+url.PathEscape(issueID)+"/comment", params)
 		if err != nil {
-			if isNotFound(err) {
+			if domain.IsNotFound(err) {
 				return nil, &domain.TrackerError{
 					Kind:    domain.ErrTrackerNotFound,
 					Message: fmt.Sprintf("issue not found: %s", issueID),
@@ -524,9 +524,4 @@ func (a *JiraAdapter) fetchComments(ctx context.Context, issueID string) ([]doma
 		return []domain.Comment{}, nil
 	}
 	return normalizeComments(allComments), nil
-}
-
-func isNotFound(err error) bool {
-	te, ok := err.(*domain.TrackerError)
-	return ok && te.Kind == domain.ErrTrackerNotFound
 }
