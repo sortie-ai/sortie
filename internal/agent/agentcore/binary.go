@@ -21,7 +21,7 @@ func ResolveBinary(command string) (string, *domain.AgentError) {
 	if strings.ContainsAny(command, " \t") {
 		return "", &domain.AgentError{
 			Kind:    domain.ErrAgentNotFound,
-			Message: fmt.Sprintf("ResolveBinary requires a single command token, got %q", command),
+			Message: fmt.Sprintf("agent command must be a single token, got %q", command),
 		}
 	}
 
