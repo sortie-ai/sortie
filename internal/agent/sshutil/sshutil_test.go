@@ -208,7 +208,7 @@ func TestBuildSSHArgs(t *testing.T) {
 			check: func(t *testing.T, args []string) {
 				t.Helper()
 				remote := args[len(args)-1]
-				want := "cd -- " + ShellQuote("/workspace") + " && " + ShellQuote("claude")
+				want := "cd -- " + ShellQuote("/workspace") + " && " + "claude"
 				if remote != want {
 					t.Errorf("remote cmd = %q, want %q", remote, want)
 				}
@@ -244,15 +244,32 @@ func TestBuildSSHArgs(t *testing.T) {
 			},
 		},
 		{
-			name:      "command with spaces is shell-quoted",
+			name:      "multi-token command is appended verbatim not quoted as single word",
 			host:      "host",
 			workspace: "/w",
-			cmd:       "/usr/local/bin/my cmd",
+			cmd:       "codex app-server",
 			check: func(t *testing.T, args []string) {
 				t.Helper()
 				remote := args[len(args)-1]
-				if !strings.Contains(remote, ShellQuote("/usr/local/bin/my cmd")) {
-					t.Errorf("remote cmd = %q: command with spaces not properly quoted", remote)
+				if strings.Contains(remote, "'codex app-server'") {
+					t.Errorf("remote cmd = %q: multi-token command must not be single-quoted as one word", remote)
+				}
+				if !strings.Contains(remote, "codex app-server") {
+					t.Errorf("remote cmd = %q: want verbatim substring %q", remote, "codex app-server")
+				}
+			},
+		},
+		{
+			name:      "env-var prefix command is appended verbatim",
+			host:      "host",
+			workspace: "/w",
+			cmd:       "CODEX_API_KEY='sk-test' codex app-server",
+			check: func(t *testing.T, args []string) {
+				t.Helper()
+				remote := args[len(args)-1]
+				want := "CODEX_API_KEY='sk-test' codex app-server"
+				if !strings.Contains(remote, want) {
+					t.Errorf("remote cmd = %q: want verbatim substring %q", remote, want)
 				}
 			},
 		},
