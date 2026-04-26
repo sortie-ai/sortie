@@ -11,10 +11,8 @@ description: >
   whenever the output is meant to live under .plans/. The skill defines the
   phase structure, output style rules, constraint checks, and verification
   checklist — it does NOT write implementation code, tests, function
-  bodies, goroutine logic, or SQL queries. Do NOT use for specifications
-  (use writing-specs), ADRs (use managing-adrs), code reviews (use
-  Reviewer), implementing code (use Coder or Tester), or triaging review
-  feedback (use babysit-pr).
+  bodies, goroutine logic, or SQL queries. Do NOT use for specifications,
+  ADR, code reviews, implementing code, or triaging review feedback.
 metadata:
   version: 2026-04-21
   category: planning
@@ -39,7 +37,7 @@ A good plan is the compiled form of a spec: it removes ambiguity, sequences depe
 | "Write the spec for X" (no plan)                                     | No — use writing-specs |
 | "Implement this plan" / "write the code"                             | No — Coder or Tester   |
 | "Review this PR"                                                     | No — Reviewer          |
-| "Document this ADR"                                                  | No — managing-adrs     |
+| "Document this ADR"                                                  | No — manage-adrs     |
 | "Resolve review feedback"                                            | No — babysit-pr        |
 
 ## Inputs
