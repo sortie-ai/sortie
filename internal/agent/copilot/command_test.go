@@ -319,7 +319,7 @@ func TestBuildArgs(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			got := buildArgs(tt.state, tt.prompt, tt.pt)
+			got := buildArgs(tt.state, 1, tt.prompt, tt.pt)
 			tt.check(t, got)
 		})
 	}
@@ -386,7 +386,7 @@ func TestBuildArgs_AlwaysPresent(t *testing.T) {
 
 	// Required flags must appear in every invocation regardless of configuration.
 	required := []string{"-p", "--output-format", "-s", "--allow-all", "--autopilot", "--no-ask-user", "--max-autopilot-continues"}
-	got := buildArgs(&sessionState{}, "test prompt", passthroughConfig{})
+	got := buildArgs(&sessionState{}, 1, "test prompt", passthroughConfig{})
 
 	for _, flag := range required {
 		assertHasFlag(t, got, flag)
