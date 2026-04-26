@@ -90,6 +90,11 @@ func TestSampleWorkflowLoad(t *testing.T) {
 			file:     "WORKFLOW.test.md",
 			wantKeys: []string{"tracker", "polling", "workspace", "agent", "file"},
 		},
+		{
+			name:     "WORKFLOW.opencode.md loads with expected config keys",
+			file:     "WORKFLOW.opencode.md",
+			wantKeys: []string{"tracker", "polling", "workspace", "hooks", "agent", "opencode", "server"},
+		},
 	}
 
 	for _, tt := range tests {
@@ -139,6 +144,16 @@ func TestSampleWorkflowRender(t *testing.T) {
 		{
 			name:  "WORKFLOW.test.md minimal issue",
 			file:  "WORKFLOW.test.md",
+			issue: minimalIssue(),
+		},
+		{
+			name:  "WORKFLOW.opencode.md full issue",
+			file:  "WORKFLOW.opencode.md",
+			issue: fullIssue(),
+		},
+		{
+			name:  "WORKFLOW.opencode.md minimal issue",
+			file:  "WORKFLOW.opencode.md",
 			issue: minimalIssue(),
 		},
 	}
@@ -281,7 +296,7 @@ func TestSampleWorkflowTestFilePathConfig(t *testing.T) {
 func TestSampleWorkflowNoHTMLComments(t *testing.T) {
 	t.Parallel()
 
-	files := []string{"WORKFLOW.md", "WORKFLOW.test.md"}
+	files := []string{"WORKFLOW.md", "WORKFLOW.test.md", "WORKFLOW.opencode.md"}
 	for _, name := range files {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -297,6 +312,54 @@ func TestSampleWorkflowNoHTMLComments(t *testing.T) {
 				t.Errorf("%s prompt body contains HTML comment (<!--); use Go template comments {{/* */}} instead", name)
 			}
 		})
+	}
+}
+
+func TestSampleWorkflowOpenCodeExtension(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(repoRoot(t), "examples", "WORKFLOW.opencode.md")
+	wf, err := workflow.Load(path)
+	if err != nil {
+		t.Fatalf("workflow.Load(WORKFLOW.opencode.md): %v", err)
+	}
+
+	raw, ok := wf.Config["opencode"]
+	if !ok {
+		t.Fatal("WORKFLOW.opencode.md config missing 'opencode' extension block")
+	}
+	opencodeCfg, ok := raw.(map[string]any)
+	if !ok {
+		t.Fatalf("opencode extension type = %T, want map[string]any", raw)
+	}
+
+	if _, ok := opencodeCfg["model"]; !ok {
+		t.Error("opencode extension missing 'model' field")
+	}
+	if v, _ := opencodeCfg["dangerously_skip_permissions"].(bool); !v {
+		t.Error("opencode extension 'dangerously_skip_permissions' must be true")
+	}
+	if v, _ := opencodeCfg["disable_autocompact"].(bool); !v {
+		t.Error("opencode extension 'disable_autocompact' must be true")
+	}
+
+	agent, ok := wf.Config["agent"].(map[string]any)
+	if !ok {
+		t.Fatal("WORKFLOW.opencode.md config missing 'agent' map")
+	}
+	if kind, _ := agent["kind"].(string); kind != "opencode" {
+		t.Errorf("agent.kind = %q, want %q", kind, "opencode")
+	}
+	if cmd, _ := agent["command"].(string); cmd != "opencode" {
+		t.Errorf("agent.command = %q, want %q", cmd, "opencode")
+	}
+
+	tracker, ok := wf.Config["tracker"].(map[string]any)
+	if !ok {
+		t.Fatal("WORKFLOW.opencode.md config missing 'tracker' map")
+	}
+	if kind, _ := tracker["kind"].(string); kind != "jira" {
+		t.Errorf("tracker.kind = %q, want %q", kind, "jira")
 	}
 }
 
