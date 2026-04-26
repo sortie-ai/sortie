@@ -10,7 +10,7 @@ Before implementing:
 - State your assumptions explicitly. If uncertain, ask.
 - If multiple interpretations exist, present them - don't pick silently.
 - If a simpler approach exists, say so. Push back when warranted.
-- If something is unclear, stop. Name what's confusing. Ask.
+- If something is unclear, stop. Name what's confusing. Ask. This applies even when the confusion seems mild ("a bit confusing") or when you can imagine a reasonable resolution. Ambiguity that the agent silently resolves is a class of bug; ambiguity that the user resolves is not.
 
 ### 2. Simplicity First
 
