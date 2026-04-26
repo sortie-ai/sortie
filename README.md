@@ -84,7 +84,7 @@ distributed coordination. For full architectural details, see
 Issue trackers and coding agents are integrated through adapter interfaces. Adding support
 for a new tracker or agent is an additive change: implement the interface in a new package.
 
-Supported trackers: GitHub Issues and Jira. Supported agents: Claude Code, Copilot,
+Supported trackers: GitHub Issues and Jira. Supported agents: Claude Code, Copilot, OpenCode,
 and Codex. See [`docs/decisions/`](docs/decisions/) for detailed rationale on technology
 choices.
 

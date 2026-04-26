@@ -64,7 +64,7 @@ You are a senior engineer.
 
 Sortie 监视该文件，轮询匹配的工单，为每个工单创建隔离的工作区，并使用渲染后的提示词启动智能体。剩余工作由 Sortie 处理：停滞检测、超时强制执行、带退避的重试、与工单系统的状态协调，以及工单到达终态后的工作区清理。工作流变更无需重启即可生效。
 
-`agent.kind` 字段用于选择每次会话运行的编程智能体。Sortie 内置了 Claude Code、Copilot 和 Codex 的适配器——只需一行改动即可切换。完整配置详情参见[适配器参考文档](https://docs.sortie-ai.com/reference/)，完整工作流示例参见 [`examples/`](examples/)。
+`agent.kind` 字段用于选择每次会话运行的编程智能体。Sortie 内置了 Claude Code、Copilot、OpenCode 和 Codex 的适配器——只需一行改动即可切换。完整配置详情参见[适配器参考文档](https://docs.sortie-ai.com/reference/)，完整工作流示例参见 [`examples/`](examples/)。
 
 ## 架构
 
