@@ -1414,9 +1414,9 @@ known.
 **Validation rules:**
 
 - `opencode.allowed_tools` and `opencode.denied_tools` MUST NOT overlap.
-- When either tool list is present, the adapter removes any inherited
-  `OPENCODE_PERMISSION` value before launching OpenCode and replaces it with the
-  adapter-managed JSON policy.
+- The adapter always removes any inherited `OPENCODE_PERMISSION` value before
+  launching OpenCode. If either tool list is non-empty, it replaces that value
+  with the adapter-managed JSON policy.
 
 **Custom or future adapters (illustrative example):**
 
