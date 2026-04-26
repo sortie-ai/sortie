@@ -25,15 +25,7 @@ func newTestCIProvider(t *testing.T, baseURL string, maxLogLines int) *GitHubCIP
 	if err != nil {
 		t.Fatalf("NewGitHubCIProvider: %v", err)
 	}
-	gh := p.(*GitHubCIProvider)
-	defaultTransport, ok := http.DefaultTransport.(*http.Transport)
-	if !ok {
-		t.Fatalf("http.DefaultTransport is %T, want *http.Transport", http.DefaultTransport)
-	}
-	transport := defaultTransport.Clone()
-	gh.client.httpClient.Transport = transport
-	t.Cleanup(transport.CloseIdleConnections)
-	return gh
+	return p.(*GitHubCIProvider)
 }
 
 func assertCIErrorKind(t *testing.T, err error, want domain.CIErrorKind) {

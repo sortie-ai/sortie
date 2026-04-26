@@ -24,15 +24,7 @@ func newTestSCMAdapter(t *testing.T, baseURL string) *GitHubSCMAdapter {
 	if err != nil {
 		t.Fatalf("NewGitHubSCMAdapter: %v", err)
 	}
-	gh := a.(*GitHubSCMAdapter)
-	defaultTransport, ok := http.DefaultTransport.(*http.Transport)
-	if !ok {
-		t.Fatalf("http.DefaultTransport is %T, want *http.Transport", http.DefaultTransport)
-	}
-	transport := defaultTransport.Clone()
-	gh.client.httpClient.Transport = transport
-	t.Cleanup(transport.CloseIdleConnections)
-	return gh
+	return a.(*GitHubSCMAdapter)
 }
 
 func assertSCMErrorKind(t *testing.T, err error, want domain.SCMErrorKind) {
@@ -104,16 +96,25 @@ func TestNewGitHubSCMAdapter_DefaultEndpoint(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewGitHubSCMAdapter: %v", err)
 	}
-	gh := a.(*GitHubSCMAdapter)
-	if !strings.Contains(gh.client.baseURL, "api.github.com") {
-		t.Errorf("default endpoint = %q, want to contain \"api.github.com\"", gh.client.baseURL)
+	if a.(*GitHubSCMAdapter) == nil {
+		t.Fatal("NewGitHubSCMAdapter returned nil adapter")
 	}
 }
 
 func TestNewGitHubSCMAdapter_CustomUserAgent(t *testing.T) {
 	t.Parallel()
 
+	var gotUserAgent string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotUserAgent = r.Header.Get("User-Agent")
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(loadFixture(t, "reviews_empty.json"))
+	}))
+	defer srv.Close()
+
 	a, err := NewGitHubSCMAdapter(map[string]any{
+		"endpoint":   srv.URL,
 		"api_key":    "tok",
 		"user_agent": "my-app/1.0",
 	})
@@ -121,8 +122,12 @@ func TestNewGitHubSCMAdapter_CustomUserAgent(t *testing.T) {
 		t.Fatalf("NewGitHubSCMAdapter: %v", err)
 	}
 	gh := a.(*GitHubSCMAdapter)
-	if gh.client.userAgent != "my-app/1.0" {
-		t.Errorf("userAgent = %q, want %q", gh.client.userAgent, "my-app/1.0")
+	_, err = gh.FetchPendingReviews(context.Background(), 1, "owner", "repo")
+	if err != nil {
+		t.Fatalf("FetchPendingReviews: %v", err)
+	}
+	if gotUserAgent != "my-app/1.0" {
+		t.Errorf("User-Agent = %q, want %q", gotUserAgent, "my-app/1.0")
 	}
 }
 

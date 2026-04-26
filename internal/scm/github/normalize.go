@@ -2,9 +2,9 @@ package github
 
 import (
 	"strconv"
-	"strings"
 
 	"github.com/sortie-ai/sortie/internal/domain"
+	"github.com/sortie-ai/sortie/internal/issuekit"
 )
 
 // githubIssue represents a single issue from the GitHub REST API.
@@ -71,9 +71,9 @@ func normalizeIssue(gi githubIssue, activeStates, terminalStates []string, hando
 		desc = *gi.Body
 	}
 
-	labels := make([]string, 0, len(gi.Labels))
+	labelNames := make([]string, 0, len(gi.Labels))
 	for _, l := range gi.Labels {
-		labels = append(labels, strings.ToLower(l.Name))
+		labelNames = append(labelNames, l.Name)
 	}
 
 	assignee := ""
@@ -93,7 +93,7 @@ func normalizeIssue(gi githubIssue, activeStates, terminalStates []string, hando
 		Description: desc,
 		State:       extractState(gi.Labels, gi.State, activeStates, terminalStates, handoffState),
 		URL:         gi.HTMLURL,
-		Labels:      labels,
+		Labels:      issuekit.NormalizeLabels(labelNames),
 		Assignee:    assignee,
 		IssueType:   issueType,
 		BlockedBy:   []domain.BlockerRef{},
@@ -132,16 +132,16 @@ func normalizeBlockers(blockers []githubIssue, activeStates, terminalStates []st
 // [domain.Comment] values. Returns a non-nil empty slice when input
 // is empty.
 func normalizeComments(comments []githubComment) []domain.Comment {
-	normalized := make([]domain.Comment, 0, len(comments))
-	for _, c := range comments {
-		normalized = append(normalized, domain.Comment{
+	source := make([]issuekit.SourceComment, len(comments))
+	for i, c := range comments {
+		source[i] = issuekit.SourceComment{
 			ID:        strconv.FormatInt(c.ID, 10),
 			Author:    c.User.Login,
 			Body:      c.Body,
 			CreatedAt: c.CreatedAt,
-		})
+		}
 	}
-	return normalized
+	return issuekit.NormalizeComments(source)
 }
 
 // isPullRequest returns true when the GitHub API entry represents a

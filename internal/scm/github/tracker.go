@@ -2,8 +2,8 @@
 // The package includes [GitHubAdapter], which implements [domain.TrackerAdapter]
 // against the GitHub Issues and Labels REST API, and [GitHubCIProvider], which
 // implements [domain.CIStatusProvider] against the GitHub Checks API. Both
-// adapters share the internal HTTP client ([githubClient]) and ETag cache
-// ([etagCache]). Start with [NewGitHubAdapter] for tracker integration or
+// adapters share the internal HTTP transport and ETag cache ([etagCache]).
+// Start with [NewGitHubAdapter] for tracker integration or
 // [NewGitHubCIProvider] for CI status queries.
 //
 // Unlike the Jira adapter, this adapter stores both activeStates and
@@ -27,7 +27,9 @@ import (
 	"strings"
 
 	"github.com/sortie-ai/sortie/internal/domain"
+	"github.com/sortie-ai/sortie/internal/httpkit"
 	"github.com/sortie-ai/sortie/internal/registry"
+	"github.com/sortie-ai/sortie/internal/trackermetrics"
 	"github.com/sortie-ai/sortie/internal/typeutil"
 )
 
@@ -56,7 +58,7 @@ var defaultTerminalStates = []string{"done", "wontfix"}
 // GitHubAdapter implements [domain.TrackerAdapter] against the GitHub
 // REST API. Safe for concurrent use.
 type GitHubAdapter struct {
-	client         *githubClient
+	client         *httpkit.Client
 	owner          string
 	repo           string
 	activeStates   []string
@@ -166,10 +168,17 @@ func NewGitHubAdapter(config map[string]any) (domain.TrackerAdapter, error) {
 // is set, routes through the search endpoint for server-side
 // filtering. Comments are set to nil on all returned issues.
 func (a *GitHubAdapter) FetchCandidateIssues(ctx context.Context) ([]domain.Issue, error) {
-	if a.queryFilter != "" {
-		return a.fetchCandidatesViaSearch(ctx)
-	}
-	return a.fetchCandidatesViaIssues(ctx)
+	issues := make([]domain.Issue, 0)
+	err := trackermetrics.Track(a.metrics, "fetch_candidates", func() error {
+		var fetchErr error
+		if a.queryFilter != "" {
+			issues, fetchErr = a.fetchCandidatesViaSearch(ctx)
+			return fetchErr
+		}
+		issues, fetchErr = a.fetchCandidatesViaIssues(ctx)
+		return fetchErr
+	})
+	return issues, err
 }
 
 func (a *GitHubAdapter) fetchCandidatesViaIssues(ctx context.Context) ([]domain.Issue, error) {
@@ -181,59 +190,22 @@ func (a *GitHubAdapter) fetchCandidatesViaIssues(ctx context.Context) ([]domain.
 		"per_page":  {"50"},
 	}
 
-	body, nextURL, err := a.client.do(ctx, "GET", path, params)
-	if err != nil {
-		a.incTrackerRequest("fetch_candidates", "error")
-		return nil, err
-	}
-
-	var raw []githubIssue
-	if err := json.Unmarshal(body, &raw); err != nil {
-		a.incTrackerRequest("fetch_candidates", "error")
-		return nil, &domain.TrackerError{
-			Kind:    domain.ErrTrackerPayload,
-			Message: "failed to parse issues response",
-			Err:     err,
-		}
-	}
-
 	activeSet := make(map[string]struct{}, len(a.activeStates))
 	for _, s := range a.activeStates {
 		activeSet[s] = struct{}{}
 	}
 
-	var issues []domain.Issue
-	for _, gi := range raw {
-		if isPullRequest(gi) {
-			continue
-		}
-		issue := normalizeIssue(gi, a.activeStates, a.terminalStates, a.handoffState)
-		a.qualifyDisplayID(&issue)
-		if _, ok := activeSet[issue.State]; !ok {
-			continue
-		}
-		issue.Comments = nil
-		issues = append(issues, issue)
-	}
-
-	pageCount := 1
-	for nextURL != "" && pageCount < maxPages {
-		pageCount++
-		body, nextURL, err = a.client.doURL(ctx, nextURL)
-		if err != nil {
-			a.incTrackerRequest("fetch_candidates", "error")
-			return nil, err
-		}
-
-		raw = raw[:0]
+	paginator := httpkit.NewLinkPaginator(a.client, path, params, func(body []byte) ([]domain.Issue, error) {
+		var raw []githubIssue
 		if err := json.Unmarshal(body, &raw); err != nil {
-			a.incTrackerRequest("fetch_candidates", "error")
 			return nil, &domain.TrackerError{
 				Kind:    domain.ErrTrackerPayload,
 				Message: "failed to parse issues response",
 				Err:     err,
 			}
 		}
+
+		issues := make([]domain.Issue, 0, len(raw))
 		for _, gi := range raw {
 			if isPullRequest(gi) {
 				continue
@@ -246,19 +218,17 @@ func (a *GitHubAdapter) fetchCandidatesViaIssues(ctx context.Context) ([]domain.
 			issue.Comments = nil
 			issues = append(issues, issue)
 		}
-	}
+		return issues, nil
+	}, httpkit.PaginatorOptions{
+		MaxPages: maxPages,
+		OnLimitReached: func(limit int) {
+			slog.Warn("pagination limit reached",
+				slog.Int("max_pages", limit),
+				slog.String("endpoint", "/repos/{owner}/{repo}/issues"))
+		},
+	})
 
-	if pageCount >= maxPages {
-		slog.Warn("pagination limit reached", //nolint:gosec // endpoint is an internal API path constant, not user input
-			slog.Int("max_pages", maxPages),
-			slog.String("endpoint", path))
-	}
-
-	if issues == nil {
-		issues = []domain.Issue{}
-	}
-	a.incTrackerRequest("fetch_candidates", "success")
-	return issues, nil
+	return paginator.All(ctx)
 }
 
 func (a *GitHubAdapter) fetchCandidatesViaSearch(ctx context.Context) ([]domain.Issue, error) {
@@ -270,63 +240,26 @@ func (a *GitHubAdapter) fetchCandidatesViaSearch(ctx context.Context) ([]domain.
 		"per_page": {"50"},
 	}
 
-	body, nextURL, err := a.client.do(ctx, "GET", "/search/issues", params)
-	if err != nil {
-		a.incTrackerRequest("fetch_candidates", "error")
-		return nil, err
-	}
-
-	var sr searchResponse
-	if err := json.Unmarshal(body, &sr); err != nil {
-		a.incTrackerRequest("fetch_candidates", "error")
-		return nil, &domain.TrackerError{
-			Kind:    domain.ErrTrackerPayload,
-			Message: "failed to parse search response",
-			Err:     err,
-		}
-	}
-	if sr.IncompleteResults {
-		slog.Warn("github search returned incomplete results",
-			slog.Int("total_count", sr.TotalCount))
-	}
-
 	activeSet := make(map[string]struct{}, len(a.activeStates))
 	for _, s := range a.activeStates {
 		activeSet[s] = struct{}{}
 	}
 
-	var issues []domain.Issue
-	for _, gi := range sr.Items {
-		if isPullRequest(gi) {
-			continue
-		}
-		issue := normalizeIssue(gi, a.activeStates, a.terminalStates, a.handoffState)
-		a.qualifyDisplayID(&issue)
-		if _, ok := activeSet[issue.State]; !ok {
-			continue
-		}
-		issue.Comments = nil
-		issues = append(issues, issue)
-	}
-
-	pageCount := 1
-	for nextURL != "" && pageCount < maxPages {
-		pageCount++
-		body, nextURL, err = a.client.doURL(ctx, nextURL)
-		if err != nil {
-			a.incTrackerRequest("fetch_candidates", "error")
-			return nil, err
-		}
-
+	paginator := httpkit.NewLinkPaginator(a.client, "/search/issues", params, func(body []byte) ([]domain.Issue, error) {
 		var page searchResponse
 		if err := json.Unmarshal(body, &page); err != nil {
-			a.incTrackerRequest("fetch_candidates", "error")
 			return nil, &domain.TrackerError{
 				Kind:    domain.ErrTrackerPayload,
 				Message: "failed to parse search response",
 				Err:     err,
 			}
 		}
+		if page.IncompleteResults {
+			slog.Warn("github search returned incomplete results",
+				slog.Int("total_count", page.TotalCount))
+		}
+
+		issues := make([]domain.Issue, 0, len(page.Items))
 		for _, gi := range page.Items {
 			if isPullRequest(gi) {
 				continue
@@ -339,130 +272,101 @@ func (a *GitHubAdapter) fetchCandidatesViaSearch(ctx context.Context) ([]domain.
 			issue.Comments = nil
 			issues = append(issues, issue)
 		}
-	}
+		return issues, nil
+	}, httpkit.PaginatorOptions{
+		MaxPages: maxPages,
+		OnLimitReached: func(limit int) {
+			slog.Warn("pagination limit reached",
+				slog.Int("max_pages", limit),
+				slog.String("endpoint", "/search/issues"))
+		},
+	})
 
-	if pageCount >= maxPages {
-		slog.Warn("pagination limit reached", //nolint:gosec // endpoint is an internal API path constant, not user input
-			slog.Int("max_pages", maxPages),
-			slog.String("endpoint", "/search/issues"))
-	}
-
-	if issues == nil {
-		issues = []domain.Issue{}
-	}
-	a.incTrackerRequest("fetch_candidates", "success")
-	return issues, nil
+	return paginator.All(ctx)
 }
 
 // FetchIssueByID returns a fully populated issue including comments,
 // blockers, and parent. The issueID is the issue number as a string.
 func (a *GitHubAdapter) FetchIssueByID(ctx context.Context, issueID string) (domain.Issue, error) {
-	basePath := "/repos/" + a.owner + "/" + a.repo + "/issues/" + url.PathEscape(issueID)
+	var issue domain.Issue
+	err := trackermetrics.Track(a.metrics, "fetch_issue", func() error {
+		basePath := "/repos/" + a.owner + "/" + a.repo + "/issues/" + url.PathEscape(issueID)
 
-	// Fetch the issue itself.
-	body, _, err := a.client.do(ctx, "GET", basePath, nil)
-	if err != nil {
-		a.incTrackerRequest("fetch_issue", "error")
-		if domain.IsNotFound(err) {
-			return domain.Issue{}, &domain.TrackerError{
-				Kind:    domain.ErrTrackerNotFound,
-				Message: fmt.Sprintf("issue not found: %s", issueID),
+		body, _, err := a.client.Get(ctx, basePath, nil)
+		if err != nil {
+			if domain.IsNotFound(err) {
+				return &domain.TrackerError{
+					Kind:    domain.ErrTrackerNotFound,
+					Message: fmt.Sprintf("issue not found: %s", issueID),
+				}
+			}
+			return err
+		}
+
+		var gi githubIssue
+		if err := json.Unmarshal(body, &gi); err != nil {
+			return &domain.TrackerError{
+				Kind:    domain.ErrTrackerPayload,
+				Message: "failed to parse issue response",
+				Err:     err,
 			}
 		}
-		return domain.Issue{}, err
-	}
 
-	var gi githubIssue
-	if err := json.Unmarshal(body, &gi); err != nil {
-		a.incTrackerRequest("fetch_issue", "error")
-		return domain.Issue{}, &domain.TrackerError{
-			Kind:    domain.ErrTrackerPayload,
-			Message: "failed to parse issue response",
-			Err:     err,
+		if isPullRequest(gi) {
+			return &domain.TrackerError{
+				Kind:    domain.ErrTrackerNotFound,
+				Message: fmt.Sprintf("resource is a pull request, not an issue: %s", issueID),
+			}
 		}
-	}
 
-	if isPullRequest(gi) {
-		a.incTrackerRequest("fetch_issue", "error")
-		return domain.Issue{}, &domain.TrackerError{
-			Kind:    domain.ErrTrackerNotFound,
-			Message: fmt.Sprintf("resource is a pull request, not an issue: %s", issueID),
+		issue = normalizeIssue(gi, a.activeStates, a.terminalStates, a.handoffState)
+		a.qualifyDisplayID(&issue)
+
+		issue.BlockedBy, err = a.fetchBlockers(ctx, issueID)
+		if err != nil {
+			return err
 		}
-	}
 
-	issue := normalizeIssue(gi, a.activeStates, a.terminalStates, a.handoffState)
-	a.qualifyDisplayID(&issue)
+		issue.Parent, err = a.fetchParent(ctx, issueID)
+		if err != nil {
+			return err
+		}
 
-	// Fetch blockers (dependencies/blocked_by).
-	issue.BlockedBy, err = a.fetchBlockers(ctx, issueID)
-	if err != nil {
-		a.incTrackerRequest("fetch_issue", "error")
-		return domain.Issue{}, err
-	}
-
-	// Fetch parent.
-	issue.Parent, err = a.fetchParent(ctx, issueID)
-	if err != nil {
-		a.incTrackerRequest("fetch_issue", "error")
-		return domain.Issue{}, err
-	}
-
-	// Fetch comments.
-	comments, err := a.fetchAllComments(ctx, issueID)
-	if err != nil {
-		a.incTrackerRequest("fetch_issue", "error")
-		return domain.Issue{}, err
-	}
-	issue.Comments = comments
-
-	a.incTrackerRequest("fetch_issue", "success")
-	return issue, nil
+		issue.Comments, err = a.fetchAllComments(ctx, issueID)
+		return err
+	})
+	return issue, err
 }
 
 func (a *GitHubAdapter) fetchBlockers(ctx context.Context, issueID string) ([]domain.BlockerRef, error) {
 	path := "/repos/" + a.owner + "/" + a.repo + "/issues/" + url.PathEscape(issueID) + "/dependencies/blocked_by"
 	params := url.Values{"per_page": {"50"}}
 
-	body, nextURL, err := a.client.do(ctx, "GET", path, params)
-	if err != nil {
-		if domain.IsNotFound(err) {
-			return []domain.BlockerRef{}, nil
-		}
-		return nil, err
-	}
-
-	var blockers []githubIssue
-	if err := json.Unmarshal(body, &blockers); err != nil {
-		return nil, &domain.TrackerError{
-			Kind:    domain.ErrTrackerPayload,
-			Message: "failed to parse blockers response",
-			Err:     err,
-		}
-	}
-
-	pageCount := 1
-	for nextURL != "" && pageCount < maxPages {
-		pageCount++
-		body, nextURL, err = a.client.doURL(ctx, nextURL)
-		if err != nil {
-			return nil, err
-		}
-
-		var page []githubIssue
-		if err := json.Unmarshal(body, &page); err != nil {
+	paginator := httpkit.NewLinkPaginator(a.client, path, params, func(body []byte) ([]githubIssue, error) {
+		var blockers []githubIssue
+		if err := json.Unmarshal(body, &blockers); err != nil {
 			return nil, &domain.TrackerError{
 				Kind:    domain.ErrTrackerPayload,
 				Message: "failed to parse blockers response",
 				Err:     err,
 			}
 		}
-		blockers = append(blockers, page...)
-	}
+		return blockers, nil
+	}, httpkit.PaginatorOptions{
+		MaxPages: maxPages,
+		OnLimitReached: func(limit int) {
+			slog.Warn("pagination limit reached",
+				slog.Int("max_pages", limit),
+				slog.String("endpoint", "/repos/{owner}/{repo}/issues/{issue_id}/dependencies/blocked_by"))
+		},
+	})
 
-	if pageCount >= maxPages {
-		slog.Warn("pagination limit reached", //nolint:gosec // endpoint is an internal API path constant, not user input
-			slog.Int("max_pages", maxPages),
-			slog.String("endpoint", path))
+	blockers, err := paginator.All(ctx)
+	if err != nil {
+		if domain.IsNotFound(err) {
+			return []domain.BlockerRef{}, nil
+		}
+		return nil, err
 	}
 
 	return normalizeBlockers(blockers, a.activeStates, a.terminalStates, a.handoffState), nil
@@ -471,7 +375,7 @@ func (a *GitHubAdapter) fetchBlockers(ctx context.Context, issueID string) ([]do
 func (a *GitHubAdapter) fetchParent(ctx context.Context, issueID string) (*domain.ParentRef, error) {
 	path := "/repos/" + a.owner + "/" + a.repo + "/issues/" + url.PathEscape(issueID) + "/parent"
 
-	body, _, err := a.client.do(ctx, "GET", path, nil)
+	body, _, err := a.client.Get(ctx, path, nil)
 	if err != nil {
 		if domain.IsNotFound(err) {
 			return nil, nil
@@ -524,39 +428,32 @@ func (a *GitHubAdapter) FetchIssuesByStates(ctx context.Context, states []string
 		}
 	}
 
-	var matched []domain.Issue
+	matched := make([]domain.Issue, 0)
 	seen := make(map[string]struct{})
 
-	// Active/unknown states: issues endpoint with client-side filtering.
-	if needOpenFetch {
-		issues, err := a.fetchOpenIssuesByStates(ctx, stateSet, seen)
-		if err != nil {
-			a.incTrackerRequest("fetch_by_states", "error")
-			return nil, err
-		}
-		matched = append(matched, issues...)
-	}
-
-	// Terminal states: search endpoint with server-side label filtering.
-	for _, label := range requestedTerminal {
-		if ctx.Err() != nil {
-			a.incTrackerRequest("fetch_by_states", "error")
-			return nil, ctx.Err()
+	err := trackermetrics.Track(a.metrics, "fetch_by_states", func() error {
+		if needOpenFetch {
+			issues, err := a.fetchOpenIssuesByStates(ctx, stateSet, seen)
+			if err != nil {
+				return err
+			}
+			matched = append(matched, issues...)
 		}
 
-		issues, err := a.fetchClosedIssuesByLabel(ctx, label, seen)
-		if err != nil {
-			a.incTrackerRequest("fetch_by_states", "error")
-			return nil, err
-		}
-		matched = append(matched, issues...)
-	}
+		for _, label := range requestedTerminal {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
 
-	if matched == nil {
-		matched = []domain.Issue{}
-	}
-	a.incTrackerRequest("fetch_by_states", "success")
-	return matched, nil
+			issues, err := a.fetchClosedIssuesByLabel(ctx, label, seen)
+			if err != nil {
+				return err
+			}
+			matched = append(matched, issues...)
+		}
+		return nil
+	})
+	return matched, err
 }
 
 func (a *GitHubAdapter) fetchOpenIssuesByStates(ctx context.Context, stateSet map[string]struct{}, seen map[string]struct{}) ([]domain.Issue, error) {
@@ -568,46 +465,8 @@ func (a *GitHubAdapter) fetchOpenIssuesByStates(ctx context.Context, stateSet ma
 		"per_page":  {"50"},
 	}
 
-	body, nextURL, err := a.client.do(ctx, "GET", path, params)
-	if err != nil {
-		return nil, err
-	}
-
-	var issues []domain.Issue
-	var raw []githubIssue
-	if err := json.Unmarshal(body, &raw); err != nil {
-		return nil, &domain.TrackerError{
-			Kind:    domain.ErrTrackerPayload,
-			Message: "failed to parse issues response",
-			Err:     err,
-		}
-	}
-	for _, gi := range raw {
-		if isPullRequest(gi) {
-			continue
-		}
-		issue := normalizeIssue(gi, a.activeStates, a.terminalStates, a.handoffState)
-		a.qualifyDisplayID(&issue)
-		if _, ok := stateSet[issue.State]; !ok {
-			continue
-		}
-		if _, dup := seen[issue.Identifier]; dup {
-			continue
-		}
-		issue.Comments = nil
-		issues = append(issues, issue)
-		seen[issue.Identifier] = struct{}{}
-	}
-
-	pageCount := 1
-	for nextURL != "" && pageCount < maxPages {
-		pageCount++
-		body, nextURL, err = a.client.doURL(ctx, nextURL)
-		if err != nil {
-			return nil, err
-		}
-
-		raw = raw[:0]
+	paginator := httpkit.NewLinkPaginator(a.client, path, params, func(body []byte) ([]domain.Issue, error) {
+		var raw []githubIssue
 		if err := json.Unmarshal(body, &raw); err != nil {
 			return nil, &domain.TrackerError{
 				Kind:    domain.ErrTrackerPayload,
@@ -615,6 +474,8 @@ func (a *GitHubAdapter) fetchOpenIssuesByStates(ctx context.Context, stateSet ma
 				Err:     err,
 			}
 		}
+
+		issues := make([]domain.Issue, 0, len(raw))
 		for _, gi := range raw {
 			if isPullRequest(gi) {
 				continue
@@ -631,16 +492,18 @@ func (a *GitHubAdapter) fetchOpenIssuesByStates(ctx context.Context, stateSet ma
 			issues = append(issues, issue)
 			seen[issue.Identifier] = struct{}{}
 		}
-	}
+		return issues, nil
+	}, httpkit.PaginatorOptions{
+		MaxPages: maxPages,
+		OnLimitReached: func(limit int) {
+			slog.Warn("pagination limit reached",
+				slog.Int("max_pages", limit),
+				slog.String("endpoint", path),
+				slog.String("state", "open"))
+		},
+	})
 
-	if pageCount >= maxPages {
-		slog.Warn("pagination limit reached", //nolint:gosec // endpoint is an internal API path constant, not user input
-			slog.Int("max_pages", maxPages),
-			slog.String("endpoint", path),
-			slog.String("state", "open"))
-	}
-
-	return issues, nil
+	return paginator.All(ctx)
 }
 
 func (a *GitHubAdapter) fetchClosedIssuesByLabel(ctx context.Context, label string, seen map[string]struct{}) ([]domain.Issue, error) {
@@ -652,47 +515,7 @@ func (a *GitHubAdapter) fetchClosedIssuesByLabel(ctx context.Context, label stri
 		"per_page": {"50"},
 	}
 
-	body, nextURL, err := a.client.do(ctx, "GET", "/search/issues", params)
-	if err != nil {
-		return nil, err
-	}
-
-	var sr searchResponse
-	if err := json.Unmarshal(body, &sr); err != nil {
-		return nil, &domain.TrackerError{
-			Kind:    domain.ErrTrackerPayload,
-			Message: "failed to parse search response",
-			Err:     err,
-		}
-	}
-	if sr.IncompleteResults {
-		slog.Warn("github search returned incomplete results",
-			slog.String("label", label))
-	}
-
-	var issues []domain.Issue
-	for _, gi := range sr.Items {
-		if isPullRequest(gi) {
-			continue
-		}
-		issue := normalizeIssue(gi, a.activeStates, a.terminalStates, a.handoffState)
-		a.qualifyDisplayID(&issue)
-		if _, dup := seen[issue.Identifier]; dup {
-			continue
-		}
-		issue.Comments = nil
-		issues = append(issues, issue)
-		seen[issue.Identifier] = struct{}{}
-	}
-
-	pageCount := 1
-	for nextURL != "" && pageCount < maxPages {
-		pageCount++
-		body, nextURL, err = a.client.doURL(ctx, nextURL)
-		if err != nil {
-			return nil, err
-		}
-
+	paginator := httpkit.NewLinkPaginator(a.client, "/search/issues", params, func(body []byte) ([]domain.Issue, error) {
 		var page searchResponse
 		if err := json.Unmarshal(body, &page); err != nil {
 			return nil, &domain.TrackerError{
@@ -701,6 +524,12 @@ func (a *GitHubAdapter) fetchClosedIssuesByLabel(ctx context.Context, label stri
 				Err:     err,
 			}
 		}
+		if page.IncompleteResults {
+			slog.Warn("github search returned incomplete results",
+				slog.String("label", label))
+		}
+
+		issues := make([]domain.Issue, 0, len(page.Items))
 		for _, gi := range page.Items {
 			if isPullRequest(gi) {
 				continue
@@ -714,42 +543,44 @@ func (a *GitHubAdapter) fetchClosedIssuesByLabel(ctx context.Context, label stri
 			issues = append(issues, issue)
 			seen[issue.Identifier] = struct{}{}
 		}
-	}
+		return issues, nil
+	}, httpkit.PaginatorOptions{
+		MaxPages: maxPages,
+		OnLimitReached: func(limit int) {
+			slog.Warn("pagination limit reached",
+				slog.Int("max_pages", limit),
+				slog.String("endpoint", "/search/issues"),
+				slog.String("label", label))
+		},
+	})
 
-	if pageCount >= maxPages {
-		slog.Warn("pagination limit reached", //nolint:gosec // endpoint is an internal API path constant, not user input
-			slog.Int("max_pages", maxPages),
-			slog.String("endpoint", "/search/issues"),
-			slog.String("label", label))
-	}
-
-	return issues, nil
+	return paginator.All(ctx)
 }
 
 // FetchIssueStatesByIDs returns the current state for each requested
 // issue ID. Since ID and Identifier are both the issue number, this
 // delegates to [GitHubAdapter.fetchStatesByNumbers].
 func (a *GitHubAdapter) FetchIssueStatesByIDs(ctx context.Context, issueIDs []string) (map[string]string, error) {
-	states, err := a.fetchStatesByNumbers(ctx, issueIDs)
-	if err != nil {
-		a.incTrackerRequest("fetch_states_by_ids", "error")
-		return nil, err
-	}
-	a.incTrackerRequest("fetch_states_by_ids", "success")
-	return states, nil
+	states := make(map[string]string)
+	err := trackermetrics.Track(a.metrics, "fetch_states_by_ids", func() error {
+		var fetchErr error
+		states, fetchErr = a.fetchStatesByNumbers(ctx, issueIDs)
+		return fetchErr
+	})
+	return states, err
 }
 
 // FetchIssueStatesByIdentifiers returns the current state for each
 // requested issue identifier. Since ID and Identifier are both the
 // issue number, this delegates to [GitHubAdapter.fetchStatesByNumbers].
 func (a *GitHubAdapter) FetchIssueStatesByIdentifiers(ctx context.Context, identifiers []string) (map[string]string, error) {
-	states, err := a.fetchStatesByNumbers(ctx, identifiers)
-	if err != nil {
-		a.incTrackerRequest("fetch_states_by_identifiers", "error")
-		return nil, err
-	}
-	a.incTrackerRequest("fetch_states_by_identifiers", "success")
-	return states, nil
+	states := make(map[string]string)
+	err := trackermetrics.Track(a.metrics, "fetch_states_by_identifiers", func() error {
+		var fetchErr error
+		states, fetchErr = a.fetchStatesByNumbers(ctx, identifiers)
+		return fetchErr
+	})
+	return states, err
 }
 
 func (a *GitHubAdapter) fetchStatesByNumbers(ctx context.Context, numbers []string) (map[string]string, error) {
@@ -766,7 +597,7 @@ func (a *GitHubAdapter) fetchStatesByNumbers(ctx context.Context, numbers []stri
 		path := "/repos/" + a.owner + "/" + a.repo + "/issues/" + url.PathEscape(num)
 		etag, cachedState, cacheHit := a.etagCache.lookup(path)
 
-		body, responseETag, notModified, err := a.client.doConditional(ctx, "GET", path, nil, etag)
+		body, responseETag, notModified, err := a.client.GetConditional(ctx, path, etag, nil)
 		if err != nil {
 			if domain.IsNotFound(err) {
 				continue
@@ -806,20 +637,39 @@ func (a *GitHubAdapter) fetchStatesByNumbers(ctx context.Context, numbers []stri
 // FetchIssueComments returns comments for the specified issue.
 // Returns an empty non-nil slice when no comments exist.
 func (a *GitHubAdapter) FetchIssueComments(ctx context.Context, issueID string) ([]domain.Comment, error) {
-	comments, err := a.fetchAllComments(ctx, issueID)
-	if err != nil {
-		a.incTrackerRequest("fetch_comments", "error")
-		return nil, err
-	}
-	a.incTrackerRequest("fetch_comments", "success")
-	return comments, nil
+	comments := make([]domain.Comment, 0)
+	err := trackermetrics.Track(a.metrics, "fetch_comments", func() error {
+		var fetchErr error
+		comments, fetchErr = a.fetchAllComments(ctx, issueID)
+		return fetchErr
+	})
+	return comments, err
 }
 
 func (a *GitHubAdapter) fetchAllComments(ctx context.Context, issueNumber string) ([]domain.Comment, error) {
 	path := "/repos/" + a.owner + "/" + a.repo + "/issues/" + url.PathEscape(issueNumber) + "/comments"
 	params := url.Values{"per_page": {"50"}}
 
-	body, nextURL, err := a.client.do(ctx, "GET", path, params)
+	paginator := httpkit.NewLinkPaginator(a.client, path, params, func(body []byte) ([]githubComment, error) {
+		var comments []githubComment
+		if err := json.Unmarshal(body, &comments); err != nil {
+			return nil, &domain.TrackerError{
+				Kind:    domain.ErrTrackerPayload,
+				Message: "failed to parse comments response",
+				Err:     err,
+			}
+		}
+		return comments, nil
+	}, httpkit.PaginatorOptions{
+		MaxPages: maxPages,
+		OnLimitReached: func(limit int) {
+			slog.Warn("pagination limit reached",
+				slog.Int("max_pages", limit),
+				slog.String("endpoint", "/repos/{owner}/{repo}/issues/{issue_id}/comments"))
+		},
+	})
+
+	allComments, err := paginator.All(ctx)
 	if err != nil {
 		if domain.IsNotFound(err) {
 			return nil, &domain.TrackerError{
@@ -828,42 +678,6 @@ func (a *GitHubAdapter) fetchAllComments(ctx context.Context, issueNumber string
 			}
 		}
 		return nil, err
-	}
-
-	var allComments []githubComment
-	var page []githubComment
-	if err := json.Unmarshal(body, &page); err != nil {
-		return nil, &domain.TrackerError{
-			Kind:    domain.ErrTrackerPayload,
-			Message: "failed to parse comments response",
-			Err:     err,
-		}
-	}
-	allComments = append(allComments, page...)
-
-	pageCount := 1
-	for nextURL != "" && pageCount < maxPages {
-		pageCount++
-		body, nextURL, err = a.client.doURL(ctx, nextURL)
-		if err != nil {
-			return nil, err
-		}
-
-		page = page[:0]
-		if err := json.Unmarshal(body, &page); err != nil {
-			return nil, &domain.TrackerError{
-				Kind:    domain.ErrTrackerPayload,
-				Message: "failed to parse comments response",
-				Err:     err,
-			}
-		}
-		allComments = append(allComments, page...)
-	}
-
-	if pageCount >= maxPages {
-		slog.Warn("pagination limit reached", //nolint:gosec // endpoint is an internal API path constant, not user input
-			slog.Int("max_pages", maxPages),
-			slog.String("endpoint", path))
 	}
 
 	return normalizeComments(allComments), nil
@@ -877,120 +691,104 @@ func (a *GitHubAdapter) fetchAllComments(ctx context.Context, issueNumber string
 func (a *GitHubAdapter) TransitionIssue(ctx context.Context, issueID string, targetState string) error {
 	targetLower := strings.ToLower(targetState)
 
-	isHandoffTarget := a.handoffState != "" && targetLower == a.handoffState
-	if !isActiveState(targetLower, a.activeStates) && !isTerminalState(targetLower, a.terminalStates) && !isHandoffTarget {
-		a.incTrackerRequest("transition", "error")
-		return &domain.TrackerError{
-			Kind:    domain.ErrTrackerPayload,
-			Message: fmt.Sprintf("invalid target state: %q is not a configured active, terminal, or handoff state", targetState),
-		}
-	}
-
-	basePath := "/repos/" + a.owner + "/" + a.repo + "/issues/" + url.PathEscape(issueID)
-
-	// Fetch current issue to read labels and native state.
-	body, _, err := a.client.do(ctx, "GET", basePath, nil)
-	if err != nil {
-		a.incTrackerRequest("transition", "error")
-		return err
-	}
-
-	var gi githubIssue
-	if err := json.Unmarshal(body, &gi); err != nil {
-		a.incTrackerRequest("transition", "error")
-		return &domain.TrackerError{
-			Kind:    domain.ErrTrackerPayload,
-			Message: "failed to parse issue response",
-			Err:     err,
-		}
-	}
-
-	currentLabel := findCurrentStateLabel(gi.Labels, a.activeStates, a.terminalStates, a.handoffState)
-	currentNative := gi.State
-
-	// Remove old state label if present and different.
-	if currentLabel != "" && currentLabel != targetLower {
-		labelPath := basePath + "/labels/" + url.PathEscape(currentLabel)
-		err := a.client.doNoBody(ctx, "DELETE", labelPath)
-		if err != nil && !domain.IsNotFound(err) {
-			a.incTrackerRequest("transition", "error")
-			return err
-		}
-	}
-
-	// Add target state label if different from current.
-	if currentLabel != targetLower {
-		payload, err := json.Marshal(map[string][]string{"labels": {targetLower}})
-		if err != nil {
-			a.incTrackerRequest("transition", "error")
+	return trackermetrics.Track(a.metrics, "transition", func() error {
+		isHandoffTarget := a.handoffState != "" && targetLower == a.handoffState
+		if !isActiveState(targetLower, a.activeStates) && !isTerminalState(targetLower, a.terminalStates) && !isHandoffTarget {
 			return &domain.TrackerError{
 				Kind:    domain.ErrTrackerPayload,
-				Message: "failed to marshal label payload",
+				Message: fmt.Sprintf("invalid target state: %q is not a configured active, terminal, or handoff state", targetState),
+			}
+		}
+
+		basePath := "/repos/" + a.owner + "/" + a.repo + "/issues/" + url.PathEscape(issueID)
+
+		body, _, err := a.client.Get(ctx, basePath, nil)
+		if err != nil {
+			return err
+		}
+
+		var gi githubIssue
+		if err := json.Unmarshal(body, &gi); err != nil {
+			return &domain.TrackerError{
+				Kind:    domain.ErrTrackerPayload,
+				Message: "failed to parse issue response",
 				Err:     err,
 			}
 		}
-		if _, err := a.client.doJSON(ctx, "POST", basePath+"/labels", bytes.NewReader(payload)); err != nil {
-			a.incTrackerRequest("transition", "error")
-			return err
-		}
-	}
 
-	// Open/close the issue if the native state needs to change.
-	if isTerminalState(targetLower, a.terminalStates) && currentNative == "open" {
-		payload, err := json.Marshal(map[string]any{"state": "closed", "state_reason": "completed"})
-		if err != nil {
-			a.incTrackerRequest("transition", "error")
-			return &domain.TrackerError{
-				Kind:    domain.ErrTrackerPayload,
-				Message: "failed to marshal state payload",
-				Err:     err,
+		currentLabel := findCurrentStateLabel(gi.Labels, a.activeStates, a.terminalStates, a.handoffState)
+		currentNative := gi.State
+
+		if currentLabel != "" && currentLabel != targetLower {
+			labelPath := basePath + "/labels/" + url.PathEscape(currentLabel)
+			err := a.client.SendNoBody(ctx, "DELETE", labelPath)
+			if err != nil && !domain.IsNotFound(err) {
+				return err
 			}
 		}
-		if _, err := a.client.doJSON(ctx, "PATCH", basePath, bytes.NewReader(payload)); err != nil {
-			a.incTrackerRequest("transition", "error")
-			return err
-		}
-	} else if isActiveState(targetLower, a.activeStates) && currentNative == "closed" {
-		payload, err := json.Marshal(map[string]any{"state": "open"})
-		if err != nil {
-			a.incTrackerRequest("transition", "error")
-			return &domain.TrackerError{
-				Kind:    domain.ErrTrackerPayload,
-				Message: "failed to marshal state payload",
-				Err:     err,
+
+		if currentLabel != targetLower {
+			payload, err := json.Marshal(map[string][]string{"labels": {targetLower}})
+			if err != nil {
+				return &domain.TrackerError{
+					Kind:    domain.ErrTrackerPayload,
+					Message: "failed to marshal label payload",
+					Err:     err,
+				}
+			}
+			if _, err := a.client.Send(ctx, "POST", basePath+"/labels", bytes.NewReader(payload)); err != nil {
+				return err
 			}
 		}
-		if _, err := a.client.doJSON(ctx, "PATCH", basePath, bytes.NewReader(payload)); err != nil {
-			a.incTrackerRequest("transition", "error")
-			return err
-		}
-	}
 
-	a.incTrackerRequest("transition", "success")
-	return nil
+		if isTerminalState(targetLower, a.terminalStates) && currentNative == "open" {
+			payload, err := json.Marshal(map[string]any{"state": "closed", "state_reason": "completed"})
+			if err != nil {
+				return &domain.TrackerError{
+					Kind:    domain.ErrTrackerPayload,
+					Message: "failed to marshal state payload",
+					Err:     err,
+				}
+			}
+			if _, err := a.client.Send(ctx, "PATCH", basePath, bytes.NewReader(payload)); err != nil {
+				return err
+			}
+		} else if isActiveState(targetLower, a.activeStates) && currentNative == "closed" {
+			payload, err := json.Marshal(map[string]any{"state": "open"})
+			if err != nil {
+				return &domain.TrackerError{
+					Kind:    domain.ErrTrackerPayload,
+					Message: "failed to marshal state payload",
+					Err:     err,
+				}
+			}
+			if _, err := a.client.Send(ctx, "PATCH", basePath, bytes.NewReader(payload)); err != nil {
+				return err
+			}
+		}
+
+		return nil
+	})
 }
 
 // CommentIssue posts a Markdown comment on the specified issue.
 // GitHub natively accepts Markdown, so no format conversion is needed.
 func (a *GitHubAdapter) CommentIssue(ctx context.Context, issueID string, text string) error {
-	path := "/repos/" + a.owner + "/" + a.repo + "/issues/" + url.PathEscape(issueID) + "/comments"
+	return trackermetrics.Track(a.metrics, "comment", func() error {
+		path := "/repos/" + a.owner + "/" + a.repo + "/issues/" + url.PathEscape(issueID) + "/comments"
 
-	payload, err := json.Marshal(map[string]string{"body": text})
-	if err != nil {
-		a.incTrackerRequest("comment", "error")
-		return &domain.TrackerError{
-			Kind:    domain.ErrTrackerPayload,
-			Message: "failed to marshal comment payload",
-			Err:     err,
+		payload, err := json.Marshal(map[string]string{"body": text})
+		if err != nil {
+			return &domain.TrackerError{
+				Kind:    domain.ErrTrackerPayload,
+				Message: "failed to marshal comment payload",
+				Err:     err,
+			}
 		}
-	}
 
-	if _, err := a.client.doJSON(ctx, "POST", path, bytes.NewReader(payload)); err != nil {
-		a.incTrackerRequest("comment", "error")
+		_, err = a.client.Send(ctx, "POST", path, bytes.NewReader(payload))
 		return err
-	}
-	a.incTrackerRequest("comment", "success")
-	return nil
+	})
 }
 
 // SetMetrics configures the metrics recorder for tracker API call
@@ -1016,7 +814,7 @@ func (a *GitHubAdapter) AddLabel(ctx context.Context, issueID string, label stri
 		}
 	}
 
-	if _, err := a.client.doJSON(ctx, "POST", path, bytes.NewReader(payload)); err != nil {
+	if _, err := a.client.Send(ctx, "POST", path, bytes.NewReader(payload)); err != nil {
 		a.incTrackerRequest("add_label", "error")
 		return err
 	}

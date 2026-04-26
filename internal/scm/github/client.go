@@ -1,302 +1,36 @@
 package github
 
 import (
-	"context"
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"strings"
 	"time"
 
 	"github.com/sortie-ai/sortie/internal/domain"
+	"github.com/sortie-ai/sortie/internal/httpkit"
 )
 
-// maxErrorBody is the maximum number of bytes read from non-success
-// response bodies for diagnostic error messages.
+func newGitHubClient(baseURL, token, userAgent string) *httpkit.Client {
+	trimmedBaseURL := strings.TrimRight(baseURL, "/")
+	authorization := "Bearer " + token
+
+	return httpkit.NewClient(httpkit.ClientOptions{
+		BaseURL: trimmedBaseURL,
+		Timeout: 30 * time.Second,
+		Authorize: func(req *http.Request) {
+			req.Header.Set("Authorization", authorization)
+			req.Header.Set("Accept", "application/vnd.github+json")
+			req.Header.Set("X-GitHub-Api-Version", "2026-03-10")
+			req.Header.Set("User-Agent", userAgent)
+		},
+		ClassifyError:     classifyHTTPError,
+		ClassifyTransport: classifyTransportError,
+	})
+}
+
 const maxErrorBody = 512
 
-type githubClient struct {
-	httpClient *http.Client
-	baseURL    string
-	authHeader string
-	userAgent  string
-	apiVersion string
-}
-
-func newGitHubClient(baseURL, token, userAgent string) *githubClient {
-	return &githubClient{
-		httpClient: &http.Client{Timeout: 30 * time.Second},
-		baseURL:    strings.TrimRight(baseURL, "/"),
-		authHeader: "Bearer " + token,
-		userAgent:  userAgent,
-		apiVersion: "2026-03-10",
-	}
-}
-
-// setHeaders applies the common GitHub API headers to a request.
-func (c *githubClient) setHeaders(req *http.Request) {
-	req.Header.Set("Authorization", c.authHeader)
-	req.Header.Set("Accept", "application/vnd.github+json")
-	req.Header.Set("X-GitHub-Api-Version", c.apiVersion)
-	req.Header.Set("User-Agent", c.userAgent)
-}
-
-// do executes an HTTP request against the GitHub REST API and returns
-// the response body and the Link rel="next" URL on success. Non-200
-// responses are classified via [classifyHTTPError]. Context
-// cancellation is propagated directly.
-func (c *githubClient) do(ctx context.Context, method, path string, params url.Values) ([]byte, string, error) { //nolint:unparam // method is GET today but the signature mirrors doJSON for consistency
-	reqURL := c.baseURL + path
-	if len(params) > 0 {
-		reqURL += "?" + params.Encode()
-	}
-
-	req, err := http.NewRequestWithContext(ctx, method, reqURL, nil) //nolint:gosec // URL is constructed from operator-configured base URL + internal API paths, not user data
-	if err != nil {
-		if ctx.Err() != nil {
-			return nil, "", ctx.Err()
-		}
-		return nil, "", &domain.TrackerError{
-			Kind:    domain.ErrTrackerTransport,
-			Message: fmt.Sprintf("failed to build request: %s %s", method, path),
-			Err:     err,
-		}
-	}
-
-	c.setHeaders(req)
-
-	resp, err := c.httpClient.Do(req) //nolint:gosec // controlled URL, see above
-	if err != nil {
-		if ctx.Err() != nil {
-			return nil, "", ctx.Err()
-		}
-		return nil, "", &domain.TrackerError{
-			Kind:    domain.ErrTrackerTransport,
-			Message: fmt.Sprintf("%s %s: network error", method, path),
-			Err:     err,
-		}
-	}
-	defer resp.Body.Close() //nolint:errcheck // best-effort cleanup on response body
-
-	if resp.StatusCode == http.StatusOK {
-		body, err := io.ReadAll(resp.Body)
-		if err != nil {
-			return nil, "", &domain.TrackerError{
-				Kind:    domain.ErrTrackerTransport,
-				Message: "failed to read response body",
-				Err:     err,
-			}
-		}
-		linkNext := parseLinkNext(resp.Header.Get("Link"))
-		return body, linkNext, nil
-	}
-
-	return nil, "", classifyHTTPError(resp, method, path)
-}
-
-// doURL executes a GET request using a full URL (typically from a Link
-// header). Sets the same authentication and API version headers as
-// [githubClient.do]. Used exclusively for pagination.
-func (c *githubClient) doURL(ctx context.Context, fullURL string) ([]byte, string, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fullURL, nil) //nolint:gosec // fullURL comes from GitHub Link headers, not user input
-	if err != nil {
-		if ctx.Err() != nil {
-			return nil, "", ctx.Err()
-		}
-		return nil, "", &domain.TrackerError{
-			Kind:    domain.ErrTrackerTransport,
-			Message: fmt.Sprintf("failed to build pagination request: %s", fullURL),
-			Err:     err,
-		}
-	}
-
-	c.setHeaders(req)
-
-	resp, err := c.httpClient.Do(req) //nolint:gosec // controlled URL from Link header
-	if err != nil {
-		if ctx.Err() != nil {
-			return nil, "", ctx.Err()
-		}
-		return nil, "", &domain.TrackerError{
-			Kind:    domain.ErrTrackerTransport,
-			Message: fmt.Sprintf("GET %s: network error", fullURL),
-			Err:     err,
-		}
-	}
-	defer resp.Body.Close() //nolint:errcheck // best-effort cleanup on response body
-
-	if resp.StatusCode == http.StatusOK {
-		body, err := io.ReadAll(resp.Body)
-		if err != nil {
-			return nil, "", &domain.TrackerError{
-				Kind:    domain.ErrTrackerTransport,
-				Message: "failed to read response body",
-				Err:     err,
-			}
-		}
-		linkNext := parseLinkNext(resp.Header.Get("Link"))
-		return body, linkNext, nil
-	}
-
-	return nil, "", classifyHTTPError(resp, http.MethodGet, fullURL)
-}
-
-// doJSON executes an HTTP request with a JSON body. Successful
-// responses (200-299) return the response body. Non-success responses
-// are classified via [classifyHTTPError].
-func (c *githubClient) doJSON(ctx context.Context, method, path string, body io.Reader) ([]byte, error) { //nolint:unparam // callers may inspect response body in future operations
-	reqURL := c.baseURL + path
-
-	req, err := http.NewRequestWithContext(ctx, method, reqURL, body)
-	if err != nil {
-		if ctx.Err() != nil {
-			return nil, ctx.Err()
-		}
-		return nil, &domain.TrackerError{
-			Kind:    domain.ErrTrackerTransport,
-			Message: fmt.Sprintf("failed to build request: %s %s", method, path),
-			Err:     err,
-		}
-	}
-
-	c.setHeaders(req)
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		if ctx.Err() != nil {
-			return nil, ctx.Err()
-		}
-		return nil, &domain.TrackerError{
-			Kind:    domain.ErrTrackerTransport,
-			Message: fmt.Sprintf("%s %s: network error", method, path),
-			Err:     err,
-		}
-	}
-	defer resp.Body.Close() //nolint:errcheck // best-effort cleanup on response body
-
-	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-		respBody, err := io.ReadAll(resp.Body)
-		if err != nil {
-			return nil, &domain.TrackerError{
-				Kind:    domain.ErrTrackerTransport,
-				Message: "failed to read response body",
-				Err:     err,
-			}
-		}
-		return respBody, nil
-	}
-
-	return nil, classifyHTTPError(resp, method, path)
-}
-
-// doNoBody executes an HTTP request without a request body and
-// discards the response body. Accepts 200 and 204 as success. Used
-// for label removal (DELETE).
-func (c *githubClient) doNoBody(ctx context.Context, method, path string) error { //nolint:unparam // DELETE is the only caller today; method kept for interface consistency
-	reqURL := c.baseURL + path
-
-	req, err := http.NewRequestWithContext(ctx, method, reqURL, nil)
-	if err != nil {
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-		return &domain.TrackerError{
-			Kind:    domain.ErrTrackerTransport,
-			Message: fmt.Sprintf("failed to build request: %s %s", method, path),
-			Err:     err,
-		}
-	}
-
-	c.setHeaders(req)
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-		return &domain.TrackerError{
-			Kind:    domain.ErrTrackerTransport,
-			Message: fmt.Sprintf("%s %s: network error", method, path),
-			Err:     err,
-		}
-	}
-	defer resp.Body.Close() //nolint:errcheck // best-effort cleanup on response body
-
-	if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusNoContent {
-		_, _ = io.Copy(io.Discard, resp.Body)
-		return nil
-	}
-
-	return classifyHTTPError(resp, method, path)
-}
-
-// doConditional executes an HTTP request with optional conditional-GET
-// support. If ifNoneMatch is non-empty, sets the If-None-Match header.
-// Returns (body, etag, notModified, error):
-//   - On 304 Not Modified: body is nil, etag is empty, notModified is true.
-//   - On 200 OK: body is the response body, etag is the response ETag
-//     header (may be empty), notModified is false.
-//   - On error: body is nil, etag is empty, notModified is false.
-func (c *githubClient) doConditional(ctx context.Context, method, path string, params url.Values, ifNoneMatch string) (body []byte, etag string, notModified bool, err error) { //nolint:unparam // method is GET today but the signature mirrors do() for consistency
-	reqURL := c.baseURL + path
-	if len(params) > 0 {
-		reqURL += "?" + params.Encode()
-	}
-
-	req, err := http.NewRequestWithContext(ctx, method, reqURL, nil) //nolint:gosec // URL is constructed from operator-configured base URL + internal API paths, not user data
-	if err != nil {
-		if ctx.Err() != nil {
-			return nil, "", false, ctx.Err()
-		}
-		return nil, "", false, &domain.TrackerError{
-			Kind:    domain.ErrTrackerTransport,
-			Message: fmt.Sprintf("failed to build request: %s %s", method, path),
-			Err:     err,
-		}
-	}
-
-	c.setHeaders(req)
-	if ifNoneMatch != "" {
-		req.Header.Set("If-None-Match", ifNoneMatch)
-	}
-
-	resp, err := c.httpClient.Do(req) //nolint:gosec // controlled URL, see above
-	if err != nil {
-		if ctx.Err() != nil {
-			return nil, "", false, ctx.Err()
-		}
-		return nil, "", false, &domain.TrackerError{
-			Kind:    domain.ErrTrackerTransport,
-			Message: fmt.Sprintf("%s %s: network error", method, path),
-			Err:     err,
-		}
-	}
-	defer resp.Body.Close() //nolint:errcheck // best-effort cleanup on response body
-
-	if resp.StatusCode == http.StatusNotModified {
-		_, _ = io.Copy(io.Discard, resp.Body)
-		return nil, "", true, nil
-	}
-
-	if resp.StatusCode == http.StatusOK {
-		respBody, err := io.ReadAll(resp.Body)
-		if err != nil {
-			return nil, "", false, &domain.TrackerError{
-				Kind:    domain.ErrTrackerTransport,
-				Message: "failed to read response body",
-				Err:     err,
-			}
-		}
-		return respBody, resp.Header.Get("ETag"), false, nil
-	}
-
-	return nil, "", false, classifyHTTPError(resp, method, path)
-}
-
-// classifyHTTPError maps a non-success HTTP response to a
-// [*domain.TrackerError] with GitHub-specific 403 disambiguation.
 func classifyHTTPError(resp *http.Response, method, path string) error {
 	snippet, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBody))
 	_, _ = io.Copy(io.Discard, resp.Body)
@@ -316,7 +50,6 @@ func classifyHTTPError(resp *http.Response, method, path string) error {
 		}
 
 	case resp.StatusCode == http.StatusForbidden:
-		// Disambiguate 403: primary rate limit, secondary rate limit, or insufficient permissions.
 		if resp.Header.Get("X-Ratelimit-Remaining") == "0" {
 			return &domain.TrackerError{
 				Kind:    domain.ErrTrackerAPI,
@@ -324,13 +57,13 @@ func classifyHTTPError(resp *http.Response, method, path string) error {
 			}
 		}
 		if strings.Contains(strings.ToLower(detail), "rate limit") {
-			msg := fmt.Sprintf("%s %s: rate limited (secondary)", method, path)
-			if ra := resp.Header.Get("Retry-After"); ra != "" {
-				msg += fmt.Sprintf(" (retry after %s seconds)", ra)
+			message := fmt.Sprintf("%s %s: rate limited (secondary)", method, path)
+			if retryAfter := resp.Header.Get("Retry-After"); retryAfter != "" {
+				message += fmt.Sprintf(" (retry after %s seconds)", retryAfter)
 			}
 			return &domain.TrackerError{
 				Kind:    domain.ErrTrackerAPI,
-				Message: msg,
+				Message: message,
 			}
 		}
 		return &domain.TrackerError{
@@ -357,13 +90,13 @@ func classifyHTTPError(resp *http.Response, method, path string) error {
 		}
 
 	case resp.StatusCode == http.StatusTooManyRequests:
-		msg := fmt.Sprintf("%s %s: rate limited", method, path)
-		if ra := resp.Header.Get("Retry-After"); ra != "" {
-			msg += fmt.Sprintf(" (retry after %s seconds)", ra)
+		message := fmt.Sprintf("%s %s: rate limited", method, path)
+		if retryAfter := resp.Header.Get("Retry-After"); retryAfter != "" {
+			message += fmt.Sprintf(" (retry after %s seconds)", retryAfter)
 		}
 		return &domain.TrackerError{
 			Kind:    domain.ErrTrackerAPI,
-			Message: msg,
+			Message: message,
 		}
 
 	case resp.StatusCode >= 500:
@@ -380,87 +113,10 @@ func classifyHTTPError(resp *http.Response, method, path string) error {
 	}
 }
 
-// parseLinkNext extracts the URL with rel="next" from the Link header
-// value. Returns an empty string when absent or malformed.
-func parseLinkNext(header string) string {
-	if header == "" {
-		return ""
+func classifyTransportError(err error, method, path string) error {
+	return &domain.TrackerError{
+		Kind:    domain.ErrTrackerTransport,
+		Message: fmt.Sprintf("%s %s: transport error", method, path),
+		Err:     err,
 	}
-
-	for _, segment := range strings.Split(header, ",") {
-		parts := strings.Split(segment, ";")
-		if len(parts) < 2 {
-			continue
-		}
-
-		hasNext := false
-		for _, attr := range parts[1:] {
-			attr = strings.TrimSpace(attr)
-			if strings.EqualFold(attr, `rel="next"`) {
-				hasNext = true
-				break
-			}
-		}
-		if !hasNext {
-			continue
-		}
-
-		urlPart := strings.TrimSpace(parts[0])
-		if start := strings.Index(urlPart, "<"); start != -1 {
-			if end := strings.Index(urlPart[start:], ">"); end != -1 {
-				return urlPart[start+1 : start+end]
-			}
-		}
-	}
-
-	return ""
-}
-
-// doRawGet executes a GET request and returns the response body as
-// raw bytes. Reads up to maxBytes from the body to prevent memory
-// exhaustion. Used for log fetching where the response is text, not
-// JSON. Follows redirects via the default http.Client behavior.
-func (c *githubClient) doRawGet(ctx context.Context, path string, maxBytes int64) ([]byte, error) {
-	reqURL := c.baseURL + path
-
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil) //nolint:gosec // URL is constructed from operator-configured base URL + internal API paths, not user data
-	if err != nil {
-		if ctx.Err() != nil {
-			return nil, ctx.Err()
-		}
-		return nil, &domain.TrackerError{
-			Kind:    domain.ErrTrackerTransport,
-			Message: fmt.Sprintf("failed to build request: GET %s", path),
-			Err:     err,
-		}
-	}
-
-	c.setHeaders(req)
-
-	resp, err := c.httpClient.Do(req) //nolint:gosec // controlled URL, see above
-	if err != nil {
-		if ctx.Err() != nil {
-			return nil, ctx.Err()
-		}
-		return nil, &domain.TrackerError{
-			Kind:    domain.ErrTrackerTransport,
-			Message: fmt.Sprintf("GET %s: network error", path),
-			Err:     err,
-		}
-	}
-	defer resp.Body.Close() //nolint:errcheck // best-effort cleanup on response body
-
-	if resp.StatusCode == http.StatusOK {
-		body, err := io.ReadAll(io.LimitReader(resp.Body, maxBytes))
-		if err != nil {
-			return nil, &domain.TrackerError{
-				Kind:    domain.ErrTrackerTransport,
-				Message: "failed to read response body",
-				Err:     err,
-			}
-		}
-		return body, nil
-	}
-
-	return nil, classifyHTTPError(resp, http.MethodGet, path)
 }

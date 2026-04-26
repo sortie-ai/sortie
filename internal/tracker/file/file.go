@@ -17,7 +17,9 @@ import (
 	"time"
 
 	"github.com/sortie-ai/sortie/internal/domain"
+	"github.com/sortie-ai/sortie/internal/issuekit"
 	"github.com/sortie-ai/sortie/internal/registry"
+	"github.com/sortie-ai/sortie/internal/trackermetrics"
 	"github.com/sortie-ai/sortie/internal/typeutil"
 )
 
@@ -77,60 +79,65 @@ func NewFileAdapter(config map[string]any) (domain.TrackerAdapter, error) {
 // configured active states. Comments are set to nil on all returned
 // issues.
 func (a *FileAdapter) FetchCandidateIssues(_ context.Context) ([]domain.Issue, error) {
-	raws, err := loadIssues(a.path)
-	if err != nil {
-		a.incTrackerRequest("fetch_candidates", "error")
-		return nil, err
-	}
-
-	a.mu.RLock()
-	defer a.mu.RUnlock()
-
-	issues := make([]domain.Issue, 0, len(raws))
-	for _, raw := range raws {
-		raw = a.applyOverride(raw)
-		if len(a.activeStates) > 0 && !a.activeStates[strings.ToLower(raw.State)] {
-			continue
+	issues := make([]domain.Issue, 0)
+	err := trackermetrics.Track(a.metrics, "fetch_candidates", func() error {
+		raws, err := loadIssues(a.path)
+		if err != nil {
+			return err
 		}
-		iss := normalize(raw)
-		iss.Comments = nil
-		issues = append(issues, iss)
-	}
-	a.incTrackerRequest("fetch_candidates", "success")
-	return issues, nil
+
+		a.mu.RLock()
+		defer a.mu.RUnlock()
+
+		issues = make([]domain.Issue, 0, len(raws))
+		for _, raw := range raws {
+			raw = a.applyOverride(raw)
+			if len(a.activeStates) > 0 && !a.activeStates[strings.ToLower(raw.State)] {
+				continue
+			}
+			iss := normalize(raw)
+			iss.Comments = nil
+			issues = append(issues, iss)
+		}
+		return nil
+	})
+	return issues, err
 }
 
 // FetchIssueByID returns a single fully-populated issue including
 // comments. Returns a [*domain.TrackerError] with Kind
 // [domain.ErrTrackerNotFound] if the issue does not exist.
 func (a *FileAdapter) FetchIssueByID(_ context.Context, issueID string) (domain.Issue, error) {
-	raws, err := loadIssues(a.path)
-	if err != nil {
-		a.incTrackerRequest("fetch_issue", "error")
-		return domain.Issue{}, err
-	}
-
-	a.mu.RLock()
-	defer a.mu.RUnlock()
-
-	for _, raw := range raws {
-		if raw.ID == issueID {
-			raw = a.applyOverride(raw)
-			iss := normalize(raw)
-			if iss.Comments == nil {
-				iss.Comments = []domain.Comment{}
-			}
-			iss.Comments = append(iss.Comments, a.commentOverrides[issueID]...)
-			a.incTrackerRequest("fetch_issue", "success")
-			return iss, nil
+	var issue domain.Issue
+	err := trackermetrics.Track(a.metrics, "fetch_issue", func() error {
+		raws, err := loadIssues(a.path)
+		if err != nil {
+			return err
 		}
-	}
 
-	a.incTrackerRequest("fetch_issue", "error")
-	return domain.Issue{}, &domain.TrackerError{
-		Kind:    domain.ErrTrackerNotFound,
-		Message: fmt.Sprintf("issue not found: %s", issueID),
-	}
+		a.mu.RLock()
+		defer a.mu.RUnlock()
+
+		for _, raw := range raws {
+			if raw.ID != issueID {
+				continue
+			}
+
+			raw = a.applyOverride(raw)
+			issue = normalize(raw)
+			if issue.Comments == nil {
+				issue.Comments = []domain.Comment{}
+			}
+			issue.Comments = append(issue.Comments, a.commentOverrides[issueID]...)
+			return nil
+		}
+
+		return &domain.TrackerError{
+			Kind:    domain.ErrTrackerNotFound,
+			Message: fmt.Sprintf("issue not found: %s", issueID),
+		}
+	})
+	return issue, err
 }
 
 // FetchIssuesByStates returns issues in the specified states. An
@@ -141,31 +148,33 @@ func (a *FileAdapter) FetchIssuesByStates(_ context.Context, states []string) ([
 		return []domain.Issue{}, nil
 	}
 
-	raws, err := loadIssues(a.path)
-	if err != nil {
-		a.incTrackerRequest("fetch_by_states", "error")
-		return nil, err
-	}
-
-	a.mu.RLock()
-	defer a.mu.RUnlock()
-
-	stateSet := make(map[string]bool, len(states))
-	for _, s := range states {
-		stateSet[strings.ToLower(s)] = true
-	}
-
-	issues := make([]domain.Issue, 0, len(raws))
-	for _, raw := range raws {
-		raw = a.applyOverride(raw)
-		if stateSet[strings.ToLower(raw.State)] {
-			iss := normalize(raw)
-			iss.Comments = nil
-			issues = append(issues, iss)
+	issues := make([]domain.Issue, 0)
+	err := trackermetrics.Track(a.metrics, "fetch_by_states", func() error {
+		raws, err := loadIssues(a.path)
+		if err != nil {
+			return err
 		}
-	}
-	a.incTrackerRequest("fetch_by_states", "success")
-	return issues, nil
+
+		a.mu.RLock()
+		defer a.mu.RUnlock()
+
+		stateSet := make(map[string]bool, len(states))
+		for _, s := range states {
+			stateSet[strings.ToLower(s)] = true
+		}
+
+		issues = make([]domain.Issue, 0, len(raws))
+		for _, raw := range raws {
+			raw = a.applyOverride(raw)
+			if stateSet[strings.ToLower(raw.State)] {
+				iss := normalize(raw)
+				iss.Comments = nil
+				issues = append(issues, iss)
+			}
+		}
+		return nil
+	})
+	return issues, err
 }
 
 // FetchIssueStatesByIDs returns the current state for each requested
@@ -175,29 +184,30 @@ func (a *FileAdapter) FetchIssueStatesByIDs(_ context.Context, issueIDs []string
 		return map[string]string{}, nil
 	}
 
-	raws, err := loadIssues(a.path)
-	if err != nil {
-		a.incTrackerRequest("fetch_states_by_ids", "error")
-		return nil, err
-	}
-
-	a.mu.RLock()
-	defer a.mu.RUnlock()
-
-	wanted := make(map[string]bool, len(issueIDs))
-	for _, id := range issueIDs {
-		wanted[id] = true
-	}
-
 	states := make(map[string]string, len(issueIDs))
-	for _, raw := range raws {
-		if wanted[raw.ID] {
-			raw = a.applyOverride(raw)
-			states[raw.ID] = raw.State
+	err := trackermetrics.Track(a.metrics, "fetch_states_by_ids", func() error {
+		raws, err := loadIssues(a.path)
+		if err != nil {
+			return err
 		}
-	}
-	a.incTrackerRequest("fetch_states_by_ids", "success")
-	return states, nil
+
+		a.mu.RLock()
+		defer a.mu.RUnlock()
+
+		wanted := make(map[string]bool, len(issueIDs))
+		for _, id := range issueIDs {
+			wanted[id] = true
+		}
+
+		for _, raw := range raws {
+			if wanted[raw.ID] {
+				raw = a.applyOverride(raw)
+				states[raw.ID] = raw.State
+			}
+		}
+		return nil
+	})
+	return states, err
 }
 
 // FetchIssueStatesByIdentifiers returns the current state for each
@@ -208,29 +218,30 @@ func (a *FileAdapter) FetchIssueStatesByIdentifiers(_ context.Context, identifie
 		return map[string]string{}, nil
 	}
 
-	raws, err := loadIssues(a.path)
-	if err != nil {
-		a.incTrackerRequest("fetch_states_by_identifiers", "error")
-		return nil, err
-	}
-
-	a.mu.RLock()
-	defer a.mu.RUnlock()
-
-	wanted := make(map[string]bool, len(identifiers))
-	for _, id := range identifiers {
-		wanted[id] = true
-	}
-
 	states := make(map[string]string, len(identifiers))
-	for _, raw := range raws {
-		if wanted[raw.Identifier] {
-			raw = a.applyOverride(raw)
-			states[raw.Identifier] = raw.State
+	err := trackermetrics.Track(a.metrics, "fetch_states_by_identifiers", func() error {
+		raws, err := loadIssues(a.path)
+		if err != nil {
+			return err
 		}
-	}
-	a.incTrackerRequest("fetch_states_by_identifiers", "success")
-	return states, nil
+
+		a.mu.RLock()
+		defer a.mu.RUnlock()
+
+		wanted := make(map[string]bool, len(identifiers))
+		for _, id := range identifiers {
+			wanted[id] = true
+		}
+
+		for _, raw := range raws {
+			if wanted[raw.Identifier] {
+				raw = a.applyOverride(raw)
+				states[raw.Identifier] = raw.State
+			}
+		}
+		return nil
+	})
+	return states, err
 }
 
 // FetchIssueComments returns comments for the specified issue.
@@ -238,16 +249,20 @@ func (a *FileAdapter) FetchIssueStatesByIdentifiers(_ context.Context, identifie
 // [*domain.TrackerError] with Kind [domain.ErrTrackerNotFound] if
 // the issue does not exist.
 func (a *FileAdapter) FetchIssueComments(_ context.Context, issueID string) ([]domain.Comment, error) {
-	raws, err := loadIssues(a.path)
-	if err != nil {
-		a.incTrackerRequest("fetch_comments", "error")
-		return nil, err
-	}
+	comments := make([]domain.Comment, 0)
+	err := trackermetrics.Track(a.metrics, "fetch_comments", func() error {
+		raws, err := loadIssues(a.path)
+		if err != nil {
+			return err
+		}
 
-	for _, raw := range raws {
-		if raw.ID == issueID {
-			iss := normalize(raw)
-			comments := iss.Comments
+		for _, raw := range raws {
+			if raw.ID != issueID {
+				continue
+			}
+
+			issue := normalize(raw)
+			comments = issue.Comments
 			if comments == nil {
 				comments = []domain.Comment{}
 			}
@@ -255,17 +270,15 @@ func (a *FileAdapter) FetchIssueComments(_ context.Context, issueID string) ([]d
 			a.mu.RLock()
 			comments = append(comments, a.commentOverrides[issueID]...)
 			a.mu.RUnlock()
-
-			a.incTrackerRequest("fetch_comments", "success")
-			return comments, nil
+			return nil
 		}
-	}
 
-	a.incTrackerRequest("fetch_comments", "error")
-	return nil, &domain.TrackerError{
-		Kind:    domain.ErrTrackerNotFound,
-		Message: fmt.Sprintf("issue not found: %s", issueID),
-	}
+		return &domain.TrackerError{
+			Kind:    domain.ErrTrackerNotFound,
+			Message: fmt.Sprintf("issue not found: %s", issueID),
+		}
+	})
+	return comments, err
 }
 
 // TransitionIssue records a state override for the given issue in the
@@ -276,33 +289,31 @@ func (a *FileAdapter) FetchIssueComments(_ context.Context, issueID string) ([]d
 // [domain.ErrTrackerNotFound] if the issue ID does not exist in the
 // fixture. Safe for concurrent use.
 func (a *FileAdapter) TransitionIssue(_ context.Context, issueID string, targetState string) error {
-	raws, err := loadIssues(a.path)
-	if err != nil {
-		a.incTrackerRequest("transition", "error")
-		return err
-	}
-
-	found := false
-	for _, raw := range raws {
-		if raw.ID == issueID {
-			found = true
-			break
+	return trackermetrics.Track(a.metrics, "transition", func() error {
+		raws, err := loadIssues(a.path)
+		if err != nil {
+			return err
 		}
-	}
-	if !found {
-		a.incTrackerRequest("transition", "error")
-		return &domain.TrackerError{
-			Kind:    domain.ErrTrackerNotFound,
-			Message: fmt.Sprintf("issue not found: %s", issueID),
+
+		found := false
+		for _, raw := range raws {
+			if raw.ID == issueID {
+				found = true
+				break
+			}
 		}
-	}
+		if !found {
+			return &domain.TrackerError{
+				Kind:    domain.ErrTrackerNotFound,
+				Message: fmt.Sprintf("issue not found: %s", issueID),
+			}
+		}
 
-	a.mu.Lock()
-	a.overrides[issueID] = targetState
-	a.mu.Unlock()
-
-	a.incTrackerRequest("transition", "success")
-	return nil
+		a.mu.Lock()
+		a.overrides[issueID] = targetState
+		a.mu.Unlock()
+		return nil
+	})
 }
 
 // CommentIssue records a comment for the given issue in the adapter's
@@ -311,36 +322,34 @@ func (a *FileAdapter) TransitionIssue(_ context.Context, issueID string, targetS
 // any comments present in the fixture file. Returns a [*domain.TrackerError]
 // with Kind [domain.ErrTrackerNotFound] if the issue does not exist.
 func (a *FileAdapter) CommentIssue(_ context.Context, issueID string, text string) error {
-	raws, err := loadIssues(a.path)
-	if err != nil {
-		a.incTrackerRequest("comment", "error")
-		return err
-	}
-
-	found := false
-	for _, raw := range raws {
-		if raw.ID == issueID {
-			found = true
-			break
+	return trackermetrics.Track(a.metrics, "comment", func() error {
+		raws, err := loadIssues(a.path)
+		if err != nil {
+			return err
 		}
-	}
-	if !found {
-		a.incTrackerRequest("comment", "error")
-		return &domain.TrackerError{
-			Kind:    domain.ErrTrackerNotFound,
-			Message: fmt.Sprintf("issue not found: %s", issueID),
-		}
-	}
 
-	a.mu.Lock()
-	a.commentOverrides[issueID] = append(a.commentOverrides[issueID], domain.Comment{
-		Body:      text,
-		CreatedAt: time.Now().UTC().Format(time.RFC3339),
+		found := false
+		for _, raw := range raws {
+			if raw.ID == issueID {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return &domain.TrackerError{
+				Kind:    domain.ErrTrackerNotFound,
+				Message: fmt.Sprintf("issue not found: %s", issueID),
+			}
+		}
+
+		a.mu.Lock()
+		a.commentOverrides[issueID] = append(a.commentOverrides[issueID], domain.Comment{
+			Body:      text,
+			CreatedAt: time.Now().UTC().Format(time.RFC3339),
+		})
+		a.mu.Unlock()
+		return nil
 	})
-	a.mu.Unlock()
-
-	a.incTrackerRequest("comment", "success")
-	return nil
 }
 
 // SetMetrics configures the metrics recorder for tracker API call
@@ -356,12 +365,6 @@ func (a *FileAdapter) SetMetrics(m domain.Metrics) {
 // support labels.
 func (a *FileAdapter) AddLabel(_ context.Context, _ string, _ string) error {
 	return nil
-}
-
-func (a *FileAdapter) incTrackerRequest(operation, outcome string) {
-	if a.metrics != nil {
-		a.metrics.IncTrackerRequests(operation, outcome)
-	}
 }
 
 // applyOverride returns a copy of raw with its State replaced by the
@@ -447,28 +450,8 @@ func normalize(raw rawIssue) domain.Issue {
 		UpdatedAt:   raw.UpdatedAt,
 	}
 
-	// Priority: integer only, non-integers become nil.
-	if len(raw.Priority) > 0 {
-		var p int
-		if json.Unmarshal(raw.Priority, &p) == nil {
-			// Guard against floats that json.Unmarshal silently truncates:
-			// re-marshal the int and compare to the raw bytes.
-			canonical, _ := json.Marshal(p)
-			if string(canonical) == string(raw.Priority) {
-				iss.Priority = &p
-			}
-		}
-	}
-
-	// Labels: lowercase, non-nil empty slice when absent.
-	if raw.Labels != nil {
-		iss.Labels = make([]string, len(raw.Labels))
-		for i, l := range raw.Labels {
-			iss.Labels[i] = strings.ToLower(l)
-		}
-	} else {
-		iss.Labels = []string{}
-	}
+	iss.Priority = issuekit.ParsePriorityIntStrict(raw.Priority)
+	iss.Labels = issuekit.NormalizeLabels(raw.Labels)
 
 	// Parent: nil stays nil.
 	if raw.Parent != nil {
@@ -478,17 +461,17 @@ func normalize(raw rawIssue) domain.Issue {
 		}
 	}
 
-	// Comments: nil means "not fetched", empty non-nil means "none exist".
 	if raw.Comments != nil {
-		iss.Comments = make([]domain.Comment, len(raw.Comments))
+		source := make([]issuekit.SourceComment, len(raw.Comments))
 		for i, c := range raw.Comments {
-			iss.Comments[i] = domain.Comment{
+			source[i] = issuekit.SourceComment{
 				ID:        c.ID,
 				Author:    c.Author,
 				Body:      c.Body,
 				CreatedAt: c.CreatedAt,
 			}
 		}
+		iss.Comments = issuekit.NormalizeComments(source)
 	}
 
 	// BlockedBy: non-nil empty slice when absent.

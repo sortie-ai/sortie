@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/sortie-ai/sortie/internal/domain"
+	"github.com/sortie-ai/sortie/internal/httpkit"
 	"github.com/sortie-ai/sortie/internal/registry"
 )
 
@@ -50,7 +51,7 @@ type checkRunApp struct {
 // GitHubCIProvider implements [domain.CIStatusProvider] for the GitHub
 // Checks API. Safe for concurrent use.
 type GitHubCIProvider struct {
-	client      *githubClient
+	client      *httpkit.Client
 	owner       string
 	repo        string
 	maxLogLines int
@@ -156,50 +157,26 @@ func (p *GitHubCIProvider) fetchAllCheckRuns(ctx context.Context, ref string) ([
 	path := fmt.Sprintf("/repos/%s/%s/commits/%s/check-runs", p.owner, p.repo, url.PathEscape(ref))
 	params := url.Values{"per_page": {"100"}}
 
-	body, nextURL, err := p.client.do(ctx, "GET", path, params)
-	if err != nil {
-		return nil, err
-	}
-
-	var resp checkRunsResponse
-	if err := json.Unmarshal(body, &resp); err != nil {
-		return nil, &domain.TrackerError{
-			Kind:    domain.ErrTrackerPayload,
-			Message: "failed to parse check runs response",
-			Err:     err,
-		}
-	}
-
-	allRuns := resp.CheckRuns
-	pages := 1
-
-	for nextURL != "" && pages < maxCIPages {
-		body, nextURL, err = p.client.doURL(ctx, nextURL)
-		if err != nil {
-			return nil, err
-		}
-
-		var pageResp checkRunsResponse
-		if err := json.Unmarshal(body, &pageResp); err != nil {
+	paginator := httpkit.NewLinkPaginator(p.client, path, params, func(body []byte) ([]githubCheckRun, error) {
+		var resp checkRunsResponse
+		if err := json.Unmarshal(body, &resp); err != nil {
 			return nil, &domain.TrackerError{
 				Kind:    domain.ErrTrackerPayload,
 				Message: "failed to parse check runs response",
 				Err:     err,
 			}
 		}
+		return resp.CheckRuns, nil
+	}, httpkit.PaginatorOptions{
+		MaxPages: maxCIPages,
+		OnLimitReached: func(limit int) {
+			slog.WarnContext(ctx, "check runs response truncated at page limit",
+				slog.Int("max_pages", limit),
+				slog.String("ref", ref))
+		},
+	})
 
-		allRuns = append(allRuns, pageResp.CheckRuns...)
-		pages++
-	}
-
-	if nextURL != "" {
-		slog.WarnContext(ctx, "check runs response truncated at page limit",
-			slog.Int("pages_fetched", pages),
-			slog.Int("max_pages", maxCIPages),
-			slog.String("ref", ref))
-	}
-
-	return allRuns, nil
+	return paginator.All(ctx)
 }
 
 func (p *GitHubCIProvider) fetchLogExcerpt(ctx context.Context, failing githubCheckRun) string {
@@ -215,7 +192,7 @@ func (p *GitHubCIProvider) fetchLogExcerpt(ctx context.Context, failing githubCh
 	// check run ID doubles as the job ID for the Actions logs endpoint.
 	path := fmt.Sprintf("/repos/%s/%s/actions/jobs/%d/logs", p.owner, p.repo, failing.ID)
 
-	body, err := p.client.doRawGet(ctx, path, maxLogBytes)
+	body, err := p.client.GetRaw(ctx, path, maxLogBytes)
 	if err != nil {
 		slog.WarnContext(ctx, "failed to fetch job log",
 			slog.Int64("job_id", failing.ID),
