@@ -46,3 +46,7 @@ go.work.sum
 # Sortie user documentation and blog posts
 /website
 /blog
+
+# Python cache files
+__pycache__
+*.pyc

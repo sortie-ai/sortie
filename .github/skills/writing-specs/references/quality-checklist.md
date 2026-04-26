@@ -37,13 +37,12 @@ If any requirement fails the "two engineers" test for unambiguity, rewrite it wi
 
 ## Structural Completeness
 
-All five sections must be present and substantive:
+All four sections must be present and substantive:
 
 - [ ] **Section 1 (Business Goal):** States the problem and its impact.
-- [ ] **Section 2 (System Diagram):** Contains at least one Mermaid code block that renders. Diagram matches the data flow described in the text. Uses domain operation names, not implementation details.
-- [ ] **Section 3 (Technical Architecture):** Contains at least one of: Go interface definition, struct definition, or SQLite schema. Unused subsections are deleted, not left empty.
-- [ ] **Section 4 (Risk Assessment):** Table has at least one row. Severity uses the scale: Critical / High / Medium / Low. Every Critical risk has a concrete mitigation, not "TBD".
-- [ ] **Section 5 (File Structure Summary):** Lists all new and modified files. Each file is annotated with its architecture layer.
+- [ ] **Section 2 (Technical Architecture):** Contains at least one of: Go interface definition, struct definition, or SQLite schema. Unused subsections are deleted, not left empty.
+- [ ] **Section 3 (Risk Assessment):** Table has at least one row. Severity uses the scale: Critical / High / Medium / Low. Every Critical risk has a concrete mitigation, not "TBD".
+- [ ] **Section 4 (File Structure Summary):** Lists all new and modified files. Each file is annotated with its architecture layer.
 
 ---
 

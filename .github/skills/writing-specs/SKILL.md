@@ -5,9 +5,9 @@ description: >
   changes. Use when asked to specify, architect, design, write a spec, create
   requirements, produce an SRS, define technical requirements, or transform a
   feature request into a specification. Also use when creating any .specs/
-  artifact. Handles analysis protocol, compliance checks, Mermaid diagrams,
-  Go interface design, SQLite schema, risk assessment, and implementation
-  step sizing. Do NOT use for implementation plans (use Planner), code reviews
+  artifact. Handles analysis protocol, Go interface design, SQLite schema,
+  risk assessment, and file-structure summary. Do NOT use for implementation
+  plans (use Planner), code reviews
   (use Reviewer), or standalone architecture analysis without spec output.
 metadata:
   author: Sortie LLC
@@ -28,13 +28,12 @@ Five phases, executed sequentially. Do not skip or reorder phases.
 Before writing a single line of spec, collect all inputs:
 
 1. **Read the feature request** in full. Identify the core problem being solved.
-2. **Read the relevant sections of `docs/architecture.md`** — this is the authoritative specification for all domain models, state machines, algorithms, and validation rules. The spec must conform to it; do not invent behavior that contradicts the architecture document.
-3. **Read `docs/decisions/`** — check accepted ADRs for binding constraints on technology choices, interfaces, and deployment model.
+2. **Read [`docs/architecture-digest.md`](../../../docs/architecture-digest.md)** by default — a 2-page summary of components, layers, the adapter model, hard constraints, and a deep-read trigger table that maps feature surface areas to specific sections of the full spec. Open the full [`docs/architecture.md`](../../../docs/architecture.md) only when the digest's deep-read table flags an area your feature touches. When the digest and the full document disagree, the full document wins; flag the drift.
+3. **Read `docs/decisions/`** — check accepted ADRs for binding constraints on technology choices, interfaces, and deployment model. Use `docs/decisions/README.md` (when present) as the index.
 4. **Scan codebase structure** — run `tree -d -L 3 internal/` to understand the current package layout and identify where new code belongs.
-5. **Fetch external context** (when Atlassian MCP is available):
-   - If a Jira issue ID is provided, fetch the issue details, acceptance criteria, and linked issues.
-   - Check linked Confluence pages for domain documentation.
-   - Extract constraints from Jira issue fields.
+5. **Fetch external context** (when an issue tracker is referenced):
+   - If a GitHub issue is referenced, fetch its title, body, and labels.
+   - If a Jira issue is referenced and Atlassian MCP is available, fetch issue details, acceptance criteria, and linked issues.
 
 If any input is missing or ambiguous, stop and ask before proceeding. Do not guess requirements.
 
@@ -51,10 +50,9 @@ Record findings from each check.
 Use the template from [assets/spec-template.md](assets/spec-template.md) as the output skeleton. Fill each section sequentially:
 
 1. **Business Goal & Value** — state the problem and why it matters. Map to the architecture doc's problem statement or a specific GitHub issue.
-2. **System Diagram** — create a Mermaid sequence or component diagram showing data flow through the system's layers.
-3. **Technical Architecture** — the core design section. Define Go interfaces, struct layouts, SQLite schema, state machine transitions, error categories, and adapter boundaries. See Output Style Rules below.
-4. **Risk Assessment** — identify risks with severity and mitigation. Security boundaries (workspace path containment, key sanitization, cwd validation) are always relevant when the feature touches workspace or filesystem operations.
-5. **File Structure Summary** — tree view of new/modified files with architecture layer annotations.
+2. **Technical Architecture** — the core design section. Define Go interfaces, struct layouts, SQLite schema, state machine transitions, error categories, and adapter boundaries. See Output Style Rules below.
+3. **Risk Assessment** — identify risks with severity and mitigation. Security boundaries (workspace path containment, key sanitization, cwd validation) are always relevant when the feature touches workspace or filesystem operations.
+4. **File Structure Summary** — tree view of new/modified files with architecture layer annotations.
 
 Write the spec to `.specs/Spec-{TASK_NAME}.md`.
 
@@ -75,7 +73,6 @@ At minimum, confirm:
 - [ ] Every design decision traces to a specific architecture doc section
 - [ ] Go interfaces define contracts, not implementations
 - [ ] No implementation code — pseudo-code and signatures only
-- [ ] Mermaid diagram renders and matches the described data flow
 - [ ] Risk assessment covers security boundaries when applicable
 - [ ] No Symphony/Elixir/BEAM patterns referenced
 - [ ] No generic naming violations (`jira_*`, `claude_*` outside adapter scope)
@@ -91,8 +88,7 @@ python3 .github/skills/writing-specs/scripts/validate_spec.py .specs/Spec-{TASK_
 ```
 
 If the script is unavailable, manually verify:
-- All five sections are present and non-empty
-- At least one Mermaid code block exists
+- All four sections are present and non-empty
 - The risk assessment table has at least one row
 
 Report the spec file path after completion.

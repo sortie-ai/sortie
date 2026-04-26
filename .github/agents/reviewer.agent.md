@@ -153,6 +153,23 @@ Structure your review as follows:
 
 **Open Questions:** Things you cannot evaluate without more information. Frame as specific questions, not vague requests for "more detail."
 
+## Subagent Return Line
+
+When a SpecPipeline (or any orchestrator) delegates a review to you, the **last line** of your subagent result MUST be a single, machine-parsable line of the form:
+
+```
+path=<absolute or repo-relative review path>; critical=<int>; significant=<int>; observations=<int>; verdict=<approve|revise>
+```
+
+Rules:
+
+- One line, no surrounding backticks, no leading/trailing prose on that line.
+- `critical` / `significant` / `observations` are integer counts of the findings written to the review artifact in this run (re-reviews count only the findings of the current cycle, not the cumulative total).
+- `verdict=approve` ⇔ `critical == 0`. Any other combination is a protocol violation.
+- The review file referenced by `path` MUST exist on disk before you return.
+
+This line is the orchestrator's handoff contract — it parses these counts directly to decide whether to enter the Critical Resolution Loop, to request a single Significant-only revision, or to proceed without revision. Without this line the orchestrator falls back to opening the review file, which costs context and tool latency. Emitting the line is mandatory; emitting an incorrect or malformed line is logged as a protocol violation in the pipeline summary.
+
 ## Communication Style
 
 Be concise. Architects read these under time pressure. Every sentence should carry information.

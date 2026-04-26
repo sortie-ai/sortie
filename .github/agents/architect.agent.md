@@ -5,7 +5,10 @@ description: >
   decisions. Use when asked to specify, architect, design, write a spec,
   define requirements, or analyze a feature request.
 argument-hint: Specify the feature or idea to architect
-model: Claude Opus 4.6 (copilot)
+model:
+  - GPT-5.4 (copilot)
+  - Claude Opus 4.7 (copilot)
+  - Gemini 3.1 Pro (Preview) (copilot)
 tools:
   - execute/getTerminalOutput
   - execute/killTerminal
@@ -40,7 +43,7 @@ Feature Request, User Prompt, GitHub issue reference, or architecture section re
 
 The skill contains the complete specification workflow:
 - **Analysis protocol** (7 checks) — in `references/analysis-protocol.md`
-- **Output template** (6 sections) — in `assets/spec-template.md`
+- **Output template** (4 sections) — in `assets/spec-template.md`
 - **Output style rules** — in the SKILL.md body
 - **Quality checklist** — in `references/quality-checklist.md`
 - **Structural validation** — in `scripts/validate_spec.py`

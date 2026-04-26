@@ -27,30 +27,7 @@ Keep to 2-4 paragraphs.
 
 ---
 
-## 2. System Diagram (Mermaid)
-
-<!--
-Create a Mermaid sequence or component diagram showing the data flow through
-the system's layers. Use this layer order as the axis:
-
-  Tracker Adapter -> Orchestrator -> Workspace Manager -> Agent Adapter -> Observability
-
-Include only components the feature touches. Label messages with the domain
-operation name (e.g., "FetchIssuesByStates()", "Dispatch()"), not
-implementation details.
--->
-
-```mermaid
-sequenceDiagram
-    participant A as ComponentA
-    participant B as ComponentB
-    A->>B: Operation()
-    B-->>A: Result
-```
-
----
-
-## 3. Technical Architecture
+## 2. Technical Architecture
 
 <!--
 The core design section. Fill only the subsections relevant to this feature.
@@ -112,7 +89,7 @@ Delete this subsection if the feature is entirely within one layer.
 
 ---
 
-## 4. Risk Assessment
+## 3. Risk Assessment
 
 | Risk                        | Severity | Mitigation                                   |
 |-----------------------------|----------|----------------------------------------------|
@@ -133,7 +110,7 @@ Always assess:
 
 ---
 
-## 5. File Structure Summary
+## 4. File Structure Summary
 
 <!--
 Tree view of ALL new and modified files, annotated with the architecture

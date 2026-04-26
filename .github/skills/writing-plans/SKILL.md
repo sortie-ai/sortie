@@ -47,7 +47,7 @@ A good plan is the compiled form of a spec: it removes ambiguity, sequences depe
 Before drafting, confirm you have:
 
 1. **A specification source.** Typically `.specs/Spec-{TASK_NAME}.md`, but may be a Jira issue, GitHub issue, or feature description pasted inline. If only a one-line request is given, stop and ask for the spec. Do not plan from assumptions.
-2. **The relevant sections of `docs/architecture.md`.** Every non-trivial step must trace back to an architecture section. If you cannot cite a section for a step, either the spec is wrong or the step is speculative.
+2. **[`docs/architecture-digest.md`](../../../docs/architecture-digest.md).** Read this by default — it summarizes components, layers, the adapter model, hard constraints, and a deep-read trigger table. Open the full [`docs/architecture.md`](../../../docs/architecture.md) only when the plan touches an area flagged in the digest's deep-read table. Anchor-link citations in the plan still point at the full document. When the digest and the full document disagree, the full document wins; flag the drift.
 3. **The current file tree.** Run `tree -d -L 3 internal/` (or equivalent) to know where new code belongs before assigning file paths.
 
 If any input is missing, stop and ask. Planning from guesses produces plans that diverge from the spec on first contact with the code.
@@ -67,7 +67,7 @@ Copy this checklist into your response and mark items as you go. Each gate exist
 
 Read the spec in full. Extract: the goal, the layers touched, the milestone, prerequisites, and any explicit "do not" constraints.
 
-Read every architecture section the spec cites. If the spec references Section 9.6 (workspace safety) and your plan does not address path containment, the plan is incomplete.
+Read [`docs/architecture-digest.md`](../../../docs/architecture-digest.md) for the system map. Open the matching section of the full [`docs/architecture.md`](../../../docs/architecture.md) only when the spec cites it explicitly or when the digest's deep-read table flags an area the plan touches. If the spec references Section 9.6 (workspace safety) and your plan does not address path containment, the plan is incomplete.
 
 Run a file-tree listing of the affected packages. This grounds your file-path decisions in reality — no inventing `internal/foo/bar.go` if `internal/foo/` does not exist.
 

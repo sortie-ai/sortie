@@ -6,8 +6,7 @@ Usage:
     validate_spec.py <path-to-spec.md>
 
 Checks:
-    - All five required sections are present and non-empty
-    - At least one Mermaid code block exists
+    - All four required sections are present and non-empty
     - Risk assessment table has at least one data row
     - File structure summary is present
     - No output style violations (function bodies, Symphony references)
@@ -21,10 +20,9 @@ from pathlib import Path
 
 REQUIRED_SECTIONS = [
     (r"##\s+1\.\s+Business Goal", "Section 1: Business Goal & Value"),
-    (r"##\s+2\.\s+System Diagram", "Section 2: System Diagram (Mermaid)"),
-    (r"##\s+3\.\s+Technical Architecture", "Section 3: Technical Architecture"),
-    (r"##\s+4\.\s+Risk Assessment", "Section 4: Risk Assessment"),
-    (r"##\s+5\.\s+File Structure Summary", "Section 5: File Structure Summary"),
+    (r"##\s+2\.\s+Technical Architecture", "Section 2: Technical Architecture"),
+    (r"##\s+3\.\s+Risk Assessment", "Section 3: Risk Assessment"),
+    (r"##\s+4\.\s+File Structure Summary", "Section 4: File Structure Summary"),
 ]
 
 SYMPHONY_PATTERNS = [
@@ -95,20 +93,11 @@ def validate(spec_path: str) -> list[dict]:
             if len(body_clean) < 20:
                 error(f"Empty or minimal: {label}")
 
-    # Check Mermaid diagram
-    mermaid_blocks = re.findall(r"```mermaid\s*\n(.+?)```", content, re.DOTALL)
-    if not mermaid_blocks:
-        error("Missing: Mermaid diagram in Section 2")
-    else:
-        for i, block in enumerate(mermaid_blocks):
-            if len(block.strip()) < 20:
-                warn(f"Mermaid block {i + 1} appears too short to be meaningful")
-
     # Check risk assessment table
     risk_section = extract_section(
         content,
-        r"##\s+4\.\s+Risk Assessment",
-        r"##\s+5\.\s+File Structure Summary",
+        r"##\s+3\.\s+Risk Assessment",
+        r"##\s+4\.\s+File Structure Summary",
     )
     if risk_section:
         table_rows = re.findall(r"^\|[^|]+\|[^|]+\|[^|]+\|", risk_section, re.MULTILINE)

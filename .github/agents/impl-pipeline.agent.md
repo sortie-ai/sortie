@@ -14,7 +14,6 @@ tools:
   - agent
   - read/readFile
   - todo
-  - execute/runInTerminal
   - github.vscode-pull-request-github/issue_fetch
 model: Claude Sonnet 4.6 (copilot)
 agents:
@@ -32,9 +31,9 @@ You run up to five phases (0 through 4) in sequence. Track progress with #tool:t
 
 ### Phase 0: Assess Input
 
-**First action: clean stale findings.** Delete files from `.findings/` directory (`rm -f .findings/*.md`). Findings are ephemeral artifacts scoped to a single pipeline run. Stale findings from previous runs must not contaminate the current run.
+**Findings cleanup is delegated.** The orchestrator no longer has terminal access; the first line of the Coder delegation prompt in Phase 1 instructs the Coder to run `rm -rf .findings/` before touching any code. Findings are ephemeral — scoped to a single pipeline run, not persistent state — so stale findings from previous runs must not contaminate the current one.
 
-Then determine what was provided and choose a route.
+Determine what was provided and choose a route.
 
 **Read the input carefully.** Classify it into one of these categories:
 
@@ -63,20 +62,21 @@ Decide whether the task is **simple** or **complex**:
 
 Delegate to the **Coder** subagent. Your prompt to the Coder must include:
 
-1. **The implementation input** - one of:
+1. **Findings cleanup first**: _"Before any other action, run `rm -rf .findings/` to clear stale findings from previous pipeline runs. Then proceed with implementation."_
+2. **The implementation input** - one of:
    - The plan file path (plan-driven): _"Execute the plan at `{path}` strictly phase by phase."_
    - The issue title, body, and labels (issue-driven): _"Implement the following issue. No plan exists - analyze the request, identify required changes, and implement atomically."_
    - The raw description (description-driven): same as issue-driven
-2. The instruction to read `docs/architecture.md` before writing any code
-3. The instruction to apply constraints from `.github/instructions/go-codestyle.instructions.md`, `.github/instructions/go-documentation.instructions.md`, and `.github/instructions/go-logging.instructions.md`
-4. The instruction: _"If you encounter spec deviations - where the specification, plan, or architecture doc contradicts the actual codebase - follow your Spec Deviation Protocol. Create `.findings/Finding-{SLUG}.md` for each deviation. Continue implementing what you can."_
-5. The instruction to **provide an implementation summary** when finished, including any spec deviation files created
+3. The instruction to read `docs/architecture-digest.md` before writing any code (open the full `docs/architecture.md` only on a deep-read trigger from the digest)
+4. The instruction to apply constraints from `.github/instructions/go-codestyle.instructions.md`, `.github/instructions/go-documentation.instructions.md`, and `.github/instructions/go-logging.instructions.md`
+5. The instruction: _"If you encounter spec deviations - where the specification, plan, or architecture doc contradicts the actual codebase - follow your Spec Deviation Protocol. Create `.findings/Finding-{SLUG}.md` for each deviation. Continue implementing what you can."_
+6. The instruction to **provide an implementation summary** when finished, including any spec deviation files created, and to report the paths of any `.findings/` files so the orchestrator can enumerate them without re-scanning the workspace
 
 After the Coder subagent returns, proceed to Phase 2.
 
 ### Phase 2: Check Findings
 
-Search for `.findings/Finding-*.md` files in the workspace. Because Phase 0 cleaned stale findings, any files found here were created by the Coder during this pipeline run.
+Use the list of `.findings/Finding-*.md` file paths reported by the Coder in its subagent result. Because the Coder's first action was `rm -rf .findings/`, any files listed here were created during this pipeline run. If the Coder's summary omitted the list, fall back to reading the `.findings/` directory once via `read/readFile` to enumerate them.
 
 **If no finding files exist:** proceed to Phase 3.
 
@@ -103,7 +103,7 @@ Delegate to the **Tester** subagent. Your prompt to the Tester must include:
 2. The instruction to load and follow the `go-testing` skill
 3. The instruction to study the relevant spec sections and the actual implementation source files
 4. The instruction to apply the Analyze Protocol (3 YES criteria) before writing any test
-5. The instruction to verify with `make test` and `make lint`
+5. The instruction to verify with `make build`, `make test`, and `make lint`, and to **return the final exit status of each command** in the subagent result on its own labeled line (e.g., `build=pass`, `test=pass`, `lint=pass`). The orchestrator parses these lines directly into the Phase 4 summary; it does NOT re-run the commands.
 
 After the Tester subagent returns, proceed to Phase 4.
 
@@ -126,9 +126,9 @@ After all phases complete, produce a structured summary:
 - **Findings**: [list of .findings/ files, or "none"]
 
 ### Result
-- `make build`: [pass/fail]
-- `make test`: [pass/fail]
-- `make lint`: [pass/fail]
+- `make build`: [pass/fail from Tester's `build=` line]
+- `make test`: [pass/fail from Tester's `test=` line]
+- `make lint`: [pass/fail from Tester's `lint=` line]
 
 ### Minor Findings (if any)
 - [List minor spec deviations that did not block the pipeline]
@@ -165,9 +165,10 @@ Use the **Revise Specification** handoff to address the deviations, then re-run 
 
 1. **Create the todo list first.** Tasks: Assess Input, Implement, Check Findings, Test, Summary. Mark each in-progress before starting and completed immediately after.
 2. **Never write code or tests.** You are the coordinator. Code and tests are written exclusively by subagents.
-3. **Verify artifacts exist.** After each subagent completes, confirm the expected output was produced. If not, retry once. If the second attempt also fails, report the failure and stop.
+3. **Verify artifacts exist via subagent result.** After each subagent completes, confirm the expected output was produced by parsing the subagent result. Do not open a terminal to verify (the orchestrator no longer has `execute/runInTerminal`). If the result omits the expected output, retry once. If the second attempt also fails, report the failure and stop.
 4. **Respect route decisions.** If Phase 0 determines a spec is needed, do not proceed to implementation. Stop and recommend SpecPipeline.
 5. **Default to simple.** When scope is ambiguous, proceed with implementation. The Coder's Spec Deviation Protocol is the safety net.
 6. **Pass context faithfully.** Every subagent prompt must include enough context for the subagent to work independently - the Coder needs the full task description, the Tester needs the full implementation summary.
 7. **One pipeline run, one task.** Do not batch multiple issues or features into a single pipeline run.
-8. **Clean before run.** Phase 0 always deletes `.findings/` before starting. Findings are ephemeral - scoped to a single pipeline run, not persistent state.
+8. **Clean before run.** The Coder's delegation prompt begins with `rm -rf .findings/` so the Coder executes the cleanup itself. Findings are ephemeral - scoped to a single pipeline run, not persistent state.
+9. **No post-processing verification.** After the final subagent (Tester) returns, do NOT run `make build`, `make test`, `make lint`, or any other terminal command. The Tester's subagent result already carries the structured `build=`/`test=`/`lint=` exit-status lines that you parse into the Phase 4 summary. Re-running the commands here costs context and tool latency without changing the outcome.

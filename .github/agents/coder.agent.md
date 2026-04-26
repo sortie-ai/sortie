@@ -5,7 +5,9 @@ description: >
   architectural constraints. Use when asked to build, code, implement,
   develop a feature, execute a plan, or write production code.
 argument-hint: Specify the execution plan step or file to implement
-model: Claude Opus 4.6 (copilot)
+model:
+  - GPT-5.4 (copilot)
+  - Claude Opus 4.7 (copilot)
 tools:
   - execute/getTerminalOutput
   - execute/killTerminal

@@ -12,7 +12,6 @@ tools:
   - agent
   - read/readFile
   - todo
-  - execute/runInTerminal
   - github.vscode-pull-request-github/issue_fetch
 model: Claude Sonnet 4.6 (copilot)
 agents:
@@ -47,18 +46,19 @@ After the Architect subagent returns, search `.specs/` for the created file. Con
 Delegate to the **Reviewer** subagent. Your prompt to the Reviewer must include:
 
 1. The exact spec file path from Phase 1
-2. The instruction to ground the review in project context by reading `AGENTS.md`, `docs/architecture.md`, and `docs/decisions/`
+2. The instruction to ground the review in project context by reading `AGENTS.md`, `docs/architecture-digest.md` (full `docs/architecture.md` only on deep-read trigger), and `docs/decisions/`
 3. The instruction to study codebase structure and existing patterns before evaluating
 4. The instruction to classify each finding as **Critical**, **Significant**, or **Observation**
 5. The output path: `.reviews/Review-{TASK_NAME}.md`
 6. The instruction to apply review standards from `.github/instructions/code-review.instructions.md`
 7. The instruction to **report the exact file path** of the created review
-
-After the Reviewer subagent returns, search `.reviews/` for the created review. Read it to assess findings.
+8. The instruction to end the subagent result with the **Subagent Return Line** specified in `reviewer.agent.md` (format: `path=<...>; critical=N; significant=M; observations=K; verdict=approve|revise`). This line is the machine-readable handoff.
 
 ### Phase 3: Revise if Needed
 
-Read the review from Phase 2. Count **Critical** and **Significant** findings separately.
+Parse the **Subagent Return Line** from the Reviewer's subagent result (format specified in `reviewer.agent.md`). Extract `critical`, `significant`, and `verdict`.
+
+If the return line is missing or malformed, fall back to reading the review artifact from `.reviews/` and counting findings manually — then log the Reviewer's protocol violation in the Phase 5 summary so it can be fixed.
 
 **Decision tree:**
 
@@ -74,6 +74,7 @@ Every revision delegation to the **Architect** must include:
 2. The review file path
 3. The instruction: _"Read the review and revise the spec to address all Critical and Significant findings. Preserve the overall spec structure — make surgical revisions, do not rewrite sections that received no findings."_
 4. The instruction to report what was changed
+5. The instruction to run `python3 .github/skills/writing-specs/scripts/validate_spec.py <spec-path>` after the revision and report the exit code. If the validator returns a non-zero exit code, the Architect MUST fix the structural errors before returning — an external validator pass is a precondition for re-review.
 
 #### Critical Resolution Loop
 
@@ -85,7 +86,8 @@ Critical findings represent safety violations, data loss risks, or fundamental c
    - The revised spec file path
    - The original review file path (for comparison)
    - The instruction: _"Re-review the specification. Focus on whether the previously identified Critical findings have been resolved. Classify any remaining issues. Write the re-review to `.reviews/Review-{TASK_NAME}-r2.md`."_
-3. Read the re-review. Count remaining Critical findings.
+   - The instruction to end the subagent result with the **Subagent Return Line** (same format as Phase 2)
+3. Parse the Subagent Return Line. Extract remaining `critical` count.
 
 **If zero Critical findings remain after Cycle 1** — proceed to Phase 4.
 
@@ -95,7 +97,8 @@ Critical findings represent safety violations, data loss risks, or fundamental c
    - The twice-revised spec file path
    - The `-r2` review file path (showing which Critical findings remained after Cycle 1)
    - The instruction: _"Re-review the specification. Focus on whether the remaining Critical findings from the `-r2` review have been resolved. Classify any remaining issues. Write the re-review to `.reviews/Review-{TASK_NAME}-r3.md`."_
-3. Read the `-r3` re-review. Count remaining Critical findings.
+   - The instruction to end the subagent result with the **Subagent Return Line** (same format as Phase 2)
+3. Parse the Subagent Return Line. Extract remaining `critical` count.
 
 **After Cycle 2, unconditionally proceed to Phase 4 or halt:**
 - If zero Critical findings remain in the `-r3` re-review — proceed to Phase 4.
@@ -109,7 +112,7 @@ Delegate to the **Planner** subagent. Your prompt to the Planner must include:
 
 1. The spec file path (the final version after any revision)
 2. The instruction to analyze the spec section-by-section and produce an atomic, layer-aware plan
-3. The instruction to read `docs/architecture.md` to ensure the plan respects milestone ordering and dependencies
+3. The instruction to read `docs/architecture-digest.md` (full `docs/architecture.md` only on deep-read trigger) to ensure the plan respects milestone ordering and dependencies
 4. The instruction to apply standards from `.github/instructions/go-environment.instructions.md`
 5. The output path: `.plans/Plan-{TASK_NAME}.md` using the standard output format
 6. The instruction to **report the exact file path** of the created plan
@@ -164,8 +167,9 @@ Use the **Refine Specification** handoff to address the unresolved findings manu
 
 1. **Create the todo list first.** Tasks: Specify, Review, Revise (conditional), Re-review (conditional), Plan. Mark each in-progress before starting and completed immediately after.
 2. **Pass the verbatim feature request.** Every subagent prompt must include the user's original request so the subagent has full context.
-3. **Verify artifacts exist.** After each subagent completes, confirm the expected file was created. If not, retry once with explicit file path instructions. If the second attempt also fails, report the failure and stop the pipeline.
+3. **Verify artifacts exist via subagent result.** After each subagent completes, confirm the expected file was created by parsing the subagent result (and the Reviewer's Subagent Return Line in Phase 2). If the expected path is missing from the result, retry the delegation once with explicit file path instructions. If the second attempt also fails, report the failure and stop the pipeline.
 4. **Never write files.** You are the coordinator. Specs, reviews, and plans are written exclusively by subagents.
 5. **Never skip Phase 2.** Every specification gets reviewed, regardless of complexity.
 6. **Revision depth is severity-gated.** Significant-only findings get 1 revision, no re-review. Critical findings get up to 2 revision cycles with re-review after each. Unresolvable Critical findings halt the pipeline. This balances thoroughness against loop prevention.
 7. **Derive TASK_NAME consistently.** Use a concise, kebab-case name derived from the feature request. Use the same name across all artifact paths for traceability (e.g., `Spec-Template-Static-Analysis.md`, `Review-Template-Static-Analysis.md`, `Plan-Template-Static-Analysis.md`).
+8. **No post-processing verification.** After the final subagent (Planner) returns success, do NOT run `validate_spec.py`, formatters, linters, or any additional checks yourself. Validators are the responsibility of the subagent whose context is fresh (Architect runs `validate_spec.py` as a revision exit gate; the Planner's writing-plans skill enforces the philosophy checklist as its own exit gate). The orchestrator no longer has `execute/runInTerminal` for this reason.
