@@ -2,18 +2,15 @@
 
 ## Supported Versions
 
-Sortie follows [Semantic Versioning](https://semver.org/). Security fixes are
-applied to the **current minor release** of the latest major version, with a
-**3-month grace period** during which the previous minor continues to receive
-critical and high severity security patches.
+Sortie follows [Semantic Versioning](https://semver.org/). Security fixes are applied to the **current minor release** of the latest major version, with a **3-month grace period** during which the previous minor continues to receive critical and high severity security patches.
 
 | Version   | Supported                        |
 |-----------|----------------------------------|
-| 1.8.x     | Yes                              |
-| 1.7.x     | Security patches until July 2026 |
-| < 1.7     | No                               |
+| 1.9.x     | Yes                              |
+| 1.8.x     | Security patches until July 2026 |
+| < 1.8     | No                               |
 
-When a new minor version is released (e.g., 1.5.0), the previous minor (e.g., 1.4.x) enters this 3-month grace period. After the grace period ends, only the current minor release of the latest major version is supported; all older versions are unsupported.
+When a new minor version is released (e.g., 1.9.0), the previous minor (e.g., 1.8.x) enters this 3-month grace period. After the grace period ends, only the current minor release of the latest major version is supported; all older versions are unsupported.
 
 ## Reporting a Vulnerability
 
