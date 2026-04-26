@@ -8,13 +8,13 @@
 # Do not ignore .vscode directory.
 !/.vscode
 
-# Test binary, built with `go test -c`
+# Test binary, built with `go test -c`.
 *.test
 
 # Manual tests
 /WORKFLOW.test.md
 
-# Code coverage profiles and other test artifacts
+# Code coverage profiles and other test artifacts.
 *.out
 coverage.*
 *.coverprofile
@@ -43,10 +43,13 @@ go.work.sum
 /.specs
 /.tasks
 
-# Sortie user documentation and blog posts
+# Sortie user documentation and blog posts.
 /website
 /blog
 
-# Python cache files
+# Python cache files.
 __pycache__
 *.pyc
+
+# Local environment variables for E2E tests.
+env.local.sh

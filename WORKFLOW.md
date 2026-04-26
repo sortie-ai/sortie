@@ -180,10 +180,15 @@ Sortie is a single-binary Go service with this internal layout:
 | `internal/config/`       | Configuration | Typed config, env-var resolution, template rendering |
 | `internal/workflow/`     | Configuration | WORKFLOW.md parsing, file watching, dynamic reload   |
 | `internal/persistence/`  | Persistence   | SQLite schema, migrations, CRUD                      |
+| `internal/httpkit/`      | Integration   | Shared REST transport, conditional GET, and pagination helpers |
+| `internal/issuekit/`     | Integration   | Shared issue normalization helpers                   |
+| `internal/trackermetrics/` | Integration | Shared tracker-operation metrics decorator           |
 | `internal/tracker/jira/` | Integration   | Jira adapter behind `TrackerAdapter` interface       |
-| `internal/scm/github/`   | Integration | GitHub SCM adapters behind `TrackerAdapter` and `CIStatusProvider` interfaces |
+| `internal/scm/github/`   | Integration   | GitHub tracker, CI, and review adapters behind `TrackerAdapter`, `CIStatusProvider`, and `SCMAdapter` interfaces |
 | `internal/tracker/file/` | Integration   | File-based tracker for dev/test                      |
+| `internal/agent/agentcore/` | Integration | Shared agent adapter command, event, usage, and workspace helpers |
 | `internal/agent/claude/` | Integration   | Claude Code adapter behind `AgentAdapter` interface  |
+| `internal/agent/codex/`  | Integration   | Codex adapter behind `AgentAdapter` interface        |
 | `internal/agent/copilot/` | Integration  | Copilot adapter behind `AgentAdapter` interface      |
 | `internal/agent/mock/`   | Integration   | Mock agent for testing                               |
 | `internal/workspace/`    | Execution     | Workspace lifecycle, hooks, path safety              |

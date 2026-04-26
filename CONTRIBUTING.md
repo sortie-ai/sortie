@@ -89,9 +89,11 @@ change, that is a valid conversation to have in an issue.
 ```
 cmd/sortie/            entry point, CLI wiring
 internal/
-  agent/               agent adapters (claude/, copilot/, mock/, etc.)
+  agent/               agent adapters and shared agent helpers (agentcore/, claude/, codex/, copilot/, mock/, ...)
   config/              typed config, defaults, env-var resolution
   domain/              pure types, interfaces, error categories (imports nothing)
+  httpkit/             shared REST transport, conditional GET, pagination
+  issuekit/            shared issue normalization helpers
   logging/             structured slog helpers (imports nothing)
   maputil/             generic map utility helpers (imports nothing)
   typeutil/            type coercion helpers (imports nothing)
@@ -103,6 +105,7 @@ internal/
   tool/                agent tools (trackerapi/, history/, mcpserver/, status/)
   tracker/             tracker adapters (jira/, file/, etc.)
   scm/                 SCM adapters (github/)
+  trackermetrics/      shared tracker-operation metrics helpers
   workflow/            WORKFLOW.md parser, file watcher
   workspace/           filesystem isolation, path safety, hook execution
 docs/
@@ -110,10 +113,10 @@ docs/
   decisions/           Architecture Decision Records (ADRs)
 ```
 
-Imports flow downward. `domain/`, `logging/`, `maputil/`, and `typeutil/` sit at the
-bottom with no internal dependencies. Adapters (`tracker/*`, `scm/*`, `agent/*`)
-implement interfaces defined in `domain/` and never import each other or the
-orchestrator.
+Imports flow downward. `domain/`, `logging/`, `maputil/`, `typeutil/`, and `httpkit/`
+sit at the bottom with no internal dependencies. `issuekit/` and `trackermetrics/`
+depend only on `domain/`. Adapters (`tracker/*`, `scm/*`, `agent/*`) implement
+interfaces defined in `domain/` and never import each other or the orchestrator.
 
 ## Code conventions
 
