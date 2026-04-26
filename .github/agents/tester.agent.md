@@ -55,9 +55,13 @@ At least one criterion must be met. Do not write useless tests. Your KPI is test
 | Workflow     | `internal/workflow/`     | Unit                                      | YAML parsing, BOM/CRLF, delimiter detection, reload fallback      |
 | Config       | `internal/config/`       | Unit                                      | Template rendering, `$VAR` resolution, `~` expansion, validation  |
 | Persistence  | `internal/persistence/`  | Integration (in-memory SQLite)            | Migrations, CRUD, idempotent upserts, recovery                    |
+| Integration support | `internal/httpkit/` | Unit (httptest)                           | Request construction, success status handling, conditional GET, pagination |
+| Integration support | `internal/issuekit/` | Unit                                     | Label normalization, comment normalization, strict priority parsing |
+| Integration support | `internal/trackermetrics/` | Unit                              | Logical tracker-operation outcome accounting                      |
 | Tracker      | `internal/tracker/*/`    | Unit (httptest) + Integration (env-gated) | Response normalization, pagination, error categories              |
 | SCM          | `internal/scm/*/`        | Unit (httptest) + Integration (env-gated) | SCM integration, response normalization, pagination               |
 | Agent        | `internal/agent/*/`      | Unit (fixtures) + Integration (env-gated) | Event parsing, token extraction, timeout handling                 |
+| Agent core   | `internal/agent/agentcore/` | Unit                                   | Shared launch, event, usage, and workspace helpers                |
 | Agent util   | `internal/agent/agenttest/` | (test helper)                          | Shared test helpers for agent adapter tests                       |
 | Agent util   | `internal/agent/procutil/`  | Unit                                   | Subprocess lifecycle, exit code extraction                        |
 | Agent util   | `internal/agent/sshutil/`   | Unit                                   | SSH invocation, shell quoting                                     |
@@ -81,6 +85,7 @@ Integration tests requiring external services MUST be gated:
 - `SORTIE_GITHUB_TEST=1` for GitHub adapter integration tests
 - `SORTIE_GITHUB_E2E=1` for orchestrator-level E2E tests with real GitHub API + mock agent (also requires `SORTIE_GITHUB_TOKEN` and `SORTIE_GITHUB_PROJECT`)
 - `SORTIE_CLAUDE_TEST=1` for Claude Code adapter integration tests
+- `SORTIE_CODEX_TEST=1` for Codex adapter integration tests
 - `SORTIE_COPILOT_TEST=1` for Copilot adapter integration tests
 
 Without these vars, integration tests must **skip cleanly** — never fail.
