@@ -1,6 +1,6 @@
-# Mandatory Protocol and Critical Guidelines for AI Agents
+# Project Conventions for AI Agents
 
-## Protocol
+## Working Agreement
 
 ### 1. Think Before Coding
 
@@ -101,14 +101,15 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 
 ## Reference docs
 
-Read whichever of these are relevant before starting work:
+Consult these on demand for the area you are working on, not as a blanket prerequisite to read upfront:
 
-- `docs/architecture.md` — the full specification: domain model, state machine, algorithms, adapter contracts, persistence schema, test matrix
-- `docs/decisions/` — accepted ADRs for Go runtime, SQLite persistence, and adapter-based extensibility
-- `docs/workflow-reference.md` - WORKFLOW.md Syntax Reference
+- `docs/architecture-digest.md` -  a 2-page map of the system for AI agents. Read this document as your first reference during specification, planning, and review. Open the full `docs/architecture.md` only when the feature you are working on touches one of the areas flagged in the "deep-read" section at the bottom.
+- `docs/architecture.md` - the full specification (~3600 lines). Read the section that covers the entity, state machine, algorithm, or contract you are about to change. Do not read the document end-to-end before starting work.
+- `docs/decisions/` - accepted ADRs. Read when discussing or revising a prior design choice.
+- `docs/workflow-reference.md` - WORKFLOW.md syntax reference.
 
 ---
 
-Last updated: 2026-04-16
+Last updated: 2026-04-26
 
 Maintained by: AI Agents under human supervision
