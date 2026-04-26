@@ -32,7 +32,6 @@ func assertNoFlag(t *testing.T, args []string, flag string) {
 func newFirstTurnState(mcpConfigPath string) *sessionState {
 	return &sessionState{
 		claudeSessionID: "test-session-id",
-		turnCount:       0,
 		isContinuation:  false,
 		mcpConfigPath:   mcpConfigPath,
 	}
@@ -94,7 +93,7 @@ func TestBuildArgs_MCPConfig(t *testing.T) {
 			t.Parallel()
 			state := newFirstTurnState(tt.mcpConfigPath)
 			pt := passthroughConfig{MCPConfig: tt.ptMCPConfig, SessionPersistence: true}
-			args := buildArgs(state, "do work", pt)
+			args := buildArgs(state, 1, "do work", pt)
 			tt.checkArgs(t, args)
 		})
 	}

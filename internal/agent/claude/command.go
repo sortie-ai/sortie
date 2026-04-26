@@ -47,7 +47,7 @@ func parsePassthroughConfig(config map[string]any) passthroughConfig {
 // buildArgs constructs the CLI argument slice for a Claude Code
 // invocation. The arguments are passed directly to exec.Command,
 // avoiding shell interpolation.
-func buildArgs(state *sessionState, prompt string, pt passthroughConfig) []string {
+func buildArgs(state *sessionState, turn int, prompt string, pt passthroughConfig) []string {
 	args := []string{
 		"-p", prompt,
 		"--output-format", "stream-json",
@@ -63,7 +63,7 @@ func buildArgs(state *sessionState, prompt string, pt passthroughConfig) []strin
 	// Session management: first turn of a new session uses --session-id,
 	// all other cases (continuation turns or continuation sessions) use
 	// --resume.
-	if state.turnCount == 0 && !state.isContinuation {
+	if turn == 1 && !state.isContinuation {
 		args = append(args, "--session-id", state.claudeSessionID)
 	} else {
 		args = append(args, "--resume", state.claudeSessionID)
