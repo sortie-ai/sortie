@@ -7,23 +7,16 @@
 package claude
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"os"
-	"os/exec"
 	"regexp"
-	"strconv"
 	"strings"
-	"sync"
 	"time"
 	"unicode/utf8"
 
 	"github.com/sortie-ai/sortie/internal/agent/agentcore"
-	"github.com/sortie-ai/sortie/internal/agent/procutil"
-	"github.com/sortie-ai/sortie/internal/agent/sshutil"
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/logging"
 	"github.com/sortie-ai/sortie/internal/registry"
@@ -53,23 +46,29 @@ type ClaudeCodeAdapter struct {
 }
 
 // sessionState is adapter-internal state stored in [domain.Session]
-// Internal. It tracks the Claude Code session ID and subprocess
-// handle across turns.
+// Internal. It tracks the Claude Code session ID and per-turn scan
+// state across turns.
 type sessionState struct {
 	target          agentcore.LaunchTarget
 	claudeSessionID string
 	isContinuation  bool
 	agentConfig     domain.AgentConfig
-	turnCount       int
 
 	// mcpConfigPath is the worker-generated MCP config file path.
 	mcpConfigPath string
 
-	// mu guards proc and waitCh for concurrent access from
-	// StopSession and the cmd.Cancel callback.
-	mu     sync.Mutex
-	proc   *os.Process
-	waitCh chan struct{} // closed when cmd.Wait() completes; nil when no process is running
+	// forkSession owns the subprocess lifecycle for this session.
+	forkSession *agentcore.ForkPerTurnSession
+
+	// Per-turn scan state owned by the ParseLine and OnFinalize hook
+	// closures. Reset at the top of each RunTurn call before delegating
+	// to forkSession.
+	acc              *agentcore.UsageAccumulator
+	lastModel        string
+	emittedUsage     bool
+	apiCallStart     time.Time
+	emittedAPITiming bool
+	inFlight         *agentcore.ToolTracker
 }
 
 // NewClaudeCodeAdapter creates a [ClaudeCodeAdapter] from adapter
@@ -107,24 +106,196 @@ func (a *ClaudeCodeAdapter) StartSession(_ context.Context, params domain.StartS
 		mcpConfigPath:   params.MCPConfigPath,
 	}
 
+	sessionLogger := logging.WithSession(slog.Default().With(slog.String("component", "claude-adapter")), sessionUUID)
+
+	hooks := agentcore.ForkPerTurnHooks{
+		BuildArgs: func(turn int, prompt string) []string {
+			return buildArgs(state, turn, prompt, a.passthrough)
+		},
+		ParseLine: func(line []byte, emit func(domain.AgentEvent), pid string) (any, error) {
+			now := time.Now().UTC()
+
+			event, parseErr := parseEvent(line)
+			if parseErr != nil {
+				return nil, parseErr
+			}
+
+			switch event.Type {
+			case "system":
+				switch event.Subtype {
+				case "init":
+					if event.SessionID != "" {
+						state.claudeSessionID = event.SessionID
+					}
+					agentcore.EmitSessionStarted(emit, pid, state.claudeSessionID)
+					// The first API call is imminent. Start the monotonic timer.
+					state.apiCallStart = time.Now()
+				case "api_retry":
+					agentcore.EmitNotification(emit, formatAPIRetry(event))
+				default:
+					agentcore.EmitNotification(emit, event.summary())
+				}
+
+			case "assistant":
+				if len(event.Message) > 0 {
+					var meta rawAssistantMessageMeta
+					if err := json.Unmarshal(event.Message, &meta); err == nil {
+						if meta.Model != "" {
+							state.lastModel = meta.Model
+						}
+						if meta.Usage != nil {
+							snapshot, ready := state.acc.AddDelta(meta.Usage.InputTokens, meta.Usage.OutputTokens, meta.Usage.CacheReadInputTokens)
+							// Claude Code 2.x: tool_use-only assistant messages may
+							// carry output_tokens=0 (streaming message_start snapshot).
+							// Defer the token_usage event until cumulative output is
+							// non-zero so the orchestrator never receives an event
+							// claiming zero output tokens for a real API turn.
+							if ready {
+								tokenEvt := domain.AgentEvent{
+									Type:      domain.EventTokenUsage,
+									Timestamp: now,
+									Usage:     snapshot,
+									Model:     state.lastModel,
+								}
+								if !state.apiCallStart.IsZero() {
+									dur := time.Since(state.apiCallStart).Milliseconds()
+									if dur <= 0 {
+										dur = 1 // clamp so the orchestrator accumulates this measurement
+									}
+									tokenEvt.APIDurationMS = dur
+									state.apiCallStart = time.Time{}
+									state.emittedAPITiming = true
+								}
+								emit(tokenEvt)
+								state.emittedUsage = true
+							} else if !state.apiCallStart.IsZero() {
+								// Consume the timing window without emitting so
+								// that the next user event restarts fresh timing
+								// for the subsequent API call.
+								state.apiCallStart = time.Time{}
+							}
+						}
+					}
+				}
+				// ToolTracker.Begin stores time.Now() internally, so no separate
+				// monotonic timestamp is needed before calling processToolBlocks.
+				processToolBlocks(event.contentBlocks(), state.inFlight, now, emit)
+				agentcore.EmitNotification(emit, summarizeAssistant(event))
+
+			case "user":
+				// Claude Code emits tool results as user-role messages.
+				processToolBlocks(event.contentBlocks(), state.inFlight, now, emit)
+				state.apiCallStart = time.Now() // next API call is imminent
+
+			case "result":
+				captured := event
+				// Only emit token_usage from the result event when no
+				// per-assistant-message usage was already emitted. This
+				// avoids inflating APIRequestCount in the orchestrator.
+				if !state.emittedUsage {
+					state.acc.ReplaceCumulative(normalizeUsage(event.Usage))
+					emit(domain.AgentEvent{
+						Type:      domain.EventTokenUsage,
+						Timestamp: now,
+						Usage:     state.acc.Snapshot(),
+						Model:     state.lastModel,
+					})
+				}
+				return &captured, nil
+
+			case "stream_event":
+				agentcore.EmitNotification(emit, "")
+
+			default:
+				emit(domain.AgentEvent{
+					Type:      domain.EventOtherMessage,
+					Timestamp: now,
+					Message:   event.summary(),
+				})
+			}
+
+			return nil, nil
+		},
+		GetUsage:     func() domain.TokenUsage { return state.acc.Snapshot() },
+		GetSessionID: func() string { return state.claudeSessionID },
+		OnFinalize: func(emit func(domain.AgentEvent), lastParsed any, exitCode int, stderrLines []string) (domain.TurnResult, *domain.AgentError) {
+			lastResult, _ := lastParsed.(*rawEvent)
+			usage := state.acc.Snapshot()
+
+			if lastResult != nil {
+				// Use turn-level duration_api_ms only when no per-request
+				// API timing was emitted, to avoid double-counting.
+				var turnAPIDuration int64
+				if !state.emittedAPITiming {
+					turnAPIDuration = lastResult.DurationAPI
+				}
+				if lastResult.Subtype == "success" && !lastResult.IsError {
+					agentcore.EmitTurnCompleted(emit, typeutil.TruncateRunes(lastResult.Result, 500), turnAPIDuration)
+					return domain.TurnResult{
+						SessionID:  state.claudeSessionID,
+						ExitReason: domain.EventTurnCompleted,
+						Usage:      usage,
+					}, nil
+				}
+				// EmitWarnLines is called by the skeleton when agentErr is non-nil.
+				agentcore.EmitTurnFailed(emit, lastResult.Subtype, turnAPIDuration)
+				return domain.TurnResult{
+						SessionID:  state.claudeSessionID,
+						ExitReason: domain.EventTurnFailed,
+						Usage:      usage,
+					}, &domain.AgentError{
+						Kind:    domain.ErrTurnFailed,
+						Message: lastResult.Subtype,
+					}
+			}
+
+			if exitCode != 0 {
+				agentcore.EmitTurnFailed(emit, "non-zero exit", 0)
+				return domain.TurnResult{
+						SessionID:  state.claudeSessionID,
+						ExitReason: domain.EventTurnFailed,
+						Usage:      usage,
+					}, &domain.AgentError{
+						Kind:    domain.ErrPortExit,
+						Message: fmt.Sprintf("exit code %d", exitCode),
+					}
+			}
+
+			// No result event and exit code 0.
+			if state.acc.Snapshot().OutputTokens == 0 {
+				sessionLogger.Warn("agent exited without producing output, treating as failure")
+				agentcore.EmitTurnFailed(emit, "agent exited without producing output", 0)
+				return domain.TurnResult{
+						SessionID:  state.claudeSessionID,
+						ExitReason: domain.EventTurnFailed,
+						Usage:      usage,
+					}, &domain.AgentError{
+						Kind:    domain.ErrTurnFailed,
+						Message: "agent exited without producing output",
+					}
+			}
+
+			agentcore.EmitTurnCompleted(emit, "", 0)
+			return domain.TurnResult{
+				SessionID:  state.claudeSessionID,
+				ExitReason: domain.EventTurnCompleted,
+				Usage:      usage,
+			}, nil
+		},
+		EmitSessionStartID: nil, // Claude emits EventSessionStarted from ParseLine on "system/init"
+	}
+
+	state.forkSession = agentcore.NewForkPerTurnSession(&state.target, hooks, sessionLogger)
+
 	return domain.Session{
 		ID:       sessionUUID,
 		Internal: state,
 	}, nil
 }
 
-// RunTurn executes one agent turn by launching a Claude Code subprocess
-// and reading JSONL events from stdout. Events are delivered
-// synchronously via params.OnEvent.
-//
-// The subprocess is placed in its own process group via
-// [procutil.SetProcessGroup]. On context cancellation, [exec.Cmd].Cancel
-// sends a platform-appropriate graceful shutdown signal to the entire
-// process group via [procutil.SignalGraceful], and [exec.Cmd].WaitDelay
-// of 5 seconds provides a grace period before Go force-kills the group
-// leader. After [exec.Cmd.Wait] returns, a best-effort force kill is
-// sent to the group via [procutil.KillProcessGroup] to reap any
-// children that survived the graceful signal.
+// RunTurn executes one agent turn by delegating to the session's
+// [agentcore.ForkPerTurnSession]. Per-turn scan state is reset before
+// delegation so each turn starts with a fresh accumulator and clean state.
 func (a *ClaudeCodeAdapter) RunTurn(ctx context.Context, session domain.Session, params domain.RunTurnParams) (domain.TurnResult, error) {
 	if params.OnEvent == nil {
 		panic("claude: OnEvent must be non-nil")
@@ -137,406 +308,29 @@ func (a *ClaudeCodeAdapter) RunTurn(ctx context.Context, session domain.Session,
 			Message: fmt.Sprintf("unexpected session internal type %T", session.Internal),
 		}
 	}
-	logger := logging.WithSession(slog.Default().With(slog.String("component", "claude-adapter")), state.claudeSessionID)
 
-	args := buildArgs(state, params.Prompt, a.passthrough)
+	// Reset per-turn scan state before delegation.
+	state.acc = agentcore.NewUsageAccumulator()
+	state.lastModel = ""
+	state.emittedUsage = false
+	state.apiCallStart = time.Time{}
+	state.emittedAPITiming = false
+	state.inFlight = agentcore.NewToolTracker()
 
-	cmdCtx, cancelCmd := context.WithCancel(ctx)
-	defer cancelCmd()
-
-	var cmd *exec.Cmd
-	if state.target.RemoteCommand != "" {
-		sshArgs := sshutil.BuildSSHArgs(state.target.SSHHost, state.target.WorkspacePath, state.target.RemoteCommand, args, sshutil.SSHOptions{
-			StrictHostKeyChecking: state.target.SSHStrictHostKeyChecking,
-		})
-		cmd = exec.CommandContext(cmdCtx, state.target.Command, sshArgs...) //nolint:gosec // args are constructed programmatically with shell quoting
-	} else {
-		allArgs := append(state.target.Args, args...)                       //nolint:gocritic // intentional: target.Args has cap==len so append always allocates
-		cmd = exec.CommandContext(cmdCtx, state.target.Command, allArgs...) //nolint:gosec // args are constructed programmatically
-	}
-	procutil.SetProcessGroup(cmd)
-	cmd.Cancel = func() error {
-		return procutil.SignalGraceful(cmd.Process.Pid)
-	}
-	cmd.WaitDelay = 5 * time.Second
-	cmd.Dir = state.target.WorkspacePath
-	cmd.Env = os.Environ()
-
-	stdoutPipe, err := cmd.StdoutPipe()
-	if err != nil {
-		return domain.TurnResult{}, &domain.AgentError{
-			Kind:    domain.ErrPortExit,
-			Message: "failed to create stdout pipe",
-			Err:     err,
-		}
-	}
-	stderrPipe, err := cmd.StderrPipe()
-	if err != nil {
-		return domain.TurnResult{}, &domain.AgentError{
-			Kind:    domain.ErrPortExit,
-			Message: "failed to create stderr pipe",
-			Err:     err,
-		}
-	}
-
-	// Lock before Start to prevent a race with StopSession.
-	state.mu.Lock()
-	err = cmd.Start()
-	if err != nil {
-		state.mu.Unlock()
-		if ctx.Err() != nil {
-			agentcore.EmitTurnCancelled(params.OnEvent, "context cancelled")
-			return domain.TurnResult{
-					SessionID:  state.claudeSessionID,
-					ExitReason: domain.EventTurnCancelled,
-				}, &domain.AgentError{
-					Kind:    domain.ErrTurnCancelled,
-					Message: "turn cancelled",
-					Err:     ctx.Err(),
-				}
-		}
-		return domain.TurnResult{}, &domain.AgentError{
-			Kind:    domain.ErrPortExit,
-			Message: "failed to start subprocess",
-			Err:     err,
-		}
-	}
-	if assignErr := procutil.AssignProcess(cmd.Process.Pid, cmd.Process); assignErr != nil {
-		logger.Warn("process group assignment failed", slog.Any("error", assignErr))
-	}
-	state.proc = cmd.Process
-	state.waitCh = make(chan struct{})
-	waitCh := state.waitCh // local copy for cleanup closures
-	state.mu.Unlock()
-
-	state.turnCount++
-
-	stderrCollector := procutil.NewStderrCollector(stderrPipe, logger)
-
-	scanner := bufio.NewScanner(stdoutPipe)
-	scanner.Buffer(make([]byte, 0, 64*1024), 10*1024*1024)
-
-	var lastResult *rawEvent
-	var usage domain.TokenUsage
-	inFlight := agentcore.NewToolTracker()
-
-	acc := agentcore.NewUsageAccumulator()
-	var (
-		lastModel        string
-		emittedUsage     bool
-		apiCallStart     time.Time // monotonic timestamp of the last event before an API call
-		emittedAPITiming bool      // true once per-request APIDurationMS has been emitted
-	)
-
-	for scanner.Scan() {
-		line := scanner.Bytes()
-		now := time.Now().UTC()
-
-		event, parseErr := parseEvent(line)
-		if parseErr != nil {
-			agentcore.EmitMalformed(params.OnEvent, line)
-			continue
-		}
-
-		switch event.Type {
-		case "system":
-			switch event.Subtype {
-			case "init":
-				if event.SessionID != "" {
-					state.claudeSessionID = event.SessionID
-				}
-				agentcore.EmitSessionStarted(params.OnEvent, strconv.Itoa(cmd.Process.Pid), state.claudeSessionID)
-				// The first API call is imminent. Start the monotonic timer.
-				// This first measurement includes agent initialization overhead
-				// (workspace scanning, .claude.json parsing, system prompt
-				// assembly) that occurs before the actual HTTP request.
-				// Subsequent measurements (after user events) do not have this
-				// overhead.
-				apiCallStart = time.Now()
-			case "api_retry":
-				agentcore.EmitNotification(params.OnEvent, formatAPIRetry(event))
-			default:
-				agentcore.EmitNotification(params.OnEvent, event.summary())
-			}
-
-		case "assistant":
-			// Extract model and per-request usage from assistant message.
-			if len(event.Message) > 0 {
-				var meta rawAssistantMessageMeta
-				if err := json.Unmarshal(event.Message, &meta); err == nil {
-					if meta.Model != "" {
-						lastModel = meta.Model
-					}
-					if meta.Usage != nil {
-						snapshot, ready := acc.AddDelta(meta.Usage.InputTokens, meta.Usage.OutputTokens, meta.Usage.CacheReadInputTokens)
-						// Claude Code 2.x: tool_use-only assistant messages may
-						// carry output_tokens=0 (streaming message_start snapshot).
-						// Defer the token_usage event until cumulative output is
-						// non-zero so the orchestrator never receives an event
-						// claiming zero output tokens for a real API turn.
-						if ready {
-							usage = snapshot
-							tokenEvt := domain.AgentEvent{
-								Type:      domain.EventTokenUsage,
-								Timestamp: now,
-								Usage:     snapshot,
-								Model:     lastModel,
-							}
-							if !apiCallStart.IsZero() {
-								dur := time.Since(apiCallStart).Milliseconds()
-								if dur <= 0 {
-									dur = 1 // clamp so the orchestrator accumulates this measurement
-								}
-								tokenEvt.APIDurationMS = dur
-								apiCallStart = time.Time{}
-								emittedAPITiming = true
-							}
-							params.OnEvent(tokenEvt)
-							emittedUsage = true
-						} else if !apiCallStart.IsZero() {
-							// Consume the timing window without emitting so
-							// that the next user event restarts fresh timing
-							// for the subsequent API call.
-							apiCallStart = time.Time{}
-						}
-					}
-				}
-			}
-			// ToolTracker.Begin stores time.Now() internally, so no separate
-			// monotonic timestamp is needed before calling processToolBlocks.
-			processToolBlocks(event.contentBlocks(), inFlight, now, params.OnEvent)
-			agentcore.EmitNotification(params.OnEvent, summarizeAssistant(event))
-
-		case "user":
-			// Claude Code emits tool results as user-role messages.
-			// Correlate with the inFlight tracker populated from
-			// assistant tool_use blocks.
-			processToolBlocks(event.contentBlocks(), inFlight, now, params.OnEvent)
-			apiCallStart = time.Now() // next API call is imminent
-
-		case "result":
-			captured := event
-			lastResult = &captured
-			// Only emit token_usage from the result event when no
-			// per-assistant-message usage was already emitted. This
-			// avoids inflating APIRequestCount in the orchestrator.
-			if !emittedUsage {
-				usage = acc.ReplaceCumulative(normalizeUsage(event.Usage))
-				params.OnEvent(domain.AgentEvent{
-					Type:      domain.EventTokenUsage,
-					Timestamp: now,
-					Usage:     usage,
-					Model:     lastModel,
-				})
-			} else {
-				usage = acc.Snapshot()
-			}
-
-		case "stream_event":
-			agentcore.EmitNotification(params.OnEvent, "")
-
-		default:
-			params.OnEvent(domain.AgentEvent{
-				Type:      domain.EventOtherMessage,
-				Timestamp: now,
-				Message:   event.summary(),
-			})
-		}
-	}
-
-	if scanErr := scanner.Err(); scanErr != nil {
-		cancelCmd()
-		stderrLines := stderrCollector.Lines()     // drain before cmd.Wait() closes the pipe
-		cmd.Wait()                                 //nolint:errcheck,gosec // best-effort reap; exit code is irrelevant on scanner failure
-		procutil.KillProcessGroup(cmd.Process.Pid) //nolint:errcheck,gosec // best-effort cleanup of surviving group members
-		procutil.CleanupProcess(cmd.Process.Pid)
-		close(waitCh)
-		state.mu.Lock()
-		state.proc = nil
-		state.waitCh = nil
-		state.mu.Unlock()
-
-		// Context cancellation propagates through exec.CommandContext
-		// and can surface as a pipe read error. Treat as cancellation.
-		if ctx.Err() != nil {
-			agentcore.EmitTurnCancelled(params.OnEvent, "context cancelled")
-			return domain.TurnResult{
-					SessionID:  state.claudeSessionID,
-					ExitReason: domain.EventTurnCancelled,
-					Usage:      usage,
-				}, &domain.AgentError{
-					Kind:    domain.ErrTurnCancelled,
-					Message: "turn cancelled",
-					Err:     ctx.Err(),
-				}
-		}
-
-		procutil.EmitWarnLines(stderrLines, logger)
-		agentcore.EmitTurnFailed(params.OnEvent, "stdout read error: "+scanErr.Error(), 0)
-		return domain.TurnResult{
-				SessionID:  state.claudeSessionID,
-				ExitReason: domain.EventTurnFailed,
-				Usage:      usage,
-			}, &domain.AgentError{
-				Kind:    domain.ErrPortExit,
-				Message: "stdout scanner error",
-				Err:     scanErr,
-			}
-	}
-
-	// Drain stderr before cmd.Wait() to avoid losing buffered data:
-	// cmd.Wait() closes the pipe read end, which can prevent the drain
-	// goroutine from reading data that the process already wrote.
-	stderrLines := stderrCollector.Lines()
-
-	// cmd.Wait is the sole waiter; StopSession only signals and
-	// waits on waitCh.
-	waitErr := cmd.Wait()
-	procutil.KillProcessGroup(cmd.Process.Pid) //nolint:errcheck,gosec // best-effort cleanup of surviving group members
-	procutil.CleanupProcess(cmd.Process.Pid)
-	close(waitCh)
-
-	state.mu.Lock()
-	state.proc = nil
-	state.waitCh = nil
-	state.mu.Unlock()
-
-	if ctx.Err() != nil {
-		agentcore.EmitTurnCancelled(params.OnEvent, "context cancelled")
-		return domain.TurnResult{
-				SessionID:  state.claudeSessionID,
-				ExitReason: domain.EventTurnCancelled,
-				Usage:      usage,
-			}, &domain.AgentError{
-				Kind:    domain.ErrTurnCancelled,
-				Message: "turn cancelled",
-				Err:     ctx.Err(),
-			}
-	}
-
-	exitCode := procutil.ExtractExitCode(waitErr)
-
-	if exitCode == 127 {
-		procutil.EmitWarnLines(stderrLines, logger)
-		agentcore.EmitTurnFailed(params.OnEvent, "claude binary not found", 0)
-		return domain.TurnResult{
-				SessionID:  state.claudeSessionID,
-				ExitReason: domain.EventTurnFailed,
-				Usage:      usage,
-			}, &domain.AgentError{
-				Kind:    domain.ErrAgentNotFound,
-				Message: "exit code 127",
-			}
-	}
-
-	if procutil.WasSignaled(waitErr) {
-		agentcore.EmitTurnCancelled(params.OnEvent, "killed by signal")
-		return domain.TurnResult{
-				SessionID:  state.claudeSessionID,
-				ExitReason: domain.EventTurnCancelled,
-				Usage:      usage,
-			}, &domain.AgentError{
-				Kind:    domain.ErrTurnCancelled,
-				Message: "killed by signal",
-			}
-	}
-
-	if lastResult != nil {
-		// Use turn-level duration_api_ms only when no per-request
-		// API timing was emitted, to avoid double-counting.
-		var turnAPIDuration int64
-		if !emittedAPITiming {
-			turnAPIDuration = lastResult.DurationAPI
-		}
-		if lastResult.Subtype == "success" && !lastResult.IsError {
-			agentcore.EmitTurnCompleted(params.OnEvent, typeutil.TruncateRunes(lastResult.Result, 500), turnAPIDuration)
-			return domain.TurnResult{
-				SessionID:  state.claudeSessionID,
-				ExitReason: domain.EventTurnCompleted,
-				Usage:      usage,
-			}, nil
-		}
-		procutil.EmitWarnLines(stderrLines, logger)
-		agentcore.EmitTurnFailed(params.OnEvent, lastResult.Subtype, turnAPIDuration)
-		return domain.TurnResult{
-				SessionID:  state.claudeSessionID,
-				ExitReason: domain.EventTurnFailed,
-				Usage:      usage,
-			}, &domain.AgentError{
-				Kind:    domain.ErrTurnFailed,
-				Message: lastResult.Subtype,
-			}
-	}
-
-	if exitCode != 0 {
-		procutil.EmitWarnLines(stderrLines, logger)
-		agentcore.EmitTurnFailed(params.OnEvent, "non-zero exit", 0)
-		return domain.TurnResult{
-				SessionID:  state.claudeSessionID,
-				ExitReason: domain.EventTurnFailed,
-				Usage:      usage,
-			}, &domain.AgentError{
-				Kind:    domain.ErrPortExit,
-				Message: fmt.Sprintf("exit code %d", exitCode),
-			}
-	}
-
-	// No result event and exit code 0.
-	if acc.Snapshot().OutputTokens == 0 {
-		procutil.EmitWarnLines(stderrLines, logger)
-		logger.Warn("agent exited without producing output, treating as failure")
-		agentcore.EmitTurnFailed(params.OnEvent, "agent exited without producing output", 0)
-		return domain.TurnResult{
-				SessionID:  state.claudeSessionID,
-				ExitReason: domain.EventTurnFailed,
-				Usage:      usage,
-			}, &domain.AgentError{
-				Kind:    domain.ErrTurnFailed,
-				Message: "agent exited without producing output",
-			}
-	}
-
-	agentcore.EmitTurnCompleted(params.OnEvent, "", 0)
-	return domain.TurnResult{
-		SessionID:  state.claudeSessionID,
-		ExitReason: domain.EventTurnCompleted,
-		Usage:      usage,
-	}, nil
+	return state.forkSession.RunTurn(ctx, params.Prompt, params.OnEvent)
 }
 
-// StopSession terminates a running Claude Code subprocess gracefully.
-// Sends a platform-appropriate graceful shutdown signal via
-// [procutil.SignalGraceful], waits up to 5 seconds, then force-kills
-// the process group via [procutil.KillProcessGroup]. Safe to call when
-// no subprocess is running.
+// StopSession terminates a running Claude Code subprocess gracefully by
+// delegating to the session's [agentcore.ForkPerTurnSession].
 func (a *ClaudeCodeAdapter) StopSession(ctx context.Context, session domain.Session) error {
 	state, ok := session.Internal.(*sessionState)
 	if !ok {
 		return fmt.Errorf("unexpected session internal type %T", session.Internal)
 	}
-
-	state.mu.Lock()
-	proc := state.proc
-	state.proc = nil
-	waitCh := state.waitCh
-	state.mu.Unlock()
-
-	if proc == nil {
+	if state.forkSession == nil {
 		return nil
 	}
-
-	_ = procutil.SignalGraceful(proc.Pid) //nolint:errcheck // best-effort signal; process may already be dead
-
-	select {
-	case <-waitCh:
-		return nil
-	case <-time.After(5 * time.Second):
-		_ = procutil.KillProcessGroup(proc.Pid) //nolint:errcheck // best-effort kill
-		return nil
-	case <-ctx.Done():
-		_ = procutil.KillProcessGroup(proc.Pid) //nolint:errcheck // best-effort kill
-		return ctx.Err()
-	}
+	return state.forkSession.Stop(ctx)
 }
 
 // EventStream returns nil. The Claude Code adapter delivers events

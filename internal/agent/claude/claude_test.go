@@ -233,6 +233,7 @@ func TestBuildArgs(t *testing.T) {
 	tests := []struct {
 		name       string
 		state      *sessionState
+		turn       int
 		prompt     string
 		pt         passthroughConfig
 		wantArgs   []string
@@ -242,9 +243,9 @@ func TestBuildArgs(t *testing.T) {
 			name: "first turn new session",
 			state: &sessionState{
 				claudeSessionID: "sess-001",
-				turnCount:       0,
 				isContinuation:  false,
 			},
+			turn:   1,
 			prompt: "fix the bug",
 			pt:     passthroughConfig{SessionPersistence: true},
 			wantArgs: []string{
@@ -260,9 +261,9 @@ func TestBuildArgs(t *testing.T) {
 			name: "continuation turn same session",
 			state: &sessionState{
 				claudeSessionID: "sess-001",
-				turnCount:       1,
 				isContinuation:  false,
 			},
+			turn:   2,
 			prompt: "continue",
 			pt:     passthroughConfig{SessionPersistence: true},
 			wantArgs: []string{
@@ -275,9 +276,9 @@ func TestBuildArgs(t *testing.T) {
 			name: "continuation session first turn",
 			state: &sessionState{
 				claudeSessionID: "resumed-id",
-				turnCount:       0,
 				isContinuation:  true,
 			},
+			turn:   1,
 			prompt: "continue work",
 			pt:     passthroughConfig{SessionPersistence: true},
 			wantArgs: []string{
@@ -345,7 +346,7 @@ func TestBuildArgs(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			got := buildArgs(tt.state, tt.prompt, tt.pt)
+			got := buildArgs(tt.state, tt.turn, tt.prompt, tt.pt)
 			argStr := strings.Join(got, " ")
 
 			for i := 0; i < len(tt.wantArgs); i++ {
@@ -385,7 +386,7 @@ func TestBuildArgs(t *testing.T) {
 func TestBuildArgs_AlwaysPresent(t *testing.T) {
 	t.Parallel()
 
-	got := buildArgs(&sessionState{claudeSessionID: "x"}, "p", passthroughConfig{SessionPersistence: true})
+	got := buildArgs(&sessionState{claudeSessionID: "x"}, 1, "p", passthroughConfig{SessionPersistence: true})
 	required := []string{"-p", "--output-format", "--verbose"}
 	for _, r := range required {
 		found := false
@@ -1291,40 +1292,6 @@ func TestRunTurn_PanicsOnNilOnEvent(t *testing.T) {
 	adapter.RunTurn(context.Background(), session, domain.RunTurnParams{ //nolint:errcheck // testing panic
 		Prompt: "test",
 	})
-}
-
-func TestRunTurn_TurnCountIncrement(t *testing.T) {
-	t.Parallel()
-
-	tmpDir := t.TempDir()
-	script := writeScript(t, tmpDir, `
-echo '{"type":"result","subtype":"success","result":"done","is_error":false,"usage":{"input_tokens":1,"output_tokens":1}}'
-exit 0
-`)
-
-	adapter, _ := NewClaudeCodeAdapter(map[string]any{})
-	session, err := adapter.StartSession(context.Background(), domain.StartSessionParams{
-		WorkspacePath: tmpDir,
-		AgentConfig:   domain.AgentConfig{Command: script},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	state := session.Internal.(*sessionState)
-	if state.turnCount != 0 {
-		t.Fatalf("initial turnCount = %d", state.turnCount)
-	}
-
-	_, err = adapter.RunTurn(context.Background(), session, domain.RunTurnParams{
-		Prompt:  "first",
-		OnEvent: func(domain.AgentEvent) {},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if state.turnCount != 1 {
-		t.Errorf("turnCount after turn 1 = %d, want 1", state.turnCount)
-	}
 }
 
 func TestRunTurn_APIRetryEvent(t *testing.T) {
