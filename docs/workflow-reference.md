@@ -359,8 +359,8 @@ agent:
 
 | Field                            | Type                              | Required                            | Default         | Dynamic Reload                             | Description                                                                                                                                                                      |
 | -------------------------------- | --------------------------------- | ----------------------------------- | --------------- | ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `kind`                           | string                            | No                                  | `claude-code`   | Future dispatches                          | Agent adapter identifier. Built-in adapters: `claude-code`, `copilot-cli`, `codex`. Other kinds (for example, HTTP-based adapters) are available only if you register them separately. |
-| `command`                        | string (shell command)            | When adapter requires local process | Adapter-defined | Future dispatches                          | Shell command to launch the agent for adapters that run as a local subprocess (such as `claude-code`). Adapters that do not start a local process ignore this field.             |
+| `kind`                           | string                            | No                                  | `claude-code`   | Future dispatches                          | Agent adapter identifier. Built-in adapters: `claude-code`, `copilot-cli`, `codex`, and `opencode`. Other kinds (for example, HTTP-based adapters) are available only if you register them separately. |
+| `command`                        | string (shell command)            | When adapter requires local process | Adapter-defined | Future dispatches                          | Shell command to launch the agent for adapters that run as a local subprocess (such as `claude-code` or `opencode`). Adapters that do not start a local process ignore this field. |
 | `turn_timeout_ms`                | integer                           | No                                  | `3600000` (1h)  | Future worker attempts                     | Total timeout for a single agent turn.                                                                                                                                           |
 | `read_timeout_ms`                | integer                           | No                                  | `5000` (5s)     | Future worker attempts                     | Request/response timeout during startup and synchronous operations.                                                                                                              |
 | `stall_timeout_ms`               | integer                           | No                                  | `300000` (5m)   | Future worker attempts                     | Inactivity timeout based on event stream gaps. Set to `0` or negative to **disable** stall detection.                                                                            |
@@ -1279,7 +1279,7 @@ token_rates:
 
 When `token_rates` is configured, the dashboard displays estimated USD cost for
 currently running sessions. Keys are agent adapter kind strings (e.g., `"claude-code"`,
-`"copilot-cli"`, `"codex"`). All rates are in USD per 1 million tokens.
+`"copilot-cli"`, `"codex"`, `"opencode"`). All rates are in USD per 1 million tokens.
 
 When `token_rates` is absent or empty, the dashboard shows raw token counts without
 cost estimates.
@@ -1368,12 +1368,55 @@ when initializing the `codex app-server` subprocess and starting threads.
 
 The Codex adapter uses a persistent subprocess model: the app-server is launched
 once in `StartSession` and kept alive across turns, unlike the per-turn subprocess
-model used by `claude-code` and `copilot-cli`.
+model used by `claude-code`, `copilot-cli`, and `opencode`.
 
 > **Sandbox defaults:** When `thread_sandbox` is omitted, the adapter defaults to
 > `workspaceWrite` with `writableRoots` set to the workspace path and
 > `networkAccess: false`. Use `turn_sandbox_policy` to override specific sandbox
 > fields per turn.
+
+**OpenCode adapter:**
+
+```yaml
+opencode:
+  model: anthropic/claude-sonnet-4-5
+  agent: build
+  variant: high
+  thinking: true
+  pure: false
+  dangerously_skip_permissions: true
+  disable_autocompact: true
+  allowed_tools:
+    - read
+    - glob
+  denied_tools:
+    - bash
+```
+
+The `opencode` block is forwarded to the OpenCode adapter. The adapter runs
+`opencode run --format json --dir <workspace>` once per turn, appends
+`--session <session_id>` when continuing a session, and recovers final token
+usage with `opencode export --sanitize <session_id>` when the session ID is
+known.
+
+| Field | Type | Default | Description |
+| --- | --- | --- | --- |
+| `opencode.model` | string | _(absent)_ | Value forwarded to `opencode run --model`. OpenCode interprets provider and model selection from this string. |
+| `opencode.agent` | string | _(absent)_ | Value forwarded to `opencode run --agent`. Selects the OpenCode agent profile for the turn. |
+| `opencode.variant` | string | _(absent)_ | Value forwarded to `opencode run --variant`. Selects an OpenCode provider-specific variant. |
+| `opencode.thinking` | boolean | `false` | Adds `--thinking` to the run command. |
+| `opencode.pure` | boolean | `false` | Adds `--pure` to the run command. |
+| `opencode.dangerously_skip_permissions` | boolean | `true` | Adds `--dangerously-skip-permissions` when `true`. When `false`, OpenCode headless permission prompts can surface as tool errors instead of auto-approved tool execution. |
+| `opencode.disable_autocompact` | boolean | `true` | Sets `OPENCODE_DISABLE_AUTOCOMPACT`. The adapter always also sets `OPENCODE_AUTO_SHARE=false`, `OPENCODE_DISABLE_AUTOUPDATE=true`, and `OPENCODE_DISABLE_LSP_DOWNLOAD=true`. |
+| `opencode.allowed_tools` | list of strings | `[]` | Builds `OPENCODE_PERMISSION` allow rules. Listed keys become `allow`; known OpenCode permission keys not listed become `deny`. Unknown keys are forwarded unchanged. |
+| `opencode.denied_tools` | list of strings | `[]` | Builds explicit `deny` rules in `OPENCODE_PERMISSION`. |
+
+**Validation rules:**
+
+- `opencode.allowed_tools` and `opencode.denied_tools` MUST NOT overlap.
+- When either tool list is present, the adapter removes any inherited
+  `OPENCODE_PERMISSION` value before launching OpenCode and replaces it with the
+  adapter-managed JSON policy.
 
 **Custom or future adapters (illustrative example):**
 
