@@ -49,6 +49,12 @@ opencode:
   model: anthropic/claude-sonnet-4-5
   dangerously_skip_permissions: true
   disable_autocompact: true
+  allowed_tools:
+    - read
+    - glob
+    - grep
+    - edit
+    - bash
 
 server:
   port: 8642
@@ -59,6 +65,9 @@ server:
      The OpenCode adapter launches one `opencode run` subprocess per
      turn. Session IDs are preserved across turns, so continuation uses
      the existing session instead of starting over.
+
+     This sample also pins an explicit tool allowlist so OpenCode does
+     not fall back to its permissive default tool policy.
 
      Required env vars:
        SORTIE_JIRA_ENDPOINT  — Jira Cloud base URL (e.g. https://mycompany.atlassian.net)
