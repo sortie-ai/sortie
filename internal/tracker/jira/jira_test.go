@@ -32,18 +32,7 @@ func mustAdapter(t *testing.T, config map[string]any) *JiraAdapter {
 	if err != nil {
 		t.Fatalf("NewJiraAdapter: %v", err)
 	}
-	jira := a.(*JiraAdapter)
-	// Isolate the HTTP transport so that httptest.Server.Close() in one
-	// parallel test cannot call CloseIdleConnections on http.DefaultTransport
-	// and break in-flight requests from another parallel test.
-	defaultTransport, ok := http.DefaultTransport.(*http.Transport)
-	if !ok {
-		t.Fatalf("http.DefaultTransport is %T, want *http.Transport", http.DefaultTransport)
-	}
-	transport := defaultTransport.Clone()
-	jira.client.httpClient.Transport = transport
-	t.Cleanup(transport.CloseIdleConnections)
-	return jira
+	return a.(*JiraAdapter)
 }
 
 func assertTrackerErrorKind(t *testing.T, err error, want domain.TrackerErrorKind) {

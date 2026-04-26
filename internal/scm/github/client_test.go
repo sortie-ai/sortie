@@ -8,102 +8,30 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"strings"
 	"testing"
 
 	"github.com/sortie-ai/sortie/internal/domain"
+	"github.com/sortie-ai/sortie/internal/httpkit"
 )
 
-// newTestClient creates a githubClient pointed at the given base URL with
-// a test token and user-agent. Each call gets an isolated HTTP transport
-// cloned from DefaultTransport so that parallel tests whose httptest
-// servers close do not race against shared idle connections.
-func newTestClient(t *testing.T, baseURL string) *githubClient {
+func newTestClient(t *testing.T, baseURL string) *httpkit.Client {
 	t.Helper()
-	defaultTransport, ok := http.DefaultTransport.(*http.Transport)
-	if !ok {
-		t.Fatalf("http.DefaultTransport is %T, want *http.Transport", http.DefaultTransport)
-	}
-	transport := defaultTransport.Clone()
-	c := newGitHubClient(baseURL, "test-token", "sortie/test")
-	c.httpClient.Transport = transport
-	t.Cleanup(func() {
-		transport.CloseIdleConnections()
-	})
-	return c
+	return newGitHubClient(baseURL, "test-token", "sortie/test")
 }
 
-// assertClientError asserts that err is a *domain.TrackerError with the
-// expected Kind. Fatals when err is nil.
 func assertClientError(t *testing.T, err error, want domain.TrackerErrorKind) {
 	t.Helper()
 	if err == nil {
 		t.Fatalf("expected error with kind %q, got nil", want)
 	}
-	var te *domain.TrackerError
-	if !errors.As(err, &te) {
+	var trackerErr *domain.TrackerError
+	if !errors.As(err, &trackerErr) {
 		t.Fatalf("error type = %T, want *domain.TrackerError", err)
 	}
-	if te.Kind != want {
-		t.Errorf("TrackerError.Kind = %q, want %q", te.Kind, want)
+	if trackerErr.Kind != want {
+		t.Errorf("TrackerError.Kind = %q, want %q", trackerErr.Kind, want)
 	}
 }
-
-// --- parseLinkNext ---
-
-func TestParseLinkNext(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name   string
-		header string
-		want   string
-	}{
-		{
-			name:   "single rel next",
-			header: `<https://api.github.com/repos/o/r/issues?page=2>; rel="next"`,
-			want:   "https://api.github.com/repos/o/r/issues?page=2",
-		},
-		{
-			name:   "next among multiple rels",
-			header: `<https://api.github.com/repos/o/r/issues?page=3>; rel="last", <https://api.github.com/repos/o/r/issues?page=2>; rel="next"`,
-			want:   "https://api.github.com/repos/o/r/issues?page=2",
-		},
-		{
-			name:   "no next rel returns empty",
-			header: `<https://api.github.com/repos/o/r/issues?page=3>; rel="last"`,
-			want:   "",
-		},
-		{
-			name:   "empty header returns empty",
-			header: "",
-			want:   "",
-		},
-		{
-			name:   "malformed header no angle brackets",
-			header: `https://api.github.com; rel="next"`,
-			want:   "",
-		},
-		{
-			name:   "prev and next together",
-			header: `<https://example.com/page=1>; rel="prev", <https://example.com/page=3>; rel="next"`,
-			want:   "https://example.com/page=3",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-
-			got := parseLinkNext(tt.header)
-			if got != tt.want {
-				t.Errorf("parseLinkNext(%q) = %q, want %q", tt.header, got, tt.want)
-			}
-		})
-	}
-}
-
-// --- classifyHTTPError ---
 
 func TestClassifyHTTPError(t *testing.T) {
 	t.Parallel()
@@ -115,148 +43,70 @@ func TestClassifyHTTPError(t *testing.T) {
 		body     string
 		wantKind domain.TrackerErrorKind
 	}{
-		{
-			name:     "400 bad request",
-			status:   http.StatusBadRequest,
-			body:     "bad input",
-			wantKind: domain.ErrTrackerPayload,
-		},
-		{
-			name:     "401 unauthorized",
-			status:   http.StatusUnauthorized,
-			wantKind: domain.ErrTrackerAuth,
-		},
-		{
-			name:     "403 rate limited primary X-Ratelimit-Remaining=0",
-			status:   http.StatusForbidden,
-			headers:  map[string]string{"X-Ratelimit-Remaining": "0"},
-			wantKind: domain.ErrTrackerAPI,
-		},
-		{
-			name:     "403 rate limited secondary body contains rate limit",
-			status:   http.StatusForbidden,
-			body:     `{"message":"You have exceeded a secondary rate limit"}`,
-			wantKind: domain.ErrTrackerAPI,
-		},
-		{
-			name:     "403 permission denied other 403",
-			status:   http.StatusForbidden,
-			body:     "forbidden",
-			wantKind: domain.ErrTrackerAuth,
-		},
-		{
-			name:     "404 not found",
-			status:   http.StatusNotFound,
-			wantKind: domain.ErrTrackerNotFound,
-		},
-		{
-			name:     "410 gone",
-			status:   http.StatusGone,
-			wantKind: domain.ErrTrackerAPI,
-		},
-		{
-			name:     "422 validation failed",
-			status:   http.StatusUnprocessableEntity,
-			body:     "validation error",
-			wantKind: domain.ErrTrackerPayload,
-		},
-		{
-			name:     "429 rate limited",
-			status:   http.StatusTooManyRequests,
-			headers:  map[string]string{"Retry-After": "60"},
-			wantKind: domain.ErrTrackerAPI,
-		},
-		{
-			name:     "500 server error",
-			status:   http.StatusInternalServerError,
-			body:     "oops",
-			wantKind: domain.ErrTrackerTransport,
-		},
-		{
-			name:     "502 bad gateway",
-			status:   http.StatusBadGateway,
-			wantKind: domain.ErrTrackerTransport,
-		},
-		{
-			name:     "503 service unavailable",
-			status:   http.StatusServiceUnavailable,
-			wantKind: domain.ErrTrackerTransport,
-		},
-		{
-			name:     "unexpected status",
-			status:   418,
-			body:     "I'm a teapot",
-			wantKind: domain.ErrTrackerAPI,
-		},
+		{"400 bad request", http.StatusBadRequest, nil, "bad input", domain.ErrTrackerPayload},
+		{"401 unauthorized", http.StatusUnauthorized, nil, "", domain.ErrTrackerAuth},
+		{"403 rate limited primary", http.StatusForbidden, map[string]string{"X-Ratelimit-Remaining": "0"}, "", domain.ErrTrackerAPI},
+		{"403 rate limited secondary", http.StatusForbidden, nil, `{"message":"You have exceeded a secondary rate limit"}`, domain.ErrTrackerAPI},
+		{"403 permission denied", http.StatusForbidden, nil, "forbidden", domain.ErrTrackerAuth},
+		{"404 not found", http.StatusNotFound, nil, "", domain.ErrTrackerNotFound},
+		{"410 gone", http.StatusGone, nil, "", domain.ErrTrackerAPI},
+		{"422 validation failed", http.StatusUnprocessableEntity, nil, "validation error", domain.ErrTrackerPayload},
+		{"429 rate limited", http.StatusTooManyRequests, map[string]string{"Retry-After": "60"}, "", domain.ErrTrackerAPI},
+		{"500 server error", http.StatusInternalServerError, nil, "oops", domain.ErrTrackerTransport},
+		{"502 bad gateway", http.StatusBadGateway, nil, "", domain.ErrTrackerTransport},
+		{"503 service unavailable", http.StatusServiceUnavailable, nil, "", domain.ErrTrackerTransport},
+		{"unexpected status", 418, nil, "I'm a teapot", domain.ErrTrackerAPI},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			h := make(http.Header)
-			for k, v := range tt.headers {
-				h.Set(k, v)
+			headers := make(http.Header)
+			for key, value := range tt.headers {
+				headers.Set(key, value)
 			}
 			resp := &http.Response{
 				StatusCode: tt.status,
-				Header:     h,
+				Header:     headers,
 				Body:       io.NopCloser(bytes.NewBufferString(tt.body)),
 			}
 			defer resp.Body.Close() //nolint:errcheck // NopCloser.Close always returns nil
 
-			err := classifyHTTPError(resp, "GET", "/test/path")
+			err := classifyHTTPError(resp, http.MethodGet, "/test/path")
 			assertClientError(t, err, tt.wantKind)
 		})
 	}
 }
 
-func TestClassifyHTTPError_429_RetryAfterInMessage(t *testing.T) {
-	t.Parallel()
-
-	resp := &http.Response{
-		StatusCode: http.StatusTooManyRequests,
-		Header:     http.Header{"Retry-After": []string{"30"}},
-		Body:       io.NopCloser(bytes.NewBufferString("")),
-	}
-	defer resp.Body.Close() //nolint:errcheck // NopCloser.Close always returns nil
-
-	err := classifyHTTPError(resp, "GET", "/repos/o/r/issues")
-	var te *domain.TrackerError
-	if !errors.As(err, &te) {
-		t.Fatalf("error type = %T, want *domain.TrackerError", err)
-	}
-	if !strings.Contains(te.Message, "30") {
-		t.Errorf("message = %q, should contain Retry-After value", te.Message)
-	}
-}
-
-// --- do ---
-
-func TestDo_Success(t *testing.T) {
+func TestClientGet_Success(t *testing.T) {
 	t.Parallel()
 
 	var gotHeaders http.Header
+	var gotQuery url.Values
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotHeaders = r.Header.Clone()
+		gotQuery = r.URL.Query()
+		w.Header().Set("X-Result", "ok")
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(`{"ok":true}`)) //nolint:errcheck // test helper
 	}))
 	defer srv.Close()
 
-	c := newTestClient(t, srv.URL)
-	body, linkNext, err := c.do(context.Background(), "GET", "/repos/o/r/issues", nil)
+	client := newTestClient(t, srv.URL)
+	body, headers, err := client.Get(context.Background(), "/repos/o/r/issues", url.Values{"state": {"open"}})
 	if err != nil {
-		t.Fatalf("do: %v", err)
+		t.Fatalf("Get: %v", err)
 	}
 	if string(body) != `{"ok":true}` {
 		t.Errorf("body = %q, want %q", body, `{"ok":true}`)
 	}
-	if linkNext != "" {
-		t.Errorf("linkNext = %q, want empty", linkNext)
+	if got := headers.Get("X-Result"); got != "ok" {
+		t.Errorf("headers.Get(X-Result) = %q, want %q", got, "ok")
 	}
-
-	// Verify required GitHub API headers.
+	if got := gotQuery.Get("state"); got != "open" {
+		t.Errorf("state param = %q, want %q", got, "open")
+	}
 	if got := gotHeaders.Get("Authorization"); got != "Bearer test-token" {
 		t.Errorf("Authorization = %q, want %q", got, "Bearer test-token")
 	}
@@ -269,638 +119,12 @@ func TestDo_Success(t *testing.T) {
 	if got := gotHeaders.Get("User-Agent"); got != "sortie/test" {
 		t.Errorf("User-Agent = %q, want %q", got, "sortie/test")
 	}
-}
-
-func TestDo_LinkHeaderParsed(t *testing.T) {
-	t.Parallel()
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Link", `<https://api.github.com/repos/o/r/issues?page=2>; rel="next", <https://api.github.com/repos/o/r/issues?page=5>; rel="last"`)
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("[]")) //nolint:errcheck // test helper
-	}))
-	defer srv.Close()
-
-	c := newTestClient(t, srv.URL)
-	_, linkNext, err := c.do(context.Background(), "GET", "/repos/o/r/issues", nil)
-	if err != nil {
-		t.Fatalf("do: %v", err)
-	}
-	if linkNext != "https://api.github.com/repos/o/r/issues?page=2" {
-		t.Errorf("linkNext = %q, want page=2 URL", linkNext)
+	if got := gotHeaders.Get("Content-Type"); got != "" {
+		t.Errorf("Content-Type = %q, want empty", got)
 	}
 }
 
-func TestDo_QueryParams(t *testing.T) {
-	t.Parallel()
-
-	var gotQuery url.Values
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotQuery = r.URL.Query()
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("[]")) //nolint:errcheck // test helper
-	}))
-	defer srv.Close()
-
-	c := newTestClient(t, srv.URL)
-	params := url.Values{"state": {"open"}, "per_page": {"50"}}
-	_, _, err := c.do(context.Background(), "GET", "/repos/o/r/issues", params)
-	if err != nil {
-		t.Fatalf("do: %v", err)
-	}
-	if got := gotQuery.Get("state"); got != "open" {
-		t.Errorf("state param = %q, want %q", got, "open")
-	}
-	if got := gotQuery.Get("per_page"); got != "50" {
-		t.Errorf("per_page param = %q, want %q", got, "50")
-	}
-}
-
-func TestDo_304NotModified(t *testing.T) {
-	t.Parallel()
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusNotModified)
-	}))
-	defer srv.Close()
-
-	c := newTestClient(t, srv.URL)
-	_, _, err := c.do(context.Background(), "GET", "/path", nil)
-	if err == nil {
-		t.Fatal("do 304: expected error, got nil")
-	}
-	var trackerErr *domain.TrackerError
-	if !errors.As(err, &trackerErr) {
-		t.Fatalf("error type = %T, want *domain.TrackerError", err)
-	}
-	if trackerErr.Kind != domain.ErrTrackerAPI {
-		t.Errorf("TrackerError.Kind = %q, want %q", trackerErr.Kind, domain.ErrTrackerAPI)
-	}
-}
-
-func TestDo_ContextCancellation(t *testing.T) {
-	t.Parallel()
-
-	started := make(chan struct{})
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		close(started)
-		<-r.Context().Done()
-	}))
-	defer srv.Close()
-
-	ctx, cancel := context.WithCancel(context.Background())
-	c := newTestClient(t, srv.URL)
-
-	errCh := make(chan error, 1)
-	go func() {
-		_, _, err := c.do(ctx, "GET", "/repos/o/r/issues", nil)
-		errCh <- err
-	}()
-
-	<-started
-	cancel()
-
-	err := <-errCh
-	if err == nil {
-		t.Fatal("expected error after context cancel, got nil")
-	}
-	if !errors.Is(err, context.Canceled) {
-		t.Errorf("error = %v, want context.Canceled", err)
-	}
-}
-
-func TestDo_ErrorStatus(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name     string
-		status   int
-		wantKind domain.TrackerErrorKind
-	}{
-		{"401", http.StatusUnauthorized, domain.ErrTrackerAuth},
-		{"403 perm", http.StatusForbidden, domain.ErrTrackerAuth},
-		{"404", http.StatusNotFound, domain.ErrTrackerNotFound},
-		{"500", http.StatusInternalServerError, domain.ErrTrackerTransport},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				w.WriteHeader(tt.status)
-			}))
-			defer srv.Close()
-
-			c := newTestClient(t, srv.URL)
-			_, _, err := c.do(context.Background(), "GET", "/path", nil)
-			assertClientError(t, err, tt.wantKind)
-		})
-	}
-}
-
-// --- doURL ---
-
-func TestDoURL_AuthHeadersSent(t *testing.T) {
-	t.Parallel()
-
-	var gotHeaders http.Header
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotHeaders = r.Header.Clone()
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("[]")) //nolint:errcheck // test helper
-	}))
-	defer srv.Close()
-
-	c := newTestClient(t, srv.URL)
-	_, _, err := c.doURL(context.Background(), srv.URL+"/repos/o/r/issues?page=2")
-	if err != nil {
-		t.Fatalf("doURL: %v", err)
-	}
-
-	if got := gotHeaders.Get("Authorization"); got != "Bearer test-token" {
-		t.Errorf("Authorization = %q, want Bearer prefix", got)
-	}
-	if got := gotHeaders.Get("X-GitHub-Api-Version"); got != "2026-03-10" {
-		t.Errorf("X-GitHub-Api-Version = %q, want %q", got, "2026-03-10")
-	}
-}
-
-func TestDoURL_LinkHeaderParsed(t *testing.T) {
-	t.Parallel()
-
-	nextURL := "https://api.github.com/repos/o/r/issues?page=3"
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Link", `<`+nextURL+`>; rel="next"`)
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("[]")) //nolint:errcheck // test helper
-	}))
-	defer srv.Close()
-
-	c := newTestClient(t, srv.URL)
-	_, got, err := c.doURL(context.Background(), srv.URL+"/page")
-	if err != nil {
-		t.Fatalf("doURL: %v", err)
-	}
-	if got != nextURL {
-		t.Errorf("linkNext = %q, want %q", got, nextURL)
-	}
-}
-
-// --- doJSON ---
-
-func TestDoJSON_Success(t *testing.T) {
-	t.Parallel()
-
-	var gotMethod string
-	var gotContentType string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotMethod = r.Method
-		gotContentType = r.Header.Get("Content-Type")
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"result":"ok"}`)) //nolint:errcheck // test helper
-	}))
-	defer srv.Close()
-
-	c := newTestClient(t, srv.URL)
-	payload := bytes.NewBufferString(`{"labels":["review"]}`)
-	body, err := c.doJSON(context.Background(), "POST", "/repos/o/r/issues/1/labels", payload)
-	if err != nil {
-		t.Fatalf("doJSON: %v", err)
-	}
-	if string(body) != `{"result":"ok"}` {
-		t.Errorf("body = %q", body)
-	}
-	if gotMethod != "POST" {
-		t.Errorf("method = %q, want %q", gotMethod, "POST")
-	}
-	if gotContentType != "application/json" {
-		t.Errorf("Content-Type = %q, want %q", gotContentType, "application/json")
-	}
-}
-
-func TestDoJSON_2xxRange(t *testing.T) {
-	t.Parallel()
-
-	for _, status := range []int{200, 201, 204} {
-		t.Run(http.StatusText(status), func(t *testing.T) {
-			t.Parallel()
-
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				w.WriteHeader(status)
-			}))
-			t.Cleanup(srv.Close)
-
-			c := newTestClient(t, srv.URL)
-			_, err := c.doJSON(context.Background(), "PATCH", "/repos/o/r/issues/1", bytes.NewBufferString("{}"))
-			if err != nil {
-				t.Errorf("doJSON %d: unexpected error: %v", status, err)
-			}
-		})
-	}
-}
-
-func TestDoJSON_Error(t *testing.T) {
-	t.Parallel()
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusUnprocessableEntity)
-		w.Write([]byte(`{"errors":["invalid"]}`)) //nolint:errcheck // test helper
-	}))
-	defer srv.Close()
-
-	c := newTestClient(t, srv.URL)
-	_, err := c.doJSON(context.Background(), "POST", "/labels", bytes.NewBufferString("{}"))
-	assertClientError(t, err, domain.ErrTrackerPayload)
-}
-
-// --- doNoBody ---
-
-func TestDoNoBody_200(t *testing.T) {
-	t.Parallel()
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
-	defer srv.Close()
-
-	c := newTestClient(t, srv.URL)
-	if err := c.doNoBody(context.Background(), "DELETE", "/repos/o/r/issues/1/labels/backlog"); err != nil {
-		t.Errorf("doNoBody 200: unexpected error: %v", err)
-	}
-}
-
-func TestDoNoBody_204(t *testing.T) {
-	t.Parallel()
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != "DELETE" {
-			t.Errorf("method = %q, want DELETE", r.Method)
-		}
-		w.WriteHeader(http.StatusNoContent)
-	}))
-	defer srv.Close()
-
-	c := newTestClient(t, srv.URL)
-	if err := c.doNoBody(context.Background(), "DELETE", "/repos/o/r/issues/1/labels/backlog"); err != nil {
-		t.Errorf("doNoBody 204: unexpected error: %v", err)
-	}
-}
-
-func TestDoNoBody_Error(t *testing.T) {
-	t.Parallel()
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusForbidden)
-	}))
-	defer srv.Close()
-
-	c := newTestClient(t, srv.URL)
-	err := c.doNoBody(context.Background(), "DELETE", "/repos/o/r/issues/1/labels/backlog")
-	assertClientError(t, err, domain.ErrTrackerAuth)
-}
-
-func TestDoNoBody_ContextCancellation(t *testing.T) {
-	t.Parallel()
-
-	started := make(chan struct{})
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		close(started)
-		<-r.Context().Done()
-	}))
-	defer srv.Close()
-
-	ctx, cancel := context.WithCancel(context.Background())
-	c := newTestClient(t, srv.URL)
-
-	errCh := make(chan error, 1)
-	go func() {
-		errCh <- c.doNoBody(ctx, "DELETE", "/repos/o/r/issues/1/labels/backlog")
-	}()
-
-	<-started
-	cancel()
-
-	err := <-errCh
-	if err == nil {
-		t.Fatal("expected error after context cancel")
-	}
-	if !errors.Is(err, context.Canceled) {
-		t.Errorf("error = %v, want context.Canceled", err)
-	}
-}
-
-func TestDoURL_NonOKStatus(t *testing.T) {
-	t.Parallel()
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusUnauthorized)
-	}))
-	defer srv.Close()
-
-	c := newTestClient(t, srv.URL)
-	_, _, err := c.doURL(context.Background(), srv.URL+"/repos/o/r/issues?page=2")
-	assertClientError(t, err, domain.ErrTrackerAuth)
-}
-
-func TestDoURL_ContextCancellation(t *testing.T) {
-	t.Parallel()
-
-	started := make(chan struct{})
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		close(started)
-		<-r.Context().Done()
-	}))
-	defer srv.Close()
-
-	ctx, cancel := context.WithCancel(context.Background())
-	c := newTestClient(t, srv.URL)
-
-	errCh := make(chan error, 1)
-	go func() {
-		_, _, err := c.doURL(ctx, srv.URL+"/repos/o/r/issues?page=2")
-		errCh <- err
-	}()
-
-	<-started
-	cancel()
-
-	err := <-errCh
-	if err == nil {
-		t.Fatal("expected error after context cancel")
-	}
-	if !errors.Is(err, context.Canceled) {
-		t.Errorf("error = %v, want context.Canceled", err)
-	}
-}
-
-func TestDoJSON_ContextCancellation(t *testing.T) {
-	t.Parallel()
-
-	started := make(chan struct{})
-	release := make(chan struct{})
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		close(started)
-		<-release // unblocked by the test to allow srv.Close() to finish cleanly
-	}))
-	defer srv.Close()
-
-	ctx, cancel := context.WithCancel(context.Background())
-	c := newTestClient(t, srv.URL)
-
-	errCh := make(chan error, 1)
-	go func() {
-		_, err := c.doJSON(ctx, "PATCH", "/repos/o/r/issues/1", bytes.NewBufferString(`{}`))
-		errCh <- err
-	}()
-
-	<-started
-	cancel()
-
-	err := <-errCh
-	close(release) // let the handler return so srv.Close() does not hang
-
-	if err == nil {
-		t.Fatal("expected error after context cancel")
-	}
-	if !errors.Is(err, context.Canceled) {
-		t.Errorf("error = %v, want context.Canceled", err)
-	}
-}
-
-// --- doConditional ---
-
-func TestDoConditional_200_ReturnsBodyAndETag(t *testing.T) {
-	t.Parallel()
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("ETag", `"abc123"`)
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"number":1}`)) //nolint:errcheck // test helper
-	}))
-	defer srv.Close()
-
-	c := newTestClient(t, srv.URL)
-	body, etag, notModified, err := c.doConditional(context.Background(), "GET", "/repos/o/r/issues/1", nil, "")
-	if err != nil {
-		t.Fatalf("doConditional: %v", err)
-	}
-	if notModified {
-		t.Error("notModified = true, want false")
-	}
-	if string(body) != `{"number":1}` {
-		t.Errorf("body = %q, want %q", string(body), `{"number":1}`)
-	}
-	if etag != `"abc123"` {
-		t.Errorf("etag = %q, want %q", etag, `"abc123"`)
-	}
-}
-
-func TestDoConditional_200_NoETagHeader(t *testing.T) {
-	t.Parallel()
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"number":2}`)) //nolint:errcheck // test helper
-	}))
-	defer srv.Close()
-
-	c := newTestClient(t, srv.URL)
-	body, etag, notModified, err := c.doConditional(context.Background(), "GET", "/repos/o/r/issues/2", nil, "")
-	if err != nil {
-		t.Fatalf("doConditional: %v", err)
-	}
-	if notModified {
-		t.Error("notModified = true, want false")
-	}
-	if len(body) == 0 {
-		t.Error("body is empty, want non-empty")
-	}
-	if etag != "" {
-		t.Errorf("etag = %q, want empty (no ETag header in response)", etag)
-	}
-}
-
-func TestDoConditional_304_NotModified(t *testing.T) {
-	t.Parallel()
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusNotModified)
-	}))
-	defer srv.Close()
-
-	c := newTestClient(t, srv.URL)
-	body, etag, notModified, err := c.doConditional(context.Background(), "GET", "/repos/o/r/issues/3", nil, `"cached"`)
-	if err != nil {
-		t.Fatalf("doConditional: %v", err)
-	}
-	if !notModified {
-		t.Error("notModified = false, want true")
-	}
-	if body != nil {
-		t.Errorf("body = %v, want nil on 304", body)
-	}
-	if etag != "" {
-		t.Errorf("etag = %q, want empty on 304", etag)
-	}
-}
-
-func TestDoConditional_SetsIfNoneMatchHeader(t *testing.T) {
-	t.Parallel()
-
-	var gotHeader string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotHeader = r.Header.Get("If-None-Match")
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{}`)) //nolint:errcheck // test helper
-	}))
-	defer srv.Close()
-
-	c := newTestClient(t, srv.URL)
-	_, _, _, err := c.doConditional(context.Background(), "GET", "/repos/o/r/issues/4", nil, `"stored-etag"`)
-	if err != nil {
-		t.Fatalf("doConditional: %v", err)
-	}
-	if gotHeader != `"stored-etag"` {
-		t.Errorf("If-None-Match = %q, want %q", gotHeader, `"stored-etag"`)
-	}
-}
-
-func TestDoConditional_OmitsIfNoneMatchWhenEmpty(t *testing.T) {
-	t.Parallel()
-
-	var gotHeader string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotHeader = r.Header.Get("If-None-Match")
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{}`)) //nolint:errcheck // test helper
-	}))
-	defer srv.Close()
-
-	c := newTestClient(t, srv.URL)
-	_, _, _, err := c.doConditional(context.Background(), "GET", "/repos/o/r/issues/5", nil, "")
-	if err != nil {
-		t.Fatalf("doConditional: %v", err)
-	}
-	if gotHeader != "" {
-		t.Errorf("If-None-Match = %q, want empty (header must be omitted when ifNoneMatch is empty)", gotHeader)
-	}
-}
-
-func TestDoConditional_Error_PassesThrough(t *testing.T) {
-	t.Parallel()
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusInternalServerError)
-	}))
-	defer srv.Close()
-
-	c := newTestClient(t, srv.URL)
-	_, _, _, err := c.doConditional(context.Background(), "GET", "/repos/o/r/issues/6", nil, "")
-	assertClientError(t, err, domain.ErrTrackerTransport)
-}
-
-func TestDoConditional_ContextCancellation(t *testing.T) {
-	t.Parallel()
-
-	started := make(chan struct{})
-	release := make(chan struct{})
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		close(started)
-		<-release // unblocked after test collects the error
-	}))
-	defer srv.Close()
-
-	ctx, cancel := context.WithCancel(context.Background())
-	c := newTestClient(t, srv.URL)
-
-	errCh := make(chan error, 1)
-	go func() {
-		_, _, _, err := c.doConditional(ctx, "GET", "/repos/o/r/issues/7", nil, "")
-		errCh <- err
-	}()
-
-	<-started
-	cancel()
-
-	err := <-errCh
-	close(release) // let the server handler return so srv.Close() does not hang
-
-	if err == nil {
-		t.Fatal("expected error after context cancel, got nil")
-	}
-	if !errors.Is(err, context.Canceled) {
-		t.Errorf("error = %v, want context.Canceled", err)
-	}
-}
-
-func TestDoConditional_WeakETag(t *testing.T) {
-	t.Parallel()
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("ETag", `W/"weaketag"`)
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{}`)) //nolint:errcheck // test helper
-	}))
-	defer srv.Close()
-
-	c := newTestClient(t, srv.URL)
-	_, etag, _, err := c.doConditional(context.Background(), "GET", "/repos/o/r/issues/8", nil, "")
-	if err != nil {
-		t.Fatalf("doConditional: %v", err)
-	}
-	// Weak ETags must be stored and replayed verbatim (opaque token per HTTP spec).
-	if etag != `W/"weaketag"` {
-		t.Errorf("etag = %q, want %q", etag, `W/"weaketag"`)
-	}
-}
-
-// --- doRawGet ---
-
-func TestDoRawGet_Success(t *testing.T) {
-	t.Parallel()
-
-	const want = "hello from the server"
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(want)) //nolint:errcheck // test helper
-	}))
-	defer srv.Close()
-
-	c := newTestClient(t, srv.URL)
-	got, err := c.doRawGet(context.Background(), "/repos/o/r/actions/jobs/1/logs", 1<<20)
-	if err != nil {
-		t.Fatalf("doRawGet: %v", err)
-	}
-	if string(got) != want {
-		t.Errorf("doRawGet body = %q, want %q", string(got), want)
-	}
-}
-
-func TestDoRawGet_BodyTruncation(t *testing.T) {
-	t.Parallel()
-
-	const maxBytes = 10
-	body := strings.Repeat("x", 100)
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(body)) //nolint:errcheck // test helper
-	}))
-	defer srv.Close()
-
-	c := newTestClient(t, srv.URL)
-	got, err := c.doRawGet(context.Background(), "/repos/o/r/actions/jobs/1/logs", maxBytes)
-	if err != nil {
-		t.Fatalf("doRawGet: %v", err)
-	}
-	if int64(len(got)) != maxBytes {
-		t.Errorf("doRawGet body len = %d, want exactly %d (truncated)", len(got), maxBytes)
-	}
-}
-
-func TestDoRawGet_Non200(t *testing.T) {
+func TestClientGet_ErrorStatus(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -909,6 +133,7 @@ func TestDoRawGet_Non200(t *testing.T) {
 		wantKind domain.TrackerErrorKind
 	}{
 		{"401 unauthorized", http.StatusUnauthorized, domain.ErrTrackerAuth},
+		{"403 forbidden", http.StatusForbidden, domain.ErrTrackerAuth},
 		{"404 not found", http.StatusNotFound, domain.ErrTrackerNotFound},
 		{"500 server error", http.StatusInternalServerError, domain.ErrTrackerTransport},
 	}
@@ -922,40 +147,293 @@ func TestDoRawGet_Non200(t *testing.T) {
 			}))
 			defer srv.Close()
 
-			c := newTestClient(t, srv.URL)
-			_, err := c.doRawGet(context.Background(), "/repos/o/r/actions/jobs/1/logs", 1<<20)
+			client := newTestClient(t, srv.URL)
+			_, _, err := client.Get(context.Background(), "/path", nil)
 			assertClientError(t, err, tt.wantKind)
 		})
 	}
 }
 
-func TestDoRawGet_ContextCancelled(t *testing.T) {
+func TestClientGet_NetworkFailure(t *testing.T) {
 	t.Parallel()
 
-	started := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	_, _, err := client.Get(context.Background(), "/repos/o/r/issues", nil)
+	assertClientError(t, err, domain.ErrTrackerTransport)
+}
+
+func TestClientGet_ContextCancellation(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	client := newTestClient(t, "https://example.invalid")
+	_, _, err := client.Get(ctx, "/repos/o/r/issues", nil)
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("error = %v, want context.Canceled", err)
+	}
+}
+
+func TestClientGetURL_AuthHeadersSent(t *testing.T) {
+	t.Parallel()
+
+	var gotHeaders http.Header
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		close(started)
-		<-r.Context().Done()
+		gotHeaders = r.Header.Clone()
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`[]`)) //nolint:errcheck // test helper
 	}))
 	defer srv.Close()
 
-	ctx, cancel := context.WithCancel(context.Background())
-	c := newTestClient(t, srv.URL)
-
-	errCh := make(chan error, 1)
-	go func() {
-		_, err := c.doRawGet(ctx, "/repos/o/r/actions/jobs/1/logs", 1<<20)
-		errCh <- err
-	}()
-
-	<-started
-	cancel()
-
-	err := <-errCh
-	if err == nil {
-		t.Fatal("doRawGet: expected error after context cancel, got nil")
+	client := newTestClient(t, srv.URL)
+	_, _, err := client.GetURL(context.Background(), srv.URL+"/repos/o/r/issues?page=2")
+	if err != nil {
+		t.Fatalf("GetURL: %v", err)
 	}
-	if !errors.Is(err, context.Canceled) {
-		t.Errorf("doRawGet error = %v, want context.Canceled", err)
+	if got := gotHeaders.Get("Authorization"); got != "Bearer test-token" {
+		t.Errorf("Authorization = %q, want %q", got, "Bearer test-token")
+	}
+	if got := gotHeaders.Get("X-GitHub-Api-Version"); got != "2026-03-10" {
+		t.Errorf("X-GitHub-Api-Version = %q, want %q", got, "2026-03-10")
+	}
+	if got := gotHeaders.Get("Content-Type"); got != "" {
+		t.Errorf("Content-Type = %q, want empty", got)
+	}
+}
+
+func TestClientSend_Success(t *testing.T) {
+	t.Parallel()
+
+	var gotMethod string
+	var gotHeaders http.Header
+	var gotBody []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotMethod = r.Method
+		gotHeaders = r.Header.Clone()
+		gotBody, _ = io.ReadAll(r.Body)
+		w.WriteHeader(http.StatusCreated)
+		w.Write([]byte(`{"result":"ok"}`)) //nolint:errcheck // test helper
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	body, err := client.Send(context.Background(), http.MethodPost, "/repos/o/r/issues/1/labels", bytes.NewBufferString(`{"labels":["review"]}`))
+	if err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	if string(body) != `{"result":"ok"}` {
+		t.Errorf("body = %q, want %q", body, `{"result":"ok"}`)
+	}
+	if gotMethod != http.MethodPost {
+		t.Errorf("method = %q, want %q", gotMethod, http.MethodPost)
+	}
+	if string(gotBody) != `{"labels":["review"]}` {
+		t.Errorf("request body = %q, want %q", gotBody, `{"labels":["review"]}`)
+	}
+	if got := gotHeaders.Get("Content-Type"); got != "application/json" {
+		t.Errorf("Content-Type = %q, want %q", got, "application/json")
+	}
+	if got := gotHeaders.Get("Authorization"); got != "Bearer test-token" {
+		t.Errorf("Authorization = %q, want %q", got, "Bearer test-token")
+	}
+}
+
+func TestClientSend_Error(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnprocessableEntity)
+		w.Write([]byte(`{"errors":["invalid"]}`)) //nolint:errcheck // test helper
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	_, err := client.Send(context.Background(), http.MethodPost, "/labels", bytes.NewBufferString("{}"))
+	assertClientError(t, err, domain.ErrTrackerPayload)
+}
+
+func TestClientSendNoBody_Success(t *testing.T) {
+	t.Parallel()
+
+	for _, status := range []int{http.StatusOK, http.StatusNoContent} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			t.Parallel()
+
+			var gotContentType string
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				gotContentType = r.Header.Get("Content-Type")
+				w.WriteHeader(status)
+			}))
+			defer srv.Close()
+
+			client := newTestClient(t, srv.URL)
+			if err := client.SendNoBody(context.Background(), http.MethodDelete, "/repos/o/r/issues/1/labels/backlog"); err != nil {
+				t.Fatalf("SendNoBody(%d): %v", status, err)
+			}
+			if gotContentType != "" {
+				t.Errorf("Content-Type = %q, want empty", gotContentType)
+			}
+		})
+	}
+}
+
+func TestClientSendNoBody_Error(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	err := client.SendNoBody(context.Background(), http.MethodDelete, "/repos/o/r/issues/1/labels/backlog")
+	assertClientError(t, err, domain.ErrTrackerAuth)
+}
+
+func TestClientGetConditional_200_ReturnsBodyAndETag(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("ETag", `"abc123"`)
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"number":1}`)) //nolint:errcheck // test helper
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	body, etag, notModified, err := client.GetConditional(context.Background(), "/repos/o/r/issues/1", "", nil)
+	if err != nil {
+		t.Fatalf("GetConditional: %v", err)
+	}
+	if notModified {
+		t.Error("notModified = true, want false")
+	}
+	if string(body) != `{"number":1}` {
+		t.Errorf("body = %q, want %q", body, `{"number":1}`)
+	}
+	if etag != `"abc123"` {
+		t.Errorf("etag = %q, want %q", etag, `"abc123"`)
+	}
+}
+
+func TestClientGetConditional_304_NotModified(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotModified)
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	body, etag, notModified, err := client.GetConditional(context.Background(), "/repos/o/r/issues/3", `"cached"`, nil)
+	if err != nil {
+		t.Fatalf("GetConditional: %v", err)
+	}
+	if !notModified {
+		t.Error("notModified = false, want true")
+	}
+	if body != nil {
+		t.Errorf("body = %v, want nil on 304", body)
+	}
+	if etag != "" {
+		t.Errorf("etag = %q, want empty on 304", etag)
+	}
+}
+
+func TestClientGetConditional_SetsIfNoneMatchHeader(t *testing.T) {
+	t.Parallel()
+
+	var gotHeader string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotHeader = r.Header.Get("If-None-Match")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{}`)) //nolint:errcheck // test helper
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	_, _, _, err := client.GetConditional(context.Background(), "/repos/o/r/issues/4", `W/"etag-1"`, nil)
+	if err != nil {
+		t.Fatalf("GetConditional: %v", err)
+	}
+	if gotHeader != `W/"etag-1"` {
+		t.Errorf("If-None-Match = %q, want %q", gotHeader, `W/"etag-1"`)
+	}
+}
+
+func TestClientGetConditional_OmitsIfNoneMatchWhenEmpty(t *testing.T) {
+	t.Parallel()
+
+	var gotHeader string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotHeader = r.Header.Get("If-None-Match")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{}`)) //nolint:errcheck // test helper
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	_, _, _, err := client.GetConditional(context.Background(), "/repos/o/r/issues/5", "", nil)
+	if err != nil {
+		t.Fatalf("GetConditional: %v", err)
+	}
+	if gotHeader != "" {
+		t.Errorf("If-None-Match = %q, want empty", gotHeader)
+	}
+}
+
+func TestClientGetConditional_WeakETagPreserved(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("ETag", `W/"weak-1"`)
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"number":5}`)) //nolint:errcheck // test helper
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	_, etag, _, err := client.GetConditional(context.Background(), "/repos/o/r/issues/5", "", nil)
+	if err != nil {
+		t.Fatalf("GetConditional: %v", err)
+	}
+	if etag != `W/"weak-1"` {
+		t.Errorf("etag = %q, want %q", etag, `W/"weak-1"`)
+	}
+}
+
+func TestClientGetConditional_Error(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	_, _, _, err := client.GetConditional(context.Background(), "/repos/o/r/issues/6", "", nil)
+	assertClientError(t, err, domain.ErrTrackerTransport)
+}
+
+func TestClientGetRaw_Success(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("hello world")) //nolint:errcheck // test helper
+	}))
+	defer srv.Close()
+
+	client := newTestClient(t, srv.URL)
+	body, err := client.GetRaw(context.Background(), "/repos/o/r/actions/jobs/1/logs", 5)
+	if err != nil {
+		t.Fatalf("GetRaw: %v", err)
+	}
+	if string(body) != "hello" {
+		t.Errorf("body = %q, want %q", body, "hello")
 	}
 }

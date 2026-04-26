@@ -34,8 +34,8 @@ internal/workflow/     → internal/config, prompt            (no orchestrator, 
 internal/workspace/    → internal/domain, config, persistence
 internal/persistence/  → internal/domain, config
 internal/registry/     → internal/domain                   (adapter registration — no orchestrator, no persistence)
-internal/tracker/*/    → internal/domain, registry, typeutil (no cross-adapter imports)
-internal/scm/*/        → internal/domain, registry, typeutil (no cross-adapter imports)
+internal/tracker/*/    → internal/domain, registry, typeutil, httpkit, issuekit, trackermetrics (no cross-adapter imports)
+internal/scm/*/        → internal/domain, registry, typeutil, httpkit, issuekit, trackermetrics (no cross-adapter imports)
 internal/agent/*/      → internal/domain, registry, agent/agentcore, agent/procutil, agent/sshutil, typeutil (no cross-adapter imports)
 internal/tool/*/        → internal/domain                  (agent tool implementations)
 internal/config/       → internal/domain, maputil          (no orchestrator, no persistence)
@@ -43,6 +43,9 @@ internal/prompt/       → internal/domain, maputil          (no orchestrator, n
 internal/domain/       → (nothing internal)                (pure types, interfaces, constants)
 internal/maputil/      → (nothing internal)                (generic map helpers)
 internal/typeutil/     → (nothing internal)                (type coercion helpers)
+internal/httpkit/      → (nothing internal)                (shared REST transport and pagination helpers)
+internal/issuekit/     → internal/domain                   (shared issue normalization helpers)
+internal/trackermetrics/ → internal/domain                   (shared tracker-operation metrics decorator)
 internal/logging/      → (nothing internal)                (stdlib only)
 ```
 

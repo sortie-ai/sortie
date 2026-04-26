@@ -15,7 +15,9 @@ import (
 	"strings"
 
 	"github.com/sortie-ai/sortie/internal/domain"
+	"github.com/sortie-ai/sortie/internal/httpkit"
 	"github.com/sortie-ai/sortie/internal/registry"
+	"github.com/sortie-ai/sortie/internal/trackermetrics"
 	"github.com/sortie-ai/sortie/internal/typeutil"
 )
 
@@ -49,7 +51,7 @@ const batchSize = 40
 // JiraAdapter implements [domain.TrackerAdapter] against Jira Cloud
 // REST API v3. Safe for concurrent use.
 type JiraAdapter struct {
-	client       *jiraClient
+	client       *httpkit.Client
 	project      string
 	activeStates []string
 	endpoint     string
@@ -128,53 +130,52 @@ func NewJiraAdapter(config map[string]any) (domain.TrackerAdapter, error) {
 // for the configured project. Comments are set to nil on all returned
 // issues. Results are ordered by priority then creation time.
 func (a *JiraAdapter) FetchCandidateIssues(ctx context.Context) ([]domain.Issue, error) {
-	jql := buildCandidateJQL(a.project, a.activeStates, a.queryFilter)
-	issues, err := a.paginatedSearch(ctx, jql, searchFields)
-	if err != nil {
-		a.incTrackerRequest("fetch_candidates", "error")
-		return nil, err
-	}
-	a.incTrackerRequest("fetch_candidates", "success")
-	return issues, nil
+	issues := make([]domain.Issue, 0)
+	err := trackermetrics.Track(a.metrics, "fetch_candidates", func() error {
+		var fetchErr error
+		jql := buildCandidateJQL(a.project, a.activeStates, a.queryFilter)
+		issues, fetchErr = a.paginatedSearch(ctx, jql, searchFields)
+		return fetchErr
+	})
+	return issues, err
 }
 
 // FetchIssueByID returns a fully populated issue including comments.
 // The issueID is the Jira issue key (e.g. "PROJ-123").
 func (a *JiraAdapter) FetchIssueByID(ctx context.Context, issueID string) (domain.Issue, error) {
-	params := url.Values{"fields": {searchFields}}
-	body, err := a.client.do(ctx, "GET", "/rest/api/3/issue/"+url.PathEscape(issueID), params)
-	if err != nil {
-		a.incTrackerRequest("fetch_issue", "error")
-		if domain.IsNotFound(err) {
-			return domain.Issue{}, &domain.TrackerError{
-				Kind:    domain.ErrTrackerNotFound,
-				Message: fmt.Sprintf("issue not found: %s", issueID),
+	var issue domain.Issue
+	err := trackermetrics.Track(a.metrics, "fetch_issue", func() error {
+		params := url.Values{"fields": {searchFields}}
+		body, _, err := a.client.Get(ctx, "/rest/api/3/issue/"+url.PathEscape(issueID), params)
+		if err != nil {
+			if domain.IsNotFound(err) {
+				return &domain.TrackerError{
+					Kind:    domain.ErrTrackerNotFound,
+					Message: fmt.Sprintf("issue not found: %s", issueID),
+				}
+			}
+			return err
+		}
+
+		var ji jiraIssue
+		if err := json.Unmarshal(body, &ji); err != nil {
+			return &domain.TrackerError{
+				Kind:    domain.ErrTrackerPayload,
+				Message: "failed to parse issue response",
+				Err:     err,
 			}
 		}
-		return domain.Issue{}, err
-	}
 
-	var ji jiraIssue
-	if err := json.Unmarshal(body, &ji); err != nil {
-		a.incTrackerRequest("fetch_issue", "error")
-		return domain.Issue{}, &domain.TrackerError{
-			Kind:    domain.ErrTrackerPayload,
-			Message: "failed to parse issue response",
-			Err:     err,
+		issue = normalizeSearchIssue(a.endpoint, ji)
+
+		comments, err := a.fetchComments(ctx, issueID)
+		if err != nil {
+			return err
 		}
-	}
-
-	issue := normalizeSearchIssue(a.endpoint, ji)
-
-	comments, err := a.fetchComments(ctx, issueID)
-	if err != nil {
-		a.incTrackerRequest("fetch_issue", "error")
-		return domain.Issue{}, err
-	}
-	issue.Comments = comments
-
-	a.incTrackerRequest("fetch_issue", "success")
-	return issue, nil
+		issue.Comments = comments
+		return nil
+	})
+	return issue, err
 }
 
 // FetchIssuesByStates returns issues in the specified states. Used
@@ -184,14 +185,15 @@ func (a *JiraAdapter) FetchIssuesByStates(ctx context.Context, states []string) 
 	if len(states) == 0 {
 		return []domain.Issue{}, nil
 	}
-	jql := buildStatesFetchJQL(a.project, states, a.queryFilter)
-	issues, err := a.paginatedSearch(ctx, jql, searchFields)
-	if err != nil {
-		a.incTrackerRequest("fetch_by_states", "error")
-		return nil, err
-	}
-	a.incTrackerRequest("fetch_by_states", "success")
-	return issues, nil
+
+	issues := make([]domain.Issue, 0)
+	err := trackermetrics.Track(a.metrics, "fetch_by_states", func() error {
+		var fetchErr error
+		jql := buildStatesFetchJQL(a.project, states, a.queryFilter)
+		issues, fetchErr = a.paginatedSearch(ctx, jql, searchFields)
+		return fetchErr
+	})
+	return issues, err
 }
 
 // FetchIssueStatesByIDs returns the current state for each requested
@@ -204,37 +206,31 @@ func (a *JiraAdapter) FetchIssueStatesByIDs(ctx context.Context, issueIDs []stri
 	}
 
 	statesByID := make(map[string]string, len(issueIDs))
+	err := trackermetrics.Track(a.metrics, "fetch_states_by_ids", func() error {
+		for start := 0; start < len(issueIDs); start += batchSize {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
 
-	var requested bool
+			end := min(start+batchSize, len(issueIDs))
+			batch := issueIDs[start:end]
 
-	for start := 0; start < len(issueIDs); start += batchSize {
-		if ctx.Err() != nil {
-			a.incTrackerRequest("fetch_states_by_ids", "error")
-			return nil, ctx.Err()
+			jql := buildIDINJQL(batch)
+			if jql == "" {
+				continue
+			}
+
+			issues, err := a.paginatedSearch(ctx, jql, "status")
+			if err != nil {
+				return err
+			}
+			for _, iss := range issues {
+				statesByID[iss.ID] = iss.State
+			}
 		}
-
-		end := min(start+batchSize, len(issueIDs))
-		batch := issueIDs[start:end]
-
-		jql := buildIDINJQL(batch)
-		if jql == "" {
-			continue
-		}
-		requested = true
-		issues, err := a.paginatedSearch(ctx, jql, "status")
-		if err != nil {
-			a.incTrackerRequest("fetch_states_by_ids", "error")
-			return nil, err
-		}
-		for _, iss := range issues {
-			statesByID[iss.ID] = iss.State
-		}
-	}
-
-	if requested {
-		a.incTrackerRequest("fetch_states_by_ids", "success")
-	}
-	return statesByID, nil
+		return nil
+	})
+	return statesByID, err
 }
 
 // FetchIssueStatesByIdentifiers returns the current state for each
@@ -248,41 +244,39 @@ func (a *JiraAdapter) FetchIssueStatesByIdentifiers(ctx context.Context, identif
 	}
 
 	statesByKey := make(map[string]string, len(identifiers))
+	err := trackermetrics.Track(a.metrics, "fetch_states_by_identifiers", func() error {
+		for start := 0; start < len(identifiers); start += batchSize {
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
 
-	for start := 0; start < len(identifiers); start += batchSize {
-		if ctx.Err() != nil {
-			a.incTrackerRequest("fetch_states_by_identifiers", "error")
-			return nil, ctx.Err()
+			end := min(start+batchSize, len(identifiers))
+			batch := identifiers[start:end]
+
+			jql := buildKeyINJQL(batch)
+			issues, err := a.paginatedSearch(ctx, jql, "status")
+			if err != nil {
+				return err
+			}
+			for _, iss := range issues {
+				statesByKey[iss.Identifier] = iss.State
+			}
 		}
-
-		end := min(start+batchSize, len(identifiers))
-		batch := identifiers[start:end]
-
-		jql := buildKeyINJQL(batch)
-		issues, err := a.paginatedSearch(ctx, jql, "status")
-		if err != nil {
-			a.incTrackerRequest("fetch_states_by_identifiers", "error")
-			return nil, err
-		}
-		for _, iss := range issues {
-			statesByKey[iss.Identifier] = iss.State
-		}
-	}
-
-	a.incTrackerRequest("fetch_states_by_identifiers", "success")
-	return statesByKey, nil
+		return nil
+	})
+	return statesByKey, err
 }
 
 // FetchIssueComments returns comments for the specified issue.
 // Returns an empty non-nil slice when no comments exist.
 func (a *JiraAdapter) FetchIssueComments(ctx context.Context, issueID string) ([]domain.Comment, error) {
-	comments, err := a.fetchComments(ctx, issueID)
-	if err != nil {
-		a.incTrackerRequest("fetch_comments", "error")
-		return nil, err
-	}
-	a.incTrackerRequest("fetch_comments", "success")
-	return comments, nil
+	comments := make([]domain.Comment, 0)
+	err := trackermetrics.Track(a.metrics, "fetch_comments", func() error {
+		var fetchErr error
+		comments, fetchErr = a.fetchComments(ctx, issueID)
+		return fetchErr
+	})
+	return comments, err
 }
 
 // TransitionIssue moves an issue to the specified target state by
@@ -290,91 +284,80 @@ func (a *JiraAdapter) FetchIssueComments(ctx context.Context, issueID string) ([
 // Available transitions are fetched via GET, matched by target status
 // name (case-insensitive, first match), then executed via POST.
 func (a *JiraAdapter) TransitionIssue(ctx context.Context, issueID string, targetState string) error {
-	path := "/rest/api/3/issue/" + url.PathEscape(issueID) + "/transitions"
+	return trackermetrics.Track(a.metrics, "transition", func() error {
+		path := "/rest/api/3/issue/" + url.PathEscape(issueID) + "/transitions"
 
-	body, err := a.client.do(ctx, "GET", path, nil)
-	if err != nil {
-		a.incTrackerRequest("transition", "error")
+		body, _, err := a.client.Get(ctx, path, nil)
+		if err != nil {
+			return err
+		}
+
+		var resp transitionsResponse
+		if err := json.Unmarshal(body, &resp); err != nil {
+			return &domain.TrackerError{
+				Kind:    domain.ErrTrackerPayload,
+				Message: fmt.Sprintf("failed to parse transitions response for issue %s", issueID),
+				Err:     err,
+			}
+		}
+
+		var matchID string
+		for _, t := range resp.Transitions {
+			if strings.EqualFold(t.To.Name, targetState) {
+				matchID = t.ID
+				break
+			}
+		}
+
+		if matchID == "" {
+			return &domain.TrackerError{
+				Kind:    domain.ErrTrackerPayload,
+				Message: fmt.Sprintf("no transition to state %q available for issue %s", targetState, issueID),
+			}
+		}
+
+		postBody, err := json.Marshal(struct {
+			Transition struct {
+				ID string `json:"id"`
+			} `json:"transition"`
+		}{
+			Transition: struct {
+				ID string `json:"id"`
+			}{ID: matchID},
+		})
+		if err != nil {
+			return &domain.TrackerError{
+				Kind:    domain.ErrTrackerPayload,
+				Message: "failed to marshal transition request",
+				Err:     err,
+			}
+		}
+
+		_, err = a.client.Send(ctx, "POST", path, bytes.NewReader(postBody))
 		return err
-	}
-
-	var resp transitionsResponse
-	if err := json.Unmarshal(body, &resp); err != nil {
-		a.incTrackerRequest("transition", "error")
-		return &domain.TrackerError{
-			Kind:    domain.ErrTrackerPayload,
-			Message: fmt.Sprintf("failed to parse transitions response for issue %s", issueID),
-			Err:     err,
-		}
-	}
-
-	var matchID string
-	for _, t := range resp.Transitions {
-		if strings.EqualFold(t.To.Name, targetState) {
-			matchID = t.ID
-			break
-		}
-	}
-
-	if matchID == "" {
-		a.incTrackerRequest("transition", "error")
-		return &domain.TrackerError{
-			Kind:    domain.ErrTrackerPayload,
-			Message: fmt.Sprintf("no transition to state %q available for issue %s", targetState, issueID),
-		}
-	}
-
-	postBody, err := json.Marshal(struct {
-		Transition struct {
-			ID string `json:"id"`
-		} `json:"transition"`
-	}{
-		Transition: struct {
-			ID string `json:"id"`
-		}{ID: matchID},
 	})
-	if err != nil {
-		a.incTrackerRequest("transition", "error")
-		return &domain.TrackerError{
-			Kind:    domain.ErrTrackerPayload,
-			Message: "failed to marshal transition request",
-			Err:     err,
-		}
-	}
-
-	_, err = a.client.doJSON(ctx, "POST", path, bytes.NewReader(postBody))
-	if err != nil {
-		a.incTrackerRequest("transition", "error")
-		return err
-	}
-	a.incTrackerRequest("transition", "success")
-	return nil
 }
 
 // CommentIssue posts a plain-text comment on the specified Jira issue.
 // The text is split by newlines into ADF paragraph nodes before
 // submission to the Jira v3 REST API.
 func (a *JiraAdapter) CommentIssue(ctx context.Context, issueID string, text string) error {
-	path := "/rest/api/3/issue/" + url.PathEscape(issueID) + "/comment"
+	return trackermetrics.Track(a.metrics, "comment", func() error {
+		path := "/rest/api/3/issue/" + url.PathEscape(issueID) + "/comment"
 
-	body := buildADFComment(text)
-	payload, err := json.Marshal(body)
-	if err != nil {
-		a.incTrackerRequest("comment", "error")
-		return &domain.TrackerError{
-			Kind:    domain.ErrTrackerPayload,
-			Message: "failed to marshal comment request",
-			Err:     err,
+		body := buildADFComment(text)
+		payload, err := json.Marshal(body)
+		if err != nil {
+			return &domain.TrackerError{
+				Kind:    domain.ErrTrackerPayload,
+				Message: "failed to marshal comment request",
+				Err:     err,
+			}
 		}
-	}
 
-	_, err = a.client.doJSON(ctx, "POST", path, bytes.NewReader(payload))
-	if err != nil {
-		a.incTrackerRequest("comment", "error")
+		_, err = a.client.Send(ctx, "POST", path, bytes.NewReader(payload))
 		return err
-	}
-	a.incTrackerRequest("comment", "success")
-	return nil
+	})
 }
 
 // SetMetrics configures the metrics recorder for tracker API call
@@ -408,7 +391,7 @@ func (a *JiraAdapter) AddLabel(ctx context.Context, issueID string, label string
 		}
 	}
 
-	_, err = a.client.doJSON(ctx, "PUT", path, bytes.NewReader(payload))
+	_, err = a.client.Send(ctx, "PUT", path, bytes.NewReader(payload))
 	if err != nil {
 		a.incTrackerRequest("add_label", "error")
 		return err
@@ -426,53 +409,32 @@ func (a *JiraAdapter) incTrackerRequest(operation, result string) {
 // paginatedSearch executes a cursor-based paginated JQL search and
 // returns all normalized issues. Comments are set to nil.
 func (a *JiraAdapter) paginatedSearch(ctx context.Context, jql, fields string) ([]domain.Issue, error) {
-	var issues []domain.Issue
-	var nextPageToken string
+	params := url.Values{
+		"jql":        {jql},
+		"fields":     {fields},
+		"maxResults": {maxSearchResults},
+	}
 
-	for {
-		if ctx.Err() != nil {
-			return nil, ctx.Err()
-		}
-
-		params := url.Values{
-			"jql":        {jql},
-			"fields":     {fields},
-			"maxResults": {maxSearchResults},
-		}
-		if nextPageToken != "" {
-			params.Set("nextPageToken", nextPageToken)
-		}
-
-		body, err := a.client.do(ctx, "GET", "/rest/api/3/search/jql", params)
-		if err != nil {
-			return nil, err
-		}
-
+	paginator := httpkit.NewTokenPaginator(a.client, "/rest/api/3/search/jql", params, "nextPageToken", func(body []byte) ([]domain.Issue, string, error) {
 		var sr searchResponse
 		if err := json.Unmarshal(body, &sr); err != nil {
-			return nil, &domain.TrackerError{
+			return nil, "", &domain.TrackerError{
 				Kind:    domain.ErrTrackerPayload,
 				Message: "failed to parse search response",
 				Err:     err,
 			}
 		}
 
+		issues := make([]domain.Issue, 0, len(sr.Issues))
 		for _, ji := range sr.Issues {
 			issue := normalizeSearchIssue(a.endpoint, ji)
 			issue.Comments = nil
 			issues = append(issues, issue)
 		}
+		return issues, sr.NextPageToken, nil
+	}, httpkit.PaginatorOptions{})
 
-		if sr.NextPageToken == "" {
-			break
-		}
-		nextPageToken = sr.NextPageToken
-	}
-
-	if issues == nil {
-		issues = []domain.Issue{}
-	}
-	return issues, nil
+	return paginator.All(ctx)
 }
 
 // fetchComments retrieves all comments for an issue using offset-based
@@ -492,7 +454,7 @@ func (a *JiraAdapter) fetchComments(ctx context.Context, issueID string) ([]doma
 			"startAt":    {fmt.Sprintf("%d", startAt)},
 		}
 
-		body, err := a.client.do(ctx, "GET", "/rest/api/3/issue/"+url.PathEscape(issueID)+"/comment", params)
+		body, _, err := a.client.Get(ctx, "/rest/api/3/issue/"+url.PathEscape(issueID)+"/comment", params)
 		if err != nil {
 			if domain.IsNotFound(err) {
 				return nil, &domain.TrackerError{

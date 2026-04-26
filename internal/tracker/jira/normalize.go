@@ -2,10 +2,9 @@ package jira
 
 import (
 	"encoding/json"
-	"strconv"
-	"strings"
 
 	"github.com/sortie-ai/sortie/internal/domain"
+	"github.com/sortie-ai/sortie/internal/issuekit"
 )
 
 // blockerLinkTypeName is the Jira link type name used to identify
@@ -117,20 +116,10 @@ func normalizeSearchIssue(endpoint string, ji jiraIssue) domain.Issue {
 	}
 
 	if ji.Fields.Priority != nil {
-		if v, err := strconv.Atoi(ji.Fields.Priority.ID); err == nil {
-			issue.Priority = &v
-		}
+		issue.Priority = issuekit.ParsePriorityIntFromString(ji.Fields.Priority.ID)
 	}
 
-	if ji.Fields.Labels != nil {
-		labels := make([]string, len(ji.Fields.Labels))
-		for i, l := range ji.Fields.Labels {
-			labels[i] = strings.ToLower(l)
-		}
-		issue.Labels = labels
-	} else {
-		issue.Labels = []string{}
-	}
+	issue.Labels = issuekit.NormalizeLabels(ji.Fields.Labels)
 
 	if ji.Fields.Assignee != nil {
 		issue.Assignee = ji.Fields.Assignee.DisplayName
@@ -176,18 +165,18 @@ func extractBlockers(links []jiraIssueLink) []domain.BlockerRef {
 // values. ADF bodies are flattened to plain text. Nil author fields
 // produce an empty author string.
 func normalizeComments(comments []jiraComment) []domain.Comment {
-	normalized := make([]domain.Comment, len(comments))
+	source := make([]issuekit.SourceComment, len(comments))
 	for i, c := range comments {
-		normalized[i] = domain.Comment{
+		source[i] = issuekit.SourceComment{
 			ID:        c.ID,
 			Body:      flattenADF(unmarshalADF(c.Body)),
 			CreatedAt: c.Created,
 		}
 		if c.Author != nil {
-			normalized[i].Author = c.Author.DisplayName
+			source[i].Author = c.Author.DisplayName
 		}
 	}
-	return normalized
+	return issuekit.NormalizeComments(source)
 }
 
 // unmarshalADF decodes a json.RawMessage into an any value suitable

@@ -33,18 +33,7 @@ func mustAdapter(t *testing.T, config map[string]any) *GitHubAdapter {
 	if err != nil {
 		t.Fatalf("NewGitHubAdapter: %v", err)
 	}
-	gh := a.(*GitHubAdapter)
-	// Isolate the HTTP transport so that httptest.Server.Close() in one
-	// parallel test cannot call CloseIdleConnections on http.DefaultTransport
-	// and break in-flight requests from another parallel test.
-	defaultTransport, ok := http.DefaultTransport.(*http.Transport)
-	if !ok {
-		t.Fatalf("http.DefaultTransport is %T, want *http.Transport", http.DefaultTransport)
-	}
-	transport := defaultTransport.Clone()
-	gh.client.httpClient.Transport = transport
-	t.Cleanup(transport.CloseIdleConnections)
-	return gh
+	return a.(*GitHubAdapter)
 }
 
 func assertTrackerErrorKind(t *testing.T, err error, want domain.TrackerErrorKind) {
@@ -234,11 +223,43 @@ func TestNewGitHubAdapter_CustomStatesLowercased(t *testing.T) {
 func TestNewGitHubAdapter_EndpointTrailingSlashStripped(t *testing.T) {
 	t.Parallel()
 
-	cfg := validConfig("https://api.github.com/")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "//") {
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = io.WriteString(w, `{"message":"unexpected doubled slash"}`)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/repos/owner/repo/issues/123":
+			w.WriteHeader(http.StatusOK)
+			_, _ = io.WriteString(w, issueJSON(123, "todo", "open"))
+		case "/repos/owner/repo/issues/123/comments":
+			w.WriteHeader(http.StatusOK)
+			_, _ = io.WriteString(w, `[]`)
+		case "/repos/owner/repo/issues/123/dependencies/blocked_by":
+			w.WriteHeader(http.StatusOK)
+			_, _ = io.WriteString(w, `[]`)
+		case "/repos/owner/repo/issues/123/parent":
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = io.WriteString(w, `{"message":"not found"}`)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = io.WriteString(w, `{"message":"unexpected path"}`)
+		}
+	}))
+	defer srv.Close()
+
+	cfg := validConfig(srv.URL + "/")
 	a := mustAdapter(t, cfg)
 
-	if strings.HasSuffix(a.client.baseURL, "/") {
-		t.Errorf("client.baseURL = %q, should not have trailing slash", a.client.baseURL)
+	issue, err := a.FetchIssueByID(context.Background(), "123")
+	if err != nil {
+		t.Fatalf("FetchIssueByID: %v", err)
+	}
+	if issue.ID != "123" {
+		t.Errorf("issue.ID = %q, want %q", issue.ID, "123")
 	}
 }
 

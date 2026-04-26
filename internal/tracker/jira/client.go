@@ -1,37 +1,33 @@
 package jira
 
 import (
-	"context"
 	"encoding/base64"
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"strings"
 	"time"
 
 	"github.com/sortie-ai/sortie/internal/domain"
+	"github.com/sortie-ai/sortie/internal/httpkit"
 )
 
-// jiraClient wraps net/http.Client with Jira-specific authentication,
-// request building, and HTTP status to TrackerError mapping.
-type jiraClient struct {
-	httpClient *http.Client
-	baseURL    string
-	authHeader string
-	userAgent  string
-}
+// newJiraClient constructs the shared Jira transport.
+func newJiraClient(baseURL, email, token, userAgent string) *httpkit.Client {
+	trimmedBaseURL := strings.TrimRight(baseURL, "/")
+	authHeader := "Basic " + base64.StdEncoding.EncodeToString([]byte(email+":"+token))
 
-// newJiraClient constructs a jiraClient with Basic authentication
-// derived from the email and API token. The baseURL is stripped of
-// any trailing slash. The userAgent value is set on every outgoing request.
-func newJiraClient(baseURL, email, token, userAgent string) *jiraClient {
-	return &jiraClient{
-		httpClient: &http.Client{Timeout: 30 * time.Second},
-		baseURL:    strings.TrimRight(baseURL, "/"),
-		authHeader: "Basic " + base64.StdEncoding.EncodeToString([]byte(email+":"+token)),
-		userAgent:  userAgent,
-	}
+	return httpkit.NewClient(httpkit.ClientOptions{
+		BaseURL: trimmedBaseURL,
+		Timeout: 30 * time.Second,
+		Authorize: func(req *http.Request) {
+			req.Header.Set("Authorization", authHeader)
+			req.Header.Set("Accept", "application/json")
+			req.Header.Set("User-Agent", userAgent)
+		},
+		ClassifyError:     classifyHTTPError,
+		ClassifyTransport: classifyTransportError,
+	})
 }
 
 // maxErrorBody is the maximum number of bytes read from non-200
@@ -95,110 +91,10 @@ func classifyHTTPError(resp *http.Response, method, path string) error {
 	}
 }
 
-// do executes an HTTP request against the Jira REST API and returns
-// the response body on success. Non-200 responses are mapped to
-// [domain.TrackerError] by status code. Context cancellation is
-// propagated directly without wrapping in TrackerError.
-func (c *jiraClient) do(ctx context.Context, method, path string, params url.Values) ([]byte, error) { //nolint:unparam // method will accept POST for future comment/transition operations
-	reqURL := c.baseURL + path
-	if len(params) > 0 {
-		reqURL += "?" + params.Encode()
+func classifyTransportError(err error, method, path string) error {
+	return &domain.TrackerError{
+		Kind:    domain.ErrTrackerTransport,
+		Message: fmt.Sprintf("%s %s: transport error", method, path),
+		Err:     err,
 	}
-
-	req, err := http.NewRequestWithContext(ctx, method, reqURL, nil)
-	if err != nil {
-		if ctx.Err() != nil {
-			return nil, ctx.Err()
-		}
-		return nil, &domain.TrackerError{
-			Kind:    domain.ErrTrackerTransport,
-			Message: fmt.Sprintf("failed to build request: %s %s", method, path),
-			Err:     err,
-		}
-	}
-
-	req.Header.Set("Authorization", c.authHeader)
-	req.Header.Set("Accept", "application/json")
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", c.userAgent)
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		if ctx.Err() != nil {
-			return nil, ctx.Err()
-		}
-		return nil, &domain.TrackerError{
-			Kind:    domain.ErrTrackerTransport,
-			Message: fmt.Sprintf("%s %s: network error", method, path),
-			Err:     err,
-		}
-	}
-	defer resp.Body.Close() //nolint:errcheck // best-effort cleanup on response body
-
-	if resp.StatusCode == http.StatusOK {
-		body, err := io.ReadAll(resp.Body)
-		if err != nil {
-			return nil, &domain.TrackerError{
-				Kind:    domain.ErrTrackerTransport,
-				Message: "failed to read response body",
-				Err:     err,
-			}
-		}
-		return body, nil
-	}
-
-	return nil, classifyHTTPError(resp, method, path)
-}
-
-// doJSON executes an HTTP request with a JSON request body against the
-// Jira REST API. Successful responses (200-299) return the response
-// body (which may be empty for 204 No Content). Non-success responses
-// are mapped to [domain.TrackerError] by status code, using the same
-// classification as [jiraClient.do].
-func (c *jiraClient) doJSON(ctx context.Context, method, path string, body io.Reader) ([]byte, error) { //nolint:unparam // method is POST today but the signature mirrors do for consistency
-	reqURL := c.baseURL + path
-
-	req, err := http.NewRequestWithContext(ctx, method, reqURL, body)
-	if err != nil {
-		if ctx.Err() != nil {
-			return nil, ctx.Err()
-		}
-		return nil, &domain.TrackerError{
-			Kind:    domain.ErrTrackerTransport,
-			Message: fmt.Sprintf("failed to build request: %s %s", method, path),
-			Err:     err,
-		}
-	}
-
-	req.Header.Set("Authorization", c.authHeader)
-	req.Header.Set("Accept", "application/json")
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", c.userAgent)
-
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		if ctx.Err() != nil {
-			return nil, ctx.Err()
-		}
-		return nil, &domain.TrackerError{
-			Kind:    domain.ErrTrackerTransport,
-			Message: fmt.Sprintf("%s %s: network error", method, path),
-			Err:     err,
-		}
-	}
-	defer resp.Body.Close() //nolint:errcheck // best-effort cleanup on response body
-
-	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
-		respBody, err := io.ReadAll(resp.Body)
-		if err != nil {
-			return nil, &domain.TrackerError{
-				Kind:    domain.ErrTrackerTransport,
-				Message: "failed to read response body",
-				Err:     err,
-			}
-		}
-		return respBody, nil
-	}
-
-	return nil, classifyHTTPError(resp, method, path)
 }
