@@ -1,0 +1,2 @@
+{"type":"step_start","timestamp":1777197446593,"sessionID":"ses_abc123","part":{"id":"prt_m01","messageID":"msg_m01","sessionID":"ses_abc123","snapshot":"","type":"step-start"}}
+{"type":"unknown_future_type","data":"something"}

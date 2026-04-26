@@ -1,0 +1,2 @@
+{"type":"step_start","timestamp":1777197598000,"sessionID":"ses_fail123","part":{"id":"prt_fail001","messageID":"msg_fail001","sessionID":"ses_fail123","snapshot":"","type":"step-start"}}
+{"type":"error","timestamp":1777197598202,"sessionID":"ses_fail123","error":{"name":"ProviderAuthError","data":{"message":"invalid api key"}}}

@@ -1,0 +1,28 @@
+{
+  "messages": [
+    {
+      "info": {
+        "role": "user",
+        "sessionID": "ses_abc123"
+      }
+    },
+    {
+      "info": {
+        "role": "assistant",
+        "sessionID": "ses_abc123",
+        "providerID": "anthropic",
+        "modelID": "claude-sonnet-4-5",
+        "tokens": {
+          "input": 1500,
+          "output": 300,
+          "total": 1800,
+          "cache": {
+            "read": 200,
+            "write": 50
+          }
+        },
+        "cost": 0.05
+      }
+    }
+  ]
+}

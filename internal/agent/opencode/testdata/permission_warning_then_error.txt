@@ -1,0 +1,2 @@
+! permission requested: bash; auto-rejecting
+{"type":"tool_use","timestamp":1777197470000,"sessionID":"ses_abc123","part":{"id":"prt_bash_001","messageID":"msg_bash_001","sessionID":"ses_abc123","type":"tool","tool":"bash","callID":"call_bash_001","state":{"status":"error","error":"The user rejected permission to use this specific tool call.","time":{"start":1777197470000,"end":1777197470001}}}}
