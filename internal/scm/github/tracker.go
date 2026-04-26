@@ -319,21 +319,26 @@ func (a *GitHubAdapter) FetchIssueByID(ctx context.Context, issueID string) (dom
 			}
 		}
 
-		issue = normalizeIssue(gi, a.activeStates, a.terminalStates, a.handoffState)
-		a.qualifyDisplayID(&issue)
+		fetchedIssue := normalizeIssue(gi, a.activeStates, a.terminalStates, a.handoffState)
+		a.qualifyDisplayID(&fetchedIssue)
 
-		issue.BlockedBy, err = a.fetchBlockers(ctx, issueID)
+		fetchedIssue.BlockedBy, err = a.fetchBlockers(ctx, issueID)
 		if err != nil {
 			return err
 		}
 
-		issue.Parent, err = a.fetchParent(ctx, issueID)
+		fetchedIssue.Parent, err = a.fetchParent(ctx, issueID)
 		if err != nil {
 			return err
 		}
 
-		issue.Comments, err = a.fetchAllComments(ctx, issueID)
-		return err
+		fetchedIssue.Comments, err = a.fetchAllComments(ctx, issueID)
+		if err != nil {
+			return err
+		}
+
+		issue = fetchedIssue
+		return nil
 	})
 	return issue, err
 }
@@ -428,16 +433,18 @@ func (a *GitHubAdapter) FetchIssuesByStates(ctx context.Context, states []string
 		}
 	}
 
-	matched := make([]domain.Issue, 0)
-	seen := make(map[string]struct{})
+	var matched []domain.Issue
 
 	err := trackermetrics.Track(a.metrics, "fetch_by_states", func() error {
+		matchedIssues := make([]domain.Issue, 0)
+		seen := make(map[string]struct{})
+
 		if needOpenFetch {
 			issues, err := a.fetchOpenIssuesByStates(ctx, stateSet, seen)
 			if err != nil {
 				return err
 			}
-			matched = append(matched, issues...)
+			matchedIssues = append(matchedIssues, issues...)
 		}
 
 		for _, label := range requestedTerminal {
@@ -449,8 +456,10 @@ func (a *GitHubAdapter) FetchIssuesByStates(ctx context.Context, states []string
 			if err != nil {
 				return err
 			}
-			matched = append(matched, issues...)
+			matchedIssues = append(matchedIssues, issues...)
 		}
+
+		matched = matchedIssues
 		return nil
 	})
 	return matched, err
@@ -561,11 +570,14 @@ func (a *GitHubAdapter) fetchClosedIssuesByLabel(ctx context.Context, label stri
 // issue ID. Since ID and Identifier are both the issue number, this
 // delegates to [GitHubAdapter.fetchStatesByNumbers].
 func (a *GitHubAdapter) FetchIssueStatesByIDs(ctx context.Context, issueIDs []string) (map[string]string, error) {
-	states := make(map[string]string)
+	var states map[string]string
 	err := trackermetrics.Track(a.metrics, "fetch_states_by_ids", func() error {
-		var fetchErr error
-		states, fetchErr = a.fetchStatesByNumbers(ctx, issueIDs)
-		return fetchErr
+		fetchedStates, err := a.fetchStatesByNumbers(ctx, issueIDs)
+		if err != nil {
+			return err
+		}
+		states = fetchedStates
+		return nil
 	})
 	return states, err
 }
@@ -574,11 +586,14 @@ func (a *GitHubAdapter) FetchIssueStatesByIDs(ctx context.Context, issueIDs []st
 // requested issue identifier. Since ID and Identifier are both the
 // issue number, this delegates to [GitHubAdapter.fetchStatesByNumbers].
 func (a *GitHubAdapter) FetchIssueStatesByIdentifiers(ctx context.Context, identifiers []string) (map[string]string, error) {
-	states := make(map[string]string)
+	var states map[string]string
 	err := trackermetrics.Track(a.metrics, "fetch_states_by_identifiers", func() error {
-		var fetchErr error
-		states, fetchErr = a.fetchStatesByNumbers(ctx, identifiers)
-		return fetchErr
+		fetchedStates, err := a.fetchStatesByNumbers(ctx, identifiers)
+		if err != nil {
+			return err
+		}
+		states = fetchedStates
+		return nil
 	})
 	return states, err
 }
