@@ -100,7 +100,7 @@ func (a *OpenCodeAdapter) StartSession(_ context.Context, params domain.StartSes
 	}
 
 	return domain.Session{
-		ID:       params.WorkspacePath,
+		ID:       state.sessionID,
 		AgentPID: "",
 		Internal: state,
 	}, nil
@@ -449,7 +449,7 @@ func (a *OpenCodeAdapter) RunTurn(ctx context.Context, session domain.Session, p
 }
 
 // StopSession marks the session closed and terminates any active subprocess.
-func (a *OpenCodeAdapter) StopSession(_ context.Context, session domain.Session) error {
+func (a *OpenCodeAdapter) StopSession(ctx context.Context, session domain.Session) error {
 	state, ok := session.Internal.(*sessionState)
 	if !ok {
 		return &domain.AgentError{
@@ -461,19 +461,10 @@ func (a *OpenCodeAdapter) StopSession(_ context.Context, session domain.Session)
 	state.mu.Lock()
 	state.closed = true
 	active := state.active
+	state.active = nil
 	state.mu.Unlock()
 
-	if active == nil {
-		return nil
-	}
-
-	closeStop(active)
-	killTurnProcess(active)
-	<-active.readerDone
-	_ = waitForProcess(active)
-	clearActive(state, active)
-
-	return nil
+	return stopActiveTurn(ctx, active)
 }
 
 // EventStream returns nil because OpenCode events are delivered via the
@@ -693,6 +684,33 @@ func closeStop(runtime *turnRuntime) {
 	runtime.stopOnce.Do(func() {
 		close(runtime.stopCh)
 	})
+}
+
+func stopActiveTurn(ctx context.Context, runtime *turnRuntime) error {
+	if runtime == nil {
+		return nil
+	}
+
+	closeStop(runtime)
+	if runtime.proc == nil {
+		return nil
+	}
+
+	_ = procutil.SignalGraceful(runtime.proc.Pid) //nolint:errcheck // best-effort signal; process may already be dead
+
+	graceTimer := time.NewTimer(5 * time.Second)
+	defer stopTimer(graceTimer)
+
+	select {
+	case <-runtime.waitCh:
+		return nil
+	case <-graceTimer.C:
+		killTurnProcess(runtime)
+		return nil
+	case <-ctx.Done():
+		killTurnProcess(runtime)
+		return ctx.Err()
+	}
 }
 
 func killTurnProcess(runtime *turnRuntime) {

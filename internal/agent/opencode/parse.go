@@ -178,7 +178,7 @@ func queryExportUsage(ctx context.Context, state *sessionState) exportUsage {
 
 	managedEnv, err := buildManagedEnv(state.passthrough)
 	if err != nil {
-		state.logger().Warn("failed to build opencode export command", slog.Any("error", err))
+		state.logger().Warn("failed to build opencode managed environment", slog.Any("error", err))
 		return exportUsage{}
 	}
 

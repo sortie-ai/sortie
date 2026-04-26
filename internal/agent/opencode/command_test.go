@@ -2,7 +2,6 @@ package opencode
 
 import (
 	"encoding/json"
-	"errors"
 	"strings"
 	"testing"
 
@@ -482,6 +481,3 @@ func TestSSHRemoteCommand(t *testing.T) {
 		}
 	})
 }
-
-// Compile-time interface check.
-var _ = errors.New // keep errors imported if needed in future
