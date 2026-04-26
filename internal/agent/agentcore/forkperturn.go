@@ -39,9 +39,10 @@ const (
 // from within ParseLine (e.g. Claude Code).
 type ForkPerTurnHooks struct {
 	// BuildArgs is called once per RunTurn before the subprocess starts.
-	// turn is the 1-based call count for this session instance; it is
-	// incremented by the skeleton before calling BuildArgs. prompt is
-	// the rendered task prompt passed by the orchestrator.
+	// turn is the prospective 1-based turn number for this session
+	// instance. The skeleton commits it only after the subprocess starts
+	// successfully, so failed starts may pass the same turn value again.
+	// prompt is the rendered task prompt passed by the orchestrator.
 	//
 	// The adapter uses turn to decide session-continuation flags (e.g.
 	// --resume vs. --continue) and must not perform I/O here.
@@ -183,6 +184,15 @@ func NewForkPerTurnSession(
 		hooks:  hooks,
 		logger: logger,
 	}
+}
+
+// SetLogger replaces the logger used for future internal lifecycle and stderr
+// log records emitted by [RunTurn]. logger must be non-nil.
+func (s *ForkPerTurnSession) SetLogger(logger *slog.Logger) {
+	if logger == nil {
+		panic("agentcore: ForkPerTurnSession logger must be non-nil")
+	}
+	s.logger = logger
 }
 
 // RunTurn executes one agent turn. It forks a subprocess, scans its
