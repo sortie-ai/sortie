@@ -302,6 +302,44 @@ jobs:
       - name: Run integration tests
         run: go test -race -count=1 -v -timeout 300s -run 'Integration' ./internal/agent/codex/...
 
+  test-integration-opencode:
+    name: "Integration: OpenCode"
+    needs: [lint, test-unit]
+    runs-on: ubuntu-latest
+    env:
+      SORTIE_OPENCODE_TEST: "1"
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+    steps:
+      - name: Verify OpenCode secrets are configured
+        run: |
+          missing=()
+          [ -z "$ANTHROPIC_API_KEY" ] && missing+=("ANTHROPIC_API_KEY")
+          if [ ${#missing[@]} -ne 0 ]; then
+            echo "::error::Missing required secrets: ${missing[*]}"
+            echo "Configure these in Settings → Secrets and variables → Actions"
+            exit 1
+          fi
+          echo "✓ All OpenCode secrets are present"
+
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Set up Go
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version-file: go.mod
+
+      - name: Set up Node.js
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: "lts/*"
+
+      - name: Install OpenCode CLI
+        run: npm install -g opencode-ai
+
+      - name: Run integration tests
+        run: go test -race -count=1 -v -timeout 300s -run 'Integration' ./internal/agent/opencode/...
+
   release:
     name: Tag & Release
     needs:
@@ -313,6 +351,7 @@ jobs:
       - test-integration-claude
       - test-integration-copilot
       - test-integration-codex
+      - test-integration-opencode
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
