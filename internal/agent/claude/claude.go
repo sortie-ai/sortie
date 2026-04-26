@@ -53,6 +53,7 @@ type sessionState struct {
 	claudeSessionID string
 	isContinuation  bool
 	agentConfig     domain.AgentConfig
+	baseLogger      *slog.Logger
 
 	// mcpConfigPath is the worker-generated MCP config file path.
 	mcpConfigPath string
@@ -69,6 +70,19 @@ type sessionState struct {
 	apiCallStart     time.Time
 	emittedAPITiming bool
 	inFlight         *agentcore.ToolTracker
+}
+
+func (s *sessionState) logger() *slog.Logger {
+	if s.claudeSessionID == "" {
+		return s.baseLogger
+	}
+	return logging.WithSession(s.baseLogger, s.claudeSessionID)
+}
+
+func (s *sessionState) refreshForkLogger() {
+	if s.forkSession != nil {
+		s.forkSession.SetLogger(s.logger())
+	}
 }
 
 // NewClaudeCodeAdapter creates a [ClaudeCodeAdapter] from adapter
@@ -103,10 +117,9 @@ func (a *ClaudeCodeAdapter) StartSession(_ context.Context, params domain.StartS
 		claudeSessionID: sessionUUID,
 		isContinuation:  isContinuation,
 		agentConfig:     params.AgentConfig,
+		baseLogger:      slog.Default().With(slog.String("component", "claude-adapter")),
 		mcpConfigPath:   params.MCPConfigPath,
 	}
-
-	sessionLogger := logging.WithSession(slog.Default().With(slog.String("component", "claude-adapter")), sessionUUID)
 
 	hooks := agentcore.ForkPerTurnHooks{
 		BuildArgs: func(turn int, prompt string) []string {
@@ -126,6 +139,7 @@ func (a *ClaudeCodeAdapter) StartSession(_ context.Context, params domain.StartS
 				case "init":
 					if event.SessionID != "" {
 						state.claudeSessionID = event.SessionID
+						state.refreshForkLogger()
 					}
 					agentcore.EmitSessionStarted(emit, pid, state.claudeSessionID)
 					// The first API call is imminent. Start the monotonic timer.
@@ -263,7 +277,7 @@ func (a *ClaudeCodeAdapter) StartSession(_ context.Context, params domain.StartS
 
 			// No result event and exit code 0.
 			if state.acc.Snapshot().OutputTokens == 0 {
-				sessionLogger.Warn("agent exited without producing output, treating as failure")
+				state.logger().Warn("agent exited without producing output, treating as failure")
 				agentcore.EmitTurnFailed(emit, "agent exited without producing output", 0)
 				return domain.TurnResult{
 						SessionID:  state.claudeSessionID,
@@ -285,7 +299,7 @@ func (a *ClaudeCodeAdapter) StartSession(_ context.Context, params domain.StartS
 		EmitSessionStartID: nil, // Claude emits EventSessionStarted from ParseLine on "system/init"
 	}
 
-	state.forkSession = agentcore.NewForkPerTurnSession(&state.target, hooks, sessionLogger)
+	state.forkSession = agentcore.NewForkPerTurnSession(&state.target, hooks, state.logger())
 
 	return domain.Session{
 		ID:       sessionUUID,
@@ -308,6 +322,8 @@ func (a *ClaudeCodeAdapter) RunTurn(ctx context.Context, session domain.Session,
 			Message: fmt.Sprintf("unexpected session internal type %T", session.Internal),
 		}
 	}
+
+	state.refreshForkLogger()
 
 	// Reset per-turn scan state before delegation.
 	state.acc = agentcore.NewUsageAccumulator()

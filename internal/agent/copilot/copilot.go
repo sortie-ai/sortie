@@ -48,6 +48,7 @@ type sessionState struct {
 	target           agentcore.LaunchTarget
 	copilotSessionID string
 	agentConfig      domain.AgentConfig
+	baseLogger       *slog.Logger
 
 	// mcpConfigPath is the worker-generated MCP config file path.
 	mcpConfigPath string
@@ -65,6 +66,19 @@ type sessionState struct {
 	// to forkSession.
 	acc      *agentcore.UsageAccumulator
 	inFlight *agentcore.ToolTracker
+}
+
+func (s *sessionState) logger() *slog.Logger {
+	if s.copilotSessionID == "" {
+		return s.baseLogger
+	}
+	return logging.WithSession(s.baseLogger, s.copilotSessionID)
+}
+
+func (s *sessionState) refreshForkLogger() {
+	if s.forkSession != nil {
+		s.forkSession.SetLogger(s.logger())
+	}
 }
 
 // NewCopilotAdapter creates a [CopilotAdapter] from adapter
@@ -113,11 +127,9 @@ func (a *CopilotAdapter) StartSession(ctx context.Context, params domain.StartSe
 		target:           target,
 		copilotSessionID: copilotSessionID,
 		agentConfig:      params.AgentConfig,
+		baseLogger:       slog.Default().With(slog.String("component", "copilot-adapter")),
 		mcpConfigPath:    params.MCPConfigPath,
 	}
-
-	baseLogger := slog.Default().With(slog.String("component", "copilot-adapter"))
-	sessionLogger := logging.WithSession(baseLogger, copilotSessionID)
 
 	hooks := agentcore.ForkPerTurnHooks{
 		BuildArgs: func(turn int, prompt string) []string {
@@ -148,7 +160,7 @@ func (a *CopilotAdapter) StartSession(ctx context.Context, params domain.StartSe
 						})
 						agentcore.EmitNotification(emit, summarizeAssistantMessage(msgData))
 					} else {
-						sessionLogger.Debug("failed to parse assistant.message data", slog.Any("error", dataErr))
+						state.logger().Debug("failed to parse assistant.message data", slog.Any("error", dataErr))
 						agentcore.EmitNotification(emit, "assistant message")
 					}
 				}
@@ -191,7 +203,7 @@ func (a *CopilotAdapter) StartSession(ctx context.Context, params domain.StartSe
 						msg = warnData.Message
 					}
 				}
-				sessionLogger.Warn("copilot session warning", slog.String("message", msg))
+				state.logger().Warn("copilot session warning", slog.String("message", msg))
 				agentcore.EmitNotification(emit, msg)
 
 			case "session.info":
@@ -216,7 +228,7 @@ func (a *CopilotAdapter) StartSession(ctx context.Context, params domain.StartSe
 
 			case "session.mcp_server_status_changed", "session.mcp_servers_loaded",
 				"session.tools_updated", "user.message":
-				sessionLogger.Debug("copilot event logged only", slog.String("event_type", event.Type))
+				state.logger().Debug("copilot event logged only", slog.String("event_type", event.Type))
 
 			case "result":
 				captured := event
@@ -241,6 +253,7 @@ func (a *CopilotAdapter) StartSession(ctx context.Context, params domain.StartSe
 			if lastResult != nil && lastResult.SessionID != "" {
 				state.copilotSessionID = lastResult.SessionID
 				state.fallbackToContinue = false
+				state.refreshForkLogger()
 			} else if state.copilotSessionID == "" {
 				// No result event and no session ID from a prior turn.
 				// Use --continue on the next turn to resume the most recent
@@ -255,7 +268,7 @@ func (a *CopilotAdapter) StartSession(ctx context.Context, params domain.StartSe
 				var apiDurationMS int64
 				if lastResult.Usage != nil {
 					apiDurationMS = lastResult.Usage.TotalAPIDurMS
-					logging.WithSession(baseLogger, state.copilotSessionID).Info("copilot turn completed",
+					state.logger().Info("copilot turn completed",
 						slog.Int64("premium_requests", lastResult.Usage.PremiumRequests))
 				}
 
@@ -294,7 +307,7 @@ func (a *CopilotAdapter) StartSession(ctx context.Context, params domain.StartSe
 
 			// No result event and exit code 0.
 			if state.acc.Snapshot().OutputTokens == 0 {
-				sessionLogger.Warn("agent exited without producing output, treating as failure")
+				state.logger().Warn("agent exited without producing output, treating as failure")
 				agentcore.EmitTurnFailed(emit, "agent exited without producing output", 0)
 				return domain.TurnResult{
 						SessionID:  state.copilotSessionID,
@@ -319,7 +332,7 @@ func (a *CopilotAdapter) StartSession(ctx context.Context, params domain.StartSe
 		EmitSessionStartID: func() string { return state.copilotSessionID },
 	}
 
-	state.forkSession = agentcore.NewForkPerTurnSession(&state.target, hooks, sessionLogger)
+	state.forkSession = agentcore.NewForkPerTurnSession(&state.target, hooks, state.logger())
 
 	return domain.Session{
 		ID:       copilotSessionID,
@@ -368,6 +381,8 @@ func (a *CopilotAdapter) RunTurn(ctx context.Context, session domain.Session, pa
 	if !ok {
 		return domain.TurnResult{}, fmt.Errorf("unexpected session internal type %T", session.Internal)
 	}
+
+	state.refreshForkLogger()
 
 	// Reset per-turn scan state before delegation.
 	state.acc = agentcore.NewUsageAccumulator()
