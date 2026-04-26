@@ -3,9 +3,15 @@
 > OpenCode CLI v1.14.25 (`opencode`, npm `opencode-ai`), researched April 2026.
 > Reference for implementing the OpenCode `AgentAdapter`.
 >
-> Primary sources: [CLI docs][cli-docs], [permissions docs][permissions-docs], [providers docs][providers-docs], [server docs][server-docs], [plugin events docs][plugins-docs], [run command source][run-src], [permission event source][permission-src], [SDK v2 types][sdk-v2-types], [published README][readme-src], and local probes of `npx -y opencode-ai@latest` v1.14.25 on Linux on 2026-04-26.
+> Primary sources, rendered docs: [CLI docs][cli-docs], [permissions docs][permissions-docs], [providers docs][providers-docs], [server docs][server-docs], [plugin events docs][plugins-docs].
 >
-> Source links below mostly point at OpenCode's `dev` branch. When shipped v1.14.25 behavior differs from docs or source, this note calls that drift out explicitly.
+> Primary sources, raw docs markdown (the underlying authoring files): [`cli.mdx`][cli-docs-src], [`permissions.mdx`][permissions-docs-src].
+>
+> Primary sources, source code: [`run.ts`][run-src], [`permission/index.ts`][permission-src], [`config/permission.ts`][permission-config-src], [`config/config.ts`][config-src], [`flag/flag.ts`][flag-src], [SDK v2 types][sdk-v2-types], [published README][readme-src].
+>
+> Local validation: probes of `npx -y opencode-ai@latest` v1.14.25 on Linux on 2026-04-26.
+>
+> All source-code and raw-docs links below point at the `v1.14.25` tag — the exact version this note was validated against. Tags are immutable, so quoted code and line numbers stay correct. The rendered public docs at `opencode.ai/docs/...` track the latest published documentation and may move ahead of v1.14.25; where rendered docs and v1.14.25 source disagree, this note calls the drift out explicitly.
 
 ## Overview
 
@@ -61,13 +67,22 @@ OpenCode does not have a single vendor-specific auth flow. It delegates model ac
 
 ### Adapter-relevant environment variables
 
-| Variable | Purpose | Notes |
-| -------- | ------- | ----- |
-| `OPENCODE_CONFIG` / `OPENCODE_CONFIG_DIR` / `OPENCODE_CONFIG_CONTENT` | Point OpenCode at a config file, config directory, or inline JSON config | Useful when Sortie wants to inject provider or permission config without mutating the repo.[cli-docs] |
-| `OPENCODE_PERMISSION` | Inline JSON permission config | Complements `--dangerously-skip-permissions`.[cli-docs][permissions-docs] |
-| `OPENCODE_SERVER_PASSWORD` / `OPENCODE_SERVER_USERNAME` | Basic auth for `serve` and `web`; also used by `run --attach` when `--password` is omitted | [server-docs][cli-docs][run-src] |
-| `OPENCODE_DISABLE_DEFAULT_PLUGINS` | Disable default plugins | Reduces implicit behavior in headless runs.[cli-docs] |
-| `OPENCODE_DISABLE_CLAUDE_CODE`, `OPENCODE_DISABLE_CLAUDE_CODE_PROMPT`, `OPENCODE_DISABLE_CLAUDE_CODE_SKILLS` | Disable loading `.claude` prompt and skills content | Relevant if Sortie needs strict prompt isolation.[cli-docs] |
+The full env var surface is documented in [`cli.mdx`][cli-docs-src] and exposed via [`flag.ts`][flag-src]. The subset below is the one relevant to a deterministic, unattended adapter; bold rows are security- or determinism-critical and should be set explicitly by the adapter rather than left to inherited shell state.
+
+| Variable | Type | Purpose | Adapter notes |
+| -------- | ---- | ------- | ------------- |
+| `OPENCODE_CONFIG` / `OPENCODE_CONFIG_DIR` / `OPENCODE_CONFIG_CONTENT` | string | Point OpenCode at a config file, directory, or inline JSON config | Useful when Sortie wants to inject provider or permission config without mutating the repo.[cli-docs] |
+| **`OPENCODE_PERMISSION`** | string | Inline JSON permission config; `JSON.parse`d and **deep-merged** into the resolved `opencode.json` `permission` field at startup, not replacing it.[config-src] | See "OPENCODE_PERMISSION env var format" below. The adapter must remove any inherited value before setting its own, otherwise an operator-side `OPENCODE_PERMISSION` contaminates the merged result.[cli-docs][permissions-docs] |
+| **`OPENCODE_AUTO_SHARE`** | boolean | When truthy, sessions are automatically shared on completion | Adapter should set explicitly to `false` to prevent operator shells leaking session URLs into Sortie runs.[cli-docs][flag-src] |
+| **`OPENCODE_DISABLE_AUTOUPDATE`** | boolean | Disable self-update | Set `true` for CI, container, and pinned-version environments.[cli-docs][flag-src] |
+| **`OPENCODE_DISABLE_AUTOCOMPACT`** | boolean | Disable automatic context compaction between steps | Set `true` when token accounting via `opencode export` must reflect what the adapter actually saw on stdout. Otherwise compaction rewrites prior turns and changes export totals.[cli-docs][flag-src] |
+| **`OPENCODE_DISABLE_LSP_DOWNLOAD`** | boolean | Disable automatic LSP server downloads | Set `true` for air-gapped and CI environments where outbound network access is restricted.[cli-docs][flag-src] |
+| `OPENCODE_DISABLE_MODELS_FETCH` | boolean | Disable fetching the Models.dev catalogue | Useful for fully offline runs.[cli-docs][flag-src] |
+| `OPENCODE_DISABLE_PRUNE` | boolean | Disable storage pruning of old data | Relevant only if the adapter relies on long-term local session history.[cli-docs][flag-src] |
+| `OPENCODE_DISABLE_DEFAULT_PLUGINS` | boolean | Disable default plugins | Reduces implicit behavior in headless runs.[cli-docs][flag-src] |
+| `OPENCODE_DISABLE_CLAUDE_CODE`, `OPENCODE_DISABLE_CLAUDE_CODE_PROMPT`, `OPENCODE_DISABLE_CLAUDE_CODE_SKILLS` | boolean | Disable reading `.claude` prompt and skills content | Setting `OPENCODE_DISABLE_CLAUDE_CODE=true` implies the other two via `flag.ts` derivation; setting `OPENCODE_DISABLE_CLAUDE_CODE_SKILLS=true` also implies `OPENCODE_DISABLE_EXTERNAL_SKILLS=true`.[cli-docs][flag-src] |
+| `OPENCODE_ENABLE_QUESTION_TOOL` | boolean | Enable the `question` tool (which surfaces an interactive question to the user) | Should remain off for unattended use; complements the `question` permission.[cli-docs][flag-src] |
+| `OPENCODE_SERVER_PASSWORD` / `OPENCODE_SERVER_USERNAME` | string | Basic auth for `serve` and `web`; also used by `run --attach` when `--password` is omitted | [server-docs][cli-docs][run-src] |
 
 ## Relevant CLI commands and flags
 
@@ -129,7 +144,7 @@ Shared network options define `port` with a default of `0`, but both the Node an
 | Command | Use |
 | ------- | --- |
 | `opencode session list --format json -n N` | Enumerate recent sessions. The observed output is newest-first. Observed locally in v1.14.25. |
-| `opencode export [sessionID]` | Export session data as JSON. Useful for offline debugging or fixtures.[cli-docs] |
+| `opencode export [sessionID] [--sanitize]` | Export session data as JSON. Without arguments, exports the most recent session in the current directory; with `sessionID`, exports that exact session. The `--sanitize` flag redacts sensitive transcript and file data, suitable when the adapter uses `export` to recover authoritative token usage without leaking tool-output bodies into logs. Observed locally in v1.14.25.[cli-docs] |
 | `opencode providers list` | Enumerate configured provider credentials. This is the primary command name in shipped root help and in `providers --help`. Observed locally in v1.14.25. |
 | `opencode auth list` | Alias for `providers list`. The docs still use `auth`, and `auth --help` keeps `auth`-prefixed subcommands under an `opencode providers` header. Observed locally in v1.14.25. |
 
@@ -171,7 +186,7 @@ OpenCode permission control is config-driven. Each rule resolves to `allow`, `as
 
 ### Permission keys
 
-Documented tool and safety keys include:[permissions-docs]
+The [`permissions.mdx`][permissions-docs-src] page (rendered as the [public permissions docs][permissions-docs]) documents 14 tool and safety keys:
 
 - `read`
 - `edit`
@@ -188,6 +203,8 @@ Documented tool and safety keys include:[permissions-docs]
 - `external_directory`
 - `doom_loop`
 
+The runtime schema in [`config/permission.ts`][permission-config-src] (v1.14.25) explicitly declares two more keys not surfaced by the docs page — `list` and `todowrite` — and accepts any additional string key through a `Schema.StructWithRest` catchall. In practice this means OpenCode validates more permission keys than the public documentation lists. Adapters that whitelist keys strictly against the 14 documented ones will reject configurations that OpenCode itself accepts; adapters that pass keys through verbatim stay compatible with both the documented and the undocumented surface as the schema evolves.
+
 ### Defaults
 
 The documented defaults are:[permissions-docs]
@@ -197,7 +214,44 @@ The documented defaults are:[permissions-docs]
 | Most tools | `allow` |
 | `external_directory` | `ask` |
 | `doom_loop` | `ask` |
-| `read` on `.env*` files | `deny`, except `.env.example` |
+| `read` on env files | `deny` for `*.env` and `*.env.*`; `allow` for `*.env.example` (rule order matters; last matching pattern wins).[permissions-docs] |
+
+### `OPENCODE_PERMISSION` env var format
+
+OpenCode loads `OPENCODE_PERMISSION` at config-merge time, in [`config/config.ts` lines 656-658](https://github.com/anomalyco/opencode/blob/v1.14.25/packages/opencode/src/config/config.ts#L656-L658):
+
+```ts
+if (Flag.OPENCODE_PERMISSION) {
+  result.permission = mergeDeep(result.permission ?? {}, JSON.parse(Flag.OPENCODE_PERMISSION))
+}
+```
+
+Two consequences for adapters:
+
+1. The value is parsed as JSON and must conform to the same schema as the `permission` field in `opencode.json`, defined in [`config/permission.ts`][permission-config-src].
+2. The result is **deep-merged** into the resolved `opencode.json` `permission`, not used as a replacement. An adapter-supplied policy stacks on top of any operator-side `permission` block instead of overriding it.
+
+Three accepted forms (all valid for `opencode.json` `permission` and therefore valid for `OPENCODE_PERMISSION` as JSON-encoded values):
+
+1. **Shorthand string** — applied to all keys via `*` normalization (`"allow"` becomes `{"*":"allow"}` internally):
+   ```bash
+   OPENCODE_PERMISSION='"deny"'
+   ```
+2. **Flat key→action map** (most common adapter form):
+   ```bash
+   OPENCODE_PERMISSION='{"read":"allow","edit":"deny","bash":"deny","external_directory":"deny"}'
+   ```
+3. **Granular key→{pattern→action} map** (when path/argument scoping matters):
+   ```bash
+   OPENCODE_PERMISSION='{"bash":{"git *":"allow","rm *":"deny","*":"deny"}}'
+   ```
+
+Action values are `"allow" | "ask" | "deny"` (see [`config/permission.ts`][permission-config-src]). Pattern syntax: `*` matches zero or more characters, `?` exactly one, `~` and `$HOME` expand to the user home; rules are evaluated by pattern match with the **last matching rule winning** (see [`permissions.mdx`][permissions-docs-src]).
+
+**Adapter implication for unattended use.** Because the value is merged rather than replaced, the adapter must:
+
+- Remove any inherited `OPENCODE_PERMISSION` from the parent environment before launching `opencode run`, otherwise the operator's value pre-pollutes the merge result.
+- Cover every key the adapter cares about explicitly in its own policy. Keys absent from the adapter's JSON fall through to whatever the operator's `~/.config/opencode/opencode.json` declares, or to OpenCode defaults.
 
 ### Headless behavior of `run`
 
@@ -207,6 +261,8 @@ The documented defaults are:[permissions-docs]
 | --------- | ------------ |
 | `--dangerously-skip-permissions` set | Reply `once` to permission requests that are not explicitly denied |
 | No bypass flag | Print a human warning and reply `reject` |
+
+The full `Reply` schema accepts `once | always | reject`; `run.ts` only emits `once` and `reject`, so the third value (`always`, which would whitelist a tool's suggested patterns for the rest of the session) is not reachable through `opencode run`.[permission-src]
 
 Observed with v1.14.25:
 
@@ -388,10 +444,12 @@ If Sortie wants maximum symmetry with the existing Claude/Copilot launch-per-tur
 | ----- | -------- | ------------------------ | ------ |
 | Auth command name | `opencode auth ...` | Root help promotes `opencode providers ...`; `auth` remains an alias, and alias help still renders `auth` subcommands under an `opencode providers` header | Low; parser should not depend on human help text |
 | Network port default wording | Server docs describe `4096` | Shared CLI options expose `0` in help/config, while the Bun/Node adapters treat `0` as "try `4096` first, then fall back to an ephemeral port" | High for `--attach`; always set `--port` explicitly |
-| `run --format json` | "raw JSON events" | CLI-emitted projection from `run.ts`, not raw SSE | High for adapters |
+| `run --format json` | "raw JSON events" | CLI-emitted projection from [`run.ts`][run-src], not raw SSE | High for adapters |
 | Permissions in JSON mode | Not called out | Permission rejection prints a plain-text warning to stdout before JSON | High for parsers |
 | Exit codes | Not documented | Observed logical failure with exit code `0` | High for failure handling |
 | `--pure` flag | Not on docs page | Present in shipped help output | Medium for deterministic runs |
+| Permission keys | [`permissions.mdx`][permissions-docs-src] lists 14 keys | [`config/permission.ts`][permission-config-src] schema explicitly accepts 16 (adds `list`, `todowrite`) and any other string key via a `StructWithRest` catchall | Medium; adapters that strictly whitelist against the documented set break on configurations OpenCode itself accepts |
+| `OPENCODE_PERMISSION` precedence | Listed in env-var table, no merge semantics specified | [`config/config.ts` lines 656-658](https://github.com/anomalyco/opencode/blob/v1.14.25/packages/opencode/src/config/config.ts#L656-L658) call `mergeDeep(opencode.json.permission, JSON.parse(env))` — env var stacks on top of operator config, never replaces it | High; adapter must scrub inherited value and cover every key it cares about, otherwise operator-side policy bleeds in |
 
 [cli-docs]: https://opencode.ai/docs/cli/
 [permissions-docs]: https://opencode.ai/docs/permissions/
@@ -399,10 +457,15 @@ If Sortie wants maximum symmetry with the existing Claude/Copilot launch-per-tur
 [server-docs]: https://opencode.ai/docs/server/
 [sdk-docs]: https://opencode.ai/docs/sdk/
 [plugins-docs]: https://opencode.ai/docs/plugins/
-[readme-src]: https://github.com/anomalyco/opencode/blob/dev/README.md
-[network-src]: https://github.com/anomalyco/opencode/blob/dev/packages/opencode/src/cli/network.ts
-[run-src]: https://github.com/anomalyco/opencode/blob/dev/packages/opencode/src/cli/cmd/run.ts
-[node-adapter-src]: https://github.com/anomalyco/opencode/blob/dev/packages/opencode/src/server/adapter.node.ts
-[bun-adapter-src]: https://github.com/anomalyco/opencode/blob/dev/packages/opencode/src/server/adapter.bun.ts
-[permission-src]: https://github.com/anomalyco/opencode/blob/dev/packages/opencode/src/permission/index.ts
-[sdk-v2-types]: https://github.com/anomalyco/opencode/blob/dev/packages/sdk/js/src/v2/gen/types.gen.ts
+[readme-src]: https://github.com/anomalyco/opencode/blob/v1.14.25/README.md
+[network-src]: https://github.com/anomalyco/opencode/blob/v1.14.25/packages/opencode/src/cli/network.ts
+[run-src]: https://github.com/anomalyco/opencode/blob/v1.14.25/packages/opencode/src/cli/cmd/run.ts
+[node-adapter-src]: https://github.com/anomalyco/opencode/blob/v1.14.25/packages/opencode/src/server/adapter.node.ts
+[bun-adapter-src]: https://github.com/anomalyco/opencode/blob/v1.14.25/packages/opencode/src/server/adapter.bun.ts
+[permission-src]: https://github.com/anomalyco/opencode/blob/v1.14.25/packages/opencode/src/permission/index.ts
+[permission-config-src]: https://github.com/anomalyco/opencode/blob/v1.14.25/packages/opencode/src/config/permission.ts
+[config-src]: https://github.com/anomalyco/opencode/blob/v1.14.25/packages/opencode/src/config/config.ts
+[flag-src]: https://github.com/anomalyco/opencode/blob/v1.14.25/packages/opencode/src/flag/flag.ts
+[cli-docs-src]: https://github.com/anomalyco/opencode/blob/v1.14.25/packages/web/src/content/docs/cli.mdx
+[permissions-docs-src]: https://github.com/anomalyco/opencode/blob/v1.14.25/packages/web/src/content/docs/permissions.mdx
+[sdk-v2-types]: https://github.com/anomalyco/opencode/blob/v1.14.25/packages/sdk/js/src/v2/gen/types.gen.ts
