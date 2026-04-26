@@ -166,13 +166,14 @@ func (a *JiraAdapter) FetchIssueByID(ctx context.Context, issueID string) (domai
 			}
 		}
 
-		issue = normalizeSearchIssue(a.endpoint, ji)
+		fetchedIssue := normalizeSearchIssue(a.endpoint, ji)
 
 		comments, err := a.fetchComments(ctx, issueID)
 		if err != nil {
 			return err
 		}
-		issue.Comments = comments
+		fetchedIssue.Comments = comments
+		issue = fetchedIssue
 		return nil
 	})
 	return issue, err
@@ -205,8 +206,9 @@ func (a *JiraAdapter) FetchIssueStatesByIDs(ctx context.Context, issueIDs []stri
 		return map[string]string{}, nil
 	}
 
-	statesByID := make(map[string]string, len(issueIDs))
+	var statesByID map[string]string
 	err := trackermetrics.Track(a.metrics, "fetch_states_by_ids", func() error {
+		fetchedStates := make(map[string]string, len(issueIDs))
 		for start := 0; start < len(issueIDs); start += batchSize {
 			if ctx.Err() != nil {
 				return ctx.Err()
@@ -225,9 +227,10 @@ func (a *JiraAdapter) FetchIssueStatesByIDs(ctx context.Context, issueIDs []stri
 				return err
 			}
 			for _, iss := range issues {
-				statesByID[iss.ID] = iss.State
+				fetchedStates[iss.ID] = iss.State
 			}
 		}
+		statesByID = fetchedStates
 		return nil
 	})
 	return statesByID, err
@@ -243,8 +246,9 @@ func (a *JiraAdapter) FetchIssueStatesByIdentifiers(ctx context.Context, identif
 		return map[string]string{}, nil
 	}
 
-	statesByKey := make(map[string]string, len(identifiers))
+	var statesByKey map[string]string
 	err := trackermetrics.Track(a.metrics, "fetch_states_by_identifiers", func() error {
+		fetchedStates := make(map[string]string, len(identifiers))
 		for start := 0; start < len(identifiers); start += batchSize {
 			if ctx.Err() != nil {
 				return ctx.Err()
@@ -259,9 +263,10 @@ func (a *JiraAdapter) FetchIssueStatesByIdentifiers(ctx context.Context, identif
 				return err
 			}
 			for _, iss := range issues {
-				statesByKey[iss.Identifier] = iss.State
+				fetchedStates[iss.Identifier] = iss.State
 			}
 		}
+		statesByKey = fetchedStates
 		return nil
 	})
 	return statesByKey, err
