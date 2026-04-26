@@ -2,6 +2,7 @@ package main
 
 import (
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -341,6 +342,22 @@ func TestSampleWorkflowOpenCodeExtension(t *testing.T) {
 	}
 	if v, _ := opencodeCfg["disable_autocompact"].(bool); !v {
 		t.Error("opencode extension 'disable_autocompact' must be true")
+	}
+	allowedTools, ok := opencodeCfg["allowed_tools"].([]any)
+	if !ok {
+		t.Fatal("opencode extension missing 'allowed_tools' list")
+	}
+	gotAllowedTools := make([]string, 0, len(allowedTools))
+	for _, tool := range allowedTools {
+		name, ok := tool.(string)
+		if !ok {
+			t.Fatalf("allowed tool type = %T, want string", tool)
+		}
+		gotAllowedTools = append(gotAllowedTools, name)
+	}
+	wantAllowedTools := []string{"read", "glob", "grep", "edit", "bash"}
+	if !slices.Equal(gotAllowedTools, wantAllowedTools) {
+		t.Errorf("opencode extension allowed_tools = %v, want %v", gotAllowedTools, wantAllowedTools)
 	}
 
 	agent, ok := wf.Config["agent"].(map[string]any)
