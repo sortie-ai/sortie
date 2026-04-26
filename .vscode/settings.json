@@ -10,7 +10,7 @@
   "explorer.fileNesting.enabled": true,
   "explorer.fileNesting.expand": false,
   "explorer.fileNesting.patterns": {
-    "*.go": "${capture}_test.go, ${capture}_integration_test.go",
+    "*.go": "${capture}_test.go, ${capture}_unix_test.go, ${capture}_integration_test.go",
     "go.mod": "go.sum",
     "codecov.yml": "coverage.*",
     ".env": ".env.*",

@@ -1,0 +1,3 @@
+{"type":"step_start","timestamp":1777197450000,"sessionID":"ses_abc123","part":{"id":"prt_r01","messageID":"msg_r01","sessionID":"ses_abc123","snapshot":"","type":"step-start"}}
+{"type":"text","timestamp":1777197450100,"sessionID":"ses_abc123","part":{"id":"prt_r02","messageID":"msg_r01","sessionID":"ses_abc123","type":"text","text":"Resuming work.","time":{"start":1777197450050,"end":1777197450090}}}
+{"type":"step_finish","timestamp":1777197450200,"sessionID":"ses_abc123","part":{"id":"prt_r03","reason":"stop","messageID":"msg_r01","sessionID":"ses_abc123","type":"step-finish","tokens":{"total":800,"input":700,"output":100},"cost":0}}

@@ -8,6 +8,7 @@ import (
 	// Trigger adapter init() registrations.
 	_ "github.com/sortie-ai/sortie/internal/agent/claude"
 	_ "github.com/sortie-ai/sortie/internal/agent/mock"
+	_ "github.com/sortie-ai/sortie/internal/agent/opencode"
 	_ "github.com/sortie-ai/sortie/internal/scm/github"
 	_ "github.com/sortie-ai/sortie/internal/tracker/file"
 	_ "github.com/sortie-ai/sortie/internal/tracker/jira"
@@ -73,6 +74,11 @@ func TestAdapterMeta_RealRegistrations(t *testing.T) {
 			{
 				name:        "claude-code requires command",
 				kind:        "claude-code",
+				wantCommand: true,
+			},
+			{
+				name:        "opencode requires command",
+				kind:        "opencode",
 				wantCommand: true,
 			},
 			{

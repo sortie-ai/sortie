@@ -1,0 +1,10 @@
+{
+  "messages": [
+    {
+      "info": {
+        "role": "assistant",
+        "sessionID": "ses_abc123"
+      }
+    }
+  ]
+}

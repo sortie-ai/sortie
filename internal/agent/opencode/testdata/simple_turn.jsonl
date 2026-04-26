@@ -1,0 +1,3 @@
+{"type":"step_start","timestamp":1777197446593,"sessionID":"ses_abc123","part":{"id":"prt_001","messageID":"msg_001","sessionID":"ses_abc123","snapshot":"45865d3017876fc42b80fa16e317d109a7008c30","type":"step-start"}}
+{"type":"text","timestamp":1777197446597,"sessionID":"ses_abc123","part":{"id":"prt_002","messageID":"msg_001","sessionID":"ses_abc123","type":"text","text":"Hello, world!","time":{"start":1777197446595,"end":1777197446596}}}
+{"type":"step_finish","timestamp":1777197446660,"sessionID":"ses_abc123","part":{"id":"prt_003","reason":"stop","messageID":"msg_001","sessionID":"ses_abc123","type":"step-finish","tokens":{"total":16267,"input":14406,"output":21,"reasoning":0,"cache":{"write":0,"read":1840}},"cost":0}}
