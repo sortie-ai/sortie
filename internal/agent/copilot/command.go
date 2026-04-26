@@ -46,7 +46,7 @@ func parsePassthroughConfig(config map[string]any) passthroughConfig {
 // buildArgs constructs the CLI argument slice for a Copilot CLI
 // invocation. The arguments are passed directly to exec.Command,
 // avoiding shell interpolation.
-func buildArgs(state *sessionState, prompt string, pt passthroughConfig) []string {
+func buildArgs(state *sessionState, turn int, prompt string, pt passthroughConfig) []string { //nolint:unparam // turn mirrors the ForkPerTurnHooks.BuildArgs signature; copilot tracks sessions via state fields
 	args := []string{
 		"-p", prompt,
 		"--output-format", "json",
