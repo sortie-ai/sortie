@@ -156,7 +156,8 @@ Sortie is organized into these layers:
    - API calls and normalization for tracker data; session lifecycle for agent runtimes; CI
      pipeline status queries; PR review comment fetching.
    - Multiple adapters per dimension: tracker adapters (Jira, GitHub, …), agent adapters
-     (Claude Code, Codex, …), CI status providers (GitHub Checks, …), and SCM adapters
+     (Claude Code, Copilot CLI, Codex CLI, OpenCode CLI, …), CI status providers
+     (GitHub Checks, …), and SCM adapters
      (GitHub, …).
 
 6. `Observability Layer` (logs + status surface)
@@ -536,7 +537,8 @@ Fields:
 
 - `kind` (string)
   - Specifies which agent adapter to use. Default: `claude-code`.
-  - Other supported values: `codex`, `http`, and any additionally registered adapter.
+  - Other supported values: `copilot-cli`, `codex`, `opencode`, `http`, and any
+    additionally registered adapter.
   - Parallels `tracker.kind`.
 - `command` (string shell command)
   - The command the agent adapter uses to launch the agent process. Adapter-defined default.
@@ -572,8 +574,9 @@ Adapter-specific pass-through config:
 Each adapter may define its own configuration fields in a sub-object named after its `kind`
 value. These are pass-through values interpreted by the adapter and not by the orchestrator
 core. For example, a Codex adapter may accept `codex.approval_policy` and
-`codex.thread_sandbox`; a Claude Code adapter may accept `claude-code.permission_mode`.
-The orchestrator forwards the entire sub-object to the adapter without validation.
+`codex.thread_sandbox`; a Claude Code adapter may accept `claude-code.permission_mode`; an
+OpenCode adapter may accept `opencode.variant` and `opencode.allowed_tools`. The
+orchestrator forwards the entire sub-object to the adapter without validation.
 
 #### 5.3.6 `ci_feedback` (object, optional, **deprecated**)
 
@@ -1413,6 +1416,21 @@ An agent adapter must implement the following operations:
 - `EventStream() -> <event channel>`
   - Optional: adapters that push events asynchronously may expose an event channel.
 
+Built-in agent adapter kinds:
+
+- `claude-code`, `copilot-cli`, `codex`, and `opencode` are built-in agent adapter kinds.
+- `claude-code`, `copilot-cli`, and `opencode` use one local subprocess per turn.
+- `codex` uses one persistent local subprocess per session.
+
+Built-in adapter summary:
+
+| Kind | Session model | Event surface | Resume and identity | Notable differences |
+|---|---|---|---|---|
+| `claude-code` | One subprocess per turn | Newline-delimited JSON from `claude -p --output-format stream-json --verbose` | New sessions use `--session-id`; continuation turns use `--resume`; runtime `session_id` may replace the provisional adapter-generated ID | Token usage is normalized from streamed assistant and result events. |
+| `copilot-cli` | One subprocess per turn | Newline-delimited JSON from `copilot -p --output-format json -s --autopilot --no-ask-user` | Uses `--resume <session_id>` when a session ID is known; falls back to `--continue` when a prior result omitted `sessionId` | Session identity is captured from the terminal `result` event rather than a start event. |
+| `codex` | One persistent `codex app-server` subprocess per session | JSON-RPC 2.0 over stdio | `ResumeSessionID` maps to `thread/resume`; otherwise the adapter starts a new thread; thread ID is the session ID | Turns are started inside the persistent session with `turn/start`; tool and approval handling are part of the app-server protocol. |
+| `opencode` | One subprocess per turn | Line-delimited JSON from `opencode run --format json --dir <workspace>` | `ResumeSessionID` maps to `--session <session_id>`; the first observed `sessionID` becomes the session ID; a mismatch is `turn_ended_with_error` | The adapter maps `opencode.model`, `opencode.agent`, `opencode.variant`, `opencode.thinking`, `opencode.pure`, and `opencode.dangerously_skip_permissions` to CLI flags; parses `step_start`, `text`, `reasoning`, `tool_use`, `step_finish`, and `error`; maps plain-text permission warnings to `notification` and unknown output to `malformed`; recovers final token usage with `opencode export --sanitize <session_id>`; maps logical `error` events to `turn_failed` even when the process exits with status `0`. |
+
 ### 10.2 Session Lifecycle
 
 The orchestrator interacts with an agent session as follows:
@@ -1669,7 +1687,8 @@ Note:
 ### 10.7 Local Subprocess Launch Contract
 
 This subsection applies only to adapters that launch a local subprocess (e.g., Claude Code,
-Copilot CLI). HTTP-based and remote adapters define their own connection semantics.
+Copilot CLI, OpenCode CLI, and the Codex app-server). HTTP-based and remote adapters define
+their own connection semantics.
 
 When `agent.kind` requires a local subprocess:
 
