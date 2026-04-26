@@ -164,6 +164,9 @@ func TestStartSession_ResumeSession(t *testing.T) {
 	if state.sessionID != resumeID {
 		t.Errorf("sessionID = %q, want %q", state.sessionID, resumeID)
 	}
+	if session.ID != resumeID {
+		t.Errorf("session.ID = %q, want %q", session.ID, resumeID)
+	}
 }
 
 func TestRunTurn_WrongInternalType(t *testing.T) {
@@ -311,6 +314,73 @@ func TestStopSession_NoActiveTurn(t *testing.T) {
 	// Double stop should also return nil.
 	if err := a.StopSession(context.Background(), session); err != nil {
 		t.Fatalf("StopSession() second call error = %v, want nil", err)
+	}
+}
+
+func TestStopSession_ContextDeadline(t *testing.T) {
+	t.Parallel()
+
+	testCtx, testCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer testCancel()
+
+	tmpDir := t.TempDir()
+	script := writeOpenCodeScript(t, tmpDir, `case "$1" in
+  export) echo '{"messages":[]}'; exit 0;;
+esac
+trap '' TERM
+printf '{"type":"step_start","timestamp":1000,"sessionID":"ses_abc123","part":{"id":"p1","messageID":"m1","sessionID":"ses_abc123","snapshot":"","type":"step-start"}}\n'
+while :; do sleep 1; done`)
+
+	a, _ := NewOpenCodeAdapter(map[string]any{})
+	session, err := a.StartSession(testCtx, domain.StartSessionParams{
+		WorkspacePath: tmpDir,
+		AgentConfig:   domain.AgentConfig{Command: script},
+	})
+	if err != nil {
+		t.Fatalf("StartSession() error = %v", err)
+	}
+
+	gotEvent := make(chan struct{}, 1)
+	resultCh := make(chan domain.TurnResult, 1)
+	errCh := make(chan error, 1)
+	go func() {
+		result, runErr := a.RunTurn(context.Background(), session, domain.RunTurnParams{
+			Prompt: "work",
+			OnEvent: func(_ domain.AgentEvent) {
+				select {
+				case gotEvent <- struct{}{}:
+				default:
+				}
+			},
+		})
+		resultCh <- result
+		errCh <- runErr
+	}()
+
+	select {
+	case <-gotEvent:
+	case <-testCtx.Done():
+		t.Fatal("timed out waiting for first event")
+	}
+
+	stopCtx, stopCancel := context.WithTimeout(testCtx, 50*time.Millisecond)
+	defer stopCancel()
+
+	err = a.StopSession(stopCtx, session)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("StopSession() error = %v, want %v", err, context.DeadlineExceeded)
+	}
+
+	select {
+	case result := <-resultCh:
+		if result.ExitReason != domain.EventTurnCancelled {
+			t.Errorf("ExitReason = %q, want %q", result.ExitReason, domain.EventTurnCancelled)
+		}
+		if runErr := <-errCh; runErr != nil {
+			t.Errorf("RunTurn() error = %v, want nil", runErr)
+		}
+	case <-testCtx.Done():
+		t.Fatal("RunTurn did not return after StopSession timeout")
 	}
 }
 
