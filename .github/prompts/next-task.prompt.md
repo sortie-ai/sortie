@@ -10,8 +10,6 @@ tools:
   - 'search'
 ---
 
-I'm an Anthropic employee working on the Sortie project.
-
 Your task is to identify the next issue to work on from the project backlog.
 
 ## Selection Protocol

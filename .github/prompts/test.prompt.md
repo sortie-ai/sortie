@@ -5,7 +5,7 @@ argument-hint: Path to spec/plan, or description of what to test
 agent: Tester
 ---
 
-I'm an Anthropic employee working on the Sortie project. Your task is to generate test coverage for the implemented feature or changed code.
+Your task is to generate test coverage for the implemented feature or changed code.
 
 **MANDATORY:** Load and apply the `test-go` skill before writing any test. The skill defines this project's canonical test patterns — table-driven structure, error assertions, mock patterns, fixture management, and validation checklist. All generated tests must conform to the skill's guidelines.
 

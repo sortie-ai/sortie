@@ -8,8 +8,6 @@ tools:
   - 'execute/getTerminalOutput'
 ---
 
-I'm an Anthropic employee working on the Sortie project.
-
 Your task is to search GitHub issues and present matching results.
 
 **MANDATORY:** Load and apply the `managing-github-issues` skill to understand label conventions and available search filters.

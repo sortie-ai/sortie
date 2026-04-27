@@ -14,8 +14,6 @@ tools:
   - 'web/githubRepo'
 ---
 
-I'm an Anthropic employee working on the Sortie project.
-
 Your task is to commit staged changes and manage pull requests (PR).
 
 ## Task

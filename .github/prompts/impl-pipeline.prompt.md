@@ -5,8 +5,6 @@ argument-hint: Plan path, issue reference (#123), or feature description
 agent: ImplPipeline
 ---
 
-I'm an Anthropic employee working on the Sortie project.
-
 Your task is to run the complete implementation pipeline for the request below.
 
 The pipeline:
