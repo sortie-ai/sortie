@@ -113,9 +113,8 @@ Delegate to the **Planner** subagent. Your prompt to the Planner must include:
 1. The spec file path (the final version after any revision)
 2. The instruction to analyze the spec section-by-section and produce an atomic, layer-aware plan
 3. The instruction to read `docs/architecture-digest.md` (full `docs/architecture.md` only on deep-read trigger) to ensure the plan respects milestone ordering and dependencies
-4. The instruction to apply standards from `.github/instructions/go-environment.instructions.md`
-5. The output path: `.plans/Plan-{TASK_NAME}.md` using the standard output format
-6. The instruction to **report the exact file path** of the created plan
+4. The output path: `.plans/Plan-{TASK_NAME}.md` using the standard output format
+5. The instruction to **report the exact file path** of the created plan
 
 ### Phase 5: Summary
 

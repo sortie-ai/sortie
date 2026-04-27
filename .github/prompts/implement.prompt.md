@@ -21,8 +21,6 @@ You MUST adhere to the following constraints:
 - [Go Structured Logging](../instructions/go-logging.instructions.md)
 - [Go Documentation Guidelines](../instructions/go-documentation.instructions.md)
 
-Use [Go environment guidelines](../instructions/go-environment.instructions.md) for any necessary environment variable setup.
-
 When finished, provide an implementation summary (files modified, changes made, testing considerations) and use the **Verify Implementation** handoff to pass work to the Tester agent.
 
 ${input:request:Path to plan file or feature description}

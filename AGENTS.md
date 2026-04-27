@@ -62,14 +62,11 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 
 ### Commands
 
-- `make fmt` — format all Go source files.
-- `make lint` — run `golangci-lint` (must be installed separately).
-- `make test` — run all tests with `-race`.
-- `make build` — compile the `sortie` binary into the repo root.
-- `make clean` — remove the compiled binary.
+Read the Makefile to discover available targets before running any Go toolchain commands directly.
 
 ### Gotchas
 
+- Go is managed by asdf. The `go` binary resolves through `~/.asdf/shims/go`.
 - **Architecture doc is the spec.** `docs/architecture.md` (~3600 lines) defines every entity, state machine, algorithm, and validation rule. Read the relevant section before implementing anything. Drift from the spec is a bug.
 - **Symphony is prior art, not a template.** Sortie derives from OpenAI Symphony but diverges intentionally (Go instead of Elixir, SQLite persistence, adapter interfaces). Do not copy Symphony patterns or Elixir idioms.
 - **Workspace safety invariants are security boundaries.** Path containment under workspace root, sanitized workspace keys (`[A-Za-z0-9._-]` only), and cwd validation before agent launch are mandatory — not suggestions. See architecture Section 9.6.
@@ -98,6 +95,9 @@ Strong success criteria let you loop independently. Weak criteria ("make it work
 - Weaken workspace path containment or sanitization rules.
 - Edit `LICENSE` or `README.md` without explicit instruction.
 - Do not reference `docs/architecture.md`, `docs/decisions/`, section numbers, ADR numbers, or ticket IDs in any comment — godoc or inline. Those belong in specs and plans, not in source files.
+- NEVER prefix commands with `GOPATH=...`, `GOMODCACHE=...`, or any Go environment overrides. The asdf shim configures everything.
+- NEVER use `/usr/local/go/bin/go`, `/usr/bin/go`, or any absolute path to a Go binary.
+- NEVER downgrade the `go` directive in `go.mod`. NEVER add or modify `toolchain` directives in `go.mod` unless explicitly asked.
 
 ## Reference docs
 
