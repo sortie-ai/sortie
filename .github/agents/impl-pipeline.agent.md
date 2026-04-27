@@ -100,7 +100,7 @@ Then assess:
 Delegate to the **Tester** subagent. Your prompt to the Tester must include:
 
 1. The Coder's implementation summary - quoted **verbatim**
-2. The instruction to load and follow the `go-testing` skill
+2. The instruction to load and follow the `test-go` skill
 3. The instruction to study the relevant spec sections and the actual implementation source files
 4. The instruction to apply the Analyze Protocol (3 YES criteria) before writing any test
 5. The instruction to verify with `make build`, `make test`, and `make lint`, and to **return the final exit status of each command** in the subagent result on its own labeled line (e.g., `build=pass`, `test=pass`, `lint=pass`). The orchestrator parses these lines directly into the Phase 4 summary; it does NOT re-run the commands.
