@@ -3,7 +3,7 @@ module github.com/sortie-ai/sortie
 go 1.26.1
 
 require (
-	github.com/fsnotify/fsnotify v1.9.0
+	github.com/fsnotify/fsnotify v1.10.1
 	github.com/prometheus/client_golang v1.23.2
 	github.com/prometheus/client_model v0.6.2
 	golang.org/x/sys v0.43.0
