@@ -1,9 +1,16 @@
 package orchestrator
 
 import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/persistence"
 )
 
@@ -400,5 +407,752 @@ func TestPopulateRetries_SessionID_Nil(t *testing.T) {
 	}
 	if got.SessionID != "" {
 		t.Errorf("PopulateRetries_SessionID_Nil: SessionID = %q, want empty", got.SessionID)
+	}
+}
+
+// --- RecoverPendingReactions tests ---
+
+// recoveryNow is a fixed instant used as the NowFunc reference for recovery tests.
+var recoveryNow = time.Date(2026, 5, 1, 12, 0, 0, 0, time.UTC)
+
+// writeRecoverySCM writes meta as .sortie/scm.json inside <wsRoot>/<key>.
+// The directory is created if absent. key is the sanitized identifier (e.g. "PROJ-1").
+func writeRecoverySCM(t *testing.T, wsRoot, key string, meta domain.SCMMetadata) {
+	t.Helper()
+	dir := filepath.Join(wsRoot, key, ".sortie")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("writeSCMMetadata MkdirAll: %v", err)
+	}
+	data, err := json.Marshal(meta)
+	if err != nil {
+		t.Fatalf("writeSCMMetadata Marshal: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "scm.json"), data, 0o644); err != nil {
+		t.Fatalf("writeSCMMetadata WriteFile: %v", err)
+	}
+}
+
+// freshSCMTime returns an RFC3339 timestamp that is within the 30-day lookback.
+func freshSCMTime(daysAgo int) string {
+	return recoveryNow.Add(-time.Duration(daysAgo) * 24 * time.Hour).UTC().Format(time.RFC3339)
+}
+
+// freshRun builds a persistence.RunHistory for recovery tests.
+func freshRun(issueID, identifier, displayID string, attempt int) persistence.RunHistory {
+	return persistence.RunHistory{
+		IssueID:      issueID,
+		Identifier:   identifier,
+		DisplayID:    displayID,
+		Attempt:      attempt,
+		AgentAdapter: "mock",
+		Workspace:    "/ws/" + identifier,
+		StartedAt:    freshSCMTime(2),
+		CompletedAt:  freshSCMTime(2),
+		Status:       "succeeded",
+	}
+}
+
+// recoveryTrackerStub satisfies domain.TrackerAdapter; returns a configurable state map.
+type recoveryTrackerStub struct {
+	states     map[string]string
+	err        error
+	fetchedIDs []string
+}
+
+var _ domain.TrackerAdapter = (*recoveryTrackerStub)(nil)
+
+func (s *recoveryTrackerStub) FetchIssuesByStates(_ context.Context, _ []string) ([]domain.Issue, error) {
+	return nil, nil
+}
+func (s *recoveryTrackerStub) FetchCandidateIssues(_ context.Context) ([]domain.Issue, error) {
+	return nil, nil
+}
+func (s *recoveryTrackerStub) FetchIssueByID(_ context.Context, _ string) (domain.Issue, error) {
+	return domain.Issue{}, nil
+}
+func (s *recoveryTrackerStub) FetchIssueStatesByIDs(_ context.Context, ids []string) (map[string]string, error) {
+	s.fetchedIDs = append(s.fetchedIDs, ids...)
+	if s.err != nil {
+		return nil, s.err
+	}
+	result := make(map[string]string, len(ids))
+	for _, id := range ids {
+		if st, ok := s.states[id]; ok {
+			result[id] = st
+		}
+	}
+	return result, nil
+}
+func (s *recoveryTrackerStub) FetchIssueStatesByIdentifiers(_ context.Context, _ []string) (map[string]string, error) {
+	return nil, nil
+}
+func (s *recoveryTrackerStub) FetchIssueComments(_ context.Context, _ string) ([]domain.Comment, error) {
+	return nil, nil
+}
+func (s *recoveryTrackerStub) TransitionIssue(_ context.Context, _ string, _ string) error {
+	return nil
+}
+func (s *recoveryTrackerStub) CommentIssue(_ context.Context, _ string, _ string) error {
+	return nil
+}
+func (s *recoveryTrackerStub) AddLabel(_ context.Context, _ string, _ string) error {
+	return nil
+}
+
+// panicSCMAdapter panics if any method is called. Used to assert FR-7.
+type panicSCMAdapter struct{}
+
+var _ domain.SCMAdapter = (*panicSCMAdapter)(nil)
+
+func (p *panicSCMAdapter) FetchPendingReviews(_ context.Context, _ int, _, _ string) ([]domain.ReviewComment, error) {
+	panic("FetchPendingReviews must not be called during RecoverPendingReactions")
+}
+
+// panicCIProvider panics if FetchCIStatus is called. Used to assert FR-7.
+type panicCIProvider struct{}
+
+var _ domain.CIStatusProvider = (*panicCIProvider)(nil)
+
+func (p *panicCIProvider) FetchCIStatus(_ context.Context, _ string) (domain.CIResult, error) {
+	panic("FetchCIStatus must not be called during RecoverPendingReactions")
+}
+
+// stubSCMForRecovery is a non-nil SCMAdapter that satisfies the interface without panicking,
+// used when a non-nil adapter is required for the recovery guard but the fetch must not fire.
+type stubSCMForRecovery struct{}
+
+var _ domain.SCMAdapter = (*stubSCMForRecovery)(nil)
+
+func (s *stubSCMForRecovery) FetchPendingReviews(_ context.Context, _ int, _, _ string) ([]domain.ReviewComment, error) {
+	return nil, nil
+}
+
+// stubCIForRecovery is a non-nil CIStatusProvider for recovery guard, never called during recovery.
+type stubCIForRecovery struct{}
+
+var _ domain.CIStatusProvider = (*stubCIForRecovery)(nil)
+
+func (s *stubCIForRecovery) FetchCIStatus(_ context.Context, _ string) (domain.CIResult, error) {
+	return domain.CIResult{}, nil
+}
+
+// defaultRecoveryParams builds PendingReactionRecoveryParams with sensible defaults for tests.
+func defaultRecoveryParams(wsRoot string, tracker domain.TrackerAdapter) PendingReactionRecoveryParams {
+	return PendingReactionRecoveryParams{
+		WorkspaceRoot:    wsRoot,
+		TrackerAdapter:   tracker,
+		HandoffState:     "In Review",
+		TerminalStates:   []string{"Done", "Closed"},
+		SCMAdapter:       &stubSCMForRecovery{},
+		CIProvider:       &stubCIForRecovery{},
+		RecoveryLookback: PendingReactionRecoveryLookback,
+		MaxCandidates:    PendingReactionRecoveryMaxCandidates,
+		NowFunc:          func() time.Time { return recoveryNow },
+		Logger:           discardLogger(),
+	}
+}
+
+func TestRecoverPendingReactions_RecreatesReviewAfterRestart(t *testing.T) {
+	t.Parallel()
+
+	wsRoot := t.TempDir()
+	writeRecoverySCM(t, wsRoot, "PROJ-1", domain.SCMMetadata{
+		Branch:   "feature/fix",
+		SHA:      "abc123",
+		PushedAt: freshSCMTime(1),
+		PRNumber: 42,
+		Owner:    "owner",
+		Repo:     "repo",
+	})
+
+	tracker := &recoveryTrackerStub{states: map[string]string{"ISS-1": "In Review"}}
+	state := NewState(5000, 4, nil, AgentTotals{})
+	run := freshRun("ISS-1", "PROJ-1", "owner/repo#42", 2)
+	params := defaultRecoveryParams(wsRoot, tracker)
+
+	result, err := RecoverPendingReactions(context.Background(), state, []persistence.RunHistory{run}, params)
+	if err != nil {
+		t.Fatalf("RecoverPendingReactions: %v", err)
+	}
+	if result.ReviewRecovered != 1 {
+		t.Errorf("ReviewRecovered = %d, want 1", result.ReviewRecovered)
+	}
+
+	rkey := ReactionKey("ISS-1", ReactionKindReview)
+	pr, ok := state.PendingReactions[rkey]
+	if !ok {
+		t.Fatalf("PendingReactions[%q] missing, want present", rkey)
+	}
+	if pr.IssueID != "ISS-1" {
+		t.Errorf("PendingReaction.IssueID = %q, want %q", pr.IssueID, "ISS-1")
+	}
+	if pr.Attempt != 2 {
+		t.Errorf("PendingReaction.Attempt = %d, want 2", pr.Attempt)
+	}
+	if pr.DisplayID != "owner/repo#42" {
+		t.Errorf("PendingReaction.DisplayID = %q, want %q", pr.DisplayID, "owner/repo#42")
+	}
+	rd, ok := pr.KindData.(*ReviewReactionData)
+	if !ok {
+		t.Fatalf("KindData type = %T, want *ReviewReactionData", pr.KindData)
+	}
+	if rd.PRNumber != 42 {
+		t.Errorf("ReviewReactionData.PRNumber = %d, want 42", rd.PRNumber)
+	}
+	if rd.Owner != "owner" {
+		t.Errorf("ReviewReactionData.Owner = %q, want %q", rd.Owner, "owner")
+	}
+	if rd.Repo != "repo" {
+		t.Errorf("ReviewReactionData.Repo = %q, want %q", rd.Repo, "repo")
+	}
+	if rd.Branch != "feature/fix" {
+		t.Errorf("ReviewReactionData.Branch = %q, want %q", rd.Branch, "feature/fix")
+	}
+	if rd.SHA != "abc123" {
+		t.Errorf("ReviewReactionData.SHA = %q, want %q", rd.SHA, "abc123")
+	}
+	// FR-5: issue must not be claimed.
+	if _, claimed := state.Claimed["ISS-1"]; claimed {
+		t.Error("ISS-1 found in state.Claimed after recovery, want not claimed")
+	}
+}
+
+func TestRecoverPendingReactions_RecreatesCIAfterRestart(t *testing.T) {
+	t.Parallel()
+
+	wsRoot := t.TempDir()
+	writeRecoverySCM(t, wsRoot, "PROJ-2", domain.SCMMetadata{
+		Branch:   "feature/ci-fix",
+		SHA:      "deadbeef",
+		PushedAt: freshSCMTime(1),
+	})
+
+	tracker := &recoveryTrackerStub{states: map[string]string{"ISS-2": "In Review"}}
+	state := NewState(5000, 4, nil, AgentTotals{})
+	run := freshRun("ISS-2", "PROJ-2", "", 1)
+	params := defaultRecoveryParams(wsRoot, tracker)
+
+	result, err := RecoverPendingReactions(context.Background(), state, []persistence.RunHistory{run}, params)
+	if err != nil {
+		t.Fatalf("RecoverPendingReactions: %v", err)
+	}
+	if result.CIRecovered != 1 {
+		t.Errorf("CIRecovered = %d, want 1", result.CIRecovered)
+	}
+
+	rkey := ReactionKey("ISS-2", ReactionKindCI)
+	pr, ok := state.PendingReactions[rkey]
+	if !ok {
+		t.Fatalf("PendingReactions[%q] missing, want present", rkey)
+	}
+	ci, ok := pr.KindData.(*CIReactionData)
+	if !ok {
+		t.Fatalf("KindData type = %T, want *CIReactionData", pr.KindData)
+	}
+	if ci.Branch != "feature/ci-fix" {
+		t.Errorf("CIReactionData.Branch = %q, want %q", ci.Branch, "feature/ci-fix")
+	}
+	if ci.SHA != "deadbeef" {
+		t.Errorf("CIReactionData.SHA = %q, want %q", ci.SHA, "deadbeef")
+	}
+	// FR-5: issue must not be claimed.
+	if _, claimed := state.Claimed["ISS-2"]; claimed {
+		t.Error("ISS-2 found in state.Claimed after CI recovery, want not claimed")
+	}
+}
+
+func TestRecoverPendingReactions_SkipsWhenHandoffStateEmpty(t *testing.T) {
+	t.Parallel()
+
+	wsRoot := t.TempDir()
+	tracker := &recoveryTrackerStub{states: map[string]string{"ISS-3": "In Review"}}
+	state := NewState(5000, 4, nil, AgentTotals{})
+	run := freshRun("ISS-3", "PROJ-3", "", 1)
+	params := defaultRecoveryParams(wsRoot, tracker)
+	params.HandoffState = ""
+
+	result, err := RecoverPendingReactions(context.Background(), state, []persistence.RunHistory{run}, params)
+	if err != nil {
+		t.Fatalf("RecoverPendingReactions: %v", err)
+	}
+	if result.ReviewRecovered != 0 || result.CIRecovered != 0 {
+		t.Errorf("recovered = review:%d ci:%d, want 0/0 when HandoffState is empty",
+			result.ReviewRecovered, result.CIRecovered)
+	}
+	if len(state.PendingReactions) != 0 {
+		t.Errorf("PendingReactions len = %d, want 0", len(state.PendingReactions))
+	}
+	if len(tracker.fetchedIDs) != 0 {
+		t.Error("FetchIssueStatesByIDs was called with empty HandoffState, want no call")
+	}
+}
+
+func TestRecoverPendingReactions_SkipsWhenProvidersNil(t *testing.T) {
+	t.Parallel()
+
+	wsRoot := t.TempDir()
+	tracker := &recoveryTrackerStub{states: map[string]string{"ISS-4": "In Review"}}
+	state := NewState(5000, 4, nil, AgentTotals{})
+	run := freshRun("ISS-4", "PROJ-4", "", 1)
+	params := defaultRecoveryParams(wsRoot, tracker)
+	params.SCMAdapter = nil
+	params.CIProvider = nil
+
+	result, err := RecoverPendingReactions(context.Background(), state, []persistence.RunHistory{run}, params)
+	if err != nil {
+		t.Fatalf("RecoverPendingReactions: %v", err)
+	}
+	if result.ReviewRecovered != 0 || result.CIRecovered != 0 {
+		t.Errorf("recovered = review:%d ci:%d, want 0/0 when both providers are nil",
+			result.ReviewRecovered, result.CIRecovered)
+	}
+	if len(tracker.fetchedIDs) != 0 {
+		t.Error("FetchIssueStatesByIDs was called with nil providers, want no call")
+	}
+}
+
+func TestRecoverPendingReactions_SkipsNonHandoffState(t *testing.T) {
+	t.Parallel()
+
+	wsRoot := t.TempDir()
+	writeRecoverySCM(t, wsRoot, "PROJ-5", domain.SCMMetadata{
+		Branch:   "feature/x",
+		PushedAt: freshSCMTime(1),
+		PRNumber: 10,
+		Owner:    "o",
+		Repo:     "r",
+	})
+
+	// Tracker returns "In Progress" — not the handoff state "In Review".
+	tracker := &recoveryTrackerStub{states: map[string]string{"ISS-5": "In Progress"}}
+	state := NewState(5000, 4, nil, AgentTotals{})
+	run := freshRun("ISS-5", "PROJ-5", "", 1)
+	params := defaultRecoveryParams(wsRoot, tracker)
+
+	result, err := RecoverPendingReactions(context.Background(), state, []persistence.RunHistory{run}, params)
+	if err != nil {
+		t.Fatalf("RecoverPendingReactions: %v", err)
+	}
+	if result.ReviewRecovered != 0 {
+		t.Errorf("ReviewRecovered = %d, want 0 for non-handoff state", result.ReviewRecovered)
+	}
+	if len(state.PendingReactions) != 0 {
+		t.Errorf("PendingReactions len = %d, want 0", len(state.PendingReactions))
+	}
+}
+
+func TestRecoverPendingReactions_SkipsTerminalState(t *testing.T) {
+	t.Parallel()
+
+	wsRoot := t.TempDir()
+	writeRecoverySCM(t, wsRoot, "PROJ-6", domain.SCMMetadata{
+		Branch:   "feature/done",
+		PushedAt: freshSCMTime(1),
+		PRNumber: 99,
+		Owner:    "o",
+		Repo:     "r",
+	})
+
+	// Tracker returns "Done" — a configured terminal state.
+	tracker := &recoveryTrackerStub{states: map[string]string{"ISS-6": "Done"}}
+	state := NewState(5000, 4, nil, AgentTotals{})
+	run := freshRun("ISS-6", "PROJ-6", "", 1)
+	params := defaultRecoveryParams(wsRoot, tracker)
+
+	result, err := RecoverPendingReactions(context.Background(), state, []persistence.RunHistory{run}, params)
+	if err != nil {
+		t.Fatalf("RecoverPendingReactions: %v", err)
+	}
+	if result.ReviewRecovered != 0 {
+		t.Errorf("ReviewRecovered = %d, want 0 for terminal state", result.ReviewRecovered)
+	}
+	if len(state.PendingReactions) != 0 {
+		t.Errorf("PendingReactions len = %d, want 0", len(state.PendingReactions))
+	}
+}
+
+func TestRecoverPendingReactions_SkipsClaimedOrRetryingIssue(t *testing.T) {
+	t.Parallel()
+
+	wsRoot := t.TempDir()
+	for _, id := range []string{"PROJ-7", "PROJ-8", "PROJ-9"} {
+		writeRecoverySCM(t, wsRoot, id, domain.SCMMetadata{
+			Branch: "feature/x", PushedAt: freshSCMTime(1), PRNumber: 1, Owner: "o", Repo: "r",
+		})
+	}
+
+	tracker := &recoveryTrackerStub{states: map[string]string{
+		"ISS-CLAIMED": "In Review",
+		"ISS-RETRY":   "In Review",
+		"ISS-RUNNING": "In Review",
+	}}
+	state := NewState(5000, 4, nil, AgentTotals{})
+	// Seed claimed, retry, and running.
+	state.Claimed["ISS-CLAIMED"] = struct{}{}
+	state.RetryAttempts["ISS-RETRY"] = &RetryEntry{IssueID: "ISS-RETRY", Identifier: "PROJ-8"}
+	state.Claimed["ISS-RETRY"] = struct{}{}
+	state.Running["ISS-RUNNING"] = &RunningEntry{}
+
+	runs := []persistence.RunHistory{
+		freshRun("ISS-CLAIMED", "PROJ-7", "", 1),
+		freshRun("ISS-RETRY", "PROJ-8", "", 1),
+		freshRun("ISS-RUNNING", "PROJ-9", "", 1),
+	}
+	params := defaultRecoveryParams(wsRoot, tracker)
+
+	result, err := RecoverPendingReactions(context.Background(), state, runs, params)
+	if err != nil {
+		t.Fatalf("RecoverPendingReactions: %v", err)
+	}
+	if result.ReviewRecovered != 0 {
+		t.Errorf("ReviewRecovered = %d, want 0 for claimed/retry/running issues", result.ReviewRecovered)
+	}
+	// Retry state unchanged.
+	if _, ok := state.RetryAttempts["ISS-RETRY"]; !ok {
+		t.Error("state.RetryAttempts[ISS-RETRY] was removed by recovery, want unchanged")
+	}
+	if len(state.PendingReactions) != 0 {
+		t.Errorf("PendingReactions len = %d, want 0", len(state.PendingReactions))
+	}
+}
+
+func TestRecoverPendingReactions_LimitsTrackerFetchCandidates(t *testing.T) {
+	t.Parallel()
+
+	wsRoot := t.TempDir()
+	// Generate 250 runs; recovery should cap at PendingReactionRecoveryMaxCandidates (200).
+	const total = 250
+	runs := make([]persistence.RunHistory, total)
+	stateMap := make(map[string]string, total)
+	for i := range total {
+		issueID := fmt.Sprintf("ISS-%04d", i)
+		identifier := fmt.Sprintf("PROJ-%04d", i)
+		runs[i] = freshRun(issueID, identifier, "", 1)
+		stateMap[issueID] = "In Review"
+		writeRecoverySCM(t, wsRoot, identifier, domain.SCMMetadata{
+			Branch:   "feature/x",
+			PushedAt: freshSCMTime(1),
+			PRNumber: i + 1,
+			Owner:    "o",
+			Repo:     "r",
+		})
+	}
+
+	tracker := &recoveryTrackerStub{states: stateMap}
+	state := NewState(5000, 4, nil, AgentTotals{})
+	params := defaultRecoveryParams(wsRoot, tracker)
+
+	result, err := RecoverPendingReactions(context.Background(), state, runs, params)
+	if err != nil {
+		t.Fatalf("RecoverPendingReactions: %v", err)
+	}
+	if result.CapSkipped != total-PendingReactionRecoveryMaxCandidates {
+		t.Errorf("CapSkipped = %d, want %d", result.CapSkipped, total-PendingReactionRecoveryMaxCandidates)
+	}
+	if len(tracker.fetchedIDs) > PendingReactionRecoveryMaxCandidates {
+		t.Errorf("FetchIssueStatesByIDs received %d IDs, want <= %d",
+			len(tracker.fetchedIDs), PendingReactionRecoveryMaxCandidates)
+	}
+}
+
+func TestRecoverPendingReactions_SkipsStaleSCMActivity(t *testing.T) {
+	t.Parallel()
+
+	wsRoot := t.TempDir()
+	// Case 1: stale pushed_at (> 30 days ago).
+	writeRecoverySCM(t, wsRoot, "PROJ-STALE", domain.SCMMetadata{
+		Branch:   "feature/stale",
+		PushedAt: freshSCMTime(35),
+		PRNumber: 1,
+		Owner:    "o",
+		Repo:     "r",
+	})
+	// Case 2: malformed pushed_at.
+	writeRecoverySCM(t, wsRoot, "PROJ-MALFORMED", domain.SCMMetadata{
+		Branch:   "feature/malformed",
+		PushedAt: "not-a-date",
+		PRNumber: 2,
+		Owner:    "o",
+		Repo:     "r",
+	})
+	// Case 3: absent pushed_at + stale completed_at (fallback).
+	runStaleCompleted := freshRun("ISS-STALE-COMPLETED", "PROJ-STALE-COMPLETED", "", 1)
+	runStaleCompleted.CompletedAt = freshSCMTime(35)
+	writeRecoverySCM(t, wsRoot, "PROJ-STALE-COMPLETED", domain.SCMMetadata{
+		Branch:   "feature/stale-completed",
+		PRNumber: 3,
+		Owner:    "o",
+		Repo:     "r",
+		// PushedAt empty
+	})
+
+	tracker := &recoveryTrackerStub{states: map[string]string{
+		"ISS-STALE":           "In Review",
+		"ISS-MALFORMED":       "In Review",
+		"ISS-STALE-COMPLETED": "In Review",
+	}}
+	state := NewState(5000, 4, nil, AgentTotals{})
+	runs := []persistence.RunHistory{
+		freshRun("ISS-STALE", "PROJ-STALE", "", 1),
+		freshRun("ISS-MALFORMED", "PROJ-MALFORMED", "", 1),
+		runStaleCompleted,
+	}
+	params := defaultRecoveryParams(wsRoot, tracker)
+
+	result, err := RecoverPendingReactions(context.Background(), state, runs, params)
+	if err != nil {
+		t.Fatalf("RecoverPendingReactions: %v", err)
+	}
+	if result.StaleSkipped != 3 {
+		t.Errorf("StaleSkipped = %d, want 3 (stale pushed_at, malformed pushed_at, stale completed_at)", result.StaleSkipped)
+	}
+	if len(state.PendingReactions) != 0 {
+		t.Errorf("PendingReactions len = %d, want 0", len(state.PendingReactions))
+	}
+}
+
+func TestRecoverPendingReactions_DoesNotOverwriteExistingReview(t *testing.T) {
+	t.Parallel()
+
+	wsRoot := t.TempDir()
+	writeRecoverySCM(t, wsRoot, "PROJ-EXISTING", domain.SCMMetadata{
+		Branch:   "feature/new",
+		PushedAt: freshSCMTime(1),
+		PRNumber: 77,
+		Owner:    "o",
+		Repo:     "r",
+	})
+
+	tracker := &recoveryTrackerStub{states: map[string]string{"ISS-EXISTING": "In Review"}}
+	state := NewState(5000, 4, nil, AgentTotals{})
+	// Pre-populate a pending reaction — recovery must not overwrite it.
+	existing := &PendingReaction{
+		IssueID: "ISS-EXISTING", Kind: ReactionKindReview,
+		KindData: &ReviewReactionData{PRNumber: 9999, Owner: "old", Repo: "old", Branch: "old"},
+	}
+	state.PendingReactions[ReactionKey("ISS-EXISTING", ReactionKindReview)] = existing
+
+	run := freshRun("ISS-EXISTING", "PROJ-EXISTING", "", 1)
+	params := defaultRecoveryParams(wsRoot, tracker)
+
+	result, err := RecoverPendingReactions(context.Background(), state, []persistence.RunHistory{run}, params)
+	if err != nil {
+		t.Fatalf("RecoverPendingReactions: %v", err)
+	}
+	if result.ReviewRecovered != 0 {
+		t.Errorf("ReviewRecovered = %d, want 0 (existing entry preserved)", result.ReviewRecovered)
+	}
+
+	rkey := ReactionKey("ISS-EXISTING", ReactionKindReview)
+	got := state.PendingReactions[rkey]
+	if got != existing {
+		t.Error("existing PendingReaction pointer was replaced by recovery; want unchanged")
+	}
+	rd := got.KindData.(*ReviewReactionData)
+	if rd.PRNumber != 9999 {
+		t.Errorf("PRNumber = %d, want 9999 (original value preserved)", rd.PRNumber)
+	}
+}
+
+func TestRecoverPendingReactions_ProviderFetchesNotCalled(t *testing.T) {
+	t.Parallel()
+
+	wsRoot := t.TempDir()
+	writeRecoverySCM(t, wsRoot, "PROJ-NOFETCH", domain.SCMMetadata{
+		Branch:   "feature/nofetch",
+		PushedAt: freshSCMTime(1),
+		PRNumber: 5,
+		Owner:    "o",
+		Repo:     "r",
+	})
+
+	tracker := &recoveryTrackerStub{states: map[string]string{"ISS-NOFETCH": "In Review"}}
+	state := NewState(5000, 4, nil, AgentTotals{})
+	run := freshRun("ISS-NOFETCH", "PROJ-NOFETCH", "", 1)
+	params := defaultRecoveryParams(wsRoot, tracker)
+	// Use panic adapters to assert FR-7: no fetch methods called during recovery.
+	params.SCMAdapter = &panicSCMAdapter{}
+	params.CIProvider = &panicCIProvider{}
+
+	// Must not panic; FetchPendingReviews / FetchCIStatus are not called.
+	_, err := RecoverPendingReactions(context.Background(), state, []persistence.RunHistory{run}, params)
+	if err != nil {
+		t.Fatalf("RecoverPendingReactions: %v", err)
+	}
+}
+
+func TestRecoverPendingReactions_InvalidSCMMetadataSkips(t *testing.T) {
+	t.Parallel()
+
+	wsRoot := t.TempDir()
+	// No .sortie/scm.json written — ReadSCMMetadata returns zero value.
+
+	tracker := &recoveryTrackerStub{states: map[string]string{"ISS-NOMETA": "In Review"}}
+	state := NewState(5000, 4, nil, AgentTotals{})
+	run := freshRun("ISS-NOMETA", "PROJ-NOMETA", "", 1)
+	params := defaultRecoveryParams(wsRoot, tracker)
+
+	result, err := RecoverPendingReactions(context.Background(), state, []persistence.RunHistory{run}, params)
+	if err != nil {
+		t.Fatalf("RecoverPendingReactions: %v", err)
+	}
+	if result.ReviewRecovered != 0 || result.CIRecovered != 0 {
+		t.Errorf("recovered = review:%d ci:%d, want 0/0 for missing scm.json",
+			result.ReviewRecovered, result.CIRecovered)
+	}
+	if len(state.PendingReactions) != 0 {
+		t.Errorf("PendingReactions len = %d, want 0", len(state.PendingReactions))
+	}
+}
+
+func TestRecoverPendingReactions_TrackerFetchError(t *testing.T) {
+	t.Parallel()
+
+	wsRoot := t.TempDir()
+	writeRecoverySCM(t, wsRoot, "PROJ-FETCHERR", domain.SCMMetadata{
+		Branch:   "feature/err",
+		PushedAt: freshSCMTime(1),
+		PRNumber: 3,
+		Owner:    "o",
+		Repo:     "r",
+	})
+
+	fetchErr := errors.New("tracker unavailable")
+	tracker := &recoveryTrackerStub{err: fetchErr}
+	state := NewState(5000, 4, nil, AgentTotals{})
+	run := freshRun("ISS-FETCHERR", "PROJ-FETCHERR", "", 1)
+	params := defaultRecoveryParams(wsRoot, tracker)
+
+	result, err := RecoverPendingReactions(context.Background(), state, []persistence.RunHistory{run}, params)
+	if err == nil {
+		t.Fatal("RecoverPendingReactions tracker fetch error = nil, want error")
+	}
+	if !errors.Is(err, fetchErr) {
+		t.Errorf("RecoverPendingReactions err = %v, want wrapping %v", err, fetchErr)
+	}
+	if result.ReviewRecovered != 0 || result.CIRecovered != 0 {
+		t.Errorf("recovered = review:%d ci:%d, want 0/0 on tracker fetch error",
+			result.ReviewRecovered, result.CIRecovered)
+	}
+	if len(state.PendingReactions) != 0 {
+		t.Errorf("PendingReactions len = %d, want 0 on tracker fetch error", len(state.PendingReactions))
+	}
+}
+
+func TestRecoverPendingReactions_DispatchedFingerprintStillDedups(t *testing.T) {
+	t.Parallel()
+
+	wsRoot := t.TempDir()
+	writeRecoverySCM(t, wsRoot, "PROJ-DEDUP", domain.SCMMetadata{
+		Branch:   "feature/dedup",
+		PushedAt: freshSCMTime(1),
+		PRNumber: 7,
+		Owner:    "owner",
+		Repo:     "repo",
+	})
+
+	tracker := &recoveryTrackerStub{states: map[string]string{"ISS-DEDUP": "In Review"}}
+	state := NewState(5000, 4, nil, AgentTotals{})
+	run := freshRun("ISS-DEDUP", "PROJ-DEDUP", "owner/repo#7", 1)
+	params := defaultRecoveryParams(wsRoot, tracker)
+
+	// Step 1: recover the review reaction.
+	result, err := RecoverPendingReactions(context.Background(), state, []persistence.RunHistory{run}, params)
+	if err != nil {
+		t.Fatalf("RecoverPendingReactions: %v", err)
+	}
+	if result.ReviewRecovered != 1 {
+		t.Fatalf("ReviewRecovered = %d, want 1", result.ReviewRecovered)
+	}
+
+	// Step 2: seed the store so the fingerprint appears already dispatched.
+	comments := []domain.ReviewComment{
+		{ID: "fp-1", Body: "lgtm", SubmittedAt: reviewBaseTime.Add(-5 * time.Minute)},
+	}
+	fp := buildReviewFingerprint(comments)
+	store := &reviewReconcileStore{
+		getFingerprintResult:     fp,
+		getFingerprintDispatched: true,
+	}
+
+	// Step 3: run reconcile with the already-dispatched fingerprint.
+	scm := &mockSCMAdapter{comments: comments}
+	reconcileParams := reviewParams(store, scm, nil)
+	reconcileReviewComments(state, reconcileParams, discardLogger(), context.Background(), newReviewMetricsSpy())
+
+	// The entry should be re-enqueued (fingerprint already dispatched), not trigger a new dispatch.
+	rkey := ReactionKey("ISS-DEDUP", ReactionKindReview)
+	if _, ok := state.PendingReactions[rkey]; !ok {
+		t.Error("PendingReactions[ISS-DEDUP:review] removed for dispatched fingerprint; want re-enqueued")
+	}
+	if store.markDispatchedCalls != 0 {
+		t.Errorf("MarkReactionDispatched calls = %d, want 0 (already dispatched)", store.markDispatchedCalls)
+	}
+	if _, ok := state.RetryAttempts["ISS-DEDUP"]; ok {
+		t.Error("retry scheduled for already-dispatched fingerprint; want none")
+	}
+}
+
+func TestRecoverPendingReactions_RecoveredReviewDispatchesContinuation(t *testing.T) {
+	t.Parallel()
+
+	wsRoot := t.TempDir()
+	writeRecoverySCM(t, wsRoot, "PROJ-DISPATCH", domain.SCMMetadata{
+		Branch:   "feature/cont",
+		PushedAt: freshSCMTime(1),
+		PRNumber: 11,
+		Owner:    "owner",
+		Repo:     "repo",
+	})
+
+	tracker := &recoveryTrackerStub{states: map[string]string{"ISS-DISPATCH": "In Review"}}
+	state := NewState(5000, 4, nil, AgentTotals{})
+	run := freshRun("ISS-DISPATCH", "PROJ-DISPATCH", "owner/repo#11", 1)
+	params := defaultRecoveryParams(wsRoot, tracker)
+
+	// Recover.
+	result, err := RecoverPendingReactions(context.Background(), state, []persistence.RunHistory{run}, params)
+	if err != nil {
+		t.Fatalf("RecoverPendingReactions: %v", err)
+	}
+	if result.ReviewRecovered != 1 {
+		t.Fatalf("ReviewRecovered = %d, want 1", result.ReviewRecovered)
+	}
+
+	// Issue was NOT claimed before reconcile.
+	if _, claimed := state.Claimed["ISS-DISPATCH"]; claimed {
+		t.Error("ISS-DISPATCH claimed before reconcile; want not claimed at recovery time")
+	}
+
+	// New comment outside the debounce window.
+	comments := []domain.ReviewComment{
+		{ID: "c-new", Body: "please fix", SubmittedAt: reviewBaseTime.Add(-5 * time.Minute)},
+	}
+	store := &reviewReconcileStore{
+		getFingerprintResult:     "",
+		getFingerprintDispatched: false,
+	}
+	scm := &mockSCMAdapter{comments: comments}
+	reconcileParams := reviewParams(store, scm, nil)
+
+	reconcileReviewComments(state, reconcileParams, discardLogger(), context.Background(), newReviewMetricsSpy())
+
+	// After dispatch, entry removed from pending reactions and a retry is scheduled.
+	rkey := ReactionKey("ISS-DISPATCH", ReactionKindReview)
+	if _, ok := state.PendingReactions[rkey]; ok {
+		t.Error("PendingReactions[ISS-DISPATCH:review] present after dispatch; want consumed")
+	}
+	retry, ok := state.RetryAttempts["ISS-DISPATCH"]
+	if !ok {
+		t.Fatal("RetryAttempts[ISS-DISPATCH] missing after review dispatch; want scheduled")
+	}
+	if retry.ContinuationContext == nil {
+		t.Error("RetryEntry.ContinuationContext is nil; want review_comments map")
+	}
+	if retry.ReactionKind != ReactionKindReview {
+		t.Errorf("RetryEntry.ReactionKind = %q, want %q", retry.ReactionKind, ReactionKindReview)
+	}
+	if store.markDispatchedCalls != 1 {
+		t.Errorf("MarkReactionDispatched calls = %d, want 1", store.markDispatchedCalls)
 	}
 }

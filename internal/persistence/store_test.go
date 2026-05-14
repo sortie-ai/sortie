@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func closeStore(t *testing.T, s *Store) {
@@ -2401,5 +2402,226 @@ func TestAppendRunHistory_ReviewMetadata_Null(t *testing.T) {
 	}
 	if entries[0].ReviewMetadata != nil {
 		t.Errorf("queried ReviewMetadata = %q, want nil", *entries[0].ReviewMetadata)
+	}
+}
+
+// --- LoadLatestSuccessfulRunsForReactionRecovery Tests ---
+
+// recoveryRefTime is a fixed reference for recovery query tests.
+var recoveryRefTime = time.Date(2026, 1, 15, 12, 0, 0, 0, time.UTC)
+
+// recentCompletedAt returns an RFC3339 timestamp for a run completed daysAgo
+// days before recoveryRefTime.
+func recentCompletedAt(daysAgo int) string {
+	return recoveryRefTime.Add(-time.Duration(daysAgo) * 24 * time.Hour).UTC().Format(time.RFC3339)
+}
+
+// appendRecoveryRun inserts a recovery-eligible (succeeded, non-empty workspace) run and returns it.
+func appendRecoveryRun(t *testing.T, s *Store, issueID, identifier string, attempt int, completedAt string) RunHistory {
+	t.Helper()
+	run := RunHistory{
+		IssueID:      issueID,
+		Identifier:   identifier,
+		Attempt:      attempt,
+		AgentAdapter: "mock",
+		Workspace:    "/ws/" + identifier,
+		StartedAt:    completedAt,
+		CompletedAt:  completedAt,
+		Status:       "succeeded",
+	}
+	return appendOrFatal(t, s, run)
+}
+
+func TestLoadLatestSuccessfulRunsForReactionRecovery_Empty(t *testing.T) {
+	t.Parallel()
+
+	s := openTestStore(t)
+	migrateOrFatal(t, s)
+
+	cutoff := recoveryRefTime.Add(-30 * 24 * time.Hour)
+	got, err := s.LoadLatestSuccessfulRunsForReactionRecovery(context.Background(), cutoff, 200)
+	if err != nil {
+		t.Fatalf("LoadLatestSuccessfulRunsForReactionRecovery: %v", err)
+	}
+	if got == nil {
+		t.Fatal("result = nil, want non-nil empty slice")
+	}
+	if len(got) != 0 {
+		t.Fatalf("LoadLatestSuccessfulRunsForReactionRecovery() len = %d, want 0", len(got))
+	}
+}
+
+func TestLoadLatestSuccessfulRunsForReactionRecovery_LatestPerIssue(t *testing.T) {
+	t.Parallel()
+
+	s := openTestStore(t)
+	migrateOrFatal(t, s)
+	ctx := context.Background()
+	cutoff := recoveryRefTime.Add(-30 * 24 * time.Hour)
+
+	// Three runs for ISS-A; the third has the highest id and is the expected result.
+	appendRecoveryRun(t, s, "ISS-A", "PROJ-1", 1, recentCompletedAt(5))
+	appendRecoveryRun(t, s, "ISS-A", "PROJ-1", 2, recentCompletedAt(4))
+	latestA := appendRecoveryRun(t, s, "ISS-A", "PROJ-1", 3, recentCompletedAt(3))
+	// One run for ISS-B.
+	latestB := appendRecoveryRun(t, s, "ISS-B", "PROJ-2", 1, recentCompletedAt(2))
+
+	got, err := s.LoadLatestSuccessfulRunsForReactionRecovery(ctx, cutoff, 200)
+	if err != nil {
+		t.Fatalf("LoadLatestSuccessfulRunsForReactionRecovery: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("LoadLatestSuccessfulRunsForReactionRecovery() len = %d, want 2", len(got))
+	}
+	// Results are ordered newest id first.
+	if got[0].ID != latestB.ID {
+		t.Errorf("got[0].ID = %d, want %d (latest ISS-B)", got[0].ID, latestB.ID)
+	}
+	if got[1].ID != latestA.ID {
+		t.Errorf("got[1].ID = %d, want %d (latest ISS-A)", got[1].ID, latestA.ID)
+	}
+	if got[1].Attempt != 3 {
+		t.Errorf("got[1].Attempt = %d, want 3 (latest attempt for ISS-A)", got[1].Attempt)
+	}
+}
+
+func TestLoadLatestSuccessfulRunsForReactionRecovery_BoundsByCutoffAndLimit(t *testing.T) {
+	t.Parallel()
+
+	s := openTestStore(t)
+	migrateOrFatal(t, s)
+	ctx := context.Background()
+	cutoff := recoveryRefTime.Add(-30 * 24 * time.Hour)
+
+	// Insert 3 recent issues (within cutoff) and 1 old issue (outside cutoff).
+	r1 := appendRecoveryRun(t, s, "ISS-1", "PROJ-1", 1, recentCompletedAt(10))
+	r2 := appendRecoveryRun(t, s, "ISS-2", "PROJ-2", 1, recentCompletedAt(8))
+	r3 := appendRecoveryRun(t, s, "ISS-3", "PROJ-3", 1, recentCompletedAt(3))
+	// Old run: completed_at is 35 days ago, older than the 30-day cutoff.
+	appendRecoveryRun(t, s, "ISS-OLD", "PROJ-OLD", 1, recentCompletedAt(35))
+
+	// Limit=2: should return the 2 newest (r3, r2); r1 is capped out; ISS-OLD is excluded.
+	got, err := s.LoadLatestSuccessfulRunsForReactionRecovery(ctx, cutoff, 2)
+	if err != nil {
+		t.Fatalf("LoadLatestSuccessfulRunsForReactionRecovery: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("LoadLatestSuccessfulRunsForReactionRecovery(limit=2) len = %d, want 2", len(got))
+	}
+	// Ordered newest-first.
+	if got[0].ID != r3.ID {
+		t.Errorf("got[0].ID = %d, want %d (ISS-3, newest)", got[0].ID, r3.ID)
+	}
+	if got[1].ID != r2.ID {
+		t.Errorf("got[1].ID = %d, want %d (ISS-2)", got[1].ID, r2.ID)
+	}
+	// r1 excluded by cap.
+	for _, e := range got {
+		if e.IssueID == r1.IssueID {
+			t.Errorf("ISS-1 (r1) should be excluded by limit=2, but appears in result")
+		}
+		if e.IssueID == "ISS-OLD" {
+			t.Errorf("ISS-OLD should be excluded by cutoff, but appears in result")
+		}
+	}
+}
+
+func TestLoadLatestSuccessfulRunsForReactionRecovery_IgnoresFailedAndEmptyWorkspace(t *testing.T) {
+	t.Parallel()
+
+	s := openTestStore(t)
+	migrateOrFatal(t, s)
+	ctx := context.Background()
+	cutoff := recoveryRefTime.Add(-30 * 24 * time.Hour)
+
+	// Excluded: failed run.
+	appendOrFatal(t, s, RunHistory{
+		IssueID: "ISS-FAIL", Identifier: "PROJ-F", Attempt: 1,
+		AgentAdapter: "mock", Workspace: "/ws/PROJ-F",
+		StartedAt: recentCompletedAt(2), CompletedAt: recentCompletedAt(2),
+		Status: "failed",
+	})
+	// Excluded: cancelled run.
+	appendOrFatal(t, s, RunHistory{
+		IssueID: "ISS-CANCEL", Identifier: "PROJ-C", Attempt: 1,
+		AgentAdapter: "mock", Workspace: "/ws/PROJ-C",
+		StartedAt: recentCompletedAt(2), CompletedAt: recentCompletedAt(2),
+		Status: "cancelled",
+	})
+	// Excluded: succeeded but empty workspace.
+	appendOrFatal(t, s, RunHistory{
+		IssueID: "ISS-NOPATH", Identifier: "PROJ-NP", Attempt: 1,
+		AgentAdapter: "mock", Workspace: "",
+		StartedAt: recentCompletedAt(2), CompletedAt: recentCompletedAt(2),
+		Status: "succeeded",
+	})
+	// Included: succeeded with non-empty workspace.
+	eligible := appendRecoveryRun(t, s, "ISS-OK", "PROJ-OK", 1, recentCompletedAt(2))
+
+	got, err := s.LoadLatestSuccessfulRunsForReactionRecovery(ctx, cutoff, 200)
+	if err != nil {
+		t.Fatalf("LoadLatestSuccessfulRunsForReactionRecovery: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("LoadLatestSuccessfulRunsForReactionRecovery() len = %d, want 1", len(got))
+	}
+	if got[0].IssueID != eligible.IssueID {
+		t.Errorf("LoadLatestSuccessfulRunsForReactionRecovery().IssueID = %q, want %q", got[0].IssueID, eligible.IssueID)
+	}
+}
+
+func TestLoadLatestSuccessfulRunsForReactionRecovery_DisplayIDRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	s := openTestStore(t)
+	migrateOrFatal(t, s)
+	ctx := context.Background()
+	cutoff := recoveryRefTime.Add(-30 * 24 * time.Hour)
+
+	run := RunHistory{
+		IssueID:      "ISS-DISP",
+		Identifier:   "PROJ-100",
+		DisplayID:    "owner/repo#42",
+		Attempt:      3,
+		AgentAdapter: "mock",
+		Workspace:    "/ws/PROJ-100",
+		StartedAt:    recentCompletedAt(1),
+		CompletedAt:  recentCompletedAt(1),
+		Status:       "succeeded",
+	}
+	appendOrFatal(t, s, run)
+
+	got, err := s.LoadLatestSuccessfulRunsForReactionRecovery(ctx, cutoff, 200)
+	if err != nil {
+		t.Fatalf("LoadLatestSuccessfulRunsForReactionRecovery: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("LoadLatestSuccessfulRunsForReactionRecovery() len = %d, want 1", len(got))
+	}
+	if got[0].DisplayID != "owner/repo#42" {
+		t.Errorf("DisplayID = %q, want %q", got[0].DisplayID, "owner/repo#42")
+	}
+	if got[0].Attempt != 3 {
+		t.Errorf("Attempt = %d, want 3", got[0].Attempt)
+	}
+}
+
+func TestLoadLatestSuccessfulRunsForReactionRecovery_DBError(t *testing.T) {
+	t.Parallel()
+
+	s := openTestStore(t)
+	migrateOrFatal(t, s)
+
+	if err := s.db.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	cutoff := recoveryRefTime.Add(-30 * 24 * time.Hour)
+	_, err := s.LoadLatestSuccessfulRunsForReactionRecovery(context.Background(), cutoff, 200)
+	if err == nil {
+		t.Fatal("LoadLatestSuccessfulRunsForReactionRecovery on closed DB = nil, want error")
+	}
+	if !strings.Contains(err.Error(), "load recovery runs") {
+		t.Errorf("LoadLatestSuccessfulRunsForReactionRecovery error = %q, want wrapped 'load recovery runs'", err.Error())
 	}
 }

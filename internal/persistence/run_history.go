@@ -5,7 +5,10 @@ import (
 	"database/sql"
 	"fmt"
 	"strings"
+	"time"
 )
+
+const reactionRecoveryMaxCandidates = 200
 
 // RunHistory represents a single completed run attempt persisted in the
 // run_history table. The ID field is assigned by the database on insert and
@@ -115,6 +118,77 @@ func (s *Store) QueryRunHistoryByIssue(ctx context.Context, issueID string) ([]R
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("query run history by issue: %w", err)
+	}
+	return entries, nil
+}
+
+// LoadLatestSuccessfulRunsForReactionRecovery returns at most limit latest
+// successful run_history rows, one per issue, for rows with non-empty
+// workspace paths and completed_at >= completedAfter. Results are ordered by
+// descending run_history id. The limit is clamped to the recovery maximum
+// before querying. Returns an empty non-nil slice when no rows qualify.
+func (s *Store) LoadLatestSuccessfulRunsForReactionRecovery(ctx context.Context, completedAfter time.Time, limit int) ([]RunHistory, error) {
+	if limit <= 0 {
+		limit = 1
+	}
+	if limit > reactionRecoveryMaxCandidates {
+		limit = reactionRecoveryMaxCandidates
+	}
+
+	rows, err := s.db.QueryContext(ctx,
+		`WITH latest AS (
+			SELECT issue_id, MAX(id) AS latest_id
+			FROM run_history
+			WHERE status = 'succeeded'
+			  AND workspace <> ''
+			  AND completed_at >= ?
+			GROUP BY issue_id
+		), bounded AS (
+			SELECT latest_id
+			FROM latest
+			ORDER BY latest_id DESC
+			LIMIT ?
+		)
+		SELECT r.id, r.issue_id, r.identifier, r.display_identifier, r.attempt, r.agent_adapter,
+			r.workspace, r.started_at, r.completed_at, r.status, r.error, r.workflow_file,
+			r.turns_completed, r.review_metadata
+		FROM run_history AS r
+		JOIN bounded ON bounded.latest_id = r.id
+		ORDER BY r.id DESC`, completedAfter.UTC().Format(time.RFC3339), limit)
+	if err != nil {
+		return nil, fmt.Errorf("load recovery runs: %w", err)
+	}
+	defer rows.Close() //nolint:errcheck // read-only query; close error is non-actionable
+
+	entries := []RunHistory{}
+	for rows.Next() {
+		var run RunHistory
+		var errVal, wfVal, dispIDVal, reviewMetaVal sql.NullString
+		if err := rows.Scan(
+			&run.ID, &run.IssueID, &run.Identifier, &dispIDVal, &run.Attempt, &run.AgentAdapter,
+			&run.Workspace, &run.StartedAt, &run.CompletedAt, &run.Status, &errVal, &wfVal,
+			&run.TurnsCompleted, &reviewMetaVal,
+		); err != nil {
+			return nil, fmt.Errorf("load recovery runs: %w", err)
+		}
+		if errVal.Valid {
+			errorText := errVal.String
+			run.Error = &errorText
+		}
+		if wfVal.Valid {
+			run.WorkflowFile = wfVal.String
+		}
+		if dispIDVal.Valid {
+			run.DisplayID = dispIDVal.String
+		}
+		if reviewMetaVal.Valid {
+			metaJSON := reviewMetaVal.String
+			run.ReviewMetadata = &metaJSON
+		}
+		entries = append(entries, run)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("load recovery runs: %w", err)
 	}
 	return entries, nil
 }
