@@ -579,6 +579,12 @@ and non-empty. Agent-created PRs MUST write `pr_number`, `owner`, and `repo` to
 (written by the agent), not from the tracker project configuration. This decouples SCM
 repository identity from the tracker project identifier.
 
+**Recovery timestamp:** Hooks that push commits or create PRs SHOULD write `pushed_at` to
+`.sortie/scm.json` when review or CI reaction recovery is enabled. Startup recovery uses
+`pushed_at` to decide whether handoff-stage reaction work is fresh. If `pushed_at` is absent,
+recovery falls back to `run_history.completed_at`, so long-lived PRs can age out based on the
+agent completion time instead of the latest push time.
+
 **Debounce behavior:** When review comments are detected but the newest comment timestamp
 is within the debounce window, dispatch is deferred. This ensures the reviewer has finished
 their full review before the agent starts addressing comments.

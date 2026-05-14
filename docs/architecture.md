@@ -340,8 +340,9 @@ Fields:
   dispatched per issue and reaction kind; reset when the issue leaves the running/retry maps;
   runtime-only, not persisted)
 - `pending_reactions` (map `issue_id:kind -> PendingReaction`; populated by worker exit on normal
-  exits with SCM metadata when a CI status provider or SCM adapter is configured; consumed by
-  per-kind reconcile functions during the reconcile tick — `reconcile_ci_status` for kind `ci`,
+  exits with SCM metadata when a CI status provider or SCM adapter is configured, and reconstructed
+  at startup by `RecoverPendingReactions` for eligible handoff-stage runs; consumed by per-kind
+  reconcile functions during the reconcile tick — `reconcile_ci_status` for kind `ci`,
   `reconcile_review_comments` for kind `review`; runtime-only, not persisted)
 
 ### 4.2 Stable Identifiers and Normalization Rules
@@ -1065,6 +1066,9 @@ Distinct terminal reasons are important because retry logic and logs differ.
 - Restart recovery uses persisted state from SQLite for retry queues and session metadata,
   supplemented by tracker polling for current issue states and filesystem inspection for workspace
   existence.
+- Startup pending reaction recovery uses `run_history`, tracker state, and `.sortie/scm.json` to
+  reconstruct runtime `pending_reactions` for recent handoff-stage runs before the first poll tick.
+  The scan is bounded by `PendingReactionRecoveryLookback` and a fixed candidate cap.
 - Startup terminal cleanup removes stale workspaces for issues already in terminal states.
 
 #### Startup Recovery Sequence (SQLite)
@@ -1073,8 +1077,10 @@ Distinct terminal reasons are important because retry logic and logs differ.
 2. Load persisted retry entries from SQLite.
 3. Reconstruct retry timers from persisted `due_at` timestamps.
 4. Query tracker for terminal-state issues and clean corresponding workspaces.
-5. Query tracker for active issues and reconcile with persisted state.
-6. Begin normal polling loop.
+5. Construct reaction providers and call `RecoverPendingReactions` to restore eligible CI and
+  review pending entries for handoff-stage issues.
+6. Query tracker for active issues and reconcile with persisted state.
+7. Begin normal polling loop.
 
 ## 8. Polling, Scheduling, and Reconciliation
 
@@ -1348,9 +1354,9 @@ feedback, review comment routing, and other features can reuse.
   absent, the file is treated as missing and CI status queries are skipped.
 - `sha` (string, optional): the commit SHA at push time. When present, the orchestrator passes
   this to `CIStatusProvider.FetchCIStatus` instead of the branch name for deterministic results.
-- `pushed_at` (string, optional): ISO-8601 timestamp of the push. This field is reserved metadata
-  for producers and future consumers of `.sortie/scm.json`. The orchestrator does not use it for
-  CI gating today.
+- `pushed_at` (string, optional): ISO-8601 timestamp of the push. Startup pending reaction recovery
+  uses this timestamp to skip stale SCM activity. When absent, recovery falls back to
+  `run_history.completed_at`.
 - `pr_number` (integer, optional): the pull request number associated with this branch. Zero or
   absent when no PR has been created. Written by the agent or post-push hook. When positive and
   `owner` and `repo` are non-empty, the orchestrator creates a pending review comment reaction
@@ -2169,7 +2175,12 @@ Review comment reconciliation only processes PRs created by Sortie:
 1. `SCMMetadata.pr_number > 0` — only workspaces where the agent created a PR have this field.
    Since `.sortie/scm.json` is written by the agent inside a Sortie-managed workspace, this is
    inherently scoped.
-2. Claimed check: only issues in `claimed` get review polling. Released issues are not polled.
+2. Runtime scope: review polling processes entries in `pending_reactions`. Normal worker exit can
+  create those entries while the issue is still claimed, and startup recovery can recreate them for
+  recent handoff-stage issues after the claim has been released.
+
+Future reaction kinds whose lifecycle outlives active tracker states MUST define restart recovery
+and kind-specific `.sortie/scm.json` metadata validation before they can be polled after handoff.
 
 ## 12. Prompt Construction and Context Assembly
 
