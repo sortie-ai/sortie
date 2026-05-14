@@ -1366,6 +1366,285 @@ func TestHandleWorkerExit_EmptyActiveStatesDefaultsToContinuationRetry(t *testin
 	}
 }
 
+// --- Handoff pending-reaction regression tests (FR-1 through FR-7) ---
+
+func TestHandleWorkerExit_HandoffTransitionSucceeds_PopulatesReviewPendingReaction(t *testing.T) {
+	t.Parallel()
+
+	wsPath := t.TempDir()
+	writePRSCMMetadata(t, wsPath, 42, "acme", "myrepo", "feature/HO-R1", "deadbeef")
+
+	store := &mockExitStore{}
+	tracker := &mockTrackerAdapter{}
+	state := exitStateWithIssue(t, "HO-R1", "In Progress")
+	params := defaultExitParams(t, store)
+	params.TrackerAdapter = tracker
+	params.HandoffState = "In Review"
+	params.ActiveStates = []string{"In Progress"}
+	params.SCMAdapter = &scmAdapterStubExit{}
+
+	HandleWorkerExit(state, WorkerResult{
+		IssueID:       "HO-R1",
+		Identifier:    "HO-R1-ident",
+		ExitKind:      WorkerExitNormal,
+		AgentAdapter:  "mock",
+		WorkspacePath: wsPath,
+	}, params)
+
+	// TransitionIssue called exactly once.
+	if len(tracker.transitionCalls) != 1 {
+		t.Fatalf("TransitionIssue called %d times, want 1", len(tracker.transitionCalls))
+	}
+
+	// Claim released after successful handoff.
+	if _, ok := state.Claimed["HO-R1"]; ok {
+		t.Error("state.Claimed[HO-R1] present after successful handoff, want released")
+	}
+
+	// No ordinary retry scheduled.
+	if _, ok := state.RetryAttempts["HO-R1"]; ok {
+		t.Error("retry scheduled after successful handoff, want none")
+	}
+
+	// Review pending reaction populated with PR metadata from fixture.
+	rkey := ReactionKey("HO-R1", ReactionKindReview)
+	pr, ok := state.PendingReactions[rkey]
+	if !ok {
+		t.Fatal("PendingReactions[HO-R1:review] missing after successful handoff with PR metadata")
+	}
+	reviewData, ok := pr.KindData.(*ReviewReactionData)
+	if !ok {
+		t.Fatalf("KindData type = %T, want *ReviewReactionData", pr.KindData)
+	}
+	if reviewData.PRNumber != 42 {
+		t.Errorf("ReviewReactionData.PRNumber = %d, want 42", reviewData.PRNumber)
+	}
+	if reviewData.Owner != "acme" {
+		t.Errorf("ReviewReactionData.Owner = %q, want %q", reviewData.Owner, "acme")
+	}
+	if reviewData.Repo != "myrepo" {
+		t.Errorf("ReviewReactionData.Repo = %q, want %q", reviewData.Repo, "myrepo")
+	}
+	if reviewData.Branch != "feature/HO-R1" {
+		t.Errorf("ReviewReactionData.Branch = %q, want %q", reviewData.Branch, "feature/HO-R1")
+	}
+	if reviewData.SHA != "deadbeef" {
+		t.Errorf("ReviewReactionData.SHA = %q, want %q", reviewData.SHA, "deadbeef")
+	}
+}
+
+func TestHandleWorkerExit_HandoffTransitionFails_PopulatesReviewPendingReaction(t *testing.T) {
+	t.Parallel()
+
+	wsPath := t.TempDir()
+	writePRSCMMetadata(t, wsPath, 42, "acme", "myrepo", "feature/HO-R2", "deadbeef")
+
+	store := &mockExitStore{}
+	tracker := &mockTrackerAdapter{
+		transitionIssueFn: func(_ context.Context, _, _ string) error {
+			return errors.New("transition failed")
+		},
+	}
+	state := exitStateWithIssue(t, "HO-R2", "In Progress")
+	params := defaultExitParams(t, store)
+	params.TrackerAdapter = tracker
+	params.HandoffState = "In Review"
+	params.ActiveStates = []string{"In Progress"}
+	params.SCMAdapter = &scmAdapterStubExit{}
+
+	HandleWorkerExit(state, WorkerResult{
+		IssueID:       "HO-R2",
+		Identifier:    "HO-R2-ident",
+		ExitKind:      WorkerExitNormal,
+		AgentAdapter:  "mock",
+		WorkspacePath: wsPath,
+	}, params)
+
+	// Continuation retry scheduled after handoff failure.
+	if _, ok := state.RetryAttempts["HO-R2"]; !ok {
+		t.Fatal("retry not scheduled after failed handoff transition, want continuation retry")
+	}
+
+	// Claim preserved after non-soft-stop handoff failure.
+	if _, ok := state.Claimed["HO-R2"]; !ok {
+		t.Error("state.Claimed[HO-R2] absent after failed handoff, want preserved")
+	}
+
+	// Review pending reaction populated despite handoff failure.
+	rkey := ReactionKey("HO-R2", ReactionKindReview)
+	pr, ok := state.PendingReactions[rkey]
+	if !ok {
+		t.Fatal("PendingReactions[HO-R2:review] missing after failed handoff with PR metadata")
+	}
+	reviewData, ok := pr.KindData.(*ReviewReactionData)
+	if !ok {
+		t.Fatalf("KindData type = %T, want *ReviewReactionData", pr.KindData)
+	}
+	if reviewData.PRNumber != 42 {
+		t.Errorf("ReviewReactionData.PRNumber = %d, want 42", reviewData.PRNumber)
+	}
+	if reviewData.Owner != "acme" {
+		t.Errorf("ReviewReactionData.Owner = %q, want %q", reviewData.Owner, "acme")
+	}
+	if reviewData.Repo != "myrepo" {
+		t.Errorf("ReviewReactionData.Repo = %q, want %q", reviewData.Repo, "myrepo")
+	}
+}
+
+func TestHandleWorkerExit_HandoffTransitionSucceeds_PopulatesCIPendingReaction(t *testing.T) {
+	t.Parallel()
+
+	wsPath := t.TempDir()
+	writeSCMMetadata(t, wsPath, "feature/HO-C1", "cafebabe")
+
+	store := &mockExitStore{}
+	tracker := &mockTrackerAdapter{}
+	state := exitStateWithIssue(t, "HO-C1", "In Progress")
+	params := defaultExitParams(t, store)
+	params.TrackerAdapter = tracker
+	params.HandoffState = "In Review"
+	params.ActiveStates = []string{"In Progress"}
+	params.CIProvider = &ciProviderStubExit{}
+
+	HandleWorkerExit(state, WorkerResult{
+		IssueID:       "HO-C1",
+		Identifier:    "HO-C1-ident",
+		ExitKind:      WorkerExitNormal,
+		AgentAdapter:  "mock",
+		WorkspacePath: wsPath,
+	}, params)
+
+	// Claim released after successful handoff.
+	if _, ok := state.Claimed["HO-C1"]; ok {
+		t.Error("state.Claimed[HO-C1] present after successful handoff, want released")
+	}
+
+	// No ordinary retry scheduled.
+	if _, ok := state.RetryAttempts["HO-C1"]; ok {
+		t.Error("retry scheduled after successful handoff, want none")
+	}
+
+	// CI pending reaction populated with branch and SHA from SCM metadata.
+	rkey := ReactionKey("HO-C1", ReactionKindCI)
+	ci, ok := state.PendingReactions[rkey]
+	if !ok {
+		t.Fatal("PendingReactions[HO-C1:ci] missing after successful handoff with branch in SCM metadata")
+	}
+	ciData, ok := ci.KindData.(*CIReactionData)
+	if !ok {
+		t.Fatalf("KindData type = %T, want *CIReactionData", ci.KindData)
+	}
+	if ciData.Branch != "feature/HO-C1" {
+		t.Errorf("CIReactionData.Branch = %q, want %q", ciData.Branch, "feature/HO-C1")
+	}
+	if ciData.SHA != "cafebabe" {
+		t.Errorf("CIReactionData.SHA = %q, want %q", ciData.SHA, "cafebabe")
+	}
+}
+
+func TestHandleWorkerExit_HandoffTransitionFails_PopulatesCIPendingReaction(t *testing.T) {
+	t.Parallel()
+
+	wsPath := t.TempDir()
+	writeSCMMetadata(t, wsPath, "feature/HO-C2", "cafebabe")
+
+	store := &mockExitStore{}
+	tracker := &mockTrackerAdapter{
+		transitionIssueFn: func(_ context.Context, _, _ string) error {
+			return errors.New("transition failed")
+		},
+	}
+	state := exitStateWithIssue(t, "HO-C2", "In Progress")
+	params := defaultExitParams(t, store)
+	params.TrackerAdapter = tracker
+	params.HandoffState = "In Review"
+	params.ActiveStates = []string{"In Progress"}
+	params.CIProvider = &ciProviderStubExit{}
+
+	HandleWorkerExit(state, WorkerResult{
+		IssueID:       "HO-C2",
+		Identifier:    "HO-C2-ident",
+		ExitKind:      WorkerExitNormal,
+		AgentAdapter:  "mock",
+		WorkspacePath: wsPath,
+	}, params)
+
+	// Continuation retry scheduled after handoff failure.
+	if _, ok := state.RetryAttempts["HO-C2"]; !ok {
+		t.Fatal("retry not scheduled after failed handoff transition, want continuation retry")
+	}
+
+	// CI pending reaction populated despite handoff failure.
+	rkey := ReactionKey("HO-C2", ReactionKindCI)
+	ci, ok := state.PendingReactions[rkey]
+	if !ok {
+		t.Fatal("PendingReactions[HO-C2:ci] missing after failed handoff with branch in SCM metadata")
+	}
+	ciData, ok := ci.KindData.(*CIReactionData)
+	if !ok {
+		t.Fatalf("KindData type = %T, want *CIReactionData", ci.KindData)
+	}
+	if ciData.Branch != "feature/HO-C2" {
+		t.Errorf("CIReactionData.Branch = %q, want %q", ciData.Branch, "feature/HO-C2")
+	}
+	if ciData.SHA != "cafebabe" {
+		t.Errorf("CIReactionData.SHA = %q, want %q", ciData.SHA, "cafebabe")
+	}
+}
+
+func TestHandleWorkerExit_HandoffReview_DoesNotOverwriteExistingPendingReaction(t *testing.T) {
+	t.Parallel()
+
+	wsPath := t.TempDir()
+	writePRSCMMetadata(t, wsPath, 42, "acme", "myrepo", "feature/HO-DUP1", "deadbeef")
+
+	store := &mockExitStore{}
+	tracker := &mockTrackerAdapter{}
+	state := exitStateWithIssue(t, "HO-DUP1", "In Progress")
+
+	// Seed an existing review pending entry with a distinct PRNumber.
+	existingEntry := &PendingReaction{
+		IssueID:   "HO-DUP1",
+		Kind:      ReactionKindReview,
+		CreatedAt: baseTime,
+		KindData: &ReviewReactionData{
+			PRNumber: 99,
+			Owner:    "seed-owner",
+			Repo:     "seed-repo",
+			Branch:   "seed-branch",
+		},
+	}
+	rkey := ReactionKey("HO-DUP1", ReactionKindReview)
+	state.PendingReactions[rkey] = existingEntry
+
+	params := defaultExitParams(t, store)
+	params.TrackerAdapter = tracker
+	params.HandoffState = "In Review"
+	params.ActiveStates = []string{"In Progress"}
+	params.SCMAdapter = &scmAdapterStubExit{}
+
+	HandleWorkerExit(state, WorkerResult{
+		IssueID:       "HO-DUP1",
+		Identifier:    "HO-DUP1-ident",
+		ExitKind:      WorkerExitNormal,
+		AgentAdapter:  "mock",
+		WorkspacePath: wsPath,
+	}, params)
+
+	// Seeded entry must not be replaced.
+	got := state.PendingReactions[rkey]
+	if got != existingEntry {
+		t.Error("PendingReactions[HO-DUP1:review] was replaced; want existing entry preserved")
+	}
+	reviewData, ok := got.KindData.(*ReviewReactionData)
+	if !ok {
+		t.Fatalf("KindData type = %T, want *ReviewReactionData", got.KindData)
+	}
+	if reviewData.PRNumber != 99 {
+		t.Errorf("ReviewReactionData.PRNumber = %d, want 99 (seeded value)", reviewData.PRNumber)
+	}
+}
+
 func TestHandleWorkerExit_PendingCleanupSkipsWhenNoWorkspacePath(t *testing.T) {
 	t.Parallel()
 
@@ -2785,12 +3064,37 @@ func writeSCMMetadata(t *testing.T, wsPath, branch, sha string) {
 	}
 }
 
+// writePRSCMMetadata writes a .sortie/scm.json with full PR metadata fields to
+// wsPath so that workspace.ReadSCMMetadata returns all review-reaction fields.
+func writePRSCMMetadata(t *testing.T, wsPath string, prNumber int, owner, repo, branch, sha string) {
+	t.Helper()
+	dotSortie := filepath.Join(wsPath, ".sortie")
+	if err := os.MkdirAll(dotSortie, 0o750); err != nil {
+		t.Fatalf("MkdirAll .sortie: %v", err)
+	}
+	content := fmt.Sprintf(`{"pr_number":%d,"owner":%q,"repo":%q,"branch":%q,"sha":%q}`,
+		prNumber, owner, repo, branch, sha)
+	if err := os.WriteFile(filepath.Join(dotSortie, "scm.json"), []byte(content), 0o600); err != nil {
+		t.Fatalf("WriteFile scm.json: %v", err)
+	}
+}
+
 // ciProviderStubExit is a minimal CIStatusProvider for exit tests; FetchCIStatus
 // must not be called by HandleWorkerExit (that is reconcileCIStatus's job).
 type ciProviderStubExit struct{}
 
 func (c *ciProviderStubExit) FetchCIStatus(_ context.Context, _ string) (domain.CIResult, error) {
 	panic("FetchCIStatus must not be called by HandleWorkerExit")
+}
+
+// scmAdapterStubExit is a minimal SCMAdapter for exit tests; FetchPendingReviews
+// must not be called by HandleWorkerExit (that is reconcileReviewComments's job).
+type scmAdapterStubExit struct{}
+
+var _ domain.SCMAdapter = (*scmAdapterStubExit)(nil)
+
+func (s *scmAdapterStubExit) FetchPendingReviews(_ context.Context, _ int, _, _ string) ([]domain.ReviewComment, error) {
+	panic("FetchPendingReviews must not be called by HandleWorkerExit")
 }
 
 func TestHandleWorkerExit_CIProvider_PopulatesPendingReaction(t *testing.T) {

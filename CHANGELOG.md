@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Orchestrator: CI and PR review pending reactions are now enqueued when
+  `tracker.handoff_state` is configured. Previously, a successful handoff
+  released the claim before `HandleWorkerExit` checked reaction
+  eligibility, so the reconcile loop had no entry to poll — post-run CI
+  failures and review comments on agent-created PRs went unobserved and
+  no continuation turn was dispatched. Eligibility now derives from the
+  exit-time claim state and the handoff path; blocked soft stops remain
+  ineligible and existing review-reaction idempotency is preserved.
+  ([#506](https://github.com/sortie-ai/sortie/issues/506))
+
 ## [1.9.0] - 2026-04-26
 
 ### Added

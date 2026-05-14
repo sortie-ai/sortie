@@ -293,9 +293,12 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 		// When ActiveStates is nil or empty, default to true (pessimistic —
 		// backward compatibility guard: continuation retry fires).
 		issueIsActive := len(params.ActiveStates) == 0 || isActiveState(entry.Issue.State, params.ActiveStates)
+		_, claimedAtExit := state.Claimed[workerResult.IssueID]
+		blockedSoftStop := workerResult.SoftStop && workerResult.SoftStopReason == string(workspace.StatusBlocked)
+		handoffPath := params.HandoffState != "" && issueIsActive && !blockedSoftStop
 
 		switch {
-		case workerResult.SoftStop && workerResult.SoftStopReason == string(workspace.StatusBlocked):
+		case blockedSoftStop:
 			// Blocked agents have no further work; suppress continuation
 			// retry and release the claim immediately.
 			log.Info("continuation retry suppressed",
@@ -304,7 +307,7 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 			CancelRetry(state, workerResult.IssueID)
 			delete(state.Claimed, workerResult.IssueID)
 
-		case params.HandoffState != "" && issueIsActive:
+		case handoffPath:
 			// Handoff: issue is active and handoff_state is configured.
 			// Guard against nil TrackerAdapter (misconfiguration or test
 			// that sets HandoffState without providing an adapter).
@@ -411,13 +414,14 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 			delete(state.Claimed, workerResult.IssueID)
 		}
 
+		_, stillClaimed := state.Claimed[workerResult.IssueID]
+		reactionEnqueueAllowed := claimedAtExit && (handoffPath || stillClaimed)
+
 		// Record a pending CI check when the CI provider is configured and
-		// the worker produced workspace SCM metadata. Skipped when:
-		//   - SoftStop (claim already released, no further action)
-		//   - Successful handoff (claim released, issue handed to human)
-		//   - No workspace path (worker exited before workspace prep)
+		// the worker produced workspace SCM metadata. Handoff paths remain
+		// eligible even after the claim is released.
 		if params.CIProvider != nil && workerResult.WorkspacePath != "" {
-			if _, stillClaimed := state.Claimed[workerResult.IssueID]; stillClaimed {
+			if reactionEnqueueAllowed {
 				scm := workspace.ReadSCMMetadata(workerResult.WorkspacePath, log)
 				if scm.Branch != "" {
 					nowCI := time.Now().UTC()
@@ -445,7 +449,7 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 		// Record a pending review check when the SCM adapter is configured
 		// and the workspace has PR metadata with SCM repository identity.
 		if params.SCMAdapter != nil && workerResult.WorkspacePath != "" {
-			if _, stillClaimed := state.Claimed[workerResult.IssueID]; stillClaimed {
+			if reactionEnqueueAllowed {
 				scm := workspace.ReadSCMMetadata(workerResult.WorkspacePath, log)
 				if scm.PRNumber > 0 && scm.Branch != "" && scm.Owner != "" && scm.Repo != "" {
 					nowReview := time.Now().UTC()
