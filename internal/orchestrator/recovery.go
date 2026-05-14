@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"strings"
 	"time"
@@ -143,7 +144,7 @@ func RecoverPendingReactions(ctx context.Context, state *State, runs []persisten
 
 	statesByID, err := params.TrackerAdapter.FetchIssueStatesByIDs(ctx, issueIDs)
 	if err != nil {
-		return PendingReactionRecoveryResult{}, err
+		return PendingReactionRecoveryResult{}, fmt.Errorf("fetch pending reaction recovery issue states: %w", err)
 	}
 	outcome.StateChecked = len(issueIDs)
 

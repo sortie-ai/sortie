@@ -283,36 +283,34 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 		)
 	}
 
-	recoveryNow := time.Now().UTC()
-	recoveryLookback := orchestrator.PendingReactionRecoveryLookback
-	recoveryCutoff := recoveryNow.Add(-recoveryLookback)
-	recoveryRuns, err := store.LoadLatestSuccessfulRunsForReactionRecovery(ctx, recoveryCutoff, orchestrator.PendingReactionRecoveryMaxCandidates)
-	if err != nil {
-		br.logger.Warn("failed to load pending reaction recovery candidates",
-			slog.Any("error", err),
-		)
-		recoveryRuns = []persistence.RunHistory{}
+	recoveryEnabled := br.cfg.Tracker.HandoffState != "" && (ciProvider != nil || scmAdapter != nil)
+	recoveryOutcome := orchestrator.PendingReactionRecoveryResult{}
+	var recoveryErr error
+	if recoveryEnabled {
+		recoveryNow := time.Now().UTC()
+		recoveryLookback := orchestrator.PendingReactionRecoveryLookback
+		recoveryCutoff := recoveryNow.Add(-recoveryLookback)
+		var recoveryRuns []persistence.RunHistory
+		recoveryRuns, recoveryErr = store.LoadLatestSuccessfulRunsForReactionRecovery(ctx, recoveryCutoff, orchestrator.PendingReactionRecoveryMaxCandidates)
+		if recoveryErr == nil {
+			recoveryOutcome, recoveryErr = orchestrator.RecoverPendingReactions(ctx, state, recoveryRuns, orchestrator.PendingReactionRecoveryParams{
+				WorkspaceRoot:    br.cfg.Workspace.Root,
+				TrackerAdapter:   br.trackerAdapter,
+				HandoffState:     br.cfg.Tracker.HandoffState,
+				TerminalStates:   br.cfg.Tracker.TerminalStates,
+				CIProvider:       ciProvider,
+				SCMAdapter:       scmAdapter,
+				RecoveryLookback: recoveryLookback,
+				MaxCandidates:    orchestrator.PendingReactionRecoveryMaxCandidates,
+				NowFunc: func() time.Time {
+					return recoveryNow
+				},
+				Logger: br.logger,
+			})
+		}
 	}
-	recoveryOutcome, err := orchestrator.RecoverPendingReactions(ctx, state, recoveryRuns, orchestrator.PendingReactionRecoveryParams{
-		WorkspaceRoot:    br.cfg.Workspace.Root,
-		TrackerAdapter:   br.trackerAdapter,
-		HandoffState:     br.cfg.Tracker.HandoffState,
-		TerminalStates:   br.cfg.Tracker.TerminalStates,
-		CIProvider:       ciProvider,
-		SCMAdapter:       scmAdapter,
-		RecoveryLookback: recoveryLookback,
-		MaxCandidates:    orchestrator.PendingReactionRecoveryMaxCandidates,
-		NowFunc: func() time.Time {
-			return recoveryNow
-		},
-		Logger: br.logger,
-	})
-	if err != nil {
-		br.logger.Warn("pending reaction recovery failed",
-			slog.Any("error", err),
-		)
-	}
-	br.logger.Info("pending reaction recovery completed",
+	recoveryLogAttrs := []any{
+		slog.Bool("enabled", recoveryEnabled),
 		slog.Int("candidates", recoveryOutcome.Candidates),
 		slog.Int("cap_skipped", recoveryOutcome.CapSkipped),
 		slog.Int("state_checked", recoveryOutcome.StateChecked),
@@ -320,7 +318,14 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 		slog.Int("ci_recovered", recoveryOutcome.CIRecovered),
 		slog.Int("stale_skipped", recoveryOutcome.StaleSkipped),
 		slog.Int("skipped", recoveryOutcome.Skipped),
-	)
+	}
+	if recoveryErr != nil {
+		recoveryLogAttrs = append(recoveryLogAttrs, slog.Bool("success", false), slog.Any("error", recoveryErr))
+		br.logger.Warn("pending reaction recovery failed", recoveryLogAttrs...)
+	} else {
+		recoveryLogAttrs = append(recoveryLogAttrs, slog.Bool("success", true))
+		br.logger.Info("pending reaction recovery completed", recoveryLogAttrs...)
+	}
 
 	// Attempt to bind the HTTP server before constructing metrics so
 	// that graceful degradation on an implicit default port conflict
