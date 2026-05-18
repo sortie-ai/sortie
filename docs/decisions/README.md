@@ -17,3 +17,4 @@ This directory contains architecturally significant decisions for Sortie, docume
 | [0008](0008-observability-model.md)              | Use Embedded Dashboard with Prometheus Metrics for Observability | Accepted |
 | [0009](0009-mcp-stdio-sidecar-for-tool-execution.md) | Use MCP stdio sidecar for agent tool execution               | Accepted |
 | [0010](0010-keep-tracker-adapter-unified.md)         | Keep TrackerAdapter as a Unified Interface                    | Accepted |
+| [0011](0011-dispatch-rule-configuration.md)          | Use First-Match-Wins Dispatch Rules in WORKFLOW.md Front Matter | Proposed |
