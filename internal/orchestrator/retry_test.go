@@ -350,16 +350,12 @@ func TestHandleRetryTimer(t *testing.T) {
 				if _, claimed := state.Claimed[id]; !claimed {
 					t.Errorf("Claimed[%s] missing after fetch failure, want claimed", id)
 				}
-				// SaveRetryEntry called once.
-				if len(store.savedEntries) != 1 {
-					t.Fatalf("SaveRetryEntry call count = %d, want 1", len(store.savedEntries))
+				// Known reaction retry reschedules stay runtime-only.
+				if len(store.savedEntries) != 0 {
+					t.Fatalf("SaveRetryEntry call count = %d, want 0", len(store.savedEntries))
 				}
-				if store.savedEntries[0].Attempt != 3 {
-					t.Errorf("saved entry Attempt = %d, want 3", store.savedEntries[0].Attempt)
-				}
-				// DeleteRetryEntry not called.
-				if len(store.deletedIssueID) != 0 {
-					t.Errorf("DeleteRetryEntry call count = %d, want 0", len(store.deletedIssueID))
+				if len(store.deletedIssueID) != 1 || store.deletedIssueID[0] != id {
+					t.Errorf("DeleteRetryEntry calls = %v, want [%s]", store.deletedIssueID, id)
 				}
 				// ReactionKind preserved across reschedule.
 				if entry.ReactionKind != ReactionKindCI {
@@ -448,12 +444,12 @@ func TestHandleRetryTimer(t *testing.T) {
 				if _, running := state.Running[id]; running {
 					t.Errorf("Running[%s] present, want absent (no dispatch)", id)
 				}
-				// SaveRetryEntry called.
-				if len(store.savedEntries) != 1 {
-					t.Fatalf("SaveRetryEntry call count = %d, want 1", len(store.savedEntries))
+				// Known reaction retry reschedules stay runtime-only.
+				if len(store.savedEntries) != 0 {
+					t.Fatalf("SaveRetryEntry call count = %d, want 0", len(store.savedEntries))
 				}
-				if store.savedEntries[0].Attempt != 2 {
-					t.Errorf("saved entry Attempt = %d, want 2", store.savedEntries[0].Attempt)
+				if len(store.deletedIssueID) != 1 || store.deletedIssueID[0] != id {
+					t.Errorf("DeleteRetryEntry calls = %v, want [%s]", store.deletedIssueID, id)
 				}
 				// ReactionKind preserved across reschedule.
 				if entry.ReactionKind != ReactionKindCI {
@@ -1931,8 +1927,8 @@ func TestHandleRetryTimer_ReactionInUnrelatedStateReschedules(t *testing.T) {
 	if entry.LastSSHHost != "host-a" {
 		t.Errorf("RetryAttempts[%s].LastSSHHost = %q, want %q", id, entry.LastSSHHost, "host-a")
 	}
-	if len(store.savedEntries) != 1 {
-		t.Errorf("SaveRetryEntry call count = %d, want 1", len(store.savedEntries))
+	if len(store.savedEntries) != 0 {
+		t.Errorf("SaveRetryEntry call count = %d, want 0 (reaction retry is runtime-only)", len(store.savedEntries))
 	}
 	if store.markDispatchedCalls != 0 {
 		t.Errorf("MarkReactionDispatched calls = %d, want 0 (no dispatch)", store.markDispatchedCalls)
@@ -2088,6 +2084,9 @@ func TestHandleRetryTimer_ReactionHandoffNoSlotsPreservesContext(t *testing.T) {
 	if store.markDispatchedCalls != 0 {
 		t.Errorf("MarkReactionDispatched calls = %d, want 0 (no dispatch)", store.markDispatchedCalls)
 	}
+	if len(store.savedEntries) != 0 {
+		t.Errorf("SaveRetryEntry call count = %d, want 0 (reaction retry is runtime-only)", len(store.savedEntries))
+	}
 	if entry.TimerHandle != nil {
 		entry.TimerHandle.Stop()
 	}
@@ -2144,6 +2143,9 @@ func TestHandleRetryTimer_ReactionHandoffPerStateCapExhaustedPreservesContext(t 
 	}
 	if store.markDispatchedCalls != 0 {
 		t.Errorf("MarkReactionDispatched calls = %d, want 0 (no dispatch)", store.markDispatchedCalls)
+	}
+	if len(store.savedEntries) != 0 {
+		t.Errorf("SaveRetryEntry call count = %d, want 0 (reaction retry is runtime-only)", len(store.savedEntries))
 	}
 	if entry.TimerHandle != nil {
 		entry.TimerHandle.Stop()
@@ -2205,6 +2207,9 @@ func TestHandleRetryTimer_ReactionActiveStateBlockerReschedules(t *testing.T) {
 	}
 	if store.markDispatchedCalls != 0 {
 		t.Errorf("MarkReactionDispatched calls = %d, want 0 (no dispatch)", store.markDispatchedCalls)
+	}
+	if len(store.savedEntries) != 0 {
+		t.Errorf("SaveRetryEntry call count = %d, want 0 (reaction retry is runtime-only)", len(store.savedEntries))
 	}
 	if entry.TimerHandle != nil {
 		entry.TimerHandle.Stop()

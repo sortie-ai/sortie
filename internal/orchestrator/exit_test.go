@@ -365,6 +365,61 @@ func TestHandleWorkerExit_RetryableError(t *testing.T) {
 	}
 }
 
+func TestHandleWorkerExit_RetryableReactionErrorPreservesContext(t *testing.T) {
+	t.Parallel()
+
+	store := &mockExitStore{}
+	state := exitState(t, "ISSUE-R", intPtr(2))
+	contContext := map[string]any{
+		"review_comments": map[string]any{"count": 1},
+	}
+	entry := state.Running["ISSUE-R"]
+	entry.Issue = candidateIssue("ISSUE-R", "ISSUE-R-ident", "Ready For Review")
+	entry.SessionID = "entry-session"
+	entry.ContinuationContext = contContext
+	entry.ReactionKind = ReactionKindReview
+	params := defaultExitParams(t, store)
+
+	turnTimeoutErr := &domain.AgentError{Kind: domain.ErrTurnTimeout, Message: "timed out"}
+
+	HandleWorkerExit(state, WorkerResult{
+		IssueID:       "ISSUE-R",
+		Identifier:    "ISSUE-R-ident",
+		ExitKind:      WorkerExitError,
+		Error:         turnTimeoutErr,
+		SessionID:     "worker-session",
+		AgentAdapter:  "mock",
+		WorkspacePath: "/tmp/ws",
+		SSHHost:       "host-r",
+	}, params)
+
+	retryEntry, ok := state.RetryAttempts["ISSUE-R"]
+	if !ok {
+		t.Fatal("retry not scheduled after retryable reaction error")
+	}
+	if retryEntry.Attempt != 3 {
+		t.Errorf("retry Attempt = %d, want 3", retryEntry.Attempt)
+	}
+	if retryEntry.ReactionKind != ReactionKindReview {
+		t.Errorf("RetryEntry.ReactionKind = %q, want %q", retryEntry.ReactionKind, ReactionKindReview)
+	}
+	if retryEntry.ContinuationContext == nil {
+		t.Fatal("RetryEntry.ContinuationContext is nil, want preserved")
+	}
+	if _, ok := retryEntry.ContinuationContext["review_comments"]; !ok {
+		t.Error("RetryEntry.ContinuationContext missing review_comments key")
+	}
+	if retryEntry.SessionID != "" {
+		t.Errorf("RetryEntry.SessionID = %q, want empty", retryEntry.SessionID)
+	}
+	if retryEntry.LastSSHHost != "host-r" {
+		t.Errorf("RetryEntry.LastSSHHost = %q, want %q", retryEntry.LastSSHHost, "host-r")
+	}
+	if len(store.retryEntries) != 0 {
+		t.Errorf("SaveRetryEntry called %d times, want 0 (reaction retry is runtime-only)", len(store.retryEntries))
+	}
+}
+
 func TestHandleWorkerExit_NonRetryableError(t *testing.T) {
 	t.Parallel()
 

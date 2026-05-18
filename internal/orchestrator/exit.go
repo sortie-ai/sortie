@@ -507,13 +507,15 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 			}
 
 			ScheduleRetry(state, ScheduleRetryParams{
-				IssueID:     workerResult.IssueID,
-				Identifier:  workerResult.Identifier,
-				DisplayID:   entry.Issue.DisplayID,
-				Attempt:     nextAttempt,
-				DelayMS:     delayMS,
-				Error:       errMsg,
-				LastSSHHost: workerResult.SSHHost,
+				IssueID:             workerResult.IssueID,
+				Identifier:          workerResult.Identifier,
+				DisplayID:           entry.Issue.DisplayID,
+				Attempt:             nextAttempt,
+				DelayMS:             delayMS,
+				Error:               errMsg,
+				LastSSHHost:         workerResult.SSHHost,
+				ContinuationContext: entry.ContinuationContext,
+				ReactionKind:        entry.ReactionKind,
 			}, params.OnRetryFire)
 			metrics.IncRetries(triggerError)
 			retryScheduled = true
@@ -527,18 +529,20 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 
 	if retryScheduled {
 		if retryEntry, ok := state.RetryAttempts[workerResult.IssueID]; ok {
-			pEntry := persistence.RetryEntry{
-				IssueID:    retryEntry.IssueID,
-				Identifier: retryEntry.Identifier,
-				Attempt:    retryEntry.Attempt,
-				DueAtMs:    retryEntry.DueAtMS,
-				Error:      stringPtr(retryEntry.Error),
-				SessionID:  stringPtr(retryEntry.SessionID),
-			}
-			if err := params.Store.SaveRetryEntry(ctx, pEntry); err != nil {
-				log.Error("failed to persist retry entry",
-					slog.Any("error", err),
-				)
+			if !isKnownReactionKind(retryEntry.ReactionKind) {
+				pEntry := persistence.RetryEntry{
+					IssueID:    retryEntry.IssueID,
+					Identifier: retryEntry.Identifier,
+					Attempt:    retryEntry.Attempt,
+					DueAtMs:    retryEntry.DueAtMS,
+					Error:      stringPtr(retryEntry.Error),
+					SessionID:  stringPtr(retryEntry.SessionID),
+				}
+				if err := params.Store.SaveRetryEntry(ctx, pEntry); err != nil {
+					log.Error("failed to persist retry entry",
+						slog.Any("error", err),
+					)
+				}
 			}
 		}
 	}

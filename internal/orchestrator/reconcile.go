@@ -195,16 +195,33 @@ func reconcileStalled(state *State, params ReconcileParams, log *slog.Logger, ct
 		delayMS := computeBackoffDelay(nextAttempt, params.MaxRetryBackoffMS)
 
 		ScheduleRetry(state, ScheduleRetryParams{
-			IssueID:    issueID,
-			Identifier: entry.Identifier,
-			DisplayID:  entry.Issue.DisplayID,
-			Attempt:    nextAttempt,
-			DelayMS:    delayMS,
-			Error:      "stall timeout exceeded",
+			IssueID:             issueID,
+			Identifier:          entry.Identifier,
+			DisplayID:           entry.Issue.DisplayID,
+			Attempt:             nextAttempt,
+			DelayMS:             delayMS,
+			Error:               "stall timeout exceeded",
+			LastSSHHost:         entry.SSHHost,
+			SessionID:           entry.SessionID,
+			ContinuationContext: entry.ContinuationContext,
+			ReactionKind:        entry.ReactionKind,
 		}, params.OnRetryFire)
 		metrics.IncRetries(triggerStall)
 
 		if retryEntry, ok := state.RetryAttempts[issueID]; ok {
+			if isKnownReactionKind(retryEntry.ReactionKind) {
+				if err := params.Store.DeleteRetryEntry(ctx, issueID); err != nil {
+					entryLog.Error("failed to delete persisted reaction retry entry",
+						slog.Any("error", err),
+					)
+				}
+				entryLog.Warn("stall detected, cancelling worker",
+					slog.Int64("elapsed_ms", elapsedMS),
+					slog.Int("stall_timeout_ms", params.StallTimeoutMS),
+				)
+				continue
+			}
+
 			pEntry := persistence.RetryEntry{
 				IssueID:    retryEntry.IssueID,
 				Identifier: retryEntry.Identifier,

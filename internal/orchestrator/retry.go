@@ -154,7 +154,15 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 			ContinuationContext: popped.ContinuationContext,
 			ReactionKind:        popped.ReactionKind,
 		}, params.OnRetryFire)
-		persistRetryEntry(ctx, log, params.Store, state, issueID)
+		if isKnownReactionKind(popped.ReactionKind) {
+			if err := params.Store.DeleteRetryEntry(ctx, issueID); err != nil {
+				log.Error("failed to delete persisted reaction retry entry",
+					slog.Any("error", err),
+				)
+			}
+		} else {
+			persistRetryEntry(ctx, log, params.Store, state, issueID)
+		}
 		metrics.IncRetries(triggerTimer)
 	}
 

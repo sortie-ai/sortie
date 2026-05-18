@@ -1152,7 +1152,7 @@ func TestRecoverPendingReactions_RecoveredReviewDispatchesContinuation(t *testin
 	if retry.ReactionKind != ReactionKindReview {
 		t.Errorf("RetryEntry.ReactionKind = %q, want %q", retry.ReactionKind, ReactionKindReview)
 	}
-	if store.markDispatchedCalls != 1 {
-		t.Errorf("MarkReactionDispatched calls = %d, want 1", store.markDispatchedCalls)
+	if store.markDispatchedCalls != 0 {
+		t.Errorf("MarkReactionDispatched calls = %d, want 0 (mark deferred to dispatch site)", store.markDispatchedCalls)
 	}
 }

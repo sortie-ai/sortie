@@ -164,14 +164,6 @@ func reconcileReviewComments(state *State, params ReconcileParams, log *slog.Log
 		// Dispatch.
 		metrics.IncReviewChecks("dispatched")
 
-		// Mark dispatched synchronously before scheduling the retry to
-		// prevent duplicate dispatch on entry recreation.
-		if err := params.Store.MarkReactionDispatched(ctx, pending.IssueID, ReactionKindReview); err != nil {
-			entryLog.Warn("failed to mark review reaction dispatched",
-				slog.Any("error", err),
-			)
-		}
-
 		reviewContext := buildReviewTemplateMap(actionable)
 
 		CancelRetry(state, pending.IssueID)

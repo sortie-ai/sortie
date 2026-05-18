@@ -291,6 +291,66 @@ func TestReconcileStalled_ViaLastAgentTimestamp(t *testing.T) {
 	}
 }
 
+func TestReconcileStalled_ReactionRetryPreservesContext(t *testing.T) {
+	t.Parallel()
+
+	store := &mockReconcileStore{}
+	tracker := &mockReconcileTracker{states: map[string]string{
+		"ISSUE-R": "Ready For Review",
+	}}
+	params := defaultReconcileParams(t, store, tracker)
+	params.StallTimeoutMS = 60_000
+	params.HandoffState = "Ready For Review"
+
+	contContext := map[string]any{
+		"review_comments": map[string]any{"count": 2},
+	}
+	state := NewState(5000, 4, nil, AgentTotals{})
+	cc := &cancelCounter{}
+	state.Running["ISSUE-R"] = &RunningEntry{
+		Identifier:          "ISSUE-R-ident",
+		Issue:               candidateIssue("ISSUE-R", "ISSUE-R-ident", "Ready For Review"),
+		SessionID:           "sess-r",
+		SSHHost:             "host-r",
+		StartedAt:           reconcileBaseTime.Add(-120 * time.Second),
+		CancelFunc:          cc.cancel,
+		ContinuationContext: contContext,
+		ReactionKind:        ReactionKindReview,
+	}
+	state.Claimed["ISSUE-R"] = struct{}{}
+
+	ReconcileRunningIssues(state, params)
+
+	if cc.count != 1 {
+		t.Errorf("CancelFunc called %d times, want 1", cc.count)
+	}
+	retryEntry, ok := state.RetryAttempts["ISSUE-R"]
+	if !ok {
+		t.Fatal("retry not scheduled for stalled reaction entry")
+	}
+	if retryEntry.ReactionKind != ReactionKindReview {
+		t.Errorf("RetryEntry.ReactionKind = %q, want %q", retryEntry.ReactionKind, ReactionKindReview)
+	}
+	if retryEntry.ContinuationContext == nil {
+		t.Fatal("RetryEntry.ContinuationContext is nil, want preserved")
+	}
+	if _, ok := retryEntry.ContinuationContext["review_comments"]; !ok {
+		t.Error("RetryEntry.ContinuationContext missing review_comments key")
+	}
+	if retryEntry.SessionID != "sess-r" {
+		t.Errorf("RetryEntry.SessionID = %q, want %q", retryEntry.SessionID, "sess-r")
+	}
+	if retryEntry.LastSSHHost != "host-r" {
+		t.Errorf("RetryEntry.LastSSHHost = %q, want %q", retryEntry.LastSSHHost, "host-r")
+	}
+	if len(store.savedEntries) != 0 {
+		t.Errorf("SaveRetryEntry called %d times, want 0 (reaction retry is runtime-only)", len(store.savedEntries))
+	}
+	if len(store.deletedIssueID) != 1 || store.deletedIssueID[0] != "ISSUE-R" {
+		t.Errorf("DeleteRetryEntry calls = %v, want [ISSUE-R]", store.deletedIssueID)
+	}
+}
+
 func TestReconcileStalled_ViaStartedAtFallback(t *testing.T) {
 	t.Parallel()
 

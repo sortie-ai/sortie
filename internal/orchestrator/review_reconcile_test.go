@@ -434,8 +434,8 @@ func TestReconcileReviewComments_NewFingerprint_Dispatches(t *testing.T) {
 	if _, ok := state.PendingReactions[rkey]; ok {
 		t.Error("PendingReactions entry still present after dispatch; want consumed")
 	}
-	if store.markDispatchedCalls != 1 {
-		t.Errorf("MarkReactionDispatched calls = %d, want 1", store.markDispatchedCalls)
+	if store.markDispatchedCalls != 0 {
+		t.Errorf("MarkReactionDispatched calls = %d, want 0 (mark deferred to dispatch site)", store.markDispatchedCalls)
 	}
 	if _, ok := state.RetryAttempts["ISS-R-8"]; !ok {
 		t.Fatal("retry not scheduled after review dispatch; want scheduled")
@@ -518,8 +518,8 @@ func TestReconcileReviewComments_DebounceElapsed_Dispatches(t *testing.T) {
 	if _, ok := state.RetryAttempts["ISS-R-10"]; !ok {
 		t.Error("retry not scheduled after debounce elapsed; want scheduled")
 	}
-	if store.markDispatchedCalls != 1 {
-		t.Errorf("MarkReactionDispatched calls = %d, want 1", store.markDispatchedCalls)
+	if store.markDispatchedCalls != 0 {
+		t.Errorf("MarkReactionDispatched calls = %d, want 0 (mark deferred to dispatch site)", store.markDispatchedCalls)
 	}
 }
 
