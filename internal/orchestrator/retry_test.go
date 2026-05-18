@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"testing"
 	"time"
 
@@ -1720,5 +1721,615 @@ func TestHandleRetryTimer_Reschedule_PreservesSessionID(t *testing.T) {
 	}
 	if entry.TimerHandle != nil {
 		entry.TimerHandle.Stop()
+	}
+}
+
+// --- Handoff-state reaction retry tests ---
+
+func TestHandleRetryTimer_ReactionReviewInHandoffStateDispatches(t *testing.T) {
+	t.Parallel()
+
+	const id = "HANDOFF-REVIEW"
+	contContext := map[string]any{
+		"review_comments": map[string]any{"count": 3},
+	}
+
+	// No claim set — simulates post-handoff state (FR-10).
+	state := NewState(5000, 4, nil, AgentTotals{})
+	state.RetryAttempts[id] = &RetryEntry{
+		IssueID:             id,
+		Identifier:          id,
+		Attempt:             1,
+		ReactionKind:        ReactionKindReview,
+		ContinuationContext: contContext,
+		SessionID:           "sess-r1",
+	}
+
+	store := &mockRetryStore{}
+	tracker := &mockRetryTracker{
+		fetchedIssue: candidateIssue(id, id, "Ready For Review"),
+	}
+	params := defaultRetryParams(t, store, tracker)
+	params.HandoffState = "Ready For Review"
+
+	HandleRetryTimer(state, id, params)
+	t.Cleanup(func() { state.WorkerWg.Wait() })
+
+	entry, ok := state.Running[id]
+	if !ok {
+		t.Fatalf("Running[%s] missing after handoff-state review dispatch", id)
+	}
+	if entry.ContinuationContext == nil {
+		t.Fatal("RunningEntry.ContinuationContext is nil, want forwarded context")
+	}
+	if _, ok := entry.ContinuationContext["review_comments"]; !ok {
+		t.Error("RunningEntry.ContinuationContext missing review_comments key")
+	}
+	if entry.ReactionKind != ReactionKindReview {
+		t.Errorf("RunningEntry.ReactionKind = %q, want %q", entry.ReactionKind, ReactionKindReview)
+	}
+	if store.markDispatchedCalls != 1 {
+		t.Errorf("MarkReactionDispatched calls = %d, want 1", store.markDispatchedCalls)
+	}
+	if store.markDispatchedIssueID != id {
+		t.Errorf("MarkReactionDispatched issueID = %q, want %q", store.markDispatchedIssueID, id)
+	}
+	if store.markDispatchedKind != ReactionKindReview {
+		t.Errorf("MarkReactionDispatched kind = %q, want %q", store.markDispatchedKind, ReactionKindReview)
+	}
+	if len(store.deletedIssueID) != 1 || store.deletedIssueID[0] != id {
+		t.Errorf("DeleteRetryEntry calls = %v, want [%s]", store.deletedIssueID, id)
+	}
+	if _, claimed := state.Claimed[id]; !claimed {
+		t.Errorf("Claimed[%s] missing after dispatch, want claimed (set by DispatchIssue)", id)
+	}
+	if _, ok := state.RetryAttempts[id]; ok {
+		t.Errorf("RetryAttempts[%s] present after dispatch, want cleared", id)
+	}
+}
+
+func TestHandleRetryTimer_ReactionCIInHandoffStateDispatches(t *testing.T) {
+	t.Parallel()
+
+	const id = "HANDOFF-CI"
+	contContext := map[string]any{
+		"ci_failure": map[string]any{"status": "failing"},
+	}
+
+	state := NewState(5000, 4, nil, AgentTotals{})
+	state.RetryAttempts[id] = &RetryEntry{
+		IssueID:             id,
+		Identifier:          id,
+		Attempt:             1,
+		ReactionKind:        ReactionKindCI,
+		ContinuationContext: contContext,
+	}
+
+	store := &mockRetryStore{}
+	tracker := &mockRetryTracker{
+		fetchedIssue: candidateIssue(id, id, "Ready For Review"),
+	}
+	params := defaultRetryParams(t, store, tracker)
+	params.HandoffState = "Ready For Review"
+
+	HandleRetryTimer(state, id, params)
+	t.Cleanup(func() { state.WorkerWg.Wait() })
+
+	entry, ok := state.Running[id]
+	if !ok {
+		t.Fatalf("Running[%s] missing after handoff-state CI dispatch", id)
+	}
+	if entry.ReactionKind != ReactionKindCI {
+		t.Errorf("RunningEntry.ReactionKind = %q, want %q", entry.ReactionKind, ReactionKindCI)
+	}
+	if entry.ContinuationContext == nil {
+		t.Fatal("RunningEntry.ContinuationContext is nil, want forwarded context")
+	}
+	if store.markDispatchedCalls != 1 {
+		t.Errorf("MarkReactionDispatched calls = %d, want 1", store.markDispatchedCalls)
+	}
+	if store.markDispatchedKind != ReactionKindCI {
+		t.Errorf("MarkReactionDispatched kind = %q, want %q", store.markDispatchedKind, ReactionKindCI)
+	}
+	if len(store.deletedIssueID) != 1 || store.deletedIssueID[0] != id {
+		t.Errorf("DeleteRetryEntry calls = %v, want [%s]", store.deletedIssueID, id)
+	}
+}
+
+func TestHandleRetryTimer_NonReactionInHandoffStateReleasesClaim(t *testing.T) {
+	t.Parallel()
+
+	const id = "HANDOFF-NONREACTION"
+
+	state := NewState(5000, 4, nil, AgentTotals{})
+	state.Claimed[id] = struct{}{}
+	state.RetryAttempts[id] = &RetryEntry{
+		IssueID:    id,
+		Identifier: id,
+		Attempt:    1,
+		// ReactionKind is empty — non-reaction retry.
+	}
+
+	store := &mockRetryStore{}
+	tracker := &mockRetryTracker{
+		fetchedIssue: candidateIssue(id, id, "Ready For Review"),
+	}
+	params := defaultRetryParams(t, store, tracker)
+	params.HandoffState = "Ready For Review"
+
+	HandleRetryTimer(state, id, params)
+
+	if _, running := state.Running[id]; running {
+		t.Errorf("Running[%s] present, want absent (non-reaction in handoff state)", id)
+	}
+	if _, claimed := state.Claimed[id]; claimed {
+		t.Errorf("Claimed[%s] still present, want released (non-reaction in handoff state)", id)
+	}
+	if len(store.deletedIssueID) != 1 || store.deletedIssueID[0] != id {
+		t.Errorf("DeleteRetryEntry calls = %v, want [%s]", store.deletedIssueID, id)
+	}
+	if _, ok := state.RetryAttempts[id]; ok {
+		t.Errorf("RetryAttempts[%s] present, want absent", id)
+	}
+	if store.markDispatchedCalls != 0 {
+		t.Errorf("MarkReactionDispatched calls = %d, want 0", store.markDispatchedCalls)
+	}
+}
+
+func TestHandleRetryTimer_ReactionInUnrelatedStateReschedules(t *testing.T) {
+	t.Parallel()
+
+	const id = "UNRELATED-REVIEW"
+	contContext := map[string]any{
+		"review_comments": map[string]any{"count": 1},
+	}
+
+	state := NewState(5000, 4, nil, AgentTotals{})
+	state.Claimed[id] = struct{}{}
+	state.RetryAttempts[id] = &RetryEntry{
+		IssueID:             id,
+		Identifier:          id,
+		Attempt:             1,
+		ReactionKind:        ReactionKindReview,
+		ContinuationContext: contContext,
+		SessionID:           "sess-x",
+		LastSSHHost:         "host-a",
+	}
+
+	store := &mockRetryStore{}
+	// "QA Review": not active, not terminal, not handoff.
+	tracker := &mockRetryTracker{
+		fetchedIssue: candidateIssue(id, id, "QA Review"),
+	}
+	params := defaultRetryParams(t, store, tracker)
+	params.HandoffState = "Ready For Review"
+
+	HandleRetryTimer(state, id, params)
+
+	if _, running := state.Running[id]; running {
+		t.Errorf("Running[%s] present, want absent (paused reaction reschedule)", id)
+	}
+	entry, ok := state.RetryAttempts[id]
+	if !ok {
+		t.Fatalf("RetryAttempts[%s] missing after paused reaction reschedule", id)
+	}
+	if entry.Attempt != 2 {
+		t.Errorf("RetryAttempts[%s].Attempt = %d, want 2", id, entry.Attempt)
+	}
+	if entry.ReactionKind != ReactionKindReview {
+		t.Errorf("RetryAttempts[%s].ReactionKind = %q, want %q", id, entry.ReactionKind, ReactionKindReview)
+	}
+	if entry.ContinuationContext == nil {
+		t.Fatal("RetryAttempts.ContinuationContext is nil, want preserved")
+	}
+	if _, ok := entry.ContinuationContext["review_comments"]; !ok {
+		t.Error("RetryAttempts.ContinuationContext missing review_comments key")
+	}
+	if entry.SessionID != "sess-x" {
+		t.Errorf("RetryAttempts[%s].SessionID = %q, want %q", id, entry.SessionID, "sess-x")
+	}
+	if entry.LastSSHHost != "host-a" {
+		t.Errorf("RetryAttempts[%s].LastSSHHost = %q, want %q", id, entry.LastSSHHost, "host-a")
+	}
+	if len(store.savedEntries) != 1 {
+		t.Errorf("SaveRetryEntry call count = %d, want 1", len(store.savedEntries))
+	}
+	if store.markDispatchedCalls != 0 {
+		t.Errorf("MarkReactionDispatched calls = %d, want 0 (no dispatch)", store.markDispatchedCalls)
+	}
+	if entry.TimerHandle != nil {
+		entry.TimerHandle.Stop()
+	}
+}
+
+func TestHandleRetryTimer_NonReactionInUnrelatedStateReleasesClaim(t *testing.T) {
+	t.Parallel()
+
+	const id = "UNRELATED-NONREACTION"
+
+	state := NewState(5000, 4, nil, AgentTotals{})
+	state.Claimed[id] = struct{}{}
+	state.RetryAttempts[id] = &RetryEntry{
+		IssueID:    id,
+		Identifier: id,
+		Attempt:    1,
+		// ReactionKind empty.
+	}
+
+	store := &mockRetryStore{}
+	tracker := &mockRetryTracker{
+		fetchedIssue: candidateIssue(id, id, "QA Review"),
+	}
+	params := defaultRetryParams(t, store, tracker)
+	params.HandoffState = "Ready For Review"
+
+	HandleRetryTimer(state, id, params)
+
+	if _, running := state.Running[id]; running {
+		t.Errorf("Running[%s] present, want absent (non-reaction in unrelated state)", id)
+	}
+	if _, claimed := state.Claimed[id]; claimed {
+		t.Errorf("Claimed[%s] still present, want released (non-reaction in unrelated state)", id)
+	}
+	if len(store.deletedIssueID) != 1 || store.deletedIssueID[0] != id {
+		t.Errorf("DeleteRetryEntry calls = %v, want [%s]", store.deletedIssueID, id)
+	}
+	if _, ok := state.RetryAttempts[id]; ok {
+		t.Errorf("RetryAttempts[%s] present, want absent", id)
+	}
+	if store.markDispatchedCalls != 0 {
+		t.Errorf("MarkReactionDispatched calls = %d, want 0", store.markDispatchedCalls)
+	}
+}
+
+func TestHandleRetryTimer_ReactionInTerminalStateReleasesClaim(t *testing.T) {
+	t.Parallel()
+
+	const id = "TERMINAL-REACTION"
+
+	state := NewState(5000, 4, nil, AgentTotals{})
+	state.Claimed[id] = struct{}{}
+	state.RetryAttempts[id] = &RetryEntry{
+		IssueID:      id,
+		Identifier:   id,
+		Attempt:      1,
+		ReactionKind: ReactionKindCI,
+	}
+
+	store := &mockRetryStore{}
+	tracker := &mockRetryTracker{
+		// "Done" is in TerminalStates; "Ready For Review" is HandoffState.
+		fetchedIssue: candidateIssue(id, id, "Done"),
+	}
+	params := defaultRetryParams(t, store, tracker)
+	params.HandoffState = "Ready For Review"
+
+	HandleRetryTimer(state, id, params)
+
+	if _, running := state.Running[id]; running {
+		t.Errorf("Running[%s] present, want absent (terminal state must not dispatch)", id)
+	}
+	if _, claimed := state.Claimed[id]; claimed {
+		t.Errorf("Claimed[%s] still present, want released (terminal state)", id)
+	}
+	if len(store.deletedIssueID) != 1 || store.deletedIssueID[0] != id {
+		t.Errorf("DeleteRetryEntry calls = %v, want [%s]", store.deletedIssueID, id)
+	}
+	if _, ok := state.RetryAttempts[id]; ok {
+		t.Errorf("RetryAttempts[%s] present, want absent (terminal state)", id)
+	}
+	if len(store.savedEntries) != 0 {
+		t.Errorf("SaveRetryEntry call count = %d, want 0 (terminal state releases)", len(store.savedEntries))
+	}
+}
+
+func TestHandleRetryTimer_ReactionHandoffNoSlotsPreservesContext(t *testing.T) {
+	t.Parallel()
+
+	const id = "HANDOFF-NO-SLOTS"
+	contContext := map[string]any{
+		"review_comments": map[string]any{"count": 2},
+	}
+
+	// MaxConcurrentAgents = 1, one other issue already running → slots exhausted.
+	state := NewState(5000, 1, nil, AgentTotals{})
+	state.Claimed[id] = struct{}{}
+	state.Running["OTHER-1"] = &RunningEntry{
+		Identifier: "OTHER-1",
+		Issue:      candidateIssue("OTHER-1", "OTHER-1", "In Progress"),
+	}
+	state.RetryAttempts[id] = &RetryEntry{
+		IssueID:             id,
+		Identifier:          id,
+		Attempt:             1,
+		ReactionKind:        ReactionKindReview,
+		ContinuationContext: contContext,
+		SessionID:           "sess-ns",
+		LastSSHHost:         "host-x",
+	}
+
+	store := &mockRetryStore{}
+	tracker := &mockRetryTracker{
+		fetchedIssue: candidateIssue(id, id, "Ready For Review"),
+	}
+	params := defaultRetryParams(t, store, tracker)
+	params.HandoffState = "Ready For Review"
+
+	HandleRetryTimer(state, id, params)
+
+	if _, running := state.Running[id]; running {
+		t.Errorf("Running[%s] present, want absent (no global slots)", id)
+	}
+	entry, ok := state.RetryAttempts[id]
+	if !ok {
+		t.Fatalf("RetryAttempts[%s] missing after no-slots reschedule", id)
+	}
+	if entry.Attempt != 2 {
+		t.Errorf("RetryAttempts[%s].Attempt = %d, want 2", id, entry.Attempt)
+	}
+	if entry.Error != "no available orchestrator slots" {
+		t.Errorf("RetryAttempts[%s].Error = %q, want %q", id, entry.Error, "no available orchestrator slots")
+	}
+	if entry.ReactionKind != ReactionKindReview {
+		t.Errorf("RetryAttempts[%s].ReactionKind = %q, want %q", id, entry.ReactionKind, ReactionKindReview)
+	}
+	if entry.ContinuationContext == nil {
+		t.Fatal("RetryAttempts.ContinuationContext is nil after no-slots reschedule, want preserved")
+	}
+	if entry.SessionID != "sess-ns" {
+		t.Errorf("RetryAttempts[%s].SessionID = %q, want %q", id, entry.SessionID, "sess-ns")
+	}
+	if entry.LastSSHHost != "host-x" {
+		t.Errorf("RetryAttempts[%s].LastSSHHost = %q, want %q", id, entry.LastSSHHost, "host-x")
+	}
+	if _, claimed := state.Claimed[id]; !claimed {
+		t.Errorf("Claimed[%s] missing after no-slots reschedule, want claimed", id)
+	}
+	if store.markDispatchedCalls != 0 {
+		t.Errorf("MarkReactionDispatched calls = %d, want 0 (no dispatch)", store.markDispatchedCalls)
+	}
+	if entry.TimerHandle != nil {
+		entry.TimerHandle.Stop()
+	}
+}
+
+func TestHandleRetryTimer_ReactionHandoffPerStateCapExhaustedPreservesContext(t *testing.T) {
+	t.Parallel()
+
+	const id = "HANDOFF-PER-STATE"
+	contContext := map[string]any{
+		"ci_failure": map[string]any{"status": "failing"},
+	}
+
+	// Per-state cap for "ready for review" = 1. One other issue running in that state.
+	// Global capacity = 5 (plenty available).
+	perStateMap := map[string]int{"ready for review": 1}
+	state := NewState(5000, 5, perStateMap, AgentTotals{})
+	state.Running["OTHER-RFR"] = &RunningEntry{
+		Identifier: "OTHER-RFR",
+		Issue:      candidateIssue("OTHER-RFR", "OTHER-RFR", "Ready For Review"),
+	}
+	state.RetryAttempts[id] = &RetryEntry{
+		IssueID:             id,
+		Identifier:          id,
+		Attempt:             1,
+		ReactionKind:        ReactionKindCI,
+		ContinuationContext: contContext,
+	}
+
+	store := &mockRetryStore{}
+	tracker := &mockRetryTracker{
+		fetchedIssue: candidateIssue(id, id, "Ready For Review"),
+	}
+	params := defaultRetryParams(t, store, tracker)
+	params.HandoffState = "Ready For Review"
+
+	HandleRetryTimer(state, id, params)
+
+	if _, running := state.Running[id]; running {
+		t.Errorf("Running[%s] present, want absent (per-state cap exhausted)", id)
+	}
+	entry, ok := state.RetryAttempts[id]
+	if !ok {
+		t.Fatalf("RetryAttempts[%s] missing after per-state cap reschedule", id)
+	}
+	if entry.Attempt != 2 {
+		t.Errorf("RetryAttempts[%s].Attempt = %d, want 2", id, entry.Attempt)
+	}
+	if entry.ReactionKind != ReactionKindCI {
+		t.Errorf("RetryAttempts[%s].ReactionKind = %q, want %q", id, entry.ReactionKind, ReactionKindCI)
+	}
+	if entry.ContinuationContext == nil {
+		t.Fatal("RetryAttempts.ContinuationContext is nil after per-state cap reschedule, want preserved")
+	}
+	if store.markDispatchedCalls != 0 {
+		t.Errorf("MarkReactionDispatched calls = %d, want 0 (no dispatch)", store.markDispatchedCalls)
+	}
+	if entry.TimerHandle != nil {
+		entry.TimerHandle.Stop()
+	}
+}
+
+func TestHandleRetryTimer_ReactionActiveStateBlockerReschedules(t *testing.T) {
+	t.Parallel()
+
+	const id = "ACTIVE-BLOCKER-REACTION"
+	contContext := map[string]any{
+		"review_comments": map[string]any{"count": 1},
+	}
+
+	state := NewState(5000, 4, nil, AgentTotals{})
+	state.Claimed[id] = struct{}{}
+	state.RetryAttempts[id] = &RetryEntry{
+		IssueID:             id,
+		Identifier:          id,
+		Attempt:             1,
+		ReactionKind:        ReactionKindReview,
+		ContinuationContext: contContext,
+		SessionID:           "sess-b",
+		LastSSHHost:         "host-b",
+	}
+
+	store := &mockRetryStore{}
+	issue := candidateIssue(id, id, "To Do") // in active states
+	issue.BlockedBy = []domain.BlockerRef{
+		{ID: "BLOCK-1", Identifier: "BLOCK-1", State: "In Progress"}, // non-terminal blocker
+	}
+	tracker := &mockRetryTracker{fetchedIssue: issue}
+	params := defaultRetryParams(t, store, tracker)
+	params.HandoffState = "Ready For Review"
+
+	HandleRetryTimer(state, id, params)
+
+	if _, running := state.Running[id]; running {
+		t.Errorf("Running[%s] present, want absent (blocked reaction retry)", id)
+	}
+	entry, ok := state.RetryAttempts[id]
+	if !ok {
+		t.Fatalf("RetryAttempts[%s] missing after blocked reaction reschedule", id)
+	}
+	if entry.Attempt != 2 {
+		t.Errorf("RetryAttempts[%s].Attempt = %d, want 2", id, entry.Attempt)
+	}
+	if entry.ReactionKind != ReactionKindReview {
+		t.Errorf("RetryAttempts[%s].ReactionKind = %q, want %q", id, entry.ReactionKind, ReactionKindReview)
+	}
+	if entry.ContinuationContext == nil {
+		t.Fatal("RetryAttempts.ContinuationContext nil after blocker reschedule, want preserved")
+	}
+	if entry.SessionID != "sess-b" {
+		t.Errorf("RetryAttempts[%s].SessionID = %q, want %q", id, entry.SessionID, "sess-b")
+	}
+	if entry.LastSSHHost != "host-b" {
+		t.Errorf("RetryAttempts[%s].LastSSHHost = %q, want %q", id, entry.LastSSHHost, "host-b")
+	}
+	if store.markDispatchedCalls != 0 {
+		t.Errorf("MarkReactionDispatched calls = %d, want 0 (no dispatch)", store.markDispatchedCalls)
+	}
+	if entry.TimerHandle != nil {
+		entry.TimerHandle.Stop()
+	}
+}
+
+func TestHandleRetryTimer_NonReactionActiveStateBlockerReleasesClaim(t *testing.T) {
+	t.Parallel()
+
+	const id = "ACTIVE-BLOCKER-NONREACTION"
+
+	state := NewState(5000, 4, nil, AgentTotals{})
+	state.Claimed[id] = struct{}{}
+	state.RetryAttempts[id] = &RetryEntry{
+		IssueID:    id,
+		Identifier: id,
+		Attempt:    1,
+		// Empty ReactionKind.
+	}
+
+	store := &mockRetryStore{}
+	issue := candidateIssue(id, id, "To Do") // in active states
+	issue.BlockedBy = []domain.BlockerRef{
+		{ID: "BLOCK-1", Identifier: "BLOCK-1", State: "In Progress"}, // non-terminal blocker
+	}
+	tracker := &mockRetryTracker{fetchedIssue: issue}
+	params := defaultRetryParams(t, store, tracker)
+	params.HandoffState = "Ready For Review"
+
+	HandleRetryTimer(state, id, params)
+
+	if _, running := state.Running[id]; running {
+		t.Errorf("Running[%s] present, want absent (non-reaction blocked)", id)
+	}
+	if _, claimed := state.Claimed[id]; claimed {
+		t.Errorf("Claimed[%s] still present, want released (non-reaction blocked)", id)
+	}
+	if len(store.deletedIssueID) != 1 || store.deletedIssueID[0] != id {
+		t.Errorf("DeleteRetryEntry calls = %v, want [%s]", store.deletedIssueID, id)
+	}
+	if _, ok := state.RetryAttempts[id]; ok {
+		t.Errorf("RetryAttempts[%s] present, want absent (non-reaction blocked)", id)
+	}
+	if len(store.savedEntries) != 0 {
+		t.Errorf("SaveRetryEntry call count = %d, want 0 (no reschedule)", len(store.savedEntries))
+	}
+}
+
+func TestHandleRetryTimer_UnknownReactionKindInHandoffStateReleasesClaim(t *testing.T) {
+	t.Parallel()
+
+	const id = "HANDOFF-UNKNOWN"
+
+	state := NewState(5000, 4, nil, AgentTotals{})
+	state.Claimed[id] = struct{}{}
+	state.RetryAttempts[id] = &RetryEntry{
+		IssueID:      id,
+		Identifier:   id,
+		Attempt:      1,
+		ReactionKind: "merge_conflict", // unknown kind — not ci or review
+	}
+
+	store := &mockRetryStore{}
+	tracker := &mockRetryTracker{
+		fetchedIssue: candidateIssue(id, id, "Ready For Review"),
+	}
+	handler := &recordHandler{}
+	params := defaultRetryParams(t, store, tracker)
+	params.HandoffState = "Ready For Review"
+	params.Logger = slog.New(handler)
+
+	HandleRetryTimer(state, id, params)
+
+	// Treated as non-reaction: claim released, retry deleted.
+	if _, running := state.Running[id]; running {
+		t.Errorf("Running[%s] present, want absent (unknown reaction kind)", id)
+	}
+	if _, claimed := state.Claimed[id]; claimed {
+		t.Errorf("Claimed[%s] still present, want released (unknown kind treated as non-reaction)", id)
+	}
+	if len(store.deletedIssueID) != 1 || store.deletedIssueID[0] != id {
+		t.Errorf("DeleteRetryEntry calls = %v, want [%s]", store.deletedIssueID, id)
+	}
+	// Warning emitted for unknown reaction kind.
+	if handler.countByMessage("found unknown reaction kind in retry entry") != 1 {
+		t.Errorf("Warn('found unknown reaction kind in retry entry') emitted %d times, want 1",
+			handler.countByMessage("found unknown reaction kind in retry entry"))
+	}
+	if store.markDispatchedCalls != 0 {
+		t.Errorf("MarkReactionDispatched calls = %d, want 0 (unknown kind)", store.markDispatchedCalls)
+	}
+}
+
+func TestHandleRetryTimer_HandoffReactionStartsWithoutExistingClaim(t *testing.T) {
+	t.Parallel()
+
+	const id = "HANDOFF-NO-CLAIM"
+
+	// state.Claimed is intentionally empty — no pre-existing claim for this
+	// issue. Guards against nil-map panics or early-return guards that
+	// incorrectly require a prior claim before dispatching a handoff-state
+	// reaction retry.
+	state := NewState(5000, 4, nil, AgentTotals{})
+	state.RetryAttempts[id] = &RetryEntry{
+		IssueID:      id,
+		Identifier:   id,
+		Attempt:      1,
+		ReactionKind: ReactionKindReview,
+	}
+
+	store := &mockRetryStore{}
+	tracker := &mockRetryTracker{
+		fetchedIssue: candidateIssue(id, id, "Ready For Review"),
+	}
+	params := defaultRetryParams(t, store, tracker)
+	params.HandoffState = "Ready For Review"
+
+	// Must not panic.
+	HandleRetryTimer(state, id, params)
+	t.Cleanup(func() { state.WorkerWg.Wait() })
+
+	if _, ok := state.Running[id]; !ok {
+		t.Fatalf("Running[%s] missing after no-claim handoff dispatch, want worker dispatched", id)
+	}
+	if _, claimed := state.Claimed[id]; !claimed {
+		t.Errorf("Claimed[%s] absent after dispatch, want DispatchIssue to add claim", id)
 	}
 }

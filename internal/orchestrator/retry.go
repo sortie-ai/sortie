@@ -45,6 +45,12 @@ type HandleRetryTimerParams struct {
 	// [IsBlockedByNonTerminal] before dispatch.
 	TerminalStates []string
 
+	// HandoffState is the configured tracker handoff state. Known
+	// reaction retries (ReactionKindCI, ReactionKindReview) may dispatch
+	// while the fetched issue equals this state. Empty means no
+	// handoff-state retry eligibility applies.
+	HandoffState string
+
 	// MaxRetryBackoffMS is the configured cap for exponential backoff
 	// delay (from config.Agent.MaxRetryBackoffMS). Used when re-scheduling
 	// a retry after fetch failure or slot exhaustion.
@@ -135,6 +141,23 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 
 	log = logging.WithIssue(log, issueID, popped.Identifier)
 
+	reschedule := func(attempt int, delayMS int64, retryErr string) {
+		ScheduleRetry(state, ScheduleRetryParams{
+			IssueID:             issueID,
+			Identifier:          popped.Identifier,
+			DisplayID:           popped.DisplayID,
+			Attempt:             attempt,
+			DelayMS:             delayMS,
+			Error:               retryErr,
+			LastSSHHost:         popped.LastSSHHost,
+			SessionID:           popped.SessionID,
+			ContinuationContext: popped.ContinuationContext,
+			ReactionKind:        popped.ReactionKind,
+		}, params.OnRetryFire)
+		persistRetryEntry(ctx, log, params.Store, state, issueID)
+		metrics.IncRetries(triggerTimer)
+	}
+
 	// Guard: if the cancelled worker has not yet exited, the issue is
 	// still in the Running map. Re-scheduling a dispatch would overwrite
 	// the running entry and spawn a duplicate worker. Reschedule the
@@ -145,18 +168,7 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 		log.Debug("worker still running, rescheduling retry",
 			slog.Int("attempt", popped.Attempt),
 		)
-		ScheduleRetry(state, ScheduleRetryParams{
-			IssueID:      issueID,
-			Identifier:   popped.Identifier,
-			DisplayID:    popped.DisplayID,
-			Attempt:      popped.Attempt,
-			DelayMS:      delayMS,
-			Error:        popped.Error,
-			SessionID:    popped.SessionID,
-			ReactionKind: popped.ReactionKind,
-		}, params.OnRetryFire)
-		persistRetryEntry(ctx, log, params.Store, state, issueID)
-		metrics.IncRetries(triggerTimer)
+		reschedule(popped.Attempt, delayMS, popped.Error)
 		return
 	}
 
@@ -213,30 +225,39 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 			slog.Any("error", err),
 		)
 
-		ScheduleRetry(state, ScheduleRetryParams{
-			IssueID:      issueID,
-			Identifier:   popped.Identifier,
-			DisplayID:    popped.DisplayID,
-			Attempt:      nextAttempt,
-			DelayMS:      delayMS,
-			Error:        "retry issue fetch failed",
-			SessionID:    popped.SessionID,
-			ReactionKind: popped.ReactionKind,
-		}, params.OnRetryFire)
-
-		persistRetryEntry(ctx, log, params.Store, state, issueID)
-		metrics.IncRetries(triggerTimer)
+		reschedule(nextAttempt, delayMS, "retry issue fetch failed")
 		return
 	}
 
-	// Validate the issue's current state against the configured active states.
-	// This is the sole gate replacing the implicit activeStates filter that
-	// FetchCandidateIssues applied at the tracker level. The queryFilter
-	// (adapter-internal JQL or search fragment) is not re-evaluated here:
-	// retry eligibility uses the state constraint only.
 	activeSet := stateSet(params.ActiveStates)
-	if _, active := activeSet[strings.ToLower(issue.State)]; !active {
-		log.Info("issue no longer in active state, releasing claim",
+	terminalSet := stateSet(params.TerminalStates)
+	normalizedState := strings.ToLower(issue.State)
+	_, isActive := activeSet[normalizedState]
+	_, isTerminal := terminalSet[normalizedState]
+	isKnownReaction := isKnownReactionKind(popped.ReactionKind)
+	isHandoff := params.HandoffState != "" && strings.EqualFold(issue.State, params.HandoffState)
+
+	if popped.ReactionKind != "" && !isKnownReaction {
+		log.Warn("found unknown reaction kind in retry entry",
+			slog.String("kind", popped.ReactionKind),
+			slog.String("issue_state", issue.State),
+		)
+	}
+
+	if issue.ID == "" || issue.Identifier == "" || issue.Title == "" || issue.State == "" {
+		log.Info("issue missing required fields, releasing claim")
+		delete(state.Claimed, issueID)
+
+		if err := params.Store.DeleteRetryEntry(ctx, issueID); err != nil {
+			log.Error("failed to delete retry entry from store",
+				slog.Any("error", err),
+			)
+		}
+		return
+	}
+
+	if isTerminal {
+		log.Info("issue in terminal state, releasing claim",
 			slog.String("issue_state", issue.State),
 		)
 		delete(state.Claimed, issueID)
@@ -249,15 +270,38 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 		return
 	}
 
-	// Validate retry eligibility — required fields, terminal state
-	// exclusion (defense-in-depth), and the blocker rule. Keeps the
-	// retry dispatch path consistent with the main dispatch path.
-	terminalSet := stateSet(params.TerminalStates)
-	_, isTerminal := terminalSet[strings.ToLower(issue.State)]
-	if issue.ID == "" || issue.Identifier == "" || issue.Title == "" || issue.State == "" ||
-		isTerminal ||
-		isBlockedByNonTerminalSet(issue, terminalSet) {
-		log.Info("issue no longer eligible for retry, releasing claim")
+	if isActive {
+		if isBlockedByNonTerminalSet(issue, terminalSet) {
+			if isKnownReaction {
+				nextAttempt := popped.Attempt + 1
+				delayMS := computeBackoffDelay(nextAttempt, params.MaxRetryBackoffMS)
+
+				log.Info("issue blocked, rescheduling reaction retry",
+					slog.String("issue_state", issue.State),
+					slog.String("kind", popped.ReactionKind),
+					slog.Int("attempt", nextAttempt),
+					slog.Int64("delay_ms", delayMS),
+				)
+				reschedule(nextAttempt, delayMS, popped.Error)
+				return
+			}
+
+			log.Info("issue blocked, releasing claim",
+				slog.String("issue_state", issue.State),
+			)
+			delete(state.Claimed, issueID)
+
+			if err := params.Store.DeleteRetryEntry(ctx, issueID); err != nil {
+				log.Error("failed to delete retry entry from store",
+					slog.Any("error", err),
+				)
+			}
+			return
+		}
+	} else if !isKnownReaction {
+		log.Info("issue no longer in active state, releasing claim",
+			slog.String("issue_state", issue.State),
+		)
 		delete(state.Claimed, issueID)
 
 		if err := params.Store.DeleteRetryEntry(ctx, issueID); err != nil {
@@ -265,6 +309,18 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 				slog.Any("error", err),
 			)
 		}
+		return
+	} else if !isHandoff {
+		nextAttempt := popped.Attempt + 1
+		delayMS := computeBackoffDelay(nextAttempt, params.MaxRetryBackoffMS)
+
+		log.Info("reaction retry paused by issue state, rescheduling",
+			slog.String("issue_state", issue.State),
+			slog.String("kind", popped.ReactionKind),
+			slog.Int("attempt", nextAttempt),
+			slog.Int64("delay_ms", delayMS),
+		)
+		reschedule(nextAttempt, delayMS, popped.Error)
 		return
 	}
 
@@ -279,19 +335,7 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 			slog.Int64("delay_ms", delayMS),
 		)
 
-		ScheduleRetry(state, ScheduleRetryParams{
-			IssueID:      issueID,
-			Identifier:   popped.Identifier,
-			DisplayID:    popped.DisplayID,
-			Attempt:      nextAttempt,
-			DelayMS:      delayMS,
-			Error:        "no available orchestrator slots",
-			SessionID:    popped.SessionID,
-			ReactionKind: popped.ReactionKind,
-		}, params.OnRetryFire)
-
-		persistRetryEntry(ctx, log, params.Store, state, issueID)
-		metrics.IncRetries(triggerTimer)
+		reschedule(nextAttempt, delayMS, "no available orchestrator slots")
 		return
 	}
 
@@ -309,19 +353,7 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 				slog.Int64("delay_ms", delayMS),
 			)
 
-			ScheduleRetry(state, ScheduleRetryParams{
-				IssueID:      issueID,
-				Identifier:   popped.Identifier,
-				DisplayID:    popped.DisplayID,
-				Attempt:      nextAttempt,
-				DelayMS:      delayMS,
-				Error:        "no available SSH hosts",
-				SessionID:    popped.SessionID,
-				ReactionKind: popped.ReactionKind,
-			}, params.OnRetryFire)
-
-			persistRetryEntry(ctx, log, params.Store, state, issueID)
-			metrics.IncRetries(triggerTimer)
+			reschedule(nextAttempt, delayMS, "no available SSH hosts")
 			return
 		}
 	}
@@ -343,13 +375,14 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 		entry.WorkflowFile = params.WorkflowFile
 		entry.AgentKind = params.AgentKind
 		entry.ContinuationContext = popped.ContinuationContext
+		entry.ReactionKind = popped.ReactionKind
 	}
 	metrics.IncDispatches(outcomeSuccess)
 
 	// Mark the reaction fingerprint dispatched only after actual dispatch
 	// succeeds. Scoped to reaction-triggered retries; non-reaction retries
 	// have no fingerprint row to update.
-	if popped.ReactionKind != "" {
+	if isKnownReaction {
 		if err := params.Store.MarkReactionDispatched(ctx, issueID, popped.ReactionKind); err != nil {
 			log.Warn("failed to mark reaction dispatched after retry dispatch",
 				slog.String("kind", popped.ReactionKind),

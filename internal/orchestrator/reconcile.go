@@ -40,6 +40,11 @@ type ReconcileParams struct {
 	// TerminalStates is the current list of configured terminal issue states.
 	TerminalStates []string
 
+	// HandoffState is treated as a keep-running state only for running
+	// reaction continuations (ReactionKindCI or ReactionKindReview). Does
+	// not affect fresh dispatch eligibility in ShouldDispatch.
+	HandoffState string
+
 	// StallTimeoutMS is the configured stall detection threshold.
 	// If <= 0, stall detection is skipped entirely.
 	StallTimeoutMS int
@@ -280,6 +285,17 @@ func reconcileTrackerState(state *State, params ReconcileParams, log *slog.Logge
 			metrics.IncReconciliationActions(actionKeep)
 			entryLog.Debug("refreshed issue state",
 				slog.String("state", stateName),
+			)
+			continue
+		}
+
+		isHandoff := params.HandoffState != "" && strings.EqualFold(stateName, params.HandoffState)
+		if isHandoff && isKnownReactionKind(entry.ReactionKind) {
+			entry.Issue.State = stateName
+			metrics.IncReconciliationActions(actionKeep)
+			entryLog.Debug("keeping reaction worker running in handoff state",
+				slog.String("state", stateName),
+				slog.String("kind", entry.ReactionKind),
 			)
 			continue
 		}

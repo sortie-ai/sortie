@@ -205,6 +205,11 @@ type RunningEntry struct {
 	// retry carries reaction context. Nil for normal dispatches.
 	ContinuationContext map[string]any
 
+	// ReactionKind is the reaction type that caused this worker dispatch.
+	// Empty for first dispatches and non-reaction retries. Runtime-only;
+	// not stored in SQLite run history or session metadata.
+	ReactionKind string
+
 	// SelfReviewActive is true when the worker is in the self-review phase.
 	// Mutated only by the event loop via selfReviewCh.
 	SelfReviewActive bool
@@ -259,9 +264,9 @@ type RetryEntry struct {
 	ContinuationContext map[string]any
 
 	// ReactionKind is the reaction type that triggered this retry (e.g.
-	// ReactionKindCI). Empty for non-reaction retries. When non-empty,
-	// HandleRetryTimer calls MarkReactionDispatched after successful
-	// dispatch. Runtime-only (not persisted to SQLite).
+	// ReactionKindCI). Empty for non-reaction retries. Known non-empty
+	// values cause HandleRetryTimer to call MarkReactionDispatched after
+	// successful dispatch. Runtime-only (not persisted to SQLite).
 	ReactionKind string
 }
 
@@ -271,6 +276,15 @@ const ReactionKindCI = "ci"
 // ReactionKindReview is the reaction kind constant for PR review comment
 // reactions.
 const ReactionKindReview = "review"
+
+func isKnownReactionKind(kind string) bool {
+	switch kind {
+	case ReactionKindCI, ReactionKindReview:
+		return true
+	default:
+		return false
+	}
+}
 
 // ReactionKey returns the composite map key for a pending reaction.
 // Callers must not pass IDs containing colons; the delimiter is a plain

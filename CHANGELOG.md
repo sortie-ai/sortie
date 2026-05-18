@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Orchestrator: CI-failure and review-comment retries now continue from
+  the configured `tracker.handoff_state` instead of being dropped when
+  the issue is no longer in an active state. Fresh dispatch remains
+  limited to active states.
+  ([#513](https://github.com/sortie-ai/sortie/issues/513))
+
 ## [1.9.1] - 2026-04-14
 
 ### Fixed
