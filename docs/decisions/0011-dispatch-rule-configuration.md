@@ -73,10 +73,13 @@ Markdown body single-file format) and [ADR-0005](0005-prompt-template-engine.md)
    recurring source of catastrophic backtracking, accidental case-sensitivity bugs,
    and reviewer confusion. The matching DSL should cover labels, issue type, priority,
    identifier prefixes, and assignee with no more power than is needed.
-10. **Layer hygiene (`AGENTS.md`).** Rule parsing belongs to `internal/config/`; rule
-    evaluation belongs to `internal/orchestrator/`. No new package or import edge may
-    break the strict downward dependency chain
-    (`domain ← config ← persistence ← adapters ← workspace ← orchestrator ← cmd`).
+10. **Layer hygiene.** Rule parsing belongs to `internal/config/`; rule evaluation
+    belongs to `internal/orchestrator/`. No new package or import edge may break the
+    documented downward-only model: low-level `domain`, `config`, and `prompt` packages
+    do not import orchestration, workflow, adapter, or workspace packages; adapters do
+    not import orchestrator or each other; orchestrator remains the coordination layer
+    that consumes config, prompt, registry, workspace, persistence, and adapter
+    interfaces.
 
 ## Considered Options
 
@@ -125,8 +128,9 @@ The `dispatch` key is added to `knownTopLevelKeys` in `internal/config/config.go
 gains a `SectionSchema` entry in `internal/config/schema.go` with `AllowAdapterPassthrough:
 false` and `AllowDynamicKeys: false` for the outer object, plus a dedicated builder
 (`buildDispatchConfig`) that validates the inner list shape and per-rule fields. Unknown
-keys at any depth produce `FrontMatterWarning` diagnostics through the existing
-advisory path.
+keys under `dispatch`, `dispatch.rules[*]`, and `dispatch.default` produce
+`FrontMatterWarning` diagnostics through the existing advisory path. Unknown keys inside
+`dispatch.rules[*].match` are configuration errors because they change matching behavior.
 
 ### Matching semantics
 
@@ -209,6 +213,13 @@ At workflow load:
    orchestrator computes the template ID once per claim and the worker uses it for
    every turn of that claim.
 
+The v1 filesystem watcher remains scoped to the workflow file. Editing `WORKFLOW.md`
+reloads the rules and all referenced templates. Editing a referenced template file by
+itself does not trigger the watcher path; the existing defensive reload before dispatch
+re-reads referenced templates on the next dispatch cycle. Operators who need an immediate
+reload after a template-only edit can touch `WORKFLOW.md`. Expanding the watcher to track
+referenced template paths is a future additive improvement, not a requirement of this ADR.
+
 Per-rule template files do **not** carry their own YAML front matter in v1. A
 `template_parse_error` is raised if a referenced file begins with `---`. Per-template
 configuration overrides (timeouts, max_turns, adapter-specific blocks) are explicitly
@@ -237,8 +248,8 @@ gains the following checks, all of which run at startup and at every tick before
 dispatch:
 
 - **Schema-level (warnings):** unknown sub-keys under `dispatch`, `dispatch.rules[*]`,
-  `dispatch.rules[*].match`, and `dispatch.default` produce `unknown_sub_key`
-  diagnostics through the existing `ValidateFrontMatter` path.
+  and `dispatch.default` produce `unknown_sub_key` diagnostics through the existing
+  `ValidateFrontMatter` path.
 - **Structural (errors, dispatch blocked):**
   - `dispatch.rules` must be a YAML sequence; `dispatch.default` must be a map.
   - Each rule must be a map with at least one of `match`, `agent`, or `template`.
@@ -246,10 +257,13 @@ dispatch:
   - Duplicate rule names are rejected with the offending index pair.
   - At most one catch-all rule (no `match` block) is permitted, and it must be the
     last element. A non-terminal catch-all is rejected with `unreachable_rules`.
+  - `match` keys must be one of `labels`, `issue_type`, `priority`, `identifier`, or
+    `assignee`. Unknown match keys are rejected as configuration errors, not warnings.
   - `match.priority` predicate must contain exactly one of
     `{eq, in, lt, lte, gt, gte}`.
-  - Glob patterns are pre-compiled via `path.Match("test", "")` to catch malformed
-    patterns at load time, not at dispatch time.
+  - Glob patterns are validated by calling `path.Match(pattern, "")` for each configured
+    pattern and checking the returned error, so malformed user-provided patterns are caught
+    at load time instead of dispatch time.
 - **Cross-reference (errors):**
   - Every referenced `agent: <kind>` must resolve to a registered agent adapter.
     Unknown kinds are rejected.
@@ -460,12 +474,12 @@ is a sequence.
   working.
 - **Single-file authoring is preserved.** Operators continue to version and review one
   artifact per workflow.
-- **Live reload requires no new mechanism.** `fsnotify` already watches `WORKFLOW.md`;
-  the loader gains a few extra fields to populate, nothing more. Per-rule template
-  files are read at workflow load (and reload) by the same code that already reads the
-  Markdown body, so a single file-system watcher remains sufficient — operators do
-  not need to wait for a new poll cycle when a rule's template changes alongside its
-  rule definition.
+- **Live reload requires no new long-running watcher.** `fsnotify` already watches
+  `WORKFLOW.md`; the loader gains a few extra fields to populate, nothing more.
+  Per-rule template files are read at workflow load and reload by the same code that
+  already reads the Markdown body. Template edits made alongside a `WORKFLOW.md` change
+  are loaded immediately by that workflow-file event; template-only edits are picked up
+  by the existing defensive reload before a future dispatch.
 - **Parse errors are bounded at load time.** ADR-0005's contract — parse once, block
   dispatch on parse error — extends uniformly to per-rule templates without a new
   policy.
@@ -532,10 +546,10 @@ The decision is validated when all of the following are true after implementatio
    top-level `agent.kind` and body template, and frozen selection across retry and
    reaction continuation.
 3. **Schema validation.** Unit tests in `internal/config/schema_test.go` cover the
-   warning cases (unknown sub-keys at every depth) and the error cases (malformed
-   list, missing fields, duplicate rule names, unreachable rules, unknown agent
-   kinds, missing or unreadable template files, malformed globs, malformed priority
-   predicates).
+  warning cases (unknown sub-keys under `dispatch`, `dispatch.rules[*]`, and
+  `dispatch.default`) and the error cases (malformed list, missing fields, duplicate
+  rule names, unreachable rules, unknown match keys, unknown agent kinds, missing or
+  unreadable template files, malformed globs, malformed priority predicates).
 4. **Two-rules acceptance test.** A new integration test in
    `internal/orchestrator/dispatch_test.go` confirms the milestone verification
    criterion from issue #435: an issue with label `bug` dispatches to a different
