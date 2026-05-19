@@ -10,12 +10,10 @@ decision-makers: Serghei Iakovlev
 
 Sortie's orchestrator currently dispatches every active candidate issue with the single
 agent identified by `agent.kind` and the single prompt template stored in the Markdown body
-of `WORKFLOW.md`. Issue [#434](https://github.com/sortie-ai/sortie/issues/434) asks for an
-ADR that resolves the configuration format and matching semantics for issue-aware routing,
-unblocking the downstream implementation in [#435](https://github.com/sortie-ai/sortie/issues/435)
-and the architecture documentation update in
-[#471](https://github.com/sortie-ai/sortie/issues/471) within milestone
-*M21: Rule-based Dispatch & Auto-merge*.
+of `WORKFLOW.md`. Supporting issue-aware routing — selecting a different agent, a different
+prompt template, or both, on a per-issue basis — requires extending the workflow
+configuration in a way that preserves single-file authoring and backward compatibility for
+the workflows that ship today.
 
 The decision must address four coupled questions:
 
@@ -532,8 +530,7 @@ is a sequence.
 
 ## Confirmation
 
-The decision is validated when all of the following are true after implementation
-(tracked under [#435](https://github.com/sortie-ai/sortie/issues/435)):
+The decision is validated when all of the following are true after implementation:
 
 1. **Backward compatibility.** Every existing example workflow under `examples/` and
    every fixture under `internal/workflow/testdata/` continues to pass without
@@ -551,14 +548,12 @@ The decision is validated when all of the following are true after implementatio
   rule names, unreachable rules, unknown match keys, unknown agent kinds, missing or
   unreadable template files, malformed globs, malformed priority predicates).
 4. **Two-rules acceptance test.** A new integration test in
-   `internal/orchestrator/dispatch_test.go` confirms the milestone verification
-   criterion from issue #435: an issue with label `bug` dispatches to a different
-   agent and/or template than one with label `docs`, and an issue with no matching
-   label uses the default.
+   `internal/orchestrator/dispatch_test.go` exercises the canonical two-rule case:
+   an issue with label `bug` dispatches to a different agent and/or template than
+   one with label `docs`, and an issue with no matching label uses the default.
 5. **Diagnostics.** Operator-facing error messages for each failure mode are reviewed
    for clarity. The CLI `sortie validate` subcommand (proposed under ADR-0004's
    negative-consequence mitigation) exercises the same code path as preflight.
 6. **Documentation.** Architecture (Section 5.3 and Section 7-8) and the WORKFLOW.md
-   syntax reference are updated under issue
-   [#471](https://github.com/sortie-ai/sortie/issues/471) and the operator
-   how-to guide under [#469](https://github.com/sortie-ai/sortie/issues/469).
+   syntax reference are updated to describe rule-based dispatch, and the operator
+   how-to guide gains a section covering rule authoring patterns and common pitfalls.
