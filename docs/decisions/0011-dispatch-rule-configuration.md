@@ -246,8 +246,16 @@ gains the following checks, all of which run at startup and at every tick before
 dispatch:
 
 - **Schema-level (warnings):** unknown sub-keys under `dispatch`, `dispatch.rules[*]`,
-  and `dispatch.default` produce `unknown_sub_key` diagnostics through the existing
-  `ValidateFrontMatter` path.
+  and `dispatch.default` produce `unknown_sub_key` diagnostics via the existing
+  `FrontMatterWarning` mechanism. `ValidateFrontMatter` is extended in two ways to
+  cover the dispatch section: (1) it descends into the `dispatch.rules` YAML
+  sequence so per-rule unknown keys are caught — the current implementation
+  traverses only top-level maps and their explicitly nested map fields, not
+  sequences; (2) the recognized top-level key set is augmented with every agent
+  kind referenced by `dispatch.rules[*].agent` and `dispatch.default.agent`, so
+  the corresponding adapter pass-through blocks (e.g., a `codex:` block declared
+  alongside `claude-code:`) do not surface as `unknown_key` warnings. The
+  diagnostic shape and operator-visible formatting are unchanged.
 - **Structural (errors, dispatch blocked):**
   - `dispatch.rules` must be a YAML sequence; `dispatch.default` must be a map.
   - Each rule must be a map with at least one of `match`, `agent`, or `template`.
