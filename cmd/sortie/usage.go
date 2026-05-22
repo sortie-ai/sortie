@@ -44,8 +44,8 @@ func printValidateHelp(w io.Writer) {
 	fmt.Fprint(w, //nolint:errcheck // help output write failure is unrecoverable
 		`Validate a workflow file without running the orchestrator.
 
-Checks syntax, required fields, and adapter configuration. Exits with
-a non-zero code if validation fails.
+Checks syntax, required fields, adapter configuration, and dispatch
+rule routing. Exits with a non-zero code if validation fails.
 
 Usage:
   sortie validate [flags] [workflow-path]

@@ -841,3 +841,234 @@ func TestManager_SetLoggerConcurrentWithReload(t *testing.T) {
 	wg.Wait()
 	mgr.Stop()
 }
+
+// workflowWithDispatch returns WORKFLOW.md content with dispatch rules
+// that reference template files that exist under dir.
+func workflowWithDispatch(t *testing.T, dir string) []byte {
+	t.Helper()
+	tmplDir := filepath.Join(dir, "prompts")
+	if err := os.MkdirAll(tmplDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	bugTmpl := filepath.Join(tmplDir, "bug.md")
+	if err := os.WriteFile(bugTmpl, []byte("bug template {{ .issue.identifier }}"), 0o644); err != nil {
+		t.Fatalf("write bug.md: %v", err)
+	}
+	return []byte(`---
+polling:
+  interval_ms: 5000
+agent:
+  kind: mock
+dispatch:
+  rules:
+    - name: bug
+      match:
+        labels: ["bug"]
+      template: prompts/bug.md
+---
+You are assigned to {{ .issue.identifier }}.
+`)
+}
+
+func TestManager_PromptTemplateByID_EmptyIDReturnsBodyTemplate(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "WORKFLOW.md")
+	mustWriteFile(t, path, validWorkflow(5000))
+
+	mgr, err := NewManager(path, testLogger())
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+
+	got := mgr.PromptTemplateByID("")
+	if got == nil {
+		t.Fatal("PromptTemplateByID(\"\") = nil, want body template")
+	}
+	body := mgr.PromptTemplate()
+	if got != body {
+		t.Errorf("PromptTemplateByID(\"\") != PromptTemplate(): pointers differ")
+	}
+}
+
+func TestManager_PromptTemplateByID_UnknownIDReturnsNil(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "WORKFLOW.md")
+	mustWriteFile(t, path, validWorkflow(5000))
+
+	mgr, err := NewManager(path, testLogger())
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+
+	got := mgr.PromptTemplateByID("/nonexistent/path.md")
+	if got != nil {
+		t.Errorf("PromptTemplateByID(\"/nonexistent/path.md\") = non-nil, want nil")
+	}
+}
+
+func TestManager_PromptTemplateByID_KnownRuleTemplate(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	content := workflowWithDispatch(t, dir)
+	path := filepath.Join(dir, "WORKFLOW.md")
+	mustWriteFile(t, path, content)
+
+	mgr, err := NewManager(path, testLogger())
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+
+	// The template is registered under its resolved absolute path.
+	bugTmplAbs := filepath.Join(dir, "prompts", "bug.md")
+
+	got := mgr.PromptTemplateByID(bugTmplAbs)
+	if got == nil {
+		t.Fatalf("PromptTemplateByID(%q) = nil, want non-nil", bugTmplAbs)
+	}
+}
+
+func TestManager_WithAgentKindProbe_AcceptsKnownKind(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "WORKFLOW.md")
+	// Use a workflow with agent kind "mock" — probe accepts it.
+	mustWriteFile(t, path, []byte(`---
+polling:
+  interval_ms: 5000
+agent:
+  kind: mock
+dispatch:
+  rules:
+    - name: test
+      agent: mock
+---
+Prompt.
+`))
+
+	probe := func(kind string) bool { return kind == "mock" }
+	mgr, err := NewManager(path, testLogger(), WithAgentKindProbe(probe))
+	if err != nil {
+		t.Fatalf("NewManager with probe: %v", err)
+	}
+	if mgr == nil {
+		t.Fatal("NewManager returned nil manager")
+	}
+}
+
+func TestManager_WithAgentKindProbe_RejectsUnknownKind(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "WORKFLOW.md")
+	// Dispatch rule references "nonexistent-agent".
+	mustWriteFile(t, path, []byte(`---
+polling:
+  interval_ms: 5000
+agent:
+  kind: mock
+dispatch:
+  rules:
+    - name: bad
+      agent: nonexistent-agent
+---
+Prompt.
+`))
+
+	probe := func(kind string) bool { return kind == "mock" }
+	_, err := NewManager(path, testLogger(), WithAgentKindProbe(probe))
+	if err == nil {
+		t.Fatal("NewManager with rejecting probe = nil error, want error")
+	}
+}
+
+func TestManager_FailSafeReload_DispatchError(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "WORKFLOW.md")
+	mustWriteFile(t, path, validWorkflow(5000))
+
+	mgr, err := NewManager(path, testLogger())
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+
+	initialInterval := mgr.Config().Polling.IntervalMS
+	initialPrompt := mgr.PromptTemplate()
+
+	// Overwrite with an invalid dispatch glob that BuildDispatchConfig will reject.
+	mustWriteFile(t, path, []byte(`---
+polling:
+  interval_ms: 9999
+dispatch:
+  rules:
+    - name: bad-glob
+      match:
+        labels: ["[unclosed"]
+      agent: mock
+---
+Prompt.
+`))
+
+	err = mgr.Reload()
+	if err == nil {
+		t.Fatal("Reload() error = nil, want error for invalid dispatch config")
+	}
+
+	if mgr.Config().Polling.IntervalMS != initialInterval {
+		t.Errorf("after failed Reload: Polling.IntervalMS = %d, want %d (previous good value)",
+			mgr.Config().Polling.IntervalMS, initialInterval)
+	}
+	if mgr.PromptTemplate() != initialPrompt {
+		t.Errorf("after failed Reload: PromptTemplate pointer changed, want same previous good template")
+	}
+	if mgr.LastLoadError() == nil {
+		t.Error("after failed Reload: LastLoadError() = nil, want non-nil")
+	}
+}
+
+func TestManager_PerRuleTemplate_FrontMatterRejected(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+
+	// Write a per-rule template that has front matter — must be rejected.
+	tmplDir := filepath.Join(dir, "prompts")
+	if err := os.MkdirAll(tmplDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	tmplPath := filepath.Join(tmplDir, "with_fm.md")
+	if err := os.WriteFile(tmplPath, []byte("---\nkey: value\n---\nTemplate body."), 0o644); err != nil {
+		t.Fatalf("write template: %v", err)
+	}
+
+	path := filepath.Join(dir, "WORKFLOW.md")
+	mustWriteFile(t, path, []byte(`---
+polling:
+  interval_ms: 5000
+dispatch:
+  rules:
+    - name: with-fm
+      match:
+        labels: ["test"]
+      template: prompts/with_fm.md
+---
+Prompt.
+`))
+
+	_, err := NewManager(path, testLogger())
+	if err == nil {
+		t.Fatal("NewManager with front-matter template = nil error, want error")
+	}
+
+	errMsg := err.Error()
+	if !bytes.Contains([]byte(errMsg), []byte("front matter")) {
+		t.Errorf("error = %q, want to contain %q", errMsg, "front matter")
+	}
+}

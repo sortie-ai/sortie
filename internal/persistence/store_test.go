@@ -2625,3 +2625,117 @@ func TestLoadLatestSuccessfulRunsForReactionRecovery_DBError(t *testing.T) {
 		t.Errorf("LoadLatestSuccessfulRunsForReactionRecovery error = %q, want wrapped 'load recovery runs'", err.Error())
 	}
 }
+
+func TestSaveRetryEntry_DispatchColumnsRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	s := openTestStore(t)
+	migrateOrFatal(t, s)
+	ctx := context.Background()
+
+	entry := RetryEntry{
+		IssueID:    "ISS-99",
+		Identifier: "PROJ-99",
+		Attempt:    2,
+		DueAtMs:    9000,
+		RuleName:   "bug-rule",
+		TemplateID: "/abs/path/bug.md",
+		AgentKind:  "claude-code",
+	}
+	if err := s.SaveRetryEntry(ctx, entry); err != nil {
+		t.Fatalf("SaveRetryEntry: %v", err)
+	}
+
+	entries, err := s.LoadRetryEntries(ctx)
+	if err != nil {
+		t.Fatalf("LoadRetryEntries: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("LoadRetryEntries() count = %d, want 1", len(entries))
+	}
+
+	got := entries[0]
+	if got.RuleName != "bug-rule" {
+		t.Errorf("RuleName = %q, want %q", got.RuleName, "bug-rule")
+	}
+	if got.TemplateID != "/abs/path/bug.md" {
+		t.Errorf("TemplateID = %q, want %q", got.TemplateID, "/abs/path/bug.md")
+	}
+	if got.AgentKind != "claude-code" {
+		t.Errorf("AgentKind = %q, want %q", got.AgentKind, "claude-code")
+	}
+}
+
+func TestSaveRetryEntry_LegacyRowsDefaultToEmptyDispatchFields(t *testing.T) {
+	t.Parallel()
+
+	s := openTestStore(t)
+	migrateOrFatal(t, s)
+	ctx := context.Background()
+
+	// Insert without dispatch columns to simulate legacy rows.
+	if _, err := s.db.ExecContext(ctx,
+		`INSERT INTO retry_entries (issue_id, identifier, attempt, due_at_ms)
+		 VALUES ('legacy-1', 'MT-1', 1, 1000)`); err != nil {
+		t.Fatalf("insert legacy row: %v", err)
+	}
+
+	entries, err := s.LoadRetryEntries(ctx)
+	if err != nil {
+		t.Fatalf("LoadRetryEntries: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("LoadRetryEntries() count = %d, want 1", len(entries))
+	}
+
+	got := entries[0]
+	if got.RuleName != "" {
+		t.Errorf("legacy RuleName = %q, want empty string", got.RuleName)
+	}
+	if got.TemplateID != "" {
+		t.Errorf("legacy TemplateID = %q, want empty string", got.TemplateID)
+	}
+	if got.AgentKind != "" {
+		t.Errorf("legacy AgentKind = %q, want empty string", got.AgentKind)
+	}
+}
+
+func TestAppendRunHistory_RuleNameRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	s := openTestStore(t)
+	migrateOrFatal(t, s)
+	ctx := context.Background()
+
+	run := RunHistory{
+		IssueID:      "ISS-77",
+		Identifier:   "PROJ-77",
+		Attempt:      1,
+		AgentAdapter: "claude-code",
+		Workspace:    "/tmp/ws",
+		StartedAt:    "2026-01-01T00:00:00Z",
+		CompletedAt:  "2026-01-01T00:05:00Z",
+		Status:       "succeeded",
+		RuleName:     "docs-rule",
+	}
+	inserted, err := s.AppendRunHistory(ctx, run)
+	if err != nil {
+		t.Fatalf("AppendRunHistory: %v", err)
+	}
+
+	entries, err := s.QueryRunHistoryByIssue(ctx, "ISS-77")
+	if err != nil {
+		t.Fatalf("QueryRunHistoryByIssue: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("QueryRunHistoryByIssue() count = %d, want 1", len(entries))
+	}
+
+	got := entries[0]
+	if got.RuleName != "docs-rule" {
+		t.Errorf("RuleName = %q, want %q", got.RuleName, "docs-rule")
+	}
+	if got.ID != inserted.ID {
+		t.Errorf("ID = %d, want %d", got.ID, inserted.ID)
+	}
+}

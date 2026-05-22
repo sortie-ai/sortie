@@ -36,6 +36,7 @@ type PromMetrics struct {
 	ciEscalationsTotal     *prometheus.CounterVec
 	reviewChecksTotal      *prometheus.CounterVec
 	reviewEscalationsTotal *prometheus.CounterVec
+	dispatchRuleMatchTotal *prometheus.CounterVec
 
 	selfReviewIterationsTotal      *prometheus.CounterVec
 	selfReviewSessionsTotal        *prometheus.CounterVec
@@ -209,6 +210,12 @@ func NewPromMetrics(version, goVersion string) *PromMetrics {
 		Help:      "Review reaction escalation outcomes.",
 	}, []string{"action"})
 
+	dispatchRuleMatchTotal := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: "sortie",
+		Name:      "dispatch_rule_match_total",
+		Help:      "Dispatch rule match outcomes by resolution layer and rule name.",
+	}, []string{"layer", "rule"})
+
 	selfReviewIterationsTotal := prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: "sortie",
 		Name:      "self_review_iterations_total",
@@ -259,6 +266,7 @@ func NewPromMetrics(version, goVersion string) *PromMetrics {
 		ciEscalationsTotal,
 		reviewChecksTotal,
 		reviewEscalationsTotal,
+		dispatchRuleMatchTotal,
 		selfReviewIterationsTotal,
 		selfReviewSessionsTotal,
 		selfReviewVerificationDuration,
@@ -290,6 +298,7 @@ func NewPromMetrics(version, goVersion string) *PromMetrics {
 		ciEscalationsTotal:             ciEscalationsTotal,
 		reviewChecksTotal:              reviewChecksTotal,
 		reviewEscalationsTotal:         reviewEscalationsTotal,
+		dispatchRuleMatchTotal:         dispatchRuleMatchTotal,
 		selfReviewIterationsTotal:      selfReviewIterationsTotal,
 		selfReviewSessionsTotal:        selfReviewSessionsTotal,
 		selfReviewVerificationDuration: selfReviewVerificationDuration,
@@ -426,6 +435,14 @@ func (p *PromMetrics) IncReviewChecks(result string) {
 // IncReviewEscalations increments the review escalation action counter.
 func (p *PromMetrics) IncReviewEscalations(action string) {
 	p.reviewEscalationsTotal.WithLabelValues(action).Inc()
+}
+
+// IncDispatchRuleMatch increments the dispatch rule match counter.
+// layer is one of "rule", "default", or "fallback"; rule is the
+// matched rule name with empty values replaced by "<none>" to keep
+// the label cardinality bounded.
+func (p *PromMetrics) IncDispatchRuleMatch(layer, rule string) {
+	p.dispatchRuleMatchTotal.WithLabelValues(layer, rule).Inc()
 }
 
 // IncSelfReviewIterations increments the review iteration counter.

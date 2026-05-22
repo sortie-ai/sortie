@@ -392,11 +392,11 @@ func TestRunWorkerAttempt(t *testing.T) {
 					}, nil
 				},
 			},
-			ConfigFunc:         func() config.ServiceConfig { return cfg },
-			PromptTemplateFunc: func() *prompt.Template { return mustParseTemplate(t, "do work on {{ .issue.title }}") },
-			OnEvent:            func(_ string, _ domain.AgentEvent) {},
-			OnExit:             ec.onExit,
-			Logger:             discardLogger(),
+			ConfigFunc:             func() config.ServiceConfig { return cfg },
+			PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "do work on {{ .issue.title }}") },
+			OnEvent:                func(_ string, _ domain.AgentEvent) {},
+			OnExit:                 ec.onExit,
+			Logger:                 discardLogger(),
 		}
 
 		issue := workerTestIssue()
@@ -460,11 +460,11 @@ func TestRunWorkerAttempt(t *testing.T) {
 					return domain.TurnResult{SessionID: session.ID, ExitReason: domain.EventTurnCompleted}, nil
 				},
 			},
-			ConfigFunc:         func() config.ServiceConfig { return cfg },
-			PromptTemplateFunc: func() *prompt.Template { return mustParseTemplate(t, "work on {{ .issue.title }}") },
-			OnEvent:            func(_ string, _ domain.AgentEvent) {},
-			OnExit:             ec.onExit,
-			Logger:             discardLogger(),
+			ConfigFunc:             func() config.ServiceConfig { return cfg },
+			PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "work on {{ .issue.title }}") },
+			OnEvent:                func(_ string, _ domain.AgentEvent) {},
+			OnExit:                 ec.onExit,
+			Logger:                 discardLogger(),
 		}
 
 		RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
@@ -487,13 +487,13 @@ func TestRunWorkerAttempt(t *testing.T) {
 
 		ec := newExitCapture()
 		deps := WorkerDeps{
-			TrackerAdapter:     &mockTrackerAdapter{},
-			AgentAdapter:       &mockAgentAdapter{},
-			ConfigFunc:         func() config.ServiceConfig { return cfg },
-			PromptTemplateFunc: func() *prompt.Template { return mustParseTemplate(t, "work on {{ .issue.title }}") },
-			OnEvent:            func(_ string, _ domain.AgentEvent) {},
-			OnExit:             ec.onExit,
-			Logger:             discardLogger(),
+			TrackerAdapter:         &mockTrackerAdapter{},
+			AgentAdapter:           &mockAgentAdapter{},
+			ConfigFunc:             func() config.ServiceConfig { return cfg },
+			PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "work on {{ .issue.title }}") },
+			OnEvent:                func(_ string, _ domain.AgentEvent) {},
+			OnExit:                 ec.onExit,
+			Logger:                 discardLogger(),
 		}
 
 		RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
@@ -531,11 +531,11 @@ func TestRunWorkerAttempt(t *testing.T) {
 					return domain.TurnResult{SessionID: session.ID, ExitReason: domain.EventTurnCompleted}, nil
 				},
 			},
-			ConfigFunc:         func() config.ServiceConfig { return cfg },
-			PromptTemplateFunc: func() *prompt.Template { return mustParseTemplate(t, "work on {{ .issue.title }}") },
-			OnEvent:            func(_ string, _ domain.AgentEvent) {},
-			OnExit:             ec.onExit,
-			Logger:             discardLogger(),
+			ConfigFunc:             func() config.ServiceConfig { return cfg },
+			PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "work on {{ .issue.title }}") },
+			OnEvent:                func(_ string, _ domain.AgentEvent) {},
+			OnExit:                 ec.onExit,
+			Logger:                 discardLogger(),
 		}
 
 		RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
@@ -576,11 +576,11 @@ func TestRunWorkerAttempt(t *testing.T) {
 					}, nil
 				},
 			},
-			ConfigFunc:         func() config.ServiceConfig { return cfg },
-			PromptTemplateFunc: func() *prompt.Template { return mustParseTemplate(t, "work on {{ .issue.title }}") },
-			OnEvent:            func(_ string, _ domain.AgentEvent) {},
-			OnExit:             ec.onExit,
-			Logger:             discardLogger(),
+			ConfigFunc:             func() config.ServiceConfig { return cfg },
+			PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "work on {{ .issue.title }}") },
+			OnEvent:                func(_ string, _ domain.AgentEvent) {},
+			OnExit:                 ec.onExit,
+			Logger:                 discardLogger(),
 		}
 
 		RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
@@ -622,11 +622,11 @@ func TestRunWorkerAttempt(t *testing.T) {
 					return domain.Session{ID: "sess-1"}, nil
 				},
 			},
-			ConfigFunc:         func() config.ServiceConfig { return cfg },
-			PromptTemplateFunc: func() *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
-			OnEvent:            func(_ string, _ domain.AgentEvent) {},
-			OnExit:             ec.onExit,
-			Logger:             discardLogger(),
+			ConfigFunc:             func() config.ServiceConfig { return cfg },
+			PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
+			OnEvent:                func(_ string, _ domain.AgentEvent) {},
+			OnExit:                 ec.onExit,
+			Logger:                 discardLogger(),
 		}
 
 		RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
@@ -666,11 +666,11 @@ func TestRunWorkerAttempt(t *testing.T) {
 					return domain.Session{}, errors.New("session launch failed")
 				},
 			},
-			ConfigFunc:         func() config.ServiceConfig { return cfg },
-			PromptTemplateFunc: func() *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
-			OnEvent:            func(_ string, _ domain.AgentEvent) {},
-			OnExit:             ec.onExit,
-			Logger:             discardLogger(),
+			ConfigFunc:             func() config.ServiceConfig { return cfg },
+			PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
+			OnEvent:                func(_ string, _ domain.AgentEvent) {},
+			OnExit:                 ec.onExit,
+			Logger:                 discardLogger(),
 		}
 
 		RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
@@ -729,11 +729,11 @@ func TestRunWorkerAttempt(t *testing.T) {
 					return nil
 				},
 			},
-			ConfigFunc:         func() config.ServiceConfig { return cfg },
-			PromptTemplateFunc: func() *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
-			OnEvent:            func(_ string, _ domain.AgentEvent) {},
-			OnExit:             ec.onExit,
-			Logger:             discardLogger(),
+			ConfigFunc:             func() config.ServiceConfig { return cfg },
+			PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
+			OnEvent:                func(_ string, _ domain.AgentEvent) {},
+			OnExit:                 ec.onExit,
+			Logger:                 discardLogger(),
 		}
 
 		RunWorkerAttempt(ctx, workerTestIssue(), nil, deps)
@@ -771,13 +771,13 @@ func TestRunWorkerAttempt(t *testing.T) {
 		cancel() // Cancel immediately.
 
 		deps := WorkerDeps{
-			TrackerAdapter:     &mockTrackerAdapter{},
-			AgentAdapter:       &mockAgentAdapter{},
-			ConfigFunc:         func() config.ServiceConfig { return cfg },
-			PromptTemplateFunc: func() *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
-			OnEvent:            func(_ string, _ domain.AgentEvent) {},
-			OnExit:             ec.onExit,
-			Logger:             discardLogger(),
+			TrackerAdapter:         &mockTrackerAdapter{},
+			AgentAdapter:           &mockAgentAdapter{},
+			ConfigFunc:             func() config.ServiceConfig { return cfg },
+			PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
+			OnEvent:                func(_ string, _ domain.AgentEvent) {},
+			OnExit:                 ec.onExit,
+			Logger:                 discardLogger(),
 		}
 
 		RunWorkerAttempt(ctx, workerTestIssue(), nil, deps)
@@ -816,7 +816,7 @@ func TestRunWorkerAttempt(t *testing.T) {
 				},
 			},
 			ConfigFunc: func() config.ServiceConfig { return cfg },
-			PromptTemplateFunc: func() *prompt.Template {
+			PromptTemplateByIDFunc: func(_ string) *prompt.Template {
 				return mustParseTemplate(t, "turn={{ .run.turn_number }} cont={{ .run.is_continuation }}")
 			},
 			OnEvent: func(_ string, _ domain.AgentEvent) {},
@@ -875,12 +875,12 @@ func TestRunWorkerAttempt(t *testing.T) {
 					return nil, fmt.Errorf("tracker API timeout")
 				},
 			},
-			AgentAdapter:       &mockAgentAdapter{},
-			ConfigFunc:         func() config.ServiceConfig { return cfg },
-			PromptTemplateFunc: func() *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
-			OnEvent:            func(_ string, _ domain.AgentEvent) {},
-			OnExit:             ec.onExit,
-			Logger:             discardLogger(),
+			AgentAdapter:           &mockAgentAdapter{},
+			ConfigFunc:             func() config.ServiceConfig { return cfg },
+			PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
+			OnEvent:                func(_ string, _ domain.AgentEvent) {},
+			OnExit:                 ec.onExit,
+			Logger:                 discardLogger(),
 		}
 
 		RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
@@ -918,11 +918,11 @@ func TestRunWorkerAttempt(t *testing.T) {
 					return nil
 				},
 			},
-			ConfigFunc:         func() config.ServiceConfig { return cfg },
-			PromptTemplateFunc: func() *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
-			OnEvent:            func(_ string, _ domain.AgentEvent) {},
-			OnExit:             ec.onExit,
-			Logger:             discardLogger(),
+			ConfigFunc:             func() config.ServiceConfig { return cfg },
+			PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
+			OnEvent:                func(_ string, _ domain.AgentEvent) {},
+			OnExit:                 ec.onExit,
+			Logger:                 discardLogger(),
 		}
 
 		// Should not propagate the panic.
@@ -965,13 +965,13 @@ func TestRunWorkerAttempt(t *testing.T) {
 		ec := newExitCapture()
 
 		deps := WorkerDeps{
-			TrackerAdapter:     &mockTrackerAdapter{},
-			AgentAdapter:       &mockAgentAdapter{},
-			ConfigFunc:         func() config.ServiceConfig { return cfg },
-			PromptTemplateFunc: func() *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
-			OnEvent:            func(_ string, _ domain.AgentEvent) {},
-			OnExit:             ec.onExit,
-			Logger:             discardLogger(),
+			TrackerAdapter:         &mockTrackerAdapter{},
+			AgentAdapter:           &mockAgentAdapter{},
+			ConfigFunc:             func() config.ServiceConfig { return cfg },
+			PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
+			OnEvent:                func(_ string, _ domain.AgentEvent) {},
+			OnExit:                 ec.onExit,
+			Logger:                 discardLogger(),
 		}
 
 		attempt := intPtr(3)
@@ -999,13 +999,13 @@ func TestRunWorkerAttempt(t *testing.T) {
 		ec := newExitCapture()
 
 		deps := WorkerDeps{
-			TrackerAdapter:     &mockTrackerAdapter{},
-			AgentAdapter:       &mockAgentAdapter{},
-			ConfigFunc:         func() config.ServiceConfig { return cfg },
-			PromptTemplateFunc: func() *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
-			OnEvent:            func(_ string, _ domain.AgentEvent) {},
-			OnExit:             ec.onExit,
-			Logger:             discardLogger(),
+			TrackerAdapter:         &mockTrackerAdapter{},
+			AgentAdapter:           &mockAgentAdapter{},
+			ConfigFunc:             func() config.ServiceConfig { return cfg },
+			PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
+			OnEvent:                func(_ string, _ domain.AgentEvent) {},
+			OnExit:                 ec.onExit,
+			Logger:                 discardLogger(),
 		}
 
 		issue := workerTestIssue()
@@ -1038,12 +1038,12 @@ func TestRunWorkerAttempt(t *testing.T) {
 					return domain.Session{ID: "sess-resumed"}, nil
 				},
 			},
-			ConfigFunc:         func() config.ServiceConfig { return cfg },
-			PromptTemplateFunc: func() *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
-			OnEvent:            func(_ string, _ domain.AgentEvent) {},
-			OnExit:             ec.onExit,
-			ResumeSessionID:    "prev-sess-123",
-			Logger:             discardLogger(),
+			ConfigFunc:             func() config.ServiceConfig { return cfg },
+			PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
+			OnEvent:                func(_ string, _ domain.AgentEvent) {},
+			OnExit:                 ec.onExit,
+			ResumeSessionID:        "prev-sess-123",
+			Logger:                 discardLogger(),
 		}
 
 		RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
@@ -1093,11 +1093,11 @@ func TestRunWorkerAttempt(t *testing.T) {
 					return nil
 				},
 			},
-			ConfigFunc:         func() config.ServiceConfig { return cfg },
-			PromptTemplateFunc: func() *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
-			OnEvent:            func(_ string, _ domain.AgentEvent) {},
-			OnExit:             ec.onExit,
-			Logger:             discardLogger(),
+			ConfigFunc:             func() config.ServiceConfig { return cfg },
+			PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
+			OnEvent:                func(_ string, _ domain.AgentEvent) {},
+			OnExit:                 ec.onExit,
+			Logger:                 discardLogger(),
 		}
 
 		RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
@@ -1126,13 +1126,13 @@ func TestRunWorkerAttempt(t *testing.T) {
 		ec := newExitCapture()
 
 		deps := WorkerDeps{
-			TrackerAdapter:     &mockTrackerAdapter{},
-			AgentAdapter:       &mockAgentAdapter{},
-			ConfigFunc:         func() config.ServiceConfig { return cfg },
-			PromptTemplateFunc: func() *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
-			OnEvent:            func(_ string, _ domain.AgentEvent) {},
-			OnExit:             ec.onExit,
-			Logger:             discardLogger(),
+			TrackerAdapter:         &mockTrackerAdapter{},
+			AgentAdapter:           &mockAgentAdapter{},
+			ConfigFunc:             func() config.ServiceConfig { return cfg },
+			PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
+			OnEvent:                func(_ string, _ domain.AgentEvent) {},
+			OnExit:                 ec.onExit,
+			Logger:                 discardLogger(),
 		}
 
 		RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
@@ -1159,13 +1159,13 @@ func TestRunWorkerAttempt(t *testing.T) {
 		ec := newExitCapture()
 
 		deps := WorkerDeps{
-			TrackerAdapter:     &mockTrackerAdapter{},
-			AgentAdapter:       &mockAgentAdapter{},
-			ConfigFunc:         func() config.ServiceConfig { return cfg },
-			PromptTemplateFunc: func() *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
-			OnEvent:            func(_ string, _ domain.AgentEvent) {},
-			OnExit:             ec.onExit,
-			Logger:             discardLogger(),
+			TrackerAdapter:         &mockTrackerAdapter{},
+			AgentAdapter:           &mockAgentAdapter{},
+			ConfigFunc:             func() config.ServiceConfig { return cfg },
+			PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
+			OnEvent:                func(_ string, _ domain.AgentEvent) {},
+			OnExit:                 ec.onExit,
+			Logger:                 discardLogger(),
 		}
 
 		RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
@@ -1203,11 +1203,11 @@ func TestRunWorkerAttempt(t *testing.T) {
 					return domain.TurnResult{SessionID: session.ID, ExitReason: domain.EventTurnCompleted}, nil
 				},
 			},
-			ConfigFunc:         func() config.ServiceConfig { return cfg },
-			PromptTemplateFunc: func() *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
-			OnEvent:            func(_ string, _ domain.AgentEvent) {},
-			OnExit:             ec.onExit,
-			Logger:             discardLogger(),
+			ConfigFunc:             func() config.ServiceConfig { return cfg },
+			PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
+			OnEvent:                func(_ string, _ domain.AgentEvent) {},
+			OnExit:                 ec.onExit,
+			Logger:                 discardLogger(),
 		}
 
 		RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
@@ -1259,8 +1259,8 @@ func TestRunWorkerAttempt(t *testing.T) {
 					return domain.TurnResult{SessionID: session.ID, ExitReason: domain.EventTurnCompleted}, nil
 				},
 			},
-			ConfigFunc:         func() config.ServiceConfig { return cfg },
-			PromptTemplateFunc: func() *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
+			ConfigFunc:             func() config.ServiceConfig { return cfg },
+			PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
 			OnEvent: func(_ string, event domain.AgentEvent) {
 				if event.RateLimits != nil {
 					relayedMap.Store(event.RateLimits)
@@ -1319,12 +1319,12 @@ func TestRunWorkerAttempt(t *testing.T) {
 					return domain.TurnResult{SessionID: session.ID, ExitReason: domain.EventTurnCompleted}, nil
 				},
 			},
-			ConfigFunc:         func() config.ServiceConfig { return cfg },
-			PromptTemplateFunc: func() *prompt.Template { return mustParseTemplate(t, "do work on {{ .issue.title }}") },
-			OnEvent:            func(_ string, _ domain.AgentEvent) {},
-			OnExit:             ec.onExit,
-			Logger:             discardLogger(),
-			ToolRegistry:       reg,
+			ConfigFunc:             func() config.ServiceConfig { return cfg },
+			PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "do work on {{ .issue.title }}") },
+			OnEvent:                func(_ string, _ domain.AgentEvent) {},
+			OnExit:                 ec.onExit,
+			Logger:                 discardLogger(),
+			ToolRegistry:           reg,
 		}
 
 		RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
@@ -1374,12 +1374,12 @@ func TestRunWorkerAttempt(t *testing.T) {
 					return domain.TurnResult{SessionID: session.ID, ExitReason: domain.EventTurnCompleted}, nil
 				},
 			},
-			ConfigFunc:         func() config.ServiceConfig { return cfg },
-			PromptTemplateFunc: func() *prompt.Template { return mustParseTemplate(t, "turn={{ .run.turn_number }}") },
-			OnEvent:            func(_ string, _ domain.AgentEvent) {},
-			OnExit:             ec.onExit,
-			Logger:             discardLogger(),
-			ToolRegistry:       reg,
+			ConfigFunc:             func() config.ServiceConfig { return cfg },
+			PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "turn={{ .run.turn_number }}") },
+			OnEvent:                func(_ string, _ domain.AgentEvent) {},
+			OnExit:                 ec.onExit,
+			Logger:                 discardLogger(),
+			ToolRegistry:           reg,
 		}
 
 		RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
@@ -1435,12 +1435,12 @@ func TestRunWorkerAttempt(t *testing.T) {
 					return domain.TurnResult{SessionID: session.ID, ExitReason: domain.EventTurnCompleted}, nil
 				},
 			},
-			ConfigFunc:         func() config.ServiceConfig { return cfg },
-			PromptTemplateFunc: func() *prompt.Template { return mustParseTemplate(t, "do work on {{ .issue.title }}") },
-			OnEvent:            func(_ string, _ domain.AgentEvent) {},
-			OnExit:             ec.onExit,
-			Logger:             discardLogger(),
-			ToolRegistry:       nil,
+			ConfigFunc:             func() config.ServiceConfig { return cfg },
+			PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "do work on {{ .issue.title }}") },
+			OnEvent:                func(_ string, _ domain.AgentEvent) {},
+			OnExit:                 ec.onExit,
+			Logger:                 discardLogger(),
+			ToolRegistry:           nil,
 		}
 
 		RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
@@ -1480,12 +1480,12 @@ func TestRunWorkerAttempt(t *testing.T) {
 					return domain.TurnResult{SessionID: session.ID, ExitReason: domain.EventTurnCompleted}, nil
 				},
 			},
-			ConfigFunc:         func() config.ServiceConfig { return cfg },
-			PromptTemplateFunc: func() *prompt.Template { return mustParseTemplate(t, "do work on {{ .issue.title }}") },
-			OnEvent:            func(_ string, _ domain.AgentEvent) {},
-			OnExit:             ec.onExit,
-			Logger:             discardLogger(),
-			ToolRegistry:       domain.NewToolRegistry(),
+			ConfigFunc:             func() config.ServiceConfig { return cfg },
+			PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "do work on {{ .issue.title }}") },
+			OnEvent:                func(_ string, _ domain.AgentEvent) {},
+			OnExit:                 ec.onExit,
+			Logger:                 discardLogger(),
+			ToolRegistry:           domain.NewToolRegistry(),
 		}
 
 		RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
@@ -1522,7 +1522,7 @@ func TestRunWorkerAttempt(t *testing.T) {
 				},
 			},
 			ConfigFunc:               func() config.ServiceConfig { return cfg },
-			PromptTemplateFunc:       func() *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
+			PromptTemplateByIDFunc:   func(_ string) *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
 			OnEvent:                  func(_ string, _ domain.AgentEvent) {},
 			OnExit:                   ec.onExit,
 			Logger:                   discardLogger(),
@@ -1711,14 +1711,14 @@ func TestRunWorkerAttempt_DispatchTransition(t *testing.T) {
 		ec := newExitCapture()
 
 		deps := WorkerDeps{
-			TrackerAdapter:     tracker,
-			AgentAdapter:       &mockAgentAdapter{},
-			ConfigFunc:         func() config.ServiceConfig { return cfg },
-			PromptTemplateFunc: func() *prompt.Template { return mustParseTemplate(t, "work on {{ .issue.title }}") },
-			OnEvent:            func(_ string, _ domain.AgentEvent) {},
-			OnExit:             ec.onExit,
-			Logger:             discardLogger(),
-			Metrics:            spy,
+			TrackerAdapter:         tracker,
+			AgentAdapter:           &mockAgentAdapter{},
+			ConfigFunc:             func() config.ServiceConfig { return cfg },
+			PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "work on {{ .issue.title }}") },
+			OnEvent:                func(_ string, _ domain.AgentEvent) {},
+			OnExit:                 ec.onExit,
+			Logger:                 discardLogger(),
+			Metrics:                spy,
 		}
 
 		issue := workerTestIssue()
@@ -1761,14 +1761,14 @@ func TestRunWorkerAttempt_DispatchTransition(t *testing.T) {
 		ec := newExitCapture()
 
 		deps := WorkerDeps{
-			TrackerAdapter:     tracker,
-			AgentAdapter:       &mockAgentAdapter{},
-			ConfigFunc:         func() config.ServiceConfig { return cfg },
-			PromptTemplateFunc: func() *prompt.Template { return mustParseTemplate(t, "work on {{ .issue.title }}") },
-			OnEvent:            func(_ string, _ domain.AgentEvent) {},
-			OnExit:             ec.onExit,
-			Logger:             discardLogger(),
-			Metrics:            spy,
+			TrackerAdapter:         tracker,
+			AgentAdapter:           &mockAgentAdapter{},
+			ConfigFunc:             func() config.ServiceConfig { return cfg },
+			PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "work on {{ .issue.title }}") },
+			OnEvent:                func(_ string, _ domain.AgentEvent) {},
+			OnExit:                 ec.onExit,
+			Logger:                 discardLogger(),
+			Metrics:                spy,
 		}
 
 		RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
@@ -1805,14 +1805,14 @@ func TestRunWorkerAttempt_DispatchTransition(t *testing.T) {
 		ec := newExitCapture()
 
 		deps := WorkerDeps{
-			TrackerAdapter:     tracker,
-			AgentAdapter:       &mockAgentAdapter{},
-			ConfigFunc:         func() config.ServiceConfig { return cfg },
-			PromptTemplateFunc: func() *prompt.Template { return mustParseTemplate(t, "work on {{ .issue.title }}") },
-			OnEvent:            func(_ string, _ domain.AgentEvent) {},
-			OnExit:             ec.onExit,
-			Logger:             discardLogger(),
-			Metrics:            spy,
+			TrackerAdapter:         tracker,
+			AgentAdapter:           &mockAgentAdapter{},
+			ConfigFunc:             func() config.ServiceConfig { return cfg },
+			PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "work on {{ .issue.title }}") },
+			OnEvent:                func(_ string, _ domain.AgentEvent) {},
+			OnExit:                 ec.onExit,
+			Logger:                 discardLogger(),
+			Metrics:                spy,
 		}
 
 		RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
@@ -1857,14 +1857,14 @@ func TestRunWorkerAttempt_DispatchTransition(t *testing.T) {
 		tracker1 := &mockTrackerAdapter{}
 		ec1 := newExitCapture()
 		deps1 := WorkerDeps{
-			TrackerAdapter:     tracker1,
-			AgentAdapter:       &mockAgentAdapter{},
-			ConfigFunc:         makeConfig(tmpDir1),
-			PromptTemplateFunc: func() *prompt.Template { return mustParseTemplate(t, "work on {{ .issue.title }}") },
-			OnEvent:            func(_ string, _ domain.AgentEvent) {},
-			OnExit:             ec1.onExit,
-			Logger:             discardLogger(),
-			Metrics:            &spyMetrics{},
+			TrackerAdapter:         tracker1,
+			AgentAdapter:           &mockAgentAdapter{},
+			ConfigFunc:             makeConfig(tmpDir1),
+			PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "work on {{ .issue.title }}") },
+			OnEvent:                func(_ string, _ domain.AgentEvent) {},
+			OnExit:                 ec1.onExit,
+			Logger:                 discardLogger(),
+			Metrics:                &spyMetrics{},
 		}
 		RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps1)
 		ec1.waitResult(t)
@@ -1873,14 +1873,14 @@ func TestRunWorkerAttempt_DispatchTransition(t *testing.T) {
 		tracker2 := &mockTrackerAdapter{}
 		ec2 := newExitCapture()
 		deps2 := WorkerDeps{
-			TrackerAdapter:     tracker2,
-			AgentAdapter:       &mockAgentAdapter{},
-			ConfigFunc:         makeConfig(tmpDir2),
-			PromptTemplateFunc: func() *prompt.Template { return mustParseTemplate(t, "work on {{ .issue.title }}") },
-			OnEvent:            func(_ string, _ domain.AgentEvent) {},
-			OnExit:             ec2.onExit,
-			Logger:             discardLogger(),
-			Metrics:            &spyMetrics{},
+			TrackerAdapter:         tracker2,
+			AgentAdapter:           &mockAgentAdapter{},
+			ConfigFunc:             makeConfig(tmpDir2),
+			PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "work on {{ .issue.title }}") },
+			OnEvent:                func(_ string, _ domain.AgentEvent) {},
+			OnExit:                 ec2.onExit,
+			Logger:                 discardLogger(),
+			Metrics:                &spyMetrics{},
 		}
 		RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps2)
 		ec2.waitResult(t)
@@ -1921,14 +1921,14 @@ func TestRunWorkerAttempt_DispatchTransition(t *testing.T) {
 		issue.State = "In Progress"
 
 		deps := WorkerDeps{
-			TrackerAdapter:     tracker,
-			AgentAdapter:       &mockAgentAdapter{},
-			ConfigFunc:         func() config.ServiceConfig { return cfg },
-			PromptTemplateFunc: func() *prompt.Template { return mustParseTemplate(t, "work on {{ .issue.title }}") },
-			OnEvent:            func(_ string, _ domain.AgentEvent) {},
-			OnExit:             ec.onExit,
-			Logger:             discardLogger(),
-			Metrics:            spy,
+			TrackerAdapter:         tracker,
+			AgentAdapter:           &mockAgentAdapter{},
+			ConfigFunc:             func() config.ServiceConfig { return cfg },
+			PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "work on {{ .issue.title }}") },
+			OnEvent:                func(_ string, _ domain.AgentEvent) {},
+			OnExit:                 ec.onExit,
+			Logger:                 discardLogger(),
+			Metrics:                spy,
 		}
 
 		RunWorkerAttempt(context.Background(), issue, nil, deps)
@@ -1963,14 +1963,14 @@ func TestRunWorkerAttempt_DispatchTransition(t *testing.T) {
 		issue.State = "in progress"
 
 		deps := WorkerDeps{
-			TrackerAdapter:     tracker,
-			AgentAdapter:       &mockAgentAdapter{},
-			ConfigFunc:         func() config.ServiceConfig { return cfg },
-			PromptTemplateFunc: func() *prompt.Template { return mustParseTemplate(t, "work on {{ .issue.title }}") },
-			OnEvent:            func(_ string, _ domain.AgentEvent) {},
-			OnExit:             ec.onExit,
-			Logger:             discardLogger(),
-			Metrics:            spy,
+			TrackerAdapter:         tracker,
+			AgentAdapter:           &mockAgentAdapter{},
+			ConfigFunc:             func() config.ServiceConfig { return cfg },
+			PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "work on {{ .issue.title }}") },
+			OnEvent:                func(_ string, _ domain.AgentEvent) {},
+			OnExit:                 ec.onExit,
+			Logger:                 discardLogger(),
+			Metrics:                spy,
 		}
 
 		RunWorkerAttempt(context.Background(), issue, nil, deps)
@@ -2003,14 +2003,14 @@ func TestRunWorkerAttempt_DispatchTransition(t *testing.T) {
 		// issue.State = "To Do" (default from workerTestIssue) — states differ,
 		// so TransitionIssue must be called.
 		deps := WorkerDeps{
-			TrackerAdapter:     tracker,
-			AgentAdapter:       &mockAgentAdapter{},
-			ConfigFunc:         func() config.ServiceConfig { return cfg },
-			PromptTemplateFunc: func() *prompt.Template { return mustParseTemplate(t, "work on {{ .issue.title }}") },
-			OnEvent:            func(_ string, _ domain.AgentEvent) {},
-			OnExit:             ec.onExit,
-			Logger:             discardLogger(),
-			Metrics:            spy,
+			TrackerAdapter:         tracker,
+			AgentAdapter:           &mockAgentAdapter{},
+			ConfigFunc:             func() config.ServiceConfig { return cfg },
+			PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "work on {{ .issue.title }}") },
+			OnEvent:                func(_ string, _ domain.AgentEvent) {},
+			OnExit:                 ec.onExit,
+			Logger:                 discardLogger(),
+			Metrics:                spy,
 		}
 
 		RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
@@ -2047,14 +2047,14 @@ func TestRunWorkerAttempt_DispatchTransition(t *testing.T) {
 
 		attempt := 2
 		deps := WorkerDeps{
-			TrackerAdapter:     tracker,
-			AgentAdapter:       &mockAgentAdapter{},
-			ConfigFunc:         func() config.ServiceConfig { return cfg },
-			PromptTemplateFunc: func() *prompt.Template { return mustParseTemplate(t, "work on {{ .issue.title }}") },
-			OnEvent:            func(_ string, _ domain.AgentEvent) {},
-			OnExit:             ec.onExit,
-			Logger:             discardLogger(),
-			Metrics:            spy,
+			TrackerAdapter:         tracker,
+			AgentAdapter:           &mockAgentAdapter{},
+			ConfigFunc:             func() config.ServiceConfig { return cfg },
+			PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "work on {{ .issue.title }}") },
+			OnEvent:                func(_ string, _ domain.AgentEvent) {},
+			OnExit:                 ec.onExit,
+			Logger:                 discardLogger(),
+			Metrics:                spy,
 		}
 
 		RunWorkerAttempt(context.Background(), issue, &attempt, deps)
@@ -2098,12 +2098,12 @@ func TestRunWorkerAttempt_MCPConfig(t *testing.T) {
 					return domain.Session{ID: "sess-1"}, nil
 				},
 			},
-			ConfigFunc:         func() config.ServiceConfig { return cfg },
-			PromptTemplateFunc: func() *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
-			OnEvent:            func(_ string, _ domain.AgentEvent) {},
-			OnExit:             ec.onExit,
-			Logger:             discardLogger(),
-			WorkflowPath:       "", // empty → MCP config skipped
+			ConfigFunc:             func() config.ServiceConfig { return cfg },
+			PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
+			OnEvent:                func(_ string, _ domain.AgentEvent) {},
+			OnExit:                 ec.onExit,
+			Logger:                 discardLogger(),
+			WorkflowPath:           "", // empty → MCP config skipped
 		}
 
 		RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
@@ -2143,12 +2143,12 @@ func TestRunWorkerAttempt_MCPConfig(t *testing.T) {
 					return domain.Session{ID: "sess-1"}, nil
 				},
 			},
-			ConfigFunc:         func() config.ServiceConfig { return cfg },
-			PromptTemplateFunc: func() *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
-			OnEvent:            func(_ string, _ domain.AgentEvent) {},
-			OnExit:             ec.onExit,
-			Logger:             discardLogger(),
-			WorkflowPath:       "/fake/WORKFLOW.md", // non-empty → MCP config generated
+			ConfigFunc:             func() config.ServiceConfig { return cfg },
+			PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
+			OnEvent:                func(_ string, _ domain.AgentEvent) {},
+			OnExit:                 ec.onExit,
+			Logger:                 discardLogger(),
+			WorkflowPath:           "/fake/WORKFLOW.md", // non-empty → MCP config generated
 		}
 
 		RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
@@ -2218,12 +2218,12 @@ func TestRunWorkerAttempt_MCPConfig(t *testing.T) {
 					return domain.Session{ID: "sess-1"}, nil
 				},
 			},
-			ConfigFunc:         func() config.ServiceConfig { return cfg },
-			PromptTemplateFunc: func() *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
-			OnEvent:            func(_ string, _ domain.AgentEvent) {},
-			OnExit:             ec.onExit,
-			Logger:             discardLogger(),
-			WorkflowPath:       "/fake/WORKFLOW.md",
+			ConfigFunc:             func() config.ServiceConfig { return cfg },
+			PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
+			OnEvent:                func(_ string, _ domain.AgentEvent) {},
+			OnExit:                 ec.onExit,
+			Logger:                 discardLogger(),
+			WorkflowPath:           "/fake/WORKFLOW.md",
 		}
 
 		RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
@@ -2282,12 +2282,12 @@ func TestRunWorkerAttempt_MCPConfig(t *testing.T) {
 					return domain.Session{ID: "sess-1"}, nil
 				},
 			},
-			ConfigFunc:         func() config.ServiceConfig { return cfg },
-			PromptTemplateFunc: func() *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
-			OnEvent:            func(_ string, _ domain.AgentEvent) {},
-			OnExit:             ec.onExit,
-			Logger:             discardLogger(),
-			WorkflowPath:       "/fake/WORKFLOW.md",
+			ConfigFunc:             func() config.ServiceConfig { return cfg },
+			PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
+			OnEvent:                func(_ string, _ domain.AgentEvent) {},
+			OnExit:                 ec.onExit,
+			Logger:                 discardLogger(),
+			WorkflowPath:           "/fake/WORKFLOW.md",
 		}
 
 		RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
@@ -2360,11 +2360,11 @@ func TestRunWorkerAttempt_MCPConfig(t *testing.T) {
 					return domain.Session{ID: "sess-1"}, nil
 				},
 			},
-			ConfigFunc:         func() config.ServiceConfig { return cfg },
-			PromptTemplateFunc: func() *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
-			OnEvent:            func(_ string, _ domain.AgentEvent) {},
-			OnExit:             ec.onExit,
-			Logger:             discardLogger(),
+			ConfigFunc:             func() config.ServiceConfig { return cfg },
+			PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
+			OnEvent:                func(_ string, _ domain.AgentEvent) {},
+			OnExit:                 ec.onExit,
+			Logger:                 discardLogger(),
 			// WorkflowPath is inside workflowDir; the file itself need not exist.
 			WorkflowPath: filepath.Join(workflowDir, "WORKFLOW.md"),
 		}
@@ -2413,13 +2413,13 @@ func TestRunWorkerAttempt_MCPConfig(t *testing.T) {
 					return domain.Session{ID: "sess-1"}, nil
 				},
 			},
-			ConfigFunc:         func() config.ServiceConfig { return cfg },
-			PromptTemplateFunc: func() *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
-			OnEvent:            func(_ string, _ domain.AgentEvent) {},
-			OnExit:             ec.onExit,
-			Logger:             discardLogger(),
-			WorkflowPath:       "/fake/WORKFLOW.md",
-			DBPath:             testDBPath,
+			ConfigFunc:             func() config.ServiceConfig { return cfg },
+			PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
+			OnEvent:                func(_ string, _ domain.AgentEvent) {},
+			OnExit:                 ec.onExit,
+			Logger:                 discardLogger(),
+			WorkflowPath:           "/fake/WORKFLOW.md",
+			DBPath:                 testDBPath,
 		}
 
 		RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
@@ -2517,14 +2517,14 @@ func TestRunWorkerAttempt_DispatchComment(t *testing.T) {
 		issue := workerTestIssue()
 
 		deps := WorkerDeps{
-			TrackerAdapter:     tracker,
-			AgentAdapter:       &mockAgentAdapter{},
-			ConfigFunc:         func() config.ServiceConfig { return cfg },
-			PromptTemplateFunc: func() *prompt.Template { return mustParseTemplate(t, "work on {{ .issue.title }}") },
-			OnEvent:            func(_ string, _ domain.AgentEvent) {},
-			OnExit:             ec.onExit,
-			Logger:             discardLogger(),
-			Metrics:            spy,
+			TrackerAdapter:         tracker,
+			AgentAdapter:           &mockAgentAdapter{},
+			ConfigFunc:             func() config.ServiceConfig { return cfg },
+			PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "work on {{ .issue.title }}") },
+			OnEvent:                func(_ string, _ domain.AgentEvent) {},
+			OnExit:                 ec.onExit,
+			Logger:                 discardLogger(),
+			Metrics:                spy,
 		}
 
 		RunWorkerAttempt(context.Background(), issue, nil, deps)
@@ -2571,14 +2571,14 @@ func TestRunWorkerAttempt_DispatchComment(t *testing.T) {
 		ec := newExitCapture()
 
 		deps := WorkerDeps{
-			TrackerAdapter:     tracker,
-			AgentAdapter:       &mockAgentAdapter{},
-			ConfigFunc:         func() config.ServiceConfig { return cfg },
-			PromptTemplateFunc: func() *prompt.Template { return mustParseTemplate(t, "work on {{ .issue.title }}") },
-			OnEvent:            func(_ string, _ domain.AgentEvent) {},
-			OnExit:             ec.onExit,
-			Logger:             discardLogger(),
-			Metrics:            spy,
+			TrackerAdapter:         tracker,
+			AgentAdapter:           &mockAgentAdapter{},
+			ConfigFunc:             func() config.ServiceConfig { return cfg },
+			PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "work on {{ .issue.title }}") },
+			OnEvent:                func(_ string, _ domain.AgentEvent) {},
+			OnExit:                 ec.onExit,
+			Logger:                 discardLogger(),
+			Metrics:                spy,
 		}
 
 		RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
@@ -2615,14 +2615,14 @@ func TestRunWorkerAttempt_DispatchComment(t *testing.T) {
 		ec := newExitCapture()
 
 		deps := WorkerDeps{
-			TrackerAdapter:     tracker,
-			AgentAdapter:       &mockAgentAdapter{},
-			ConfigFunc:         func() config.ServiceConfig { return cfg },
-			PromptTemplateFunc: func() *prompt.Template { return mustParseTemplate(t, "work on {{ .issue.title }}") },
-			OnEvent:            func(_ string, _ domain.AgentEvent) {},
-			OnExit:             ec.onExit,
-			Logger:             discardLogger(),
-			Metrics:            spy,
+			TrackerAdapter:         tracker,
+			AgentAdapter:           &mockAgentAdapter{},
+			ConfigFunc:             func() config.ServiceConfig { return cfg },
+			PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "work on {{ .issue.title }}") },
+			OnEvent:                func(_ string, _ domain.AgentEvent) {},
+			OnExit:                 ec.onExit,
+			Logger:                 discardLogger(),
+			Metrics:                spy,
 		}
 
 		RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
@@ -2665,14 +2665,14 @@ func TestRunWorkerAttempt_DispatchComment(t *testing.T) {
 		attempt := intPtr(2)
 
 		deps := WorkerDeps{
-			TrackerAdapter:     tracker,
-			AgentAdapter:       &mockAgentAdapter{},
-			ConfigFunc:         func() config.ServiceConfig { return cfg },
-			PromptTemplateFunc: func() *prompt.Template { return mustParseTemplate(t, "work on {{ .issue.title }}") },
-			OnEvent:            func(_ string, _ domain.AgentEvent) {},
-			OnExit:             ec.onExit,
-			Logger:             discardLogger(),
-			Metrics:            &domain.NoopMetrics{},
+			TrackerAdapter:         tracker,
+			AgentAdapter:           &mockAgentAdapter{},
+			ConfigFunc:             func() config.ServiceConfig { return cfg },
+			PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "work on {{ .issue.title }}") },
+			OnEvent:                func(_ string, _ domain.AgentEvent) {},
+			OnExit:                 ec.onExit,
+			Logger:                 discardLogger(),
+			Metrics:                &domain.NoopMetrics{},
 		}
 
 		RunWorkerAttempt(context.Background(), workerTestIssue(), attempt, deps)
@@ -2723,11 +2723,11 @@ func TestRunWorkerAttempt_A2OStatusSignal(t *testing.T) {
 					return domain.TurnResult{SessionID: session.ID, ExitReason: domain.EventTurnCompleted}, nil
 				},
 			},
-			ConfigFunc:         func() config.ServiceConfig { return cfg },
-			PromptTemplateFunc: func() *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
-			OnEvent:            func(_ string, _ domain.AgentEvent) {},
-			OnExit:             ec.onExit,
-			Logger:             discardLogger(),
+			ConfigFunc:             func() config.ServiceConfig { return cfg },
+			PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
+			OnEvent:                func(_ string, _ domain.AgentEvent) {},
+			OnExit:                 ec.onExit,
+			Logger:                 discardLogger(),
 		}
 
 		RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
@@ -2777,11 +2777,11 @@ func TestRunWorkerAttempt_A2OStatusSignal(t *testing.T) {
 					return domain.TurnResult{SessionID: session.ID, ExitReason: domain.EventTurnCompleted}, nil
 				},
 			},
-			ConfigFunc:         func() config.ServiceConfig { return cfg },
-			PromptTemplateFunc: func() *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
-			OnEvent:            func(_ string, _ domain.AgentEvent) {},
-			OnExit:             ec.onExit,
-			Logger:             discardLogger(),
+			ConfigFunc:             func() config.ServiceConfig { return cfg },
+			PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
+			OnEvent:                func(_ string, _ domain.AgentEvent) {},
+			OnExit:                 ec.onExit,
+			Logger:                 discardLogger(),
 		}
 
 		RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
@@ -2822,12 +2822,12 @@ func TestRunWorkerAttempt_A2OStatusSignal(t *testing.T) {
 					return result, nil
 				},
 			},
-			AgentAdapter:       &mockAgentAdapter{},
-			ConfigFunc:         func() config.ServiceConfig { return cfg },
-			PromptTemplateFunc: func() *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
-			OnEvent:            func(_ string, _ domain.AgentEvent) {},
-			OnExit:             ec.onExit,
-			Logger:             discardLogger(),
+			AgentAdapter:           &mockAgentAdapter{},
+			ConfigFunc:             func() config.ServiceConfig { return cfg },
+			PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
+			OnEvent:                func(_ string, _ domain.AgentEvent) {},
+			OnExit:                 ec.onExit,
+			Logger:                 discardLogger(),
 		}
 
 		RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
@@ -2874,13 +2874,13 @@ func TestRunWorkerAttempt_A2OStatusSignal(t *testing.T) {
 
 		deps := WorkerDeps{
 			// runTurnFn writes nothing; the stale file should be gone by now.
-			TrackerAdapter:     &mockTrackerAdapter{},
-			AgentAdapter:       &mockAgentAdapter{},
-			ConfigFunc:         func() config.ServiceConfig { return cfg },
-			PromptTemplateFunc: func() *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
-			OnEvent:            func(_ string, _ domain.AgentEvent) {},
-			OnExit:             ec.onExit,
-			Logger:             discardLogger(),
+			TrackerAdapter:         &mockTrackerAdapter{},
+			AgentAdapter:           &mockAgentAdapter{},
+			ConfigFunc:             func() config.ServiceConfig { return cfg },
+			PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
+			OnEvent:                func(_ string, _ domain.AgentEvent) {},
+			OnExit:                 ec.onExit,
+			Logger:                 discardLogger(),
 		}
 
 		RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
@@ -2945,11 +2945,11 @@ func TestRuntimeStatusSuffixInjection(t *testing.T) {
 					return domain.TurnResult{SessionID: session.ID, ExitReason: domain.EventTurnCompleted}, nil
 				},
 			},
-			ConfigFunc:         func() config.ServiceConfig { return cfg },
-			PromptTemplateFunc: func() *prompt.Template { return mustParseTemplate(t, "do work on {{ .issue.title }}") },
-			OnEvent:            func(_ string, _ domain.AgentEvent) {},
-			OnExit:             ec.onExit,
-			Logger:             discardLogger(),
+			ConfigFunc:             func() config.ServiceConfig { return cfg },
+			PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "do work on {{ .issue.title }}") },
+			OnEvent:                func(_ string, _ domain.AgentEvent) {},
+			OnExit:                 ec.onExit,
+			Logger:                 discardLogger(),
 		}
 
 		RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
@@ -2998,12 +2998,12 @@ func TestRuntimeStatusSuffixInjection(t *testing.T) {
 					return domain.TurnResult{SessionID: session.ID, ExitReason: domain.EventTurnCompleted}, nil
 				},
 			},
-			ConfigFunc:         func() config.ServiceConfig { return cfg },
-			PromptTemplateFunc: func() *prompt.Template { return mustParseTemplate(t, "do work on {{ .issue.title }}") },
-			OnEvent:            func(_ string, _ domain.AgentEvent) {},
-			OnExit:             ec.onExit,
-			Logger:             discardLogger(),
-			ToolRegistry:       reg,
+			ConfigFunc:             func() config.ServiceConfig { return cfg },
+			PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "do work on {{ .issue.title }}") },
+			OnEvent:                func(_ string, _ domain.AgentEvent) {},
+			OnExit:                 ec.onExit,
+			Logger:                 discardLogger(),
+			ToolRegistry:           reg,
 		}
 
 		RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
@@ -3052,11 +3052,11 @@ func TestRuntimeStatusSuffixInjection(t *testing.T) {
 					return domain.TurnResult{SessionID: session.ID, ExitReason: domain.EventTurnCompleted}, nil
 				},
 			},
-			ConfigFunc:         func() config.ServiceConfig { return cfg },
-			PromptTemplateFunc: func() *prompt.Template { return mustParseTemplate(t, "turn={{ .run.turn_number }}") },
-			OnEvent:            func(_ string, _ domain.AgentEvent) {},
-			OnExit:             ec.onExit,
-			Logger:             discardLogger(),
+			ConfigFunc:             func() config.ServiceConfig { return cfg },
+			PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "turn={{ .run.turn_number }}") },
+			OnEvent:                func(_ string, _ domain.AgentEvent) {},
+			OnExit:                 ec.onExit,
+			Logger:                 discardLogger(),
 		}
 
 		RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
@@ -3107,11 +3107,11 @@ func TestRuntimeStatusSuffixInjection(t *testing.T) {
 					return domain.TurnResult{SessionID: session.ID, ExitReason: domain.EventTurnCompleted}, nil
 				},
 			},
-			ConfigFunc:         func() config.ServiceConfig { return cfg },
-			PromptTemplateFunc: func() *prompt.Template { return mustParseTemplate(t, "") },
-			OnEvent:            func(_ string, _ domain.AgentEvent) {},
-			OnExit:             ec.onExit,
-			Logger:             discardLogger(),
+			ConfigFunc:             func() config.ServiceConfig { return cfg },
+			PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "") },
+			OnEvent:                func(_ string, _ domain.AgentEvent) {},
+			OnExit:                 ec.onExit,
+			Logger:                 discardLogger(),
 		}
 
 		RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
@@ -3126,4 +3126,90 @@ func TestRuntimeStatusSuffixInjection(t *testing.T) {
 			t.Errorf("first-turn prompt missing RuntimeStatusSuffix with empty template:\n%s", p)
 		}
 	})
+}
+
+// --- PromptTemplateByIDFunc dispatch ID tests ---
+
+// TestRunWorkerAttempt_PromptTemplateByIDFunc_ForwardsTemplateID verifies that
+// RunWorkerAttempt calls PromptTemplateByIDFunc with the TemplateID from
+// WorkerDeps, allowing the frozen dispatch selection to resolve the correct
+// per-rule template.
+func TestRunWorkerAttempt_PromptTemplateByIDFunc_ForwardsTemplateID(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	cfg := defaultWorkerConfig(tmpDir)
+
+	const wantTemplateID = "/abs/prompts/bug.md"
+
+	var capturedID string
+	ruleTemplate := mustParseTemplate(t, "rule prompt: {{ .issue.title }}")
+
+	ec := newExitCapture()
+	deps := WorkerDeps{
+		TrackerAdapter: &mockTrackerAdapter{
+			fetchStatesFn: func(_ context.Context, ids []string) (map[string]string, error) {
+				result := make(map[string]string, len(ids))
+				for _, id := range ids {
+					result[id] = "Done"
+				}
+				return result, nil
+			},
+		},
+		AgentAdapter: &mockAgentAdapter{},
+		ConfigFunc:   func() config.ServiceConfig { return cfg },
+		PromptTemplateByIDFunc: func(id string) *prompt.Template {
+			capturedID = id
+			return ruleTemplate
+		},
+		TemplateID: wantTemplateID,
+		OnEvent:    func(_ string, _ domain.AgentEvent) {},
+		OnExit:     ec.onExit,
+		Logger:     discardLogger(),
+		Metrics:    &domain.NoopMetrics{},
+	}
+
+	RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
+	ec.waitResult(t)
+
+	if capturedID != wantTemplateID {
+		t.Errorf("PromptTemplateByIDFunc(id) = %q, want %q", capturedID, wantTemplateID)
+	}
+}
+
+// TestRunWorkerAttempt_PromptTemplateByIDFunc_NilTemplateExitsWithError verifies
+// that when PromptTemplateByIDFunc returns nil for the configured TemplateID,
+// the worker calls OnExit with WorkerExitError rather than panicking.
+func TestRunWorkerAttempt_PromptTemplateByIDFunc_NilTemplateExitsWithError(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	cfg := defaultWorkerConfig(tmpDir)
+
+	const badTemplateID = "/nonexistent/template.md"
+
+	ec := newExitCapture()
+	deps := WorkerDeps{
+		TrackerAdapter: &mockTrackerAdapter{},
+		AgentAdapter:   &mockAgentAdapter{},
+		ConfigFunc:     func() config.ServiceConfig { return cfg },
+		PromptTemplateByIDFunc: func(_ string) *prompt.Template {
+			return nil
+		},
+		TemplateID: badTemplateID,
+		OnEvent:    func(_ string, _ domain.AgentEvent) {},
+		OnExit:     ec.onExit,
+		Logger:     discardLogger(),
+		Metrics:    &domain.NoopMetrics{},
+	}
+
+	RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
+	result := ec.waitResult(t)
+
+	if result.ExitKind != WorkerExitError {
+		t.Errorf("WorkerResult.ExitKind = %q, want %q", result.ExitKind, WorkerExitError)
+	}
+	if result.Error == nil {
+		t.Error("WorkerResult.Error = nil, want non-nil error for nil template")
+	}
 }

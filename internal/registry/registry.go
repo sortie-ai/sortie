@@ -212,6 +212,16 @@ func (r *Registry[T, M]) Kinds() []string {
 	return r.sortedKinds()
 }
 
+// Has reports whether the given kind is registered. The lookup is
+// exact-match (case-sensitive) and allocates nothing. Safe for
+// concurrent use.
+func (r *Registry[T, M]) Has(kind string) bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	_, ok := r.adapters[kind]
+	return ok
+}
+
 // sortedKinds collects and sorts the registered kind strings. The
 // caller must hold r.mu (read or write). Always returns a non-nil slice.
 func (r *Registry[T, M]) sortedKinds() []string {

@@ -12,6 +12,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net"
@@ -25,6 +26,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/sortie-ai/sortie/internal/config"
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/logging"
 	"github.com/sortie-ai/sortie/internal/orchestrator"
@@ -49,6 +51,59 @@ import (
 // to drain active connections on graceful shutdown. Overridden in tests to
 // exercise the shutdown-error path without a 5-second wait.
 var serverShutdownTimeout = 5 * time.Second
+
+// buildAgentAdapterCache eagerly constructs every registered agent
+// adapter so dispatch-rule routing can resolve any referenced kind
+// without per-issue construction. The workflow default kind reuses
+// the already-constructed adapter to avoid double-initialization.
+// Adapter construction failures for non-default kinds are logged and
+// skipped; the dispatch builder's preflight probe rejects unknown
+// kinds before they reach the cache.
+func buildAgentAdapterCache(cfg config.ServiceConfig, defaultAdapter domain.AgentAdapter) (map[string]domain.AgentAdapter, error) {
+	cache := map[string]domain.AgentAdapter{
+		cfg.Agent.Kind: defaultAdapter,
+	}
+	for _, kind := range registry.Agents.Kinds() {
+		if _, exists := cache[kind]; exists {
+			continue
+		}
+		ctor, err := registry.Agents.Get(kind)
+		if err != nil {
+			return nil, fmt.Errorf("resolve agent adapter %q: %w", kind, err)
+		}
+		cfgMap := agentConfigMap(cfg.Agent)
+		cfgMap["kind"] = kind
+		mergeExtensions(cfgMap, cfg.Extensions, kind)
+		adapter, err := ctor(cfgMap)
+		if err != nil {
+			return nil, fmt.Errorf("construct agent adapter %q: %w", kind, err)
+		}
+		cache[kind] = adapter
+	}
+	return cache, nil
+}
+
+// makeAgentAdapterByKind returns the closure passed into
+// [orchestrator.OrchestratorParams.AgentAdapterByKind] and the retry
+// timer params. The returned function reads from cache for O(1)
+// lookup and returns a wrapped *[registry.RegistryError] for unknown
+// kinds so callers can detect the missing-adapter category.
+func makeAgentAdapterByKind(cache map[string]domain.AgentAdapter) func(kind string) (domain.AgentAdapter, error) {
+	return func(kind string) (domain.AgentAdapter, error) {
+		if adapter, ok := cache[kind]; ok {
+			return adapter, nil
+		}
+		available := make([]string, 0, len(cache))
+		for k := range cache {
+			available = append(available, k)
+		}
+		return nil, &registry.RegistryError{
+			Dimension: "agent",
+			Kind:      kind,
+			Available: available,
+		}
+	}
+}
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -146,7 +201,7 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 		br.cfg.Agent.MaxConcurrentByState,
 		totals,
 	)
-	orchestrator.PopulateRetries(state, pendingRetries)
+	orchestrator.PopulateRetries(state, pendingRetries, br.logger)
 
 	// --- Agent adapter construction ---
 
@@ -165,6 +220,29 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 	if closer, ok := agentAdapter.(io.Closer); ok {
 		defer closer.Close() //nolint:errcheck // best-effort cleanup at shutdown
 	}
+
+	agentAdapterCache, err := buildAgentAdapterCache(br.cfg, agentAdapter)
+	if err != nil {
+		br.logger.Error("failed to build agent adapter cache", slog.Any("error", err))
+		return 1
+	}
+	defer func() {
+		for kind, adapter := range agentAdapterCache {
+			if kind == br.cfg.Agent.Kind {
+				// Already closed via the top-level defer.
+				continue
+			}
+			if closer, ok := adapter.(io.Closer); ok {
+				if cerr := closer.Close(); cerr != nil {
+					br.logger.Warn("agent adapter close failed",
+						slog.String("kind", kind),
+						slog.Any("error", cerr),
+					)
+				}
+			}
+		}
+	}()
+	agentAdapterByKind := makeAgentAdapterByKind(agentAdapterCache)
 
 	// --- Startup terminal workspace cleanup ---
 
@@ -362,20 +440,21 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 	}
 
 	o := orchestrator.NewOrchestrator(orchestrator.OrchestratorParams{
-		State:            state,
-		Logger:           br.logger,
-		TrackerAdapter:   br.trackerAdapter,
-		AgentAdapter:     agentAdapter,
-		WorkflowManager:  br.mgr,
-		Store:            store,
-		PreflightParams:  br.preflightParams,
-		Metrics:          orchMetrics,
-		ToolRegistry:     toolRegistry,
-		WorkflowFileFunc: br.mgr.FilePath,
-		DBPath:           dbPath,
-		CIProvider:       ciProvider,
-		SCMAdapter:       scmAdapter,
-		ReviewConfig:     reviewConfig,
+		State:              state,
+		Logger:             br.logger,
+		TrackerAdapter:     br.trackerAdapter,
+		AgentAdapter:       agentAdapter,
+		AgentAdapterByKind: agentAdapterByKind,
+		WorkflowManager:    br.mgr,
+		Store:              store,
+		PreflightParams:    br.preflightParams,
+		Metrics:            orchMetrics,
+		ToolRegistry:       toolRegistry,
+		WorkflowFileFunc:   br.mgr.FilePath,
+		DBPath:             dbPath,
+		CIProvider:         ciProvider,
+		SCMAdapter:         scmAdapter,
+		ReviewConfig:       reviewConfig,
 	})
 
 	var srv *server.Server

@@ -668,3 +668,92 @@ func TestPromMetrics_CICounters(t *testing.T) {
 		}
 	})
 }
+
+func TestIncDispatchRuleMatch(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		calls     []struct{ layer, rule string }
+		wantLabel struct{ layer, rule string }
+		wantCount float64
+	}{
+		{
+			name: "rule layer increments counter",
+			calls: []struct{ layer, rule string }{
+				{"rule", "bug-rule"},
+				{"rule", "bug-rule"},
+			},
+			wantLabel: struct{ layer, rule string }{"rule", "bug-rule"},
+			wantCount: 2,
+		},
+		{
+			name: "default layer increments counter",
+			calls: []struct{ layer, rule string }{
+				{"default", "default"},
+			},
+			wantLabel: struct{ layer, rule string }{"default", "default"},
+			wantCount: 1,
+		},
+		{
+			name: "fallback layer with none sentinel",
+			calls: []struct{ layer, rule string }{
+				{"fallback", "<none>"},
+				{"fallback", "<none>"},
+				{"fallback", "<none>"},
+			},
+			wantLabel: struct{ layer, rule string }{"fallback", "<none>"},
+			wantCount: 3,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			m := newTestMetrics(t)
+			for _, c := range tt.calls {
+				m.IncDispatchRuleMatch(c.layer, c.rule)
+			}
+
+			families := gatherFamilies(t, m)
+			got := counterValue(t, families, "sortie_dispatch_rule_match_total",
+				map[string]string{"layer": tt.wantLabel.layer, "rule": tt.wantLabel.rule})
+			if got != tt.wantCount {
+				t.Errorf("IncDispatchRuleMatch(%q, %q) counter = %v, want %v",
+					tt.wantLabel.layer, tt.wantLabel.rule, got, tt.wantCount)
+			}
+		})
+	}
+}
+
+func TestIncDispatchRuleMatch_CardinalityBounded(t *testing.T) {
+	t.Parallel()
+
+	m := newTestMetrics(t)
+
+	// Three distinct rule names produce three label pairs for the same layer.
+	m.IncDispatchRuleMatch("rule", "bug-rule")
+	m.IncDispatchRuleMatch("rule", "docs-rule")
+	m.IncDispatchRuleMatch("fallback", "<none>")
+
+	families := gatherFamilies(t, m)
+	f, ok := families["sortie_dispatch_rule_match_total"]
+	if !ok {
+		t.Fatal("sortie_dispatch_rule_match_total not found")
+	}
+
+	if len(f.GetMetric()) != 3 {
+		t.Errorf("metric family cardinality = %d, want 3", len(f.GetMetric()))
+	}
+
+	// Empty-rule normalization: calling with rule="" produces a distinct time series
+	// only when the caller passes an already-normalized label. The production code
+	// always normalizes before calling, so passing "<none>" is the expected form.
+	m.IncDispatchRuleMatch("fallback", "<none>")
+	families = gatherFamilies(t, m)
+	f = families["sortie_dispatch_rule_match_total"]
+	if len(f.GetMetric()) != 3 {
+		t.Errorf("second <none> call grew cardinality to %d, want 3", len(f.GetMetric()))
+	}
+}

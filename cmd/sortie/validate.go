@@ -100,7 +100,8 @@ func runValidate(_ context.Context, args []string, stdout io.Writer, stderr io.W
 	logger := slog.New(slog.DiscardHandler)
 
 	mgr, err := workflow.NewManager(path, logger,
-		workflow.WithValidateFunc(orchestrator.ValidateConfigForPromotion))
+		workflow.WithValidateFunc(orchestrator.ValidateConfigForPromotion),
+		workflow.WithAgentKindProbe(registry.Agents.Has))
 	if err != nil {
 		emitDiags(stdout, stderr, *format, mapManagerError(err), warningDiags)
 		return 1
@@ -168,6 +169,13 @@ func writeJSON(w io.Writer, v any) error {
 	return json.NewEncoder(w).Encode(v)
 }
 
+// mapManagerError converts a workflow manager load error into one or
+// more validateDiag entries. Dispatch-section *ConfigError values
+// arrive here unchanged from BuildDispatchConfig and route through
+// the "config." + Field arm, producing entries such as
+// "config.dispatch.rules[0].agent". Per-rule template parse failures
+// arrive as *prompt.TemplateError and route through "template_parse"
+// with the offending absolute path included verbatim.
 func mapManagerError(err error) []validateDiag {
 	var we *workflow.WorkflowError
 	if errors.As(err, &we) {

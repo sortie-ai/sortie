@@ -21,6 +21,7 @@ import (
 type WorkflowManager interface {
 	Config() config.ServiceConfig
 	PromptTemplate() *prompt.Template
+	PromptTemplateByID(id string) *prompt.Template
 	Reload() error
 	WorkflowAbsPath() string
 }
@@ -102,21 +103,32 @@ type OrchestratorParams struct {
 	// ReviewConfig holds validated review reaction configuration.
 	// Zero value when SCMAdapter is nil.
 	ReviewConfig ReviewReactionConfig
+
+	// AgentAdapterByKind resolves the agent adapter for the given
+	// kind. Constructed once at startup from the eagerly-built
+	// per-kind adapter cache. When nil, the orchestrator falls back
+	// to its single-adapter behavior using the AgentAdapter field
+	// for every kind that matches the workflow default and rejects
+	// every other kind. This fallback exists for legacy callers
+	// during the migration window; the production binary always
+	// populates this field.
+	AgentAdapterByKind func(kind string) (domain.AgentAdapter, error)
 }
 
 // Orchestrator owns the poll-and-dispatch event loop and all runtime
 // state. Construct via [NewOrchestrator] and run with [Orchestrator.Run].
-// Not safe for concurrent use — [Run] must be called from a single
+// Not safe for concurrent use - [Run] must be called from a single
 // goroutine. External events are delivered via channels.
 type Orchestrator struct {
 	state  *State
 	logger *slog.Logger
 
-	trackerAdapter  domain.TrackerAdapter
-	agentAdapter    domain.AgentAdapter
-	workflowManager WorkflowManager
-	store           OrchestratorStore
-	metrics         domain.Metrics
+	trackerAdapter     domain.TrackerAdapter
+	agentAdapter       domain.AgentAdapter
+	agentAdapterByKind func(kind string) (domain.AgentAdapter, error)
+	workflowManager    WorkflowManager
+	store              OrchestratorStore
+	metrics            domain.Metrics
 
 	workerExitCh chan WorkerResult
 	retryTimerCh chan string
@@ -190,30 +202,54 @@ func NewOrchestrator(params OrchestratorParams) *Orchestrator {
 		}
 	}
 
+	agentAdapterByKind := params.AgentAdapterByKind
+	if agentAdapterByKind == nil {
+		// Migration fallback for legacy callers (tests, dryrun) that
+		// have not wired the closure yet. The production binary
+		// always populates AgentAdapterByKind via the per-kind
+		// adapter cache constructed in cmd/sortie. Resolves the
+		// workflow default kind to the single AgentAdapter field;
+		// every other kind returns an error so the dispatch path
+		// gracefully skips the issue rather than panicking.
+		defaultAdapter := params.AgentAdapter
+		defaultKind := ""
+		if params.WorkflowManager != nil {
+			defaultKind = params.WorkflowManager.Config().Agent.Kind
+		}
+		agentAdapterByKind = func(kind string) (domain.AgentAdapter, error) {
+			if kind == defaultKind && defaultAdapter != nil {
+				return defaultAdapter, nil
+			}
+			return nil, fmt.Errorf("agent kind %q is not available (AgentAdapterByKind not wired)", kind)
+		}
+		logger.Warn("AgentAdapterByKind not provided; falling back to single-adapter mode for the workflow default kind only")
+	}
+
 	o := &Orchestrator{
-		state:            params.State,
-		logger:           logger,
-		trackerAdapter:   params.TrackerAdapter,
-		agentAdapter:     params.AgentAdapter,
-		workflowManager:  params.WorkflowManager,
-		store:            params.Store,
-		metrics:          metrics,
-		workerExitCh:     make(chan WorkerResult, exitBuf),
-		retryTimerCh:     make(chan string, retryBuf),
-		agentEventCh:     make(chan agentEventMsg, eventBuf),
-		selfReviewCh:     make(chan selfReviewProgressMsg, eventBuf),
-		snapshotCh:       make(chan snapshotRequest, 4),
-		refreshCh:        make(chan struct{}, 1),
-		preflightParams:  params.PreflightParams,
-		observers:        observers,
-		drainTimeout:     defaultDrainTimeout,
-		toolRegistry:     params.ToolRegistry,
-		hostPool:         hostPool,
-		workflowFileFunc: params.WorkflowFileFunc,
-		dbPath:           params.DBPath,
-		ciProvider:       params.CIProvider,
-		scmAdapter:       params.SCMAdapter,
-		reviewConfig:     params.ReviewConfig,
+		state:              params.State,
+		logger:             logger,
+		trackerAdapter:     params.TrackerAdapter,
+		agentAdapter:       params.AgentAdapter,
+		agentAdapterByKind: agentAdapterByKind,
+		workflowManager:    params.WorkflowManager,
+		store:              params.Store,
+		metrics:            metrics,
+		workerExitCh:       make(chan WorkerResult, exitBuf),
+		retryTimerCh:       make(chan string, retryBuf),
+		agentEventCh:       make(chan agentEventMsg, eventBuf),
+		selfReviewCh:       make(chan selfReviewProgressMsg, eventBuf),
+		snapshotCh:         make(chan snapshotRequest, 4),
+		refreshCh:          make(chan struct{}, 1),
+		preflightParams:    params.PreflightParams,
+		observers:          observers,
+		drainTimeout:       defaultDrainTimeout,
+		toolRegistry:       params.ToolRegistry,
+		hostPool:           hostPool,
+		workflowFileFunc:   params.WorkflowFileFunc,
+		dbPath:             params.DBPath,
+		ciProvider:         params.CIProvider,
+		scmAdapter:         params.SCMAdapter,
+		reviewConfig:       params.ReviewConfig,
 	}
 	// Startup preflight must have passed for the orchestrator to be
 	// constructed, so the initial value is true.
@@ -274,21 +310,21 @@ func (o *Orchestrator) Run(ctx context.Context) {
 		case issueID := <-o.retryTimerCh:
 			cfg := o.workflowManager.Config()
 			HandleRetryTimer(o.state, issueID, HandleRetryTimerParams{
-				Store:             o.store,
-				TrackerAdapter:    o.trackerAdapter,
-				ActiveStates:      cfg.Tracker.ActiveStates,
-				TerminalStates:    cfg.Tracker.TerminalStates,
-				HandoffState:      cfg.Tracker.HandoffState,
-				MaxRetryBackoffMS: cfg.Agent.MaxRetryBackoffMS,
-				MakeWorkerFn:      o.makeWorkerFn,
-				OnRetryFire:       o.onRetryFire,
-				Ctx:               ctx,
-				Logger:            o.logger,
-				MaxSessions:       cfg.Agent.MaxSessions,
-				Metrics:           o.metrics,
-				HostPool:          o.hostPool,
-				WorkflowFile:      o.workflowFile(),
-				AgentKind:         cfg.Agent.Kind,
+				Store:              o.store,
+				TrackerAdapter:     o.trackerAdapter,
+				ActiveStates:       cfg.Tracker.ActiveStates,
+				TerminalStates:     cfg.Tracker.TerminalStates,
+				HandoffState:       cfg.Tracker.HandoffState,
+				MaxRetryBackoffMS:  cfg.Agent.MaxRetryBackoffMS,
+				MakeWorkerFn:       o.makeWorkerFn,
+				AgentAdapterByKind: o.agentAdapterByKind,
+				OnRetryFire:        o.onRetryFire,
+				Ctx:                ctx,
+				Logger:             o.logger,
+				MaxSessions:        cfg.Agent.MaxSessions,
+				Metrics:            o.metrics,
+				HostPool:           o.hostPool,
+				WorkflowFile:       o.workflowFile(),
 			})
 			o.updateGauges(time.Now())
 			o.notifyObservers()
@@ -473,7 +509,7 @@ func (o *Orchestrator) handleTick(ctx context.Context) {
 	// Break only when global capacity is exhausted; skip individual
 	// issues whose per-state limit is full so issues in other states
 	// can still be dispatched.
-	var dispatched int
+	var dispatched, dispatchedByRule, dispatchedByDefault, dispatchedByFallback int
 	for _, issue := range sorted {
 		if GlobalAvailableSlots(o.state.MaxConcurrentAgents, len(o.state.Running)) == 0 {
 			break
@@ -487,22 +523,60 @@ func (o *Orchestrator) handleTick(ctx context.Context) {
 		if !ShouldDispatchWithSets(issue, o.state, activeSet, terminalSet) {
 			continue
 		}
+
+		resolution := ResolveRule(issue, cfg.Dispatch, cfg.Agent.Kind, "")
+		adapter, adapterErr := o.agentAdapterByKind(resolution.AgentKind)
+		if adapterErr != nil {
+			o.logger.Error("agent kind unavailable",
+				slog.String("rule_name", resolution.RuleName),
+				slog.String("agent_kind", resolution.AgentKind),
+				slog.Any("error", adapterErr),
+			)
+			o.metrics.IncDispatches(outcomeError)
+			o.metrics.IncDispatchRuleMatch(resolution.MatchedAt.String(), normalizeDispatchRuleName(resolution.RuleName))
+			continue
+		}
+		tmpl := o.workflowManager.PromptTemplateByID(resolution.TemplateID)
+		if tmpl == nil {
+			o.logger.Error("template id unavailable",
+				slog.String("rule_name", resolution.RuleName),
+				slog.String("template_id", resolution.TemplateID),
+			)
+			o.metrics.IncDispatches(outcomeError)
+			o.metrics.IncDispatchRuleMatch(resolution.MatchedAt.String(), normalizeDispatchRuleName(resolution.RuleName))
+			continue
+		}
+
 		host, ok := o.hostPool.AcquireHost(issue.ID, "")
 		if !ok {
 			break
 		}
-		DispatchIssue(ctx, o.state, issue, nil, host, o.makeWorkerFn("", host))
+		DispatchIssue(ctx, o.state, issue, nil, host, o.makeWorkerFn("", host, resolution.AgentKind, resolution.TemplateID, adapter))
 		if entry := o.state.Running[issue.ID]; entry != nil {
 			entry.WorkflowFile = o.workflowFile()
-			entry.AgentKind = cfg.Agent.Kind
+			entry.AgentKind = resolution.AgentKind
+			entry.RuleName = resolution.RuleName
+			entry.TemplateID = resolution.TemplateID
 		}
 		o.metrics.IncDispatches(outcomeSuccess)
+		o.metrics.IncDispatchRuleMatch(resolution.MatchedAt.String(), normalizeDispatchRuleName(resolution.RuleName))
+		switch resolution.MatchedAt {
+		case ResolvedFromRule:
+			dispatchedByRule++
+		case ResolvedFromDefault:
+			dispatchedByDefault++
+		default:
+			dispatchedByFallback++
+		}
 		dispatched++
 	}
 
 	o.logger.Info("tick completed",
 		slog.Int("candidates", len(sorted)),
 		slog.Int("dispatched", dispatched),
+		slog.Int("dispatched_by_rule", dispatchedByRule),
+		slog.Int("dispatched_by_default", dispatchedByDefault),
+		slog.Int("dispatched_by_fallback", dispatchedByFallback),
 		slog.Int("running", len(o.state.Running)),
 		slog.Int("retrying", len(o.state.RetryAttempts)),
 	)
@@ -513,20 +587,30 @@ func (o *Orchestrator) handleTick(ctx context.Context) {
 // makeWorkerFn returns a [WorkerFunc] closure that runs
 // [RunWorkerAttempt] with the orchestrator's shared dependencies.
 // The closure captures channel references for OnEvent and OnExit
-// delivery. The resumeSessionID must be read by the caller (on the
-// event loop goroutine) before the goroutine starts, to avoid a
-// data race on the Running map.
-func (o *Orchestrator) makeWorkerFn(resumeSessionID string, sshHost string) WorkerFunc {
+// delivery. agentKind, templateID, and adapter carry the rule-resolved
+// selection from the caller (handleTick for initial dispatches,
+// HandleRetryTimer for retries). The resumeSessionID must be read by
+// the caller (on the event loop goroutine) before the goroutine
+// starts, to avoid a data race on the Running map.
+func (o *Orchestrator) makeWorkerFn(resumeSessionID, sshHost, agentKind, templateID string, adapter domain.AgentAdapter) WorkerFunc {
 	strictHostKeyChecking := o.sshStrictHostKeyChecking
+	if adapter == nil {
+		adapter = o.agentAdapter
+	}
+	if agentKind == "" {
+		agentKind = o.workflowManager.Config().Agent.Kind
+	}
 	return func(ctx context.Context, issue domain.Issue, attempt *int) {
 
 		logger := logging.WithIssue(o.logger, issue.ID, issue.Identifier)
 
 		deps := WorkerDeps{
-			TrackerAdapter:     o.trackerAdapter,
-			AgentAdapter:       o.agentAdapter,
-			ConfigFunc:         o.workflowManager.Config,
-			PromptTemplateFunc: o.workflowManager.PromptTemplate,
+			TrackerAdapter:         o.trackerAdapter,
+			AgentAdapter:           adapter,
+			ConfigFunc:             o.workflowManager.Config,
+			PromptTemplateByIDFunc: o.workflowManager.PromptTemplateByID,
+			TemplateID:             templateID,
+			AgentKind:              agentKind,
 			OnEvent: func(issueID string, event domain.AgentEvent) {
 				select {
 				case o.agentEventCh <- agentEventMsg{IssueID: issueID, Event: event}:

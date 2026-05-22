@@ -223,6 +223,7 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 		Error:          errorStringPtr(workerResult.Error),
 		WorkflowFile:   entry.WorkflowFile,
 		TurnsCompleted: workerResult.TurnsCompleted,
+		RuleName:       entry.RuleName,
 	}
 	if workerResult.ReviewMetadata != nil {
 		data, marshalErr := json.Marshal(workerResult.ReviewMetadata)
@@ -332,6 +333,9 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 						Error:       "",
 						LastSSHHost: workerResult.SSHHost,
 						SessionID:   sessionID,
+						AgentKind:   entry.AgentKind,
+						RuleName:    entry.RuleName,
+						TemplateID:  entry.TemplateID,
 					}, params.OnRetryFire)
 					metrics.IncRetries(triggerContinuation)
 					retryScheduled = true
@@ -359,6 +363,9 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 						Error:       "",
 						LastSSHHost: workerResult.SSHHost,
 						SessionID:   sessionID,
+						AgentKind:   entry.AgentKind,
+						RuleName:    entry.RuleName,
+						TemplateID:  entry.TemplateID,
 					}, params.OnRetryFire)
 					metrics.IncRetries(triggerContinuation)
 					retryScheduled = true
@@ -400,6 +407,9 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 				Error:       "",
 				LastSSHHost: workerResult.SSHHost,
 				SessionID:   sessionID,
+				AgentKind:   entry.AgentKind,
+				RuleName:    entry.RuleName,
+				TemplateID:  entry.TemplateID,
 			}, params.OnRetryFire)
 			metrics.IncRetries(triggerContinuation)
 			retryScheduled = true
@@ -441,6 +451,9 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 							Branch: scm.Branch,
 							SHA:    scm.SHA,
 						},
+						AgentKind:  entry.AgentKind,
+						RuleName:   entry.RuleName,
+						TemplateID: entry.TemplateID,
 					}
 				}
 			}
@@ -475,6 +488,9 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 								Branch:   scm.Branch,
 								SHA:      scm.SHA,
 							},
+							AgentKind:  entry.AgentKind,
+							RuleName:   entry.RuleName,
+							TemplateID: entry.TemplateID,
 						}
 					}
 				}
@@ -516,6 +532,9 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 				LastSSHHost:         workerResult.SSHHost,
 				ContinuationContext: entry.ContinuationContext,
 				ReactionKind:        entry.ReactionKind,
+				AgentKind:           entry.AgentKind,
+				RuleName:            entry.RuleName,
+				TemplateID:          entry.TemplateID,
 			}, params.OnRetryFire)
 			metrics.IncRetries(triggerError)
 			retryScheduled = true
@@ -537,6 +556,9 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 					DueAtMs:    retryEntry.DueAtMS,
 					Error:      stringPtr(retryEntry.Error),
 					SessionID:  stringPtr(retryEntry.SessionID),
+					RuleName:   retryEntry.RuleName,
+					TemplateID: retryEntry.TemplateID,
+					AgentKind:  retryEntry.AgentKind,
 				}
 				if err := params.Store.SaveRetryEntry(ctx, pEntry); err != nil {
 					log.Error("failed to persist retry entry",

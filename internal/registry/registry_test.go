@@ -521,3 +521,61 @@ func TestPackageLevelRegistries(t *testing.T) {
 		}
 	})
 }
+
+func TestHas(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		register []string
+		lookup   string
+		want     bool
+	}{
+		{
+			name:     "registered kind returns true",
+			register: []string{"alpha", "beta"},
+			lookup:   "alpha",
+			want:     true,
+		},
+		{
+			name:     "second registered kind returns true",
+			register: []string{"alpha", "beta"},
+			lookup:   "beta",
+			want:     true,
+		},
+		{
+			name:     "unknown kind returns false",
+			register: []string{"alpha"},
+			lookup:   "gamma",
+			want:     false,
+		},
+		{
+			name:     "empty registry returns false",
+			register: nil,
+			lookup:   "anything",
+			want:     false,
+		},
+		{
+			name:     "case-sensitive lookup: wrong case returns false",
+			register: []string{"Claude-Code"},
+			lookup:   "claude-code",
+			want:     false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			r := newTestRegistry()
+			for _, k := range tt.register {
+				r.Register(k, dummyConstructor())
+			}
+
+			got := r.Has(tt.lookup)
+			if got != tt.want {
+				t.Errorf("Has(%q) = %v, want %v", tt.lookup, got, tt.want)
+			}
+		})
+	}
+}

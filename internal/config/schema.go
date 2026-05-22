@@ -19,6 +19,7 @@ const (
 	FieldStringList                       // []string (YAML sequence)
 	FieldMap                              // map[string]any (YAML mapping)
 	FieldShellScript                      // multiline string (shell script)
+	FieldSequence                         // []any (YAML sequence of maps or scalars)
 )
 
 // FieldDef describes a single known configuration field within a section.
@@ -114,6 +115,36 @@ var knownFieldsRegistry = map[string]SectionSchema{
 		Fields:           []FieldDef{},
 		AllowDynamicKeys: true,
 	},
+	"dispatch": {
+		Fields: []FieldDef{
+			{Name: "rules", Type: FieldSequence},
+			{Name: "default", Type: FieldMap, Nested: []FieldDef{
+				{Name: "agent", Type: FieldString},
+				{Name: "template", Type: FieldString},
+			}},
+		},
+	},
+}
+
+// dispatchRuleAllowedKeys lists the recognized per-rule keys for
+// front-matter static analysis. Mirrors [ruleKeyAllowed] in
+// dispatch.go; kept here so schema descent does not import dispatch
+// helpers directly.
+var dispatchRuleAllowedKeys = map[string]bool{
+	"name":     true,
+	"match":    true,
+	"agent":    true,
+	"template": true,
+}
+
+// dispatchMatchAllowedKeys lists the recognized match keys for
+// front-matter static analysis.
+var dispatchMatchAllowedKeys = map[string]bool{
+	"labels":     true,
+	"issue_type": true,
+	"priority":   true,
+	"identifier": true,
+	"assignee":   true,
 }
 
 // staticKnownExtensionKeys lists extension top-level keys defined by
@@ -162,6 +193,16 @@ func ValidateFrontMatter(raw map[string]any, cfg ServiceConfig) []FrontMatterWar
 	}
 	if cfg.Agent.Kind != "" {
 		recognized[cfg.Agent.Kind] = true
+	}
+
+	// Augment the recognized set with every agent kind referenced by
+	// dispatch.rules and dispatch.default. Deriving from the raw map
+	// keeps this accurate when BuildDispatchConfig fails: the
+	// recognized set must still exempt pass-through blocks named in
+	// the failing rules so the operator sees the rule error, not a
+	// stream of spurious unknown_key warnings.
+	for _, kind := range derivePassThroughKindsFromRaw(raw) {
+		recognized[kind] = true
 	}
 
 	// Flag top-level keys not in the recognized set.
@@ -271,6 +312,11 @@ func ValidateFrontMatter(raw map[string]any, cfg ServiceConfig) []FrontMatterWar
 			// Element-level checking for string lists.
 			if field.Type == FieldStringList {
 				warnings = checkStringListElements(warnings, sectionName+"."+field.Name, v)
+			}
+			// Sequence descent for sections that carry a YAML sequence
+			// of maps (e.g. dispatch.rules).
+			if field.Type == FieldSequence && sectionName == "dispatch" && field.Name == "rules" {
+				warnings = descendDispatchRules(warnings, v)
 			}
 			// Nested map type checking (e.g. tracker.comments sub-fields).
 			if field.Nested != nil {
@@ -410,6 +456,9 @@ func typeMatches(v any, ft FieldType) bool {
 	case FieldStringList:
 		_, ok := v.([]any)
 		return ok
+	case FieldSequence:
+		_, ok := v.([]any)
+		return ok
 	case FieldInt:
 		switch val := v.(type) {
 		case int, int64, int32:
@@ -440,7 +489,97 @@ func typeName(ft FieldType) string {
 		return "list of strings"
 	case FieldMap:
 		return "map"
+	case FieldSequence:
+		return "sequence"
 	default:
 		return "unknown"
 	}
+}
+
+// descendDispatchRules walks the dispatch.rules sequence and emits
+// unknown_sub_key warnings for unrecognized per-rule keys and per-match
+// keys. The sequence shape itself is already type-checked.
+func descendDispatchRules(warnings []FrontMatterWarning, rulesVal any) []FrontMatterWarning {
+	seq, ok := rulesVal.([]any)
+	if !ok {
+		return warnings
+	}
+	for i, elem := range seq {
+		ruleMap, ok := elem.(map[string]any)
+		if !ok {
+			continue
+		}
+		rulePath := fmt.Sprintf("dispatch.rules[%d]", i)
+		keys := maputil.SortedKeys(ruleMap)
+		for _, key := range keys {
+			if !dispatchRuleAllowedKeys[key] {
+				warnings = append(warnings, FrontMatterWarning{
+					Check:   "unknown_sub_key",
+					Field:   rulePath + "." + key,
+					Message: fmt.Sprintf("unknown key %q in dispatch rule", key),
+				})
+			}
+		}
+		matchRaw, exists := ruleMap["match"]
+		if !exists || matchRaw == nil {
+			continue
+		}
+		matchMap, ok := matchRaw.(map[string]any)
+		if !ok {
+			continue
+		}
+		matchKeys := maputil.SortedKeys(matchMap)
+		for _, key := range matchKeys {
+			if !dispatchMatchAllowedKeys[key] {
+				warnings = append(warnings, FrontMatterWarning{
+					Check:   "unknown_sub_key",
+					Field:   rulePath + ".match." + key,
+					Message: fmt.Sprintf("unknown match key %q", key),
+				})
+			}
+		}
+	}
+	return warnings
+}
+
+// derivePassThroughKindsFromRaw scans the raw front matter for every
+// agent kind referenced by dispatch.rules and dispatch.default. The
+// returned slice may contain duplicates. Reading the raw map keeps
+// this resilient to [BuildDispatchConfig] failure: the
+// recognized-top-level-keys set must remain accurate even when the
+// typed config is the zero value.
+func derivePassThroughKindsFromRaw(raw map[string]any) []string {
+	if raw == nil {
+		return nil
+	}
+	dispatchRaw, ok := raw["dispatch"]
+	if !ok || dispatchRaw == nil {
+		return nil
+	}
+	dispatchMap, ok := dispatchRaw.(map[string]any)
+	if !ok {
+		return nil
+	}
+
+	var kinds []string
+
+	if rulesRaw, ok := dispatchMap["rules"].([]any); ok {
+		for _, elem := range rulesRaw {
+			ruleMap, ok := elem.(map[string]any)
+			if !ok {
+				continue
+			}
+			if s, ok := ruleMap["agent"].(string); ok && s != "" {
+				kinds = append(kinds, s)
+			}
+		}
+	}
+
+	if defaultMap, ok := dispatchMap["default"].(map[string]any); ok {
+		if s, ok := defaultMap["agent"].(string); ok && s != "" {
+			kinds = append(kinds, s)
+		}
+	}
+
+	return kinds
 }
