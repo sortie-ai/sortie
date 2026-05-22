@@ -7,6 +7,46 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Dispatch rule routing: a new optional `dispatch:` block in
+  `WORKFLOW.md` front matter lets operators route each issue to a
+  specific agent kind and prompt template. Rules are evaluated
+  first-match-wins against issue metadata — `match.labels`,
+  `match.issue_type`, `match.priority` (with `eq` / `in` / `lt` /
+  `lte` / `gt` / `gte` operators), `match.identifier`, and
+  `match.assignee` — combining with AND across keys and OR within a
+  key. `labels` and `identifier` use `path.Match` globs; `issue_type`
+  and `assignee` use case-insensitive equality. Each rule may set
+  `agent:` and/or `template:`; either may be omitted to inherit from
+  an optional `dispatch.default` block and, finally, from the
+  workflow-wide `agent.kind` and the `WORKFLOW.md` body template.
+  Per-rule prompt template files live as Markdown files under the
+  workflow directory tree; absolute paths, `~` expansion, and symlink
+  targets that escape the tree are rejected at load time, and
+  per-rule templates must not carry their own front matter.
+  `sortie validate` surfaces dispatch misconfiguration — unknown
+  agent kind, unreachable catch-all rule, duplicate rule name,
+  malformed glob or priority predicate, missing or out-of-tree
+  template — before any worker is dispatched. The resolved
+  `(agent_kind, template_id, rule_name)` is frozen at first dispatch
+  and reused across every retry and reaction-driven continuation, so
+  an issue routed to one agent never silently switches mid-run.
+  Persistence adds `rule_name`, `template_id`, and `agent_kind`
+  columns to `retry_entries` and a `rule_name` column to
+  `run_history` via an additive forward-only migration; pre-existing
+  retries with an empty `agent_kind` fall back to the workflow
+  default and emit `recovery=legacy_retry_default_agent` once per
+  row at startup for operator audit. Routing outcomes are visible
+  through a new Prometheus counter
+  `sortie_dispatch_rule_match_total{layer,rule}` (where `layer` is
+  one of `rule`, `default`, `fallback`) and through new
+  `dispatched_by_rule`, `dispatched_by_default`, and
+  `dispatched_by_fallback` fields on every `tick completed` log
+  line. Workflows that do not declare a `dispatch:` section behave
+  byte-for-byte identically to previous releases.
+  ([#435](https://github.com/sortie-ai/sortie/issues/435))
+
 ### Fixed
 
 - Orchestrator: CI-failure and review-comment retries now continue from
