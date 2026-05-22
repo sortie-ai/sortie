@@ -5,6 +5,178 @@ import (
 	"testing"
 )
 
+// TestValidateFrontMatterDispatchRulesSequence verifies that dispatch.rules
+// is treated as a FieldSequence: rule-level unknown keys and match-level
+// unknown keys are reported as unknown_sub_key warnings.
+func TestValidateFrontMatterDispatchRulesSequence(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		raw        map[string]any
+		wantCount  int
+		wantChecks []string
+		wantFields []string
+	}{
+		{
+			name: "unknown rule key emits unknown_sub_key",
+			raw: map[string]any{
+				"dispatch": map[string]any{
+					"rules": []any{
+						map[string]any{
+							"agent":      "mock",
+							"typo_field": "value",
+						},
+					},
+				},
+			},
+			wantCount:  1,
+			wantChecks: []string{"unknown_sub_key"},
+			wantFields: []string{"dispatch.rules[0].typo_field"},
+		},
+		{
+			name: "unknown match key emits unknown_sub_key",
+			raw: map[string]any{
+				"dispatch": map[string]any{
+					"rules": []any{
+						map[string]any{
+							"agent": "mock",
+							"match": map[string]any{
+								"labels":    []any{"bug"},
+								"not_a_key": "val",
+							},
+						},
+					},
+				},
+			},
+			wantCount:  1,
+			wantChecks: []string{"unknown_sub_key"},
+			wantFields: []string{"dispatch.rules[0].match.not_a_key"},
+		},
+		{
+			name: "valid rule keys emit no warnings",
+			raw: map[string]any{
+				"dispatch": map[string]any{
+					"rules": []any{
+						map[string]any{
+							"name":     "bug",
+							"match":    map[string]any{"labels": []any{"bug"}},
+							"agent":    "mock",
+							"template": "some/path.md",
+						},
+					},
+				},
+			},
+			wantCount: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := ValidateFrontMatter(tt.raw, ServiceConfig{Agent: AgentConfig{Kind: "mock"}})
+
+			if len(got) != tt.wantCount {
+				t.Fatalf("ValidateFrontMatter() returned %d warnings, want %d\nwarnings: %+v",
+					len(got), tt.wantCount, got)
+			}
+			for i, wantCheck := range tt.wantChecks {
+				if got[i].Check != wantCheck {
+					t.Errorf("warnings[%d].Check = %q, want %q", i, got[i].Check, wantCheck)
+				}
+			}
+			for i, wantField := range tt.wantFields {
+				if got[i].Field != wantField {
+					t.Errorf("warnings[%d].Field = %q, want %q", i, got[i].Field, wantField)
+				}
+			}
+		})
+	}
+}
+
+// TestDerivePassThroughKindsFromRaw verifies that the function extracts
+// agent kinds from dispatch rules and default even when BuildDispatchConfig
+// would fail.
+func TestDerivePassThroughKindsFromRaw(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		raw     map[string]any
+		wantLen int
+		wantIn  []string
+	}{
+		{
+			name:    "nil raw returns nil",
+			raw:     nil,
+			wantLen: 0,
+		},
+		{
+			name:    "absent dispatch key returns nil",
+			raw:     map[string]any{},
+			wantLen: 0,
+		},
+		{
+			name: "extracts kinds from rules and default",
+			raw: map[string]any{
+				"dispatch": map[string]any{
+					"rules": []any{
+						map[string]any{"agent": "claude-code"},
+						map[string]any{"agent": "codex"},
+					},
+					"default": map[string]any{
+						"agent": "mock",
+					},
+				},
+			},
+			wantLen: 3,
+			wantIn:  []string{"claude-code", "codex", "mock"},
+		},
+		{
+			name: "rules with bad dispatch config still extracted",
+			raw: map[string]any{
+				"dispatch": map[string]any{
+					"rules": []any{
+						map[string]any{
+							"agent": "my-agent",
+							"match": map[string]any{"labels": []any{"[unclosed"}},
+						},
+					},
+				},
+			},
+			wantLen: 1,
+			wantIn:  []string{"my-agent"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := derivePassThroughKindsFromRaw(tt.raw)
+
+			if len(got) != tt.wantLen {
+				t.Errorf("derivePassThroughKindsFromRaw() len = %d, want %d; got %v",
+					len(got), tt.wantLen, got)
+				return
+			}
+			for _, want := range tt.wantIn {
+				found := false
+				for _, k := range got {
+					if k == want {
+						found = true
+						break
+					}
+				}
+				if !found {
+					t.Errorf("derivePassThroughKindsFromRaw() = %v, want to contain %q", got, want)
+				}
+			}
+		})
+	}
+}
+
 // TestValidateFrontMatter validates the advisory static analysis in
 // ValidateFrontMatter. Each case exercises a single warning category in
 // isolation so that ordering assumptions remain trivially verifiable.

@@ -38,6 +38,9 @@ var migration008SQL string
 //go:embed sql/009_retry_session_id.sql
 var migration009SQL string
 
+//go:embed sql/010_dispatch_rule_routing.sql
+var migration010SQL string
+
 var migrations = []Migration{
 	{Version: 1, Description: "core persistence tables", SQL: migration001SQL},
 	{Version: 2, Description: "extended token metrics", SQL: migration002SQL},
@@ -48,4 +51,5 @@ var migrations = []Migration{
 	{Version: 7, Description: "self-review metadata in run history", SQL: migration007SQL},
 	{Version: 8, Description: "reaction fingerprints for cross-restart dedup", SQL: migration008SQL},
 	{Version: 9, Description: "session ID in retry entries for cross-retry resume", SQL: migration009SQL},
+	{Version: 10, Description: "dispatch rule routing columns on retry_entries and run_history", SQL: migration010SQL},
 }

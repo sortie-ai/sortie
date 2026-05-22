@@ -27,11 +27,12 @@ import (
 // stubWorkflowManager implements [WorkflowManager] with configurable returns.
 // All methods are safe for concurrent use.
 type stubWorkflowManager struct {
-	mu       sync.RWMutex
-	config   config.ServiceConfig
-	template *prompt.Template
-	reloadFn func() error
-	absPath  string
+	mu            sync.RWMutex
+	config        config.ServiceConfig
+	template      *prompt.Template
+	templateIndex map[string]*prompt.Template
+	reloadFn      func() error
+	absPath       string
 }
 
 func (s *stubWorkflowManager) Config() config.ServiceConfig {
@@ -44,6 +45,20 @@ func (s *stubWorkflowManager) PromptTemplate() *prompt.Template {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.template
+}
+
+func (s *stubWorkflowManager) PromptTemplateByID(id string) *prompt.Template {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.templateIndex != nil {
+		if tmpl, ok := s.templateIndex[id]; ok {
+			return tmpl
+		}
+	}
+	if id == "" {
+		return s.template
+	}
+	return nil
 }
 
 func (s *stubWorkflowManager) Reload() error {
@@ -648,7 +663,7 @@ func TestMakeWorkerFn(t *testing.T) {
 			Issue:      issue,
 		}
 
-		wfn := o.makeWorkerFn("", "")
+		wfn := o.makeWorkerFn("", "", "", "", nil)
 
 		exitDone := make(chan struct{})
 		go func() {
@@ -710,7 +725,7 @@ func TestMakeWorkerFn(t *testing.T) {
 			Issue:      issue,
 		}
 
-		wfn := o.makeWorkerFn("", "")
+		wfn := o.makeWorkerFn("", "", "", "", nil)
 
 		exitDone := make(chan struct{})
 		go func() {
@@ -765,7 +780,7 @@ func TestMakeWorkerFn(t *testing.T) {
 			SessionID:  "resume-sess-42",
 		}
 
-		wfn := o.makeWorkerFn("resume-sess-42", "")
+		wfn := o.makeWorkerFn("resume-sess-42", "", "", "", nil)
 
 		exitDone := make(chan struct{})
 		go func() {
@@ -819,7 +834,7 @@ func TestMakeWorkerFn(t *testing.T) {
 			Issue:      issue,
 		}
 
-		wfn := o.makeWorkerFn("", "")
+		wfn := o.makeWorkerFn("", "", "", "", nil)
 
 		exitDone := make(chan struct{})
 		go func() {
@@ -4461,5 +4476,246 @@ func TestHandleTick_WorkerWarningChangeDetection(t *testing.T) {
 	o.handleTick(ctx)
 	if got := strings.Count(buf.String(), warnMsg); got != 2 {
 		t.Errorf("warning count after changing SSHHosts only = %d, want 2\nlog:\n%s", got, buf.String())
+	}
+}
+
+// TestTickLogging_DispatchBreakdown verifies that the "tick completed" log
+// entry carries the dispatched_by_rule, dispatched_by_default, and
+// dispatched_by_fallback counters reflecting the actual resolution layers
+// used for each dispatched issue.
+func TestTickLogging_DispatchBreakdown(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	cfg := lifecycleConfig(tmpDir)
+
+	// Wire a dispatch config with one named rule that matches label "bug".
+	// Issue A-1 carries the label → resolved from rule.
+	// Issue A-2 carries no label → falls through to fallback (no default configured).
+	cfg.Dispatch = config.DispatchConfig{
+		Rules: []config.DispatchRule{
+			{
+				Name:       "bug-rule",
+				Match:      config.DispatchMatch{Labels: []string{"bug"}},
+				Selection:  config.DispatchSelection{},
+				IsCatchAll: false,
+			},
+		},
+	}
+
+	issues := []domain.Issue{
+		{ID: "id-1", Identifier: "A-1", Title: "Bug fix", State: "To Do", Labels: []string{"bug"}},
+		{ID: "id-2", Identifier: "A-2", Title: "Feature", State: "To Do"},
+	}
+
+	tmpl := mustParseTemplate(t, "work on {{ .issue.identifier }}")
+
+	lb := &lockedBuf{}
+	logger := slog.New(slog.NewTextHandler(lb, nil))
+
+	pf := passingPreflightRegistries()
+	pf.ReloadWorkflow = func() error { return nil }
+	pf.ConfigFunc = func() config.ServiceConfig { return cfg }
+
+	o := NewOrchestrator(OrchestratorParams{
+		State:  NewState(1000, 5, nil, AgentTotals{}),
+		Logger: logger,
+		TrackerAdapter: &candidateTrackerAdapter{
+			mockTrackerAdapter: &mockTrackerAdapter{},
+			fetchCandidatesFn: func(_ context.Context) ([]domain.Issue, error) {
+				return issues, nil
+			},
+		},
+		AgentAdapter:    &mockAgentAdapter{},
+		WorkflowManager: &stubWorkflowManager{config: cfg, template: tmpl},
+		Store:           &stubStore{},
+		PreflightParams: pf,
+	})
+
+	o.handleTick(context.Background())
+	o.state.WorkerWg.Wait()
+
+	got := lb.String()
+
+	if !strings.Contains(got, "tick completed") {
+		t.Fatalf("log missing 'tick completed': %s", got)
+	}
+	if !strings.Contains(got, "dispatched=2") {
+		t.Errorf("log missing dispatched=2: %s", got)
+	}
+	// One issue matched the named rule.
+	if !strings.Contains(got, "dispatched_by_rule=1") {
+		t.Errorf("log missing dispatched_by_rule=1: %s", got)
+	}
+	// No default configured, no default dispatch.
+	if !strings.Contains(got, "dispatched_by_default=0") {
+		t.Errorf("log missing dispatched_by_default=0: %s", got)
+	}
+	// One issue fell through to fallback.
+	if !strings.Contains(got, "dispatched_by_fallback=1") {
+		t.Errorf("log missing dispatched_by_fallback=1: %s", got)
+	}
+}
+
+// TestDispatch_RuleResolvedKindPersistsToRunHistory is a regression test for
+// the freeze-on-dispatch wiring through
+// ResolveRule → RunningEntry.AgentKind → WorkerDeps.AgentKind →
+// WorkerResult.AgentAdapter → RunHistory.AgentAdapter.
+//
+// Before the fix, RunWorkerAttempt always populated WorkerResult.AgentAdapter
+// from cfg.Agent.Kind (the workflow default) instead of deps.AgentKind, so
+// a rule that routed an issue to a non-default agent kind caused run_history
+// to record the wrong adapter name.
+func TestDispatch_RuleResolvedKindPersistsToRunHistory(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	cfg := lifecycleConfig(tmpDir)
+
+	// Workflow default is "claude-code". One rule routes issues labelled "bug"
+	// to "codex". The second issue carries no "bug" label and falls through to
+	// the workflow-wide fallback ("claude-code").
+	cfg.Agent.Kind = "claude-code"
+	cfg.Dispatch = config.DispatchConfig{
+		Rules: []config.DispatchRule{
+			{
+				Name:      "bug-router",
+				Match:     config.DispatchMatch{Labels: []string{"bug"}},
+				Selection: config.DispatchSelection{AgentKind: "codex"},
+			},
+		},
+	}
+
+	bugIssue := domain.Issue{
+		ID:         "id-bug",
+		Identifier: "DISP-1",
+		Title:      "Bug fix",
+		State:      "To Do",
+		Labels:     []string{"bug"},
+	}
+	docsIssue := domain.Issue{
+		ID:         "id-docs",
+		Identifier: "DISP-2",
+		Title:      "Docs update",
+		State:      "To Do",
+		Labels:     []string{"docs"},
+	}
+
+	tmpl := mustParseTemplate(t, "work on {{ .issue.identifier }}")
+
+	codexAdapter := &mockAgentAdapter{}
+	claudeAdapter := &mockAgentAdapter{}
+
+	tracker := &candidateTrackerAdapter{
+		mockTrackerAdapter: &mockTrackerAdapter{
+			fetchStatesFn: func(_ context.Context, ids []string) (map[string]string, error) {
+				result := make(map[string]string, len(ids))
+				for _, id := range ids {
+					result[id] = "Done"
+				}
+				return result, nil
+			},
+		},
+		fetchCandidatesFn: func(_ context.Context) ([]domain.Issue, error) {
+			return []domain.Issue{bugIssue, docsIssue}, nil
+		},
+	}
+
+	wm := &stubWorkflowManager{config: cfg, template: tmpl}
+	store := &stubStore{}
+	regs := passingPreflightRegistries()
+
+	state := NewState(cfg.Polling.IntervalMS, cfg.Agent.MaxConcurrentAgents, nil, AgentTotals{})
+	o := NewOrchestrator(OrchestratorParams{
+		State:          state,
+		Logger:         discardLogger(),
+		TrackerAdapter: tracker,
+		AgentAdapter:   claudeAdapter,
+		AgentAdapterByKind: func(kind string) (domain.AgentAdapter, error) {
+			switch kind {
+			case "codex":
+				return codexAdapter, nil
+			case "claude-code":
+				return claudeAdapter, nil
+			default:
+				return nil, fmt.Errorf("unknown agent kind %q", kind)
+			}
+		},
+		WorkflowManager: wm,
+		Store:           store,
+		PreflightParams: PreflightParams{
+			ReloadWorkflow:  func() error { return nil },
+			ConfigFunc:      wm.Config,
+			TrackerRegistry: regs.TrackerRegistry,
+			AgentRegistry:   regs.AgentRegistry,
+		},
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		o.Run(ctx)
+		close(done)
+	}()
+
+	// Wait until both issues have produced a RunHistory row.
+	deadline := time.After(15 * time.Second)
+	for {
+		select {
+		case <-deadline:
+			cancel()
+			<-done
+			store.mu.Lock()
+			n := len(store.runHistories)
+			store.mu.Unlock()
+			t.Fatalf("timed out: run histories = %d, want 2", n)
+		default:
+		}
+		store.mu.Lock()
+		n := len(store.runHistories)
+		store.mu.Unlock()
+		if n >= 2 {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	cancel()
+	<-done
+
+	// Index rows by IssueID so assertion order is independent of dispatch order.
+	store.mu.Lock()
+	rows := make(map[string]persistence.RunHistory, len(store.runHistories))
+	for _, rh := range store.runHistories {
+		rows[rh.IssueID] = rh
+	}
+	store.mu.Unlock()
+
+	if len(rows) != 2 {
+		t.Fatalf("len(runHistories) = %d, want 2", len(rows))
+	}
+
+	// Rule-routed issue: must record the rule-resolved kind, not the workflow default.
+	bugRow, ok := rows[bugIssue.ID]
+	if !ok {
+		t.Fatalf("no RunHistory row for bug issue %q", bugIssue.ID)
+	}
+	if bugRow.AgentAdapter != "codex" {
+		t.Errorf("RunHistory(%q).AgentAdapter = %q, want %q", bugIssue.Identifier, bugRow.AgentAdapter, "codex")
+	}
+	if bugRow.RuleName != "bug-router" {
+		t.Errorf("RunHistory(%q).RuleName = %q, want %q", bugIssue.Identifier, bugRow.RuleName, "bug-router")
+	}
+
+	// Fallback issue: must record the workflow-wide default kind.
+	docsRow, ok := rows[docsIssue.ID]
+	if !ok {
+		t.Fatalf("no RunHistory row for docs issue %q", docsIssue.ID)
+	}
+	if docsRow.AgentAdapter != "claude-code" {
+		t.Errorf("RunHistory(%q).AgentAdapter = %q, want %q", docsIssue.Identifier, docsRow.AgentAdapter, "claude-code")
+	}
+	if docsRow.RuleName != "" {
+		t.Errorf("RunHistory(%q).RuleName = %q, want %q", docsIssue.Identifier, docsRow.RuleName, "")
 	}
 }

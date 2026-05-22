@@ -115,7 +115,10 @@ type WorkerResult struct {
 	// Empty if workspace preparation failed.
 	WorkspacePath string
 
-	// AgentAdapter is the agent adapter kind string (from config.Agent.Kind).
+	// AgentAdapter is the agent adapter kind string used to dispatch
+	// this attempt. Equals the rule-resolved kind when dispatch routing
+	// selected a non-default agent; otherwise equals the workflow-wide
+	// default kind from config.Agent.Kind.
 	AgentAdapter string
 
 	// Attempt is the retry attempt parameter passed to the worker.
@@ -162,9 +165,22 @@ type WorkerDeps struct {
 	// values take effect for new attempts.
 	ConfigFunc func() config.ServiceConfig
 
-	// PromptTemplateFunc returns the current compiled prompt template.
-	// Called once per attempt at the start.
-	PromptTemplateFunc func() *prompt.Template
+	// PromptTemplateByIDFunc returns the parsed prompt template
+	// registered under the given ID. The empty-string key selects the
+	// WORKFLOW.md body template. Called once per attempt to resolve
+	// the freeze-on-dispatch template selection.
+	PromptTemplateByIDFunc func(id string) *prompt.Template
+
+	// TemplateID is the resolved template registry key chosen at
+	// initial dispatch and frozen for the lifetime of the claim.
+	// Empty selects the body template.
+	TemplateID string
+
+	// AgentKind is the rule-resolved agent adapter kind frozen at
+	// initial dispatch. Empty falls back to the workflow-wide default
+	// from config.Agent.Kind, preserving pre-routing behavior for
+	// callers that have not wired the freeze-on-dispatch selection.
+	AgentKind string
 
 	// OnEvent relays agent events to the orchestrator's serialized
 	// event loop. Called from the worker goroutine; must be safe for
@@ -305,15 +321,39 @@ func exitKindForErr(ctx context.Context) WorkerExitKind {
 // closure over deps.
 func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, deps WorkerDeps) {
 	cfg := deps.ConfigFunc()
-	tmpl := deps.PromptTemplateFunc()
+	tmpl := deps.PromptTemplateByIDFunc(deps.TemplateID)
 	attemptInt := normalizeAttempt(attempt)
 	logger := deps.Logger
 	if logger == nil {
 		logger = slog.Default()
 	}
 
+	// The rule-resolved kind is authoritative for run-history recording
+	// and dispatch-comment text. Callers that have not wired routing
+	// fall back to the workflow-wide default.
+	agentKind := deps.AgentKind
+	if agentKind == "" {
+		agentKind = cfg.Agent.Kind
+	}
+
 	if deps.Metrics == nil {
 		deps.Metrics = &domain.NoopMetrics{}
+	}
+
+	if tmpl == nil {
+		logger.Error("prompt template lookup returned nil",
+			slog.String("template_id", deps.TemplateID),
+		)
+		deps.OnExit(issue.ID, WorkerResult{
+			IssueID:      issue.ID,
+			Identifier:   issue.Identifier,
+			ExitKind:     WorkerExitError,
+			Error:        fmt.Errorf("prompt template %q is not registered", deps.TemplateID),
+			AgentAdapter: agentKind,
+			Attempt:      attempt,
+			SSHHost:      deps.SSHHost,
+		})
+		return
 	}
 
 	// Dispatch-time in-progress transition: move the issue to the
@@ -347,7 +387,7 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 	// Fires after in-progress transition, before workspace preparation.
 	// Failure is non-fatal — the worker continues regardless.
 	if cfg.Tracker.Comments.OnDispatch {
-		text := buildDispatchComment(cfg.Agent.Kind, attemptInt)
+		text := buildDispatchComment(agentKind, attemptInt)
 		if err := deps.TrackerAdapter.CommentIssue(ctx, issue.ID, text); err != nil {
 			logger.Warn("dispatch comment failed", slog.Any("error", err))
 			deps.Metrics.IncTrackerComments("dispatch", "error")
@@ -406,7 +446,7 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 					TurnsCompleted: turnsCompleted,
 					SessionID:      sessionID,
 					WorkspacePath:  workspacePath,
-					AgentAdapter:   cfg.Agent.Kind,
+					AgentAdapter:   agentKind,
 					Attempt:        attempt,
 					SSHHost:        deps.SSHHost,
 				})
@@ -436,7 +476,7 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 			Identifier:   issue.Identifier,
 			ExitKind:     exitKindForErr(ctx),
 			Error:        fmt.Errorf("workspace preparation: %w", err),
-			AgentAdapter: cfg.Agent.Kind,
+			AgentAdapter: agentKind,
 			Attempt:      attempt,
 			SSHHost:      deps.SSHHost,
 		})
@@ -475,7 +515,7 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 				ExitKind:      WorkerExitError,
 				Error:         fmt.Errorf("mcp config generation: resolve executable: %w", execErr),
 				WorkspacePath: wsResult.Path,
-				AgentAdapter:  cfg.Agent.Kind,
+				AgentAdapter:  agentKind,
 				Attempt:       attempt,
 				SSHHost:       deps.SSHHost,
 			})
@@ -492,7 +532,7 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 				ExitKind:      WorkerExitError,
 				Error:         fmt.Errorf("mcp config generation: resolve symlinks: %w", execErr),
 				WorkspacePath: wsResult.Path,
-				AgentAdapter:  cfg.Agent.Kind,
+				AgentAdapter:  agentKind,
 				Attempt:       attempt,
 				SSHHost:       deps.SSHHost,
 			})
@@ -531,7 +571,7 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 				ExitKind:      WorkerExitError,
 				Error:         fmt.Errorf("mcp config generation: %w", genErr),
 				WorkspacePath: wsResult.Path,
-				AgentAdapter:  cfg.Agent.Kind,
+				AgentAdapter:  agentKind,
 				Attempt:       attempt,
 				SSHHost:       deps.SSHHost,
 			})
@@ -551,7 +591,7 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 			Identifier:    issue.Identifier,
 			ExitKind:      WorkerExitCancelled,
 			WorkspacePath: wsResult.Path,
-			AgentAdapter:  cfg.Agent.Kind,
+			AgentAdapter:  agentKind,
 			Attempt:       attempt,
 			SSHHost:       deps.SSHHost,
 		})
@@ -575,7 +615,7 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 			ExitKind:      exitKindForErr(ctx),
 			Error:         fmt.Errorf("agent session start: %w", err),
 			WorkspacePath: wsResult.Path,
-			AgentAdapter:  cfg.Agent.Kind,
+			AgentAdapter:  agentKind,
 			Attempt:       attempt,
 			SSHHost:       deps.SSHHost,
 		})
@@ -653,7 +693,7 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 				TurnsCompleted: turnsCompleted,
 				SessionID:      session.ID,
 				WorkspacePath:  wsResult.Path,
-				AgentAdapter:   cfg.Agent.Kind,
+				AgentAdapter:   agentKind,
 				Attempt:        attempt,
 				SSHHost:        deps.SSHHost,
 			})
@@ -724,7 +764,7 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 				TurnsCompleted: turnsCompleted,
 				SessionID:      session.ID,
 				WorkspacePath:  wsResult.Path,
-				AgentAdapter:   cfg.Agent.Kind,
+				AgentAdapter:   agentKind,
 				Attempt:        attempt,
 				SSHHost:        deps.SSHHost,
 			})
@@ -752,7 +792,7 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 				TurnsCompleted: turnsCompleted,
 				SessionID:      session.ID,
 				WorkspacePath:  wsResult.Path,
-				AgentAdapter:   cfg.Agent.Kind,
+				AgentAdapter:   agentKind,
 				Attempt:        attempt,
 				SSHHost:        deps.SSHHost,
 			})
@@ -777,7 +817,7 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 				TurnsCompleted: turnsCompleted,
 				SessionID:      session.ID,
 				WorkspacePath:  wsResult.Path,
-				AgentAdapter:   cfg.Agent.Kind,
+				AgentAdapter:   agentKind,
 				Attempt:        attempt,
 				SSHHost:        deps.SSHHost,
 				SoftStop:       true,
@@ -800,7 +840,7 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 				TurnsCompleted: turnsCompleted,
 				SessionID:      session.ID,
 				WorkspacePath:  wsResult.Path,
-				AgentAdapter:   cfg.Agent.Kind,
+				AgentAdapter:   agentKind,
 				Attempt:        attempt,
 				SSHHost:        deps.SSHHost,
 			})
@@ -892,7 +932,7 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 		TurnsCompleted: turnsCompleted,
 		SessionID:      session.ID,
 		WorkspacePath:  wsResult.Path,
-		AgentAdapter:   cfg.Agent.Kind,
+		AgentAdapter:   agentKind,
 		Attempt:        attempt,
 		SSHHost:        deps.SSHHost,
 		ReviewMetadata: reviewMeta,

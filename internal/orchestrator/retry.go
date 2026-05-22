@@ -57,9 +57,19 @@ type HandleRetryTimerParams struct {
 	MaxRetryBackoffMS int
 
 	// MakeWorkerFn constructs a [WorkerFunc] for the given resume
-	// session ID and SSH host. Replaces the former WorkerFn field to
-	// allow the retry handler to pass the acquired SSH host at fire time.
-	MakeWorkerFn func(resumeSessionID string, sshHost string) WorkerFunc
+	// session ID, SSH host, dispatch-frozen agent kind and template
+	// ID, and resolved adapter. The retry handler resolves the
+	// adapter through AgentAdapterByKind before invoking this
+	// constructor; the closure no longer performs adapter lookup
+	// itself.
+	MakeWorkerFn func(resumeSessionID, sshHost, agentKind, templateID string, adapter domain.AgentAdapter) WorkerFunc
+
+	// AgentAdapterByKind resolves the agent adapter for the given
+	// kind. Required when MakeWorkerFn is set. Returns a wrapped
+	// *registry.RegistryError when the kind is unknown; the retry
+	// handler logs the error, releases the claim, and deletes the
+	// persisted retry row.
+	AgentAdapterByKind func(kind string) (domain.AgentAdapter, error)
 
 	// OnRetryFire is the callback for re-scheduled retry timers.
 	// Routes back into the event loop.
@@ -89,10 +99,6 @@ type HandleRetryTimerParams struct {
 	// WorkflowFile is the base filename of the active WORKFLOW.md file.
 	// Recorded on the RunningEntry for observability.
 	WorkflowFile string
-
-	// AgentKind is the adapter kind string from the active workflow
-	// config. Recorded on the RunningEntry for cost estimation.
-	AgentKind string
 }
 
 // HandleRetryTimer processes a retry timer event for the given issue.
@@ -153,6 +159,9 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 			SessionID:           popped.SessionID,
 			ContinuationContext: popped.ContinuationContext,
 			ReactionKind:        popped.ReactionKind,
+			AgentKind:           popped.AgentKind,
+			RuleName:            popped.RuleName,
+			TemplateID:          popped.TemplateID,
 		}, params.OnRetryFire)
 		if isKnownReactionKind(popped.ReactionKind) {
 			if err := params.Store.DeleteRetryEntry(ctx, issueID); err != nil {
@@ -370,6 +379,30 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 		panic("HandleRetryTimer: nil MakeWorkerFn")
 	}
 
+	if params.AgentAdapterByKind == nil {
+		panic("HandleRetryTimer: nil AgentAdapterByKind")
+	}
+
+	adapter, adapterErr := params.AgentAdapterByKind(popped.AgentKind)
+	if adapterErr != nil {
+		log.Error("retry agent kind unavailable",
+			slog.String("rule_name", popped.RuleName),
+			slog.String("agent_kind", popped.AgentKind),
+			slog.Any("error", adapterErr),
+		)
+		delete(state.Claimed, issueID)
+		if delErr := params.Store.DeleteRetryEntry(ctx, issueID); delErr != nil {
+			log.Error("failed to delete retry entry after agent kind lookup failure",
+				slog.Any("error", delErr),
+			)
+		}
+		if params.HostPool != nil && host != "" {
+			params.HostPool.ReleaseHost(issueID)
+		}
+		metrics.IncRetries(triggerError)
+		return
+	}
+
 	// Dispatch the issue with the popped entry's attempt number.
 	// Pass the popped attempt as-is; NextAttempt increments only on the
 	// next worker exit, not at dispatch time.
@@ -378,10 +411,12 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 	if popped.ContinuationContext != nil {
 		dispatchCtx = WithContinuationContext(ctx, popped.ContinuationContext)
 	}
-	DispatchIssue(dispatchCtx, state, issue, &attempt, host, params.MakeWorkerFn(popped.SessionID, host))
+	DispatchIssue(dispatchCtx, state, issue, &attempt, host, params.MakeWorkerFn(popped.SessionID, host, popped.AgentKind, popped.TemplateID, adapter))
 	if entry := state.Running[issue.ID]; entry != nil {
 		entry.WorkflowFile = params.WorkflowFile
-		entry.AgentKind = params.AgentKind
+		entry.AgentKind = popped.AgentKind
+		entry.RuleName = popped.RuleName
+		entry.TemplateID = popped.TemplateID
 		entry.ContinuationContext = popped.ContinuationContext
 		entry.ReactionKind = popped.ReactionKind
 	}
@@ -442,6 +477,9 @@ func persistRetryEntry(ctx context.Context, log *slog.Logger, store RetryTimerSt
 		DueAtMs:    retryEntry.DueAtMS,
 		Error:      stringPtr(retryEntry.Error),
 		SessionID:  stringPtr(retryEntry.SessionID),
+		RuleName:   retryEntry.RuleName,
+		TemplateID: retryEntry.TemplateID,
+		AgentKind:  retryEntry.AgentKind,
 	}
 	if err := store.SaveRetryEntry(ctx, pEntry); err != nil {
 		log.Error("failed to persist retry entry",

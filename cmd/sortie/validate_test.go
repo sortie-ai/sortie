@@ -1452,3 +1452,337 @@ func TestValidateShortHelp(t *testing.T) {
 		t.Errorf("run([validate -h]) stderr = %q, want empty", stderr.String())
 	}
 }
+
+// --- dispatch-specific validate tests ---
+
+// makeDispatchWorkflow writes a WORKFLOW.md to dir with the given dispatch
+// section content and returns the absolute path to the workflow file.
+// The workflow includes the minimum required fields so that
+// ValidateConfigForPromotion and the preflight checks are satisfied:
+// tracker.kind, tracker.active_states, tracker.terminal_states, and agent.kind.
+func makeDispatchWorkflow(t *testing.T, dir string, dispatchYAML string) string {
+	t.Helper()
+	content := []byte("---\n" +
+		"polling:\n  interval_ms: 30000\n" +
+		"tracker:\n  kind: file\n  active_states: [\"To Do\"]\n  terminal_states: [\"Done\"]\n" +
+		"agent:\n  kind: mock\n" +
+		"file:\n  path: issues.json\n" +
+		dispatchYAML +
+		"---\nDo {{ .issue.title }}.\n")
+	return writeCustomWorkflowFile(t, dir, content)
+}
+
+func TestValidateDispatch_MalformedGlob(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	wfPath := makeDispatchWorkflow(t, dir, `dispatch:
+  rules:
+    - name: bad-glob
+      match:
+        labels: ["[unclosed"]
+      agent: mock
+`)
+
+	var stdout, stderr bytes.Buffer
+	ctx := context.Background()
+
+	code := run(ctx, []string{"validate", "--format", "json", wfPath}, &stdout, &stderr)
+	if code != 1 {
+		t.Fatalf("run(validate) = %d, want 1; stderr: %s", code, stderr.String())
+	}
+
+	var out validateOutput
+	if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
+		t.Fatalf("json.Unmarshal(%q) error: %v", stdout.String(), err)
+	}
+	if out.Valid {
+		t.Errorf("validateOutput.Valid = true, want false")
+	}
+	found := false
+	for _, d := range out.Errors {
+		if strings.Contains(d.Check, "dispatch.rules") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("validateOutput.Errors = %v, want a diagnostic mentioning dispatch.rules", out.Errors)
+	}
+}
+
+func TestValidateDispatch_UnreachableRule(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	// Write a prompt file so the template path validation passes.
+	if err := os.WriteFile(filepath.Join(dir, "catch.md"), []byte("catch all"), 0o644); err != nil {
+		t.Fatalf("write catch.md: %v", err)
+	}
+	wfPath := makeDispatchWorkflow(t, dir, `dispatch:
+  rules:
+    - name: catch-all
+      template: catch.md
+
+    - name: unreachable
+      match:
+        labels: ["bug"]
+      agent: mock
+`)
+
+	var stdout, stderr bytes.Buffer
+	ctx := context.Background()
+
+	code := run(ctx, []string{"validate", "--format", "json", wfPath}, &stdout, &stderr)
+	if code != 1 {
+		t.Fatalf("run(validate) = %d, want 1; stderr: %s", code, stderr.String())
+	}
+
+	var out validateOutput
+	if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
+		t.Fatalf("json.Unmarshal(%q) error: %v", stdout.String(), err)
+	}
+	if out.Valid {
+		t.Errorf("validateOutput.Valid = true, want false")
+	}
+	found := false
+	for _, d := range out.Errors {
+		if strings.Contains(d.Message, "unreachable_rules") || strings.Contains(d.Check, "dispatch.rules") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("validateOutput.Errors = %v, want a diagnostic mentioning unreachable_rules", out.Errors)
+	}
+}
+
+func TestValidateDispatch_AbsoluteTemplatePath(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	wfPath := makeDispatchWorkflow(t, dir, `dispatch:
+  rules:
+    - name: abs-rule
+      match:
+        labels: ["bug"]
+      template: /etc/hosts
+`)
+
+	var stdout, stderr bytes.Buffer
+	ctx := context.Background()
+
+	code := run(ctx, []string{"validate", "--format", "json", wfPath}, &stdout, &stderr)
+	if code != 1 {
+		t.Fatalf("run(validate) = %d, want 1; stderr: %s", code, stderr.String())
+	}
+
+	var out validateOutput
+	if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
+		t.Fatalf("json.Unmarshal(%q) error: %v", stdout.String(), err)
+	}
+	if out.Valid {
+		t.Errorf("validateOutput.Valid = true, want false")
+	}
+	found := false
+	for _, d := range out.Errors {
+		if strings.Contains(d.Message, "relative") || strings.Contains(d.Check, "dispatch.rules") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("validateOutput.Errors = %v, want a diagnostic about relative template path", out.Errors)
+	}
+}
+
+func TestValidateDispatch_TildeTemplatePath(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	wfPath := makeDispatchWorkflow(t, dir, `dispatch:
+  rules:
+    - name: tilde-rule
+      match:
+        labels: ["bug"]
+      template: ~/templates/custom.md
+`)
+
+	var stdout, stderr bytes.Buffer
+	ctx := context.Background()
+
+	code := run(ctx, []string{"validate", "--format", "json", wfPath}, &stdout, &stderr)
+	if code != 1 {
+		t.Fatalf("run(validate) = %d, want 1; stderr: %s", code, stderr.String())
+	}
+
+	var out validateOutput
+	if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
+		t.Fatalf("json.Unmarshal(%q) error: %v", stdout.String(), err)
+	}
+	if out.Valid {
+		t.Errorf("validateOutput.Valid = true, want false")
+	}
+}
+
+func TestValidateDispatch_MissingTemplateFile(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	wfPath := makeDispatchWorkflow(t, dir, `dispatch:
+  rules:
+    - name: missing-tmpl
+      match:
+        labels: ["bug"]
+      template: nonexistent/file.md
+`)
+
+	var stdout, stderr bytes.Buffer
+	ctx := context.Background()
+
+	code := run(ctx, []string{"validate", "--format", "json", wfPath}, &stdout, &stderr)
+	if code != 1 {
+		t.Fatalf("run(validate) = %d, want 1; stderr: %s", code, stderr.String())
+	}
+
+	var out validateOutput
+	if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
+		t.Fatalf("json.Unmarshal(%q) error: %v", stdout.String(), err)
+	}
+	if out.Valid {
+		t.Errorf("validateOutput.Valid = true, want false")
+	}
+	found := false
+	for _, d := range out.Errors {
+		if strings.Contains(d.Message, "cannot read template") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("validateOutput.Errors = %v, want a diagnostic with 'cannot read template'", out.Errors)
+	}
+}
+
+func TestValidateDispatch_FrontMatterInTemplate(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	tmplDir := filepath.Join(dir, "prompts")
+	if err := os.MkdirAll(tmplDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmplDir, "fm.md"), []byte("---\nkey: value\n---\nBody."), 0o644); err != nil {
+		t.Fatalf("write template: %v", err)
+	}
+	wfPath := makeDispatchWorkflow(t, dir, `dispatch:
+  rules:
+    - name: fm-rule
+      match:
+        labels: ["bug"]
+      template: prompts/fm.md
+`)
+
+	var stdout, stderr bytes.Buffer
+	ctx := context.Background()
+
+	code := run(ctx, []string{"validate", "--format", "json", wfPath}, &stdout, &stderr)
+	if code != 1 {
+		t.Fatalf("run(validate) = %d, want 1; stderr: %s", code, stderr.String())
+	}
+
+	var out validateOutput
+	if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
+		t.Fatalf("json.Unmarshal(%q) error: %v", stdout.String(), err)
+	}
+	if out.Valid {
+		t.Errorf("validateOutput.Valid = true, want false")
+	}
+
+	found := false
+	for _, d := range out.Errors {
+		if d.Check == "template_parse" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("validateOutput.Errors = %v, want a diagnostic with check %q", out.Errors, "template_parse")
+	}
+}
+
+func TestValidateDispatch_ValidRulesPassThrough(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	tmplDir := filepath.Join(dir, "prompts")
+	if err := os.MkdirAll(tmplDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmplDir, "bug.md"),
+		[]byte("You are a bug-fixing agent for {{ .issue.identifier }}."), 0o644); err != nil {
+		t.Fatalf("write bug.md: %v", err)
+	}
+	wfPath := makeDispatchWorkflow(t, dir, `dispatch:
+  rules:
+    - name: bug
+      match:
+        labels: ["bug"]
+      template: prompts/bug.md
+`)
+
+	var stdout, stderr bytes.Buffer
+	ctx := context.Background()
+
+	code := run(ctx, []string{"validate", "--format", "json", wfPath}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("run(validate) = %d, want 0; stderr: %s", code, stderr.String())
+	}
+
+	var out validateOutput
+	if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
+		t.Fatalf("json.Unmarshal(%q) error: %v", stdout.String(), err)
+	}
+	if !out.Valid {
+		t.Errorf("validateOutput.Valid = false, want true; errors: %v", out.Errors)
+	}
+}
+
+func TestValidateDispatch_ConfigErrorRouting(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	wfPath := makeDispatchWorkflow(t, dir, `dispatch:
+  rules:
+    - name: Invalid Name!
+      agent: mock
+`)
+
+	var stdout, stderr bytes.Buffer
+	ctx := context.Background()
+
+	code := run(ctx, []string{"validate", "--format", "json", wfPath}, &stdout, &stderr)
+	if code != 1 {
+		t.Fatalf("run(validate) = %d, want 1; stderr: %s", code, stderr.String())
+	}
+
+	var out validateOutput
+	if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
+		t.Fatalf("json.Unmarshal(%q) error: %v", stdout.String(), err)
+	}
+	if out.Valid {
+		t.Errorf("validateOutput.Valid = true, want false")
+	}
+
+	// mapManagerError routes *ConfigError to check "config." + Field.
+	found := false
+	for _, d := range out.Errors {
+		if strings.HasPrefix(d.Check, "config.dispatch") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("validateOutput.Errors = %v, want a diagnostic with check prefixed 'config.dispatch'", out.Errors)
+	}
+}

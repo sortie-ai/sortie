@@ -180,6 +180,9 @@ func TestMigrate_ColumnCorrectness(t *testing.T) {
 				{"due_at_ms", "INTEGER", true, 0},
 				{"error", "TEXT", false, 0},
 				{"session_id", "TEXT", false, 0},
+				{"rule_name", "TEXT", true, 0},
+				{"template_id", "TEXT", true, 0},
+				{"agent_kind", "TEXT", true, 0},
 			},
 		},
 		{
@@ -199,6 +202,7 @@ func TestMigrate_ColumnCorrectness(t *testing.T) {
 				{"turns_completed", "INTEGER", true, 0},
 				{"display_identifier", "TEXT", false, 0},
 				{"review_metadata", "TEXT", false, 0},
+				{"rule_name", "TEXT", true, 0},
 			},
 		},
 		{

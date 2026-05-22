@@ -222,6 +222,18 @@ type RunningEntry struct {
 	// workflow config active at dispatch time. Used for token cost
 	// estimation on the dashboard.
 	AgentKind string
+
+	// RuleName is the dispatch rule name frozen at initial dispatch.
+	// Empty when no rule matched and the workflow-wide fallback fired,
+	// or "default" when the dispatch default block matched. Used in
+	// logs, metrics, and the passive dashboard display.
+	RuleName string
+
+	// TemplateID is the resolved template registry key frozen at
+	// initial dispatch. Empty selects the WORKFLOW.md body template.
+	// Used by the worker to look up the parsed template via the
+	// workflow manager's per-ID index.
+	TemplateID string
 }
 
 // RetryEntry holds the runtime state for a pending retry. The persisted
@@ -268,6 +280,21 @@ type RetryEntry struct {
 	// values cause HandleRetryTimer to call MarkReactionDispatched after
 	// successful dispatch. Runtime-only (not persisted to SQLite).
 	ReactionKind string
+
+	// RuleName is the dispatch rule name frozen at initial dispatch.
+	// Propagated verbatim through every retry so the freeze-on-dispatch
+	// contract holds across reschedule, slot-exhaustion, and reaction
+	// continuation paths.
+	RuleName string
+
+	// TemplateID is the resolved template registry key frozen at
+	// initial dispatch. Propagated verbatim through every retry.
+	TemplateID string
+
+	// AgentKind is the adapter kind frozen at initial dispatch.
+	// Propagated through every retry so [HandleRetryTimer] can look up
+	// the adapter without re-running rule resolution.
+	AgentKind string
 }
 
 // ReactionKindCI is the reaction kind constant for CI failure reactions.
@@ -335,6 +362,23 @@ type PendingReaction struct {
 	// The reconcile function for each kind is responsible for a single
 	// type assertion at the top of its loop body.
 	KindData any
+
+	// AgentKind is the dispatch-frozen adapter kind captured from the
+	// completed worker. Propagated into the reaction continuation
+	// retry so the same adapter handles the follow-up turn.
+	AgentKind string
+
+	// RuleName is the dispatch-frozen rule name captured from the
+	// completed worker. Propagated for logs and metrics so the
+	// continuation appears under the same rule as the original
+	// dispatch.
+	RuleName string
+
+	// TemplateID is the dispatch-frozen template registry key
+	// captured from the completed worker. Propagated so the
+	// continuation renders the same template as the original
+	// dispatch.
+	TemplateID string
 }
 
 // CIReactionData holds CI-specific fields for a pending CI reaction.
@@ -586,6 +630,7 @@ type SnapshotRunningEntry struct {
 	SelfReviewActive    bool                  `json:"self_review_active,omitempty"`
 	SelfReviewIteration int                   `json:"self_review_iteration,omitempty"`
 	AgentKind           string                `json:"agent_kind,omitempty"`
+	RuleName            string                `json:"rule_name,omitempty"`
 }
 
 // SnapshotRetryEntry is a read-only view of a pending retry for
@@ -700,6 +745,7 @@ func RuntimeSnapshot(state *State, now time.Time) RuntimeSnapshotResult {
 			SelfReviewActive:    entry.SelfReviewActive,
 			SelfReviewIteration: entry.SelfReviewIteration,
 			AgentKind:           entry.AgentKind,
+			RuleName:            entry.RuleName,
 		})
 
 		if !entry.StartedAt.IsZero() {

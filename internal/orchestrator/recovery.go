@@ -19,9 +19,18 @@ import (
 // scheduledDelayMS for later activation. The issue is marked as Claimed
 // to prevent double-dispatch on the first poll tick.
 //
+// Legacy rows persisted before dispatch rule routing was added carry
+// an empty AgentKind. The orchestrator treats the empty value as the
+// workflow-wide default during retry dispatch; a one-shot audit log
+// records each legacy row so operators can correlate the routing
+// decision with run history.
+//
 // Must be called before [NewOrchestrator] so the retry timer channel
 // buffer can be sized to accommodate immediate-fire entries.
-func PopulateRetries(state *State, entries []persistence.PendingRetry) {
+func PopulateRetries(state *State, entries []persistence.PendingRetry, log *slog.Logger) {
+	if log == nil {
+		log = slog.Default()
+	}
 	for _, pending := range entries {
 		e := pending.Entry
 
@@ -42,9 +51,19 @@ func PopulateRetries(state *State, entries []persistence.PendingRetry) {
 			Attempt:          e.Attempt,
 			DueAtMS:          e.DueAtMs,
 			Error:            errStr,
+			RuleName:         e.RuleName,
+			TemplateID:       e.TemplateID,
+			AgentKind:        e.AgentKind,
 			scheduledDelayMS: pending.RemainingMs,
 		}
 		state.Claimed[e.IssueID] = struct{}{}
+
+		if e.AgentKind == "" {
+			log.Info("rehydrated legacy retry entry without agent kind",
+				slog.String("recovery", "legacy_retry_default_agent"),
+				slog.String("issue_id", e.IssueID),
+			)
+		}
 	}
 }
 
@@ -280,6 +299,8 @@ func recoverPendingReactionKinds(
 					Branch:   meta.Branch,
 					SHA:      meta.SHA,
 				},
+				AgentKind: run.AgentAdapter,
+				RuleName:  run.RuleName,
 			}
 			outcome.ReviewRecovered++
 			added++
@@ -300,6 +321,8 @@ func recoverPendingReactionKinds(
 					Branch: meta.Branch,
 					SHA:    meta.SHA,
 				},
+				AgentKind: run.AgentAdapter,
+				RuleName:  run.RuleName,
 			}
 			outcome.CIRecovered++
 			added++

@@ -205,6 +205,9 @@ func reconcileStalled(state *State, params ReconcileParams, log *slog.Logger, ct
 			SessionID:           entry.SessionID,
 			ContinuationContext: entry.ContinuationContext,
 			ReactionKind:        entry.ReactionKind,
+			AgentKind:           entry.AgentKind,
+			RuleName:            entry.RuleName,
+			TemplateID:          entry.TemplateID,
 		}, params.OnRetryFire)
 		metrics.IncRetries(triggerStall)
 
@@ -228,6 +231,9 @@ func reconcileStalled(state *State, params ReconcileParams, log *slog.Logger, ct
 				Attempt:    retryEntry.Attempt,
 				DueAtMs:    retryEntry.DueAtMS,
 				Error:      stringPtr(retryEntry.Error),
+				RuleName:   retryEntry.RuleName,
+				TemplateID: retryEntry.TemplateID,
+				AgentKind:  retryEntry.AgentKind,
 			}
 			if err := params.Store.SaveRetryEntry(ctx, pEntry); err != nil {
 				entryLog.Error("failed to persist stall retry entry",

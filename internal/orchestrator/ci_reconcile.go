@@ -239,6 +239,9 @@ func handleCIFailure(
 			"ci_failure": ciContext,
 		},
 		ReactionKind: ReactionKindCI,
+		AgentKind:    pending.AgentKind,
+		RuleName:     pending.RuleName,
+		TemplateID:   pending.TemplateID,
 	}, params.OnRetryFire)
 	metrics.IncRetries(triggerCIFix)
 

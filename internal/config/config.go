@@ -55,6 +55,19 @@ type ServiceConfig struct {
 	// core schema (e.g. "server", "worker"). Consumers access these
 	// via map lookup. Never nil after construction.
 	Extensions map[string]any
+
+	// Dispatch carries the parsed dispatch rule configuration. The
+	// workflow manager stitches this in via [ServiceConfig.SetDispatch]
+	// after [NewServiceConfig] returns. Zero value selects the
+	// workflow-wide fallback for every issue.
+	Dispatch DispatchConfig
+}
+
+// SetDispatch attaches a parsed [DispatchConfig] to the service
+// config. Called by the workflow manager after [BuildDispatchConfig]
+// runs.
+func (c *ServiceConfig) SetDispatch(d DispatchConfig) {
+	c.Dispatch = d
 }
 
 // TrackerConfig holds issue tracker connection and query settings.
@@ -125,6 +138,7 @@ var knownTopLevelKeys = map[string]bool{
 	"ci_feedback": true,
 	"self_review": true,
 	"reactions":   true,
+	"dispatch":    true,
 }
 
 // NewServiceConfig converts a raw front matter map into a validated

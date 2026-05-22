@@ -59,7 +59,7 @@ func TestPopulateRetries(t *testing.T) {
 			},
 		}
 
-		PopulateRetries(state, entries)
+		PopulateRetries(state, entries, nil)
 
 		if len(state.RetryAttempts) != 3 {
 			t.Fatalf("RetryAttempts count = %d, want 3", len(state.RetryAttempts))
@@ -112,7 +112,7 @@ func TestPopulateRetries(t *testing.T) {
 		t.Parallel()
 
 		state := NewState(5000, 4, nil, AgentTotals{})
-		PopulateRetries(state, nil)
+		PopulateRetries(state, nil, nil)
 
 		if len(state.RetryAttempts) != 0 {
 			t.Errorf("RetryAttempts count = %d, want 0", len(state.RetryAttempts))
@@ -371,7 +371,7 @@ func TestPopulateRetries_SessionID(t *testing.T) {
 		},
 	}
 
-	PopulateRetries(state, entries)
+	PopulateRetries(state, entries, nil)
 
 	got, ok := state.RetryAttempts["id-sess"]
 	if !ok {
@@ -399,7 +399,7 @@ func TestPopulateRetries_SessionID_Nil(t *testing.T) {
 		},
 	}
 
-	PopulateRetries(state, entries)
+	PopulateRetries(state, entries, nil)
 
 	got, ok := state.RetryAttempts["id-nosess"]
 	if !ok {

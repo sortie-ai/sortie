@@ -236,6 +236,21 @@ type ScheduleRetryParams struct {
 	// Propagated to [RetryEntry.ReactionKind]. Empty for non-reaction
 	// retries.
 	ReactionKind string
+
+	// AgentKind is the dispatch-frozen adapter kind. Propagated
+	// verbatim into the new [RetryEntry] so retries reuse the
+	// original adapter without re-running rule resolution.
+	AgentKind string
+
+	// RuleName is the dispatch-frozen rule name. Propagated verbatim
+	// into the new [RetryEntry] so logs and metrics report the
+	// original matched rule across every retry attempt.
+	RuleName string
+
+	// TemplateID is the dispatch-frozen template registry key.
+	// Propagated verbatim into the new [RetryEntry] so retries
+	// render the same template as the initial dispatch.
+	TemplateID string
 }
 
 // ScheduleRetry cancels any existing retry for the issue, creates a new
@@ -279,6 +294,9 @@ func ScheduleRetry(state *State, params ScheduleRetryParams, onFire func(issueID
 		LastSSHHost:         params.LastSSHHost,
 		ContinuationContext: params.ContinuationContext,
 		ReactionKind:        params.ReactionKind,
+		RuleName:            params.RuleName,
+		TemplateID:          params.TemplateID,
+		AgentKind:           params.AgentKind,
 		scheduledAt:         time.Now(),
 		scheduledDelayMS:    delayMS,
 	}

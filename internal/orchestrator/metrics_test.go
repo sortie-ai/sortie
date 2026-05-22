@@ -199,6 +199,8 @@ func (s *spyMetrics) IncReviewChecks(_ string) {}
 
 func (s *spyMetrics) IncReviewEscalations(_ string) {}
 
+func (s *spyMetrics) IncDispatchRuleMatch(_ string, _ string) {}
+
 // --- Tests ---
 
 func TestActiveElapsedSeconds(t *testing.T) {
@@ -652,10 +654,13 @@ func TestHandleRetryTimerMetrics(t *testing.T) {
 			ActiveStates:      []string{"To Do"},
 			TerminalStates:    []string{"Done"},
 			MaxRetryBackoffMS: 300_000,
-			MakeWorkerFn: func(_, _ string) WorkerFunc {
+			MakeWorkerFn: func(_, _, _, _ string, _ domain.AgentAdapter) WorkerFunc {
 				return func(_ context.Context, _ domain.Issue, _ *int) {
 					// no-op worker
 				}
+			},
+			AgentAdapterByKind: func(_ string) (domain.AgentAdapter, error) {
+				return &mockAgentAdapter{}, nil
 			},
 			OnRetryFire: noopRetryFire,
 			Logger:      discardLogger(),

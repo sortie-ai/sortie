@@ -144,6 +144,14 @@ type Metrics interface {
 	// action is "label", "comment", or "error"
 	// (sortie_review_escalations_total{action} counter).
 	IncReviewEscalations(action string)
+
+	// IncDispatchRuleMatch increments the dispatch rule match counter.
+	// layer is one of "rule", "default", or "fallback" identifying
+	// which resolution layer produced the selection. rule is the
+	// matched rule name; empty rule names report as "<none>" to keep
+	// the label cardinality bounded.
+	// (sortie_dispatch_rule_match_total{layer,rule} counter).
+	IncDispatchRuleMatch(layer string, rule string)
 }
 
 // NoopMetrics is a [Metrics] implementation where every method is a no-op.
@@ -181,6 +189,7 @@ func (*NoopMetrics) ObserveSelfReviewVerificationDuration(string, float64) {}
 func (*NoopMetrics) IncSelfReviewCapReached()                              {}
 func (*NoopMetrics) IncReviewChecks(string)                                {}
 func (*NoopMetrics) IncReviewEscalations(string)                           {}
+func (*NoopMetrics) IncDispatchRuleMatch(string, string)                   {}
 
 // MetricsSetter is implemented by adapters that accept a [Metrics]
 // recorder for self-instrumentation.

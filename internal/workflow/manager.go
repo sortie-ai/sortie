@@ -1,9 +1,11 @@
 package workflow
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"log/slog"
+	"os"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
@@ -35,19 +37,34 @@ func WithValidateFunc(fn ValidateFunc) ManagerOption {
 	return func(m *Manager) { m.validateFunc = fn }
 }
 
+// WithAgentKindProbe sets the agent-kind registry probe used by
+// dispatch-rule validation at workflow load time. The probe receives
+// an agent kind string and returns true when the kind is currently
+// registered. Callers wire the closure to the registry pointer; the
+// workflow package never imports the registry package itself.
+//
+// When the probe is nil (the default), the dispatch builder treats
+// every agent kind as registered. The orchestrator's startup
+// preflight still rejects unknown kinds as a defense-in-depth gate.
+func WithAgentKindProbe(probe func(kind string) bool) ManagerOption {
+	return func(m *Manager) { m.agentKindProbe = probe }
+}
+
 // Manager watches a workflow file for changes and maintains the current
 // effective configuration. The latest config and prompt template are
 // available via [Manager.Config] and [Manager.PromptTemplate]. Safe for
 // concurrent use.
 type Manager struct {
-	path         string
-	logger       *slog.Logger
-	validateFunc ValidateFunc
+	path           string
+	logger         *slog.Logger
+	validateFunc   ValidateFunc
+	agentKindProbe func(kind string) bool
 
-	mu            sync.RWMutex
-	currentConfig config.ServiceConfig
-	currentPrompt *prompt.Template
-	lastLoadErr   error
+	mu                   sync.RWMutex
+	currentConfig        config.ServiceConfig
+	currentPrompt        *prompt.Template
+	currentTemplateIndex map[string]*prompt.Template
+	lastLoadErr          error
 
 	watcher *fsnotify.Watcher
 	done    chan struct{}
@@ -75,7 +92,7 @@ func NewManager(path string, logger *slog.Logger, opts ...ManagerOption) (*Manag
 		o(m)
 	}
 
-	cfg, tmpl, err := m.loadPipeline()
+	cfg, tmpl, index, err := m.loadPipeline()
 	if err != nil {
 		return nil, err
 	}
@@ -88,6 +105,7 @@ func NewManager(path string, logger *slog.Logger, opts ...ManagerOption) (*Manag
 
 	m.currentConfig = cfg
 	m.currentPrompt = tmpl
+	m.currentTemplateIndex = index
 	return m, nil
 }
 
@@ -107,6 +125,25 @@ func (m *Manager) PromptTemplate() *prompt.Template {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.currentPrompt
+}
+
+// PromptTemplateByID returns the parsed prompt template registered
+// under id. The empty-string key returns the WORKFLOW.md body
+// template. Returns nil when the id is unknown. Safe for concurrent
+// use.
+func (m *Manager) PromptTemplateByID(id string) *prompt.Template {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if m.currentTemplateIndex == nil {
+		if id == "" {
+			return m.currentPrompt
+		}
+		return nil
+	}
+	if tmpl, ok := m.currentTemplateIndex[id]; ok {
+		return tmpl
+	}
+	return nil
 }
 
 // FilePath returns the base filename of the workflow file (e.g.
@@ -155,7 +192,7 @@ func (m *Manager) SetLogger(logger *slog.Logger) {
 // is retained and the error is returned. This supports the orchestrator's
 // defensive re-validation before dispatch. Safe for concurrent use.
 func (m *Manager) Reload() error {
-	cfg, tmpl, err := m.loadPipeline()
+	cfg, tmpl, index, err := m.loadPipeline()
 	if err != nil {
 		m.mu.Lock()
 		m.lastLoadErr = err
@@ -175,6 +212,7 @@ func (m *Manager) Reload() error {
 	m.mu.Lock()
 	m.currentConfig = cfg
 	m.currentPrompt = tmpl
+	m.currentTemplateIndex = index
 	m.lastLoadErr = nil
 	m.mu.Unlock()
 	return nil
@@ -267,7 +305,7 @@ func (m *Manager) watch(ctx context.Context) {
 
 func (m *Manager) reload() {
 	logger := m.currentLogger()
-	cfg, tmpl, err := m.loadPipeline()
+	cfg, tmpl, index, err := m.loadPipeline()
 	if err != nil {
 		logger.Error("workflow reload failed", slog.Any("error", err), slog.String("path", m.path))
 		m.mu.Lock()
@@ -290,27 +328,103 @@ func (m *Manager) reload() {
 	m.mu.Lock()
 	m.currentConfig = cfg
 	m.currentPrompt = tmpl
+	m.currentTemplateIndex = index
 	m.lastLoadErr = nil
 	m.mu.Unlock()
 	logger.Info("workflow reloaded", slog.String("path", m.path))
 }
 
-// loadPipeline runs the full Load → NewServiceConfig → Parse pipeline.
-func (m *Manager) loadPipeline() (config.ServiceConfig, *prompt.Template, error) {
+// loadPipeline runs the full Load -> NewServiceConfig -> dispatch
+// build -> Parse pipeline. Returns the parsed service config, the
+// body template, and the per-template index keyed by resolved
+// absolute path (empty key holds the body template). On any error
+// the caller retains the previous values and surfaces the error via
+// [Manager.LastLoadError].
+func (m *Manager) loadPipeline() (config.ServiceConfig, *prompt.Template, map[string]*prompt.Template, error) {
 	wf, err := Load(m.path)
 	if err != nil {
-		return config.ServiceConfig{}, nil, err
+		return config.ServiceConfig{}, nil, nil, err
 	}
 
 	cfg, err := config.NewServiceConfig(wf.Config)
 	if err != nil {
-		return config.ServiceConfig{}, nil, err
+		return config.ServiceConfig{}, nil, nil, err
 	}
+
+	probe := m.agentKindProbe
+	if probe == nil {
+		// Permissive default: callers without an orchestrator
+		// dependency (dryrun, tests) accept any agent kind. The
+		// startup preflight rejects unknown kinds as a second gate.
+		probe = func(string) bool { return true }
+	}
+
+	dispatchCfg, err := config.BuildDispatchConfig(wf.Config, filepath.Dir(m.path), probe)
+	if err != nil {
+		return config.ServiceConfig{}, nil, nil, err
+	}
+	cfg.SetDispatch(dispatchCfg)
 
 	tmpl, err := prompt.Parse(wf.PromptTemplate, m.path, wf.FrontMatterLines)
 	if err != nil {
-		return config.ServiceConfig{}, nil, err
+		return config.ServiceConfig{}, nil, nil, err
 	}
 
-	return cfg, tmpl, nil
+	index, err := loadPerRuleTemplates(dispatchCfg, tmpl)
+	if err != nil {
+		return config.ServiceConfig{}, nil, nil, err
+	}
+
+	return cfg, tmpl, index, nil
+}
+
+// loadPerRuleTemplates reads and parses every unique per-rule
+// template referenced by the dispatch config. The returned index is
+// keyed by resolved absolute path; the empty-string key holds the
+// already-parsed body template.
+func loadPerRuleTemplates(dispatchCfg config.DispatchConfig, body *prompt.Template) (map[string]*prompt.Template, error) {
+	index := map[string]*prompt.Template{"": body}
+
+	unique := make(map[string]struct{})
+	for _, rule := range dispatchCfg.Rules {
+		if rule.Selection.TemplateID == "" {
+			continue
+		}
+		unique[rule.Selection.TemplateID] = struct{}{}
+	}
+	if dispatchCfg.Default.TemplateID != "" {
+		unique[dispatchCfg.Default.TemplateID] = struct{}{}
+	}
+
+	for absPath := range unique {
+		bodyBytes, err := os.ReadFile(absPath) //nolint:gosec // path was resolved and validated by BuildDispatchConfig
+		if err != nil {
+			return nil, &prompt.TemplateError{
+				Kind:   prompt.ErrTemplateParse,
+				Source: absPath,
+				Err:    fmt.Errorf("read per-rule template: %w", err),
+			}
+		}
+		if hasFrontMatterMarker(bodyBytes) {
+			return nil, &prompt.TemplateError{
+				Kind:   prompt.ErrTemplateParse,
+				Source: absPath,
+				Err:    fmt.Errorf("per-rule templates must not carry front matter"),
+			}
+		}
+		parsed, err := prompt.Parse(string(bodyBytes), absPath, 0)
+		if err != nil {
+			return nil, err
+		}
+		index[absPath] = parsed
+	}
+
+	return index, nil
+}
+
+// hasFrontMatterMarker reports whether the byte buffer starts with
+// the YAML front matter delimiter, after skipping leading whitespace.
+func hasFrontMatterMarker(b []byte) bool {
+	trimmed := bytes.TrimLeft(b, " \t\r\n")
+	return bytes.HasPrefix(trimmed, []byte("---"))
 }

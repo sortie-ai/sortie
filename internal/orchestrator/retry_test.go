@@ -161,10 +161,13 @@ func defaultRetryParams(t *testing.T, store *mockRetryStore, tracker *mockRetryT
 		ActiveStates:      []string{"To Do", "In Progress"},
 		TerminalStates:    []string{"Done"},
 		MaxRetryBackoffMS: 300_000,
-		MakeWorkerFn:      func(_, _ string) WorkerFunc { return func(_ context.Context, _ domain.Issue, _ *int) {} },
-		OnRetryFire:       noopRetryFire,
-		Ctx:               context.Background(),
-		Logger:            discardLogger(),
+		MakeWorkerFn: func(_, _, _, _ string, _ domain.AgentAdapter) WorkerFunc {
+			return func(_ context.Context, _ domain.Issue, _ *int) {}
+		},
+		AgentAdapterByKind: func(_ string) (domain.AgentAdapter, error) { return &mockAgentAdapter{}, nil },
+		OnRetryFire:        noopRetryFire,
+		Ctx:                context.Background(),
+		Logger:             discardLogger(),
 	}
 }
 
@@ -1101,7 +1104,7 @@ func TestHandleRetryTimer(t *testing.T) {
 			if tt.workerFn != nil {
 				ch := make(chan struct{}, 1)
 				wf := tt.workerFn(ch)
-				params.MakeWorkerFn = func(_, _ string) WorkerFunc { return wf }
+				params.MakeWorkerFn = func(_, _, _, _ string, _ domain.AgentAdapter) WorkerFunc { return wf }
 				HandleRetryTimer(state, id, params)
 				select {
 				case <-ch:
@@ -1135,7 +1138,7 @@ func TestHandleRetryTimer_WorkerStillRunningReschedulesInsteadOfDispatching(t *t
 	params := defaultRetryParams(t, store, tracker)
 
 	workerCalled := false
-	params.MakeWorkerFn = func(_, _ string) WorkerFunc {
+	params.MakeWorkerFn = func(_, _, _, _ string, _ domain.AgentAdapter) WorkerFunc {
 		return func(_ context.Context, _ domain.Issue, _ *int) {
 			workerCalled = true
 		}
@@ -1200,7 +1203,7 @@ func TestHandleRetryTimer_SSHHostAcquisition(t *testing.T) {
 		params.HostPool = hp
 
 		ch := make(chan struct{}, 1)
-		params.MakeWorkerFn = func(_, sshHost string) WorkerFunc {
+		params.MakeWorkerFn = func(_, sshHost, _, _ string, _ domain.AgentAdapter) WorkerFunc {
 			return func(_ context.Context, _ domain.Issue, _ *int) {
 				if sshHost != "host-b" {
 					t.Errorf("MakeWorkerFn sshHost = %q, want \"host-b\" (preferred)", sshHost)
@@ -1348,7 +1351,7 @@ func TestHandleRetryTimer_WorkflowFilePropagated(t *testing.T) {
 	params.WorkflowFile = "infra.WORKFLOW.md"
 
 	workerCalled := make(chan struct{}, 1)
-	params.MakeWorkerFn = func(_, _ string) WorkerFunc {
+	params.MakeWorkerFn = func(_, _, _, _ string, _ domain.AgentAdapter) WorkerFunc {
 		return func(_ context.Context, _ domain.Issue, _ *int) {
 			workerCalled <- struct{}{}
 		}
@@ -1665,7 +1668,7 @@ func TestHandleRetryTimer_SessionID_PassedToMakeWorkerFn(t *testing.T) {
 
 	var gotSessionID string
 	ch := make(chan struct{}, 1)
-	params.MakeWorkerFn = func(resumeSessionID, _ string) WorkerFunc {
+	params.MakeWorkerFn = func(resumeSessionID, _, _, _ string, _ domain.AgentAdapter) WorkerFunc {
 		gotSessionID = resumeSessionID
 		return func(_ context.Context, _ domain.Issue, _ *int) {
 			ch <- struct{}{}
@@ -2336,5 +2339,220 @@ func TestHandleRetryTimer_HandoffReactionStartsWithoutExistingClaim(t *testing.T
 	}
 	if _, claimed := state.Claimed[id]; !claimed {
 		t.Errorf("Claimed[%s] absent after dispatch, want DispatchIssue to add claim", id)
+	}
+}
+
+// --- Frozen-selection tests ---
+
+// TestHandleRetryTimer_FrozenFieldsPropagatedToRunningEntry verifies that
+// AgentKind, RuleName, and TemplateID are copied from the retry entry into
+// the RunningEntry after dispatch so the fields are preserved across retries.
+func TestHandleRetryTimer_FrozenFieldsPropagatedToRunningEntry(t *testing.T) {
+	t.Parallel()
+
+	const id = "ISS-FROZEN"
+	const wantAgentKind = "claude-code"
+	const wantRuleName = "bug-rule"
+	const wantTemplateID = "/abs/prompts/bug.md"
+
+	state := NewState(5000, 4, nil, AgentTotals{})
+	state.RetryAttempts[id] = &RetryEntry{
+		IssueID:    id,
+		Identifier: id,
+		Attempt:    2,
+		AgentKind:  wantAgentKind,
+		RuleName:   wantRuleName,
+		TemplateID: wantTemplateID,
+	}
+	state.Claimed[id] = struct{}{}
+
+	store := &mockRetryStore{}
+	tracker := &mockRetryTracker{
+		fetchedIssue: candidateIssue(id, id, "To Do"),
+	}
+
+	var capturedAgentKind, capturedTemplateID string
+	params := defaultRetryParams(t, store, tracker)
+	params.MakeWorkerFn = func(_, _, agentKind, templateID string, _ domain.AgentAdapter) WorkerFunc {
+		capturedAgentKind = agentKind
+		capturedTemplateID = templateID
+		return func(_ context.Context, _ domain.Issue, _ *int) {}
+	}
+	params.AgentAdapterByKind = func(kind string) (domain.AgentAdapter, error) {
+		if kind != wantAgentKind {
+			t.Errorf("AgentAdapterByKind(kind) = %q, want %q", kind, wantAgentKind)
+		}
+		return &mockAgentAdapter{}, nil
+	}
+
+	HandleRetryTimer(state, id, params)
+	t.Cleanup(func() { state.WorkerWg.Wait() })
+
+	entry, ok := state.Running[id]
+	if !ok {
+		t.Fatal("Running entry missing after retry dispatch")
+	}
+
+	if entry.AgentKind != wantAgentKind {
+		t.Errorf("RunningEntry.AgentKind = %q, want %q", entry.AgentKind, wantAgentKind)
+	}
+	if entry.RuleName != wantRuleName {
+		t.Errorf("RunningEntry.RuleName = %q, want %q", entry.RuleName, wantRuleName)
+	}
+	if entry.TemplateID != wantTemplateID {
+		t.Errorf("RunningEntry.TemplateID = %q, want %q", entry.TemplateID, wantTemplateID)
+	}
+	if capturedAgentKind != wantAgentKind {
+		t.Errorf("MakeWorkerFn agentKind = %q, want %q", capturedAgentKind, wantAgentKind)
+	}
+	if capturedTemplateID != wantTemplateID {
+		t.Errorf("MakeWorkerFn templateID = %q, want %q", capturedTemplateID, wantTemplateID)
+	}
+}
+
+// TestHandleRetryTimer_ReschedulePreservesFrozenFields verifies that when a
+// retry is rescheduled (e.g., no available slots), the frozen AgentKind,
+// RuleName, and TemplateID are preserved in the new RetryEntry.
+func TestHandleRetryTimer_ReschedulePreservesFrozenFields(t *testing.T) {
+	t.Parallel()
+
+	const id = "ISS-RESCHED"
+	const wantAgentKind = "copilot"
+	const wantRuleName = "feature-rule"
+	const wantTemplateID = "/abs/prompts/feature.md"
+
+	// Fill all slots so dispatch is blocked and the retry is rescheduled.
+	state := NewState(1, 1, nil, AgentTotals{})
+	state.RetryAttempts[id] = &RetryEntry{
+		IssueID:    id,
+		Identifier: id,
+		Attempt:    1,
+		AgentKind:  wantAgentKind,
+		RuleName:   wantRuleName,
+		TemplateID: wantTemplateID,
+	}
+	state.Claimed[id] = struct{}{}
+	// Occupy the single slot.
+	state.Running["OTHER"] = &RunningEntry{Identifier: "OTHER"}
+
+	store := &mockRetryStore{}
+	tracker := &mockRetryTracker{
+		fetchedIssue: candidateIssue(id, id, "To Do"),
+	}
+	params := defaultRetryParams(t, store, tracker)
+
+	HandleRetryTimer(state, id, params)
+
+	newEntry, ok := state.RetryAttempts[id]
+	if !ok {
+		t.Fatal("RetryAttempts entry missing after no-slots reschedule")
+	}
+	if newEntry.AgentKind != wantAgentKind {
+		t.Errorf("RetryEntry.AgentKind = %q, want %q", newEntry.AgentKind, wantAgentKind)
+	}
+	if newEntry.RuleName != wantRuleName {
+		t.Errorf("RetryEntry.RuleName = %q, want %q", newEntry.RuleName, wantRuleName)
+	}
+	if newEntry.TemplateID != wantTemplateID {
+		t.Errorf("RetryEntry.TemplateID = %q, want %q", newEntry.TemplateID, wantTemplateID)
+	}
+	if newEntry.TimerHandle != nil {
+		newEntry.TimerHandle.Stop()
+	}
+}
+
+// TestHandleRetryTimer_FrozenFieldsPersistedOnReschedule verifies that when a
+// retry is rescheduled, the SQLite row captures the frozen AgentKind, RuleName,
+// and TemplateID so they survive a process restart.
+func TestHandleRetryTimer_FrozenFieldsPersistedOnReschedule(t *testing.T) {
+	t.Parallel()
+
+	const id = "ISS-PERSIST"
+	const wantAgentKind = "codex"
+	const wantRuleName = "docs-rule"
+	const wantTemplateID = "/abs/prompts/docs.md"
+
+	// Fill all slots to force reschedule.
+	state := NewState(1, 1, nil, AgentTotals{})
+	state.RetryAttempts[id] = &RetryEntry{
+		IssueID:    id,
+		Identifier: id,
+		Attempt:    1,
+		AgentKind:  wantAgentKind,
+		RuleName:   wantRuleName,
+		TemplateID: wantTemplateID,
+	}
+	state.Claimed[id] = struct{}{}
+	state.Running["OTHER"] = &RunningEntry{Identifier: "OTHER"}
+
+	store := &mockRetryStore{}
+	tracker := &mockRetryTracker{
+		fetchedIssue: candidateIssue(id, id, "To Do"),
+	}
+	params := defaultRetryParams(t, store, tracker)
+
+	HandleRetryTimer(state, id, params)
+
+	if len(store.savedEntries) == 0 {
+		t.Fatal("SaveRetryEntry not called after reschedule")
+	}
+	saved := store.savedEntries[0]
+	if saved.AgentKind != wantAgentKind {
+		t.Errorf("saved RetryEntry.AgentKind = %q, want %q", saved.AgentKind, wantAgentKind)
+	}
+	if saved.RuleName != wantRuleName {
+		t.Errorf("saved RetryEntry.RuleName = %q, want %q", saved.RuleName, wantRuleName)
+	}
+	if saved.TemplateID != wantTemplateID {
+		t.Errorf("saved RetryEntry.TemplateID = %q, want %q", saved.TemplateID, wantTemplateID)
+	}
+	// Clean up the timer.
+	if entry, ok := state.RetryAttempts[id]; ok && entry.TimerHandle != nil {
+		entry.TimerHandle.Stop()
+	}
+}
+
+// TestHandleRetryTimer_AgentAdapterLookupUsesAgentKind verifies that when
+// AgentAdapterByKind returns an error for the frozen agent kind, the claim is
+// released and no dispatch occurs.
+func TestHandleRetryTimer_AgentAdapterLookupUsesAgentKind(t *testing.T) {
+	t.Parallel()
+
+	const id = "ISS-BADKIND"
+	const frozenKind = "unknown-agent"
+
+	state := NewState(5000, 4, nil, AgentTotals{})
+	state.RetryAttempts[id] = &RetryEntry{
+		IssueID:    id,
+		Identifier: id,
+		Attempt:    1,
+		AgentKind:  frozenKind,
+		RuleName:   "some-rule",
+		TemplateID: "",
+	}
+	state.Claimed[id] = struct{}{}
+
+	store := &mockRetryStore{}
+	tracker := &mockRetryTracker{
+		fetchedIssue: candidateIssue(id, id, "To Do"),
+	}
+	params := defaultRetryParams(t, store, tracker)
+	params.AgentAdapterByKind = func(kind string) (domain.AgentAdapter, error) {
+		if kind != frozenKind {
+			t.Errorf("AgentAdapterByKind(kind) = %q, want %q", kind, frozenKind)
+		}
+		return nil, errors.New("adapter not registered")
+	}
+
+	HandleRetryTimer(state, id, params)
+
+	if _, claimed := state.Claimed[id]; claimed {
+		t.Error("Claimed[id] still present after adapter lookup failure, want released")
+	}
+	if _, ok := state.Running[id]; ok {
+		t.Error("Running[id] present after adapter lookup failure, want not dispatched")
+	}
+	if len(store.deletedIssueID) == 0 {
+		t.Error("DeleteRetryEntry not called after adapter lookup failure")
 	}
 }
