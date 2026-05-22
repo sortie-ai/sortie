@@ -15,7 +15,18 @@ func neverRegistered(_ string) bool { return false }
 
 func mkDispatchDir(t *testing.T) string {
 	t.Helper()
-	return t.TempDir()
+	// Resolve the temp dir through EvalSymlinks so test paths match what
+	// BuildDispatchConfig's resolveWorkflowDir produces. On Windows,
+	// t.TempDir() may return an 8.3 short name (e.g. RUNNER~1) which
+	// EvalSymlinks canonicalizes to the long form (e.g. runneradmin);
+	// without canonicalization here, expected paths built by joining onto
+	// the raw temp dir disagree byte-for-byte with the resolved paths
+	// production returns.
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatalf("EvalSymlinks(t.TempDir()): %v", err)
+	}
+	return dir
 }
 
 // writeFile creates a file at the given absolute path with content.
@@ -598,6 +609,67 @@ func TestBuildDispatchConfig_TemplateResolvedToAbsPath(t *testing.T) {
 	wantAbs := filepath.Join(dir, relPath)
 	if got.Default.TemplateID != wantAbs {
 		t.Errorf("Default.TemplateID = %q, want %q", got.Default.TemplateID, wantAbs)
+	}
+}
+
+// TestBuildDispatchConfig_TemplateIDIsCanonicalAcrossSymlinks locks the
+// invariant that BuildDispatchConfig returns the canonical,
+// EvalSymlinks-resolved absolute path for every template, even when
+// the workflow directory itself is reached through a symlink. Windows
+// CI runners exposed this drift via 8.3 short-name paths (a
+// t.TempDir() value such as RUNNER~1\... canonicalized to
+// runneradmin\... once EvalSymlinks ran); the symlink wiring below
+// reproduces the same drift on Linux and macOS so the contract is
+// verifiable on every supported runner. Skips gracefully on hosts
+// where os.Symlink is unsupported or forbidden.
+func TestBuildDispatchConfig_TemplateIDIsCanonicalAcrossSymlinks(t *testing.T) {
+	t.Parallel()
+
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatalf("EvalSymlinks(t.TempDir()) error = %v, want nil", err)
+	}
+	canonical := filepath.Join(base, "real")
+	if err := os.MkdirAll(filepath.Join(canonical, "prompts"), 0o755); err != nil {
+		t.Fatalf("MkdirAll(%q) error = %v, want nil", filepath.Join(canonical, "prompts"), err)
+	}
+	bugPath := filepath.Join(canonical, "prompts", "bug.md")
+	if err := os.WriteFile(bugPath, []byte("body"), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q) error = %v, want nil", bugPath, err)
+	}
+
+	via := filepath.Join(base, "via")
+	if err := os.Symlink(canonical, via); err != nil {
+		if errors.Is(err, errors.ErrUnsupported) {
+			t.Skipf("os.Symlink(%q -> %q) unsupported on this filesystem: %v", canonical, via, err)
+		}
+		t.Skipf("os.Symlink(%q -> %q) = %v (skipping symlink-based assertion)", canonical, via, err)
+	}
+
+	raw := map[string]any{
+		"dispatch": map[string]any{
+			"rules": []any{
+				map[string]any{
+					"name":     "bug",
+					"match":    map[string]any{"labels": []any{"bug"}},
+					"template": "prompts/bug.md",
+					"agent":    "claude-code",
+				},
+			},
+		},
+	}
+
+	got, err := BuildDispatchConfig(raw, via, alwaysRegistered)
+	if err != nil {
+		t.Fatalf("BuildDispatchConfig(via=%q) error = %v, want nil", via, err)
+	}
+	if len(got.Rules) != 1 {
+		t.Fatalf("BuildDispatchConfig(via=%q) Rules count = %d, want 1", via, len(got.Rules))
+	}
+	wantTemplate := filepath.Join(canonical, "prompts", "bug.md")
+	if got.Rules[0].Selection.TemplateID != wantTemplate {
+		t.Errorf("BuildDispatchConfig(via=%q) Rules[0].Selection.TemplateID = %q, want %q (canonical, symlink-resolved)",
+			via, got.Rules[0].Selection.TemplateID, wantTemplate)
 	}
 }
 

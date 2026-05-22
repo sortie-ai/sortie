@@ -913,7 +913,14 @@ func TestManager_PromptTemplateByID_UnknownIDReturnsNil(t *testing.T) {
 func TestManager_PromptTemplateByID_KnownRuleTemplate(t *testing.T) {
 	t.Parallel()
 
-	dir := t.TempDir()
+	// Canonicalize the temp dir via EvalSymlinks so the expected key
+	// matches the resolved absolute path the manager registers (on
+	// Windows, t.TempDir() may return an 8.3 short name that the
+	// manager's symlink-evaluation step rewrites to the long form).
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatalf("EvalSymlinks(t.TempDir()): %v", err)
+	}
 	content := workflowWithDispatch(t, dir)
 	path := filepath.Join(dir, "WORKFLOW.md")
 	mustWriteFile(t, path, content)
@@ -929,6 +936,52 @@ func TestManager_PromptTemplateByID_KnownRuleTemplate(t *testing.T) {
 	got := mgr.PromptTemplateByID(bugTmplAbs)
 	if got == nil {
 		t.Fatalf("PromptTemplateByID(%q) = nil, want non-nil", bugTmplAbs)
+	}
+}
+
+// TestManager_PromptTemplateByID_CanonicalKeyAcrossSymlinks locks the
+// invariant that the per-rule template index is keyed by the canonical,
+// EvalSymlinks-resolved absolute path, even when the workflow file is
+// reached through a symlinked workflow directory. Windows CI runners
+// surfaced this contract via 8.3 short-name paths (RUNNER~1 → long
+// form); creating an explicit symlink reproduces the same canonical-
+// vs-raw drift on Linux and macOS so the regression is caught on every
+// supported runner. Skips gracefully on hosts where os.Symlink is
+// unsupported or forbidden.
+func TestManager_PromptTemplateByID_CanonicalKeyAcrossSymlinks(t *testing.T) {
+	t.Parallel()
+
+	base, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatalf("EvalSymlinks(t.TempDir()) error = %v, want nil", err)
+	}
+	canonical := filepath.Join(base, "real")
+	if err := os.MkdirAll(canonical, 0o755); err != nil {
+		t.Fatalf("MkdirAll(%q) error = %v, want nil", canonical, err)
+	}
+
+	via := filepath.Join(base, "via")
+	if err := os.Symlink(canonical, via); err != nil {
+		if errors.Is(err, errors.ErrUnsupported) {
+			t.Skipf("os.Symlink(%q -> %q) unsupported on this filesystem: %v", canonical, via, err)
+		}
+		t.Skipf("os.Symlink(%q -> %q) = %v (skipping symlink-based assertion)", canonical, via, err)
+	}
+
+	// Write the workflow and its template under the canonical
+	// directory so the on-disk layout is independent of which path
+	// (canonical or symlinked) the manager is asked to load from.
+	content := workflowWithDispatch(t, canonical)
+	mustWriteFile(t, filepath.Join(canonical, "WORKFLOW.md"), content)
+
+	mgr, err := NewManager(filepath.Join(via, "WORKFLOW.md"), testLogger())
+	if err != nil {
+		t.Fatalf("NewManager(via=%q) error = %v, want nil", via, err)
+	}
+
+	wantKey := filepath.Join(canonical, "prompts", "bug.md")
+	if got := mgr.PromptTemplateByID(wantKey); got == nil {
+		t.Fatalf("PromptTemplateByID(canonical=%q) = nil, want non-nil", wantKey)
 	}
 }
 
