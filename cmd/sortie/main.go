@@ -12,7 +12,6 @@ package main
 import (
 	"context"
 	"errors"
-	"fmt"
 	"io"
 	"log/slog"
 	"net"
@@ -56,10 +55,16 @@ var serverShutdownTimeout = 5 * time.Second
 // adapter so dispatch-rule routing can resolve any referenced kind
 // without per-issue construction. The workflow default kind reuses
 // the already-constructed adapter to avoid double-initialization.
-// Adapter construction failures for non-default kinds are logged and
-// skipped; the dispatch builder's preflight probe rejects unknown
-// kinds before they reach the cache.
-func buildAgentAdapterCache(cfg config.ServiceConfig, defaultAdapter domain.AgentAdapter) (map[string]domain.AgentAdapter, error) {
+// Adapter resolution and construction failures for non-default kinds
+// are logged at warn level and skipped, so a missing or misconfigured
+// optional adapter does not block startup; the dispatch builder's
+// preflight probe rejects unknown kinds before they reach this cache,
+// and any rule that references a skipped kind surfaces as an unknown
+// agent kind at dispatch time. If log is nil, [slog.Default] is used.
+func buildAgentAdapterCache(cfg config.ServiceConfig, defaultAdapter domain.AgentAdapter, log *slog.Logger) map[string]domain.AgentAdapter {
+	if log == nil {
+		log = slog.Default()
+	}
 	cache := map[string]domain.AgentAdapter{
 		cfg.Agent.Kind: defaultAdapter,
 	}
@@ -69,18 +74,26 @@ func buildAgentAdapterCache(cfg config.ServiceConfig, defaultAdapter domain.Agen
 		}
 		ctor, err := registry.Agents.Get(kind)
 		if err != nil {
-			return nil, fmt.Errorf("resolve agent adapter %q: %w", kind, err)
+			log.Warn("skipping agent adapter cache entry, registry lookup failed",
+				slog.String("kind", kind),
+				slog.Any("error", err),
+			)
+			continue
 		}
 		cfgMap := agentConfigMap(cfg.Agent)
 		cfgMap["kind"] = kind
 		mergeExtensions(cfgMap, cfg.Extensions, kind)
 		adapter, err := ctor(cfgMap)
 		if err != nil {
-			return nil, fmt.Errorf("construct agent adapter %q: %w", kind, err)
+			log.Warn("skipping agent adapter cache entry, construction failed",
+				slog.String("kind", kind),
+				slog.Any("error", err),
+			)
+			continue
 		}
 		cache[kind] = adapter
 	}
-	return cache, nil
+	return cache
 }
 
 // makeAgentAdapterByKind returns the closure passed into
@@ -221,11 +234,7 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 		defer closer.Close() //nolint:errcheck // best-effort cleanup at shutdown
 	}
 
-	agentAdapterCache, err := buildAgentAdapterCache(br.cfg, agentAdapter)
-	if err != nil {
-		br.logger.Error("failed to build agent adapter cache", slog.Any("error", err))
-		return 1
-	}
+	agentAdapterCache := buildAgentAdapterCache(br.cfg, agentAdapter, br.logger)
 	defer func() {
 		for kind, adapter := range agentAdapterCache {
 			if kind == br.cfg.Agent.Kind {

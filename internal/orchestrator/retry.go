@@ -71,6 +71,14 @@ type HandleRetryTimerParams struct {
 	// persisted retry row.
 	AgentAdapterByKind func(kind string) (domain.AgentAdapter, error)
 
+	// DefaultAgentKind is the workflow-wide default agent kind used
+	// when a popped retry entry carries an empty AgentKind (legacy
+	// rows persisted before dispatch rule routing was added). The
+	// retry handler coalesces the empty value to this default before
+	// adapter resolution, worker construction, and running-entry
+	// assignment so downstream state reflects the actual kind used.
+	DefaultAgentKind string
+
 	// OnRetryFire is the callback for re-scheduled retry timers.
 	// Routes back into the event loop.
 	OnRetryFire func(issueID string)
@@ -383,11 +391,21 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 		panic("HandleRetryTimer: nil AgentAdapterByKind")
 	}
 
-	adapter, adapterErr := params.AgentAdapterByKind(popped.AgentKind)
+	// Legacy retry rows persisted before dispatch rule routing was
+	// added carry an empty AgentKind. Coalesce to the workflow-wide
+	// default so adapter resolution, worker construction, and the
+	// running-entry record below all observe a concrete kind. The
+	// one-shot audit log is emitted at recovery time by PopulateRetries.
+	agentKind := popped.AgentKind
+	if agentKind == "" {
+		agentKind = params.DefaultAgentKind
+	}
+
+	adapter, adapterErr := params.AgentAdapterByKind(agentKind)
 	if adapterErr != nil {
 		log.Error("retry agent kind unavailable",
 			slog.String("rule_name", popped.RuleName),
-			slog.String("agent_kind", popped.AgentKind),
+			slog.String("agent_kind", agentKind),
 			slog.Any("error", adapterErr),
 		)
 		delete(state.Claimed, issueID)
@@ -411,10 +429,10 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 	if popped.ContinuationContext != nil {
 		dispatchCtx = WithContinuationContext(ctx, popped.ContinuationContext)
 	}
-	DispatchIssue(dispatchCtx, state, issue, &attempt, host, params.MakeWorkerFn(popped.SessionID, host, popped.AgentKind, popped.TemplateID, adapter))
+	DispatchIssue(dispatchCtx, state, issue, &attempt, host, params.MakeWorkerFn(popped.SessionID, host, agentKind, popped.TemplateID, adapter))
 	if entry := state.Running[issue.ID]; entry != nil {
 		entry.WorkflowFile = params.WorkflowFile
-		entry.AgentKind = popped.AgentKind
+		entry.AgentKind = agentKind
 		entry.RuleName = popped.RuleName
 		entry.TemplateID = popped.TemplateID
 		entry.ContinuationContext = popped.ContinuationContext

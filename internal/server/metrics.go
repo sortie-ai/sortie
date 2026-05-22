@@ -438,10 +438,14 @@ func (p *PromMetrics) IncReviewEscalations(action string) {
 }
 
 // IncDispatchRuleMatch increments the dispatch rule match counter.
-// layer is one of "rule", "default", or "fallback"; rule is the
-// matched rule name with empty values replaced by "<none>" to keep
-// the label cardinality bounded.
+// layer is one of "rule", "default", or "fallback". An empty rule
+// value is normalized to "<none>" inside this method so callers
+// cannot accidentally emit an empty-label time series, keeping the
+// label cardinality bounded.
 func (p *PromMetrics) IncDispatchRuleMatch(layer, rule string) {
+	if rule == "" {
+		rule = "<none>"
+	}
 	p.dispatchRuleMatchTotal.WithLabelValues(layer, rule).Inc()
 }
 

@@ -692,18 +692,17 @@ func resolveWorkflowDir(workflowDir string) (string, error) {
 // or a path nested under root, using clean filesystem semantics. Both
 // arguments must be absolute paths produced by [filepath.EvalSymlinks]
 // to avoid relative-path false negatives.
+//
+// The relative path is evaluated with [filepath.IsLocal] so component
+// names that happen to contain ".." as a substring (for example,
+// "prompts/v1..md") are accepted, while genuine upward-escape
+// segments are rejected.
 func isUnderDirectory(candidate, root string) bool {
 	rel, err := filepath.Rel(root, candidate)
 	if err != nil {
 		return false
 	}
-	if rel == "." {
-		return true
-	}
-	if strings.HasPrefix(rel, "..") {
-		return false
-	}
-	return !strings.Contains(rel, "..")
+	return filepath.IsLocal(rel)
 }
 
 // isEmptyMatch reports whether the match block carries no keys and

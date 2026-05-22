@@ -318,6 +318,7 @@ func (o *Orchestrator) Run(ctx context.Context) {
 				MaxRetryBackoffMS:  cfg.Agent.MaxRetryBackoffMS,
 				MakeWorkerFn:       o.makeWorkerFn,
 				AgentAdapterByKind: o.agentAdapterByKind,
+				DefaultAgentKind:   cfg.Agent.Kind,
 				OnRetryFire:        o.onRetryFire,
 				Ctx:                ctx,
 				Logger:             o.logger,
