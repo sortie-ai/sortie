@@ -113,6 +113,11 @@ type HandleWorkerExitParams struct {
 	// Owner and Repo, a pending review reaction is created on normal
 	// worker exit.
 	SCMAdapter domain.SCMAdapter
+
+	// AutoMergeReactionConfigured marks whether the auto-merge feature
+	// is active for the current process. The enqueue path gates on
+	// this flag and the SCMAdapter being non-nil.
+	AutoMergeReactionConfigured bool
 }
 
 // HandleWorkerExit processes a worker's terminal outcome. It removes the
@@ -483,6 +488,44 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 							LastSSHHost: workerResult.SSHHost,
 							CreatedAt:   nowReview,
 							KindData: &ReviewReactionData{
+								PRNumber: scm.PRNumber,
+								Owner:    scm.Owner,
+								Repo:     scm.Repo,
+								Branch:   scm.Branch,
+								SHA:      scm.SHA,
+							},
+							AgentKind:  entry.AgentKind,
+							RuleName:   entry.RuleName,
+							TemplateID: entry.TemplateID,
+						}
+					}
+				}
+			}
+		}
+
+		// Record a pending auto-merge entry when the SCM adapter is
+		// configured, auto-merge is enabled, and the workspace has PR
+		// metadata. The merge-kind enqueue is independent of the
+		// review-kind enqueue: both fire from the same worker exit.
+		if params.SCMAdapter != nil && params.AutoMergeReactionConfigured && workerResult.WorkspacePath != "" {
+			if reactionEnqueueAllowed {
+				scm := workspace.ReadSCMMetadata(workerResult.WorkspacePath, log)
+				if scm.PRNumber > 0 && scm.Branch != "" && scm.Owner != "" && scm.Repo != "" {
+					nowMerge := time.Now().UTC()
+					if params.NowFunc != nil {
+						nowMerge = params.NowFunc().UTC()
+					}
+					rkey := ReactionKey(workerResult.IssueID, ReactionKindAutoMerge)
+					if _, exists := state.PendingReactions[rkey]; !exists {
+						state.PendingReactions[rkey] = &PendingReaction{
+							IssueID:     workerResult.IssueID,
+							Identifier:  workerResult.Identifier,
+							DisplayID:   entry.Issue.DisplayID,
+							Attempt:     normalizeAttempt(entry.RetryAttempt) + 1,
+							Kind:        ReactionKindAutoMerge,
+							LastSSHHost: workerResult.SSHHost,
+							CreatedAt:   nowMerge,
+							KindData: &AutoMergeReactionData{
 								PRNumber: scm.PRNumber,
 								Owner:    scm.Owner,
 								Repo:     scm.Repo,

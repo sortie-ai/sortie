@@ -84,28 +84,30 @@ type ReactionRecoveryRunStore interface {
 
 // PendingReactionRecoveryParams holds all inputs for [RecoverPendingReactions].
 type PendingReactionRecoveryParams struct {
-	WorkspaceRoot    string
-	TrackerAdapter   domain.TrackerAdapter
-	HandoffState     string
-	TerminalStates   []string
-	CIProvider       domain.CIStatusProvider
-	SCMAdapter       domain.SCMAdapter
-	RecoveryLookback time.Duration
-	MaxCandidates    int
-	NowFunc          func() time.Time
-	Logger           *slog.Logger
+	WorkspaceRoot               string
+	TrackerAdapter              domain.TrackerAdapter
+	HandoffState                string
+	TerminalStates              []string
+	CIProvider                  domain.CIStatusProvider
+	SCMAdapter                  domain.SCMAdapter
+	AutoMergeReactionConfigured bool
+	RecoveryLookback            time.Duration
+	MaxCandidates               int
+	NowFunc                     func() time.Time
+	Logger                      *slog.Logger
 }
 
 // PendingReactionRecoveryResult reports outcome counts from a single
 // [RecoverPendingReactions] call.
 type PendingReactionRecoveryResult struct {
-	Candidates      int
-	CapSkipped      int
-	StateChecked    int
-	ReviewRecovered int
-	CIRecovered     int
-	StaleSkipped    int
-	Skipped         int
+	Candidates         int
+	CapSkipped         int
+	StateChecked       int
+	ReviewRecovered    int
+	CIRecovered        int
+	AutoMergeRecovered int
+	StaleSkipped       int
+	Skipped            int
 }
 
 // RecoverPendingReactions reconstructs runtime pending reaction entries from
@@ -116,7 +118,7 @@ type PendingReactionRecoveryResult struct {
 // tracker state fetch failure aborts recovery for this startup and returns a
 // zero result with the fetch error.
 func RecoverPendingReactions(ctx context.Context, state *State, runs []persistence.RunHistory, params PendingReactionRecoveryParams) (PendingReactionRecoveryResult, error) {
-	if params.HandoffState == "" || (params.SCMAdapter == nil && params.CIProvider == nil) {
+	if params.HandoffState == "" || (params.SCMAdapter == nil && params.CIProvider == nil && !params.AutoMergeReactionConfigured) {
 		return PendingReactionRecoveryResult{}, nil
 	}
 	if err := ctx.Err(); err != nil {
@@ -327,6 +329,32 @@ func recoverPendingReactionKinds(
 				TemplateID: run.TemplateID,
 			}
 			outcome.CIRecovered++
+			added++
+		}
+	}
+
+	if params.SCMAdapter != nil && params.AutoMergeReactionConfigured && meta.PRNumber > 0 && meta.Owner != "" && meta.Repo != "" && meta.Branch != "" {
+		key := ReactionKey(run.IssueID, ReactionKindAutoMerge)
+		if _, exists := state.PendingReactions[key]; !exists {
+			state.PendingReactions[key] = &PendingReaction{
+				IssueID:    run.IssueID,
+				Identifier: run.Identifier,
+				DisplayID:  run.DisplayID,
+				Attempt:    run.Attempt,
+				Kind:       ReactionKindAutoMerge,
+				CreatedAt:  now,
+				KindData: &AutoMergeReactionData{
+					PRNumber: meta.PRNumber,
+					Owner:    meta.Owner,
+					Repo:     meta.Repo,
+					Branch:   meta.Branch,
+					SHA:      meta.SHA,
+				},
+				AgentKind:  run.AgentAdapter,
+				RuleName:   run.RuleName,
+				TemplateID: run.TemplateID,
+			}
+			outcome.AutoMergeRecovered++
 			added++
 		}
 	}
