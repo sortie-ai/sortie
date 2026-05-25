@@ -474,6 +474,84 @@ func TestVerifyAutoMergeScopes_TransportError(t *testing.T) {
 	assertSCMErrorKind(t, err, domain.ErrSCMTransport)
 }
 
+// TestVerifyAutoMergeScopes_EmptyHeaderReturnsUnableToVerify verifies that an
+// empty X-OAuth-Scopes header is reported as "unable to verify" (nil scopes,
+// nil missing, nil error) rather than as every required scope missing.
+// Fine-grained PATs and GitHub App installation tokens commonly omit content
+// from this header.
+func TestVerifyAutoMergeScopes_EmptyHeaderReturnsUnableToVerify(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("X-OAuth-Scopes", "")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"rate":{"limit":5000}}`))
+	}))
+	defer srv.Close()
+
+	a := newTestSCMAdapter(t, srv.URL)
+	scopes, missing, err := a.VerifyAutoMergeScopes(t.Context(), true)
+	if err != nil {
+		t.Fatalf("VerifyAutoMergeScopes: %v", err)
+	}
+	if scopes != nil {
+		t.Errorf("scopes = %v, want nil (unable to verify)", scopes)
+	}
+	if missing != nil {
+		t.Errorf("missing = %v, want nil (unable to verify)", missing)
+	}
+}
+
+// TestVerifyAutoMergeScopes_AbsentHeaderReturnsUnableToVerify verifies that a
+// response with no X-OAuth-Scopes header at all is treated identically to an
+// empty header: nil scopes, nil missing, nil error.
+func TestVerifyAutoMergeScopes_AbsentHeaderReturnsUnableToVerify(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"rate":{"limit":5000}}`))
+	}))
+	defer srv.Close()
+
+	a := newTestSCMAdapter(t, srv.URL)
+	scopes, missing, err := a.VerifyAutoMergeScopes(t.Context(), true)
+	if err != nil {
+		t.Fatalf("VerifyAutoMergeScopes: %v", err)
+	}
+	if scopes != nil {
+		t.Errorf("scopes = %v, want nil (unable to verify)", scopes)
+	}
+	if missing != nil {
+		t.Errorf("missing = %v, want nil (unable to verify)", missing)
+	}
+}
+
+// TestVerifyAutoMergeScopes_WhitespaceOnlyHeaderReturnsUnableToVerify verifies
+// that a header containing only whitespace is treated as empty.
+func TestVerifyAutoMergeScopes_WhitespaceOnlyHeaderReturnsUnableToVerify(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("X-OAuth-Scopes", "   ")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"rate":{"limit":5000}}`))
+	}))
+	defer srv.Close()
+
+	a := newTestSCMAdapter(t, srv.URL)
+	scopes, missing, err := a.VerifyAutoMergeScopes(t.Context(), true)
+	if err != nil {
+		t.Fatalf("VerifyAutoMergeScopes: %v", err)
+	}
+	if scopes != nil {
+		t.Errorf("scopes = %v, want nil (unable to verify)", scopes)
+	}
+	if missing != nil {
+		t.Errorf("missing = %v, want nil (unable to verify)", missing)
+	}
+}
+
 // --- splitScopes tests ---
 
 func TestSplitScopes(t *testing.T) {

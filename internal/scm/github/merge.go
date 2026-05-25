@@ -328,8 +328,11 @@ const legacyRepoScope = "repo"
 // X-OAuth-Scopes response header to determine whether the configured
 // token carries the scopes required for auto-merge. The first return
 // is the full granted scope list; the second is the subset of required
-// scopes that are missing. An empty missing list means the token has
-// sufficient scope.
+// scopes that are missing. An empty missing list with a nil scopes
+// slice (when the header is absent or empty) signals "unable to
+// verify": the caller MUST fail open and rely on runtime auth checks.
+// A non-empty scopes slice with an empty missing list means the token
+// has sufficient scope.
 func (a *GitHubSCMAdapter) VerifyAutoMergeScopes(ctx context.Context, requireContents bool) ([]string, []string, error) {
 	_, header, err := a.client.Get(ctx, "/rate_limit", nil)
 	if err != nil {
@@ -341,8 +344,18 @@ func (a *GitHubSCMAdapter) VerifyAutoMergeScopes(ctx context.Context, requireCon
 		return nil, nil, toSCMError(err)
 	}
 
+	// Fine-grained PATs and GitHub App installation tokens do not
+	// populate X-OAuth-Scopes; treat absent or empty as "unable to
+	// verify" by returning nil scopes and nil missing. The caller
+	// distinguishes this from a verified result by checking len(scopes).
 	scopesHeader := header.Get("X-OAuth-Scopes")
+	if strings.TrimSpace(scopesHeader) == "" {
+		return nil, nil, nil
+	}
 	scopes := splitScopes(scopesHeader)
+	if len(scopes) == 0 {
+		return nil, nil, nil
+	}
 
 	required := []string{AutoMergeRequiredPullRequestsScope}
 	if requireContents {

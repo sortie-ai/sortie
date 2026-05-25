@@ -245,8 +245,14 @@ func TestIntegration_VerifyAutoMergeScopes(t *testing.T) {
 	}
 
 	if len(scopes) == 0 {
-		// Fine-grained PATs may return an empty X-OAuth-Scopes header; that is
-		// not an error. Just log.
+		// Fine-grained PATs and GitHub App installation tokens do not
+		// populate X-OAuth-Scopes; VerifyAutoMergeScopes signals
+		// "unable to verify" by returning nil scopes with an empty
+		// missing list. Callers fail open and rely on runtime auth
+		// checks on the first merge attempt.
 		t.Log("X-OAuth-Scopes header was empty (fine-grained PAT or GitHub App)")
+		if len(missing) != 0 {
+			t.Errorf("missing = %v; want nil when scopes are unverifiable", missing)
+		}
 	}
 }
