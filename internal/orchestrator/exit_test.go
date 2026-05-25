@@ -3152,6 +3152,26 @@ func (s *scmAdapterStubExit) FetchPendingReviews(_ context.Context, _ int, _, _ 
 	panic("FetchPendingReviews must not be called by HandleWorkerExit")
 }
 
+func (s *scmAdapterStubExit) GetReviewDecision(_ context.Context, _ int, _, _ string) (domain.ReviewDecision, error) {
+	panic("GetReviewDecision must not be called by HandleWorkerExit")
+}
+
+func (s *scmAdapterStubExit) GetCIStatus(_ context.Context, _ int, _, _ string) (string, error) {
+	panic("GetCIStatus must not be called by HandleWorkerExit")
+}
+
+func (s *scmAdapterStubExit) GetMergeability(_ context.Context, _ int, _, _ string) (domain.PRMergeStatus, error) {
+	panic("GetMergeability must not be called by HandleWorkerExit")
+}
+
+func (s *scmAdapterStubExit) MergePR(_ context.Context, _ int, _, _ string, _ domain.MergeStrategy, _, _, _ string) (domain.MergeResult, error) {
+	panic("MergePR must not be called by HandleWorkerExit")
+}
+
+func (s *scmAdapterStubExit) DeleteBranch(_ context.Context, _, _, _ string) error {
+	panic("DeleteBranch must not be called by HandleWorkerExit")
+}
+
 func TestHandleWorkerExit_CIProvider_PopulatesPendingReaction(t *testing.T) {
 	t.Parallel()
 
@@ -3502,5 +3522,271 @@ func TestHandleWorkerExit_ErrorRetry_NoSessionID(t *testing.T) {
 	}
 	if entry.TimerHandle != nil {
 		entry.TimerHandle.Stop()
+	}
+}
+
+// --- Auto-merge enqueue tests ---
+
+// TestHandleWorkerExit_AutoMergeEnqueue_PopulatesPendingReaction verifies that
+// a complete PR metadata file causes HandleWorkerExit to populate the
+// auto-merge PendingReaction on a normal exit (spec Test 7 positive case).
+func TestHandleWorkerExit_AutoMergeEnqueue_PopulatesPendingReaction(t *testing.T) {
+	t.Parallel()
+
+	wsPath := t.TempDir()
+	writePRSCMMetadata(t, wsPath, 55, "corp", "api", "feature/AM-1", "c0ffee")
+
+	store := &mockExitStore{}
+	state := exitState(t, "AM-1", nil)
+	params := defaultExitParams(t, store)
+	params.SCMAdapter = &scmAdapterStubExit{}
+	params.AutoMergeReactionConfigured = true
+
+	HandleWorkerExit(state, WorkerResult{
+		IssueID:       "AM-1",
+		Identifier:    "AM-1-ident",
+		ExitKind:      WorkerExitNormal,
+		AgentAdapter:  "mock",
+		WorkspacePath: wsPath,
+	}, params)
+
+	rkey := ReactionKey("AM-1", ReactionKindAutoMerge)
+	pr, ok := state.PendingReactions[rkey]
+	if !ok {
+		t.Fatal("PendingReactions[AM-1:merge] missing after normal exit with PR metadata")
+	}
+	mergeData, ok := pr.KindData.(*AutoMergeReactionData)
+	if !ok {
+		t.Fatalf("KindData type = %T, want *AutoMergeReactionData", pr.KindData)
+	}
+	if mergeData.PRNumber != 55 {
+		t.Errorf("AutoMergeReactionData.PRNumber = %d, want 55", mergeData.PRNumber)
+	}
+	if mergeData.Owner != "corp" {
+		t.Errorf("AutoMergeReactionData.Owner = %q, want %q", mergeData.Owner, "corp")
+	}
+	if mergeData.Repo != "api" {
+		t.Errorf("AutoMergeReactionData.Repo = %q, want %q", mergeData.Repo, "api")
+	}
+	if mergeData.Branch != "feature/AM-1" {
+		t.Errorf("AutoMergeReactionData.Branch = %q, want %q", mergeData.Branch, "feature/AM-1")
+	}
+	if mergeData.SHA != "c0ffee" {
+		t.Errorf("AutoMergeReactionData.SHA = %q, want %q", mergeData.SHA, "c0ffee")
+	}
+}
+
+// TestHandleWorkerExit_AutoMergeEnqueueRequiresPRMetadata verifies that the
+// auto-merge pending reaction is NOT created when the workspace SCM metadata
+// lacks required fields (spec Test 7).
+func TestHandleWorkerExit_AutoMergeEnqueueRequiresPRMetadata(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		content string // raw JSON written to .sortie/scm.json
+	}{
+		{
+			name:    "missing pr_number",
+			content: `{"owner":"corp","repo":"api","branch":"feature/x","sha":"abc"}`,
+		},
+		{
+			name:    "missing owner",
+			content: `{"pr_number":10,"repo":"api","branch":"feature/x","sha":"abc"}`,
+		},
+		{
+			name:    "missing repo",
+			content: `{"pr_number":10,"owner":"corp","branch":"feature/x","sha":"abc"}`,
+		},
+		{
+			name:    "missing branch",
+			content: `{"pr_number":10,"owner":"corp","repo":"api","sha":"abc"}`,
+		},
+		{
+			name:    "empty scm file",
+			content: `{}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			wsPath := t.TempDir()
+			dotSortie := filepath.Join(wsPath, ".sortie")
+			if err := os.MkdirAll(dotSortie, 0o750); err != nil {
+				t.Fatalf("MkdirAll .sortie: %v", err)
+			}
+			if err := os.WriteFile(filepath.Join(dotSortie, "scm.json"), []byte(tt.content), 0o600); err != nil {
+				t.Fatalf("WriteFile scm.json: %v", err)
+			}
+
+			store := &mockExitStore{}
+			state := exitState(t, "AM-7", nil)
+			params := defaultExitParams(t, store)
+			params.SCMAdapter = &scmAdapterStubExit{}
+			params.AutoMergeReactionConfigured = true
+
+			HandleWorkerExit(state, WorkerResult{
+				IssueID:       "AM-7",
+				Identifier:    "AM-7-ident",
+				ExitKind:      WorkerExitNormal,
+				AgentAdapter:  "mock",
+				WorkspacePath: wsPath,
+			}, params)
+
+			rkey := ReactionKey("AM-7", ReactionKindAutoMerge)
+			if _, ok := state.PendingReactions[rkey]; ok {
+				t.Errorf("PendingReactions[AM-7:merge] present despite incomplete SCM metadata (%s)", tt.name)
+			}
+		})
+	}
+}
+
+// TestHandleWorkerExit_AutoMergeEnqueueRequiresConfigured verifies that the
+// auto-merge pending reaction is NOT created when AutoMergeReactionConfigured
+// is false, even with a valid SCM metadata file (spec Test 6).
+func TestHandleWorkerExit_AutoMergeEnqueueRequiresConfigured(t *testing.T) {
+	t.Parallel()
+
+	wsPath := t.TempDir()
+	writePRSCMMetadata(t, wsPath, 20, "corp", "api", "feature/AM-6", "deadbeef")
+
+	store := &mockExitStore{}
+	state := exitState(t, "AM-6", nil)
+	params := defaultExitParams(t, store)
+	params.SCMAdapter = &scmAdapterStubExit{}
+	params.AutoMergeReactionConfigured = false // provider unset
+
+	HandleWorkerExit(state, WorkerResult{
+		IssueID:       "AM-6",
+		Identifier:    "AM-6-ident",
+		ExitKind:      WorkerExitNormal,
+		AgentAdapter:  "mock",
+		WorkspacePath: wsPath,
+	}, params)
+
+	rkey := ReactionKey("AM-6", ReactionKindAutoMerge)
+	if _, ok := state.PendingReactions[rkey]; ok {
+		t.Error("PendingReactions[AM-6:merge] present despite AutoMergeReactionConfigured=false")
+	}
+}
+
+// TestHandleWorkerExit_AutoMergeEnqueueRequiresSCMAdapter verifies that the
+// auto-merge pending reaction is NOT created when no SCM adapter is wired.
+func TestHandleWorkerExit_AutoMergeEnqueueRequiresSCMAdapter(t *testing.T) {
+	t.Parallel()
+
+	wsPath := t.TempDir()
+	writePRSCMMetadata(t, wsPath, 20, "corp", "api", "feature/AM-nil", "deadbeef")
+
+	store := &mockExitStore{}
+	state := exitState(t, "AM-nil", nil)
+	params := defaultExitParams(t, store)
+	params.SCMAdapter = nil
+	params.AutoMergeReactionConfigured = true
+
+	HandleWorkerExit(state, WorkerResult{
+		IssueID:       "AM-nil",
+		Identifier:    "AM-nil-ident",
+		ExitKind:      WorkerExitNormal,
+		AgentAdapter:  "mock",
+		WorkspacePath: wsPath,
+	}, params)
+
+	rkey := ReactionKey("AM-nil", ReactionKindAutoMerge)
+	if _, ok := state.PendingReactions[rkey]; ok {
+		t.Error("PendingReactions[AM-nil:merge] present despite nil SCMAdapter")
+	}
+}
+
+// TestHandleWorkerExit_AutoMergeEnqueueOnHandoff verifies that the auto-merge
+// pending reaction is created after a successful handoff transition, mirroring
+// the review-kind behaviour (the merge fires after the worker exits via the
+// handoff path).
+func TestHandleWorkerExit_AutoMergeEnqueueOnHandoff(t *testing.T) {
+	t.Parallel()
+
+	wsPath := t.TempDir()
+	writePRSCMMetadata(t, wsPath, 99, "corp", "api", "feature/AM-HO", "beefcafe")
+
+	store := &mockExitStore{}
+	tracker := &mockTrackerAdapter{}
+	state := exitStateWithIssue(t, "AM-HO", "In Progress")
+	params := defaultExitParams(t, store)
+	params.TrackerAdapter = tracker
+	params.HandoffState = "In Review"
+	params.ActiveStates = []string{"In Progress"}
+	params.SCMAdapter = &scmAdapterStubExit{}
+	params.AutoMergeReactionConfigured = true
+
+	HandleWorkerExit(state, WorkerResult{
+		IssueID:       "AM-HO",
+		Identifier:    "AM-HO-ident",
+		ExitKind:      WorkerExitNormal,
+		AgentAdapter:  "mock",
+		WorkspacePath: wsPath,
+	}, params)
+
+	rkey := ReactionKey("AM-HO", ReactionKindAutoMerge)
+	pr, ok := state.PendingReactions[rkey]
+	if !ok {
+		t.Fatal("PendingReactions[AM-HO:merge] missing after handoff with PR metadata")
+	}
+	mergeData, ok := pr.KindData.(*AutoMergeReactionData)
+	if !ok {
+		t.Fatalf("KindData type = %T, want *AutoMergeReactionData", pr.KindData)
+	}
+	if mergeData.PRNumber != 99 {
+		t.Errorf("AutoMergeReactionData.PRNumber = %d, want 99", mergeData.PRNumber)
+	}
+}
+
+// TestHandleWorkerExit_AutoMergeEnqueueDoesNotOverwrite verifies that an
+// existing merge-kind pending reaction is not replaced on re-entry.
+func TestHandleWorkerExit_AutoMergeEnqueueDoesNotOverwrite(t *testing.T) {
+	t.Parallel()
+
+	wsPath := t.TempDir()
+	writePRSCMMetadata(t, wsPath, 10, "corp", "api", "feature/AM-DUP", "sha1")
+
+	store := &mockExitStore{}
+	state := exitState(t, "AM-DUP", nil)
+	params := defaultExitParams(t, store)
+	params.SCMAdapter = &scmAdapterStubExit{}
+	params.AutoMergeReactionConfigured = true
+
+	existingEntry := &PendingReaction{
+		IssueID:    "AM-DUP",
+		Identifier: "AM-DUP-ident",
+		Kind:       ReactionKindAutoMerge,
+		KindData: &AutoMergeReactionData{
+			PRNumber: 77,
+			Owner:    "original",
+			Repo:     "original",
+			Branch:   "original-branch",
+		},
+	}
+	rkey := ReactionKey("AM-DUP", ReactionKindAutoMerge)
+	state.PendingReactions[rkey] = existingEntry
+
+	HandleWorkerExit(state, WorkerResult{
+		IssueID:       "AM-DUP",
+		Identifier:    "AM-DUP-ident",
+		ExitKind:      WorkerExitNormal,
+		AgentAdapter:  "mock",
+		WorkspacePath: wsPath,
+	}, params)
+
+	got := state.PendingReactions[rkey]
+	if got != existingEntry {
+		t.Error("PendingReactions[AM-DUP:merge] was replaced; want existing entry preserved")
+	}
+	mergeData, ok := got.KindData.(*AutoMergeReactionData)
+	if !ok {
+		t.Fatalf("KindData type = %T, want *AutoMergeReactionData", got.KindData)
+	}
+	if mergeData.PRNumber != 77 {
+		t.Errorf("AutoMergeReactionData.PRNumber = %d, want 77 (seeded value)", mergeData.PRNumber)
 	}
 }

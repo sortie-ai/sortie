@@ -508,6 +508,26 @@ func (p *panicSCMAdapter) FetchPendingReviews(_ context.Context, _ int, _, _ str
 	panic("FetchPendingReviews must not be called during RecoverPendingReactions")
 }
 
+func (p *panicSCMAdapter) GetReviewDecision(_ context.Context, _ int, _, _ string) (domain.ReviewDecision, error) {
+	panic("GetReviewDecision must not be called during RecoverPendingReactions")
+}
+
+func (p *panicSCMAdapter) GetCIStatus(_ context.Context, _ int, _, _ string) (string, error) {
+	panic("GetCIStatus must not be called during RecoverPendingReactions")
+}
+
+func (p *panicSCMAdapter) GetMergeability(_ context.Context, _ int, _, _ string) (domain.PRMergeStatus, error) {
+	panic("GetMergeability must not be called during RecoverPendingReactions")
+}
+
+func (p *panicSCMAdapter) MergePR(_ context.Context, _ int, _, _ string, _ domain.MergeStrategy, _, _, _ string) (domain.MergeResult, error) {
+	panic("MergePR must not be called during RecoverPendingReactions")
+}
+
+func (p *panicSCMAdapter) DeleteBranch(_ context.Context, _, _, _ string) error {
+	panic("DeleteBranch must not be called during RecoverPendingReactions")
+}
+
 // panicCIProvider panics if FetchCIStatus is called. Used to assert FR-7.
 type panicCIProvider struct{}
 
@@ -525,6 +545,26 @@ var _ domain.SCMAdapter = (*stubSCMForRecovery)(nil)
 
 func (s *stubSCMForRecovery) FetchPendingReviews(_ context.Context, _ int, _, _ string) ([]domain.ReviewComment, error) {
 	return nil, nil
+}
+
+func (s *stubSCMForRecovery) GetReviewDecision(_ context.Context, _ int, _, _ string) (domain.ReviewDecision, error) {
+	return "", nil
+}
+
+func (s *stubSCMForRecovery) GetCIStatus(_ context.Context, _ int, _, _ string) (string, error) {
+	return "", nil
+}
+
+func (s *stubSCMForRecovery) GetMergeability(_ context.Context, _ int, _, _ string) (domain.PRMergeStatus, error) {
+	return domain.PRMergeStatus{}, nil
+}
+
+func (s *stubSCMForRecovery) MergePR(_ context.Context, _ int, _, _ string, _ domain.MergeStrategy, _, _, _ string) (domain.MergeResult, error) {
+	return domain.MergeResult{}, nil
+}
+
+func (s *stubSCMForRecovery) DeleteBranch(_ context.Context, _, _, _ string) error {
+	return nil
 }
 
 // stubCIForRecovery is a non-nil CIStatusProvider for recovery guard, never called during recovery.
@@ -1154,5 +1194,134 @@ func TestRecoverPendingReactions_RecoveredReviewDispatchesContinuation(t *testin
 	}
 	if store.markDispatchedCalls != 0 {
 		t.Errorf("MarkReactionDispatched calls = %d, want 0 (mark deferred to dispatch site)", store.markDispatchedCalls)
+	}
+}
+
+// --- Auto-merge recovery tests ---
+
+// TestRecoverPendingReactions_RecoversAutoMergeKindWhenConfigured verifies that
+// a run history entry with full PR metadata is recovered as a merge-kind
+// PendingReaction when AutoMergeReactionConfigured is true.
+func TestRecoverPendingReactions_RecoversAutoMergeKindWhenConfigured(t *testing.T) {
+	t.Parallel()
+
+	wsRoot := t.TempDir()
+	writeRecoverySCM(t, wsRoot, "PROJ-AM1", domain.SCMMetadata{
+		Branch:   "feature/am-1",
+		SHA:      "deadbeef",
+		PushedAt: freshSCMTime(1),
+		PRNumber: 77,
+		Owner:    "corp",
+		Repo:     "api",
+	})
+
+	tracker := &recoveryTrackerStub{states: map[string]string{"ISS-AM1": "In Review"}}
+	state := NewState(5000, 4, nil, AgentTotals{})
+	run := freshRun("ISS-AM1", "PROJ-AM1", "corp/api#77", 1)
+	params := defaultRecoveryParams(wsRoot, tracker)
+	params.AutoMergeReactionConfigured = true
+
+	result, err := RecoverPendingReactions(context.Background(), state, []persistence.RunHistory{run}, params)
+	if err != nil {
+		t.Fatalf("RecoverPendingReactions: %v", err)
+	}
+
+	if result.AutoMergeRecovered != 1 {
+		t.Fatalf("AutoMergeRecovered = %d, want 1", result.AutoMergeRecovered)
+	}
+
+	rkey := ReactionKey("ISS-AM1", ReactionKindAutoMerge)
+	pr, ok := state.PendingReactions[rkey]
+	if !ok {
+		t.Fatalf("PendingReactions[ISS-AM1:merge] missing after recovery; want present")
+	}
+
+	mergeData, ok := pr.KindData.(*AutoMergeReactionData)
+	if !ok {
+		t.Fatalf("KindData type = %T, want *AutoMergeReactionData", pr.KindData)
+	}
+	if mergeData.PRNumber != 77 {
+		t.Errorf("AutoMergeReactionData.PRNumber = %d, want 77", mergeData.PRNumber)
+	}
+	if mergeData.Owner != "corp" {
+		t.Errorf("AutoMergeReactionData.Owner = %q, want %q", mergeData.Owner, "corp")
+	}
+	if mergeData.Repo != "api" {
+		t.Errorf("AutoMergeReactionData.Repo = %q, want %q", mergeData.Repo, "api")
+	}
+	if mergeData.Branch != "feature/am-1" {
+		t.Errorf("AutoMergeReactionData.Branch = %q, want %q", mergeData.Branch, "feature/am-1")
+	}
+}
+
+// TestRecoverPendingReactions_SkipsAutoMergeWhenNotConfigured verifies that no
+// merge-kind PendingReaction is created when AutoMergeReactionConfigured is
+// false, even with full PR metadata present (spec Test 6).
+func TestRecoverPendingReactions_SkipsAutoMergeWhenNotConfigured(t *testing.T) {
+	t.Parallel()
+
+	wsRoot := t.TempDir()
+	writeRecoverySCM(t, wsRoot, "PROJ-AM2", domain.SCMMetadata{
+		Branch:   "feature/am-2",
+		SHA:      "cafebabe",
+		PushedAt: freshSCMTime(1),
+		PRNumber: 88,
+		Owner:    "corp",
+		Repo:     "api",
+	})
+
+	tracker := &recoveryTrackerStub{states: map[string]string{"ISS-AM2": "In Review"}}
+	state := NewState(5000, 4, nil, AgentTotals{})
+	run := freshRun("ISS-AM2", "PROJ-AM2", "corp/api#88", 1)
+	params := defaultRecoveryParams(wsRoot, tracker)
+	params.AutoMergeReactionConfigured = false // not configured
+
+	result, err := RecoverPendingReactions(context.Background(), state, []persistence.RunHistory{run}, params)
+	if err != nil {
+		t.Fatalf("RecoverPendingReactions: %v", err)
+	}
+
+	if result.AutoMergeRecovered != 0 {
+		t.Errorf("AutoMergeRecovered = %d, want 0 when not configured", result.AutoMergeRecovered)
+	}
+
+	rkey := ReactionKey("ISS-AM2", ReactionKindAutoMerge)
+	if _, ok := state.PendingReactions[rkey]; ok {
+		t.Error("PendingReactions[ISS-AM2:merge] present despite AutoMergeReactionConfigured=false")
+	}
+}
+
+// TestRecoverPendingReactions_SkipsAutoMergeWhenMissingPRMetadata verifies
+// that recovery skips the merge-kind entry when SCM metadata is incomplete.
+func TestRecoverPendingReactions_SkipsAutoMergeWhenMissingPRMetadata(t *testing.T) {
+	t.Parallel()
+
+	wsRoot := t.TempDir()
+	// Write minimal SCM metadata with no PR fields.
+	writeRecoverySCM(t, wsRoot, "PROJ-AM3", domain.SCMMetadata{
+		Branch:   "feature/no-pr",
+		SHA:      "abc",
+		PushedAt: freshSCMTime(1),
+		// PRNumber intentionally omitted (zero).
+	})
+
+	tracker := &recoveryTrackerStub{states: map[string]string{"ISS-AM3": "In Review"}}
+	state := NewState(5000, 4, nil, AgentTotals{})
+	run := freshRun("ISS-AM3", "PROJ-AM3", "no-pr", 1)
+	params := defaultRecoveryParams(wsRoot, tracker)
+	params.AutoMergeReactionConfigured = true
+
+	result, err := RecoverPendingReactions(context.Background(), state, []persistence.RunHistory{run}, params)
+	if err != nil {
+		t.Fatalf("RecoverPendingReactions: %v", err)
+	}
+
+	if result.AutoMergeRecovered != 0 {
+		t.Errorf("AutoMergeRecovered = %d, want 0 when PR metadata missing", result.AutoMergeRecovered)
+	}
+
+	rkey := ReactionKey("ISS-AM3", ReactionKindAutoMerge)
+	if _, ok := state.PendingReactions[rkey]; ok {
+		t.Error("PendingReactions[ISS-AM3:merge] present despite missing PR metadata")
 	}
 }
