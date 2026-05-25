@@ -29,6 +29,7 @@ type RunHistory struct {
 	TurnsCompleted int     // Number of coding turns completed in this run.
 	ReviewMetadata *string // JSON-serialized ReviewMetadata; nil when self-review did not run.
 	RuleName       string  // Dispatch rule name frozen at initial dispatch; empty for legacy rows and fallback dispatches.
+	TemplateID     string  // Resolved template path frozen at initial dispatch; empty for legacy rows and the workflow body template.
 }
 
 // AppendRunHistory inserts a completed run attempt into run_history. The ID
@@ -57,11 +58,11 @@ func (s *Store) AppendRunHistory(ctx context.Context, run RunHistory) (RunHistor
 
 	res, err := s.db.ExecContext(ctx,
 		`INSERT INTO run_history
-			(issue_id, identifier, display_identifier, attempt, agent_adapter, workspace, started_at, completed_at, status, error, workflow_file, turns_completed, review_metadata, rule_name)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			(issue_id, identifier, display_identifier, attempt, agent_adapter, workspace, started_at, completed_at, status, error, workflow_file, turns_completed, review_metadata, rule_name, template_id)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		run.IssueID, run.Identifier, dispIDVal, run.Attempt, run.AgentAdapter,
 		run.Workspace, run.StartedAt, run.CompletedAt, run.Status, errVal, wfVal,
-		run.TurnsCompleted, reviewMetaVal, run.RuleName,
+		run.TurnsCompleted, reviewMetaVal, run.RuleName, run.TemplateID,
 	)
 	if err != nil {
 		return RunHistory{}, fmt.Errorf("append run history for %q: %w", run.IssueID, err)
@@ -81,7 +82,7 @@ func (s *Store) AppendRunHistory(ctx context.Context, run RunHistory) (RunHistor
 func (s *Store) QueryRunHistoryByIssue(ctx context.Context, issueID string) ([]RunHistory, error) {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT id, issue_id, identifier, display_identifier, attempt, agent_adapter, workspace,
-			started_at, completed_at, status, error, workflow_file, turns_completed, review_metadata, rule_name
+			started_at, completed_at, status, error, workflow_file, turns_completed, review_metadata, rule_name, template_id
 		FROM run_history
 		WHERE issue_id = ?
 		ORDER BY id DESC`, issueID)
@@ -97,7 +98,7 @@ func (s *Store) QueryRunHistoryByIssue(ctx context.Context, issueID string) ([]R
 		if err := rows.Scan(
 			&r.ID, &r.IssueID, &r.Identifier, &dispIDVal, &r.Attempt, &r.AgentAdapter,
 			&r.Workspace, &r.StartedAt, &r.CompletedAt, &r.Status, &errVal, &wfVal,
-			&r.TurnsCompleted, &reviewMetaVal, &r.RuleName,
+			&r.TurnsCompleted, &reviewMetaVal, &r.RuleName, &r.TemplateID,
 		); err != nil {
 			return nil, fmt.Errorf("scan run history: %w", err)
 		}
@@ -152,7 +153,7 @@ func (s *Store) LoadLatestSuccessfulRunsForReactionRecovery(ctx context.Context,
 		)
 		SELECT r.id, r.issue_id, r.identifier, r.display_identifier, r.attempt, r.agent_adapter,
 			r.workspace, r.started_at, r.completed_at, r.status, r.error, r.workflow_file,
-			r.turns_completed, r.review_metadata, r.rule_name
+			r.turns_completed, r.review_metadata, r.rule_name, r.template_id
 		FROM run_history AS r
 		JOIN bounded ON bounded.latest_id = r.id
 		ORDER BY r.id DESC`, completedAfter.UTC().Format(time.RFC3339), limit)
@@ -168,7 +169,7 @@ func (s *Store) LoadLatestSuccessfulRunsForReactionRecovery(ctx context.Context,
 		if err := rows.Scan(
 			&run.ID, &run.IssueID, &run.Identifier, &dispIDVal, &run.Attempt, &run.AgentAdapter,
 			&run.Workspace, &run.StartedAt, &run.CompletedAt, &run.Status, &errVal, &wfVal,
-			&run.TurnsCompleted, &reviewMetaVal, &run.RuleName,
+			&run.TurnsCompleted, &reviewMetaVal, &run.RuleName, &run.TemplateID,
 		); err != nil {
 			return nil, fmt.Errorf("load recovery runs: %w", err)
 		}
@@ -209,7 +210,7 @@ func (s *Store) QueryRecentRunHistory(ctx context.Context, limit int, afterID in
 	if afterID > 0 {
 		rows, err = s.db.QueryContext(ctx,
 			`SELECT id, issue_id, identifier, display_identifier, attempt, agent_adapter, workspace,
-				started_at, completed_at, status, error, workflow_file, turns_completed, review_metadata, rule_name
+				started_at, completed_at, status, error, workflow_file, turns_completed, review_metadata, rule_name, template_id
 			FROM run_history
 			WHERE id < ?
 			ORDER BY id DESC
@@ -217,7 +218,7 @@ func (s *Store) QueryRecentRunHistory(ctx context.Context, limit int, afterID in
 	} else {
 		rows, err = s.db.QueryContext(ctx,
 			`SELECT id, issue_id, identifier, display_identifier, attempt, agent_adapter, workspace,
-				started_at, completed_at, status, error, workflow_file, turns_completed, review_metadata, rule_name
+				started_at, completed_at, status, error, workflow_file, turns_completed, review_metadata, rule_name, template_id
 			FROM run_history
 			ORDER BY id DESC
 			LIMIT ?`, limit)
@@ -234,7 +235,7 @@ func (s *Store) QueryRecentRunHistory(ctx context.Context, limit int, afterID in
 		if err := rows.Scan(
 			&r.ID, &r.IssueID, &r.Identifier, &dispIDVal, &r.Attempt, &r.AgentAdapter,
 			&r.Workspace, &r.StartedAt, &r.CompletedAt, &r.Status, &errVal, &wfVal,
-			&r.TurnsCompleted, &reviewMetaVal, &r.RuleName,
+			&r.TurnsCompleted, &reviewMetaVal, &r.RuleName, &r.TemplateID,
 		); err != nil {
 			return nil, fmt.Errorf("scan run history: %w", err)
 		}

@@ -224,6 +224,7 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 		WorkflowFile:   entry.WorkflowFile,
 		TurnsCompleted: workerResult.TurnsCompleted,
 		RuleName:       entry.RuleName,
+		TemplateID:     entry.TemplateID,
 	}
 	if workerResult.ReviewMetadata != nil {
 		data, marshalErr := json.Marshal(workerResult.ReviewMetadata)

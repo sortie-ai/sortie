@@ -299,8 +299,9 @@ func recoverPendingReactionKinds(
 					Branch:   meta.Branch,
 					SHA:      meta.SHA,
 				},
-				AgentKind: run.AgentAdapter,
-				RuleName:  run.RuleName,
+				AgentKind:  run.AgentAdapter,
+				RuleName:   run.RuleName,
+				TemplateID: run.TemplateID,
 			}
 			outcome.ReviewRecovered++
 			added++
@@ -321,8 +322,9 @@ func recoverPendingReactionKinds(
 					Branch: meta.Branch,
 					SHA:    meta.SHA,
 				},
-				AgentKind: run.AgentAdapter,
-				RuleName:  run.RuleName,
+				AgentKind:  run.AgentAdapter,
+				RuleName:   run.RuleName,
+				TemplateID: run.TemplateID,
 			}
 			outcome.CIRecovered++
 			added++
