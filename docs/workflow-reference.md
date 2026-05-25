@@ -611,6 +611,62 @@ reactions:
     max_continuation_turns: 3
 ```
 
+#### Reaction kind: `auto_merge`
+
+PR auto-merge. When configured and enabled, the orchestrator polls merge preconditions
+(review decision, CI status, draft state, mergeability) on Sortie-created PRs and
+executes the merge directly through the SCM adapter once the compound condition is
+satisfied. Auto-merge is disabled by default; enabling it is an explicit opt-in because
+the merge is irreversible.
+
+Additional fields (via Extra):
+
+| Field              | Type    | Default  | Dynamic Reload    | Description                                                                                              |
+| ------------------ | ------- | -------- | ----------------- | -------------------------------------------------------------------------------------------------------- |
+| `strategy`         | string  | `squash` | Future dispatches | Merge strategy. One of `merge`, `squash`, or `rebase`.                                                   |
+| `require_ci`       | boolean | `true`   | Future dispatches | When `true`, all CI checks must pass before the merge is attempted. When `false`, CI is advisory only.   |
+| `delete_branch`    | boolean | `true`   | Future dispatches | When `true`, the PR head branch is deleted after a successful merge. Failure to delete does not roll back the merge. |
+| `poll_interval_ms` | integer | `60000`  | Future dispatches | Polling interval for the precondition state machine. Minimum: `30000` (30 sec).                          |
+
+**Activation:** The `reactions.auto_merge` block is active when `provider` is present
+and non-empty. Agent-created PRs MUST write `pr_number`, `owner`, and `repo` to
+`.sortie/scm.json` in the workspace for auto-merge to activate.
+
+**Token scopes required:** the configured GitHub token must carry `pull_requests: write`
+for the merge endpoint, and when `delete_branch` is not `false`, also `contents: write`
+for the branch delete endpoint. The classic `repo` scope is a superset that covers both.
+The orchestrator validates scopes once at startup; failure emits an ERROR log with the
+missing scope and disables auto-merge for the process lifetime. A transport-class
+startup failure (network outage) schedules a single bounded retry on the next reconcile
+tick before disabling auto-merge.
+
+**Fingerprint dedup:** The fingerprint is the SHA-256 of the PR head SHA concatenated
+with the review decision. A new push or a change in review decision invalidates the
+fingerprint and allows a new merge attempt; an unchanged fingerprint with the dispatched
+flag set suppresses duplicate merge calls within the poll interval.
+
+**Cross-kind isolation:** Auto-merge success and failure cleanup scope mutation to the
+`merge` kind only. CI failure and review comment continuations on the same issue are
+unaffected by a successful merge or by escalation.
+
+**Escalation:** When `max_retries` is exhausted, the orchestrator applies the configured
+escalation action (label or comment) and removes the pending merge entry. Other reaction
+kinds on the same issue are preserved.
+
+Example:
+
+```yaml
+reactions:
+  auto_merge:
+    provider: github
+    max_retries: 2
+    escalation: comment
+    strategy: squash
+    require_ci: true
+    delete_branch: true
+    poll_interval_ms: 60000
+```
+
 **Validation rules:**
 
 - Reaction kind keys must match `[a-z][a-z0-9_-]*`. Invalid keys are rejected with a
@@ -620,6 +676,9 @@ reactions:
 - `poll_interval_ms` must be >= `30000` for `review_comments`.
 - `debounce_ms` must be non-negative for `review_comments`.
 - `max_continuation_turns` must be positive for `review_comments`.
+- `strategy` for `auto_merge` must be `"merge"`, `"squash"`, or `"rebase"`.
+- `require_ci` and `delete_branch` for `auto_merge` must be boolean.
+- `poll_interval_ms` must be >= `30000` for `auto_merge`.
 - When `provider` is absent or empty, all other fields in the kind sub-object are ignored.
 
 ---

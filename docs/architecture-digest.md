@@ -18,7 +18,7 @@
 - **Status Surface.** Optional HTTP server exposing operator-readable runtime state. Not required for orchestrator correctness.
 - **Logging.** Structured logs (`log/slog`) routed to one or more sinks.
 - **CI Status Provider.** Read-only single-method (`FetchCIStatus`) adapter. Activated only when workflow front matter requests CI feedback.
-- **SCM Adapter.** Read-only multi-method (`FetchPendingReviews`) adapter. Activated only when `reactions.review_comments.provider` is configured.
+- **SCM Adapter.** Read-write multi-method adapter exposing six methods (`FetchPendingReviews`, `GetReviewDecision`, `GetCIStatus`, `GetMergeability`, `MergePR`, `DeleteBranch`). Activated when `reactions.review_comments.provider` or `reactions.auto_merge.provider` is configured.
 
 ## 2. Abstraction layers (strict downward dependency)
 
@@ -40,7 +40,7 @@ Existing adapter dimensions:
 - **Tracker adapters** — Jira, GitHub.
 - **Agent adapters** — Claude Code, Codex, Copilot.
 - **CI status providers** — GitHub Checks (only when `ci_feedback.kind: github` or `reactions.ci_failure.provider: github`).
-- **SCM adapters** — GitHub (only when `reactions.review_comments.provider: github`).
+- **SCM adapters** — GitHub (only when `reactions.review_comments.provider: github` or `reactions.auto_merge.provider: github`).
 
 ## 4. Hard constraints (memory refresh)
 
