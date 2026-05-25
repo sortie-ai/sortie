@@ -145,6 +145,11 @@ type Metrics interface {
 	// (sortie_review_escalations_total{action} counter).
 	IncReviewEscalations(action string)
 
+	// IncAutoMergeReactions increments the auto-merge reaction outcome
+	// counter. result is "merged", "error", or "escalated"
+	// (sortie_reactions_auto_merge_total{result} counter).
+	IncAutoMergeReactions(result string)
+
 	// IncDispatchRuleMatch increments the dispatch rule match counter.
 	// layer is one of "rule", "default", or "fallback" identifying
 	// which resolution layer produced the selection. rule is the
@@ -189,6 +194,7 @@ func (*NoopMetrics) ObserveSelfReviewVerificationDuration(string, float64) {}
 func (*NoopMetrics) IncSelfReviewCapReached()                              {}
 func (*NoopMetrics) IncReviewChecks(string)                                {}
 func (*NoopMetrics) IncReviewEscalations(string)                           {}
+func (*NoopMetrics) IncAutoMergeReactions(string)                          {}
 func (*NoopMetrics) IncDispatchRuleMatch(string, string)                   {}
 
 // MetricsSetter is implemented by adapters that accept a [Metrics]
