@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sortie-ai/sortie/internal/config"
 	"github.com/sortie-ai/sortie/internal/domain"
 )
 
@@ -850,6 +851,220 @@ func TestRuntimeSnapshot_WorkflowFile(t *testing.T) {
 				t.Errorf("WorkflowFile = %q, want %q", got, tt.wantFile)
 			}
 		})
+	}
+}
+
+// --- isKnownReactionKind tests ---
+
+func TestIsKnownReactionKind_AcceptsAutoMerge(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		kind string
+		want bool
+	}{
+		{ReactionKindCI, true},
+		{ReactionKindReview, true},
+		{ReactionKindAutoMerge, true},
+		{"unknown", false},
+		{"", false},
+		{"merge_comments", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.kind, func(t *testing.T) {
+			t.Parallel()
+			if got := isKnownReactionKind(tt.kind); got != tt.want {
+				t.Errorf("isKnownReactionKind(%q) = %v, want %v", tt.kind, got, tt.want)
+			}
+		})
+	}
+}
+
+// --- BuildAutoMergeReactionConfig tests ---
+
+func TestBuildAutoMergeReactionConfig_DefaultsAndOverrides(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		rc      config.ReactionConfig
+		want    AutoMergeReactionConfig
+		wantErr bool
+	}{
+		{
+			name: "all defaults",
+			rc:   config.ReactionConfig{MaxRetries: 2},
+			want: AutoMergeReactionConfig{
+				Strategy:        domain.StrategySquash,
+				RequireCI:       true,
+				DeleteBranch:    true,
+				PollIntervalMS:  60000,
+				Escalation:      "comment",
+				EscalationLabel: "needs-human",
+				MaxRetries:      2,
+			},
+		},
+		{
+			name: "strategy override to merge",
+			rc:   config.ReactionConfig{Extra: map[string]any{"strategy": "merge"}},
+			want: AutoMergeReactionConfig{
+				Strategy:        domain.StrategyMerge,
+				RequireCI:       true,
+				DeleteBranch:    true,
+				PollIntervalMS:  60000,
+				Escalation:      "comment",
+				EscalationLabel: "needs-human",
+			},
+		},
+		{
+			name: "strategy override to rebase",
+			rc:   config.ReactionConfig{Extra: map[string]any{"strategy": "rebase"}},
+			want: AutoMergeReactionConfig{
+				Strategy:        domain.StrategyRebase,
+				RequireCI:       true,
+				DeleteBranch:    true,
+				PollIntervalMS:  60000,
+				Escalation:      "comment",
+				EscalationLabel: "needs-human",
+			},
+		},
+		{
+			name: "require_ci false",
+			rc:   config.ReactionConfig{Extra: map[string]any{"require_ci": false}},
+			want: AutoMergeReactionConfig{
+				Strategy:        domain.StrategySquash,
+				RequireCI:       false,
+				DeleteBranch:    true,
+				PollIntervalMS:  60000,
+				Escalation:      "comment",
+				EscalationLabel: "needs-human",
+			},
+		},
+		{
+			name: "delete_branch false",
+			rc:   config.ReactionConfig{Extra: map[string]any{"delete_branch": false}},
+			want: AutoMergeReactionConfig{
+				Strategy:        domain.StrategySquash,
+				RequireCI:       true,
+				DeleteBranch:    false,
+				PollIntervalMS:  60000,
+				Escalation:      "comment",
+				EscalationLabel: "needs-human",
+			},
+		},
+		{
+			name: "poll_interval_ms override",
+			rc:   config.ReactionConfig{Extra: map[string]any{"poll_interval_ms": 120000}},
+			want: AutoMergeReactionConfig{
+				Strategy:        domain.StrategySquash,
+				RequireCI:       true,
+				DeleteBranch:    true,
+				PollIntervalMS:  120000,
+				Escalation:      "comment",
+				EscalationLabel: "needs-human",
+			},
+		},
+		{
+			name: "escalation label with custom label",
+			rc: config.ReactionConfig{
+				Escalation:      "label",
+				EscalationLabel: "auto-merge-failed",
+			},
+			want: AutoMergeReactionConfig{
+				Strategy:        domain.StrategySquash,
+				RequireCI:       true,
+				DeleteBranch:    true,
+				PollIntervalMS:  60000,
+				Escalation:      "label",
+				EscalationLabel: "auto-merge-failed",
+			},
+		},
+		{
+			name: "max_retries from rc",
+			rc:   config.ReactionConfig{MaxRetries: 5},
+			want: AutoMergeReactionConfig{
+				Strategy:        domain.StrategySquash,
+				RequireCI:       true,
+				DeleteBranch:    true,
+				PollIntervalMS:  60000,
+				Escalation:      "comment",
+				EscalationLabel: "needs-human",
+				MaxRetries:      5,
+			},
+		},
+		{
+			name:    "invalid strategy",
+			rc:      config.ReactionConfig{Extra: map[string]any{"strategy": "fast-forward"}},
+			wantErr: true,
+		},
+		{
+			name:    "poll_interval_ms below minimum",
+			rc:      config.ReactionConfig{Extra: map[string]any{"poll_interval_ms": 10000}},
+			wantErr: true,
+		},
+		{
+			name:    "invalid escalation value",
+			rc:      config.ReactionConfig{Escalation: "webhook"},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := BuildAutoMergeReactionConfig(tt.rc)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatal("BuildAutoMergeReactionConfig() = nil error, want error")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("BuildAutoMergeReactionConfig() unexpected error: %v", err)
+			}
+			if got != tt.want {
+				t.Errorf("BuildAutoMergeReactionConfig() = %+v, want %+v", got, tt.want)
+			}
+		})
+	}
+}
+
+// --- NewState auto-merge flag defaults ---
+
+func TestNewState_AutoMergePreflightFlagDefaultsFalse(t *testing.T) {
+	t.Parallel()
+
+	s := NewState(5000, 4, nil, AgentTotals{})
+	if s.AutoMergePreflightFailed {
+		t.Error("NewState().AutoMergePreflightFailed = true, want false")
+	}
+}
+
+func TestNewState_AutoMergePreflightRetryDueAtDefaultsZero(t *testing.T) {
+	t.Parallel()
+
+	s := NewState(5000, 4, nil, AgentTotals{})
+	if !s.AutoMergePreflightRetryDueAt.IsZero() {
+		t.Errorf("NewState().AutoMergePreflightRetryDueAt = %v, want zero", s.AutoMergePreflightRetryDueAt)
+	}
+}
+
+func TestNewState_AutoMergeAuthLoggedInitialized(t *testing.T) {
+	t.Parallel()
+
+	s := NewState(5000, 4, nil, AgentTotals{})
+	if s.AutoMergeAuthLogged == nil {
+		t.Error("NewState().AutoMergeAuthLogged = nil, want non-nil map")
+	}
+}
+
+func TestAutoMergePreflightRetryDelay_DefaultsFiveMinutes(t *testing.T) {
+	t.Parallel()
+
+	if AutoMergePreflightRetryDelay != 5*time.Minute {
+		t.Errorf("AutoMergePreflightRetryDelay = %v, want 5m0s", AutoMergePreflightRetryDelay)
 	}
 }
 
