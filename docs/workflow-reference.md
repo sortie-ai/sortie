@@ -629,11 +629,13 @@ Additional fields (via Extra):
 | `poll_interval_ms` | integer | `60000`  | Future dispatches | Polling interval for the precondition state machine. Minimum: `30000` (30 sec).                          |
 
 **Activation:** The `reactions.auto_merge` block is active when `provider` is present
-and non-empty. Agent-created PRs MUST write `pr_number`, `owner`, and `repo` to
-`.sortie/scm.json` in the workspace for auto-merge to activate.
+and non-empty. Agent-created PRs MUST write `pr_number` (positive integer), `owner`,
+`repo`, and `branch` (all non-empty) to `.sortie/scm.json` in the workspace for
+auto-merge to activate. Recovery on restart additionally consults `pushed_at` (when
+present) to skip stale PRs older than the recovery lookback window.
 
-**Token scopes required:** the configured GitHub token must carry `pull_requests: write`
-for the merge endpoint, and when `delete_branch` is not `false`, also `contents: write`
+**Token scopes required:** the configured GitHub token must carry `pull_requests:write`
+for the merge endpoint, and when `delete_branch` is not `false`, also `contents:write`
 for the branch delete endpoint. The classic `repo` scope is a superset that covers both.
 The orchestrator validates scopes once at startup; failure emits an ERROR log with the
 missing scope and disables auto-merge for the process lifetime. A transport-class
