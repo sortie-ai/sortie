@@ -747,13 +747,19 @@ func TestIncDispatchRuleMatch_CardinalityBounded(t *testing.T) {
 		t.Errorf("metric family cardinality = %d, want 3", len(f.GetMetric()))
 	}
 
-	// Empty-rule normalization: calling with rule="" produces a distinct time series
-	// only when the caller passes an already-normalized label. The production code
-	// always normalizes before calling, so passing "<none>" is the expected form.
+	// IncDispatchRuleMatch normalizes rule=="" to "<none>" inside the
+	// method, so passing an empty string folds into the same series as
+	// the already-normalized "<none>" call without growing cardinality.
 	m.IncDispatchRuleMatch("fallback", "<none>")
+	m.IncDispatchRuleMatch("fallback", "")
 	families = gatherFamilies(t, m)
 	f = families["sortie_dispatch_rule_match_total"]
 	if len(f.GetMetric()) != 3 {
-		t.Errorf("second <none> call grew cardinality to %d, want 3", len(f.GetMetric()))
+		t.Errorf("empty-rule fold grew cardinality to %d, want 3", len(f.GetMetric()))
+	}
+	got := counterValue(t, families, "sortie_dispatch_rule_match_total",
+		map[string]string{"layer": "fallback", "rule": "<none>"})
+	if got != 3 {
+		t.Errorf("fallback/<none> counter = %v, want 3", got)
 	}
 }
