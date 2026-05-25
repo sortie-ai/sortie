@@ -126,13 +126,20 @@ Important boundary:
       front matter.
 
 11. `SCM Adapter`
-    - Provides read-only access to SCM platform features beyond CI status: PR review comment
-      fetching, review state queries.
-    - Read-only, multi-method contract (`FetchPendingReviews`); does not create PRs, push code,
-      or manage branches.
-    - Activated by `reactions.review_comments.provider` presence in workflow front matter.
+    - Provides read and write access to SCM platform features beyond CI status: PR review comment
+      fetching, review state queries, merge precondition reads, and orchestrator-driven PR merge
+      with optional branch deletion.
+    - Read-write, multi-method contract (`FetchPendingReviews`, `GetReviewDecision`, `GetCIStatus`,
+      `GetMergeability`, `MergePR`, `DeleteBranch`). Write methods are exercised only by the
+      auto-merge reaction.
+    - Surfaces a sixth error kind, `ErrSCMConflict`, for HTTP 405 and HTTP 409 responses from
+      the merge endpoint (precondition raced, branch protection refused, or PR already merged).
+    - Activated by `reactions.review_comments.provider` or `reactions.auto_merge.provider`
+      presence in workflow front matter. Auto-merge activation requires the provider token to
+      carry `pull_requests:write` and, when branch deletion is enabled, `contents:write`.
     - Distinct from CI Status Provider: the CI provider queries pipeline status for a git ref;
-      the SCM adapter queries PR-level data (reviews, comments) for a pull request number.
+      the SCM adapter queries PR-level data (reviews, comments, mergeability) and performs the
+      merge call for a pull request number.
 
 ### 3.2 Abstraction Levels
 
