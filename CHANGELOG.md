@@ -10,41 +10,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Dispatch rule routing: a new optional `dispatch:` block in
-  `WORKFLOW.md` front matter lets operators route each issue to a
-  specific agent kind and prompt template. Rules are evaluated
-  first-match-wins against issue metadata — `match.labels`,
-  `match.issue_type`, `match.priority` (with `eq` / `in` / `lt` /
-  `lte` / `gt` / `gte` operators), `match.identifier`, and
-  `match.assignee` — combining with AND across keys and OR within a
-  key. `labels` and `identifier` use `path.Match` globs; `issue_type`
-  and `assignee` use case-insensitive equality. Each rule may set
-  `agent:` and/or `template:`; either may be omitted to inherit from
-  an optional `dispatch.default` block and, finally, from the
-  workflow-wide `agent.kind` and the `WORKFLOW.md` body template.
-  Per-rule prompt template files live as Markdown files under the
-  workflow directory tree; absolute paths, `~` expansion, and symlink
-  targets that escape the tree are rejected at load time, and
-  per-rule templates must not carry their own front matter.
-  `sortie validate` surfaces dispatch misconfiguration — unknown
-  agent kind, unreachable catch-all rule, duplicate rule name,
-  malformed glob or priority predicate, missing or out-of-tree
-  template — before any worker is dispatched. The resolved
-  `(agent_kind, template_id, rule_name)` is frozen at first dispatch
-  and reused across every retry and reaction-driven continuation, so
-  an issue routed to one agent never silently switches mid-run.
-  Persistence adds `rule_name`, `template_id`, and `agent_kind`
-  columns to `retry_entries` and a `rule_name` column to
-  `run_history` via an additive forward-only migration; pre-existing
-  retries with an empty `agent_kind` fall back to the workflow
-  default and emit `recovery=legacy_retry_default_agent` once per
-  row at startup for operator audit. Routing outcomes are visible
-  through a new Prometheus counter
-  `sortie_dispatch_rule_match_total{layer,rule}` (where `layer` is
-  one of `rule`, `default`, `fallback`) and through new
-  `dispatched_by_rule`, `dispatched_by_default`, and
-  `dispatched_by_fallback` fields on every `tick completed` log
-  line. Workflows that do not declare a `dispatch:` section behave
-  byte-for-byte identically to previous releases.
+  `WORKFLOW.md` front matter routes each issue to a specific agent
+  kind and prompt template based on issue metadata. Rules match
+  first-wins on `labels`, `issue_type`, `priority`, `identifier`, and
+  `assignee` (AND across keys, OR within a key), with optional
+  `dispatch.default` and a final fallback to the workflow-wide
+  `agent.kind` and body template. Per-rule templates live as
+  Markdown files under the workflow tree and must not carry their
+  own front matter; absolute paths, `~` expansion, and symlink
+  targets that escape the tree are rejected at load time.
+  `sortie validate` reports unknown agent kinds, unreachable
+  catch-all rules, duplicate names, malformed globs and priority
+  predicates, and missing or out-of-tree templates before dispatch.
+  The resolved `(agent_kind, template_id, rule_name)` is frozen at
+  first dispatch and reused across every retry and reaction
+  continuation. Routing outcomes are exposed via the
+  `sortie_dispatch_rule_match_total{layer,rule}` Prometheus counter
+  and new `dispatched_by_rule` / `dispatched_by_default` /
+  `dispatched_by_fallback` fields on the `tick completed` log line.
+  Workflows without a `dispatch:` section are unaffected.
   ([#435](https://github.com/sortie-ai/sortie/issues/435))
 
 ### Fixed
@@ -54,6 +38,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the issue is no longer in an active state. Fresh dispatch remains
   limited to active states.
   ([#513](https://github.com/sortie-ai/sortie/issues/513))
+
+### Migrations
+
+- 010: Add `rule_name`, `template_id`, and `agent_kind` to
+  `retry_entries` and `rule_name`, `template_id` to `run_history`.
+  Existing rows read back as empty strings and are treated as legacy
+  fallback dispatches.
 
 ## [1.9.1] - 2026-04-14
 
