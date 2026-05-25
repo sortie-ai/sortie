@@ -16,8 +16,13 @@ import (
 type AutoMergeScopeVerifier interface {
 	// VerifyAutoMergeScopes returns the granted scopes, the subset of
 	// required scopes that are missing, and any transport-class
-	// failure. An empty missing list with a nil error means the token
-	// has sufficient scope for auto-merge.
+	// failure. A non-empty scopes slice with an empty missing list
+	// means the token has sufficient scope for auto-merge. A nil
+	// scopes slice with an empty missing list and a nil error means
+	// the provider did not return scope information (fine-grained PATs
+	// and GitHub App installation tokens) and the caller MUST fail
+	// open: proceed with auto-merge enabled and rely on the runtime
+	// auth-failure path on the first merge attempt.
 	VerifyAutoMergeScopes(ctx context.Context, requireContents bool) (scopes []string, missing []string, err error)
 }
 
@@ -54,6 +59,15 @@ func RunAutoMergePreflight(ctx context.Context, adapter domain.SCMAdapter, requi
 			slog.String("docs_url", autoMergeDocsURL),
 		)
 		return false, missing, nil
+	}
+
+	// Provider returned no scope information (fine-grained PAT or
+	// GitHub App installation token). Fail open so auto-merge proceeds;
+	// the runtime auth-failure path on the first merge attempt
+	// surfaces any genuine scope gap as an ERROR with deduplication.
+	if len(scopes) == 0 {
+		log.Warn("auto_merge preflight scope verification skipped: provider did not return scope information")
+		return true, nil, nil
 	}
 
 	log.Info("auto_merge preflight passed",
@@ -94,6 +108,15 @@ func RunAutoMergePreflightRetry(ctx context.Context, adapter domain.SCMAdapter, 
 			slog.String("docs_url", autoMergeDocsURL),
 		)
 		return false, missing, nil
+	}
+
+	// Provider returned no scope information (fine-grained PAT or
+	// GitHub App installation token). Fail open so auto-merge proceeds;
+	// the runtime auth-failure path on the first merge attempt
+	// surfaces any genuine scope gap as an ERROR with deduplication.
+	if len(scopes) == 0 {
+		log.Warn("auto_merge preflight retry scope verification skipped: provider did not return scope information")
+		return true, nil, nil
 	}
 
 	log.Info("auto_merge preflight retry succeeded",

@@ -194,6 +194,84 @@ func TestRunAutoMergePreflight_PassesWithRepoScope(t *testing.T) {
 	}
 }
 
+// TestRunAutoMergePreflight_UnableToVerifyLogsWarnAndProceeds verifies that
+// when the verifier returns nil scopes with a nil error (provider did not
+// populate the X-OAuth-Scopes header), preflight fails open: passed=true,
+// missing=nil, err=nil, with a WARN log explaining the skip. The runtime
+// auth-failure path remains responsible for surfacing genuine scope gaps.
+func TestRunAutoMergePreflight_UnableToVerifyLogsWarnAndProceeds(t *testing.T) {
+	t.Parallel()
+
+	log, buf := logCapture()
+	adapter := &preflightSCMStub{
+		preflightVerifierStub: preflightVerifierStub{
+			granted: nil,
+			missing: nil,
+		},
+	}
+
+	passed, missing, err := RunAutoMergePreflight(context.Background(), adapter, true, log)
+
+	if !passed {
+		t.Error("RunAutoMergePreflight passed = false when scopes are unverifiable; want true (fail open)")
+	}
+	if len(missing) != 0 {
+		t.Errorf("RunAutoMergePreflight missing = %v, want nil when scopes are unverifiable", missing)
+	}
+	if err != nil {
+		t.Errorf("RunAutoMergePreflight err = %v, want nil when scopes are unverifiable", err)
+	}
+
+	output := buf.String()
+	if !strings.Contains(output, "level=WARN") {
+		t.Errorf("expected WARN log when scopes are unverifiable, got: %s", output)
+	}
+	if !strings.Contains(output, "scope verification skipped") {
+		t.Errorf("expected 'scope verification skipped' in log, got: %s", output)
+	}
+	if strings.Contains(output, "level=ERROR") {
+		t.Errorf("unexpected ERROR log when failing open; WARN is expected: %s", output)
+	}
+}
+
+// TestRunAutoMergePreflightRetry_UnableToVerifyLogsWarnAndProceeds verifies
+// that the retry path also fails open when the provider does not return scope
+// information.
+func TestRunAutoMergePreflightRetry_UnableToVerifyLogsWarnAndProceeds(t *testing.T) {
+	t.Parallel()
+
+	log, buf := logCapture()
+	adapter := &preflightSCMStub{
+		preflightVerifierStub: preflightVerifierStub{
+			granted: nil,
+			missing: nil,
+		},
+	}
+
+	passed, missing, err := RunAutoMergePreflightRetry(context.Background(), adapter, true, log)
+
+	if !passed {
+		t.Error("RunAutoMergePreflightRetry passed = false when scopes are unverifiable; want true (fail open)")
+	}
+	if len(missing) != 0 {
+		t.Errorf("RunAutoMergePreflightRetry missing = %v, want nil when scopes are unverifiable", missing)
+	}
+	if err != nil {
+		t.Errorf("RunAutoMergePreflightRetry err = %v, want nil when scopes are unverifiable", err)
+	}
+
+	output := buf.String()
+	if !strings.Contains(output, "level=WARN") {
+		t.Errorf("expected WARN log when scopes are unverifiable, got: %s", output)
+	}
+	if !strings.Contains(output, "scope verification skipped") {
+		t.Errorf("expected 'scope verification skipped' in log, got: %s", output)
+	}
+	if strings.Contains(output, "level=ERROR") {
+		t.Errorf("unexpected ERROR log when failing open; WARN is expected: %s", output)
+	}
+}
+
 // TestRunAutoMergePreflight_AdapterWithoutVerifier verifies that when the
 // adapter does not implement AutoMergeScopeVerifier, preflight is skipped and
 // returns (true, nil, nil) with a WARN log.
