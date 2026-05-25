@@ -214,3 +214,39 @@ func TestFetchPendingReviews_Integration_NotFound(t *testing.T) {
 		t.Errorf("SCMError.Kind = %q, want %q", se.Kind, domain.ErrSCMNotFound)
 	}
 }
+
+func TestIntegration_VerifyAutoMergeScopes(t *testing.T) {
+	skipUnlessGitHubIntegration(t)
+
+	cfg := map[string]any{
+		"api_key": os.Getenv("SORTIE_GITHUB_TOKEN"),
+	}
+	a, err := NewGitHubSCMAdapter(cfg)
+	if err != nil {
+		t.Fatalf("NewGitHubSCMAdapter: %v", err)
+	}
+	scmAdapter := a.(*GitHubSCMAdapter)
+
+	scopes, missing, verifyErr := scmAdapter.VerifyAutoMergeScopes(context.Background(), true)
+	if verifyErr != nil {
+		var se *domain.SCMError
+		if errors.As(verifyErr, &se) {
+			t.Logf("VerifyAutoMergeScopes transport error (kind=%s): %v", se.Kind, verifyErr)
+		}
+		t.Skipf("VerifyAutoMergeScopes returned transport error; skipping scope assertion: %v", verifyErr)
+	}
+
+	t.Logf("granted scopes: %v", scopes)
+
+	if len(missing) > 0 {
+		t.Logf("missing scopes: %v (token lacks scope for auto-merge)", missing)
+	} else {
+		t.Logf("token has sufficient auto-merge scopes")
+	}
+
+	if len(scopes) == 0 {
+		// Fine-grained PATs may return an empty X-OAuth-Scopes header; that is
+		// not an error. Just log.
+		t.Log("X-OAuth-Scopes header was empty (fine-grained PAT or GitHub App)")
+	}
+}
