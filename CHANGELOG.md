@@ -9,6 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Extension `$VAR` resolution: every string leaf inside top-level
+  front matter keys outside the core schema (for example
+  `github.api_key`, `worker.ssh_hosts[0]`, `server.host`) now resolves
+  `$VAR` and `${VAR}` environment indirection in a single pass during
+  `NewServiceConfig`, after `SORTIE_*` overrides are applied. Nested
+  maps and lists are traversed recursively; non-string leaves
+  (integers, booleans, floats, timestamps, nil) are returned
+  unchanged. `sortie validate` now emits a new advisory
+  `unresolved_extension_var` warning naming the field path and the
+  unset variable name when a referenced variable is absent from the
+  process environment; the variable's resolved value never appears in
+  any warning, log, or error. Exit code remains 0 and `valid` remains
+  `true` when only this advisory warning is present. Operators of
+  cross-platform setups (for example a Jira tracker paired with a
+  GitHub SCM adapter) may now reference secrets such as
+  `$SORTIE_GITHUB_TOKEN` directly inside the adapter extension block
+  without an external `envsubst` step.
+  ([#512](https://github.com/sortie-ai/sortie/issues/512))
 - Dispatch rule routing: a new optional `dispatch:` block in
   `WORKFLOW.md` front matter routes each issue to a specific agent
   kind and prompt template based on issue metadata. Rules match

@@ -1786,3 +1786,148 @@ func TestValidateDispatch_ConfigErrorRouting(t *testing.T) {
 		t.Errorf("validateOutput.Errors = %v, want a diagnostic with check prefixed 'config.dispatch'", out.Errors)
 	}
 }
+
+// --- unresolved_extension_var end-to-end validate tests ---
+
+// unresolvedExtVarWorkflow returns a workflow YAML containing an extension block
+// whose api_key references varName, which must be unset when the test runs.
+func unresolvedExtVarWorkflow(varName string) []byte {
+	return []byte("---\n" +
+		"tracker:\n  kind: file\n  active_states:\n    - To Do\n  terminal_states:\n    - Done\n" +
+		"agent:\n  kind: mock\n" +
+		"myext:\n  api_key: \"$" + varName + "\"\n" +
+		"---\nDo {{ .issue.title }}.\n")
+}
+
+// TestValidateUnresolvedExtensionVar covers AC-4, AC-6, and AC-7 end-to-end.
+func TestValidateUnresolvedExtensionVar(t *testing.T) {
+	// The variable must resolve to empty. Use a name that is unique to this
+	// test suite; explicitly clear it so the resolved value is "".
+	const missingVar = "SORTIE_TEST_512_E2E_MISSING"
+
+	t.Run("TextMode", func(t *testing.T) {
+		// No t.Parallel: uses t.Setenv.
+		t.Setenv(missingVar, "")
+
+		dir := t.TempDir()
+		wfPath := writeCustomWorkflowFile(t, dir, unresolvedExtVarWorkflow(missingVar))
+
+		var stdout, stderr bytes.Buffer
+		ctx := context.Background()
+
+		code := run(ctx, []string{"validate", wfPath}, &stdout, &stderr)
+
+		// AC-6: exit code must be 0 (advisory warning).
+		if code != 0 {
+			t.Fatalf("run(validate) = %d, want 0 (warning is advisory); stderr: %s", code, stderr.String())
+		}
+		// Text mode: no output on stdout.
+		if stdout.Len() != 0 {
+			t.Errorf("stdout = %q, want empty (text mode)", stdout.String())
+		}
+		got := stderr.String()
+		// AC-4 text: warning must appear on stderr.
+		if !strings.Contains(got, "warning:") {
+			t.Errorf("stderr = %q, want to contain %q", got, "warning:")
+		}
+		if !strings.Contains(got, "unresolved_extension_var") {
+			t.Errorf("stderr = %q, want to contain %q", got, "unresolved_extension_var")
+		}
+		// Field path must appear (prefixed onto the message by emitDiags).
+		if !strings.Contains(got, "myext.api_key") {
+			t.Errorf("stderr = %q, want to contain field path %q", got, "myext.api_key")
+		}
+		// AC-7: variable name must appear, resolved value (empty) must not add noise.
+		if !strings.Contains(got, missingVar) {
+			t.Errorf("stderr = %q, want to contain variable name %q", got, missingVar)
+		}
+	})
+
+	t.Run("JSONMode", func(t *testing.T) {
+		// No t.Parallel: uses t.Setenv.
+		t.Setenv(missingVar, "")
+
+		dir := t.TempDir()
+		wfPath := writeCustomWorkflowFile(t, dir, unresolvedExtVarWorkflow(missingVar))
+
+		var stdout, stderr bytes.Buffer
+		ctx := context.Background()
+
+		code := run(ctx, []string{"validate", "--format", "json", wfPath}, &stdout, &stderr)
+
+		// AC-6: exit code 0.
+		if code != 0 {
+			t.Fatalf("run(validate --format json) = %d, want 0; stderr: %s", code, stderr.String())
+		}
+		// JSON mode: stderr must be empty.
+		if stderr.Len() != 0 {
+			t.Errorf("stderr = %q, want empty (JSON mode)", stderr.String())
+		}
+
+		var out validateOutput
+		if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
+			t.Fatalf("json.Unmarshal(%q) error: %v", stdout.String(), err)
+		}
+		// AC-6: valid=true.
+		if !out.Valid {
+			t.Errorf("validateOutput.Valid = false, want true")
+		}
+		// No errors.
+		if len(out.Errors) != 0 {
+			t.Errorf("validateOutput.Errors = %v, want empty", out.Errors)
+		}
+
+		// AC-4 JSON: the warnings array must contain the unresolved_extension_var entry.
+		var found *validateDiag
+		for i := range out.Warnings {
+			if out.Warnings[i].Check == "unresolved_extension_var" {
+				w := out.Warnings[i]
+				found = &w
+				break
+			}
+		}
+		if found == nil {
+			t.Fatalf("validateOutput.Warnings = %v, want at least one unresolved_extension_var entry", out.Warnings)
+		}
+		if found.Severity != "warning" {
+			t.Errorf("warning.Severity = %q, want %q", found.Severity, "warning")
+		}
+		// Field path must be prefixed in the message.
+		if !strings.Contains(found.Message, "myext.api_key") {
+			t.Errorf("warning.Message = %q, want field path %q", found.Message, "myext.api_key")
+		}
+		// AC-7: variable name appears in the message.
+		if !strings.Contains(found.Message, missingVar) {
+			t.Errorf("warning.Message = %q, want variable name %q", found.Message, missingVar)
+		}
+		// AC-7: resolved value (empty string "") must not appear as a meaningful token.
+		// The message must not contain any resolved credential value; since the value is
+		// empty here the key assertion is that the variable name (not the value) is shown.
+	})
+
+	t.Run("ValidTrueExitZero", func(t *testing.T) {
+		// No t.Parallel: uses t.Setenv.
+		// Extra confirmation that valid:true and exit code 0 hold even when
+		// the only warning present is an unresolved extension variable.
+		t.Setenv(missingVar, "")
+
+		dir := t.TempDir()
+		wfPath := writeCustomWorkflowFile(t, dir, unresolvedExtVarWorkflow(missingVar))
+
+		var stdout, stderr bytes.Buffer
+		ctx := context.Background()
+
+		code := run(ctx, []string{"validate", "--format", "json", wfPath}, &stdout, &stderr)
+		if code != 0 {
+			t.Fatalf("run(validate --format json) = %d, want 0", code)
+		}
+
+		var out validateOutput
+		if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
+			t.Fatalf("json.Unmarshal: %v", err)
+		}
+		if !out.Valid {
+			t.Errorf("validateOutput.Valid = false, want true")
+		}
+	})
+}

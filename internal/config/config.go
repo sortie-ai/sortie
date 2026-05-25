@@ -56,6 +56,14 @@ type ServiceConfig struct {
 	// via map lookup. Never nil after construction.
 	Extensions map[string]any
 
+	// extensionsPreResolution maps a dotted-and-indexed extension field
+	// path (for example "github.api_key" or "worker.ssh_hosts[0]") to
+	// the pre-resolution literal value for every string leaf that
+	// contained at least one $VAR or ${VAR} reference. The field is
+	// internal to the validation pathway, never read by adapters, and
+	// never serialized.
+	extensionsPreResolution map[string]string
+
 	// Dispatch carries the parsed dispatch rule configuration. The
 	// workflow manager stitches this in via [ServiceConfig.SetDispatch]
 	// after [NewServiceConfig] returns. Zero value selects the
@@ -293,17 +301,20 @@ func NewServiceConfig(raw map[string]any) (ServiceConfig, error) {
 		}
 	}
 
+	preResolution := resolveExtensionEnvRefs(extensions)
+
 	return ServiceConfig{
-		Tracker:    tracker,
-		Polling:    polling,
-		Workspace:  workspace,
-		Hooks:      hooks,
-		Agent:      agent,
-		CIFeedback: ciFeedback,
-		SelfReview: selfReview,
-		Reactions:  reactions,
-		DBPath:     dbPath,
-		Extensions: extensions,
+		Tracker:                 tracker,
+		Polling:                 polling,
+		Workspace:               workspace,
+		Hooks:                   hooks,
+		Agent:                   agent,
+		CIFeedback:              ciFeedback,
+		SelfReview:              selfReview,
+		Reactions:               reactions,
+		DBPath:                  dbPath,
+		Extensions:              extensions,
+		extensionsPreResolution: preResolution,
 	}, nil
 }
 
@@ -786,6 +797,63 @@ func validateInProgressState(inProgressState string, activeStates, terminalState
 		}
 	}
 	return nil
+}
+
+// resolveExtensionEnvRefs walks the Extensions subtree and resolves
+// $VAR references on every string leaf using [os.ExpandEnv]. Nested
+// map[string]any and []any values are traversed; non-string leaves are
+// returned unchanged. The function mutates the input map in place.
+//
+// The returned map captures the pre-resolution literal value for every
+// leaf whose value contained at least one $ reference, keyed by the
+// dotted-and-indexed field path starting at the extension-block key.
+// Literals without a $ reference are not recorded. The walker is safe
+// to call with a nil map and returns a nil snapshot in that case.
+func resolveExtensionEnvRefs(extensions map[string]any) map[string]string {
+	if extensions == nil {
+		return nil
+	}
+	var snapshot map[string]string
+	for k, v := range extensions {
+		extensions[k] = resolveExtensionEnvValue(k, v, &snapshot)
+	}
+	return snapshot
+}
+
+// resolveExtensionEnvValue recursively resolves $VAR references on
+// string leaves under v. Maps and slices are mutated in place; non-
+// string leaves are returned unchanged. Recorded entries are written
+// into *snapshot using dotted (for nested maps) and bracketed (for
+// slice elements) path notation.
+//
+// The type switch is exhaustive over the closed set of yaml.v3-decoded
+// leaf types (string, map[string]any, []any, scalars, nil, time.Time).
+// Every other Go type takes the default arm and round-trips unchanged
+// without panic.
+func resolveExtensionEnvValue(path string, v any, snapshot *map[string]string) any {
+	switch typed := v.(type) {
+	case string:
+		if !strings.Contains(typed, "$") {
+			return typed
+		}
+		if *snapshot == nil {
+			*snapshot = make(map[string]string)
+		}
+		(*snapshot)[path] = typed
+		return os.ExpandEnv(typed)
+	case map[string]any:
+		for k, child := range typed {
+			typed[k] = resolveExtensionEnvValue(path+"."+k, child, snapshot)
+		}
+		return typed
+	case []any:
+		for i, child := range typed {
+			typed[i] = resolveExtensionEnvValue(path+"["+strconv.Itoa(i)+"]", child, snapshot)
+		}
+		return typed
+	default:
+		return v
+	}
 }
 
 func resolveEnv(s string) string {

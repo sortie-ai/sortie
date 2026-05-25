@@ -4,11 +4,11 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Release version (semver, e.g. 1.0.0 or 1.0.0-rc.1 — no 'v' prefix)"
+        description: "Release version (semver, e.g. 1.0.0 or 1.0.0-rc.1 - no 'v' prefix)"
         required: true
         type: string
       dry_run:
-        description: "Dry run — run all steps but skip tag creation and release publish"
+        description: "Dry run - run all steps but skip tag creation and release publish"
         required: false
         type: boolean
         default: false

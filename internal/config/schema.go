@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"math"
+	"os"
 	"strconv"
 	"strings"
 
@@ -160,7 +161,7 @@ var staticKnownExtensionKeys = map[string]bool{
 // FrontMatterWarning represents a single advisory diagnostic from
 // front matter static analysis. These do not affect runtime behavior.
 type FrontMatterWarning struct {
-	Check   string // "unknown_key", "unknown_sub_key", or "type_mismatch"
+	Check   string // "unknown_key", "unknown_sub_key", "type_mismatch", or "unresolved_extension_var"
 	Field   string // dotted path to the offending key
 	Message string // operator-friendly description
 }
@@ -354,7 +355,221 @@ func ValidateFrontMatter(raw map[string]any, cfg ServiceConfig) []FrontMatterWar
 	warnings = checkHooksTimeoutSemantic(warnings, raw)
 	warnings = checkByStateSemantic(warnings, raw)
 
+	// Surface unresolved $VAR references in Extensions by replaying the
+	// snapshot captured during NewServiceConfig. A non-empty resolved
+	// leaf indicates the variable was set; a resolved empty leaf is the
+	// warning trigger.
+	warnings = checkUnresolvedExtensionVars(warnings, cfg)
+
 	return warnings
+}
+
+// checkUnresolvedExtensionVars iterates the pre-resolution snapshot
+// captured by [resolveExtensionEnvRefs] and emits one warning per
+// extension leaf that contains a $VAR reference whose current value
+// is unset or empty. The warning fires regardless of whether the
+// resolved string is otherwise non-empty: a field like
+// "https://$HOST:$PORT/path" still warns about PORT when only HOST is
+// set. Entries whose extracted variable name is empty (e.g. the $$
+// literal) are excluded.
+func checkUnresolvedExtensionVars(warnings []FrontMatterWarning, cfg ServiceConfig) []FrontMatterWarning {
+	if len(cfg.extensionsPreResolution) == 0 {
+		return warnings
+	}
+	paths := maputil.SortedKeys(cfg.extensionsPreResolution)
+	for _, path := range paths {
+		before := cfg.extensionsPreResolution[path]
+		_, ok := lookupExtensionValue(cfg.Extensions, path)
+		if !ok {
+			continue
+		}
+		unsetNames := extractUnsetExtensionVars(before)
+		if len(unsetNames) == 0 {
+			continue
+		}
+		warnings = append(warnings, FrontMatterWarning{
+			Check:   "unresolved_extension_var",
+			Field:   path,
+			Message: formatUnresolvedExtensionVarMessage(unsetNames),
+		})
+	}
+	return warnings
+}
+
+// extractUnsetExtensionVars scans before for every $NAME and ${NAME}
+// reference in declaration order and returns the distinct variable
+// names (without the leading $ or wrapping braces) whose current
+// [os.Getenv] value is empty. The first occurrence of a repeated name
+// is preserved; later duplicates are dropped. Returns nil when every
+// reference resolves to a non-empty value or when no extractable name
+// is present.
+func extractUnsetExtensionVars(before string) []string {
+	var unset []string
+	seen := make(map[string]bool)
+	for i := 0; i < len(before); i++ {
+		if before[i] != '$' {
+			continue
+		}
+		name, consumed := readShellName(before[i+1:])
+		i += consumed
+		if name == "" {
+			continue
+		}
+		if seen[name] {
+			continue
+		}
+		seen[name] = true
+		if os.Getenv(name) != "" {
+			continue
+		}
+		unset = append(unset, name)
+	}
+	return unset
+}
+
+// readShellName parses a variable reference following a leading $ byte
+// and returns the extracted name and the number of bytes consumed from
+// s (excluding the leading $). The braced form ${NAME} consumes the
+// closing brace; the bare form $NAME consumes only the identifier
+// bytes. An empty name (no identifier or empty braces) returns the
+// number of bytes that should be skipped past the malformed reference.
+func readShellName(s string) (name string, consumed int) {
+	if len(s) == 0 {
+		return "", 0
+	}
+	if s[0] == '{' {
+		end := strings.IndexByte(s, '}')
+		if end < 0 {
+			return "", 0
+		}
+		return s[1:end], end + 1
+	}
+	if !isShellNameByte(s[0], true) {
+		return "", 0
+	}
+	end := 1
+	for end < len(s) && isShellNameByte(s[end], false) {
+		end++
+	}
+	return s[:end], end
+}
+
+// isShellNameByte reports whether b is a valid byte for a shell-style
+// identifier. When start is true, digits are not permitted.
+func isShellNameByte(b byte, start bool) bool {
+	if b == '_' {
+		return true
+	}
+	if b >= 'A' && b <= 'Z' {
+		return true
+	}
+	if b >= 'a' && b <= 'z' {
+		return true
+	}
+	if !start && b >= '0' && b <= '9' {
+		return true
+	}
+	return false
+}
+
+// formatUnresolvedExtensionVarMessage returns the operator-facing
+// message for the unresolved_extension_var warning. The variable name
+// is rendered via the %q verb so a name such as SORTIE_GITHUB_TOKEN
+// prints surrounded by double quotes. The message is byte-stable
+// across calls with the same input so operators can alert on it.
+func formatUnresolvedExtensionVarMessage(unsetNames []string) string {
+	switch len(unsetNames) {
+	case 0:
+		return ""
+	case 1:
+		return fmt.Sprintf("unresolved $VAR reference: variable %q is unset or empty", unsetNames[0])
+	case 2:
+		return fmt.Sprintf("unresolved $VAR reference: variables %q and %q are unset or empty", unsetNames[0], unsetNames[1]) //nolint:gosec // G602: case 2 guarantees len(unsetNames) == 2
+	}
+	var b strings.Builder
+	b.WriteString("unresolved $VAR reference: variables ")
+	for i, name := range unsetNames {
+		if i == len(unsetNames)-1 {
+			b.WriteString("and ")
+			fmt.Fprintf(&b, "%q", name)
+			continue
+		}
+		fmt.Fprintf(&b, "%q, ", name)
+	}
+	b.WriteString(" are unset or empty")
+	return b.String()
+}
+
+// lookupExtensionValue walks the dotted-and-indexed path produced by
+// [resolveExtensionEnvRefs] under extensions and returns the resolved
+// string at that path. Returns (value, true) when the path lands on a
+// string leaf; returns ("", false) when any intermediate segment fails
+// to type-assert or when the final leaf is not a string. Two-result
+// type assertions guarantee the helper never panics on a malformed
+// path.
+func lookupExtensionValue(extensions map[string]any, path string) (string, bool) {
+	if extensions == nil || path == "" {
+		return "", false
+	}
+	var current any = extensions
+	for path != "" {
+		segment, rest, _ := strings.Cut(path, ".")
+		path = rest
+		name, indices := splitPathIndices(segment)
+		m, ok := current.(map[string]any)
+		if !ok {
+			return "", false
+		}
+		current, ok = m[name]
+		if !ok {
+			return "", false
+		}
+		for _, idx := range indices {
+			slice, ok := current.([]any)
+			if !ok {
+				return "", false
+			}
+			if idx < 0 || idx >= len(slice) {
+				return "", false
+			}
+			current = slice[idx]
+		}
+	}
+	s, ok := current.(string)
+	if !ok {
+		return "", false
+	}
+	return s, true
+}
+
+// splitPathIndices separates a path segment into its name and any
+// trailing [index] suffixes. For example "ssh_hosts[0][1]" returns
+// ("ssh_hosts", [0, 1]). Malformed suffixes return the original
+// segment with no indices.
+func splitPathIndices(segment string) (string, []int) {
+	openIdx := strings.IndexByte(segment, '[')
+	if openIdx < 0 {
+		return segment, nil
+	}
+	name := segment[:openIdx]
+	rest := segment[openIdx:]
+	var indices []int
+	for rest != "" {
+		if rest[0] != '[' {
+			return segment, nil
+		}
+		closeIdx := strings.IndexByte(rest, ']')
+		if closeIdx < 0 {
+			return segment, nil
+		}
+		n, err := strconv.Atoi(rest[1:closeIdx])
+		if err != nil {
+			return segment, nil
+		}
+		indices = append(indices, n)
+		rest = rest[closeIdx+1:]
+	}
+	return name, indices
 }
 
 // checkStringListElements appends type_mismatch warnings for non-string
