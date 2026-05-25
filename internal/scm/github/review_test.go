@@ -515,6 +515,25 @@ func TestToSCMError(t *testing.T) {
 			input:    fmt.Errorf("some generic transport error"),
 			wantKind: domain.ErrSCMTransport,
 		},
+		// 405 "method not allowed" messages produced by classifyHTTPError
+		// are promoted to ErrSCMConflict.
+		{
+			name: "ErrTrackerAPI with 'method not allowed' → ErrSCMConflict",
+			input: &domain.TrackerError{
+				Kind:    domain.ErrTrackerAPI,
+				Message: "PUT /repos/o/r/pulls/1/merge: method not allowed: branch protection refuses",
+			},
+			wantKind: domain.ErrSCMConflict,
+		},
+		// 409 "conflict" messages produced by classifyHTTPError are promoted.
+		{
+			name: "ErrTrackerAPI with ': conflict:' → ErrSCMConflict",
+			input: &domain.TrackerError{
+				Kind:    domain.ErrTrackerAPI,
+				Message: "PUT /repos/o/r/pulls/1/merge: conflict: head sha mismatch",
+			},
+			wantKind: domain.ErrSCMConflict,
+		},
 	}
 
 	for _, tt := range tests {

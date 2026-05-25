@@ -55,6 +55,8 @@ func TestClassifyHTTPError(t *testing.T) {
 		{"500 server error", http.StatusInternalServerError, nil, "oops", domain.ErrTrackerTransport},
 		{"502 bad gateway", http.StatusBadGateway, nil, "", domain.ErrTrackerTransport},
 		{"503 service unavailable", http.StatusServiceUnavailable, nil, "", domain.ErrTrackerTransport},
+		{"405 method not allowed", http.StatusMethodNotAllowed, nil, "branch protection refuses", domain.ErrTrackerAPI},
+		{"409 conflict", http.StatusConflict, nil, "head sha mismatch", domain.ErrTrackerAPI},
 		{"unexpected status", 418, nil, "I'm a teapot", domain.ErrTrackerAPI},
 	}
 
