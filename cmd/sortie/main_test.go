@@ -1320,3 +1320,198 @@ func TestRunLongHelp(t *testing.T) {
 		t.Errorf("run([--help]) stderr = %q, want empty", stderr.String())
 	}
 }
+
+// --- Auto-merge wiring tests ---
+
+// autoMergeWorkflowNoProvider returns a minimal WORKFLOW.md with
+// reactions.auto_merge but an empty provider, so the auto-merge feature is
+// disabled and no SCM adapter initialization is attempted.
+func autoMergeWorkflowNoProvider(issuesPath, workspaceRoot string) []byte {
+	return []byte(fmt.Sprintf(`---
+tracker:
+  kind: file
+  project: DEMO
+  active_states:
+    - "To Do"
+  handoff_state: Done
+
+file:
+  path: %s
+
+agent:
+  kind: mock
+  max_turns: 1
+
+polling:
+  interval_ms: 500
+
+workspace:
+  root: %s
+
+reactions:
+  auto_merge:
+    provider: ""
+---
+
+Fix issue {{ .issue.identifier }}.
+`, issuesPath, workspaceRoot))
+}
+
+// autoMergeWorkflowUnknownProvider returns a WORKFLOW.md with an unknown SCM
+// provider, which should cause startup to fail with exit code 1.
+func autoMergeWorkflowUnknownProvider(issuesPath, workspaceRoot string) []byte {
+	return []byte(fmt.Sprintf(`---
+tracker:
+  kind: file
+  project: DEMO
+  active_states:
+    - "To Do"
+  handoff_state: Done
+
+file:
+  path: %s
+
+agent:
+  kind: mock
+  max_turns: 1
+
+polling:
+  interval_ms: 500
+
+workspace:
+  root: %s
+
+reactions:
+  auto_merge:
+    provider: nonexistent-scm
+---
+
+Fix issue {{ .issue.identifier }}.
+`, issuesPath, workspaceRoot))
+}
+
+// autoMergeWorkflowMismatchedProviders returns a WORKFLOW.md where
+// review_comments and auto_merge use different SCM providers, which should
+// cause startup to fail with exit code 1.
+func autoMergeWorkflowMismatchedProviders(issuesPath, workspaceRoot string) []byte {
+	return []byte(fmt.Sprintf(`---
+tracker:
+  kind: file
+  project: DEMO
+  active_states:
+    - "To Do"
+  handoff_state: Done
+
+file:
+  path: %s
+
+agent:
+  kind: mock
+  max_turns: 1
+
+polling:
+  interval_ms: 500
+
+workspace:
+  root: %s
+
+reactions:
+  review_comments:
+    provider: github
+  auto_merge:
+    provider: nonexistent-scm
+---
+
+Fix issue {{ .issue.identifier }}.
+`, issuesPath, workspaceRoot))
+}
+
+// TestRunAutoMerge_EmptyProvider verifies that when reactions.auto_merge.provider
+// is empty, the server starts normally and does NOT log "auto_merge reaction
+// enabled" (spec Test 6 at the wiring layer).
+func TestRunAutoMerge_EmptyProvider(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	wsRoot := filepath.Join(dir, "workspaces")
+
+	issuesPath := filepath.Join(dir, "issues.json")
+	if err := os.WriteFile(issuesPath, quickStartIssues(), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	wfPath := writeCustomWorkflowFile(t, dir, autoMergeWorkflowNoProvider(issuesPath, wsRoot))
+
+	var stdout bytes.Buffer
+	var stderr lockedBuf
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+
+	code := run(ctx, []string{wfPath}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("exit code = %d, want 0; stderr:\n%s", code, stderr.String())
+	}
+
+	logs := stderr.String()
+	if strings.Contains(logs, "auto_merge reaction enabled") {
+		t.Error(`"auto_merge reaction enabled" logged despite empty provider; want absent`)
+	}
+}
+
+// TestRunAutoMerge_UnknownProvider verifies that an unknown SCM provider in
+// reactions.auto_merge causes startup to fail with exit code 1.
+// No t.Parallel: calls t.Chdir.
+func TestRunAutoMerge_UnknownProvider(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	wsRoot := filepath.Join(dir, "workspaces")
+
+	issuesPath := filepath.Join(dir, "issues.json")
+	if err := os.WriteFile(issuesPath, quickStartIssues(), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	wfPath := writeCustomWorkflowFile(t, dir, autoMergeWorkflowUnknownProvider(issuesPath, wsRoot))
+
+	var stdout bytes.Buffer
+	var stderr lockedBuf
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	code := run(ctx, []string{wfPath}, &stdout, &stderr)
+	if code != 1 {
+		t.Fatalf("exit code = %d, want 1 (unknown SCM provider); stderr:\n%s", code, stderr.String())
+	}
+
+	logs := stderr.String()
+	if !strings.Contains(logs, "nonexistent-scm") {
+		t.Errorf("expected provider name %q in error log, got:\n%s", "nonexistent-scm", logs)
+	}
+}
+
+// TestRunAutoMerge_MismatchedProviders verifies that mismatched providers for
+// review_comments and auto_merge causes startup to fail with exit code 1.
+// No t.Parallel: calls t.Chdir.
+func TestRunAutoMerge_MismatchedProviders(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	wsRoot := filepath.Join(dir, "workspaces")
+
+	issuesPath := filepath.Join(dir, "issues.json")
+	if err := os.WriteFile(issuesPath, quickStartIssues(), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	wfPath := writeCustomWorkflowFile(t, dir, autoMergeWorkflowMismatchedProviders(issuesPath, wsRoot))
+
+	var stdout bytes.Buffer
+	var stderr lockedBuf
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	code := run(ctx, []string{wfPath}, &stdout, &stderr)
+	if code != 1 {
+		t.Fatalf("exit code = %d, want 1 (mismatched providers); stderr:\n%s", code, stderr.String())
+	}
+
+	logs := stderr.String()
+	if !strings.Contains(logs, "must use the same provider") {
+		t.Errorf("expected 'must use the same provider' in error log, got:\n%s", logs)
+	}
+}

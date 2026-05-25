@@ -331,43 +331,99 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 
 	var scmAdapter domain.SCMAdapter
 	var reviewConfig orchestrator.ReviewReactionConfig
-	if rc, ok := br.cfg.Reactions["review_comments"]; ok && rc.Provider != "" {
-		scmCtor, scmErr := registry.SCMAdapters.Get(rc.Provider)
+	var autoMergeConfig orchestrator.AutoMergeReactionConfig
+	var autoMergeConfigured bool
+
+	reviewRC, hasReview := br.cfg.Reactions["review_comments"]
+	autoMergeRC, hasAutoMerge := br.cfg.Reactions["auto_merge"]
+	reviewActive := hasReview && reviewRC.Provider != ""
+	autoMergeActive := hasAutoMerge && autoMergeRC.Provider != ""
+
+	if reviewActive && autoMergeActive && reviewRC.Provider != autoMergeRC.Provider {
+		br.logger.Error("unsupported: reactions.review_comments and reactions.auto_merge must use the same provider",
+			slog.String("review_provider", reviewRC.Provider),
+			slog.String("auto_merge_provider", autoMergeRC.Provider),
+		)
+		return 1
+	}
+
+	if reviewActive || autoMergeActive {
+		provider := reviewRC.Provider
+		if provider == "" {
+			provider = autoMergeRC.Provider
+		}
+		scmCtor, scmErr := registry.SCMAdapters.Get(provider)
 		if scmErr != nil {
 			br.logger.Error("unknown SCM adapter kind",
-				slog.String("kind", rc.Provider),
+				slog.String("kind", provider),
 				slog.Any("error", scmErr),
 			)
 			return 1
 		}
 		adapterCfgMap := make(map[string]any)
-		mergeExtensions(adapterCfgMap, br.cfg.Extensions, rc.Provider)
-		if rc.Provider == br.cfg.Tracker.Kind {
+		mergeExtensions(adapterCfgMap, br.cfg.Extensions, provider)
+		if provider == br.cfg.Tracker.Kind {
 			mergeTrackerCredentials(adapterCfgMap, br.cfg.Tracker)
 		}
-		for k, v := range rc.Extra {
-			if _, exists := adapterCfgMap[k]; !exists {
-				adapterCfgMap[k] = v
+		if reviewActive {
+			for k, v := range reviewRC.Extra {
+				if _, exists := adapterCfgMap[k]; !exists {
+					adapterCfgMap[k] = v
+				}
+			}
+		}
+		if autoMergeActive {
+			for k, v := range autoMergeRC.Extra {
+				if _, exists := adapterCfgMap[k]; !exists {
+					adapterCfgMap[k] = v
+				}
 			}
 		}
 		scmAdapter, scmErr = scmCtor(adapterCfgMap)
 		if scmErr != nil {
 			br.logger.Error("failed to construct SCM adapter",
-				slog.String("kind", rc.Provider),
+				slog.String("kind", provider),
 				slog.Any("error", scmErr),
 			)
 			return 1
 		}
-		reviewConfig, scmErr = orchestrator.BuildReviewReactionConfig(rc)
-		if scmErr != nil {
-			br.logger.Error("invalid review reaction config", slog.Any("error", scmErr))
-			return 1
+
+		if reviewActive {
+			reviewConfig, scmErr = orchestrator.BuildReviewReactionConfig(reviewRC)
+			if scmErr != nil {
+				br.logger.Error("invalid review reaction config", slog.Any("error", scmErr))
+				return 1
+			}
+			br.logger.Info("review comment routing enabled",
+				slog.String("kind", reviewRC.Provider),
+				slog.Int("max_continuation_turns", reviewConfig.MaxContinuationTurns),
+				slog.Int("poll_interval_ms", reviewConfig.PollIntervalMS),
+			)
 		}
-		br.logger.Info("review comment routing enabled",
-			slog.String("kind", rc.Provider),
-			slog.Int("max_continuation_turns", reviewConfig.MaxContinuationTurns),
-			slog.Int("poll_interval_ms", reviewConfig.PollIntervalMS),
-		)
+
+		if autoMergeActive {
+			autoMergeConfig, scmErr = orchestrator.BuildAutoMergeReactionConfig(autoMergeRC)
+			if scmErr != nil {
+				br.logger.Error("invalid auto_merge reaction config", slog.Any("error", scmErr))
+				return 1
+			}
+			autoMergeConfigured = true
+
+			passed, _, preflightErr := orchestrator.RunAutoMergePreflight(ctx, scmAdapter, autoMergeConfig.DeleteBranch, br.logger)
+			state.AutoMergePreflightFailed = !passed
+			if preflightErr != nil && orchestrator.IsAutoMergePreflightTransportClass(preflightErr) {
+				state.AutoMergePreflightRetryDueAt = time.Now().UTC().Add(orchestrator.AutoMergePreflightRetryDelay)
+			}
+
+			br.logger.Info("auto_merge reaction enabled",
+				slog.String("provider", autoMergeRC.Provider),
+				slog.String("strategy", string(autoMergeConfig.Strategy)),
+				slog.Bool("require_ci", autoMergeConfig.RequireCI),
+				slog.Bool("delete_branch", autoMergeConfig.DeleteBranch),
+				slog.Int("poll_interval_ms", autoMergeConfig.PollIntervalMS),
+				slog.Int("max_retries", autoMergeConfig.MaxRetries),
+			)
+		}
 	}
 
 	recoveryEnabled := br.cfg.Tracker.HandoffState != "" && (ciProvider != nil || scmAdapter != nil)
@@ -381,14 +437,15 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 		recoveryRuns, recoveryErr = store.LoadLatestSuccessfulRunsForReactionRecovery(ctx, recoveryCutoff, orchestrator.PendingReactionRecoveryMaxCandidates)
 		if recoveryErr == nil {
 			recoveryOutcome, recoveryErr = orchestrator.RecoverPendingReactions(ctx, state, recoveryRuns, orchestrator.PendingReactionRecoveryParams{
-				WorkspaceRoot:    br.cfg.Workspace.Root,
-				TrackerAdapter:   br.trackerAdapter,
-				HandoffState:     br.cfg.Tracker.HandoffState,
-				TerminalStates:   br.cfg.Tracker.TerminalStates,
-				CIProvider:       ciProvider,
-				SCMAdapter:       scmAdapter,
-				RecoveryLookback: recoveryLookback,
-				MaxCandidates:    orchestrator.PendingReactionRecoveryMaxCandidates,
+				WorkspaceRoot:               br.cfg.Workspace.Root,
+				TrackerAdapter:              br.trackerAdapter,
+				HandoffState:                br.cfg.Tracker.HandoffState,
+				TerminalStates:              br.cfg.Tracker.TerminalStates,
+				CIProvider:                  ciProvider,
+				SCMAdapter:                  scmAdapter,
+				AutoMergeReactionConfigured: autoMergeConfigured,
+				RecoveryLookback:            recoveryLookback,
+				MaxCandidates:               orchestrator.PendingReactionRecoveryMaxCandidates,
 				NowFunc: func() time.Time {
 					return recoveryNow
 				},
@@ -403,6 +460,7 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 		slog.Int("state_checked", recoveryOutcome.StateChecked),
 		slog.Int("review_recovered", recoveryOutcome.ReviewRecovered),
 		slog.Int("ci_recovered", recoveryOutcome.CIRecovered),
+		slog.Int("auto_merge_recovered", recoveryOutcome.AutoMergeRecovered),
 		slog.Int("stale_skipped", recoveryOutcome.StaleSkipped),
 		slog.Int("skipped", recoveryOutcome.Skipped),
 	}
@@ -449,21 +507,23 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 	}
 
 	o := orchestrator.NewOrchestrator(orchestrator.OrchestratorParams{
-		State:              state,
-		Logger:             br.logger,
-		TrackerAdapter:     br.trackerAdapter,
-		AgentAdapter:       agentAdapter,
-		AgentAdapterByKind: agentAdapterByKind,
-		WorkflowManager:    br.mgr,
-		Store:              store,
-		PreflightParams:    br.preflightParams,
-		Metrics:            orchMetrics,
-		ToolRegistry:       toolRegistry,
-		WorkflowFileFunc:   br.mgr.FilePath,
-		DBPath:             dbPath,
-		CIProvider:         ciProvider,
-		SCMAdapter:         scmAdapter,
-		ReviewConfig:       reviewConfig,
+		State:                       state,
+		Logger:                      br.logger,
+		TrackerAdapter:              br.trackerAdapter,
+		AgentAdapter:                agentAdapter,
+		AgentAdapterByKind:          agentAdapterByKind,
+		WorkflowManager:             br.mgr,
+		Store:                       store,
+		PreflightParams:             br.preflightParams,
+		Metrics:                     orchMetrics,
+		ToolRegistry:                toolRegistry,
+		WorkflowFileFunc:            br.mgr.FilePath,
+		DBPath:                      dbPath,
+		CIProvider:                  ciProvider,
+		SCMAdapter:                  scmAdapter,
+		ReviewConfig:                reviewConfig,
+		AutoMergeConfig:             autoMergeConfig,
+		AutoMergeReactionConfigured: autoMergeConfigured,
 	})
 
 	var srv *server.Server
