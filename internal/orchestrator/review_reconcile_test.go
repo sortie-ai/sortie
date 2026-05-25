@@ -30,6 +30,26 @@ func (m *mockSCMAdapter) FetchPendingReviews(_ context.Context, _ int, _, _ stri
 	return m.comments, nil
 }
 
+func (m *mockSCMAdapter) GetReviewDecision(_ context.Context, _ int, _, _ string) (domain.ReviewDecision, error) {
+	return "", nil
+}
+
+func (m *mockSCMAdapter) GetCIStatus(_ context.Context, _ int, _, _ string) (string, error) {
+	return "", nil
+}
+
+func (m *mockSCMAdapter) GetMergeability(_ context.Context, _ int, _, _ string) (domain.PRMergeStatus, error) {
+	return domain.PRMergeStatus{}, nil
+}
+
+func (m *mockSCMAdapter) MergePR(_ context.Context, _ int, _, _ string, _ domain.MergeStrategy, _, _, _ string) (domain.MergeResult, error) {
+	return domain.MergeResult{}, nil
+}
+
+func (m *mockSCMAdapter) DeleteBranch(_ context.Context, _, _, _ string) error {
+	return nil
+}
+
 // reviewReconcileStore is a self-contained ReconcileStore for review tests.
 type reviewReconcileStore struct {
 	savedEntries    []persistence.RetryEntry

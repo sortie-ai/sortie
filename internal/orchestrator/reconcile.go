@@ -41,8 +41,8 @@ type ReconcileParams struct {
 	TerminalStates []string
 
 	// HandoffState is treated as a keep-running state only for running
-	// reaction continuations (ReactionKindCI or ReactionKindReview). Does
-	// not affect fresh dispatch eligibility in ShouldDispatch.
+	// reaction continuations of any known reaction kind. Does not
+	// affect fresh dispatch eligibility in ShouldDispatch.
 	HandoffState string
 
 	// StallTimeoutMS is the configured stall detection threshold.
@@ -103,6 +103,20 @@ type ReconcileParams struct {
 	// ReviewPendingTTL is the maximum age of a review PendingReaction
 	// entry before it is dropped. Zero disables TTL enforcement.
 	ReviewPendingTTL time.Duration
+
+	// AutoMergeConfig holds auto-merge reaction configuration. Only
+	// read when AutoMergeReactionConfigured is true.
+	AutoMergeConfig AutoMergeReactionConfig
+
+	// AutoMergePendingTTL is the maximum age of an auto-merge
+	// PendingReaction entry before it is dropped. Zero disables TTL
+	// enforcement.
+	AutoMergePendingTTL time.Duration
+
+	// AutoMergeReactionConfigured marks whether the auto-merge feature
+	// is active for the current process. Reconcile, enqueue, and
+	// recovery paths gate on this flag.
+	AutoMergeReactionConfigured bool
 }
 
 // ReconcileRunningIssues detects stalled workers and refreshes tracker
@@ -150,6 +164,11 @@ func ReconcileRunningIssues(state *State, params ReconcileParams) {
 
 	// Poll review comments for issues with pending review reactions.
 	reconcileReviewComments(state, params, log, ctx, metrics)
+
+	// Poll auto-merge preconditions for issues with pending merge
+	// reactions. Runs LAST so the CI and review reconcile passes have
+	// already updated their state before the merge call inspects it.
+	reconcileAutoMerge(state, params, log, ctx, metrics)
 }
 
 // reconcileStalled cancels running entries whose last activity exceeds the
