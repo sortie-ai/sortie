@@ -129,3 +129,23 @@ type mockSCMAdapter struct{}
 func (m *mockSCMAdapter) FetchPendingReviews(_ context.Context, _ int, _, _ string) ([]ReviewComment, error) {
 	return nil, nil
 }
+
+func (m *mockSCMAdapter) GetReviewDecision(_ context.Context, _ int, _, _ string) (ReviewDecision, error) {
+	return "", nil
+}
+
+func (m *mockSCMAdapter) GetCIStatus(_ context.Context, _ int, _, _ string) (string, error) {
+	return "", nil
+}
+
+func (m *mockSCMAdapter) GetMergeability(_ context.Context, _ int, _, _ string) (PRMergeStatus, error) {
+	return PRMergeStatus{}, nil
+}
+
+func (m *mockSCMAdapter) MergePR(_ context.Context, _ int, _, _ string, _ MergeStrategy, _, _, _ string) (MergeResult, error) {
+	return MergeResult{}, nil
+}
+
+func (m *mockSCMAdapter) DeleteBranch(_ context.Context, _, _, _ string) error {
+	return nil
+}
