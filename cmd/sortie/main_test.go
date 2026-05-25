@@ -560,9 +560,13 @@ func TestRunServerShutdownError(t *testing.T) {
 		result <- run(ctx, []string{"--port", port, wfPath}, io.Discard, &stderr)
 	}()
 
-	// Wait until the HTTP server reports its bound address.
+	// Wait until the HTTP server reports its bound address. Windows
+	// CI runners need a wider budget because the SQLite migrations and
+	// workspace cleanup that run before the listener log can take
+	// several seconds on the slow NTFS path.
 	var addr string
-	deadline := time.Now().Add(3 * time.Second)
+	startWait := runTestTimeout
+	deadline := time.Now().Add(startWait)
 	for time.Now().Before(deadline) {
 		if log := stderr.String(); strings.Contains(log, "http server listening") {
 			if i := strings.Index(log, "addr="); i >= 0 {
@@ -581,7 +585,7 @@ func TestRunServerShutdownError(t *testing.T) {
 	}
 	if addr == "" {
 		cancel()
-		t.Fatal("HTTP server did not start or log its address within 3 s")
+		t.Fatalf("HTTP server did not start or log its address within %s; stderr:\n%s", startWait, stderr.String())
 	}
 
 	// Open a TCP connection and send an incomplete HTTP request (no
@@ -610,8 +614,9 @@ func TestRunServerShutdownError(t *testing.T) {
 			t.Errorf("run() = %d, want 0 (shutdown error is non-fatal); stderr:\n%s",
 				code, stderr.String())
 		}
-	case <-time.After(3 * time.Second):
-		t.Fatalf("run() did not return within 3 s after context cancel; stderr:\n%s", stderr.String())
+	case <-time.After(runTestTimeout):
+		t.Fatalf("run() did not return within %s after context cancel; stderr:\n%s",
+			runTestTimeout, stderr.String())
 	}
 
 	if !strings.Contains(stderr.String(), "http server shutdown error") {
