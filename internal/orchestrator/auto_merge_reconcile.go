@@ -251,17 +251,22 @@ func reconcileAutoMerge(state *State, params ReconcileParams, log *slog.Logger, 
 			mergeStatus.HeadSHA,
 		)
 
-		if markErr := params.Store.MarkReactionDispatched(ctx, pending.IssueID, ReactionKindAutoMerge); markErr != nil {
-			entryLog.Warn("failed to mark auto_merge dispatched",
-				slog.Any("error", markErr),
-			)
-		}
-
 		state.ReactionAttempts[rkey]++
 
 		if err != nil {
 			handleMergeError(state, params, key, pending, autoMergeData, err, now, pollInterval, entryLog, ctx, metrics)
 			continue
+		}
+
+		// MarkReactionDispatched runs only on a successful merge so the
+		// fingerprint dedup branch above does not short-circuit a retry
+		// after a transient or transport-class failure. The duplicate
+		// merge path inside handleMergeError marks the same fingerprint
+		// dispatched before clearing it on idempotent success.
+		if markErr := params.Store.MarkReactionDispatched(ctx, pending.IssueID, ReactionKindAutoMerge); markErr != nil {
+			entryLog.Warn("failed to mark auto_merge dispatched",
+				slog.Any("error", markErr),
+			)
 		}
 
 		entryLog.Info("auto_merge merged PR",
@@ -424,6 +429,11 @@ func handleMergeError(state *State, params ReconcileParams, key string, pending 
 				slog.Int("pr_number", autoMergeData.PRNumber),
 			)
 			metrics.IncAutoMergeReactions("merged")
+			if markErr := params.Store.MarkReactionDispatched(ctx, pending.IssueID, ReactionKindAutoMerge); markErr != nil {
+				log.Warn("failed to mark auto_merge dispatched",
+					slog.Any("error", markErr),
+				)
+			}
 			delete(state.PendingReactions, key)
 			if delErr := params.Store.DeleteReactionFingerprint(ctx, pending.IssueID, ReactionKindAutoMerge); delErr != nil {
 				log.Warn("auto_merge fingerprint delete failed on duplicate merge",
