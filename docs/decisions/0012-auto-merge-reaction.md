@@ -151,10 +151,10 @@ orchestrator, preserving merge idempotency.
 
 ### Token scope and operational stakes
 
-Auto-merge requires write scopes on the provider token: `pull_requests:
-write` for the merge call and, when branch deletion is enabled,
-`contents: write` for the delete call. The token reuses the existing
-`tracker.api_key` credential; no second secret is introduced.
+Auto-merge requires write scopes on the provider token:
+`pull_requests:write` for the merge call and, when branch deletion is
+enabled, `contents:write` for the delete call. The token reuses the
+existing `tracker.api_key` credential; no second secret is introduced.
 
 The orchestrator MUST validate token scopes at startup. Discovering a
 missing scope only on the first merge attempt would mean exhausting
