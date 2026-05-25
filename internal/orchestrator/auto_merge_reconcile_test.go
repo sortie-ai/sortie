@@ -617,6 +617,92 @@ func TestReconcileAutoMerge_Conflict405Reenqueues(t *testing.T) {
 	}
 }
 
+// TestReconcileAutoMerge_DoesNotMarkDispatchedOnTransientFailure verifies that
+// MarkReactionDispatched is invoked only on a successful merge. A transient
+// MergePR failure on tick one must leave the dispatched flag clear so the
+// fingerprint dedup branch does not short-circuit the retry attempt on tick
+// two; the second tick then succeeds and records the dispatch exactly once.
+func TestReconcileAutoMerge_DoesNotMarkDispatchedOnTransientFailure(t *testing.T) {
+	t.Parallel()
+
+	state := stateWithAutoMergePending(t, "AM-RT", 99)
+	store := &reviewReconcileStore{}
+	metrics := newAutoMergeMetricsSpy()
+
+	var mergeCallCount int
+	scm := &controlledSCMAdapter{
+		getMergeabilityFn: func(_ context.Context, _ int, _, _ string) (domain.PRMergeStatus, error) {
+			return domain.PRMergeStatus{
+				Mergeability: domain.MergeabilityClean,
+				HeadSHA:      "sha-retry",
+			}, nil
+		},
+		getReviewDecisionFn: func(_ context.Context, _ int, _, _ string) (domain.ReviewDecision, error) {
+			return domain.ReviewDecisionApproved, nil
+		},
+		getCIStatusFn: func(_ context.Context, _ int, _, _ string) (string, error) {
+			return "success", nil
+		},
+		mergePRFn: func(_ context.Context, _ int, _, _ string, _ domain.MergeStrategy, _, _, _ string) (domain.MergeResult, error) {
+			mergeCallCount++
+			if mergeCallCount == 1 {
+				return domain.MergeResult{}, &domain.SCMError{
+					Kind:    domain.ErrSCMTransport,
+					Message: "dial timeout",
+				}
+			}
+			return domain.MergeResult{SHA: "merge-sha-retry"}, nil
+		},
+	}
+	tracker := &reviewTrackerStub{}
+	params := autoMergeParams(store, scm, tracker)
+
+	// Tick one: transient failure. UpsertReactionFingerprint is invoked
+	// before MergePR; GetReactionFingerprint then reads back the stored
+	// fingerprint. Configure the stub so the read returns the value that
+	// was just upserted but with dispatched=false, modeling the persisted
+	// state at the start of tick two.
+	reconcileAutoMerge(state, params, discardLogger(), context.Background(), metrics)
+	state.TrackerOpsWg.Wait()
+
+	if mergeCallCount != 1 {
+		t.Fatalf("MergePR call count after tick one = %d, want 1", mergeCallCount)
+	}
+	if store.markDispatchedCalls != 0 {
+		t.Errorf("MarkReactionDispatched calls after transient failure = %d, want 0", store.markDispatchedCalls)
+	}
+
+	rkey := ReactionKey("AM-RT", ReactionKindAutoMerge)
+	pending, ok := state.PendingReactions[rkey]
+	if !ok {
+		t.Fatal("PendingReactions[AM-RT:merge] removed after transient failure; want re-enqueued")
+	}
+
+	// Tick two: clear the backoff so the entry is eligible immediately,
+	// configure the stub fingerprint to match the stored value with
+	// dispatched=false so the dedup short-circuit does NOT trigger. The
+	// second MergePR call succeeds and the dispatched flag is set.
+	pending.PendingRetryAt = autoMergeBaseTime
+	store.getFingerprintResult = buildAutoMergeFingerprint("sha-retry", domain.ReviewDecisionApproved)
+	store.getFingerprintDispatched = false
+
+	reconcileAutoMerge(state, params, discardLogger(), context.Background(), metrics)
+	state.TrackerOpsWg.Wait()
+
+	if mergeCallCount != 2 {
+		t.Errorf("MergePR call count after tick two = %d, want 2 (dedup should not block retry)", mergeCallCount)
+	}
+	if store.markDispatchedCalls != 1 {
+		t.Errorf("MarkReactionDispatched calls after successful merge = %d, want 1", store.markDispatchedCalls)
+	}
+	if metrics.autoMerge["merged"] != 1 {
+		t.Errorf("IncAutoMergeReactions(merged) = %d, want 1", metrics.autoMerge["merged"])
+	}
+	if _, stillPending := state.PendingReactions[rkey]; stillPending {
+		t.Error("PendingReactions[AM-RT:merge] still present after successful retry; want removed")
+	}
+}
+
 // TestReconcileAutoMerge_CrossKindIsolationOnSuccess verifies that a successful
 // merge does not touch review-kind retry entries (spec Test 15).
 func TestReconcileAutoMerge_CrossKindIsolationOnSuccess(t *testing.T) {
