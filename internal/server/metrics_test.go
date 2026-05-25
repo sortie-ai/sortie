@@ -763,3 +763,60 @@ func TestIncDispatchRuleMatch_CardinalityBounded(t *testing.T) {
 		t.Errorf("fallback/<none> counter = %v, want 3", got)
 	}
 }
+
+func TestPromMetrics_AutoMergeCounter(t *testing.T) {
+	t.Parallel()
+
+	t.Run("IncAutoMergeReactions_Merged", func(t *testing.T) {
+		t.Parallel()
+		m := newTestMetrics(t)
+		m.IncAutoMergeReactions("merged")
+		families := gatherFamilies(t, m)
+		got := counterValue(t, families, "sortie_reactions_auto_merge_total", map[string]string{"result": "merged"})
+		if got != 1 {
+			t.Errorf("sortie_reactions_auto_merge_total{result=merged} = %v, want 1", got)
+		}
+	})
+
+	t.Run("IncAutoMergeReactions_Error_Twice", func(t *testing.T) {
+		t.Parallel()
+		m := newTestMetrics(t)
+		m.IncAutoMergeReactions("error")
+		m.IncAutoMergeReactions("error")
+		families := gatherFamilies(t, m)
+		got := counterValue(t, families, "sortie_reactions_auto_merge_total", map[string]string{"result": "error"})
+		if got != 2 {
+			t.Errorf("sortie_reactions_auto_merge_total{result=error} = %v, want 2", got)
+		}
+	})
+
+	t.Run("IncAutoMergeReactions_Escalated", func(t *testing.T) {
+		t.Parallel()
+		m := newTestMetrics(t)
+		m.IncAutoMergeReactions("escalated")
+		families := gatherFamilies(t, m)
+		got := counterValue(t, families, "sortie_reactions_auto_merge_total", map[string]string{"result": "escalated"})
+		if got != 1 {
+			t.Errorf("sortie_reactions_auto_merge_total{result=escalated} = %v, want 1", got)
+		}
+	})
+
+	t.Run("IncAutoMergeReactions_MultipleLabels_Independent", func(t *testing.T) {
+		t.Parallel()
+		m := newTestMetrics(t)
+		m.IncAutoMergeReactions("merged")
+		m.IncAutoMergeReactions("merged")
+		m.IncAutoMergeReactions("error")
+		m.IncAutoMergeReactions("escalated")
+		families := gatherFamilies(t, m)
+		if got := counterValue(t, families, "sortie_reactions_auto_merge_total", map[string]string{"result": "merged"}); got != 2 {
+			t.Errorf("sortie_reactions_auto_merge_total{result=merged} = %v, want 2", got)
+		}
+		if got := counterValue(t, families, "sortie_reactions_auto_merge_total", map[string]string{"result": "error"}); got != 1 {
+			t.Errorf("sortie_reactions_auto_merge_total{result=error} = %v, want 1", got)
+		}
+		if got := counterValue(t, families, "sortie_reactions_auto_merge_total", map[string]string{"result": "escalated"}); got != 1 {
+			t.Errorf("sortie_reactions_auto_merge_total{result=escalated} = %v, want 1", got)
+		}
+	})
+}

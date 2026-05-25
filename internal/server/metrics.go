@@ -20,23 +20,24 @@ type PromMetrics struct {
 	slotsAvailable        prometheus.Gauge
 	activeSessionsElapsed prometheus.Gauge
 
-	tokensTotal            *prometheus.CounterVec
-	agentRuntimeTotal      prometheus.Counter
-	dispatchesTotal        *prometheus.CounterVec
-	workerExitsTotal       *prometheus.CounterVec
-	retriesTotal           *prometheus.CounterVec
-	reconciliationActions  *prometheus.CounterVec
-	pollCyclesTotal        *prometheus.CounterVec
-	trackerRequestsTotal   *prometheus.CounterVec
-	handoffTransitions     *prometheus.CounterVec
-	dispatchTransitions    *prometheus.CounterVec
-	trackerCommentsTotal   *prometheus.CounterVec
-	toolCallsTotal         *prometheus.CounterVec
-	ciStatusChecksTotal    *prometheus.CounterVec
-	ciEscalationsTotal     *prometheus.CounterVec
-	reviewChecksTotal      *prometheus.CounterVec
-	reviewEscalationsTotal *prometheus.CounterVec
-	dispatchRuleMatchTotal *prometheus.CounterVec
+	tokensTotal             *prometheus.CounterVec
+	agentRuntimeTotal       prometheus.Counter
+	dispatchesTotal         *prometheus.CounterVec
+	workerExitsTotal        *prometheus.CounterVec
+	retriesTotal            *prometheus.CounterVec
+	reconciliationActions   *prometheus.CounterVec
+	pollCyclesTotal         *prometheus.CounterVec
+	trackerRequestsTotal    *prometheus.CounterVec
+	handoffTransitions      *prometheus.CounterVec
+	dispatchTransitions     *prometheus.CounterVec
+	trackerCommentsTotal    *prometheus.CounterVec
+	toolCallsTotal          *prometheus.CounterVec
+	ciStatusChecksTotal     *prometheus.CounterVec
+	ciEscalationsTotal      *prometheus.CounterVec
+	reviewChecksTotal       *prometheus.CounterVec
+	reviewEscalationsTotal  *prometheus.CounterVec
+	autoMergeReactionsTotal *prometheus.CounterVec
+	dispatchRuleMatchTotal  *prometheus.CounterVec
 
 	selfReviewIterationsTotal      *prometheus.CounterVec
 	selfReviewSessionsTotal        *prometheus.CounterVec
@@ -210,6 +211,12 @@ func NewPromMetrics(version, goVersion string) *PromMetrics {
 		Help:      "Review reaction escalation outcomes.",
 	}, []string{"action"})
 
+	autoMergeReactionsTotal := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: "sortie",
+		Name:      "reactions_auto_merge_total",
+		Help:      "Auto-merge reaction outcomes by result.",
+	}, []string{"result"})
+
 	dispatchRuleMatchTotal := prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: "sortie",
 		Name:      "dispatch_rule_match_total",
@@ -266,6 +273,7 @@ func NewPromMetrics(version, goVersion string) *PromMetrics {
 		ciEscalationsTotal,
 		reviewChecksTotal,
 		reviewEscalationsTotal,
+		autoMergeReactionsTotal,
 		dispatchRuleMatchTotal,
 		selfReviewIterationsTotal,
 		selfReviewSessionsTotal,
@@ -298,6 +306,7 @@ func NewPromMetrics(version, goVersion string) *PromMetrics {
 		ciEscalationsTotal:             ciEscalationsTotal,
 		reviewChecksTotal:              reviewChecksTotal,
 		reviewEscalationsTotal:         reviewEscalationsTotal,
+		autoMergeReactionsTotal:        autoMergeReactionsTotal,
 		dispatchRuleMatchTotal:         dispatchRuleMatchTotal,
 		selfReviewIterationsTotal:      selfReviewIterationsTotal,
 		selfReviewSessionsTotal:        selfReviewSessionsTotal,
@@ -435,6 +444,12 @@ func (p *PromMetrics) IncReviewChecks(result string) {
 // IncReviewEscalations increments the review escalation action counter.
 func (p *PromMetrics) IncReviewEscalations(action string) {
 	p.reviewEscalationsTotal.WithLabelValues(action).Inc()
+}
+
+// IncAutoMergeReactions increments the auto-merge reaction outcome
+// counter.
+func (p *PromMetrics) IncAutoMergeReactions(result string) {
+	p.autoMergeReactionsTotal.WithLabelValues(result).Inc()
 }
 
 // IncDispatchRuleMatch increments the dispatch rule match counter.
