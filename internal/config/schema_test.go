@@ -614,6 +614,237 @@ func TestValidateFrontMatter(t *testing.T) {
 	}
 }
 
+// --- unresolved_extension_var warning tests ---
+
+// buildCfgWithExtension is a helper that constructs a ServiceConfig with an
+// extension block populated after env resolution so ValidateFrontMatter can
+// operate on a realistic snapshot.
+func buildCfgWithExtension(t *testing.T, extKey string, extVal map[string]any) ServiceConfig {
+	t.Helper()
+	raw := map[string]any{extKey: extVal}
+	cfg, err := NewServiceConfig(raw)
+	if err != nil {
+		t.Fatalf("NewServiceConfig: %v", err)
+	}
+	return cfg
+}
+
+// TestValidateFrontMatter_UnresolvedExtensionVar covers the new
+// unresolved_extension_var warning class: bare form, braced form, nested paths,
+// slice-index paths, set variables, multi-ref fields, $$ non-flagging,
+// deduplication of repeated variable names, and message stability.
+func TestValidateFrontMatter_UnresolvedExtensionVar(t *testing.T) {
+	t.Run("EmitsWarningOnUnset", func(t *testing.T) {
+		// An empty value is treated as unset by extractUnsetExtensionVars.
+		t.Setenv("SORTIE_TEST_512_MISSING_BARE", "")
+
+		raw := map[string]any{
+			"myext": map[string]any{"api_key": "$SORTIE_TEST_512_MISSING_BARE"},
+		}
+		cfg := buildCfgWithExtension(t, "myext", map[string]any{"api_key": "$SORTIE_TEST_512_MISSING_BARE"})
+
+		got := ValidateFrontMatter(raw, cfg)
+
+		found := findUnresolvedExtVarWarning(got)
+		if found == nil {
+			t.Fatalf("ValidateFrontMatter() no unresolved_extension_var warning; warnings: %+v", got)
+		}
+		if found.Field != "myext.api_key" {
+			t.Errorf("warning.Field = %q, want %q", found.Field, "myext.api_key")
+		}
+		if !strings.Contains(found.Message, "SORTIE_TEST_512_MISSING_BARE") {
+			t.Errorf("warning.Message = %q, want to contain variable name", found.Message)
+		}
+	})
+
+	t.Run("NoWarningWhenVariableSet", func(t *testing.T) {
+		t.Setenv("SORTIE_TEST_512_SET_VAR", "resolved-token")
+
+		raw := map[string]any{
+			"myext": map[string]any{"api_key": "$SORTIE_TEST_512_SET_VAR"},
+		}
+		cfg := buildCfgWithExtension(t, "myext", map[string]any{"api_key": "$SORTIE_TEST_512_SET_VAR"})
+
+		got := ValidateFrontMatter(raw, cfg)
+
+		for _, w := range got {
+			if w.Check == "unresolved_extension_var" {
+				t.Errorf("unexpected unresolved_extension_var warning when variable is set: %+v", w)
+			}
+		}
+	})
+
+	t.Run("BracedForm", func(t *testing.T) {
+		// An empty value is treated as unset by extractUnsetExtensionVars.
+		t.Setenv("SORTIE_TEST_512_BRACED_UNSET", "")
+
+		raw := map[string]any{
+			"myext": map[string]any{"token": "${SORTIE_TEST_512_BRACED_UNSET}"},
+		}
+		cfg := buildCfgWithExtension(t, "myext", map[string]any{"token": "${SORTIE_TEST_512_BRACED_UNSET}"})
+
+		got := ValidateFrontMatter(raw, cfg)
+
+		found := findUnresolvedExtVarWarning(got)
+		if found == nil {
+			t.Fatalf("ValidateFrontMatter() no unresolved_extension_var warning for ${VAR}; warnings: %+v", got)
+		}
+		if found.Field != "myext.token" {
+			t.Errorf("warning.Field = %q, want %q", found.Field, "myext.token")
+		}
+		// Variable name without braces must appear in the message.
+		if !strings.Contains(found.Message, "SORTIE_TEST_512_BRACED_UNSET") {
+			t.Errorf("warning.Message = %q, want variable name without braces", found.Message)
+		}
+	})
+
+	t.Run("SliceIndexPath", func(t *testing.T) {
+		// An empty value is treated as unset by extractUnsetExtensionVars.
+		t.Setenv("SORTIE_TEST_512_SLICE_HOST", "")
+
+		raw := map[string]any{
+			"worker": map[string]any{
+				"ssh_hosts": []any{"literal-host", "literal2", "$SORTIE_TEST_512_SLICE_HOST"},
+			},
+		}
+		cfg := buildCfgWithExtension(t, "worker", map[string]any{
+			"ssh_hosts": []any{"literal-host", "literal2", "$SORTIE_TEST_512_SLICE_HOST"},
+		})
+
+		got := ValidateFrontMatter(raw, cfg)
+
+		found := findUnresolvedExtVarWarning(got)
+		if found == nil {
+			t.Fatalf("no unresolved_extension_var warning for slice element; warnings: %+v", got)
+		}
+		if found.Field != "worker.ssh_hosts[2]" {
+			t.Errorf("warning.Field = %q, want %q", found.Field, "worker.ssh_hosts[2]")
+		}
+	})
+
+	t.Run("MultipleRefsOneUnset", func(t *testing.T) {
+		t.Setenv("SORTIE_TEST_512_MULTI_HOST", "example.com")
+		// An empty value is treated as unset by extractUnsetExtensionVars.
+		t.Setenv("SORTIE_TEST_512_MULTI_PORT", "")
+
+		raw := map[string]any{
+			"myext": map[string]any{
+				"url": "https://$SORTIE_TEST_512_MULTI_HOST:$SORTIE_TEST_512_MULTI_PORT/path",
+			},
+		}
+		cfg := buildCfgWithExtension(t, "myext", map[string]any{
+			"url": "https://$SORTIE_TEST_512_MULTI_HOST:$SORTIE_TEST_512_MULTI_PORT/path",
+		})
+
+		got := ValidateFrontMatter(raw, cfg)
+
+		var found []*FrontMatterWarning
+		for i := range got {
+			if got[i].Check == "unresolved_extension_var" {
+				w := got[i]
+				found = append(found, &w)
+			}
+		}
+		if len(found) != 1 {
+			t.Fatalf("ValidateFrontMatter() returned %d unresolved_extension_var warnings, want exactly 1; got %+v", len(found), got)
+		}
+		// Message must name only the unset variable.
+		if !strings.Contains(found[0].Message, "SORTIE_TEST_512_MULTI_PORT") {
+			t.Errorf("warning.Message = %q, want to contain PORT variable name", found[0].Message)
+		}
+		if strings.Contains(found[0].Message, "SORTIE_TEST_512_MULTI_HOST") {
+			t.Errorf("warning.Message = %q, must not contain the set HOST variable name", found[0].Message)
+		}
+		// The resolved value must not appear.
+		if strings.Contains(found[0].Message, "example.com") {
+			t.Errorf("warning.Message = %q, must not contain the resolved value", found[0].Message)
+		}
+	})
+
+	t.Run("DedupRepeatedVar", func(t *testing.T) {
+		// An empty value is treated as unset by extractUnsetExtensionVars.
+		t.Setenv("SORTIE_TEST_512_DEDUP_HOST", "")
+
+		raw := map[string]any{
+			"myext": map[string]any{
+				"url": "https://$SORTIE_TEST_512_DEDUP_HOST:80/$SORTIE_TEST_512_DEDUP_HOST/path",
+			},
+		}
+		cfg := buildCfgWithExtension(t, "myext", map[string]any{
+			"url": "https://$SORTIE_TEST_512_DEDUP_HOST:80/$SORTIE_TEST_512_DEDUP_HOST/path",
+		})
+
+		got := ValidateFrontMatter(raw, cfg)
+
+		found := findUnresolvedExtVarWarning(got)
+		if found == nil {
+			t.Fatalf("no unresolved_extension_var warning for dedup case; warnings: %+v", got)
+		}
+		// The variable name must appear exactly once in the message.
+		count := strings.Count(found.Message, "SORTIE_TEST_512_DEDUP_HOST")
+		if count != 1 {
+			t.Errorf("warning.Message = %q, variable name appears %d times, want exactly 1 (dedup contract)", found.Message, count)
+		}
+		// Singular form: "variable ... is unset or empty"
+		if !strings.Contains(found.Message, "variable") {
+			t.Errorf("warning.Message = %q, want singular 'variable' form", found.Message)
+		}
+	})
+
+	t.Run("DollarDollarNotFlagged", func(t *testing.T) {
+		t.Parallel()
+		// os.ExpandEnv("$$") -> ""; the resolved value is empty but the
+		// variable name extracted by readShellName is "" so no warning fires.
+		raw := map[string]any{
+			"myext": map[string]any{"val": "$$"},
+		}
+		cfg := buildCfgWithExtension(t, "myext", map[string]any{"val": "$$"})
+
+		got := ValidateFrontMatter(raw, cfg)
+
+		for _, w := range got {
+			if w.Check == "unresolved_extension_var" {
+				t.Errorf("unexpected unresolved_extension_var warning for $$ literal: %+v", w)
+			}
+		}
+	})
+
+	t.Run("MessageStability", func(t *testing.T) {
+		t.Parallel()
+		// Verify formatUnresolvedExtensionVarMessage produces the exact
+		// fixed-shape strings the spec mandates.
+		one := formatUnresolvedExtensionVarMessage([]string{"MY_VAR"})
+		wantOne := `unresolved $VAR reference: variable "MY_VAR" is unset or empty`
+		if one != wantOne {
+			t.Errorf("1-name: got %q, want %q", one, wantOne)
+		}
+
+		two := formatUnresolvedExtensionVarMessage([]string{"VAR_A", "VAR_B"})
+		wantTwo := `unresolved $VAR reference: variables "VAR_A" and "VAR_B" are unset or empty`
+		if two != wantTwo {
+			t.Errorf("2-name: got %q, want %q", two, wantTwo)
+		}
+
+		three := formatUnresolvedExtensionVarMessage([]string{"VAR_A", "VAR_B", "VAR_C"})
+		wantThree := `unresolved $VAR reference: variables "VAR_A", "VAR_B", and "VAR_C" are unset or empty`
+		if three != wantThree {
+			t.Errorf("3-name: got %q, want %q", three, wantThree)
+		}
+	})
+}
+
+// findUnresolvedExtVarWarning returns the first FrontMatterWarning with
+// Check == "unresolved_extension_var", or nil when none exists.
+func findUnresolvedExtVarWarning(warnings []FrontMatterWarning) *FrontMatterWarning {
+	for i := range warnings {
+		if warnings[i].Check == "unresolved_extension_var" {
+			w := warnings[i]
+			return &w
+		}
+	}
+	return nil
+}
+
 // TestValidateFrontMatterReactions verifies that the reactions section with
 // AllowDynamicKeys=true never emits unknown_sub_key warnings for any reaction
 // kind keys, while still emitting type_mismatch when the top-level value is

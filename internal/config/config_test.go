@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestNewServiceConfig(t *testing.T) {
@@ -1933,5 +1934,293 @@ func TestCIFailureMigration(t *testing.T) {
 			t.Fatal("Reactions[\"review_comments\"] missing")
 		}
 		assertStringEqual(t, "Reactions[review_comments].Provider", "github", rc.Provider)
+	})
+}
+
+// TestResolveExtensionEnvRefs covers the recursive walker at the unit level:
+// nested maps, slices of strings, slices of maps, non-string leaves, nil map,
+// the braced ${VAR} form, and the $$ -> "" contract.
+func TestResolveExtensionEnvRefs(t *testing.T) {
+	t.Run("NilMap", func(t *testing.T) {
+		t.Parallel()
+		snapshot := resolveExtensionEnvRefs(nil)
+		if snapshot != nil {
+			t.Errorf("resolveExtensionEnvRefs(nil) = %v, want nil", snapshot)
+		}
+	})
+
+	t.Run("NestedMap", func(t *testing.T) {
+		t.Setenv("SORTIE_TEST_512_NESTED_A", "tok-abc")
+
+		ext := map[string]any{
+			"myext": map[string]any{
+				"api_key": "$SORTIE_TEST_512_NESTED_A",
+				"host":    "literal-host",
+			},
+		}
+		snapshot := resolveExtensionEnvRefs(ext)
+
+		inner, ok := ext["myext"].(map[string]any)
+		if !ok {
+			t.Fatal("ext[myext] is not a map")
+		}
+		assertStringEqual(t, "myext.api_key resolved", "tok-abc", inner["api_key"].(string))
+		assertStringEqual(t, "myext.host unchanged", "literal-host", inner["host"].(string))
+
+		if snapshot == nil {
+			t.Fatal("snapshot is nil, want non-nil")
+		}
+		if _, ok := snapshot["myext.api_key"]; !ok {
+			t.Error("snapshot missing key myext.api_key")
+		}
+		if _, ok := snapshot["myext.host"]; ok {
+			t.Error("snapshot must not record literal (no $) values")
+		}
+	})
+
+	t.Run("SliceOfStrings", func(t *testing.T) {
+		t.Setenv("SORTIE_TEST_512_HOST", "deploy.example.com")
+
+		ext := map[string]any{
+			"worker": map[string]any{
+				"ssh_hosts": []any{"$SORTIE_TEST_512_HOST", "literal-host"},
+			},
+		}
+		snapshot := resolveExtensionEnvRefs(ext)
+
+		worker := ext["worker"].(map[string]any)
+		hosts := worker["ssh_hosts"].([]any)
+		assertStringEqual(t, "ssh_hosts[0] resolved", "deploy.example.com", hosts[0].(string))
+		assertStringEqual(t, "ssh_hosts[1] literal unchanged", "literal-host", hosts[1].(string))
+
+		if snapshot == nil {
+			t.Fatal("snapshot is nil")
+		}
+		if _, ok := snapshot["worker.ssh_hosts[0]"]; !ok {
+			t.Error("snapshot missing key worker.ssh_hosts[0]")
+		}
+		if _, ok := snapshot["worker.ssh_hosts[1]"]; ok {
+			t.Error("snapshot must not record literal (no $) element")
+		}
+	})
+
+	t.Run("SliceOfMaps", func(t *testing.T) {
+		t.Setenv("SORTIE_TEST_512_SMAP_KEY", "nested-value")
+
+		ext := map[string]any{
+			"myext": map[string]any{
+				"servers": []any{
+					map[string]any{"key": "$SORTIE_TEST_512_SMAP_KEY"},
+					map[string]any{"key": "plain"},
+				},
+			},
+		}
+		snapshot := resolveExtensionEnvRefs(ext)
+
+		inner := ext["myext"].(map[string]any)
+		servers := inner["servers"].([]any)
+		first := servers[0].(map[string]any)
+		second := servers[1].(map[string]any)
+		assertStringEqual(t, "servers[0].key resolved", "nested-value", first["key"].(string))
+		assertStringEqual(t, "servers[1].key literal", "plain", second["key"].(string))
+
+		if snapshot == nil {
+			t.Fatal("snapshot is nil")
+		}
+		if _, ok := snapshot["myext.servers[0].key"]; !ok {
+			t.Error("snapshot missing myext.servers[0].key")
+		}
+		if _, ok := snapshot["myext.servers[1].key"]; ok {
+			t.Error("snapshot must not record literal value")
+		}
+	})
+
+	t.Run("NonStringLeavesUntouched", func(t *testing.T) {
+		t.Parallel()
+
+		ts := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+		ext := map[string]any{
+			"myext": map[string]any{
+				"port":    8080,
+				"ratio":   float64(3.14),
+				"enabled": true,
+				"limit":   int64(100),
+				"ts":      ts,
+				"nothing": nil,
+			},
+		}
+		snapshot := resolveExtensionEnvRefs(ext)
+
+		inner := ext["myext"].(map[string]any)
+		if inner["port"] != 8080 {
+			t.Errorf("port = %v, want 8080", inner["port"])
+		}
+		if inner["ratio"] != float64(3.14) {
+			t.Errorf("ratio = %v, want 3.14", inner["ratio"])
+		}
+		if inner["enabled"] != true {
+			t.Errorf("enabled = %v, want true", inner["enabled"])
+		}
+		if inner["limit"] != int64(100) {
+			t.Errorf("limit = %v, want int64(100)", inner["limit"])
+		}
+		if inner["ts"] != ts {
+			t.Errorf("ts = %v, want %v", inner["ts"], ts)
+		}
+		if inner["nothing"] != nil {
+			t.Errorf("nothing = %v, want nil", inner["nothing"])
+		}
+		if snapshot != nil {
+			t.Errorf("snapshot = %v, want nil (no $ leaves)", snapshot)
+		}
+	})
+
+	t.Run("LiteralsWithoutDollar", func(t *testing.T) {
+		t.Parallel()
+
+		ext := map[string]any{
+			"logging": map[string]any{"level": "debug"},
+		}
+		snapshot := resolveExtensionEnvRefs(ext)
+
+		inner := ext["logging"].(map[string]any)
+		assertStringEqual(t, "logging.level unchanged", "debug", inner["level"].(string))
+		if snapshot != nil {
+			t.Errorf("snapshot = %v, want nil (no $ in any leaf)", snapshot)
+		}
+	})
+
+	t.Run("BracedForm", func(t *testing.T) {
+		t.Setenv("SORTIE_TEST_512_BRACE", "braced-value")
+
+		ext := map[string]any{
+			"myext": map[string]any{"key": "${SORTIE_TEST_512_BRACE}"},
+		}
+		snapshot := resolveExtensionEnvRefs(ext)
+
+		inner := ext["myext"].(map[string]any)
+		assertStringEqual(t, "myext.key resolved via ${}", "braced-value", inner["key"].(string))
+		if snapshot == nil {
+			t.Fatal("snapshot is nil")
+		}
+		if _, ok := snapshot["myext.key"]; !ok {
+			t.Error("snapshot missing myext.key for ${VAR} form")
+		}
+	})
+
+	t.Run("DollarDollar", func(t *testing.T) {
+		t.Parallel()
+		// os.ExpandEnv("$$") returns "" — the $$ sequence is consumed
+		// and maps to an empty variable name which expands to empty.
+		// This is the documented behavior (no custom $$ escape).
+		ext := map[string]any{"myext": map[string]any{"val": "$$"}}
+		resolveExtensionEnvRefs(ext)
+
+		inner := ext["myext"].(map[string]any)
+		assertStringEqual(t, "myext.val after $$ expansion", "", inner["val"].(string))
+	})
+}
+
+// TestNewServiceConfigExtensions covers extension-walker integration through
+// NewServiceConfig: SORTIE_* precedence, unknown leaf types, and slice-of-strings.
+func TestNewServiceConfigExtensions(t *testing.T) {
+	t.Run("SortiePrecedence", func(t *testing.T) {
+		// SORTIE_TRACKER_API_KEY overrides the YAML value for the core field;
+		// a sibling extension $VAR is resolved against the same environment.
+		t.Setenv("SORTIE_TRACKER_API_KEY", "from-env-override")
+		t.Setenv("SORTIE_TEST_512_EXT_KEY", "ext-resolved-value")
+
+		cfg, err := NewServiceConfig(map[string]any{
+			"tracker": map[string]any{
+				"kind":    "file",
+				"api_key": "$SORTIE_TEST_512_EXT_KEY",
+			},
+			"myext": map[string]any{
+				"api_key": "$SORTIE_TEST_512_EXT_KEY",
+			},
+		})
+		if err != nil {
+			t.Fatalf("NewServiceConfig: %v", err)
+		}
+		// Core field: the SORTIE_* override wins.
+		assertStringEqual(t, "Tracker.APIKey", "from-env-override", cfg.Tracker.APIKey)
+		// Extension field: $VAR resolved against process environment.
+		extMap, ok := cfg.Extensions["myext"].(map[string]any)
+		if !ok {
+			t.Fatal("cfg.Extensions[myext] not a map")
+		}
+		assertStringEqual(t, "myext.api_key resolved", "ext-resolved-value", extMap["api_key"].(string))
+	})
+
+	t.Run("NestedSliceOfStrings", func(t *testing.T) {
+		t.Setenv("SORTIE_TEST_512_DEPLOY", "prod.example.com")
+
+		cfg, err := NewServiceConfig(map[string]any{
+			"worker": map[string]any{
+				"ssh_hosts": []any{"$SORTIE_TEST_512_DEPLOY", "literal-host"},
+			},
+		})
+		if err != nil {
+			t.Fatalf("NewServiceConfig: %v", err)
+		}
+		workerExt, ok := cfg.Extensions["worker"].(map[string]any)
+		if !ok {
+			t.Fatal("cfg.Extensions[worker] not a map")
+		}
+		hosts, ok := workerExt["ssh_hosts"].([]any)
+		if !ok {
+			t.Fatal("worker.ssh_hosts not a []any")
+		}
+		assertStringEqual(t, "ssh_hosts[0] resolved", "prod.example.com", hosts[0].(string))
+		assertStringEqual(t, "ssh_hosts[1] literal", "literal-host", hosts[1].(string))
+	})
+
+	t.Run("NoPanicOnUnexpectedLeafType", func(t *testing.T) {
+		t.Parallel()
+		// An int32 value is not produced by yaml.v3 decode-to-any but can
+		// appear in Go-constructed test maps. The walker MUST NOT panic.
+		raw := map[string]any{
+			"myext": map[string]any{
+				"count": int32(42),
+				"name":  "literal",
+			},
+		}
+		// Verify no panic.
+		cfg, err := NewServiceConfig(raw)
+		if err != nil {
+			t.Fatalf("NewServiceConfig with int32 leaf: %v", err)
+		}
+		extMap, ok := cfg.Extensions["myext"].(map[string]any)
+		if !ok {
+			t.Fatal("cfg.Extensions[myext] not a map")
+		}
+		if extMap["count"] != int32(42) {
+			t.Errorf("myext.count = %v (%T), want int32(42)", extMap["count"], extMap["count"])
+		}
+	})
+
+	t.Run("WalkerPanicFreeOnUnknownLeafType", func(t *testing.T) {
+		t.Parallel()
+		// A func() value is definitely not a yaml.v3 leaf type.
+		// The walker default arm must return it unchanged without panicking.
+		fn := func() {}
+		ext := map[string]any{
+			"myext": map[string]any{
+				"callback": fn,
+				"name":     "plain",
+			},
+		}
+		// Must not panic.
+		snapshot := resolveExtensionEnvRefs(ext)
+
+		inner := ext["myext"].(map[string]any)
+		// callback must be returned unchanged (non-nil, same function value).
+		if inner["callback"] == nil {
+			t.Error("callback became nil; want original func value preserved")
+		}
+		// No snapshot entry for non-string leaves.
+		if snapshot != nil {
+			t.Errorf("snapshot = %v, want nil for non-string ext with no $ leaves", snapshot)
+		}
 	})
 }
