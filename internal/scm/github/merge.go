@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/sortie-ai/sortie/internal/domain"
 )
@@ -18,7 +19,7 @@ import (
 type reviewState struct {
 	State     string
 	IsBot     bool
-	Submitted string
+	Submitted time.Time
 }
 
 // GetReviewDecision returns the aggregated review decision computed
@@ -40,12 +41,16 @@ func (a *GitHubSCMAdapter) GetReviewDecision(ctx context.Context, prNumber int, 
 			continue
 		}
 		isBot := strings.EqualFold(r.User.Type, "Bot")
+		// Parsing yields a comparable time.Time. A parse failure produces
+		// the zero time, so an unparseable timestamp loses to any
+		// successfully parsed one and ties keep the first-seen review.
+		submitted, _ := time.Parse(time.RFC3339, r.SubmittedAt)
 		prev, exists := latest[login]
-		if !exists || r.SubmittedAt > prev.Submitted {
+		if !exists || submitted.After(prev.Submitted) {
 			latest[login] = reviewState{
 				State:     state,
 				IsBot:     isBot,
-				Submitted: r.SubmittedAt,
+				Submitted: submitted,
 			}
 		}
 	}
