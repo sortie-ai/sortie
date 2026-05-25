@@ -304,9 +304,20 @@ const ReactionKindCI = "ci"
 // reactions.
 const ReactionKindReview = "review"
 
+// ReactionKindAutoMerge is the reaction kind constant for auto-merge
+// reactions. The user-facing YAML key is reactions.auto_merge; the
+// short form lives here as the runtime and persisted discriminator.
+const ReactionKindAutoMerge = "merge"
+
+// AutoMergePreflightRetryDelay is the delay between the initial
+// auto-merge preflight failure (transport-class) and its single
+// scheduled retry. The retry runs at most once per orchestrator
+// lifetime.
+const AutoMergePreflightRetryDelay time.Duration = 5 * time.Minute
+
 func isKnownReactionKind(kind string) bool {
 	switch kind {
-	case ReactionKindCI, ReactionKindReview:
+	case ReactionKindCI, ReactionKindReview, ReactionKindAutoMerge:
 		return true
 	default:
 		return false
@@ -429,6 +440,40 @@ type ReviewReactionConfig struct {
 	MaxContinuationTurns int
 }
 
+// AutoMergeReactionData holds auto-merge-specific fields for a pending
+// auto-merge reaction. Stored in [PendingReaction.KindData] for
+// reactions with Kind == [ReactionKindAutoMerge]. Owner, Repo, Branch,
+// and SHA are sourced from [domain.SCMMetadata] (written by the agent
+// to scm.json), never from the tracker project configuration.
+type AutoMergeReactionData struct {
+	// PRNumber is the pull request number.
+	PRNumber int
+
+	// Owner is the repository owner.
+	Owner string
+
+	// Repo is the repository name.
+	Repo string
+
+	// Branch is the git branch name (PR head).
+	Branch string
+
+	// SHA is the git commit SHA at the last known push.
+	SHA string
+}
+
+// AutoMergeReactionConfig holds validated auto-merge-specific
+// configuration extracted from [config.ReactionConfig] at startup.
+type AutoMergeReactionConfig struct {
+	Strategy        domain.MergeStrategy
+	RequireCI       bool
+	DeleteBranch    bool
+	PollIntervalMS  int
+	Escalation      string
+	EscalationLabel string
+	MaxRetries      int
+}
+
 // State is the single authoritative runtime state owned by the orchestrator.
 // The running map and claimed set are in-memory for performance. The
 // agent_totals and completed set are backed by SQLite and survive restarts.
@@ -507,6 +552,25 @@ type State struct {
 	// (not persisted).
 	PendingReactions map[string]*PendingReaction
 
+	// AutoMergePreflightFailed marks the auto-merge subsystem as
+	// disabled for the lifetime of the process when the startup
+	// preflight detects a missing token scope or a transport failure
+	// the bounded retry could not heal. Read by reconcileAutoMerge to
+	// drop pending merge entries with a single warn log per entry.
+	AutoMergePreflightFailed bool
+
+	// AutoMergePreflightRetryDueAt schedules a one-shot retry of the
+	// auto-merge preflight after a transport-class startup failure.
+	// Zero means no retry is scheduled. Cleared by the event-loop
+	// goroutine when the retry is consumed; never re-set after the
+	// consume runs.
+	AutoMergePreflightRetryDueAt time.Time
+
+	// AutoMergeAuthLogged tracks issues whose runtime ErrSCMAuth on
+	// MergePR has already produced a structured ERROR log, so the log
+	// fires at most once per issue per orchestrator lifetime.
+	AutoMergeAuthLogged map[string]struct{}
+
 	// SweepTickCounter tracks poll ticks since the last terminal workspace
 	// sweep. Incremented by handleTick; reset to zero when the sweep fires.
 	// Runtime-only (not persisted).
@@ -582,6 +646,7 @@ func NewState(pollIntervalMS, maxConcurrentAgents int, maxConcurrentByState map[
 		AgentTotals:          totals,
 		ReactionAttempts:     make(map[string]int),
 		PendingReactions:     make(map[string]*PendingReaction),
+		AutoMergeAuthLogged:  make(map[string]struct{}),
 	}
 }
 
@@ -847,6 +912,76 @@ func BuildReviewReactionConfig(rc config.ReactionConfig) (ReviewReactionConfig, 
 			return ReviewReactionConfig{}, fmt.Errorf("max_continuation_turns must be positive, got %d", n)
 		}
 		cfg.MaxContinuationTurns = n
+	}
+
+	return cfg, nil
+}
+
+// BuildAutoMergeReactionConfig extracts and validates auto-merge
+// specific configuration from a [config.ReactionConfig]. Returns an
+// error for invalid values.
+func BuildAutoMergeReactionConfig(rc config.ReactionConfig) (AutoMergeReactionConfig, error) {
+	cfg := AutoMergeReactionConfig{
+		Strategy:        domain.StrategySquash,
+		RequireCI:       true,
+		DeleteBranch:    true,
+		PollIntervalMS:  60000,
+		Escalation:      rc.Escalation,
+		EscalationLabel: rc.EscalationLabel,
+		MaxRetries:      rc.MaxRetries,
+	}
+
+	if cfg.Escalation == "" {
+		cfg.Escalation = "comment"
+	}
+	if cfg.Escalation != "label" && cfg.Escalation != "comment" {
+		return AutoMergeReactionConfig{}, fmt.Errorf("invalid escalation %q: must be \"label\" or \"comment\"", cfg.Escalation)
+	}
+
+	if cfg.EscalationLabel == "" {
+		cfg.EscalationLabel = "needs-human"
+	}
+
+	if v, ok := rc.Extra["strategy"]; ok {
+		s, sok := v.(string)
+		if !sok {
+			return AutoMergeReactionConfig{}, fmt.Errorf("invalid strategy: expected string, got %T", v)
+		}
+		switch s {
+		case "":
+			cfg.Strategy = domain.StrategySquash
+		case string(domain.StrategyMerge), string(domain.StrategySquash), string(domain.StrategyRebase):
+			cfg.Strategy = domain.MergeStrategy(s)
+		default:
+			return AutoMergeReactionConfig{}, fmt.Errorf("invalid strategy %q: must be \"merge\", \"squash\", or \"rebase\"", s)
+		}
+	}
+
+	if v, ok := rc.Extra["require_ci"]; ok {
+		b, bok := v.(bool)
+		if !bok {
+			return AutoMergeReactionConfig{}, fmt.Errorf("invalid require_ci: expected bool, got %T", v)
+		}
+		cfg.RequireCI = b
+	}
+
+	if v, ok := rc.Extra["delete_branch"]; ok {
+		b, bok := v.(bool)
+		if !bok {
+			return AutoMergeReactionConfig{}, fmt.Errorf("invalid delete_branch: expected bool, got %T", v)
+		}
+		cfg.DeleteBranch = b
+	}
+
+	if v, ok := rc.Extra["poll_interval_ms"]; ok {
+		n, err := toInt(v)
+		if err != nil {
+			return AutoMergeReactionConfig{}, fmt.Errorf("invalid poll_interval_ms: %w", err)
+		}
+		if n < 30000 {
+			return AutoMergeReactionConfig{}, fmt.Errorf("poll_interval_ms must be >= 30000, got %d", n)
+		}
+		cfg.PollIntervalMS = n
 	}
 
 	return cfg, nil
