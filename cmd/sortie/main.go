@@ -14,12 +14,14 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"maps"
 	"net"
 	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -100,20 +102,18 @@ func buildAgentAdapterCache(cfg config.ServiceConfig, defaultAdapter domain.Agen
 // [orchestrator.OrchestratorParams.AgentAdapterByKind] and the retry
 // timer params. The returned function reads from cache for O(1)
 // lookup and returns a wrapped *[registry.RegistryError] for unknown
-// kinds so callers can detect the missing-adapter category.
+// kinds so callers can detect the missing-adapter category. The
+// Available list on the returned error is sorted for stable diagnostic
+// output, matching the contract of [registry.Registry.Get].
 func makeAgentAdapterByKind(cache map[string]domain.AgentAdapter) func(kind string) (domain.AgentAdapter, error) {
 	return func(kind string) (domain.AgentAdapter, error) {
 		if adapter, ok := cache[kind]; ok {
 			return adapter, nil
 		}
-		available := make([]string, 0, len(cache))
-		for k := range cache {
-			available = append(available, k)
-		}
 		return nil, &registry.RegistryError{
 			Dimension: "agent",
 			Kind:      kind,
-			Available: available,
+			Available: slices.Sorted(maps.Keys(cache)),
 		}
 	}
 }
