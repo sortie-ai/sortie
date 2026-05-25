@@ -423,8 +423,12 @@ func loadPerRuleTemplates(dispatchCfg config.DispatchConfig, body *prompt.Templa
 }
 
 // hasFrontMatterMarker reports whether the byte buffer starts with
-// the YAML front matter delimiter, after skipping leading whitespace.
+// the YAML front matter delimiter, after skipping a leading UTF-8 BOM
+// and any whitespace. The BOM is stripped first because Windows editors
+// frequently prepend it to UTF-8 files, and a delimiter check on the
+// raw bytes would otherwise miss the front matter on those inputs.
 func hasFrontMatterMarker(b []byte) bool {
-	trimmed := bytes.TrimLeft(b, " \t\r\n")
+	trimmed := bytes.TrimPrefix(b, []byte(utf8BOM))
+	trimmed = bytes.TrimLeft(trimmed, " \t\r\n")
 	return bytes.HasPrefix(trimmed, []byte("---"))
 }
