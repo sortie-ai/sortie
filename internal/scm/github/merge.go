@@ -6,72 +6,50 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
-	"time"
 
 	"github.com/sortie-ai/sortie/internal/domain"
 )
 
-// reviewState carries the minimum review fields needed to compute the
-// aggregated review decision client-side.
-type reviewState struct {
-	State     string
-	IsBot     bool
-	Submitted time.Time
-}
-
-// GetReviewDecision returns the aggregated review decision computed
-// from the latest non-pending review per reviewer on the PR.
+// GetReviewDecision returns the platform's authoritative review
+// decision for the given PR. The value is read from
+// PullRequest.reviewDecision on the GraphQL endpoint and mapped onto
+// the four domain.ReviewDecision constants. A null platform answer is
+// mapped to ReviewDecisionNotRequired; an unknown enum value is mapped
+// to ReviewDecisionNotRequired and logged at warn level so an operator
+// can detect a platform-side enum extension.
 func (a *GitHubSCMAdapter) GetReviewDecision(ctx context.Context, prNumber int, owner, repo string) (domain.ReviewDecision, error) {
-	reviews, err := a.fetchAllReviews(ctx, prNumber, owner, repo)
-	if err != nil {
+	variables := map[string]any{
+		"owner":  owner,
+		"repo":   repo,
+		"number": prNumber,
+	}
+	envelope := graphqlResponseEnvelope[reviewDecisionResponseData]{}
+	if err := a.postGraphQL(ctx, reviewDecisionQuery, variables, &envelope); err != nil {
 		return "", err
 	}
 
-	latest := make(map[string]reviewState)
-	for _, r := range reviews {
-		state := strings.ToUpper(strings.TrimSpace(r.State))
-		if state == "" || state == "PENDING" || state == "COMMENTED" {
-			continue
-		}
-		login := r.User.Login
-		if login == "" {
-			continue
-		}
-		isBot := strings.EqualFold(r.User.Type, "Bot")
-		// Parsing yields a comparable time.Time. A parse failure produces
-		// the zero time, so an unparseable timestamp loses to any
-		// successfully parsed one and ties keep the first-seen review.
-		submitted, _ := time.Parse(time.RFC3339, r.SubmittedAt)
-		prev, exists := latest[login]
-		if !exists || submitted.After(prev.Submitted) {
-			latest[login] = reviewState{
-				State:     state,
-				IsBot:     isBot,
-				Submitted: submitted,
-			}
+	pr := envelope.Data.Repository.PullRequest
+	if pr == nil {
+		return "", &domain.SCMError{
+			Kind:    domain.ErrSCMPayload,
+			Message: "graphql response missing pullRequest payload",
 		}
 	}
 
-	hasApproval := false
-	for _, rs := range latest {
-		if rs.IsBot {
-			continue
-		}
-		if rs.State == "CHANGES_REQUESTED" {
-			return domain.ReviewDecisionChangesRequested, nil
-		}
-		if rs.State == "APPROVED" {
-			hasApproval = true
-		}
+	mapped, known := mapReviewDecision(pr.ReviewDecision)
+	if !known {
+		slog.WarnContext(ctx, "graphql review decision returned unknown value",
+			slog.Int("pr_number", prNumber),
+			slog.String("owner", owner),
+			slog.String("repo", repo),
+			slog.String("decision", *pr.ReviewDecision),
+		)
 	}
-
-	if hasApproval {
-		return domain.ReviewDecisionApproved, nil
-	}
-	return domain.ReviewDecisionNotRequired, nil
+	return mapped, nil
 }
 
 // pullRequestResponse captures the subset of GitHub pull request fields

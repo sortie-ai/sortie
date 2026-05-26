@@ -1,7 +1,11 @@
 package github
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
+	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -12,102 +16,436 @@ import (
 
 // --- GetReviewDecision tests ---
 
-func TestGetReviewDecision_Approved(t *testing.T) {
+// TestGetReviewDecision_GraphQL_EnumMapping covers the four authoritative
+// review decision values plus the null case via a table-driven test.
+func TestGetReviewDecision_GraphQL_EnumMapping(t *testing.T) {
 	t.Parallel()
 
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.Contains(r.URL.Path, "/reviews") {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusOK)
-			// Two reviewers: one approved, one bot-approved. Only human counts.
-			_, _ = w.Write([]byte(`[
-				{"user":{"login":"alice","type":"User"},"state":"APPROVED","submitted_at":"2026-01-02T10:00:00Z"},
-				{"user":{"login":"ci-bot","type":"Bot"},"state":"APPROVED","submitted_at":"2026-01-02T11:00:00Z"}
-			]`))
-		}
-	}))
-	defer srv.Close()
-
-	a := newTestSCMAdapter(t, srv.URL)
-	decision, err := a.GetReviewDecision(t.Context(), 1, "owner", "repo")
-	if err != nil {
-		t.Fatalf("GetReviewDecision: %v", err)
+	tests := []struct {
+		name           string
+		reviewDecision string // JSON value for the reviewDecision field
+		want           domain.ReviewDecision
+	}{
+		{
+			name:           "approved",
+			reviewDecision: `"APPROVED"`,
+			want:           domain.ReviewDecisionApproved,
+		},
+		{
+			name:           "changes_requested",
+			reviewDecision: `"CHANGES_REQUESTED"`,
+			want:           domain.ReviewDecisionChangesRequested,
+		},
+		{
+			name:           "review_required",
+			reviewDecision: `"REVIEW_REQUIRED"`,
+			want:           domain.ReviewDecisionReviewRequired,
+		},
+		{
+			name:           "null_not_required",
+			reviewDecision: `null`,
+			want:           domain.ReviewDecisionNotRequired,
+		},
 	}
-	if decision != domain.ReviewDecisionApproved {
-		t.Errorf("GetReviewDecision() = %q, want %q", decision, domain.ReviewDecisionApproved)
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			body := `{"data":{"repository":{"pullRequest":{"reviewDecision":` + tt.reviewDecision + `}}}}`
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(body))
+			}))
+			defer srv.Close()
+
+			a := newTestSCMAdapter(t, srv.URL)
+			got, err := a.GetReviewDecision(t.Context(), 1, "owner", "repo")
+			if err != nil {
+				t.Fatalf("GetReviewDecision() = _, %v, want nil error", err)
+			}
+			if got != tt.want {
+				t.Errorf("GetReviewDecision() = %q, want %q", got, tt.want)
+			}
+		})
 	}
 }
 
-func TestGetReviewDecision_ChangesRequested(t *testing.T) {
-	t.Parallel()
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.Contains(r.URL.Path, "/reviews") {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte(`[
-				{"user":{"login":"alice","type":"User"},"state":"APPROVED","submitted_at":"2026-01-02T10:00:00Z"},
-				{"user":{"login":"bob","type":"User"},"state":"CHANGES_REQUESTED","submitted_at":"2026-01-02T11:00:00Z"}
-			]`))
-		}
+// TestGetReviewDecision_GraphQL_UnknownEnumValue verifies that an unknown
+// reviewDecision enum value maps to ReviewDecisionNotRequired and emits a
+// WARN log entry carrying the unknown value.
+func TestGetReviewDecision_GraphQL_UnknownEnumValue(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":{"repository":{"pullRequest":{"reviewDecision":"FUTURE_VALUE"}}}}`))
 	}))
 	defer srv.Close()
 
+	var buf bytes.Buffer
+	h := slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelWarn})
+	prev := slog.Default()
+	slog.SetDefault(slog.New(h))
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
 	a := newTestSCMAdapter(t, srv.URL)
-	decision, err := a.GetReviewDecision(t.Context(), 1, "owner", "repo")
+	got, err := a.GetReviewDecision(t.Context(), 1, "owner", "repo")
 	if err != nil {
-		t.Fatalf("GetReviewDecision: %v", err)
+		t.Fatalf("GetReviewDecision() = _, %v, want nil error", err)
 	}
-	if decision != domain.ReviewDecisionChangesRequested {
-		t.Errorf("GetReviewDecision() = %q, want %q", decision, domain.ReviewDecisionChangesRequested)
+	if got != domain.ReviewDecisionNotRequired {
+		t.Errorf("GetReviewDecision() = %q, want %q", got, domain.ReviewDecisionNotRequired)
+	}
+
+	logOutput := buf.String()
+	if !strings.Contains(logOutput, "FUTURE_VALUE") {
+		t.Errorf("WARN log output = %q, want substring %q", logOutput, "FUTURE_VALUE")
 	}
 }
 
-func TestGetReviewDecision_BotChangesRequestedIgnored(t *testing.T) {
+// TestGetReviewDecision_GraphQL_ErrorsArray verifies that a GraphQL 200
+// response with a non-empty errors array surfaces as ErrSCMAPI with the
+// first error message text included in the SCMError message.
+func TestGetReviewDecision_GraphQL_ErrorsArray(t *testing.T) {
 	t.Parallel()
 
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.Contains(r.URL.Path, "/reviews") {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusOK)
-			// Only the bot has CHANGES_REQUESTED; human approved.
-			_, _ = w.Write([]byte(`[
-				{"user":{"login":"alice","type":"User"},"state":"APPROVED","submitted_at":"2026-01-02T10:00:00Z"},
-				{"user":{"login":"ci-bot","type":"Bot"},"state":"CHANGES_REQUESTED","submitted_at":"2026-01-02T11:00:00Z"}
-			]`))
-		}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":{"repository":null},"errors":[{"message":"Could not resolve to a Repository with the name"}]}`))
 	}))
 	defer srv.Close()
 
 	a := newTestSCMAdapter(t, srv.URL)
-	decision, err := a.GetReviewDecision(t.Context(), 1, "owner", "repo")
-	if err != nil {
-		t.Fatalf("GetReviewDecision: %v", err)
+	_, err := a.GetReviewDecision(t.Context(), 1, "owner", "repo")
+	assertSCMErrorKind(t, err, domain.ErrSCMAPI)
+
+	var se *domain.SCMError
+	if !errors.As(err, &se) {
+		t.Fatalf("error type = %T, want *domain.SCMError", err)
 	}
-	if decision != domain.ReviewDecisionApproved {
-		t.Errorf("GetReviewDecision() = %q, want %q (bot CHANGES_REQUESTED must be ignored)", decision, domain.ReviewDecisionApproved)
+	if !strings.Contains(se.Message, "Could not resolve to a Repository") {
+		t.Errorf("SCMError.Message = %q, want substring %q", se.Message, "Could not resolve to a Repository")
 	}
 }
 
-func TestGetReviewDecision_NoReviews_ReturnsNotRequired(t *testing.T) {
+// TestGetReviewDecision_GraphQL_MalformedJSON verifies that a GraphQL 200
+// response with non-JSON body surfaces as ErrSCMPayload.
+func TestGetReviewDecision_GraphQL_MalformedJSON(t *testing.T) {
 	t.Parallel()
 
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.Contains(r.URL.Path, "/reviews") {
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte(`[]`))
-		}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`not valid json {{{`))
 	}))
 	defer srv.Close()
 
 	a := newTestSCMAdapter(t, srv.URL)
-	decision, err := a.GetReviewDecision(t.Context(), 1, "owner", "repo")
-	if err != nil {
-		t.Fatalf("GetReviewDecision: %v", err)
+	_, err := a.GetReviewDecision(t.Context(), 1, "owner", "repo")
+	assertSCMErrorKind(t, err, domain.ErrSCMPayload)
+}
+
+// TestGetReviewDecision_GraphQL_HTTP401 verifies that a 401 response
+// surfaces as ErrSCMAuth.
+func TestGetReviewDecision_GraphQL_HTTP401(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+		_, _ = w.Write([]byte(`{"message":"Bad credentials"}`))
+	}))
+	defer srv.Close()
+
+	a := newTestSCMAdapter(t, srv.URL)
+	_, err := a.GetReviewDecision(t.Context(), 1, "owner", "repo")
+	assertSCMErrorKind(t, err, domain.ErrSCMAuth)
+}
+
+// TestGetReviewDecision_GraphQL_HTTP403RateLimit verifies that a 403
+// response with X-Ratelimit-Remaining: 0 surfaces as ErrSCMAPI with a
+// message containing "rate limited".
+func TestGetReviewDecision_GraphQL_HTTP403RateLimit(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("X-Ratelimit-Remaining", "0")
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte(`{"message":"API rate limit exceeded"}`))
+	}))
+	defer srv.Close()
+
+	a := newTestSCMAdapter(t, srv.URL)
+	_, err := a.GetReviewDecision(t.Context(), 1, "owner", "repo")
+	assertSCMErrorKind(t, err, domain.ErrSCMAPI)
+
+	var se *domain.SCMError
+	if !errors.As(err, &se) {
+		t.Fatalf("error type = %T, want *domain.SCMError", err)
 	}
-	if decision != domain.ReviewDecisionNotRequired {
-		t.Errorf("GetReviewDecision() = %q, want %q (no reviews)", decision, domain.ReviewDecisionNotRequired)
+	if !strings.Contains(se.Message, "rate limited") {
+		t.Errorf("SCMError.Message = %q, want substring %q", se.Message, "rate limited")
+	}
+}
+
+// TestGetReviewDecision_GraphQL_HTTP500 verifies that a 5xx response
+// surfaces as ErrSCMTransport.
+func TestGetReviewDecision_GraphQL_HTTP500(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(`{"message":"Internal Server Error"}`))
+	}))
+	defer srv.Close()
+
+	a := newTestSCMAdapter(t, srv.URL)
+	_, err := a.GetReviewDecision(t.Context(), 1, "owner", "repo")
+	assertSCMErrorKind(t, err, domain.ErrSCMTransport)
+}
+
+// TestGetReviewDecision_GraphQL_MissingPullRequest verifies that a 200
+// response with a null pullRequest field surfaces as ErrSCMPayload with
+// the expected message.
+func TestGetReviewDecision_GraphQL_MissingPullRequest(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":{"repository":{"pullRequest":null}}}`))
+	}))
+	defer srv.Close()
+
+	a := newTestSCMAdapter(t, srv.URL)
+	_, err := a.GetReviewDecision(t.Context(), 1, "owner", "repo")
+	assertSCMErrorKind(t, err, domain.ErrSCMPayload)
+
+	var se *domain.SCMError
+	if !errors.As(err, &se) {
+		t.Fatalf("error type = %T, want *domain.SCMError", err)
+	}
+	if se.Message != "graphql response missing pullRequest payload" {
+		t.Errorf("SCMError.Message = %q, want %q", se.Message, "graphql response missing pullRequest payload")
+	}
+}
+
+// TestGetReviewDecision_GraphQL_RequestShape verifies that the POST body
+// sent to the GraphQL endpoint carries the exact reviewDecisionQuery
+// constant text and the expected variables map.
+func TestGetReviewDecision_GraphQL_RequestShape(t *testing.T) {
+	t.Parallel()
+
+	var gotBody []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		gotBody = body
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":{"repository":{"pullRequest":{"reviewDecision":"APPROVED"}}}}`))
+	}))
+	defer srv.Close()
+
+	a := newTestSCMAdapter(t, srv.URL)
+	_, err := a.GetReviewDecision(t.Context(), 1, "owner", "repo")
+	if err != nil {
+		t.Fatalf("GetReviewDecision() unexpected error: %v", err)
+	}
+
+	var payload struct {
+		Query     string         `json:"query"`
+		Variables map[string]any `json:"variables"`
+	}
+	if err := json.Unmarshal(gotBody, &payload); err != nil {
+		t.Fatalf("json.Unmarshal(request body) = %v, want nil error", err)
+	}
+	if payload.Query != reviewDecisionQuery {
+		t.Errorf("request query = %q, want reviewDecisionQuery constant", payload.Query)
+	}
+
+	wantVars := map[string]any{
+		"owner":  "owner",
+		"repo":   "repo",
+		"number": float64(1),
+	}
+	for k, wantV := range wantVars {
+		gotV, ok := payload.Variables[k]
+		if !ok {
+			t.Errorf("request variables[%q] missing, want %v", k, wantV)
+			continue
+		}
+		if gotV != wantV {
+			t.Errorf("request variables[%q] = %v, want %v", k, gotV, wantV)
+		}
+	}
+}
+
+// TestGetReviewDecision_GraphQL_RequestURL verifies that the GraphQL POST
+// is issued to /graphql via POST with the correct Authorization header.
+func TestGetReviewDecision_GraphQL_RequestURL(t *testing.T) {
+	t.Parallel()
+
+	var gotPath, gotMethod, gotAuth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotMethod = r.Method
+		gotAuth = r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"data":{"repository":{"pullRequest":{"reviewDecision":"APPROVED"}}}}`))
+	}))
+	defer srv.Close()
+
+	a := newTestSCMAdapter(t, srv.URL)
+	_, err := a.GetReviewDecision(t.Context(), 1, "owner", "repo")
+	if err != nil {
+		t.Fatalf("GetReviewDecision() unexpected error: %v", err)
+	}
+
+	if gotPath != "/graphql" {
+		t.Errorf("request path = %q, want %q", gotPath, "/graphql")
+	}
+	if gotMethod != http.MethodPost {
+		t.Errorf("request method = %q, want %q", gotMethod, http.MethodPost)
+	}
+	if gotAuth != "Bearer test-token" {
+		t.Errorf("Authorization = %q, want %q", gotAuth, "Bearer test-token")
+	}
+}
+
+// TestGetReviewDecision_GraphQL405_NotPromotedToConflict verifies that a
+// GraphQL-originated HTTP 405 surfaces as ErrSCMAPI rather than being
+// promoted to ErrSCMConflict. The duplicate-merge promotion is reserved
+// for the REST MergePR write path.
+func TestGetReviewDecision_GraphQL405_NotPromotedToConflict(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		_, _ = w.Write([]byte(`{"message":"Method not allowed"}`))
+	}))
+	defer srv.Close()
+
+	a := newTestSCMAdapter(t, srv.URL)
+	_, err := a.GetReviewDecision(t.Context(), 1, "owner", "repo")
+	assertSCMErrorKind(t, err, domain.ErrSCMAPI)
+
+	var se *domain.SCMError
+	if !errors.As(err, &se) {
+		t.Fatalf("error type = %T, want *domain.SCMError", err)
+	}
+	if se.Kind == domain.ErrSCMConflict {
+		t.Errorf("SCMError.Kind = %q, want NOT %q (graphql 405 must not promote to conflict)",
+			se.Kind, domain.ErrSCMConflict)
+	}
+}
+
+// TestGetReviewDecision_GraphQL409_NotPromotedToConflict verifies that a
+// GraphQL-originated HTTP 409 surfaces as ErrSCMAPI rather than being
+// promoted to ErrSCMConflict.
+func TestGetReviewDecision_GraphQL409_NotPromotedToConflict(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusConflict)
+		_, _ = w.Write([]byte(`{"message":"Conflict on graphql endpoint"}`))
+	}))
+	defer srv.Close()
+
+	a := newTestSCMAdapter(t, srv.URL)
+	_, err := a.GetReviewDecision(t.Context(), 1, "owner", "repo")
+	assertSCMErrorKind(t, err, domain.ErrSCMAPI)
+
+	var se *domain.SCMError
+	if !errors.As(err, &se) {
+		t.Fatalf("error type = %T, want *domain.SCMError", err)
+	}
+	if se.Kind == domain.ErrSCMConflict {
+		t.Errorf("SCMError.Kind = %q, want NOT %q (graphql 409 must not promote to conflict)",
+			se.Kind, domain.ErrSCMConflict)
+	}
+}
+
+// TestGetReviewDecision_GraphQL200ErrorsAlreadyMerged_NotPromotedToConflict
+// verifies that a GraphQL HTTP 200 response carrying an errors array
+// with an "already merged" message surfaces as ErrSCMAPI rather than
+// ErrSCMConflict. The read path must not inherit the duplicate-merge
+// disposition reserved for the MergePR write path.
+func TestGetReviewDecision_GraphQL200ErrorsAlreadyMerged_NotPromotedToConflict(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"data":{"repository":null},"errors":[{"message":"Pull request was already merged in upstream"}]}`))
+	}))
+	defer srv.Close()
+
+	a := newTestSCMAdapter(t, srv.URL)
+	_, err := a.GetReviewDecision(t.Context(), 1, "owner", "repo")
+	assertSCMErrorKind(t, err, domain.ErrSCMAPI)
+
+	var se *domain.SCMError
+	if !errors.As(err, &se) {
+		t.Fatalf("error type = %T, want *domain.SCMError", err)
+	}
+	if se.Kind == domain.ErrSCMConflict {
+		t.Errorf("SCMError.Kind = %q, want NOT %q (graphql 200 errors[] with 'already merged' must not promote)",
+			se.Kind, domain.ErrSCMConflict)
+	}
+	if !strings.Contains(se.Message, "already merged") {
+		t.Errorf("SCMError.Message = %q, want substring %q", se.Message, "already merged")
+	}
+}
+
+// TestGraphqlBasePath_RewriteTable exercises graphqlBasePath with the
+// six endpoint configurations from the GHES rewrite rule specification.
+func TestGraphqlBasePath_RewriteTable(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		endpoint string
+		want     string
+	}{
+		{
+			name:     "github.com_no_trailing_slash",
+			endpoint: "https://api.github.com",
+			want:     "https://api.github.com",
+		},
+		{
+			name:     "github.com_trailing_slash",
+			endpoint: "https://api.github.com/",
+			want:     "https://api.github.com",
+		},
+		{
+			name:     "ghes_api_v3",
+			endpoint: "https://ghe.example.com/api/v3",
+			want:     "https://ghe.example.com/api",
+		},
+		{
+			name:     "ghes_api_v3_trailing_slash",
+			endpoint: "https://ghe.example.com/api/v3/",
+			want:     "https://ghe.example.com/api",
+		},
+		{
+			name:     "ghes_api_v3_subpath_not_rewritten",
+			endpoint: "https://ghe.example.com/api/v3/foo",
+			want:     "https://ghe.example.com/api/v3/foo",
+		},
+		{
+			name:     "custom_mount_not_rewritten",
+			endpoint: "https://ghe.example.com/custom-mount",
+			want:     "https://ghe.example.com/custom-mount",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			a := newTestSCMAdapter(t, tt.endpoint)
+			got := a.graphqlBasePath()
+			if got != tt.want {
+				t.Errorf("graphqlBasePath(%q) = %q, want %q", tt.endpoint, got, tt.want)
+			}
+		})
 	}
 }
 
