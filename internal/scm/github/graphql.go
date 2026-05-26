@@ -125,7 +125,7 @@ func (a *GitHubSCMAdapter) postGraphQL(ctx context.Context, query string, variab
 // envelopeWithErrors is the interface postGraphQL uses to inspect the
 // decoded envelope's Errors slice without referencing the generic
 // type parameter of graphqlResponseEnvelope. Each call-site envelope
-// satisfies it via the EnvelopeErrors method declared below.
+// satisfies it via the envelopeErrors method declared below.
 type envelopeWithErrors interface {
 	envelopeErrors() []graphqlErrorObj
 }
