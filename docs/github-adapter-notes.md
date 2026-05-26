@@ -1,7 +1,7 @@
 # GitHub REST API: Adapter research notes
 
 > GitHub REST API, API version `2026-03-10`, researched March 2026.
-> Reference for implementing the GitHub `TrackerAdapter`.
+> Reference for implementing the GitHub `TrackerAdapter` and `SCMAdapter`.
 
 ---
 
@@ -512,6 +512,287 @@ other messages) by inspecting the response body. Rate limit 403s map to
 
 ---
 
+## SCM write surface
+
+The `SCMAdapter` interface (per `internal/domain/scm.go`) is implemented by
+`internal/scm/github/`. The package exposes the six methods listed in
+architecture §11C.1: one read-only method documented in §11B.1
+(`FetchPendingReviews`) and five additional methods used by the auto-merge
+reconcile loop. The five methods below extend the surface beyond the seven
+tracker operations covered earlier in this document.
+
+All implementations are safe for concurrent use. SCM errors are normalized to
+`*domain.SCMError` with a `SCMErrorKind` drawn from the six values in
+`internal/domain/scm.go`. Network and HTTP classification is shared with the
+tracker adapter via `internal/httpkit` and the `classifyHTTPError` helper in
+`internal/scm/github/client.go`; the SCM-specific remapping (including the
+405/409 promotion to `ErrSCMConflict`) lives in `toSCMError`
+(`internal/scm/github/review.go`).
+
+### 1. `GetReviewDecision` (GraphQL `pullRequest.reviewDecision`)
+
+Returns the platform's authoritative review decision for a PR. Issues a
+GraphQL POST rather than a REST call because the four-valued enum is exposed
+only on the GraphQL `PullRequest` type.
+
+```
+POST /graphql
+Content-Type: application/json
+
+{
+  "query": "query($owner: String!, $repo: String!, $number: Int!) {
+    repository(owner: $owner, name: $repo) {
+      pullRequest(number: $number) {
+        reviewDecision
+      }
+    }
+  }",
+  "variables": { "owner": "...", "repo": "...", "number": <prNumber> }
+}
+```
+
+Response shape (subset):
+
+```json
+{ "data": { "repository": { "pullRequest": { "reviewDecision": "APPROVED" } } } }
+```
+
+Mapping from GraphQL value to `domain.ReviewDecision`:
+
+| GraphQL value       | Domain value                          |
+| ------------------- | ------------------------------------- |
+| `APPROVED`          | `ReviewDecisionApproved`              |
+| `CHANGES_REQUESTED` | `ReviewDecisionChangesRequested`      |
+| `REVIEW_REQUIRED`   | `ReviewDecisionReviewRequired`        |
+| `null` (no policy)  | `ReviewDecisionNotRequired`           |
+| Unknown enum value  | `ReviewDecisionNotRequired` (logs warn) |
+
+Idempotent and read-only: repeated calls return the current decision and do
+not mutate platform state. The GraphQL transport prefix
+`POST /graphql:` exempts errors from the 405/409 promotion that applies to
+the REST surface (see `toSCMError`).
+
+### 2. `GetCIStatus` (combined status + check runs)
+
+Returns an aggregate CI conclusion string for the PR head commit. The
+adapter reads the head SHA from the PR object, then queries two endpoints
+in sequence:
+
+```
+GET /repos/{owner}/{repo}/pulls/{prNumber}
+GET /repos/{owner}/{repo}/commits/{headSHA}/status
+GET /repos/{owner}/{repo}/commits/{headSHA}/check-runs
+```
+
+The first call returns the head SHA from `head.sha`. The second returns the
+combined commit-status payload (`{ "state": "...", "statuses": [...] }`).
+The third returns the check-runs payload (`{ "total_count": N, "check_runs":
+[...] }`).
+
+The aggregate is computed from both signals:
+
+| Observation                                                 | Returned conclusion |
+| ----------------------------------------------------------- | ------------------- |
+| No statuses and no check runs                               | `""` (no signal)    |
+| Any failing status (`failure`, `error`) or check conclusion (`failure`, `timed_out`, `cancelled`, `action_required`) | `"failing"`         |
+| At least one pending status or check (`pending`, `in_progress`, `queued`) and none failing | `"pending"`         |
+| All passing or non-failing (`success`, `neutral`, `skipped`) | `"success"`         |
+
+Idempotent and read-only. The empty-string return signals "no required
+checks exist on the PR" and the auto-merge loop treats it as a satisfied
+CI precondition when `require_ci` is not set.
+
+### 3. `GetMergeability` (pull request preview)
+
+Returns the merge precondition state for a PR. Reuses the same pull request
+read used by `GetCIStatus`:
+
+```
+GET /repos/{owner}/{repo}/pulls/{prNumber}
+```
+
+Response subset:
+
+```json
+{ "draft": false, "mergeable_state": "clean",
+  "head": { "sha": "<headSHA>", "ref": "<branch>" } }
+```
+
+The adapter maps `mergeable_state` to `domain.MergeabilityState`:
+
+| GitHub `mergeable_state` | Domain `MergeabilityState` |
+| ------------------------ | -------------------------- |
+| `clean`                  | `MergeabilityClean`        |
+| `unstable`               | `MergeabilityUnstable`     |
+| `blocked`, `behind`, `draft` | `MergeabilityBlocked`  |
+| `dirty`                  | `MergeabilityDirty`        |
+| anything else (including the empty string) | `MergeabilityUnknown` |
+
+The returned `PRMergeStatus` populates `Draft`, `Mergeability`, `HeadSHA`,
+and `BranchName`. `ReviewDecision` and `CIConclusion` are left unset:
+callers obtain those values from the dedicated reads (see §1 and §2 above).
+GitHub computes `mergeable_state` asynchronously after a push, so callers
+treat `MergeabilityUnknown` as a deferral condition per §11C.5.
+
+Idempotent and read-only.
+
+### 4. `MergePR` (PUT merge)
+
+Performs the merge. Sends:
+
+```
+PUT /repos/{owner}/{repo}/pulls/{prNumber}/merge
+Content-Type: application/json
+
+{
+  "merge_method": "merge" | "squash" | "rebase",
+  "sha": "<expectedHeadSHA>",
+  "commit_title": "<optional>",
+  "commit_message": "<optional>"
+}
+```
+
+Field rules:
+
+- `merge_method` is the only required field. Mapped 1:1 from
+  `domain.MergeStrategy` constant values.
+- `sha`, `commit_title`, and `commit_message` are omitted when the caller
+  passes the empty string (`omitempty`). GitHub then uses the
+  strategy-specific defaults for the commit title and message.
+- When `sha` is present GitHub uses it as a precondition: if the PR head
+  has moved since the caller read it, GitHub returns HTTP 409. The
+  `expectedHeadSHA` parameter is sourced from the latest
+  `PRMergeStatus.HeadSHA` value the caller observed.
+
+Response on 200:
+
+```json
+{ "sha": "<merge_commit_sha>", "merged": true, "message": "Pull Request successfully merged" }
+```
+
+The adapter returns a `domain.MergeResult` populated from these fields.
+
+Idempotency: the merge endpoint is not idempotent in the HTTP sense. A
+second `PUT` against a PR already merged by the first call returns HTTP 409
+with a body that contains the substring `already merged`. Per the
+`SCMAdapter` contract that substring is preserved in the returned
+`SCMError.Message`; the orchestrator's reconcile loop
+(`internal/orchestrator/auto_merge_reconcile.go`) treats that substring as
+idempotent success and the absent substring as a transient precondition
+failure. The adapter itself does not classify the already-merged subcase;
+it surfaces the verbatim GitHub body so the orchestrator can disambiguate.
+
+A success response with `"merged": false` (the platform's documented but
+rare refusal path) is mapped to `*SCMError` with kind `ErrSCMConflict` and
+message `merge endpoint returned merged=false`.
+
+### 5. `DeleteBranch` (DELETE git ref)
+
+Deletes the source branch after a successful merge. Sends:
+
+```
+DELETE /repos/{owner}/{repo}/git/refs/heads/{branch}
+```
+
+No request body. GitHub returns HTTP 204 on success.
+
+Idempotency: an HTTP 404 (branch already gone) maps to
+`*SCMError` with kind `ErrSCMNotFound`. The auto-merge reconcile loop
+treats this as a successful no-op so that a retried delete after a
+partial-failure tail does not block the issue's completion path.
+
+GitHub may return HTTP 422 when the caller attempts to delete a default
+branch. The adapter surfaces this as `ErrSCMPayload` (see the status table
+below). The auto-merge loop does not target default branches, so this is
+an operator-configuration error rather than a recoverable runtime
+condition.
+
+### HTTP status mapping
+
+The mapping below is the SCM view: each row reports the HTTP status the
+adapter receives and the `SCMErrorKind` it returns. The base classification
+happens in `classifyHTTPError` (`internal/scm/github/client.go`), and
+`toSCMError` (`internal/scm/github/review.go`) remaps the result for the
+SCM error namespace, including the merge-specific 405/409 promotion.
+
+| HTTP Status | Condition                                          | SCM error kind        |
+| ----------- | -------------------------------------------------- | --------------------- |
+| 200, 204    | Success                                            | (no error)            |
+| 400         | Malformed request                                  | `ErrSCMPayload`       |
+| 401         | Bad credentials or expired token                   | `ErrSCMAuth`          |
+| 403         | Insufficient permissions (non-rate-limit body)     | `ErrSCMAuth`          |
+| 403, 429    | Rate limit (primary or secondary, with `Retry-After` or `X-RateLimit-Remaining: 0` or `rate limit` body) | `ErrSCMAPI` |
+| 404         | Resource not found (PR, branch, ref)               | `ErrSCMNotFound`      |
+| 405         | Method not allowed on merge endpoint               | `ErrSCMConflict`      |
+| 409         | Conflict on merge endpoint (head SHA drift, branch protection refusal, or `already merged` body) | `ErrSCMConflict` |
+| 410         | Resource permanently gone                          | `ErrSCMAPI`           |
+| 422         | Validation failed (unsupported `merge_method`, default-branch delete, spam check) | `ErrSCMPayload` |
+| 5xx         | Server error                                       | `ErrSCMTransport`     |
+| network     | DNS, TCP, TLS failure                              | `ErrSCMTransport`     |
+| payload     | JSON decode failure on a 2xx response              | `ErrSCMPayload`       |
+
+The 405-to-`ErrSCMConflict` promotion exists because GitHub returns 405 on
+the merge endpoint when the PR is in a state that bars any merge (notably
+when the platform has detected the branch as already merged); collapsing
+both 405 and 409 into one kind lets the reconcile loop apply a single
+disposition policy. The promotion is suppressed for messages prefixed with
+`POST /graphql:` so a 405 against the GraphQL endpoint is not misread as a
+merge conflict.
+
+The `already merged` 409 subcase is signaled by the verbatim GitHub body in
+`SCMError.Message`. The orchestrator inspects the message case-insensitively
+and dispatches the subcase to the merge-success branch; every other
+`ErrSCMConflict` is re-enqueued at the poll interval per §11C.5.
+
+### Token scopes
+
+The auto-merge reaction requires write scopes that the read-only tracker
+surface does not. The names below are stable constants in
+`internal/scm/github/merge.go`.
+
+| Operation       | Fine-grained PAT permission | Classic PAT scope |
+| --------------- | --------------------------- | ----------------- |
+| `MergePR`       | `pull_requests:write`       | `repo`            |
+| `DeleteBranch`  | `contents:write`            | `repo`            |
+| Both            | both of the above           | `repo` covers both |
+
+A classic PAT with the `repo` scope is a superset that satisfies the
+fine-grained `pull_requests:write` and `contents:write` permissions for
+this adapter. Fine-grained PAT permission names are accepted by the
+startup token-scope preflight (per §11C.9).
+
+The preflight reads the `X-OAuth-Scopes` header on `GET /rate_limit`.
+Classic PATs populate that header; fine-grained PATs and GitHub App
+installation tokens do not. When the verifier returns no scope information
+the preflight fails open: it logs a warning and proceeds, and any genuine
+scope gap surfaces at runtime as `ErrSCMAuth` on the first `MergePR` call.
+
+### `expectedHeadSHA` and the TOCTOU window
+
+`GetMergeability` and `MergePR` are two separate HTTP calls. Between them
+the PR head can move: a new push, a force-push, a base-branch update, or a
+rebase performed by another actor. Without a precondition the second call
+would merge whatever the head is at the moment of the merge, not the head
+the precondition check approved.
+
+The `expectedHeadSHA` parameter forecloses that window. The caller passes
+the `PRMergeStatus.HeadSHA` it read from `GetMergeability` (or any later
+read) directly to `MergePR`. The adapter places that value in the merge
+request body's `sha` field. GitHub treats the field as a precondition: if
+the current PR head does not match, the server returns HTTP 409, the
+adapter maps it to `ErrSCMConflict` with the verbatim GitHub body, and the
+reconcile loop re-enqueues the merge for the next tick. The next tick
+re-reads the merge state, computes a fresh fingerprint over the new SHA
+(per §11C.7), and either retries with the new head SHA or defers further
+when other preconditions still fail.
+
+The window the SHA closes is the only race the merge call exposes: review
+decision and CI conclusion are read separately and have no equivalent
+precondition mechanism, so changes there are caught by the next-tick
+re-read rather than by the merge call itself.
+
+---
+
 ## Key differences from Jira adapter
 
 | Aspect             | Jira                                  | GitHub                                       |
@@ -551,6 +832,10 @@ other messages) by inspecting the response body. Rate limit 403s map to
 | Sub-issues/parent        | Fine-grained PAT permissions page (endpoint discovered)                     | `curl` live: 404 for issue without parent     |
 | Issue types (`type`)     | Live API response                                                           | `curl`: `type.name` = `"Research"` on #299    |
 | `state_reason` field     | Live API response                                                           | `curl`: `null` on open issue |
+| Merge endpoint           | GitHub Docs: REST API / Pulls / Merge a pull request                        | Context7 `/websites/github_en_rest`: 200, 403, 404, 405, 409, 422 |
+| Branch delete endpoint   | GitHub Docs: REST API / Git / Delete a reference                            | Context7 `/websites/github_en_rest`: 204 on success, 409 / 422 on default branch |
+| Review decision (GraphQL) | GitHub Docs: GraphQL / PullRequest.reviewDecision                          | Adapter unit test pins the query text         |
+| Token scopes (merge)     | GitHub Docs: Permissions required for GitHub Apps and fine-grained PATs     | Constants in `internal/scm/github/merge.go`   |
 
 ## Context7 verification report
 
@@ -571,3 +856,14 @@ Queries executed:
 Context7 did not cover: dependencies/blocked_by endpoint, sub-issues/parent endpoint,
 issue types (`type` field), or secondary rate limit details. These were verified
 exclusively through live API calls and the official GitHub documentation pages.
+
+3. **Merge endpoint** (added with SCM write surface). Confirmed via Context7:
+   `PUT /repos/{owner}/{repo}/pulls/{pull_number}/merge` returns 200 on success
+   and 403, 404, 405, 409, 422 on various failure modes. Body fields are
+   `commit_title`, `commit_message`, `sha`, and `merge_method`. The `sha` field
+   acts as a precondition; mismatch returns 409.
+
+4. **Branch delete endpoint** (added with SCM write surface). Confirmed via
+   Context7: `DELETE /repos/{owner}/{repo}/git/refs/{ref}` returns 204 on
+   success. A 409 indicates a conflict and a 422 indicates an attempt to
+   delete the default branch.
