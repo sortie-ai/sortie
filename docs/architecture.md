@@ -348,9 +348,15 @@ Fields:
   runtime-only, not persisted)
 - `pending_reactions` (map `issue_id:kind -> PendingReaction`; populated by worker exit on normal
   exits with SCM metadata when a CI status provider or SCM adapter is configured, and reconstructed
-  at startup by `RecoverPendingReactions` for eligible handoff-stage runs; consumed by per-kind
-  reconcile functions during the reconcile tick — `reconcile_ci_status` for kind `ci`,
-  `reconcile_review_comments` for kind `review`; runtime-only, not persisted)
+  at startup by `RecoverPendingReactions` for eligible handoff-stage runs, including `merge`-kind
+  entries; consumed by per-kind reconcile functions during the reconcile tick: `reconcile_ci_status`
+  for kind `ci`, `reconcile_review_comments` for kind `review`, `reconcile_auto_merge` for kind
+  `merge`; runtime-only, not persisted)
+- `auto_merge_preflight_failed` (boolean): sticky after a startup auth-class preflight failure;
+  cleared only by a successful one-shot transport-class retry or by an orchestrator restart.
+- `auto_merge_preflight_retry_due_at` (timestamp): non-zero only when the startup preflight failed
+  with a transport-class error and scheduled a single bounded retry; cleared by the reconcile tick
+  that consumes the retry.
 
 ### 4.2 Stable Identifiers and Normalization Rules
 
@@ -413,6 +419,7 @@ Top-level keys:
 - `hooks`
 - `agent`
 - `ci_feedback` (deprecated; use `reactions.ci_failure` instead)
+- `dispatch`
 - `reactions`
 - `db_path`
 
@@ -548,6 +555,8 @@ Fields:
   - Other supported values: `copilot-cli`, `codex`, `opencode`, `http`, and any
     additionally registered adapter.
   - Parallels `tracker.kind`.
+  - This is the default agent kind used when no `dispatch.rules` entry overrides it; see
+    §5.3.10 for the override mechanism.
 - `command` (string shell command)
   - The command the agent adapter uses to launch the agent process. Adapter-defined default.
   - When `agent.kind` requires a local command, this field must be present and non-empty.
@@ -739,6 +748,36 @@ reactions:
     max_continuation_turns: 3
 ```
 
+**Reaction kind: `auto_merge`**
+
+Auto-merge applies to Sortie-managed PRs whose preconditions (review decision, CI conclusion,
+mergeability) are satisfied. See §11C for the full contract. (Runtime kind value: `merge`.)
+
+Extra fields:
+
+- `strategy` (string, via Extra): merge strategy. Default: `squash`. One of `merge`, `squash`,
+  `rebase`.
+- `require_ci` (boolean, via Extra): whether merge requires CI success. Default: `true`.
+- `delete_branch` (boolean, via Extra): whether to delete the head branch after merge.
+  Default: `true`.
+- `poll_interval_ms` (integer, via Extra): polling interval for merge-precondition checks.
+  Default: `60000` (1 minute). Minimum: `30000`.
+
+Example:
+
+```yaml
+reactions:
+  auto_merge:
+    provider: github
+    max_retries: 3
+    escalation: label
+    escalation_label: needs-human
+    strategy: squash
+    require_ci: true
+    delete_branch: true
+    poll_interval_ms: 60000
+```
+
 **Validation rules:**
 
 - Reaction kind keys MUST match `[a-z][a-z0-9_-]*`.
@@ -746,6 +785,79 @@ reactions:
 - Per-kind common fields follow the same validation as the deprecated `ci_feedback` equivalents.
 - Extra fields are kind-specific; the orchestrator validates them when constructing the
   kind-specific config (e.g. `BuildReviewReactionConfig`).
+
+#### 5.3.10 `dispatch` (object, optional)
+
+Routes the initial dispatch to an `(agent_kind, template_id)` selection per first-match-wins
+rules. When absent, the orchestrator behaves identically to today: the resolver returns the
+top-level defaults (`agent.kind` and the Markdown body template).
+
+Fields:
+
+- `rules` (list of `DispatchRule`, optional): ordered list of dispatch rules; first-match-wins.
+- `default` (object, optional): carries `agent` and `template` overrides applied when no rule
+  matches.
+
+Each `DispatchRule` has four keys:
+
+- `name`: a unique identifier for the rule, used in metrics labels and freeze-on-dispatch
+  persistence.
+- `match`: a block whose keys define the predicate evaluated against the issue.
+- `agent`: optional override of the agent kind for matching issues.
+- `template`: optional override of the prompt template path for matching issues.
+
+**Match-block keys and semantics**
+
+Match keys are evaluated with AND semantics across keys and OR semantics within a single key:
+
+- `labels` (list of glob patterns): matches when the issue carries at least one label matching
+  any pattern; glob syntax (e.g. `bug/*`, `*-urgent`).
+- `issue_type` (string): case-insensitive equality match against the issue type field.
+- `priority` (predicate object): numeric comparison via one operator key: `eq`, `in`, `lt`,
+  `lte`, `gt`, or `gte`. The predicate object MUST have exactly one operator key.
+- `identifier` (list of glob patterns): matches against the issue identifier string.
+- `assignee` (string): case-insensitive equality match against the issue assignee.
+
+**Resolution semantics and freeze-on-dispatch invariant**
+
+First-match wins: evaluation stops at the first rule whose `match` block succeeds. Absent rule
+fields fall through to `dispatch.default`, then to the top-level `agent.kind` and the
+Markdown-body template (the pre-dispatch top-level defaults).
+
+The resolved `(agent_kind, template_id, rule_name)` is recorded on `RunningEntry` at the
+initial dispatch and propagated through `RetryEntry`. Retries and reaction-driven continuations
+reuse the frozen selection without re-evaluating rules.
+
+**Template lifecycle**
+
+Per-rule template paths are relative to `filepath.Dir(workflow_path)`. Absolute paths,
+`~`-prefixed paths, and symlink escapes outside the workflow directory tree are rejected at load
+time. The `ResolveRule` function and full algorithm details are in §5.3.10's source spec.
+
+Example:
+
+```yaml
+dispatch:
+  rules:
+    - name: bug-fix
+      match:
+        labels: ["bug", "bug/*"]
+      agent: claude-code
+      template: templates/bug-fix.md
+    - name: docs-update
+      match:
+        issue_type: documentation
+      agent: codex
+      template: templates/docs.md
+    - name: high-priority
+      match:
+        priority:
+          lte: 2
+      agent: claude-code
+  default:
+    agent: claude-code
+    template: templates/default.md
+```
 
 ### 5.4 Prompt Template Contract
 
@@ -874,6 +986,40 @@ Validation checks:
 - `agent.command` is present and non-empty when `agent.kind` requires a local command.
 - Tracker adapter for the configured `tracker.kind` is registered and available.
 - Agent adapter for the configured `agent.kind` is registered and available.
+- Rule-set validation: `dispatch.rules` parses; every referenced `agent` kind is registered;
+  every referenced per-rule template path resolves and parses; no rule name is duplicated;
+  no non-final rule is a catch-all; every match key is recognized; every glob pattern is
+  syntactically valid; every priority predicate has exactly one operator key.
+
+**Startup token-scope preflight**
+
+When `reactions.auto_merge.provider` is non-empty at startup, the orchestrator invokes the SCM
+adapter's scope-verification path before the first reconcile tick. The verifier reads OAuth scopes
+from `GET /rate_limit` response headers and validates that the token carries `pull_requests:write`
+and, when `reactions.auto_merge.delete_branch != false`, `contents:write`. A classic `repo` scope
+satisfies both. Fine-grained PAT permission names are accepted.
+
+Auth-class sticky posture: a missing-scope failure is an operator configuration error. The
+orchestrator logs ERROR once at startup with the missing scope name and continues running (it does
+NOT `os.Exit`). `state.AutoMergePreflightFailed` is set to true and remains true for the lifetime
+of the process. Every subsequent `reconcileAutoMerge` tick drops `merge`-kind pending entries with
+a WARN log. Operator recovery requires a token rotation and an orchestrator restart.
+
+Bounded transport-class retry: a transport-class failure on the preflight call is environmental.
+The orchestrator logs WARN once, sets `state.AutoMergePreflightFailed = true` and
+`state.AutoMergePreflightRetryDueAt = startTime + AutoMergePreflightRetryDelay` (default 5
+minutes), and returns. The scheduled retry runs once, on the first `reconcileAutoMerge` tick
+whose `state.NowFunc().UTC() >= state.AutoMergePreflightRetryDueAt`. Success clears both fields.
+Another transport failure leaves the sticky flag set and clears the retry timestamp (no further
+retries this lifetime). The retry timer is consumed by the existing reconcile loop, not by a new
+goroutine or ticker.
+
+The asymmetry between auth-class and transport-class postures is intentional: auth failures are
+sticky because the orchestrator cannot self-heal a configuration error; transport failures get one
+bounded retry because they are environmental and the operator's restart lever remains the
+documented escape hatch.
+
+For cross-reference, see §11C.9.
 
 ### 6.4 Config Fields Summary (Cheat Sheet)
 
@@ -929,6 +1075,13 @@ This section is intentionally redundant so a coding agent can implement the conf
 - `reactions.review_comments.poll_interval_ms`: integer, default `120000` (2 min); minimum `30000`
 - `reactions.review_comments.debounce_ms`: integer, default `60000` (60 sec); non-negative
 - `reactions.review_comments.max_continuation_turns`: integer, default `3`; positive
+- `reactions.auto_merge.strategy`: string, default `squash`; one of `merge`, `squash`, `rebase`
+- `reactions.auto_merge.require_ci`: boolean, default `true`
+- `reactions.auto_merge.delete_branch`: boolean, default `true`
+- `reactions.auto_merge.poll_interval_ms`: integer, default `60000` (1 minute); minimum `30000`
+- `dispatch.rules`: list of rule objects, optional; first-match-wins routing; see §5.3.10
+- `dispatch.default.agent`: string, optional; default agent kind when no rule matches; falls through to top-level `agent.kind`
+- `dispatch.default.template`: path, optional; default template when no rule matches; falls through to the Markdown body
 - `self_review.enabled`: boolean, default `false`; activates the self-review loop
 - `self_review.max_iterations`: integer, default `3`, range [1, 10]; review iteration cap
 - `self_review.verification_commands`: list of strings, required when enabled; shell commands
@@ -1027,6 +1180,10 @@ Distinct terminal reasons are important because retry logic and logs differ.
     `pr_number > 0`, non-empty `owner`, and non-empty `repo`, and the issue is still claimed:
     record a pending review comment entry for reconciliation. Only created if no entry already
     exists (preserves in-progress debounce state).
+  - When an SCM adapter is configured (`reactions.auto_merge.provider` non-empty), the workspace
+    contains SCM metadata with `pr_number > 0`, non-empty `owner`, and non-empty `repo`, and the
+    issue is still claimed: record a pending auto-merge entry for reconciliation. Only created if
+    no entry already exists.
 
 - `Worker Exit (abnormal)`
   - Remove running entry.
@@ -1239,6 +1396,51 @@ Part D: Review comment reconciliation (when `reactions.review_comments` is confi
   - Otherwise: mark dispatched in `reaction_fingerprints`, cancel existing retry, schedule a
     review-fix dispatch with review comment context, increment `reaction_attempts`.
 
+Part E: Auto-merge reconciliation (when `reactions.auto_merge` is configured)
+
+Activation gate: `reactions.auto_merge.provider` non-empty AND
+`state.AutoMergePreflightFailed == false`.
+
+If `state.AutoMergePreflightRetryDueAt` is non-zero and `now >= AutoMergePreflightRetryDueAt`,
+run the scope-verification preflight first and clear or re-arm the flags before processing
+entries.
+
+For each entry in `pending_reactions` with kind `merge`:
+
+1. Remove the entry from the `pending_reactions` map.
+2. Drop with a WARN log when `state.AutoMergePreflightFailed == true`.
+3. Drop when the entry has exceeded the configured TTL.
+4. Re-enqueue when `now < pending.PendingRetryAt`.
+5. Escalate when `reaction_attempts[issue_id:merge] >= MaxRetries`.
+6. Fetch mergeability via `SCMAdapter.GetMergeability`; re-enqueue on transport error or
+   `MergeabilityUnknown`; re-enqueue with poll interval on `Draft`, `Dirty`, or `Blocked`.
+7. Fetch review decision via `SCMAdapter.GetReviewDecision`; re-enqueue when not `APPROVED`
+   or `NOT_REQUIRED`.
+8. When `require_ci == true`, fetch CI status via `SCMAdapter.GetCIStatus`; re-enqueue when
+   not `success`.
+9. Compute the fingerprint from `(head_sha, review_decision)`; upsert into
+   `reaction_fingerprints` with `kind = "merge"`. Skip when the stored fingerprint matches
+   and is marked dispatched.
+10. Call `SCMAdapter.MergePR` with the configured strategy and the observed head SHA;
+    increment `reaction_attempts[issue_id:merge]`.
+11. On success: post a tracker comment; delete the branch when `delete_branch == true`; clear
+    the fingerprint; remove the pending entry; increment
+    `sortie_reactions_auto_merge_total{result="merged"}`.
+
+Error dispositions:
+
+- On `ErrSCMConflict` ("already merged"): treat as idempotent success; same actions as
+  merge succeeded, including incrementing `sortie_reactions_auto_merge_total{result="merged"}`.
+- On `ErrSCMConflict` (head SHA mismatch or branch-protection refusal): re-enqueue with
+  poll interval; the next tick observes the new SHA via a refreshed fingerprint.
+- On `ErrSCMAuth` on the merge call: escalate immediately (do not re-enqueue).
+- On other transient errors: re-enqueue with backoff; escalate after `MaxRetries`.
+
+Cross-kind isolation: the success and escalation paths MUST scope cleanup to `kind = "merge"`
+only. They MUST NOT mutate `ci` or `review` reaction state (full invariant in §11C.10).
+
+Part E runs after Part D so the precondition reads observe the most current per-kind state.
+
 ### 8.6 Startup Terminal Workspace Cleanup
 
 When Sortie starts:
@@ -1366,8 +1568,11 @@ feedback, review comment routing, and other features can reuse.
   `run_history.completed_at`.
 - `pr_number` (integer, optional): the pull request number associated with this branch. Zero or
   absent when no PR has been created. Written by the agent or post-push hook. When positive and
-  `owner` and `repo` are non-empty, the orchestrator creates a pending review comment reaction
-  on normal worker exit. Review polling is skipped when `pr_number` is `0`.
+  `owner` and `repo` are non-empty AND `reactions.review_comments.provider` is configured, the
+  orchestrator creates a pending `review`-kind reaction on normal worker exit. When positive and
+  `owner` and `repo` are non-empty AND `reactions.auto_merge.provider` is configured, the
+  orchestrator creates a pending `merge`-kind reaction on normal worker exit. When `pr_number`
+  is `0`, both review polling and auto-merge are skipped.
 - `owner` (string, optional): the SCM repository owner (e.g. GitHub org or user). Written by
   the agent alongside `pr_number`. Required for review comment polling; when empty, review
   polling is skipped. The `owner` field is the authoritative source of SCM repository identity —
@@ -2007,9 +2212,8 @@ continuation prompts. It does not create PRs, approve reviews, or resolve commen
 
 SCM adapters use the `*Adapter` suffix rather than `*Provider`. The distinction matches the
 tracker and agent naming: an adapter manages a broader integration surface with multiple
-operations and may carry per-instance state (HTTP client, auth token). The current contract
-is single-method (`FetchPendingReviews`) but the interface is designed for future expansion
-(e.g. `PostComment`, `RequestReReview`).
+operations and may carry per-instance state (HTTP client, auth token). The adapter today covers both read-only review-comment fetching (this section) and the
+merge-write surface used by auto-merge (see §11C).
 
 ### 11B.1 SCMAdapter interface
 
@@ -2059,6 +2263,7 @@ Error categories:
 | `scm_api_error` | Non-success HTTP status or API-level error. |
 | `scm_not_found` | PR or repository does not exist. |
 | `scm_payload_error` | Malformed or unexpected response structure. |
+| `scm_conflict_error` | Conflict on a write-class operation (HTTP 405 method-not-allowed or HTTP 409 conflict from the merge endpoint). |
 
 `SCMError` implements `Error()` and `Unwrap()` for use with `errors.Is`/`errors.As`.
 
@@ -2188,6 +2393,161 @@ Review comment reconciliation only processes PRs created by Sortie:
 
 Future reaction kinds whose lifecycle outlives active tracker states MUST define restart recovery
 and kind-specific `.sortie/scm.json` metadata validation before they can be polled after handoff.
+
+## 11C. Auto-merge Reaction Contract
+
+The auto-merge reaction is default-off; enablement requires `reactions.auto_merge.provider` to be
+non-empty in `WORKFLOW.md`. The merge operation is irreversible: the orchestrator does NOT roll back
+on partial-failure tail operations (branch delete, tracker comment). The reaction runs as the last
+reconcile pass in the tick (after CI and review-comment reconciliation) so the precondition reads
+observe the most current per-kind state.
+
+### 11C.1 SCMAdapter write surface
+
+The `SCMAdapter` interface, introduced in §11B.1 for review-comment fetching, is widened by the
+read-write surface defined by the interface-surface section of the auto-merge ADR. The full
+interface now exposes six methods:
+
+```text
+SCMAdapter:
+  FetchPendingReviews(ctx, prNumber, owner, repo) ([]ReviewComment, error)
+  GetReviewDecision(ctx, prNumber, owner, repo)   (ReviewDecision, error)
+  GetCIStatus(ctx, prNumber, owner, repo)         (string, error)
+  GetMergeability(ctx, prNumber, owner, repo)     (MergeabilityState, error)
+  MergePR(ctx, prNumber, owner, repo, strategy, commitTitle, commitMessage, expectedHeadSHA) (MergeResult, error)
+  DeleteBranch(ctx, branchName, owner, repo)      error
+```
+
+`FetchPendingReviews` is the original read-only method documented in §11B.1. The five new methods
+provide the write surface needed by the auto-merge reconcile loop. All implementations MUST be safe
+for concurrent use.
+
+### 11C.2 Domain types
+
+The auto-merge reaction introduces five domain types:
+
+- `MergeStrategy`: merge strategy for `MergePR`. One of `merge`, `squash`, `rebase`.
+- `ReviewDecision`: normalized review status. One of `APPROVED`, `CHANGES_REQUESTED`,
+  `REVIEW_REQUIRED`, `NOT_REQUIRED`.
+- `MergeabilityState`: PR mergeability. One of `Clean`, `Draft`, `Dirty`, `Blocked`,
+  `Unknown`.
+- `PRMergeStatus`: struct carrying `HeadSHA`, `ReviewDecision`, `CIConclusion`, and
+  `MergeabilityState` fields observed at merge-precondition check time.
+- `MergeResult`: struct carrying the merged commit SHA and a boolean indicating whether
+  the merge was idempotent (already merged).
+
+### 11C.3 Error kind
+
+`ErrSCMConflict` is the sixth `SCMErrorKind` value. Its HTTP semantics (405 method-not-allowed
+and 409 conflict from the merge endpoint) are documented in the §11B.3 table.
+
+The auto-merge reconcile loop imposes merge-specific dispositions on this kind. A 409 response
+with an "already merged" body is treated as idempotent success. A 405 or a 409 with a head-SHA
+mismatch or branch-protection refusal is re-enqueued with the poll interval; the next tick
+observes the new SHA via a refreshed fingerprint. The full disposition table is in §11C.5 and
+§11C.6.
+
+### 11C.4 Reconcile loop integration
+
+The auto-merge reconcile loop runs as Part E of active run reconciliation (see §8.5 Part E for
+the algorithm). The loop processes entries from `pending_reactions` whose kind discriminator is
+`"merge"`.
+
+There is an intentional asymmetry between the YAML configuration key and the runtime kind value.
+The YAML key the operator sets in `WORKFLOW.md` is `reactions.auto_merge`. The runtime and
+persisted kind value used in `pending_reactions` map keys and in the `reaction_fingerprints`
+table's `kind` column is `"merge"`, not `"auto_merge"`. A reader who only sees the YAML key
+would expect the runtime kind to be `auto_merge`; it is `merge`.
+
+### 11C.5 Merge precondition state machine
+
+The auto-merge reconcile loop evaluates three observable inputs before calling `MergePR`. The
+transition table below summarizes the loop's decisions:
+
+| From state | Observation | To state | Action |
+|------------|-------------|----------|--------|
+| Pending | `MergeabilityState == Draft` | Pending | Re-enqueue with poll interval. |
+| Pending | `MergeabilityState == Dirty` or `Blocked` | Pending | Re-enqueue with poll interval. |
+| Pending | `MergeabilityState == Unknown` | Pending | Re-enqueue with poll interval (transient state). |
+| Pending | `ReviewDecision != APPROVED` and `!= NOT_REQUIRED` | Pending | Re-enqueue with poll interval. |
+| Pending | `require_ci == true` and `CI != success` | Pending | Re-enqueue with poll interval. |
+| Pending | All preconditions satisfied | Merging | Call `SCMAdapter.MergePR`. |
+| Merging | Merge succeeded | Done | Post tracker comment; delete branch when `delete_branch == true`; clear fingerprint; increment `sortie_reactions_auto_merge_total{result="merged"}`. |
+| Merging | `ErrSCMConflict` ("already merged") | Done | Treat as idempotent success; same actions as merge succeeded. |
+| Merging | `ErrSCMConflict` (head SHA mismatch) | Pending | Re-enqueue with poll interval; next tick refreshes fingerprint. |
+| Merging | `ErrSCMAuth` | Escalated | Escalate immediately; do not re-enqueue. |
+| Merging | Other transient error | Pending | Re-enqueue with backoff; escalate after `MaxRetries`. |
+
+### 11C.6 Escalation behavior
+
+When `reaction_attempts[issue_id:merge] >= MaxRetries` or when `ErrSCMAuth` is returned on
+`MergePR`, the orchestrator escalates the issue. Two escalation postures are available, set by
+the operator in `WORKFLOW.md`:
+
+- `label`: applies the `needs-human` label to the tracker issue via `TrackerAdapter.AddLabel`.
+  This is the default posture.
+- `comment`: posts a plain-text message to the tracker issue identifying the PR number, the
+  retry count, and that manual merge is required.
+
+Both postures record the escalation in the reaction attempt state and stop further auto-merge
+retries for that issue.
+
+Cross-kind isolation: escalation cleanup MUST scope deletions to the `merge` kind only. The
+escalation path MUST NOT mutate `ci` or `review` reaction state. The full normative invariant
+is in §11C.10.
+
+### 11C.7 Fingerprint
+
+Before calling `MergePR`, the reconcile loop computes a merge fingerprint as SHA-256 over the
+head SHA, a newline byte, and the review-decision string (for example:
+`sha256(headSHA + "\n" + reviewDecision)`). The fingerprint is upserted into the
+`reaction_fingerprints` table with `kind = "merge"`.
+
+The fingerprint's purpose is to deduplicate merge attempts: if the same head SHA and review
+decision are observed across multiple ticks before a successful merge result is persisted, the
+loop skips the re-attempt. When the merge succeeds, the fingerprint entry is cleared.
+
+### 11C.8 Adapter registration
+
+Activation is via `reactions.auto_merge.provider` being non-empty in `WORKFLOW.md`, mirroring
+the `reactions.review_comments.provider` activation pattern documented in §11B.8. The
+`SCMAdapterConstructor` type and registry registration code are defined in §11B.8; the
+auto-merge path reuses the same constructor and registration mechanism without change.
+
+### 11C.9 Token scope and preflight
+
+The startup token-scope preflight is documented in full in §6.3. The auto-merge reaction
+requires two token scopes:
+
+- `pull_requests:write`: always required for `MergePR`.
+- `contents:write`: required when `reactions.auto_merge.delete_branch != false` (for
+  `DeleteBranch`).
+
+A classic `repo` scope satisfies both. Fine-grained PAT permission names are accepted.
+
+Two failure postures apply:
+
+- **Auth-class sticky**: a missing-scope failure sets `state.AutoMergePreflightFailed = true`
+  permanently for the process lifetime. Every subsequent `reconcileAutoMerge` tick drops
+  `merge`-kind pending entries with a WARN log.
+- **Transport-class bounded retry**: a transport failure on the preflight call schedules one
+  retry via `state.AutoMergePreflightRetryDueAt`. After one retry attempt, any further
+  transport failure leaves the sticky flag set.
+
+For the full preflight algorithm, see §6.3.
+
+### 11C.10 Cross-kind isolation
+
+`postAutoMergeSuccess` and `escalateAutoMergeFailure` MUST NOT call any function that modifies
+state owned by a different reaction kind. Specifically, these paths MUST NOT call:
+
+- `CancelRetry`
+- `DeleteRetryEntry`
+- `ClearReactionsForIssue`
+- `delete state.Claimed[issue_id]`
+
+A failed auto-merge does NOT invalidate parallel `ci` or `review` reaction continuations on
+the same issue, so the auto-merge cleanup path is scoped to the `merge` kind only.
 
 ## 12. Prompt Construction and Context Assembly
 
@@ -2576,6 +2936,7 @@ Defined metrics (label sets and buckets are specified here; see ADR-0008 for his
 | `sortie_tool_calls_total{tool,result}` | Counter | Agent tool call completions, partitioned by tool name and result (`success`, `error`). |
 | `sortie_ci_status_checks_total{result}` | Counter | CI status check outcomes, partitioned by result (`passing`, `pending`, `failing`, `error`). |
 | `sortie_ci_escalations_total{action}` | Counter | CI escalation actions when fix retries are exhausted, partitioned by action (`label`, `comment`, `error`). |
+| `sortie_reactions_auto_merge_total{result}` | Counter | Auto-merge reaction outcomes, partitioned by result (`merged`, `error`, `escalated`). |
 | `sortie_review_checks_total{result}` | Counter | Review comment check outcomes, partitioned by result (`dispatched`, `error`, `skipped`). |
 | `sortie_review_escalations_total{action}` | Counter | Review escalation actions when continuation turns are exhausted, partitioned by action (`label`, `comment`, `error`). |
 | `sortie_poll_duration_seconds` | Histogram | Wall-clock time per poll cycle; buckets via `ExponentialBuckets(0.1, 2, 10)` (0.1 s–51.2 s). |
@@ -2960,6 +3321,10 @@ function reconcile_review_comments(state):
 
 ```text
 function dispatch_issue(issue, state, attempt):
+  (agent_kind, template_id, rule_name) = resolve_rule(
+    issue, state.dispatch_cfg, state.default_agent_kind, state.default_template_id
+  )
+
   worker = spawn_worker(
     fn -> run_agent_attempt(issue, attempt, parent_orchestrator_pid) end
   )
@@ -2975,6 +3340,9 @@ function dispatch_issue(issue, state, attempt):
     monitor_handle,
     identifier: issue.identifier,
     issue,
+    agent_kind,
+    template_id,
+    rule_name,
     session_id: null,
     agent_pid: null,
     last_agent_message: null,
@@ -2994,6 +3362,11 @@ function dispatch_issue(issue, state, attempt):
   state.retry_attempts.remove(issue.id)
   return state
 ```
+
+The `resolve_rule` call evaluates `dispatch.rules` in order and returns the first match; see
+§5.3.10 for match semantics and the `ResolveRule` function for the full algorithm. The resolved
+triple is frozen on `RunningEntry` so retries and reaction-driven continuations reuse the same
+selection without re-evaluating rules.
 
 ### 16.5 Worker Attempt (Workspace + Prompt + Agent)
 

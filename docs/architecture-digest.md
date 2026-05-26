@@ -74,6 +74,7 @@ Open [`docs/architecture.md`](architecture.md) when your feature touches one of 
 | §11 Issue Tracker Integration Contract                | Adding/modifying tracker adapters, normalization, pagination, or error categories                  |
 | §11A CI Feedback Contract                             | Wiring CI feedback (provider activation, log truncation, normalized result shape)                  |
 | §11B PR Review Comment Feedback Contract              | Wiring review-comment feedback (SCM provider activation, pending-review semantics)                 |
+| §11C Auto-merge Reaction Contract                     | Wiring auto-merge reactions, SCM write methods (`MergePR`, `DeleteBranch`), the startup token-scope preflight, or the merge fingerprint kind |
 | §12 Prompt Construction and Context Assembly          | Changing prompt rendering, FuncMap, or context fields supplied to the template                     |
 | §13 Logging, Status, and Observability                | Adding log fields, metrics, status endpoints, or dashboard surfaces                                |
 | §14 Failure Model and Recovery Strategy               | Changing retry/backoff, restart-recovery, or failure categorization                                |
