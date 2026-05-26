@@ -575,8 +575,8 @@ the REST surface (see `toSCMError`).
 ### 2. `GetCIStatus` (combined status + check runs)
 
 Returns an aggregate CI conclusion string for the PR head commit. The
-adapter reads the head SHA from the PR object, then queries two endpoints
-in sequence:
+adapter first reads the PR object to obtain the head SHA, then queries two
+additional commit-scoped endpoints in sequence, three calls in total:
 
 ```
 GET /repos/{owner}/{repo}/pulls/{prNumber}
@@ -701,10 +701,13 @@ Idempotency: an HTTP 404 (branch already gone) maps to
 treats this as a successful no-op so that a retried delete after a
 partial-failure tail does not block the issue's completion path.
 
-GitHub may return HTTP 422 when the caller attempts to delete a default
-branch. The adapter surfaces this as `ErrSCMPayload` (see the status table
-below). The auto-merge loop does not target default branches, so this is
-an operator-configuration error rather than a recoverable runtime
+GitHub refuses a delete that targets a protected or default branch. The
+documented refusal statuses for this endpoint are HTTP 409 (conflict) and
+HTTP 422 (validation failed); GitHub's reference attributes the
+default-branch case to both, so the adapter must handle either. A 409 maps
+to `ErrSCMConflict` and a 422 maps to `ErrSCMPayload` (see the status table
+below). The auto-merge loop does not target default branches, so either
+status is an operator-configuration error rather than a recoverable runtime
 condition.
 
 ### HTTP status mapping
@@ -713,7 +716,7 @@ The mapping below is the SCM view: each row reports the HTTP status the
 adapter receives and the `SCMErrorKind` it returns. The base classification
 happens in `classifyHTTPError` (`internal/scm/github/client.go`), and
 `toSCMError` (`internal/scm/github/review.go`) remaps the result for the
-SCM error namespace, including the merge-specific 405/409 promotion.
+SCM error namespace, including the 405/409 promotion to `ErrSCMConflict`.
 
 | HTTP Status | Condition                                          | SCM error kind        |
 | ----------- | -------------------------------------------------- | --------------------- |
@@ -723,21 +726,29 @@ SCM error namespace, including the merge-specific 405/409 promotion.
 | 403         | Insufficient permissions (non-rate-limit body)     | `ErrSCMAuth`          |
 | 403, 429    | Rate limit (primary or secondary, with `Retry-After` or `X-RateLimit-Remaining: 0` or `rate limit` body) | `ErrSCMAPI` |
 | 404         | Resource not found (PR, branch, ref)               | `ErrSCMNotFound`      |
-| 405         | Method not allowed on merge endpoint               | `ErrSCMConflict`      |
-| 409         | Conflict on merge endpoint (head SHA drift, branch protection refusal, or `already merged` body) | `ErrSCMConflict` |
+| 405         | Method not allowed on any non-GraphQL REST SCM call | `ErrSCMConflict`      |
+| 409         | Conflict on any non-GraphQL REST SCM call (merge head SHA drift, branch protection refusal, `already merged` body, or a `DeleteBranch` ref conflict) | `ErrSCMConflict` |
 | 410         | Resource permanently gone                          | `ErrSCMAPI`           |
 | 422         | Validation failed (unsupported `merge_method`, default-branch delete, spam check) | `ErrSCMPayload` |
 | 5xx         | Server error                                       | `ErrSCMTransport`     |
 | network     | DNS, TCP, TLS failure                              | `ErrSCMTransport`     |
 | payload     | JSON decode failure on a 2xx response              | `ErrSCMPayload`       |
 
-The 405-to-`ErrSCMConflict` promotion exists because GitHub returns 405 on
-the merge endpoint when the PR is in a state that bars any merge (notably
-when the platform has detected the branch as already merged); collapsing
-both 405 and 409 into one kind lets the reconcile loop apply a single
-disposition policy. The promotion is suppressed for messages prefixed with
-`POST /graphql:` so a 405 against the GraphQL endpoint is not misread as a
-merge conflict.
+The 405/409-to-`ErrSCMConflict` promotion is keyed on the error message,
+not on the endpoint path. `classifyHTTPError` formats a 405 as
+`"<method> <path>: method not allowed: <detail>"` and a 409 as
+`"<method> <path>: conflict: <detail>"`. `toSCMError` promotes any
+`ErrSCMAPI` error whose message contains `method not allowed` or
+`: conflict:` to `ErrSCMConflict`, so the promotion applies to every
+non-GraphQL REST SCM call, not only the merge endpoint. In practice the
+merge endpoint is the main source of these statuses (GitHub returns 405
+when the PR is in a state that bars any merge, and 409 on head-SHA drift,
+branch-protection refusal, or an already-merged PR), but a 409 from
+`DeleteBranch` (a ref conflict) is promoted the same way. Collapsing both
+statuses into one kind lets the reconcile loop apply a single disposition
+policy on the merge path. The promotion is suppressed for messages prefixed
+with `POST /graphql:` so a 405 or 409 against the GraphQL endpoint is not
+misread as a conflict.
 
 The `already merged` 409 subcase is signaled by the verbatim GitHub body in
 `SCMError.Message`. The orchestrator inspects the message case-insensitively
@@ -833,7 +844,7 @@ re-read rather than by the merge call itself.
 | Issue types (`type`)     | Live API response                                                           | `curl`: `type.name` = `"Research"` on #299    |
 | `state_reason` field     | Live API response                                                           | `curl`: `null` on open issue |
 | Merge endpoint           | GitHub Docs: REST API / Pulls / Merge a pull request                        | Context7 `/websites/github_en_rest`: 200, 403, 404, 405, 409, 422 |
-| Branch delete endpoint   | GitHub Docs: REST API / Git / Delete a reference                            | Context7 `/websites/github_en_rest`: 204 on success, 409 / 422 on default branch |
+| Branch delete endpoint   | GitHub Docs: REST API / Git / Delete a reference                            | Context7 `/websites/github_en_rest`: 204 on success, 409 or 422 on a refused delete (including a default-branch delete) |
 | Review decision (GraphQL) | GitHub Docs: GraphQL / PullRequest.reviewDecision                          | Adapter unit test pins the query text         |
 | Token scopes (merge)     | GitHub Docs: Permissions required for GitHub Apps and fine-grained PATs     | Constants in `internal/scm/github/merge.go`   |
 
@@ -865,5 +876,6 @@ exclusively through live API calls and the official GitHub documentation pages.
 
 4. **Branch delete endpoint** (added with SCM write surface). Confirmed via
    Context7: `DELETE /repos/{owner}/{repo}/git/refs/{ref}` returns 204 on
-   success. A 409 indicates a conflict and a 422 indicates an attempt to
-   delete the default branch.
+   success. A refused delete returns 409 (conflict) or 422 (validation
+   failed); GitHub's reference attributes a default-branch delete to both
+   statuses.
