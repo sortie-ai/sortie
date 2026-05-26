@@ -2419,9 +2419,9 @@ SCMAdapter:
   FetchPendingReviews(ctx, prNumber, owner, repo) ([]ReviewComment, error)
   GetReviewDecision(ctx, prNumber, owner, repo)   (ReviewDecision, error)
   GetCIStatus(ctx, prNumber, owner, repo)         (string, error)
-  GetMergeability(ctx, prNumber, owner, repo)     (MergeabilityState, error)
+  GetMergeability(ctx, prNumber, owner, repo)     (PRMergeStatus, error)
   MergePR(ctx, prNumber, owner, repo, strategy, commitTitle, commitMessage, expectedHeadSHA) (MergeResult, error)
-  DeleteBranch(ctx, branchName, owner, repo)      error
+  DeleteBranch(ctx, owner, repo, branch)          error
 ```
 
 `FetchPendingReviews` is the original read-only method documented in §11B.1. The five new methods
@@ -2435,12 +2435,17 @@ The auto-merge reaction introduces five domain types:
 - `MergeStrategy`: merge strategy for `MergePR`. One of `merge`, `squash`, `rebase`.
 - `ReviewDecision`: normalized review status. One of `APPROVED`, `CHANGES_REQUESTED`,
   `REVIEW_REQUIRED`, `NOT_REQUIRED`.
-- `MergeabilityState`: PR mergeability. One of `Clean`, `Draft`, `Dirty`, `Blocked`,
-  `Unknown`.
-- `PRMergeStatus`: struct carrying `HeadSHA`, `ReviewDecision`, `CIConclusion`, and
-  `MergeabilityState` fields observed at merge-precondition check time.
-- `MergeResult`: struct carrying the merged commit SHA and a boolean indicating whether
-  the merge was idempotent (already merged).
+- `MergeabilityState`: PR mergeability classification. One of `clean`, `unstable`, `blocked`,
+  `dirty`, `unknown` (lowercase string values).
+- `PRMergeStatus`: struct carrying the merge precondition state. Fields: `ReviewDecision`,
+  `CIConclusion`, `Draft` (bool, separate from `Mergeability`), `Mergeability`
+  (`MergeabilityState`), `HeadSHA`, `BranchName`. `ReviewDecision` and `CIConclusion` are unset
+  by `GetMergeability`; callers obtain those from dedicated reads.
+- `MergeResult`: struct carrying `SHA` (merge commit SHA), `Merged` (bool reporting whether the
+  merge completed), and `Message` (provider-supplied status text). The already-merged case is
+  NOT signaled on this struct; it is signaled via `*SCMError` with kind `ErrSCMConflict` and the
+  substring `already merged` (case-insensitive) in the error message. Callers disambiguate that
+  subcase as documented in §11C.3.
 
 ### 11C.3 Error kind
 
