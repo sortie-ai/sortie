@@ -1005,11 +1005,25 @@ from `GET /rate_limit` response headers and validates that the token carries `pu
 and, when `reactions.auto_merge.delete_branch != false`, `contents:write`. A classic `repo` scope
 satisfies both. Fine-grained PAT permission names are accepted.
 
-Auth-class sticky posture: a missing-scope failure is an operator configuration error. The
-orchestrator logs ERROR once at startup with the missing scope name and continues running (it does
-NOT `os.Exit`). `state.AutoMergePreflightFailed` is set to true and remains true for the lifetime
-of the process. Every subsequent `reconcileAutoMerge` tick drops `merge`-kind pending entries with
-a WARN log. Operator recovery requires a token rotation and an orchestrator restart.
+Fail-open paths: the preflight does NOT block startup when scope information is unavailable.
+Two paths fail open and let auto-merge proceed:
+
+- The configured SCM adapter does not implement the scope-verifier interface
+  (`AutoMergeScopeVerifier`). The orchestrator logs WARN that the preflight was skipped and
+  treats the check as passed.
+- The provider returns no scope information (an empty scopes list and no missing entries with no
+  error). This is the normal response for fine-grained PATs and GitHub App installation tokens,
+  whose tokens do not populate `X-OAuth-Scopes`. The orchestrator logs WARN that scope
+  verification was skipped and treats the check as passed. The runtime auth-failure path on the
+  first `MergePR` attempt surfaces any genuine scope gap as `ErrSCMAuth`, with deduplicated
+  ERROR logging.
+
+Auth-class sticky posture: a missing-scope failure (the verifier returns one or more missing
+scope names) is an operator configuration error. The orchestrator logs ERROR once at startup
+with the missing scope name and continues running (it does NOT `os.Exit`).
+`state.AutoMergePreflightFailed` is set to true and remains true for the lifetime of the
+process. Every subsequent `reconcileAutoMerge` tick drops `merge`-kind pending entries with a
+WARN log. Operator recovery requires a token rotation and an orchestrator restart.
 
 Bounded transport-class retry: a transport-class failure on the preflight call is environmental.
 The orchestrator logs WARN once, sets `state.AutoMergePreflightFailed = true` and
@@ -2541,14 +2555,27 @@ requires two token scopes:
 
 A classic `repo` scope satisfies both. Fine-grained PAT permission names are accepted.
 
-Two failure postures apply:
+Scope verification is best-effort: the preflight relies on `X-OAuth-Scopes` returned by
+`GET /rate_limit`. Classic personal access tokens populate that header; fine-grained PATs and
+GitHub App installation tokens do not. When the verifier returns no scope information (and no
+error), and when the adapter does not implement the scope-verifier interface, the preflight
+fails open: it logs WARN and proceeds. Genuine scope gaps for those token classes surface at
+runtime as `ErrSCMAuth` on the first `MergePR` attempt, which the orchestrator dispatches to
+the auth-class escalation path. See §6.3 for the full fail-open semantics.
 
-- **Auth-class sticky**: a missing-scope failure sets `state.AutoMergePreflightFailed = true`
-  permanently for the process lifetime. Every subsequent `reconcileAutoMerge` tick drops
-  `merge`-kind pending entries with a WARN log.
+Three failure postures apply:
+
+- **Auth-class sticky**: a missing-scope failure (the verifier returns one or more missing
+  scope names) sets `state.AutoMergePreflightFailed = true` permanently for the process
+  lifetime. Every subsequent `reconcileAutoMerge` tick drops `merge`-kind pending entries with
+  a WARN log.
 - **Transport-class bounded retry**: a transport failure on the preflight call schedules one
   retry via `state.AutoMergePreflightRetryDueAt`. After one retry attempt, any further
   transport failure leaves the sticky flag set.
+- **Fail-open (no scope information)**: the verifier returned no scopes and no missing entries
+  (fine-grained PAT or GitHub App token), or the adapter does not implement scope verification.
+  The orchestrator proceeds with auto-merge enabled and surfaces any real scope gap at the
+  first `MergePR` call.
 
 For the full preflight algorithm, see §6.3.
 
