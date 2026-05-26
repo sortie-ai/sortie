@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.10.0] - 2026-05-27
+
 ### Added
 
 - Auto-merge reaction for Sortie-created PRs: a new opt-in
@@ -89,7 +91,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Existing rows read back as empty strings and are treated as legacy
   fallback dispatches.
 
-## [1.9.1] - 2026-04-14
+## [1.9.1] - 2026-05-14
 
 ### Fixed
 
@@ -877,7 +879,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   execution via GitHub Actions.
 - Architecture Decision Records (ADR-0001 through ADR-0005).
 
-[Unreleased]: https://github.com/sortie-ai/sortie/compare/1.9.1...HEAD
+[Unreleased]: https://github.com/sortie-ai/sortie/compare/1.10.0...HEAD
+[1.10.0]: https://github.com/sortie-ai/sortie/compare/1.9.1...1.10.0
 [1.9.1]: https://github.com/sortie-ai/sortie/compare/1.9.0...1.9.1
 [1.9.0]: https://github.com/sortie-ai/sortie/compare/1.8.0...1.9.0
 [1.8.0]: https://github.com/sortie-ai/sortie/compare/1.7.1...1.8.0
