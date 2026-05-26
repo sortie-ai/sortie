@@ -24,7 +24,7 @@
   - [2.8 `ci_feedback` — CI Feedback Loop (deprecated)](#28-ci_feedback--ci-feedback-loop-deprecated)
   - [2.9 `self_review` — Self-Review Configuration](#29-self_review--self-review-configuration)
   - [2.10 `reactions` — Reaction-Based Feedback Loops](#210-reactions--reaction-based-feedback-loops)
-  - [2.11 `dispatch` – Rule-based Routing](#211-dispatch--rule-based-routing)
+  - [2.11 `dispatch` — Rule-based Routing](#211-dispatch--rule-based-routing)
 - [3. Environment Variable Overrides](#3-environment-variable-overrides)
   - [3.1 Source Precedence](#31-source-precedence)
   - [3.2 Curated Variable List](#32-curated-variable-list)
@@ -687,7 +687,7 @@ reactions:
 
 ---
 
-### 2.11 `dispatch` – Rule-based Routing
+### 2.11 `dispatch` — Rule-based Routing
 
 ```yaml
 dispatch:
