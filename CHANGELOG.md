@@ -9,6 +9,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Auto-merge reaction for Sortie-created PRs: a new opt-in
+  `reactions.auto_merge` block in `WORKFLOW.md` instructs the
+  orchestrator to merge an agent-created pull request directly through
+  the SCM adapter once review decision, CI conclusion, draft state,
+  and mergeability all satisfy the configured preconditions. The
+  reconcile loop polls every `poll_interval_ms` (default 60 s,
+  minimum 30 s), calls `MergePR` with the expected head SHA to close
+  the TOCTOU window, and treats an "already merged" 409 response as
+  success. Merge strategy (`squash` default, also `merge` or
+  `rebase`), `require_ci` (default `true`), `delete_branch` (default
+  `true`), and the standard `max_retries` / `escalation` /
+  `escalation_label` fields are configurable. At startup the
+  orchestrator runs a one-shot scope preflight against the SCM
+  provider; an auth-class failure sets a sticky
+  `auto_merge_preflight_failed` flag that disables merge attempts for
+  the process lifetime, while a transport-class failure schedules a
+  single retry after 5 minutes. `reactions.review_comments` and
+  `reactions.auto_merge` must declare the same SCM provider; a
+  mismatch or an unknown provider fails startup. Workflows without an
+  `auto_merge` block are unaffected. The `SCMAdapter` interface gains
+  five write methods (`GetReviewDecision`, `GetCIStatus`,
+  `GetMergeability`, `MergePR`, `DeleteBranch`) and a new
+  `ErrSCMConflict` error kind; see
+  [ADR-0012](https://github.com/sortie-ai/sortie/blob/main/docs/decisions/0012-auto-merge-reaction.md).
+  ([#417](https://github.com/sortie-ai/sortie/issues/417))
 - Extension `$VAR` resolution: every string leaf inside top-level
   front matter keys outside the core schema (for example
   `github.api_key`, `worker.ssh_hosts[0]`, `server.host`) now resolves
