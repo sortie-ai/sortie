@@ -800,23 +800,29 @@ Fields:
 
 Each `DispatchRule` has four keys:
 
-- `name`: a unique identifier for the rule, used in metrics labels and freeze-on-dispatch
-  persistence.
+- `name` (optional): operator-supplied rule identifier used in metrics labels and
+  freeze-on-dispatch persistence. When present, the value MUST match the pattern
+  `^[a-z][a-z0-9_-]*$`. When absent or empty, the rule has no operator-visible name and metrics
+  label the rule as the sentinel `<none>`.
 - `match`: a block whose keys define the predicate evaluated against the issue.
 - `agent`: optional override of the agent kind for matching issues.
 - `template`: optional override of the prompt template path for matching issues.
 
 **Match-block keys and semantics**
 
-Match keys are evaluated with AND semantics across keys and OR semantics within a single key:
+Match keys are evaluated with AND semantics across keys and OR semantics within a single key.
+String-valued keys accept either a single string or a list of strings; a scalar is treated as a
+one-element list. Comparisons against `issue_type` and `assignee` are case-insensitive:
 
-- `labels` (list of glob patterns): matches when the issue carries at least one label matching
-  any pattern; glob syntax (e.g. `bug/*`, `*-urgent`).
-- `issue_type` (string): case-insensitive equality match against the issue type field.
+- `labels` (string or list of glob patterns): matches when the issue carries at least one label
+  matching any pattern; glob syntax (e.g. `bug/*`, `*-urgent`).
+- `issue_type` (string or list of strings): case-insensitive equality match against the issue
+  type field; matches when the issue type equals any list entry.
 - `priority` (predicate object): numeric comparison via one operator key: `eq`, `in`, `lt`,
   `lte`, `gt`, or `gte`. The predicate object MUST have exactly one operator key.
-- `identifier` (list of glob patterns): matches against the issue identifier string.
-- `assignee` (string): case-insensitive equality match against the issue assignee.
+- `identifier` (string or list of glob patterns): matches against the issue identifier string.
+- `assignee` (string or list of strings): case-insensitive equality match against the issue
+  assignee; matches when the assignee equals any list entry.
 
 **Resolution semantics and freeze-on-dispatch invariant**
 
