@@ -24,6 +24,7 @@
   - [2.8 `ci_feedback` — CI Feedback Loop (deprecated)](#28-ci_feedback--ci-feedback-loop-deprecated)
   - [2.9 `self_review` — Self-Review Configuration](#29-self_review--self-review-configuration)
   - [2.10 `reactions` — Reaction-Based Feedback Loops](#210-reactions--reaction-based-feedback-loops)
+  - [2.11 `dispatch` – Rule-based Routing](#211-dispatch--rule-based-routing)
 - [3. Environment Variable Overrides](#3-environment-variable-overrides)
   - [3.1 Source Precedence](#31-source-precedence)
   - [3.2 Curated Variable List](#32-curated-variable-list)
@@ -140,7 +141,7 @@ After parsing, the loader produces a struct with three fields:
 
 ### 2.1 Top-Level Keys
 
-The core schema recognizes nine top-level keys:
+The core schema recognizes ten top-level keys:
 
 ```yaml
 tracker: # Issue tracker connection and query settings
@@ -152,6 +153,7 @@ db_path: # SQLite database file path
 ci_feedback: # CI failure feedback loop (deprecated; use reactions.ci_failure)
 reactions: # Reaction-based feedback loops (CI failure, review comments)
 self_review: # Self-review verification loop (optional)
+dispatch: # Rule-based dispatch routing
 ```
 
 **Unknown top-level keys are ignored** by the core schema for forward compatibility. They
@@ -359,7 +361,7 @@ agent:
 
 | Field                            | Type                              | Required                            | Default         | Dynamic Reload                             | Description                                                                                                                                                                      |
 | -------------------------------- | --------------------------------- | ----------------------------------- | --------------- | ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `kind`                           | string                            | No                                  | `claude-code`   | Future dispatches                          | Agent adapter identifier. Built-in adapters: `claude-code`, `copilot-cli`, `codex`, and `opencode`. Other kinds (for example, HTTP-based adapters) are available only if you register them separately. |
+| `kind`                           | string                            | No                                  | `claude-code`   | Future dispatches                          | Agent adapter identifier. This is the default kind used when no `dispatch.rules` entry (and no `dispatch.default.agent`) overrides it. Built-in adapters: `claude-code`, `copilot-cli`, `codex`, and `opencode`. Other kinds (for example, HTTP-based adapters) are available only if you register them separately. |
 | `command`                        | string (shell command)            | When adapter requires local process | Adapter-defined | Future dispatches                          | Shell command to launch the agent for adapters that run as a local subprocess (such as `claude-code` or `opencode`). Adapters that do not start a local process ignore this field. |
 | `turn_timeout_ms`                | integer                           | No                                  | `3600000` (1h)  | Future worker attempts                     | Total timeout for a single agent turn.                                                                                                                                           |
 | `read_timeout_ms`                | integer                           | No                                  | `5000` (5s)     | Future worker attempts                     | Request/response timeout during startup and synchronous operations.                                                                                                              |
@@ -682,6 +684,155 @@ reactions:
 - `require_ci` and `delete_branch` for `auto_merge` must be boolean.
 - `poll_interval_ms` must be >= `30000` for `auto_merge`.
 - When `provider` is absent or empty, all other fields in the kind sub-object are ignored.
+
+---
+
+### 2.11 `dispatch` – Rule-based Routing
+
+```yaml
+dispatch:
+  rules: # ordered list; first-match-wins; optional
+    - name: <rule-name> # optional; must match ^[a-z][a-z0-9_-]*$; used in logs
+      match: # optional; absent or empty match block matches every issue (catch-all)
+        labels: ["bug", "p0-*"]  # string or list; glob; OR within key
+        issue_type: ["Bug"]      # string or list; case-insensitive equality
+        priority: { lte: 2 }    # predicate object; exactly one of eq, in, lt, lte, gt, gte
+        identifier: ["FE-*"]    # string or list; glob; matched against issue.identifier
+        assignee: ["alice"]     # string or list; case-insensitive equality
+      agent: <kind>    # optional; overrides the agent kind for matching issues
+      template: ./prompts/bug.md # optional; path relative to the WORKFLOW.md directory
+  default: # optional
+    agent: <kind>     # optional; defaults to top-level agent.kind
+    template: <path>  # optional; defaults to the WORKFLOW.md Markdown body
+```
+
+#### Dispatch rules
+
+| Field | Type | Required | Default | Description |
+| ----- | ---- | -------- | ------- | ----------- |
+| `rules` | list of rule objects | No | _(none)_ | Ordered dispatch rules; first-match-wins. Evaluated in YAML order. |
+| `default` | map | No | _(none)_ | Fallback selection when no rule matches. Keys: `agent`, `template`. |
+
+Each rule in `dispatch.rules` is a map with the following keys (all other keys are unrecognized):
+
+| Field | Type | Required | Default | Description |
+| ----- | ---- | -------- | ------- | ----------- |
+| `name` | string | No | _(absent)_ | Operator-supplied identifier used in logs. Must match `^[a-z][a-z0-9_-]*$` when present. |
+| `match` | map | No | _(absent)_ | Predicate block. An absent or empty block matches every issue (catch-all). |
+| `agent` | string | No | _(fallback)_ | Agent adapter kind for matching issues. Falls through to `dispatch.default.agent`, then to `agent.kind`. |
+| `template` | string | No | _(fallback)_ | Prompt template path (relative to `WORKFLOW.md` directory). Falls through to `dispatch.default.template`, then to the Markdown body. |
+
+The `match` block accepts only these keys:
+
+| Field | Type | Matching | Description |
+| ----- | ---- | -------- | ----------- |
+| `labels` | string or list | Glob (any element) | Matches when the issue carries at least one label matching any pattern. Patterns use `path.Match` glob syntax (e.g., `bug/*`, `*-urgent`). Matched against the adapter-normalized lowercase label set. |
+| `issue_type` | string or list | Case-insensitive equality (any element) | Matches when the issue type equals any list entry. |
+| `priority` | predicate object | Numeric comparison | Single-operator predicate. See Priority predicates below. An issue with no priority never matches. |
+| `identifier` | string or list | Glob (any element) | Matches when `issue.identifier` glob-matches any pattern, in the case the adapter produced. |
+| `assignee` | string or list | Case-insensitive equality (any element) | Matches when the issue assignee equals any list entry. |
+
+The `dispatch.default` block accepts only `agent` and `template`, with the same types and
+fallback behavior as the per-rule fields.
+
+#### Matching semantics
+
+Evaluation applies AND logic across keys and OR logic within a single key:
+
+- A `match` block succeeds only when every present key is satisfied.
+- A key whose value is a list succeeds when any element matches.
+- An absent or empty `match` block always succeeds (catch-all).
+
+String-valued keys (`labels`, `issue_type`, `identifier`, `assignee`) accept either a
+single string or a list of strings. A scalar is treated as a one-element list.
+
+#### Priority predicates
+
+The `priority` key takes a predicate object with exactly one operator key:
+
+| Operator | Meaning |
+| -------- | ------- |
+| `eq` | Priority equals value |
+| `in` | Priority is in the list of values |
+| `lt` | Priority is less than value |
+| `lte` | Priority is less than or equal to value |
+| `gt` | Priority is greater than value |
+| `gte` | Priority is greater than or equal to value |
+
+For `in`, the value is a list of integers (e.g., `{ in: [1, 2] }`). For all other
+operators, the value is a single integer. An issue with no priority never matches a
+`priority` predicate.
+
+#### Fallback resolution chain
+
+Rules evaluate in YAML order. The first rule whose `match` block succeeds is selected;
+later rules are not consulted. For each selected rule, `agent` and `template` may each be
+omitted independently. Missing fields fall through in order:
+
+1. The matched rule's `agent` / `template`.
+2. `dispatch.default.agent` / `dispatch.default.template`.
+3. Top-level `agent.kind` (for agent) or the `WORKFLOW.md` Markdown body (for template).
+   See [Section 2.6](#26-agent--coding-agent-configuration) for the top-level `agent.kind`
+   default.
+
+When no rule matches and `dispatch.default` supplies an agent or template, the default is
+applied with the same fallback chain for any unset field.
+
+#### Freeze-on-dispatch
+
+The resolved `(agent_kind, template_id, rule_name)` is recorded at the initial dispatch
+and reused by retries and reaction-driven continuations for the same claim. Rules are
+re-evaluated only after the claim is released.
+
+A changed rule set from a `WORKFLOW.md` reload applies to future claims only. In-flight
+issues keep their frozen selection.
+
+#### Per-rule template paths
+
+Template paths for rules and `dispatch.default` resolve relative to the directory
+containing `WORKFLOW.md` (`filepath.Dir(workflow_path)`). The following paths are rejected
+at load time:
+
+- Absolute paths (starting with `/`).
+- `~`-prefixed paths.
+- Paths that resolve, after symlink evaluation, outside the workflow directory tree.
+
+An empty `template` field falls through to the Markdown body (the same behavior as
+omitting the field).
+
+#### Example
+
+```yaml
+dispatch:
+  rules:
+    - name: bug-fix
+      match:
+        labels: ["bug", "bug/*"]
+        priority: { lte: 2 }
+      agent: claude-code
+      template: ./prompts/bug.md
+    - name: docs-update
+      match:
+        issue_type: ["Documentation", "Docs"]
+      agent: codex
+      template: ./prompts/docs.md
+    - name: catch-all
+      agent: claude-code
+      template: ./prompts/default.md
+  default:
+    agent: claude-code
+    template: ./prompts/default.md
+```
+
+The two named rules carry `match` blocks. The third rule has no `match` block and acts as
+the terminal catch-all. Each rule carries a `template:` path that is relative to the
+`WORKFLOW.md` directory and uses forward-slash separators.
+
+#### Further reading (optional)
+
+The design rationale is in `architecture.md` §5.3.10 and
+[ADR-0011](decisions/0011-dispatch-rule-configuration.md). Neither document is required
+to write a valid `dispatch` block; they explain why the feature is shaped as it is.
 
 ---
 
@@ -1974,6 +2125,23 @@ skipped for that tick, reconciliation remains active, and an error is emitted.
 | `agent.command` present and non-empty          | Missing when `agent.kind` requires a local command.         |
 | Tracker adapter registered and available       | No adapter registered for the configured `tracker.kind`.    |
 | Agent adapter registered and available         | No adapter registered for the configured `agent.kind`.      |
+| `dispatch` is a map; `dispatch.rules` is a sequence; `dispatch.default` is a map | Wrong YAML node type for `dispatch`, `dispatch.rules`, or `dispatch.default`. |
+| Each rule has at least one of `match`, `agent`, `template` | A rule map carries none of the three. |
+| Rule `name`, when present, matches `^[a-z][a-z0-9_-]*$` | Malformed rule name. |
+| No duplicate rule name | Two rules share the same non-empty `name`. |
+| No non-final catch-all (`unreachable_rules`) | A rule with no `match` block precedes another rule. |
+| Every `match` key recognized | A `match` key is not one of `labels`, `issue_type`, `priority`, `identifier`, `assignee`. |
+| `priority` predicate has exactly one operator | Zero or more than one of `eq`, `in`, `lt`, `lte`, `gt`, `gte`. |
+| Glob patterns syntactically valid | A `labels` or `identifier` pattern fails `path.Match`. |
+| Every referenced `agent` kind registered | `dispatch.rules[*].agent` or `dispatch.default.agent` names an unregistered adapter. |
+| Every per-rule template path resolvable and parseable | Path is absolute, `~`-prefixed, escapes the workflow tree, is not a regular file, is unreadable, or fails template parse. |
+
+**Advisory warnings vs. configuration errors:** Unknown keys under `dispatch`,
+`dispatch.rules[*]`, and `dispatch.default` produce `unknown_sub_key` advisory
+warnings; they do not block dispatch. Unknown keys inside a `match` block are
+rejected as configuration errors. The asymmetry matters: a typo like `lables:` inside
+`match` is caught as an error so it cannot silently disable a rule, while a typo at
+the `dispatch` or rule level is flagged as a warning without preventing startup.
 
 ---
 
