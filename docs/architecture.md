@@ -2472,17 +2472,22 @@ would expect the runtime kind to be `auto_merge`; it is `merge`.
 
 ### 11C.5 Merge precondition state machine
 
-The auto-merge reconcile loop evaluates three observable inputs before calling `MergePR`. The
-transition table below summarizes the loop's decisions:
+The auto-merge reconcile loop evaluates the merge preconditions reported by `GetMergeability`
+(via `PRMergeStatus`) alongside the review-decision and CI-conclusion reads before calling
+`MergePR`. The transition table below summarizes the loop's decisions. `Draft` is the
+`PRMergeStatus.Draft` boolean (not a `MergeabilityState` value); `Mergeability` is the
+`PRMergeStatus.Mergeability` field:
 
 | From state | Observation | To state | Action |
 |------------|-------------|----------|--------|
-| Pending | `MergeabilityState == Draft` | Pending | Re-enqueue with poll interval. |
-| Pending | `MergeabilityState == Dirty` or `Blocked` | Pending | Re-enqueue with poll interval. |
-| Pending | `MergeabilityState == Unknown` | Pending | Re-enqueue with poll interval (transient state). |
+| Pending | `Draft == true` | Pending | Re-enqueue with poll interval. |
+| Pending | `Mergeability == dirty` | Pending | Re-enqueue with poll interval. |
+| Pending | `Mergeability == blocked` | Pending | Re-enqueue with poll interval. |
+| Pending | `Mergeability == unknown` | Pending | Re-enqueue with poll interval (transient state). |
+| Pending | `Mergeability` not in (`clean`, `unstable`) | Pending | Re-enqueue with poll interval. |
 | Pending | `ReviewDecision != APPROVED` and `!= NOT_REQUIRED` | Pending | Re-enqueue with poll interval. |
 | Pending | `require_ci == true` and `CI != success` | Pending | Re-enqueue with poll interval. |
-| Pending | All preconditions satisfied | Merging | Call `SCMAdapter.MergePR`. |
+| Pending | All preconditions satisfied (`Mergeability` in (`clean`, `unstable`); `!Draft`; review and CI satisfied) | Merging | Call `SCMAdapter.MergePR`. |
 | Merging | Merge succeeded | Done | Post tracker comment; delete branch when `delete_branch == true`; clear fingerprint; increment `sortie_reactions_auto_merge_total{result="merged"}`. |
 | Merging | `ErrSCMConflict` ("already merged") | Done | Treat as idempotent success; same actions as merge succeeded. |
 | Merging | `ErrSCMConflict` (head SHA mismatch) | Pending | Re-enqueue with poll interval; next tick refreshes fingerprint. |
