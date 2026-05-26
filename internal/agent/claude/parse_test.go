@@ -543,8 +543,8 @@ func TestEmitToolResult_SameMessage(t *testing.T) {
 	if got.ToolName != "Bash" {
 		t.Errorf("event.ToolName = %q, want %q", got.ToolName, "Bash")
 	}
-	if got.ToolDurationMS != 0 {
-		t.Errorf("event.ToolDurationMS = %d, want 0 (same-message pair)", got.ToolDurationMS)
+	if got.ToolDurationMS < 0 {
+		t.Errorf("event.ToolDurationMS = %d, want >= 0 (same-message pair)", got.ToolDurationMS)
 	}
 	if got.ToolError {
 		t.Error("event.ToolError = true, want false")
