@@ -2136,12 +2136,14 @@ skipped for that tick, reconciliation remains active, and an error is emitted.
 | Every referenced `agent` kind registered | `dispatch.rules[*].agent` or `dispatch.default.agent` names an unregistered adapter. |
 | Every per-rule template path resolvable and parseable | Path is absolute, `~`-prefixed, escapes the workflow tree, is not a regular file, is unreadable, or fails template parse. |
 
-**Advisory warnings vs. configuration errors:** Unknown keys under `dispatch`,
-`dispatch.rules[*]`, and `dispatch.default` produce `unknown_sub_key` advisory
-warnings; they do not block dispatch. Unknown keys inside a `match` block are
-rejected as configuration errors. The asymmetry matters: a typo like `lables:` inside
-`match` is caught as an error so it cannot silently disable a rule, while a typo at
-the `dispatch` or rule level is flagged as a warning without preventing startup.
+**Advisory warnings vs. configuration errors:** An unknown key placed directly
+under `dispatch` (alongside `rules` and `default`) produces an `unknown_sub_key`
+advisory warning and does not block startup. Unknown keys nested deeper are
+rejected as configuration errors that fail the load: an unrecognized key inside a
+rule map (`dispatch.rules[*]`), inside `dispatch.default`, or inside a `match`
+block. The asymmetry matters: a typo like `lables:` inside `match`, or a stray key
+on a rule, is caught as an error so it cannot silently disable a rule, while a typo
+at the top `dispatch` level is flagged as a warning without preventing startup.
 
 ---
 
