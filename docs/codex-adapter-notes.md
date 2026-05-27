@@ -3,10 +3,7 @@
 > OpenAI Codex CLI v0.134.x (npm `@openai/codex`, binary `codex`), researched April 2026.
 > and updated research on May 2026. Reference for implementing the Codex `AgentAdapter`.
 >
-> **Primary sources:** [Codex documentation][codex-docs], [Non-interactive mode][ni-mode],
-> [App Server protocol][app-server], [Agent approvals & security][approvals],
-> [Authentication][auth], [Hooks][hooks], [Codex SDK][sdk],
-> [openai/codex GitHub repository][repo].
+> Primary sources are linked under "Sources" at the end.
 >
 > **Prior art:** OpenAI Symphony (Elixir) uses the app-server JSON-RPC
 > protocol exclusively. Sortie's adapter uses the same protocol surface per architecture
@@ -292,7 +289,7 @@ The adapter records `turn.id` for timeout enforcement and interrupt capability.
 ### Continuation turns
 
 For turn 2+, the adapter sends another `turn/start` on the same thread. No `--resume` flag
-is needed — the thread maintains full conversation history automatically.
+is needed; the thread maintains full conversation history automatically.
 
 ```json
 {"method": "turn/start", "id": 31, "params": {
@@ -410,7 +407,7 @@ Normalization to Sortie's `{input_tokens, output_tokens, total_tokens}`:
 | `input_tokens`          | `input_tokens`    | Total input tokens (includes cached).    |
 | `output_tokens`         | `output_tokens`   | Output tokens generated.                 |
 | sum of above            | `total_tokens`    | Computed by adapter.                     |
-| `cached_input_tokens`   | —                 | Logged for observability; not in Sortie's model. |
+| `cached_input_tokens`   | n/a               | Logged for observability; not in Sortie's model. |
 
 ---
 
@@ -461,10 +458,10 @@ mode.
 When `approvalPolicy` is not `"never"`, the app-server sends approval requests as JSON-RPC
 requests to the client:
 
-- `item/commandExecution/requestApproval` — shell command approval
-- `item/fileChange/requestApproval` — file edit approval
-- `item/tool/requestUserInput` — user input request (can carry approval questions)
-- `item/tool/call` — dynamic tool call (client must execute and return result)
+- `item/commandExecution/requestApproval`: shell command approval
+- `item/fileChange/requestApproval`: file edit approval
+- `item/tool/requestUserInput`: user input request (can carry approval questions)
+- `item/tool/call`: dynamic tool call (client must execute and return result)
 
 The adapter responds with approval decisions:
 
@@ -552,7 +549,7 @@ an `error` object:
 
 | Exit scenario        | Adapter mapping      | Description                               |
 | -------------------- | -------------------- | ----------------------------------------- |
-| Clean shutdown       | —                    | Normal after stdin close or interrupt.     |
+| Clean shutdown       | n/a                  | Normal after stdin close or interrupt.     |
 | Non-zero exit        | `turn_failed`        | Unexpected failure.                        |
 | 127                  | `agent_not_found`    | `codex` binary not found on `$PATH`.       |
 | Signal (SIGTERM)     | `turn_cancelled`     | Killed by adapter timeout.                 |
@@ -920,31 +917,31 @@ issue, preventing this scenario.
 12. **Git requirement:** Ensure workspace is a Git repository before launching app-server,
     or configure `--skip-git-repo-check`.
 
-### Verification items
+### Open questions
 
-Items requiring experimental verification:
+The following behaviors are not characterized here and need experimental verification:
 
-- [ ] `dynamicTools` persistence across `thread/resume` (documented but not verified).
-- [ ] Exact `codexErrorInfo` values for authentication failures vs. rate limit exhaustion.
-- [ ] Behavior when `thread/start` is called with an already-active thread.
-- [ ] Whether `turn/interrupt` reliably produces `status: "interrupted"` under all conditions.
-- [ ] Process exit code mapping when app-server encounters a fatal internal error.
-- [ ] Interaction between OS sandbox enforcement and containerized deployment (Docker with
+- `dynamicTools` persistence across `thread/resume` (documented but not verified).
+- Exact `codexErrorInfo` values for authentication failures vs. rate limit exhaustion.
+- Behavior when `thread/start` is called with an already-active thread.
+- Whether `turn/interrupt` reliably produces `status: "interrupted"` under all conditions.
+- Process exit code mapping when app-server encounters a fatal internal error.
+- Interaction between OS sandbox enforcement and containerized deployment (Docker with
   `--security-opt seccomp=unconfined`).
-- [ ] Thread storage location customization (whether `CODEX_HOME` env var is respected).
-- [ ] Maximum message size on stdio transport (observed 1 MB in Symphony; may vary).
-- [ ] `account/login/start` behavior when `CODEX_API_KEY` is already in the environment
+- Thread storage location customization (whether `CODEX_HOME` env var is respected).
+- Maximum message size on stdio transport (observed 1 MB in Symphony; may vary).
+- `account/login/start` behavior when `CODEX_API_KEY` is already in the environment
   (auto-login vs. explicit login required).
 
 ---
 
 ## Sources
 
-[codex-docs]: https://developers.openai.com/codex
-[ni-mode]: https://developers.openai.com/codex/noninteractive
-[app-server]: https://developers.openai.com/codex/app-server
-[approvals]: https://developers.openai.com/codex/agent-approvals-security
-[auth]: https://developers.openai.com/codex/auth
-[hooks]: https://developers.openai.com/codex/hooks
-[sdk]: https://developers.openai.com/codex/sdk
-[repo]: https://github.com/openai/codex
+- [Codex documentation](https://developers.openai.com/codex)
+- [Non-interactive mode](https://developers.openai.com/codex/noninteractive)
+- [App Server protocol](https://developers.openai.com/codex/app-server)
+- [Agent approvals & security](https://developers.openai.com/codex/agent-approvals-security)
+- [Authentication](https://developers.openai.com/codex/auth)
+- [Hooks](https://developers.openai.com/codex/hooks)
+- [Codex SDK](https://developers.openai.com/codex/sdk)
+- [openai/codex GitHub repository](https://github.com/openai/codex)
