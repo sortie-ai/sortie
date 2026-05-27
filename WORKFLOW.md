@@ -189,6 +189,7 @@ Sortie is a single-binary Go service with this internal layout:
 | `internal/agent/claude/` | Integration   | Claude Code adapter behind `AgentAdapter` interface  |
 | `internal/agent/codex/`  | Integration   | Codex adapter behind `AgentAdapter` interface        |
 | `internal/agent/copilot/` | Integration  | Copilot adapter behind `AgentAdapter` interface      |
+| `internal/agent/opencode/` | Integration | OpenCode adapter behind `AgentAdapter` interface     |
 | `internal/agent/mock/`   | Integration   | Mock agent for testing                               |
 | `internal/workspace/`    | Execution     | Workspace lifecycle, hooks, path safety              |
 | `internal/orchestrator/` | Coordination  | Poll loop, dispatch, retry, reconciliation           |
