@@ -1,7 +1,7 @@
 # OpenAI Codex CLI: Adapter Research Notes
 
-> OpenAI Codex CLI v0.121.x (npm `@openai/codex`, binary `codex`), researched April 2026.
-> Reference for implementing the Codex `AgentAdapter`.
+> OpenAI Codex CLI v0.134.x (npm `@openai/codex`, binary `codex`), researched April 2026.
+> and updated research on May 2026. Reference for implementing the Codex `AgentAdapter`.
 >
 > **Primary sources:** [Codex documentation][codex-docs], [Non-interactive mode][ni-mode],
 > [App Server protocol][app-server], [Agent approvals & security][approvals],
@@ -838,6 +838,14 @@ issue, preventing this scenario.
   (observed in Symphony) allows silently declining specific approval categories rather than
   auto-approving them. With `reject.sandbox_approval: true`, sandbox-related prompts are
   rejected (agent sees a denial) rather than approved.
+- **Model and hosted-tool compatibility:** Previous Codex releases inject a `tool_search`
+  hosted tool into the app-server's default tool set on every turn. The `gpt-5.4-nano` model
+  rejects it with HTTP 400 (`invalid_request_error` on the `tools` param), which the adapter
+  normalizes to `turn_failed`. Use `gpt-5.4-mini` or higher as the minimum viable tier. The
+  tool is no longer gated by a user feature flag (`codex features list` reports `tool_search`
+  as `removed`), so `--disable tool_search` does not suppress it. Verified on CLI v0.134.0;
+  previous versions (e.g., v0.121.0) did not inject the tool, so `gpt-5.4-nano` completed
+  turns there.
 
 ---
 

@@ -8,7 +8,7 @@
 // Optional environment variables:
 //
 //	SORTIE_CODEX_COMMAND    override the default "codex app-server" binary command
-//	SORTIE_CODEX_MODEL      override the default "gpt-5.4-nano" model
+//	SORTIE_CODEX_MODEL      override the default "gpt-5.4-mini" model
 //
 // Run:
 //
@@ -47,7 +47,7 @@ func skipUnlessCodexIntegration(t *testing.T) {
 func integrationConfig() map[string]any {
 	model := os.Getenv("SORTIE_CODEX_MODEL")
 	if model == "" {
-		model = "gpt-5.4-nano"
+		model = "gpt-5.4-mini"
 	}
 	return map[string]any{
 		"approval_policy": "never",
