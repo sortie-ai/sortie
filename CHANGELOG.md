@@ -86,7 +86,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Migrations
 
-- 010: Add `rule_name`, `template_id`, and `agent_kind` to
+- Add `rule_name`, `template_id`, and `agent_kind` to
   `retry_entries` and `rule_name`, `template_id` to `run_history`.
   Existing rows read back as empty strings and are treated as legacy
   fallback dispatches.
@@ -222,7 +222,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Migrations
 
-- 009: Add nullable `session_id TEXT` column to `retry_entries`
+- Add nullable `session_id TEXT` column to `retry_entries`
 
 ## [1.6.1] - 2026-04-11
 
@@ -319,8 +319,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Migrations
 
-- 007: Add nullable `review_metadata TEXT` column to `run_history`
-- 008: Add `reaction_fingerprints` table for cross-restart reaction
+- Add nullable `review_metadata TEXT` column to `run_history`
+- Add `reaction_fingerprints` table for cross-restart reaction
   deduplication
 
 ## [1.5.1] - 2026-04-08
@@ -522,9 +522,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Migrations
 
-- 004: Add index `idx_run_history_issue_id` on `run_history(issue_id)`
-- 005: Add `turns_completed INTEGER NOT NULL DEFAULT 0` to `run_history`
-- 006: Add nullable `display_identifier` column to `run_history`
+- Add index `idx_run_history_issue_id` on `run_history(issue_id)`
+- Add `turns_completed INTEGER NOT NULL DEFAULT 0` to `run_history`
+- Add nullable `display_identifier` column to `run_history`
 
 ## [1.2.0] - 2026-03-31
 
