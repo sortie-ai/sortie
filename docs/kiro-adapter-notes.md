@@ -5,28 +5,18 @@
 >
 > Provenance: Kiro CLI is the rebranded Amazon Q Developer CLI. The November 2025
 > Kiro general-availability release renamed the `q` binary to `kiro-cli` and moved
-> configuration from `~/.aws/amazonq` to `~/.kiro`.[migrating-docs] The installed 2.4.2
-> binary is built from the open-source [`aws/amazon-q-developer-cli`][q-cli-repo] codebase:
-> it embeds Rust source paths under `crates/q_cli/` and changelog entries that link to
-> pull requests in that repository (local `strings` probe of the 2.4.2 binary).
->
-> Primary sources, rendered docs: [CLI overview][kiro-cli-docs], [headless mode][headless-docs],
-> [migrating from Amazon Q][migrating-docs], [exit codes][exit-codes-docs],
-> [built-in tools][builtin-tools-docs], [CLI commands][cli-commands-docs], [chat command][chat-docs].
->
-> Primary sources, first-party blog: [Introducing headless mode][headless-blog].
->
-> Primary sources, source code and tracker: [`aws/amazon-q-developer-cli`][q-cli-repo],
-> [Kiro tracker][kiro-issues], [feature request #5423][feature-5423].
->
-> Independent hands-on report: [DevelopersIO (Classmethod)][devio-headless].
+> configuration from `~/.aws/amazonq` to `~/.kiro`. The installed 2.4.2 binary is built from
+> the open-source [`aws/amazon-q-developer-cli`](https://github.com/aws/amazon-q-developer-cli)
+> codebase: it embeds Rust source paths under `crates/q_cli/` and changelog entries that link
+> to pull requests in that repository (local `strings` probe of the 2.4.2 binary).
 >
 > Local validation: direct probes of `kiro-cli 2.4.2`, including authenticated headless turns
 > run with a `KIRO_API_KEY` credential on a Kiro Pro account. These cover help surfaces, exit
 > codes, authentication gating, the SQLite store schema, the success-turn stdout shape, the
 > cost-trailer location, conversation persistence and resume, the live model list, and the MCP
-> config-load mechanism. Claims that rest on secondary sources are cited inline; behaviors not
-> exercised here are listed under "Known limitations".
+> config-load mechanism. Claims that rest on secondary sources are attributed in the prose;
+> behaviors not exercised here are listed under "Known limitations". All sources are linked
+> under "Sources" at the end.
 >
 > Version note: the docs at `kiro.dev` track the current product. The source repository
 > tags its own releases on a separate `1.x` line. Runtime claims here are anchored to the
@@ -36,10 +26,10 @@
 ## Overview
 
 Kiro CLI exposes one relevant automation surface for Sortie: the `chat` command run with
-`--no-interactive`.[headless-docs][cli-commands-docs] Unlike Codex, Kiro CLI does not ship a
-persistent JSON-RPC app-server, and unlike OpenCode it has no embedded HTTP server. It is a
-single binary that, in non-interactive mode, accepts one prompt, runs an agent loop to
-completion, prints a human-readable transcript to stdout, and exits.
+`--no-interactive`. Unlike Codex, Kiro CLI does not ship a persistent JSON-RPC app-server, and
+unlike OpenCode it has no embedded HTTP server. It is a single binary that, in non-interactive
+mode, accepts one prompt, runs an agent loop to completion, prints a human-readable transcript
+to stdout, and exits.
 
 | Surface | Transport | What it does | Adapter relevance |
 | ------- | --------- | ------------ | ----------------- |
@@ -48,8 +38,9 @@ completion, prints a human-readable transcript to stdout, and exits.
 | `kiro-cli acp` | stdin/stdout nd-JSON | Agent Client Protocol server | Exists in the command tree (local `--help-all` probe), but the headless `chat` path is the documented automation surface and the focus of this note |
 
 This places the Kiro adapter in Sortie's synchronous, launch-per-turn category. It satisfies
-[`domain.AgentAdapter`](../internal/domain/agent.go) with one subprocess per turn, delivers
-events through the `RunTurn` `OnEvent` callback, and returns `nil` from `EventStream()`.
+`domain.AgentAdapter` (defined in `internal/domain/agent.go`) with one subprocess per turn,
+delivers events through the `RunTurn` `OnEvent` callback, and returns `nil` from
+`EventStream()`.
 
 The single most important architectural fact for the adapter: **headless Kiro CLI has no
 structured output**. There is no JSON event stream, no machine-readable result envelope, and
@@ -60,22 +51,22 @@ cost reporting" below.
 
 ## Installation and prerequisites
 
-Kiro CLI installs as the `kiro-cli` binary.[kiro-cli-docs][headless-blog]
+Kiro CLI installs as the `kiro-cli` binary:
 
 ```bash
 curl -fsSL https://cli.kiro.dev/install | bash
 ```
 
 For backward compatibility the rebrand keeps the legacy `q` and `q chat` entry points
-working, and existing Amazon Q users migrate in place via `q update`.[migrating-docs]
+working, and existing Amazon Q users migrate in place via `q update`.
 
 | Item | Requirement | Evidence |
 | ---- | ----------- | -------- |
 | Kiro CLI binary | `kiro-cli` on `PATH` | Local probe, 2.4.2 |
-| Credentials | A valid Builder ID, IAM Identity Center, social, external IdP, or `KIRO_API_KEY` token | [headless-docs][migrating-docs], local probe |
-| Subscription for headless | `KIRO_API_KEY` requires Kiro Pro, Pro+, or Power | [headless-docs] |
+| Credentials | A valid Builder ID, IAM Identity Center, social, external IdP, or `KIRO_API_KEY` token | Published docs, local probe |
+| Subscription for headless | `KIRO_API_KEY` requires Kiro Pro, Pro+, or Power | Published docs |
 | Working directory | Any project directory; the adapter must launch with cwd set to the workspace | Local probe |
-| Headless use | `kiro-cli chat --no-interactive` runs without a TTY once a credential is present | [headless-docs][devio-headless] |
+| Headless use | `kiro-cli chat --no-interactive` runs without a TTY once a credential is present | Published docs, hands-on report |
 
 The binary is large (roughly 118 MB for 2.4.2) and dynamically linked against glibc (local
 `file` probe). It bundles shell-integration assets (`inline`, autosuggestions, completions)
@@ -96,7 +87,7 @@ Evidence that `kiro-cli` 2.4.2 is the rebranded Amazon Q Developer CLI:
   `github.com/aws/amazon-q-developer-cli` (for example `/pull/2561` and `/pull/2516`)
   (local `strings` probe).
 - The official migration guide documents the `q` to `kiro-cli` rename and the configuration
-  move from `~/.aws/amazonq` to `~/.kiro`.[migrating-docs]
+  move from `~/.aws/amazonq` to `~/.kiro`.
 - The CLI talks to AWS CodeWhisperer endpoints under SSO authentication
   (`codewhisperer.us-east-1.amazonaws.com`, `cps.prod-us-east-1.codewhisperer.ai.aws.dev`)
   and to Kiro runtime endpoints under API-key authentication
@@ -104,9 +95,8 @@ Evidence that `kiro-cli` 2.4.2 is the rebranded Amazon Q Developer CLI:
   (local `strings` probe).
 
 The `kirodotdev/Kiro` repository is the Kiro IDE and the public issue tracker (TypeScript,
-not the CLI source).[kiro-issues] CLI feature requests such as machine-readable headless
-output are filed there.[feature-5423] The CLI source of record remains
-[`aws/amazon-q-developer-cli`][q-cli-repo].
+not the CLI source). CLI feature requests such as machine-readable headless output are filed
+there. The CLI source of record remains `aws/amazon-q-developer-cli`.
 
 ## Authentication
 
@@ -119,16 +109,15 @@ flows; `KIRO_API_KEY` is the unattended path.
 | IAM Identity Center (pro) | `kiro-cli login --license pro --identity-provider <url> --region <r>` | Interactive; enterprise SSO |
 | Social (Google, GitHub) | `kiro-cli login --license free` social option | Interactive |
 | External IdP | Refresh-token flow stored under `kirocli:external-idp:token` | Interactive setup |
-| API key | `KIRO_API_KEY` environment variable | The unattended path. Requires Kiro Pro, Pro+, or Power.[headless-docs] |
+| API key | `KIRO_API_KEY` environment variable | The unattended path. Requires Kiro Pro, Pro+, or Power. |
 
 `KIRO_API_KEY` is the credential the adapter should rely on. Per the first-party blog, "when
 the `KIRO_API_KEY` environment variable is set, Kiro CLI skips the browser-based login flow
-entirely."[headless-blog] The headless docs state plainly that "headless mode requires an API
-key set as the `KIRO_API_KEY` environment variable."[headless-docs] The binary confirms an
-`API_KEY` token type and an `https://runtime.<region>.kiro.dev` endpoint for that path, plus
-a changelog entry "Fix API key authentication failing for non us-east-1 users" (local
-`strings` probe), so the adapter MUST treat the active region as a configurable input rather
-than assuming `us-east-1`.
+entirely." The headless docs state plainly that "headless mode requires an API key set as the
+`KIRO_API_KEY` environment variable." The binary confirms an `API_KEY` token type and an
+`https://runtime.<region>.kiro.dev` endpoint for that path, plus a changelog entry "Fix API
+key authentication failing for non us-east-1 users" (local `strings` probe), so the adapter
+MUST treat the active region as a configurable input rather than assuming `us-east-1`.
 
 ### Token storage
 
@@ -158,11 +147,11 @@ without a valid credential does not error out; it hangs until killed. Confirmed 
 `kiro-cli chat --no-interactive --trust-all-tools "..."` with no credential produced only the
 device-login prompt and spinner on stdout, an empty stderr, and never exited on its own.
 
-The authenticated probe sharpened this hazard into two distinct cases (authenticated, 2.4.2,
-2026-05-27). An **invalid** `KIRO_API_KEY` does not hang: `chat --no-interactive` fails fast
-with `Authentication failed.` on stderr, empty stdout, and exit 0. The indefinite device-login
-hang is specific to **no credential at all** (no `KIRO_API_KEY` and no cached SSO token). The
-two failure shapes need different defenses.
+The authenticated probe sharpened this hazard into two distinct cases. An **invalid**
+`KIRO_API_KEY` does not hang: `chat --no-interactive` fails fast with `Authentication failed.`
+on stderr, empty stdout, and exit 0. The indefinite device-login hang is specific to **no
+credential at all** (no `KIRO_API_KEY` and no cached SSO token). The two failure shapes need
+different defenses.
 
 Adapter requirement: the adapter MUST verify that `KIRO_API_KEY` (or a pre-completed SSO
 token) is present before launching `chat` (defends against the hang), SHOULD validate the
@@ -175,9 +164,8 @@ own turn timeout as a backstop, because the CLI provides no self-timeout on the 
 ### `kiro-cli chat`
 
 The flag surface below is captured verbatim from `kiro-cli chat --help` on 2.4.2 (local
-probe), cross-checked against the published CLI command reference.[cli-commands-docs] The
-internal usage string is `kiro-cli-chat chat [OPTIONS] [INPUT]`, where `[INPUT]` is "the
-first question to ask".
+probe), cross-checked against the published CLI command reference. The internal usage string
+is `kiro-cli-chat chat [OPTIONS] [INPUT]`, where `[INPUT]` is "the first question to ask".
 
 | Flag | Short | Meaning | Adapter use |
 | ---- | ----- | ------- | ----------- |
@@ -221,9 +209,9 @@ have to escape leading hyphens.
 
 | Command | Subcommands or use | Evidence |
 | ------- | ------------------ | -------- |
-| `kiro-cli mcp` | `add`, `remove`, `list`, `import`, `status` | Local `mcp --help`, [cli-commands-docs] |
+| `kiro-cli mcp` | `add`, `remove`, `list`, `import`, `status` | Local `mcp --help`, published docs |
 | `kiro-cli agent` | `list`, `create`, `edit`, `validate`, `migrate`, `set-default` | Local `agent --help` |
-| `kiro-cli settings` | Read or write CLI settings, for example `kiro-cli settings chat.defaultModel <model>` | [devio-headless], local probe |
+| `kiro-cli settings` | Read or write CLI settings, for example `kiro-cli settings chat.defaultModel <model>` | Hands-on report, local probe |
 | `kiro-cli login` / `logout` / `whoami` | Authentication management; `whoami` prints `Not logged in` or the active method | Local probe |
 | `kiro-cli mcp` / `agent` when unauthenticated | Fail fast with exit 1 (`You are not logged in`) | Local probe |
 
@@ -231,9 +219,9 @@ have to escape leading hyphens.
 
 ### Headless execution model
 
-`kiro-cli chat --no-interactive "<prompt>"` runs the agent loop to completion and exits.[headless-docs]
-The flag "tells Kiro to print its response to stdout and exit, rather than starting an
-interactive chat session," which is the intended CI behavior.[headless-blog] There is no
+`kiro-cli chat --no-interactive "<prompt>"` runs the agent loop to completion and exits. The
+flag "tells Kiro to print its response to stdout and exit, rather than starting an interactive
+chat session," which is the intended CI behavior per the first-party blog. There is no
 persistent process to manage between turns. Each turn is one subprocess launch, matching the
 Claude Code and Copilot adapters rather than the Codex app-server.
 
@@ -266,11 +254,11 @@ output for a chat turn. Evidence, triangulated:
 - The 2.4.2 binary contains no `output-format`, `output_format`, `stop_reason`, or
   `tool_calls` strings (local `strings` probe).
 - A structured headless output mode is an open feature request, not a shipped feature:
-  [`kirodotdev/Kiro#5423`][feature-5423] (filed 2026-02-05, state OPEN) proposes adding
-  `--output-format json` returning `{response, tool_calls, stop_reason}` and a
-  `--progress-file <path>` NDJSON stream. The request explicitly motivates the need to "parse
-  the final response without stripping ANSI codes or text parsing," which confirms that no
-  such clean output exists today.
+  [kirodotdev/Kiro#5423](https://github.com/kirodotdev/Kiro/issues/5423) (filed 2026-02-05,
+  state OPEN) proposes adding `--output-format json` returning
+  `{response, tool_calls, stop_reason}` and a `--progress-file <path>` NDJSON stream. The
+  request explicitly motivates the need to "parse the final response without stripping ANSI
+  codes or text parsing," which confirms that no such clean output exists today.
 
 Caution on secondary sources: some web summaries describe `--output-format json` as if it
 ships in Kiro CLI. It does not in 2.4.2. Those summaries appear to paraphrase the wording of
@@ -280,21 +268,20 @@ this version.
 ### What stdout actually contains
 
 In `--no-interactive` mode the stdout stream is a human transcript, not a parseable protocol.
-The authenticated probe refined the picture of how the streams divide (local probe,
-authenticated, 2.4.2, 2026-05-27):
+The authenticated probe refined the picture of how the streams divide:
 
 - **stdout carries the assistant answer.** For a turn that invokes no tools, stdout held only
   the answer, prefixed with a colorized `> ` marker and ANSI styling, with no trailing
   newline (observed: `\x1b[38;5;141m> \x1b[0mPONG`). Per the independent hands-on report, a
   turn that invokes tools also prints tool-progress lines such as
-  `Reading directory: ... (using tool: read ...)` and markdown answers including
-  tables.[devio-headless] The tool-progress case was not re-exercised here, so where exactly
-  tool logs land relative to stdout/stderr is still secondary-sourced.
+  `Reading directory: ... (using tool: read ...)` and markdown answers including tables. The
+  tool-progress case was not re-exercised here, so where exactly tool logs land relative to
+  stdout and stderr is still secondary-sourced.
 - **stderr carries the cost trailer and warnings.** The closing cost line of the form
   `▸ Credits: 0.01 • Time: 1s` is emitted on **stderr**, not stdout. The format matches the
-  `▸ Credits: 0.05 • Time: 6s` shape from the hands-on report,[devio-headless] so the trailer
-  format is corroborated by two independent observations. A `Failed to retrieve MCP settings`
-  warning and any `--trust-tools` warnings also land on stderr.
+  `▸ Credits: 0.05 • Time: 6s` shape from the hands-on report, so the trailer format is
+  corroborated by two independent observations. A `Failed to retrieve MCP settings` warning
+  and any `--trust-tools` warnings also land on stderr.
 
 Consequences for parsing:
 
@@ -311,7 +298,7 @@ Consequences for parsing:
 ## Session continuity
 
 Kiro CLI persists conversations per directory and supports several resume modes (local
-`chat --help`, [chat-docs]):
+`chat --help`, published chat docs):
 
 | Mode | Mechanism | Adapter notes |
 | ---- | --------- | ------------- |
@@ -344,29 +331,27 @@ Adapter mapping. Both resume paths work headless and retain conversation context
 `--list-sessions` returns **empty** for a workspace whose only conversation was created
 headless, so the adapter cannot obtain the session ID through the CLI, and the session ID is
 absent from the headless turn output (no structured envelope exists). The two viable
-continuation strategies
-are therefore: rely on cwd-scoped `--resume`, which needs no ID and suits Sortie's
-one-conversation-per-workspace model, or read `conversation_id` from `conversations_v2` keyed
-by the workspace path (brittle, depends on store internals). The cwd-scoped `--resume` path is
-recommended because it avoids both ID capture and store-internal coupling.
+continuation strategies are therefore: rely on cwd-scoped `--resume`, which needs no ID and
+suits Sortie's one-conversation-per-workspace model, or read `conversation_id` from
+`conversations_v2` keyed by the workspace path (brittle, depends on store internals). The
+cwd-scoped `--resume` path is recommended because it avoids both ID capture and store-internal
+coupling.
 
 ## Tool permissions
 
 Kiro distinguishes tools the agent may attempt from tools pre-approved for unattended
-execution.[headless-blog] Two flags control approval without a human:
+execution. Two flags control approval without a human:
 
-- `--trust-all-tools` (`-a`): auto-approve every tool call.[headless-docs] Use only inside a
-  hardened sandbox.
+- `--trust-all-tools` (`-a`): auto-approve every tool call. Use only inside a hardened sandbox.
 - `--trust-tools=<names>`: auto-approve only the named tools, for example
   `--trust-tools=read,grep`; an empty value (`--trust-tools=`) trusts nothing (local
-  `chat --help`, [headless-docs]).
+  `chat --help`).
 
 ### Built-in tool catalog
 
-Tool names and default permissions, from the published reference[builtin-tools-docs] and
-cross-checked against symbol counts in the 2.4.2 binary (local `strings` probe). The rebrand
-simplified names and kept the old names as aliases, so both work with
-`--trust-tools`.[migrating-docs]
+Tool names and default permissions, from the published reference and cross-checked against
+symbol counts in the 2.4.2 binary (local `strings` probe). The rebrand simplified names and
+kept the old names as aliases, so both work with `--trust-tools`.
 
 | Tool | Aliases | Default permission |
 | ---- | ------- | ------------------ |
@@ -383,49 +368,48 @@ simplified names and kept the old names as aliases, so both work with
 | `report` | `report_issue` | Trusted by default |
 
 The migration mapping is `fs_read` to `read`, `fs_write` to `write`, `use_aws` to `aws`,
-`execute_bash` to `shell`, and `report_issue` to `report`.[migrating-docs] For least-privilege
-headless runs, a read-only profile such as `--trust-tools=read,grep,glob` is the natural
-starting point; add `write` and `shell` only when the workflow requires file edits or command
-execution, and only inside a sandbox.
+`execute_bash` to `shell`, and `report_issue` to `report`. For least-privilege headless runs,
+a read-only profile such as `--trust-tools=read,grep,glob` is the natural starting point; add
+`write` and `shell` only when the workflow requires file edits or command execution, and only
+inside a sandbox.
 
 ## Model selection
 
 | Mechanism | Behavior | Evidence |
 | --------- | -------- | -------- |
 | `--model <MODEL>` | Select the model for this invocation | Local `chat --help` |
-| `kiro-cli settings chat.defaultModel <model>` | Set the default model for new sessions | [devio-headless] |
-| `--list-models [--format json]` | List available models and exit | Local `chat --help`, [cli-commands-docs] |
-| `/model` slash command | Switch model inside a session | Interactive only; "cannot be used in headless mode"[devio-headless] |
+| `kiro-cli settings chat.defaultModel <model>` | Set the default model for new sessions | Hands-on report |
+| `--list-models [--format json]` | List available models and exit | Local `chat --help`, published docs |
+| `/model` slash command | Switch model inside a session | Interactive only; cannot be used in headless mode |
 
 The available model set is fetched from the backend and depends on the account and
 subscription, so it is not embedded in the binary (a `strings` search for `claude-` model IDs
 returned nothing, local probe). `kiro-cli chat --list-models --format json` returns a JSON
 object `{"models": [...], "default_model": "..."}`, where each model carries `model_name`,
 `model_id`, `description`, `context_window_tokens`, `rate_multiplier`, and `rate_unit`. On the
-probed Kiro Pro account (authenticated probe) the default model was `auto`
-(`rate_multiplier` 1.0), and the list included `claude-opus-4.7` and `claude-opus-4.6` (2.2),
-`claude-sonnet-4.6`/`4.5`/`4` (1.3), `claude-opus-4.5` (2.2), `claude-haiku-4.5` (0.4),
-`deepseek-3.2` and `minimax-m2.5` (0.25), `minimax-m2.1` (0.15), `glm-5` (0.5), and
-`qwen3-coder-next` (0.05). The `rate_multiplier` scales credit cost per turn, so the cheapest
-model is far cheaper than the Claude options. Treat the exact set as account- and
-date-specific, not a stable contract; the adapter SHOULD read `--list-models --format json` at
-configuration time rather than hardcode IDs. Because `/model` is unavailable headless, the
-adapter MUST pin the model with `--model` per turn, or set `chat.defaultModel` before launch.
+probed Kiro Pro account the default model was `auto` (`rate_multiplier` 1.0), and the list
+included `claude-opus-4.7` and `claude-opus-4.6` (2.2), `claude-sonnet-4.6`/`4.5`/`4` (1.3),
+`claude-opus-4.5` (2.2), `claude-haiku-4.5` (0.4), `deepseek-3.2` and `minimax-m2.5` (0.25),
+`minimax-m2.1` (0.15), `glm-5` (0.5), and `qwen3-coder-next` (0.05). The `rate_multiplier`
+scales credit cost per turn, so the cheapest model is far cheaper than the Claude options.
+Treat the exact set as account- and date-specific, not a stable contract; the adapter SHOULD
+read `--list-models --format json` at configuration time rather than hardcode IDs. Because
+`/model` is unavailable headless, the adapter MUST pin the model with `--model` per turn, or
+set `chat.defaultModel` before launch.
 
 Sortie's `AgentEvent.Model` field expects a model identifier such as
-`claude-sonnet-4-20250514`.[../internal/domain/agent.go] The headless path does not print the
-resolved model identifier in machine-readable form, so the adapter can populate `Model` only
-from the value it passed via `--model`, not from anything Kiro reports back.
+`claude-sonnet-4-20250514`. The headless path does not print the resolved model identifier in
+machine-readable form, so the adapter can populate `Model` only from the value it passed via
+`--model`, not from anything Kiro reports back.
 
 ## MCP integration
 
 Kiro CLI is an MCP client. MCP servers are managed with the `mcp` subcommand
-(`add`, `remove`, `list`, `import`, `status`) and configured via JSON
-files.[cli-commands-docs] The global configuration lives at `~/.kiro/settings/mcp.json` after
-the rebrand (previously `~/.aws/amazonq/mcp.json`), with a workspace-level `mcp.json` also
-supported.[migrating-docs] The config uses the standard `mcpServers` object (the binary
-references the `mcpServers` key and a legacy `useLegacyMcpJson` toggle, local `strings`
-probe).
+(`add`, `remove`, `list`, `import`, `status`) and configured via JSON files. The global
+configuration lives at `~/.kiro/settings/mcp.json` after the rebrand (previously
+`~/.aws/amazonq/mcp.json`), with a workspace-level `mcp.json` also supported. The config uses
+the standard `mcpServers` object (the binary references the `mcpServers` key and a legacy
+`useLegacyMcpJson` toggle, local `strings` probe).
 
 There is no per-launch `--mcp-config <path>` flag on `chat` (the `chat --help` flag table
 above has none). Servers are configured out of band with `kiro-cli mcp import --file <FILE>
@@ -434,7 +418,7 @@ above has none). Servers are configured out of band with `kiro-cli mcp import --
 (`mcp add --help`, `mcp import --help`).
 
 `--require-mcp-startup` is documented to exit with code 3 when an enabled MCP server fails to
-start; without it, startup failures are non-fatal and the turn proceeds.[headless-docs][cli-commands-docs]
+start; without it, startup failures are non-fatal and the turn proceeds.
 
 MCP is gated behind a server-side profile, and that gate fails under `KIRO_API_KEY`
 authentication. With an API key the CLI's `GetProfile` call returns HTTP 403
@@ -443,21 +427,23 @@ disabled`, and prints `Failed to retrieve MCP settings; MCP functionality disabl
 on every invocation (authenticated probe). With MCP disabled the workspace `mcp.json` is not
 loaded: a deliberately broken server placed at `<cwd>/.kiro/settings/mcp.json` did not appear
 in `mcp list`, and `kiro-cli chat --no-interactive --require-mcp-startup` ran the turn to
-completion and exited 0 rather than 3 (authenticated probe). The same symptom is reported under
-IAM Identity Center while Builder ID is reported to work, which points to a profile-entitlement
-gate rather than a missing config.[q-cli-3603][q-cli-3650]
+completion and exited 0 rather than 3 (authenticated probe). The same symptom is reported in
+[amazon-q-developer-cli#3603](https://github.com/aws/amazon-q-developer-cli/issues/3603) and
+[#3650](https://github.com/aws/amazon-q-developer-cli/issues/3650), where it occurs under IAM
+Identity Center while Builder ID is reported to work, which points to a profile-entitlement
+gate rather than a missing config.
 
 Adapter consequence: under the unattended `KIRO_API_KEY` path, MCP injection does not function
 and `--require-mcp-startup` exit 3 is unreachable, so `StartSessionParams.MCPConfigPath` has no
-effect.[../internal/domain/agent.go] The `mcp import` mechanism and the exit-3 behavior apply
-only when MCP is enabled, which on this evidence requires an auth path whose profile the
-backend authorizes (Builder ID reported to work; not verified here).
+effect. The `mcp import` mechanism and the exit-3 behavior apply only when MCP is enabled,
+which on this evidence requires an auth path whose profile the backend authorizes (Builder ID
+reported to work; not verified here).
 
 ## Exit codes and error detection
 
 ### Documented exit codes
 
-From the published reference[exit-codes-docs]:
+From the published reference:
 
 | Code | Meaning |
 | ---- | ------- |
@@ -467,7 +453,7 @@ From the published reference[exit-codes-docs]:
 
 Hook exit codes are a separate system: 0 succeeds, 2 (PreToolUse only) blocks the tool and
 returns stderr to the model, any other code is treated as a hook failure with stderr shown as
-a warning.[exit-codes-docs]
+a warning.
 
 ### Observed exit codes and a documented conflict
 
@@ -487,28 +473,27 @@ Local probes on 2.4.2:
 | `kiro-cli chat --no-interactive ...` (valid key, success) | 0 | Answer on stdout, `▸ Credits: … • Time: …` trailer on stderr (authenticated probe) |
 | `kiro-cli chat --no-interactive ...` (invalid `KIRO_API_KEY`) | **0** | Empty stdout, `Authentication failed.` on stderr, no credits trailer. Fails fast, does not hang (authenticated probe) |
 
-Conflict, then reconciliation: the docs fold "invalid arguments" into exit code
-1,[exit-codes-docs] but the binary returns the `clap` usage-error code 2 for an unrecognized
-top-level flag or subcommand (local probe). The reconciliation that fits the observations is
-that the top-level `clap` parser uses code 2 for malformed invocations, while a subcommand's
-own argument and semantic errors exit 1 (a pristine `kiro-cli chat --no-such-flag` exited 1,
-local probe), which is the case the docs describe. The docs do not mention code 2 at all. The
-adapter SHOULD treat any non-zero exit as failure and not depend on the specific value to
-distinguish argument errors from runtime errors.
+Conflict, then reconciliation: the docs fold "invalid arguments" into exit code 1, but the
+binary returns the `clap` usage-error code 2 for an unrecognized top-level flag or subcommand
+(local probe). The reconciliation that fits the observations is that the top-level `clap`
+parser uses code 2 for malformed invocations, while a subcommand's own argument and semantic
+errors exit 1 (a pristine `kiro-cli chat --no-such-flag` exited 1, local probe), which is the
+case the docs describe. The docs do not mention code 2 at all. The adapter SHOULD treat any
+non-zero exit as failure and not depend on the specific value to distinguish argument errors
+from runtime errors.
 
 **Exit code 0 does not mean the turn succeeded.** A successful turn and an invalid-credential
 turn both exit 0. With an invalid `KIRO_API_KEY`, `chat --no-interactive` produces empty
 stdout, prints `Authentication failed. Your API key may be invalid or expired.` to stderr,
 emits no `▸ Credits:` trailer, and exits 0 (authenticated probe). This conflicts with the
-documented "exit 1 = authentication error".[exit-codes-docs] The invalid-credential case is
-distinct from the no-credential case: an invalid key fails fast as just described, whereas no
-credential at all triggers the interactive device-login hang. The adapter consequence is
-concrete: an exit-0 turn with empty stdout and no credits trailer is a silent failure, not an
-empty success. The adapter MUST NOT map exit 0 to `turn_completed` unconditionally; it MUST
-require a positive success signal (the `▸ Credits:` trailer on stderr, or non-empty answer
-stdout) and treat `Authentication failed.` on stderr as `turn_failed`. Validating the key in
-`StartSession` with a free `whoami` or `--list-models` call catches an invalid key before any
-turn runs.
+documented "exit 1 = authentication error". The invalid-credential case is distinct from the
+no-credential case: an invalid key fails fast as just described, whereas no credential at all
+triggers the interactive device-login hang. The adapter consequence is concrete: an exit-0
+turn with empty stdout and no credits trailer is a silent failure, not an empty success. The
+adapter MUST NOT map exit 0 to `turn_completed` unconditionally; it MUST require a positive
+success signal (the `▸ Credits:` trailer on stderr, or non-empty answer stdout) and treat
+`Authentication failed.` on stderr as `turn_failed`. Validating the key in `StartSession` with
+a free `whoami` or `--list-models` call catches an invalid key before any turn runs.
 
 Second observation, and a nondeterminism worth recording: once the CLI has a cached device
 registration (written to the `auth_kv` table after any login attempt), an unauthenticated
@@ -526,9 +511,9 @@ Because there is no structured output, failure detection on the headless path re
 following signals, in priority order:
 
 1. The `▸ Credits: … • Time: …` trailer on stderr. This is the one reliable positive signal
-   that a turn actually executed (authenticated probe). Its presence with
-   exit 0 indicates success; its absence with exit 0 indicates the turn did not run (most
-   commonly an authentication failure).
+   that a turn actually executed (authenticated probe). Its presence with exit 0 indicates
+   success; its absence with exit 0 indicates the turn did not run (most commonly an
+   authentication failure).
 2. The `Authentication failed.` line on stderr. Present with exit 0 and empty stdout, it marks
    an invalid-credential turn that the adapter MUST classify as `turn_failed`, not as an empty
    success.
@@ -544,7 +529,7 @@ following signals, in priority order:
    `InsufficientModelCapacity` (local `strings` probe), which surface as upstream failures.
    Text classification is brittle and SHOULD be a last resort.
 
-Suggested mapping to `domain.TurnResult.ExitReason`[../internal/domain/agent.go]:
+Suggested mapping to `domain.TurnResult.ExitReason`:
 
 | Kiro evidence | Sortie `ExitReason` |
 | ------------- | ------------------- |
@@ -564,17 +549,16 @@ reported anywhere on the headless output path.
 Finding: **the headless path does not report token counts.** It reports an abstract "credits"
 cost and elapsed time as human-readable text.
 
-- The first-party headless announcement does not mention token usage or cost
-  reporting.[headless-blog]
+- The first-party headless announcement does not mention token usage or cost reporting.
 - The cost line of the form `▸ Credits: 0.01 • Time: 1s` was confirmed directly on stderr
-  (authenticated probe), matching the shape the independent hands-on report
-  observed.[devio-headless] It carries an abstract credits figure and elapsed time, and no
-  input or output token counts. This is the central finding for token accounting and it is now
-  double-sourced: the headless path surfaces credits, never tokens.
+  (authenticated probe), matching the shape the independent hands-on report observed. It
+  carries an abstract credits figure and elapsed time, and no input or output token counts.
+  This is the central finding for token accounting and it is now double-sourced: the headless
+  path surfaces credits, never tokens.
 - Token and context usage are available only through interactive slash commands. The binary
   defines `/usage`, `/context`, `/model`, `/tools`, and `/compact` (local `strings` probe),
-  and the chat docs describe `/context show` displaying "per-file token usage".[chat-docs]
-  None of these are available in `--no-interactive` mode.[devio-headless]
+  and the chat docs describe `/context show` displaying "per-file token usage". None of these
+  are available in `--no-interactive` mode.
 - Token counts exist internally as telemetry sent to AWS (the binary defines telemetry fields
   including `output_token_size`, `conversation_id`, and `message_id`, local `strings` probe),
   but telemetry is not exposed on stdout.
@@ -582,9 +566,8 @@ cost and elapsed time as human-readable text.
 ### Consequences for `EventTokenUsage` and budget tracking
 
 Sortie's `domain.TokenUsage` carries `InputTokens`, `OutputTokens`, `TotalTokens`, and
-`CacheReadTokens`, and `EventTokenUsage` exists to carry these normalized
-counters.[../internal/domain/agent.go] The orchestrator computes deltas across turns and
-accumulates session totals.
+`CacheReadTokens`, and `EventTokenUsage` exists to carry these normalized counters. The
+orchestrator computes deltas across turns and accumulates session totals.
 
 The Kiro headless adapter cannot populate these fields:
 
@@ -600,7 +583,7 @@ Options the adapter implementation MAY consider (each a tradeoff, none free):
 
 1. Emit no token usage and document Kiro as a no-token-accounting adapter. Lowest complexity;
    budget-by-tokens does not apply.
-2. Parse the credits trailer from stdout as a cost proxy for observability only. This requires
+2. Parse the credits trailer from stderr as a cost proxy for observability only. This requires
    a new cost field in the domain model and a stable trailer format, which #5423 shows is not
    yet contracted. Not recommended until the format stabilizes.
 3. Wait for, or upstream, the `--output-format json` feature in #5423, which proposes a
@@ -614,8 +597,8 @@ and in any operator-facing documentation.
 ## Timeout enforcement
 
 Kiro CLI has no native per-turn timeout flag (local `chat --help`). The orchestrator owns
-turn duration through `AgentConfig.TurnTimeoutMS` and enforces it by killing the
-subprocess.[../internal/domain/agent.go] Recommended sequence on timeout:
+turn duration through `AgentConfig.TurnTimeoutMS` and enforces it by killing the subprocess.
+Recommended sequence on timeout:
 
 1. Send SIGTERM to the `kiro-cli` process group.
 2. Wait a short grace period for clean exit.
@@ -629,20 +612,20 @@ timeout mandatory rather than optional.
 ## Concurrency and session isolation
 
 Each headless turn is an independent `kiro-cli` subprocess. Sessions are scoped to the working
-directory (local `chat --help`), and Sortie runs one agent session per workspace per
-issue,[../internal/domain/agent.go] so two turns for the same issue never share a cwd
-concurrently. The shared local state across processes is the SQLite store at
-`~/.local/share/kiro-cli/data.sqlite3` and the configuration under `~/.kiro`. Two processes
-in different workspace directories keep separate conversation sets because `conversations_v2`
-is keyed by the workspace path. Concurrent writes within a single workspace are not
-characterized here; Sortie runs one session per workspace, so the case does not arise.
+directory (local `chat --help`), and Sortie runs one agent session per workspace per issue, so
+two turns for the same issue never share a cwd concurrently. The shared local state across
+processes is the SQLite store at `~/.local/share/kiro-cli/data.sqlite3` and the configuration
+under `~/.kiro`. Two processes in different workspace directories keep separate conversation
+sets because `conversations_v2` is keyed by the workspace path. Concurrent writes within a
+single workspace are not characterized here; Sortie runs one session per workspace, so the
+case does not arise.
 
 ## Adapter implications
 
 The evidence supports a clear shape for the Kiro adapter:
 
 - It is a synchronous, launch-per-turn adapter. `EventStream()` returns `nil`; events are
-  delivered through the `RunTurn` `OnEvent` callback.[../internal/domain/agent.go]
+  delivered through the `RunTurn` `OnEvent` callback.
 - `StartSession` validates the credential (`KIRO_API_KEY` present, or a usable SSO token) and
   records the workspace path. It does not launch a long-lived process.
 - `RunTurn` launches `kiro-cli chat --no-interactive` with the rendered prompt, the chosen
@@ -685,11 +668,11 @@ projection, while Kiro emits only a human transcript.
 ## Known limitations
 
 - No structured event stream in headless mode. stdout carries the assistant answer (and
-  tool-progress lines when tools run); there is no machine-readable
-  envelope.[feature-5423][devio-headless] This is the central limitation for any wrapper.
+  tool-progress lines when tools run); there is no machine-readable envelope. This is the
+  central limitation for any wrapper.
 - No token-count reporting on the headless path. Only an abstract "credits" cost and elapsed
-  time are surfaced, and only as text.[headless-blog][devio-headless] `EventTokenUsage` cannot
-  be populated; token-based budget tracking does not apply.
+  time are surfaced, and only as text. `EventTokenUsage` cannot be populated; token-based
+  budget tracking does not apply.
 - `--no-interactive` does not bypass authentication. With **no** `KIRO_API_KEY` and no cached
   SSO token, `chat` blocks on an interactive device-login flow with no self-timeout (local
   probe). An **invalid** `KIRO_API_KEY` instead fails fast (exit 0, `Authentication failed.` on
@@ -698,16 +681,15 @@ projection, while Kiro emits only a human transcript.
 - No native per-turn timeout. The orchestrator must enforce timeouts by killing the process
   (local `chat --help`).
 - Interactive-only token and model controls. `/usage`, `/context`, and `/model` are
-  unavailable headless,[devio-headless] so the model MUST be pinned with `--model` or
-  `chat.defaultModel`.
+  unavailable headless, so the model MUST be pinned with `--model` or `chat.defaultModel`.
 - Exit-code granularity is coarse. Documented codes are 0, 1, and 3, with `clap` returning 2
-  for argument errors that the docs do not list.[exit-codes-docs] Non-zero means failure;
-  the value is not a reliable category.
+  for argument errors that the docs do not list. Non-zero means failure; the value is not a
+  reliable category.
 - MCP is unavailable under `KIRO_API_KEY` auth. The `GetProfile` gate returns 403, MCP is
   disabled, a configured `mcp.json` is not loaded, and `--require-mcp-startup` exit 3 is
-  unreachable.[q-cli-3603][q-cli-3650] MCP reportedly works under Builder ID; not verified here.
+  unreachable. MCP reportedly works under Builder ID; not verified here.
 - The shape of a tool-using turn is not characterized here. Only no-tool turns were exercised;
-  where tool-progress lines land relative to stdout and stderr rests on [devio-headless].
+  where tool-progress lines land relative to stdout and stderr rests on the hands-on report.
 - Exit behavior on quota exhaustion (`DailyRequestCount`, `MonthlyRequestCount`) and on a
   mid-turn upstream error is not characterized; those conditions were not induced.
 
@@ -715,14 +697,14 @@ projection, while Kiro emits only a human transcript.
 
 | Topic | One source says | Authoritative source says | Impact |
 | ----- | --------------- | ------------------------- | ------ |
-| `--output-format json` for chat | Some web summaries present it as shipped | Binary `chat --help` and `strings` have no such flag in 2.4.2; it is open feature request [#5423][feature-5423] | High; adapters must not depend on structured headless output |
-| Exit code for invalid arguments | Docs fold invalid args into code 1[exit-codes-docs] | Binary returns `clap` code 2 for an unknown top-level flag (local probe) | Medium; treat any non-zero as failure |
-| Version numbering | Source repo tags releases on a `1.x` line ([v1.19.7][q-cli-repo]) | Installed distribution reports `kiro-cli 2.4.2` (local probe) | Low; anchor runtime claims to 2.4.2 and the docs |
+| `--output-format json` for chat | Some web summaries present it as shipped | Binary `chat --help` and `strings` have no such flag in 2.4.2; it is open feature request [#5423](https://github.com/kirodotdev/Kiro/issues/5423) | High; adapters must not depend on structured headless output |
+| Exit code for invalid arguments | Docs fold invalid args into code 1 | Binary returns `clap` code 2 for an unknown top-level flag (local probe) | Medium; treat any non-zero as failure |
+| Version numbering | Source repo tags releases on a `1.x` line (for example [v1.19.7](https://github.com/aws/amazon-q-developer-cli/releases/tag/v1.19.7)) | Installed distribution reports `kiro-cli 2.4.2` (local probe) | Low; anchor runtime claims to 2.4.2 and the docs |
 | Chat-command flag validation | A pristine `chat --no-such-flag` exits 1 (local probe) | Once a device registration is cached, the same invocation hangs on the login flow instead of erroring (repeated local probes) | Medium; preflight the credential, do not depend on flag-error exit codes |
-| Exit code for authentication failure | Docs map authentication error to exit 1[exit-codes-docs] | An invalid `KIRO_API_KEY` exits **0** with `Authentication failed.` on stderr and empty stdout (authenticated probe) | High; exit 0 is not a success signal, require the credits trailer |
-| Credits and time trailer stream | The hands-on report shows the cost line within the printed transcript[devio-headless] | The `▸ Credits: … • Time: …` trailer is emitted on **stderr** (authenticated probe) | Medium; read the trailer from stderr, treat stdout as the answer |
-| Credits and time trailer format | `▸ Credits: 0.05 • Time: 6s`[devio-headless] | A second observation matches the shape, `▸ Credits: 0.01 • Time: 1s` (authenticated probe); format stable, values vary | Low; the shape is stable, the numbers are not a contract |
-| Headless session enumeration | `--list-sessions` lists saved sessions for the directory[chat-docs] | It returns empty for a conversation created by a headless `--no-interactive` turn (authenticated probe) | Medium; use cwd-scoped `--resume`, the ID is not enumerable via the CLI |
+| Exit code for authentication failure | Docs map authentication error to exit 1 | An invalid `KIRO_API_KEY` exits **0** with `Authentication failed.` on stderr and empty stdout (authenticated probe) | High; exit 0 is not a success signal, require the credits trailer |
+| Credits and time trailer stream | The hands-on report shows the cost line within the printed transcript | The `▸ Credits: … • Time: …` trailer is emitted on **stderr** (authenticated probe) | Medium; read the trailer from stderr, treat stdout as the answer |
+| Credits and time trailer format | Hands-on report shows `▸ Credits: 0.05 • Time: 6s` | A second observation matches the shape, `▸ Credits: 0.01 • Time: 1s` (authenticated probe); format stable, values vary | Low; the shape is stable, the numbers are not a contract |
+| Headless session enumeration | `--list-sessions` lists saved sessions for the directory | It returns empty for a conversation created by a headless `--no-interactive` turn (authenticated probe) | Medium; use cwd-scoped `--resume`, the ID is not enumerable via the CLI |
 
 ## Summary: adapter implementation checklist
 
@@ -762,17 +744,29 @@ projection, while Kiro emits only a human transcript.
 
 ## Sources
 
-[kiro-cli-docs]: https://kiro.dev/docs/cli/
-[headless-docs]: https://kiro.dev/docs/cli/headless/
-[migrating-docs]: https://kiro.dev/docs/cli/migrating-from-q/
-[exit-codes-docs]: https://kiro.dev/docs/cli/reference/exit-codes/
-[builtin-tools-docs]: https://kiro.dev/docs/cli/reference/built-in-tools/
-[cli-commands-docs]: https://kiro.dev/docs/cli/reference/cli-commands/
-[chat-docs]: https://kiro.dev/docs/cli/chat/
-[headless-blog]: https://kiro.dev/blog/introducing-headless-mode/
-[devio-headless]: https://dev.classmethod.jp/en/articles/kiro-cli-2-0-headless-mode-api-key-auth/
-[feature-5423]: https://github.com/kirodotdev/Kiro/issues/5423
-[kiro-issues]: https://github.com/kirodotdev/Kiro
-[q-cli-repo]: https://github.com/aws/amazon-q-developer-cli
-[q-cli-3603]: https://github.com/aws/amazon-q-developer-cli/issues/3603
-[q-cli-3650]: https://github.com/aws/amazon-q-developer-cli/issues/3650
+Rendered docs (`kiro.dev`):
+
+- [CLI overview](https://kiro.dev/docs/cli/)
+- [Headless mode](https://kiro.dev/docs/cli/headless/)
+- [Migrating from Amazon Q](https://kiro.dev/docs/cli/migrating-from-q/)
+- [Exit codes](https://kiro.dev/docs/cli/reference/exit-codes/)
+- [Built-in tools](https://kiro.dev/docs/cli/reference/built-in-tools/)
+- [CLI commands](https://kiro.dev/docs/cli/reference/cli-commands/)
+- [Chat command](https://kiro.dev/docs/cli/chat/)
+
+First-party blog:
+
+- [Introducing headless mode](https://kiro.dev/blog/introducing-headless-mode/)
+
+Source code and tracker:
+
+- [`aws/amazon-q-developer-cli`](https://github.com/aws/amazon-q-developer-cli) (CLI source of record)
+- [`kirodotdev/Kiro`](https://github.com/kirodotdev/Kiro) (IDE and public issue tracker)
+- [Kiro#5423: structured headless output request](https://github.com/kirodotdev/Kiro/issues/5423)
+- [amazon-q-developer-cli#3603: MCP functionality disabled](https://github.com/aws/amazon-q-developer-cli/issues/3603)
+- [amazon-q-developer-cli#3650: MCP disabled under Identity Center](https://github.com/aws/amazon-q-developer-cli/issues/3650)
+- [Tag v1.19.7](https://github.com/aws/amazon-q-developer-cli/releases/tag/v1.19.7)
+
+Independent hands-on report:
+
+- [DevelopersIO (Classmethod): Kiro CLI 2.0 headless mode and API-key auth](https://dev.classmethod.jp/en/articles/kiro-cli-2-0-headless-mode-api-key-auth/)
