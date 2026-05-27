@@ -24,7 +24,7 @@ import (
 //
 // The test creates a throwaway PR, runs the full merge lifecycle, and
 // asserts that a second MergePR call on the already-merged PR returns a
-// *domain.SCMError with Kind ErrSCMConflict.
+// nil error with MergeResult.Merged == true (idempotent success).
 //
 // Required environment variables:
 //
@@ -66,7 +66,9 @@ func TestSCMAdapter_MergeFlow_Integration(t *testing.T) {
 	})
 
 	// headSHA is captured from GetMergeability and forwarded to MergePR.
+	// mergeSHA is captured from the first MergePR call for idempotency checks.
 	var headSHA string
+	var mergeSHA string
 
 	t.Run("GetMergeability", func(t *testing.T) {
 		// Poll up to five times with two-second pauses; GitHub computes
@@ -164,43 +166,33 @@ func TestSCMAdapter_MergeFlow_Integration(t *testing.T) {
 		if result.SHA == "" {
 			t.Errorf("MergePR(PR #%d).SHA = %q, want non-empty", prNumber, result.SHA)
 		}
+		mergeSHA = result.SHA
 	})
 
 	if t.Failed() {
 		t.Skip("MergePR_HappyPath subtest failed; skipping dependent subtests")
 	}
 
-	t.Run("MergePR_AlreadyMerged_ReturnsErrSCMConflict", func(t *testing.T) {
+	t.Run("MergePR_AlreadyMerged_IdempotentSuccess", func(t *testing.T) {
 		// Call MergePR again on the same PR that was just merged. GitHub
-		// returns HTTP 409. classifyHTTPError formats the message as
-		// "<method> <path>: conflict: <body>"; toSCMError detects
-		// ": conflict:" and promotes the error kind to ErrSCMConflict.
-		_, err := a.MergePR(ctx, prNumber, owner, repo,
+		// returns HTTP 200 with the existing merge commit SHA — it does not
+		// re-evaluate the head-SHA precondition once the PR is merged.
+		result, err := a.MergePR(ctx, prNumber, owner, repo,
 			domain.StrategySquash, "", "", headSHA)
-		if err == nil {
-			t.Fatalf("MergePR(PR #%d) second call = nil, want *domain.SCMError with Kind %q",
-				prNumber, domain.ErrSCMConflict)
+		if err != nil {
+			t.Fatalf("MergePR(PR #%d) second call = %v, want nil", prNumber, err)
 		}
-
-		var se *domain.SCMError
-		if !errors.As(err, &se) {
-			t.Fatalf("MergePR(PR #%d) second call error type = %T, want *domain.SCMError",
-				prNumber, err)
+		if !result.Merged {
+			t.Errorf("MergePR(PR #%d) second call Merged = false, want true", prNumber)
 		}
-		if se.Kind != domain.ErrSCMConflict {
-			t.Errorf("MergePR(PR #%d) second call SCMError.Kind = %q, want %q",
-				prNumber, se.Kind, domain.ErrSCMConflict)
-		}
-		// classifyHTTPError formats HTTP 409 as "<method> <path>: conflict: <body>".
-		// That substring is what toSCMError checks to promote to ErrSCMConflict.
-		if !strings.Contains(se.Message, ": conflict:") {
-			t.Errorf("MergePR(PR #%d) second call SCMError.Message = %q, want substring %q",
-				prNumber, se.Message, ": conflict:")
+		if result.SHA != mergeSHA {
+			t.Errorf("MergePR(PR #%d) second call SHA = %q, want %q (same merge commit)",
+				prNumber, result.SHA, mergeSHA)
 		}
 	})
 
 	if t.Failed() {
-		t.Skip("MergePR_AlreadyMerged subtest failed; skipping DeleteBranch")
+		t.Skip("MergePR_AlreadyMerged_IdempotentSuccess subtest failed; skipping DeleteBranch")
 	}
 
 	t.Run("DeleteBranch", func(t *testing.T) {

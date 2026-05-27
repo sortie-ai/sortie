@@ -672,15 +672,22 @@ Response on 200:
 
 The adapter returns a `domain.MergeResult` populated from these fields.
 
-Idempotency: the merge endpoint is not idempotent in the HTTP sense. A
-second `PUT` against a PR already merged by the first call returns HTTP 409
-with a body that contains the substring `already merged`. Per the
-`SCMAdapter` contract that substring is preserved in the returned
-`SCMError.Message`; the orchestrator's reconcile loop
-(`internal/orchestrator/auto_merge_reconcile.go`) treats that substring as
-idempotent success and the absent substring as a transient precondition
-failure. The adapter itself does not classify the already-merged subcase;
-it surfaces the verbatim GitHub body so the orchestrator can disambiguate.
+Idempotency: a second `PUT` against a PR already merged by the first call
+returns HTTP 200 with `"merged": true` and the existing merge commit SHA,
+not an error. GitHub short-circuits once a PR is merged: the `sha`
+precondition is no longer evaluated, so a stale or even invalid
+`expectedHeadSHA` still yields 200. The adapter therefore returns a
+successful `domain.MergeResult` (carrying the existing merge commit SHA)
+with a nil error, and the orchestrator's reconcile loop
+(`internal/orchestrator/auto_merge_reconcile.go`) records the duplicate
+merge as success through its normal success path.
+
+The generic promotion of HTTP 405 and 409 to `ErrSCMConflict` in the
+`SCMAdapter` contract, and the orchestrator's `already merged` substring
+check, remain the fallback for a provider that rejects a re-merge. GitHub
+does not exercise that path for an already-merged PR; the `expectedHeadSHA`
+precondition produces HTTP 409 only while the PR is still open and its head
+has moved.
 
 A success response with `"merged": false` (the platform's documented but
 rare refusal path) is mapped to `*SCMError` with kind `ErrSCMConflict` and
