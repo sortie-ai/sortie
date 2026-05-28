@@ -172,7 +172,7 @@ jobs:
           [ -z "$SORTIE_GITHUB_TOKEN" ] && missing+=("SORTIE_GITHUB_TOKEN")
           if [ ${#missing[@]} -ne 0 ]; then
             echo "::error::Missing required secrets: ${missing[*]}"
-            echo "Configure SORTIE_GITHUB_TOKEN in Settings → Secrets and variables → Actions"
+            echo "Configure these in Settings → Secrets and variables → Actions"
             exit 1
           fi
           echo "✓ GitHub E2E token secret is present"
@@ -340,6 +340,42 @@ jobs:
       - name: Run integration tests
         run: go test -race -count=1 -v -timeout 300s -run 'Integration' ./internal/agent/opencode/...
 
+  test-integration-kiro:
+    name: "Integration: Kiro"
+    needs: [lint, test-unit]
+    runs-on: ubuntu-latest
+    env:
+      SORTIE_KIRO_TEST: "1"
+      KIRO_API_KEY: ${{ secrets.KIRO_API_KEY }}
+    steps:
+      - name: Verify Kiro secrets are configured
+        run: |
+          missing=()
+          [ -z "$KIRO_API_KEY" ] && missing+=("KIRO_API_KEY")
+          if [ ${#missing[@]} -ne 0 ]; then
+            echo "::error::Missing required secrets: ${missing[*]}"
+            echo "Configure these in Settings → Secrets and variables → Actions"
+            exit 1
+          fi
+          echo "✓ All Kiro secrets are present"
+
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Set up Go
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version-file: go.mod
+
+      - name: Install Kiro CLI
+        run: |
+          set -euo pipefail
+          curl -fsSL https://cli.kiro.dev/install | bash
+          kiro-cli --version
+
+      - name: Run integration tests
+        run: go test -race -count=1 -v -timeout 300s -run 'Integration' ./internal/agent/kiro/...
+
   release:
     name: Tag & Release
     needs:
@@ -352,6 +388,7 @@ jobs:
       - test-integration-copilot
       - test-integration-codex
       - test-integration-opencode
+      - test-integration-kiro
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
