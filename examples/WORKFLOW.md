@@ -58,7 +58,7 @@ server:
   port: 8642
 ---
 
-{{/* Sortie sample workflow — E2E testing and documentation reference.
+{{/* Sortie sample workflow, E2E testing and documentation reference.
      Required env vars: SORTIE_JIRA_ENDPOINT, SORTIE_JIRA_API_KEY,
      SORTIE_JIRA_PROJECT, SORTIE_REPO_URL.
      Optional: SORTIE_WORKSPACE_ROOT (defaults to system temp). */}}
