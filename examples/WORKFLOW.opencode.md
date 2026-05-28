@@ -60,7 +60,7 @@ server:
   port: 8642
 ---
 
-{{/* Sortie sample workflow — Jira + OpenCode CLI (Anthropic).
+{{/* Sortie sample workflow, Jira + OpenCode CLI (Anthropic).
 
      The OpenCode adapter launches one `opencode run` subprocess per
      turn. Session IDs are preserved across turns, so continuation uses
@@ -70,15 +70,15 @@ server:
      not fall back to its permissive default tool policy.
 
      Required env vars:
-       SORTIE_JIRA_ENDPOINT  — Jira Cloud base URL (e.g. https://mycompany.atlassian.net)
-       SORTIE_JIRA_API_KEY   — Jira API token
-       SORTIE_JIRA_PROJECT   — Jira project key (e.g. PROJ)
-       SORTIE_REPO_URL       — Git clone URL for the repository
-       ANTHROPIC_API_KEY     — Anthropic API key for OpenCode
+       SORTIE_JIRA_ENDPOINT  Jira Cloud base URL (e.g. https://mycompany.atlassian.net)
+       SORTIE_JIRA_API_KEY   Jira API token
+       SORTIE_JIRA_PROJECT   Jira project key (e.g. PROJ)
+       SORTIE_REPO_URL       Git clone URL for the repository
+       ANTHROPIC_API_KEY     Anthropic API key for OpenCode
 
      Optional:
-       SORTIE_WORKSPACE_ROOT — Base directory for per-issue workspaces
-                               (defaults to system temp) */}}
+       SORTIE_WORKSPACE_ROOT Base directory for per-issue workspaces
+                             (defaults to system temp) */}}
 You are a senior engineer. Your work is tracked by an automated orchestrator (Sortie)
 that manages your session, retries failures, and monitors progress.
 

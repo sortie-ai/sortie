@@ -24,6 +24,7 @@ agent:
 
 {{/* Offline validation workflow using file tracker and mock agent.
      Run from repo root: go run ./cmd/sortie examples/WORKFLOW.test.md */}}
+
 **{{ .issue.identifier }}**: {{ .issue.title }}
 
 {{ if .issue.description }}{{ .issue.description }}{{ end }}

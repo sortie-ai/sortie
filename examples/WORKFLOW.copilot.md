@@ -51,20 +51,19 @@ server:
   port: 8642
 ---
 
-{{/* Sortie sample workflow — GitHub Issues + Copilot CLI.
-     Fully GitHub-native: no Jira, no Claude Code.
+{{/* Sortie sample workflow, GitHub Issues + Copilot CLI.
 
      Required env vars:
-       GITHUB_TOKEN          — Fine-grained PAT with Issues read/write + Copilot
-                               Requests permissions. Serves double duty: the tracker
-                               reads it via $GITHUB_TOKEN expansion and the Copilot
-                               CLI picks it up from the process environment.
-       SORTIE_GITHUB_PROJECT — Repository in owner/repo format
-       SORTIE_REPO_URL       — Git clone URL for the repository
+       GITHUB_TOKEN          Fine-grained PAT with Issues read/write + Copilot
+                             Requests permissions. Serves double duty: the tracker
+                             reads it via $GITHUB_TOKEN expansion and the Copilot
+                             CLI picks it up from the process environment.
+       SORTIE_GITHUB_PROJECT Repository in owner/repo format
+       SORTIE_REPO_URL       Git clone URL for the repository
 
      Optional:
-       SORTIE_WORKSPACE_ROOT — Base directory for per-issue workspaces
-                               (defaults to system temp) */}}
+       SORTIE_WORKSPACE_ROOT Base directory for per-issue workspaces
+                             (defaults to system temp) */}}
 You are a senior engineer. Your work is tracked by an automated orchestrator (Sortie)
 that manages your session, retries failures, and monitors progress.
 
@@ -91,7 +90,7 @@ Before making changes, read:
 
 1. Run the project's lint and test commands before finishing. All checks must pass.
 2. Do not modify protected files (LICENSE, CODEOWNERS) unless the task explicitly requires it.
-3. Keep changes minimal — implement exactly what the task requires.
+3. Keep changes minimal, implement exactly what the task requires.
 4. Write tests for new functionality. Cover edge cases, not just the happy path.
 5. If you encounter a problem outside the scope of this task, stop and explain what blocked you.
 
@@ -111,7 +110,7 @@ Before making changes, read:
 ## Continuation
 
 You are resuming work on this task (turn {{ .run.turn_number }} of {{ .run.max_turns }}).
-Review the current state of the workspace — check test output, lint results, and any
+Review the current state of the workspace, check test output, lint results, and any
 partial changes. Do not repeat work already completed. Proceed with the next step.
 {{ end }}
 

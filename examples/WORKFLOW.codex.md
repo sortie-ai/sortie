@@ -56,22 +56,22 @@ server:
   port: 8642
 ---
 
-{{/* Sortie sample workflow — Jira + Codex CLI (OpenAI).
+{{/* Sortie sample workflow, Jira + Codex CLI (OpenAI).
 
      The Codex adapter uses a persistent app-server subprocess launched
      once per session. Turns are JSON-RPC requests on the same thread,
      so no --resume flag is needed between turns.
 
      Required env vars:
-       SORTIE_JIRA_ENDPOINT  — Jira Cloud base URL (e.g. https://mycompany.atlassian.net)
-       SORTIE_JIRA_API_KEY   — Jira API token
-       SORTIE_JIRA_PROJECT   — Jira project key (e.g. PROJ)
-       SORTIE_REPO_URL       — Git clone URL for the repository
-       CODEX_API_KEY         — OpenAI API key for Codex CLI
+       SORTIE_JIRA_ENDPOINT Jira Cloud base URL (e.g. https://mycompany.atlassian.net)
+       SORTIE_JIRA_API_KEY  Jira API token
+       SORTIE_JIRA_PROJECT  Jira project key (e.g. PROJ)
+       SORTIE_REPO_URL      Git clone URL for the repository
+       CODEX_API_KEY        OpenAI API key for Codex CLI
 
      Optional:
-       SORTIE_WORKSPACE_ROOT — Base directory for per-issue workspaces
-                               (defaults to system temp) */}}
+       SORTIE_WORKSPACE_ROOT Base directory for per-issue workspaces
+                             (defaults to system temp) */}}
 You are a senior engineer. Your work is tracked by an automated orchestrator (Sortie)
 that manages your session, retries failures, and monitors progress.
 
