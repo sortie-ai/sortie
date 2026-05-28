@@ -163,7 +163,7 @@ Sortie is organized into these layers:
    - API calls and normalization for tracker data; session lifecycle for agent runtimes; CI
      pipeline status queries; PR review comment fetching.
    - Multiple adapters per dimension: tracker adapters (Jira, GitHub, …), agent adapters
-     (Claude Code, Copilot CLI, Codex CLI, OpenCode CLI, …), CI status providers
+     (Claude Code, Copilot CLI, Codex CLI, OpenCode CLI, Kiro CLI, …), CI status providers
      (GitHub Checks, …), and SCM adapters
      (GitHub, …).
 
@@ -552,7 +552,7 @@ Fields:
 
 - `kind` (string)
   - Specifies which agent adapter to use. Default: `claude-code`.
-  - Other supported values: `copilot-cli`, `codex`, `opencode`, `http`, and any
+  - Other supported values: `copilot-cli`, `codex`, `opencode`, `kiro`, `http`, and any
     additionally registered adapter.
   - Parallels `tracker.kind`.
   - This is the default agent kind used when no `dispatch.rules` entry overrides it; see
@@ -592,8 +592,9 @@ Each adapter may define its own configuration fields in a sub-object named after
 value. These are pass-through values interpreted by the adapter and not by the orchestrator
 core. For example, a Codex adapter may accept `codex.approval_policy` and
 `codex.thread_sandbox`; a Claude Code adapter may accept `claude-code.permission_mode`; an
-OpenCode adapter may accept `opencode.variant` and `opencode.allowed_tools`. The
-orchestrator forwards the entire sub-object to the adapter without validation.
+OpenCode adapter may accept `opencode.variant` and `opencode.allowed_tools`; a Kiro adapter
+may accept `kiro.model` and `kiro.trust_tools`. The orchestrator forwards the entire
+sub-object to the adapter without validation.
 
 #### 5.3.6 `ci_feedback` (object, optional, **deprecated**)
 
@@ -1656,8 +1657,8 @@ An agent adapter must implement the following operations:
 
 Built-in agent adapter kinds:
 
-- `claude-code`, `copilot-cli`, `codex`, and `opencode` are built-in agent adapter kinds.
-- `claude-code`, `copilot-cli`, and `opencode` use one local subprocess per turn.
+- `claude-code`, `copilot-cli`, `codex`, `opencode`, and `kiro` are built-in agent adapter kinds.
+- `claude-code`, `copilot-cli`, `opencode`, and `kiro` use one local subprocess per turn.
 - `codex` uses one persistent local subprocess per session.
 
 Built-in adapter summary:
@@ -1668,6 +1669,7 @@ Built-in adapter summary:
 | `copilot-cli` | One subprocess per turn | Newline-delimited JSON from an abbreviated `copilot -p --output-format json -s --autopilot --no-ask-user ...` invocation | Uses `--resume <session_id>` when a session ID is known; falls back to `--continue` when a prior result omitted `sessionId` | The adapter always includes `--max-autopilot-continues` and includes `--allow-all` when no tool-scoping flags are configured; session identity is captured from the terminal `result` event rather than a start event. |
 | `codex` | One persistent `codex app-server` subprocess per session | JSON-RPC 2.0 over stdio | `ResumeSessionID` maps to `thread/resume`; otherwise the adapter starts a new thread; thread ID is the session ID | Turns are started inside the persistent session with `turn/start`; tool and approval handling are part of the app-server protocol. |
 | `opencode` | One subprocess per turn | Line-delimited JSON from `opencode run --format json --dir <workspace>` | `ResumeSessionID` maps to `--session <session_id>`; the first observed `sessionID` becomes the session ID; a mismatch is `turn_ended_with_error` | The adapter maps `opencode.model`, `opencode.agent`, `opencode.variant`, `opencode.thinking`, `opencode.pure`, and `opencode.dangerously_skip_permissions` to CLI flags; parses `step_start`, `text`, `reasoning`, `tool_use`, `step_finish`, and `error`; maps plain-text permission warnings to `notification` and unknown output to `malformed`; recovers final token usage with `opencode export --sanitize <session_id>`; maps logical `error` events to `turn_failed` even when the process exits with status `0`. |
+| `kiro` | One subprocess per turn | Plain-text human transcript from `kiro-cli chat --no-interactive`; stdout carries the assistant answer (ANSI-stripped), stderr carries the `▸ Credits: … • Time: …` trailer and warnings | Headless mode does not surface a session ID; `ResumeSessionID` is recorded but continuation relies on `--resume` against the cwd-scoped conversation store keyed by the workspace path | Headless Kiro emits no structured output and no token counts, so the adapter emits no `token_usage` events and leaves `TurnResult.Usage` zero; token-based budget enforcement does not apply and the turn timeout is the only backstop. Exit code 0 is ambiguous (success and invalid-credential failure both exit 0): success requires the credits trailer on stderr, and `Authentication failed.` on stderr with empty stdout maps to `turn_failed`. `StartSession` requires `KIRO_API_KEY` and runs a `kiro-cli whoami` canary to reject silently invalid keys before any turn; a missing credential would otherwise block headless `chat` indefinitely on an interactive device-login flow, which the credential preflight and the mandatory `agent.turn_timeout_ms` together defend against. MCP injection has no effect under `KIRO_API_KEY` auth (the backend profile gate disables MCP), so `MCPConfigPath` is ignored and `--require-mcp-startup` is unreachable. Permissions are controlled by `--trust-all-tools` or a `--trust-tools=<names>` allowlist; the two modes are mutually exclusive. The model is pinned per turn with `--model` because the `/model` slash command is unavailable headless. |
 
 ### 10.2 Session Lifecycle
 
@@ -1925,8 +1927,8 @@ Note:
 ### 10.7 Local Subprocess Launch Contract
 
 This subsection applies only to adapters that launch a local subprocess (e.g., Claude Code,
-Copilot CLI, OpenCode CLI, and the Codex app-server). HTTP-based and remote adapters define
-their own connection semantics.
+Copilot CLI, OpenCode CLI, Kiro CLI, and the Codex app-server). HTTP-based and remote
+adapters define their own connection semantics.
 
 When `agent.kind` requires a local subprocess:
 
