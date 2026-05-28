@@ -361,8 +361,8 @@ agent:
 
 | Field                            | Type                              | Required                            | Default         | Dynamic Reload                             | Description                                                                                                                                                                      |
 | -------------------------------- | --------------------------------- | ----------------------------------- | --------------- | ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `kind`                           | string                            | No                                  | `claude-code`   | Future dispatches                          | Agent adapter identifier. This is the default kind used when no `dispatch.rules` entry (and no `dispatch.default.agent`) overrides it. Built-in adapters: `claude-code`, `copilot-cli`, `codex`, and `opencode`. Other kinds (for example, HTTP-based adapters) are available only if you register them separately. |
-| `command`                        | string (shell command)            | When adapter requires local process | Adapter-defined | Future dispatches                          | Shell command to launch the agent for adapters that run as a local subprocess (such as `claude-code` or `opencode`). Adapters that do not start a local process ignore this field. |
+| `kind`                           | string                            | No                                  | `claude-code`   | Future dispatches                          | Agent adapter identifier. This is the default kind used when no `dispatch.rules` entry (and no `dispatch.default.agent`) overrides it. Built-in adapters: `claude-code`, `copilot-cli`, `codex`, `opencode`, and `kiro`. Other kinds (for example, HTTP-based adapters) are available only if you register them separately. |
+| `command`                        | string (shell command)            | When adapter requires local process | Adapter-defined | Future dispatches                          | Shell command to launch the agent for adapters that run as a local subprocess (such as `claude-code`, `opencode`, or `kiro`). Adapters that do not start a local process ignore this field. |
 | `turn_timeout_ms`                | integer                           | No                                  | `3600000` (1h)  | Future worker attempts                     | Total timeout for a single agent turn.                                                                                                                                           |
 | `read_timeout_ms`                | integer                           | No                                  | `5000` (5s)     | Future worker attempts                     | Request/response timeout during startup and synchronous operations.                                                                                                              |
 | `stall_timeout_ms`               | integer                           | No                                  | `300000` (5m)   | Future worker attempts                     | Inactivity timeout based on event stream gaps. Set to `0` or negative to **disable** stall detection.                                                                            |
@@ -1502,6 +1502,10 @@ currently running sessions. Keys are agent adapter kind strings (e.g., `"claude-
 When `token_rates` is absent or empty, the dashboard shows raw token counts without
 cost estimates.
 
+The `kiro` adapter reports no token counts on the headless path, so a `token_rates.kiro`
+entry has no effect. Cost is surfaced only through the abstract credits figure in the
+`kiro-cli` stderr trailer, which the orchestrator does not aggregate.
+
 | Field | Type | Default | Description |
 | --- | --- | --- | --- |
 | `token_rates` | map | _(absent)_ | Top-level extension key. Keys are agent adapter kind strings. |
@@ -1635,6 +1639,57 @@ known.
 - The adapter always removes any inherited `OPENCODE_PERMISSION` value before
   launching OpenCode. If either tool list is non-empty, it replaces that value
   with the adapter-managed JSON policy.
+
+**Kiro adapter:**
+
+```yaml
+agent:
+  kind: kiro
+  command: kiro-cli
+  turn_timeout_ms: 3600000
+
+kiro:
+  model: claude-sonnet-4.6
+  trust_tools:
+    - read
+    - grep
+    - glob
+  agent: my-context-profile
+```
+
+The `kiro` block is forwarded to the Kiro adapter, which runs
+`kiro-cli chat --no-interactive --wrap never` once per turn and adds `--resume`
+on continuation turns to attach to the cwd-scoped conversation. The Kiro CLI
+is the rebranded Amazon Q Developer CLI; the binary is `kiro-cli`.
+
+| Field | Type | Default | Description |
+| --- | --- | --- | --- |
+| `kiro.model` | string | _(absent)_ | Forwarded to `kiro-cli chat --model`. The `/model` slash command is unavailable headless, so the model MUST be pinned per turn (here or via `kiro-cli settings chat.defaultModel`). Use `kiro-cli chat --list-models --format json` to enumerate the account-specific model set. |
+| `kiro.trust_all_tools` | boolean | `false` | Adds `--trust-all-tools`, auto-approving every tool call. Use only inside a hardened sandbox. Mutually exclusive with `kiro.trust_tools`. |
+| `kiro.trust_tools` | list of strings | `[]` | Adds `--trust-tools=<names>` with the comma-joined list. An empty list trusts nothing (the adapter still passes `--trust-tools=`, which is the explicit no-trust mode). Mutually exclusive with `kiro.trust_all_tools`. Tool names include `read`, `write`, `glob`, `grep`, `shell`, `aws`, `web_search`, `web_fetch`, `code`, and `report`. |
+| `kiro.agent` | string | _(absent)_ | Forwarded to `kiro-cli chat --agent` to select a named Kiro context profile (custom agent). |
+
+**Validation rules:**
+
+- `kiro.trust_all_tools: true` and a non-empty `kiro.trust_tools` list MUST NOT
+  be set together. The adapter rejects this combination at construction time.
+
+**Environment variables consumed by the adapter:**
+
+| Variable | Required | Description |
+| --- | --- | --- |
+| `KIRO_API_KEY` | Yes (local mode) | Headless credential. Requires a Kiro Pro, Pro+, or Power subscription. The adapter rejects a missing key in `StartSession` and runs a `kiro-cli whoami` canary to reject a present-but-invalid key, because headless `chat` with no credential blocks on an interactive device-login flow with no self-timeout. In SSH mode the orchestrator forwards `KIRO_API_KEY` from its environment into the remote command. |
+
+**Token usage and budgets:** The Kiro adapter emits no token-usage events.
+`kiro-cli` does not report token counts on the headless path (only an abstract
+credits figure on stderr), so `TurnResult.Usage` is the zero value and
+`token_rates.kiro` produces no cost estimate. Token-based budget enforcement
+does not apply to Kiro; the `agent.turn_timeout_ms` is the only effective
+backstop and is mandatory because `kiro-cli` has no native per-turn timeout.
+
+**MCP:** Under `KIRO_API_KEY` authentication the backend `GetProfile` gate
+disables MCP. A workspace `mcp.json` is not loaded and `--require-mcp-startup`
+is unreachable, so MCP-dependent workflows cannot run on the API-key path.
 
 **Custom or future adapters (illustrative example):**
 
