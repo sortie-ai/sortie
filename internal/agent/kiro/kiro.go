@@ -215,9 +215,16 @@ func (a *KiroAdapter) StartSession(ctx context.Context, params domain.StartSessi
 }
 
 // checkCredential verifies that KIRO_API_KEY is present and usable before
-// any chat turn. It returns nil on success, an [domain.AgentError] with
-// [domain.ErrResponseError] when the key is absent or rejected, and
-// [domain.ErrAgentNotFound] when the whoami canary cannot run.
+// any chat turn. It returns nil on success and a [domain.AgentError] with
+// [domain.ErrResponseError] when the key is absent, when the whoami canary
+// times out or exits non-zero, or when the canary output shows the key is
+// invalid.
+//
+// The canary binary is already resolved by [agentcore.ResolveLaunchTarget]
+// before this runs, so a canary execution failure means the present binary
+// could not confirm the credential (a timeout or non-zero exit), not that
+// the agent is missing. It is classified as a retryable credential problem
+// rather than the non-retryable [domain.ErrAgentNotFound].
 func checkCredential(ctx context.Context, command string) *domain.AgentError {
 	if strings.TrimSpace(os.Getenv("KIRO_API_KEY")) == "" {
 		return &domain.AgentError{
@@ -232,8 +239,8 @@ func checkCredential(ctx context.Context, command string) *domain.AgentError {
 	out, canaryErr := exec.CommandContext(canaryCtx, command, "whoami").CombinedOutput() //nolint:gosec // command resolved by ResolveLaunchTarget via LookPath
 	if canaryErr != nil {
 		return &domain.AgentError{
-			Kind:    domain.ErrAgentNotFound,
-			Message: "kiro-cli whoami canary failed to run",
+			Kind:    domain.ErrResponseError,
+			Message: "kiro-cli whoami canary timed out or exited non-zero",
 			Err:     canaryErr,
 		}
 	}

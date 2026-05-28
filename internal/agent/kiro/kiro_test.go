@@ -382,6 +382,35 @@ func TestStartSession_InvalidCredential(t *testing.T) {
 	requireAgentError(t, err, domain.ErrResponseError)
 }
 
+// TestStartSession_CanaryNonZeroExitIsResponseError locks the classification of
+// the whoami-canary failure arm: when the canary binary resolves but its whoami
+// invocation exits non-zero, the credential preflight returns ErrResponseError
+// (a retryable credential/runtime problem), never ErrAgentNotFound. The binary
+// here is already on PATH and resolvable, so a missing-agent classification
+// would be wrong. The fake's whoami arm exits 1 to drive the canaryErr != nil
+// branch; the 5s timeout path is intentionally not exercised.
+func TestStartSession_CanaryNonZeroExitIsResponseError(t *testing.T) {
+	// t.Setenv is incompatible with t.Parallel.
+	setValidAPIKey(t)
+
+	dir := t.TempDir()
+	bin := agenttest.WriteScript(t, dir, "kiro-cli", `if [ "$1" = "whoami" ]; then
+  exit 1
+fi
+exit 0`)
+
+	adapter, err := NewKiroAdapter(map[string]any{})
+	if err != nil {
+		t.Fatalf("NewKiroAdapter: %v", err)
+	}
+
+	_, err = adapter.StartSession(context.Background(), domain.StartSessionParams{
+		WorkspacePath: t.TempDir(),
+		AgentConfig:   domain.AgentConfig{Command: bin},
+	})
+	requireAgentError(t, err, domain.ErrResponseError)
+}
+
 func TestStartSession_BinaryNotFound(t *testing.T) {
 	t.Parallel()
 
