@@ -66,3 +66,4 @@ go.work.sum
 
 # Install script
 install.sh
+install.ps1

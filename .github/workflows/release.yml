@@ -422,6 +422,27 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git tag -a "$TAG" -m "Dry run ${TAG}"
 
+      - name: Verify SignPath secrets are configured
+        env:
+          SIGNPATH_ORG_ID: ${{ secrets.SIGNPATH_ORG_ID }}
+          SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
+        run: |
+          missing=()
+          [ -z "$SIGNPATH_ORG_ID" ]    && missing+=("SIGNPATH_ORG_ID")
+          [ -z "$SIGNPATH_API_TOKEN" ] && missing+=("SIGNPATH_API_TOKEN")
+          if [ ${#missing[@]} -ne 0 ]; then
+            echo "::error::Missing required secrets: ${missing[*]}"
+            echo "Configure these in Settings → Secrets and variables → Actions"
+            exit 1
+          fi
+          echo "✓ All SignPath secrets are present"
+
+      - name: Install SignPath signing module
+        shell: pwsh
+        run: |
+          Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
+          Install-Module -Name SignPath -RequiredVersion 4.3.1 -Force -Scope CurrentUser -AcceptLicense
+
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@5daf1e915a5f0af01ddbcd89a43b8061ff4f1a89 # v7.2.2
         with:
@@ -431,6 +452,8 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAP_GITHUB_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
+          SIGNPATH_ORG_ID: ${{ secrets.SIGNPATH_ORG_ID }}
+          SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
 
       - name: Release summary
         if: ${{ !inputs.dry_run }}
