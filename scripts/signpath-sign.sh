@@ -43,10 +43,13 @@ SIGNPATH_ARTIFACT="$artifact" pwsh -NoProfile -Command '
     Set-StrictMode -Version Latest
     $ErrorActionPreference = "Stop"
 
-    if (-not (Get-Module -ListAvailable -Name SignPath)) {
-        Install-Module -Name SignPath -Force -Scope CurrentUser -AcceptLicense
+    $moduleVersion = "4.3.1"
+    $installed = Get-Module -ListAvailable -Name SignPath |
+        Where-Object { $_.Version.ToString() -eq $moduleVersion }
+    if (-not $installed) {
+        Install-Module -Name SignPath -RequiredVersion $moduleVersion -Force -Scope CurrentUser -AcceptLicense
     }
-    Import-Module SignPath
+    Import-Module SignPath -RequiredVersion $moduleVersion
 
     $project = if ($env:SIGNPATH_PROJECT_SLUG) { $env:SIGNPATH_PROJECT_SLUG } else { "sortie" }
     $policy  = if ($env:SIGNPATH_POLICY_SLUG)  { $env:SIGNPATH_POLICY_SLUG }  else { "release" }
