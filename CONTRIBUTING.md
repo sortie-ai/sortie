@@ -173,6 +173,15 @@ welcome under the same quality bar: the code must be correct, spec-conformant, t
 and reviewed by you before submitting. `make test` and `make lint` must pass — not just
 "the agent said it works."
 
+Whoever opens the pull request owns it. You are accountable for every line you submit
+and for its conformance to the conventions, spec, and tests described here, regardless
+of how the change was produced: by hand, by a teammate, by a contractor, or by an AI
+agent. We have no preference among those. What we do not accept is "the agent decided"
+as the explanation for why a change is the way it is. If you cannot explain a change
+under review, it is not ready to merge. The verification gate is identical for everyone:
+`make lint` and `make test` pass because you ran them and read the output, not because a
+tool reported success.
+
 ## Security
 
 Workspace path containment and input sanitization are security boundaries, not
