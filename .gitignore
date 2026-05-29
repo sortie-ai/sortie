@@ -36,17 +36,6 @@ go.work.sum
 .sortie.db-shm
 .sortie.db-wal
 
-# Ignore generated plans, specs, reviews, findings and task files.
-/.findings
-/.plans
-/.reviews
-/.specs
-/.tasks
-
-# Sortie user documentation and blog posts.
-/website
-/blog
-
 # Python cache files.
 __pycache__
 *.pyc
