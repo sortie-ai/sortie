@@ -1,11 +1,11 @@
 #!/bin/sh
-# Installer for sortie — spec-first agent orchestrator.
+# Installer for sortie - spec-first agent orchestrator.
 #
 # Usage:
 #   curl -sSL https://get.sortie-ai.com/install.sh | sh
 #
 # Environment:
-#   SORTIE_VERSION      Pin a specific release tag (e.g. v1.0.0 or 0.0.7).
+#   SORTIE_VERSION      Pin a specific release tag (e.g. 1.11.0 or 0.0.7).
 #   SORTIE_INSTALL_DIR  Override install directory
 #                       (default: /usr/local/bin as root, ~/.local/bin otherwise).
 #   SORTIE_NO_VERIFY    Set to 1 to skip checksum verification.
@@ -164,7 +164,7 @@ main() {
 
     info "Downloading ${_archive}"
     fetch "${_base}/${_archive}" "${TMPDIR_INSTALL}/${_archive}" \
-        || die "download failed — verify release ${_tag} has asset for ${OS}/${ARCH}"
+        || die "download failed - verify release ${_tag} has asset for ${OS}/${ARCH}"
 
     if [ "${SORTIE_NO_VERIFY-}" != "1" ]; then
         fetch "${_base}/checksums.txt" "${TMPDIR_INSTALL}/checksums.txt" \
@@ -215,7 +215,7 @@ main() {
         fi
     fi
 
-    printf '  %bTurns issue tickets into autonomous sessions%b\n\n' "${DIM}" "${RESET}"
+    printf '  %bTurns issue tickets into autonomous sessions.%b\n\n' "${DIM}" "${RESET}"
     printf '\n  %bDocs:%b       https://docs.sortie-ai.com\n' "${BOLD}${YELLOW}" "${RESET}"
     printf '  %bChangelog:%b  https://docs.sortie-ai.com/changelog/#%s\n' "${BOLD}${YELLOW}" "${RESET}" "$_version"
     printf '  %bGitHub:%b     https://github.com/%s\n' "${BOLD}${YELLOW}" "${RESET}" "$REPO"
