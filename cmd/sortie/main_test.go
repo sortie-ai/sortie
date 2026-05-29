@@ -1472,7 +1472,12 @@ func TestRunAutoMerge_UnknownProvider(t *testing.T) {
 
 	var stdout bytes.Buffer
 	var stderr lockedBuf
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	// run() rejects the unknown SCM provider only after opening and
+	// migrating the database, so the timeout must outlast a slow DB open
+	// on a contended Windows runner. The startup error returns in
+	// milliseconds once reached, so the wider budget is a hang-guard
+	// only and never slows the happy path.
+	ctx, cancel := context.WithTimeout(context.Background(), runTestTimeout)
 	defer cancel()
 
 	code := run(ctx, []string{wfPath}, &stdout, &stderr)
@@ -1502,7 +1507,12 @@ func TestRunAutoMerge_MismatchedProviders(t *testing.T) {
 
 	var stdout bytes.Buffer
 	var stderr lockedBuf
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	// run() rejects the mismatched providers only after opening and
+	// migrating the database, so the timeout must outlast a slow DB open
+	// on a contended Windows runner. The startup error returns in
+	// milliseconds once reached, so the wider budget is a hang-guard
+	// only and never slows the happy path.
+	ctx, cancel := context.WithTimeout(context.Background(), runTestTimeout)
 	defer cancel()
 
 	code := run(ctx, []string{wfPath}, &stdout, &stderr)
