@@ -1,0 +1,291 @@
+name: Nightly
+
+on:
+  schedule:
+    # 02:17 UTC daily. Off the hour to avoid GitHub's on-the-hour scheduling lag.
+    - cron: "17 2 * * *"
+  workflow_dispatch:
+
+permissions:
+  # Checkout only. Issues are filed with CICDBOT_TOKEN, not the workflow token.
+  contents: read
+
+concurrency:
+  group: nightly
+  cancel-in-progress: false
+
+jobs:
+  integration:
+    name: "Integration: ${{ matrix.name }}"
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    # The per-test guard variable is exported per shard inside the check step.
+    # All API credentials are provided here as the union of every adapter's
+    # needs; only the targeted adapter's test actually runs in a given shard
+    # (gated by its SORTIE_*_TEST variable), so unused keys are inert.
+    env:
+      SORTIE_JIRA_ENDPOINT: ${{ secrets.SORTIE_JIRA_ENDPOINT }}
+      SORTIE_JIRA_API_KEY: ${{ secrets.SORTIE_JIRA_API_KEY }}
+      SORTIE_JIRA_PROJECT: ${{ secrets.SORTIE_JIRA_PROJECT }}
+      SORTIE_GITHUB_TOKEN: ${{ secrets.SORTIE_GITHUB_TOKEN }}
+      SORTIE_GITHUB_PROJECT: sortie-ai/sortie-test
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+      CODEX_API_KEY: ${{ secrets.CODEX_API_KEY }}
+      KIRO_API_KEY: ${{ secrets.KIRO_API_KEY }}
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Claude Code
+            adapter: claude
+            kind: agent
+            guard: SORTIE_CLAUDE_TEST
+            run_filter: Integration
+            test_path: ./internal/agent/claude/...
+            timeout: 300s
+            node: true
+            install: npm install -g @anthropic-ai/claude-code
+            version_cmd: claude --version
+            source: "npm: @anthropic-ai/claude-code (unpinned, installs latest)"
+
+          - name: OpenAI Codex
+            adapter: codex
+            kind: agent
+            guard: SORTIE_CODEX_TEST
+            run_filter: Integration
+            test_path: ./internal/agent/codex/...
+            timeout: 300s
+            node: true
+            install: npm install -g @openai/codex
+            version_cmd: codex --version
+            source: "npm: @openai/codex (unpinned, installs latest)"
+
+          - name: GitHub Copilot CLI
+            adapter: copilot
+            kind: agent
+            guard: SORTIE_COPILOT_TEST
+            run_filter: Integration
+            test_path: ./internal/agent/copilot/...
+            timeout: 300s
+            node: true
+            install: npm install -g @github/copilot
+            version_cmd: copilot --version
+            source: "npm: @github/copilot (unpinned, installs latest)"
+
+          - name: OpenCode
+            adapter: opencode
+            kind: agent
+            guard: SORTIE_OPENCODE_TEST
+            run_filter: Integration
+            test_path: ./internal/agent/opencode/...
+            timeout: 300s
+            node: true
+            install: npm install -g opencode-ai
+            version_cmd: opencode --version
+            source: "npm: opencode-ai (unpinned, installs latest)"
+
+          - name: Kiro
+            adapter: kiro
+            kind: agent
+            guard: SORTIE_KIRO_TEST
+            run_filter: Integration
+            test_path: ./internal/agent/kiro/...
+            timeout: 300s
+            node: false
+            install: curl -fsSL https://cli.kiro.dev/install | bash
+            version_cmd: kiro-cli --version
+            source: "curl https://cli.kiro.dev/install (unpinned, installs latest)"
+
+          - name: Jira
+            adapter: jira
+            kind: tracker
+            guard: SORTIE_JIRA_TEST
+            run_filter: Integration
+            test_path: ./internal/tracker/jira/...
+            timeout: ""
+            node: false
+            install: ""
+            version_cmd: ""
+            source: "Jira Cloud REST API (remote service, no pinned client)"
+
+          - name: GitHub
+            adapter: github
+            kind: SCM
+            guard: SORTIE_GITHUB_TEST
+            run_filter: Integration
+            test_path: ./internal/scm/github/...
+            timeout: ""
+            node: false
+            install: ""
+            version_cmd: ""
+            source: "GitHub REST API (remote service, no pinned client)"
+
+          - name: GitHub orchestrator E2E
+            adapter: github-e2e
+            kind: orchestrator E2E
+            guard: SORTIE_GITHUB_E2E
+            run_filter: TestGitHubIntegration
+            test_path: ./internal/orchestrator/...
+            timeout: 120s
+            node: false
+            install: ""
+            version_cmd: ""
+            source: "GitHub REST API (remote service, no pinned client)"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Set up Go
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6.4.0
+        with:
+          go-version-file: go.mod
+
+      - name: Set up Node.js
+        if: ${{ matrix.node }}
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: "24"
+
+      - name: Run integration check
+        id: check
+        env:
+          ADAPTER: ${{ matrix.adapter }}
+          GUARD: ${{ matrix.guard }}
+          INSTALL_CMD: ${{ matrix.install }}
+          VERSION_CMD: ${{ matrix.version_cmd }}
+          RUN_FILTER: ${{ matrix.run_filter }}
+          TEST_PATH: ${{ matrix.test_path }}
+          TIMEOUT: ${{ matrix.timeout }}
+          # Consumed only by the copilot adapter's test, which reads GH_TOKEN.
+          # The issue-reporting steps override GH_TOKEN with CICDBOT_TOKEN.
+          GH_TOKEN: ${{ secrets.SORTIE_COPILOT_TOKEN }}
+        run: |
+          # The runner's default bash uses -e; disable it so a failing test is
+          # captured and reported instead of aborting the step.
+          set +e
+
+          if [ -n "${INSTALL_CMD}" ]; then
+            echo "::group::Install ${ADAPTER} CLI"
+            bash -c "${INSTALL_CMD}"
+            install_status=$?
+            echo "::endgroup::"
+            if [ "${install_status}" -ne 0 ]; then
+              echo "ADAPTER_VERSION=install failed (exit ${install_status})" >> "$GITHUB_ENV"
+              echo "outcome=failure" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+          fi
+
+          # Record the version actually under test for the issue body.
+          VER="remote service (no pinned client)"
+          if [ -n "${VERSION_CMD}" ]; then
+            VER="$(bash -c "${VERSION_CMD}" 2>&1 | head -n1)"
+            if [ -z "${VER}" ]; then VER="unknown"; fi
+          fi
+          echo "ADAPTER_VERSION=${VER}" >> "$GITHUB_ENV"
+
+          # Enable only the targeted adapter's integration tests.
+          export "${GUARD}=1"
+
+          TIMEOUT_FLAG=()
+          if [ -n "${TIMEOUT}" ]; then TIMEOUT_FLAG=(-timeout "${TIMEOUT}"); fi
+
+          go test -json -race -count=1 "${TIMEOUT_FLAG[@]}" -run "${RUN_FILTER}" "${TEST_PATH}" 2>&1 | tee gotest.json
+          status=${PIPESTATUS[0]}
+
+          if [ "${status}" -ne 0 ]; then
+            echo "outcome=failure" >> "$GITHUB_OUTPUT"
+          else
+            echo "outcome=success" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: File or update failure issue
+        if: steps.check.outputs.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ secrets.CICDBOT_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          ADAPTER: ${{ matrix.adapter }}
+          ADAPTER_NAME: ${{ matrix.name }}
+          KIND: ${{ matrix.kind }}
+          SOURCE: ${{ matrix.source }}
+        run: |
+          # Backticks in the printf formats below are literal Markdown for the
+          # issue body, not command substitution.
+          # shellcheck disable=SC2016
+          set -euo pipefail
+          export TITLE="Nightly integration failure: ${ADAPTER_NAME}"
+
+          FAILED=""
+          LOG="Install step failed before tests ran; no test output captured."
+          if [ -f gotest.json ]; then
+            FAILED="$(jq -rR 'fromjson? | select(.Action == "fail" and (.Test != null)) | .Test' gotest.json 2>/dev/null | sort -u)"
+            LOG="$(jq -jR 'fromjson? | select(.Action == "output") | .Output' gotest.json 2>/dev/null | tail -c 6000)"
+            if [ -z "${LOG}" ]; then LOG="$(tail -c 6000 gotest.json)"; fi
+          fi
+
+          if [ -n "${FAILED}" ]; then
+            FAILED_MD="$(printf '%s\n' "${FAILED}" | sed 's/^/- `/; s/$/`/')"
+          else
+            FAILED_MD="_No test-level failures parsed (build error, panic, timeout, or install failure). See the log excerpt._"
+          fi
+
+          RUN_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+          NOW="$(date -u '+%Y-%m-%d %H:%M UTC')"
+
+          {
+            printf 'Nightly integration tests failed for `%s`.\n\n' "${ADAPTER}"
+            printf '| Field | Value |\n|---|---|\n'
+            printf '| Adapter | `%s` (%s) |\n' "${ADAPTER}" "${KIND}"
+            printf '| Tested version | %s |\n' "${ADAPTER_VERSION}"
+            printf '| Install source | %s |\n' "${SOURCE}"
+            printf '| Run | %s |\n' "${RUN_URL}"
+            printf '| Commit | `%s` |\n' "${GITHUB_SHA}"
+            printf '| Date | %s |\n\n' "${NOW}"
+            printf '### Failing tests\n\n%s\n\n' "${FAILED_MD}"
+            printf '### Log excerpt\n\n```\n%s\n```\n\n' "${LOG}"
+            printf '%s\n' "_Filed by the nightly integration monitor. It comments on recurrence and closes automatically when this adapter passes again._"
+          } > body.md
+
+          NUM="$(gh issue list --state open --limit 100 --search "in:title \"${TITLE}\"" --json number,title \
+            | jq -r --arg t "${TITLE}" '[.[] | select(.title == $t) | .number] | (first // empty)')"
+
+          if [ -n "${NUM}" ]; then
+            gh issue comment "${NUM}" --body-file body.md
+            echo "Updated existing issue #${NUM}"
+          else
+            gh label create ci-nightly --color D73A4A --description "Nightly integration test failures" --force >/dev/null 2>&1 || true
+            gh issue create --title "${TITLE}" --label ci-nightly --body-file body.md
+          fi
+
+      - name: Close resolved issue
+        if: steps.check.outputs.outcome == 'success'
+        env:
+          GH_TOKEN: ${{ secrets.CICDBOT_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          ADAPTER: ${{ matrix.adapter }}
+          ADAPTER_NAME: ${{ matrix.name }}
+        run: |
+          set -euo pipefail
+          export TITLE="Nightly integration failure: ${ADAPTER_NAME}"
+
+          NUM="$(gh issue list --state open --limit 100 --search "in:title \"${TITLE}\"" --json number,title \
+            | jq -r --arg t "${TITLE}" '[.[] | select(.title == $t) | .number] | (first // empty)')"
+
+          if [ -n "${NUM}" ]; then
+            RUN_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}"
+            NOW="$(date -u '+%Y-%m-%d %H:%M UTC')"
+            gh issue comment "${NUM}" --body "Recovered: \`${ADAPTER}\` integration tests passed on ${NOW}. Closing. Run: ${RUN_URL}"
+            gh issue close "${NUM}"
+            echo "Closed issue #${NUM} (recovered)"
+          fi
+
+      - name: Fail job on integration failure
+        if: steps.check.outputs.outcome == 'failure'
+        env:
+          ADAPTER: ${{ matrix.adapter }}
+        run: |
+          echo "::error::Integration check failed for ${ADAPTER}"
+          exit 1
