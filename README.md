@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="docs/assets/banner.jpg" alt="Sortie — Turn tracker tickets into agent sessions" width="100%">
+  <img src="docs/assets/banner.jpg" alt="Sortie - Turn tracker tickets into agent sessions" width="100%">
 </p>
 
 <div align="center">
@@ -31,7 +31,7 @@ Or via Homebrew: `brew install sortie-ai/tap/sortie`
 
 ## The Problem
 
-Coding agents can handle routine engineering tasks — bug fixes, dependency updates, test coverage, feature work — when they have good system prompts, appropriate tool permissions, and have been tested on representative issues. But running validated agents at scale requires infrastructure that doesn't exist yet: isolated workspaces, retry logic, state reconciliation, tracker integration, cost tracking. Teams build this ad-hoc, poorly, and differently each time.
+Coding agents can handle routine engineering tasks - bug fixes, dependency updates, test coverage, feature work - when they have good system prompts, appropriate tool permissions, and have been tested on representative issues. But running validated agents at scale requires infrastructure that doesn't exist yet: isolated workspaces, retry logic, state reconciliation, tracker integration, cost tracking. Teams build this ad-hoc, poorly, and differently each time.
 
 Sortie is that infrastructure.
 
@@ -69,9 +69,9 @@ with the tracker, and workspace cleanup when issues reach terminal states. Chang
 to the workflow are applied without restart.
 
 The `agent.kind` field selects which coding agent runs each session. Sortie ships
-adapters for Claude Code, Copilot, and Codex — switching is a one-line change.
-See the [adapter reference](https://docs.sortie-ai.com/reference/) for configuration
-details and [`examples/`](examples/) for complete workflow files.
+adapters for several coding agents, and switching is a one-line change. See the
+[adapter reference](https://docs.sortie-ai.com/reference/) for the full list and
+configuration details, and [`examples/`](examples/) for complete workflow files.
 
 ## Architecture
 
@@ -85,7 +85,7 @@ Issue trackers and coding agents are integrated through adapter interfaces. Addi
 for a new tracker or agent is an additive change: implement the interface in a new package.
 
 Supported trackers: GitHub Issues and Jira. Supported agents: Claude Code, Copilot, OpenCode,
-and Codex. See [`docs/decisions/`](docs/decisions/) for detailed rationale on technology
+Codex and Kiro. See [`docs/decisions/`](docs/decisions/) for detailed rationale on technology
 choices.
 
 ## Documentation
