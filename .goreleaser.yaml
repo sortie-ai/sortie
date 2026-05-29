@@ -33,6 +33,14 @@ builds:
       - osusergo
       - netgo
     mod_timestamp: "{{ .CommitTimestamp }}"
+    hooks:
+      post:
+        # Authenticode-sign Windows binaries with SignPath before archiving, so
+        # the published archive and checksums cover the signed binary. The
+        # script no-ops on non-Windows targets and when SignPath credentials are
+        # absent (snapshots, pull requests, local builds).
+        - cmd: ./scripts/signpath-sign.sh "{{ .Path }}"
+          output: true
 
 archives:
   - id: default
