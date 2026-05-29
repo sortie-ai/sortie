@@ -404,25 +404,11 @@ jobs:
       - name: Install Syft
         uses: anchore/sbom-action/download-syft@e22c389904149dbc22b58101806040fa8d37a610 # v0.24.0
 
-      - name: Create and push tag
-        if: ${{ !inputs.dry_run }}
-        run: |
-          TAG='${{ inputs.version }}'
-          git config user.name  "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git tag -a "$TAG" -m "Release ${TAG}"
-          git push origin "$TAG"
-          echo "### Tagged \`${TAG}\`" >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Create local tag (dry run)
-        if: ${{ inputs.dry_run }}
-        run: |
-          TAG='${{ inputs.version }}'
-          git config user.name  "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git tag -a "$TAG" -m "Dry run ${TAG}"
-
+      # Verify signing config and install the module before any repository
+      # mutation, so a misconfigured release fails fast without leaving an
+      # orphaned tag. Skipped on dry runs, which may run without credentials.
       - name: Verify SignPath configuration is present
+        if: ${{ !inputs.dry_run }}
         env:
           SIGNPATH_ORG_ID: ${{ vars.SIGNPATH_ORG_ID }}
           SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
@@ -442,6 +428,24 @@ jobs:
         run: |
           Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
           Install-Module -Name SignPath -RequiredVersion 4.3.1 -Force -Scope CurrentUser -AcceptLicense
+
+      - name: Create and push tag
+        if: ${{ !inputs.dry_run }}
+        run: |
+          TAG='${{ inputs.version }}'
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "$TAG" -m "Release ${TAG}"
+          git push origin "$TAG"
+          echo "### Tagged \`${TAG}\`" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Create local tag (dry run)
+        if: ${{ inputs.dry_run }}
+        run: |
+          TAG='${{ inputs.version }}'
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "$TAG" -m "Dry run ${TAG}"
 
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@5daf1e915a5f0af01ddbcd89a43b8061ff4f1a89 # v7.2.2
