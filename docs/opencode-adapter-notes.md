@@ -1,19 +1,24 @@
 # OpenCode CLI: adapter research notes
 
 > OpenCode CLI v1.14.25 (`opencode`, npm `opencode-ai`), researched April 2026.
-> Re-validated against v1.14.50 on 2026-05-14; version-specific drift is called out inline.
+> Re-validated against v1.14.50 on 2026-05-14, and against v1.15.12 on 2026-05-29;
+> version-specific drift is called out inline.
 > Reference for implementing the OpenCode `AgentAdapter`.
 >
 > Local validation: probes of `npx -y opencode-ai@latest` v1.14.25 on Linux on 2026-04-26,
-> plus v1.14.50 on 2026-05-14. All sources are linked under "Sources" at the end.
+> v1.14.50 on 2026-05-14, and the locally installed v1.15.12 on 2026-05-29. All sources are
+> linked under "Sources" at the end.
 >
 > All source-code and raw-docs links point at the `v1.14.25` tag, the exact version most
 > claims were originally validated against. Tags are immutable, so quoted code and line
-> numbers stay correct. Where v1.14.50 behavior diverges from v1.14.25 (failure exit code,
-> stderr content, duplicated `error` events), the relevant section names both versions and the
-> observed difference. The rendered public docs at `opencode.ai/docs/...` track the latest
-> published documentation and may move ahead of both tagged versions; where rendered docs and
-> tagged source disagree, this note calls the drift out explicitly.
+> numbers stay correct. Where later behavior diverges from v1.14.25 (failure exit code,
+> stderr content, duplicated `error` events), the relevant section names the version and the
+> observed difference. Between v1.14.50 and v1.15.12 the upstream changelog records only
+> additive `run` changes (`--replay` and `--replay-limit` for interactive resume in v1.15.5,
+> a project-local `--agent` resolution fix in v1.15.2); no flag the adapter builds was renamed
+> or removed across that window. The rendered public docs at `opencode.ai/docs/...` track the
+> latest published documentation and may move ahead of the tagged source; where rendered docs
+> and observed binary behavior disagree, this note calls the drift out explicitly.
 
 ## Overview
 
@@ -102,26 +107,36 @@ adapter rather than left to inherited shell state.
 
 `opencode run [message..]` is the non-interactive CLI entry point.
 
+The flag set below was confirmed present in `opencode run --help` on v1.15.12. The adapter
+(`internal/agent/opencode/command.go`, `buildRunArgs`) emits a fixed subset:
+`run --format json --dir <ws>`, then conditionally `--session`, `--model`, `--agent`,
+`--variant`, `--thinking`, `--pure`, `--dangerously-skip-permissions`, then `--` and the
+prompt.
+
 | Flag | Short | Meaning | Adapter use |
 | ---- | ----- | ------- | ----------- |
-| `--command` |  | Run a slash command instead of a freeform prompt | Optional |
+| `--command` |  | Run a slash command instead of a freeform prompt | Optional. Confirmed present in v1.15.12 `run --help`; the adapter does not use it. |
 | `--continue` | `-c` | Resume the last root session | Useful, but see resume caveat below |
-| `--session` | `-s` | Resume a specific session ID | Preferred for deterministic continuation |
+| `--session` | `-s` | Resume a specific session ID | Preferred for deterministic continuation. The adapter sets this from the persisted `sessionID`. See the dir-scoped resume caveat below. |
 | `--fork` |  | Fork the resumed session first | Optional branch semantics |
-| `--share` |  | Share session on completion | Usually disable for automation |
+| `--share` |  | Share session on completion | Usually disable for automation. Confirmed present in v1.15.12 `run --help`. The adapter does not pass this flag; it sets `OPENCODE_AUTO_SHARE=false` instead. |
 | `--model` | `-m` | Model in `provider/model` form | Primary model selector |
-| `--agent` |  | Primary agent name | Validated against available agents; subagents fall back to default with a warning (`run.ts` source). |
+| `--agent` |  | Primary agent name | Validated against available agents; subagents fall back to default with a warning (`run.ts` source). v1.15.2 fixed resolution of project-local agents. |
 | `--file` | `-f` | Attach files or directories to the prompt | Optional |
 | `--format` |  | `default` or `json` | `json` is required if scraping stdout |
 | `--title` |  | Explicit session title | Useful when automation wants deterministic session names instead of truncated prompts |
 | `--attach` |  | Target an existing `serve` instance | Avoids server cold start per turn |
 | `--password` | `-p` | Basic-auth password for `--attach` | Falls back to `OPENCODE_SERVER_PASSWORD` (`run.ts` source). |
-| `--dir` |  | Local cwd override, or remote path when attached | Useful for remote-server routing |
+| `--username` | `-u` | Basic-auth username for `--attach` | Falls back to `OPENCODE_SERVER_USERNAME`, then `opencode` (CLI docs). |
+| `--dir` |  | Local cwd override, or remote path when attached | Required by the adapter; also scopes session resume (see caveat below). |
 | `--port` |  | Local server port when not attached | Effective port `0` means try `4096` first, then fall back to an ephemeral port if `4096` is busy; shipped `run --help` phrases this as "defaults to random port" |
 | `--variant` |  | Provider-specific reasoning variant such as `high`, `max`, or `minimal` | Secondary model control |
 | `--thinking` |  | Emit reasoning blocks | Only affects CLI output |
 | `--dangerously-skip-permissions` |  | Auto-approve permissions that are not explicitly denied | Required for clean unattended runs in many tooling scenarios |
-| `--pure` |  | Run without external plugins | Present in shipped v1.14.25 help output, but omitted from the CLI docs page. Observed locally in v1.14.25. |
+| `--pure` |  | Run without external plugins | Present in shipped v1.14.25 and v1.15.12 help output, but omitted from the CLI docs page. |
+| `--print-logs` |  | Print logs to stderr during the run | Diagnostic only; confirmed in v1.15.12 `run --help` ("print logs to stderr"). Not used by the adapter. |
+| `--log-level` |  | Set log verbosity | Diagnostic only; confirmed in v1.15.12 `run --help` (choices DEBUG, INFO, WARN, ERROR). Not used by the adapter. |
+| `--replay` / `--replay-limit` |  | Replay recent history when resuming an interactive run | Added in v1.15.5. Targets interactive resume, not `--format json` automation; not used by the adapter. |
 
 Separately, the top-level `opencode [project]` command documents a `--prompt` flag in the CLI
 docs and shipped root help. That is a TUI/root flag rather than the documented `run` surface.
@@ -191,9 +206,20 @@ server in-process and routes SDK calls through an internal fetch function backed
 | Mode | Mechanism | Notes |
 | ---- | --------- | ----- |
 | Fresh | `sdk.session.create({ title, permission: rules })` | Session ID is server-generated and looks like `ses_...`. Observed locally in v1.14.25. |
-| `--session <id>` | Resume exact session ID | Deterministic resume path |
+| `--session <id>` | Resume exact session ID | Deterministic resume path, but dir-scoped. See the resume caveat below. |
 | `--continue` | `sdk.session.list()` then first root session | In practice, `session list --format json` returns newest-first, so `--continue` resumes the most recent root session today. That ordering is observed locally, not promised by the docs. |
 | `--fork` with resume | `sdk.session.fork({ sessionID })` | Creates a child session before continuing |
+
+**Resume is dir-scoped.** `opencode run --session <id>` only replays a session when the run
+executes with the same `--dir` (project directory) the session was created in. Resuming the
+same session ID under a different `--dir` exits `0` with no JSON events on stdout. Confirmed by
+experiment on v1.15.12: same-dir resume emits events; different-dir resume emits nothing. This
+is consistent with sessions being stored in a single global database (see "Session storage"
+below) and keyed to their originating project directory. The adapter relies on this: it reuses
+an issue's workspace across turns and passes that path as `--dir` on every turn
+(`internal/agent/opencode/opencode.go`, `command.go`), so resume turns share turn one's
+directory. An adapter that resumed a session under a different workspace would observe a silent
+empty turn, not an error.
 
 Source inspection of `run.ts` also shows that `run` injects three deny rules when it creates a
 new session: `question=*`, `plan_enter=*`, and `plan_exit=*`. That is source-derived behavior.
@@ -204,6 +230,18 @@ Resumed sessions reuse the existing session state instead of re-creating these r
 - When not attached, `--dir` calls `process.chdir(args.dir)` before bootstrapping the local server. Invalid paths terminate immediately with exit code `1` (`run.ts` source).
 - When attached, `--dir` is passed to the SDK as the remote directory selector instead of changing the local process cwd (`run.ts` source).
 - The server and SDK surfaces also accept `directory` query parameters on many APIs, which makes `serve` a better fit when a single OpenCode backend serves multiple workspaces (server and SDK docs).
+
+### Session storage
+
+Sessions are persisted in a single global SQLite database at
+`~/.local/share/opencode/opencode.db`, not in a per-project store under the workspace. The same
+directory holds the credential store (`auth.json`) and other shared state. Confirmed locally on
+v1.15.12.
+
+Two consequences for the adapter:
+
+- Sessions created in any workspace are visible to the same OS user from any other workspace. Isolation between concurrent issues comes from distinct server-generated session IDs, not from separate storage files.
+- Resume is still dir-scoped at replay time even though storage is global (see the resume caveat above): the session row exists regardless of cwd, but `run --session <id>` only emits events when invoked under the originating `--dir`.
 
 ## Permissions and tool access control
 
@@ -534,7 +572,7 @@ HTTP/SSE integration is a better fit.
 | `run --format json` | "raw JSON events" | CLI-emitted projection from `run.ts`, not raw SSE | High for adapters |
 | Permissions in JSON mode | Not called out | Permission rejection prints a plain-text warning to stdout before JSON | High for parsers |
 | Exit codes | Not documented | v1.14.25 exited `0` on logical failure; v1.14.50 exits `1`. Treat as informative, not load-bearing | High for failure handling |
-| `--pure` flag | Not on docs page | Present in shipped help output | Medium for deterministic runs |
+| `--pure` flag | Not on docs page | Present in shipped help output through v1.15.12 | Medium for deterministic runs |
 | Permission keys | `permissions.mdx` lists 14 keys | `config/permission.ts` schema explicitly accepts 16 (adds `list`, `todowrite`) and any other string key via a `StructWithRest` catchall | Medium; adapters that strictly whitelist against the documented set break on configurations OpenCode itself accepts |
 | `OPENCODE_PERMISSION` precedence | Listed in env-var table, no merge semantics specified | [`config/config.ts` lines 656-658](https://github.com/anomalyco/opencode/blob/v1.14.25/packages/opencode/src/config/config.ts#L656-L658) call `mergeDeep(opencode.json.permission, JSON.parse(env))`; env var stacks on top of operator config, never replaces it | High; adapter must scrub inherited value and cover every key it cares about, otherwise operator-side policy bleeds in |
 
