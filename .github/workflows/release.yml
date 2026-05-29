@@ -422,20 +422,20 @@ jobs:
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git tag -a "$TAG" -m "Dry run ${TAG}"
 
-      - name: Verify SignPath secrets are configured
+      - name: Verify SignPath configuration is present
         env:
-          SIGNPATH_ORG_ID: ${{ secrets.SIGNPATH_ORG_ID }}
+          SIGNPATH_ORG_ID: ${{ vars.SIGNPATH_ORG_ID }}
           SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
         run: |
           missing=()
-          [ -z "$SIGNPATH_ORG_ID" ]    && missing+=("SIGNPATH_ORG_ID")
-          [ -z "$SIGNPATH_API_TOKEN" ] && missing+=("SIGNPATH_API_TOKEN")
+          [ -z "$SIGNPATH_ORG_ID" ]    && missing+=("SIGNPATH_ORG_ID (variable)")
+          [ -z "$SIGNPATH_API_TOKEN" ] && missing+=("SIGNPATH_API_TOKEN (secret)")
           if [ ${#missing[@]} -ne 0 ]; then
-            echo "::error::Missing required secrets: ${missing[*]}"
+            echo "::error::Missing required SignPath config: ${missing[*]}"
             echo "Configure these in Settings → Secrets and variables → Actions"
             exit 1
           fi
-          echo "✓ All SignPath secrets are present"
+          echo "✓ SignPath configuration is present"
 
       - name: Install SignPath signing module
         shell: pwsh
@@ -452,8 +452,10 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAP_GITHUB_TOKEN: ${{ secrets.TAP_GITHUB_TOKEN }}
-          SIGNPATH_ORG_ID: ${{ secrets.SIGNPATH_ORG_ID }}
+          SIGNPATH_ORG_ID: ${{ vars.SIGNPATH_ORG_ID }}
           SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
+          SIGNPATH_PROJECT_SLUG: ${{ vars.SIGNPATH_PROJECT_SLUG }}
+          SIGNPATH_POLICY_SLUG: ${{ vars.SIGNPATH_POLICY_SLUG }}
 
       - name: Release summary
         if: ${{ !inputs.dry_run }}
