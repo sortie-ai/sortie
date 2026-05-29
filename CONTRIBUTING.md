@@ -162,6 +162,7 @@ CI runs `make lint` and `make test` - both must pass.
 - Weakened workspace path containment or input sanitization - these are security
   boundaries.
 - Behavior that contradicts [docs/architecture.md](docs/architecture.md).
+- Changes the author cannot explain or justify under review ([see below](#ai-assisted-contributions)).
 
 If you are unsure whether a change fits, open an issue. A five-minute conversation saves
 hours of work.
