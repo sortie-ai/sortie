@@ -7,6 +7,52 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.11.0] - 2026-05-29
+
+### Added
+
+- Kiro CLI agent adapter: configure with `agent.kind: kiro` for
+  autonomous issue-to-code workflows using the Kiro CLI via
+  `kiro-cli chat --no-interactive`, following the subprocess-per-turn
+  model of the `claude-code` and `copilot-cli` adapters. Kiro headless
+  mode emits no structured event stream and no token counts, so turn
+  outcome is classified from process exit status and stderr: the
+  `▸ Credits:` cost trailer marks success, an `Authentication failed.`
+  line on a bare exit 0 marks failure, and signal exits map to
+  cancellation. `StartSession` requires `KIRO_API_KEY` and validates it
+  up front to avoid the silent device-login hang an invalid key would
+  otherwise trigger. The model is pinned per turn with `--model`,
+  continuation turns resume the workspace conversation with `--resume`,
+  and a `kiro` passthrough config block exposes the model selector, the
+  tool-trust mode (`--trust-tools` / `--trust-all-tools`), and an
+  optional `--agent` selector. Because the headless path reports no
+  tokens, only time-based budget enforcement applies and no
+  `token_usage` events are emitted; MCP tool injection is unavailable on
+  the `KIRO_API_KEY` path. `sortie validate` accepts `agent.kind: kiro`
+  and flags unknown `kiro` subkeys. Ships with a companion
+  `examples/docker/kiro.Dockerfile` (a glibc Debian base, since
+  `kiro-cli` is dynamically linked) and an `examples/WORKFLOW.kiro.md`
+  sample workflow.
+  ([#515](https://github.com/sortie-ai/sortie/issues/515),
+  [#517](https://github.com/sortie-ai/sortie/issues/517))
+- `install.ps1` PowerShell installer for Windows: install with the
+  one-liner `irm 'https://get.sortie-ai.com/install.ps1' | iex`,
+  mirroring the POSIX `install.sh`. Detects architecture, resolves the
+  release tag (honoring `SORTIE_VERSION` when set), downloads the
+  matching `sortie_<version>_windows_<arch>.zip`, verifies its SHA-256
+  against `checksums.txt` (skippable with `SORTIE_NO_VERIFY=1`),
+  installs to `%LOCALAPPDATA%\Programs\sortie` by default (override with
+  `SORTIE_INSTALL_DIR`), and appends the install directory to the
+  User-scope `PATH`. Compatible with Windows PowerShell 5.1 and
+  PowerShell 7+, depends only on built-in cmdlets, and forces TLS 1.2.
+  ([#541](https://github.com/sortie-ai/sortie/issues/541))
+- Authenticode-signed Windows binaries: the release pipeline now signs
+  Windows `.exe` artifacts via SignPath before they are archived, so
+  downloaded binaries are no longer blocked by Microsoft SmartScreen or
+  Smart App Control. Signing runs as a GoReleaser post-build hook and is
+  a no-op for local, snapshot, and pull-request builds.
+  ([PR #548](https://github.com/sortie-ai/sortie/pull/548))
+
 ## [1.10.0] - 2026-05-27
 
 ### Added
@@ -879,7 +925,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   execution via GitHub Actions.
 - Architecture Decision Records (ADR-0001 through ADR-0005).
 
-[Unreleased]: https://github.com/sortie-ai/sortie/compare/1.10.0...HEAD
+[Unreleased]: https://github.com/sortie-ai/sortie/compare/1.11.0...HEAD
+[1.11.0]: https://github.com/sortie-ai/sortie/compare/1.10.0...1.11.0
 [1.10.0]: https://github.com/sortie-ai/sortie/compare/1.9.1...1.10.0
 [1.9.1]: https://github.com/sortie-ai/sortie/compare/1.9.0...1.9.1
 [1.9.0]: https://github.com/sortie-ai/sortie/compare/1.8.0...1.9.0
