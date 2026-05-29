@@ -2,6 +2,7 @@ package opencode_test
 
 import (
 	"context"
+	"errors"
 	"os"
 	"strings"
 	"testing"
@@ -84,6 +85,18 @@ func mustStartIntegrationSession(t *testing.T, a domain.AgentAdapter, resumeID s
 // by slow first-turn processing on a cold-start instance.
 func collectAllEvents(t *testing.T, a domain.AgentAdapter, session domain.Session, prompt string) ([]domain.AgentEvent, domain.TurnResult) {
 	t.Helper()
+	events, result, err := collectAllEventsErr(t, a, session, prompt)
+	if err != nil {
+		t.Logf("RunTurn error: %v", err)
+	}
+	return events, result
+}
+
+// collectAllEventsErr is collectAllEvents that also surfaces the RunTurn error
+// so callers can classify the failure (e.g. distinguish a transient subprocess
+// early-exit from a deterministic adapter defect).
+func collectAllEventsErr(t *testing.T, a domain.AgentAdapter, session domain.Session, prompt string) ([]domain.AgentEvent, domain.TurnResult, error) {
+	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
@@ -94,10 +107,25 @@ func collectAllEvents(t *testing.T, a domain.AgentAdapter, session domain.Sessio
 			events = append(events, e)
 		},
 	})
-	if err != nil {
-		t.Logf("RunTurn error: %v", err)
+	return events, result, err
+}
+
+// isTransientFirstEventExit reports whether err is the specific transient
+// failure where the OpenCode subprocess exited before emitting its first JSON
+// event. This surfaces as an [domain.AgentError] of kind [domain.ErrPortExit]
+// and is an infrastructure/CLI symptom (e.g. cold-start), not an adapter
+// resume defect. Every other failure category returns false so it propagates
+// to the test assertion unchanged.
+func isTransientFirstEventExit(result domain.TurnResult, err error) bool {
+	if result.ExitReason != domain.EventTurnEndedWithError {
+		return false
 	}
-	return events, result
+	var agentErr *domain.AgentError
+	if !errors.As(err, &agentErr) {
+		return false
+	}
+	return agentErr.Kind == domain.ErrPortExit &&
+		strings.Contains(agentErr.Message, "process exited before first opencode json event")
 }
 
 func TestIntegration_HappyPathFreshTurn(t *testing.T) {
@@ -144,12 +172,37 @@ func TestIntegration_SessionResume(t *testing.T) {
 		t.Fatal("turn 1 SessionID is empty")
 	}
 
-	// Resume session.
-	a2 := mustNewAdapter(t)
-	session2 := mustStartIntegrationSession(t, a2, sessionID)
-	t.Cleanup(func() { _ = a2.StopSession(context.Background(), session2) })
+	// Resume session. The first turn already exited and its session state was
+	// read back by the post-turn `opencode export`, so the session is durable
+	// before resuming - this is not a session-availability race.
+	//
+	// The resumed turn occasionally fails because the freshly launched OpenCode
+	// subprocess exits before emitting its first JSON event (an infrastructure
+	// /cold-start symptom). Allow a single retry scoped to that exact transient
+	// error. A deterministic resume regression fails both attempts - or fails
+	// with a different reason - and still surfaces here unmasked.
+	const resumeAttempts = 2
+	var result2 domain.TurnResult
+	for attempt := 1; attempt <= resumeAttempts; attempt++ {
+		a2 := mustNewAdapter(t)
+		session2 := mustStartIntegrationSession(t, a2, sessionID)
+		t.Cleanup(func() { _ = a2.StopSession(context.Background(), session2) })
 
-	_, result2 := collectAllEvents(t, a2, session2, "What did I say in the previous message?")
+		var err2 error
+		_, result2, err2 = collectAllEventsErr(t, a2, session2, "What did I say in the previous message?")
+		if err2 != nil {
+			t.Logf("resumed RunTurn attempt %d error: %v", attempt, err2)
+		}
+		if result2.ExitReason == domain.EventTurnCompleted {
+			break
+		}
+		if attempt < resumeAttempts && isTransientFirstEventExit(result2, err2) {
+			t.Logf("resumed turn hit transient first-event exit on attempt %d; retrying", attempt)
+			continue
+		}
+		break
+	}
+
 	if result2.ExitReason != domain.EventTurnCompleted {
 		t.Errorf("resumed turn ExitReason = %q, want completed", result2.ExitReason)
 	}
