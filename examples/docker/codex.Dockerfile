@@ -2,7 +2,7 @@
 #
 # Complete working example: Sortie + OpenAI Codex CLI agent.
 #
-# Codex CLI is a statically linked Rust binary — no Node.js runtime required.
+# Codex CLI is a statically linked Rust binary - no Node.js runtime required.
 # The container runs as a non-root user for security best practices.
 #
 # Build:

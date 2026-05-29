@@ -1,6 +1,6 @@
 # Contributing to Sortie
 
-Sortie turns issue tracker tickets into autonomous coding agent sessions — a single Go
+Sortie turns issue tracker tickets into autonomous coding agent sessions - a single Go
 binary that orchestrates workspaces, retries, and state reconciliation for AI coding
 agents. The full picture is in the [README](README.md).
 
@@ -25,7 +25,7 @@ go test -coverprofile=coverage.out ./...
 go tool cover -func=coverage.out | grep -v '100.0%' | sort -k3 -n
 ```
 
-For larger work — new features, new adapters, architectural changes — open an issue
+For larger work - new features, new adapters, architectural changes - open an issue
 first to discuss the approach.
 
 ## Setup
@@ -44,7 +44,7 @@ make fmt     # gofmt + goimports
 All commands go through the Makefile. If `make test` passes, the change is safe to
 submit.
 
-The SQLite dependency is [modernc.org/sqlite](https://pkg.go.dev/modernc.org/sqlite) —
+The SQLite dependency is [modernc.org/sqlite](https://pkg.go.dev/modernc.org/sqlite) -
 a pure-Go driver. No C compiler needed.
 
 ### Integration tests
@@ -80,7 +80,7 @@ implementing. The spec defines what correct behavior looks like, so reading it f
 prevents wasted effort.
 
 **Large changes** (new features, new adapters, orchestrator changes): open an issue to
-discuss the design before writing code. The architecture doc is the source of truth —
+discuss the design before writing code. The architecture doc is the source of truth -
 changes that contradict it will not be merged. If you believe the spec itself should
 change, that is a valid conversation to have in an issue.
 
@@ -129,7 +129,7 @@ linter enforces:
   trailing punctuation. Use the error categories in `internal/domain/errors.go`.
 - **Logging:** `log/slog` with typed `slog.Attr` constructors. Derive loggers via
   `logging.WithIssue` and `logging.WithSession`.
-- **Templates:** `Option("missingkey=error")` on every `text/template` — strict mode is
+- **Templates:** `Option("missingkey=error")` on every `text/template` - strict mode is
   mandatory.
 
 ## Testing conventions
@@ -139,7 +139,7 @@ linter enforces:
 - `t.TempDir()` for filesystem isolation, `t.Setenv()` for environment variables.
 - Error assertions via `errors.As()` / `errors.Is()`, never string matching.
 - Failure format: `FuncName(input) = got, want expected`.
-- Standard library only — no third-party assertion frameworks.
+- Standard library only - no third-party assertion frameworks.
 - Fixtures live in `testdata/` within each package.
 
 ## Commits and PRs
@@ -153,13 +153,13 @@ test(tracker): cover pagination edge cases in Jira adapter
 ```
 
 PRs use the [template](.github/pull_request_template.md). One logical change per PR.
-CI runs `make lint` and `make test` — both must pass.
+CI runs `make lint` and `make test` - both must pass.
 
 ## What will not be merged
 
 - CGo or any dependency requiring a C compiler.
 - Adapter-specific logic in core packages (`internal/orchestrator/`, `internal/domain/`).
-- Weakened workspace path containment or input sanitization — these are security
+- Weakened workspace path containment or input sanitization - these are security
   boundaries.
 - Behavior that contradicts [docs/architecture.md](docs/architecture.md).
 
@@ -170,8 +170,8 @@ hours of work.
 
 Sortie is primarily developed with AI coding agents. Contributions using AI tools are
 welcome under the same quality bar: the code must be correct, spec-conformant, tested,
-and reviewed by you before submitting. `make test` and `make lint` must pass — not just
-"the agent said it works."
+and reviewed by you before submitting. `make test` and `make lint` must pass - not just
+"the agent said it works".
 
 Whoever opens the pull request owns it. You are accountable for every line you submit
 and for its conformance to the conventions, spec, and tests described here, regardless

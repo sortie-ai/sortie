@@ -92,7 +92,7 @@ Before making changes, read:
 3. Write table-driven tests. Cover edge cases, not just the happy path.
 4. If you encounter a problem outside the scope of this task, write `blocked` to
    `.sortie/status` and stop.
-5. Keep changes minimal — implement exactly what the task requires.
+5. Keep changes minimal - implement exactly what the task requires.
 
 {{ if not .run.is_continuation }}
 
@@ -110,7 +110,7 @@ Before making changes, read:
 ## Continuation
 
 You are resuming work on this task (turn {{ .run.turn_number }} of {{ .run.max_turns }}).
-Review the current state of the workspace — check test output, lint results, and any
+Review the current state of the workspace - check test output, lint results, and any
 partial changes. Do not repeat work already completed. Proceed with the next step.
 {{ end }}
 

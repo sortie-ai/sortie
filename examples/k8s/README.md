@@ -1,7 +1,7 @@
 # Kubernetes Examples
 
 Plain Kubernetes manifests for deploying Sortie to a cluster. For the full
-guide — secrets, networking, storage classes, monitoring — see
+guide - secrets, networking, storage classes, monitoring - see
 [Deploy Sortie to Kubernetes](https://docs.sortie-ai.com/guides/deploy-sortie-to-kubernetes/).
 
 ## Prerequisites
@@ -50,10 +50,10 @@ kubectl get pods -l app.kubernetes.io/name=sortie
 
 ## Customization
 
-1. **Image** — replace `sortie-claude:latest` in `deployment.yaml` with your
+1. **Image** - replace `sortie-claude:latest` in `deployment.yaml` with your
    registry image (e.g., `registry.example.com/sortie-claude:v1.0.0`).
-2. **Workflow** — edit the `WORKFLOW.md` content in `configmap.yaml` to match
+2. **Workflow** - edit the `WORKFLOW.md` content in `configmap.yaml` to match
    your tracker and agent setup.
-3. **Secrets** — the Deployment references a Secret named `sortie-secrets`.
+3. **Secrets** - the Deployment references a Secret named `sortie-secrets`.
    Add any environment variables your workflow requires.
-4. **Storage** — adjust the PVC size or storage class to match your cluster.
+4. **Storage** - adjust the PVC size or storage class to match your cluster.

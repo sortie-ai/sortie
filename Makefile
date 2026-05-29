@@ -1,4 +1,4 @@
-# Makefile — build, test, and quality targets for Sortie.
+# Makefile - build, test, and quality targets for Sortie.
 #
 # Run "make" or "make help" to see all targets and configurable variables.
 # Requires GNU make >= 3.81.

@@ -1,4 +1,4 @@
-# Sortie Deployment — single-replica with Recreate strategy.
+# Sortie Deployment - single-replica with Recreate strategy.
 # SQLite requires exclusive filesystem access; do not increase replicas.
 #
 # The default image assumes you have built an agent-specific image using one

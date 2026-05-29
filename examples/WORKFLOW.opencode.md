@@ -107,7 +107,7 @@ Before making changes, read:
 2. Do not modify protected files (architecture docs, ADRs, LICENSE) unless the task
    explicitly requires it.
 3. Write tests for new functionality. Cover edge cases, not just the happy path.
-4. Keep changes minimal — implement exactly what the task requires.
+4. Keep changes minimal - implement exactly what the task requires.
 5. If you encounter a problem outside the scope of this task, stop and explain what
    blocked you.
 
@@ -127,7 +127,7 @@ Before making changes, read:
 ## Continuation
 
 You are resuming work on this task (turn {{ .run.turn_number }} of {{ .run.max_turns }}).
-Review the current state of the workspace — check test output, lint results, and any
+Review the current state of the workspace - check test output, lint results, and any
 partial changes. Do not repeat work already completed. Proceed with the next step.
 {{ end }}
 

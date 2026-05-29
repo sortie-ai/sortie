@@ -1,8 +1,8 @@
 # Docker Examples
 
 Complete working Dockerfiles that pair Sortie with a coding agent. For the
-full guide — volumes, health checks, persistence, process reaping, custom
-agents — see
+full guide - volumes, health checks, persistence, process reaping, custom
+agents - see
 [How to use Sortie in Docker](https://docs.sortie-ai.com/guides/use-sortie-in-docker/).
 
 ## Quick start

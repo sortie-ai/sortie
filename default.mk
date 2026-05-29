@@ -1,4 +1,4 @@
-# default.mk — project variables, tool detection, and output formatting.
+# default.mk - project variables, tool detection, and output formatting.
 #
 # Included by the root Makefile.  Every variable is defined with ?= so any of
 # them can be overridden on the command line or in the environment:
@@ -53,12 +53,12 @@ COVERAGE_HTML  = $(COVERAGE_OUT:.out=.html)
 # ── Color / formatting ────────────────────────────────────────────────────────
 #
 # Honors three opt-out signals:
-#   NO_COLOR  — set to any value to disable (https://no-color.org/)
-#   CI        — set to any value (most CI/CD platforms set this automatically)
-#   TERM=dumb — indicates a terminal with no escape-sequence support
+#   NO_COLOR  - set to any value to disable (https://no-color.org/)
+#   CI        - set to any value (most CI/CD platforms set this automatically)
+#   TERM=dumb - indicates a terminal with no escape-sequence support
 #
 # When all conditions are satisfied, colors are enabled by embedding the real
-# ESC byte (0x1B) once via printf rather than using \033 literals throughout —
+# ESC byte (0x1B) once via printf rather than using \033 literals throughout -
 # this keeps every downstream variable self-contained and portable across both
 # GNU awk and BSD awk (macOS).
 #

@@ -1,5 +1,5 @@
 # PersistentVolumeClaim for the Sortie SQLite database.
-# SQLite requires exclusive access — ReadWriteOnce is mandatory.
+# SQLite requires exclusive access - ReadWriteOnce is mandatory.
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
