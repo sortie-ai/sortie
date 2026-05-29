@@ -423,7 +423,10 @@ jobs:
           fi
           echo "✓ SignPath configuration is present"
 
+      # Only needed when signing is configured for this repo; skipped on forks
+      # and credential-less dry runs so they do not depend on PSGallery.
       - name: Install SignPath signing module
+        if: ${{ vars.SIGNPATH_ORG_ID != '' }}
         shell: pwsh
         run: |
           Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
