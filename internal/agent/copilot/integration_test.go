@@ -36,9 +36,11 @@ func skipUnlessCopilotIntegration(t *testing.T) {
 
 // integrationConfig builds the adapter config map for integration tests.
 func integrationConfig() map[string]any {
+	// For supported models for Copilot CLI, see
+	// https://docs.github.com/en/copilot/reference/ai-models/supported-models#supported-ai-models-in-auto-model-selection
 	model := os.Getenv("SORTIE_COPILOT_MODEL")
 	if model == "" {
-		model = "gpt-4.1"
+		model = "gpt-5-mini"
 	}
 	return map[string]any{
 		"max_autopilot_continues": float64(5),
