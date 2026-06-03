@@ -15,7 +15,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
-	"math"
 	"net/url"
 	"strconv"
 	"strings"
@@ -164,7 +163,7 @@ func normalizeAPIVersion(raw any) (string, error) {
 	case int:
 		v = strconv.Itoa(n)
 	case float64:
-		if n != math.Trunc(n) {
+		if n != 2 && n != 3 {
 			return "", &domain.TrackerError{
 				Kind:    domain.ErrTrackerPayload,
 				Message: fmt.Sprintf(`tracker.api_version must be "2" or "3", got %v`, raw),
@@ -208,10 +207,7 @@ func resolveAuth(apiVersion, apiKey string) (string, error) {
 	idx := strings.Index(apiKey, ":")
 	if idx >= 0 {
 		if idx < 1 || idx == len(apiKey)-1 {
-			return "", &domain.TrackerError{
-				Kind:    domain.ErrTrackerAuth,
-				Message: "api_key must be in email:token format",
-			}
+			return "", authFormatError(apiVersion)
 		}
 		return "Basic " + base64.StdEncoding.EncodeToString([]byte(apiKey)), nil
 	}
@@ -220,9 +216,22 @@ func resolveAuth(apiVersion, apiKey string) (string, error) {
 		return "Bearer " + apiKey, nil
 	}
 
-	return "", &domain.TrackerError{
+	return "", authFormatError(apiVersion)
+}
+
+// authFormatError reports an invalid api_key shape for the given API
+// version. Version 2 accepts a personal access token or user:password
+// Basic credentials; version 3 requires email:token Basic credentials.
+func authFormatError(apiVersion string) error {
+	if apiVersion == "2" {
+		return &domain.TrackerError{
+			Kind:    domain.ErrTrackerAuth,
+			Message: "api_key for api_version 2 must be a personal access token or in user:password format",
+		}
+	}
+	return &domain.TrackerError{
 		Kind:    domain.ErrTrackerAuth,
-		Message: "api_key must be in email:token format",
+		Message: "api_key for api_version 3 must be in email:token format",
 	}
 }
 
