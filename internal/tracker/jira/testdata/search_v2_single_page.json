@@ -1,0 +1,50 @@
+{
+  "startAt": 0,
+  "maxResults": 50,
+  "total": 2,
+  "issues": [
+    {
+      "id": "20001",
+      "key": "SRV-1",
+      "fields": {
+        "summary": "Migrate to LDAP auth",
+        "status": { "name": "To Do" },
+        "priority": { "id": "2" },
+        "labels": ["Backend", "Auth"],
+        "assignee": { "displayName": "Bob Server" },
+        "issuetype": { "name": "Story" },
+        "parent": { "id": "20000", "key": "SRV-0" },
+        "issuelinks": [
+          {
+            "type": { "name": "Blocks", "inward": "is blocked by" },
+            "inwardIssue": {
+              "id": "20010",
+              "key": "SRV-10",
+              "fields": { "status": { "name": "In Progress" } }
+            }
+          }
+        ],
+        "description": "h2. Goal\n\nMigrate the *auth* layer.\n\n{code}config.set(\"ldap\")\n{code}",
+        "created": "2025-02-01T08:00:00.000+0000",
+        "updated": "2025-02-02T09:30:00.000+0000"
+      }
+    },
+    {
+      "id": "20002",
+      "key": "SRV-2",
+      "fields": {
+        "summary": "Fix offset pagination",
+        "status": { "name": "In Progress" },
+        "priority": { "id": "1" },
+        "labels": [],
+        "assignee": null,
+        "issuetype": { "name": "Bug" },
+        "parent": null,
+        "issuelinks": [],
+        "description": "",
+        "created": "2025-02-03T10:00:00.000+0000",
+        "updated": "2025-02-04T11:30:00.000+0000"
+      }
+    }
+  ]
+}

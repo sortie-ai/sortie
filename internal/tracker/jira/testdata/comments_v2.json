@@ -1,0 +1,19 @@
+{
+  "startAt": 0,
+  "maxResults": 50,
+  "total": 2,
+  "comments": [
+    {
+      "id": "40001",
+      "author": { "displayName": "Bob Server" },
+      "body": "h3. Review\n\nLooks good. See {code}main.go{code} and *ship it*.",
+      "created": "2025-02-05T10:00:00.000+0000"
+    },
+    {
+      "id": "40002",
+      "author": null,
+      "body": "Automated update: build passed.",
+      "created": "2025-02-05T12:00:00.000+0000"
+    }
+  ]
+}

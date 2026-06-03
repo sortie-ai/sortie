@@ -1,7 +1,6 @@
 package jira
 
 import (
-	"encoding/base64"
 	"fmt"
 	"io"
 	"net/http"
@@ -12,10 +11,11 @@ import (
 	"github.com/sortie-ai/sortie/internal/httpkit"
 )
 
-// newJiraClient constructs the shared Jira transport.
-func newJiraClient(baseURL, email, token, userAgent string) *httpkit.Client {
+// newJiraClient constructs the shared Jira transport. The authHeader is
+// the fully-formed Authorization value (Basic or Bearer) set on every
+// request.
+func newJiraClient(baseURL, authHeader, userAgent string) *httpkit.Client {
 	trimmedBaseURL := strings.TrimRight(baseURL, "/")
-	authHeader := "Basic " + base64.StdEncoding.EncodeToString([]byte(email+":"+token))
 
 	return httpkit.NewClient(httpkit.ClientOptions{
 		BaseURL: trimmedBaseURL,

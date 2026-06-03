@@ -1059,6 +1059,9 @@ This section is intentionally redundant so a coding agent can implement the conf
 - `tracker.in_progress_state`: string, optional, default absent; target state for
   dispatch-time transition at the start of each worker attempt; must be in `active_states`,
   must not collide with `terminal_states` or `handoff_state`; supports `$VAR`
+- `tracker.api_version`: string (`"2"` or `"3"`), optional, default `"3"`; selects
+  Jira REST API v3 (Cloud) or v2 (Server / Data Center); quote the value to avoid
+  a validation advisory (`api_version: "2"`); supports `$VAR`
 - `polling.interval_ms`: integer, default `30000`
 - `workspace.root`: path, default `<system-temp>/sortie_workspaces`
 - `worker.ssh_hosts` (extension): list of SSH host strings, optional; when omitted, work runs

@@ -36,19 +36,35 @@ PATs act as a secure alternative to Basic Auth passwords, behaving like bearer t
 - Header: `Authorization: Bearer <your_pat>`
 - Available in Jira Data Center and Server.
 
-Relevant only if Sortie adds Data Center support in the future.
+Sortie supports PAT authentication when `tracker.api_version: "2"` is set. The adapter
+selects the auth mode from the `tracker.api_key` value using a presence-of-colon rule:
+
+- `api_key` contains a colon (`user:password`): Basic auth, `Authorization: Basic
+  base64(user:password)`. Both sides of the colon must be non-empty; an empty user
+  (`":password"`) or empty secret (`"user:"`) is rejected at construction time with
+  `ErrTrackerAuth`.
+- `api_key` has no colon (a colon-free token string): Bearer auth, `Authorization:
+  Bearer <token>`. This is the PAT path for Server and Data Center.
+
+Under `api_version: "3"` (Cloud), a colon-free `api_key` is always rejected because
+Cloud requires `email:token` format.
 
 ### Config mapping
 
-| Config field       | Value                                          |
-| ------------------ | ---------------------------------------------- |
-| `tracker.endpoint` | `https://<site>.atlassian.net` (no trailing /) |
-| `tracker.api_key`  | `email:api_token`; adapter splits on first `:` |
-| `tracker.project`  | Jira project key, e.g. `SORT`                  |
+| Config field            | Cloud (v3)                                           | Server / DC (v2)                                   |
+| ----------------------- | ---------------------------------------------------- | -------------------------------------------------- |
+| `tracker.endpoint`      | `https://<site>.atlassian.net` (no trailing /)       | `https://jira.internal.example.com` (no trailing /) |
+| `tracker.api_key`       | `email:api_token`; splits on first `:`               | `user:password` (Basic) or PAT token (Bearer)      |
+| `tracker.project`       | Jira project key, e.g. `SORT`                        | Same                                               |
+| `tracker.api_version`   | `"3"` (default, may be omitted)                      | `"2"` (required for Server / DC)                   |
 
 Encoding `email:token` in a single field follows curl convention (`-u email:token`) and avoids
 adding Jira-specific config keys to the core schema. The value may be provided via environment
 variable indirection (e.g. `$JIRA_API_KEY`) if the config layer supports it.
+
+**Construction-time host/version guard:** A `.atlassian.net` endpoint combined with
+`api_version: "2"` is rejected at startup (`ErrTrackerPayload`). A non-`.atlassian.net`
+endpoint combined with `api_version: "3"` emits a warning and proceeds.
 
 **CAPTCHA caveat:** After several failed logins Jira triggers CAPTCHA and returns
 `X-Seraph-LoginReason: AUTHENTICATION_DENIED`. The adapter should detect this header and
@@ -58,7 +74,34 @@ return `tracker_auth_error`.
 
 ## Endpoints
 
-Each `TrackerAdapter` operation maps to a Jira REST v3 endpoint.
+Each `TrackerAdapter` operation maps to a Jira REST endpoint. The base path is
+`/rest/api/3` when `api_version` is `"3"` (default) and `/rest/api/2` when
+`api_version` is `"2"`. The table below shows the v3 paths; substitute `/rest/api/2`
+for v2. The one exception is the search resource: v3 uses `/rest/api/3/search/jql`
+whereas v2 uses `/rest/api/2/search` (no `/jql` segment).
+
+### v2 body format
+
+On v2, `description` and comment `body` fields are returned as a **raw string in Jira
+wiki markup** (for example `h2. Heading`, `*bold*`, `{code}...{code}`). The adapter
+reads this string verbatim; it does not flatten or translate markup tokens. Downstream
+consumers (prompt templates, agents) therefore see wiki markup rather than clean prose
+when `api_version: "2"` is set. The v3 path returns ADF, which the adapter flattens to
+text before storing in `domain.Issue.Description` and `domain.Comment.Body`.
+
+Comment creation on v2 sends a raw-string body:
+
+```json
+{"body": "<text>"}
+```
+
+Comment creation on v3 sends an ADF document (see ADF flattening section below).
+
+### v2 search pagination
+
+The v2 search endpoint (`GET /rest/api/2/search`) uses offset-based pagination
+(`startAt` / `total`). The adapter loops until `startAt + page_count >= total` or the
+page is empty. Page size is 50 for both versions.
 
 ### 1. `FetchCandidateIssues` → `GET /rest/api/3/search/jql`
 
@@ -154,7 +197,7 @@ operations.
 | `ID`                 | `id` (string)                     | Numeric ID as string                    |
 | `Identifier`         | `key` (string)                    | e.g. `"PROJ-123"`                       |
 | `Title`              | `fields.summary`                  |                                         |
-| `Description`        | `fields.description` (ADF)        | Flatten ADF → plain text                |
+| `Description`        | `fields.description`              | v3: ADF flattened to text. v2: raw string (wiki markup). |
 | `Priority`           | `fields.priority.id` (string)     | e.g. `"3"` → int 3; use `id` not `name` |
 | `State`              | `fields.status.name`              | Preserve original casing                |
 | `BranchName`         | —                                 | See dev-status note below               |
@@ -163,7 +206,7 @@ operations.
 | `Assignee`           | `fields.assignee.displayName`     | Nil → empty string                      |
 | `IssueType`          | `fields.issuetype.name`           |                                         |
 | `Parent`             | `fields.parent.id`, `.parent.key` | Nil when absent                         |
-| `Comments`           | Separate endpoint                 | ADF → plain text                        |
+| `Comments`           | Separate endpoint                 | v3: ADF flattened to text. v2: raw string (wiki markup). |
 | `BlockedBy`          | `fields.issuelinks[]` (filtered)  | See blocker extraction below            |
 | `CreatedAt`          | `fields.created` (ISO-8601)       |                                         |
 | `UpdatedAt`          | `fields.updated` (ISO-8601)       |                                         |
@@ -223,16 +266,16 @@ Jira v3 returns `description` and comment `body` as ADF JSON:
 The adapter must recursively walk the tree and extract all `text` node values, joining
 paragraphs with newlines. Without this, `Description` and comment `Body` would be raw JSON.
 
-**v2 API alternative:** The v2 API (`/rest/api/2/...`) returns `description` and comment
-`body` as rendered HTML or plain text instead of ADF. If ADF flattening proves too complex,
-the adapter could use v2 endpoints for these fields. However, v3 is the current API and
-ADF flattening gives the adapter full control over text extraction.
+**v2 bodies are not ADF:** When `api_version: "2"`, `description` and comment `body` are
+JSON strings containing Jira wiki markup, not ADF objects. The adapter reads them verbatim
+with a JSON string unquote, not ADF flattening. Rendered HTML (`expand=renderedBody`) is
+not requested and not in scope.
 
 ---
 
 ## Pagination
 
-### Search endpoint (`GET /rest/api/3/search/jql`), cursor-based
+### v3 search endpoint (`GET /rest/api/3/search/jql`), cursor-based
 
 - First request: omit `nextPageToken`, set `maxResults` (recommend `50`).
 - Subsequent requests: pass the `nextPageToken` from the previous response.
@@ -243,6 +286,17 @@ ADF flattening gives the adapter full control over text extraction.
 
 `POST /rest/api/3/search/jql` uses offset-based (`startAt`/`total`) pagination but is
 deprecated for new integrations. Prefer `GET` with cursor-based pagination.
+
+### v2 search endpoint (`GET /rest/api/2/search`), offset-based
+
+The v2 endpoint uses offset-based pagination. The adapter maintains a `startAt` counter
+and advances it by the number of results returned per page.
+
+- First request: `startAt=0`, `maxResults=50`.
+- Subsequent requests: `startAt += len(page.issues)`.
+- Stop when `len(page.issues) == 0` or `startAt + len(page.issues) >= total`.
+
+This mirrors the comment pagination loop already used by both v2 and v3.
 
 ### Comment endpoint, offset-based
 
