@@ -44,6 +44,10 @@ jobs:
         with:
           version: latest
           verify: false
+          # Skip the action's analysis cache: stale entries cause flaky
+          # staticcheck false positives (golangci-lint#5979) that would otherwise
+          # masquerade as new 'latest' findings. setup-go's caches are unaffected.
+          skip-cache: true
 
   test:
     name: Test

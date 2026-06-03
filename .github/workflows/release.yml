@@ -75,6 +75,10 @@ jobs:
         uses: golangci/golangci-lint-action@82606bf257cbaff209d206a39f5134f0cfbfd2ee # v9.2.1
         with:
           version: latest
+          # Skip the action's analysis cache: stale entries cause flaky
+          # staticcheck false positives (golangci-lint#5979) that would otherwise
+          # masquerade as new 'latest' findings. setup-go's caches are unaffected.
+          skip-cache: true
 
   test-unit:
     name: Unit tests
