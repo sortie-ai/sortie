@@ -1,17 +1,23 @@
-// Package jira implements [domain.TrackerAdapter] for Atlassian Jira
-// Cloud REST API v3. Issues are fetched via JQL search, normalized to
-// domain types with ADF descriptions flattened to plain text, labels
-// lowercased, integer-only priority (non-integers become nil), and
-// blocker refs extracted from inward "Blocks" issuelinks. Registered
-// under kind "jira" via an init function.
+// Package jira implements [domain.TrackerAdapter] for Atlassian Jira.
+// It targets the Cloud REST API v3 by default and the Server / Data
+// Center REST API v2 when api_version is "2". Issues are fetched via
+// JQL search and normalized to domain types: labels lowercased,
+// integer-only priority (non-integers become nil), and blocker refs
+// extracted from inward "Blocks" issuelinks. Descriptions and comment
+// bodies are flattened from ADF on v3 and preserved as raw wiki markup
+// on v2. Registered under kind "jira" via an init function.
 package jira
 
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"log/slog"
+	"math"
 	"net/url"
+	"strconv"
 	"strings"
 
 	"github.com/sortie-ai/sortie/internal/domain"
@@ -48,21 +54,32 @@ const maxCommentResults = 50
 // to keep GET URLs within safe URI length limits.
 const batchSize = 40
 
-// JiraAdapter implements [domain.TrackerAdapter] against Jira Cloud
-// REST API v3. Safe for concurrent use.
+// JiraAdapter implements [domain.TrackerAdapter] against Atlassian
+// Jira. The selected API version and the base path derived from it are
+// immutable after construction. Safe for concurrent use.
 type JiraAdapter struct {
 	client       *httpkit.Client
 	project      string
 	activeStates []string
 	endpoint     string
 	queryFilter  string
+	apiVersion   string
+	basePath     string
 	metrics      domain.Metrics // nil-safe: check before calling
 }
 
 // NewJiraAdapter creates a [JiraAdapter] from adapter configuration.
-// Required config keys: "endpoint", "api_key" (email:token format),
-// "project". Optional: "active_states" (defaults to Backlog, Selected
-// for Development, In Progress), "query_filter" (raw JQL fragment).
+// Required config keys: "endpoint", "api_key", "project". Optional:
+// "active_states" (defaults to Backlog, Selected for Development, In
+// Progress), "query_filter" (raw JQL fragment), "api_version" ("2" or
+// "3", default "3").
+//
+// On version "3" the api_key must be email:token and authenticates
+// with Basic. On version "2" a colon-free api_key is a Personal Access
+// Token and authenticates with Bearer, while a user:password api_key
+// authenticates with Basic. An api_version other than "2" or "3", a
+// malformed api_key, or a Cloud endpoint combined with api_version "2"
+// returns a [*domain.TrackerError] and blocks construction.
 func NewJiraAdapter(config map[string]any) (domain.TrackerAdapter, error) {
 	endpoint, _ := config["endpoint"].(string)
 	if endpoint == "" {
@@ -79,6 +96,15 @@ func NewJiraAdapter(config map[string]any) (domain.TrackerAdapter, error) {
 		}
 	}
 
+	apiVersion, err := normalizeAPIVersion(config["api_version"])
+	if err != nil {
+		return nil, err
+	}
+
+	if err := checkHostVersion(endpoint, apiVersion); err != nil {
+		return nil, err
+	}
+
 	apiKey, _ := config["api_key"].(string)
 	if apiKey == "" {
 		return nil, &domain.TrackerError{
@@ -87,15 +113,10 @@ func NewJiraAdapter(config map[string]any) (domain.TrackerAdapter, error) {
 		}
 	}
 
-	idx := strings.Index(apiKey, ":")
-	if idx < 1 || idx == len(apiKey)-1 {
-		return nil, &domain.TrackerError{
-			Kind:    domain.ErrTrackerAuth,
-			Message: "api_key must be in email:token format",
-		}
+	authHeader, err := resolveAuth(apiVersion, apiKey)
+	if err != nil {
+		return nil, err
 	}
-	email := apiKey[:idx]
-	token := apiKey[idx+1:]
 
 	project, _ := config["project"].(string)
 	if project == "" {
@@ -118,12 +139,120 @@ func NewJiraAdapter(config map[string]any) (domain.TrackerAdapter, error) {
 	}
 
 	return &JiraAdapter{
-		client:       newJiraClient(endpoint, email, token, userAgent),
+		client:       newJiraClient(endpoint, authHeader, userAgent),
 		project:      project,
 		activeStates: activeStates,
 		endpoint:     endpoint,
 		queryFilter:  queryFilter,
+		apiVersion:   apiVersion,
+		basePath:     basePath(apiVersion),
 	}, nil
+}
+
+// normalizeAPIVersion coerces a raw config value to a validated Jira
+// REST API version. It accepts a string, an int, or a whole-number
+// float64, trims surrounding whitespace, and resolves an absent or
+// empty value to "3". A value other than "2" or "3" returns a
+// [*domain.TrackerError] of kind [domain.ErrTrackerPayload].
+func normalizeAPIVersion(raw any) (string, error) {
+	var v string
+	switch n := raw.(type) {
+	case nil:
+		v = ""
+	case string:
+		v = n
+	case int:
+		v = strconv.Itoa(n)
+	case float64:
+		if n != math.Trunc(n) {
+			return "", &domain.TrackerError{
+				Kind:    domain.ErrTrackerPayload,
+				Message: fmt.Sprintf(`tracker.api_version must be "2" or "3", got %v`, raw),
+			}
+		}
+		v = strconv.Itoa(int(n))
+	default:
+		return "", &domain.TrackerError{
+			Kind:    domain.ErrTrackerPayload,
+			Message: fmt.Sprintf(`tracker.api_version must be "2" or "3", got %v`, raw),
+		}
+	}
+
+	v = strings.TrimSpace(v)
+	switch v {
+	case "":
+		return "3", nil
+	case "2", "3":
+		return v, nil
+	default:
+		return "", &domain.TrackerError{
+			Kind:    domain.ErrTrackerPayload,
+			Message: fmt.Sprintf(`tracker.api_version must be "2" or "3", got %q`, v),
+		}
+	}
+}
+
+// basePath returns the Jira REST API base path for the given version.
+func basePath(apiVersion string) string {
+	return "/rest/api/" + apiVersion
+}
+
+// resolveAuth selects the Authorization header value from the API
+// version and api_key. A key containing a colon is parsed as
+// user:secret and produces a Basic header on both versions; an empty
+// user or empty secret returns [domain.ErrTrackerAuth]. A colon-free
+// key produces a Bearer header on version "2" and returns
+// [domain.ErrTrackerAuth] on version "3". The api_key is never empty:
+// the caller rejects an empty value earlier.
+func resolveAuth(apiVersion, apiKey string) (string, error) {
+	idx := strings.Index(apiKey, ":")
+	if idx >= 0 {
+		if idx < 1 || idx == len(apiKey)-1 {
+			return "", &domain.TrackerError{
+				Kind:    domain.ErrTrackerAuth,
+				Message: "api_key must be in email:token format",
+			}
+		}
+		return "Basic " + base64.StdEncoding.EncodeToString([]byte(apiKey)), nil
+	}
+
+	if apiVersion == "2" {
+		return "Bearer " + apiKey, nil
+	}
+
+	return "", &domain.TrackerError{
+		Kind:    domain.ErrTrackerAuth,
+		Message: "api_key must be in email:token format",
+	}
+}
+
+// checkHostVersion runs a static consistency check between the endpoint
+// host and the API version. It performs no network I/O. A Cloud host
+// (one ending in .atlassian.net) combined with version "2" returns a
+// [*domain.TrackerError] of kind [domain.ErrTrackerPayload]. A
+// non-Cloud host combined with version "3" logs a warning and returns
+// nil so construction proceeds. All other combinations return nil.
+func checkHostVersion(endpoint, apiVersion string) error {
+	parsed, err := url.Parse(endpoint)
+	if err != nil {
+		return nil
+	}
+	host := strings.ToLower(parsed.Hostname())
+	isCloud := strings.HasSuffix(host, ".atlassian.net")
+
+	if isCloud && apiVersion == "2" {
+		return &domain.TrackerError{
+			Kind:    domain.ErrTrackerPayload,
+			Message: fmt.Sprintf("tracker.api_version 2 targets Jira Server / Data Center; endpoint %s is Jira Cloud, which requires api_version 3", host),
+		}
+	}
+
+	if !isCloud && apiVersion == "3" {
+		slog.Warn("tracker.api_version 3 against non-cloud endpoint will return 404",
+			slog.String("host", host))
+	}
+
+	return nil
 }
 
 // FetchCandidateIssues returns issues in configured active states
@@ -146,7 +275,7 @@ func (a *JiraAdapter) FetchIssueByID(ctx context.Context, issueID string) (domai
 	var issue domain.Issue
 	err := trackermetrics.Track(a.metrics, "fetch_issue", func() error {
 		params := url.Values{"fields": {searchFields}}
-		body, _, err := a.client.Get(ctx, "/rest/api/3/issue/"+url.PathEscape(issueID), params)
+		body, _, err := a.client.Get(ctx, a.basePath+"/issue/"+url.PathEscape(issueID), params)
 		if err != nil {
 			if domain.IsNotFound(err) {
 				return &domain.TrackerError{
@@ -166,7 +295,7 @@ func (a *JiraAdapter) FetchIssueByID(ctx context.Context, issueID string) (domai
 			}
 		}
 
-		fetchedIssue := normalizeSearchIssue(a.endpoint, ji)
+		fetchedIssue := normalizeSearchIssue(a.apiVersion, a.endpoint, ji)
 
 		comments, err := a.fetchComments(ctx, issueID)
 		if err != nil {
@@ -290,7 +419,7 @@ func (a *JiraAdapter) FetchIssueComments(ctx context.Context, issueID string) ([
 // name (case-insensitive, first match), then executed via POST.
 func (a *JiraAdapter) TransitionIssue(ctx context.Context, issueID string, targetState string) error {
 	return trackermetrics.Track(a.metrics, "transition", func() error {
-		path := "/rest/api/3/issue/" + url.PathEscape(issueID) + "/transitions"
+		path := a.basePath + "/issue/" + url.PathEscape(issueID) + "/transitions"
 
 		body, _, err := a.client.Get(ctx, path, nil)
 		if err != nil {
@@ -343,14 +472,14 @@ func (a *JiraAdapter) TransitionIssue(ctx context.Context, issueID string, targe
 	})
 }
 
-// CommentIssue posts a plain-text comment on the specified Jira issue.
-// The text is split by newlines into ADF paragraph nodes before
-// submission to the Jira v3 REST API.
+// CommentIssue posts a comment on the specified Jira issue. On version
+// "3" the text is split by newlines into ADF paragraph nodes. On
+// version "2" the text is sent verbatim as a raw wiki-markup body.
 func (a *JiraAdapter) CommentIssue(ctx context.Context, issueID string, text string) error {
 	return trackermetrics.Track(a.metrics, "comment", func() error {
-		path := "/rest/api/3/issue/" + url.PathEscape(issueID) + "/comment"
+		path := a.basePath + "/issue/" + url.PathEscape(issueID) + "/comment"
 
-		body := buildADFComment(text)
+		body := commentPayload(a.apiVersion, text)
 		payload, err := json.Marshal(body)
 		if err != nil {
 			return &domain.TrackerError{
@@ -363,6 +492,16 @@ func (a *JiraAdapter) CommentIssue(ctx context.Context, issueID string, text str
 		_, err = a.client.Send(ctx, "POST", path, bytes.NewReader(payload))
 		return err
 	})
+}
+
+// commentPayload builds the comment-create request body for the given
+// API version. On version "2" it returns a raw wiki-markup string body;
+// on any other version it returns an ADF document.
+func commentPayload(apiVersion, text string) any {
+	if apiVersion == "2" {
+		return map[string]any{"body": text}
+	}
+	return buildADFComment(text)
 }
 
 // SetMetrics configures the metrics recorder for tracker API call
@@ -378,7 +517,7 @@ func (a *JiraAdapter) SetMetrics(m domain.Metrics) {
 // Returns an error if the request fails; the orchestrator treats AddLabel
 // errors as non-fatal.
 func (a *JiraAdapter) AddLabel(ctx context.Context, issueID string, label string) error {
-	path := "/rest/api/3/issue/" + url.PathEscape(issueID)
+	path := a.basePath + "/issue/" + url.PathEscape(issueID)
 
 	payload, err := json.Marshal(map[string]any{
 		"update": map[string]any{
@@ -411,16 +550,21 @@ func (a *JiraAdapter) incTrackerRequest(operation, result string) {
 	}
 }
 
-// paginatedSearch executes a cursor-based paginated JQL search and
-// returns all normalized issues. Comments are set to nil.
+// paginatedSearch executes a paginated JQL search and returns all
+// normalized issues. Comments are set to nil. Version "2" uses an
+// offset loop; any other version uses cursor pagination.
 func (a *JiraAdapter) paginatedSearch(ctx context.Context, jql, fields string) ([]domain.Issue, error) {
+	if a.apiVersion == "2" {
+		return a.paginatedSearchV2(ctx, jql, fields)
+	}
+
 	params := url.Values{
 		"jql":        {jql},
 		"fields":     {fields},
 		"maxResults": {maxSearchResults},
 	}
 
-	paginator := httpkit.NewTokenPaginator(a.client, "/rest/api/3/search/jql", params, "nextPageToken", func(body []byte) ([]domain.Issue, string, error) {
+	paginator := httpkit.NewTokenPaginator(a.client, a.basePath+"/search/jql", params, "nextPageToken", func(body []byte) ([]domain.Issue, string, error) {
 		var sr searchResponse
 		if err := json.Unmarshal(body, &sr); err != nil {
 			return nil, "", &domain.TrackerError{
@@ -432,7 +576,7 @@ func (a *JiraAdapter) paginatedSearch(ctx context.Context, jql, fields string) (
 
 		issues := make([]domain.Issue, 0, len(sr.Issues))
 		for _, ji := range sr.Issues {
-			issue := normalizeSearchIssue(a.endpoint, ji)
+			issue := normalizeSearchIssue(a.apiVersion, a.endpoint, ji)
 			issue.Comments = nil
 			issues = append(issues, issue)
 		}
@@ -440,6 +584,55 @@ func (a *JiraAdapter) paginatedSearch(ctx context.Context, jql, fields string) (
 	}, httpkit.PaginatorOptions{})
 
 	return paginator.All(ctx)
+}
+
+// paginatedSearchV2 executes an offset-paginated JQL search against the
+// v2 search endpoint and returns all normalized issues. Comments are
+// set to nil. The loop terminates on an empty page or when the cursor
+// reaches the reported total, mirroring the comment-pagination loop.
+func (a *JiraAdapter) paginatedSearchV2(ctx context.Context, jql, fields string) ([]domain.Issue, error) {
+	issues := make([]domain.Issue, 0)
+	startAt := 0
+
+	for {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+
+		params := url.Values{
+			"jql":        {jql},
+			"fields":     {fields},
+			"maxResults": {maxSearchResults},
+			"startAt":    {strconv.Itoa(startAt)},
+		}
+
+		body, _, err := a.client.Get(ctx, a.basePath+"/search", params)
+		if err != nil {
+			return nil, err
+		}
+
+		var sr searchResponseV2
+		if err := json.Unmarshal(body, &sr); err != nil {
+			return nil, &domain.TrackerError{
+				Kind:    domain.ErrTrackerPayload,
+				Message: "failed to parse search response",
+				Err:     err,
+			}
+		}
+
+		for _, ji := range sr.Issues {
+			issue := normalizeSearchIssue(a.apiVersion, a.endpoint, ji)
+			issue.Comments = nil
+			issues = append(issues, issue)
+		}
+
+		if len(sr.Issues) == 0 || startAt+len(sr.Issues) >= sr.Total {
+			break
+		}
+		startAt += len(sr.Issues)
+	}
+
+	return issues, nil
 }
 
 // fetchComments retrieves all comments for an issue using offset-based
@@ -459,7 +652,7 @@ func (a *JiraAdapter) fetchComments(ctx context.Context, issueID string) ([]doma
 			"startAt":    {fmt.Sprintf("%d", startAt)},
 		}
 
-		body, _, err := a.client.Get(ctx, "/rest/api/3/issue/"+url.PathEscape(issueID)+"/comment", params)
+		body, _, err := a.client.Get(ctx, a.basePath+"/issue/"+url.PathEscape(issueID)+"/comment", params)
 		if err != nil {
 			if domain.IsNotFound(err) {
 				return nil, &domain.TrackerError{
@@ -490,5 +683,5 @@ func (a *JiraAdapter) fetchComments(ctx context.Context, issueID string) ([]doma
 	if len(allComments) == 0 {
 		return []domain.Comment{}, nil
 	}
-	return normalizeComments(allComments), nil
+	return normalizeComments(a.apiVersion, allComments), nil
 }

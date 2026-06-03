@@ -12,10 +12,18 @@ import (
 // inwardIssue produce a BlockerRef.
 const blockerLinkTypeName = "Blocks"
 
-// searchResponse represents GET /rest/api/3/search/jql response.
+// searchResponse represents the cursor-paginated search response.
 type searchResponse struct {
 	Issues        []jiraIssue `json:"issues"`
 	NextPageToken string      `json:"nextPageToken,omitempty"`
+}
+
+// searchResponseV2 represents the offset-paginated search response.
+type searchResponseV2 struct {
+	StartAt    int         `json:"startAt"`
+	MaxResults int         `json:"maxResults"`
+	Total      int         `json:"total"`
+	Issues     []jiraIssue `json:"issues"`
 }
 
 // jiraIssue represents a single issue in a search or issue-detail response.
@@ -99,13 +107,15 @@ type jiraComment struct {
 // normalizeSearchIssue maps a Jira API issue to a domain.Issue. The
 // endpoint is used to construct the browse URL. Labels are lowercased,
 // priority parsed as integer (nil on failure), and blocker refs
-// extracted from issuelinks.
-func normalizeSearchIssue(endpoint string, ji jiraIssue) domain.Issue {
+// extracted from issuelinks. The description body is extracted per
+// apiVersion: ADF is flattened on "3", the raw wiki-markup string is
+// preserved on "2".
+func normalizeSearchIssue(apiVersion, endpoint string, ji jiraIssue) domain.Issue {
 	issue := domain.Issue{
 		ID:          ji.ID,
 		Identifier:  ji.Key,
 		Title:       ji.Fields.Summary,
-		Description: flattenADF(unmarshalADF(ji.Fields.Description)),
+		Description: extractBody(apiVersion, ji.Fields.Description),
 		URL:         endpoint + "/browse/" + ji.Key,
 		CreatedAt:   ji.Fields.Created,
 		UpdatedAt:   ji.Fields.Updated,
@@ -162,14 +172,15 @@ func extractBlockers(links []jiraIssueLink) []domain.BlockerRef {
 }
 
 // normalizeComments maps Jira comment objects to domain.Comment
-// values. ADF bodies are flattened to plain text. Nil author fields
-// produce an empty author string.
-func normalizeComments(comments []jiraComment) []domain.Comment {
+// values. Comment bodies are extracted per apiVersion: ADF is
+// flattened on "3", the raw wiki-markup string is preserved on "2".
+// Nil author fields produce an empty author string.
+func normalizeComments(apiVersion string, comments []jiraComment) []domain.Comment {
 	source := make([]issuekit.SourceComment, len(comments))
 	for i, c := range comments {
 		source[i] = issuekit.SourceComment{
 			ID:        c.ID,
-			Body:      flattenADF(unmarshalADF(c.Body)),
+			Body:      extractBody(apiVersion, c.Body),
 			CreatedAt: c.Created,
 		}
 		if c.Author != nil {
@@ -177,6 +188,26 @@ func normalizeComments(comments []jiraComment) []domain.Comment {
 		}
 	}
 	return issuekit.NormalizeComments(source)
+}
+
+// extractBody returns the body text for a description or comment field
+// according to the API version. On version "2" the raw message is a
+// quoted JSON string carrying Jira wiki markup; it is decoded and
+// returned verbatim, with no markup translation. On any other version
+// the raw message is an ADF document, which is flattened to text.
+// Empty or invalid input yields an empty string.
+func extractBody(apiVersion string, raw json.RawMessage) string {
+	if apiVersion == "2" {
+		if len(raw) == 0 {
+			return ""
+		}
+		var s string
+		if err := json.Unmarshal(raw, &s); err != nil {
+			return ""
+		}
+		return s
+	}
+	return flattenADF(unmarshalADF(raw))
 }
 
 // unmarshalADF decodes a json.RawMessage into an any value suitable

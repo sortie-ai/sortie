@@ -89,6 +89,7 @@ type TrackerConfig struct {
 	QueryFilter     string
 	HandoffState    string
 	InProgressState string
+	APIVersion      string
 	Comments        TrackerCommentsConfig
 }
 
@@ -351,6 +352,11 @@ func buildTrackerConfig(m map[string]any, envKeys map[string]bool) TrackerConfig
 		inProgressState = resolveEnvRef(inProgressState)
 	}
 
+	apiVersion := extractString(m, "api_version")
+	if !envKeys["tracker.api_version"] {
+		apiVersion = resolveEnvRef(apiVersion)
+	}
+
 	return TrackerConfig{
 		Kind:            extractString(m, "kind"),
 		Endpoint:        endpoint,
@@ -361,6 +367,7 @@ func buildTrackerConfig(m map[string]any, envKeys map[string]bool) TrackerConfig
 		QueryFilter:     queryFilter,
 		HandoffState:    handoffState,
 		InProgressState: inProgressState,
+		APIVersion:      apiVersion,
 		Comments: TrackerCommentsConfig{
 			OnDispatch:   coerceBool(commentsMap, "on_dispatch"),
 			OnCompletion: coerceBool(commentsMap, "on_completion"),

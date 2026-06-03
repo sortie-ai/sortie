@@ -32,7 +32,7 @@ func TestNormalizeSearchIssue_AllFields(t *testing.T) {
 		},
 	}
 
-	issue := normalizeSearchIssue("https://test.atlassian.net", ji)
+	issue := normalizeSearchIssue("3", "https://test.atlassian.net", ji)
 
 	if issue.ID != "10001" {
 		t.Errorf("ID = %q, want %q", issue.ID, "10001")
@@ -99,7 +99,7 @@ func TestNormalizeSearchIssue_NilFields(t *testing.T) {
 		},
 	}
 
-	issue := normalizeSearchIssue("https://test.atlassian.net", ji)
+	issue := normalizeSearchIssue("3", "https://test.atlassian.net", ji)
 
 	if issue.State != "" {
 		t.Errorf("State = %q, want empty (nil status)", issue.State)
@@ -145,7 +145,7 @@ func TestNormalizeSearchIssue_NonIntegerPriority(t *testing.T) {
 			Priority: &jiraPriority{ID: "high"},
 		},
 	}
-	issue := normalizeSearchIssue("https://x.atlassian.net", ji)
+	issue := normalizeSearchIssue("3", "https://x.atlassian.net", ji)
 	if issue.Priority != nil {
 		t.Errorf("Priority = %v, want nil for non-integer id", issue.Priority)
 	}
@@ -187,7 +187,7 @@ func TestNormalizeSearchIssue_BlockerExtraction(t *testing.T) {
 		},
 	}
 
-	issue := normalizeSearchIssue("https://x.atlassian.net", ji)
+	issue := normalizeSearchIssue("3", "https://x.atlassian.net", ji)
 
 	if len(issue.BlockedBy) != 2 {
 		t.Fatalf("BlockedBy len = %d, want 2", len(issue.BlockedBy))
@@ -214,7 +214,7 @@ func TestNormalizeComments(t *testing.T) {
 				Created: "2025-01-01T00:00:00.000+0000",
 			},
 		}
-		result := normalizeComments(comments)
+		result := normalizeComments("3", comments)
 		if len(result) != 1 {
 			t.Fatalf("len = %d, want 1", len(result))
 		}
@@ -243,7 +243,7 @@ func TestNormalizeComments(t *testing.T) {
 				Created: "2025-01-01T00:00:00.000+0000",
 			},
 		}
-		result := normalizeComments(comments)
+		result := normalizeComments("3", comments)
 		if result[0].Author != "" {
 			t.Errorf("Author = %q, want empty for nil author", result[0].Author)
 		}
@@ -252,7 +252,7 @@ func TestNormalizeComments(t *testing.T) {
 	t.Run("empty list", func(t *testing.T) {
 		t.Parallel()
 
-		result := normalizeComments([]jiraComment{})
+		result := normalizeComments("3", []jiraComment{})
 		if result == nil {
 			t.Error("result is nil, want non-nil empty slice")
 		}
@@ -314,7 +314,7 @@ func TestNormalizeSearchIssue_EmptyLabelsSlice(t *testing.T) {
 			Labels: []string{},
 		},
 	}
-	issue := normalizeSearchIssue("https://x.atlassian.net", ji)
+	issue := normalizeSearchIssue("3", "https://x.atlassian.net", ji)
 	if issue.Labels == nil {
 		t.Error("Labels is nil, want non-nil empty slice")
 	}

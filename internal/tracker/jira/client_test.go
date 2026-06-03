@@ -2,6 +2,7 @@ package jira
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"io"
 	"net/http"
@@ -16,7 +17,8 @@ import (
 
 func newTestJiraClient(t *testing.T, baseURL, email, token string) *httpkit.Client {
 	t.Helper()
-	return newJiraClient(baseURL, email, token, "sortie/test")
+	authHeader := "Basic " + base64.StdEncoding.EncodeToString([]byte(email+":"+token))
+	return newJiraClient(baseURL, authHeader, "sortie/test")
 }
 
 func assertClientTrackerErrorKind(t *testing.T, err error, want domain.TrackerErrorKind) {
