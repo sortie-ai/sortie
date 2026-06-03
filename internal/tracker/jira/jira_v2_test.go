@@ -68,6 +68,11 @@ func TestNewJiraAdapter_APIVersion(t *testing.T) {
 			wantMsgSubs: []string{`"2"`, `"3"`},
 		},
 		{
+			name: "out-of-range whole float rejected", apiVersion: 1e20, present: true,
+			wantErr: true, wantKind: domain.ErrTrackerPayload,
+			wantMsgSubs: []string{`"2"`, `"3"`},
+		},
+		{
 			name: "non-coercible type rejected", apiVersion: []any{"2"}, present: true,
 			wantErr: true, wantKind: domain.ErrTrackerPayload,
 			wantMsgSubs: []string{`"2"`, `"3"`},
