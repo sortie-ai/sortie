@@ -64,7 +64,9 @@ variable indirection (e.g. `$JIRA_API_KEY`) if the config layer supports it.
 
 **Construction-time host/version guard:** A `.atlassian.net` endpoint combined with
 `api_version: "2"` is rejected at startup (`ErrTrackerPayload`). A non-`.atlassian.net`
-endpoint combined with `api_version: "3"` emits a warning and proceeds.
+endpoint combined with `api_version: "3"` emits a warning and proceeds, except for a
+loopback IP or `localhost` endpoint, which is a test or local-dev target and does not
+warn.
 
 **CAPTCHA caveat:** After several failed logins Jira triggers CAPTCHA and returns
 `X-Seraph-LoginReason: AUTHENTICATION_DENIED`. The adapter should detect this header and

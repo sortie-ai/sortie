@@ -353,6 +353,15 @@ func buildTrackerConfig(m map[string]any, envKeys map[string]bool) TrackerConfig
 	}
 
 	apiVersion := extractString(m, "api_version")
+	if apiVersion == "" {
+		// A bare YAML integer (api_version: 2) is not a string, so
+		// extractString yields ""; coerce a whole-number value to its
+		// decimal form so a Server/DC config written as api_version: 2 is
+		// not silently treated as absent and defaulted to v3.
+		if n, err := coerceInt(mapVal(m, "api_version")); err == nil {
+			apiVersion = strconv.Itoa(n)
+		}
+	}
 	if !envKeys["tracker.api_version"] {
 		apiVersion = resolveEnvRef(apiVersion)
 	}

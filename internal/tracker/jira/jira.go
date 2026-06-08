@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/url"
 	"strconv"
 	"strings"
@@ -240,7 +241,10 @@ func authFormatError(apiVersion string) error {
 // (one ending in .atlassian.net) combined with version "2" returns a
 // [*domain.TrackerError] of kind [domain.ErrTrackerPayload]. A
 // non-Cloud host combined with version "3" logs a warning and returns
-// nil so construction proceeds. All other combinations return nil.
+// nil so construction proceeds, except for a loopback or localhost host,
+// which is a test or local-dev endpoint and never a real Server / Data
+// Center instance, so it is not warned. All other combinations return
+// nil.
 func checkHostVersion(endpoint, apiVersion string) error {
 	parsed, err := url.Parse(endpoint)
 	if err != nil {
@@ -256,12 +260,24 @@ func checkHostVersion(endpoint, apiVersion string) error {
 		}
 	}
 
-	if !isCloud && apiVersion == "3" {
-		slog.Warn("tracker.api_version 3 against non-cloud endpoint will return 404",
+	if !isCloud && apiVersion == "3" && !isLocalEndpoint(host) {
+		slog.Warn("api_version 3 against non-cloud endpoint will return 404; set tracker.api_version 2 for jira server or data center",
 			slog.String("host", host))
 	}
 
 	return nil
+}
+
+// isLocalEndpoint reports whether host is a test or local-dev endpoint:
+// the literal "localhost" or a loopback IP address. Private IPs and
+// internal FQDNs are not local, since real Server / Data Center
+// instances commonly live on those.
+func isLocalEndpoint(host string) bool {
+	if host == "localhost" {
+		return true
+	}
+	ip := net.ParseIP(host)
+	return ip != nil && ip.IsLoopback()
 }
 
 // FetchCandidateIssues returns issues in configured active states
