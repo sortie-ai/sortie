@@ -7,6 +7,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Jira adapter: Jira Server and Data Center support via a new optional
+  `tracker.api_version` field. The default `"3"` targets Jira Cloud
+  (REST v3) and leaves existing configurations unchanged; `"2"` targets
+  Server / Data Center (REST v2), switching to `/rest/api/2` endpoints,
+  offset-based search pagination, and raw issue and comment bodies in
+  Jira wiki markup (the v3 ADF-to-text flattening does not run on v2, so
+  descriptions reach prompts as markup rather than plain text). On v2 the
+  `api_key` shape selects authentication: a colon-free value is sent as a
+  Personal Access Token (`Authorization: Bearer`), while a `user:password`
+  value uses HTTP Basic; Cloud v3 continues to use Basic `email:token`.
+  Comment creation posts a raw `{"body": ...}` payload on v2 instead of an
+  ADF document. A construction-time guard rejects inconsistent
+  configuration at startup: a Cloud (`*.atlassian.net`) endpoint combined
+  with `api_version: 2`, or an endpoint that is not a URL with a scheme and
+  host; it also warns when a self-hosted endpoint is left on the default
+  v3. A bare YAML integer (`api_version: 2`) is coerced rather than treated
+  as absent, though `sortie validate` still advises quoting it.
+  ([#549](https://github.com/sortie-ai/sortie/issues/549))
+
 ## [1.11.0] - 2026-05-29
 
 ### Added
