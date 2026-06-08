@@ -274,10 +274,11 @@ func TestNewJiraAdapter_HostVersionGuard_ConsistentCombos(t *testing.T) {
 }
 
 // TestNewJiraAdapter_HostVersionGuard_WarnArm covers the warn arm: a
-// non-Cloud host with api_version 3 constructs successfully and emits a
-// single warning that carries the host attribute and never the api_key.
-// It mutates the default slog logger, so it must not run in parallel and
-// must restore the prior default.
+// non-Cloud, non-loopback host with api_version 3 constructs
+// successfully and emits a single warning that carries the host
+// attribute and never the api_key. It mutates the default slog logger,
+// so it must not run in parallel (no t.Parallel anywhere in its chain)
+// and must restore the prior default.
 func TestNewJiraAdapter_HostVersionGuard_WarnArm(t *testing.T) {
 	prev := slog.Default()
 	t.Cleanup(func() { slog.SetDefault(prev) })
@@ -304,14 +305,65 @@ func TestNewJiraAdapter_HostVersionGuard_WarnArm(t *testing.T) {
 	if !strings.Contains(output, "level=WARN") {
 		t.Errorf("log output = %q, want a WARN line", output)
 	}
-	if !strings.Contains(output, "host=") {
-		t.Errorf("log output = %q, want a host attribute", output)
-	}
-	if !strings.Contains(output, "jira.internal.example.com") {
-		t.Errorf("log output = %q, want the endpoint host", output)
+	if !strings.Contains(output, "host=jira.internal.example.com") {
+		t.Errorf("log output = %q, want the host attribute carrying the endpoint host", output)
 	}
 	if strings.Contains(output, "secret_tok") {
 		t.Errorf("log output leaked api_key: %q", output)
+	}
+}
+
+// TestNewJiraAdapter_HostVersionGuard_WarnArmLocalSuppressed covers the
+// warn-arm exception: a loopback or localhost endpoint with api_version
+// 3 is a test or local-dev target, never a real Server / Data Center
+// instance, so construction succeeds and emits no warn line. It mutates
+// the default slog logger, so it must not run in parallel (no t.Parallel
+// anywhere in its chain) and must restore the prior default.
+func TestNewJiraAdapter_HostVersionGuard_WarnArmLocalSuppressed(t *testing.T) {
+	prev := slog.Default()
+	t.Cleanup(func() { slog.SetDefault(prev) })
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	tests := []struct {
+		name     string
+		endpoint string
+	}{
+		{name: "loopback IP", endpoint: srv.URL},
+		{name: "localhost", endpoint: "http://localhost:8080"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+
+			cfg := map[string]any{
+				"endpoint":    tt.endpoint,
+				"api_key":     "user@test.com:secret_tok",
+				"project":     "P",
+				"api_version": "3",
+			}
+
+			a, err := NewJiraAdapter(cfg)
+			if err != nil {
+				t.Fatalf("NewJiraAdapter (local endpoint) unexpected error: %v", err)
+			}
+			if a == nil {
+				t.Fatal("adapter is nil; a local endpoint must not block construction")
+			}
+
+			output := buf.String()
+			if strings.Contains(output, "level=WARN") {
+				t.Errorf("log output = %q, want no WARN line for a local endpoint", output)
+			}
+			if strings.Contains(output, "secret_tok") {
+				t.Errorf("log output leaked api_key: %q", output)
+			}
+		})
 	}
 }
 

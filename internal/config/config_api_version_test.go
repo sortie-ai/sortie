@@ -18,12 +18,18 @@ func TestBuildTrackerConfig_APIVersion(t *testing.T) {
 		assertStringEqual(t, "TrackerConfig.APIVersion", "", tc.APIVersion)
 	})
 
-	t.Run("non-string yields empty", func(t *testing.T) {
+	t.Run("bare integer coerced to string", func(t *testing.T) {
 		t.Parallel()
-		// extractString flattens a non-string to ""; the adapter applies
-		// the "3" default for an empty value.
+		// A bare YAML integer (api_version: 2) is coerced to its decimal
+		// string form so a Server/DC config is not silently defaulted to v3.
 		tc := buildTrackerConfig(map[string]any{"api_version": 2}, nil)
-		assertStringEqual(t, "TrackerConfig.APIVersion", "", tc.APIVersion)
+		assertStringEqual(t, "TrackerConfig.APIVersion", "2", tc.APIVersion)
+	})
+
+	t.Run("bare whole float coerced to string", func(t *testing.T) {
+		t.Parallel()
+		tc := buildTrackerConfig(map[string]any{"api_version": float64(2)}, nil)
+		assertStringEqual(t, "TrackerConfig.APIVersion", "2", tc.APIVersion)
 	})
 
 	t.Run("VAR indirection resolved", func(t *testing.T) {
@@ -70,16 +76,16 @@ func TestNewServiceConfig_APIVersion(t *testing.T) {
 		assertStringEqual(t, "Tracker.APIVersion", "2", cfg.Tracker.APIVersion)
 	})
 
-	t.Run("bare YAML integer loads without fatal error", func(t *testing.T) {
+	t.Run("bare YAML integer coerced and loads", func(t *testing.T) {
 		t.Parallel()
-		// A bare integer is accepted (flattened to "" here; the adapter
-		// applies its own coercion). Loading must not fail.
+		// A bare integer (api_version: 2) is coerced to "2" so a Server/DC
+		// config is not silently defaulted to v3. Loading must not fail.
 		cfg, err := NewServiceConfig(map[string]any{
 			"tracker": map[string]any{"kind": "jira", "api_version": 2},
 		})
 		if err != nil {
 			t.Fatalf("NewServiceConfig with bare integer api_version: %v", err)
 		}
-		assertStringEqual(t, "Tracker.APIVersion", "", cfg.Tracker.APIVersion)
+		assertStringEqual(t, "Tracker.APIVersion", "2", cfg.Tracker.APIVersion)
 	})
 }
