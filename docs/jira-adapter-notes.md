@@ -62,8 +62,9 @@ Encoding `email:token` in a single field follows curl convention (`-u email:toke
 adding Jira-specific config keys to the core schema. The value may be provided via environment
 variable indirection (e.g. `$JIRA_API_KEY`) if the config layer supports it.
 
-**Construction-time host/version guard:** A `.atlassian.net` endpoint combined with
-`api_version: "2"` is rejected at startup (`ErrTrackerPayload`). A non-`.atlassian.net`
+**Construction-time host/version guard:** An `endpoint` that is not a URL with a scheme
+and host is rejected at startup (`ErrTrackerPayload`). A `.atlassian.net` endpoint combined
+with `api_version: "2"` is rejected at startup (`ErrTrackerPayload`). A non-`.atlassian.net`
 endpoint combined with `api_version: "3"` emits a warning and proceeds, except for a
 loopback IP or `localhost` endpoint, which is a test or local-dev target and does not
 warn.
