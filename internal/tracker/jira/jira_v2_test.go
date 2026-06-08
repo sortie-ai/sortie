@@ -241,6 +241,44 @@ func TestNewJiraAdapter_HostVersionGuard_RejectCloudV2(t *testing.T) {
 	}
 }
 
+// TestNewJiraAdapter_HostVersionGuard_RejectUnparseableEndpoint verifies
+// that an endpoint without a scheme and host is rejected at construction
+// with ErrTrackerPayload and a nil adapter. The guard runs for both API
+// versions, so the cases cover v2 and v3.
+func TestNewJiraAdapter_HostVersionGuard_RejectUnparseableEndpoint(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		endpoint string
+		apiKey   string
+		version  string
+	}{
+		{name: "scheme-less host on v3", endpoint: "not-a-url", apiKey: "user@test.com:tok", version: "3"},
+		{name: "scheme-less host on v2", endpoint: "not-a-url", apiKey: "pat_token_abc", version: "2"},
+		{name: "malformed scheme on v3", endpoint: "://bad", apiKey: "user@test.com:tok", version: "3"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			cfg := map[string]any{
+				"endpoint":    tt.endpoint,
+				"api_key":     tt.apiKey,
+				"project":     "P",
+				"api_version": tt.version,
+			}
+
+			a, err := NewJiraAdapter(cfg)
+			assertTrackerErrorKind(t, err, domain.ErrTrackerPayload)
+			if a != nil {
+				t.Error("adapter should be nil when the endpoint is not a URL with a scheme and host")
+			}
+		})
+	}
+}
+
 // TestNewJiraAdapter_HostVersionGuard_ConsistentCombos verifies the two
 // consistent (host, version) pairs construct successfully.
 func TestNewJiraAdapter_HostVersionGuard_ConsistentCombos(t *testing.T) {

@@ -237,7 +237,8 @@ func authFormatError(apiVersion string) error {
 }
 
 // checkHostVersion runs a static consistency check between the endpoint
-// host and the API version. It performs no network I/O. A Cloud host
+// host and the API version. It also rejects an endpoint that is not a URL
+// with a scheme and host. It performs no network I/O. A Cloud host
 // (one ending in .atlassian.net) combined with version "2" returns a
 // [*domain.TrackerError] of kind [domain.ErrTrackerPayload]. A
 // non-Cloud host combined with version "3" logs a warning and returns
@@ -247,8 +248,11 @@ func authFormatError(apiVersion string) error {
 // nil.
 func checkHostVersion(endpoint, apiVersion string) error {
 	parsed, err := url.Parse(endpoint)
-	if err != nil {
-		return nil
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return &domain.TrackerError{
+			Kind:    domain.ErrTrackerPayload,
+			Message: fmt.Sprintf("endpoint %q must be a URL with a scheme and host", endpoint),
+		}
 	}
 	host := strings.ToLower(parsed.Hostname())
 	isCloud := strings.HasSuffix(host, ".atlassian.net")
@@ -520,8 +524,9 @@ func (a *JiraAdapter) CommentIssue(ctx context.Context, issueID string, text str
 }
 
 // commentPayload builds the comment-create request body for the given
-// API version. On version "2" it returns a raw wiki-markup string body;
-// on any other version it returns an ADF document.
+// API version. On version "2" it returns a {"body": <text>} object whose
+// body field carries the raw wiki-markup string; on any other version it
+// returns an ADF document.
 func commentPayload(apiVersion, text string) any {
 	if apiVersion == "2" {
 		return map[string]any{"body": text}
