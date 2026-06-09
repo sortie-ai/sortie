@@ -1777,19 +1777,21 @@ Invariants:
 - The registry is safe for concurrent reads after construction. Concurrent `Register` + `Get` is
   a data race; callers MUST NOT call `Register` after passing the registry to the orchestrator.
 - Duplicate names panic (programming error, not runtime input).
-- The registry feeds prompt-time tool advertisement. The runtime execution channel through
-  which agents invoke tools at call time (e.g., MCP sidecar, HTTP, in-process) is not yet
-  designed. See issue #224 for the execution channel design discussion.
+- The registry feeds prompt-time tool advertisement and the runtime execution channel through
+  which agents invoke tools at call time. The execution channel is an MCP stdio sidecar exposed
+  by the `sortie mcp-server` subcommand.
 
 #### 10.4.4 Tool tiers
 
 Tools are classified by their dependency profile. The tier determines security posture, test
 strategy, and failure characteristics.
 
-**Tier 1 — pure orchestrator state.** These tools read from local orchestrator state (in-memory
-session context or SQLite database) with zero external calls. They are deterministic, fast, and
-have no failure modes beyond internal bugs. No Tier 1 tools are currently implemented. See
-issues #226 and #227 for planned tools.
+**Tier 1 — pure orchestrator state.** These tools read from local session state (a workspace
+state file or the SQLite database) with zero external calls. They are deterministic, fast, and
+have no failure modes beyond internal bugs.
+
+- `sortie_status` (Section 10.4.5)
+- `workspace_history` (Section 10.4.5)
 
 **Tier 2 — external dependencies.** These tools interact with external services (tracker APIs,
 future SCM APIs) through network calls using orchestrator-managed credentials. They are subject
@@ -1799,9 +1801,13 @@ to transport failures, authentication errors, rate limits, and per-tool timeouts
 
 Future tools follow the same classification.
 
-#### 10.4.5 Built-in tool: `tracker_api`
+#### 10.4.5 Built-in tools
 
-`tracker_api` is a Tier 2 tool that executes queries and mutations against the configured issue
+Sortie registers the built-in tools below in the `ToolRegistry`, subject to each tool's
+availability conditions. The MCP server (`sortie mcp-server`, per ADR-0009) registers a tool
+only when its required inputs are present in the session environment.
+
+**`tracker_api` (Tier 2)** executes queries and mutations against the configured issue
 tracker using the orchestrator's tracker credentials.
 
 Availability: only meaningful when valid tracker auth is configured. When auth is absent, the
@@ -1838,6 +1844,41 @@ Result semantics:
 The response payload or error envelope is returned as structured JSON that the agent can inspect
 in-session.
 
+**`sortie_status` (Tier 1)** returns live session runtime metadata. It reads the
+worker-maintained session state file `.sortie/state.json` in the workspace and makes no external
+calls.
+
+Availability: registered when the session workspace path is present in the environment
+(`SORTIE_WORKSPACE`). The tool takes no input.
+
+Response fields:
+
+| Field | Type | Description |
+|---|---|---|
+| `turn_number` | integer | Current turn within the session |
+| `max_turns` | integer | Configured `agent.max_turns` |
+| `turns_remaining` | integer | `max_turns - turn_number`, clamped at 0 |
+| `attempt` | integer or null | Retry or continuation attempt number; null on the first run |
+| `session_duration_seconds` | number | Wall-clock seconds since the session started |
+| `tokens` | object | `input_tokens`, `output_tokens`, `total_tokens`, and `cache_read_tokens` |
+
+A tool-error response is returned when the state file is absent, a symlink, oversized, or
+malformed.
+
+**`workspace_history` (Tier 1)** returns the most recent completed run attempts for the current
+issue. It queries the `run_history` table (Section 19.2) through a read-only SQLite connection
+and makes no external calls.
+
+Availability: registered when the database path and issue ID are present in the environment
+(`SORTIE_DB_PATH`, `SORTIE_ISSUE_ID`). The tool takes no input.
+
+The response is a JSON object `{issue_id, entries}`, where `entries` lists at most the 10 most
+recent runs, newest first. Each entry has `attempt`, `agent_adapter`, `started_at`,
+`completed_at`, `status` (`succeeded`, `failed`, `timed_out`, `stalled`, or `cancelled`), and
+`error` (null unless the run failed).
+
+A tool-error response is returned when the history query fails.
+
 #### 10.4.6 Tools vs. agent-authored files
 
 The tool subsystem (this section) and the `.sortie/status` file protocol (Section 21) are
@@ -1850,7 +1891,7 @@ characteristics. This separation is a design choice, not an implementation accid
 | Property | Agent tools | `.sortie/status` file |
 |---|---|---|
 | Direction | Agent <-> Orchestrator (request-response) | Agent -> Orchestrator (one-way advisory) |
-| Transport | Tool call (mechanism TBD per Section 10.4.3) | Filesystem sentinel file |
+| Transport | Tool call (MCP stdio sidecar) | Filesystem sentinel file |
 | Timing | Synchronous, during a turn | Asynchronous, read after turn completes |
 | Purpose | Data access (tracker queries, orchestrator state) | Control flow (retry suppression, soft stop) |
 | Failure mode | Tool call fails; agent receives error and continues | File absent or unreadable; orchestrator proceeds normally |
@@ -1886,7 +1927,7 @@ execution channel), status file after the turn (Section 21.1, read timing per
 `agent-to-orchestrator-protocol.md` Section 3.1).
 
 **Defense in depth.** The independence of the two channels provides resilience. If the MCP
-execution channel is unavailable (not yet implemented, sidecar crash, agent lacks MCP support),
+execution channel is unavailable (sidecar crash, agent lacks MCP support),
 the file-based advisory signal still functions. If the filesystem is read-only or the workspace
 is on a remote host with restricted write access, tool calls still function. Neither channel is
 a single point of failure for the other.
@@ -3820,8 +3861,9 @@ Use the same validation profiles as Section 17:
 - Prometheus `/metrics` endpoint exposes defined gauges, counters, and histograms when the HTTP
   server is enabled (Section 13.7.3). Backed by `github.com/prometheus/client_golang` with a
   dedicated registry; no external Prometheus server required.
-- Agent tool subsystem: `ToolRegistry` populated at startup with `tracker_api` per Section 10.4.
-  Execution channel design and additional built-in tools are tracked in issues #224, #226, #227.
+- Agent tool subsystem: `ToolRegistry` populated with the built-in tools per Section 10.4
+  (`tracker_api`, `sortie_status`, `workspace_history`). The runtime execution channel is an
+  MCP stdio sidecar (per ADR-0009).
 - Make observability settings configurable in workflow front matter without prescribing UI
   implementation details.
 - First-class tracker write APIs (comments/state transitions) in the orchestrator, supplementing
