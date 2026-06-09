@@ -1787,8 +1787,10 @@ Tools are classified by their dependency profile. The tier determines security p
 strategy, and failure characteristics.
 
 **Tier 1 — pure orchestrator state.** These tools read from local session state (a workspace
-state file or the SQLite database) with zero external calls. They are deterministic, fast, and
-have no failure modes beyond internal bugs.
+state file or the SQLite database) with zero external calls. They are deterministic and fast.
+Beyond internal bugs, their only runtime failure mode is a tool-error response when the local
+state they read is missing or unreadable (for example, an absent or malformed state file, or a
+failed database query).
 
 - `sortie_status` (Section 10.4.5)
 - `workspace_history` (Section 10.4.5)
@@ -1862,8 +1864,8 @@ Response fields:
 | `session_duration_seconds` | number | Wall-clock seconds since the session started |
 | `tokens` | object | `input_tokens`, `output_tokens`, `total_tokens`, and `cache_read_tokens` |
 
-A tool-error response is returned when the state file is absent, a symlink, oversized, or
-malformed.
+On failure the tool returns a JSON error object of the form `{"error": "<message>"}`. This
+happens when the state file is absent, a symlink, oversized, or malformed.
 
 **`workspace_history` (Tier 1)** returns the most recent completed run attempts for the current
 issue. It queries the `run_history` table (Section 19.2) through a read-only SQLite connection
@@ -1877,7 +1879,8 @@ recent runs, newest first. Each entry has `attempt`, `agent_adapter`, `started_a
 `completed_at`, `status` (`succeeded`, `failed`, `timed_out`, `stalled`, or `cancelled`), and
 `error` (null unless the run failed).
 
-A tool-error response is returned when the history query fails.
+On failure the tool returns a JSON error object of the form `{"error": "<message>"}`. This
+happens when the history query fails.
 
 #### 10.4.6 Tools vs. agent-authored files
 
