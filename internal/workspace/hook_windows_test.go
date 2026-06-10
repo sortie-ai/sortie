@@ -5,6 +5,7 @@ package workspace
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -137,10 +138,11 @@ func TestRunHook_ProcessTreeKill(t *testing.T) {
 	// Job Object when the timeout fires.
 	script := "start /b ping.exe -n 30 127.0.0.1 & ping -n 30 127.0.0.1"
 
+	dir := t.TempDir()
 	start := time.Now()
 	_, err := RunHook(context.Background(), HookParams{
 		Script:    script,
-		Dir:       t.TempDir(),
+		Dir:       dir,
 		Env:       map[string]string{},
 		TimeoutMS: 300,
 	})
@@ -155,5 +157,13 @@ func TestRunHook_ProcessTreeKill(t *testing.T) {
 	elapsed := time.Since(start)
 	if elapsed > 5*time.Second {
 		t.Errorf("RunHook took %v after timeout; expected prompt return (< 5s)", elapsed)
+	}
+
+	// The drain guarantee: when RunHook returns, no descendant still holds
+	// a handle into the hook directory, so removal must succeed on the
+	// first immediate attempt. Before the drain this failed intermittently
+	// with a sharing violation raised by the dying background child.
+	if err := os.RemoveAll(dir); err != nil {
+		t.Errorf("hook dir removal immediately after RunHook = %v, want success", err)
 	}
 }

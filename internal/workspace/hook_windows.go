@@ -96,7 +96,10 @@ func RunHook(ctx context.Context, params HookParams) (HookResult, error) {
 	// with a sharing violation, so terminate any survivors explicitly
 	// and wait until the job reports zero active processes.
 	if job != 0 {
-		_ = windows.TerminateJobObject(job, statusControlCExit)
+		if termErr := windows.TerminateJobObject(job, statusControlCExit); termErr != nil {
+			slog.Warn("hook job termination after wait failed; drain may not settle",
+				slog.Any("error", termErr))
+		}
 		waitJobDrained(job)
 	}
 
@@ -225,7 +228,12 @@ func waitJobDrained(job windows.Handle) {
 			uint32(unsafe.Sizeof(info)),
 			nil,
 		)
-		if err != nil || info.ActiveProcesses == 0 {
+		if err != nil {
+			slog.Warn("hook job accounting query failed; drain skipped",
+				slog.Any("error", err))
+			return
+		}
+		if info.ActiveProcesses == 0 {
 			return
 		}
 		if time.Now().After(deadline) {
