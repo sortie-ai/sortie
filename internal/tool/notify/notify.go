@@ -2,8 +2,9 @@
 // tool. The tool fills a system-owned envelope from session context the
 // agent cannot forge, validates the agent-supplied message, enforces a
 // per-session cap, and delivers a normalized [domain.Notification] to
-// each configured backend. It knows nothing about Slack or HTTP;
-// backends arrive as a resolved slice of [domain.Notifier].
+// the configured backends in configuration order, stopping at the first
+// backend that fails. It knows nothing about Slack or HTTP; backends
+// arrive as a resolved slice of [domain.Notifier].
 package notify
 
 import (
@@ -126,10 +127,12 @@ type toolInput struct {
 }
 
 // Execute validates the message, enforces the per-session cap, and
-// delivers one [domain.Notification] to each configured backend in
-// order. Domain failures are encoded in the JSON result with
-// success: false and a nil Go error. The Go error return is reserved
-// for a result-marshal failure.
+// delivers one [domain.Notification] to the configured backends in
+// configuration order. The first backend that fails short-circuits the
+// loop and yields a send_failed result; partial delivery across
+// backends is not reported in this version. Domain failures are encoded
+// in the JSON result with success: false and a nil Go error. The Go
+// error return is reserved for a result-marshal failure.
 func (t *NotifyTool) Execute(ctx context.Context, input json.RawMessage) (json.RawMessage, error) {
 	var in toolInput
 	dec := json.NewDecoder(bytes.NewReader(input))
