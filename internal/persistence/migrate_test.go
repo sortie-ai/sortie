@@ -204,6 +204,10 @@ func TestMigrate_ColumnCorrectness(t *testing.T) {
 				{"review_metadata", "TEXT", false, 0},
 				{"rule_name", "TEXT", true, 0},
 				{"template_id", "TEXT", true, 0},
+				{"input_tokens", "INTEGER", true, 0},
+				{"output_tokens", "INTEGER", true, 0},
+				{"total_tokens", "INTEGER", true, 0},
+				{"cache_read_tokens", "INTEGER", true, 0},
 			},
 		},
 		{

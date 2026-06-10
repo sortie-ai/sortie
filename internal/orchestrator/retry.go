@@ -19,6 +19,7 @@ type RetryTimerStore interface {
 	SaveRetryEntry(ctx context.Context, entry persistence.RetryEntry) error
 	DeleteRetryEntry(ctx context.Context, issueID string) error
 	CountRunHistoryByIssue(ctx context.Context, issueID string) (int, error)
+	SumTotalTokensByIssue(ctx context.Context, issueID string) (int64, int, error)
 	MarkReactionDispatched(ctx context.Context, issueID, kind string) error
 }
 
@@ -95,6 +96,13 @@ type HandleRetryTimerParams struct {
 	// the claim instead of dispatching if the count has reached the
 	// budget. When 0, no budget is enforced.
 	MaxSessions int
+
+	// MaxTokens is the configured per-issue token budget (from
+	// config.Agent.MaxTokens). When > 0, HandleRetryTimer sums
+	// run_history total_tokens for the issue and releases the claim
+	// instead of dispatching if the sum has reached the budget. When 0,
+	// no token budget is enforced.
+	MaxTokens int
 
 	// Metrics records instrumentation counters for retry timer events.
 	// If nil, defaults to [domain.NoopMetrics].
@@ -197,6 +205,27 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 		return
 	}
 
+	// blockBudget releases the claim and drops the retry entry for an issue
+	// whose budget is exhausted, recording the firing ceiling's reason. The
+	// block is identical whichever ceiling triggers it; only the recorded
+	// reason differs. The token gate may call this after the session gate
+	// already did, overwriting the reason with the token budget so an issue
+	// exhausted on both axes reports the token budget.
+	blocked := false
+	blockBudget := func(reason string) {
+		state.BudgetExhausted[issueID] = struct{}{}
+		state.BudgetExhaustedReason[issueID] = reason
+		delete(state.Claimed, issueID)
+		if !blocked {
+			if err := params.Store.DeleteRetryEntry(ctx, issueID); err != nil {
+				log.Error("failed to delete retry entry after budget exhaustion",
+					slog.Any("error", err),
+				)
+			}
+		}
+		blocked = true
+	}
+
 	// Effort budget gate: when max_sessions > 0, count completed sessions
 	// for this issue and release the claim if the budget is exhausted.
 	// Runs before the tracker fetch to avoid a wasted network call.
@@ -211,15 +240,36 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 				slog.Int("count", count),
 				slog.Int("max_sessions", params.MaxSessions),
 			)
-			state.BudgetExhausted[issueID] = struct{}{}
-			delete(state.Claimed, issueID)
-			if err := params.Store.DeleteRetryEntry(ctx, issueID); err != nil {
-				log.Error("failed to delete retry entry after budget exhaustion",
-					slog.Any("error", err),
-				)
-			}
-			return
+			blockBudget(budgetReasonSession)
 		}
+	}
+
+	// Token budget gate: when max_tokens > 0, sum completed-session tokens
+	// for this issue and release the claim if the budget is exhausted.
+	// Evaluated after the session gate so that an issue exhausted on both
+	// axes reports the token budget. A token-query error fails open on the
+	// token axis only: a session block already recorded above still holds.
+	// Runs before the tracker fetch.
+	if params.MaxTokens > 0 {
+		sumTokens, sessionCount, sumErr := params.Store.SumTotalTokensByIssue(ctx, issueID)
+		if sumErr != nil {
+			log.Warn("token budget check failed, proceeding with dispatch",
+				slog.Any("error", sumErr),
+			)
+		} else if sumTokens >= int64(params.MaxTokens) {
+			log.Warn("token budget exhausted, blocking re-dispatch",
+				slog.String("reason", budgetReasonToken),
+				slog.Int64("used_tokens", sumTokens),
+				slog.Int("budget_tokens", params.MaxTokens),
+				slog.Int("used_sessions", sessionCount),
+				slog.Int("budget_sessions", params.MaxSessions),
+			)
+			blockBudget(budgetReasonToken)
+		}
+	}
+
+	if blocked {
+		return
 	}
 
 	// Re-validate the issue with a single tracker API call instead of a

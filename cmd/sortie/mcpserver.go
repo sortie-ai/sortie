@@ -15,6 +15,7 @@ import (
 	"github.com/sortie-ai/sortie/internal/logging"
 	"github.com/sortie-ai/sortie/internal/persistence"
 	"github.com/sortie-ai/sortie/internal/registry"
+	"github.com/sortie-ai/sortie/internal/tool/budget"
 	"github.com/sortie-ai/sortie/internal/tool/history"
 	"github.com/sortie-ai/sortie/internal/tool/mcpserver"
 	"github.com/sortie-ai/sortie/internal/tool/status"
@@ -110,6 +111,8 @@ func runMCPServer(ctx context.Context, args []string, stdout io.Writer, stderr i
 			} else {
 				defer store.Close() //nolint:errcheck // best-effort cleanup at shutdown
 				toolRegistry.Register(history.New(buildHistoryQuery(store), issueID))
+				runningSessionID := os.Getenv("SORTIE_SESSION_ID")
+				toolRegistry.Register(budget.New(buildBudgetQuery(store), issueID, runningSessionID, cfg.Agent.MaxTokens, cfg.Agent.MaxSessions))
 			}
 		}
 	}
@@ -121,6 +124,36 @@ func runMCPServer(ctx context.Context, args []string, stdout io.Writer, stderr i
 	}
 
 	return 0
+}
+
+func buildBudgetQuery(store *persistence.Store) budget.BudgetQueryFunc {
+	return func(ctx context.Context, issueID string, runningSessionID string) (budget.BudgetUsage, error) {
+		completedTotal, completedSessions, err := store.SumTotalTokensByIssue(ctx, issueID)
+		if err != nil {
+			return budget.BudgetUsage{}, err
+		}
+
+		usage := budget.BudgetUsage{
+			CompletedTotalTokens: completedTotal,
+			CompletedSessions:    completedSessions,
+		}
+
+		// The running session's recorded spend lives in session_metadata,
+		// which survives session exit. Add it only when the stored
+		// session ID matches the live session ID supplied out of band, so
+		// a stale earlier session's row is never double counted.
+		if runningSessionID == "" {
+			return usage, nil
+		}
+		meta, found, err := store.LoadSessionMetadata(ctx, issueID)
+		if err != nil {
+			return budget.BudgetUsage{}, err
+		}
+		if found && meta.SessionID == runningSessionID {
+			usage.RunningTotalTokens = meta.TotalTokens
+		}
+		return usage, nil
+	}
 }
 
 func buildHistoryQuery(store *persistence.Store) history.QueryFunc {

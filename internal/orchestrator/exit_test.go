@@ -303,6 +303,55 @@ func TestHandleWorkerExit_NormalExit(t *testing.T) {
 	}
 }
 
+// TestHandleWorkerExit_RunHistoryTokenColumns verifies the exit path copies
+// the running entry's accumulated token counters into the run_history row,
+// matching the totals it writes to session_metadata.
+func TestHandleWorkerExit_RunHistoryTokenColumns(t *testing.T) {
+	t.Parallel()
+
+	store := &mockExitStore{}
+	state := exitState(t, "ISSUE-TOK", nil)
+	entry := state.Running["ISSUE-TOK"]
+	entry.AgentInputTokens = 100
+	entry.AgentOutputTokens = 200
+	entry.AgentTotalTokens = 300
+	entry.CacheReadTokens = 40
+
+	HandleWorkerExit(state, WorkerResult{
+		IssueID:       "ISSUE-TOK",
+		Identifier:    "ISSUE-TOK-ident",
+		ExitKind:      WorkerExitNormal,
+		AgentAdapter:  "mock",
+		WorkspacePath: "/tmp/ws",
+	}, defaultExitParams(t, store))
+
+	if len(store.runHistories) != 1 {
+		t.Fatalf("AppendRunHistory called %d times, want 1", len(store.runHistories))
+	}
+	run := store.runHistories[0]
+	if run.InputTokens != 100 {
+		t.Errorf("RunHistory.InputTokens = %d, want 100", run.InputTokens)
+	}
+	if run.OutputTokens != 200 {
+		t.Errorf("RunHistory.OutputTokens = %d, want 200", run.OutputTokens)
+	}
+	if run.TotalTokens != 300 {
+		t.Errorf("RunHistory.TotalTokens = %d, want 300", run.TotalTokens)
+	}
+	if run.CacheReadTokens != 40 {
+		t.Errorf("RunHistory.CacheReadTokens = %d, want 40", run.CacheReadTokens)
+	}
+
+	// The same totals reach session_metadata at exit (advisory parity).
+	if len(store.sessionMetadata) != 1 {
+		t.Fatalf("UpsertSessionMetadata called %d times, want 1", len(store.sessionMetadata))
+	}
+	meta := store.sessionMetadata[0]
+	if meta.TotalTokens != run.TotalTokens {
+		t.Errorf("SessionMetadata.TotalTokens = %d, want %d (parity with run_history)", meta.TotalTokens, run.TotalTokens)
+	}
+}
+
 func TestHandleWorkerExit_RetryableError(t *testing.T) {
 	t.Parallel()
 

@@ -78,6 +78,7 @@ var envOverrides = []envOverride{
 	{"SORTIE_AGENT_MAX_TURNS", "agent", "max_turns", coerceEnvInt},
 	{"SORTIE_AGENT_MAX_RETRY_BACKOFF_MS", "agent", "max_retry_backoff_ms", coerceEnvInt},
 	{"SORTIE_AGENT_MAX_SESSIONS", "agent", "max_sessions", coerceEnvInt},
+	{"SORTIE_AGENT_MAX_TOKENS", "agent", "max_tokens", coerceEnvInt},
 
 	// Top-level
 	{"SORTIE_DB_PATH", "", "db_path", coerceString},

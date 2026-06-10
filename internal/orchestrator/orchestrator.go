@@ -35,7 +35,9 @@ type OrchestratorStore interface {
 	SaveRetryEntry(ctx context.Context, entry persistence.RetryEntry) error
 	DeleteRetryEntry(ctx context.Context, issueID string) error
 	CountRunHistoryByIssue(ctx context.Context, issueID string) (int, error)
+	SumTotalTokensByIssue(ctx context.Context, issueID string) (int64, int, error)
 	QueryBudgetExhaustedIssues(ctx context.Context, candidateIDs []string, maxSessions int) ([]string, error)
+	QueryTokenExhaustedIssues(ctx context.Context, candidateIDs []string, maxTokens int) ([]string, error)
 	DeleteReactionFingerprintsByIssue(ctx context.Context, issueID string) error
 	UpsertReactionFingerprint(ctx context.Context, issueID, kind, fingerprint string) error
 	GetReactionFingerprint(ctx context.Context, issueID, kind string) (fingerprint string, dispatched bool, err error)
@@ -338,6 +340,7 @@ func (o *Orchestrator) Run(ctx context.Context) {
 				Ctx:                ctx,
 				Logger:             o.logger,
 				MaxSessions:        cfg.Agent.MaxSessions,
+				MaxTokens:          cfg.Agent.MaxTokens,
 				Metrics:            o.metrics,
 				HostPool:           o.hostPool,
 				WorkflowFile:       o.workflowFile(),
@@ -347,6 +350,7 @@ func (o *Orchestrator) Run(ctx context.Context) {
 
 		case msg := <-o.agentEventCh:
 			HandleAgentEvent(o.state, msg.IssueID, msg.Event, o.logger, o.metrics)
+			o.maybeWriteIncrementalMetadata(ctx, msg.IssueID, msg.Event)
 
 		case msg := <-o.selfReviewCh:
 			if entry, ok := o.state.Running[msg.IssueID]; ok {
@@ -498,28 +502,7 @@ func (o *Orchestrator) handleTick(ctx context.Context) {
 
 	sorted := SortForDispatch(issues)
 
-	// Rebuild the BudgetExhausted set from run_history. One batch
-	// query per tick, scoped to the candidate set.
-	if cfg.Agent.MaxSessions > 0 && len(sorted) > 0 {
-		candidateIDs := make([]string, len(sorted))
-		for i, issue := range sorted {
-			candidateIDs[i] = issue.ID
-		}
-		exhaustedIDs, qErr := o.store.QueryBudgetExhaustedIssues(ctx, candidateIDs, cfg.Agent.MaxSessions)
-		if qErr != nil {
-			o.logger.Warn("budget exhaustion query failed, retaining previous set",
-				slog.Any("error", qErr),
-			)
-		} else {
-			fresh := make(map[string]struct{}, len(exhaustedIDs))
-			for _, id := range exhaustedIDs {
-				fresh[id] = struct{}{}
-			}
-			o.state.BudgetExhausted = fresh
-		}
-	} else if cfg.Agent.MaxSessions == 0 {
-		o.state.BudgetExhausted = make(map[string]struct{})
-	}
+	o.rebuildBudgetExhausted(ctx, cfg, sorted)
 
 	// Pre-build state sets once for the dispatch loop.
 	activeSet := stateSet(cfg.Tracker.ActiveStates)
@@ -716,6 +699,121 @@ func (o *Orchestrator) activateReconstructedRetries() {
 // running workers to exit during graceful shutdown.
 const defaultDrainTimeout = 30 * time.Second
 
+// sessionMetadataWriteInterval bounds how often the event loop writes an
+// in-flight session's token totals to session_metadata. At most one
+// incremental write per issue per interval, so the advisory cost reading
+// trails live spend by at most one interval plus whatever accrued since
+// the last token_usage event.
+const sessionMetadataWriteInterval = 2 * time.Second
+
+// maybeWriteIncrementalMetadata persists the running session's current
+// token totals to session_metadata when a token_usage event arrives and
+// the per-issue throttle interval has elapsed. It is a no-op for other
+// event types, for unknown issues, and while throttled. Must be called
+// from the orchestrator's single-writer event loop so it shares the one
+// SQLite writer and the running entry it mutates.
+func (o *Orchestrator) maybeWriteIncrementalMetadata(ctx context.Context, issueID string, event domain.AgentEvent) {
+	if event.Type != domain.EventTokenUsage {
+		return
+	}
+	entry := o.state.Running[issueID]
+	if entry == nil {
+		return
+	}
+	now := time.Now().UTC()
+	if !entry.LastMetadataWrite.IsZero() && now.Sub(entry.LastMetadataWrite) < sessionMetadataWriteInterval {
+		return
+	}
+
+	meta := persistence.SessionMetadata{
+		IssueID:         issueID,
+		SessionID:       entry.SessionID,
+		InputTokens:     entry.AgentInputTokens,
+		OutputTokens:    entry.AgentOutputTokens,
+		TotalTokens:     entry.AgentTotalTokens,
+		CacheReadTokens: entry.CacheReadTokens,
+		ModelName:       entry.ModelName,
+		APIRequestCount: entry.APIRequestCount,
+		UpdatedAt:       now.Format(time.RFC3339),
+	}
+	if entry.AgentPID != "" {
+		meta.AgentPID = &entry.AgentPID
+	}
+	if err := o.store.UpsertSessionMetadata(ctx, meta); err != nil {
+		o.logger.Error("failed to persist incremental session metadata",
+			slog.Any("error", err),
+		)
+		return
+	}
+	entry.LastMetadataWrite = now
+}
+
+// rebuildBudgetExhausted replaces the BudgetExhausted set and its reason
+// map once per tick from run_history, as the union of the session-count
+// and token-sum budgets scoped to the candidate set. An issue blocked on
+// either budget is in the rebuilt set; an issue blocked on both reports
+// the token budget. On a query error for one axis, the entire prior set
+// is folded in for that axis so a transient error never drops an issue
+// mid-tick. Must be called from the event loop goroutine.
+func (o *Orchestrator) rebuildBudgetExhausted(ctx context.Context, cfg config.ServiceConfig, sorted []domain.Issue) {
+	if cfg.Agent.MaxSessions == 0 && cfg.Agent.MaxTokens == 0 {
+		o.state.BudgetExhausted = make(map[string]struct{})
+		o.state.BudgetExhaustedReason = make(map[string]string)
+		return
+	}
+
+	candidateIDs := make([]string, len(sorted))
+	for i, issue := range sorted {
+		candidateIDs[i] = issue.ID
+	}
+
+	prior := o.state.BudgetExhausted
+	priorReason := o.state.BudgetExhaustedReason
+	fresh := make(map[string]struct{})
+	freshReason := make(map[string]string)
+
+	if cfg.Agent.MaxSessions > 0 {
+		sessionExhausted, qErr := o.store.QueryBudgetExhaustedIssues(ctx, candidateIDs, cfg.Agent.MaxSessions)
+		if qErr != nil {
+			o.logger.Warn("budget exhaustion query failed, retaining previous set",
+				slog.Any("error", qErr),
+			)
+			for id := range prior {
+				fresh[id] = struct{}{}
+				freshReason[id] = priorReason[id]
+			}
+		} else {
+			for _, id := range sessionExhausted {
+				fresh[id] = struct{}{}
+				freshReason[id] = budgetReasonSession
+			}
+		}
+	}
+
+	if cfg.Agent.MaxTokens > 0 {
+		tokenExhausted, qErr := o.store.QueryTokenExhaustedIssues(ctx, candidateIDs, cfg.Agent.MaxTokens)
+		if qErr != nil {
+			o.logger.Warn("token budget exhaustion query failed, retaining previous set",
+				slog.Any("error", qErr),
+			)
+			for id := range prior {
+				fresh[id] = struct{}{}
+				if _, ok := freshReason[id]; !ok {
+					freshReason[id] = priorReason[id]
+				}
+			}
+		} else {
+			for _, id := range tokenExhausted {
+				fresh[id] = struct{}{}
+				freshReason[id] = budgetReasonToken
+			}
+		}
+	}
+
+	o.state.BudgetExhausted = fresh
+	o.state.BudgetExhaustedReason = freshReason
+}
+
 // drainRunningWorkers cancels all running worker contexts and waits for
 // them to exit, processing each [WorkerResult] through [HandleWorkerExit]
 // for clean persistence. Agent events are processed through
@@ -772,6 +870,7 @@ func (o *Orchestrator) drainRunningWorkers() {
 
 		case msg := <-o.agentEventCh:
 			HandleAgentEvent(o.state, msg.IssueID, msg.Event, o.logger, o.metrics)
+			o.maybeWriteIncrementalMetadata(drainCtx, msg.IssueID, msg.Event)
 
 		case req := <-o.snapshotCh:
 			snap := RuntimeSnapshot(o.state, time.Now())

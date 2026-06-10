@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/sortie-ai/sortie/internal/domain"
+	"github.com/sortie-ai/sortie/internal/persistence"
 	"github.com/sortie-ai/sortie/internal/tool/mcpserver"
 	"github.com/sortie-ai/sortie/internal/tool/status"
 )
@@ -203,4 +205,135 @@ func TestMCPServerShortHelp(t *testing.T) {
 	if stderr.Len() != 0 {
 		t.Errorf("runMCPServer([-h]) stderr = %q, want empty", stderr.String())
 	}
+}
+
+// seedBudgetStore creates a migrated SQLite database with two completed
+// run_history rows (400 + 200 total tokens) for issue "iss-1" and a
+// session_metadata row for the live session "sess-live" carrying 150 total
+// tokens, then reopens it read-only as the sidecar does.
+func seedBudgetStore(t *testing.T) *persistence.Store {
+	t.Helper()
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "budget.db")
+
+	rw, err := persistence.Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("Open(%q): %v", dbPath, err)
+	}
+	if err := rw.Migrate(ctx); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+
+	for i, total := range []int64{400, 200} {
+		run := persistence.RunHistory{
+			IssueID:      "iss-1",
+			Identifier:   "PROJ-1",
+			Attempt:      i + 1,
+			AgentAdapter: "mock",
+			Workspace:    "/tmp/ws/PROJ-1",
+			StartedAt:    fmt.Sprintf("2026-03-19T10:%02d:00Z", i),
+			CompletedAt:  fmt.Sprintf("2026-03-19T10:%02d:30Z", i),
+			Status:       "succeeded",
+			TotalTokens:  total,
+		}
+		if _, err := rw.AppendRunHistory(ctx, run); err != nil {
+			t.Fatalf("AppendRunHistory(attempt %d): %v", i+1, err)
+		}
+	}
+
+	meta := persistence.SessionMetadata{
+		IssueID:     "iss-1",
+		SessionID:   "sess-live",
+		TotalTokens: 150,
+		UpdatedAt:   "2026-03-19T10:02:00Z",
+	}
+	if err := rw.UpsertSessionMetadata(ctx, meta); err != nil {
+		t.Fatalf("UpsertSessionMetadata: %v", err)
+	}
+
+	if err := rw.Close(); err != nil {
+		t.Fatalf("Close read-write store: %v", err)
+	}
+
+	ro, err := persistence.OpenReadOnly(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("OpenReadOnly(%q): %v", dbPath, err)
+	}
+	t.Cleanup(func() {
+		if err := ro.Close(); err != nil {
+			t.Errorf("Close read-only store: %v", err)
+		}
+	})
+	return ro
+}
+
+func TestBuildBudgetQuery(t *testing.T) {
+	t.Parallel()
+
+	t.Run("matching running session id adds running total", func(t *testing.T) {
+		t.Parallel()
+
+		query := buildBudgetQuery(seedBudgetStore(t))
+
+		usage, err := query(context.Background(), "iss-1", "sess-live")
+		if err != nil {
+			t.Fatalf("buildBudgetQuery query: %v", err)
+		}
+		if usage.CompletedTotalTokens != 600 {
+			t.Errorf("CompletedTotalTokens = %d, want 600", usage.CompletedTotalTokens)
+		}
+		if usage.CompletedSessions != 2 {
+			t.Errorf("CompletedSessions = %d, want 2", usage.CompletedSessions)
+		}
+		if usage.RunningTotalTokens != 150 {
+			t.Errorf("RunningTotalTokens = %d, want 150 (session_id matches)", usage.RunningTotalTokens)
+		}
+	})
+
+	t.Run("stale session row with different id is excluded", func(t *testing.T) {
+		t.Parallel()
+
+		query := buildBudgetQuery(seedBudgetStore(t))
+
+		// The stored row belongs to "sess-live"; the live session is a
+		// newer one, so the stale row must not be double counted.
+		usage, err := query(context.Background(), "iss-1", "sess-new")
+		if err != nil {
+			t.Fatalf("buildBudgetQuery query: %v", err)
+		}
+		if usage.CompletedTotalTokens != 600 {
+			t.Errorf("CompletedTotalTokens = %d, want 600", usage.CompletedTotalTokens)
+		}
+		if usage.RunningTotalTokens != 0 {
+			t.Errorf("RunningTotalTokens = %d, want 0 (stale session row)", usage.RunningTotalTokens)
+		}
+	})
+
+	t.Run("empty running session id contributes zero", func(t *testing.T) {
+		t.Parallel()
+
+		query := buildBudgetQuery(seedBudgetStore(t))
+
+		usage, err := query(context.Background(), "iss-1", "")
+		if err != nil {
+			t.Fatalf("buildBudgetQuery query: %v", err)
+		}
+		if usage.RunningTotalTokens != 0 {
+			t.Errorf("RunningTotalTokens = %d, want 0 (no running session id)", usage.RunningTotalTokens)
+		}
+	})
+
+	t.Run("issue with no history returns zero usage", func(t *testing.T) {
+		t.Parallel()
+
+		query := buildBudgetQuery(seedBudgetStore(t))
+
+		usage, err := query(context.Background(), "iss-none", "sess-live")
+		if err != nil {
+			t.Fatalf("buildBudgetQuery query: %v", err)
+		}
+		if usage.CompletedTotalTokens != 0 || usage.CompletedSessions != 0 || usage.RunningTotalTokens != 0 {
+			t.Errorf("usage = %+v, want all-zero", usage)
+		}
+	})
 }

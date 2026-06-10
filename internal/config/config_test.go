@@ -706,6 +706,56 @@ func TestNewServiceConfig(t *testing.T) {
 		assertConfigErrorField(t, err, "agent.max_sessions")
 	})
 
+	t.Run("MaxTokens/DefaultIsZero", func(t *testing.T) {
+		t.Parallel()
+		cfg, err := NewServiceConfig(map[string]any{})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		assertIntEqual(t, "Agent.MaxTokens", 0, cfg.Agent.MaxTokens)
+	})
+
+	t.Run("MaxTokens/ExplicitZero", func(t *testing.T) {
+		t.Parallel()
+		cfg, err := NewServiceConfig(map[string]any{
+			"agent": map[string]any{"max_tokens": 0},
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		assertIntEqual(t, "Agent.MaxTokens", 0, cfg.Agent.MaxTokens)
+	})
+
+	t.Run("MaxTokens/PositiveInteger", func(t *testing.T) {
+		t.Parallel()
+		cfg, err := NewServiceConfig(map[string]any{
+			"agent": map[string]any{"max_tokens": 500000},
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		assertIntEqual(t, "Agent.MaxTokens", 500000, cfg.Agent.MaxTokens)
+	})
+
+	t.Run("MaxTokens/StringCoercion", func(t *testing.T) {
+		t.Parallel()
+		cfg, err := NewServiceConfig(map[string]any{
+			"agent": map[string]any{"max_tokens": "500000"},
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		assertIntEqual(t, "Agent.MaxTokens", 500000, cfg.Agent.MaxTokens)
+	})
+
+	t.Run("MaxTokens/NegativeRejected", func(t *testing.T) {
+		t.Parallel()
+		_, err := NewServiceConfig(map[string]any{
+			"agent": map[string]any{"max_tokens": -1},
+		})
+		assertConfigErrorField(t, err, "agent.max_tokens")
+	})
+
 	// --- InProgressState subtests ---
 
 	t.Run("InProgressState/Absent", func(t *testing.T) {
@@ -1291,6 +1341,7 @@ func TestNewServiceConfigEnvOverrides(t *testing.T) {
 		t.Setenv("SORTIE_AGENT_MAX_TURNS", "15")
 		t.Setenv("SORTIE_AGENT_MAX_RETRY_BACKOFF_MS", "99999")
 		t.Setenv("SORTIE_AGENT_MAX_SESSIONS", "3")
+		t.Setenv("SORTIE_AGENT_MAX_TOKENS", "750000")
 
 		cfg, err := NewServiceConfig(map[string]any{})
 		if err != nil {
@@ -1303,6 +1354,49 @@ func TestNewServiceConfigEnvOverrides(t *testing.T) {
 		assertIntEqual(t, "Agent.MaxTurns", 15, cfg.Agent.MaxTurns)
 		assertIntEqual(t, "Agent.MaxRetryBackoffMS", 99999, cfg.Agent.MaxRetryBackoffMS)
 		assertIntEqual(t, "Agent.MaxSessions", 3, cfg.Agent.MaxSessions)
+		assertIntEqual(t, "Agent.MaxTokens", 750000, cfg.Agent.MaxTokens)
+	})
+
+	t.Run("MaxTokensOverrideBeatsFrontMatter", func(t *testing.T) {
+		t.Setenv("SORTIE_AGENT_MAX_TOKENS", "200000")
+		cfg, err := NewServiceConfig(map[string]any{
+			"agent": map[string]any{"max_tokens": 100000},
+		})
+		if err != nil {
+			t.Fatalf("NewServiceConfig: %v", err)
+		}
+		assertIntEqual(t, "Agent.MaxTokens", 200000, cfg.Agent.MaxTokens)
+	})
+
+	t.Run("MaxTokensDynamicReload", func(t *testing.T) {
+		// First parse with one front-matter value.
+		cfg1, err := NewServiceConfig(map[string]any{
+			"agent": map[string]any{"max_tokens": 100000},
+		})
+		if err != nil {
+			t.Fatalf("first NewServiceConfig: %v", err)
+		}
+		assertIntEqual(t, "Agent.MaxTokens (1st)", 100000, cfg1.Agent.MaxTokens)
+
+		// Simulate dynamic reload: the re-parsed front matter carries a
+		// new value, which must be re-applied.
+		cfg2, err := NewServiceConfig(map[string]any{
+			"agent": map[string]any{"max_tokens": 250000},
+		})
+		if err != nil {
+			t.Fatalf("second NewServiceConfig: %v", err)
+		}
+		assertIntEqual(t, "Agent.MaxTokens (2nd)", 250000, cfg2.Agent.MaxTokens)
+
+		// An env override set between reloads applies on the next re-parse.
+		t.Setenv("SORTIE_AGENT_MAX_TOKENS", "300000")
+		cfg3, err := NewServiceConfig(map[string]any{
+			"agent": map[string]any{"max_tokens": 250000},
+		})
+		if err != nil {
+			t.Fatalf("third NewServiceConfig: %v", err)
+		}
+		assertIntEqual(t, "Agent.MaxTokens (3rd)", 300000, cfg3.Agent.MaxTokens)
 	})
 
 	t.Run("TrackerStringOverridesAllFields", func(t *testing.T) {

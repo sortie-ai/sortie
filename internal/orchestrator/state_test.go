@@ -738,6 +738,67 @@ func TestRuntimeSnapshot(t *testing.T) {
 		}
 	})
 
+	t.Run("BudgetExhaustedReason projected for every exhausted issue", func(t *testing.T) {
+		t.Parallel()
+
+		state := NewState(5000, 10, nil, AgentTotals{})
+		state.BudgetExhausted["ISS-A"] = struct{}{}
+		state.BudgetExhaustedReason["ISS-A"] = budgetReasonToken
+		state.BudgetExhausted["ISS-B"] = struct{}{}
+		state.BudgetExhaustedReason["ISS-B"] = budgetReasonSession
+
+		result := RuntimeSnapshot(state, fixedNow)
+
+		if got := result.BudgetExhaustedReason["ISS-A"]; got != budgetReasonToken {
+			t.Errorf("BudgetExhaustedReason[ISS-A] = %q, want %q", got, budgetReasonToken)
+		}
+		if got := result.BudgetExhaustedReason["ISS-B"]; got != budgetReasonSession {
+			t.Errorf("BudgetExhaustedReason[ISS-B] = %q, want %q", got, budgetReasonSession)
+		}
+		// Total coverage: the projected reason map carries exactly the
+		// issues in the projected set.
+		if len(result.BudgetExhaustedReason) != len(result.BudgetExhausted) {
+			t.Errorf("len(BudgetExhaustedReason) = %d, want %d (one reason per exhausted issue)",
+				len(result.BudgetExhaustedReason), len(result.BudgetExhausted))
+		}
+		for _, id := range result.BudgetExhausted {
+			if _, ok := result.BudgetExhaustedReason[id]; !ok {
+				t.Errorf("BudgetExhaustedReason missing entry for %q", id)
+			}
+		}
+	})
+
+	t.Run("BudgetExhaustedReason omits issues outside the exhausted set", func(t *testing.T) {
+		t.Parallel()
+
+		state := NewState(5000, 10, nil, AgentTotals{})
+		state.BudgetExhausted["ISS-A"] = struct{}{}
+		state.BudgetExhaustedReason["ISS-A"] = budgetReasonToken
+		// A stray reason without a set entry must not be projected.
+		state.BudgetExhaustedReason["ISS-GONE"] = budgetReasonSession
+
+		result := RuntimeSnapshot(state, fixedNow)
+
+		if got, ok := result.BudgetExhaustedReason["ISS-GONE"]; ok {
+			t.Errorf("BudgetExhaustedReason[ISS-GONE] = %q, want absent (not in BudgetExhausted)", got)
+		}
+		if len(result.BudgetExhaustedReason) != 1 {
+			t.Errorf("len(BudgetExhaustedReason) = %d, want 1", len(result.BudgetExhaustedReason))
+		}
+	})
+
+	t.Run("empty BudgetExhausted omits the reason map", func(t *testing.T) {
+		t.Parallel()
+
+		state := NewState(5000, 10, nil, AgentTotals{})
+
+		result := RuntimeSnapshot(state, fixedNow)
+
+		if result.BudgetExhaustedReason != nil {
+			t.Errorf("BudgetExhaustedReason = %v, want nil for an empty exhausted set", result.BudgetExhaustedReason)
+		}
+	})
+
 	t.Run("DisplayID propagated from Issue.DisplayID to running snapshot", func(t *testing.T) {
 		t.Parallel()
 

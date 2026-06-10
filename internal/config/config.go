@@ -133,6 +133,10 @@ type AgentConfig struct {
 	MaxRetryBackoffMS    int
 	MaxConcurrentByState map[string]int
 	MaxSessions          int
+
+	// MaxTokens is the cumulative per-issue token ceiling enforced at
+	// dispatch preflight. 0 means unlimited.
+	MaxTokens int
 }
 
 // knownTopLevelKeys enumerates the front matter keys consumed by the
@@ -533,6 +537,17 @@ func buildAgentConfig(m map[string]any) (AgentConfig, error) {
 		}
 	}
 
+	maxTokens, err := coerceIntField(m, "max_tokens", "agent.max_tokens")
+	if err != nil {
+		return AgentConfig{}, err
+	}
+	if maxTokens < 0 {
+		return AgentConfig{}, &ConfigError{
+			Field:   "agent.max_tokens",
+			Message: "must be non-negative",
+		}
+	}
+
 	return AgentConfig{
 		Kind:                 kind,
 		Command:              command,
@@ -544,6 +559,7 @@ func buildAgentConfig(m map[string]any) (AgentConfig, error) {
 		MaxRetryBackoffMS:    maxRetryBackoff,
 		MaxConcurrentByState: byState,
 		MaxSessions:          maxSessions,
+		MaxTokens:            maxTokens,
 	}, nil
 }
 
