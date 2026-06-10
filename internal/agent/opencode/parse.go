@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"slices"
+	"strings"
 
 	"github.com/sortie-ai/sortie/internal/agent/sshutil"
 )
@@ -215,6 +216,68 @@ func queryExportUsage(ctx context.Context, state *sessionState) exportUsage {
 		state.logger().Warn("no assistant token usage found in opencode export")
 	}
 	return usage
+}
+
+// queryModelNotFound reports whether the model configured for this session is
+// absent from the catalog served by `opencode models`. OpenCode 1.16.0 and
+// later replace the unknown-model failure on the run stream with a generic
+// masked server error, so the adapter restores the actionable diagnostic by
+// checking the catalog itself. ok is false when no model is configured, the
+// listing fails or is empty, or the model is present.
+func queryModelNotFound(ctx context.Context, state *sessionState) (message string, ok bool) {
+	model := state.passthrough.Model
+	if model == "" {
+		return "", false
+	}
+
+	env, err := buildRunEnv(os.Environ(), state.passthrough)
+	if err != nil {
+		state.logger().Warn("failed to build opencode models environment", slog.Any("error", err))
+		return "", false
+	}
+
+	managedEnv, err := buildManagedEnv(state.passthrough)
+	if err != nil {
+		state.logger().Warn("failed to build opencode managed environment", slog.Any("error", err))
+		return "", false
+	}
+
+	queryCtx, cancel := context.WithTimeout(ctx, exportTimeout(state))
+	defer cancel()
+
+	modelsArgs := []string{"models"}
+	var cmd *exec.Cmd
+	if state.target.RemoteCommand != "" {
+		remoteCommand := buildSSHRemoteCommand(state.target.RemoteCommand, managedEnv)
+		sshArgs := sshutil.BuildSSHArgs(
+			state.target.SSHHost,
+			state.target.WorkspacePath,
+			remoteCommand,
+			modelsArgs,
+			sshutil.SSHOptions{StrictHostKeyChecking: state.target.SSHStrictHostKeyChecking},
+		)
+		cmd = exec.CommandContext(queryCtx, state.target.Command, sshArgs...) //nolint:gosec // args are constructed programmatically with shell quoting
+	} else {
+		allArgs := append(slices.Clone(state.target.Args), modelsArgs...)
+		cmd = exec.CommandContext(queryCtx, state.target.Command, allArgs...) //nolint:gosec // args are constructed programmatically
+	}
+	cmd.Dir = state.target.WorkspacePath
+	cmd.Env = env
+
+	stdout, err := cmd.Output()
+	if err != nil {
+		state.logger().Warn("failed to list opencode models", slog.Any("error", err))
+		return "", false
+	}
+
+	// Model identifiers are provider/model slugs without whitespace, so the
+	// catalog collapses to one entry per field regardless of line endings.
+	entries := strings.Fields(string(stdout))
+	if len(entries) == 0 || slices.Contains(entries, model) {
+		return "", false
+	}
+
+	return "Model not found: " + model, true
 }
 
 // parseExportOutput extracts token usage from the JSON returned by

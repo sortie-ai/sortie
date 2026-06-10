@@ -523,6 +523,148 @@ func TestRunTurn_LogicalFailureDualError(t *testing.T) {
 	}
 }
 
+// writeMaskedRunScript writes a fake opencode whose run stream emits only the
+// masked generic server error and whose models subcommand runs modelsCase.
+func writeMaskedRunScript(t *testing.T, dir, modelsCase string) string {
+	t.Helper()
+
+	runPath := filepath.Join(dir, "logical_failure_masked_error.jsonl")
+	if err := os.WriteFile(runPath, loadFixture(t, "logical_failure_masked_error.jsonl"), 0o644); err != nil {
+		t.Fatalf("WriteFile(logical_failure_masked_error.jsonl): %v", err)
+	}
+
+	exportPath := filepath.Join(dir, "export.json")
+	if err := os.WriteFile(exportPath, []byte(`{"messages":[]}`), 0o644); err != nil {
+		t.Fatalf("WriteFile(export.json): %v", err)
+	}
+
+	body := `case "$1" in
+  export) cat '` + exportPath + `'; exit 0;;
+  models) ` + modelsCase + `;;
+esac
+cat '` + runPath + `'`
+
+	return writeOpenCodeScript(t, dir, body)
+}
+
+func collectTurnFailedMessages(events []domain.AgentEvent) []string {
+	var messages []string
+	for _, event := range events {
+		if event.Type == domain.EventTurnFailed {
+			messages = append(messages, event.Message)
+		}
+	}
+	return messages
+}
+
+func TestRunTurn_MaskedErrorRecoversModelNotFound(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	script := writeMaskedRunScript(t, tmpDir, `printf 'opencode/big-pickle\nanthropic/claude-sonnet-4-6\n'; exit 0`)
+
+	a, _ := NewOpenCodeAdapter(map[string]any{"model": "nonexistent/nonexistent"})
+	session := mustStartSession(t, a, tmpDir, script)
+
+	events, result, err := collectEvents(t, a, session, "work")
+	if err != nil {
+		t.Fatalf("RunTurn() error = %v, want nil", err)
+	}
+	if result.ExitReason != domain.EventTurnFailed {
+		t.Errorf("ExitReason = %q, want %q", result.ExitReason, domain.EventTurnFailed)
+	}
+
+	messages := collectTurnFailedMessages(events)
+	if len(messages) != 2 {
+		t.Fatalf("turn_failed count = %d, want 2 (masked relay plus recovered detail), messages=%q", len(messages), messages)
+	}
+	if !strings.Contains(messages[0], "Unexpected server error") {
+		t.Errorf("first turn_failed message = %q, want substring %q", messages[0], "Unexpected server error")
+	}
+	if messages[1] != "Model not found: nonexistent/nonexistent" {
+		t.Errorf("second turn_failed message = %q, want %q", messages[1], "Model not found: nonexistent/nonexistent")
+	}
+}
+
+func TestRunTurn_MaskedErrorModelListed(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	script := writeMaskedRunScript(t, tmpDir, `printf 'opencode/big-pickle\nexisting/model\n'; exit 0`)
+
+	a, _ := NewOpenCodeAdapter(map[string]any{"model": "existing/model"})
+	session := mustStartSession(t, a, tmpDir, script)
+
+	events, result, err := collectEvents(t, a, session, "work")
+	if err != nil {
+		t.Fatalf("RunTurn() error = %v, want nil", err)
+	}
+	if result.ExitReason != domain.EventTurnFailed {
+		t.Errorf("ExitReason = %q, want %q", result.ExitReason, domain.EventTurnFailed)
+	}
+
+	messages := collectTurnFailedMessages(events)
+	if len(messages) != 1 {
+		t.Fatalf("turn_failed count = %d, want 1 (listed model must not be reported missing), messages=%q", len(messages), messages)
+	}
+	if !strings.Contains(messages[0], "Unexpected server error") {
+		t.Errorf("turn_failed message = %q, want substring %q", messages[0], "Unexpected server error")
+	}
+}
+
+func TestRunTurn_MaskedErrorModelsCommandFails(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	script := writeMaskedRunScript(t, tmpDir, `exit 1`)
+
+	a, _ := NewOpenCodeAdapter(map[string]any{"model": "nonexistent/nonexistent"})
+	session := mustStartSession(t, a, tmpDir, script)
+
+	events, result, err := collectEvents(t, a, session, "work")
+	if err != nil {
+		t.Fatalf("RunTurn() error = %v, want nil", err)
+	}
+	if result.ExitReason != domain.EventTurnFailed {
+		t.Errorf("ExitReason = %q, want %q", result.ExitReason, domain.EventTurnFailed)
+	}
+
+	messages := collectTurnFailedMessages(events)
+	if len(messages) != 1 {
+		t.Fatalf("turn_failed count = %d, want 1 (failed listing must not invent detail), messages=%q", len(messages), messages)
+	}
+	if !strings.Contains(messages[0], "Unexpected server error") {
+		t.Errorf("turn_failed message = %q, want substring %q", messages[0], "Unexpected server error")
+	}
+}
+
+func TestRunTurn_MaskedErrorNoModelConfigured(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	sentinel := filepath.Join(tmpDir, "models-invoked")
+	script := writeMaskedRunScript(t, tmpDir, `touch '`+sentinel+`'; exit 0`)
+
+	a, _ := NewOpenCodeAdapter(map[string]any{})
+	session := mustStartSession(t, a, tmpDir, script)
+
+	events, result, err := collectEvents(t, a, session, "work")
+	if err != nil {
+		t.Fatalf("RunTurn() error = %v, want nil", err)
+	}
+	if result.ExitReason != domain.EventTurnFailed {
+		t.Errorf("ExitReason = %q, want %q", result.ExitReason, domain.EventTurnFailed)
+	}
+
+	messages := collectTurnFailedMessages(events)
+	if len(messages) != 1 {
+		t.Fatalf("turn_failed count = %d, want 1, messages=%q", len(messages), messages)
+	}
+	if _, err := os.Stat(sentinel); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("models subcommand was invoked without a configured model (sentinel stat err = %v)", err)
+	}
+}
+
 func TestRunTurn_OversizedStdoutLine(t *testing.T) {
 	t.Parallel()
 
