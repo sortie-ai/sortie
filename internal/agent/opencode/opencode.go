@@ -1,7 +1,10 @@
 // Package opencode implements [domain.AgentAdapter] for the OpenCode CLI.
 // It launches one `opencode run --format json` subprocess per turn,
 // normalizes stdout envelopes into domain events, and recovers final token
-// usage with `opencode export --sanitize`.
+// usage with `opencode export --sanitize`. When a turn fails with only
+// opencode's masked generic server error, the adapter consults
+// `opencode models` to restore the unknown-model diagnostic that OpenCode
+// 1.16.0 and later no longer emit on the run stream.
 package opencode
 
 import (
@@ -495,6 +498,12 @@ func (a *OpenCodeAdapter) finalizeExitedTurn(ctx context.Context, state *session
 	sessionID := state.currentSessionID()
 
 	if runtime.terminalError != nil {
+		if isMaskedServerError(rawRunErrorMessage(runtime.terminalError)) {
+			if detail, ok := queryModelNotFound(ctx, state); ok {
+				state.logger().Debug("recovered masked opencode failure detail", slog.String("detail", detail))
+				agentcore.EmitTurnFailed(emit, detail, 0)
+			}
+		}
 		procutil.EmitWarnLines(stderrLines, state.logger())
 		return domain.TurnResult{
 			SessionID:  sessionID,
@@ -784,6 +793,17 @@ func rawRunErrorMessage(runErr *rawRunError) string {
 		return runErr.Name
 	}
 	return "opencode reported an unknown error"
+}
+
+// maskedServerErrorMessage is the placeholder opencode emits on the run
+// stream when its server error boundary swallows an unhandled internal
+// failure, hiding the underlying cause from the JSON events.
+const maskedServerErrorMessage = "Unexpected server error. Check server logs for details."
+
+// isMaskedServerError reports whether message carries no failure detail
+// beyond opencode's generic server-error placeholder.
+func isMaskedServerError(message string) bool {
+	return strings.TrimSpace(message) == maskedServerErrorMessage
 }
 
 func portExitMessage(exit waitResult) string {
