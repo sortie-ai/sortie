@@ -1,9 +1,11 @@
 package orchestrator
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"log/slog"
+	"strings"
 	"testing"
 	"time"
 
@@ -24,6 +26,11 @@ type mockRetryStore struct {
 	runHistoryCount           int
 	countRunHistoryByIssueErr error
 	countedIssueIDs           []string
+
+	tokenSum                 int64
+	tokenSessionCount        int
+	sumTotalTokensByIssueErr error
+	summedTokenIssueIDs      []string
 
 	markDispatchedCalls   int
 	markDispatchedIssueID string
@@ -46,6 +53,11 @@ func (m *mockRetryStore) DeleteRetryEntry(_ context.Context, issueID string) err
 func (m *mockRetryStore) CountRunHistoryByIssue(_ context.Context, issueID string) (int, error) {
 	m.countedIssueIDs = append(m.countedIssueIDs, issueID)
 	return m.runHistoryCount, m.countRunHistoryByIssueErr
+}
+
+func (m *mockRetryStore) SumTotalTokensByIssue(_ context.Context, issueID string) (int64, int, error) {
+	m.summedTokenIssueIDs = append(m.summedTokenIssueIDs, issueID)
+	return m.tokenSum, m.tokenSessionCount, m.sumTotalTokensByIssueErr
 }
 
 func (m *mockRetryStore) AppendRunHistory(_ context.Context, run persistence.RunHistory) (persistence.RunHistory, error) {
@@ -185,6 +197,7 @@ func TestHandleRetryTimer(t *testing.T) {
 		tracker func(issueID string) *mockRetryTracker
 		// overrides applied after defaultRetryParams
 		maxSessions int
+		maxTokens   int
 		workerFn    func(ch chan<- struct{}) WorkerFunc
 		// assertions
 		check func(t *testing.T, issueID string, state *State, store *mockRetryStore, tracker *mockRetryTracker, workerCalled bool)
@@ -890,6 +903,271 @@ func TestHandleRetryTimer(t *testing.T) {
 			},
 		},
 		{
+			name:      "token budget exhausted blocks dispatch and records reason",
+			issueID:   "ISS-TOK",
+			maxTokens: 1000,
+			state: func(t *testing.T, id string) *State {
+				t.Helper()
+				return retryState(t, id, "PROJ-TOK", 2)
+			},
+			store: func() *mockRetryStore {
+				return &mockRetryStore{tokenSum: 1000, tokenSessionCount: 2}
+			},
+			tracker: func(_ string) *mockRetryTracker {
+				return &mockRetryTracker{}
+			},
+			check: func(t *testing.T, id string, state *State, store *mockRetryStore, tracker *mockRetryTracker, _ bool) {
+				t.Helper()
+				// Claim released.
+				if _, claimed := state.Claimed[id]; claimed {
+					t.Errorf("Claimed[%s] still present, want released (token budget exhausted)", id)
+				}
+				// Not dispatched.
+				if _, running := state.Running[id]; running {
+					t.Errorf("Running[%s] present, want absent (token budget exhausted)", id)
+				}
+				// BudgetExhausted set must contain this issue with the token reason.
+				if _, exhausted := state.BudgetExhausted[id]; !exhausted {
+					t.Errorf("BudgetExhausted[%s] missing, want present after token budget exhaustion", id)
+				}
+				if got := state.BudgetExhaustedReason[id]; got != budgetReasonToken {
+					t.Errorf("BudgetExhaustedReason[%s] = %q, want %q", id, got, budgetReasonToken)
+				}
+				// The dispatcher gate must refuse the issue.
+				if ShouldDispatch(candidateIssue(id, "PROJ-TOK", "To Do"), state, []string{"To Do", "In Progress"}, []string{"Done"}) {
+					t.Errorf("ShouldDispatch(%s) = true, want false (token budget exhausted)", id)
+				}
+				// Tracker never called — budget checks run before fetch.
+				if tracker.fetchCount != 0 {
+					t.Errorf("FetchIssueByID call count = %d, want 0", tracker.fetchCount)
+				}
+				// DeleteRetryEntry called.
+				if len(store.deletedIssueID) != 1 || store.deletedIssueID[0] != id {
+					t.Errorf("DeleteRetryEntry calls = %v, want [%s]", store.deletedIssueID, id)
+				}
+				// SumTotalTokensByIssue was called with the correct ID.
+				if len(store.summedTokenIssueIDs) != 1 || store.summedTokenIssueIDs[0] != id {
+					t.Errorf("SumTotalTokensByIssue calls = %v, want [%s]", store.summedTokenIssueIDs, id)
+				}
+			},
+		},
+		{
+			name:      "token budget under limit allows dispatch",
+			issueID:   "ISS-TOK-UNDER",
+			maxTokens: 1000,
+			state: func(t *testing.T, id string) *State {
+				t.Helper()
+				return retryState(t, id, "PROJ-TOK-UNDER", 1)
+			},
+			store: func() *mockRetryStore {
+				return &mockRetryStore{tokenSum: 999, tokenSessionCount: 3}
+			},
+			tracker: func(id string) *mockRetryTracker {
+				return &mockRetryTracker{
+					fetchedIssue: candidateIssue(id, "PROJ-TOK-UNDER", "To Do"),
+				}
+			},
+			workerFn: func(ch chan<- struct{}) WorkerFunc {
+				return func(_ context.Context, _ domain.Issue, _ *int) {
+					ch <- struct{}{}
+				}
+			},
+			check: func(t *testing.T, id string, state *State, store *mockRetryStore, tracker *mockRetryTracker, workerCalled bool) {
+				t.Helper()
+				// Budget was checked.
+				if len(store.summedTokenIssueIDs) != 1 || store.summedTokenIssueIDs[0] != id {
+					t.Errorf("SumTotalTokensByIssue calls = %v, want [%s]", store.summedTokenIssueIDs, id)
+				}
+				// Tracker called and issue dispatched.
+				if tracker.fetchCount != 1 {
+					t.Errorf("FetchIssueByID call count = %d, want 1", tracker.fetchCount)
+				}
+				if _, ok := state.Running[id]; !ok {
+					t.Fatalf("Running[%s] missing after dispatch, want present", id)
+				}
+				if !workerCalled {
+					t.Error("worker function not invoked, want invoked")
+				}
+				// No reason recorded for a dispatched issue.
+				if got, ok := state.BudgetExhaustedReason[id]; ok {
+					t.Errorf("BudgetExhaustedReason[%s] = %q, want absent", id, got)
+				}
+			},
+		},
+		{
+			name:    "max_tokens zero skips token check",
+			issueID: "ISS-TOK-NOLIMIT",
+			state: func(t *testing.T, id string) *State {
+				t.Helper()
+				return retryState(t, id, "PROJ-TOK-NOLIMIT", 1)
+			},
+			store: func() *mockRetryStore {
+				return &mockRetryStore{tokenSum: 99999}
+			},
+			tracker: func(id string) *mockRetryTracker {
+				return &mockRetryTracker{
+					fetchedIssue: candidateIssue(id, "PROJ-TOK-NOLIMIT", "To Do"),
+				}
+			},
+			workerFn: func(ch chan<- struct{}) WorkerFunc {
+				return func(_ context.Context, _ domain.Issue, _ *int) {
+					ch <- struct{}{}
+				}
+			},
+			check: func(t *testing.T, id string, state *State, store *mockRetryStore, tracker *mockRetryTracker, workerCalled bool) {
+				t.Helper()
+				// SumTotalTokensByIssue never called — MaxTokens is 0.
+				if len(store.summedTokenIssueIDs) != 0 {
+					t.Errorf("SumTotalTokensByIssue calls = %v, want empty (MaxTokens=0)", store.summedTokenIssueIDs)
+				}
+				if tracker.fetchCount != 1 {
+					t.Errorf("FetchIssueByID call count = %d, want 1", tracker.fetchCount)
+				}
+				if _, ok := state.Running[id]; !ok {
+					t.Fatalf("Running[%s] missing after dispatch, want present", id)
+				}
+				if !workerCalled {
+					t.Error("worker function not invoked, want invoked")
+				}
+			},
+		},
+		{
+			name:      "token sum store error is fail-open",
+			issueID:   "ISS-TOK-FAIL",
+			maxTokens: 1000,
+			state: func(t *testing.T, id string) *State {
+				t.Helper()
+				return retryState(t, id, "PROJ-TOK-FAIL", 1)
+			},
+			store: func() *mockRetryStore {
+				return &mockRetryStore{
+					tokenSum:                 99999,
+					sumTotalTokensByIssueErr: errors.New("database locked"),
+				}
+			},
+			tracker: func(id string) *mockRetryTracker {
+				return &mockRetryTracker{
+					fetchedIssue: candidateIssue(id, "PROJ-TOK-FAIL", "To Do"),
+				}
+			},
+			workerFn: func(ch chan<- struct{}) WorkerFunc {
+				return func(_ context.Context, _ domain.Issue, _ *int) {
+					ch <- struct{}{}
+				}
+			},
+			check: func(t *testing.T, id string, state *State, store *mockRetryStore, tracker *mockRetryTracker, workerCalled bool) {
+				t.Helper()
+				// Sum was attempted.
+				if len(store.summedTokenIssueIDs) != 1 || store.summedTokenIssueIDs[0] != id {
+					t.Errorf("SumTotalTokensByIssue calls = %v, want [%s]", store.summedTokenIssueIDs, id)
+				}
+				// Tracker called — fail-open.
+				if tracker.fetchCount != 1 {
+					t.Errorf("FetchIssueByID call count = %d, want 1 (fail-open)", tracker.fetchCount)
+				}
+				// Issue dispatched despite sum error — never stranded.
+				if _, ok := state.Running[id]; !ok {
+					t.Fatalf("Running[%s] missing after dispatch, want present (fail-open)", id)
+				}
+				if !workerCalled {
+					t.Error("worker function not invoked, want invoked (fail-open)")
+				}
+				if _, exhausted := state.BudgetExhausted[id]; exhausted {
+					t.Errorf("BudgetExhausted[%s] present after fail-open, want absent", id)
+				}
+				// Claim preserved (issue is running).
+				if _, claimed := state.Claimed[id]; !claimed {
+					t.Errorf("Claimed[%s] missing, want claimed", id)
+				}
+			},
+		},
+		{
+			name:        "both budgets exhausted records token budget reason",
+			issueID:     "ISS-BOTH",
+			maxSessions: 3,
+			maxTokens:   1000,
+			state: func(t *testing.T, id string) *State {
+				t.Helper()
+				return retryState(t, id, "PROJ-BOTH", 2)
+			},
+			store: func() *mockRetryStore {
+				return &mockRetryStore{
+					runHistoryCount:   3,
+					tokenSum:          1500,
+					tokenSessionCount: 3,
+				}
+			},
+			tracker: func(_ string) *mockRetryTracker {
+				return &mockRetryTracker{}
+			},
+			check: func(t *testing.T, id string, state *State, store *mockRetryStore, tracker *mockRetryTracker, _ bool) {
+				t.Helper()
+				// Blocked either way: claim released, not dispatched.
+				if _, claimed := state.Claimed[id]; claimed {
+					t.Errorf("Claimed[%s] still present, want released (both budgets exhausted)", id)
+				}
+				if tracker.fetchCount != 0 {
+					t.Errorf("FetchIssueByID call count = %d, want 0", tracker.fetchCount)
+				}
+				if _, exhausted := state.BudgetExhausted[id]; !exhausted {
+					t.Errorf("BudgetExhausted[%s] missing, want present after exhaustion", id)
+				}
+				// A single evaluation that finds both ceilings exhausted must
+				// report the token budget.
+				if got := state.BudgetExhaustedReason[id]; got != budgetReasonToken {
+					t.Errorf("BudgetExhaustedReason[%s] = %q, want %q (token precedence)", id, got, budgetReasonToken)
+				}
+			},
+		},
+		{
+			name:        "both budgets exhausted with token sum error keeps session reason",
+			issueID:     "ISS-BOTH-TOK-FAIL",
+			maxSessions: 3,
+			maxTokens:   1000,
+			state: func(t *testing.T, id string) *State {
+				t.Helper()
+				return retryState(t, id, "PROJ-BOTH-TOK-FAIL", 2)
+			},
+			store: func() *mockRetryStore {
+				return &mockRetryStore{
+					runHistoryCount:          3,
+					tokenSum:                 1500,
+					tokenSessionCount:        3,
+					sumTotalTokensByIssueErr: errors.New("database locked"),
+				}
+			},
+			tracker: func(_ string) *mockRetryTracker {
+				return &mockRetryTracker{}
+			},
+			check: func(t *testing.T, id string, state *State, store *mockRetryStore, tracker *mockRetryTracker, _ bool) {
+				t.Helper()
+				// The session ceiling's block holds even though the token
+				// axis failed open: claim released, issue not dispatched.
+				if _, claimed := state.Claimed[id]; claimed {
+					t.Errorf("Claimed[%s] still present, want released (session budget exhausted)", id)
+				}
+				if _, exhausted := state.BudgetExhausted[id]; !exhausted {
+					t.Errorf("BudgetExhausted[%s] missing, want present after session exhaustion", id)
+				}
+				// The errored token gate must not overwrite the session reason.
+				if got := state.BudgetExhaustedReason[id]; got != budgetReasonSession {
+					t.Errorf("BudgetExhaustedReason[%s] = %q, want %q (token axis failed open)", id, got, budgetReasonSession)
+				}
+				// Token sum was attempted before failing open.
+				if len(store.summedTokenIssueIDs) != 1 || store.summedTokenIssueIDs[0] != id {
+					t.Errorf("SumTotalTokensByIssue calls = %v, want [%s]", store.summedTokenIssueIDs, id)
+				}
+				// Tracker never called — the session block short-circuits the fetch.
+				if tracker.fetchCount != 0 {
+					t.Errorf("FetchIssueByID call count = %d, want 0", tracker.fetchCount)
+				}
+				// DeleteRetryEntry called exactly once, by the session block.
+				if len(store.deletedIssueID) != 1 || store.deletedIssueID[0] != id {
+					t.Errorf("DeleteRetryEntry calls = %v, want [%s]", store.deletedIssueID, id)
+				}
+			},
+		},
+		{
 			name:    "ErrTrackerNotFound releases claim",
 			issueID: "ISS-X",
 			state: func(t *testing.T, id string) *State {
@@ -1099,6 +1377,7 @@ func TestHandleRetryTimer(t *testing.T) {
 			tracker := tt.tracker(id)
 			params := defaultRetryParams(t, store, tracker)
 			params.MaxSessions = tt.maxSessions
+			params.MaxTokens = tt.maxTokens
 
 			var workerCalled bool
 			if tt.workerFn != nil {
@@ -1118,6 +1397,83 @@ func TestHandleRetryTimer(t *testing.T) {
 
 			tt.check(t, id, state, store, tracker, workerCalled)
 		})
+	}
+}
+
+// TestHandleRetryTimer_TokenBudgetLogLine asserts the structured refusal
+// log line carries the typed attributes the token gate emits.
+func TestHandleRetryTimer_TokenBudgetLogLine(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	store := &mockRetryStore{tokenSum: 1500, tokenSessionCount: 2}
+	tracker := &mockRetryTracker{}
+	state := retryState(t, "ISS-TOK-LOG", "PROJ-TOK-LOG", 1)
+
+	params := defaultRetryParams(t, store, tracker)
+	params.MaxTokens = 1000
+	params.Logger = logger
+
+	HandleRetryTimer(state, "ISS-TOK-LOG", params)
+
+	output := buf.String()
+	if !strings.Contains(output, "token budget exhausted, blocking re-dispatch") {
+		t.Fatalf("log output = %q, want to contain the token refusal message", output)
+	}
+	for _, attr := range []string{
+		"reason=token_budget",
+		"used_tokens=1500",
+		"budget_tokens=1000",
+		"used_sessions=2",
+		"budget_sessions=0",
+		"issue_id=ISS-TOK-LOG",
+	} {
+		if !strings.Contains(output, attr) {
+			t.Errorf("log output missing attribute %q: %q", attr, output)
+		}
+	}
+}
+
+// TestHandleRetryTimer_TokenBudgetFailOpenLogsWarning asserts the fail-open
+// path logs a warning instead of stranding the issue silently.
+func TestHandleRetryTimer_TokenBudgetFailOpenLogsWarning(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	store := &mockRetryStore{sumTotalTokensByIssueErr: errors.New("database locked")}
+	tracker := &mockRetryTracker{
+		fetchedIssue: candidateIssue("ISS-TOK-WARN", "PROJ-TOK-WARN", "To Do"),
+	}
+	state := retryState(t, "ISS-TOK-WARN", "PROJ-TOK-WARN", 1)
+
+	dispatched := make(chan struct{}, 1)
+	params := defaultRetryParams(t, store, tracker)
+	params.MaxTokens = 1000
+	params.Logger = logger
+	params.MakeWorkerFn = func(_, _, _, _ string, _ domain.AgentAdapter) WorkerFunc {
+		return func(_ context.Context, _ domain.Issue, _ *int) {
+			dispatched <- struct{}{}
+		}
+	}
+
+	HandleRetryTimer(state, "ISS-TOK-WARN", params)
+
+	select {
+	case <-dispatched:
+	case <-time.After(time.Second):
+		t.Fatal("worker not dispatched within 1 second (fail-open must dispatch)")
+	}
+
+	output := buf.String()
+	if !strings.Contains(output, "token budget check failed, proceeding with dispatch") {
+		t.Errorf("log output = %q, want to contain the fail-open warning", output)
+	}
+	if !strings.Contains(output, "error=") {
+		t.Errorf("log output missing error attribute: %q", output)
 	}
 }
 

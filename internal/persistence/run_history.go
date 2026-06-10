@@ -30,6 +30,11 @@ type RunHistory struct {
 	ReviewMetadata *string // JSON-serialized ReviewMetadata; nil when self-review did not run.
 	RuleName       string  // Dispatch rule name frozen at initial dispatch; empty for legacy rows and fallback dispatches.
 	TemplateID     string  // Resolved template path frozen at initial dispatch; empty for legacy rows and the workflow body template.
+
+	InputTokens     int64 // Accumulated input tokens for the run; 0 for pre-migration rows.
+	OutputTokens    int64 // Accumulated output tokens for the run; 0 for pre-migration rows.
+	TotalTokens     int64 // Accumulated total tokens for the run; 0 for pre-migration rows.
+	CacheReadTokens int64 // Accumulated cache-read tokens for the run; 0 for pre-migration rows.
 }
 
 // AppendRunHistory inserts a completed run attempt into run_history. The ID
@@ -58,11 +63,12 @@ func (s *Store) AppendRunHistory(ctx context.Context, run RunHistory) (RunHistor
 
 	res, err := s.db.ExecContext(ctx,
 		`INSERT INTO run_history
-			(issue_id, identifier, display_identifier, attempt, agent_adapter, workspace, started_at, completed_at, status, error, workflow_file, turns_completed, review_metadata, rule_name, template_id)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			(issue_id, identifier, display_identifier, attempt, agent_adapter, workspace, started_at, completed_at, status, error, workflow_file, turns_completed, review_metadata, rule_name, template_id, input_tokens, output_tokens, total_tokens, cache_read_tokens)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		run.IssueID, run.Identifier, dispIDVal, run.Attempt, run.AgentAdapter,
 		run.Workspace, run.StartedAt, run.CompletedAt, run.Status, errVal, wfVal,
 		run.TurnsCompleted, reviewMetaVal, run.RuleName, run.TemplateID,
+		run.InputTokens, run.OutputTokens, run.TotalTokens, run.CacheReadTokens,
 	)
 	if err != nil {
 		return RunHistory{}, fmt.Errorf("append run history for %q: %w", run.IssueID, err)
@@ -82,7 +88,8 @@ func (s *Store) AppendRunHistory(ctx context.Context, run RunHistory) (RunHistor
 func (s *Store) QueryRunHistoryByIssue(ctx context.Context, issueID string) ([]RunHistory, error) {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT id, issue_id, identifier, display_identifier, attempt, agent_adapter, workspace,
-			started_at, completed_at, status, error, workflow_file, turns_completed, review_metadata, rule_name, template_id
+			started_at, completed_at, status, error, workflow_file, turns_completed, review_metadata, rule_name, template_id,
+			input_tokens, output_tokens, total_tokens, cache_read_tokens
 		FROM run_history
 		WHERE issue_id = ?
 		ORDER BY id DESC`, issueID)
@@ -99,6 +106,7 @@ func (s *Store) QueryRunHistoryByIssue(ctx context.Context, issueID string) ([]R
 			&r.ID, &r.IssueID, &r.Identifier, &dispIDVal, &r.Attempt, &r.AgentAdapter,
 			&r.Workspace, &r.StartedAt, &r.CompletedAt, &r.Status, &errVal, &wfVal,
 			&r.TurnsCompleted, &reviewMetaVal, &r.RuleName, &r.TemplateID,
+			&r.InputTokens, &r.OutputTokens, &r.TotalTokens, &r.CacheReadTokens,
 		); err != nil {
 			return nil, fmt.Errorf("scan run history: %w", err)
 		}
@@ -153,7 +161,8 @@ func (s *Store) LoadLatestSuccessfulRunsForReactionRecovery(ctx context.Context,
 		)
 		SELECT r.id, r.issue_id, r.identifier, r.display_identifier, r.attempt, r.agent_adapter,
 			r.workspace, r.started_at, r.completed_at, r.status, r.error, r.workflow_file,
-			r.turns_completed, r.review_metadata, r.rule_name, r.template_id
+			r.turns_completed, r.review_metadata, r.rule_name, r.template_id,
+			r.input_tokens, r.output_tokens, r.total_tokens, r.cache_read_tokens
 		FROM run_history AS r
 		JOIN bounded ON bounded.latest_id = r.id
 		ORDER BY r.id DESC`, completedAfter.UTC().Format(time.RFC3339), limit)
@@ -170,6 +179,7 @@ func (s *Store) LoadLatestSuccessfulRunsForReactionRecovery(ctx context.Context,
 			&run.ID, &run.IssueID, &run.Identifier, &dispIDVal, &run.Attempt, &run.AgentAdapter,
 			&run.Workspace, &run.StartedAt, &run.CompletedAt, &run.Status, &errVal, &wfVal,
 			&run.TurnsCompleted, &reviewMetaVal, &run.RuleName, &run.TemplateID,
+			&run.InputTokens, &run.OutputTokens, &run.TotalTokens, &run.CacheReadTokens,
 		); err != nil {
 			return nil, fmt.Errorf("load recovery runs: %w", err)
 		}
@@ -210,7 +220,8 @@ func (s *Store) QueryRecentRunHistory(ctx context.Context, limit int, afterID in
 	if afterID > 0 {
 		rows, err = s.db.QueryContext(ctx,
 			`SELECT id, issue_id, identifier, display_identifier, attempt, agent_adapter, workspace,
-				started_at, completed_at, status, error, workflow_file, turns_completed, review_metadata, rule_name, template_id
+				started_at, completed_at, status, error, workflow_file, turns_completed, review_metadata, rule_name, template_id,
+				input_tokens, output_tokens, total_tokens, cache_read_tokens
 			FROM run_history
 			WHERE id < ?
 			ORDER BY id DESC
@@ -218,7 +229,8 @@ func (s *Store) QueryRecentRunHistory(ctx context.Context, limit int, afterID in
 	} else {
 		rows, err = s.db.QueryContext(ctx,
 			`SELECT id, issue_id, identifier, display_identifier, attempt, agent_adapter, workspace,
-				started_at, completed_at, status, error, workflow_file, turns_completed, review_metadata, rule_name, template_id
+				started_at, completed_at, status, error, workflow_file, turns_completed, review_metadata, rule_name, template_id,
+				input_tokens, output_tokens, total_tokens, cache_read_tokens
 			FROM run_history
 			ORDER BY id DESC
 			LIMIT ?`, limit)
@@ -236,6 +248,7 @@ func (s *Store) QueryRecentRunHistory(ctx context.Context, limit int, afterID in
 			&r.ID, &r.IssueID, &r.Identifier, &dispIDVal, &r.Attempt, &r.AgentAdapter,
 			&r.Workspace, &r.StartedAt, &r.CompletedAt, &r.Status, &errVal, &wfVal,
 			&r.TurnsCompleted, &reviewMetaVal, &r.RuleName, &r.TemplateID,
+			&r.InputTokens, &r.OutputTokens, &r.TotalTokens, &r.CacheReadTokens,
 		); err != nil {
 			return nil, fmt.Errorf("scan run history: %w", err)
 		}
@@ -312,6 +325,61 @@ func (s *Store) QueryBudgetExhaustedIssues(ctx context.Context, candidateIDs []s
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("query budget exhausted issues: %w", err)
+	}
+	return exhaustedIDs, nil
+}
+
+// SumTotalTokensByIssue returns the sum of total_tokens across all
+// run_history rows for the issue and the count of those rows. Returns
+// (0, 0, nil) when no rows exist.
+func (s *Store) SumTotalTokensByIssue(ctx context.Context, issueID string) (sumTotalTokens int64, sessionCount int, err error) {
+	row := s.db.QueryRowContext(ctx,
+		`SELECT COALESCE(SUM(total_tokens), 0), COUNT(*) FROM run_history WHERE issue_id = ?`, issueID,
+	)
+	if err := row.Scan(&sumTotalTokens, &sessionCount); err != nil {
+		return 0, 0, fmt.Errorf("sum total tokens by issue %q: %w", issueID, err)
+	}
+	return sumTotalTokens, sessionCount, nil
+}
+
+// QueryTokenExhaustedIssues returns issue IDs from candidateIDs whose
+// summed run_history total_tokens meet or exceed maxTokens. Returns an
+// empty non-nil slice when no issues qualify or candidateIDs is empty.
+func (s *Store) QueryTokenExhaustedIssues(ctx context.Context, candidateIDs []string, maxTokens int) ([]string, error) {
+	if len(candidateIDs) == 0 {
+		return []string{}, nil
+	}
+
+	placeholders := strings.Repeat("?,", len(candidateIDs))
+	placeholders = placeholders[:len(placeholders)-1]
+
+	args := make([]any, 0, len(candidateIDs)+1)
+	for _, id := range candidateIDs {
+		args = append(args, id)
+	}
+	args = append(args, maxTokens)
+
+	query := fmt.Sprintf( //nolint:gosec // placeholders is "?,?,..." built from len(candidateIDs); no user data in format string
+		`SELECT issue_id FROM run_history WHERE issue_id IN (%s) GROUP BY issue_id HAVING SUM(total_tokens) >= ?`,
+		placeholders,
+	)
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query token exhausted issues: %w", err)
+	}
+	defer rows.Close() //nolint:errcheck // read-only query; close error is non-actionable
+
+	exhaustedIDs := []string{}
+	for rows.Next() {
+		var issueID string
+		if err := rows.Scan(&issueID); err != nil {
+			return nil, fmt.Errorf("scan token exhausted issue: %w", err)
+		}
+		exhaustedIDs = append(exhaustedIDs, issueID)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("query token exhausted issues: %w", err)
 	}
 	return exhaustedIDs, nil
 }

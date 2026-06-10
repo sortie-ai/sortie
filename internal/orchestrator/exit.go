@@ -216,20 +216,24 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 	// first retry = 2, etc. normalizeAttempt returns the 0-based retry
 	// counter (nil → 0), so add 1 for the overall run attempt number.
 	runHistory := persistence.RunHistory{
-		IssueID:        workerResult.IssueID,
-		Identifier:     workerResult.Identifier,
-		DisplayID:      entry.Issue.DisplayID,
-		Attempt:        normalizeAttempt(entry.RetryAttempt) + 1,
-		AgentAdapter:   workerResult.AgentAdapter,
-		Workspace:      workerResult.WorkspacePath,
-		StartedAt:      entry.StartedAt.Format(time.RFC3339),
-		CompletedAt:    now.Format(time.RFC3339),
-		Status:         status,
-		Error:          errorStringPtr(workerResult.Error),
-		WorkflowFile:   entry.WorkflowFile,
-		TurnsCompleted: workerResult.TurnsCompleted,
-		RuleName:       entry.RuleName,
-		TemplateID:     entry.TemplateID,
+		IssueID:         workerResult.IssueID,
+		Identifier:      workerResult.Identifier,
+		DisplayID:       entry.Issue.DisplayID,
+		Attempt:         normalizeAttempt(entry.RetryAttempt) + 1,
+		AgentAdapter:    workerResult.AgentAdapter,
+		Workspace:       workerResult.WorkspacePath,
+		StartedAt:       entry.StartedAt.Format(time.RFC3339),
+		CompletedAt:     now.Format(time.RFC3339),
+		Status:          status,
+		Error:           errorStringPtr(workerResult.Error),
+		WorkflowFile:    entry.WorkflowFile,
+		TurnsCompleted:  workerResult.TurnsCompleted,
+		RuleName:        entry.RuleName,
+		TemplateID:      entry.TemplateID,
+		InputTokens:     entry.AgentInputTokens,
+		OutputTokens:    entry.AgentOutputTokens,
+		TotalTokens:     entry.AgentTotalTokens,
+		CacheReadTokens: entry.CacheReadTokens,
 	}
 	if workerResult.ReviewMetadata != nil {
 		data, marshalErr := json.Marshal(workerResult.ReviewMetadata)

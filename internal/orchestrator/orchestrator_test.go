@@ -102,9 +102,17 @@ type stubStore struct {
 	sessions        []persistence.SessionMetadata
 	savedRetries    []persistence.RetryEntry
 	deletedRetryIDs []string
-	// Budget exhaustion query configuration (Rule 4b / per-tick rebuild).
+	// Budget exhaustion query configuration (per-tick rebuild).
 	budgetExhaustedIDs []string
 	budgetExhaustedErr error
+
+	// Token budget query configuration (per-tick rebuild and single-issue gate).
+	tokenExhaustedIDs []string
+	tokenExhaustedErr error
+	tokenSum          int64
+	tokenSessionCount int
+
+	upsertSessionMetadataErr error
 }
 
 func (s *stubStore) AppendRunHistory(_ context.Context, run persistence.RunHistory) (persistence.RunHistory, error) {
@@ -126,7 +134,16 @@ func (s *stubStore) UpsertSessionMetadata(_ context.Context, m persistence.Sessi
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.sessions = append(s.sessions, m)
-	return nil
+	return s.upsertSessionMetadataErr
+}
+
+// sessionWrites returns a copy of the captured session metadata writes.
+func (s *stubStore) sessionWrites() []persistence.SessionMetadata {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]persistence.SessionMetadata, len(s.sessions))
+	copy(out, s.sessions)
+	return out
 }
 
 func (s *stubStore) SaveRetryEntry(_ context.Context, entry persistence.RetryEntry) error {
@@ -147,6 +164,12 @@ func (s *stubStore) CountRunHistoryByIssue(_ context.Context, _ string) (int, er
 	return 0, nil
 }
 
+func (s *stubStore) SumTotalTokensByIssue(_ context.Context, _ string) (int64, int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.tokenSum, s.tokenSessionCount, nil
+}
+
 func (s *stubStore) QueryBudgetExhaustedIssues(_ context.Context, _ []string, _ int) ([]string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -155,6 +178,17 @@ func (s *stubStore) QueryBudgetExhaustedIssues(_ context.Context, _ []string, _ 
 	}
 	result := make([]string, len(s.budgetExhaustedIDs))
 	copy(result, s.budgetExhaustedIDs)
+	return result, nil
+}
+
+func (s *stubStore) QueryTokenExhaustedIssues(_ context.Context, _ []string, _ int) ([]string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.tokenExhaustedErr != nil {
+		return nil, s.tokenExhaustedErr
+	}
+	result := make([]string, len(s.tokenExhaustedIDs))
+	copy(result, s.tokenExhaustedIDs)
 	return result, nil
 }
 
@@ -3549,7 +3583,7 @@ func TestHandleTick_BudgetExhaustionRebuildsState(t *testing.T) {
 		}
 	})
 
-	t.Run("empty candidate list skips query and retains previous set", func(t *testing.T) {
+	t.Run("empty candidate list with budget enabled clears stale set", func(t *testing.T) {
 		t.Parallel()
 
 		wm := budgetTickConfig(3)
@@ -3563,11 +3597,422 @@ func TestHandleTick_BudgetExhaustionRebuildsState(t *testing.T) {
 
 		budgetOrchestrator(state, wm, store, tracker).handleTick(context.Background())
 
-		// No candidates → query skipped → previous set retained.
-		if _, ok := state.BudgetExhausted[issue.ID]; !ok {
-			t.Errorf("BudgetExhausted[%s] cleared on empty candidate list, want retained", issue.ID)
+		// With a budget enabled, the rebuild scopes its batch queries to the
+		// candidate set and assigns the fresh result. An empty candidate set
+		// yields an empty result, so a stale entry is dropped. There are no
+		// candidates to dispatch this tick, so the set is repopulated from
+		// run_history on the next tick that has candidates.
+		if _, ok := state.BudgetExhausted[issue.ID]; ok {
+			t.Errorf("BudgetExhausted[%s] retained on empty candidate list, want cleared", issue.ID)
 		}
 	})
+}
+
+// budgetTickConfigTokens returns a workflow manager configured with both
+// per-issue ceilings for per-tick rebuild tests.
+func budgetTickConfigTokens(maxSessions, maxTokens int) *stubWorkflowManager {
+	wm := budgetTickConfig(maxSessions)
+	wm.config.Agent.MaxTokens = maxTokens
+	return wm
+}
+
+// TestHandleTick_TokenBudgetRebuild covers the per-tick union rebuild of
+// BudgetExhausted across the session and token ceilings, with per-issue
+// reason attribution, token precedence, lockstep pruning, and the
+// per-axis fail-open that folds the prior set in on a query error.
+func TestHandleTick_TokenBudgetRebuild(t *testing.T) {
+	t.Parallel()
+
+	issueA := domain.Issue{ID: "iss-a", Identifier: "TEST-A", Title: "title", State: "To Do"}
+	issueB := domain.Issue{ID: "iss-b", Identifier: "TEST-B", Title: "title", State: "To Do"}
+
+	candidates := func(issues ...domain.Issue) *candidateTrackerAdapter {
+		return &candidateTrackerAdapter{
+			mockTrackerAdapter: &mockTrackerAdapter{},
+			fetchCandidatesFn:  func(_ context.Context) ([]domain.Issue, error) { return issues, nil },
+		}
+	}
+
+	t.Run("token ceiling alone populates set with token reason", func(t *testing.T) {
+		t.Parallel()
+
+		wm := budgetTickConfigTokens(0, 1000)
+		store := &stubStore{tokenExhaustedIDs: []string{issueA.ID}}
+		state := NewState(60000, 10, nil, AgentTotals{})
+
+		budgetOrchestrator(state, wm, store, candidates(issueA)).handleTick(context.Background())
+
+		if _, ok := state.BudgetExhausted[issueA.ID]; !ok {
+			t.Errorf("BudgetExhausted[%s] missing after tick, want present (token ceiling)", issueA.ID)
+		}
+		if got := state.BudgetExhaustedReason[issueA.ID]; got != budgetReasonToken {
+			t.Errorf("BudgetExhaustedReason[%s] = %q, want %q", issueA.ID, got, budgetReasonToken)
+		}
+		if _, running := state.Running[issueA.ID]; running {
+			t.Errorf("Running[%s] present, want absent (token budget exhausted)", issueA.ID)
+		}
+	})
+
+	t.Run("issue exhausted on both axes reports token budget", func(t *testing.T) {
+		t.Parallel()
+
+		wm := budgetTickConfigTokens(3, 1000)
+		store := &stubStore{
+			budgetExhaustedIDs: []string{issueA.ID},
+			tokenExhaustedIDs:  []string{issueA.ID},
+		}
+		state := NewState(60000, 10, nil, AgentTotals{})
+
+		budgetOrchestrator(state, wm, store, candidates(issueA)).handleTick(context.Background())
+
+		if _, ok := state.BudgetExhausted[issueA.ID]; !ok {
+			t.Fatalf("BudgetExhausted[%s] missing after tick, want present", issueA.ID)
+		}
+		if got := state.BudgetExhaustedReason[issueA.ID]; got != budgetReasonToken {
+			t.Errorf("BudgetExhaustedReason[%s] = %q, want %q (token precedence)", issueA.ID, got, budgetReasonToken)
+		}
+	})
+
+	t.Run("every issue in the rebuilt set carries a reason and stale entries are pruned", func(t *testing.T) {
+		t.Parallel()
+
+		wm := budgetTickConfigTokens(3, 1000)
+		store := &stubStore{
+			budgetExhaustedIDs: []string{issueA.ID},
+			tokenExhaustedIDs:  []string{issueB.ID},
+		}
+		state := NewState(60000, 10, nil, AgentTotals{})
+		// Stale entry from a previous tick: must be pruned from both
+		// structures in lockstep.
+		state.BudgetExhausted["iss-stale"] = struct{}{}
+		state.BudgetExhaustedReason["iss-stale"] = budgetReasonSession
+
+		budgetOrchestrator(state, wm, store, candidates(issueA, issueB)).handleTick(context.Background())
+
+		if got := state.BudgetExhaustedReason[issueA.ID]; got != budgetReasonSession {
+			t.Errorf("BudgetExhaustedReason[%s] = %q, want %q", issueA.ID, got, budgetReasonSession)
+		}
+		if got := state.BudgetExhaustedReason[issueB.ID]; got != budgetReasonToken {
+			t.Errorf("BudgetExhaustedReason[%s] = %q, want %q", issueB.ID, got, budgetReasonToken)
+		}
+		if _, ok := state.BudgetExhausted["iss-stale"]; ok {
+			t.Error("BudgetExhausted[iss-stale] survived the rebuild, want pruned")
+		}
+		if got, ok := state.BudgetExhaustedReason["iss-stale"]; ok {
+			t.Errorf("BudgetExhaustedReason[iss-stale] = %q, want pruned in lockstep", got)
+		}
+		// Total coverage: the reason map carries exactly the set's issues.
+		if len(state.BudgetExhaustedReason) != len(state.BudgetExhausted) {
+			t.Errorf("reason map has %d entries, set has %d, want equal",
+				len(state.BudgetExhaustedReason), len(state.BudgetExhausted))
+		}
+		for id := range state.BudgetExhausted {
+			if _, ok := state.BudgetExhaustedReason[id]; !ok {
+				t.Errorf("BudgetExhaustedReason[%s] missing, want a reason for every exhausted issue", id)
+			}
+		}
+	})
+
+	t.Run("token query failure folds prior set after session query would drop the issue", func(t *testing.T) {
+		t.Parallel()
+
+		wm := budgetTickConfigTokens(3, 1000)
+		// Session query succeeds and returns nothing (would drop the issue);
+		// token query fails: the prior set must be folded in for the token
+		// axis so the issue stays blocked this tick.
+		store := &stubStore{
+			budgetExhaustedIDs: []string{},
+			tokenExhaustedErr:  fmt.Errorf("db error"),
+		}
+		state := NewState(60000, 10, nil, AgentTotals{})
+		state.BudgetExhausted[issueA.ID] = struct{}{}
+		state.BudgetExhaustedReason[issueA.ID] = budgetReasonToken
+
+		budgetOrchestrator(state, wm, store, candidates(issueA)).handleTick(context.Background())
+
+		if _, ok := state.BudgetExhausted[issueA.ID]; !ok {
+			t.Errorf("BudgetExhausted[%s] dropped on token query error, want retained (prior set folded)", issueA.ID)
+		}
+		if got := state.BudgetExhaustedReason[issueA.ID]; got != budgetReasonToken {
+			t.Errorf("BudgetExhaustedReason[%s] = %q, want %q (prior reason carried)", issueA.ID, got, budgetReasonToken)
+		}
+		if _, running := state.Running[issueA.ID]; running {
+			t.Errorf("Running[%s] present, want absent (issue stays blocked this tick)", issueA.ID)
+		}
+	})
+
+	t.Run("session query failure folds prior set with carried reasons", func(t *testing.T) {
+		t.Parallel()
+
+		wm := budgetTickConfigTokens(3, 0)
+		store := &stubStore{budgetExhaustedErr: fmt.Errorf("db error")}
+		state := NewState(60000, 10, nil, AgentTotals{})
+		state.BudgetExhausted[issueA.ID] = struct{}{}
+		state.BudgetExhaustedReason[issueA.ID] = budgetReasonSession
+
+		budgetOrchestrator(state, wm, store, candidates(issueA)).handleTick(context.Background())
+
+		if _, ok := state.BudgetExhausted[issueA.ID]; !ok {
+			t.Errorf("BudgetExhausted[%s] dropped on session query error, want retained", issueA.ID)
+		}
+		if got := state.BudgetExhaustedReason[issueA.ID]; got != budgetReasonSession {
+			t.Errorf("BudgetExhaustedReason[%s] = %q, want %q (prior reason carried)", issueA.ID, got, budgetReasonSession)
+		}
+	})
+
+	t.Run("both ceilings zero clears set and reason map", func(t *testing.T) {
+		t.Parallel()
+
+		wm := budgetTickConfigTokens(0, 0)
+		store := &stubStore{}
+		state := NewState(60000, 10, nil, AgentTotals{})
+		state.BudgetExhausted[issueA.ID] = struct{}{}
+		state.BudgetExhaustedReason[issueA.ID] = budgetReasonToken
+
+		budgetOrchestrator(state, wm, store, candidates(issueA)).handleTick(context.Background())
+
+		if len(state.BudgetExhausted) != 0 {
+			t.Errorf("BudgetExhausted = %v, want empty with both ceilings disabled", state.BudgetExhausted)
+		}
+		if len(state.BudgetExhaustedReason) != 0 {
+			t.Errorf("BudgetExhaustedReason = %v, want empty with both ceilings disabled", state.BudgetExhaustedReason)
+		}
+	})
+
+	t.Run("empty candidate list clears set and reason map in lockstep", func(t *testing.T) {
+		t.Parallel()
+
+		wm := budgetTickConfigTokens(3, 1000)
+		store := &stubStore{}
+		state := NewState(60000, 10, nil, AgentTotals{})
+		state.BudgetExhausted[issueA.ID] = struct{}{}
+		state.BudgetExhaustedReason[issueA.ID] = budgetReasonToken
+
+		budgetOrchestrator(state, wm, store, candidates()).handleTick(context.Background())
+
+		// Both batch queries return empty for an empty candidate list, so
+		// the rebuild assigns an empty fresh set; the issue is re-blocked on
+		// the next tick that has candidates, from the run_history ledger.
+		if len(state.BudgetExhausted) != 0 {
+			t.Errorf("BudgetExhausted = %v, want cleared on empty candidate list", state.BudgetExhausted)
+		}
+		if len(state.BudgetExhaustedReason) != 0 {
+			t.Errorf("BudgetExhaustedReason = %v, want cleared in lockstep", state.BudgetExhaustedReason)
+		}
+	})
+}
+
+// --- Incremental session_metadata write tests ---
+
+// tokenUsageEvent returns a token_usage agent event with cumulative counters.
+func tokenUsageEvent(input, output, total, cacheRead int64) domain.AgentEvent {
+	return domain.AgentEvent{
+		Type:      domain.EventTokenUsage,
+		Timestamp: time.Now().UTC(),
+		Usage: domain.TokenUsage{
+			InputTokens:     input,
+			OutputTokens:    output,
+			TotalTokens:     total,
+			CacheReadTokens: cacheRead,
+		},
+	}
+}
+
+// incrementalWriteOrchestrator builds an orchestrator with a running entry
+// whose accumulated token counters are pre-set, for driving
+// maybeWriteIncrementalMetadata directly.
+func incrementalWriteOrchestrator(t *testing.T, store *stubStore) (*Orchestrator, *RunningEntry) {
+	t.Helper()
+	state := NewState(60000, 10, nil, AgentTotals{})
+	entry := &RunningEntry{
+		Identifier:        "MT-1",
+		Issue:             domain.Issue{ID: "id-1", Identifier: "MT-1", State: "In Progress"},
+		StartedAt:         time.Now().UTC(),
+		SessionID:         "sess-1",
+		AgentInputTokens:  10,
+		AgentOutputTokens: 20,
+		AgentTotalTokens:  30,
+		CacheReadTokens:   5,
+		ModelName:         "test-model",
+		APIRequestCount:   2,
+	}
+	state.Running["id-1"] = entry
+	tracker := &candidateTrackerAdapter{mockTrackerAdapter: &mockTrackerAdapter{}}
+	return budgetOrchestrator(state, budgetTickConfig(0), store, tracker), entry
+}
+
+func TestMaybeWriteIncrementalMetadata(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+
+	t.Run("first token usage event writes immediately", func(t *testing.T) {
+		t.Parallel()
+
+		store := &stubStore{}
+		o, entry := incrementalWriteOrchestrator(t, store)
+
+		o.maybeWriteIncrementalMetadata(ctx, "id-1", tokenUsageEvent(10, 20, 30, 5))
+
+		writes := store.sessionWrites()
+		if len(writes) != 1 {
+			t.Fatalf("UpsertSessionMetadata calls = %d, want 1", len(writes))
+		}
+		meta := writes[0]
+		if meta.IssueID != "id-1" {
+			t.Errorf("SessionMetadata.IssueID = %q, want %q", meta.IssueID, "id-1")
+		}
+		if meta.SessionID != "sess-1" {
+			t.Errorf("SessionMetadata.SessionID = %q, want %q", meta.SessionID, "sess-1")
+		}
+		if meta.InputTokens != 10 || meta.OutputTokens != 20 || meta.TotalTokens != 30 || meta.CacheReadTokens != 5 {
+			t.Errorf("SessionMetadata tokens = (%d, %d, %d, %d), want (10, 20, 30, 5)",
+				meta.InputTokens, meta.OutputTokens, meta.TotalTokens, meta.CacheReadTokens)
+		}
+		if meta.ModelName != "test-model" {
+			t.Errorf("SessionMetadata.ModelName = %q, want %q", meta.ModelName, "test-model")
+		}
+		if entry.LastMetadataWrite.IsZero() {
+			t.Error("RunningEntry.LastMetadataWrite still zero after successful write")
+		}
+	})
+
+	t.Run("second event within interval is throttled", func(t *testing.T) {
+		t.Parallel()
+
+		store := &stubStore{}
+		o, _ := incrementalWriteOrchestrator(t, store)
+
+		o.maybeWriteIncrementalMetadata(ctx, "id-1", tokenUsageEvent(10, 20, 30, 5))
+		o.maybeWriteIncrementalMetadata(ctx, "id-1", tokenUsageEvent(11, 21, 33, 5))
+
+		if writes := store.sessionWrites(); len(writes) != 1 {
+			t.Errorf("UpsertSessionMetadata calls = %d, want 1 (second event throttled)", len(writes))
+		}
+	})
+
+	t.Run("event after interval elapses writes again", func(t *testing.T) {
+		t.Parallel()
+
+		store := &stubStore{}
+		o, entry := incrementalWriteOrchestrator(t, store)
+
+		o.maybeWriteIncrementalMetadata(ctx, "id-1", tokenUsageEvent(10, 20, 30, 5))
+		// Backdate the last write past the throttle interval.
+		entry.LastMetadataWrite = time.Now().UTC().Add(-sessionMetadataWriteInterval - time.Second)
+		o.maybeWriteIncrementalMetadata(ctx, "id-1", tokenUsageEvent(11, 21, 33, 6))
+
+		if writes := store.sessionWrites(); len(writes) != 2 {
+			t.Errorf("UpsertSessionMetadata calls = %d, want 2 (interval elapsed)", len(writes))
+		}
+	})
+
+	t.Run("non token_usage event is ignored", func(t *testing.T) {
+		t.Parallel()
+
+		store := &stubStore{}
+		o, _ := incrementalWriteOrchestrator(t, store)
+
+		o.maybeWriteIncrementalMetadata(ctx, "id-1", domain.AgentEvent{
+			Type:      domain.EventTurnCompleted,
+			Timestamp: time.Now().UTC(),
+		})
+
+		if writes := store.sessionWrites(); len(writes) != 0 {
+			t.Errorf("UpsertSessionMetadata calls = %d, want 0 (non-token event)", len(writes))
+		}
+	})
+
+	t.Run("unknown issue is ignored", func(t *testing.T) {
+		t.Parallel()
+
+		store := &stubStore{}
+		o, _ := incrementalWriteOrchestrator(t, store)
+
+		o.maybeWriteIncrementalMetadata(ctx, "id-unknown", tokenUsageEvent(10, 20, 30, 5))
+
+		if writes := store.sessionWrites(); len(writes) != 0 {
+			t.Errorf("UpsertSessionMetadata calls = %d, want 0 (unknown issue)", len(writes))
+		}
+	})
+
+	t.Run("store error does not advance the throttle timestamp", func(t *testing.T) {
+		t.Parallel()
+
+		store := &stubStore{upsertSessionMetadataErr: fmt.Errorf("disk full")}
+		o, entry := incrementalWriteOrchestrator(t, store)
+
+		o.maybeWriteIncrementalMetadata(ctx, "id-1", tokenUsageEvent(10, 20, 30, 5))
+
+		if !entry.LastMetadataWrite.IsZero() {
+			t.Error("RunningEntry.LastMetadataWrite advanced after failed write, want zero")
+		}
+		// The next event retries immediately because the timestamp did not move.
+		o.maybeWriteIncrementalMetadata(ctx, "id-1", tokenUsageEvent(11, 21, 33, 6))
+		if writes := store.sessionWrites(); len(writes) != 2 {
+			t.Errorf("UpsertSessionMetadata calls = %d, want 2 (failed write not throttled)", len(writes))
+		}
+	})
+}
+
+// TestDrainRunningWorkers_TokenUsageEventTriggersIncrementalWrite delivers a
+// token_usage event on the drain-loop agentEventCh site and asserts an
+// incremental session_metadata write occurs before the worker exits, so the
+// advisory staleness bound holds during graceful drain.
+func TestDrainRunningWorkers_TokenUsageEventTriggersIncrementalWrite(t *testing.T) {
+	t.Parallel()
+
+	state := NewState(60000, 1, nil, AgentTotals{})
+	state.Running["id-1"] = &RunningEntry{
+		Identifier: "MT-1",
+		Issue:      domain.Issue{ID: "id-1", Identifier: "MT-1", State: "In Progress"},
+		StartedAt:  time.Now().UTC(),
+		SessionID:  "sess-1",
+		CancelFunc: func() {},
+	}
+	store := &stubStore{}
+	tracker := &candidateTrackerAdapter{mockTrackerAdapter: &mockTrackerAdapter{}}
+	o := budgetOrchestrator(state, budgetTickConfig(0), store, tracker)
+
+	// Run never starts: the drain loop is the only consumer of
+	// agentEventCh, so the event below is processed at the drain site.
+	done := make(chan struct{})
+	go func() {
+		o.drainRunningWorkers()
+		close(done)
+	}()
+
+	o.agentEventCh <- agentEventMsg{IssueID: "id-1", Event: tokenUsageEvent(10, 20, 30, 5)}
+
+	// The incremental write must land before the worker exit is delivered;
+	// the exit-path metadata write cannot have happened yet.
+	deadline := time.After(10 * time.Second)
+	for len(store.sessionWrites()) == 0 {
+		select {
+		case <-deadline:
+			t.Fatal("timed out waiting for incremental session_metadata write during drain")
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+
+	meta := store.sessionWrites()[0]
+	if meta.IssueID != "id-1" {
+		t.Errorf("SessionMetadata.IssueID = %q, want %q", meta.IssueID, "id-1")
+	}
+	if meta.SessionID != "sess-1" {
+		t.Errorf("SessionMetadata.SessionID = %q, want %q", meta.SessionID, "sess-1")
+	}
+	if meta.TotalTokens != 30 {
+		t.Errorf("SessionMetadata.TotalTokens = %d, want 30", meta.TotalTokens)
+	}
+
+	// Let the drain complete.
+	o.workerExitCh <- WorkerResult{IssueID: "id-1", Identifier: "MT-1"}
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("drainRunningWorkers did not return within 10 seconds")
+	}
 }
 
 // TestBudgetExhaustionPreventsRedispatch verifies that an issue whose budget is

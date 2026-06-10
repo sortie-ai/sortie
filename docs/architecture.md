@@ -585,6 +585,14 @@ Fields:
   - When the count reaches `max_sessions`, the claim is released and a warning is logged.
   - `0` disables the budget (unlimited retries).
   - Changes are re-applied at runtime and affect future retry timer evaluations.
+- `max_tokens` (integer)
+  - Default: `0` (unlimited; no token budget enforced).
+  - Cumulative per-issue token ceiling. The orchestrator sums `total_tokens` across the
+    issue's `run_history` entries and stops re-dispatching once the sum reaches `max_tokens`.
+  - When the sum reaches `max_tokens`, the claim is released and a warning is logged, exactly
+    as `max_sessions` does. A failed token query fails open: dispatch proceeds.
+  - Overridable through `SORTIE_AGENT_MAX_TOKENS`. `0` disables the budget.
+  - Changes are re-applied at runtime and affect future retry timer evaluations.
 
 Adapter-specific pass-through config:
 
@@ -1083,6 +1091,7 @@ This section is intentionally redundant so a coding agent can implement the conf
 - `agent.max_retry_backoff_ms`: integer, default `300000` (5m)
 - `agent.max_concurrent_agents_by_state`: map of positive integers, default `{}`
 - `agent.max_sessions`: integer, default `0` (unlimited)
+- `agent.max_tokens`: integer, default `0` (unlimited)
 - `ci_feedback.kind`: string, optional, **deprecated**; identifies the CI status provider adapter;
   presence activates CI feedback; use `reactions.ci_failure` instead
 - `ci_feedback.max_retries`: integer, default `2`; CI-fix continuation attempts before escalation
@@ -1362,6 +1371,25 @@ Per-issue effort budget (defense-in-depth):
 - If the count query fails, the budget check is skipped (fail-open) and dispatch proceeds
   normally.
 - `max_sessions = 0` (default) disables the budget entirely.
+
+Per-issue token budget (cost ceiling):
+
+- When `agent.max_tokens > 0`, the retry handler sums `total_tokens` across the issue's
+  `run_history` entries on the same pre-dispatch path, after the session check.
+- If the sum reaches `max_tokens`, the claim is released and a warning is logged instead of
+  re-dispatching, identical in mechanism to the session ceiling.
+- The session and token ceilings are independent hard ceilings. A re-dispatch is blocked when
+  either is reached, so whichever fills first across polling cycles is the one that fires. When
+  a single evaluation finds both exhausted, the reported and logged reason names the token
+  budget; the block itself is identical regardless of which ceiling triggered it.
+- The per-tick rebuild of the exhausted-issue set accounts for both ceilings: it runs the
+  session-count batch query when `max_sessions > 0` and the token-sum batch query when
+  `max_tokens > 0`, and unions the results. Each blocked issue carries a machine-readable
+  reason (`token_budget` or `session_budget`, token taking precedence) surfaced in the runtime
+  snapshot beside the exhausted set.
+- If the token query fails, the check fails open and dispatch proceeds, matching the session
+  check. A token sum recorded before the token columns were added reads as zero.
+- `max_tokens = 0` (default) disables the budget entirely.
 
 Note:
 
@@ -1794,6 +1822,7 @@ failed database query).
 
 - `sortie_status` (Section 10.4.5)
 - `workspace_history` (Section 10.4.5)
+- `cost_budget` (Section 10.4.5)
 
 **Tier 2 — external dependencies.** These tools interact with external services (tracker APIs,
 future SCM APIs) through network calls using orchestrator-managed credentials. They are subject
@@ -1881,6 +1910,40 @@ recent runs, newest first. Each entry has `attempt`, `agent_adapter`, `started_a
 
 On failure the tool returns a JSON error object of the form `{"error": "<message>"}`. This
 happens when the history query fails.
+
+**`cost_budget` (Tier 1)** returns cumulative per-issue token spend and the remaining token
+budget so an agent can self-regulate before the orchestrator's token ceiling blocks a
+re-dispatch. It sums `total_tokens` across the issue's `run_history` rows and adds the running
+session's recorded `total_tokens` from `session_metadata`, then makes no external calls. It is
+the advisory counterpart to the `agent.max_tokens` enforcement on the dispatch path; both read
+the same summed `total_tokens`, so the advisory reading and the refusal agree.
+
+Availability: registered when the database path and issue ID are present in the environment
+(`SORTIE_DB_PATH`, `SORTIE_ISSUE_ID`), the same condition as `workspace_history`. The running
+session ID arrives through `SORTIE_SESSION_ID`. The tool takes no input.
+
+The response is a JSON object with five fields:
+
+- `used_tokens`: cumulative `total_tokens` across the issue's completed sessions, plus the
+  running session's recorded `total_tokens` when a session is in flight. The running session's
+  spend is added only when the `session_metadata` row's session ID matches the live session ID,
+  so a stale earlier session is never counted twice.
+- `budget_tokens`: the configured `agent.max_tokens`. `0` means unlimited.
+- `remaining_tokens`: `budget_tokens - used_tokens`, floored at `0`; `null` when the budget is
+  unlimited, so the agent distinguishes "no limit" from "nothing left".
+- `used_sessions`: completed sessions for the issue. The running session is not counted,
+  matching how `agent.max_sessions` counts.
+- `budget_sessions`: the configured `agent.max_sessions`. `0` means unlimited.
+
+The asymmetry between `used_tokens` (includes the running session) and `used_sessions`
+(excludes it) is deliberate: a session is discrete and either finished or not, whereas tokens
+accrue continuously, so an advisory reading that ignored in-flight spend would be useless
+exactly when the agent consults it. The running session's spend reaches `session_metadata`
+through throttled incremental writes during the session and reaches `run_history` only at
+session exit, so no window double counts.
+
+On failure the tool returns a JSON error object of the form `{"error": "<message>"}`. This
+happens when the budget query fails.
 
 #### 10.4.6 Tools vs. agent-authored files
 
@@ -2778,6 +2841,10 @@ Token accounting rules:
   `input_tokens` / `output_tokens`.
 - `api_request_count` is incremented monotonically per `token_usage` event.
 - Accumulate aggregate totals in orchestrator state (`agent_totals`).
+- At session exit, the session's token totals are written to the `run_history` row alongside
+  the aggregate update. The per-issue token budget (`agent.max_tokens`) sums `run_history`
+  `total_tokens` per issue; the `cost_budget` tool reads the same sum plus the running
+  session's recorded total.
 
 Timing accounting rules:
 
@@ -3918,6 +3985,17 @@ Note: `timer_handle` is runtime-only and is not stored.
 | `status`          | TEXT    | Terminal status (succeeded, failed, etc.) |
 | `error`           | TEXT    | Error message if failed, may be null      |
 | `review_metadata` | TEXT    | JSON-encoded self-review metadata, may be null (migration 007) |
+| `input_tokens`      | INTEGER | Accumulated input tokens, 0 for pre-migration rows (migration 011) |
+| `output_tokens`     | INTEGER | Accumulated output tokens, 0 for pre-migration rows (migration 011) |
+| `total_tokens`      | INTEGER | Accumulated total tokens, 0 for pre-migration rows (migration 011) |
+| `cache_read_tokens` | INTEGER | Accumulated cache-read tokens, 0 for pre-migration rows (migration 011) |
+
+The token columns mirror those on `session_metadata`. The per-issue token budget
+(`agent.max_tokens`) sums `total_tokens` here; the other three are recorded for parity and
+future use. The `session_metadata` write cadence changed to throttled-incremental during a
+running session (at most one write per issue per two seconds, on the orchestrator event loop)
+so the `cost_budget` tool can read in-flight spend before the session's `run_history` row
+exists.
 
 **`session_metadata`** — last known session metadata per issue (for observability and debug)
 

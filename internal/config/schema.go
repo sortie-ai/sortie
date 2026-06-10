@@ -91,6 +91,7 @@ var knownFieldsRegistry = map[string]SectionSchema{
 			{Name: "max_retry_backoff_ms", Type: FieldInt},
 			{Name: "max_concurrent_agents_by_state", Type: FieldMap},
 			{Name: "max_sessions", Type: FieldInt},
+			{Name: "max_tokens", Type: FieldInt},
 		},
 		AllowAdapterPassthrough: true,
 	},
