@@ -312,19 +312,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       SORTIE_OPENCODE_TEST: "1"
-      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
     steps:
-      - name: Verify OpenCode secrets are configured
-        run: |
-          missing=()
-          [ -z "$ANTHROPIC_API_KEY" ] && missing+=("ANTHROPIC_API_KEY")
-          if [ ${#missing[@]} -ne 0 ]; then
-            echo "::error::Missing required secrets: ${missing[*]}"
-            echo "Configure these in Settings → Secrets and variables → Actions"
-            exit 1
-          fi
-          echo "✓ All OpenCode secrets are present"
-
       - name: Checkout
         uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
 
