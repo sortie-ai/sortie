@@ -3551,6 +3551,7 @@ func TestHandleTick_BudgetExhaustionRebuildsState(t *testing.T) {
 		store := &stubStore{budgetExhaustedErr: fmt.Errorf("db error")}
 		state := NewState(60000, 10, nil, AgentTotals{})
 		state.BudgetExhausted[issue.ID] = struct{}{} // pre-populated
+		state.BudgetExhaustedReason[issue.ID] = budgetReasonSession
 		tracker := &candidateTrackerAdapter{
 			mockTrackerAdapter: &mockTrackerAdapter{},
 			fetchCandidatesFn:  func(_ context.Context) ([]domain.Issue, error) { return []domain.Issue{issue}, nil },
@@ -3757,6 +3758,76 @@ func TestHandleTick_TokenBudgetRebuild(t *testing.T) {
 		}
 		if got := state.BudgetExhaustedReason[issueA.ID]; got != budgetReasonSession {
 			t.Errorf("BudgetExhaustedReason[%s] = %q, want %q (prior reason carried)", issueA.ID, got, budgetReasonSession)
+		}
+	})
+
+	t.Run("session query failure carries only session-attributed entries", func(t *testing.T) {
+		t.Parallel()
+
+		wm := budgetTickConfigTokens(3, 1000)
+		// Session query fails while the token query succeeds and reports
+		// the issue back under budget. The session-axis fold must not
+		// resurrect an entry attributed to the token budget.
+		store := &stubStore{budgetExhaustedErr: fmt.Errorf("db error")}
+		state := NewState(60000, 10, nil, AgentTotals{})
+		state.BudgetExhausted[issueA.ID] = struct{}{}
+		state.BudgetExhaustedReason[issueA.ID] = budgetReasonToken
+
+		budgetOrchestrator(state, wm, store, candidates(issueA)).handleTick(context.Background())
+
+		if _, ok := state.BudgetExhausted[issueA.ID]; ok {
+			t.Errorf("BudgetExhausted[%s] retained by session-axis fold, want dropped (fresh token result cleared it)", issueA.ID)
+		}
+		if got, ok := state.BudgetExhaustedReason[issueA.ID]; ok {
+			t.Errorf("BudgetExhaustedReason[%s] = %q, want pruned in lockstep", issueA.ID, got)
+		}
+	})
+
+	t.Run("token query failure carries only token-attributed entries when session ceiling disabled", func(t *testing.T) {
+		t.Parallel()
+
+		wm := budgetTickConfigTokens(0, 1000)
+		// With the session ceiling disabled, a prior session-attributed
+		// entry has no axis to survive on: the token-axis fold must not
+		// carry it forward.
+		store := &stubStore{tokenExhaustedErr: fmt.Errorf("db error")}
+		state := NewState(60000, 10, nil, AgentTotals{})
+		state.BudgetExhausted[issueA.ID] = struct{}{}
+		state.BudgetExhaustedReason[issueA.ID] = budgetReasonSession
+
+		budgetOrchestrator(state, wm, store, candidates(issueA)).handleTick(context.Background())
+
+		if _, ok := state.BudgetExhausted[issueA.ID]; ok {
+			t.Errorf("BudgetExhausted[%s] retained by token-axis fold, want dropped (session ceiling disabled)", issueA.ID)
+		}
+		if got, ok := state.BudgetExhaustedReason[issueA.ID]; ok {
+			t.Errorf("BudgetExhaustedReason[%s] = %q, want pruned in lockstep", issueA.ID, got)
+		}
+	})
+
+	t.Run("token query failure reports token reason when session query also finds the issue", func(t *testing.T) {
+		t.Parallel()
+
+		wm := budgetTickConfigTokens(3, 1000)
+		// Session query succeeds and blocks the issue; the token query
+		// fails and folds the prior token-attributed entry back in. The
+		// carried entry reports the token budget, matching the precedence
+		// the success path applies when both axes block an issue.
+		store := &stubStore{
+			budgetExhaustedIDs: []string{issueA.ID},
+			tokenExhaustedErr:  fmt.Errorf("db error"),
+		}
+		state := NewState(60000, 10, nil, AgentTotals{})
+		state.BudgetExhausted[issueA.ID] = struct{}{}
+		state.BudgetExhaustedReason[issueA.ID] = budgetReasonToken
+
+		budgetOrchestrator(state, wm, store, candidates(issueA)).handleTick(context.Background())
+
+		if _, ok := state.BudgetExhausted[issueA.ID]; !ok {
+			t.Fatalf("BudgetExhausted[%s] missing after tick, want present (blocked on both axes)", issueA.ID)
+		}
+		if got := state.BudgetExhaustedReason[issueA.ID]; got != budgetReasonToken {
+			t.Errorf("BudgetExhaustedReason[%s] = %q, want %q (token precedence on carried entry)", issueA.ID, got, budgetReasonToken)
 		}
 	})
 
