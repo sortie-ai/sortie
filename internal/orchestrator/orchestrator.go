@@ -752,9 +752,10 @@ func (o *Orchestrator) maybeWriteIncrementalMetadata(ctx context.Context, issueI
 // map once per tick from run_history, as the union of the session-count
 // and token-sum budgets scoped to the candidate set. An issue blocked on
 // either budget is in the rebuilt set; an issue blocked on both reports
-// the token budget. On a query error for one axis, the entire prior set
-// is folded in for that axis so a transient error never drops an issue
-// mid-tick. Must be called from the event loop goroutine.
+// the token budget. On a query error for one axis, the prior entries
+// attributed to that axis are folded back in so a transient error never
+// drops an issue mid-tick, while the other axis keeps its fresh result.
+// Must be called from the event loop goroutine.
 func (o *Orchestrator) rebuildBudgetExhausted(ctx context.Context, cfg config.ServiceConfig, sorted []domain.Issue) {
 	if cfg.Agent.MaxSessions == 0 && cfg.Agent.MaxTokens == 0 {
 		o.state.BudgetExhausted = make(map[string]struct{})
@@ -779,8 +780,11 @@ func (o *Orchestrator) rebuildBudgetExhausted(ctx context.Context, cfg config.Se
 				slog.Any("error", qErr),
 			)
 			for id := range prior {
+				if priorReason[id] != budgetReasonSession {
+					continue
+				}
 				fresh[id] = struct{}{}
-				freshReason[id] = priorReason[id]
+				freshReason[id] = budgetReasonSession
 			}
 		} else {
 			for _, id := range sessionExhausted {
@@ -797,10 +801,11 @@ func (o *Orchestrator) rebuildBudgetExhausted(ctx context.Context, cfg config.Se
 				slog.Any("error", qErr),
 			)
 			for id := range prior {
-				fresh[id] = struct{}{}
-				if _, ok := freshReason[id]; !ok {
-					freshReason[id] = priorReason[id]
+				if priorReason[id] != budgetReasonToken {
+					continue
 				}
+				fresh[id] = struct{}{}
+				freshReason[id] = budgetReasonToken
 			}
 		} else {
 			for _, id := range tokenExhausted {
