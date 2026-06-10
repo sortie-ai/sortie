@@ -69,6 +69,12 @@ type ServiceConfig struct {
 	// after [NewServiceConfig] returns. Zero value selects the
 	// workflow-wide fallback for every issue.
 	Dispatch DispatchConfig
+
+	// Notifications carries the parsed notifier backend list. Populated
+	// inside [NewServiceConfig] so the MCP sidecar, which reaches config
+	// only through that constructor, can read it. Zero value (nil
+	// Backends) means no notifier backend is configured.
+	Notifications NotificationsConfig
 }
 
 // SetDispatch attaches a parsed [DispatchConfig] to the service
@@ -142,16 +148,17 @@ type AgentConfig struct {
 // knownTopLevelKeys enumerates the front matter keys consumed by the
 // core schema. Anything else is collected into Extensions.
 var knownTopLevelKeys = map[string]bool{
-	"tracker":     true,
-	"polling":     true,
-	"workspace":   true,
-	"hooks":       true,
-	"agent":       true,
-	"db_path":     true,
-	"ci_feedback": true,
-	"self_review": true,
-	"reactions":   true,
-	"dispatch":    true,
+	"tracker":       true,
+	"polling":       true,
+	"workspace":     true,
+	"hooks":         true,
+	"agent":         true,
+	"db_path":       true,
+	"ci_feedback":   true,
+	"self_review":   true,
+	"reactions":     true,
+	"dispatch":      true,
+	"notifications": true,
 }
 
 // NewServiceConfig converts a raw front matter map into a validated
@@ -299,6 +306,11 @@ func NewServiceConfig(raw map[string]any) (ServiceConfig, error) {
 		delete(reactions, "ci_failure")
 	}
 
+	notifications, err := buildNotificationsConfig(raw)
+	if err != nil {
+		return ServiceConfig{}, err
+	}
+
 	extensions := make(map[string]any)
 	for k, v := range raw {
 		if !knownTopLevelKeys[k] {
@@ -320,6 +332,7 @@ func NewServiceConfig(raw map[string]any) (ServiceConfig, error) {
 		DBPath:                  dbPath,
 		Extensions:              extensions,
 		extensionsPreResolution: preResolution,
+		Notifications:           notifications,
 	}, nil
 }
 

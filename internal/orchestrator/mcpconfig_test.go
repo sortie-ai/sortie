@@ -125,19 +125,20 @@ func TestGenerateMCPConfig(t *testing.T) {
 		}
 
 		checks := map[string]string{
-			"SORTIE_ISSUE_ID":         p.IssueID,
-			"SORTIE_ISSUE_IDENTIFIER": p.Identifier,
-			"SORTIE_WORKSPACE":        p.WorkspacePath,
-			"SORTIE_DB_PATH":          p.DBPath,
-			"SORTIE_SESSION_ID":       p.SessionID,
+			"SORTIE_ISSUE_ID":           p.IssueID,
+			"SORTIE_ISSUE_IDENTIFIER":   p.Identifier,
+			"SORTIE_WORKSPACE":          p.WorkspacePath,
+			"SORTIE_DB_PATH":            p.DBPath,
+			"SORTIE_SESSION_ID":         p.SessionID,
+			"SORTIE_SESSION_AGENT_KIND": p.AgentKind,
 		}
 		for k, want := range checks {
 			if got, ok := env[k].(string); !ok || got != want {
 				t.Errorf("env[%q] = %q, want %q", k, env[k], want)
 			}
 		}
-		if len(env) != 5 {
-			t.Errorf("env key count = %d, want 5: %v", len(env), env)
+		if len(env) != 6 {
+			t.Errorf("env key count = %d, want 6: %v", len(env), env)
 		}
 	})
 
@@ -337,20 +338,21 @@ func TestGenerateMCPConfig(t *testing.T) {
 
 		// Per-session vars are also present and correct.
 		for k, want := range map[string]string{
-			"SORTIE_ISSUE_ID":         p.IssueID,
-			"SORTIE_ISSUE_IDENTIFIER": p.Identifier,
-			"SORTIE_WORKSPACE":        p.WorkspacePath,
-			"SORTIE_DB_PATH":          p.DBPath,
-			"SORTIE_SESSION_ID":       p.SessionID,
+			"SORTIE_ISSUE_ID":           p.IssueID,
+			"SORTIE_ISSUE_IDENTIFIER":   p.Identifier,
+			"SORTIE_WORKSPACE":          p.WorkspacePath,
+			"SORTIE_DB_PATH":            p.DBPath,
+			"SORTIE_SESSION_ID":         p.SessionID,
+			"SORTIE_SESSION_AGENT_KIND": p.AgentKind,
 		} {
 			if got, _ := env[k].(string); got != want {
 				t.Errorf("env[%q] = %q, want %q", k, got, want)
 			}
 		}
 
-		// 5 per-session + 2 process-level.
-		if len(env) != 7 {
-			t.Errorf("env key count = %d, want 7: %v", len(env), env)
+		// 6 per-session + 2 process-level.
+		if len(env) != 8 {
+			t.Errorf("env key count = %d, want 8: %v", len(env), env)
 		}
 	})
 
@@ -380,9 +382,9 @@ func TestGenerateMCPConfig(t *testing.T) {
 			t.Errorf("SORTIE_SESSION_ID = %q, want %q (per-session wins)", got, p.SessionID)
 		}
 
-		// Overwritten keys do not inflate the map; count stays at 5.
-		if len(env) != 5 {
-			t.Errorf("env key count = %d, want 5: %v", len(env), env)
+		// Overwritten keys do not inflate the map; count stays at 6.
+		if len(env) != 6 {
+			t.Errorf("env key count = %d, want 6: %v", len(env), env)
 		}
 	})
 
@@ -468,8 +470,8 @@ func TestGenerateMCPConfig_Attempt(t *testing.T) {
 		if got, ok := env["SORTIE_ATTEMPT"].(string); !ok || got != "2" {
 			t.Errorf("env[%q] = %q, want %q", "SORTIE_ATTEMPT", env["SORTIE_ATTEMPT"], "2")
 		}
-		if len(env) != 6 {
-			t.Errorf("env key count = %d, want 6: %v", len(env), env)
+		if len(env) != 7 {
+			t.Errorf("env key count = %d, want 7: %v", len(env), env)
 		}
 	})
 
@@ -492,6 +494,116 @@ func TestGenerateMCPConfig_Attempt(t *testing.T) {
 
 		if _, present := env["SORTIE_ATTEMPT"]; present {
 			t.Errorf("env[%q] = %v, want key absent when Attempt is nil", "SORTIE_ATTEMPT", env["SORTIE_ATTEMPT"])
+		}
+	})
+}
+
+func TestGenerateMCPConfig_AgentKind(t *testing.T) {
+	t.Parallel()
+
+	t.Run("SORTIE_SESSION_AGENT_KIND_written_with_AgentKind_value", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		p := mcpParams(dir)
+		p.AgentKind = "claude-code"
+
+		_, err := GenerateMCPConfig(p)
+		if err != nil {
+			t.Fatalf("GenerateMCPConfig: %v", err)
+		}
+
+		env, ok := sortieEntry(t, readMCPConfig(t, dir))["env"].(map[string]any)
+		if !ok {
+			t.Fatal("env is not an object")
+		}
+
+		got, ok := env["SORTIE_SESSION_AGENT_KIND"].(string)
+		if !ok {
+			t.Fatalf("env[%q] missing or wrong type: %v", "SORTIE_SESSION_AGENT_KIND", env["SORTIE_SESSION_AGENT_KIND"])
+		}
+		if got != "claude-code" {
+			t.Errorf("env[%q] = %q, want %q", "SORTIE_SESSION_AGENT_KIND", got, "claude-code")
+		}
+	})
+
+	t.Run("per_session_AgentKind_overrides_ProcessEnv", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		p := mcpParams(dir)
+		p.AgentKind = "codex"
+		p.ProcessEnv = map[string]string{
+			"SORTIE_SESSION_AGENT_KIND": "stale-kind-from-process",
+		}
+
+		_, err := GenerateMCPConfig(p)
+		if err != nil {
+			t.Fatalf("GenerateMCPConfig: %v", err)
+		}
+
+		env, ok := sortieEntry(t, readMCPConfig(t, dir))["env"].(map[string]any)
+		if !ok {
+			t.Fatal("env is not an object")
+		}
+
+		got, ok := env["SORTIE_SESSION_AGENT_KIND"].(string)
+		if !ok {
+			t.Fatalf("env[%q] missing or wrong type", "SORTIE_SESSION_AGENT_KIND")
+		}
+		if got != "codex" {
+			t.Errorf("env[%q] = %q (per-session), want %q; per-session write must win over ProcessEnv", "SORTIE_SESSION_AGENT_KIND", got, "codex")
+		}
+	})
+
+	t.Run("SORTIE_SESSION_AGENT_KIND_distinct_from_SORTIE_AGENT_KIND", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		p := mcpParams(dir)
+		p.AgentKind = "mock-agent"
+
+		_, err := GenerateMCPConfig(p)
+		if err != nil {
+			t.Fatalf("GenerateMCPConfig: %v", err)
+		}
+
+		env, ok := sortieEntry(t, readMCPConfig(t, dir))["env"].(map[string]any)
+		if !ok {
+			t.Fatal("env is not an object")
+		}
+
+		// The per-session agent kind must be written as SORTIE_SESSION_AGENT_KIND.
+		if _, present := env["SORTIE_SESSION_AGENT_KIND"]; !present {
+			t.Error("env[\"SORTIE_SESSION_AGENT_KIND\"] absent; per-session agent kind not written")
+		}
+		// SORTIE_AGENT_KIND is the config-override variable. It must NOT be
+		// written by GenerateMCPConfig; writing it would collide with the
+		// env-override registry and rewrite the workflow default agent.kind.
+		if _, present := env["SORTIE_AGENT_KIND"]; present {
+			t.Error("env[\"SORTIE_AGENT_KIND\"] present; GenerateMCPConfig must not write the override variable")
+		}
+	})
+
+	t.Run("empty_AgentKind_writes_empty_string", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		p := mcpParams(dir)
+		p.AgentKind = ""
+
+		_, err := GenerateMCPConfig(p)
+		if err != nil {
+			t.Fatalf("GenerateMCPConfig: %v", err)
+		}
+
+		env, ok := sortieEntry(t, readMCPConfig(t, dir))["env"].(map[string]any)
+		if !ok {
+			t.Fatal("env is not an object")
+		}
+
+		got, ok := env["SORTIE_SESSION_AGENT_KIND"].(string)
+		if !ok {
+			t.Fatalf("env[%q] missing or wrong type: %v", "SORTIE_SESSION_AGENT_KIND", env["SORTIE_SESSION_AGENT_KIND"])
+		}
+		if got != "" {
+			t.Errorf("env[%q] = %q, want empty string when AgentKind is empty", "SORTIE_SESSION_AGENT_KIND", got)
 		}
 	})
 }

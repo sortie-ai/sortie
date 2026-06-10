@@ -1829,6 +1829,7 @@ future SCM APIs) through network calls using orchestrator-managed credentials. T
 to transport failures, authentication errors, rate limits, and per-tool timeouts.
 
 - `tracker_api` (Section 10.4.5)
+- `notify_operator` (Section 10.4.5)
 
 Future tools follow the same classification.
 
@@ -1945,6 +1946,48 @@ session exit, so no window double counts.
 On failure the tool returns a JSON error object of the form `{"error": "<message>"}`. This
 happens when the budget query fails.
 
+**`notify_operator` (Tier 2)** sends a real-time notification to an operator-configured
+channel while a session runs. The agent uses it to escalate a decision it should not make
+alone, report progress on a long task, or flag a blocker, without terminating the session.
+The tool resolves the configured notifier backends and posts to them; it knows nothing about
+any specific channel.
+
+Availability: registered only when at least one valid notifier backend is configured in the
+`notifications` list (Section 5). The registration derives from the same workflow file the
+main process reads, so the sidecar and the main process agree on the tool set. When the list
+is empty or absent, the tool is not registered.
+
+The agent supplies only the message; the system owns the envelope and the agent cannot set
+or forge any envelope field. The input schema rejects unknown fields:
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `severity` | string | Yes | One of `info`, `warning`, `critical` |
+| `title` | string | Yes | Non-empty short summary |
+| `body` | string | Yes | Non-empty notification detail |
+| `category` | string | No | One of `decision_needed`, `progress`, `blocked`, `completed`, `other` |
+
+The system-owned envelope carries a generated notification id, an ISO-8601 UTC timestamp, a
+source (the hostname by default), the issue id and identifier, the session id, the attempt,
+and the dispatch-frozen agent kind. The envelope correlates the notification to a session for
+an operator and a machine consumer.
+
+Rate limiting: the tool enforces a per-session cap, `max_per_session`, where `0` selects the
+default rather than unlimited. A call past the cap returns `rate_limited` and sends nothing.
+An accepted call increments the counter once, after delivery, not once per backend.
+
+Result semantics: on success the tool returns `{"success": true, "delivered": <int>,
+"notification_id": "<id>"}`. On a domain failure it returns `{"success": false, "error":
+{"kind": "...", "message": "..."}}` with `error.kind` in the closed set below. The Go error
+return is reserved for an internal marshal failure.
+
+| `error.kind` | Condition |
+|---|---|
+| `invalid_input` | Input fails schema decode, carries unknown or trailing fields, has an out-of-enum `severity` or `category`, or has an empty `title` or `body` |
+| `rate_limited` | The per-session counter has reached `max_per_session` |
+| `send_failed` | A backend returned a transport failure, a non-2xx response, or an unparseable response. The message is a redacted category and never echoes the URL, request body, or response body |
+| `backend_unavailable` | No backend could be resolved at execution time (defensive; normal operation gates registration on a configured backend) |
+
 #### 10.4.6 Tools vs. agent-authored files
 
 The tool subsystem (this section) and the `.sortie/status` file protocol (Section 21) are
@@ -1997,6 +2040,56 @@ execution channel is unavailable (sidecar crash, agent lacks MCP support),
 the file-based advisory signal still functions. If the filesystem is read-only or the workspace
 is on a remote host with restricted write access, tool calls still function. Neither channel is
 a single point of failure for the other.
+
+#### 10.4.7 Notifier adapter family
+
+Operator notifications are an adapter family, the same shape as the tracker, agent, CI, and
+SCM families. The `notify_operator` tool (Section 10.4.5) is a thin Tier 2 wrapper over this
+family; a new channel is a new package behind the existing interface, not a tool rewrite.
+
+The family has four parts:
+
+- **The `domain.Notifier` interface** exposes one method, `Send(ctx, Notification) error`. A
+  single method keeps every backend interchangeable and lets any producer reuse the family.
+  An implementation applies a per-call timeout and never logs the endpoint URL, the request
+  body, or the response body.
+- **The normalized `domain.Notification`** has two layers. The envelope is system-owned and
+  carries the notification id, timestamp, source, issue id and identifier, session id,
+  attempt, and dispatch-frozen agent kind. The message is agent-supplied and carries
+  `severity`, `title`, `body`, and an optional `category`. The value is self-contained:
+  every field a backend needs rides in it, with no dependency on producer-only state, so a
+  future orchestrator producer can fill the envelope without an interface change.
+- **The `registry.Notifiers` registry** maps a `kind` string to a constructor. Backend
+  packages register in `init()`; the sidecar resolves backends by `kind` at runtime. This
+  mirrors `registry.SCMAdapters` exactly.
+- **The backend packages** live under `internal/notify/<kind>/`. v1 ships `webhook` (posts
+  the notification as a JSON object using generic field names) and `slack` (posts a
+  Slack-shaped body with a `text` field). Each builds on the shared HTTP client with its
+  configured endpoint as the base URL, applies a mandatory per-call timeout, and classifies
+  its own transport and non-2xx errors into a category that omits the URL and payload.
+
+The backend packages obey the adapter-family boundary rules: no cross-adapter imports, no
+orchestrator imports, normalization to the domain type at the boundary, and generic
+`notifier_*` vocabulary in the core, never `slack_*`.
+
+Backends register via the notifier registry using `init()` functions:
+
+```go
+func init() {
+    registry.Notifiers.Register("webhook", newNotifier)
+}
+```
+
+The `NotifierConstructor` signature is:
+
+```go
+type NotifierConstructor func(config map[string]any) (domain.Notifier, error)
+```
+
+The `config` parameter receives the per-backend fields from the matching `notifications`
+list entry, with `$VAR` references already resolved. A constructor rejects a missing required
+field or a secret that resolved to the empty string, which surfaces as a fatal sidecar
+startup error rather than a notification posted nowhere.
 
 ### 10.5 Timeouts and Error Mapping
 
