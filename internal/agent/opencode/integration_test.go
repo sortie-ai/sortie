@@ -32,7 +32,7 @@ func integrationCommand() string {
 func integrationConfig() map[string]any {
 	model := os.Getenv("SORTIE_OPENCODE_MODEL")
 	if model == "" {
-		model = "anthropic/claude-haiku-4-5"
+		model = "opencode/big-pickle"
 	}
 
 	cfg := map[string]any{
