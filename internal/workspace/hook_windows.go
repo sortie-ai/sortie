@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"log/slog"
 	"os/exec"
-	"sync"
 	"syscall"
 	"time"
 	"unsafe"
@@ -25,7 +24,10 @@ const statusControlCExit uint32 = 0xC000013A
 // RunHook executes a hook script via cmd.exe on Windows, enforcing a
 // timeout and capturing output. The subprocess is placed in a Job
 // Object with KILL_ON_JOB_CLOSE so that the entire process tree is
-// terminated on timeout or context cancellation.
+// terminated on timeout or context cancellation. Before returning,
+// RunHook terminates any process remaining in the job and waits for
+// the job to drain, so no descendant still holds a handle into the
+// hook directory when the caller proceeds to clean it up.
 //
 // On success (exit code 0), returns a [HookResult] with truncated
 // output. On failure, returns a [*HookError] with Op indicating the
@@ -73,27 +75,30 @@ func RunHook(ctx context.Context, params HookParams) (HookResult, error) {
 	}
 
 	if job != 0 {
-		var closeJob sync.Once
-		closeHandle := func() {
-			closeJob.Do(func() { windows.CloseHandle(job) })
-		}
 		cmd.Cancel = func() error {
-			// On cancellation/timeout, actively terminate the tree
-			// before closing the handle.
-			err := windows.TerminateJobObject(job, statusControlCExit)
-			closeHandle()
-			return err
+			// On cancellation/timeout, actively terminate the tree.
+			// The handle stays open so the post-Wait drain can observe
+			// the job; the deferred close releases it on every path.
+			return windows.TerminateJobObject(job, statusControlCExit)
 		}
-		// On the happy path, just close the handle.
-		// KILL_ON_JOB_CLOSE ensures any stray background children
-		// are still cleaned up when the handle is released.
-		defer closeHandle()
+		defer windows.CloseHandle(job)
 	}
 
 	cmd.WaitDelay = 3 * time.Second
 
 	err := cmd.Wait()
 	output := buf.String()
+
+	// Job process termination is asynchronous: TerminateJobObject and
+	// KILL_ON_JOB_CLOSE both return before the dying processes release
+	// their handles. A descendant still holding the hook directory as
+	// its working directory makes the caller's directory cleanup fail
+	// with a sharing violation, so terminate any survivors explicitly
+	// and wait until the job reports zero active processes.
+	if job != 0 {
+		_ = windows.TerminateJobObject(job, statusControlCExit)
+		waitJobDrained(job)
+	}
 
 	if err == nil {
 		return HookResult{Output: output}, nil
@@ -183,4 +188,51 @@ func createHookJobObject(pid int) (windows.Handle, error) {
 	}
 
 	return job, nil
+}
+
+// jobObjectBasicAccountingInformation mirrors the Win32
+// JOBOBJECT_BASIC_ACCOUNTING_INFORMATION layout consumed by
+// QueryInformationJobObject; x/sys/windows does not define the type.
+type jobObjectBasicAccountingInformation struct {
+	TotalUserTime             int64
+	TotalKernelTime           int64
+	ThisPeriodTotalUserTime   int64
+	ThisPeriodTotalKernelTime int64
+	TotalPageFaultCount       uint32
+	TotalProcesses            uint32
+	ActiveProcesses           uint32
+	TotalTerminatedProcesses  uint32
+}
+
+// waitJobDrained polls the job accounting counters until no process in
+// the job remains active or the deadline expires. Termination initiated
+// by TerminateJobObject completes asynchronously, so returning before
+// the active count reaches zero would let a dying child briefly outlive
+// RunHook with its working-directory handle still open.
+func waitJobDrained(job windows.Handle) {
+	const (
+		pollInterval = 5 * time.Millisecond
+		drainTimeout = 2 * time.Second
+	)
+
+	deadline := time.Now().Add(drainTimeout)
+	for {
+		var info jobObjectBasicAccountingInformation
+		err := windows.QueryInformationJobObject(
+			job,
+			windows.JobObjectBasicAccountingInformation,
+			uintptr(unsafe.Pointer(&info)),
+			uint32(unsafe.Sizeof(info)),
+			nil,
+		)
+		if err != nil || info.ActiveProcesses == 0 {
+			return
+		}
+		if time.Now().After(deadline) {
+			slog.Warn("hook job processes still active after drain deadline",
+				slog.Int64("active_processes", int64(info.ActiveProcesses)))
+			return
+		}
+		time.Sleep(pollInterval)
+	}
 }
