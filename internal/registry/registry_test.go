@@ -381,6 +381,12 @@ func TestRegistryError_Error(t *testing.T) {
 
 // --- Type-specific constructor tests ---
 
+var _ domain.Notifier = (*stubNotifier)(nil)
+
+type stubNotifier struct{}
+
+func (s *stubNotifier) Send(_ context.Context, _ domain.Notification) error { return nil }
+
 var _ domain.TrackerAdapter = (*mockTrackerAdapter)(nil)
 
 type mockTrackerAdapter struct{}
@@ -518,6 +524,82 @@ func TestPackageLevelRegistries(t *testing.T) {
 		}
 		if kinds := CIProviders.Kinds(); kinds == nil {
 			t.Fatal("CIProviders.Kinds() returned nil, want non-nil slice")
+		}
+	})
+
+	t.Run("Notifiers", func(t *testing.T) {
+		t.Parallel()
+
+		if Notifiers == nil {
+			t.Fatal("Notifiers is nil")
+		}
+		if kinds := Notifiers.Kinds(); kinds == nil {
+			t.Fatal("Notifiers.Kinds() returned nil, want non-nil slice")
+		}
+	})
+}
+
+func TestNotifiersRegistry(t *testing.T) {
+	t.Parallel()
+
+	t.Run("register and resolve stub kind", func(t *testing.T) {
+		t.Parallel()
+
+		r := NewRegistry[NotifierConstructor, struct{}]("notifier")
+		r.Register("test-notifier-stub", func(_ map[string]any) (domain.Notifier, error) {
+			return &stubNotifier{}, nil
+		})
+
+		ctor, err := r.Get("test-notifier-stub")
+		if err != nil {
+			t.Fatalf("Get(%q) unexpected error: %v", "test-notifier-stub", err)
+		}
+
+		notifier, err := ctor(nil)
+		if err != nil {
+			t.Fatalf("NotifierConstructor() unexpected error: %v", err)
+		}
+		if notifier == nil {
+			t.Fatal("NotifierConstructor() returned nil, want non-nil Notifier")
+		}
+	})
+
+	t.Run("unknown kind returns RegistryError", func(t *testing.T) {
+		t.Parallel()
+
+		r := NewRegistry[NotifierConstructor, struct{}]("notifier")
+
+		_, err := r.Get("nonexistent-notifier-kind")
+		if err == nil {
+			t.Fatal("Get(unknown kind) = nil, want *RegistryError")
+		}
+
+		var re *RegistryError
+		if !errors.As(err, &re) {
+			t.Fatalf("Get(unknown kind) error type = %T, want *RegistryError", err)
+		}
+		if re.Dimension != "notifier" {
+			t.Errorf("RegistryError.Dimension = %q, want %q", re.Dimension, "notifier")
+		}
+		if re.Kind != "nonexistent-notifier-kind" {
+			t.Errorf("RegistryError.Kind = %q, want %q", re.Kind, "nonexistent-notifier-kind")
+		}
+	})
+
+	t.Run("package-level Notifiers uses notifier dimension", func(t *testing.T) {
+		t.Parallel()
+
+		_, err := Notifiers.Get("no-such-kind-xyz")
+		if err == nil {
+			t.Fatal("Notifiers.Get(unknown) = nil, want error")
+		}
+
+		var re *RegistryError
+		if !errors.As(err, &re) {
+			t.Fatalf("error type = %T, want *RegistryError", err)
+		}
+		if re.Dimension != "notifier" {
+			t.Errorf("Notifiers dimension = %q, want %q", re.Dimension, "notifier")
 		}
 	})
 }

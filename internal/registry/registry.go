@@ -65,6 +65,17 @@ type SCMAdapterConstructor func(adapterConfig map[string]any) (domain.SCMAdapter
 // the orchestrator resolves adapters via [Registry.Get] at runtime.
 var SCMAdapters = NewRegistry[SCMAdapterConstructor, struct{}]("scm")
 
+// NotifierConstructor creates a [domain.Notifier] from the backend
+// entry's pass-through config map. Implementations validate their
+// config and return an error when a required field is missing or a
+// referenced secret resolved to an empty string.
+type NotifierConstructor func(config map[string]any) (domain.Notifier, error)
+
+// Notifiers is the default notifier adapter registry. Backend packages
+// register themselves via [Registry.Register] in their init functions;
+// the sidecar resolves backends via [Registry.Get] at runtime.
+var Notifiers = NewRegistry[NotifierConstructor, struct{}]("notifier")
+
 // TrackerConfigFields holds the config values passed to adapter
 // validation functions. This is a plain data struct that avoids
 // coupling the registry package to the config package.

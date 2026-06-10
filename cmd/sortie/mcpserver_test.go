@@ -6,12 +6,15 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/sortie-ai/sortie/internal/config"
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/persistence"
 	"github.com/sortie-ai/sortie/internal/tool/mcpserver"
@@ -336,4 +339,227 @@ func TestBuildBudgetQuery(t *testing.T) {
 			t.Errorf("usage = %+v, want all-zero", usage)
 		}
 	})
+}
+
+func TestBuildNotifyTool_EmptyBackends_ReturnsNilNil(t *testing.T) {
+	t.Parallel()
+
+	tool, err := buildNotifyTool(nil)
+	if err != nil {
+		t.Fatalf("buildNotifyTool(nil) error = %v, want nil", err)
+	}
+	if tool != nil {
+		t.Errorf("buildNotifyTool(nil) tool = %v, want nil", tool)
+	}
+}
+
+func TestBuildNotifyTool_EmptySlice_ReturnsNilNil(t *testing.T) {
+	t.Parallel()
+
+	tool, err := buildNotifyTool([]config.NotificationBackend{})
+	if err != nil {
+		t.Fatalf("buildNotifyTool(empty) error = %v, want nil", err)
+	}
+	if tool != nil {
+		t.Errorf("buildNotifyTool(empty) tool = %v, want nil", tool)
+	}
+}
+
+func TestBuildNotifyTool_ValidWebhookBackend_ReturnsNonNilTool(t *testing.T) {
+	t.Parallel()
+
+	// Use a real httptest server so the webhook constructor does not
+	// reject the URL. The server URL is non-empty so construction succeeds.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(srv.Close)
+
+	backends := []config.NotificationBackend{
+		{
+			Kind:   "webhook",
+			Config: map[string]any{"url": srv.URL},
+		},
+	}
+
+	tool, err := buildNotifyTool(backends)
+	if err != nil {
+		t.Fatalf("buildNotifyTool(webhook) error = %v, want nil", err)
+	}
+	if tool == nil {
+		t.Fatal("buildNotifyTool(webhook) tool = nil, want non-nil")
+	}
+	if tool.Name() != "notify_operator" {
+		t.Errorf("tool.Name() = %q, want %q", tool.Name(), "notify_operator")
+	}
+}
+
+func TestBuildNotifyTool_ValidSlackBackend_ReturnsNonNilTool(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(srv.Close)
+
+	backends := []config.NotificationBackend{
+		{
+			Kind:   "slack",
+			Config: map[string]any{"webhook_url": srv.URL},
+		},
+	}
+
+	tool, err := buildNotifyTool(backends)
+	if err != nil {
+		t.Fatalf("buildNotifyTool(slack) error = %v, want nil", err)
+	}
+	if tool == nil {
+		t.Fatal("buildNotifyTool(slack) tool = nil, want non-nil")
+	}
+}
+
+func TestBuildNotifyTool_UnknownKind_ReturnsError(t *testing.T) {
+	t.Parallel()
+
+	backends := []config.NotificationBackend{
+		{
+			Kind:   "no-such-backend-kind-xyz",
+			Config: map[string]any{"url": "https://example.com"},
+		},
+	}
+
+	tool, err := buildNotifyTool(backends)
+	if err == nil {
+		t.Fatal("buildNotifyTool(unknown kind) error = nil, want non-nil error")
+	}
+	if tool != nil {
+		t.Errorf("buildNotifyTool(unknown kind) tool = %v, want nil on error", tool)
+	}
+}
+
+func TestBuildNotifyTool_EmptyRequiredSecret_ReturnsError(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		kind   string
+		config map[string]any
+	}{
+		{
+			name:   "webhook empty url",
+			kind:   "webhook",
+			config: map[string]any{"url": ""},
+		},
+		{
+			name:   "slack empty webhook_url",
+			kind:   "slack",
+			config: map[string]any{"webhook_url": ""},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			backends := []config.NotificationBackend{
+				{Kind: tt.kind, Config: tt.config},
+			}
+
+			tool, err := buildNotifyTool(backends)
+			if err == nil {
+				t.Fatalf("buildNotifyTool(%q, empty secret) error = nil, want fatal constructor error", tt.kind)
+			}
+			if tool != nil {
+				t.Errorf("buildNotifyTool(%q, empty secret) tool = %v, want nil on error", tt.kind, tool)
+			}
+		})
+	}
+}
+
+func TestBuildNotifyTool_PartialFailureIsTotal(t *testing.T) {
+	t.Parallel()
+
+	// First backend valid, second backend has an unknown kind. The result
+	// must be an error, not a partial set of backends.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	t.Cleanup(srv.Close)
+
+	backends := []config.NotificationBackend{
+		{Kind: "webhook", Config: map[string]any{"url": srv.URL}},
+		{Kind: "unknown-kind-for-partial-test", Config: map[string]any{"url": srv.URL}},
+	}
+
+	tool, err := buildNotifyTool(backends)
+	if err == nil {
+		t.Fatal("buildNotifyTool(partial failure) = nil error, want non-nil (no partial registration)")
+	}
+	if tool != nil {
+		t.Errorf("buildNotifyTool(partial failure) tool = %v, want nil", tool)
+	}
+}
+
+func TestResolveNotificationCap_AllZero_ReturnsDefault(t *testing.T) {
+	t.Parallel()
+
+	backends := []config.NotificationBackend{
+		{Kind: "webhook", MaxPerSession: 0},
+		{Kind: "slack", MaxPerSession: 0},
+	}
+
+	got := resolveNotificationCap(backends)
+	if got != defaultMaxPerSession {
+		t.Errorf("resolveNotificationCap(all-zero) = %d, want default %d", got, defaultMaxPerSession)
+	}
+}
+
+func TestResolveNotificationCap_EmptySlice_ReturnsDefault(t *testing.T) {
+	t.Parallel()
+
+	got := resolveNotificationCap(nil)
+	if got != defaultMaxPerSession {
+		t.Errorf("resolveNotificationCap(nil) = %d, want default %d", got, defaultMaxPerSession)
+	}
+}
+
+func TestResolveNotificationCap_SingleNonZero_ReturnsThatValue(t *testing.T) {
+	t.Parallel()
+
+	backends := []config.NotificationBackend{
+		{Kind: "webhook", MaxPerSession: 15},
+	}
+
+	got := resolveNotificationCap(backends)
+	if got != 15 {
+		t.Errorf("resolveNotificationCap({15}) = %d, want 15", got)
+	}
+}
+
+func TestResolveNotificationCap_MultipleNonZero_ReturnsMax(t *testing.T) {
+	t.Parallel()
+
+	backends := []config.NotificationBackend{
+		{Kind: "webhook", MaxPerSession: 5},
+		{Kind: "slack", MaxPerSession: 30},
+	}
+
+	got := resolveNotificationCap(backends)
+	if got != 30 {
+		t.Errorf("resolveNotificationCap({5,30}) = %d, want 30", got)
+	}
+}
+
+func TestResolveNotificationCap_MixedZeroAndNonZero_ReturnsNonZeroMax(t *testing.T) {
+	t.Parallel()
+
+	backends := []config.NotificationBackend{
+		{Kind: "webhook", MaxPerSession: 0},
+		{Kind: "slack", MaxPerSession: 10},
+	}
+
+	got := resolveNotificationCap(backends)
+	if got != 10 {
+		t.Errorf("resolveNotificationCap({0,10}) = %d, want 10", got)
+	}
 }

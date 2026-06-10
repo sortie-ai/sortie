@@ -141,7 +141,7 @@ After parsing, the loader produces a struct with three fields:
 
 ### 2.1 Top-Level Keys
 
-The core schema recognizes ten top-level keys:
+The core schema recognizes eleven top-level keys:
 
 ```yaml
 tracker: # Issue tracker connection and query settings
@@ -154,6 +154,7 @@ ci_feedback: # CI failure feedback loop (deprecated; use reactions.ci_failure)
 reactions: # Reaction-based feedback loops (CI failure, review comments)
 self_review: # Self-review verification loop (optional)
 dispatch: # Rule-based dispatch routing
+notifications: # Operator notification backends (notify_operator tool)
 ```
 
 **Unknown top-level keys are ignored** by the core schema for forward compatibility. They
@@ -834,6 +835,58 @@ the terminal catch-all. Each rule carries a `template:` path that is relative to
 The design rationale is in `architecture.md` §5.3.10 and
 [ADR-0011](decisions/0011-dispatch-rule-configuration.md). Neither document is required
 to write a valid `dispatch` block; they explain why the feature is shaped as it is.
+
+---
+
+### 2.12 `notifications` (operator notification backends)
+
+```yaml
+notifications: # ordered list of notifier backends; optional
+  - kind: slack
+    webhook_url: $SORTIE_SLACK_WEBHOOK_URL # SORTIE_-prefixed reference (mandatory)
+    max_per_session: 20                     # optional; 0 selects the default (also 20)
+  - kind: webhook
+    url: $SORTIE_OPS_WEBHOOK_URL            # SORTIE_-prefixed reference (mandatory)
+```
+
+The `notifications` list configures the backends behind the `notify_operator` agent tool.
+While a session runs, the agent calls `notify_operator` to escalate a decision, report
+progress, or flag a blocker to a real-time channel. The tool is registered only when at
+least one valid backend is configured; an empty or absent list leaves it unregistered, so
+the agent is never offered a tool it cannot use.
+
+The value is a sequence, not a single object. A second channel is a second list entry. Each
+entry is a map carrying a required `kind` discriminator and that backend's own fields.
+
+| Field | Type | Required | Default | Description |
+| ----- | ---- | -------- | ------- | ----------- |
+| `kind` | string | Yes | _(none)_ | Backend discriminator. v1 backends are `webhook` and `slack`. |
+| `max_per_session` | int | No | `20` | Per-session notification cap. `0` selects the default (`20`); it never means unlimited. A negative value is rejected. |
+
+Per-backend fields depend on `kind` and are passed through to the backend untyped:
+
+| `kind` | Field | Description |
+| ------ | ----- | ----------- |
+| `webhook` | `url` | Endpoint that receives an HTTP POST of the notification as a JSON object using generic field names. |
+| `slack` | `webhook_url` | Slack incoming webhook URL that receives a Slack-shaped JSON body with a `text` field. |
+
+The `notifications` `webhook` backend is an outbound POST to an operator-supplied endpoint.
+It is unrelated to inbound tracker webhooks (§20 of `architecture.md`), which trigger
+reconciliation. The two share a name but not a direction.
+
+When the list configures more than one backend, the effective per-session cap is the
+maximum non-zero `max_per_session` across entries, falling back to the default when every
+entry is `0` or unset. The cap counts `notify_operator` calls, not per-backend sends.
+
+**`SORTIE_`-prefixed secret rule:**
+
+A backend secret MUST be given as a reference to a `SORTIE_`-prefixed environment variable,
+written as `$SORTIE_NAME` or `${SORTIE_NAME}`. The prefix is mandatory, not stylistic. The
+`notify_operator` tool runs in a separate `sortie mcp-server` process that receives only the
+workflow file path and the orchestrator's `SORTIE_`-prefixed variables. A reference without
+the `SORTIE_` prefix, or to an unset variable, resolves to an empty string in that process.
+The backend rejects an empty required secret, which surfaces as a fatal startup error rather
+than a notification posted nowhere. Name every notification secret with the `SORTIE_` prefix.
 
 ---
 

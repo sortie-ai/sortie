@@ -37,6 +37,12 @@ type MCPConfigParams struct {
 	// When non-nil, written to the env block as SORTIE_ATTEMPT.
 	Attempt *int
 
+	// AgentKind is the dispatch-frozen agent kind for this session.
+	// Written to the env block as SORTIE_SESSION_AGENT_KIND so the
+	// notify_operator envelope can record the agent that actually ran
+	// the session. Empty when no agent kind is resolved.
+	AgentKind string
+
 	// OperatorMCPConfigPath is the path to the operator-provided MCP
 	// config file. Empty when no operator config is specified.
 	OperatorMCPConfigPath string
@@ -63,7 +69,7 @@ func GenerateMCPConfig(params MCPConfigParams) (string, error) {
 	// Build the env block with a two-layer merge: process-level SORTIE_*
 	// variables first (lower precedence), then per-session variables
 	// (higher precedence, always win).
-	env := make(map[string]string, len(params.ProcessEnv)+5)
+	env := make(map[string]string, len(params.ProcessEnv)+6)
 	for k, v := range params.ProcessEnv {
 		env[k] = v
 	}
@@ -72,6 +78,7 @@ func GenerateMCPConfig(params MCPConfigParams) (string, error) {
 	env["SORTIE_WORKSPACE"] = params.WorkspacePath
 	env["SORTIE_DB_PATH"] = params.DBPath
 	env["SORTIE_SESSION_ID"] = params.SessionID
+	env["SORTIE_SESSION_AGENT_KIND"] = params.AgentKind
 	if params.Attempt != nil {
 		env["SORTIE_ATTEMPT"] = strconv.Itoa(*params.Attempt)
 	}

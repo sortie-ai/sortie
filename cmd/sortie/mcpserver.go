@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strconv"
 
 	"github.com/sortie-ai/sortie/internal/config"
 	"github.com/sortie-ai/sortie/internal/domain"
@@ -18,10 +19,16 @@ import (
 	"github.com/sortie-ai/sortie/internal/tool/budget"
 	"github.com/sortie-ai/sortie/internal/tool/history"
 	"github.com/sortie-ai/sortie/internal/tool/mcpserver"
+	"github.com/sortie-ai/sortie/internal/tool/notify"
 	"github.com/sortie-ai/sortie/internal/tool/status"
 	"github.com/sortie-ai/sortie/internal/tool/trackerapi"
 	"github.com/sortie-ai/sortie/internal/workflow"
 )
+
+// defaultMaxPerSession is the per-session notification cap selected when
+// no backend declares a non-zero max_per_session. 0 in config selects
+// this default; it never means unlimited.
+const defaultMaxPerSession = 20
 
 func runMCPServer(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer) int {
 	if containsHelpFlag(args) {
@@ -117,6 +124,19 @@ func runMCPServer(ctx context.Context, args []string, stdout io.Writer, stderr i
 		}
 	}
 
+	// Register notify_operator only when at least one backend is
+	// configured. An invalid backend is a fatal startup error, never a
+	// partial registration, so the sidecar and main process agree on the
+	// advertised tool set.
+	notifyTool, notifyErr := buildNotifyTool(cfg.Notifications.Backends)
+	if notifyErr != nil {
+		logger.Error("failed to configure notify_operator", slog.Any("error", notifyErr))
+		return 1
+	}
+	if notifyTool != nil {
+		toolRegistry.Register(notifyTool)
+	}
+
 	srv := mcpserver.NewServer(toolRegistry, os.Stdin, stdout, logger, Version)
 	if err := srv.Serve(ctx); err != nil {
 		logger.Error("MCP server error", slog.Any("error", err))
@@ -124,6 +144,66 @@ func runMCPServer(ctx context.Context, args []string, stdout io.Writer, stderr i
 	}
 
 	return 0
+}
+
+// buildNotifyTool resolves the configured notifier backends and returns
+// the notify_operator tool. It returns (nil, nil) when no backend is
+// configured, so the caller skips registration. An unknown kind or a
+// constructor error (including a required secret that resolved to the
+// empty string) is fatal and returned as a non-nil error rather than a
+// partial registration. The envelope context is read from the sidecar
+// environment.
+func buildNotifyTool(configured []config.NotificationBackend) (domain.AgentTool, error) {
+	if len(configured) == 0 {
+		return nil, nil
+	}
+
+	backends := make([]domain.Notifier, 0, len(configured))
+	for _, entry := range configured {
+		ctor, err := registry.Notifiers.Get(entry.Kind)
+		if err != nil {
+			return nil, err
+		}
+		notifier, err := ctor(entry.Config)
+		if err != nil {
+			return nil, fmt.Errorf("notifier %q: %w", entry.Kind, err)
+		}
+		backends = append(backends, notifier)
+	}
+
+	var attempt *int
+	if raw := os.Getenv("SORTIE_ATTEMPT"); raw != "" {
+		if n, err := strconv.Atoi(raw); err == nil {
+			attempt = &n
+		}
+	}
+	envContext := notify.NotificationEnvelopeContext{
+		IssueID:    os.Getenv("SORTIE_ISSUE_ID"),
+		Identifier: os.Getenv("SORTIE_ISSUE_IDENTIFIER"),
+		SessionID:  os.Getenv("SORTIE_SESSION_ID"),
+		Attempt:    attempt,
+		Agent:      os.Getenv("SORTIE_SESSION_AGENT_KIND"),
+	}
+
+	return notify.New(backends, envContext, resolveNotificationCap(configured)), nil
+}
+
+// resolveNotificationCap selects the single per-session cap for the tool
+// from the configured backends. It returns the maximum non-zero
+// max_per_session across entries and falls back to defaultMaxPerSession
+// when every entry is 0 or unset. The cap counts notify_operator calls,
+// not per-backend sends, so it is a tool-level property.
+func resolveNotificationCap(backends []config.NotificationBackend) int {
+	maxCap := 0
+	for _, b := range backends {
+		if b.MaxPerSession > maxCap {
+			maxCap = b.MaxPerSession
+		}
+	}
+	if maxCap == 0 {
+		return defaultMaxPerSession
+	}
+	return maxCap
 }
 
 func buildBudgetQuery(store *persistence.Store) budget.BudgetQueryFunc {

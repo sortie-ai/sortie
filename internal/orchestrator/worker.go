@@ -559,6 +559,7 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 			DBPath:                deps.DBPath,
 			SessionID:             "",
 			Attempt:               attempt,
+			AgentKind:             agentKind,
 			OperatorMCPConfigPath: operatorPath,
 			ProcessEnv:            CollectSortieEnv(),
 		})
