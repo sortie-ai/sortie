@@ -5,16 +5,19 @@ This directory contains architecturally significant decisions for Sortie, docume
 
 ## Decisions
 
-| ADR                                              | Title                                                            | Status   |
-| ------------------------------------------------ | ---------------------------------------------------------------- | -------- |
-| [0001](0001-use-go-as-core-runtime.md)           | Use Go as core runtime                                           | Accepted |
-| [0002](0002-use-sqlite-for-persistence.md)       | Use SQLite for persistence                                       | Accepted |
-| [0003](0003-adapter-based-integration.md)        | Use adapter interfaces for integration extensibility             | Accepted |
-| [0004](0004-workflow-file-format.md)             | Use YAML Front Matter for Workflow Files                         | Accepted |
-| [0005](0005-prompt-template-engine.md)           | Use Go text/template for Prompt Rendering                        | Accepted |
-| [0006](0006-use-fsnotify-for-file-watching.md)   | Use fsnotify for Filesystem Event Watching                       | Accepted |
-| [0007](0007-handoff-state-and-tracker-writes.md) | Use Handoff State Transitions to Signal Agent Completion         | Accepted |
-| [0008](0008-observability-model.md)              | Use Embedded Dashboard with Prometheus Metrics for Observability | Accepted |
-| [0009](0009-mcp-stdio-sidecar-for-tool-execution.md) | Use MCP stdio sidecar for agent tool execution               | Accepted |
-| [0010](0010-keep-tracker-adapter-unified.md)         | Keep TrackerAdapter as a Unified Interface                    | Accepted |
-| [0011](0011-dispatch-rule-configuration.md)          | Use First-Match-Wins Dispatch Rules in WORKFLOW.md Front Matter | Proposed |
+| ADR                                                  | Title                                                             | Status   |
+| ---------------------------------------------------- | ----------------------------------------------------------------- | -------- |
+| [0001](0001-use-go-as-core-runtime.md)               | Use Go as core runtime                                            | Accepted |
+| [0002](0002-use-sqlite-for-persistence.md)           | Use SQLite for persistence                                        | Accepted |
+| [0003](0003-adapter-based-integration.md)            | Use adapter interfaces for integration extensibility              | Accepted |
+| [0004](0004-workflow-file-format.md)                 | Use YAML Front Matter for Workflow Files                          | Accepted |
+| [0005](0005-prompt-template-engine.md)               | Use Go `text/template` for Prompt Rendering                       | Accepted |
+| [0006](0006-use-fsnotify-for-file-watching.md)       | Use `fsnotify` for Filesystem Event Watching                      | Accepted |
+| [0007](0007-handoff-state-and-tracker-writes.md)     | Use Handoff State Transitions to Signal Agent Completion          | Accepted |
+| [0008](0008-observability-model.md)                  | Use Embedded Dashboard with Prometheus Metrics for Observability  | Accepted |
+| [0009](0009-mcp-stdio-sidecar-for-tool-execution.md) | Use MCP stdio sidecar for agent tool execution                    | Accepted |
+| [0010](0010-keep-tracker-adapter-unified.md)         | Keep TrackerAdapter as a Unified Interface                        | Accepted |
+| [0011](0011-dispatch-rule-configuration.md)          | Use First-Match-Wins Dispatch Rules in `WORKFLOW.md` Front Matter | Accepted |
+| [0012](0012-auto-merge-reaction.md)                  | Extend `SCMAdapter` with Write Methods for Auto-Merge Reactions   | Accepted |
+| [0013](0013-agent-cost-budget.md)                    | Use cumulative per-issue token counts for the agent cost budget   | Accepted |
+| [0014](0014-operator-notifications.md)               | Use an adapter family for operator notifications                  | Accepted |
