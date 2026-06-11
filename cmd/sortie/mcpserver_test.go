@@ -10,6 +10,8 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -562,5 +564,157 @@ func TestResolveNotificationCap_MixedZeroAndNonZero_ReturnsNonZeroMax(t *testing
 	got := resolveNotificationCap(backends)
 	if got != 10 {
 		t.Errorf("resolveNotificationCap({0,10}) = %d, want 10", got)
+	}
+}
+
+// mcpServerWorkflow returns a minimal WORKFLOW.md body suitable for
+// runMCPServer tests. No tracker section is included — only what is
+// required to pass workflow.Load and config.NewServiceConfig without
+// error. The notifications list is injected as an optional YAML block
+// so tests can control whether buildNotifyTool succeeds.
+func mcpServerWorkflow(notificationsYAML string) []byte {
+	base := "---\npolling:\n  interval_ms: 30000\nagent:\n  kind: mock\n"
+	if notificationsYAML != "" {
+		base += notificationsYAML + "\n"
+	}
+	base += "---\nDo something.\n"
+	return []byte(base)
+}
+
+// TestRunMCPServer_SuccessPath exercises the section of runMCPServer
+// starting at line 106: SORTIE_ATTEMPT parsing, env-to-SessionToolParams
+// mapping, BuildSessionToolRegistry call, and the final Serve invocation.
+// Under go test, os.Stdin is /dev/null so Serve returns on EOF and the
+// function exits 0.
+//
+// No t.Parallel: uses t.Setenv which is incompatible with t.Parallel.
+func TestRunMCPServer_SuccessPath_ReturnsZero(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "test.db")
+	seedDB(t, dbPath)
+
+	wfPath := filepath.Join(dir, "WORKFLOW.md")
+	if err := os.WriteFile(wfPath, mcpServerWorkflow(""), 0o644); err != nil {
+		t.Fatalf("WriteFile WORKFLOW.md: %v", err)
+	}
+
+	// Wire all optional env vars so the covered block is fully exercised.
+	t.Setenv("SORTIE_ATTEMPT", "2")
+	t.Setenv("SORTIE_WORKSPACE", dir)
+	t.Setenv("SORTIE_DB_PATH", dbPath)
+	t.Setenv("SORTIE_ISSUE_ID", "issue-99")
+	t.Setenv("SORTIE_ISSUE_IDENTIFIER", "PROJ-99")
+	t.Setenv("SORTIE_SESSION_ID", "sess-99")
+	t.Setenv("SORTIE_SESSION_AGENT_KIND", "mock")
+
+	var stdout, stderr bytes.Buffer
+	code := runMCPServer(context.Background(), []string{"--workflow", wfPath}, &stdout, &stderr)
+	if code != 0 {
+		t.Errorf("runMCPServer(success) = %d, want 0; stderr: %s", code, stderr.String())
+	}
+}
+
+// TestRunMCPServer_BuilderError_ReturnsOne verifies that a misconfigured
+// notifier backend in the workflow causes BuildSessionToolRegistry to
+// return an error, which runMCPServer logs and returns 1 for.
+//
+// No t.Parallel: uses t.Setenv which is incompatible with t.Parallel.
+func TestRunMCPServer_BuilderError_ReturnsOne(t *testing.T) {
+	dir := t.TempDir()
+
+	badNotifications := `notifications:
+  - kind: no-such-backend-xyz
+    url: https://example.com`
+	wfPath := filepath.Join(dir, "WORKFLOW.md")
+	if err := os.WriteFile(wfPath, mcpServerWorkflow(badNotifications), 0o644); err != nil {
+		t.Fatalf("WriteFile WORKFLOW.md: %v", err)
+	}
+
+	var stdout, stderr bytes.Buffer
+	code := runMCPServer(context.Background(), []string{"--workflow", wfPath}, &stdout, &stderr)
+	if code != 1 {
+		t.Errorf("runMCPServer(builder error) = %d, want 1; stderr: %s", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "failed to build session tool registry") {
+		t.Errorf("runMCPServer(builder error) stderr = %q, want to contain %q",
+			stderr.String(), "failed to build session tool registry")
+	}
+}
+
+// TestRunMCPServer_AttemptEnvParsed verifies that a non-integer
+// SORTIE_ATTEMPT is silently ignored (attempt stays nil) rather than
+// causing an error, and runMCPServer still returns 0.
+//
+// No t.Parallel: uses t.Setenv which is incompatible with t.Parallel.
+func TestRunMCPServer_InvalidAttemptIgnored_ReturnsZero(t *testing.T) {
+	dir := t.TempDir()
+
+	wfPath := filepath.Join(dir, "WORKFLOW.md")
+	if err := os.WriteFile(wfPath, mcpServerWorkflow(""), 0o644); err != nil {
+		t.Fatalf("WriteFile WORKFLOW.md: %v", err)
+	}
+
+	t.Setenv("SORTIE_ATTEMPT", "not-a-number")
+
+	var stdout, stderr bytes.Buffer
+	code := runMCPServer(context.Background(), []string{"--workflow", wfPath}, &stdout, &stderr)
+	if code != 0 {
+		t.Errorf("runMCPServer(invalid attempt) = %d, want 0; stderr: %s", code, stderr.String())
+	}
+}
+
+// TestBuildSessionToolRegistry_EnvFree asserts that BuildSessionToolRegistry
+// returns an identical tool-name set whether or not SORTIE_* env vars are
+// set. The PR moved all env reads out of the builder; this test locks that
+// property.
+//
+// No t.Parallel: uses t.Setenv which is incompatible with t.Parallel.
+func TestBuildSessionToolRegistry_EnvFree(t *testing.T) {
+	tmpDir := t.TempDir()
+	dbPath := filepath.Join(tmpDir, "envfree.db")
+	seedDB(t, dbPath)
+
+	params := SessionToolParams{
+		TrackerAdapter: &stubTrackerAdapter{},
+		Project:        "ENVFREE",
+		WorkspacePath:  tmpDir,
+		DBPath:         dbPath,
+		IssueID:        "issue-envfree",
+		SessionID:      "sess-envfree",
+		MaxTokens:      50000,
+		MaxSessions:    5,
+		Notifications:  []config.NotificationBackend{webhookBackend(t)},
+	}
+
+	// Build without any SORTIE_* vars in scope (they are not set here).
+	result1, err := BuildSessionToolRegistry(context.Background(), slog.New(slog.DiscardHandler), params)
+	if err != nil {
+		t.Fatalf("BuildSessionToolRegistry(no env) error = %v, want nil", err)
+	}
+	t.Cleanup(func() { closeResult(t, result1) })
+	names1 := toolNamesFromResult(result1)
+	sort.Strings(names1)
+
+	// Build again with a full complement of SORTIE_* vars. The result must
+	// be identical because the builder ignores the process environment.
+	t.Setenv("SORTIE_WORKSPACE", tmpDir)
+	t.Setenv("SORTIE_DB_PATH", dbPath)
+	t.Setenv("SORTIE_ISSUE_ID", "env-issue-override")
+	t.Setenv("SORTIE_ISSUE_IDENTIFIER", "ENV-1")
+	t.Setenv("SORTIE_SESSION_ID", "env-session-override")
+	t.Setenv("SORTIE_ATTEMPT", "3")
+	t.Setenv("SORTIE_SESSION_AGENT_KIND", "env-agent")
+
+	result2, err := BuildSessionToolRegistry(context.Background(), slog.New(slog.DiscardHandler), params)
+	if err != nil {
+		t.Fatalf("BuildSessionToolRegistry(with env) error = %v, want nil", err)
+	}
+	t.Cleanup(func() { closeResult(t, result2) })
+	names2 := toolNamesFromResult(result2)
+	sort.Strings(names2)
+
+	if !slices.Equal(names1, names2) {
+		t.Errorf("BuildSessionToolRegistry tool names differ when SORTIE_* env set:\n  no env: %v\n with env: %v",
+			names1, names2)
 	}
 }

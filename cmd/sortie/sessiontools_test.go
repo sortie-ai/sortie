@@ -465,3 +465,61 @@ func TestBuildSessionToolRegistry_EmptyParamsEmptyRegistry(t *testing.T) {
 		t.Errorf("BuildSessionToolRegistry(empty) result.Store non-nil, want nil")
 	}
 }
+
+// TestBuildSessionToolRegistry_StoreOpenedThenNotifierError covers the
+// branch at sessiontools.go:142-144: the read-only store opens successfully
+// (DBPath+IssueID are valid) but buildNotifyTool returns an error due to a
+// misconfigured backend. The builder must close the open store and return
+// the zero-value SessionToolRegistry with a non-nil error so no store
+// connection is leaked.
+func TestBuildSessionToolRegistry_StoreOpenedThenNotifierError(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		backend config.NotificationBackend
+	}{
+		{
+			name: "unknown notifier kind with open store",
+			backend: config.NotificationBackend{
+				Kind:   "no-such-backend-xyz",
+				Config: map[string]any{"url": "https://example.com"},
+			},
+		},
+		{
+			name: "webhook empty url with open store",
+			backend: config.NotificationBackend{
+				Kind:   "webhook",
+				Config: map[string]any{"url": ""},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			tmpDir := t.TempDir()
+			dbPath := filepath.Join(tmpDir, "storeopen.db")
+			seedDB(t, dbPath)
+
+			params := SessionToolParams{
+				DBPath:        dbPath,
+				IssueID:       "issue-storeopen",
+				Notifications: []config.NotificationBackend{tt.backend},
+			}
+
+			result, err := BuildSessionToolRegistry(context.Background(), slog.New(slog.DiscardHandler), params)
+			if err == nil {
+				t.Fatalf("BuildSessionToolRegistry(%q) error = nil, want non-nil", tt.name)
+			}
+			if result.Store != nil {
+				_ = result.Store.Close()
+				t.Errorf("BuildSessionToolRegistry(%q) result.Store non-nil on error, want nil (store leaked)", tt.name)
+			}
+			if result.Registry != nil {
+				t.Errorf("BuildSessionToolRegistry(%q) result.Registry non-nil on error, want nil", tt.name)
+			}
+		})
+	}
+}
