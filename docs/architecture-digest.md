@@ -19,6 +19,7 @@
 - **Logging.** Structured logs (`log/slog`) routed to one or more sinks.
 - **CI Status Provider.** Read-only single-method (`FetchCIStatus`) adapter. Activated only when workflow front matter requests CI feedback.
 - **SCM Adapter.** Read-write multi-method adapter exposing six methods (`FetchPendingReviews`, `GetReviewDecision`, `GetCIStatus`, `GetMergeability`, `MergePR`, `DeleteBranch`). Activated when `reactions.review_comments.provider` or `reactions.auto_merge.provider` is configured.
+- **Notifier Adapter.** Read-write single-method (`Send`) adapter family behind the `notify_operator` agent tool. Activated when the top-level `notifications` list configures at least one backend (`webhook`, `slack` today). Resolved in the `sortie mcp-server` sidecar, not the orchestrator process.
 
 ## 2. Abstraction layers (strict downward dependency)
 
@@ -29,7 +30,7 @@
 5. **Integration Layer** — tracker adapters, agent adapters, CI status providers, SCM adapters.
 6. **Observability Layer** — logs and the status surface.
 
-A layer MUST NOT import from a layer above it. Integration-specific identifiers (`jira_*`, `claude_*`, `codex_*`, `copilot_*`, `github_*`) appear only inside their adapter packages — core code uses generic vocabulary (`agent_*`, `tracker_*`, `session_*`, `workspace_*`).
+A layer MUST NOT import from a layer above it. Integration-specific identifiers (`jira_*`, `claude_*`, `codex_*`, `copilot_*`, `github_*`, `slack_*`) appear only inside their adapter packages — core code uses generic vocabulary (`agent_*`, `tracker_*`, `session_*`, `workspace_*`, `notifier_*`).
 
 ## 3. Adapter model
 
@@ -41,6 +42,7 @@ Existing adapter dimensions:
 - **Agent adapters** — Claude Code, Codex, Copilot.
 - **CI status providers** — GitHub Checks (only when `ci_feedback.kind: github` or `reactions.ci_failure.provider: github`).
 - **SCM adapters** — GitHub (only when `reactions.review_comments.provider: github` or `reactions.auto_merge.provider: github`).
+- **Notifier adapters** — webhook, Slack (only when the `notifications` list configures a backend of that `kind`). Registered via `init()` into `registry.Notifiers`; resolved by the MCP sidecar.
 
 ## 4. Hard constraints (memory refresh)
 
@@ -52,7 +54,7 @@ These are reproduced here from `CLAUDE.md` for quick reference. When in doubt, `
 - **Workspace key sanitization.** Only `[A-Za-z0-9._-]` in directory names. No exceptions.
 - **Agent cwd validation.** `cwd == workspace_path` MUST be verified *before* `exec`, not after.
 - **Single-writer persistence.** SQLite WAL mode; orchestrator state mutations serialized through one authority.
-- **Generic naming in core.** `agent_*`, `tracker_*`, `session_*`, `workspace_*`. Never `jira_*`, `claude_*`, `codex_*`, `copilot_*`, `github_*` outside their adapter packages.
+- **Generic naming in core.** `agent_*`, `tracker_*`, `session_*`, `workspace_*`, `notifier_*`. Never `jira_*`, `claude_*`, `codex_*`, `copilot_*`, `github_*`, `slack_*` outside their adapter packages.
 - **Symphony is prior art, not a template.** No Symphony / Elixir / BEAM patterns or vocabulary anywhere.
 - **Integration tests are env-gated.** `SORTIE_JIRA_TEST`, `SORTIE_GITHUB_TEST`, `SORTIE_GITHUB_E2E`, `SORTIE_CLAUDE_TEST`, `SORTIE_COPILOT_TEST`. Without the guard variable, the test MUST skip cleanly — never fail.
 - **No architecture-doc references in source comments.** `docs/architecture.md`, `docs/decisions/`, section numbers, ADR numbers, and ticket IDs belong in specs, plans, and ADRs — not in `*.go` godoc or inline comments.
