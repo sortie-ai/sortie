@@ -83,6 +83,12 @@ type OrchestratorParams struct {
 	ToolRegistry    *domain.ToolRegistry // may be nil
 	HostPool        *HostPool            // may be nil; defaults to local-mode pool
 
+	// SessionToolRegistryFunc builds the per-session tool registry for
+	// the first-turn advertisement so it matches the set the MCP sidecar
+	// serves. Threaded into WorkerDeps. May be nil, in which case the
+	// worker advertises from ToolRegistry instead.
+	SessionToolRegistryFunc SessionToolRegistryFunc
+
 	// WorkflowFileFunc returns the base filename of the active workflow
 	// file (e.g. "WORKFLOW.md"). Used for observability: recorded on
 	// RunningEntry and persisted in run_history. If nil, defaults to
@@ -153,6 +159,7 @@ type Orchestrator struct {
 	observers                   []Observer
 	drainTimeout                time.Duration
 	toolRegistry                *domain.ToolRegistry
+	sessionToolRegistryFunc     SessionToolRegistryFunc
 	preflightOK                 atomic.Bool
 	draining                    atomic.Bool
 	hostPool                    *HostPool
@@ -258,6 +265,7 @@ func NewOrchestrator(params OrchestratorParams) *Orchestrator {
 		observers:                   observers,
 		drainTimeout:                defaultDrainTimeout,
 		toolRegistry:                params.ToolRegistry,
+		sessionToolRegistryFunc:     params.SessionToolRegistryFunc,
 		hostPool:                    hostPool,
 		workflowFileFunc:            params.WorkflowFileFunc,
 		dbPath:                      params.DBPath,
@@ -637,6 +645,7 @@ func (o *Orchestrator) makeWorkerFn(resumeSessionID, sshHost, agentKind, templat
 			ResumeSessionID:          resumeSessionID,
 			Logger:                   logger,
 			ToolRegistry:             o.toolRegistry,
+			SessionToolRegistryFunc:  o.sessionToolRegistryFunc,
 			SSHHost:                  sshHost,
 			SSHStrictHostKeyChecking: strictHostKeyChecking,
 			Metrics:                  o.metrics,

@@ -149,6 +149,16 @@ type WorkerResult struct {
 	StartedAt time.Time
 }
 
+// SessionToolRegistryFunc builds the per-session tool registry rendered
+// into the first-turn advertisement. issueID, workspacePath, and
+// sessionID are the gating inputs the worker resolves late: issueID per
+// dispatch, workspacePath after workspace preparation, and sessionID
+// after the agent session starts. The wiring layer has already captured
+// every session-invariant gating input. A nil value means no builder
+// was injected, in which case the worker falls back to the static
+// [WorkerDeps.ToolRegistry].
+type SessionToolRegistryFunc func(ctx context.Context, issueID, workspacePath, sessionID string) (*domain.ToolRegistry, error)
+
 // WorkerDeps holds the collaborators injected into the worker attempt
 // function. The orchestrator constructs this once and shares it
 // across all workers. All fields are required unless documented as
@@ -201,6 +211,14 @@ type WorkerDeps struct {
 	// ToolRegistry holds the tools available to agent sessions. May
 	// be nil when no tools are registered. Read-only after construction.
 	ToolRegistry *domain.ToolRegistry
+
+	// SessionToolRegistryFunc builds the per-session tool registry for
+	// the first-turn advertisement, so the advertised tool set matches
+	// the set the MCP sidecar serves for the same session. When non-nil,
+	// the first-turn advertisement renders from the registry it returns
+	// instead of from ToolRegistry. When nil, the worker falls back to
+	// ToolRegistry. Optional.
+	SessionToolRegistryFunc SessionToolRegistryFunc
 
 	// Logger is the structured logger with issue-scoped context fields
 	// already attached (issue_id, issue_identifier).
@@ -702,7 +720,14 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 		}
 
 		if turnNumber == 1 {
-			if deps.ToolRegistry != nil && deps.ToolRegistry.Len() > 0 {
+			if deps.SessionToolRegistryFunc != nil {
+				sessionReg, err := deps.SessionToolRegistryFunc(ctx, issue.ID, wsResult.Path, session.ID)
+				if err != nil {
+					logger.Warn("failed to build session tool advertisement", slog.Any("error", err))
+				} else if sessionReg != nil && sessionReg.Len() > 0 {
+					rendered += "\n\n" + buildToolAdvertisement(sessionReg, cfg.Tracker.Project)
+				}
+			} else if deps.ToolRegistry != nil && deps.ToolRegistry.Len() > 0 {
 				rendered += "\n\n" + buildToolAdvertisement(deps.ToolRegistry, cfg.Tracker.Project)
 			}
 			rendered += "\n\n" + prompt.RuntimeStatusSuffix

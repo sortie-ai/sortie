@@ -3213,3 +3213,327 @@ func TestRunWorkerAttempt_PromptTemplateByIDFunc_NilTemplateExitsWithError(t *te
 		t.Error("WorkerResult.Error = nil, want non-nil error for nil template")
 	}
 }
+
+// TestRunWorkerAttempt_SessionToolRegistryFunc covers the injected
+// SessionToolRegistryFunc seam: AC-1 (all five tool headings in the first-turn
+// advertisement), AC-3 (advertised side extracted from the rendered string),
+// AC-5 (suffix ordering and continuation-turn omission preserved), and E-3
+// (builder error degrades without failing the attempt).
+func TestRunWorkerAttempt_SessionToolRegistryFunc(t *testing.T) {
+	t.Parallel()
+
+	// fakeAllToolsRegistry builds a registry containing all five expected
+	// per-session tools as stub entries. This satisfies AC-1 / AC-3.
+	fakeAllToolsRegistry := func() *domain.ToolRegistry {
+		reg := domain.NewToolRegistry()
+		for _, name := range []string{
+			"tracker_api",
+			"sortie_status",
+			"workspace_history",
+			"cost_budget",
+			"notify_operator",
+		} {
+			reg.Register(&stubAgentTool{toolName: name, desc: "stub description for " + name})
+		}
+		return reg
+	}
+
+	t.Run("injected_builder_all_five_tools_advertised", func(t *testing.T) {
+		// AC-1: the first-turn prompt contains a ### heading for each of the
+		// five per-session tools when the injected builder returns all five.
+		// AC-3 advertised side: names are extracted from the rendered string,
+		// not from registry.List(), so a buildToolAdvertisement regression
+		// would be caught here.
+		t.Parallel()
+
+		tmpDir := t.TempDir()
+		cfg := defaultWorkerConfig(tmpDir)
+		cfg.Agent.MaxTurns = 1
+		cfg.Tracker.Project = "TESTPROJ"
+
+		ec := newExitCapture()
+		var capturedPrompt string
+		var mu sync.Mutex
+
+		deps := WorkerDeps{
+			TrackerAdapter: &mockTrackerAdapter{},
+			AgentAdapter: &mockAgentAdapter{
+				runTurnFn: func(_ context.Context, session domain.Session, params domain.RunTurnParams) (domain.TurnResult, error) {
+					mu.Lock()
+					capturedPrompt = params.Prompt
+					mu.Unlock()
+					return domain.TurnResult{SessionID: session.ID, ExitReason: domain.EventTurnCompleted}, nil
+				},
+			},
+			ConfigFunc:             func() config.ServiceConfig { return cfg },
+			PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "work on {{ .issue.title }}") },
+			OnEvent:                func(_ string, _ domain.AgentEvent) {},
+			OnExit:                 ec.onExit,
+			Logger:                 discardLogger(),
+			SessionToolRegistryFunc: func(_ context.Context, _, _, _ string) (*domain.ToolRegistry, error) {
+				return fakeAllToolsRegistry(), nil
+			},
+		}
+
+		RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
+
+		result := ec.waitResult(t)
+		if result.ExitKind != WorkerExitNormal {
+			t.Fatalf("ExitKind = %q, want %q", result.ExitKind, WorkerExitNormal)
+		}
+
+		mu.Lock()
+		p := capturedPrompt
+		mu.Unlock()
+
+		wantHeadings := []string{
+			"### tracker_api",
+			"### sortie_status",
+			"### workspace_history",
+			"### cost_budget",
+			"### notify_operator",
+		}
+		for _, heading := range wantHeadings {
+			if !strings.Contains(p, heading) {
+				t.Errorf("first-turn prompt missing heading %q:\n%s", heading, p)
+			}
+		}
+
+		// Confirm the advertisement section header is present (AC-3 rendered
+		// string check).
+		if !strings.Contains(p, "## Available Sortie tools") {
+			t.Errorf("first-turn prompt missing advertisement header:\n%s", p)
+		}
+	})
+
+	t.Run("injected_builder_suffix_after_advertisement", func(t *testing.T) {
+		// AC-5: RuntimeStatusSuffix appears after the tool advertisement when
+		// SessionToolRegistryFunc is injected, preserving suffix ordering.
+		t.Parallel()
+
+		tmpDir := t.TempDir()
+		cfg := defaultWorkerConfig(tmpDir)
+		cfg.Agent.MaxTurns = 1
+		cfg.Tracker.Project = "TESTPROJ"
+
+		ec := newExitCapture()
+		var capturedPrompt string
+		var mu sync.Mutex
+
+		deps := WorkerDeps{
+			TrackerAdapter: &mockTrackerAdapter{},
+			AgentAdapter: &mockAgentAdapter{
+				runTurnFn: func(_ context.Context, session domain.Session, params domain.RunTurnParams) (domain.TurnResult, error) {
+					mu.Lock()
+					capturedPrompt = params.Prompt
+					mu.Unlock()
+					return domain.TurnResult{SessionID: session.ID, ExitReason: domain.EventTurnCompleted}, nil
+				},
+			},
+			ConfigFunc:             func() config.ServiceConfig { return cfg },
+			PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "work on {{ .issue.title }}") },
+			OnEvent:                func(_ string, _ domain.AgentEvent) {},
+			OnExit:                 ec.onExit,
+			Logger:                 discardLogger(),
+			SessionToolRegistryFunc: func(_ context.Context, _, _, _ string) (*domain.ToolRegistry, error) {
+				return fakeAllToolsRegistry(), nil
+			},
+		}
+
+		RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
+		ec.waitResult(t)
+
+		mu.Lock()
+		p := capturedPrompt
+		mu.Unlock()
+
+		advIdx := strings.Index(p, "## Available Sortie tools")
+		if advIdx < 0 {
+			t.Fatalf("first-turn prompt missing tool advertisement header:\n%s", p)
+		}
+		suffixIdx := strings.Index(p, prompt.RuntimeStatusSuffix)
+		if suffixIdx < 0 {
+			t.Fatalf("first-turn prompt missing RuntimeStatusSuffix:\n%s", p)
+		}
+		if suffixIdx <= advIdx {
+			t.Errorf("RuntimeStatusSuffix (idx=%d) must appear after advertisement (idx=%d)", suffixIdx, advIdx)
+		}
+	})
+
+	t.Run("injected_builder_no_advertisement_on_continuation_turns", func(t *testing.T) {
+		// AC-5: continuation turns still omit the advertisement when
+		// SessionToolRegistryFunc is injected.
+		t.Parallel()
+
+		tmpDir := t.TempDir()
+		cfg := defaultWorkerConfig(tmpDir)
+		cfg.Agent.MaxTurns = 3
+		cfg.Tracker.Project = "TESTPROJ"
+
+		ec := newExitCapture()
+		var capturedPrompts []string
+		var mu sync.Mutex
+
+		deps := WorkerDeps{
+			TrackerAdapter: &mockTrackerAdapter{},
+			AgentAdapter: &mockAgentAdapter{
+				runTurnFn: func(_ context.Context, session domain.Session, params domain.RunTurnParams) (domain.TurnResult, error) {
+					mu.Lock()
+					capturedPrompts = append(capturedPrompts, params.Prompt)
+					mu.Unlock()
+					return domain.TurnResult{SessionID: session.ID, ExitReason: domain.EventTurnCompleted}, nil
+				},
+			},
+			ConfigFunc:             func() config.ServiceConfig { return cfg },
+			PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "turn={{ .run.turn_number }}") },
+			OnEvent:                func(_ string, _ domain.AgentEvent) {},
+			OnExit:                 ec.onExit,
+			Logger:                 discardLogger(),
+			SessionToolRegistryFunc: func(_ context.Context, _, _, _ string) (*domain.ToolRegistry, error) {
+				return fakeAllToolsRegistry(), nil
+			},
+		}
+
+		RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
+
+		result := ec.waitResult(t)
+		if result.TurnsCompleted != 3 {
+			t.Fatalf("TurnsCompleted = %d, want 3", result.TurnsCompleted)
+		}
+
+		mu.Lock()
+		prompts := make([]string, len(capturedPrompts))
+		copy(prompts, capturedPrompts)
+		mu.Unlock()
+
+		if len(prompts) != 3 {
+			t.Fatalf("captured %d prompts, want 3", len(prompts))
+		}
+
+		// Turn 1 must have the advertisement.
+		if !strings.Contains(prompts[0], "## Available Sortie tools") {
+			t.Errorf("turn 1 prompt missing tool advertisement:\n%s", prompts[0])
+		}
+
+		// Turns 2 and 3 must NOT have the advertisement.
+		for i := 1; i < len(prompts); i++ {
+			if strings.Contains(prompts[i], "## Available Sortie tools") {
+				t.Errorf("turn %d prompt must not contain tool advertisement:\n%s", i+1, prompts[i])
+			}
+		}
+	})
+
+	t.Run("injected_builder_error_degrades_no_advertisement", func(t *testing.T) {
+		// E-3 degrade path: when SessionToolRegistryFunc returns an error the
+		// worker logs a Warn and renders no advertisement section, still appends
+		// RuntimeStatusSuffix, and does not fail the attempt.
+		t.Parallel()
+
+		tmpDir := t.TempDir()
+		cfg := defaultWorkerConfig(tmpDir)
+		cfg.Agent.MaxTurns = 1
+
+		ec := newExitCapture()
+		var capturedPrompt string
+		var mu sync.Mutex
+
+		var logBuf bytes.Buffer
+		logger := slog.New(slog.NewTextHandler(&logBuf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+		deps := WorkerDeps{
+			TrackerAdapter: &mockTrackerAdapter{},
+			AgentAdapter: &mockAgentAdapter{
+				runTurnFn: func(_ context.Context, session domain.Session, params domain.RunTurnParams) (domain.TurnResult, error) {
+					mu.Lock()
+					capturedPrompt = params.Prompt
+					mu.Unlock()
+					return domain.TurnResult{SessionID: session.ID, ExitReason: domain.EventTurnCompleted}, nil
+				},
+			},
+			ConfigFunc:             func() config.ServiceConfig { return cfg },
+			PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "work on {{ .issue.title }}") },
+			OnEvent:                func(_ string, _ domain.AgentEvent) {},
+			OnExit:                 ec.onExit,
+			Logger:                 logger,
+			SessionToolRegistryFunc: func(_ context.Context, _, _, _ string) (*domain.ToolRegistry, error) {
+				return nil, errors.New("simulated builder failure")
+			},
+		}
+
+		RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
+
+		result := ec.waitResult(t)
+
+		// E-3: attempt must not fail.
+		if result.ExitKind != WorkerExitNormal {
+			t.Errorf("ExitKind = %q, want %q (E-3: degrade not fail)", result.ExitKind, WorkerExitNormal)
+		}
+
+		mu.Lock()
+		p := capturedPrompt
+		mu.Unlock()
+
+		// E-3: no advertisement section rendered.
+		if strings.Contains(p, "## Available Sortie tools") {
+			t.Errorf("first-turn prompt must not contain tool advertisement after builder error:\n%s", p)
+		}
+
+		// RuntimeStatusSuffix must still be present.
+		if !strings.Contains(p, prompt.RuntimeStatusSuffix) {
+			t.Errorf("first-turn prompt missing RuntimeStatusSuffix after builder error:\n%s", p)
+		}
+
+		// E-3: Warn must have been logged.
+		if !strings.Contains(logBuf.String(), "failed to build session tool advertisement") {
+			t.Errorf("E-3: expected Warn log not found; got:\n%s", logBuf.String())
+		}
+	})
+
+	t.Run("nil_builder_falls_back_to_tool_registry", func(t *testing.T) {
+		// When SessionToolRegistryFunc is nil the worker falls back to the
+		// static ToolRegistry (existing behavior preserved).
+		t.Parallel()
+
+		tmpDir := t.TempDir()
+		cfg := defaultWorkerConfig(tmpDir)
+		cfg.Agent.MaxTurns = 1
+		cfg.Tracker.Project = "TESTPROJ"
+
+		ec := newExitCapture()
+		var capturedPrompt string
+		var mu sync.Mutex
+
+		reg := domain.NewToolRegistry()
+		reg.Register(&stubAgentTool{toolName: "tracker_api", desc: "fallback tool"})
+
+		deps := WorkerDeps{
+			TrackerAdapter: &mockTrackerAdapter{},
+			AgentAdapter: &mockAgentAdapter{
+				runTurnFn: func(_ context.Context, session domain.Session, params domain.RunTurnParams) (domain.TurnResult, error) {
+					mu.Lock()
+					capturedPrompt = params.Prompt
+					mu.Unlock()
+					return domain.TurnResult{SessionID: session.ID, ExitReason: domain.EventTurnCompleted}, nil
+				},
+			},
+			ConfigFunc:              func() config.ServiceConfig { return cfg },
+			PromptTemplateByIDFunc:  func(_ string) *prompt.Template { return mustParseTemplate(t, "work on {{ .issue.title }}") },
+			OnEvent:                 func(_ string, _ domain.AgentEvent) {},
+			OnExit:                  ec.onExit,
+			Logger:                  discardLogger(),
+			ToolRegistry:            reg,
+			SessionToolRegistryFunc: nil,
+		}
+
+		RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
+		ec.waitResult(t)
+
+		mu.Lock()
+		p := capturedPrompt
+		mu.Unlock()
+
+		if !strings.Contains(p, "### tracker_api") {
+			t.Errorf("first-turn prompt missing fallback tool heading \"### tracker_api\":\n%s", p)
+		}
+	})
+}

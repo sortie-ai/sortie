@@ -20,8 +20,6 @@ import (
 	"github.com/sortie-ai/sortie/internal/tool/history"
 	"github.com/sortie-ai/sortie/internal/tool/mcpserver"
 	"github.com/sortie-ai/sortie/internal/tool/notify"
-	"github.com/sortie-ai/sortie/internal/tool/status"
-	"github.com/sortie-ai/sortie/internal/tool/trackerapi"
 	"github.com/sortie-ai/sortie/internal/workflow"
 )
 
@@ -100,44 +98,31 @@ func runMCPServer(ctx context.Context, args []string, stdout io.Writer, stderr i
 		trackerAdapter = adapter
 	}
 
-	// Build tool registry.
-	toolRegistry := domain.NewToolRegistry()
-	if trackerAdapter != nil && cfg.Tracker.Project != "" {
-		toolRegistry.Register(trackerapi.New(trackerAdapter, cfg.Tracker.Project))
-	}
-	if workspacePath := os.Getenv("SORTIE_WORKSPACE"); workspacePath != "" {
-		toolRegistry.Register(status.New(workspacePath))
-	}
-	if dbPath := os.Getenv("SORTIE_DB_PATH"); dbPath != "" {
-		if issueID := os.Getenv("SORTIE_ISSUE_ID"); issueID != "" {
-			store, storeErr := persistence.OpenReadOnly(ctx, dbPath)
-			if storeErr != nil {
-				logger.Warn("failed to open read-only db for workspace_history",
-					slog.String("db_path", dbPath),
-					slog.Any("error", storeErr))
-			} else {
-				defer store.Close() //nolint:errcheck // best-effort cleanup at shutdown
-				toolRegistry.Register(history.New(buildHistoryQuery(store), issueID))
-				runningSessionID := os.Getenv("SORTIE_SESSION_ID")
-				toolRegistry.Register(budget.New(buildBudgetQuery(store), issueID, runningSessionID, cfg.Agent.MaxTokens, cfg.Agent.MaxSessions))
-			}
-		}
-	}
-
-	// Register notify_operator only when at least one backend is
-	// configured. An invalid backend is a fatal startup error, never a
-	// partial registration, so the sidecar and main process agree on the
-	// advertised tool set.
-	notifyTool, notifyErr := buildNotifyTool(cfg.Notifications.Backends)
-	if notifyErr != nil {
-		logger.Error("failed to configure notify_operator", slog.Any("error", notifyErr))
+	// Build the per-session tool registry through the shared builder so
+	// the served tool set matches the set the worker advertises in the
+	// first-turn prompt. A notifier misconfiguration is fatal here, as
+	// before; a read-only DB-open failure is non-fatal and skips the two
+	// database-backed tools.
+	sessionTools, err := BuildSessionToolRegistry(ctx, logger, SessionToolParams{
+		TrackerAdapter: trackerAdapter,
+		Project:        cfg.Tracker.Project,
+		WorkspacePath:  os.Getenv("SORTIE_WORKSPACE"),
+		DBPath:         os.Getenv("SORTIE_DB_PATH"),
+		IssueID:        os.Getenv("SORTIE_ISSUE_ID"),
+		SessionID:      os.Getenv("SORTIE_SESSION_ID"),
+		MaxTokens:      cfg.Agent.MaxTokens,
+		MaxSessions:    cfg.Agent.MaxSessions,
+		Notifications:  cfg.Notifications.Backends,
+	})
+	if err != nil {
+		logger.Error("failed to build session tool registry", slog.Any("error", err))
 		return 1
 	}
-	if notifyTool != nil {
-		toolRegistry.Register(notifyTool)
+	if sessionTools.Store != nil {
+		defer sessionTools.Store.Close() //nolint:errcheck // best-effort cleanup at shutdown
 	}
 
-	srv := mcpserver.NewServer(toolRegistry, os.Stdin, stdout, logger, Version)
+	srv := mcpserver.NewServer(sessionTools.Registry, os.Stdin, stdout, logger, Version)
 	if err := srv.Serve(ctx); err != nil {
 		logger.Error("MCP server error", slog.Any("error", err))
 		return 1
