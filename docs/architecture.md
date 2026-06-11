@@ -874,6 +874,54 @@ dispatch:
     template: templates/default.md
 ```
 
+#### 5.3.11 `notifications` (list, optional)
+
+The `notifications` list configures the backends behind the `notify_operator` tool
+(Section 10.4.5). While a session runs, the agent calls the tool to escalate a decision, report
+progress, or flag a blocker to a real-time channel. The tool is registered only when at least one
+valid backend is configured; an empty or absent list leaves it unregistered, so the agent is
+never offered a tool it cannot use.
+
+The value is a sequence, not a single object. Each entry is a map carrying a required `kind`
+discriminator and that backend's own fields. A second channel is a second list entry.
+
+```yaml
+notifications:
+  - kind: slack
+    webhook_url: $SORTIE_SLACK_WEBHOOK_URL
+    max_per_session: 20
+  - kind: webhook
+    url: $SORTIE_OPS_WEBHOOK_URL
+```
+
+Per-entry fields:
+
+- `kind` (string)
+  - Required. The registry discriminator, resolved against the notifier registry
+    (Section 10.4.7) at sidecar startup. v1 backends are `webhook` and `slack`.
+- `max_per_session` (integer)
+  - Default: `20`. The per-session `notify_operator` call cap. `0` selects the default (also
+    `20`); it never means unlimited. A negative value is rejected at config parse time.
+- backend-specific fields
+  - Passed through to the backend constructor untyped, with `$VAR` references resolved. The
+    `webhook` backend requires `url`; the `slack` backend requires `webhook_url`.
+
+Validation and resolution:
+
+- The list is structurally validated when the config is parsed: a non-sequence value, an entry
+  that is not a map, an entry with an empty `kind`, or a negative `max_per_session` aborts config
+  construction (Section 6.3).
+- When more than one backend is configured, the effective per-session cap is the maximum non-zero
+  `max_per_session` across entries, falling back to the default when every entry is `0` or unset.
+  The cap counts `notify_operator` calls, not per-backend sends.
+- A backend secret MUST be given as a reference to a `SORTIE_`-prefixed environment variable
+  (`$SORTIE_NAME` or `${SORTIE_NAME}`). The prefix is mandatory. The `notify_operator` tool runs
+  in a separate `sortie mcp-server` process that receives only the workflow file path and the
+  orchestrator's `SORTIE_`-prefixed variables, so a reference without the prefix, or to an unset
+  variable, resolves to the empty string in that process. The backend rejects an empty required
+  secret, which surfaces as a fatal sidecar startup error rather than a notification posted
+  nowhere.
+
 ### 5.4 Prompt Template Contract
 
 The Markdown body of `WORKFLOW.md` is the per-issue prompt template.
@@ -1006,6 +1054,22 @@ Validation checks:
   no non-final rule is a catch-all; every match key is recognized; every glob pattern is
   syntactically valid; every priority predicate has exactly one operator key.
 
+Effort-budget and notification config are validated outside this preflight, by design:
+
+- The per-issue token ceiling (`agent.max_tokens`) is not a scheduler preflight check. It is a
+  re-dispatch gate evaluated on the retry path alongside `agent.max_sessions` (Section 8.4), so
+  the ceiling stops a blocked issue from being re-dispatched rather than failing startup or a
+  poll tick. Config-level validation rejects a negative `agent.max_tokens` when the config is
+  parsed, which both startup validation and the live-reload fail-safe path consume.
+- The `notifications` backend list (Section 5.3.11) is structurally validated when the config is
+  parsed: the value must be a sequence, every entry must carry a non-empty string `kind`, and an
+  optional `max_per_session` must be a non-negative integer. A malformed section aborts config
+  construction. Backend resolution (an unknown `kind` or a required secret that resolved to the
+  empty string) is validated separately at `sortie mcp-server` sidecar startup, where it is a
+  fatal startup error rather than a partial registration (Section 10.4.5). The scheduler preflight
+  does not resolve notifier backends, because the orchestrator process never delivers
+  notifications; the sidecar does.
+
 **Startup token-scope preflight**
 
 When `reactions.auto_merge.provider` is non-empty at startup, the orchestrator invokes the SCM
@@ -1115,6 +1179,16 @@ This section is intentionally redundant so a coding agent can implement the conf
 - `dispatch.rules`: list of rule objects, optional; first-match-wins routing; see §5.3.10
 - `dispatch.default.agent`: string, optional; default agent kind when no rule matches; falls through to top-level `agent.kind`
 - `dispatch.default.template`: path, optional; default template when no rule matches; falls through to the Markdown body
+- `notifications`: list of notifier backend objects, optional; default empty; configures the
+  backends behind the `notify_operator` tool (Section 5.3.11). An empty or absent list leaves
+  the tool unregistered
+- `notifications[].kind`: string, required per entry; registry discriminator; v1 backends are
+  `webhook` and `slack`
+- `notifications[].max_per_session`: integer, optional, default `20`; per-session
+  `notify_operator` call cap; `0` selects the default (also `20`), never unlimited; negative
+  is rejected
+- `notifications[].<backend fields>`: pass-through per `kind`; `webhook` requires `url`, `slack`
+  requires `webhook_url`; secrets must be `$SORTIE_*` references resolved at sidecar startup
 - `self_review.enabled`: boolean, default `false`; activates the self-review loop
 - `self_review.max_iterations`: integer, default `3`, range [1, 10]; review iteration cap
 - `self_review.verification_commands`: list of strings, required when enabled; shell commands
@@ -1953,7 +2027,7 @@ The tool resolves the configured notifier backends and posts to them; it knows n
 any specific channel.
 
 Availability: registered only when at least one valid notifier backend is configured in the
-`notifications` list (Section 5). The registration derives from the same workflow file the
+`notifications` list (Section 5.3.11). The registration derives from the same workflow file the
 main process reads, so the sidecar and the main process agree on the tool set. When the list
 is empty or absent, the tool is not registered.
 
@@ -2014,6 +2088,18 @@ characteristics. This separation is a design choice, not an implementation accid
 - The `.sortie/status` file is the **control plane**: the agent advises the orchestrator about
   task feasibility after the turn completes. The orchestrator uses this signal to suppress
   continuation retries. No response flows back to the agent.
+
+The `notify_operator` tool (Section 10.4.5) is a third direction that the data-plane and
+control-plane framing above does not cover: agent to operator. Most tools target the
+orchestrator and return data the agent consumes to continue its turn. `notify_operator` is a
+tool by transport (it travels the MCP execution channel and returns a delivery result), but its
+recipient is a human on a configured channel, not the orchestrator, and it changes no
+orchestrator state. The three patterns are distinct: read or mutate orchestrator-held data
+(`tracker_api`, `cost_budget`, `sortie_status`, `workspace_history`), advise the orchestrator
+about feasibility after the turn (`.sortie/status`), and reach the operator in real time during
+the turn (`notify_operator`). `notify_operator` does not suppress retries, perform a handoff, or
+release a claim; an agent that needs to alter orchestrator control flow still writes
+`.sortie/status`.
 
 Collapsing both into a single MCP-based channel was evaluated and rejected during the A2O
 protocol design (see `docs/agent-to-orchestrator-protocol.md`, Section 5.1, Alternative 2).
@@ -2087,7 +2173,7 @@ type NotifierConstructor func(config map[string]any) (domain.Notifier, error)
 ```
 
 The `config` parameter receives the per-backend fields from the matching `notifications`
-list entry, with `$VAR` references already resolved. A constructor rejects a missing required
+list entry (Section 5.3.11), with `$VAR` references already resolved. A constructor rejects a missing required
 field or a secret that resolved to the empty string, which surfaces as a fatal sidecar
 startup error rather than a notification posted nowhere.
 
@@ -2908,6 +2994,9 @@ should return:
   - `cache_read_tokens`
   - `seconds_running` (aggregate runtime seconds as of snapshot time, including active sessions)
 - `rate_limits` (latest coding-agent rate limit payload, if available)
+- `budget_exhausted_count` (number of issues currently blocked by a re-dispatch budget; always present)
+- `budget_exhausted` (sorted list of blocked issue IDs; omitted when the set is empty)
+- `budget_exhausted_reason` (map from blocked issue ID to the budget that fired, `token_budget` or `session_budget`, token taking precedence when both are exhausted for one issue; omitted when the set is empty). The exhausted set and its reasons are rebuilt per tick from the budget ceilings (Section 8.4); an issue's reason entry exists exactly when that issue is in `budget_exhausted`.
 
 Recommended snapshot error modes:
 
@@ -3175,6 +3264,7 @@ Defined metrics (label sets and buckets are specified here; see ADR-0008 for his
 | `sortie_sessions_retrying` | Gauge | Number of issues in the retry queue. |
 | `sortie_slots_available` | Gauge | Remaining dispatch capacity under current concurrency limits. |
 | `sortie_active_sessions_elapsed_seconds` | Gauge | Cumulative wall-clock elapsed time across all currently running sessions. |
+| `sortie_ssh_host_usage{host}` | Gauge | Current session count per remote SSH host, partitioned by host. Recomputed from the host-usage map after each tick, worker exit, and retry-timer event; hosts removed by config reload decrement to zero rather than freezing at their last value. |
 | `sortie_tokens_total{type}` | Counter | Tokens consumed, partitioned by type (`input`, `output`). |
 | `sortie_agent_runtime_seconds_total` | Counter | Cumulative agent-session wall-clock time for completed sessions. |
 | `sortie_dispatches_total{outcome}` | Counter | Dispatch attempts, partitioned by outcome (`success`, `error`). |
@@ -3183,16 +3273,22 @@ Defined metrics (label sets and buckets are specified here; see ADR-0008 for his
 | `sortie_reconciliation_actions_total{action}` | Counter | Reconciliation outcomes per issue, partitioned by action (`stop`, `cleanup`, `keep`). |
 | `sortie_poll_cycles_total{result}` | Counter | Poll tick completions, partitioned by result (`success`, `error`, `skipped`). |
 | `sortie_tracker_requests_total{operation,result}` | Counter | Tracker adapter API calls, partitioned by operation (`fetch_candidates`, `fetch_issue`, `fetch_by_states`, `fetch_states_by_ids`, `fetch_states_by_identifiers`, `fetch_comments`, `transition`) and result (`success`, `error`). |
+| `sortie_tracker_comments_total{lifecycle,result}` | Counter | Tracker comment attempts, partitioned by lifecycle point (`dispatch`, `completion`, `failure`) and result (`success`, `error`). |
 | `sortie_handoff_transitions_total{result}` | Counter | Handoff-state transition attempts, partitioned by result (`success`, `error`, `skipped`). |
 | `sortie_dispatch_transitions_total{result}` | Counter | Dispatch-time in-progress transition attempts, partitioned by result (`success`, `error`, `skipped`). `skipped` indicates the issue was already in the target state. |
+| `sortie_dispatch_rule_match_total{layer,rule}` | Counter | Dispatch rule match outcomes, partitioned by resolution layer (`rule`, `default`, `fallback`) and matched rule name. Empty rule names report as `<none>` to bound label cardinality. |
 | `sortie_tool_calls_total{tool,result}` | Counter | Agent tool call completions, partitioned by tool name and result (`success`, `error`). |
 | `sortie_ci_status_checks_total{result}` | Counter | CI status check outcomes, partitioned by result (`passing`, `pending`, `failing`, `error`). |
 | `sortie_ci_escalations_total{action}` | Counter | CI escalation actions when fix retries are exhausted, partitioned by action (`label`, `comment`, `error`). |
 | `sortie_reactions_auto_merge_total{result}` | Counter | Auto-merge reaction outcomes, partitioned by result (`merged`, `error`, `escalated`). |
 | `sortie_review_checks_total{result}` | Counter | Review comment check outcomes, partitioned by result (`dispatched`, `error`, `skipped`). |
 | `sortie_review_escalations_total{action}` | Counter | Review escalation actions when continuation turns are exhausted, partitioned by action (`label`, `comment`, `error`). |
+| `sortie_self_review_iterations_total{verdict}` | Counter | Self-review iterations, partitioned by per-iteration verdict (`pass`, `iterate`, `none`). `none` indicates a missing or unparseable verdict for that iteration. |
+| `sortie_self_review_sessions_total{final_verdict}` | Counter | Self-review sessions, partitioned by final verdict (`pass`, `iterate`, `none`). |
+| `sortie_self_review_cap_reached_total` | Counter | Self-review sessions that reached the iteration cap without a passing verdict. |
 | `sortie_poll_duration_seconds` | Histogram | Wall-clock time per poll cycle; buckets via `ExponentialBuckets(0.1, 2, 10)` (0.1 s–51.2 s). |
 | `sortie_worker_duration_seconds{exit_type}` | Histogram | Worker session wall-clock time; buckets via `ExponentialBuckets(10, 2, 12)` (10 s–5.7 h). |
+| `sortie_self_review_verification_duration_seconds{command}` | Histogram | Per-command verification duration during self-review; buckets via `ExponentialBuckets(10, 2, 12)` (10 s–5.7 h). The `command` label is truncated to the first 64 characters. |
 | `sortie_build_info{version,go_version}` | Gauge | Always `1`; carries build metadata as labels. |
 
 ## 14. Failure Model and Recovery Strategy
@@ -4162,6 +4258,14 @@ This extension is not implemented in v1. Tracker adapters should not assume webh
 
 Agents may create files in the workspace that Sortie reads for orchestration decisions. This is an
 optional extension that enables richer agent-to-orchestrator communication beyond the event stream.
+
+These files are the filesystem channel from the agent to the orchestrator: the agent writes,
+Sortie reads after the turn, and the signal changes orchestrator control flow (retry suppression,
+handoff, the review loop). They are distinct from the `notify_operator` tool (Section 10.4.5),
+which reaches a human operator on a configured channel in real time during the turn and changes
+no orchestrator state. An agent that wants to influence scheduling writes one of the files below;
+an agent that wants to inform a person calls `notify_operator`. Section 10.4.6 contrasts the two
+channels in full.
 
 ### 21.1 `.sortie/status`
 
