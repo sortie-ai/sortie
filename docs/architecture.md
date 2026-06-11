@@ -899,9 +899,11 @@ Per-entry fields:
 - `kind` (string)
   - Required. The registry discriminator, resolved against the notifier registry
     (Section 10.4.7) at sidecar startup. v1 backends are `webhook` and `slack`.
-- `max_per_session` (integer)
-  - Default: `20`. The per-session `notify_operator` call cap. `0` selects the default (also
-    `20`); it never means unlimited. A negative value is rejected at config parse time.
+- `max_per_session` (integer, optional)
+  - The per-session `notify_operator` call cap. It is not a per-entry default: an omitted, `null`,
+    or `0` value contributes nothing to cap selection, which then falls back to the default of `20`
+    only when every entry is `0` or unset (see "Validation and resolution" below). `0` never means
+    unlimited. A negative value is rejected at config parse time.
 - backend-specific fields
   - Passed through to the backend constructor untyped, with `$VAR` references resolved. The
     `webhook` backend requires `url`; the `slack` backend requires `webhook_url`.
@@ -914,13 +916,16 @@ Validation and resolution:
 - When more than one backend is configured, the effective per-session cap is the maximum non-zero
   `max_per_session` across entries, falling back to the default when every entry is `0` or unset.
   The cap counts `notify_operator` calls, not per-backend sends.
-- A backend secret MUST be given as a reference to a `SORTIE_`-prefixed environment variable
-  (`$SORTIE_NAME` or `${SORTIE_NAME}`). The prefix is mandatory. The `notify_operator` tool runs
-  in a separate `sortie mcp-server` process that receives only the workflow file path and the
-  orchestrator's `SORTIE_`-prefixed variables, so a reference without the prefix, or to an unset
-  variable, resolves to the empty string in that process. The backend rejects an empty required
-  secret, which surfaces as a fatal sidecar startup error rather than a notification posted
-  nowhere.
+- A backend secret SHOULD be given as a reference to a `SORTIE_`-prefixed environment variable
+  (`$SORTIE_NAME` or `${SORTIE_NAME}`). The `notify_operator` tool runs in a separate
+  `sortie mcp-server` process whose environment is constructed by the agent's MCP host. The
+  orchestrator guarantees that only its `SORTIE_`-prefixed variables are propagated into that
+  process for `$VAR` resolution; the host MAY additionally inherit other variables from its own
+  environment, so a reference without the prefix is not guaranteed to resolve and MAY resolve to
+  the empty string. References are expanded against the sidecar process environment with no prefix
+  enforcement, so the `SORTIE_` prefix is the way to guarantee a secret resolves regardless of
+  host. When a required secret resolves to the empty string, the backend rejects it, which
+  surfaces as a fatal sidecar startup error rather than a notification posted nowhere.
 
 ### 5.4 Prompt Template Contract
 
@@ -1062,9 +1067,10 @@ Effort-budget and notification config are validated outside this preflight, by d
   poll tick. Config-level validation rejects a negative `agent.max_tokens` when the config is
   parsed, which both startup validation and the live-reload fail-safe path consume.
 - The `notifications` backend list (Section 5.3.11) is structurally validated when the config is
-  parsed: the value must be a sequence, every entry must carry a non-empty string `kind`, and an
-  optional `max_per_session` must be a non-negative integer. A malformed section aborts config
-  construction. Backend resolution (an unknown `kind` or a required secret that resolved to the
+  parsed: the value must be a sequence, every entry must carry a non-empty string `kind`, and
+  `max_per_session`, when present, must be a non-negative integer. `max_per_session` is optional:
+  an omitted, `null`, or `0` value is accepted and selects the default cap. A malformed section
+  aborts config construction. Backend resolution (an unknown `kind` or a required secret that resolved to the
   empty string) is validated separately at `sortie mcp-server` sidecar startup, where it is a
   fatal startup error rather than a partial registration (Section 10.4.5). The scheduler preflight
   does not resolve notifier backends, because the orchestrator process never delivers
@@ -1184,11 +1190,12 @@ This section is intentionally redundant so a coding agent can implement the conf
   the tool unregistered
 - `notifications[].kind`: string, required per entry; registry discriminator; v1 backends are
   `webhook` and `slack`
-- `notifications[].max_per_session`: integer, optional, default `20`; per-session
-  `notify_operator` call cap; `0` selects the default (also `20`), never unlimited; negative
-  is rejected
+- `notifications[].max_per_session`: integer, optional; per-session `notify_operator` call cap;
+  not a per-entry default; omitted/`null`/`0` contributes nothing and the cap falls back to `20`
+  only when every entry is `0` or unset; never unlimited; negative is rejected
 - `notifications[].<backend fields>`: pass-through per `kind`; `webhook` requires `url`, `slack`
-  requires `webhook_url`; secrets must be `$SORTIE_*` references resolved at sidecar startup
+  requires `webhook_url`; secrets SHOULD be `$SORTIE_*` references (only those are guaranteed
+  propagated to the sidecar), resolved at sidecar startup
 - `self_review.enabled`: boolean, default `false`; activates the self-review loop
 - `self_review.max_iterations`: integer, default `3`, range [1, 10]; review iteration cap
 - `self_review.verification_commands`: list of strings, required when enabled; shell commands
