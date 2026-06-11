@@ -9,6 +9,7 @@ import (
 	"github.com/sortie-ai/sortie/internal/persistence"
 	"github.com/sortie-ai/sortie/internal/tool/budget"
 	"github.com/sortie-ai/sortie/internal/tool/history"
+	"github.com/sortie-ai/sortie/internal/tool/notify"
 	"github.com/sortie-ai/sortie/internal/tool/status"
 	"github.com/sortie-ai/sortie/internal/tool/trackerapi"
 )
@@ -32,13 +33,29 @@ type SessionToolParams struct {
 	// workspace_history and cost_budget.
 	DBPath string
 
-	// IssueID is the current issue identifier. With DBPath, gates
-	// workspace_history and cost_budget.
+	// IssueID is the tracker-internal issue ID (domain.Issue.ID, not the
+	// human-readable domain.Issue.Identifier). With DBPath, gates
+	// workspace_history and cost_budget, and is the key the two
+	// database-backed tools query by.
 	IssueID string
+
+	// Identifier is the human-readable issue key (domain.Issue.Identifier,
+	// e.g. "ABC-123"). It gates no tool's registration; it feeds the
+	// notify_operator envelope context only.
+	Identifier string
 
 	// SessionID is the running-session id used by cost_budget to add the
 	// live session's spend. It gates no tool's registration.
 	SessionID string
+
+	// Attempt is the retry or continuation attempt number for the
+	// notify_operator envelope context, or nil on the first run. It gates
+	// no tool's registration.
+	Attempt *int
+
+	// AgentKind is the dispatch-frozen agent kind for the notify_operator
+	// envelope context. It gates no tool's registration.
+	AgentKind string
 
 	// MaxTokens is the agent.max_tokens ceiling reported by cost_budget.
 	MaxTokens int
@@ -81,8 +98,10 @@ type SessionToolRegistry struct {
 // failure is non-fatal: the two database-backed tools are skipped and a
 // warning is logged. A notifier construction failure is returned as a
 // non-nil error so the sidecar preserves its fatal-on-misconfiguration
-// behavior. The function does not read process environment variables;
-// callers resolve environment into params.
+// behavior. The function reads no process environment variables; callers
+// resolve environment into params, including the notify_operator
+// envelope fields ([SessionToolParams.Identifier], [SessionToolParams.Attempt],
+// [SessionToolParams.AgentKind]).
 func BuildSessionToolRegistry(ctx context.Context, logger *slog.Logger, params SessionToolParams) (SessionToolRegistry, error) {
 	if logger == nil {
 		logger = slog.Default()
@@ -112,7 +131,13 @@ func BuildSessionToolRegistry(ctx context.Context, logger *slog.Logger, params S
 		}
 	}
 
-	notifyTool, err := buildNotifyTool(params.Notifications)
+	notifyTool, err := buildNotifyTool(params.Notifications, notify.NotificationEnvelopeContext{
+		IssueID:    params.IssueID,
+		Identifier: params.Identifier,
+		SessionID:  params.SessionID,
+		Attempt:    params.Attempt,
+		Agent:      params.AgentKind,
+	})
 	if err != nil {
 		if store != nil {
 			store.Close() //nolint:errcheck,gosec // best-effort cleanup on construction failure

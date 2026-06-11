@@ -18,6 +18,7 @@ import (
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/persistence"
 	"github.com/sortie-ai/sortie/internal/tool/mcpserver"
+	"github.com/sortie-ai/sortie/internal/tool/notify"
 	"github.com/sortie-ai/sortie/internal/tool/status"
 )
 
@@ -344,7 +345,7 @@ func TestBuildBudgetQuery(t *testing.T) {
 func TestBuildNotifyTool_EmptyBackends_ReturnsNilNil(t *testing.T) {
 	t.Parallel()
 
-	tool, err := buildNotifyTool(nil)
+	tool, err := buildNotifyTool(nil, notify.NotificationEnvelopeContext{})
 	if err != nil {
 		t.Fatalf("buildNotifyTool(nil) error = %v, want nil", err)
 	}
@@ -356,7 +357,7 @@ func TestBuildNotifyTool_EmptyBackends_ReturnsNilNil(t *testing.T) {
 func TestBuildNotifyTool_EmptySlice_ReturnsNilNil(t *testing.T) {
 	t.Parallel()
 
-	tool, err := buildNotifyTool([]config.NotificationBackend{})
+	tool, err := buildNotifyTool([]config.NotificationBackend{}, notify.NotificationEnvelopeContext{})
 	if err != nil {
 		t.Fatalf("buildNotifyTool(empty) error = %v, want nil", err)
 	}
@@ -382,7 +383,7 @@ func TestBuildNotifyTool_ValidWebhookBackend_ReturnsNonNilTool(t *testing.T) {
 		},
 	}
 
-	tool, err := buildNotifyTool(backends)
+	tool, err := buildNotifyTool(backends, notify.NotificationEnvelopeContext{})
 	if err != nil {
 		t.Fatalf("buildNotifyTool(webhook) error = %v, want nil", err)
 	}
@@ -409,7 +410,7 @@ func TestBuildNotifyTool_ValidSlackBackend_ReturnsNonNilTool(t *testing.T) {
 		},
 	}
 
-	tool, err := buildNotifyTool(backends)
+	tool, err := buildNotifyTool(backends, notify.NotificationEnvelopeContext{})
 	if err != nil {
 		t.Fatalf("buildNotifyTool(slack) error = %v, want nil", err)
 	}
@@ -428,7 +429,7 @@ func TestBuildNotifyTool_UnknownKind_ReturnsError(t *testing.T) {
 		},
 	}
 
-	tool, err := buildNotifyTool(backends)
+	tool, err := buildNotifyTool(backends, notify.NotificationEnvelopeContext{})
 	if err == nil {
 		t.Fatal("buildNotifyTool(unknown kind) error = nil, want non-nil error")
 	}
@@ -465,7 +466,7 @@ func TestBuildNotifyTool_EmptyRequiredSecret_ReturnsError(t *testing.T) {
 				{Kind: tt.kind, Config: tt.config},
 			}
 
-			tool, err := buildNotifyTool(backends)
+			tool, err := buildNotifyTool(backends, notify.NotificationEnvelopeContext{})
 			if err == nil {
 				t.Fatalf("buildNotifyTool(%q, empty secret) error = nil, want fatal constructor error", tt.kind)
 			}
@@ -491,7 +492,7 @@ func TestBuildNotifyTool_PartialFailureIsTotal(t *testing.T) {
 		{Kind: "unknown-kind-for-partial-test", Config: map[string]any{"url": srv.URL}},
 	}
 
-	tool, err := buildNotifyTool(backends)
+	tool, err := buildNotifyTool(backends, notify.NotificationEnvelopeContext{})
 	if err == nil {
 		t.Fatal("buildNotifyTool(partial failure) = nil error, want non-nil (no partial registration)")
 	}
