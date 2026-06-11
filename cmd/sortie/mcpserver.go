@@ -103,13 +103,22 @@ func runMCPServer(ctx context.Context, args []string, stdout io.Writer, stderr i
 	// first-turn prompt. A notifier misconfiguration is fatal here, as
 	// before; a read-only DB-open failure is non-fatal and skips the two
 	// database-backed tools.
+	var attempt *int
+	if raw := os.Getenv("SORTIE_ATTEMPT"); raw != "" {
+		if n, atoiErr := strconv.Atoi(raw); atoiErr == nil {
+			attempt = &n
+		}
+	}
 	sessionTools, err := BuildSessionToolRegistry(ctx, logger, SessionToolParams{
 		TrackerAdapter: trackerAdapter,
 		Project:        cfg.Tracker.Project,
 		WorkspacePath:  os.Getenv("SORTIE_WORKSPACE"),
 		DBPath:         os.Getenv("SORTIE_DB_PATH"),
 		IssueID:        os.Getenv("SORTIE_ISSUE_ID"),
+		Identifier:     os.Getenv("SORTIE_ISSUE_IDENTIFIER"),
 		SessionID:      os.Getenv("SORTIE_SESSION_ID"),
+		Attempt:        attempt,
+		AgentKind:      os.Getenv("SORTIE_SESSION_AGENT_KIND"),
 		MaxTokens:      cfg.Agent.MaxTokens,
 		MaxSessions:    cfg.Agent.MaxSessions,
 		Notifications:  cfg.Notifications.Backends,
@@ -136,9 +145,10 @@ func runMCPServer(ctx context.Context, args []string, stdout io.Writer, stderr i
 // configured, so the caller skips registration. An unknown kind or a
 // constructor error (including a required secret that resolved to the
 // empty string) is fatal and returned as a non-nil error rather than a
-// partial registration. The envelope context is read from the sidecar
-// environment.
-func buildNotifyTool(configured []config.NotificationBackend) (domain.AgentTool, error) {
+// partial registration. The caller supplies env: the function reads no
+// process environment itself, so the gating decision stays a pure
+// function of explicit inputs.
+func buildNotifyTool(configured []config.NotificationBackend, env notify.NotificationEnvelopeContext) (domain.AgentTool, error) {
 	if len(configured) == 0 {
 		return nil, nil
 	}
@@ -156,21 +166,7 @@ func buildNotifyTool(configured []config.NotificationBackend) (domain.AgentTool,
 		backends = append(backends, notifier)
 	}
 
-	var attempt *int
-	if raw := os.Getenv("SORTIE_ATTEMPT"); raw != "" {
-		if n, err := strconv.Atoi(raw); err == nil {
-			attempt = &n
-		}
-	}
-	envContext := notify.NotificationEnvelopeContext{
-		IssueID:    os.Getenv("SORTIE_ISSUE_ID"),
-		Identifier: os.Getenv("SORTIE_ISSUE_IDENTIFIER"),
-		SessionID:  os.Getenv("SORTIE_SESSION_ID"),
-		Attempt:    attempt,
-		Agent:      os.Getenv("SORTIE_SESSION_AGENT_KIND"),
-	}
-
-	return notify.New(backends, envContext, resolveNotificationCap(configured)), nil
+	return notify.New(backends, env, resolveNotificationCap(configured)), nil
 }
 
 // resolveNotificationCap selects the single per-session cap for the tool
