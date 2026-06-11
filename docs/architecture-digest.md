@@ -27,7 +27,7 @@
 2. **Configuration Layer** — typed front-matter getters, defaults, env resolution.
 3. **Coordination Layer** — orchestrator: poll loop, eligibility, concurrency, retries, reconciliation.
 4. **Execution Layer** — workspace lifecycle and agent subprocess management.
-5. **Integration Layer** — tracker adapters, agent adapters, CI status providers, SCM adapters.
+5. **Integration Layer** — tracker adapters, agent adapters, CI status providers, SCM adapters, notifier adapters.
 6. **Observability Layer** — logs and the status surface.
 
 A layer MUST NOT import from a layer above it. Integration-specific identifiers (`jira_*`, `claude_*`, `codex_*`, `copilot_*`, `github_*`, `slack_*`) appear only inside their adapter packages — core code uses generic vocabulary (`agent_*`, `tracker_*`, `session_*`, `workspace_*`, `notifier_*`).
