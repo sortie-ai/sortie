@@ -131,7 +131,7 @@ func TestNewPromMetrics(t *testing.T) {
 	m.SetSSHHostUsage("test-host", 1)
 	m.IncCIStatusChecks("passing")
 	m.IncCIEscalations("label")
-	m.IncReviewChecks("passing")
+	m.IncReviewChecks("dispatched")
 	m.IncReviewEscalations("label")
 	m.IncAutoMergeReactions("merged")
 	m.IncDispatchRuleMatch("rule", "bug-rule")
