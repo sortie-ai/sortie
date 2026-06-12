@@ -9,6 +9,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `cost_budget` agent tool with per-issue token budget enforcement: a
+  new Tier 1 MCP tool reports cumulative token spend and remaining
+  budget for the current issue so an agent can adjust strategy — skip
+  expensive work, return a partial result, or hand off — before hitting
+  a ceiling. It reads cumulative totals from `run_history` in read-only
+  mode and returns the standard `{"success": true, "data": ...}`
+  envelope. A companion hard ceiling, the new optional `agent.max_tokens`
+  field (sibling to `agent.max_sessions`, default `0` for unlimited),
+  blocks dispatch at preflight once an issue's cumulative token spend is
+  exhausted; when the session and token budgets are exceeded on the same
+  evaluation, the token reason takes precedence in the recorded
+  budget-exhaustion state. `cost_budget` calls are counted on
+  `sortie_tool_calls_total`.
+  ([#240](https://github.com/sortie-ai/sortie/issues/240))
+- `notify_operator` agent tool: a new Tier 2 MCP tool lets an agent send
+  real-time notifications to operator-configured channels during a
+  session — to escalate a decision, report progress on a long-running
+  task, or flag a blocker — without terminating the session. Version 1
+  ships Slack and generic-webhook backends, configured under a new
+  optional top-level `notifications` block in `WORKFLOW.md`, with
+  per-session volume bounded by `max_per_session`. Backend secrets must
+  use the `$SORTIE_`-prefixed environment indirection or they stay
+  invisible to the sidecar process. Envelope fields (issue, session,
+  attempt, agent kind) are injected by the orchestrator and cannot be
+  forged by the agent, and error paths never echo the endpoint URL or
+  payload. Registration is all-or-nothing: an invalid backend config
+  fails sidecar startup rather than partially registering, so the prompt
+  advertisement and `tools/list` always agree. When no backend is
+  configured the tool is not registered.
+  ([#242](https://github.com/sortie-ai/sortie/issues/242))
 - Jira adapter: Jira Server and Data Center support via a new optional
   `tracker.api_version` field. The default `"3"` targets Jira Cloud
   (REST v3) and leaves existing configurations unchanged; `"2"` targets
@@ -30,23 +60,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- Agent tools: all five built-in tools (`sortie_status`,
-  `workspace_history`, `cost_budget`, `tracker_api`, `notify_operator`)
-  now return one uniform result envelope. On success a tool returns
-  `{"success": true, "data": <payload>}`; on a domain failure it returns
-  `{"success": false, "error": {"kind": "...", "message": "..."}}`. This
-  changes the result shape of four tools: the Tier 1 tools
-  (`sortie_status`, `workspace_history`, `cost_budget`) previously
-  returned a bare success object and a flat `{"error": "message"}`
-  failure, and `notify_operator` previously returned `delivered` and
-  `notification_id` as top-level fields, now nested under `data`. The
-  Tier 1 tools gain a closed `error.kind` set: `state_unavailable` and
-  `state_malformed` for `sortie_status`, and `query_failed` for
-  `workspace_history` and `cost_budget`. `tracker_api`'s output is
-  unchanged. Agent prompts or downstream consumers that parsed the
-  previous bare or flat shapes must now read the payload under `data`
-  and read failures as `error.kind` and `error.message`.
+- Agent tools: the built-in tools now share one uniform result
+  envelope — `{"success": true, "data": <payload>}` on success and
+  `{"success": false, "error": {"kind": "...", "message": "..."}}` on a
+  domain failure. For operators upgrading, this changes the result shape
+  of the two pre-existing Tier 1 tools: `sortie_status` and
+  `workspace_history` previously returned a bare success object and a
+  flat `{"error": "message"}` failure, and now nest their payload under
+  `data` and report failures with a closed `error.kind`
+  (`state_unavailable` / `state_malformed` for `sortie_status`,
+  `query_failed` for `workspace_history`). `tracker_api`'s output is
+  unchanged, and the new `cost_budget` and `notify_operator` tools adopt
+  the envelope natively. Agent prompts or downstream consumers that
+  parsed the previous bare or flat shapes must now read the payload under
+  `data` and read failures as `error.kind` and `error.message`.
   ([#567](https://github.com/sortie-ai/sortie/issues/567))
+
+### Fixed
+
+- OpenCode adapter: restore the actionable "model not found" diagnostic
+  on invalid-model turns. OpenCode 1.16.0 replaced its per-run
+  unknown-model error with a generic masked server error, so a turn
+  configured with a model absent from the catalog failed with no
+  actionable detail. The adapter now detects the masked placeholder,
+  queries `opencode models`, and emits a "model not found" turn failure
+  when the configured model is missing — including over SSH, reusing the
+  existing remote-command path.
+  ([#562](https://github.com/sortie-ai/sortie/issues/562))
+- Agent tool advertisement: the first-turn prompt now lists the same
+  tools the MCP server serves for the session. Previously the prompt
+  advertised only `tracker_api` while the sidecar also served the Tier 1
+  `sortie_status` and `workspace_history` tools, so an agent that relied
+  on the prompt for tool discovery was never told those tools existed.
+  The orchestrator worker and the MCP sidecar now build the session tool
+  set through a single shared path, keeping the advertised set and the
+  MCP `tools/list` response identical.
+  ([#565](https://github.com/sortie-ai/sortie/issues/565))
+- Windows: workspace hook cleanup no longer fails with a sharing
+  violation when a hook spawns child processes. `TerminateJobObject` and
+  `KILL_ON_JOB_CLOSE` can return before dying descendants release their
+  handles, so a child still holding the hook working directory open made
+  the caller's cleanup fail. `RunHook` now terminates any survivors and
+  polls the Job Object until its active-process count reaches zero
+  (2-second cap) before returning.
+  ([PR #575](https://github.com/sortie-ai/sortie/pull/575))
+
+### Migrations
+
+- Add token-accounting columns (`input_tokens`, `output_tokens`,
+  `total_tokens`, `cache_read_tokens`) to `run_history` as
+  `NOT NULL DEFAULT 0`; pre-migration rows read back as zero.
 
 ## [1.11.0] - 2026-05-29
 
