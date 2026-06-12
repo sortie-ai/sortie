@@ -170,6 +170,7 @@ tracker:
   kind: jira
   endpoint: https://mycompany.atlassian.net
   api_key: $JIRA_API_TOKEN
+  api_version: "3"
   project: PROJ
   active_states:
     - To Do
@@ -180,6 +181,10 @@ tracker:
   query_filter: "labels = 'agent-ready'"
   handoff_state: Human Review
   in_progress_state: In Progress
+  comments:
+    on_dispatch: false
+    on_completion: false
+    on_failure: false
 ```
 
 | Field             | Type            | Required                  | Default         | Dynamic Reload                     | Description                                                                                                                                                                                     |
@@ -188,11 +193,13 @@ tracker:
 | `endpoint`        | string          | Adapter-defined           | Adapter-defined | Future dispatches                  | Tracker API endpoint URL. Supports `$VAR` indirection: if the value starts with `$`, it is expanded via `os.ExpandEnv`.                                                                         |
 | `api_key`         | string          | When adapter requires it  | _(none)_        | Future dispatches                  | API authentication token. May be a literal or `$VAR_NAME`. If `$VAR_NAME` resolves to empty, treated as missing. Jira requires this field. Full env expansion applied (`$VAR` at any position). |
 | `project`         | string          | When adapter requires it  | _(none)_        | Future dispatches                  | Project identifier (e.g., Jira project key). Supports `$VAR` indirection: if the value starts with `$`, it is expanded via `os.ExpandEnv`.                                                      |
+| `api_version`     | string          | No                        | `"3"`           | Future dispatches                  | Jira REST API version selector: `"3"` (Cloud) or `"2"` (Server / Data Center). Supports `$VAR` indirection. Quote the value: a bare integer (`api_version: 2`) is coerced to its decimal string but emits a validation advisory. Adapters other than Jira ignore this field. |
 | `active_states`   | list of strings | **Yes** (see rules below) | `[]` (empty)    | Future dispatch and reconciliation | Issue states eligible for agent dispatch. An issue is eligible for dispatch only if its state appears in this list. An empty list means no issues will be dispatched.                           |
 | `terminal_states` | list of strings | **Yes** (see rules below) | `[]` (empty)    | Future dispatch and reconciliation | Issue states that release claims and trigger cleanup.                                                                                                                                           |
 | `query_filter`    | string          | No                        | `""` (empty)    | Future dispatches                  | Adapter-defined query fragment appended to candidate and terminal-state queries. Passed to the adapter without interpretation. For Jira: JQL fragment (e.g., `"labels = 'agent-ready'"`).       |
 | `handoff_state`   | string          | No                        | _(absent)_      | Future worker exits                | Target tracker state for orchestrator-initiated handoff after successful worker run. When absent, no handoff transition is performed.                                                           |
 | `in_progress_state` | string        | No                        | _(absent)_      | Future dispatches                  | Target tracker state for dispatch-time transition at the start of each worker attempt. When absent, no dispatch-time transition is performed. Must be in `active_states`. Must not collide with `terminal_states` or `handoff_state`. |
+| `comments`        | map of booleans | No                        | all `false`     | Future dispatches                  | Toggles for orchestrator-posted tracker comments at session lifecycle points. Keys: `on_dispatch`, `on_completion`, `on_failure`. Each is a boolean defaulting to `false`. Non-boolean values are rejected with a configuration error. See [Section 3.2](#32-curated-variable-list) for the matching `SORTIE_TRACKER_COMMENTS_*` env overrides. |
 
 **`active_states` / `terminal_states` validation rules:**
 
@@ -1068,6 +1075,7 @@ as an environment variable reference.
 | `hooks.before_remove`                  | Same as above                                                   |
 | `hooks.timeout_ms`                     | Low-risk tuning; hooks are rarely changed per-environment       |
 | `agent.max_concurrent_agents_by_state` | Complex map type; no clean single-value representation          |
+| `notifications`                        | List of pass-through backend maps; no single-value representation. Backend secrets are referenced as `SORTIE_`-prefixed variables from inside the entry (see Section 2.12), not as field-level overrides. |
 | `ci_feedback.escalation_label`         | Low-risk default; rarely differs per environment                |
 | `self_review.*`                        | Verification commands are security-sensitive privileged configuration that must come from the version-controlled WORKFLOW.md |
 | Extensions (`server`, `worker`, etc.)  | Extension-defined; would couple core env parsing to extensions  |
@@ -2201,6 +2209,7 @@ re-applies configuration and prompt template without restart.
 | `reactions.review_comments.poll_interval_ms`    | Future dispatches.                                                                             |
 | `reactions.review_comments.debounce_ms`         | Future dispatches.                                                                             |
 | `reactions.review_comments.max_continuation_turns` | Future dispatches.                                                                          |
+| `notifications`                        | Future sessions. The `sortie mcp-server` sidecar re-reads `WORKFLOW.md` at each session start, so backend and cap changes apply to sessions started after the reload, not to in-flight sessions. |
 | `server.port`                          | **No effect** — requires restart.                                                              |
 | `server.host`                          | **No effect** — requires restart.                                                              |
 | `logging.level`                        | **No effect** — requires restart.                                                              |
@@ -2350,6 +2359,7 @@ lists the `SORTIE_*` variable that overrides the field, or "—" if not overrida
 | `tracker.query_filter`                  | string           | `""`                         | `SORTIE_TRACKER_QUERY_FILTER`            | Adapter-interpreted                                                                    |
 | `tracker.handoff_state`                 | string           | _(absent)_                   | `SORTIE_TRACKER_HANDOFF_STATE`           | Must not collide with active/terminal                                                  |
 | `tracker.in_progress_state`             | string           | _(absent)_                   | `SORTIE_TRACKER_IN_PROGRESS_STATE`       | Must be in active; must not collide with terminal/handoff                              |
+| `tracker.api_version`                   | string           | `"3"`                        | —                                        | Jira only; `"3"` (Cloud) or `"2"` (Server/DC); `$VAR` supported; quote the value       |
 | `tracker.comments.on_dispatch`          | bool             | `false`                      | `SORTIE_TRACKER_COMMENTS_ON_DISPATCH`    |                                                                                        |
 | `tracker.comments.on_completion`        | bool             | `false`                      | `SORTIE_TRACKER_COMMENTS_ON_COMPLETION`  |                                                                                        |
 | `tracker.comments.on_failure`           | bool             | `false`                      | `SORTIE_TRACKER_COMMENTS_ON_FAILURE`     |                                                                                        |
@@ -2390,6 +2400,9 @@ lists the `SORTIE_*` variable that overrides the field, or "—" if not overrida
 | `self_review.verification_timeout_ms`   | integer          | `120000`                     | —                                        | Per-command timeout                                                                    |
 | `self_review.max_diff_bytes`            | integer          | `102400`                     | —                                        | Diff truncation limit                                                                  |
 | `self_review.reviewer`                  | string           | `"same"`                     | —                                        | Only `"same"` in v1                                                                    |
+| `notifications`                         | `[map]`          | _(absent)_                   | —                                        | Notifier backend list; `notify_operator` tool; absent = tool unregistered             |
+| `notifications[].kind`                  | string           | _(required)_                 | —                                        | Backend discriminator; v1: `webhook`, `slack`                                          |
+| `notifications[].max_per_session`       | integer          | `20`                         | —                                        | Per-session `notify_operator` cap; `0` selects the default; never unlimited; non-negative |
 | **Extensions**                          |                  |                              |                                          |                                                                                        |
 | `server.port`                           | integer          | `7678`                       | —                                        | CLI `--port` overrides; `0` disables server                                    |
 | `server.host`                           | string (IP)      | `127.0.0.1`                  | —                                        | CLI `--host` overrides                                                         |
