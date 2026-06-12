@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.12.0] - 2026-06-12
+
 ### Added
 
 - `cost_budget` agent tool with per-issue token budget enforcement: a
@@ -1029,7 +1031,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   execution via GitHub Actions.
 - Architecture Decision Records (ADR-0001 through ADR-0005).
 
-[Unreleased]: https://github.com/sortie-ai/sortie/compare/1.11.0...HEAD
+[Unreleased]: https://github.com/sortie-ai/sortie/compare/1.12.0...HEAD
+[1.12.0]: https://github.com/sortie-ai/sortie/compare/1.11.0...1.12.0
 [1.11.0]: https://github.com/sortie-ai/sortie/compare/1.10.0...1.11.0
 [1.10.0]: https://github.com/sortie-ai/sortie/compare/1.9.1...1.10.0
 [1.9.1]: https://github.com/sortie-ai/sortie/compare/1.9.0...1.9.1
