@@ -199,7 +199,7 @@ tracker:
 | `query_filter`    | string          | No                        | `""` (empty)    | Future dispatches                  | Adapter-defined query fragment appended to candidate and terminal-state queries. Passed to the adapter without interpretation. For Jira: JQL fragment (e.g., `"labels = 'agent-ready'"`).       |
 | `handoff_state`   | string          | No                        | _(absent)_      | Future worker exits                | Target tracker state for orchestrator-initiated handoff after successful worker run. When absent, no handoff transition is performed.                                                           |
 | `in_progress_state` | string        | No                        | _(absent)_      | Future dispatches                  | Target tracker state for dispatch-time transition at the start of each worker attempt. When absent, no dispatch-time transition is performed. Must be in `active_states`. Must not collide with `terminal_states` or `handoff_state`. |
-| `comments`        | map of booleans | No                        | all `false`     | Future dispatches                  | Toggles for orchestrator-posted tracker comments at session lifecycle points. Keys: `on_dispatch`, `on_completion`, `on_failure`. Each is a boolean defaulting to `false`. Non-boolean values are rejected with a configuration error. See [Section 3.2](#32-curated-variable-list) for the matching `SORTIE_TRACKER_COMMENTS_*` env overrides. |
+| `comments`        | map of booleans | No                        | all `false`     | Future dispatches (`on_dispatch`); future worker exits (`on_completion`, `on_failure`) | Toggles for orchestrator-posted tracker comments at session lifecycle points. Keys: `on_dispatch`, `on_completion`, `on_failure`. Each is a boolean defaulting to `false`. Non-boolean values are rejected with a configuration error. See [Section 3.2](#32-curated-variable-list) for the matching `SORTIE_TRACKER_COMMENTS_*` env overrides. |
 
 **`active_states` / `terminal_states` validation rules:**
 
@@ -1075,7 +1075,7 @@ as an environment variable reference.
 | `hooks.before_remove`                  | Same as above                                                   |
 | `hooks.timeout_ms`                     | Low-risk tuning; hooks are rarely changed per-environment       |
 | `agent.max_concurrent_agents_by_state` | Complex map type; no clean single-value representation          |
-| `notifications`                        | List of pass-through backend maps; no single-value representation. Backend secrets are referenced as `SORTIE_`-prefixed variables from inside the entry (see Section 2.12), not as field-level overrides. |
+| `notifications`                        | List of pass-through backend maps; no single-value representation. Backend secrets are referenced via `$SORTIE_*` indirection from inside the entry (see Section 2.12), not as field-level overrides. |
 | `ci_feedback.escalation_label`         | Low-risk default; rarely differs per environment                |
 | `self_review.*`                        | Verification commands are security-sensitive privileged configuration that must come from the version-controlled WORKFLOW.md |
 | Extensions (`server`, `worker`, etc.)  | Extension-defined; would couple core env parsing to extensions  |
