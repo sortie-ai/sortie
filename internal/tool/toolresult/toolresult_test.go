@@ -2,6 +2,7 @@ package toolresult
 
 import (
 	"encoding/json"
+	"sort"
 	"testing"
 )
 
@@ -327,5 +328,6 @@ func keysOf(m map[string]json.RawMessage) []string {
 	for k := range m {
 		keys = append(keys, k)
 	}
+	sort.Strings(keys)
 	return keys
 }
