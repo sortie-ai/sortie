@@ -222,6 +222,19 @@ func TestFailure_GoErrorNilForStringInputs(t *testing.T) {
 	}
 }
 
+// TestSuccess_GoErrorOnUnmarshalablePayload asserts that Success returns a
+// non-nil Go error when given a payload that encoding/json cannot marshal,
+// and does not panic.
+func TestSuccess_GoErrorOnUnmarshalablePayload(t *testing.T) {
+	t.Parallel()
+
+	_, err := Success(func() {})
+
+	if err == nil {
+		t.Errorf("Success(func(){}) Go error = nil, want non-nil marshal error")
+	}
+}
+
 // TestSuccess_ByteShapeMatchesPriorSuccessResult asserts that Success(payload)
 // produces identical bytes to the historic per-tool successResult pattern
 // ({"success": true, "data": payload}) for a representative payload.
