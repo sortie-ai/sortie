@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/sortie-ai/sortie/internal/domain"
+	"github.com/sortie-ai/sortie/internal/tool/toolresult"
 )
 
 var _ domain.AgentTool = (*NotifyTool)(nil)
@@ -138,28 +139,28 @@ func (t *NotifyTool) Execute(ctx context.Context, input json.RawMessage) (json.R
 	dec := json.NewDecoder(bytes.NewReader(input))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&in); err != nil {
-		return errorResult("invalid_input", fmt.Sprintf("failed to parse input: %s", err))
+		return toolresult.Failure("invalid_input", fmt.Sprintf("failed to parse input: %s", err))
 	}
 	if dec.More() {
-		return errorResult("invalid_input", "unexpected trailing content after JSON object")
+		return toolresult.Failure("invalid_input", "unexpected trailing content after JSON object")
 	}
 
 	if !validSeverities[in.Severity] {
-		return errorResult("invalid_input", "severity must be info, warning, or critical")
+		return toolresult.Failure("invalid_input", "severity must be info, warning, or critical")
 	}
 	if in.Category != "" && !validCategories[in.Category] {
-		return errorResult("invalid_input", "category is not a recognized value")
+		return toolresult.Failure("invalid_input", "category is not a recognized value")
 	}
 	if in.Title == "" || in.Body == "" {
-		return errorResult("invalid_input", "title and body must be non-empty")
+		return toolresult.Failure("invalid_input", "title and body must be non-empty")
 	}
 
 	if len(t.backends) == 0 {
-		return errorResult("backend_unavailable", "no notification backend is configured")
+		return toolresult.Failure("backend_unavailable", "no notification backend is configured")
 	}
 
 	if t.count >= t.maxPerSession {
-		return errorResult("rate_limited", "per-session notification cap reached")
+		return toolresult.Failure("rate_limited", "per-session notification cap reached")
 	}
 
 	notification := domain.Notification{
@@ -175,13 +176,16 @@ func (t *NotifyTool) Execute(ctx context.Context, input json.RawMessage) (json.R
 	delivered := 0
 	for _, backend := range t.backends {
 		if err := backend.Send(ctx, notification); err != nil {
-			return errorResult("send_failed", fmt.Sprintf("notification delivery failed: %s", err))
+			return toolresult.Failure("send_failed", fmt.Sprintf("notification delivery failed: %s", err))
 		}
 		delivered++
 	}
 
 	t.count++
-	return successResult(delivered, notification.Envelope.NotificationID)
+	return toolresult.Success(map[string]any{
+		"delivered":       delivered,
+		"notification_id": notification.Envelope.NotificationID,
+	})
 }
 
 // buildEnvelope generates the notification id and timestamp at call time
@@ -205,28 +209,6 @@ func (t *NotifyTool) buildEnvelope() domain.NotificationEnvelope {
 		Attempt:        t.env.Attempt,
 		Agent:          t.env.Agent,
 	}
-}
-
-// successResult marshals the success envelope.
-func successResult(delivered int, notificationID string) (json.RawMessage, error) {
-	return json.Marshal(map[string]any{
-		"success":         true,
-		"delivered":       delivered,
-		"notification_id": notificationID,
-	})
-}
-
-// errorResult marshals the failure envelope with a closed-set kind and a
-// redacted message. The kind is one of invalid_input, rate_limited,
-// send_failed, or backend_unavailable.
-func errorResult(kind, message string) (json.RawMessage, error) {
-	return json.Marshal(map[string]any{
-		"success": false,
-		"error": map[string]string{
-			"kind":    kind,
-			"message": message,
-		},
-	})
 }
 
 // newUUID generates a random v4 UUID string using crypto/rand. Panics if

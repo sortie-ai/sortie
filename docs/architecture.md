@@ -1871,9 +1871,17 @@ All tools that Sortie exposes to agents implement the `AgentTool` interface
 - `InputSchema() json.RawMessage` — JSON Schema describing the tool's expected input. Used for
   MCP tool registration and prompt-based documentation.
 - `Execute(ctx context.Context, input json.RawMessage) (json.RawMessage, error)` — runs the tool
-  and returns a structured JSON result. Domain-level errors (missing auth, API failures, invalid
-  input) are encoded in the JSON result with `success: false`. The Go `error` return is reserved
-  for internal failures (nil adapter, marshal failure) that indicate programming errors.
+  and returns a structured JSON result. The Go `error` return is reserved for internal failures
+  (nil adapter, marshal failure) that indicate programming errors.
+
+Every tool's `Execute` MUST return the uniform result envelope. On success it MUST return
+`{"success": true, "data": <payload>}`, where `<payload>` is the tool's success object. On a
+domain failure (missing auth, API failures, invalid input, unreadable local state) it MUST return
+`{"success": false, "error": {"kind": "<kind>", "message": "<message>"}}`, where `kind` is from the
+tool's documented closed set (Section 10.4.5) and `message` is a human-readable detail. A domain
+failure is carried in this envelope with a nil Go `error`; the non-nil Go `error` return signals
+only an internal marshal failure. All tools marshal both envelopes through one shared helper, so
+the two shapes are byte-identical at the top level across tools.
 
 #### 10.4.3 Tool registry
 
@@ -1897,9 +1905,11 @@ strategy, and failure characteristics.
 
 **Tier 1 — pure orchestrator state.** These tools read from local session state (a workspace
 state file or the SQLite database) with zero external calls. They are deterministic and fast.
-Beyond internal bugs, their only runtime failure mode is a tool-error response when the local
-state they read is missing or unreadable (for example, an absent or malformed state file, or a
-failed database query).
+Beyond internal bugs, their only runtime failure mode is the failure envelope of Section 10.4.2
+when the local state they read is missing or unreadable. Their `error.kind` values come from the
+closed Tier 1 set `state_unavailable`, `state_malformed`, and `query_failed`: an absent, symlinked,
+oversized, or unreadable state file is `state_unavailable`, a present but unparseable state file is
+`state_malformed`, and a failed database query is `query_failed`.
 
 - `sortie_status` (Section 10.4.5)
 - `workspace_history` (Section 10.4.5)
@@ -1946,13 +1956,20 @@ Tracker dispatch:
 The tool delegates to the configured `TrackerAdapter` implementation. Transport, input shape,
 and query semantics are adapter-defined.
 
-Result semantics:
+Result semantics: the tool returns the uniform envelope of Section 10.4.2. On success it returns
+`{"success": true, "data": <payload>}`, where `<payload>` is the per-operation response object. On
+a domain failure (API-level error, invalid input, missing auth, or transport failure) it returns
+`{"success": false, "error": {"kind": "<kind>", "message": "<message>"}}`. The `error.kind` comes
+from the closed set below.
 
-- Transport success + no API-level errors -> `success: true` with response payload.
-- API-level errors -> `success: false` with a normalized error envelope
-  `{"success": false, "error": {"kind": "...", "message": "..."}}`.
-- Invalid input, missing auth, or transport failure -> `success: false` with the same normalized
-  error envelope (`error.kind` indicates the failure category).
+| `error.kind` | Condition |
+|---|---|
+| `invalid_input` | Input fails schema decode, carries unknown or trailing fields, or omits a required field for the operation |
+| `unsupported_operation` | The requested operation is not one of the four supported operations |
+| `project_scope_violation` | The target issue is outside the configured project |
+| `tracker_transport_error` | The request was canceled or its deadline was exceeded |
+| `internal_error` | An unexpected error that the adapter did not classify |
+| `domain.TrackerError` kinds | The adapter returned a classified tracker error; its kind passes through verbatim |
 
 The response payload or error envelope is returned as structured JSON that the agent can inspect
 in-session.
@@ -1975,8 +1992,11 @@ Response fields:
 | `session_duration_seconds` | number | Wall-clock seconds since the session started |
 | `tokens` | object | `input_tokens`, `output_tokens`, `total_tokens`, and `cache_read_tokens` |
 
-On failure the tool returns a JSON error object of the form `{"error": "<message>"}`. This
-happens when the state file is absent, a symlink, oversized, or malformed.
+On success the tool returns the response object above under `data`, in the envelope
+`{"success": true, "data": {...}}` of Section 10.4.2. On failure it returns the failure envelope
+`{"success": false, "error": {"kind": "<kind>", "message": "<message>"}}`. An absent, symlinked,
+oversized, or unreadable state file yields `error.kind` `state_unavailable`; a present but
+unparseable state file, including an invalid `started_at`, yields `state_malformed`.
 
 **`workspace_history` (Tier 1)** returns the most recent completed run attempts for the current
 issue. It queries the `run_history` table (Section 19.2) through a read-only SQLite connection
@@ -1985,13 +2005,16 @@ and makes no external calls.
 Availability: registered when the database path and issue ID are present in the environment
 (`SORTIE_DB_PATH`, `SORTIE_ISSUE_ID`). The tool takes no input.
 
-The response is a JSON object `{issue_id, entries}`, where `entries` lists at most the 10 most
+On success the tool returns, under `data` in the envelope `{"success": true, "data": {...}}` of
+Section 10.4.2, a JSON object `{issue_id, entries}`, where `entries` lists at most the 10 most
 recent runs, newest first. Each entry has `attempt`, `agent_adapter`, `started_at`,
 `completed_at`, `status` (`succeeded`, `failed`, `timed_out`, `stalled`, or `cancelled`), and
-`error` (null unless the run failed).
+`error` (null unless the run failed). The per-entry `error` is the run's own error and is distinct
+from the envelope's `error` object.
 
-On failure the tool returns a JSON error object of the form `{"error": "<message>"}`. This
-happens when the history query fails.
+On failure the tool returns the failure envelope
+`{"success": false, "error": {"kind": "<kind>", "message": "<message>"}}` with `error.kind`
+`query_failed`. This happens when the history query fails.
 
 **`cost_budget` (Tier 1)** returns cumulative per-issue token spend and the remaining token
 budget so an agent can self-regulate before the orchestrator's token ceiling blocks a
@@ -2004,7 +2027,8 @@ Availability: registered when the database path and issue ID are present in the 
 (`SORTIE_DB_PATH`, `SORTIE_ISSUE_ID`), the same condition as `workspace_history`. The running
 session ID arrives through `SORTIE_SESSION_ID`. The tool takes no input.
 
-The response is a JSON object with five fields:
+On success the tool returns, under `data` in the envelope `{"success": true, "data": {...}}` of
+Section 10.4.2, a JSON object with five fields:
 
 - `used_tokens`: cumulative `total_tokens` across the issue's completed sessions, plus the
   running session's recorded `total_tokens` when a session is in flight. The running session's
@@ -2024,8 +2048,9 @@ exactly when the agent consults it. The running session's spend reaches `session
 through throttled incremental writes during the session and reaches `run_history` only at
 session exit, so no window double counts.
 
-On failure the tool returns a JSON error object of the form `{"error": "<message>"}`. This
-happens when the budget query fails.
+On failure the tool returns the failure envelope
+`{"success": false, "error": {"kind": "<kind>", "message": "<message>"}}` with `error.kind`
+`query_failed`. This happens when the budget query fails.
 
 **`notify_operator` (Tier 2)** sends a real-time notification to an operator-configured
 channel while a session runs. The agent uses it to escalate a decision it should not make
@@ -2057,10 +2082,10 @@ Rate limiting: the tool enforces a per-session cap, `max_per_session`, where `0`
 default rather than unlimited. A call past the cap returns `rate_limited` and sends nothing.
 An accepted call increments the counter once, after delivery, not once per backend.
 
-Result semantics: on success the tool returns `{"success": true, "delivered": <int>,
-"notification_id": "<id>"}`. On a domain failure it returns `{"success": false, "error":
-{"kind": "...", "message": "..."}}` with `error.kind` in the closed set below. The Go error
-return is reserved for an internal marshal failure.
+Result semantics: on success the tool returns `{"success": true, "data": {"delivered": <int>,
+"notification_id": "<id>"}}`, the uniform success envelope of Section 10.4.2. On a domain failure
+it returns `{"success": false, "error": {"kind": "...", "message": "..."}}` with `error.kind` in
+the closed set below. The Go error return is reserved for an internal marshal failure.
 
 | `error.kind` | Condition |
 |---|---|

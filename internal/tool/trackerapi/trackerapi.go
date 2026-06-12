@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/sortie-ai/sortie/internal/domain"
+	"github.com/sortie-ai/sortie/internal/tool/toolresult"
 )
 
 // Compile-time interface check.
@@ -96,26 +97,26 @@ func (t *TrackerAPITool) Execute(ctx context.Context, input json.RawMessage) (js
 	dec := json.NewDecoder(bytes.NewReader(input))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&in); err != nil {
-		return errorResult("invalid_input", fmt.Sprintf("failed to parse input: %s", err)), nil
+		return toolresult.Failure("invalid_input", fmt.Sprintf("failed to parse input: %s", err))
 	}
 	if dec.More() {
-		return errorResult("invalid_input", "unexpected trailing content after JSON object"), nil
+		return toolresult.Failure("invalid_input", "unexpected trailing content after JSON object")
 	}
 
 	if in.Operation == "" {
-		return errorResult("invalid_input", "operation is required"), nil
+		return toolresult.Failure("invalid_input", "operation is required")
 	}
 
 	switch in.Operation {
 	case "fetch_issue":
 		if in.IssueID == "" {
-			return errorResult("invalid_input", "issue_id is required for fetch_issue"), nil
+			return toolresult.Failure("invalid_input", "issue_id is required for fetch_issue")
 		}
 		return t.fetchIssue(ctx, in.IssueID)
 
 	case "fetch_comments":
 		if in.IssueID == "" {
-			return errorResult("invalid_input", "issue_id is required for fetch_comments"), nil
+			return toolresult.Failure("invalid_input", "issue_id is required for fetch_comments")
 		}
 		return t.fetchComments(ctx, in.IssueID)
 
@@ -124,47 +125,47 @@ func (t *TrackerAPITool) Execute(ctx context.Context, input json.RawMessage) (js
 
 	case "transition_issue":
 		if in.IssueID == "" {
-			return errorResult("invalid_input", "issue_id is required for transition_issue"), nil
+			return toolresult.Failure("invalid_input", "issue_id is required for transition_issue")
 		}
 		if in.TargetState == "" {
-			return errorResult("invalid_input", "target_state is required for transition_issue"), nil
+			return toolresult.Failure("invalid_input", "target_state is required for transition_issue")
 		}
 		return t.transitionIssue(ctx, in.IssueID, in.TargetState)
 
 	default:
-		return errorResult("unsupported_operation", fmt.Sprintf("unknown operation: %s", in.Operation)), nil
+		return toolresult.Failure("unsupported_operation", fmt.Sprintf("unknown operation: %s", in.Operation))
 	}
 }
 
 func (t *TrackerAPITool) fetchIssue(ctx context.Context, issueID string) (json.RawMessage, error) {
 	issue, err := t.adapter.FetchIssueByID(ctx, issueID)
 	if err != nil {
-		return mapTrackerError(err), nil
+		return mapTrackerError(err)
 	}
 
 	if !t.isInProject(issue.Identifier) {
-		return errorResult("project_scope_violation",
-			fmt.Sprintf("issue %s is not in project %s", issue.Identifier, t.project)), nil
+		return toolresult.Failure("project_scope_violation",
+			fmt.Sprintf("issue %s is not in project %s", issue.Identifier, t.project))
 	}
 
-	return successResult(issue.ToTemplateMap()), nil
+	return toolresult.Success(issue.ToTemplateMap())
 }
 
 func (t *TrackerAPITool) fetchComments(ctx context.Context, issueID string) (json.RawMessage, error) {
 	// Fetch issue first for project scope validation (defense-in-depth).
 	issue, err := t.adapter.FetchIssueByID(ctx, issueID)
 	if err != nil {
-		return mapTrackerError(err), nil
+		return mapTrackerError(err)
 	}
 
 	if !t.isInProject(issue.Identifier) {
-		return errorResult("project_scope_violation",
-			fmt.Sprintf("issue %s is not in project %s", issue.Identifier, t.project)), nil
+		return toolresult.Failure("project_scope_violation",
+			fmt.Sprintf("issue %s is not in project %s", issue.Identifier, t.project))
 	}
 
 	comments, err := t.adapter.FetchIssueComments(ctx, issueID)
 	if err != nil {
-		return mapTrackerError(err), nil
+		return mapTrackerError(err)
 	}
 
 	commentMaps := make([]map[string]any, len(comments))
@@ -177,13 +178,13 @@ func (t *TrackerAPITool) fetchComments(ctx context.Context, issueID string) (jso
 		}
 	}
 
-	return successResult(commentMaps), nil
+	return toolresult.Success(commentMaps)
 }
 
 func (t *TrackerAPITool) searchIssues(ctx context.Context) (json.RawMessage, error) {
 	issues, err := t.adapter.FetchCandidateIssues(ctx)
 	if err != nil {
-		return mapTrackerError(err), nil
+		return mapTrackerError(err)
 	}
 
 	issueMaps := make([]map[string]any, len(issues))
@@ -191,26 +192,26 @@ func (t *TrackerAPITool) searchIssues(ctx context.Context) (json.RawMessage, err
 		issueMaps[i] = issues[i].ToTemplateMap()
 	}
 
-	return successResult(issueMaps), nil
+	return toolresult.Success(issueMaps)
 }
 
 func (t *TrackerAPITool) transitionIssue(ctx context.Context, issueID, targetState string) (json.RawMessage, error) {
 	// Fetch issue first for project scope validation (defense-in-depth).
 	issue, err := t.adapter.FetchIssueByID(ctx, issueID)
 	if err != nil {
-		return mapTrackerError(err), nil
+		return mapTrackerError(err)
 	}
 
 	if !t.isInProject(issue.Identifier) {
-		return errorResult("project_scope_violation",
-			fmt.Sprintf("issue %s is not in project %s", issue.Identifier, t.project)), nil
+		return toolresult.Failure("project_scope_violation",
+			fmt.Sprintf("issue %s is not in project %s", issue.Identifier, t.project))
 	}
 
 	if err := t.adapter.TransitionIssue(ctx, issueID, targetState); err != nil {
-		return mapTrackerError(err), nil
+		return mapTrackerError(err)
 	}
 
-	return successResult(map[string]any{"transitioned": true}), nil
+	return toolresult.Success(map[string]any{"transitioned": true})
 }
 
 // isInProject is a defense-in-depth check using identifier prefix.
@@ -239,52 +240,23 @@ func (t *TrackerAPITool) isInProject(identifier string) bool {
 	return strings.EqualFold(prefix, t.project)
 }
 
-// mapTrackerError converts a tracker error into a structured JSON
-// error response. Context cancellation and deadline exceeded are
-// mapped to tracker_transport_error. TrackerError kinds map directly.
-// Unknown errors become internal_error.
-func mapTrackerError(err error) json.RawMessage {
+// mapTrackerError converts a tracker error into the failure envelope.
+// Context cancellation and deadline exceeded are mapped to
+// tracker_transport_error. TrackerError kinds map directly. Unknown
+// errors become internal_error. The Go error return is reserved for an
+// internal marshal failure.
+func mapTrackerError(err error) (json.RawMessage, error) {
 	if errors.Is(err, context.Canceled) {
-		return errorResult("tracker_transport_error", "request canceled")
+		return toolresult.Failure("tracker_transport_error", "request canceled")
 	}
 	if errors.Is(err, context.DeadlineExceeded) {
-		return errorResult("tracker_transport_error", "deadline exceeded")
+		return toolresult.Failure("tracker_transport_error", "deadline exceeded")
 	}
 
 	var te *domain.TrackerError
 	if errors.As(err, &te) {
-		return errorResult(string(te.Kind), te.Message)
+		return toolresult.Failure(string(te.Kind), te.Message)
 	}
 
-	return errorResult("internal_error", "an unexpected internal error occurred")
-}
-
-// successResult marshals a success response envelope. Panics on
-// marshal failure (programming error — only called with JSON-safe
-// map values).
-func successResult(data any) json.RawMessage {
-	raw, err := json.Marshal(map[string]any{
-		"success": true,
-		"data":    data,
-	})
-	if err != nil {
-		panic(fmt.Sprintf("trackerapi: marshal success result: %v", err))
-	}
-	return raw
-}
-
-// errorResult marshals an error response envelope. Panics on marshal
-// failure (should never happen with string inputs).
-func errorResult(kind, message string) json.RawMessage {
-	raw, err := json.Marshal(map[string]any{
-		"success": false,
-		"error": map[string]string{
-			"kind":    kind,
-			"message": message,
-		},
-	})
-	if err != nil {
-		panic(fmt.Sprintf("trackerapi: marshal error result: %v", err))
-	}
-	return raw
+	return toolresult.Failure("internal_error", "an unexpected internal error occurred")
 }

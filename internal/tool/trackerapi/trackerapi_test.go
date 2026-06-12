@@ -3,7 +3,6 @@ package trackerapi
 import (
 	"context"
 	"encoding/json"
-	"math"
 	"strings"
 	"testing"
 
@@ -643,25 +642,4 @@ func TestTrailingJSONContent(t *testing.T) {
 	}
 	assertErrorKind(t, result, "invalid_input")
 	assertErrorContains(t, result, "trailing")
-}
-
-func TestSuccessResultPanicsOnUnmarshalable(t *testing.T) {
-	t.Parallel()
-
-	defer func() {
-		r := recover()
-		if r == nil {
-			t.Fatal("successResult did not panic on unmarshalable input")
-		}
-		msg, ok := r.(string)
-		if !ok {
-			t.Fatalf("panic value type = %T, want string", r)
-		}
-		if !strings.Contains(msg, "marshal success result") {
-			t.Errorf("panic message = %q, want it to contain %q", msg, "marshal success result")
-		}
-	}()
-
-	// math.Inf produces a float64 value that json.Marshal cannot encode.
-	successResult(math.Inf(1))
 }

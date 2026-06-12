@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/sortie-ai/sortie/internal/domain"
+	"github.com/sortie-ai/sortie/internal/tool/toolresult"
 )
 
 var _ domain.AgentTool = (*StatusTool)(nil)
@@ -100,28 +101,28 @@ func (t *StatusTool) InputSchema() json.RawMessage {
 func (t *StatusTool) Execute(_ context.Context, _ json.RawMessage) (json.RawMessage, error) {
 	fi, err := os.Lstat(t.stateFilePath)
 	if err != nil {
-		return errorResponse("state file unavailable: " + err.Error())
+		return toolresult.Failure("state_unavailable", "state file unavailable: "+err.Error())
 	}
 	if fi.Mode()&os.ModeSymlink != 0 {
-		return errorResponse("state file is a symlink")
+		return toolresult.Failure("state_unavailable", "state file is a symlink")
 	}
 	if fi.Size() > maxStateFileBytes {
-		return errorResponse("state file exceeds size limit")
+		return toolresult.Failure("state_unavailable", "state file exceeds size limit")
 	}
 
 	data, err := os.ReadFile(t.stateFilePath)
 	if err != nil {
-		return errorResponse("state file unavailable: " + err.Error())
+		return toolresult.Failure("state_unavailable", "state file unavailable: "+err.Error())
 	}
 
 	var sf stateFile
 	if err := json.Unmarshal(data, &sf); err != nil {
-		return errorResponse("state file malformed: " + err.Error())
+		return toolresult.Failure("state_malformed", "state file malformed: "+err.Error())
 	}
 
 	startedAt, err := time.Parse(time.RFC3339Nano, sf.StartedAt)
 	if err != nil {
-		return errorResponse("state file has invalid started_at: " + err.Error())
+		return toolresult.Failure("state_malformed", "state file has invalid started_at: "+err.Error())
 	}
 
 	turnsRemaining := sf.MaxTurns - sf.TurnNumber
@@ -145,9 +146,5 @@ func (t *StatusTool) Execute(_ context.Context, _ json.RawMessage) (json.RawMess
 		},
 	}
 
-	return json.Marshal(resp)
-}
-
-func errorResponse(msg string) (json.RawMessage, error) {
-	return json.Marshal(map[string]string{"error": msg})
+	return toolresult.Success(resp)
 }

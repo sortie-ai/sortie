@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 
 	"github.com/sortie-ai/sortie/internal/domain"
+	"github.com/sortie-ai/sortie/internal/tool/toolresult"
 )
 
 var _ domain.AgentTool = (*HistoryTool)(nil)
@@ -94,11 +95,7 @@ func (t *HistoryTool) InputSchema() json.RawMessage {
 func (t *HistoryTool) Execute(ctx context.Context, _ json.RawMessage) (json.RawMessage, error) {
 	results, err := t.query(ctx, t.issueID, maxEntries)
 	if err != nil {
-		resp, marshalErr := json.Marshal(map[string]string{"error": err.Error()})
-		if marshalErr != nil {
-			return nil, marshalErr
-		}
-		return resp, nil
+		return toolresult.Failure("query_failed", err.Error())
 	}
 
 	entries := make([]historyEntry, len(results))
@@ -111,7 +108,7 @@ func (t *HistoryTool) Execute(ctx context.Context, _ json.RawMessage) (json.RawM
 		entries = []historyEntry{}
 	}
 
-	return json.Marshal(historyResponse{
+	return toolresult.Success(historyResponse{
 		IssueID: t.issueID,
 		Entries: entries,
 	})

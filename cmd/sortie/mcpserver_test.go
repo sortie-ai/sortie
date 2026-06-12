@@ -169,31 +169,36 @@ func TestMCPServer_StatusTool_Dispatch(t *testing.T) {
 		t.Fatalf("unmarshal status response %q: %v", text, err)
 	}
 
-	if got, ok := statusResp["turn_number"].(float64); !ok || int(got) != 7 {
-		t.Errorf("turn_number = %v, want 7", statusResp["turn_number"])
-	}
-	if got, ok := statusResp["max_turns"].(float64); !ok || int(got) != 10 {
-		t.Errorf("max_turns = %v, want 10", statusResp["max_turns"])
-	}
-	if got, ok := statusResp["turns_remaining"].(float64); !ok || int(got) != 3 {
-		t.Errorf("turns_remaining = %v, want 3", statusResp["turns_remaining"])
+	data, ok := statusResp["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("statusResp[\"data\"] = %T %v, want map[string]any", statusResp["data"], statusResp["data"])
 	}
 
-	tokens, ok := statusResp["tokens"].(map[string]any)
+	if got, ok := data["turn_number"].(float64); !ok || int(got) != 7 {
+		t.Errorf("data.turn_number = %v, want 7", data["turn_number"])
+	}
+	if got, ok := data["max_turns"].(float64); !ok || int(got) != 10 {
+		t.Errorf("data.max_turns = %v, want 10", data["max_turns"])
+	}
+	if got, ok := data["turns_remaining"].(float64); !ok || int(got) != 3 {
+		t.Errorf("data.turns_remaining = %v, want 3", data["turns_remaining"])
+	}
+
+	tokens, ok := data["tokens"].(map[string]any)
 	if !ok {
-		t.Fatalf("tokens is not an object: %v", statusResp["tokens"])
+		t.Fatalf("data.tokens is not an object: %v", data["tokens"])
 	}
 	if got, ok := tokens["input_tokens"].(float64); !ok || got != 5000 {
-		t.Errorf("tokens.input_tokens = %v, want 5000", tokens["input_tokens"])
+		t.Errorf("data.tokens.input_tokens = %v, want 5000", tokens["input_tokens"])
 	}
 	if got, ok := tokens["output_tokens"].(float64); !ok || got != 1200 {
-		t.Errorf("tokens.output_tokens = %v, want 1200", tokens["output_tokens"])
+		t.Errorf("data.tokens.output_tokens = %v, want 1200", tokens["output_tokens"])
 	}
 	if got, ok := tokens["total_tokens"].(float64); !ok || got != 6200 {
-		t.Errorf("tokens.total_tokens = %v, want 6200", tokens["total_tokens"])
+		t.Errorf("data.tokens.total_tokens = %v, want 6200", tokens["total_tokens"])
 	}
 	if got, ok := tokens["cache_read_tokens"].(float64); !ok || got != 800 {
-		t.Errorf("tokens.cache_read_tokens = %v, want 800", tokens["cache_read_tokens"])
+		t.Errorf("data.tokens.cache_read_tokens = %v, want 800", tokens["cache_read_tokens"])
 	}
 }
 
