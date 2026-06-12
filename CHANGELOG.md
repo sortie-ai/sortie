@@ -28,6 +28,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   as absent, though `sortie validate` still advises quoting it.
   ([#549](https://github.com/sortie-ai/sortie/issues/549))
 
+### Changed
+
+- Agent tools: all five built-in tools (`sortie_status`,
+  `workspace_history`, `cost_budget`, `tracker_api`, `notify_operator`)
+  now return one uniform result envelope. On success a tool returns
+  `{"success": true, "data": <payload>}`; on a domain failure it returns
+  `{"success": false, "error": {"kind": "...", "message": "..."}}`. This
+  changes the result shape of four tools: the Tier 1 tools
+  (`sortie_status`, `workspace_history`, `cost_budget`) previously
+  returned a bare success object and a flat `{"error": "message"}`
+  failure, and `notify_operator` previously returned `delivered` and
+  `notification_id` as top-level fields, now nested under `data`. The
+  Tier 1 tools gain a closed `error.kind` set: `state_unavailable` and
+  `state_malformed` for `sortie_status`, and `query_failed` for
+  `workspace_history` and `cost_budget`. `tracker_api`'s output is
+  unchanged. Agent prompts or downstream consumers that parsed the
+  previous bare or flat shapes must now read the payload under `data`
+  and read failures as `error.kind` and `error.message`.
+  ([#567](https://github.com/sortie-ai/sortie/issues/567))
+
 ## [1.11.0] - 2026-05-29
 
 ### Added
