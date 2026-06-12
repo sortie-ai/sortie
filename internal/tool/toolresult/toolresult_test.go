@@ -243,21 +243,8 @@ func TestSuccess_ByteShapeMatchesPriorSuccessResult(t *testing.T) {
 		t.Fatalf("marshal want: %v", err)
 	}
 
-	var gotM, wantM map[string]any
-	if err := json.Unmarshal(got, &gotM); err != nil {
-		t.Fatalf("unmarshal got: %v", err)
-	}
-	if err := json.Unmarshal(want, &wantM); err != nil {
-		t.Fatalf("unmarshal want: %v", err)
-	}
-
-	gotData, _ := json.Marshal(gotM["data"])
-	wantData, _ := json.Marshal(wantM["data"])
-	if string(gotData) != string(wantData) {
-		t.Errorf("Success(payload) data = %s, want %s", gotData, wantData)
-	}
-	if gotM["success"] != wantM["success"] {
-		t.Errorf("Success(payload) success = %v, want %v", gotM["success"], wantM["success"])
+	if string(got) != string(want) {
+		t.Errorf("Success(payload) = %s, want %s", got, want)
 	}
 }
 
@@ -302,21 +289,8 @@ func TestFailure_ByteShapeMatchesPriorErrorResult(t *testing.T) {
 				t.Fatalf("marshal want: %v", err)
 			}
 
-			var gotM, wantM map[string]any
-			if err := json.Unmarshal(got, &gotM); err != nil {
-				t.Fatalf("unmarshal got: %v", err)
-			}
-			if err := json.Unmarshal(want, &wantM); err != nil {
-				t.Fatalf("unmarshal want: %v", err)
-			}
-
-			if gotM["success"] != wantM["success"] {
-				t.Errorf("Failure success = %v, want %v", gotM["success"], wantM["success"])
-			}
-			gotErr, _ := json.Marshal(gotM["error"])
-			wantErr, _ := json.Marshal(wantM["error"])
-			if string(gotErr) != string(wantErr) {
-				t.Errorf("Failure(%q, %q) error = %s, want %s", tt.kind, tt.message, gotErr, wantErr)
+			if string(got) != string(want) {
+				t.Errorf("Failure(%q, %q) = %s, want %s", tt.kind, tt.message, got, want)
 			}
 		})
 	}
