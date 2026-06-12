@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strings"
 	"testing"
 )
 
@@ -14,17 +13,27 @@ var noopQuery BudgetQueryFunc = func(_ context.Context, _ string, _ string) (Bud
 	return BudgetUsage{}, nil
 }
 
+// executeOK calls Execute and fails on a non-nil Go error or unparseable JSON.
+// Returns the decoded data payload as a costBudgetResponse.
 func executeOK(t *testing.T, tool *BudgetTool) costBudgetResponse {
 	t.Helper()
 	out, err := tool.Execute(context.Background(), json.RawMessage(`{}`))
 	if err != nil {
 		t.Fatalf("Execute: unexpected Go error: %v", err)
 	}
-	var resp costBudgetResponse
-	if err := json.Unmarshal(out, &resp); err != nil {
-		t.Fatalf("Execute: unmarshal response %q: %v", out, err)
+
+	// Unwrap the {success, data} envelope.
+	var envelope struct {
+		Success bool               `json:"success"`
+		Data    costBudgetResponse `json:"data"`
 	}
-	return resp
+	if err := json.Unmarshal(out, &envelope); err != nil {
+		t.Fatalf("Execute: unmarshal envelope %q: %v", out, err)
+	}
+	if !envelope.Success {
+		t.Fatalf("Execute: envelope success = false, want true; raw: %s", out)
+	}
+	return envelope.Data
 }
 
 func int64Ptr(v int64) *int64 { return &v }
@@ -175,33 +184,33 @@ func TestBudgetTool_Execute(t *testing.T) {
 			resp := executeOK(t, tool)
 
 			if resp.UsedTokens != tt.wantUsedTokens {
-				t.Errorf("used_tokens = %d, want %d", resp.UsedTokens, tt.wantUsedTokens)
+				t.Errorf("data.used_tokens = %d, want %d", resp.UsedTokens, tt.wantUsedTokens)
 			}
 			if resp.BudgetTokens != tt.wantBudgetTokens {
-				t.Errorf("budget_tokens = %d, want %d", resp.BudgetTokens, tt.wantBudgetTokens)
+				t.Errorf("data.budget_tokens = %d, want %d", resp.BudgetTokens, tt.wantBudgetTokens)
 			}
 			if resp.UsedSessions != tt.wantUsedSessions {
-				t.Errorf("used_sessions = %d, want %d", resp.UsedSessions, tt.wantUsedSessions)
+				t.Errorf("data.used_sessions = %d, want %d", resp.UsedSessions, tt.wantUsedSessions)
 			}
 			if resp.BudgetSessions != tt.wantBudgetSessions {
-				t.Errorf("budget_sessions = %d, want %d", resp.BudgetSessions, tt.wantBudgetSessions)
+				t.Errorf("data.budget_sessions = %d, want %d", resp.BudgetSessions, tt.wantBudgetSessions)
 			}
 			switch {
 			case tt.wantRemaining == nil && resp.RemainingTokens != nil:
-				t.Errorf("remaining_tokens = %d, want null", *resp.RemainingTokens)
+				t.Errorf("data.remaining_tokens = %d, want null", *resp.RemainingTokens)
 			case tt.wantRemaining != nil && resp.RemainingTokens == nil:
-				t.Errorf("remaining_tokens = null, want %d", *tt.wantRemaining)
+				t.Errorf("data.remaining_tokens = null, want %d", *tt.wantRemaining)
 			case tt.wantRemaining != nil && *resp.RemainingTokens != *tt.wantRemaining:
-				t.Errorf("remaining_tokens = %d, want %d", *resp.RemainingTokens, *tt.wantRemaining)
+				t.Errorf("data.remaining_tokens = %d, want %d", *resp.RemainingTokens, *tt.wantRemaining)
 			}
 		})
 	}
 }
 
-// TestBudgetTool_Execute_FiveFieldShape pins the public JSON contract:
-// all five field names are present, and remaining_tokens is an explicit
-// null (not omitted) under an unlimited token budget.
-func TestBudgetTool_Execute_FiveFieldShape(t *testing.T) {
+// TestBudgetTool_Execute_SuccessEnvelopeShape pins the AC-1 contract:
+// top-level keys are exactly {success, data}, data carries the five fields,
+// and remaining_tokens is an explicit null when the budget is unlimited.
+func TestBudgetTool_Execute_SuccessEnvelopeShape(t *testing.T) {
 	t.Parallel()
 
 	query := func(_ context.Context, _ string, _ string) (BudgetUsage, error) {
@@ -214,24 +223,49 @@ func TestBudgetTool_Execute_FiveFieldShape(t *testing.T) {
 		t.Fatalf("Execute: unexpected Go error: %v", err)
 	}
 
-	var m map[string]any
-	if err := json.Unmarshal(out, &m); err != nil {
+	var top map[string]any
+	if err := json.Unmarshal(out, &top); err != nil {
 		t.Fatalf("unmarshal response %q: %v", out, err)
 	}
 
+	// Top-level keys must be exactly {success, data}.
+	if len(top) != 2 {
+		t.Errorf("Execute success top-level keys = %v, want exactly {success, data}", top)
+	}
+	if top["success"] != true {
+		t.Errorf("Execute success[\"success\"] = %v, want true", top["success"])
+	}
+	data, ok := top["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("Execute success[\"data\"] = %T %v, want map", top["data"], top["data"])
+	}
+
+	// data must carry exactly the five budget fields.
 	for _, key := range []string{"used_tokens", "budget_tokens", "remaining_tokens", "used_sessions", "budget_sessions"} {
-		if _, ok := m[key]; !ok {
-			t.Errorf("response missing key %q: %s", key, out)
+		if _, ok := data[key]; !ok {
+			t.Errorf("data missing key %q: %s", key, out)
 		}
 	}
-	if len(m) != 5 {
-		t.Errorf("response has %d keys, want 5: %s", len(m), out)
+	if len(data) != 5 {
+		t.Errorf("data has %d keys, want 5: %s", len(data), out)
 	}
-	if got, ok := m["remaining_tokens"]; !ok || got != nil {
-		t.Errorf("remaining_tokens = %v, want explicit null", got)
+
+	// remaining_tokens must be explicit null under unlimited budget.
+	if got, ok := data["remaining_tokens"]; !ok || got != nil {
+		t.Errorf("data.remaining_tokens = %v, want explicit null", got)
+	}
+
+	// Payload fields must NOT appear at the top level.
+	for _, payloadKey := range []string{"used_tokens", "budget_tokens", "remaining_tokens", "used_sessions", "budget_sessions"} {
+		if _, exists := top[payloadKey]; exists {
+			t.Errorf("Execute success has payload key %q at top level, want it under data", payloadKey)
+		}
 	}
 }
 
+// TestBudgetTool_Execute_QueryError asserts that a query failure returns
+// success==false, error.kind=="query_failed", error.message equal to the query
+// error string, and a nil Go error (AC-2, AC-5).
 func TestBudgetTool_Execute_QueryError(t *testing.T) {
 	t.Parallel()
 
@@ -245,17 +279,63 @@ func TestBudgetTool_Execute_QueryError(t *testing.T) {
 		t.Fatalf("Execute: expected nil Go error on query failure, got: %v", err)
 	}
 
-	var m map[string]any
-	if err := json.Unmarshal(out, &m); err != nil {
+	var top map[string]any
+	if err := json.Unmarshal(out, &top); err != nil {
 		t.Fatalf("unmarshal error response %q: %v", out, err)
 	}
 
-	errStr, ok := m["error"].(string)
-	if !ok {
-		t.Fatalf("error value is not a string: %T %v", m["error"], m["error"])
+	if top["success"] != false {
+		t.Errorf("Execute failure[\"success\"] = %v, want false", top["success"])
 	}
-	if !strings.Contains(errStr, "database is locked") {
-		t.Errorf("error value = %q, want to contain %q", errStr, "database is locked")
+
+	errObj, ok := top["error"].(map[string]any)
+	if !ok {
+		t.Fatalf("Execute failure[\"error\"] = %T %v, want map", top["error"], top["error"])
+	}
+	if got, _ := errObj["kind"].(string); got != "query_failed" {
+		t.Errorf("error.kind = %q, want %q", got, "query_failed")
+	}
+	msg, ok := errObj["message"].(string)
+	if !ok {
+		t.Fatalf("error.message is not a string: %T %v", errObj["message"], errObj["message"])
+	}
+	if msg != "database is locked" {
+		t.Errorf("error.message = %q, want %q", msg, "database is locked")
+	}
+}
+
+// TestBudgetTool_Execute_FailureEnvelopeShape pins the AC-2 contract: the
+// failure response has top-level keys exactly {success, error} with error
+// carrying {kind, message}.
+func TestBudgetTool_Execute_FailureEnvelopeShape(t *testing.T) {
+	t.Parallel()
+
+	query := func(_ context.Context, _ string, _ string) (BudgetUsage, error) {
+		return BudgetUsage{}, fmt.Errorf("disk full")
+	}
+	tool := New(query, "10042", "sess-1", 0, 0)
+	out, err := tool.Execute(context.Background(), json.RawMessage(`{}`))
+	if err != nil {
+		t.Fatalf("Execute: unexpected Go error: %v", err)
+	}
+
+	var top map[string]any
+	if err := json.Unmarshal(out, &top); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+
+	if len(top) != 2 {
+		t.Errorf("Execute failure top-level keys = %v, want exactly {success, error}", top)
+	}
+	if top["success"] != false {
+		t.Errorf("Execute failure[\"success\"] = %v, want false", top["success"])
+	}
+	errObj, ok := top["error"].(map[string]any)
+	if !ok {
+		t.Fatalf("Execute failure[\"error\"] = %T %v, want map", top["error"], top["error"])
+	}
+	if len(errObj) != 2 {
+		t.Errorf("error object keys = %v, want exactly {kind, message}", errObj)
 	}
 }
 

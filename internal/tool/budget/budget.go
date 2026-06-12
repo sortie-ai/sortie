@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 
 	"github.com/sortie-ai/sortie/internal/domain"
+	"github.com/sortie-ai/sortie/internal/tool/toolresult"
 )
 
 var _ domain.AgentTool = (*BudgetTool)(nil)
@@ -103,7 +104,7 @@ func (t *BudgetTool) InputSchema() json.RawMessage {
 func (t *BudgetTool) Execute(ctx context.Context, _ json.RawMessage) (json.RawMessage, error) {
 	usage, err := t.query(ctx, t.issueID, t.runningSessionID)
 	if err != nil {
-		return errorResponse(err.Error())
+		return toolresult.Failure("query_failed", err.Error())
 	}
 
 	usedTokens := usage.CompletedTotalTokens + usage.RunningTotalTokens
@@ -117,15 +118,11 @@ func (t *BudgetTool) Execute(ctx context.Context, _ json.RawMessage) (json.RawMe
 		remaining = &r
 	}
 
-	return json.Marshal(costBudgetResponse{
+	return toolresult.Success(costBudgetResponse{
 		UsedTokens:      usedTokens,
 		BudgetTokens:    int64(t.budgetTokens),
 		RemainingTokens: remaining,
 		UsedSessions:    usage.CompletedSessions,
 		BudgetSessions:  t.budgetSessions,
 	})
-}
-
-func errorResponse(msg string) (json.RawMessage, error) {
-	return json.Marshal(map[string]string{"error": msg})
 }

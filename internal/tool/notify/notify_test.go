@@ -269,11 +269,22 @@ func TestExecute_SuccessResultShape(t *testing.T) {
 	m := executeJSON(t, tool, `{"severity":"info","title":"Hi","body":"Body"}`)
 	assertSuccess(t, m)
 
-	if _, ok := m["delivered"]; !ok {
-		t.Error("result missing \"delivered\" field")
+	data, ok := m["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("result[\"data\"] = %T %v, want map[string]any", m["data"], m["data"])
 	}
-	if _, ok := m["notification_id"]; !ok {
-		t.Error("result missing \"notification_id\" field")
+	if _, ok := data["delivered"]; !ok {
+		t.Error("result[\"data\"] missing \"delivered\" field")
+	}
+	if _, ok := data["notification_id"]; !ok {
+		t.Error("result[\"data\"] missing \"notification_id\" field")
+	}
+	// Payload fields must NOT appear at the top level.
+	if _, exists := m["delivered"]; exists {
+		t.Error("result has \"delivered\" at top level, want it under data")
+	}
+	if _, exists := m["notification_id"]; exists {
+		t.Error("result has \"notification_id\" at top level, want it under data")
 	}
 }
 
@@ -552,8 +563,12 @@ func TestExecute_MultipleBackends_AllReceiveNotification(t *testing.T) {
 	if len(mock2.received) != 1 {
 		t.Errorf("backend 2 Send called %d times, want 1", len(mock2.received))
 	}
-	if got := m["delivered"]; got != float64(2) {
-		t.Errorf("delivered = %v, want 2", got)
+	data, ok := m["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("result[\"data\"] = %T %v, want map[string]any", m["data"], m["data"])
+	}
+	if got := data["delivered"]; got != float64(2) {
+		t.Errorf("data.delivered = %v, want 2", got)
 	}
 }
 
