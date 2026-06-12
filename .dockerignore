@@ -13,7 +13,7 @@ profile.cov
 .gitignore
 
 # IDE
-.vscode
+.zed
 
 # Documentation
 docs/

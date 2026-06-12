@@ -10,7 +10,3 @@ go.sum linguist-generated
 # Excluded from GitHub language stats
 docs/** linguist-documentation
 examples/** linguist-documentation
-
-# Set the language for VS Config files to JSONC
-# to ensure GitHub doesn't show the comments as errors.
-.vscode/*.json diff=json linguist-language=JSONC
