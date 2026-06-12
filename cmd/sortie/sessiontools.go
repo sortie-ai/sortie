@@ -121,7 +121,7 @@ func BuildSessionToolRegistry(ctx context.Context, logger *slog.Logger, params S
 	if params.DBPath != "" && params.IssueID != "" {
 		openedStore, err := persistence.OpenReadOnly(ctx, params.DBPath)
 		if err != nil {
-			logger.Warn("failed to open read-only db for workspace_history",
+			logger.Warn("failed to open read-only db for workspace_history and cost_budget",
 				slog.String("db_path", params.DBPath),
 				slog.Any("error", err))
 		} else {
