@@ -1,0 +1,56 @@
+{
+  "data": {
+    "issues": {
+      "nodes": [
+        {
+          "id": "a7c4f8e2-1b9d-4e3a-8f2c-6d5e4a3b2c1f",
+          "identifier": "SOR-5",
+          "title": "Implement the read path",
+          "description": "First issue body in **markdown**.",
+          "priority": 2,
+          "branchName": "tasks/sor-5-implement-the-read-path",
+          "url": "https://linear.app/sortie-ai/issue/SOR-5/implement-the-read-path",
+          "createdAt": "2026-06-10T09:00:00.000Z",
+          "updatedAt": "2026-06-12T14:30:00.000Z",
+          "state": { "name": "Todo" },
+          "assignee": { "displayName": "Ada Lovelace", "name": "ada", "email": "ada@example.com" },
+          "parent": null,
+          "labels": {
+            "nodes": [{ "name": "Feature" }, { "name": "Backend" }],
+            "pageInfo": { "hasNextPage": false }
+          },
+          "inverseRelations": {
+            "nodes": [],
+            "pageInfo": { "hasNextPage": false }
+          }
+        },
+        {
+          "id": "b2d9e4a1-3c7f-4b8e-9d2a-1f6c5b4e3a2d",
+          "identifier": "SOR-8",
+          "title": "Sub-issue with no priority",
+          "description": null,
+          "priority": 0,
+          "branchName": "tasks/sor-8-sub-issue",
+          "url": "https://linear.app/sortie-ai/issue/SOR-8/sub-issue",
+          "createdAt": "2026-06-09T08:00:00.000Z",
+          "updatedAt": "2026-06-09T08:05:00.000Z",
+          "state": { "name": "Todo" },
+          "assignee": null,
+          "parent": { "id": "a7c4f8e2-1b9d-4e3a-8f2c-6d5e4a3b2c1f", "identifier": "SOR-5" },
+          "labels": {
+            "nodes": [],
+            "pageInfo": { "hasNextPage": false }
+          },
+          "inverseRelations": {
+            "nodes": [],
+            "pageInfo": { "hasNextPage": false }
+          }
+        }
+      ],
+      "pageInfo": {
+        "hasNextPage": true,
+        "endCursor": "eyJrZXkiOiJiMmQ5ZTRhMS0zYzdmLTRiOGUtOWQyYS0xZjZjNWI0ZTNhMmQiLCJjcmVhdGVkQXQiOiIyMDI2LTA2LTA5In0="
+      }
+    }
+  }
+}

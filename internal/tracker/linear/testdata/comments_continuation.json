@@ -1,0 +1,21 @@
+{
+  "data": {
+    "issue": {
+      "comments": {
+        "nodes": [
+          {
+            "id": "comment-0001",
+            "body": "First comment, oldest, arrives on the continuation page.",
+            "createdAt": "2026-06-10T12:00:00.000Z",
+            "user": { "displayName": "Grace Hopper", "name": "grace", "email": "grace@example.com" },
+            "botActor": null
+          }
+        ],
+        "pageInfo": {
+          "hasNextPage": false,
+          "endCursor": "comment-0001"
+        }
+      }
+    }
+  }
+}

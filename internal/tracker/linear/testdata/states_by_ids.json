@@ -1,0 +1,10 @@
+{
+  "data": {
+    "issues": {
+      "nodes": [
+        { "id": "a7c4f8e2-1b9d-4e3a-8f2c-6d5e4a3b2c1f", "state": { "name": "Todo" } },
+        { "id": "d4f1a6c3-5e9b-4daf-bf4c-3b8e7d6a5c4f", "state": { "name": "Done" } }
+      ]
+    }
+  }
+}

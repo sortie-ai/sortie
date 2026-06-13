@@ -1,0 +1,39 @@
+{
+  "data": {
+    "issue": {
+      "id": "e5a2b7d4-6f0c-4eb0-c05d-4c9f8e7b6d5a",
+      "identifier": "SOR-42",
+      "title": "Issue with overflowing nested connections",
+      "description": "Pathological label and blocker counts.",
+      "priority": 2,
+      "branchName": "tasks/sor-42-overflow",
+      "url": "https://linear.app/sortie-ai/issue/SOR-42/overflow",
+      "createdAt": "2026-06-08T09:00:00.000Z",
+      "updatedAt": "2026-06-12T09:00:00.000Z",
+      "state": { "name": "Todo" },
+      "assignee": null,
+      "parent": null,
+      "labels": {
+        "nodes": [{ "name": "Feature" }, { "name": "Bug" }],
+        "pageInfo": { "hasNextPage": true }
+      },
+      "inverseRelations": {
+        "nodes": [
+          {
+            "type": "blocks",
+            "issue": {
+              "id": "a7c4f8e2-1b9d-4e3a-8f2c-6d5e4a3b2c1f",
+              "identifier": "SOR-5",
+              "state": { "name": "Todo" }
+            }
+          }
+        ],
+        "pageInfo": { "hasNextPage": true }
+      },
+      "comments": {
+        "nodes": [],
+        "pageInfo": { "hasNextPage": false, "endCursor": "" }
+      }
+    }
+  }
+}

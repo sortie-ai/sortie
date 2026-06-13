@@ -1,0 +1,51 @@
+{
+  "data": {
+    "issues": {
+      "nodes": [
+        {
+          "id": "c3e0f5b2-4d8a-4c9f-ae3b-2a7d6c5f4b3e",
+          "identifier": "SOR-7",
+          "title": "Blocked, urgent priority",
+          "description": "Blocked by SOR-5.",
+          "priority": 1,
+          "branchName": "tasks/sor-7-blocked",
+          "url": "https://linear.app/sortie-ai/issue/SOR-7/blocked",
+          "createdAt": "2026-06-11T10:00:00.000Z",
+          "updatedAt": "2026-06-12T11:00:00.000Z",
+          "state": { "name": "Backlog" },
+          "assignee": { "displayName": "", "name": "grace", "email": "grace@example.com" },
+          "parent": null,
+          "labels": {
+            "nodes": [{ "name": "Bug" }],
+            "pageInfo": { "hasNextPage": false }
+          },
+          "inverseRelations": {
+            "nodes": [
+              {
+                "type": "blocks",
+                "issue": {
+                  "id": "a7c4f8e2-1b9d-4e3a-8f2c-6d5e4a3b2c1f",
+                  "identifier": "SOR-5",
+                  "state": { "name": "Todo" }
+                }
+              },
+              {
+                "type": "related",
+                "issue": {
+                  "id": "d4f1a6c3-5e9b-4daf-bf4c-3b8e7d6a5c4f",
+                  "identifier": "SOR-6",
+                  "state": { "name": "Done" }
+                }
+              }
+            ],
+            "pageInfo": { "hasNextPage": false }
+          }
+        }
+      ],
+      "pageInfo": {
+        "hasNextPage": false,
+        "endCursor": "eyJrZXkiOiJjM2UwZjViMi00ZDhhLTRjOWYtYWUzYi0yYTdkNmM1ZjRiM2UifQ=="
+      }
+    }
+  }
+}
