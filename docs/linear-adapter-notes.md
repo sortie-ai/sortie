@@ -87,11 +87,11 @@ nothing and identifies the acting user:
 
 ```graphql
 query Me {
-    viewer {
-        id
-        name
-        email
-    }
+  viewer {
+    id
+    name
+    email
+  }
 }
 ```
 
@@ -220,11 +220,11 @@ has real named states, but every state also carries a workspace-immutable
 
 ```graphql
 type WorkflowState {
-    id: ID! # UUID, required for transitions
-    name: String! # e.g. "In Progress", "Done", "Backlog"; operator-visible
-    type: String! # category, see below
-    position: Float! # display order within the type group
-    team: Team! # owning team
+  id: ID! # UUID, required for transitions
+  name: String! # e.g. "In Progress", "Done", "Backlog"; operator-visible
+  type: String! # category, see below
+  position: Float! # display order within the type group
+  team: Team! # owning team
 }
 ```
 
@@ -264,11 +264,11 @@ is `issue.state.name` with original casing preserved. Example:
 
 ```yaml
 tracker:
-    kind: linear
-    project: "ENG"
-    active_states: ["Backlog", "Todo"]
-    terminal_states: ["Done", "Canceled", "Duplicate"]
-    handoff_state: "In Review"
+  kind: linear
+  project: "ENG"
+  active_states: ["Backlog", "Todo"]
+  terminal_states: ["Done", "Canceled", "Duplicate"]
+  handoff_state: "In Review"
 ```
 
 The `type` field is not used for candidate selection (names are more precise
@@ -278,20 +278,20 @@ exists, with a case-insensitive comparison in Go:
 
 ```graphql
 query TeamStates($teamKey: String!) {
-    teams(filter: { key: { eq: $teamKey } }, first: 1) {
+  teams(filter: { key: { eq: $teamKey } }, first: 1) {
+    nodes {
+      id
+      key
+      states(first: 50) {
         nodes {
-            id
-            key
-            states(first: 50) {
-                nodes {
-                    id
-                    name
-                    type
-                    position
-                }
-            }
+          id
+          name
+          type
+          position
         }
+      }
     }
+  }
 }
 ```
 
@@ -319,17 +319,17 @@ team's states, which also keeps multi-team workspaces safe without caching:
 
 ```graphql
 query ResolveStateID($issueId: String!, $stateName: String!) {
-    issue(id: $issueId) {
-        id
-        team {
-            states(filter: { name: { eqIgnoreCase: $stateName } }, first: 1) {
-                nodes {
-                    id
-                    name
-                }
-            }
+  issue(id: $issueId) {
+    id
+    team {
+      states(filter: { name: { eqIgnoreCase: $stateName } }, first: 1) {
+        nodes {
+          id
+          name
         }
+      }
     }
+  }
 }
 ```
 
@@ -361,68 +361,68 @@ endpoint and are covered below as operations 1 through 9 (`CommentIssue` and
 
 ```graphql
 query CandidateIssues(
-    $teamKey: String!
-    $states: [String!]!
-    $first: Int!
-    $after: String
+  $teamKey: String!
+  $states: [String!]!
+  $first: Int!
+  $after: String
 ) {
-    issues(
-        first: $first
-        after: $after
-        filter: {
-            team: { key: { eq: $teamKey } }
-            state: { name: { in: $states } }
-        }
-        sort: [
-            { priority: { order: Ascending, noPriorityFirst: false } }
-            { createdAt: { order: Ascending } }
-        ]
-    ) {
+  issues(
+    first: $first
+    after: $after
+    filter: {
+      team: { key: { eq: $teamKey } }
+      state: { name: { in: $states } }
+    }
+    sort: [
+      { priority: { order: Ascending, noPriorityFirst: false } }
+      { createdAt: { order: Ascending } }
+    ]
+  ) {
+    nodes {
+      id
+      identifier
+      title
+      description
+      priority
+      branchName
+      url
+      createdAt
+      updatedAt
+      state {
+        name
+      }
+      assignee {
+        displayName
+        name
+        email
+      }
+      parent {
+        id
+        identifier
+      }
+      labels(first: 25) {
         nodes {
+          name
+        }
+      }
+      inverseRelations(first: 25) {
+        nodes {
+          type
+          issue {
             id
             identifier
-            title
-            description
-            priority
-            branchName
-            url
-            createdAt
-            updatedAt
             state {
-                name
+              name
             }
-            assignee {
-                displayName
-                name
-                email
-            }
-            parent {
-                id
-                identifier
-            }
-            labels(first: 25) {
-                nodes {
-                    name
-                }
-            }
-            inverseRelations(first: 25) {
-                nodes {
-                    type
-                    issue {
-                        id
-                        identifier
-                        state {
-                            name
-                        }
-                    }
-                }
-            }
+          }
         }
-        pageInfo {
-            hasNextPage
-            endCursor
-        }
+      }
     }
+    pageInfo {
+      hasNextPage
+      endCursor
+    }
+  }
 }
 ```
 
@@ -459,65 +459,65 @@ Notes:
 
 ```graphql
 query IssueByID($id: String!) {
-    issue(id: $id) {
-        id
-        identifier
-        title
-        description
-        priority
-        branchName
-        url
-        createdAt
-        updatedAt
-        state {
-            name
-        }
-        assignee {
-            displayName
-            name
-            email
-        }
-        parent {
-            id
-            identifier
-        }
-        labels(first: 25) {
-            nodes {
-                name
-            }
-        }
-        inverseRelations(first: 25) {
-            nodes {
-                type
-                issue {
-                    id
-                    identifier
-                    state {
-                        name
-                    }
-                }
-            }
-        }
-        comments(first: 50, orderBy: createdAt) {
-            nodes {
-                id
-                body
-                createdAt
-                user {
-                    displayName
-                    name
-                    email
-                }
-                botActor {
-                    name
-                }
-            }
-            pageInfo {
-                hasNextPage
-                endCursor
-            }
-        }
+  issue(id: $id) {
+    id
+    identifier
+    title
+    description
+    priority
+    branchName
+    url
+    createdAt
+    updatedAt
+    state {
+      name
     }
+    assignee {
+      displayName
+      name
+      email
+    }
+    parent {
+      id
+      identifier
+    }
+    labels(first: 25) {
+      nodes {
+        name
+      }
+    }
+    inverseRelations(first: 25) {
+      nodes {
+        type
+        issue {
+          id
+          identifier
+          state {
+            name
+          }
+        }
+      }
+    }
+    comments(first: 50, orderBy: createdAt) {
+      nodes {
+        id
+        body
+        createdAt
+        user {
+          displayName
+          name
+          email
+        }
+        botActor {
+          name
+        }
+      }
+      pageInfo {
+        hasNextPage
+        endCursor
+      }
+    }
+  }
 }
 ```
 
@@ -542,14 +542,14 @@ comparison.
 
 ```graphql
 query IssueStatesByIDs($ids: [ID!]!, $first: Int!) {
-    issues(filter: { id: { in: $ids } }, first: $first) {
-        nodes {
-            id
-            state {
-                name
-            }
-        }
+  issues(filter: { id: { in: $ids } }, first: $first) {
+    nodes {
+      id
+      state {
+        name
+      }
     }
+  }
 }
 ```
 
@@ -568,22 +568,22 @@ scoped to the configured team:
 
 ```graphql
 query IssueStatesByNumbers(
-    $teamKey: String!
-    $numbers: [Float!]!
-    $first: Int!
+  $teamKey: String!
+  $numbers: [Float!]!
+  $first: Int!
 ) {
-    issues(
-        filter: { team: { key: { eq: $teamKey } }, number: { in: $numbers } }
-        first: $first
-    ) {
-        nodes {
-            identifier
-            number
-            state {
-                name
-            }
-        }
+  issues(
+    filter: { team: { key: { eq: $teamKey } }, number: { in: $numbers } }
+    first: $first
+  ) {
+    nodes {
+      identifier
+      number
+      state {
+        name
+      }
     }
+  }
 }
 ```
 
@@ -609,27 +609,27 @@ team key, so one filter covers the batch; chunk the number list at 50.
 
 ```graphql
 query IssueComments($id: String!, $first: Int!, $after: String) {
-    issue(id: $id) {
-        comments(first: $first, after: $after, orderBy: createdAt) {
-            nodes {
-                id
-                body
-                createdAt
-                user {
-                    displayName
-                    name
-                    email
-                }
-                botActor {
-                    name
-                }
-            }
-            pageInfo {
-                hasNextPage
-                endCursor
-            }
+  issue(id: $id) {
+    comments(first: $first, after: $after, orderBy: createdAt) {
+      nodes {
+        id
+        body
+        createdAt
+        user {
+          displayName
+          name
+          email
         }
+        botActor {
+          name
+        }
+      }
+      pageInfo {
+        hasNextPage
+        endCursor
+      }
     }
+  }
 }
 ```
 
@@ -657,15 +657,15 @@ Resolution query in the State model section. The mutation:
 
 ```graphql
 mutation IssueUpdateState($id: String!, $stateId: String!) {
-    issueUpdate(id: $id, input: { stateId: $stateId }) {
-        success
-        issue {
-            id
-            state {
-                name
-            }
-        }
+  issueUpdate(id: $id, input: { stateId: $stateId }) {
+    success
+    issue {
+      id
+      state {
+        name
+      }
     }
+  }
 }
 ```
 
@@ -679,12 +679,12 @@ normally signals failure via `errors`).
 
 ```graphql
 mutation CommentCreate($issueId: String!, $body: String!) {
-    commentCreate(input: { issueId: $issueId, body: $body }) {
-        success
-        comment {
-            id
-        }
+  commentCreate(input: { issueId: $issueId, body: $body }) {
+    success
+    comment {
+      id
     }
+  }
 }
 ```
 
@@ -726,15 +726,15 @@ workspace labels (the root query returns both, per its schema doc):
 
 ```graphql
 query ResolveLabel($name: String!) {
-    issueLabels(filter: { name: { eqIgnoreCase: $name } }, first: 50) {
-        nodes {
-            id
-            name
-            team {
-                id
-            }
-        }
+  issueLabels(filter: { name: { eqIgnoreCase: $name } }, first: 50) {
+    nodes {
+      id
+      name
+      team {
+        id
+      }
     }
+  }
 }
 ```
 
@@ -745,12 +745,12 @@ workspace label (`team` null).
 
 ```graphql
 mutation LabelCreate($teamId: String!, $name: String!) {
-    issueLabelCreate(input: { teamId: $teamId, name: $name }) {
-        success
-        issueLabel {
-            id
-        }
+  issueLabelCreate(input: { teamId: $teamId, name: $name }) {
+    success
+    issueLabel {
+      id
     }
+  }
 }
 ```
 
@@ -777,9 +777,9 @@ which the adapter's lookup in step 1 finds it and never calls
 
 ```graphql
 mutation IssueAddLabel($id: String!, $labelIds: [String!]!) {
-    issueUpdate(id: $id, input: { addedLabelIds: $labelIds }) {
-        success
-    }
+  issueUpdate(id: $id, input: { addedLabelIds: $labelIds }) {
+    success
+  }
 }
 ```
 
@@ -1034,21 +1034,21 @@ is the verbatim live response for `issue(id: "<nonexistent-uuid>")`:
 
 ```json
 {
-    "errors": [
-        {
-            "message": "Entity not found: Issue",
-            "path": ["byUuid"],
-            "locations": [{ "line": 1, "column": 68 }],
-            "extensions": {
-                "type": "invalid input",
-                "code": "INPUT_ERROR",
-                "statusCode": 400,
-                "userError": true,
-                "userPresentableMessage": "Could not find referenced Issue."
-            }
-        }
-    ],
-    "data": null
+  "errors": [
+    {
+      "message": "Entity not found: Issue",
+      "path": ["byUuid"],
+      "locations": [{ "line": 1, "column": 68 }],
+      "extensions": {
+        "type": "invalid input",
+        "code": "INPUT_ERROR",
+        "statusCode": 400,
+        "userError": true,
+        "userPresentableMessage": "Could not find referenced Issue."
+      }
+    }
+  ],
+  "data": null
 }
 ```
 
