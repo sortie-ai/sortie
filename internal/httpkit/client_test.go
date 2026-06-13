@@ -248,6 +248,115 @@ func TestClient_Send_2xx(t *testing.T) {
 	}
 }
 
+func TestSendWithHeaders(t *testing.T) {
+	t.Parallel()
+
+	t.Run("returns body and headers and sends the body", func(t *testing.T) {
+		t.Parallel()
+
+		var gotBody string
+		var gotContentType string
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			raw, _ := io.ReadAll(r.Body)
+			gotBody = string(raw)
+			gotContentType = r.Header.Get("Content-Type")
+			w.Header().Set("X-Complexity", "95")
+			w.WriteHeader(http.StatusOK)
+			_, _ = io.WriteString(w, "response payload")
+		}))
+		defer srv.Close()
+
+		c := mustClient(t, ClientOptions{BaseURL: srv.URL})
+
+		body, headers, err := c.SendWithHeaders(context.Background(), http.MethodPost, "/graphql", strings.NewReader(`{"query":"x"}`))
+		if err != nil {
+			t.Fatalf("SendWithHeaders: %v", err)
+		}
+		if gotBody != `{"query":"x"}` {
+			t.Errorf("server received body = %q, want %q", gotBody, `{"query":"x"}`)
+		}
+		if gotContentType != "application/json" {
+			t.Errorf("server received Content-Type = %q, want %q", gotContentType, "application/json")
+		}
+		if string(body) != "response payload" {
+			t.Errorf("SendWithHeaders body = %q, want %q", body, "response payload")
+		}
+		if got := headers.Get("X-Complexity"); got != "95" {
+			t.Errorf("SendWithHeaders X-Complexity = %q, want %q", got, "95")
+		}
+	})
+
+	t.Run("2xx statuses succeed", func(t *testing.T) {
+		t.Parallel()
+
+		tests := []struct {
+			name   string
+			status int
+		}{
+			{"200 OK", http.StatusOK},
+			{"201 Created", http.StatusCreated},
+			{"204 No Content", http.StatusNoContent},
+		}
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				t.Parallel()
+
+				srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					w.WriteHeader(tt.status)
+				}))
+				defer srv.Close()
+
+				c := mustClient(t, ClientOptions{BaseURL: srv.URL})
+
+				_, _, err := c.SendWithHeaders(context.Background(), http.MethodPost, "/items", strings.NewReader("{}"))
+				if err != nil {
+					t.Errorf("SendWithHeaders(%d): %v", tt.status, err)
+				}
+			})
+		}
+	})
+
+	t.Run("non-2xx routes through classifier", func(t *testing.T) {
+		t.Parallel()
+
+		sentinel := errors.New("classified-400")
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusBadRequest)
+		}))
+		defer srv.Close()
+
+		c := mustClient(t, ClientOptions{
+			BaseURL: srv.URL,
+			ClassifyError: func(resp *http.Response, method, path string) error {
+				return fmt.Errorf("%w: %s %s %d", sentinel, method, path, resp.StatusCode)
+			},
+		})
+
+		_, _, err := c.SendWithHeaders(context.Background(), http.MethodPost, "/items", strings.NewReader("{}"))
+		if !errors.Is(err, sentinel) {
+			t.Errorf("SendWithHeaders non-2xx error = %v, want to wrap %v", err, sentinel)
+		}
+	})
+
+	t.Run("transport failure routes through transport classifier", func(t *testing.T) {
+		t.Parallel()
+
+		sentinel := errors.New("transport-classified")
+		c := mustClient(t, ClientOptions{
+			BaseURL: "://bad",
+			ClassifyTransport: func(err error, method, path string) error {
+				return fmt.Errorf("%w: %s %s", sentinel, method, path)
+			},
+		})
+
+		_, _, err := c.SendWithHeaders(context.Background(), http.MethodPost, "/items", strings.NewReader("{}"))
+		if !errors.Is(err, sentinel) {
+			t.Errorf("SendWithHeaders transport error = %v, want to wrap %v", err, sentinel)
+		}
+	})
+}
+
 func TestClient_SendNoBody_success(t *testing.T) {
 	t.Parallel()
 

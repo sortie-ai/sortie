@@ -176,6 +176,31 @@ func (c *Client) Send(ctx context.Context, method, path string, body io.Reader) 
 	return respBody, nil
 }
 
+// SendWithHeaders issues a request with a JSON body and returns the response
+// body and headers on any HTTP 2xx status.
+//
+// It mirrors [Client.Send] but also returns a clone of the response headers,
+// which adapters read for rate-limit and complexity values. A non-2xx status
+// is routed through the configured error classifier exactly as [Client.Send].
+func (c *Client) SendWithHeaders(ctx context.Context, method, path string, body io.Reader) ([]byte, http.Header, error) {
+	reqURL := c.baseURL + path
+	resp, err := c.do(ctx, method, path, reqURL, body, "application/json", "")
+	if err != nil {
+		return nil, nil, err
+	}
+	defer resp.Body.Close() //nolint:errcheck // best-effort cleanup on response body
+
+	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
+		return nil, nil, c.classifyResponse(resp, method, path)
+	}
+
+	respBody, err := c.readBody(ctx, resp.Body, method, path)
+	if err != nil {
+		return nil, nil, err
+	}
+	return respBody, resp.Header.Clone(), nil
+}
+
 // SendNoBody issues a request without a body and succeeds only on HTTP 200 or 204.
 func (c *Client) SendNoBody(ctx context.Context, method, path string) error {
 	reqURL := c.baseURL + path
