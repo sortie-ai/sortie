@@ -1,0 +1,48 @@
+{
+  "data": {
+    "issue": {
+      "id": "a7c4f8e2-1b9d-4e3a-8f2c-6d5e4a3b2c1f",
+      "identifier": "SOR-5",
+      "title": "Implement the read path",
+      "description": "Issue body.",
+      "priority": 3,
+      "branchName": "tasks/sor-5-implement-the-read-path",
+      "url": "https://linear.app/sortie-ai/issue/SOR-5/implement-the-read-path",
+      "createdAt": "2026-06-10T09:00:00.000Z",
+      "updatedAt": "2026-06-12T14:30:00.000Z",
+      "state": { "name": "In Progress" },
+      "assignee": { "displayName": "Ada Lovelace", "name": "ada", "email": "ada@example.com" },
+      "parent": null,
+      "labels": {
+        "nodes": [{ "name": "Feature" }],
+        "pageInfo": { "hasNextPage": false }
+      },
+      "inverseRelations": {
+        "nodes": [],
+        "pageInfo": { "hasNextPage": false }
+      },
+      "comments": {
+        "nodes": [
+          {
+            "id": "comment-0003",
+            "body": "Third comment, newest first from the API.",
+            "createdAt": "2026-06-12T12:00:00.000Z",
+            "user": { "displayName": "Ada Lovelace", "name": "ada", "email": "ada@example.com" },
+            "botActor": null
+          },
+          {
+            "id": "comment-0002",
+            "body": "Second comment.",
+            "createdAt": "2026-06-11T12:00:00.000Z",
+            "user": null,
+            "botActor": { "name": "Sortie Bot" }
+          }
+        ],
+        "pageInfo": {
+          "hasNextPage": true,
+          "endCursor": "comment-0002"
+        }
+      }
+    }
+  }
+}

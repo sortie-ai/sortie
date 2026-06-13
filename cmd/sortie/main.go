@@ -49,6 +49,7 @@ import (
 	_ "github.com/sortie-ai/sortie/internal/scm/github"
 	_ "github.com/sortie-ai/sortie/internal/tracker/file"
 	_ "github.com/sortie-ai/sortie/internal/tracker/jira"
+	_ "github.com/sortie-ai/sortie/internal/tracker/linear"
 )
 
 // serverShutdownTimeout controls how long [run] waits for the HTTP server

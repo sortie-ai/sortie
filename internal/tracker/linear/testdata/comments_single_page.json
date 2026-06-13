@@ -1,0 +1,28 @@
+{
+  "data": {
+    "issue": {
+      "comments": {
+        "nodes": [
+          {
+            "id": "comment-b",
+            "body": "Newer comment returned first.",
+            "createdAt": "2026-06-12T15:00:00.000Z",
+            "user": { "displayName": "Ada Lovelace", "name": "ada", "email": "ada@example.com" },
+            "botActor": null
+          },
+          {
+            "id": "comment-a",
+            "body": "Older comment returned second.",
+            "createdAt": "2026-06-10T15:00:00.000Z",
+            "user": null,
+            "botActor": { "name": "Integration Bot" }
+          }
+        ],
+        "pageInfo": {
+          "hasNextPage": false,
+          "endCursor": "comment-a"
+        }
+      }
+    }
+  }
+}

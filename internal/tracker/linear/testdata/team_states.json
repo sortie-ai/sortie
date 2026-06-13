@@ -1,0 +1,23 @@
+{
+  "data": {
+    "teams": {
+      "nodes": [
+        {
+          "id": "team-uuid-sor",
+          "key": "SOR",
+          "states": {
+            "nodes": [
+              { "id": "state-backlog", "name": "Backlog", "type": "backlog", "position": 0 },
+              { "id": "state-todo", "name": "Todo", "type": "unstarted", "position": 1 },
+              { "id": "state-inprogress", "name": "In Progress", "type": "started", "position": 2 },
+              { "id": "state-inreview", "name": "In Review", "type": "started", "position": 3 },
+              { "id": "state-done", "name": "Done", "type": "completed", "position": 4 },
+              { "id": "state-canceled", "name": "Canceled", "type": "canceled", "position": 5 },
+              { "id": "state-duplicate", "name": "Duplicate", "type": "duplicate", "position": 6 }
+            ]
+          }
+        }
+      ]
+    }
+  }
+}
