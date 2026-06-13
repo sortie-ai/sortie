@@ -53,13 +53,13 @@ transitions and label changes); Create comments covers `commentCreate`.
 Per-operation minimum permission (key scope plus, where relevant, a team
 setting):
 
-| Operation                                         | Minimum permission                                   |
-| ------------------------------------------------- | ---------------------------------------------------- |
-| `FetchCandidateIssues`, `FetchIssueByID`, `FetchIssuesByStates`, `FetchIssueStatesByIDs`, `FetchIssueStatesByIdentifiers`, `FetchIssueComments` | **Read** (member access to the team) |
-| `TransitionIssue` (`issueUpdate` state)           | **Write**                                            |
-| `AddLabel`, attach existing label (`issueUpdate`) | **Write**                                            |
-| `CommentIssue` (`commentCreate`)                  | **Create comments** (or Write)                       |
-| `AddLabel`, create missing label (`issueLabelCreate`) | **Write**, plus the team's label-management setting must allow members (see operation 9) |
+| Operation                                                                                                                                       | Minimum permission                                                                       |
+| ----------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| `FetchCandidateIssues`, `FetchIssueByID`, `FetchIssuesByStates`, `FetchIssueStatesByIDs`, `FetchIssueStatesByIdentifiers`, `FetchIssueComments` | **Read** (member access to the team)                                                     |
+| `TransitionIssue` (`issueUpdate` state)                                                                                                         | **Write**                                                                                |
+| `AddLabel`, attach existing label (`issueUpdate`)                                                                                               | **Write**                                                                                |
+| `CommentIssue` (`commentCreate`)                                                                                                                | **Create comments** (or Write)                                                           |
+| `AddLabel`, create missing label (`issueLabelCreate`)                                                                                           | **Write**, plus the team's label-management setting must allow members (see operation 9) |
 
 The only operation that can fail on a correctly-scoped key is the
 create-missing-label path, because label creation is additionally gated by a
@@ -87,11 +87,11 @@ nothing and identifies the acting user:
 
 ```graphql
 query Me {
-  viewer {
-    id
-    name
-    email
-  }
+    viewer {
+        id
+        name
+        email
+    }
 }
 ```
 
@@ -110,11 +110,11 @@ body layer; the adapter's body-first classifier handles it either way.
 
 ### Config mapping
 
-| Config field       | Value                                                          |
-| ------------------ | -------------------------------------------------------------- |
-| `tracker.endpoint` | `https://api.linear.app/graphql` (default, omit normally)      |
-| `tracker.api_key`  | Personal API key (`lin_api_...`), sent verbatim                 |
-| `tracker.project`  | Linear **team key**, e.g. `ENG` (see Identifiers below)         |
+| Config field       | Value                                                     |
+| ------------------ | --------------------------------------------------------- |
+| `tracker.endpoint` | `https://api.linear.app/graphql` (default, omit normally) |
+| `tracker.api_key`  | Personal API key (`lin_api_...`), sent verbatim           |
+| `tracker.project`  | Linear **team key**, e.g. `ENG` (see Identifiers below)   |
 
 ---
 
@@ -132,14 +132,14 @@ body layer; the adapter's body-first classifier handles it either way.
 HTTP status semantics differ from REST APIs and from each other. The table marks
 what was observed live:
 
-| Status | Meaning                                                                  | Observed |
-| ------ | ------------------------------------------------------------------------ | -------- |
-| 200    | Request executed. **The body may still contain `errors`.** Covers not-found and argument-validation errors. Always inspect. | [live-verified] |
-| 400    | Malformed `Authorization` format (e.g. a `Bearer`-prefixed API key); also documented for rate limiting (`RATELIMITED`) | 400 for bad auth format [live-verified] |
-| 401    | Missing, invalid, or revoked credentials                                  | [live-verified] |
-| 403    | Authenticated but forbidden                                               | documented |
-| 429    | Also documented for rate limiting; the official SDK handles both 400 and 429 | documented |
-| 5xx    | Server-side failure                                                       | documented |
+| Status | Meaning                                                                                                                     | Observed                                |
+| ------ | --------------------------------------------------------------------------------------------------------------------------- | --------------------------------------- |
+| 200    | Request executed. **The body may still contain `errors`.** Covers not-found and argument-validation errors. Always inspect. | [live-verified]                         |
+| 400    | Malformed `Authorization` format (e.g. a `Bearer`-prefixed API key); also documented for rate limiting (`RATELIMITED`)      | 400 for bad auth format [live-verified] |
+| 401    | Missing, invalid, or revoked credentials                                                                                    | [live-verified]                         |
+| 403    | Authenticated but forbidden                                                                                                 | documented                              |
+| 429    | Also documented for rate limiting; the official SDK handles both 400 and 429                                                | documented                              |
+| 5xx    | Server-side failure                                                                                                         | documented                              |
 
 The decisive rule, now confirmed by the spread above: **HTTP status alone never
 classifies a Linear response.** An entity-not-found and an argument-validation
@@ -175,11 +175,11 @@ body-level classification pass that REST adapters do not need.
 Linear has three identifier-like values per issue, and the distinction drives
 several adapter decisions:
 
-| Value             | Example                                  | Properties                                  |
-| ----------------- | ---------------------------------------- | ------------------------------------------- |
-| `issue.id`        | `a7c4f8e2-1b9d-4e3a-8f2c-6d5e4a3b2c1f`   | UUID, stable, globally unique               |
-| `issue.identifier`| `ENG-123`                                | Human-readable, team key + issue number     |
-| `issue.number`    | `123`                                    | Numeric part, **unique only within a team** |
+| Value              | Example                                | Properties                                  |
+| ------------------ | -------------------------------------- | ------------------------------------------- |
+| `issue.id`         | `a7c4f8e2-1b9d-4e3a-8f2c-6d5e4a3b2c1f` | UUID, stable, globally unique               |
+| `issue.identifier` | `ENG-123`                              | Human-readable, team key + issue number     |
+| `issue.number`     | `123`                                  | Numeric part, **unique only within a team** |
 
 Per the schema, `Team.key` is "used as a prefix in issue identifiers (e.g.,
 'ENG' in 'ENG-123')", and `Issue.number` is "scoped to the issue's team".
@@ -220,25 +220,25 @@ has real named states, but every state also carries a workspace-immutable
 
 ```graphql
 type WorkflowState {
-  id: ID!          # UUID, required for transitions
-  name: String!    # e.g. "In Progress", "Done", "Backlog"; operator-visible
-  type: String!    # category, see below
-  position: Float! # display order within the type group
-  team: Team!      # owning team
+    id: ID! # UUID, required for transitions
+    name: String! # e.g. "In Progress", "Done", "Backlog"; operator-visible
+    type: String! # category, see below
+    position: Float! # display order within the type group
+    team: Team! # owning team
 }
 ```
 
 `WorkflowState.type` is one of **seven** values (schema, 2026-06):
 
-| `type`      | Meaning                                            | Suggested bucket            |
-| ----------- | --------------------------------------------------- | --------------------------- |
-| `triage`    | Intake queue awaiting acceptance (optional feature) | Neither (exclude by default) |
-| `backlog`   | Accepted, not planned                               | `active_states` candidate   |
-| `unstarted` | Planned, not begun (e.g. "Todo")                    | `active_states` candidate   |
+| `type`      | Meaning                                             | Suggested bucket                  |
+| ----------- | --------------------------------------------------- | --------------------------------- |
+| `triage`    | Intake queue awaiting acceptance (optional feature) | Neither (exclude by default)      |
+| `backlog`   | Accepted, not planned                               | `active_states` candidate         |
+| `unstarted` | Planned, not begun (e.g. "Todo")                    | `active_states` candidate         |
 | `started`   | Work in progress (e.g. "In Progress", "In Review")  | `active_states` / `handoff_state` |
-| `completed` | Done                                                | `terminal_states`           |
-| `canceled`  | Abandoned                                           | `terminal_states`           |
-| `duplicate` | Closed as duplicate of another issue                | `terminal_states`           |
+| `completed` | Done                                                | `terminal_states`                 |
+| `canceled`  | Abandoned                                           | `terminal_states`                 |
+| `duplicate` | Closed as duplicate of another issue                | `terminal_states`                 |
 
 **[live-verified]** A freshly created team (`SOR`) shipped with exactly six
 default states and no `triage`: Backlog (`backlog`), Todo (`unstarted`),
@@ -264,11 +264,11 @@ is `issue.state.name` with original casing preserved. Example:
 
 ```yaml
 tracker:
-  kind: linear
-  project: "ENG"
-  active_states: ["Backlog", "Todo"]
-  terminal_states: ["Done", "Canceled", "Duplicate"]
-  handoff_state: "In Review"
+    kind: linear
+    project: "ENG"
+    active_states: ["Backlog", "Todo"]
+    terminal_states: ["Done", "Canceled", "Duplicate"]
+    handoff_state: "In Review"
 ```
 
 The `type` field is not used for candidate selection (names are more precise
@@ -278,15 +278,20 @@ exists, with a case-insensitive comparison in Go:
 
 ```graphql
 query TeamStates($teamKey: String!) {
-  teams(filter: { key: { eq: $teamKey } }, first: 1) {
-    nodes {
-      id
-      key
-      states(first: 50) {
-        nodes { id name type position }
-      }
+    teams(filter: { key: { eq: $teamKey } }, first: 1) {
+        nodes {
+            id
+            key
+            states(first: 50) {
+                nodes {
+                    id
+                    name
+                    type
+                    position
+                }
+            }
+        }
     }
-  }
 }
 ```
 
@@ -314,14 +319,17 @@ team's states, which also keeps multi-team workspaces safe without caching:
 
 ```graphql
 query ResolveStateID($issueId: String!, $stateName: String!) {
-  issue(id: $issueId) {
-    id
-    team {
-      states(filter: { name: { eqIgnoreCase: $stateName } }, first: 1) {
-        nodes { id name }
-      }
+    issue(id: $issueId) {
+        id
+        team {
+            states(filter: { name: { eqIgnoreCase: $stateName } }, first: 1) {
+                nodes {
+                    id
+                    name
+                }
+            }
+        }
     }
-  }
 }
 ```
 
@@ -341,47 +349,80 @@ case-insensitive resolve plus update, works end to end.
 
 ## Operations
 
-All nine `TrackerAdapter` methods map onto the single GraphQL endpoint.
+The `TrackerAdapter` Go interface has nine methods. Seven of them are the
+required tracker operations in the architecture spec (Section 11.1),
+`FetchCandidateIssues` through `TransitionIssue`; the interface adds
+`CommentIssue` (lifecycle comments) and `AddLabel` (CI-failure label
+escalation) beyond that required set. All nine map onto the single GraphQL
+endpoint and are covered below as operations 1 through 9 (`CommentIssue` and
+`AddLabel` are operations 8 and 9).
 
 ### 1. `FetchCandidateIssues`: `issues` query, team + active states
 
 ```graphql
-query CandidateIssues($teamKey: String!, $states: [String!]!, $first: Int!, $after: String) {
-  issues(
-    first: $first
-    after: $after
-    filter: {
-      team:  { key:  { eq: $teamKey } }
-      state: { name: { in: $states } }
-    }
-    sort: [
-      { priority:  { order: Ascending, noPriorityFirst: false } }
-      { createdAt: { order: Ascending } }
-    ]
-  ) {
-    nodes {
-      id
-      identifier
-      title
-      description
-      priority
-      branchName
-      url
-      createdAt
-      updatedAt
-      state { name }
-      assignee { displayName name email }
-      parent { id identifier }
-      labels(first: 25) { nodes { name } }
-      inverseRelations(first: 25) {
-        nodes {
-          type
-          issue { id identifier state { name } }
+query CandidateIssues(
+    $teamKey: String!
+    $states: [String!]!
+    $first: Int!
+    $after: String
+) {
+    issues(
+        first: $first
+        after: $after
+        filter: {
+            team: { key: { eq: $teamKey } }
+            state: { name: { in: $states } }
         }
-      }
+        sort: [
+            { priority: { order: Ascending, noPriorityFirst: false } }
+            { createdAt: { order: Ascending } }
+        ]
+    ) {
+        nodes {
+            id
+            identifier
+            title
+            description
+            priority
+            branchName
+            url
+            createdAt
+            updatedAt
+            state {
+                name
+            }
+            assignee {
+                displayName
+                name
+                email
+            }
+            parent {
+                id
+                identifier
+            }
+            labels(first: 25) {
+                nodes {
+                    name
+                }
+            }
+            inverseRelations(first: 25) {
+                nodes {
+                    type
+                    issue {
+                        id
+                        identifier
+                        state {
+                            name
+                        }
+                    }
+                }
+            }
+        }
+        pageInfo {
+            hasNextPage
+            endCursor
+        }
     }
-    pageInfo { hasNextPage endCursor }
-  }
 }
 ```
 
@@ -418,37 +459,65 @@ Notes:
 
 ```graphql
 query IssueByID($id: String!) {
-  issue(id: $id) {
-    id
-    identifier
-    title
-    description
-    priority
-    branchName
-    url
-    createdAt
-    updatedAt
-    state { name }
-    assignee { displayName name email }
-    parent { id identifier }
-    labels(first: 25) { nodes { name } }
-    inverseRelations(first: 25) {
-      nodes {
-        type
-        issue { id identifier state { name } }
-      }
-    }
-    comments(first: 50, orderBy: createdAt) {
-      nodes {
+    issue(id: $id) {
         id
-        body
+        identifier
+        title
+        description
+        priority
+        branchName
+        url
         createdAt
-        user { displayName name email }
-        botActor { name }
-      }
-      pageInfo { hasNextPage endCursor }
+        updatedAt
+        state {
+            name
+        }
+        assignee {
+            displayName
+            name
+            email
+        }
+        parent {
+            id
+            identifier
+        }
+        labels(first: 25) {
+            nodes {
+                name
+            }
+        }
+        inverseRelations(first: 25) {
+            nodes {
+                type
+                issue {
+                    id
+                    identifier
+                    state {
+                        name
+                    }
+                }
+            }
+        }
+        comments(first: 50, orderBy: createdAt) {
+            nodes {
+                id
+                body
+                createdAt
+                user {
+                    displayName
+                    name
+                    email
+                }
+                botActor {
+                    name
+                }
+            }
+            pageInfo {
+                hasNextPage
+                endCursor
+            }
+        }
     }
-  }
 }
 ```
 
@@ -473,12 +542,14 @@ comparison.
 
 ```graphql
 query IssueStatesByIDs($ids: [ID!]!, $first: Int!) {
-  issues(filter: { id: { in: $ids } }, first: $first) {
-    nodes {
-      id
-      state { name }
+    issues(filter: { id: { in: $ids } }, first: $first) {
+        nodes {
+            id
+            state {
+                name
+            }
+        }
     }
-  }
 }
 ```
 
@@ -496,14 +567,23 @@ key and numeric part (`"SOR-7"` to `("SOR", 7)`) and filters by the number set,
 scoped to the configured team:
 
 ```graphql
-query IssueStatesByNumbers($teamKey: String!, $numbers: [Float!]!, $first: Int!) {
-  issues(filter: { team: { key: { eq: $teamKey } }, number: { in: $numbers } }, first: $first) {
-    nodes {
-      identifier
-      number
-      state { name }
+query IssueStatesByNumbers(
+    $teamKey: String!
+    $numbers: [Float!]!
+    $first: Int!
+) {
+    issues(
+        filter: { team: { key: { eq: $teamKey } }, number: { in: $numbers } }
+        first: $first
+    ) {
+        nodes {
+            identifier
+            number
+            state {
+                name
+            }
+        }
     }
-  }
 }
 ```
 
@@ -522,26 +602,34 @@ team key, so one filter covers the batch; chunk the number list at 50.
 > nothing. A deleted or renamed issue, the exact reconciliation case this method
 > serves, would wipe the states of every other issue in the batch. The
 > connection-filter form above does not have this failure: **[live-verified]**
-> `number: { in: [5, 7, 99999] }` returned SOR-5 and SOR-7 and silently dropped
-> 99999. The same reasoning is why `FetchIssueStatesByIDs` (operation 4) uses
+> `number: { in: [5, 7, 99999] }` returned SOR-5 and SOR-7 and silently dropped 99999. The same reasoning is why `FetchIssueStatesByIDs` (operation 4) uses
 > `id: { in: [...] }` rather than aliased lookups.
 
 ### 6. `FetchIssueComments`: `issue.comments` connection
 
 ```graphql
 query IssueComments($id: String!, $first: Int!, $after: String) {
-  issue(id: $id) {
-    comments(first: $first, after: $after, orderBy: createdAt) {
-      nodes {
-        id
-        body
-        createdAt
-        user { displayName name email }
-        botActor { name }
-      }
-      pageInfo { hasNextPage endCursor }
+    issue(id: $id) {
+        comments(first: $first, after: $after, orderBy: createdAt) {
+            nodes {
+                id
+                body
+                createdAt
+                user {
+                    displayName
+                    name
+                    email
+                }
+                botActor {
+                    name
+                }
+            }
+            pageInfo {
+                hasNextPage
+                endCursor
+            }
+        }
     }
-  }
 }
 ```
 
@@ -569,10 +657,15 @@ Resolution query in the State model section. The mutation:
 
 ```graphql
 mutation IssueUpdateState($id: String!, $stateId: String!) {
-  issueUpdate(id: $id, input: { stateId: $stateId }) {
-    success
-    issue { id state { name } }
-  }
+    issueUpdate(id: $id, input: { stateId: $stateId }) {
+        success
+        issue {
+            id
+            state {
+                name
+            }
+        }
+    }
 }
 ```
 
@@ -586,10 +679,12 @@ normally signals failure via `errors`).
 
 ```graphql
 mutation CommentCreate($issueId: String!, $body: String!) {
-  commentCreate(input: { issueId: $issueId, body: $body }) {
-    success
-    comment { id }
-  }
+    commentCreate(input: { issueId: $issueId, body: $body }) {
+        success
+        comment {
+            id
+        }
+    }
 }
 ```
 
@@ -631,9 +726,15 @@ workspace labels (the root query returns both, per its schema doc):
 
 ```graphql
 query ResolveLabel($name: String!) {
-  issueLabels(filter: { name: { eqIgnoreCase: $name } }, first: 50) {
-    nodes { id name team { id } }
-  }
+    issueLabels(filter: { name: { eqIgnoreCase: $name } }, first: 50) {
+        nodes {
+            id
+            name
+            team {
+                id
+            }
+        }
+    }
 }
 ```
 
@@ -644,10 +745,12 @@ workspace label (`team` null).
 
 ```graphql
 mutation LabelCreate($teamId: String!, $name: String!) {
-  issueLabelCreate(input: { teamId: $teamId, name: $name }) {
-    success
-    issueLabel { id }
-  }
+    issueLabelCreate(input: { teamId: $teamId, name: $name }) {
+        success
+        issueLabel {
+            id
+        }
+    }
 }
 ```
 
@@ -674,9 +777,9 @@ which the adapter's lookup in step 1 finds it and never calls
 
 ```graphql
 mutation IssueAddLabel($id: String!, $labelIds: [String!]!) {
-  issueUpdate(id: $id, input: { addedLabelIds: $labelIds }) {
-    success
-  }
+    issueUpdate(id: $id, input: { addedLabelIds: $labelIds }) {
+        success
+    }
 }
 ```
 
@@ -695,25 +798,25 @@ was not exercised; that branch remains documentation-sourced.)
 
 `domain.Issue` field to Linear source (all field names schema-verified):
 
-| `domain.Issue` field | Linear source                                            | Notes                                                            |
-| -------------------- | -------------------------------------------------------- | ---------------------------------------------------------------- |
-| `ID`                 | `issue.id`                                               | UUID string                                                       |
-| `Identifier`         | `issue.identifier`                                       | e.g. `"ENG-123"`                                                  |
-| `DisplayID`          | empty                                                    | Identifiers are already display-ready                             |
-| `Title`              | `issue.title`                                            |                                                                   |
-| `Description`        | `issue.description`                                      | Markdown per schema; nullable, null becomes empty string          |
-| `Priority`           | `issue.priority`                                         | Float in schema: 0 = No priority, 1 = Urgent, 2 = High, 3 = Medium, 4 = Low. Map 1..4 to `*int`; map 0 to nil |
-| `State`              | `issue.state.name`                                       | Original casing preserved                                         |
-| `BranchName`         | `issue.branchName`                                       | Non-null; auto-generated. Format is workspace-configurable (see below); treat the whole string as opaque, never parse the prefix |
-| `URL`                | `issue.url`                                              | Provided directly, no construction                                |
-| `Labels`             | `issue.labels.nodes[].name`                              | Lowercase each (Section 11.3); non-nil empty slice when none      |
-| `Assignee`           | `assignee.displayName`, fallback `name`, then `email`    | `assignee` is strictly the `User` type, nullable; null becomes empty string. Agents/apps are not `User`s (they surface under the separate `delegate`/`botActor` fields the adapter does not read), so an agent-driven issue with no human assignee normalizes to empty |
-| `IssueType`          | empty                                                    | Linear has no native issue-type field                             |
-| `Parent`             | `issue.parent` `{id, identifier}`                        | Nil when absent                                                   |
-| `Comments`           | separate connection (op 6)                               | Nil when not fetched; empty non-nil when fetched and empty        |
-| `BlockedBy`          | `inverseRelations.nodes` where `type == "blocks"`        | See below                                                         |
-| `CreatedAt`          | `issue.createdAt`                                        | ISO-8601 `DateTime`, passed through                               |
-| `UpdatedAt`          | `issue.updatedAt`                                        | ISO-8601 `DateTime`, passed through                               |
+| `domain.Issue` field | Linear source                                         | Notes                                                                                                                                                                                                                                                                  |
+| -------------------- | ----------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ID`                 | `issue.id`                                            | UUID string                                                                                                                                                                                                                                                            |
+| `Identifier`         | `issue.identifier`                                    | e.g. `"ENG-123"`                                                                                                                                                                                                                                                       |
+| `DisplayID`          | empty                                                 | Identifiers are already display-ready                                                                                                                                                                                                                                  |
+| `Title`              | `issue.title`                                         |                                                                                                                                                                                                                                                                        |
+| `Description`        | `issue.description`                                   | Markdown per schema; nullable, null becomes empty string                                                                                                                                                                                                               |
+| `Priority`           | `issue.priority`                                      | Float in schema: 0 = No priority, 1 = Urgent, 2 = High, 3 = Medium, 4 = Low. Map 1..4 to `*int`; map 0 to nil                                                                                                                                                          |
+| `State`              | `issue.state.name`                                    | Original casing preserved                                                                                                                                                                                                                                              |
+| `BranchName`         | `issue.branchName`                                    | Non-null; auto-generated. Format is workspace-configurable (see below); treat the whole string as opaque, never parse the prefix                                                                                                                                       |
+| `URL`                | `issue.url`                                           | Provided directly, no construction                                                                                                                                                                                                                                     |
+| `Labels`             | `issue.labels.nodes[].name`                           | Lowercase each (Section 11.3); non-nil empty slice when none                                                                                                                                                                                                           |
+| `Assignee`           | `assignee.displayName`, fallback `name`, then `email` | `assignee` is strictly the `User` type, nullable; null becomes empty string. Agents/apps are not `User`s (they surface under the separate `delegate`/`botActor` fields the adapter does not read), so an agent-driven issue with no human assignee normalizes to empty |
+| `IssueType`          | empty                                                 | Linear has no native issue-type field                                                                                                                                                                                                                                  |
+| `Parent`             | `issue.parent` `{id, identifier}`                     | Nil when absent                                                                                                                                                                                                                                                        |
+| `Comments`           | separate connection (op 6)                            | Nil when not fetched; empty non-nil when fetched and empty                                                                                                                                                                                                             |
+| `BlockedBy`          | `inverseRelations.nodes` where `type == "blocks"`     | See below                                                                                                                                                                                                                                                              |
+| `CreatedAt`          | `issue.createdAt`                                     | ISO-8601 `DateTime`, passed through                                                                                                                                                                                                                                    |
+| `UpdatedAt`          | `issue.updatedAt`                                     | ISO-8601 `DateTime`, passed through                                                                                                                                                                                                                                    |
 
 ### Blocker extraction from `inverseRelations`
 
@@ -768,12 +871,12 @@ shape.
 
 ### Comment mapping
 
-| `domain.Comment` field | Linear source                                              |
-| ---------------------- | ----------------------------------------------------------- |
-| `ID`                   | `comment.id`                                                |
+| `domain.Comment` field | Linear source                                                              |
+| ---------------------- | -------------------------------------------------------------------------- |
+| `ID`                   | `comment.id`                                                               |
 | `Author`               | `user.displayName`, fallback `user.name`, then `botActor.name`, else empty |
-| `Body`                 | `comment.body` (markdown, pass through)                     |
-| `CreatedAt`            | `comment.createdAt`                                         |
+| `Body`                 | `comment.body` (markdown, pass through)                                    |
+| `CreatedAt`            | `comment.createdAt`                                                        |
 
 ---
 
@@ -831,11 +934,11 @@ as the source of truth.
 
 ### Complexity budget
 
-| Auth mode       | Points per hour | Live check                          |
-| --------------- | --------------- | ----------------------------------- |
+| Auth mode       | Points per hour | Live check                                              |
+| --------------- | --------------- | ------------------------------------------------------- |
 | API key         | 3,000,000       | `x-ratelimit-complexity-limit: 3000000` [live-verified] |
-| OAuth app       | 2,000,000       | documented                          |
-| Unauthenticated | 100,000         | documented                          |
+| OAuth app       | 2,000,000       | documented                                              |
+| Unauthenticated | 100,000         | documented                                              |
 
 Plus a **single-query cap of 10,000 points** for all auth modes.
 
@@ -849,14 +952,14 @@ The documented "multiply by page size" rule is a worst-case upper bound, not
 the figure the API charges. Measured `X-Complexity` values, all
 **[live-verified]**:
 
-| Query                                                              | X-Complexity |
-| ------------------------------------------------------------------ | ------------ |
-| `viewer { id name email displayName }`                             | 2            |
-| `issues(first: 250) { nodes { id } }`                              | 3            |
-| Candidate query, `first: 50`, nested `labels`/`relations` `first: 25` | **95**    |
-| Candidate query, `first: 250`, nested `first: 50`                  | 180          |
-| `team { states(first: 50) labels(first: 50) }`                     | 132          |
-| `issues(filter:{number:{in:[...]}})` state batch                   | 4            |
+| Query                                                                 | X-Complexity |
+| --------------------------------------------------------------------- | ------------ |
+| `viewer { id name email displayName }`                                | 2            |
+| `issues(first: 250) { nodes { id } }`                                 | 3            |
+| Candidate query, `first: 50`, nested `labels`/`relations` `first: 25` | **95**       |
+| Candidate query, `first: 250`, nested `first: 50`                     | 180          |
+| `team { states(first: 50) labels(first: 50) }`                        | 132          |
+| `issues(filter:{number:{in:[...]}})` state batch                      | 4            |
 
 Two lessons for the implementation:
 
@@ -883,17 +986,17 @@ cap is a practical constraint.
 
 All header names below were observed on live responses.
 
-| Header                                  | Meaning                                  |
-| --------------------------------------- | ----------------------------------------- |
-| `x-ratelimit-requests-limit`            | Request quota (dynamic; 2500 in the test workspace) |
-| `x-ratelimit-requests-remaining`        | Requests left in the window               |
-| `x-ratelimit-requests-reset`            | Window reset time, **epoch milliseconds** (13-digit) |
-| `x-complexity`                          | Complexity score of this query            |
-| `x-ratelimit-complexity-limit`          | Complexity quota                          |
-| `x-ratelimit-complexity-remaining`      | Complexity left in the window             |
-| `x-ratelimit-complexity-reset`          | Window reset time, epoch milliseconds     |
-| `x-ratelimit-endpoint-*`, `...-name`    | Per-endpoint sub-budgets where applied (documented) |
-| `Retry-After`                           | Seconds to wait (the official SDK reads it on rate-limit errors) |
+| Header                               | Meaning                                                          |
+| ------------------------------------ | ---------------------------------------------------------------- |
+| `x-ratelimit-requests-limit`         | Request quota (dynamic; 2500 in the test workspace)              |
+| `x-ratelimit-requests-remaining`     | Requests left in the window                                      |
+| `x-ratelimit-requests-reset`         | Window reset time, **epoch milliseconds** (13-digit)             |
+| `x-complexity`                       | Complexity score of this query                                   |
+| `x-ratelimit-complexity-limit`       | Complexity quota                                                 |
+| `x-ratelimit-complexity-remaining`   | Complexity left in the window                                    |
+| `x-ratelimit-complexity-reset`       | Window reset time, epoch milliseconds                            |
+| `x-ratelimit-endpoint-*`, `...-name` | Per-endpoint sub-budgets where applied (documented)              |
+| `Retry-After`                        | Seconds to wait (the official SDK reads it on rate-limit errors) |
 
 The `*-reset` values are epoch **milliseconds** (e.g. `1781361577787`), not
 seconds; divide by 1000 before comparing to a Go `time.Unix` value.
@@ -931,21 +1034,21 @@ is the verbatim live response for `issue(id: "<nonexistent-uuid>")`:
 
 ```json
 {
-  "errors": [
-    {
-      "message": "Entity not found: Issue",
-      "path": ["byUuid"],
-      "locations": [{ "line": 1, "column": 68 }],
-      "extensions": {
-        "type": "invalid input",
-        "code": "INPUT_ERROR",
-        "statusCode": 400,
-        "userError": true,
-        "userPresentableMessage": "Could not find referenced Issue."
-      }
-    }
-  ],
-  "data": null
+    "errors": [
+        {
+            "message": "Entity not found: Issue",
+            "path": ["byUuid"],
+            "locations": [{ "line": 1, "column": 68 }],
+            "extensions": {
+                "type": "invalid input",
+                "code": "INPUT_ERROR",
+                "statusCode": 400,
+                "userError": true,
+                "userPresentableMessage": "Could not find referenced Issue."
+            }
+        }
+    ],
+    "data": null
 }
 ```
 
@@ -972,7 +1075,7 @@ Observed `extensions` fields and their reliability:
   for `TrackerError.Message`.
 - `extensions.validationErrors` (array): present on argument-validation
   failures, with `constraints` such as `{ "max": "first must not be greater
-  than 250" }`.
+than 250" }`.
 
 ### The not-found special case [live-verified]
 
@@ -1063,8 +1166,8 @@ documented: "queries can partially succeed with a 200"). Policy:
 The issue-update mutation exposes one field with replace semantics and a pair
 with delta semantics for the same collection:
 
-| `IssueUpdateInput` field | Semantics (schema doc)                                   |
-| ------------------------ | --------------------------------------------------------- |
+| `IssueUpdateInput` field | Semantics (schema doc)                                     |
+| ------------------------ | ---------------------------------------------------------- |
 | `labelIds`               | "labels associated with this ticket": **replaces the set** |
 | `addedLabelIds`          | "labels to be added": appends                              |
 | `removedLabelIds`        | "labels to be removed": removes                            |
@@ -1121,23 +1224,23 @@ pattern in `IssueUpdateInput`.)
 
 ## Key differences from the Jira and GitHub adapters
 
-| Aspect             | Jira                              | GitHub                              | Linear                                        |
-| ------------------ | --------------------------------- | ----------------------------------- | --------------------------------------------- |
-| Protocol           | REST, multiple endpoints          | REST, multiple endpoints            | GraphQL, single POST endpoint                 |
-| Auth header        | `Basic base64(email:token)`       | `Bearer <token>`                    | `<api_key>` verbatim, no scheme prefix        |
-| Error transport    | HTTP status codes                 | HTTP status codes                   | `errors[]` inside HTTP 200 bodies             |
-| Rate-limit signal  | 429 + `Retry-After`               | 403/429 + headers                   | 400 (or 429) + `RATELIMITED` body code        |
-| Rate-limit model   | Points quota (65K/hr)             | Requests (5K/hr) + search (30/min)  | Requests (dynamic, 2.5K live) + complexity (3M/hr, 10K/query) |
-| State model        | Workflow states + transition graph | open/closed + labels-as-states     | Team-scoped named states + 7 type categories  |
-| Transitions        | Transition API (graph-restricted) | Label add/remove + close/reopen     | `issueUpdate(stateId)`, any state to any state |
-| Issue identifier   | `PROJ-123` (project key)          | `299` (repo-scoped number)          | `ENG-123` (team key + number), plus UUID      |
-| Lookup by both forms | id or key in path               | number in path                      | `issue(id:)` accepts UUID or identifier       |
-| Description/comments | ADF tree (flatten) or wiki markup | Markdown                          | Markdown                                      |
-| Priority           | `priority.id` numeric             | none native                         | 0..4 numeric, 0 = none (map to nil)           |
-| Blockers           | `issuelinks` type parsing         | `dependencies/blocked_by` endpoint  | `inverseRelations` where `type == "blocks"`   |
-| Branch name        | dev-status API (extra call)       | not in API response                 | `branchName` field, always present            |
-| Pagination         | `nextPageToken` / offset          | `Link` header                       | Relay cursors (`pageInfo`, `endCursor`)       |
-| Label writes       | n/a for adapter                   | additive label endpoints            | `addedLabelIds` delta (avoid `labelIds` replace) |
+| Aspect               | Jira                               | GitHub                             | Linear                                                        |
+| -------------------- | ---------------------------------- | ---------------------------------- | ------------------------------------------------------------- |
+| Protocol             | REST, multiple endpoints           | REST, multiple endpoints           | GraphQL, single POST endpoint                                 |
+| Auth header          | `Basic base64(email:token)`        | `Bearer <token>`                   | `<api_key>` verbatim, no scheme prefix                        |
+| Error transport      | HTTP status codes                  | HTTP status codes                  | `errors[]` inside HTTP 200 bodies                             |
+| Rate-limit signal    | 429 + `Retry-After`                | 403/429 + headers                  | 400 (or 429) + `RATELIMITED` body code                        |
+| Rate-limit model     | Points quota (65K/hr)              | Requests (5K/hr) + search (30/min) | Requests (dynamic, 2.5K live) + complexity (3M/hr, 10K/query) |
+| State model          | Workflow states + transition graph | open/closed + labels-as-states     | Team-scoped named states + 7 type categories                  |
+| Transitions          | Transition API (graph-restricted)  | Label add/remove + close/reopen    | `issueUpdate(stateId)`, any state to any state                |
+| Issue identifier     | `PROJ-123` (project key)           | `299` (repo-scoped number)         | `ENG-123` (team key + number), plus UUID                      |
+| Lookup by both forms | id or key in path                  | number in path                     | `issue(id:)` accepts UUID or identifier                       |
+| Description/comments | ADF tree (flatten) or wiki markup  | Markdown                           | Markdown                                                      |
+| Priority             | `priority.id` numeric              | none native                        | 0..4 numeric, 0 = none (map to nil)                           |
+| Blockers             | `issuelinks` type parsing          | `dependencies/blocked_by` endpoint | `inverseRelations` where `type == "blocks"`                   |
+| Branch name          | dev-status API (extra call)        | not in API response                | `branchName` field, always present                            |
+| Pagination           | `nextPageToken` / offset           | `Link` header                      | Relay cursors (`pageInfo`, `endCursor`)                       |
+| Label writes         | n/a for adapter                    | additive label endpoints           | `addedLabelIds` delta (avoid `labelIds` replace)              |
 
 ---
 
@@ -1196,21 +1299,21 @@ so a default run never mutates the workspace.
 
 ## Source attribution
 
-| Topic                                   | Primary source                                                                  | Cross-check                                            |
-| --------------------------------------- | -------------------------------------------------------------------------------- | ------------------------------------------------------ |
-| Endpoint, auth headers, viewer query    | Linear Developers: GraphQL getting started (`linear.app/developers/graphql`)     | Context7 `/websites/linear_app_developers` quotes      |
-| API key creation, scopes, team limits   | Linear Docs: API and webhooks (`linear.app/docs/api-and-webhooks`)               | First-party only                                        |
-| Key prefixes, leak revocation           | Linear changelog 2021-08-19 (GitHub secret scanning)                             | GitHub secret-scanning program docs                     |
-| OAuth scopes and token lifetime         | Linear Developers: OAuth 2.0 (`linear.app/developers/oauth-2-0-authentication`)  | First-party only                                        |
-| Rate limits, complexity scoring, headers | Linear Developers: Rate limiting (`linear.app/developers/rate-limiting`)        | SDK `RatelimitedLinearError` header reads               |
-| Pagination defaults and ordering        | Linear Developers: Pagination (`linear.app/developers/pagination`)               | Connection arg docs in the published schema             |
-| Schema shapes (all types, inputs, enums) | `linear/linear` `packages/sdk/src/schema.graphql` @ `df20561` (2026-06-11)      | Official docs examples where available                  |
-| `issue(id:)` / `issueUpdate` accept identifiers | **Live API** (`issue(id: "SOR-5")` and `commentCreate(issueId: "SOR-5")` accepted) | Official docs examples (`issue(id: "BLA-123")`, "UUID or a shorthand ID") |
-| Error envelope and type classification  | `linear/linear` `packages/sdk/src/error.ts` (official client parser)             | **Live API** error responses (auth, not-found, validation) |
-| Entity-not-found message shape          | **Live API** (`issue(id:)` on a nonexistent id), 2026-06-13                      | Schema: `Query.issue` returns non-null `Issue!`, explaining the `data: null` propagation |
-| Relation direction semantics            | **Live API** (created SOR-5 blocks SOR-7, read SOR-7 inverseRelations)           | Schema doc strings on `IssueRelation`                   |
-| Max `first`, orderBy direction, complexity, identifier acceptance, label append | **Live API**, team `SOR`, 2026-06-13 | Schema constraints and SDK where applicable             |
-| Dynamic request rate limit (2,500 live vs 5,000 documented) | **Live API** response headers                                | Web search: Linear scales request limit by paid seats   |
+| Topic                                                                           | Primary source                                                                     | Cross-check                                                                              |
+| ------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------- |
+| Endpoint, auth headers, viewer query                                            | Linear Developers: GraphQL getting started (`linear.app/developers/graphql`)       | Context7 `/websites/linear_app_developers` quotes                                        |
+| API key creation, scopes, team limits                                           | Linear Docs: API and webhooks (`linear.app/docs/api-and-webhooks`)                 | First-party only                                                                         |
+| Key prefixes, leak revocation                                                   | Linear changelog 2021-08-19 (GitHub secret scanning)                               | GitHub secret-scanning program docs                                                      |
+| OAuth scopes and token lifetime                                                 | Linear Developers: OAuth 2.0 (`linear.app/developers/oauth-2-0-authentication`)    | First-party only                                                                         |
+| Rate limits, complexity scoring, headers                                        | Linear Developers: Rate limiting (`linear.app/developers/rate-limiting`)           | SDK `RatelimitedLinearError` header reads                                                |
+| Pagination defaults and ordering                                                | Linear Developers: Pagination (`linear.app/developers/pagination`)                 | Connection arg docs in the published schema                                              |
+| Schema shapes (all types, inputs, enums)                                        | `linear/linear` `packages/sdk/src/schema.graphql` @ `df20561` (2026-06-11)         | Official docs examples where available                                                   |
+| `issue(id:)` / `issueUpdate` accept identifiers                                 | **Live API** (`issue(id: "SOR-5")` and `commentCreate(issueId: "SOR-5")` accepted) | Official docs examples (`issue(id: "BLA-123")`, "UUID or a shorthand ID")                |
+| Error envelope and type classification                                          | `linear/linear` `packages/sdk/src/error.ts` (official client parser)               | **Live API** error responses (auth, not-found, validation)                               |
+| Entity-not-found message shape                                                  | **Live API** (`issue(id:)` on a nonexistent id), 2026-06-13                        | Schema: `Query.issue` returns non-null `Issue!`, explaining the `data: null` propagation |
+| Relation direction semantics                                                    | **Live API** (created SOR-5 blocks SOR-7, read SOR-7 inverseRelations)             | Schema doc strings on `IssueRelation`                                                    |
+| Max `first`, orderBy direction, complexity, identifier acceptance, label append | **Live API**, team `SOR`, 2026-06-13                                               | Schema constraints and SDK where applicable                                              |
+| Dynamic request rate limit (2,500 live vs 5,000 documented)                     | **Live API** response headers                                                      | Web search: Linear scales request limit by paid seats                                    |
 
 ### Context7 verification report
 
