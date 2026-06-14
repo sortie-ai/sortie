@@ -353,7 +353,7 @@ func TestSetupJSON(t *testing.T) {
 	// slog.Default() must also write JSON to the same buf.
 	buf.Reset()
 	slog.Default().Info("from slog.Default")
-	for _, line := range strings.Split(buf.String(), "\n") {
+	for line := range strings.SplitSeq(buf.String(), "\n") {
 		if line == "" {
 			continue
 		}

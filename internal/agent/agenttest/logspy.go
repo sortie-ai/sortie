@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 	"sync"
 	"testing"
 )
@@ -103,12 +104,12 @@ func formatEntries(entries []LogSpyEntry) string {
 	if len(entries) == 0 {
 		return "(none)"
 	}
-	var s string
+	var s strings.Builder
 	for i, e := range entries {
 		if i > 0 {
-			s += ", "
+			s.WriteString(", ")
 		}
-		s += fmt.Sprintf("{%s %q line=%q}", e.Level, e.Msg, e.Line)
+		fmt.Fprintf(&s, "{%s %q line=%q}", e.Level, e.Msg, e.Line)
 	}
-	return s
+	return s.String()
 }

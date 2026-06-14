@@ -54,10 +54,7 @@ type cappedWriter struct {
 
 func (w *cappedWriter) Write(p []byte) (int, error) {
 	if w.buf.Len() < w.max {
-		remaining := w.max - w.buf.Len()
-		if remaining > len(p) {
-			remaining = len(p)
-		}
+		remaining := min(w.max-w.buf.Len(), len(p))
 		w.buf.Write(p[:remaining])
 	}
 	return len(p), nil

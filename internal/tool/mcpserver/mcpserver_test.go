@@ -49,7 +49,7 @@ func buildNotification(t *testing.T, method string) string {
 func parseResponses(t *testing.T, data []byte) []map[string]any {
 	t.Helper()
 	var results []map[string]any
-	for _, line := range bytes.Split(data, []byte("\n")) {
+	for line := range bytes.SplitSeq(data, []byte("\n")) {
 		line = bytes.TrimSpace(line)
 		if len(line) == 0 {
 			continue

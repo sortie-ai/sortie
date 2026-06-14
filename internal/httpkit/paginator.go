@@ -163,7 +163,7 @@ func parseLinkNext(header string) string {
 		return ""
 	}
 
-	for _, segment := range strings.Split(header, ",") {
+	for segment := range strings.SplitSeq(header, ",") {
 		parts := strings.Split(segment, ";")
 		if len(parts) < 2 {
 			continue

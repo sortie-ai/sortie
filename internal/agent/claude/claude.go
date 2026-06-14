@@ -443,17 +443,17 @@ func truncateToolError(s string, maxLen int) string {
 	if len(s) <= maxLen {
 		return s
 	}
-	nlPos := strings.IndexByte(s, '\n')
-	if nlPos == -1 {
+	before, after, ok := strings.Cut(s, "\n")
+	if !ok {
 		return tailBytes(s, maxLen)
 	}
-	firstLine := s[:nlPos]
+	firstLine := before
 	const sep = "\n...\n"
 	tailBudget := maxLen - len(firstLine) - len(sep)
 	if tailBudget <= 0 {
 		return tailBytes(s, maxLen)
 	}
-	tail := tailBytes(s[nlPos+1:], tailBudget)
+	tail := tailBytes(after, tailBudget)
 	return firstLine + sep + tail
 }
 

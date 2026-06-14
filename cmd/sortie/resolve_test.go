@@ -344,7 +344,7 @@ func TestTrackerConfigMapCompleteness(t *testing.T) {
 	t.Parallel()
 
 	m := trackerConfigMap(config.TrackerConfig{})
-	rt := reflect.TypeOf(config.TrackerConfig{})
+	rt := reflect.TypeFor[config.TrackerConfig]()
 
 	for _, field := range reflect.VisibleFields(rt) {
 		if !field.IsExported() {
@@ -361,7 +361,7 @@ func TestAgentConfigMapCompleteness(t *testing.T) {
 	t.Parallel()
 
 	m := agentConfigMap(config.AgentConfig{})
-	rt := reflect.TypeOf(config.AgentConfig{})
+	rt := reflect.TypeFor[config.AgentConfig]()
 
 	// Orchestrator-only fields are intentionally excluded from the
 	// adapter config map. They are consumed by the orchestrator via

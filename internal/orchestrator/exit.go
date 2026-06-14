@@ -627,10 +627,7 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 	if sessionID == "" {
 		sessionID = entry.SessionID
 	}
-	runDuration := now.Sub(entry.StartedAt)
-	if runDuration < 0 {
-		runDuration = 0
-	}
+	runDuration := max(now.Sub(entry.StartedAt), 0)
 
 	switch workerResult.ExitKind {
 	case WorkerExitNormal:
@@ -659,9 +656,7 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 		lc := lifecycle
 		ct := commentText
 
-		state.TrackerOpsWg.Add(1)
-		go func() {
-			defer state.TrackerOpsWg.Done()
+		state.TrackerOpsWg.Go(func() {
 			dctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 			defer cancel()
 
@@ -677,7 +672,7 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 				)
 				m.IncTrackerComments(lc, "success")
 			}
-		}()
+		})
 	}
 
 }

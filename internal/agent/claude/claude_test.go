@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -351,7 +352,7 @@ func TestBuildArgs(t *testing.T) {
 
 			for i := 0; i < len(tt.wantArgs); i++ {
 				found := false
-				for j := 0; j < len(got); j++ {
+				for j := range got {
 					if got[j] == tt.wantArgs[i] {
 						// Check value arg too if there's a pair.
 						if i+1 < len(tt.wantArgs) && j+1 < len(got) && got[j+1] == tt.wantArgs[i+1] {
@@ -372,11 +373,8 @@ func TestBuildArgs(t *testing.T) {
 			}
 
 			for _, absent := range tt.wantAbsent {
-				for _, a := range got {
-					if a == absent {
-						t.Errorf("unexpected arg %q in: %s", absent, argStr)
-						break
-					}
+				if slices.Contains(got, absent) {
+					t.Errorf("unexpected arg %q in: %s", absent, argStr)
 				}
 			}
 		})
@@ -389,13 +387,7 @@ func TestBuildArgs_AlwaysPresent(t *testing.T) {
 	got := buildArgs(&sessionState{claudeSessionID: "x"}, 1, "p", passthroughConfig{SessionPersistence: true})
 	required := []string{"-p", "--output-format", "--verbose"}
 	for _, r := range required {
-		found := false
-		for _, a := range got {
-			if a == r {
-				found = true
-				break
-			}
-		}
+		found := slices.Contains(got, r)
 		if !found {
 			t.Errorf("required flag %q missing in %v", r, got)
 		}

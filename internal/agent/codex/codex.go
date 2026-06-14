@@ -686,9 +686,7 @@ func (a *CodexAdapter) handleToolCall(ctx context.Context, state *sessionState, 
 		}
 	}
 
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		start := time.Now()
 		result, execErr := tool.Execute(ctx, tc.Arguments)
 
@@ -717,7 +715,7 @@ func (a *CodexAdapter) handleToolCall(ctx context.Context, state *sessionState, 
 				ToolDurationMS: time.Since(start).Milliseconds(),
 			}
 		}
-	}()
+	})
 	return nil
 }
 

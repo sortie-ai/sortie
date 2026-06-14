@@ -908,8 +908,7 @@ func TestRunTurn_StopSessionUnblocksReader(t *testing.T) {
 	testCtx, testCancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer testCancel()
 
-	runCtx, runCancel := context.WithCancel(context.Background())
-	defer runCancel()
+	runCtx := t.Context()
 
 	tmpDir := t.TempDir()
 	// Script: emit one JSON event on a run call, then block until killed.

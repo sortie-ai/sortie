@@ -2,6 +2,7 @@ package orchestrator
 
 import (
 	"log/slog"
+	"maps"
 	"slices"
 	"strings"
 )
@@ -103,12 +104,7 @@ func (hp *HostPool) HasCapacity() bool {
 	if len(hp.hosts) == 0 {
 		return true
 	}
-	for _, h := range hp.hosts {
-		if hp.hasHostCapacity(h) {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(hp.hosts, hp.hasHostCapacity)
 }
 
 // Update replaces the host list and per-host cap from a new config
@@ -152,9 +148,7 @@ func (hp *HostPool) Update(hosts []string, maxPerHost int) {
 // Snapshot returns a copy of the usage map for observability.
 func (hp *HostPool) Snapshot() map[string]int {
 	snap := make(map[string]int, len(hp.usage))
-	for h, c := range hp.usage {
-		snap[h] = c
-	}
+	maps.Copy(snap, hp.usage)
 	return snap
 }
 

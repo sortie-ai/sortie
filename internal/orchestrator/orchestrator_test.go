@@ -4890,7 +4890,7 @@ func TestHandleTickSweepThrottle(t *testing.T) {
 	ctx := context.Background()
 
 	// Ticks 1 through sweepEveryNTicks-1: sweep must not fire.
-	for i := 0; i < sweepEveryNTicks-1; i++ {
+	for range sweepEveryNTicks - 1 {
 		o.handleTick(ctx)
 	}
 	if got := tracker.callCount(); got != 0 {

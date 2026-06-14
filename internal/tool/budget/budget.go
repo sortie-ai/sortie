@@ -111,10 +111,7 @@ func (t *BudgetTool) Execute(ctx context.Context, _ json.RawMessage) (json.RawMe
 
 	var remaining *int64
 	if t.budgetTokens > 0 {
-		r := int64(t.budgetTokens) - usedTokens
-		if r < 0 {
-			r = 0
-		}
+		r := max(int64(t.budgetTokens)-usedTokens, 0)
 		remaining = &r
 	}
 

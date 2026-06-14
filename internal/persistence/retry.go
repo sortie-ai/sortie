@@ -126,10 +126,7 @@ func (s *Store) LoadRetryEntriesForRecovery(ctx context.Context, nowMs int64) ([
 
 	pending := make([]PendingRetry, len(entries))
 	for i, e := range entries {
-		remaining := e.DueAtMs - nowMs
-		if remaining < 0 {
-			remaining = 0
-		}
+		remaining := max(e.DueAtMs-nowMs, 0)
 		pending[i] = PendingRetry{Entry: e, RemainingMs: remaining}
 	}
 	return pending, nil

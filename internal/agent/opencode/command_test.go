@@ -2,6 +2,7 @@ package opencode
 
 import (
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 
@@ -12,8 +13,8 @@ import (
 func envLookup(env []string, key string) (string, bool) {
 	prefix := key + "="
 	for _, e := range env {
-		if strings.HasPrefix(e, prefix) {
-			return strings.TrimPrefix(e, prefix), true
+		if after, ok := strings.CutPrefix(e, prefix); ok {
+			return after, true
 		}
 	}
 	return "", false
@@ -55,10 +56,8 @@ func assertHasArgPair(t *testing.T, args []string, flag, value string) {
 // assertHasFlag fails if flag does not appear in args.
 func assertHasFlag(t *testing.T, args []string, flag string) {
 	t.Helper()
-	for _, a := range args {
-		if a == flag {
-			return
-		}
+	if slices.Contains(args, flag) {
+		return
 	}
 	t.Errorf("buildRunArgs() missing flag %q in [%s]", flag, strings.Join(args, " "))
 }
@@ -66,11 +65,9 @@ func assertHasFlag(t *testing.T, args []string, flag string) {
 // assertNoFlag fails if flag appears anywhere in args.
 func assertNoFlag(t *testing.T, args []string, flag string) {
 	t.Helper()
-	for _, a := range args {
-		if a == flag {
-			t.Errorf("buildRunArgs() unexpected flag %q in [%s]", flag, strings.Join(args, " "))
-			return
-		}
+	if slices.Contains(args, flag) {
+		t.Errorf("buildRunArgs() unexpected flag %q in [%s]", flag, strings.Join(args, " "))
+		return
 	}
 }
 

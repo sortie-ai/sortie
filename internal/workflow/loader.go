@@ -52,15 +52,13 @@ func Load(path string) (Workflow, error) {
 	// Check whether the first line is a front matter opening delimiter.
 	// Allow optional trailing whitespace on the delimiter line, consistent
 	// with closing delimiter handling.
-	firstNL := strings.IndexByte(content, '\n')
-	if firstNL == -1 || strings.TrimRight(content[:firstNL], " \t") != "---" {
+	firstLine, rest, hasNL := strings.Cut(content, "\n")
+	if !hasNL || strings.TrimRight(firstLine, " \t") != "---" {
 		return Workflow{
 			Config:         make(map[string]any),
 			PromptTemplate: strings.TrimSpace(content),
 		}, nil
 	}
-
-	rest := content[firstNL+1:] // skip opening delimiter line
 
 	fmBytes, promptBody, closingFound := splitAtClosingDelimiter(rest)
 

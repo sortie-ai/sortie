@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -452,9 +453,9 @@ func TestFetchCandidateIssues_Pagination(t *testing.T) {
 	page2 := loadFixture(t, "issues_page2.json") // issue 5 (review)
 
 	var srvURL string
-	var callCount int32
+	var callCount atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		n := atomic.AddInt32(&callCount, 1)
+		n := callCount.Add(1)
 		if n == 1 {
 			// First page: set Link header pointing to page 2.
 			w.Header().Set("Link", fmt.Sprintf(`<%s/repos/owner/repo/issues?page=2>; rel="next"`, srvURL))
@@ -478,7 +479,7 @@ func TestFetchCandidateIssues_Pagination(t *testing.T) {
 	if len(issues) != 3 {
 		t.Fatalf("len = %d, want 3 across 2 pages", len(issues))
 	}
-	if got := atomic.LoadInt32(&callCount); got != 2 {
+	if got := callCount.Load(); got != 2 {
 		t.Errorf("call count = %d, want 2", got)
 	}
 }
@@ -487,9 +488,9 @@ func TestFetchCandidateIssues_MaxPagesGuard(t *testing.T) {
 	t.Parallel()
 
 	// Server always returns a Link header, forcing the guard to trigger.
-	var callCount int32
+	var callCount atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		n := atomic.AddInt32(&callCount, 1)
+		n := callCount.Add(1)
 		nextURL := fmt.Sprintf("http://%s/repos/owner/repo/issues?p=%d", r.Host, n+1)
 		w.Header().Set("Link", fmt.Sprintf(`<%s>; rel="next"`, nextURL))
 		w.WriteHeader(http.StatusOK)
@@ -507,7 +508,7 @@ func TestFetchCandidateIssues_MaxPagesGuard(t *testing.T) {
 		t.Fatalf("FetchCandidateIssues: %v", err)
 	}
 
-	got := int(atomic.LoadInt32(&callCount))
+	got := int(callCount.Load())
 	if got > maxPages {
 		t.Errorf("call count = %d, exceeded maxPages = %d", got, maxPages)
 	}
@@ -971,9 +972,9 @@ func TestFetchIssueStatesByIDs_NotFoundOmitted(t *testing.T) {
 	t.Parallel()
 
 	// First issue found, second returns 404 (omit from map).
-	var callNum int32
+	var callNum atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		n := atomic.AddInt32(&callNum, 1)
+		n := callNum.Add(1)
 		if n == 1 {
 			w.WriteHeader(http.StatusOK)
 			w.Write([]byte(issueJSON(1, "backlog", "open"))) //nolint:errcheck // test helper
@@ -1109,9 +1110,9 @@ func TestFetchIssueComments_Pagination(t *testing.T) {
 	page2 := `[{"id":9999,"user":{"login":"charlie"},"body":"Third comment.","created_at":"2026-01-17T09:00:00Z"}]`
 
 	var srvURL string
-	var callCount int32
+	var callCount atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		n := atomic.AddInt32(&callCount, 1)
+		n := callCount.Add(1)
 		if n == 1 {
 			w.Header().Set("Link", fmt.Sprintf(`<%s/repos/owner/repo/issues/42/comments?page=2>; rel="next"`, srvURL))
 			w.WriteHeader(http.StatusOK)
@@ -1157,9 +1158,9 @@ func TestFetchIssueComments_NotFound(t *testing.T) {
 // state operations for TransitionIssue. It tracks which API calls were made.
 type transitionServer struct {
 	srv            *httptest.Server
-	deleteCount    int32
-	postCount      int32
-	patchCount     int32
+	deleteCount    atomic.Int32
+	postCount      atomic.Int32
+	patchCount     atomic.Int32
 	deleteFailWith int // if non-zero, respond with this status on DELETE
 	postFailWith   int // if non-zero, respond with this status on POST labels
 	patchFailWith  int // if non-zero, respond with this status on PATCH
@@ -1179,7 +1180,7 @@ func newTransitionServer(t *testing.T, number int, currentLabel, nativeState str
 				w.WriteHeader(ts.patchFailWith)
 				return
 			}
-			atomic.AddInt32(&ts.patchCount, 1)
+			ts.patchCount.Add(1)
 			w.WriteHeader(http.StatusOK)
 			body, _ := io.ReadAll(r.Body)
 			w.Write(body) //nolint:errcheck // test helper
@@ -1195,7 +1196,7 @@ func newTransitionServer(t *testing.T, number int, currentLabel, nativeState str
 			w.WriteHeader(ts.deleteFailWith)
 			return
 		}
-		atomic.AddInt32(&ts.deleteCount, 1)
+		ts.deleteCount.Add(1)
 		w.WriteHeader(http.StatusOK)
 	})
 	// POST labels
@@ -1204,7 +1205,7 @@ func newTransitionServer(t *testing.T, number int, currentLabel, nativeState str
 			w.WriteHeader(ts.postFailWith)
 			return
 		}
-		atomic.AddInt32(&ts.postCount, 1)
+		ts.postCount.Add(1)
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(`[]`)) //nolint:errcheck // test helper
 	})
@@ -1226,13 +1227,13 @@ func TestTransitionIssue_LabelSwap(t *testing.T) {
 		t.Fatalf("TransitionIssue: %v", err)
 	}
 
-	if got := atomic.LoadInt32(&ts.deleteCount); got != 1 {
+	if got := ts.deleteCount.Load(); got != 1 {
 		t.Errorf("DELETE count = %d, want 1", got)
 	}
-	if got := atomic.LoadInt32(&ts.postCount); got != 1 {
+	if got := ts.postCount.Load(); got != 1 {
 		t.Errorf("POST count = %d, want 1", got)
 	}
-	if got := atomic.LoadInt32(&ts.patchCount); got != 0 {
+	if got := ts.patchCount.Load(); got != 0 {
 		t.Errorf("PATCH count = %d, want 0 (no native state change needed)", got)
 	}
 }
@@ -1249,13 +1250,13 @@ func TestTransitionIssue_CloseOnTerminal(t *testing.T) {
 		t.Fatalf("TransitionIssue: %v", err)
 	}
 
-	if got := atomic.LoadInt32(&ts.deleteCount); got != 1 {
+	if got := ts.deleteCount.Load(); got != 1 {
 		t.Errorf("DELETE count = %d, want 1", got)
 	}
-	if got := atomic.LoadInt32(&ts.postCount); got != 1 {
+	if got := ts.postCount.Load(); got != 1 {
 		t.Errorf("POST count = %d, want 1", got)
 	}
-	if got := atomic.LoadInt32(&ts.patchCount); got != 1 {
+	if got := ts.patchCount.Load(); got != 1 {
 		t.Errorf("PATCH count = %d, want 1 (close issue)", got)
 	}
 }
@@ -1272,13 +1273,13 @@ func TestTransitionIssue_ReopenOnActive(t *testing.T) {
 		t.Fatalf("TransitionIssue: %v", err)
 	}
 
-	if got := atomic.LoadInt32(&ts.deleteCount); got != 1 {
+	if got := ts.deleteCount.Load(); got != 1 {
 		t.Errorf("DELETE count = %d, want 1", got)
 	}
-	if got := atomic.LoadInt32(&ts.postCount); got != 1 {
+	if got := ts.postCount.Load(); got != 1 {
 		t.Errorf("POST count = %d, want 1", got)
 	}
-	if got := atomic.LoadInt32(&ts.patchCount); got != 1 {
+	if got := ts.patchCount.Load(); got != 1 {
 		t.Errorf("PATCH count = %d, want 1 (reopen issue)", got)
 	}
 }
@@ -1294,10 +1295,10 @@ func TestTransitionIssue_IdempotentNoOp(t *testing.T) {
 		t.Fatalf("TransitionIssue idempotent: %v", err)
 	}
 
-	if got := atomic.LoadInt32(&ts.deleteCount); got != 0 {
+	if got := ts.deleteCount.Load(); got != 0 {
 		t.Errorf("DELETE count = %d, want 0", got)
 	}
-	if got := atomic.LoadInt32(&ts.postCount); got != 0 {
+	if got := ts.postCount.Load(); got != 0 {
 		t.Errorf("POST count = %d, want 0", got)
 	}
 }
@@ -1314,7 +1315,7 @@ func TestTransitionIssue_PartialFailure_AddLabel(t *testing.T) {
 	err := a.TransitionIssue(context.Background(), "2", "review")
 	assertTrackerErrorKind(t, err, domain.ErrTrackerTransport)
 
-	if got := atomic.LoadInt32(&ts.deleteCount); got != 1 {
+	if got := ts.deleteCount.Load(); got != 1 {
 		t.Errorf("DELETE count = %d, want 1 (delete succeeded before add failed)", got)
 	}
 }
@@ -1345,13 +1346,13 @@ func TestTransitionIssue_HandoffToActive(t *testing.T) {
 		t.Fatalf("TransitionIssue: %v", err)
 	}
 
-	if got := atomic.LoadInt32(&ts.deleteCount); got != 1 {
+	if got := ts.deleteCount.Load(); got != 1 {
 		t.Errorf("DELETE count = %d, want 1 (stale handoff label must be removed)", got)
 	}
-	if got := atomic.LoadInt32(&ts.postCount); got != 1 {
+	if got := ts.postCount.Load(); got != 1 {
 		t.Errorf("POST count = %d, want 1 (active label must be added)", got)
 	}
-	if got := atomic.LoadInt32(&ts.patchCount); got != 0 {
+	if got := ts.patchCount.Load(); got != 0 {
 		t.Errorf("PATCH count = %d, want 0 (issue already open, no native state change)", got)
 	}
 }
@@ -1376,13 +1377,13 @@ func TestTransitionIssue_HandoffAsTarget(t *testing.T) {
 		t.Fatalf("TransitionIssue: %v", err)
 	}
 
-	if got := atomic.LoadInt32(&ts.deleteCount); got != 1 {
+	if got := ts.deleteCount.Load(); got != 1 {
 		t.Errorf("DELETE count = %d, want 1 (active label must be removed)", got)
 	}
-	if got := atomic.LoadInt32(&ts.postCount); got != 1 {
+	if got := ts.postCount.Load(); got != 1 {
 		t.Errorf("POST count = %d, want 1 (handoff label must be added)", got)
 	}
-	if got := atomic.LoadInt32(&ts.patchCount); got != 0 {
+	if got := ts.patchCount.Load(); got != 0 {
 		t.Errorf("PATCH count = %d, want 0 (handoff state never changes native open/closed)", got)
 	}
 }
@@ -1413,10 +1414,10 @@ func TestTransitionIssue_PartialFailure_Close(t *testing.T) {
 	err := a.TransitionIssue(context.Background(), "6", "done")
 	assertTrackerErrorKind(t, err, domain.ErrTrackerTransport)
 
-	if got := atomic.LoadInt32(&ts.deleteCount); got != 1 {
+	if got := ts.deleteCount.Load(); got != 1 {
 		t.Errorf("DELETE count = %d, want 1", got)
 	}
-	if got := atomic.LoadInt32(&ts.postCount); got != 1 {
+	if got := ts.postCount.Load(); got != 1 {
 		t.Errorf("POST count = %d, want 1", got)
 	}
 }
@@ -1522,13 +1523,7 @@ func TestSetMetrics_RecordsOperations(t *testing.T) {
 		t.Fatalf("FetchCandidateIssues: %v", err)
 	}
 
-	found := false
-	for _, call := range spy.calls {
-		if call == "fetch_candidates:success" {
-			found = true
-			break
-		}
-	}
+	found := slices.Contains(spy.calls, "fetch_candidates:success")
 	if !found {
 		t.Errorf("metrics calls = %v, want fetch_candidates:success recorded", spy.calls)
 	}
@@ -1563,9 +1558,9 @@ func TestFetchCandidateIssues_SearchPagination(t *testing.T) {
 	page2 := `{"total_count":2,"incomplete_results":false,"items":[{"id":20,"number":20,"title":"T20","body":null,"state":"open","html_url":"u","labels":[{"name":"backlog"}],"assignees":[],"type":null,"pull_request":null,"created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z"}]}`
 
 	var srvURL string
-	var callCount int32
+	var callCount atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		n := atomic.AddInt32(&callCount, 1)
+		n := callCount.Add(1)
 		if n == 1 {
 			w.Header().Set("Link", fmt.Sprintf(`<%s/search/issues?q=...&page=2>; rel="next"`, srvURL))
 			w.WriteHeader(http.StatusOK)
@@ -1703,9 +1698,9 @@ func TestFetchIssuesByStates_OpenPagination(t *testing.T) {
 	page2 := loadFixture(t, "issues_page2.json")
 
 	var srvURL string
-	var callCount int32
+	var callCount atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		n := atomic.AddInt32(&callCount, 1)
+		n := callCount.Add(1)
 		if n == 1 {
 			w.Header().Set("Link", fmt.Sprintf(`<%s/repos/owner/repo/issues?state=open&page=2>; rel="next"`, srvURL))
 			w.WriteHeader(http.StatusOK)
@@ -1738,9 +1733,9 @@ func TestFetchIssuesByStates_ClosedSearchPagination(t *testing.T) {
 	page2 := `{"total_count":2,"incomplete_results":false,"items":[{"id":200,"number":200,"title":"D2","body":null,"state":"closed","html_url":"u","labels":[{"name":"done"}],"assignees":[],"type":null,"pull_request":null,"created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z"}]}`
 
 	var srvURL string
-	var callCount int32
+	var callCount atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		n := atomic.AddInt32(&callCount, 1)
+		n := callCount.Add(1)
 		if n == 1 {
 			w.Header().Set("Link", fmt.Sprintf(`<%s/search/issues?q=...&page=2>; rel="next"`, srvURL))
 			w.WriteHeader(http.StatusOK)
@@ -1815,9 +1810,9 @@ func TestFetchIssuesByStates_ContextCancelledDuringTerminal(t *testing.T) {
 	// Two terminal states: first search succeeds, context is cancelled before
 	// the second search, exercising the ctx.Err() guard between iterations.
 	started := make(chan struct{}, 1)
-	var callCount int32
+	var callCount atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		n := atomic.AddInt32(&callCount, 1)
+		n := callCount.Add(1)
 		if n == 1 {
 			w.WriteHeader(http.StatusOK)
 			w.Write([]byte(`{"total_count":0,"incomplete_results":false,"items":[]}`)) //nolint:errcheck // test helper
@@ -1925,7 +1920,7 @@ func TestTransitionIssue_DeleteLabelIsNotFound(t *testing.T) {
 	t.Parallel()
 
 	// DELETE existing label returns 404 (already removed) → treated as no-op; POST still executes.
-	var postCount int32
+	var postCount atomic.Int32
 	mux := http.NewServeMux()
 	mux.HandleFunc("/repos/owner/repo/issues/1", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPatch {
@@ -1941,7 +1936,7 @@ func TestTransitionIssue_DeleteLabelIsNotFound(t *testing.T) {
 		w.WriteHeader(http.StatusNotFound)
 	})
 	mux.HandleFunc("/repos/owner/repo/issues/1/labels", func(w http.ResponseWriter, r *http.Request) {
-		atomic.AddInt32(&postCount, 1)
+		postCount.Add(1)
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte("[]")) //nolint:errcheck // test helper
 	})
@@ -1953,7 +1948,7 @@ func TestTransitionIssue_DeleteLabelIsNotFound(t *testing.T) {
 	if err := a.TransitionIssue(context.Background(), "1", "review"); err != nil {
 		t.Fatalf("TransitionIssue 404-on-delete: %v", err)
 	}
-	if got := atomic.LoadInt32(&postCount); got != 1 {
+	if got := postCount.Load(); got != 1 {
 		t.Errorf("POST count = %d, want 1 (add-label must still execute)", got)
 	}
 }
@@ -2030,9 +2025,9 @@ func TestNewGitHubAdapter_ETagCacheSizeNegative(t *testing.T) {
 func TestFetchIssueStatesByIDs_ConditionalRequest_304(t *testing.T) {
 	t.Parallel()
 
-	var callCount int32
+	var callCount atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		n := atomic.AddInt32(&callCount, 1)
+		n := callCount.Add(1)
 		if n == 1 {
 			w.Header().Set("ETag", `"etag-v1"`)
 			w.WriteHeader(http.StatusOK)
@@ -2067,7 +2062,7 @@ func TestFetchIssueStatesByIDs_ConditionalRequest_304(t *testing.T) {
 	if result2["42"] != "in-progress" {
 		t.Errorf("second call result[\"42\"] = %q, want in-progress (304 hit)", result2["42"])
 	}
-	if n := atomic.LoadInt32(&callCount); n != 2 {
+	if n := callCount.Load(); n != 2 {
 		t.Errorf("server call count = %d, want 2", n)
 	}
 }
@@ -2075,9 +2070,9 @@ func TestFetchIssueStatesByIDs_ConditionalRequest_304(t *testing.T) {
 func TestFetchIssueStatesByIDs_ConditionalRequest_200_UpdatesCache(t *testing.T) {
 	t.Parallel()
 
-	var callCount int32
+	var callCount atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		n := atomic.AddInt32(&callCount, 1)
+		n := callCount.Add(1)
 		switch n {
 		case 1:
 			w.Header().Set("ETag", `"etag-v1"`)
@@ -2132,9 +2127,9 @@ func TestFetchIssueStatesByIDs_ConditionalRequest_200_UpdatesCache(t *testing.T)
 func TestFetchIssueStatesByIDs_NoETagHeader_NoCacheEntry(t *testing.T) {
 	t.Parallel()
 
-	var callCount int32
+	var callCount atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		n := atomic.AddInt32(&callCount, 1)
+		n := callCount.Add(1)
 		// Server intentionally omits the ETag header.
 		if h := r.Header.Get("If-None-Match"); h != "" {
 			t.Errorf("call %d: unexpected If-None-Match = %q (no ETag was ever returned)", n, h)
@@ -2149,12 +2144,12 @@ func TestFetchIssueStatesByIDs_NoETagHeader_NoCacheEntry(t *testing.T) {
 	a := mustAdapter(t, cfg)
 
 	// Both calls must be unconditional because the server never returns an ETag.
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		if _, err := a.FetchIssueStatesByIDs(context.Background(), []string{"10"}); err != nil {
 			t.Fatalf("call %d: %v", i+1, err)
 		}
 	}
-	if n := atomic.LoadInt32(&callCount); n != 2 {
+	if n := callCount.Load(); n != 2 {
 		t.Errorf("server call count = %d, want 2 (no caching when ETag absent)", n)
 	}
 }
@@ -2231,9 +2226,9 @@ func TestFetchIssueStatesByIDs_304_CachedStateUsedAfterEviction(t *testing.T) {
 func TestFetchIssueStatesByIDs_CacheDisabled_ZeroSize(t *testing.T) {
 	t.Parallel()
 
-	var callCount int32
+	var callCount atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		n := atomic.AddInt32(&callCount, 1)
+		n := callCount.Add(1)
 		if h := r.Header.Get("If-None-Match"); h != "" {
 			t.Errorf("call %d: unexpected If-None-Match = %q (cache disabled)", n, h)
 		}
@@ -2247,12 +2242,12 @@ func TestFetchIssueStatesByIDs_CacheDisabled_ZeroSize(t *testing.T) {
 	cfg["etag_cache_size"] = 0 // caching disabled
 	a := mustAdapter(t, cfg)
 
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		if _, err := a.FetchIssueStatesByIDs(context.Background(), []string{"20"}); err != nil {
 			t.Fatalf("call %d: %v", i+1, err)
 		}
 	}
-	if n := atomic.LoadInt32(&callCount); n != 2 {
+	if n := callCount.Load(); n != 2 {
 		t.Errorf("server call count = %d, want 2 (cache disabled, all requests unconditional)", n)
 	}
 }
@@ -2260,9 +2255,9 @@ func TestFetchIssueStatesByIDs_CacheDisabled_ZeroSize(t *testing.T) {
 func TestFetchIssueStatesByIDs_NetworkError_CachePreserved(t *testing.T) {
 	t.Parallel()
 
-	var callCount int32
+	var callCount atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		n := atomic.AddInt32(&callCount, 1)
+		n := callCount.Add(1)
 		switch n {
 		case 1:
 			w.Header().Set("ETag", `"etag-v1"`)

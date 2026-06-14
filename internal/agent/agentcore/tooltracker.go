@@ -44,9 +44,6 @@ func (t *ToolTracker) End(id string) (name string, durationMS int64, ok bool) {
 		return "", 0, false
 	}
 	delete(t.entries, id)
-	ms := time.Since(entry.ts).Milliseconds()
-	if ms <= 0 {
-		ms = 0
-	}
+	ms := max(time.Since(entry.ts).Milliseconds(), 0)
 	return entry.name, ms, true
 }

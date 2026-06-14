@@ -275,9 +275,9 @@ func TestFetchCandidateIssues_MultiPage(t *testing.T) {
 	page1 := loadFixture(t, "search_multi_page_1.json")
 	page2 := loadFixture(t, "search_multi_page_2.json")
 
-	var callCount int32
+	var callCount atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		n := atomic.AddInt32(&callCount, 1)
+		n := callCount.Add(1)
 		if n == 1 {
 			w.Write(page1) //nolint:errcheck // test helper
 		} else {
@@ -448,11 +448,11 @@ func TestFetchCandidateIssues_NoQueryFilter(t *testing.T) {
 		t.Fatalf("FetchCandidateIssues: %v", err)
 	}
 	// Should not have dangling AND before ORDER BY
-	idx := strings.Index(receivedJQL, "ORDER BY")
-	if idx < 0 {
+	before0, _, ok := strings.Cut(receivedJQL, "ORDER BY")
+	if !ok {
 		t.Fatalf("JQL missing ORDER BY: %q", receivedJQL)
 	}
-	before := receivedJQL[:idx]
+	before := before0
 	if strings.HasSuffix(strings.TrimSpace(before), "AND") {
 		t.Errorf("JQL has trailing AND before ORDER BY: %q", receivedJQL)
 	}
@@ -748,19 +748,19 @@ func TestFetchIssueStatesByIDs_SingleBatch(t *testing.T) {
 func TestFetchIssueStatesByIDs_MultiBatch(t *testing.T) {
 	t.Parallel()
 
-	var requestCount int32
+	var requestCount atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		atomic.AddInt32(&requestCount, 1)
+		requestCount.Add(1)
 		jql := r.URL.Query().Get("jql")
 		if !strings.Contains(jql, "id IN") {
 			t.Errorf("JQL = %q, should use id IN", jql)
 		}
 
 		// Verify the batch does not exceed 40 IDs.
-		if start := strings.Index(jql, "id IN ("); start != -1 {
-			inner := jql[start+len("id IN ("):]
-			if end := strings.Index(inner, ")"); end != -1 {
-				idCount := len(strings.Split(strings.TrimSpace(inner[:end]), ","))
+		if _, after, ok := strings.Cut(jql, "id IN ("); ok {
+			inner := after
+			if before, _, ok := strings.Cut(inner, ")"); ok {
+				idCount := len(strings.Split(strings.TrimSpace(before), ","))
 				if idCount > 40 {
 					t.Errorf("batch has %d IDs, max allowed 40", idCount)
 				}
@@ -790,7 +790,7 @@ func TestFetchIssueStatesByIDs_MultiBatch(t *testing.T) {
 		t.Fatalf("FetchIssueStatesByIDs: %v", err)
 	}
 
-	if got := atomic.LoadInt32(&requestCount); got != 2 {
+	if got := requestCount.Load(); got != 2 {
 		t.Errorf("request count = %d, want 2 batches", got)
 	}
 }
@@ -938,9 +938,9 @@ func TestFetchIssueStatesByIdentifiers_SingleBatch(t *testing.T) {
 func TestFetchIssueStatesByIdentifiers_MultiBatch(t *testing.T) {
 	t.Parallel()
 
-	var requestCount int32
+	var requestCount atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		atomic.AddInt32(&requestCount, 1)
+		requestCount.Add(1)
 		jql := r.URL.Query().Get("jql")
 		keyCount := strings.Count(jql, `"PROJ-`)
 		if keyCount > batchSize {
@@ -968,7 +968,7 @@ func TestFetchIssueStatesByIdentifiers_MultiBatch(t *testing.T) {
 		t.Fatalf("FetchIssueStatesByIdentifiers: %v", err)
 	}
 
-	if got := atomic.LoadInt32(&requestCount); got != 2 {
+	if got := requestCount.Load(); got != 2 {
 		t.Errorf("request count = %d, want 2 batches", got)
 	}
 }

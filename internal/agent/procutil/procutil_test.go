@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os/exec"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -260,13 +261,7 @@ func TestStderrCollector_LineCap(t *testing.T) {
 				}
 			}
 			wantMarkerStr := fmt.Sprintf(droppedMarkerFmt, tt.wantDrop)
-			hasMarker := false
-			for _, line := range got {
-				if line == wantMarkerStr {
-					hasMarker = true
-					break
-				}
-			}
+			hasMarker := slices.Contains(got, wantMarkerStr)
 			if hasMarker != tt.wantMarker {
 				t.Errorf("marker %q present = %v, want %v", wantMarkerStr, hasMarker, tt.wantMarker)
 			}

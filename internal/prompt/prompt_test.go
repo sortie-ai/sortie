@@ -465,9 +465,7 @@ func TestRender_Concurrent(t *testing.T) {
 
 	var wg sync.WaitGroup
 	for i := range 50 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			issue := map[string]any{"title": "concurrent test"}
 			_, renderErr := tmpl.Render(issue, nil, RunContext{
 				TurnNumber: i + 1,
@@ -476,7 +474,7 @@ func TestRender_Concurrent(t *testing.T) {
 			if renderErr != nil {
 				t.Errorf("concurrent render %d failed: %v", i, renderErr)
 			}
-		}()
+		})
 	}
 	wg.Wait()
 }

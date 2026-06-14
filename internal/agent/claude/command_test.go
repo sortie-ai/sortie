@@ -1,6 +1,7 @@
 package claude
 
 import (
+	"slices"
 	"strings"
 	"testing"
 )
@@ -20,11 +21,9 @@ func assertHasArgPair(t *testing.T, args []string, flag, value string) {
 // assertNoFlag fails if flag appears anywhere in args.
 func assertNoFlag(t *testing.T, args []string, flag string) {
 	t.Helper()
-	for _, a := range args {
-		if a == flag {
-			t.Errorf("buildArgs() unexpectedly contains flag %q in [%s]", flag, strings.Join(args, " "))
-			return
-		}
+	if slices.Contains(args, flag) {
+		t.Errorf("buildArgs() unexpectedly contains flag %q in [%s]", flag, strings.Join(args, " "))
+		return
 	}
 }
 

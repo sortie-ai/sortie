@@ -187,18 +187,12 @@ func buildDashboardData(
 
 	available := 0
 	if slotFunc != nil {
-		available = slotFunc() - runningCount
-		if available < 0 {
-			available = 0
-		}
+		available = max(slotFunc()-runningCount, 0)
 	}
 
 	uptimeDur := time.Duration(0)
 	if !startedAt.IsZero() {
-		uptimeDur = now.Sub(startedAt)
-		if uptimeDur < 0 {
-			uptimeDur = 0
-		}
+		uptimeDur = max(now.Sub(startedAt), 0)
 	}
 
 	data := dashboardData{
@@ -227,10 +221,7 @@ func buildDashboardData(
 	var aggregateCost float64
 	aggregateCostSet := false
 	for i, e := range sortedRunning {
-		dur := snap.GeneratedAt.Sub(e.StartedAt)
-		if dur < 0 {
-			dur = 0
-		}
+		dur := max(snap.GeneratedAt.Sub(e.StartedAt), 0)
 		if e.SSHHost != "" {
 			hasSSH = true
 		}

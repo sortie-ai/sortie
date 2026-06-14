@@ -293,8 +293,8 @@ func parseExportOutput(data []byte, sessionID string) exportUsage {
 	if !ok {
 		return exportUsage{}
 	}
-	for i := len(messages) - 1; i >= 0; i-- {
-		message, ok := messages[i].(map[string]any)
+	for _, v := range slices.Backward(messages) {
+		message, ok := v.(map[string]any)
 		if !ok {
 			continue
 		}

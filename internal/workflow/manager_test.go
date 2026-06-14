@@ -20,7 +20,7 @@ import (
 // validWorkflow returns a minimal valid WORKFLOW.md content with the
 // given polling interval.
 func validWorkflow(intervalMS int) []byte {
-	return []byte(fmt.Sprintf("---\npolling:\n  interval_ms: %d\n---\nDo the task for {{ .issue.title }}.\n", intervalMS))
+	return fmt.Appendf(nil, "---\npolling:\n  interval_ms: %d\n---\nDo the task for {{ .issue.title }}.\n", intervalMS)
 }
 
 func testLogger() *slog.Logger {
@@ -239,8 +239,7 @@ func TestManager_WatchPicksUpChange(t *testing.T) {
 		t.Fatalf("NewManager: %v", err)
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	if err := mgr.Start(ctx); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -274,8 +273,7 @@ func TestManager_WatchInvalidRetainsGood(t *testing.T) {
 		t.Fatalf("NewManager: %v", err)
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	if err := mgr.Start(ctx); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -313,8 +311,7 @@ func TestManager_ConcurrentReadSafety(t *testing.T) {
 		t.Fatalf("NewManager: %v", err)
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	if err := mgr.Start(ctx); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -329,15 +326,13 @@ func TestManager_ConcurrentReadSafety(t *testing.T) {
 	const readers = 10
 
 	for range readers {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			for !reloaded.Load() {
 				_ = mgr.Config()
 				_ = mgr.PromptTemplate()
 				_ = mgr.LastLoadError()
 			}
-		}()
+		})
 	}
 
 	writeWorkflow(t, path, validWorkflow(7777))
@@ -368,8 +363,7 @@ func TestManager_DebounceCoalescence(t *testing.T) {
 		t.Fatalf("NewManager: %v", err)
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	if err := mgr.Start(ctx); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -406,8 +400,7 @@ func TestManager_DeleteAndRecreate(t *testing.T) {
 		t.Fatalf("NewManager: %v", err)
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	if err := mgr.Start(ctx); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -486,8 +479,7 @@ func TestManager_StopIdempotent(t *testing.T) {
 		t.Fatalf("NewManager: %v", err)
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	if err := mgr.Start(ctx); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -509,8 +501,7 @@ func TestManager_RecoverAfterInvalidReload(t *testing.T) {
 		t.Fatalf("NewManager: %v", err)
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	if err := mgr.Start(ctx); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -546,22 +537,22 @@ func TestManager_RecoverAfterInvalidReload(t *testing.T) {
 // active and terminal state lists. An empty slice results in the key being
 // absent from the front matter.
 func workflowWithStates(active, terminal []string) []byte {
-	var s string
-	s += "---\npolling:\n  interval_ms: 5000\ntracker:\n"
+	var s strings.Builder
+	s.WriteString("---\npolling:\n  interval_ms: 5000\ntracker:\n")
 	if len(active) > 0 {
-		s += "  active_states:\n"
+		s.WriteString("  active_states:\n")
 		for _, st := range active {
-			s += fmt.Sprintf("    - %s\n", st)
+			fmt.Fprintf(&s, "    - %s\n", st)
 		}
 	}
 	if len(terminal) > 0 {
-		s += "  terminal_states:\n"
+		s.WriteString("  terminal_states:\n")
 		for _, st := range terminal {
-			s += fmt.Sprintf("    - %s\n", st)
+			fmt.Fprintf(&s, "    - %s\n", st)
 		}
 	}
-	s += "---\nDo the task for {{ .issue.title }}.\n"
-	return []byte(s)
+	s.WriteString("---\nDo the task for {{ .issue.title }}.\n")
+	return []byte(s.String())
 }
 
 // rejectBothEmpty is a ValidateFunc that rejects configs where both
@@ -729,8 +720,7 @@ func TestManager_SetLogger(t *testing.T) {
 
 	mgr.SetLogger(loggerB)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	if err := mgr.Start(ctx); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -777,8 +767,7 @@ func TestManager_SetLoggerNil(t *testing.T) {
 
 	mgr.SetLogger(nil)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	if err := mgr.Start(ctx); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -814,8 +803,7 @@ func TestManager_SetLoggerConcurrentWithReload(t *testing.T) {
 		t.Fatalf("NewManager: %v", err)
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	if err := mgr.Start(ctx); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -824,13 +812,11 @@ func TestManager_SetLoggerConcurrentWithReload(t *testing.T) {
 
 	var stop atomic.Bool
 	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		for !stop.Load() {
 			mgr.SetLogger(testLogger())
 		}
-	}()
+	})
 
 	for i := range 5 {
 		writeWorkflow(t, path, validWorkflow(5000+i))

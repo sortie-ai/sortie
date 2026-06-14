@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -111,13 +112,7 @@ func testLogger(buf *bytes.Buffer) *slog.Logger {
 func assertContainsAll(t *testing.T, label string, got, want []string) {
 	t.Helper()
 	for _, w := range want {
-		found := false
-		for _, g := range got {
-			if g == w {
-				found = true
-				break
-			}
-		}
+		found := slices.Contains(got, w)
 		if !found {
 			t.Errorf("%s: missing %q; got %v", label, w, got)
 		}
@@ -128,11 +123,8 @@ func assertContainsAll(t *testing.T, label string, got, want []string) {
 func assertContainsNone(t *testing.T, label string, got, absent []string) {
 	t.Helper()
 	for _, a := range absent {
-		for _, g := range got {
-			if g == a {
-				t.Errorf("%s: unexpected tool %q present; got %v", label, a, got)
-				break
-			}
+		if slices.Contains(got, a) {
+			t.Errorf("%s: unexpected tool %q present; got %v", label, a, got)
 		}
 	}
 }

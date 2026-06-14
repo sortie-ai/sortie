@@ -109,7 +109,7 @@ func (s *Store) applyMigration(ctx context.Context, m Migration) error {
 // literals. This is safe for DDL statements (CREATE TABLE, CREATE INDEX) but
 // would mis-split DML containing literal semicolons.
 func execStatements(ctx context.Context, tx *sql.Tx, rawSQL string) error {
-	for _, stmt := range strings.Split(rawSQL, ";") {
+	for stmt := range strings.SplitSeq(rawSQL, ";") {
 		stmt = strings.TrimSpace(stmt)
 		if stmt == "" {
 			continue
