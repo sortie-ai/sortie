@@ -138,6 +138,26 @@ func TestPaginate(t *testing.T) {
 
 		assertTrackerErrorKind(t, err, domain.ErrTrackerTransport)
 	})
+
+	t.Run("honors a seeded after cursor on the first request", func(t *testing.T) {
+		t.Parallel()
+
+		f := newFakeClient()
+		f.queueBody("q", stubBody([]string{"c"}, false, ""))
+
+		_, err := paginate(context.Background(), f, "q", map[string]any{"after": "seed-cursor"}, decodeStub, nil)
+		if err != nil {
+			t.Fatalf("paginate: %v", err)
+		}
+
+		calls := f.callsFor("q")
+		if len(calls) != 1 {
+			t.Fatalf("Execute call count = %d, want 1", len(calls))
+		}
+		if calls[0].variables["after"] != "seed-cursor" {
+			t.Errorf("first after = %v, want %q (seeded cursor, not reset to page 1)", calls[0].variables["after"], "seed-cursor")
+		}
+	})
 }
 
 func TestDecodeIssuesPage(t *testing.T) {

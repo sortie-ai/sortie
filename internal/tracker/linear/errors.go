@@ -16,8 +16,10 @@ const notFoundPrefix = "entity not found"
 //
 // The not-found-by-message check runs first, before any type-based rule,
 // because a missing entity arrives under the generic "invalid input" type.
-// Classification keys on extensions.type, never on the diagnostic
-// extensions.code. The returned message carries the first error's
+// Classification keys on extensions.type rather than the diagnostic
+// extensions.code, with one exception: the rate-limit signal also accepts the
+// documented extensions.code "RATELIMITED" because Linear reports it under the
+// generic "invalid input" type. The returned message carries the first error's
 // userPresentableMessage, falling back to its message.
 func classifyGraphQLErrors(errs []graphQLError) error {
 	if len(errs) == 0 {

@@ -273,6 +273,12 @@ func (a *LinearAdapter) collectComments(ctx context.Context, issueID string, inl
 	}
 
 	if inline != nil && inline.PageInfo.HasNextPage {
+		if inline.PageInfo.EndCursor == "" {
+			return nil, &domain.TrackerError{
+				Kind:    domain.ErrTrackerMissingCursor,
+				Message: "linear graphql: next comment page reported without an end cursor",
+			}
+		}
 		variables := map[string]any{
 			"id":    issueID,
 			"first": topLevelPageSize,
