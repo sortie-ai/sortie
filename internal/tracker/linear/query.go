@@ -165,11 +165,11 @@ const queryCommentCreate = `mutation CommentCreate($issueId: String!, $body: Str
 }`
 
 // queryResolveLabel resolves a label name to its UUID, case-insensitively. Each
-// node carries its team so the resolver can prefer a team-scoped label over a
-// workspace-scoped one.
+// node carries its team key so the resolver can prefer a team-scoped label over
+// a workspace-scoped one; the configured project is a team key, not a team UUID.
 const queryResolveLabel = `query ResolveLabel($name: String!) {
   issueLabels(filter: { name: { eqIgnoreCase: $name } }, first: 50) {
-    nodes { id name team { id } }
+    nodes { id name team { id key } }
   }
 }`
 
