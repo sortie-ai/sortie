@@ -762,6 +762,60 @@ func TestTransitionIssue(t *testing.T) {
 			t.Errorf("IssueUpdateState call count = %d, want 0 for a missing issue", len(calls))
 		}
 	})
+
+	t.Run("null issue with no errors on resolve is not found", func(t *testing.T) {
+		t.Parallel()
+
+		f := newFakeClient()
+		seedPreflight(f, t)
+		f.queueBody("ResolveStateID", loadFixture(t, "state_resolve_null_issue.json"))
+
+		adapter := newTestAdapter(t, f)
+
+		err := adapter.TransitionIssue(context.Background(), "SOR-999", "In Review")
+
+		assertTrackerErrorKind(t, err, domain.ErrTrackerNotFound)
+		if calls := f.callsFor("IssueUpdateState"); len(calls) != 0 {
+			t.Errorf("IssueUpdateState call count = %d, want 0 for a null issue", len(calls))
+		}
+	})
+
+	t.Run("transport error on resolve propagates and skips the mutation", func(t *testing.T) {
+		t.Parallel()
+
+		transportErr := &domain.TrackerError{Kind: domain.ErrTrackerTransport, Message: "dial tcp: timeout"}
+		f := newFakeClient()
+		seedPreflight(f, t)
+		f.queueResponse("ResolveStateID", fakeResponse{err: transportErr})
+
+		adapter := newTestAdapter(t, f)
+
+		err := adapter.TransitionIssue(context.Background(), "SOR-5", "In Review")
+
+		if !errors.Is(err, transportErr) {
+			t.Errorf("TransitionIssue resolve transport error = %v, want %v unchanged", err, transportErr)
+		}
+		if calls := f.callsFor("IssueUpdateState"); len(calls) != 0 {
+			t.Errorf("IssueUpdateState call count = %d, want 0 when the resolve fails", len(calls))
+		}
+	})
+
+	t.Run("malformed resolve body is a payload error and skips the mutation", func(t *testing.T) {
+		t.Parallel()
+
+		f := newFakeClient()
+		seedPreflight(f, t)
+		f.queueBody("ResolveStateID", []byte("{not json"))
+
+		adapter := newTestAdapter(t, f)
+
+		err := adapter.TransitionIssue(context.Background(), "SOR-5", "In Review")
+
+		assertTrackerErrorKind(t, err, domain.ErrTrackerPayload)
+		if calls := f.callsFor("IssueUpdateState"); len(calls) != 0 {
+			t.Errorf("IssueUpdateState call count = %d, want 0 when the resolve body is malformed", len(calls))
+		}
+	})
 }
 
 func TestCommentIssue(t *testing.T) {
@@ -1019,6 +1073,428 @@ func TestAddLabel(t *testing.T) {
 			t.Errorf("IssueAddLabel call count = %d, want 0 on a forbidden create", len(calls))
 		}
 	})
+
+	t.Run("create success with null label id is a payload error when re-resolve still misses", func(t *testing.T) {
+		t.Parallel()
+
+		f := newFakeClient()
+		seedPreflight(f, t)
+		f.queueBody("ResolveLabel", loadFixture(t, "label_resolve_miss.json"))
+		f.queueBody("ResolveLabel", loadFixture(t, "label_resolve_miss.json"))
+		f.queueBody("ResolveIssueTeam", loadFixture(t, "team_resolve_hit.json"))
+		f.queueBody("LabelCreate", loadFixture(t, "label_create_success_no_id.json"))
+
+		adapter := newTestAdapter(t, f)
+
+		err := adapter.AddLabel(context.Background(), "SOR-5", "needs-human")
+
+		assertTrackerErrorKind(t, err, domain.ErrTrackerPayload)
+
+		creates := f.callsFor("LabelCreate")
+		if len(creates) != 1 {
+			t.Fatalf("LabelCreate call count = %d, want 1", len(creates))
+		}
+		if resolves := f.callsFor("ResolveLabel"); len(resolves) != 2 {
+			t.Errorf("ResolveLabel call count = %d, want 2 (the empty-id payload error triggers one re-resolve)", len(resolves))
+		}
+		if calls := f.callsFor("IssueAddLabel"); len(calls) != 0 {
+			t.Errorf("IssueAddLabel call count = %d, want 0 when the create returns no id and re-resolve misses", len(calls))
+		}
+	})
+
+	t.Run("create success with null label id recovers via re-resolve and attaches the re-resolved id", func(t *testing.T) {
+		t.Parallel()
+
+		f := newFakeClient()
+		seedPreflight(f, t)
+		f.queueBody("ResolveLabel", loadFixture(t, "label_resolve_miss.json"))
+		f.queueBody("ResolveLabel", loadFixture(t, "label_resolve_hit.json"))
+		f.queueBody("ResolveIssueTeam", loadFixture(t, "team_resolve_hit.json"))
+		f.queueBody("LabelCreate", loadFixture(t, "label_create_success_no_id.json"))
+		f.queueBody("IssueAddLabel", loadFixture(t, "issue_add_label_success.json"))
+
+		adapter := newTestAdapter(t, f)
+
+		if err := adapter.AddLabel(context.Background(), "SOR-5", "needs-human"); err != nil {
+			t.Fatalf("AddLabel empty-id recovery path = %v, want nil (re-resolve recovers from the empty-id payload error)", err)
+		}
+
+		if resolves := f.callsFor("ResolveLabel"); len(resolves) != 2 {
+			t.Fatalf("ResolveLabel call count = %d, want 2 (empty-id payload error triggers one re-resolve)", len(resolves))
+		}
+
+		attaches := f.callsFor("IssueAddLabel")
+		if len(attaches) != 1 {
+			t.Fatalf("IssueAddLabel call count = %d, want 1", len(attaches))
+		}
+		labelIDs := attaches[0].variables["labelIds"].([]string)
+		want := []string{"label-team-needs-human"}
+		if !reflect.DeepEqual(labelIDs, want) {
+			t.Errorf("IssueAddLabel addedLabelIds = %v, want %v (re-resolved id after the empty-id create)", labelIDs, want)
+		}
+	})
+
+	t.Run("initial resolve transport error propagates and skips create and attach", func(t *testing.T) {
+		t.Parallel()
+
+		transportErr := &domain.TrackerError{Kind: domain.ErrTrackerTransport, Message: "dial tcp: timeout"}
+		f := newFakeClient()
+		seedPreflight(f, t)
+		f.queueResponse("ResolveLabel", fakeResponse{err: transportErr})
+
+		adapter := newTestAdapter(t, f)
+
+		err := adapter.AddLabel(context.Background(), "SOR-5", "needs-human")
+
+		if !errors.Is(err, transportErr) {
+			t.Errorf("AddLabel resolve transport error = %v, want %v unchanged", err, transportErr)
+		}
+		if calls := f.callsFor("ResolveIssueTeam"); len(calls) != 0 {
+			t.Errorf("ResolveIssueTeam call count = %d, want 0 when the initial resolve fails", len(calls))
+		}
+		if calls := f.callsFor("LabelCreate"); len(calls) != 0 {
+			t.Errorf("LabelCreate call count = %d, want 0 when the initial resolve fails", len(calls))
+		}
+		if calls := f.callsFor("IssueAddLabel"); len(calls) != 0 {
+			t.Errorf("IssueAddLabel call count = %d, want 0 when the initial resolve fails", len(calls))
+		}
+	})
+
+	t.Run("team resolve error on a missing label propagates and skips create and attach", func(t *testing.T) {
+		t.Parallel()
+
+		transportErr := &domain.TrackerError{Kind: domain.ErrTrackerTransport, Message: "dial tcp: timeout"}
+		f := newFakeClient()
+		seedPreflight(f, t)
+		f.queueBody("ResolveLabel", loadFixture(t, "label_resolve_miss.json"))
+		f.queueResponse("ResolveIssueTeam", fakeResponse{err: transportErr})
+
+		adapter := newTestAdapter(t, f)
+
+		err := adapter.AddLabel(context.Background(), "SOR-5", "needs-human")
+
+		if !errors.Is(err, transportErr) {
+			t.Errorf("AddLabel team resolve transport error = %v, want %v unchanged", err, transportErr)
+		}
+		if calls := f.callsFor("LabelCreate"); len(calls) != 0 {
+			t.Errorf("LabelCreate call count = %d, want 0 when the team resolve fails", len(calls))
+		}
+		if calls := f.callsFor("IssueAddLabel"); len(calls) != 0 {
+			t.Errorf("IssueAddLabel call count = %d, want 0 when the team resolve fails", len(calls))
+		}
+	})
+
+	t.Run("re-resolve transport error after a payload create error propagates", func(t *testing.T) {
+		t.Parallel()
+
+		transportErr := &domain.TrackerError{Kind: domain.ErrTrackerTransport, Message: "dial tcp: timeout"}
+		f := newFakeClient()
+		seedPreflight(f, t)
+		f.queueBody("ResolveLabel", loadFixture(t, "label_resolve_miss.json"))
+		f.queueResponse("ResolveLabel", fakeResponse{err: transportErr})
+		f.queueBody("ResolveIssueTeam", loadFixture(t, "team_resolve_hit.json"))
+		f.queueBody("LabelCreate", loadFixture(t, "label_create_conflict.json"))
+
+		adapter := newTestAdapter(t, f)
+
+		err := adapter.AddLabel(context.Background(), "SOR-5", "needs-human")
+
+		if !errors.Is(err, transportErr) {
+			t.Errorf("AddLabel re-resolve transport error = %v, want %v unchanged (re-resolve failure overrides the create error)", err, transportErr)
+		}
+		if resolves := f.callsFor("ResolveLabel"); len(resolves) != 2 {
+			t.Errorf("ResolveLabel call count = %d, want 2 (initial miss then failing re-resolve)", len(resolves))
+		}
+		if calls := f.callsFor("IssueAddLabel"); len(calls) != 0 {
+			t.Errorf("IssueAddLabel call count = %d, want 0 when the re-resolve fails", len(calls))
+		}
+	})
+
+	t.Run("missing label with no workspace fallback creates then attaches", func(t *testing.T) {
+		t.Parallel()
+
+		f := newFakeClient()
+		seedPreflight(f, t)
+		f.queueBody("ResolveLabel", loadFixture(t, "label_resolve_other_team.json"))
+		f.queueBody("ResolveIssueTeam", loadFixture(t, "team_resolve_hit.json"))
+		f.queueBody("LabelCreate", loadFixture(t, "label_create_success.json"))
+		f.queueBody("IssueAddLabel", loadFixture(t, "issue_add_label_success.json"))
+
+		adapter := newTestAdapter(t, f)
+
+		if err := adapter.AddLabel(context.Background(), "SOR-5", "needs-human"); err != nil {
+			t.Fatalf("AddLabel: %v", err)
+		}
+
+		if creates := f.callsFor("LabelCreate"); len(creates) != 1 {
+			t.Fatalf("LabelCreate call count = %d, want 1 (a label scoped to another team is not a match)", len(creates))
+		}
+		attaches := f.callsFor("IssueAddLabel")
+		if len(attaches) != 1 {
+			t.Fatalf("IssueAddLabel call count = %d, want 1", len(attaches))
+		}
+		labelIDs := attaches[0].variables["labelIds"].([]string)
+		want := []string{"label-created-needs-human"}
+		if !reflect.DeepEqual(labelIDs, want) {
+			t.Errorf("IssueAddLabel addedLabelIds = %v, want %v (created id; the other-team label is ignored)", labelIDs, want)
+		}
+	})
+}
+
+func TestResolveTeamID(t *testing.T) {
+	t.Parallel()
+
+	t.Run("transport error from Execute is returned unchanged", func(t *testing.T) {
+		t.Parallel()
+
+		transportErr := &domain.TrackerError{Kind: domain.ErrTrackerTransport, Message: "dial tcp: timeout"}
+		f := newFakeClient()
+		seedPreflight(f, t)
+		f.queueResponse("ResolveIssueTeam", fakeResponse{err: transportErr})
+
+		adapter := newTestAdapter(t, f)
+
+		_, err := adapter.resolveTeamID(context.Background(), "SOR-5")
+
+		if !errors.Is(err, transportErr) {
+			t.Errorf("resolveTeamID transport error = %v, want %v unchanged", err, transportErr)
+		}
+	})
+
+	t.Run("malformed body is a payload error", func(t *testing.T) {
+		t.Parallel()
+
+		f := newFakeClient()
+		seedPreflight(f, t)
+		f.queueBody("ResolveIssueTeam", []byte("{not json"))
+
+		adapter := newTestAdapter(t, f)
+
+		_, err := adapter.resolveTeamID(context.Background(), "SOR-5")
+
+		assertTrackerErrorKind(t, err, domain.ErrTrackerPayload)
+	})
+
+	t.Run("graphql errors array is classified", func(t *testing.T) {
+		t.Parallel()
+
+		f := newFakeClient()
+		seedPreflight(f, t)
+		f.queueBody("ResolveIssueTeam", loadFixture(t, "mutation_invalid_input.json"))
+
+		adapter := newTestAdapter(t, f)
+
+		_, err := adapter.resolveTeamID(context.Background(), "SOR-5")
+
+		assertTrackerErrorKind(t, err, domain.ErrTrackerPayload)
+	})
+
+	t.Run("null issue with no errors is not found", func(t *testing.T) {
+		t.Parallel()
+
+		f := newFakeClient()
+		seedPreflight(f, t)
+		f.queueBody("ResolveIssueTeam", loadFixture(t, "team_resolve_null_issue.json"))
+
+		adapter := newTestAdapter(t, f)
+
+		_, err := adapter.resolveTeamID(context.Background(), "SOR-999")
+
+		assertTrackerErrorKind(t, err, domain.ErrTrackerNotFound)
+	})
+
+	t.Run("resolves the owning team id verbatim", func(t *testing.T) {
+		t.Parallel()
+
+		f := newFakeClient()
+		seedPreflight(f, t)
+		f.queueBody("ResolveIssueTeam", loadFixture(t, "team_resolve_hit.json"))
+
+		adapter := newTestAdapter(t, f)
+
+		teamID, err := adapter.resolveTeamID(context.Background(), "SOR-5")
+		if err != nil {
+			t.Fatalf("resolveTeamID: %v", err)
+		}
+		if teamID != "team-uuid-sor" {
+			t.Errorf("resolveTeamID = %q, want %q", teamID, "team-uuid-sor")
+		}
+		if got := f.callsFor("ResolveIssueTeam")[0].variables["issueId"]; got != "SOR-5" {
+			t.Errorf("ResolveIssueTeam issueId = %v, want %q (verbatim)", got, "SOR-5")
+		}
+	})
+}
+
+func TestResolveLabelID(t *testing.T) {
+	t.Parallel()
+
+	t.Run("transport error from Execute is returned unchanged", func(t *testing.T) {
+		t.Parallel()
+
+		transportErr := &domain.TrackerError{Kind: domain.ErrTrackerTransport, Message: "dial tcp: timeout"}
+		f := newFakeClient()
+		seedPreflight(f, t)
+		f.queueResponse("ResolveLabel", fakeResponse{err: transportErr})
+
+		adapter := newTestAdapter(t, f)
+
+		_, _, err := adapter.resolveLabelID(context.Background(), "needs-human")
+
+		if !errors.Is(err, transportErr) {
+			t.Errorf("resolveLabelID transport error = %v, want %v unchanged", err, transportErr)
+		}
+	})
+
+	t.Run("malformed body is a payload error", func(t *testing.T) {
+		t.Parallel()
+
+		f := newFakeClient()
+		seedPreflight(f, t)
+		f.queueBody("ResolveLabel", []byte("{not json"))
+
+		adapter := newTestAdapter(t, f)
+
+		_, _, err := adapter.resolveLabelID(context.Background(), "needs-human")
+
+		assertTrackerErrorKind(t, err, domain.ErrTrackerPayload)
+	})
+
+	t.Run("graphql errors array is classified", func(t *testing.T) {
+		t.Parallel()
+
+		f := newFakeClient()
+		seedPreflight(f, t)
+		f.queueBody("ResolveLabel", loadFixture(t, "mutation_auth_error.json"))
+
+		adapter := newTestAdapter(t, f)
+
+		_, _, err := adapter.resolveLabelID(context.Background(), "needs-human")
+
+		assertTrackerErrorKind(t, err, domain.ErrTrackerAuth)
+	})
+
+	t.Run("a label scoped to a different team reports not found", func(t *testing.T) {
+		t.Parallel()
+
+		f := newFakeClient()
+		seedPreflight(f, t)
+		f.queueBody("ResolveLabel", loadFixture(t, "label_resolve_other_team.json"))
+
+		adapter := newTestAdapter(t, f)
+
+		labelID, found, err := adapter.resolveLabelID(context.Background(), "needs-human")
+		if err != nil {
+			t.Fatalf("resolveLabelID: %v", err)
+		}
+		if found {
+			t.Errorf("resolveLabelID found = %v, want false (the only match belongs to another team)", found)
+		}
+		if labelID != "" {
+			t.Errorf("resolveLabelID id = %q, want empty string", labelID)
+		}
+	})
+}
+
+func TestCreateLabel(t *testing.T) {
+	t.Parallel()
+
+	t.Run("success with no label id is a payload error", func(t *testing.T) {
+		t.Parallel()
+
+		f := newFakeClient()
+		seedPreflight(f, t)
+		f.queueBody("LabelCreate", loadFixture(t, "label_create_success_no_id.json"))
+
+		adapter := newTestAdapter(t, f)
+
+		_, err := adapter.createLabel(context.Background(), "team-uuid-sor", "needs-human")
+
+		assertTrackerErrorKind(t, err, domain.ErrTrackerPayload)
+	})
+
+	t.Run("malformed body is a payload error", func(t *testing.T) {
+		t.Parallel()
+
+		f := newFakeClient()
+		seedPreflight(f, t)
+		f.queueBody("LabelCreate", []byte("{not json"))
+
+		adapter := newTestAdapter(t, f)
+
+		_, err := adapter.createLabel(context.Background(), "team-uuid-sor", "needs-human")
+
+		assertTrackerErrorKind(t, err, domain.ErrTrackerPayload)
+	})
+
+	t.Run("success returns the created label id", func(t *testing.T) {
+		t.Parallel()
+
+		f := newFakeClient()
+		seedPreflight(f, t)
+		f.queueBody("LabelCreate", loadFixture(t, "label_create_success.json"))
+
+		adapter := newTestAdapter(t, f)
+
+		labelID, err := adapter.createLabel(context.Background(), "team-uuid-sor", "needs-human")
+		if err != nil {
+			t.Fatalf("createLabel: %v", err)
+		}
+		if labelID != "label-created-needs-human" {
+			t.Errorf("createLabel = %q, want %q", labelID, "label-created-needs-human")
+		}
+	})
+}
+
+func TestDecodeCommentCreateSuccess(t *testing.T) {
+	t.Parallel()
+
+	t.Run("malformed body is a payload error", func(t *testing.T) {
+		t.Parallel()
+
+		_, _, err := decodeCommentCreateSuccess([]byte("{not json"))
+
+		assertTrackerErrorKind(t, err, domain.ErrTrackerPayload)
+	})
+
+	t.Run("well-formed success body reports success with no error", func(t *testing.T) {
+		t.Parallel()
+
+		errs, success, err := decodeCommentCreateSuccess(loadFixture(t, "comment_create_success.json"))
+		if err != nil {
+			t.Fatalf("decodeCommentCreateSuccess: %v", err)
+		}
+		if !success {
+			t.Errorf("decodeCommentCreateSuccess success = %v, want true", success)
+		}
+		if len(errs) != 0 {
+			t.Errorf("decodeCommentCreateSuccess errs = %v, want empty", errs)
+		}
+	})
+}
+
+func TestIsPayloadError(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		err  error
+		want bool
+	}{
+		{"payload tracker error", &domain.TrackerError{Kind: domain.ErrTrackerPayload}, true},
+		{"non-payload tracker error", &domain.TrackerError{Kind: domain.ErrTrackerAuth}, false},
+		{"plain error is not a payload error", errors.New("boom"), false},
+		{"nil error is not a payload error", nil, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := isPayloadError(tt.err); got != tt.want {
+				t.Errorf("isPayloadError(%v) = %v, want %v", tt.err, got, tt.want)
+			}
+		})
+	}
 }
 
 func TestWriteErrorMapping(t *testing.T) {
