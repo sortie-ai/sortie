@@ -1,6 +1,7 @@
 package sshutil
 
 import (
+	"slices"
 	"strings"
 	"testing"
 )
@@ -154,13 +155,7 @@ func TestBuildSSHArgs(t *testing.T) {
 			cmd:       "cmd",
 			check: func(t *testing.T, args []string) {
 				t.Helper()
-				found := false
-				for _, a := range args {
-					if a == "--" {
-						found = true
-						break
-					}
-				}
+				found := slices.Contains(args, "--")
 				if !found {
 					t.Errorf("BuildSSHArgs() args = %v: missing '--' separator", args)
 				}

@@ -354,13 +354,10 @@ func TestIntegration_FetchIssueStatesByIDs(t *testing.T) {
 		t.Skip("no candidate issues in project")
 	}
 
-	limit := 5
-	if len(candidates) < limit {
-		limit = len(candidates)
-	}
+	limit := min(len(candidates), 5)
 	ids := make([]string, limit)
 	candidateStates := make(map[string]string, limit)
-	for i := 0; i < limit; i++ {
+	for i := range limit {
 		ids[i] = candidates[i].ID
 		candidateStates[candidates[i].ID] = candidates[i].State
 	}

@@ -1827,7 +1827,7 @@ func TestHandleWorkerExit_RetryableErrorLogsWarn(t *testing.T) {
 	}
 
 	// No "worker run failed" at ERROR level.
-	for _, line := range strings.Split(out, "\n") {
+	for line := range strings.SplitSeq(out, "\n") {
 		if strings.Contains(line, "level=ERROR") && strings.Contains(line, "worker run failed") {
 			t.Errorf("unexpected ERROR log with 'worker run failed':\n%s", line)
 		}
@@ -1866,7 +1866,7 @@ func TestHandleWorkerExit_NonRetryableErrorLogsError(t *testing.T) {
 	}
 
 	// No "worker run failed" at WARN level.
-	for _, line := range strings.Split(out, "\n") {
+	for line := range strings.SplitSeq(out, "\n") {
 		if strings.Contains(line, "level=WARN") && strings.Contains(line, "worker run failed") {
 			t.Errorf("unexpected WARN log with 'worker run failed':\n%s", line)
 		}

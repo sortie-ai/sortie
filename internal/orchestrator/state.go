@@ -806,9 +806,7 @@ func RuntimeSnapshot(state *State, now time.Time) RuntimeSnapshotResult {
 		var modelRequests map[string]int
 		if entry.RequestsByModel != nil {
 			modelRequests = make(map[string]int, len(entry.RequestsByModel))
-			for k, v := range entry.RequestsByModel {
-				modelRequests[k] = v
-			}
+			maps.Copy(modelRequests, entry.RequestsByModel)
 		}
 		snap.Running = append(snap.Running, SnapshotRunningEntry{
 			IssueID:             entry.Issue.ID,

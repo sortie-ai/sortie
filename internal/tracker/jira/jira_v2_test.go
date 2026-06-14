@@ -486,11 +486,11 @@ func TestPaginatedSearchV2_MultiPage(t *testing.T) {
 	page2 := loadFixture(t, "search_v2_multi_page_2.json")
 
 	var (
-		callCount   int32
+		callCount   atomic.Int32
 		seenStartAt []string
 	)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		n := atomic.AddInt32(&callCount, 1)
+		n := callCount.Add(1)
 		seenStartAt = append(seenStartAt, r.URL.Query().Get("startAt"))
 		if r.URL.Path != "/rest/api/2/search" {
 			t.Errorf("request path = %q, want /rest/api/2/search", r.URL.Path)
@@ -511,7 +511,7 @@ func TestPaginatedSearchV2_MultiPage(t *testing.T) {
 	if len(issues) != 3 {
 		t.Fatalf("len = %d, want 3 across 2 pages", len(issues))
 	}
-	if got := atomic.LoadInt32(&callCount); got != 2 {
+	if got := callCount.Load(); got != 2 {
 		t.Errorf("request count = %d, want 2", got)
 	}
 	wantIDs := []string{"SRV-11", "SRV-12", "SRV-13"}
@@ -534,9 +534,9 @@ func TestPaginatedSearchV2_FinalFullPageTerminates(t *testing.T) {
 	t.Parallel()
 
 	// total == 2 and the single page returns 2 issues: startAt(0)+2 >= 2.
-	var callCount int32
+	var callCount atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		atomic.AddInt32(&callCount, 1)
+		callCount.Add(1)
 		w.Write(loadFixture(t, "search_v2_single_page.json")) //nolint:errcheck // test helper
 	}))
 	defer srv.Close()
@@ -549,7 +549,7 @@ func TestPaginatedSearchV2_FinalFullPageTerminates(t *testing.T) {
 	if len(issues) != 2 {
 		t.Fatalf("len = %d, want 2", len(issues))
 	}
-	if got := atomic.LoadInt32(&callCount); got != 1 {
+	if got := callCount.Load(); got != 1 {
 		t.Errorf("request count = %d, want 1 (loop must terminate on a full final page)", got)
 	}
 }

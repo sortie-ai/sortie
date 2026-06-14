@@ -51,10 +51,7 @@ func reconcileAutoMerge(state *State, params ReconcileParams, log *slog.Logger, 
 		now = params.NowFunc().UTC()
 	}
 
-	pollInterval := time.Duration(params.AutoMergeConfig.PollIntervalMS) * time.Millisecond
-	if pollInterval < 30*time.Second {
-		pollInterval = 30 * time.Second
-	}
+	pollInterval := max(time.Duration(params.AutoMergeConfig.PollIntervalMS)*time.Millisecond, 30*time.Second)
 	ttl := params.AutoMergePendingTTL
 
 	// Consume a scheduled preflight retry at the top of the function
@@ -286,10 +283,7 @@ func reconcileAutoMerge(state *State, params ReconcileParams, log *slog.Logger, 
 // log it emits at its own (stable, literal) message.
 func applyAutoMergeBackoff(state *State, key string, pending *PendingReaction, now time.Time, pollInterval time.Duration) time.Duration {
 	pending.PendingAttempts++
-	delay := computeAutoMergePendingDelay(pending.PendingAttempts)
-	if delay < pollInterval {
-		delay = pollInterval
-	}
+	delay := max(computeAutoMergePendingDelay(pending.PendingAttempts), pollInterval)
 	pending.PendingRetryAt = now.Add(delay)
 	state.PendingReactions[key] = pending
 	return delay
@@ -342,9 +336,7 @@ func postAutoMergeSuccess(state *State, params ReconcileParams, pending *Pending
 		adapter := params.SCMAdapter
 		branchLog := log
 
-		state.TrackerOpsWg.Add(1)
-		go func() {
-			defer state.TrackerOpsWg.Done()
+		state.TrackerOpsWg.Go(func() {
 			dctx, cancel := context.WithTimeout(
 				context.WithoutCancel(ctx), 30*time.Second)
 			defer cancel()
@@ -362,7 +354,7 @@ func postAutoMergeSuccess(state *State, params ReconcileParams, pending *Pending
 					slog.Any("error", err),
 				)
 			}
-		}()
+		})
 	}
 
 	if params.TrackerAdapter != nil {
@@ -371,9 +363,7 @@ func postAutoMergeSuccess(state *State, params ReconcileParams, pending *Pending
 		tracker := params.TrackerAdapter
 		commentLog := log
 
-		state.TrackerOpsWg.Add(1)
-		go func() {
-			defer state.TrackerOpsWg.Done()
+		state.TrackerOpsWg.Go(func() {
 			dctx, cancel := context.WithTimeout(
 				context.WithoutCancel(ctx), 30*time.Second)
 			defer cancel()
@@ -383,7 +373,7 @@ func postAutoMergeSuccess(state *State, params ReconcileParams, pending *Pending
 					slog.Any("error", err),
 				)
 			}
-		}()
+		})
 	}
 
 	if err := params.Store.DeleteReactionFingerprint(ctx, pending.IssueID, ReactionKindAutoMerge); err != nil {
@@ -511,9 +501,7 @@ func escalateAutoMergeFailure(state *State, params ReconcileParams, pending *Pen
 			tracker := params.TrackerAdapter
 			escalLog := log
 
-			state.TrackerOpsWg.Add(1)
-			go func() {
-				defer state.TrackerOpsWg.Done()
+			state.TrackerOpsWg.Go(func() {
 				dctx, cancel := context.WithTimeout(
 					context.WithoutCancel(ctx), 30*time.Second)
 				defer cancel()
@@ -523,7 +511,7 @@ func escalateAutoMergeFailure(state *State, params ReconcileParams, pending *Pen
 						slog.Any("error", err),
 					)
 				}
-			}()
+			})
 		}
 
 	case "comment", "":
@@ -533,9 +521,7 @@ func escalateAutoMergeFailure(state *State, params ReconcileParams, pending *Pen
 			tracker := params.TrackerAdapter
 			escalLog := log
 
-			state.TrackerOpsWg.Add(1)
-			go func() {
-				defer state.TrackerOpsWg.Done()
+			state.TrackerOpsWg.Go(func() {
 				dctx, cancel := context.WithTimeout(
 					context.WithoutCancel(ctx), 30*time.Second)
 				defer cancel()
@@ -545,7 +531,7 @@ func escalateAutoMergeFailure(state *State, params ReconcileParams, pending *Pen
 						slog.Any("error", err),
 					)
 				}
-			}()
+			})
 		}
 	}
 

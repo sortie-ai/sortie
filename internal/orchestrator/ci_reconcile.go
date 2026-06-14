@@ -286,9 +286,7 @@ func escalateCIFailure(
 			escalLog := log
 			escalAction := params.CIFeedback.Escalation
 
-			state.TrackerOpsWg.Add(1)
-			go func() {
-				defer state.TrackerOpsWg.Done()
+			state.TrackerOpsWg.Go(func() {
 				dctx, cancel := context.WithTimeout(
 					context.WithoutCancel(ctx), 30*time.Second)
 				defer cancel()
@@ -301,7 +299,7 @@ func escalateCIFailure(
 				} else {
 					m.IncCIEscalations(escalAction)
 				}
-			}()
+			})
 		}
 
 	case "comment", "":
@@ -317,9 +315,7 @@ func escalateCIFailure(
 				escalAction = "comment"
 			}
 
-			state.TrackerOpsWg.Add(1)
-			go func() {
-				defer state.TrackerOpsWg.Done()
+			state.TrackerOpsWg.Go(func() {
 				dctx, cancel := context.WithTimeout(
 					context.WithoutCancel(ctx), 30*time.Second)
 				defer cancel()
@@ -332,7 +328,7 @@ func escalateCIFailure(
 				} else {
 					m.IncCIEscalations(escalAction)
 				}
-			}()
+			})
 		}
 	}
 

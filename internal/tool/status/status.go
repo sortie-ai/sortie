@@ -125,10 +125,7 @@ func (t *StatusTool) Execute(_ context.Context, _ json.RawMessage) (json.RawMess
 		return toolresult.Failure("state_malformed", "state file has invalid started_at: "+err.Error())
 	}
 
-	turnsRemaining := sf.MaxTurns - sf.TurnNumber
-	if turnsRemaining < 0 {
-		turnsRemaining = 0
-	}
+	turnsRemaining := max(sf.MaxTurns-sf.TurnNumber, 0)
 
 	durationSeconds := math.Round(time.Since(startedAt).Seconds()*1000) / 1000
 

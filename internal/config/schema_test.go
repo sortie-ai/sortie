@@ -1,6 +1,7 @@
 package config
 
 import (
+	"slices"
 	"strings"
 	"testing"
 )
@@ -162,13 +163,7 @@ func TestDerivePassThroughKindsFromRaw(t *testing.T) {
 				return
 			}
 			for _, want := range tt.wantIn {
-				found := false
-				for _, k := range got {
-					if k == want {
-						found = true
-						break
-					}
-				}
+				found := slices.Contains(got, want)
 				if !found {
 					t.Errorf("derivePassThroughKindsFromRaw() = %v, want to contain %q", got, want)
 				}

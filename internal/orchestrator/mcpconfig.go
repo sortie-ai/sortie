@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -70,9 +71,7 @@ func GenerateMCPConfig(params MCPConfigParams) (string, error) {
 	// variables first (lower precedence), then per-session variables
 	// (higher precedence, always win).
 	env := make(map[string]string, len(params.ProcessEnv)+6)
-	for k, v := range params.ProcessEnv {
-		env[k] = v
-	}
+	maps.Copy(env, params.ProcessEnv)
 	env["SORTIE_ISSUE_ID"] = params.IssueID
 	env["SORTIE_ISSUE_IDENTIFIER"] = params.Identifier
 	env["SORTIE_WORKSPACE"] = params.WorkspacePath

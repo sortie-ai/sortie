@@ -271,10 +271,7 @@ func ScheduleRetry(state *State, params ScheduleRetryParams, onFire func(issueID
 
 	CancelRetry(state, params.IssueID)
 
-	delayMS := params.DelayMS
-	if delayMS < 0 {
-		delayMS = 0
-	}
+	delayMS := max(params.DelayMS, 0)
 
 	dueAtMS := time.Now().UnixMilli() + delayMS
 
@@ -349,9 +346,7 @@ func DispatchIssue(ctx context.Context, state *State, issue domain.Issue, attemp
 
 	CancelRetry(state, issue.ID)
 
-	state.WorkerWg.Add(1)
-	go func() {
-		defer state.WorkerWg.Done()
+	state.WorkerWg.Go(func() {
 		workerFn(workerCtx, issue, attemptCopy)
-	}()
+	})
 }

@@ -52,8 +52,8 @@ var knownSortieMetrics = []string{
 // registered family name sortie_worker_duration_seconds.
 func stripHistogramSuffix(name string) string {
 	for _, sfx := range []string{"_bucket", "_sum", "_count"} {
-		if strings.HasSuffix(name, sfx) {
-			return strings.TrimSuffix(name, sfx)
+		if before, ok := strings.CutSuffix(name, sfx); ok {
+			return before
 		}
 	}
 	return name

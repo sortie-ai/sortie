@@ -291,7 +291,7 @@ func TestRunPortFlagLogged(t *testing.T) {
 }
 
 func quickStartWorkflow(issuesPath, workspaceRoot string) []byte {
-	return []byte(fmt.Sprintf(`---
+	return fmt.Appendf(nil, `---
 tracker:
   kind: file
   project: DEMO
@@ -318,7 +318,7 @@ Fix the following issue.
 **{{ .issue.identifier }}**: {{ .issue.title }}
 
 {{ .issue.description }}
-`, issuesPath, workspaceRoot))
+`, issuesPath, workspaceRoot)
 }
 
 // quickStartIssues returns issues.json content matching the
@@ -569,8 +569,8 @@ func TestRunServerShutdownError(t *testing.T) {
 	deadline := time.Now().Add(startWait)
 	for time.Now().Before(deadline) {
 		if log := stderr.String(); strings.Contains(log, "http server listening") {
-			if i := strings.Index(log, "addr="); i >= 0 {
-				rest := log[i+5:]
+			if _, after, ok := strings.Cut(log, "addr="); ok {
+				rest := after
 				if end := strings.IndexAny(rest, " \t\n\r"); end >= 0 {
 					addr = rest[:end]
 				} else {
@@ -667,7 +667,7 @@ func TestRunReadOnlyWorkflowDir(t *testing.T) {
 }
 
 func minimalWorkflowWithLogLevel(level string) []byte {
-	return []byte(fmt.Sprintf(`---
+	return fmt.Appendf(nil, `---
 polling:
   interval_ms: 30000
 tracker:
@@ -686,7 +686,7 @@ logging:
   level: %s
 ---
 Do {{ .issue.title }}.
-`, level))
+`, level)
 }
 
 // writeWorkflowFileWithContent writes the given content as WORKFLOW.md
@@ -994,7 +994,7 @@ func TestRunInvalidHost(t *testing.T) {
 }
 
 func minimalWorkflowWithLogFormat(format string) []byte {
-	return []byte(fmt.Sprintf(`---
+	return fmt.Appendf(nil, `---
 polling:
   interval_ms: 30000
 tracker:
@@ -1013,7 +1013,7 @@ logging:
   format: %s
 ---
 Do {{ .issue.title }}.
-`, format))
+`, format)
 }
 
 func TestRunLogFormatJSON(t *testing.T) {
@@ -1029,7 +1029,7 @@ func TestRunLogFormatJSON(t *testing.T) {
 	}
 
 	foundStarting := false
-	for _, line := range strings.Split(stderr.String(), "\n") {
+	for line := range strings.SplitSeq(stderr.String(), "\n") {
 		if line == "" {
 			continue
 		}
@@ -1064,7 +1064,7 @@ func TestRunLogFormatText(t *testing.T) {
 	if !strings.Contains(stderr.String(), "level=INFO") {
 		t.Errorf("stderr = %q, want to contain %q", stderr.String(), "level=INFO")
 	}
-	for _, line := range strings.Split(stderr.String(), "\n") {
+	for line := range strings.SplitSeq(stderr.String(), "\n") {
 		if line != "" {
 			if strings.HasPrefix(line, "{") {
 				t.Errorf("first non-empty stderr line %q starts with '{', expected text format", line)
@@ -1089,7 +1089,7 @@ func TestRunLogFormatDefault(t *testing.T) {
 	if !strings.Contains(stderr.String(), "level=INFO") {
 		t.Errorf("stderr = %q, want to contain %q", stderr.String(), "level=INFO")
 	}
-	for _, line := range strings.Split(stderr.String(), "\n") {
+	for line := range strings.SplitSeq(stderr.String(), "\n") {
 		if line != "" {
 			if strings.HasPrefix(line, "{") {
 				t.Errorf("first non-empty stderr line %q starts with '{', want text format by default", line)
@@ -1137,7 +1137,7 @@ func TestRunLogFormatCaseInsensitive(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit code = %d, want 0; stderr: %s", code, stderr.String())
 	}
-	for _, line := range strings.Split(stderr.String(), "\n") {
+	for line := range strings.SplitSeq(stderr.String(), "\n") {
 		if line == "" {
 			continue
 		}
@@ -1162,7 +1162,7 @@ func TestRunLogFormatFromExtension(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("exit code = %d, want 0; stderr: %s", code, stderr.String())
 	}
-	for _, line := range strings.Split(stderr.String(), "\n") {
+	for line := range strings.SplitSeq(stderr.String(), "\n") {
 		if line == "" {
 			continue
 		}
@@ -1191,7 +1191,7 @@ func TestRunLogFormatFlagOverridesExtension(t *testing.T) {
 	if !strings.Contains(stderr.String(), "level=INFO") {
 		t.Errorf("stderr = %q, want to contain %q (flag wins over extension)", stderr.String(), "level=INFO")
 	}
-	for _, line := range strings.Split(stderr.String(), "\n") {
+	for line := range strings.SplitSeq(stderr.String(), "\n") {
 		if line != "" {
 			if strings.HasPrefix(line, "{") {
 				t.Errorf("first non-empty stderr line %q starts with '{', want text format (flag wins)", line)
@@ -1327,7 +1327,7 @@ func TestRunLongHelp(t *testing.T) {
 // reactions.auto_merge but an empty provider, so the auto-merge feature is
 // disabled and no SCM adapter initialization is attempted.
 func autoMergeWorkflowNoProvider(issuesPath, workspaceRoot string) []byte {
-	return []byte(fmt.Sprintf(`---
+	return fmt.Appendf(nil, `---
 tracker:
   kind: file
   project: DEMO
@@ -1354,13 +1354,13 @@ reactions:
 ---
 
 Fix issue {{ .issue.identifier }}.
-`, issuesPath, workspaceRoot))
+`, issuesPath, workspaceRoot)
 }
 
 // autoMergeWorkflowUnknownProvider returns a WORKFLOW.md with an unknown SCM
 // provider, which should cause startup to fail with exit code 1.
 func autoMergeWorkflowUnknownProvider(issuesPath, workspaceRoot string) []byte {
-	return []byte(fmt.Sprintf(`---
+	return fmt.Appendf(nil, `---
 tracker:
   kind: file
   project: DEMO
@@ -1387,14 +1387,14 @@ reactions:
 ---
 
 Fix issue {{ .issue.identifier }}.
-`, issuesPath, workspaceRoot))
+`, issuesPath, workspaceRoot)
 }
 
 // autoMergeWorkflowMismatchedProviders returns a WORKFLOW.md where
 // review_comments and auto_merge use different SCM providers, which should
 // cause startup to fail with exit code 1.
 func autoMergeWorkflowMismatchedProviders(issuesPath, workspaceRoot string) []byte {
-	return []byte(fmt.Sprintf(`---
+	return fmt.Appendf(nil, `---
 tracker:
   kind: file
   project: DEMO
@@ -1423,7 +1423,7 @@ reactions:
 ---
 
 Fix issue {{ .issue.identifier }}.
-`, issuesPath, workspaceRoot))
+`, issuesPath, workspaceRoot)
 }
 
 // TestRunAutoMerge_EmptyProvider verifies that when reactions.auto_merge.provider

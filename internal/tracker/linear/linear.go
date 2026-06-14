@@ -17,6 +17,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"strconv"
 	"strings"
 
@@ -267,9 +268,7 @@ func buildFetchFilter(teamKey string, states []string, operatorFilter map[string
 		"team":  map[string]any{"key": map[string]any{"eq": teamKey}},
 		"state": map[string]any{"name": map[string]any{"in": states}},
 	}
-	for key, value := range operatorFilter {
-		filter[key] = value
-	}
+	maps.Copy(filter, operatorFilter)
 	return filter
 }
 

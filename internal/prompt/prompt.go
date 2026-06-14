@@ -9,7 +9,9 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"text/template"
@@ -129,12 +131,7 @@ var continuationKeys = []string{"ci_failure", "review_comments"}
 // isContinuationKey reports whether key is a registered continuation
 // template variable name.
 func isContinuationKey(key string) bool {
-	for _, k := range continuationKeys {
-		if k == key {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(continuationKeys, key)
 }
 
 // WithContinuationContext returns a [RenderOption] that merges each
@@ -149,9 +146,7 @@ func WithContinuationContext(data map[string]any) RenderOption {
 		}
 	}
 	return func(m map[string]any) {
-		for k, v := range data {
-			m[k] = v
-		}
+		maps.Copy(m, data)
 	}
 }
 

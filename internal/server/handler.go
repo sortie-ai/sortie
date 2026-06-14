@@ -471,10 +471,7 @@ func (s *Server) handleLivez(w http.ResponseWriter, _ *http.Request) {
 func (s *Server) handleReadyz(w http.ResponseWriter, r *http.Request) {
 	var uptime float64
 	if !s.startedAt.IsZero() {
-		d := time.Since(s.startedAt)
-		if d < 0 {
-			d = 0
-		}
+		d := max(time.Since(s.startedAt), 0)
 		uptime = d.Seconds()
 	}
 

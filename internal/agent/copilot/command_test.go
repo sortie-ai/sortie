@@ -1,6 +1,7 @@
 package copilot
 
 import (
+	"slices"
 	"strings"
 	"testing"
 )
@@ -20,10 +21,8 @@ func assertHasArgPair(t *testing.T, args []string, flag, value string) {
 // assertHasFlag fails if flag does not appear anywhere in args.
 func assertHasFlag(t *testing.T, args []string, flag string) {
 	t.Helper()
-	for _, a := range args {
-		if a == flag {
-			return
-		}
+	if slices.Contains(args, flag) {
+		return
 	}
 	t.Errorf("buildArgs() missing flag %q in [%s]", flag, strings.Join(args, " "))
 }
@@ -31,11 +30,9 @@ func assertHasFlag(t *testing.T, args []string, flag string) {
 // assertNoFlag fails if flag appears anywhere in args.
 func assertNoFlag(t *testing.T, args []string, flag string) {
 	t.Helper()
-	for _, a := range args {
-		if a == flag {
-			t.Errorf("buildArgs() unexpectedly contains flag %q in [%s]", flag, strings.Join(args, " "))
-			return
-		}
+	if slices.Contains(args, flag) {
+		t.Errorf("buildArgs() unexpectedly contains flag %q in [%s]", flag, strings.Join(args, " "))
+		return
 	}
 }
 

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"maps"
 	"os"
 	"time"
 
@@ -437,9 +438,7 @@ func buildSandboxPolicy(state *sessionState, pt passthroughConfig) map[string]an
 	}
 
 	if pt.TurnSandboxPolicy != nil {
-		for k, v := range pt.TurnSandboxPolicy {
-			policy[k] = v
-		}
+		maps.Copy(policy, pt.TurnSandboxPolicy)
 	}
 	return policy
 }

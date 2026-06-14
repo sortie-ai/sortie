@@ -90,10 +90,7 @@ func reconcileReviewComments(state *State, params ReconcileParams, log *slog.Log
 		comments, err := params.SCMAdapter.FetchPendingReviews(ctx, reviewData.PRNumber, reviewData.Owner, reviewData.Repo)
 		if err != nil {
 			pending.PendingAttempts++
-			delay := computeReviewPendingDelay(pending.PendingAttempts)
-			if delay < pollInterval {
-				delay = pollInterval
-			}
+			delay := max(computeReviewPendingDelay(pending.PendingAttempts), pollInterval)
 			pending.PendingRetryAt = now.Add(delay)
 			state.PendingReactions[key] = pending
 			entryLog.Warn("review fetch failed, retrying with backoff",
@@ -245,9 +242,7 @@ func escalateReviewFailure(
 			escalLog := log
 			escalAction := params.ReviewConfig.Escalation
 
-			state.TrackerOpsWg.Add(1)
-			go func() {
-				defer state.TrackerOpsWg.Done()
+			state.TrackerOpsWg.Go(func() {
 				dctx, cancel := context.WithTimeout(
 					context.WithoutCancel(ctx), 30*time.Second)
 				defer cancel()
@@ -260,7 +255,7 @@ func escalateReviewFailure(
 				} else {
 					m.IncReviewEscalations(escalAction)
 				}
-			}()
+			})
 		} else {
 			metrics.IncReviewEscalations(params.ReviewConfig.Escalation)
 		}
@@ -278,9 +273,7 @@ func escalateReviewFailure(
 				escalAction = "comment"
 			}
 
-			state.TrackerOpsWg.Add(1)
-			go func() {
-				defer state.TrackerOpsWg.Done()
+			state.TrackerOpsWg.Go(func() {
 				dctx, cancel := context.WithTimeout(
 					context.WithoutCancel(ctx), 30*time.Second)
 				defer cancel()
@@ -293,7 +286,7 @@ func escalateReviewFailure(
 				} else {
 					m.IncReviewEscalations(escalAction)
 				}
-			}()
+			})
 		} else {
 			action := params.ReviewConfig.Escalation
 			if action == "" {
