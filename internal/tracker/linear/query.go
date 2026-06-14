@@ -120,3 +120,74 @@ const queryTeamStates = `query TeamStates($teamKey: String!) {
     }
   }
 }`
+
+// queryResolveStateID resolves a workflow-state name to its UUID within the
+// team that owns the issue. The eqIgnoreCase filter matches the name
+// case-insensitively, so the caller's target state is sent verbatim.
+const queryResolveStateID = `query ResolveStateID($issueId: String!, $stateName: String!) {
+  issue(id: $issueId) {
+    id
+    team {
+      states(filter: { name: { eqIgnoreCase: $stateName } }, first: 1) {
+        nodes { id name }
+      }
+    }
+  }
+}`
+
+// queryResolveIssueTeam resolves the UUID of the team that owns an issue. It is
+// the team source for the team-scoped label create, which never runs the
+// state-resolve query.
+const queryResolveIssueTeam = `query ResolveIssueTeam($issueId: String!) {
+  issue(id: $issueId) {
+    id
+    team { id }
+  }
+}`
+
+// queryIssueUpdateState moves an issue to a workflow state by UUID. The
+// IssueUpdateState operation name distinguishes it from the label-attach
+// issueUpdate mutation under a query-substring match.
+const queryIssueUpdateState = `mutation IssueUpdateState($id: String!, $stateId: String!) {
+  issueUpdate(id: $id, input: { stateId: $stateId }) {
+    success
+    issue { id state { name } }
+  }
+}`
+
+// queryCommentCreate posts a markdown comment body verbatim, with no ADF-style
+// wrapping.
+const queryCommentCreate = `mutation CommentCreate($issueId: String!, $body: String!) {
+  commentCreate(input: { issueId: $issueId, body: $body }) {
+    success
+    comment { id }
+  }
+}`
+
+// queryResolveLabel resolves a label name to its UUID, case-insensitively. Each
+// node carries its team so the resolver can prefer a team-scoped label over a
+// workspace-scoped one.
+const queryResolveLabel = `query ResolveLabel($name: String!) {
+  issueLabels(filter: { name: { eqIgnoreCase: $name } }, first: 50) {
+    nodes { id name team { id } }
+  }
+}`
+
+// queryLabelCreate creates a team-scoped label. It always passes teamId because
+// workspace-scoped label management is more likely to require elevated access.
+const queryLabelCreate = `mutation LabelCreate($teamId: String!, $name: String!) {
+  issueLabelCreate(input: { teamId: $teamId, name: $name }) {
+    success
+    issueLabel { id }
+  }
+}`
+
+// queryIssueAddLabel attaches labels through addedLabelIds (append), so the
+// issue's existing labels are preserved and no read-before-write of the label
+// set is required. The IssueAddLabel operation name distinguishes it from the
+// transition issueUpdate mutation under a query-substring match.
+const queryIssueAddLabel = `mutation IssueAddLabel($id: String!, $labelIds: [String!]!) {
+  issueUpdate(id: $id, input: { addedLabelIds: $labelIds }) {
+    success
+  }
+}`

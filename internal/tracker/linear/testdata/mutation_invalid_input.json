@@ -1,0 +1,17 @@
+{
+  "errors": [
+    {
+      "message": "Argument Validation Error",
+      "path": ["issueUpdate"],
+      "locations": [{ "line": 1, "column": 1 }],
+      "extensions": {
+        "type": "invalid input",
+        "code": "INVALID_INPUT",
+        "statusCode": 400,
+        "userError": true,
+        "userPresentableMessage": "The state you supplied is not valid for this issue."
+      }
+    }
+  ],
+  "data": null
+}

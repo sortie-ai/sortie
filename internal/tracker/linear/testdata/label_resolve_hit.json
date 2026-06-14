@@ -1,0 +1,9 @@
+{
+  "data": {
+    "issueLabels": {
+      "nodes": [
+        { "id": "label-team-needs-human", "name": "needs-human", "team": { "id": "SOR" } }
+      ]
+    }
+  }
+}

@@ -14,6 +14,7 @@ package linear
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strconv"
@@ -413,31 +414,263 @@ func (a *LinearAdapter) fetchStateBatch(ctx context.Context, query string, varia
 	return resp.Data.Issues.Nodes, nil
 }
 
-// TransitionIssue is a compile-satisfying stub for the read-only adapter. The
-// write path is implemented separately; this returns a typed error rather than
-// silently succeeding so a handoff transition is never falsely reported.
-func (a *LinearAdapter) TransitionIssue(_ context.Context, _, _ string) error {
-	return writePathNotImplemented("TransitionIssue")
-}
+// mutationDecoder extracts the errors array and the payload success boolean
+// from a mutation response body, returning a payload error only on JSON
+// unmarshal failure. It leaves the result policy to [runMutation].
+type mutationDecoder func(body []byte) (errs []graphQLError, success bool, err error)
 
-// CommentIssue is a compile-satisfying stub for the read-only adapter. See
-// [LinearAdapter.TransitionIssue] for the stub rationale.
-func (a *LinearAdapter) CommentIssue(_ context.Context, _, _ string) error {
-	return writePathNotImplemented("CommentIssue")
-}
-
-// AddLabel is a compile-satisfying stub for the read-only adapter. See
-// [LinearAdapter.TransitionIssue] for the stub rationale.
-func (a *LinearAdapter) AddLabel(_ context.Context, _, _ string) error {
-	return writePathNotImplemented("AddLabel")
-}
-
-// writePathNotImplemented builds the typed error returned by the write stubs.
-func writePathNotImplemented(operation string) error {
-	return &domain.TrackerError{
-		Kind:    domain.ErrTrackerPayload,
-		Message: fmt.Sprintf("linear write path not implemented: %s", operation),
+// runMutation submits a mutation and applies the per-mutation result policy. A
+// non-empty errors array is a failure regardless of the payload success value;
+// an empty errors array with success false maps to [domain.ErrTrackerAPI]. It
+// reuses the read-path transport, rate-limit recorder, and classifier, and does
+// not record metrics, so a public method that wraps it in
+// [trackermetrics.Track] emits one sample per logical write.
+func runMutation(ctx context.Context, client graphQLClient, log *slog.Logger, query string, variables map[string]any, decode mutationDecoder) error {
+	body, headers, err := client.Execute(ctx, query, variables)
+	if err != nil {
+		return err
 	}
+	recordRateLimit(headers, log)
+
+	errs, success, err := decode(body)
+	if err != nil {
+		return err
+	}
+	if classified := classifyGraphQLErrors(errs); classified != nil {
+		return classified
+	}
+	if !success {
+		return &domain.TrackerError{
+			Kind:    domain.ErrTrackerAPI,
+			Message: "linear graphql: mutation returned success: false",
+		}
+	}
+	return nil
+}
+
+// decodeIssueUpdateSuccess decodes an issueUpdate mutation response. It is
+// shared by the transition mutation and the label-attach mutation because both
+// return IssuePayload.success.
+func decodeIssueUpdateSuccess(body []byte) ([]graphQLError, bool, error) {
+	var resp graphQLResponse[issueUpdateData]
+	if err := unmarshal(body, &resp); err != nil {
+		return nil, false, err
+	}
+	return resp.Errors, resp.Data.IssueUpdate.Success, nil
+}
+
+// TransitionIssue moves an issue to the workflow state named targetState. It
+// resolves the state name to a team-scoped UUID with a case-insensitive filter,
+// then applies it; issueID and targetState are passed verbatim.
+//
+// A missing issue returns [domain.ErrTrackerNotFound]; a name that matches no
+// workflow state in the issue's team returns [domain.ErrTrackerPayload].
+func (a *LinearAdapter) TransitionIssue(ctx context.Context, issueID, targetState string) error {
+	return trackermetrics.Track(a.metrics, "transition", func() error {
+		body, headers, execErr := a.client.Execute(ctx, queryResolveStateID, map[string]any{
+			"issueId":   issueID,
+			"stateName": targetState,
+		})
+		if execErr != nil {
+			return execErr
+		}
+		recordRateLimit(headers, a.log)
+
+		var resp graphQLResponse[stateResolveData]
+		if err := unmarshal(body, &resp); err != nil {
+			return err
+		}
+		if classified := classifyGraphQLErrors(resp.Errors); classified != nil {
+			return classified
+		}
+		if resp.Data.Issue == nil {
+			return &domain.TrackerError{
+				Kind:    domain.ErrTrackerNotFound,
+				Message: fmt.Sprintf("issue not found: %s", issueID),
+			}
+		}
+		nodes := resp.Data.Issue.Team.States.Nodes
+		if len(nodes) == 0 {
+			return &domain.TrackerError{
+				Kind:    domain.ErrTrackerPayload,
+				Message: fmt.Sprintf("no workflow state named %q in the team of issue %s", targetState, issueID),
+			}
+		}
+
+		return runMutation(ctx, a.client, a.log, queryIssueUpdateState, map[string]any{
+			"id":      issueID,
+			"stateId": nodes[0].ID,
+		}, decodeIssueUpdateSuccess)
+	})
+}
+
+// CommentIssue posts text as a markdown comment on the issue. The body is sent
+// verbatim with no wrapping or escaping; issueID is passed verbatim.
+//
+// The method performs no internal retry because commentCreate is not
+// idempotent and the orchestrator owns retry policy.
+func (a *LinearAdapter) CommentIssue(ctx context.Context, issueID, text string) error {
+	return trackermetrics.Track(a.metrics, "comment", func() error {
+		return runMutation(ctx, a.client, a.log, queryCommentCreate, map[string]any{
+			"issueId": issueID,
+			"body":    text,
+		}, decodeCommentCreateSuccess)
+	})
+}
+
+// AddLabel attaches the named label to the issue, creating the label
+// team-scoped when it does not yet exist. The label is appended through
+// addedLabelIds, so the issue's other labels are preserved; label and issueID
+// are passed verbatim.
+//
+// A label-create forbidden for the key returns [domain.ErrTrackerAuth]. On any
+// payload-class create error the method re-resolves once, using a label that a
+// concurrent create produced; only a re-resolve that still finds nothing
+// surfaces the original create error.
+func (a *LinearAdapter) AddLabel(ctx context.Context, issueID, label string) error {
+	return trackermetrics.Track(a.metrics, "add_label", func() error {
+		labelID, found, err := a.resolveLabelID(ctx, label)
+		if err != nil {
+			return err
+		}
+
+		if !found {
+			teamID, teamErr := a.resolveTeamID(ctx, issueID)
+			if teamErr != nil {
+				return teamErr
+			}
+
+			created, createErr := a.createLabel(ctx, teamID, label)
+			switch {
+			case createErr == nil:
+				labelID = created
+			case isPayloadError(createErr):
+				labelID, found, err = a.resolveLabelID(ctx, label)
+				if err != nil {
+					return err
+				}
+				if !found {
+					return createErr
+				}
+			default:
+				return createErr
+			}
+		}
+
+		return runMutation(ctx, a.client, a.log, queryIssueAddLabel, map[string]any{
+			"id":       issueID,
+			"labelIds": []string{labelID},
+		}, decodeIssueUpdateSuccess)
+	})
+}
+
+// resolveLabelID resolves a label name to its UUID, preferring a label scoped
+// to the configured team over a workspace-scoped label. It reports found false
+// with a nil error when no label matches. The name is matched case-insensitively
+// and sent verbatim.
+func (a *LinearAdapter) resolveLabelID(ctx context.Context, name string) (string, bool, error) {
+	body, headers, err := a.client.Execute(ctx, queryResolveLabel, map[string]any{"name": name})
+	if err != nil {
+		return "", false, err
+	}
+	recordRateLimit(headers, a.log)
+
+	var resp graphQLResponse[labelResolveData]
+	if err := unmarshal(body, &resp); err != nil {
+		return "", false, err
+	}
+	if classified := classifyGraphQLErrors(resp.Errors); classified != nil {
+		return "", false, classified
+	}
+
+	var workspaceID string
+	var hasWorkspace bool
+	for _, node := range resp.Data.IssueLabels.Nodes {
+		if node.Team != nil {
+			if node.Team.ID == a.project {
+				return node.ID, true, nil
+			}
+			continue
+		}
+		if !hasWorkspace {
+			workspaceID = node.ID
+			hasWorkspace = true
+		}
+	}
+	if hasWorkspace {
+		return workspaceID, true, nil
+	}
+	return "", false, nil
+}
+
+// resolveTeamID resolves the UUID of the team that owns the issue. A missing
+// issue returns [domain.ErrTrackerNotFound]. issueID is passed verbatim.
+func (a *LinearAdapter) resolveTeamID(ctx context.Context, issueID string) (string, error) {
+	body, headers, err := a.client.Execute(ctx, queryResolveIssueTeam, map[string]any{"issueId": issueID})
+	if err != nil {
+		return "", err
+	}
+	recordRateLimit(headers, a.log)
+
+	var resp graphQLResponse[teamResolveData]
+	if err := unmarshal(body, &resp); err != nil {
+		return "", err
+	}
+	if classified := classifyGraphQLErrors(resp.Errors); classified != nil {
+		return "", classified
+	}
+	if resp.Data.Issue == nil {
+		return "", &domain.TrackerError{
+			Kind:    domain.ErrTrackerNotFound,
+			Message: fmt.Sprintf("issue not found: %s", issueID),
+		}
+	}
+	return resp.Data.Issue.Team.ID, nil
+}
+
+// createLabel creates a team-scoped label and returns its UUID. It always
+// passes teamId because workspace-scoped label management is more likely to
+// require elevated access. The name is sent verbatim. A forbidden create
+// surfaces as [domain.ErrTrackerAuth] through the shared classifier.
+func (a *LinearAdapter) createLabel(ctx context.Context, teamID, name string) (string, error) {
+	var labelID string
+	decode := func(body []byte) ([]graphQLError, bool, error) {
+		var resp graphQLResponse[labelCreateData]
+		if err := unmarshal(body, &resp); err != nil {
+			return nil, false, err
+		}
+		if resp.Data.IssueLabelCreate.IssueLabel != nil {
+			labelID = resp.Data.IssueLabelCreate.IssueLabel.ID
+		}
+		return resp.Errors, resp.Data.IssueLabelCreate.Success, nil
+	}
+
+	if err := runMutation(ctx, a.client, a.log, queryLabelCreate, map[string]any{
+		"teamId": teamID,
+		"name":   name,
+	}, decode); err != nil {
+		return "", err
+	}
+	return labelID, nil
+}
+
+// decodeCommentCreateSuccess decodes a commentCreate mutation response.
+func decodeCommentCreateSuccess(body []byte) ([]graphQLError, bool, error) {
+	var resp graphQLResponse[commentCreateData]
+	if err := unmarshal(body, &resp); err != nil {
+		return nil, false, err
+	}
+	return resp.Errors, resp.Data.CommentCreate.Success, nil
+}
+
+// isPayloadError reports whether err is a [*domain.TrackerError] of kind
+// [domain.ErrTrackerPayload].
+func isPayloadError(err error) bool {
+	var te *domain.TrackerError
+	if !errors.As(err, &te) {
+		return false
+	}
+	return te.Kind == domain.ErrTrackerPayload
 }
 
 // extractNumbers splits each identifier on the last hyphen and collects the

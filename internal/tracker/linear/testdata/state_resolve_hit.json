@@ -1,0 +1,12 @@
+{
+  "data": {
+    "issue": {
+      "id": "a7c4f8e2-1b9d-4e3a-8f2c-6d5e4a3b2c1f",
+      "team": {
+        "states": {
+          "nodes": [{ "id": "state-inreview", "name": "In Review" }]
+        }
+      }
+    }
+  }
+}

@@ -197,6 +197,77 @@ type teamStatesData struct {
 	} `json:"teams"`
 }
 
+// stateResolveData is the data payload for the transition state-resolution
+// query. A nil Issue distinguishes a missing issue from a present issue with no
+// matching state.
+type stateResolveData struct {
+	Issue *struct {
+		ID   string `json:"id"`
+		Team struct {
+			States struct {
+				Nodes []struct {
+					ID   string `json:"id"`
+					Name string `json:"name"`
+				} `json:"nodes"`
+			} `json:"states"`
+		} `json:"team"`
+	} `json:"issue"`
+}
+
+// teamResolveData is the data payload for the team-resolve query. A nil Issue
+// distinguishes a missing issue from a present issue.
+type teamResolveData struct {
+	Issue *struct {
+		ID   string `json:"id"`
+		Team struct {
+			ID string `json:"id"`
+		} `json:"team"`
+	} `json:"issue"`
+}
+
+// issueUpdateData is the data payload for both issueUpdate mutations, the
+// transition and the label attach. Only the success boolean drives correctness.
+type issueUpdateData struct {
+	IssueUpdate struct {
+		Success bool `json:"success"`
+	} `json:"issueUpdate"`
+}
+
+// commentCreateData is the data payload for the commentCreate mutation.
+type commentCreateData struct {
+	CommentCreate struct {
+		Success bool `json:"success"`
+		Comment *struct {
+			ID string `json:"id"`
+		} `json:"comment"`
+	} `json:"commentCreate"`
+}
+
+// labelResolveData is the data payload for the label-resolve query. A node's
+// Team is a pointer so a workspace-scoped label (team null) is distinguishable
+// from a team-scoped label.
+type labelResolveData struct {
+	IssueLabels struct {
+		Nodes []struct {
+			ID   string `json:"id"`
+			Name string `json:"name"`
+			Team *struct {
+				ID string `json:"id"`
+			} `json:"team"`
+		} `json:"nodes"`
+	} `json:"issueLabels"`
+}
+
+// labelCreateData is the data payload for the issueLabelCreate mutation.
+type labelCreateData struct {
+	IssueLabelCreate struct {
+		Success    bool `json:"success"`
+		IssueLabel *struct {
+			ID string `json:"id"`
+		} `json:"issueLabel"`
+	} `json:"issueLabelCreate"`
+}
+
 // normalizeIssue maps a [linearIssue] to a [domain.Issue].
 //
 // Labels are lowercased, priority 0 maps to nil while 1..4 map to a non-nil
