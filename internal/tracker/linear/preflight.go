@@ -35,14 +35,14 @@ var terminalStateTypes = map[string]struct{}{
 // A configured name whose category contradicts its list emits a WARN without
 // failing.
 func runPreflight(ctx context.Context, client graphQLClient, project string, active, terminal []string, handoff string, log *slog.Logger) (map[string]string, error) {
-	if err := withRetry(func() error {
+	if err := withRetry(ctx, func() error {
 		return checkViewer(ctx, client)
 	}); err != nil {
 		return nil, err
 	}
 
 	var states []teamState
-	if err := withRetry(func() error {
+	if err := withRetry(ctx, func() error {
 		var fetchErr error
 		states, fetchErr = fetchTeamStates(ctx, client, project)
 		return fetchErr
@@ -142,16 +142,35 @@ func fetchTeamStates(ctx context.Context, client graphQLClient, project string) 
 
 // withRetry runs fn, retrying transient tracker errors with the bounded
 // preflight backoff. Config errors return immediately without a retry.
-func withRetry(fn func() error) error {
+//
+// The backoff wait honors ctx: a cancellation during a backoff returns
+// ctx.Err() without waiting for the delay to elapse, matching the per-chunk
+// cancellation checks in the read paths.
+func withRetry(ctx context.Context, fn func() error) error {
 	err := fn()
 	for attempt := 0; err != nil && attempt < len(preflightBackoff); attempt++ {
 		if !isRetryable(err) {
 			return err
 		}
-		time.Sleep(preflightBackoff[attempt])
+		if waitErr := sleepContext(ctx, preflightBackoff[attempt]); waitErr != nil {
+			return waitErr
+		}
 		err = fn()
 	}
 	return err
+}
+
+// sleepContext blocks for d or until ctx is cancelled, whichever comes first.
+// It returns ctx.Err() on cancellation and nil once the full delay elapses.
+func sleepContext(ctx context.Context, d time.Duration) error {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 // isRetryable reports whether err is a tracker error whose kind is retryable.
