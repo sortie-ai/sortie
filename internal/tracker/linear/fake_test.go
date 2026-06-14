@@ -130,11 +130,20 @@ func seedPreflight(f *fakeGraphQLClient, t *testing.T) {
 }
 
 // newTestAdapter constructs a [LinearAdapter] through the offline seam with the
-// default team-SOR config and a nil logger, failing the test on a construction
-// error.
+// default team-SOR config, no operator filter, and a nil logger, failing the
+// test on a construction error.
 func newTestAdapter(t *testing.T, f *fakeGraphQLClient) *LinearAdapter {
 	t.Helper()
-	a, err := newAdapter(f, "SOR", defaultActiveStates, defaultTerminalStates, "In Review", nil)
+	return newTestAdapterWithFilter(t, f, nil)
+}
+
+// newTestAdapterWithFilter constructs a [LinearAdapter] through the offline seam
+// with the default team-SOR config carrying the supplied parsed query filter and
+// a nil logger, failing the test on a construction error. A nil queryFilter
+// reproduces the unset passthrough behavior.
+func newTestAdapterWithFilter(t *testing.T, f *fakeGraphQLClient, queryFilter map[string]any) *LinearAdapter {
+	t.Helper()
+	a, err := newAdapter(f, "SOR", defaultActiveStates, defaultTerminalStates, "In Review", queryFilter, nil)
 	if err != nil {
 		t.Fatalf("newAdapter: %v", err)
 	}

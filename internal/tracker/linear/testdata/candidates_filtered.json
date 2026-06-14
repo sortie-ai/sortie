@@ -1,0 +1,65 @@
+{
+  "data": {
+    "issues": {
+      "nodes": [
+        {
+          "id": "a7c4f8e2-1b9d-4e3a-8f2c-6d5e4a3b2c1f",
+          "identifier": "SOR-5",
+          "title": "Implement the read path",
+          "description": "First issue body in **markdown**.",
+          "priority": 2,
+          "branchName": "tasks/sor-5-implement-the-read-path",
+          "url": "https://linear.app/sortie-ai/issue/SOR-5/implement-the-read-path",
+          "createdAt": "2026-06-10T09:00:00.000Z",
+          "updatedAt": "2026-06-12T14:30:00.000Z",
+          "state": { "name": "Todo" },
+          "assignee": { "displayName": "Ada Lovelace", "name": "ada", "email": "ada@example.com" },
+          "parent": null,
+          "labels": {
+            "nodes": [{ "name": "Feature" }, { "name": "Backend" }],
+            "pageInfo": { "hasNextPage": false }
+          },
+          "inverseRelations": {
+            "nodes": [],
+            "pageInfo": { "hasNextPage": false }
+          }
+        },
+        {
+          "id": "c3e0f5b2-4d8a-4c9f-ae3b-2a7d6c5f4b3e",
+          "identifier": "SOR-7",
+          "title": "Blocked, urgent priority",
+          "description": "Blocked by SOR-5.",
+          "priority": 1,
+          "branchName": "tasks/sor-7-blocked",
+          "url": "https://linear.app/sortie-ai/issue/SOR-7/blocked",
+          "createdAt": "2026-06-11T10:00:00.000Z",
+          "updatedAt": "2026-06-12T11:00:00.000Z",
+          "state": { "name": "Backlog" },
+          "assignee": { "displayName": "", "name": "grace", "email": "grace@example.com" },
+          "parent": null,
+          "labels": {
+            "nodes": [{ "name": "Bug" }],
+            "pageInfo": { "hasNextPage": false }
+          },
+          "inverseRelations": {
+            "nodes": [
+              {
+                "type": "blocks",
+                "issue": {
+                  "id": "a7c4f8e2-1b9d-4e3a-8f2c-6d5e4a3b2c1f",
+                  "identifier": "SOR-5",
+                  "state": { "name": "Todo" }
+                }
+              }
+            ],
+            "pageInfo": { "hasNextPage": false }
+          }
+        }
+      ],
+      "pageInfo": {
+        "hasNextPage": false,
+        "endCursor": "eyJrZXkiOiJjM2UwZjViMi00ZDhhLTRjOWYtYWUzYi0yYTdkNmM1ZjRiM2UifQ=="
+      }
+    }
+  }
+}
