@@ -19,11 +19,18 @@ linters:
     - bodyclose
     - noctx
     - gosec
+    - modernize
   settings:
     sloglint:
       attr-only: true
       static-msg: true
       key-naming-case: snake
+    modernize:
+      disable:
+        # omitempty -> omitzero changes JSON marshaling on struct-typed fields.
+        - omitzero
+        # new(expr) rewrites leave //go:fix inline wrappers and mixed call sites.
+        - newexpr
   exclusions:
     rules:
       - path: _test\.go
