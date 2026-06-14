@@ -29,8 +29,9 @@ import (
 
 func init() {
 	registry.Trackers.RegisterWithMeta("linear", NewLinearAdapter, registry.TrackerMeta{
-		RequiresProject: true,
-		RequiresAPIKey:  true,
+		RequiresProject:       true,
+		RequiresAPIKey:        true,
+		ValidateTrackerConfig: validateConfig,
 	})
 }
 
