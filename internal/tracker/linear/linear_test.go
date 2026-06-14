@@ -254,6 +254,31 @@ func TestFetchIssueByID(t *testing.T) {
 		if issue.Identifier != "SOR-5" {
 			t.Errorf("Identifier = %q, want %q", issue.Identifier, "SOR-5")
 		}
+
+		continuation := f.callsFor("query IssueComments")
+		if len(continuation) != 1 {
+			t.Fatalf("continuation calls = %d, want 1", len(continuation))
+		}
+		if continuation[0].variables["after"] != "comment-0002" {
+			t.Errorf("continuation after = %v, want %q (inline endCursor, not page 1)", continuation[0].variables["after"], "comment-0002")
+		}
+	})
+
+	t.Run("inline page hasNextPage without end cursor is missing cursor", func(t *testing.T) {
+		t.Parallel()
+
+		f := newFakeClient()
+		seedPreflight(f, t)
+		f.queueBody("query IssueByID", loadFixture(t, "issue_missing_comment_cursor.json"))
+
+		adapter := newTestAdapter(t, f)
+
+		_, err := adapter.FetchIssueByID(context.Background(), "SOR-5")
+
+		assertTrackerErrorKind(t, err, domain.ErrTrackerMissingCursor)
+		if calls := f.callsFor("query IssueComments"); len(calls) != 0 {
+			t.Errorf("continuation calls = %d, want 0 (fail fast before pagination)", len(calls))
+		}
 	})
 
 	t.Run("passes id verbatim", func(t *testing.T) {

@@ -142,7 +142,7 @@ func TestNormalizePriority(t *testing.T) {
 			got := normalizePriority(tt.in)
 
 			if !reflect.DeepEqual(got, tt.want) {
-				t.Errorf("normalizePriority(%v) = %v, want %v", deref(tt.in), deref(tt.want), deref(tt.want))
+				t.Errorf("normalizePriority(%v) = %v, want %v", deref(tt.in), deref(got), deref(tt.want))
 			}
 		})
 	}

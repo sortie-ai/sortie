@@ -25,7 +25,11 @@ type pageDecoder[T any] func(body []byte) (items []T, info linearPageInfo, err e
 func paginate[T any](ctx context.Context, client graphQLClient, query string, variables map[string]any, decode pageDecoder[T], log *slog.Logger) ([]T, error) {
 	items := make([]T, 0)
 	pageCount := 0
-	after := ""
+
+	// A caller may seed variables["after"] to continue a connection past an
+	// inline first page (comment continuation). Preserve that cursor instead of
+	// resetting to the first page, which would re-fetch and duplicate it.
+	after, _ := variables["after"].(string)
 
 	for {
 		if after == "" {
