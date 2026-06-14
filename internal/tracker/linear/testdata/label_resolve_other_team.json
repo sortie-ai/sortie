@@ -1,0 +1,9 @@
+{
+  "data": {
+    "issueLabels": {
+      "nodes": [
+        { "id": "label-other-team-needs-human", "name": "needs-human", "team": { "id": "22222222-2222-2222-2222-222222222222", "key": "OPS" } }
+      ]
+    }
+  }
+}
