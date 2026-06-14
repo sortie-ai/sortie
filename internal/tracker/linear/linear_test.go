@@ -1,6 +1,7 @@
 package linear
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"reflect"
@@ -577,36 +578,6 @@ func TestFetchIssueStatesByIdentifiers(t *testing.T) {
 	})
 }
 
-func TestWriteStubs(t *testing.T) {
-	t.Parallel()
-
-	f := newFakeClient()
-	seedPreflight(f, t)
-	adapter := newTestAdapter(t, f)
-	callsBefore := len(f.calls)
-
-	tests := []struct {
-		name string
-		call func() error
-	}{
-		{"TransitionIssue", func() error { return adapter.TransitionIssue(context.Background(), "SOR-5", "Done") }},
-		{"CommentIssue", func() error { return adapter.CommentIssue(context.Background(), "SOR-5", "hello") }},
-		{"AddLabel", func() error { return adapter.AddLabel(context.Background(), "SOR-5", "needs-human") }},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := tt.call()
-
-			assertTrackerErrorKind(t, err, domain.ErrTrackerPayload)
-		})
-	}
-
-	if len(f.calls) != callsBefore {
-		t.Errorf("write stubs issued %d GraphQL calls, want 0", len(f.calls)-callsBefore)
-	}
-}
-
 func TestSetMetricsAcceptsNil(t *testing.T) {
 	t.Parallel()
 
@@ -619,6 +590,465 @@ func TestSetMetricsAcceptsNil(t *testing.T) {
 
 	if _, err := adapter.FetchCandidateIssues(context.Background()); err != nil {
 		t.Fatalf("FetchCandidateIssues with nil metrics: %v", err)
+	}
+}
+
+func TestRunMutation(t *testing.T) {
+	t.Parallel()
+
+	t.Run("success returns nil", func(t *testing.T) {
+		t.Parallel()
+
+		f := newFakeClient()
+		f.queueBody("IssueUpdateState", loadFixture(t, "issue_update_success.json"))
+
+		err := runMutation(context.Background(), f, newTextLogger(&bytes.Buffer{}),
+			queryIssueUpdateState, map[string]any{"id": "SOR-5", "stateId": "state-inreview"},
+			decodeIssueUpdateSuccess)
+		if err != nil {
+			t.Fatalf("runMutation success path = %v, want nil", err)
+		}
+	})
+
+	t.Run("non-empty errors array is a failure regardless of success", func(t *testing.T) {
+		t.Parallel()
+
+		f := newFakeClient()
+		f.queueBody("IssueUpdateState", loadFixture(t, "mutation_invalid_input.json"))
+
+		err := runMutation(context.Background(), f, newTextLogger(&bytes.Buffer{}),
+			queryIssueUpdateState, map[string]any{"id": "SOR-5", "stateId": "state-inreview"},
+			decodeIssueUpdateSuccess)
+
+		assertTrackerErrorKind(t, err, domain.ErrTrackerPayload)
+	})
+
+	t.Run("success false with no errors is API error", func(t *testing.T) {
+		t.Parallel()
+
+		f := newFakeClient()
+		f.queueBody("IssueUpdateState", loadFixture(t, "mutation_success_false.json"))
+
+		err := runMutation(context.Background(), f, newTextLogger(&bytes.Buffer{}),
+			queryIssueUpdateState, map[string]any{"id": "SOR-5", "stateId": "state-inreview"},
+			decodeIssueUpdateSuccess)
+
+		assertTrackerErrorKind(t, err, domain.ErrTrackerAPI)
+	})
+
+	t.Run("malformed body is a payload error", func(t *testing.T) {
+		t.Parallel()
+
+		f := newFakeClient()
+		f.queueBody("IssueUpdateState", []byte("{not json"))
+
+		err := runMutation(context.Background(), f, newTextLogger(&bytes.Buffer{}),
+			queryIssueUpdateState, map[string]any{"id": "SOR-5", "stateId": "state-inreview"},
+			decodeIssueUpdateSuccess)
+
+		assertTrackerErrorKind(t, err, domain.ErrTrackerPayload)
+	})
+
+	t.Run("transport error from Execute is returned unchanged", func(t *testing.T) {
+		t.Parallel()
+
+		transportErr := &domain.TrackerError{Kind: domain.ErrTrackerTransport, Message: "dial tcp: timeout"}
+		f := newFakeClient()
+		f.queueResponse("IssueUpdateState", fakeResponse{err: transportErr})
+
+		err := runMutation(context.Background(), f, newTextLogger(&bytes.Buffer{}),
+			queryIssueUpdateState, map[string]any{"id": "SOR-5", "stateId": "state-inreview"},
+			decodeIssueUpdateSuccess)
+
+		if !errors.Is(err, transportErr) {
+			t.Errorf("runMutation transport error = %v, want %v unchanged", err, transportErr)
+		}
+	})
+}
+
+func TestTransitionIssue(t *testing.T) {
+	t.Parallel()
+
+	t.Run("resolves target then applies the resolved state id", func(t *testing.T) {
+		t.Parallel()
+
+		f := newFakeClient()
+		seedPreflight(f, t)
+		f.queueBody("ResolveStateID", loadFixture(t, "state_resolve_hit.json"))
+		f.queueBody("IssueUpdateState", loadFixture(t, "issue_update_success.json"))
+
+		adapter := newTestAdapter(t, f)
+
+		if err := adapter.TransitionIssue(context.Background(), "SOR-5", "In Review"); err != nil {
+			t.Fatalf("TransitionIssue: %v", err)
+		}
+
+		resolves := f.callsFor("ResolveStateID")
+		if len(resolves) != 1 {
+			t.Fatalf("ResolveStateID call count = %d, want 1", len(resolves))
+		}
+		if got := resolves[0].variables["stateName"]; got != "In Review" {
+			t.Errorf("ResolveStateID stateName = %v, want %q (verbatim target)", got, "In Review")
+		}
+		if got := resolves[0].variables["issueId"]; got != "SOR-5" {
+			t.Errorf("ResolveStateID issueId = %v, want %q (verbatim)", got, "SOR-5")
+		}
+
+		mutations := f.callsFor("IssueUpdateState")
+		if len(mutations) != 1 {
+			t.Fatalf("IssueUpdateState call count = %d, want 1", len(mutations))
+		}
+		if got := mutations[0].variables["stateId"]; got != "state-inreview" {
+			t.Errorf("IssueUpdateState stateId = %v, want %q (resolved id)", got, "state-inreview")
+		}
+		if got := mutations[0].variables["id"]; got != "SOR-5" {
+			t.Errorf("IssueUpdateState id = %v, want %q (verbatim)", got, "SOR-5")
+		}
+	})
+
+	t.Run("handoff name resolves case-insensitively and returns nil", func(t *testing.T) {
+		t.Parallel()
+
+		f := newFakeClient()
+		seedPreflight(f, t)
+		f.queueBody("ResolveStateID", loadFixture(t, "state_resolve_hit.json"))
+		f.queueBody("IssueUpdateState", loadFixture(t, "issue_update_success.json"))
+
+		adapter := newTestAdapter(t, f)
+
+		if err := adapter.TransitionIssue(context.Background(), "SOR-5", "in review"); err != nil {
+			t.Fatalf("TransitionIssue handoff name: %v", err)
+		}
+
+		resolves := f.callsFor("ResolveStateID")
+		if len(resolves) != 1 {
+			t.Fatalf("ResolveStateID call count = %d, want 1", len(resolves))
+		}
+		if got := resolves[0].variables["stateName"]; got != "in review" {
+			t.Errorf("ResolveStateID stateName = %v, want %q (caller value sent verbatim, no casing cache)", got, "in review")
+		}
+	})
+
+	t.Run("empty states resolve is a payload error", func(t *testing.T) {
+		t.Parallel()
+
+		f := newFakeClient()
+		seedPreflight(f, t)
+		f.queueBody("ResolveStateID", loadFixture(t, "state_resolve_empty.json"))
+
+		adapter := newTestAdapter(t, f)
+
+		err := adapter.TransitionIssue(context.Background(), "SOR-5", "Nonexistent")
+
+		assertTrackerErrorKind(t, err, domain.ErrTrackerPayload)
+		if calls := f.callsFor("IssueUpdateState"); len(calls) != 0 {
+			t.Errorf("IssueUpdateState call count = %d, want 0 when no state resolves", len(calls))
+		}
+	})
+
+	t.Run("not found issue is not found", func(t *testing.T) {
+		t.Parallel()
+
+		f := newFakeClient()
+		seedPreflight(f, t)
+		f.queueBody("ResolveStateID", loadFixture(t, "issue_not_found.json"))
+
+		adapter := newTestAdapter(t, f)
+
+		err := adapter.TransitionIssue(context.Background(), "SOR-999", "In Review")
+
+		assertTrackerErrorKind(t, err, domain.ErrTrackerNotFound)
+		if calls := f.callsFor("IssueUpdateState"); len(calls) != 0 {
+			t.Errorf("IssueUpdateState call count = %d, want 0 for a missing issue", len(calls))
+		}
+	})
+}
+
+func TestCommentIssue(t *testing.T) {
+	t.Parallel()
+
+	t.Run("sends the markdown body verbatim and returns nil", func(t *testing.T) {
+		t.Parallel()
+
+		f := newFakeClient()
+		seedPreflight(f, t)
+		f.queueBody("CommentCreate", loadFixture(t, "comment_create_success.json"))
+
+		adapter := newTestAdapter(t, f)
+
+		body := "CI failed on `make test`.\n\n- step: build\n- see **logs** for details"
+		if err := adapter.CommentIssue(context.Background(), "SOR-5", body); err != nil {
+			t.Fatalf("CommentIssue: %v", err)
+		}
+
+		calls := f.callsFor("CommentCreate")
+		if len(calls) != 1 {
+			t.Fatalf("CommentCreate call count = %d, want 1", len(calls))
+		}
+		if got := calls[0].variables["body"]; got != body {
+			t.Errorf("CommentCreate body = %q, want %q (verbatim markdown, no ADF wrapping)", got, body)
+		}
+		if got := calls[0].variables["issueId"]; got != "SOR-5" {
+			t.Errorf("CommentCreate issueId = %v, want %q (verbatim)", got, "SOR-5")
+		}
+	})
+
+	t.Run("rejected create surfaces the classified error", func(t *testing.T) {
+		t.Parallel()
+
+		f := newFakeClient()
+		seedPreflight(f, t)
+		f.queueBody("CommentCreate", loadFixture(t, "mutation_auth_error.json"))
+
+		adapter := newTestAdapter(t, f)
+
+		err := adapter.CommentIssue(context.Background(), "SOR-5", "body")
+
+		assertTrackerErrorKind(t, err, domain.ErrTrackerAuth)
+	})
+}
+
+func TestAddLabel(t *testing.T) {
+	t.Parallel()
+
+	t.Run("existing label attaches without creating and never calls LabelCreate", func(t *testing.T) {
+		t.Parallel()
+
+		f := newFakeClient()
+		seedPreflight(f, t)
+		f.queueBody("ResolveLabel", loadFixture(t, "label_resolve_hit.json"))
+		f.queueBody("IssueAddLabel", loadFixture(t, "issue_add_label_success.json"))
+
+		adapter := newTestAdapter(t, f)
+
+		if err := adapter.AddLabel(context.Background(), "SOR-5", "needs-human"); err != nil {
+			t.Fatalf("AddLabel: %v", err)
+		}
+
+		if calls := f.callsFor("LabelCreate"); len(calls) != 0 {
+			t.Errorf("LabelCreate call count = %d, want 0 when the label already exists", len(calls))
+		}
+		if calls := f.callsFor("ResolveIssueTeam"); len(calls) != 0 {
+			t.Errorf("ResolveIssueTeam call count = %d, want 0 when the label already exists", len(calls))
+		}
+
+		attaches := f.callsFor("IssueAddLabel")
+		if len(attaches) != 1 {
+			t.Fatalf("IssueAddLabel call count = %d, want 1", len(attaches))
+		}
+		labelIDs, ok := attaches[0].variables["labelIds"].([]string)
+		if !ok {
+			t.Fatalf("IssueAddLabel labelIds type = %T, want []string", attaches[0].variables["labelIds"])
+		}
+		want := []string{"label-team-needs-human"}
+		if !reflect.DeepEqual(labelIDs, want) {
+			t.Errorf("IssueAddLabel addedLabelIds = %v, want %v (resolved id, append)", labelIDs, want)
+		}
+		if got := attaches[0].variables["id"]; got != "SOR-5" {
+			t.Errorf("IssueAddLabel id = %v, want %q (verbatim)", got, "SOR-5")
+		}
+	})
+
+	t.Run("prefers the team-scoped label over the workspace-scoped label", func(t *testing.T) {
+		t.Parallel()
+
+		f := newFakeClient()
+		seedPreflight(f, t)
+		f.queueBody("ResolveLabel", loadFixture(t, "label_resolve_team_preference.json"))
+		f.queueBody("IssueAddLabel", loadFixture(t, "issue_add_label_success.json"))
+
+		adapter := newTestAdapter(t, f)
+
+		if err := adapter.AddLabel(context.Background(), "SOR-5", "needs-human"); err != nil {
+			t.Fatalf("AddLabel: %v", err)
+		}
+
+		attaches := f.callsFor("IssueAddLabel")
+		if len(attaches) != 1 {
+			t.Fatalf("IssueAddLabel call count = %d, want 1", len(attaches))
+		}
+		labelIDs := attaches[0].variables["labelIds"].([]string)
+		want := []string{"label-team-needs-human"}
+		if !reflect.DeepEqual(labelIDs, want) {
+			t.Errorf("IssueAddLabel addedLabelIds = %v, want %v (team-scoped preferred over workspace)", labelIDs, want)
+		}
+	})
+
+	t.Run("falls back to the workspace-scoped label when no team-scoped label exists", func(t *testing.T) {
+		t.Parallel()
+
+		f := newFakeClient()
+		seedPreflight(f, t)
+		f.queueBody("ResolveLabel", loadFixture(t, "label_resolve_workspace_only.json"))
+		f.queueBody("IssueAddLabel", loadFixture(t, "issue_add_label_success.json"))
+
+		adapter := newTestAdapter(t, f)
+
+		if err := adapter.AddLabel(context.Background(), "SOR-5", "needs-human"); err != nil {
+			t.Fatalf("AddLabel: %v", err)
+		}
+
+		if calls := f.callsFor("LabelCreate"); len(calls) != 0 {
+			t.Errorf("LabelCreate call count = %d, want 0 when a workspace label exists", len(calls))
+		}
+		if calls := f.callsFor("ResolveIssueTeam"); len(calls) != 0 {
+			t.Errorf("ResolveIssueTeam call count = %d, want 0 when a workspace label exists", len(calls))
+		}
+
+		attaches := f.callsFor("IssueAddLabel")
+		if len(attaches) != 1 {
+			t.Fatalf("IssueAddLabel call count = %d, want 1", len(attaches))
+		}
+		labelIDs := attaches[0].variables["labelIds"].([]string)
+		want := []string{"label-workspace-needs-human"}
+		if !reflect.DeepEqual(labelIDs, want) {
+			t.Errorf("IssueAddLabel addedLabelIds = %v, want %v (workspace fallback)", labelIDs, want)
+		}
+	})
+
+	t.Run("missing label resolves team, creates, then attaches the created id", func(t *testing.T) {
+		t.Parallel()
+
+		f := newFakeClient()
+		seedPreflight(f, t)
+		f.queueBody("ResolveLabel", loadFixture(t, "label_resolve_miss.json"))
+		f.queueBody("ResolveIssueTeam", loadFixture(t, "team_resolve_hit.json"))
+		f.queueBody("LabelCreate", loadFixture(t, "label_create_success.json"))
+		f.queueBody("IssueAddLabel", loadFixture(t, "issue_add_label_success.json"))
+
+		adapter := newTestAdapter(t, f)
+
+		if err := adapter.AddLabel(context.Background(), "SOR-5", "needs-human"); err != nil {
+			t.Fatalf("AddLabel: %v", err)
+		}
+
+		creates := f.callsFor("LabelCreate")
+		if len(creates) != 1 {
+			t.Fatalf("LabelCreate call count = %d, want 1", len(creates))
+		}
+		if got := creates[0].variables["teamId"]; got != "team-uuid-sor" {
+			t.Errorf("LabelCreate teamId = %v, want %q (resolved team UUID)", got, "team-uuid-sor")
+		}
+		if got := creates[0].variables["name"]; got != "needs-human" {
+			t.Errorf("LabelCreate name = %v, want %q (verbatim)", got, "needs-human")
+		}
+
+		attaches := f.callsFor("IssueAddLabel")
+		if len(attaches) != 1 {
+			t.Fatalf("IssueAddLabel call count = %d, want 1", len(attaches))
+		}
+		labelIDs := attaches[0].variables["labelIds"].([]string)
+		want := []string{"label-created-needs-human"}
+		if !reflect.DeepEqual(labelIDs, want) {
+			t.Errorf("IssueAddLabel addedLabelIds = %v, want %v (created id)", labelIDs, want)
+		}
+	})
+
+	t.Run("concurrent create race re-resolves and attaches the re-resolved id", func(t *testing.T) {
+		t.Parallel()
+
+		f := newFakeClient()
+		seedPreflight(f, t)
+		f.queueBody("ResolveLabel", loadFixture(t, "label_resolve_miss.json"))
+		f.queueBody("ResolveLabel", loadFixture(t, "label_resolve_hit.json"))
+		f.queueBody("ResolveIssueTeam", loadFixture(t, "team_resolve_hit.json"))
+		f.queueBody("LabelCreate", loadFixture(t, "label_create_conflict.json"))
+		f.queueBody("IssueAddLabel", loadFixture(t, "issue_add_label_success.json"))
+
+		adapter := newTestAdapter(t, f)
+
+		if err := adapter.AddLabel(context.Background(), "SOR-5", "needs-human"); err != nil {
+			t.Fatalf("AddLabel race path = %v, want nil (re-resolve hides the spurious conflict)", err)
+		}
+
+		resolves := f.callsFor("ResolveLabel")
+		if len(resolves) != 2 {
+			t.Fatalf("ResolveLabel call count = %d, want 2 (initial miss then post-create re-resolve)", len(resolves))
+		}
+
+		attaches := f.callsFor("IssueAddLabel")
+		if len(attaches) != 1 {
+			t.Fatalf("IssueAddLabel call count = %d, want 1", len(attaches))
+		}
+		labelIDs := attaches[0].variables["labelIds"].([]string)
+		want := []string{"label-team-needs-human"}
+		if !reflect.DeepEqual(labelIDs, want) {
+			t.Errorf("IssueAddLabel addedLabelIds = %v, want %v (re-resolved id from the concurrent create)", labelIDs, want)
+		}
+	})
+
+	t.Run("payload create error that still resolves nothing surfaces the create error", func(t *testing.T) {
+		t.Parallel()
+
+		f := newFakeClient()
+		seedPreflight(f, t)
+		f.queueBody("ResolveLabel", loadFixture(t, "label_resolve_miss.json"))
+		f.queueBody("ResolveLabel", loadFixture(t, "label_resolve_miss.json"))
+		f.queueBody("ResolveIssueTeam", loadFixture(t, "team_resolve_hit.json"))
+		f.queueBody("LabelCreate", loadFixture(t, "label_create_conflict.json"))
+
+		adapter := newTestAdapter(t, f)
+
+		err := adapter.AddLabel(context.Background(), "SOR-5", "needs-human")
+
+		assertTrackerErrorKind(t, err, domain.ErrTrackerPayload)
+		if calls := f.callsFor("IssueAddLabel"); len(calls) != 0 {
+			t.Errorf("IssueAddLabel call count = %d, want 0 when the create error is genuine", len(calls))
+		}
+	})
+
+	t.Run("forbidden create is auth error and does not re-resolve", func(t *testing.T) {
+		t.Parallel()
+
+		f := newFakeClient()
+		seedPreflight(f, t)
+		f.queueBody("ResolveLabel", loadFixture(t, "label_resolve_miss.json"))
+		f.queueBody("ResolveIssueTeam", loadFixture(t, "team_resolve_hit.json"))
+		f.queueBody("LabelCreate", loadFixture(t, "mutation_forbidden.json"))
+
+		adapter := newTestAdapter(t, f)
+
+		err := adapter.AddLabel(context.Background(), "SOR-5", "needs-human")
+
+		assertTrackerErrorKind(t, err, domain.ErrTrackerAuth)
+
+		if calls := f.callsFor("ResolveLabel"); len(calls) != 1 {
+			t.Errorf("ResolveLabel call count = %d, want 1 (no re-resolve on a forbidden create)", len(calls))
+		}
+		if calls := f.callsFor("IssueAddLabel"); len(calls) != 0 {
+			t.Errorf("IssueAddLabel call count = %d, want 0 on a forbidden create", len(calls))
+		}
+	})
+}
+
+func TestWriteErrorMapping(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		fixture  string
+		wantKind domain.TrackerErrorKind
+	}{
+		{"authentication error maps to auth", "mutation_auth_error.json", domain.ErrTrackerAuth},
+		{"feature not accessible maps to auth", "mutation_forbidden.json", domain.ErrTrackerAuth},
+		{"invalid input maps to payload", "mutation_invalid_input.json", domain.ErrTrackerPayload},
+		{"ratelimited maps to API", "mutation_ratelimited.json", domain.ErrTrackerAPI},
+		{"success false with no errors maps to API", "mutation_success_false.json", domain.ErrTrackerAPI},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			f := newFakeClient()
+			f.queueBody("CommentCreate", loadFixture(t, tt.fixture))
+
+			err := runMutation(context.Background(), f, newTextLogger(&bytes.Buffer{}),
+				queryCommentCreate, map[string]any{"issueId": "SOR-5", "body": "x"},
+				decodeCommentCreateSuccess)
+
+			assertTrackerErrorKind(t, err, tt.wantKind)
+		})
 	}
 }
 

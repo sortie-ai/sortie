@@ -21,6 +21,18 @@ func skipUnlessIntegration(t *testing.T) {
 	}
 }
 
+// skipUnlessWriteIntegration skips the current test unless both the read
+// integration gate (SORTIE_LINEAR_TEST=1) and the write opt-in
+// (SORTIE_LINEAR_WRITE_TEST=1) are set, so a default run reads but never
+// mutates the live workspace.
+func skipUnlessWriteIntegration(t *testing.T) {
+	t.Helper()
+	skipUnlessIntegration(t)
+	if os.Getenv("SORTIE_LINEAR_WRITE_TEST") != "1" {
+		t.Skip("skipping Linear write integration test: set SORTIE_LINEAR_WRITE_TEST=1 to enable")
+	}
+}
+
 // requireEnv reads an environment variable and fails the test when empty.
 func requireEnv(t *testing.T, key string) string {
 	t.Helper()
@@ -249,5 +261,70 @@ func TestIntegration_FetchIssueComments(t *testing.T) {
 			t.Errorf("comments not in ascending createdAt order at index %d: %q before %q",
 				i, comments[i-1].CreatedAt, comments[i].CreatedAt)
 		}
+	}
+}
+
+// firstCandidate returns the first candidate issue or skips when the team has
+// none, so a write test has a real issue to act on without mutating ordering.
+func firstCandidate(t *testing.T, adapter domain.TrackerAdapter, ctx context.Context) domain.Issue {
+	t.Helper()
+	candidates, err := adapter.FetchCandidateIssues(ctx)
+	if err != nil {
+		t.Fatalf("FetchCandidateIssues: %v", err)
+	}
+	if len(candidates) == 0 {
+		t.Skip("no candidate issues in team; cannot run write test")
+	}
+	return candidates[0]
+}
+
+func TestIntegration_TransitionIssue(t *testing.T) {
+	skipUnlessWriteIntegration(t)
+
+	adapter := newIntegrationAdapter(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	issue := firstCandidate(t, adapter, ctx)
+
+	if err := adapter.TransitionIssue(ctx, issue.Identifier, issue.State); err != nil {
+		t.Fatalf("TransitionIssue(%s, %q): %v", issue.Identifier, issue.State, err)
+	}
+}
+
+func TestIntegration_CommentIssue(t *testing.T) {
+	skipUnlessWriteIntegration(t)
+
+	adapter := newIntegrationAdapter(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	issue := firstCandidate(t, adapter, ctx)
+
+	body := "sortie write-path integration test comment at " + time.Now().UTC().Format(time.RFC3339)
+	if err := adapter.CommentIssue(ctx, issue.Identifier, body); err != nil {
+		t.Fatalf("CommentIssue(%s): %v", issue.Identifier, err)
+	}
+}
+
+func TestIntegration_AddLabel(t *testing.T) {
+	skipUnlessWriteIntegration(t)
+
+	adapter := newIntegrationAdapter(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	issue := firstCandidate(t, adapter, ctx)
+
+	label := os.Getenv("SORTIE_LINEAR_WRITE_LABEL")
+	if label == "" {
+		label = "needs-human"
+	}
+
+	if err := adapter.AddLabel(ctx, issue.Identifier, label); err != nil {
+		t.Fatalf("AddLabel(%s, %q): %v", issue.Identifier, label, err)
 	}
 }

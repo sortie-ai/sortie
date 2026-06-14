@@ -1,0 +1,9 @@
+{
+  "data": {
+    "issueLabels": {
+      "nodes": [
+        { "id": "label-workspace-needs-human", "name": "needs-human", "team": null }
+      ]
+    }
+  }
+}

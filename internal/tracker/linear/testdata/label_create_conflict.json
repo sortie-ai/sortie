@@ -1,0 +1,17 @@
+{
+  "errors": [
+    {
+      "message": "A label with this name already exists in the team",
+      "path": ["issueLabelCreate"],
+      "locations": [{ "line": 1, "column": 1 }],
+      "extensions": {
+        "type": "user error",
+        "code": "CONSTRAINT_VIOLATION",
+        "statusCode": 400,
+        "userError": true,
+        "userPresentableMessage": "A label with this name already exists."
+      }
+    }
+  ],
+  "data": null
+}
