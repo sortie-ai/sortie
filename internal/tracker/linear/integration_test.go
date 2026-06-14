@@ -276,7 +276,7 @@ func TestIntegration_TransitionIssue(t *testing.T) {
 
 	issue := firstCandidate(t, adapter, ctx)
 
-	if err := adapter.TransitionIssue(ctx, issue.Identifier, issue.State); err != nil {
+	if err := adapter.TransitionIssue(ctx, issue.ID, issue.State); err != nil {
 		t.Fatalf("TransitionIssue(%s, %q): %v", issue.Identifier, issue.State, err)
 	}
 }
@@ -292,7 +292,7 @@ func TestIntegration_CommentIssue(t *testing.T) {
 	issue := firstCandidate(t, adapter, ctx)
 
 	body := "sortie write-path integration test comment at " + time.Now().UTC().Format(time.RFC3339)
-	if err := adapter.CommentIssue(ctx, issue.Identifier, body); err != nil {
+	if err := adapter.CommentIssue(ctx, issue.ID, body); err != nil {
 		t.Fatalf("CommentIssue(%s): %v", issue.Identifier, err)
 	}
 }
@@ -309,7 +309,7 @@ func TestIntegration_AddLabel(t *testing.T) {
 
 	label := "needs-human"
 
-	if err := adapter.AddLabel(ctx, issue.Identifier, label); err != nil {
+	if err := adapter.AddLabel(ctx, issue.ID, label); err != nil {
 		t.Fatalf("AddLabel(%s, %q): %v", issue.Identifier, label, err)
 	}
 }
