@@ -3,7 +3,7 @@
     "issueLabels": {
       "nodes": [
         { "id": "label-workspace-needs-human", "name": "needs-human", "team": null },
-        { "id": "label-team-needs-human", "name": "needs-human", "team": { "id": "SOR" } }
+        { "id": "label-team-needs-human", "name": "needs-human", "team": { "id": "11111111-1111-1111-1111-111111111111", "key": "SOR" } }
       ]
     }
   }

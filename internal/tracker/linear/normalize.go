@@ -245,14 +245,16 @@ type commentCreateData struct {
 
 // labelResolveData is the data payload for the label-resolve query. A node's
 // Team is a pointer so a workspace-scoped label (team null) is distinguishable
-// from a team-scoped label.
+// from a team-scoped label. Team.Key is the team key the configured project is
+// matched against; Team.ID is a UUID and is not the configured project value.
 type labelResolveData struct {
 	IssueLabels struct {
 		Nodes []struct {
 			ID   string `json:"id"`
 			Name string `json:"name"`
 			Team *struct {
-				ID string `json:"id"`
+				ID  string `json:"id"`
+				Key string `json:"key"`
 			} `json:"team"`
 		} `json:"nodes"`
 	} `json:"issueLabels"`

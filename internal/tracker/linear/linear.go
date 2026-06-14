@@ -587,7 +587,7 @@ func (a *LinearAdapter) resolveLabelID(ctx context.Context, name string) (string
 	var hasWorkspace bool
 	for _, node := range resp.Data.IssueLabels.Nodes {
 		if node.Team != nil {
-			if node.Team.ID == a.project {
+			if node.Team.Key == a.project {
 				return node.ID, true, nil
 			}
 			continue
@@ -650,6 +650,12 @@ func (a *LinearAdapter) createLabel(ctx context.Context, teamID, name string) (s
 		"name":   name,
 	}, decode); err != nil {
 		return "", err
+	}
+	if labelID == "" {
+		return "", &domain.TrackerError{
+			Kind:    domain.ErrTrackerPayload,
+			Message: fmt.Sprintf("linear graphql: issueLabelCreate reported success but returned no label id for %q", name),
+		}
 	}
 	return labelID, nil
 }
