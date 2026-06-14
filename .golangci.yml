@@ -6,20 +6,20 @@ run:
 linters:
   default: standard
   enable:
+    - bodyclose
     - copyloopvar
     - errcheck
+    - gosec
     - govet
     - ineffassign
-    - staticcheck
-    - unused
     - misspell
+    - modernize
+    - noctx
+    - sloglint
+    - staticcheck
     - unconvert
     - unparam
-    - sloglint
-    - bodyclose
-    - noctx
-    - gosec
-    - modernize
+    - unused
   settings:
     sloglint:
       attr-only: true
