@@ -61,6 +61,7 @@ type LinearAdapter struct {
 	activeStates   []string
 	terminalStates []string
 	handoffState   string
+	queryFilter    map[string]any
 	casingCache    map[string]string
 	log            *slog.Logger
 	metrics        domain.Metrics
@@ -106,19 +107,25 @@ func NewLinearAdapter(config map[string]any) (domain.TrackerAdapter, error) {
 	}
 	handoffState, _ := config["handoff_state"].(string)
 
+	rawQueryFilter, _ := config["query_filter"].(string)
+	queryFilter, err := parseQueryFilter(rawQueryFilter)
+	if err != nil {
+		return nil, err
+	}
+
 	userAgent, _ := config["user_agent"].(string)
 	if userAgent == "" {
 		userAgent = "sortie/dev"
 	}
 
 	client := newLinearClient(endpoint, apiKey, userAgent)
-	return newAdapter(client, project, activeStates, terminalStates, handoffState, slog.Default())
+	return newAdapter(client, project, activeStates, terminalStates, handoffState, queryFilter, slog.Default())
 }
 
 // newAdapter runs the preflight through client and assembles the adapter with
 // canonical-cased state lists. It is the seam shared by the production
 // constructor and offline tests.
-func newAdapter(client graphQLClient, project string, active, terminal []string, handoff string, log *slog.Logger) (domain.TrackerAdapter, error) {
+func newAdapter(client graphQLClient, project string, active, terminal []string, handoff string, queryFilter map[string]any, log *slog.Logger) (domain.TrackerAdapter, error) {
 	casingCache, err := runPreflight(context.Background(), client, project, active, terminal, handoff, log)
 	if err != nil {
 		return nil, err
@@ -130,9 +137,52 @@ func newAdapter(client graphQLClient, project string, active, terminal []string,
 		activeStates:   canonicalize(active, casingCache),
 		terminalStates: canonicalize(terminal, casingCache),
 		handoffState:   canonicalOne(handoff, casingCache),
+		queryFilter:    queryFilter,
 		casingCache:    casingCache,
 		log:            log,
 	}, nil
+}
+
+// parseQueryFilter decodes the operator-supplied query_filter into an
+// IssueFilter fragment. It returns nil with a nil error when raw is empty.
+//
+// A value that does not parse as JSON, parses as a non-object, or carries a
+// top-level reserved key returns a [*domain.TrackerError] of kind
+// [domain.ErrTrackerPayload]. The reserved-key check inspects "team" before
+// "state" so a fragment naming both always reports "team", keeping the error
+// message stable. The returned map is stored and merged into the fetch filter,
+// so the value travels in the GraphQL variables object, never the query text.
+func parseQueryFilter(raw string) (map[string]any, error) {
+	if raw == "" {
+		return nil, nil
+	}
+
+	var decoded any
+	if err := json.Unmarshal([]byte(raw), &decoded); err != nil {
+		return nil, &domain.TrackerError{
+			Kind:    domain.ErrTrackerPayload,
+			Message: fmt.Sprintf("linear: tracker.query_filter is not valid json: %v", err),
+		}
+	}
+
+	filter, ok := decoded.(map[string]any)
+	if !ok {
+		return nil, &domain.TrackerError{
+			Kind:    domain.ErrTrackerPayload,
+			Message: "linear: tracker.query_filter must be a json object",
+		}
+	}
+
+	for _, reserved := range []string{"team", "state"} {
+		if _, present := filter[reserved]; present {
+			return nil, &domain.TrackerError{
+				Kind:    domain.ErrTrackerPayload,
+				Message: fmt.Sprintf("linear: tracker.query_filter must not contain a reserved key %q", reserved),
+			}
+		}
+	}
+
+	return filter, nil
 }
 
 // canonicalize maps each configured name to its canonical casing from the
@@ -203,13 +253,32 @@ func (a *LinearAdapter) FetchIssuesByStates(ctx context.Context, states []string
 	return issues, err
 }
 
+// buildFetchFilter constructs the IssueFilter object for a single fetch from the
+// configured team, the supplied states, and the operator filter.
+//
+// It allocates a fresh map on every call and never writes into operatorFilter,
+// so concurrent fetches do not share or rewrite the stored fragment. The team
+// and state constraints are always set by the adapter; the reserved-key guard in
+// [parseQueryFilter] guarantees operatorFilter cannot overwrite them, and the
+// shallow copy leaves nested operator objects intact because Linear ANDs sibling
+// IssueFilter fields.
+func buildFetchFilter(teamKey string, states []string, operatorFilter map[string]any) map[string]any {
+	filter := map[string]any{
+		"team":  map[string]any{"key": map[string]any{"eq": teamKey}},
+		"state": map[string]any{"name": map[string]any{"in": states}},
+	}
+	for key, value := range operatorFilter {
+		filter[key] = value
+	}
+	return filter
+}
+
 // fetchIssues paginates the issues connection for the given query and states,
 // normalizing each node with Comments left nil.
 func (a *LinearAdapter) fetchIssues(ctx context.Context, query string, states []string) ([]domain.Issue, error) {
 	variables := map[string]any{
-		"teamKey": a.project,
-		"states":  states,
-		"first":   topLevelPageSize,
+		"filter": buildFetchFilter(a.project, states, a.queryFilter),
+		"first":  topLevelPageSize,
 	}
 
 	nodes, err := paginate(ctx, a.client, query, variables, decodeIssuesPage, a.log)

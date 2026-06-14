@@ -3,11 +3,11 @@ package linear
 // queryCandidateIssues fetches issues in the configured team and active states,
 // ordered by the server sort hint. The client re-sorts results by normalized
 // priority, so the sort argument is only a coarse stable order for the fetch.
-const queryCandidateIssues = `query CandidateIssues($teamKey: String!, $states: [String!]!, $first: Int!, $after: String) {
+const queryCandidateIssues = `query CandidateIssues($filter: IssueFilter!, $first: Int!, $after: String) {
   issues(
     first: $first
     after: $after
-    filter: { team: { key: { eq: $teamKey } }, state: { name: { in: $states } } }
+    filter: $filter
     sort: [{ priority: { order: Ascending, noPriorityFirst: false } }, { createdAt: { order: Ascending } }]
   ) {
     nodes {
@@ -24,11 +24,11 @@ const queryCandidateIssues = `query CandidateIssues($teamKey: String!, $states: 
 
 // queryIssuesByStates is the candidate query without the sort argument, used
 // for terminal cleanup where dispatch order is irrelevant.
-const queryIssuesByStates = `query IssuesByStates($teamKey: String!, $states: [String!]!, $first: Int!, $after: String) {
+const queryIssuesByStates = `query IssuesByStates($filter: IssueFilter!, $first: Int!, $after: String) {
   issues(
     first: $first
     after: $after
-    filter: { team: { key: { eq: $teamKey } }, state: { name: { in: $states } } }
+    filter: $filter
   ) {
     nodes {
       id identifier title description priority branchName url createdAt updatedAt

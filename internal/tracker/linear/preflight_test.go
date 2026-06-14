@@ -121,7 +121,7 @@ func TestRunPreflight(t *testing.T) {
 		f := newFakeClient()
 		f.queueBody("query Me", loadFixture(t, "auth_error.json"))
 
-		_, err := newAdapter(f, "SOR", defaultActiveStates, defaultTerminalStates, "", nil)
+		_, err := newAdapter(f, "SOR", defaultActiveStates, defaultTerminalStates, "", nil, nil)
 
 		assertTrackerErrorKind(t, err, domain.ErrTrackerAuth)
 	})

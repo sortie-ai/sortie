@@ -4,7 +4,10 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"maps"
 	"reflect"
+	"slices"
+	"strings"
 	"testing"
 
 	"github.com/sortie-ai/sortie/internal/domain"
@@ -67,7 +70,7 @@ func TestNewAdapterSuccess(t *testing.T) {
 	f := newFakeClient()
 	seedPreflight(f, t)
 
-	got, err := newAdapter(f, "SOR", defaultActiveStates, defaultTerminalStates, "in review", nil)
+	got, err := newAdapter(f, "SOR", defaultActiveStates, defaultTerminalStates, "in review", nil, nil)
 	if err != nil {
 		t.Fatalf("newAdapter: %v", err)
 	}
@@ -83,6 +86,92 @@ func TestNewAdapterSuccess(t *testing.T) {
 	if !reflect.DeepEqual(adapter.activeStates, wantActive) {
 		t.Errorf("activeStates = %v, want %v", adapter.activeStates, wantActive)
 	}
+}
+
+func TestParseQueryFilter(t *testing.T) {
+	t.Parallel()
+
+	t.Run("rejects malformed and reserved filters as payload errors", func(t *testing.T) {
+		t.Parallel()
+
+		tests := []struct {
+			name        string
+			raw         string
+			wantKeyword string
+		}{
+			{"non-json string", "not json", ""},
+			{"json array", `["a", "b"]`, ""},
+			{"json number", "42", ""},
+			{"json string", `"backend"`, ""},
+			{"json boolean", "true", ""},
+			{"json null", "null", ""},
+			{"reserved team key", `{"team": {"key": {"eq": "ENG"}}}`, "team"},
+			{"reserved state key", `{"state": {"name": {"in": ["Done"]}}}`, "state"},
+			{"both reserved keys report team first", `{"team": {}, "state": {}}`, "team"},
+		}
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				t.Parallel()
+
+				got, err := parseQueryFilter(tt.raw)
+
+				if got != nil {
+					t.Errorf("parseQueryFilter(%q) = %v, want nil map on error", tt.raw, got)
+				}
+				assertTrackerErrorKind(t, err, domain.ErrTrackerPayload)
+				if tt.wantKeyword != "" {
+					var te *domain.TrackerError
+					if errors.As(err, &te) && !strings.Contains(te.Message, tt.wantKeyword) {
+						t.Errorf("parseQueryFilter(%q) message = %q, want it to name %q", tt.raw, te.Message, tt.wantKeyword)
+					}
+				}
+			})
+		}
+	})
+
+	t.Run("empty string is the unset passthrough", func(t *testing.T) {
+		t.Parallel()
+
+		got, err := parseQueryFilter("")
+		if err != nil {
+			t.Fatalf("parseQueryFilter(%q) = %v, want nil error", "", err)
+		}
+		if got != nil {
+			t.Errorf("parseQueryFilter(%q) = %v, want nil map", "", got)
+		}
+	})
+
+	t.Run("valid object is returned decoded", func(t *testing.T) {
+		t.Parallel()
+
+		raw := `{"labels": {"some": {"name": {"eq": "backend"}}}}`
+		got, err := parseQueryFilter(raw)
+		if err != nil {
+			t.Fatalf("parseQueryFilter(%q) = %v, want nil error", raw, err)
+		}
+		want := map[string]any{
+			"labels": map[string]any{"some": map[string]any{"name": map[string]any{"eq": "backend"}}},
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("parseQueryFilter(%q) = %v, want %v", raw, got, want)
+		}
+	})
+
+	t.Run("empty object is a valid no-op map", func(t *testing.T) {
+		t.Parallel()
+
+		got, err := parseQueryFilter("{}")
+		if err != nil {
+			t.Fatalf("parseQueryFilter(%q) = %v, want nil error", "{}", err)
+		}
+		if got == nil {
+			t.Fatalf("parseQueryFilter(%q) = nil, want non-nil empty map", "{}")
+		}
+		if len(got) != 0 {
+			t.Errorf("parseQueryFilter(%q) = %v, want empty map", "{}", got)
+		}
+	})
 }
 
 func TestFetchCandidateIssues(t *testing.T) {
@@ -148,7 +237,7 @@ func TestFetchCandidateIssues(t *testing.T) {
 		}
 	})
 
-	t.Run("sends configured active states", func(t *testing.T) {
+	t.Run("sends configured active states inside the merged filter", func(t *testing.T) {
 		t.Parallel()
 
 		f := newFakeClient()
@@ -162,17 +251,124 @@ func TestFetchCandidateIssues(t *testing.T) {
 		}
 
 		call := f.callsFor("query CandidateIssues")[0]
-		states, ok := call.variables["states"].([]string)
-		if !ok {
-			t.Fatalf("states variable type = %T, want []string", call.variables["states"])
+		filter := assertFilterVar(t, call)
+		assertTeamFilter(t, filter)
+		assertStateFilter(t, filter, []string{"Backlog", "Todo", "In Progress"})
+		assertNoTopLevelVar(t, call, "teamKey")
+		assertNoTopLevelVar(t, call, "states")
+	})
+
+	t.Run("operator filter merges with team and state and returns the fixture issues", func(t *testing.T) {
+		t.Parallel()
+
+		f := newFakeClient()
+		seedPreflight(f, t)
+		f.queueBody("query CandidateIssues", loadFixture(t, "candidates_filtered.json"))
+
+		operatorFilter := map[string]any{
+			"labels": map[string]any{"some": map[string]any{"name": map[string]any{"eq": "backend"}}},
 		}
-		want := []string{"Backlog", "Todo", "In Progress"}
-		if !reflect.DeepEqual(states, want) {
-			t.Errorf("states = %v, want %v", states, want)
+		adapter := newTestAdapterWithFilter(t, f, operatorFilter)
+
+		issues, err := adapter.FetchCandidateIssues(context.Background())
+		if err != nil {
+			t.Fatalf("FetchCandidateIssues: %v", err)
 		}
-		if call.variables["teamKey"] != "SOR" {
-			t.Errorf("teamKey = %v, want %q", call.variables["teamKey"], "SOR")
+
+		gotOrder := identifiers(issues)
+		wantOrder := []string{"SOR-7", "SOR-5"}
+		if !reflect.DeepEqual(gotOrder, wantOrder) {
+			t.Errorf("FetchCandidateIssues order = %v, want %v (exactly the fixture issues)", gotOrder, wantOrder)
 		}
+
+		call := f.callsFor("query CandidateIssues")[0]
+		filter := assertFilterVar(t, call)
+		assertTeamFilter(t, filter)
+		assertStateFilter(t, filter, []string{"Backlog", "Todo", "In Progress"})
+		if !reflect.DeepEqual(filter["labels"], operatorFilter["labels"]) {
+			t.Errorf("filter[labels] = %v, want %v (operator fragment copied verbatim)", filter["labels"], operatorFilter["labels"])
+		}
+		assertFilterKeys(t, filter, []string{"team", "state", "labels"})
+	})
+
+	t.Run("unset filter passes through exactly team and state", func(t *testing.T) {
+		t.Parallel()
+
+		f := newFakeClient()
+		seedPreflight(f, t)
+		f.queueBody("query CandidateIssues", loadFixture(t, "issues_empty.json"))
+
+		adapter := newTestAdapterWithFilter(t, f, nil)
+
+		if _, err := adapter.FetchCandidateIssues(context.Background()); err != nil {
+			t.Fatalf("FetchCandidateIssues: %v", err)
+		}
+
+		call := f.callsFor("query CandidateIssues")[0]
+		filter := assertFilterVar(t, call)
+		assertTeamFilter(t, filter)
+		assertStateFilter(t, filter, []string{"Backlog", "Todo", "In Progress"})
+		assertFilterKeys(t, filter, []string{"team", "state"})
+	})
+
+	t.Run("empty-object filter is a no-op equal to the passthrough object", func(t *testing.T) {
+		t.Parallel()
+
+		f := newFakeClient()
+		seedPreflight(f, t)
+		f.queueBody("query CandidateIssues", loadFixture(t, "issues_empty.json"))
+
+		parsed, err := parseQueryFilter("{}")
+		if err != nil {
+			t.Fatalf("parseQueryFilter(%q) = %v, want nil error", "{}", err)
+		}
+		adapter := newTestAdapterWithFilter(t, f, parsed)
+
+		if _, err := adapter.FetchCandidateIssues(context.Background()); err != nil {
+			t.Fatalf("FetchCandidateIssues: %v", err)
+		}
+
+		call := f.callsFor("query CandidateIssues")[0]
+		filter := assertFilterVar(t, call)
+		assertTeamFilter(t, filter)
+		assertStateFilter(t, filter, []string{"Backlog", "Todo", "In Progress"})
+		assertFilterKeys(t, filter, []string{"team", "state"})
+	})
+
+	t.Run("multi-page filtered fetch carries the cursor and the same filter on page two", func(t *testing.T) {
+		t.Parallel()
+
+		f := newFakeClient()
+		seedPreflight(f, t)
+		f.queueBody("query CandidateIssues", loadFixture(t, "candidates_page1.json"))
+		f.queueBody("query CandidateIssues", loadFixture(t, "candidates_page2.json"))
+
+		operatorFilter := map[string]any{
+			"assignee": map[string]any{"isMe": map[string]any{"eq": true}},
+		}
+		adapter := newTestAdapterWithFilter(t, f, operatorFilter)
+
+		if _, err := adapter.FetchCandidateIssues(context.Background()); err != nil {
+			t.Fatalf("FetchCandidateIssues: %v", err)
+		}
+
+		calls := f.callsFor("query CandidateIssues")
+		if len(calls) != 2 {
+			t.Fatalf("CandidateIssues call count = %d, want 2 (one per page)", len(calls))
+		}
+
+		wantCursor := "eyJrZXkiOiJiMmQ5ZTRhMS0zYzdmLTRiOGUtOWQyYS0xZjZjNWI0ZTNhMmQiLCJjcmVhdGVkQXQiOiIyMDI2LTA2LTA5In0="
+		if got := calls[1].variables["after"]; got != wantCursor {
+			t.Errorf("second page after = %v, want %q (page-1 end cursor)", got, wantCursor)
+		}
+
+		filter := assertFilterVar(t, calls[1])
+		assertTeamFilter(t, filter)
+		assertStateFilter(t, filter, []string{"Backlog", "Todo", "In Progress"})
+		if !reflect.DeepEqual(filter["assignee"], operatorFilter["assignee"]) {
+			t.Errorf("second page filter[assignee] = %v, want %v (filter reused across pages)", filter["assignee"], operatorFilter["assignee"])
+		}
+		assertFilterKeys(t, filter, []string{"team", "state", "assignee"})
 	})
 }
 
@@ -198,7 +394,7 @@ func TestFetchIssuesByStates(t *testing.T) {
 		}
 	})
 
-	t.Run("canonical-cases supplied states and omits sort", func(t *testing.T) {
+	t.Run("canonical-cases supplied states inside the merged filter", func(t *testing.T) {
 		t.Parallel()
 
 		f := newFakeClient()
@@ -215,14 +411,40 @@ func TestFetchIssuesByStates(t *testing.T) {
 		if len(calls) != 1 {
 			t.Fatalf("IssuesByStates call count = %d, want 1", len(calls))
 		}
-		states, ok := calls[0].variables["states"].([]string)
-		if !ok {
-			t.Fatalf("states variable type = %T, want []string", calls[0].variables["states"])
+		filter := assertFilterVar(t, calls[0])
+		assertTeamFilter(t, filter)
+		assertStateFilter(t, filter, []string{"Done", "Canceled"})
+		assertNoTopLevelVar(t, calls[0], "states")
+		assertNoTopLevelVar(t, calls[0], "teamKey")
+	})
+
+	t.Run("operator filter merges with team and supplied states", func(t *testing.T) {
+		t.Parallel()
+
+		f := newFakeClient()
+		seedPreflight(f, t)
+		f.queueBody("query IssuesByStates", loadFixture(t, "issues_empty.json"))
+
+		operatorFilter := map[string]any{
+			"labels": map[string]any{"some": map[string]any{"name": map[string]any{"eq": "backend"}}},
 		}
-		want := []string{"Done", "Canceled"}
-		if !reflect.DeepEqual(states, want) {
-			t.Errorf("states = %v, want %v (canonical casing)", states, want)
+		adapter := newTestAdapterWithFilter(t, f, operatorFilter)
+
+		if _, err := adapter.FetchIssuesByStates(context.Background(), []string{"done", "CANCELED"}); err != nil {
+			t.Fatalf("FetchIssuesByStates: %v", err)
 		}
+
+		calls := f.callsFor("query IssuesByStates")
+		if len(calls) != 1 {
+			t.Fatalf("IssuesByStates call count = %d, want 1", len(calls))
+		}
+		filter := assertFilterVar(t, calls[0])
+		assertTeamFilter(t, filter)
+		assertStateFilter(t, filter, []string{"Done", "Canceled"})
+		if !reflect.DeepEqual(filter["labels"], operatorFilter["labels"]) {
+			t.Errorf("filter[labels] = %v, want %v (operator fragment copied verbatim)", filter["labels"], operatorFilter["labels"])
+		}
+		assertFilterKeys(t, filter, []string{"team", "state", "labels"})
 	})
 }
 
@@ -464,6 +686,26 @@ func TestFetchIssueStatesByIDs(t *testing.T) {
 		}
 	})
 
+	t.Run("a configured filter introduces no filter variable", func(t *testing.T) {
+		t.Parallel()
+
+		f := newFakeClient()
+		seedPreflight(f, t)
+		f.queueBody("query IssueStatesByIDs", loadFixture(t, "states_by_ids.json"))
+
+		operatorFilter := map[string]any{
+			"labels": map[string]any{"some": map[string]any{"name": map[string]any{"eq": "backend"}}},
+		}
+		adapter := newTestAdapterWithFilter(t, f, operatorFilter)
+
+		if _, err := adapter.FetchIssueStatesByIDs(context.Background(), []string{"a7c4f8e2-1b9d-4e3a-8f2c-6d5e4a3b2c1f"}); err != nil {
+			t.Fatalf("FetchIssueStatesByIDs: %v", err)
+		}
+
+		call := f.callsFor("query IssueStatesByIDs")[0]
+		assertVarKeys(t, call, []string{"ids", "first"})
+	})
+
 	t.Run("checks context cancellation before each chunk", func(t *testing.T) {
 		t.Parallel()
 
@@ -536,6 +778,29 @@ func TestFetchIssueStatesByIdentifiers(t *testing.T) {
 		wantNumbers := []float64{5, 7, 99999}
 		if !reflect.DeepEqual(numbers, wantNumbers) {
 			t.Errorf("numbers = %v, want %v", numbers, wantNumbers)
+		}
+	})
+
+	t.Run("a configured filter introduces no filter variable and keeps teamKey", func(t *testing.T) {
+		t.Parallel()
+
+		f := newFakeClient()
+		seedPreflight(f, t)
+		f.queueBody("query IssueStatesByNumbers", loadFixture(t, "states_by_numbers.json"))
+
+		operatorFilter := map[string]any{
+			"labels": map[string]any{"some": map[string]any{"name": map[string]any{"eq": "backend"}}},
+		}
+		adapter := newTestAdapterWithFilter(t, f, operatorFilter)
+
+		if _, err := adapter.FetchIssueStatesByIdentifiers(context.Background(), []string{"SOR-5", "SOR-7"}); err != nil {
+			t.Fatalf("FetchIssueStatesByIdentifiers: %v", err)
+		}
+
+		call := f.callsFor("query IssueStatesByNumbers")[0]
+		assertVarKeys(t, call, []string{"teamKey", "numbers", "first"})
+		if call.variables["teamKey"] != "SOR" {
+			t.Errorf("teamKey = %v, want %q (reconciliation query is unchanged)", call.variables["teamKey"], "SOR")
 		}
 	})
 
@@ -1529,6 +1794,91 @@ func TestWriteErrorMapping(t *testing.T) {
 }
 
 // --- local helpers ---
+
+// assertFilterVar returns the recorded filter operation variable as a map,
+// failing the test when it is absent or not a map.
+func assertFilterVar(t *testing.T, call recordedCall) map[string]any {
+	t.Helper()
+	filter, ok := call.variables["filter"].(map[string]any)
+	if !ok {
+		t.Fatalf("filter variable type = %T, want map[string]any", call.variables["filter"])
+	}
+	return filter
+}
+
+// assertTeamFilter asserts the adapter-owned team constraint nested as
+// team.key.eq inside the merged filter. The offline harness always configures
+// team SOR, so the expected key is fixed.
+func assertTeamFilter(t *testing.T, filter map[string]any) {
+	t.Helper()
+	const wantKey = "SOR"
+	team, ok := filter["team"].(map[string]any)
+	if !ok {
+		t.Fatalf("filter[team] type = %T, want map[string]any", filter["team"])
+	}
+	key, ok := team["key"].(map[string]any)
+	if !ok {
+		t.Fatalf("filter[team][key] type = %T, want map[string]any", team["key"])
+	}
+	if key["eq"] != wantKey {
+		t.Errorf("filter[team][key][eq] = %v, want %q", key["eq"], wantKey)
+	}
+}
+
+// assertStateFilter asserts the adapter-owned state constraint nested as
+// state.name.in inside the merged filter. The in value is the canonical-cased
+// Go []string the adapter builds, not a []any.
+func assertStateFilter(t *testing.T, filter map[string]any, wantStates []string) {
+	t.Helper()
+	state, ok := filter["state"].(map[string]any)
+	if !ok {
+		t.Fatalf("filter[state] type = %T, want map[string]any", filter["state"])
+	}
+	name, ok := state["name"].(map[string]any)
+	if !ok {
+		t.Fatalf("filter[state][name] type = %T, want map[string]any", state["name"])
+	}
+	in, ok := name["in"].([]string)
+	if !ok {
+		t.Fatalf("filter[state][name][in] type = %T, want []string", name["in"])
+	}
+	if !reflect.DeepEqual(in, wantStates) {
+		t.Errorf("filter[state][name][in] = %v, want %v", in, wantStates)
+	}
+}
+
+// assertFilterKeys asserts the merged filter has exactly the expected top-level
+// keys and no others.
+func assertFilterKeys(t *testing.T, filter map[string]any, want []string) {
+	t.Helper()
+	got := slices.Sorted(maps.Keys(filter))
+	wantSorted := slices.Clone(want)
+	slices.Sort(wantSorted)
+	if !reflect.DeepEqual(got, wantSorted) {
+		t.Errorf("filter top-level keys = %v, want %v", got, wantSorted)
+	}
+}
+
+// assertVarKeys asserts a recorded call's variable map has exactly the expected
+// keys and no others, so a stray filter variable is caught.
+func assertVarKeys(t *testing.T, call recordedCall, want []string) {
+	t.Helper()
+	got := slices.Sorted(maps.Keys(call.variables))
+	wantSorted := slices.Clone(want)
+	slices.Sort(wantSorted)
+	if !reflect.DeepEqual(got, wantSorted) {
+		t.Errorf("variable keys = %v, want %v", got, wantSorted)
+	}
+}
+
+// assertNoTopLevelVar asserts the named variable is absent from the recorded
+// call, used to confirm the folded teamKey/states no longer travel top-level.
+func assertNoTopLevelVar(t *testing.T, call recordedCall, name string) {
+	t.Helper()
+	if _, present := call.variables[name]; present {
+		t.Errorf("variable %q present = %v, want absent (folded into filter)", name, call.variables[name])
+	}
+}
 
 func identifiers(issues []domain.Issue) []string {
 	out := make([]string, len(issues))

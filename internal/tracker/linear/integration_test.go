@@ -21,18 +21,6 @@ func skipUnlessIntegration(t *testing.T) {
 	}
 }
 
-// skipUnlessWriteIntegration skips the current test unless both the read
-// integration gate (SORTIE_LINEAR_TEST=1) and the write opt-in
-// (SORTIE_LINEAR_WRITE_TEST=1) are set, so a default run reads but never
-// mutates the live workspace.
-func skipUnlessWriteIntegration(t *testing.T) {
-	t.Helper()
-	skipUnlessIntegration(t)
-	if os.Getenv("SORTIE_LINEAR_WRITE_TEST") != "1" {
-		t.Skip("skipping Linear write integration test: set SORTIE_LINEAR_WRITE_TEST=1 to enable")
-	}
-}
-
 // requireEnv reads an environment variable and fails the test when empty.
 func requireEnv(t *testing.T, key string) string {
 	t.Helper()
@@ -279,7 +267,7 @@ func firstCandidate(t *testing.T, adapter domain.TrackerAdapter, ctx context.Con
 }
 
 func TestIntegration_TransitionIssue(t *testing.T) {
-	skipUnlessWriteIntegration(t)
+	skipUnlessIntegration(t)
 
 	adapter := newIntegrationAdapter(t)
 
@@ -294,7 +282,7 @@ func TestIntegration_TransitionIssue(t *testing.T) {
 }
 
 func TestIntegration_CommentIssue(t *testing.T) {
-	skipUnlessWriteIntegration(t)
+	skipUnlessIntegration(t)
 
 	adapter := newIntegrationAdapter(t)
 
@@ -310,7 +298,7 @@ func TestIntegration_CommentIssue(t *testing.T) {
 }
 
 func TestIntegration_AddLabel(t *testing.T) {
-	skipUnlessWriteIntegration(t)
+	skipUnlessIntegration(t)
 
 	adapter := newIntegrationAdapter(t)
 
@@ -319,10 +307,7 @@ func TestIntegration_AddLabel(t *testing.T) {
 
 	issue := firstCandidate(t, adapter, ctx)
 
-	label := os.Getenv("SORTIE_LINEAR_WRITE_LABEL")
-	if label == "" {
-		label = "needs-human"
-	}
+	label := "needs-human"
 
 	if err := adapter.AddLabel(ctx, issue.Identifier, label); err != nil {
 		t.Fatalf("AddLabel(%s, %q): %v", issue.Identifier, label, err)
