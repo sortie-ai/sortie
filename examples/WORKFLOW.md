@@ -50,7 +50,7 @@ agent:
 
 claude-code:
   permission_mode: bypassPermissions
-  model: claude-sonnet-4-20250514
+  model: claude-sonnet-4-6
   max_turns: 50
   max_budget_usd: 5
 

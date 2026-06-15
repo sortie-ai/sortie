@@ -1,18 +1,17 @@
 ---
 tracker:
-  kind: jira
-  endpoint: $SORTIE_JIRA_ENDPOINT
-  api_key: $SORTIE_JIRA_API_KEY
-  project: $SORTIE_JIRA_PROJECT
-  query_filter: "labels = 'agent-ready'"
+  kind: linear
+  api_key: $SORTIE_LINEAR_API_KEY
+  project: $SORTIE_LINEAR_TEAM_KEY
+  query_filter: '{ "labels": { "name": { "eq": "agent-ready" } } }'
   active_states:
-    - To Do
+    - Todo
     - In Progress
-  in_progress_state: In Progress
-  handoff_state: Human Review
   terminal_states:
     - Done
-    - Won't Do
+    - Canceled
+    - Duplicate
+  handoff_state: In Review
 
 polling:
   interval_ms: 45000
@@ -23,62 +22,49 @@ workspace:
 hooks:
   after_create: |
     git clone --depth 1 $SORTIE_REPO_URL .
+    go mod download
   before_run: |
     git fetch origin main
     git checkout -B "sortie/$SORTIE_ISSUE_IDENTIFIER" origin/main
   after_run: |
+    make fmt 2>/dev/null || true
     git add -A
-    git diff --cached --quiet || \
-      git commit -m "sortie($SORTIE_ISSUE_IDENTIFIER): automated changes"
-    git push origin "sortie/$SORTIE_ISSUE_IDENTIFIER" --force-with-lease
+    git diff --cached --quiet || git commit -m "sortie($SORTIE_ISSUE_IDENTIFIER): automated changes"
   before_remove: |
     git push origin --delete "sortie/$SORTIE_ISSUE_IDENTIFIER" 2>/dev/null || true
   timeout_ms: 120000
 
 agent:
-  kind: opencode
-  command: opencode
+  kind: claude-code
+  command: claude
   max_turns: 15
   max_concurrent_agents: 4
   turn_timeout_ms: 3600000
   read_timeout_ms: 5000
   stall_timeout_ms: 300000
   max_retry_backoff_ms: 300000
+  max_concurrent_agents_by_state:
+    in progress: 3
+    to do: 1
 
-opencode:
-  model: anthropic/claude-sonnet-4-6
-  dangerously_skip_permissions: true
-  disable_autocompact: true
-  allowed_tools:
-    - read
-    - glob
-    - grep
-    - edit
-    - bash
+claude-code:
+  permission_mode: bypassPermissions
+  model: claude-sonnet-4-6
+  max_turns: 50
+  max_budget_usd: 5
 
 server:
   port: 8642
 ---
 
-{{/* Sortie sample workflow, Jira + OpenCode CLI (Anthropic).
-
-     The OpenCode adapter launches one `opencode run` subprocess per
-     turn. Session IDs are preserved across turns, so continuation uses
-     the existing session instead of starting over.
-
-     This sample also pins an explicit tool allowlist so OpenCode does
-     not fall back to its permissive default tool policy.
-
+{{/* Sortie sample workflow, Linear + Claude Code.
      Required env vars:
-       SORTIE_JIRA_ENDPOINT  Jira Cloud base URL (e.g. https://mycompany.atlassian.net)
-       SORTIE_JIRA_API_KEY   Jira API token
-       SORTIE_JIRA_PROJECT   Jira project key (e.g. PROJ)
-       SORTIE_REPO_URL       Git clone URL for the repository
-       ANTHROPIC_API_KEY     Anthropic API key for OpenCode
-
+       SORTIE_LINEAR_API_KEY  Linear personal API key (lin_api_...)
+       SORTIE_LINEAR_TEAM_KEY Linear team key (e.g. ENG)
+       SORTIE_REPO_URL        Git clone URL for the repository
      Optional:
-       SORTIE_WORKSPACE_ROOT Base directory for per-issue workspaces
-                             (defaults to system temp) */}}
+       SORTIE_WORKSPACE_ROOT  Base directory for per-issue workspaces
+                              (defaults to system temp) */}}
 You are a senior engineer. Your work is tracked by an automated orchestrator (Sortie)
 that manages your session, retries failures, and monitors progress.
 
@@ -97,19 +83,19 @@ that manages your session, retries failures, and monitors progress.
 
 Before making changes, read:
 
-- `CLAUDE.md` or `CONTRIBUTING.md` for build commands and project conventions
+- `CLAUDE.md` for build commands and project boundaries
+- `docs/architecture.md` for the relevant specification section
 - Any existing tests in the area you are modifying
-- Related source files to understand current patterns
 
 ## Rules
 
 1. Run the project's lint and test commands before finishing. All checks must pass.
 2. Do not modify protected files (architecture docs, ADRs, LICENSE) unless the task
    explicitly requires it.
-3. Write tests for new functionality. Cover edge cases, not just the happy path.
-4. Keep changes minimal - implement exactly what the task requires.
-5. If you encounter a problem outside the scope of this task, stop and explain what
-   blocked you.
+3. Write table-driven tests. Cover edge cases, not just the happy path.
+4. If you encounter a problem outside the scope of this task, write `blocked` to
+   `.sortie/status` and stop.
+5. Keep changes minimal - implement exactly what the task requires.
 
 {{ if not .run.is_continuation }}
 
@@ -120,7 +106,7 @@ Before making changes, read:
 3. Write or update tests to cover the new behavior.
 4. Run verification commands and fix any failures.
 5. If the task is complete, confirm by reviewing your changes.
-{{ end }}
+   {{ end }}
 
 {{ if .run.is_continuation }}
 
