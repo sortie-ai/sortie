@@ -25,9 +25,10 @@ go.work.sum
 /.env
 /.env.*
 
-# Build output
+# Build artifacts
 /sortie
 /sortie.exe
+/dist
 
 .sortie.db
 .sortie.db-shm

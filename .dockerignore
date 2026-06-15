@@ -1,8 +1,7 @@
-# Build artifacts
-dist/
-sortie
-sortie.exe
+# Test data
 *.test
+
+# Code coverage profiles and other test artifacts.
 *.out
 coverage.*
 *.coverprofile
@@ -11,6 +10,7 @@ profile.cov
 # Git
 .git
 .gitignore
+.gitattributes
 
 # IDE
 .zed
@@ -19,6 +19,7 @@ profile.cov
 docs/
 blog/
 website/
+kb/
 *.md
 
 # CI and project config
@@ -33,9 +34,6 @@ codecov.yml
 .sortie.db-shm
 .sortie.db-wal
 
-# Git config and attributes
-.gitattributes
-
 # Build tools and configs
 .tool-versions
 Makefile
@@ -47,6 +45,11 @@ default.mk
 # Environment files
 .env
 .env.*
+
+# Build artifacts
+dist/
+sortie
+sortie.exe
 
 # Test fixtures and examples
 examples/
