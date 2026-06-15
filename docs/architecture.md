@@ -2422,8 +2422,8 @@ defaults `["Backlog", "Todo", "In Progress"]` and `["Done", "Canceled", "Duplica
   `1..4` to a non-null integer.
 - `branch_name` comes from Linear's `branchName`, whose prefix is workspace-configurable; the
   adapter stores it as an opaque string and never parses it.
-- `assignee` resolves through `displayName`, then `name`, then `email`; a null assignee or a
-  non-human actor maps to the empty string.
+- `assignee` resolves through `displayName`, then `name`, then `email`; only a null assignee maps
+  to the empty string, so an assignee carrying just an email resolves to that email.
 - `blocked_by` is derived from `inverseRelations` nodes whose `type` equals `blocks`, matching the
   Section 11.3 rule, which was phrased for Linear's native relation model.
 - `issue_type` is always empty because Linear has no native issue-type field.

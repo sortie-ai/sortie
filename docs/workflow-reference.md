@@ -193,7 +193,7 @@ tracker:
 | ----------------- | --------------- | ------------------------- | --------------- | ---------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `kind`            | string          | **Yes** (for dispatch)    | _(none)_        | Future dispatches                  | Adapter identifier. Supported: `jira`, `github`, `linear`, `file`. Additional adapters are registered separately.                                                                               |
 | `endpoint`        | string          | Adapter-defined           | Adapter-defined | Future dispatches                  | Tracker API endpoint URL. Supports `$VAR` indirection: if the value starts with `$`, it is expanded via `os.ExpandEnv`.                                                                         |
-| `api_key`         | string          | When adapter requires it  | _(none)_        | Future dispatches                  | API authentication token. May be a literal or `$VAR_NAME`. If `$VAR_NAME` resolves to empty, treated as missing. Jira requires this field. Full env expansion applied (`$VAR` at any position). |
+| `api_key`         | string          | When adapter requires it  | _(none)_        | Future dispatches                  | API authentication token. May be a literal or `$VAR_NAME`. If `$VAR_NAME` resolves to empty, treated as missing. The `jira`, `github`, and `linear` adapters require this field; `file` does not. Full env expansion applied (`$VAR` at any position). |
 | `project`         | string          | When adapter requires it  | _(none)_        | Future dispatches                  | Project identifier. Interpretation is adapter-defined: Jira project key, GitHub `owner/repo`, or Linear team key (e.g., `ENG`). Supports `$VAR` indirection: if the value starts with `$`, it is expanded via `os.ExpandEnv`. |
 | `api_version`     | string          | No                        | `"3"`           | Future dispatches                  | Jira REST API version selector: `"3"` (Cloud) or `"2"` (Server / Data Center). Supports `$VAR` indirection. Quote the value: a bare integer (`api_version: 2`) is coerced to its decimal string but emits a validation advisory. Adapters other than Jira ignore this field. |
 | `active_states`   | list of strings | **Yes** (see rules below) | `[]` (empty)    | Future dispatch and reconciliation | Issue states eligible for agent dispatch. An issue is eligible for dispatch only if its state appears in this list. An empty list means no issues will be dispatched.                           |
@@ -267,9 +267,11 @@ The Linear adapter talks to Linear's single GraphQL endpoint. Configure it with 
 - `active_states`, `terminal_states`, and `handoff_state` name Linear **workflow states** by their
   display name (for example `Backlog`, `Todo`, `In Progress`, `Done`, `Canceled`). The adapter
   matches names case-insensitively and verifies at startup that every configured name exists in
-  the team. When `active_states` or `terminal_states` is omitted, the adapter applies the stock
-  Linear defaults: active `["Backlog", "Todo", "In Progress"]`, terminal
-  `["Done", "Canceled", "Duplicate"]`.
+  the team. When `active_states` or `terminal_states` is omitted or set to an empty list, the
+  adapter applies the stock Linear defaults: active `["Backlog", "Todo", "In Progress"]`, terminal
+  `["Done", "Canceled", "Duplicate"]`. The general rule that an empty `active_states` pauses
+  dispatch (see the field table above) does not hold for Linear: an empty list is replaced by the
+  defaults, so emptying it does not stop dispatch.
 
 `handoff_state` and `in_progress_state` also name Linear workflow states. At transition time the
 adapter resolves the configured name to its team-scoped workflow-state id and applies it. Linear
