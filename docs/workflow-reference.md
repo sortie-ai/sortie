@@ -65,6 +65,8 @@
 - [11. Complete Annotated Examples](#11-complete-annotated-examples)
   - [11.1 Minimal Workflow](#111-minimal-workflow)
   - [11.2 Production Jira + Claude Code](#112-production-jira--claude-code)
+  - [11.3 Self-Review with Go Verification](#113-self-review-with-go-verification)
+  - [11.4 Linear + Claude Code](#114-linear--claude-code)
 
 ---
 
@@ -189,14 +191,14 @@ tracker:
 
 | Field             | Type            | Required                  | Default         | Dynamic Reload                     | Description                                                                                                                                                                                     |
 | ----------------- | --------------- | ------------------------- | --------------- | ---------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `kind`            | string          | **Yes** (for dispatch)    | _(none)_        | Future dispatches                  | Adapter identifier. Supported: `jira`, `file`. Additional adapters are registered separately.                                                                                                   |
+| `kind`            | string          | **Yes** (for dispatch)    | _(none)_        | Future dispatches                  | Adapter identifier. Supported: `jira`, `github`, `linear`, `file`. Additional adapters are registered separately.                                                                               |
 | `endpoint`        | string          | Adapter-defined           | Adapter-defined | Future dispatches                  | Tracker API endpoint URL. Supports `$VAR` indirection: if the value starts with `$`, it is expanded via `os.ExpandEnv`.                                                                         |
 | `api_key`         | string          | When adapter requires it  | _(none)_        | Future dispatches                  | API authentication token. May be a literal or `$VAR_NAME`. If `$VAR_NAME` resolves to empty, treated as missing. Jira requires this field. Full env expansion applied (`$VAR` at any position). |
-| `project`         | string          | When adapter requires it  | _(none)_        | Future dispatches                  | Project identifier (e.g., Jira project key). Supports `$VAR` indirection: if the value starts with `$`, it is expanded via `os.ExpandEnv`.                                                      |
+| `project`         | string          | When adapter requires it  | _(none)_        | Future dispatches                  | Project identifier. Interpretation is adapter-defined: Jira project key, GitHub `owner/repo`, or Linear team key (e.g., `ENG`). Supports `$VAR` indirection: if the value starts with `$`, it is expanded via `os.ExpandEnv`. |
 | `api_version`     | string          | No                        | `"3"`           | Future dispatches                  | Jira REST API version selector: `"3"` (Cloud) or `"2"` (Server / Data Center). Supports `$VAR` indirection. Quote the value: a bare integer (`api_version: 2`) is coerced to its decimal string but emits a validation advisory. Adapters other than Jira ignore this field. |
 | `active_states`   | list of strings | **Yes** (see rules below) | `[]` (empty)    | Future dispatch and reconciliation | Issue states eligible for agent dispatch. An issue is eligible for dispatch only if its state appears in this list. An empty list means no issues will be dispatched.                           |
 | `terminal_states` | list of strings | **Yes** (see rules below) | `[]` (empty)    | Future dispatch and reconciliation | Issue states that release claims and trigger cleanup.                                                                                                                                           |
-| `query_filter`    | string          | No                        | `""` (empty)    | Future dispatches                  | Adapter-defined query fragment appended to candidate and terminal-state queries. Passed to the adapter without interpretation. For Jira: JQL fragment (e.g., `"labels = 'agent-ready'"`).       |
+| `query_filter`    | string          | No                        | `""` (empty)    | Future dispatches                  | Adapter-defined query fragment that narrows candidate and terminal-state queries. Passed to the adapter without interpretation. For Jira: JQL fragment (e.g., `"labels = 'agent-ready'"`). For Linear: an `IssueFilter` JSON object, merged rather than appended (see the Linear note below). |
 | `handoff_state`   | string          | No                        | _(absent)_      | Future worker exits                | Target tracker state for orchestrator-initiated handoff after successful worker run. When absent, no handoff transition is performed.                                                           |
 | `in_progress_state` | string        | No                        | _(absent)_      | Future dispatches                  | Target tracker state for dispatch-time transition at the start of each worker attempt. When absent, no dispatch-time transition is performed. Must be in `active_states`. Must not collide with `terminal_states` or `handoff_state`. |
 | `comments`        | map of booleans | No                        | all `false`     | Future dispatches (`on_dispatch`); future worker exits (`on_completion`, `on_failure`) | Toggles for orchestrator-posted tracker comments at session lifecycle points. Keys: `on_dispatch`, `on_completion`, `on_failure`. Each is a boolean defaulting to `false`. Non-boolean values are rejected with a configuration error. See [Section 3.2](#32-curated-variable-list) for the matching `SORTIE_TRACKER_COMMENTS_*` env overrides. |
@@ -245,6 +247,71 @@ All other `$VAR`-supporting fields in `tracker` use targeted resolution: if the 
 value starts with `$`, the entire string is expanded via `os.ExpandEnv` (for example,
 `$HOST/api/rest` expands as expected). Values that do not start with `$` are returned
 unchanged, preserving literal URI strings.
+
+**Linear tracker (`kind: linear`):**
+
+The Linear adapter talks to Linear's single GraphQL endpoint. Configure it with the same generic
+`tracker.*` fields used for every adapter; the Linear-specific interpretation of those fields is:
+
+- `endpoint` defaults to `https://api.linear.app/graphql` and rarely needs to be set, since there
+  is no self-hosted Linear.
+- `api_key` is a Linear personal API key (it carries the `lin_api_` prefix). The key is sent
+  verbatim in the `Authorization` header with no `Bearer` prefix, so leading or trailing
+  whitespace fails authentication. Supply it through environment indirection like any other
+  tracker, for example `api_key: $SORTIE_LINEAR_API_KEY`. The key resolves through the standard
+  `tracker.api_key` field (env override `SORTIE_TRACKER_API_KEY`); `SORTIE_LINEAR_API_KEY` is the
+  conventional variable name the `sortie validate` advisory suggests, not a separate config path.
+- `project` is the Linear **team key** (the prefix in identifiers such as `ENG-123`), for example
+  `ENG`. It is not a Linear project and not an `owner/repo` path. Team scoping is required because
+  Linear workflow states are team-scoped.
+- `active_states`, `terminal_states`, and `handoff_state` name Linear **workflow states** by their
+  display name (for example `Backlog`, `Todo`, `In Progress`, `Done`, `Canceled`). The adapter
+  matches names case-insensitively and verifies at startup that every configured name exists in
+  the team. When `active_states` or `terminal_states` is omitted, the adapter applies the stock
+  Linear defaults: active `["Backlog", "Todo", "In Progress"]`, terminal
+  `["Done", "Canceled", "Duplicate"]`.
+
+`handoff_state` and `in_progress_state` also name Linear workflow states. At transition time the
+adapter resolves the configured name to its team-scoped workflow-state id and applies it. Linear
+imposes no transition graph, so any state can move to any state.
+
+**Linear `query_filter`:** For `kind: linear`, `query_filter` is a Linear `IssueFilter` JSON
+**object**, not a string predicate. The adapter parses the value as JSON and merges it as
+additional fields of the GraphQL `filter` argument alongside the team and state constraints it
+always applies, so Linear ANDs the operator filter with the base query. This differs from Jira,
+where the fragment is appended to a JQL string. Rules:
+
+- The value MUST be a JSON object. A value that is not valid JSON, or parses to a non-object,
+  is a configuration error.
+- The object MUST NOT contain a top-level `team` or `state` key. Those keys are reserved for the
+  adapter's own team and state constraints, and supplying either is a configuration error.
+
+```yaml
+tracker:
+  kind: linear
+  # Only pick up issues that also carry the "Bug" label and have an assignee.
+  query_filter: '{ "labels": { "name": { "eq": "Bug" } }, "assignee": { "null": false } }'
+```
+
+A minimal valid Linear workflow:
+
+```markdown
+---
+tracker:
+  kind: linear
+  api_key: $SORTIE_LINEAR_API_KEY # Linear personal API key (lin_api_...)
+  project: ENG # Linear team key
+  active_states:
+    - Todo
+    - In Progress
+  terminal_states:
+    - Done
+    - Canceled
+  handoff_state: In Review # Linear workflow state moved to after a successful run
+---
+
+Fix {{ .issue.identifier }}: {{ .issue.title }}
+```
 
 ---
 
@@ -2265,6 +2332,29 @@ block. The asymmetry matters: a typo like `lables:` inside `match`, or a stray k
 on a rule, is caught as an error so it cannot silently disable a rule, while a typo
 at the top `dispatch` level is flagged as a warning without preventing startup.
 
+**Adapter-specific tracker diagnostics.** A tracker adapter may contribute its own offline
+checks, which run during the same preflight without any network call. An `error`-severity
+diagnostic blocks dispatch like any other preflight error; a `warning`-severity diagnostic is
+advisory and does not block startup. The Linear adapter (`kind: linear`) emits:
+
+| Check                                            | Severity | Message                                                                                                                                            |
+| ------------------------------------------------ | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `tracker.project.format`                         | error    | `tracker.project must be a Linear team key with no whitespace (e.g. "ENG")`                                                                         |
+| `tracker.project.format`                         | warning  | `tracker.project is a Linear team key (e.g. "ENG"), not an owner/repo path; the "/" looks like a GitHub-style value`                                |
+| `tracker.api_key.sortie_linear_api_key_hint`     | warning  | `tracker.api_key is empty but SORTIE_LINEAR_API_KEY environment variable is set; consider using api_key: $SORTIE_LINEAR_API_KEY`                    |
+| `tracker.api_key.sortie_linear_api_key_missing`  | warning  | `tracker.api_key is empty and SORTIE_LINEAR_API_KEY environment variable is not set`                                                                |
+| `tracker.api_key.linear_whitespace`              | warning  | `tracker.api_key has leading or trailing whitespace; the key is sent verbatim in the Authorization header, so surrounding whitespace will fail authentication` |
+| `tracker.api_key.linear_prefix`                  | warning  | `tracker.api_key does not start with "lin_api_"; Linear personal API keys carry that prefix`                                                        |
+| `tracker.active_states.empty_element` / `tracker.terminal_states.empty_element` | error | `tracker.active_states[<i>]: empty state name can never match a team state` (same shape for `terminal_states`)               |
+| `tracker.active_states.untrimmed_element` / `tracker.terminal_states.untrimmed_element` | error | `tracker.active_states[<i>]: state name has leading or trailing whitespace and can never match a team state` (same shape for `terminal_states`) |
+| `tracker.states.overlap`                         | warning  | `tracker.active_states and tracker.terminal_states overlap on "<name>"; an issue in state "<name>" would match both sets`                           |
+| `tracker.handoff_state.collision`                | warning  | `tracker.handoff_state "<name>" must not appear in active_states (would cause immediate re-dispatch after handoff)`                                 |
+| `tracker.handoff_state.collision`                | warning  | `tracker.handoff_state "<name>" must not appear in terminal_states (handoff is not terminal)`                                                       |
+
+These offline checks never contact Linear and never log the API key value. State-name existence
+against the team and credential validity are checked by the online preflight at adapter
+construction, not by `sortie validate`.
+
 ---
 
 ## 9. Error Reference
@@ -2664,6 +2754,41 @@ hooks:
 ---
 
 Fix {{ .issue.identifier }}: {{ .issue.title }}
+```
+
+---
+
+### 11.4 Linear + Claude Code
+
+A workflow targeting a Linear team. `project` is the team key, the state names are Linear
+workflow states, and `query_filter` is a Linear `IssueFilter` JSON object:
+
+```markdown
+---
+tracker:
+  kind: linear
+  api_key: $SORTIE_LINEAR_API_KEY # Linear personal API key (lin_api_...)
+  project: ENG # Linear team key (prefix in ENG-123)
+  query_filter: '{ "labels": { "name": { "eq": "agent-ready" } } }' # IssueFilter object
+  active_states:
+    - Todo
+    - In Progress
+  terminal_states:
+    - Done
+    - Canceled
+    - Duplicate
+  handoff_state: In Review # Linear workflow state after a successful run
+
+agent:
+  kind: claude-code
+  max_turns: 10
+---
+
+Fix {{ .issue.identifier }}: {{ .issue.title }}
+{{ if .issue.description }}
+
+{{ .issue.description }}
+{{ end }}
 ```
 
 ---
