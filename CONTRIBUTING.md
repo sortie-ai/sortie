@@ -89,7 +89,7 @@ change, that is a valid conversation to have in an issue.
 ```
 cmd/sortie/            entry point, CLI wiring
 internal/
-  agent/               agent adapters and shared agent helpers (agentcore/, claude/, codex/, copilot/, mock/, ...)
+  agent/               agent adapters and shared agent helpers (agentcore/, claude/, codex/, copilot/, opencode/, kiro/, mock/, ...)
   config/              typed config, defaults, env-var resolution
   domain/              pure types, interfaces, error categories (imports nothing)
   httpkit/             shared REST transport, conditional GET, pagination
@@ -102,21 +102,23 @@ internal/
   prompt/              text/template rendering, strict mode
   registry/            adapter registration
   server/              HTTP API, dashboard, metrics
-  tool/                agent tools (trackerapi/, history/, mcpserver/, status/)
-  tracker/             tracker adapters (jira/, file/, etc.)
+  tool/                agent tools (trackerapi/, history/, status/, budget/, notify/, mcpserver/, ...)
+  tracker/             tracker adapters (jira/, file/, linear/)
   scm/                 SCM adapters (github/)
+  notify/              notification adapters (slack/, webhook/)
   trackermetrics/      shared tracker-operation metrics helpers
   workflow/            WORKFLOW.md parser, file watcher
   workspace/           filesystem isolation, path safety, hook execution
 docs/
-  architecture.md      the specification (~4000 lines)
+  architecture.md      the specification (~4500 lines)
   decisions/           Architecture Decision Records (ADRs)
 ```
 
 Imports flow downward. `domain/`, `logging/`, `maputil/`, `typeutil/`, and `httpkit/`
 sit at the bottom with no internal dependencies. `issuekit/` and `trackermetrics/`
-depend only on `domain/`. Adapters (`tracker/*`, `scm/*`, `agent/*`) implement
-interfaces defined in `domain/` and never import each other or the orchestrator.
+depend only on `domain/`. Adapters (`tracker/*`, `scm/*`, `agent/*`, `notify/*`)
+implement interfaces defined in `domain/` and never import each other or the
+orchestrator.
 
 ## Code conventions
 

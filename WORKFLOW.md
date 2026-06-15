@@ -185,12 +185,18 @@ Sortie is a single-binary Go service with this internal layout:
 | `internal/tracker/jira/` | Integration   | Jira adapter behind `TrackerAdapter` interface       |
 | `internal/scm/github/`   | Integration   | GitHub tracker, CI, and review adapters behind `TrackerAdapter`, `CIStatusProvider`, and `SCMAdapter` interfaces |
 | `internal/tracker/file/` | Integration   | File-based tracker for dev/test                      |
+| `internal/tracker/linear/` | Integration | Linear adapter behind `TrackerAdapter` interface     |
 | `internal/agent/agentcore/` | Integration | Shared agent adapter command, event, usage, and workspace helpers |
+| `internal/agent/procutil/` | Integration | Shared subprocess lifecycle helpers for agent adapters |
+| `internal/agent/sshutil/`  | Integration | Shared SSH invocation helpers for agent adapters     |
 | `internal/agent/claude/` | Integration   | Claude Code adapter behind `AgentAdapter` interface  |
 | `internal/agent/codex/`  | Integration   | Codex adapter behind `AgentAdapter` interface        |
 | `internal/agent/copilot/` | Integration  | Copilot adapter behind `AgentAdapter` interface      |
 | `internal/agent/opencode/` | Integration | OpenCode adapter behind `AgentAdapter` interface     |
+| `internal/agent/kiro/`   | Integration   | Kiro adapter behind `AgentAdapter` interface         |
 | `internal/agent/mock/`   | Integration   | Mock agent for testing                               |
+| `internal/notify/slack/` | Integration   | Slack notifier behind `Notifier` interface           |
+| `internal/notify/webhook/` | Integration | Outbound webhook notifier behind `Notifier` interface |
 | `internal/workspace/`    | Execution     | Workspace lifecycle, hooks, path safety              |
 | `internal/orchestrator/` | Coordination  | Poll loop, dispatch, retry, reconciliation           |
 | `internal/server/`       | Observability | HTTP API server, JSON endpoints, dashboard           |
@@ -203,6 +209,9 @@ Sortie is a single-binary Go service with this internal layout:
 | `internal/tool/history/`    | Support    | Agent tool for workspace run history                 |
 | `internal/tool/mcpserver/`  | Support    | MCP stdio server for tool dispatch                   |
 | `internal/tool/status/`     | Support    | Agent tool for session metadata                      |
+| `internal/tool/budget/`     | Support    | Agent tool for cost budget reporting                 |
+| `internal/tool/notify/`     | Support    | Agent tool for notifying the operator                |
+| `internal/tool/toolresult/` | Support    | Uniform result envelope for built-in agent tools     |
 | `cmd/sortie/`            | Entry point   | CLI wiring, signal handling, startup                 |
 
 {{ if .issue.url }}
