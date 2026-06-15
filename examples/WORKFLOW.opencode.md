@@ -46,7 +46,7 @@ agent:
   max_retry_backoff_ms: 300000
 
 opencode:
-  model: anthropic/claude-sonnet-4-5
+  model: anthropic/claude-sonnet-4-6
   dangerously_skip_permissions: true
   disable_autocompact: true
   allowed_tools:
