@@ -203,6 +203,7 @@ func TestValidateStateLabels(t *testing.T) {
 		field     string
 		states    []string
 		wantCount int
+		wantCheck string // suffix appended to field; empty means no diags expected
 	}{
 		{
 			name:      "nil slice yields no warnings",
@@ -221,24 +222,56 @@ func TestValidateStateLabels(t *testing.T) {
 			field:     "tracker.active_states",
 			states:    []string{""},
 			wantCount: 1,
+			wantCheck: "empty_element",
 		},
 		{
 			name:      "empty element at index 1",
 			field:     "tracker.active_states",
 			states:    []string{"Backlog", ""},
 			wantCount: 1,
+			wantCheck: "empty_element",
 		},
 		{
-			name:      "whitespace-only element",
+			name:      "whitespace-only element maps to empty_element not untrimmed_element",
 			field:     "tracker.active_states",
 			states:    []string{"Backlog", "   ", "Done"},
 			wantCount: 1,
+			wantCheck: "empty_element",
 		},
 		{
 			name:      "multiple empty elements",
 			field:     "tracker.active_states",
 			states:    []string{"", "Backlog", ""},
 			wantCount: 2,
+			wantCheck: "empty_element",
+		},
+		// untrimmed_element: non-empty strings with leading or trailing whitespace.
+		{
+			name:      "trailing-space element yields untrimmed_element error",
+			field:     "tracker.active_states",
+			states:    []string{"Todo "},
+			wantCount: 1,
+			wantCheck: "untrimmed_element",
+		},
+		{
+			name:      "leading-space element yields untrimmed_element error",
+			field:     "tracker.active_states",
+			states:    []string{" Todo"},
+			wantCount: 1,
+			wantCheck: "untrimmed_element",
+		},
+		{
+			name:      "trailing-tab element yields untrimmed_element error",
+			field:     "tracker.active_states",
+			states:    []string{"Todo\t"},
+			wantCount: 1,
+			wantCheck: "untrimmed_element",
+		},
+		{
+			name:      "clean element yields no diag",
+			field:     "tracker.active_states",
+			states:    []string{"Todo"},
+			wantCount: 0,
 		},
 		// Exercise the terminal_states field name so both check-key paths are covered.
 		{
@@ -252,6 +285,21 @@ func TestValidateStateLabels(t *testing.T) {
 			field:     "tracker.terminal_states",
 			states:    []string{""},
 			wantCount: 1,
+			wantCheck: "empty_element",
+		},
+		{
+			name:      "terminal_states trailing-space element yields untrimmed_element error",
+			field:     "tracker.terminal_states",
+			states:    []string{"Done "},
+			wantCount: 1,
+			wantCheck: "untrimmed_element",
+		},
+		{
+			name:      "terminal_states leading-space element yields untrimmed_element error",
+			field:     "tracker.terminal_states",
+			states:    []string{" Done"},
+			wantCount: 1,
+			wantCheck: "untrimmed_element",
 		},
 	}
 
@@ -264,7 +312,10 @@ func TestValidateStateLabels(t *testing.T) {
 			if len(got) != tt.wantCount {
 				t.Fatalf("validateStateLabels(%q, %v) = %d diags, want %d; diags: %v", tt.field, tt.states, len(got), tt.wantCount, got)
 			}
-			wantCheck := tt.field + ".empty_element"
+			if tt.wantCount == 0 {
+				return
+			}
+			wantCheck := tt.field + "." + tt.wantCheck
 			for i, d := range got {
 				if d.Check != wantCheck {
 					t.Errorf("validateStateLabels(%q, ...) diag[%d].Check = %q, want %q", tt.field, i, d.Check, wantCheck)
@@ -513,6 +564,22 @@ func TestValidateConfig(t *testing.T) {
 				TerminalStates: []string{"Done"},
 			},
 			wantChecks:   []string{"tracker.active_states.empty_element"},
+			wantErrCount: 1,
+		},
+		{
+			// An untrimmed element in a present active_states list cannot match
+			// a team state by exact comparison, so it must produce a
+			// tracker.active_states.untrimmed_element error. No in_progress_state
+			// diagnostic may appear (Linear has no such config key).
+			name: "present active list with untrimmed element – untrimmed_element error",
+			fields: registry.TrackerConfigFields{
+				Kind:           "linear",
+				Project:        "ENG",
+				APIKey:         "lin_api_testtoken123",
+				ActiveStates:   []string{"Todo "},
+				TerminalStates: []string{"Done"},
+			},
+			wantChecks:   []string{"tracker.active_states.untrimmed_element"},
 			wantErrCount: 1,
 		},
 	}
