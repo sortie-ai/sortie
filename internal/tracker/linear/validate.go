@@ -55,9 +55,11 @@ func validateProject(project string) []registry.ValidationDiag {
 
 // validateAPIKeyHint produces advisory diagnostics for the resolved
 // tracker.api_key. An empty key hints about the SORTIE_LINEAR_API_KEY
-// environment variable; a non-empty key lacking the lin_api_ prefix is
-// flagged as likely wrong. The key value is never logged or placed in a
-// diagnostic message.
+// environment variable; a non-empty key surrounded by whitespace is
+// flagged because the key is sent verbatim in the Authorization header;
+// a non-empty key lacking the lin_api_ prefix is flagged as likely
+// wrong. The key value is never logged or placed in a diagnostic
+// message.
 func validateAPIKeyHint(apiKey string) []registry.ValidationDiag {
 	trimmed := strings.TrimSpace(apiKey)
 
@@ -77,10 +79,18 @@ func validateAPIKeyHint(apiKey string) []registry.ValidationDiag {
 		}}
 	}
 
+	if apiKey != trimmed {
+		return []registry.ValidationDiag{{
+			Severity: "warning",
+			Check:    "tracker.api_key.linear_whitespace",
+			Message:  "tracker.api_key has leading or trailing whitespace; the key is sent verbatim in the Authorization header, so surrounding whitespace will fail authentication",
+		}}
+	}
+
 	if !strings.HasPrefix(trimmed, "lin_api_") {
 		return []registry.ValidationDiag{{
 			Severity: "warning",
-			Check:    "tracker.api_key.prefix",
+			Check:    "tracker.api_key.linear_prefix",
 			Message:  `tracker.api_key does not start with "lin_api_"; Linear personal API keys carry that prefix`,
 		}}
 	}
