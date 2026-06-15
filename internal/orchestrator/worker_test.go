@@ -2074,7 +2074,7 @@ func TestRunWorkerAttempt_DispatchTransition(t *testing.T) {
 	})
 }
 
-// TestRunWorkerAttempt_MCPConfig covers Phase 1.5: MCP config generation
+// TestRunWorkerAttempt_MCPConfig covers MCP config generation, which
 // is skipped when WorkflowPath is empty, and the generated config path is
 // forwarded to StartSessionParams when WorkflowPath is non-empty.
 func TestRunWorkerAttempt_MCPConfig(t *testing.T) {
@@ -2182,7 +2182,7 @@ func TestRunWorkerAttempt_MCPConfig(t *testing.T) {
 		}
 	})
 
-	// Phase 1.5 error path: GenerateMCPConfig failure must be fatal to the attempt.
+	// Error path: GenerateMCPConfig failure must be fatal to the attempt.
 	// Triggered by an operator config that contains the reserved name "sortie-tools".
 	t.Run("generate_fails_fatal_to_attempt", func(t *testing.T) {
 		t.Parallel()
@@ -2246,7 +2246,7 @@ func TestRunWorkerAttempt_MCPConfig(t *testing.T) {
 		}
 	})
 
-	// Phase 1.5 extension lookup: operator mcp_config from cfg.Extensions[agentKind]
+	// Extension lookup: operator mcp_config from cfg.Extensions[agentKind]
 	// must be merged into the generated .sortie/mcp.json.
 	t.Run("operator_config_merged_from_extensions", func(t *testing.T) {
 		t.Parallel()
@@ -2322,7 +2322,7 @@ func TestRunWorkerAttempt_MCPConfig(t *testing.T) {
 		}
 	})
 
-	// Phase 1.5 path resolution: a relative mcp_config extension value must be
+	// Path resolution: a relative mcp_config extension value must be
 	// resolved relative to the directory containing deps.WorkflowPath.
 	t.Run("relative_operator_path_resolved_from_workflow_dir", func(t *testing.T) {
 		t.Parallel()
@@ -2391,7 +2391,7 @@ func TestRunWorkerAttempt_MCPConfig(t *testing.T) {
 		}
 	})
 
-	// Phase 1.5 env forwarding: deps.DBPath must appear as SORTIE_DB_PATH in the
+	// Env forwarding: deps.DBPath must appear as SORTIE_DB_PATH in the
 	// generated config's env block.
 	t.Run("dbpath_forwarded_to_mcp_config_env", func(t *testing.T) {
 		t.Parallel()
@@ -3215,15 +3215,15 @@ func TestRunWorkerAttempt_PromptTemplateByIDFunc_NilTemplateExitsWithError(t *te
 }
 
 // TestRunWorkerAttempt_SessionToolRegistryFunc covers the injected
-// SessionToolRegistryFunc seam: AC-1 (all five tool headings in the first-turn
-// advertisement), AC-3 (advertised side extracted from the rendered string),
-// AC-5 (suffix ordering and continuation-turn omission preserved), and E-3
-// (builder error degrades without failing the attempt).
+// SessionToolRegistryFunc seam: all five tool headings in the first-turn
+// advertisement, the advertised side extracted from the rendered string,
+// suffix ordering and continuation-turn omission preserved, and a builder
+// error degrading without failing the attempt.
 func TestRunWorkerAttempt_SessionToolRegistryFunc(t *testing.T) {
 	t.Parallel()
 
 	// fakeAllToolsRegistry builds a registry containing all five expected
-	// per-session tools as stub entries. This satisfies AC-1 / AC-3.
+	// per-session tools as stub entries.
 	fakeAllToolsRegistry := func() *domain.ToolRegistry {
 		reg := domain.NewToolRegistry()
 		for _, name := range []string{
@@ -3239,9 +3239,9 @@ func TestRunWorkerAttempt_SessionToolRegistryFunc(t *testing.T) {
 	}
 
 	t.Run("injected_builder_all_five_tools_advertised", func(t *testing.T) {
-		// AC-1: the first-turn prompt contains a ### heading for each of the
+		// The first-turn prompt contains a ### heading for each of the
 		// five per-session tools when the injected builder returns all five.
-		// AC-3 advertised side: names are extracted from the rendered string,
+		// Advertised side: names are extracted from the rendered string,
 		// not from registry.List(), so a buildToolAdvertisement regression
 		// would be caught here.
 		t.Parallel()
@@ -3299,15 +3299,14 @@ func TestRunWorkerAttempt_SessionToolRegistryFunc(t *testing.T) {
 			}
 		}
 
-		// Confirm the advertisement section header is present (AC-3 rendered
-		// string check).
+		// Confirm the advertisement section header is present.
 		if !strings.Contains(p, "## Available Sortie tools") {
 			t.Errorf("first-turn prompt missing advertisement header:\n%s", p)
 		}
 	})
 
 	t.Run("injected_builder_suffix_after_advertisement", func(t *testing.T) {
-		// AC-5: RuntimeStatusSuffix appears after the tool advertisement when
+		// RuntimeStatusSuffix appears after the tool advertisement when
 		// SessionToolRegistryFunc is injected, preserving suffix ordering.
 		t.Parallel()
 
@@ -3361,7 +3360,7 @@ func TestRunWorkerAttempt_SessionToolRegistryFunc(t *testing.T) {
 	})
 
 	t.Run("injected_builder_no_advertisement_on_continuation_turns", func(t *testing.T) {
-		// AC-5: continuation turns still omit the advertisement when
+		// Continuation turns still omit the advertisement when
 		// SessionToolRegistryFunc is injected.
 		t.Parallel()
 
@@ -3424,7 +3423,7 @@ func TestRunWorkerAttempt_SessionToolRegistryFunc(t *testing.T) {
 	})
 
 	t.Run("injected_builder_error_degrades_no_advertisement", func(t *testing.T) {
-		// E-3 degrade path: when SessionToolRegistryFunc returns an error the
+		// Degrade path: when SessionToolRegistryFunc returns an error the
 		// worker logs a Warn and renders no advertisement section, still appends
 		// RuntimeStatusSuffix, and does not fail the attempt.
 		t.Parallel()
@@ -3464,16 +3463,16 @@ func TestRunWorkerAttempt_SessionToolRegistryFunc(t *testing.T) {
 
 		result := ec.waitResult(t)
 
-		// E-3: attempt must not fail.
+		// Attempt must not fail.
 		if result.ExitKind != WorkerExitNormal {
-			t.Errorf("ExitKind = %q, want %q (E-3: degrade not fail)", result.ExitKind, WorkerExitNormal)
+			t.Errorf("ExitKind = %q, want %q (degrade not fail)", result.ExitKind, WorkerExitNormal)
 		}
 
 		mu.Lock()
 		p := capturedPrompt
 		mu.Unlock()
 
-		// E-3: no advertisement section rendered.
+		// No advertisement section rendered.
 		if strings.Contains(p, "## Available Sortie tools") {
 			t.Errorf("first-turn prompt must not contain tool advertisement after builder error:\n%s", p)
 		}
@@ -3483,9 +3482,9 @@ func TestRunWorkerAttempt_SessionToolRegistryFunc(t *testing.T) {
 			t.Errorf("first-turn prompt missing RuntimeStatusSuffix after builder error:\n%s", p)
 		}
 
-		// E-3: Warn must have been logged.
+		// Warn must have been logged.
 		if !strings.Contains(logBuf.String(), "failed to build session tool advertisement") {
-			t.Errorf("E-3: expected Warn log not found; got:\n%s", logBuf.String())
+			t.Errorf("expected Warn log not found; got:\n%s", logBuf.String())
 		}
 	})
 

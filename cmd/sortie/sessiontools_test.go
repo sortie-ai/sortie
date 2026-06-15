@@ -159,7 +159,7 @@ func (s *stubTrackerAdapter) AddLabel(_ context.Context, _ string, _ string) err
 
 // --- Tests ---
 
-// TestBuildSessionToolRegistry_AllToolsPresent verifies AC-3 served-side parity:
+// TestBuildSessionToolRegistry_AllToolsPresent verifies served-side parity:
 // all five expected tools appear in the built registry and in the names served
 // over tools/list for an equivalent session.
 func TestBuildSessionToolRegistry_AllToolsPresent(t *testing.T) {
@@ -192,7 +192,7 @@ func TestBuildSessionToolRegistry_AllToolsPresent(t *testing.T) {
 	registryNames := toolNamesFromResult(result)
 	assertContainsAll(t, "registry", registryNames, want)
 
-	// AC-3 cross-channel parity: tools/list must match the registry.
+	// Cross-channel parity: tools/list must match the registry.
 	mcpNames := toolNamesFromMCPServer(t, result)
 	if len(mcpNames) != len(registryNames) {
 		t.Errorf("tools/list len = %d, registry.Len() = %d; want equal", len(mcpNames), len(registryNames))
@@ -200,7 +200,7 @@ func TestBuildSessionToolRegistry_AllToolsPresent(t *testing.T) {
 	assertContainsAll(t, "tools/list", mcpNames, want)
 }
 
-// TestBuildSessionToolRegistry_GatingPreserved verifies AC-2: unset gates
+// TestBuildSessionToolRegistry_GatingPreserved verifies that unset gates
 // remove the corresponding tools from the built registry.
 func TestBuildSessionToolRegistry_GatingPreserved(t *testing.T) {
 	t.Parallel()
@@ -299,8 +299,8 @@ func TestBuildSessionToolRegistry_GatingPreserved(t *testing.T) {
 	}
 }
 
-// TestBuildSessionToolRegistry_MisconfiguredNotifier verifies AC-6: a
-// misconfigured notifier backend (E-1) causes BuildSessionToolRegistry to
+// TestBuildSessionToolRegistry_MisconfiguredNotifier verifies that a
+// misconfigured notifier backend causes BuildSessionToolRegistry to
 // return a non-nil error and no store is leaked.
 func TestBuildSessionToolRegistry_MisconfiguredNotifier(t *testing.T) {
 	t.Parallel()
@@ -353,9 +353,9 @@ func TestBuildSessionToolRegistry_MisconfiguredNotifier(t *testing.T) {
 	}
 }
 
-// TestBuildSessionToolRegistry_DBOpenDegradation verifies AC-7: a read-only
-// open failure (E-2) produces a degraded success — workspace_history and
-// cost_budget absent, result.Store nil, and the E-2 warning logged.
+// TestBuildSessionToolRegistry_DBOpenDegradation verifies that a read-only
+// open failure produces a degraded success — workspace_history and
+// cost_budget absent, result.Store nil, and the degradation warning logged.
 func TestBuildSessionToolRegistry_DBOpenDegradation(t *testing.T) {
 	t.Parallel()
 
@@ -401,19 +401,19 @@ func TestBuildSessionToolRegistry_DBOpenDegradation(t *testing.T) {
 				t.Fatalf("BuildSessionToolRegistry(%q) error = %v, want nil (degraded success)", tt.name, err)
 			}
 
-			// AC-7: no DB connection leaked.
+			// No DB connection leaked.
 			if result.Store != nil {
 				_ = result.Store.Close()
 				t.Errorf("BuildSessionToolRegistry(%q) result.Store non-nil, want nil", tt.name)
 			}
 
-			// AC-7: DB-backed tools absent after open failure.
+			// DB-backed tools absent after open failure.
 			names := toolNamesFromResult(result)
 			assertContainsNone(t, tt.name, names, []string{"workspace_history", "cost_budget"})
 
-			// E-2 warning must have been emitted on the supplied logger.
+			// The degradation warning must have been emitted on the supplied logger.
 			if !strings.Contains(logBuf.String(), "failed to open read-only db") {
-				t.Errorf("BuildSessionToolRegistry(%q) E-2 warning not logged; got:\n%s", tt.name, logBuf.String())
+				t.Errorf("BuildSessionToolRegistry(%q) degradation warning not logged; got:\n%s", tt.name, logBuf.String())
 			}
 		})
 	}

@@ -207,7 +207,7 @@ func TestBudgetTool_Execute(t *testing.T) {
 	}
 }
 
-// TestBudgetTool_Execute_SuccessEnvelopeShape pins the AC-1 contract:
+// TestBudgetTool_Execute_SuccessEnvelopeShape pins the success-envelope contract:
 // top-level keys are exactly {success, data}, data carries the five fields,
 // and remaining_tokens is an explicit null when the budget is unlimited.
 func TestBudgetTool_Execute_SuccessEnvelopeShape(t *testing.T) {
@@ -265,7 +265,7 @@ func TestBudgetTool_Execute_SuccessEnvelopeShape(t *testing.T) {
 
 // TestBudgetTool_Execute_QueryError asserts that a query failure returns
 // success==false, error.kind=="query_failed", error.message equal to the query
-// error string, and a nil Go error (AC-2, AC-5).
+// error string, and a nil Go error.
 func TestBudgetTool_Execute_QueryError(t *testing.T) {
 	t.Parallel()
 
@@ -304,7 +304,7 @@ func TestBudgetTool_Execute_QueryError(t *testing.T) {
 	}
 }
 
-// TestBudgetTool_Execute_FailureEnvelopeShape pins the AC-2 contract: the
+// TestBudgetTool_Execute_FailureEnvelopeShape pins the failure-envelope contract: the
 // failure response has top-level keys exactly {success, error} with error
 // carrying {kind, message}.
 func TestBudgetTool_Execute_FailureEnvelopeShape(t *testing.T) {

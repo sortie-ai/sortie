@@ -446,7 +446,7 @@ func TestValidateStateOverlap(t *testing.T) {
 			},
 			wantDiagCount: 0,
 		},
-		// AC-7: InProgressState populated but must generate no in_progress_state diag.
+		// InProgressState populated but must generate no in_progress_state diag.
 		{
 			name: "in_progress_state populated – no in_progress_state diagnostic emitted",
 			fields: registry.TrackerConfigFields{
@@ -487,7 +487,7 @@ func TestValidateStateOverlap(t *testing.T) {
 					t.Errorf("validateStateOverlap() diag[%d].Severity = %q, want %q", i, d.Severity, "warning")
 				}
 			}
-			// AC-7: no in_progress_state check may ever appear.
+			// No in_progress_state check may ever appear.
 			for i, d := range got {
 				if strings.HasPrefix(d.Check, "tracker.in_progress_state") {
 					t.Errorf("validateStateOverlap() diag[%d].Check = %q begins with tracker.in_progress_state; Linear validator must not emit this check", i, d.Check)
@@ -508,8 +508,8 @@ func TestValidateConfig(t *testing.T) {
 		wantWarnCount int      // expected warning-severity diag count
 	}{
 		{
-			// AC-5: valid lin_api_-prefixed key, whitespace-free slash-free
-			// project, non-overlapping clean state lists. AC-7: InProgressState
+			// Valid lin_api_-prefixed key, whitespace-free slash-free
+			// project, non-overlapping clean state lists. InProgressState
 			// is populated to prove the validator ignores it.
 			name: "fully valid config with explicit state lists – zero diagnostics",
 			fields: registry.TrackerConfigFields{
@@ -524,7 +524,7 @@ func TestValidateConfig(t *testing.T) {
 			wantWarnCount: 0,
 		},
 		{
-			// AC-5: nil state lists are valid because the constructor applies
+			// Nil state lists are valid because the constructor applies
 			// defaultActiveStates / defaultTerminalStates.
 			name: "valid config with nil state lists – zero diagnostics (defaults-apply path)",
 			fields: registry.TrackerConfigFields{
@@ -536,7 +536,7 @@ func TestValidateConfig(t *testing.T) {
 			wantWarnCount: 0,
 		},
 		{
-			// AC-3: whitespace in team key must produce one error on tracker.project.format.
+			// Whitespace in team key must produce one error on tracker.project.format.
 			name: "whitespace project – error diagnostic",
 			fields: registry.TrackerConfigFields{
 				Kind:    "linear",
@@ -547,7 +547,7 @@ func TestValidateConfig(t *testing.T) {
 			wantErrCount: 1,
 		},
 		{
-			// AC-3: slash in team key must produce one warning on tracker.project.format.
+			// Slash in team key must produce one warning on tracker.project.format.
 			name: "slash project – warning diagnostic",
 			fields: registry.TrackerConfigFields{
 				Kind:    "linear",
@@ -558,7 +558,7 @@ func TestValidateConfig(t *testing.T) {
 			wantWarnCount: 1,
 		},
 		{
-			// AC-4: active ∩ terminal must produce tracker.states.overlap warning.
+			// Active ∩ terminal must produce tracker.states.overlap warning.
 			name: "overlapping active and terminal states – overlap warning",
 			fields: registry.TrackerConfigFields{
 				Kind:           "linear",
@@ -624,7 +624,7 @@ func TestValidateConfig(t *testing.T) {
 				}
 			}
 
-			// AC-7: no in_progress_state check may ever appear.
+			// No in_progress_state check may ever appear.
 			for i, d := range got {
 				if strings.HasPrefix(d.Check, "tracker.in_progress_state") {
 					t.Errorf("validateConfig(%q) diag[%d].Check = %q; Linear must not emit in_progress_state checks", tt.name, i, d.Check)
@@ -634,7 +634,7 @@ func TestValidateConfig(t *testing.T) {
 	}
 }
 
-// TestValidateConfigEnvGated covers the AC-1 and AC-5 paths that depend on
+// TestValidateConfigEnvGated covers the API-key paths that depend on
 // SORTIE_LINEAR_API_KEY. These subtests use t.Setenv so the parent must not
 // call t.Parallel().
 func TestValidateConfigEnvGated(t *testing.T) {
@@ -651,7 +651,7 @@ func TestValidateConfigEnvGated(t *testing.T) {
 
 		got := validateConfig(fields)
 
-		// AC-1: validateAPIKeyHint emits tracker.api_key.sortie_linear_api_key_hint.
+		// validateAPIKeyHint emits tracker.api_key.sortie_linear_api_key_hint.
 		if !hasDiagCheck(got, "tracker.api_key.sortie_linear_api_key_hint") {
 			t.Errorf("validateConfig(empty key, env set) = %v, want check tracker.api_key.sortie_linear_api_key_hint", got)
 		}
@@ -668,7 +668,7 @@ func TestValidateConfigEnvGated(t *testing.T) {
 
 		got := validateConfig(fields)
 
-		// AC-1: validateAPIKeyHint emits tracker.api_key.sortie_linear_api_key_missing.
+		// validateAPIKeyHint emits tracker.api_key.sortie_linear_api_key_missing.
 		if !hasDiagCheck(got, "tracker.api_key.sortie_linear_api_key_missing") {
 			t.Errorf("validateConfig(empty key, env unset) = %v, want check tracker.api_key.sortie_linear_api_key_missing", got)
 		}

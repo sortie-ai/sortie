@@ -2089,7 +2089,7 @@ func TestHandleRetryTimer_ReactionReviewInHandoffStateDispatches(t *testing.T) {
 		"review_comments": map[string]any{"count": 3},
 	}
 
-	// No claim set — simulates post-handoff state (FR-10).
+	// No claim set — simulates post-handoff state.
 	state := NewState(5000, 4, nil, AgentTotals{})
 	state.RetryAttempts[id] = &RetryEntry{
 		IssueID:             id,

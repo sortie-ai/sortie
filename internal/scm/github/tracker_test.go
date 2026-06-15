@@ -1905,7 +1905,7 @@ func TestFetchIssueComments_NonNotFoundError(t *testing.T) {
 func TestTransitionIssue_GetIssueError(t *testing.T) {
 	t.Parallel()
 
-	// Step 1 (GET issue) returns 500 → error propagated; not a NotFound.
+	// GET issue returns 500 → error propagated; not a NotFound.
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 	}))
@@ -2386,7 +2386,7 @@ func TestFetchCandidateIssueByIDEquivalence(t *testing.T) {
 		activeSet[s] = true // GitHub adapter already lowercases
 	}
 
-	// Case 1: active issue — FetchIssueByID succeeds and local check accepts.
+	// Active issue — FetchIssueByID succeeds and local check accepts.
 	issue1, err := a.FetchIssueByID(ctx, "1")
 	if err != nil {
 		t.Fatalf("FetchIssueByID(1): %v", err)
@@ -2401,11 +2401,11 @@ func TestFetchCandidateIssueByIDEquivalence(t *testing.T) {
 		t.Errorf("issue 1 (state=%q): local active check rejects it but it was a candidate", issue1.State)
 	}
 
-	// Case 2: PR — FetchIssueByID returns ErrTrackerNotFound.
+	// PR — FetchIssueByID returns ErrTrackerNotFound.
 	_, err = a.FetchIssueByID(ctx, "2")
 	assertTrackerErrorKind(t, err, domain.ErrTrackerNotFound)
 
-	// Case 3: non-active issue — FetchIssueByID succeeds but local check rejects.
+	// Non-active issue — FetchIssueByID succeeds but local check rejects.
 	issue3, err := a.FetchIssueByID(ctx, "3")
 	if err != nil {
 		t.Fatalf("FetchIssueByID(3): %v", err)

@@ -1056,7 +1056,7 @@ func assertStringSliceEqual(t *testing.T, name string, want, got []string) {
 	}
 }
 
-// TestValidateInProgressState exercises rule 4 (collision with handoff_state)
+// TestValidateInProgressState exercises the handoff_state collision check
 // directly, because the path through NewServiceConfig cannot reach it:
 // validateHandoffState rejects any handoffState ∈ activeStates before
 // validateInProgressState runs, and inProgressState must be ∈ activeStates.

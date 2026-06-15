@@ -125,8 +125,7 @@ func TestHistoryTool_InputSchema_DefensiveCopy(t *testing.T) {
 }
 
 // TestHistoryTool_Execute_SuccessEnvelopeShape asserts that a success response
-// has top-level keys {success, data} and that data carries issue_id and entries
-// (AC-1).
+// has top-level keys {success, data} and that data carries issue_id and entries.
 func TestHistoryTool_Execute_SuccessEnvelopeShape(t *testing.T) {
 	t.Parallel()
 
@@ -211,7 +210,7 @@ func TestHistoryTool_Execute_EntriesReturned(t *testing.T) {
 }
 
 // TestHistoryTool_Execute_EmptyEntries asserts that an empty history returns
-// data.entries as [] (not null) (AC-1).
+// data.entries as [] (not null).
 func TestHistoryTool_Execute_EmptyEntries(t *testing.T) {
 	t.Parallel()
 
@@ -277,7 +276,7 @@ func TestHistoryTool_Execute_LimitPassthrough(t *testing.T) {
 
 // TestHistoryTool_Execute_QueryError asserts that a query failure returns
 // success==false, error.kind=="query_failed", error.message equal to the query
-// error string, and a nil Go error (AC-2, AC-5).
+// error string, and a nil Go error.
 func TestHistoryTool_Execute_QueryError(t *testing.T) {
 	t.Parallel()
 
@@ -307,7 +306,7 @@ func TestHistoryTool_Execute_QueryError(t *testing.T) {
 	}
 }
 
-// TestHistoryTool_Execute_FailureEnvelopeShape pins the AC-2 contract: the
+// TestHistoryTool_Execute_FailureEnvelopeShape pins the failure-envelope contract: the
 // failure response has top-level keys exactly {success, error} with error
 // carrying {kind, message}, and no "data" key.
 func TestHistoryTool_Execute_FailureEnvelopeShape(t *testing.T) {
@@ -345,7 +344,7 @@ func TestHistoryTool_Execute_FailureEnvelopeShape(t *testing.T) {
 
 // TestHistoryTool_Execute_PerEntryErrorIsUnderData asserts that the per-entry
 // error field is under data.entries[i].error and not conflated with the
-// envelope error (AC-1 note on per-entry error).
+// envelope error.
 func TestHistoryTool_Execute_PerEntryErrorIsUnderData(t *testing.T) {
 	t.Parallel()
 

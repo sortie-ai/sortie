@@ -1120,7 +1120,7 @@ func TestAdapterLifecycle(t *testing.T) {
 
 	ctx := context.Background()
 
-	// 1. FetchCandidateIssues
+	// FetchCandidateIssues
 	candidates, err := a.FetchCandidateIssues(ctx)
 	if err != nil {
 		t.Fatalf("FetchCandidateIssues: %v", err)
@@ -1152,7 +1152,7 @@ func TestAdapterLifecycle(t *testing.T) {
 		t.Errorf("BlockedBy len = %d, want 1", len(candidates[0].BlockedBy))
 	}
 
-	// 2. FetchIssueByID
+	// FetchIssueByID
 	detail, err := a.FetchIssueByID(ctx, "PROJ-5")
 	if err != nil {
 		t.Fatalf("FetchIssueByID: %v", err)
@@ -1164,7 +1164,7 @@ func TestAdapterLifecycle(t *testing.T) {
 		t.Error("detail.Description is empty, want flattened ADF text")
 	}
 
-	// 3. FetchIssuesByStates
+	// FetchIssuesByStates
 	terminal, err := a.FetchIssuesByStates(ctx, []string{"Done"})
 	if err != nil {
 		t.Fatalf("FetchIssuesByStates: %v", err)
@@ -1173,7 +1173,7 @@ func TestAdapterLifecycle(t *testing.T) {
 		t.Errorf("terminal len = %d, want 2", len(terminal))
 	}
 
-	// 4. FetchIssueStatesByIDs — uses numeric IDs, results keyed by ID
+	// FetchIssueStatesByIDs — uses numeric IDs, results keyed by ID
 	stateMap, err := a.FetchIssueStatesByIDs(ctx, []string{"10001", "10002"})
 	if err != nil {
 		t.Fatalf("FetchIssueStatesByIDs: %v", err)
@@ -1185,7 +1185,7 @@ func TestAdapterLifecycle(t *testing.T) {
 		t.Errorf("stateMap[\"10002\"] = %q, want In Progress", stateMap["10002"])
 	}
 
-	// 5. FetchIssueComments
+	// FetchIssueComments
 	comments, err := a.FetchIssueComments(ctx, "PROJ-5")
 	if err != nil {
 		t.Fatalf("FetchIssueComments: %v", err)

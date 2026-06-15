@@ -194,7 +194,7 @@ func TestSampleWorkflowContinuationShorter(t *testing.T) {
 		t.Fatalf("Render(continuation): %v", err)
 	}
 
-	// Section 3.4: continuation turns must produce shorter output than first turns.
+	// Continuation turns must produce shorter output than first turns.
 	if len(contOut) >= len(firstOut) {
 		t.Errorf("continuation output (%d chars) should be shorter than first turn (%d chars)",
 			len(contOut), len(firstOut))
@@ -272,7 +272,7 @@ func TestSampleWorkflowTestFilePathConfig(t *testing.T) {
 	}
 
 	// Verify file.path is CWD-relative (examples/issues.json), not bare issues.json.
-	// Section 3.2: file tracker resolves path relative to CWD.
+	// The file tracker resolves path relative to CWD.
 	fileExt, ok := wf.Config["file"]
 	if !ok {
 		t.Fatal("WORKFLOW.test.md config missing 'file' extension block")
@@ -307,7 +307,7 @@ func TestSampleWorkflowNoHTMLComments(t *testing.T) {
 			if err != nil {
 				t.Fatalf("workflow.Load(%s): %v", name, err)
 			}
-			// Section 3.5: HTML comments must not appear — they are not
+			// HTML comments must not appear — they are not
 			// stripped by Go text/template and would leak into the prompt.
 			if strings.Contains(wf.PromptTemplate, "<!--") {
 				t.Errorf("%s prompt body contains HTML comment (<!--); use Go template comments {{/* */}} instead", name)

@@ -1470,7 +1470,7 @@ func TestHandleWorkerExit_EmptyActiveStatesDefaultsToContinuationRetry(t *testin
 	}
 }
 
-// --- Handoff pending-reaction regression tests (FR-1 through FR-7) ---
+// --- Handoff pending-reaction regression tests ---
 
 func TestHandleWorkerExit_HandoffTransitionSucceeds_PopulatesReviewPendingReaction(t *testing.T) {
 	t.Parallel()

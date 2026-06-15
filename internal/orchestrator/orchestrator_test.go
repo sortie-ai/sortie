@@ -368,7 +368,7 @@ func TestShouldDispatchWithSets(t *testing.T) {
 			activeSet: activeSet, terminalS: terminalSet,
 			want: true,
 		},
-		// Rule 4b: effort budget exhausted.
+		// Effort budget exhausted.
 		{
 			name:      "budget exhausted blocks dispatch",
 			issue:     baseIssue,

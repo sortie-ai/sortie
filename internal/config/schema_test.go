@@ -199,7 +199,7 @@ func TestValidateFrontMatter(t *testing.T) {
 			wantCount: 0,
 		},
 
-		// --- Phase 1: Unknown top-level keys ---
+		// --- Unknown top-level keys ---
 		{
 			name:       "unknown top-level key trackers",
 			raw:        map[string]any{"trackers": map[string]any{"kind": "file"}},
@@ -272,7 +272,7 @@ func TestValidateFrontMatter(t *testing.T) {
 			wantCount: 0,
 		},
 
-		// --- Phase 2: Unknown sub-keys in known sections ---
+		// --- Unknown sub-keys in known sections ---
 		{
 			name: "unknown tracker sub-key",
 			raw: map[string]any{
@@ -352,7 +352,7 @@ func TestValidateFrontMatter(t *testing.T) {
 			wantFields: []string{"agent.typo_field"},
 		},
 
-		// --- Phase 3: Section-level type mismatch (scalar instead of map) ---
+		// --- Section-level type mismatch (scalar instead of map) ---
 		{
 			name: "tracker section is scalar not map",
 			raw:  map[string]any{"tracker": "not-a-map"},
@@ -363,7 +363,7 @@ func TestValidateFrontMatter(t *testing.T) {
 			wantFields: []string{"tracker"},
 		},
 
-		// --- Phase 3: Field-level type mismatches ---
+		// --- Field-level type mismatches ---
 		{
 			name: "type mismatch tracker.kind is integer",
 			raw: map[string]any{
@@ -430,7 +430,7 @@ func TestValidateFrontMatter(t *testing.T) {
 			wantFields: []string{"hooks.timeout_ms"},
 		},
 		{
-			// timeout_ms = "30000" passes both Phase 3 (coercible) and Phase 3b (>0).
+			// timeout_ms = "30000" passes both type coercion and the positive-value check.
 			name:      "hooks.timeout_ms coercible string 30000 produces no warning",
 			raw:       map[string]any{"hooks": map[string]any{"timeout_ms": "30000"}},
 			wantCount: 0,
@@ -457,7 +457,7 @@ func TestValidateFrontMatter(t *testing.T) {
 			wantFields: []string{"agent.stall_timeout_ms"},
 		},
 
-		// --- Phase 3: Top-level db_path ---
+		// --- Top-level db_path ---
 		{
 			name: "type mismatch db_path is integer",
 			raw:  map[string]any{"db_path": 123},
@@ -472,9 +472,9 @@ func TestValidateFrontMatter(t *testing.T) {
 			wantCount: 0,
 		},
 
-		// --- Phase 3b: hooks.timeout_ms semantic (non-positive) ---
+		// --- hooks.timeout_ms semantic (non-positive) ---
 		{
-			// -5 passes Phase 3 (valid int type) but fails Phase 3b (≤ 0).
+			// -5 passes the int-type check but fails the positive-value check.
 			name: "hooks.timeout_ms negative value",
 			raw: map[string]any{
 				"hooks": map[string]any{"timeout_ms": -5},
@@ -485,7 +485,7 @@ func TestValidateFrontMatter(t *testing.T) {
 			wantMsgSubs: []string{"non-positive"},
 		},
 		{
-			// 0 passes Phase 3 (valid int type) but fails Phase 3b (≤ 0).
+			// 0 passes the int-type check but fails the positive-value check.
 			name: "hooks.timeout_ms zero value",
 			raw: map[string]any{
 				"hooks": map[string]any{"timeout_ms": 0},
@@ -501,7 +501,7 @@ func TestValidateFrontMatter(t *testing.T) {
 			wantCount: 0,
 		},
 
-		// --- Phase 3b: agent.max_concurrent_agents_by_state semantic ---
+		// --- agent.max_concurrent_agents_by_state semantic ---
 		{
 			name: "agent.max_concurrent_agents_by_state non-numeric value",
 			raw: map[string]any{

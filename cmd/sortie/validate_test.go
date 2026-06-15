@@ -1799,7 +1799,7 @@ func unresolvedExtVarWorkflow(varName string) []byte {
 		"---\nDo {{ .issue.title }}.\n")
 }
 
-// TestValidateUnresolvedExtensionVar covers AC-4, AC-6, and AC-7 end-to-end.
+// TestValidateUnresolvedExtensionVar covers the unresolved_extension_var warning end-to-end.
 func TestValidateUnresolvedExtensionVar(t *testing.T) {
 	// The variable must resolve to empty. Use a name that is unique to this
 	// test suite; explicitly clear it so the resolved value is "".
@@ -1817,7 +1817,7 @@ func TestValidateUnresolvedExtensionVar(t *testing.T) {
 
 		code := run(ctx, []string{"validate", wfPath}, &stdout, &stderr)
 
-		// AC-6: exit code must be 0 (advisory warning).
+		// Exit code must be 0 (advisory warning).
 		if code != 0 {
 			t.Fatalf("run(validate) = %d, want 0 (warning is advisory); stderr: %s", code, stderr.String())
 		}
@@ -1826,7 +1826,7 @@ func TestValidateUnresolvedExtensionVar(t *testing.T) {
 			t.Errorf("stdout = %q, want empty (text mode)", stdout.String())
 		}
 		got := stderr.String()
-		// AC-4 text: warning must appear on stderr.
+		// Text mode: warning must appear on stderr.
 		if !strings.Contains(got, "warning:") {
 			t.Errorf("stderr = %q, want to contain %q", got, "warning:")
 		}
@@ -1837,7 +1837,7 @@ func TestValidateUnresolvedExtensionVar(t *testing.T) {
 		if !strings.Contains(got, "myext.api_key") {
 			t.Errorf("stderr = %q, want to contain field path %q", got, "myext.api_key")
 		}
-		// AC-7: variable name must appear, resolved value (empty) must not add noise.
+		// Variable name must appear, resolved value (empty) must not add noise.
 		if !strings.Contains(got, missingVar) {
 			t.Errorf("stderr = %q, want to contain variable name %q", got, missingVar)
 		}
@@ -1855,7 +1855,7 @@ func TestValidateUnresolvedExtensionVar(t *testing.T) {
 
 		code := run(ctx, []string{"validate", "--format", "json", wfPath}, &stdout, &stderr)
 
-		// AC-6: exit code 0.
+		// Exit code 0.
 		if code != 0 {
 			t.Fatalf("run(validate --format json) = %d, want 0; stderr: %s", code, stderr.String())
 		}
@@ -1868,7 +1868,7 @@ func TestValidateUnresolvedExtensionVar(t *testing.T) {
 		if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
 			t.Fatalf("json.Unmarshal(%q) error: %v", stdout.String(), err)
 		}
-		// AC-6: valid=true.
+		// Valid must be true.
 		if !out.Valid {
 			t.Errorf("validateOutput.Valid = false, want true")
 		}
@@ -1877,7 +1877,7 @@ func TestValidateUnresolvedExtensionVar(t *testing.T) {
 			t.Errorf("validateOutput.Errors = %v, want empty", out.Errors)
 		}
 
-		// AC-4 JSON: the warnings array must contain the unresolved_extension_var entry.
+		// JSON mode: the warnings array must contain the unresolved_extension_var entry.
 		var found *validateDiag
 		for i := range out.Warnings {
 			if out.Warnings[i].Check == "unresolved_extension_var" {
@@ -1896,11 +1896,11 @@ func TestValidateUnresolvedExtensionVar(t *testing.T) {
 		if !strings.Contains(found.Message, "myext.api_key") {
 			t.Errorf("warning.Message = %q, want field path %q", found.Message, "myext.api_key")
 		}
-		// AC-7: variable name appears in the message.
+		// Variable name appears in the message.
 		if !strings.Contains(found.Message, missingVar) {
 			t.Errorf("warning.Message = %q, want variable name %q", found.Message, missingVar)
 		}
-		// AC-7: resolved value (empty string "") must not appear as a meaningful token.
+		// Resolved value (empty string "") must not appear as a meaningful token.
 		// The message must not contain any resolved credential value; since the value is
 		// empty here the key assertion is that the variable name (not the value) is shown.
 	})

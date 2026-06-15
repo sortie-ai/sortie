@@ -29,7 +29,7 @@ func TestAnalyzeTemplate(t *testing.T) {
 		wantKind  WarnKind // checked only when wantCount > 0
 		wantNode  string   // checked only when non-empty
 	}{
-		// Check 1: dot-context misuse inside range/with.
+		// Dot-context misuse inside range/with.
 		{
 			name:      "DotContextRange",
 			body:      `{{ range .issue.labels }}{{ .issue.title }}{{ end }}`,
@@ -79,7 +79,7 @@ func TestAnalyzeTemplate(t *testing.T) {
 			wantCount: 0,
 		},
 
-		// Check 2: unknown top-level variable.
+		// Unknown top-level variable.
 		{
 			name:      "UnknownTopLevel",
 			body:      `{{ .config }}`,
@@ -102,7 +102,7 @@ func TestAnalyzeTemplate(t *testing.T) {
 			wantCount: 0,
 		},
 
-		// Check 3: unknown sub-field of a known top-level key.
+		// Unknown sub-field of a known top-level key.
 		{
 			name:      "UnknownSubFieldIssue",
 			body:      `{{ .issue.nonexistent }}`,

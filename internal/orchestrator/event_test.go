@@ -262,7 +262,7 @@ func TestHandleAgentEvent_FullSequence(t *testing.T) {
 	state, entry := newStateWithEntry(issueID)
 	ts := time.Now().UTC()
 
-	// 1. Session started.
+	// Session started.
 	HandleAgentEvent(state, issueID, domain.AgentEvent{
 		Type:      domain.EventSessionStarted,
 		Timestamp: ts,
@@ -271,28 +271,28 @@ func TestHandleAgentEvent_FullSequence(t *testing.T) {
 		Message:   "session started",
 	}, slog.Default(), nil)
 
-	// 2. First token usage: {100, 50, 150}.
+	// First token usage: {100, 50, 150}.
 	HandleAgentEvent(state, issueID, domain.AgentEvent{
 		Type:      domain.EventTokenUsage,
 		Timestamp: ts,
 		Usage:     domain.TokenUsage{InputTokens: 100, OutputTokens: 50, TotalTokens: 150},
 	}, slog.Default(), nil)
 
-	// 3. Second token usage: {200, 100, 300} — delta {+100, +50, +150}.
+	// Second token usage: {200, 100, 300} — delta {+100, +50, +150}.
 	HandleAgentEvent(state, issueID, domain.AgentEvent{
 		Type:      domain.EventTokenUsage,
 		Timestamp: ts,
 		Usage:     domain.TokenUsage{InputTokens: 200, OutputTokens: 100, TotalTokens: 300},
 	}, slog.Default(), nil)
 
-	// 4. Duplicate token usage — zero delta.
+	// Duplicate token usage — zero delta.
 	HandleAgentEvent(state, issueID, domain.AgentEvent{
 		Type:      domain.EventTokenUsage,
 		Timestamp: ts,
 		Usage:     domain.TokenUsage{InputTokens: 200, OutputTokens: 100, TotalTokens: 300},
 	}, slog.Default(), nil)
 
-	// 5. Turn completed.
+	// Turn completed.
 	HandleAgentEvent(state, issueID, domain.AgentEvent{
 		Type:      domain.EventTurnCompleted,
 		Timestamp: ts,

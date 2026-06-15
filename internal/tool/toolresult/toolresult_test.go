@@ -238,7 +238,7 @@ func TestSuccess_GoErrorOnUnmarshalablePayload(t *testing.T) {
 // TestSuccess_ByteShapeMatchesPriorSuccessResult asserts that Success(payload)
 // produces identical bytes to the historic per-tool successResult pattern
 // ({"success": true, "data": payload}) for a representative payload.
-// This guards AC-4a: the shared helper is byte-compatible with tracker_api's
+// This guards that the shared helper is byte-compatible with tracker_api's
 // former local helper.
 func TestSuccess_ByteShapeMatchesPriorSuccessResult(t *testing.T) {
 	t.Parallel()
@@ -265,7 +265,7 @@ func TestSuccess_ByteShapeMatchesPriorSuccessResult(t *testing.T) {
 // produces identical bytes to the historic per-tool errorResult pattern
 // ({"success": false, "error": {"kind": ..., "message": ...}}) for a
 // representative set of inputs.
-// This guards AC-4a: the shared helper is byte-compatible with the former
+// This guards that the shared helper is byte-compatible with the former
 // Tier 2 local errorResult helpers.
 func TestFailure_ByteShapeMatchesPriorErrorResult(t *testing.T) {
 	t.Parallel()

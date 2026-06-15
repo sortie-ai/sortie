@@ -271,7 +271,7 @@ func TestStatusTool_TurnsRemainingFloor(t *testing.T) {
 	}
 }
 
-// TestStatusTool_SuccessEnvelopeShape pins the AC-1 contract: top-level keys
+// TestStatusTool_SuccessEnvelopeShape pins the success-envelope contract: top-level keys
 // are exactly {success, data}, payload fields are absent at the top level.
 func TestStatusTool_SuccessEnvelopeShape(t *testing.T) {
 	t.Parallel()
@@ -313,7 +313,7 @@ func TestStatusTool_SuccessEnvelopeShape(t *testing.T) {
 
 // TestStatusTool_MissingStateFile asserts that a missing state file returns
 // success==false, error.kind=="state_unavailable", a non-empty error.message,
-// and a nil Go error (AC-2, AC-5).
+// and a nil Go error.
 func TestStatusTool_MissingStateFile(t *testing.T) {
 	t.Parallel()
 
@@ -330,8 +330,7 @@ func TestStatusTool_MissingStateFile(t *testing.T) {
 }
 
 // TestStatusTool_MalformedJSON asserts that malformed state JSON returns
-// success==false, error.kind=="state_malformed", and a nil Go error
-// (AC-2, AC-5).
+// success==false, error.kind=="state_malformed", and a nil Go error.
 func TestStatusTool_MalformedJSON(t *testing.T) {
 	t.Parallel()
 
@@ -356,7 +355,7 @@ func TestStatusTool_MalformedJSON(t *testing.T) {
 
 // TestStatusTool_InvalidStartedAt asserts that a state file whose started_at
 // cannot be parsed returns success==false, error.kind=="state_malformed", and
-// a nil Go error (AC-2, AC-5).
+// a nil Go error.
 func TestStatusTool_InvalidStartedAt(t *testing.T) {
 	t.Parallel()
 
@@ -382,7 +381,7 @@ func TestStatusTool_InvalidStartedAt(t *testing.T) {
 
 // TestStatusTool_OversizedStateFile asserts that a state file that exceeds the
 // size limit returns success==false, error.kind=="state_unavailable", and a nil
-// Go error (AC-2, AC-5).
+// Go error.
 func TestStatusTool_OversizedStateFile(t *testing.T) {
 	t.Parallel()
 
@@ -402,7 +401,7 @@ func TestStatusTool_OversizedStateFile(t *testing.T) {
 	assertFailureEnvelope(t, m, "state_unavailable")
 }
 
-// TestStatusTool_FailureEnvelopeShape pins the AC-2 contract: top-level keys
+// TestStatusTool_FailureEnvelopeShape pins the failure-envelope contract: top-level keys
 // are exactly {success, error}, with error carrying {kind, message}.
 func TestStatusTool_FailureEnvelopeShape(t *testing.T) {
 	t.Parallel()
@@ -442,8 +441,7 @@ func TestStatusTool_FailureEnvelopeShape(t *testing.T) {
 }
 
 // TestStatusTool_ErrorMessageExactStrings asserts that every failure site
-// emits the exact message string the tool produced before this change (AC-2
-// message invariant).
+// emits the exact message string the tool produced before this change.
 func TestStatusTool_ErrorMessageExactStrings(t *testing.T) {
 	t.Parallel()
 
@@ -523,7 +521,7 @@ func TestStatusTool_ErrorMessageExactStrings(t *testing.T) {
 }
 
 // TestStatusTool_EmptyJSONInput asserts that {} input with a valid state file
-// succeeds and data carries turn_number (AC-1, AC-5).
+// succeeds and data carries turn_number.
 func TestStatusTool_EmptyJSONInput(t *testing.T) {
 	t.Parallel()
 
@@ -553,7 +551,7 @@ func TestStatusTool_EmptyJSONInput(t *testing.T) {
 }
 
 // TestStatusTool_NullInput asserts that null input with a valid state file
-// succeeds and data carries turn_number (AC-1, AC-5).
+// succeeds and data carries turn_number.
 func TestStatusTool_NullInput(t *testing.T) {
 	t.Parallel()
 

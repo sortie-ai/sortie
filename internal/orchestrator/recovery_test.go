@@ -499,7 +499,7 @@ func (s *recoveryTrackerStub) AddLabel(_ context.Context, _ string, _ string) er
 	return nil
 }
 
-// panicSCMAdapter panics if any method is called. Used to assert FR-7.
+// panicSCMAdapter panics if any method is called, asserting recovery makes no SCM calls.
 type panicSCMAdapter struct{}
 
 var _ domain.SCMAdapter = (*panicSCMAdapter)(nil)
@@ -528,7 +528,7 @@ func (p *panicSCMAdapter) DeleteBranch(_ context.Context, _, _, _ string) error 
 	panic("DeleteBranch must not be called during RecoverPendingReactions")
 }
 
-// panicCIProvider panics if FetchCIStatus is called. Used to assert FR-7.
+// panicCIProvider panics if FetchCIStatus is called, asserting recovery makes no CI fetch.
 type panicCIProvider struct{}
 
 var _ domain.CIStatusProvider = (*panicCIProvider)(nil)
@@ -651,7 +651,7 @@ func TestRecoverPendingReactions_RecreatesReviewAfterRestart(t *testing.T) {
 	if rd.SHA != "abc123" {
 		t.Errorf("ReviewReactionData.SHA = %q, want %q", rd.SHA, "abc123")
 	}
-	// FR-5: issue must not be claimed.
+	// Issue must not be claimed.
 	if _, claimed := state.Claimed["ISS-1"]; claimed {
 		t.Error("ISS-1 found in state.Claimed after recovery, want not claimed")
 	}
@@ -695,7 +695,7 @@ func TestRecoverPendingReactions_RecreatesCIAfterRestart(t *testing.T) {
 	if ci.SHA != "deadbeef" {
 		t.Errorf("CIReactionData.SHA = %q, want %q", ci.SHA, "deadbeef")
 	}
-	// FR-5: issue must not be claimed.
+	// Issue must not be claimed.
 	if _, claimed := state.Claimed["ISS-2"]; claimed {
 		t.Error("ISS-2 found in state.Claimed after CI recovery, want not claimed")
 	}
@@ -899,7 +899,7 @@ func TestRecoverPendingReactions_SkipsStaleSCMActivity(t *testing.T) {
 	t.Parallel()
 
 	wsRoot := t.TempDir()
-	// Case 1: stale pushed_at (> 30 days ago).
+	// Stale pushed_at (> 30 days ago).
 	writeRecoverySCM(t, wsRoot, "PROJ-STALE", domain.SCMMetadata{
 		Branch:   "feature/stale",
 		PushedAt: freshSCMTime(35),
@@ -907,7 +907,7 @@ func TestRecoverPendingReactions_SkipsStaleSCMActivity(t *testing.T) {
 		Owner:    "o",
 		Repo:     "r",
 	})
-	// Case 2: malformed pushed_at.
+	// Malformed pushed_at.
 	writeRecoverySCM(t, wsRoot, "PROJ-MALFORMED", domain.SCMMetadata{
 		Branch:   "feature/malformed",
 		PushedAt: "not-a-date",
@@ -915,7 +915,7 @@ func TestRecoverPendingReactions_SkipsStaleSCMActivity(t *testing.T) {
 		Owner:    "o",
 		Repo:     "r",
 	})
-	// Case 3: absent pushed_at + stale completed_at (fallback).
+	// Absent pushed_at + stale completed_at (fallback).
 	runStaleCompleted := freshRun("ISS-STALE-COMPLETED", "PROJ-STALE-COMPLETED", "", 1)
 	runStaleCompleted.CompletedAt = freshSCMTime(35)
 	writeRecoverySCM(t, wsRoot, "PROJ-STALE-COMPLETED", domain.SCMMetadata{
@@ -1010,7 +1010,7 @@ func TestRecoverPendingReactions_ProviderFetchesNotCalled(t *testing.T) {
 	state := NewState(5000, 4, nil, AgentTotals{})
 	run := freshRun("ISS-NOFETCH", "PROJ-NOFETCH", "", 1)
 	params := defaultRecoveryParams(wsRoot, tracker)
-	// Use panic adapters to assert FR-7: no fetch methods called during recovery.
+	// Use panic adapters to assert no fetch methods are called during recovery.
 	params.SCMAdapter = &panicSCMAdapter{}
 	params.CIProvider = &panicCIProvider{}
 
@@ -1096,7 +1096,7 @@ func TestRecoverPendingReactions_DispatchedFingerprintStillDedups(t *testing.T) 
 	run := freshRun("ISS-DEDUP", "PROJ-DEDUP", "owner/repo#7", 1)
 	params := defaultRecoveryParams(wsRoot, tracker)
 
-	// Step 1: recover the review reaction.
+	// Recover the review reaction.
 	result, err := RecoverPendingReactions(context.Background(), state, []persistence.RunHistory{run}, params)
 	if err != nil {
 		t.Fatalf("RecoverPendingReactions: %v", err)
@@ -1105,7 +1105,7 @@ func TestRecoverPendingReactions_DispatchedFingerprintStillDedups(t *testing.T) 
 		t.Fatalf("ReviewRecovered = %d, want 1", result.ReviewRecovered)
 	}
 
-	// Step 2: seed the store so the fingerprint appears already dispatched.
+	// Seed the store so the fingerprint appears already dispatched.
 	comments := []domain.ReviewComment{
 		{ID: "fp-1", Body: "lgtm", SubmittedAt: reviewBaseTime.Add(-5 * time.Minute)},
 	}
@@ -1115,7 +1115,7 @@ func TestRecoverPendingReactions_DispatchedFingerprintStillDedups(t *testing.T) 
 		getFingerprintDispatched: true,
 	}
 
-	// Step 3: run reconcile with the already-dispatched fingerprint.
+	// Run reconcile with the already-dispatched fingerprint.
 	scm := &mockSCMAdapter{comments: comments}
 	reconcileParams := reviewParams(store, scm, nil)
 	reconcileReviewComments(state, reconcileParams, discardLogger(), context.Background(), newReviewMetricsSpy())

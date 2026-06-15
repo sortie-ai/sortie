@@ -871,7 +871,7 @@ func TestLifecycleFullSequence(t *testing.T) {
 	root := t.TempDir()
 	markerDir := t.TempDir()
 
-	// Phase 1: Prepare with after_create and before_run hooks.
+	// Prepare with after_create and before_run hooks.
 	result, err := Prepare(context.Background(), PrepareParams{
 		Root:          root,
 		Identifier:    "LIFE-1",
@@ -890,7 +890,7 @@ func TestLifecycleFullSequence(t *testing.T) {
 	assertFileExists(t, filepath.Join(result.Path, ".after_create_marker"))
 	assertFileExists(t, filepath.Join(result.Path, ".before_run_marker"))
 
-	// Phase 2: Finish with after_run hook.
+	// Finish with after_run hook.
 	Finish(context.Background(), FinishParams{
 		Path:          result.Path,
 		Identifier:    "LIFE-1",
@@ -901,7 +901,7 @@ func TestLifecycleFullSequence(t *testing.T) {
 	})
 	assertFileExists(t, filepath.Join(result.Path, ".after_run_marker"))
 
-	// Phase 3: Cleanup with before_remove hook writing outside workspace.
+	// Cleanup with before_remove hook writing outside workspace.
 	beforeRemoveMarker := filepath.Join(markerDir, "before_remove_marker")
 	err = Cleanup(context.Background(), CleanupParams{
 		Root:          root,
