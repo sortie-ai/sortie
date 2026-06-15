@@ -88,17 +88,31 @@ func validateAPIKeyHint(apiKey string) []registry.ValidationDiag {
 	return nil
 }
 
-// validateStateLabels checks for empty or whitespace-only elements in a
-// state name list. An absent or wholly empty list yields no diagnostic
-// because the adapter applies defaults in that case.
+// validateStateLabels checks for empty, whitespace-only, or untrimmed
+// elements in a state name list. An absent or wholly empty list yields no
+// diagnostic because the adapter applies defaults in that case.
+//
+// Both faults are errors, not warnings: a present list element is matched
+// against the team's workflow states by exact case-insensitive name, so an
+// empty name or one carrying leading or trailing whitespace can never match
+// and aborts adapter construction before any issue is dispatched.
 func validateStateLabels(field string, states []string) []registry.ValidationDiag {
 	var diags []registry.ValidationDiag
 	for i, s := range states {
-		if strings.TrimSpace(s) == "" {
+		trimmed := strings.TrimSpace(s)
+		if trimmed == "" {
 			diags = append(diags, registry.ValidationDiag{
-				Severity: "warning",
+				Severity: "error",
 				Check:    field + ".empty_element",
-				Message:  fmt.Sprintf("%s[%d]: empty state name will never match any issue", field, i),
+				Message:  fmt.Sprintf("%s[%d]: empty state name can never match a team state", field, i),
+			})
+			continue
+		}
+		if trimmed != s {
+			diags = append(diags, registry.ValidationDiag{
+				Severity: "error",
+				Check:    field + ".untrimmed_element",
+				Message:  fmt.Sprintf("%s[%d]: state name has leading or trailing whitespace and can never match a team state", field, i),
 			})
 		}
 	}
@@ -134,19 +148,20 @@ func validateStateOverlap(fields registry.TrackerConfigFields) []registry.Valida
 		})
 	}
 
-	if hs := strings.ToLower(strings.TrimSpace(fields.HandoffState)); hs != "" {
+	handoff := strings.TrimSpace(fields.HandoffState)
+	if hs := strings.ToLower(handoff); hs != "" {
 		if _, ok := activeSet[hs]; ok {
 			diags = append(diags, registry.ValidationDiag{
 				Severity: "warning",
 				Check:    "tracker.handoff_state.collision",
-				Message:  fmt.Sprintf("tracker.handoff_state %q must not appear in active_states (would cause immediate re-dispatch after handoff)", hs),
+				Message:  fmt.Sprintf("tracker.handoff_state %q must not appear in active_states (would cause immediate re-dispatch after handoff)", handoff),
 			})
 		}
 		if _, ok := terminalSet[hs]; ok {
 			diags = append(diags, registry.ValidationDiag{
 				Severity: "warning",
 				Check:    "tracker.handoff_state.collision",
-				Message:  fmt.Sprintf("tracker.handoff_state %q must not appear in terminal_states (handoff is not terminal)", hs),
+				Message:  fmt.Sprintf("tracker.handoff_state %q must not appear in terminal_states (handoff is not terminal)", handoff),
 			})
 		}
 	}

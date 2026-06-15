@@ -269,8 +269,8 @@ func TestValidateStateLabels(t *testing.T) {
 				if d.Check != wantCheck {
 					t.Errorf("validateStateLabels(%q, ...) diag[%d].Check = %q, want %q", tt.field, i, d.Check, wantCheck)
 				}
-				if d.Severity != "warning" {
-					t.Errorf("validateStateLabels(%q, ...) diag[%d].Severity = %q, want %q", tt.field, i, d.Severity, "warning")
+				if d.Severity != "error" {
+					t.Errorf("validateStateLabels(%q, ...) diag[%d].Severity = %q, want %q", tt.field, i, d.Severity, "error")
 				}
 			}
 		})
@@ -501,9 +501,10 @@ func TestValidateConfig(t *testing.T) {
 			wantWarnCount: 1,
 		},
 		{
-			// AC-4: active_states list with an empty element must produce
-			// tracker.active_states.empty_element.
-			name: "present active list with empty element – empty_element warning",
+			// An empty element in a present active_states list aborts adapter
+			// construction, so it must produce a tracker.active_states.empty_element
+			// error rather than a warning.
+			name: "present active list with empty element – empty_element error",
 			fields: registry.TrackerConfigFields{
 				Kind:           "linear",
 				Project:        "ENG",
@@ -511,8 +512,8 @@ func TestValidateConfig(t *testing.T) {
 				ActiveStates:   []string{"Backlog", ""},
 				TerminalStates: []string{"Done"},
 			},
-			wantChecks:    []string{"tracker.active_states.empty_element"},
-			wantWarnCount: 1,
+			wantChecks:   []string{"tracker.active_states.empty_element"},
+			wantErrCount: 1,
 		},
 	}
 
