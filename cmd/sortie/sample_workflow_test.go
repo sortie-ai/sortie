@@ -96,6 +96,11 @@ func TestSampleWorkflowLoad(t *testing.T) {
 			file:     "WORKFLOW.opencode.md",
 			wantKeys: []string{"tracker", "polling", "workspace", "hooks", "agent", "opencode", "server"},
 		},
+		{
+			name:     "WORKFLOW.linear.md loads with expected config keys",
+			file:     "WORKFLOW.linear.md",
+			wantKeys: []string{"tracker", "polling", "workspace", "hooks", "agent", "claude-code", "server"},
+		},
 	}
 
 	for _, tt := range tests {
@@ -155,6 +160,16 @@ func TestSampleWorkflowRender(t *testing.T) {
 		{
 			name:  "WORKFLOW.opencode.md minimal issue",
 			file:  "WORKFLOW.opencode.md",
+			issue: minimalIssue(),
+		},
+		{
+			name:  "WORKFLOW.linear.md full issue",
+			file:  "WORKFLOW.linear.md",
+			issue: fullIssue(),
+		},
+		{
+			name:  "WORKFLOW.linear.md minimal issue",
+			file:  "WORKFLOW.linear.md",
 			issue: minimalIssue(),
 		},
 	}
@@ -297,7 +312,7 @@ func TestSampleWorkflowTestFilePathConfig(t *testing.T) {
 func TestSampleWorkflowNoHTMLComments(t *testing.T) {
 	t.Parallel()
 
-	files := []string{"WORKFLOW.md", "WORKFLOW.test.md", "WORKFLOW.opencode.md"}
+	files := []string{"WORKFLOW.md", "WORKFLOW.test.md", "WORKFLOW.opencode.md", "WORKFLOW.linear.md"}
 	for _, name := range files {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -402,6 +417,40 @@ func TestSampleWorkflowEnvVarIndirection(t *testing.T) {
 		{"endpoint", "$SORTIE_JIRA_ENDPOINT"},
 		{"api_key", "$SORTIE_JIRA_API_KEY"},
 		{"project", "$SORTIE_JIRA_PROJECT"},
+	}
+	for _, c := range checks {
+		got, _ := tracker[c.key].(string)
+		if got != c.want {
+			t.Errorf("tracker.%s = %q, want %q", c.key, got, c.want)
+		}
+	}
+}
+
+func TestSampleWorkflowLinearEnvVarIndirection(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(repoRoot(t), "examples", "WORKFLOW.linear.md")
+	wf, err := workflow.Load(path)
+	if err != nil {
+		t.Fatalf("workflow.Load(WORKFLOW.linear.md): %v", err)
+	}
+
+	tracker, ok := wf.Config["tracker"].(map[string]any)
+	if !ok {
+		t.Fatal("WORKFLOW.linear.md config missing tracker map")
+	}
+
+	if kind, _ := tracker["kind"].(string); kind != "linear" {
+		t.Errorf("tracker.kind = %q, want %q", kind, "linear")
+	}
+
+	// Credential and project fields must use $SORTIE_* indirection.
+	checks := []struct {
+		key  string
+		want string
+	}{
+		{"api_key", "$SORTIE_LINEAR_API_KEY"},
+		{"project", "$SORTIE_LINEAR_TEAM_KEY"},
 	}
 	for _, c := range checks {
 		got, _ := tracker[c.key].(string)
