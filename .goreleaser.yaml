@@ -62,28 +62,25 @@ checksum:
 sboms:
   - artifacts: archive
 
-homebrew_casks:
+brews:
   - name: sortie
     repository:
       owner: sortie-ai
       name: homebrew-tap
       branch: main
       token: "{{ .Env.TAP_GITHUB_TOKEN }}"
+    directory: Formula
     commit_author:
       name: goreleaserbot
       email: goreleaserbot@users.noreply.github.com
-    commit_msg_template: "chore(cask): update {{ .ProjectName }} to {{ .Tag }}"
+    commit_msg_template: "chore(formula): update {{ .ProjectName }} to {{ .Tag }}"
     homepage: "https://github.com/sortie-ai/sortie"
     description: "Spec-first orchestration service for coding agents"
     license: "Apache-2.0"
-    hooks:
-      post:
-        # macOS binaries are not notarized, so Gatekeeper would quarantine the
-        # cask and block first run; drop the attribute on install.
-        install: |
-          if OS.mac?
-            system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{staged_path}/sortie"]
-          end
+    install: |
+      bin.install "sortie"
+    test: |
+      assert_match version.to_s, shell_output("#{bin}/sortie --version")
     skip_upload: "auto"
 
 changelog:
