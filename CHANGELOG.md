@@ -7,14 +7,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.13.0] - 2026-06-15
+
+### Added
+
+- Linear tracker adapter: configure with `tracker.kind: linear` and
+  `tracker.project` set to a Linear team key (the prefix in identifiers
+  such as `ABC-123`). The adapter speaks Linear's GraphQL API over a
+  single endpoint and authenticates with a personal API key,
+  validating the key against the workspace at construction time. It
+  implements the full `TrackerAdapter` interface: cursor-paginated
+  candidate fetch, issue and comment retrieval, and state reconciliation
+  on the read path; `TransitionIssue`, `CommentIssue`, and `AddLabel` on
+  the write path, so a Linear-backed deployment performs handoff
+  transitions, posts lifecycle comments, and attaches escalation labels
+  on par with the Jira and GitHub adapters. Workflow states are mapped
+  by display name, matched case-insensitively and verified against the
+  team at startup, rather than by Linear's immutable state `type`.
+  `tracker.query_filter` accepts a Linear `IssueFilter` JSON fragment
+  merged with the adapter-owned team and state constraints; a top-level
+  `team` or `state` key is reserved and rejected. Linear returns
+  application errors inside HTTP 200 bodies, so the adapter classifies
+  the response body before any HTTP-status check; the request rate limit
+  is read from response headers rather than hardcoded. Ships with an
+  `examples/WORKFLOW.linear.md` sample workflow.
+  ([#237](https://github.com/sortie-ai/sortie/issues/237),
+  [#589](https://github.com/sortie-ai/sortie/issues/589),
+  [#599](https://github.com/sortie-ai/sortie/issues/599),
+  [#593](https://github.com/sortie-ai/sortie/issues/593))
+- `sortie validate` Linear adapter config validation: emits offline
+  diagnostics for `tracker.kind: linear` covering `tracker.project` as a
+  Linear team key, a `$SORTIE_LINEAR_API_KEY` environment-variable hint,
+  empty state labels, and active/terminal state overlap, matching the
+  checks already provided for the Jira and GitHub adapters. Errors block
+  dispatch; warnings are advisory.
+  ([#590](https://github.com/sortie-ai/sortie/issues/590))
+
 ## [1.12.0] - 2026-06-12
 
 ### Added
 
 - `cost_budget` agent tool with per-issue token budget enforcement: a
   new Tier 1 MCP tool reports cumulative token spend and remaining
-  budget for the current issue so an agent can adjust strategy — skip
-  expensive work, return a partial result, or hand off — before hitting
+  budget for the current issue so an agent can adjust strategy - skip
+  expensive work, return a partial result, or hand off - before hitting
   a ceiling. It reads cumulative totals from `run_history` in read-only
   mode and returns the standard `{"success": true, "data": ...}`
   envelope. A companion hard ceiling, the new optional `agent.max_tokens`
@@ -27,8 +63,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ([#240](https://github.com/sortie-ai/sortie/issues/240))
 - `notify_operator` agent tool: a new Tier 2 MCP tool lets an agent send
   real-time notifications to operator-configured channels during a
-  session — to escalate a decision, report progress on a long-running
-  task, or flag a blocker — without terminating the session. Version 1
+  session - to escalate a decision, report progress on a long-running
+  task, or flag a blocker - without terminating the session. Version 1
   ships Slack and generic-webhook backends, configured under a new
   optional top-level `notifications` block in `WORKFLOW.md`, with
   per-session volume bounded by `max_per_session`. Backend secrets must
@@ -63,7 +99,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Agent tools: the built-in tools now share one uniform result
-  envelope — `{"success": true, "data": <payload>}` on success and
+  envelope - `{"success": true, "data": <payload>}` on success and
   `{"success": false, "error": {"kind": "...", "message": "..."}}` on a
   domain failure. For operators upgrading, this changes the result shape
   of the two pre-existing Tier 1 tools: `sortie_status` and
@@ -86,7 +122,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   configured with a model absent from the catalog failed with no
   actionable detail. The adapter now detects the masked placeholder,
   queries `opencode models`, and emits a "model not found" turn failure
-  when the configured model is missing — including over SSH, reusing the
+  when the configured model is missing - including over SSH, reusing the
   existing remote-command path.
   ([#562](https://github.com/sortie-ai/sortie/issues/562))
 - Agent tool advertisement: the first-turn prompt now lists the same
@@ -250,7 +286,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Orchestrator: CI and PR review pending reactions are now enqueued when
   `tracker.handoff_state` is configured. Previously, a successful handoff
   released the claim before `HandleWorkerExit` checked reaction
-  eligibility, so the reconcile loop had no entry to poll — post-run CI
+  eligibility, so the reconcile loop had no entry to poll - post-run CI
   failures and review comments on agent-created PRs went unobserved and
   no continuation turn was dispatched. Eligibility now derives from the
   exit-time claim state and the handoff path; blocked soft stops remain
@@ -259,7 +295,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Orchestrator: handoff-stage pending review and CI reactions are now
   reconstructed on startup. `state.PendingReactions` is a runtime-only
   map, so a restart after a successful handoff previously left the
-  issue with no pending review entry — the tracker issue was no longer
+  issue with no pending review entry - the tracker issue was no longer
   active, the dispatch loop did not rediscover it, and human review
   comments on agent-created PRs went unobserved until an operator
   manually re-engaged the issue. Startup now rebuilds eligible review
@@ -306,7 +342,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Codex CLI agent adapter: configure with `agent.kind: codex` for
   autonomous issue-to-code workflows using OpenAI Codex CLI via the
   `codex app-server` JSON-RPC 2.0 protocol. Supports the same structured
-  lifecycle as Claude Code and Copilot CLI adapters — event normalization,
+  lifecycle as Claude Code and Copilot CLI adapters - event normalization,
   token tracking, timeout enforcement, graceful SIGTERM→SIGKILL shutdown,
   and session resume via `ResumeSessionID`. Tool calls are serialized
   through a channel to prevent concurrent stdin corruption. Handshake
@@ -319,7 +355,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - CLI: `--version` now outputs a single diagnostic line including commit SHA,
-  build date, Go version, and OS/architecture — e.g.
+  build date, Go version, and OS/architecture - e.g.
   `sortie 1.7.0 (commit: a1b2c3d, built: 2026-04-15, go1.26.1, linux/amd64)`.
   The previous GNU-style copyright/warranty block is removed. Build tooling
   (`Makefile`, `Dockerfile`, `.goreleaser.yaml`, and the release workflow) now
@@ -329,7 +365,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Orchestrator: `sortie_ci_escalations_total` over-counted during CI escalation.
   `escalateCIFailure` incremented the metric unconditionally before calling the
-  tracker API, then incremented again on error — producing two increments for one
+  tracker API, then incremented again on error - producing two increments for one
   failed operation. It also incremented when `TrackerAdapter` was nil, recording a
   phantom escalation that was never performed. Both defects are fixed; the metric
   now increments exactly once per operation outcome, matching the pattern in
@@ -426,9 +462,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   timeout or cancellation. Graceful shutdown sends `CTRL_BREAK_EVENT` to the
   process group; force-terminate uses `TerminateJobObject`. Workspace hooks
   execute via `cmd.exe /C` on Windows with their own Job Object for timeout
-  enforcement. The `procutil` package exposes cross-platform functions —
+  enforcement. The `procutil` package exposes cross-platform functions -
   `SignalGraceful`, `AssignProcess`, `CleanupProcess`, `SetProcessGroup`,
-  `KillProcessGroup` — and `WasSignaled` is now platform-aware. Adapters
+  `KillProcessGroup` - and `WasSignaled` is now platform-aware. Adapters
   no longer reference `syscall.SIGTERM` directly.
   ([#390](https://github.com/sortie-ai/sortie/issues/390),
   [#391](https://github.com/sortie-ai/sortie/issues/391))
@@ -704,7 +740,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `tracker.project: OWNER/REPO`. State management is label-based;
   `TransitionIssue` applies and removes GitHub labels with convergent retry on
   partial failure.
-- GitHub adapter: in-memory ETag cache for reconciliation polls —
+- GitHub adapter: in-memory ETag cache for reconciliation polls -
   `If-None-Match` conditional requests return `304 Not Modified` on unchanged
   issues, reducing GitHub API rate limit consumption during active runs.
 - `sortie validate` GitHub adapter config validation: emits diagnostics for
@@ -731,7 +767,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - `sortie validate` template static analysis: three advisory warning
-  classes — `WarnDotContext` (top-level key referenced inside `{{ range }}`
+  classes - `WarnDotContext` (top-level key referenced inside `{{ range }}`
   or `{{ with }}` where dot is redefined), `WarnUnknownVar` (variable not in
   the `{issue, attempt, run}` contract), and `WarnUnknownField` (valid
   top-level key with an unknown sub-field, including depth-4+ field chains on
@@ -749,8 +785,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   precedence over `.env` file values. Raw line content is removed from `.env`
   parse errors and override values are excluded from debug logs to prevent
   secret leakage.
-- Orchestrator: tracker comments posted at session lifecycle points —
-  session start, successful completion, and failure — with run duration and
+- Orchestrator: tracker comments posted at session lifecycle points -
+  session start, successful completion, and failure - with run duration and
   attempt metadata. Comments fire from a detached goroutine to avoid blocking
   the event loop.
 - Orchestrator: issues are transitioned to the configured `in_progress_state`
@@ -775,7 +811,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Dashboard: Workflow column in Active Sessions table and a new Run History
   table showing completed session outcomes, timing, and workflow file.
   SQL migration 003 adds a nullable `workflow_file` column to `run_history`.
-- Workspace root write-permission check in dispatch preflight —
+- Workspace root write-permission check in dispatch preflight -
   surfaces a clear diagnostic instead of failing mid-dispatch.
 - Homebrew tap distribution via GoReleaser-managed tap repository
   (`brew install sortie-ai/tap/sortie`).
@@ -811,7 +847,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Prometheus `/metrics` endpoint exposing session gauges, dispatch/worker/retry
   counters, token counters, tracker request counters, tool call counters,
   poll and worker duration histograms, and `sortie_build_info`. Uses a dedicated
-  `prometheus.Registry` — compatible with standard Prometheus scrape configs.
+  `prometheus.Registry` - compatible with standard Prometheus scrape configs.
 - `tracker_api` client-side tool: agents can query the tracker during sessions
   to fetch issues and comments, scoped to the configured project.
 - SSH worker extension via `worker.ssh_hosts` config: dispatch agent runs to
@@ -852,14 +888,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Graceful shutdown: on SIGTERM/SIGINT the orchestrator now drains running
   workers (up to 30 s), persists final state to SQLite, flushes pending
   agent events, and cancels retry timers before exiting.
-- Issue handoff via `tracker.handoff_state` config field — when an agent
+- Issue handoff via `tracker.handoff_state` config field - when an agent
   session completes normally and the issue is still in an active state, the
   orchestrator transitions it to the configured handoff state (e.g.,
   "In Review") and skips the continuation retry.
-- `TransitionIssue` operation on the `TrackerAdapter` interface — Jira
+- `TransitionIssue` operation on the `TrackerAdapter` interface - Jira
   adapter uses the workflow transitions API; file adapter uses an in-memory
   override map.
-- Per-issue effort budget via `agent.max_sessions` — limits total agent
+- Per-issue effort budget via `agent.max_sessions` - limits total agent
   sessions dispatched per issue before releasing the claim. Default 0
   (unlimited).
 - Documentation site at https://docs.sortie-ai.com/ with initial
@@ -874,7 +910,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the adapter config map, fixing silent shadowing of adapter extension keys
   such as `claude-code.max_turns`.
 - Jira adapter: `extractStringSlice` now handles `[]string` from the config
-  layer — previously only `[]any` was handled, silently reverting to default
+  layer - previously only `[]any` was handled, silently reverting to default
   states and causing configured `active_states` / `terminal_states` to be
   ignored.
 - Jira adapter: `FetchIssueStatesByIDs` now queries by numeric `id` instead
@@ -896,12 +932,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   worker lifecycle, exponential-backoff retry scheduling, active-run
   reconciliation, and event-driven poll loop with graceful shutdown.
 - Full startup sequence: workflow load, preflight validation, database open,
-  state reconciliation, and poll loop — in that order.
+  state reconciliation, and poll loop - in that order.
 - Dispatch preflight checks that validate adapter availability, required API
   keys, and agent configuration before dispatching work.
 - Adapter metadata via `AdapterMeta` and `RegisterWithMeta` so adapters can
   declare requirements (e.g., `RequiresAPIKey`) checked during preflight.
-- Retry classification on `TrackerErrorKind` and `AgentErrorKind` — errors
+- Retry classification on `TrackerErrorKind` and `AgentErrorKind` - errors
   are now classified as retryable or permanent for dispatch decisions.
 - `ErrTrackerNotFound` error kind for HTTP 404 responses from tracker
   adapters.
@@ -958,7 +994,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Claude Code adapter: double-wait race between `RunTurn` and `StopSession` —
+- Claude Code adapter: double-wait race between `RunTurn` and `StopSession` -
   `gracefulKill` is now fire-and-forget with timer-based SIGKILL escalation.
 - Claude Code adapter: error on missing binary now includes the actual command
   name instead of a hardcoded string.
@@ -1031,7 +1067,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   execution via GitHub Actions.
 - Architecture Decision Records (ADR-0001 through ADR-0005).
 
-[Unreleased]: https://github.com/sortie-ai/sortie/compare/1.12.0...HEAD
+[Unreleased]: https://github.com/sortie-ai/sortie/compare/1.13.0...HEAD
+[1.13.0]: https://github.com/sortie-ai/sortie/compare/1.12.0...1.13.0
 [1.12.0]: https://github.com/sortie-ai/sortie/compare/1.11.0...1.12.0
 [1.11.0]: https://github.com/sortie-ai/sortie/compare/1.10.0...1.11.0
 [1.10.0]: https://github.com/sortie-ai/sortie/compare/1.9.1...1.10.0
