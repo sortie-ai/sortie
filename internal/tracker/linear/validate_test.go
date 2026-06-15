@@ -169,14 +169,33 @@ func TestValidateAPIKeyHint(t *testing.T) {
 		if len(got) != 1 {
 			t.Fatalf("validateAPIKeyHint(%q) = %d diags, want 1; diags: %v", keyVal, len(got), got)
 		}
-		if got[0].Check != "tracker.api_key.prefix" {
-			t.Errorf("validateAPIKeyHint(%q) diag[0].Check = %q, want %q", keyVal, got[0].Check, "tracker.api_key.prefix")
+		if got[0].Check != "tracker.api_key.linear_prefix" {
+			t.Errorf("validateAPIKeyHint(%q) diag[0].Check = %q, want %q", keyVal, got[0].Check, "tracker.api_key.linear_prefix")
 		}
 		if got[0].Severity != "warning" {
 			t.Errorf("validateAPIKeyHint(%q) diag[0].Severity = %q, want %q", keyVal, got[0].Severity, "warning")
 		}
 		// Secret-leakage guard: the key value must not appear in any message.
 		if strings.Contains(got[0].Message, keyVal) {
+			t.Errorf("validateAPIKeyHint(%q) diag[0].Message contains the key value; messages must not echo secret values", keyVal)
+		}
+	})
+
+	t.Run("non-empty key with trailing whitespace – whitespace warning", func(t *testing.T) {
+		const keyVal = "lin_api_padded "
+		got := validateAPIKeyHint(keyVal)
+
+		if len(got) != 1 {
+			t.Fatalf("validateAPIKeyHint(%q) = %d diags, want 1; diags: %v", keyVal, len(got), got)
+		}
+		if got[0].Check != "tracker.api_key.linear_whitespace" {
+			t.Errorf("validateAPIKeyHint(%q) diag[0].Check = %q, want %q", keyVal, got[0].Check, "tracker.api_key.linear_whitespace")
+		}
+		if got[0].Severity != "warning" {
+			t.Errorf("validateAPIKeyHint(%q) diag[0].Severity = %q, want %q", keyVal, got[0].Severity, "warning")
+		}
+		// Secret-leakage guard: the key value must not appear in any message.
+		if strings.Contains(got[0].Message, strings.TrimSpace(keyVal)) {
 			t.Errorf("validateAPIKeyHint(%q) diag[0].Message contains the key value; messages must not echo secret values", keyVal)
 		}
 	})
