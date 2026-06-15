@@ -28,6 +28,8 @@ jobs:
       SORTIE_JIRA_ENDPOINT: ${{ secrets.SORTIE_JIRA_ENDPOINT }}
       SORTIE_JIRA_API_KEY: ${{ secrets.SORTIE_JIRA_API_KEY }}
       SORTIE_JIRA_PROJECT: ${{ secrets.SORTIE_JIRA_PROJECT }}
+      SORTIE_LINEAR_API_KEY: ${{ secrets.SORTIE_LINEAR_API_KEY }}
+      SORTIE_LINEAR_TEAM_KEY: ${{ vars.SORTIE_LINEAR_TEAM_KEY }}
       SORTIE_GITHUB_TOKEN: ${{ secrets.SORTIE_GITHUB_TOKEN }}
       SORTIE_GITHUB_PROJECT: sortie-ai/sortie-test
       ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -109,6 +111,18 @@ jobs:
             install: ""
             version_cmd: ""
             source: "Jira Cloud REST API (remote service, no pinned client)"
+
+          - name: Linear
+            adapter: linear
+            kind: tracker
+            guard: SORTIE_LINEAR_TEST
+            run_filter: Integration
+            test_path: ./internal/tracker/linear/...
+            timeout: ""
+            node: false
+            install: ""
+            version_cmd: ""
+            source: "Linear GraphQL API (remote service, no pinned client)"
 
           - name: GitHub
             adapter: github
