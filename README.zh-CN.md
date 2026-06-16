@@ -27,7 +27,7 @@ Sortie 假定你的编程智能体在手动运行时已经能够产出有价值�
 curl -sSL https://get.sortie-ai.com/install.sh | sh
 ```
 
-或通过 Homebrew 安装：`brew install sortie-ai/tap/sortie`
+或通过 Homebrew 安装：`brew install --cask sortie-ai/tap/sortie`
 
 ## 要解决的问题
 

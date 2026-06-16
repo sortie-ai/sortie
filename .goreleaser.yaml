@@ -62,26 +62,32 @@ checksum:
 sboms:
   - artifacts: archive
 
-brews:
+homebrew_casks:
   - name: sortie
+    binaries:
+      - sortie
     repository:
       owner: sortie-ai
       name: homebrew-tap
       branch: main
       token: "{{ .Env.TAP_GITHUB_TOKEN }}"
-    directory: Formula
+    directory: Casks
     commit_author:
       name: goreleaserbot
       email: goreleaserbot@users.noreply.github.com
-    commit_msg_template: "chore(formula): update {{ .ProjectName }} to {{ .Tag }}"
+    commit_msg_template: "chore(cask): update {{ .ProjectName }} to {{ .Tag }}"
     homepage: "https://github.com/sortie-ai/sortie"
     description: "Spec-first orchestration service for coding agents"
-    license: "Apache-2.0"
-    install: |
-      bin.install "sortie"
-    test: |
-      assert_match version.to_s, shell_output("#{bin}/sortie --version")
     skip_upload: "auto"
+    url:
+      verified: "github.com/sortie-ai/sortie/"
+    hooks:
+      post:
+        install: |
+          if OS.mac?
+            system_command "/usr/bin/xattr",
+              args: ["-dr", "com.apple.quarantine", "#{staged_path}/sortie"]
+          end
 
 changelog:
   sort: asc
