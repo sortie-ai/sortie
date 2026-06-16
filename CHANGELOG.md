@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Homebrew installs now use `brew install --cask sortie-ai/tap/sortie`.
+  The tap distributes a Homebrew cask covering both macOS and Linux,
+  replacing the previous formula.
+  ([#613](https://github.com/sortie-ai/sortie/issues/613))
+
 ## [1.13.0] - 2026-06-15
 
 ### Added

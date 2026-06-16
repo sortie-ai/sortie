@@ -27,7 +27,7 @@ Sortie assumes your coding agent already produces useful results when you run it
 curl -sSL https://get.sortie-ai.com/install.sh | sh
 ```
 
-Or via Homebrew: `brew install sortie-ai/tap/sortie`
+Or via Homebrew: `brew install --cask sortie-ai/tap/sortie`
 
 ## The Problem
 
