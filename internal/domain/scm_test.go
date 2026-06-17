@@ -130,6 +130,10 @@ func (m *mockSCMAdapter) FetchPendingReviews(_ context.Context, _ int, _, _ stri
 	return nil, nil
 }
 
+func (m *mockSCMAdapter) FetchBotReviewComments(_ context.Context, _ int, _, _ string, _ []string) ([]ReviewComment, error) {
+	return nil, nil
+}
+
 func (m *mockSCMAdapter) GetReviewDecision(_ context.Context, _ int, _, _ string) (ReviewDecision, error) {
 	return "", nil
 }

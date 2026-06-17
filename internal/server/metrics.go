@@ -20,24 +20,26 @@ type PromMetrics struct {
 	slotsAvailable        prometheus.Gauge
 	activeSessionsElapsed prometheus.Gauge
 
-	tokensTotal             *prometheus.CounterVec
-	agentRuntimeTotal       prometheus.Counter
-	dispatchesTotal         *prometheus.CounterVec
-	workerExitsTotal        *prometheus.CounterVec
-	retriesTotal            *prometheus.CounterVec
-	reconciliationActions   *prometheus.CounterVec
-	pollCyclesTotal         *prometheus.CounterVec
-	trackerRequestsTotal    *prometheus.CounterVec
-	handoffTransitions      *prometheus.CounterVec
-	dispatchTransitions     *prometheus.CounterVec
-	trackerCommentsTotal    *prometheus.CounterVec
-	toolCallsTotal          *prometheus.CounterVec
-	ciStatusChecksTotal     *prometheus.CounterVec
-	ciEscalationsTotal      *prometheus.CounterVec
-	reviewChecksTotal       *prometheus.CounterVec
-	reviewEscalationsTotal  *prometheus.CounterVec
-	autoMergeReactionsTotal *prometheus.CounterVec
-	dispatchRuleMatchTotal  *prometheus.CounterVec
+	tokensTotal               *prometheus.CounterVec
+	agentRuntimeTotal         prometheus.Counter
+	dispatchesTotal           *prometheus.CounterVec
+	workerExitsTotal          *prometheus.CounterVec
+	retriesTotal              *prometheus.CounterVec
+	reconciliationActions     *prometheus.CounterVec
+	pollCyclesTotal           *prometheus.CounterVec
+	trackerRequestsTotal      *prometheus.CounterVec
+	handoffTransitions        *prometheus.CounterVec
+	dispatchTransitions       *prometheus.CounterVec
+	trackerCommentsTotal      *prometheus.CounterVec
+	toolCallsTotal            *prometheus.CounterVec
+	ciStatusChecksTotal       *prometheus.CounterVec
+	ciEscalationsTotal        *prometheus.CounterVec
+	reviewChecksTotal         *prometheus.CounterVec
+	reviewEscalationsTotal    *prometheus.CounterVec
+	botReviewChecksTotal      *prometheus.CounterVec
+	botReviewEscalationsTotal *prometheus.CounterVec
+	autoMergeReactionsTotal   *prometheus.CounterVec
+	dispatchRuleMatchTotal    *prometheus.CounterVec
 
 	selfReviewIterationsTotal      *prometheus.CounterVec
 	selfReviewSessionsTotal        *prometheus.CounterVec
@@ -211,6 +213,18 @@ func NewPromMetrics(version, goVersion string) *PromMetrics {
 		Help:      "Review reaction escalation outcomes.",
 	}, []string{"action"})
 
+	botReviewChecksTotal := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: "sortie",
+		Name:      "bot_review_checks_total",
+		Help:      "Bot review comment check outcomes.",
+	}, []string{"result"})
+
+	botReviewEscalationsTotal := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: "sortie",
+		Name:      "bot_review_escalations_total",
+		Help:      "Bot review reaction escalation outcomes.",
+	}, []string{"action"})
+
 	autoMergeReactionsTotal := prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: "sortie",
 		Name:      "reactions_auto_merge_total",
@@ -273,6 +287,8 @@ func NewPromMetrics(version, goVersion string) *PromMetrics {
 		ciEscalationsTotal,
 		reviewChecksTotal,
 		reviewEscalationsTotal,
+		botReviewChecksTotal,
+		botReviewEscalationsTotal,
 		autoMergeReactionsTotal,
 		dispatchRuleMatchTotal,
 		selfReviewIterationsTotal,
@@ -306,6 +322,8 @@ func NewPromMetrics(version, goVersion string) *PromMetrics {
 		ciEscalationsTotal:             ciEscalationsTotal,
 		reviewChecksTotal:              reviewChecksTotal,
 		reviewEscalationsTotal:         reviewEscalationsTotal,
+		botReviewChecksTotal:           botReviewChecksTotal,
+		botReviewEscalationsTotal:      botReviewEscalationsTotal,
 		autoMergeReactionsTotal:        autoMergeReactionsTotal,
 		dispatchRuleMatchTotal:         dispatchRuleMatchTotal,
 		selfReviewIterationsTotal:      selfReviewIterationsTotal,
@@ -444,6 +462,16 @@ func (p *PromMetrics) IncReviewChecks(result string) {
 // IncReviewEscalations increments the review escalation action counter.
 func (p *PromMetrics) IncReviewEscalations(action string) {
 	p.reviewEscalationsTotal.WithLabelValues(action).Inc()
+}
+
+// IncBotReviewChecks increments the bot review comment check outcome counter.
+func (p *PromMetrics) IncBotReviewChecks(result string) {
+	p.botReviewChecksTotal.WithLabelValues(result).Inc()
+}
+
+// IncBotReviewEscalations increments the bot review escalation action counter.
+func (p *PromMetrics) IncBotReviewEscalations(action string) {
+	p.botReviewEscalationsTotal.WithLabelValues(action).Inc()
 }
 
 // IncAutoMergeReactions increments the auto-merge reaction outcome

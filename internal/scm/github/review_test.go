@@ -470,6 +470,332 @@ func TestFetchPendingReviews_JSONPayloadError(t *testing.T) {
 	assertSCMErrorKind(t, err, domain.ErrSCMPayload)
 }
 
+// --- FetchBotReviewComments tests ---
+
+// TestFetchBotReviewComments_BotTypeReturned verifies R1: a review authored by
+// a user with user.type == "Bot" is returned by FetchBotReviewComments.
+func TestFetchBotReviewComments_BotTypeReturned(t *testing.T) {
+	t.Parallel()
+
+	reviewsFixture := loadFixture(t, "reviews_bot.json")
+	commentsFixture := loadFixture(t, "comments_bot_inline.json")
+	srv := httptest.NewServer(reviewsAndCommentsHandler(t, reviewsFixture, commentsFixture))
+	defer srv.Close()
+
+	adapter := newTestSCMAdapter(t, srv.URL)
+	got, err := adapter.FetchBotReviewComments(context.Background(), 1, "owner", "repo", nil)
+	if err != nil {
+		t.Fatalf("FetchBotReviewComments: unexpected error: %v", err)
+	}
+	if len(got) == 0 {
+		t.Fatal("FetchBotReviewComments returned empty slice, want at least 1 comment from bot")
+	}
+
+	// The bot review has a non-empty body, so it must appear as a PR-level comment.
+	found := false
+	for _, c := range got {
+		if c.Reviewer == "github-actions[bot]" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("FetchBotReviewComments: reviewer %q not found in results", "github-actions[bot]")
+	}
+}
+
+// TestFetchBotReviewComments_BotExcludedByFetchPendingReviews verifies R1: the
+// same bot fixture that FetchBotReviewComments returns is excluded by
+// FetchPendingReviews.
+func TestFetchBotReviewComments_BotExcludedByFetchPendingReviews(t *testing.T) {
+	t.Parallel()
+
+	reviewsFixture := loadFixture(t, "reviews_bot.json")
+	srv := httptest.NewServer(reviewsAndCommentsHandler(t, reviewsFixture, loadFixture(t, "comments_empty.json")))
+	defer srv.Close()
+
+	adapter := newTestSCMAdapter(t, srv.URL)
+
+	// FetchPendingReviews must exclude the bot review entirely.
+	human, err := adapter.FetchPendingReviews(context.Background(), 1, "owner", "repo")
+	if err != nil {
+		t.Fatalf("FetchPendingReviews: %v", err)
+	}
+	if len(human) != 0 {
+		t.Errorf("FetchPendingReviews with bot fixture: len = %d, want 0 (bot must be excluded)", len(human))
+	}
+
+	// FetchBotReviewComments must include the same bot review.
+	bot, err := adapter.FetchBotReviewComments(context.Background(), 1, "owner", "repo", nil)
+	if err != nil {
+		t.Fatalf("FetchBotReviewComments: %v", err)
+	}
+	if len(bot) == 0 {
+		t.Error("FetchBotReviewComments with bot fixture: len = 0, want > 0")
+	}
+}
+
+// TestFetchBotReviewComments_AllowlistMatchCaseInsensitive verifies R2: a
+// review authored by a user with user.type == "User" whose login matches a
+// botUsernames entry case-insensitively is returned by FetchBotReviewComments.
+// The test uses a fixture where both the review and its inline comment carry
+// user.type == "User" with login "Dependabot[bot]", so the only selection path
+// is the allowlist union arm.
+func TestFetchBotReviewComments_AllowlistMatchCaseInsensitive(t *testing.T) {
+	t.Parallel()
+
+	// reviews_user_allowlisted.json: user.type == "User", login "Dependabot[bot]", empty body.
+	// comments_user_allowlisted.json: user.type == "User", login "Dependabot[bot]".
+	reviewsFixture := loadFixture(t, "reviews_user_allowlisted.json")
+	commentsFixture := loadFixture(t, "comments_user_allowlisted.json")
+	srv := httptest.NewServer(reviewsAndCommentsHandler(t, reviewsFixture, commentsFixture))
+	defer srv.Close()
+
+	adapter := newTestSCMAdapter(t, srv.URL)
+
+	// Without the allowlist the "User" type review/comment must be excluded entirely.
+	gotNoAllowlist, err := adapter.FetchBotReviewComments(context.Background(), 1, "owner", "repo", nil)
+	if err != nil {
+		t.Fatalf("FetchBotReviewComments (no allowlist): %v", err)
+	}
+	for _, c := range gotNoAllowlist {
+		if strings.EqualFold(c.Reviewer, "dependabot[bot]") {
+			t.Errorf("FetchBotReviewComments with no allowlist: reviewer %q must not appear without allowlist", c.Reviewer)
+		}
+	}
+
+	// With a differently-cased allowlist entry, the inline comment must be returned.
+	allowlist := []string{"DEPENDABOT[BOT]"}
+	gotWithAllowlist, err := adapter.FetchBotReviewComments(context.Background(), 1, "owner", "repo", allowlist)
+	if err != nil {
+		t.Fatalf("FetchBotReviewComments (with allowlist): %v", err)
+	}
+	found := false
+	for _, c := range gotWithAllowlist {
+		if strings.EqualFold(c.Reviewer, "dependabot[bot]") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("FetchBotReviewComments(allowlist=%v): reviewer %q not found, want case-insensitive match",
+			allowlist, "Dependabot[bot]")
+	}
+}
+
+// TestFetchBotReviewComments_CommentedReviewIncluded verifies Open Question 2
+// (Option A): a bot review with state COMMENTED (not CHANGES_REQUESTED) is
+// still returned by FetchBotReviewComments.
+func TestFetchBotReviewComments_CommentedReviewIncluded(t *testing.T) {
+	t.Parallel()
+
+	// reviews_bot_commented.json has state == "COMMENTED" and user.type == "Bot".
+	reviewsFixture := loadFixture(t, "reviews_bot_commented.json")
+	srv := httptest.NewServer(reviewsAndCommentsHandler(t, reviewsFixture, loadFixture(t, "comments_empty.json")))
+	defer srv.Close()
+
+	adapter := newTestSCMAdapter(t, srv.URL)
+	got, err := adapter.FetchBotReviewComments(context.Background(), 1, "owner", "repo", nil)
+	if err != nil {
+		t.Fatalf("FetchBotReviewComments: %v", err)
+	}
+	if len(got) == 0 {
+		t.Error("FetchBotReviewComments with COMMENTED bot review: len = 0, want > 0 (no review-state filter)")
+	}
+}
+
+// TestFetchBotReviewComments_SelectionIgnoresBody verifies R3: classification
+// reads only user.login and user.type; the body content does not affect
+// selection. A bot with empty body is still classified as bot (no PR-level
+// comment), and its inline comments are returned.
+func TestFetchBotReviewComments_SelectionIgnoresBody(t *testing.T) {
+	t.Parallel()
+
+	// reviews_changes_requested_no_body.json has user.type == "User" (not a bot).
+	// We need a bot review with empty body to confirm body doesn't affect selection.
+	// Use a bot review + inline comment; the bot is selected by user.type, not body.
+	reviewsFixture := loadFixture(t, "reviews_bot.json")
+	// Provide a bot inline comment — body content is irrelevant to selection.
+	commentsFixture := loadFixture(t, "comments_bot_inline.json")
+	srv := httptest.NewServer(reviewsAndCommentsHandler(t, reviewsFixture, commentsFixture))
+	defer srv.Close()
+
+	adapter := newTestSCMAdapter(t, srv.URL)
+	got, err := adapter.FetchBotReviewComments(context.Background(), 1, "owner", "repo", nil)
+	if err != nil {
+		t.Fatalf("FetchBotReviewComments: %v", err)
+	}
+	// Selection must have occurred regardless of comment body content.
+	// The inline comment (id 501) must appear in results.
+	found := false
+	for _, c := range got {
+		if c.ID == "501" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("FetchBotReviewComments: inline bot comment id %q not returned; selection must use user.type only", "501")
+	}
+}
+
+// TestFetchBotReviewComments_EmptyResultNonNil verifies that when no bot
+// comments match, the result is a non-nil empty slice.
+func TestFetchBotReviewComments_EmptyResultNonNil(t *testing.T) {
+	t.Parallel()
+
+	// reviews_approved.json has user.type == "User" and is not in any allowlist.
+	reviewsFixture := loadFixture(t, "reviews_approved.json")
+	srv := httptest.NewServer(reviewsAndCommentsHandler(t, reviewsFixture, loadFixture(t, "comments_empty.json")))
+	defer srv.Close()
+
+	adapter := newTestSCMAdapter(t, srv.URL)
+	got, err := adapter.FetchBotReviewComments(context.Background(), 1, "owner", "repo", nil)
+	if err != nil {
+		t.Fatalf("FetchBotReviewComments: %v", err)
+	}
+	if got == nil {
+		t.Error("FetchBotReviewComments with no bot matches: returned nil, want non-nil empty slice")
+	}
+	if len(got) != 0 {
+		t.Errorf("FetchBotReviewComments with no bot matches: len = %d, want 0", len(got))
+	}
+}
+
+// TestFetchBotReviewComments_OutdatedCommentFlag verifies that a bot inline
+// comment with null position carries Outdated == true.
+func TestFetchBotReviewComments_OutdatedCommentFlag(t *testing.T) {
+	t.Parallel()
+
+	// Use the COMMENTED bot review (user.type == "Bot") with an outdated inline
+	// comment (position == null).
+	reviewsFixture := loadFixture(t, "reviews_bot_commented.json")
+	commentsFixture := loadFixture(t, "comments_bot_outdated.json")
+	srv := httptest.NewServer(reviewsAndCommentsHandler(t, reviewsFixture, commentsFixture))
+	defer srv.Close()
+
+	adapter := newTestSCMAdapter(t, srv.URL)
+	got, err := adapter.FetchBotReviewComments(context.Background(), 1, "owner", "repo", nil)
+	if err != nil {
+		t.Fatalf("FetchBotReviewComments: %v", err)
+	}
+
+	foundOutdated := false
+	for _, c := range got {
+		if c.ID == "500" {
+			foundOutdated = true
+			if !c.Outdated {
+				t.Errorf("FetchBotReviewComments: comment id %q Outdated = false, want true (position is null)", c.ID)
+			}
+		}
+	}
+	if !foundOutdated {
+		t.Errorf("FetchBotReviewComments: outdated bot comment id %q not found in results", "500")
+	}
+}
+
+// TestFetchBotReviewComments_NoReviews verifies that when the PR has no
+// reviews at all, the result is a non-nil empty slice.
+func TestFetchBotReviewComments_NoReviews(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(reviewsAndCommentsHandler(t, loadFixture(t, "reviews_empty.json"), loadFixture(t, "comments_empty.json")))
+	defer srv.Close()
+
+	adapter := newTestSCMAdapter(t, srv.URL)
+	got, err := adapter.FetchBotReviewComments(context.Background(), 1, "owner", "repo", nil)
+	if err != nil {
+		t.Fatalf("FetchBotReviewComments with empty reviews: %v", err)
+	}
+	if got == nil {
+		t.Error("FetchBotReviewComments with empty reviews: returned nil, want non-nil empty slice")
+	}
+	if len(got) != 0 {
+		t.Errorf("FetchBotReviewComments with empty reviews: len = %d, want 0", len(got))
+	}
+}
+
+// TestIsBotAuthor verifies the isBotAuthor predicate covers all union branches.
+func TestIsBotAuthor(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		login     string
+		userType  string
+		allowlist []string
+		want      bool
+	}{
+		{
+			name:     "user.type Bot (exact case)",
+			login:    "golangci-lint[bot]",
+			userType: "Bot",
+			want:     true,
+		},
+		{
+			name:     "user.type bot (lower case)",
+			login:    "golangci-lint[bot]",
+			userType: "bot",
+			want:     true,
+		},
+		{
+			name:     "user.type BOT (upper case)",
+			login:    "golangci-lint[bot]",
+			userType: "BOT",
+			want:     true,
+		},
+		{
+			name:     "user.type User not in allowlist",
+			login:    "alice",
+			userType: "User",
+			want:     false,
+		},
+		{
+			name:      "user.type User in allowlist exact match",
+			login:     "dependabot[bot]",
+			userType:  "User",
+			allowlist: []string{"dependabot[bot]"},
+			want:      true,
+		},
+		{
+			name:      "user.type User in allowlist case-insensitive",
+			login:     "Dependabot[bot]",
+			userType:  "User",
+			allowlist: []string{"DEPENDABOT[BOT]"},
+			want:      true,
+		},
+		{
+			name:      "user.type User not in populated allowlist",
+			login:     "bob",
+			userType:  "User",
+			allowlist: []string{"dependabot[bot]", "golangci-lint[bot]"},
+			want:      false,
+		},
+		{
+			name:      "empty allowlist and non-bot type",
+			login:     "carol",
+			userType:  "User",
+			allowlist: []string{},
+			want:      false,
+		},
+		{
+			name:     "nil allowlist and non-bot type",
+			login:    "carol",
+			userType: "User",
+			want:     false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := isBotAuthor(tt.login, tt.userType, tt.allowlist)
+			if got != tt.want {
+				t.Errorf("isBotAuthor(%q, %q, %v) = %v, want %v",
+					tt.login, tt.userType, tt.allowlist, got, tt.want)
+			}
+		})
+	}
+}
+
 // --- TestToSCMError ---
 
 func TestToSCMError(t *testing.T) {

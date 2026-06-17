@@ -1,0 +1,12 @@
+[
+  {
+    "id": 50,
+    "state": "COMMENTED",
+    "body": "Found 2 issues: unused import, missing error check.",
+    "user": {
+      "login": "golangci-lint[bot]",
+      "type": "Bot"
+    },
+    "submitted_at": "2026-04-01T10:00:00Z"
+  }
+]

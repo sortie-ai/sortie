@@ -116,6 +116,23 @@ type SCMAdapter interface {
 	// exist. Returns a [*SCMError] on failure.
 	FetchPendingReviews(ctx context.Context, prNumber int, owner, repo string) ([]ReviewComment, error)
 
+	// FetchBotReviewComments returns review comments authored by
+	// automated review bots on the given PR. A comment is bot-authored
+	// when the platform reports its author as an automated bot account
+	// OR when the author login matches an entry in botUsernames under a
+	// case-insensitive comparison. The two conditions form a union:
+	// either one qualifies. botUsernames may be nil or empty, in which
+	// case only the platform's bot-account signal selects comments.
+	//
+	// Unlike [SCMAdapter.FetchPendingReviews], selection does not require
+	// any particular review state. Comments marked as outdated by the
+	// platform are included with Outdated=true; the caller is responsible
+	// for filtering.
+	//
+	// Returns an empty non-nil slice when no bot review comments exist.
+	// Returns a [*SCMError] on failure.
+	FetchBotReviewComments(ctx context.Context, prNumber int, owner, repo string, botUsernames []string) ([]ReviewComment, error)
+
 	// GetReviewDecision returns the aggregated review decision for the
 	// given PR. Returns a [*SCMError] on failure.
 	GetReviewDecision(ctx context.Context, prNumber int, owner, repo string) (ReviewDecision, error)

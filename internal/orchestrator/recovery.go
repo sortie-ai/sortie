@@ -91,6 +91,7 @@ type PendingReactionRecoveryParams struct {
 	CIProvider                  domain.CIStatusProvider
 	SCMAdapter                  domain.SCMAdapter
 	AutoMergeReactionConfigured bool
+	BotReviewReactionConfigured bool
 	RecoveryLookback            time.Duration
 	MaxCandidates               int
 	NowFunc                     func() time.Time
@@ -106,6 +107,7 @@ type PendingReactionRecoveryResult struct {
 	ReviewRecovered    int
 	CIRecovered        int
 	AutoMergeRecovered int
+	BotReviewRecovered int
 	StaleSkipped       int
 	Skipped            int
 }
@@ -306,6 +308,32 @@ func recoverPendingReactionKinds(
 				TemplateID: run.TemplateID,
 			}
 			outcome.ReviewRecovered++
+			added++
+		}
+	}
+
+	if params.BotReviewReactionConfigured && meta.PRNumber > 0 && meta.Owner != "" && meta.Repo != "" && meta.Branch != "" {
+		key := ReactionKey(run.IssueID, ReactionKindBotReview)
+		if _, exists := state.PendingReactions[key]; !exists {
+			state.PendingReactions[key] = &PendingReaction{
+				IssueID:    run.IssueID,
+				Identifier: run.Identifier,
+				DisplayID:  run.DisplayID,
+				Attempt:    run.Attempt,
+				Kind:       ReactionKindBotReview,
+				CreatedAt:  now,
+				KindData: &BotReviewReactionData{
+					PRNumber: meta.PRNumber,
+					Owner:    meta.Owner,
+					Repo:     meta.Repo,
+					Branch:   meta.Branch,
+					SHA:      meta.SHA,
+				},
+				AgentKind:  run.AgentAdapter,
+				RuleName:   run.RuleName,
+				TemplateID: run.TemplateID,
+			}
+			outcome.BotReviewRecovered++
 			added++
 		}
 	}

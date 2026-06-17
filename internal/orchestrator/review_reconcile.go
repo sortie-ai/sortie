@@ -90,7 +90,7 @@ func reconcileReviewComments(state *State, params ReconcileParams, log *slog.Log
 		comments, err := params.SCMAdapter.FetchPendingReviews(ctx, reviewData.PRNumber, reviewData.Owner, reviewData.Repo)
 		if err != nil {
 			pending.PendingAttempts++
-			delay := max(computeReviewPendingDelay(pending.PendingAttempts), pollInterval)
+			delay := max(computeReactionPendingDelay(pending.PendingAttempts), pollInterval)
 			pending.PendingRetryAt = now.Add(delay)
 			state.PendingReactions[key] = pending
 			entryLog.Warn("review fetch failed, retrying with backoff",
@@ -191,12 +191,13 @@ func reconcileReviewComments(state *State, params ReconcileParams, log *slog.Log
 	}
 }
 
-// computeReviewPendingDelay returns the backoff delay for a review
+// computeReactionPendingDelay returns the backoff delay for a reaction
 // pending re-check at the given attempt count. Attempt 0 returns zero
 // (immediate). Each subsequent attempt returns
 // reviewPendingBackoffBase * 2^attempts, capped at
-// [reviewPendingBackoffCap].
-func computeReviewPendingDelay(attempts int) time.Duration {
+// [reviewPendingBackoffCap]. Shared by the review and bot-review
+// reconcile passes for fetch-error backoff.
+func computeReactionPendingDelay(attempts int) time.Duration {
 	if attempts <= 0 {
 		return 0
 	}

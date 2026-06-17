@@ -3201,6 +3201,10 @@ func (s *scmAdapterStubExit) FetchPendingReviews(_ context.Context, _ int, _, _ 
 	panic("FetchPendingReviews must not be called by HandleWorkerExit")
 }
 
+func (s *scmAdapterStubExit) FetchBotReviewComments(_ context.Context, _ int, _, _ string, _ []string) ([]domain.ReviewComment, error) {
+	panic("FetchBotReviewComments must not be called by HandleWorkerExit")
+}
+
 func (s *scmAdapterStubExit) GetReviewDecision(_ context.Context, _ int, _, _ string) (domain.ReviewDecision, error) {
 	panic("GetReviewDecision must not be called by HandleWorkerExit")
 }

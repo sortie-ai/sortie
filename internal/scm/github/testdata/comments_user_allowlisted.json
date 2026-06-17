@@ -1,0 +1,15 @@
+[
+  {
+    "id": 600,
+    "path": "internal/security.go",
+    "start_line": 5,
+    "line": 7,
+    "position": 2,
+    "body": "Dependency `lodash` has a known vulnerability.",
+    "user": {
+      "login": "Dependabot[bot]",
+      "type": "User"
+    },
+    "created_at": "2026-04-01T11:05:00Z"
+  }
+]

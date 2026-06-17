@@ -117,6 +117,21 @@ type ReconcileParams struct {
 	// is active for the current process. Reconcile, enqueue, and
 	// recovery paths gate on this flag.
 	AutoMergeReactionConfigured bool
+
+	// BotReviewConfig holds bot-review reaction configuration. Only read
+	// when BotReviewConfigured is true.
+	BotReviewConfig BotReviewReactionConfig
+
+	// BotReviewPendingTTL is the maximum age of a bot-review
+	// PendingReaction entry before it is dropped. Zero disables TTL
+	// enforcement.
+	BotReviewPendingTTL time.Duration
+
+	// BotReviewConfigured marks whether the bot-review feature is active
+	// for the current process. The reconcile pass gates on this flag
+	// independently of SCMAdapter presence, since a single SCM adapter
+	// may be shared with the review and auto-merge kinds.
+	BotReviewConfigured bool
 }
 
 // ReconcileRunningIssues detects stalled workers and refreshes tracker
@@ -164,6 +179,11 @@ func ReconcileRunningIssues(state *State, params ReconcileParams) {
 
 	// Poll review comments for issues with pending review reactions.
 	reconcileReviewComments(state, params, log, ctx, metrics)
+
+	// Poll bot-authored review comments for issues with pending
+	// bot-review reactions. Runs after the human review pass and before
+	// auto-merge.
+	reconcileBotReviewComments(state, params, log, ctx, metrics)
 
 	// Poll auto-merge preconditions for issues with pending merge
 	// reactions. Runs LAST so the CI and review reconcile passes have
