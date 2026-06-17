@@ -3346,8 +3346,10 @@ merge-conflict resolution by a coding agent is less likely to succeed on a secon
 
 Two metrics counters:
 
-- `sortie_merge_conflict_checks_total{result}`: incremented on every reconcile-loop outcome for a
-  due entry. Label values: `dispatched`, `error`, `unknown`, `clear`.
+- `sortie_merge_conflict_checks_total{result}`: incremented once per counted reconcile-loop outcome
+  for a due entry. Label values: `dispatched`, `error`, `unknown`, `clear`. Dirty-branch deferrals
+  (empty head SHA, empty base branch, or the same-head dedup early-return) and the escalation path do
+  not increment this counter.
 - `sortie_merge_conflict_escalations_total{action}`: incremented inside the escalation goroutine.
   Label values: `label`, `comment`, `error`.
 

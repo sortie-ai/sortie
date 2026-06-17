@@ -2148,8 +2148,8 @@ PR identity and the rebase target read live from the PR object (see
 
 The `base` value is the PR's actual base ref, not an assumed default branch, so the agent
 rebases onto the correct target for PRs that target a release branch, a GitFlow `develop`,
-or a stacked-PR parent. `base` is empty only when the provider omits the base ref (rare);
-the template author handles that case.
+or a stacked-PR parent. The orchestrator defers the continuation while the base ref is
+unavailable, so `base` is always a populated branch name when this context is emitted.
 
 When `nil` (default on non-merge-conflict dispatches), `{{ if .merge_conflict }}` evaluates
 to `false`.
