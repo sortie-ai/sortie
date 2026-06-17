@@ -5,9 +5,9 @@
     "start_line": 5,
     "line": 7,
     "position": 2,
-    "body": "Exported function `Handler` should have a doc comment.",
+    "body": "Trailing whitespace detected.",
     "user": {
-      "login": "acme-lint-bot",
+      "login": "houndci-bot",
       "type": "User"
     },
     "created_at": "2026-04-01T11:05:00Z"

@@ -4,7 +4,7 @@
     "state": "CHANGES_REQUESTED",
     "body": "",
     "user": {
-      "login": "acme-lint-bot",
+      "login": "houndci-bot",
       "type": "User"
     },
     "submitted_at": "2026-04-01T11:00:00Z"

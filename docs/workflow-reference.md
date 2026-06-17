@@ -775,7 +775,7 @@ to `.sortie/scm.json` in the workspace for bot-review polling to activate.
 content heuristic. A comment is selected when the platform marks its author as a bot OR
 its author login matches a `bot_usernames` entry, case-insensitively. The `bot_usernames`
 allowlist covers review tools that comment under a regular user account (`user.type == "User"`)
-rather than a bot account, such as a linter posting through a CI service account's token. Unlike
+rather than a bot account, such as Hound (`houndci-bot`), which posts inline style comments under a regular user account. Unlike
 `review_comments`, no `CHANGES_REQUESTED` review state is required, because review bots
 commonly post comment-only reviews.
 
@@ -810,7 +810,7 @@ reactions:
     poll_interval_ms: 60000
     max_continuation_turns: 5
     bot_usernames:            # only for review tools that comment under a user account, not a bot account
-      - acme-lint-bot
+      - houndci-bot           # e.g. Hound (houndci.com), comments as a type:User account
 ```
 
 **Validation rules:**
