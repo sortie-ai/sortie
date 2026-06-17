@@ -10,7 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Bot-review reaction kind: automated review-bot comments (linters,
-  static analyzers, security scanners, dependency bots) on a
+  static analyzers, security scanners, and AI reviewers) on a
   Sortie-created pull request are now detected separately from human
   review comments and routed back into the agent session as
   continuation turns. Enable it with a `reactions.bot_review` block in

@@ -538,13 +538,13 @@ func TestFetchBotReviewComments_BotExcludedByFetchPendingReviews(t *testing.T) {
 // review authored by a user with user.type == "User" whose login matches a
 // botUsernames entry case-insensitively is returned by FetchBotReviewComments.
 // The test uses a fixture where both the review and its inline comment carry
-// user.type == "User" with login "Dependabot[bot]", so the only selection path
+// user.type == "User" with login "acme-lint-bot", so the only selection path
 // is the allowlist union arm.
 func TestFetchBotReviewComments_AllowlistMatchCaseInsensitive(t *testing.T) {
 	t.Parallel()
 
-	// reviews_user_allowlisted.json: user.type == "User", login "Dependabot[bot]", empty body.
-	// comments_user_allowlisted.json: user.type == "User", login "Dependabot[bot]".
+	// reviews_user_allowlisted.json: user.type == "User", login "acme-lint-bot", empty body.
+	// comments_user_allowlisted.json: user.type == "User", login "acme-lint-bot".
 	reviewsFixture := loadFixture(t, "reviews_user_allowlisted.json")
 	commentsFixture := loadFixture(t, "comments_user_allowlisted.json")
 	srv := httptest.NewServer(reviewsAndCommentsHandler(t, reviewsFixture, commentsFixture))
@@ -558,26 +558,26 @@ func TestFetchBotReviewComments_AllowlistMatchCaseInsensitive(t *testing.T) {
 		t.Fatalf("FetchBotReviewComments (no allowlist): %v", err)
 	}
 	for _, c := range gotNoAllowlist {
-		if strings.EqualFold(c.Reviewer, "dependabot[bot]") {
+		if strings.EqualFold(c.Reviewer, "acme-lint-bot") {
 			t.Errorf("FetchBotReviewComments with no allowlist: reviewer %q must not appear without allowlist", c.Reviewer)
 		}
 	}
 
 	// With a differently-cased allowlist entry, the inline comment must be returned.
-	allowlist := []string{"DEPENDABOT[BOT]"}
+	allowlist := []string{"ACME-LINT-BOT"}
 	gotWithAllowlist, err := adapter.FetchBotReviewComments(context.Background(), 1, "owner", "repo", allowlist)
 	if err != nil {
 		t.Fatalf("FetchBotReviewComments (with allowlist): %v", err)
 	}
 	found := false
 	for _, c := range gotWithAllowlist {
-		if strings.EqualFold(c.Reviewer, "dependabot[bot]") {
+		if strings.EqualFold(c.Reviewer, "acme-lint-bot") {
 			found = true
 		}
 	}
 	if !found {
 		t.Errorf("FetchBotReviewComments(allowlist=%v): reviewer %q not found, want case-insensitive match",
-			allowlist, "Dependabot[bot]")
+			allowlist, "acme-lint-bot")
 	}
 }
 
@@ -749,23 +749,23 @@ func TestIsBotAuthor(t *testing.T) {
 		},
 		{
 			name:      "user.type User in allowlist exact match",
-			login:     "dependabot[bot]",
+			login:     "acme-lint-bot",
 			userType:  "User",
-			allowlist: []string{"dependabot[bot]"},
+			allowlist: []string{"acme-lint-bot"},
 			want:      true,
 		},
 		{
 			name:      "user.type User in allowlist case-insensitive",
-			login:     "Dependabot[bot]",
+			login:     "acme-lint-bot",
 			userType:  "User",
-			allowlist: []string{"DEPENDABOT[BOT]"},
+			allowlist: []string{"ACME-LINT-BOT"},
 			want:      true,
 		},
 		{
 			name:      "user.type User not in populated allowlist",
 			login:     "bob",
 			userType:  "User",
-			allowlist: []string{"dependabot[bot]", "golangci-lint[bot]"},
+			allowlist: []string{"acme-lint-bot", "golangci-lint[bot]"},
 			want:      false,
 		},
 		{

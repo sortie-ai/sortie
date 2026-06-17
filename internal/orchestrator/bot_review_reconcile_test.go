@@ -127,7 +127,7 @@ func TestBuildBotReviewReactionConfig(t *testing.T) {
 			name: "well-formed bot_usernames coerces to []string",
 			rc: config.ReactionConfig{
 				Extra: map[string]any{
-					"bot_usernames": []any{"dependabot", "renovate-bot"},
+					"bot_usernames": []any{"acme-lint-bot", "ci-review-svc"},
 				},
 			},
 			want: BotReviewReactionConfig{
@@ -135,7 +135,7 @@ func TestBuildBotReviewReactionConfig(t *testing.T) {
 				EscalationLabel:      "needs-human",
 				PollIntervalMS:       60000,
 				MaxContinuationTurns: 5,
-				BotUsernames:         []string{"dependabot", "renovate-bot"},
+				BotUsernames:         []string{"acme-lint-bot", "ci-review-svc"},
 			},
 		},
 		{

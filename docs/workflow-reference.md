@@ -753,7 +753,7 @@ reactions:
 
 Automated review-bot comment routing. When configured, the orchestrator polls for
 PR comments authored by automated review tools (linters, static analyzers, security
-scanners, dependency bots) on Sortie-created PRs and dispatches continuation turns so
+scanners, and AI reviewers such as GitHub Copilot or CodeRabbit) on Sortie-created PRs and dispatches continuation turns so
 the agent can address them. This is the complement of `review_comments`, which routes
 only human `CHANGES_REQUESTED` comments and excludes bot-authored ones.
 
@@ -768,12 +768,14 @@ Additional fields (via Extra):
 **Activation:** The `reactions.bot_review` block is active when `provider` is present
 and non-empty, on its own, with no `reactions.review_comments` or `reactions.auto_merge`
 block required. When `provider` is absent or empty, the block is inactive. Agent-created
-PRs MUST write `pr_number` (positive integer), `owner`, `repo`, and `branch` (all
-non-empty) to `.sortie/scm.json` in the workspace for bot-review polling to activate.
+PRs MUST write `pr_number` (positive integer), `owner`, and `repo` (all non-empty)
+to `.sortie/scm.json` in the workspace for bot-review polling to activate.
 
 **Classification:** Bot detection is deterministic author-metadata matching, not a
 content heuristic. A comment is selected when the platform marks its author as a bot OR
-its author login matches a `bot_usernames` entry, case-insensitively. Unlike
+its author login matches a `bot_usernames` entry, case-insensitively. The `bot_usernames`
+allowlist covers review tools that comment under a regular user account (`user.type == "User"`)
+rather than a bot account, such as a linter posting through a CI service account's token. Unlike
 `review_comments`, no `CHANGES_REQUESTED` review state is required, because review bots
 commonly post comment-only reviews.
 
@@ -807,9 +809,8 @@ reactions:
     escalation_label: needs-human
     poll_interval_ms: 60000
     max_continuation_turns: 5
-    bot_usernames:
-      - dependabot[bot]
-      - renovate[bot]
+    bot_usernames:            # only for review tools that comment under a user account, not a bot account
+      - acme-lint-bot
 ```
 
 **Validation rules:**
