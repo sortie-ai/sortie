@@ -611,6 +611,16 @@ under `reactions` identifies a reaction kind.
 | `escalation`       | string  | No                    | `label`       | Future dispatches | Action when retries are exhausted. Valid: `"label"`, `"comment"`.                                |
 | `escalation_label` | string  | No                    | `needs-human` | Future dispatches | Label applied when `escalation` is `"label"`.                                                    |
 
+**Escalation recurrence:** `escalation: label` is idempotent (re-applying a
+present label is a no-op); `escalation: comment` posts a new comment each time
+it fires. For kinds whose escalation releases the issue claim (`ci_failure`,
+`review_comments`), escalation fires once and the reaction stops. For kinds
+whose escalation is scoped and keeps the claim (`auto_merge`, `bot_review`), the
+reaction re-arms if its condition recurs and escalates again, so on a long-lived
+PR `escalation: comment` can accumulate repeated comments while `escalation:
+label` stays a single mark. Prefer `label` for kinds that may escalate
+repeatedly.
+
 Remaining keys within a kind sub-object are kind-specific and collected into an `Extra` map.
 
 #### Reaction kind: `ci_failure`
@@ -813,6 +823,68 @@ reactions:
       - houndci-bot           # e.g. Hound (houndci.com), comments as a type:User account
 ```
 
+#### Reaction kind: `merge_conflicts`
+
+Merge-conflict detection and resolution. When configured, the orchestrator polls
+mergeability on Sortie-created open PRs each reconcile cycle and dispatches one
+rebase-and-resolve continuation turn each time a PR transitions from no-conflict to
+conflict. The continuation carries the PR's real base branch so the agent rebases the PR
+head branch onto the correct target and resolves the conflicts on the existing workspace.
+
+Retry semantics are episodic: a resolved conflict closes the episode and resets the
+attempt counter, so a later independent conflict opens a fresh episode rather than
+counting against the prior budget. The default `max_retries` is `1`, lower than the other
+kinds, because merge-conflict resolution is less likely to succeed on retry than a CI fix.
+
+Fields:
+
+| Field              | Type    | Default       | Dynamic Reload    | Description                                                                                              |
+| ------------------ | ------- | ------------- | ----------------- | -------------------------------------------------------------------------------------------------------- |
+| `provider`         | string  | _(required)_  | Requires restart  | SCM adapter kind. Must match the provider of every other active SCM reaction. Activates the kind.        |
+| `max_retries`      | integer | `1`           | Future dispatches | Per-episode rebase attempts before escalation. `0` escalates on first detection without a rebase attempt. |
+| `escalation`       | string  | `label`       | Future dispatches | Escalation action when retries are exhausted. One of `label` or `comment`.                               |
+| `escalation_label` | string  | `needs-human` | Future dispatches | Label applied when `escalation` is `label`.                                                              |
+| `poll_interval_ms` | integer | `60000`       | Future dispatches | Polling interval for the conflict-detection state machine. Minimum: `30000` (30 sec).                    |
+
+**Activation:** The `reactions.merge_conflicts` block is active when `provider` is present
+and non-empty, on its own, with no other `reactions` block required. Agent-created PRs MUST
+write `pr_number` (positive integer), `owner`, `repo`, and `branch` (all non-empty) to
+`.sortie/scm.json` in the workspace for merge-conflict polling to activate. To disable the
+reaction, omit the `merge_conflicts` block; setting `max_retries: 0` does not disable it but
+escalates on the first detected conflict.
+
+**Fingerprint dedup:** The fingerprint is the SHA-256 of the PR head SHA, persisted in the
+`reaction_fingerprints` SQLite table under a kind distinct from the other reactions. A
+single conflicted head dispatches exactly one rebase turn; after the agent rebases and
+pushes a new head, the new head produces a new fingerprint, so a conflict that persists
+across the rebase re-arms a new attempt bounded by `max_retries`. When the conflict clears,
+the row is deleted, so the next conflict observation dispatches again.
+
+**Cross-kind isolation:** Merge-conflict detection runs independently of every other
+reaction kind; each owns its own pending entry, fingerprint row, and attempt counter.
+Escalation cleanup is scoped to the `merge-conflict` kind only and does not release the
+issue claim or clear sibling reaction kinds. Auto-merge and merge-conflict coexist on the
+same PR: auto-merge defers while a PR is conflicted, and merge-conflict drives the
+resolution, after which auto-merge proceeds once the PR is clean and approved.
+
+**Escalation:** When `max_retries` is exhausted within an episode (a new conflicting head
+pushes the attempt count strictly over the budget), the orchestrator applies the configured
+escalation action (`label` or `comment`, default `label`, with `escalation_label`
+defaulting to `needs-human`) and removes the pending merge-conflict entry and its attempt
+counter. Other reaction kinds on the same issue are preserved.
+
+Example:
+
+```yaml
+reactions:
+  merge_conflicts:
+    provider: github
+    max_retries: 1
+    escalation: label
+    escalation_label: needs-human
+    poll_interval_ms: 60000
+```
+
 **Validation rules:**
 
 - Reaction kind keys must match `[a-z][a-z0-9_-]*`. Invalid keys are rejected with a
@@ -828,6 +900,8 @@ reactions:
 - `poll_interval_ms` must be >= `30000` for `bot_review`.
 - `max_continuation_turns` must be positive for `bot_review`.
 - `bot_usernames` for `bot_review` must be a list of strings.
+- `poll_interval_ms` must be >= `30000` for `merge_conflicts`.
+- `max_retries` for `merge_conflicts` defaults to `1` rather than `2`; an explicit value overrides.
 - When `provider` is absent or empty, all other fields in the kind sub-object are ignored.
 
 ---
@@ -2056,6 +2130,43 @@ The following comments were left on the PR by automated review tools. Address ea
 {{ .body }}
 
 {{ end }}
+{{ end }}
+```
+
+#### `merge_conflict` — Merge Conflict Context (continuation key)
+
+Non-nil only on turn 1 of a merge-conflict-resolution continuation dispatch. Contains the
+PR identity and the rebase target read live from the PR object (see
+`reactions.merge_conflicts` in Section 2.10):
+
+| Field                      | Type    | Description                                                                 |
+| -------------------------- | ------- | --------------------------------------------------------------------------- |
+| `.merge_conflict.pr_number` | integer | Pull request number.                                                        |
+| `.merge_conflict.branch`   | string  | PR head branch the agent rebases.                                           |
+| `.merge_conflict.head_sha` | string  | Latest commit SHA on the PR head branch.                                    |
+| `.merge_conflict.base`     | string  | PR's real target (base) branch, read live from the PR object. The rebase target. |
+
+The `base` value is the PR's actual base ref, not an assumed default branch, so the agent
+rebases onto the correct target for PRs that target a release branch, a GitFlow `develop`,
+or a stacked-PR parent. `base` is empty only when the provider omits the base ref (rare);
+the template author handles that case.
+
+When `nil` (default on non-merge-conflict dispatches), `{{ if .merge_conflict }}` evaluates
+to `false`.
+
+**Template pattern for merge conflicts:**
+
+```
+{{ if .merge_conflict }}
+## Resolve Merge Conflicts
+
+PR #{{ .merge_conflict.pr_number }} ({{ .merge_conflict.branch }}) has merge conflicts with
+its base branch {{ .merge_conflict.base }}. Resolve them:
+
+1. Fetch the latest {{ .merge_conflict.base }}.
+2. Rebase {{ .merge_conflict.branch }} onto {{ .merge_conflict.base }}.
+3. Resolve every conflict, keeping both the intent of the PR and the base changes.
+4. Push the rebased branch.
 {{ end }}
 ```
 

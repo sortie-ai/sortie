@@ -141,6 +141,19 @@ Review the current state of the workspace, check test output, lint results, and 
 partial changes. Do not repeat work already completed. Proceed with the next step.
 {{ end }}
 
+{{ if .merge_conflict }}
+
+## Resolve Merge Conflicts
+
+PR #{{ .merge_conflict.pr_number }} ({{ .merge_conflict.branch }}) has merge conflicts with
+its base branch {{ .merge_conflict.base }}. Resolve them now:
+
+1. Fetch the latest {{ .merge_conflict.base }} from the remote.
+2. Rebase {{ .merge_conflict.branch }} onto {{ .merge_conflict.base }}.
+3. Resolve every conflict, preserving both the intent of this PR and the base changes.
+4. Push the rebased branch.
+{{ end }}
+
 {{ if .attempt }}
 
 ## Retry
