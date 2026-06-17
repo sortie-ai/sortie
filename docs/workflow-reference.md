@@ -768,7 +768,7 @@ Additional fields (via Extra):
 **Activation:** The `reactions.bot_review` block is active when `provider` is present
 and non-empty, on its own, with no `reactions.review_comments` or `reactions.auto_merge`
 block required. When `provider` is absent or empty, the block is inactive. Agent-created
-PRs MUST write `pr_number` (positive integer), `owner`, and `repo` (all non-empty)
+PRs MUST write `pr_number` (positive integer), `owner`, `repo`, and `branch` (all non-empty)
 to `.sortie/scm.json` in the workspace for bot-review polling to activate.
 
 **Classification:** Bot detection is deterministic author-metadata matching, not a
