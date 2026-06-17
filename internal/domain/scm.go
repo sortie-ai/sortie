@@ -90,6 +90,11 @@ type PRMergeStatus struct {
 
 	// BranchName is the source branch name (PR head).
 	BranchName string
+
+	// BaseBranch is the PR target (base) branch name, e.g. "main" or
+	// "develop". Populated by GetMergeability from the same PR object it
+	// already fetches; empty only when the provider omits the base ref.
+	BaseBranch string
 }
 
 // MergeResult carries the outcome of a successful merge call.

@@ -131,6 +131,16 @@ type OrchestratorParams struct {
 	// HandleWorkerExitParams, and the recovery params.
 	BotReviewConfigured bool
 
+	// MergeConflictConfig holds validated merge-conflict reaction
+	// configuration. Zero value when MergeConflictReactionConfigured is
+	// false.
+	MergeConflictConfig MergeConflictReactionConfig
+
+	// MergeConflictReactionConfigured marks whether the merge-conflict
+	// feature is active for this process. Threaded into ReconcileParams,
+	// HandleWorkerExitParams, and the recovery params.
+	MergeConflictReactionConfigured bool
+
 	// AgentAdapterByKind resolves the agent adapter for the given
 	// kind. Constructed once at startup from the eagerly-built
 	// per-kind adapter cache. When nil, the orchestrator falls back
@@ -164,23 +174,25 @@ type Orchestrator struct {
 	snapshotCh   chan snapshotRequest
 	refreshCh    chan struct{}
 
-	preflightParams             PreflightParams
-	observers                   []Observer
-	drainTimeout                time.Duration
-	toolRegistry                *domain.ToolRegistry
-	sessionToolRegistryFunc     SessionToolRegistryFunc
-	preflightOK                 atomic.Bool
-	draining                    atomic.Bool
-	hostPool                    *HostPool
-	workflowFileFunc            func() string
-	dbPath                      string
-	ciProvider                  domain.CIStatusProvider
-	scmAdapter                  domain.SCMAdapter
-	reviewConfig                ReviewReactionConfig
-	autoMergeConfig             AutoMergeReactionConfig
-	autoMergeReactionConfigured bool
-	botReviewConfig             BotReviewReactionConfig
-	botReviewReactionConfigured bool
+	preflightParams                 PreflightParams
+	observers                       []Observer
+	drainTimeout                    time.Duration
+	toolRegistry                    *domain.ToolRegistry
+	sessionToolRegistryFunc         SessionToolRegistryFunc
+	preflightOK                     atomic.Bool
+	draining                        atomic.Bool
+	hostPool                        *HostPool
+	workflowFileFunc                func() string
+	dbPath                          string
+	ciProvider                      domain.CIStatusProvider
+	scmAdapter                      domain.SCMAdapter
+	reviewConfig                    ReviewReactionConfig
+	autoMergeConfig                 AutoMergeReactionConfig
+	autoMergeReactionConfigured     bool
+	botReviewConfig                 BotReviewReactionConfig
+	botReviewReactionConfigured     bool
+	mergeConflictConfig             MergeConflictReactionConfig
+	mergeConflictReactionConfigured bool
 
 	// sshStrictHostKeyChecking is the current effective OpenSSH
 	// StrictHostKeyChecking value. Written by handleTick on every
@@ -258,35 +270,37 @@ func NewOrchestrator(params OrchestratorParams) *Orchestrator {
 	}
 
 	o := &Orchestrator{
-		state:                       params.State,
-		logger:                      logger,
-		trackerAdapter:              params.TrackerAdapter,
-		agentAdapter:                params.AgentAdapter,
-		agentAdapterByKind:          agentAdapterByKind,
-		workflowManager:             params.WorkflowManager,
-		store:                       params.Store,
-		metrics:                     metrics,
-		workerExitCh:                make(chan WorkerResult, exitBuf),
-		retryTimerCh:                make(chan string, retryBuf),
-		agentEventCh:                make(chan agentEventMsg, eventBuf),
-		selfReviewCh:                make(chan selfReviewProgressMsg, eventBuf),
-		snapshotCh:                  make(chan snapshotRequest, 4),
-		refreshCh:                   make(chan struct{}, 1),
-		preflightParams:             params.PreflightParams,
-		observers:                   observers,
-		drainTimeout:                defaultDrainTimeout,
-		toolRegistry:                params.ToolRegistry,
-		sessionToolRegistryFunc:     params.SessionToolRegistryFunc,
-		hostPool:                    hostPool,
-		workflowFileFunc:            params.WorkflowFileFunc,
-		dbPath:                      params.DBPath,
-		ciProvider:                  params.CIProvider,
-		scmAdapter:                  params.SCMAdapter,
-		reviewConfig:                params.ReviewConfig,
-		autoMergeConfig:             params.AutoMergeConfig,
-		autoMergeReactionConfigured: params.AutoMergeReactionConfigured,
-		botReviewConfig:             params.BotReviewConfig,
-		botReviewReactionConfigured: params.BotReviewConfigured,
+		state:                           params.State,
+		logger:                          logger,
+		trackerAdapter:                  params.TrackerAdapter,
+		agentAdapter:                    params.AgentAdapter,
+		agentAdapterByKind:              agentAdapterByKind,
+		workflowManager:                 params.WorkflowManager,
+		store:                           params.Store,
+		metrics:                         metrics,
+		workerExitCh:                    make(chan WorkerResult, exitBuf),
+		retryTimerCh:                    make(chan string, retryBuf),
+		agentEventCh:                    make(chan agentEventMsg, eventBuf),
+		selfReviewCh:                    make(chan selfReviewProgressMsg, eventBuf),
+		snapshotCh:                      make(chan snapshotRequest, 4),
+		refreshCh:                       make(chan struct{}, 1),
+		preflightParams:                 params.PreflightParams,
+		observers:                       observers,
+		drainTimeout:                    defaultDrainTimeout,
+		toolRegistry:                    params.ToolRegistry,
+		sessionToolRegistryFunc:         params.SessionToolRegistryFunc,
+		hostPool:                        hostPool,
+		workflowFileFunc:                params.WorkflowFileFunc,
+		dbPath:                          params.DBPath,
+		ciProvider:                      params.CIProvider,
+		scmAdapter:                      params.SCMAdapter,
+		reviewConfig:                    params.ReviewConfig,
+		autoMergeConfig:                 params.AutoMergeConfig,
+		autoMergeReactionConfigured:     params.AutoMergeReactionConfigured,
+		botReviewConfig:                 params.BotReviewConfig,
+		botReviewReactionConfigured:     params.BotReviewConfigured,
+		mergeConflictConfig:             params.MergeConflictConfig,
+		mergeConflictReactionConfigured: params.MergeConflictReactionConfigured,
 	}
 	// Startup preflight must have passed for the orchestrator to be
 	// constructed, so the initial value is true.
@@ -325,23 +339,24 @@ func (o *Orchestrator) Run(ctx context.Context) {
 		case workerExit := <-o.workerExitCh:
 			cfg := o.workflowManager.Config()
 			HandleWorkerExit(o.state, workerExit, HandleWorkerExitParams{
-				Store:                       o.store,
-				MaxRetryBackoffMS:           cfg.Agent.MaxRetryBackoffMS,
-				OnRetryFire:                 o.onRetryFire,
-				Ctx:                         ctx,
-				Logger:                      o.logger,
-				BeforeRemoveHook:            cfg.Hooks.BeforeRemove,
-				HookTimeoutMS:               cfg.Hooks.TimeoutMS,
-				TrackerAdapter:              o.trackerAdapter,
-				HandoffState:                cfg.Tracker.HandoffState,
-				ActiveStates:                cfg.Tracker.ActiveStates,
-				Metrics:                     o.metrics,
-				HostPool:                    o.hostPool,
-				CommentsConfig:              cfg.Tracker.Comments,
-				CIProvider:                  o.ciProvider,
-				SCMAdapter:                  o.scmAdapter,
-				AutoMergeReactionConfigured: o.autoMergeReactionConfigured,
-				BotReviewReactionConfigured: o.botReviewReactionConfigured,
+				Store:                           o.store,
+				MaxRetryBackoffMS:               cfg.Agent.MaxRetryBackoffMS,
+				OnRetryFire:                     o.onRetryFire,
+				Ctx:                             ctx,
+				Logger:                          o.logger,
+				BeforeRemoveHook:                cfg.Hooks.BeforeRemove,
+				HookTimeoutMS:                   cfg.Hooks.TimeoutMS,
+				TrackerAdapter:                  o.trackerAdapter,
+				HandoffState:                    cfg.Tracker.HandoffState,
+				ActiveStates:                    cfg.Tracker.ActiveStates,
+				Metrics:                         o.metrics,
+				HostPool:                        o.hostPool,
+				CommentsConfig:                  cfg.Tracker.Comments,
+				CIProvider:                      o.ciProvider,
+				SCMAdapter:                      o.scmAdapter,
+				AutoMergeReactionConfigured:     o.autoMergeReactionConfigured,
+				BotReviewReactionConfigured:     o.botReviewReactionConfigured,
+				MergeConflictReactionConfigured: o.mergeConflictReactionConfigured,
 			})
 			o.updateGauges(time.Now())
 			o.notifyObservers()
@@ -461,29 +476,32 @@ func (o *Orchestrator) handleTick(ctx context.Context) {
 	// Reconcile running issues unconditionally so in-flight workers
 	// are monitored even when dispatch is skipped.
 	ReconcileRunningIssues(o.state, ReconcileParams{
-		TrackerAdapter:              o.trackerAdapter,
-		ActiveStates:                cfg.Tracker.ActiveStates,
-		TerminalStates:              cfg.Tracker.TerminalStates,
-		HandoffState:                cfg.Tracker.HandoffState,
-		StallTimeoutMS:              cfg.Agent.StallTimeoutMS,
-		MaxRetryBackoffMS:           cfg.Agent.MaxRetryBackoffMS,
-		Store:                       o.store,
-		OnRetryFire:                 o.onRetryFire,
-		Ctx:                         ctx,
-		Logger:                      o.logger,
-		Metrics:                     o.metrics,
-		CIProvider:                  o.ciProvider,
-		CIFeedback:                  cfg.CIFeedback,
-		CIPendingTTL:                ciPendingDefaultTTL,
-		SCMAdapter:                  o.scmAdapter,
-		ReviewConfig:                o.reviewConfig,
-		ReviewPendingTTL:            reviewPendingDefaultTTL,
-		AutoMergeConfig:             o.autoMergeConfig,
-		AutoMergePendingTTL:         autoMergePendingDefaultTTL,
-		AutoMergeReactionConfigured: o.autoMergeReactionConfigured,
-		BotReviewConfig:             o.botReviewConfig,
-		BotReviewPendingTTL:         reviewPendingDefaultTTL,
-		BotReviewConfigured:         o.botReviewReactionConfigured,
+		TrackerAdapter:                  o.trackerAdapter,
+		ActiveStates:                    cfg.Tracker.ActiveStates,
+		TerminalStates:                  cfg.Tracker.TerminalStates,
+		HandoffState:                    cfg.Tracker.HandoffState,
+		StallTimeoutMS:                  cfg.Agent.StallTimeoutMS,
+		MaxRetryBackoffMS:               cfg.Agent.MaxRetryBackoffMS,
+		Store:                           o.store,
+		OnRetryFire:                     o.onRetryFire,
+		Ctx:                             ctx,
+		Logger:                          o.logger,
+		Metrics:                         o.metrics,
+		CIProvider:                      o.ciProvider,
+		CIFeedback:                      cfg.CIFeedback,
+		CIPendingTTL:                    ciPendingDefaultTTL,
+		SCMAdapter:                      o.scmAdapter,
+		ReviewConfig:                    o.reviewConfig,
+		ReviewPendingTTL:                reviewPendingDefaultTTL,
+		AutoMergeConfig:                 o.autoMergeConfig,
+		AutoMergePendingTTL:             autoMergePendingDefaultTTL,
+		AutoMergeReactionConfigured:     o.autoMergeReactionConfigured,
+		BotReviewConfig:                 o.botReviewConfig,
+		BotReviewPendingTTL:             reviewPendingDefaultTTL,
+		BotReviewConfigured:             o.botReviewReactionConfigured,
+		MergeConflictConfig:             o.mergeConflictConfig,
+		MergeConflictPendingTTL:         mergeConflictPendingDefaultTTL,
+		MergeConflictReactionConfigured: o.mergeConflictReactionConfigured,
 	})
 
 	// Sweep terminal workspaces periodically to catch issues that
@@ -879,23 +897,24 @@ func (o *Orchestrator) drainRunningWorkers() {
 		case workerExit := <-o.workerExitCh:
 			cfg := o.workflowManager.Config()
 			HandleWorkerExit(o.state, workerExit, HandleWorkerExitParams{
-				Store:                       o.store,
-				MaxRetryBackoffMS:           cfg.Agent.MaxRetryBackoffMS,
-				OnRetryFire:                 func(string) {}, // no-op: prevent retry fire events from reaching the event loop during drain
-				Ctx:                         drainCtx,
-				Logger:                      o.logger,
-				BeforeRemoveHook:            cfg.Hooks.BeforeRemove,
-				HookTimeoutMS:               cfg.Hooks.TimeoutMS,
-				TrackerAdapter:              o.trackerAdapter,
-				HandoffState:                cfg.Tracker.HandoffState,
-				ActiveStates:                cfg.Tracker.ActiveStates,
-				Metrics:                     o.metrics,
-				HostPool:                    o.hostPool,
-				CommentsConfig:              cfg.Tracker.Comments,
-				CIProvider:                  o.ciProvider,
-				SCMAdapter:                  o.scmAdapter,
-				AutoMergeReactionConfigured: o.autoMergeReactionConfigured,
-				BotReviewReactionConfigured: o.botReviewReactionConfigured,
+				Store:                           o.store,
+				MaxRetryBackoffMS:               cfg.Agent.MaxRetryBackoffMS,
+				OnRetryFire:                     func(string) {}, // no-op: prevent retry fire events from reaching the event loop during drain
+				Ctx:                             drainCtx,
+				Logger:                          o.logger,
+				BeforeRemoveHook:                cfg.Hooks.BeforeRemove,
+				HookTimeoutMS:                   cfg.Hooks.TimeoutMS,
+				TrackerAdapter:                  o.trackerAdapter,
+				HandoffState:                    cfg.Tracker.HandoffState,
+				ActiveStates:                    cfg.Tracker.ActiveStates,
+				Metrics:                         o.metrics,
+				HostPool:                        o.hostPool,
+				CommentsConfig:                  cfg.Tracker.Comments,
+				CIProvider:                      o.ciProvider,
+				SCMAdapter:                      o.scmAdapter,
+				AutoMergeReactionConfigured:     o.autoMergeReactionConfigured,
+				BotReviewReactionConfigured:     o.botReviewReactionConfigured,
+				MergeConflictReactionConfigured: o.mergeConflictReactionConfigured,
 			})
 			o.updateGauges(time.Now())
 			o.notifyObservers()

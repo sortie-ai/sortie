@@ -123,6 +123,11 @@ type HandleWorkerExitParams struct {
 	// is active for the current process. The enqueue path gates on
 	// this flag and the SCMAdapter being non-nil.
 	BotReviewReactionConfigured bool
+
+	// MergeConflictReactionConfigured marks whether the merge-conflict
+	// feature is active for the current process. The enqueue path gates
+	// on this flag and the SCMAdapter being non-nil.
+	MergeConflictReactionConfigured bool
 }
 
 // HandleWorkerExit processes a worker's terminal outcome. It removes the
@@ -574,6 +579,44 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 							LastSSHHost: workerResult.SSHHost,
 							CreatedAt:   nowMerge,
 							KindData: &AutoMergeReactionData{
+								PRNumber: scm.PRNumber,
+								Owner:    scm.Owner,
+								Repo:     scm.Repo,
+								Branch:   scm.Branch,
+								SHA:      scm.SHA,
+							},
+							AgentKind:  entry.AgentKind,
+							RuleName:   entry.RuleName,
+							TemplateID: entry.TemplateID,
+						}
+					}
+				}
+			}
+		}
+
+		// Record a pending merge-conflict entry when the SCM adapter
+		// is configured, merge-conflict is enabled, and the workspace
+		// has PR metadata. The merge-conflict enqueue is independent
+		// of the other kinds: all fire from the same worker exit.
+		if params.SCMAdapter != nil && params.MergeConflictReactionConfigured && workerResult.WorkspacePath != "" {
+			if reactionEnqueueAllowed {
+				scm := workspace.ReadSCMMetadata(workerResult.WorkspacePath, log)
+				if scm.PRNumber > 0 && scm.Branch != "" && scm.Owner != "" && scm.Repo != "" {
+					nowMergeConflict := time.Now().UTC()
+					if params.NowFunc != nil {
+						nowMergeConflict = params.NowFunc().UTC()
+					}
+					rkey := ReactionKey(workerResult.IssueID, ReactionKindMergeConflict)
+					if _, exists := state.PendingReactions[rkey]; !exists {
+						state.PendingReactions[rkey] = &PendingReaction{
+							IssueID:     workerResult.IssueID,
+							Identifier:  workerResult.Identifier,
+							DisplayID:   entry.Issue.DisplayID,
+							Attempt:     normalizeAttempt(entry.RetryAttempt) + 1,
+							Kind:        ReactionKindMergeConflict,
+							LastSSHHost: workerResult.SSHHost,
+							CreatedAt:   nowMergeConflict,
+							KindData: &MergeConflictReactionData{
 								PRNumber: scm.PRNumber,
 								Owner:    scm.Owner,
 								Repo:     scm.Repo,

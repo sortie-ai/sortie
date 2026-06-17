@@ -370,18 +370,23 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 	var autoMergeConfigured bool
 	var botReviewConfig orchestrator.BotReviewReactionConfig
 	var botReviewConfigured bool
+	var mergeConflictConfig orchestrator.MergeConflictReactionConfig
+	var mergeConflictConfigured bool
 
 	reviewRC, hasReview := br.cfg.Reactions["review_comments"]
 	autoMergeRC, hasAutoMerge := br.cfg.Reactions["auto_merge"]
 	botReviewRC, hasBotReview := br.cfg.Reactions["bot_review"]
+	mergeConflictRC, hasMergeConflict := br.cfg.Reactions["merge_conflicts"]
 	reviewActive := hasReview && reviewRC.Provider != ""
 	autoMergeActive := hasAutoMerge && autoMergeRC.Provider != ""
 	botReviewActive := hasBotReview && botReviewRC.Provider != ""
+	mergeConflictActive := hasMergeConflict && mergeConflictRC.Provider != ""
 
 	activeSCMKinds := []scmReactionKind{
 		{name: "review_comments", active: reviewActive, provider: reviewRC.Provider},
 		{name: "auto_merge", active: autoMergeActive, provider: autoMergeRC.Provider},
 		{name: "bot_review", active: botReviewActive, provider: botReviewRC.Provider},
+		{name: "merge_conflicts", active: mergeConflictActive, provider: mergeConflictRC.Provider},
 	}
 	if conflictKinds, conflictProviders := scmProviderConflict(activeSCMKinds); len(conflictProviders) > 1 {
 		br.logger.Error("unsupported: active SCM reaction kinds must use the same provider",
@@ -391,8 +396,8 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 		return 1
 	}
 
-	if reviewActive || autoMergeActive || botReviewActive {
-		provider := cmp.Or(reviewRC.Provider, autoMergeRC.Provider, botReviewRC.Provider)
+	if reviewActive || autoMergeActive || botReviewActive || mergeConflictActive {
+		provider := cmp.Or(reviewRC.Provider, autoMergeRC.Provider, botReviewRC.Provider, mergeConflictRC.Provider)
 		scmCtor, scmErr := registry.SCMAdapters.Get(provider)
 		if scmErr != nil {
 			br.logger.Error("unknown SCM adapter kind",
@@ -422,6 +427,13 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 		}
 		if botReviewActive {
 			for k, v := range botReviewRC.Extra {
+				if _, exists := adapterCfgMap[k]; !exists {
+					adapterCfgMap[k] = v
+				}
+			}
+		}
+		if mergeConflictActive {
+			for k, v := range mergeConflictRC.Extra {
 				if _, exists := adapterCfgMap[k]; !exists {
 					adapterCfgMap[k] = v
 				}
@@ -487,6 +499,21 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 				slog.Int("poll_interval_ms", botReviewConfig.PollIntervalMS),
 			)
 		}
+
+		if mergeConflictActive {
+			mergeConflictConfig, scmErr = orchestrator.BuildMergeConflictReactionConfig(mergeConflictRC)
+			if scmErr != nil {
+				br.logger.Error("invalid merge_conflicts reaction config", slog.Any("error", scmErr))
+				return 1
+			}
+			mergeConflictConfigured = true
+
+			br.logger.Info("merge conflict reaction enabled",
+				slog.String("provider", mergeConflictRC.Provider),
+				slog.Int("poll_interval_ms", mergeConflictConfig.PollIntervalMS),
+				slog.Int("max_retries", mergeConflictConfig.MaxRetries),
+			)
+		}
 	}
 
 	recoveryEnabled := br.cfg.Tracker.HandoffState != "" && (ciProvider != nil || scmAdapter != nil)
@@ -500,16 +527,17 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 		recoveryRuns, recoveryErr = store.LoadLatestSuccessfulRunsForReactionRecovery(ctx, recoveryCutoff, orchestrator.PendingReactionRecoveryMaxCandidates)
 		if recoveryErr == nil {
 			recoveryOutcome, recoveryErr = orchestrator.RecoverPendingReactions(ctx, state, recoveryRuns, orchestrator.PendingReactionRecoveryParams{
-				WorkspaceRoot:               br.cfg.Workspace.Root,
-				TrackerAdapter:              br.trackerAdapter,
-				HandoffState:                br.cfg.Tracker.HandoffState,
-				TerminalStates:              br.cfg.Tracker.TerminalStates,
-				CIProvider:                  ciProvider,
-				SCMAdapter:                  scmAdapter,
-				AutoMergeReactionConfigured: autoMergeConfigured,
-				BotReviewReactionConfigured: botReviewConfigured,
-				RecoveryLookback:            recoveryLookback,
-				MaxCandidates:               orchestrator.PendingReactionRecoveryMaxCandidates,
+				WorkspaceRoot:                   br.cfg.Workspace.Root,
+				TrackerAdapter:                  br.trackerAdapter,
+				HandoffState:                    br.cfg.Tracker.HandoffState,
+				TerminalStates:                  br.cfg.Tracker.TerminalStates,
+				CIProvider:                      ciProvider,
+				SCMAdapter:                      scmAdapter,
+				AutoMergeReactionConfigured:     autoMergeConfigured,
+				BotReviewReactionConfigured:     botReviewConfigured,
+				MergeConflictReactionConfigured: mergeConflictConfigured,
+				RecoveryLookback:                recoveryLookback,
+				MaxCandidates:                   orchestrator.PendingReactionRecoveryMaxCandidates,
 				NowFunc: func() time.Time {
 					return recoveryNow
 				},
@@ -526,6 +554,7 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 		slog.Int("ci_recovered", recoveryOutcome.CIRecovered),
 		slog.Int("auto_merge_recovered", recoveryOutcome.AutoMergeRecovered),
 		slog.Int("bot_review_recovered", recoveryOutcome.BotReviewRecovered),
+		slog.Int("merge_conflict_recovered", recoveryOutcome.MergeConflictRecovered),
 		slog.Int("stale_skipped", recoveryOutcome.StaleSkipped),
 		slog.Int("skipped", recoveryOutcome.Skipped),
 	}
@@ -602,26 +631,28 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 	}
 
 	o := orchestrator.NewOrchestrator(orchestrator.OrchestratorParams{
-		State:                       state,
-		Logger:                      br.logger,
-		TrackerAdapter:              br.trackerAdapter,
-		AgentAdapter:                agentAdapter,
-		AgentAdapterByKind:          agentAdapterByKind,
-		WorkflowManager:             br.mgr,
-		Store:                       store,
-		PreflightParams:             br.preflightParams,
-		Metrics:                     orchMetrics,
-		ToolRegistry:                toolRegistry,
-		SessionToolRegistryFunc:     sessionToolFunc,
-		WorkflowFileFunc:            br.mgr.FilePath,
-		DBPath:                      dbPath,
-		CIProvider:                  ciProvider,
-		SCMAdapter:                  scmAdapter,
-		ReviewConfig:                reviewConfig,
-		AutoMergeConfig:             autoMergeConfig,
-		AutoMergeReactionConfigured: autoMergeConfigured,
-		BotReviewConfig:             botReviewConfig,
-		BotReviewConfigured:         botReviewConfigured,
+		State:                           state,
+		Logger:                          br.logger,
+		TrackerAdapter:                  br.trackerAdapter,
+		AgentAdapter:                    agentAdapter,
+		AgentAdapterByKind:              agentAdapterByKind,
+		WorkflowManager:                 br.mgr,
+		Store:                           store,
+		PreflightParams:                 br.preflightParams,
+		Metrics:                         orchMetrics,
+		ToolRegistry:                    toolRegistry,
+		SessionToolRegistryFunc:         sessionToolFunc,
+		WorkflowFileFunc:                br.mgr.FilePath,
+		DBPath:                          dbPath,
+		CIProvider:                      ciProvider,
+		SCMAdapter:                      scmAdapter,
+		ReviewConfig:                    reviewConfig,
+		AutoMergeConfig:                 autoMergeConfig,
+		AutoMergeReactionConfigured:     autoMergeConfigured,
+		BotReviewConfig:                 botReviewConfig,
+		BotReviewConfigured:             botReviewConfigured,
+		MergeConflictConfig:             mergeConflictConfig,
+		MergeConflictReactionConfigured: mergeConflictConfigured,
 	})
 
 	var srv *server.Server

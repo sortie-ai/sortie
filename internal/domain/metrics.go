@@ -160,6 +160,16 @@ type Metrics interface {
 	// (sortie_reactions_auto_merge_total{result} counter).
 	IncAutoMergeReactions(result string)
 
+	// IncMergeConflictChecks increments the merge-conflict check counter.
+	// result is "dispatched", "error", "unknown", or "clear"
+	// (sortie_merge_conflict_checks_total{result} counter).
+	IncMergeConflictChecks(result string)
+
+	// IncMergeConflictEscalations increments the merge-conflict
+	// escalation counter. action is "label", "comment", or "error"
+	// (sortie_merge_conflict_escalations_total{action} counter).
+	IncMergeConflictEscalations(action string)
+
 	// IncDispatchRuleMatch increments the dispatch rule match counter.
 	// layer is one of "rule", "default", or "fallback" identifying
 	// which resolution layer produced the selection. rule is the
@@ -207,6 +217,8 @@ func (*NoopMetrics) IncReviewEscalations(string)                           {}
 func (*NoopMetrics) IncBotReviewChecks(string)                             {}
 func (*NoopMetrics) IncBotReviewEscalations(string)                        {}
 func (*NoopMetrics) IncAutoMergeReactions(string)                          {}
+func (*NoopMetrics) IncMergeConflictChecks(string)                         {}
+func (*NoopMetrics) IncMergeConflictEscalations(string)                    {}
 func (*NoopMetrics) IncDispatchRuleMatch(string, string)                   {}
 
 // MetricsSetter is implemented by adapters that accept a [Metrics]
