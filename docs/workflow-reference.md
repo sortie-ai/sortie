@@ -749,6 +749,70 @@ reactions:
     poll_interval_ms: 60000
 ```
 
+#### Reaction kind: `bot_review`
+
+Automated review-bot comment routing. When configured, the orchestrator polls for
+PR comments authored by automated review tools (linters, static analyzers, security
+scanners, and AI reviewers such as GitHub Copilot or CodeRabbit) on Sortie-created PRs and dispatches continuation turns so
+the agent can address them. This is the complement of `review_comments`, which routes
+only human `CHANGES_REQUESTED` comments and excludes bot-authored ones.
+
+Additional fields (via Extra):
+
+| Field                    | Type         | Default | Dynamic Reload    | Description                                                                                               |
+| ------------------------ | ------------ | ------- | ----------------- | --------------------------------------------------------------------------------------------------------- |
+| `bot_usernames`          | list[string] | _(empty)_ | Requires restart | Allowlist of bot logins. A comment is bot-authored when the platform reports a bot user type OR its author login matches an entry here (case-insensitive). |
+| `poll_interval_ms`       | integer      | `60000` | Future dispatches | Polling interval for bot comments. Minimum: `30000` (30 sec). The default is tighter than `review_comments` because bot comments arrive in bulk on push. |
+| `max_continuation_turns` | integer      | `5`     | Future dispatches | Maximum bot-fix continuation dispatches per issue before escalation. Must be positive. Higher than `review_comments` because bot fixes are mechanical.    |
+
+**Activation:** The `reactions.bot_review` block is active when `provider` is present
+and non-empty, on its own, with no `reactions.review_comments` or `reactions.auto_merge`
+block required. When `provider` is absent or empty, the block is inactive. Agent-created
+PRs MUST write `pr_number` (positive integer), `owner`, `repo`, and `branch` (all non-empty)
+to `.sortie/scm.json` in the workspace for bot-review polling to activate.
+
+**Classification:** Bot detection is deterministic author-metadata matching, not a
+content heuristic. A comment is selected when the platform marks its author as a bot OR
+its author login matches a `bot_usernames` entry, case-insensitively. The `bot_usernames`
+allowlist covers review tools that comment under a regular user account (`user.type == "User"`)
+rather than a bot account, such as Hound (`houndci-bot`), which posts inline style comments under a regular user account. Unlike
+`review_comments`, no `CHANGES_REQUESTED` review state is required, because review bots
+commonly post comment-only reviews.
+
+**No debounce:** Bot comments are dispatched immediately. There is no `debounce_ms`
+field; the debounce window that `review_comments` applies does not apply to `bot_review`,
+because bot comments arrive in bulk on push rather than at reviewer pace.
+
+**Fingerprint dedup:** The orchestrator computes a SHA-256 fingerprint from sorted
+non-outdated comment IDs and persists it in the `reaction_fingerprints` SQLite table
+under a kind distinct from `review_comments`. A new push that changes the bot comment-ID
+set changes the fingerprint and re-triggers dispatch; an unchanged dispatched fingerprint
+suppresses re-dispatch within the poll interval.
+
+**Cross-kind isolation:** `bot_review` and `review_comments` never interfere on the same
+PR; each owns its own pending entry, fingerprint row, and attempt counter. Escalation
+cleanup is scoped to the `bot_review` kind only and does not release the issue claim or
+clear sibling reaction kinds.
+
+**Escalation:** When `max_continuation_turns` is exhausted, the orchestrator applies the
+configured escalation action (`label` or `comment`, default `label`, with
+`escalation_label` defaulting to `needs-human`) and removes the pending bot-review entry.
+Other reaction kinds on the same issue are preserved.
+
+Example:
+
+```yaml
+reactions:
+  bot_review:
+    provider: github
+    escalation: label
+    escalation_label: needs-human
+    poll_interval_ms: 60000
+    max_continuation_turns: 5
+    bot_usernames:            # only for review tools that comment under a user account, not a bot account
+      - houndci-bot           # e.g. Hound (houndci.com), comments as a type:User account
+```
+
 **Validation rules:**
 
 - Reaction kind keys must match `[a-z][a-z0-9_-]*`. Invalid keys are rejected with a
@@ -761,6 +825,9 @@ reactions:
 - `strategy` for `auto_merge` must be `"merge"`, `"squash"`, or `"rebase"`.
 - `require_ci` and `delete_branch` for `auto_merge` must be boolean.
 - `poll_interval_ms` must be >= `30000` for `auto_merge`.
+- `poll_interval_ms` must be >= `30000` for `bot_review`.
+- `max_continuation_turns` must be positive for `bot_review`.
+- `bot_usernames` for `bot_review` must be a list of strings.
 - When `provider` is absent or empty, all other fields in the kind sub-object are ignored.
 
 ---
@@ -1861,8 +1928,8 @@ template.New("prompt").
 ### 5.2 Template Input Variables
 
 The data map passed to `Execute` contains **three core top-level keys** (`issue`, `attempt`,
-`run`) plus **continuation context keys** (`ci_failure`, `review_comments`) that are `nil` by
-default and populated on reaction-triggered dispatches:
+`run`) plus **continuation context keys** (`ci_failure`, `review_comments`, `bot_review_comments`)
+that are `nil` by default and populated on reaction-triggered dispatches:
 
 #### `issue` — Normalized Issue Object
 
@@ -1949,6 +2016,41 @@ When `nil` (default on non-review dispatches), `{{ if .review_comments }}` evalu
 The following review comments were left on the PR. Address each one:
 
 {{ range .review_comments }}
+### {{ .reviewer }} on {{ .file }}{{ if .start_line }} (line {{ .start_line }}{{ if .end_line }}-{{ .end_line }}{{ end }}){{ end }}
+
+{{ .body }}
+
+{{ end }}
+{{ end }}
+```
+
+#### `bot_review_comments` — Bot Review Comment Context (continuation key)
+
+Non-nil only on turn 1 of a bot-review-fix continuation dispatch. Contains a list of
+comments authored by automated review bots (see `reactions.bot_review` in Section 2.10).
+The per-element shape is identical to `review_comments`:
+
+| Field (per element)               | Type    | Description                                              |
+| --------------------------------- | ------- | -------------------------------------------------------- |
+| `.bot_review_comments[].id`       | string  | SCM-platform comment identifier.                         |
+| `.bot_review_comments[].file`     | string  | File path (empty for PR-level comments).                 |
+| `.bot_review_comments[].start_line` | integer | First line of commented range (0 for non-inline).       |
+| `.bot_review_comments[].end_line` | integer | Last line of commented range (0 for single-line or non-inline). |
+| `.bot_review_comments[].reviewer` | string  | Login of the bot that authored the comment.             |
+| `.bot_review_comments[].body`     | string  | Comment text.                                            |
+
+When `nil` (default on non-bot-review dispatches), `{{ if .bot_review_comments }}`
+evaluates to `false`.
+
+**Template pattern for bot review comments:**
+
+```
+{{ if .bot_review_comments }}
+## Bot Review Comments to Address
+
+The following comments were left on the PR by automated review tools. Address each one:
+
+{{ range .bot_review_comments }}
 ### {{ .reviewer }} on {{ .file }}{{ if .start_line }} (line {{ .start_line }}{{ if .end_line }}-{{ .end_line }}{{ end }}){{ end }}
 
 {{ .body }}

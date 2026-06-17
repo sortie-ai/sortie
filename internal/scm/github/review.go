@@ -177,6 +177,112 @@ func (a *GitHubSCMAdapter) FetchPendingReviews(ctx context.Context, prNumber int
 	return result, nil
 }
 
+// FetchBotReviewComments returns review comments authored by automated
+// review bots on the given PR. A review or comment is bot-authored when
+// its user.type is "Bot" or its author login matches a botUsernames entry
+// case-insensitively. Outdated comments (where GitHub reports position as
+// null) have Outdated=true. Returns an empty non-nil slice when no bot
+// comments exist.
+//
+// Unlike [GitHubSCMAdapter.FetchPendingReviews], no review-state filter is
+// applied: review bots commonly post COMMENTED reviews, so requiring
+// CHANGES_REQUESTED would drop most bot findings.
+func (a *GitHubSCMAdapter) FetchBotReviewComments(ctx context.Context, prNumber int, owner, repo string, botUsernames []string) ([]domain.ReviewComment, error) {
+	reviews, err := a.fetchAllReviews(ctx, prNumber, owner, repo)
+	if err != nil {
+		return nil, err
+	}
+
+	seen := make(map[string]struct{})
+	var result []domain.ReviewComment
+
+	for _, review := range reviews {
+		if !isBotAuthor(review.User.Login, review.User.Type, botUsernames) {
+			continue
+		}
+
+		// Include non-empty review body as a PR-level comment.
+		body := strings.TrimSpace(review.Body)
+		if body != "" {
+			prCommentID := fmt.Sprintf("review-%d", review.ID)
+			if _, dup := seen[prCommentID]; !dup {
+				seen[prCommentID] = struct{}{}
+				submittedAt, _ := time.Parse(time.RFC3339, review.SubmittedAt)
+				result = append(result, domain.ReviewComment{
+					ID:          prCommentID,
+					Reviewer:    review.User.Login,
+					Body:        body,
+					SubmittedAt: submittedAt,
+				})
+			}
+		}
+
+		// Fetch inline comments for this review.
+		comments, fetchErr := a.fetchReviewComments(ctx, prNumber, owner, repo, review.ID)
+		if fetchErr != nil {
+			return nil, fetchErr
+		}
+
+		for _, c := range comments {
+			if !isBotAuthor(c.User.Login, c.User.Type, botUsernames) {
+				continue
+			}
+
+			commentID := strconv.FormatInt(c.ID, 10)
+			if _, dup := seen[commentID]; dup {
+				continue
+			}
+			seen[commentID] = struct{}{}
+
+			startLine := 0
+			if c.StartLine != nil {
+				startLine = *c.StartLine
+			} else if c.Line != nil {
+				startLine = *c.Line
+			}
+
+			endLine := 0
+			if c.Line != nil && *c.Line != startLine {
+				endLine = *c.Line
+			}
+
+			createdAt, _ := time.Parse(time.RFC3339, c.CreatedAt)
+
+			result = append(result, domain.ReviewComment{
+				ID:          commentID,
+				FilePath:    c.Path,
+				StartLine:   startLine,
+				EndLine:     endLine,
+				Reviewer:    c.User.Login,
+				Body:        c.Body,
+				SubmittedAt: createdAt,
+				Outdated:    c.Position == nil,
+			})
+		}
+	}
+
+	if result == nil {
+		result = []domain.ReviewComment{}
+	}
+	return result, nil
+}
+
+// isBotAuthor reports whether an author is an automated review bot. The
+// author qualifies when userType is "Bot" (case-insensitive) or when login
+// matches an allowlist entry case-insensitively. The two conditions form a
+// union: either qualifies.
+func isBotAuthor(login, userType string, allowlist []string) bool {
+	if strings.EqualFold(userType, "Bot") {
+		return true
+	}
+	for _, name := range allowlist {
+		if strings.EqualFold(login, name) {
+			return true
+		}
+	}
+	return false
+}
+
 func (a *GitHubSCMAdapter) fetchAllReviews(ctx context.Context, prNumber int, owner, repo string) ([]githubReview, error) {
 	path := fmt.Sprintf("/repos/%s/%s/pulls/%d/reviews", url.PathEscape(owner), url.PathEscape(repo), prNumber)
 	params := url.Values{"per_page": {"100"}}

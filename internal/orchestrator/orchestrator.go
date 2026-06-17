@@ -122,6 +122,15 @@ type OrchestratorParams struct {
 	// HandleWorkerExitParams, and the recovery params.
 	AutoMergeReactionConfigured bool
 
+	// BotReviewConfig holds validated bot-review reaction
+	// configuration. Zero value when BotReviewConfigured is false.
+	BotReviewConfig BotReviewReactionConfig
+
+	// BotReviewConfigured marks whether the bot-review feature is
+	// active for this process. Threaded into ReconcileParams,
+	// HandleWorkerExitParams, and the recovery params.
+	BotReviewConfigured bool
+
 	// AgentAdapterByKind resolves the agent adapter for the given
 	// kind. Constructed once at startup from the eagerly-built
 	// per-kind adapter cache. When nil, the orchestrator falls back
@@ -170,6 +179,8 @@ type Orchestrator struct {
 	reviewConfig                ReviewReactionConfig
 	autoMergeConfig             AutoMergeReactionConfig
 	autoMergeReactionConfigured bool
+	botReviewConfig             BotReviewReactionConfig
+	botReviewReactionConfigured bool
 
 	// sshStrictHostKeyChecking is the current effective OpenSSH
 	// StrictHostKeyChecking value. Written by handleTick on every
@@ -274,6 +285,8 @@ func NewOrchestrator(params OrchestratorParams) *Orchestrator {
 		reviewConfig:                params.ReviewConfig,
 		autoMergeConfig:             params.AutoMergeConfig,
 		autoMergeReactionConfigured: params.AutoMergeReactionConfigured,
+		botReviewConfig:             params.BotReviewConfig,
+		botReviewReactionConfigured: params.BotReviewConfigured,
 	}
 	// Startup preflight must have passed for the orchestrator to be
 	// constructed, so the initial value is true.
@@ -328,6 +341,7 @@ func (o *Orchestrator) Run(ctx context.Context) {
 				CIProvider:                  o.ciProvider,
 				SCMAdapter:                  o.scmAdapter,
 				AutoMergeReactionConfigured: o.autoMergeReactionConfigured,
+				BotReviewReactionConfigured: o.botReviewReactionConfigured,
 			})
 			o.updateGauges(time.Now())
 			o.notifyObservers()
@@ -467,6 +481,9 @@ func (o *Orchestrator) handleTick(ctx context.Context) {
 		AutoMergeConfig:             o.autoMergeConfig,
 		AutoMergePendingTTL:         autoMergePendingDefaultTTL,
 		AutoMergeReactionConfigured: o.autoMergeReactionConfigured,
+		BotReviewConfig:             o.botReviewConfig,
+		BotReviewPendingTTL:         reviewPendingDefaultTTL,
+		BotReviewConfigured:         o.botReviewReactionConfigured,
 	})
 
 	// Sweep terminal workspaces periodically to catch issues that
@@ -878,6 +895,7 @@ func (o *Orchestrator) drainRunningWorkers() {
 				CIProvider:                  o.ciProvider,
 				SCMAdapter:                  o.scmAdapter,
 				AutoMergeReactionConfigured: o.autoMergeReactionConfigured,
+				BotReviewReactionConfigured: o.botReviewReactionConfigured,
 			})
 			o.updateGauges(time.Now())
 			o.notifyObservers()

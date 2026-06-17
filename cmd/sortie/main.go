@@ -10,6 +10,7 @@
 package main
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"io"
@@ -120,6 +121,36 @@ func makeAgentAdapterByKind(cache map[string]domain.AgentAdapter) func(kind stri
 			Available: slices.Sorted(maps.Keys(cache)),
 		}
 	}
+}
+
+// scmReactionKind pairs an SCM reaction kind's WORKFLOW.md key with its
+// activation state and configured provider for the shared-provider check.
+type scmReactionKind struct {
+	name     string
+	active   bool
+	provider string
+}
+
+// scmProviderConflict reports the active SCM reaction kinds and their
+// distinct providers. A single SCMAdapter is shared by all active SCM
+// reaction reconcile passes, so every active kind must name the same
+// provider. The caller treats more than one distinct provider as fatal.
+//
+// The returned kinds slice lists the names of every active kind in the
+// input order; the providers slice lists the distinct non-empty provider
+// values, also in first-seen order. When fewer than two providers are
+// returned there is no conflict.
+func scmProviderConflict(kinds []scmReactionKind) (activeKinds, distinctProviders []string) {
+	for _, k := range kinds {
+		if !k.active {
+			continue
+		}
+		activeKinds = append(activeKinds, k.name)
+		if !slices.Contains(distinctProviders, k.provider) {
+			distinctProviders = append(distinctProviders, k.provider)
+		}
+	}
+	return activeKinds, distinctProviders
 }
 
 func main() {
@@ -337,25 +368,31 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 	var reviewConfig orchestrator.ReviewReactionConfig
 	var autoMergeConfig orchestrator.AutoMergeReactionConfig
 	var autoMergeConfigured bool
+	var botReviewConfig orchestrator.BotReviewReactionConfig
+	var botReviewConfigured bool
 
 	reviewRC, hasReview := br.cfg.Reactions["review_comments"]
 	autoMergeRC, hasAutoMerge := br.cfg.Reactions["auto_merge"]
+	botReviewRC, hasBotReview := br.cfg.Reactions["bot_review"]
 	reviewActive := hasReview && reviewRC.Provider != ""
 	autoMergeActive := hasAutoMerge && autoMergeRC.Provider != ""
+	botReviewActive := hasBotReview && botReviewRC.Provider != ""
 
-	if reviewActive && autoMergeActive && reviewRC.Provider != autoMergeRC.Provider {
-		br.logger.Error("unsupported: reactions.review_comments and reactions.auto_merge must use the same provider",
-			slog.String("review_provider", reviewRC.Provider),
-			slog.String("auto_merge_provider", autoMergeRC.Provider),
+	activeSCMKinds := []scmReactionKind{
+		{name: "review_comments", active: reviewActive, provider: reviewRC.Provider},
+		{name: "auto_merge", active: autoMergeActive, provider: autoMergeRC.Provider},
+		{name: "bot_review", active: botReviewActive, provider: botReviewRC.Provider},
+	}
+	if conflictKinds, conflictProviders := scmProviderConflict(activeSCMKinds); len(conflictProviders) > 1 {
+		br.logger.Error("unsupported: active SCM reaction kinds must use the same provider",
+			slog.String("kinds", strings.Join(conflictKinds, ", ")),
+			slog.String("providers", strings.Join(conflictProviders, ", ")),
 		)
 		return 1
 	}
 
-	if reviewActive || autoMergeActive {
-		provider := reviewRC.Provider
-		if provider == "" {
-			provider = autoMergeRC.Provider
-		}
+	if reviewActive || autoMergeActive || botReviewActive {
+		provider := cmp.Or(reviewRC.Provider, autoMergeRC.Provider, botReviewRC.Provider)
 		scmCtor, scmErr := registry.SCMAdapters.Get(provider)
 		if scmErr != nil {
 			br.logger.Error("unknown SCM adapter kind",
@@ -378,6 +415,13 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 		}
 		if autoMergeActive {
 			for k, v := range autoMergeRC.Extra {
+				if _, exists := adapterCfgMap[k]; !exists {
+					adapterCfgMap[k] = v
+				}
+			}
+		}
+		if botReviewActive {
+			for k, v := range botReviewRC.Extra {
 				if _, exists := adapterCfgMap[k]; !exists {
 					adapterCfgMap[k] = v
 				}
@@ -428,6 +472,21 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 				slog.Int("max_retries", autoMergeConfig.MaxRetries),
 			)
 		}
+
+		if botReviewActive {
+			botReviewConfig, scmErr = orchestrator.BuildBotReviewReactionConfig(botReviewRC)
+			if scmErr != nil {
+				br.logger.Error("invalid bot_review reaction config", slog.Any("error", scmErr))
+				return 1
+			}
+			botReviewConfigured = true
+
+			br.logger.Info("bot review routing enabled",
+				slog.String("provider", botReviewRC.Provider),
+				slog.Int("max_continuation_turns", botReviewConfig.MaxContinuationTurns),
+				slog.Int("poll_interval_ms", botReviewConfig.PollIntervalMS),
+			)
+		}
 	}
 
 	recoveryEnabled := br.cfg.Tracker.HandoffState != "" && (ciProvider != nil || scmAdapter != nil)
@@ -448,6 +507,7 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 				CIProvider:                  ciProvider,
 				SCMAdapter:                  scmAdapter,
 				AutoMergeReactionConfigured: autoMergeConfigured,
+				BotReviewReactionConfigured: botReviewConfigured,
 				RecoveryLookback:            recoveryLookback,
 				MaxCandidates:               orchestrator.PendingReactionRecoveryMaxCandidates,
 				NowFunc: func() time.Time {
@@ -465,6 +525,7 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 		slog.Int("review_recovered", recoveryOutcome.ReviewRecovered),
 		slog.Int("ci_recovered", recoveryOutcome.CIRecovered),
 		slog.Int("auto_merge_recovered", recoveryOutcome.AutoMergeRecovered),
+		slog.Int("bot_review_recovered", recoveryOutcome.BotReviewRecovered),
 		slog.Int("stale_skipped", recoveryOutcome.StaleSkipped),
 		slog.Int("skipped", recoveryOutcome.Skipped),
 	}
@@ -559,6 +620,8 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 		ReviewConfig:                reviewConfig,
 		AutoMergeConfig:             autoMergeConfig,
 		AutoMergeReactionConfigured: autoMergeConfigured,
+		BotReviewConfig:             botReviewConfig,
+		BotReviewConfigured:         botReviewConfigured,
 	})
 
 	var srv *server.Server

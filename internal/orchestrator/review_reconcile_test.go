@@ -18,6 +18,10 @@ type mockSCMAdapter struct {
 	comments []domain.ReviewComment
 	err      error
 	calls    int
+
+	botComments []domain.ReviewComment
+	botErr      error
+	botCalls    int
 }
 
 var _ domain.SCMAdapter = (*mockSCMAdapter)(nil)
@@ -28,6 +32,14 @@ func (m *mockSCMAdapter) FetchPendingReviews(_ context.Context, _ int, _, _ stri
 		return nil, m.err
 	}
 	return m.comments, nil
+}
+
+func (m *mockSCMAdapter) FetchBotReviewComments(_ context.Context, _ int, _, _ string, _ []string) ([]domain.ReviewComment, error) {
+	m.botCalls++
+	if m.botErr != nil {
+		return nil, m.botErr
+	}
+	return m.botComments, nil
 }
 
 func (m *mockSCMAdapter) GetReviewDecision(_ context.Context, _ int, _, _ string) (domain.ReviewDecision, error) {
@@ -69,6 +81,7 @@ type reviewReconcileStore struct {
 	getFingerprintErr        error
 	upsertFingerprintErr     error
 	markDispatchedErr        error
+	deleteFingerprintErr     error
 }
 
 var _ ReconcileStore = (*reviewReconcileStore)(nil)
@@ -109,7 +122,7 @@ func (s *reviewReconcileStore) MarkReactionDispatched(_ context.Context, _, _ st
 
 func (s *reviewReconcileStore) DeleteReactionFingerprint(_ context.Context, _, _ string) error {
 	s.deleteFingerprintCalls++
-	return nil
+	return s.deleteFingerprintErr
 }
 
 // reviewTrackerStub satisfies domain.TrackerAdapter for escalation tests.
@@ -973,9 +986,9 @@ func TestComputeReviewPendingDelay(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			got := computeReviewPendingDelay(tt.attempts)
+			got := computeReactionPendingDelay(tt.attempts)
 			if got < tt.wantMin || got > tt.wantMax {
-				t.Errorf("computeReviewPendingDelay(%d) = %v, want in [%v, %v]",
+				t.Errorf("computeReactionPendingDelay(%d) = %v, want in [%v, %v]",
 					tt.attempts, got, tt.wantMin, tt.wantMax)
 			}
 		})

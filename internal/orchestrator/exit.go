@@ -118,6 +118,11 @@ type HandleWorkerExitParams struct {
 	// is active for the current process. The enqueue path gates on
 	// this flag and the SCMAdapter being non-nil.
 	AutoMergeReactionConfigured bool
+
+	// BotReviewReactionConfigured marks whether the bot-review feature
+	// is active for the current process. The enqueue path gates on
+	// this flag and the SCMAdapter being non-nil.
+	BotReviewReactionConfigured bool
 }
 
 // HandleWorkerExit processes a worker's terminal outcome. It removes the
@@ -492,6 +497,45 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 							LastSSHHost: workerResult.SSHHost,
 							CreatedAt:   nowReview,
 							KindData: &ReviewReactionData{
+								PRNumber: scm.PRNumber,
+								Owner:    scm.Owner,
+								Repo:     scm.Repo,
+								Branch:   scm.Branch,
+								SHA:      scm.SHA,
+							},
+							AgentKind:  entry.AgentKind,
+							RuleName:   entry.RuleName,
+							TemplateID: entry.TemplateID,
+						}
+					}
+				}
+			}
+		}
+
+		// Record a pending bot-review check when the SCM adapter is
+		// configured, bot-review is enabled, and the workspace has PR
+		// metadata with SCM repository identity. The bot-review enqueue
+		// is independent of the review-kind enqueue: both fire from the
+		// same worker exit.
+		if params.SCMAdapter != nil && params.BotReviewReactionConfigured && workerResult.WorkspacePath != "" {
+			if reactionEnqueueAllowed {
+				scm := workspace.ReadSCMMetadata(workerResult.WorkspacePath, log)
+				if scm.PRNumber > 0 && scm.Branch != "" && scm.Owner != "" && scm.Repo != "" {
+					nowBotReview := time.Now().UTC()
+					if params.NowFunc != nil {
+						nowBotReview = params.NowFunc().UTC()
+					}
+					rkey := ReactionKey(workerResult.IssueID, ReactionKindBotReview)
+					if _, exists := state.PendingReactions[rkey]; !exists {
+						state.PendingReactions[rkey] = &PendingReaction{
+							IssueID:     workerResult.IssueID,
+							Identifier:  workerResult.Identifier,
+							DisplayID:   entry.Issue.DisplayID,
+							Attempt:     normalizeAttempt(entry.RetryAttempt) + 1,
+							Kind:        ReactionKindBotReview,
+							LastSSHHost: workerResult.SSHHost,
+							CreatedAt:   nowBotReview,
+							KindData: &BotReviewReactionData{
 								PRNumber: scm.PRNumber,
 								Owner:    scm.Owner,
 								Repo:     scm.Repo,

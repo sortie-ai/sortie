@@ -479,6 +479,93 @@ func TestRender_Concurrent(t *testing.T) {
 	wg.Wait()
 }
 
+func TestRender_BotReviewComments(t *testing.T) {
+	t.Parallel()
+
+	issue := map[string]any{"title": "Fix linter findings"}
+	run := RunContext{TurnNumber: 2, MaxTurns: 5, IsContinuation: true}
+
+	botComments := []map[string]any{
+		{
+			"id":         "501",
+			"file":       "internal/handler.go",
+			"start_line": 20,
+			"end_line":   22,
+			"reviewer":   "golangci-lint[bot]",
+			"body":       "Error return value of `doWork` is not checked.",
+		},
+	}
+
+	t.Run("BotReviewComments_RendersWithoutMissingKeyError", func(t *testing.T) {
+		t.Parallel()
+
+		tmpl, err := Parse(`{{ if .bot_review_comments }}has-bot-comments{{ end }}`, "WORKFLOW.md", 0)
+		if err != nil {
+			t.Fatalf("parse: %v", err)
+		}
+
+		got, err := tmpl.Render(issue, nil, run,
+			WithContinuationContext(map[string]any{"bot_review_comments": botComments}),
+		)
+		if err != nil {
+			t.Fatalf("Render with bot_review_comments: %v", err)
+		}
+		if got != "has-bot-comments" {
+			t.Errorf("Render() = %q, want %q", got, "has-bot-comments")
+		}
+	})
+
+	t.Run("BotReviewComments_DefaultNilNoError", func(t *testing.T) {
+		t.Parallel()
+
+		tmpl, err := Parse(`{{ if .bot_review_comments }}FAIL{{ end }}`, "WORKFLOW.md", 0)
+		if err != nil {
+			t.Fatalf("parse: %v", err)
+		}
+
+		got, err := tmpl.Render(issue, nil, run)
+		if err != nil {
+			t.Fatalf("Render with default bot_review_comments=nil: %v", err)
+		}
+		if got != "" {
+			t.Errorf("Render() = %q, want empty string when bot_review_comments is nil", got)
+		}
+	})
+
+	t.Run("BotReviewComments_PerCommentShapeMatchesReviewComments", func(t *testing.T) {
+		t.Parallel()
+
+		tmpl, err := Parse(
+			`{{ range .bot_review_comments }}{{ index . "id" }}:{{ index . "file" }}:{{ index . "start_line" }}:{{ index . "end_line" }}:{{ index . "reviewer" }}:{{ index . "body" }}{{ end }}`,
+			"WORKFLOW.md", 0,
+		)
+		if err != nil {
+			t.Fatalf("parse: %v", err)
+		}
+
+		got, err := tmpl.Render(issue, nil, run,
+			WithContinuationContext(map[string]any{"bot_review_comments": botComments}),
+		)
+		if err != nil {
+			t.Fatalf("Render with bot_review_comments shape: %v", err)
+		}
+		want := "501:internal/handler.go:20:22:golangci-lint[bot]:Error return value of `doWork` is not checked."
+		if got != want {
+			t.Errorf("Render() = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("WithContinuationContext_AcceptsBotReviewCommentsKey", func(t *testing.T) {
+		t.Parallel()
+
+		// WithContinuationContext must not panic when passed bot_review_comments.
+		opt := WithContinuationContext(map[string]any{"bot_review_comments": botComments})
+		if opt == nil {
+			t.Error("WithContinuationContext returned nil for registered key bot_review_comments")
+		}
+	})
+}
+
 func TestWithContinuationContext_UnregisteredKeyPanics(t *testing.T) {
 	t.Parallel()
 

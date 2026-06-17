@@ -18,7 +18,7 @@
 - **Status Surface.** Optional HTTP server exposing operator-readable runtime state. Not required for orchestrator correctness.
 - **Logging.** Structured logs (`log/slog`) routed to one or more sinks.
 - **CI Status Provider.** Read-only single-method (`FetchCIStatus`) adapter. Activated only when workflow front matter requests CI feedback.
-- **SCM Adapter.** Read-write multi-method adapter exposing six methods (`FetchPendingReviews`, `GetReviewDecision`, `GetCIStatus`, `GetMergeability`, `MergePR`, `DeleteBranch`). Activated when `reactions.review_comments.provider` or `reactions.auto_merge.provider` is configured.
+- **SCM Adapter.** Read-write multi-method adapter exposing seven methods (`FetchPendingReviews`, `FetchBotReviewComments`, `GetReviewDecision`, `GetCIStatus`, `GetMergeability`, `MergePR`, `DeleteBranch`). Activated when `reactions.review_comments.provider`, `reactions.auto_merge.provider`, or `reactions.bot_review.provider` is configured.
 - **Notifier Adapter.** Read-write single-method (`Send`) adapter family behind the `notify_operator` agent tool. Activated when the top-level `notifications` list configures at least one backend (`webhook`, `slack` today). Resolved in the `sortie mcp-server` sidecar, not the orchestrator process.
 
 ## 2. Abstraction layers (strict downward dependency)
@@ -77,6 +77,7 @@ Open [`docs/architecture.md`](architecture.md) when your feature touches one of 
 | §11A CI Feedback Contract                             | Wiring CI feedback (provider activation, log truncation, normalized result shape)                  |
 | §11B PR Review Comment Feedback Contract              | Wiring review-comment feedback (SCM provider activation, pending-review semantics)                 |
 | §11C Auto-merge Reaction Contract                     | Wiring auto-merge reactions, SCM write methods (`MergePR`, `DeleteBranch`), the startup token-scope preflight, or the merge fingerprint kind |
+| §11D Bot Review Comment Feedback Contract             | Wiring bot review-comment feedback (bot-author classification, the `bot-review` reaction kind, immediate non-debounced dispatch)             |
 | §12 Prompt Construction and Context Assembly          | Changing prompt rendering, FuncMap, or context fields supplied to the template                     |
 | §13 Logging, Status, and Observability                | Adding log fields, metrics, status endpoints, or dashboard surfaces                                |
 | §14 Failure Model and Recovery Strategy               | Changing retry/backoff, restart-recovery, or failure categorization                                |

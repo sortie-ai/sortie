@@ -38,6 +38,9 @@ var _ domain.SCMAdapter = (*preflightSCMStub)(nil)
 func (s *preflightSCMStub) FetchPendingReviews(_ context.Context, _ int, _, _ string) ([]domain.ReviewComment, error) {
 	return nil, nil
 }
+func (s *preflightSCMStub) FetchBotReviewComments(_ context.Context, _ int, _, _ string, _ []string) ([]domain.ReviewComment, error) {
+	return []domain.ReviewComment{}, nil
+}
 func (s *preflightSCMStub) GetReviewDecision(_ context.Context, _ int, _, _ string) (domain.ReviewDecision, error) {
 	return domain.ReviewDecisionApproved, nil
 }
@@ -61,6 +64,9 @@ var _ domain.SCMAdapter = (*noVerifierSCMStub)(nil)
 
 func (s *noVerifierSCMStub) FetchPendingReviews(_ context.Context, _ int, _, _ string) ([]domain.ReviewComment, error) {
 	return nil, nil
+}
+func (s *noVerifierSCMStub) FetchBotReviewComments(_ context.Context, _ int, _, _ string, _ []string) ([]domain.ReviewComment, error) {
+	return []domain.ReviewComment{}, nil
 }
 func (s *noVerifierSCMStub) GetReviewDecision(_ context.Context, _ int, _, _ string) (domain.ReviewDecision, error) {
 	return domain.ReviewDecisionApproved, nil

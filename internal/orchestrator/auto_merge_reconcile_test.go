@@ -16,12 +16,13 @@ import (
 // controllable via function fields. Used by auto-merge reconcile tests that
 // need to simulate different combinations of API responses and errors.
 type controlledSCMAdapter struct {
-	fetchPendingReviewsFn func(ctx context.Context, prNumber int, owner, repo string) ([]domain.ReviewComment, error)
-	getReviewDecisionFn   func(ctx context.Context, prNumber int, owner, repo string) (domain.ReviewDecision, error)
-	getCIStatusFn         func(ctx context.Context, prNumber int, owner, repo string) (string, error)
-	getMergeabilityFn     func(ctx context.Context, prNumber int, owner, repo string) (domain.PRMergeStatus, error)
-	mergePRFn             func(ctx context.Context, prNumber int, owner, repo string, strategy domain.MergeStrategy, commitTitle, commitMessage, expectedHeadSHA string) (domain.MergeResult, error)
-	deleteBranchFn        func(ctx context.Context, owner, repo, branch string) error
+	fetchPendingReviewsFn    func(ctx context.Context, prNumber int, owner, repo string) ([]domain.ReviewComment, error)
+	fetchBotReviewCommentsFn func(ctx context.Context, prNumber int, owner, repo string, botUsernames []string) ([]domain.ReviewComment, error)
+	getReviewDecisionFn      func(ctx context.Context, prNumber int, owner, repo string) (domain.ReviewDecision, error)
+	getCIStatusFn            func(ctx context.Context, prNumber int, owner, repo string) (string, error)
+	getMergeabilityFn        func(ctx context.Context, prNumber int, owner, repo string) (domain.PRMergeStatus, error)
+	mergePRFn                func(ctx context.Context, prNumber int, owner, repo string, strategy domain.MergeStrategy, commitTitle, commitMessage, expectedHeadSHA string) (domain.MergeResult, error)
+	deleteBranchFn           func(ctx context.Context, owner, repo, branch string) error
 }
 
 var _ domain.SCMAdapter = (*controlledSCMAdapter)(nil)
@@ -29,6 +30,13 @@ var _ domain.SCMAdapter = (*controlledSCMAdapter)(nil)
 func (c *controlledSCMAdapter) FetchPendingReviews(ctx context.Context, prNumber int, owner, repo string) ([]domain.ReviewComment, error) {
 	if c.fetchPendingReviewsFn != nil {
 		return c.fetchPendingReviewsFn(ctx, prNumber, owner, repo)
+	}
+	return nil, nil
+}
+
+func (c *controlledSCMAdapter) FetchBotReviewComments(ctx context.Context, prNumber int, owner, repo string, botUsernames []string) ([]domain.ReviewComment, error) {
+	if c.fetchBotReviewCommentsFn != nil {
+		return c.fetchBotReviewCommentsFn(ctx, prNumber, owner, repo, botUsernames)
 	}
 	return nil, nil
 }
@@ -1156,6 +1164,13 @@ func (s *scopeVerifierAdapter) FetchPendingReviews(ctx context.Context, prNumber
 		return s.scm.FetchPendingReviews(ctx, prNumber, owner, repo)
 	}
 	return nil, nil
+}
+
+func (s *scopeVerifierAdapter) FetchBotReviewComments(ctx context.Context, prNumber int, owner, repo string, botUsernames []string) ([]domain.ReviewComment, error) {
+	if s.scm != nil {
+		return s.scm.FetchBotReviewComments(ctx, prNumber, owner, repo, botUsernames)
+	}
+	return []domain.ReviewComment{}, nil
 }
 
 func (s *scopeVerifierAdapter) GetReviewDecision(ctx context.Context, prNumber int, owner, repo string) (domain.ReviewDecision, error) {

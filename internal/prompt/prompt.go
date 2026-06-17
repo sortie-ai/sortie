@@ -126,7 +126,7 @@ type RenderOption func(m map[string]any)
 // reaction continuation context. Each key receives a nil default in
 // [Template.Render] so templates using missingkey=error do not reject
 // references to absent reaction types.
-var continuationKeys = []string{"ci_failure", "review_comments"}
+var continuationKeys = []string{"ci_failure", "review_comments", "bot_review_comments"}
 
 // isContinuationKey reports whether key is a registered continuation
 // template variable name.
@@ -153,9 +153,10 @@ func WithContinuationContext(data map[string]any) RenderOption {
 // Render executes the template with the given inputs and returns the
 // rendered prompt string. The data map contains the top-level keys
 // "issue", "attempt", and "run", plus every key in [continuationKeys]
-// (currently "ci_failure", "review_comments"). Continuation keys default
-// to nil when no [RenderOption] overrides them, ensuring missingkey=error
-// does not reject templates that reference these fields.
+// (currently "ci_failure", "review_comments", "bot_review_comments").
+// Continuation keys default to nil when no [RenderOption] overrides them,
+// ensuring missingkey=error does not reject templates that reference these
+// fields.
 // Returns a [*TemplateError] with Kind [ErrTemplateRender] on failure,
 // with line numbers adjusted to WORKFLOW.md-relative positions.
 func (t *Template) Render(issue map[string]any, attempt any, run RunContext, opts ...RenderOption) (string, error) {

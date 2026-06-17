@@ -319,6 +319,12 @@ const ReactionKindCI = "ci"
 // reactions.
 const ReactionKindReview = "review"
 
+// ReactionKindBotReview is the reaction kind constant for automated
+// review bot PR comment reactions. The user-facing YAML key is
+// reactions.bot_review; the short form lives here as the runtime and
+// persisted discriminator.
+const ReactionKindBotReview = "bot-review"
+
 // ReactionKindAutoMerge is the reaction kind constant for auto-merge
 // reactions. The user-facing YAML key is reactions.auto_merge; the
 // short form lives here as the runtime and persisted discriminator.
@@ -332,7 +338,7 @@ const AutoMergePreflightRetryDelay time.Duration = 5 * time.Minute
 
 func isKnownReactionKind(kind string) bool {
 	switch kind {
-	case ReactionKindCI, ReactionKindReview, ReactionKindAutoMerge:
+	case ReactionKindCI, ReactionKindReview, ReactionKindBotReview, ReactionKindAutoMerge:
 		return true
 	default:
 		return false
@@ -453,6 +459,41 @@ type ReviewReactionConfig struct {
 	PollIntervalMS       int
 	DebounceMS           int
 	MaxContinuationTurns int
+}
+
+// BotReviewReactionData holds bot-review-specific fields for a pending
+// bot-review reaction. Stored in [PendingReaction.KindData] for reactions
+// with Kind == [ReactionKindBotReview]. Owner, Repo, Branch, and SHA are
+// sourced from [domain.SCMMetadata] (written by the agent to scm.json),
+// never from the tracker project configuration.
+//
+// Unlike [ReviewReactionData], there is no debounce timestamp: bot-review
+// dispatches immediately.
+type BotReviewReactionData struct {
+	// PRNumber is the pull request number.
+	PRNumber int
+
+	// Owner is the repository owner.
+	Owner string
+
+	// Repo is the repository name.
+	Repo string
+
+	// Branch is the git branch name (PR head).
+	Branch string
+
+	// SHA is the git commit SHA at the last known push.
+	SHA string
+}
+
+// BotReviewReactionConfig holds validated bot-review-specific
+// configuration extracted from [config.ReactionConfig] at startup.
+type BotReviewReactionConfig struct {
+	Escalation           string
+	EscalationLabel      string
+	PollIntervalMS       int
+	MaxContinuationTurns int
+	BotUsernames         []string
 }
 
 // AutoMergeReactionData holds auto-merge-specific fields for a pending
@@ -942,6 +983,74 @@ func BuildReviewReactionConfig(rc config.ReactionConfig) (ReviewReactionConfig, 
 			return ReviewReactionConfig{}, fmt.Errorf("max_continuation_turns must be positive, got %d", n)
 		}
 		cfg.MaxContinuationTurns = n
+	}
+
+	return cfg, nil
+}
+
+// BuildBotReviewReactionConfig extracts and validates bot-review-specific
+// configuration from a [config.ReactionConfig]. Returns an error for
+// invalid values.
+//
+// The poll-interval and continuation-turn defaults differ from
+// [BuildReviewReactionConfig]: bot comments arrive in bulk on push and are
+// dispatched immediately, so the poll cadence is tighter and the retry
+// budget larger. No debounce field is read.
+func BuildBotReviewReactionConfig(rc config.ReactionConfig) (BotReviewReactionConfig, error) {
+	cfg := BotReviewReactionConfig{
+		Escalation:           rc.Escalation,
+		EscalationLabel:      rc.EscalationLabel,
+		PollIntervalMS:       60000,
+		MaxContinuationTurns: 5,
+	}
+
+	if cfg.Escalation == "" {
+		cfg.Escalation = "label"
+	}
+	if cfg.Escalation != "label" && cfg.Escalation != "comment" {
+		return BotReviewReactionConfig{}, fmt.Errorf("invalid escalation %q: must be \"label\" or \"comment\"", cfg.Escalation)
+	}
+
+	if cfg.EscalationLabel == "" {
+		cfg.EscalationLabel = "needs-human"
+	}
+
+	if v, ok := rc.Extra["poll_interval_ms"]; ok {
+		n, err := toInt(v)
+		if err != nil {
+			return BotReviewReactionConfig{}, fmt.Errorf("invalid poll_interval_ms: %w", err)
+		}
+		if n < 30000 {
+			return BotReviewReactionConfig{}, fmt.Errorf("poll_interval_ms must be >= 30000, got %d", n)
+		}
+		cfg.PollIntervalMS = n
+	}
+
+	if v, ok := rc.Extra["max_continuation_turns"]; ok {
+		n, err := toInt(v)
+		if err != nil {
+			return BotReviewReactionConfig{}, fmt.Errorf("invalid max_continuation_turns: %w", err)
+		}
+		if n <= 0 {
+			return BotReviewReactionConfig{}, fmt.Errorf("max_continuation_turns must be positive, got %d", n)
+		}
+		cfg.MaxContinuationTurns = n
+	}
+
+	if v, ok := rc.Extra["bot_usernames"]; ok {
+		list, lok := v.([]any)
+		if !lok {
+			return BotReviewReactionConfig{}, fmt.Errorf("invalid bot_usernames: expected list, got %T", v)
+		}
+		names := make([]string, 0, len(list))
+		for i, elem := range list {
+			s, sok := elem.(string)
+			if !sok {
+				return BotReviewReactionConfig{}, fmt.Errorf("invalid bot_usernames[%d]: expected string, got %T", i, elem)
+			}
+			names = append(names, s)
+		}
+		cfg.BotUsernames = names
 	}
 
 	return cfg, nil

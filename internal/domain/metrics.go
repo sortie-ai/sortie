@@ -145,6 +145,16 @@ type Metrics interface {
 	// (sortie_review_escalations_total{action} counter).
 	IncReviewEscalations(action string)
 
+	// IncBotReviewChecks increments the bot review comment check counter.
+	// result is "dispatched", "error", or "skipped"
+	// (sortie_bot_review_checks_total{result} counter).
+	IncBotReviewChecks(result string)
+
+	// IncBotReviewEscalations increments the bot review escalation
+	// counter. action is "label", "comment", or "error"
+	// (sortie_bot_review_escalations_total{action} counter).
+	IncBotReviewEscalations(action string)
+
 	// IncAutoMergeReactions increments the auto-merge reaction outcome
 	// counter. result is "merged", "error", or "escalated"
 	// (sortie_reactions_auto_merge_total{result} counter).
@@ -194,6 +204,8 @@ func (*NoopMetrics) ObserveSelfReviewVerificationDuration(string, float64) {}
 func (*NoopMetrics) IncSelfReviewCapReached()                              {}
 func (*NoopMetrics) IncReviewChecks(string)                                {}
 func (*NoopMetrics) IncReviewEscalations(string)                           {}
+func (*NoopMetrics) IncBotReviewChecks(string)                             {}
+func (*NoopMetrics) IncBotReviewEscalations(string)                        {}
 func (*NoopMetrics) IncAutoMergeReactions(string)                          {}
 func (*NoopMetrics) IncDispatchRuleMatch(string, string)                   {}
 

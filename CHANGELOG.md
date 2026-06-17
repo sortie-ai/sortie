@@ -7,6 +7,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Bot-review reaction kind: automated review-bot comments (linters,
+  static analyzers, security scanners, and AI reviewers) on a
+  Sortie-created pull request are now detected separately from human
+  review comments and routed back into the agent session as
+  continuation turns. Enable it with a `reactions.bot_review` block in
+  WORKFLOW.md: `provider` activates the kind (an empty provider leaves
+  it inactive), `bot_usernames` is an allowlist of bot login names,
+  `max_continuation_turns` caps continuation attempts (default 5),
+  `poll_interval_ms` sets the poll cadence (default 60000, minimum
+  30000), and `escalation` (`label` or `comment`, default `label`)
+  with `escalation_label` (default `needs-human`) controls handoff
+  once the budget is exhausted. Comments are classified as bot-authored
+  by the platform author type or the configured username allowlist,
+  never by comment content. Unlike human review comments, bot comments
+  dispatch immediately with no debounce window and carry an independent
+  retry budget, fingerprint, and escalation config, so the bot-review
+  and human-review kinds never interfere on the same pull request.
+  Visible on startup as a `bot review routing enabled` log line and via
+  the `sortie_bot_review_checks_total` and
+  `sortie_bot_review_escalations_total` metrics.
+  ([#415](https://github.com/sortie-ai/sortie/issues/415))
+
 ### Changed
 
 - Homebrew installs now use `brew install --cask sortie-ai/tap/sortie`.

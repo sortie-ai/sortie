@@ -508,6 +508,10 @@ func (p *panicSCMAdapter) FetchPendingReviews(_ context.Context, _ int, _, _ str
 	panic("FetchPendingReviews must not be called during RecoverPendingReactions")
 }
 
+func (p *panicSCMAdapter) FetchBotReviewComments(_ context.Context, _ int, _, _ string, _ []string) ([]domain.ReviewComment, error) {
+	panic("FetchBotReviewComments must not be called during RecoverPendingReactions")
+}
+
 func (p *panicSCMAdapter) GetReviewDecision(_ context.Context, _ int, _, _ string) (domain.ReviewDecision, error) {
 	panic("GetReviewDecision must not be called during RecoverPendingReactions")
 }
@@ -545,6 +549,10 @@ var _ domain.SCMAdapter = (*stubSCMForRecovery)(nil)
 
 func (s *stubSCMForRecovery) FetchPendingReviews(_ context.Context, _ int, _, _ string) ([]domain.ReviewComment, error) {
 	return nil, nil
+}
+
+func (s *stubSCMForRecovery) FetchBotReviewComments(_ context.Context, _ int, _, _ string, _ []string) ([]domain.ReviewComment, error) {
+	return []domain.ReviewComment{}, nil
 }
 
 func (s *stubSCMForRecovery) GetReviewDecision(_ context.Context, _ int, _, _ string) (domain.ReviewDecision, error) {
@@ -1323,5 +1331,253 @@ func TestRecoverPendingReactions_SkipsAutoMergeWhenMissingPRMetadata(t *testing.
 	rkey := ReactionKey("ISS-AM3", ReactionKindAutoMerge)
 	if _, ok := state.PendingReactions[rkey]; ok {
 		t.Error("PendingReactions[ISS-AM3:merge] present despite missing PR metadata")
+	}
+}
+
+// --- bot-review startup recovery tests (6.6 → R11) ---
+
+// TestRecoverPendingReactions_RecreatesBotReviewAfterRestart verifies R11:
+// a run_history row plus SCMMetadata with full PR identity and
+// BotReviewReactionConfigured=true reconstructs a bot-review PendingReaction
+// and increments BotReviewRecovered.
+func TestRecoverPendingReactions_RecreatesBotReviewAfterRestart(t *testing.T) {
+	t.Parallel()
+
+	wsRoot := t.TempDir()
+	writeRecoverySCM(t, wsRoot, "PROJ-BR1", domain.SCMMetadata{
+		Branch:   "feature/bot-fix",
+		SHA:      "deadcafe",
+		PushedAt: freshSCMTime(1),
+		PRNumber: 55,
+		Owner:    "botowner",
+		Repo:     "botrepo",
+	})
+
+	tracker := &recoveryTrackerStub{states: map[string]string{"ISS-BR1": "In Review"}}
+	state := NewState(5000, 4, nil, AgentTotals{})
+	run := freshRun("ISS-BR1", "PROJ-BR1", "botowner/botrepo#55", 3)
+	params := defaultRecoveryParams(wsRoot, tracker)
+	params.BotReviewReactionConfigured = true
+
+	result, err := RecoverPendingReactions(context.Background(), state, []persistence.RunHistory{run}, params)
+	if err != nil {
+		t.Fatalf("RecoverPendingReactions: %v", err)
+	}
+	if result.BotReviewRecovered != 1 {
+		t.Errorf("BotReviewRecovered = %d, want 1", result.BotReviewRecovered)
+	}
+
+	rkey := ReactionKey("ISS-BR1", ReactionKindBotReview)
+	pr, ok := state.PendingReactions[rkey]
+	if !ok {
+		t.Fatalf("PendingReactions[%q] missing, want present", rkey)
+	}
+	if pr.Kind != ReactionKindBotReview {
+		t.Errorf("PendingReaction.Kind = %q, want %q", pr.Kind, ReactionKindBotReview)
+	}
+	if pr.IssueID != "ISS-BR1" {
+		t.Errorf("PendingReaction.IssueID = %q, want %q", pr.IssueID, "ISS-BR1")
+	}
+	if pr.Attempt != 3 {
+		t.Errorf("PendingReaction.Attempt = %d, want 3", pr.Attempt)
+	}
+	brd, ok := pr.KindData.(*BotReviewReactionData)
+	if !ok {
+		t.Fatalf("KindData type = %T, want *BotReviewReactionData", pr.KindData)
+	}
+	if brd.PRNumber != 55 {
+		t.Errorf("BotReviewReactionData.PRNumber = %d, want 55", brd.PRNumber)
+	}
+	if brd.Owner != "botowner" {
+		t.Errorf("BotReviewReactionData.Owner = %q, want %q", brd.Owner, "botowner")
+	}
+	if brd.Repo != "botrepo" {
+		t.Errorf("BotReviewReactionData.Repo = %q, want %q", brd.Repo, "botrepo")
+	}
+	if brd.Branch != "feature/bot-fix" {
+		t.Errorf("BotReviewReactionData.Branch = %q, want %q", brd.Branch, "feature/bot-fix")
+	}
+	if brd.SHA != "deadcafe" {
+		t.Errorf("BotReviewReactionData.SHA = %q, want %q", brd.SHA, "deadcafe")
+	}
+	// Issue must not be claimed.
+	if _, claimed := state.Claimed["ISS-BR1"]; claimed {
+		t.Error("ISS-BR1 found in state.Claimed after recovery, want not claimed")
+	}
+}
+
+// TestRecoverPendingReactions_BotReviewNotRecoveredWhenFlagFalse verifies R11:
+// BotReviewReactionConfigured=false → no bot-review entry is reconstructed, even
+// with full PR metadata present.
+func TestRecoverPendingReactions_BotReviewNotRecoveredWhenFlagFalse(t *testing.T) {
+	t.Parallel()
+
+	wsRoot := t.TempDir()
+	writeRecoverySCM(t, wsRoot, "PROJ-BR2", domain.SCMMetadata{
+		Branch:   "feature/bot-disabled",
+		SHA:      "abc",
+		PushedAt: freshSCMTime(1),
+		PRNumber: 10,
+		Owner:    "o",
+		Repo:     "r",
+	})
+
+	tracker := &recoveryTrackerStub{states: map[string]string{"ISS-BR2": "In Review"}}
+	state := NewState(5000, 4, nil, AgentTotals{})
+	run := freshRun("ISS-BR2", "PROJ-BR2", "", 1)
+	params := defaultRecoveryParams(wsRoot, tracker)
+	params.BotReviewReactionConfigured = false // not configured
+
+	result, err := RecoverPendingReactions(context.Background(), state, []persistence.RunHistory{run}, params)
+	if err != nil {
+		t.Fatalf("RecoverPendingReactions: %v", err)
+	}
+	if result.BotReviewRecovered != 0 {
+		t.Errorf("BotReviewRecovered = %d, want 0 when flag is false", result.BotReviewRecovered)
+	}
+
+	rkey := ReactionKey("ISS-BR2", ReactionKindBotReview)
+	if _, ok := state.PendingReactions[rkey]; ok {
+		t.Error("bot-review PendingReactions entry created with BotReviewReactionConfigured=false; want absent")
+	}
+}
+
+// TestRecoverPendingReactions_BotReviewMissingPRNumber verifies R11: a row missing
+// PRNumber (zero) recovers no bot-review entry even when BotReviewReactionConfigured=true.
+func TestRecoverPendingReactions_BotReviewMissingPRNumber(t *testing.T) {
+	t.Parallel()
+
+	wsRoot := t.TempDir()
+	writeRecoverySCM(t, wsRoot, "PROJ-BRNPR", domain.SCMMetadata{
+		Branch:   "feature/no-pr",
+		SHA:      "abc",
+		PushedAt: freshSCMTime(1),
+		// PRNumber intentionally zero.
+		Owner: "o",
+		Repo:  "r",
+	})
+
+	tracker := &recoveryTrackerStub{states: map[string]string{"ISS-BRNPR": "In Review"}}
+	state := NewState(5000, 4, nil, AgentTotals{})
+	run := freshRun("ISS-BRNPR", "PROJ-BRNPR", "", 1)
+	params := defaultRecoveryParams(wsRoot, tracker)
+	params.BotReviewReactionConfigured = true
+
+	result, err := RecoverPendingReactions(context.Background(), state, []persistence.RunHistory{run}, params)
+	if err != nil {
+		t.Fatalf("RecoverPendingReactions: %v", err)
+	}
+	if result.BotReviewRecovered != 0 {
+		t.Errorf("BotReviewRecovered = %d, want 0 for missing PRNumber", result.BotReviewRecovered)
+	}
+
+	rkey := ReactionKey("ISS-BRNPR", ReactionKindBotReview)
+	if _, ok := state.PendingReactions[rkey]; ok {
+		t.Error("bot-review PendingReactions entry created with zero PRNumber; want absent")
+	}
+}
+
+// TestRecoverPendingReactions_BotReviewMissingOwner verifies R11: a row missing
+// Owner recovers no bot-review entry.
+func TestRecoverPendingReactions_BotReviewMissingOwner(t *testing.T) {
+	t.Parallel()
+
+	wsRoot := t.TempDir()
+	writeRecoverySCM(t, wsRoot, "PROJ-BRNOWN", domain.SCMMetadata{
+		Branch:   "feature/no-owner",
+		SHA:      "abc",
+		PushedAt: freshSCMTime(1),
+		PRNumber: 5,
+		// Owner intentionally empty.
+		Repo: "r",
+	})
+
+	tracker := &recoveryTrackerStub{states: map[string]string{"ISS-BRNOWN": "In Review"}}
+	state := NewState(5000, 4, nil, AgentTotals{})
+	run := freshRun("ISS-BRNOWN", "PROJ-BRNOWN", "", 1)
+	params := defaultRecoveryParams(wsRoot, tracker)
+	params.BotReviewReactionConfigured = true
+
+	result, err := RecoverPendingReactions(context.Background(), state, []persistence.RunHistory{run}, params)
+	if err != nil {
+		t.Fatalf("RecoverPendingReactions: %v", err)
+	}
+	if result.BotReviewRecovered != 0 {
+		t.Errorf("BotReviewRecovered = %d, want 0 for missing Owner", result.BotReviewRecovered)
+	}
+
+	rkey := ReactionKey("ISS-BRNOWN", ReactionKindBotReview)
+	if _, ok := state.PendingReactions[rkey]; ok {
+		t.Error("bot-review PendingReactions entry created with empty Owner; want absent")
+	}
+}
+
+// TestRecoverPendingReactions_BotReviewMissingRepo verifies R11: a row missing
+// Repo recovers no bot-review entry.
+func TestRecoverPendingReactions_BotReviewMissingRepo(t *testing.T) {
+	t.Parallel()
+
+	wsRoot := t.TempDir()
+	writeRecoverySCM(t, wsRoot, "PROJ-BRNREP", domain.SCMMetadata{
+		Branch:   "feature/no-repo",
+		SHA:      "abc",
+		PushedAt: freshSCMTime(1),
+		PRNumber: 5,
+		Owner:    "o",
+		// Repo intentionally empty.
+	})
+
+	tracker := &recoveryTrackerStub{states: map[string]string{"ISS-BRNREP": "In Review"}}
+	state := NewState(5000, 4, nil, AgentTotals{})
+	run := freshRun("ISS-BRNREP", "PROJ-BRNREP", "", 1)
+	params := defaultRecoveryParams(wsRoot, tracker)
+	params.BotReviewReactionConfigured = true
+
+	result, err := RecoverPendingReactions(context.Background(), state, []persistence.RunHistory{run}, params)
+	if err != nil {
+		t.Fatalf("RecoverPendingReactions: %v", err)
+	}
+	if result.BotReviewRecovered != 0 {
+		t.Errorf("BotReviewRecovered = %d, want 0 for missing Repo", result.BotReviewRecovered)
+	}
+
+	rkey := ReactionKey("ISS-BRNREP", ReactionKindBotReview)
+	if _, ok := state.PendingReactions[rkey]; ok {
+		t.Error("bot-review PendingReactions entry created with empty Repo; want absent")
+	}
+}
+
+// TestRecoverPendingReactions_BotReviewMissingBranch verifies R11: a row missing
+// Branch recovers no bot-review entry.
+func TestRecoverPendingReactions_BotReviewMissingBranch(t *testing.T) {
+	t.Parallel()
+
+	wsRoot := t.TempDir()
+	writeRecoverySCM(t, wsRoot, "PROJ-BRNBRA", domain.SCMMetadata{
+		// Branch intentionally empty.
+		SHA:      "abc",
+		PushedAt: freshSCMTime(1),
+		PRNumber: 5,
+		Owner:    "o",
+		Repo:     "r",
+	})
+
+	tracker := &recoveryTrackerStub{states: map[string]string{"ISS-BRNBRA": "In Review"}}
+	state := NewState(5000, 4, nil, AgentTotals{})
+	run := freshRun("ISS-BRNBRA", "PROJ-BRNBRA", "", 1)
+	params := defaultRecoveryParams(wsRoot, tracker)
+	params.BotReviewReactionConfigured = true
+
+	result, err := RecoverPendingReactions(context.Background(), state, []persistence.RunHistory{run}, params)
+	if err != nil {
+		t.Fatalf("RecoverPendingReactions: %v", err)
+	}
+	if result.BotReviewRecovered != 0 {
+		t.Errorf("BotReviewRecovered = %d, want 0 for missing Branch", result.BotReviewRecovered)
+	}
+
+	rkey := ReactionKey("ISS-BRNBRA", ReactionKindBotReview)
+	if _, ok := state.PendingReactions[rkey]; ok {
+		t.Error("bot-review PendingReactions entry created with empty Branch; want absent")
 	}
 }

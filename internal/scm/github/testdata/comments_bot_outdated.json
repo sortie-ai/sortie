@@ -1,0 +1,15 @@
+[
+  {
+    "id": 500,
+    "path": "internal/auth.go",
+    "start_line": null,
+    "line": 42,
+    "position": null,
+    "body": "Unused variable detected by linter.",
+    "user": {
+      "login": "golangci-lint[bot]",
+      "type": "Bot"
+    },
+    "created_at": "2026-04-01T10:05:00Z"
+  }
+]
