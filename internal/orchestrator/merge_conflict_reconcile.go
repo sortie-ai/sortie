@@ -11,9 +11,10 @@ import (
 	"github.com/sortie-ai/sortie/internal/logging"
 )
 
-// mergeConflictPendingBackoffBase is the base interval for merge-conflict
-// pending exponential backoff and the floor for the configured poll
-// interval.
+// mergeConflictPendingBackoffBase is the floor for the merge-conflict poll
+// interval and, through it, for the per-tick deferral and fetch-error
+// backoff delays. The exponential backoff itself is computed by
+// [computeReactionPendingDelay]; this constant only bounds it from below.
 const mergeConflictPendingBackoffBase = 10 * time.Second
 
 // mergeConflictPendingDefaultTTL is the default lifetime of a
@@ -387,9 +388,14 @@ func escalateMergeConflictFailure(
 // comment used when the per-episode retry budget is exhausted. Plain text
 // is used so the comment renders consistently across all tracker adapters.
 func buildMergeConflictEscalationComment(data *MergeConflictReactionData, attempts int) string {
+	// The observation that trips the retry cap dispatches no continuation, so
+	// the number of resolution turns actually dispatched is attempts-1. At
+	// max_retries 0 this is 0: the reaction escalates on first detection
+	// without attempting a rebase.
+	dispatched := attempts - 1
 	return fmt.Sprintf(
 		"Sortie attempted %d merge-conflict resolution turn(s) and could not clear the conflicts for PR #%d. Manual rebase required.",
-		attempts,
+		dispatched,
 		data.PRNumber,
 	)
 }
