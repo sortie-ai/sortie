@@ -25,22 +25,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ([#415](https://github.com/sortie-ai/sortie/issues/415))
 
 - Merge-conflict reaction kind: the orchestrator now polls mergeability
-  on every open Sortie-managed PR each reconcile cycle. When a PR
-  transitions from no-conflict to conflict a single continuation turn is
-  dispatched, instructing the agent to rebase the PR head branch onto
-  the real base branch and resolve the conflicts on the existing
-  workspace. Configure it with a `reactions.merge_conflicts` block in
-  WORKFLOW.md, where `provider` activates the kind,
-  `max_retries` caps rebase attempts (default 1, lower than other kinds
-  because conflict resolution is less likely to succeed on retry),
-  `poll_interval_ms` sets the poll cadence (default 60000, minimum
-  30000), and `escalation` (`label` or `comment`, default `label`) with
-  `escalation_label` (default `needs-human`) controls handoff once the
-  budget is exhausted. Conflict tracking is episodic: resolving a
-  conflict closes the episode and resets the counter, so a later
-  independent conflict opens a fresh retry budget. Tracked via
-  `sortie_merge_conflict_checks_total` and
-  `sortie_merge_conflict_escalations_total` metrics.
+  of each open Sortie-managed pull request per reconcile cycle and, on a
+  no-conflict-to-conflict transition, dispatches a single continuation
+  turn that rebases the PR branch onto its base and resolves the
+  conflicts on the existing workspace. Configure it with a
+  `reactions.merge_conflicts` block in WORKFLOW.md, where `provider`
+  activates the kind and `max_retries`, `poll_interval_ms`, and
+  `escalation` tune the retry budget, poll cadence, and handoff; the
+  retry budget defaults lower than other reaction kinds because conflict
+  resolution rarely succeeds on retry. Tracking is episodic: resolving a
+  conflict resets the budget, so a later independent conflict gets a
+  fresh attempt rather than immediate escalation.
   ([#416](https://github.com/sortie-ai/sortie/issues/416))
 
 ### Changed
