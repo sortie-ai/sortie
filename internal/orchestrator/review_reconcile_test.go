@@ -81,6 +81,7 @@ type reviewReconcileStore struct {
 	getFingerprintErr        error
 	upsertFingerprintErr     error
 	markDispatchedErr        error
+	deleteFingerprintErr     error
 }
 
 var _ ReconcileStore = (*reviewReconcileStore)(nil)
@@ -121,7 +122,7 @@ func (s *reviewReconcileStore) MarkReactionDispatched(_ context.Context, _, _ st
 
 func (s *reviewReconcileStore) DeleteReactionFingerprint(_ context.Context, _, _ string) error {
 	s.deleteFingerprintCalls++
-	return nil
+	return s.deleteFingerprintErr
 }
 
 // reviewTrackerStub satisfies domain.TrackerAdapter for escalation tests.

@@ -712,6 +712,85 @@ func TestFetchBotReviewComments_NoReviews(t *testing.T) {
 	}
 }
 
+// TestFetchBotReviewComments_ReviewsFetchError verifies that an error fetching
+// the reviews list propagates as an SCMError from FetchBotReviewComments.
+func TestFetchBotReviewComments_ReviewsFetchError(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`not valid json {{{`))
+	}))
+	defer srv.Close()
+
+	adapter := newTestSCMAdapter(t, srv.URL)
+	_, err := adapter.FetchBotReviewComments(context.Background(), 1, "owner", "repo", nil)
+	assertSCMErrorKind(t, err, domain.ErrSCMPayload)
+}
+
+// TestFetchBotReviewComments_CommentsFetchError verifies that an error fetching
+// a bot review's inline comments propagates from FetchBotReviewComments even
+// when the reviews list itself was fetched successfully.
+func TestFetchBotReviewComments_CommentsFetchError(t *testing.T) {
+	t.Parallel()
+
+	reviewsFixture := loadFixture(t, "reviews_bot.json")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.Contains(r.URL.Path, "/comments"):
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`not valid json {{{`))
+		case strings.HasSuffix(r.URL.Path, "/reviews"):
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write(reviewsFixture)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"message":"not found"}`))
+		}
+	}))
+	defer srv.Close()
+
+	adapter := newTestSCMAdapter(t, srv.URL)
+	_, err := adapter.FetchBotReviewComments(context.Background(), 1, "owner", "repo", nil)
+	assertSCMErrorKind(t, err, domain.ErrSCMPayload)
+}
+
+// TestFetchBotReviewComments_SkipsNonBotInlineComment verifies that an inline
+// comment authored by a non-bot, non-allowlisted user is excluded from the
+// results while bot-authored inline comments are kept.
+func TestFetchBotReviewComments_SkipsNonBotInlineComment(t *testing.T) {
+	t.Parallel()
+
+	// reviews_bot.json: one bot review (user.type "Bot").
+	// comments_bot_mixed.json: a bot comment (id 700), a non-bot comment
+	// (id 701, user.type "User", not allowlisted), and a duplicate of id 700.
+	reviewsFixture := loadFixture(t, "reviews_bot.json")
+	commentsFixture := loadFixture(t, "comments_bot_mixed.json")
+	srv := httptest.NewServer(reviewsAndCommentsHandler(t, reviewsFixture, commentsFixture))
+	defer srv.Close()
+
+	adapter := newTestSCMAdapter(t, srv.URL)
+	got, err := adapter.FetchBotReviewComments(context.Background(), 1, "owner", "repo", nil)
+	if err != nil {
+		t.Fatalf("FetchBotReviewComments: %v", err)
+	}
+
+	var botInlineCount int
+	for _, c := range got {
+		if c.ID == "701" {
+			t.Error("non-bot inline comment id 701 returned; want excluded")
+		}
+		if c.ID == "700" {
+			botInlineCount++
+		}
+	}
+	if botInlineCount != 1 {
+		t.Errorf("bot inline comment id 700 appeared %d time(s); want exactly 1 (deduped)", botInlineCount)
+	}
+}
+
 // TestIsBotAuthor verifies the isBotAuthor predicate covers all union branches.
 func TestIsBotAuthor(t *testing.T) {
 	t.Parallel()

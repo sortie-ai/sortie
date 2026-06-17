@@ -3843,3 +3843,305 @@ func TestHandleWorkerExit_AutoMergeEnqueueDoesNotOverwrite(t *testing.T) {
 		t.Errorf("AutoMergeReactionData.PRNumber = %d, want 77 (seeded value)", mergeData.PRNumber)
 	}
 }
+
+// --- Bot-review enqueue tests ---
+
+// TestHandleWorkerExit_BotReviewEnqueue_PopulatesPendingReaction verifies that
+// a complete PR metadata file causes HandleWorkerExit to populate the
+// bot-review PendingReaction on a normal exit when bot-review is configured.
+func TestHandleWorkerExit_BotReviewEnqueue_PopulatesPendingReaction(t *testing.T) {
+	t.Parallel()
+
+	wsPath := t.TempDir()
+	writePRSCMMetadata(t, wsPath, 55, "corp", "api", "feature/BR-1", "c0ffee")
+
+	store := &mockExitStore{}
+	state := exitState(t, "BR-1", nil)
+	params := defaultExitParams(t, store)
+	params.SCMAdapter = &scmAdapterStubExit{}
+	params.BotReviewReactionConfigured = true
+
+	HandleWorkerExit(state, WorkerResult{
+		IssueID:       "BR-1",
+		Identifier:    "BR-1-ident",
+		ExitKind:      WorkerExitNormal,
+		AgentAdapter:  "mock",
+		WorkspacePath: wsPath,
+	}, params)
+
+	rkey := ReactionKey("BR-1", ReactionKindBotReview)
+	pr, ok := state.PendingReactions[rkey]
+	if !ok {
+		t.Fatal("PendingReactions[BR-1:bot-review] missing after normal exit with PR metadata")
+	}
+	if pr.Kind != ReactionKindBotReview {
+		t.Errorf("PendingReaction.Kind = %q, want %q", pr.Kind, ReactionKindBotReview)
+	}
+	botData, ok := pr.KindData.(*BotReviewReactionData)
+	if !ok {
+		t.Fatalf("KindData type = %T, want *BotReviewReactionData", pr.KindData)
+	}
+	if botData.PRNumber != 55 {
+		t.Errorf("BotReviewReactionData.PRNumber = %d, want 55", botData.PRNumber)
+	}
+	if botData.Owner != "corp" {
+		t.Errorf("BotReviewReactionData.Owner = %q, want %q", botData.Owner, "corp")
+	}
+	if botData.Repo != "api" {
+		t.Errorf("BotReviewReactionData.Repo = %q, want %q", botData.Repo, "api")
+	}
+	if botData.Branch != "feature/BR-1" {
+		t.Errorf("BotReviewReactionData.Branch = %q, want %q", botData.Branch, "feature/BR-1")
+	}
+	if botData.SHA != "c0ffee" {
+		t.Errorf("BotReviewReactionData.SHA = %q, want %q", botData.SHA, "c0ffee")
+	}
+}
+
+// TestHandleWorkerExit_BotReviewEnqueueRequiresPRMetadata verifies that the
+// bot-review pending reaction is NOT created when the workspace SCM metadata
+// lacks any required field.
+func TestHandleWorkerExit_BotReviewEnqueueRequiresPRMetadata(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		content string
+	}{
+		{
+			name:    "missing pr_number",
+			content: `{"owner":"corp","repo":"api","branch":"feature/x","sha":"abc"}`,
+		},
+		{
+			name:    "missing owner",
+			content: `{"pr_number":10,"repo":"api","branch":"feature/x","sha":"abc"}`,
+		},
+		{
+			name:    "missing repo",
+			content: `{"pr_number":10,"owner":"corp","branch":"feature/x","sha":"abc"}`,
+		},
+		{
+			name:    "missing branch",
+			content: `{"pr_number":10,"owner":"corp","repo":"api","sha":"abc"}`,
+		},
+		{
+			name:    "empty scm file",
+			content: `{}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			wsPath := t.TempDir()
+			dotSortie := filepath.Join(wsPath, ".sortie")
+			if err := os.MkdirAll(dotSortie, 0o750); err != nil {
+				t.Fatalf("MkdirAll .sortie: %v", err)
+			}
+			if err := os.WriteFile(filepath.Join(dotSortie, "scm.json"), []byte(tt.content), 0o600); err != nil {
+				t.Fatalf("WriteFile scm.json: %v", err)
+			}
+
+			store := &mockExitStore{}
+			state := exitState(t, "BR-7", nil)
+			params := defaultExitParams(t, store)
+			params.SCMAdapter = &scmAdapterStubExit{}
+			params.BotReviewReactionConfigured = true
+
+			HandleWorkerExit(state, WorkerResult{
+				IssueID:       "BR-7",
+				Identifier:    "BR-7-ident",
+				ExitKind:      WorkerExitNormal,
+				AgentAdapter:  "mock",
+				WorkspacePath: wsPath,
+			}, params)
+
+			rkey := ReactionKey("BR-7", ReactionKindBotReview)
+			if _, ok := state.PendingReactions[rkey]; ok {
+				t.Errorf("PendingReactions[BR-7:bot-review] present despite incomplete SCM metadata (%s)", tt.name)
+			}
+		})
+	}
+}
+
+// TestHandleWorkerExit_BotReviewEnqueueRequiresConfigured verifies that the
+// bot-review pending reaction is NOT created when BotReviewReactionConfigured
+// is false, even with a valid SCM metadata file.
+func TestHandleWorkerExit_BotReviewEnqueueRequiresConfigured(t *testing.T) {
+	t.Parallel()
+
+	wsPath := t.TempDir()
+	writePRSCMMetadata(t, wsPath, 20, "corp", "api", "feature/BR-6", "deadbeef")
+
+	store := &mockExitStore{}
+	state := exitState(t, "BR-6", nil)
+	params := defaultExitParams(t, store)
+	params.SCMAdapter = &scmAdapterStubExit{}
+	params.BotReviewReactionConfigured = false
+
+	HandleWorkerExit(state, WorkerResult{
+		IssueID:       "BR-6",
+		Identifier:    "BR-6-ident",
+		ExitKind:      WorkerExitNormal,
+		AgentAdapter:  "mock",
+		WorkspacePath: wsPath,
+	}, params)
+
+	rkey := ReactionKey("BR-6", ReactionKindBotReview)
+	if _, ok := state.PendingReactions[rkey]; ok {
+		t.Error("PendingReactions[BR-6:bot-review] present despite BotReviewReactionConfigured=false")
+	}
+}
+
+// TestHandleWorkerExit_BotReviewEnqueueRequiresSCMAdapter verifies that the
+// bot-review pending reaction is NOT created when no SCM adapter is wired,
+// even when bot-review is configured.
+func TestHandleWorkerExit_BotReviewEnqueueRequiresSCMAdapter(t *testing.T) {
+	t.Parallel()
+
+	wsPath := t.TempDir()
+	writePRSCMMetadata(t, wsPath, 20, "corp", "api", "feature/BR-nil", "deadbeef")
+
+	store := &mockExitStore{}
+	state := exitState(t, "BR-nil", nil)
+	params := defaultExitParams(t, store)
+	params.SCMAdapter = nil
+	params.BotReviewReactionConfigured = true
+
+	HandleWorkerExit(state, WorkerResult{
+		IssueID:       "BR-nil",
+		Identifier:    "BR-nil-ident",
+		ExitKind:      WorkerExitNormal,
+		AgentAdapter:  "mock",
+		WorkspacePath: wsPath,
+	}, params)
+
+	rkey := ReactionKey("BR-nil", ReactionKindBotReview)
+	if _, ok := state.PendingReactions[rkey]; ok {
+		t.Error("PendingReactions[BR-nil:bot-review] present despite nil SCMAdapter")
+	}
+}
+
+// TestHandleWorkerExit_BotReviewEnqueueOnHandoff verifies that the bot-review
+// pending reaction is created after a successful handoff transition: the
+// reaction fires after the worker exits via the handoff path.
+func TestHandleWorkerExit_BotReviewEnqueueOnHandoff(t *testing.T) {
+	t.Parallel()
+
+	wsPath := t.TempDir()
+	writePRSCMMetadata(t, wsPath, 99, "corp", "api", "feature/BR-HO", "beefcafe")
+
+	store := &mockExitStore{}
+	tracker := &mockTrackerAdapter{}
+	state := exitStateWithIssue(t, "BR-HO", "In Progress")
+	params := defaultExitParams(t, store)
+	params.TrackerAdapter = tracker
+	params.HandoffState = "In Review"
+	params.ActiveStates = []string{"In Progress"}
+	params.SCMAdapter = &scmAdapterStubExit{}
+	params.BotReviewReactionConfigured = true
+
+	HandleWorkerExit(state, WorkerResult{
+		IssueID:       "BR-HO",
+		Identifier:    "BR-HO-ident",
+		ExitKind:      WorkerExitNormal,
+		AgentAdapter:  "mock",
+		WorkspacePath: wsPath,
+	}, params)
+
+	rkey := ReactionKey("BR-HO", ReactionKindBotReview)
+	pr, ok := state.PendingReactions[rkey]
+	if !ok {
+		t.Fatal("PendingReactions[BR-HO:bot-review] missing after handoff with PR metadata")
+	}
+	botData, ok := pr.KindData.(*BotReviewReactionData)
+	if !ok {
+		t.Fatalf("KindData type = %T, want *BotReviewReactionData", pr.KindData)
+	}
+	if botData.PRNumber != 99 {
+		t.Errorf("BotReviewReactionData.PRNumber = %d, want 99", botData.PRNumber)
+	}
+}
+
+// TestHandleWorkerExit_BotReviewEnqueueDoesNotOverwrite verifies the if-absent
+// guard: an existing bot-review pending reaction is not replaced on re-entry,
+// preserving in-progress debounce state.
+func TestHandleWorkerExit_BotReviewEnqueueDoesNotOverwrite(t *testing.T) {
+	t.Parallel()
+
+	wsPath := t.TempDir()
+	writePRSCMMetadata(t, wsPath, 10, "corp", "api", "feature/BR-DUP", "sha1")
+
+	store := &mockExitStore{}
+	state := exitState(t, "BR-DUP", nil)
+	params := defaultExitParams(t, store)
+	params.SCMAdapter = &scmAdapterStubExit{}
+	params.BotReviewReactionConfigured = true
+
+	existingEntry := &PendingReaction{
+		IssueID:    "BR-DUP",
+		Identifier: "BR-DUP-ident",
+		Kind:       ReactionKindBotReview,
+		KindData: &BotReviewReactionData{
+			PRNumber: 77,
+			Owner:    "original",
+			Repo:     "original",
+			Branch:   "original-branch",
+		},
+	}
+	rkey := ReactionKey("BR-DUP", ReactionKindBotReview)
+	state.PendingReactions[rkey] = existingEntry
+
+	HandleWorkerExit(state, WorkerResult{
+		IssueID:       "BR-DUP",
+		Identifier:    "BR-DUP-ident",
+		ExitKind:      WorkerExitNormal,
+		AgentAdapter:  "mock",
+		WorkspacePath: wsPath,
+	}, params)
+
+	got := state.PendingReactions[rkey]
+	if got != existingEntry {
+		t.Error("PendingReactions[BR-DUP:bot-review] was replaced; want existing entry preserved")
+	}
+	botData, ok := got.KindData.(*BotReviewReactionData)
+	if !ok {
+		t.Fatalf("KindData type = %T, want *BotReviewReactionData", got.KindData)
+	}
+	if botData.PRNumber != 77 {
+		t.Errorf("BotReviewReactionData.PRNumber = %d, want 77 (seeded value)", botData.PRNumber)
+	}
+}
+
+// TestHandleWorkerExit_BotReviewEnqueueSkippedWhenClaimReleased verifies that
+// the bot-review enqueue is gated on reactionEnqueueAllowed: a soft-stop
+// releases the claim before the enqueue check, so no pending reaction is
+// created even with complete PR metadata.
+func TestHandleWorkerExit_BotReviewEnqueueSkippedWhenClaimReleased(t *testing.T) {
+	t.Parallel()
+
+	wsPath := t.TempDir()
+	writePRSCMMetadata(t, wsPath, 12, "corp", "api", "feature/BR-SOFT", "sha999")
+
+	store := &mockExitStore{}
+	state := exitState(t, "BR-SOFT", nil)
+	params := defaultExitParams(t, store)
+	params.SCMAdapter = &scmAdapterStubExit{}
+	params.BotReviewReactionConfigured = true
+
+	HandleWorkerExit(state, WorkerResult{
+		IssueID:        "BR-SOFT",
+		Identifier:     "BR-SOFT-ident",
+		ExitKind:       WorkerExitNormal,
+		AgentAdapter:   "mock",
+		WorkspacePath:  wsPath,
+		SoftStop:       true,
+		SoftStopReason: "blocked",
+	}, params)
+
+	rkey := ReactionKey("BR-SOFT", ReactionKindBotReview)
+	if _, ok := state.PendingReactions[rkey]; ok {
+		t.Error("PendingReactions[BR-SOFT:bot-review] present after soft-stop; want absent (claim released before enqueue)")
+	}
+}

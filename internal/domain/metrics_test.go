@@ -75,4 +75,14 @@ func TestNoopMetricsSatisfiesInterface(t *testing.T) {
 	m.ObserveWorkerDuration("normal", 300.5)
 	m.ObserveWorkerDuration("error", 10.0)
 	m.ObserveWorkerDuration("cancelled", 45.2)
+
+	// Counters — IncBotReviewChecks
+	m.IncBotReviewChecks("dispatched")
+	m.IncBotReviewChecks("error")
+	m.IncBotReviewChecks("skipped")
+
+	// Counters — IncBotReviewEscalations
+	m.IncBotReviewEscalations("label")
+	m.IncBotReviewEscalations("comment")
+	m.IncBotReviewEscalations("error")
 }

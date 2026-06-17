@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"errors"
+	"math"
 	"testing"
 	"time"
 
@@ -156,6 +157,70 @@ func TestBuildBotReviewReactionConfig(t *testing.T) {
 				PollIntervalMS:       30000,
 				MaxContinuationTurns: 5,
 			},
+		},
+		{
+			name: "poll_interval_ms as int64 is valid",
+			rc: config.ReactionConfig{
+				Extra: map[string]any{"poll_interval_ms": int64(45000)},
+			},
+			want: BotReviewReactionConfig{
+				Escalation:           "label",
+				EscalationLabel:      "needs-human",
+				PollIntervalMS:       45000,
+				MaxContinuationTurns: 5,
+			},
+		},
+		{
+			name: "poll_interval_ms as whole float64 is valid",
+			rc: config.ReactionConfig{
+				Extra: map[string]any{"poll_interval_ms": float64(90000)},
+			},
+			want: BotReviewReactionConfig{
+				Escalation:           "label",
+				EscalationLabel:      "needs-human",
+				PollIntervalMS:       90000,
+				MaxContinuationTurns: 5,
+			},
+		},
+		{
+			name: "poll_interval_ms non-numeric type errors",
+			rc: config.ReactionConfig{
+				Extra: map[string]any{"poll_interval_ms": "fast"},
+			},
+			wantErr: true,
+		},
+		{
+			name: "poll_interval_ms fractional float64 errors",
+			rc: config.ReactionConfig{
+				Extra: map[string]any{"poll_interval_ms": float64(30000.5)},
+			},
+			wantErr: true,
+		},
+		{
+			name: "poll_interval_ms infinite float64 errors",
+			rc: config.ReactionConfig{
+				Extra: map[string]any{"poll_interval_ms": math.Inf(1)},
+			},
+			wantErr: true,
+		},
+		{
+			name: "max_continuation_turns valid override",
+			rc: config.ReactionConfig{
+				Extra: map[string]any{"max_continuation_turns": 8},
+			},
+			want: BotReviewReactionConfig{
+				Escalation:           "label",
+				EscalationLabel:      "needs-human",
+				PollIntervalMS:       60000,
+				MaxContinuationTurns: 8,
+			},
+		},
+		{
+			name: "max_continuation_turns non-numeric type errors",
+			rc: config.ReactionConfig{
+				Extra: map[string]any{"max_continuation_turns": "many"},
+			},
+			wantErr: true,
 		},
 		{
 			name: "max_continuation_turns <= 0 errors",
@@ -916,5 +981,330 @@ func TestReconcileBotReviewComments_TurnCapEscalates(t *testing.T) {
 	// ReactionAttempts for bot-review is NOT cleared.
 	if state.ReactionAttempts[botKey] != 5 {
 		t.Errorf("ReactionAttempts[%s] = %d, want 5 (residual counter preserved, R10)", botKey, state.ReactionAttempts[botKey])
+	}
+}
+
+// botReviewErrTrackerStub is a TrackerAdapter whose AddLabel and CommentIssue
+// return a configurable error, used to exercise the escalation error paths.
+type botReviewErrTrackerStub struct {
+	addLabelErr     error
+	commentErr      error
+	addLabelCalls   int
+	commentCalls    int
+	lastLabel       string
+	lastCommentText string
+}
+
+var _ domain.TrackerAdapter = (*botReviewErrTrackerStub)(nil)
+
+func (s *botReviewErrTrackerStub) FetchIssuesByStates(_ context.Context, _ []string) ([]domain.Issue, error) {
+	return nil, nil
+}
+func (s *botReviewErrTrackerStub) FetchCandidateIssues(_ context.Context) ([]domain.Issue, error) {
+	return nil, nil
+}
+func (s *botReviewErrTrackerStub) FetchIssueByID(_ context.Context, _ string) (domain.Issue, error) {
+	return domain.Issue{}, nil
+}
+func (s *botReviewErrTrackerStub) FetchIssueStatesByIDs(_ context.Context, _ []string) (map[string]string, error) {
+	return nil, nil
+}
+func (s *botReviewErrTrackerStub) FetchIssueStatesByIdentifiers(_ context.Context, _ []string) (map[string]string, error) {
+	return nil, nil
+}
+func (s *botReviewErrTrackerStub) FetchIssueComments(_ context.Context, _ string) ([]domain.Comment, error) {
+	return nil, nil
+}
+func (s *botReviewErrTrackerStub) TransitionIssue(_ context.Context, _, _ string) error {
+	return nil
+}
+func (s *botReviewErrTrackerStub) CommentIssue(_ context.Context, _, text string) error {
+	s.commentCalls++
+	s.lastCommentText = text
+	return s.commentErr
+}
+func (s *botReviewErrTrackerStub) AddLabel(_ context.Context, _, label string) error {
+	s.addLabelCalls++
+	s.lastLabel = label
+	return s.addLabelErr
+}
+
+// TestReconcileBotReviewComments_TTLDrop verifies that a bot-review pending
+// entry older than BotReviewPendingTTL is dropped without dispatch or fetch.
+func TestReconcileBotReviewComments_TTLDrop(t *testing.T) {
+	t.Parallel()
+
+	state := stateWithBotReviewReaction(t, "BOT-TTL", 10)
+	rkey := ReactionKey("BOT-TTL", ReactionKindBotReview)
+	// CreatedAt is botReviewBaseTime; advance now well past the TTL.
+	store := &reviewReconcileStore{}
+	metrics := newBotReviewMetricsSpy()
+	scm := &mockSCMAdapter{}
+	params := botReviewParams(store, scm, nil)
+	params.BotReviewPendingTTL = 1 * time.Minute
+	params.NowFunc = func() time.Time { return botReviewBaseTime.Add(2 * time.Minute) }
+
+	reconcileBotReviewComments(state, params, discardLogger(), context.Background(), metrics)
+
+	if _, ok := state.PendingReactions[rkey]; ok {
+		t.Error("PendingReactions entry present after TTL drop; want removed")
+	}
+	if scm.botCalls != 0 {
+		t.Errorf("FetchBotReviewComments calls = %d, want 0 (TTL drop before fetch)", scm.botCalls)
+	}
+	if _, ok := state.RetryAttempts["BOT-TTL"]; ok {
+		t.Error("retry scheduled after TTL drop; want none")
+	}
+}
+
+// TestReconcileBotReviewComments_ZeroPollIntervalUsesFallback verifies that a
+// zero PollIntervalMS falls back to the default backoff base when re-enqueuing
+// a pending entry with no actionable comments.
+func TestReconcileBotReviewComments_ZeroPollIntervalUsesFallback(t *testing.T) {
+	t.Parallel()
+
+	state := stateWithBotReviewReaction(t, "BOT-ZEROPOLL", 10)
+	rkey := ReactionKey("BOT-ZEROPOLL", ReactionKindBotReview)
+	store := &reviewReconcileStore{}
+	metrics := newBotReviewMetricsSpy()
+	scm := &mockSCMAdapter{botComments: []domain.ReviewComment{}}
+	params := botReviewParams(store, scm, nil)
+	params.BotReviewConfig.PollIntervalMS = 0 // forces fallback to reviewPendingBackoffBase
+
+	reconcileBotReviewComments(state, params, discardLogger(), context.Background(), metrics)
+
+	entry, ok := state.PendingReactions[rkey]
+	if !ok {
+		t.Fatal("PendingReactions entry dropped with zero poll interval; want re-enqueued")
+	}
+	wantRetryAt := botReviewBaseTime.Add(reviewPendingBackoffBase)
+	if !entry.PendingRetryAt.Equal(wantRetryAt) {
+		t.Errorf("PendingRetryAt = %v, want %v (fallback backoff base)", entry.PendingRetryAt, wantRetryAt)
+	}
+}
+
+// TestReconcileBotReviewComments_UpsertFingerprintError_StillDispatches verifies
+// that an UpsertReactionFingerprint failure is logged but does not prevent
+// dispatch when actionable comments exist.
+func TestReconcileBotReviewComments_UpsertFingerprintError_StillDispatches(t *testing.T) {
+	t.Parallel()
+
+	state := stateWithBotReviewReaction(t, "BOT-UPFP", 10)
+	rkey := ReactionKey("BOT-UPFP", ReactionKindBotReview)
+	store := &reviewReconcileStore{
+		upsertFingerprintErr: errors.New("upsert failed"),
+	}
+	metrics := newBotReviewMetricsSpy()
+	scm := &mockSCMAdapter{botComments: []domain.ReviewComment{{ID: "u1", Body: "fix me"}}}
+	params := botReviewParams(store, scm, nil)
+
+	reconcileBotReviewComments(state, params, discardLogger(), context.Background(), metrics)
+
+	if _, ok := state.PendingReactions[rkey]; ok {
+		t.Error("PendingReactions entry still present after dispatch despite upsert error; want consumed")
+	}
+	if _, ok := state.RetryAttempts["BOT-UPFP"]; !ok {
+		t.Error("retry not scheduled despite actionable comments; upsert error must not block dispatch")
+	}
+	if metrics.botReviewChecks["dispatched"] != 1 {
+		t.Errorf(`IncBotReviewChecks("dispatched") = %d, want 1`, metrics.botReviewChecks["dispatched"])
+	}
+}
+
+// TestReconcileBotReviewComments_GetFingerprintError_ProceedsWithoutDedup
+// verifies that a GetReactionFingerprint failure is logged but dispatch still
+// proceeds without the dedup short-circuit.
+func TestReconcileBotReviewComments_GetFingerprintError_ProceedsWithoutDedup(t *testing.T) {
+	t.Parallel()
+
+	state := stateWithBotReviewReaction(t, "BOT-GETFP", 10)
+	rkey := ReactionKey("BOT-GETFP", ReactionKindBotReview)
+	store := &reviewReconcileStore{
+		getFingerprintErr: errors.New("get failed"),
+	}
+	metrics := newBotReviewMetricsSpy()
+	scm := &mockSCMAdapter{botComments: []domain.ReviewComment{{ID: "g1", Body: "fix me"}}}
+	params := botReviewParams(store, scm, nil)
+
+	reconcileBotReviewComments(state, params, discardLogger(), context.Background(), metrics)
+
+	if _, ok := state.PendingReactions[rkey]; ok {
+		t.Error("PendingReactions entry still present after dispatch despite get-fingerprint error; want consumed")
+	}
+	if _, ok := state.RetryAttempts["BOT-GETFP"]; !ok {
+		t.Error("retry not scheduled; get-fingerprint error must fall through to dispatch")
+	}
+	if metrics.botReviewChecks["dispatched"] != 1 {
+		t.Errorf(`IncBotReviewChecks("dispatched") = %d, want 1`, metrics.botReviewChecks["dispatched"])
+	}
+}
+
+// TestEscalateBotReviewFailure_LabelDefaultsWhenEmpty verifies that the "label"
+// escalation uses the "needs-human" default when EscalationLabel is empty.
+func TestEscalateBotReviewFailure_LabelDefaultsWhenEmpty(t *testing.T) {
+	t.Parallel()
+
+	issueID := "ESC-LABEL-DEFAULT"
+	state := NewState(5000, 4, nil, AgentTotals{})
+	botKey := ReactionKey(issueID, ReactionKindBotReview)
+	botPending := &PendingReaction{
+		IssueID:   issueID,
+		Kind:      ReactionKindBotReview,
+		CreatedAt: botReviewBaseTime,
+		KindData:  &BotReviewReactionData{PRNumber: 10, Owner: "o", Repo: "r"},
+	}
+	state.PendingReactions[botKey] = botPending
+
+	store := &reviewReconcileStore{}
+	metrics := newBotReviewMetricsSpy()
+	tracker := &botReviewErrTrackerStub{}
+	params := botReviewParams(store, &mockSCMAdapter{}, tracker)
+	params.BotReviewConfig = BotReviewReactionConfig{
+		Escalation:           "label",
+		EscalationLabel:      "", // empty → defaults to needs-human
+		MaxContinuationTurns: 5,
+		PollIntervalMS:       60000,
+	}
+
+	botData := botPending.KindData.(*BotReviewReactionData)
+	escalateBotReviewFailure(state, params, botPending, 5, botData, discardLogger(), context.Background(), metrics)
+	state.TrackerOpsWg.Wait()
+
+	if tracker.addLabelCalls != 1 {
+		t.Fatalf("AddLabel calls = %d, want 1", tracker.addLabelCalls)
+	}
+	if tracker.lastLabel != "needs-human" {
+		t.Errorf("AddLabel label = %q, want %q (default)", tracker.lastLabel, "needs-human")
+	}
+	if metrics.botReviewEscalations["label"] != 1 {
+		t.Errorf(`IncBotReviewEscalations("label") = %d, want 1`, metrics.botReviewEscalations["label"])
+	}
+}
+
+// TestEscalateBotReviewFailure_LabelActionError verifies that a failing AddLabel
+// records the "error" escalation metric and still removes the bot-review slot.
+func TestEscalateBotReviewFailure_LabelActionError(t *testing.T) {
+	t.Parallel()
+
+	issueID := "ESC-LABEL-ERR"
+	state := NewState(5000, 4, nil, AgentTotals{})
+	botKey := ReactionKey(issueID, ReactionKindBotReview)
+	botPending := &PendingReaction{
+		IssueID:   issueID,
+		Kind:      ReactionKindBotReview,
+		CreatedAt: botReviewBaseTime,
+		KindData:  &BotReviewReactionData{PRNumber: 11, Owner: "o", Repo: "r"},
+	}
+	state.PendingReactions[botKey] = botPending
+
+	store := &reviewReconcileStore{}
+	metrics := newBotReviewMetricsSpy()
+	tracker := &botReviewErrTrackerStub{addLabelErr: errors.New("label api failed")}
+	params := botReviewParams(store, &mockSCMAdapter{}, tracker)
+	params.BotReviewConfig = BotReviewReactionConfig{
+		Escalation:           "label",
+		EscalationLabel:      "needs-human",
+		MaxContinuationTurns: 5,
+		PollIntervalMS:       60000,
+	}
+
+	botData := botPending.KindData.(*BotReviewReactionData)
+	escalateBotReviewFailure(state, params, botPending, 5, botData, discardLogger(), context.Background(), metrics)
+	state.TrackerOpsWg.Wait()
+
+	if tracker.addLabelCalls != 1 {
+		t.Fatalf("AddLabel calls = %d, want 1", tracker.addLabelCalls)
+	}
+	if metrics.botReviewEscalations["error"] != 1 {
+		t.Errorf(`IncBotReviewEscalations("error") = %d, want 1 on AddLabel failure`, metrics.botReviewEscalations["error"])
+	}
+	if metrics.botReviewEscalations["label"] != 0 {
+		t.Errorf(`IncBotReviewEscalations("label") = %d, want 0 on AddLabel failure`, metrics.botReviewEscalations["label"])
+	}
+	if _, ok := state.PendingReactions[botKey]; ok {
+		t.Error("bot-review slot still present after label-error escalation; want removed")
+	}
+}
+
+// TestEscalateBotReviewFailure_CommentActionError verifies that a failing
+// CommentIssue records the "error" escalation metric.
+func TestEscalateBotReviewFailure_CommentActionError(t *testing.T) {
+	t.Parallel()
+
+	issueID := "ESC-COMMENT-ERR"
+	state := NewState(5000, 4, nil, AgentTotals{})
+	botKey := ReactionKey(issueID, ReactionKindBotReview)
+	botPending := &PendingReaction{
+		IssueID:   issueID,
+		Kind:      ReactionKindBotReview,
+		CreatedAt: botReviewBaseTime,
+		KindData:  &BotReviewReactionData{PRNumber: 21, Owner: "o", Repo: "r"},
+	}
+	state.PendingReactions[botKey] = botPending
+
+	store := &reviewReconcileStore{}
+	metrics := newBotReviewMetricsSpy()
+	tracker := &botReviewErrTrackerStub{commentErr: errors.New("comment api failed")}
+	params := botReviewParams(store, &mockSCMAdapter{}, tracker)
+	params.BotReviewConfig = BotReviewReactionConfig{
+		Escalation:           "comment",
+		MaxContinuationTurns: 5,
+		PollIntervalMS:       60000,
+	}
+
+	botData := botPending.KindData.(*BotReviewReactionData)
+	escalateBotReviewFailure(state, params, botPending, 5, botData, discardLogger(), context.Background(), metrics)
+	state.TrackerOpsWg.Wait()
+
+	if tracker.commentCalls != 1 {
+		t.Fatalf("CommentIssue calls = %d, want 1", tracker.commentCalls)
+	}
+	if metrics.botReviewEscalations["error"] != 1 {
+		t.Errorf(`IncBotReviewEscalations("error") = %d, want 1 on CommentIssue failure`, metrics.botReviewEscalations["error"])
+	}
+	if metrics.botReviewEscalations["comment"] != 0 {
+		t.Errorf(`IncBotReviewEscalations("comment") = %d, want 0 on CommentIssue failure`, metrics.botReviewEscalations["comment"])
+	}
+}
+
+// TestEscalateBotReviewFailure_DeleteFingerprintError verifies that a failing
+// DeleteReactionFingerprint during escalation is logged but does not panic and
+// the bot-review slot is still removed.
+func TestEscalateBotReviewFailure_DeleteFingerprintError(t *testing.T) {
+	t.Parallel()
+
+	issueID := "ESC-DELFP-ERR"
+	state := NewState(5000, 4, nil, AgentTotals{})
+	botKey := ReactionKey(issueID, ReactionKindBotReview)
+	botPending := &PendingReaction{
+		IssueID:   issueID,
+		Kind:      ReactionKindBotReview,
+		CreatedAt: botReviewBaseTime,
+		KindData:  &BotReviewReactionData{PRNumber: 31, Owner: "o", Repo: "r"},
+	}
+	state.PendingReactions[botKey] = botPending
+
+	store := &reviewReconcileStore{deleteFingerprintErr: errors.New("delete failed")}
+	metrics := newBotReviewMetricsSpy()
+	tracker := &reviewTrackerStub{}
+	params := botReviewParams(store, &mockSCMAdapter{}, tracker)
+	params.BotReviewConfig = BotReviewReactionConfig{
+		Escalation:           "label",
+		EscalationLabel:      "needs-human",
+		MaxContinuationTurns: 5,
+		PollIntervalMS:       60000,
+	}
+
+	botData := botPending.KindData.(*BotReviewReactionData)
+
+	// Must not panic despite the delete error.
+	escalateBotReviewFailure(state, params, botPending, 5, botData, discardLogger(), context.Background(), metrics)
+	state.TrackerOpsWg.Wait()
+
+	if store.deleteFingerprintCalls != 1 {
+		t.Errorf("DeleteReactionFingerprint calls = %d, want 1", store.deleteFingerprintCalls)
+	}
+	if _, ok := state.PendingReactions[botKey]; ok {
+		t.Error("bot-review slot still present after delete-fingerprint error; want removed")
 	}
 }

@@ -133,6 +133,8 @@ func TestNewPromMetrics(t *testing.T) {
 	m.IncCIEscalations("label")
 	m.IncReviewChecks("dispatched")
 	m.IncReviewEscalations("label")
+	m.IncBotReviewChecks("dispatched")
+	m.IncBotReviewEscalations("label")
 	m.IncAutoMergeReactions("merged")
 	m.IncDispatchRuleMatch("rule", "bug-rule")
 	m.IncSelfReviewIterations("pass")
@@ -821,6 +823,74 @@ func TestPromMetrics_AutoMergeCounter(t *testing.T) {
 		}
 		if got := counterValue(t, families, "sortie_reactions_auto_merge_total", map[string]string{"result": "escalated"}); got != 1 {
 			t.Errorf("sortie_reactions_auto_merge_total{result=escalated} = %v, want 1", got)
+		}
+	})
+}
+
+func TestPromMetrics_BotReviewCounters(t *testing.T) {
+	t.Parallel()
+
+	t.Run("IncBotReviewChecks_Dispatched", func(t *testing.T) {
+		t.Parallel()
+		m := newTestMetrics(t)
+		m.IncBotReviewChecks("dispatched")
+		families := gatherFamilies(t, m)
+		got := counterValue(t, families, "sortie_bot_review_checks_total", map[string]string{"result": "dispatched"})
+		if got != 1 {
+			t.Errorf("sortie_bot_review_checks_total{result=dispatched} = %v, want 1", got)
+		}
+	})
+
+	t.Run("IncBotReviewChecks_Error_Twice", func(t *testing.T) {
+		t.Parallel()
+		m := newTestMetrics(t)
+		m.IncBotReviewChecks("error")
+		m.IncBotReviewChecks("error")
+		families := gatherFamilies(t, m)
+		got := counterValue(t, families, "sortie_bot_review_checks_total", map[string]string{"result": "error"})
+		if got != 2 {
+			t.Errorf("sortie_bot_review_checks_total{result=error} = %v, want 2", got)
+		}
+	})
+
+	t.Run("IncBotReviewChecks_MultipleLabels_Independent", func(t *testing.T) {
+		t.Parallel()
+		m := newTestMetrics(t)
+		m.IncBotReviewChecks("dispatched")
+		m.IncBotReviewChecks("dispatched")
+		m.IncBotReviewChecks("error")
+		families := gatherFamilies(t, m)
+		if got := counterValue(t, families, "sortie_bot_review_checks_total", map[string]string{"result": "dispatched"}); got != 2 {
+			t.Errorf("sortie_bot_review_checks_total{result=dispatched} = %v, want 2", got)
+		}
+		if got := counterValue(t, families, "sortie_bot_review_checks_total", map[string]string{"result": "error"}); got != 1 {
+			t.Errorf("sortie_bot_review_checks_total{result=error} = %v, want 1", got)
+		}
+	})
+
+	t.Run("IncBotReviewEscalations_Label", func(t *testing.T) {
+		t.Parallel()
+		m := newTestMetrics(t)
+		m.IncBotReviewEscalations("label")
+		families := gatherFamilies(t, m)
+		got := counterValue(t, families, "sortie_bot_review_escalations_total", map[string]string{"action": "label"})
+		if got != 1 {
+			t.Errorf("sortie_bot_review_escalations_total{action=label} = %v, want 1", got)
+		}
+	})
+
+	t.Run("IncBotReviewEscalations_CommentAndError_Independent", func(t *testing.T) {
+		t.Parallel()
+		m := newTestMetrics(t)
+		m.IncBotReviewEscalations("comment")
+		m.IncBotReviewEscalations("error")
+		m.IncBotReviewEscalations("error")
+		families := gatherFamilies(t, m)
+		if got := counterValue(t, families, "sortie_bot_review_escalations_total", map[string]string{"action": "comment"}); got != 1 {
+			t.Errorf("sortie_bot_review_escalations_total{action=comment} = %v, want 1", got)
+		}
+		if got := counterValue(t, families, "sortie_bot_review_escalations_total", map[string]string{"action": "error"}); got != 2 {
+			t.Errorf("sortie_bot_review_escalations_total{action=error} = %v, want 2", got)
 		}
 	})
 }

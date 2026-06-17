@@ -1,0 +1,41 @@
+[
+  {
+    "id": 700,
+    "path": "internal/handler.go",
+    "start_line": 10,
+    "line": 12,
+    "position": 4,
+    "body": "Bot finding: unchecked error.",
+    "user": {
+      "login": "golangci-lint[bot]",
+      "type": "Bot"
+    },
+    "created_at": "2026-04-01T10:10:00Z"
+  },
+  {
+    "id": 701,
+    "path": "internal/handler.go",
+    "start_line": 15,
+    "line": 15,
+    "position": 5,
+    "body": "Human reviewer note, not a bot.",
+    "user": {
+      "login": "alice",
+      "type": "User"
+    },
+    "created_at": "2026-04-01T10:11:00Z"
+  },
+  {
+    "id": 700,
+    "path": "internal/handler.go",
+    "start_line": 10,
+    "line": 12,
+    "position": 4,
+    "body": "Bot finding: unchecked error.",
+    "user": {
+      "login": "golangci-lint[bot]",
+      "type": "Bot"
+    },
+    "created_at": "2026-04-01T10:10:00Z"
+  }
+]
