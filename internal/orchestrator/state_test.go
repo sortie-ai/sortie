@@ -1192,3 +1192,164 @@ func TestRuntimeSnapshot_SelfReviewFields(t *testing.T) {
 		})
 	}
 }
+
+// --- isKnownReactionKind merge-conflict case ---
+
+func TestIsKnownReactionKind_AcceptsMergeConflict(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		kind string
+		want bool
+	}{
+		{ReactionKindMergeConflict, true},
+		{"merge-conflict", true},
+		{ReactionKindBotReview, true},
+		{ReactionKindAutoMerge, true},
+		{"merge_conflicts", false}, // the YAML key, not the runtime discriminator
+		{"merge_conflict", false},  // the template variable, not the discriminator
+		{"unknown", false},
+		{"", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.kind, func(t *testing.T) {
+			t.Parallel()
+			if got := isKnownReactionKind(tt.kind); got != tt.want {
+				t.Errorf("isKnownReactionKind(%q) = %v, want %v", tt.kind, got, tt.want)
+			}
+		})
+	}
+}
+
+// --- BuildMergeConflictReactionConfig tests ---
+
+func TestBuildMergeConflictReactionConfig(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		rc      config.ReactionConfig
+		want    MergeConflictReactionConfig
+		wantErr bool
+	}{
+		{
+			name: "all defaults",
+			rc:   config.ReactionConfig{MaxRetries: 1},
+			want: MergeConflictReactionConfig{
+				Escalation:      "label",
+				EscalationLabel: "needs-human",
+				PollIntervalMS:  60000,
+				MaxRetries:      1,
+			},
+		},
+		{
+			name: "max_retries consumed verbatim from rc",
+			rc:   config.ReactionConfig{MaxRetries: 3},
+			want: MergeConflictReactionConfig{
+				Escalation:      "label",
+				EscalationLabel: "needs-human",
+				PollIntervalMS:  60000,
+				MaxRetries:      3,
+			},
+		},
+		{
+			name: "max_retries zero is consumed verbatim (no default re-application)",
+			rc:   config.ReactionConfig{MaxRetries: 0},
+			want: MergeConflictReactionConfig{
+				Escalation:      "label",
+				EscalationLabel: "needs-human",
+				PollIntervalMS:  60000,
+				MaxRetries:      0,
+			},
+		},
+		{
+			name: "explicit comment escalation",
+			rc:   config.ReactionConfig{Escalation: "comment", MaxRetries: 1},
+			want: MergeConflictReactionConfig{
+				Escalation:      "comment",
+				EscalationLabel: "needs-human",
+				PollIntervalMS:  60000,
+				MaxRetries:      1,
+			},
+		},
+		{
+			name: "custom escalation label",
+			rc:   config.ReactionConfig{Escalation: "label", EscalationLabel: "conflict-stuck", MaxRetries: 1},
+			want: MergeConflictReactionConfig{
+				Escalation:      "label",
+				EscalationLabel: "conflict-stuck",
+				PollIntervalMS:  60000,
+				MaxRetries:      1,
+			},
+		},
+		{
+			name: "poll_interval_ms override above floor",
+			rc:   config.ReactionConfig{MaxRetries: 1, Extra: map[string]any{"poll_interval_ms": 120000}},
+			want: MergeConflictReactionConfig{
+				Escalation:      "label",
+				EscalationLabel: "needs-human",
+				PollIntervalMS:  120000,
+				MaxRetries:      1,
+			},
+		},
+		{
+			name: "poll_interval_ms exactly at floor is valid",
+			rc:   config.ReactionConfig{MaxRetries: 1, Extra: map[string]any{"poll_interval_ms": 30000}},
+			want: MergeConflictReactionConfig{
+				Escalation:      "label",
+				EscalationLabel: "needs-human",
+				PollIntervalMS:  30000,
+				MaxRetries:      1,
+			},
+		},
+		{
+			name:    "poll_interval_ms below floor errors",
+			rc:      config.ReactionConfig{Extra: map[string]any{"poll_interval_ms": 29999}},
+			wantErr: true,
+		},
+		{
+			name:    "invalid escalation value errors",
+			rc:      config.ReactionConfig{Escalation: "webhook"},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := BuildMergeConflictReactionConfig(tt.rc)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("BuildMergeConflictReactionConfig(%+v) = %+v, want error", tt.rc, got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("BuildMergeConflictReactionConfig(%+v) unexpected error: %v", tt.rc, err)
+			}
+			if got != tt.want {
+				t.Errorf("BuildMergeConflictReactionConfig(%+v) = %+v, want %+v", tt.rc, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestBuildMergeConflictReactionConfig_EmptyEscalationDefaultsToLabel verifies
+// that an empty escalation defaults to "label" (the direct-call safety net,
+// independent of the config-layer default).
+func TestBuildMergeConflictReactionConfig_EmptyEscalationDefaultsToLabel(t *testing.T) {
+	t.Parallel()
+
+	got, err := BuildMergeConflictReactionConfig(config.ReactionConfig{MaxRetries: 1})
+	if err != nil {
+		t.Fatalf("BuildMergeConflictReactionConfig: %v", err)
+	}
+	if got.Escalation != "label" {
+		t.Errorf("Escalation = %q, want %q (empty defaults to label)", got.Escalation, "label")
+	}
+	if got.EscalationLabel != "needs-human" {
+		t.Errorf("EscalationLabel = %q, want %q (empty defaults to needs-human)", got.EscalationLabel, "needs-human")
+	}
+}

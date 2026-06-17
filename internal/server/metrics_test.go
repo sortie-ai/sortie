@@ -894,3 +894,57 @@ func TestPromMetrics_BotReviewCounters(t *testing.T) {
 		}
 	})
 }
+
+func TestPromMetrics_MergeConflictCounters(t *testing.T) {
+	t.Parallel()
+
+	t.Run("IncMergeConflictChecks_AllFourResults_Independent", func(t *testing.T) {
+		t.Parallel()
+		m := newTestMetrics(t)
+		m.IncMergeConflictChecks("dispatched")
+		m.IncMergeConflictChecks("dispatched")
+		m.IncMergeConflictChecks("error")
+		m.IncMergeConflictChecks("unknown")
+		m.IncMergeConflictChecks("unknown")
+		m.IncMergeConflictChecks("unknown")
+		m.IncMergeConflictChecks("clear")
+		families := gatherFamilies(t, m)
+
+		want := map[string]float64{
+			"dispatched": 2,
+			"error":      1,
+			"unknown":    3,
+			"clear":      1,
+		}
+		for result, wantCount := range want {
+			got := counterValue(t, families, "sortie_merge_conflict_checks_total", map[string]string{"result": result})
+			if got != wantCount {
+				t.Errorf("sortie_merge_conflict_checks_total{result=%s} = %v, want %v", result, got, wantCount)
+			}
+		}
+	})
+
+	t.Run("IncMergeConflictEscalations_AllThreeActions_Independent", func(t *testing.T) {
+		t.Parallel()
+		m := newTestMetrics(t)
+		m.IncMergeConflictEscalations("label")
+		m.IncMergeConflictEscalations("comment")
+		m.IncMergeConflictEscalations("comment")
+		m.IncMergeConflictEscalations("error")
+		m.IncMergeConflictEscalations("error")
+		m.IncMergeConflictEscalations("error")
+		families := gatherFamilies(t, m)
+
+		want := map[string]float64{
+			"label":   1,
+			"comment": 2,
+			"error":   3,
+		}
+		for action, wantCount := range want {
+			got := counterValue(t, families, "sortie_merge_conflict_escalations_total", map[string]string{"action": action})
+			if got != wantCount {
+				t.Errorf("sortie_merge_conflict_escalations_total{action=%s} = %v, want %v", action, got, wantCount)
+			}
+		}
+	})
+}

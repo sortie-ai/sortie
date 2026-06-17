@@ -191,6 +191,68 @@ func TestSampleWorkflowRender(t *testing.T) {
 	}
 }
 
+// shippedExampleWorkflows are the operator-facing templates that carry a
+// continuation region and a {{ if .merge_conflict }} branch. WORKFLOW.test.md
+// is excluded: it is a minimal single-block fixture with no continuation
+// region.
+var shippedExampleWorkflows = []string{
+	"WORKFLOW.md",
+	"WORKFLOW.codex.md",
+	"WORKFLOW.copilot.md",
+	"WORKFLOW.opencode.md",
+	"WORKFLOW.linear.md",
+	"WORKFLOW.kiro.md",
+}
+
+// TestSampleWorkflowMergeConflictBranch verifies AC13: each shipped example
+// workflow renders under missingkey=error both when merge_conflict is nil (the
+// branch is skipped, no error) and when it is populated (the branch renders and
+// the output carries the real base named by .merge_conflict.base).
+func TestSampleWorkflowMergeConflictBranch(t *testing.T) {
+	t.Parallel()
+
+	for _, file := range shippedExampleWorkflows {
+		t.Run(file, func(t *testing.T) {
+			t.Parallel()
+
+			tmpl := loadSampleWorkflow(t, file)
+
+			// merge_conflict nil: the branch is skipped, render must not error
+			// under missingkey=error.
+			rc := prompt.RunContext{TurnNumber: 1, MaxTurns: 15, IsContinuation: false}
+			nilOut, err := tmpl.Render(fullIssue(), nil, rc)
+			if err != nil {
+				t.Fatalf("Render(%s, merge_conflict=nil): %v", file, err)
+			}
+			if strings.Contains(nilOut, "release/2.0") {
+				t.Errorf("Render(%s, merge_conflict=nil) leaked base %q; want branch skipped", file, "release/2.0")
+			}
+
+			// merge_conflict populated: the branch renders and the output must
+			// contain the real base value, not a hardcoded default.
+			mergeConflict := map[string]any{
+				"pr_number": 99,
+				"branch":    "feature/conflict",
+				"head_sha":  "deadbeef",
+				"base":      "release/2.0",
+			}
+			contRC := prompt.RunContext{TurnNumber: 3, MaxTurns: 15, IsContinuation: true}
+			gotOut, err := tmpl.Render(fullIssue(), nil, contRC,
+				prompt.WithContinuationContext(map[string]any{"merge_conflict": mergeConflict}),
+			)
+			if err != nil {
+				t.Fatalf("Render(%s, merge_conflict populated): %v", file, err)
+			}
+			if !strings.Contains(gotOut, "release/2.0") {
+				t.Errorf("Render(%s, merge_conflict populated) output missing base %q (want .merge_conflict.base interpolated)", file, "release/2.0")
+			}
+			if !strings.Contains(gotOut, "feature/conflict") {
+				t.Errorf("Render(%s, merge_conflict populated) output missing head branch %q", file, "feature/conflict")
+			}
+		})
+	}
+}
+
 func TestSampleWorkflowContinuationShorter(t *testing.T) {
 	t.Parallel()
 
