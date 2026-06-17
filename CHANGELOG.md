@@ -9,27 +9,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Bot-review reaction kind: automated review-bot comments (linters,
-  static analyzers, security scanners, and AI reviewers) on a
-  Sortie-created pull request are now detected separately from human
-  review comments and routed back into the agent session as
-  continuation turns. Enable it with a `reactions.bot_review` block in
-  WORKFLOW.md: `provider` activates the kind (an empty provider leaves
-  it inactive), `bot_usernames` is an allowlist of bot login names,
-  `max_continuation_turns` caps continuation attempts (default 5),
-  `poll_interval_ms` sets the poll cadence (default 60000, minimum
-  30000), and `escalation` (`label` or `comment`, default `label`)
-  with `escalation_label` (default `needs-human`) controls handoff
-  once the budget is exhausted. Comments are classified as bot-authored
-  by the platform author type or the configured username allowlist,
-  never by comment content. Unlike human review comments, bot comments
-  dispatch immediately with no debounce window and carry an independent
-  retry budget, fingerprint, and escalation config, so the bot-review
-  and human-review kinds never interfere on the same pull request.
-  Visible on startup as a `bot review routing enabled` log line and via
-  the `sortie_bot_review_checks_total` and
-  `sortie_bot_review_escalations_total` metrics.
+- Bot-review reaction kind: review-bot comments (linters, static
+  analyzers, security scanners, and AI reviewers) on a Sortie-created
+  pull request are now detected and routed back into the agent session
+  as continuation turns, separately from human review comments.
+  Configure it with a `reactions.bot_review` block in WORKFLOW.md, where
+  `provider` activates the kind, `bot_usernames` allowlists bot logins,
+  and `max_continuation_turns`, `poll_interval_ms`, and `escalation`
+  tune the retry budget, poll cadence, and handoff. A comment is
+  classified as bot-authored by its platform author type or the
+  allowlist, never by its content; bot comments dispatch immediately
+  with no debounce window and own an independent retry budget,
+  fingerprint, and escalation, so the bot-review and human-review kinds
+  never interfere on the same pull request.
   ([#415](https://github.com/sortie-ai/sortie/issues/415))
+
+- Merge-conflict reaction kind: the orchestrator now polls mergeability
+  of each open Sortie-managed pull request per reconcile cycle and, on a
+  no-conflict-to-conflict transition, dispatches a single continuation
+  turn that rebases the PR branch onto its base and resolves the
+  conflicts on the existing workspace. Configure it with a
+  `reactions.merge_conflicts` block in WORKFLOW.md, where `provider`
+  activates the kind and `max_retries`, `poll_interval_ms`, and
+  `escalation` tune the retry budget, poll cadence, and handoff; the
+  retry budget defaults lower than other reaction kinds because conflict
+  resolution rarely succeeds on retry. Tracking is episodic: resolving a
+  conflict resets the budget, so a later independent conflict gets a
+  fresh attempt rather than immediate escalation.
+  ([#416](https://github.com/sortie-ai/sortie/issues/416))
 
 ### Changed
 

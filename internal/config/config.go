@@ -1185,7 +1185,14 @@ func buildReactionsConfig(m map[string]any) (map[string]ReactionConfig, error) {
 			}
 		}
 
+		// Merge-conflict resolution is less likely to succeed on retry
+		// than CI or review fixes, so it defaults to a single attempt;
+		// every other kind keeps the default of two. An operator-set
+		// value below still wins.
 		maxRetries := 2
+		if k == "merge_conflicts" {
+			maxRetries = 1
+		}
 		if raw, exists := vm["max_retries"]; exists && raw != nil {
 			parsed, parseErr := coerceInt(raw)
 			if parseErr != nil {

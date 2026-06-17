@@ -920,6 +920,63 @@ func TestNewServiceConfig(t *testing.T) {
 		assertStringEqual(t, "Reactions[ci].EscalationLabel", "needs-human", rc.EscalationLabel)
 	})
 
+	t.Run("Reactions/MergeConflictsDefaultMaxRetriesOne", func(t *testing.T) {
+		t.Parallel()
+		cfg, err := NewServiceConfig(map[string]any{
+			"reactions": map[string]any{
+				"merge_conflicts": map[string]any{},
+			},
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		rc := cfg.Reactions["merge_conflicts"]
+		assertIntEqual(t, "Reactions[merge_conflicts].MaxRetries", 1, rc.MaxRetries)
+		assertStringEqual(t, "Reactions[merge_conflicts].Escalation", "label", rc.Escalation)
+		assertStringEqual(t, "Reactions[merge_conflicts].EscalationLabel", "needs-human", rc.EscalationLabel)
+	})
+
+	t.Run("Reactions/MergeConflictsExplicitMaxRetriesOverrides", func(t *testing.T) {
+		t.Parallel()
+		cfg, err := NewServiceConfig(map[string]any{
+			"reactions": map[string]any{
+				"merge_conflicts": map[string]any{
+					"max_retries": 3,
+					"escalation":  "comment",
+				},
+			},
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		rc := cfg.Reactions["merge_conflicts"]
+		assertIntEqual(t, "Reactions[merge_conflicts].MaxRetries", 3, rc.MaxRetries)
+		assertStringEqual(t, "Reactions[merge_conflicts].Escalation", "comment", rc.Escalation)
+	})
+
+	t.Run("Reactions/MergeConflictsDefaultLeavesOtherKindsUnchanged", func(t *testing.T) {
+		t.Parallel()
+		// The per-kind default-of-1 switch must apply ONLY to merge_conflicts.
+		// Every sibling kind keeps its current effective default of 2.
+		cfg, err := NewServiceConfig(map[string]any{
+			"reactions": map[string]any{
+				"merge_conflicts": map[string]any{},
+				"ci_failure":      map[string]any{"provider": "github"},
+				"review_comments": map[string]any{},
+				"auto_merge":      map[string]any{"provider": "github"},
+				"bot_review":      map[string]any{"provider": "github"},
+			},
+		})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		assertIntEqual(t, "Reactions[merge_conflicts].MaxRetries", 1, cfg.Reactions["merge_conflicts"].MaxRetries)
+		assertIntEqual(t, "Reactions[review_comments].MaxRetries", 2, cfg.Reactions["review_comments"].MaxRetries)
+		assertIntEqual(t, "Reactions[auto_merge].MaxRetries", 2, cfg.Reactions["auto_merge"].MaxRetries)
+		assertIntEqual(t, "Reactions[bot_review].MaxRetries", 2, cfg.Reactions["bot_review"].MaxRetries)
+	})
+
 	t.Run("Reactions/UnknownKeyStoredInExtra", func(t *testing.T) {
 		t.Parallel()
 		cfg, err := NewServiceConfig(map[string]any{

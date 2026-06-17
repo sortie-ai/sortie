@@ -661,3 +661,88 @@ func TestRender_WithContinuationContext(t *testing.T) {
 		}
 	})
 }
+
+func TestRender_MergeConflict(t *testing.T) {
+	t.Parallel()
+
+	issue := map[string]any{"title": "Resolve conflicts"}
+	run := RunContext{TurnNumber: 2, MaxTurns: 5, IsContinuation: true}
+
+	mergeConflict := map[string]any{
+		"pr_number": 142,
+		"branch":    "feature/x",
+		"head_sha":  "abc123",
+		"base":      "release/2.0",
+	}
+
+	t.Run("MergeConflict_RendersWithoutMissingKeyError", func(t *testing.T) {
+		t.Parallel()
+
+		tmpl, err := Parse(`{{ if .merge_conflict }}has-conflict{{ end }}`, "WORKFLOW.md", 0)
+		if err != nil {
+			t.Fatalf("parse: %v", err)
+		}
+
+		got, err := tmpl.Render(issue, nil, run,
+			WithContinuationContext(map[string]any{"merge_conflict": mergeConflict}),
+		)
+		if err != nil {
+			t.Fatalf("Render with merge_conflict: %v", err)
+		}
+		if got != "has-conflict" {
+			t.Errorf("Render() = %q, want %q", got, "has-conflict")
+		}
+	})
+
+	t.Run("MergeConflict_DefaultNilNoError", func(t *testing.T) {
+		t.Parallel()
+
+		// The key is seeded to nil by Render, so a template referencing it
+		// under missingkey=error must not error and must evaluate as falsy.
+		tmpl, err := Parse(`{{ if .merge_conflict }}FAIL{{ end }}`, "WORKFLOW.md", 0)
+		if err != nil {
+			t.Fatalf("parse: %v", err)
+		}
+
+		got, err := tmpl.Render(issue, nil, run)
+		if err != nil {
+			t.Fatalf("Render with default merge_conflict=nil: %v", err)
+		}
+		if got != "" {
+			t.Errorf("Render() = %q, want empty string when merge_conflict is nil", got)
+		}
+	})
+
+	t.Run("MergeConflict_FieldsRenderIncludingRealBase", func(t *testing.T) {
+		t.Parallel()
+
+		tmpl, err := Parse(
+			`{{ with .merge_conflict }}{{ .pr_number }}:{{ .branch }}:{{ .head_sha }}:{{ .base }}{{ end }}`,
+			"WORKFLOW.md", 0,
+		)
+		if err != nil {
+			t.Fatalf("parse: %v", err)
+		}
+
+		got, err := tmpl.Render(issue, nil, run,
+			WithContinuationContext(map[string]any{"merge_conflict": mergeConflict}),
+		)
+		if err != nil {
+			t.Fatalf("Render with merge_conflict fields: %v", err)
+		}
+		want := "142:feature/x:abc123:release/2.0"
+		if got != want {
+			t.Errorf("Render() = %q, want %q (real base, not a hardcoded default)", got, want)
+		}
+	})
+
+	t.Run("WithContinuationContext_AcceptsMergeConflictKey", func(t *testing.T) {
+		t.Parallel()
+
+		// WithContinuationContext must not panic for the registered key.
+		opt := WithContinuationContext(map[string]any{"merge_conflict": mergeConflict})
+		if opt == nil {
+			t.Error("WithContinuationContext returned nil for registered key merge_conflict")
+		}
+	})
+}

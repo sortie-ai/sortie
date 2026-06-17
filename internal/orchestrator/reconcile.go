@@ -132,6 +132,20 @@ type ReconcileParams struct {
 	// independently of SCMAdapter presence, since a single SCM adapter
 	// may be shared with the review and auto-merge kinds.
 	BotReviewConfigured bool
+
+	// MergeConflictConfig holds merge-conflict reaction configuration.
+	// Only read when MergeConflictReactionConfigured is true.
+	MergeConflictConfig MergeConflictReactionConfig
+
+	// MergeConflictPendingTTL is the maximum age of a merge-conflict
+	// PendingReaction entry before it is dropped. Zero disables TTL
+	// enforcement.
+	MergeConflictPendingTTL time.Duration
+
+	// MergeConflictReactionConfigured marks whether the merge-conflict
+	// feature is active for the current process. Reconcile, enqueue, and
+	// recovery paths gate on this flag.
+	MergeConflictReactionConfigured bool
 }
 
 // ReconcileRunningIssues detects stalled workers and refreshes tracker
@@ -184,6 +198,12 @@ func ReconcileRunningIssues(state *State, params ReconcileParams) {
 	// bot-review reactions. Runs after the human review pass and before
 	// auto-merge.
 	reconcileBotReviewComments(state, params, log, ctx, metrics)
+
+	// Detect merge conflicts on managed open PRs. Runs before auto-merge
+	// so a freshly observed conflict is acted on (a rebase continuation
+	// scheduled) before auto-merge re-confirms its existing dirty
+	// deferral on the same tick.
+	reconcileMergeConflicts(state, params, log, ctx, metrics)
 
 	// Poll auto-merge preconditions for issues with pending merge
 	// reactions. Runs LAST so the CI and review reconcile passes have

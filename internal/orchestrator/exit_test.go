@@ -4145,3 +4145,229 @@ func TestHandleWorkerExit_BotReviewEnqueueSkippedWhenClaimReleased(t *testing.T)
 		t.Error("PendingReactions[BR-SOFT:bot-review] present after soft-stop; want absent (claim released before enqueue)")
 	}
 }
+
+// --- merge-conflict enqueue tests ---
+
+func TestHandleWorkerExit_MergeConflictEnqueue_PopulatesPendingReaction(t *testing.T) {
+	t.Parallel()
+
+	wsPath := t.TempDir()
+	writePRSCMMetadata(t, wsPath, 55, "corp", "api", "feature/MC-1", "c0ffee")
+
+	store := &mockExitStore{}
+	state := exitState(t, "MC-1", nil)
+	params := defaultExitParams(t, store)
+	params.SCMAdapter = &scmAdapterStubExit{}
+	params.MergeConflictReactionConfigured = true
+
+	HandleWorkerExit(state, WorkerResult{
+		IssueID:       "MC-1",
+		Identifier:    "MC-1-ident",
+		ExitKind:      WorkerExitNormal,
+		AgentAdapter:  "mock",
+		WorkspacePath: wsPath,
+	}, params)
+
+	rkey := ReactionKey("MC-1", ReactionKindMergeConflict)
+	pr, ok := state.PendingReactions[rkey]
+	if !ok {
+		t.Fatal("PendingReactions[MC-1:merge-conflict] missing after normal exit with PR metadata")
+	}
+	if pr.Kind != ReactionKindMergeConflict {
+		t.Errorf("PendingReaction.Kind = %q, want %q", pr.Kind, ReactionKindMergeConflict)
+	}
+	mcData, ok := pr.KindData.(*MergeConflictReactionData)
+	if !ok {
+		t.Fatalf("KindData type = %T, want *MergeConflictReactionData", pr.KindData)
+	}
+	if mcData.PRNumber != 55 {
+		t.Errorf("MergeConflictReactionData.PRNumber = %d, want 55", mcData.PRNumber)
+	}
+	if mcData.Owner != "corp" {
+		t.Errorf("MergeConflictReactionData.Owner = %q, want %q", mcData.Owner, "corp")
+	}
+	if mcData.Repo != "api" {
+		t.Errorf("MergeConflictReactionData.Repo = %q, want %q", mcData.Repo, "api")
+	}
+	if mcData.Branch != "feature/MC-1" {
+		t.Errorf("MergeConflictReactionData.Branch = %q, want %q", mcData.Branch, "feature/MC-1")
+	}
+	if mcData.SHA != "c0ffee" {
+		t.Errorf("MergeConflictReactionData.SHA = %q, want %q", mcData.SHA, "c0ffee")
+	}
+}
+
+// TestHandleWorkerExit_MergeConflictEnqueueRequiresPRMetadata verifies that the
+// merge-conflict pending reaction is NOT created when the workspace SCM
+// metadata lacks any required field.
+func TestHandleWorkerExit_MergeConflictEnqueueRequiresPRMetadata(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		content string
+	}{
+		{
+			name:    "missing pr_number",
+			content: `{"owner":"corp","repo":"api","branch":"feature/x","sha":"abc"}`,
+		},
+		{
+			name:    "missing owner",
+			content: `{"pr_number":10,"repo":"api","branch":"feature/x","sha":"abc"}`,
+		},
+		{
+			name:    "missing repo",
+			content: `{"pr_number":10,"owner":"corp","branch":"feature/x","sha":"abc"}`,
+		},
+		{
+			name:    "missing branch",
+			content: `{"pr_number":10,"owner":"corp","repo":"api","sha":"abc"}`,
+		},
+		{
+			name:    "empty scm file",
+			content: `{}`,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			wsPath := t.TempDir()
+			dotSortie := filepath.Join(wsPath, ".sortie")
+			if err := os.MkdirAll(dotSortie, 0o750); err != nil {
+				t.Fatalf("MkdirAll .sortie: %v", err)
+			}
+			if err := os.WriteFile(filepath.Join(dotSortie, "scm.json"), []byte(tt.content), 0o600); err != nil {
+				t.Fatalf("WriteFile scm.json: %v", err)
+			}
+
+			store := &mockExitStore{}
+			state := exitState(t, "MC-7", nil)
+			params := defaultExitParams(t, store)
+			params.SCMAdapter = &scmAdapterStubExit{}
+			params.MergeConflictReactionConfigured = true
+
+			HandleWorkerExit(state, WorkerResult{
+				IssueID:       "MC-7",
+				Identifier:    "MC-7-ident",
+				ExitKind:      WorkerExitNormal,
+				AgentAdapter:  "mock",
+				WorkspacePath: wsPath,
+			}, params)
+
+			rkey := ReactionKey("MC-7", ReactionKindMergeConflict)
+			if _, ok := state.PendingReactions[rkey]; ok {
+				t.Errorf("PendingReactions[MC-7:merge-conflict] present despite incomplete SCM metadata (%s)", tt.name)
+			}
+		})
+	}
+}
+
+// TestHandleWorkerExit_MergeConflictEnqueueRequiresConfigured verifies that the
+// merge-conflict pending reaction is NOT created when
+// MergeConflictReactionConfigured is false, even with valid PR metadata.
+func TestHandleWorkerExit_MergeConflictEnqueueRequiresConfigured(t *testing.T) {
+	t.Parallel()
+
+	wsPath := t.TempDir()
+	writePRSCMMetadata(t, wsPath, 20, "corp", "api", "feature/MC-6", "deadbeef")
+
+	store := &mockExitStore{}
+	state := exitState(t, "MC-6", nil)
+	params := defaultExitParams(t, store)
+	params.SCMAdapter = &scmAdapterStubExit{}
+	params.MergeConflictReactionConfigured = false
+
+	HandleWorkerExit(state, WorkerResult{
+		IssueID:       "MC-6",
+		Identifier:    "MC-6-ident",
+		ExitKind:      WorkerExitNormal,
+		AgentAdapter:  "mock",
+		WorkspacePath: wsPath,
+	}, params)
+
+	rkey := ReactionKey("MC-6", ReactionKindMergeConflict)
+	if _, ok := state.PendingReactions[rkey]; ok {
+		t.Error("PendingReactions[MC-6:merge-conflict] present despite MergeConflictReactionConfigured=false")
+	}
+}
+
+// TestHandleWorkerExit_MergeConflictEnqueueRequiresSCMAdapter verifies that the
+// merge-conflict pending reaction is NOT created when no SCM adapter is wired,
+// even when merge-conflict is configured.
+func TestHandleWorkerExit_MergeConflictEnqueueRequiresSCMAdapter(t *testing.T) {
+	t.Parallel()
+
+	wsPath := t.TempDir()
+	writePRSCMMetadata(t, wsPath, 20, "corp", "api", "feature/MC-nil", "deadbeef")
+
+	store := &mockExitStore{}
+	state := exitState(t, "MC-nil", nil)
+	params := defaultExitParams(t, store)
+	params.SCMAdapter = nil
+	params.MergeConflictReactionConfigured = true
+
+	HandleWorkerExit(state, WorkerResult{
+		IssueID:       "MC-nil",
+		Identifier:    "MC-nil-ident",
+		ExitKind:      WorkerExitNormal,
+		AgentAdapter:  "mock",
+		WorkspacePath: wsPath,
+	}, params)
+
+	rkey := ReactionKey("MC-nil", ReactionKindMergeConflict)
+	if _, ok := state.PendingReactions[rkey]; ok {
+		t.Error("PendingReactions[MC-nil:merge-conflict] present despite nil SCMAdapter")
+	}
+}
+
+// TestHandleWorkerExit_MergeConflictEnqueueDoesNotOverwrite verifies the
+// if-absent guard: an existing merge-conflict pending reaction is not replaced
+// on re-entry, preserving in-progress episode state.
+func TestHandleWorkerExit_MergeConflictEnqueueDoesNotOverwrite(t *testing.T) {
+	t.Parallel()
+
+	wsPath := t.TempDir()
+	writePRSCMMetadata(t, wsPath, 10, "corp", "api", "feature/MC-DUP", "sha1")
+
+	store := &mockExitStore{}
+	state := exitState(t, "MC-DUP", nil)
+	params := defaultExitParams(t, store)
+	params.SCMAdapter = &scmAdapterStubExit{}
+	params.MergeConflictReactionConfigured = true
+
+	existingEntry := &PendingReaction{
+		IssueID:    "MC-DUP",
+		Identifier: "MC-DUP-ident",
+		Kind:       ReactionKindMergeConflict,
+		KindData: &MergeConflictReactionData{
+			PRNumber: 77,
+			Owner:    "original",
+			Repo:     "original",
+			Branch:   "original-branch",
+		},
+	}
+	rkey := ReactionKey("MC-DUP", ReactionKindMergeConflict)
+	state.PendingReactions[rkey] = existingEntry
+
+	HandleWorkerExit(state, WorkerResult{
+		IssueID:       "MC-DUP",
+		Identifier:    "MC-DUP-ident",
+		ExitKind:      WorkerExitNormal,
+		AgentAdapter:  "mock",
+		WorkspacePath: wsPath,
+	}, params)
+
+	got := state.PendingReactions[rkey]
+	if got != existingEntry {
+		t.Error("PendingReactions[MC-DUP:merge-conflict] was replaced; want existing entry preserved")
+	}
+	mcData, ok := got.KindData.(*MergeConflictReactionData)
+	if !ok {
+		t.Fatalf("KindData type = %T, want *MergeConflictReactionData", got.KindData)
+	}
+	if mcData.PRNumber != 77 {
+		t.Errorf("MergeConflictReactionData.PRNumber = %d, want 77 (seeded value preserved)", mcData.PRNumber)
+	}
+}

@@ -1581,3 +1581,104 @@ func TestRecoverPendingReactions_BotReviewMissingBranch(t *testing.T) {
 		t.Error("bot-review PendingReactions entry created with empty Branch; want absent")
 	}
 }
+
+// --- merge-conflict recovery tests ---
+
+func TestRecoverPendingReactions_MergeConflict(t *testing.T) {
+	t.Parallel()
+
+	wsRoot := t.TempDir()
+	writeRecoverySCM(t, wsRoot, "PROJ-MC1", domain.SCMMetadata{
+		Branch:   "feature/mc-fix",
+		SHA:      "facefeed",
+		PushedAt: freshSCMTime(1),
+		PRNumber: 55,
+		Owner:    "mcowner",
+		Repo:     "mcrepo",
+	})
+
+	tracker := &recoveryTrackerStub{states: map[string]string{"ISS-MC1": "In Review"}}
+	state := NewState(5000, 4, nil, AgentTotals{})
+	run := freshRun("ISS-MC1", "PROJ-MC1", "mcowner/mcrepo#55", 3)
+	params := defaultRecoveryParams(wsRoot, tracker)
+	params.MergeConflictReactionConfigured = true
+
+	result, err := RecoverPendingReactions(context.Background(), state, []persistence.RunHistory{run}, params)
+	if err != nil {
+		t.Fatalf("RecoverPendingReactions: %v", err)
+	}
+	if result.MergeConflictRecovered != 1 {
+		t.Errorf("MergeConflictRecovered = %d, want 1", result.MergeConflictRecovered)
+	}
+
+	rkey := ReactionKey("ISS-MC1", ReactionKindMergeConflict)
+	pr, ok := state.PendingReactions[rkey]
+	if !ok {
+		t.Fatalf("PendingReactions[%q] missing, want present", rkey)
+	}
+	if pr.Kind != ReactionKindMergeConflict {
+		t.Errorf("PendingReaction.Kind = %q, want %q", pr.Kind, ReactionKindMergeConflict)
+	}
+	if pr.Attempt != 3 {
+		t.Errorf("PendingReaction.Attempt = %d, want 3", pr.Attempt)
+	}
+	mcd, ok := pr.KindData.(*MergeConflictReactionData)
+	if !ok {
+		t.Fatalf("KindData type = %T, want *MergeConflictReactionData", pr.KindData)
+	}
+	if mcd.PRNumber != 55 {
+		t.Errorf("MergeConflictReactionData.PRNumber = %d, want 55", mcd.PRNumber)
+	}
+	if mcd.Owner != "mcowner" {
+		t.Errorf("MergeConflictReactionData.Owner = %q, want %q", mcd.Owner, "mcowner")
+	}
+	if mcd.Repo != "mcrepo" {
+		t.Errorf("MergeConflictReactionData.Repo = %q, want %q", mcd.Repo, "mcrepo")
+	}
+	if mcd.Branch != "feature/mc-fix" {
+		t.Errorf("MergeConflictReactionData.Branch = %q, want %q", mcd.Branch, "feature/mc-fix")
+	}
+	if mcd.SHA != "facefeed" {
+		t.Errorf("MergeConflictReactionData.SHA = %q, want %q", mcd.SHA, "facefeed")
+	}
+	// Issue must not be claimed by recovery.
+	if _, claimed := state.Claimed["ISS-MC1"]; claimed {
+		t.Error("ISS-MC1 found in state.Claimed after recovery, want not claimed")
+	}
+}
+
+// TestRecoverPendingReactions_MergeConflictNotRecoveredWhenFlagFalse verifies
+// that MergeConflictReactionConfigured=false reconstructs no merge-conflict
+// entry, even with full PR metadata present.
+func TestRecoverPendingReactions_MergeConflictNotRecoveredWhenFlagFalse(t *testing.T) {
+	t.Parallel()
+
+	wsRoot := t.TempDir()
+	writeRecoverySCM(t, wsRoot, "PROJ-MC2", domain.SCMMetadata{
+		Branch:   "feature/mc-disabled",
+		SHA:      "abc",
+		PushedAt: freshSCMTime(1),
+		PRNumber: 10,
+		Owner:    "o",
+		Repo:     "r",
+	})
+
+	tracker := &recoveryTrackerStub{states: map[string]string{"ISS-MC2": "In Review"}}
+	state := NewState(5000, 4, nil, AgentTotals{})
+	run := freshRun("ISS-MC2", "PROJ-MC2", "", 1)
+	params := defaultRecoveryParams(wsRoot, tracker)
+	params.MergeConflictReactionConfigured = false // not configured
+
+	result, err := RecoverPendingReactions(context.Background(), state, []persistence.RunHistory{run}, params)
+	if err != nil {
+		t.Fatalf("RecoverPendingReactions: %v", err)
+	}
+	if result.MergeConflictRecovered != 0 {
+		t.Errorf("MergeConflictRecovered = %d, want 0 when flag is false", result.MergeConflictRecovered)
+	}
+
+	rkey := ReactionKey("ISS-MC2", ReactionKindMergeConflict)
+	if _, ok := state.PendingReactions[rkey]; ok {
+		t.Error("merge-conflict PendingReactions entry created with MergeConflictReactionConfigured=false; want absent")
+	}
+}

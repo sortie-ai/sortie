@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/sortie-ai/sortie/internal/domain"
@@ -572,6 +573,43 @@ func TestGetMergeability_Draft(t *testing.T) {
 	}
 	if !status.Draft {
 		t.Error("GetMergeability().Draft = false, want true for draft PR")
+	}
+}
+
+// TestGetMergeability_BaseBranch verifies that GetMergeability reads the PR's
+// real base branch from the base.ref field of the single pull-request object
+// it already fetches, issuing no second HTTP request for the base.
+func TestGetMergeability_BaseBranch(t *testing.T) {
+	t.Parallel()
+
+	var requests atomic.Int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		if !strings.Contains(r.URL.Path, "/pulls/") {
+			t.Errorf("unexpected request path %q; GetMergeability must only fetch the PR object", r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"head":{"sha":"head-rel","ref":"feature/conflict"},"base":{"ref":"release/2.0"},"draft":false,"mergeable_state":"dirty"}`))
+	}))
+	defer srv.Close()
+
+	a := newTestSCMAdapter(t, srv.URL)
+	status, err := a.GetMergeability(t.Context(), 1, "owner", "repo")
+	if err != nil {
+		t.Fatalf("GetMergeability: %v", err)
+	}
+
+	if status.BaseBranch != "release/2.0" {
+		t.Errorf("GetMergeability().BaseBranch = %q, want %q", status.BaseBranch, "release/2.0")
+	}
+	if status.Mergeability != domain.MergeabilityDirty {
+		t.Errorf("GetMergeability().Mergeability = %q, want %q", status.Mergeability, domain.MergeabilityDirty)
+	}
+	if status.HeadSHA != "head-rel" {
+		t.Errorf("GetMergeability().HeadSHA = %q, want %q", status.HeadSHA, "head-rel")
+	}
+	if got := requests.Load(); got != 1 {
+		t.Errorf("HTTP request count = %d, want 1 (base ref rides the existing PR fetch, no second request)", got)
 	}
 }
 

@@ -330,6 +330,12 @@ const ReactionKindBotReview = "bot-review"
 // short form lives here as the runtime and persisted discriminator.
 const ReactionKindAutoMerge = "merge"
 
+// ReactionKindMergeConflict is the reaction kind constant for
+// merge-conflict reactions. The user-facing YAML key is
+// reactions.merge_conflicts; the short form lives here as the runtime
+// and persisted discriminator.
+const ReactionKindMergeConflict = "merge-conflict"
+
 // AutoMergePreflightRetryDelay is the delay between the initial
 // auto-merge preflight failure (transport-class) and its single
 // scheduled retry. The retry runs at most once per orchestrator
@@ -338,7 +344,7 @@ const AutoMergePreflightRetryDelay time.Duration = 5 * time.Minute
 
 func isKnownReactionKind(kind string) bool {
 	switch kind {
-	case ReactionKindCI, ReactionKindReview, ReactionKindBotReview, ReactionKindAutoMerge:
+	case ReactionKindCI, ReactionKindReview, ReactionKindBotReview, ReactionKindAutoMerge, ReactionKindMergeConflict:
 		return true
 	default:
 		return false
@@ -527,6 +533,44 @@ type AutoMergeReactionConfig struct {
 	PollIntervalMS  int
 	Escalation      string
 	EscalationLabel string
+	MaxRetries      int
+}
+
+// MergeConflictReactionData holds merge-conflict-specific fields for a
+// pending merge-conflict reaction. Stored in [PendingReaction.KindData]
+// for reactions with Kind == [ReactionKindMergeConflict]. PRNumber,
+// Owner, Repo, and Branch are sourced from [domain.SCMMetadata] (written
+// by the agent to scm.json), never from the tracker project
+// configuration.
+//
+// The rebase base branch is not stored here. It is read live from
+// [domain.PRMergeStatus.BaseBranch] on each reconcile tick and threaded
+// into the continuation data, so the agent always rebases onto the PR's
+// current target rather than a value snapshotted at enqueue time.
+type MergeConflictReactionData struct {
+	// PRNumber is the pull request number.
+	PRNumber int
+
+	// Owner is the repository owner.
+	Owner string
+
+	// Repo is the repository name.
+	Repo string
+
+	// Branch is the PR head branch (the branch the agent rebases).
+	Branch string
+
+	// SHA is the git commit SHA at the last known push; carried for
+	// logging and parity with the sibling reaction data.
+	SHA string
+}
+
+// MergeConflictReactionConfig holds validated merge-conflict-specific
+// configuration extracted from [config.ReactionConfig] at startup.
+type MergeConflictReactionConfig struct {
+	Escalation      string
+	EscalationLabel string
+	PollIntervalMS  int
 	MaxRetries      int
 }
 
@@ -1119,6 +1163,46 @@ func BuildAutoMergeReactionConfig(rc config.ReactionConfig) (AutoMergeReactionCo
 		}
 		if n < 30000 {
 			return AutoMergeReactionConfig{}, fmt.Errorf("poll_interval_ms must be >= 30000, got %d", n)
+		}
+		cfg.PollIntervalMS = n
+	}
+
+	return cfg, nil
+}
+
+// BuildMergeConflictReactionConfig extracts and validates
+// merge-conflict-specific configuration from a [config.ReactionConfig].
+// Returns an error for invalid values.
+//
+// rc.MaxRetries is consumed verbatim; the per-kind default of 1 for
+// merge_conflicts is applied earlier in config parsing, so this builder
+// reads the already-coerced, non-negative value without re-applying it.
+func BuildMergeConflictReactionConfig(rc config.ReactionConfig) (MergeConflictReactionConfig, error) {
+	cfg := MergeConflictReactionConfig{
+		Escalation:      rc.Escalation,
+		EscalationLabel: rc.EscalationLabel,
+		PollIntervalMS:  60000,
+		MaxRetries:      rc.MaxRetries,
+	}
+
+	if cfg.Escalation == "" {
+		cfg.Escalation = "label"
+	}
+	if cfg.Escalation != "label" && cfg.Escalation != "comment" {
+		return MergeConflictReactionConfig{}, fmt.Errorf("invalid escalation %q: must be \"label\" or \"comment\"", cfg.Escalation)
+	}
+
+	if cfg.EscalationLabel == "" {
+		cfg.EscalationLabel = "needs-human"
+	}
+
+	if v, ok := rc.Extra["poll_interval_ms"]; ok {
+		n, err := toInt(v)
+		if err != nil {
+			return MergeConflictReactionConfig{}, fmt.Errorf("invalid poll_interval_ms: %w", err)
+		}
+		if n < 30000 {
+			return MergeConflictReactionConfig{}, fmt.Errorf("poll_interval_ms must be >= 30000, got %d", n)
 		}
 		cfg.PollIntervalMS = n
 	}

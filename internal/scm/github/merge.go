@@ -61,6 +61,9 @@ type pullRequestResponse struct {
 		SHA string `json:"sha"`
 		Ref string `json:"ref"`
 	} `json:"head"`
+	Base struct {
+		Ref string `json:"ref"`
+	} `json:"base"`
 }
 
 // fetchPullRequest issues GET /repos/{owner}/{repo}/pulls/{prNumber}
@@ -196,6 +199,7 @@ func (a *GitHubSCMAdapter) GetMergeability(ctx context.Context, prNumber int, ow
 		Mergeability: mergeability,
 		HeadSHA:      pr.Head.SHA,
 		BranchName:   pr.Head.Ref,
+		BaseBranch:   pr.Base.Ref,
 	}, nil
 }
 

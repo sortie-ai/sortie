@@ -205,6 +205,10 @@ func (s *spyMetrics) IncBotReviewEscalations(_ string) {}
 
 func (s *spyMetrics) IncAutoMergeReactions(_ string) {}
 
+func (s *spyMetrics) IncMergeConflictChecks(_ string) {}
+
+func (s *spyMetrics) IncMergeConflictEscalations(_ string) {}
+
 func (s *spyMetrics) IncDispatchRuleMatch(_ string, _ string) {}
 
 // --- Tests ---
