@@ -38,6 +38,12 @@ When your changes create orphans:
 - Remove imports/variables/functions that YOUR changes made unused.
 - Don't remove pre-existing dead code unless asked.
 
+When the working tree has changes you didn't make:
+- You are not the only one working in this repo. The user or a parallel agent session may edit files while you work, so `git status` and `git diff` show their uncommitted changes mixed with yours.
+- Changes you cannot trace to your own task are not yours to revert. Don't assume unfamiliar edits are accidental or stray - they may be deliberate work from another session.
+- Never discard, revert, reset, stash, or reformat files outside your task's scope (`git checkout --`, `git restore`, `git reset --hard`, `git stash`, `git clean`). Stage your own paths by name; never `git add -A` or `git add .`.
+- If changes you didn't make seem to collide with your task, stop and ask. Never resolve it by throwing them away.
+
 The test: Every changed line should trace directly to the user's request.
 
 ### 4. Goal-Driven Execution
@@ -94,6 +100,7 @@ Read the project Makefile to discover available targets before running any Go to
 
 #### Never
 
+- Discard, revert, reset, stash, or reformat uncommitted changes outside your current task's file set - the working tree may hold the user's or a parallel agent's work (see Surgical Changes).
 - Modify accepted ADRs in `docs/decisions/*.md` without explicit instruction.
 - Use CGo or any library requiring a C toolchain.
 - Put integration-specific logic (Jira field names, Claude Code CLI flags) in orchestrator core packages.
