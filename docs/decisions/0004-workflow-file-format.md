@@ -108,7 +108,7 @@ repository with minimal ceremony, two files create unnecessary friction.
 - **No IDE schema validation for front matter.** A standalone `sortie.yaml` would allow JSON
   Schema binding in VS Code / GoLand for autocompletion and error highlighting. YAML embedded
   in Markdown front matter lacks standard IDE schema support. Mitigation: Dispatch Preflight
-  Validation (architecture Section 6.3) catches configuration errors before the first poll
+  Validation ([architecture Section 6.3](../architecture/06-configuration-specification.md#63-dispatch-preflight-validation)) catches configuration errors before the first poll
   cycle, but errors surface at runtime rather than at edit time. To close this gap, the CLI
   should expose a `sortie validate [path]` subcommand that parses and validates the workflow
   file without starting the orchestrator, enabling integration into pre-commit hooks and CI

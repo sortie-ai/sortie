@@ -1,0 +1,543 @@
+## 10. Agent Adapter Contract
+
+This section defines the interface contract that all agent adapters must satisfy. Adapter-specific
+protocol details (handshake sequences, JSON-RPC framing, stdio vs. HTTP transport) are documented
+separately per adapter.
+
+### 10.1 Agent Adapter Interface
+
+An agent adapter must implement the following operations:
+
+- `StartSession(workspace, config) -> Session`
+  - Launch or connect to an agent process/service in the given workspace.
+  - Returns an opaque session handle.
+- `RunTurn(session, prompt, issue, on_event) -> TurnResult`
+  - Execute one agent turn with the given prompt.
+  - Delivers events to the orchestrator via `on_event` callback (push adapters) or returns
+    them in the result (synchronous adapters).
+  - Returns when the turn completes (success, failure, or timeout).
+- `StopSession(session)`
+  - Terminate the agent process/service cleanly.
+- `EventStream() -> <event channel>`
+  - Optional: adapters that push events asynchronously may expose an event channel.
+
+Built-in agent adapter kinds:
+
+- `claude-code`, `copilot-cli`, `codex`, `opencode`, and `kiro` are built-in agent adapter kinds.
+- `claude-code`, `copilot-cli`, `opencode`, and `kiro` use one local subprocess per turn.
+- `codex` uses one persistent local subprocess per session.
+
+Built-in adapter summary:
+
+| Kind | Session model | Event surface | Resume and identity | Notable differences |
+|---|---|---|---|---|
+| `claude-code` | One subprocess per turn | Newline-delimited JSON from `claude -p --output-format stream-json --verbose` | New sessions use `--session-id`; continuation turns use `--resume`; runtime `session_id` may replace the provisional adapter-generated ID | Token usage is normalized from streamed assistant and result events. |
+| `copilot-cli` | One subprocess per turn | Newline-delimited JSON from an abbreviated `copilot -p --output-format json -s --autopilot --no-ask-user ...` invocation | Uses `--resume <session_id>` when a session ID is known; falls back to `--continue` when a prior result omitted `sessionId` | The adapter always includes `--max-autopilot-continues` and includes `--allow-all` when no tool-scoping flags are configured; session identity is captured from the terminal `result` event rather than a start event. |
+| `codex` | One persistent `codex app-server` subprocess per session | JSON-RPC 2.0 over stdio | `ResumeSessionID` maps to `thread/resume`; otherwise the adapter starts a new thread; thread ID is the session ID | Turns are started inside the persistent session with `turn/start`; tool and approval handling are part of the app-server protocol. |
+| `opencode` | One subprocess per turn | Line-delimited JSON from `opencode run --format json --dir <workspace>` | `ResumeSessionID` maps to `--session <session_id>`; the first observed `sessionID` becomes the session ID; a mismatch is `turn_ended_with_error` | The adapter maps `opencode.model`, `opencode.agent`, `opencode.variant`, `opencode.thinking`, `opencode.pure`, and `opencode.dangerously_skip_permissions` to CLI flags; parses `step_start`, `text`, `reasoning`, `tool_use`, `step_finish`, and `error`; maps plain-text permission warnings to `notification` and unknown output to `malformed`; recovers final token usage with `opencode export --sanitize <session_id>`; maps logical `error` events to `turn_failed` even when the process exits with status `0`. |
+| `kiro` | One subprocess per turn | Plain-text human transcript from `kiro-cli chat --no-interactive`; stdout carries the assistant answer (ANSI-stripped), stderr carries the `▸ Credits: … • Time: …` trailer and warnings | Headless mode does not surface a session ID; `ResumeSessionID` is recorded but continuation relies on `--resume` against the cwd-scoped conversation store keyed by the workspace path | Headless Kiro emits no structured output and no token counts, so the adapter emits no `token_usage` events and leaves `TurnResult.Usage` zero; token-based budget enforcement does not apply and the turn timeout is the only backstop. Exit code 0 is ambiguous (success and invalid-credential failure both exit 0): success requires the credits trailer on stderr, and `Authentication failed.` on stderr with empty stdout maps to `turn_failed`. `StartSession` requires `KIRO_API_KEY` and runs a `kiro-cli whoami` canary to reject silently invalid keys before any turn; a missing credential would otherwise block headless `chat` indefinitely on an interactive device-login flow, which the credential preflight and the mandatory `agent.turn_timeout_ms` together defend against. MCP injection has no effect under `KIRO_API_KEY` auth (the backend profile gate disables MCP), so `MCPConfigPath` is ignored and `--require-mcp-startup` is unreachable. Permissions are controlled by `--trust-all-tools` or a `--trust-tools=<names>` allowlist; the two modes are mutually exclusive. The model is pinned per turn with `--model` because the `/model` slash command is unavailable headless. |
+
+### 10.2 Session Lifecycle
+
+The orchestrator interacts with an agent session as follows:
+
+1. Call `StartSession` before the first turn.
+2. Call `RunTurn` for each turn. Continuation turns reuse the same session.
+3. Call `StopSession` when the worker run is ending.
+
+The session handle and any session identifiers are adapter-specific. The orchestrator treats
+`session_id` as an opaque string.
+
+### 10.3 Normalized Event Types
+
+The orchestrator expects the following event types from any agent adapter. Adapters map their
+native protocol events to this normalized set:
+
+- `session_started` — session initialized successfully
+- `startup_failed` — session could not be initialized
+- `turn_completed` — turn finished successfully
+- `turn_failed` — turn finished with failure
+- `turn_cancelled` — turn was cancelled
+- `turn_ended_with_error` — turn ended due to an error condition
+- `turn_input_required` — agent requested user input (hard failure per policy)
+- `approval_auto_approved` — approval request was auto-resolved
+- `unsupported_tool_call` — agent requested an unsupported tool
+- `token_usage` — normalized token usage event: `{input_tokens, output_tokens, total_tokens, cache_read_tokens}`. Optional `model` field (string) identifies the LLM model when available. Optional `api_duration_ms` field (int64, milliseconds) carries per-request or per-turn API response wait time when the adapter can measure it.
+- `tool_result` — a tool call completed. Optional fields: `tool_name` (string), `duration_ms` (int64).
+- `notification` — informational message from the agent
+- `other_message` — unclassified message
+- `malformed` — unparseable or unrecognized message
+
+Each event should include:
+
+- `event` (enum/string)
+- `timestamp` (UTC timestamp)
+- `agent_pid` (if available)
+- optional `usage` map: `{input_tokens, output_tokens, total_tokens, cache_read_tokens}`
+- optional `model` string: LLM model identifier when available
+- payload fields as needed
+
+Token accounting is normalized at the adapter boundary. The orchestrator receives
+`{input_tokens, output_tokens, total_tokens, cache_read_tokens}` directly and does not parse
+adapter-specific payload shapes.
+
+### 10.4 Approval, Tools, and User Input Policy
+
+This section covers the approval posture, tool subsystem, and user-input handling for agent
+sessions.
+
+#### 10.4.1 Approval policy
+
+Approval, sandbox, and user-input behavior is implementation-defined.
+
+Policy requirements:
+
+- Each deployment MUST document its chosen approval, sandbox, and operator-confirmation posture.
+- Approval requests and user-input-required events MUST NOT leave a run stalled indefinitely.
+  Sortie MUST either satisfy them, surface them to an operator, auto-resolve them, or fail the
+  run according to its documented policy.
+
+Example high-trust behavior:
+
+- Auto-approve command execution approvals for the session.
+- Auto-approve file-change approvals for the session.
+- Treat user-input-required turns as hard failure.
+
+Unsupported dynamic tool calls:
+
+- If the agent adapter receives a tool call request for a name not in the `ToolRegistry`, the
+  adapter returns a tool failure response and continues the session.
+- This is adapter-level behavior; the orchestrator does not intercept tool call routing.
+
+Hard failure on user input requirement:
+
+- If the agent requests user input, fail the run attempt immediately.
+
+#### 10.4.2 Tool interface contract
+
+All tools that Sortie exposes to agents implement the `AgentTool` interface
+(`internal/domain/tool.go`):
+
+- `Name() string` — stable tool identifier used for matching tool call requests to
+  implementations. MUST be unique within a `ToolRegistry`.
+- `Description() string` — human-readable summary suitable for inclusion in agent prompts and
+  MCP `tools/list` responses.
+- `InputSchema() json.RawMessage` — JSON Schema describing the tool's expected input. Used for
+  MCP tool registration and prompt-based documentation.
+- `Execute(ctx context.Context, input json.RawMessage) (json.RawMessage, error)` — runs the tool
+  and returns a structured JSON result. The Go `error` return is reserved for internal failures
+  (nil adapter, marshal failure) that indicate programming errors.
+
+Every tool's `Execute` MUST return the uniform result envelope. On success it MUST return
+`{"success": true, "data": <payload>}`, where `<payload>` is the tool's success object. On a
+domain failure (missing auth, API failures, invalid input, unreadable local state) it MUST return
+`{"success": false, "error": {"kind": "<kind>", "message": "<message>"}}`, where `kind` is from the
+tool's documented closed set (Section 10.4.5) and `message` is a human-readable detail. A domain
+failure is carried in this envelope with a nil Go `error`; the non-nil Go `error` return signals
+only an internal marshal failure. All tools marshal both envelopes through one shared helper, so
+the two shapes are byte-identical at the top level across tools.
+
+#### 10.4.3 Tool registry
+
+`ToolRegistry` (`internal/domain/tool.go`) is the central registration point for all agent tools.
+
+Invariants:
+
+- Registration is static at build time. All tools are registered during orchestrator
+  initialization, before the first dispatch. No dynamic plugin loading.
+- The registry is safe for concurrent reads after construction. Concurrent `Register` + `Get` is
+  a data race; callers MUST NOT call `Register` after passing the registry to the orchestrator.
+- Duplicate names panic (programming error, not runtime input).
+- The registry feeds prompt-time tool advertisement and the runtime execution channel through
+  which agents invoke tools at call time. The execution channel is an MCP stdio sidecar exposed
+  by the `sortie mcp-server` subcommand.
+
+#### 10.4.4 Tool tiers
+
+Tools are classified by their dependency profile. The tier determines security posture, test
+strategy, and failure characteristics.
+
+**Tier 1 — pure orchestrator state.** These tools read from local session state (a workspace
+state file or the SQLite database) with zero external calls. They are deterministic and fast.
+Beyond internal bugs, their only runtime failure mode is the failure envelope of Section 10.4.2
+when the local state they read is missing or unreadable. Their `error.kind` values come from the
+closed Tier 1 set `state_unavailable`, `state_malformed`, and `query_failed`: an absent, symlinked,
+oversized, or unreadable state file is `state_unavailable`, a present but unparseable state file is
+`state_malformed`, and a failed database query is `query_failed`.
+
+- `sortie_status` (Section 10.4.5)
+- `workspace_history` (Section 10.4.5)
+- `cost_budget` (Section 10.4.5)
+
+**Tier 2 — external dependencies.** These tools interact with external services (tracker APIs,
+future SCM APIs) through network calls using orchestrator-managed credentials. They are subject
+to transport failures, authentication errors, rate limits, and per-tool timeouts.
+
+- `tracker_api` (Section 10.4.5)
+- `notify_operator` (Section 10.4.5)
+
+Future tools follow the same classification.
+
+#### 10.4.5 Built-in tools
+
+Sortie registers the built-in tools below in the `ToolRegistry`, subject to each tool's
+availability conditions. The MCP server (`sortie mcp-server`, per ADR-0009) registers a tool
+only when its required inputs are present in the session environment.
+
+**`tracker_api` (Tier 2)** executes queries and mutations against the configured issue
+tracker using the orchestrator's tracker credentials.
+
+Availability: only meaningful when valid tracker auth is configured. When auth is absent, the
+tool SHOULD NOT be registered.
+
+Project scoping: the tool is scoped to the configured project. An agent working on project PROJ
+MUST NOT be able to query or mutate issues in unrelated projects through this passthrough tool.
+
+Supported operations:
+
+| Operation | Required fields | Description |
+|---|---|---|
+| `fetch_issue` | `issue_id` | Fetch a single issue by ID |
+| `fetch_comments` | `issue_id` | Fetch comments for an issue |
+| `search_issues` | (none) | Return issues in configured active states |
+| `transition_issue` | `issue_id`, `target_state` | Transition an issue to a target state |
+
+The `TrackerAdapter.CommentIssue` method exists on the adapter interface but is not yet exposed
+through `tracker_api`.
+
+Tracker dispatch:
+
+The tool delegates to the configured `TrackerAdapter` implementation. Transport, input shape,
+and query semantics are adapter-defined.
+
+Result semantics: the tool returns the uniform envelope of Section 10.4.2. On success it returns
+`{"success": true, "data": <payload>}`, where `<payload>` is the per-operation response object. On
+a domain failure (API-level error, invalid input, missing auth, or transport failure) it returns
+`{"success": false, "error": {"kind": "<kind>", "message": "<message>"}}`. The `error.kind` comes
+from the closed set below.
+
+| `error.kind` | Condition |
+|---|---|
+| `invalid_input` | Input fails schema decode, carries unknown or trailing fields, or omits a required field for the operation |
+| `unsupported_operation` | The requested operation is not one of the four supported operations |
+| `project_scope_violation` | The target issue is outside the configured project |
+| `tracker_transport_error` | The request was canceled or its deadline was exceeded |
+| `internal_error` | An unexpected error that the adapter did not classify |
+| `domain.TrackerError` kinds | The adapter returned a classified tracker error; its kind passes through verbatim |
+
+The response payload or error envelope is returned as structured JSON that the agent can inspect
+in-session.
+
+**`sortie_status` (Tier 1)** returns live session runtime metadata. It reads the
+worker-maintained session state file `.sortie/state.json` in the workspace and makes no external
+calls.
+
+Availability: registered when the session workspace path is present in the environment
+(`SORTIE_WORKSPACE`). The tool takes no input.
+
+Response fields:
+
+| Field | Type | Description |
+|---|---|---|
+| `turn_number` | integer | Current turn within the session |
+| `max_turns` | integer | Configured `agent.max_turns` |
+| `turns_remaining` | integer | `max_turns - turn_number`, clamped at 0 |
+| `attempt` | integer or null | Retry or continuation attempt number; null on the first run |
+| `session_duration_seconds` | number | Wall-clock seconds since the session started |
+| `tokens` | object | `input_tokens`, `output_tokens`, `total_tokens`, and `cache_read_tokens` |
+
+On success the tool returns the response object above under `data`, in the envelope
+`{"success": true, "data": {...}}` of Section 10.4.2. On failure it returns the failure envelope
+`{"success": false, "error": {"kind": "<kind>", "message": "<message>"}}`. An absent, symlinked,
+oversized, or unreadable state file yields `error.kind` `state_unavailable`; a present but
+unparseable state file, including an invalid `started_at`, yields `state_malformed`.
+
+**`workspace_history` (Tier 1)** returns the most recent completed run attempts for the current
+issue. It queries the `run_history` table (Section 19.2) through a read-only SQLite connection
+and makes no external calls.
+
+Availability: registered when the database path and issue ID are present in the environment
+(`SORTIE_DB_PATH`, `SORTIE_ISSUE_ID`). The tool takes no input.
+
+On success the tool returns, under `data` in the envelope `{"success": true, "data": {...}}` of
+Section 10.4.2, a JSON object `{issue_id, entries}`, where `entries` lists at most the 10 most
+recent runs, newest first. Each entry has `attempt`, `agent_adapter`, `started_at`,
+`completed_at`, `status` (`succeeded`, `failed`, `timed_out`, `stalled`, or `cancelled`), and
+`error` (null unless the run failed). The per-entry `error` is the run's own error and is distinct
+from the envelope's `error` object.
+
+On failure the tool returns the failure envelope
+`{"success": false, "error": {"kind": "<kind>", "message": "<message>"}}` with `error.kind`
+`query_failed`. This happens when the history query fails.
+
+**`cost_budget` (Tier 1)** returns cumulative per-issue token spend and the remaining token
+budget so an agent can self-regulate before the orchestrator's token ceiling blocks a
+re-dispatch. It sums `total_tokens` across the issue's `run_history` rows and adds the running
+session's recorded `total_tokens` from `session_metadata`, then makes no external calls. It is
+the advisory counterpart to the `agent.max_tokens` enforcement on the dispatch path; both read
+the same summed `total_tokens`, so the advisory reading and the refusal agree.
+
+Availability: registered when the database path and issue ID are present in the environment
+(`SORTIE_DB_PATH`, `SORTIE_ISSUE_ID`), the same condition as `workspace_history`. The running
+session ID arrives through `SORTIE_SESSION_ID`. The tool takes no input.
+
+On success the tool returns, under `data` in the envelope `{"success": true, "data": {...}}` of
+Section 10.4.2, a JSON object with five fields:
+
+- `used_tokens`: cumulative `total_tokens` across the issue's completed sessions, plus the
+  running session's recorded `total_tokens` when a session is in flight. The running session's
+  spend is added only when the `session_metadata` row's session ID matches the live session ID,
+  so a stale earlier session is never counted twice.
+- `budget_tokens`: the configured `agent.max_tokens`. `0` means unlimited.
+- `remaining_tokens`: `budget_tokens - used_tokens`, floored at `0`; `null` when the budget is
+  unlimited, so the agent distinguishes "no limit" from "nothing left".
+- `used_sessions`: completed sessions for the issue. The running session is not counted,
+  matching how `agent.max_sessions` counts.
+- `budget_sessions`: the configured `agent.max_sessions`. `0` means unlimited.
+
+The asymmetry between `used_tokens` (includes the running session) and `used_sessions`
+(excludes it) is deliberate: a session is discrete and either finished or not, whereas tokens
+accrue continuously, so an advisory reading that ignored in-flight spend would be useless
+exactly when the agent consults it. The running session's spend reaches `session_metadata`
+through throttled incremental writes during the session and reaches `run_history` only at
+session exit, so no window double counts.
+
+On failure the tool returns the failure envelope
+`{"success": false, "error": {"kind": "<kind>", "message": "<message>"}}` with `error.kind`
+`query_failed`. This happens when the budget query fails.
+
+**`notify_operator` (Tier 2)** sends a real-time notification to an operator-configured
+channel while a session runs. The agent uses it to escalate a decision it should not make
+alone, report progress on a long task, or flag a blocker, without terminating the session.
+The tool resolves the configured notifier backends and posts to them; it knows nothing about
+any specific channel.
+
+Availability: registered only when at least one valid notifier backend is configured in the
+`notifications` list (Section 5.3.11). The registration derives from the same workflow file the
+main process reads, so the sidecar and the main process agree on the tool set. When the list
+is empty or absent, the tool is not registered.
+
+The agent supplies only the message; the system owns the envelope and the agent cannot set
+or forge any envelope field. The input schema rejects unknown fields:
+
+| Field | Type | Required | Description |
+|---|---|---|---|
+| `severity` | string | Yes | One of `info`, `warning`, `critical` |
+| `title` | string | Yes | Non-empty short summary |
+| `body` | string | Yes | Non-empty notification detail |
+| `category` | string | No | One of `decision_needed`, `progress`, `blocked`, `completed`, `other` |
+
+The system-owned envelope carries a generated notification id, an ISO-8601 UTC timestamp, a
+source (the hostname by default), the issue id and identifier, the session id, the attempt,
+and the dispatch-frozen agent kind. The envelope correlates the notification to a session for
+an operator and a machine consumer.
+
+Rate limiting: the tool enforces a per-session cap, `max_per_session`, where `0` selects the
+default rather than unlimited. A call past the cap returns `rate_limited` and sends nothing.
+An accepted call increments the counter once, after delivery, not once per backend.
+
+Result semantics: on success the tool returns `{"success": true, "data": {"delivered": <int>,
+"notification_id": "<id>"}}`, the uniform success envelope of Section 10.4.2. On a domain failure
+it returns `{"success": false, "error": {"kind": "...", "message": "..."}}` with `error.kind` in
+the closed set below. The Go error return is reserved for an internal marshal failure.
+
+| `error.kind` | Condition |
+|---|---|
+| `invalid_input` | Input fails schema decode, carries unknown or trailing fields, has an out-of-enum `severity` or `category`, or has an empty `title` or `body` |
+| `rate_limited` | The per-session counter has reached `max_per_session` |
+| `send_failed` | A backend returned a transport failure, a non-2xx response, or an unparseable response. The message is a redacted category and never echoes the URL, request body, or response body |
+| `backend_unavailable` | No backend could be resolved at execution time (defensive; normal operation gates registration on a configured backend) |
+
+#### 10.4.6 Tools vs. agent-authored files
+
+The tool subsystem (this section) and the `.sortie/status` file protocol (Section 21) are
+independent communication channels between agents and the orchestrator. They address different
+concerns, operate on different transports, and have deliberately different failure
+characteristics. This separation is a design choice, not an implementation accident.
+
+**Communication patterns.**
+
+| Property | Agent tools | `.sortie/status` file |
+|---|---|---|
+| Direction | Agent <-> Orchestrator (request-response) | Agent -> Orchestrator (one-way advisory) |
+| Transport | Tool call (MCP stdio sidecar) | Filesystem sentinel file |
+| Timing | Synchronous, during a turn | Asynchronous, read after turn completes |
+| Purpose | Data access (tracker queries, orchestrator state) | Control flow (retry suppression, soft stop) |
+| Failure mode | Tool call fails; agent receives error and continues | File absent or unreadable; orchestrator proceeds normally |
+| Agent requirement | MCP client or equivalent tool-calling capability | Write a file to disk (`echo "blocked" > .sortie/status`) |
+
+**Why two channels exist.** The channels serve orthogonal roles:
+
+- Tools are the **data plane**: the agent requests information or performs a mutation and
+  receives a structured result within the same turn. The agent needs the response to continue
+  its work.
+- The `.sortie/status` file is the **control plane**: the agent advises the orchestrator about
+  task feasibility after the turn completes. The orchestrator uses this signal to suppress
+  continuation retries. No response flows back to the agent.
+
+The `notify_operator` tool (Section 10.4.5) is a third direction that the data-plane and
+control-plane framing above does not cover: agent to operator. Most tools target the
+orchestrator and return data the agent consumes to continue its turn. `notify_operator` is a
+tool by transport (it travels the MCP execution channel and returns a delivery result), but its
+recipient is a human on a configured channel, not the orchestrator, and it changes no
+orchestrator state. The three patterns are distinct: read or mutate orchestrator-held data
+(`tracker_api`, `cost_budget`, `sortie_status`, `workspace_history`), advise the orchestrator
+about feasibility after the turn (`.sortie/status`), and reach the operator in real time during
+the turn (`notify_operator`). `notify_operator` does not suppress retries, perform a handoff, or
+release a claim; an agent that needs to alter orchestrator control flow still writes
+`.sortie/status`.
+
+Collapsing both into a single MCP-based channel was evaluated and rejected during the A2O
+protocol design (see `docs/agent-to-orchestrator-protocol.md`, Section 5.1, Alternative 2).
+The MCP approach fails the agent-agnostic requirement: an agent without MCP client support
+cannot send the control signal. The file-based channel satisfies all six A2O requirements
+(agent-agnostic, fail-safe, advisory, zero-dependency, forward-compatible, inspectable)
+simultaneously; no tool-call-based mechanism achieves this.
+
+**Coexistence.** An agent MAY use both channels in the same session. Typical sequence:
+
+1. Agent calls a tool (e.g., `tracker_api.fetch_issue`) to gather context.
+2. Agent determines the task requires a human architectural decision.
+3. Agent writes `mkdir -p .sortie && echo "blocked" > .sortie/status`.
+4. Turn completes; orchestrator reads the status file and suppresses retries.
+
+The two channels do not interact. A tool call cannot write to `.sortie/status` on behalf of
+the agent, and the `.sortie/status` file cannot trigger tool execution. The orchestrator
+processes them at different points in the worker lifecycle: tool calls during the turn (via the
+execution channel), status file after the turn (Section 21.1, read timing per
+`agent-to-orchestrator-protocol.md` Section 3.1).
+
+**Defense in depth.** The independence of the two channels provides resilience. If the MCP
+execution channel is unavailable (sidecar crash, agent lacks MCP support),
+the file-based advisory signal still functions. If the filesystem is read-only or the workspace
+is on a remote host with restricted write access, tool calls still function. Neither channel is
+a single point of failure for the other.
+
+#### 10.4.7 Notifier adapter family
+
+Operator notifications are an adapter family, the same shape as the tracker, agent, CI, and
+SCM families. The `notify_operator` tool (Section 10.4.5) is a thin Tier 2 wrapper over this
+family; a new channel is a new package behind the existing interface, not a tool rewrite.
+
+The family has four parts:
+
+- **The `domain.Notifier` interface** exposes one method, `Send(ctx, Notification) error`. A
+  single method keeps every backend interchangeable and lets any producer reuse the family.
+  An implementation applies a per-call timeout and never logs the endpoint URL, the request
+  body, or the response body.
+- **The normalized `domain.Notification`** has two layers. The envelope is system-owned and
+  carries the notification id, timestamp, source, issue id and identifier, session id,
+  attempt, and dispatch-frozen agent kind. The message is agent-supplied and carries
+  `severity`, `title`, `body`, and an optional `category`. The value is self-contained:
+  every field a backend needs rides in it, with no dependency on producer-only state, so a
+  future orchestrator producer can fill the envelope without an interface change.
+- **The `registry.Notifiers` registry** maps a `kind` string to a constructor. Backend
+  packages register in `init()`; the sidecar resolves backends by `kind` at runtime. This
+  mirrors `registry.SCMAdapters` exactly.
+- **The backend packages** live under `internal/notify/<kind>/`. v1 ships `webhook` (posts
+  the notification as a JSON object using generic field names) and `slack` (posts a
+  Slack-shaped body with a `text` field). Each builds on the shared HTTP client with its
+  configured endpoint as the base URL, applies a mandatory per-call timeout, and classifies
+  its own transport and non-2xx errors into a category that omits the URL and payload.
+
+The backend packages obey the adapter-family boundary rules: no cross-adapter imports, no
+orchestrator imports, normalization to the domain type at the boundary, and generic
+`notifier_*` vocabulary in the core, never `slack_*`.
+
+Backends register via the notifier registry using `init()` functions:
+
+```go
+func init() {
+    registry.Notifiers.Register("webhook", newNotifier)
+}
+```
+
+The `NotifierConstructor` signature is:
+
+```go
+type NotifierConstructor func(config map[string]any) (domain.Notifier, error)
+```
+
+The `config` parameter receives the per-backend fields from the matching `notifications`
+list entry (Section 5.3.11), with `$VAR` references already resolved. A constructor rejects a missing required
+field or a secret that resolved to the empty string, which surfaces as a fatal sidecar
+startup error rather than a notification posted nowhere.
+
+### 10.5 Timeouts and Error Mapping
+
+Timeouts:
+
+- `agent.read_timeout_ms`: request/response timeout during startup and sync requests
+- `agent.turn_timeout_ms`: total turn stream timeout
+- `agent.stall_timeout_ms`: enforced by orchestrator based on event inactivity
+
+Error mapping (recommended normalized categories):
+
+- `agent_not_found`
+- `invalid_workspace_cwd`
+- `response_timeout`
+- `turn_timeout`
+- `port_exit`
+- `response_error`
+- `turn_failed`
+- `turn_cancelled`
+- `turn_input_required`
+
+### 10.6 Agent Runner Contract
+
+The `Agent Runner` wraps workspace + prompt + agent adapter.
+
+Behavior:
+
+1. Create/reuse workspace for issue.
+2. Build prompt from workflow template.
+3. Start agent session via adapter.
+4. Relay agent events to orchestrator.
+5. On any error, fail the worker attempt (the orchestrator will retry).
+
+Note:
+
+- Workspaces are intentionally preserved after successful runs.
+
+### 10.7 Local Subprocess Launch Contract
+
+This subsection applies only to adapters that launch a local subprocess (e.g., Claude Code,
+Copilot CLI, OpenCode CLI, Kiro CLI, and the Codex app-server). HTTP-based and remote
+adapters define their own connection semantics.
+
+When `agent.kind` requires a local subprocess:
+
+- Command: `agent.command`
+- Invocation:
+  - POSIX: `sh -c <agent.command>` (or `bash -lc` when a login shell is required by the agent).
+    The shell used for invocation is configurable to support minimal Docker images and CI
+    environments where bash may not be present.
+  - Windows: the adapter invokes the command directly (no shell wrapper). The subprocess receives
+    `CREATE_NEW_PROCESS_GROUP` so it can be signaled independently of the orchestrator.
+- Working directory: workspace path
+- Stdout/stderr: separate streams
+
+Process group isolation:
+
+- The adapter MUST place the subprocess in its own process group before starting it.
+  - POSIX: `Setpgid = true` (new process group at fork time).
+  - Windows: `CREATE_NEW_PROCESS_GROUP` creation flag, followed by Job Object assignment after
+    process start. The Job Object is configured with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` so
+    the entire process tree is terminated if the orchestrator crashes.
+
+Graceful shutdown sequence:
+
+- On context cancellation or `StopSession`, the adapter sends a platform-appropriate graceful
+  shutdown signal to the process group:
+  - POSIX: `SIGTERM` to the process group (`kill(-pgid, SIGTERM)`).
+  - Windows: `CTRL_BREAK_EVENT` via `GenerateConsoleCtrlEvent` to the process group.
+- After a grace period (default 5 seconds), force-terminate the process tree:
+  - POSIX: `SIGKILL` to the process group.
+  - Windows: `TerminateJobObject` to kill all processes in the Job Object.
+- After `cmd.Wait()` returns, a best-effort force kill is sent to the process group to reap any
+  children that survived the graceful signal.
+
+Recommended additional process settings:
+
+- Max line size: 10 MB (for safe buffering)
+

@@ -64,7 +64,7 @@ external tools). The decision must resolve this tension.
 
 ## Considered Options
 
-- **Embedded HTTP server with JSON API + HTML dashboard** — the architecture Section 13.7
+- **Embedded HTTP server with JSON API + HTML dashboard** — the [architecture Section 13.7](../architecture/18-logging-status-and-observability.md#137-http-server)
   spec: bespoke observability surface with `curl`/browser access, no standard telemetry
   format, no integration with external monitoring systems.
 - **Prometheus `/metrics` endpoint** — standard `/metrics` endpoint via
@@ -100,7 +100,7 @@ the forensic record, and the first place an operator looks when something goes w
 
 ### Tier 2: Embedded JSON API + HTML Dashboard (Default on Port 7678)
 
-The embedded HTTP server specified in architecture Section 13.7 provides:
+The embedded HTTP server specified in [architecture Section 13.7](../architecture/18-logging-status-and-observability.md#137-http-server) provides:
 
 - **JSON API** (`/api/v1/*`) for programmatic access to runtime state, per-issue detail, and
   operational triggers.
@@ -240,7 +240,7 @@ No single tier satisfies all personas. The combination provides:
 
 ### Considered Options in Detail
 
-**Embedded HTTP server with JSON API + HTML dashboard.** The architecture Section 13.7 spec:
+**Embedded HTTP server with JSON API + HTML dashboard.** The [architecture Section 13.7](../architecture/18-logging-status-and-observability.md#137-http-server) spec:
 `GET /api/v1/state`, `GET /api/v1/<identifier>`, `POST /api/v1/refresh`, and `/` dashboard
 via `html/template`. Pros: zero dependencies, full control over Sortie-specific data
 presentation (retry queue delays, turn counts, `.sortie/status`), aligns with single-binary
@@ -263,7 +263,7 @@ by log aggregation (Elasticsearch/Loki/Splunk/CloudWatch). Pros: zero new depend
 works with any aggregation tool, captures full event context. Cons: log-to-metric pipelines
 are fragile and silently break on log format changes, no standardized metric schema (no
 reusable dashboards or alert rules), no point-in-time state snapshots, query latency for
-aggregation questions, and the architecture Section 13.3 runtime snapshot requirement
+aggregation questions, and the [architecture Section 13.3](../architecture/18-logging-status-and-observability.md#133-runtime-snapshot--monitoring-interface) runtime snapshot requirement
 cannot be satisfied by logs alone. Retained as the always-on Tier 1 baseline but
 insufficient as the sole observability surface.
 

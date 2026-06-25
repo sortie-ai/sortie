@@ -21,7 +21,7 @@ Three integration surfaces exist, in order of relevance to Sortie:
 
 1. **CLI in non-interactive ("headless") mode** using the `-p` (prompt) flag with
    `--output-format json` for JSONL output. This is the primary integration surface per
-   architecture Section 10.7 (Local Subprocess Launch Contract).
+   [architecture Section 10.7](architecture/10-agent-adapter-contract.md#107-local-subprocess-launch-contract) (Local Subprocess Launch Contract).
 2. **Agent Client Protocol (ACP)** via `copilot --acp` ([CLI command reference][cli-ref]),
    which starts an ACP server. This is a structured alternative but details are sparse in
    official documentation and the protocol surface is subject to breaking changes.
@@ -163,7 +163,7 @@ always set by the adapter; others are conditional.
 | `--deny-tool <tools>`      | Deny specific tools. Takes precedence over `--allow-tool`. Supports glob patterns.                              | Optional. For tool restriction.                                                                                                         |
 
 > **Security note:** `--allow-all` / `--yolo` allows arbitrary command execution and file
-> modification. Per architecture Section 10.4, Sortie adopts a high-trust posture where
+> modification. Per [architecture Section 10.4](architecture/10-agent-adapter-contract.md#104-approval-tools-and-user-input-policy), Sortie adopts a high-trust posture where
 > approval requests must not leave a run stalled. The `--allow-all` flag is appropriate for
 > headless operation in sandboxed environments. Sortie's workspace isolation and hook system
 > operate as additional defense-in-depth.
@@ -203,7 +203,7 @@ backed by `apply_patch`), `create`, `apply_patch`, `glob`, `grep`, `web_fetch`, 
 
 ## Subprocess Invocation
 
-Per architecture Section 10.7, the adapter launches:
+Per [architecture Section 10.7](architecture/10-agent-adapter-contract.md#107-local-subprocess-launch-contract), the adapter launches:
 
 ```
 # POSIX (Linux / macOS)
@@ -409,7 +409,7 @@ TokenUsage{
 
 ## Session Lifecycle Mapping
 
-Architecture Section 10.2 defines the session lifecycle. Here is how Copilot CLI maps to it:
+[Architecture Section 10.2](architecture/10-agent-adapter-contract.md#102-session-lifecycle) defines the session lifecycle. Here is how Copilot CLI maps to it:
 
 ### `StartSession`
 
@@ -543,7 +543,7 @@ The adapter must respect `context.Context` cancellation:
 
 ## Permission and Approval Policy
 
-Per architecture Section 10.4, Sortie adopts a high-trust posture:
+Per [architecture Section 10.4](architecture/10-agent-adapter-contract.md#104-approval-tools-and-user-input-policy), Sortie adopts a high-trust posture:
 
 | Policy                    | Implementation                                                                                                                                                                                           |
 | ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -605,7 +605,7 @@ is set.
 | Organization policy disables Copilot CLI   | CLI fails during authentication                            | `turn_failed`           |
 | Classic PAT (`ghp_*`) used                 | Authentication rejected                                    | `turn_failed`           |
 
-### Error category mapping (per architecture Section 10.5)
+### Error category mapping (per [architecture Section 10.5](architecture/10-agent-adapter-contract.md#105-timeouts-and-error-mapping))
 
 | Condition                                 | Error category          |
 | ----------------------------------------- | ----------------------- |
@@ -905,7 +905,7 @@ per-tool and per-request token breakdowns that JSONL may not provide.
 
 ## Adapter-Specific Pass-Through Config
 
-Per architecture Section 5.3.5, the adapter reads pass-through config from the `copilot-cli`
+Per [architecture Section 5.3.5](architecture/05-workflow-specification.md#535-agent-object), the adapter reads pass-through config from the `copilot-cli`
 sub-object in WORKFLOW.md:
 
 | Config key                                | Type    | Description                                                                      |
@@ -1062,7 +1062,7 @@ await client.stop();
 | System message override   | `customize` (per-section) or `replace` mode.               | Reference for prompt injection behavior.                         |
 
 Sortie does **not** use the SDK because the adapter is implemented in Go and the architecture
-mandates subprocess-based integration (Section 10.7). The CLI provides a clean, language-agnostic
+mandates subprocess-based integration ([Section 10.7](architecture/10-agent-adapter-contract.md#107-local-subprocess-launch-contract)). The CLI provides a clean, language-agnostic
 integration surface. The SDK documentation is useful as a reference for expected event types and
 session behavior, as the SDK and CLI share the same underlying agent engine.
 

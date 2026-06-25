@@ -76,13 +76,13 @@ Before writing any code, work through these steps in order. Do not skip steps.
 
 ### Step 1 - Locate the spec
 
-Read the section of `docs/architecture.md` that governs the area you are changing.
-If the task touches configuration, read Section 5–6.
-If it touches the orchestrator, read Sections 7–8 and 16.
-If it touches adapters, read Sections 10–11.
-If it touches workspace, read Section 9.
-If it touches persistence, read Section 19.
-If it touches observability, read Section 13.
+Read the architecture section that governs the area you are changing. The `docs/architecture.md` index routes each area to its section file under `docs/architecture/`.
+If the task touches configuration, read Section [5](docs/architecture/05-workflow-specification.md)–[6](docs/architecture/06-configuration-specification.md).
+If it touches the orchestrator, read Sections [7](docs/architecture/07-orchestration-state-machine.md)–[8](docs/architecture/08-polling-scheduling-and-reconciliation.md) and [16](docs/architecture/21-reference-algorithms.md).
+If it touches adapters, read Sections [10](docs/architecture/10-agent-adapter-contract.md)–[11](docs/architecture/11-issue-tracker-integration-contract.md).
+If it touches workspace, read Section [9](docs/architecture/09-workspace-management-and-safety.md).
+If it touches persistence, read Section [19](docs/architecture/24-persistence-schema.md).
+If it touches observability, read Section [13](docs/architecture/18-logging-status-and-observability.md).
 
 Also read `CLAUDE.md` for build commands and project boundaries.
 

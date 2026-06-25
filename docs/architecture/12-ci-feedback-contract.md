@@ -1,0 +1,171 @@
+## 11A. CI Feedback Contract
+
+This section defines the CI status provider interface and the orchestrator's CI feedback loop.
+The CI feedback system is a read-only integration: it queries CI pipeline status for git refs
+and injects failure context into agent continuation prompts. It does not trigger builds, manage
+pipelines, or write CI configuration.
+
+### Naming convention
+
+CI status providers use the `*Provider` suffix rather than `*Adapter`. The distinction is
+intentional: a provider is a read-only, single-method contract (`FetchCIStatus`), while an adapter
+(tracker, agent) manages a full lifecycle with multiple operations and bidirectional state. The
+naming signals to implementers that the contract surface is minimal.
+
+### 11A.1 CIStatusProvider interface
+
+```go
+type CIStatusProvider interface {
+    FetchCIStatus(ctx context.Context, ref string) (CIResult, error)
+}
+```
+
+- `ref` is a git ref string (branch name or commit SHA). Adapters that require a full commit SHA
+  MUST resolve branch names to SHAs internally.
+- Returns a `CIResult` on success or a `*CIError` on failure. All error categories are non-fatal
+  from the orchestrator's perspective.
+- Implementations MUST be safe for concurrent use. The orchestrator's reconcile loop may call
+  `FetchCIStatus` for multiple workspaces concurrently.
+
+### 11A.2 CIResult structure
+
+```text
+CIResult:
+  status:        CIStatus         # aggregate pipeline status
+  check_runs:    []CheckRun       # individual check runs
+  log_excerpt:   string           # truncated log from first failing check
+  failing_count: int              # precomputed count of failing check runs
+  ref:           string           # echoed git ref for observability
+```
+
+`CIStatus` is an enum with three values:
+
+| Value | Meaning |
+|-------|---------|
+| `pending` | CI checks are still running or no checks have been reported. |
+| `passing` | All checks completed successfully. |
+| `failing` | At least one check completed with a failure conclusion. |
+
+Each `CheckRun` contains:
+
+- `name`: check name as defined by the CI platform (e.g. `test`, `lint`, `build`).
+- `status`: execution status (`queued`, `in_progress`, `completed`).
+- `conclusion`: normalized outcome (`success`, `failure`, `cancelled`, `timed_out`, `neutral`,
+  `skipped`, `pending`). Meaningful only when status is `completed`. Unknown or unmappable
+  platform conclusions map to `pending`.
+- `details_url`: web URL to the check run's detail page. Empty string when unavailable.
+
+`log_excerpt` handling:
+
+- CI logs may contain secrets accidentally printed by build scripts. Adapters MUST truncate to
+  the configured `max_log_lines` and SHOULD strip ANSI escape sequences.
+- Consumers MUST NOT persist log excerpts to the database or expose them via unauthenticated API
+  endpoints.
+- The orchestrator omits the log section from the continuation prompt when `log_excerpt` is empty.
+
+`CIResult.ToTemplateMap()` converts the result to a `map[string]any` with snake_case keys
+(`status`, `check_runs`, `log_excerpt`, `failing_count`, `ref`) for use as the `ci_failure`
+prompt template variable (Section 12.1).
+
+### 11A.3 CIError type
+
+```text
+CIError:
+  kind:    CIErrorKind    # normalized error category
+  message: string         # operator-friendly description
+  err:     error          # underlying error (may be nil)
+```
+
+Error categories:
+
+| Kind | Meaning |
+|------|---------|
+| `ci_transport_error` | Network or transport failure (connection, DNS, TLS). |
+| `ci_auth_error` | Authentication or authorization failure (expired token, insufficient scopes). |
+| `ci_api_error` | Non-success HTTP status or API-level error (rate limiting, server error). |
+| `ci_not_found` | Requested ref or repository does not exist (HTTP 404). |
+| `ci_payload_error` | Malformed or unexpected response structure. |
+
+`CIError` implements `Error()` and `Unwrap()` for use with `errors.Is`/`errors.As`.
+
+Orchestrator behavior on CI errors:
+
+- Log a warning with the ref and error category.
+- Re-enqueue the pending CI check entry for the next reconciliation tick.
+- Increment `sortie_ci_status_checks_total{result="error"}`.
+
+### 11A.4 Reconcile loop integration
+
+CI status reconciliation runs as Part C of active run reconciliation (Section 8.5), after tracker
+state refresh. The flow is:
+
+1. Skip entirely when neither `ci_feedback.kind` nor `reactions.ci_failure.provider` is configured
+   (no `CIStatusProvider` constructed).
+2. For each entry in `pending_reactions` with kind `ci`:
+   a. Remove the entry from the map (prevents reprocessing within the same tick).
+   b. Call `CIStatusProvider.FetchCIStatus` with the SCM ref (SHA preferred, branch as fallback).
+   c. On fetch error: re-enqueue the entry; continue.
+   d. On `passing`: clear `reaction_attempts` for the issue and kind.
+   e. On `pending`: re-enqueue the entry.
+   f. On `failing`: handle CI failure (see Section 11A.5).
+
+### 11A.5 CI failure handling
+
+When CI status is `failing`:
+
+1. Persist a CI-failure run history entry (`status: ci_failed`).
+2. Increment `reaction_attempts[issue_id:ci]`.
+3. If `reaction_attempts[issue_id:ci]` exceeds `ci_feedback.max_retries`: escalate (Section 11A.6).
+4. Otherwise:
+   a. Convert `CIResult` to a template map via `ToTemplateMap()`.
+   b. Cancel the existing continuation retry for the issue.
+   c. Schedule a CI-fix dispatch carrying the CI failure context. The retry entry's
+      `ContinuationContext` field carries the map through the timer to the worker goroutine.
+   d. The worker injects the context into the prompt on turn 1 via `prompt.WithContinuationContext`.
+
+CI-fix dispatches count toward the regular retry machinery but use a fixed delay rather than
+exponential backoff.
+
+### 11A.6 Escalation behavior
+
+When `reaction_attempts[issue_id:ci]` exceeds `ci_feedback.max_retries`:
+
+- `escalation: label` (default): add `escalation_label` (default `needs-human`) to the tracker
+  issue via `TrackerAdapter.AddLabel`. The label call runs in a detached goroutine with a 30-second
+  timeout.
+- `escalation: comment`: post a plain-text comment listing the ref, attempt count, failing check
+  names, conclusions, and details URLs. The comment call runs in a detached goroutine with a
+  30-second timeout.
+
+After escalation:
+
+- Cancel any pending retry for the issue.
+- Delete the persisted retry entry from SQLite.
+- Release the claim (`delete claimed[issue_id]`).
+- Clear all `reaction_attempts` and `pending_reactions` entries for the issue.
+
+Escalation failures are logged and counted (`sortie_ci_escalations_total{action="error"}`) but do
+not block claim release.
+
+### 11A.7 Adapter registration
+
+CI status providers register via the CI provider registry using `init()` functions, following the
+same pattern as tracker and agent adapters:
+
+```go
+func init() {
+    registry.CIProviders.Register("github", NewGitHubCIProvider)
+}
+```
+
+The `CIProviderConstructor` signature is:
+
+```go
+type CIProviderConstructor func(maxLogLines int, adapterConfig map[string]any) (domain.CIStatusProvider, error)
+```
+
+The `maxLogLines` parameter comes from `ci_feedback.max_log_lines`. The `adapterConfig` parameter
+comes from the `extensions` sub-object keyed by `ci_feedback.kind`. Startup merges tracker
+credentials (API key, project, endpoint) into that config only when `tracker.kind` and
+`ci_feedback.kind` match.
+
