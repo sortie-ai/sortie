@@ -100,7 +100,7 @@ them as regular GitHub issues instead:
 - Bugs in third-party coding agents (Claude Code, etc.) launched by Sortie.
 - Vulnerabilities in the underlying OS, container runtime, or hosting environment.
 - Issues that require the attacker to already have write access to WORKFLOW.md
-  (workflow configuration is a trusted input &mdash; see architecture Section 15.4).
+  (workflow configuration is a trusted input &mdash; see [architecture Section 15.4](docs/architecture/20-security-and-operational-safety.md#154-hook-script-safety)).
 - Misconfiguration of deployment-specific hardening (sandbox settings, network
   policies, credential scoping).
 - Automated scanner output without analysis demonstrating actual exploitability.
@@ -112,7 +112,7 @@ triage a borderline report than miss a real vulnerability.
 ## Security Architecture
 
 Sortie's security model is documented in the
-[architecture specification](docs/architecture.md) (Section 15). Key invariants:
+[architecture specification](docs/architecture/20-security-and-operational-safety.md) (Section 15). Key invariants:
 
 - **Path containment**: all workspace paths are validated to remain under the
   configured workspace root using symlink resolution and relative-path checks.

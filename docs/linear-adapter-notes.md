@@ -127,7 +127,7 @@ body layer; the adapter's body-first classifier handles it either way.
   top-level `errors` array, **potentially alongside partial `data`**.
 - The endpoint supports introspection; the full schema is also published at
   `linear/linear` (`packages/sdk/src/schema.graphql`).
-- Network timeout: 30,000 ms (architecture Section 11.2 default).
+- Network timeout: 30,000 ms ([architecture Section 11.2](architecture/11-issue-tracker-integration-contract.md#112-query-semantics) default).
 
 HTTP status semantics differ from REST APIs and from each other. The table marks
 what was observed live:
@@ -350,7 +350,7 @@ case-insensitive resolve plus update, works end to end.
 ## Operations
 
 The `TrackerAdapter` Go interface has nine methods. Seven of them are the
-required tracker operations in the architecture spec (Section 11.1),
+required tracker operations in the architecture spec ([Section 11.1](architecture/11-issue-tracker-integration-contract.md#111-required-operations)),
 `FetchCandidateIssues` through `TransitionIssue`; the interface adds
 `CommentIssue` (lifecycle comments) and `AddLabel` (CI-failure label
 escalation) beyond that required set. All nine map onto the single GraphQL
@@ -809,7 +809,7 @@ was not exercised; that branch remains documentation-sourced.)
 | `State`              | `issue.state.name`                                    | Original casing preserved                                                                                                                                                                                                                                              |
 | `BranchName`         | `issue.branchName`                                    | Non-null; auto-generated. Format is workspace-configurable (see below); treat the whole string as opaque, never parse the prefix                                                                                                                                       |
 | `URL`                | `issue.url`                                           | Provided directly, no construction                                                                                                                                                                                                                                     |
-| `Labels`             | `issue.labels.nodes[].name`                           | Lowercase each (Section 11.3); non-nil empty slice when none                                                                                                                                                                                                           |
+| `Labels`             | `issue.labels.nodes[].name`                           | Lowercase each ([Section 11.3](architecture/11-issue-tracker-integration-contract.md#113-normalization-rules)); non-nil empty slice when none                                                                                                                                                                                                           |
 | `Assignee`           | `assignee.displayName`, fallback `name`, then `email` | `assignee` is strictly the `User` type, nullable; null becomes empty string. Agents/apps are not `User`s (they surface under the separate `delegate`/`botActor` fields the adapter does not read), so an agent-driven issue with no human assignee normalizes to empty |
 | `IssueType`          | empty                                                 | Linear has no native issue-type field                                                                                                                                                                                                                                  |
 | `Parent`             | `issue.parent` `{id, identifier}`                     | Nil when absent                                                                                                                                                                                                                                                        |
@@ -890,7 +890,7 @@ Linear uses Relay-style cursor connections everywhere:
   with `after: null`, then `after: endCursor`, until `hasNextPage` is false.
 - Default page size is 50 when `first` is omitted (documented and repeated in
   every connection's schema doc). Sortie always passes `first` explicitly:
-  50 for top-level collections (Section 11.2), smaller for nested connections
+  50 for top-level collections ([Section 11.2](architecture/11-issue-tracker-integration-contract.md#112-query-semantics)), smaller for nested connections
   (complexity, below).
 - `first` must be in the range **1 to 250**, both bounds enforced and
   **[live-verified]**: `first: 251` fails with
@@ -899,7 +899,7 @@ Linear uses Relay-style cursor connections everywhere:
   `Argument Validation Error` on HTTP 200. With Sortie's page size of 50, neither
   bound is reachable; keep `first` between 1 and 250.
 - If `hasNextPage` is true but `endCursor` is empty or null, return
-  `ErrTrackerMissingCursor` (`tracker_missing_end_cursor`, Section 11.4)
+  `ErrTrackerMissingCursor` (`tracker_missing_end_cursor`, [Section 11.4](architecture/11-issue-tracker-integration-contract.md#114-error-handling-contract))
   instead of treating pagination as complete. Silent truncation here is a
   data-loss bug; this mirrors the Jira adapter's guard.
 - Default ordering is by `createdAt`; `orderBy: updatedAt` is the only

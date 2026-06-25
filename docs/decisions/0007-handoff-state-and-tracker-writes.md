@@ -13,13 +13,13 @@ agent completes work successfully but the issue remains in an active tracker sta
 occurs because:
 
 1. The agent finishes its turns and exits normally.
-2. The orchestrator schedules a continuation retry (architecture Section 7.3, `Worker Exit (normal)`).
+2. The orchestrator schedules a continuation retry ([architecture Section 7.3](../architecture/07-orchestration-state-machine.md#73-transition-triggers), `Worker Exit (normal)`).
 3. On retry, the issue is still active in the tracker (the agent created a PR but cannot
    transition the ticket).
 4. The orchestrator dispatches again. The agent finds no remaining work, exits normally.
 5. Go to step 2.
 
-The architecture spec (Section 11.5) explicitly states: "Sortie does not require first-class
+The architecture spec ([Section 11.5](../architecture/11-issue-tracker-integration-contract.md#115-tracker-writes-important-boundary)) explicitly states: "Sortie does not require first-class
 tracker write APIs in the orchestrator" and "Sortie remains a scheduler/runner and tracker
 reader." However, the spec also acknowledges (Section 1): "A successful run may end at a
 workflow-defined handoff state (for example `Human Review`), not necessarily `Done`," and
@@ -59,11 +59,11 @@ fallback — to break the cycle.
   and `TrackerAdapter.TransitionIssue` operation. On normal worker exit with the issue still
   active, the orchestrator transitions it to the handoff state.
 - **Option B: Agent-initiated transitions** — Rely on the agent to transition issues using
-  the `tracker_api` client-side tool (architecture Section 10.4). No orchestrator writes.
+  the `tracker_api` client-side tool ([architecture Section 10.4](../architecture/10-agent-adapter-contract.md#104-approval-tools-and-user-input-policy)). No orchestrator writes.
 - **Option C: Pure effort budget (circuit breaker)** — Add `agent.max_sessions` to cap the
   number of worker sessions per issue. No tracker writes by the orchestrator.
 - **Option D: `.sortie/status` file convention only** — The agent writes a status file
-  (architecture Section 21) to signal completion. The orchestrator reads it and suppresses
+  ([architecture Section 21](../architecture/26-agent-authored-workspace-files.md)) to signal completion. The orchestrator reads it and suppresses
   continuation retries.
 
 ## Decision Outcome
@@ -143,7 +143,7 @@ state and skips the handoff transition entirely.
 
 ### Why Not Option D Alone (Status File)
 
-The `.sortie/status` file (architecture Section 21) is an advisory signal: "blocked" or
+The `.sortie/status` file ([architecture Section 21](../architecture/26-agent-authored-workspace-files.md)) is an advisory signal: "blocked" or
 "needs-human-review." It suppresses continuation retries but does not communicate completion
 to the tracker. The issue remains in an active state in the tracker, invisible to
 non-orchestrator tools (dashboards, reports, team boards). The handoff transition moves the

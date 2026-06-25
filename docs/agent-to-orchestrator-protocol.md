@@ -52,7 +52,7 @@ productive from futile execution.
 ### 1.2 Requirements
 
 The feedback channel must satisfy the following constraints, derived from Sortie's architectural
-principles (architecture Section 1, Section 2):
+principles (architecture [Section 1](architecture/01-problem-statement.md), [Section 2](architecture/02-goals-and-non-goals.md)):
 
 1. **Agent-agnostic.** The mechanism must not depend on any specific agent runtime's capabilities.
    Any process capable of writing a file to disk must be able to participate. This rules out
@@ -89,7 +89,7 @@ This document specifies:
 This document does not specify:
 
 - The internal implementation of the orchestrator's retry or dispatch logic (see architecture
-  Sections 7, 8, and 16).
+  Sections [7](architecture/07-orchestration-state-machine.md), [8](architecture/08-polling-scheduling-and-reconciliation.md), and [16](architecture/21-reference-algorithms.md)).
 - The mechanism by which coding agents decide to write a status signal. That is an agent-internal
   concern.
 - Future extensions to the `.sortie/` namespace beyond the `status` file.
@@ -135,16 +135,16 @@ The status file path is:
 
 Where:
 
-- `<workspace_root>` is the configured `workspace.root` value (architecture Section 5.3.3).
+- `<workspace_root>` is the configured `workspace.root` value ([architecture Section 5.3.3](architecture/05-workflow-specification.md#533-workspace-object)).
 - `<sanitized_issue_identifier>` is the issue identifier sanitized to the character class
-  `[A-Za-z0-9._-]` (architecture Section 9.6, Invariant 3).
+  `[A-Za-z0-9._-]` ([architecture Section 9.6](architecture/09-workspace-management-and-safety.md#96-safety-invariants), Invariant 3).
 - `.sortie/` is a reserved directory namespace within the per-issue workspace.
 - `status` is the canonical filename.
 
 The `.sortie/` directory is not created by the orchestrator. The agent creates it as needed.
 
 Relative to the agent's working directory (which MUST equal the per-issue workspace path per
-architecture Section 9.6, Invariant 1), the file path is:
+[architecture Section 9.6](architecture/09-workspace-management-and-safety.md#96-safety-invariants), Invariant 1), the file path is:
 
 ```
 .sortie/status
@@ -180,7 +180,7 @@ agent's scope, or repeated failures on the same operation.
 **Orchestrator behavior:** The orchestrator treats this as a **soft stop**. It completes the
 current turn normally, then breaks the turn loop — no further continuation turns execute within
 the current worker run. On worker exit, the orchestrator MUST NOT schedule a continuation retry
-(architecture Section 8.4). The claim on the issue is released. If the issue subsequently returns
+([architecture Section 8.4](architecture/08-polling-scheduling-and-reconciliation.md#84-retry-and-backoff)). The claim on the issue is released. If the issue subsequently returns
 to an active state (e.g., after a human updates it), normal dispatch eligibility resumes.
 
 To clarify the two distinct suppression effects:
@@ -201,7 +201,7 @@ has low confidence in its solution.
 
 **Orchestrator behavior:** Like `blocked`, this value triggers a soft stop: the turn loop breaks,
 continuation retries are suppressed, and the issue claim is released. Unlike `blocked`, when
-`tracker.handoff_state` is configured (architecture Section 5.3.1) and the issue is in an active
+`tracker.handoff_state` is configured ([architecture Section 5.3.1](architecture/05-workflow-specification.md#531-tracker-object)) and the issue is in an active
 tracker state, the orchestrator performs the handoff transition before releasing the claim. If the
 handoff transition fails (network error, permission denied, nil adapter), the orchestrator logs a
 warning and releases the claim without scheduling a retry.
@@ -241,7 +241,7 @@ orchestrator reads.
 ### 2.4 Absent file
 
 If the `.sortie/status` file does not exist, the orchestrator proceeds with its default behavior:
-continuation retries are scheduled according to the standard algorithm (architecture Section 8.4).
+continuation retries are scheduled according to the standard algorithm ([architecture Section 8.4](architecture/08-polling-scheduling-and-reconciliation.md#84-retry-and-backoff)).
 
 File absence is the expected state during normal productive execution. The protocol follows the
 Kubernetes health probe principle: absence of a failure signal is treated as healthy [see
@@ -279,7 +279,7 @@ produces a token that will not match any recognized value and is handled as an u
 
 The orchestrator reads the status file **after each completed turn**, before making the
 continuation-turn or retry decision. The read occurs in the worker goroutine, within the turn
-loop described in architecture Section 16.5.
+loop described in [architecture Section 16.5](architecture/21-reference-algorithms.md#165-worker-attempt-workspace--prompt--agent).
 
 The read-after-turn timing eliminates race conditions between agent writes and orchestrator
 reads: the agent's turn has completed and the agent process is no longer writing before the
@@ -302,7 +302,7 @@ The tracker state refresh remains authoritative for detecting external state cha
 human moved the issue to "Done" while the agent was running). That check executes on every turn
 where the status file does not trigger a soft stop.
 
-Pseudo-code placement within the worker turn loop (extending architecture Section 16.5):
+Pseudo-code placement within the worker turn loop (extending [architecture Section 16.5](architecture/21-reference-algorithms.md#165-worker-attempt-workspace--prompt--agent)):
 
 ```
 while true:
@@ -374,7 +374,7 @@ scripts may write to `.sortie/status` as a pre-condition gate (e.g., a CI readin
 their output being erased. The cleanup targets only the `status` file; the `.sortie/` directory
 itself is left intact.
 
-In the worker lifecycle (architecture Section 16.5), the cleanup slot is:
+In the worker lifecycle ([architecture Section 16.5](architecture/21-reference-algorithms.md#165-worker-attempt-workspace--prompt--agent)), the cleanup slot is:
 
 1. Workspace directory ensured (`workspace_manager.create_for_issue`).
 2. **Status file cleanup** (this section).
@@ -418,7 +418,7 @@ mechanism is required.
 ### 3.6 Interaction with tracker handoff state
 
 The `.sortie/status` file protocol and the `tracker.handoff_state` configuration
-(architecture Section 5.3.1) are **complementary mechanisms** that interact during the worker
+([architecture Section 5.3.1](architecture/05-workflow-specification.md#531-tracker-object)) are **complementary mechanisms** that interact during the worker
 exit phase. The status file value determines whether the handoff transition fires:
 
 | `.sortie/status` value | Worker exit | Handoff transition | Continuation retry |
@@ -658,7 +658,7 @@ manually.
 ### 7.2 Path containment
 
 The `.sortie/status` file resides within the per-issue workspace directory, which is itself
-contained under `workspace.root` (architecture Section 9.6). The orchestrator reads only this
+contained under `workspace.root` ([architecture Section 9.6](architecture/09-workspace-management-and-safety.md#96-safety-invariants)). The orchestrator reads only this
 specific path. No user-controlled input influences the path construction beyond the issue
 identifier, which is sanitized to `[A-Za-z0-9._-]`.
 
@@ -666,7 +666,7 @@ The orchestrator MUST NOT follow symbolic links when reading the status file. A 
 status file path, the `.sortie/` directory, or any intermediate component MUST be treated as a
 read error (Section 2.6): log a warning, treat as absent.
 
-This requirement extends the workspace safety model (architecture Section 9.6) into the
+This requirement extends the workspace safety model ([architecture Section 9.6](architecture/09-workspace-management-and-safety.md#96-safety-invariants)) into the
 `.sortie/` namespace. Existing workspace path validation covers the workspace root and per-issue
 directory; the symlink check here adds coverage for files created by the agent inside the
 workspace. Implementation requires `Lstat` checks on the path components leading to the status

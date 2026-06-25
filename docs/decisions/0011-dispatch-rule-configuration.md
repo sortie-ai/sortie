@@ -49,7 +49,7 @@ Markdown body single-file format) and [ADR-0005](0005-prompt-template-engine.md)
    lexicographic), capacity gates (Section 8.3 — global and per-state slots), blocker
    rule, claim, and reconciliation logic must remain unchanged. Rule evaluation is a
    *post-eligibility* selection step, not a replacement for any existing gate.
-5. **Session continuity (architecture §7.1, §10.2).** Continuation retries propagate
+5. **Session continuity (architecture [§7.1](../architecture/07-orchestration-state-machine.md#71-issue-orchestration-states), [§10.2](../architecture/10-agent-adapter-contract.md#102-session-lifecycle)).** Continuation retries propagate
    `ResumeSessionID` to the agent adapter so the agent resumes its prior thread.
    Switching agent kind or template across attempts on the same claim would corrupt
    that thread. Rule resolution must therefore freeze the selected agent and template

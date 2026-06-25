@@ -15,7 +15,7 @@ from stdout, and terminate it when done.
 The primary integration surface is the **CLI in non-interactive ("headless") mode** using the
 `-p` (print) flag. Anthropic also provides TypeScript and Python SDKs (`@anthropic-ai/claude-agent-sdk`
 and `claude-agent-sdk` respectively), but Sortie's Go adapter uses the CLI subprocess approach per
-architecture Section 10.7 (Local Subprocess Launch Contract).
+[architecture Section 10.7](architecture/10-agent-adapter-contract.md#107-local-subprocess-launch-contract) (Local Subprocess Launch Contract).
 
 ---
 
@@ -140,7 +140,7 @@ are always set by the adapter; others are conditional.
 
 ## Subprocess Invocation
 
-Per architecture Section 10.7, the adapter launches:
+Per [architecture Section 10.7](architecture/10-agent-adapter-contract.md#107-local-subprocess-launch-contract), the adapter launches:
 
 ```
 # POSIX (Linux / macOS)
@@ -427,7 +427,7 @@ analysis (cached tokens are cheaper) but are not required for the normalized `to
 
 ## Session Lifecycle Mapping
 
-Architecture Section 10.2 defines the session lifecycle. Here is how Claude Code maps to it:
+[Architecture Section 10.2](architecture/10-agent-adapter-contract.md#102-session-lifecycle) defines the session lifecycle. Here is how Claude Code maps to it:
 
 ### `StartSession`
 
@@ -559,7 +559,7 @@ The adapter must respect `context.Context` cancellation:
 
 ## Permission and Approval Policy
 
-Per architecture Section 10.4, Sortie adopts a high-trust posture:
+Per [architecture Section 10.4](architecture/10-agent-adapter-contract.md#104-approval-tools-and-user-input-policy), Sortie adopts a high-trust posture:
 
 | Policy                    | Implementation                                                                                                                                                                                                                                                     |
 | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -627,7 +627,7 @@ The adapter must check both the exit code and the result event fields.
 | `error_during_execution`              | `true`     | `turn_failed`    | Runtime error (API failure, tool crash, etc). |
 | `error_max_structured_output_retries` | `true`     | `turn_failed`    | `--json-schema` validation exhausted retries. |
 
-### Error category mapping (per architecture Section 10.5)
+### Error category mapping (per [architecture Section 10.5](architecture/10-agent-adapter-contract.md#105-timeouts-and-error-mapping))
 
 | Condition                                 | Error category          |
 | ----------------------------------------- | ----------------------- |
@@ -779,7 +779,7 @@ but the adapter's primary event source is the `stream-json` stdout output, not O
 
 ## Adapter-Specific Pass-Through Config
 
-Per architecture Section 5.3.5, the adapter reads pass-through config from the `claude-code`
+Per [architecture Section 5.3.5](architecture/05-workflow-specification.md#535-agent-object), the adapter reads pass-through config from the `claude-code`
 sub-object in WORKFLOW.md:
 
 | Config key                        | Type    | Description                                                                                                                                                 |
@@ -918,7 +918,7 @@ async with ClaudeSDKClient(options=options) as client:
 ```
 
 Sortie does **not** use the SDKs because the adapter is implemented in Go and the
-architecture mandates subprocess-based integration (Section 10.7). The CLI provides a
+architecture mandates subprocess-based integration ([Section 10.7](architecture/10-agent-adapter-contract.md#107-local-subprocess-launch-contract)). The CLI provides a
 clean, language-agnostic integration surface. The SDK documentation is useful as a
 reference for expected message types and session behavior, as the SDK and CLI share the
 same underlying protocol.

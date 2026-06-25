@@ -7,7 +7,7 @@
 >
 > **Prior art:** OpenAI Symphony (Elixir) uses the app-server JSON-RPC
 > protocol exclusively. Sortie's adapter uses the same protocol surface per architecture
-> Section 10.7 (Local Subprocess Launch Contract).
+> [Section 10.7](architecture/10-agent-adapter-contract.md#107-local-subprocess-launch-contract) (Local Subprocess Launch Contract).
 
 ---
 

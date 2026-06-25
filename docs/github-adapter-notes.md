@@ -97,7 +97,7 @@ Query parameters:
 | `labels`    | comma-separated label list | Filter by active state labels       |
 | `sort`      | `created`                  | Stable ordering                     |
 | `direction` | `asc`                      | Oldest first                        |
-| `per_page`  | `50`                       | Per architecture Section 11.2       |
+| `per_page`  | `50`                       | Per [architecture Section 11.2](architecture/11-issue-tracker-integration-contract.md#112-query-semantics)       |
 
 **Pull request filtering:** The issues endpoint returns both issues and pull requests.
 Pull requests have a non-null `pull_request` key. The adapter must skip entries where
@@ -165,7 +165,7 @@ Query parameters:
 
 | Parameter  | Value          | Notes                                           |
 | ---------- | -------------- | ----------------------------------------------- |
-| `per_page` | `50`           | Per architecture Section 11.2                   |
+| `per_page` | `50`           | Per [architecture Section 11.2](architecture/11-issue-tracker-integration-contract.md#112-query-semantics)                   |
 | `page`     | 1, 2, 3, ...   | Offset pagination                               |
 | `since`    | ISO-8601 timestamp | Optional. Only comments updated after this time |
 
@@ -226,7 +226,7 @@ tracker:
 ```
 
 These values correspond to GitHub label names (normalized to lowercase per architecture
-Section 11.3). The adapter:
+[Section 11.3](architecture/11-issue-tracker-integration-contract.md#113-normalization-rules)). The adapter:
 
 - Derives an issue's state by scanning its labels against the configured state lists.
 - Returns the **first matching** label as the state. If multiple state labels are present,
@@ -262,7 +262,7 @@ with existing repository conventions.
 | `State`              | Label-derived                     | See State mapping section                            |
 | `BranchName`         | —                                 | Not available in issue response. See note below      |
 | `URL`                | `html_url`                        | Directly available, no construction needed           |
-| `Labels`             | `labels[].name`                   | Lowercase each per Section 11.3                      |
+| `Labels`             | `labels[].name`                   | Lowercase each per [Section 11.3](architecture/11-issue-tracker-integration-contract.md#113-normalization-rules)                      |
 | `Assignee`           | `assignees[0].login`              | Empty array → empty string. Uses `login`, not `displayName`. The singular `assignee` field was removed in API version `2026-03-10`; use the `assignees` array |
 | `IssueType`          | `type.name`                       | GitHub issue types (if configured). See note below   |
 | `Parent`             | `GET .../issues/{n}/parent`       | Separate endpoint. 404 → nil                        |
@@ -350,7 +350,7 @@ Verified: returns `404` for issues without a parent assignment.
 
 GitHub uses `Link` header-based pagination for list endpoints.
 
-- Set `per_page=50` (architecture Section 11.2 default, max `100`).
+- Set `per_page=50` ([architecture Section 11.2](architecture/11-issue-tracker-integration-contract.md#112-query-semantics) default, max `100`).
 - Parse the `Link` response header for the URL with `rel="next"`.
 - Stop when no `rel="next"` link is present.
 - The `rel="last"` link indicates total pages but is not needed for iteration.
@@ -503,7 +503,7 @@ other messages) by inspecting the response body. Rate limit 403s map to
 - **`tracker.query_filter`:** Optional GitHub search qualifier string appended to
   the search query. Example: `label:sortie-managed milestone:"Sprint 1"`.
   When set, the adapter uses `GET /search/issues` instead of `GET /repos/.../issues`.
-- **Network timeout:** 30,000 ms per architecture Section 11.2.
+- **Network timeout:** 30,000 ms per [architecture Section 11.2](architecture/11-issue-tracker-integration-contract.md#112-query-semantics).
 - **API version header:** The adapter must send `X-GitHub-Api-Version: 2026-03-10` on
   every request. This pins behavior to the latest supported version and prevents
   breakage from future API evolution.
@@ -516,7 +516,7 @@ other messages) by inspecting the response body. Rate limit 403s map to
 
 The `SCMAdapter` interface (per `internal/domain/scm.go`) is implemented by
 `internal/scm/github/`. The package exposes the six methods listed in
-architecture §11C.1: one read-only method documented in §11B.1
+[architecture §11C.1](architecture/14-auto-merge-reaction-contract.md#11c1-scmadapter-write-surface): one read-only method documented in [§11B.1](architecture/13-pr-review-comment-feedback-contract.md#11b1-scmadapter-interface)
 (`FetchPendingReviews`) and five additional methods used by the auto-merge
 reconcile loop. The five methods below extend the surface beyond the seven
 tracker operations covered earlier in this document.
@@ -632,7 +632,7 @@ The returned `PRMergeStatus` populates `Draft`, `Mergeability`, `HeadSHA`,
 and `BranchName`. `ReviewDecision` and `CIConclusion` are left unset:
 callers obtain those values from the dedicated reads (see §1 and §2 above).
 GitHub computes `mergeable_state` asynchronously after a push, so callers
-treat `MergeabilityUnknown` as a deferral condition per §11C.5.
+treat `MergeabilityUnknown` as a deferral condition per [§11C.5](architecture/14-auto-merge-reaction-contract.md#11c5-merge-precondition-state-machine).
 
 Idempotent and read-only.
 
@@ -760,7 +760,7 @@ misread as a conflict.
 The `already merged` 409 subcase is signaled by the verbatim GitHub body in
 `SCMError.Message`. The orchestrator inspects the message case-insensitively
 and dispatches the subcase to the merge-success branch; every other
-`ErrSCMConflict` is re-enqueued at the poll interval per §11C.5.
+`ErrSCMConflict` is re-enqueued at the poll interval per [§11C.5](architecture/14-auto-merge-reaction-contract.md#11c5-merge-precondition-state-machine).
 
 ### Token scopes
 
@@ -777,7 +777,7 @@ surface does not. The names below are stable constants in
 A classic PAT with the `repo` scope is a superset that satisfies the
 fine-grained `pull_requests:write` and `contents:write` permissions for
 this adapter. Fine-grained PAT permission names are accepted by the
-startup token-scope preflight (per §11C.9).
+startup token-scope preflight (per [§11C.9](architecture/14-auto-merge-reaction-contract.md#11c9-token-scope-and-preflight)).
 
 The preflight reads the `X-OAuth-Scopes` header on `GET /rate_limit`.
 Classic PATs populate that header; fine-grained PATs and GitHub App
@@ -801,7 +801,7 @@ the current PR head does not match, the server returns HTTP 409, the
 adapter maps it to `ErrSCMConflict` with the verbatim GitHub body, and the
 reconcile loop re-enqueues the merge for the next tick. The next tick
 re-reads the merge state, computes a fresh fingerprint over the new SHA
-(per §11C.7), and either retries with the new head SHA or defers further
+(per [§11C.7](architecture/14-auto-merge-reaction-contract.md#11c7-fingerprint)), and either retries with the new head SHA or defers further
 when other preconditions still fail.
 
 The window the SHA closes is the only race the merge call exposes: review

@@ -1049,7 +1049,7 @@ the terminal catch-all. Each rule carries a `template:` path that is relative to
 
 #### Further reading (optional)
 
-The design rationale is in `architecture.md` §5.3.10 and
+The design rationale is in [architecture §5.3.10](architecture/05-workflow-specification.md#5310-dispatch-object-optional) and
 [ADR-0011](decisions/0011-dispatch-rule-configuration.md). Neither document is required
 to write a valid `dispatch` block; they explain why the feature is shaped as it is.
 
@@ -1088,7 +1088,7 @@ Per-backend fields depend on `kind` and are passed through to the backend untype
 | `slack` | `webhook_url` | Slack incoming webhook URL that receives a Slack-shaped JSON body with a `text` field. |
 
 The `notifications` `webhook` backend is an outbound POST to an operator-supplied endpoint.
-It is unrelated to inbound tracker webhooks (§20 of `architecture.md`), which trigger
+It is unrelated to inbound tracker webhooks ([architecture §20](architecture/25-webhook-support.md)), which trigger
 reconciliation. The two share a name but not a direction.
 
 When the list configures more than one backend, the effective per-session cap is the

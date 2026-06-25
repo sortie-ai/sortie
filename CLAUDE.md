@@ -38,6 +38,12 @@ When your changes create orphans:
 - Remove imports/variables/functions that YOUR changes made unused.
 - Don't remove pre-existing dead code unless asked.
 
+When the working tree has changes you didn't make:
+- You are not the only one working in this repo. The user or a parallel agent session may edit files while you work, so `git status` and `git diff` show their uncommitted changes mixed with yours.
+- Changes you cannot trace to your own task are not yours to revert. Don't assume unfamiliar edits are accidental or stray - they may be deliberate work from another session.
+- Never discard, revert, reset, stash, or reformat files outside your task's scope (`git checkout --`, `git restore`, `git reset --hard`, `git stash`, `git clean`). Stage your own paths by name; never `git add -A` or `git add .`.
+- If changes you didn't make seem to collide with your task, stop and ask. Never resolve it by throwing them away.
+
 The test: Every changed line should trace directly to the user's request.
 
 ### 4. Goal-Driven Execution
@@ -67,9 +73,9 @@ Read the project Makefile to discover available targets before running any Go to
 ### Gotchas
 
 - Go is managed by asdf. The `go` binary resolves through `~/.asdf/shims/go`.
-- **Architecture doc is the spec.** `docs/architecture.md` (~3600 lines) defines every entity, state machine, algorithm, and validation rule. Read the relevant section before implementing anything. Drift from the spec is a bug. The digest verson `docs/architecture-digest.md` is a 2-page map of the system for AI agents. Read it first, then consult the full doc as needed.
+- **Architecture doc is the spec.** `docs/architecture.md` is a curated index; the spec lives in one file per section under `docs/architecture/`. Open the index, find the section your task touches, and read that section file before implementing anything. Drift from the spec is a bug. Section files are authoritative when they disagree with the index.
 - **Symphony is prior art, not a template.** Sortie derives from OpenAI Symphony but diverges intentionally (Go instead of Elixir, SQLite persistence, adapter interfaces). Do NOT copy Symphony patterns or Elixir idioms.
-- **Workspace safety invariants are security boundaries.** Path containment under workspace root, sanitized workspace keys (`[A-Za-z0-9._-]` only), and cwd validation before agent launch are mandatory — not suggestions. See architecture Section 9.6.
+- **Workspace safety invariants are security boundaries.** Path containment under workspace root, sanitized workspace keys (`[A-Za-z0-9._-]` only), and cwd validation before agent launch are mandatory — not suggestions. See [architecture Section 9.6](docs/architecture/09-workspace-management-and-safety.md#96-safety-invariants).
 - **Generic naming in core code.** Use `agent_*`, `tracker_*`, `session_*` in orchestrator core. Never `jira_*`, `claude_*`, `codex_*` outside their adapter packages.
 - **Integration tests are env-gated.** Each adapter has its own `SORTIE_<ADAPTER>_TEST=1` gate (e.g. `SORTIE_JIRA_TEST`, `SORTIE_LINEAR_TEST`, `SORTIE_CODEX_TEST`). GitHub end-to-end orchestrator tests also gate on `SORTIE_GITHUB_E2E=1` and require `SORTIE_GITHUB_TOKEN` and `SORTIE_GITHUB_PROJECT`. Without the gate set, integration tests must skip cleanly — never fail.
 - **SQLite library is `modernc.org/sqlite` only.** Never `mattn/go-sqlite3` — CGo breaks the single-binary zero-dependency deployment model.
@@ -94,6 +100,7 @@ Read the project Makefile to discover available targets before running any Go to
 
 #### Never
 
+- Discard, revert, reset, stash, or reformat uncommitted changes outside your current task's file set - the working tree may hold the user's or a parallel agent's work (see Surgical Changes).
 - Modify accepted ADRs in `docs/decisions/*.md` without explicit instruction.
 - Use CGo or any library requiring a C toolchain.
 - Put integration-specific logic (Jira field names, Claude Code CLI flags) in orchestrator core packages.
@@ -107,8 +114,8 @@ Read the project Makefile to discover available targets before running any Go to
 
 Consult these on demand for the area you are working on, not as a blanket prerequisite to read upfront:
 
-- `docs/architecture-digest.md` - a 2-page map of the system for AI agents. Read this document as your first reference during specification, planning, and review. Open the full `docs/architecture.md` only when the feature you are working on touches one of the areas flagged in the "deep-read" section at the bottom.
-- `docs/architecture.md` - the full specification (~3600 lines). Read the section that covers the entity, state machine, algorithm, or contract you are about to change. Do not read the document end-to-end before starting work.
+- `docs/architecture.md` - the architecture index. Read it first: a short system-at-a-glance and a routing table that maps each task to the one section it needs. It is a map, not a second source of truth.
+- `docs/architecture/` - the specification, one file per section (`NN-<slug>.md`). Open only the section the index routes you to; the section files win on conflict with the index. Do not read the tree end-to-end before starting work.
 - `docs/decisions/*.md` - accepted ADRs. Read when discussing or revising a prior design choice.
 - `docs/workflow-reference.md` - WORKFLOW.md syntax reference.
 - `docs/*-adapter-notes.md` - Adapter Research Notes with API details, response examples, and implementation tips for each integration. Read the relevant file when working on an adapter integration.

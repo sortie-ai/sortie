@@ -84,42 +84,6 @@ discuss the design before writing code. The architecture doc is the source of tr
 changes that contradict it will not be merged. If you believe the spec itself should
 change, that is a valid conversation to have in an issue.
 
-## Project layout
-
-```
-cmd/sortie/            entry point, CLI wiring
-internal/
-  agent/               agent adapters and shared agent helpers (agentcore/, claude/, codex/, copilot/, opencode/, kiro/, mock/, ...)
-  config/              typed config, defaults, env-var resolution
-  domain/              pure types, interfaces, error categories (imports nothing)
-  httpkit/             shared REST transport, conditional GET, pagination
-  issuekit/            shared issue normalization helpers
-  logging/             structured slog helpers (imports nothing)
-  maputil/             generic map utility helpers (imports nothing)
-  typeutil/            type coercion helpers (imports nothing)
-  orchestrator/        dispatch, retry, reconciliation, state machine
-  persistence/         SQLite store, migrations, retry queues
-  prompt/              text/template rendering, strict mode
-  registry/            adapter registration
-  server/              HTTP API, dashboard, metrics
-  tool/                agent tools (trackerapi/, history/, status/, budget/, notify/, mcpserver/, ...)
-  tracker/             tracker adapters (jira/, file/, linear/)
-  scm/                 SCM adapters (github/)
-  notify/              notification adapters (slack/, webhook/)
-  trackermetrics/      shared tracker-operation metrics helpers
-  workflow/            WORKFLOW.md parser, file watcher
-  workspace/           filesystem isolation, path safety, hook execution
-docs/
-  architecture.md      the specification (~4500 lines)
-  decisions/           Architecture Decision Records (ADRs)
-```
-
-Imports flow downward. `domain/`, `logging/`, `maputil/`, `typeutil/`, and `httpkit/`
-sit at the bottom with no internal dependencies. `issuekit/` and `trackermetrics/`
-depend only on `domain/`. Adapters (`tracker/*`, `scm/*`, `agent/*`, `notify/*`)
-implement interfaces defined in `domain/` and never import each other or the
-orchestrator.
-
 ## Code conventions
 
 The linter config in [.golangci.yml](.golangci.yml) catches most issues. Beyond what the
