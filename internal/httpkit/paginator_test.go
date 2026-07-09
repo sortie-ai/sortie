@@ -458,6 +458,10 @@ func TestParseLinkRel(t *testing.T) {
 		{"last relation", multi, "last", "https://api.example.com/items?page=5"},
 		{"missing relation returns empty", multi, "next2", ""},
 		{"empty header returns empty", "", "next", ""},
+		{"unquoted rel value", `<https://api.example.com/items?page=2>; rel=next`, "next", "https://api.example.com/items?page=2"},
+		{"multi-token rel matches first token", `<https://api.example.com/items?page=3>; rel="next prev"`, "next", "https://api.example.com/items?page=3"},
+		{"multi-token rel matches second token", `<https://api.example.com/items?page=3>; rel="next prev"`, "prev", "https://api.example.com/items?page=3"},
+		{"whitespace around rel attribute", `<https://api.example.com/items?page=4>;  rel = "next" `, "next", "https://api.example.com/items?page=4"},
 	}
 
 	for _, tt := range tests {
