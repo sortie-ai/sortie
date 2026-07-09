@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"net/url"
 	"slices"
-	"strconv"
 	"strings"
 	"time"
 
@@ -140,10 +139,20 @@ func decodeLabelEvents(body []byte) ([]domain.LabelEvent, error) {
 			actor = e.Actor.Login
 		}
 
-		at, _ := time.Parse(time.RFC3339, e.CreatedAt)
+		at, parseErr := time.Parse(time.RFC3339, e.CreatedAt)
+		if parseErr != nil {
+			return nil, &domain.SCMError{
+				Kind:    domain.ErrSCMPayload,
+				Message: "failed to parse issue event created_at",
+				Err:     parseErr,
+			}
+		}
 
 		events = append(events, domain.LabelEvent{
-			ID:    strconv.FormatInt(e.ID, 10),
+			// Normalize the id so the orchestrator's lexical (At, id) mark
+			// comparison matches chronological order even for events that
+			// share a timestamp.
+			ID:    sortableEventID(e.ID),
 			Label: strings.ToLower(e.Label.Name),
 			Actor: actor,
 			Added: e.Event == "labeled",
@@ -151,6 +160,13 @@ func decodeLabelEvents(body []byte) ([]domain.LabelEvent, error) {
 		})
 	}
 	return events, nil
+}
+
+// sortableEventID formats a numeric journal-event id as a fixed-width,
+// zero-padded decimal so lexical string comparison matches numeric order.
+// The width covers the maximum int64.
+func sortableEventID(id int64) string {
+	return fmt.Sprintf("%019d", id)
 }
 
 // RemoveLabel deletes the named label from the given pull request. An

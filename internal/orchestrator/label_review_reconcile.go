@@ -77,7 +77,25 @@ func reconcileLabelReviewCommands(state *State, params ReconcileParams, log *slo
 			continue
 		}
 
-		storedMark, _, _ := params.Store.GetReactionFingerprint(ctx, pending.IssueID, ReactionKindLabelReview)
+		// The dispatched flag is not consulted for this kind. The read error
+		// is: at-most-once rests solely on the mark, and this kind has no
+		// turn cap to bound a duplicate, so when the mark cannot be read the
+		// pass backs off rather than risk re-dispatching an already
+		// acknowledged command with storedMark treated as empty.
+		storedMark, _, fpErr := params.Store.GetReactionFingerprint(ctx, pending.IssueID, ReactionKindLabelReview)
+		if fpErr != nil {
+			pending.PendingAttempts++
+			delay := max(computeReactionPendingDelay(pending.PendingAttempts), pollInterval)
+			pending.PendingRetryAt = now.Add(delay)
+			state.PendingReactions[key] = pending
+			entryLog.Warn("label-review fingerprint read failed, backing off without dispatch",
+				slog.Int("pr_number", data.PRNumber),
+				slog.Any("error", fpErr),
+				slog.Int("pending_attempts", pending.PendingAttempts),
+				slog.Int64("retry_after_ms", int64(delay/time.Millisecond)),
+			)
+			continue
+		}
 
 		events, err := params.SCMAdapter.ListLabelEvents(ctx, data.PRNumber, data.Owner, data.Repo)
 		if err != nil {
@@ -111,9 +129,10 @@ func reconcileLabelReviewCommands(state *State, params ReconcileParams, log *slo
 		newestMark := labelReviewMark(latestLabelEvent(newEvents))
 
 		// Burst collapse: all matching labeled events in the batch collapse
-		// to at most one command. Self-authored events are excluded
-		// defensively; no orchestrator identity is wired in this slice, so
-		// that filter is a no-op today.
+		// to at most one command. A self-authored-event filter is not run in
+		// this slice because no orchestrator identity is wired; the structural
+		// guarantee that Sortie never applies command labels makes its absence
+		// a no-op.
 		var matches []domain.LabelEvent
 		for _, e := range newEvents {
 			if e.Added && strings.EqualFold(e.Label, params.LabelReviewConfig.ReviewLabel) {
@@ -131,7 +150,10 @@ func reconcileLabelReviewCommands(state *State, params ReconcileParams, log *slo
 		if commandConfirmed && !alreadyQueuedOrRunning {
 			// Advance the mark BEFORE scheduling: at-most-once rests on the
 			// persisted mark, so a crash in the window between the two loses
-			// the command rather than duplicating it.
+			// the command rather than duplicating it. The upsert is
+			// best-effort: a write failure is logged and dispatch still
+			// proceeds, degrading the durable guarantee to best-effort for
+			// this tick, matching the sibling reactions.
 			if upErr := params.Store.UpsertReactionFingerprint(ctx, pending.IssueID, ReactionKindLabelReview, newestMark); upErr != nil {
 				entryLog.Warn("failed to upsert label-review reaction fingerprint",
 					slog.Any("error", upErr),

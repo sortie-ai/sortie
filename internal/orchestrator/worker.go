@@ -506,6 +506,11 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 			})
 			return
 		}
+		// The read-only path reuses the per-issue workspace directory, which
+		// may hold a stale .sortie/status from a prior session. Clear it so a
+		// stale recognized status does not end the review on turn one, the
+		// same best-effort cleanup the normal path runs via PreRunFunc.
+		workspace.CleanupStatusFile(ensureResult.Path, logger)
 		wsResult = workspace.PrepareResult(ensureResult)
 	} else {
 		wsResult, err = workspace.Prepare(ctx, workspace.PrepareParams{

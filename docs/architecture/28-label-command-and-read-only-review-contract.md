@@ -91,8 +91,9 @@ adapter fits without a contract change.
 The unit of command is one `labeled` journal event whose normalized label name matches a configured
 command label on a Sortie-managed PR. Detection maintains a per-PR high-water mark, an opaque
 position formed from the newest processed event's timestamp and id (`"<RFC3339Nano>|<id>"`), compared
-lexically by `(At, id)`. A fixed-width fractional-second timestamp is required so lexical order
-matches chronological order across timestamps of differing precision.
+lexically by `(At, id)`. Both components are normalized to a fixed-width, lexically-sortable form —
+the timestamp carries all nine fractional-second digits and the adapter zero-pads the numeric id —
+so lexical order matches chronological order even for events that share a timestamp.
 
 Each due tick reads the journal and considers only events whose position sorts strictly after the
 stored mark. The following invariants hold:
@@ -115,8 +116,9 @@ stored mark. The following invariants hold:
   re-applies the label) rather than duplicating it, because the advanced mark is already in SQLite
   and the processed event never again sorts after it. At-most-once rests solely on the advancing
   mark.
-- **Self-authored events ignored.** `labeled` events authored by the orchestrator's own identity are
-  excluded defensively, though Sortie never applies command labels.
+- **Self-authored events ignored (best-effort).** A filter for `labeled` events authored by the
+  orchestrator's own identity is not run in this slice because no orchestrator identity is wired; the
+  structural guarantee that Sortie never applies command labels makes its absence a no-op.
 
 After scheduling a dispatch the orchestrator removes the command label as the operator-visible
 acknowledgment: present means "queued, not yet picked up"; disappearance means "accepted" (or
@@ -196,7 +198,9 @@ no branch. The read-only posture supplies exactly that:
 - **Scratch workspace, no hooks.** The session obtains a minimal per-issue scratch directory,
   containment-validated under the workspace root exactly as a normal dispatch (§9.6), but the
   operator `after_create`, `before_run`, and `after_run` hooks do not run. There is no clone, no
-  build, no branch, and no checkout.
+  build, no branch, and no checkout. Because the directory is the reused per-issue workspace, a stale
+  `.sortie/status` from a prior session is cleared best-effort after creation so it cannot end the
+  review on turn one.
 - **Fresh session.** The session starts with no resume identifier. It is a new session, not a
   continuation of a live one.
 - **Single selecting flag.** The posture is selected by one worker flag derived from the dispatch
@@ -347,6 +351,7 @@ budget machinery.
 |-----------|------------|----------|
 | `ListLabelEvents` returns a `*SCMError` | Warn with PR number and error kind | Increment per-entry backoff, set `PendingRetryAt`, re-enqueue; retried on the next due tick. No escalation. |
 | `RemoveLabel` returns a `*SCMError` (including a scope gap) | Warn with PR number and label | None required; deduplication is already committed. The label lingers until removed manually. |
+| Fingerprint read fails | Warn | The pass backs off and re-enqueues without dispatching: at-most-once rests solely on the mark, so a command must not dispatch when the stored mark cannot be read. |
 | Fingerprint upsert fails | Warn | The pass proceeds; the durable guarantee degrades to best-effort for that tick, matching the siblings. |
 | `provider` set with both labels empty | Config error surfaced by config load and `sortie validate` | The operator fixes the config; the workflow loader retains the previous good config until fixed. |
 | `poll_interval_ms` below the floor | Warn at load | Clamped to 30000; the run continues. |

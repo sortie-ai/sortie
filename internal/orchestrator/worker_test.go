@@ -3586,6 +3586,55 @@ func TestRunWorkerAttempt_ReadOnly_NoCloneWorkspace(t *testing.T) {
 	}
 }
 
+// TestRunWorkerAttempt_ReadOnly_StaleStatusCleaned verifies that the
+// read-only path clears a stale .sortie/status left in the reused per-issue
+// workspace, so a prior recognized signal does not end the review on turn
+// one. The normal path does this via PreRunFunc; the read-only path must do
+// the same best-effort cleanup after workspace.Ensure.
+func TestRunWorkerAttempt_ReadOnly_StaleStatusCleaned(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	cfg := defaultWorkerConfig(tmpDir)
+	cfg.Agent.MaxTurns = 1
+
+	// Pre-create the reused workspace with a stale "blocked" status from a
+	// prior session's exit.
+	wsPath := filepath.Join(tmpDir, "TEST-1")
+	statusDir := filepath.Join(wsPath, ".sortie")
+	if err := os.MkdirAll(statusDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(statusDir, "status"), []byte("blocked\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(stale status): %v", err)
+	}
+
+	ec := newExitCapture()
+	deps := WorkerDeps{
+		TrackerAdapter:         &mockTrackerAdapter{},
+		AgentAdapter:           &mockAgentAdapter{},
+		ConfigFunc:             func() config.ServiceConfig { return cfg },
+		PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
+		OnEvent:                func(_ string, _ domain.AgentEvent) {},
+		OnExit:                 ec.onExit,
+		Logger:                 discardLogger(),
+		ReadOnly:               true,
+	}
+
+	RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
+	result := ec.waitResult(t)
+
+	if result.SoftStop {
+		t.Error("SoftStop = true, want false (stale status should have been cleaned after workspace.Ensure)")
+	}
+	if result.ExitKind != WorkerExitNormal {
+		t.Errorf("ExitKind = %q, want %q", result.ExitKind, WorkerExitNormal)
+	}
+	if result.TurnsCompleted != 1 {
+		t.Errorf("TurnsCompleted = %d, want 1 (the read-only session ran a turn instead of soft-stopping)", result.TurnsCompleted)
+	}
+}
+
 // TestRunWorkerAttempt_ReadOnly_SuppressesInProgressTransition verifies that
 // a read-only attempt never calls TransitionIssue even when
 // cfg.Tracker.InProgressState is set (A4).

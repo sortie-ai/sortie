@@ -113,7 +113,10 @@ type MergeResult struct {
 // LabelEvent is one normalized entry from a pull request's label-event
 // journal. Adapters map provider-specific event shapes to this type.
 type LabelEvent struct {
-	// ID is the provider journal entry id: opaque and unique per PR.
+	// ID is the provider journal entry id: opaque to the orchestrator and
+	// unique per PR. Adapters normalize it to a lexically-sortable form so
+	// that ordering entries by (At, ID) as strings matches their journal
+	// (chronological) order.
 	ID string
 
 	// Label is the normalized (lowercased) label name.

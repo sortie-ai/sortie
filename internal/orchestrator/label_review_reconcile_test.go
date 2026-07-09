@@ -126,7 +126,8 @@ func (p *labelReviewSCMPanicOnOthers) DeleteBranch(_ context.Context, _, _, _ st
 // value. Only the fingerprint methods carry behavior; the rest satisfy the
 // interface.
 type labelReviewFingerprintStore struct {
-	marks map[string]string
+	marks  map[string]string
+	getErr error
 
 	upsertCalls int
 	getCalls    int
@@ -146,6 +147,9 @@ func (s *labelReviewFingerprintStore) UpsertReactionFingerprint(_ context.Contex
 
 func (s *labelReviewFingerprintStore) GetReactionFingerprint(_ context.Context, issueID, kind string) (string, bool, error) {
 	s.getCalls++
+	if s.getErr != nil {
+		return "", false, s.getErr
+	}
 	return s.marks[issueID+":"+kind], false, nil
 }
 
@@ -697,6 +701,44 @@ func TestReconcileLabelReviewCommands_JournalReadError(t *testing.T) {
 	}
 	if _, dispatched := state.RetryAttempts[issueID]; dispatched {
 		t.Error("retry scheduled despite the journal read error; want none")
+	}
+}
+
+// TestReconcileLabelReviewCommands_FingerprintReadError verifies that a
+// fingerprint read failure backs off without dispatching. At-most-once
+// rests solely on the mark, and this kind has no turn cap, so a command
+// must never dispatch when the stored mark cannot be read.
+func TestReconcileLabelReviewCommands_FingerprintReadError(t *testing.T) {
+	t.Parallel()
+
+	const issueID = "LR-FPE"
+	state := stateWithLabelReviewPending(t, issueID, 10)
+	rkey := ReactionKey(issueID, ReactionKindLabelReview)
+	scm := &labelReviewSCMFake{}
+	store := newLabelReviewFingerprintStore()
+	store.getErr = errors.New("sqlite is locked")
+	params := labelReviewParams(store, scm)
+
+	reconcileLabelReviewCommands(state, params, discardLogger(), context.Background(), &domain.NoopMetrics{})
+
+	entry, ok := state.PendingReactions[rkey]
+	if !ok {
+		t.Fatal("PendingReactions entry dropped after a fingerprint read error; want re-enqueued")
+	}
+	if entry.PendingAttempts != 1 {
+		t.Errorf("PendingAttempts = %d, want 1", entry.PendingAttempts)
+	}
+	if !entry.PendingRetryAt.After(labelReviewBaseTime) {
+		t.Error("PendingRetryAt not advanced after a fingerprint read error; want backoff applied")
+	}
+	if scm.listCalls != 0 {
+		t.Errorf("ListLabelEvents calls = %d, want 0 (no journal read when the mark is unreadable)", scm.listCalls)
+	}
+	if store.upsertCalls != 0 {
+		t.Errorf("UpsertReactionFingerprint calls = %d, want 0", store.upsertCalls)
+	}
+	if _, dispatched := state.RetryAttempts[issueID]; dispatched {
+		t.Error("retry scheduled despite the fingerprint read error; want none")
 	}
 }
 

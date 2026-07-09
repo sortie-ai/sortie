@@ -91,8 +91,8 @@ func TestListLabelEvents_Normalization(t *testing.T) {
 		t.Fatalf("ListLabelEvents() len = %d, want 3 (the commented event is excluded)", len(events))
 	}
 
-	if events[0].ID != "1" || events[1].ID != "2" || events[2].ID != "4" {
-		t.Fatalf("ListLabelEvents() ids = [%s %s %s], want [1 2 4] (oldest-first)",
+	if events[0].ID != sortableEventID(1) || events[1].ID != sortableEventID(2) || events[2].ID != sortableEventID(4) {
+		t.Fatalf("ListLabelEvents() ids = [%s %s %s], want [1 2 4] normalized (oldest-first)",
 			events[0].ID, events[1].ID, events[2].ID)
 	}
 
@@ -140,17 +140,17 @@ func TestListLabelEvents_NewestRetainedPaging(t *testing.T) {
 		t.Fatalf("ListLabelEvents() len = %d, want %d (retained window)", len(events), maxLabelEventPages)
 	}
 
-	wantOldestID := strconv.Itoa(truncatedJournalPageCount - maxLabelEventPages + 1)
+	wantOldestID := sortableEventID(int64(truncatedJournalPageCount - maxLabelEventPages + 1))
 	if events[0].ID != wantOldestID {
 		t.Errorf("ListLabelEvents()[0].ID = %q, want %q (oldest ID retained within the cap)", events[0].ID, wantOldestID)
 	}
-	wantNewestID := strconv.Itoa(truncatedJournalPageCount)
+	wantNewestID := sortableEventID(int64(truncatedJournalPageCount))
 	if events[len(events)-1].ID != wantNewestID {
 		t.Errorf("ListLabelEvents()[last].ID = %q, want %q (newest event present despite the cap)",
 			events[len(events)-1].ID, wantNewestID)
 	}
 	for _, e := range events {
-		if e.ID == "1" {
+		if e.ID == sortableEventID(1) {
 			t.Error("ListLabelEvents() contains the oldest journal entry (id=1); want it truncated away")
 		}
 	}
@@ -217,6 +217,35 @@ func TestListLabelEvents_TransportError(t *testing.T) {
 	adapter := newTestSCMAdapter(t, srv.URL)
 	_, err := adapter.ListLabelEvents(context.Background(), 1, "o", "r")
 	assertSCMErrorKind(t, err, domain.ErrSCMTransport)
+}
+
+func TestListLabelEvents_MalformedTimestampIsPayloadError(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`[{"id":1,"event":"labeled","actor":{"login":"alice"},"label":{"name":"sortie:review"},"created_at":"not-a-timestamp"}]`))
+	}))
+	defer srv.Close()
+
+	adapter := newTestSCMAdapter(t, srv.URL)
+	_, err := adapter.ListLabelEvents(context.Background(), 1, "o", "r")
+	assertSCMErrorKind(t, err, domain.ErrSCMPayload)
+}
+
+func TestSortableEventID_LexicalMatchesNumericAcrossDigitBoundary(t *testing.T) {
+	t.Parallel()
+
+	// Raw decimal ids misorder lexically across a digit-width boundary
+	// ("9" sorts after "10"); the normalized form must preserve numeric
+	// order so the reconcile's (At, id) mark comparison stays chronological
+	// for events that share a timestamp.
+	for _, pair := range []struct{ lo, hi int64 }{{9, 10}, {99, 100}, {999999999, 1000000000}} {
+		if sortableEventID(pair.lo) >= sortableEventID(pair.hi) {
+			t.Errorf("sortableEventID(%d)=%q not lexically before sortableEventID(%d)=%q",
+				pair.lo, sortableEventID(pair.lo), pair.hi, sortableEventID(pair.hi))
+		}
+	}
 }
 
 func TestListLabelEvents_EmptyJournalReturnsNonNilEmptySlice(t *testing.T) {
