@@ -141,6 +141,16 @@ type OrchestratorParams struct {
 	// HandleWorkerExitParams, and the recovery params.
 	MergeConflictReactionConfigured bool
 
+	// LabelReviewConfig holds validated label-review reaction
+	// configuration. Zero value when LabelReviewReactionConfigured is
+	// false.
+	LabelReviewConfig LabelReviewReactionConfig
+
+	// LabelReviewReactionConfigured marks whether the label-review feature
+	// is active for this process. Threaded into ReconcileParams,
+	// HandleWorkerExitParams, and the recovery params.
+	LabelReviewReactionConfigured bool
+
 	// AgentAdapterByKind resolves the agent adapter for the given
 	// kind. Constructed once at startup from the eagerly-built
 	// per-kind adapter cache. When nil, the orchestrator falls back
@@ -193,6 +203,8 @@ type Orchestrator struct {
 	botReviewReactionConfigured     bool
 	mergeConflictConfig             MergeConflictReactionConfig
 	mergeConflictReactionConfigured bool
+	labelReviewConfig               LabelReviewReactionConfig
+	labelReviewReactionConfigured   bool
 
 	// sshStrictHostKeyChecking is the current effective OpenSSH
 	// StrictHostKeyChecking value. Written by handleTick on every
@@ -301,6 +313,8 @@ func NewOrchestrator(params OrchestratorParams) *Orchestrator {
 		botReviewReactionConfigured:     params.BotReviewConfigured,
 		mergeConflictConfig:             params.MergeConflictConfig,
 		mergeConflictReactionConfigured: params.MergeConflictReactionConfigured,
+		labelReviewConfig:               params.LabelReviewConfig,
+		labelReviewReactionConfigured:   params.LabelReviewReactionConfigured,
 	}
 	// Startup preflight must have passed for the orchestrator to be
 	// constructed, so the initial value is true.
@@ -357,6 +371,7 @@ func (o *Orchestrator) Run(ctx context.Context) {
 				AutoMergeReactionConfigured:     o.autoMergeReactionConfigured,
 				BotReviewReactionConfigured:     o.botReviewReactionConfigured,
 				MergeConflictReactionConfigured: o.mergeConflictReactionConfigured,
+				LabelReviewReactionConfigured:   o.labelReviewReactionConfigured,
 			})
 			o.updateGauges(time.Now())
 			o.notifyObservers()
@@ -502,6 +517,8 @@ func (o *Orchestrator) handleTick(ctx context.Context) {
 		MergeConflictConfig:             o.mergeConflictConfig,
 		MergeConflictPendingTTL:         mergeConflictPendingDefaultTTL,
 		MergeConflictReactionConfigured: o.mergeConflictReactionConfigured,
+		LabelReviewConfig:               o.labelReviewConfig,
+		LabelReviewReactionConfigured:   o.labelReviewReactionConfigured,
 	})
 
 	// Sweep terminal workspaces periodically to catch issues that
@@ -596,7 +613,7 @@ func (o *Orchestrator) handleTick(ctx context.Context) {
 		if !ok {
 			break
 		}
-		DispatchIssue(ctx, o.state, issue, nil, host, o.makeWorkerFn("", host, resolution.AgentKind, resolution.TemplateID, adapter))
+		DispatchIssue(ctx, o.state, issue, nil, host, o.makeWorkerFn("", host, resolution.AgentKind, resolution.TemplateID, "", adapter))
 		if entry := o.state.Running[issue.ID]; entry != nil {
 			entry.WorkflowFile = o.workflowFile()
 			entry.AgentKind = resolution.AgentKind
@@ -634,11 +651,14 @@ func (o *Orchestrator) handleTick(ctx context.Context) {
 // The closure captures channel references for OnEvent and OnExit
 // delivery. agentKind, templateID, and adapter carry the rule-resolved
 // selection from the caller (handleTick for initial dispatches,
-// HandleRetryTimer for retries). The resumeSessionID must be read by
-// the caller (on the event loop goroutine) before the goroutine
-// starts, to avoid a data race on the Running map.
-func (o *Orchestrator) makeWorkerFn(resumeSessionID, sshHost, agentKind, templateID string, adapter domain.AgentAdapter) WorkerFunc {
+// HandleRetryTimer for retries). reactionKind selects the read-only
+// worker posture when it equals [ReactionKindLabelReview]. The
+// resumeSessionID must be read by the caller (on the event loop
+// goroutine) before the goroutine starts, to avoid a data race on the
+// Running map.
+func (o *Orchestrator) makeWorkerFn(resumeSessionID, sshHost, agentKind, templateID, reactionKind string, adapter domain.AgentAdapter) WorkerFunc {
 	strictHostKeyChecking := o.sshStrictHostKeyChecking
+	readOnly := reactionKind == ReactionKindLabelReview
 	if adapter == nil {
 		adapter = o.agentAdapter
 	}
@@ -686,6 +706,7 @@ func (o *Orchestrator) makeWorkerFn(resumeSessionID, sshHost, agentKind, templat
 			Metrics:                  o.metrics,
 			WorkflowPath:             o.workflowManager.WorkflowAbsPath(),
 			DBPath:                   o.dbPath,
+			ReadOnly:                 readOnly,
 		}
 
 		RunWorkerAttempt(ctx, issue, attempt, deps)
@@ -915,6 +936,7 @@ func (o *Orchestrator) drainRunningWorkers() {
 				AutoMergeReactionConfigured:     o.autoMergeReactionConfigured,
 				BotReviewReactionConfigured:     o.botReviewReactionConfigured,
 				MergeConflictReactionConfigured: o.mergeConflictReactionConfigured,
+				LabelReviewReactionConfigured:   o.labelReviewReactionConfigured,
 			})
 			o.updateGauges(time.Now())
 			o.notifyObservers()

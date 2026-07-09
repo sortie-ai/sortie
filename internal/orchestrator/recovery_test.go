@@ -532,6 +532,14 @@ func (p *panicSCMAdapter) DeleteBranch(_ context.Context, _, _, _ string) error 
 	panic("DeleteBranch must not be called during RecoverPendingReactions")
 }
 
+func (p *panicSCMAdapter) ListLabelEvents(_ context.Context, _ int, _, _ string) ([]domain.LabelEvent, error) {
+	panic("ListLabelEvents must not be called during RecoverPendingReactions")
+}
+
+func (p *panicSCMAdapter) RemoveLabel(_ context.Context, _ int, _, _, _ string) error {
+	panic("RemoveLabel must not be called during RecoverPendingReactions")
+}
+
 // panicCIProvider panics if FetchCIStatus is called, asserting recovery makes no CI fetch.
 type panicCIProvider struct{}
 
@@ -572,6 +580,14 @@ func (s *stubSCMForRecovery) MergePR(_ context.Context, _ int, _, _ string, _ do
 }
 
 func (s *stubSCMForRecovery) DeleteBranch(_ context.Context, _, _, _ string) error {
+	return nil
+}
+
+func (s *stubSCMForRecovery) ListLabelEvents(_ context.Context, _ int, _, _ string) ([]domain.LabelEvent, error) {
+	return nil, nil
+}
+
+func (s *stubSCMForRecovery) RemoveLabel(_ context.Context, _ int, _, _, _ string) error {
 	return nil
 }
 
@@ -1680,5 +1696,170 @@ func TestRecoverPendingReactions_MergeConflictNotRecoveredWhenFlagFalse(t *testi
 	rkey := ReactionKey("ISS-MC2", ReactionKindMergeConflict)
 	if _, ok := state.PendingReactions[rkey]; ok {
 		t.Error("merge-conflict PendingReactions entry created with MergeConflictReactionConfigured=false; want absent")
+	}
+}
+
+// TestRecoverPendingReactions_LabelReview verifies that a handoff-state
+// issue whose recovered SCM metadata carries a PR number, owner, and repo
+// recovers one label-review pending entry with the frozen dispatch fields
+// and increments LabelReviewRecovered.
+//
+// The fixture includes a branch even though the label-review recovery
+// clause itself imposes no branch requirement (recovery.go's per-kind
+// clause omits the meta.Branch != "" guard the sibling kinds carry):
+// workspace.ReadSCMMetadata unconditionally returns a zero value whenever
+// the decoded branch is empty, and RecoverPendingReactions skips the whole
+// run when that zero value comes back, before any per-kind clause runs. A
+// workspace's scm.json is written only by a normal (non-read-only)
+// session, and such a session always operates on a branch, so this
+// reflects the only reachable production case.
+func TestRecoverPendingReactions_LabelReview(t *testing.T) {
+	t.Parallel()
+
+	wsRoot := t.TempDir()
+	writeRecoverySCM(t, wsRoot, "PROJ-LR1", domain.SCMMetadata{
+		Branch:   "feature/lr-fix",
+		SHA:      "facefeed",
+		PushedAt: freshSCMTime(1),
+		PRNumber: 55,
+		Owner:    "lrowner",
+		Repo:     "lrrepo",
+	})
+
+	tracker := &recoveryTrackerStub{states: map[string]string{"ISS-LR1": "In Review"}}
+	state := NewState(5000, 4, nil, AgentTotals{})
+	run := freshRun("ISS-LR1", "PROJ-LR1", "lrowner/lrrepo#55", 2)
+	params := defaultRecoveryParams(wsRoot, tracker)
+	params.LabelReviewReactionConfigured = true
+
+	result, err := RecoverPendingReactions(context.Background(), state, []persistence.RunHistory{run}, params)
+	if err != nil {
+		t.Fatalf("RecoverPendingReactions: %v", err)
+	}
+	if result.LabelReviewRecovered != 1 {
+		t.Errorf("LabelReviewRecovered = %d, want 1", result.LabelReviewRecovered)
+	}
+
+	rkey := ReactionKey("ISS-LR1", ReactionKindLabelReview)
+	pr, ok := state.PendingReactions[rkey]
+	if !ok {
+		t.Fatalf("PendingReactions[%q] missing, want present", rkey)
+	}
+	if pr.Kind != ReactionKindLabelReview {
+		t.Errorf("PendingReaction.Kind = %q, want %q", pr.Kind, ReactionKindLabelReview)
+	}
+	if pr.Attempt != 2 {
+		t.Errorf("PendingReaction.Attempt = %d, want 2", pr.Attempt)
+	}
+	if pr.AgentKind != run.AgentAdapter {
+		t.Errorf("PendingReaction.AgentKind = %q, want %q (frozen from the recovered run)", pr.AgentKind, run.AgentAdapter)
+	}
+	lrd, ok := pr.KindData.(*LabelReviewReactionData)
+	if !ok {
+		t.Fatalf("KindData type = %T, want *LabelReviewReactionData", pr.KindData)
+	}
+	if lrd.PRNumber != 55 {
+		t.Errorf("LabelReviewReactionData.PRNumber = %d, want 55", lrd.PRNumber)
+	}
+	if lrd.Owner != "lrowner" {
+		t.Errorf("LabelReviewReactionData.Owner = %q, want %q", lrd.Owner, "lrowner")
+	}
+	if lrd.Repo != "lrrepo" {
+		t.Errorf("LabelReviewReactionData.Repo = %q, want %q", lrd.Repo, "lrrepo")
+	}
+	if _, claimed := state.Claimed["ISS-LR1"]; claimed {
+		t.Error("ISS-LR1 found in state.Claimed after recovery, want not claimed")
+	}
+}
+
+// TestRecoverPendingReactions_LabelReviewNotRecoveredWhenFlagFalse verifies
+// that LabelReviewReactionConfigured=false reconstructs no label-review
+// entry, even with full PR metadata present.
+func TestRecoverPendingReactions_LabelReviewNotRecoveredWhenFlagFalse(t *testing.T) {
+	t.Parallel()
+
+	wsRoot := t.TempDir()
+	writeRecoverySCM(t, wsRoot, "PROJ-LR2", domain.SCMMetadata{
+		Branch:   "feature/lr-disabled",
+		SHA:      "abc",
+		PushedAt: freshSCMTime(1),
+		PRNumber: 10,
+		Owner:    "o",
+		Repo:     "r",
+	})
+
+	tracker := &recoveryTrackerStub{states: map[string]string{"ISS-LR2": "In Review"}}
+	state := NewState(5000, 4, nil, AgentTotals{})
+	run := freshRun("ISS-LR2", "PROJ-LR2", "", 1)
+	params := defaultRecoveryParams(wsRoot, tracker)
+	params.LabelReviewReactionConfigured = false
+
+	result, err := RecoverPendingReactions(context.Background(), state, []persistence.RunHistory{run}, params)
+	if err != nil {
+		t.Fatalf("RecoverPendingReactions: %v", err)
+	}
+	if result.LabelReviewRecovered != 0 {
+		t.Errorf("LabelReviewRecovered = %d, want 0 when flag is false", result.LabelReviewRecovered)
+	}
+
+	rkey := ReactionKey("ISS-LR2", ReactionKindLabelReview)
+	if _, ok := state.PendingReactions[rkey]; ok {
+		t.Error("label-review PendingReactions entry created with LabelReviewReactionConfigured=false; want absent")
+	}
+}
+
+// TestRecoverPendingReactions_LabelReviewMissingPRMetadata verifies that no
+// label-review entry is recovered when owner, repo, or PR number is
+// missing from the recovered SCM metadata.
+func TestRecoverPendingReactions_LabelReviewMissingPRMetadata(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		issueID    string
+		identifier string
+		meta       domain.SCMMetadata
+	}{
+		{
+			name:       "missing PR number",
+			issueID:    "ISS-LR3-NOPR",
+			identifier: "PROJ-LR3-NOPR",
+			meta:       domain.SCMMetadata{Branch: "feature/x", PushedAt: freshSCMTime(1), Owner: "o", Repo: "r"},
+		},
+		{
+			name:       "missing owner",
+			issueID:    "ISS-LR3-NOOWNER",
+			identifier: "PROJ-LR3-NOOWNER",
+			meta:       domain.SCMMetadata{Branch: "feature/x", PushedAt: freshSCMTime(1), PRNumber: 10, Repo: "r"},
+		},
+		{
+			name:       "missing repo",
+			issueID:    "ISS-LR3-NOREPO",
+			identifier: "PROJ-LR3-NOREPO",
+			meta:       domain.SCMMetadata{Branch: "feature/x", PushedAt: freshSCMTime(1), PRNumber: 10, Owner: "o"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			wsRoot := t.TempDir()
+			writeRecoverySCM(t, wsRoot, tt.identifier, tt.meta)
+
+			tracker := &recoveryTrackerStub{states: map[string]string{tt.issueID: "In Review"}}
+			state := NewState(5000, 4, nil, AgentTotals{})
+			run := freshRun(tt.issueID, tt.identifier, "", 1)
+			params := defaultRecoveryParams(wsRoot, tracker)
+			params.LabelReviewReactionConfigured = true
+
+			result, err := RecoverPendingReactions(context.Background(), state, []persistence.RunHistory{run}, params)
+			if err != nil {
+				t.Fatalf("RecoverPendingReactions: %v", err)
+			}
+			if result.LabelReviewRecovered != 0 {
+				t.Errorf("LabelReviewRecovered = %d, want 0 (%s)", result.LabelReviewRecovered, tt.name)
+			}
+		})
 	}
 }

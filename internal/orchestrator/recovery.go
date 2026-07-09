@@ -93,6 +93,7 @@ type PendingReactionRecoveryParams struct {
 	AutoMergeReactionConfigured     bool
 	BotReviewReactionConfigured     bool
 	MergeConflictReactionConfigured bool
+	LabelReviewReactionConfigured   bool
 	RecoveryLookback                time.Duration
 	MaxCandidates                   int
 	NowFunc                         func() time.Time
@@ -110,6 +111,7 @@ type PendingReactionRecoveryResult struct {
 	AutoMergeRecovered     int
 	BotReviewRecovered     int
 	MergeConflictRecovered int
+	LabelReviewRecovered   int
 	StaleSkipped           int
 	Skipped                int
 }
@@ -411,6 +413,32 @@ func recoverPendingReactionKinds(
 				TemplateID: run.TemplateID,
 			}
 			outcome.MergeConflictRecovered++
+			added++
+		}
+	}
+
+	// The label-review reaction has no checkout and requires no branch, so
+	// unlike the sibling kinds its guard omits the meta.Branch != "" clause.
+	if params.SCMAdapter != nil && params.LabelReviewReactionConfigured && meta.PRNumber > 0 && meta.Owner != "" && meta.Repo != "" {
+		key := ReactionKey(run.IssueID, ReactionKindLabelReview)
+		if _, exists := state.PendingReactions[key]; !exists {
+			state.PendingReactions[key] = &PendingReaction{
+				IssueID:    run.IssueID,
+				Identifier: run.Identifier,
+				DisplayID:  run.DisplayID,
+				Attempt:    run.Attempt,
+				Kind:       ReactionKindLabelReview,
+				CreatedAt:  now,
+				KindData: &LabelReviewReactionData{
+					PRNumber: meta.PRNumber,
+					Owner:    meta.Owner,
+					Repo:     meta.Repo,
+				},
+				AgentKind:  run.AgentAdapter,
+				RuleName:   run.RuleName,
+				TemplateID: run.TemplateID,
+			}
+			outcome.LabelReviewRecovered++
 			added++
 		}
 	}

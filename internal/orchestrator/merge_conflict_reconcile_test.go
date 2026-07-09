@@ -69,6 +69,12 @@ func (m *mergeabilitySCM) MergePR(_ context.Context, _ int, _, _ string, _ domai
 func (m *mergeabilitySCM) DeleteBranch(_ context.Context, _, _, _ string) error {
 	return nil
 }
+func (m *mergeabilitySCM) ListLabelEvents(_ context.Context, _ int, _, _ string) ([]domain.LabelEvent, error) {
+	return nil, nil
+}
+func (m *mergeabilitySCM) RemoveLabel(_ context.Context, _ int, _, _, _ string) error {
+	return nil
+}
 
 // statefulFingerprintStore is a ReconcileStore that genuinely persists the
 // per-(issue,kind) fingerprint and dispatched flag, so the head-SHA dedup

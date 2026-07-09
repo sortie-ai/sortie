@@ -664,7 +664,7 @@ func TestHandleRetryTimerMetrics(t *testing.T) {
 			ActiveStates:      []string{"To Do"},
 			TerminalStates:    []string{"Done"},
 			MaxRetryBackoffMS: 300_000,
-			MakeWorkerFn: func(_, _, _, _ string, _ domain.AgentAdapter) WorkerFunc {
+			MakeWorkerFn: func(_, _, _, _, _ string, _ domain.AgentAdapter) WorkerFunc {
 				return func(_ context.Context, _ domain.Issue, _ *int) {
 					// no-op worker
 				}

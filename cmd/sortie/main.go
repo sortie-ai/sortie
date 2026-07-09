@@ -372,6 +372,8 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 	var botReviewConfigured bool
 	var mergeConflictConfig orchestrator.MergeConflictReactionConfig
 	var mergeConflictConfigured bool
+	var labelReviewConfig orchestrator.LabelReviewReactionConfig
+	var labelReviewConfigured bool
 
 	reviewRC, hasReview := br.cfg.Reactions["review_comments"]
 	autoMergeRC, hasAutoMerge := br.cfg.Reactions["auto_merge"]
@@ -381,12 +383,16 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 	autoMergeActive := hasAutoMerge && autoMergeRC.Provider != ""
 	botReviewActive := hasBotReview && botReviewRC.Provider != ""
 	mergeConflictActive := hasMergeConflict && mergeConflictRC.Provider != ""
+	// label_commands parses through its own dedicated field, never the
+	// Reactions map; it activates when a provider and a review label are set.
+	labelReviewActive := br.cfg.LabelCommands.Provider != "" && br.cfg.LabelCommands.ReviewLabel != ""
 
 	activeSCMKinds := []scmReactionKind{
 		{name: "review_comments", active: reviewActive, provider: reviewRC.Provider},
 		{name: "auto_merge", active: autoMergeActive, provider: autoMergeRC.Provider},
 		{name: "bot_review", active: botReviewActive, provider: botReviewRC.Provider},
 		{name: "merge_conflicts", active: mergeConflictActive, provider: mergeConflictRC.Provider},
+		{name: "label_commands", active: labelReviewActive, provider: br.cfg.LabelCommands.Provider},
 	}
 	if conflictKinds, conflictProviders := scmProviderConflict(activeSCMKinds); len(conflictProviders) > 1 {
 		br.logger.Error("unsupported: active SCM reaction kinds must use the same provider",
@@ -396,8 +402,8 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 		return 1
 	}
 
-	if reviewActive || autoMergeActive || botReviewActive || mergeConflictActive {
-		provider := cmp.Or(reviewRC.Provider, autoMergeRC.Provider, botReviewRC.Provider, mergeConflictRC.Provider)
+	if reviewActive || autoMergeActive || botReviewActive || mergeConflictActive || labelReviewActive {
+		provider := cmp.Or(reviewRC.Provider, autoMergeRC.Provider, botReviewRC.Provider, mergeConflictRC.Provider, br.cfg.LabelCommands.Provider)
 		scmCtor, scmErr := registry.SCMAdapters.Get(provider)
 		if scmErr != nil {
 			br.logger.Error("unknown SCM adapter kind",
@@ -514,6 +520,17 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 				slog.Int("max_retries", mergeConflictConfig.MaxRetries),
 			)
 		}
+
+		if labelReviewActive {
+			labelReviewConfig = orchestrator.BuildLabelReviewReactionConfig(br.cfg.LabelCommands)
+			labelReviewConfigured = true
+
+			br.logger.Info("label review reaction enabled",
+				slog.String("provider", br.cfg.LabelCommands.Provider),
+				slog.String("review_label", br.cfg.LabelCommands.ReviewLabel),
+				slog.Int("poll_interval_ms", labelReviewConfig.PollIntervalMS),
+			)
+		}
 	}
 
 	recoveryEnabled := br.cfg.Tracker.HandoffState != "" && (ciProvider != nil || scmAdapter != nil)
@@ -536,6 +553,7 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 				AutoMergeReactionConfigured:     autoMergeConfigured,
 				BotReviewReactionConfigured:     botReviewConfigured,
 				MergeConflictReactionConfigured: mergeConflictConfigured,
+				LabelReviewReactionConfigured:   labelReviewConfigured,
 				RecoveryLookback:                recoveryLookback,
 				MaxCandidates:                   orchestrator.PendingReactionRecoveryMaxCandidates,
 				NowFunc: func() time.Time {
@@ -555,6 +573,7 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 		slog.Int("auto_merge_recovered", recoveryOutcome.AutoMergeRecovered),
 		slog.Int("bot_review_recovered", recoveryOutcome.BotReviewRecovered),
 		slog.Int("merge_conflict_recovered", recoveryOutcome.MergeConflictRecovered),
+		slog.Int("label_review_recovered", recoveryOutcome.LabelReviewRecovered),
 		slog.Int("stale_skipped", recoveryOutcome.StaleSkipped),
 		slog.Int("skipped", recoveryOutcome.Skipped),
 	}
@@ -653,6 +672,8 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 		BotReviewConfigured:             botReviewConfigured,
 		MergeConflictConfig:             mergeConflictConfig,
 		MergeConflictReactionConfigured: mergeConflictConfigured,
+		LabelReviewConfig:               labelReviewConfig,
+		LabelReviewReactionConfigured:   labelReviewConfigured,
 	})
 
 	var srv *server.Server

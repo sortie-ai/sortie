@@ -1111,3 +1111,91 @@ Prompt.
 		t.Errorf("error = %q, want to contain %q", errMsg, "front matter")
 	}
 }
+
+// labelCommandsWorkflow returns a WORKFLOW.md with an active
+// reactions.label_commands block and the given prompt body.
+func labelCommandsWorkflow(promptBody string) []byte {
+	return fmt.Appendf(nil, "---\n"+
+		"reactions:\n"+
+		"  label_commands:\n"+
+		"    provider: github\n"+
+		"    review_label: \"sortie:review\"\n"+
+		"---\n"+
+		"%s\n", promptBody)
+}
+
+const labelReviewWarnMessage = "label_commands active but prompt template has no label_review branch"
+
+// TestManager_WarnsWhenLabelReviewTokenMissing covers A12: with
+// label_commands active and a prompt body that never references
+// label_review, load emits a Warn; the same active block with a
+// {{ if .label_review }} branch in the prompt suppresses it; and an
+// inactive label_commands block suppresses it regardless of prompt
+// content. The warning is advisory only — NewManager never fails because
+// of it.
+func TestManager_WarnsWhenLabelReviewTokenMissing(t *testing.T) {
+	t.Parallel()
+
+	t.Run("missing token warns", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		path := filepath.Join(dir, "WORKFLOW.md")
+		mustWriteFile(t, path, labelCommandsWorkflow("Do the task for {{ .issue.title }}."))
+
+		var buf bytes.Buffer
+		logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+		mgr, err := NewManager(path, logger)
+		if err != nil {
+			t.Fatalf("NewManager: %v", err)
+		}
+		mgr.Stop()
+
+		if !strings.Contains(buf.String(), labelReviewWarnMessage) {
+			t.Errorf("logger output = %q, want the missing-token warning", buf.String())
+		}
+	})
+
+	t.Run("token present suppresses the warning", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		path := filepath.Join(dir, "WORKFLOW.md")
+		mustWriteFile(t, path, labelCommandsWorkflow("{{ if .label_review }}review this{{ end }}\nDo the task for {{ .issue.title }}."))
+
+		var buf bytes.Buffer
+		logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+		mgr, err := NewManager(path, logger)
+		if err != nil {
+			t.Fatalf("NewManager: %v", err)
+		}
+		mgr.Stop()
+
+		if strings.Contains(buf.String(), labelReviewWarnMessage) {
+			t.Errorf("logger output = %q, want no warning when the prompt references label_review", buf.String())
+		}
+	})
+
+	t.Run("feature inactive suppresses the warning regardless of prompt content", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		path := filepath.Join(dir, "WORKFLOW.md")
+		mustWriteFile(t, path, validWorkflow(5000)) // no reactions.label_commands block
+
+		var buf bytes.Buffer
+		logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+		mgr, err := NewManager(path, logger)
+		if err != nil {
+			t.Fatalf("NewManager: %v", err)
+		}
+		mgr.Stop()
+
+		if strings.Contains(buf.String(), labelReviewWarnMessage) {
+			t.Errorf("logger output = %q, want no warning when label_commands is inactive", buf.String())
+		}
+	})
+}

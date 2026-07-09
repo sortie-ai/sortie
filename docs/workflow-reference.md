@@ -885,6 +885,66 @@ reactions:
     poll_interval_ms: 60000
 ```
 
+#### Reaction kind: `label_commands`
+
+Label-command detection. When configured, the orchestrator polls each Sortie-managed PR's
+label-event journal and dispatches a read-only, no-clone agent session when an operator
+applies the configured review label. The session reads the PR diff and posts review
+comments under the agent's own identity; it performs no branch mutation and requires no
+repository checkout.
+
+Unlike the other reaction kinds, `label_commands` carries no escalation semantics and does
+not use the shared per-kind fields (`max_retries`, `escalation`, `escalation_label`). It
+parses through a dedicated path and never appears as a generic reaction entry, so its
+fields sit directly on the block.
+
+Fields:
+
+| Field              | Type    | Default         | Dynamic Reload   | Description                                                                                             |
+| ------------------ | ------- | --------------- | ---------------- | ------------------------------------------------------------------------------------------------------- |
+| `provider`         | string  | _(required)_    | Requires restart | SCM adapter kind. Must match the provider of every other active SCM reaction. Activates the block.      |
+| `review_label`     | string  | `sortie:review` | Requires restart | Label that triggers a read-only review. An explicit empty string disables the review command.           |
+| `fix_label`        | string  | `sortie:fix`    | Requires restart | Label reserved for the fix command. Parsed and shape-validated but drives no dispatch in this release.  |
+| `poll_interval_ms` | integer | `60000`         | Requires restart | Journal poll interval. Minimum `30000` (30 sec); a lower value is clamped up to the floor with a warning. |
+
+**Activation:** The `reactions.label_commands` block is active when `provider` is present
+and non-empty AND `review_label` is non-empty. Agent-created PRs MUST write `pr_number`
+(positive integer), `owner`, and `repo` (all non-empty) to `.sortie/scm.json` in the
+workspace for label detection to activate. No branch is required: the review session has no
+checkout.
+
+**Acknowledgment:** On a confirmed command the orchestrator removes the label from the PR.
+The label's disappearance is the operator-visible signal that the command was accepted:
+present means "queued, not yet picked up"; gone means "accepted" (or retracted by the
+operator). A removal failure leaves the label in place and logs a warning; correctness is
+unaffected because deduplication rests on the journal position, not the removal. Re-applying
+the label after a review completes is a new gesture and produces a new session.
+
+**Validation:** Setting `provider` while both `review_label` and `fix_label` are empty is a
+configuration error. Because the defaults are non-empty, this occurs only when the operator
+explicitly sets both labels to `""`. The rule is a config-shape check and surfaces offline
+via `sortie validate`. A `provider` naming an unregistered SCM adapter is NOT a `validate`
+error; it fails at construction.
+
+**Operator prerequisite:** Enabling `review_label` requires the active prompt template to
+contain a `{{ if .label_review }}` branch that fetches the PR diff and posts review comments
+using the agent's own SCM tooling (see the `label_review` continuation key in Section 5.2).
+The orchestrator injects only the PR coordinates, never the diff text and never a posted
+comment, so without this branch a label-review dispatch runs the normal work prompt and
+posts no review. The orchestrator emits an info log at each dispatch and a warning at prompt
+load when the template omits the `label_review` token, so the inert outcome is diagnosable.
+
+Example:
+
+```yaml
+reactions:
+  label_commands:
+    provider: github
+    review_label: sortie:review
+    fix_label: sortie:fix
+    poll_interval_ms: 60000
+```
+
 **Validation rules:**
 
 - Reaction kind keys must match `[a-z][a-z0-9_-]*`. Invalid keys are rejected with a
@@ -902,6 +962,9 @@ reactions:
 - `bot_usernames` for `bot_review` must be a list of strings.
 - `poll_interval_ms` must be >= `30000` for `merge_conflicts`.
 - `max_retries` for `merge_conflicts` defaults to `1` rather than `2`; an explicit value overrides.
+- `review_label` and `fix_label` for `label_commands` must be strings; each defaults to a non-empty value, and an explicit `""` disables that command.
+- `poll_interval_ms` below `30000` for `label_commands` is clamped up to `30000` with a warning, not rejected.
+- For `label_commands`, setting `provider` while both `review_label` and `fix_label` are `""` is a configuration error surfaced offline by `sortie validate`.
 - When `provider` is absent or empty, all other fields in the kind sub-object are ignored.
 
 ---
@@ -2167,6 +2230,44 @@ its base branch {{ .merge_conflict.base }}. Resolve them:
 2. Rebase {{ .merge_conflict.branch }} onto {{ .merge_conflict.base }}.
 3. Resolve every conflict, keeping both the intent of the PR and the base changes.
 4. Push the rebased branch.
+{{ end }}
+```
+
+#### `label_review` — Label Review Context (continuation key)
+
+Non-nil only on turn 1 of a read-only label-review dispatch, triggered when an operator
+applies the configured review label to a Sortie-managed PR (see `reactions.label_commands`
+in Section 2.10). Carries the PR coordinates the agent needs to fetch the diff and post its
+review:
+
+| Field                        | Type    | Description                                         |
+| ---------------------------- | ------- | --------------------------------------------------- |
+| `.label_review.pr_number`    | integer | Pull request number to review.                      |
+| `.label_review.owner`        | string  | Repository owner.                                   |
+| `.label_review.repo`         | string  | Repository name.                                    |
+| `.label_review.actor`        | string  | Login of the operator who applied the review label. |
+| `.label_review.requested_at` | string  | RFC 3339 timestamp of the confirmed labeling gesture. |
+
+The orchestrator injects only these coordinates. It never injects the PR diff text and never
+posts a comment itself; the agent fetches the diff and posts review comments using its own
+SCM tooling. A prompt template that omits the `{{ if .label_review }}` branch therefore
+produces no review on a label-review dispatch.
+
+When `nil` (default on non-label-review dispatches), `{{ if .label_review }}` evaluates to
+`false`.
+
+**Template pattern for label review:**
+
+```
+{{ if .label_review }}
+## Review This Pull Request
+
+Produce a code review of pull request #{{ .label_review.pr_number }} in
+{{ .label_review.owner }}/{{ .label_review.repo }}, requested by {{ .label_review.actor }}.
+
+1. Fetch the PR diff using your SCM tooling.
+2. Review the changes for correctness, clarity, and regressions.
+3. Post your review comments on the PR. Do not modify the branch.
 {{ end }}
 ```
 

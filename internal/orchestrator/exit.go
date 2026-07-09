@@ -128,6 +128,11 @@ type HandleWorkerExitParams struct {
 	// feature is active for the current process. The enqueue path gates
 	// on this flag and the SCMAdapter being non-nil.
 	MergeConflictReactionConfigured bool
+
+	// LabelReviewReactionConfigured marks whether the label-review
+	// feature is active for the current process. The enqueue path gates
+	// on this flag and the SCMAdapter being non-nil.
+	LabelReviewReactionConfigured bool
 }
 
 // HandleWorkerExit processes a worker's terminal outcome. It removes the
@@ -316,7 +321,11 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 		issueIsActive := len(params.ActiveStates) == 0 || isActiveState(entry.Issue.State, params.ActiveStates)
 		_, claimedAtExit := state.Claimed[workerResult.IssueID]
 		blockedSoftStop := workerResult.SoftStop && workerResult.SoftStopReason == string(workspace.StatusBlocked)
-		handoffPath := params.HandoffState != "" && issueIsActive && !blockedSoftStop
+		// A read-only review performs no work handoff and schedules no
+		// continuation on a clean exit, so it never takes the handoff path
+		// or the active-issue continuation-retry branch.
+		isReadOnly := entry.ReactionKind == ReactionKindLabelReview
+		handoffPath := params.HandoffState != "" && issueIsActive && !blockedSoftStop && !isReadOnly
 
 		switch {
 		case blockedSoftStop:
@@ -415,7 +424,7 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 			CancelRetry(state, workerResult.IssueID)
 			delete(state.Claimed, workerResult.IssueID)
 
-		case issueIsActive:
+		case issueIsActive && !isReadOnly:
 			// No handoff configured but issue is still active:
 			// schedule continuation retry (existing behavior).
 			ScheduleRetry(state, ScheduleRetryParams{
@@ -622,6 +631,44 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 								Repo:     scm.Repo,
 								Branch:   scm.Branch,
 								SHA:      scm.SHA,
+							},
+							AgentKind:  entry.AgentKind,
+							RuleName:   entry.RuleName,
+							TemplateID: entry.TemplateID,
+						}
+					}
+				}
+			}
+		}
+
+		// Record a pending label-review entry when the SCM adapter is
+		// configured, label-review is enabled, and the workspace has PR
+		// metadata. Unlike the sibling kinds this requires no branch:
+		// the read-only review has no checkout. This never fires on a
+		// read-only session's own exit, whose scratch workspace writes
+		// no scm.json, so the PR-metadata gate fails naturally.
+		if params.SCMAdapter != nil && params.LabelReviewReactionConfigured && workerResult.WorkspacePath != "" {
+			if reactionEnqueueAllowed {
+				scm := workspace.ReadSCMMetadata(workerResult.WorkspacePath, log)
+				if scm.PRNumber > 0 && scm.Owner != "" && scm.Repo != "" {
+					nowLabelReview := time.Now().UTC()
+					if params.NowFunc != nil {
+						nowLabelReview = params.NowFunc().UTC()
+					}
+					rkey := ReactionKey(workerResult.IssueID, ReactionKindLabelReview)
+					if _, exists := state.PendingReactions[rkey]; !exists {
+						state.PendingReactions[rkey] = &PendingReaction{
+							IssueID:     workerResult.IssueID,
+							Identifier:  workerResult.Identifier,
+							DisplayID:   entry.Issue.DisplayID,
+							Attempt:     normalizeAttempt(entry.RetryAttempt) + 1,
+							Kind:        ReactionKindLabelReview,
+							LastSSHHost: workerResult.SSHHost,
+							CreatedAt:   nowLabelReview,
+							KindData: &LabelReviewReactionData{
+								PRNumber: scm.PRNumber,
+								Owner:    scm.Owner,
+								Repo:     scm.Repo,
 							},
 							AgentKind:  entry.AgentKind,
 							RuleName:   entry.RuleName,

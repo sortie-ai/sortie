@@ -41,6 +41,12 @@ type ServiceConfig struct {
 	// map.
 	Reactions map[string]ReactionConfig
 
+	// LabelCommands holds the parsed reactions.label_commands block. Zero
+	// value (Provider == "") means the label-command feature is off. This
+	// block parses through its own path and never appears as an entry in
+	// the Reactions map.
+	LabelCommands LabelCommandsConfig
+
 	// DBPath is the environment- and tilde-expanded path for the SQLite
 	// database. It may be relative; callers resolve it against the
 	// WORKFLOW.md directory. Empty string means the caller should apply
@@ -306,6 +312,11 @@ func NewServiceConfig(raw map[string]any) (ServiceConfig, error) {
 		delete(reactions, "ci_failure")
 	}
 
+	labelCommands, err := buildLabelCommandsConfig(extractSubMap(extractSubMap(raw, "reactions"), "label_commands"))
+	if err != nil {
+		return ServiceConfig{}, err
+	}
+
 	notifications, err := buildNotificationsConfig(raw)
 	if err != nil {
 		return ServiceConfig{}, err
@@ -329,6 +340,7 @@ func NewServiceConfig(raw map[string]any) (ServiceConfig, error) {
 		CIFeedback:              ciFeedback,
 		SelfReview:              selfReview,
 		Reactions:               reactions,
+		LabelCommands:           labelCommands,
 		DBPath:                  dbPath,
 		Extensions:              extensions,
 		extensionsPreResolution: preResolution,
@@ -1170,6 +1182,12 @@ func buildReactionsConfig(m map[string]any) (map[string]ReactionConfig, error) {
 	}
 
 	for k, v := range m {
+		// label_commands parses through its own dedicated path
+		// (buildLabelCommandsConfig); it must never become a generic
+		// ReactionConfig entry.
+		if k == "label_commands" {
+			continue
+		}
 		if !reactionKeyPattern.MatchString(k) {
 			return nil, &ConfigError{
 				Field:   "reactions." + k,
@@ -1251,6 +1269,94 @@ func buildReactionsConfig(m map[string]any) (map[string]ReactionConfig, error) {
 		}
 	}
 	return result, nil
+}
+
+// LabelCommandsConfig is the parsed reactions.label_commands block.
+// Provider empty (or block absent) means the whole feature is off.
+// ReviewLabel and FixLabel empty individually disable that command.
+type LabelCommandsConfig struct {
+	// Provider names the SCM adapter (e.g. "github"). Empty means the
+	// feature is off.
+	Provider string
+
+	// ReviewLabel triggers the read-only review command. Defaults to
+	// "sortie:review"; an explicit empty string disables the command.
+	ReviewLabel string
+
+	// FixLabel triggers the fix command. Defaults to "sortie:fix"; an
+	// explicit empty string disables the command. Parsed and shape-validated
+	// but not otherwise consumed yet.
+	FixLabel string
+
+	// PollIntervalMS is the journal poll interval. Defaults to 60000 and
+	// is clamped up to a floor of 30000.
+	PollIntervalMS int
+}
+
+// buildLabelCommandsConfig parses and validates the label_commands block.
+// Returns a zero-value config with Provider == "" when the block is absent
+// or empty. Returns a [*ConfigError] when a field has the wrong type, when
+// poll_interval_ms is not an integer, or when provider is set while both
+// command labels resolve to empty.
+func buildLabelCommandsConfig(m map[string]any) (LabelCommandsConfig, error) {
+	if len(m) == 0 {
+		return LabelCommandsConfig{}, nil
+	}
+
+	provider, _, err := requireStringField(m, "provider", "reactions.label_commands.provider")
+	if err != nil {
+		return LabelCommandsConfig{}, err
+	}
+
+	// An absent label key defaults to the conventional label; an explicit
+	// empty string is a deliberate disable and must be preserved.
+	reviewLabel := "sortie:review"
+	if s, found, rErr := requireStringField(m, "review_label", "reactions.label_commands.review_label"); rErr != nil {
+		return LabelCommandsConfig{}, rErr
+	} else if found {
+		reviewLabel = s
+	}
+
+	fixLabel := "sortie:fix"
+	if s, found, fErr := requireStringField(m, "fix_label", "reactions.label_commands.fix_label"); fErr != nil {
+		return LabelCommandsConfig{}, fErr
+	} else if found {
+		fixLabel = s
+	}
+
+	pollIntervalMS := 60000
+	if raw, exists := m["poll_interval_ms"]; exists && raw != nil {
+		n, pErr := coerceInt(raw)
+		if pErr != nil {
+			return LabelCommandsConfig{}, &ConfigError{
+				Field:   "reactions.label_commands.poll_interval_ms",
+				Message: fmt.Sprintf("invalid integer value: %v", raw),
+			}
+		}
+		if n < 30000 {
+			slog.Warn("clamped label_commands poll_interval_ms to floor",
+				slog.Int("configured_ms", n),
+				slog.Int("floor_ms", 30000))
+			n = 30000
+		}
+		pollIntervalMS = n
+	}
+
+	// An active provider with both command labels disabled is a loud
+	// misconfiguration: the block does nothing but is not silently inert.
+	if provider != "" && reviewLabel == "" && fixLabel == "" {
+		return LabelCommandsConfig{}, &ConfigError{
+			Field:   "reactions.label_commands",
+			Message: "an active provider requires at least one non-empty command label (review_label or fix_label)",
+		}
+	}
+
+	return LabelCommandsConfig{
+		Provider:       provider,
+		ReviewLabel:    reviewLabel,
+		FixLabel:       fixLabel,
+		PollIntervalMS: pollIntervalMS,
+	}, nil
 }
 
 func normalizeByStateMap(raw any) map[string]int {

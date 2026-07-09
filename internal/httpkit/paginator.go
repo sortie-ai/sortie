@@ -159,9 +159,19 @@ func cloneValues(values url.Values) url.Values {
 }
 
 func parseLinkNext(header string) string {
+	return ParseLinkRel(header, "next")
+}
+
+// ParseLinkRel returns the URL carried by the given rel token (for
+// example "next", "prev", or "last") in an RFC 8288 Link header, or the
+// empty string when the header is empty or carries no matching relation.
+// The rel attribute match is case-insensitive.
+func ParseLinkRel(header, rel string) string {
 	if header == "" {
 		return ""
 	}
+
+	want := `rel="` + rel + `"`
 
 	for segment := range strings.SplitSeq(header, ",") {
 		parts := strings.Split(segment, ";")
@@ -169,14 +179,14 @@ func parseLinkNext(header string) string {
 			continue
 		}
 
-		hasNext := false
+		hasRel := false
 		for _, attr := range parts[1:] {
-			if strings.EqualFold(strings.TrimSpace(attr), `rel="next"`) {
-				hasNext = true
+			if strings.EqualFold(strings.TrimSpace(attr), want) {
+				hasRel = true
 				break
 			}
 		}
-		if !hasNext {
+		if !hasRel {
 			continue
 		}
 

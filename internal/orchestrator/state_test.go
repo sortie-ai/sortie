@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"context"
 	"math"
 	"testing"
 	"time"
@@ -1351,5 +1352,111 @@ func TestBuildMergeConflictReactionConfig_EmptyEscalationDefaultsToLabel(t *test
 	}
 	if got.EscalationLabel != "needs-human" {
 		t.Errorf("EscalationLabel = %q, want %q (empty defaults to needs-human)", got.EscalationLabel, "needs-human")
+	}
+}
+
+// --- isKnownReactionKind label-review case ---
+
+func TestIsKnownReactionKind_AcceptsLabelReview(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		kind string
+		want bool
+	}{
+		{ReactionKindLabelReview, true},
+		{"label-review", true},
+		{ReactionKindMergeConflict, true},
+		{ReactionKindAutoMerge, true},
+		{"label_commands", false}, // the YAML key, not the runtime discriminator
+		{"label_review", false},   // the template variable, not the discriminator
+		{"unknown", false},
+		{"", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.kind, func(t *testing.T) {
+			t.Parallel()
+			if got := isKnownReactionKind(tt.kind); got != tt.want {
+				t.Errorf("isKnownReactionKind(%q) = %v, want %v", tt.kind, got, tt.want)
+			}
+		})
+	}
+}
+
+// --- BuildLabelReviewReactionConfig tests ---
+
+func TestBuildLabelReviewReactionConfig(t *testing.T) {
+	t.Parallel()
+
+	cfg := config.LabelCommandsConfig{
+		Provider:       "github",
+		ReviewLabel:    "sortie:review",
+		FixLabel:       "sortie:fix",
+		PollIntervalMS: 45000,
+	}
+
+	got := BuildLabelReviewReactionConfig(cfg)
+
+	want := LabelReviewReactionConfig{
+		Provider:       "github",
+		ReviewLabel:    "sortie:review",
+		PollIntervalMS: 45000,
+	}
+	if got != want {
+		t.Errorf("BuildLabelReviewReactionConfig(%+v) = %+v, want %+v", cfg, got, want)
+	}
+}
+
+// --- ClearReactionsForIssue cross-kind tests ---
+
+// TestClearReactionsForIssue verifies that clearing an issue's reactions on
+// a terminal transition removes every sibling kind's PendingReactions entry,
+// including label-review, alongside the reaction_fingerprints deletion,
+// while leaving another issue's entries untouched.
+func TestClearReactionsForIssue(t *testing.T) {
+	t.Parallel()
+
+	const issueID = "ISS-CLEAR"
+	const otherIssueID = "ISS-OTHER"
+
+	state := NewState(5000, 4, nil, AgentTotals{})
+	kinds := []string{
+		ReactionKindCI,
+		ReactionKindReview,
+		ReactionKindBotReview,
+		ReactionKindAutoMerge,
+		ReactionKindMergeConflict,
+		ReactionKindLabelReview,
+	}
+	for _, kind := range kinds {
+		state.PendingReactions[ReactionKey(issueID, kind)] = &PendingReaction{IssueID: issueID, Kind: kind}
+	}
+	state.ReactionAttempts[ReactionKey(issueID, ReactionKindReview)] = 2
+
+	// A sibling issue's label-review entry must survive.
+	state.PendingReactions[ReactionKey(otherIssueID, ReactionKindLabelReview)] = &PendingReaction{
+		IssueID: otherIssueID,
+		Kind:    ReactionKindLabelReview,
+	}
+
+	store := &reviewReconcileStore{}
+
+	ClearReactionsForIssue(context.Background(), state, store, issueID, discardLogger())
+
+	for _, kind := range kinds {
+		key := ReactionKey(issueID, kind)
+		if _, ok := state.PendingReactions[key]; ok {
+			t.Errorf("PendingReactions[%s] survived ClearReactionsForIssue, want removed", key)
+		}
+	}
+	if _, ok := state.ReactionAttempts[ReactionKey(issueID, ReactionKindReview)]; ok {
+		t.Error("ReactionAttempts entry survived ClearReactionsForIssue, want removed")
+	}
+	if _, ok := state.PendingReactions[ReactionKey(otherIssueID, ReactionKindLabelReview)]; !ok {
+		t.Error("sibling issue's label-review PendingReaction removed by ClearReactionsForIssue, want untouched")
+	}
+	if store.deleteFPByIssueCalls != 1 {
+		t.Errorf("DeleteReactionFingerprintsByIssue calls = %d, want 1", store.deleteFPByIssueCalls)
 	}
 }

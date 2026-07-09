@@ -437,3 +437,65 @@ func TestLinkPaginator_cancellation(t *testing.T) {
 		t.Errorf("All() err = %v, want %v", err, context.Canceled)
 	}
 }
+
+func TestParseLinkRel(t *testing.T) {
+	t.Parallel()
+
+	multi := `<https://api.example.com/items?page=2>; rel="next", ` +
+		`<https://api.example.com/items?page=1>; rel="prev", ` +
+		`<https://api.example.com/items?page=1>; rel="first", ` +
+		`<https://api.example.com/items?page=5>; rel="last"`
+
+	tests := []struct {
+		name   string
+		header string
+		rel    string
+		want   string
+	}{
+		{"next relation", multi, "next", "https://api.example.com/items?page=2"},
+		{"prev relation", multi, "prev", "https://api.example.com/items?page=1"},
+		{"first relation", multi, "first", "https://api.example.com/items?page=1"},
+		{"last relation", multi, "last", "https://api.example.com/items?page=5"},
+		{"missing relation returns empty", multi, "next2", ""},
+		{"empty header returns empty", "", "next", ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := ParseLinkRel(tt.header, tt.rel)
+			if got != tt.want {
+				t.Errorf("ParseLinkRel(%q, %q) = %q, want %q", tt.header, tt.rel, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestParseLinkNext_Unchanged verifies that parseLinkNext, now a one-line
+// wrapper around ParseLinkRel(header, "next"), preserves its exact prior
+// behavior for the existing forward-paginating callers.
+func TestParseLinkNext_Unchanged(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		header string
+		want   string
+	}{
+		{"next present", `<https://api.example.com/items?page=2>; rel="next"`, "https://api.example.com/items?page=2"},
+		{"no next relation", `<https://api.example.com/items?page=1>; rel="prev"`, ""},
+		{"empty header", "", ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := parseLinkNext(tt.header)
+			if got != tt.want {
+				t.Errorf("parseLinkNext(%q) = %q, want %q", tt.header, got, tt.want)
+			}
+		})
+	}
+}

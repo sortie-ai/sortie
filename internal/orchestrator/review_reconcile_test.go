@@ -62,6 +62,14 @@ func (m *mockSCMAdapter) DeleteBranch(_ context.Context, _, _, _ string) error {
 	return nil
 }
 
+func (m *mockSCMAdapter) ListLabelEvents(_ context.Context, _ int, _, _ string) ([]domain.LabelEvent, error) {
+	return nil, nil
+}
+
+func (m *mockSCMAdapter) RemoveLabel(_ context.Context, _ int, _, _, _ string) error {
+	return nil
+}
+
 // reviewReconcileStore is a self-contained ReconcileStore for review tests.
 type reviewReconcileStore struct {
 	savedEntries    []persistence.RetryEntry
