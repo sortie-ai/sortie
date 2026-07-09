@@ -21,3 +21,4 @@ This directory contains architecturally significant decisions for Sortie, docume
 | [0012](0012-auto-merge-reaction.md)                  | Extend `SCMAdapter` with Write Methods for Auto-Merge Reactions   | Accepted |
 | [0013](0013-agent-cost-budget.md)                    | Use cumulative per-issue token counts for the agent cost budget   | Accepted |
 | [0014](0014-operator-notifications.md)               | Use an adapter family for operator notifications                  | Accepted |
+| [0015](0015-pr-label-command-detection.md)           | Detect PR Label Commands by Polling the Label-Event Journal       | Accepted |
