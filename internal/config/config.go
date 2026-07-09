@@ -1308,6 +1308,13 @@ func buildLabelCommandsConfig(m map[string]any) (LabelCommandsConfig, error) {
 		return LabelCommandsConfig{}, err
 	}
 
+	// An absent or empty provider makes the whole block inert. Its other
+	// fields are ignored, so they are neither validated, clamped, nor
+	// defaulted here.
+	if provider == "" {
+		return LabelCommandsConfig{}, nil
+	}
+
 	// An absent label key defaults to the conventional label; an explicit
 	// empty string is a deliberate disable and must be preserved.
 	reviewLabel := "sortie:review"

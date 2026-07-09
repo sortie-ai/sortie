@@ -1106,6 +1106,25 @@ func TestBuildLabelCommandsConfig_Defaults(t *testing.T) {
 	})
 }
 
+func TestBuildLabelCommandsConfig_EmptyProviderIgnoresFields(t *testing.T) {
+	t.Parallel()
+
+	// With no active provider the block is inert, so a below-floor poll
+	// interval and a type-invalid label field are neither clamped nor
+	// rejected: the whole block is ignored and yields a zero-value config.
+	got, err := buildLabelCommandsConfig(map[string]any{
+		"provider":         "",
+		"poll_interval_ms": 5,
+		"review_label":     123,
+	})
+	if err != nil {
+		t.Fatalf("buildLabelCommandsConfig(empty provider): unexpected error: %v", err)
+	}
+	if got != (LabelCommandsConfig{}) {
+		t.Errorf("buildLabelCommandsConfig(empty provider) = %+v, want zero value", got)
+	}
+}
+
 func TestBuildLabelCommandsConfig_ReviewLabelDisabled(t *testing.T) {
 	t.Parallel()
 
