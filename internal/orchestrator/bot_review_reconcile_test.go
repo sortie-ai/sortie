@@ -1311,13 +1311,18 @@ func TestEscalateBotReviewFailure_DeleteFingerprintError(t *testing.T) {
 
 // --- coexistence with the review reaction kind ---
 
-// TestReconcileBotReviewComments_CoexistsWithReview verifies that the review
-// and bot-review passes dispatch independently within a single reconcile
-// cycle when both slots are pending for the same issue.
+// TestReconcileBotReviewComments_CoexistsWithReview verifies how the review
+// and bot-review passes interact when both kinds are pending for the same
+// issue in one reconcile cycle.
 //
-// Each pass must schedule its own retry carrying its own continuation-context
-// key, advance its own fingerprint row and attempt counter, and leave the
-// other kind's tracking state untouched.
+// The per-kind tracking state stays independent: each pass advances only its
+// own fingerprint row and attempt counter and consumes only its own pending
+// slot. The retry slot is shared: RetryAttempts is keyed by issue ID alone,
+// so the later bot-review pass overwrites the review pass's retry and only the
+// bot-review continuation survives the cycle. That overwrite does not strand
+// the review continuation, because its fingerprint stays undispatched and its
+// pending slot is recreated on the next worker exit, so it re-dispatches on a
+// later tick.
 func TestReconcileBotReviewComments_CoexistsWithReview(t *testing.T) {
 	t.Parallel()
 
@@ -1353,12 +1358,11 @@ func TestReconcileBotReviewComments_CoexistsWithReview(t *testing.T) {
 	}
 
 	reconcileReviewComments(state, params, discardLogger(), context.Background(), reviewMetrics)
-	// RetryAttempts is keyed by issue ID alone, so the bot-review dispatch
-	// below overwrites this entry; capture it before that happens.
-	reviewRetry, reviewScheduled := state.RetryAttempts[issueID]
-	reconcileBotReviewComments(state, params, discardLogger(), context.Background(), botMetrics)
-	botRetry, botScheduled := state.RetryAttempts[issueID]
 
+	// The review pass schedules its continuation retry in the issue-ID-keyed
+	// slot. Capture it to prove the bot-review pass overwrites it below, not to
+	// claim both retries survive the cycle.
+	reviewRetry, reviewScheduled := state.RetryAttempts[issueID]
 	if !reviewScheduled {
 		t.Fatal("retry not scheduled after review dispatch; want scheduled")
 	}
@@ -1368,6 +1372,12 @@ func TestReconcileBotReviewComments_CoexistsWithReview(t *testing.T) {
 	if _, ok := reviewRetry.ContinuationContext["review_comments"]; !ok {
 		t.Error("review RetryEntry.ContinuationContext missing review_comments key")
 	}
+
+	reconcileBotReviewComments(state, params, discardLogger(), context.Background(), botMetrics)
+
+	// ScheduleRetry cancels the prior entry, so the bot-review pass replaces the
+	// review retry in the shared slot: only the bot-review continuation remains.
+	botRetry, botScheduled := state.RetryAttempts[issueID]
 	if !botScheduled {
 		t.Fatal("retry not scheduled after bot-review dispatch; want scheduled")
 	}
@@ -1376,6 +1386,12 @@ func TestReconcileBotReviewComments_CoexistsWithReview(t *testing.T) {
 	}
 	if _, ok := botRetry.ContinuationContext["bot_review_comments"]; !ok {
 		t.Error("bot-review RetryEntry.ContinuationContext missing bot_review_comments key")
+	}
+	if botRetry == reviewRetry {
+		t.Error("RetryAttempts[issueID] = review entry, want bot-review entry (review retry overwritten)")
+	}
+	if len(state.RetryAttempts) != 1 {
+		t.Errorf("len(RetryAttempts) = %d, want 1 (review and bot-review share one issue-ID slot)", len(state.RetryAttempts))
 	}
 
 	if reviewMetrics.reviewChecks["dispatched"] != 1 {
