@@ -127,12 +127,11 @@ is not lost in practice: a session dispatched after the collapse sees
 all feedback accumulated up to its start.
 
 The guarantee is **at-most-once per gesture batch**, matching the
-family's posture: the fingerprint row is marked dispatched before the
-dispatch is scheduled, so a crash in the narrow window between marking
-and scheduling loses the command rather than duplicating it. The
-operator re-applies the label. A crash at any other point neither
-replays nor duplicates, because the mark and the dispatched flag live
-in SQLite.
+family's posture: the high-water mark is persisted before the dispatch
+is scheduled, so a crash in the narrow window between persisting and
+scheduling loses the command rather than duplicating it. The operator
+re-applies the label. A crash at any other point neither replays nor
+duplicates, because the mark lives in SQLite.
 
 ### Retraction
 
@@ -172,14 +171,16 @@ defensively, although Sortie never applies command labels.
 The existing `reaction_fingerprints` table is reused with two new kind
 discriminators: `label-review` and `label-fix`. The primary key
 `(issue_id, kind)` gives each command kind an independent high-water
-mark and dispatched flag, preserving cross-kind isolation. No
-migration is required; `kind` is TEXT.
+mark, preserving cross-kind isolation. No migration is required;
+`kind` is TEXT.
 
 One documented deviation: for these two kinds the `fingerprint` column
 stores the high-water mark (newest processed journal event's timestamp
 and id), not a hash of observed state. The column is opaque TEXT and
 the table's upsert-and-flag semantics are unchanged, but readers of
-the schema should not assume every fingerprint is a digest.
+the schema should not assume every fingerprint is a digest. For these
+kinds the `dispatched` column is never consulted: deduplication rests
+solely on the advancing mark.
 
 ### Configuration surface
 
@@ -359,9 +360,9 @@ contract defined here without changing its semantics.
 
 - **No new network surface.** The feature ships inside the existing
   tick, preserving the single-binary, outbound-only posture.
-- **Restart-safe at-most-once semantics.** The high-water mark and the
-  dispatched flag live in `reaction_fingerprints`; crashes neither
-  replay nor double-dispatch.
+- **Restart-safe at-most-once semantics.** The high-water mark lives
+  in `reaction_fingerprints`; crashes neither replay nor
+  double-dispatch.
 - **Full gesture fidelity.** Retraction, repetition, and bursts each
   have defined, explainable outcomes; nothing depends on the accident
   of poll timing except the bounded latency and cancellation windows.
@@ -410,7 +411,7 @@ mock SCM adapter for integration coverage:
    produces a second dispatch.
 4. Multiple label applications between two ticks produce one dispatch.
 5. A process restart between ticks produces no duplicate dispatch; the
-   mark and dispatched flag are read back from SQLite.
+   mark is read back from SQLite.
 6. After a dispatch is scheduled, the command label is removed from
    the PR; a removal failure logs a warning and does not affect
    subsequent deduplication.
