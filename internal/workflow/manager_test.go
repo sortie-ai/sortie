@@ -1199,3 +1199,91 @@ func TestManager_WarnsWhenLabelReviewTokenMissing(t *testing.T) {
 		}
 	})
 }
+
+// fixOnlyLabelCommandsWorkflow returns a WORKFLOW.md whose
+// reactions.label_commands block disables the review command and keeps
+// only fix_label active, with the given prompt body.
+func fixOnlyLabelCommandsWorkflow(promptBody string) []byte {
+	return fmt.Appendf(nil, "---\n"+
+		"reactions:\n"+
+		"  label_commands:\n"+
+		"    provider: github\n"+
+		"    review_label: \"\"\n"+
+		"    fix_label: \"sortie:fix\"\n"+
+		"---\n"+
+		"%s\n", promptBody)
+}
+
+const fixOnlyWarnMessage = "label_commands active with only fix_label set, block is inert"
+
+// TestManager_WarnsWhenLabelCommandsFixOnly: with label_commands active,
+// review_label explicitly empty, and fix_label non-empty, load emits a
+// Warn because the fix command does not dispatch in this release; an
+// enabled review command or an inactive block suppresses it. The warning
+// is advisory only — NewManager never fails because of it.
+func TestManager_WarnsWhenLabelCommandsFixOnly(t *testing.T) {
+	t.Parallel()
+
+	t.Run("fix-only block warns", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		path := filepath.Join(dir, "WORKFLOW.md")
+		mustWriteFile(t, path, fixOnlyLabelCommandsWorkflow("Do the task for {{ .issue.title }}."))
+
+		var buf bytes.Buffer
+		logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+		mgr, err := NewManager(path, logger)
+		if err != nil {
+			t.Fatalf("NewManager: %v", err)
+		}
+		mgr.Stop()
+
+		if !strings.Contains(buf.String(), fixOnlyWarnMessage) {
+			t.Errorf("logger output = %q, want the fix-only warning", buf.String())
+		}
+	})
+
+	t.Run("enabled review command suppresses the warning", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		path := filepath.Join(dir, "WORKFLOW.md")
+		mustWriteFile(t, path, labelCommandsWorkflow("{{ if .label_review }}review this{{ end }}\nDo the task for {{ .issue.title }}."))
+
+		var buf bytes.Buffer
+		logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+		mgr, err := NewManager(path, logger)
+		if err != nil {
+			t.Fatalf("NewManager: %v", err)
+		}
+		mgr.Stop()
+
+		if strings.Contains(buf.String(), fixOnlyWarnMessage) {
+			t.Errorf("logger output = %q, want no fix-only warning when the review command is enabled", buf.String())
+		}
+	})
+
+	t.Run("inactive block suppresses the warning", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		path := filepath.Join(dir, "WORKFLOW.md")
+		mustWriteFile(t, path, validWorkflow(5000)) // no reactions.label_commands block
+
+		var buf bytes.Buffer
+		logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+		mgr, err := NewManager(path, logger)
+		if err != nil {
+			t.Fatalf("NewManager: %v", err)
+		}
+		mgr.Stop()
+
+		if strings.Contains(buf.String(), fixOnlyWarnMessage) {
+			t.Errorf("logger output = %q, want no fix-only warning when label_commands is inactive", buf.String())
+		}
+	})
+}

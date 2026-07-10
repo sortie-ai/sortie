@@ -362,6 +362,17 @@ func (m *Manager) loadPipeline() (config.ServiceConfig, *prompt.Template, map[st
 		)
 	}
 
+	// Advisory: the fix command is not implemented yet, so an active block
+	// whose only non-empty command label is fix_label detects nothing.
+	// Loud at load beats silently inert; drop this warning when the fix
+	// command ships.
+	if cfg.LabelCommands.Provider != "" && cfg.LabelCommands.ReviewLabel == "" && cfg.LabelCommands.FixLabel != "" {
+		m.currentLogger().Warn("label_commands active with only fix_label set, block is inert",
+			slog.String("workflow", m.path),
+			slog.String("hint", "the fix command is not implemented in this release; set review_label to enable the review command"),
+		)
+	}
+
 	probe := m.agentKindProbe
 	if probe == nil {
 		// Permissive default: callers without an orchestrator
