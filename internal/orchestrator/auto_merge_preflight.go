@@ -125,6 +125,64 @@ func RunAutoMergePreflightRetry(ctx context.Context, adapter domain.SCMAdapter, 
 	return true, nil, nil
 }
 
+// RunLabelFixScopePreflight checks the configured token's scope grant
+// for the label-fix command at orchestrator startup. The returned
+// passed flag reports whether the token has sufficient scope to push
+// fixes, post a summary comment, and remove the command label; missing
+// carries the absent required scopes; err carries a transport or API
+// failure.
+//
+// The preflight is advisory: it never gates detection, dispatch, or
+// deduplication, and every failure mode logs at Warn rather than Error.
+// Because the fix command is default-on, a review-only deployment that
+// inherited the default fix label must not raise a startup Error for a
+// feature it did not intend to use. The preflight fails open (returns
+// true) when the adapter does not implement scope verification and when
+// the provider returns no scope information (fine-grained PATs and
+// GitHub App installation tokens); a genuine gap then surfaces at
+// runtime as the fix session's push failure and a label-removal Warn.
+func RunLabelFixScopePreflight(ctx context.Context, adapter domain.SCMAdapter, log *slog.Logger) (bool, []string, error) {
+	if log == nil {
+		log = slog.Default()
+	}
+
+	verifier, ok := adapter.(AutoMergeScopeVerifier)
+	if !ok {
+		log.Warn("label-fix scope preflight skipped: adapter does not implement scope verification")
+		return true, nil, nil
+	}
+
+	scopes, missing, err := verifier.VerifyAutoMergeScopes(ctx, true)
+	if err != nil {
+		log.Warn("label-fix scope preflight transport failure",
+			slog.Any("error", err),
+		)
+		return false, nil, err
+	}
+
+	if len(missing) > 0 {
+		log.Warn("label-fix scope preflight found insufficient token scope",
+			slog.String("missing_scope", missing[0]),
+			slog.Any("required_scopes", buildRequiredScopeList(true)),
+		)
+		return false, missing, nil
+	}
+
+	// Provider returned no scope information (fine-grained PAT or GitHub
+	// App installation token). Fail open so the fix command proceeds; a
+	// genuine gap surfaces at runtime as the fix session's push failure
+	// and a label-removal warning.
+	if len(scopes) == 0 {
+		log.Warn("label-fix scope preflight scope verification skipped: provider did not return scope information")
+		return true, nil, nil
+	}
+
+	log.Info("label-fix scope preflight passed",
+		slog.Any("scopes", scopes),
+	)
+	return true, nil, nil
+}
+
 // buildRequiredScopeList returns the canonical required-scope list
 // for an auto-merge deployment. Includes the branch-delete scope only
 // when requireContents is true.

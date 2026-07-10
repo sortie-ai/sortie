@@ -2043,3 +2043,60 @@ func TestRunValidate_LabelCommandsUnregisteredProviderNotRejected(t *testing.T) 
 		t.Fatalf("run(validate) = %d, want 0 (provider validity is deferred to construction); stderr: %s", code, stderr.String())
 	}
 }
+
+// labelCommandsFixOnlyWorkflow returns a workflow with an active
+// label_commands provider, an explicitly empty review_label, and a
+// non-empty fix_label: a fix-only configuration that buildLabelCommandsConfig
+// accepts because at least one command label is non-empty.
+func labelCommandsFixOnlyWorkflow() []byte {
+	return []byte(`---
+tracker:
+  kind: file
+  api_key: "unused"
+  active_states:
+    - To Do
+    - In Progress
+  terminal_states:
+    - Done
+agent:
+  kind: mock
+file:
+  path: issues.json
+reactions:
+  label_commands:
+    provider: github
+    review_label: ""
+    fix_label: "sortie:fix"
+---
+Do {{ .issue.title }}.
+`)
+}
+
+// TestRunValidate_LabelCommandsFixOnlyValid covers A1/A2's fix-only
+// activation shape offline: a provider with review_label explicitly
+// disabled and fix_label set is a valid block, not the
+// both-labels-empty error (companion to
+// TestRunValidate_LabelCommandsBothLabelsEmpty).
+func TestRunValidate_LabelCommandsFixOnlyValid(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	writeIssuesFixture(t, dir)
+	wfPath := writeCustomWorkflowFile(t, dir, labelCommandsFixOnlyWorkflow())
+
+	var stdout, stderr bytes.Buffer
+	ctx := context.Background()
+
+	code := run(ctx, []string{"validate", "--format", "json", wfPath}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("run(validate) = %d, want 0 (fix-only config is valid); stderr: %s", code, stderr.String())
+	}
+
+	var out validateOutput
+	if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
+		t.Fatalf("json.Unmarshal(%q) error: %v", stdout.String(), err)
+	}
+	if !out.Valid {
+		t.Errorf("validateOutput.Valid = false, want true; errors: %v", out.Errors)
+	}
+}

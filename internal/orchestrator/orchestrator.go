@@ -151,6 +151,16 @@ type OrchestratorParams struct {
 	// HandleWorkerExitParams, and the recovery params.
 	LabelReviewReactionConfigured bool
 
+	// LabelFixConfig holds validated label-fix reaction
+	// configuration. Zero value when LabelFixReactionConfigured is
+	// false.
+	LabelFixConfig LabelFixReactionConfig
+
+	// LabelFixReactionConfigured marks whether the label-fix feature
+	// is active for this process. Threaded into ReconcileParams,
+	// HandleWorkerExitParams, and the recovery params.
+	LabelFixReactionConfigured bool
+
 	// AgentAdapterByKind resolves the agent adapter for the given
 	// kind. Constructed once at startup from the eagerly-built
 	// per-kind adapter cache. When nil, the orchestrator falls back
@@ -205,6 +215,8 @@ type Orchestrator struct {
 	mergeConflictReactionConfigured bool
 	labelReviewConfig               LabelReviewReactionConfig
 	labelReviewReactionConfigured   bool
+	labelFixConfig                  LabelFixReactionConfig
+	labelFixReactionConfigured      bool
 
 	// sshStrictHostKeyChecking is the current effective OpenSSH
 	// StrictHostKeyChecking value. Written by handleTick on every
@@ -315,6 +327,8 @@ func NewOrchestrator(params OrchestratorParams) *Orchestrator {
 		mergeConflictReactionConfigured: params.MergeConflictReactionConfigured,
 		labelReviewConfig:               params.LabelReviewConfig,
 		labelReviewReactionConfigured:   params.LabelReviewReactionConfigured,
+		labelFixConfig:                  params.LabelFixConfig,
+		labelFixReactionConfigured:      params.LabelFixReactionConfigured,
 	}
 	// Startup preflight must have passed for the orchestrator to be
 	// constructed, so the initial value is true.
@@ -372,6 +386,7 @@ func (o *Orchestrator) Run(ctx context.Context) {
 				BotReviewReactionConfigured:     o.botReviewReactionConfigured,
 				MergeConflictReactionConfigured: o.mergeConflictReactionConfigured,
 				LabelReviewReactionConfigured:   o.labelReviewReactionConfigured,
+				LabelFixReactionConfigured:      o.labelFixReactionConfigured,
 			})
 			o.updateGauges(time.Now())
 			o.notifyObservers()
@@ -519,6 +534,8 @@ func (o *Orchestrator) handleTick(ctx context.Context) {
 		MergeConflictReactionConfigured: o.mergeConflictReactionConfigured,
 		LabelReviewConfig:               o.labelReviewConfig,
 		LabelReviewReactionConfigured:   o.labelReviewReactionConfigured,
+		LabelFixConfig:                  o.labelFixConfig,
+		LabelFixReactionConfigured:      o.labelFixReactionConfigured,
 	})
 
 	// Sweep terminal workspaces periodically to catch issues that
@@ -651,14 +668,14 @@ func (o *Orchestrator) handleTick(ctx context.Context) {
 // The closure captures channel references for OnEvent and OnExit
 // delivery. agentKind, templateID, and adapter carry the rule-resolved
 // selection from the caller (handleTick for initial dispatches,
-// HandleRetryTimer for retries). reactionKind selects the read-only
-// worker posture when it equals [ReactionKindLabelReview]. The
+// HandleRetryTimer for retries). reactionKind selects the worker
+// posture via [dispatchPostureForReactionKind]. The
 // resumeSessionID must be read by the caller (on the event loop
 // goroutine) before the goroutine starts, to avoid a data race on the
 // Running map.
 func (o *Orchestrator) makeWorkerFn(resumeSessionID, sshHost, agentKind, templateID, reactionKind string, adapter domain.AgentAdapter) WorkerFunc {
 	strictHostKeyChecking := o.sshStrictHostKeyChecking
-	readOnly := reactionKind == ReactionKindLabelReview
+	posture := dispatchPostureForReactionKind(reactionKind)
 	if adapter == nil {
 		adapter = o.agentAdapter
 	}
@@ -706,7 +723,7 @@ func (o *Orchestrator) makeWorkerFn(resumeSessionID, sshHost, agentKind, templat
 			Metrics:                  o.metrics,
 			WorkflowPath:             o.workflowManager.WorkflowAbsPath(),
 			DBPath:                   o.dbPath,
-			ReadOnly:                 readOnly,
+			Posture:                  posture,
 		}
 
 		RunWorkerAttempt(ctx, issue, attempt, deps)
@@ -937,6 +954,7 @@ func (o *Orchestrator) drainRunningWorkers() {
 				BotReviewReactionConfigured:     o.botReviewReactionConfigured,
 				MergeConflictReactionConfigured: o.mergeConflictReactionConfigured,
 				LabelReviewReactionConfigured:   o.labelReviewReactionConfigured,
+				LabelFixReactionConfigured:      o.labelFixReactionConfigured,
 			})
 			o.updateGauges(time.Now())
 			o.notifyObservers()

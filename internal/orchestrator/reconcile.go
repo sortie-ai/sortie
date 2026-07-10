@@ -158,6 +158,18 @@ type ReconcileParams struct {
 	// is active for the current process. Reconcile, enqueue, and recovery
 	// paths gate on this flag.
 	LabelReviewReactionConfigured bool
+
+	// LabelFixConfig holds label-fix reaction configuration. Only read
+	// when LabelFixReactionConfigured is true. Like label-review and unlike
+	// every sibling kind there is no accompanying LabelFixPendingTTL: a
+	// human label gesture stays actionable regardless of age, so the
+	// label-fix pending entry has no drop-on-age branch.
+	LabelFixConfig LabelFixReactionConfig
+
+	// LabelFixReactionConfigured marks whether the label-fix feature is
+	// active for the current process. Reconcile, enqueue, and recovery
+	// paths gate on this flag.
+	LabelFixReactionConfigured bool
 }
 
 // ReconcileRunningIssues detects stalled workers and refreshes tracker
@@ -226,6 +238,11 @@ func ReconcileRunningIssues(state *State, params ReconcileParams) {
 	// review sessions. Ordering does not affect correctness: the pass is
 	// fully cross-kind isolated. Placed last as the newest reaction added.
 	reconcileLabelReviewCommands(state, params, log, ctx, metrics)
+
+	// Detect fix-label commands on managed PRs and dispatch full read-write
+	// fix sessions. Ordering does not affect correctness: the pass is fully
+	// cross-kind isolated, mutating only label-fix state.
+	reconcileLabelFixCommands(state, params, log, ctx, metrics)
 }
 
 // reconcileStalled cancels running entries whose last activity exceeds the

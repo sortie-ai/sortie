@@ -133,6 +133,11 @@ type HandleWorkerExitParams struct {
 	// feature is active for the current process. The enqueue path gates
 	// on this flag and the SCMAdapter being non-nil.
 	LabelReviewReactionConfigured bool
+
+	// LabelFixReactionConfigured marks whether the label-fix feature is
+	// active for the current process. The enqueue path gates on this flag
+	// and the SCMAdapter being non-nil.
+	LabelFixReactionConfigured bool
 }
 
 // HandleWorkerExit processes a worker's terminal outcome. It removes the
@@ -321,11 +326,12 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 		issueIsActive := len(params.ActiveStates) == 0 || isActiveState(entry.Issue.State, params.ActiveStates)
 		_, claimedAtExit := state.Claimed[workerResult.IssueID]
 		blockedSoftStop := workerResult.SoftStop && workerResult.SoftStopReason == string(workspace.StatusBlocked)
-		// A read-only review performs no work handoff and schedules no
-		// continuation on a clean exit, so it never takes the handoff path
-		// or the active-issue continuation-retry branch.
-		isReadOnly := entry.ReactionKind == ReactionKindLabelReview
-		handoffPath := params.HandoffState != "" && issueIsActive && !blockedSoftStop && !isReadOnly
+		// A dispatch that does not drive issue state (a label-command
+		// posture) performs no work handoff and schedules no continuation
+		// on a clean exit, so it never takes the handoff path or the
+		// active-issue continuation-retry branch.
+		drivesIssue := dispatchPostureForReactionKind(entry.ReactionKind).DrivesIssueState()
+		handoffPath := params.HandoffState != "" && issueIsActive && !blockedSoftStop && drivesIssue
 
 		switch {
 		case blockedSoftStop:
@@ -424,7 +430,7 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 			CancelRetry(state, workerResult.IssueID)
 			delete(state.Claimed, workerResult.IssueID)
 
-		case issueIsActive && !isReadOnly:
+		case issueIsActive && drivesIssue:
 			// No handoff configured but issue is still active:
 			// schedule continuation retry (existing behavior).
 			ScheduleRetry(state, ScheduleRetryParams{
@@ -673,6 +679,48 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 								PRNumber: scm.PRNumber,
 								Owner:    scm.Owner,
 								Repo:     scm.Repo,
+							},
+							AgentKind:  entry.AgentKind,
+							RuleName:   entry.RuleName,
+							TemplateID: entry.TemplateID,
+						}
+					}
+				}
+			}
+		}
+
+		// Record a pending label-fix entry when the SCM adapter is
+		// configured, label-fix is enabled, and the workspace has PR
+		// metadata with a recorded head branch. Unlike label-review this
+		// requires a branch: the fix session checks out that branch, so a
+		// PR record without one cannot drive a fix. A fix session's own
+		// exit never seeds because reactionEnqueueAllowed is false for it
+		// (it is excluded from the handoff path and releases the claim);
+		// repeatability after a completed fix comes from the reconcile
+		// re-enqueue on dispatch.
+		if params.SCMAdapter != nil && params.LabelFixReactionConfigured && workerResult.WorkspacePath != "" {
+			if reactionEnqueueAllowed {
+				scm := workspace.ReadSCMMetadata(workerResult.WorkspacePath, log)
+				if scm.PRNumber > 0 && scm.Owner != "" && scm.Repo != "" && scm.Branch != "" {
+					nowLabelFix := time.Now().UTC()
+					if params.NowFunc != nil {
+						nowLabelFix = params.NowFunc().UTC()
+					}
+					rkey := ReactionKey(workerResult.IssueID, ReactionKindLabelFix)
+					if _, exists := state.PendingReactions[rkey]; !exists {
+						state.PendingReactions[rkey] = &PendingReaction{
+							IssueID:     workerResult.IssueID,
+							Identifier:  workerResult.Identifier,
+							DisplayID:   entry.Issue.DisplayID,
+							Attempt:     normalizeAttempt(entry.RetryAttempt) + 1,
+							Kind:        ReactionKindLabelFix,
+							LastSSHHost: workerResult.SSHHost,
+							CreatedAt:   nowLabelFix,
+							KindData: &LabelFixReactionData{
+								PRNumber: scm.PRNumber,
+								Owner:    scm.Owner,
+								Repo:     scm.Repo,
+								Branch:   scm.Branch,
 							},
 							AgentKind:  entry.AgentKind,
 							RuleName:   entry.RuleName,

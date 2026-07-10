@@ -900,8 +900,9 @@ fields sit directly on the block.
 
 `label_commands` is the configuration key only. The runtime and persisted reaction-kind
 discriminators are `label-review` (the review command) and `label-fix` (the fix command):
-these values appear in logs and in the `reaction_fingerprints.kind` column. The prompt
-continuation key is a third name, `label_review` (underscore; see Section 5.2).
+these values appear in logs and in the `reaction_fingerprints.kind` column. Each command
+has its own prompt continuation key, a third and fourth name: `label_review` and
+`label_fix` (both underscore; see Section 5.2).
 
 Fields:
 
@@ -913,10 +914,15 @@ Fields:
 | `poll_interval_ms` | integer | `60000`         | Requires restart | Journal poll interval. Minimum `30000` (30 sec); a lower value is clamped up to the floor with a warning. |
 
 **Activation:** The `reactions.label_commands` block is active when `provider` is present
-and non-empty and at least one command label is non-empty. Agent-created PRs MUST write
-`pr_number` (positive integer), `owner`, and `repo` (all non-empty) to `.sortie/scm.json`
-in the workspace for label detection to activate. No branch is required: the review
-session has no checkout.
+and non-empty and at least one command label is non-empty. Activation considers `fix_label`
+exactly as it considers `review_label`: a fix-only configuration (`review_label` empty,
+`fix_label` non-empty) activates the block and constructs the SCM adapter exactly as a
+review-only configuration does. Agent-created PRs MUST write `pr_number` (positive
+integer), `owner`, and `repo` (all non-empty) to `.sortie/scm.json` in the workspace for
+label detection to activate. The review command requires no branch: the review session has
+no checkout. The fix command additionally requires a non-empty `branch` in the same file,
+because the fix session checks out and pushes to it; a PR record without one is not seeded
+for the fix command.
 
 **Acknowledgment:** On a confirmed command the orchestrator removes the label from the PR.
 The label's disappearance is the operator-visible signal that the command was accepted:
@@ -938,6 +944,25 @@ The orchestrator injects only the PR coordinates, never the diff text and never 
 comment, so without this branch a label-review dispatch runs the normal work prompt and
 posts no review. The orchestrator emits an info log at each dispatch and a warning at prompt
 load when the template omits the `label_review` token, so the inert outcome is diagnosable.
+
+**Operator prerequisite (fix):** Enabling `fix_label` requires the active prompt template to
+contain a `{{ if .label_fix }}` branch that checks out `label_fix.branch`, fetches and
+addresses the outstanding review comments, pushes the fixes to that branch, posts a summary
+comment, and writes `.sortie/status` to signal completion (see the `label_fix` continuation
+key in Section 5.2). The completion signal matters more here than for review: a review is
+naturally one turn, but a fix is multi-turn, so without it a completed fix session runs to
+`agent.max_turns` and wastes turns. Unlike the review case, a missing `label_fix` branch is
+not a structural no-op: the fix command clones and checks out a real workspace with
+content-write scope, so an applied fix label without the template branch runs the normal
+work prompt against a real checkout that can push. The workflow loader MUST (not SHOULD)
+emit a warning at prompt load when `label_commands` is active with a non-empty fix label but
+the template omits the `label_fix` token, and the orchestrator emits an info log at each fix
+dispatch, so the misconfiguration stays diagnosable.
+
+**Default-on activation:** `fix_label` defaults to `sortie:fix`, so shipping the fix command
+activates it for every deployment that already sets `provider` for `label_commands`,
+including a deployment that enabled only the review command. A review-only deployment MUST
+set `reactions.label_commands.fix_label: ""` to opt out.
 
 Example:
 
@@ -2273,6 +2298,48 @@ Produce a code review of pull request #{{ .label_review.pr_number }} in
 1. Fetch the PR diff using your SCM tooling.
 2. Review the changes for correctness, clarity, and regressions.
 3. Post your review comments on the PR. Do not modify the branch.
+{{ end }}
+```
+
+#### `label_fix`: Label Fix Context (continuation key)
+
+Non-nil only on turn 1 of a fix dispatch, triggered when an operator applies the configured
+fix label to a Sortie-managed PR (see `reactions.label_commands` in Section 2.10). Carries
+the PR coordinates the agent needs to check out the head branch, address the review
+comments, and push:
+
+| Field                     | Type    | Description                                           |
+| ------------------------- | ------- | ------------------------------------------------------ |
+| `.label_fix.pr_number`    | integer | Pull request number to fix.                             |
+| `.label_fix.owner`        | string  | Repository owner.                                       |
+| `.label_fix.repo`         | string  | Repository name.                                        |
+| `.label_fix.branch`       | string  | PR head branch to check out and push to.                |
+| `.label_fix.actor`        | string  | Login of the operator who applied the fix label.        |
+| `.label_fix.requested_at` | string  | RFC 3339 timestamp of the confirmed labeling gesture.    |
+
+The orchestrator injects only these coordinates. It never fetches the review comments,
+never applies changes, and never pushes or comments itself; the agent checks out
+`label_fix.branch`, addresses the comments, pushes the fixes, and posts the summary comment
+using its own SCM tooling. A prompt template that omits the `{{ if .label_fix }}` branch
+therefore runs the normal work prompt against a real checkout with push capability instead
+of producing a fix.
+
+When `nil` (default on non-label-fix dispatches), `{{ if .label_fix }}` evaluates to
+`false`.
+
+**Template pattern for label fix:**
+
+```
+{{ if .label_fix }}
+## Fix This Pull Request
+
+Check out {{ .label_fix.branch }} for pull request #{{ .label_fix.pr_number }} in
+{{ .label_fix.owner }}/{{ .label_fix.repo }}, requested by {{ .label_fix.actor }}.
+
+1. Fetch the outstanding review comments using your SCM tooling.
+2. Address the feedback and push the fixes to {{ .label_fix.branch }}.
+3. Post a summary comment on the PR.
+4. Write `needs-human-review` to `.sortie/status` to signal completion.
 {{ end }}
 ```
 

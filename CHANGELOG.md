@@ -38,6 +38,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   fresh attempt rather than immediate escalation.
   ([#416](https://github.com/sortie-ai/sortie/issues/416))
 
+- PR label commands: apply a label to a Sortie-managed pull request to
+  trigger an agent action on it. Two commands share a
+  `reactions.label_commands` block in WORKFLOW.md. Applying `sortie:review`
+  (the `review_label`) runs a read-only session that posts review comments
+  and changes no code; applying `sortie:fix` (the `fix_label`) runs a
+  session that checks out the PR branch, addresses the outstanding review
+  comments, pushes the fixes, and posts a summary comment. `provider`
+  activates the feature (for example `provider: github`); both labels
+  default to their `sortie:` names and are active once `provider` is set,
+  so disable either command by setting its label to `""`.
+  `poll_interval_ms` (default 60000, minimum 30000) sets how often the
+  labels are checked. Sortie removes the label once it accepts the
+  command, so re-applying it after the run finishes starts a new one. The
+  operator creates the labels (Sortie never creates them) and adds the
+  matching `{{ if .label_review }}` or `{{ if .label_fix }}` branch to the
+  prompt template.
+  ([#584](https://github.com/sortie-ai/sortie/issues/584),
+  [#585](https://github.com/sortie-ai/sortie/issues/585))
+
 ### Changed
 
 - Homebrew installs now use `brew install --cask sortie-ai/tap/sortie`.

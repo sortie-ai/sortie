@@ -835,3 +835,93 @@ func TestRender_LabelReview(t *testing.T) {
 		}
 	})
 }
+
+func TestRender_LabelFix(t *testing.T) {
+	t.Parallel()
+
+	issue := map[string]any{"title": "Fix the flaky test"}
+	run := RunContext{TurnNumber: 1, MaxTurns: 5, IsContinuation: false}
+
+	labelFix := map[string]any{
+		"pr_number":    142,
+		"owner":        "acme",
+		"repo":         "widgets",
+		"branch":       "feature/flaky-test",
+		"actor":        "alice",
+		"requested_at": "2026-07-09T12:00:00Z",
+	}
+
+	t.Run("LabelFix_RendersWithoutMissingKeyError", func(t *testing.T) {
+		t.Parallel()
+
+		tmpl, err := Parse(`{{ if .label_fix }}has-command{{ end }}`, "WORKFLOW.md", 0)
+		if err != nil {
+			t.Fatalf("parse: %v", err)
+		}
+
+		got, err := tmpl.Render(issue, nil, run,
+			WithContinuationContext(map[string]any{"label_fix": labelFix}),
+		)
+		if err != nil {
+			t.Fatalf("Render with label_fix: %v", err)
+		}
+		if got != "has-command" {
+			t.Errorf("Render() = %q, want %q", got, "has-command")
+		}
+	})
+
+	t.Run("LabelFix_DefaultNilNoError", func(t *testing.T) {
+		t.Parallel()
+
+		// The key is seeded to nil by Render, so a template referencing it
+		// under missingkey=error must not error and must evaluate as falsy.
+		tmpl, err := Parse(`{{ if .label_fix }}FAIL{{ end }}`, "WORKFLOW.md", 0)
+		if err != nil {
+			t.Fatalf("parse: %v", err)
+		}
+
+		got, err := tmpl.Render(issue, nil, run)
+		if err != nil {
+			t.Fatalf("Render with default label_fix=nil: %v", err)
+		}
+		if got != "" {
+			t.Errorf("Render() = %q, want empty string when label_fix is nil", got)
+		}
+	})
+
+	t.Run("LabelFix_FieldsRender", func(t *testing.T) {
+		t.Parallel()
+
+		tmpl, err := Parse(
+			`{{ with .label_fix }}{{ .pr_number }}:{{ .owner }}:{{ .repo }}:{{ .branch }}:{{ .actor }}:{{ .requested_at }}{{ end }}`,
+			"WORKFLOW.md", 0,
+		)
+		if err != nil {
+			t.Fatalf("parse: %v", err)
+		}
+
+		got, err := tmpl.Render(issue, nil, run,
+			WithContinuationContext(map[string]any{"label_fix": labelFix}),
+		)
+		if err != nil {
+			t.Fatalf("Render with label_fix fields: %v", err)
+		}
+		want := "142:acme:widgets:feature/flaky-test:alice:2026-07-09T12:00:00Z"
+		if got != want {
+			t.Errorf("Render() = %q, want %q", got, want)
+		}
+	})
+
+	t.Run("WithContinuationContext_AcceptsLabelFixKey", func(t *testing.T) {
+		t.Parallel()
+
+		// WithContinuationContext must not panic for the registered key.
+		// The key is "label_fix" (underscore, the template variable),
+		// distinct from the runtime reaction-kind discriminator
+		// "label-fix" (hyphen).
+		opt := WithContinuationContext(map[string]any{"label_fix": labelFix})
+		if opt == nil {
+			t.Error("WithContinuationContext returned nil for registered key label_fix")
+		}
+	})
+}

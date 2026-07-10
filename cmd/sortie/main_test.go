@@ -1525,3 +1525,228 @@ func TestRunAutoMerge_MismatchedProviders(t *testing.T) {
 		t.Errorf("expected 'must use the same provider' in error log, got:\n%s", logs)
 	}
 }
+
+// --- Label-fix wiring tests ---
+
+// labelFixOnlyWorkflowUnknownProvider returns a WORKFLOW.md with a
+// fix-only reactions.label_commands block (review_label disabled,
+// fix_label set) that names an unregistered SCM provider.
+func labelFixOnlyWorkflowUnknownProvider(issuesPath, workspaceRoot string) []byte {
+	return fmt.Appendf(nil, `---
+tracker:
+  kind: file
+  project: DEMO
+  active_states:
+    - "To Do"
+  handoff_state: Done
+
+file:
+  path: %s
+
+agent:
+  kind: mock
+  max_turns: 1
+
+polling:
+  interval_ms: 500
+
+workspace:
+  root: %s
+
+reactions:
+  label_commands:
+    provider: nonexistent-scm
+    review_label: ""
+    fix_label: "sortie:fix"
+---
+
+Fix issue {{ .issue.identifier }}.
+`, issuesPath, workspaceRoot)
+}
+
+// labelFixOnlyWorkflowMismatchedProviders returns a WORKFLOW.md where
+// review_comments and a fix-only label_commands block (review_label
+// disabled, fix_label set) use different SCM providers.
+func labelFixOnlyWorkflowMismatchedProviders(issuesPath, workspaceRoot string) []byte {
+	return fmt.Appendf(nil, `---
+tracker:
+  kind: file
+  project: DEMO
+  active_states:
+    - "To Do"
+  handoff_state: Done
+
+file:
+  path: %s
+
+agent:
+  kind: mock
+  max_turns: 1
+
+polling:
+  interval_ms: 500
+
+workspace:
+  root: %s
+
+reactions:
+  review_comments:
+    provider: github
+  label_commands:
+    provider: nonexistent-scm
+    review_label: ""
+    fix_label: "sortie:fix"
+---
+
+Fix issue {{ .issue.identifier }}.
+`, issuesPath, workspaceRoot)
+}
+
+// labelCommandsProviderEmptyWorkflow returns a WORKFLOW.md with an inert
+// label_commands block (provider empty). Both command labels are set to
+// prove they are ignored when the provider is empty.
+func labelCommandsProviderEmptyWorkflow(issuesPath, workspaceRoot string) []byte {
+	return fmt.Appendf(nil, `---
+tracker:
+  kind: file
+  project: DEMO
+  active_states:
+    - "To Do"
+  handoff_state: Done
+
+file:
+  path: %s
+
+agent:
+  kind: mock
+  max_turns: 1
+
+polling:
+  interval_ms: 500
+
+workspace:
+  root: %s
+
+reactions:
+  label_commands:
+    provider: ""
+    review_label: "sortie:review"
+    fix_label: "sortie:fix"
+---
+
+Fix issue {{ .issue.identifier }}.
+`, issuesPath, workspaceRoot)
+}
+
+// TestLabelFixOnly_ConstructsSCMAdapter covers A1: a fix-only
+// label_commands configuration (empty review_label, non-empty fix_label)
+// alone drives labelFixActive and the SCM-adapter construction attempt,
+// proven by an unregistered provider failing at the same "unknown SCM
+// adapter kind" gate a review- or auto_merge-driven configuration hits.
+// No t.Parallel: calls t.Chdir.
+func TestLabelFixOnly_ConstructsSCMAdapter(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	wsRoot := filepath.Join(dir, "workspaces")
+
+	issuesPath := filepath.Join(dir, "issues.json")
+	if err := os.WriteFile(issuesPath, quickStartIssues(), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	wfPath := writeCustomWorkflowFile(t, dir, labelFixOnlyWorkflowUnknownProvider(issuesPath, wsRoot))
+
+	var stdout bytes.Buffer
+	var stderr lockedBuf
+	// run() rejects the unknown SCM provider only after opening and
+	// migrating the database, so the timeout must outlast a slow DB open
+	// on a contended Windows runner (see TestRunAutoMerge_UnknownProvider).
+	ctx, cancel := context.WithTimeout(context.Background(), runTestTimeout)
+	defer cancel()
+
+	code := run(ctx, []string{wfPath}, &stdout, &stderr)
+	if code != 1 {
+		t.Fatalf("exit code = %d, want 1 (unknown SCM adapter for fix-only label_commands); stderr:\n%s", code, stderr.String())
+	}
+
+	logs := stderr.String()
+	if !strings.Contains(logs, "nonexistent-scm") {
+		t.Errorf("expected provider name %q in error log, got:\n%s", "nonexistent-scm", logs)
+	}
+}
+
+// TestLabelFixOnly_JoinsProviderConflictCheck covers A1's second clause:
+// a fix-only label_commands configuration participates in the
+// single-provider conflict check alongside another active SCM reaction.
+// No t.Parallel: calls t.Chdir.
+func TestLabelFixOnly_JoinsProviderConflictCheck(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	wsRoot := filepath.Join(dir, "workspaces")
+
+	issuesPath := filepath.Join(dir, "issues.json")
+	if err := os.WriteFile(issuesPath, quickStartIssues(), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	wfPath := writeCustomWorkflowFile(t, dir, labelFixOnlyWorkflowMismatchedProviders(issuesPath, wsRoot))
+
+	var stdout bytes.Buffer
+	var stderr lockedBuf
+	ctx, cancel := context.WithTimeout(context.Background(), runTestTimeout)
+	defer cancel()
+
+	code := run(ctx, []string{wfPath}, &stdout, &stderr)
+	if code != 1 {
+		t.Fatalf("exit code = %d, want 1 (mismatched providers); stderr:\n%s", code, stderr.String())
+	}
+
+	logs := stderr.String()
+	if !strings.Contains(logs, "must use the same provider") {
+		t.Errorf("expected 'must use the same provider' in error log, got:\n%s", logs)
+	}
+}
+
+// TestLabelFixInactive_NothingFires covers V6: with label_commands
+// absent or its provider empty, neither label reaction activates and
+// startup proceeds normally.
+// No t.Parallel: subtests call t.Chdir.
+func TestLabelFixInactive_NothingFires(t *testing.T) {
+	tests := []struct {
+		name       string
+		workflowFn func(issuesPath, workspaceRoot string) []byte
+	}{
+		{"block absent", quickStartWorkflow},
+		{"provider empty", labelCommandsProviderEmptyWorkflow},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			t.Chdir(dir)
+			wsRoot := filepath.Join(dir, "workspaces")
+
+			issuesPath := filepath.Join(dir, "issues.json")
+			if err := os.WriteFile(issuesPath, quickStartIssues(), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			wfPath := writeCustomWorkflowFile(t, dir, tt.workflowFn(issuesPath, wsRoot))
+
+			var stdout bytes.Buffer
+			var stderr lockedBuf
+			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer cancel()
+
+			code := run(ctx, []string{wfPath}, &stdout, &stderr)
+			if code != 0 {
+				t.Fatalf("exit code = %d, want 0; stderr:\n%s", code, stderr.String())
+			}
+
+			logs := stderr.String()
+			if strings.Contains(logs, "label fix reaction enabled") {
+				t.Error(`"label fix reaction enabled" logged despite inactive label_commands; want absent`)
+			}
+			if strings.Contains(logs, "label review reaction enabled") {
+				t.Error(`"label review reaction enabled" logged despite inactive label_commands; want absent`)
+			}
+		})
+	}
+}

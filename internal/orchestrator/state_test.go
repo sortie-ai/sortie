@@ -1408,6 +1408,58 @@ func TestBuildLabelReviewReactionConfig(t *testing.T) {
 	}
 }
 
+// --- isKnownReactionKind label-fix case ---
+
+func TestIsKnownReactionKind_AcceptsLabelFix(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		kind string
+		want bool
+	}{
+		{ReactionKindLabelFix, true},
+		{"label-fix", true},
+		{ReactionKindLabelReview, true},
+		{"label_commands", false}, // the YAML key, not the runtime discriminator
+		{"label_fix", false},      // the template variable, not the discriminator
+		{"unknown", false},
+		{"", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.kind, func(t *testing.T) {
+			t.Parallel()
+			if got := isKnownReactionKind(tt.kind); got != tt.want {
+				t.Errorf("isKnownReactionKind(%q) = %v, want %v", tt.kind, got, tt.want)
+			}
+		})
+	}
+}
+
+// --- BuildLabelFixReactionConfig tests ---
+
+func TestBuildLabelFixReactionConfig(t *testing.T) {
+	t.Parallel()
+
+	cfg := config.LabelCommandsConfig{
+		Provider:       "github",
+		ReviewLabel:    "sortie:review",
+		FixLabel:       "sortie:fix",
+		PollIntervalMS: 45000,
+	}
+
+	got := BuildLabelFixReactionConfig(cfg)
+
+	want := LabelFixReactionConfig{
+		Provider:       "github",
+		FixLabel:       "sortie:fix",
+		PollIntervalMS: 45000,
+	}
+	if got != want {
+		t.Errorf("BuildLabelFixReactionConfig(%+v) = %+v, want %+v", cfg, got, want)
+	}
+}
+
 // --- ClearReactionsForIssue cross-kind tests ---
 
 // TestClearReactionsForIssue verifies that clearing an issue's reactions on
