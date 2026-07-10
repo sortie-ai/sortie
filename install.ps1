@@ -10,7 +10,7 @@
         irm 'https://get.sortie-ai.com/install.ps1' | iex
 
     Environment:
-        SORTIE_VERSION      Pin a specific release tag (e.g. 1.11.0 or 0.0.7).
+        SORTIE_VERSION      Pin a specific release tag (e.g. 1.14.0 or 0.0.7).
         SORTIE_INSTALL_DIR  Override install directory
                             (default: %LOCALAPPDATA%\Programs\sortie).
         SORTIE_NO_VERIFY    Set to 1 to skip checksum verification.
