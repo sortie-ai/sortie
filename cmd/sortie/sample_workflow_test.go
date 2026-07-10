@@ -253,6 +253,62 @@ func TestSampleWorkflowMergeConflictBranch(t *testing.T) {
 	}
 }
 
+// TestSampleWorkflowLabelReviewBranch verifies A5: each shipped example
+// workflow renders under missingkey=error both when label_review is nil
+// (the branch is skipped, no error) and when it is populated (the branch
+// renders and the output carries the real PR number, owner/repo, and
+// actor, not a hardcoded default).
+func TestSampleWorkflowLabelReviewBranch(t *testing.T) {
+	t.Parallel()
+
+	for _, file := range shippedExampleWorkflows {
+		t.Run(file, func(t *testing.T) {
+			t.Parallel()
+
+			tmpl := loadSampleWorkflow(t, file)
+
+			// label_review nil: the branch is skipped, render must not error
+			// under missingkey=error.
+			rc := prompt.RunContext{TurnNumber: 1, MaxTurns: 15, IsContinuation: false}
+			nilOut, err := tmpl.Render(fullIssue(), nil, rc)
+			if err != nil {
+				t.Fatalf("Render(%s, label_review=nil): %v", file, err)
+			}
+			if strings.Contains(nilOut, "acme-labelreview/widgets-labelreview") {
+				t.Errorf("Render(%s, label_review=nil) leaked owner/repo; want branch skipped", file)
+			}
+
+			// label_review populated: the branch renders and the output
+			// must contain the real PR coordinates and actor, not a
+			// hardcoded default.
+			labelReview := map[string]any{
+				"pr_number":    142,
+				"owner":        "acme-labelreview",
+				"repo":         "widgets-labelreview",
+				"actor":        "alice-labelreview",
+				"requested_at": "2026-07-09T12:00:00Z",
+			}
+			contRC := prompt.RunContext{TurnNumber: 1, MaxTurns: 15, IsContinuation: false}
+			gotOut, err := tmpl.Render(fullIssue(), nil, contRC,
+				prompt.WithContinuationContext(map[string]any{"label_review": labelReview}),
+			)
+			if err != nil {
+				t.Fatalf("Render(%s, label_review populated): %v", file, err)
+			}
+			if !strings.Contains(gotOut, "142") {
+				t.Errorf("Render(%s, label_review populated) output missing pr_number %q", file, "142")
+			}
+			if !strings.Contains(gotOut, "acme-labelreview/widgets-labelreview") {
+				t.Errorf("Render(%s, label_review populated) output missing owner/repo %q (want .label_review.owner/.label_review.repo interpolated)",
+					file, "acme-labelreview/widgets-labelreview")
+			}
+			if !strings.Contains(gotOut, "alice-labelreview") {
+				t.Errorf("Render(%s, label_review populated) output missing actor %q", file, "alice-labelreview")
+			}
+		})
+	}
+}
+
 func TestSampleWorkflowContinuationShorter(t *testing.T) {
 	t.Parallel()
 

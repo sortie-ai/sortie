@@ -173,7 +173,7 @@ func defaultRetryParams(t *testing.T, store *mockRetryStore, tracker *mockRetryT
 		ActiveStates:      []string{"To Do", "In Progress"},
 		TerminalStates:    []string{"Done"},
 		MaxRetryBackoffMS: 300_000,
-		MakeWorkerFn: func(_, _, _, _ string, _ domain.AgentAdapter) WorkerFunc {
+		MakeWorkerFn: func(_, _, _, _, _ string, _ domain.AgentAdapter) WorkerFunc {
 			return func(_ context.Context, _ domain.Issue, _ *int) {}
 		},
 		AgentAdapterByKind: func(_ string) (domain.AgentAdapter, error) { return &mockAgentAdapter{}, nil },
@@ -1383,7 +1383,7 @@ func TestHandleRetryTimer(t *testing.T) {
 			if tt.workerFn != nil {
 				ch := make(chan struct{}, 1)
 				wf := tt.workerFn(ch)
-				params.MakeWorkerFn = func(_, _, _, _ string, _ domain.AgentAdapter) WorkerFunc { return wf }
+				params.MakeWorkerFn = func(_, _, _, _, _ string, _ domain.AgentAdapter) WorkerFunc { return wf }
 				HandleRetryTimer(state, id, params)
 				select {
 				case <-ch:
@@ -1454,7 +1454,7 @@ func TestHandleRetryTimer_TokenBudgetFailOpenLogsWarning(t *testing.T) {
 	params := defaultRetryParams(t, store, tracker)
 	params.MaxTokens = 1000
 	params.Logger = logger
-	params.MakeWorkerFn = func(_, _, _, _ string, _ domain.AgentAdapter) WorkerFunc {
+	params.MakeWorkerFn = func(_, _, _, _, _ string, _ domain.AgentAdapter) WorkerFunc {
 		return func(_ context.Context, _ domain.Issue, _ *int) {
 			dispatched <- struct{}{}
 		}
@@ -1494,7 +1494,7 @@ func TestHandleRetryTimer_WorkerStillRunningReschedulesInsteadOfDispatching(t *t
 	params := defaultRetryParams(t, store, tracker)
 
 	workerCalled := false
-	params.MakeWorkerFn = func(_, _, _, _ string, _ domain.AgentAdapter) WorkerFunc {
+	params.MakeWorkerFn = func(_, _, _, _, _ string, _ domain.AgentAdapter) WorkerFunc {
 		return func(_ context.Context, _ domain.Issue, _ *int) {
 			workerCalled = true
 		}
@@ -1559,7 +1559,7 @@ func TestHandleRetryTimer_SSHHostAcquisition(t *testing.T) {
 		params.HostPool = hp
 
 		ch := make(chan struct{}, 1)
-		params.MakeWorkerFn = func(_, sshHost, _, _ string, _ domain.AgentAdapter) WorkerFunc {
+		params.MakeWorkerFn = func(_, sshHost, _, _, _ string, _ domain.AgentAdapter) WorkerFunc {
 			return func(_ context.Context, _ domain.Issue, _ *int) {
 				if sshHost != "host-b" {
 					t.Errorf("MakeWorkerFn sshHost = %q, want \"host-b\" (preferred)", sshHost)
@@ -1707,7 +1707,7 @@ func TestHandleRetryTimer_WorkflowFilePropagated(t *testing.T) {
 	params.WorkflowFile = "infra.WORKFLOW.md"
 
 	workerCalled := make(chan struct{}, 1)
-	params.MakeWorkerFn = func(_, _, _, _ string, _ domain.AgentAdapter) WorkerFunc {
+	params.MakeWorkerFn = func(_, _, _, _, _ string, _ domain.AgentAdapter) WorkerFunc {
 		return func(_ context.Context, _ domain.Issue, _ *int) {
 			workerCalled <- struct{}{}
 		}
@@ -2024,7 +2024,7 @@ func TestHandleRetryTimer_SessionID_PassedToMakeWorkerFn(t *testing.T) {
 
 	var gotSessionID string
 	ch := make(chan struct{}, 1)
-	params.MakeWorkerFn = func(resumeSessionID, _, _, _ string, _ domain.AgentAdapter) WorkerFunc {
+	params.MakeWorkerFn = func(resumeSessionID, _, _, _, _ string, _ domain.AgentAdapter) WorkerFunc {
 		gotSessionID = resumeSessionID
 		return func(_ context.Context, _ domain.Issue, _ *int) {
 			ch <- struct{}{}
@@ -2041,6 +2041,45 @@ func TestHandleRetryTimer_SessionID_PassedToMakeWorkerFn(t *testing.T) {
 
 	if gotSessionID != wantSessionID {
 		t.Errorf("MakeWorkerFn resumeSessionID = %q, want %q", gotSessionID, wantSessionID)
+	}
+}
+
+// TestHandleRetryTimer_PassesReactionKindToMakeWorkerFn verifies that a
+// popped retry entry's ReactionKind reaches MakeWorkerFn's reactionKind
+// argument (A9), which the worker builder uses to derive the read-only
+// posture for label-review dispatches.
+func TestHandleRetryTimer_PassesReactionKindToMakeWorkerFn(t *testing.T) {
+	t.Parallel()
+
+	const id = "ISS-LR-RK"
+	state := retryState(t, id, id, 1)
+	state.RetryAttempts[id].ReactionKind = ReactionKindLabelReview
+
+	store := &mockRetryStore{}
+	tracker := &mockRetryTracker{
+		fetchedIssue: candidateIssue(id, id, "In Progress"),
+	}
+	params := defaultRetryParams(t, store, tracker)
+
+	var gotReactionKind string
+	ch := make(chan struct{}, 1)
+	params.MakeWorkerFn = func(_, _, _, _, reactionKind string, _ domain.AgentAdapter) WorkerFunc {
+		gotReactionKind = reactionKind
+		return func(_ context.Context, _ domain.Issue, _ *int) {
+			ch <- struct{}{}
+		}
+	}
+
+	HandleRetryTimer(state, id, params)
+
+	select {
+	case <-ch:
+	case <-time.After(time.Second):
+		t.Fatal("worker did not execute within 1 second")
+	}
+
+	if gotReactionKind != ReactionKindLabelReview {
+		t.Errorf("MakeWorkerFn reactionKind = %q, want %q", gotReactionKind, ReactionKindLabelReview)
 	}
 }
 
@@ -2729,7 +2768,7 @@ func TestHandleRetryTimer_FrozenFieldsPropagatedToRunningEntry(t *testing.T) {
 
 	var capturedAgentKind, capturedTemplateID string
 	params := defaultRetryParams(t, store, tracker)
-	params.MakeWorkerFn = func(_, _, agentKind, templateID string, _ domain.AgentAdapter) WorkerFunc {
+	params.MakeWorkerFn = func(_, _, agentKind, templateID, _ string, _ domain.AgentAdapter) WorkerFunc {
 		capturedAgentKind = agentKind
 		capturedTemplateID = templateID
 		return func(_ context.Context, _ domain.Issue, _ *int) {}

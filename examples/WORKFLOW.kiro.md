@@ -154,6 +154,18 @@ its base branch {{ .merge_conflict.base }}. Resolve them now:
 4. Push the rebased branch.
 {{ end }}
 
+{{ if .label_review }}
+
+## Review This Pull Request
+
+Produce a code review of pull request #{{ .label_review.pr_number }} in
+{{ .label_review.owner }}/{{ .label_review.repo }}, requested by {{ .label_review.actor }}.
+
+1. Fetch the diff for this PR using your SCM tooling.
+2. Review the changes for correctness, clarity, and regressions.
+3. Post your review comments on the PR. Do not modify the branch or push commits.
+{{ end }}
+
 {{ if .attempt }}
 
 ## Retry

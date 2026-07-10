@@ -1931,3 +1931,115 @@ func TestValidateUnresolvedExtensionVar(t *testing.T) {
 		}
 	})
 }
+
+// --- reactions.label_commands end-to-end validate tests ---
+
+// labelCommandsBothLabelsEmptyWorkflow returns a workflow with an active
+// label_commands provider and both command labels explicitly disabled,
+// which buildLabelCommandsConfig rejects as a loud misconfiguration.
+func labelCommandsBothLabelsEmptyWorkflow() []byte {
+	return []byte(`---
+tracker:
+  kind: file
+  api_key: "unused"
+  active_states:
+    - To Do
+    - In Progress
+  terminal_states:
+    - Done
+agent:
+  kind: mock
+file:
+  path: issues.json
+reactions:
+  label_commands:
+    provider: github
+    review_label: ""
+    fix_label: ""
+---
+Do {{ .issue.title }}.
+`)
+}
+
+// labelCommandsUnregisteredProviderWorkflow returns a workflow whose
+// label_commands.provider names an SCM adapter that is not registered.
+// Provider validity is deferred to construction, not checked offline.
+func labelCommandsUnregisteredProviderWorkflow() []byte {
+	return []byte(`---
+tracker:
+  kind: file
+  api_key: "unused"
+  active_states:
+    - To Do
+    - In Progress
+  terminal_states:
+    - Done
+agent:
+  kind: mock
+file:
+  path: issues.json
+reactions:
+  label_commands:
+    provider: not-a-real-adapter
+---
+Do {{ .issue.title }}.
+`)
+}
+
+// TestRunValidate_LabelCommandsBothLabelsEmpty covers the offline path of
+// the both-labels-empty validation rule: an active provider with both
+// command labels explicitly empty is a config-shape error surfaced by
+// sortie validate, not a silently inert block.
+func TestRunValidate_LabelCommandsBothLabelsEmpty(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	writeIssuesFixture(t, dir)
+	wfPath := writeCustomWorkflowFile(t, dir, labelCommandsBothLabelsEmptyWorkflow())
+
+	var stdout, stderr bytes.Buffer
+	ctx := context.Background()
+
+	code := run(ctx, []string{"validate", "--format", "json", wfPath}, &stdout, &stderr)
+	if code != 1 {
+		t.Fatalf("run(validate) = %d, want 1; stderr: %s", code, stderr.String())
+	}
+
+	var out validateOutput
+	if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
+		t.Fatalf("json.Unmarshal(%q) error: %v", stdout.String(), err)
+	}
+	if out.Valid {
+		t.Error("validateOutput.Valid = true, want false")
+	}
+
+	found := false
+	for _, d := range out.Errors {
+		if d.Check == "config.reactions.label_commands" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("validateOutput.Errors = %v, want a diagnostic with check %q", out.Errors, "config.reactions.label_commands")
+	}
+}
+
+// TestRunValidate_LabelCommandsUnregisteredProviderNotRejected is the
+// companion case: an unregistered provider value is NOT a validate error,
+// since provider validity is deferred to adapter construction.
+func TestRunValidate_LabelCommandsUnregisteredProviderNotRejected(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	writeIssuesFixture(t, dir)
+	wfPath := writeCustomWorkflowFile(t, dir, labelCommandsUnregisteredProviderWorkflow())
+
+	var stdout, stderr bytes.Buffer
+	ctx := context.Background()
+
+	code := run(ctx, []string{"validate", wfPath}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("run(validate) = %d, want 0 (provider validity is deferred to construction); stderr: %s", code, stderr.String())
+	}
+}

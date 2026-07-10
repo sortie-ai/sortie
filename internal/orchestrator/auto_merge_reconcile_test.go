@@ -79,6 +79,14 @@ func (c *controlledSCMAdapter) DeleteBranch(ctx context.Context, owner, repo, br
 	return nil
 }
 
+func (c *controlledSCMAdapter) ListLabelEvents(_ context.Context, _ int, _, _ string) ([]domain.LabelEvent, error) {
+	return nil, nil
+}
+
+func (c *controlledSCMAdapter) RemoveLabel(_ context.Context, _ int, _, _, _ string) error {
+	return nil
+}
+
 // autoMergeMetricsSpy records auto-merge metric calls.
 type autoMergeMetricsSpy struct {
 	domain.NoopMetrics
@@ -1204,6 +1212,20 @@ func (s *scopeVerifierAdapter) MergePR(ctx context.Context, prNumber int, owner,
 func (s *scopeVerifierAdapter) DeleteBranch(ctx context.Context, owner, repo, branch string) error {
 	if s.scm != nil {
 		return s.scm.DeleteBranch(ctx, owner, repo, branch)
+	}
+	return nil
+}
+
+func (s *scopeVerifierAdapter) ListLabelEvents(ctx context.Context, prNumber int, owner, repo string) ([]domain.LabelEvent, error) {
+	if s.scm != nil {
+		return s.scm.ListLabelEvents(ctx, prNumber, owner, repo)
+	}
+	return nil, nil
+}
+
+func (s *scopeVerifierAdapter) RemoveLabel(ctx context.Context, prNumber int, owner, repo, label string) error {
+	if s.scm != nil {
+		return s.scm.RemoveLabel(ctx, prNumber, owner, repo, label)
 	}
 	return nil
 }

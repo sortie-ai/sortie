@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 )
 
@@ -159,6 +160,17 @@ func cloneValues(values url.Values) url.Values {
 }
 
 func parseLinkNext(header string) string {
+	return ParseLinkRel(header, "next")
+}
+
+// ParseLinkRel returns the URL carried by the given rel token (for
+// example "next", "prev", or "last") in an RFC 8288 Link header, or the
+// empty string when the header is empty or carries no matching relation.
+//
+// The rel attribute value may be quoted or bare and may list several
+// space-separated relation types (RFC 8288 permits rel="next prev"); the
+// match against rel is case-insensitive on each token.
+func ParseLinkRel(header, rel string) string {
 	if header == "" {
 		return ""
 	}
@@ -169,14 +181,23 @@ func parseLinkNext(header string) string {
 			continue
 		}
 
-		hasNext := false
-		for _, attr := range parts[1:] {
-			if strings.EqualFold(strings.TrimSpace(attr), `rel="next"`) {
-				hasNext = true
+		hasRel := false
+		for _, param := range parts[1:] {
+			name, value, ok := strings.Cut(param, "=")
+			if !ok || !strings.EqualFold(strings.TrimSpace(name), "rel") {
+				continue
+			}
+			// RFC 8288 permits a bare or quoted value and multiple
+			// space-separated relation tokens (rel="next prev").
+			value = strings.Trim(strings.TrimSpace(value), `"`)
+			if slices.ContainsFunc(strings.Fields(value), func(token string) bool {
+				return strings.EqualFold(token, rel)
+			}) {
+				hasRel = true
 				break
 			}
 		}
-		if !hasNext {
+		if !hasRel {
 			continue
 		}
 

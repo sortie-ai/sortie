@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -349,6 +350,16 @@ func (m *Manager) loadPipeline() (config.ServiceConfig, *prompt.Template, map[st
 	cfg, err := config.NewServiceConfig(wf.Config)
 	if err != nil {
 		return config.ServiceConfig{}, nil, nil, err
+	}
+
+	// Advisory: a label-review dispatch renders the frozen work template, so
+	// without a {{ if .label_review }} branch it posts no review. This scan
+	// is best-effort and never fails the load.
+	if cfg.LabelCommands.Provider != "" && cfg.LabelCommands.ReviewLabel != "" && !strings.Contains(wf.PromptTemplate, "label_review") {
+		m.currentLogger().Warn("label_commands active but prompt template has no label_review branch",
+			slog.String("workflow", m.path),
+			slog.String("hint", "add a {{ if .label_review }} branch so label-review dispatches post a review"),
+		)
 	}
 
 	probe := m.agentKindProbe

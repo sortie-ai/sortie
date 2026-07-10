@@ -56,6 +56,12 @@ func (s *preflightSCMStub) MergePR(_ context.Context, _ int, _, _ string, _ doma
 func (s *preflightSCMStub) DeleteBranch(_ context.Context, _, _, _ string) error {
 	return nil
 }
+func (s *preflightSCMStub) ListLabelEvents(_ context.Context, _ int, _, _ string) ([]domain.LabelEvent, error) {
+	return nil, nil
+}
+func (s *preflightSCMStub) RemoveLabel(_ context.Context, _ int, _, _, _ string) error {
+	return nil
+}
 
 // noVerifierSCMStub is a plain SCMAdapter with no VerifyAutoMergeScopes method.
 type noVerifierSCMStub struct{}
@@ -81,6 +87,12 @@ func (s *noVerifierSCMStub) MergePR(_ context.Context, _ int, _, _ string, _ dom
 	return domain.MergeResult{}, nil
 }
 func (s *noVerifierSCMStub) DeleteBranch(_ context.Context, _, _, _ string) error {
+	return nil
+}
+func (s *noVerifierSCMStub) ListLabelEvents(_ context.Context, _ int, _, _ string) ([]domain.LabelEvent, error) {
+	return nil, nil
+}
+func (s *noVerifierSCMStub) RemoveLabel(_ context.Context, _ int, _, _, _ string) error {
 	return nil
 }
 

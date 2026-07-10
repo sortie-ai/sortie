@@ -697,7 +697,7 @@ func TestMakeWorkerFn(t *testing.T) {
 			Issue:      issue,
 		}
 
-		wfn := o.makeWorkerFn("", "", "", "", nil)
+		wfn := o.makeWorkerFn("", "", "", "", "", nil)
 
 		exitDone := make(chan struct{})
 		go func() {
@@ -759,7 +759,7 @@ func TestMakeWorkerFn(t *testing.T) {
 			Issue:      issue,
 		}
 
-		wfn := o.makeWorkerFn("", "", "", "", nil)
+		wfn := o.makeWorkerFn("", "", "", "", "", nil)
 
 		exitDone := make(chan struct{})
 		go func() {
@@ -814,7 +814,7 @@ func TestMakeWorkerFn(t *testing.T) {
 			SessionID:  "resume-sess-42",
 		}
 
-		wfn := o.makeWorkerFn("resume-sess-42", "", "", "", nil)
+		wfn := o.makeWorkerFn("resume-sess-42", "", "", "", "", nil)
 
 		exitDone := make(chan struct{})
 		go func() {
@@ -868,7 +868,7 @@ func TestMakeWorkerFn(t *testing.T) {
 			Issue:      issue,
 		}
 
-		wfn := o.makeWorkerFn("", "", "", "", nil)
+		wfn := o.makeWorkerFn("", "", "", "", "", nil)
 
 		exitDone := make(chan struct{})
 		go func() {
@@ -886,6 +886,69 @@ func TestMakeWorkerFn(t *testing.T) {
 			t.Errorf("StartSessionParams.SSHStrictHostKeyChecking = %q, want %q", capturedStrictHostKeyChecking, "yes")
 		}
 	})
+}
+
+// TestMakeWorkerFn_DerivesReadOnlyFromLabelReview verifies that
+// makeWorkerFn derives WorkerDeps.ReadOnly from the reactionKind argument:
+// true only for ReactionKindLabelReview, false for every other kind
+// including empty (A9). Asserted indirectly via the dispatch-time
+// in-progress transition, which the read-only path suppresses.
+func TestMakeWorkerFn_DerivesReadOnlyFromLabelReview(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name             string
+		reactionKind     string
+		wantTransitioned bool
+	}{
+		{"label-review reaction kind is read-only", ReactionKindLabelReview, false},
+		{"empty reaction kind is not read-only", "", true},
+		{"other known reaction kind is not read-only", ReactionKindReview, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			tmpDir := t.TempDir()
+			cfg := defaultWorkerConfig(tmpDir)
+			cfg.Tracker.InProgressState = "In Progress"
+			tmpl := mustParseTemplate(t, "do {{ .issue.identifier }}")
+
+			tracker := &mockTrackerAdapter{}
+			state := NewState(1000, 5, nil, AgentTotals{})
+			o := NewOrchestrator(OrchestratorParams{
+				State:           state,
+				Logger:          discardLogger(),
+				TrackerAdapter:  tracker,
+				AgentAdapter:    &mockAgentAdapter{},
+				WorkflowManager: &stubWorkflowManager{config: cfg, template: tmpl},
+				Store:           &stubStore{},
+			})
+
+			issue := workerTestIssue()
+			wfn := o.makeWorkerFn("", "", "", "", tt.reactionKind, nil)
+
+			exitDone := make(chan struct{})
+			go func() {
+				wfn(context.Background(), issue, nil)
+				close(exitDone)
+			}()
+
+			select {
+			case <-o.workerExitCh:
+			case <-time.After(10 * time.Second):
+				t.Fatal("worker did not exit within 10 seconds")
+			}
+			<-exitDone
+
+			gotTransitioned := len(tracker.transitionCalls) > 0
+			if gotTransitioned != tt.wantTransitioned {
+				t.Errorf("makeWorkerFn(reactionKind=%q): TransitionIssue called = %v, want %v",
+					tt.reactionKind, gotTransitioned, tt.wantTransitioned)
+			}
+		})
+	}
 }
 
 // --- TestOnRetryFire ---
@@ -1284,6 +1347,54 @@ func TestTickLogging_WithDispatches(t *testing.T) {
 	}
 	if !strings.Contains(got, "dispatched=2") {
 		t.Errorf("log missing dispatched=2: %s", got)
+	}
+}
+
+// TestHandleTick_PassesEmptyReactionKind verifies that the poll-tick
+// candidate-dispatch call site invokes makeWorkerFn with an empty
+// reactionKind (A9): a freshly dispatched candidate issue is never
+// read-only, so its dispatch-time in-progress transition still fires.
+func TestHandleTick_PassesEmptyReactionKind(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	cfg := defaultWorkerConfig(tmpDir)
+	cfg.Tracker.Kind = "mock"
+	cfg.Tracker.InProgressState = "In Progress"
+	cfg.Agent.MaxConcurrentAgents = 5
+
+	issue := domain.Issue{ID: "iss-tick-1", Identifier: "TICK-1", Title: "title", State: "To Do"}
+	tracker := &candidateTrackerAdapter{
+		mockTrackerAdapter: &mockTrackerAdapter{},
+		fetchCandidatesFn: func(_ context.Context) ([]domain.Issue, error) {
+			return []domain.Issue{issue}, nil
+		},
+	}
+
+	pf := passingPreflightRegistries()
+	pf.ReloadWorkflow = func() error { return nil }
+	pf.ConfigFunc = func() config.ServiceConfig { return cfg }
+
+	tmpl := mustParseTemplate(t, "do {{ .issue.identifier }}")
+
+	o := NewOrchestrator(OrchestratorParams{
+		State:           NewState(1000, 5, nil, AgentTotals{}),
+		Logger:          discardLogger(),
+		TrackerAdapter:  tracker,
+		AgentAdapter:    &mockAgentAdapter{},
+		WorkflowManager: &stubWorkflowManager{config: cfg, template: tmpl},
+		Store:           &stubStore{},
+		PreflightParams: pf,
+	})
+
+	o.handleTick(context.Background())
+	o.state.WorkerWg.Wait()
+
+	if len(tracker.transitionCalls) != 1 {
+		t.Fatalf("TransitionIssue calls = %d, want 1 (a fresh poll-tick dispatch is never read-only)", len(tracker.transitionCalls))
+	}
+	if tracker.transitionCalls[0].IssueID != issue.ID {
+		t.Errorf("TransitionIssue IssueID = %q, want %q", tracker.transitionCalls[0].IssueID, issue.ID)
 	}
 }
 

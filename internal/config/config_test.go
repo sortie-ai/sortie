@@ -1070,6 +1070,206 @@ func TestNewServiceConfig(t *testing.T) {
 	})
 }
 
+// --- buildLabelCommandsConfig tests ---
+
+func TestBuildLabelCommandsConfig_Defaults(t *testing.T) {
+	t.Parallel()
+
+	t.Run("absent block is a zero-value config, no error", func(t *testing.T) {
+		t.Parallel()
+		got, err := buildLabelCommandsConfig(nil)
+		if err != nil {
+			t.Fatalf("buildLabelCommandsConfig(nil): unexpected error: %v", err)
+		}
+		if got != (LabelCommandsConfig{}) {
+			t.Errorf("buildLabelCommandsConfig(nil) = %+v, want zero value", got)
+		}
+	})
+
+	t.Run("provider only fills in every default", func(t *testing.T) {
+		t.Parallel()
+		got, err := buildLabelCommandsConfig(map[string]any{
+			"provider": "github",
+		})
+		if err != nil {
+			t.Fatalf("buildLabelCommandsConfig: unexpected error: %v", err)
+		}
+		want := LabelCommandsConfig{
+			Provider:       "github",
+			ReviewLabel:    "sortie:review",
+			FixLabel:       "sortie:fix",
+			PollIntervalMS: 60000,
+		}
+		if got != want {
+			t.Errorf("buildLabelCommandsConfig(provider only) = %+v, want %+v", got, want)
+		}
+	})
+}
+
+func TestBuildLabelCommandsConfig_EmptyProviderIgnoresFields(t *testing.T) {
+	t.Parallel()
+
+	// With no active provider the block is inert, so a below-floor poll
+	// interval and a type-invalid label field are neither clamped nor
+	// rejected: the whole block is ignored and yields a zero-value config.
+	got, err := buildLabelCommandsConfig(map[string]any{
+		"provider":         "",
+		"poll_interval_ms": 5,
+		"review_label":     123,
+	})
+	if err != nil {
+		t.Fatalf("buildLabelCommandsConfig(empty provider): unexpected error: %v", err)
+	}
+	if got != (LabelCommandsConfig{}) {
+		t.Errorf("buildLabelCommandsConfig(empty provider) = %+v, want zero value", got)
+	}
+}
+
+func TestBuildLabelCommandsConfig_ReviewLabelDisabled(t *testing.T) {
+	t.Parallel()
+
+	got, err := buildLabelCommandsConfig(map[string]any{
+		"provider":     "github",
+		"review_label": "",
+		"fix_label":    "sortie:fix",
+	})
+	if err != nil {
+		t.Fatalf("buildLabelCommandsConfig: unexpected error: %v", err)
+	}
+	if got.ReviewLabel != "" {
+		t.Errorf("ReviewLabel = %q, want empty (explicit disable)", got.ReviewLabel)
+	}
+	if got.FixLabel != "sortie:fix" {
+		t.Errorf("FixLabel = %q, want %q", got.FixLabel, "sortie:fix")
+	}
+}
+
+func TestBuildLabelCommandsConfig_FixLabelParsedNotWired(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		m    map[string]any
+		want string
+	}{
+		{
+			name: "absent defaults to sortie:fix",
+			m:    map[string]any{"provider": "github"},
+			want: "sortie:fix",
+		},
+		{
+			name: "explicit custom value parsed verbatim",
+			m:    map[string]any{"provider": "github", "fix_label": "custom:fix"},
+			want: "custom:fix",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := buildLabelCommandsConfig(tt.m)
+			if err != nil {
+				t.Fatalf("buildLabelCommandsConfig(%+v): unexpected error: %v", tt.m, err)
+			}
+			if got.FixLabel != tt.want {
+				t.Errorf("FixLabel = %q, want %q", got.FixLabel, tt.want)
+			}
+		})
+	}
+}
+
+func TestBuildLabelCommandsConfig_PollIntervalFloorClamp(t *testing.T) {
+	t.Parallel()
+
+	t.Run("below floor clamps to 30000", func(t *testing.T) {
+		t.Parallel()
+		got, err := buildLabelCommandsConfig(map[string]any{
+			"provider":         "github",
+			"poll_interval_ms": 5000,
+		})
+		if err != nil {
+			t.Fatalf("buildLabelCommandsConfig: unexpected error: %v", err)
+		}
+		if got.PollIntervalMS != 30000 {
+			t.Errorf("PollIntervalMS = %d, want 30000 (clamped)", got.PollIntervalMS)
+		}
+	})
+
+	t.Run("at floor is unchanged", func(t *testing.T) {
+		t.Parallel()
+		got, err := buildLabelCommandsConfig(map[string]any{
+			"provider":         "github",
+			"poll_interval_ms": 30000,
+		})
+		if err != nil {
+			t.Fatalf("buildLabelCommandsConfig: unexpected error: %v", err)
+		}
+		if got.PollIntervalMS != 30000 {
+			t.Errorf("PollIntervalMS = %d, want 30000", got.PollIntervalMS)
+		}
+	})
+
+	t.Run("above floor is unchanged", func(t *testing.T) {
+		t.Parallel()
+		got, err := buildLabelCommandsConfig(map[string]any{
+			"provider":         "github",
+			"poll_interval_ms": 90000,
+		})
+		if err != nil {
+			t.Fatalf("buildLabelCommandsConfig: unexpected error: %v", err)
+		}
+		if got.PollIntervalMS != 90000 {
+			t.Errorf("PollIntervalMS = %d, want 90000", got.PollIntervalMS)
+		}
+	})
+
+	t.Run("non-integer value is a ConfigError", func(t *testing.T) {
+		t.Parallel()
+		_, err := buildLabelCommandsConfig(map[string]any{
+			"provider":         "github",
+			"poll_interval_ms": "not-a-number",
+		})
+		assertConfigErrorField(t, err, "reactions.label_commands.poll_interval_ms")
+	})
+}
+
+func TestBuildLabelCommandsConfig_BothLabelsEmptyErrors(t *testing.T) {
+	t.Parallel()
+
+	_, err := buildLabelCommandsConfig(map[string]any{
+		"provider":     "github",
+		"review_label": "",
+		"fix_label":    "",
+	})
+	assertConfigErrorField(t, err, "reactions.label_commands")
+}
+
+func TestNewServiceConfig_LabelCommandsExcludedFromReactionsMap(t *testing.T) {
+	t.Parallel()
+
+	cfg, err := NewServiceConfig(map[string]any{
+		"reactions": map[string]any{
+			"label_commands": map[string]any{
+				"provider":     "github",
+				"review_label": "sortie:review",
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("NewServiceConfig: unexpected error: %v", err)
+	}
+
+	if cfg.LabelCommands.Provider != "github" {
+		t.Errorf("LabelCommands.Provider = %q, want %q", cfg.LabelCommands.Provider, "github")
+	}
+	if cfg.LabelCommands.ReviewLabel != "sortie:review" {
+		t.Errorf("LabelCommands.ReviewLabel = %q, want %q", cfg.LabelCommands.ReviewLabel, "sortie:review")
+	}
+	if _, ok := cfg.Reactions["label_commands"]; ok {
+		t.Error(`Reactions["label_commands"] present, want absent (parses through its own dedicated path)`)
+	}
+}
+
 // --- test helpers ---
 
 func assertConfigErrorField(t *testing.T, err error, wantField string) {

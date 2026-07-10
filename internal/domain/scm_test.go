@@ -153,3 +153,11 @@ func (m *mockSCMAdapter) MergePR(_ context.Context, _ int, _, _ string, _ MergeS
 func (m *mockSCMAdapter) DeleteBranch(_ context.Context, _, _, _ string) error {
 	return nil
 }
+
+func (m *mockSCMAdapter) ListLabelEvents(_ context.Context, _ int, _, _ string) ([]LabelEvent, error) {
+	return nil, nil
+}
+
+func (m *mockSCMAdapter) RemoveLabel(_ context.Context, _ int, _, _, _ string) error {
+	return nil
+}

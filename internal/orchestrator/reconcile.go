@@ -146,6 +146,18 @@ type ReconcileParams struct {
 	// feature is active for the current process. Reconcile, enqueue, and
 	// recovery paths gate on this flag.
 	MergeConflictReactionConfigured bool
+
+	// LabelReviewConfig holds label-review reaction configuration. Only
+	// read when LabelReviewReactionConfigured is true. Unlike every
+	// sibling kind there is no accompanying LabelReviewPendingTTL: a human
+	// label gesture stays actionable regardless of age, so the label-review
+	// pending entry has no drop-on-age branch.
+	LabelReviewConfig LabelReviewReactionConfig
+
+	// LabelReviewReactionConfigured marks whether the label-review feature
+	// is active for the current process. Reconcile, enqueue, and recovery
+	// paths gate on this flag.
+	LabelReviewReactionConfigured bool
 }
 
 // ReconcileRunningIssues detects stalled workers and refreshes tracker
@@ -209,6 +221,11 @@ func ReconcileRunningIssues(state *State, params ReconcileParams) {
 	// reactions. Runs LAST so the CI and review reconcile passes have
 	// already updated their state before the merge call inspects it.
 	reconcileAutoMerge(state, params, log, ctx, metrics)
+
+	// Detect review-label commands on managed PRs and dispatch read-only
+	// review sessions. Ordering does not affect correctness: the pass is
+	// fully cross-kind isolated. Placed last as the newest reaction added.
+	reconcileLabelReviewCommands(state, params, log, ctx, metrics)
 }
 
 // reconcileStalled cancels running entries whose last activity exceeds the

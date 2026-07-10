@@ -253,6 +253,15 @@ type WorkerDeps struct {
 	// reaction-triggered continuation dispatches.
 	ContinuationContext map[string]any
 
+	// ReadOnly routes the no-clone, read-only worker path: a scratch
+	// workspace obtained via [workspace.Ensure] with no operator
+	// after_create/before_run/after_run hooks, no issue-work side effects
+	// (no in-progress transition, no dispatch comment, no per-turn tracker
+	// refresh, no self-review loop), and a fresh session. Derived from
+	// ReactionKind == ReactionKindLabelReview by the caller that constructs
+	// WorkerDeps.
+	ReadOnly bool
+
 	// OnProgress relays self-review progress to the orchestrator's event
 	// loop. Called from the worker goroutine; must be safe for concurrent
 	// use. May be nil when self-review is not configured.
@@ -376,8 +385,9 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 
 	// Dispatch-time in-progress transition: move the issue to the
 	// configured in-progress tracker state before workspace prep.
-	// Failure is non-fatal — the worker continues regardless.
-	if cfg.Tracker.InProgressState != "" {
+	// Failure is non-fatal — the worker continues regardless. A read-only
+	// review changes no issue state, so it is suppressed there.
+	if cfg.Tracker.InProgressState != "" && !deps.ReadOnly {
 		if strings.EqualFold(issue.State, cfg.Tracker.InProgressState) {
 			logger.Debug("skipped in-progress transition, issue already in target state",
 				slog.String("issue_state", issue.State),
@@ -403,8 +413,9 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 
 	// Dispatch comment: post a tracker comment acknowledging claim.
 	// Fires after in-progress transition, before workspace preparation.
-	// Failure is non-fatal — the worker continues regardless.
-	if cfg.Tracker.Comments.OnDispatch {
+	// Failure is non-fatal — the worker continues regardless. A read-only
+	// review is not a work claim, so it posts no dispatch comment.
+	if cfg.Tracker.Comments.OnDispatch && !deps.ReadOnly {
 		text := buildDispatchComment(agentKind, attemptInt)
 		if err := deps.TrackerAdapter.CommentIssue(ctx, issue.ID, text); err != nil {
 			logger.Warn("dispatch comment failed", slog.Any("error", err))
@@ -443,7 +454,9 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 			if sessionStarted {
 				stopSessionBestEffort(ctx, deps.AgentAdapter, session, cfg, logger)
 			}
-			if workspacePath != "" {
+			// A read-only review ran no operator setup hook, so no operator
+			// teardown hook runs on its scratch workspace, even on panic.
+			if workspacePath != "" && !deps.ReadOnly {
 				workspace.Finish(ctx, workspace.FinishParams{
 					Path:          workspacePath,
 					Identifier:    issue.Identifier,
@@ -472,33 +485,68 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 		}
 	}()
 
-	// Prepare the workspace directory, running lifecycle hooks.
-	wsResult, err := workspace.Prepare(ctx, workspace.PrepareParams{
-		Root:          cfg.Workspace.Root,
-		Identifier:    issue.Identifier,
-		IssueID:       issue.ID,
-		Attempt:       attemptInt,
-		AfterCreate:   cfg.Hooks.AfterCreate,
-		BeforeRun:     cfg.Hooks.BeforeRun,
-		HookTimeoutMS: cfg.Hooks.TimeoutMS,
-		Logger:        logger,
-		SSHHost:       deps.SSHHost,
-		PreRunFunc: func(wsPath string) {
-			workspace.CleanupStatusFile(wsPath, logger)
-		},
-	})
-	if err != nil {
-		reported = true
-		deps.OnExit(issue.ID, WorkerResult{
-			IssueID:      issue.ID,
-			Identifier:   issue.Identifier,
-			ExitKind:     exitKindForErr(ctx),
-			Error:        fmt.Errorf("workspace preparation: %w", err),
-			AgentAdapter: agentKind,
-			Attempt:      attempt,
-			SSHHost:      deps.SSHHost,
+	// Prepare the workspace directory. A read-only dispatch obtains a
+	// scratch directory via workspace.Ensure and runs no operator
+	// after_create/before_run hooks (no clone, no build); a normal dispatch
+	// runs the full lifecycle.
+	var wsResult workspace.PrepareResult
+	var err error
+	if deps.ReadOnly {
+		// workspace.Ensure does not inspect the context, so honor an
+		// already-cancelled dispatch here before any filesystem work,
+		// matching the normal path's workspace.Prepare early return.
+		var ensureResult workspace.EnsureResult
+		prepErr := ctx.Err()
+		if prepErr == nil {
+			ensureResult, prepErr = workspace.Ensure(cfg.Workspace.Root, issue.Identifier)
+		}
+		if prepErr != nil {
+			reported = true
+			deps.OnExit(issue.ID, WorkerResult{
+				IssueID:      issue.ID,
+				Identifier:   issue.Identifier,
+				ExitKind:     exitKindForErr(ctx),
+				Error:        fmt.Errorf("workspace preparation: %w", prepErr),
+				AgentAdapter: agentKind,
+				Attempt:      attempt,
+				SSHHost:      deps.SSHHost,
+			})
+			return
+		}
+		// The read-only path reuses the per-issue workspace directory, which
+		// may hold a stale .sortie/status from a prior session. Clear it so a
+		// stale recognized status does not end the review on turn one, the
+		// same best-effort cleanup the normal path runs via PreRunFunc.
+		workspace.CleanupStatusFile(ensureResult.Path, logger)
+		wsResult = workspace.PrepareResult(ensureResult)
+	} else {
+		wsResult, err = workspace.Prepare(ctx, workspace.PrepareParams{
+			Root:          cfg.Workspace.Root,
+			Identifier:    issue.Identifier,
+			IssueID:       issue.ID,
+			Attempt:       attemptInt,
+			AfterCreate:   cfg.Hooks.AfterCreate,
+			BeforeRun:     cfg.Hooks.BeforeRun,
+			HookTimeoutMS: cfg.Hooks.TimeoutMS,
+			Logger:        logger,
+			SSHHost:       deps.SSHHost,
+			PreRunFunc: func(wsPath string) {
+				workspace.CleanupStatusFile(wsPath, logger)
+			},
 		})
-		return
+		if err != nil {
+			reported = true
+			deps.OnExit(issue.ID, WorkerResult{
+				IssueID:      issue.ID,
+				Identifier:   issue.Identifier,
+				ExitKind:     exitKindForErr(ctx),
+				Error:        fmt.Errorf("workspace preparation: %w", err),
+				AgentAdapter: agentKind,
+				Attempt:      attempt,
+				SSHHost:      deps.SSHHost,
+			})
+			return
+		}
 	}
 
 	workspacePath = wsResult.Path
@@ -507,6 +555,11 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 	// finishWorkspace runs the after_run hook best-effort on every exit
 	// path after successful workspace preparation.
 	finishWorkspace := func() {
+		// A read-only review ran no operator setup hook, so no operator
+		// teardown hook runs on its scratch workspace.
+		if deps.ReadOnly {
+			return
+		}
 		workspace.Finish(ctx, workspace.FinishParams{
 			Path:          wsResult.Path,
 			Identifier:    issue.Identifier,
@@ -852,35 +905,41 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 			return
 		}
 
-		// Refresh the tracker state to detect external transitions.
-		refreshed, err := deps.TrackerAdapter.FetchIssueStatesByIDs(ctx, []string{issue.ID})
-		if err != nil {
-			stopSessionBestEffort(ctx, deps.AgentAdapter, session, cfg, logger)
-			finishWorkspace()
-			reported = true
-			deps.OnExit(issue.ID, WorkerResult{
-				IssueID:        issue.ID,
-				Identifier:     issue.Identifier,
-				ExitKind:       exitKindForErr(ctx),
-				Error:          fmt.Errorf("issue state refresh (turn %d): %w", turnNumber, err),
-				TurnsCompleted: turnsCompleted,
-				SessionID:      session.ID,
-				WorkspacePath:  wsResult.Path,
-				AgentAdapter:   agentKind,
-				Attempt:        attempt,
-				SSHHost:        deps.SSHHost,
-			})
-			return
-		}
+		// A read-only review changes no issue state, so it skips the
+		// per-turn tracker refresh and its active-state termination gate;
+		// the loop then rests solely on max_turns or the agent's own
+		// .sortie/status self-signal.
+		if !deps.ReadOnly {
+			// Refresh the tracker state to detect external transitions.
+			refreshed, err := deps.TrackerAdapter.FetchIssueStatesByIDs(ctx, []string{issue.ID})
+			if err != nil {
+				stopSessionBestEffort(ctx, deps.AgentAdapter, session, cfg, logger)
+				finishWorkspace()
+				reported = true
+				deps.OnExit(issue.ID, WorkerResult{
+					IssueID:        issue.ID,
+					Identifier:     issue.Identifier,
+					ExitKind:       exitKindForErr(ctx),
+					Error:          fmt.Errorf("issue state refresh (turn %d): %w", turnNumber, err),
+					TurnsCompleted: turnsCompleted,
+					SessionID:      session.ID,
+					WorkspacePath:  wsResult.Path,
+					AgentAdapter:   agentKind,
+					Attempt:        attempt,
+					SSHHost:        deps.SSHHost,
+				})
+				return
+			}
 
-		if stateStr, ok := refreshed[issue.ID]; ok {
-			issue.State = stateStr
-		}
+			if stateStr, ok := refreshed[issue.ID]; ok {
+				issue.State = stateStr
+			}
 
-		logger.Info("issue state refreshed", slog.String("refreshed_state", issue.State))
+			logger.Info("issue state refreshed", slog.String("refreshed_state", issue.State))
 
-		if !isActiveState(issue.State, activeStates) {
-			break
+			if !isActiveState(issue.State, activeStates) {
+				break
+			}
 		}
 
 		if turnNumber >= maxTurns {
@@ -895,7 +954,7 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 	reviewCfg := deps.ConfigFunc()
 	var reviewMeta *domain.ReviewMetadata
 
-	if reviewCfg.SelfReview.Enabled && isActiveState(issue.State, activeStates) && ctx.Err() == nil {
+	if reviewCfg.SelfReview.Enabled && isActiveState(issue.State, activeStates) && ctx.Err() == nil && !deps.ReadOnly {
 		reviewMeta = runSelfReviewLoop(ctx, RunSelfReviewParams{
 			Session:        session,
 			Issue:          issue,
@@ -932,18 +991,20 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 	}
 
 	stopSessionBestEffort(ctx, deps.AgentAdapter, session, cfg, logger)
-	workspace.Finish(ctx, workspace.FinishParams{
-		Path:                  wsResult.Path,
-		Identifier:            issue.Identifier,
-		IssueID:               issue.ID,
-		Attempt:               attemptInt,
-		AfterRun:              cfg.Hooks.AfterRun,
-		HookTimeoutMS:         cfg.Hooks.TimeoutMS,
-		Logger:                logger,
-		SSHHost:               deps.SSHHost,
-		SelfReviewStatus:      selfReviewStatus,
-		SelfReviewSummaryPath: selfReviewSummaryPath,
-	})
+	if !deps.ReadOnly {
+		workspace.Finish(ctx, workspace.FinishParams{
+			Path:                  wsResult.Path,
+			Identifier:            issue.Identifier,
+			IssueID:               issue.ID,
+			Attempt:               attemptInt,
+			AfterRun:              cfg.Hooks.AfterRun,
+			HookTimeoutMS:         cfg.Hooks.TimeoutMS,
+			Logger:                logger,
+			SSHHost:               deps.SSHHost,
+			SelfReviewStatus:      selfReviewStatus,
+			SelfReviewSummaryPath: selfReviewSummaryPath,
+		})
+	}
 
 	logger.Info("worker exiting",
 		slog.Any("exit_kind", WorkerExitNormal),

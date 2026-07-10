@@ -3,6 +3,7 @@ package domain
 import (
 	"context"
 	"fmt"
+	"time"
 )
 
 // MergeStrategy enumerates the supported pull-request merge strategies.
@@ -109,6 +110,28 @@ type MergeResult struct {
 	Message string
 }
 
+// LabelEvent is one normalized entry from a pull request's label-event
+// journal. Adapters map provider-specific event shapes to this type.
+type LabelEvent struct {
+	// ID is the provider journal entry id: opaque to the orchestrator and
+	// unique per PR. Adapters normalize it to a lexically-sortable form so
+	// that ordering entries by (At, ID) as strings matches their journal
+	// (chronological) order.
+	ID string
+
+	// Label is the normalized (lowercased) label name.
+	Label string
+
+	// Actor is the login of the acting user.
+	Actor string
+
+	// Added is true for a labeled event and false for an unlabeled event.
+	Added bool
+
+	// At is the journal timestamp in UTC.
+	At time.Time
+}
+
 // SCMAdapter exposes read and write operations against the SCM platform.
 // Implementations must be safe for concurrent use.
 type SCMAdapter interface {
@@ -193,6 +216,18 @@ type SCMAdapter interface {
 	// the branch is already gone; callers treat this as a successful
 	// no-op. Returns a [*SCMError] on any other failure.
 	DeleteBranch(ctx context.Context, owner, repo, branch string) error
+
+	// ListLabelEvents returns the label-event journal for the given PR,
+	// oldest first. Returns an empty non-nil slice when the PR has no
+	// label events. Returns a [*SCMError] on failure.
+	ListLabelEvents(ctx context.Context, prNumber int, owner, repo string) ([]LabelEvent, error)
+
+	// RemoveLabel removes the named label from the given PR. Returns nil
+	// on success and treats an already-absent label as a successful
+	// no-op: a [*SCMError] with Kind [ErrSCMNotFound] is mapped to nil,
+	// matching the [SCMAdapter.DeleteBranch] precedent. Returns a
+	// [*SCMError] on any other failure.
+	RemoveLabel(ctx context.Context, prNumber int, owner, repo, label string) error
 }
 
 // SCMErrorKind enumerates the normalized error categories that SCM

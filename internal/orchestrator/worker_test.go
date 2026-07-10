@@ -3536,3 +3536,359 @@ func TestRunWorkerAttempt_SessionToolRegistryFunc(t *testing.T) {
 		}
 	})
 }
+
+// --- Read-only (label-review) dispatch tests ---
+
+// TestRunWorkerAttempt_ReadOnly_NoCloneWorkspace verifies that a read-only
+// attempt creates its workspace via workspace.Ensure: the directory exists,
+// but neither after_create nor before_run runs even when both are
+// configured (A4, A9).
+func TestRunWorkerAttempt_ReadOnly_NoCloneWorkspace(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("hooks use touch, unavailable on windows")
+	}
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	afterCreateMarker := filepath.Join(tmpDir, "after_create_marker")
+	beforeRunMarker := filepath.Join(tmpDir, "before_run_marker")
+
+	cfg := defaultWorkerConfig(tmpDir)
+	cfg.Hooks.AfterCreate = fmt.Sprintf("touch %s", afterCreateMarker)
+	cfg.Hooks.BeforeRun = fmt.Sprintf("touch %s", beforeRunMarker)
+
+	ec := newExitCapture()
+	deps := WorkerDeps{
+		TrackerAdapter:         &mockTrackerAdapter{},
+		AgentAdapter:           &mockAgentAdapter{},
+		ConfigFunc:             func() config.ServiceConfig { return cfg },
+		PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
+		OnEvent:                func(_ string, _ domain.AgentEvent) {},
+		OnExit:                 ec.onExit,
+		Logger:                 discardLogger(),
+		ReadOnly:               true,
+	}
+
+	RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
+	result := ec.waitResult(t)
+
+	if result.WorkspacePath == "" {
+		t.Fatal("WorkspacePath is empty, want a scratch workspace to be created")
+	}
+	if _, err := os.Stat(result.WorkspacePath); err != nil {
+		t.Errorf("workspace directory not found: %v", err)
+	}
+	if _, err := os.Stat(afterCreateMarker); err == nil {
+		t.Error("after_create hook ran for a read-only dispatch; want no hook execution")
+	}
+	if _, err := os.Stat(beforeRunMarker); err == nil {
+		t.Error("before_run hook ran for a read-only dispatch; want no hook execution")
+	}
+}
+
+// TestRunWorkerAttempt_ReadOnly_StaleStatusCleaned verifies that the
+// read-only path clears a stale .sortie/status left in the reused per-issue
+// workspace, so a prior recognized signal does not end the review on turn
+// one. The normal path does this via PreRunFunc; the read-only path must do
+// the same best-effort cleanup after workspace.Ensure.
+func TestRunWorkerAttempt_ReadOnly_StaleStatusCleaned(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	cfg := defaultWorkerConfig(tmpDir)
+	cfg.Agent.MaxTurns = 1
+
+	// Pre-create the reused workspace with a stale "blocked" status from a
+	// prior session's exit.
+	wsPath := filepath.Join(tmpDir, "TEST-1")
+	statusDir := filepath.Join(wsPath, ".sortie")
+	if err := os.MkdirAll(statusDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(statusDir, "status"), []byte("blocked\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(stale status): %v", err)
+	}
+
+	ec := newExitCapture()
+	deps := WorkerDeps{
+		TrackerAdapter:         &mockTrackerAdapter{},
+		AgentAdapter:           &mockAgentAdapter{},
+		ConfigFunc:             func() config.ServiceConfig { return cfg },
+		PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
+		OnEvent:                func(_ string, _ domain.AgentEvent) {},
+		OnExit:                 ec.onExit,
+		Logger:                 discardLogger(),
+		ReadOnly:               true,
+	}
+
+	RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
+	result := ec.waitResult(t)
+
+	if result.SoftStop {
+		t.Error("SoftStop = true, want false (stale status should have been cleaned after workspace.Ensure)")
+	}
+	if result.ExitKind != WorkerExitNormal {
+		t.Errorf("ExitKind = %q, want %q", result.ExitKind, WorkerExitNormal)
+	}
+	if result.TurnsCompleted != 1 {
+		t.Errorf("TurnsCompleted = %d, want 1 (the read-only session ran a turn instead of soft-stopping)", result.TurnsCompleted)
+	}
+}
+
+// TestRunWorkerAttempt_ReadOnly_SuppressesInProgressTransition verifies that
+// a read-only attempt never calls TransitionIssue even when
+// cfg.Tracker.InProgressState is set (A4).
+func TestRunWorkerAttempt_ReadOnly_SuppressesInProgressTransition(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	cfg := defaultWorkerConfig(tmpDir)
+	cfg.Tracker.InProgressState = "In Progress"
+
+	tracker := &mockTrackerAdapter{}
+	ec := newExitCapture()
+	deps := WorkerDeps{
+		TrackerAdapter:         tracker,
+		AgentAdapter:           &mockAgentAdapter{},
+		ConfigFunc:             func() config.ServiceConfig { return cfg },
+		PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
+		OnEvent:                func(_ string, _ domain.AgentEvent) {},
+		OnExit:                 ec.onExit,
+		Logger:                 discardLogger(),
+		ReadOnly:               true,
+	}
+
+	RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
+	ec.waitResult(t)
+
+	if len(tracker.transitionCalls) != 0 {
+		t.Errorf("TransitionIssue call count = %d, want 0 (a read-only review changes no issue state)", len(tracker.transitionCalls))
+	}
+}
+
+// TestRunWorkerAttempt_ReadOnly_SuppressesDispatchComment verifies that a
+// read-only attempt never posts the dispatch comment even when
+// cfg.Tracker.Comments.OnDispatch is true (A4).
+func TestRunWorkerAttempt_ReadOnly_SuppressesDispatchComment(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	cfg := defaultWorkerConfig(tmpDir)
+	cfg.Tracker.Comments.OnDispatch = true
+
+	tracker := &mockTrackerAdapter{}
+	ec := newExitCapture()
+	deps := WorkerDeps{
+		TrackerAdapter:         tracker,
+		AgentAdapter:           &mockAgentAdapter{},
+		ConfigFunc:             func() config.ServiceConfig { return cfg },
+		PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
+		OnEvent:                func(_ string, _ domain.AgentEvent) {},
+		OnExit:                 ec.onExit,
+		Logger:                 discardLogger(),
+		ReadOnly:               true,
+	}
+
+	RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
+	ec.waitResult(t)
+
+	if len(tracker.commentCalls) != 0 {
+		t.Errorf("CommentIssue call count = %d, want 0 (a read-only review is not a work claim)", len(tracker.commentCalls))
+	}
+}
+
+// TestRunWorkerAttempt_ReadOnly_SuppressesPerTurnRefresh verifies that a
+// read-only attempt never calls FetchIssueStatesByIDs during the turn loop;
+// the loop terminates via max_turns instead (A4).
+func TestRunWorkerAttempt_ReadOnly_SuppressesPerTurnRefresh(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	cfg := defaultWorkerConfig(tmpDir)
+	cfg.Agent.MaxTurns = 3
+
+	var fetchCalls atomic.Int32
+	tracker := &mockTrackerAdapter{
+		fetchStatesFn: func(_ context.Context, ids []string) (map[string]string, error) {
+			fetchCalls.Add(1)
+			result := make(map[string]string, len(ids))
+			for _, id := range ids {
+				result[id] = "To Do"
+			}
+			return result, nil
+		},
+	}
+	ec := newExitCapture()
+	deps := WorkerDeps{
+		TrackerAdapter:         tracker,
+		AgentAdapter:           &mockAgentAdapter{},
+		ConfigFunc:             func() config.ServiceConfig { return cfg },
+		PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
+		OnEvent:                func(_ string, _ domain.AgentEvent) {},
+		OnExit:                 ec.onExit,
+		Logger:                 discardLogger(),
+		ReadOnly:               true,
+	}
+
+	RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
+	result := ec.waitResult(t)
+
+	if fetchCalls.Load() != 0 {
+		t.Errorf("FetchIssueStatesByIDs call count = %d, want 0 (read-only loop rests on max_turns/status file only)", fetchCalls.Load())
+	}
+	if result.TurnsCompleted != cfg.Agent.MaxTurns {
+		t.Errorf("TurnsCompleted = %d, want %d (loop terminates via max_turns, not tracker-state gating)",
+			result.TurnsCompleted, cfg.Agent.MaxTurns)
+	}
+}
+
+// TestRunWorkerAttempt_ReadOnly_SuppressesSelfReview verifies that a
+// read-only attempt never runs the self-review loop even when self-review
+// is enabled (A4).
+func TestRunWorkerAttempt_ReadOnly_SuppressesSelfReview(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("self-review verification command uses touch")
+	}
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	markerPath := filepath.Join(tmpDir, "self_review_marker")
+
+	cfg := defaultWorkerConfig(tmpDir)
+	cfg.SelfReview = config.SelfReviewConfig{
+		Enabled:               true,
+		MaxIterations:         1,
+		VerificationCommands:  []string{fmt.Sprintf("touch %s", markerPath)},
+		VerificationTimeoutMS: 5000,
+	}
+
+	ec := newExitCapture()
+	deps := WorkerDeps{
+		TrackerAdapter:         &mockTrackerAdapter{},
+		AgentAdapter:           &mockAgentAdapter{},
+		ConfigFunc:             func() config.ServiceConfig { return cfg },
+		PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
+		OnEvent:                func(_ string, _ domain.AgentEvent) {},
+		OnExit:                 ec.onExit,
+		Logger:                 discardLogger(),
+		ReadOnly:               true,
+	}
+
+	RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
+	ec.waitResult(t)
+
+	if _, err := os.Stat(markerPath); err == nil {
+		t.Error("self-review verification command ran for a read-only dispatch; want no self-review")
+	}
+}
+
+// TestRunWorkerAttempt_ReadOnly_SuppressesAfterRunHook verifies that a
+// read-only attempt never runs the after_run hook even when cfg.Hooks.AfterRun
+// is set (A4).
+func TestRunWorkerAttempt_ReadOnly_SuppressesAfterRunHook(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("after_run hook uses touch, unavailable on windows")
+	}
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	markerPath := filepath.Join(tmpDir, "after_run_marker")
+
+	cfg := defaultWorkerConfig(tmpDir)
+	cfg.Hooks.AfterRun = fmt.Sprintf("touch %s", markerPath)
+
+	ec := newExitCapture()
+	deps := WorkerDeps{
+		TrackerAdapter:         &mockTrackerAdapter{},
+		AgentAdapter:           &mockAgentAdapter{},
+		ConfigFunc:             func() config.ServiceConfig { return cfg },
+		PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
+		OnEvent:                func(_ string, _ domain.AgentEvent) {},
+		OnExit:                 ec.onExit,
+		Logger:                 discardLogger(),
+		ReadOnly:               true,
+	}
+
+	RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
+	ec.waitResult(t)
+
+	if _, err := os.Stat(markerPath); err == nil {
+		t.Error("after_run hook ran for a read-only dispatch; want no operator teardown hook")
+	}
+}
+
+// TestRunWorkerAttempt_NormalDispatchUnaffected is the regression
+// counterpart to the read-only suppression tests: with WorkerDeps.ReadOnly
+// == false, every guard added for the read-only path is a no-op and the
+// in-progress transition, dispatch comment, per-turn refresh, self-review
+// loop, and after_run hook all fire exactly as before.
+func TestRunWorkerAttempt_NormalDispatchUnaffected(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("hooks use touch, unavailable on windows")
+	}
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	afterCreateMarker := filepath.Join(tmpDir, "after_create_marker")
+	afterRunMarker := filepath.Join(tmpDir, "after_run_marker")
+	selfReviewMarker := filepath.Join(tmpDir, "self_review_marker")
+
+	cfg := defaultWorkerConfig(tmpDir)
+	cfg.Agent.MaxTurns = 3
+	cfg.Tracker.InProgressState = "In Progress"
+	cfg.Tracker.Comments.OnDispatch = true
+	cfg.Hooks.AfterCreate = fmt.Sprintf("touch %s", afterCreateMarker)
+	cfg.Hooks.AfterRun = fmt.Sprintf("touch %s", afterRunMarker)
+	cfg.SelfReview = config.SelfReviewConfig{
+		Enabled:               true,
+		MaxIterations:         1,
+		VerificationCommands:  []string{fmt.Sprintf("touch %s", selfReviewMarker)},
+		VerificationTimeoutMS: 5000,
+	}
+
+	var fetchCalls atomic.Int32
+	tracker := &mockTrackerAdapter{
+		fetchStatesFn: func(_ context.Context, ids []string) (map[string]string, error) {
+			fetchCalls.Add(1)
+			result := make(map[string]string, len(ids))
+			for _, id := range ids {
+				result[id] = "To Do"
+			}
+			return result, nil
+		},
+	}
+
+	ec := newExitCapture()
+	deps := WorkerDeps{
+		TrackerAdapter:         tracker,
+		AgentAdapter:           &mockAgentAdapter{},
+		ConfigFunc:             func() config.ServiceConfig { return cfg },
+		PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
+		OnEvent:                func(_ string, _ domain.AgentEvent) {},
+		OnExit:                 ec.onExit,
+		Logger:                 discardLogger(),
+		ReadOnly:               false,
+	}
+
+	RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
+	ec.waitResult(t)
+
+	if len(tracker.transitionCalls) != 1 {
+		t.Errorf("TransitionIssue call count = %d, want 1 (normal dispatch still transitions in-progress)", len(tracker.transitionCalls))
+	}
+	if len(tracker.commentCalls) != 1 {
+		t.Errorf("CommentIssue call count = %d, want 1 (normal dispatch still posts the dispatch comment)", len(tracker.commentCalls))
+	}
+	if fetchCalls.Load() == 0 {
+		t.Error("FetchIssueStatesByIDs was never called; want per-turn refresh for a normal dispatch")
+	}
+	if _, err := os.Stat(afterCreateMarker); err != nil {
+		t.Errorf("after_create hook did not run for a normal dispatch: %v", err)
+	}
+	if _, err := os.Stat(afterRunMarker); err != nil {
+		t.Errorf("after_run hook did not run for a normal dispatch: %v", err)
+	}
+	if _, err := os.Stat(selfReviewMarker); err != nil {
+		t.Errorf("self-review did not run for a normal dispatch: %v", err)
+	}
+}

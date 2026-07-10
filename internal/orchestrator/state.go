@@ -336,6 +336,13 @@ const ReactionKindAutoMerge = "merge"
 // and persisted discriminator.
 const ReactionKindMergeConflict = "merge-conflict"
 
+// ReactionKindLabelReview is the reaction kind constant for the read-only
+// PR review command triggered by the review label. The user-facing YAML
+// block is reactions.label_commands; the short form lives here as the
+// runtime and persisted discriminator, matching the YAML-versus-runtime
+// asymmetry the sibling kinds document.
+const ReactionKindLabelReview = "label-review"
+
 // AutoMergePreflightRetryDelay is the delay between the initial
 // auto-merge preflight failure (transport-class) and its single
 // scheduled retry. The retry runs at most once per orchestrator
@@ -344,7 +351,7 @@ const AutoMergePreflightRetryDelay time.Duration = 5 * time.Minute
 
 func isKnownReactionKind(kind string) bool {
 	switch kind {
-	case ReactionKindCI, ReactionKindReview, ReactionKindBotReview, ReactionKindAutoMerge, ReactionKindMergeConflict:
+	case ReactionKindCI, ReactionKindReview, ReactionKindBotReview, ReactionKindAutoMerge, ReactionKindMergeConflict, ReactionKindLabelReview:
 		return true
 	default:
 		return false
@@ -572,6 +579,42 @@ type MergeConflictReactionConfig struct {
 	EscalationLabel string
 	PollIntervalMS  int
 	MaxRetries      int
+}
+
+// LabelReviewReactionData holds the label-review command's per-PR
+// detection state. Stored in [PendingReaction.KindData] for reactions
+// with Kind == [ReactionKindLabelReview]. PRNumber, Owner, and Repo are
+// sourced from [domain.SCMMetadata] (written by the agent to scm.json),
+// never from the tracker project configuration.
+type LabelReviewReactionData struct {
+	// PRNumber is the pull request number whose journal is polled.
+	PRNumber int
+
+	// Owner is the repository owner.
+	Owner string
+
+	// Repo is the repository name.
+	Repo string
+
+	// HighWaterMark caches the newest processed journal position as an
+	// opaque "<RFC3339Nano>|<id>" string; empty means unset. The persisted
+	// source of truth is the reaction_fingerprints row.
+	HighWaterMark string
+
+	// LastActor is the login from the most recently confirmed command,
+	// carried into the dispatch context and logs.
+	LastActor string
+}
+
+// LabelReviewReactionConfig holds the validated label-review runtime
+// configuration resolved from [config.LabelCommandsConfig]. ReviewLabel is
+// the normalized label that triggers the command; empty disables the
+// review command even when the block is otherwise active. PollIntervalMS
+// is the detection poll interval, already clamped to the floor.
+type LabelReviewReactionConfig struct {
+	Provider       string
+	ReviewLabel    string
+	PollIntervalMS int
 }
 
 // State is the single authoritative runtime state owned by the orchestrator.
@@ -1208,6 +1251,19 @@ func BuildMergeConflictReactionConfig(rc config.ReactionConfig) (MergeConflictRe
 	}
 
 	return cfg, nil
+}
+
+// BuildLabelReviewReactionConfig copies the validated label-review runtime
+// configuration out of the parsed label_commands block. Unlike the sibling
+// Build*ReactionConfig functions it returns no error: the input is already
+// fully validated and defaulted by config parsing, so there is nothing left
+// to validate here.
+func BuildLabelReviewReactionConfig(cfg config.LabelCommandsConfig) LabelReviewReactionConfig {
+	return LabelReviewReactionConfig{
+		Provider:       cfg.Provider,
+		ReviewLabel:    cfg.ReviewLabel,
+		PollIntervalMS: cfg.PollIntervalMS,
+	}
 }
 
 // toInt converts a YAML-decoded value (typically int or float64) to int.

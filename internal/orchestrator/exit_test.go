@@ -3225,6 +3225,14 @@ func (s *scmAdapterStubExit) DeleteBranch(_ context.Context, _, _, _ string) err
 	panic("DeleteBranch must not be called by HandleWorkerExit")
 }
 
+func (s *scmAdapterStubExit) ListLabelEvents(_ context.Context, _ int, _, _ string) ([]domain.LabelEvent, error) {
+	panic("ListLabelEvents must not be called by HandleWorkerExit")
+}
+
+func (s *scmAdapterStubExit) RemoveLabel(_ context.Context, _ int, _, _, _ string) error {
+	panic("RemoveLabel must not be called by HandleWorkerExit")
+}
+
 func TestHandleWorkerExit_CIProvider_PopulatesPendingReaction(t *testing.T) {
 	t.Parallel()
 
@@ -4369,5 +4377,275 @@ func TestHandleWorkerExit_MergeConflictEnqueueDoesNotOverwrite(t *testing.T) {
 	}
 	if mcData.PRNumber != 77 {
 		t.Errorf("MergeConflictReactionData.PRNumber = %d, want 77 (seeded value preserved)", mcData.PRNumber)
+	}
+}
+
+// --- label-review enqueue tests ---
+
+// TestHandleWorkerExit_LabelReviewEnqueue verifies that a normal exit with
+// PR metadata and LabelReviewReactionConfigured==true seeds one
+// label-review pending entry; the slot is not overwritten if already
+// present; nothing is seeded when the flag is false, the SCM adapter is
+// nil, or PR metadata is incomplete.
+//
+// The fixture includes a branch even though the label-review enqueue
+// clause itself imposes no branch requirement: workspace.ReadSCMMetadata
+// unconditionally returns a zero value whenever the decoded branch is
+// empty (internal/workspace/scm.go), which also zeroes PRNumber/Owner/Repo
+// before the label-review clause ever inspects them. A workspace's scm.json
+// is written only by a normal (non-read-only) session, and such a session
+// always operates on a branch, so this reflects the only reachable
+// production case.
+func TestHandleWorkerExit_LabelReviewEnqueue(t *testing.T) {
+	t.Parallel()
+
+	t.Run("populates pending reaction", func(t *testing.T) {
+		t.Parallel()
+
+		wsPath := t.TempDir()
+		writePRSCMMetadata(t, wsPath, 55, "corp", "api", "feature/LR-1", "c0ffee")
+
+		store := &mockExitStore{}
+		state := exitState(t, "LR-1", nil)
+		params := defaultExitParams(t, store)
+		params.SCMAdapter = &scmAdapterStubExit{}
+		params.LabelReviewReactionConfigured = true
+
+		HandleWorkerExit(state, WorkerResult{
+			IssueID:       "LR-1",
+			Identifier:    "LR-1-ident",
+			ExitKind:      WorkerExitNormal,
+			AgentAdapter:  "mock",
+			WorkspacePath: wsPath,
+		}, params)
+
+		rkey := ReactionKey("LR-1", ReactionKindLabelReview)
+		pr, ok := state.PendingReactions[rkey]
+		if !ok {
+			t.Fatal("PendingReactions[LR-1:label-review] missing after normal exit with PR metadata")
+		}
+		if pr.Kind != ReactionKindLabelReview {
+			t.Errorf("PendingReaction.Kind = %q, want %q", pr.Kind, ReactionKindLabelReview)
+		}
+		lrData, ok := pr.KindData.(*LabelReviewReactionData)
+		if !ok {
+			t.Fatalf("KindData type = %T, want *LabelReviewReactionData", pr.KindData)
+		}
+		if lrData.PRNumber != 55 {
+			t.Errorf("LabelReviewReactionData.PRNumber = %d, want 55", lrData.PRNumber)
+		}
+		if lrData.Owner != "corp" {
+			t.Errorf("LabelReviewReactionData.Owner = %q, want %q", lrData.Owner, "corp")
+		}
+		if lrData.Repo != "api" {
+			t.Errorf("LabelReviewReactionData.Repo = %q, want %q", lrData.Repo, "api")
+		}
+	})
+
+	t.Run("does not overwrite an existing entry", func(t *testing.T) {
+		t.Parallel()
+
+		wsPath := t.TempDir()
+		writePRSCMMetadata(t, wsPath, 10, "corp", "api", "feature/LR-DUP", "sha1")
+
+		store := &mockExitStore{}
+		state := exitState(t, "LR-DUP", nil)
+		params := defaultExitParams(t, store)
+		params.SCMAdapter = &scmAdapterStubExit{}
+		params.LabelReviewReactionConfigured = true
+
+		existingEntry := &PendingReaction{
+			IssueID: "LR-DUP",
+			Kind:    ReactionKindLabelReview,
+			KindData: &LabelReviewReactionData{
+				PRNumber: 77,
+				Owner:    "original",
+				Repo:     "original",
+			},
+		}
+		rkey := ReactionKey("LR-DUP", ReactionKindLabelReview)
+		state.PendingReactions[rkey] = existingEntry
+
+		HandleWorkerExit(state, WorkerResult{
+			IssueID:       "LR-DUP",
+			Identifier:    "LR-DUP-ident",
+			ExitKind:      WorkerExitNormal,
+			AgentAdapter:  "mock",
+			WorkspacePath: wsPath,
+		}, params)
+
+		got := state.PendingReactions[rkey]
+		if got != existingEntry {
+			t.Error("PendingReactions[LR-DUP:label-review] was replaced; want existing entry preserved")
+		}
+	})
+
+	t.Run("not seeded when not configured", func(t *testing.T) {
+		t.Parallel()
+
+		wsPath := t.TempDir()
+		writePRSCMMetadata(t, wsPath, 20, "corp", "api", "feature/LR-NC", "deadbeef")
+
+		store := &mockExitStore{}
+		state := exitState(t, "LR-NC", nil)
+		params := defaultExitParams(t, store)
+		params.SCMAdapter = &scmAdapterStubExit{}
+		params.LabelReviewReactionConfigured = false
+
+		HandleWorkerExit(state, WorkerResult{
+			IssueID:       "LR-NC",
+			Identifier:    "LR-NC-ident",
+			ExitKind:      WorkerExitNormal,
+			AgentAdapter:  "mock",
+			WorkspacePath: wsPath,
+		}, params)
+
+		rkey := ReactionKey("LR-NC", ReactionKindLabelReview)
+		if _, ok := state.PendingReactions[rkey]; ok {
+			t.Error("PendingReactions[LR-NC:label-review] present despite LabelReviewReactionConfigured=false")
+		}
+	})
+
+	t.Run("not seeded when SCM adapter is nil", func(t *testing.T) {
+		t.Parallel()
+
+		wsPath := t.TempDir()
+		writePRSCMMetadata(t, wsPath, 20, "corp", "api", "feature/LR-nil", "deadbeef")
+
+		store := &mockExitStore{}
+		state := exitState(t, "LR-nil", nil)
+		params := defaultExitParams(t, store)
+		params.SCMAdapter = nil
+		params.LabelReviewReactionConfigured = true
+
+		HandleWorkerExit(state, WorkerResult{
+			IssueID:       "LR-nil",
+			Identifier:    "LR-nil-ident",
+			ExitKind:      WorkerExitNormal,
+			AgentAdapter:  "mock",
+			WorkspacePath: wsPath,
+		}, params)
+
+		rkey := ReactionKey("LR-nil", ReactionKindLabelReview)
+		if _, ok := state.PendingReactions[rkey]; ok {
+			t.Error("PendingReactions[LR-nil:label-review] present despite nil SCMAdapter")
+		}
+	})
+
+	t.Run("not seeded when PR metadata is incomplete", func(t *testing.T) {
+		t.Parallel()
+
+		tests := []struct {
+			name    string
+			content string
+		}{
+			{name: "missing pr_number", content: `{"branch":"feature/x","owner":"corp","repo":"api"}`},
+			{name: "missing owner", content: `{"branch":"feature/x","pr_number":10,"repo":"api"}`},
+			{name: "missing repo", content: `{"branch":"feature/x","pr_number":10,"owner":"corp"}`},
+			{name: "empty scm file", content: `{}`},
+		}
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				t.Parallel()
+
+				wsPath := t.TempDir()
+				dotSortie := filepath.Join(wsPath, ".sortie")
+				if err := os.MkdirAll(dotSortie, 0o750); err != nil {
+					t.Fatalf("MkdirAll .sortie: %v", err)
+				}
+				if err := os.WriteFile(filepath.Join(dotSortie, "scm.json"), []byte(tt.content), 0o600); err != nil {
+					t.Fatalf("WriteFile scm.json: %v", err)
+				}
+
+				store := &mockExitStore{}
+				state := exitState(t, "LR-INC", nil)
+				params := defaultExitParams(t, store)
+				params.SCMAdapter = &scmAdapterStubExit{}
+				params.LabelReviewReactionConfigured = true
+
+				HandleWorkerExit(state, WorkerResult{
+					IssueID:       "LR-INC",
+					Identifier:    "LR-INC-ident",
+					ExitKind:      WorkerExitNormal,
+					AgentAdapter:  "mock",
+					WorkspacePath: wsPath,
+				}, params)
+
+				rkey := ReactionKey("LR-INC", ReactionKindLabelReview)
+				if _, ok := state.PendingReactions[rkey]; ok {
+					t.Errorf("PendingReactions[LR-INC:label-review] present despite incomplete SCM metadata (%s)", tt.name)
+				}
+			})
+		}
+	})
+}
+
+// --- label-review read-only exit tests ---
+
+// TestHandleWorkerExit_LabelReviewReadOnlyExit_NoHandoff verifies that a
+// normal exit whose running entry carries ReactionKind==label-review takes
+// neither the handoff path nor the active-issue continuation-retry path,
+// even when HandoffState is configured and the linked issue is still
+// active: no TransitionIssue call, no continuation retry, and the claim is
+// released.
+func TestHandleWorkerExit_LabelReviewReadOnlyExit_NoHandoff(t *testing.T) {
+	t.Parallel()
+
+	store := &mockExitStore{}
+	tracker := &mockTrackerAdapter{}
+	state := exitStateWithIssue(t, "LR-RO-1", "In Progress")
+	state.Running["LR-RO-1"].ReactionKind = ReactionKindLabelReview
+
+	params := defaultExitParams(t, store)
+	params.TrackerAdapter = tracker
+	params.HandoffState = "Human Review"
+	params.ActiveStates = []string{"In Progress"}
+
+	HandleWorkerExit(state, WorkerResult{
+		IssueID:      "LR-RO-1",
+		Identifier:   "LR-RO-1-ident",
+		ExitKind:     WorkerExitNormal,
+		AgentAdapter: "mock",
+	}, params)
+
+	if len(tracker.transitionCalls) != 0 {
+		t.Errorf("TransitionIssue calls = %d, want 0 (a read-only exit performs no handoff)", len(tracker.transitionCalls))
+	}
+	if _, ok := state.RetryAttempts["LR-RO-1"]; ok {
+		t.Error("continuation retry scheduled for a read-only exit; want none")
+	}
+	if _, claimed := state.Claimed["LR-RO-1"]; claimed {
+		t.Error("claim still held after a read-only exit; want released")
+	}
+}
+
+// TestHandleWorkerExit_LabelReviewReadOnlyExit_ErrorStillRetries is the
+// contrast case: an error exit whose running entry carries
+// ReactionKind==label-review still schedules a retryable error-driven
+// retry, confirming the read-only guard is scoped to normal exits only.
+func TestHandleWorkerExit_LabelReviewReadOnlyExit_ErrorStillRetries(t *testing.T) {
+	t.Parallel()
+
+	store := &mockExitStore{}
+	state := exitState(t, "LR-RO-2", nil)
+	state.Running["LR-RO-2"].ReactionKind = ReactionKindLabelReview
+
+	params := defaultExitParams(t, store)
+
+	HandleWorkerExit(state, WorkerResult{
+		IssueID:      "LR-RO-2",
+		Identifier:   "LR-RO-2-ident",
+		ExitKind:     WorkerExitError,
+		Error:        errors.New("agent crashed"),
+		AgentAdapter: "mock",
+	}, params)
+
+	retry, ok := state.RetryAttempts["LR-RO-2"]
+	if !ok {
+		t.Fatal("retry not scheduled after a retryable error exit; want scheduled even for a label-review entry")
+	}
+	if retry.ReactionKind != ReactionKindLabelReview {
+		t.Errorf("RetryEntry.ReactionKind = %q, want %q (propagated from the exiting entry)", retry.ReactionKind, ReactionKindLabelReview)
 	}
 }
