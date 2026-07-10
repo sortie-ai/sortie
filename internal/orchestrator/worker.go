@@ -492,14 +492,21 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 	var wsResult workspace.PrepareResult
 	var err error
 	if deps.ReadOnly {
-		ensureResult, ensureErr := workspace.Ensure(cfg.Workspace.Root, issue.Identifier)
-		if ensureErr != nil {
+		// workspace.Ensure does not inspect the context, so honor an
+		// already-cancelled dispatch here before any filesystem work,
+		// matching the normal path's workspace.Prepare early return.
+		var ensureResult workspace.EnsureResult
+		prepErr := ctx.Err()
+		if prepErr == nil {
+			ensureResult, prepErr = workspace.Ensure(cfg.Workspace.Root, issue.Identifier)
+		}
+		if prepErr != nil {
 			reported = true
 			deps.OnExit(issue.ID, WorkerResult{
 				IssueID:      issue.ID,
 				Identifier:   issue.Identifier,
 				ExitKind:     exitKindForErr(ctx),
-				Error:        fmt.Errorf("workspace preparation: %w", ensureErr),
+				Error:        fmt.Errorf("workspace preparation: %w", prepErr),
 				AgentAdapter: agentKind,
 				Attempt:      attempt,
 				SSHHost:      deps.SSHHost,
