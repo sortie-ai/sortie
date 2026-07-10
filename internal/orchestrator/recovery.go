@@ -94,6 +94,7 @@ type PendingReactionRecoveryParams struct {
 	BotReviewReactionConfigured     bool
 	MergeConflictReactionConfigured bool
 	LabelReviewReactionConfigured   bool
+	LabelFixReactionConfigured      bool
 	RecoveryLookback                time.Duration
 	MaxCandidates                   int
 	NowFunc                         func() time.Time
@@ -112,6 +113,7 @@ type PendingReactionRecoveryResult struct {
 	BotReviewRecovered     int
 	MergeConflictRecovered int
 	LabelReviewRecovered   int
+	LabelFixRecovered      int
 	StaleSkipped           int
 	Skipped                int
 }
@@ -439,6 +441,34 @@ func recoverPendingReactionKinds(
 				TemplateID: run.TemplateID,
 			}
 			outcome.LabelReviewRecovered++
+			added++
+		}
+	}
+
+	// The label-fix reaction checks out the PR head branch, so unlike
+	// label-review its guard requires meta.Branch != "", matching every
+	// other checkout-bearing sibling kind.
+	if params.SCMAdapter != nil && params.LabelFixReactionConfigured && meta.PRNumber > 0 && meta.Owner != "" && meta.Repo != "" && meta.Branch != "" {
+		key := ReactionKey(run.IssueID, ReactionKindLabelFix)
+		if _, exists := state.PendingReactions[key]; !exists {
+			state.PendingReactions[key] = &PendingReaction{
+				IssueID:    run.IssueID,
+				Identifier: run.Identifier,
+				DisplayID:  run.DisplayID,
+				Attempt:    run.Attempt,
+				Kind:       ReactionKindLabelFix,
+				CreatedAt:  now,
+				KindData: &LabelFixReactionData{
+					PRNumber: meta.PRNumber,
+					Owner:    meta.Owner,
+					Repo:     meta.Repo,
+					Branch:   meta.Branch,
+				},
+				AgentKind:  run.AgentAdapter,
+				RuleName:   run.RuleName,
+				TemplateID: run.TemplateID,
+			}
+			outcome.LabelFixRecovered++
 			added++
 		}
 	}

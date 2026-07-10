@@ -4649,3 +4649,322 @@ func TestHandleWorkerExit_LabelReviewReadOnlyExit_ErrorStillRetries(t *testing.T
 		t.Errorf("RetryEntry.ReactionKind = %q, want %q (propagated from the exiting entry)", retry.ReactionKind, ReactionKindLabelReview)
 	}
 }
+
+// --- label-fix seeding tests ---
+
+// TestHandleWorkerExit_LabelFixEnqueue verifies the label-fix seeding
+// block: a normal exit with the SCM adapter configured, the label-fix
+// feature configured, and branch-bearing PR metadata seeds one entry
+// carrying the branch; the entry is skipped when an entry already exists,
+// when the feature is not configured, when the SCM adapter is nil, when
+// the branch is empty (the fix-specific difference from label-review), or
+// when any other PR metadata field is missing.
+func TestHandleWorkerExit_LabelFixEnqueue(t *testing.T) {
+	t.Parallel()
+
+	t.Run("populates pending reaction", func(t *testing.T) {
+		t.Parallel()
+
+		wsPath := t.TempDir()
+		writePRSCMMetadata(t, wsPath, 55, "corp", "api", "feature/LF-1", "c0ffee")
+
+		store := &mockExitStore{}
+		state := exitState(t, "LF-1", nil)
+		state.Running["LF-1"].AgentKind = "mock"
+		state.Running["LF-1"].RuleName = "default"
+		state.Running["LF-1"].TemplateID = "tmpl-1"
+		params := defaultExitParams(t, store)
+		params.SCMAdapter = &scmAdapterStubExit{}
+		params.LabelFixReactionConfigured = true
+
+		HandleWorkerExit(state, WorkerResult{
+			IssueID:       "LF-1",
+			Identifier:    "LF-1-ident",
+			ExitKind:      WorkerExitNormal,
+			AgentAdapter:  "mock",
+			WorkspacePath: wsPath,
+		}, params)
+
+		rkey := ReactionKey("LF-1", ReactionKindLabelFix)
+		pr, ok := state.PendingReactions[rkey]
+		if !ok {
+			t.Fatal("PendingReactions[LF-1:label-fix] missing after normal exit with branch-bearing PR metadata")
+		}
+		if pr.Kind != ReactionKindLabelFix {
+			t.Errorf("PendingReaction.Kind = %q, want %q", pr.Kind, ReactionKindLabelFix)
+		}
+		if pr.AgentKind != "mock" || pr.RuleName != "default" || pr.TemplateID != "tmpl-1" {
+			t.Errorf("PendingReaction frozen dispatch fields = (%q, %q, %q), want (mock, default, tmpl-1) (frozen from the exiting entry)",
+				pr.AgentKind, pr.RuleName, pr.TemplateID)
+		}
+		lfData, ok := pr.KindData.(*LabelFixReactionData)
+		if !ok {
+			t.Fatalf("KindData type = %T, want *LabelFixReactionData", pr.KindData)
+		}
+		if lfData.PRNumber != 55 {
+			t.Errorf("LabelFixReactionData.PRNumber = %d, want 55", lfData.PRNumber)
+		}
+		if lfData.Owner != "corp" {
+			t.Errorf("LabelFixReactionData.Owner = %q, want %q", lfData.Owner, "corp")
+		}
+		if lfData.Repo != "api" {
+			t.Errorf("LabelFixReactionData.Repo = %q, want %q", lfData.Repo, "api")
+		}
+		if lfData.Branch != "feature/LF-1" {
+			t.Errorf("LabelFixReactionData.Branch = %q, want %q", lfData.Branch, "feature/LF-1")
+		}
+	})
+
+	t.Run("does not overwrite an existing entry", func(t *testing.T) {
+		t.Parallel()
+
+		wsPath := t.TempDir()
+		writePRSCMMetadata(t, wsPath, 10, "corp", "api", "feature/LF-DUP", "sha1")
+
+		store := &mockExitStore{}
+		state := exitState(t, "LF-DUP", nil)
+		params := defaultExitParams(t, store)
+		params.SCMAdapter = &scmAdapterStubExit{}
+		params.LabelFixReactionConfigured = true
+
+		existingEntry := &PendingReaction{
+			IssueID: "LF-DUP",
+			Kind:    ReactionKindLabelFix,
+			KindData: &LabelFixReactionData{
+				PRNumber: 77,
+				Owner:    "original",
+				Repo:     "original",
+				Branch:   "original-branch",
+			},
+		}
+		rkey := ReactionKey("LF-DUP", ReactionKindLabelFix)
+		state.PendingReactions[rkey] = existingEntry
+
+		HandleWorkerExit(state, WorkerResult{
+			IssueID:       "LF-DUP",
+			Identifier:    "LF-DUP-ident",
+			ExitKind:      WorkerExitNormal,
+			AgentAdapter:  "mock",
+			WorkspacePath: wsPath,
+		}, params)
+
+		got := state.PendingReactions[rkey]
+		if got != existingEntry {
+			t.Error("PendingReactions[LF-DUP:label-fix] was replaced; want existing entry preserved")
+		}
+	})
+
+	t.Run("not seeded when not configured", func(t *testing.T) {
+		t.Parallel()
+
+		wsPath := t.TempDir()
+		writePRSCMMetadata(t, wsPath, 20, "corp", "api", "feature/LF-NC", "deadbeef")
+
+		store := &mockExitStore{}
+		state := exitState(t, "LF-NC", nil)
+		params := defaultExitParams(t, store)
+		params.SCMAdapter = &scmAdapterStubExit{}
+		params.LabelFixReactionConfigured = false
+
+		HandleWorkerExit(state, WorkerResult{
+			IssueID:       "LF-NC",
+			Identifier:    "LF-NC-ident",
+			ExitKind:      WorkerExitNormal,
+			AgentAdapter:  "mock",
+			WorkspacePath: wsPath,
+		}, params)
+
+		rkey := ReactionKey("LF-NC", ReactionKindLabelFix)
+		if _, ok := state.PendingReactions[rkey]; ok {
+			t.Error("PendingReactions[LF-NC:label-fix] present despite LabelFixReactionConfigured=false")
+		}
+	})
+
+	t.Run("not seeded when SCM adapter is nil", func(t *testing.T) {
+		t.Parallel()
+
+		wsPath := t.TempDir()
+		writePRSCMMetadata(t, wsPath, 20, "corp", "api", "feature/LF-nil", "deadbeef")
+
+		store := &mockExitStore{}
+		state := exitState(t, "LF-nil", nil)
+		params := defaultExitParams(t, store)
+		params.SCMAdapter = nil
+		params.LabelFixReactionConfigured = true
+
+		HandleWorkerExit(state, WorkerResult{
+			IssueID:       "LF-nil",
+			Identifier:    "LF-nil-ident",
+			ExitKind:      WorkerExitNormal,
+			AgentAdapter:  "mock",
+			WorkspacePath: wsPath,
+		}, params)
+
+		rkey := ReactionKey("LF-nil", ReactionKindLabelFix)
+		if _, ok := state.PendingReactions[rkey]; ok {
+			t.Error("PendingReactions[LF-nil:label-fix] present despite nil SCMAdapter")
+		}
+	})
+
+	t.Run("not seeded when branch is empty", func(t *testing.T) {
+		t.Parallel()
+
+		wsPath := t.TempDir()
+		dotSortie := filepath.Join(wsPath, ".sortie")
+		if err := os.MkdirAll(dotSortie, 0o750); err != nil {
+			t.Fatalf("MkdirAll .sortie: %v", err)
+		}
+		content := `{"pr_number":30,"owner":"corp","repo":"api"}`
+		if err := os.WriteFile(filepath.Join(dotSortie, "scm.json"), []byte(content), 0o600); err != nil {
+			t.Fatalf("WriteFile scm.json: %v", err)
+		}
+
+		store := &mockExitStore{}
+		state := exitState(t, "LF-NOBRANCH", nil)
+		params := defaultExitParams(t, store)
+		params.SCMAdapter = &scmAdapterStubExit{}
+		params.LabelFixReactionConfigured = true
+
+		HandleWorkerExit(state, WorkerResult{
+			IssueID:       "LF-NOBRANCH",
+			Identifier:    "LF-NOBRANCH-ident",
+			ExitKind:      WorkerExitNormal,
+			AgentAdapter:  "mock",
+			WorkspacePath: wsPath,
+		}, params)
+
+		rkey := ReactionKey("LF-NOBRANCH", ReactionKindLabelFix)
+		if _, ok := state.PendingReactions[rkey]; ok {
+			t.Error("PendingReactions[LF-NOBRANCH:label-fix] present despite an empty branch; want the branch-required guard to block seeding (unlike label-review)")
+		}
+	})
+
+	t.Run("not seeded when PR metadata is incomplete", func(t *testing.T) {
+		t.Parallel()
+
+		tests := []struct {
+			name    string
+			content string
+		}{
+			{name: "missing pr_number", content: `{"branch":"feature/x","owner":"corp","repo":"api"}`},
+			{name: "missing owner", content: `{"branch":"feature/x","pr_number":10,"repo":"api"}`},
+			{name: "missing repo", content: `{"branch":"feature/x","pr_number":10,"owner":"corp"}`},
+			{name: "empty scm file", content: `{}`},
+		}
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				t.Parallel()
+
+				wsPath := t.TempDir()
+				dotSortie := filepath.Join(wsPath, ".sortie")
+				if err := os.MkdirAll(dotSortie, 0o750); err != nil {
+					t.Fatalf("MkdirAll .sortie: %v", err)
+				}
+				if err := os.WriteFile(filepath.Join(dotSortie, "scm.json"), []byte(tt.content), 0o600); err != nil {
+					t.Fatalf("WriteFile scm.json: %v", err)
+				}
+
+				store := &mockExitStore{}
+				state := exitState(t, "LF-INC", nil)
+				params := defaultExitParams(t, store)
+				params.SCMAdapter = &scmAdapterStubExit{}
+				params.LabelFixReactionConfigured = true
+
+				HandleWorkerExit(state, WorkerResult{
+					IssueID:       "LF-INC",
+					Identifier:    "LF-INC-ident",
+					ExitKind:      WorkerExitNormal,
+					AgentAdapter:  "mock",
+					WorkspacePath: wsPath,
+				}, params)
+
+				rkey := ReactionKey("LF-INC", ReactionKindLabelFix)
+				if _, ok := state.PendingReactions[rkey]; ok {
+					t.Errorf("PendingReactions[LF-INC:label-fix] present despite incomplete SCM metadata (%s)", tt.name)
+				}
+			})
+		}
+	})
+}
+
+// --- label-fix exit tests ---
+
+// TestHandleWorkerExit_LabelFixExit_NoHandoff verifies that a normal exit
+// whose running entry carries ReactionKind==label-fix takes neither the
+// handoff path nor the active-issue continuation-retry path, even when
+// HandoffState is configured and the linked issue is still active: no
+// TransitionIssue call, no continuation retry, the claim is released, and
+// no label-fix entry is re-seeded even though the workspace carries full
+// branch-bearing PR metadata (repeatability comes from the reconcile
+// re-enqueue, not from a fix session's own exit).
+func TestHandleWorkerExit_LabelFixExit_NoHandoff(t *testing.T) {
+	t.Parallel()
+
+	wsPath := t.TempDir()
+	writePRSCMMetadata(t, wsPath, 5, "corp", "api", "feature/LF-RO-1", "c0ffee")
+
+	store := &mockExitStore{}
+	tracker := &mockTrackerAdapter{}
+	state := exitStateWithIssue(t, "LF-RO-1", "In Progress")
+	state.Running["LF-RO-1"].ReactionKind = ReactionKindLabelFix
+
+	params := defaultExitParams(t, store)
+	params.TrackerAdapter = tracker
+	params.HandoffState = "Human Review"
+	params.ActiveStates = []string{"In Progress"}
+	params.SCMAdapter = &scmAdapterStubExit{}
+	params.LabelFixReactionConfigured = true
+
+	HandleWorkerExit(state, WorkerResult{
+		IssueID:       "LF-RO-1",
+		Identifier:    "LF-RO-1-ident",
+		ExitKind:      WorkerExitNormal,
+		AgentAdapter:  "mock",
+		WorkspacePath: wsPath,
+	}, params)
+
+	if len(tracker.transitionCalls) != 0 {
+		t.Errorf("TransitionIssue calls = %d, want 0 (a fix exit performs no handoff)", len(tracker.transitionCalls))
+	}
+	if _, ok := state.RetryAttempts["LF-RO-1"]; ok {
+		t.Error("continuation retry scheduled for a fix exit; want none")
+	}
+	if _, claimed := state.Claimed["LF-RO-1"]; claimed {
+		t.Error("claim still held after a fix exit; want released")
+	}
+	rkey := ReactionKey("LF-RO-1", ReactionKindLabelFix)
+	if _, ok := state.PendingReactions[rkey]; ok {
+		t.Error("label-fix entry re-seeded by its own exit; want none (repeatability comes from the reconcile re-enqueue)")
+	}
+}
+
+// TestHandleWorkerExit_LabelFixExit_ErrorStillRetries is the contrast
+// case: an error exit whose running entry carries ReactionKind==label-fix
+// still schedules a retryable error-driven retry, confirming the
+// claim-release guard is scoped to normal exits only.
+func TestHandleWorkerExit_LabelFixExit_ErrorStillRetries(t *testing.T) {
+	t.Parallel()
+
+	store := &mockExitStore{}
+	state := exitState(t, "LF-RO-2", nil)
+	state.Running["LF-RO-2"].ReactionKind = ReactionKindLabelFix
+
+	params := defaultExitParams(t, store)
+
+	HandleWorkerExit(state, WorkerResult{
+		IssueID:      "LF-RO-2",
+		Identifier:   "LF-RO-2-ident",
+		ExitKind:     WorkerExitError,
+		Error:        errors.New("agent crashed"),
+		AgentAdapter: "mock",
+	}, params)
+
+	retry, ok := state.RetryAttempts["LF-RO-2"]
+	if !ok {
+		t.Fatal("retry not scheduled after a retryable error exit; want scheduled even for a label-fix entry")
+	}
+	if retry.ReactionKind != ReactionKindLabelFix {
+		t.Errorf("RetryEntry.ReactionKind = %q, want %q (propagated from the exiting entry)", retry.ReactionKind, ReactionKindLabelFix)
+	}
+}

@@ -374,6 +374,8 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 	var mergeConflictConfigured bool
 	var labelReviewConfig orchestrator.LabelReviewReactionConfig
 	var labelReviewConfigured bool
+	var labelFixConfig orchestrator.LabelFixReactionConfig
+	var labelFixConfigured bool
 
 	reviewRC, hasReview := br.cfg.Reactions["review_comments"]
 	autoMergeRC, hasAutoMerge := br.cfg.Reactions["auto_merge"]
@@ -386,13 +388,17 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 	// label_commands parses through its own dedicated field, never the
 	// Reactions map; it activates when a provider and a review label are set.
 	labelReviewActive := br.cfg.LabelCommands.Provider != "" && br.cfg.LabelCommands.ReviewLabel != ""
+	// The fix command activates independently when a provider and a fix
+	// label are set; a fix-only configuration is valid and still
+	// constructs the SCM adapter and joins the provider-conflict check.
+	labelFixActive := br.cfg.LabelCommands.Provider != "" && br.cfg.LabelCommands.FixLabel != ""
 
 	activeSCMKinds := []scmReactionKind{
 		{name: "review_comments", active: reviewActive, provider: reviewRC.Provider},
 		{name: "auto_merge", active: autoMergeActive, provider: autoMergeRC.Provider},
 		{name: "bot_review", active: botReviewActive, provider: botReviewRC.Provider},
 		{name: "merge_conflicts", active: mergeConflictActive, provider: mergeConflictRC.Provider},
-		{name: "label_commands", active: labelReviewActive, provider: br.cfg.LabelCommands.Provider},
+		{name: "label_commands", active: labelReviewActive || labelFixActive, provider: br.cfg.LabelCommands.Provider},
 	}
 	if conflictKinds, conflictProviders := scmProviderConflict(activeSCMKinds); len(conflictProviders) > 1 {
 		br.logger.Error("unsupported: active SCM reaction kinds must use the same provider",
@@ -402,7 +408,7 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 		return 1
 	}
 
-	if reviewActive || autoMergeActive || botReviewActive || mergeConflictActive || labelReviewActive {
+	if reviewActive || autoMergeActive || botReviewActive || mergeConflictActive || labelReviewActive || labelFixActive {
 		provider := cmp.Or(reviewRC.Provider, autoMergeRC.Provider, botReviewRC.Provider, mergeConflictRC.Provider, br.cfg.LabelCommands.Provider)
 		scmCtor, scmErr := registry.SCMAdapters.Get(provider)
 		if scmErr != nil {
@@ -531,6 +537,22 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 				slog.Int("poll_interval_ms", labelReviewConfig.PollIntervalMS),
 			)
 		}
+
+		if labelFixActive {
+			labelFixConfig = orchestrator.BuildLabelFixReactionConfig(br.cfg.LabelCommands)
+			labelFixConfigured = true
+
+			br.logger.Info("label fix reaction enabled",
+				slog.String("provider", br.cfg.LabelCommands.Provider),
+				slog.String("fix_label", br.cfg.LabelCommands.FixLabel),
+				slog.Int("poll_interval_ms", labelFixConfig.PollIntervalMS),
+			)
+
+			// Advisory only: the preflight logs a warning when the token
+			// lacks the content-write scope the fix session needs, but never
+			// gates detection or dispatch, so the result is discarded.
+			_, _, _ = orchestrator.RunLabelFixScopePreflight(ctx, scmAdapter, br.logger)
+		}
 	}
 
 	recoveryEnabled := br.cfg.Tracker.HandoffState != "" && (ciProvider != nil || scmAdapter != nil)
@@ -554,6 +576,7 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 				BotReviewReactionConfigured:     botReviewConfigured,
 				MergeConflictReactionConfigured: mergeConflictConfigured,
 				LabelReviewReactionConfigured:   labelReviewConfigured,
+				LabelFixReactionConfigured:      labelFixConfigured,
 				RecoveryLookback:                recoveryLookback,
 				MaxCandidates:                   orchestrator.PendingReactionRecoveryMaxCandidates,
 				NowFunc: func() time.Time {
@@ -574,6 +597,7 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 		slog.Int("bot_review_recovered", recoveryOutcome.BotReviewRecovered),
 		slog.Int("merge_conflict_recovered", recoveryOutcome.MergeConflictRecovered),
 		slog.Int("label_review_recovered", recoveryOutcome.LabelReviewRecovered),
+		slog.Int("label_fix_recovered", recoveryOutcome.LabelFixRecovered),
 		slog.Int("stale_skipped", recoveryOutcome.StaleSkipped),
 		slog.Int("skipped", recoveryOutcome.Skipped),
 	}
@@ -674,6 +698,8 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 		MergeConflictReactionConfigured: mergeConflictConfigured,
 		LabelReviewConfig:               labelReviewConfig,
 		LabelReviewReactionConfigured:   labelReviewConfigured,
+		LabelFixConfig:                  labelFixConfig,
+		LabelFixReactionConfigured:      labelFixConfigured,
 	})
 
 	var srv *server.Server

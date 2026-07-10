@@ -343,6 +343,13 @@ const ReactionKindMergeConflict = "merge-conflict"
 // asymmetry the sibling kinds document.
 const ReactionKindLabelReview = "label-review"
 
+// ReactionKindLabelFix is the reaction kind constant for the read-write
+// PR fix command triggered by the fix label. The user-facing YAML block
+// is reactions.label_commands; the short form lives here as the runtime
+// and persisted discriminator, matching the YAML-versus-runtime
+// asymmetry the sibling kinds document.
+const ReactionKindLabelFix = "label-fix"
+
 // AutoMergePreflightRetryDelay is the delay between the initial
 // auto-merge preflight failure (transport-class) and its single
 // scheduled retry. The retry runs at most once per orchestrator
@@ -351,7 +358,7 @@ const AutoMergePreflightRetryDelay time.Duration = 5 * time.Minute
 
 func isKnownReactionKind(kind string) bool {
 	switch kind {
-	case ReactionKindCI, ReactionKindReview, ReactionKindBotReview, ReactionKindAutoMerge, ReactionKindMergeConflict, ReactionKindLabelReview:
+	case ReactionKindCI, ReactionKindReview, ReactionKindBotReview, ReactionKindAutoMerge, ReactionKindMergeConflict, ReactionKindLabelReview, ReactionKindLabelFix:
 		return true
 	default:
 		return false
@@ -606,6 +613,20 @@ type LabelReviewReactionData struct {
 	LastActor string
 }
 
+// LabelFixReactionData holds the label-fix command's per-PR detection
+// state. Stored in [PendingReaction.KindData] for reactions with
+// Kind == [ReactionKindLabelFix]. PRNumber, Owner, Repo, and Branch are
+// sourced from [domain.SCMMetadata]; Branch is the PR head branch the
+// dispatched fix session checks out and pushes to.
+type LabelFixReactionData struct {
+	PRNumber      int
+	Owner         string
+	Repo          string
+	Branch        string // PR head branch to check out and push to
+	HighWaterMark string // opaque "<RFC3339-9-digit-UTC>|<id>" position; empty means unset
+	LastActor     string
+}
+
 // LabelReviewReactionConfig holds the validated label-review runtime
 // configuration resolved from [config.LabelCommandsConfig]. ReviewLabel is
 // the normalized label that triggers the command; empty disables the
@@ -614,6 +635,17 @@ type LabelReviewReactionData struct {
 type LabelReviewReactionConfig struct {
 	Provider       string
 	ReviewLabel    string
+	PollIntervalMS int
+}
+
+// LabelFixReactionConfig holds the validated label-fix runtime
+// configuration resolved from [config.LabelCommandsConfig]. FixLabel is
+// the normalized label that triggers the command; empty disables the fix
+// command even when the block is otherwise active. PollIntervalMS is the
+// detection poll interval, already clamped to the floor.
+type LabelFixReactionConfig struct {
+	Provider       string
+	FixLabel       string
 	PollIntervalMS int
 }
 
@@ -1262,6 +1294,19 @@ func BuildLabelReviewReactionConfig(cfg config.LabelCommandsConfig) LabelReviewR
 	return LabelReviewReactionConfig{
 		Provider:       cfg.Provider,
 		ReviewLabel:    cfg.ReviewLabel,
+		PollIntervalMS: cfg.PollIntervalMS,
+	}
+}
+
+// BuildLabelFixReactionConfig copies the validated label-fix runtime
+// configuration out of the parsed label_commands block. Like
+// BuildLabelReviewReactionConfig it returns no error: the input is
+// already fully validated and defaulted by config parsing, so there is
+// nothing left to validate here.
+func BuildLabelFixReactionConfig(cfg config.LabelCommandsConfig) LabelFixReactionConfig {
+	return LabelFixReactionConfig{
+		Provider:       cfg.Provider,
+		FixLabel:       cfg.FixLabel,
 		PollIntervalMS: cfg.PollIntervalMS,
 	}
 }

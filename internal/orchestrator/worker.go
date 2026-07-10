@@ -159,6 +159,61 @@ type WorkerResult struct {
 // [WorkerDeps.ToolRegistry].
 type SessionToolRegistryFunc func(ctx context.Context, issueID, workspacePath, sessionID string) (*domain.ToolRegistry, error)
 
+// DispatchPosture selects the worker behavior for a dispatch. Exactly
+// one posture applies per dispatch; the type makes the invariant
+// representable and eliminates invalid flag combinations.
+type DispatchPosture int
+
+const (
+	// PostureNormal is the default work dispatch: full clone via the
+	// operator hooks, and it drives the linked issue's state.
+	PostureNormal DispatchPosture = iota
+
+	// PostureReview is the read-only, no-clone review dispatch
+	// (label-review): a scratch workspace, no operator hooks, no
+	// issue-work side effects, a fresh session.
+	PostureReview
+
+	// PostureFix is the read-write fix dispatch (label-fix): a full
+	// clone via the operator hooks so the agent can check out the PR
+	// head branch and push, a fresh session, and every issue-work side
+	// effect suppressed.
+	PostureFix
+)
+
+// RunsSetupHooks reports whether the posture runs the operator
+// after_create/before_run setup hooks and the after_run teardown hook.
+// True for PostureNormal and PostureFix; false for PostureReview.
+func (p DispatchPosture) RunsSetupHooks() bool {
+	return p == PostureNormal || p == PostureFix
+}
+
+// DrivesIssueState reports whether the posture claims and drives the
+// linked issue's tracker state (in-progress transition, dispatch
+// comment, per-turn state refresh and termination gate, self-review,
+// exit-path handoff, and continuation retry). True only for
+// PostureNormal.
+func (p DispatchPosture) DrivesIssueState() bool {
+	return p == PostureNormal
+}
+
+// dispatchPostureForReactionKind maps a dispatch reaction kind to its
+// worker posture. Label-command kinds select non-normal postures; every
+// other kind (including the empty string for an initial dispatch)
+// selects PostureNormal. It is the single source of truth for posture
+// selection, shared by the dispatch builder and the exit handler so the
+// two never disagree.
+func dispatchPostureForReactionKind(kind string) DispatchPosture {
+	switch kind {
+	case ReactionKindLabelReview:
+		return PostureReview
+	case ReactionKindLabelFix:
+		return PostureFix
+	default:
+		return PostureNormal
+	}
+}
+
 // WorkerDeps holds the collaborators injected into the worker attempt
 // function. The orchestrator constructs this once and shares it
 // across all workers. All fields are required unless documented as
@@ -253,14 +308,17 @@ type WorkerDeps struct {
 	// reaction-triggered continuation dispatches.
 	ContinuationContext map[string]any
 
-	// ReadOnly routes the no-clone, read-only worker path: a scratch
-	// workspace obtained via [workspace.Ensure] with no operator
-	// after_create/before_run/after_run hooks, no issue-work side effects
-	// (no in-progress transition, no dispatch comment, no per-turn tracker
-	// refresh, no self-review loop), and a fresh session. Derived from
-	// ReactionKind == ReactionKindLabelReview by the caller that constructs
-	// WorkerDeps.
-	ReadOnly bool
+	// Posture selects the worker behavior for this dispatch. PostureNormal
+	// runs the operator hooks and drives the linked issue's state;
+	// PostureReview runs no hooks and suppresses every issue-work side
+	// effect on a fresh session; PostureFix runs the hooks so the agent
+	// can clone, check out the PR head branch, and push, but suppresses
+	// every issue-work side effect on a fresh session. The predicate
+	// methods [DispatchPosture.RunsSetupHooks] and
+	// [DispatchPosture.DrivesIssueState] gate the worker guards. The caller
+	// derives the posture from the dispatch reaction kind via
+	// [dispatchPostureForReactionKind].
+	Posture DispatchPosture
 
 	// OnProgress relays self-review progress to the orchestrator's event
 	// loop. Called from the worker goroutine; must be safe for concurrent
@@ -385,9 +443,10 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 
 	// Dispatch-time in-progress transition: move the issue to the
 	// configured in-progress tracker state before workspace prep.
-	// Failure is non-fatal — the worker continues regardless. A read-only
-	// review changes no issue state, so it is suppressed there.
-	if cfg.Tracker.InProgressState != "" && !deps.ReadOnly {
+	// Failure is non-fatal — the worker continues regardless. A dispatch
+	// that does not drive issue state changes no issue state, so it is
+	// suppressed there.
+	if cfg.Tracker.InProgressState != "" && deps.Posture.DrivesIssueState() {
 		if strings.EqualFold(issue.State, cfg.Tracker.InProgressState) {
 			logger.Debug("skipped in-progress transition, issue already in target state",
 				slog.String("issue_state", issue.State),
@@ -413,9 +472,10 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 
 	// Dispatch comment: post a tracker comment acknowledging claim.
 	// Fires after in-progress transition, before workspace preparation.
-	// Failure is non-fatal — the worker continues regardless. A read-only
-	// review is not a work claim, so it posts no dispatch comment.
-	if cfg.Tracker.Comments.OnDispatch && !deps.ReadOnly {
+	// Failure is non-fatal — the worker continues regardless. A dispatch
+	// that does not drive issue state is not a work claim, so it posts no
+	// dispatch comment.
+	if cfg.Tracker.Comments.OnDispatch && deps.Posture.DrivesIssueState() {
 		text := buildDispatchComment(agentKind, attemptInt)
 		if err := deps.TrackerAdapter.CommentIssue(ctx, issue.ID, text); err != nil {
 			logger.Warn("dispatch comment failed", slog.Any("error", err))
@@ -454,9 +514,9 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 			if sessionStarted {
 				stopSessionBestEffort(ctx, deps.AgentAdapter, session, cfg, logger)
 			}
-			// A read-only review ran no operator setup hook, so no operator
-			// teardown hook runs on its scratch workspace, even on panic.
-			if workspacePath != "" && !deps.ReadOnly {
+			// A dispatch that runs no operator setup hook has no operator
+			// teardown hook to run on its scratch workspace, even on panic.
+			if workspacePath != "" && deps.Posture.RunsSetupHooks() {
 				workspace.Finish(ctx, workspace.FinishParams{
 					Path:          workspacePath,
 					Identifier:    issue.Identifier,
@@ -485,13 +545,13 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 		}
 	}()
 
-	// Prepare the workspace directory. A read-only dispatch obtains a
-	// scratch directory via workspace.Ensure and runs no operator
-	// after_create/before_run hooks (no clone, no build); a normal dispatch
-	// runs the full lifecycle.
+	// Prepare the workspace directory. A dispatch that runs no setup hooks
+	// obtains a scratch directory via workspace.Ensure and runs no operator
+	// after_create/before_run hooks (no clone, no build); a hook-running
+	// dispatch runs the full lifecycle.
 	var wsResult workspace.PrepareResult
 	var err error
-	if deps.ReadOnly {
+	if !deps.Posture.RunsSetupHooks() {
 		// workspace.Ensure does not inspect the context, so honor an
 		// already-cancelled dispatch here before any filesystem work,
 		// matching the normal path's workspace.Prepare early return.
@@ -555,9 +615,9 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 	// finishWorkspace runs the after_run hook best-effort on every exit
 	// path after successful workspace preparation.
 	finishWorkspace := func() {
-		// A read-only review ran no operator setup hook, so no operator
-		// teardown hook runs on its scratch workspace.
-		if deps.ReadOnly {
+		// A dispatch that runs no operator setup hook has no operator
+		// teardown hook to run on its scratch workspace.
+		if !deps.Posture.RunsSetupHooks() {
 			return
 		}
 		workspace.Finish(ctx, workspace.FinishParams{
@@ -905,11 +965,11 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 			return
 		}
 
-		// A read-only review changes no issue state, so it skips the
-		// per-turn tracker refresh and its active-state termination gate;
-		// the loop then rests solely on max_turns or the agent's own
-		// .sortie/status self-signal.
-		if !deps.ReadOnly {
+		// A dispatch that does not drive issue state skips the per-turn
+		// tracker refresh and its active-state termination gate; the loop
+		// then rests solely on max_turns or the agent's own .sortie/status
+		// self-signal.
+		if deps.Posture.DrivesIssueState() {
 			// Refresh the tracker state to detect external transitions.
 			refreshed, err := deps.TrackerAdapter.FetchIssueStatesByIDs(ctx, []string{issue.ID})
 			if err != nil {
@@ -954,7 +1014,7 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 	reviewCfg := deps.ConfigFunc()
 	var reviewMeta *domain.ReviewMetadata
 
-	if reviewCfg.SelfReview.Enabled && isActiveState(issue.State, activeStates) && ctx.Err() == nil && !deps.ReadOnly {
+	if reviewCfg.SelfReview.Enabled && isActiveState(issue.State, activeStates) && ctx.Err() == nil && deps.Posture.DrivesIssueState() {
 		reviewMeta = runSelfReviewLoop(ctx, RunSelfReviewParams{
 			Session:        session,
 			Issue:          issue,
@@ -991,7 +1051,7 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 	}
 
 	stopSessionBestEffort(ctx, deps.AgentAdapter, session, cfg, logger)
-	if !deps.ReadOnly {
+	if deps.Posture.RunsSetupHooks() {
 		workspace.Finish(ctx, workspace.FinishParams{
 			Path:                  wsResult.Path,
 			Identifier:            issue.Identifier,

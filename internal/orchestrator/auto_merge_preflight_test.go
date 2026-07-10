@@ -384,6 +384,202 @@ func TestRunAutoMergePreflightRetry_Success(t *testing.T) {
 	}
 }
 
+// --- RunLabelFixScopePreflight tests ---
+
+// TestRunLabelFixScopePreflight_MissingScopeLogsWarnNotError verifies that a
+// missing required scope logs a WARN, never an ERROR, because the fix
+// command is default-on and a review-only deployment must not see a startup
+// ERROR for a feature it did not intend to use (A10). This is the deliberate
+// divergence from RunAutoMergePreflight, which logs the same condition at
+// ERROR because auto-merge is opt-in.
+func TestRunLabelFixScopePreflight_MissingScopeLogsWarnNotError(t *testing.T) {
+	t.Parallel()
+
+	log, buf := logCapture()
+	adapter := &preflightSCMStub{
+		preflightVerifierStub: preflightVerifierStub{
+			granted: []string{"contents:write"},
+			missing: []string{"pull_requests:write"},
+		},
+	}
+
+	passed, missing, err := RunLabelFixScopePreflight(context.Background(), adapter, log)
+
+	if passed {
+		t.Error("RunLabelFixScopePreflight passed = true on missing scope; want false")
+	}
+	if len(missing) == 0 {
+		t.Fatal("RunLabelFixScopePreflight missing is empty; want [pull_requests:write]")
+	}
+	if missing[0] != "pull_requests:write" {
+		t.Errorf("RunLabelFixScopePreflight missing[0] = %q, want %q", missing[0], "pull_requests:write")
+	}
+	if err != nil {
+		t.Errorf("RunLabelFixScopePreflight err = %v; want nil on auth-class failure", err)
+	}
+
+	output := buf.String()
+	if !strings.Contains(output, "level=WARN") {
+		t.Errorf("expected WARN log on missing scope, got: %s", output)
+	}
+	if strings.Contains(output, "level=ERROR") {
+		t.Errorf("unexpected ERROR log on missing scope; want WARN only (fix command is default-on): %s", output)
+	}
+	if !strings.Contains(output, "pull_requests:write") {
+		t.Errorf("expected missing scope name in log, got: %s", output)
+	}
+	if !strings.Contains(output, "contents:write") {
+		t.Errorf("expected required_scopes to include contents:write (VerifyAutoMergeScopes called with requireContents=true), got: %s", output)
+	}
+}
+
+// TestRunLabelFixScopePreflight_AdapterWithoutVerifierFailsOpen verifies
+// that an adapter not implementing AutoMergeScopeVerifier fails open with a
+// WARN log and no ERROR (A10).
+func TestRunLabelFixScopePreflight_AdapterWithoutVerifierFailsOpen(t *testing.T) {
+	t.Parallel()
+
+	log, buf := logCapture()
+	adapter := &noVerifierSCMStub{}
+
+	passed, missing, err := RunLabelFixScopePreflight(context.Background(), adapter, log)
+
+	if !passed {
+		t.Error("RunLabelFixScopePreflight passed = false for non-verifier adapter; want true (fail open)")
+	}
+	if len(missing) != 0 {
+		t.Errorf("RunLabelFixScopePreflight missing = %v, want nil for non-verifier adapter", missing)
+	}
+	if err != nil {
+		t.Errorf("RunLabelFixScopePreflight err = %v, want nil for non-verifier adapter", err)
+	}
+
+	output := buf.String()
+	if !strings.Contains(output, "level=WARN") {
+		t.Errorf("expected WARN log for non-verifier adapter, got: %s", output)
+	}
+	if !strings.Contains(output, "preflight skipped") {
+		t.Errorf("expected 'preflight skipped' log, got: %s", output)
+	}
+	if strings.Contains(output, "level=ERROR") {
+		t.Errorf("unexpected ERROR log for non-verifier adapter; want WARN only: %s", output)
+	}
+}
+
+// TestRunLabelFixScopePreflight_NoScopeInformationFailsOpen verifies that a
+// provider returning no scope information (fine-grained PAT or GitHub App
+// installation token) fails open with a WARN log (A10).
+func TestRunLabelFixScopePreflight_NoScopeInformationFailsOpen(t *testing.T) {
+	t.Parallel()
+
+	log, buf := logCapture()
+	adapter := &preflightSCMStub{
+		preflightVerifierStub: preflightVerifierStub{
+			granted: nil,
+			missing: nil,
+		},
+	}
+
+	passed, missing, err := RunLabelFixScopePreflight(context.Background(), adapter, log)
+
+	if !passed {
+		t.Error("RunLabelFixScopePreflight passed = false when scopes are unverifiable; want true (fail open)")
+	}
+	if len(missing) != 0 {
+		t.Errorf("RunLabelFixScopePreflight missing = %v, want nil when scopes are unverifiable", missing)
+	}
+	if err != nil {
+		t.Errorf("RunLabelFixScopePreflight err = %v, want nil when scopes are unverifiable", err)
+	}
+
+	output := buf.String()
+	if !strings.Contains(output, "level=WARN") {
+		t.Errorf("expected WARN log when scopes are unverifiable, got: %s", output)
+	}
+	if !strings.Contains(output, "scope verification skipped") {
+		t.Errorf("expected 'scope verification skipped' in log, got: %s", output)
+	}
+	if strings.Contains(output, "level=ERROR") {
+		t.Errorf("unexpected ERROR log when failing open; want WARN only: %s", output)
+	}
+}
+
+// TestRunLabelFixScopePreflight_TransportFailureLogsWarn verifies that a
+// transport-class error logs a WARN and returns (false, nil, err); the
+// caller discards the result rather than scheduling a retry (A10).
+func TestRunLabelFixScopePreflight_TransportFailureLogsWarn(t *testing.T) {
+	t.Parallel()
+
+	log, buf := logCapture()
+	transportErr := &domain.SCMError{Kind: domain.ErrSCMTransport, Message: "dial timeout"}
+	adapter := &preflightSCMStub{
+		preflightVerifierStub: preflightVerifierStub{err: transportErr},
+	}
+
+	passed, missing, err := RunLabelFixScopePreflight(context.Background(), adapter, log)
+
+	if passed {
+		t.Error("RunLabelFixScopePreflight passed = true on transport error; want false")
+	}
+	if len(missing) != 0 {
+		t.Errorf("RunLabelFixScopePreflight missing = %v, want nil on transport error", missing)
+	}
+	if err == nil {
+		t.Error("RunLabelFixScopePreflight err = nil; want transport error")
+	}
+
+	output := buf.String()
+	if !strings.Contains(output, "level=WARN") {
+		t.Errorf("expected WARN log on transport failure, got: %s", output)
+	}
+	if !strings.Contains(output, "label-fix scope preflight transport failure") {
+		t.Errorf("expected 'label-fix scope preflight transport failure' log, got: %s", output)
+	}
+	if strings.Contains(output, "level=ERROR") {
+		t.Errorf("unexpected ERROR log on transport failure; want WARN only: %s", output)
+	}
+}
+
+// TestRunLabelFixScopePreflight_PassesWithSufficientScope verifies that a
+// token with sufficient scope passes and logs INFO, never WARN or ERROR.
+func TestRunLabelFixScopePreflight_PassesWithSufficientScope(t *testing.T) {
+	t.Parallel()
+
+	log, buf := logCapture()
+	adapter := &preflightSCMStub{
+		preflightVerifierStub: preflightVerifierStub{
+			granted: []string{"repo"},
+			missing: nil,
+		},
+	}
+
+	passed, missing, err := RunLabelFixScopePreflight(context.Background(), adapter, log)
+
+	if !passed {
+		t.Error("RunLabelFixScopePreflight passed = false on sufficient scope; want true")
+	}
+	if len(missing) != 0 {
+		t.Errorf("RunLabelFixScopePreflight missing = %v, want nil on success", missing)
+	}
+	if err != nil {
+		t.Errorf("RunLabelFixScopePreflight err = %v, want nil", err)
+	}
+
+	output := buf.String()
+	if !strings.Contains(output, "level=INFO") {
+		t.Errorf("expected INFO log on preflight pass, got: %s", output)
+	}
+	if !strings.Contains(output, "label-fix scope preflight passed") {
+		t.Errorf("expected 'label-fix scope preflight passed' message, got: %s", output)
+	}
+	if strings.Contains(output, "level=ERROR") {
+		t.Errorf("unexpected ERROR log on preflight pass: %s", output)
+	}
+	if strings.Contains(output, "level=WARN") {
+		t.Errorf("unexpected WARN log on preflight pass: %s", output)
+	}
+}
+
 // --- IsAutoMergePreflightTransportClass tests ---
 
 // TestIsAutoMergePreflightTransportClass verifies the transport-class predicate.

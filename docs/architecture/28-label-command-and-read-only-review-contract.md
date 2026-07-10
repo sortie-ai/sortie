@@ -1,15 +1,16 @@
-## 11F. PR Label Command and Read-Only Review Contract
+## 11F. PR Label Command Contract
 
 Every reaction kind in §11A through §11E observes a durable condition: a CI conclusion, a
 review-comment set, a mergeability state. The reconcile loop re-reads that condition on each tick
 and deduplicates it against a persisted fingerprint, so a missed tick loses nothing because the
-fact remains re-readable. This section defines two mechanisms that together let an operator command
-work on a Sortie-managed pull request by applying a label, a discrete human gesture rather than a
-durable condition. The first is a journal-polling detection substrate that turns each labeling
-gesture into an at-most-once dispatch. The second is a no-clone, read-only dispatch posture that
-reviews a PR without a checkout. ADR-0015 records the decision to detect label commands by polling
-the journal; this section specifies both the detection substrate and the read-only dispatch posture
-it drives.
+fact remains re-readable. This section defines three mechanisms that together let an operator
+command work on a Sortie-managed pull request by applying a label, a discrete human gesture rather
+than a durable condition. The first is a journal-polling detection substrate that turns each
+labeling gesture into an at-most-once dispatch. The second is a no-clone, read-only dispatch posture
+that reviews a PR without a checkout. The third is a read-write, clone-and-checkout dispatch posture
+that pushes review-feedback fixes to the PR branch. ADR-0015 records the decision to detect label
+commands by polling the journal; this section specifies the detection substrate and both dispatch
+postures it drives.
 
 The command surface is a label because the platform grants labels a permission gate that comments
 lack (on GitHub, applying a label requires the triage role), and because Sortie's SCM and tracker
@@ -22,13 +23,16 @@ command over the same substrate and configuration surface (ADR-0015); its runtim
 
 Three names denote three distinct concepts and MUST NOT be conflated: `label_commands` is the
 `WORKFLOW.md` configuration block; `label-review` (hyphen) is the runtime and persisted
-reaction-kind discriminator; `label_review` (underscore) is the prompt continuation key. This is the
-same YAML-versus-runtime asymmetry §11C.4 and §11E document for auto-merge and merge-conflict.
+reaction-kind discriminator; `label_review` (underscore) is the prompt continuation key. The fix
+command reuses the same configuration block with a second triple: `label-fix` (hyphen) is its
+runtime and persisted reaction-kind discriminator, and `label_fix` (underscore) is its prompt
+continuation key. This is the same YAML-versus-runtime asymmetry §11C.4 and §11E document for
+auto-merge and merge-conflict.
 
-The label-review reaction coexists with every other reaction kind on the same PR without
-interference. It owns a distinct `pending_reactions` entry and `reaction_fingerprints` row, because
-every key is composed via `ReactionKey(issue_id, kind)` and the fingerprint table primary key is
-`(issue_id, kind)`.
+The label-review and label-fix reactions coexist with every other reaction kind, and with each
+other, on the same PR without interference. Each owns a distinct `pending_reactions` entry and
+`reaction_fingerprints` row, because every key is composed via `ReactionKey(issue_id, kind)` and the
+fingerprint table primary key is `(issue_id, kind)`.
 
 ### 11F.1 SCMAdapter interface widening
 
@@ -177,6 +181,15 @@ Cross-kind isolation: the pass MUST scope every `pending_reactions` and `reactio
 mutation to `kind = "label-review"`. It MUST NOT read or write any other kind's entry, fingerprint,
 or counter, matching the isolation invariant §11C and §11E state for auto-merge and merge-conflict.
 
+A second reconcile pass, for `label-fix`, runs immediately after the label-review pass on every
+tick. It is structurally identical to the loop above: it is skipped when no `SCMAdapter` is
+constructed or the label-fix feature is not configured, it matches on `fix_label` in place of
+`review_label`, and it scopes every `pending_reactions` and `reaction_fingerprints` mutation to
+`kind = "label-fix"`, never reading or writing the label-review entry, fingerprint, or counter. On a
+confirmed command it schedules the read-write fix dispatch posture (§11F.13) instead of the
+read-only review posture. Ordering between the two passes does not affect correctness because each
+is fully cross-kind isolated.
+
 ### 11F.5 Deduplication storage
 
 The reaction reuses the `reaction_fingerprints` table (§19.2) with the kind discriminator
@@ -250,7 +263,7 @@ only the PR coordinates, through the prompt continuation key (§11F.7).
 
 A fix command is the read-write counterpart of this posture: it pushes review-feedback changes to
 the PR branch and therefore needs a checkout and the content-write scope (ADR-0015). It is not a
-read-only dispatch.
+read-only dispatch; §11F.13 specifies its dispatch posture.
 
 ### 11F.7 Prompt continuation key
 
@@ -283,6 +296,37 @@ silent: the reconcile emits an informational log at each dispatch recording the 
 acting user, and the workflow loader SHOULD emit a warning when `label_commands` is active with a
 non-empty review label but the resolved template text does not reference the `label_review` key.
 
+The key `label_fix` follows the same registration rule for the fix command. Its value mirrors
+`label_review` and adds the PR head branch the fix session checks out and pushes to:
+
+```text
+label_fix (map or nil):
+  pr_number:    int      # PR to fix
+  owner:        string   # repository owner
+  repo:         string   # repository name
+  branch:       string   # PR head branch to check out and push to
+  actor:        string   # login that applied the fix label
+  requested_at: string   # RFC3339 timestamp of the confirmed labeling gesture
+```
+
+The orchestrator injects only these coordinates, never the diff, the review comments, or the
+checked-out tree. The agent checks out `label_fix.branch`, addresses the review comments, pushes
+fixes to that branch, and posts a summary comment only when the operator's prompt template contains
+a `{{ if .label_fix }}` branch instructing it to do so.
+
+The missing-branch case is not a structural no-op for fix, unlike for review. A misfired review
+dispatch runs against a scratch directory with no checkout and structurally posts and pushes nothing
+(§11F.6). A misfired fix dispatch runs the normal `workspace.Prepare` clone path (§11F.13) and
+carries the content-write scope, so it runs the normal work prompt against a real checkout with push
+capability; whether it pushes then depends on the operator's normal prompt and the agent's behavior
+against an under-review issue, and cannot be asserted to be a no-op. Because of this stronger
+residual risk, the workflow loader MUST (not SHOULD) emit a warning when `label_commands` is active
+with a non-empty fix label but the resolved template text does not reference the `label_fix` key.
+This scan stays advisory: it is a warning, not a configuration error and not an activation gate,
+because a text scan over template source is a heuristic that can false-negative a correctly
+configured template. The reconcile's informational dispatch log applies to the fix command exactly
+as it does to review.
+
 ### 11F.8 Configuration and activation
 
 Activation is a single block in the `reactions` family of `WORKFLOW.md` front matter:
@@ -301,7 +345,11 @@ The block diverges from the common per-kind reaction schema (§5.3.9): it carrie
 loop). It parses through a dedicated path and never appears as an entry in the generic reactions map.
 
 - Activation is by `provider`, never by an `enabled` flag. The block absent or `provider` empty
-  means the feature is off and no journal read ever happens.
+  means the feature is off and no journal read ever happens for either command. Activation
+  considers `fix_label` exactly as it considers `review_label`: a fix-only configuration
+  (`review_label` empty, `fix_label` non-empty) activates the block and constructs the SCM adapter
+  exactly as a review-only configuration does; the two commands share one activation gate and one
+  adapter.
 - `review_label` and `fix_label` default to namespaced names (the `sortie:` prefix) to stay clear of
   team label vocabularies, and each is individually disableable by setting it to the empty string.
   Setting `provider` while both labels are empty is a configuration validation error, a loud
@@ -326,19 +374,28 @@ no checkout). The seeded entry carries the dispatch-frozen agent kind, rule name
 copied from the exiting run, so the later read-only session resolves the same adapter and template; a
 "create only if absent" guard preserves in-progress detection state across re-exits.
 
-This seeding never fires on a read-only review session's own exit, and not because the metadata is
-absent: the read-only session reuses the per-issue workspace directory, which may still hold the
+A pending `label-fix` entry is seeded the same way, on normal worker exit, when the SCM adapter is
+configured and the fix feature is active, but its predicate adds the branch guard the review
+predicate omits: the workspace SCM metadata must additionally report a non-empty head branch. A fix
+session checks out that branch, so a PR record without one has nothing to check out and seeds no fix
+entry. The seeded entry carries the branch alongside the PR number, owner, and repo, and the same
+frozen agent kind, rule name, and template id the review seed carries.
+
+Neither seeding block fires on the command session's own exit, and not because the metadata is
+absent: both sessions reuse the per-issue workspace directory, which may still hold the
 `.sortie/scm.json` a prior full session wrote. The operative gate is the reaction-enqueue
 predicate shared by every seeding block: the issue must have been claimed at exit and the exit must
-either take the handoff path or leave the claim held. A read-only exit is excluded from the handoff
-path and always releases the claim, so the predicate is never satisfied and no seeding block reads
-the workspace metadata at all. Repeatability after a completed review is carried instead by the
-reconcile re-enqueue on dispatch (§11F.4).
+either take the handoff path or leave the claim held. A read-only review exit and a fix exit
+(§11F.13) are both excluded from the handoff path and always release the claim, so the predicate is
+never satisfied and no seeding block reads the workspace metadata at all on either exit.
+Repeatability after a completed review or fix is carried instead by the reconcile re-enqueue on
+dispatch (§11F.4).
 
 Startup recovery re-seeds a `label-review` entry for each recovered active-issue run with the same PR
-metadata, again omitting the branch guard, so a label applied while Sortie was down is detected on
-the first tick after restart (the journal is durable). The persisted mark is read back from
-`reaction_fingerprints`, so recovery does not reset deduplication state.
+metadata, again omitting the branch guard, and re-seeds a `label-fix` entry under the same branch
+guard seeding uses, so a label applied while Sortie was down is detected on the first tick after
+restart (the journal is durable) for either command. The persisted mark is read back from
+`reaction_fingerprints` for each kind, so recovery does not reset deduplication state.
 
 When the linked issue reaches a terminal state the reaction state is cleared with the rest of the
 issue's reactions by the issue-wide reaction cleanup, which removes the pending entry and the
@@ -371,6 +428,9 @@ budget machinery.
 | `poll_interval_ms` below the floor | Warn at load | Clamped to 30000; the run continues. |
 | Crash between persisting the mark and scheduling | Startup logs | The command is lost, not duplicated (§11F.3); the operator re-applies the label. |
 | Review feature active but the template lacks the `{{ if .label_review }}` branch | Info dispatch log always present; advisory Warn at prompt load | The session posts no review; the operator adds the documented branch. No orchestrator-side posting fallback exists. |
+| The fix session cannot check out the PR head branch, apply the review feedback, or push | Agent event stream, normal turn-failure logging | The turn fails through the normal agent machinery; no orchestrator-side push exists to fail. The operator re-applies the label to retry. |
+| The content-write scope preflight finds a missing scope at startup | Warn naming the missing scope (not Error; the fix command is default-on) | Advisory only; detection and dispatch proceed. The gap surfaces later as the fix session's push failure (above) and as a `RemoveLabel` warning (above). |
+| Fix feature active but the template lacks the `{{ if .label_fix }}` branch | Info dispatch log always present; advisory Warn at prompt load (MUST, stronger than the SHOULD for `label_review`) | The session runs the normal work prompt against a real checkout with push capability, so the outcome cannot be asserted to push nothing. The operator adds the documented template branch. No orchestrator-side fix fallback exists. |
 
 ### 11F.12 State machine
 
@@ -387,3 +447,73 @@ Per-issue `label-review` reaction lifecycle (the `issue_id:label-review` slot):
 | pending | Reconcile tick, confirmed command, none queued or running | dispatched | Advance the mark; schedule the read-only dispatch; remove the label best-effort; re-enqueue at the poll interval. |
 | pending | Reconcile tick, confirmed command, a `label-review` command already queued or running | pending | Advance the mark; re-enqueue; the gesture collapses into the outstanding command. |
 | pending | Issue reaches terminal state (tracker reconcile) | (cleared) | Issue-wide reaction cleanup removes the slot and the fingerprint row. |
+
+Per-issue `label-fix` reaction lifecycle (the `issue_id:label-fix` slot) follows the same three
+states, differing only in the seeding and recovery guard and in which dispatch the confirmed-command
+transition schedules:
+
+| From | Event | To | Action |
+|------|-------|----|--------|
+| (none) | Normal worker exit passing the reaction-enqueue gate (§11F.9), SCM adapter and label-fix configured, PR metadata present with a non-empty head branch | pending | Seed the entry if absent (frozen agent kind, rule, template, and branch). |
+| (none) | Startup recovery, recovered active run with PR metadata carrying a non-empty head branch | pending | Re-seed the entry if absent; read the mark back from SQLite. |
+| pending | Reconcile tick, `now < PendingRetryAt` | pending | Re-enqueue, no journal read. |
+| pending | Reconcile tick, journal fetch error | pending | Increment backoff, set `PendingRetryAt`, re-enqueue. |
+| pending | Reconcile tick, no events past the mark | pending | Re-enqueue at the poll interval; mark unchanged. |
+| pending | Reconcile tick, new events but no confirmed command (retraction, foreign or unlabeled only, or collapse into an outstanding command) | pending | Advance the mark; re-enqueue at the poll interval; no dispatch. |
+| pending | Reconcile tick, confirmed command, none queued or running | dispatched | Advance the mark; schedule the fix dispatch (§11F.13); remove the label best-effort; re-enqueue at the poll interval. |
+| pending | Reconcile tick, confirmed command, a `label-fix` command already queued or running | pending | Advance the mark; re-enqueue; the gesture collapses into the outstanding command. |
+| pending | Issue reaches terminal state (tracker reconcile) | (cleared) | Issue-wide reaction cleanup removes the slot and the fingerprint row. |
+
+A PR record whose head branch is empty seeds and recovers no `label-fix` entry at all: the slot
+stays absent rather than entering `pending`, because a fix session with nothing to check out is
+never scheduled.
+
+### 11F.13 Read-write, clone-and-checkout fix dispatch
+
+A confirmed fix command dispatches a fresh agent session that checks out the PR head branch and
+pushes review-feedback fixes to it. Unlike the review posture (§11F.6), the fix session pushes
+commits, so it needs the same real per-issue workspace and operator hooks a normal dispatch uses:
+
+- **Full workspace, hooks run.** The session takes the same `workspace.Prepare` path a normal
+  dispatch takes: the operator `after_create` and `before_run` setup hooks run, cloning the
+  per-issue directory when it is absent and reusing the existing checkout when it is present. The
+  `after_run` teardown hook runs on every exit path, including panic recovery, because the setup
+  hooks ran. Sortie never checks out a branch itself; the agent checks out the PR head branch with
+  its own git tooling, told the branch through the `label_fix` continuation key (§11F.7, the
+  `branch` field). A stale `.sortie/status` from a prior session in the reused directory is cleared
+  before the first turn, exactly as for a normal dispatch.
+- **Fresh session.** The session starts with no resume identifier. It is a new session, not a
+  continuation of a live one.
+- **Single selecting flag.** The posture is selected by the same worker flag §11F.6 describes,
+  derived from the dispatch reaction kind. A `label-fix` dispatch runs this read-write path; every
+  other dispatch is unchanged.
+
+The fix path suppresses every issue-work side effect a normal dispatch performs, because the linked
+issue of a PR under review is typically not in an active work state and the fix session must not
+re-drive it:
+
+- the dispatch-time transition of the linked issue to the in-progress tracker state;
+- the dispatch comment on the linked issue;
+- the per-turn tracker-state refresh, and with it the issue-state termination gate that would
+  otherwise end the turn loop as soon as the linked issue leaves an active state;
+- the self-review loop;
+- the worker-exit handoff transition and the active-issue continuation retry, so a clean fix exit
+  neither hands off nor re-dispatches; repeatability after a completed fix comes instead from the
+  reconcile re-enqueue (§11F.4).
+
+Because the fix turn loop is not gated on issue state, its turn budget rests on the existing
+`agent.max_turns` ceiling plus the agent's own completion signal (the `.sortie/status` control-plane
+file, §21). A fix is naturally multi-turn (fetch the comments, apply changes, push, post the
+summary), so the completion signal matters more here than for review: without it a completed fix
+session runs to `agent.max_turns` and wastes turns.
+
+Credentials reach the fix agent the same way they reach a normal dispatch: through the
+orchestrator's process environment (§10.7) and through any checkout-scoped credential the operator
+setup hooks provision during `after_create`. Because the fix session runs those hooks, it has
+strictly more credential paths available than the read-only review, not fewer.
+
+The fix agent fetches the review comments, applies changes, pushes commits, and posts the summary
+comment through its own SCM tooling and credentials, consistent with Sortie's scheduler-and-reader
+boundary: the orchestrator adds no comment-fetch, push, or comment-post method to `SCMAdapter` and
+performs none of that work itself. It injects only the PR coordinates and the head branch, through
+the prompt continuation key (§11F.7).

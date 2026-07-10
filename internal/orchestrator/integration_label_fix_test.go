@@ -18,47 +18,48 @@ import (
 	_ "github.com/sortie-ai/sortie/internal/scm/github"
 )
 
-// skipUnlessGitHubE2ELabelReview skips the test when the GitHub E2E gate is
-// absent or the required credentials are not set. Mirrors the auto-merge
-// and merge-conflict E2E gates: a single SORTIE_GITHUB_E2E gate plus the
-// token and project, never a per-operation env var. The test must skip
-// cleanly — never fail — when the gate is unset.
-func skipUnlessGitHubE2ELabelReview(t *testing.T) {
+// skipUnlessGitHubE2ELabelFix skips the test when the GitHub E2E gate is
+// absent or the required credentials are not set. Mirrors the
+// label-review, auto-merge, and merge-conflict E2E gates: a single
+// SORTIE_GITHUB_E2E gate plus the token and project, never a
+// per-operation env var. The test must skip cleanly — never fail — when
+// the gate is unset.
+func skipUnlessGitHubE2ELabelFix(t *testing.T) {
 	t.Helper()
 	if testing.Short() {
-		t.Skip("skipping label-review E2E test in short mode")
+		t.Skip("skipping label-fix E2E test in short mode")
 	}
 	if os.Getenv("SORTIE_GITHUB_E2E") != "1" {
-		t.Skip("skipping label-review E2E test: set SORTIE_GITHUB_E2E=1, SORTIE_GITHUB_TOKEN, SORTIE_GITHUB_PROJECT")
+		t.Skip("skipping label-fix E2E test: set SORTIE_GITHUB_E2E=1, SORTIE_GITHUB_TOKEN, SORTIE_GITHUB_PROJECT")
 	}
 	if os.Getenv("SORTIE_GITHUB_TOKEN") == "" {
-		t.Skip("skipping label-review E2E test: SORTIE_GITHUB_TOKEN not set")
+		t.Skip("skipping label-fix E2E test: SORTIE_GITHUB_TOKEN not set")
 	}
 	if os.Getenv("SORTIE_GITHUB_PROJECT") == "" {
-		t.Skip("skipping label-review E2E test: SORTIE_GITHUB_PROJECT not set")
+		t.Skip("skipping label-fix E2E test: SORTIE_GITHUB_PROJECT not set")
 	}
 }
 
-// labelReviewAPIClient is a minimal GitHub REST client used only for test
-// setup and teardown in the label-review E2E test. It is intentionally
-// separate from the auto-merge and merge-conflict E2E clients so the three
-// tests can run independently without coupling.
-type labelReviewAPIClient struct {
+// labelFixAPIClient is a minimal GitHub REST client used only for test
+// setup and teardown in the label-fix E2E test. It is intentionally
+// separate from the label-review, auto-merge, and merge-conflict E2E
+// clients so the four tests can run independently without coupling.
+type labelFixAPIClient struct {
 	token      string
 	baseURL    string
 	httpClient *http.Client
 }
 
-func newLabelReviewAPIClient(t *testing.T) *labelReviewAPIClient {
+func newLabelFixAPIClient(t *testing.T) *labelFixAPIClient {
 	t.Helper()
-	return &labelReviewAPIClient{
+	return &labelFixAPIClient{
 		token:      os.Getenv("SORTIE_GITHUB_TOKEN"),
 		baseURL:    "https://api.github.com",
 		httpClient: &http.Client{Timeout: 30 * time.Second},
 	}
 }
 
-func (c *labelReviewAPIClient) doRequest(t *testing.T, method, path string, body any) []byte {
+func (c *labelFixAPIClient) doRequest(t *testing.T, method, path string, body any) []byte {
 	t.Helper()
 
 	var bodyReader io.Reader
@@ -99,7 +100,7 @@ func (c *labelReviewAPIClient) doRequest(t *testing.T, method, path string, body
 
 // doRequestIgnoreStatus executes a request and returns the status code
 // without failing on non-2xx. Used by cleanup helpers that tolerate 404/422.
-func (c *labelReviewAPIClient) doRequestIgnoreStatus(method, path string, body any) (int, error) {
+func (c *labelFixAPIClient) doRequestIgnoreStatus(method, path string, body any) (int, error) {
 	var bodyReader io.Reader
 	if body != nil {
 		data, err := json.Marshal(body)
@@ -129,7 +130,7 @@ func (c *labelReviewAPIClient) doRequestIgnoreStatus(method, path string, body a
 	return resp.StatusCode, nil
 }
 
-func (c *labelReviewAPIClient) defaultBranchSHA(t *testing.T, owner, repo string) (defaultBranch, sha string) {
+func (c *labelFixAPIClient) defaultBranchSHA(t *testing.T, owner, repo string) (defaultBranch, sha string) {
 	t.Helper()
 	repoResp := c.doRequest(t, "GET", fmt.Sprintf("/repos/%s/%s", owner, repo), nil)
 	var repoInfo struct {
@@ -157,7 +158,7 @@ func (c *labelReviewAPIClient) defaultBranchSHA(t *testing.T, owner, repo string
 	return repoInfo.DefaultBranch, refInfo.Object.SHA
 }
 
-func (c *labelReviewAPIClient) putFile(t *testing.T, owner, repo, branch, path, content, message string) {
+func (c *labelFixAPIClient) putFile(t *testing.T, owner, repo, branch, path, content, message string) {
 	t.Helper()
 	c.doRequest(t, "PUT", fmt.Sprintf("/repos/%s/%s/contents/%s", owner, repo, path), map[string]any{
 		"message": message,
@@ -166,9 +167,11 @@ func (c *labelReviewAPIClient) putFile(t *testing.T, owner, repo, branch, path, 
 	})
 }
 
-// createLabelReviewPR opens a throwaway PR with a single distinguishing
-// commit on a fresh branch. Returns the PR number.
-func (c *labelReviewAPIClient) createLabelReviewPR(t *testing.T, owner, repo, branch, prTitle string) int {
+// createLabelFixPR opens a throwaway PR with a single distinguishing
+// commit on a fresh branch. Returns the PR number. Unlike the read-only
+// label-review PR, this branch is the coordinate the fix session would
+// check out, so the seeded LabelFixReactionData carries it.
+func (c *labelFixAPIClient) createLabelFixPR(t *testing.T, owner, repo, branch, prTitle string) int {
 	t.Helper()
 
 	defaultBranch, baseSHA := c.defaultBranchSHA(t, owner, repo)
@@ -178,14 +181,14 @@ func (c *labelReviewAPIClient) createLabelReviewPR(t *testing.T, owner, repo, br
 		"sha": baseSHA,
 	})
 
-	c.putFile(t, owner, repo, branch, fmt.Sprintf("e2e/label-review-%s.txt", branch),
-		"label-review E2E test content\n", "test: seed label-review E2E branch")
+	c.putFile(t, owner, repo, branch, fmt.Sprintf("e2e/label-fix-%s.txt", branch),
+		"label-fix E2E test content\n", "test: seed label-fix E2E branch")
 
 	prResp := c.doRequest(t, "POST", fmt.Sprintf("/repos/%s/%s/pulls", owner, repo), map[string]any{
 		"title": prTitle,
 		"head":  branch,
 		"base":  defaultBranch,
-		"body":  "Label-review E2E test PR — safe to close",
+		"body":  "Label-fix E2E test PR — safe to close",
 	})
 	var pr struct {
 		Number int `json:"number"`
@@ -193,12 +196,12 @@ func (c *labelReviewAPIClient) createLabelReviewPR(t *testing.T, owner, repo, br
 	if err := json.Unmarshal(prResp, &pr); err != nil {
 		t.Fatalf("unmarshal create PR response: %v", err)
 	}
-	t.Logf("opened label-review E2E PR #%d (branch %q -> %s)", pr.Number, branch, defaultBranch)
+	t.Logf("opened label-fix E2E PR #%d (branch %q -> %s)", pr.Number, branch, defaultBranch)
 	return pr.Number
 }
 
 // addLabel applies label to the given PR via the issue-labels endpoint.
-func (c *labelReviewAPIClient) addLabel(t *testing.T, owner, repo string, prNumber int, label string) {
+func (c *labelFixAPIClient) addLabel(t *testing.T, owner, repo string, prNumber int, label string) {
 	t.Helper()
 	c.doRequest(t, "POST", fmt.Sprintf("/repos/%s/%s/issues/%d/labels", owner, repo, prNumber), map[string]any{
 		"labels": []string{label},
@@ -207,7 +210,7 @@ func (c *labelReviewAPIClient) addLabel(t *testing.T, owner, repo string, prNumb
 
 // currentLabels returns the lowercased names of every label currently
 // applied to the given PR.
-func (c *labelReviewAPIClient) currentLabels(t *testing.T, owner, repo string, prNumber int) []string {
+func (c *labelFixAPIClient) currentLabels(t *testing.T, owner, repo string, prNumber int) []string {
 	t.Helper()
 	resp := c.doRequest(t, "GET", fmt.Sprintf("/repos/%s/%s/issues/%d", owner, repo, prNumber), nil)
 	var issue struct {
@@ -225,7 +228,7 @@ func (c *labelReviewAPIClient) currentLabels(t *testing.T, owner, repo string, p
 	return names
 }
 
-func (c *labelReviewAPIClient) closePR(t *testing.T, owner, repo string, prNumber int) {
+func (c *labelFixAPIClient) closePR(t *testing.T, owner, repo string, prNumber int) {
 	t.Helper()
 	status, err := c.doRequestIgnoreStatus("PATCH", fmt.Sprintf("/repos/%s/%s/pulls/%d", owner, repo, prNumber), map[string]any{
 		"state": "closed",
@@ -235,7 +238,7 @@ func (c *labelReviewAPIClient) closePR(t *testing.T, owner, repo string, prNumbe
 	}
 }
 
-func (c *labelReviewAPIClient) deleteBranch(t *testing.T, owner, repo, branch string) {
+func (c *labelFixAPIClient) deleteBranch(t *testing.T, owner, repo, branch string) {
 	t.Helper()
 	status, err := c.doRequestIgnoreStatus("DELETE", fmt.Sprintf("/repos/%s/%s/git/refs/heads/%s", owner, repo, branch), nil)
 	if err != nil || (status >= 300 && status != http.StatusNotFound) {
@@ -243,10 +246,11 @@ func (c *labelReviewAPIClient) deleteBranch(t *testing.T, owner, repo, branch st
 	}
 }
 
-// TestReconcileLabelReview_LiveAPI_E2E exercises reconcileLabelReviewCommands
-// against the live GitHub API. It creates a throwaway PR, applies the
-// configured review label via the REST API, wires the real SCM adapter, and
-// drives the reconcile pass until exactly one label-review dispatch is
+// TestReconcileLabelFix_LiveAPI_E2E exercises reconcileLabelFixCommands
+// against the live GitHub API. It creates a throwaway PR, runs the
+// content-write scope preflight against the live adapter, applies the
+// configured fix label via the REST API, wires the real SCM adapter, and
+// drives the reconcile pass until exactly one label-fix dispatch is
 // scheduled. It then asserts the label was removed from the live PR
 // (best-effort acknowledgment) and that re-applying the label produces a
 // second dispatch with no process restart.
@@ -258,8 +262,8 @@ func (c *labelReviewAPIClient) deleteBranch(t *testing.T, owner, repo, branch st
 //	SORTIE_GITHUB_PROJECT=sortie-ai/sortie-test
 //
 // No t.Parallel — the test mutates shared state in a live repository.
-func TestReconcileLabelReview_LiveAPI_E2E(t *testing.T) {
-	skipUnlessGitHubE2ELabelReview(t)
+func TestReconcileLabelFix_LiveAPI_E2E(t *testing.T) {
+	skipUnlessGitHubE2ELabelFix(t)
 
 	ctx := context.Background()
 
@@ -270,13 +274,13 @@ func TestReconcileLabelReview_LiveAPI_E2E(t *testing.T) {
 	}
 	owner, repo := parts[0], parts[1]
 
-	ghClient := newLabelReviewAPIClient(t)
+	ghClient := newLabelFixAPIClient(t)
 
-	branch := fmt.Sprintf("label-review-test-%d-%s", time.Now().UnixNano(), randomHex())
-	prTitle := fmt.Sprintf("sortie-e2e-label-review %s", branch)
-	issueID := fmt.Sprintf("%s/%s#e2e-label-review", owner, repo)
+	branch := fmt.Sprintf("label-fix-test-%d-%s", time.Now().UnixNano(), randomHex())
+	prTitle := fmt.Sprintf("sortie-e2e-label-fix %s", branch)
+	issueID := fmt.Sprintf("%s/%s#e2e-label-fix", owner, repo)
 
-	prNumber := ghClient.createLabelReviewPR(t, owner, repo, branch, prTitle)
+	prNumber := ghClient.createLabelFixPR(t, owner, repo, branch, prTitle)
 
 	t.Cleanup(func() {
 		ghClient.closePR(t, owner, repo, prNumber)
@@ -294,33 +298,46 @@ func TestReconcileLabelReview_LiveAPI_E2E(t *testing.T) {
 		t.Fatalf("NewGitHubSCMAdapter: %v", err)
 	}
 
+	// Confirm the content-write scope preflight runs cleanly against the
+	// live adapter: the documented E2E token carries contents:write and
+	// pull_requests:write, so the preflight must report no transport
+	// error and no missing scope.
+	ok, missing, preflightErr := RunLabelFixScopePreflight(ctx, scmAdapter, discardLogger())
+	if preflightErr != nil {
+		t.Fatalf("RunLabelFixScopePreflight transport error: %v", preflightErr)
+	}
+	if !ok || len(missing) > 0 {
+		t.Errorf("RunLabelFixScopePreflight = (ok=%v, missing=%v), want (true, empty) for a token with contents:write", ok, missing)
+	}
+
 	store := openInMemoryStore(t)
 
 	state := NewState(5000, 4, nil, AgentTotals{})
-	rkey := ReactionKey(issueID, ReactionKindLabelReview)
+	rkey := ReactionKey(issueID, ReactionKindLabelFix)
 	state.PendingReactions[rkey] = &PendingReaction{
 		IssueID:    issueID,
 		Identifier: issueID,
 		Attempt:    1,
-		Kind:       ReactionKindLabelReview,
+		Kind:       ReactionKindLabelFix,
 		CreatedAt:  time.Now().UTC(),
-		KindData: &LabelReviewReactionData{
+		KindData: &LabelFixReactionData{
 			PRNumber: prNumber,
 			Owner:    owner,
 			Repo:     repo,
+			Branch:   branch,
 		},
 	}
 
-	params := labelReviewParams(store, scmAdapter)
+	params := labelFixParams(store, scmAdapter)
 	params.Ctx = ctx
 
-	reviewLabel := params.LabelReviewConfig.ReviewLabel
-	ghClient.addLabel(t, owner, repo, prNumber, reviewLabel)
+	fixLabel := params.LabelFixConfig.FixLabel
+	ghClient.addLabel(t, owner, repo, prNumber, fixLabel)
 
 	const maxTicks = 8
 	dispatched := false
 	for range maxTicks {
-		reconcileLabelReviewCommands(state, params, discardLogger(), ctx, &domain.NoopMetrics{})
+		reconcileLabelFixCommands(state, params, discardLogger(), ctx, &domain.NoopMetrics{})
 
 		if _, retryQueued := state.RetryAttempts[issueID]; retryQueued {
 			dispatched = true
@@ -333,44 +350,47 @@ func TestReconcileLabelReview_LiveAPI_E2E(t *testing.T) {
 		time.Sleep(2 * time.Second)
 	}
 	if !dispatched {
-		t.Fatal("label-review dispatch did not fire within the tick budget")
+		t.Fatal("label-fix dispatch did not fire within the tick budget")
 	}
 
 	retry := state.RetryAttempts[issueID]
-	if retry.ReactionKind != ReactionKindLabelReview {
-		t.Errorf("RetryEntry.ReactionKind = %q, want %q", retry.ReactionKind, ReactionKindLabelReview)
+	if retry.ReactionKind != ReactionKindLabelFix {
+		t.Errorf("RetryEntry.ReactionKind = %q, want %q", retry.ReactionKind, ReactionKindLabelFix)
 	}
 	if retry.SessionID != "" {
 		t.Errorf("RetryEntry.SessionID = %q, want empty (fresh session, not a resume)", retry.SessionID)
 	}
-	raw, ok := retry.ContinuationContext["label_review"]
+	raw, ok := retry.ContinuationContext["label_fix"]
 	if !ok {
-		t.Fatal(`ContinuationContext missing "label_review" key`)
+		t.Fatal(`ContinuationContext missing "label_fix" key`)
 	}
-	lrContext, ok := raw.(map[string]any)
+	lfContext, ok := raw.(map[string]any)
 	if !ok {
-		t.Fatalf("label_review context type = %T, want map[string]any", raw)
+		t.Fatalf("label_fix context type = %T, want map[string]any", raw)
 	}
-	if lrContext["pr_number"] != prNumber {
-		t.Errorf("label_review[pr_number] = %v, want %d", lrContext["pr_number"], prNumber)
+	if lfContext["pr_number"] != prNumber {
+		t.Errorf("label_fix[pr_number] = %v, want %d", lfContext["pr_number"], prNumber)
 	}
-	if lrContext["owner"] != owner {
-		t.Errorf("label_review[owner] = %v, want %q", lrContext["owner"], owner)
+	if lfContext["owner"] != owner {
+		t.Errorf("label_fix[owner] = %v, want %q", lfContext["owner"], owner)
 	}
-	if lrContext["repo"] != repo {
-		t.Errorf("label_review[repo] = %v, want %q", lrContext["repo"], repo)
+	if lfContext["repo"] != repo {
+		t.Errorf("label_fix[repo] = %v, want %q", lfContext["repo"], repo)
 	}
-	actor, _ := lrContext["actor"].(string)
+	if lfContext["branch"] != branch {
+		t.Errorf("label_fix[branch] = %v, want %q", lfContext["branch"], branch)
+	}
+	actor, _ := lfContext["actor"].(string)
 	if actor == "" {
-		t.Error("label_review[actor] is empty, want the acting user's login recorded")
+		t.Error("label_fix[actor] is empty, want the acting user's login recorded")
 	}
 
-	// Best-effort acknowledgment: the review label should be removed from
+	// Best-effort acknowledgment: the fix label should be removed from
 	// the live PR after the confirmed dispatch.
 	labels := ghClient.currentLabels(t, owner, repo, prNumber)
 	for _, l := range labels {
-		if l == strings.ToLower(reviewLabel) {
-			t.Errorf("review label %q still present on PR #%d after dispatch; want removed", reviewLabel, prNumber)
+		if l == strings.ToLower(fixLabel) {
+			t.Errorf("fix label %q still present on PR #%d after dispatch; want removed", fixLabel, prNumber)
 		}
 	}
 
@@ -380,11 +400,11 @@ func TestReconcileLabelReview_LiveAPI_E2E(t *testing.T) {
 	// with no process restart, driven by the reconcile's own re-enqueue.
 	CancelRetry(state, issueID)
 
-	ghClient.addLabel(t, owner, repo, prNumber, reviewLabel)
+	ghClient.addLabel(t, owner, repo, prNumber, fixLabel)
 
 	dispatchedAgain := false
 	for range maxTicks {
-		reconcileLabelReviewCommands(state, params, discardLogger(), ctx, &domain.NoopMetrics{})
+		reconcileLabelFixCommands(state, params, discardLogger(), ctx, &domain.NoopMetrics{})
 
 		if _, retryQueued := state.RetryAttempts[issueID]; retryQueued {
 			dispatchedAgain = true
@@ -397,6 +417,6 @@ func TestReconcileLabelReview_LiveAPI_E2E(t *testing.T) {
 		time.Sleep(2 * time.Second)
 	}
 	if !dispatchedAgain {
-		t.Fatal("second label-review dispatch did not fire within the tick budget after re-applying the label")
+		t.Fatal("second label-fix dispatch did not fire within the tick budget after re-applying the label")
 	}
 }

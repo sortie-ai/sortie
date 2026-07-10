@@ -362,6 +362,17 @@ func (m *Manager) loadPipeline() (config.ServiceConfig, *prompt.Template, map[st
 		)
 	}
 
+	// Advisory: a label-fix dispatch clones the workspace and carries
+	// content-write scope, so without a {{ if .label_fix }} branch it runs
+	// the normal work prompt against a real checkout with push capability.
+	// This scan is best-effort and never fails the load.
+	if cfg.LabelCommands.Provider != "" && cfg.LabelCommands.FixLabel != "" && !strings.Contains(wf.PromptTemplate, "label_fix") {
+		m.currentLogger().Warn("label_commands active but prompt template has no label_fix branch",
+			slog.String("workflow", m.path),
+			slog.String("hint", "add a {{ if .label_fix }} branch so label-fix dispatches check out the branch, push fixes, and post a summary"),
+		)
+	}
+
 	probe := m.agentKindProbe
 	if probe == nil {
 		// Permissive default: callers without an orchestrator

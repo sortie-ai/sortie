@@ -285,7 +285,7 @@ func TestReconcileMergeConflict_LiveAPI_E2E(t *testing.T) {
 
 	ghClient := newMergeConflictAPIClient(t)
 
-	branch := fmt.Sprintf("merge-conflict-test-%d-%s", time.Now().UnixNano(), randomHex(4))
+	branch := fmt.Sprintf("merge-conflict-test-%d-%s", time.Now().UnixNano(), randomHex())
 	prTitle := fmt.Sprintf("sortie-e2e-merge-conflict %s", branch)
 	issueTitle := fmt.Sprintf("sortie-e2e-merge-conflict-issue %s", branch)
 

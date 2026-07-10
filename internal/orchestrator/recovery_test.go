@@ -1863,3 +1863,175 @@ func TestRecoverPendingReactions_LabelReviewMissingPRMetadata(t *testing.T) {
 		})
 	}
 }
+
+// TestRecoverPendingReactions_LabelFix verifies that a handoff-state issue
+// whose recovered SCM metadata carries a PR number, owner, repo, and a
+// non-empty branch recovers one label-fix entry, carrying the branch and
+// the frozen dispatch fields, and increments LabelFixRecovered.
+func TestRecoverPendingReactions_LabelFix(t *testing.T) {
+	t.Parallel()
+
+	wsRoot := t.TempDir()
+	writeRecoverySCM(t, wsRoot, "PROJ-LF1", domain.SCMMetadata{
+		Branch:   "feature/lf-fix",
+		SHA:      "facefeed",
+		PushedAt: freshSCMTime(1),
+		PRNumber: 66,
+		Owner:    "lfowner",
+		Repo:     "lfrepo",
+	})
+
+	tracker := &recoveryTrackerStub{states: map[string]string{"ISS-LF1": "In Review"}}
+	state := NewState(5000, 4, nil, AgentTotals{})
+	run := freshRun("ISS-LF1", "PROJ-LF1", "lfowner/lfrepo#66", 2)
+	params := defaultRecoveryParams(wsRoot, tracker)
+	params.LabelFixReactionConfigured = true
+
+	result, err := RecoverPendingReactions(context.Background(), state, []persistence.RunHistory{run}, params)
+	if err != nil {
+		t.Fatalf("RecoverPendingReactions: %v", err)
+	}
+	if result.LabelFixRecovered != 1 {
+		t.Errorf("LabelFixRecovered = %d, want 1", result.LabelFixRecovered)
+	}
+
+	rkey := ReactionKey("ISS-LF1", ReactionKindLabelFix)
+	pr, ok := state.PendingReactions[rkey]
+	if !ok {
+		t.Fatalf("PendingReactions[%q] missing, want present", rkey)
+	}
+	if pr.Kind != ReactionKindLabelFix {
+		t.Errorf("PendingReaction.Kind = %q, want %q", pr.Kind, ReactionKindLabelFix)
+	}
+	if pr.Attempt != 2 {
+		t.Errorf("PendingReaction.Attempt = %d, want 2", pr.Attempt)
+	}
+	if pr.AgentKind != run.AgentAdapter {
+		t.Errorf("PendingReaction.AgentKind = %q, want %q (frozen from the recovered run)", pr.AgentKind, run.AgentAdapter)
+	}
+	lfd, ok := pr.KindData.(*LabelFixReactionData)
+	if !ok {
+		t.Fatalf("KindData type = %T, want *LabelFixReactionData", pr.KindData)
+	}
+	if lfd.PRNumber != 66 {
+		t.Errorf("LabelFixReactionData.PRNumber = %d, want 66", lfd.PRNumber)
+	}
+	if lfd.Owner != "lfowner" {
+		t.Errorf("LabelFixReactionData.Owner = %q, want %q", lfd.Owner, "lfowner")
+	}
+	if lfd.Repo != "lfrepo" {
+		t.Errorf("LabelFixReactionData.Repo = %q, want %q", lfd.Repo, "lfrepo")
+	}
+	if lfd.Branch != "feature/lf-fix" {
+		t.Errorf("LabelFixReactionData.Branch = %q, want %q", lfd.Branch, "feature/lf-fix")
+	}
+	if _, claimed := state.Claimed["ISS-LF1"]; claimed {
+		t.Error("ISS-LF1 found in state.Claimed after recovery, want not claimed")
+	}
+}
+
+// TestRecoverPendingReactions_LabelFixNotRecoveredWhenFlagFalse verifies
+// that LabelFixReactionConfigured=false reconstructs no label-fix entry,
+// even with full branch-bearing PR metadata present.
+func TestRecoverPendingReactions_LabelFixNotRecoveredWhenFlagFalse(t *testing.T) {
+	t.Parallel()
+
+	wsRoot := t.TempDir()
+	writeRecoverySCM(t, wsRoot, "PROJ-LF2", domain.SCMMetadata{
+		Branch:   "feature/lf-disabled",
+		SHA:      "abc",
+		PushedAt: freshSCMTime(1),
+		PRNumber: 10,
+		Owner:    "o",
+		Repo:     "r",
+	})
+
+	tracker := &recoveryTrackerStub{states: map[string]string{"ISS-LF2": "In Review"}}
+	state := NewState(5000, 4, nil, AgentTotals{})
+	run := freshRun("ISS-LF2", "PROJ-LF2", "", 1)
+	params := defaultRecoveryParams(wsRoot, tracker)
+	params.LabelFixReactionConfigured = false
+
+	result, err := RecoverPendingReactions(context.Background(), state, []persistence.RunHistory{run}, params)
+	if err != nil {
+		t.Fatalf("RecoverPendingReactions: %v", err)
+	}
+	if result.LabelFixRecovered != 0 {
+		t.Errorf("LabelFixRecovered = %d, want 0 when flag is false", result.LabelFixRecovered)
+	}
+
+	rkey := ReactionKey("ISS-LF2", ReactionKindLabelFix)
+	if _, ok := state.PendingReactions[rkey]; ok {
+		t.Error("label-fix PendingReactions entry created with LabelFixReactionConfigured=false; want absent")
+	}
+}
+
+// TestRecoverPendingReactions_LabelFixMissingPRMetadata verifies that no
+// label-fix entry is recovered when owner, repo, PR number, or branch is
+// missing from the recovered SCM metadata. The missing-branch case is the
+// fix-specific difference from label-review: label-review recovery omits
+// the branch requirement, but a fix session checks out that branch, so
+// recovery must require it.
+func TestRecoverPendingReactions_LabelFixMissingPRMetadata(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		issueID    string
+		identifier string
+		meta       domain.SCMMetadata
+	}{
+		{
+			name:       "missing PR number",
+			issueID:    "ISS-LF3-NOPR",
+			identifier: "PROJ-LF3-NOPR",
+			meta:       domain.SCMMetadata{Branch: "feature/x", PushedAt: freshSCMTime(1), Owner: "o", Repo: "r"},
+		},
+		{
+			name:       "missing owner",
+			issueID:    "ISS-LF3-NOOWNER",
+			identifier: "PROJ-LF3-NOOWNER",
+			meta:       domain.SCMMetadata{Branch: "feature/x", PushedAt: freshSCMTime(1), PRNumber: 10, Repo: "r"},
+		},
+		{
+			name:       "missing repo",
+			issueID:    "ISS-LF3-NOREPO",
+			identifier: "PROJ-LF3-NOREPO",
+			meta:       domain.SCMMetadata{Branch: "feature/x", PushedAt: freshSCMTime(1), PRNumber: 10, Owner: "o"},
+		},
+		{
+			name:       "missing branch",
+			issueID:    "ISS-LF3-NOBRANCH",
+			identifier: "PROJ-LF3-NOBRANCH",
+			meta:       domain.SCMMetadata{PushedAt: freshSCMTime(1), PRNumber: 10, Owner: "o", Repo: "r"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			wsRoot := t.TempDir()
+			writeRecoverySCM(t, wsRoot, tt.identifier, tt.meta)
+
+			tracker := &recoveryTrackerStub{states: map[string]string{tt.issueID: "In Review"}}
+			state := NewState(5000, 4, nil, AgentTotals{})
+			run := freshRun(tt.issueID, tt.identifier, "", 1)
+			params := defaultRecoveryParams(wsRoot, tracker)
+			params.LabelFixReactionConfigured = true
+
+			result, err := RecoverPendingReactions(context.Background(), state, []persistence.RunHistory{run}, params)
+			if err != nil {
+				t.Fatalf("RecoverPendingReactions: %v", err)
+			}
+			if result.LabelFixRecovered != 0 {
+				t.Errorf("LabelFixRecovered = %d, want 0 (%s)", result.LabelFixRecovered, tt.name)
+			}
+
+			rkey := ReactionKey(tt.issueID, ReactionKindLabelFix)
+			if _, ok := state.PendingReactions[rkey]; ok {
+				t.Errorf("label-fix PendingReactions entry present despite incomplete SCM metadata (%s)", tt.name)
+			}
+		})
+	}
+}

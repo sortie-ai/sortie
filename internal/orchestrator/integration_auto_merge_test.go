@@ -349,9 +349,9 @@ func encodeBase64(b []byte) string {
 	return string(out)
 }
 
-// randomHex returns a n-byte random hex string.
-func randomHex(n int) string {
-	b := make([]byte, n)
+// randomHex returns a 4-byte random hex string.
+func randomHex() string {
+	b := make([]byte, 4)
 	if _, err := rand.Read(b); err != nil {
 		panic("crypto/rand unavailable: " + err.Error())
 	}
@@ -444,7 +444,7 @@ func TestReconcileAutoMerge_LiveAPI_E2E(t *testing.T) {
 	ghClient := newAutoMergeAPIClient(t)
 
 	// Create a fresh throwaway branch name guaranteed to be unique per run.
-	branch := fmt.Sprintf("auto-merge-test-%d-%s", time.Now().UnixNano(), randomHex(4))
+	branch := fmt.Sprintf("auto-merge-test-%d-%s", time.Now().UnixNano(), randomHex())
 	prTitle := fmt.Sprintf("sortie-e2e-auto-merge %s", branch)
 	issueTitle := fmt.Sprintf("sortie-e2e-auto-merge-issue %s", branch)
 

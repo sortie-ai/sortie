@@ -888,27 +888,35 @@ func TestMakeWorkerFn(t *testing.T) {
 	})
 }
 
-// TestMakeWorkerFn_DerivesReadOnlyFromLabelReview verifies that
-// makeWorkerFn derives WorkerDeps.ReadOnly from the reactionKind argument:
-// true only for ReactionKindLabelReview, false for every other kind
-// including empty (A9). Asserted indirectly via the dispatch-time
-// in-progress transition, which the read-only path suppresses.
-func TestMakeWorkerFn_DerivesReadOnlyFromLabelReview(t *testing.T) {
+// TestMakeWorkerFn_DerivesPostureFromReactionKind verifies that
+// makeWorkerFn derives WorkerDeps.Posture from the reactionKind argument
+// via dispatchPostureForReactionKind: ReactionKindLabelReview selects
+// PostureReview, ReactionKindLabelFix selects PostureFix, and every other
+// kind (including empty) selects PostureNormal (A3). Each case asserts
+// the pure mapping output directly, then asserts the derived
+// WorkerDeps.Posture indirectly via the dispatch-time in-progress
+// transition, which only a DrivesIssueState-true posture performs.
+func TestMakeWorkerFn_DerivesPostureFromReactionKind(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name             string
-		reactionKind     string
-		wantTransitioned bool
+		name         string
+		reactionKind string
+		wantPosture  DispatchPosture
 	}{
-		{"label-review reaction kind is read-only", ReactionKindLabelReview, false},
-		{"empty reaction kind is not read-only", "", true},
-		{"other known reaction kind is not read-only", ReactionKindReview, true},
+		{"label-review reaction kind selects PostureReview", ReactionKindLabelReview, PostureReview},
+		{"label-fix reaction kind selects PostureFix", ReactionKindLabelFix, PostureFix},
+		{"empty reaction kind selects PostureNormal", "", PostureNormal},
+		{"other known reaction kind selects PostureNormal", ReactionKindReview, PostureNormal},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
+
+			if got := dispatchPostureForReactionKind(tt.reactionKind); got != tt.wantPosture {
+				t.Errorf("dispatchPostureForReactionKind(%q) = %v, want %v", tt.reactionKind, got, tt.wantPosture)
+			}
 
 			tmpDir := t.TempDir()
 			cfg := defaultWorkerConfig(tmpDir)
@@ -943,9 +951,63 @@ func TestMakeWorkerFn_DerivesReadOnlyFromLabelReview(t *testing.T) {
 			<-exitDone
 
 			gotTransitioned := len(tracker.transitionCalls) > 0
-			if gotTransitioned != tt.wantTransitioned {
+			if gotTransitioned != tt.wantPosture.DrivesIssueState() {
 				t.Errorf("makeWorkerFn(reactionKind=%q): TransitionIssue called = %v, want %v",
-					tt.reactionKind, gotTransitioned, tt.wantTransitioned)
+					tt.reactionKind, gotTransitioned, tt.wantPosture.DrivesIssueState())
+			}
+		})
+	}
+}
+
+// TestMakeWorkerFn_PostureMappingSharedWithHandleWorkerExit verifies that
+// HandleWorkerExit derives its drivesIssue gate from the same
+// dispatchPostureForReactionKind mapping makeWorkerFn uses (A3), so the
+// dispatch builder and the exit handler can never disagree on a reaction
+// kind's posture. Observed via the continuation-retry branch, which fires
+// on a normal exit with an active issue and no handoff configured only
+// when DrivesIssueState is true.
+func TestMakeWorkerFn_PostureMappingSharedWithHandleWorkerExit(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name         string
+		reactionKind string
+		wantPosture  DispatchPosture
+	}{
+		{"label-review reaction kind selects PostureReview", ReactionKindLabelReview, PostureReview},
+		{"label-fix reaction kind selects PostureFix", ReactionKindLabelFix, PostureFix},
+		{"empty reaction kind selects PostureNormal", "", PostureNormal},
+		{"other known reaction kind selects PostureNormal", ReactionKindReview, PostureNormal},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			const issueID = "issue-1"
+			state := NewState(1000, 5, nil, AgentTotals{})
+			state.Claimed[issueID] = struct{}{}
+			state.Running[issueID] = &RunningEntry{
+				Identifier:   "TEST-1",
+				ReactionKind: tt.reactionKind,
+				Issue:        domain.Issue{ID: issueID, State: "To Do"},
+			}
+
+			HandleWorkerExit(state, WorkerResult{
+				IssueID:    issueID,
+				Identifier: "TEST-1",
+				ExitKind:   WorkerExitNormal,
+			}, HandleWorkerExitParams{
+				Store:        &stubStore{},
+				Logger:       discardLogger(),
+				OnRetryFire:  func(_ string) {},
+				ActiveStates: []string{"To Do"},
+			})
+
+			_, gotRetryScheduled := state.RetryAttempts[issueID]
+			if gotRetryScheduled != tt.wantPosture.DrivesIssueState() {
+				t.Errorf("HandleWorkerExit(reactionKind=%q): continuation retry scheduled = %v, want %v",
+					tt.reactionKind, gotRetryScheduled, tt.wantPosture.DrivesIssueState())
 			}
 		})
 	}

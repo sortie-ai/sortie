@@ -139,6 +139,19 @@ Produce a code review of pull request #{{ .label_review.pr_number }} in
 3. Post your review comments on the PR. Do not modify the branch or push commits.
 {{ end }}
 
+{{ if .label_fix }}
+
+## Fix This Pull Request
+
+Check out {{ .label_fix.branch }} for pull request #{{ .label_fix.pr_number }} in
+{{ .label_fix.owner }}/{{ .label_fix.repo }}, requested by {{ .label_fix.actor }}.
+
+1. Fetch the outstanding review comments for this PR using your SCM tooling.
+2. Address the feedback and push the fixes to {{ .label_fix.branch }}.
+3. Post a summary comment on the PR describing the changes you made.
+4. Write `needs-human-review` to `.sortie/status` to signal completion.
+{{ end }}
+
 {{ if .attempt }}
 
 ## Retry

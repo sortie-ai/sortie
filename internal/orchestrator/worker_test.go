@@ -3566,7 +3566,7 @@ func TestRunWorkerAttempt_ReadOnly_NoCloneWorkspace(t *testing.T) {
 		OnEvent:                func(_ string, _ domain.AgentEvent) {},
 		OnExit:                 ec.onExit,
 		Logger:                 discardLogger(),
-		ReadOnly:               true,
+		Posture:                PostureReview,
 	}
 
 	RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
@@ -3618,7 +3618,7 @@ func TestRunWorkerAttempt_ReadOnly_StaleStatusCleaned(t *testing.T) {
 		OnEvent:                func(_ string, _ domain.AgentEvent) {},
 		OnExit:                 ec.onExit,
 		Logger:                 discardLogger(),
-		ReadOnly:               true,
+		Posture:                PostureReview,
 	}
 
 	RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
@@ -3655,7 +3655,7 @@ func TestRunWorkerAttempt_ReadOnly_SuppressesInProgressTransition(t *testing.T) 
 		OnEvent:                func(_ string, _ domain.AgentEvent) {},
 		OnExit:                 ec.onExit,
 		Logger:                 discardLogger(),
-		ReadOnly:               true,
+		Posture:                PostureReview,
 	}
 
 	RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
@@ -3686,7 +3686,7 @@ func TestRunWorkerAttempt_ReadOnly_SuppressesDispatchComment(t *testing.T) {
 		OnEvent:                func(_ string, _ domain.AgentEvent) {},
 		OnExit:                 ec.onExit,
 		Logger:                 discardLogger(),
-		ReadOnly:               true,
+		Posture:                PostureReview,
 	}
 
 	RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
@@ -3727,7 +3727,7 @@ func TestRunWorkerAttempt_ReadOnly_SuppressesPerTurnRefresh(t *testing.T) {
 		OnEvent:                func(_ string, _ domain.AgentEvent) {},
 		OnExit:                 ec.onExit,
 		Logger:                 discardLogger(),
-		ReadOnly:               true,
+		Posture:                PostureReview,
 	}
 
 	RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
@@ -3771,7 +3771,7 @@ func TestRunWorkerAttempt_ReadOnly_SuppressesSelfReview(t *testing.T) {
 		OnEvent:                func(_ string, _ domain.AgentEvent) {},
 		OnExit:                 ec.onExit,
 		Logger:                 discardLogger(),
-		ReadOnly:               true,
+		Posture:                PostureReview,
 	}
 
 	RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
@@ -3806,7 +3806,7 @@ func TestRunWorkerAttempt_ReadOnly_SuppressesAfterRunHook(t *testing.T) {
 		OnEvent:                func(_ string, _ domain.AgentEvent) {},
 		OnExit:                 ec.onExit,
 		Logger:                 discardLogger(),
-		ReadOnly:               true,
+		Posture:                PostureReview,
 	}
 
 	RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
@@ -3867,7 +3867,7 @@ func TestRunWorkerAttempt_NormalDispatchUnaffected(t *testing.T) {
 		OnEvent:                func(_ string, _ domain.AgentEvent) {},
 		OnExit:                 ec.onExit,
 		Logger:                 discardLogger(),
-		ReadOnly:               false,
+		Posture:                PostureNormal,
 	}
 
 	RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
@@ -3890,5 +3890,349 @@ func TestRunWorkerAttempt_NormalDispatchUnaffected(t *testing.T) {
 	}
 	if _, err := os.Stat(selfReviewMarker); err != nil {
 		t.Errorf("self-review did not run for a normal dispatch: %v", err)
+	}
+}
+
+// TestRunWorkerAttempt_Fix_RunsSetupHooksAndClones verifies that a
+// PostureFix attempt runs the operator after_create/before_run setup
+// hooks, proving it takes the workspace.Prepare clone path rather than
+// the read-only path's scratch workspace.Ensure path, which accepts no
+// hook configuration at all (A4).
+func TestRunWorkerAttempt_Fix_RunsSetupHooksAndClones(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("hooks use touch, unavailable on windows")
+	}
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	afterCreateMarker := filepath.Join(tmpDir, "after_create_marker")
+	beforeRunMarker := filepath.Join(tmpDir, "before_run_marker")
+
+	cfg := defaultWorkerConfig(tmpDir)
+	cfg.Hooks.AfterCreate = fmt.Sprintf("touch %s", afterCreateMarker)
+	cfg.Hooks.BeforeRun = fmt.Sprintf("touch %s", beforeRunMarker)
+
+	ec := newExitCapture()
+	deps := WorkerDeps{
+		TrackerAdapter:         &mockTrackerAdapter{},
+		AgentAdapter:           &mockAgentAdapter{},
+		ConfigFunc:             func() config.ServiceConfig { return cfg },
+		PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
+		OnEvent:                func(_ string, _ domain.AgentEvent) {},
+		OnExit:                 ec.onExit,
+		Logger:                 discardLogger(),
+		Posture:                PostureFix,
+	}
+
+	RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
+	result := ec.waitResult(t)
+
+	if result.WorkspacePath == "" {
+		t.Fatal("WorkspacePath is empty, want the cloned per-issue workspace")
+	}
+	if _, err := os.Stat(afterCreateMarker); err != nil {
+		t.Errorf("after_create hook did not run for a fix dispatch: %v", err)
+	}
+	if _, err := os.Stat(beforeRunMarker); err != nil {
+		t.Errorf("before_run hook did not run for a fix dispatch: %v", err)
+	}
+}
+
+// TestRunWorkerAttempt_Fix_FreshSessionClearsStaleStatus verifies that a
+// PostureFix attempt starts a fresh session (StartSessionParams.ResumeSessionID
+// empty) and clears a stale .sortie/status left in the reused per-issue
+// workspace via the Prepare PreRunFunc, so a prior recognized signal does
+// not end the fix session on turn one (A4).
+func TestRunWorkerAttempt_Fix_FreshSessionClearsStaleStatus(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	cfg := defaultWorkerConfig(tmpDir)
+	cfg.Agent.MaxTurns = 1
+
+	// Pre-create the reused workspace with a stale "blocked" status from a
+	// prior session's exit.
+	wsPath := filepath.Join(tmpDir, "TEST-1")
+	statusDir := filepath.Join(wsPath, ".sortie")
+	if err := os.MkdirAll(statusDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(statusDir, "status"), []byte("blocked\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(stale status): %v", err)
+	}
+
+	var gotResumeSessionID string
+	var resumeSessionIDCaptured bool
+	ec := newExitCapture()
+	deps := WorkerDeps{
+		TrackerAdapter: &mockTrackerAdapter{},
+		AgentAdapter: &mockAgentAdapter{
+			startSessionFn: func(_ context.Context, params domain.StartSessionParams) (domain.Session, error) {
+				gotResumeSessionID = params.ResumeSessionID
+				resumeSessionIDCaptured = true
+				return domain.Session{ID: "sess-1"}, nil
+			},
+		},
+		ConfigFunc:             func() config.ServiceConfig { return cfg },
+		PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
+		OnEvent:                func(_ string, _ domain.AgentEvent) {},
+		OnExit:                 ec.onExit,
+		Logger:                 discardLogger(),
+		Posture:                PostureFix,
+	}
+
+	RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
+	result := ec.waitResult(t)
+
+	if !resumeSessionIDCaptured {
+		t.Fatal("StartSession was never called")
+	}
+	if gotResumeSessionID != "" {
+		t.Errorf("StartSessionParams.ResumeSessionID = %q, want empty (a fix dispatch starts a fresh session)", gotResumeSessionID)
+	}
+	if result.SoftStop {
+		t.Error("SoftStop = true, want false (stale status should have been cleaned via the Prepare PreRunFunc)")
+	}
+	if result.ExitKind != WorkerExitNormal {
+		t.Errorf("ExitKind = %q, want %q", result.ExitKind, WorkerExitNormal)
+	}
+	if result.TurnsCompleted != 1 {
+		t.Errorf("TurnsCompleted = %d, want 1 (the fix session ran a turn instead of soft-stopping)", result.TurnsCompleted)
+	}
+}
+
+// TestRunWorkerAttempt_Fix_SuppressesInProgressTransition verifies that a
+// fix attempt never calls TransitionIssue even when
+// cfg.Tracker.InProgressState is set (A4).
+func TestRunWorkerAttempt_Fix_SuppressesInProgressTransition(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	cfg := defaultWorkerConfig(tmpDir)
+	cfg.Tracker.InProgressState = "In Progress"
+
+	tracker := &mockTrackerAdapter{}
+	ec := newExitCapture()
+	deps := WorkerDeps{
+		TrackerAdapter:         tracker,
+		AgentAdapter:           &mockAgentAdapter{},
+		ConfigFunc:             func() config.ServiceConfig { return cfg },
+		PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
+		OnEvent:                func(_ string, _ domain.AgentEvent) {},
+		OnExit:                 ec.onExit,
+		Logger:                 discardLogger(),
+		Posture:                PostureFix,
+	}
+
+	RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
+	ec.waitResult(t)
+
+	if len(tracker.transitionCalls) != 0 {
+		t.Errorf("TransitionIssue call count = %d, want 0 (a fix dispatch drives no issue state)", len(tracker.transitionCalls))
+	}
+}
+
+// TestRunWorkerAttempt_Fix_SuppressesDispatchComment verifies that a fix
+// attempt never posts the dispatch comment even when
+// cfg.Tracker.Comments.OnDispatch is true (A4).
+func TestRunWorkerAttempt_Fix_SuppressesDispatchComment(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	cfg := defaultWorkerConfig(tmpDir)
+	cfg.Tracker.Comments.OnDispatch = true
+
+	tracker := &mockTrackerAdapter{}
+	ec := newExitCapture()
+	deps := WorkerDeps{
+		TrackerAdapter:         tracker,
+		AgentAdapter:           &mockAgentAdapter{},
+		ConfigFunc:             func() config.ServiceConfig { return cfg },
+		PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
+		OnEvent:                func(_ string, _ domain.AgentEvent) {},
+		OnExit:                 ec.onExit,
+		Logger:                 discardLogger(),
+		Posture:                PostureFix,
+	}
+
+	RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
+	ec.waitResult(t)
+
+	if len(tracker.commentCalls) != 0 {
+		t.Errorf("CommentIssue call count = %d, want 0 (a fix dispatch is not a work claim)", len(tracker.commentCalls))
+	}
+}
+
+// TestRunWorkerAttempt_Fix_SuppressesPerTurnRefresh verifies that a fix
+// attempt never calls FetchIssueStatesByIDs during the turn loop; the loop
+// terminates via max_turns instead, since a PR under review usually has its
+// linked issue in a non-active state (A4).
+func TestRunWorkerAttempt_Fix_SuppressesPerTurnRefresh(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	cfg := defaultWorkerConfig(tmpDir)
+	cfg.Agent.MaxTurns = 3
+
+	var fetchCalls atomic.Int32
+	tracker := &mockTrackerAdapter{
+		fetchStatesFn: func(_ context.Context, ids []string) (map[string]string, error) {
+			fetchCalls.Add(1)
+			result := make(map[string]string, len(ids))
+			for _, id := range ids {
+				result[id] = "To Do"
+			}
+			return result, nil
+		},
+	}
+	ec := newExitCapture()
+	deps := WorkerDeps{
+		TrackerAdapter:         tracker,
+		AgentAdapter:           &mockAgentAdapter{},
+		ConfigFunc:             func() config.ServiceConfig { return cfg },
+		PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
+		OnEvent:                func(_ string, _ domain.AgentEvent) {},
+		OnExit:                 ec.onExit,
+		Logger:                 discardLogger(),
+		Posture:                PostureFix,
+	}
+
+	RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
+	result := ec.waitResult(t)
+
+	if fetchCalls.Load() != 0 {
+		t.Errorf("FetchIssueStatesByIDs call count = %d, want 0 (fix loop rests on max_turns/status file only)", fetchCalls.Load())
+	}
+	if result.TurnsCompleted != cfg.Agent.MaxTurns {
+		t.Errorf("TurnsCompleted = %d, want %d (loop terminates via max_turns, not tracker-state gating)",
+			result.TurnsCompleted, cfg.Agent.MaxTurns)
+	}
+}
+
+// TestRunWorkerAttempt_Fix_SuppressesSelfReview verifies that a fix attempt
+// never runs the self-review loop even when self-review is enabled (A4).
+func TestRunWorkerAttempt_Fix_SuppressesSelfReview(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("self-review verification command uses touch")
+	}
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	markerPath := filepath.Join(tmpDir, "self_review_marker")
+
+	cfg := defaultWorkerConfig(tmpDir)
+	cfg.SelfReview = config.SelfReviewConfig{
+		Enabled:               true,
+		MaxIterations:         1,
+		VerificationCommands:  []string{fmt.Sprintf("touch %s", markerPath)},
+		VerificationTimeoutMS: 5000,
+	}
+
+	ec := newExitCapture()
+	deps := WorkerDeps{
+		TrackerAdapter:         &mockTrackerAdapter{},
+		AgentAdapter:           &mockAgentAdapter{},
+		ConfigFunc:             func() config.ServiceConfig { return cfg },
+		PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
+		OnEvent:                func(_ string, _ domain.AgentEvent) {},
+		OnExit:                 ec.onExit,
+		Logger:                 discardLogger(),
+		Posture:                PostureFix,
+	}
+
+	RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
+	ec.waitResult(t)
+
+	if _, err := os.Stat(markerPath); err == nil {
+		t.Error("self-review verification command ran for a fix dispatch; want no self-review")
+	}
+}
+
+// TestRunWorkerAttempt_Fix_AfterRunHookOnCleanExit verifies that a fix
+// attempt runs the after_run teardown hook on a clean exit, unlike the
+// read-only path, because RunsSetupHooks is true for PostureFix (A4).
+func TestRunWorkerAttempt_Fix_AfterRunHookOnCleanExit(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("after_run hook uses touch, unavailable on windows")
+	}
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	markerPath := filepath.Join(tmpDir, "after_run_marker")
+
+	cfg := defaultWorkerConfig(tmpDir)
+	cfg.Hooks.AfterRun = fmt.Sprintf("touch %s", markerPath)
+
+	ec := newExitCapture()
+	deps := WorkerDeps{
+		TrackerAdapter:         &mockTrackerAdapter{},
+		AgentAdapter:           &mockAgentAdapter{},
+		ConfigFunc:             func() config.ServiceConfig { return cfg },
+		PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
+		OnEvent:                func(_ string, _ domain.AgentEvent) {},
+		OnExit:                 ec.onExit,
+		Logger:                 discardLogger(),
+		Posture:                PostureFix,
+	}
+
+	RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
+	result := ec.waitResult(t)
+
+	if result.ExitKind != WorkerExitNormal {
+		t.Fatalf("ExitKind = %q, want %q", result.ExitKind, WorkerExitNormal)
+	}
+	if _, err := os.Stat(markerPath); err != nil {
+		t.Errorf("after_run hook did not run for a fix dispatch on clean exit: %v", err)
+	}
+}
+
+// TestRunWorkerAttempt_Fix_AfterRunHookOnPanic verifies that a fix attempt
+// runs the after_run teardown hook during panic recovery, because
+// RunsSetupHooks is true for PostureFix and its teardown must run on every
+// exit path for symmetry with the setup hooks that ran (A4).
+func TestRunWorkerAttempt_Fix_AfterRunHookOnPanic(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("after_run hook uses touch, unavailable on windows")
+	}
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	markerPath := filepath.Join(tmpDir, "after_run_marker")
+
+	cfg := defaultWorkerConfig(tmpDir)
+	cfg.Hooks.AfterRun = fmt.Sprintf("touch %s", markerPath)
+
+	ec := newExitCapture()
+	var stopCalled atomic.Bool
+	deps := WorkerDeps{
+		TrackerAdapter: &mockTrackerAdapter{},
+		AgentAdapter: &mockAgentAdapter{
+			runTurnFn: func(_ context.Context, _ domain.Session, _ domain.RunTurnParams) (domain.TurnResult, error) {
+				panic("crash after session")
+			},
+			stopSessionFn: func(_ context.Context, _ domain.Session) error {
+				stopCalled.Store(true)
+				return nil
+			},
+		},
+		ConfigFunc:             func() config.ServiceConfig { return cfg },
+		PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
+		OnEvent:                func(_ string, _ domain.AgentEvent) {},
+		OnExit:                 ec.onExit,
+		Logger:                 discardLogger(),
+		Posture:                PostureFix,
+	}
+
+	RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
+	result := ec.waitResult(t)
+
+	if result.ExitKind != WorkerExitError {
+		t.Fatalf("ExitKind = %q, want %q", result.ExitKind, WorkerExitError)
+	}
+	if _, err := os.Stat(markerPath); err != nil {
+		t.Errorf("after_run hook did not run during panic recovery for a fix dispatch: %v", err)
+	}
+	if !stopCalled.Load() {
+		t.Error("StopSession was not called during panic recovery, want teardown")
 	}
 }
