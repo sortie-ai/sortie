@@ -1308,3 +1308,109 @@ func TestEscalateBotReviewFailure_DeleteFingerprintError(t *testing.T) {
 		t.Error("bot-review slot still present after delete-fingerprint error; want removed")
 	}
 }
+
+// --- coexistence with the review reaction kind ---
+
+// TestReconcileBotReviewComments_CoexistsWithReview verifies that the review
+// and bot-review passes dispatch independently within a single reconcile
+// cycle when both slots are pending for the same issue.
+//
+// Each pass must schedule its own retry carrying its own continuation-context
+// key, advance its own fingerprint row and attempt counter, and leave the
+// other kind's tracking state untouched.
+func TestReconcileBotReviewComments_CoexistsWithReview(t *testing.T) {
+	t.Parallel()
+
+	issueID := "BOT-COEXIST"
+	state := NewState(5000, 4, nil, AgentTotals{})
+	reviewKey := ReactionKey(issueID, ReactionKindReview)
+	state.PendingReactions[reviewKey] = newReviewPendingEntry(issueID, 55)
+	botKey := ReactionKey(issueID, ReactionKindBotReview)
+	state.PendingReactions[botKey] = makeBotReviewPendingEntry(t, issueID, 55)
+	state.Claimed[issueID] = struct{}{}
+
+	scm := &mockSCMAdapter{
+		comments: []domain.ReviewComment{
+			{ID: "human-1", Body: "please rename this variable", SubmittedAt: botReviewBaseTime.Add(-5 * time.Minute)},
+		},
+		botComments: []domain.ReviewComment{
+			{ID: "bot-1", Body: "lint: line too long", SubmittedAt: botReviewBaseTime.Add(-2 * time.Second)},
+		},
+	}
+	store := newStatefulFingerprintStore()
+	reviewMetrics := newReviewMetricsSpy()
+	botMetrics := newBotReviewMetricsSpy()
+	params := ReconcileParams{
+		SCMAdapter:          scm,
+		ReviewConfig:        defaultReviewConfig(),
+		BotReviewConfig:     defaultBotReviewConfig(),
+		BotReviewConfigured: true,
+		Store:               store,
+		OnRetryFire:         noopRetryFire,
+		Ctx:                 context.Background(),
+		Logger:              discardLogger(),
+		NowFunc:             func() time.Time { return botReviewBaseTime },
+	}
+
+	reconcileReviewComments(state, params, discardLogger(), context.Background(), reviewMetrics)
+	// RetryAttempts is keyed by issue ID alone, so the bot-review dispatch
+	// below overwrites this entry; capture it before that happens.
+	reviewRetry, reviewScheduled := state.RetryAttempts[issueID]
+	reconcileBotReviewComments(state, params, discardLogger(), context.Background(), botMetrics)
+	botRetry, botScheduled := state.RetryAttempts[issueID]
+
+	if !reviewScheduled {
+		t.Fatal("retry not scheduled after review dispatch; want scheduled")
+	}
+	if reviewRetry.ReactionKind != ReactionKindReview {
+		t.Errorf("review RetryEntry.ReactionKind = %q, want %q", reviewRetry.ReactionKind, ReactionKindReview)
+	}
+	if _, ok := reviewRetry.ContinuationContext["review_comments"]; !ok {
+		t.Error("review RetryEntry.ContinuationContext missing review_comments key")
+	}
+	if !botScheduled {
+		t.Fatal("retry not scheduled after bot-review dispatch; want scheduled")
+	}
+	if botRetry.ReactionKind != ReactionKindBotReview {
+		t.Errorf("bot-review RetryEntry.ReactionKind = %q, want %q", botRetry.ReactionKind, ReactionKindBotReview)
+	}
+	if _, ok := botRetry.ContinuationContext["bot_review_comments"]; !ok {
+		t.Error("bot-review RetryEntry.ContinuationContext missing bot_review_comments key")
+	}
+
+	if reviewMetrics.reviewChecks["dispatched"] != 1 {
+		t.Errorf(`IncReviewChecks("dispatched") = %d, want 1`, reviewMetrics.reviewChecks["dispatched"])
+	}
+	if botMetrics.botReviewChecks["dispatched"] != 1 {
+		t.Errorf(`IncBotReviewChecks("dispatched") = %d, want 1`, botMetrics.botReviewChecks["dispatched"])
+	}
+	if state.ReactionAttempts[reviewKey] != 1 {
+		t.Errorf("ReactionAttempts[%s] = %d, want 1", reviewKey, state.ReactionAttempts[reviewKey])
+	}
+	if state.ReactionAttempts[botKey] != 1 {
+		t.Errorf("ReactionAttempts[%s] = %d, want 1", botKey, state.ReactionAttempts[botKey])
+	}
+
+	if _, ok := state.PendingReactions[reviewKey]; ok {
+		t.Error("review PendingReactions entry still present; want consumed by its own dispatch")
+	}
+	if _, ok := state.PendingReactions[botKey]; ok {
+		t.Error("bot-review PendingReactions entry still present; want consumed by its own dispatch")
+	}
+
+	reviewFingerprint := store.fingerprints[reviewKey].fingerprint
+	botFingerprint := store.fingerprints[botKey].fingerprint
+	if reviewFingerprint == "" {
+		t.Error("review fingerprint row is empty; want a non-empty hash after review dispatch")
+	}
+	if botFingerprint == "" {
+		t.Error("bot-review fingerprint row is empty; want a non-empty hash after bot-review dispatch")
+	}
+	if reviewFingerprint == botFingerprint {
+		t.Errorf("review and bot-review fingerprints both equal %q; want distinct values scoped to each kind", reviewFingerprint)
+	}
+
+	if _, ok := state.Claimed[issueID]; !ok {
+		t.Error("state.Claimed[issueID] cleared during coexistence dispatch; want preserved")
+	}
+}
