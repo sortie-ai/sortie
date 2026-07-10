@@ -899,9 +899,9 @@ parses through a dedicated path and never appears as a generic reaction entry, s
 fields sit directly on the block.
 
 `label_commands` is the configuration key only. The runtime and persisted reaction-kind
-discriminators are `label-review` (this command) and `label-fix` (reserved for the fix
-command): these values appear in logs and in the `reaction_fingerprints.kind` column. The
-prompt continuation key is a third name, `label_review` (underscore; see Section 5.2).
+discriminators are `label-review` (the review command) and `label-fix` (the fix command):
+these values appear in logs and in the `reaction_fingerprints.kind` column. The prompt
+continuation key is a third name, `label_review` (underscore; see Section 5.2).
 
 Fields:
 
@@ -909,16 +909,14 @@ Fields:
 | ------------------ | ------- | --------------- | ---------------- | ------------------------------------------------------------------------------------------------------- |
 | `provider`         | string  | _(required)_    | Requires restart | SCM adapter kind. Must match the provider of every other active SCM reaction. Activates the block.      |
 | `review_label`     | string  | `sortie:review` | Requires restart | Label that triggers a read-only review. An explicit empty string disables the review command.           |
-| `fix_label`        | string  | `sortie:fix`    | Requires restart | Label reserved for the fix command. Parsed and shape-validated but drives no dispatch in this release.  |
+| `fix_label`        | string  | `sortie:fix`    | Requires restart | Label that triggers the fix command. An explicit empty string disables the fix command.                 |
 | `poll_interval_ms` | integer | `60000`         | Requires restart | Journal poll interval. Minimum `30000` (30 sec); a lower value is clamped up to the floor with a warning. |
 
 **Activation:** The `reactions.label_commands` block is active when `provider` is present
-and non-empty AND `review_label` is non-empty. When `provider` is set and only `fix_label`
-is non-empty, the block is inert in this release (the fix command does not dispatch yet)
-and the workflow loader logs a warning at load time. Agent-created PRs MUST write `pr_number`
-(positive integer), `owner`, and `repo` (all non-empty) to `.sortie/scm.json` in the
-workspace for label detection to activate. No branch is required: the review session has no
-checkout.
+and non-empty and at least one command label is non-empty. Agent-created PRs MUST write
+`pr_number` (positive integer), `owner`, and `repo` (all non-empty) to `.sortie/scm.json`
+in the workspace for label detection to activate. No branch is required: the review
+session has no checkout.
 
 **Acknowledgment:** On a confirmed command the orchestrator removes the label from the PR.
 The label's disappearance is the operator-visible signal that the command was accepted:

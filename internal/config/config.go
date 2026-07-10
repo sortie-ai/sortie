@@ -1284,8 +1284,7 @@ type LabelCommandsConfig struct {
 	ReviewLabel string
 
 	// FixLabel triggers the fix command. Defaults to "sortie:fix"; an
-	// explicit empty string disables the command. Parsed and shape-validated
-	// but not otherwise consumed yet.
+	// explicit empty string disables the command.
 	FixLabel string
 
 	// PollIntervalMS is the journal poll interval. Defaults to 60000 and
