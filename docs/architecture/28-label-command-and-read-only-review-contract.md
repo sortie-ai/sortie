@@ -38,7 +38,7 @@ introduces one normalized journal type:
 
 ```go
 type LabelEvent struct {
-    ID    string    // provider journal entry id, opaque, unique per PR
+    ID    string    // journal entry id, unique per PR; sorts lexically in journal order
     Label string    // normalized (lowercased) label name
     Actor string    // login of the acting user
     Added bool      // true = labeled, false = unlabeled
@@ -59,6 +59,12 @@ RemoveLabel(ctx context.Context, prNumber int, owner, repo, label string) error
 - Implementations MUST normalize provider field names at the boundary; platform-specific field
   names MUST NOT leave the adapter package. `Label` is lowercased by the adapter so the orchestrator
   never re-normalizes it.
+- `ID` MUST be normalized by the adapter so that lexicographic string order matches the journal's
+  chronological order among events sharing a timestamp; the orchestrator uses the id as the
+  tiebreaker when it compares positions by `(At, id)`. Providers with numeric journal ids satisfy
+  this by zero-padding the decimal id to a fixed width (the GitHub adapter pads to 19 digits, the
+  int64 maximum). An adapter whose native ids do not sort lexically in journal order MUST derive a
+  sortable surrogate at the boundary; raw UUIDs do not qualify.
 - Implementations MUST be safe for concurrent use.
 
 No diff-fetch method and no review-comment-posting method are added. The reviewing agent fetches the
@@ -90,10 +96,13 @@ adapter fits without a contract change.
 
 The unit of command is one `labeled` journal event whose normalized label name matches a configured
 command label on a Sortie-managed PR. Detection maintains a per-PR high-water mark, an opaque
-position formed from the newest processed event's timestamp and id (`"<RFC3339Nano>|<id>"`), compared
-lexically by `(At, id)`. Both components are normalized to a fixed-width, lexically-sortable form —
-the timestamp carries all nine fractional-second digits and the adapter zero-pads the numeric id —
-so lexical order matches chronological order even for events that share a timestamp.
+position formed from the newest processed event's timestamp and id (`"<timestamp>|<id>"`), compared
+lexically by `(At, id)`. Both components are normalized to a fixed-width, lexically-sortable form.
+The orchestrator formats the timestamp as RFC 3339 UTC with all nine fractional-second digits
+forced (a trailing-zero-trimming layout such as Go's `RFC3339Nano` is unsuitable: it breaks lexical
+ordering between timestamps of differing precision); the adapter normalizes the id per the
+`LabelEvent.ID` contract (§11F.1). Lexical order therefore matches chronological order even for
+events that share a timestamp.
 
 Each due tick reads the journal and considers only events whose position sorts strictly after the
 stored mark. The following invariants hold:
@@ -158,11 +167,11 @@ Loop body per `label-review` entry in `pending_reactions`:
 9. Otherwise (retraction, foreign labels, unlabeled-only, or collapse into an outstanding command):
    persist the newest mark and re-enqueue at the poll interval without dispatching.
 
-The re-enqueue at step 8 is the property the sibling passes lack. A read-only review session runs in
-a scratch workspace and writes no `.sortie/scm.json`, so worker-exit seeding (§11F.9) cannot re-arm
-detection after a review completes. The pass instead keeps the detection entry alive across its own
-dispatch, carrying the PR identity in the entry's kind data, so a re-applied label after a completed
-review is detected on a later tick without a process restart.
+The re-enqueue at step 8 is the property the sibling passes lack. Worker-exit seeding (§11F.9)
+cannot re-arm detection after a review completes, because a read-only exit never passes the
+reaction-enqueue gate. The pass instead keeps the detection entry alive across its own dispatch,
+carrying the PR identity in the entry's kind data, so a re-applied label after a completed review
+is detected on a later tick without a process restart.
 
 Cross-kind isolation: the pass MUST scope every `pending_reactions` and `reaction_fingerprints`
 mutation to `kind = "label-review"`. It MUST NOT read or write any other kind's entry, fingerprint,
@@ -317,9 +326,14 @@ no checkout). The seeded entry carries the dispatch-frozen agent kind, rule name
 copied from the exiting run, so the later read-only session resolves the same adapter and template; a
 "create only if absent" guard preserves in-progress detection state across re-exits.
 
-This seeding never fires on a read-only review session's own exit: that session runs in a scratch
-workspace and writes no `.sortie/scm.json`, so the PR-metadata gate fails naturally. Repeatability
-after a completed review is carried instead by the reconcile re-enqueue on dispatch (§11F.4).
+This seeding never fires on a read-only review session's own exit, and not because the metadata is
+absent: the read-only session reuses the per-issue workspace directory, which may still hold the
+`.sortie/scm.json` a prior full session wrote. The operative gate is the reaction-enqueue
+predicate shared by every seeding block: the issue must have been claimed at exit and the exit must
+either take the handoff path or leave the claim held. A read-only exit is excluded from the handoff
+path and always releases the claim, so the predicate is never satisfied and no seeding block reads
+the workspace metadata at all. Repeatability after a completed review is carried instead by the
+reconcile re-enqueue on dispatch (§11F.4).
 
 Startup recovery re-seeds a `label-review` entry for each recovered active-issue run with the same PR
 metadata, again omitting the branch guard, so a label applied while Sortie was down is detected on
@@ -364,7 +378,7 @@ Per-issue `label-review` reaction lifecycle (the `issue_id:label-review` slot):
 
 | From | Event | To | Action |
 |------|-------|----|--------|
-| (none) | Normal worker exit, SCM adapter and label-review configured, PR metadata present | pending | Seed the entry if absent (frozen agent kind, rule, template). |
+| (none) | Normal worker exit passing the reaction-enqueue gate (§11F.9), SCM adapter and label-review configured, PR metadata present | pending | Seed the entry if absent (frozen agent kind, rule, template). |
 | (none) | Startup recovery, recovered active run with PR metadata | pending | Re-seed the entry if absent; read the mark back from SQLite. |
 | pending | Reconcile tick, `now < PendingRetryAt` | pending | Re-enqueue, no journal read. |
 | pending | Reconcile tick, journal fetch error | pending | Increment backoff, set `PendingRetryAt`, re-enqueue. |

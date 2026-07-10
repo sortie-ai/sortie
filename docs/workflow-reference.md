@@ -898,6 +898,11 @@ not use the shared per-kind fields (`max_retries`, `escalation`, `escalation_lab
 parses through a dedicated path and never appears as a generic reaction entry, so its
 fields sit directly on the block.
 
+`label_commands` is the configuration key only. The runtime and persisted reaction-kind
+discriminators are `label-review` (this command) and `label-fix` (reserved for the fix
+command): these values appear in logs and in the `reaction_fingerprints.kind` column. The
+prompt continuation key is a third name, `label_review` (underscore; see Section 5.2).
+
 Fields:
 
 | Field              | Type    | Default         | Dynamic Reload   | Description                                                                                             |
@@ -908,7 +913,9 @@ Fields:
 | `poll_interval_ms` | integer | `60000`         | Requires restart | Journal poll interval. Minimum `30000` (30 sec); a lower value is clamped up to the floor with a warning. |
 
 **Activation:** The `reactions.label_commands` block is active when `provider` is present
-and non-empty AND `review_label` is non-empty. Agent-created PRs MUST write `pr_number`
+and non-empty AND `review_label` is non-empty. When `provider` is set and only `fix_label`
+is non-empty, the block is inert in this release (the fix command does not dispatch yet)
+and the workflow loader logs a warning at load time. Agent-created PRs MUST write `pr_number`
 (positive integer), `owner`, and `repo` (all non-empty) to `.sortie/scm.json` in the
 workspace for label detection to activate. No branch is required: the review session has no
 checkout.

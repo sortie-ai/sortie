@@ -644,9 +644,13 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 		// Record a pending label-review entry when the SCM adapter is
 		// configured, label-review is enabled, and the workspace has PR
 		// metadata. Unlike the sibling kinds this requires no branch:
-		// the read-only review has no checkout. This never fires on a
-		// read-only session's own exit, whose scratch workspace writes
-		// no scm.json, so the PR-metadata gate fails naturally.
+		// the read-only review has no checkout. A read-only session's
+		// own exit never seeds, but not for lack of metadata: the
+		// reused per-issue directory may still hold the scm.json a
+		// prior full session wrote. The operative gate is
+		// reactionEnqueueAllowed, which is always false for a read-only
+		// exit because that exit is excluded from the handoff path and
+		// releases the claim.
 		if params.SCMAdapter != nil && params.LabelReviewReactionConfigured && workerResult.WorkspacePath != "" {
 			if reactionEnqueueAllowed {
 				scm := workspace.ReadSCMMetadata(workerResult.WorkspacePath, log)
