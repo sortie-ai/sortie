@@ -4,6 +4,14 @@
 
 Sortie follows [Semantic Versioning](https://semver.org/). Security fixes are applied to the **current minor release** of the latest major version. The immediately preceding minor enters a **3-month security-maintenance window** during which it continues to receive critical and high severity security patches only.
 
+<!--
+  Per-minor-release maintenance (policy is in the prose below):
+  1. New minor's ship date = its dated "## [X.Y.0] - DATE" heading in CHANGELOG.md.
+  2. Shift the three rows: current -> "Yes (X.Y.0 recommended)";
+     preceding -> "Security patches until <ship date + 3 months>"; older -> "No".
+  3. Also bump the "(e.g., X.Y.0)" / "(e.g., X.(Y-1).x)" examples in the paragraph below.
+-->
+
 | Version | Supported |
 |---------|-----------|
 | 1.14.x | Yes (1.14.0 recommended) |
