@@ -465,6 +465,37 @@ func TestFinish(t *testing.T) {
 		}
 	})
 
+	t.Run("after_run succeeds with output logs hook completed with workspace", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		var buf bytes.Buffer
+		logger := captureLogger(&buf)
+
+		Finish(context.Background(), FinishParams{
+			Path:          dir,
+			Identifier:    "F-7",
+			IssueID:       "id-7",
+			Attempt:       1,
+			AfterRun:      `echo "after_run stdout"`,
+			HookTimeoutMS: 5000,
+			Logger:        logger,
+		})
+
+		out := buf.String()
+		if !strings.Contains(out, "hook completed") {
+			t.Errorf("log output = %q, want it to contain the %q message", out, "hook completed")
+		}
+		if !strings.Contains(out, "hook=after_run") {
+			t.Errorf("log output = %q, want it to contain %q", out, "hook=after_run")
+		}
+		if !strings.Contains(out, "workspace=") || !strings.Contains(out, dir) {
+			t.Errorf("log output = %q, want it to contain workspace=%q", out, dir)
+		}
+		if !strings.Contains(out, "hook_output=") || !strings.Contains(out, "after_run stdout") {
+			t.Errorf("log output = %q, want hook_output to contain %q", out, "after_run stdout")
+		}
+	})
+
 	t.Run("no after_run configured", func(t *testing.T) {
 		t.Parallel()
 		dir := t.TempDir()
@@ -726,6 +757,79 @@ func TestCleanup(t *testing.T) {
 	})
 }
 
+// TestCleanup_HookOutputLogging covers the hook_output failure attribute
+// and the hook completed success record at the before_remove site reached
+// through Cleanup (R1-R4).
+func TestCleanup_HookOutputLogging(t *testing.T) {
+	t.Parallel()
+
+	t.Run("before_remove fails with output logs hook_output", func(t *testing.T) {
+		t.Parallel()
+		root := t.TempDir()
+		res := mustEnsure(t, root, "CLNLOG-1")
+		var buf bytes.Buffer
+		logger := captureLogger(&buf)
+
+		err := Cleanup(context.Background(), CleanupParams{
+			Root:          root,
+			Identifier:    "CLNLOG-1",
+			IssueID:       "id-clnlog-1",
+			Attempt:       1,
+			BeforeRemove:  `echo "before_remove stdout"; exit 1`,
+			HookTimeoutMS: 5000,
+			Logger:        logger,
+		})
+		if err != nil {
+			t.Fatalf("Cleanup() error: %v", err)
+		}
+		assertFileNotExists(t, res.Path)
+
+		out := buf.String()
+		if !strings.Contains(out, "hook_output=") {
+			t.Errorf("log output = %q, want it to contain hook_output=", out)
+		}
+		if !strings.Contains(out, "before_remove stdout") {
+			t.Errorf("log output = %q, want it to contain %q", out, "before_remove stdout")
+		}
+	})
+
+	t.Run("before_remove succeeds with output logs hook completed with workspace", func(t *testing.T) {
+		t.Parallel()
+		root := t.TempDir()
+		res := mustEnsure(t, root, "CLNLOG-2")
+		var buf bytes.Buffer
+		logger := captureLogger(&buf)
+
+		err := Cleanup(context.Background(), CleanupParams{
+			Root:          root,
+			Identifier:    "CLNLOG-2",
+			IssueID:       "id-clnlog-2",
+			Attempt:       1,
+			BeforeRemove:  `echo "before_remove stdout"`,
+			HookTimeoutMS: 5000,
+			Logger:        logger,
+		})
+		if err != nil {
+			t.Fatalf("Cleanup() error: %v", err)
+		}
+		assertFileNotExists(t, res.Path)
+
+		out := buf.String()
+		if !strings.Contains(out, "hook completed") {
+			t.Errorf("log output = %q, want it to contain the %q message", out, "hook completed")
+		}
+		if !strings.Contains(out, "hook=before_remove") {
+			t.Errorf("log output = %q, want it to contain %q", out, "hook=before_remove")
+		}
+		if !strings.Contains(out, "workspace=") || !strings.Contains(out, res.Path) {
+			t.Errorf("log output = %q, want it to contain workspace=%q", out, res.Path)
+		}
+		if !strings.Contains(out, "hook_output=") || !strings.Contains(out, "before_remove stdout") {
+			t.Errorf("log output = %q, want hook_output to contain %q", out, "before_remove stdout")
+		}
+	})
+}
+
 func TestCleanupByPath(t *testing.T) {
 	t.Parallel()
 
@@ -898,6 +1002,85 @@ func TestCleanupByPath(t *testing.T) {
 		}
 		assertFileExists(t, marker)
 		assertFileNotExists(t, wsDir)
+	})
+}
+
+// TestCleanupByPath_HookOutputLogging covers the hook_output failure
+// attribute and the hook completed success record at the before_remove
+// site reached through CleanupByPath (R1-R4).
+func TestCleanupByPath_HookOutputLogging(t *testing.T) {
+	t.Parallel()
+
+	t.Run("before_remove fails with output logs hook_output", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		wsDir := filepath.Join(dir, "WSLOG-1")
+		if err := os.MkdirAll(wsDir, 0o755); err != nil {
+			t.Fatalf("MkdirAll: %v", err)
+		}
+		var buf bytes.Buffer
+		logger := captureLogger(&buf)
+
+		err := CleanupByPath(context.Background(), CleanupByPathParams{
+			Path:          wsDir,
+			Identifier:    "WSLOG-1",
+			IssueID:       "id-wslog-1",
+			Attempt:       1,
+			BeforeRemove:  `echo "before_remove stdout"; exit 1`,
+			HookTimeoutMS: 5000,
+			Logger:        logger,
+		})
+		if err != nil {
+			t.Fatalf("CleanupByPath() error: %v", err)
+		}
+		assertFileNotExists(t, wsDir)
+
+		out := buf.String()
+		if !strings.Contains(out, "hook_output=") {
+			t.Errorf("log output = %q, want it to contain hook_output=", out)
+		}
+		if !strings.Contains(out, "before_remove stdout") {
+			t.Errorf("log output = %q, want it to contain %q", out, "before_remove stdout")
+		}
+	})
+
+	t.Run("before_remove succeeds with output logs hook completed with workspace", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		wsDir := filepath.Join(dir, "WSLOG-2")
+		if err := os.MkdirAll(wsDir, 0o755); err != nil {
+			t.Fatalf("MkdirAll: %v", err)
+		}
+		var buf bytes.Buffer
+		logger := captureLogger(&buf)
+
+		err := CleanupByPath(context.Background(), CleanupByPathParams{
+			Path:          wsDir,
+			Identifier:    "WSLOG-2",
+			IssueID:       "id-wslog-2",
+			Attempt:       1,
+			BeforeRemove:  `echo "before_remove stdout"`,
+			HookTimeoutMS: 5000,
+			Logger:        logger,
+		})
+		if err != nil {
+			t.Fatalf("CleanupByPath() error: %v", err)
+		}
+		assertFileNotExists(t, wsDir)
+
+		out := buf.String()
+		if !strings.Contains(out, "hook completed") {
+			t.Errorf("log output = %q, want it to contain the %q message", out, "hook completed")
+		}
+		if !strings.Contains(out, "hook=before_remove") {
+			t.Errorf("log output = %q, want it to contain %q", out, "hook=before_remove")
+		}
+		if !strings.Contains(out, "workspace=") || !strings.Contains(out, wsDir) {
+			t.Errorf("log output = %q, want it to contain workspace=%q", out, wsDir)
+		}
+		if !strings.Contains(out, "hook_output=") || !strings.Contains(out, "before_remove stdout") {
+			t.Errorf("log output = %q, want hook_output to contain %q", out, "before_remove stdout")
+		}
 	})
 }
 
@@ -1416,6 +1599,32 @@ func TestPrepare_HookOutputLogging(t *testing.T) {
 			t.Errorf("log output = %q, want no hook_output attribute for a silent failing hook", out)
 		}
 	})
+
+	t.Run("failing before_run hook logs hook_output", func(t *testing.T) {
+		t.Parallel()
+		root := t.TempDir()
+		var buf bytes.Buffer
+		logger := captureLogger(&buf)
+
+		_, err := Prepare(context.Background(), PrepareParams{
+			Root:          root,
+			Identifier:    "HOOKLOG-5",
+			IssueID:       "id-hooklog-5",
+			Attempt:       1,
+			BeforeRun:     `echo "before_run stdout"; exit 1`,
+			HookTimeoutMS: 5000,
+			Logger:        logger,
+		})
+		_ = requireHookError(t, err)
+
+		out := buf.String()
+		if !strings.Contains(out, "hook_output=") {
+			t.Errorf("log output = %q, want it to contain hook_output=", out)
+		}
+		if !strings.Contains(out, "before_run stdout") {
+			t.Errorf("log output = %q, want it to contain %q", out, "before_run stdout")
+		}
+	})
 }
 
 // TestPrepare_HookCompletedLogging covers the "hook completed" DEBUG
@@ -1499,6 +1708,40 @@ func TestPrepare_HookCompletedLogging(t *testing.T) {
 
 		if out := buf.String(); strings.Contains(out, "hook completed") {
 			t.Errorf("log output for a silent hook = %q, want no %q record", out, "hook completed")
+		}
+	})
+
+	t.Run("succeeding before_run hook logs hook completed with workspace", func(t *testing.T) {
+		t.Parallel()
+		root := t.TempDir()
+		var buf bytes.Buffer
+		logger := captureLogger(&buf)
+
+		result, err := Prepare(context.Background(), PrepareParams{
+			Root:          root,
+			Identifier:    "HOOKDONE-4",
+			IssueID:       "id-hookdone-4",
+			Attempt:       1,
+			BeforeRun:     `echo "before_run stdout"`,
+			HookTimeoutMS: 5000,
+			Logger:        logger,
+		})
+		if err != nil {
+			t.Fatalf("Prepare() error: %v", err)
+		}
+
+		out := buf.String()
+		if !strings.Contains(out, "hook completed") {
+			t.Errorf("log output = %q, want it to contain the %q message", out, "hook completed")
+		}
+		if !strings.Contains(out, "hook=before_run") {
+			t.Errorf("log output = %q, want it to contain %q", out, "hook=before_run")
+		}
+		if !strings.Contains(out, "workspace=") || !strings.Contains(out, result.Path) {
+			t.Errorf("log output = %q, want it to contain workspace=%q", out, result.Path)
+		}
+		if !strings.Contains(out, "hook_output=") || !strings.Contains(out, "before_run stdout") {
+			t.Errorf("log output = %q, want hook_output to contain %q", out, "before_run stdout")
 		}
 	})
 }
