@@ -9,11 +9,14 @@ import (
 	"sync"
 )
 
-// MaxHookOutputBytes is the maximum number of bytes captured from
-// hook stdout+stderr combined. Output beyond this limit is silently
-// discarded. This prevents a runaway hook from consuming unbounded
-// memory.
-const MaxHookOutputBytes = 256 * 1024
+// MaxHookOutputBytes is the maximum number of bytes retained from a
+// hook's combined stdout and stderr. When output exceeds this cap the
+// earliest bytes are dropped so the retained value holds the tail,
+// where a failing hook's error message almost always is. The cap is
+// deliberately small so the captured output, emitted verbatim as one
+// structured log field, stays under the single-line size limit that
+// common log collectors impose before they split a record.
+const MaxHookOutputBytes = 8 * 1024
 
 // maxScriptDisplayLen is the maximum number of bytes of a hook script
 // included in error messages.
@@ -41,11 +44,12 @@ type HookParams struct {
 }
 
 // HookResult holds the outcome of a successful hook execution (exit
-// code 0). Output contains the combined stdout and stderr, truncated
-// to [MaxHookOutputBytes].
+// code 0). Output contains the combined stdout and stderr, retained as
+// the last [MaxHookOutputBytes] bytes.
 type HookResult struct {
-	// Output is the combined stdout+stderr of the hook, truncated to
-	// [MaxHookOutputBytes].
+	// Output is the combined stdout+stderr of the hook: the last
+	// [MaxHookOutputBytes] bytes, prefixed with a truncation marker
+	// when earlier output was dropped.
 	Output string
 }
 
@@ -59,37 +63,43 @@ func truncateScript(s string) string {
 	return s[:maxScriptDisplayLen] + "..."
 }
 
-// limitedBuffer captures up to max bytes, silently discarding the
-// rest. Implements [io.Writer] for use as cmd.Stdout/Stderr.
-// Safe for concurrent use.
+// limitedBuffer retains the last max bytes written to it, dropping the
+// earliest bytes once the total exceeds max. It implements [io.Writer]
+// for use as cmd.Stdout and cmd.Stderr and is safe for concurrent use.
 type limitedBuffer struct {
-	mu  sync.Mutex
-	buf bytes.Buffer
-	max int
+	mu        sync.Mutex
+	buf       bytes.Buffer
+	max       int
+	truncated bool
 }
 
-// Write appends p to the buffer up to the configured maximum. Bytes
-// beyond the cap are silently discarded. Always returns len(p), nil
-// to prevent [os/exec.Cmd] short-write errors.
+// Write appends p and, once the retained content exceeds max, discards
+// the earliest bytes so only the most recent max bytes remain. It
+// always returns len(p), nil to prevent [os/exec.Cmd] short-write
+// errors, and is safe for concurrent use.
 func (lb *limitedBuffer) Write(p []byte) (int, error) {
 	lb.mu.Lock()
 	defer lb.mu.Unlock()
 
-	remaining := lb.max - lb.buf.Len()
-	if remaining > 0 {
-		write := p
-		if len(write) > remaining {
-			write = write[:remaining]
-		}
-		lb.buf.Write(write) //nolint:errcheck // bytes.Buffer.Write never returns an error
+	lb.buf.Write(p) //nolint:errcheck // bytes.Buffer.Write never returns an error
+	if overflow := lb.buf.Len() - lb.max; overflow > 0 {
+		lb.buf.Next(overflow)
+		lb.truncated = true
 	}
 	return len(p), nil
 }
 
+// String returns the retained tail of the written bytes. When earlier
+// bytes were dropped, the tail is prefixed with a one-line marker
+// reporting the number of bytes shown.
 func (lb *limitedBuffer) String() string {
 	lb.mu.Lock()
 	defer lb.mu.Unlock()
-	return lb.buf.String()
+
+	if !lb.truncated {
+		return lb.buf.String()
+	}
+	return fmt.Sprintf("[truncated: showing last %d bytes of hook output]\n%s", lb.max, lb.buf.String())
 }
 
 // hookEnv builds a restricted environment for the hook subprocess.

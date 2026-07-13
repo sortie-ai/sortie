@@ -3,8 +3,10 @@
 package workspace
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -32,6 +34,13 @@ func mustEnsure(t *testing.T, root, identifier string) EnsureResult {
 		t.Fatalf("Ensure(%q, %q): %v", root, identifier, err)
 	}
 	return res
+}
+
+// captureLoggerAt returns an [slog.Logger] writing to buf, gated at the
+// given minimum level. Use [captureLogger] (status_test.go) when the
+// level should always be Debug.
+func captureLoggerAt(buf *bytes.Buffer, level slog.Level) *slog.Logger {
+	return slog.New(slog.NewTextHandler(buf, &slog.HandlerOptions{Level: level}))
 }
 
 func TestHookEnv(t *testing.T) {
@@ -425,6 +434,35 @@ func TestFinish(t *testing.T) {
 			AfterRun:      "sleep 60",
 			HookTimeoutMS: 100,
 		})
+	})
+
+	// Finish is a log-and-ignore site: the failure branch does not return,
+	// so a missing hookErr == nil guard would let a failed hook also emit
+	// "hook completed". This guards that regression at a site distinct
+	// from Prepare, where both hook failure branches return.
+	t.Run("after_run fails logs hook_output but not hook completed", func(t *testing.T) {
+		t.Parallel()
+		dir := t.TempDir()
+		var buf bytes.Buffer
+		logger := captureLogger(&buf)
+
+		Finish(context.Background(), FinishParams{
+			Path:          dir,
+			Identifier:    "F-6",
+			IssueID:       "id-6",
+			Attempt:       1,
+			AfterRun:      `echo "this is stdout"; exit 1`,
+			HookTimeoutMS: 5000,
+			Logger:        logger,
+		})
+
+		out := buf.String()
+		if !strings.Contains(out, "hook_output=") {
+			t.Errorf("log output = %q, want it to contain hook_output=", out)
+		}
+		if strings.Contains(out, "hook completed") {
+			t.Errorf("log output = %q, want no %q record for a failed hook", out, "hook completed")
+		}
 	})
 
 	t.Run("no after_run configured", func(t *testing.T) {
@@ -1255,6 +1293,212 @@ func TestPrepare_PreRunFunc(t *testing.T) {
 		})
 		if err != nil {
 			t.Fatalf("Prepare() with nil PreRunFunc error: %v", err)
+		}
+	})
+}
+
+// TestPrepare_HookOutputLogging covers the hook_output attribute added to
+// the after_create failure WARN record (R1, R2, R5, R6, R9).
+func TestPrepare_HookOutputLogging(t *testing.T) {
+	t.Parallel()
+
+	t.Run("failing hook logs hook_output with stdout and stderr", func(t *testing.T) {
+		t.Parallel()
+		root := t.TempDir()
+		var buf bytes.Buffer
+		logger := captureLogger(&buf)
+
+		_, err := Prepare(context.Background(), PrepareParams{
+			Root:          root,
+			Identifier:    "HOOKLOG-1",
+			IssueID:       "id-hooklog-1",
+			Attempt:       1,
+			AfterCreate:   `echo "this is stdout"; echo "this is stderr" >&2; exit 1`,
+			HookTimeoutMS: 5000,
+			Logger:        logger,
+		})
+		_ = requireHookError(t, err)
+
+		out := buf.String()
+		before, _, found := strings.Cut(out, "hook_output=")
+		if !found {
+			t.Fatalf("log output = %q, want it to contain hook_output=", out)
+		}
+		if !strings.Contains(out, "this is stdout") {
+			t.Errorf("log output = %q, want it to contain %q", out, "this is stdout")
+		}
+		if !strings.Contains(out, "this is stderr") {
+			t.Errorf("log output = %q, want it to contain %q", out, "this is stderr")
+		}
+		// The diagnostic text must be attached under hook_output, never
+		// under the preceding error attribute.
+		if strings.Contains(before, "this is stdout") || strings.Contains(before, "this is stderr") {
+			t.Errorf("hook diagnostic text found before hook_output= (leaked into error attribute): %q", before)
+		}
+	})
+
+	t.Run("failing hook logs hook_output at warn level without debug", func(t *testing.T) {
+		t.Parallel()
+		root := t.TempDir()
+		var buf bytes.Buffer
+		logger := captureLoggerAt(&buf, slog.LevelWarn)
+
+		_, err := Prepare(context.Background(), PrepareParams{
+			Root:          root,
+			Identifier:    "HOOKLOG-2",
+			IssueID:       "id-hooklog-2",
+			Attempt:       1,
+			AfterCreate:   `echo "this is stdout"; echo "this is stderr" >&2; exit 1`,
+			HookTimeoutMS: 5000,
+			Logger:        logger,
+		})
+		_ = requireHookError(t, err)
+
+		out := buf.String()
+		if !strings.Contains(out, "hook_output=") {
+			t.Errorf("log output at LevelWarn = %q, want it to contain hook_output=", out)
+		}
+		if !strings.Contains(out, "this is stdout") {
+			t.Errorf("log output at LevelWarn = %q, want it to contain %q", out, "this is stdout")
+		}
+	})
+
+	t.Run("failure record inherits issue scoping from provided logger", func(t *testing.T) {
+		t.Parallel()
+		root := t.TempDir()
+		var buf bytes.Buffer
+		// Mimics the orchestrator's logging.WithIssue-scoped logger, which
+		// internal/workspace cannot construct itself (no internal/logging
+		// import). The caller-provided logger already carries these fields.
+		logger := captureLogger(&buf).With(
+			slog.String("issue_id", "id-hooklog-3"),
+			slog.String("issue_identifier", "HOOKLOG-3"),
+		)
+
+		_, err := Prepare(context.Background(), PrepareParams{
+			Root:          root,
+			Identifier:    "HOOKLOG-3",
+			IssueID:       "id-hooklog-3",
+			Attempt:       1,
+			AfterCreate:   "exit 1",
+			HookTimeoutMS: 5000,
+			Logger:        logger,
+		})
+		_ = requireHookError(t, err)
+
+		out := buf.String()
+		if !strings.Contains(out, "issue_id=id-hooklog-3") {
+			t.Errorf("log output = %q, want it to contain %q", out, "issue_id=id-hooklog-3")
+		}
+		if !strings.Contains(out, "issue_identifier=HOOKLOG-3") {
+			t.Errorf("log output = %q, want it to contain %q", out, "issue_identifier=HOOKLOG-3")
+		}
+	})
+
+	t.Run("failing hook with no output omits hook_output", func(t *testing.T) {
+		t.Parallel()
+		root := t.TempDir()
+		var buf bytes.Buffer
+		logger := captureLogger(&buf)
+
+		_, err := Prepare(context.Background(), PrepareParams{
+			Root:          root,
+			Identifier:    "HOOKLOG-4",
+			IssueID:       "id-hooklog-4",
+			Attempt:       1,
+			AfterCreate:   "exit 1",
+			HookTimeoutMS: 5000,
+			Logger:        logger,
+		})
+		_ = requireHookError(t, err)
+
+		if out := buf.String(); strings.Contains(out, "hook_output=") {
+			t.Errorf("log output = %q, want no hook_output attribute for a silent failing hook", out)
+		}
+	})
+}
+
+// TestPrepare_HookCompletedLogging covers the "hook completed" DEBUG
+// record emitted on hook success (R3, R4).
+func TestPrepare_HookCompletedLogging(t *testing.T) {
+	t.Parallel()
+
+	t.Run("succeeding hook logs hook completed at debug", func(t *testing.T) {
+		t.Parallel()
+		root := t.TempDir()
+		var buf bytes.Buffer
+		logger := captureLogger(&buf)
+
+		_, err := Prepare(context.Background(), PrepareParams{
+			Root:          root,
+			Identifier:    "HOOKDONE-1",
+			IssueID:       "id-hookdone-1",
+			Attempt:       1,
+			AfterCreate:   `echo "created ok"`,
+			HookTimeoutMS: 5000,
+			Logger:        logger,
+		})
+		if err != nil {
+			t.Fatalf("Prepare() error: %v", err)
+		}
+
+		out := buf.String()
+		if !strings.Contains(out, "hook completed") {
+			t.Errorf("log output = %q, want it to contain the %q message", out, "hook completed")
+		}
+		if !strings.Contains(out, "hook=after_create") {
+			t.Errorf("log output = %q, want it to contain %q", out, "hook=after_create")
+		}
+		if !strings.Contains(out, "hook_output=") || !strings.Contains(out, "created ok") {
+			t.Errorf("log output = %q, want hook_output to contain %q", out, "created ok")
+		}
+	})
+
+	t.Run("succeeding hook silent above debug", func(t *testing.T) {
+		t.Parallel()
+		root := t.TempDir()
+		var buf bytes.Buffer
+		logger := captureLoggerAt(&buf, slog.LevelInfo)
+
+		_, err := Prepare(context.Background(), PrepareParams{
+			Root:          root,
+			Identifier:    "HOOKDONE-2",
+			IssueID:       "id-hookdone-2",
+			Attempt:       1,
+			AfterCreate:   `echo "created ok"`,
+			HookTimeoutMS: 5000,
+			Logger:        logger,
+		})
+		if err != nil {
+			t.Fatalf("Prepare() error: %v", err)
+		}
+
+		if out := buf.String(); strings.Contains(out, "hook completed") {
+			t.Errorf("log output at LevelInfo = %q, want no %q record", out, "hook completed")
+		}
+	})
+
+	t.Run("silent succeeding hook produces no hook completed record", func(t *testing.T) {
+		t.Parallel()
+		root := t.TempDir()
+		var buf bytes.Buffer
+		logger := captureLogger(&buf)
+
+		_, err := Prepare(context.Background(), PrepareParams{
+			Root:          root,
+			Identifier:    "HOOKDONE-3",
+			IssueID:       "id-hookdone-3",
+			Attempt:       1,
+			AfterCreate:   "true",
+			HookTimeoutMS: 5000,
+			Logger:        logger,
+		})
+		if err != nil {
+			t.Fatalf("Prepare() error: %v", err)
+		}
+
+		if out := buf.String(); strings.Contains(out, "hook completed") {
+			t.Errorf("log output for a silent hook = %q, want no %q record", out, "hook completed")
 		}
 	})
 }
