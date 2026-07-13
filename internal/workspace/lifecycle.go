@@ -120,7 +120,7 @@ func Prepare(ctx context.Context, params PrepareParams) (PrepareResult, error) {
 			TimeoutMS: params.HookTimeoutMS,
 		})
 		if hookErr != nil {
-			attrs := []slog.Attr{slog.String("workspace", wsResult.Path), slog.Any("error", hookErr)}
+			attrs := []slog.Attr{slog.String("hook", "after_create"), slog.String("workspace", wsResult.Path), slog.Any("error", hookErr)}
 			var he *HookError
 			if errors.As(hookErr, &he) && he.Output != "" {
 				attrs = append(attrs, slog.String("hook_output", he.Output))
@@ -153,7 +153,7 @@ func Prepare(ctx context.Context, params PrepareParams) (PrepareResult, error) {
 			TimeoutMS: params.HookTimeoutMS,
 		})
 		if hookErr != nil {
-			attrs := []slog.Attr{slog.String("workspace", wsResult.Path), slog.Any("error", hookErr)}
+			attrs := []slog.Attr{slog.String("hook", "before_run"), slog.String("workspace", wsResult.Path), slog.Any("error", hookErr)}
 			var he *HookError
 			if errors.As(hookErr, &he) && he.Output != "" {
 				attrs = append(attrs, slog.String("hook_output", he.Output))
@@ -242,7 +242,7 @@ func Finish(ctx context.Context, params FinishParams) {
 		TimeoutMS: params.HookTimeoutMS,
 	})
 	if hookErr != nil {
-		attrs := []slog.Attr{slog.String("workspace", params.Path), slog.Any("error", hookErr)}
+		attrs := []slog.Attr{slog.String("hook", "after_run"), slog.String("workspace", params.Path), slog.Any("error", hookErr)}
 		var he *HookError
 		if errors.As(hookErr, &he) && he.Output != "" {
 			attrs = append(attrs, slog.String("hook_output", he.Output))
@@ -319,7 +319,7 @@ func Cleanup(ctx context.Context, params CleanupParams) error {
 			TimeoutMS: params.HookTimeoutMS,
 		})
 		if hookErr != nil {
-			attrs := []slog.Attr{slog.String("workspace", pathResult.Path), slog.Any("error", hookErr)}
+			attrs := []slog.Attr{slog.String("hook", "before_remove"), slog.String("workspace", pathResult.Path), slog.Any("error", hookErr)}
 			var he *HookError
 			if errors.As(hookErr, &he) && he.Output != "" {
 				attrs = append(attrs, slog.String("hook_output", he.Output))
@@ -417,7 +417,7 @@ func CleanupByPath(ctx context.Context, params CleanupByPathParams) error {
 			TimeoutMS: params.HookTimeoutMS,
 		})
 		if hookErr != nil {
-			attrs := []slog.Attr{slog.String("workspace", params.Path), slog.Any("error", hookErr)}
+			attrs := []slog.Attr{slog.String("hook", "before_remove"), slog.String("workspace", params.Path), slog.Any("error", hookErr)}
 			var he *HookError
 			if errors.As(hookErr, &he) && he.Output != "" {
 				attrs = append(attrs, slog.String("hook_output", he.Output))
