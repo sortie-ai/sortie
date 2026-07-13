@@ -35,6 +35,12 @@ func requireHookError(t *testing.T, err error) *HookError {
 	return he
 }
 
+// truncationMarker returns the prefix [limitedBuffer.String] adds once it
+// has discarded the earliest bytes to stay within max.
+func truncationMarker(max int) string {
+	return fmt.Sprintf("[truncated: showing last %d bytes of hook output]\n", max)
+}
+
 func TestRunHook(t *testing.T) {
 	t.Parallel()
 
@@ -192,7 +198,7 @@ func TestRunHook(t *testing.T) {
 		})
 
 		// The script exits 0 if head closes the pipe before yes notices,
-		// or non-zero (SIGPIPE). Either way, check the output length.
+		// or non-zero (SIGPIPE). Either way, check the captured output.
 		output := result.Output
 		if err != nil {
 			var he *HookError
@@ -200,8 +206,40 @@ func TestRunHook(t *testing.T) {
 				output = he.Output
 			}
 		}
-		if len(output) != MaxHookOutputBytes {
-			t.Errorf("output length = %d, want %d", len(output), MaxHookOutputBytes)
+
+		marker := truncationMarker(MaxHookOutputBytes)
+		if !strings.HasPrefix(output, marker) {
+			t.Errorf("Output prefix = %q, want %q", output[:min(len(output), len(marker))], marker)
+		}
+		if maxLen := len(marker) + MaxHookOutputBytes; len(output) > maxLen {
+			t.Errorf("len(Output) = %d, want <= %d (MaxHookOutputBytes + marker)", len(output), maxLen)
+		}
+	})
+
+	t.Run("verbose hook keeps tail with final error line, not head", func(t *testing.T) {
+		t.Parallel()
+
+		const finalLine = "DISTINCT_FINAL_ERROR_LINE_42"
+		script := `yes AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA | head -c 307200; echo ` + finalLine + `; exit 1`
+
+		_, err := RunHook(context.Background(), HookParams{
+			Script:    script,
+			Dir:       t.TempDir(),
+			Env:       map[string]string{},
+			TimeoutMS: 10000,
+		})
+
+		he := requireHookError(t, err)
+		if !strings.Contains(he.Output, finalLine) {
+			tail := he.Output
+			if len(tail) > 80 {
+				tail = tail[len(tail)-80:]
+			}
+			t.Errorf("Output tail = %q, want it to contain %q", tail, finalLine)
+		}
+		marker := truncationMarker(MaxHookOutputBytes)
+		if !strings.HasPrefix(he.Output, marker) {
+			t.Errorf("Output prefix = %q, want %q", he.Output[:min(len(he.Output), len(marker))], marker)
 		}
 	})
 
@@ -435,8 +473,15 @@ func TestLimitedBuffer(t *testing.T) {
 		if n != 300 {
 			t.Errorf("Write() = %d, want 300 (original length)", n)
 		}
-		if len(lb.String()) != 200 {
-			t.Errorf("String() length = %d, want 200", len(lb.String()))
+
+		got := lb.String()
+		marker := truncationMarker(lb.max)
+		if !strings.HasPrefix(got, marker) {
+			t.Errorf("String() = %q, want prefix %q", got, marker)
+		}
+		tail := strings.TrimPrefix(got, marker)
+		if want := string(data[len(data)-200:]); tail != want {
+			t.Errorf("String() tail = %q, want last 200 bytes %q", tail, want)
 		}
 	})
 
@@ -455,13 +500,12 @@ func TestLimitedBuffer(t *testing.T) {
 			t.Errorf("second Write() = %d, want 150", n2)
 		}
 
-		if len(lb.String()) != 200 {
-			t.Errorf("String() length = %d, want 200", len(lb.String()))
-		}
-		// First 150 bytes are 'a', next 50 are 'b'.
-		want := strings.Repeat("a", 150) + strings.Repeat("b", 50)
-		if lb.String() != want {
-			t.Errorf("String() content mismatch")
+		// Retained tail is the last 200 bytes: 50 'a' followed by 150 'b',
+		// inverting the former head-retention expectation.
+		marker := truncationMarker(lb.max)
+		want := marker + strings.Repeat("a", 50) + strings.Repeat("b", 150)
+		if got := lb.String(); got != want {
+			t.Errorf("String() = %q, want %q", got, want)
 		}
 	})
 
@@ -480,8 +524,16 @@ func TestLimitedBuffer(t *testing.T) {
 		if n != len("more data") {
 			t.Errorf("Write() = %d, want %d", n, len("more data"))
 		}
-		if lb.String() != snapshot {
-			t.Error("String() changed after writing past limit")
+
+		// Tail-retention shifts the window: the write past the limit
+		// discards the earliest bytes, so String() now differs from the
+		// pre-write snapshot and ends with what was just written.
+		got := lb.String()
+		if got == snapshot {
+			t.Error("String() unchanged after writing past limit, want it to reflect the shifted tail")
+		}
+		if !strings.HasSuffix(got, "more data") {
+			t.Errorf("String() = %q, want suffix %q", got, "more data")
 		}
 	})
 }

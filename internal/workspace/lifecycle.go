@@ -113,20 +113,30 @@ func Prepare(ctx context.Context, params PrepareParams) (PrepareResult, error) {
 
 	if wsResult.CreatedNow && params.AfterCreate != "" {
 		logger.InfoContext(ctx, "running hook", slog.String("hook", "after_create"), slog.String("workspace", wsResult.Path))
-		_, hookErr := RunHook(ctx, HookParams{
+		res, hookErr := RunHook(ctx, HookParams{
 			Script:    params.AfterCreate,
 			Dir:       wsResult.Path,
 			Env:       env,
 			TimeoutMS: params.HookTimeoutMS,
 		})
 		if hookErr != nil {
-			logger.WarnContext(ctx, "after_create hook failed, rolling back workspace",
-				slog.String("workspace", wsResult.Path), slog.Any("error", hookErr))
+			attrs := []slog.Attr{slog.String("hook", "after_create"), slog.String("workspace", wsResult.Path), slog.Any("error", hookErr)}
+			var he *HookError
+			if errors.As(hookErr, &he) && he.Output != "" {
+				attrs = append(attrs, slog.String("hook_output", he.Output))
+			}
+			logger.LogAttrs(ctx, slog.LevelWarn, "after_create hook failed, rolling back workspace", attrs...)
 			if rmErr := os.RemoveAll(wsResult.Path); rmErr != nil {
 				logger.ErrorContext(ctx, "workspace rollback failed after after_create hook error",
 					slog.String("workspace", wsResult.Path), slog.Any("rollback_error", rmErr))
 			}
 			return PrepareResult{}, hookErr
+		}
+		// A successful hook that produced no output emits no record here;
+		// the preceding "running hook" info record already marks that the
+		// hook ran.
+		if res.Output != "" {
+			logger.DebugContext(ctx, "hook completed", slog.String("hook", "after_create"), slog.String("workspace", wsResult.Path), slog.String("hook_output", res.Output))
 		}
 	}
 
@@ -136,15 +146,23 @@ func Prepare(ctx context.Context, params PrepareParams) (PrepareResult, error) {
 
 	if params.BeforeRun != "" {
 		logger.InfoContext(ctx, "running hook", slog.String("hook", "before_run"), slog.String("workspace", wsResult.Path))
-		_, hookErr := RunHook(ctx, HookParams{
+		res, hookErr := RunHook(ctx, HookParams{
 			Script:    params.BeforeRun,
 			Dir:       wsResult.Path,
 			Env:       env,
 			TimeoutMS: params.HookTimeoutMS,
 		})
 		if hookErr != nil {
-			logger.WarnContext(ctx, "before_run hook failed", slog.String("workspace", wsResult.Path), slog.Any("error", hookErr))
+			attrs := []slog.Attr{slog.String("hook", "before_run"), slog.String("workspace", wsResult.Path), slog.Any("error", hookErr)}
+			var he *HookError
+			if errors.As(hookErr, &he) && he.Output != "" {
+				attrs = append(attrs, slog.String("hook_output", he.Output))
+			}
+			logger.LogAttrs(ctx, slog.LevelWarn, "before_run hook failed", attrs...)
 			return PrepareResult{}, hookErr
+		}
+		if res.Output != "" {
+			logger.DebugContext(ctx, "hook completed", slog.String("hook", "before_run"), slog.String("workspace", wsResult.Path), slog.String("hook_output", res.Output))
 		}
 	}
 
@@ -217,14 +235,21 @@ func Finish(ctx context.Context, params FinishParams) {
 	}
 
 	logger.InfoContext(ctx, "running hook", slog.String("hook", "after_run"), slog.String("workspace", params.Path))
-	_, hookErr := RunHook(detachedCtx, HookParams{
+	res, hookErr := RunHook(detachedCtx, HookParams{
 		Script:    params.AfterRun,
 		Dir:       params.Path,
 		Env:       env,
 		TimeoutMS: params.HookTimeoutMS,
 	})
 	if hookErr != nil {
-		logger.WarnContext(ctx, "after_run hook failed", slog.String("workspace", params.Path), slog.Any("error", hookErr))
+		attrs := []slog.Attr{slog.String("hook", "after_run"), slog.String("workspace", params.Path), slog.Any("error", hookErr)}
+		var he *HookError
+		if errors.As(hookErr, &he) && he.Output != "" {
+			attrs = append(attrs, slog.String("hook_output", he.Output))
+		}
+		logger.LogAttrs(ctx, slog.LevelWarn, "after_run hook failed", attrs...)
+	} else if res.Output != "" {
+		logger.DebugContext(ctx, "hook completed", slog.String("hook", "after_run"), slog.String("workspace", params.Path), slog.String("hook_output", res.Output))
 	}
 }
 
@@ -287,14 +312,21 @@ func Cleanup(ctx context.Context, params CleanupParams) error {
 
 	if params.BeforeRemove != "" {
 		logger.InfoContext(ctx, "running hook", slog.String("hook", "before_remove"), slog.String("workspace", pathResult.Path))
-		_, hookErr := RunHook(detachedCtx, HookParams{
+		res, hookErr := RunHook(detachedCtx, HookParams{
 			Script:    params.BeforeRemove,
 			Dir:       pathResult.Path,
 			Env:       env,
 			TimeoutMS: params.HookTimeoutMS,
 		})
 		if hookErr != nil {
-			logger.WarnContext(ctx, "before_remove hook failed", slog.String("workspace", pathResult.Path), slog.Any("error", hookErr))
+			attrs := []slog.Attr{slog.String("hook", "before_remove"), slog.String("workspace", pathResult.Path), slog.Any("error", hookErr)}
+			var he *HookError
+			if errors.As(hookErr, &he) && he.Output != "" {
+				attrs = append(attrs, slog.String("hook_output", he.Output))
+			}
+			logger.LogAttrs(ctx, slog.LevelWarn, "before_remove hook failed", attrs...)
+		} else if res.Output != "" {
+			logger.DebugContext(ctx, "hook completed", slog.String("hook", "before_remove"), slog.String("workspace", pathResult.Path), slog.String("hook_output", res.Output))
 		}
 	}
 
@@ -378,14 +410,21 @@ func CleanupByPath(ctx context.Context, params CleanupByPathParams) error {
 
 	if params.BeforeRemove != "" {
 		logger.InfoContext(ctx, "running hook", slog.String("hook", "before_remove"), slog.String("workspace", params.Path))
-		_, hookErr := RunHook(detachedCtx, HookParams{
+		res, hookErr := RunHook(detachedCtx, HookParams{
 			Script:    params.BeforeRemove,
 			Dir:       params.Path,
 			Env:       env,
 			TimeoutMS: params.HookTimeoutMS,
 		})
 		if hookErr != nil {
-			logger.WarnContext(ctx, "before_remove hook failed", slog.String("workspace", params.Path), slog.Any("error", hookErr))
+			attrs := []slog.Attr{slog.String("hook", "before_remove"), slog.String("workspace", params.Path), slog.Any("error", hookErr)}
+			var he *HookError
+			if errors.As(hookErr, &he) && he.Output != "" {
+				attrs = append(attrs, slog.String("hook_output", he.Output))
+			}
+			logger.LogAttrs(ctx, slog.LevelWarn, "before_remove hook failed", attrs...)
+		} else if res.Output != "" {
+			logger.DebugContext(ctx, "hook completed", slog.String("hook", "before_remove"), slog.String("workspace", params.Path), slog.String("hook_output", res.Output))
 		}
 	}
 

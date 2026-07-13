@@ -57,8 +57,9 @@ type HookError struct {
 	// not exit normally (timeout, start failure).
 	ExitCode int
 
-	// Output is the combined stdout+stderr captured before failure,
-	// truncated to [MaxHookOutputBytes].
+	// Output is the combined stdout+stderr captured before failure:
+	// the last [MaxHookOutputBytes] bytes (the tail), prefixed with a
+	// truncation marker when earlier output was dropped.
 	Output string
 
 	// Err is the underlying error.

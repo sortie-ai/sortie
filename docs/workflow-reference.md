@@ -405,6 +405,19 @@ hooks:
   timeout_ms: 120000
 ```
 
+> **Note:** `after_create` runs only when Sortie first creates the per-issue
+> workspace directory, so the directory is empty when the clone runs. If
+> `after_create` fails, Sortie removes the directory before the next retry, so
+> a retry also starts from an empty directory. A clone error such as
+> "destination path already exists" or "directory not empty" does not come from
+> this example on the normal path.
+>
+> Hooks also run with a restricted environment: an allowlist (including `HOME`
+> and `SSH_AUTH_SOCK`) plus `SORTIE_*` variables. Sortie strips any variable
+> outside that set, such as `GIT_SSH_COMMAND`, so an SSH clone must reach its
+> key through the SSH agent (`SSH_AUTH_SOCK`) or through `~/.ssh` via `HOME`,
+> not through a stripped variable. See Section 6.2 for the full allowlist.
+
 | Field           | Type                           | Required | Default  | Dynamic Reload         | Description                                                                          |
 | --------------- | ------------------------------ | -------- | -------- | ---------------------- | ------------------------------------------------------------------------------------ |
 | `after_create`  | multiline shell script or null | No       | _(none)_ | Future hook executions | Runs only when a workspace directory is **newly created**.                           |
@@ -2598,6 +2611,19 @@ hooks:
   after_run: ./hooks/post-run.sh
 ```
 
+> **Note:** `after_create` runs only when Sortie first creates the per-issue
+> workspace directory, so the directory is empty when the clone runs. If
+> `after_create` fails, Sortie removes the directory before the next retry, so
+> a retry also starts from an empty directory. A clone error such as
+> "destination path already exists" or "directory not empty" does not come from
+> this example on the normal path.
+>
+> Hooks also run with the restricted environment described in Section 6.2: an
+> allowlist (including `HOME` and `SSH_AUTH_SOCK`) plus `SORTIE_*` variables.
+> Sortie strips any variable outside that set, such as `GIT_SSH_COMMAND`, so an
+> SSH clone must reach its key through the SSH agent (`SSH_AUTH_SOCK`) or
+> through `~/.ssh` via `HOME`, not through a stripped variable.
+
 > **Caveat:** Inline scripts are triple-nested (Bash in YAML in Markdown). IDEs cannot
 > provide syntax highlighting or shell linting for inline scripts. For non-trivial logic,
 > external scripts are more maintainable.
@@ -2927,6 +2953,19 @@ Fix {{ .issue.identifier }}: {{ .issue.title }}
 ### 11.2 Production Jira + Claude Code
 
 A complete, production-ready workflow demonstrating all major features:
+
+> **Note:** In this example, `after_create` runs only when Sortie first creates
+> the per-issue workspace directory, so the directory is empty when the clone
+> runs. If `after_create` fails, Sortie removes the directory before the next
+> retry, so a retry also starts from an empty directory. A clone error such as
+> "destination path already exists" or "directory not empty" does not come from
+> this example on the normal path.
+>
+> Hooks also run with a restricted environment: an allowlist (including `HOME`
+> and `SSH_AUTH_SOCK`) plus `SORTIE_*` variables. Sortie strips any variable
+> outside that set, such as `GIT_SSH_COMMAND`, so an SSH clone must reach its
+> key through the SSH agent (`SSH_AUTH_SOCK`) or through `~/.ssh` via `HOME`,
+> not through a stripped variable. See Section 6.2 for the full allowlist.
 
 ```markdown
 ---

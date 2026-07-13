@@ -69,7 +69,11 @@ Execution contract:
   a Job Object with `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` so that timeout-triggered termination
   kills the entire process tree, not just the direct child.
 - Hook timeout uses `hooks.timeout_ms`; default: `60000 ms`.
-- Log hook start, failures, and timeouts.
+- Log hook start, failures, and timeouts. A failure or timeout record carries the hook's captured
+  combined stdout and stderr under `hook_output`; a hook that succeeds with output emits it in a
+  debug-level record.
+- Output capture retains the last 8 KiB of the combined stream (the tail, where failure
+  diagnostics appear), prefixed with a truncation marker when earlier output was dropped.
 
 Failure semantics:
 
