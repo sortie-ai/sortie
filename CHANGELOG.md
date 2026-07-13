@@ -11,13 +11,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Failing lifecycle hooks (`after_create`, `before_run`, `after_run`,
   `before_remove`) now log their captured stdout and stderr in a
-  `hook_output` attribute on the failure WARN record, visible at every
-  log level; previously the output was discarded and a failed hook,
-  such as a `git clone` in `after_create`, could not be diagnosed from
-  the logs even at `--log-level debug`. A hook that succeeds while
-  printing output logs it at debug level on a `hook completed` record.
-  `hook_output` keeps the last 8 KiB of output and starts with a
-  truncation marker when longer.
+  `hook_output` attribute on the failure WARN record, so the output is
+  visible at the default log level without enabling debug; previously
+  the output was discarded and a failed hook, such as a `git clone` in
+  `after_create`, could not be diagnosed from the logs even at
+  `--log-level debug`. A hook that succeeds while printing output logs
+  it at debug level on a `hook completed` record. `hook_output` keeps
+  the last 8 KiB of output and starts with a truncation marker when
+  longer.
   ([#643](https://github.com/sortie-ai/sortie/issues/643))
 
 ## [1.14.0] - 2026-07-11
