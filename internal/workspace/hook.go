@@ -81,6 +81,16 @@ func (lb *limitedBuffer) Write(p []byte) (int, error) {
 	lb.mu.Lock()
 	defer lb.mu.Unlock()
 
+	// A single write larger than the cap overwrites the whole retained
+	// window, so keep only its last max bytes rather than growing the
+	// buffer to hold all of p and trimming afterward.
+	if len(p) > lb.max {
+		lb.buf.Reset()
+		lb.buf.Write(p[len(p)-lb.max:]) //nolint:errcheck // bytes.Buffer.Write never returns an error
+		lb.truncated = true
+		return len(p), nil
+	}
+
 	lb.buf.Write(p) //nolint:errcheck // bytes.Buffer.Write never returns an error
 	if overflow := lb.buf.Len() - lb.max; overflow > 0 {
 		lb.buf.Next(overflow)
