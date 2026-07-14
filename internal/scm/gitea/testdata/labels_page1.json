@@ -1,0 +1,5 @@
+[
+  { "id": 501, "name": "in-progress", "color": "1d76db" },
+  { "id": 502, "name": "done", "color": "0e8a16" },
+  { "id": 503, "name": "escalated", "color": "d93f0b" }
+]

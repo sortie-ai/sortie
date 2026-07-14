@@ -61,3 +61,39 @@ func deriveState(labels []giteaLabel, nativeState string, activeStates, terminal
 
 	return nativeState
 }
+
+// findCurrentStateLabel returns the first configured state label present on the
+// issue, scanning activeStates, then terminalStates, then handoffState in config
+// order. It returns an empty string when the issue carries no configured state
+// label. Comparison is case-insensitive; activeStates, terminalStates, and
+// handoffState are expected already lowercased.
+//
+// Unlike deriveState, this reports only the first match and never falls back to
+// native open/closed status, because the transition flow uses it to locate the
+// single state label to remove.
+func findCurrentStateLabel(labels []giteaLabel, activeStates, terminalStates []string, handoffState string) string {
+	lowerSet := make(map[string]struct{}, len(labels))
+	for _, l := range labels {
+		lowerSet[strings.ToLower(l.Name)] = struct{}{}
+	}
+
+	for _, s := range activeStates {
+		if _, ok := lowerSet[s]; ok {
+			return s
+		}
+	}
+
+	for _, s := range terminalStates {
+		if _, ok := lowerSet[s]; ok {
+			return s
+		}
+	}
+
+	if handoffState != "" {
+		if _, ok := lowerSet[handoffState]; ok {
+			return handoffState
+		}
+	}
+
+	return ""
+}

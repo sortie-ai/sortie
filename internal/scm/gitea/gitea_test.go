@@ -11,6 +11,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -52,6 +53,16 @@ func assertTrackerErrorKind(t *testing.T, err error, want domain.TrackerErrorKin
 	}
 	if te.Kind != want {
 		t.Errorf("TrackerError.Kind = %q, want %q", te.Kind, want)
+	}
+}
+
+// decodeRequestBody decodes r's JSON body into v, recording a test failure
+// with t.Errorf on a read or decode error. Handlers run on a server goroutine,
+// so t.Fatalf (unsafe outside the test goroutine) must never be used here.
+func decodeRequestBody(t *testing.T, r *http.Request, v any) {
+	t.Helper()
+	if err := json.NewDecoder(r.Body).Decode(v); err != nil {
+		t.Errorf("decode request body: %v", err)
 	}
 }
 
@@ -1009,32 +1020,453 @@ func TestFetchBlockers(t *testing.T) {
 	})
 }
 
-// --- Write-path stubs ---
+// --- TransitionIssue ---
 
-func TestWriteStubs(t *testing.T) {
+func TestTransitionIssue(t *testing.T) {
 	t.Parallel()
 
-	t.Run("TransitionIssue", func(t *testing.T) {
+	t.Run("invalid target state is rejected before any request", func(t *testing.T) {
 		t.Parallel()
 
-		a := mustAdapter(t, newPreflightMux(t)) // no write routes registered; any call fails the test
-		err := a.TransitionIssue(context.Background(), "1", "done")
-		assertTrackerErrorKind(t, err, domain.ErrTrackerPayload)
+		tests := []struct {
+			name   string
+			target string
+		}{
+			{"empty target", ""},
+			{"unconfigured target", "not-a-configured-state"},
+		}
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				t.Parallel()
+
+				a := mustAdapter(t, newPreflightMux(t)) // no write route registered; any request fails the test
+
+				err := a.TransitionIssue(context.Background(), "42", tt.target)
+				assertTrackerErrorKind(t, err, domain.ErrTrackerPayload)
+			})
+		}
 	})
 
-	t.Run("CommentIssue", func(t *testing.T) {
+	t.Run("issue not found maps to not found error", func(t *testing.T) {
 		t.Parallel()
 
-		a := mustAdapter(t, newPreflightMux(t))
-		err := a.CommentIssue(context.Background(), "1", "hello")
-		assertTrackerErrorKind(t, err, domain.ErrTrackerPayload)
+		mux := newPreflightMux(t)
+		mux.HandleFunc("GET /api/v1/repos/"+testOwner+"/"+testRepo+"/issues/{index}", func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusNotFound)
+			w.Write(loadFixture(t, "error_404.json")) //nolint:errcheck // test helper
+		})
+		a := mustAdapter(t, mux)
+
+		err := a.TransitionIssue(context.Background(), "999", "done")
+		assertTrackerErrorKind(t, err, domain.ErrTrackerNotFound)
 	})
 
-	t.Run("AddLabel", func(t *testing.T) {
+	t.Run("pull request index maps to not found error", func(t *testing.T) {
 		t.Parallel()
 
-		a := mustAdapter(t, newPreflightMux(t))
-		err := a.AddLabel(context.Background(), "1", "bug")
-		assertTrackerErrorKind(t, err, domain.ErrTrackerPayload)
+		mux := newPreflightMux(t)
+		mux.HandleFunc("GET /api/v1/repos/"+testOwner+"/"+testRepo+"/issues/{index}", func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			w.Write(loadFixture(t, "issue_pr.json")) //nolint:errcheck // test helper
+		})
+		a := mustAdapter(t, mux)
+
+		err := a.TransitionIssue(context.Background(), "6", "done")
+		assertTrackerErrorKind(t, err, domain.ErrTrackerNotFound)
+	})
+
+	t.Run("no-op transition performs no label work", func(t *testing.T) {
+		t.Parallel()
+
+		mux := newPreflightMux(t)
+		mux.HandleFunc("GET /api/v1/repos/"+testOwner+"/"+testRepo+"/issues/{index}", func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{"number":42,"state":"closed","labels":[{"id":502,"name":"done"}],"pull_request":null}`)) //nolint:errcheck // test helper
+		})
+		// No labels/DELETE/POST/PATCH route registered: currentLabel already
+		// equals the target, so no label work and no native reconcile is due.
+		a := mustAdapter(t, mux)
+
+		if err := a.TransitionIssue(context.Background(), "42", "done"); err != nil {
+			t.Fatalf("TransitionIssue(42, done) = %v, want nil (no-op, already in target state)", err)
+		}
+	})
+
+	t.Run("active-to-terminal transition removes the prior label by id, attaches the target by id, and closes natively", func(t *testing.T) {
+		t.Parallel()
+
+		mux := newPreflightMux(t)
+		mux.HandleFunc("GET /api/v1/repos/"+testOwner+"/"+testRepo+"/issues/{index}", func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			w.Write(loadFixture(t, "issue_full.json")) //nolint:errcheck // test helper (open, in-progress label id 3)
+		})
+		var labelsCalls atomic.Int32
+		mux.HandleFunc("GET /api/v1/repos/"+testOwner+"/"+testRepo+"/labels", func(w http.ResponseWriter, r *http.Request) {
+			labelsCalls.Add(1)
+			if got := r.URL.Query().Get("limit"); got != "50" {
+				t.Errorf("labels request limit = %q, want %q", got, "50")
+			}
+			w.WriteHeader(http.StatusOK)
+			w.Write(loadFixture(t, "labels_page1.json")) //nolint:errcheck // test helper
+		})
+		var deleteCalls atomic.Int32
+		mux.HandleFunc("DELETE /api/v1/repos/"+testOwner+"/"+testRepo+"/issues/42/labels/{id}", func(w http.ResponseWriter, r *http.Request) {
+			deleteCalls.Add(1)
+			if got := r.PathValue("id"); got != "501" {
+				t.Errorf("DELETE label id = %q, want %q (catalog id of in-progress, not the issue's own label id or the name)", got, "501")
+			}
+			w.WriteHeader(http.StatusNoContent)
+		})
+		var attachBody struct {
+			Labels []int64 `json:"labels"`
+		}
+		mux.HandleFunc("POST /api/v1/repos/"+testOwner+"/"+testRepo+"/issues/42/labels", func(w http.ResponseWriter, r *http.Request) {
+			decodeRequestBody(t, r, &attachBody)
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{}`)) //nolint:errcheck // test helper
+		})
+		var patchBody map[string]json.RawMessage
+		mux.HandleFunc("PATCH /api/v1/repos/"+testOwner+"/"+testRepo+"/issues/{index}", func(w http.ResponseWriter, r *http.Request) {
+			decodeRequestBody(t, r, &patchBody)
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{}`)) //nolint:errcheck // test helper
+		})
+		a := mustAdapter(t, mux)
+
+		if err := a.TransitionIssue(context.Background(), "42", "done"); err != nil {
+			t.Fatalf("TransitionIssue(42, done): %v", err)
+		}
+
+		if got := labelsCalls.Load(); got != 1 {
+			t.Errorf("labels catalog request count = %d, want 1", got)
+		}
+		if got := deleteCalls.Load(); got != 1 {
+			t.Errorf("DELETE call count = %d, want 1", got)
+		}
+		if want := []int64{502}; !slices.Equal(attachBody.Labels, want) {
+			t.Errorf("attach body labels = %v, want %v (numeric id of done, not the name)", attachBody.Labels, want)
+		}
+		if len(patchBody) != 1 {
+			t.Fatalf("PATCH body has %d keys, want 1 (state only, no state_reason)", len(patchBody))
+		}
+		var state string
+		if err := json.Unmarshal(patchBody["state"], &state); err != nil {
+			t.Fatalf("decode PATCH state: %v", err)
+		}
+		if state != "closed" {
+			t.Errorf("PATCH state = %q, want %q", state, "closed")
+		}
+	})
+
+	t.Run("handoff target swaps the state label but issues no native patch", func(t *testing.T) {
+		t.Parallel()
+
+		mux := newPreflightMux(t)
+		mux.HandleFunc("GET /api/v1/repos/"+testOwner+"/"+testRepo+"/issues/{index}", func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			w.Write(loadFixture(t, "issue_full.json")) //nolint:errcheck // test helper (open, in-progress label)
+		})
+		mux.HandleFunc("GET /api/v1/repos/"+testOwner+"/"+testRepo+"/labels", func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			w.Write(loadFixture(t, "labels_page1.json")) //nolint:errcheck // test helper
+		})
+		var deleteCalls atomic.Int32
+		mux.HandleFunc("DELETE /api/v1/repos/"+testOwner+"/"+testRepo+"/issues/42/labels/{id}", func(w http.ResponseWriter, r *http.Request) {
+			deleteCalls.Add(1)
+			if got := r.PathValue("id"); got != "501" {
+				t.Errorf("DELETE label id = %q, want %q", got, "501")
+			}
+			w.WriteHeader(http.StatusNoContent)
+		})
+		var attachBody struct {
+			Labels []int64 `json:"labels"`
+		}
+		mux.HandleFunc("POST /api/v1/repos/"+testOwner+"/"+testRepo+"/issues/42/labels", func(w http.ResponseWriter, r *http.Request) {
+			decodeRequestBody(t, r, &attachBody)
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{}`)) //nolint:errcheck // test helper
+		})
+		// No PATCH route registered: a handoff-only target must not touch
+		// native open/closed status, so a stray PATCH falls to the catch-all.
+
+		srv := httptest.NewServer(mux)
+		defer srv.Close()
+		cfg := validConfig(srv.URL)
+		cfg["handoff_state"] = "escalated"
+		adapter, err := NewGiteaAdapter(cfg)
+		if err != nil {
+			t.Fatalf("NewGiteaAdapter: %v", err)
+		}
+		a := adapter.(*GiteaAdapter)
+
+		if err := a.TransitionIssue(context.Background(), "42", "escalated"); err != nil {
+			t.Fatalf("TransitionIssue(42, escalated): %v", err)
+		}
+
+		if got := deleteCalls.Load(); got != 1 {
+			t.Errorf("DELETE call count = %d, want 1", got)
+		}
+		if want := []int64{503}; !slices.Equal(attachBody.Labels, want) {
+			t.Errorf("attach body labels = %v, want %v (numeric id of escalated)", attachBody.Labels, want)
+		}
+	})
+
+	t.Run("state-label delete 404 is tolerated as already removed", func(t *testing.T) {
+		t.Parallel()
+
+		mux := newPreflightMux(t)
+		mux.HandleFunc("GET /api/v1/repos/"+testOwner+"/"+testRepo+"/issues/{index}", func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			w.Write(loadFixture(t, "issue_full.json")) //nolint:errcheck // test helper (open, in-progress label)
+		})
+		mux.HandleFunc("GET /api/v1/repos/"+testOwner+"/"+testRepo+"/labels", func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			w.Write(loadFixture(t, "labels_page1.json")) //nolint:errcheck // test helper
+		})
+		mux.HandleFunc("DELETE /api/v1/repos/"+testOwner+"/"+testRepo+"/issues/42/labels/{id}", func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusNotFound)
+			w.Write(loadFixture(t, "error_404.json")) //nolint:errcheck // test helper
+		})
+		mux.HandleFunc("POST /api/v1/repos/"+testOwner+"/"+testRepo+"/issues/42/labels", func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{}`)) //nolint:errcheck // test helper
+		})
+		mux.HandleFunc("PATCH /api/v1/repos/"+testOwner+"/"+testRepo+"/issues/{index}", func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{}`)) //nolint:errcheck // test helper
+		})
+		a := mustAdapter(t, mux)
+
+		if err := a.TransitionIssue(context.Background(), "42", "done"); err != nil {
+			t.Fatalf("TransitionIssue(42, done) = %v, want nil (a 404 on label removal is already-removed)", err)
+		}
+	})
+}
+
+// --- CommentIssue ---
+
+func TestCommentIssue(t *testing.T) {
+	t.Parallel()
+
+	t.Run("posts the markdown body verbatim and returns nil on 201", func(t *testing.T) {
+		t.Parallel()
+
+		const markdown = "## Status update\n\n- retried the failing step\n- **no repro** locally\n"
+
+		mux := newPreflightMux(t)
+		var gotBody struct {
+			Body string `json:"body"`
+		}
+		var calls atomic.Int32
+		mux.HandleFunc("POST /api/v1/repos/"+testOwner+"/"+testRepo+"/issues/42/comments", func(w http.ResponseWriter, r *http.Request) {
+			calls.Add(1)
+			decodeRequestBody(t, r, &gotBody)
+			w.WriteHeader(http.StatusCreated)
+			w.Write([]byte(`{"id":1}`)) //nolint:errcheck // test helper
+		})
+		a := mustAdapter(t, mux)
+
+		if err := a.CommentIssue(context.Background(), "42", markdown); err != nil {
+			t.Fatalf("CommentIssue: %v", err)
+		}
+		if gotBody.Body != markdown {
+			t.Errorf("comment body = %q, want %q (verbatim, no conversion)", gotBody.Body, markdown)
+		}
+		if got := calls.Load(); got != 1 {
+			t.Errorf("call count = %d, want 1", got)
+		}
+	})
+}
+
+// --- Write error mapping ---
+
+func TestWriteErrorMapping(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		statusCode int
+		fixture    string
+		wantKind   domain.TrackerErrorKind
+	}{
+		{"403 forbidden maps to auth error", http.StatusForbidden, "error_403.json", domain.ErrTrackerAuth},
+		{"422 unprocessable maps to payload error", http.StatusUnprocessableEntity, "error_422.json", domain.ErrTrackerPayload},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			mux := newPreflightMux(t)
+			mux.HandleFunc("POST /api/v1/repos/"+testOwner+"/"+testRepo+"/issues/42/comments", func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(tt.statusCode)
+				w.Write(loadFixture(t, tt.fixture)) //nolint:errcheck // test helper
+			})
+			a := mustAdapter(t, mux)
+
+			err := a.CommentIssue(context.Background(), "42", "body")
+			assertTrackerErrorKind(t, err, tt.wantKind)
+		})
+	}
+}
+
+// --- AddLabel ---
+
+func TestAddLabel(t *testing.T) {
+	t.Parallel()
+
+	t.Run("creates a missing label with the default color and attaches it additively", func(t *testing.T) {
+		t.Parallel()
+
+		mux := newPreflightMux(t)
+		mux.HandleFunc("GET /api/v1/repos/"+testOwner+"/"+testRepo+"/labels", func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			w.Write(loadFixture(t, "labels_page1.json")) //nolint:errcheck // test helper
+		})
+		var createBody struct {
+			Name  string `json:"name"`
+			Color string `json:"color"`
+		}
+		mux.HandleFunc("POST /api/v1/repos/"+testOwner+"/"+testRepo+"/labels", func(w http.ResponseWriter, r *http.Request) {
+			decodeRequestBody(t, r, &createBody)
+			w.WriteHeader(http.StatusCreated)
+			w.Write(loadFixture(t, "label_created.json")) //nolint:errcheck // test helper
+		})
+		var attachBody struct {
+			Labels []int64 `json:"labels"`
+		}
+		mux.HandleFunc("POST /api/v1/repos/"+testOwner+"/"+testRepo+"/issues/42/labels", func(w http.ResponseWriter, r *http.Request) {
+			decodeRequestBody(t, r, &attachBody)
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{}`)) //nolint:errcheck // test helper
+		})
+		// No issue GET and no DELETE route registered: AddLabel is additive
+		// and must never read or remove the issue's existing labels.
+		a := mustAdapter(t, mux)
+
+		if err := a.AddLabel(context.Background(), "42", "Needs-Human"); err != nil {
+			t.Fatalf("AddLabel: %v", err)
+		}
+
+		if createBody.Name != "needs-human" {
+			t.Errorf("create-label name = %q, want %q (lowercased)", createBody.Name, "needs-human")
+		}
+		if createBody.Color != "#cccccc" {
+			t.Errorf("create-label color = %q, want %q", createBody.Color, "#cccccc")
+		}
+		if want := []int64{701}; !slices.Equal(attachBody.Labels, want) {
+			t.Errorf("attach body labels = %v, want %v (numeric created id, not the name)", attachBody.Labels, want)
+		}
+	})
+
+	t.Run("resolves a label defined only on page two of the catalog with no duplicate create", func(t *testing.T) {
+		t.Parallel()
+
+		page1 := loadFixture(t, "labels_page1.json")
+		page2 := loadFixture(t, "labels_page2.json")
+
+		var srvURL string
+		var calls atomic.Int32
+		mux := newPreflightMux(t)
+		basePath := "/api/v1/repos/" + testOwner + "/" + testRepo + "/labels"
+		mux.HandleFunc("GET "+basePath, func(w http.ResponseWriter, r *http.Request) {
+			n := calls.Add(1)
+			if n == 1 {
+				w.Header().Set("Link", fmt.Sprintf(`<%s%s?page=2>; rel="next"`, srvURL, basePath))
+				w.WriteHeader(http.StatusOK)
+				w.Write(page1) //nolint:errcheck // test helper
+				return
+			}
+			w.WriteHeader(http.StatusOK)
+			w.Write(page2) //nolint:errcheck // test helper
+		})
+		var attachBody struct {
+			Labels []int64 `json:"labels"`
+		}
+		mux.HandleFunc("POST /api/v1/repos/"+testOwner+"/"+testRepo+"/issues/42/labels", func(w http.ResponseWriter, r *http.Request) {
+			decodeRequestBody(t, r, &attachBody)
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{}`)) //nolint:errcheck // test helper
+		})
+		// No create-label route registered: a spurious create for a label
+		// that resolves from page two would fail the test.
+		srv := httptest.NewServer(mux)
+		defer srv.Close()
+		srvURL = srv.URL
+
+		adapter, err := NewGiteaAdapter(validConfig(srv.URL))
+		if err != nil {
+			t.Fatalf("NewGiteaAdapter: %v", err)
+		}
+		a := adapter.(*GiteaAdapter)
+
+		if err := a.AddLabel(context.Background(), "42", "ci-failure"); err != nil {
+			t.Fatalf("AddLabel: %v", err)
+		}
+
+		if got := calls.Load(); got != 2 {
+			t.Errorf("labels catalog request count = %d, want 2 (paged to exhaustion)", got)
+		}
+		if want := []int64{601}; !slices.Equal(attachBody.Labels, want) {
+			t.Errorf("attach body labels = %v, want %v (numeric id of ci-failure resolved from page two)", attachBody.Labels, want)
+		}
+	})
+}
+
+// --- ensureLabelID ---
+
+func TestEnsureLabelID(t *testing.T) {
+	t.Parallel()
+
+	t.Run("re-resolves the catalog once when create conflicts and returns the now-visible id", func(t *testing.T) {
+		t.Parallel()
+
+		mux := newPreflightMux(t)
+		var createCalls atomic.Int32
+		mux.HandleFunc("POST /api/v1/repos/"+testOwner+"/"+testRepo+"/labels", func(w http.ResponseWriter, r *http.Request) {
+			createCalls.Add(1)
+			w.WriteHeader(http.StatusConflict)
+			w.Write([]byte(`{"message":"label already exists"}`)) //nolint:errcheck // test helper
+		})
+		var resolveCalls atomic.Int32
+		mux.HandleFunc("GET /api/v1/repos/"+testOwner+"/"+testRepo+"/labels", func(w http.ResponseWriter, r *http.Request) {
+			resolveCalls.Add(1)
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`[{"id":801,"name":"conflict-label","color":"cccccc"}]`)) //nolint:errcheck // test helper
+		})
+		a := mustAdapter(t, mux)
+
+		id, err := a.ensureLabelID(context.Background(), map[string]int64{}, "conflict-label")
+		if err != nil {
+			t.Fatalf("ensureLabelID: %v", err)
+		}
+		if id != 801 {
+			t.Errorf("ensureLabelID id = %d, want %d (resolved after the create conflict)", id, 801)
+		}
+		if got := createCalls.Load(); got != 1 {
+			t.Errorf("create call count = %d, want 1", got)
+		}
+		if got := resolveCalls.Load(); got != 1 {
+			t.Errorf("resolve call count = %d, want 1 (single re-resolve on conflict)", got)
+		}
+	})
+
+	t.Run("propagates the create error when the label is still absent after re-resolve", func(t *testing.T) {
+		t.Parallel()
+
+		mux := newPreflightMux(t)
+		mux.HandleFunc("POST /api/v1/repos/"+testOwner+"/"+testRepo+"/labels", func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusForbidden)
+			w.Write(loadFixture(t, "error_403.json")) //nolint:errcheck // test helper
+		})
+		mux.HandleFunc("GET /api/v1/repos/"+testOwner+"/"+testRepo+"/labels", func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`[]`)) //nolint:errcheck // test helper
+		})
+		a := mustAdapter(t, mux)
+
+		_, err := a.ensureLabelID(context.Background(), map[string]int64{}, "still-missing")
+		assertTrackerErrorKind(t, err, domain.ErrTrackerAuth)
 	})
 }
