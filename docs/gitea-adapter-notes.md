@@ -403,7 +403,7 @@ Sketch, verified end-to-end by this research's provisioning sequence:
 
 - Image: `docker.gitea.com/gitea:1.27.0-rootless` (the registry and tag scheme documented in the official Docker installation guide; the tag pins the researched version).
 - Provisioning: `gitea admin user create --must-change-password=false ...` (the flag matters: a fresh user is otherwise forced into a password-change state that blocks token creation with a 401-class error), then `POST /api/v1/users/{user}/tokens` with basic auth for the token, then repository, labels, and issues through the API.
-- Gate: `SORTIE_GITEA_TEST=1`, with `SORTIE_GITEA_URL`, `SORTIE_GITEA_TOKEN`, and `SORTIE_GITEA_PROJECT` supplied by the job, following the sibling adapters' single-gate convention. Without the gate the tests MUST skip cleanly, never fail.
+- Gate: `SORTIE_GITEA_TEST=1`, with `SORTIE_GITEA_ENDPOINT`, `SORTIE_GITEA_TOKEN`, and `SORTIE_GITEA_PROJECT` supplied by the job, following the sibling adapters' single-gate convention and their variable naming: `SORTIE_JIRA_ENDPOINT` sets the endpoint-name precedent, and `SORTIE_GITHUB_TOKEN` plus `SORTIE_GITHUB_PROJECT` set the token and project precedents for a token-authenticated tracker. Without the gate the tests MUST skip cleanly, never fail.
 - The same harness slots into the nightly adapter matrix as a tracker entry whose "install" step is the container boot instead of a CLI install.
 
 ---
