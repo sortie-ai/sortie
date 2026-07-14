@@ -1,0 +1,4 @@
+{
+  "message": "invalid username, password or token",
+  "url": "https://git.example.com/api/swagger"
+}

@@ -1,0 +1,16 @@
+[
+  {
+    "id": 500,
+    "number": 1,
+    "title": "Blocking dependency",
+    "body": null,
+    "state": "open",
+    "ref": "",
+    "html_url": "https://git.example.com/acme/widgets/issues/1",
+    "labels": [{ "id": 3, "name": "in-progress", "color": "00ff00" }],
+    "assignees": [],
+    "pull_request": null,
+    "created_at": "2025-12-01T00:00:00Z",
+    "updated_at": "2025-12-01T00:00:00Z"
+  }
+]

@@ -1,0 +1,30 @@
+[
+  {
+    "id": 8010,
+    "number": 10,
+    "title": "In progress, requested",
+    "body": null,
+    "state": "open",
+    "ref": "",
+    "html_url": "https://git.example.com/acme/widgets/issues/10",
+    "labels": [{ "id": 3, "name": "in-progress", "color": "00ff00" }],
+    "assignees": [],
+    "pull_request": null,
+    "created_at": "2026-01-10T00:00:00Z",
+    "updated_at": "2026-01-10T00:00:00Z"
+  },
+  {
+    "id": 8011,
+    "number": 11,
+    "title": "Backlog, not requested",
+    "body": null,
+    "state": "open",
+    "ref": "",
+    "html_url": "https://git.example.com/acme/widgets/issues/11",
+    "labels": [{ "id": 1, "name": "backlog", "color": "cccccc" }],
+    "assignees": [],
+    "pull_request": null,
+    "created_at": "2026-01-11T00:00:00Z",
+    "updated_at": "2026-01-11T00:00:00Z"
+  }
+]

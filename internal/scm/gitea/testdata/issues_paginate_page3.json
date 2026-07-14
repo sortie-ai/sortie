@@ -1,0 +1,16 @@
+[
+  {
+    "id": 7005,
+    "number": 105,
+    "title": "Paginate item 5",
+    "body": null,
+    "state": "open",
+    "ref": "",
+    "html_url": "https://git.example.com/acme/widgets/issues/105",
+    "labels": [{ "id": 1, "name": "backlog", "color": "cccccc" }],
+    "assignees": [],
+    "pull_request": null,
+    "created_at": "2026-02-05T00:00:00Z",
+    "updated_at": "2026-02-05T00:00:00Z"
+  }
+]

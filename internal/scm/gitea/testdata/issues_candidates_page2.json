@@ -1,0 +1,44 @@
+[
+  {
+    "id": 8001,
+    "number": 1,
+    "title": "Backlog item created first",
+    "body": null,
+    "state": "open",
+    "ref": "",
+    "html_url": "https://git.example.com/acme/widgets/issues/1",
+    "labels": [{ "id": 1, "name": "backlog", "color": "cccccc" }],
+    "assignees": [],
+    "pull_request": null,
+    "created_at": "2026-01-01T00:00:00Z",
+    "updated_at": "2026-01-01T00:00:00Z"
+  },
+  {
+    "id": 8003,
+    "number": 3,
+    "title": "Already done, should be filtered",
+    "body": null,
+    "state": "open",
+    "ref": "",
+    "html_url": "https://git.example.com/acme/widgets/issues/3",
+    "labels": [{ "id": 4, "name": "done", "color": "00ff00" }],
+    "assignees": [],
+    "pull_request": null,
+    "created_at": "2026-01-02T00:00:00Z",
+    "updated_at": "2026-01-02T00:00:00Z"
+  },
+  {
+    "id": 8002,
+    "number": 2,
+    "title": "In progress item",
+    "body": null,
+    "state": "open",
+    "ref": "",
+    "html_url": "https://git.example.com/acme/widgets/issues/2",
+    "labels": [{ "id": 3, "name": "in-progress", "color": "00ff00" }],
+    "assignees": [{ "login": "bob" }],
+    "pull_request": null,
+    "created_at": "2026-01-03T00:00:00Z",
+    "updated_at": "2026-01-03T00:00:00Z"
+  }
+]
