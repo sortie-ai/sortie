@@ -88,8 +88,8 @@ func normalizeIssue(gi giteaIssue, activeStates, terminalStates []string, handof
 }
 
 // setDisplayID sets issue.DisplayID to "owner/repo#N" so dashboard and API
-// consumers see a fully qualified reference. It is idempotent: an
-// already-qualified DisplayID is not overwritten.
+// consumers see a fully qualified reference. It is idempotent: a DisplayID
+// that is already set is not overwritten.
 func setDisplayID(issue *domain.Issue, owner, repo string) {
 	if issue.DisplayID != "" {
 		return
