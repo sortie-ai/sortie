@@ -21,8 +21,9 @@ var preflightBackoff = []time.Duration{time.Second, 2 * time.Second, 4 * time.Se
 //
 // A config error (401 or 403 auth, 404 not found) fails construction
 // immediately; a transient error (5xx or transport) is retried with the bounded
-// backoff. The returned user login is not consumed on the read path. It returns
-// a classified [*domain.TrackerError], never a raw error.
+// backoff. The returned user login is not consumed on the read path. Failures
+// return a classified [*domain.TrackerError], except that a context cancellation
+// or deadline surfaces as the context error.
 func runPreflight(ctx context.Context, client *httpkit.Client, owner, repo string) error {
 	if err := withRetry(ctx, func() error {
 		body, _, err := client.Get(ctx, "/user", nil)
