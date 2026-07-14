@@ -522,7 +522,7 @@ func (a *GiteaAdapter) fetchStatesByIndexes(ctx context.Context, indexes []strin
 func (a *GiteaAdapter) TransitionIssue(ctx context.Context, issueID, targetState string) error {
 	return &domain.TrackerError{
 		Kind:    domain.ErrTrackerPayload,
-		Message: "gitea: TransitionIssue is not yet implemented",
+		Message: "gitea: transitioning issues is not yet implemented",
 	}
 }
 
@@ -531,7 +531,7 @@ func (a *GiteaAdapter) TransitionIssue(ctx context.Context, issueID, targetState
 func (a *GiteaAdapter) CommentIssue(ctx context.Context, issueID, text string) error {
 	return &domain.TrackerError{
 		Kind:    domain.ErrTrackerPayload,
-		Message: "gitea: CommentIssue is not yet implemented",
+		Message: "gitea: commenting on issues is not yet implemented",
 	}
 }
 
@@ -541,6 +541,6 @@ func (a *GiteaAdapter) CommentIssue(ctx context.Context, issueID, text string) e
 func (a *GiteaAdapter) AddLabel(ctx context.Context, issueID, label string) error {
 	return &domain.TrackerError{
 		Kind:    domain.ErrTrackerPayload,
-		Message: "gitea: AddLabel is not yet implemented",
+		Message: "gitea: adding labels is not yet implemented",
 	}
 }
