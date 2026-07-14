@@ -36,8 +36,8 @@ func newGiteaClient(baseURL, token, userAgent string) *httpkit.Client {
 const maxErrorBody = 512
 
 // classifyHTTPError maps a non-200 Gitea response to a [*domain.TrackerError].
-// It reads a bounded body snippet for the diagnostic message and never includes
-// the request URL, which carries the token in no scheme this adapter uses.
+// The message carries a bounded body snippet and the request path or URL, never
+// the token, which this adapter sends only in the Authorization header.
 func classifyHTTPError(resp *http.Response, method, path string) error {
 	snippet, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorBody))
 	_, _ = io.Copy(io.Discard, resp.Body)
