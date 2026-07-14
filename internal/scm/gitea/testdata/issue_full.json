@@ -1,0 +1,18 @@
+{
+  "id": 9042,
+  "number": 42,
+  "title": "Add dark mode support",
+  "body": "Users want a **dark mode** option.",
+  "state": "open",
+  "ref": "feature/dark-mode",
+  "html_url": "https://git.example.com/acme/widgets/issues/42",
+  "labels": [
+    { "id": 3, "name": "in-progress", "color": "00ff00" },
+    { "id": 9, "name": "ui", "color": "0000ff" }
+  ],
+  "assignee": { "login": "wrong-user-deprecated-field" },
+  "assignees": [{ "login": "alice" }, { "login": "bob" }],
+  "pull_request": null,
+  "created_at": "2026-01-01T00:00:00Z",
+  "updated_at": "2026-01-02T00:00:00Z"
+}

@@ -1,0 +1,30 @@
+[
+  {
+    "id": 8020,
+    "number": 20,
+    "title": "Done, requested",
+    "body": null,
+    "state": "closed",
+    "ref": "",
+    "html_url": "https://git.example.com/acme/widgets/issues/20",
+    "labels": [{ "id": 4, "name": "done", "color": "00ff00" }],
+    "assignees": [],
+    "pull_request": null,
+    "created_at": "2026-01-20T00:00:00Z",
+    "updated_at": "2026-01-20T00:00:00Z"
+  },
+  {
+    "id": 8021,
+    "number": 21,
+    "title": "Wontfix, not requested",
+    "body": null,
+    "state": "closed",
+    "ref": "",
+    "html_url": "https://git.example.com/acme/widgets/issues/21",
+    "labels": [{ "id": 5, "name": "wontfix", "color": "ff0000" }],
+    "assignees": [],
+    "pull_request": null,
+    "created_at": "2026-01-21T00:00:00Z",
+    "updated_at": "2026-01-21T00:00:00Z"
+  }
+]

@@ -1,0 +1,14 @@
+{
+  "id": 601,
+  "number": 6,
+  "title": "Implement dark mode toggle",
+  "body": "Closes #42.",
+  "state": "open",
+  "ref": "feature-x",
+  "html_url": "https://git.example.com/acme/widgets/pulls/6",
+  "labels": [],
+  "assignees": [],
+  "pull_request": {},
+  "created_at": "2026-01-05T00:00:00Z",
+  "updated_at": "2026-01-05T00:00:00Z"
+}

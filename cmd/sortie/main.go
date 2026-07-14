@@ -47,6 +47,7 @@ import (
 	_ "github.com/sortie-ai/sortie/internal/agent/opencode"
 	_ "github.com/sortie-ai/sortie/internal/notify/slack"
 	_ "github.com/sortie-ai/sortie/internal/notify/webhook"
+	_ "github.com/sortie-ai/sortie/internal/scm/gitea"
 	_ "github.com/sortie-ai/sortie/internal/scm/github"
 	_ "github.com/sortie-ai/sortie/internal/tracker/file"
 	_ "github.com/sortie-ai/sortie/internal/tracker/jira"

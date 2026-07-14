@@ -1,0 +1,30 @@
+[
+  {
+    "id": 8008,
+    "number": 8,
+    "title": "Backlog item created later",
+    "body": null,
+    "state": "open",
+    "ref": "",
+    "html_url": "https://git.example.com/acme/widgets/issues/8",
+    "labels": [{ "id": 1, "name": "backlog", "color": "cccccc" }],
+    "assignees": [],
+    "pull_request": null,
+    "created_at": "2026-01-04T00:00:00Z",
+    "updated_at": "2026-01-04T00:00:00Z"
+  },
+  {
+    "id": 601,
+    "number": 6,
+    "title": "Implement dark mode toggle",
+    "body": "Closes #42.",
+    "state": "open",
+    "ref": "feature-x",
+    "html_url": "https://git.example.com/acme/widgets/pulls/6",
+    "labels": [],
+    "assignees": [],
+    "pull_request": {},
+    "created_at": "2026-01-05T00:00:00Z",
+    "updated_at": "2026-01-05T00:00:00Z"
+  }
+]

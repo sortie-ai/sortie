@@ -1,0 +1,4 @@
+{
+  "message": "token does not have at least one of required scope(s), required=[read:user], token scope=write:issue",
+  "url": "https://git.example.com/api/swagger"
+}

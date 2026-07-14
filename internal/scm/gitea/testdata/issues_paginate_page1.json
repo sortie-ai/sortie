@@ -1,0 +1,30 @@
+[
+  {
+    "id": 7001,
+    "number": 101,
+    "title": "Paginate item 1",
+    "body": null,
+    "state": "open",
+    "ref": "",
+    "html_url": "https://git.example.com/acme/widgets/issues/101",
+    "labels": [{ "id": 1, "name": "backlog", "color": "cccccc" }],
+    "assignees": [],
+    "pull_request": null,
+    "created_at": "2026-02-01T00:00:00Z",
+    "updated_at": "2026-02-01T00:00:00Z"
+  },
+  {
+    "id": 7002,
+    "number": 102,
+    "title": "Paginate item 2",
+    "body": null,
+    "state": "open",
+    "ref": "",
+    "html_url": "https://git.example.com/acme/widgets/issues/102",
+    "labels": [{ "id": 1, "name": "backlog", "color": "cccccc" }],
+    "assignees": [],
+    "pull_request": null,
+    "created_at": "2026-02-02T00:00:00Z",
+    "updated_at": "2026-02-02T00:00:00Z"
+  }
+]
