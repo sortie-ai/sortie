@@ -1352,8 +1352,8 @@ func TestAddLabel(t *testing.T) {
 		if createBody.Name != "needs-human" {
 			t.Errorf("create-label name = %q, want %q (lowercased)", createBody.Name, "needs-human")
 		}
-		if createBody.Color != "#cccccc" {
-			t.Errorf("create-label color = %q, want %q", createBody.Color, "#cccccc")
+		if createBody.Color != "cccccc" {
+			t.Errorf("create-label color = %q, want %q", createBody.Color, "cccccc")
 		}
 		if want := []int64{701}; !slices.Equal(attachBody.Labels, want) {
 			t.Errorf("attach body labels = %v, want %v (numeric created id, not the name)", attachBody.Labels, want)
@@ -1419,50 +1419,60 @@ func TestAddLabel(t *testing.T) {
 func TestEnsureLabelID(t *testing.T) {
 	t.Parallel()
 
-	t.Run("re-resolves the catalog once when create conflicts and returns the now-visible id", func(t *testing.T) {
+	t.Run("returns the indexed id without a create when the label is present", func(t *testing.T) {
+		t.Parallel()
+
+		// Only the preflight routes are registered: a create request would hit
+		// the catch-all and fail, proving no create is issued.
+		a := mustAdapter(t, newPreflightMux(t))
+
+		id, err := a.ensureLabelID(context.Background(), map[string]int64{"in-progress": 501}, "in-progress")
+		if err != nil {
+			t.Fatalf("ensureLabelID: %v", err)
+		}
+		if id != 501 {
+			t.Errorf("ensureLabelID id = %d, want %d (resolved from the index)", id, 501)
+		}
+	})
+
+	t.Run("creates the label and returns the new id when absent", func(t *testing.T) {
 		t.Parallel()
 
 		mux := newPreflightMux(t)
 		var createCalls atomic.Int32
 		mux.HandleFunc("POST /api/v1/repos/"+testOwner+"/"+testRepo+"/labels", func(w http.ResponseWriter, r *http.Request) {
 			createCalls.Add(1)
-			w.WriteHeader(http.StatusConflict)
-			w.Write([]byte(`{"message":"label already exists"}`)) //nolint:errcheck // test helper
-		})
-		var resolveCalls atomic.Int32
-		mux.HandleFunc("GET /api/v1/repos/"+testOwner+"/"+testRepo+"/labels", func(w http.ResponseWriter, r *http.Request) {
-			resolveCalls.Add(1)
-			w.WriteHeader(http.StatusOK)
-			w.Write([]byte(`[{"id":801,"name":"conflict-label","color":"cccccc"}]`)) //nolint:errcheck // test helper
+			w.WriteHeader(http.StatusCreated)
+			w.Write(loadFixture(t, "label_created.json")) //nolint:errcheck // test helper
 		})
 		a := mustAdapter(t, mux)
 
-		id, err := a.ensureLabelID(context.Background(), map[string]int64{}, "conflict-label")
+		index := map[string]int64{}
+		id, err := a.ensureLabelID(context.Background(), index, "needs-human")
 		if err != nil {
 			t.Fatalf("ensureLabelID: %v", err)
 		}
-		if id != 801 {
-			t.Errorf("ensureLabelID id = %d, want %d (resolved after the create conflict)", id, 801)
+		if id != 701 {
+			t.Errorf("ensureLabelID id = %d, want %d (created label id)", id, 701)
+		}
+		if got := index["needs-human"]; got != 701 {
+			t.Errorf("index[needs-human] = %d, want %d (cached after create)", got, 701)
 		}
 		if got := createCalls.Load(); got != 1 {
 			t.Errorf("create call count = %d, want 1", got)
 		}
-		if got := resolveCalls.Load(); got != 1 {
-			t.Errorf("resolve call count = %d, want 1 (single re-resolve on conflict)", got)
-		}
 	})
 
-	t.Run("propagates the create error when the label is still absent after re-resolve", func(t *testing.T) {
+	t.Run("propagates the create error when the label is absent", func(t *testing.T) {
 		t.Parallel()
 
+		// No labels GET route is registered: a create failure returns the
+		// classifier-mapped error directly and never re-reads the catalog, so a
+		// stray catalog GET would hit the catch-all and fail.
 		mux := newPreflightMux(t)
 		mux.HandleFunc("POST /api/v1/repos/"+testOwner+"/"+testRepo+"/labels", func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusForbidden)
 			w.Write(loadFixture(t, "error_403.json")) //nolint:errcheck // test helper
-		})
-		mux.HandleFunc("GET /api/v1/repos/"+testOwner+"/"+testRepo+"/labels", func(w http.ResponseWriter, r *http.Request) {
-			w.WriteHeader(http.StatusOK)
-			w.Write([]byte(`[]`)) //nolint:errcheck // test helper
 		})
 		a := mustAdapter(t, mux)
 

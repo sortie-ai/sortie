@@ -565,16 +565,14 @@ func (a *GiteaAdapter) resolveLabelIndex(ctx context.Context) (map[string]int64,
 // the new id.
 //
 // Gitea rejects a create without a color, so a fixed neutral color accompanies
-// every create. On a create failure the catalog is re-resolved once: a
-// concurrent create may have registered the label, in which case its id is
-// returned; otherwise the create error is propagated. index is updated with the
-// created id on success.
+// every create. A create failure returns the classifier-mapped error directly.
+// index is updated with the created id on success.
 func (a *GiteaAdapter) ensureLabelID(ctx context.Context, index map[string]int64, lowered string) (int64, error) {
 	if id, ok := index[lowered]; ok {
 		return id, nil
 	}
 
-	payload, err := json.Marshal(map[string]string{"name": lowered, "color": "#cccccc"})
+	payload, err := json.Marshal(map[string]string{"name": lowered, "color": "cccccc"})
 	if err != nil {
 		return 0, &domain.TrackerError{
 			Kind:    domain.ErrTrackerPayload,
@@ -584,15 +582,9 @@ func (a *GiteaAdapter) ensureLabelID(ctx context.Context, index map[string]int64
 	}
 
 	path := "/repos/" + a.owner + "/" + a.repo + "/labels"
-	body, createErr := a.client.Send(ctx, "POST", path, bytes.NewReader(payload))
-	if createErr != nil {
-		refreshed, resolveErr := a.resolveLabelIndex(ctx)
-		if resolveErr == nil {
-			if id, ok := refreshed[lowered]; ok {
-				return id, nil
-			}
-		}
-		return 0, createErr
+	body, err := a.client.Send(ctx, "POST", path, bytes.NewReader(payload))
+	if err != nil {
+		return 0, err
 	}
 
 	var created giteaLabel
