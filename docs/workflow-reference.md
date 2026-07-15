@@ -334,11 +334,13 @@ of those fields is:
 - `project` is the repository in **`owner/repo`** form (for example `sortie-ai/sortie`): exactly one
   slash, with a non-empty owner and repository.
 - `active_states`, `terminal_states`, and `handoff_state` name repository **labels**, compared
-  case-insensitively (the adapter lowercases them). When `active_states` or `terminal_states` is
-  omitted or set to an empty list, the adapter applies its defaults: active
-  `["backlog", "in-progress", "review"]`, terminal `["done", "wontfix"]`. The general rule that an
-  empty `active_states` pauses dispatch (see the field table above) does not hold for Gitea: an
-  empty list is replaced by the defaults, so emptying it does not stop dispatch.
+  case-insensitively (the adapter lowercases them). The adapter carries internal fallback labels
+  (active `["backlog", "in-progress", "review"]`, terminal `["done", "wontfix"]`) that it uses only
+  to derive an issue's state from its labels when the matching list is omitted. These fallbacks do
+  not drive dispatch: the orchestrator gates dispatch and reconciliation on the workflow's
+  `tracker.active_states` and `tracker.terminal_states`, so the field-table rule above holds for
+  Gitea. An empty `active_states` dispatches nothing, and validation rejects a workflow with both
+  lists empty. Configure `active_states` with the labels a dispatched Gitea issue must carry.
 
 Gitea has no transition workflow, so the adapter derives an issue's state from its labels: it scans
 the configured active, terminal, then handoff labels in order and takes the first match. An issue

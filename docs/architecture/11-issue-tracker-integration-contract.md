@@ -207,8 +207,12 @@ issue labels case-insensitively. State derivation scans the configured active, t
 handoff labels in config order and takes the first match; an issue carrying more than one configured
 state label logs a WARN and keeps the first. An issue with no configured state label falls back to
 the first active label when it is open and the first terminal label when it is closed. When
-`active_states` or `terminal_states` is omitted or empty, the adapter applies the defaults
-`["backlog", "in-progress", "review"]` and `["done", "wontfix"]`.
+`active_states` or `terminal_states` is omitted or empty, the adapter applies the internal defaults
+`["backlog", "in-progress", "review"]` and `["done", "wontfix"]` for this label-to-state
+derivation. These defaults are an adapter-internal derivation fallback, not a substitute for the
+workflow configuration: the orchestrator gates dispatch and reconciliation on the workflow's
+`tracker.active_states` and `tracker.terminal_states`, which an operator sets to the labels that
+should be treated as active or terminal.
 
 **Normalization specifics.** Beyond the shared rules in Section 11.3:
 
