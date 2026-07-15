@@ -13,6 +13,7 @@
 package gitea
 
 import (
+	"bytes"
 	"cmp"
 	"context"
 	"encoding/json"
@@ -20,6 +21,7 @@ import (
 	"log/slog"
 	"net/url"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/sortie-ai/sortie/internal/domain"
@@ -516,31 +518,260 @@ func (a *GiteaAdapter) fetchStatesByIndexes(ctx context.Context, indexes []strin
 	return states, nil
 }
 
-// TransitionIssue is not yet implemented; the Gitea write path is a separate
-// task. It returns [domain.ErrTrackerPayload] and issues no request, so the
-// orchestrator never mistakes a missing transition for a completed one.
+// resolveLabelIndex pages the repository label catalog to exhaustion and returns
+// a case-insensitive name-to-id map keyed by the lowercased label name.
+//
+// Paging to exhaustion is required: a first-page-only resolver would miss a
+// label defined on a later page and then either fail to resolve a real label or
+// spuriously create a duplicate. A page decode failure returns
+// [domain.ErrTrackerPayload].
+func (a *GiteaAdapter) resolveLabelIndex(ctx context.Context) (map[string]int64, error) {
+	path := "/repos/" + a.owner + "/" + a.repo + "/labels"
+	params := url.Values{"limit": {"50"}}
+
+	paginator := httpkit.NewLinkPaginator(a.client, path, params, func(body []byte) ([]giteaLabel, error) {
+		var raw []giteaLabel
+		if err := json.Unmarshal(body, &raw); err != nil {
+			return nil, &domain.TrackerError{
+				Kind:    domain.ErrTrackerPayload,
+				Message: "failed to parse labels response",
+				Err:     err,
+			}
+		}
+		return raw, nil
+	}, httpkit.PaginatorOptions{
+		MaxPages: maxPages,
+		OnLimitReached: func(limit int) {
+			a.log.Warn("pagination limit reached",
+				slog.Int("max_pages", limit),
+				slog.String("endpoint", path))
+		},
+	})
+
+	labels, err := paginator.All(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	index := make(map[string]int64, len(labels))
+	for _, l := range labels {
+		index[strings.ToLower(l.Name)] = l.ID
+	}
+	return index, nil
+}
+
+// ensureLabelID resolves lowered against index and returns its label id. When
+// the label is absent it creates the label with the default color and returns
+// the new id.
+//
+// Gitea rejects a create without a color, so a fixed neutral color accompanies
+// every create. A create failure returns the classifier-mapped error directly.
+// index is updated with the created id on success.
+func (a *GiteaAdapter) ensureLabelID(ctx context.Context, index map[string]int64, lowered string) (int64, error) {
+	if id, ok := index[lowered]; ok {
+		return id, nil
+	}
+
+	payload, err := json.Marshal(map[string]string{"name": lowered, "color": "cccccc"})
+	if err != nil {
+		return 0, &domain.TrackerError{
+			Kind:    domain.ErrTrackerPayload,
+			Message: "failed to marshal create-label payload",
+			Err:     err,
+		}
+	}
+
+	path := "/repos/" + a.owner + "/" + a.repo + "/labels"
+	body, err := a.client.Send(ctx, "POST", path, bytes.NewReader(payload))
+	if err != nil {
+		return 0, err
+	}
+
+	var created giteaLabel
+	if err := json.Unmarshal(body, &created); err != nil {
+		return 0, &domain.TrackerError{
+			Kind:    domain.ErrTrackerPayload,
+			Message: "failed to parse create-label response",
+			Err:     err,
+		}
+	}
+
+	index[lowered] = created.ID
+	return created.ID, nil
+}
+
+// TransitionIssue moves an issue to targetState by swapping its state label and
+// reconciling the native open/closed status. A target that is not a configured
+// active, terminal, or handoff state returns [domain.ErrTrackerPayload] before
+// any request; an index resolving to a pull request returns
+// [domain.ErrTrackerNotFound].
+//
+// Gitea has no transition API, so the move is composed from label and state
+// edits: the current state label is removed by id, the target label is resolved
+// or created and attached by id, and a terminal or active target patches the
+// native state. Every step is idempotent, so a partial failure converges on
+// retry, and a no-op transition performs no label work.
 func (a *GiteaAdapter) TransitionIssue(ctx context.Context, issueID, targetState string) error {
-	return &domain.TrackerError{
-		Kind:    domain.ErrTrackerPayload,
-		Message: "gitea: transitioning issues is not yet implemented",
-	}
+	targetLower := strings.ToLower(targetState)
+
+	return trackermetrics.Track(a.metrics, "transition", func() error {
+		isHandoffTarget := a.handoffState != "" && targetLower == a.handoffState
+		if !slices.Contains(a.activeStates, targetLower) &&
+			!slices.Contains(a.terminalStates, targetLower) &&
+			!isHandoffTarget {
+			return &domain.TrackerError{
+				Kind:    domain.ErrTrackerPayload,
+				Message: fmt.Sprintf("invalid target state: %q is not a configured active, terminal, or handoff state", targetState),
+			}
+		}
+
+		basePath := "/repos/" + a.owner + "/" + a.repo + "/issues/" + url.PathEscape(issueID)
+
+		body, _, err := a.client.Get(ctx, basePath, nil)
+		if err != nil {
+			if domain.IsNotFound(err) {
+				return &domain.TrackerError{
+					Kind:    domain.ErrTrackerNotFound,
+					Message: fmt.Sprintf("issue not found: %s", issueID),
+				}
+			}
+			return err
+		}
+
+		var gi giteaIssue
+		if err := json.Unmarshal(body, &gi); err != nil {
+			return &domain.TrackerError{
+				Kind:    domain.ErrTrackerPayload,
+				Message: "failed to parse issue response",
+				Err:     err,
+			}
+		}
+		if isPullRequest(gi) {
+			return &domain.TrackerError{
+				Kind:    domain.ErrTrackerNotFound,
+				Message: fmt.Sprintf("resource is a pull request, not an issue: %s", issueID),
+			}
+		}
+
+		currentLabel := findCurrentStateLabel(gi.Labels, a.activeStates, a.terminalStates, a.handoffState)
+
+		if currentLabel != targetLower {
+			index, err := a.resolveLabelIndex(ctx)
+			if err != nil {
+				return err
+			}
+
+			if currentLabel != "" {
+				if currentID, ok := index[currentLabel]; ok {
+					labelPath := basePath + "/labels/" + strconv.FormatInt(currentID, 10)
+					if err := a.client.SendNoBody(ctx, "DELETE", labelPath); err != nil && !domain.IsNotFound(err) {
+						return err
+					}
+				}
+			}
+
+			targetID, err := a.ensureLabelID(ctx, index, targetLower)
+			if err != nil {
+				return err
+			}
+
+			payload, err := json.Marshal(map[string][]int64{"labels": {targetID}})
+			if err != nil {
+				return &domain.TrackerError{
+					Kind:    domain.ErrTrackerPayload,
+					Message: "failed to marshal label payload",
+					Err:     err,
+				}
+			}
+			if _, err := a.client.Send(ctx, "POST", basePath+"/labels", bytes.NewReader(payload)); err != nil {
+				return err
+			}
+		}
+
+		if slices.Contains(a.terminalStates, targetLower) && gi.State == "open" {
+			payload, err := json.Marshal(map[string]string{"state": "closed"})
+			if err != nil {
+				return &domain.TrackerError{
+					Kind:    domain.ErrTrackerPayload,
+					Message: "failed to marshal state payload",
+					Err:     err,
+				}
+			}
+			if _, err := a.client.Send(ctx, "PATCH", basePath, bytes.NewReader(payload)); err != nil {
+				return err
+			}
+		} else if slices.Contains(a.activeStates, targetLower) && gi.State == "closed" {
+			payload, err := json.Marshal(map[string]string{"state": "open"})
+			if err != nil {
+				return &domain.TrackerError{
+					Kind:    domain.ErrTrackerPayload,
+					Message: "failed to marshal state payload",
+					Err:     err,
+				}
+			}
+			if _, err := a.client.Send(ctx, "PATCH", basePath, bytes.NewReader(payload)); err != nil {
+				return err
+			}
+		}
+
+		return nil
+	})
 }
 
-// CommentIssue is not yet implemented; the Gitea write path is a separate task.
-// It returns [domain.ErrTrackerPayload] and issues no request.
+// CommentIssue posts text as a Markdown comment on the issue. The text is sent
+// verbatim with no conversion, and the created-comment response is ignored.
 func (a *GiteaAdapter) CommentIssue(ctx context.Context, issueID, text string) error {
-	return &domain.TrackerError{
-		Kind:    domain.ErrTrackerPayload,
-		Message: "gitea: commenting on issues is not yet implemented",
-	}
+	return trackermetrics.Track(a.metrics, "comment", func() error {
+		path := "/repos/" + a.owner + "/" + a.repo + "/issues/" + url.PathEscape(issueID) + "/comments"
+
+		payload, err := json.Marshal(map[string]string{"body": text})
+		if err != nil {
+			return &domain.TrackerError{
+				Kind:    domain.ErrTrackerPayload,
+				Message: "failed to marshal comment payload",
+				Err:     err,
+			}
+		}
+
+		_, err = a.client.Send(ctx, "POST", path, bytes.NewReader(payload))
+		return err
+	})
 }
 
-// AddLabel is not yet implemented; the Gitea write path is a separate task. It
-// returns [domain.ErrTrackerPayload] and issues no request, so a silently
-// ignored label attach cannot masquerade as success.
+// AddLabel attaches label to the issue, resolving or creating the label id
+// first. The label name is lowercased to match the read path, and the attach is
+// additive, so existing labels are preserved and no read-modify-write occurs.
+//
+// The label is attached by id, never by name: Gitea silently ignores an unknown
+// name on the attach route, so an unresolved label would otherwise be a silent
+// no-op instead of a created-then-attached label.
 func (a *GiteaAdapter) AddLabel(ctx context.Context, issueID, label string) error {
-	return &domain.TrackerError{
-		Kind:    domain.ErrTrackerPayload,
-		Message: "gitea: adding labels is not yet implemented",
-	}
+	return trackermetrics.Track(a.metrics, "add_label", func() error {
+		lowered := strings.ToLower(label)
+
+		index, err := a.resolveLabelIndex(ctx)
+		if err != nil {
+			return err
+		}
+
+		labelID, err := a.ensureLabelID(ctx, index, lowered)
+		if err != nil {
+			return err
+		}
+
+		path := "/repos/" + a.owner + "/" + a.repo + "/issues/" + url.PathEscape(issueID) + "/labels"
+		payload, err := json.Marshal(map[string][]int64{"labels": {labelID}})
+		if err != nil {
+			return &domain.TrackerError{
+				Kind:    domain.ErrTrackerPayload,
+				Message: "failed to marshal label payload",
+				Err:     err,
+			}
+		}
+
+		if _, err := a.client.Send(ctx, "POST", path, bytes.NewReader(payload)); err != nil {
+			return err
+		}
+		return nil
+	})
 }

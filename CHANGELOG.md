@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Gitea tracker adapter: configure with `tracker.kind: gitea` to run
+  Sortie against a self-hosted Gitea instance. `tracker.endpoint` is
+  required and sets the instance base URL (there is no default host,
+  unlike the hosted trackers), `tracker.api_key` is a Gitea access
+  token, and `tracker.project` names the target repository as
+  `owner/repo`. The adapter implements the full `TrackerAdapter`
+  interface: candidate issue polling, issue and comment retrieval, and
+  state reconciliation on the read path; issue transitions, lifecycle
+  comments, and label attachment on the write path, so a Gitea-backed
+  deployment performs handoff transitions, posts session comments, and
+  applies CI-failure escalation labels on par with the Jira, GitHub, and
+  Linear adapters. Workflow state is label-driven through `active_states`,
+  `terminal_states`, and `handoff_state`, as with the GitHub adapter; a
+  terminal transition also closes the issue and an active transition
+  reopens it, and a missing state or escalation label is created in the
+  repository on demand rather than requiring operators to pre-create it.
+  Forgejo and Codeberg instances are expected to work through the same
+  `kind: gitea` configuration.
+  ([#629](https://github.com/sortie-ai/sortie/issues/629),
+  [#630](https://github.com/sortie-ai/sortie/issues/630))
+
 ## [1.14.1] - 2026-07-13
 
 ### Fixed

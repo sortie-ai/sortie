@@ -24,8 +24,10 @@ type giteaIssue struct {
 	UpdatedAt   string       `json:"updated_at"`
 }
 
-// giteaLabel carries the label name the read path consumes.
+// giteaLabel carries the label id and name. The read path consumes Name; the
+// write path resolves Name to ID for id-based attach and remove.
 type giteaLabel struct {
+	ID   int64  `json:"id"`
 	Name string `json:"name"`
 }
 

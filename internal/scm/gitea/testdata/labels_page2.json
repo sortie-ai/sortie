@@ -1,0 +1,4 @@
+[
+  { "id": 601, "name": "ci-failure", "color": "b60205" },
+  { "id": 602, "name": "needs-triage", "color": "fbca04" }
+]
