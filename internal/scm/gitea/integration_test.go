@@ -64,6 +64,17 @@ func firstCandidate(t *testing.T, adapter domain.TrackerAdapter, ctx context.Con
 	return candidates[0]
 }
 
+// parseCreatedAt parses a comment's CreatedAt so ordering checks compare
+// chronological order rather than lexicographic string order.
+func parseCreatedAt(t *testing.T, raw string) time.Time {
+	t.Helper()
+	parsed, err := time.Parse(time.RFC3339, raw)
+	if err != nil {
+		t.Fatalf("CreatedAt %q is not a valid RFC 3339 timestamp: %v", raw, err)
+	}
+	return parsed
+}
+
 func TestIntegration_TransitionIssue(t *testing.T) {
 	skipUnlessIntegration(t)
 
@@ -174,12 +185,12 @@ func TestIntegration_FetchIssueByID(t *testing.T) {
 
 	issue := firstCandidate(t, adapter, ctx)
 
-	fetched, err := adapter.FetchIssueByID(ctx, issue.Identifier)
+	fetched, err := adapter.FetchIssueByID(ctx, issue.ID)
 	if err != nil {
-		t.Fatalf("FetchIssueByID(%s): %v", issue.Identifier, err)
+		t.Fatalf("FetchIssueByID(%s): %v", issue.ID, err)
 	}
-	if fetched.Identifier != issue.Identifier {
-		t.Errorf("Identifier = %q, want %q", fetched.Identifier, issue.Identifier)
+	if fetched.ID != issue.ID {
+		t.Errorf("ID = %q, want %q", fetched.ID, issue.ID)
 	}
 	if fetched.Comments == nil {
 		t.Error("Comments is nil, want non-nil slice for fully populated issue")
@@ -316,16 +327,18 @@ func TestIntegration_FetchIssueComments(t *testing.T) {
 
 	issue := firstCandidate(t, adapter, ctx)
 
-	comments, err := adapter.FetchIssueComments(ctx, issue.Identifier)
+	comments, err := adapter.FetchIssueComments(ctx, issue.ID)
 	if err != nil {
-		t.Fatalf("FetchIssueComments(%s): %v", issue.Identifier, err)
+		t.Fatalf("FetchIssueComments(%s): %v", issue.ID, err)
 	}
 	if comments == nil {
 		t.Fatal("comments is nil, want non-nil slice")
 	}
 
 	for i := 1; i < len(comments); i++ {
-		if comments[i-1].CreatedAt > comments[i].CreatedAt {
+		prev := parseCreatedAt(t, comments[i-1].CreatedAt)
+		curr := parseCreatedAt(t, comments[i].CreatedAt)
+		if prev.After(curr) {
 			t.Errorf("comments not in ascending createdAt order at index %d: %q before %q",
 				i, comments[i-1].CreatedAt, comments[i].CreatedAt)
 		}

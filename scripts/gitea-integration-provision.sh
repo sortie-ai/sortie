@@ -84,6 +84,10 @@ gitea_call() {
 	case "$auth" in
 	token) auth_args=(-H "Authorization: token ${TOKEN}") ;;
 	basic) auth_args=(-u "${GITEA_USER}:${GITEA_PASSWORD}") ;;
+	*)
+		log "unknown auth mode: ${auth}"
+		return 1
+		;;
 	esac
 	response=$(curl -sS --max-time 30 -w "${NEWLINE}%{http_code}" \
 		"${auth_args[@]}" \
