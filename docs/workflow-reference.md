@@ -191,7 +191,7 @@ tracker:
 
 | Field             | Type            | Required                  | Default         | Dynamic Reload                     | Description                                                                                                                                                                                     |
 | ----------------- | --------------- | ------------------------- | --------------- | ---------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `kind`            | string          | **Yes** (for dispatch)    | _(none)_        | Future dispatches                  | Adapter identifier. Supported: `jira`, `github`, `linear`, `gitea`, `file`. Additional adapters are registered separately.                                                                               |
+| `kind`            | string          | **Yes** (for dispatch)    | _(none)_        | Future dispatches                  | Adapter identifier. Supported: `jira`, `github`, `linear`, `gitea`, `file`. Additional adapters are registered separately.                                                                      |
 | `endpoint`        | string          | Adapter-defined           | Adapter-defined | Future dispatches                  | Tracker API endpoint URL. Supports `$VAR` indirection: if the value starts with `$`, it is expanded via `os.ExpandEnv`.                                                                         |
 | `api_key`         | string          | When adapter requires it  | _(none)_        | Future dispatches                  | API authentication token. May be a literal or `$VAR_NAME`. If `$VAR_NAME` resolves to empty, treated as missing. The `jira`, `github`, `linear`, and `gitea` adapters require this field; `file` does not. Full env expansion applied (`$VAR` at any position). |
 | `project`         | string          | When adapter requires it  | _(none)_        | Future dispatches                  | Project identifier. Interpretation is adapter-defined: Jira project key, GitHub or Gitea `owner/repo`, or Linear team key (e.g., `ENG`). Supports `$VAR` indirection: if the value starts with `$`, it is expanded via `os.ExpandEnv`. |
@@ -336,11 +336,12 @@ of those fields is:
 - `active_states`, `terminal_states`, and `handoff_state` name repository **labels**, compared
   case-insensitively (the adapter lowercases them). The adapter carries internal fallback labels
   (active `["backlog", "in-progress", "review"]`, terminal `["done", "wontfix"]`) that it uses only
-  to derive an issue's state from its labels when the matching list is omitted. These fallbacks do
-  not drive dispatch: the orchestrator gates dispatch and reconciliation on the workflow's
-  `tracker.active_states` and `tracker.terminal_states`, so the field-table rule above holds for
-  Gitea. An empty `active_states` dispatches nothing, and validation rejects a workflow with both
-  lists empty. Configure `active_states` with the labels a dispatched Gitea issue must carry.
+  to derive an issue's state from its labels when the matching list is omitted or empty. These
+  fallbacks do not drive dispatch: the orchestrator gates dispatch and reconciliation on the
+  workflow's `tracker.active_states` and `tracker.terminal_states`, so the field-table rule above
+  holds for Gitea. An empty `active_states` dispatches nothing, and validation rejects a workflow
+  with both lists empty. Configure `active_states` with the labels a dispatched Gitea issue must
+  carry.
 
 Gitea has no transition workflow, so the adapter derives an issue's state from its labels: it scans
 the configured active, terminal, then handoff labels in order and takes the first match. An issue
