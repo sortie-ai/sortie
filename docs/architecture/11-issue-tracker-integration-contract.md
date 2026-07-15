@@ -86,11 +86,16 @@ Sortie does not require first-class tracker write APIs in the orchestrator.
 
 ### 11.6 Implemented Tracker Adapters
 
-Three tracker adapters ship today: Jira (`internal/tracker/jira`, Atlassian REST API), GitHub
-(`internal/scm/github`, Issues and Labels REST API), and Linear (`internal/tracker/linear`,
-GraphQL API). Each normalizes its native responses to the `Issue` model (Section 4.1.1), maps
-native errors to the categories in Section 11.4, and registers under its `kind` via `init()`.
-The orchestrator core never imports these packages; it resolves them through `internal/registry`.
+The following tracker adapters ship today:
+
+- Jira (`internal/tracker/jira`, Atlassian REST API)
+- Linear (`internal/tracker/linear`, GraphQL API)
+- GitHub (`internal/scm/github`, Issues and Labels REST API)
+- Gitea (`internal/scm/gitea`, Gitea REST API v1)
+
+Each normalizes its native responses to the `Issue` model (Section 4.1.1), maps native errors to
+the categories in Section 11.4, and registers under its `kind` via `init()`. The orchestrator core
+never imports these packages; it resolves them through `internal/registry`.
 
 #### 11.6.1 Linear adapter
 
@@ -171,3 +176,90 @@ requires beyond the read set:
 constraints inside the GraphQL `filter` argument rather than appending a string the way the Jira
 and GitHub adapters do. See the workflow reference for the operator-facing shape.
 
+#### 11.6.2 Gitea adapter
+
+The Gitea adapter targets the REST API v1 of a self-hosted Gitea instance, built on
+`internal/httpkit` with no third-party Gitea client library. Gitea has no hosted tier, so
+`tracker.endpoint` is required and carries the instance base URL; the adapter trims a trailing
+slash, appends `/api/v1`, and tolerates an endpoint that already ends in `/api/v1`. Its wire model
+is close to the GitHub adapter's, issues plus labels plus an open/closed status, and it diverges
+where Gitea's API differs.
+
+**Authentication.** The resolved `tracker.api_key` is a Gitea access token, sent verbatim in the
+`Authorization` header under the `token` scheme (`Authorization: token <key>`), not a `Bearer`
+prefix, so surrounding whitespace fails authentication. The constructor runs a two-call preflight
+before the first poll: a `GET /user` credential check followed by a `GET /repos/{owner}/{repo}`
+project check. A config error (401, 403, or 404) fails construction immediately, while a transient
+error is retried with a bounded backoff, so a misconfiguration surfaces at startup rather than on
+the first fetch.
+
+**Repository scoping.** `tracker.project` is the repository in `owner/repo` form (for example
+`sortie-ai/sortie`), exactly one slash with non-empty halves. Every read and write route is scoped
+to that repository. The adapter uses no global issue id: it addresses issues by their
+repository-scoped index (the Gitea `number`) and qualifies each issue's `display_id` as
+`owner/repo#N`.
+
+**State model.** Gitea has neither Jira's transition graph nor Linear's named workflow states. It
+offers a native open/closed status plus free-form repository labels, so the adapter models Sortie
+state with labels, closest to the GitHub adapter. Operators configure label names in
+`active_states`, `terminal_states`, and `handoff_state`; the adapter lowercases them and compares
+issue labels case-insensitively. State derivation scans the configured active, terminal, then
+handoff labels in config order and takes the first match; an issue carrying more than one configured
+state label logs a WARN and keeps the first. An issue with no configured state label falls back to
+the first active label when it is open and the first terminal label when it is closed. When
+`active_states` or `terminal_states` is omitted or empty, the adapter applies the defaults
+`["backlog", "in-progress", "review"]` and `["done", "wontfix"]`.
+
+**Normalization specifics.** Beyond the shared rules in Section 11.3:
+
+- `id` and `identifier` are both the repository-scoped index as a string; Gitea's global issue id is
+  never read.
+- `priority` is always null, because Gitea issues carry no priority field.
+- `parent` is always null, because Gitea has no sub-issue relationship, and no parent request is
+  issued.
+- `blocked_by` is read from the issue dependencies route (`/issues/{index}/dependencies`), the Gitea
+  form of the inverse `blocks` relation described in Section 11.3.
+- `branch_name` comes from the issue `ref` field and is stored as an opaque string.
+- `assignee` is the first entry of the issue's assignee list. Pull requests are skipped on every
+  list route, so they never enter the candidate set.
+
+**Transport and pagination.** Gitea paginates with `Link` response headers rather than cursors or
+page counts, so the adapter follows the header to exhaustion with a page size of 50 and a 30,000 ms
+network timeout. An absent `Link` header is the normal end of results, never a missing-cursor error.
+Gitea sends no `ETag`, so the adapter issues no conditional requests. Gitea has no built-in rate
+limiting; a 429 can arrive only from a fronting proxy, and the adapter surfaces the proxy's
+`Retry-After` in a log while leaving retry backoff to the orchestrator.
+
+**Error classification.** The adapter maps HTTP status to the Section 11.4 categories from the
+uniform Gitea error envelope (`{ "message", "url" }`), reading only `message` for a bounded
+diagnostic snippet and never echoing the token. 401 and 403 map to `tracker_auth_error`, 404 to a
+not-found result, 400, 412, and 422 to `tracker_payload_error`, 423 (a locked or archived
+repository) and 429 to `tracker_api_error`, and 5xx and transport failures to
+`tracker_transport_error`. The 412 and 423 statuses extend the set the GitHub adapter classifies.
+
+**Write operations.** The adapter implements the three writes the `TrackerAdapter` interface
+requires beyond the read set, composing each from Gitea's label and issue-edit routes because Gitea
+has no transition endpoint:
+
+- `transition_issue` rejects a target that is not a configured active, terminal, or handoff label
+  before any write. Otherwise it removes the current state label by id, resolves or creates the
+  target label and attaches it by id, and reconciles native status: a terminal target closes an open
+  issue, and an active target reopens a closed one. Every step is idempotent, so a partial failure
+  converges on retry. `handoff_state` and `in_progress_state` name labels applied through this same
+  path, the latter driven by the orchestrator's dispatch-time transition.
+- `comment_issue` posts the text verbatim as a Markdown comment.
+- `add_label` resolves or creates the label by lowercased name and attaches it by id additively, so
+  existing labels are preserved. A label is attached by id, never by name, because Gitea silently
+  ignores an unknown name on the attach route. A configured or attached label that does not exist is
+  created with a fixed neutral color, since Gitea rejects a label create without one.
+
+**Operator query filter.** `tracker.query_filter` (Section 5.3.1) is a URL query fragment for the
+repository issue-list route, parsed with `url.ParseQuery`. It merges into the open-issue listings
+that back candidate polling and not into the closed-issue listing used for terminal-state cleanup,
+so an operator filter never hides a terminal issue from reconciliation. The adapter reserves the
+four keys it owns (`state`, `type`, `page`, and `limit`) and rejects a fragment naming any of them;
+any other key merges through. It never pushes the configured state labels into Gitea's `labels`
+query parameter, whose AND semantics and silent drop on an unresolvable name make it unsafe for
+correctness-critical filtering, so state filtering stays client-side. See the workflow reference for
+the operator-facing shape and the diagnostics the adapter emits for unrecognized or unresolved
+filter keys.
