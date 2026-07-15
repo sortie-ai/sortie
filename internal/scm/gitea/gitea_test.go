@@ -7,12 +7,14 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
 	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 
@@ -63,6 +65,22 @@ func decodeRequestBody(t *testing.T, r *http.Request, v any) {
 	t.Helper()
 	if err := json.NewDecoder(r.Body).Decode(v); err != nil {
 		t.Errorf("decode request body: %v", err)
+	}
+}
+
+// assertQueryParams asserts got holds exactly the key/value pairs in want, with
+// no extra or missing keys, so a single call proves both that the expected
+// operator params merged in and that no unexpected param leaked in. label
+// identifies the request in a failure message (for example "candidate" or
+// "open-state").
+func assertQueryParams(t *testing.T, label string, got url.Values, want map[string]string) {
+	t.Helper()
+	wantValues := make(url.Values, len(want))
+	for key, val := range want {
+		wantValues[key] = []string{val}
+	}
+	if !maps.EqualFunc(got, wantValues, slices.Equal) {
+		t.Errorf("%s request query = %v, want exactly %v", label, got, wantValues)
 	}
 }
 
@@ -283,6 +301,123 @@ func TestNewGiteaAdapter(t *testing.T) {
 		assertTrackerErrorKind(t, err, domain.ErrTrackerAuth)
 		if a != nil {
 			t.Error("adapter should be nil when the preflight fails")
+		}
+	})
+
+	t.Run("query_filter validation runs after preflight and rejects malformed or reserved fragments", func(t *testing.T) {
+		t.Parallel()
+
+		// Unlike the pre-network config-error table above, each case here
+		// registers the preflight routes: parseGiteaQueryFilter runs only
+		// after runPreflight succeeds, so construction must reach the network
+		// before the query_filter error surfaces.
+		tests := []struct {
+			name        string
+			queryFilter string
+			wantKeyword string
+		}{
+			{"malformed percent-encoding", "labels=%zz", ""},
+			{"reserved key state", "state=open", `"state"`},
+			{"reserved key type", "type=issues", `"type"`},
+			{"reserved key page", "page=2", `"page"`},
+			{"reserved key limit", "limit=10", `"limit"`},
+			{"multiple reserved keys report state first", "limit=10&state=open&type=issues&page=2", `"state"`},
+			{"page and limit without state or type report page first", "limit=10&page=2", `"page"`},
+		}
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				t.Parallel()
+
+				srv := httptest.NewServer(newPreflightMux(t))
+				defer srv.Close()
+
+				cfg := validConfig(srv.URL)
+				cfg["query_filter"] = tt.queryFilter
+
+				a, err := NewGiteaAdapter(cfg)
+				assertTrackerErrorKind(t, err, domain.ErrTrackerPayload)
+				if a != nil {
+					t.Error("adapter should be nil when query_filter fails validation")
+				}
+				if tt.wantKeyword == "" {
+					return
+				}
+				var te *domain.TrackerError
+				if errors.As(err, &te) && !strings.Contains(te.Message, tt.wantKeyword) {
+					t.Errorf("NewGiteaAdapter(query_filter=%q) message = %q, want it to name %s", tt.queryFilter, te.Message, tt.wantKeyword)
+				}
+			})
+		}
+	})
+
+	t.Run("labels query_filter fetches the label catalog and does not block construction when a label is unresolved", func(t *testing.T) {
+		t.Parallel()
+
+		mux := newPreflightMux(t)
+		var labelsCalls atomic.Int32
+		mux.HandleFunc("GET /api/v1/repos/"+testOwner+"/"+testRepo+"/labels", func(w http.ResponseWriter, r *http.Request) {
+			labelsCalls.Add(1)
+			w.WriteHeader(http.StatusOK)
+			w.Write(loadFixture(t, "labels_page1.json")) //nolint:errcheck // test helper
+		})
+		srv := httptest.NewServer(mux)
+		defer srv.Close()
+
+		cfg := validConfig(srv.URL)
+		cfg["query_filter"] = "labels=does-not-exist"
+
+		a, err := NewGiteaAdapter(cfg)
+		if err != nil {
+			t.Fatalf("NewGiteaAdapter(query_filter with unresolved label): %v", err)
+		}
+		if a == nil {
+			t.Fatal("adapter is nil, want a constructed adapter (an unresolved label must not block construction)")
+		}
+		if got := labelsCalls.Load(); got != 1 {
+			t.Errorf("labels catalog request count = %d, want 1 (construction-time diagnostic fetch)", got)
+		}
+	})
+
+	t.Run("empty labels query_filter performs no label catalog fetch", func(t *testing.T) {
+		t.Parallel()
+
+		tests := []struct {
+			name        string
+			queryFilter string
+		}{
+			{"empty value", "labels="},
+			{"whitespace-only value", "labels=%20%20"},
+		}
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				t.Parallel()
+
+				mux := newPreflightMux(t)
+				var labelsCalls atomic.Int32
+				mux.HandleFunc("GET /api/v1/repos/"+testOwner+"/"+testRepo+"/labels", func(w http.ResponseWriter, r *http.Request) {
+					labelsCalls.Add(1)
+					w.WriteHeader(http.StatusOK)
+					w.Write(loadFixture(t, "labels_page1.json")) //nolint:errcheck // test helper
+				})
+				srv := httptest.NewServer(mux)
+				defer srv.Close()
+
+				cfg := validConfig(srv.URL)
+				cfg["query_filter"] = tt.queryFilter
+
+				a, err := NewGiteaAdapter(cfg)
+				if err != nil {
+					t.Fatalf("NewGiteaAdapter(query_filter=%q): %v", tt.queryFilter, err)
+				}
+				if a == nil {
+					t.Fatal("adapter is nil, want a constructed adapter")
+				}
+				if got := labelsCalls.Load(); got != 0 {
+					t.Errorf("labels catalog request count = %d, want 0 (empty labels= carries no constraint, so no diagnostic fetch or warning)", got)
+				}
+			})
 		}
 	})
 }
@@ -539,6 +674,151 @@ func TestFetchCandidateIssues(t *testing.T) {
 		_, err := a.FetchCandidateIssues(context.Background())
 		assertTrackerErrorKind(t, err, domain.ErrTrackerAuth)
 	})
+
+	t.Run("operator query_filter merges into the request params", func(t *testing.T) {
+		t.Parallel()
+
+		mux := newPreflightMux(t)
+		mux.HandleFunc("GET /api/v1/repos/"+testOwner+"/"+testRepo+"/issues", func(w http.ResponseWriter, r *http.Request) {
+			assertQueryParams(t, "candidate", r.URL.Query(), map[string]string{
+				"state":       "open",
+				"type":        "issues",
+				"limit":       "50",
+				"assigned_by": "hermes-bot",
+			})
+			w.WriteHeader(http.StatusOK)
+			w.Write(loadFixture(t, "issues_candidates_page2.json")) //nolint:errcheck // test helper
+		})
+		srv := httptest.NewServer(mux)
+		defer srv.Close()
+
+		cfg := validConfig(srv.URL)
+		cfg["query_filter"] = "assigned_by=hermes-bot"
+		adapter, err := NewGiteaAdapter(cfg)
+		if err != nil {
+			t.Fatalf("NewGiteaAdapter: %v", err)
+		}
+
+		issues, err := adapter.(*GiteaAdapter).FetchCandidateIssues(context.Background())
+		if err != nil {
+			t.Fatalf("FetchCandidateIssues: %v", err)
+		}
+
+		// #1 (backlog) and #2 (in-progress) are active; #3 (done) is terminal
+		// and is filtered client-side regardless of the server-side filter.
+		if len(issues) != 2 {
+			t.Fatalf("len = %d, want 2 (active-state issues only)", len(issues))
+		}
+	})
+
+	t.Run("unset query_filter sends only the adapter-owned params", func(t *testing.T) {
+		t.Parallel()
+
+		mux := newPreflightMux(t)
+		mux.HandleFunc("GET /api/v1/repos/"+testOwner+"/"+testRepo+"/issues", func(w http.ResponseWriter, r *http.Request) {
+			assertQueryParams(t, "candidate", r.URL.Query(), map[string]string{
+				"state": "open",
+				"type":  "issues",
+				"limit": "50",
+			})
+			w.WriteHeader(http.StatusOK)
+			w.Write(loadFixture(t, "issues_candidates_page2.json")) //nolint:errcheck // test helper
+		})
+		a := mustAdapter(t, mux)
+
+		if _, err := a.FetchCandidateIssues(context.Background()); err != nil {
+			t.Fatalf("FetchCandidateIssues: %v", err)
+		}
+	})
+
+	t.Run("unrecognized query_filter key is not dropped and still merges into the request", func(t *testing.T) {
+		t.Parallel()
+
+		mux := newPreflightMux(t)
+		mux.HandleFunc("GET /api/v1/repos/"+testOwner+"/"+testRepo+"/issues", func(w http.ResponseWriter, r *http.Request) {
+			if got, want := r.URL.Query().Get("assignee"), "hermes-bot"; got != want {
+				t.Errorf("request assignee = %q, want %q (unrecognized key is warned but still passed through)", got, want)
+			}
+			w.WriteHeader(http.StatusOK)
+			w.Write(loadFixture(t, "issues_candidates_page2.json")) //nolint:errcheck // test helper
+		})
+		srv := httptest.NewServer(mux)
+		defer srv.Close()
+
+		cfg := validConfig(srv.URL)
+		cfg["query_filter"] = "assignee=hermes-bot"
+		adapter, err := NewGiteaAdapter(cfg)
+		if err != nil {
+			t.Fatalf("NewGiteaAdapter(query_filter with unrecognized key): %v", err)
+		}
+
+		if _, err := adapter.(*GiteaAdapter).FetchCandidateIssues(context.Background()); err != nil {
+			t.Fatalf("FetchCandidateIssues: %v", err)
+		}
+	})
+
+	t.Run("concurrent fetches leave the stored query_filter unmutated", func(t *testing.T) {
+		t.Parallel()
+
+		const fetches = 5
+
+		mux := newPreflightMux(t)
+		// Buffered to fetches so every handler invocation's send completes
+		// without a waiting receiver; the handoff to the test goroutine is
+		// then made explicit below rather than relying on the network
+		// round-trip's implicit happens-before edge.
+		queries := make(chan url.Values, fetches)
+		mux.HandleFunc("GET /api/v1/repos/"+testOwner+"/"+testRepo+"/issues", func(w http.ResponseWriter, r *http.Request) {
+			queries <- r.URL.Query()
+			w.WriteHeader(http.StatusOK)
+			w.Write(loadFixture(t, "issues_candidates_page2.json")) //nolint:errcheck // test helper
+		})
+		srv := httptest.NewServer(mux)
+		defer srv.Close()
+
+		cfg := validConfig(srv.URL)
+		cfg["query_filter"] = "assigned_by=hermes-bot"
+		adapter, err := NewGiteaAdapter(cfg)
+		if err != nil {
+			t.Fatalf("NewGiteaAdapter: %v", err)
+		}
+		a := adapter.(*GiteaAdapter)
+
+		var wg sync.WaitGroup
+		for range fetches {
+			wg.Go(func() {
+				if _, err := a.FetchCandidateIssues(context.Background()); err != nil {
+					t.Errorf("FetchCandidateIssues: %v", err)
+				}
+			})
+		}
+		wg.Wait()
+		close(queries)
+
+		// Each channel send in the handler happens before the corresponding
+		// receive here completes (Go memory model), so every query is
+		// observed race-free regardless of how many requests overlapped.
+		i := 0
+		for q := range queries {
+			assertQueryParams(t, fmt.Sprintf("concurrent fetch #%d", i), q, map[string]string{
+				"state":       "open",
+				"type":        "issues",
+				"limit":       "50",
+				"assigned_by": "hermes-bot",
+			})
+			i++
+		}
+		if i != fetches {
+			t.Fatalf("received %d queries, want %d", i, fetches)
+		}
+
+		if len(a.queryFilter) != 1 {
+			t.Errorf("queryFilter has %d keys after concurrent fetches, want 1 (must remain unchanged)", len(a.queryFilter))
+		}
+		if got := a.queryFilter["assigned_by"]; len(got) != 1 || got[0] != "hermes-bot" {
+			t.Errorf("queryFilter[assigned_by] = %v, want [hermes-bot] after concurrent fetches", got)
+		}
+	})
 }
 
 // --- FetchIssuesByStates ---
@@ -567,11 +847,10 @@ func TestFetchIssuesByStates(t *testing.T) {
 		t.Parallel()
 
 		mux := newPreflightMux(t)
-		var gotStates []string
+		var calls atomic.Int32
 		mux.HandleFunc("GET /api/v1/repos/"+testOwner+"/"+testRepo+"/issues", func(w http.ResponseWriter, r *http.Request) {
-			state := r.URL.Query().Get("state")
-			gotStates = append(gotStates, state)
-			switch state {
+			calls.Add(1)
+			switch state := r.URL.Query().Get("state"); state {
 			case "open":
 				w.WriteHeader(http.StatusOK)
 				w.Write(loadFixture(t, "issues_open_by_states.json")) //nolint:errcheck // test helper
@@ -592,8 +871,8 @@ func TestFetchIssuesByStates(t *testing.T) {
 		if issues[0].Identifier != "10" {
 			t.Errorf("Identifier = %q, want %q", issues[0].Identifier, "10")
 		}
-		if len(gotStates) != 1 || gotStates[0] != "open" {
-			t.Errorf("state queries = %v, want exactly one open query", gotStates)
+		if got := calls.Load(); got != 1 {
+			t.Errorf("call count = %d, want 1 (exactly one open-state query)", got)
 		}
 	})
 
@@ -601,11 +880,10 @@ func TestFetchIssuesByStates(t *testing.T) {
 		t.Parallel()
 
 		mux := newPreflightMux(t)
-		var gotStates []string
+		var calls atomic.Int32
 		mux.HandleFunc("GET /api/v1/repos/"+testOwner+"/"+testRepo+"/issues", func(w http.ResponseWriter, r *http.Request) {
-			state := r.URL.Query().Get("state")
-			gotStates = append(gotStates, state)
-			switch state {
+			calls.Add(1)
+			switch state := r.URL.Query().Get("state"); state {
 			case "closed":
 				w.WriteHeader(http.StatusOK)
 				w.Write(loadFixture(t, "issues_closed_by_states.json")) //nolint:errcheck // test helper
@@ -626,8 +904,8 @@ func TestFetchIssuesByStates(t *testing.T) {
 		if issues[0].Identifier != "20" {
 			t.Errorf("Identifier = %q, want %q", issues[0].Identifier, "20")
 		}
-		if len(gotStates) != 1 || gotStates[0] != "closed" {
-			t.Errorf("state queries = %v, want exactly one closed query", gotStates)
+		if got := calls.Load(); got != 1 {
+			t.Errorf("call count = %d, want 1 (exactly one closed-state query)", got)
 		}
 	})
 
@@ -635,15 +913,18 @@ func TestFetchIssuesByStates(t *testing.T) {
 		t.Parallel()
 
 		mux := newPreflightMux(t)
-		gotStates := make(map[string]bool)
+		// atomic.Bool, not a plain map: a Go map is unsafe for concurrent
+		// writes even to distinct keys, and these two handler invocations
+		// must be provably race-free independent of request ordering.
+		var gotOpen, gotClosed atomic.Bool
 		mux.HandleFunc("GET /api/v1/repos/"+testOwner+"/"+testRepo+"/issues", func(w http.ResponseWriter, r *http.Request) {
-			state := r.URL.Query().Get("state")
-			gotStates[state] = true
-			switch state {
+			switch state := r.URL.Query().Get("state"); state {
 			case "open":
+				gotOpen.Store(true)
 				w.WriteHeader(http.StatusOK)
 				w.Write(loadFixture(t, "issues_open_by_states.json")) //nolint:errcheck // test helper
 			case "closed":
+				gotClosed.Store(true)
 				w.WriteHeader(http.StatusOK)
 				w.Write(loadFixture(t, "issues_closed_by_states.json")) //nolint:errcheck // test helper
 			default:
@@ -660,8 +941,220 @@ func TestFetchIssuesByStates(t *testing.T) {
 		if len(issues) != 2 {
 			t.Fatalf("len = %d, want 2 (one from each listing)", len(issues))
 		}
-		if !gotStates["open"] || !gotStates["closed"] {
-			t.Errorf("state queries = %v, want both open and closed", gotStates)
+		if got, want := gotOpen.Load(), true; got != want {
+			t.Errorf("open state queried = %t, want %t", got, want)
+		}
+		if got, want := gotClosed.Load(), true; got != want {
+			t.Errorf("closed state queried = %t, want %t", got, want)
+		}
+	})
+
+	t.Run("query_filter merges into the open half only; the closed half carries none", func(t *testing.T) {
+		t.Parallel()
+
+		mux := newPreflightMux(t)
+		mux.HandleFunc("GET /api/v1/repos/"+testOwner+"/"+testRepo+"/issues", func(w http.ResponseWriter, r *http.Request) {
+			switch state := r.URL.Query().Get("state"); state {
+			case "open":
+				assertQueryParams(t, "open-state", r.URL.Query(), map[string]string{
+					"state": "open", "type": "issues", "limit": "50", "assigned_by": "hermes-bot",
+				})
+				w.WriteHeader(http.StatusOK)
+				w.Write(loadFixture(t, "issues_open_by_states.json")) //nolint:errcheck // test helper
+			case "closed":
+				assertQueryParams(t, "closed-state", r.URL.Query(), map[string]string{
+					"state": "closed", "type": "issues", "limit": "50",
+				})
+				w.WriteHeader(http.StatusOK)
+				w.Write(loadFixture(t, "issues_closed_by_states.json")) //nolint:errcheck // test helper
+			default:
+				t.Errorf("unexpected state query param: %q", state)
+				w.WriteHeader(http.StatusBadRequest)
+			}
+		})
+		srv := httptest.NewServer(mux)
+		defer srv.Close()
+
+		cfg := validConfig(srv.URL)
+		cfg["query_filter"] = "assigned_by=hermes-bot"
+		adapter, err := NewGiteaAdapter(cfg)
+		if err != nil {
+			t.Fatalf("NewGiteaAdapter: %v", err)
+		}
+
+		if _, err := adapter.(*GiteaAdapter).FetchIssuesByStates(context.Background(), []string{"in-progress", "done"}); err != nil {
+			t.Fatalf("FetchIssuesByStates: %v", err)
+		}
+	})
+
+	t.Run("unset query_filter sends only the adapter-owned params on both halves", func(t *testing.T) {
+		t.Parallel()
+
+		mux := newPreflightMux(t)
+		mux.HandleFunc("GET /api/v1/repos/"+testOwner+"/"+testRepo+"/issues", func(w http.ResponseWriter, r *http.Request) {
+			switch state := r.URL.Query().Get("state"); state {
+			case "open":
+				assertQueryParams(t, "open-state", r.URL.Query(), map[string]string{
+					"state": "open", "type": "issues", "limit": "50",
+				})
+				w.WriteHeader(http.StatusOK)
+				w.Write(loadFixture(t, "issues_open_by_states.json")) //nolint:errcheck // test helper
+			case "closed":
+				assertQueryParams(t, "closed-state", r.URL.Query(), map[string]string{
+					"state": "closed", "type": "issues", "limit": "50",
+				})
+				w.WriteHeader(http.StatusOK)
+				w.Write(loadFixture(t, "issues_closed_by_states.json")) //nolint:errcheck // test helper
+			default:
+				t.Errorf("unexpected state query param: %q", state)
+				w.WriteHeader(http.StatusBadRequest)
+			}
+		})
+		a := mustAdapter(t, mux)
+
+		if _, err := a.FetchIssuesByStates(context.Background(), []string{"in-progress", "done"}); err != nil {
+			t.Fatalf("FetchIssuesByStates: %v", err)
+		}
+	})
+}
+
+// --- reportUnresolvedLabels ---
+
+func TestReportUnresolvedLabels(t *testing.T) {
+	t.Parallel()
+
+	t.Run("case-sensitive miss logs exactly one warning naming the requested label", func(t *testing.T) {
+		t.Parallel()
+
+		var buf bytes.Buffer
+		logger := slog.New(slog.NewTextHandler(&buf, nil))
+		known := map[string]struct{}{"agent-ready": {}}
+
+		reportUnresolvedLabels(logger, []string{"Agent-Ready"}, known)
+
+		output := buf.String()
+		if got := strings.Count(output, "query_filter label does not resolve against repository labels"); got != 1 {
+			t.Fatalf("warn count = %d, want 1\noutput: %s", got, output)
+		}
+		if !strings.Contains(output, "label=Agent-Ready") {
+			t.Errorf("output missing label=Agent-Ready (case-sensitive miss against known %q)\noutput: %s", "agent-ready", output)
+		}
+	})
+
+	t.Run("exact case match resolves and logs nothing", func(t *testing.T) {
+		t.Parallel()
+
+		var buf bytes.Buffer
+		logger := slog.New(slog.NewTextHandler(&buf, nil))
+		known := map[string]struct{}{"agent-ready": {}}
+
+		reportUnresolvedLabels(logger, []string{"agent-ready"}, known)
+
+		if buf.Len() != 0 {
+			t.Errorf("output = %q, want empty (exact-case match must not warn)", buf.String())
+		}
+	})
+
+	t.Run("comma-separated values are split and trimmed before the case-sensitive comparison", func(t *testing.T) {
+		t.Parallel()
+
+		var buf bytes.Buffer
+		logger := slog.New(slog.NewTextHandler(&buf, nil))
+		known := map[string]struct{}{"agent-ready": {}, "ci-failure": {}}
+
+		reportUnresolvedLabels(logger, []string{"agent-ready, Ci-Failure"}, known)
+
+		output := buf.String()
+		if got := strings.Count(output, "query_filter label does not resolve against repository labels"); got != 1 {
+			t.Fatalf("warn count = %d, want 1 (only Ci-Failure is a case-sensitive miss)\noutput: %s", got, output)
+		}
+		if !strings.Contains(output, "label=Ci-Failure") {
+			t.Errorf("output missing label=Ci-Failure\noutput: %s", output)
+		}
+	})
+}
+
+// --- warnUnrecognizedFilterKeys ---
+
+func TestWarnUnrecognizedFilterKeys(t *testing.T) {
+	t.Parallel()
+
+	t.Run("unrecognized key logs exactly one warning naming the key", func(t *testing.T) {
+		t.Parallel()
+
+		var buf bytes.Buffer
+		logger := slog.New(slog.NewTextHandler(&buf, nil))
+
+		warnUnrecognizedFilterKeys(logger, url.Values{"assignee": {"hermes-bot"}})
+
+		output := buf.String()
+		if got := strings.Count(output, "query_filter contains an unrecognized key"); got != 1 {
+			t.Fatalf("warn count = %d, want 1\noutput: %s", got, output)
+		}
+		if !strings.Contains(output, "key=assignee") {
+			t.Errorf("output missing key=assignee\noutput: %s", output)
+		}
+	})
+
+	t.Run("known keys produce no warning", func(t *testing.T) {
+		t.Parallel()
+
+		var buf bytes.Buffer
+		logger := slog.New(slog.NewTextHandler(&buf, nil))
+
+		warnUnrecognizedFilterKeys(logger, url.Values{"assigned_by": {"hermes-bot"}, "labels": {"agent-ready"}})
+
+		if buf.Len() != 0 {
+			t.Errorf("output = %q, want empty (all keys are known)", buf.String())
+		}
+	})
+
+	t.Run("mixed known and unrecognized keys warn only for the unrecognized one", func(t *testing.T) {
+		t.Parallel()
+
+		var buf bytes.Buffer
+		logger := slog.New(slog.NewTextHandler(&buf, nil))
+
+		warnUnrecognizedFilterKeys(logger, url.Values{"assigned_by": {"hermes-bot"}, "assignee": {"hermes-bot"}})
+
+		output := buf.String()
+		if got := strings.Count(output, "query_filter contains an unrecognized key"); got != 1 {
+			t.Fatalf("warn count = %d, want 1\noutput: %s", got, output)
+		}
+		if !strings.Contains(output, "key=assignee") {
+			t.Errorf("output missing key=assignee\noutput: %s", output)
+		}
+		if strings.Contains(output, "key=assigned_by") {
+			t.Errorf("output unexpectedly warned about the known key assigned_by\noutput: %s", output)
+		}
+	})
+}
+
+// --- fetchLabelNames ---
+
+func TestFetchLabelNames(t *testing.T) {
+	t.Parallel()
+
+	t.Run("preserves original casing, unlike resolveLabelIndex's lowercased keys", func(t *testing.T) {
+		t.Parallel()
+
+		mux := newPreflightMux(t)
+		mux.HandleFunc("GET /api/v1/repos/"+testOwner+"/"+testRepo+"/labels", func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			w.Write(loadFixture(t, "labels_mixed_case.json")) //nolint:errcheck // test helper
+		})
+		a := mustAdapter(t, mux)
+
+		names, err := a.fetchLabelNames(context.Background())
+		if err != nil {
+			t.Fatalf("fetchLabelNames: %v", err)
+		}
+
+		if _, ok := names["In-Progress"]; !ok {
+			t.Errorf("names = %v, want the original-case key %q present", names, "In-Progress")
+		}
+		if _, ok := names["in-progress"]; ok {
+			t.Errorf("names = %v, want the lowercased key %q absent (fetchLabelNames must not lowercase)", names, "in-progress")
 		}
 	})
 }

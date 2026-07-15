@@ -9,26 +9,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Gitea tracker adapter: configure with `tracker.kind: gitea` to run
-  Sortie against a self-hosted Gitea instance. `tracker.endpoint` is
-  required and sets the instance base URL (there is no default host,
-  unlike the hosted trackers), `tracker.api_key` is a Gitea access
-  token, and `tracker.project` names the target repository as
-  `owner/repo`. The adapter implements the full `TrackerAdapter`
-  interface: candidate issue polling, issue and comment retrieval, and
-  state reconciliation on the read path; issue transitions, lifecycle
-  comments, and label attachment on the write path, so a Gitea-backed
-  deployment performs handoff transitions, posts session comments, and
-  applies CI-failure escalation labels on par with the Jira, GitHub, and
-  Linear adapters. Workflow state is label-driven through `active_states`,
-  `terminal_states`, and `handoff_state`, as with the GitHub adapter; a
-  terminal transition also closes the issue and an active transition
-  reopens it, and a missing state or escalation label is created in the
-  repository on demand rather than requiring operators to pre-create it.
-  Forgejo and Codeberg instances are expected to work through the same
-  `kind: gitea` configuration.
+- Gitea tracker adapter: set `tracker.kind: gitea` to run Sortie against a
+  self-hosted Gitea instance (Forgejo and Codeberg included), with
+  `tracker.endpoint` the instance URL (required; there is no default
+  host), `tracker.api_key` a Gitea access token, and `tracker.project` the
+  target `owner/repo`. It runs the same autonomous workflow as the Jira,
+  GitHub, and Linear adapters: candidate polling, handoff transitions,
+  lifecycle comments, and CI-failure escalation labels. State is
+  label-driven through `active_states`, `terminal_states`, and
+  `handoff_state`; a terminal transition closes the issue and an active
+  transition reopens it, and any missing state or escalation label is
+  created in the repository on demand. `tracker.query_filter` takes a Gitea
+  issue-list query fragment (for example
+  `assigned_by=review-bot&labels=ready`) to scope candidate polling to
+  matching issues; the adapter-owned keys `state`, `type`, `page`, and
+  `limit` are rejected.
   ([#629](https://github.com/sortie-ai/sortie/issues/629),
-  [#630](https://github.com/sortie-ai/sortie/issues/630))
+  [#630](https://github.com/sortie-ai/sortie/issues/630),
+  [#632](https://github.com/sortie-ai/sortie/issues/632))
 
 ## [1.14.1] - 2026-07-13
 

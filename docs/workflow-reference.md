@@ -198,7 +198,7 @@ tracker:
 | `api_version`     | string          | No                        | `"3"`           | Future dispatches                  | Jira REST API version selector: `"3"` (Cloud) or `"2"` (Server / Data Center). Supports `$VAR` indirection. Quote the value: a bare integer (`api_version: 2`) is coerced to its decimal string but emits a validation advisory. Adapters other than Jira ignore this field. |
 | `active_states`   | list of strings | **Yes** (see rules below) | `[]` (empty)    | Future dispatch and reconciliation | Issue states eligible for agent dispatch. An issue is eligible for dispatch only if its state appears in this list. An empty list means no issues will be dispatched.                           |
 | `terminal_states` | list of strings | **Yes** (see rules below) | `[]` (empty)    | Future dispatch and reconciliation | Issue states that release claims and trigger cleanup.                                                                                                                                           |
-| `query_filter`    | string          | No                        | `""` (empty)    | Future dispatches                  | Adapter-defined query fragment that narrows candidate and terminal-state queries. Passed to the adapter without interpretation. For Jira: JQL fragment (e.g., `"labels = 'agent-ready'"`). For Linear: an `IssueFilter` JSON object, merged rather than appended (see the Linear note below). |
+| `query_filter`    | string          | No                        | `""` (empty)    | Future dispatches                  | Adapter-defined query fragment that narrows the candidate issue query and, for adapters that apply it there, the terminal-state query. Each adapter interprets it in its own query language. For Jira: JQL fragment (e.g., `"labels = 'agent-ready'"`). For Linear: an `IssueFilter` JSON object, merged rather than appended (see the Linear note below). For Gitea: a URL query fragment for the repo issue-list route, merged into candidate polling only (see the Gitea note below). |
 | `handoff_state`   | string          | No                        | _(absent)_      | Future worker exits                | Target tracker state for orchestrator-initiated handoff after successful worker run. When absent, no handoff transition is performed.                                                           |
 | `in_progress_state` | string        | No                        | _(absent)_      | Future dispatches                  | Target tracker state for dispatch-time transition at the start of each worker attempt. When absent, no dispatch-time transition is performed. Must be in `active_states`. Must not collide with `terminal_states` or `handoff_state`. |
 | `comments`        | map of booleans | No                        | all `false`     | Future dispatches (`on_dispatch`); future worker exits (`on_completion`, `on_failure`) | Toggles for orchestrator-posted tracker comments at session lifecycle points. Keys: `on_dispatch`, `on_completion`, `on_failure`. Each is a boolean defaulting to `false`. Non-boolean values are rejected with a configuration error. See [Section 3.2](#32-curated-variable-list) for the matching `SORTIE_TRACKER_COMMENTS_*` env overrides. |
@@ -313,6 +313,39 @@ tracker:
 ---
 
 Fix {{ .issue.identifier }}: {{ .issue.title }}
+```
+
+**Gitea `query_filter`:** For `kind: gitea`, `query_filter` is a URL query fragment for Gitea's
+repository issue-list route, not a string predicate or a JSON object. The adapter parses it with
+`url.ParseQuery` and merges the parameters into candidate polling, so an operator can scope which
+open issues the agent picks up (for example, to issues assigned to or mentioning the automation
+identity). Parameters combine with `&`. Rules:
+
+- The adapter rejects only the four keys it owns: `state`, `type`, `page`, and `limit`. Naming any
+  of them fails construction with a configuration error.
+- Any other key is accepted and merged. A key outside Gitea's known repo issue-list filter set
+  (`labels`, `q`, `milestones`, `since`, `before`, `created_by`, `assigned_by`, `mentioned_by`) is a
+  likely typo, such as `assignee=` or `assigned_to=` for the Gitea key `assigned_by`. The adapter
+  warns at construction and names the unrecognized key, but still passes it through unchecked. Gitea
+  silently ignores a parameter it does not honor and returns every open issue, so a misspelled key
+  widens rather than narrows the candidate set; correcting it is the operator's responsibility.
+- A `labels` value inherits Gitea's server-side semantics: AND across comma-separated names, and
+  case-sensitive matching. A name that resolves to no repository label silently drops the entire
+  filter, so Gitea returns every open issue rather than an empty set. The adapter warns at
+  construction when a `labels` value does not match a repository label by exact case, turning the
+  silent drop into a visible signal. The warning does not block construction, because an operator
+  may reference a label that does not exist yet.
+- `mentioned_by` does not count an author mentioning themselves. This behavior is verified against
+  the tested Gitea version but is not documented in Gitea's REST API, so it can differ across Gitea
+  or Forgejo releases. `mentioned_by=<identity>` matches an issue only when the identity differs from
+  the issue author, so setting the automation identity as both author and mention target yields no
+  candidates.
+
+```yaml
+tracker:
+  kind: gitea
+  # Scope candidate polling to issues assigned to the automation identity.
+  query_filter: "assigned_by=hermes-bot"
 ```
 
 ---
