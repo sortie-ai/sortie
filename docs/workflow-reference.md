@@ -191,10 +191,10 @@ tracker:
 
 | Field             | Type            | Required                  | Default         | Dynamic Reload                     | Description                                                                                                                                                                                     |
 | ----------------- | --------------- | ------------------------- | --------------- | ---------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `kind`            | string          | **Yes** (for dispatch)    | _(none)_        | Future dispatches                  | Adapter identifier. Supported: `jira`, `github`, `linear`, `file`. Additional adapters are registered separately.                                                                               |
+| `kind`            | string          | **Yes** (for dispatch)    | _(none)_        | Future dispatches                  | Adapter identifier. Supported: `jira`, `github`, `linear`, `gitea`, `file`. Additional adapters are registered separately.                                                                      |
 | `endpoint`        | string          | Adapter-defined           | Adapter-defined | Future dispatches                  | Tracker API endpoint URL. Supports `$VAR` indirection: if the value starts with `$`, it is expanded via `os.ExpandEnv`.                                                                         |
-| `api_key`         | string          | When adapter requires it  | _(none)_        | Future dispatches                  | API authentication token. May be a literal or `$VAR_NAME`. If `$VAR_NAME` resolves to empty, treated as missing. The `jira`, `github`, and `linear` adapters require this field; `file` does not. Full env expansion applied (`$VAR` at any position). |
-| `project`         | string          | When adapter requires it  | _(none)_        | Future dispatches                  | Project identifier. Interpretation is adapter-defined: Jira project key, GitHub `owner/repo`, or Linear team key (e.g., `ENG`). Supports `$VAR` indirection: if the value starts with `$`, it is expanded via `os.ExpandEnv`. |
+| `api_key`         | string          | When adapter requires it  | _(none)_        | Future dispatches                  | API authentication token. May be a literal or `$VAR_NAME`. If `$VAR_NAME` resolves to empty, treated as missing. The `jira`, `github`, `linear`, and `gitea` adapters require this field; `file` does not. Full env expansion applied (`$VAR` at any position). |
+| `project`         | string          | When adapter requires it  | _(none)_        | Future dispatches                  | Project identifier. Interpretation is adapter-defined: Jira project key, GitHub or Gitea `owner/repo`, or Linear team key (e.g., `ENG`). Supports `$VAR` indirection: if the value starts with `$`, it is expanded via `os.ExpandEnv`. |
 | `api_version`     | string          | No                        | `"3"`           | Future dispatches                  | Jira REST API version selector: `"3"` (Cloud) or `"2"` (Server / Data Center). Supports `$VAR` indirection. Quote the value: a bare integer (`api_version: 2`) is coerced to its decimal string but emits a validation advisory. Adapters other than Jira ignore this field. |
 | `active_states`   | list of strings | **Yes** (see rules below) | `[]` (empty)    | Future dispatch and reconciliation | Issue states eligible for agent dispatch. An issue is eligible for dispatch only if its state appears in this list. An empty list means no issues will be dispatched.                           |
 | `terminal_states` | list of strings | **Yes** (see rules below) | `[]` (empty)    | Future dispatch and reconciliation | Issue states that release claims and trigger cleanup.                                                                                                                                           |
@@ -315,6 +315,47 @@ tracker:
 Fix {{ .issue.identifier }}: {{ .issue.title }}
 ```
 
+**Gitea tracker (`kind: gitea`):**
+
+The Gitea adapter talks to a self-hosted Gitea instance over the Gitea REST API v1. Configure it
+with the same generic `tracker.*` fields used for every adapter; the Gitea-specific interpretation
+of those fields is:
+
+- `endpoint` is the instance base URL (for example `https://gitea.example.com`) and is required:
+  there is no default host, because Gitea is self-hosted. Supply the site root; the adapter trims a
+  trailing slash and appends `/api/v1`, and tolerates an endpoint that already ends in `/api/v1`.
+  Use `https`, since the token travels in a request header.
+- `api_key` is a Gitea access token. The adapter sends it verbatim as `Authorization: token <key>`
+  (the canonical Gitea scheme, not a `Bearer` prefix), so leading or trailing whitespace fails
+  authentication. Supply it through environment indirection like any other tracker, for example
+  `api_key: $SORTIE_GITEA_TOKEN`. The key resolves through the standard `tracker.api_key` field
+  (env override `SORTIE_TRACKER_API_KEY`); `SORTIE_GITEA_TOKEN` is the conventional variable name
+  the `sortie validate` advisory suggests, not a separate config path.
+- `project` is the repository in **`owner/repo`** form (for example `sortie-ai/sortie`): exactly one
+  slash, with a non-empty owner and repository.
+- `active_states`, `terminal_states`, and `handoff_state` name repository **labels**, compared
+  case-insensitively (the adapter lowercases them). The adapter carries internal fallback labels
+  (active `["backlog", "in-progress", "review"]`, terminal `["done", "wontfix"]`) that it uses only
+  to derive an issue's state from its labels when the matching list is omitted or empty. These
+  fallbacks do not drive dispatch: the orchestrator gates dispatch and reconciliation on the
+  workflow's `tracker.active_states` and `tracker.terminal_states`, so the field-table rule above
+  holds for Gitea. An empty `active_states` dispatches nothing, and validation rejects a workflow
+  with both lists empty. Configure `active_states` with the labels a dispatched Gitea issue must
+  carry.
+
+Gitea has no transition workflow, so the adapter derives an issue's state from its labels: it scans
+the configured active, terminal, then handoff labels in order and takes the first match. An issue
+carrying no configured state label falls back to the first active label when it is open and the
+first terminal label when it is closed. A configured label that does not yet exist in the
+repository is created on demand the first time an issue transitions into it.
+
+`handoff_state` and `in_progress_state` also name repository labels. At transition time the adapter
+swaps the issue's current state label for the target label; a move to a terminal label also closes
+the issue, and a move to an active label reopens a closed one. Gitea imposes no transition graph, so
+any state can move to any state. The dispatch-time `in_progress_state` transition runs through this
+same label swap, so its generic validation rules (must appear in `active_states`, must not collide
+with `terminal_states` or `handoff_state`) apply unchanged.
+
 **Gitea `query_filter`:** For `kind: gitea`, `query_filter` is a URL query fragment for Gitea's
 repository issue-list route, not a string predicate or a JSON object. The adapter parses it with
 `url.ParseQuery` and merges the parameters into candidate polling, so an operator can scope which
@@ -346,6 +387,27 @@ tracker:
   kind: gitea
   # Scope candidate polling to issues assigned to the automation identity.
   query_filter: "assigned_by=hermes-bot"
+```
+
+A minimal valid Gitea workflow:
+
+```markdown
+---
+tracker:
+  kind: gitea
+  endpoint: https://gitea.example.com # instance base URL; the adapter appends /api/v1
+  api_key: $SORTIE_GITEA_TOKEN # Gitea access token
+  project: sortie-ai/sortie # owner/repo
+  active_states:
+    - backlog
+    - in-progress
+  terminal_states:
+    - done
+    - wontfix
+  handoff_state: review # repository label moved to after a successful run
+---
+
+Fix {{ .issue.identifier }}: {{ .issue.title }}
 ```
 
 ---
