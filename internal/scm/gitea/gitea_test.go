@@ -679,9 +679,13 @@ func TestFetchCandidateIssues(t *testing.T) {
 		t.Parallel()
 
 		mux := newPreflightMux(t)
-		var gotQuery url.Values
 		mux.HandleFunc("GET /api/v1/repos/"+testOwner+"/"+testRepo+"/issues", func(w http.ResponseWriter, r *http.Request) {
-			gotQuery = r.URL.Query()
+			assertQueryParams(t, "candidate", r.URL.Query(), map[string]string{
+				"state":       "open",
+				"type":        "issues",
+				"limit":       "50",
+				"assigned_by": "hermes-bot",
+			})
 			w.WriteHeader(http.StatusOK)
 			w.Write(loadFixture(t, "issues_candidates_page2.json")) //nolint:errcheck // test helper
 		})
@@ -700,13 +704,6 @@ func TestFetchCandidateIssues(t *testing.T) {
 			t.Fatalf("FetchCandidateIssues: %v", err)
 		}
 
-		assertQueryParams(t, "candidate", gotQuery, map[string]string{
-			"state":       "open",
-			"type":        "issues",
-			"limit":       "50",
-			"assigned_by": "hermes-bot",
-		})
-
 		// #1 (backlog) and #2 (in-progress) are active; #3 (done) is terminal
 		// and is filtered client-side regardless of the server-side filter.
 		if len(issues) != 2 {
@@ -718,9 +715,12 @@ func TestFetchCandidateIssues(t *testing.T) {
 		t.Parallel()
 
 		mux := newPreflightMux(t)
-		var gotQuery url.Values
 		mux.HandleFunc("GET /api/v1/repos/"+testOwner+"/"+testRepo+"/issues", func(w http.ResponseWriter, r *http.Request) {
-			gotQuery = r.URL.Query()
+			assertQueryParams(t, "candidate", r.URL.Query(), map[string]string{
+				"state": "open",
+				"type":  "issues",
+				"limit": "50",
+			})
 			w.WriteHeader(http.StatusOK)
 			w.Write(loadFixture(t, "issues_candidates_page2.json")) //nolint:errcheck // test helper
 		})
@@ -729,21 +729,16 @@ func TestFetchCandidateIssues(t *testing.T) {
 		if _, err := a.FetchCandidateIssues(context.Background()); err != nil {
 			t.Fatalf("FetchCandidateIssues: %v", err)
 		}
-
-		assertQueryParams(t, "candidate", gotQuery, map[string]string{
-			"state": "open",
-			"type":  "issues",
-			"limit": "50",
-		})
 	})
 
 	t.Run("unrecognized query_filter key is not dropped and still merges into the request", func(t *testing.T) {
 		t.Parallel()
 
 		mux := newPreflightMux(t)
-		var gotQuery url.Values
 		mux.HandleFunc("GET /api/v1/repos/"+testOwner+"/"+testRepo+"/issues", func(w http.ResponseWriter, r *http.Request) {
-			gotQuery = r.URL.Query()
+			if got, want := r.URL.Query().Get("assignee"), "hermes-bot"; got != want {
+				t.Errorf("request assignee = %q, want %q (unrecognized key is warned but still passed through)", got, want)
+			}
 			w.WriteHeader(http.StatusOK)
 			w.Write(loadFixture(t, "issues_candidates_page2.json")) //nolint:errcheck // test helper
 		})
@@ -760,10 +755,6 @@ func TestFetchCandidateIssues(t *testing.T) {
 		if _, err := adapter.(*GiteaAdapter).FetchCandidateIssues(context.Background()); err != nil {
 			t.Fatalf("FetchCandidateIssues: %v", err)
 		}
-
-		if got, want := gotQuery.Get("assignee"), "hermes-bot"; got != want {
-			t.Errorf("request assignee = %q, want %q (unrecognized key is warned but still passed through)", got, want)
-		}
 	})
 
 	t.Run("concurrent fetches leave the stored query_filter unmutated", func(t *testing.T) {
@@ -772,11 +763,13 @@ func TestFetchCandidateIssues(t *testing.T) {
 		const fetches = 5
 
 		mux := newPreflightMux(t)
-		queries := make([]url.Values, fetches)
-		var next atomic.Int32
+		// Buffered to fetches so every handler invocation's send completes
+		// without a waiting receiver; the handoff to the test goroutine is
+		// then made explicit below rather than relying on the network
+		// round-trip's implicit happens-before edge.
+		queries := make(chan url.Values, fetches)
 		mux.HandleFunc("GET /api/v1/repos/"+testOwner+"/"+testRepo+"/issues", func(w http.ResponseWriter, r *http.Request) {
-			i := next.Add(1) - 1
-			queries[i] = r.URL.Query()
+			queries <- r.URL.Query()
 			w.WriteHeader(http.StatusOK)
 			w.Write(loadFixture(t, "issues_candidates_page2.json")) //nolint:errcheck // test helper
 		})
@@ -800,14 +793,23 @@ func TestFetchCandidateIssues(t *testing.T) {
 			})
 		}
 		wg.Wait()
+		close(queries)
 
-		for i, q := range queries {
+		// Each channel send in the handler happens before the corresponding
+		// receive here completes (Go memory model), so every query is
+		// observed race-free regardless of how many requests overlapped.
+		i := 0
+		for q := range queries {
 			assertQueryParams(t, fmt.Sprintf("concurrent fetch #%d", i), q, map[string]string{
 				"state":       "open",
 				"type":        "issues",
 				"limit":       "50",
 				"assigned_by": "hermes-bot",
 			})
+			i++
+		}
+		if i != fetches {
+			t.Fatalf("received %d queries, want %d", i, fetches)
 		}
 
 		if len(a.queryFilter) != 1 {
@@ -845,11 +847,10 @@ func TestFetchIssuesByStates(t *testing.T) {
 		t.Parallel()
 
 		mux := newPreflightMux(t)
-		var gotStates []string
+		var calls atomic.Int32
 		mux.HandleFunc("GET /api/v1/repos/"+testOwner+"/"+testRepo+"/issues", func(w http.ResponseWriter, r *http.Request) {
-			state := r.URL.Query().Get("state")
-			gotStates = append(gotStates, state)
-			switch state {
+			calls.Add(1)
+			switch state := r.URL.Query().Get("state"); state {
 			case "open":
 				w.WriteHeader(http.StatusOK)
 				w.Write(loadFixture(t, "issues_open_by_states.json")) //nolint:errcheck // test helper
@@ -870,8 +871,8 @@ func TestFetchIssuesByStates(t *testing.T) {
 		if issues[0].Identifier != "10" {
 			t.Errorf("Identifier = %q, want %q", issues[0].Identifier, "10")
 		}
-		if len(gotStates) != 1 || gotStates[0] != "open" {
-			t.Errorf("state queries = %v, want exactly one open query", gotStates)
+		if got := calls.Load(); got != 1 {
+			t.Errorf("call count = %d, want 1 (exactly one open-state query)", got)
 		}
 	})
 
@@ -879,11 +880,10 @@ func TestFetchIssuesByStates(t *testing.T) {
 		t.Parallel()
 
 		mux := newPreflightMux(t)
-		var gotStates []string
+		var calls atomic.Int32
 		mux.HandleFunc("GET /api/v1/repos/"+testOwner+"/"+testRepo+"/issues", func(w http.ResponseWriter, r *http.Request) {
-			state := r.URL.Query().Get("state")
-			gotStates = append(gotStates, state)
-			switch state {
+			calls.Add(1)
+			switch state := r.URL.Query().Get("state"); state {
 			case "closed":
 				w.WriteHeader(http.StatusOK)
 				w.Write(loadFixture(t, "issues_closed_by_states.json")) //nolint:errcheck // test helper
@@ -904,8 +904,8 @@ func TestFetchIssuesByStates(t *testing.T) {
 		if issues[0].Identifier != "20" {
 			t.Errorf("Identifier = %q, want %q", issues[0].Identifier, "20")
 		}
-		if len(gotStates) != 1 || gotStates[0] != "closed" {
-			t.Errorf("state queries = %v, want exactly one closed query", gotStates)
+		if got := calls.Load(); got != 1 {
+			t.Errorf("call count = %d, want 1 (exactly one closed-state query)", got)
 		}
 	})
 
@@ -913,15 +913,18 @@ func TestFetchIssuesByStates(t *testing.T) {
 		t.Parallel()
 
 		mux := newPreflightMux(t)
-		gotStates := make(map[string]bool)
+		// atomic.Bool, not a plain map: a Go map is unsafe for concurrent
+		// writes even to distinct keys, and these two handler invocations
+		// must be provably race-free independent of request ordering.
+		var gotOpen, gotClosed atomic.Bool
 		mux.HandleFunc("GET /api/v1/repos/"+testOwner+"/"+testRepo+"/issues", func(w http.ResponseWriter, r *http.Request) {
-			state := r.URL.Query().Get("state")
-			gotStates[state] = true
-			switch state {
+			switch state := r.URL.Query().Get("state"); state {
 			case "open":
+				gotOpen.Store(true)
 				w.WriteHeader(http.StatusOK)
 				w.Write(loadFixture(t, "issues_open_by_states.json")) //nolint:errcheck // test helper
 			case "closed":
+				gotClosed.Store(true)
 				w.WriteHeader(http.StatusOK)
 				w.Write(loadFixture(t, "issues_closed_by_states.json")) //nolint:errcheck // test helper
 			default:
@@ -938,8 +941,11 @@ func TestFetchIssuesByStates(t *testing.T) {
 		if len(issues) != 2 {
 			t.Fatalf("len = %d, want 2 (one from each listing)", len(issues))
 		}
-		if !gotStates["open"] || !gotStates["closed"] {
-			t.Errorf("state queries = %v, want both open and closed", gotStates)
+		if got, want := gotOpen.Load(), true; got != want {
+			t.Errorf("open state queried = %t, want %t", got, want)
+		}
+		if got, want := gotClosed.Load(), true; got != want {
+			t.Errorf("closed state queried = %t, want %t", got, want)
 		}
 	})
 
@@ -947,15 +953,18 @@ func TestFetchIssuesByStates(t *testing.T) {
 		t.Parallel()
 
 		mux := newPreflightMux(t)
-		var openQuery, closedQuery url.Values
 		mux.HandleFunc("GET /api/v1/repos/"+testOwner+"/"+testRepo+"/issues", func(w http.ResponseWriter, r *http.Request) {
 			switch state := r.URL.Query().Get("state"); state {
 			case "open":
-				openQuery = r.URL.Query()
+				assertQueryParams(t, "open-state", r.URL.Query(), map[string]string{
+					"state": "open", "type": "issues", "limit": "50", "assigned_by": "hermes-bot",
+				})
 				w.WriteHeader(http.StatusOK)
 				w.Write(loadFixture(t, "issues_open_by_states.json")) //nolint:errcheck // test helper
 			case "closed":
-				closedQuery = r.URL.Query()
+				assertQueryParams(t, "closed-state", r.URL.Query(), map[string]string{
+					"state": "closed", "type": "issues", "limit": "50",
+				})
 				w.WriteHeader(http.StatusOK)
 				w.Write(loadFixture(t, "issues_closed_by_states.json")) //nolint:errcheck // test helper
 			default:
@@ -976,28 +985,24 @@ func TestFetchIssuesByStates(t *testing.T) {
 		if _, err := adapter.(*GiteaAdapter).FetchIssuesByStates(context.Background(), []string{"in-progress", "done"}); err != nil {
 			t.Fatalf("FetchIssuesByStates: %v", err)
 		}
-
-		assertQueryParams(t, "open-state", openQuery, map[string]string{
-			"state": "open", "type": "issues", "limit": "50", "assigned_by": "hermes-bot",
-		})
-		assertQueryParams(t, "closed-state", closedQuery, map[string]string{
-			"state": "closed", "type": "issues", "limit": "50",
-		})
 	})
 
 	t.Run("unset query_filter sends only the adapter-owned params on both halves", func(t *testing.T) {
 		t.Parallel()
 
 		mux := newPreflightMux(t)
-		var openQuery, closedQuery url.Values
 		mux.HandleFunc("GET /api/v1/repos/"+testOwner+"/"+testRepo+"/issues", func(w http.ResponseWriter, r *http.Request) {
 			switch state := r.URL.Query().Get("state"); state {
 			case "open":
-				openQuery = r.URL.Query()
+				assertQueryParams(t, "open-state", r.URL.Query(), map[string]string{
+					"state": "open", "type": "issues", "limit": "50",
+				})
 				w.WriteHeader(http.StatusOK)
 				w.Write(loadFixture(t, "issues_open_by_states.json")) //nolint:errcheck // test helper
 			case "closed":
-				closedQuery = r.URL.Query()
+				assertQueryParams(t, "closed-state", r.URL.Query(), map[string]string{
+					"state": "closed", "type": "issues", "limit": "50",
+				})
 				w.WriteHeader(http.StatusOK)
 				w.Write(loadFixture(t, "issues_closed_by_states.json")) //nolint:errcheck // test helper
 			default:
@@ -1010,13 +1015,6 @@ func TestFetchIssuesByStates(t *testing.T) {
 		if _, err := a.FetchIssuesByStates(context.Background(), []string{"in-progress", "done"}); err != nil {
 			t.Fatalf("FetchIssuesByStates: %v", err)
 		}
-
-		assertQueryParams(t, "open-state", openQuery, map[string]string{
-			"state": "open", "type": "issues", "limit": "50",
-		})
-		assertQueryParams(t, "closed-state", closedQuery, map[string]string{
-			"state": "closed", "type": "issues", "limit": "50",
-		})
 	})
 }
 
