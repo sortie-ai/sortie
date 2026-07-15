@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -74,14 +75,12 @@ func decodeRequestBody(t *testing.T, r *http.Request, v any) {
 // "open-state").
 func assertQueryParams(t *testing.T, label string, got url.Values, want map[string]string) {
 	t.Helper()
-	if len(got) != len(want) {
-		t.Errorf("%s request query = %v, want exactly %v", label, got, want)
-		return
+	wantValues := make(url.Values, len(want))
+	for key, val := range want {
+		wantValues[key] = []string{val}
 	}
-	for key, wantVal := range want {
-		if got.Get(key) != wantVal {
-			t.Errorf("%s request query[%q] = %q, want %q", label, key, got.Get(key), wantVal)
-		}
+	if !maps.EqualFunc(got, wantValues, slices.Equal) {
+		t.Errorf("%s request query = %v, want exactly %v", label, got, wantValues)
 	}
 }
 
@@ -377,6 +376,48 @@ func TestNewGiteaAdapter(t *testing.T) {
 		}
 		if got := labelsCalls.Load(); got != 1 {
 			t.Errorf("labels catalog request count = %d, want 1 (construction-time diagnostic fetch)", got)
+		}
+	})
+
+	t.Run("empty labels query_filter performs no label catalog fetch", func(t *testing.T) {
+		t.Parallel()
+
+		tests := []struct {
+			name        string
+			queryFilter string
+		}{
+			{"empty value", "labels="},
+			{"whitespace-only value", "labels=%20%20"},
+		}
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				t.Parallel()
+
+				mux := newPreflightMux(t)
+				var labelsCalls atomic.Int32
+				mux.HandleFunc("GET /api/v1/repos/"+testOwner+"/"+testRepo+"/labels", func(w http.ResponseWriter, r *http.Request) {
+					labelsCalls.Add(1)
+					w.WriteHeader(http.StatusOK)
+					w.Write(loadFixture(t, "labels_page1.json")) //nolint:errcheck // test helper
+				})
+				srv := httptest.NewServer(mux)
+				defer srv.Close()
+
+				cfg := validConfig(srv.URL)
+				cfg["query_filter"] = tt.queryFilter
+
+				a, err := NewGiteaAdapter(cfg)
+				if err != nil {
+					t.Fatalf("NewGiteaAdapter(query_filter=%q): %v", tt.queryFilter, err)
+				}
+				if a == nil {
+					t.Fatal("adapter is nil, want a constructed adapter")
+				}
+				if got := labelsCalls.Load(); got != 0 {
+					t.Errorf("labels catalog request count = %d, want 0 (empty labels= carries no constraint, so no diagnostic fetch or warning)", got)
+				}
+			})
 		}
 	})
 }
