@@ -27,6 +27,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ([#629](https://github.com/sortie-ai/sortie/issues/629),
   [#630](https://github.com/sortie-ai/sortie/issues/630),
   [#632](https://github.com/sortie-ai/sortie/issues/632))
+- `sortie validate` Gitea adapter config validation: emits offline
+  diagnostics for `tracker.kind: gitea` covering `tracker.endpoint`
+  presence and URL shape (required for a self-hosted instance, which has
+  no default host to fall back on), `tracker.project` as `owner/repo`, a
+  `$SORTIE_GITEA_TOKEN` environment-variable hint, empty state labels,
+  and active/terminal state overlap. Errors block dispatch; warnings are
+  advisory.
+  ([#631](https://github.com/sortie-ai/sortie/issues/631))
 
 ## [1.14.1] - 2026-07-13
 

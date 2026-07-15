@@ -33,8 +33,9 @@ import (
 
 func init() {
 	registry.Trackers.RegisterWithMeta("gitea", NewGiteaAdapter, registry.TrackerMeta{
-		RequiresProject: true,
-		RequiresAPIKey:  true,
+		RequiresProject:       true,
+		RequiresAPIKey:        true,
+		ValidateTrackerConfig: validateConfig,
 	})
 }
 
