@@ -61,6 +61,7 @@ type GiteaAdapter struct {
 	activeStates   []string
 	terminalStates []string
 	handoffState   string
+	queryFilter    url.Values // parsed tracker.query_filter; nil or empty when unset
 	log            *slog.Logger
 	metrics        domain.Metrics
 }
@@ -143,15 +144,166 @@ func NewGiteaAdapter(config map[string]any) (domain.TrackerAdapter, error) {
 		return nil, err
 	}
 
-	return &GiteaAdapter{
+	raw, _ := config["query_filter"].(string)
+	filter, err := parseGiteaQueryFilter(raw)
+	if err != nil {
+		return nil, err
+	}
+
+	adapter := &GiteaAdapter{
 		client:         client,
 		owner:          owner,
 		repo:           repo,
 		activeStates:   activeStates,
 		terminalStates: terminalStates,
 		handoffState:   handoffState,
+		queryFilter:    filter,
 		log:            slog.Default(),
-	}, nil
+	}
+
+	warnUnrecognizedFilterKeys(adapter.log, filter)
+	if _, ok := filter["labels"]; ok {
+		known, fetchErr := adapter.fetchLabelNames(context.Background())
+		if fetchErr != nil {
+			adapter.log.Warn("failed to fetch labels for query_filter diagnostic",
+				slog.Any("error", fetchErr))
+		} else {
+			reportUnresolvedLabels(adapter.log, filter["labels"], known)
+		}
+	}
+
+	return adapter, nil
+}
+
+// parseGiteaQueryFilter parses the operator tracker.query_filter into url.Values.
+// It returns (nil, nil) when raw is empty.
+//
+// A value that does not parse as a URL query, or that names a reserved
+// adapter-owned key, returns a [*domain.TrackerError] of kind
+// [domain.ErrTrackerPayload]. The reserved keys state, type, page, and limit are
+// checked in that fixed order so a fragment naming several of them always
+// reports the first, keeping the error message stable.
+func parseGiteaQueryFilter(raw string) (url.Values, error) {
+	if raw == "" {
+		return nil, nil
+	}
+
+	values, err := url.ParseQuery(raw)
+	if err != nil {
+		return nil, &domain.TrackerError{
+			Kind:    domain.ErrTrackerPayload,
+			Message: "gitea: tracker.query_filter is not a valid url query",
+			Err:     err,
+		}
+	}
+
+	for _, reserved := range []string{"state", "type", "page", "limit"} {
+		if _, present := values[reserved]; present {
+			return nil, &domain.TrackerError{
+				Kind:    domain.ErrTrackerPayload,
+				Message: fmt.Sprintf("gitea: tracker.query_filter must not contain a reserved key %q", reserved),
+			}
+		}
+	}
+
+	return values, nil
+}
+
+// fetchLabelNames pages the repository label catalog and returns the set of
+// label names keyed by their exact, original casing.
+//
+// It is a separate read from [GiteaAdapter.resolveLabelIndex], whose
+// lowercased-key map backs the write paths and cannot support the
+// case-sensitive comparison the query_filter labels diagnostic requires. A page
+// decode failure returns [domain.ErrTrackerPayload].
+func (a *GiteaAdapter) fetchLabelNames(ctx context.Context) (map[string]struct{}, error) {
+	path := "/repos/" + a.owner + "/" + a.repo + "/labels"
+	params := url.Values{"limit": {"50"}}
+
+	paginator := httpkit.NewLinkPaginator(a.client, path, params, func(body []byte) ([]giteaLabel, error) {
+		var raw []giteaLabel
+		if err := json.Unmarshal(body, &raw); err != nil {
+			return nil, &domain.TrackerError{
+				Kind:    domain.ErrTrackerPayload,
+				Message: "failed to parse labels response",
+				Err:     err,
+			}
+		}
+		return raw, nil
+	}, httpkit.PaginatorOptions{
+		MaxPages: maxPages,
+		OnLimitReached: func(limit int) {
+			a.log.Warn("pagination limit reached",
+				slog.Int("max_pages", limit),
+				slog.String("endpoint", path))
+		},
+	})
+
+	labels, err := paginator.All(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	names := make(map[string]struct{}, len(labels))
+	for _, l := range labels {
+		names[l.Name] = struct{}{}
+	}
+	return names, nil
+}
+
+// reportUnresolvedLabels warns once for each query_filter label absent from
+// known by exact, case-sensitive comparison.
+//
+// Each value may hold several comma-separated names, matching Gitea's labels
+// parameter. The comparison is case-sensitive because Gitea matches label names
+// case-sensitively and silently drops the whole filter on a miss, so a
+// case-insensitive check would hide the exact mismatch this diagnostic exists to
+// surface.
+func reportUnresolvedLabels(log *slog.Logger, values []string, known map[string]struct{}) {
+	for _, value := range values {
+		for name := range strings.SplitSeq(value, ",") {
+			name = strings.TrimSpace(name)
+			if name == "" {
+				continue
+			}
+			if _, ok := known[name]; ok {
+				continue
+			}
+			log.Warn("query_filter label does not resolve against repository labels",
+				slog.String("label", name))
+		}
+	}
+}
+
+// knownGiteaFilterKeys is the set of repository issue-list filter parameters
+// Gitea honors, excluding the four adapter-owned keys rejected at parse. A
+// query_filter key outside this set is a likely operator typo.
+var knownGiteaFilterKeys = map[string]struct{}{
+	"labels":       {},
+	"q":            {},
+	"milestones":   {},
+	"since":        {},
+	"before":       {},
+	"created_by":   {},
+	"assigned_by":  {},
+	"mentioned_by": {},
+}
+
+// warnUnrecognizedFilterKeys warns once for each query_filter key outside
+// [knownGiteaFilterKeys].
+//
+// The key is not dropped: Gitea silently ignores an unrecognized parameter and
+// returns every open issue, so an unrecognized key widens rather than narrows
+// the candidate set. The warn surfaces the likely typo while the key still
+// merges into the request.
+func warnUnrecognizedFilterKeys(log *slog.Logger, filter url.Values) {
+	for key := range filter {
+		if _, ok := knownGiteaFilterKeys[key]; ok {
+			continue
+		}
+		log.Warn("query_filter contains an unrecognized key",
+			slog.String("key", key))
+	}
 }
 
 // SetMetrics configures the metrics recorder for tracker API call
@@ -177,7 +329,7 @@ func (a *GiteaAdapter) FetchCandidateIssues(ctx context.Context) ([]domain.Issue
 			activeSet[s] = struct{}{}
 		}
 
-		candidates, fetchErr := a.listAndFilter(ctx, "open", activeSet)
+		candidates, fetchErr := a.listAndFilter(ctx, "open", activeSet, true)
 		if fetchErr != nil {
 			return fetchErr
 		}
@@ -229,7 +381,7 @@ func (a *GiteaAdapter) FetchIssuesByStates(ctx context.Context, states []string)
 		result := make([]domain.Issue, 0)
 
 		if needOpen {
-			open, err := a.listAndFilter(ctx, "open", requested)
+			open, err := a.listAndFilter(ctx, "open", requested, true)
 			if err != nil {
 				return err
 			}
@@ -237,7 +389,7 @@ func (a *GiteaAdapter) FetchIssuesByStates(ctx context.Context, states []string)
 		}
 
 		if needClosed {
-			closed, err := a.listAndFilter(ctx, "closed", requested)
+			closed, err := a.listAndFilter(ctx, "closed", requested, false)
 			if err != nil {
 				return err
 			}
@@ -250,6 +402,27 @@ func (a *GiteaAdapter) FetchIssuesByStates(ctx context.Context, states []string)
 	return issues, err
 }
 
+// mergeQueryParams returns a fresh url.Values holding every entry of base
+// followed by every entry of filter. It never writes into base or filter, so a
+// concurrent fetch never shares or rewrites the stored operator filter.
+//
+// Because the reserved keys are rejected at parse, base (state, type, limit) and
+// filter are disjoint and no adapter-owned parameter is overwritten.
+func mergeQueryParams(base, filter url.Values) url.Values {
+	merged := make(url.Values, len(base)+len(filter))
+	for key, vals := range base {
+		for _, v := range vals {
+			merged.Add(key, v)
+		}
+	}
+	for key, vals := range filter {
+		for _, v := range vals {
+			merged.Add(key, v)
+		}
+	}
+	return merged
+}
+
 // listAndFilter paginates the issue-list route for the given native state and
 // returns issues whose derived state is in keep. Pull requests are skipped,
 // DisplayID is qualified to owner/repo#N, and Comments is nil on every issue.
@@ -257,12 +430,19 @@ func (a *GiteaAdapter) FetchIssuesByStates(ctx context.Context, states []string)
 // State filtering is client-side; the configured labels are never pushed into
 // the Gitea labels query parameter, whose AND semantics and silent drop on an
 // unresolvable name make it unusable for correctness-critical filtering.
-func (a *GiteaAdapter) listAndFilter(ctx context.Context, nativeState string, keep map[string]struct{}) ([]domain.Issue, error) {
+//
+// When applyFilter is true and an operator query_filter is configured, its
+// params are merged into the request; when false, the request carries only the
+// adapter-owned params.
+func (a *GiteaAdapter) listAndFilter(ctx context.Context, nativeState string, keep map[string]struct{}, applyFilter bool) ([]domain.Issue, error) {
 	path := "/repos/" + a.owner + "/" + a.repo + "/issues"
 	params := url.Values{
 		"state": {nativeState},
 		"type":  {"issues"},
 		"limit": {"50"},
+	}
+	if applyFilter && len(a.queryFilter) > 0 {
+		params = mergeQueryParams(params, a.queryFilter)
 	}
 
 	raw, err := a.paginateIssues(ctx, path, params)

@@ -110,3 +110,25 @@ func TestIntegration_AddLabel(t *testing.T) {
 		t.Fatalf("AddLabel(%s, %q): %v", issue.Identifier, label, err)
 	}
 }
+
+func TestIntegration_FetchCandidateIssues_QueryFilter(t *testing.T) {
+	skipUnlessIntegration(t)
+
+	cfg := integrationConfig(t)
+	// A wide-open lower bound so the filter narrows nothing, keeping the
+	// assertion (construction and fetch succeed with an operator filter
+	// configured) stable regardless of the live repository's issue history.
+	cfg["query_filter"] = "since=2000-01-01T00:00:00Z"
+
+	adapter, err := NewGiteaAdapter(cfg)
+	if err != nil {
+		t.Fatalf("NewGiteaAdapter with query_filter: %v", err)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	if _, err := adapter.FetchCandidateIssues(ctx); err != nil {
+		t.Fatalf("FetchCandidateIssues with query_filter: %v", err)
+	}
+}
