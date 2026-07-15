@@ -193,6 +193,27 @@ jobs:
       - name: Run integration tests
         run: go test -race -count=1 -v -run 'Integration' ./internal/tracker/linear/...
 
+  test-integration-gitea:
+    name: "Integration: Gitea"
+    needs: [lint, test-unit]
+    runs-on: ubuntu-latest
+    env:
+      SORTIE_GITEA_TEST: "1"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: go.mod
+
+      - name: Boot and provision Gitea
+        run: scripts/gitea-integration-provision.sh
+
+      - name: Run integration tests
+        run: go test -race -count=1 -v -run 'Integration' ./internal/scm/gitea/...
+
   test-e2e-github:
     name: "E2E: GitHub orchestrator"
     needs: [lint, test-unit]
@@ -408,6 +429,7 @@ jobs:
       - test-integration-jira
       - test-integration-github
       - test-integration-linear
+      - test-integration-gitea
       - test-e2e-github
       - test-integration-claude
       - test-integration-copilot
