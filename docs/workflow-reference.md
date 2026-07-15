@@ -335,9 +335,11 @@ identity). Parameters combine with `&`. Rules:
   construction when a `labels` value does not match a repository label by exact case, turning the
   silent drop into a visible signal. The warning does not block construction, because an operator
   may reference a label that does not exist yet.
-- `mentioned_by` does not count an author mentioning themselves. `mentioned_by=<identity>` matches
-  an issue only when the identity differs from the issue author, so setting the automation identity
-  as both author and mention target yields no candidates.
+- `mentioned_by` does not count an author mentioning themselves. This behavior is verified against
+  the tested Gitea version but is not documented in Gitea's REST API, so it can differ across Gitea
+  or Forgejo releases. `mentioned_by=<identity>` matches an issue only when the identity differs from
+  the issue author, so setting the automation identity as both author and mention target yields no
+  candidates.
 
 ```yaml
 tracker:
