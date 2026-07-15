@@ -162,7 +162,7 @@ func NewGiteaAdapter(config map[string]any) (domain.TrackerAdapter, error) {
 	}
 
 	warnUnrecognizedFilterKeys(adapter.log, filter)
-	if _, ok := filter["labels"]; ok {
+	if hasNonEmptyLabel(filter["labels"]) {
 		known, fetchErr := adapter.fetchLabelNames(context.Background())
 		if fetchErr != nil {
 			adapter.log.Warn("failed to fetch labels for query_filter diagnostic",
@@ -273,6 +273,23 @@ func reportUnresolvedLabels(log *slog.Logger, values []string, known map[string]
 				slog.String("label", name))
 		}
 	}
+}
+
+// hasNonEmptyLabel reports whether values holds at least one label name that is
+// non-empty after splitting on commas and trimming surrounding whitespace.
+//
+// The query_filter labels diagnostic reads the repository label catalog, so an
+// empty or whitespace-only labels= fragment carries no label constraint and must
+// not trigger that construction-time fetch. A nil slice reports false.
+func hasNonEmptyLabel(values []string) bool {
+	for _, value := range values {
+		for name := range strings.SplitSeq(value, ",") {
+			if strings.TrimSpace(name) != "" {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // knownGiteaFilterKeys is the set of repository issue-list filter parameters
