@@ -45,7 +45,7 @@ agent:
   max_retry_backoff_ms: 300000
   max_concurrent_agents_by_state:
     in progress: 3
-    to do: 1
+    todo: 1
 
 claude-code:
   permission_mode: bypassPermissions
