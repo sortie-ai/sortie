@@ -72,7 +72,7 @@ Sortie is a single Go binary. It uses SQLite for persistent state (retry queues,
 
 Issue trackers and coding agents are integrated through adapter interfaces. Adding support for a new tracker or agent is an additive change: implement the interface in a new package.
 
-Supported trackers: GitHub Issues, Giteat Issues, Linear and Jira. Supported agents: Claude Code, Copilot, OpenCode, Codex and Kiro. See [`docs/decisions/`](docs/decisions/) for detailed rationale on technology choices.
+Supported trackers: GitHub Issues, Gitea Issues, Linear and Jira. Supported agents: Claude Code, Copilot, OpenCode, Codex and Kiro. See [`docs/decisions/`](docs/decisions/) for detailed rationale on technology choices.
 
 ## Documentation
 
