@@ -101,6 +101,11 @@ func TestSampleWorkflowLoad(t *testing.T) {
 			file:     "WORKFLOW.linear.md",
 			wantKeys: []string{"tracker", "polling", "workspace", "hooks", "agent", "claude-code", "server"},
 		},
+		{
+			name:     "WORKFLOW.gitea.md loads with expected config keys",
+			file:     "WORKFLOW.gitea.md",
+			wantKeys: []string{"tracker", "polling", "workspace", "hooks", "agent", "claude-code", "server"},
+		},
 	}
 
 	for _, tt := range tests {
@@ -172,6 +177,16 @@ func TestSampleWorkflowRender(t *testing.T) {
 			file:  "WORKFLOW.linear.md",
 			issue: minimalIssue(),
 		},
+		{
+			name:  "WORKFLOW.gitea.md full issue",
+			file:  "WORKFLOW.gitea.md",
+			issue: fullIssue(),
+		},
+		{
+			name:  "WORKFLOW.gitea.md minimal issue",
+			file:  "WORKFLOW.gitea.md",
+			issue: minimalIssue(),
+		},
 	}
 
 	for _, tt := range tests {
@@ -202,6 +217,7 @@ var shippedExampleWorkflows = []string{
 	"WORKFLOW.opencode.md",
 	"WORKFLOW.linear.md",
 	"WORKFLOW.kiro.md",
+	"WORKFLOW.gitea.md",
 }
 
 // TestSampleWorkflowMergeConflictBranch verifies AC13: each shipped example
@@ -430,7 +446,7 @@ func TestSampleWorkflowTestFilePathConfig(t *testing.T) {
 func TestSampleWorkflowNoHTMLComments(t *testing.T) {
 	t.Parallel()
 
-	files := []string{"WORKFLOW.md", "WORKFLOW.test.md", "WORKFLOW.opencode.md", "WORKFLOW.linear.md"}
+	files := []string{"WORKFLOW.md", "WORKFLOW.test.md", "WORKFLOW.opencode.md", "WORKFLOW.linear.md", "WORKFLOW.gitea.md"}
 	for _, name := range files {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -569,6 +585,41 @@ func TestSampleWorkflowLinearEnvVarIndirection(t *testing.T) {
 	}{
 		{"api_key", "$SORTIE_LINEAR_API_KEY"},
 		{"project", "$SORTIE_LINEAR_TEAM_KEY"},
+	}
+	for _, c := range checks {
+		got, _ := tracker[c.key].(string)
+		if got != c.want {
+			t.Errorf("tracker.%s = %q, want %q", c.key, got, c.want)
+		}
+	}
+}
+
+func TestSampleWorkflowGiteaEnvVarIndirection(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(repoRoot(t), "examples", "WORKFLOW.gitea.md")
+	wf, err := workflow.Load(path)
+	if err != nil {
+		t.Fatalf("workflow.Load(WORKFLOW.gitea.md): %v", err)
+	}
+
+	tracker, ok := wf.Config["tracker"].(map[string]any)
+	if !ok {
+		t.Fatal("WORKFLOW.gitea.md config missing tracker map")
+	}
+
+	if kind, _ := tracker["kind"].(string); kind != "gitea" {
+		t.Errorf("tracker.kind = %q, want %q", kind, "gitea")
+	}
+
+	// Connection fields must use $SORTIE_* indirection.
+	checks := []struct {
+		key  string
+		want string
+	}{
+		{"endpoint", "$SORTIE_GITEA_ENDPOINT"},
+		{"api_key", "$SORTIE_GITEA_TOKEN"},
+		{"project", "$SORTIE_GITEA_PROJECT"},
 	}
 	for _, c := range checks {
 		got, _ := tracker[c.key].(string)

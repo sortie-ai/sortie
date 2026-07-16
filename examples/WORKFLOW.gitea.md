@@ -1,17 +1,17 @@
 ---
 tracker:
-  kind: linear
-  api_key: $SORTIE_LINEAR_API_KEY
-  project: $SORTIE_LINEAR_TEAM_KEY
-  query_filter: '{ "labels": { "name": { "eq": "agent-ready" } } }'
+  kind: gitea
+  endpoint: $SORTIE_GITEA_ENDPOINT
+  api_key: $SORTIE_GITEA_TOKEN
+  project: $SORTIE_GITEA_PROJECT
   active_states:
-    - Todo
-    - In Progress
+    - backlog
+    - in-progress
+  in_progress_state: in-progress
   terminal_states:
-    - Done
-    - Canceled
-    - Duplicate
-  handoff_state: In Review
+    - done
+    - wontfix
+  handoff_state: review
 
 polling:
   interval_ms: 45000
@@ -44,8 +44,8 @@ agent:
   stall_timeout_ms: 300000
   max_retry_backoff_ms: 300000
   max_concurrent_agents_by_state:
-    in progress: 3
-    todo: 1
+    in-progress: 3
+    backlog: 1
 
 claude-code:
   permission_mode: bypassPermissions
@@ -57,10 +57,11 @@ server:
   port: 8642
 ---
 
-{{/* Sortie sample workflow, Linear + Claude Code.
+{{/* Sortie sample workflow, Gitea + Claude Code.
      Required env vars:
-       SORTIE_LINEAR_API_KEY  Linear personal API key (lin_api_...)
-       SORTIE_LINEAR_TEAM_KEY Linear team key (e.g. ENG)
+       SORTIE_GITEA_ENDPOINT  Gitea instance base URL (e.g. https://gitea.example.com)
+       SORTIE_GITEA_TOKEN     Gitea access token (sent as "Authorization: token <key>")
+       SORTIE_GITEA_PROJECT   Target repository as owner/repo (e.g. sortie-ai/sortie)
        SORTIE_REPO_URL        Git clone URL for the repository
      Optional:
        SORTIE_WORKSPACE_ROOT  Base directory for per-issue workspaces
