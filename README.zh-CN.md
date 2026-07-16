@@ -72,7 +72,7 @@ Sortie 是一个单一 Go 二进制文件。它使用 SQLite 存储持久化状�
 
 工单系统和编程智能体通过适配器接口集成。为新的工单系统或智能体添加支持是一种增量变更：在新包中实现对应接口即可。
 
-已支持的工单系统：GitHub Issues、Linear 和 Jira。已支持的智能体：Claude Code、Copilot、OpenCode、Codex 和 Kiro。技术选型的详细依据参见 [`docs/decisions/`](docs/decisions/)。
+已支持的工单系统：GitHub Issues、Gitea Issues、Linear 和 Jira。已支持的智能体：Claude Code、Copilot、OpenCode、Codex 和 Kiro。技术选型的详细依据参见 [`docs/decisions/`](docs/decisions/)。
 
 ## 文档
 
