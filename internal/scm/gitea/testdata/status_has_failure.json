@@ -1,0 +1,9 @@
+{
+  "state": "failure",
+  "sha": "sha-clean-001",
+  "total_count": 2,
+  "statuses": [
+    { "id": 3, "status": "success", "context": "ci/build", "description": "Build passed" },
+    { "id": 4, "status": "failure", "context": "ci/test", "description": "Tests failed" }
+  ]
+}

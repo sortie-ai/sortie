@@ -1,0 +1,17 @@
+{
+  "id": 500004,
+  "number": 9,
+  "title": "Add label-event journal read",
+  "state": "open",
+  "mergeable": true,
+  "merged": false,
+  "merged_at": null,
+  "draft": false,
+  "user": { "login": "dave" },
+  "requested_reviewers": [{ "login": "bob" }],
+  "head": { "sha": "sha-004", "ref": "feature/label-events" },
+  "base": { "ref": "main" },
+  "html_url": "https://git.example.com/acme/widgets/pulls/9",
+  "created_at": "2026-07-13T08:00:00Z",
+  "updated_at": "2026-07-14T09:00:00Z"
+}

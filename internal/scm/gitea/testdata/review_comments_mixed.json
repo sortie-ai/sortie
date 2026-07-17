@@ -1,0 +1,28 @@
+[
+  {
+    "id": 1001,
+    "path": "internal/scm/gitea/scm_reviews.go",
+    "body": "Consider extracting this into a helper function.",
+    "position": 42,
+    "original_position": 42,
+    "diff_hunk": "@@ -10,6 +10,7 @@ func FetchPendingReviews",
+    "commit_id": "sha-clean-001",
+    "user": { "login": "alice" },
+    "created_at": "2026-07-14T09:00:00Z",
+    "updated_at": "2026-07-14T09:00:00Z",
+    "html_url": "https://git.example.com/acme/widgets/pulls/6#issuecomment-1001"
+  },
+  {
+    "id": 1002,
+    "path": "internal/scm/gitea/scm_reviews.go",
+    "body": "This line was addressed in a later push.",
+    "position": 0,
+    "original_position": 17,
+    "diff_hunk": "@@ -5,4 +5,4 @@ package gitea",
+    "commit_id": "sha-clean-001",
+    "user": { "login": "alice" },
+    "created_at": "2026-07-14T09:05:00Z",
+    "updated_at": "2026-07-14T09:05:00Z",
+    "html_url": "https://git.example.com/acme/widgets/pulls/6#issuecomment-1002"
+  }
+]

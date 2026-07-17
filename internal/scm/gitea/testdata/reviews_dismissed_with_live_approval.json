@@ -1,0 +1,28 @@
+[
+  {
+    "id": 501,
+    "state": "REQUEST_CHANGES",
+    "body": "This concern has since been resolved.",
+    "user": { "login": "alice" },
+    "dismissed": true,
+    "official": false,
+    "stale": false,
+    "submitted_at": "2026-07-14T09:00:00Z",
+    "commit_id": "sha-a",
+    "comments_count": 0,
+    "html_url": "https://git.example.com/acme/widgets/pulls/6#pullrequestreview-501"
+  },
+  {
+    "id": 502,
+    "state": "APPROVED",
+    "body": "",
+    "user": { "login": "bob" },
+    "dismissed": false,
+    "official": true,
+    "stale": false,
+    "submitted_at": "2026-07-14T10:00:00Z",
+    "commit_id": "sha-a",
+    "comments_count": 0,
+    "html_url": "https://git.example.com/acme/widgets/pulls/6#pullrequestreview-502"
+  }
+]

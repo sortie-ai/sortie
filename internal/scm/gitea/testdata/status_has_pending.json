@@ -1,0 +1,9 @@
+{
+  "state": "pending",
+  "sha": "sha-clean-001",
+  "total_count": 2,
+  "statuses": [
+    { "id": 5, "status": "success", "context": "ci/build", "description": "Build passed" },
+    { "id": 6, "status": "pending", "context": "ci/test", "description": "Tests running" }
+  ]
+}

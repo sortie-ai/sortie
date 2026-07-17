@@ -1,0 +1,15 @@
+[
+  {
+    "id": 601,
+    "state": "REQUEST_CHANGES",
+    "body": "No longer applicable.",
+    "user": { "login": "alice" },
+    "dismissed": true,
+    "official": false,
+    "stale": false,
+    "submitted_at": "2026-07-14T09:00:00Z",
+    "commit_id": "sha-a",
+    "comments_count": 0,
+    "html_url": "https://git.example.com/acme/widgets/pulls/6#pullrequestreview-601"
+  }
+]

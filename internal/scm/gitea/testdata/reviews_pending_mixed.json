@@ -1,0 +1,54 @@
+[
+  {
+    "id": 101,
+    "state": "REQUEST_CHANGES",
+    "body": "Please address the pagination edge case before merging.",
+    "user": { "login": "alice" },
+    "dismissed": false,
+    "official": true,
+    "stale": false,
+    "submitted_at": "2026-07-14T09:00:00Z",
+    "commit_id": "sha-clean-001",
+    "comments_count": 2,
+    "html_url": "https://git.example.com/acme/widgets/pulls/6#pullrequestreview-101"
+  },
+  {
+    "id": 102,
+    "state": "APPROVED",
+    "body": "",
+    "user": { "login": "carol" },
+    "dismissed": false,
+    "official": true,
+    "stale": false,
+    "submitted_at": "2026-07-14T10:00:00Z",
+    "commit_id": "sha-clean-001",
+    "comments_count": 0,
+    "html_url": "https://git.example.com/acme/widgets/pulls/6#pullrequestreview-102"
+  },
+  {
+    "id": 103,
+    "state": "COMMENT",
+    "body": "Nice work overall, just a couple of notes.",
+    "user": { "login": "dave" },
+    "dismissed": false,
+    "official": false,
+    "stale": false,
+    "submitted_at": "2026-07-14T10:30:00Z",
+    "commit_id": "sha-clean-001",
+    "comments_count": 0,
+    "html_url": "https://git.example.com/acme/widgets/pulls/6#pullrequestreview-103"
+  },
+  {
+    "id": 104,
+    "state": "REQUEST_CHANGES",
+    "body": "This is now resolved and dismissed.",
+    "user": { "login": "erin" },
+    "dismissed": true,
+    "official": false,
+    "stale": false,
+    "submitted_at": "2026-07-14T11:00:00Z",
+    "commit_id": "sha-clean-001",
+    "comments_count": 0,
+    "html_url": "https://git.example.com/acme/widgets/pulls/6#pullrequestreview-104"
+  }
+]

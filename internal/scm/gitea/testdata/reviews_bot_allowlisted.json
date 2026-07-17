@@ -1,0 +1,41 @@
+[
+  {
+    "id": 201,
+    "state": "COMMENT",
+    "body": "Automated static analysis found 2 issues.",
+    "user": { "login": "sortie-ci-bot" },
+    "dismissed": false,
+    "official": false,
+    "stale": false,
+    "submitted_at": "2026-07-14T09:00:00Z",
+    "commit_id": "sha-clean-001",
+    "comments_count": 0,
+    "html_url": "https://git.example.com/acme/widgets/pulls/6#pullrequestreview-201"
+  },
+  {
+    "id": 202,
+    "state": "REQUEST_CHANGES",
+    "body": "Please fix the lint errors flagged above.",
+    "user": { "login": "sortie-ci-bot" },
+    "dismissed": false,
+    "official": false,
+    "stale": false,
+    "submitted_at": "2026-07-14T09:15:00Z",
+    "commit_id": "sha-clean-001",
+    "comments_count": 0,
+    "html_url": "https://git.example.com/acme/widgets/pulls/6#pullrequestreview-202"
+  },
+  {
+    "id": 203,
+    "state": "APPROVED",
+    "body": "",
+    "user": { "login": "alice" },
+    "dismissed": false,
+    "official": true,
+    "stale": false,
+    "submitted_at": "2026-07-14T10:00:00Z",
+    "commit_id": "sha-clean-001",
+    "comments_count": 0,
+    "html_url": "https://git.example.com/acme/widgets/pulls/6#pullrequestreview-203"
+  }
+]
