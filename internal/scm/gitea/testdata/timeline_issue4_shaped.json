@@ -1,0 +1,50 @@
+[
+  {
+    "id": 1,
+    "type": "label",
+    "body": "1",
+    "user": { "login": "alice" },
+    "label": { "id": 3, "name": "Bug", "color": "d73a4a" },
+    "created_at": "2026-07-14T10:00:00Z"
+  },
+  {
+    "id": 2,
+    "type": "comment",
+    "body": "Just checking in on progress.",
+    "user": { "login": "bob" },
+    "label": null,
+    "created_at": "2026-07-14T10:05:00Z"
+  },
+  {
+    "id": 9,
+    "type": "label",
+    "body": "1",
+    "user": { "login": "alice" },
+    "label": { "id": 7, "name": "REVIEW", "color": "0e8a16" },
+    "created_at": "2026-07-14T10:43:21+02:00"
+  },
+  {
+    "id": 10,
+    "type": "label",
+    "body": "1",
+    "user": { "login": "carol" },
+    "label": { "id": 11, "name": "backlog", "color": "cfd3d7" },
+    "created_at": "2026-07-14T10:43:21+02:00"
+  },
+  {
+    "id": 11,
+    "type": "pull_push",
+    "body": "",
+    "user": { "login": "dave" },
+    "label": null,
+    "created_at": "2026-07-14T11:00:00Z"
+  },
+  {
+    "id": 12,
+    "type": "label",
+    "body": "",
+    "user": { "login": "bob" },
+    "label": { "id": 3, "name": "bug", "color": "d73a4a" },
+    "created_at": "2026-07-14T12:00:00Z"
+  }
+]

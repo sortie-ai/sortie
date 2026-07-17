@@ -1,0 +1,28 @@
+[
+  {
+    "id": 301,
+    "state": "REQUEST_CHANGES",
+    "body": "Needs another pass on error handling.",
+    "user": { "login": "alice" },
+    "dismissed": false,
+    "official": true,
+    "stale": false,
+    "submitted_at": "2026-07-14T09:00:00Z",
+    "commit_id": "sha-a",
+    "comments_count": 0,
+    "html_url": "https://git.example.com/acme/widgets/pulls/6#pullrequestreview-301"
+  },
+  {
+    "id": 302,
+    "state": "APPROVED",
+    "body": "Thanks, this looks good now.",
+    "user": { "login": "alice" },
+    "dismissed": false,
+    "official": true,
+    "stale": false,
+    "submitted_at": "2026-07-14T12:00:00Z",
+    "commit_id": "sha-b",
+    "comments_count": 0,
+    "html_url": "https://git.example.com/acme/widgets/pulls/6#pullrequestreview-302"
+  }
+]

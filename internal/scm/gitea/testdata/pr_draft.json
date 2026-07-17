@@ -1,0 +1,17 @@
+{
+  "id": 500002,
+  "number": 7,
+  "title": "WIP: experiment with caching",
+  "state": "open",
+  "mergeable": true,
+  "merged": false,
+  "merged_at": null,
+  "draft": true,
+  "user": { "login": "bob" },
+  "requested_reviewers": [],
+  "head": { "sha": "sha-draft-002", "ref": "feature/wip-cache" },
+  "base": { "ref": "main" },
+  "html_url": "https://git.example.com/acme/widgets/pulls/7",
+  "created_at": "2026-07-11T08:00:00Z",
+  "updated_at": "2026-07-11T09:00:00Z"
+}

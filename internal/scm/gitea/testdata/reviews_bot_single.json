@@ -1,0 +1,15 @@
+[
+  {
+    "id": 301,
+    "state": "COMMENT",
+    "body": "Automated review posted inline findings.",
+    "user": { "login": "sortie-ci-bot" },
+    "dismissed": false,
+    "official": false,
+    "stale": false,
+    "submitted_at": "2026-07-14T09:15:00Z",
+    "commit_id": "sha-clean-001",
+    "comments_count": 2,
+    "html_url": "https://git.example.com/acme/widgets/pulls/6#pullrequestreview-301"
+  }
+]

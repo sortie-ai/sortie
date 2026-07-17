@@ -1,0 +1,17 @@
+{
+  "id": 500005,
+  "number": 10,
+  "title": "Broken response missing head sha",
+  "state": "open",
+  "mergeable": true,
+  "merged": false,
+  "merged_at": null,
+  "draft": false,
+  "user": { "login": "erin" },
+  "requested_reviewers": [],
+  "head": { "sha": "", "ref": "feature/missing-sha" },
+  "base": { "ref": "main" },
+  "html_url": "https://git.example.com/acme/widgets/pulls/10",
+  "created_at": "2026-07-14T08:00:00Z",
+  "updated_at": "2026-07-14T08:30:00Z"
+}

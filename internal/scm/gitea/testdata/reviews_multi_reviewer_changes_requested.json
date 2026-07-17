@@ -1,0 +1,28 @@
+[
+  {
+    "id": 401,
+    "state": "REQUEST_CHANGES",
+    "body": "Blocking: this breaks backward compatibility.",
+    "user": { "login": "alice" },
+    "dismissed": false,
+    "official": true,
+    "stale": false,
+    "submitted_at": "2026-07-14T09:00:00Z",
+    "commit_id": "sha-a",
+    "comments_count": 0,
+    "html_url": "https://git.example.com/acme/widgets/pulls/6#pullrequestreview-401"
+  },
+  {
+    "id": 402,
+    "state": "APPROVED",
+    "body": "",
+    "user": { "login": "bob" },
+    "dismissed": false,
+    "official": true,
+    "stale": false,
+    "submitted_at": "2026-07-14T10:00:00Z",
+    "commit_id": "sha-a",
+    "comments_count": 0,
+    "html_url": "https://git.example.com/acme/widgets/pulls/6#pullrequestreview-402"
+  }
+]

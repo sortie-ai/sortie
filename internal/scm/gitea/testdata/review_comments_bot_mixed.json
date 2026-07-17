@@ -1,0 +1,28 @@
+[
+  {
+    "id": 3001,
+    "path": "internal/scm/gitea/scm_reviews.go",
+    "body": "Bot: this identifier is never used.",
+    "position": 55,
+    "original_position": 55,
+    "diff_hunk": "@@ -50,6 +50,7 @@ func collectReviewComments",
+    "commit_id": "sha-clean-001",
+    "user": { "login": "sortie-ci-bot" },
+    "created_at": "2026-07-14T09:16:00Z",
+    "updated_at": "2026-07-14T09:16:00Z",
+    "html_url": "https://git.example.com/acme/widgets/pulls/6#issuecomment-3001"
+  },
+  {
+    "id": 3002,
+    "path": "internal/scm/gitea/scm_reviews.go",
+    "body": "Human reply on the bot's review thread.",
+    "position": 60,
+    "original_position": 60,
+    "diff_hunk": "@@ -58,4 +58,5 @@ func normalizeReviewComment",
+    "commit_id": "sha-clean-001",
+    "user": { "login": "mallory" },
+    "created_at": "2026-07-14T09:17:00Z",
+    "updated_at": "2026-07-14T09:17:00Z",
+    "html_url": "https://git.example.com/acme/widgets/pulls/6#issuecomment-3002"
+  }
+]
