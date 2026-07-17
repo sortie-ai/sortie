@@ -221,6 +221,50 @@ func TestGiteaSCMFetchBotReviewComments(t *testing.T) {
 			t.Errorf("FetchBotReviewComments() len = %d, want 2 (case-insensitive allowlist match)", len(got))
 		}
 	})
+
+	t.Run("inline comments are filtered by comment author, not just review author", func(t *testing.T) {
+		t.Parallel()
+
+		reviewsFixture := loadFixture(t, "reviews_bot_single.json")
+		commentsFixture := loadFixture(t, "review_comments_bot_mixed.json")
+		srv := httptest.NewServer(giteaReviewsAndCommentsHandler(t, reviewsFixture, commentsFixture))
+		defer srv.Close()
+
+		adapter := mustSCMAdapter(t, srv.URL)
+		got, err := adapter.FetchBotReviewComments(context.Background(), 6, testOwner, testRepo, []string{"sortie-ci-bot"})
+		if err != nil {
+			t.Fatalf("FetchBotReviewComments: unexpected error: %v", err)
+		}
+
+		// The allowlisted bot review contributes its body (review-301) and its
+		// one bot-authored inline comment (3001); the inline comment by the
+		// non-allowlisted author (3002) is dropped by the comment-author
+		// predicate even though its parent review is allowlisted.
+		if len(got) != 2 {
+			t.Fatalf("FetchBotReviewComments() len = %d, want 2 (review body + bot inline comment)", len(got))
+		}
+
+		byID := make(map[string]domain.ReviewComment, len(got))
+		for _, c := range got {
+			byID[c.ID] = c
+		}
+
+		if _, ok := byID["review-301"]; !ok {
+			t.Errorf("FetchBotReviewComments() missing PR-level comment %q", "review-301")
+		}
+
+		botComment, ok := byID["3001"]
+		if !ok {
+			t.Fatalf("FetchBotReviewComments() missing bot inline comment %q", "3001")
+		}
+		if botComment.Reviewer != "sortie-ci-bot" {
+			t.Errorf(`comment "3001" Reviewer = %q, want %q`, botComment.Reviewer, "sortie-ci-bot")
+		}
+
+		if _, present := byID["3002"]; present {
+			t.Errorf(`comment "3002" present, want excluded (author "mallory" is not in the allowlist)`)
+		}
+	})
 }
 
 // --- GetReviewDecision ---

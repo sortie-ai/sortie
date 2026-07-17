@@ -47,13 +47,24 @@ type giteaReviewComment struct {
 // reviews on the given PR.
 //
 // Each retained review contributes its trimmed body as a PR-level comment when
-// non-empty, followed by its inline comments. Dismissed reviews are skipped, and
-// comments are deduplicated by id. The returned slice is non-nil even when
-// empty; a failure returns a [*domain.SCMError].
+// non-empty, followed by its inline comments filtered by the same non-bot
+// predicate. Dismissed reviews are skipped, and comments are deduplicated by id.
+// The returned slice is non-nil even when empty; a failure returns a
+// [*domain.SCMError].
+//
+// The non-bot predicate has no effect on Gitea: there is no platform bot marker
+// and this method passes no allowlist, so it cannot exclude a bot-authored
+// review or comment, and a bot's REQUEST_CHANGES review is not excluded here.
+// The predicate is retained for structural parity with
+// [GiteaSCMAdapter.FetchBotReviewComments].
 func (a *GiteaSCMAdapter) FetchPendingReviews(ctx context.Context, prNumber int, owner, repo string) ([]domain.ReviewComment, error) {
-	return a.collectReviewComments(ctx, prNumber, owner, repo, func(r giteaReview) bool {
-		return r.State == "REQUEST_CHANGES" && !isBotAuthor(r.User.Login, nil)
-	})
+	return a.collectReviewComments(ctx, prNumber, owner, repo,
+		func(r giteaReview) bool {
+			return r.State == "REQUEST_CHANGES" && !isBotAuthor(r.User.Login, nil)
+		},
+		func(c giteaReviewComment) bool {
+			return !isBotAuthor(c.User.Login, nil)
+		})
 }
 
 // FetchBotReviewComments returns the review comments authored by allowlisted bot
@@ -61,13 +72,20 @@ func (a *GiteaSCMAdapter) FetchPendingReviews(ctx context.Context, prNumber int,
 //
 // Gitea users carry no bot-type marker, so classification reduces to the
 // botUsernames allowlist under a case-insensitive comparison; a nil or empty
-// allowlist selects nothing. Dismissed reviews are skipped and comments are
-// deduplicated by id. The returned slice is non-nil even when empty; a failure
-// returns a [*domain.SCMError].
+// allowlist selects nothing. A review is retained when its author is
+// allowlisted, and each inline comment is retained only when its own author is
+// allowlisted, so a non-allowlisted reply inside a bot review is excluded.
+// Dismissed reviews are skipped and comments are deduplicated by id. The
+// returned slice is non-nil even when empty; a failure returns a
+// [*domain.SCMError].
 func (a *GiteaSCMAdapter) FetchBotReviewComments(ctx context.Context, prNumber int, owner, repo string, botUsernames []string) ([]domain.ReviewComment, error) {
-	return a.collectReviewComments(ctx, prNumber, owner, repo, func(r giteaReview) bool {
-		return isBotAuthor(r.User.Login, botUsernames)
-	})
+	return a.collectReviewComments(ctx, prNumber, owner, repo,
+		func(r giteaReview) bool {
+			return isBotAuthor(r.User.Login, botUsernames)
+		},
+		func(c giteaReviewComment) bool {
+			return isBotAuthor(c.User.Login, botUsernames)
+		})
 }
 
 // GetReviewDecision returns the aggregated review decision for the given PR.
@@ -90,14 +108,17 @@ func (a *GiteaSCMAdapter) GetReviewDecision(ctx context.Context, prNumber int, o
 }
 
 // collectReviewComments fetches every review, retains those passing keepReview
-// (dismissed reviews are always skipped first), and returns their body and
-// inline comments as [domain.ReviewComment] values.
+// (dismissed reviews are always skipped first), and returns the retained
+// reviews' bodies together with the inline comments passing keepComment as
+// [domain.ReviewComment] values.
 //
 // A retained review's trimmed body becomes a PR-level comment with id
-// "review-<id>" when non-empty; its inline comments follow. Comments are
-// deduplicated by id across all reviews. The returned slice is non-nil even when
-// empty; a fetch failure returns a [*domain.SCMError].
-func (a *GiteaSCMAdapter) collectReviewComments(ctx context.Context, prNumber int, owner, repo string, keepReview func(giteaReview) bool) ([]domain.ReviewComment, error) {
+// "review-<id>" when non-empty; its inline comments follow, each admitted only
+// when keepComment reports true, so a review-level match does not force in an
+// inline comment authored by someone else. Comments are deduplicated by id
+// across all reviews. The returned slice is non-nil even when empty; a fetch
+// failure returns a [*domain.SCMError].
+func (a *GiteaSCMAdapter) collectReviewComments(ctx context.Context, prNumber int, owner, repo string, keepReview func(giteaReview) bool, keepComment func(giteaReviewComment) bool) ([]domain.ReviewComment, error) {
 	reviews, err := a.fetchAllReviews(ctx, prNumber, owner, repo)
 	if err != nil {
 		return nil, err
@@ -134,6 +155,9 @@ func (a *GiteaSCMAdapter) collectReviewComments(ctx context.Context, prNumber in
 		}
 
 		for _, c := range comments {
+			if !keepComment(c) {
+				continue
+			}
 			commentID := strconv.FormatInt(c.ID, 10)
 			if _, dup := seen[commentID]; dup {
 				continue
