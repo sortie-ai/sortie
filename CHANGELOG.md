@@ -28,6 +28,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ([#656](https://github.com/sortie-ai/sortie/issues/656),
   [#657](https://github.com/sortie-ai/sortie/issues/657),
   [#658](https://github.com/sortie-ai/sortie/issues/658))
+- `sortie validate` reaction and CI feedback checks: before dispatch,
+  `sortie validate` now reports a reaction or `ci_feedback` block that
+  names an SCM or CI provider Sortie does not recognize, active reactions
+  that disagree on the SCM provider, a `bot_review` `bot_usernames`
+  allowlist that is not a list of names, and an `auto_merge` `strategy`
+  that is not `merge`, `squash`, or `rebase`. These faults block dispatch,
+  and apply to every SCM provider including the new Gitea one.
+  ([#659](https://github.com/sortie-ai/sortie/issues/659))
 
 ## [1.15.0] - 2026-07-16
 

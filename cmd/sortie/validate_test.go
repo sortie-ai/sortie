@@ -10,6 +10,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/sortie-ai/sortie/internal/config"
 )
 
 // errWriter is a test double that always returns a fixed error from Write.
@@ -1963,7 +1965,8 @@ Do {{ .issue.title }}.
 
 // labelCommandsUnregisteredProviderWorkflow returns a workflow whose
 // label_commands.provider names an SCM adapter that is not registered.
-// Provider validity is deferred to construction, not checked offline.
+// activationChecks reports this offline as an scm_adapter error, the
+// same registry lookup failure that already blocks construction.
 func labelCommandsUnregisteredProviderWorkflow() []byte {
 	return []byte(`---
 tracker:
@@ -2025,10 +2028,11 @@ func TestRunValidate_LabelCommandsBothLabelsEmpty(t *testing.T) {
 	}
 }
 
-// TestRunValidate_LabelCommandsUnregisteredProviderNotRejected is the
-// companion case: an unregistered provider value is NOT a validate error,
-// since provider validity is deferred to adapter construction.
-func TestRunValidate_LabelCommandsUnregisteredProviderNotRejected(t *testing.T) {
+// TestRunValidate_LabelCommandsUnregisteredProviderRejected is the
+// companion case: an unregistered provider value named by an active
+// label_commands reaction is a validate-time scm_adapter error, the
+// same registry lookup failure that already blocks construction.
+func TestRunValidate_LabelCommandsUnregisteredProviderRejected(t *testing.T) {
 	t.Parallel()
 
 	dir := t.TempDir()
@@ -2038,9 +2042,20 @@ func TestRunValidate_LabelCommandsUnregisteredProviderNotRejected(t *testing.T) 
 	var stdout, stderr bytes.Buffer
 	ctx := context.Background()
 
-	code := run(ctx, []string{"validate", wfPath}, &stdout, &stderr)
-	if code != 0 {
-		t.Fatalf("run(validate) = %d, want 0 (provider validity is deferred to construction); stderr: %s", code, stderr.String())
+	code := run(ctx, []string{"validate", "--format", "json", wfPath}, &stdout, &stderr)
+	if code != 1 {
+		t.Fatalf("run(validate --format json) = %d, want 1; stderr: %s", code, stderr.String())
+	}
+
+	var out validateOutput
+	if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
+		t.Fatalf("json.Unmarshal(%q) error: %v", stdout.String(), err)
+	}
+	if out.Valid {
+		t.Errorf("validateOutput.Valid = true, want false")
+	}
+	if d := diagWithCheck(out.Errors, "scm_adapter"); d == nil {
+		t.Errorf("validateOutput.Errors = %v, want a diagnostic with check %q", out.Errors, "scm_adapter")
 	}
 }
 
@@ -2098,5 +2113,428 @@ func TestRunValidate_LabelCommandsFixOnlyValid(t *testing.T) {
 	}
 	if !out.Valid {
 		t.Errorf("validateOutput.Valid = false, want true; errors: %v", out.Errors)
+	}
+}
+
+// --- Gitea forge validate checks ---
+
+// diagWithCheck returns a pointer to the first diag in diags whose Check
+// matches want, or nil if none match.
+func diagWithCheck(diags []validateDiag, want string) *validateDiag {
+	for i := range diags {
+		if diags[i].Check == want {
+			return &diags[i]
+		}
+	}
+	return nil
+}
+
+// forgeCheckKeys lists every check key this feature can emit: the two
+// reaction-config diagnostics plus the three activation diagnostics.
+var forgeCheckKeys = []string{
+	"reactions.bot_review",
+	"reactions.auto_merge",
+	"scm_adapter",
+	"ci_provider",
+	"reactions.scm_provider_conflict",
+}
+
+// giteaForgeWorkflow returns a WORKFLOW.md whose front matter sets a
+// fully valid gitea tracker and agent so preflight passes cleanly;
+// extraYAML is appended before the closing front-matter delimiter to
+// vary the reactions/ci_feedback block under test.
+func giteaForgeWorkflow(extraYAML string) []byte {
+	return []byte(`---
+tracker:
+  kind: gitea
+  endpoint: "https://gitea.example.com"
+  api_key: "gitea-forge-test-token"
+  project: "acme/widgets"
+  active_states:
+    - backlog
+  terminal_states:
+    - done
+agent:
+  kind: mock
+` + extraYAML + `---
+Do {{ .issue.title }}.
+`)
+}
+
+// forgeFaultWorkflow returns a WORKFLOW.md with a minimal valid tracker
+// (file) and agent, so ValidateDispatchConfig passes cleanly, with
+// extraYAML appended to introduce exactly one forge-only fault.
+func forgeFaultWorkflow(extraYAML string) []byte {
+	return []byte(`---
+tracker:
+  kind: file
+  active_states:
+    - To Do
+  terminal_states:
+    - Done
+agent:
+  kind: mock
+` + extraYAML + `---
+Do {{ .issue.title }}.
+`)
+}
+
+// TestActivationChecks covers activationChecks directly with hand-built
+// config.ServiceConfig literals, bypassing config.NewServiceConfig.
+func TestActivationChecks(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		cfg        config.ServiceConfig
+		wantChecks []string
+	}{
+		{
+			name: "unregistered SCM provider",
+			cfg: config.ServiceConfig{
+				Reactions: map[string]config.ReactionConfig{
+					"bot_review": {Provider: "gitea-scm"},
+				},
+			},
+			wantChecks: []string{"scm_adapter"},
+		},
+		{
+			name: "unregistered CI provider",
+			cfg: config.ServiceConfig{
+				CIFeedback: config.CIFeedbackConfig{Kind: "gitea-ci"},
+			},
+			wantChecks: []string{"ci_provider"},
+		},
+		{
+			name: "two active reactions naming different providers",
+			cfg: config.ServiceConfig{
+				Reactions: map[string]config.ReactionConfig{
+					"bot_review": {Provider: "gitea"},
+					"auto_merge": {Provider: "github"},
+				},
+			},
+			wantChecks: []string{"reactions.scm_provider_conflict"},
+		},
+		{
+			name: "all gitea is clean",
+			cfg: config.ServiceConfig{
+				Reactions: map[string]config.ReactionConfig{
+					"bot_review": {Provider: "gitea"},
+					"auto_merge": {Provider: "gitea"},
+				},
+				CIFeedback: config.CIFeedbackConfig{Kind: "gitea"},
+			},
+			wantChecks: nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := activationChecks(tt.cfg)
+
+			if len(got) != len(tt.wantChecks) {
+				t.Fatalf("activationChecks(cfg) = %v, want %d diag(s) with checks %v", got, len(tt.wantChecks), tt.wantChecks)
+			}
+			for i, wantCheck := range tt.wantChecks {
+				if got[i].Check != wantCheck {
+					t.Errorf("activationChecks(cfg) diag[%d].Check = %q, want %q", i, got[i].Check, wantCheck)
+				}
+				if got[i].Severity != "error" {
+					t.Errorf("activationChecks(cfg) diag[%d].Severity = %q, want %q", i, got[i].Severity, "error")
+				}
+			}
+		})
+	}
+}
+
+// TestValidateGiteaForge exercises the fold point end-to-end through
+// runValidate for a tracker.kind: gitea workflow, varying the reactions
+// and ci_feedback blocks to isolate one forge fault per case.
+func TestValidateGiteaForge(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		extraYAML string
+		wantCheck string
+		wantCode  int
+	}{
+		{
+			name: "bot_review bare string bot_usernames",
+			extraYAML: `reactions:
+  bot_review:
+    provider: gitea
+    bot_usernames: alice
+`,
+			wantCheck: "reactions.bot_review",
+			wantCode:  1,
+		},
+		{
+			name: "auto_merge strategy rebase-merge",
+			extraYAML: `reactions:
+  auto_merge:
+    provider: gitea
+    strategy: rebase-merge
+`,
+			wantCheck: "reactions.auto_merge",
+			wantCode:  1,
+		},
+		{
+			name: "unregistered SCM provider",
+			extraYAML: `reactions:
+  bot_review:
+    provider: gitea-scm
+`,
+			wantCheck: "scm_adapter",
+			wantCode:  1,
+		},
+		{
+			name: "unregistered CI provider",
+			extraYAML: `ci_feedback:
+  kind: gitea-ci
+`,
+			wantCheck: "ci_provider",
+			wantCode:  1,
+		},
+		{
+			name: "active reactions naming different providers",
+			extraYAML: `reactions:
+  bot_review:
+    provider: gitea
+  auto_merge:
+    provider: github
+`,
+			wantCheck: "reactions.scm_provider_conflict",
+			wantCode:  1,
+		},
+		{
+			name: "fully valid gitea forge configuration",
+			extraYAML: `reactions:
+  bot_review:
+    provider: gitea
+    bot_usernames:
+      - sortie-bot
+  auto_merge:
+    provider: gitea
+    strategy: squash
+ci_feedback:
+  kind: gitea
+`,
+			wantCheck: "",
+			wantCode:  0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			dir := t.TempDir()
+			wfPath := writeCustomWorkflowFile(t, dir, giteaForgeWorkflow(tt.extraYAML))
+
+			var stdout, stderr bytes.Buffer
+			code := run(context.Background(), []string{"validate", "--format", "json", wfPath}, &stdout, &stderr)
+			if code != tt.wantCode {
+				t.Fatalf("run(validate) = %d, want %d; stderr: %s", code, tt.wantCode, stderr.String())
+			}
+
+			var out validateOutput
+			if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
+				t.Fatalf("json.Unmarshal(%q) error: %v", stdout.String(), err)
+			}
+
+			if tt.wantCheck == "" {
+				if !out.Valid {
+					t.Errorf("validateOutput.Valid = false, want true; errors: %v", out.Errors)
+				}
+				for _, key := range forgeCheckKeys {
+					if d := diagWithCheck(out.Errors, key); d != nil {
+						t.Errorf("validateOutput.Errors contains forge diagnostic %q = %v, want none", key, d)
+					}
+					if d := diagWithCheck(out.Warnings, key); d != nil {
+						t.Errorf("validateOutput.Warnings contains forge diagnostic %q = %v, want none", key, d)
+					}
+				}
+				return
+			}
+
+			if out.Valid {
+				t.Errorf("validateOutput.Valid = true, want false")
+			}
+			d := diagWithCheck(out.Errors, tt.wantCheck)
+			if d == nil {
+				t.Fatalf("validateOutput.Errors = %v, want a diagnostic with check %q", out.Errors, tt.wantCheck)
+			}
+			if d.Severity != "error" {
+				t.Errorf("validateOutput.Errors[%q].Severity = %q, want %q", tt.wantCheck, d.Severity, "error")
+			}
+		})
+	}
+
+	t.Run("messages never leak the tracker api key", func(t *testing.T) {
+		t.Parallel()
+
+		const apiKey = "gitea-forge-test-token"
+
+		dir := t.TempDir()
+		wfPath := writeCustomWorkflowFile(t, dir, giteaForgeWorkflow(`reactions:
+  bot_review:
+    provider: gitea
+    bot_usernames: not-a-list
+  auto_merge:
+    provider: gitea
+    strategy: rebase-merge
+`))
+
+		var stdout, stderr bytes.Buffer
+		code := run(context.Background(), []string{"validate", "--format", "json", wfPath}, &stdout, &stderr)
+		if code != 1 {
+			t.Fatalf("run(validate) = %d, want 1; stderr: %s", code, stderr.String())
+		}
+
+		var out validateOutput
+		if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
+			t.Fatalf("json.Unmarshal(%q) error: %v", stdout.String(), err)
+		}
+		for _, d := range out.Errors {
+			if strings.Contains(d.Message, apiKey) {
+				t.Errorf("validateOutput.Errors contains message %q with the tracker api key", d.Message)
+			}
+		}
+	})
+}
+
+// TestValidateForgeFoldPointJSON guards the fold point: a forge-only
+// error with no preflight error must not be masked by an otherwise
+// passing preflight, in both JSON and text output modes.
+func TestValidateForgeFoldPointJSON(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		extraYAML string
+		wantCheck string
+	}{
+		{
+			name: "auto_merge invalid strategy, no preflight error",
+			extraYAML: `reactions:
+  auto_merge:
+    provider: gitea
+    strategy: rebase-merge
+`,
+			wantCheck: "reactions.auto_merge",
+		},
+		{
+			name: "unregistered SCM provider, no preflight error",
+			extraYAML: `reactions:
+  bot_review:
+    provider: gitea-scm
+`,
+			wantCheck: "scm_adapter",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			dir := t.TempDir()
+			wfPath := writeCustomWorkflowFile(t, dir, forgeFaultWorkflow(tt.extraYAML))
+
+			var stdout, stderr bytes.Buffer
+			code := run(context.Background(), []string{"validate", "--format", "json", wfPath}, &stdout, &stderr)
+			if code != 1 {
+				t.Fatalf("run(validate --format json) = %d, want 1; stderr: %s", code, stderr.String())
+			}
+
+			var out validateOutput
+			if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
+				t.Fatalf("json.Unmarshal(%q) error: %v", stdout.String(), err)
+			}
+			if out.Valid {
+				t.Errorf("validateOutput.Valid = true, want false (forge-only error must not be masked by a passing preflight)")
+			}
+			if d := diagWithCheck(out.Errors, tt.wantCheck); d == nil {
+				t.Errorf("validateOutput.Errors = %v, want a diagnostic with check %q", out.Errors, tt.wantCheck)
+			}
+		})
+	}
+
+	t.Run("text format also exits 1 with no preflight error", func(t *testing.T) {
+		t.Parallel()
+
+		dir := t.TempDir()
+		wfPath := writeCustomWorkflowFile(t, dir, forgeFaultWorkflow(`reactions:
+  auto_merge:
+    provider: gitea
+    strategy: rebase-merge
+`))
+
+		var stdout, stderr bytes.Buffer
+		code := run(context.Background(), []string{"validate", wfPath}, &stdout, &stderr)
+		if code != 1 {
+			t.Fatalf("run(validate) = %d, want 1; stderr: %s", code, stderr.String())
+		}
+	})
+}
+
+// giteaShadowedEscalationWorkflow returns a WORKFLOW.md whose bot_review
+// reaction sets an invalid escalation value. buildReactionsConfig rejects
+// this at the config layer before orchestrator.ValidateReactionConfigs
+// ever runs.
+func giteaShadowedEscalationWorkflow() []byte {
+	return []byte(`---
+tracker:
+  kind: file
+  active_states:
+    - To Do
+  terminal_states:
+    - Done
+agent:
+  kind: mock
+reactions:
+  bot_review:
+    provider: gitea
+    escalation: bogus
+---
+Do {{ .issue.title }}.
+`)
+}
+
+// TestValidateShadowedEscalation proves that a malformed reaction
+// escalation is reported and exits before ValidateReactionConfigs runs,
+// so no reactions.bot_review or reactions.auto_merge diagnostic ever
+// appears end-to-end for this fault.
+func TestValidateShadowedEscalation(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	wfPath := writeCustomWorkflowFile(t, dir, giteaShadowedEscalationWorkflow())
+
+	var stdout, stderr bytes.Buffer
+	code := run(context.Background(), []string{"validate", "--format", "json", wfPath}, &stdout, &stderr)
+	if code != 1 {
+		t.Fatalf("run(validate --format json) = %d, want 1; stderr: %s", code, stderr.String())
+	}
+
+	var out validateOutput
+	if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
+		t.Fatalf("json.Unmarshal(%q) error: %v", stdout.String(), err)
+	}
+	if out.Valid {
+		t.Errorf("validateOutput.Valid = true, want false")
+	}
+
+	const wantCheck = "config.reactions.bot_review.escalation"
+	if d := diagWithCheck(out.Errors, wantCheck); d == nil {
+		t.Errorf("validateOutput.Errors = %v, want a diagnostic with check %q", out.Errors, wantCheck)
+	}
+
+	for _, shadowed := range []string{"reactions.bot_review", "reactions.auto_merge"} {
+		if d := diagWithCheck(out.Errors, shadowed); d != nil {
+			t.Errorf("validateOutput.Errors contains shadowed check %q = %v, want absent (config layer must exit first)", shadowed, d)
+		}
 	}
 }

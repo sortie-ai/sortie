@@ -124,8 +124,30 @@ func runValidate(_ context.Context, args []string, stdout io.Writer, stderr io.W
 		})
 	}
 
-	if !validation.OK() {
-		emitDiags(stdout, stderr, *format, mapPreflightErrors(validation.Errors), warningDiags)
+	// Fold the offline forge diagnostics into the same exit decision as
+	// the preflight errors. A reaction- or activation-only fault must
+	// block dispatch even when the dispatch preflight passes, so both the
+	// exit code and the JSON valid flag key on the union of preflight,
+	// reaction, and activation errors.
+	var forgeDiags []validateDiag
+	for _, rd := range orchestrator.ValidateReactionConfigs(cfg) {
+		forgeDiags = append(forgeDiags, validateDiag{Severity: rd.Severity, Check: rd.Check, Message: rd.Message})
+	}
+	forgeDiags = append(forgeDiags, activationChecks(cfg)...)
+
+	var forgeErrors []validateDiag
+	for _, fd := range forgeDiags {
+		if fd.Severity == "warning" {
+			warningDiags = append(warningDiags, fd)
+			continue
+		}
+		forgeErrors = append(forgeErrors, fd)
+	}
+
+	combinedErrors := mapPreflightErrors(validation.Errors)
+	combinedErrors = append(combinedErrors, forgeErrors...)
+	if len(combinedErrors) > 0 {
+		emitDiags(stdout, stderr, *format, combinedErrors, warningDiags)
 		return 1
 	}
 
@@ -204,6 +226,56 @@ func mapPreflightErrors(errs []orchestrator.PreflightError) []validateDiag {
 	for i, e := range errs {
 		diags[i] = validateDiag{Severity: "error", Check: e.Check, Message: e.Message}
 	}
+	return diags
+}
+
+// activationChecks reports the offline-decidable SCM and CI activation
+// faults in the resolved config: an active SCM reaction naming an
+// unregistered provider, active SCM reactions disagreeing on the provider,
+// and a ci_feedback.kind naming no registered CI provider. It reuses
+// scmProviderConflict and the adapter registries the runtime consults at
+// construction, so it constructs no adapter and opens no socket.
+func activationChecks(cfg config.ServiceConfig) []validateDiag {
+	var diags []validateDiag
+
+	reviewRC := cfg.Reactions["review_comments"]
+	autoMergeRC := cfg.Reactions["auto_merge"]
+	botReviewRC := cfg.Reactions["bot_review"]
+	mergeConflictRC := cfg.Reactions["merge_conflicts"]
+	labelReviewActive := cfg.LabelCommands.Provider != "" && cfg.LabelCommands.ReviewLabel != ""
+	labelFixActive := cfg.LabelCommands.Provider != "" && cfg.LabelCommands.FixLabel != ""
+
+	activeSCMKinds := []scmReactionKind{
+		{name: "review_comments", active: reviewRC.Provider != "", provider: reviewRC.Provider},
+		{name: "auto_merge", active: autoMergeRC.Provider != "", provider: autoMergeRC.Provider},
+		{name: "bot_review", active: botReviewRC.Provider != "", provider: botReviewRC.Provider},
+		{name: "merge_conflicts", active: mergeConflictRC.Provider != "", provider: mergeConflictRC.Provider},
+		{name: "label_commands", active: labelReviewActive || labelFixActive, provider: cfg.LabelCommands.Provider},
+	}
+
+	activeKinds, providers := scmProviderConflict(activeSCMKinds)
+	if len(providers) > 1 {
+		diags = append(diags, validateDiag{
+			Severity: "error",
+			Check:    "reactions.scm_provider_conflict",
+			Message:  fmt.Sprintf("active SCM reactions %v must use a single provider, found %v", activeKinds, providers),
+		})
+	} else if len(providers) == 1 && !registry.SCMAdapters.Has(providers[0]) {
+		diags = append(diags, validateDiag{
+			Severity: "error",
+			Check:    "scm_adapter",
+			Message:  fmt.Sprintf("no registered SCM adapter for kind %q named by active reactions", providers[0]),
+		})
+	}
+
+	if cfg.CIFeedback.Kind != "" && !registry.CIProviders.Has(cfg.CIFeedback.Kind) {
+		diags = append(diags, validateDiag{
+			Severity: "error",
+			Check:    "ci_provider",
+			Message:  fmt.Sprintf("no registered CI provider for kind %q", cfg.CIFeedback.Kind),
+		})
+	}
+
 	return diags
 }
 
