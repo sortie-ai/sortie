@@ -105,7 +105,7 @@ The constructor SHOULD run this check before the first poll, mirroring the Linea
 | --- | --- |
 | `tracker.endpoint` | Instance base URL, for example `https://gitea.example.com`. Required: there is no default host. The adapter appends `/api/v1`; it SHOULD tolerate a value that already ends in `/api/v1` without double-appending |
 | `tracker.api_key` | Access token (single string, no `email:token` composition) |
-| `tracker.project` | `owner/repo`, for example `sortie/adapter-lab`; validated as exactly one `/` at startup, like the GitHub adapter |
+| `tracker.project` | `owner/repo`, for example `myorg/myrepo`; validated as exactly one `/` at startup, like the GitHub adapter |
 
 Sub-path deployments work because Gitea always serves the API at `{ROOT_URL}/api/v1`, so appending is deterministic. Plain-HTTP endpoints send the token in cleartext; operators SHOULD front self-hosted instances with TLS. There is no API version header; behavior is pinned by the instance version, which `GET /api/v1/version` reports (`{"version": "1.27.0"}`).
 
@@ -410,7 +410,7 @@ Sketch, verified end-to-end by this research's provisioning sequence:
 
 ## SCM write surface
 
-The tracker adapter package also implements the SCM write methods `MergePR`, `DeleteBranch`, and `RemoveLabel` (`domain.SCMAdapter`, `internal/domain/scm.go`), plus the auto-merge scope preflight `VerifyAutoMergeScopes`. The route facts below were verified live against the `sortie/adapter-lab` project.
+The tracker adapter package also implements the SCM write methods `MergePR`, `DeleteBranch`, and `RemoveLabel` (`domain.SCMAdapter`, `internal/domain/scm.go`), plus the auto-merge scope preflight `VerifyAutoMergeScopes`. The route facts below were verified live against a local Gitea instance.
 
 ### MergePR
 
@@ -520,13 +520,13 @@ The SCM write surface above (merge, branch delete, label removal) and the auto-m
 
 ## Live verification results
 
-All facts marked "verified" were established against a local Gitea 1.27.0 instance on 2026-07-14 (user `sortie`, repositories `sortie/adapter-lab` and `sortie/other-repo`):
+All facts marked "verified" were established against a local Gitea 1.27.0 instance on 2026-07-14:
 
 1. **Auth scheme matrix.** `token`, `Bearer`, basic with token as password, basic with token as username, and the `access_token` query parameter all authenticate; missing token yields 401 `token is required`, a bad token 401 `invalid username, password or token`.
 2. **Scope collapse and sufficiency.** Requested `read:issue` + `write:issue` + `read:repository` + `write:repository` collapsed to the write pair; a `write:issue`-only token performed every one of the nine operations, including label creation, but got 403 on `GET /user` and `GET /repos/{owner}/{repo}`.
 3. **Label filter semantics.** `labels=in-progress,bug` matched only the issue carrying both; `labels=backlog,bug` matched nothing; `labels=BACKLOG` (wrong case, unresolvable) returned every open issue, proving the dropped filter.
 4. **Label attach and removal.** Attach by name works and is additive; an unknown name returns 200 and attaches nothing; `DELETE .../labels/review` (a name) returns 404 `label does not exist [label_id: 0, repo_id: 1]`; delete by id returns 204; `PUT .../labels` replaces the whole set; label creation without `color` returns 422 `[Color]: Required`.
-5. **Identity split.** Second repository's first issue: `number` 1, global `id` 6. The PR at index 6 reports pull-table `id` 1 as a PR and issue-table `id` 7 when fetched through the issues route, with `pull_request` set in both list and single-fetch shapes.
+5. **Identity split.** A second repository's first issue: `number` 1, global `id` 6. The PR at index 6 reports pull-table `id` 1 as a PR and issue-table `id` 7 when fetched through the issues route, with `pull_request` set in both list and single-fetch shapes.
 6. **List behavior.** Default listing is open-only, newest-first, PRs mixed in; `type=issues` excludes them; `state=all` includes closed; `sort=created&direction=asc&per_page=3` changed nothing (5 items, descending order).
 7. **Pagination.** `limit=2` produced `Link` with `rel="next"` and `rel="last"` plus `X-Total-Count: 5`; `limit=100` over 56 issues returned 50 (clamp); no `limit` returned 30; `/settings/api` reported `max_response_items: 50`, `default_paging_num: 30`.
 8. **Comments.** Ascending order with `updated_at` present; system events excluded (a PATCH-closed issue shows zero comments); `since` filters correctly; an issue with 60 comments returned all 60 in one unpaginated response with `X-Total-Count: 60` and no `Link`.
@@ -539,7 +539,7 @@ All facts marked "verified" were established against a local Gitea 1.27.0 instan
 
 ### Integration test setup
 
-The verification lab doubles as the fixture blueprint: repository `sortie/adapter-lab` with labels `backlog`, `in-progress`, `review`, `done`, `bug`; issues #1 (backlog, two comments, blocks #2), #2 (in-progress and bug, assigned), #3 (closed), #4 (label round-trip target), #5 (60-comment bulk thread), #7 (mentions a second user); PR #6 from branch `feature-x`; plus `sortie/other-repo` (archived, 56 bulk issues) for clamp and 423 checks. The provisioning sequence (admin user with `--must-change-password=false`, token via `POST /users/{user}/tokens`, everything else through the API) is fully scriptable for the CI container job.
+The verification lab doubles as the fixture blueprint: a primary test repository with labels `backlog`, `in-progress`, `review`, `done`, `bug`; issues #1 (backlog, two comments, blocks #2), #2 (in-progress and bug, assigned), #3 (closed), #4 (label round-trip target), #5 (60-comment bulk thread), #7 (mentions a second user); PR #6 from branch `feature-x`; plus a second, archived repository (56 bulk issues) for clamp and 423 checks. The provisioning sequence (admin user with `--must-change-password=false`, token via `POST /users/{user}/tokens`, everything else through the API) is fully scriptable for the CI container job.
 
 ---
 
