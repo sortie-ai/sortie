@@ -105,8 +105,9 @@ func NewGiteaCIProvider(maxLogLines int, adapterConfig map[string]any) (domain.C
 // and read directly, so no PR fetch or SHA resolution occurs. The aggregate is
 // computed from the per-status entries, never the top-level state, which Gitea
 // reports as pending for a commit with no CI. CheckRuns is a non-nil slice, empty
-// when the ref has no statuses. A failure maps to a [*domain.CIError]; context
-// cancellation and deadline errors are returned unwrapped.
+// when the ref has no statuses. A failure maps to a [*domain.CIError]; a
+// context cancellation or deadline error is returned without conversion to one,
+// so a caller can still match it with [errors.Is].
 func (p *GiteaCIProvider) FetchCIStatus(ctx context.Context, ref string) (domain.CIResult, error) {
 	path := fmt.Sprintf("/repos/%s/%s/commits/%s/status",
 		url.PathEscape(p.owner), url.PathEscape(p.repo), url.PathEscape(ref))
@@ -268,8 +269,9 @@ func stripANSI(s string) string {
 // giteaToCIError converts an error from the shared Gitea transport into a
 // [*domain.CIError] at the CI boundary.
 //
-// A context cancellation or deadline error is returned unwrapped. A
-// [*domain.TrackerError] is mapped by its Kind onto the matching CI kind,
+// A context cancellation or deadline error is returned as-is, without
+// conversion to a [*domain.CIError], so a caller can match it with [errors.Is].
+// A [*domain.TrackerError] is mapped by its Kind onto the matching CI kind,
 // preserving the chain; any other error becomes [domain.ErrCIAPI].
 func giteaToCIError(err error) error {
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
