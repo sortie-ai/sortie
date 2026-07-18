@@ -164,3 +164,54 @@ func (a *GiteaSCMAdapter) GetCIStatus(ctx context.Context, prNumber int, owner, 
 	}
 	return "success", nil
 }
+
+// giteaMergeOption is the request body for POST
+// /repos/{owner}/{repo}/pulls/{index}/merge.
+//
+// Do carries the merge style and HeadCommitID is the stale-precondition SHA.
+// MergeTitle and MergeMessage use Gitea's PascalCase JSON field names and are
+// omitted when empty so Gitea applies its strategy-specific defaults.
+type giteaMergeOption struct {
+	Do           string `json:"Do"`
+	HeadCommitID string `json:"head_commit_id,omitempty"`
+	MergeTitle   string `json:"MergeTitleField,omitempty"`
+	MergeMessage string `json:"MergeMessageField,omitempty"`
+}
+
+// mapMergeStrategy maps a [domain.MergeStrategy] to Gitea's merge-style token.
+//
+// It returns the empty string for any unsupported value so the caller rejects it
+// with [domain.ErrSCMPayload] before issuing a request rather than sending a
+// token Gitea would refuse.
+func mapMergeStrategy(strategy domain.MergeStrategy) string {
+	switch strategy {
+	case domain.StrategyMerge:
+		return "merge"
+	case domain.StrategySquash:
+		return "squash"
+	case domain.StrategyRebase:
+		return "rebase"
+	default:
+		return ""
+	}
+}
+
+// resolveMergeConflict re-reads the PR after a merge conflict and returns a
+// conflict carrying the canonical "already merged" marker when the PR is in fact
+// merged.
+//
+// The marker is gated on the observed merged state rather than on Gitea's 405
+// phrasing, so it survives a reworded rejection and never fires on a stale-head
+// 409. A failed re-read returns the original conflict unchanged, at most delaying
+// the outcome by one retry cycle.
+func (a *GiteaSCMAdapter) resolveMergeConflict(ctx context.Context, prNumber int, owner, repo string, scm *domain.SCMError) *domain.SCMError {
+	pr, readErr := a.fetchPullRequest(ctx, prNumber, owner, repo)
+	if readErr == nil && pr.Merged {
+		return &domain.SCMError{
+			Kind:    domain.ErrSCMConflict,
+			Message: "pull request already merged: " + scm.Message,
+			Err:     scm.Err,
+		}
+	}
+	return scm
+}

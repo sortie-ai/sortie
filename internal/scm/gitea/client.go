@@ -68,6 +68,18 @@ func classifyHTTPError(resp *http.Response, method, path string) error {
 			Message: fmt.Sprintf("%s %s: not found", method, path),
 		}
 
+	case resp.StatusCode == http.StatusMethodNotAllowed:
+		return &domain.TrackerError{
+			Kind:    domain.ErrTrackerAPI,
+			Message: fmt.Sprintf("%s %s: method not allowed: %s", method, path, detail),
+		}
+
+	case resp.StatusCode == http.StatusConflict:
+		return &domain.TrackerError{
+			Kind:    domain.ErrTrackerAPI,
+			Message: fmt.Sprintf("%s %s: conflict: %s", method, path, detail),
+		}
+
 	case resp.StatusCode == http.StatusPreconditionFailed:
 		return &domain.TrackerError{
 			Kind:    domain.ErrTrackerPayload,

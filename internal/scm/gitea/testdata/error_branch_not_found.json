@@ -1,0 +1,5 @@
+{
+  "message": "not found",
+  "url": "https://git.example.com/api/swagger",
+  "errors": ["branch does not exist [name: feature/gone]"]
+}

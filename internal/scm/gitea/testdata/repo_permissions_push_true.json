@@ -1,0 +1,5 @@
+{
+  "id": 42,
+  "full_name": "acme/widgets",
+  "permissions": { "admin": false, "push": true, "pull": true }
+}

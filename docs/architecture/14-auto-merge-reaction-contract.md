@@ -161,6 +161,17 @@ Three failure postures apply:
   The orchestrator proceeds with auto-merge enabled and surfaces any real scope gap at the
   first `MergePR` call.
 
+**Gitea caveat.** The Gitea adapter cannot reproduce this scope check: Gitea exposes no
+`/rate_limit` endpoint and returns no `X-OAuth-Scopes` header, so no startup request reveals a
+token's own scope. Its preflight substitutes a user-role gate for scope verification: at startup
+it reads the repository's `permissions.push` field for the configured token and fails the
+preflight when the token's user lacks repository write access. This is a check on the token
+user's role, not a verification of the token's own scope: a token whose user has write access
+still passes even when the token itself is scoped read-only. That gap surfaces only at runtime,
+when a `MergePR` or `DeleteBranch` call returns a 403 that the adapter enriches to name the
+missing `write:repository` scope explicitly. An operator satisfies both checks by granting the
+Gitea token's user repository write access and the token the `write:repository` scope.
+
 For the full preflight algorithm, see §6.3.
 
 ### 11C.10 Cross-kind isolation

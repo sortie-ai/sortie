@@ -79,3 +79,42 @@ func (a *GiteaSCMAdapter) ListLabelEvents(ctx context.Context, prNumber int, own
 
 	return events, nil
 }
+
+// fetchIssueLabels returns the labels currently attached to the given pull
+// request via GET /repos/{owner}/{repo}/issues/{prNumber}/labels.
+//
+// The read is paginated through [paginatePages]; a transport or HTTP failure is
+// mapped through [giteaToSCMError] and a decode failure to a [*domain.SCMError]
+// of kind [domain.ErrSCMPayload]. The returned slice is non-nil even when the PR
+// carries no labels.
+func (a *GiteaSCMAdapter) fetchIssueLabels(ctx context.Context, prNumber int, owner, repo string) ([]giteaLabel, error) {
+	path := fmt.Sprintf("/repos/%s/%s/issues/%d/labels",
+		url.PathEscape(owner), url.PathEscape(repo), prNumber)
+
+	return paginatePages(ctx, a.client, path, func(body []byte) ([]giteaLabel, error) {
+		var batch []giteaLabel
+		if jsonErr := json.Unmarshal(body, &batch); jsonErr != nil {
+			return nil, &domain.SCMError{
+				Kind:    domain.ErrSCMPayload,
+				Message: "failed to parse issue labels response",
+				Err:     jsonErr,
+			}
+		}
+		return batch, nil
+	})
+}
+
+// resolveLabelID returns the id of the first label whose name matches target
+// case-insensitively, reporting whether a match was found.
+//
+// Case-insensitive matching bridges Gitea's original-cased stored names and
+// Sortie's lowercased configured label, so an unresolved name is the
+// already-absent no-op that issues no delete.
+func resolveLabelID(labels []giteaLabel, target string) (int64, bool) {
+	for _, l := range labels {
+		if strings.EqualFold(l.Name, target) {
+			return l.ID, true
+		}
+	}
+	return 0, false
+}
