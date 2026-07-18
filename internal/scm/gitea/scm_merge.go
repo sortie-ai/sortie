@@ -39,9 +39,15 @@ type giteaCombinedStatus struct {
 	Statuses   []giteaCommitState `json:"statuses"`
 }
 
-// giteaCommitState is one entry of the combined status statuses array.
+// giteaCommitState is one entry of the combined status statuses array. Status is
+// the per-entry outcome read by GetCIStatus; Context, TargetURL, and Description
+// are consumed by the CI status provider, which maps each entry to a check run
+// and draws the failing-status log excerpt from Description and TargetURL.
 type giteaCommitState struct {
-	Status string `json:"status"`
+	Status      string `json:"status"`
+	Context     string `json:"context"`
+	TargetURL   string `json:"target_url"`
+	Description string `json:"description"`
 }
 
 // fetchPullRequest issues GET /repos/{owner}/{repo}/pulls/{prNumber} and decodes

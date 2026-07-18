@@ -1,0 +1,10 @@
+{
+  "state": "failure",
+  "sha": "sha-clean-001",
+  "total_count": 3,
+  "statuses": [
+    { "id": 9, "status": "success", "context": "ci/build", "description": "Build passed" },
+    { "id": 10, "status": "failure", "context": "ci/test", "description": "unit tests failed: 3 assertions", "target_url": "https://ci.example.invalid/builds/10" },
+    { "id": 11, "status": "failure", "context": "ci/lint", "description": "lint failed: 2 warnings", "target_url": "https://ci.example.invalid/builds/11" }
+  ]
+}
