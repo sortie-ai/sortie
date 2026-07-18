@@ -28,6 +28,14 @@ type SCMAdapter interface {
 - Only comments from `CHANGES_REQUESTED` reviews are returned. Approved reviews, comment-only
   reviews, and bot comments (`user.type == "Bot"`) are excluded.
 
+**Gitea adapter.** A Gitea SCM adapter registers under kind `gitea`, at parity with the GitHub
+adapter. It normalizes Gitea's native `REQUEST_CHANGES` review state to the `CHANGES_REQUESTED`
+decision this contract uses, skips dismissed reviews, and deduplicates comments by identifier.
+Gitea users carry no `type: Bot` marker, so `FetchPendingReviews` on Gitea cannot exclude a
+bot-authored changes-requested review the way the GitHub adapter's platform-marker check does;
+automated-reviewer feedback is separated instead through the bot-review reaction's username
+allowlist (§11D).
+
 ### 11B.2 ReviewComment structure
 
 ```text
