@@ -92,6 +92,16 @@ The auto-merge reconcile loop evaluates the merge preconditions reported by `Get
 | Merging | `ErrSCMAuth` | Escalated | Escalate immediately; do not re-enqueue. |
 | Merging | Other transient error | Pending | Re-enqueue with backoff; escalate after `MaxRetries`. |
 
+**Gitea auto-merge reads.** The Gitea adapter has no aggregate review-decision field and no
+`mergeable_state` string, so it composes both preconditions itself. `GetReviewDecision` folds the
+per-review list, taking each reviewer's latest approving or changes-requested review, normalizing
+Gitea's native `REQUEST_CHANGES` review state to this contract's `CHANGES_REQUESTED`, and combining
+the result with the PR's requested-reviewers signal into one decision. `GetMergeability` maps Gitea's single
+`mergeable` boolean to `clean` (mergeable and not a draft), `blocked` (draft), or `unknown`
+(anything else), and never yields `dirty` or `unstable`. Gitea cannot distinguish a merge conflict
+from an in-progress recheck, so both present as `unknown`, which this table re-enqueues on the poll
+interval as a transient state.
+
 ### 11C.6 Escalation behavior
 
 When `reaction_attempts[issue_id:merge] >= MaxRetries` or when `ErrSCMAuth` is returned on

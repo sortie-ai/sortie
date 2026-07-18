@@ -169,3 +169,13 @@ comes from the `extensions` sub-object keyed by `ci_feedback.kind`. Startup merg
 credentials (API key, project, endpoint) into that config only when `tracker.kind` and
 `ci_feedback.kind` match.
 
+**Gitea provider.** A Gitea CI status provider registers under kind `gitea`, at parity with the
+GitHub provider. Gitea exposes no check-runs API, so the provider reads the combined commit status
+as the single source and maps each status entry to a `CheckRun`. It computes the aggregate from
+those entries, not from the combined status's top-level state, which Gitea reports as `pending` for
+a commit that carries no CI at all. The empty case is detected by a zero status count, so a no-CI
+ref reports `pending` from an empty check set rather than a false `passing` or `failing`. A
+`warning` status is treated as non-failing. The failing-check log excerpt is drawn only from the
+status description and target URL already present in the authenticated response; the provider never
+fetches the target URL, so the trust boundary stays at the Gitea API.
+

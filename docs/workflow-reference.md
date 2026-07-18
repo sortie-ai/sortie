@@ -731,6 +731,16 @@ repeatedly.
 
 Remaining keys within a kind sub-object are kind-specific and collected into an `Extra` map.
 
+**SCM and CI provider selection.** The reaction `provider` field (and the deprecated
+`ci_feedback.kind`) names a registered SCM adapter or CI provider kind: `github` or `gitea`. The
+reaction kinds are provider-agnostic. Setting `provider: gitea` activates the Gitea adapter for
+that reaction. Its `endpoint`, `api_key`, and `project` come from the top-level `gitea:`
+pass-through block ([Section 4.5](#45-adapter-specific-pass-through-config)); when `tracker.kind`
+is also `gitea`, any of the three left unset in that block falls back to the matching `tracker:`
+value. A Gitea reaction can therefore pair with a non-Gitea tracker, as long as the `gitea:` block
+supplies the credentials, including the instance `endpoint` Gitea always requires. Every active
+SCM reaction in one workflow MUST name the same provider.
+
 #### Reaction kind: `ci_failure`
 
 Equivalent to the deprecated `ci_feedback` section. Configures the CI failure feedback
@@ -832,13 +842,21 @@ and non-empty. Agent-created PRs MUST write `pr_number` (positive integer), `own
 auto-merge to activate. Recovery on restart additionally consults `pushed_at` (when
 present) to skip stale PRs older than the recovery lookback window.
 
-**Token scopes required:** the configured GitHub token must carry `pull_requests:write`
-for the merge endpoint, and when `delete_branch` is not `false`, also `contents:write`
-for the branch delete endpoint. The classic `repo` scope is a superset that covers both.
-The orchestrator validates scopes once at startup; failure emits an ERROR log with the
-missing scope and disables auto-merge for the process lifetime. A transport-class
-startup failure (network outage) schedules a single bounded retry on the next reconcile
-tick before disabling auto-merge.
+**Token scopes required:** for a GitHub provider the configured token must carry
+`pull_requests:write` for the merge endpoint, and when `delete_branch` is not `false`, also
+`contents:write` for the branch delete endpoint. The classic `repo` scope is a superset that
+covers both. The orchestrator validates scopes once at startup; failure emits an ERROR log with
+the missing scope and disables auto-merge for the process lifetime. A transport-class startup
+failure (network outage) schedules a single bounded retry on the next reconcile tick before
+disabling auto-merge.
+
+For a Gitea provider the scope model differs: Gitea has one coarse `write:repository` scope
+covering both the merge and branch-delete routes, and it exposes no scope-introspection surface.
+The startup check substitutes a user-role gate, reading the repository's `permissions.push` field
+and disabling auto-merge when the token's user lacks repository write access. A read-scoped token
+whose user has write access passes that gate and surfaces the missing scope only at runtime, as a
+403 on the first merge or branch delete that the adapter rewrites to name `write:repository`.
+Grant the token's user repository write access and the token the `write:repository` scope.
 
 **Fingerprint dedup:** The fingerprint is the SHA-256 of the PR head SHA concatenated
 with the review decision. A new push or a change in review decision invalidates the

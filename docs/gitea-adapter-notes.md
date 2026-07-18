@@ -1,6 +1,6 @@
 # Gitea REST API: Adapter research notes
 
-> Gitea REST API v1, researched July 2026 and pinned to **Gitea 1.27.0**. Route surface taken from the instance's own OpenAPI description (`GET /swagger.v1.json`), cross-checked against docs.gitea.com, then **verified live** against a local Gitea 1.27.0 instance on 2026-07-14. Forgejo compatibility checked against Codeberg's published swagger and version endpoint on the same date. Reference for implementing the Gitea `TrackerAdapter` and `SCMAdapter`. The [SCM write surface](#scm-write-surface) covers merge, branch delete, label removal, and the auto-merge preflight.
+> Gitea REST API v1, researched July 2026 and pinned to **Gitea 1.27.0**. Route surface taken from the instance's own OpenAPI description (`GET /swagger.v1.json`), cross-checked against docs.gitea.com, then **verified live** against a local Gitea 1.27.0 instance on 2026-07-14. Forgejo compatibility checked against Codeberg's published swagger and version endpoint on the same date. Reference for implementing the Gitea `TrackerAdapter`, `SCMAdapter`, and `CIStatusProvider`. The [SCM read surface](#scm-read-surface) covers review decisions, mergeability, CI status, review comments, and label events; the [SCM write surface](#scm-write-surface) covers merge, branch delete, label removal, and the auto-merge preflight; the [CI status provider](#ci-status-provider) reads combined-status CI feedback.
 >
 > Gitea is self-hosted: there is no fixed default host, so the instance base URL is part of every configuration, and instances differ in version and settings. Facts below hold for 1.27.0 defaults unless marked otherwise. Gitea exposes no GraphQL API; the REST surface under `/api/v1` is the whole contract.
 
@@ -408,6 +408,105 @@ Sketch, verified end-to-end by this research's provisioning sequence:
 
 ---
 
+## SCM read surface
+
+The tracker adapter package also implements the SCM read methods `GetReviewDecision`, `GetMergeability`, `GetCIStatus`, `FetchPendingReviews`, `FetchBotReviewComments`, and `ListLabelEvents` (`domain.SCMAdapter`, `internal/domain/scm.go`). Gitea exposes no GraphQL API and no aggregate review-decision or check-runs endpoint, so each read is composed from REST routes under `/api/v1`. Every route below was reached live against the localhost Gitea 1.27.0 lab instance and returned HTTP 200; where the lab PR carried no data to populate a response, the object shape is schema-inferred from the instance OpenAPI description and marked for reconciliation against a captured live fixture in the env-gated integration tests (issue #660).
+
+| Method | Gitea route(s) |
+| --- | --- |
+| `GetReviewDecision` | `GET .../pulls/{index}/reviews` + `GET .../pulls/{index}` |
+| `GetMergeability` | `GET .../pulls/{index}` |
+| `GetCIStatus` | `GET .../pulls/{index}` + `GET .../commits/{sha}/status` |
+| `FetchPendingReviews` | `GET .../pulls/{index}/reviews` + `GET .../pulls/{index}/reviews/{id}/comments` |
+| `FetchBotReviewComments` | Same routes as `FetchPendingReviews`, filtered by a bot-username allowlist |
+| `ListLabelEvents` | `GET .../issues/{index}/timeline` |
+
+### Pull request reviews
+
+```
+GET /repos/{owner}/{repo}/pulls/{index}/reviews
+```
+
+- Returns a JSON array of review objects. The `state` field is an enum: `APPROVED`, `PENDING`, `COMMENT`, `REQUEST_CHANGES`, `REQUEST_REVIEW`. Gitea spells the changes-requested state `REQUEST_CHANGES`, not GitHub's `CHANGES_REQUESTED`; a state filter copied verbatim from the GitHub adapter matches nothing.
+- Each review carries `dismissed` (an operator nullified the review), `official`, `stale`, `body`, `submitted_at`, `user.login`, and `id`. Dismissed reviews are skipped by every read.
+- `FetchPendingReviews` returns the comments of non-bot `REQUEST_CHANGES` reviews; `FetchBotReviewComments` returns the comments of reviews whose author matches a bot-username allowlist, with no review-state filter. Gitea users carry no `type: Bot` marker, so bot classification is the allowlist alone (see [Bot classification](#bot-classification)).
+- Paginated by page number, not the `Link` header (see [SCM read pagination](#scm-read-pagination)).
+- The route was reached live (HTTP 200); the lab PR carried zero reviews, so the populated `PullReview` object shape is schema-inferred and MUST be reconciled against a captured live review-list fixture (issue #660).
+
+### Review comments
+
+```
+GET /repos/{owner}/{repo}/pulls/{index}/reviews/{id}/comments
+```
+
+- Each comment carries `path`, `body`, `position`, `original_position`, `created_at`, `id`, and `user.login`. There is no `line`, `start_line`, or `end_line` field, so review comments are single-line and `EndLine` normalizes to 0.
+- `position` is the line on the current diff; `position: 0` marks a comment whose anchor a later push removed, in which case `original_position` holds the line it was written against and the comment normalizes with `Outdated` true.
+- The route is present in the instance OpenAPI; the lab PR carried no review comments, so the `position`/`original_position` semantics and the outdated derivation are schema-inferred and MUST be reconciled against a captured live review-comment fixture (issue #660).
+
+### Review decision
+
+Gitea has no aggregate review-decision field; the GitHub adapter reads one from GraphQL, which Gitea does not offer. `GetReviewDecision` folds the review list together with the PR object's `requested_reviewers` signal:
+
+- Reviews are ordered by `submitted_at` then `id`, so the latest `APPROVED` or `REQUEST_CHANGES` per reviewer supersedes that reviewer's earlier reviews. `COMMENT`, `PENDING`, and `REQUEST_REVIEW` are not decisions, and dismissed reviews do not contribute.
+- Any standing `REQUEST_CHANGES` yields changes-requested; otherwise any `APPROVED` yields approved; otherwise a non-empty `requested_reviewers` yields review-required; otherwise not-required.
+
+### Mergeability
+
+```
+GET /repos/{owner}/{repo}/pulls/{index}
+```
+
+- The PR object carries `mergeable` (a plain bool, verified `true` on the lab PR), `merged`, `draft`, `head.sha`, `head.ref`, `base.ref`, and a `requested_reviewers` array. There is no `mergeable_state` string and no tri-state "computing" field (verified absent).
+- The boolean is the only mergeability signal, so the mapping to `MergeabilityState` is lossy: a draft maps to `blocked`, a mergeable non-draft to `clean`, and any other state to `unknown`. Gitea never yields `dirty` or `unstable`; a merge conflict and an in-progress recheck both collapse to `unknown`, which the auto-merge state machine re-enqueues rather than treating as a hard conflict.
+- The same read supplies `head.sha` (the CI ref for `GetCIStatus`), `head.ref` (the branch), and `base.ref` (the base branch the merge-conflict reaction needs).
+
+### Combined commit status
+
+```
+GET /repos/{owner}/{repo}/commits/{sha}/status
+```
+
+- Returns `{state, sha, statuses, total_count}`. The top-level `state` is the aggregate; each entry in the `statuses` array carries its own `status`. The two field names differ and MUST NOT be conflated.
+- Empty detection keys on `total_count == 0`: a commit with no CI returns `total_count: 0`, `statuses: null`, and a spurious top-level `state: "pending"` (verified). Trusting the top-level `state` would report `pending` for a no-CI commit and wrongly hold auto-merge, so the aggregate is read from the per-status entries instead.
+- Per-status `status` values are `success`, `failure`, `error`, `warning`, and `pending`. `failure` and `error` are failing; `warning` and `success` are non-failing; `pending` is pending. Each entry also carries `context` (the check name), `target_url`, and `description`.
+- The per-status `target_url` field name is authored from the Gitea `CommitStatus` swagger and was absent from the lab data, and whether this route paginates for a many-status commit is unverified; both are deferred to the env-gated integration tests (issue #660).
+
+### Label event timeline
+
+```
+GET /repos/{owner}/{repo}/issues/{index}/timeline
+```
+
+- Pull requests share the issue timeline route (a PR at index 6 is served at `/issues/6/timeline`). The route returns a JSON array of typed entries; verified types include `label`, `comment`, `add_dependency`, and `pull_push`.
+- A `label` entry carries `type`, a numeric `id`, `body`, `label.name`, `user.login`, and `created_at`. `body` is `"1"` for a label add and `""` for a label remove (verified live on lab issue #4, which round-trips both). The label name keeps Gitea's original casing (for example `Bug`, `REVIEW`) and is lowercased on normalization.
+- Entries arrive oldest-first (verified), so the accumulated slice needs no re-sort. The numeric timeline id is zero-padded to a fixed width so `(timestamp, id)` string ordering matches journal order for entries sharing a timestamp.
+
+### Bot classification
+
+Gitea users carry no `type: Bot` marker (verified: the review `user` object has no bot-type field), so the platform half of the bot-author predicate is always false. `FetchBotReviewComments` classifies solely by a case-insensitive match against the configured bot-username allowlist; a nil or empty allowlist selects nothing. `FetchPendingReviews` passes no allowlist, so its non-bot filter cannot exclude a bot-authored `REQUEST_CHANGES` review, unlike the GitHub adapter's platform-marker exclusion.
+
+### SCM read pagination
+
+The reviews, review-comments, and timeline routes paginate by page number, not by the `Link` header the tracker issue routes use. The timeline route was verified live to emit no `Link` header and an unreliable `X-Total-Count` (it returns the page size, not the grand total), so `httpkit.NewLinkPaginator` MUST NOT drive these reads: it stops at the first response with no `Link` header, which would truncate a multi-page timeline to page one. A package-local page-number paginator with a max-page guard drives all three reads. Because the timeline is oldest-first and read forward to the cap, an unusually long timeline truncates its newest entries, where a label command lives; the adapter logs a WARN on reaching the cap.
+
+---
+
+## CI status provider
+
+The package registers a CI status provider under kind `gitea` (`domain.CIStatusProvider`, `internal/domain/ci.go`) alongside the tracker and SCM adapters. It drives the CI-failure reaction, the role the GitHub provider fills for GitHub-backed deployments.
+
+```
+GET /repos/{owner}/{repo}/commits/{ref}/status
+```
+
+- `FetchCIStatus(ref)` reads the combined commit status directly by ref, with no PR fetch or SHA resolution, and normalizes it to a `CIResult`.
+- Each per-status entry becomes a `CheckRun`: `context` is the check name, `status` maps to the run status and conclusion (`success` to success, `failure` and `error` to failure, `warning` to neutral, everything else to pending), and `target_url` is the details URL.
+- The aggregate is computed from the per-status entries, never the top-level `state` (the same spurious-`pending`-on-empty trap as the SCM read). An empty status set yields a pending result with an empty, non-nil check-run slice.
+- The failing-status log excerpt is assembled from the first failing entry's `description` and `target_url`, both already in the authenticated combined-status response. The provider never fetches `target_url`, so an operator-configured or third-party run URL cannot expand the request beyond the Gitea API. ANSI escape sequences are stripped and the excerpt is truncated to `max_log_lines`; a zero budget, or a failing entry with neither field, omits the excerpt.
+- The `target_url` field name and the route's pagination behavior carry the same deferred verification (issue #660) as the combined-status SCM read.
+
+---
+
 ## SCM write surface
 
 The tracker adapter package also implements the SCM write methods `MergePR`, `DeleteBranch`, and `RemoveLabel` (`domain.SCMAdapter`, `internal/domain/scm.go`), plus the auto-merge scope preflight `VerifyAutoMergeScopes`. The route facts below were verified live against a local Gitea instance.
@@ -461,18 +560,9 @@ Gitea exposes no scope-introspection surface: there is no `/rate_limit` endpoint
 
 ---
 
-## Out of scope: remaining pull request reaction surface
+## Out of scope: webhooks
 
-The SCM write surface above (merge, branch delete, label removal) and the auto-merge scope preflight are implemented. The remaining PR-reaction surface below, review decisions, mergeability, CI status, bot-review filtering, and label-command event detection, has no adapter implementation; the gap map records what that surface would build on. Route facts come from the 1.27.0 swagger; none were exercised beyond the notes given.
-
-| SCM surface (GitHub adapter today) | Gitea 1.27 equivalent | Gap notes |
-| --- | --- | --- |
-| `GetReviewDecision` via GraphQL `reviewDecision` | No GraphQL API. `GET /repos/{owner}/{repo}/pulls/{index}/reviews` returns per-review states (`APPROVED`, `PENDING`, `COMMENT`, `REQUEST_CHANGES`, `REQUEST_REVIEW`) | No aggregate decision field anywhere; the adapter must fold the review list (and branch-protection approval requirements) into a decision itself |
-| `GetMergeability` via `mergeable_state` string taxonomy | PR object carries boolean `mergeable`, plus `merged`, `draft`, `head.sha` (verified live) | Boolean collapses GitHub's `clean`/`behind`/`blocked`/`dirty`/`unstable` distinctions; mapping to `MergeabilityState` is lossy and needs supplementary signals |
-| `GetCIStatus` via combined status plus check runs | `GET /repos/{owner}/{repo}/commits/{ref}/status` (combined) and `.../statuses/{sha}`; Gitea Actions reports through commit statuses | No check-runs API; single-source aggregation |
-| `FetchPendingReviews`, `FetchBotReviewComments` | `GET .../pulls/{index}/reviews` and review-comment routes | Gitea users carry no `type: Bot` marker; bot classification needs an allowlist rather than a platform predicate |
-| `ListLabelEvents` via issue events API | No events route; `GET .../issues/{index}/timeline` returns typed entries (verified types include `label`, `comment`, `add_dependency`) with `since`/`before` and paging | Label-command detection would re-derive the journal from timeline entries |
-| Webhooks (future push-based reactivity) | `POST /repos/{owner}/{repo}/hooks`, standard Gitea webhooks | Aligns with the webhook-ingress future extension |
+Webhooks are the only PR-reaction surface with no adapter implementation. Gitea serves standard webhooks at `POST /repos/{owner}/{repo}/hooks`; wiring them aligns with the webhook-ingress future extension rather than the poll-based reads above. These route facts come from the 1.27.0 swagger and were not exercised.
 
 ---
 
