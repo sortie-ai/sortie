@@ -2,6 +2,7 @@ package gitea
 
 import (
 	"errors"
+	"strings"
 
 	"github.com/sortie-ai/sortie/internal/domain"
 )
@@ -33,6 +34,17 @@ func giteaToSCMError(err error) *domain.SCMError {
 	scmKind, ok := kindMap[te.Kind]
 	if !ok {
 		scmKind = domain.ErrSCMAPI
+	}
+
+	// The merge endpoint signals a duplicate merge with 405 and a stale
+	// precondition with 409; the classifier records both as ErrTrackerAPI with a
+	// stable "method not allowed" or "conflict" substring. Promote those to
+	// ErrSCMConflict so the merge path can disambiguate them.
+	if scmKind == domain.ErrSCMAPI {
+		lower := strings.ToLower(te.Message)
+		if strings.Contains(lower, "method not allowed") || strings.Contains(lower, ": conflict:") {
+			scmKind = domain.ErrSCMConflict
+		}
 	}
 
 	return &domain.SCMError{

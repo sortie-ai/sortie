@@ -90,6 +90,8 @@ func TestClassifyHTTPError(t *testing.T) {
 		{"401 unauthorized", http.StatusUnauthorized, "error_401.json", nil, domain.ErrTrackerAuth},
 		{"403 forbidden", http.StatusForbidden, "error_403.json", nil, domain.ErrTrackerAuth},
 		{"404 not found", http.StatusNotFound, "error_404.json", nil, domain.ErrTrackerNotFound},
+		{"405 method not allowed", http.StatusMethodNotAllowed, "merge_already_merged_405.json", nil, domain.ErrTrackerAPI},
+		{"409 conflict", http.StatusConflict, "merge_stale_conflict_409.json", nil, domain.ErrTrackerAPI},
 		{"412 precondition failed", http.StatusPreconditionFailed, "error_412.json", nil, domain.ErrTrackerPayload},
 		{"422 unprocessable entity", http.StatusUnprocessableEntity, "error_422.json", nil, domain.ErrTrackerPayload},
 		{"423 locked", http.StatusLocked, "error_423.json", nil, domain.ErrTrackerAPI},
@@ -162,6 +164,52 @@ func TestClassifyHTTPError(t *testing.T) {
 		}
 		if !strings.Contains(te.Message, "token does not have at least one of required scope(s)") {
 			t.Errorf("TrackerError.Message = %q, want it to contain the gitea error body message", te.Message)
+		}
+	})
+
+	t.Run("405 message names method not allowed for the merge conflict promotion", func(t *testing.T) {
+		t.Parallel()
+
+		resp := &http.Response{
+			StatusCode: http.StatusMethodNotAllowed,
+			Header:     make(http.Header),
+			Body:       io.NopCloser(bytes.NewReader(loadFixture(t, "merge_already_merged_405.json"))),
+		}
+		defer resp.Body.Close() //nolint:errcheck // NopCloser.Close always returns nil
+
+		err := classifyHTTPError(resp, http.MethodPost, "/repos/acme/widgets/pulls/6/merge")
+		var te *domain.TrackerError
+		if !errors.As(err, &te) {
+			t.Fatalf("error type = %T, want *domain.TrackerError", err)
+		}
+		if te.Kind != domain.ErrTrackerAPI {
+			t.Errorf("TrackerError.Kind = %q, want %q (405 must stay API-class for the tracker path)", te.Kind, domain.ErrTrackerAPI)
+		}
+		if !strings.Contains(strings.ToLower(te.Message), "method not allowed") {
+			t.Errorf("TrackerError.Message = %q, want it to contain %q", te.Message, "method not allowed")
+		}
+	})
+
+	t.Run("409 message names conflict for the merge conflict promotion", func(t *testing.T) {
+		t.Parallel()
+
+		resp := &http.Response{
+			StatusCode: http.StatusConflict,
+			Header:     make(http.Header),
+			Body:       io.NopCloser(bytes.NewReader(loadFixture(t, "merge_stale_conflict_409.json"))),
+		}
+		defer resp.Body.Close() //nolint:errcheck // NopCloser.Close always returns nil
+
+		err := classifyHTTPError(resp, http.MethodPost, "/repos/acme/widgets/pulls/6/merge")
+		var te *domain.TrackerError
+		if !errors.As(err, &te) {
+			t.Fatalf("error type = %T, want *domain.TrackerError", err)
+		}
+		if te.Kind != domain.ErrTrackerAPI {
+			t.Errorf("TrackerError.Kind = %q, want %q (409 must stay API-class for the tracker path)", te.Kind, domain.ErrTrackerAPI)
+		}
+		if !strings.Contains(strings.ToLower(te.Message), ": conflict:") {
+			t.Errorf("TrackerError.Message = %q, want it to contain %q", te.Message, ": conflict:")
 		}
 	})
 }

@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Gitea SCM provider: Sortie's pull-request automation now runs against a
+  self-hosted Gitea instance (Forgejo and Codeberg included), at parity with
+  the GitHub SCM provider. Set `provider: gitea` on a `reactions.auto_merge`,
+  `reactions.review_comments`, `reactions.bot_review`,
+  `reactions.merge_conflicts`, or `reactions.label_commands` block to drive it
+  through Gitea: Sortie routes human and bot review comments back into the
+  agent session, reacts to merge conflicts and to the `sortie:review` /
+  `sortie:fix` label commands, and, with `reactions.auto_merge`, merges an
+  approved pull request once its review decision, CI status, and mergeability
+  satisfy the configured preconditions (sending the expected head SHA so a
+  moved head aborts the merge rather than merging stale work) and deletes the
+  merged branch. Auto-merge on Gitea requires the configured token's user to
+  hold repository write access; a token that cannot push is reported at
+  startup.
+  ([#656](https://github.com/sortie-ai/sortie/issues/656),
+  [#658](https://github.com/sortie-ai/sortie/issues/658))
+
 ## [1.15.0] - 2026-07-16
 
 ### Added

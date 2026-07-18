@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -148,5 +149,103 @@ func TestGiteaSCMListLabelEvents(t *testing.T) {
 		adapter := mustSCMAdapter(t, srv.URL)
 		_, err := adapter.ListLabelEvents(context.Background(), 6, testOwner, testRepo)
 		assertSCMErrorKind(t, err, domain.ErrSCMPayload)
+	})
+}
+
+// --- RemoveLabel ---
+
+func TestGiteaSCMRemoveLabel(t *testing.T) {
+	t.Parallel()
+
+	t.Run("resolves the target label case-insensitively and deletes by its numeric id", func(t *testing.T) {
+		t.Parallel()
+
+		labelsFixture := loadFixture(t, "issue_labels_bug.json")
+		var deleteCalls atomic.Int32
+		var gotDeletePath string
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch {
+			case r.Method == http.MethodDelete:
+				deleteCalls.Add(1)
+				gotDeletePath = r.URL.Path
+				w.WriteHeader(http.StatusNoContent)
+			case strings.HasSuffix(r.URL.Path, "/labels"):
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write(labelsFixture)
+			default:
+				t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+				w.WriteHeader(http.StatusNotFound)
+			}
+		}))
+		defer srv.Close()
+
+		adapter := mustSCMAdapter(t, srv.URL)
+		if err := adapter.RemoveLabel(context.Background(), 6, testOwner, testRepo, "BUG"); err != nil {
+			t.Fatalf("RemoveLabel: unexpected error: %v", err)
+		}
+
+		if n := deleteCalls.Load(); n != 1 {
+			t.Fatalf("delete calls = %d, want 1", n)
+		}
+		wantPath := "/api/v1/repos/" + testOwner + "/" + testRepo + "/issues/6/labels/9"
+		if gotDeletePath != wantPath {
+			t.Errorf("delete path = %q, want %q (resolved numeric id, never a name)", gotDeletePath, wantPath)
+		}
+	})
+
+	t.Run("a label absent from the PR is a no-op with no delete issued", func(t *testing.T) {
+		t.Parallel()
+
+		labelsFixture := loadFixture(t, "issue_labels_no_bug.json")
+		var deleteCalls atomic.Int32
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch {
+			case r.Method == http.MethodDelete:
+				deleteCalls.Add(1)
+				w.WriteHeader(http.StatusNoContent)
+			case strings.HasSuffix(r.URL.Path, "/labels"):
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write(labelsFixture)
+			default:
+				t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+				w.WriteHeader(http.StatusNotFound)
+			}
+		}))
+		defer srv.Close()
+
+		adapter := mustSCMAdapter(t, srv.URL)
+		if err := adapter.RemoveLabel(context.Background(), 6, testOwner, testRepo, "bug"); err != nil {
+			t.Fatalf("RemoveLabel: unexpected error: %v", err)
+		}
+
+		if n := deleteCalls.Load(); n != 0 {
+			t.Errorf("delete calls = %d, want 0 (an unresolved label name must issue no delete)", n)
+		}
+	})
+
+	t.Run("a delete that races an external removal (404) is mapped to nil", func(t *testing.T) {
+		t.Parallel()
+
+		labelsFixture := loadFixture(t, "issue_labels_bug.json")
+		errorBody := loadFixture(t, "error_404.json")
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch {
+			case r.Method == http.MethodDelete:
+				w.WriteHeader(http.StatusNotFound)
+				_, _ = w.Write(errorBody)
+			case strings.HasSuffix(r.URL.Path, "/labels"):
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write(labelsFixture)
+			default:
+				t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+				w.WriteHeader(http.StatusNotFound)
+			}
+		}))
+		defer srv.Close()
+
+		adapter := mustSCMAdapter(t, srv.URL)
+		if err := adapter.RemoveLabel(context.Background(), 6, testOwner, testRepo, "bug"); err != nil {
+			t.Errorf("RemoveLabel: got error %v, want nil (a raced 404 on delete must map to nil)", err)
+		}
 	})
 }

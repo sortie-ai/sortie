@@ -4,8 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"go/parser"
+	"go/token"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -233,43 +237,6 @@ func TestGiteaSCMRegistration(t *testing.T) {
 	}
 }
 
-// --- Write-path compile stubs ---
-
-func TestGiteaSCMWriteStubs(t *testing.T) {
-	t.Parallel()
-
-	var requests atomic.Int32
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		requests.Add(1)
-		w.WriteHeader(http.StatusInternalServerError)
-	}))
-	defer srv.Close()
-
-	adapter := mustSCMAdapter(t, srv.URL)
-
-	t.Run("MergePR", func(t *testing.T) {
-		result, err := adapter.MergePR(context.Background(), 1, testOwner, testRepo, domain.StrategySquash, "", "", "")
-		assertSCMErrorKind(t, err, domain.ErrSCMAPI)
-		if result != (domain.MergeResult{}) {
-			t.Errorf("MergePR(...) result = %+v, want the zero value", result)
-		}
-	})
-
-	t.Run("DeleteBranch", func(t *testing.T) {
-		err := adapter.DeleteBranch(context.Background(), testOwner, testRepo, "feature/done")
-		assertSCMErrorKind(t, err, domain.ErrSCMAPI)
-	})
-
-	t.Run("RemoveLabel", func(t *testing.T) {
-		err := adapter.RemoveLabel(context.Background(), 1, testOwner, testRepo, "sortie:review")
-		assertSCMErrorKind(t, err, domain.ErrSCMAPI)
-	})
-
-	if n := requests.Load(); n != 0 {
-		t.Errorf("requests received by the trap server = %d, want 0 (write stubs must issue no network request)", n)
-	}
-}
-
 // --- giteaToSCMError ---
 
 func TestGiteaToSCMError(t *testing.T) {
@@ -319,6 +286,21 @@ func TestGiteaToSCMError(t *testing.T) {
 			name:     "a non-tracker error wraps as a transport error",
 			input:    errors.New("dial tcp: connection refused"),
 			wantKind: domain.ErrSCMTransport,
+		},
+		{
+			name:     "405 method not allowed promotes to a conflict error",
+			input:    &domain.TrackerError{Kind: domain.ErrTrackerAPI, Message: "POST /repos/acme/widgets/pulls/6/merge: method not allowed: The PR is already merged"},
+			wantKind: domain.ErrSCMConflict,
+		},
+		{
+			name:     "409 conflict promotes to a conflict error",
+			input:    &domain.TrackerError{Kind: domain.ErrTrackerAPI, Message: "POST /repos/acme/widgets/pulls/6/merge: conflict: head out of date"},
+			wantKind: domain.ErrSCMConflict,
+		},
+		{
+			name:     "the word conflict alone, without the formatted marker, does not promote",
+			input:    &domain.TrackerError{Kind: domain.ErrTrackerAPI, Message: "GET /repos/acme/widgets: there was a conflict in the request"},
+			wantKind: domain.ErrSCMAPI,
 		},
 	}
 
@@ -457,6 +439,80 @@ func TestGiteaPaginatePages(t *testing.T) {
 		}
 		if n := requestCount.Load(); n != 0 {
 			t.Errorf("request count = %d, want 0 (a canceled context must be checked before the first request)", n)
+		}
+	})
+}
+
+// --- Write-path transport and import boundary ---
+
+func TestGiteaSCMWriteBoundary(t *testing.T) {
+	t.Parallel()
+
+	t.Run("a captured write request carries the token header and the api/v1 path prefix", func(t *testing.T) {
+		t.Parallel()
+
+		var gotAuth, gotPath string
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			gotAuth = r.Header.Get("Authorization")
+			gotPath = r.URL.Path
+			w.WriteHeader(http.StatusNoContent)
+		}))
+		defer srv.Close()
+
+		adapter := mustSCMAdapter(t, srv.URL)
+		if err := adapter.DeleteBranch(context.Background(), testOwner, testRepo, "feature/done"); err != nil {
+			t.Fatalf("DeleteBranch: unexpected error: %v", err)
+		}
+
+		if gotAuth != "token test-token" {
+			t.Errorf("Authorization = %q, want %q", gotAuth, "token test-token")
+		}
+		if !strings.HasPrefix(gotPath, "/api/v1/") {
+			t.Errorf("request path = %q, want it to start with %q", gotPath, "/api/v1/")
+		}
+	})
+
+	t.Run("package imports no sibling adapter, no orchestrator, and no gitea sdk", func(t *testing.T) {
+		t.Parallel()
+
+		entries, err := os.ReadDir(".")
+		if err != nil {
+			t.Fatalf("ReadDir(.): %v", err)
+		}
+
+		banned := []string{
+			"github.com/sortie-ai/sortie/internal/scm/github",
+			"github.com/sortie-ai/sortie/internal/orchestrator",
+			"github.com/sortie-ai/sortie/internal/tracker/",
+			"code.gitea.io/sdk",
+		}
+
+		fset := token.NewFileSet()
+		checked := 0
+		for _, entry := range entries {
+			name := entry.Name()
+			if entry.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
+				continue
+			}
+			checked++
+
+			f, parseErr := parser.ParseFile(fset, name, nil, parser.ImportsOnly)
+			if parseErr != nil {
+				t.Fatalf("ParseFile(%s): %v", name, parseErr)
+			}
+
+			for _, imp := range f.Imports {
+				importPath := strings.Trim(imp.Path.Value, `"`)
+				for _, forbidden := range banned {
+					if strings.Contains(importPath, forbidden) {
+						t.Errorf("%s imports %q, want no import matching %q", name, importPath, forbidden)
+					}
+				}
+			}
+		}
+
+		if checked == 0 {
+			t.Fatal("no production .go files were checked, want at least one")
 		}
 	})
 }

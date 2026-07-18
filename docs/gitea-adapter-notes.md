@@ -1,6 +1,6 @@
 # Gitea REST API: Adapter research notes
 
-> Gitea REST API v1, researched July 2026 and pinned to **Gitea 1.27.0**. Route surface taken from the instance's own OpenAPI description (`GET /swagger.v1.json`), cross-checked against docs.gitea.com, then **verified live** against a local Gitea 1.27.0 instance on 2026-07-14. Forgejo compatibility checked against Codeberg's published swagger and version endpoint on the same date. Reference for implementing the Gitea `TrackerAdapter`.
+> Gitea REST API v1, researched July 2026 and pinned to **Gitea 1.27.0**. Route surface taken from the instance's own OpenAPI description (`GET /swagger.v1.json`), cross-checked against docs.gitea.com, then **verified live** against a local Gitea 1.27.0 instance on 2026-07-14. Forgejo compatibility checked against Codeberg's published swagger and version endpoint on the same date. Reference for implementing the Gitea `TrackerAdapter` and `SCMAdapter`. The [SCM write surface](#scm-write-surface) covers merge, branch delete, label removal, and the auto-merge preflight.
 >
 > Gitea is self-hosted: there is no fixed default host, so the instance base URL is part of every configuration, and instances differ in version and settings. Facts below hold for 1.27.0 defaults unless marked otherwise. Gitea exposes no GraphQL API; the REST surface under `/api/v1` is the whole contract.
 
@@ -28,7 +28,7 @@ Every route and behavior the GitHub tracker adapter (`internal/scm/github`, `tra
 | `GET /search/issues` (used for `query_filter` candidates and for terminal states in `FetchIssuesByStates`) | Route absent; Gitea's search lives at `/repos/issues/search` with different, non-qualifier parameters (verified 404) | `query_filter` breaks; startup terminal cleanup degrades to a permanent warning |
 | `GET .../issues/{n}/dependencies/blocked_by` | Route absent (verified 404); Gitea serves the same data at `.../issues/{index}/dependencies` | Adapter swallows the 404 and returns no blockers: **silent loss of `blocked_by`**, so blocked issues dispatch anyway |
 | `GET .../issues/{n}/parent` | Route absent; Gitea has no parent concept | 404 tolerated, parent is nil; harmless |
-| `DELETE .../issues/{n}/labels/{name}` in `TransitionIssue` | Route parameter is a numeric label id; a name parses to 0 and returns 404 `label does not exist [label_id: 0, ...]` (verified) | Adapter tolerates the 404, so the old state label is **never removed: state labels accumulate and state reads silently corrupt** |
+| `DELETE .../issues/{n}/labels/{name}` in `TransitionIssue` | Route parameter is a numeric label id; a name parses to 0 and returns 404 `label does not exist [label_id: 0, ...]` (422 on Gitea 1.26.x and earlier) | Adapter tolerates the 404, so the old state label is **never removed: state labels accumulate and state reads silently corrupt** |
 | `POST .../issues/{n}/labels {"labels": ["name"]}` | Accepted, additive; but an unknown label name is **silently ignored** with HTTP 200 (verified) | A transition to a not-yet-created state label no-ops without any error |
 | `PATCH .../issues/{n} {"state": ..., "state_reason": ...}` | `state` honored; unknown `state_reason` field tolerated and ignored (verified) | Close and reopen work |
 | `GET .../issues/{n}/comments?per_page=50` | Route exists; ignores paging parameters and returns the full comment list in one response (verified with 60 comments) | Complete results by accident: the paginator sees no `Link` header and stops after one page |
@@ -140,7 +140,7 @@ Gitea issues natively carry only `open` and `closed` (query enum adds `all`). Th
 
 Three verified Gitea behaviors force different label plumbing:
 
-1. **Label removal is by numeric id.** `DELETE /repos/{owner}/{repo}/issues/{index}/labels/{id}` accepts only a label id; a name in that position returns 404 with `label does not exist [label_id: 0, ...]`. The adapter resolves names to ids up front.
+1. **Label removal is by numeric id.** `DELETE /repos/{owner}/{repo}/issues/{index}/labels/{id}` accepts only a label id; a name in that position returns 404 with `label does not exist [label_id: 0, ...]` (422 on Gitea 1.26.x and earlier). The adapter resolves names to ids up front, so neither status is reached.
 2. **Unknown label names are silently ignored on attach.** `POST .../issues/{index}/labels {"labels": ["no-such-label"]}` returns HTTP 200 and attaches nothing (verified). Gitea never auto-creates labels from this route and never errors. Any flow that trusts the server to reject a bad label name will no-op invisibly, so the adapter MUST resolve every label name itself before attaching, and MUST attach by id.
 3. **Server-side label filtering is hostile to configuration typos.** See Server-side filtering: an unresolvable name in the `labels` query parameter silently disables the filter instead of returning an empty result.
 
@@ -408,17 +408,68 @@ Sketch, verified end-to-end by this research's provisioning sequence:
 
 ---
 
-## Out of scope: pull request reaction surface
+## SCM write surface
 
-The milestone covers the tracker adapter only. The long-term plan is full GitHub parity for Gitea (SCM reads and writes, CI feedback, auto-merge, label commands), so the gap map below records what the PR-reaction epic would build on. Route facts come from the 1.27.0 swagger; none were exercised beyond the notes given. Recorded for future planning only; no implementation in this milestone.
+The tracker adapter package also implements the SCM write methods `MergePR`, `DeleteBranch`, and `RemoveLabel` (`domain.SCMAdapter`, `internal/domain/scm.go`), plus the auto-merge scope preflight `VerifyAutoMergeScopes`. The route facts below were verified live against the `sortie/adapter-lab` project.
+
+### MergePR
+
+```
+POST /repos/{owner}/{repo}/pulls/{index}/merge
+{"Do": "merge", "head_commit_id": "<expected head sha>"}
+```
+
+- Field binding is case-insensitive: Gitea accepts `"Do"` or `"do"`.
+- A successful merge returns HTTP 200 with an **empty body** (`Content-Length: 0`, verified live): no merge-commit SHA comes back on this route.
+- An already-merged PR returns HTTP 405 `{"message":"The PR is already merged"}`. That message already contains the substring "already merged" case-insensitively, the marker the caller's success dispatch looks for.
+- A stale precondition (a `head_commit_id` behind the branch's current head) returns HTTP 409 `{"message":"head out of date"}`.
+- Both 405 and 409 map to `ErrSCMConflict`; only the already-merged case carries the marker text.
+- The commit-title and commit-message fields and Gitea's own `delete_branch_after_merge` and `merge_when_checks_succeed` options are not exercised: Sortie keeps the two-step merge-then-delete flow and gates CI itself before calling this route.
+
+### DeleteBranch
+
+```
+DELETE /repos/{owner}/{repo}/branches/{branch}
+```
+
+- Success is HTTP 204.
+- An already-deleted branch returns HTTP 404 `{"message":"not found","errors":["branch does not exist [...]"]}`.
+- A slash-bearing branch name (for example `feature/x`) percent-encoded as `%2F` returns 204, verified live: the route accepts the encoded slash.
+
+### RemoveLabel
+
+Used by the label-command and label-review reactions to remove the acknowledged command label. Gitea's label-remove route takes a numeric label id, never a name:
+
+```
+GET /repos/{owner}/{repo}/issues/{index}/labels          (resolve name to id)
+DELETE /repos/{owner}/{repo}/issues/{index}/labels/{id}
+```
+
+- A name placed directly in the id position is rejected: HTTP 404 `{"message":"label does not exist [label_id: 0]"}` on Gitea 1.27.0, or 422 with the same message on Gitea 1.26.x and earlier. The adapter resolves the name against the PR's own labels first and never places a name in the id slot, so neither status is reachable in practice.
+- An unresolved label name is a no-op: no `DELETE` is issued and the call returns success.
+- Deleting an already-removed label (a raced 404 on a valid numeric id) is also treated as success.
+
+### Auto-merge scope preflight
+
+Gitea exposes no scope-introspection surface: there is no `/rate_limit` endpoint, no `X-OAuth-Scopes` response header, and a token's own scopes appear only inside the body of a 403 rejection on a write call. `permissions.push` from `GET /repos/{owner}/{repo}` reflects the token owner's **repository role**, not the token's own scope: a read-only token owned by a repository admin still reports `push: true`. Gitea also has one coarse `write:repository` scope covering both `MergePR` and `DeleteBranch`, with no separate contents/pull-request split. So the preflight cannot verify the write scope the way the GitHub adapter verifies fine-grained PAT permissions.
+
+`VerifyAutoMergeScopes` substitutes a layered check instead of scope verification:
+
+1. **Fail-open scope sentinel.** With no scope surface to probe, the preflight reports "unable to verify" and auto-merge proceeds, the same path the GitHub adapter takes for a fine-grained PAT.
+2. **User-role push gate.** When the tracker project is configured, the preflight reads `permissions.push` from the repository and fails startup when it is false: the token's user lacks repository write access. This is a role check, not a scope check: it catches a wrong-owner or read-only-collaborator token, but not a read-scoped token whose user otherwise has write access.
+3. **Runtime scope enrichment.** A 403 on `MergePR` or `DeleteBranch` naming a required scope is rewritten to name `write:repository` explicitly, so the operator learns which scope to grant even though the startup check could not confirm it.
+
+---
+
+## Out of scope: remaining pull request reaction surface
+
+The SCM write surface above (merge, branch delete, label removal) and the auto-merge scope preflight are implemented. The remaining PR-reaction surface below, review decisions, mergeability, CI status, bot-review filtering, and label-command event detection, has no adapter implementation; the gap map records what that surface would build on. Route facts come from the 1.27.0 swagger; none were exercised beyond the notes given.
 
 | SCM surface (GitHub adapter today) | Gitea 1.27 equivalent | Gap notes |
 | --- | --- | --- |
 | `GetReviewDecision` via GraphQL `reviewDecision` | No GraphQL API. `GET /repos/{owner}/{repo}/pulls/{index}/reviews` returns per-review states (`APPROVED`, `PENDING`, `COMMENT`, `REQUEST_CHANGES`, `REQUEST_REVIEW`) | No aggregate decision field anywhere; the adapter must fold the review list (and branch-protection approval requirements) into a decision itself |
 | `GetMergeability` via `mergeable_state` string taxonomy | PR object carries boolean `mergeable`, plus `merged`, `draft`, `head.sha` (verified live) | Boolean collapses GitHub's `clean`/`behind`/`blocked`/`dirty`/`unstable` distinctions; mapping to `MergeabilityState` is lossy and needs supplementary signals |
 | `GetCIStatus` via combined status plus check runs | `GET /repos/{owner}/{repo}/commits/{ref}/status` (combined) and `.../statuses/{sha}`; Gitea Actions reports through commit statuses | No check-runs API; single-source aggregation |
-| `MergePR` via `PUT .../pulls/{n}/merge` | `POST /repos/{owner}/{repo}/pulls/{index}/merge` with `MergePullRequestOption`: `do` in `merge`, `rebase`, `rebase-merge`, `squash`, `fast-forward-only`, `manually-merged`; `head_commit_id` as the SHA precondition; `delete_branch_after_merge`; `merge_when_checks_succeed`. Responses 200, 403, 404, 405, 409, 423 | Method is POST, not PUT; option names differ; `delete_branch_after_merge` could collapse the two-step merge-then-delete flow |
-| `DeleteBranch` via `DELETE .../git/refs/heads/{branch}` | `DELETE /repos/{owner}/{repo}/branches/{branch}` (responses 204, 403, 404, 423) | Different route shape |
 | `FetchPendingReviews`, `FetchBotReviewComments` | `GET .../pulls/{index}/reviews` and review-comment routes | Gitea users carry no `type: Bot` marker; bot classification needs an allowlist rather than a platform predicate |
 | `ListLabelEvents` via issue events API | No events route; `GET .../issues/{index}/timeline` returns typed entries (verified types include `label`, `comment`, `add_dependency`) with `since`/`before` and paging | Label-command detection would re-derive the journal from timeline entries |
 | Webhooks (future push-based reactivity) | `POST /repos/{owner}/{repo}/hooks`, standard Gitea webhooks | Aligns with the webhook-ingress future extension |
