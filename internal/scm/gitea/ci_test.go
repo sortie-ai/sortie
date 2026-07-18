@@ -446,6 +446,12 @@ func TestGiteaTruncateLines(t *testing.T) {
 			maxLines: 1,
 			want:     "https://ci.example.invalid/builds/10",
 		},
+		{
+			name:     "CRLF line endings have their trailing carriage return trimmed",
+			input:    "a\r\nb\r\nc",
+			maxLines: 5,
+			want:     "a\nb\nc",
+		},
 	}
 
 	for _, tt := range tests {

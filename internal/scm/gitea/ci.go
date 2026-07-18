@@ -252,6 +252,9 @@ func truncateLines(raw string, maxLines int) string {
 	}
 
 	lines := strings.Split(raw, "\n")
+	for i, line := range lines {
+		lines[i] = strings.TrimRight(line, "\r")
+	}
 	if len(lines) > maxLines {
 		lines = lines[len(lines)-maxLines:]
 	}
