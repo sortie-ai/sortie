@@ -264,7 +264,7 @@ func activationChecks(cfg config.ServiceConfig) []validateDiag {
 		diags = append(diags, validateDiag{
 			Severity: "error",
 			Check:    "scm_adapter",
-			Message:  fmt.Sprintf("SCM adapter kind %q named by active reactions is not registered", providers[0]),
+			Message:  fmt.Sprintf("no registered SCM adapter for kind %q named by active reactions", providers[0]),
 		})
 	}
 
@@ -272,7 +272,7 @@ func activationChecks(cfg config.ServiceConfig) []validateDiag {
 		diags = append(diags, validateDiag{
 			Severity: "error",
 			Check:    "ci_provider",
-			Message:  fmt.Sprintf("CI provider kind %q is not registered", cfg.CIFeedback.Kind),
+			Message:  fmt.Sprintf("no registered CI provider for kind %q", cfg.CIFeedback.Kind),
 		})
 	}
 
