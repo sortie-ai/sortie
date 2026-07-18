@@ -410,7 +410,7 @@ Sketch, verified end-to-end by this research's provisioning sequence:
 
 ## SCM read surface
 
-The tracker adapter package also implements the SCM read methods `GetReviewDecision`, `GetMergeability`, `GetCIStatus`, `FetchPendingReviews`, `FetchBotReviewComments`, and `ListLabelEvents` (`domain.SCMAdapter`, `internal/domain/scm.go`). Gitea exposes no GraphQL API and no aggregate review-decision or check-runs endpoint, so each read is composed from REST routes under `/api/v1`. Every route below was reached live against the localhost Gitea 1.27.0 lab instance and returned HTTP 200; where the lab PR carried no data to populate a response, the object shape is schema-inferred from the instance OpenAPI description and marked for reconciliation against a captured live fixture in the env-gated integration tests (#660).
+The tracker adapter package also implements the SCM read methods `GetReviewDecision`, `GetMergeability`, `GetCIStatus`, `FetchPendingReviews`, `FetchBotReviewComments`, and `ListLabelEvents` (`domain.SCMAdapter`, `internal/domain/scm.go`). Gitea exposes no GraphQL API and no aggregate review-decision or check-runs endpoint, so each read is composed from REST routes under `/api/v1`. Every route below was reached live against the localhost Gitea 1.27.0 lab instance and returned HTTP 200; where the lab PR carried no data to populate a response, the object shape is schema-inferred from the instance OpenAPI description and marked for reconciliation against a captured live fixture in the env-gated integration tests (issue #660).
 
 | Method | Gitea route(s) |
 | --- | --- |
@@ -431,7 +431,7 @@ GET /repos/{owner}/{repo}/pulls/{index}/reviews
 - Each review carries `dismissed` (an operator nullified the review), `official`, `stale`, `body`, `submitted_at`, `user.login`, and `id`. Dismissed reviews are skipped by every read.
 - `FetchPendingReviews` returns the comments of non-bot `REQUEST_CHANGES` reviews; `FetchBotReviewComments` returns the comments of reviews whose author matches a bot-username allowlist, with no review-state filter. Gitea users carry no `type: Bot` marker, so bot classification is the allowlist alone (see [Bot classification](#bot-classification)).
 - Paginated by page number, not the `Link` header (see [SCM read pagination](#scm-read-pagination)).
-- The route was reached live (HTTP 200); the lab PR carried zero reviews, so the populated `PullReview` object shape is schema-inferred and MUST be reconciled against a captured live review-list fixture (#660).
+- The route was reached live (HTTP 200); the lab PR carried zero reviews, so the populated `PullReview` object shape is schema-inferred and MUST be reconciled against a captured live review-list fixture (issue #660).
 
 ### Review comments
 
@@ -441,7 +441,7 @@ GET /repos/{owner}/{repo}/pulls/{index}/reviews/{id}/comments
 
 - Each comment carries `path`, `body`, `position`, `original_position`, `created_at`, `id`, and `user.login`. There is no `line`, `start_line`, or `end_line` field, so review comments are single-line and `EndLine` normalizes to 0.
 - `position` is the line on the current diff; `position: 0` marks a comment whose anchor a later push removed, in which case `original_position` holds the line it was written against and the comment normalizes with `Outdated` true.
-- The route is present in the instance OpenAPI; the lab PR carried no review comments, so the `position`/`original_position` semantics and the outdated derivation are schema-inferred and MUST be reconciled against a captured live review-comment fixture (#660).
+- The route is present in the instance OpenAPI; the lab PR carried no review comments, so the `position`/`original_position` semantics and the outdated derivation are schema-inferred and MUST be reconciled against a captured live review-comment fixture (issue #660).
 
 ### Review decision
 
@@ -469,7 +469,7 @@ GET /repos/{owner}/{repo}/commits/{sha}/status
 - Returns `{state, sha, statuses, total_count}`. The top-level `state` is the aggregate; each entry in the `statuses` array carries its own `status`. The two field names differ and MUST NOT be conflated.
 - Empty detection keys on `total_count == 0`: a commit with no CI returns `total_count: 0`, `statuses: null`, and a spurious top-level `state: "pending"` (verified). Trusting the top-level `state` would report `pending` for a no-CI commit and wrongly hold auto-merge, so the aggregate is read from the per-status entries instead.
 - Per-status `status` values are `success`, `failure`, `error`, `warning`, and `pending`. `failure` and `error` are failing; `warning` and `success` are non-failing; `pending` is pending. Each entry also carries `context` (the check name), `target_url`, and `description`.
-- The per-status `target_url` field name is authored from the Gitea `CommitStatus` swagger and was absent from the lab data, and whether this route paginates for a many-status commit is unverified; both are deferred to the env-gated integration tests (#660).
+- The per-status `target_url` field name is authored from the Gitea `CommitStatus` swagger and was absent from the lab data, and whether this route paginates for a many-status commit is unverified; both are deferred to the env-gated integration tests (issue #660).
 
 ### Label event timeline
 
@@ -503,7 +503,7 @@ GET /repos/{owner}/{repo}/commits/{ref}/status
 - Each per-status entry becomes a `CheckRun`: `context` is the check name, `status` maps to the run status and conclusion (`success` to success, `failure` and `error` to failure, `warning` to neutral, everything else to pending), and `target_url` is the details URL.
 - The aggregate is computed from the per-status entries, never the top-level `state` (the same spurious-`pending`-on-empty trap as the SCM read). An empty status set yields a pending result with an empty, non-nil check-run slice.
 - The failing-status log excerpt is assembled from the first failing entry's `description` and `target_url`, both already in the authenticated combined-status response. The provider never fetches `target_url`, so an operator-configured or third-party run URL cannot expand the request beyond the Gitea API. ANSI escape sequences are stripped and the excerpt is truncated to `max_log_lines`; a zero budget, or a failing entry with neither field, omits the excerpt.
-- The `target_url` field name and the route's pagination behavior carry the same deferred verification (#660) as the combined-status SCM read.
+- The `target_url` field name and the route's pagination behavior carry the same deferred verification (issue #660) as the combined-status SCM read.
 
 ---
 

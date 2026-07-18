@@ -739,7 +739,7 @@ pass-through block ([Section 4.5](#45-adapter-specific-pass-through-config)); wh
 is also `gitea`, any of the three left unset in that block falls back to the matching `tracker:`
 value. A Gitea reaction can therefore pair with a non-Gitea tracker, as long as the `gitea:` block
 supplies the credentials, including the instance `endpoint` Gitea always requires. Every active
-SCM reaction in one workflow names the same provider.
+SCM reaction in one workflow MUST name the same provider.
 
 #### Reaction kind: `ci_failure`
 
