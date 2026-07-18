@@ -734,10 +734,12 @@ Remaining keys within a kind sub-object are kind-specific and collected into an 
 **SCM and CI provider selection.** The reaction `provider` field (and the deprecated
 `ci_feedback.kind`) names a registered SCM adapter or CI provider kind: `github` or `gitea`. The
 reaction kinds are provider-agnostic. Setting `provider: gitea` activates the Gitea adapter for
-that reaction, which inherits the `tracker:` block's `endpoint`, `api_key`, and `project` when
-`tracker.kind` is `gitea`. Gitea has no default host, so a Gitea reaction resolves only when the
-Gitea tracker supplies the instance `endpoint`. Every active SCM reaction in one workflow names the
-same provider.
+that reaction. Its `endpoint`, `api_key`, and `project` come from the top-level `gitea:`
+pass-through block ([Section 4.5](#45-adapter-specific-pass-through-config)); when `tracker.kind`
+is also `gitea`, any of the three left unset in that block falls back to the matching `tracker:`
+value. A Gitea reaction can therefore pair with a non-Gitea tracker, as long as the `gitea:` block
+supplies the credentials, including the instance `endpoint` Gitea always requires. Every active
+SCM reaction in one workflow names the same provider.
 
 #### Reaction kind: `ci_failure`
 
