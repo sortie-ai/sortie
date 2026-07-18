@@ -274,6 +274,10 @@ func stripANSI(s string) string {
 // A [*domain.TrackerError] is mapped by its Kind onto the matching CI kind,
 // preserving the chain; any other error becomes [domain.ErrCIAPI].
 func giteaToCIError(err error) error {
+	if err == nil {
+		return nil
+	}
+
 	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return err
 	}

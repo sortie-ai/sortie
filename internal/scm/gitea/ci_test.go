@@ -666,6 +666,16 @@ func TestGiteaToCIError(t *testing.T) {
 	})
 }
 
+func TestGiteaToCIError_NilInput(t *testing.T) {
+	t.Parallel()
+
+	got := giteaToCIError(nil)
+
+	if got != nil {
+		t.Errorf("giteaToCIError(nil) = %v, want nil", got)
+	}
+}
+
 func TestGiteaToCIError_ContextCanceled(t *testing.T) {
 	t.Parallel()
 
