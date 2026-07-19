@@ -47,17 +47,19 @@ func assertCIErrorKind(t *testing.T, err error, want domain.CIErrorKind) {
 }
 
 // buildStatusPage returns the JSON body of a combined-status page carrying n
-// statuses of the given status value, each a distinct context, so a
-// multi-page test can synthesize a full page without committing a
-// fixture of that size. total_count is set to n, matching the wire fact that
-// the per-page count equals the page length rather than the grand total.
-func buildStatusPage(t *testing.T, status string, n int) []byte {
+// statuses of the given status value, with contexts numbered from start, so a
+// multi-page test can synthesize pages whose contexts stay distinct across the
+// whole walk without committing a fixture of that size. Distinct contexts match
+// the route's wire shape, which reports one entry per context. total_count is
+// set to n, matching the wire fact that the per-page count equals the page
+// length rather than the grand total.
+func buildStatusPage(t *testing.T, status string, start, n int) []byte {
 	t.Helper()
 	statuses := make([]map[string]string, n)
 	for i := range n {
 		statuses[i] = map[string]string{
 			"status":  status,
-			"context": fmt.Sprintf("ci/check-%d", i),
+			"context": fmt.Sprintf("ci/check-%d", start+i),
 		}
 	}
 	body, err := json.Marshal(map[string]any{
@@ -405,8 +407,8 @@ func TestGiteaFetchCIStatusPagination(t *testing.T) {
 	t.Run("a failing status on page two flips the aggregate to failing", func(t *testing.T) {
 		t.Parallel()
 
-		page1 := buildStatusPage(t, "success", 50)
-		page2 := buildStatusPage(t, "failure", 1)
+		page1 := buildStatusPage(t, "success", 0, 50)
+		page2 := buildStatusPage(t, "failure", 50, 1)
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
 			w.WriteHeader(http.StatusOK)

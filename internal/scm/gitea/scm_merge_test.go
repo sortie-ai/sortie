@@ -164,8 +164,8 @@ func TestGiteaSCMGetCIStatus(t *testing.T) {
 		t.Parallel()
 
 		prFixture := loadFixture(t, "pr_clean.json")
-		page1 := buildStatusPage(t, "success", 50)
-		page2 := buildStatusPage(t, "failure", 1)
+		page1 := buildStatusPage(t, "success", 0, 50)
+		page2 := buildStatusPage(t, "failure", 50, 1)
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.Header().Set("Content-Type", "application/json")
 			switch {
