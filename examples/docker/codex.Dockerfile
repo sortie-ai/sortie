@@ -35,7 +35,7 @@ RUN set -eux; \
     *) echo "unsupported Codex architecture: ${debian_arch}" >&2; exit 1 ;; \
     esac; \
     curl -fsSL "https://github.com/openai/codex/releases/latest/download/codex-${codex_arch}.tar.gz" \
-    | tar -xz -C /usr/local/bin codex; \
+    | tar -xzO "codex-${codex_arch}" > /usr/local/bin/codex; \
     chmod +x /usr/local/bin/codex
 
 # Create a non-root user.
