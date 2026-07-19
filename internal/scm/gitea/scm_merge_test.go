@@ -218,6 +218,31 @@ func TestGiteaSCMGetCIStatus(t *testing.T) {
 		assertSCMErrorKind(t, err, domain.ErrSCMPayload)
 	})
 
+	t.Run("a combined status transport failure maps to a transport error", func(t *testing.T) {
+		t.Parallel()
+
+		prFixture := loadFixture(t, "pr_clean.json")
+		errFixture := loadFixture(t, "error_401.json")
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			switch {
+			case strings.Contains(r.URL.Path, "/status"):
+				w.WriteHeader(http.StatusInternalServerError)
+				_, _ = w.Write(errFixture)
+			case strings.Contains(r.URL.Path, "/pulls/"):
+				_, _ = w.Write(prFixture)
+			default:
+				t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+				w.WriteHeader(http.StatusNotFound)
+			}
+		}))
+		defer srv.Close()
+
+		adapter := mustSCMAdapter(t, srv.URL)
+		_, err := adapter.GetCIStatus(context.Background(), 6, testOwner, testRepo)
+		assertSCMErrorKind(t, err, domain.ErrSCMTransport)
+	})
+
 	t.Run("a single short page issues exactly one combined status request", func(t *testing.T) {
 		t.Parallel()
 

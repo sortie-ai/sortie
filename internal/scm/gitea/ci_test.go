@@ -761,6 +761,30 @@ func TestGiteaToCIError(t *testing.T) {
 
 		assertCIErrorKind(t, err, domain.ErrCIPayload)
 	})
+
+	t.Run("a cancelled context is returned as-is, not converted to a CIError", func(t *testing.T) {
+		t.Parallel()
+
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"state":"success","total_count":0,"statuses":[]}`))
+		}))
+		defer srv.Close()
+		provider := mustCIProvider(t, srv.URL, 0)
+
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		_, err := provider.FetchCIStatus(ctx, "main")
+
+		if !errors.Is(err, context.Canceled) {
+			t.Errorf("FetchCIStatus(cancelled context) = %v, want context.Canceled in the chain", err)
+		}
+		var ciErr *domain.CIError
+		if errors.As(err, &ciErr) {
+			t.Errorf("FetchCIStatus(cancelled context) = %v, want the context error without CIError conversion", ciErr)
+		}
+	})
 }
 
 func TestGiteaToCIError_NilInput(t *testing.T) {
