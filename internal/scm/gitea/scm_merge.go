@@ -4,7 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/url"
+	"strconv"
 	"strings"
 
 	"github.com/sortie-ai/sortie/internal/domain"
@@ -31,8 +33,8 @@ type giteaPullRequest struct {
 
 // giteaCombinedStatus is the combined commit-status response. Gitea reports a
 // zero total_count with a null statuses array and a spurious "pending" state
-// when a commit has no CI, so the empty case is detected by total_count, not
-// state.
+// when a commit has no CI, so the empty case is detected by the accumulated
+// status count, not total_count or state.
 type giteaCombinedStatus struct {
 	State      string             `json:"state"`
 	TotalCount int                `json:"total_count"`
@@ -111,9 +113,9 @@ func mapMergeability(pr giteaPullRequest) domain.MergeabilityState {
 // of "success", "failing", or "pending", or an empty string when the head
 // commit carries no statuses.
 //
-// The empty case is detected by a zero total_count, not the top-level state,
-// which Gitea reports as "pending" even for a commit with no CI. A failure or
-// error status makes the result failing; otherwise a pending status makes it
+// The empty case is detected by the accumulated status count, not the top-level
+// state, which Gitea reports as "pending" even for a commit with no CI. A failure
+// or error status makes the result failing; otherwise a pending status makes it
 // pending; success and warning are non-failing. Returns a [*domain.SCMError] on
 // failure, including [domain.ErrSCMPayload] when the PR response omits the head
 // SHA.
@@ -131,27 +133,54 @@ func (a *GiteaSCMAdapter) GetCIStatus(ctx context.Context, prNumber int, owner, 
 
 	statusPath := fmt.Sprintf("/repos/%s/%s/commits/%s/status",
 		url.PathEscape(owner), url.PathEscape(repo), url.PathEscape(pr.Head.SHA))
-	body, _, statusErr := a.client.Get(ctx, statusPath, nil)
-	if statusErr != nil {
-		return "", giteaToSCMError(statusErr)
-	}
 
-	var combined giteaCombinedStatus
-	if jsonErr := json.Unmarshal(body, &combined); jsonErr != nil {
-		return "", &domain.SCMError{
-			Kind:    domain.ErrSCMPayload,
-			Message: "failed to parse combined status response",
-			Err:     jsonErr,
+	const limit = 50
+	statuses := make([]giteaCommitState, 0)
+	page := 1
+	for {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return "", giteaToSCMError(ctxErr)
+		}
+
+		params := url.Values{
+			"page":  {strconv.Itoa(page)},
+			"limit": {strconv.Itoa(limit)},
+		}
+		body, _, statusErr := a.client.Get(ctx, statusPath, params)
+		if statusErr != nil {
+			return "", giteaToSCMError(statusErr)
+		}
+
+		var combined giteaCombinedStatus
+		if jsonErr := json.Unmarshal(body, &combined); jsonErr != nil {
+			return "", &domain.SCMError{
+				Kind:    domain.ErrSCMPayload,
+				Message: "failed to parse combined status response",
+				Err:     jsonErr,
+			}
+		}
+
+		statuses = append(statuses, combined.Statuses...)
+		if len(combined.Statuses) < limit {
+			break
+		}
+
+		page++
+		if page > scmMaxPages {
+			slog.WarnContext(ctx, "response truncated at page limit",
+				slog.String("path", statusPath),
+				slog.Int("max_pages", scmMaxPages))
+			break
 		}
 	}
 
-	if combined.TotalCount == 0 {
+	if len(statuses) == 0 {
 		return "", nil
 	}
 
 	anyFailing := false
 	anyPending := false
-	for _, s := range combined.Statuses {
+	for _, s := range statuses {
 		switch strings.ToLower(s.Status) {
 		case "failure", "error":
 			anyFailing = true

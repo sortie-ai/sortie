@@ -159,6 +159,98 @@ func TestGiteaSCMGetCIStatus(t *testing.T) {
 		_, err := adapter.GetCIStatus(context.Background(), 6, testOwner, testRepo)
 		assertSCMErrorKind(t, err, domain.ErrSCMPayload)
 	})
+
+	t.Run("a failing status on page two flips the verdict to failing", func(t *testing.T) {
+		t.Parallel()
+
+		prFixture := loadFixture(t, "pr_clean.json")
+		page1 := buildStatusPage(t, "success", 50)
+		page2 := buildStatusPage(t, "failure", 1)
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			switch {
+			case strings.Contains(r.URL.Path, "/status"):
+				switch r.URL.Query().Get("page") {
+				case "2":
+					_, _ = w.Write(page2)
+				default:
+					_, _ = w.Write(page1)
+				}
+			case strings.Contains(r.URL.Path, "/pulls/"):
+				_, _ = w.Write(prFixture)
+			default:
+				t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+				w.WriteHeader(http.StatusNotFound)
+			}
+		}))
+		defer srv.Close()
+
+		adapter := mustSCMAdapter(t, srv.URL)
+		got, err := adapter.GetCIStatus(context.Background(), 6, testOwner, testRepo)
+		if err != nil {
+			t.Fatalf("GetCIStatus: unexpected error: %v", err)
+		}
+		if got != "failing" {
+			t.Errorf("GetCIStatus() = %q, want %q", got, "failing")
+		}
+	})
+
+	t.Run("a malformed combined status body after a valid PR read is a payload error, not transport", func(t *testing.T) {
+		t.Parallel()
+
+		prFixture := loadFixture(t, "pr_clean.json")
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			switch {
+			case strings.Contains(r.URL.Path, "/status"):
+				_, _ = w.Write([]byte("{not valid json"))
+			case strings.Contains(r.URL.Path, "/pulls/"):
+				_, _ = w.Write(prFixture)
+			default:
+				t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+				w.WriteHeader(http.StatusNotFound)
+			}
+		}))
+		defer srv.Close()
+
+		adapter := mustSCMAdapter(t, srv.URL)
+		_, err := adapter.GetCIStatus(context.Background(), 6, testOwner, testRepo)
+		assertSCMErrorKind(t, err, domain.ErrSCMPayload)
+	})
+
+	t.Run("a single short page issues exactly one combined status request", func(t *testing.T) {
+		t.Parallel()
+
+		prFixture := loadFixture(t, "pr_clean.json")
+		statusFixture := loadFixture(t, "status_all_success.json")
+		var statusRequests atomic.Int32
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			switch {
+			case strings.Contains(r.URL.Path, "/status"):
+				statusRequests.Add(1)
+				_, _ = w.Write(statusFixture)
+			case strings.Contains(r.URL.Path, "/pulls/"):
+				_, _ = w.Write(prFixture)
+			default:
+				t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+				w.WriteHeader(http.StatusNotFound)
+			}
+		}))
+		defer srv.Close()
+
+		adapter := mustSCMAdapter(t, srv.URL)
+		got, err := adapter.GetCIStatus(context.Background(), 6, testOwner, testRepo)
+		if err != nil {
+			t.Fatalf("GetCIStatus: unexpected error: %v", err)
+		}
+		if got != "success" {
+			t.Errorf("GetCIStatus() = %q, want %q", got, "success")
+		}
+		if n := statusRequests.Load(); n != 1 {
+			t.Errorf("combined status request count = %d, want 1", n)
+		}
+	})
 }
 
 // --- MergePR ---

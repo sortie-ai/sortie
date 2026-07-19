@@ -2,6 +2,7 @@ package gitea
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -43,6 +44,31 @@ func assertCIErrorKind(t *testing.T, err error, want domain.CIErrorKind) {
 	if ce.Kind != want {
 		t.Errorf("CIError.Kind = %q, want %q", ce.Kind, want)
 	}
+}
+
+// buildStatusPage returns the JSON body of a combined-status page carrying n
+// statuses of the given status value, each a distinct context, so a
+// multi-page test can synthesize a full page without committing a
+// fixture of that size. total_count is set to n, matching the wire fact that
+// the per-page count equals the page length rather than the grand total.
+func buildStatusPage(t *testing.T, status string, n int) []byte {
+	t.Helper()
+	statuses := make([]map[string]string, n)
+	for i := range n {
+		statuses[i] = map[string]string{
+			"status":  status,
+			"context": fmt.Sprintf("ci/check-%d", i),
+		}
+	}
+	body, err := json.Marshal(map[string]any{
+		"state":       status,
+		"total_count": n,
+		"statuses":    statuses,
+	})
+	if err != nil {
+		t.Fatalf("marshal status page: %v", err)
+	}
+	return body
 }
 
 // --- status and conclusion mapping ---
@@ -367,6 +393,77 @@ func TestGiteaFetchCIStatus(t *testing.T) {
 			if run.DetailsURL != "" {
 				t.Errorf("CheckRuns[%d].DetailsURL = %q, want empty (fixture carries no target_url)", i, run.DetailsURL)
 			}
+		}
+	})
+}
+
+// --- FetchCIStatus pagination ---
+
+func TestGiteaFetchCIStatusPagination(t *testing.T) {
+	t.Parallel()
+
+	t.Run("a failing status on page two flips the aggregate to failing", func(t *testing.T) {
+		t.Parallel()
+
+		page1 := buildStatusPage(t, "success", 50)
+		page2 := buildStatusPage(t, "failure", 1)
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			switch r.URL.Query().Get("page") {
+			case "2":
+				_, _ = w.Write(page2)
+			default:
+				_, _ = w.Write(page1)
+			}
+		}))
+		defer srv.Close()
+		provider := mustCIProvider(t, srv.URL, 0)
+
+		got, err := provider.FetchCIStatus(context.Background(), "main")
+
+		if err != nil {
+			t.Fatalf("FetchCIStatus: unexpected error: %v", err)
+		}
+		if got.Status != domain.CIStatusFailing {
+			t.Errorf("FetchCIStatus().Status = %q, want %q", got.Status, domain.CIStatusFailing)
+		}
+		if got.FailingCount < 1 {
+			t.Errorf("FetchCIStatus().FailingCount = %d, want >= 1", got.FailingCount)
+		}
+		const wantLen = 51
+		if len(got.CheckRuns) != wantLen {
+			t.Errorf("len(FetchCIStatus().CheckRuns) = %d, want %d", len(got.CheckRuns), wantLen)
+		}
+	})
+
+	t.Run("a single short page issues exactly one combined status request", func(t *testing.T) {
+		t.Parallel()
+
+		fixture := loadFixture(t, "status_all_success.json")
+		var requestCount atomic.Int32
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			requestCount.Add(1)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write(fixture)
+		}))
+		defer srv.Close()
+		provider := mustCIProvider(t, srv.URL, 0)
+
+		got, err := provider.FetchCIStatus(context.Background(), "main")
+
+		if err != nil {
+			t.Fatalf("FetchCIStatus: unexpected error: %v", err)
+		}
+		if got.Status != domain.CIStatusPassing {
+			t.Errorf("FetchCIStatus().Status = %q, want %q", got.Status, domain.CIStatusPassing)
+		}
+		if len(got.CheckRuns) != 2 {
+			t.Errorf("len(FetchCIStatus().CheckRuns) = %d, want %d", len(got.CheckRuns), 2)
+		}
+		if n := requestCount.Load(); n != 1 {
+			t.Errorf("combined status request count = %d, want 1", n)
 		}
 	})
 }
@@ -816,8 +913,8 @@ func TestGiteaCIRequestShape(t *testing.T) {
 	if gotPath != wantPath {
 		t.Errorf("request path = %q, want %q", gotPath, wantPath)
 	}
-	if gotQuery != "" {
-		t.Errorf("request query = %q, want empty (no access_token query parameter)", gotQuery)
+	if strings.Contains(gotQuery, "access_token") {
+		t.Errorf("request query = %q, want no access_token query parameter", gotQuery)
 	}
 	const wantAuth = "token test-token"
 	if gotAuth != wantAuth {
