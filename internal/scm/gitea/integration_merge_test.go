@@ -210,10 +210,11 @@ func requireSCMErrorKind(t *testing.T, err error, want domain.SCMErrorKind) *dom
 
 // mergeRandomHex returns an n-byte random hex string, keeping each run's branch
 // name unique so re-runs never collide on the persistent instance.
-func mergeRandomHex(n int) string {
+func mergeRandomHex(t *testing.T, n int) string {
+	t.Helper()
 	b := make([]byte, n)
 	if _, err := rand.Read(b); err != nil {
-		panic("crypto/rand unavailable: " + err.Error())
+		t.Fatalf("read random bytes for branch suffix: %v", err)
 	}
 	return hex.EncodeToString(b)
 }
@@ -230,7 +231,7 @@ func TestIntegration_SCMMergeFlow(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 
-	branch := fmt.Sprintf("sortie-merge-flow-%d-%s", time.Now().UnixNano(), mergeRandomHex(4))
+	branch := fmt.Sprintf("sortie-merge-flow-%d-%s", time.Now().UnixNano(), mergeRandomHex(t, 4))
 	prNumber := fixture.createBranchAndPR(t, owner, repo, branch, "sortie merge-flow "+branch)
 
 	t.Cleanup(func() {
