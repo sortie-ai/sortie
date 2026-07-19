@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/sortie-ai/sortie/internal/domain"
@@ -99,7 +101,8 @@ func NewGiteaCIProvider(maxLogLines int, adapterConfig map[string]any) (domain.C
 }
 
 // FetchCIStatus returns the aggregate CI status for the given git ref by reading
-// Gitea's combined commit status once and normalizing it to a [domain.CIResult].
+// every page of Gitea's combined commit status and normalizing it to a
+// [domain.CIResult].
 //
 // The ref is percent-encoded into GET /repos/{owner}/{repo}/commits/{ref}/status
 // and read directly, so no PR fetch or SHA resolution occurs. The aggregate is
@@ -112,22 +115,48 @@ func (p *GiteaCIProvider) FetchCIStatus(ctx context.Context, ref string) (domain
 	path := fmt.Sprintf("/repos/%s/%s/commits/%s/status",
 		url.PathEscape(p.owner), url.PathEscape(p.repo), url.PathEscape(ref))
 
-	body, _, err := p.client.Get(ctx, path, nil)
-	if err != nil {
-		return domain.CIResult{}, giteaToCIError(fmt.Errorf("fetching ci status for ref %q: %w", ref, err))
-	}
+	const limit = 50
+	statuses := make([]giteaCommitState, 0)
+	page := 1
+	for {
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return domain.CIResult{}, giteaToCIError(fmt.Errorf("fetching ci status for ref %q: %w", ref, ctxErr))
+		}
 
-	var combined giteaCombinedStatus
-	if jsonErr := json.Unmarshal(body, &combined); jsonErr != nil {
-		return domain.CIResult{}, &domain.CIError{
-			Kind:    domain.ErrCIPayload,
-			Message: "failed to parse combined status response",
-			Err:     jsonErr,
+		params := url.Values{
+			"page":  {strconv.Itoa(page)},
+			"limit": {strconv.Itoa(limit)},
+		}
+		body, _, err := p.client.Get(ctx, path, params)
+		if err != nil {
+			return domain.CIResult{}, giteaToCIError(fmt.Errorf("fetching ci status for ref %q: %w", ref, err))
+		}
+
+		var combined giteaCombinedStatus
+		if jsonErr := json.Unmarshal(body, &combined); jsonErr != nil {
+			return domain.CIResult{}, &domain.CIError{
+				Kind:    domain.ErrCIPayload,
+				Message: "failed to parse combined status response",
+				Err:     jsonErr,
+			}
+		}
+
+		statuses = append(statuses, combined.Statuses...)
+		if len(combined.Statuses) < limit {
+			break
+		}
+
+		page++
+		if page > scmMaxPages {
+			slog.WarnContext(ctx, "response truncated at page limit",
+				slog.String("path", path),
+				slog.Int("max_pages", scmMaxPages))
+			break
 		}
 	}
 
-	runs := make([]domain.CheckRun, len(combined.Statuses))
-	for i, s := range combined.Statuses {
+	runs := make([]domain.CheckRun, len(statuses))
+	for i, s := range statuses {
 		runs[i] = domain.CheckRun{
 			Name:       s.Context,
 			Status:     mapRunStatus(s.Status),
@@ -140,7 +169,7 @@ func (p *GiteaCIProvider) FetchCIStatus(ctx context.Context, ref string) (domain
 
 	var logExcerpt string
 	if status == domain.CIStatusFailing {
-		logExcerpt = buildLogExcerpt(combined.Statuses, p.maxLogLines)
+		logExcerpt = buildLogExcerpt(statuses, p.maxLogLines)
 	}
 
 	return domain.CIResult{

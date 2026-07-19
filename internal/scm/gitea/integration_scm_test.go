@@ -305,15 +305,8 @@ func TestIntegration_FetchCIStatus_ManyStatuses(t *testing.T) {
 	if err != nil {
 		t.Fatalf("FetchCIStatus(%q): %v", sha, err)
 	}
-	// Gitea's combined-status route paginates at the default page size (30), but
-	// FetchCIStatus reads it with a single un-paginated GET, so a commit carrying
-	// more than 30 statuses is truncated. Until the adapter paginates that read,
-	// the completeness shortfall is a skip naming the follow-up rather than a
-	// failure, so the release and nightly gates stay green; the assertion passes
-	// once the adapter returns every seeded status.
 	if len(result.CheckRuns) != manyStatusCount {
-		t.Skipf("gitea combined-status pagination follow-up: FetchCIStatus(%q) returned %d of %d seeded statuses; the single-GET combined-status read truncates at DEFAULT_PAGING_NUM=30 and must follow the route's pagination to return every status",
-			sha, len(result.CheckRuns), manyStatusCount)
+		t.Errorf("len(FetchCIStatus(%q).CheckRuns) = %d, want %d", sha, len(result.CheckRuns), manyStatusCount)
 	}
 }
 
