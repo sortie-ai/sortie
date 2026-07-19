@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.16.0] - 2026-07-19
+
 ### Added
 
 - Gitea SCM provider: Sortie's pull-request automation now runs against a
@@ -1203,7 +1205,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   execution via GitHub Actions.
 - Architecture Decision Records (ADR-0001 through ADR-0005).
 
-[Unreleased]: https://github.com/sortie-ai/sortie/compare/1.15.0...HEAD
+[Unreleased]: https://github.com/sortie-ai/sortie/compare/1.16.0...HEAD
+[1.15.0]: https://github.com/sortie-ai/sortie/compare/1.15.0...1.16.0
 [1.15.0]: https://github.com/sortie-ai/sortie/compare/1.14.1...1.15.0
 [1.14.1]: https://github.com/sortie-ai/sortie/compare/1.14.0...1.14.1
 [1.14.0]: https://github.com/sortie-ai/sortie/compare/1.13.0...1.14.0
