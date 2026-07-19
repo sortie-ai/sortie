@@ -108,8 +108,8 @@ func (f *giteaMergeFixture) doStatus(method, path string, body any) (int, error)
 	if err != nil {
 		return 0, err
 	}
-	defer resp.Body.Close() //nolint:errcheck // cleanup helper
-	_, _ = io.Copy(io.Discard, resp.Body)
+	defer resp.Body.Close()        //nolint:errcheck // cleanup helper
+	io.Copy(io.Discard, resp.Body) //nolint:errcheck // drain body to reuse connection
 	return resp.StatusCode, nil
 }
 
