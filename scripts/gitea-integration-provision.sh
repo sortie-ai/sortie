@@ -8,7 +8,7 @@
 # removes any prior container of its fixed name before booting, so a repeat run
 # does not collide on the host port.
 #
-# Output contract. Four coordinates are published two ways. They are appended as
+# Output contract. Seven coordinates are published two ways. They are appended as
 # bare KEY=VALUE lines to the file named by $GITHUB_ENV when it is set and
 # writable, which Actions exports to successor CI steps. They are also printed to
 # stdout as export statements, so a developer can run
@@ -74,9 +74,12 @@ done
 # is logged and the call fails, so set -e stops the script and the trap dumps
 # the container logs.
 #
-# Repository creation needs a scope the published token deliberately omits, so
-# that one call runs under basic auth; every issue-scoped call runs under the
-# token, exercising that the published scopes cover the fixture's issue writes.
+# Repository creation runs under admin basic auth; every other call runs under
+# the token, exercising that the published scopes (write:issue for the issue and
+# label writes, write:repository for the branch, commit, status, pull-request,
+# merge, and branch-delete writes) cover the whole fixture and the operations
+# under test. Reviews are the exception: each is submitted under its own author's
+# basic auth, because a reviewer cannot review their own pull request.
 gitea_call() {
 	local method="$1" path="$2" auth="$3" body response status
 	body=$(cat)
@@ -102,6 +105,32 @@ gitea_call() {
 		;;
 	*)
 		log "gitea API ${method} ${path} returned HTTP ${status}: ${response}"
+		return 1
+		;;
+	esac
+}
+
+# A Gitea API call under an arbitrary user's basic auth, used only for the review
+# fixtures: a reviewer cannot review their own pull request, so each review must
+# be attributed to a distinct author. User, password, method, and path are
+# positional; the JSON request body is read from stdin. The password travels only
+# over the loopback instance and is never echoed.
+user_call() {
+	local user="$1" password="$2" method="$3" path="$4" body response status
+	body=$(cat)
+	response=$(curl -sS --max-time 30 -w "${NEWLINE}%{http_code}" \
+		-u "${user}:${password}" \
+		-H 'Content-Type: application/json' \
+		-X "$method" "${ENDPOINT}/api/v1${path}" \
+		-d "$body")
+	status=${response##*"$NEWLINE"}
+	response=${response%"$NEWLINE"*}
+	case "$status" in
+	2*)
+		printf '%s' "$response"
+		;;
+	*)
+		log "gitea API ${method} ${path} (as ${user}) returned HTTP ${status}: ${response}"
 		return 1
 		;;
 	esac
@@ -156,7 +185,7 @@ token_response=$(curl -sS --max-time 30 \
 	-u "${GITEA_USER}:${GITEA_PASSWORD}" \
 	-H 'Content-Type: application/json' \
 	-X POST "${ENDPOINT}/api/v1/users/${GITEA_USER}/tokens" \
-	-d '{"name":"sortie-integration","scopes":["write:issue","read:user","read:repository"]}')
+	-d '{"name":"sortie-integration","scopes":["write:issue","write:repository","read:user"]}')
 TOKEN=$(printf '%s' "$token_response" | jq -er '.sha1') || {
 	log "token creation failed: $(printf '%s' "$token_response" | jq -r '.message // .')"
 	exit 1
@@ -220,6 +249,110 @@ log "closing issue ${index_done} into its terminal state"
 jq -nc '{state: "closed"}' |
 	gitea_call PATCH "/repos/${PROJECT}/issues/${index_done}" token >/dev/null
 
+# The SCM read and CI provider suite targets a seeded pull request. Gitea forbids
+# a REQUEST_CHANGES self-review, so the reviewer and the allowlisted bot are
+# distinct users from the admin PR author.
+REVIEWER_USER="sortie-reviewer"
+REVIEWER_PASSWORD="Sortie-Reviewer-Pw1"
+BOT_USER="sortie-review-bot"
+BOT_PASSWORD="Sortie-Review-Bot-Pw1"
+FEATURE_BRANCH="feature-x"
+PROBE_BRANCH="status-probe"
+SENTINEL_PATH="review-sentinel.txt"
+# The failing status carries this URL so the D3 reconciliation can assert the
+# per-status target_url field name round-trips to CheckRun.DetailsURL. The
+# integration test hard-codes the same value.
+FAILING_TARGET_URL="https://ci.example.com/build/12345"
+# The probe commit carries this many distinct-context statuses, above
+# DEFAULT_PAGING_NUM (30) and MAX_RESPONSE_ITEMS (50), so the D4 reconciliation
+# proves whether the single-GET combined-status read truncates. The integration
+# test hard-codes the same count.
+PROBE_STATUS_COUNT=51
+
+log "creating reviewer and bot users"
+docker exec "$CONTAINER_NAME" gitea admin user create \
+	--username "$REVIEWER_USER" \
+	--password "$REVIEWER_PASSWORD" \
+	--email "${REVIEWER_USER}@example.com" \
+	--must-change-password=false >/dev/null
+docker exec "$CONTAINER_NAME" gitea admin user create \
+	--username "$BOT_USER" \
+	--password "$BOT_PASSWORD" \
+	--email "${BOT_USER}@example.com" \
+	--must-change-password=false >/dev/null
+
+log "adding reviewer and bot as repository collaborators"
+jq -nc '{permission: "write"}' |
+	gitea_call PUT "/repos/${PROJECT}/collaborators/${REVIEWER_USER}" basic >/dev/null
+jq -nc '{permission: "write"}' |
+	gitea_call PUT "/repos/${PROJECT}/collaborators/${BOT_USER}" basic >/dev/null
+
+# The repository is auto_init, so its default branch exists; resolve its name
+# rather than assume "main" so a changed instance default does not break the base.
+default_branch=$(curl -sS --max-time 30 \
+	-H "Authorization: token ${TOKEN}" \
+	"${ENDPOINT}/api/v1/repos/${PROJECT}" | jq -er '.default_branch')
+
+log "creating branch ${FEATURE_BRANCH} and committing the sentinel file"
+jq -nc --arg new "$FEATURE_BRANCH" --arg old "$default_branch" \
+	'{new_branch_name: $new, old_branch_name: $old}' |
+	gitea_call POST "/repos/${PROJECT}/branches" token >/dev/null
+# A NEW multi-line file: every line is an added diff line, so an inline comment
+# anchored to line 1 reads back with position > 0 (Outdated == false).
+sentinel_content=$(printf 'sentinel line 1\nsentinel line 2\nsentinel line 3\nsentinel line 4\nsentinel line 5\n' | base64 | tr -d '\n')
+head_sha=$(jq -nc --arg content "$sentinel_content" --arg branch "$FEATURE_BRANCH" \
+	'{content: $content, branch: $branch, message: "Add review sentinel file"}' |
+	gitea_call POST "/repos/${PROJECT}/contents/${SENTINEL_PATH}" token | jq -er '.commit.sha')
+
+log "opening the review pull request"
+pr_index=$(jq -nc --arg head "$FEATURE_BRANCH" --arg base "$default_branch" \
+	'{head: $head, base: $base, title: "Review fixture pull request", body: "Seed PR for the gitea SCM adapter integration fixture."}' |
+	gitea_call POST "/repos/${PROJECT}/pulls" token | jq -er '.number')
+
+log "submitting the human REQUEST_CHANGES review as ${REVIEWER_USER}"
+jq -nc --arg path "$SENTINEL_PATH" \
+	'{event: "REQUEST_CHANGES", body: "Please address the inline comment.", comments: [{path: $path, body: "Reviewer inline comment on the sentinel file.", new_position: 1}]}' |
+	user_call "$REVIEWER_USER" "$REVIEWER_PASSWORD" POST "/repos/${PROJECT}/pulls/${pr_index}/reviews" >/dev/null
+
+log "submitting the bot COMMENT review as ${BOT_USER}"
+jq -nc --arg path "$SENTINEL_PATH" \
+	'{event: "COMMENT", body: "Automated review note.", comments: [{path: $path, body: "Bot inline comment on the sentinel file.", new_position: 1}]}' |
+	user_call "$BOT_USER" "$BOT_PASSWORD" POST "/repos/${PROJECT}/pulls/${pr_index}/reviews" >/dev/null
+
+# Commit A (the PR head) carries a small determinate status set: one success and
+# one failure with a target_url, well under any page size, so the failing entry
+# is always on page one for the D3, GetCIStatus, and FetchCIStatus reads.
+log "seeding commit A statuses on the pull request head"
+jq -nc '{state: "success", context: "ci/build"}' |
+	gitea_call POST "/repos/${PROJECT}/statuses/${head_sha}" token >/dev/null
+jq -nc --arg url "$FAILING_TARGET_URL" \
+	'{state: "failure", context: "ci/test", target_url: $url, description: "The test job failed."}' |
+	gitea_call POST "/repos/${PROJECT}/statuses/${head_sha}" token >/dev/null
+
+# Commit B is a dedicated commit for the D4 pagination probe, decoupled from the
+# PR head so a paginating route cannot hide commit A's failing entry off page one.
+log "creating the many-status probe commit on branch ${PROBE_BRANCH}"
+jq -nc --arg new "$PROBE_BRANCH" --arg old "$default_branch" \
+	'{new_branch_name: $new, old_branch_name: $old}' |
+	gitea_call POST "/repos/${PROJECT}/branches" token >/dev/null
+probe_content=$(printf 'status pagination probe commit\n' | base64 | tr -d '\n')
+probe_sha=$(jq -nc --arg content "$probe_content" --arg branch "$PROBE_BRANCH" \
+	'{content: $content, branch: $branch, message: "Add status probe file"}' |
+	gitea_call POST "/repos/${PROJECT}/contents/status-probe.txt" token | jq -er '.commit.sha')
+
+log "seeding ${PROBE_STATUS_COUNT} distinct-context statuses on the probe commit"
+for ((i = 1; i <= PROBE_STATUS_COUNT; i++)); do
+	jq -nc --arg ctx "ci/probe-${i}" '{state: "success", context: $ctx}' |
+		gitea_call POST "/repos/${PROJECT}/statuses/${probe_sha}" token >/dev/null
+done
+
+# One add-and-remove pair on the PR timeline (PRs share the issue index space)
+# seeds a labeled and an unlabeled event for the label-event read.
+log "seeding a label add-and-remove pair on the pull request timeline"
+jq -nc --argjson id "$label_review" '{labels: [$id]}' |
+	gitea_call POST "/repos/${PROJECT}/issues/${pr_index}/labels" token >/dev/null
+gitea_call DELETE "/repos/${PROJECT}/issues/${pr_index}/labels/${label_review}" token </dev/null >/dev/null
+
 # Publish one coordinate to $GITHUB_ENV (when writable) and to stdout. The
 # $GITHUB_ENV file takes a bare KEY=VALUE line, which Actions exports to
 # successor steps. Stdout takes an export statement, so a developer running
@@ -243,4 +376,7 @@ log "provisioning complete; publishing coordinates"
 emit SORTIE_GITEA_ENDPOINT "$ENDPOINT"
 emit SORTIE_GITEA_TOKEN "$TOKEN"
 emit SORTIE_GITEA_PROJECT "$PROJECT"
+emit SORTIE_GITEA_PR_NUMBER "$pr_index"
+emit SORTIE_GITEA_BOT_USERNAME "$BOT_USER"
+emit SORTIE_GITEA_MANY_STATUS_SHA "$probe_sha"
 emit GITEA_IMAGE "$IMAGE"
