@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `sortie validate` no longer reports `unknown template variable` for the
+  reaction continuation variables (`ci_failure`, `review_comments`,
+  `bot_review_comments`, `merge_conflict`, `label_review`, `label_fix`). A
+  mistyped sub-field of one of them is now reported as an unknown field with
+  the valid field list, and a reference to one of them from inside a
+  `{{ range }}` or `{{ with }}` body is now reported as dot-context misuse.
+  ([#696](https://github.com/sortie-ai/sortie/issues/696))
 - `sortie validate` and startup now reject a `tracker.handoff_state` or
   `tracker.in_progress_state` that collides with the tracker adapter's own
   fallback state list when the matching workflow list is empty. Leaving

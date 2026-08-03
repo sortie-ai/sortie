@@ -1098,6 +1098,89 @@ func TestValidateTemplateCleanNoWarnings(t *testing.T) {
 	}
 }
 
+// allContinuationKeysWorkflow returns a workflow whose prompt references all
+// six reaction continuation keys under top-level {{ if }} guards, one
+// documented sub-field of each of the four map-shaped keys, one element
+// field of each of the two list-shaped keys inside {{ range }}, and exactly
+// one unrecognized name, .not_a_reaction. The front matter configures no
+// reaction block, so a clean result here also demonstrates that the
+// recognized set does not depend on which reactions are configured.
+func allContinuationKeysWorkflow() []byte {
+	return []byte(`---
+tracker:
+  kind: file
+  active_states:
+    - To Do
+  terminal_states:
+    - Done
+agent:
+  kind: mock
+---
+{{ if .ci_failure }}x{{ end }}
+{{ if .review_comments }}x{{ end }}
+{{ if .bot_review_comments }}x{{ end }}
+{{ if .merge_conflict }}x{{ end }}
+{{ if .label_review }}x{{ end }}
+{{ if .label_fix }}x{{ end }}
+{{ .ci_failure.status }}
+{{ .merge_conflict.base }}
+{{ .label_review.actor }}
+{{ .label_fix.branch }}
+{{ range .review_comments }}{{ .body }}{{ end }}
+{{ range .bot_review_comments }}{{ .body }}{{ end }}
+{{ .not_a_reaction }}
+`)
+}
+
+// TestValidateTemplateContinuationKeysCleanJSON verifies that sortie
+// validate reports no unknown_var, unknown_field, or dot_context warning
+// for any of the six reaction continuation keys or their documented
+// fields, while an unrelated unrecognized name still produces exactly one
+// unknown_var warning naming the full enumerated set of recognized names.
+func TestValidateTemplateContinuationKeysCleanJSON(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	wfPath := writeCustomWorkflowFile(t, dir, allContinuationKeysWorkflow())
+
+	var stdout, stderr bytes.Buffer
+	code := run(context.Background(), []string{"validate", "--format", "json", wfPath}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("run(validate --format json) = %d, want 0; stderr: %s", code, stderr.String())
+	}
+
+	var out validateOutput
+	if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
+		t.Fatalf("json.Unmarshal(%q): %v", stdout.String(), err)
+	}
+	if !out.Valid {
+		t.Errorf("validateOutput.Valid = false, want true")
+	}
+
+	const wantMessage = `unknown template variable ".not_a_reaction"; valid top-level variables are: .issue, .attempt, .run, .ci_failure, .review_comments, .bot_review_comments, .merge_conflict, .label_review, .label_fix`
+
+	var unknownVarWarnings []validateDiag
+	for _, w := range out.Warnings {
+		switch w.Check {
+		case "unknown_var":
+			unknownVarWarnings = append(unknownVarWarnings, w)
+		case "unknown_field", "dot_context":
+			t.Errorf("validateOutput.Warnings contains check=%q: %v, want no %q or %q warnings for the continuation keys and their documented fields",
+				w.Check, w, "unknown_field", "dot_context")
+		}
+	}
+	if len(unknownVarWarnings) != 1 {
+		t.Fatalf("validateOutput.Warnings has %d unknown_var entries, want exactly 1: %v", len(unknownVarWarnings), unknownVarWarnings)
+	}
+	got := unknownVarWarnings[0]
+	if !strings.Contains(got.Message, ".not_a_reaction") {
+		t.Errorf("unknown_var warning message = %q, want to contain %q", got.Message, ".not_a_reaction")
+	}
+	if got.Message != wantMessage {
+		t.Errorf("unknown_var warning message = %q, want %q", got.Message, wantMessage)
+	}
+}
+
 // --- writeJSON / emitDiags error-path tests ---
 
 // --- writeJSON / emitDiags error-path tests ---

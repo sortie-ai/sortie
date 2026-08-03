@@ -683,3 +683,39 @@ func TestSampleWorkflowConfigLoads(t *testing.T) {
 		})
 	}
 }
+
+// TestShippedWorkflowsProduceNoTemplateWarnings verifies that every
+// shipped WORKFLOW*.md produces zero template static-analysis warnings.
+// It calls the analyzer directly rather than the validate CLI, for the
+// same reason TestSampleWorkflowConfigLoads does: environment indirection
+// is deliberately left unresolved, so the CLI reports config errors on
+// these files and CLI-level assertions would not be hermetic.
+func TestShippedWorkflowsProduceNoTemplateWarnings(t *testing.T) {
+	t.Parallel()
+
+	for _, path := range shippedWorkflowPaths(t) {
+		name, err := filepath.Rel(repoRoot(t), path)
+		if err != nil {
+			name = filepath.Base(path)
+		}
+
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			wf, err := workflow.Load(path)
+			if err != nil {
+				t.Fatalf("workflow.Load: %v", err)
+			}
+			tmpl, err := prompt.Parse(wf.PromptTemplate, path, wf.FrontMatterLines)
+			if err != nil {
+				t.Fatalf("prompt.Parse: %v", err)
+			}
+			if warnings := prompt.AnalyzeTemplate(tmpl); len(warnings) != 0 {
+				for _, w := range warnings {
+					t.Errorf("AnalyzeTemplate warning: kind=%v node=%q message=%q", w.Kind, w.Node, w.Message)
+				}
+				t.Fatalf("prompt.AnalyzeTemplate returned %d warnings, want 0", len(warnings))
+			}
+		})
+	}
+}

@@ -2230,8 +2230,9 @@ template.New("prompt").
 ### 5.2 Template Input Variables
 
 The data map passed to `Execute` contains **three core top-level keys** (`issue`, `attempt`,
-`run`) plus **continuation context keys** (`ci_failure`, `review_comments`, `bot_review_comments`)
-that are `nil` by default and populated on reaction-triggered dispatches:
+`run`) plus **continuation context keys** (`ci_failure`, `review_comments`, `bot_review_comments`,
+`merge_conflict`, `label_review`, `label_fix`) that are `nil` by default and populated on
+reaction-triggered dispatches:
 
 #### `issue` — Normalized Issue Object
 
