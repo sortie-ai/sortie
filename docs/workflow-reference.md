@@ -219,6 +219,9 @@ tracker:
 - Must **not** appear in `active_states` (would cause immediate re-dispatch after handoff).
 - Must **not** appear in `terminal_states` (handoff is not terminal — the issue may return
   to active for further work).
+- Both list checks compare against the effective lists. When `active_states` or
+  `terminal_states` is empty, the effective list is the tracker adapter's own fallback list, and
+  the dispatch preflight reports the collision under check `tracker.handoff_state`.
 - Requires **write permissions** on the tracker API token. For Jira: `write:jira-work`
   (classic) or `write:issue:jira` (granular).
 
@@ -233,6 +236,11 @@ tracker:
   trigger workspace cleanup on the next reconciliation tick.
 - Must **not** collide with `handoff_state` (case-insensitive). The two transitions represent
   different lifecycle phases — dispatch vs. exit.
+- The `terminal_states` check compares against the effective list. When `terminal_states` is
+  empty, the effective list is the tracker adapter's own fallback list, and the dispatch preflight
+  reports the collision under check `tracker.in_progress_state`. The `active_states` membership
+  check compares against the workflow list as written, because dispatch and reconciliation gate on
+  that list.
 - Transition failure at runtime is non-fatal: the worker logs a warning and continues to
   workspace preparation.
 - If the issue is already in the target state (case-insensitive), the transition API call
@@ -335,13 +343,14 @@ of those fields is:
   slash, with a non-empty owner and repository.
 - `active_states`, `terminal_states`, and `handoff_state` name repository **labels**, compared
   case-insensitively (the adapter lowercases them). The adapter carries internal fallback labels
-  (active `["backlog", "in-progress", "review"]`, terminal `["done", "wontfix"]`) that it uses only
-  to derive an issue's state from its labels when the matching list is omitted or empty. These
-  fallbacks do not drive dispatch: the orchestrator gates dispatch and reconciliation on the
-  workflow's `tracker.active_states` and `tracker.terminal_states`, so the field-table rule above
-  holds for Gitea. An empty `active_states` dispatches nothing, and validation rejects a workflow
-  with both lists empty. Configure `active_states` with the labels a dispatched Gitea issue must
-  carry.
+  (active `["backlog", "in-progress", "review"]`, terminal `["done", "wontfix"]`) that it applies
+  when the matching list is omitted or empty, both to derive an issue's state from its labels and to
+  narrow its own candidate query. The dispatch preflight also checks `handoff_state` and
+  `in_progress_state` against the fallback list when the matching workflow list is empty. But the
+  orchestrator gates dispatch and reconciliation on the workflow's `tracker.active_states` and
+  `tracker.terminal_states`, so the field-table rule above holds for Gitea. An empty
+  `active_states` dispatches nothing, and validation rejects a workflow with both lists empty.
+  Configure `active_states` with the labels a dispatched Gitea issue must carry.
 
 Gitea has no transition workflow, so the adapter derives an issue's state from its labels: it scans
 the configured active, terminal, then handoff labels in order and takes the first match. An issue
@@ -2849,6 +2858,7 @@ skipped for that tick, reconciliation remains active, and an error is emitted.
 | Glob patterns syntactically valid | A `labels` or `identifier` pattern fails `path.Match`. |
 | Every referenced `agent` kind registered | `dispatch.rules[*].agent` or `dispatch.default.agent` names an unregistered adapter. |
 | Every per-rule template path resolvable and parseable | Path is absolute, `~`-prefixed, escapes the workflow tree, is not a regular file, is unreadable, or fails template parse. |
+| `tracker.handoff_state` and `tracker.in_progress_state` free of collisions against the effective state lists | The state collides with the effective `active_states` or `terminal_states`, where an empty workflow list takes the tracker adapter's own fallback list. |
 
 **Advisory warnings vs. configuration errors:** An unknown key placed directly
 under `dispatch` (alongside `rules` and `default`) produces an `unknown_sub_key`
@@ -2879,6 +2889,9 @@ advisory and does not block startup. The Linear adapter (`kind: linear`) emits:
 A `handoff_state` or `in_progress_state` that collides with `active_states` or
 `terminal_states` is not an adapter diagnostic. The generic config validation rejects it for
 every `tracker.kind` before the adapter hook runs, reporting it as a `config.tracker.*` error.
+The config loader rules on the state lists as written; the dispatch preflight then runs the same
+rules against the effective lists and reports a collision that only an adapter fallback exposes
+under check `tracker.handoff_state` or `tracker.in_progress_state`, without the `config.` prefix.
 
 These offline checks never contact Linear and never log the API key value. State-name existence
 against the team and credential validity are checked by the online preflight at adapter

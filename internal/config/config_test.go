@@ -1315,8 +1315,8 @@ func assertStringSliceEqual(t *testing.T, name string, want, got []string) {
 
 // TestValidateInProgressState exercises the handoff_state collision check
 // directly, because the path through NewServiceConfig cannot reach it:
-// validateHandoffState rejects any handoffState ∈ activeStates before
-// validateInProgressState runs, and inProgressState must be ∈ activeStates.
+// ValidateHandoffState rejects any handoffState ∈ activeStates before
+// ValidateInProgressState runs, and inProgressState must be ∈ activeStates.
 func TestValidateInProgressState(t *testing.T) {
 	t.Parallel()
 
@@ -1377,14 +1377,14 @@ func TestValidateInProgressState(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			err := validateInProgressState(tt.inProgressState, tt.activeStates, tt.terminalStates, tt.handoffState)
+			err := ValidateInProgressState(tt.inProgressState, tt.activeStates, tt.terminalStates, tt.handoffState)
 
 			if tt.wantErr {
 				assertConfigErrorField(t, err, tt.wantField)
 				return
 			}
 			if err != nil {
-				t.Fatalf("validateInProgressState(%q, ...) unexpected error: %v", tt.inProgressState, err)
+				t.Fatalf("ValidateInProgressState(%q, ...) unexpected error: %v", tt.inProgressState, err)
 			}
 		})
 	}

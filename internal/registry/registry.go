@@ -114,6 +114,21 @@ type TrackerMeta struct {
 	// pipeline calls to run tracker-specific config validation.
 	// Nil means no adapter-specific validation.
 	ValidateTrackerConfig func(fields TrackerConfigFields) []ValidationDiag
+
+	// DefaultActiveStates is the active-state list the tracker adapter
+	// applies when tracker.active_states is absent or empty. An empty or
+	// nil value means the adapter applies no default. The slice may alias
+	// the registering adapter's own package-level variable, so callers
+	// must treat it as read-only and copy before sorting or filtering.
+	DefaultActiveStates []string
+
+	// DefaultTerminalStates is the terminal-state list the tracker
+	// adapter applies when tracker.terminal_states is absent or empty. An
+	// empty or nil value means the adapter applies no default. The slice
+	// may alias the registering adapter's own package-level variable, so
+	// callers must treat it as read-only and copy before sorting or
+	// filtering.
+	DefaultTerminalStates []string
 }
 
 // AgentMeta holds optional agent-adapter-declared properties queried

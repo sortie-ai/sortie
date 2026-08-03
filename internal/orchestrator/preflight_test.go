@@ -102,6 +102,21 @@ func requireNoCheck(t *testing.T, result PreflightResult, check string) {
 	}
 }
 
+// stateCollisionErrors returns the result's errors whose check is one of
+// the two state-collision keys, in the order the preflight emitted them.
+// Filtering keeps the assertion independent of the credential and adapter
+// diagnostics the same run may also report.
+func stateCollisionErrors(t *testing.T, result PreflightResult) []PreflightError {
+	t.Helper()
+	var got []PreflightError
+	for _, e := range result.Errors {
+		if e.Check == "tracker.handoff_state" || e.Check == "tracker.in_progress_state" {
+			got = append(got, e)
+		}
+	}
+	return got
+}
+
 // hasWarnCheck reports whether the result contains a warning with the
 // given check name.
 func hasWarnCheck(t *testing.T, result PreflightResult, check string) bool {
@@ -533,6 +548,243 @@ func TestValidateDispatchConfig(t *testing.T) {
 			}
 			for _, check := range tt.noWarnChecks {
 				requireNoWarnCheck(t, result, check)
+			}
+		})
+	}
+}
+
+// TestValidateDispatchConfig_DefaultedTrackerStates covers the collision
+// rules re-run against the effective state lists, the ones a tracker
+// adapter fills from its own fallback when the workflow list is empty.
+// The default lists are declared here rather than read from a real
+// registration: this package links no adapter package, and the stub
+// registry is what makes every shape reachable, including the two-list
+// one the workflow promotion gate rejects before the preflight runs.
+func TestValidateDispatchConfig_DefaultedTrackerStates(t *testing.T) {
+	t.Parallel()
+
+	githubActive := []string{"backlog", "in-progress", "review"}
+	githubTerminal := []string{"done", "wontfix"}
+
+	tests := []struct {
+		name         string
+		tracker      config.TrackerConfig
+		meta         registry.TrackerMeta
+		unregistered bool
+		want         []PreflightError
+	}{
+		{
+			name: "handoff state collides with the defaulted active list",
+			tracker: config.TrackerConfig{
+				Kind:           "github",
+				HandoffState:   "review",
+				TerminalStates: []string{"done"},
+			},
+			meta: registry.TrackerMeta{
+				DefaultActiveStates:   githubActive,
+				DefaultTerminalStates: githubTerminal,
+			},
+			want: []PreflightError{{
+				Check:   "tracker.handoff_state",
+				Message: `"review" collides with active state "review"; tracker.active_states is empty, so the "github" adapter falls back to its own active states`,
+			}},
+		},
+		{
+			name: "handoff state collides with the defaulted terminal list",
+			tracker: config.TrackerConfig{
+				Kind:         "github",
+				HandoffState: "done",
+				ActiveStates: []string{"backlog"},
+			},
+			meta: registry.TrackerMeta{
+				DefaultActiveStates:   githubActive,
+				DefaultTerminalStates: githubTerminal,
+			},
+			want: []PreflightError{{
+				Check:   "tracker.handoff_state",
+				Message: `"done" collides with terminal state "done"; tracker.terminal_states is empty, so the "github" adapter falls back to its own terminal states`,
+			}},
+		},
+		{
+			name: "in progress state collides with the defaulted terminal list",
+			tracker: config.TrackerConfig{
+				Kind:            "github",
+				InProgressState: "done",
+				ActiveStates:    []string{"done", "backlog"},
+			},
+			meta: registry.TrackerMeta{
+				DefaultActiveStates:   githubActive,
+				DefaultTerminalStates: githubTerminal,
+			},
+			want: []PreflightError{{
+				Check:   "tracker.in_progress_state",
+				Message: `"done" collides with terminal state "done"; tracker.terminal_states is empty, so the "github" adapter falls back to its own terminal states`,
+			}},
+		},
+		{
+			name: "comparison is case-insensitive and each side keeps its own casing",
+			tracker: config.TrackerConfig{
+				Kind:           "github",
+				HandoffState:   "REVIEW",
+				TerminalStates: []string{"done"},
+			},
+			meta: registry.TrackerMeta{
+				DefaultActiveStates:   githubActive,
+				DefaultTerminalStates: githubTerminal,
+			},
+			want: []PreflightError{{
+				Check:   "tracker.handoff_state",
+				Message: `"REVIEW" collides with active state "review"; tracker.active_states is empty, so the "github" adapter falls back to its own active states`,
+			}},
+		},
+		{
+			name: "an explicitly empty active list behaves like an absent key",
+			tracker: config.TrackerConfig{
+				Kind:           "github",
+				HandoffState:   "review",
+				ActiveStates:   []string{},
+				TerminalStates: []string{"done"},
+			},
+			meta: registry.TrackerMeta{
+				DefaultActiveStates:   githubActive,
+				DefaultTerminalStates: githubTerminal,
+			},
+			want: []PreflightError{{
+				Check:   "tracker.handoff_state",
+				Message: `"review" collides with active state "review"; tracker.active_states is empty, so the "github" adapter falls back to its own active states`,
+			}},
+		},
+		{
+			name: "no diagnostic when the adapter declares no default",
+			tracker: config.TrackerConfig{
+				Kind:           "github",
+				HandoffState:   "review",
+				TerminalStates: []string{"done"},
+			},
+		},
+		{
+			name: "no diagnostic when the defaulted list does not collide",
+			tracker: config.TrackerConfig{
+				Kind:           "github",
+				HandoffState:   "awaiting-human",
+				TerminalStates: []string{"done"},
+			},
+			meta: registry.TrackerMeta{
+				DefaultActiveStates:   githubActive,
+				DefaultTerminalStates: githubTerminal,
+			},
+		},
+		{
+			name: "no diagnostic when both lists are written",
+			tracker: config.TrackerConfig{
+				Kind:           "github",
+				HandoffState:   "review",
+				ActiveStates:   []string{"backlog"},
+				TerminalStates: []string{"done"},
+			},
+			meta: registry.TrackerMeta{
+				DefaultActiveStates:   githubActive,
+				DefaultTerminalStates: githubTerminal,
+			},
+		},
+		{
+			name: "no diagnostic when the written lists already violate a rule",
+			tracker: config.TrackerConfig{
+				Kind:         "github",
+				HandoffState: "review",
+				ActiveStates: []string{"review"},
+			},
+			meta: registry.TrackerMeta{
+				DefaultActiveStates:   githubActive,
+				DefaultTerminalStates: githubTerminal,
+			},
+		},
+		{
+			name: "both lists defaulted reports one diagnostic per list",
+			tracker: config.TrackerConfig{
+				Kind:         "github",
+				HandoffState: "review",
+			},
+			meta: registry.TrackerMeta{
+				DefaultActiveStates:   []string{"review"},
+				DefaultTerminalStates: []string{"review", "done"},
+			},
+			want: []PreflightError{
+				{
+					Check:   "tracker.handoff_state",
+					Message: `"review" collides with active state "review"; tracker.active_states is empty, so the "github" adapter falls back to its own active states`,
+				},
+				{
+					Check:   "tracker.handoff_state",
+					Message: `"review" collides with terminal state "review"; tracker.terminal_states is empty, so the "github" adapter falls back to its own terminal states`,
+				},
+			},
+		},
+		{
+			name: "both lists defaulted with an in progress state reports nothing",
+			tracker: config.TrackerConfig{
+				Kind:            "github",
+				HandoffState:    "review",
+				InProgressState: "in-progress",
+			},
+			meta: registry.TrackerMeta{
+				DefaultActiveStates:   []string{"review"},
+				DefaultTerminalStates: []string{"review", "done"},
+			},
+		},
+		{
+			name: "no diagnostic for an unregistered kind",
+			tracker: config.TrackerConfig{
+				Kind:           "nonexistent",
+				HandoffState:   "review",
+				TerminalStates: []string{"done"},
+			},
+			unregistered: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			params := validPreflightParams()
+			params.ConfigFunc = func() config.ServiceConfig {
+				return config.ServiceConfig{
+					Tracker: tt.tracker,
+					Agent: config.AgentConfig{
+						Kind:    "test-agent",
+						Command: "/usr/bin/agent",
+					},
+				}
+			}
+			params.TrackerRegistry = &stubTrackerRegistry{
+				getFunc: func(kind string) (registry.TrackerConstructor, error) {
+					if tt.unregistered {
+						return nil, &registry.RegistryError{Dimension: "tracker", Kind: kind}
+					}
+					return nil, nil
+				},
+				metaFunc: func(string) (registry.TrackerMeta, bool) {
+					return tt.meta, !tt.unregistered
+				},
+			}
+
+			result := ValidateDispatchConfig(params)
+
+			got := stateCollisionErrors(t, result)
+			if len(got) != len(tt.want) {
+				t.Fatalf("ValidateDispatchConfig() state collision errors = %v, want %v", got, tt.want)
+			}
+			for i, want := range tt.want {
+				if got[i].Check != want.Check {
+					t.Errorf("ValidateDispatchConfig() errors[%d].Check = %q, want %q", i, got[i].Check, want.Check)
+				}
+				if got[i].Message != want.Message {
+					t.Errorf("ValidateDispatchConfig() errors[%d].Message = %q, want %q", i, got[i].Message, want.Message)
+				}
+			}
+			if len(tt.want) > 0 && result.OK() {
+				t.Errorf("ValidateDispatchConfig() OK = true, want false: a state collision is error severity")
 			}
 		})
 	}

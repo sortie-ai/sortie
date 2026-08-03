@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -14,8 +15,9 @@ import (
 type PreflightError struct {
 	// Check identifies which validation check failed. Known values:
 	// "workflow_load", "tracker.kind", "tracker.api_key",
-	// "tracker.project", "tracker_adapter", "agent.kind",
-	// "agent.command", "agent_adapter", "workspace.root_writable".
+	// "tracker.project", "tracker_adapter", "tracker.handoff_state",
+	// "tracker.in_progress_state", "agent.kind", "agent.command",
+	// "agent_adapter", "workspace.root_writable".
 	Check string
 
 	// Message is an operator-friendly description of the failure.
@@ -170,6 +172,11 @@ func ValidateDispatchConfig(params PreflightParams) PreflightResult {
 				}
 			}
 		}
+
+		// The config loader rules on the state lists as written. A list the
+		// tracker adapter fills from its own fallback needs the same rules
+		// run against the lists the run actually uses.
+		errs = append(errs, validateDefaultedTrackerStates(cfg.Tracker, trackerMeta)...)
 	}
 
 	// Agent kind must be set for any subsequent agent validation.
@@ -212,6 +219,92 @@ func ValidateDispatchConfig(params PreflightParams) PreflightResult {
 	}
 
 	return PreflightResult{Errors: errs, Warnings: warns}
+}
+
+// validateDefaultedTrackerStates reports the state collisions that
+// become visible only after the tracker adapter's default state lists
+// fill an empty tracker.active_states or tracker.terminal_states.
+//
+// Both arguments are read-only. The result is nil when no list was
+// defaulted, when the defaulted list produces no collision, or when the
+// written lists already violate a rule, in which case the config loader
+// reports the fault under its own field key.
+func validateDefaultedTrackerStates(tc config.TrackerConfig, meta registry.TrackerMeta) []PreflightError {
+	activeDefaulted := len(tc.ActiveStates) == 0 && len(meta.DefaultActiveStates) > 0
+	terminalDefaulted := len(tc.TerminalStates) == 0 && len(meta.DefaultTerminalStates) > 0
+	if !activeDefaulted && !terminalDefaulted {
+		return nil
+	}
+
+	// A collision the written lists already carry has its own diagnostic from
+	// the config loader. Returning here keeps every diagnostic below
+	// attributable to one empty front-matter key.
+	if config.ValidateHandoffState(tc.HandoffState, tc.ActiveStates, tc.TerminalStates) != nil {
+		return nil
+	}
+	if config.ValidateInProgressState(tc.InProgressState, tc.ActiveStates, tc.TerminalStates, tc.HandoffState) != nil {
+		return nil
+	}
+
+	effectiveActive := tc.ActiveStates
+	if activeDefaulted {
+		effectiveActive = meta.DefaultActiveStates
+	}
+	effectiveTerminal := tc.TerminalStates
+	if terminalDefaulted {
+		effectiveTerminal = meta.DefaultTerminalStates
+	}
+
+	var errs []PreflightError
+
+	// The handoff rule runs once per list, each call passing the other list as
+	// nil, so a violation names the one list whose emptiness the fallback
+	// filled instead of leaving the operator to guess.
+	if activeDefaulted {
+		if err := config.ValidateHandoffState(tc.HandoffState, effectiveActive, nil); err != nil {
+			errs = append(errs, defaultedStateError("tracker.handoff_state", err, "tracker.active_states", tc.Kind))
+		}
+	}
+	if terminalDefaulted {
+		if err := config.ValidateHandoffState(tc.HandoffState, nil, effectiveTerminal); err != nil {
+			errs = append(errs, defaultedStateError("tracker.handoff_state", err, "tracker.terminal_states", tc.Kind))
+		}
+		// The guards above returned on any membership or handoff-equality
+		// violation, so the only rule left for this call is the terminal
+		// collision.
+		if err := config.ValidateInProgressState(tc.InProgressState, effectiveActive, effectiveTerminal, tc.HandoffState); err != nil {
+			errs = append(errs, defaultedStateError("tracker.in_progress_state", err, "tracker.terminal_states", tc.Kind))
+		}
+	}
+
+	return errs
+}
+
+// defaultedStateError builds the diagnostic for a collision that a
+// tracker adapter's fallback state list exposed, naming the empty
+// front-matter key and the tracker kind whose fallback filled it.
+//
+// The sentence before the semicolon is the config loader's own, so both
+// paths report the same collision in the same words. ConfigError.Error
+// is not used: its field prefix belongs to a config-load failure, not to
+// a preflight message.
+func defaultedStateError(check string, err error, emptyKey, kind string) PreflightError {
+	message := err.Error()
+	var cfgErr *config.ConfigError
+	if errors.As(err, &cfgErr) {
+		message = cfgErr.Message
+	}
+
+	stateNoun := "terminal"
+	if emptyKey == "tracker.active_states" {
+		stateNoun = "active"
+	}
+
+	return PreflightError{
+		Check: check,
+		Message: message + "; " + emptyKey + " is empty, so the " + strconv.Quote(kind) +
+			" adapter falls back to its own " + stateNoun + " states",
+	}
 }
 
 // checkWorkspaceRootWritable verifies that root exists (creating it

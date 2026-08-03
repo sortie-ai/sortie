@@ -83,6 +83,10 @@ Validation checks:
   every referenced per-rule template path resolves and parses; no rule name is duplicated;
   no non-final rule is a catch-all; every match key is recognized; every glob pattern is
   syntactically valid; every priority predicate has exactly one operator key.
+- `tracker.handoff_state` and `tracker.in_progress_state` are re-checked against the effective
+  state lists. An empty `tracker.active_states` or `tracker.terminal_states` takes the tracker
+  adapter's declared fallback list, so a collision the config layer cannot see (because it rules
+  on the lists as written) is reported here.
 
 Effort-budget and notification config are validated outside this preflight, by design:
 
@@ -153,15 +157,20 @@ This section is intentionally redundant so a coding agent can implement the conf
 - `tracker.endpoint`: string, adapter-defined default
 - `tracker.api_key`: string or `$VAR`, required when the tracker adapter declares it
 - `tracker.project`: string, required when the tracker adapter requires project scoping
-- `tracker.active_states`: list of strings, adapter-defined defaults
-- `tracker.terminal_states`: list of strings, adapter-defined defaults
+- `tracker.active_states`: list of strings, defaults to empty; an empty value leaves the tracker
+  adapter to apply its own internal fallback list
+- `tracker.terminal_states`: list of strings, defaults to empty; an empty value leaves the tracker
+  adapter to apply its own internal fallback list
 - `tracker.query_filter`: string, optional, default empty (adapter-defined filter fragment)
 - `tracker.handoff_state`: string, optional, default absent; target state for
   orchestrator-initiated handoff after successful worker run; must not collide with
-  `active_states` or `terminal_states`; supports `$VAR`
+  `active_states` or `terminal_states`, evaluated against the effective lists, so the tracker
+  adapter's fallback participates whenever the matching field is empty; supports `$VAR`
 - `tracker.in_progress_state`: string, optional, default absent; target state for
   dispatch-time transition at the start of each worker attempt; must be in `active_states`,
-  must not collide with `terminal_states` or `handoff_state`; supports `$VAR`
+  must not collide with `terminal_states` or `handoff_state`, and the `terminal_states` rule is
+  evaluated against the effective list, so the tracker adapter's fallback participates when that
+  field is empty; supports `$VAR`
 - `tracker.api_version`: string (`"2"` or `"3"`), optional, default `"3"`; selects
   Jira REST API v3 (Cloud) or v2 (Server / Data Center); quote the value to avoid
   a validation advisory (`api_version: "2"`); supports `$VAR`
