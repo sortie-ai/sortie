@@ -2634,3 +2634,252 @@ func TestValidateHandoffStateCollisionEveryTrackerKind(t *testing.T) {
 		})
 	}
 }
+
+// sentinelState is written into the one state list a defaulted-state
+// fixture keeps, so that list carries no element of the tracker kind's own
+// fallback lists and every collision the fixture asserts comes from the
+// omitted list.
+const sentinelState = "Sentinel Written State"
+
+// defaultedStateWorkflow renders a minimal workflow for the given tracker
+// kind. An empty active or terminal slice omits that front-matter key,
+// which is what leaves the tracker adapter's own fallback list as the
+// effective one; an empty handoff or inProgress omits that field.
+// Credentials and project are omitted deliberately: the dispatch preflight
+// collects every diagnostic rather than short-circuiting, so a kind that
+// also reports tracker.api_key still reports the state collision.
+func defaultedStateWorkflow(kind string, active, terminal []string, handoff, inProgress string) []byte {
+	wf := fmt.Appendf(nil, `---
+polling:
+  interval_ms: 30000
+tracker:
+  kind: %s
+`, kind)
+	wf = appendStateList(wf, "active_states", active)
+	wf = appendStateList(wf, "terminal_states", terminal)
+	if handoff != "" {
+		wf = fmt.Appendf(wf, "  handoff_state: %q\n", handoff)
+	}
+	if inProgress != "" {
+		wf = fmt.Appendf(wf, "  in_progress_state: %q\n", inProgress)
+	}
+	return append(wf, `agent:
+  kind: mock
+---
+Do {{ .issue.title }}.
+`...)
+}
+
+// appendStateList appends a YAML sequence for key, or nothing when states
+// is empty so the key is absent from the rendered front matter.
+func appendStateList(wf []byte, key string, states []string) []byte {
+	if len(states) == 0 {
+		return wf
+	}
+	wf = fmt.Appendf(wf, "  %s:\n", key)
+	for _, s := range states {
+		wf = fmt.Appendf(wf, "    - %q\n", s)
+	}
+	return wf
+}
+
+// runValidateWorkflow writes content to a fresh temp directory and runs
+// the validate command against it, returning the exit code and stderr.
+func runValidateWorkflow(t *testing.T, content []byte) (int, string) {
+	t.Helper()
+	wfPath := writeCustomWorkflowFile(t, t.TempDir(), content)
+
+	var stdout, stderr bytes.Buffer
+	code := run(context.Background(), []string{"validate", wfPath}, &stdout, &stderr)
+	return code, stderr.String()
+}
+
+// requireStateAbsent fails the test when state appears in either of the
+// kind's declared fallback lists. A fixture whose written list or handoff
+// value overlaps a fallback list asserts a collision it did not construct,
+// so this guard fails loudly instead of passing vacuously.
+func requireStateAbsent(t *testing.T, kind string, meta registry.TrackerMeta, state string) {
+	t.Helper()
+	for _, list := range [][]string{meta.DefaultActiveStates, meta.DefaultTerminalStates} {
+		for _, declared := range list {
+			if strings.EqualFold(declared, state) {
+				t.Fatalf("state %q is declared by tracker kind %q (active %v, terminal %v); pick a value outside both fallback lists",
+					state, kind, meta.DefaultActiveStates, meta.DefaultTerminalStates)
+			}
+		}
+	}
+}
+
+// TestValidateDefaultedTrackerStatesEveryTrackerKind verifies end to end
+// that a handoff_state or in_progress_state colliding with a tracker
+// adapter's own fallback state list is a hard error whenever the matching
+// workflow list is empty. Both the kind list and every state value come
+// from the registry, so a newly registered adapter that declares fallback
+// lists is covered without editing this test.
+func TestValidateDefaultedTrackerStatesEveryTrackerKind(t *testing.T) {
+	t.Parallel()
+
+	kinds := registry.Trackers.Kinds()
+	if len(kinds) == 0 {
+		t.Fatal("registry.Trackers.Kinds() is empty; the subtests below would assert nothing")
+	}
+
+	for _, kind := range kinds {
+		meta, ok := registry.Trackers.Meta(kind)
+		if !ok {
+			t.Fatalf("Trackers.Meta(%q) reported not registered", kind)
+		}
+
+		if len(meta.DefaultActiveStates) == 0 && len(meta.DefaultTerminalStates) == 0 {
+			t.Run(kind+"/no declared fallback lists", func(t *testing.T) {
+				t.Parallel()
+
+				_, stderr := runValidateWorkflow(t, defaultedStateWorkflow(kind, nil, []string{sentinelState}, "Awaiting Human", ""))
+
+				// The exit code is unconstrained: a kind that requires an
+				// api_key or project still fails preflight on this minimal
+				// workflow. What must not appear is a state collision.
+				for _, unwanted := range []string{"error: tracker.handoff_state: ", "error: tracker.in_progress_state: "} {
+					if strings.Contains(stderr, unwanted) {
+						t.Errorf("stderr = %q, want no %q diagnostic for a kind that declares no fallback state lists", stderr, unwanted)
+					}
+				}
+			})
+			continue
+		}
+
+		if len(meta.DefaultActiveStates) > 0 {
+			t.Run(kind+"/handoff state inside the defaulted active list", func(t *testing.T) {
+				t.Parallel()
+
+				requireStateAbsent(t, kind, meta, sentinelState)
+				handoff := meta.DefaultActiveStates[0]
+
+				code, stderr := runValidateWorkflow(t, defaultedStateWorkflow(kind, nil, []string{sentinelState}, handoff, ""))
+
+				want := fmt.Sprintf(`error: tracker.handoff_state: %q collides with active state %q; tracker.active_states is empty, so the %q adapter falls back to its own active states`,
+					handoff, handoff, kind)
+				if code != 1 {
+					t.Fatalf("run(validate) = %d, want 1; stderr: %s", code, stderr)
+				}
+				if !strings.Contains(stderr, want) {
+					t.Errorf("stderr = %q, want to contain %q", stderr, want)
+				}
+			})
+		}
+
+		if len(meta.DefaultTerminalStates) == 0 {
+			continue
+		}
+
+		t.Run(kind+"/handoff state inside the defaulted terminal list", func(t *testing.T) {
+			t.Parallel()
+
+			requireStateAbsent(t, kind, meta, sentinelState)
+			handoff := meta.DefaultTerminalStates[0]
+
+			code, stderr := runValidateWorkflow(t, defaultedStateWorkflow(kind, []string{sentinelState}, nil, handoff, ""))
+
+			want := fmt.Sprintf(`error: tracker.handoff_state: %q collides with terminal state %q; tracker.terminal_states is empty, so the %q adapter falls back to its own terminal states`,
+				handoff, handoff, kind)
+			if code != 1 {
+				t.Fatalf("run(validate) = %d, want 1; stderr: %s", code, stderr)
+			}
+			if !strings.Contains(stderr, want) {
+				t.Errorf("stderr = %q, want to contain %q", stderr, want)
+			}
+		})
+
+		// handoff_state stays absent here: a handoff inside the written
+		// active_states is rejected by the config loader before the
+		// preflight runs, so the in_progress diagnostic would never appear.
+		t.Run(kind+"/in progress state inside the defaulted terminal list", func(t *testing.T) {
+			t.Parallel()
+
+			inProgress := meta.DefaultTerminalStates[0]
+
+			code, stderr := runValidateWorkflow(t, defaultedStateWorkflow(kind, []string{inProgress}, nil, "", inProgress))
+
+			want := fmt.Sprintf(`error: tracker.in_progress_state: %q collides with terminal state %q; tracker.terminal_states is empty, so the %q adapter falls back to its own terminal states`,
+				inProgress, inProgress, kind)
+			if code != 1 {
+				t.Fatalf("run(validate) = %d, want 1; stderr: %s", code, stderr)
+			}
+			if !strings.Contains(stderr, want) {
+				t.Errorf("stderr = %q, want to contain %q", stderr, want)
+			}
+		})
+	}
+}
+
+// TestValidateHandoffStateDefaultParityEveryTrackerKind proves that
+// omitting active_states no longer changes whether the collision rule
+// fires. The written form is rejected by the config loader under
+// config.tracker.handoff_state and the omitted form by the dispatch
+// preflight under tracker.handoff_state; the negative assertion is what
+// makes the two paths distinguishable, because the loader's check key
+// contains the preflight's as a substring.
+func TestValidateHandoffStateDefaultParityEveryTrackerKind(t *testing.T) {
+	t.Parallel()
+
+	kinds := registry.Trackers.Kinds()
+	if len(kinds) == 0 {
+		t.Fatal("registry.Trackers.Kinds() is empty; the subtests below would assert nothing")
+	}
+
+	for _, kind := range kinds {
+		meta, ok := registry.Trackers.Meta(kind)
+		if !ok {
+			t.Fatalf("Trackers.Meta(%q) reported not registered", kind)
+		}
+		if len(meta.DefaultActiveStates) == 0 {
+			continue
+		}
+
+		t.Run(kind, func(t *testing.T) {
+			t.Parallel()
+
+			requireStateAbsent(t, kind, meta, sentinelState)
+			handoff := meta.DefaultActiveStates[0]
+
+			// The written terminal list must not carry the handoff state:
+			// otherwise the config loader rejects the omitted form too and the
+			// negative assertion below would fail for the wrong reason.
+			terminal := meta.DefaultTerminalStates
+			if len(terminal) == 0 {
+				terminal = []string{sentinelState}
+			}
+			for _, s := range terminal {
+				if strings.EqualFold(s, handoff) {
+					t.Fatalf("tracker kind %q declares %q in both fallback lists (active %v, terminal %v); the written and omitted forms are not comparable",
+						kind, handoff, meta.DefaultActiveStates, meta.DefaultTerminalStates)
+				}
+			}
+
+			collision := fmt.Sprintf("%q collides with active state %q", handoff, handoff)
+
+			writtenCode, writtenStderr := runValidateWorkflow(t,
+				defaultedStateWorkflow(kind, meta.DefaultActiveStates, terminal, handoff, ""))
+			if writtenCode != 1 {
+				t.Fatalf("run(validate) with active_states written = %d, want 1; stderr: %s", writtenCode, writtenStderr)
+			}
+			if want := "error: config.tracker.handoff_state: " + collision; !strings.Contains(writtenStderr, want) {
+				t.Errorf("stderr with active_states written = %q, want to contain %q", writtenStderr, want)
+			}
+
+			omittedCode, omittedStderr := runValidateWorkflow(t,
+				defaultedStateWorkflow(kind, nil, terminal, handoff, ""))
+			if omittedCode != 1 {
+				t.Fatalf("run(validate) with active_states omitted = %d, want 1; stderr: %s", omittedCode, omittedStderr)
+			}
+			want := fmt.Sprintf("error: tracker.handoff_state: %s; tracker.active_states is empty, so the %q adapter falls back to its own active states",
+				collision, kind)
+			if !strings.Contains(omittedStderr, want) {
+				t.Errorf("stderr with active_states omitted = %q, want to contain %q", omittedStderr, want)
+			}
+			if strings.Contains(omittedStderr, "config.tracker.handoff_state") {
+				t.Errorf("stderr with active_states omitted = %q, want no config.tracker.handoff_state diagnostic: the config loader cannot see the fallback list", omittedStderr)
+			}
+		})
+	}
+}

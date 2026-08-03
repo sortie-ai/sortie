@@ -209,7 +209,7 @@ func NewServiceConfig(raw map[string]any) (ServiceConfig, error) {
 			}
 		}
 	}
-	if err := validateHandoffState(tracker.HandoffState, tracker.ActiveStates, tracker.TerminalStates); err != nil {
+	if err := ValidateHandoffState(tracker.HandoffState, tracker.ActiveStates, tracker.TerminalStates); err != nil {
 		return ServiceConfig{}, err
 	}
 
@@ -236,7 +236,7 @@ func NewServiceConfig(raw map[string]any) (ServiceConfig, error) {
 			}
 		}
 	}
-	if err := validateInProgressState(tracker.InProgressState, tracker.ActiveStates, tracker.TerminalStates, tracker.HandoffState); err != nil {
+	if err := ValidateInProgressState(tracker.InProgressState, tracker.ActiveStates, tracker.TerminalStates, tracker.HandoffState); err != nil {
 		return ServiceConfig{}, err
 	}
 
@@ -792,9 +792,14 @@ func buildSelfReviewConfig(m map[string]any) (SelfReviewConfig, error) {
 	}, nil
 }
 
-// validateHandoffState checks that handoffState does not collide with
-// active or terminal states. Returns a *ConfigError on violation.
-func validateHandoffState(handoffState string, activeStates, terminalStates []string) error {
+// ValidateHandoffState reports a [*ConfigError] when handoffState
+// collides with an active or terminal state. Comparison is
+// case-insensitive and an empty handoffState is always valid.
+//
+// The caller supplies the state lists, which may be the values written
+// in the front matter or the effective lists after tracker adapter
+// defaults apply.
+func ValidateHandoffState(handoffState string, activeStates, terminalStates []string) error {
 	if handoffState == "" {
 		return nil
 	}
@@ -818,10 +823,15 @@ func validateHandoffState(handoffState string, activeStates, terminalStates []st
 	return nil
 }
 
-// validateInProgressState checks that inProgressState does not collide
-// with terminal states or handoff_state, and is present in active states.
-// Returns a *ConfigError on violation.
-func validateInProgressState(inProgressState string, activeStates, terminalStates []string, handoffState string) error {
+// ValidateInProgressState reports a [*ConfigError] when inProgressState
+// collides with a terminal state, is absent from the active states, or
+// equals handoffState. Comparison is case-insensitive and an empty
+// inProgressState is always valid.
+//
+// The caller supplies the state lists, which may be the values written
+// in the front matter or the effective lists after tracker adapter
+// defaults apply.
+func ValidateInProgressState(inProgressState string, activeStates, terminalStates []string, handoffState string) error {
 	if inProgressState == "" {
 		return nil
 	}

@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -153,6 +154,21 @@ func TestNewJiraAdapter_DefaultActiveStates(t *testing.T) {
 	}
 	if a.activeStates[0] != "Backlog" {
 		t.Errorf("activeStates[0] = %q, want Backlog", a.activeStates[0])
+	}
+
+	// The applied fallback must stay the list the registration declares:
+	// the dispatch preflight rules on the declared one. The adapter applies
+	// no casing change here, so the comparison is verbatim. JiraAdapter
+	// carries no terminal-state field, so only the active list is checked.
+	meta, ok := registry.Trackers.Meta("jira")
+	if !ok {
+		t.Fatal(`Trackers.Meta("jira") reported not registered`)
+	}
+	if len(meta.DefaultActiveStates) == 0 {
+		t.Fatal(`Trackers.Meta("jira").DefaultActiveStates is empty, want the adapter's declared fallback`)
+	}
+	if !slices.Equal(a.activeStates, meta.DefaultActiveStates) {
+		t.Errorf("NewJiraAdapter(config without active_states).activeStates = %v, want %v", a.activeStates, meta.DefaultActiveStates)
 	}
 }
 

@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/sortie-ai/sortie/internal/domain"
+	"github.com/sortie-ai/sortie/internal/registry"
 )
 
 // --- helpers ---
@@ -58,6 +59,16 @@ func loadFixture(t *testing.T, name string) []byte {
 		t.Fatalf("reading fixture %s: %v", name, err)
 	}
 	return data
+}
+
+// loweredStates returns a lowercased copy of states, matching the
+// normalization NewGitHubAdapter applies to every state list element.
+func loweredStates(states []string) []string {
+	out := make([]string, len(states))
+	for i, s := range states {
+		out[i] = strings.ToLower(s)
+	}
+	return out
 }
 
 // issueJSON returns a minimal valid GitHub issue JSON with the given number
@@ -196,6 +207,32 @@ func TestNewGitHubAdapter_Defaults(t *testing.T) {
 	}
 	if a.repo != "repo" {
 		t.Errorf("repo = %q, want %q", a.repo, "repo")
+	}
+}
+
+// TestNewGitHubAdapter_DefaultStatesMatchRegisteredMeta pins the applied
+// fallback lists to the ones the registration declares. A constructor that
+// stops reading the declared variables would leave the preflight ruling on
+// state lists the adapter no longer uses.
+func TestNewGitHubAdapter_DefaultStatesMatchRegisteredMeta(t *testing.T) {
+	t.Parallel()
+
+	meta, ok := registry.Trackers.Meta("github")
+	if !ok {
+		t.Fatal(`Trackers.Meta("github") reported not registered`)
+	}
+	if len(meta.DefaultActiveStates) == 0 || len(meta.DefaultTerminalStates) == 0 {
+		t.Fatalf("Trackers.Meta(%q) declares DefaultActiveStates = %v, DefaultTerminalStates = %v, want both non-empty",
+			"github", meta.DefaultActiveStates, meta.DefaultTerminalStates)
+	}
+
+	a := mustAdapter(t, validConfig("https://api.github.com"))
+
+	if want := loweredStates(meta.DefaultActiveStates); !slices.Equal(a.activeStates, want) {
+		t.Errorf("NewGitHubAdapter(config without active_states).activeStates = %v, want %v", a.activeStates, want)
+	}
+	if want := loweredStates(meta.DefaultTerminalStates); !slices.Equal(a.terminalStates, want) {
+		t.Errorf("NewGitHubAdapter(config without terminal_states).terminalStates = %v, want %v", a.terminalStates, want)
 	}
 }
 

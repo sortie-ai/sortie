@@ -212,7 +212,10 @@ the first active label when it is open and the first terminal label when it is c
 derivation. These defaults are an adapter-internal derivation fallback, not a substitute for the
 workflow configuration: the orchestrator gates dispatch and reconciliation on the workflow's
 `tracker.active_states` and `tracker.terminal_states`, which an operator sets to the labels that
-should be treated as active or terminal.
+should be treated as active or terminal. The fallback list is what `tracker.handoff_state` and
+`tracker.in_progress_state` are checked against in the dispatch preflight when the matching
+workflow list is empty, so a handoff target that belongs to the fallback is rejected whether or not
+the workflow spells the list out.
 
 **Normalization specifics.** Beyond the shared rules in Section 11.3:
 

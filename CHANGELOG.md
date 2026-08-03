@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `sortie validate` and startup now reject a `tracker.handoff_state` or
+  `tracker.in_progress_state` that collides with the tracker adapter's own
+  fallback state list when the matching workflow list is empty. Leaving
+  `tracker.active_states` or `tracker.terminal_states` out no longer hides the
+  collision, so a workflow that passed validation before this release can now
+  fail: either write the list out or pick a state outside the adapter's
+  fallback. ([#695](https://github.com/sortie-ai/sortie/issues/695))
+
 ## [1.16.0] - 2026-07-19
 
 ### Added

@@ -28,6 +28,15 @@ func TestLinearAdapterRegistration(t *testing.T) {
 		t.Errorf("Trackers.Meta(%q).RequiresAPIKey = %v, want %v", "linear", meta.RequiresAPIKey, true)
 	}
 
+	// The declared fallback lists must be the variables NewLinearAdapter
+	// substitutes, because the dispatch preflight rules on the declared ones.
+	if !slices.Equal(meta.DefaultActiveStates, defaultActiveStates) {
+		t.Errorf("Trackers.Meta(%q).DefaultActiveStates = %v, want %v", "linear", meta.DefaultActiveStates, defaultActiveStates)
+	}
+	if !slices.Equal(meta.DefaultTerminalStates, defaultTerminalStates) {
+		t.Errorf("Trackers.Meta(%q).DefaultTerminalStates = %v, want %v", "linear", meta.DefaultTerminalStates, defaultTerminalStates)
+	}
+
 	if _, err := registry.Trackers.Get("linear"); err != nil {
 		t.Errorf("Trackers.Get(%q) = %v, want registered constructor", "linear", err)
 	}

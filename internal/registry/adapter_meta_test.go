@@ -1,6 +1,7 @@
 package registry_test
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/sortie-ai/sortie/internal/registry"
@@ -9,9 +10,11 @@ import (
 	_ "github.com/sortie-ai/sortie/internal/agent/claude"
 	_ "github.com/sortie-ai/sortie/internal/agent/mock"
 	_ "github.com/sortie-ai/sortie/internal/agent/opencode"
+	_ "github.com/sortie-ai/sortie/internal/scm/gitea"
 	_ "github.com/sortie-ai/sortie/internal/scm/github"
 	_ "github.com/sortie-ai/sortie/internal/tracker/file"
 	_ "github.com/sortie-ai/sortie/internal/tracker/jira"
+	_ "github.com/sortie-ai/sortie/internal/tracker/linear"
 )
 
 func TestAdapterMeta_RealRegistrations(t *testing.T) {
@@ -21,25 +24,46 @@ func TestAdapterMeta_RealRegistrations(t *testing.T) {
 		t.Parallel()
 
 		tests := []struct {
-			name        string
-			kind        string
-			wantAPIKey  bool
-			wantProject bool
+			name         string
+			kind         string
+			wantAPIKey   bool
+			wantProject  bool
+			wantActive   []string
+			wantTerminal []string
 		}{
 			{
-				name:        "jira requires api_key and project",
+				name:        "jira requires api_key and project and declares active states only",
 				kind:        "jira",
 				wantAPIKey:  true,
 				wantProject: true,
+				wantActive:  []string{"Backlog", "Selected for Development", "In Progress"},
 			},
 			{
-				name:        "github requires api_key and project",
-				kind:        "github",
-				wantAPIKey:  true,
-				wantProject: true,
+				name:         "github requires api_key and project and declares both state lists",
+				kind:         "github",
+				wantAPIKey:   true,
+				wantProject:  true,
+				wantActive:   []string{"backlog", "in-progress", "review"},
+				wantTerminal: []string{"done", "wontfix"},
 			},
 			{
-				name: "file requires neither api_key nor project",
+				name:         "gitea requires api_key and project and declares both state lists",
+				kind:         "gitea",
+				wantAPIKey:   true,
+				wantProject:  true,
+				wantActive:   []string{"backlog", "in-progress", "review"},
+				wantTerminal: []string{"done", "wontfix"},
+			},
+			{
+				name:         "linear requires api_key and project and declares both state lists",
+				kind:         "linear",
+				wantAPIKey:   true,
+				wantProject:  true,
+				wantActive:   []string{"Backlog", "Todo", "In Progress"},
+				wantTerminal: []string{"Done", "Canceled", "Duplicate"},
+			},
+			{
+				name: "file requires neither api_key nor project and declares no default states",
 				kind: "file",
 			},
 		}
@@ -58,6 +82,12 @@ func TestAdapterMeta_RealRegistrations(t *testing.T) {
 				}
 				if meta.RequiresProject != tt.wantProject {
 					t.Errorf("Trackers.Meta(%q).RequiresProject = %v, want %v", tt.kind, meta.RequiresProject, tt.wantProject)
+				}
+				if !slices.Equal(meta.DefaultActiveStates, tt.wantActive) {
+					t.Errorf("Trackers.Meta(%q).DefaultActiveStates = %v, want %v", tt.kind, meta.DefaultActiveStates, tt.wantActive)
+				}
+				if !slices.Equal(meta.DefaultTerminalStates, tt.wantTerminal) {
+					t.Errorf("Trackers.Meta(%q).DefaultTerminalStates = %v, want %v", tt.kind, meta.DefaultTerminalStates, tt.wantTerminal)
 				}
 			})
 		}

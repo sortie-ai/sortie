@@ -110,6 +110,16 @@ func newPreflightMux(t *testing.T) *http.ServeMux {
 	return mux
 }
 
+// loweredStates returns a lowercased copy of states, matching the
+// normalization NewGiteaAdapter applies to every state list element.
+func loweredStates(states []string) []string {
+	out := make([]string, len(states))
+	for i, s := range states {
+		out[i] = strings.ToLower(s)
+	}
+	return out
+}
+
 // mustAdapter starts an httptest.Server for mux and constructs a
 // *GiteaAdapter against it, registering server cleanup. mux must already
 // carry the two construction-preflight routes; see [newPreflightMux].
@@ -184,8 +194,20 @@ func TestNewGiteaAdapter(t *testing.T) {
 		}
 	})
 
+	// validConfig omits both state keys, so the constructed adapter holds the
+	// fallback lists. They must stay the ones the registration declares,
+	// because the dispatch preflight rules on the declared lists.
 	t.Run("successful construction applies default state lists", func(t *testing.T) {
 		t.Parallel()
+
+		meta, ok := registry.Trackers.Meta("gitea")
+		if !ok {
+			t.Fatal(`Trackers.Meta("gitea") reported not registered`)
+		}
+		if len(meta.DefaultActiveStates) == 0 || len(meta.DefaultTerminalStates) == 0 {
+			t.Fatalf("Trackers.Meta(%q) declares DefaultActiveStates = %v, DefaultTerminalStates = %v, want both non-empty",
+				"gitea", meta.DefaultActiveStates, meta.DefaultTerminalStates)
+		}
 
 		a := mustAdapter(t, newPreflightMux(t))
 
@@ -195,11 +217,11 @@ func TestNewGiteaAdapter(t *testing.T) {
 		if a.repo != testRepo {
 			t.Errorf("repo = %q, want %q", a.repo, testRepo)
 		}
-		if len(a.activeStates) != 3 || a.activeStates[0] != "backlog" {
-			t.Errorf("activeStates = %v, want defaults starting with backlog", a.activeStates)
+		if want := loweredStates(meta.DefaultActiveStates); !slices.Equal(a.activeStates, want) {
+			t.Errorf("NewGiteaAdapter(config without active_states).activeStates = %v, want %v", a.activeStates, want)
 		}
-		if len(a.terminalStates) != 2 || a.terminalStates[0] != "done" {
-			t.Errorf("terminalStates = %v, want defaults starting with done", a.terminalStates)
+		if want := loweredStates(meta.DefaultTerminalStates); !slices.Equal(a.terminalStates, want) {
+			t.Errorf("NewGiteaAdapter(config without terminal_states).terminalStates = %v, want %v", a.terminalStates, want)
 		}
 		if a.handoffState != "" {
 			t.Errorf("handoffState = %q, want empty", a.handoffState)
