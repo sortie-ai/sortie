@@ -360,40 +360,12 @@ func TestValidateStateOverlap(t *testing.T) {
 			wantDiagCount: 0,
 		},
 		{
-			name: "handoff_state in active_states",
-			fields: registry.TrackerConfigFields{
-				ActiveStates:   []string{"review", "backlog"},
-				TerminalStates: []string{"done"},
-				HandoffState:   "review",
-			},
-			wantChecks:    []string{"tracker.handoff_state.collision"},
-			wantDiagCount: 1,
-		},
-		{
-			name: "handoff_state in terminal_states",
-			fields: registry.TrackerConfigFields{
-				ActiveStates:   []string{"backlog"},
-				TerminalStates: []string{"done"},
-				HandoffState:   "done",
-			},
-			wantChecks:    []string{"tracker.handoff_state.collision"},
-			wantDiagCount: 1,
-		},
-		{
-			name: "empty handoff_state is skipped",
-			fields: registry.TrackerConfigFields{
-				ActiveStates:   []string{"backlog"},
-				TerminalStates: []string{"done"},
-				HandoffState:   "",
-			},
-			wantDiagCount: 0,
-		},
-		{
-			name: "in_progress_state is not a Gitea concern",
+			name: "handoff_state and in_progress_state are not this hook's concern",
 			fields: registry.TrackerConfigFields{
 				ActiveStates:    []string{"backlog"},
-				TerminalStates:  []string{"done", "closed"},
-				InProgressState: "closed",
+				TerminalStates:  []string{"done"},
+				HandoffState:    "done",
+				InProgressState: "done",
 			},
 			wantDiagCount: 0,
 		},

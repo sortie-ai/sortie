@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/sortie-ai/sortie/internal/config"
+	"github.com/sortie-ai/sortie/internal/registry"
 )
 
 // errWriter is a test double that always returns a fixed error from Write.
@@ -2536,5 +2537,100 @@ func TestValidateShadowedEscalation(t *testing.T) {
 		if d := diagWithCheck(out.Errors, shadowed); d != nil {
 			t.Errorf("validateOutput.Errors contains shadowed check %q = %v, want absent (config layer must exit first)", shadowed, d)
 		}
+	}
+}
+
+// handoffStateWorkflow renders a minimal workflow for the given tracker
+// kind. Credentials and project are omitted deliberately: the state
+// collision is rejected by the config loader, which runs before any
+// adapter or preflight check, so validate never reaches those fields.
+func handoffStateWorkflow(kind, handoff string) []byte {
+	return fmt.Appendf(nil, `---
+polling:
+  interval_ms: 30000
+tracker:
+  kind: %s
+  active_states:
+    - "In Review"
+  terminal_states:
+    - "Done"
+  handoff_state: %q
+agent:
+  kind: mock
+---
+Do {{ .issue.title }}.
+`, kind, handoff)
+}
+
+// TestValidateHandoffStateCollisionEveryTrackerKind verifies that a
+// handoff_state colliding with active_states or terminal_states is a hard
+// error for every registered tracker kind. The rule is enforced by the
+// config loader rather than by adapter validation hooks, so no adapter can
+// opt out of it or downgrade it to a warning. The kind list comes from the
+// registry so a newly registered adapter is covered without editing this
+// test.
+func TestValidateHandoffStateCollisionEveryTrackerKind(t *testing.T) {
+	t.Parallel()
+
+	kinds := registry.Trackers.Kinds()
+	if len(kinds) == 0 {
+		t.Fatal("registry.Trackers.Kinds() is empty; the subtests below would assert nothing")
+	}
+
+	collisions := []struct {
+		name    string
+		handoff string
+		wantMsg string
+	}{
+		{
+			name:    "active state",
+			handoff: "In Review",
+			wantMsg: `config.tracker.handoff_state: "In Review" collides with active state "In Review"`,
+		},
+		{
+			name:    "terminal state",
+			handoff: "Done",
+			wantMsg: `config.tracker.handoff_state: "Done" collides with terminal state "Done"`,
+		},
+		{
+			name:    "terminal state, different casing",
+			handoff: "done",
+			wantMsg: `config.tracker.handoff_state: "done" collides with terminal state "Done"`,
+		},
+	}
+
+	for _, kind := range kinds {
+		for _, tc := range collisions {
+			t.Run(kind+"/"+tc.name, func(t *testing.T) {
+				t.Parallel()
+
+				wfPath := writeCustomWorkflowFile(t, t.TempDir(), handoffStateWorkflow(kind, tc.handoff))
+
+				var stdout, stderr bytes.Buffer
+				code := run(context.Background(), []string{"validate", wfPath}, &stdout, &stderr)
+				if code != 1 {
+					t.Fatalf("run(validate) = %d, want 1; stderr: %s", code, stderr.String())
+				}
+				if !strings.Contains(stderr.String(), tc.wantMsg) {
+					t.Errorf("stderr = %q, want to contain %q", stderr.String(), tc.wantMsg)
+				}
+			})
+		}
+
+		t.Run(kind+"/no collision", func(t *testing.T) {
+			t.Parallel()
+
+			wfPath := writeCustomWorkflowFile(t, t.TempDir(), handoffStateWorkflow(kind, "Awaiting Human"))
+
+			var stdout, stderr bytes.Buffer
+			run(context.Background(), []string{"validate", wfPath}, &stdout, &stderr)
+
+			// The exit code is unconstrained: kinds that require an api_key or
+			// project still fail preflight on this minimal workflow. What must
+			// not appear is the collision diagnostic.
+			if strings.Contains(stderr.String(), "config.tracker.handoff_state") {
+				t.Errorf("stderr = %q, want no handoff_state diagnostic for a non-colliding state", stderr.String())
+			}
+		})
 	}
 }

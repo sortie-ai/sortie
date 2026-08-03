@@ -199,7 +199,7 @@ func (c *githubAPIClient) restoreIssueState(t *testing.T, number string) {
 
 // TestGitHubIntegration_FullDispatchCycle verifies the full orchestrator
 // dispatch cycle with the real GitHub adapter: poll → dispatch mock agent →
-// handoff transition (label swap + close).
+// handoff transition (label swap, issue left open).
 func TestGitHubIntegration_FullDispatchCycle(t *testing.T) {
 	skipUnlessGitHubE2E(t)
 
@@ -213,20 +213,28 @@ func TestGitHubIntegration_FullDispatchCycle(t *testing.T) {
 	issueNumber := ghClient.createTestIssue(t, issueTitle, []string{"backlog"})
 	t.Cleanup(func() { ghClient.restoreIssueState(t, issueNumber) })
 
+	// One tracker map feeds both the adapter and the orchestrator config, so
+	// the state sets the adapter derives from cannot drift away from the ones
+	// the orchestrator dispatches on. The lists are []any because that is what
+	// a YAML decode produces, and the config loader accepts nothing else.
+	trackerCfg := map[string]any{
+		"kind":            "github",
+		"api_key":         os.Getenv("SORTIE_GITHUB_TOKEN"),
+		"project":         os.Getenv("SORTIE_GITHUB_PROJECT"),
+		"active_states":   []any{"backlog", "in-progress"},
+		"terminal_states": []any{"done", "wontfix"},
+		"handoff_state":   "review",
+		// Scope fetches to this test's issue only so concurrent test runs
+		// cannot dispatch one another's issues.
+		"query_filter": issueTitle + " in:title",
+	}
+
 	// --- Setup: real GitHub tracker adapter via registry ---
 	trackerFactory, err := registry.Trackers.Get("github")
 	if err != nil {
 		t.Fatalf("registry.Trackers.Get(%q): %v", "github", err)
 	}
-	trackerAdapter, err := trackerFactory(map[string]any{
-		"api_key":         os.Getenv("SORTIE_GITHUB_TOKEN"),
-		"project":         os.Getenv("SORTIE_GITHUB_PROJECT"),
-		"active_states":   []string{"backlog", "in-progress", "review"},
-		"terminal_states": []string{"done", "wontfix"},
-		// Scope fetches to this test's issue only so concurrent test runs
-		// cannot dispatch one another's issues.
-		"query_filter": issueTitle + " in:title",
-	})
+	trackerAdapter, err := trackerFactory(trackerCfg)
 	if err != nil {
 		t.Fatalf("NewGitHubAdapter: %v", err)
 	}
@@ -259,26 +267,23 @@ func TestGitHubIntegration_FullDispatchCycle(t *testing.T) {
 	}
 
 	// --- Setup: config and workflow manager ---
+	// Built through the loader rather than as a struct literal, so this test
+	// can only ever run a configuration an operator could also write.
 	workspaceRoot := t.TempDir()
-	cfg := config.ServiceConfig{
-		Tracker: config.TrackerConfig{
-			Kind:           "github",
-			APIKey:         os.Getenv("SORTIE_GITHUB_TOKEN"),
-			Project:        os.Getenv("SORTIE_GITHUB_PROJECT"),
-			ActiveStates:   []string{"backlog", "in-progress", "review"},
-			TerminalStates: []string{"done", "wontfix"},
-			HandoffState:   "done",
+	cfg, err := config.NewServiceConfig(map[string]any{
+		"tracker":   trackerCfg,
+		"polling":   map[string]any{"interval_ms": 5000},
+		"workspace": map[string]any{"root": workspaceRoot},
+		"hooks":     map[string]any{"timeout_ms": 5000},
+		"agent": map[string]any{
+			"kind":                  "mock",
+			"max_concurrent_agents": 1,
+			"max_turns":             1,
+			"read_timeout_ms":       1000,
 		},
-		Polling:   config.PollingConfig{IntervalMS: 5000},
-		Workspace: config.WorkspaceConfig{Root: workspaceRoot},
-		Hooks:     config.HooksConfig{TimeoutMS: 5000},
-		Agent: config.AgentConfig{
-			Kind:                "mock",
-			MaxConcurrentAgents: 1,
-			MaxTurns:            1,
-			ReadTimeoutMS:       1000,
-		},
-		Extensions: map[string]any{},
+	})
+	if err != nil {
+		t.Fatalf("config.NewServiceConfig: %v", err)
 	}
 
 	tmpl, err := prompt.Parse("work on {{ .issue.identifier }}", "test", 0)
@@ -335,20 +340,20 @@ func TestGitHubIntegration_FullDispatchCycle(t *testing.T) {
 		case <-deadline:
 			orchCancel()
 			<-done
-			t.Fatalf("timed out waiting for issue #%s to transition to 'done'", issueNumber)
+			t.Fatalf("timed out waiting for issue #%s to transition to 'review'", issueNumber)
 		default:
 		}
 
 		issue = ghClient.fetchIssue(t, issueNumber)
-		hasDone := false
+		hasReview := false
 		for _, l := range issue.Labels {
-			if strings.EqualFold(l.Name, "done") {
-				hasDone = true
+			if strings.EqualFold(l.Name, "review") {
+				hasReview = true
 				break
 			}
 		}
-		if hasDone && issue.State == "closed" {
-			t.Logf("issue #%s transitioned: state=%q, labels include 'done'", issueNumber, issue.State)
+		if hasReview {
+			t.Logf("issue #%s transitioned: state=%q, labels include 'review'", issueNumber, issue.State)
 			break
 		}
 		time.Sleep(2 * time.Second)
@@ -362,12 +367,12 @@ func TestGitHubIntegration_FullDispatchCycle(t *testing.T) {
 		t.Fatal("orchestrator did not shut down within 15 seconds")
 	}
 
-	// handoff_state="done" is terminal → issue should be closed.
-	if issue.State != "closed" {
-		t.Errorf("issue state = %q, want %q", issue.State, "closed")
+	// handoff_state="review" is neither active nor terminal, so the handoff
+	// parks the issue for a reviewer instead of closing it.
+	if issue.State != "open" {
+		t.Errorf("issue state = %q, want %q", issue.State, "open")
 	}
 
-	// Issue should have the "done" label.
 	hasLabel := func(name string) bool {
 		for _, l := range issue.Labels {
 			if strings.EqualFold(l.Name, name) {
@@ -376,15 +381,15 @@ func TestGitHubIntegration_FullDispatchCycle(t *testing.T) {
 		}
 		return false
 	}
-	if !hasLabel("done") {
+	if !hasLabel("review") {
 		labels := make([]string, len(issue.Labels))
 		for i, l := range issue.Labels {
 			labels[i] = l.Name
 		}
-		t.Errorf("issue labels = %v, want 'done' present", labels)
+		t.Errorf("issue labels = %v, want 'review' present", labels)
 	}
 	if hasLabel("backlog") {
-		t.Error("issue still has 'backlog' label after handoff to 'done'")
+		t.Error("issue still has 'backlog' label after handoff to 'review'")
 	}
 
 	// --- Verification: run history in SQLite ---

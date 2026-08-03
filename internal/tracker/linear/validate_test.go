@@ -408,60 +408,12 @@ func TestValidateStateOverlap(t *testing.T) {
 			wantDiagCount: 0,
 		},
 		{
-			name: "handoff_state present in active_states – collision warning",
-			fields: registry.TrackerConfigFields{
-				ActiveStates:   []string{"review", "backlog"},
-				TerminalStates: []string{"Done"},
-				HandoffState:   "review",
-			},
-			wantDiagCount: 1,
-			wantChecks:    []string{"tracker.handoff_state.collision"},
-		},
-		{
-			name: "handoff_state present in terminal_states – collision warning",
-			fields: registry.TrackerConfigFields{
-				ActiveStates:   []string{"backlog"},
-				TerminalStates: []string{"done", "canceled"},
-				HandoffState:   "done",
-			},
-			wantDiagCount: 1,
-			wantChecks:    []string{"tracker.handoff_state.collision"},
-		},
-		{
-			name: "handoff_state case-insensitive match in active_states",
-			fields: registry.TrackerConfigFields{
-				ActiveStates:   []string{"Review"},
-				TerminalStates: []string{"Done"},
-				HandoffState:   "REVIEW",
-			},
-			wantDiagCount: 1,
-			wantChecks:    []string{"tracker.handoff_state.collision"},
-		},
-		{
-			name: "empty handoff_state is skipped",
-			fields: registry.TrackerConfigFields{
-				ActiveStates:   []string{"backlog"},
-				TerminalStates: []string{"done"},
-				HandoffState:   "",
-			},
-			wantDiagCount: 0,
-		},
-		// InProgressState populated but must generate no in_progress_state diag.
-		{
-			name: "in_progress_state populated – no in_progress_state diagnostic emitted",
+			name: "handoff_state and in_progress_state are not this hook's concern",
 			fields: registry.TrackerConfigFields{
 				ActiveStates:    []string{"backlog"},
 				TerminalStates:  []string{"done"},
-				InProgressState: "in progress",
-			},
-			wantDiagCount: 0,
-		},
-		{
-			name: "in_progress_state in terminal_states – no in_progress_state diagnostic",
-			fields: registry.TrackerConfigFields{
-				ActiveStates:    []string{"backlog"},
-				TerminalStates:  []string{"done", "in progress"},
-				InProgressState: "in progress",
+				HandoffState:    "done",
+				InProgressState: "done",
 			},
 			wantDiagCount: 0,
 		},

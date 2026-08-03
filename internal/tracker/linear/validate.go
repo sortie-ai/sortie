@@ -130,10 +130,10 @@ func validateStateLabels(field string, states []string) []registry.ValidationDia
 }
 
 // validateStateOverlap detects state names shared between active_states
-// and terminal_states, and a handoff_state that collides with either
-// list. All comparisons are case-insensitive. There is no
-// in_progress_state arm because in_progress_state is not a Linear config
-// key.
+// and terminal_states. All comparisons are case-insensitive. Collisions
+// involving handoff_state or in_progress_state are rejected by the
+// generic config validation before this hook runs, so there are no arms
+// for them here.
 func validateStateOverlap(fields registry.TrackerConfigFields) []registry.ValidationDiag {
 	var diags []registry.ValidationDiag
 
@@ -156,24 +156,6 @@ func validateStateOverlap(fields registry.TrackerConfigFields) []registry.Valida
 			Check:    "tracker.states.overlap",
 			Message:  fmt.Sprintf("tracker.active_states and tracker.terminal_states overlap on %q; an issue in state %q would match both sets", name, name),
 		})
-	}
-
-	handoff := strings.TrimSpace(fields.HandoffState)
-	if hs := strings.ToLower(handoff); hs != "" {
-		if _, ok := activeSet[hs]; ok {
-			diags = append(diags, registry.ValidationDiag{
-				Severity: "warning",
-				Check:    "tracker.handoff_state.collision",
-				Message:  fmt.Sprintf("tracker.handoff_state %q must not appear in active_states (would cause immediate re-dispatch after handoff)", handoff),
-			})
-		}
-		if _, ok := terminalSet[hs]; ok {
-			diags = append(diags, registry.ValidationDiag{
-				Severity: "warning",
-				Check:    "tracker.handoff_state.collision",
-				Message:  fmt.Sprintf("tracker.handoff_state %q must not appear in terminal_states (handoff is not terminal)", handoff),
-			})
-		}
 	}
 
 	return diags

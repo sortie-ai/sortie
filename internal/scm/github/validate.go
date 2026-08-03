@@ -100,8 +100,10 @@ func validateStateLabels(field string, states []string) []registry.ValidationDia
 	return diags
 }
 
-// validateStateOverlap detects collisions between active_states,
-// terminal_states, handoff_state, and in_progress_state.
+// validateStateOverlap detects labels shared between active_states and
+// terminal_states. Collisions involving handoff_state or
+// in_progress_state are rejected by the generic config validation before
+// this hook runs, so there are no arms for them here.
 func validateStateOverlap(fields registry.TrackerConfigFields) []registry.ValidationDiag {
 	var diags []registry.ValidationDiag
 
@@ -125,43 +127,6 @@ func validateStateOverlap(fields registry.TrackerConfigFields) []registry.Valida
 			Check:    "tracker.states.overlap",
 			Message:  fmt.Sprintf("tracker.active_states and tracker.terminal_states overlap on %q; an issue in state %q would match both sets", label, label),
 		})
-	}
-
-	// Handoff state must not overlap with active or terminal sets.
-	if hs := strings.ToLower(strings.TrimSpace(fields.HandoffState)); hs != "" {
-		if _, ok := activeSet[hs]; ok {
-			diags = append(diags, registry.ValidationDiag{
-				Severity: "warning",
-				Check:    "tracker.handoff_state.collision",
-				Message:  fmt.Sprintf("tracker.handoff_state %q must not appear in active_states (would cause immediate re-dispatch after handoff)", fields.HandoffState),
-			})
-		}
-		if _, ok := terminalSet[hs]; ok {
-			diags = append(diags, registry.ValidationDiag{
-				Severity: "warning",
-				Check:    "tracker.handoff_state.collision",
-				Message:  fmt.Sprintf("tracker.handoff_state %q must not appear in terminal_states (handoff is not terminal)", fields.HandoffState),
-			})
-		}
-	}
-
-	// In-progress state must not collide with terminal or handoff states.
-	if ips := strings.ToLower(strings.TrimSpace(fields.InProgressState)); ips != "" {
-		if _, ok := terminalSet[ips]; ok {
-			diags = append(diags, registry.ValidationDiag{
-				Severity: "warning",
-				Check:    "tracker.in_progress_state.collision",
-				Message:  fmt.Sprintf("tracker.in_progress_state %q must not appear in terminal_states", fields.InProgressState),
-			})
-		}
-		hs := strings.ToLower(strings.TrimSpace(fields.HandoffState))
-		if hs != "" && ips == hs {
-			diags = append(diags, registry.ValidationDiag{
-				Severity: "warning",
-				Check:    "tracker.in_progress_state.collision",
-				Message:  fmt.Sprintf("tracker.in_progress_state must not collide with tracker.handoff_state (%q)", fields.HandoffState),
-			})
-		}
 	}
 
 	return diags
