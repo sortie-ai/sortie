@@ -19,8 +19,9 @@ const (
 	// the current element.
 	WarnDotContext WarnKind = iota + 1
 
-	// WarnUnknownVar flags a top-level variable reference not in the
-	// template data contract {issue, attempt, run}.
+	// WarnUnknownVar flags a top-level variable reference outside the
+	// recognized set. The recognized set is exactly the top-level keys
+	// the renderer registers: [Template.Render] seeds them.
 	WarnUnknownVar
 
 	// WarnUnknownField flags a sub-field of a known top-level variable
@@ -36,19 +37,45 @@ type TemplateWarning struct {
 	Message string
 }
 
-// topLevelKeys is the set of recognized top-level template variables.
-var topLevelKeys = map[string]struct{}{
-	"issue":      {},
-	"attempt":    {},
-	"run":        {},
-	"ci_failure": {},
-}
+// coreKeys lists the top-level template variables [Template.Render]
+// always populates, independent of [continuationKeys].
+var coreKeys = []string{"issue", "attempt", "run"}
+
+// topLevelOrder is coreKeys followed by every entry of continuationKeys,
+// in that order. It fixes the enumeration order used by topLevelList.
+var topLevelOrder = func() []string {
+	order := make([]string, 0, len(coreKeys)+len(continuationKeys))
+	order = append(order, coreKeys...)
+	order = append(order, continuationKeys...)
+	return order
+}()
+
+// topLevelKeys is the set of recognized top-level template variables,
+// derived from topLevelOrder so a name registered with the renderer is
+// recognized without a second edit here.
+var topLevelKeys = func() map[string]struct{} {
+	keys := make(map[string]struct{}, len(topLevelOrder))
+	for _, k := range topLevelOrder {
+		keys[k] = struct{}{}
+	}
+	return keys
+}()
+
+// topLevelList is every entry of topLevelOrder prefixed with "." and
+// joined with ", ", for use in the unknown_var advisory message.
+var topLevelList = func() string {
+	names := make([]string, len(topLevelOrder))
+	for i, k := range topLevelOrder {
+		names[i] = "." + k
+	}
+	return strings.Join(names, ", ")
+}()
 
 // templateFieldSchema defines valid sub-fields for each top-level
-// template variable. A nil value means the variable is a scalar (no
-// sub-fields are valid). A map value enumerates the known child fields;
-// a nil entry in the child map means the child is a scalar, a non-nil
-// entry means nested fields are valid.
+// template variable. A nil value means the variable carries no
+// addressable sub-fields, whether it is a scalar or a list. A map value
+// enumerates the known child fields; a nil entry in the child map means
+// the child is a scalar, a non-nil entry means nested fields are valid.
 var templateFieldSchema = map[string]map[string]map[string]bool{
 	"issue": {
 		"id":          nil,
@@ -80,6 +107,29 @@ var templateFieldSchema = map[string]map[string]map[string]bool{
 		"log_excerpt":   nil,
 		"failing_count": nil,
 		"ref":           nil,
+	},
+	"review_comments":     nil,
+	"bot_review_comments": nil,
+	"merge_conflict": {
+		"pr_number": nil,
+		"branch":    nil,
+		"head_sha":  nil,
+		"base":      nil,
+	},
+	"label_review": {
+		"pr_number":    nil,
+		"owner":        nil,
+		"repo":         nil,
+		"actor":        nil,
+		"requested_at": nil,
+	},
+	"label_fix": {
+		"pr_number":    nil,
+		"owner":        nil,
+		"repo":         nil,
+		"branch":       nil,
+		"actor":        nil,
+		"requested_at": nil,
 	},
 }
 
@@ -189,7 +239,7 @@ func (a *analyzer) checkFieldNode(ident []string, scopeDepth int) {
 		a.warnings = append(a.warnings, TemplateWarning{
 			Kind:    WarnUnknownVar,
 			Node:    expr,
-			Message: fmt.Sprintf("unknown template variable %q; valid top-level variables are: .issue, .attempt, .run", expr),
+			Message: fmt.Sprintf("unknown template variable %q; valid top-level variables are: %s", expr, topLevelList),
 		})
 		return
 	}
@@ -213,7 +263,7 @@ func (a *analyzer) checkVariableNode(ident []string, scopeDepth int) {
 		a.warnings = append(a.warnings, TemplateWarning{
 			Kind:    WarnUnknownVar,
 			Node:    expr,
-			Message: fmt.Sprintf("unknown template variable %q; valid top-level variables are: .issue, .attempt, .run", expr),
+			Message: fmt.Sprintf("unknown template variable %q; valid top-level variables are: %s", expr, topLevelList),
 		})
 		return
 	}

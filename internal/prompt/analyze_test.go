@@ -23,11 +23,12 @@ func TestAnalyzeTemplate(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name      string
-		body      string
-		wantCount int
-		wantKind  WarnKind // checked only when wantCount > 0
-		wantNode  string   // checked only when non-empty
+		name            string
+		body            string
+		wantCount       int
+		wantKind        WarnKind // checked only when wantCount > 0
+		wantNode        string   // checked only when non-empty
+		wantMsgContains string   // checked only when non-empty
 	}{
 		// Dot-context misuse inside range/with.
 		{
@@ -94,6 +95,23 @@ func TestAnalyzeTemplate(t *testing.T) {
 			wantCount: 1,
 			wantKind:  WarnUnknownVar,
 			wantNode:  "$.config",
+		},
+		// A continuation-era unrecognized name must still warn, and its
+		// message must enumerate the full recognized set.
+		{
+			name:            "UnrecognizedContinuationLikeName",
+			body:            `{{ .not_a_reaction }}`,
+			wantCount:       1,
+			wantKind:        WarnUnknownVar,
+			wantNode:        ".not_a_reaction",
+			wantMsgContains: topLevelList,
+		},
+		{
+			name:      "UnrecognizedContinuationLikeNameDollar",
+			body:      `{{ $.not_a_reaction }}`,
+			wantCount: 1,
+			wantKind:  WarnUnknownVar,
+			wantNode:  "$.not_a_reaction",
 		},
 		// All three top-level keys are valid — no warning.
 		{
@@ -259,6 +277,10 @@ func TestAnalyzeTemplate(t *testing.T) {
 					t.Errorf("AnalyzeTemplate(%q)[0].Node = %q, want %q",
 						tt.body, warnings[0].Node, tt.wantNode)
 				}
+				if tt.wantMsgContains != "" && !strings.Contains(warnings[0].Message, tt.wantMsgContains) {
+					t.Errorf("AnalyzeTemplate(%q)[0].Message = %q, want to contain %q",
+						tt.body, warnings[0].Message, tt.wantMsgContains)
+				}
 			}
 		})
 	}
@@ -331,18 +353,6 @@ func TestAnalyzeTemplateNestedRangeAllWarnings(t *testing.T) {
 func TestTemplateFieldSchemaMatchesDomain(t *testing.T) {
 	t.Parallel()
 
-	// Verify templateFieldSchema has exactly the four expected top-level keys.
-	wantTopLevel := []string{"issue", "attempt", "run", "ci_failure"}
-	if len(templateFieldSchema) != len(wantTopLevel) {
-		t.Errorf("templateFieldSchema has %d top-level keys, want %d (%v)",
-			len(templateFieldSchema), len(wantTopLevel), wantTopLevel)
-	}
-	for _, key := range wantTopLevel {
-		if _, ok := templateFieldSchema[key]; !ok {
-			t.Errorf("templateFieldSchema missing top-level key %q", key)
-		}
-	}
-
 	// Cross-check issue fields: every key returned by ToTemplateMap must be
 	// present in templateFieldSchema["issue"].
 	issueSchema := templateFieldSchema["issue"]
@@ -360,6 +370,178 @@ func TestTemplateFieldSchemaMatchesDomain(t *testing.T) {
 	for k := range runMap {
 		if _, ok := runSchema[k]; !ok {
 			t.Errorf("runContextToMap() key %q not present in templateFieldSchema[\"run\"]", k)
+		}
+	}
+
+	// Cross-check ci_failure fields: every key returned by
+	// CIResult.ToTemplateMap must be present in
+	// templateFieldSchema["ci_failure"].
+	ciFailureSchema := templateFieldSchema["ci_failure"]
+	ciFailureMap := (&domain.CIResult{}).ToTemplateMap()
+	for k := range ciFailureMap {
+		if _, ok := ciFailureSchema[k]; !ok {
+			t.Errorf("CIResult.ToTemplateMap() key %q not present in templateFieldSchema[\"ci_failure\"]", k)
+		}
+	}
+}
+
+// TestTemplateFieldSchemaCoversRecognizedKeys verifies that
+// templateFieldSchema carries exactly one entry per recognized top-level
+// key, computed as coreKeys plus continuationKeys, with no missing entry,
+// no extra entry, and no shadowing between the two source lists.
+func TestTemplateFieldSchemaCoversRecognizedKeys(t *testing.T) {
+	t.Parallel()
+
+	want := make(map[string]struct{}, len(coreKeys)+len(continuationKeys))
+	for _, k := range coreKeys {
+		want[k] = struct{}{}
+	}
+	for _, k := range continuationKeys {
+		want[k] = struct{}{}
+	}
+
+	for k := range want {
+		if _, ok := templateFieldSchema[k]; !ok {
+			t.Errorf("templateFieldSchema is missing an entry for recognized key %q; add a field schema for it", k)
+		}
+	}
+	for k := range templateFieldSchema {
+		if _, ok := want[k]; !ok {
+			t.Errorf("templateFieldSchema has entry %q, which is not in coreKeys or continuationKeys", k)
+		}
+	}
+	if got, wantLen := len(want), len(coreKeys)+len(continuationKeys); got != wantLen {
+		t.Errorf("len(coreKeys)+len(continuationKeys) = %d, but the computed recognized set has %d entries; a continuation key duplicates another entry or shadows a core key",
+			wantLen, got)
+	}
+}
+
+// TestContinuationKeysRecognizedBare verifies that every entry of
+// continuationKeys is recognized by AnalyzeTemplate as a bare top-level
+// reference, both in its plain and its $-qualified form.
+func TestContinuationKeysRecognizedBare(t *testing.T) {
+	t.Parallel()
+
+	for _, key := range continuationKeys {
+		t.Run(key, func(t *testing.T) {
+			t.Parallel()
+
+			for _, body := range []string{
+				"{{ if ." + key + " }}x{{ end }}",
+				"{{ if $." + key + " }}x{{ end }}",
+			} {
+				tmpl := mustParseAnalyze(t, body)
+				if warnings := AnalyzeTemplate(tmpl); len(warnings) != 0 {
+					t.Errorf("AnalyzeTemplate(%q) = %v, want no warnings", body, warnings)
+				}
+			}
+		})
+	}
+}
+
+// TestContinuationKeySubFieldBehavior verifies per-key sub-field behavior
+// for every continuation key: a map-shaped key accepts each of its
+// documented fields and flags an invented field name with the real field
+// list; a list-shaped key accepts an element field inside {{ range }} and
+// flags direct sub-field access as unknown.
+func TestContinuationKeySubFieldBehavior(t *testing.T) {
+	t.Parallel()
+
+	mapShaped := []struct {
+		key    string
+		fields []string
+	}{
+		{"ci_failure", []string{"status", "check_runs", "log_excerpt", "failing_count", "ref"}},
+		{"merge_conflict", []string{"pr_number", "branch", "head_sha", "base"}},
+		{"label_review", []string{"pr_number", "owner", "repo", "actor", "requested_at"}},
+		{"label_fix", []string{"pr_number", "owner", "repo", "branch", "actor", "requested_at"}},
+	}
+
+	for _, tt := range mapShaped {
+		t.Run(tt.key, func(t *testing.T) {
+			t.Parallel()
+
+			for _, field := range tt.fields {
+				body := "{{ ." + tt.key + "." + field + " }}"
+				tmpl := mustParseAnalyze(t, body)
+				if warnings := AnalyzeTemplate(tmpl); len(warnings) != 0 {
+					t.Errorf("AnalyzeTemplate(%q) = %v, want no warnings", body, warnings)
+				}
+			}
+
+			body := "{{ ." + tt.key + ".not_a_field }}"
+			tmpl := mustParseAnalyze(t, body)
+			warnings := AnalyzeTemplate(tmpl)
+			if len(warnings) != 1 {
+				t.Fatalf("AnalyzeTemplate(%q) returned %d warnings, want 1: %v", body, len(warnings), warnings)
+			}
+			if warnings[0].Kind != WarnUnknownField {
+				t.Errorf("AnalyzeTemplate(%q)[0].Kind = %v, want WarnUnknownField", body, warnings[0].Kind)
+			}
+			for _, field := range tt.fields {
+				if !strings.Contains(warnings[0].Message, field) {
+					t.Errorf("AnalyzeTemplate(%q)[0].Message = %q, want to contain field %q", body, warnings[0].Message, field)
+				}
+			}
+		})
+	}
+
+	listShaped := []string{"review_comments", "bot_review_comments"}
+	for _, key := range listShaped {
+		t.Run(key, func(t *testing.T) {
+			t.Parallel()
+
+			rangeBody := "{{ range ." + key + " }}{{ .body }}{{ end }}"
+			tmpl := mustParseAnalyze(t, rangeBody)
+			if warnings := AnalyzeTemplate(tmpl); len(warnings) != 0 {
+				t.Errorf("AnalyzeTemplate(%q) = %v, want no warnings", rangeBody, warnings)
+			}
+
+			subFieldBody := "{{ ." + key + ".body }}"
+			tmpl = mustParseAnalyze(t, subFieldBody)
+			warnings := AnalyzeTemplate(tmpl)
+			if len(warnings) != 1 {
+				t.Fatalf("AnalyzeTemplate(%q) returned %d warnings, want 1: %v", subFieldBody, len(warnings), warnings)
+			}
+			if warnings[0].Kind != WarnUnknownField {
+				t.Errorf("AnalyzeTemplate(%q)[0].Kind = %v, want WarnUnknownField", subFieldBody, warnings[0].Kind)
+			}
+		})
+	}
+}
+
+// TestTopLevelKeysMatchRendererSeededKeys anchors the recognized set on
+// what Template.Render actually seeds, rather than on the same two
+// literals the analyzer derives topLevelKeys from. It renders a template
+// that enumerates the data map with no RenderOption applied and compares
+// the resulting key set against topLevelKeys in both directions.
+func TestTopLevelKeysMatchRendererSeededKeys(t *testing.T) {
+	t.Parallel()
+
+	const sep = "\x00"
+	tmpl := mustParseAnalyze(t, "{{ range $k, $v := . }}{{ $k }}"+sep+"{{ end }}")
+
+	rendered, err := tmpl.Render(map[string]any{}, nil, RunContext{})
+	if err != nil {
+		t.Fatalf("Template.Render: %v", err)
+	}
+
+	seeded := make(map[string]struct{})
+	for k := range strings.SplitSeq(rendered, sep) {
+		if k == "" {
+			continue
+		}
+		seeded[k] = struct{}{}
+	}
+
+	for k := range seeded {
+		if _, ok := topLevelKeys[k]; !ok {
+			t.Errorf("Template.Render seeds top-level key %q, which topLevelKeys does not recognize", k)
+		}
+	}
+	for k := range topLevelKeys {
+		if _, ok := seeded[k]; !ok {
+			t.Errorf("topLevelKeys recognizes %q, but Template.Render does not seed it", k)
 		}
 	}
 }
