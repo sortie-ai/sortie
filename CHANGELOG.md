@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.16.1] - 2026-08-03
+
 ### Fixed
 
 - `sortie validate` no longer reports `unknown template variable` for the
@@ -1222,7 +1224,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   execution via GitHub Actions.
 - Architecture Decision Records (ADR-0001 through ADR-0005).
 
-[Unreleased]: https://github.com/sortie-ai/sortie/compare/1.16.0...HEAD
+[Unreleased]: https://github.com/sortie-ai/sortie/compare/1.16.1...HEAD
+[1.16.1]: https://github.com/sortie-ai/sortie/compare/1.16.0...1.16.1
 [1.16.0]: https://github.com/sortie-ai/sortie/compare/1.15.0...1.16.0
 [1.15.0]: https://github.com/sortie-ai/sortie/compare/1.14.1...1.15.0
 [1.14.1]: https://github.com/sortie-ai/sortie/compare/1.14.0...1.14.1
