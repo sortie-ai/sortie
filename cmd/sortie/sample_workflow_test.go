@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/sortie-ai/sortie/internal/config"
 	"github.com/sortie-ai/sortie/internal/prompt"
 	"github.com/sortie-ai/sortie/internal/workflow"
 )
@@ -626,5 +627,59 @@ func TestSampleWorkflowGiteaEnvVarIndirection(t *testing.T) {
 		if got != c.want {
 			t.Errorf("tracker.%s = %q, want %q", c.key, got, c.want)
 		}
+	}
+}
+
+// shippedWorkflowPaths returns every WORKFLOW*.md the repository ships:
+// the examples directory plus the two files at the repository root.
+func shippedWorkflowPaths(t *testing.T) []string {
+	t.Helper()
+
+	root := repoRoot(t)
+	var paths []string
+	for _, pattern := range []string{
+		filepath.Join(root, "examples", "WORKFLOW*.md"),
+		filepath.Join(root, "WORKFLOW*.md"),
+	} {
+		matches, err := filepath.Glob(pattern)
+		if err != nil {
+			t.Fatalf("filepath.Glob(%q): %v", pattern, err)
+		}
+		paths = append(paths, matches...)
+	}
+	if len(paths) == 0 {
+		t.Fatalf("no WORKFLOW*.md found under %s; the subtests below would assert nothing", root)
+	}
+	return paths
+}
+
+// TestSampleWorkflowConfigLoads verifies that every shipped WORKFLOW.md
+// survives the config loader. The loader owns the tracker state rules,
+// among them the one that forbids a handoff_state shared with
+// active_states or terminal_states, so an example that violates any of
+// them fails here instead of on a user's first run. Environment
+// indirection is left unresolved on purpose: unset $VAR references become
+// empty strings, which the loader accepts and the online preflight
+// rejects, so this test stays hermetic.
+func TestSampleWorkflowConfigLoads(t *testing.T) {
+	t.Parallel()
+
+	for _, path := range shippedWorkflowPaths(t) {
+		name, err := filepath.Rel(repoRoot(t), path)
+		if err != nil {
+			name = filepath.Base(path)
+		}
+
+		t.Run(name, func(t *testing.T) {
+			t.Parallel()
+
+			wf, err := workflow.Load(path)
+			if err != nil {
+				t.Fatalf("workflow.Load: %v", err)
+			}
+			if _, err := config.NewServiceConfig(wf.Config); err != nil {
+				t.Fatalf("config.NewServiceConfig: %v", err)
+			}
+		})
 	}
 }

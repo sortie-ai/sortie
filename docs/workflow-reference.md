@@ -2875,8 +2875,10 @@ advisory and does not block startup. The Linear adapter (`kind: linear`) emits:
 | `tracker.active_states.empty_element` / `tracker.terminal_states.empty_element` | error | `tracker.active_states[<i>]: empty state name can never match a team state` (same shape for `terminal_states`)               |
 | `tracker.active_states.untrimmed_element` / `tracker.terminal_states.untrimmed_element` | error | `tracker.active_states[<i>]: state name has leading or trailing whitespace and can never match a team state` (same shape for `terminal_states`) |
 | `tracker.states.overlap`                         | warning  | `tracker.active_states and tracker.terminal_states overlap on "<name>"; an issue in state "<name>" would match both sets`                           |
-| `tracker.handoff_state.collision`                | warning  | `tracker.handoff_state "<name>" must not appear in active_states (would cause immediate re-dispatch after handoff)`                                 |
-| `tracker.handoff_state.collision`                | warning  | `tracker.handoff_state "<name>" must not appear in terminal_states (handoff is not terminal)`                                                       |
+
+A `handoff_state` or `in_progress_state` that collides with `active_states` or
+`terminal_states` is not an adapter diagnostic. The generic config validation rejects it for
+every `tracker.kind` before the adapter hook runs, reporting it as a `config.tracker.*` error.
 
 These offline checks never contact Linear and never log the API key value. State-name existence
 against the team and credential validity are checked by the online preflight at adapter
