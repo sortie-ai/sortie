@@ -865,7 +865,7 @@ func (a *GitLabAdapter) AddLabel(ctx context.Context, issueID, label string) err
 			a.log.Warn("gitlab label catalog unavailable; attaching the configured spelling",
 				slog.Any("error", err))
 		} else {
-			casing := resolveCasing(catalog, []string{strings.ToLower(name)})
+			casing := resolveCasing(catalog, []string{name})
 			if stored, ok := casing[strings.ToLower(name)]; ok {
 				name = stored
 			}
