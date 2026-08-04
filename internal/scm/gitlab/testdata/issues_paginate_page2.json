@@ -1,0 +1,4 @@
+[
+  {"id": 80103, "iid": 103, "title": "Paginate item C", "state": "opened", "issue_type": "issue", "web_url": "https://gitlab.example.com/acme/widgets/-/issues/103", "labels": [], "assignees": [], "references": {"full": "acme/widgets#103"}, "created_at": "2026-02-01T00:02:00.000Z", "updated_at": "2026-02-01T00:02:00.000Z"},
+  {"id": 80104, "iid": 104, "title": "Paginate item D", "state": "opened", "issue_type": "issue", "web_url": "https://gitlab.example.com/acme/widgets/-/issues/104", "labels": [], "assignees": [], "references": {"full": "acme/widgets#104"}, "created_at": "2026-02-01T00:03:00.000Z", "updated_at": "2026-02-01T00:03:00.000Z"}
+]

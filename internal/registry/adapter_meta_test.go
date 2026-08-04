@@ -12,6 +12,7 @@ import (
 	_ "github.com/sortie-ai/sortie/internal/agent/opencode"
 	_ "github.com/sortie-ai/sortie/internal/scm/gitea"
 	_ "github.com/sortie-ai/sortie/internal/scm/github"
+	_ "github.com/sortie-ai/sortie/internal/scm/gitlab"
 	_ "github.com/sortie-ai/sortie/internal/tracker/file"
 	_ "github.com/sortie-ai/sortie/internal/tracker/jira"
 	_ "github.com/sortie-ai/sortie/internal/tracker/linear"
@@ -49,6 +50,14 @@ func TestAdapterMeta_RealRegistrations(t *testing.T) {
 			{
 				name:         "gitea requires api_key and project and declares both state lists",
 				kind:         "gitea",
+				wantAPIKey:   true,
+				wantProject:  true,
+				wantActive:   []string{"backlog", "in-progress", "review"},
+				wantTerminal: []string{"done", "wontfix"},
+			},
+			{
+				name:         "gitlab requires api_key and project and declares both state lists",
+				kind:         "gitlab",
 				wantAPIKey:   true,
 				wantProject:  true,
 				wantActive:   []string{"backlog", "in-progress", "review"},

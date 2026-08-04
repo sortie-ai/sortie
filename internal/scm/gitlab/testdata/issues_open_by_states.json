@@ -1,0 +1,3 @@
+[
+  {"id": 91010, "iid": 10, "title": "Improve login flow", "state": "opened", "issue_type": "issue", "web_url": "https://gitlab.example.com/acme/widgets/-/issues/10", "labels": ["in-progress"], "assignees": [], "references": {"full": "acme/widgets#10"}, "created_at": "2026-01-06T00:00:00.000Z", "updated_at": "2026-01-06T00:00:00.000Z"}
+]

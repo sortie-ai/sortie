@@ -1,0 +1,30 @@
+[
+  {
+    "id": 90008,
+    "iid": 8,
+    "title": "Fix pagination cache",
+    "description": "",
+    "state": "opened",
+    "web_url": "https://gitlab.example.com/acme/widgets/-/issues/8",
+    "labels": ["backlog"],
+    "assignees": [{"id": 21, "username": "dana"}],
+    "assignee": null,
+    "references": {},
+    "created_at": "2026-01-03T00:00:00.000Z",
+    "updated_at": "2026-01-03T00:00:00.000Z"
+  },
+  {
+    "id": 90006,
+    "iid": 6,
+    "title": "Investigate flaky pipeline",
+    "description": "",
+    "state": "opened",
+    "issue_type": "task",
+    "web_url": "https://gitlab.example.com/acme/widgets/-/issues/6",
+    "labels": [],
+    "assignees": [],
+    "references": {},
+    "created_at": "2026-01-03T00:05:00.000Z",
+    "updated_at": "2026-01-03T00:05:00.000Z"
+  }
+]

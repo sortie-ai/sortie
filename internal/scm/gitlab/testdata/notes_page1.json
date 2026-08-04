@@ -1,0 +1,26 @@
+[
+  {
+    "id": 501,
+    "type": null,
+    "body": "Started investigating the failure.",
+    "author": {"id": 11, "username": "alice", "name": "Alice Smith"},
+    "created_at": "2026-01-10T09:00:00.000Z",
+    "updated_at": "2026-01-10T09:00:00.000Z",
+    "system": false,
+    "internal": false,
+    "noteable_type": "Issue",
+    "resolvable": false
+  },
+  {
+    "id": 502,
+    "type": null,
+    "body": "changed the description",
+    "author": {"id": 99, "username": "sortie-bot", "name": "Sortie Bot"},
+    "created_at": "2026-01-10T09:05:00.000Z",
+    "updated_at": "2026-01-10T09:05:00.000Z",
+    "system": true,
+    "internal": false,
+    "noteable_type": "Issue",
+    "resolvable": false
+  }
+]
