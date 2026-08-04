@@ -57,6 +57,21 @@ func assertTrackerErrorKind(t *testing.T, err error, want domain.TrackerErrorKin
 	}
 }
 
+// assertTrackerErrorMessageContains asserts err unwraps to a
+// *domain.TrackerError whose Message contains want. Tests use this to pin
+// the offending key's presence in a rejection message rather than its
+// exact wording, which is free to change without breaking the test.
+func assertTrackerErrorMessageContains(t *testing.T, err error, want string) {
+	t.Helper()
+	var te *domain.TrackerError
+	if !errors.As(err, &te) {
+		t.Fatalf("error type = %T, want *domain.TrackerError", err)
+	}
+	if !strings.Contains(te.Message, want) {
+		t.Errorf("TrackerError.Message = %q, want substring %q", te.Message, want)
+	}
+}
+
 // assertQueryParams asserts got holds exactly the key/value pairs in want,
 // with no extra or missing keys, so a single call proves both that the
 // expected params merged in and that no unexpected param leaked in. label
@@ -205,6 +220,62 @@ func loweredStates(states []string) []string {
 	return out
 }
 
+// registerTokenAndProject installs only the token and project preflight
+// routes on s for project, leaving the labels route for the caller to
+// register. Unlike [withPreflight] it installs no default empty-array
+// labels catalog, so a test can substitute its own labels handler.
+func registerTokenAndProject(t *testing.T, s *fakeServer, project string) {
+	t.Helper()
+	escaped := url.PathEscape(project)
+	s.handle("/api/v4/personal_access_tokens/self", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write(loadFixture(t, "token_self.json")) //nolint:errcheck // test helper
+	})
+	s.handle("/api/v4/projects/"+escaped, func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{}`)) //nolint:errcheck // test helper
+	})
+}
+
+// registerPagedLabels installs a two-page project label catalog (page one
+// "bug"/"documentation", page two "Review"/"URGENT") on s at the labels
+// route for [testProject]. It routes on the request's own "page" query
+// parameter rather than on call order, so two independent fetches within
+// one construction (the preflight's state-casing read and the
+// query_filter diagnostic's read) each see the complete two-page catalog.
+func registerPagedLabels(t *testing.T, s *fakeServer, srvURL *string) {
+	t.Helper()
+	basePath := "/api/v4/projects/" + testEscapedProject + "/labels"
+	s.handle(basePath, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("page") == "2" {
+			w.WriteHeader(http.StatusOK)
+			w.Write(loadFixture(t, "labels_page2.json")) //nolint:errcheck // test helper
+			return
+		}
+		w.Header().Set("Link", fmt.Sprintf(`<%s%s?page=2>; rel="next"`, *srvURL, basePath))
+		w.WriteHeader(http.StatusOK)
+		w.Write(loadFixture(t, "labels_page1.json")) //nolint:errcheck // test helper
+	})
+}
+
+// swapDefaultLogger installs a buffer-backed slog default logger and
+// restores the prior default in cleanup, returning the buffer.
+// NewGitLabAdapter takes its logger from [slog.Default] and offers no
+// injection parameter, so this is the only way to capture its diagnostic
+// output. The default logger is process-global: a test calling this
+// helper, and every one of its subtests, must not call t.Parallel(), or
+// its logging assertions and any concurrently running test's adapter
+// construction can observe each other's logger.
+func swapDefaultLogger(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var buf bytes.Buffer
+	prior := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+	t.Cleanup(func() { slog.SetDefault(prior) })
+	return &buf
+}
+
 // --- parseIID ---
 
 func TestParseIID(t *testing.T) {
@@ -257,17 +328,53 @@ func TestNewGitLabAdapter(t *testing.T) {
 		const unreachable = "http://127.0.0.1:1"
 
 		tests := []struct {
-			name     string
-			config   map[string]any
-			wantKind domain.TrackerErrorKind
+			name                string
+			config              map[string]any
+			wantKind            domain.TrackerErrorKind
+			wantMessageContains string
 		}{
-			{"missing api_key", map[string]any{"project": testProject, "endpoint": unreachable}, domain.ErrMissingTrackerAPIKey},
-			{"empty api_key", map[string]any{"api_key": "", "project": testProject, "endpoint": unreachable}, domain.ErrMissingTrackerAPIKey},
-			{"missing project", map[string]any{"api_key": "tok", "endpoint": unreachable}, domain.ErrMissingTrackerProject},
-			{"empty project", map[string]any{"api_key": "tok", "project": "", "endpoint": unreachable}, domain.ErrMissingTrackerProject},
-			{"non-empty query_filter rejected", map[string]any{"api_key": "tok", "project": testProject, "query_filter": "scope=assigned_to_me", "endpoint": unreachable}, domain.ErrTrackerPayload},
-			{"malformed endpoint scheme", map[string]any{"api_key": "tok", "project": testProject, "endpoint": "ftp://example.com"}, domain.ErrTrackerPayload},
-			{"malformed endpoint no host", map[string]any{"api_key": "tok", "project": testProject, "endpoint": "http://"}, domain.ErrTrackerPayload},
+			{"missing api_key", map[string]any{"project": testProject, "endpoint": unreachable}, domain.ErrMissingTrackerAPIKey, ""},
+			{"empty api_key", map[string]any{"api_key": "", "project": testProject, "endpoint": unreachable}, domain.ErrMissingTrackerAPIKey, ""},
+			{"missing project", map[string]any{"api_key": "tok", "endpoint": unreachable}, domain.ErrMissingTrackerProject, ""},
+			{"empty project", map[string]any{"api_key": "tok", "project": "", "endpoint": unreachable}, domain.ErrMissingTrackerProject, ""},
+			{"malformed endpoint scheme", map[string]any{"api_key": "tok", "project": testProject, "endpoint": "ftp://example.com"}, domain.ErrTrackerPayload, ""},
+			{"malformed endpoint no host", map[string]any{"api_key": "tok", "project": testProject, "endpoint": "http://"}, domain.ErrTrackerPayload, ""},
+
+			{"query_filter malformed percent-encoding", map[string]any{"api_key": "tok", "project": testProject, "endpoint": unreachable, "query_filter": "labels=%zz"}, domain.ErrTrackerPayload, ""},
+			{"query_filter semicolon separator", map[string]any{"api_key": "tok", "project": testProject, "endpoint": unreachable, "query_filter": "a=1;b=2"}, domain.ErrTrackerPayload, ""},
+
+			{"query_filter reserved key state", map[string]any{"api_key": "tok", "project": testProject, "endpoint": unreachable, "query_filter": "state=closed"}, domain.ErrTrackerPayload, "state"},
+			{"query_filter reserved key issue_type", map[string]any{"api_key": "tok", "project": testProject, "endpoint": unreachable, "query_filter": "issue_type=incident"}, domain.ErrTrackerPayload, "issue_type"},
+			{"query_filter reserved key order_by", map[string]any{"api_key": "tok", "project": testProject, "endpoint": unreachable, "query_filter": "order_by=updated_at"}, domain.ErrTrackerPayload, "order_by"},
+			{"query_filter reserved key sort", map[string]any{"api_key": "tok", "project": testProject, "endpoint": unreachable, "query_filter": "sort=desc"}, domain.ErrTrackerPayload, "sort"},
+			{"query_filter reserved key page", map[string]any{"api_key": "tok", "project": testProject, "endpoint": unreachable, "query_filter": "page=2"}, domain.ErrTrackerPayload, "page"},
+			{"query_filter reserved key per_page", map[string]any{"api_key": "tok", "project": testProject, "endpoint": unreachable, "query_filter": "per_page=50"}, domain.ErrTrackerPayload, "per_page"},
+			{"query_filter reserved key pagination", map[string]any{"api_key": "tok", "project": testProject, "endpoint": unreachable, "query_filter": "pagination=keyset"}, domain.ErrTrackerPayload, "pagination"},
+			{"query_filter reserved key with_labels_details", map[string]any{"api_key": "tok", "project": testProject, "endpoint": unreachable, "query_filter": "with_labels_details=true"}, domain.ErrTrackerPayload, "with_labels_details"},
+			{"query_filter multiple reserved keys reports the first in fixed slice order", map[string]any{"api_key": "tok", "project": testProject, "endpoint": unreachable, "query_filter": "sort=desc&per_page=10&state=closed"}, domain.ErrTrackerPayload, "state"},
+
+			{"query_filter unknown key mentioned_by", map[string]any{"api_key": "tok", "project": testProject, "endpoint": unreachable, "query_filter": "mentioned_by=bot"}, domain.ErrTrackerPayload, "mentioned_by"},
+			{"query_filter unknown key assignee", map[string]any{"api_key": "tok", "project": testProject, "endpoint": unreachable, "query_filter": "assignee=bot"}, domain.ErrTrackerPayload, "assignee"},
+			{"query_filter unknown nested key or[label_name][]", map[string]any{"api_key": "tok", "project": testProject, "endpoint": unreachable, "query_filter": "or[label_name][]=x"}, domain.ErrTrackerPayload, "or[label_name][]"},
+			{"query_filter unknown not[] subkey search", map[string]any{"api_key": "tok", "project": testProject, "endpoint": unreachable, "query_filter": "not[search]=x"}, domain.ErrTrackerPayload, "not[search]"},
+			{"query_filter unknown not[] subkey bogus", map[string]any{"api_key": "tok", "project": testProject, "endpoint": unreachable, "query_filter": "not[bogus]=x"}, domain.ErrTrackerPayload, "not[bogus]"},
+			{"query_filter reserved name inside not[] falls through to the unknown-key rejection", map[string]any{"api_key": "tok", "project": testProject, "endpoint": unreachable, "query_filter": "not[state]=opened"}, domain.ErrTrackerPayload, "not[state]"},
+			{"query_filter bare not key", map[string]any{"api_key": "tok", "project": testProject, "endpoint": unreachable, "query_filter": "not=x"}, domain.ErrTrackerPayload, "not"},
+			{"query_filter unclosed not[", map[string]any{"api_key": "tok", "project": testProject, "endpoint": unreachable, "query_filter": "not[=x"}, domain.ErrTrackerPayload, "not["},
+			{"query_filter empty key", map[string]any{"api_key": "tok", "project": testProject, "endpoint": unreachable, "query_filter": "=x"}, domain.ErrTrackerPayload, ""},
+			{"query_filter multiple unknown keys reports the lexicographically smaller one", map[string]any{"api_key": "tok", "project": testProject, "endpoint": unreachable, "query_filter": "zzz_unknown=1&aaa_unknown=2"}, domain.ErrTrackerPayload, "aaa_unknown"},
+
+			{"query_filter labels value empty", map[string]any{"api_key": "tok", "project": testProject, "endpoint": unreachable, "query_filter": "labels="}, domain.ErrTrackerPayload, "labels"},
+			{"query_filter labels bare key with no value", map[string]any{"api_key": "tok", "project": testProject, "endpoint": unreachable, "query_filter": "labels"}, domain.ErrTrackerPayload, "labels"},
+			{"query_filter labels whitespace-only value", map[string]any{"api_key": "tok", "project": testProject, "endpoint": unreachable, "query_filter": "labels=%20"}, domain.ErrTrackerPayload, "labels"},
+			{"query_filter labels single comma value", map[string]any{"api_key": "tok", "project": testProject, "endpoint": unreachable, "query_filter": "labels=,"}, domain.ErrTrackerPayload, "labels"},
+			{"query_filter labels doubled comma value", map[string]any{"api_key": "tok", "project": testProject, "endpoint": unreachable, "query_filter": "labels=,,"}, domain.ErrTrackerPayload, "labels"},
+			{"query_filter labels leading comma", map[string]any{"api_key": "tok", "project": testProject, "endpoint": unreachable, "query_filter": "labels=,backlog"}, domain.ErrTrackerPayload, "labels"},
+			{"query_filter labels trailing comma", map[string]any{"api_key": "tok", "project": testProject, "endpoint": unreachable, "query_filter": "labels=backlog,"}, domain.ErrTrackerPayload, "labels"},
+			{"query_filter negated labels trailing comma", map[string]any{"api_key": "tok", "project": testProject, "endpoint": unreachable, "query_filter": "not[labels]=review,"}, domain.ErrTrackerPayload, "not[labels]"},
+
+			{"query_filter repeated non-array key scope", map[string]any{"api_key": "tok", "project": testProject, "endpoint": unreachable, "query_filter": "scope=all&scope=assigned_to_me"}, domain.ErrTrackerPayload, "scope"},
+			{"query_filter repeated non-array key labels", map[string]any{"api_key": "tok", "project": testProject, "endpoint": unreachable, "query_filter": "labels=a&labels=b"}, domain.ErrTrackerPayload, "labels"},
 		}
 
 		for _, tt := range tests {
@@ -279,7 +386,92 @@ func TestNewGitLabAdapter(t *testing.T) {
 				if a != nil {
 					t.Error("adapter should be nil on error")
 				}
+				if tt.wantMessageContains != "" {
+					assertTrackerErrorMessageContains(t, err, tt.wantMessageContains)
+				}
 			})
+		}
+	})
+
+	t.Run("query_filter colliding spellings name both keys and are order-independent", func(t *testing.T) {
+		t.Parallel()
+
+		const unreachable = "http://127.0.0.1:1"
+
+		tests := []struct {
+			name    string
+			filterA string
+			filterB string
+			keyOne  string
+			keyTwo  string
+		}{
+			{"labels vs labels[]", "labels=a&labels[]=b", "labels[]=b&labels=a", "labels", "labels[]"},
+			{"not[labels] vs not[labels][]", "not[labels]=x&not[labels][]=y", "not[labels][]=y&not[labels]=x", "not[labels]", "not[labels][]"},
+		}
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				t.Parallel()
+
+				cfgA := map[string]any{"api_key": "tok", "project": testProject, "endpoint": unreachable, "query_filter": tt.filterA}
+				cfgB := map[string]any{"api_key": "tok", "project": testProject, "endpoint": unreachable, "query_filter": tt.filterB}
+
+				_, errA := NewGitLabAdapter(cfgA)
+				_, errB := NewGitLabAdapter(cfgB)
+
+				assertTrackerErrorKind(t, errA, domain.ErrTrackerPayload)
+				assertTrackerErrorKind(t, errB, domain.ErrTrackerPayload)
+				assertTrackerErrorMessageContains(t, errA, tt.keyOne)
+				assertTrackerErrorMessageContains(t, errA, tt.keyTwo)
+
+				var teA, teB *domain.TrackerError
+				if !errors.As(errA, &teA) || !errors.As(errB, &teB) {
+					t.Fatalf("error type = %T / %T, want *domain.TrackerError for both orderings", errA, errB)
+				}
+				if teA.Message != teB.Message {
+					t.Errorf("colliding-spelling message depends on fragment order: %q vs %q", teA.Message, teB.Message)
+				}
+			})
+		}
+	})
+
+	t.Run("query_filter labels value with commas but no empty segment constructs and reaches the request verbatim", func(t *testing.T) {
+		t.Parallel()
+
+		s := newPreflightServer(t)
+		var gotLabels string
+		s.handle("/api/v4/projects/"+testEscapedProject+"/issues", func(w http.ResponseWriter, r *http.Request) {
+			gotLabels = r.URL.Query().Get("labels")
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte("[]")) //nolint:errcheck // test helper
+		})
+		a := mustAdapterWithConfig(t, s, map[string]any{"query_filter": "labels=bug,documentation"})
+
+		if _, err := a.FetchCandidateIssues(context.Background()); err != nil {
+			t.Fatalf("FetchCandidateIssues: %v", err)
+		}
+		if gotLabels != "bug,documentation" {
+			t.Errorf("labels param = %q, want %q", gotLabels, "bug,documentation")
+		}
+	})
+
+	t.Run("query_filter iids[] array key with multiple values constructs and both reach the wire", func(t *testing.T) {
+		t.Parallel()
+
+		s := newPreflightServer(t)
+		var gotIIDs []string
+		s.handle("/api/v4/projects/"+testEscapedProject+"/issues", func(w http.ResponseWriter, r *http.Request) {
+			gotIIDs = r.URL.Query()["iids[]"]
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte("[]")) //nolint:errcheck // test helper
+		})
+		a := mustAdapterWithConfig(t, s, map[string]any{"query_filter": "iids[]=1&iids[]=3"})
+
+		if _, err := a.FetchCandidateIssues(context.Background()); err != nil {
+			t.Fatalf("FetchCandidateIssues: %v", err)
+		}
+		if want := []string{"1", "3"}; !slices.Equal(gotIIDs, want) {
+			t.Errorf("iids[] = %v, want %v", gotIIDs, want)
 		}
 	})
 
@@ -337,6 +529,9 @@ func TestNewGitLabAdapter(t *testing.T) {
 		}
 		if a == nil {
 			t.Fatal("adapter is nil, want a constructed adapter")
+		}
+		if ga := a.(*GitLabAdapter); ga.queryFilter != nil {
+			t.Errorf("queryFilter = %v, want nil", ga.queryFilter)
 		}
 	})
 
@@ -450,6 +645,58 @@ func TestNewGitLabAdapter(t *testing.T) {
 			t.Error("adapter should be nil when the preflight fails")
 		}
 	})
+}
+
+// --- parseQueryFilter ---
+
+func TestParseQueryFilter(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		raw        string
+		wantErr    bool
+		wantKind   domain.TrackerErrorKind
+		wantValues url.Values
+	}{
+		{"empty fragment returns nil values and no error", "", false, "", nil},
+		{"whitespace-only fragment returns nil values and no error", "   ", false, "", nil},
+		{"malformed percent-encoding is rejected", "labels=%zz", true, domain.ErrTrackerPayload, nil},
+		{"semicolon separator is rejected", "a=1;b=2", true, domain.ErrTrackerPayload, nil},
+		{"a reserved key is rejected", "state=closed", true, domain.ErrTrackerPayload, nil},
+		{"an unknown key is rejected", "mentioned_by=bot", true, domain.ErrTrackerPayload, nil},
+		{"an empty comma segment is rejected", "labels=backlog,", true, domain.ErrTrackerPayload, nil},
+		{"a repeated non-array key is rejected", "scope=all&scope=assigned_to_me", true, domain.ErrTrackerPayload, nil},
+		{"colliding spellings of one parameter are rejected", "labels=a&labels[]=b", true, domain.ErrTrackerPayload, nil},
+		{
+			"a valid fragment is accepted",
+			"scope=assigned_to_me&not[labels]=needs-triage",
+			false, "",
+			url.Values{"scope": {"assigned_to_me"}, "not[labels]": {"needs-triage"}},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			values, err := parseQueryFilter(tt.raw)
+
+			if tt.wantErr {
+				assertTrackerErrorKind(t, err, tt.wantKind)
+				if values != nil {
+					t.Errorf("parseQueryFilter(%q) values = %v, want nil on error", tt.raw, values)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("parseQueryFilter(%q) unexpected error: %v", tt.raw, err)
+			}
+			if !maps.EqualFunc(values, tt.wantValues, slices.Equal) {
+				t.Errorf("parseQueryFilter(%q) = %v, want %v", tt.raw, values, tt.wantValues)
+			}
+		})
+	}
 }
 
 // --- Percent-encoded project path ---
@@ -839,6 +1086,96 @@ func TestFetchCandidateIssues(t *testing.T) {
 		_, err := a.FetchCandidateIssues(context.Background())
 		assertTrackerErrorKind(t, err, domain.ErrTrackerAuth)
 	})
+
+	t.Run("query_filter merges into the request and the returned set matches active-state filtering", func(t *testing.T) {
+		t.Parallel()
+
+		s := newPreflightServer(t)
+		var gotQuery url.Values
+		s.handle("/api/v4/projects/"+testEscapedProject+"/issues", func(w http.ResponseWriter, r *http.Request) {
+			gotQuery = r.URL.Query()
+			w.WriteHeader(http.StatusOK)
+			w.Write(loadFixture(t, "issues_candidates_page2.json")) //nolint:errcheck // test helper
+		})
+		a := mustAdapterWithConfig(t, s, map[string]any{"query_filter": "scope=assigned_to_me&not[labels]=needs-triage"})
+
+		issues, err := a.FetchCandidateIssues(context.Background())
+		if err != nil {
+			t.Fatalf("FetchCandidateIssues: %v", err)
+		}
+
+		assertQueryParams(t, "candidate", gotQuery, map[string]string{
+			"state": "opened", "issue_type": "issue", "per_page": "100",
+			"order_by": "created_at", "sort": "asc",
+			"scope": "assigned_to_me", "not[labels]": "needs-triage",
+		})
+		wantOrder := []string{"1", "2", "5", "7"}
+		if len(issues) != len(wantOrder) {
+			t.Fatalf("len = %d, want %d: got identifiers %v", len(issues), len(wantOrder), identifiersOf(issues))
+		}
+		for i, want := range wantOrder {
+			if issues[i].Identifier != want {
+				t.Errorf("issues[%d].Identifier = %q, want %q", i, issues[i].Identifier, want)
+			}
+		}
+	})
+
+	t.Run("unset query_filter produces exactly the six adapter-owned params", func(t *testing.T) {
+		t.Parallel()
+
+		s := newPreflightServer(t)
+		var gotQuery url.Values
+		s.handle("/api/v4/projects/"+testEscapedProject+"/issues", func(w http.ResponseWriter, r *http.Request) {
+			gotQuery = r.URL.Query()
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte("[]")) //nolint:errcheck // test helper
+		})
+		a := mustAdapter(t, s)
+
+		if _, err := a.FetchCandidateIssues(context.Background()); err != nil {
+			t.Fatalf("FetchCandidateIssues: %v", err)
+		}
+
+		assertQueryParams(t, "candidate", gotQuery, map[string]string{
+			"state": "opened", "issue_type": "issue", "scope": "all",
+			"per_page": "100", "order_by": "created_at", "sort": "asc",
+		})
+		if a.queryFilter != nil {
+			t.Errorf("queryFilter = %v, want nil", a.queryFilter)
+		}
+	})
+
+	t.Run("query_filter is not mutated across two sequential fetches", func(t *testing.T) {
+		t.Parallel()
+
+		s := newPreflightServer(t)
+		var queries []url.Values
+		s.handle("/api/v4/projects/"+testEscapedProject+"/issues", func(w http.ResponseWriter, r *http.Request) {
+			queries = append(queries, r.URL.Query())
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte("[]")) //nolint:errcheck // test helper
+		})
+		a := mustAdapterWithConfig(t, s, map[string]any{"query_filter": "scope=assigned_to_me&not[labels]=needs-triage"})
+
+		before := maps.Clone(a.queryFilter)
+
+		if _, err := a.FetchCandidateIssues(context.Background()); err != nil {
+			t.Fatalf("FetchCandidateIssues (first): %v", err)
+		}
+		if _, err := a.FetchCandidateIssues(context.Background()); err != nil {
+			t.Fatalf("FetchCandidateIssues (second): %v", err)
+		}
+
+		if len(queries) != 2 {
+			t.Fatalf("request count = %d, want 2", len(queries))
+		}
+		if !maps.EqualFunc(queries[0], queries[1], slices.Equal) {
+			t.Errorf("sequential fetches produced different queries: %v vs %v", queries[0], queries[1])
+		}
+		if !maps.EqualFunc(a.queryFilter, before, slices.Equal) {
+			t.Errorf("queryFilter mutated across fetches: got %v, want %v", a.queryFilter, before)
+		}
+	})
 }
 
 func identifiersOf(issues []domain.Issue) []string {
@@ -972,6 +1309,43 @@ func TestFetchIssuesByStates(t *testing.T) {
 		if !gotClosed.Load() {
 			t.Error("closed state was not queried")
 		}
+	})
+
+	t.Run("query_filter merges into the opened half and leaves the closed half untouched", func(t *testing.T) {
+		t.Parallel()
+
+		s := newPreflightServer(t)
+		var openedQuery, closedQuery url.Values
+		s.handle("/api/v4/projects/"+testEscapedProject+"/issues", func(w http.ResponseWriter, r *http.Request) {
+			switch state := r.URL.Query().Get("state"); state {
+			case "opened":
+				openedQuery = r.URL.Query()
+				w.WriteHeader(http.StatusOK)
+				w.Write(loadFixture(t, "issues_open_by_states.json")) //nolint:errcheck // test helper
+			case "closed":
+				closedQuery = r.URL.Query()
+				w.WriteHeader(http.StatusOK)
+				w.Write(loadFixture(t, "issues_closed_by_states.json")) //nolint:errcheck // test helper
+			default:
+				t.Errorf("unexpected state query param: %q", state)
+				w.WriteHeader(http.StatusBadRequest)
+			}
+		})
+		a := mustAdapterWithConfig(t, s, map[string]any{"query_filter": "scope=assigned_to_me&not[labels]=needs-triage"})
+
+		if _, err := a.FetchIssuesByStates(context.Background(), []string{"in-progress", "done"}); err != nil {
+			t.Fatalf("FetchIssuesByStates: %v", err)
+		}
+
+		assertQueryParams(t, "opened-state", openedQuery, map[string]string{
+			"state": "opened", "issue_type": "issue", "per_page": "100",
+			"order_by": "created_at", "sort": "asc",
+			"scope": "assigned_to_me", "not[labels]": "needs-triage",
+		})
+		assertQueryParams(t, "closed-state", closedQuery, map[string]string{
+			"state": "closed", "issue_type": "issue", "scope": "all",
+			"per_page": "100", "order_by": "created_at", "sort": "asc",
+		})
 	})
 }
 
@@ -1382,6 +1756,39 @@ func TestFetchIssueStatesByIDs(t *testing.T) {
 		_, err := a.FetchIssueStatesByIDs(context.Background(), []string{"1"})
 		assertTrackerErrorKind(t, err, domain.ErrTrackerNotFound)
 	})
+
+	t.Run("query_filter is configured but never merged into the batch request", func(t *testing.T) {
+		t.Parallel()
+
+		s := newPreflightServer(t)
+		var gotQuery url.Values
+		s.handle("/api/v4/projects/"+testEscapedProject+"/issues", func(w http.ResponseWriter, r *http.Request) {
+			gotQuery = r.URL.Query()
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`[{"iid": 10, "state": "opened", "issue_type": "issue", "labels": ["in-progress"]}]`)) //nolint:errcheck // test helper
+		})
+		a := mustAdapterWithConfig(t, s, map[string]any{"query_filter": "scope=assigned_to_me&not[labels]=needs-triage"})
+
+		if _, err := a.FetchIssueStatesByIDs(context.Background(), []string{"10"}); err != nil {
+			t.Fatalf("FetchIssueStatesByIDs: %v", err)
+		}
+
+		if got, want := gotQuery.Get("state"), "all"; got != want {
+			t.Errorf("state = %q, want %q", got, want)
+		}
+		if got, want := gotQuery.Get("scope"), "all"; got != want {
+			t.Errorf("scope = %q, want %q (query_filter must not reach the batch route)", got, want)
+		}
+		if got, want := gotQuery.Get("per_page"), "100"; got != want {
+			t.Errorf("per_page = %q, want %q", got, want)
+		}
+		if want := []string{"10"}; !slices.Equal(gotQuery["iids[]"], want) {
+			t.Errorf("iids[] = %v, want %v", gotQuery["iids[]"], want)
+		}
+		if len(gotQuery) != 4 {
+			t.Errorf("batch request query = %v, want exactly 4 keys (state, scope, per_page, iids[]), no operator parameter", gotQuery)
+		}
+	})
 }
 
 func TestFetchIssueStatesByIdentifiers(t *testing.T) {
@@ -1420,6 +1827,30 @@ func TestFetchIssueStatesByIdentifiers(t *testing.T) {
 		}
 		if len(states) != 0 {
 			t.Errorf("len = %d, want 0", len(states))
+		}
+	})
+
+	t.Run("query_filter is configured but never merged into the batch request", func(t *testing.T) {
+		t.Parallel()
+
+		s := newPreflightServer(t)
+		var gotQuery url.Values
+		s.handle("/api/v4/projects/"+testEscapedProject+"/issues", func(w http.ResponseWriter, r *http.Request) {
+			gotQuery = r.URL.Query()
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`[{"iid": 10, "state": "opened", "issue_type": "issue", "labels": ["in-progress"]}]`)) //nolint:errcheck // test helper
+		})
+		a := mustAdapterWithConfig(t, s, map[string]any{"query_filter": "scope=assigned_to_me&not[labels]=needs-triage"})
+
+		if _, err := a.FetchIssueStatesByIdentifiers(context.Background(), []string{"10"}); err != nil {
+			t.Fatalf("FetchIssueStatesByIdentifiers: %v", err)
+		}
+
+		if got, want := gotQuery.Get("scope"), "all"; got != want {
+			t.Errorf("scope = %q, want %q (query_filter must not reach the batch route)", got, want)
+		}
+		if len(gotQuery) != 4 {
+			t.Errorf("batch request query = %v, want exactly 4 keys (state, scope, per_page, iids[]), no operator parameter", gotQuery)
 		}
 	})
 }
@@ -1912,6 +2343,162 @@ func TestLabelCatalogPagination(t *testing.T) {
 		want := `{"add_labels":["Review"]}`
 		if string(putBody) != want {
 			t.Errorf("PUT body = %s, want %s (the attach must use page two's stored casing)", putBody, want)
+		}
+	})
+}
+
+// --- query_filter labels diagnostic (W1, W2, wildcard exemptions) ---
+//
+// NewGitLabAdapter takes its logger from slog.Default(), so every subtest
+// here calls swapDefaultLogger and none of them, nor this function itself,
+// calls t.Parallel(): the process-global default logger must not be
+// swapped concurrently with another test's adapter construction.
+
+const labelAbsentFromCatalogMessage = "gitlab query_filter names a label absent from the project catalog"
+
+func TestQueryFilterLabelsDiagnostic(t *testing.T) {
+	t.Run("a name absent from the catalog logs one WARN and the filter still reaches the request", func(t *testing.T) {
+		tests := []struct {
+			name   string
+			filter string
+			label  string
+		}{
+			{"catalog holds a different case", "labels=review", "review"},
+			{"catalog holds no such name", "labels=needs-triage", "needs-triage"},
+		}
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				buf := swapDefaultLogger(t)
+
+				s := newFakeServer(t)
+				var srvURL string
+				registerTokenAndProject(t, s, testProject)
+				registerPagedLabels(t, s, &srvURL)
+				var gotLabelsParam string
+				s.handle("/api/v4/projects/"+testEscapedProject+"/issues", func(w http.ResponseWriter, r *http.Request) {
+					gotLabelsParam = r.URL.Query().Get("labels")
+					w.WriteHeader(http.StatusOK)
+					w.Write([]byte("[]")) //nolint:errcheck // test helper
+				})
+				srv := httptest.NewServer(s)
+				defer srv.Close()
+				srvURL = srv.URL
+
+				cfg := validConfig(testProject)
+				cfg["endpoint"] = srv.URL
+				cfg["query_filter"] = tt.filter
+
+				adapter, err := NewGitLabAdapter(cfg)
+				if err != nil {
+					t.Fatalf("NewGitLabAdapter(query_filter=%q): %v", tt.filter, err)
+				}
+				ga := adapter.(*GitLabAdapter)
+
+				if got := strings.Count(buf.String(), labelAbsentFromCatalogMessage); got != 1 {
+					t.Errorf("WARN count for %q = %d, want 1\noutput: %s", tt.filter, got, buf.String())
+				}
+				if want := "label=" + tt.label; !strings.Contains(buf.String(), want) {
+					t.Errorf("WARN output missing %q\noutput: %s", want, buf.String())
+				}
+
+				if _, err := ga.FetchCandidateIssues(context.Background()); err != nil {
+					t.Fatalf("FetchCandidateIssues: %v", err)
+				}
+				if gotLabelsParam != tt.label {
+					t.Errorf("candidate request labels param = %q, want %q", gotLabelsParam, tt.label)
+				}
+			})
+		}
+	})
+
+	t.Run("wildcard exemptions", func(t *testing.T) {
+		tests := []struct {
+			name           string
+			filter         string
+			wantWarnLabels []string
+		}{
+			{"bare None is exempt", "labels=None", nil},
+			{"bare Any is exempt", "labels=Any", nil},
+			{"lowercase any is exempt", "labels=any", nil},
+			{"array-form None is exempt", "labels[]=None", nil},
+			{"None exempt alongside a real name", "labels=documentation,None", nil},
+			{"negated Any is a literal name", "not[labels]=Any", []string{"Any"}},
+			{"negated None is a literal name", "not[labels]=None", []string{"None"}},
+		}
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				buf := swapDefaultLogger(t)
+
+				s := newFakeServer(t)
+				var srvURL string
+				registerTokenAndProject(t, s, testProject)
+				registerPagedLabels(t, s, &srvURL)
+				srv := httptest.NewServer(s)
+				defer srv.Close()
+				srvURL = srv.URL
+
+				cfg := validConfig(testProject)
+				cfg["endpoint"] = srv.URL
+				cfg["query_filter"] = tt.filter
+
+				if _, err := NewGitLabAdapter(cfg); err != nil {
+					t.Fatalf("NewGitLabAdapter(query_filter=%q): %v", tt.filter, err)
+				}
+
+				if got := strings.Count(buf.String(), labelAbsentFromCatalogMessage); got != len(tt.wantWarnLabels) {
+					t.Errorf("WARN count for %q = %d, want %d\noutput: %s", tt.filter, got, len(tt.wantWarnLabels), buf.String())
+				}
+				for _, label := range tt.wantWarnLabels {
+					if want := "label=" + label; !strings.Contains(buf.String(), want) {
+						t.Errorf("WARN output missing %q\noutput: %s", want, buf.String())
+					}
+				}
+			})
+		}
+	})
+
+	t.Run("a failed catalog read during the diagnostic does not fail construction", func(t *testing.T) {
+		buf := swapDefaultLogger(t)
+
+		s := newFakeServer(t)
+		var srvURL string
+		registerTokenAndProject(t, s, testProject)
+		basePath := "/api/v4/projects/" + testEscapedProject + "/labels"
+		var rootCalls atomic.Int32
+		s.handle(basePath, func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Query().Get("page") == "2" {
+				w.WriteHeader(http.StatusOK)
+				w.Write(loadFixture(t, "labels_page2.json")) //nolint:errcheck // test helper
+				return
+			}
+			if rootCalls.Add(1) > 1 {
+				w.WriteHeader(http.StatusInternalServerError)
+				w.Write([]byte(`{"message":"internal server error"}`)) //nolint:errcheck // test helper
+				return
+			}
+			w.Header().Set("Link", fmt.Sprintf(`<%s%s?page=2>; rel="next"`, srvURL, basePath))
+			w.WriteHeader(http.StatusOK)
+			w.Write(loadFixture(t, "labels_page1.json")) //nolint:errcheck // test helper
+		})
+		srv := httptest.NewServer(s)
+		defer srv.Close()
+		srvURL = srv.URL
+
+		cfg := validConfig(testProject)
+		cfg["endpoint"] = srv.URL
+		cfg["query_filter"] = "labels=review"
+
+		if _, err := NewGitLabAdapter(cfg); err != nil {
+			t.Fatalf("NewGitLabAdapter: unexpected error from a failed diagnostic catalog read: %v", err)
+		}
+
+		if got := strings.Count(buf.String(), "gitlab query_filter labels catalog unavailable; label names were not validated"); got != 1 {
+			t.Errorf("W2 WARN count = %d, want 1\noutput: %s", got, buf.String())
+		}
+		if !strings.Contains(buf.String(), "error=") {
+			t.Errorf("W2 WARN missing an \"error\" attribute\noutput: %s", buf.String())
 		}
 	})
 }
