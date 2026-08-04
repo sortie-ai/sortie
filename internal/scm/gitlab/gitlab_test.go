@@ -361,6 +361,7 @@ func TestNewGitLabAdapter(t *testing.T) {
 			{"query_filter reserved name inside not[] falls through to the unknown-key rejection", map[string]any{"api_key": "tok", "project": testProject, "endpoint": unreachable, "query_filter": "not[state]=opened"}, domain.ErrTrackerPayload, "not[state]"},
 			{"query_filter bare not key", map[string]any{"api_key": "tok", "project": testProject, "endpoint": unreachable, "query_filter": "not=x"}, domain.ErrTrackerPayload, "not"},
 			{"query_filter unclosed not[", map[string]any{"api_key": "tok", "project": testProject, "endpoint": unreachable, "query_filter": "not[=x"}, domain.ErrTrackerPayload, "not["},
+			{"query_filter bracket nested inside not[] instead of after it", map[string]any{"api_key": "tok", "project": testProject, "endpoint": unreachable, "query_filter": "not[labels[]]=x"}, domain.ErrTrackerPayload, "not[labels[]]"},
 			{"query_filter empty key", map[string]any{"api_key": "tok", "project": testProject, "endpoint": unreachable, "query_filter": "=x"}, domain.ErrTrackerPayload, ""},
 			{"query_filter multiple unknown keys reports the lexicographically smaller one", map[string]any{"api_key": "tok", "project": testProject, "endpoint": unreachable, "query_filter": "zzz_unknown=1&aaa_unknown=2"}, domain.ErrTrackerPayload, "aaa_unknown"},
 
