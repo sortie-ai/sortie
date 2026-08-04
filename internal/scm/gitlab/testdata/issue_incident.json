@@ -1,0 +1,16 @@
+{
+  "id": 91100,
+  "iid": 100,
+  "title": "Investigate production outage",
+  "description": "",
+  "state": "opened",
+  "type": "INCIDENT",
+  "issue_type": "incident",
+  "web_url": "https://gitlab.example.com/acme/widgets/-/issues/100",
+  "labels": [],
+  "assignees": [],
+  "assignee": null,
+  "references": {"short": "#100", "relative": "#100", "full": "acme/widgets#100"},
+  "created_at": "2026-01-05T00:00:00.000Z",
+  "updated_at": "2026-01-05T00:00:00.000Z"
+}

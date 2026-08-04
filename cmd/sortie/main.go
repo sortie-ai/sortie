@@ -49,6 +49,7 @@ import (
 	_ "github.com/sortie-ai/sortie/internal/notify/webhook"
 	_ "github.com/sortie-ai/sortie/internal/scm/gitea"
 	_ "github.com/sortie-ai/sortie/internal/scm/github"
+	_ "github.com/sortie-ai/sortie/internal/scm/gitlab"
 	_ "github.com/sortie-ai/sortie/internal/tracker/file"
 	_ "github.com/sortie-ai/sortie/internal/tracker/jira"
 	_ "github.com/sortie-ai/sortie/internal/tracker/linear"

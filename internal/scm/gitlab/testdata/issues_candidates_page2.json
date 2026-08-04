@@ -1,0 +1,81 @@
+[
+  {
+    "id": 90001,
+    "iid": 1,
+    "title": "Add search filter",
+    "state": "opened",
+    "issue_type": "issue",
+    "web_url": "https://gitlab.example.com/acme/widgets/-/issues/1",
+    "labels": ["backlog"],
+    "assignees": [{"id": 22, "username": "erin"}],
+    "references": {},
+    "created_at": "2026-01-04T00:00:00.000Z",
+    "updated_at": "2026-01-04T00:00:00.000Z"
+  },
+  {
+    "id": 90003,
+    "iid": 3,
+    "title": "Fix logo alignment",
+    "state": "closed",
+    "issue_type": "issue",
+    "web_url": "https://gitlab.example.com/acme/widgets/-/issues/3",
+    "labels": ["done"],
+    "assignees": [],
+    "references": {},
+    "created_at": "2026-01-04T00:10:00.000Z",
+    "updated_at": "2026-01-04T00:10:00.000Z"
+  },
+  {
+    "id": 90002,
+    "iid": 2,
+    "title": "Improve error messages",
+    "state": "opened",
+    "issue_type": "issue",
+    "web_url": "https://gitlab.example.com/acme/widgets/-/issues/2",
+    "labels": ["in-progress"],
+    "assignees": [],
+    "references": {},
+    "created_at": "2026-01-04T00:20:00.000Z",
+    "updated_at": "2026-01-04T00:20:00.000Z"
+  },
+  {
+    "id": 90005,
+    "iid": 5,
+    "title": "Update dependency versions",
+    "state": "opened",
+    "issue_type": "issue",
+    "web_url": "https://gitlab.example.com/acme/widgets/-/issues/5",
+    "labels": [],
+    "assignees": [],
+    "references": {},
+    "created_at": "2026-01-04T00:30:00.000Z",
+    "updated_at": "2026-01-04T00:30:00.000Z"
+  },
+  {
+    "id": 90004,
+    "iid": 4,
+    "title": "Archive old exports",
+    "state": "closed",
+    "issue_type": "issue",
+    "web_url": "https://gitlab.example.com/acme/widgets/-/issues/4",
+    "labels": [],
+    "assignees": [],
+    "references": {},
+    "created_at": "2026-01-04T00:40:00.000Z",
+    "updated_at": "2026-01-04T00:40:00.000Z"
+  },
+  {
+    "id": 90007,
+    "iid": 7,
+    "title": "Consolidate config loader",
+    "state": "opened",
+    "issue_type": "issue",
+    "web_url": "https://gitlab.example.com/acme/widgets/-/issues/7",
+    "labels": ["backlog", "done"],
+    "assignees": [{"id": 23, "username": "frank"}],
+    "assignee": {"id": 24, "username": "gina"},
+    "references": {},
+    "created_at": "2026-01-04T00:50:00.000Z",
+    "updated_at": "2026-01-04T00:50:00.000Z"
+  }
+]

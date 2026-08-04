@@ -1,0 +1,20 @@
+{
+  "id": 91042,
+  "iid": 42,
+  "project_id": 5,
+  "title": "Add dark mode support",
+  "description": "Users want a **dark mode** option.",
+  "state": "opened",
+  "type": "ISSUE",
+  "issue_type": "issue",
+  "web_url": "https://gitlab.example.com/acme/widgets/-/issues/42",
+  "labels": ["In-Progress", "UI"],
+  "assignees": [
+    {"id": 11, "username": "alice", "name": "Alice Smith"},
+    {"id": 12, "username": "bob", "name": "Bob Jones"}
+  ],
+  "assignee": {"id": 13, "username": "carol", "name": "Carol White"},
+  "references": {"short": "#42", "relative": "#42", "full": "acme/widgets#42"},
+  "created_at": "2026-01-01T00:00:00.000+02:00",
+  "updated_at": "2026-01-02T00:00:00.000+02:00"
+}
