@@ -221,18 +221,17 @@ func loweredStates(states []string) []string {
 }
 
 // registerTokenAndProject installs only the token and project preflight
-// routes on s for project, leaving the labels route for the caller to
-// register. Unlike [withPreflight] it installs no default empty-array
+// routes on s for [testProject], leaving the labels route for the caller
+// to register. Unlike [withPreflight] it installs no default empty-array
 // labels catalog, so a test can substitute its own labels handler.
-func registerTokenAndProject(t *testing.T, s *fakeServer, project string) {
+func registerTokenAndProject(t *testing.T, s *fakeServer) {
 	t.Helper()
-	escaped := url.PathEscape(project)
 	s.handle("/api/v4/personal_access_tokens/self", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		w.Write(loadFixture(t, "token_self.json")) //nolint:errcheck // test helper
 	})
-	s.handle("/api/v4/projects/"+escaped, func(w http.ResponseWriter, r *http.Request) {
+	s.handle("/api/v4/projects/"+testEscapedProject, func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(`{}`)) //nolint:errcheck // test helper
 	})
@@ -2374,7 +2373,7 @@ func TestQueryFilterLabelsDiagnostic(t *testing.T) {
 
 				s := newFakeServer(t)
 				var srvURL string
-				registerTokenAndProject(t, s, testProject)
+				registerTokenAndProject(t, s)
 				registerPagedLabels(t, s, &srvURL)
 				var gotLabelsParam string
 				s.handle("/api/v4/projects/"+testEscapedProject+"/issues", func(w http.ResponseWriter, r *http.Request) {
@@ -2434,7 +2433,7 @@ func TestQueryFilterLabelsDiagnostic(t *testing.T) {
 
 				s := newFakeServer(t)
 				var srvURL string
-				registerTokenAndProject(t, s, testProject)
+				registerTokenAndProject(t, s)
 				registerPagedLabels(t, s, &srvURL)
 				srv := httptest.NewServer(s)
 				defer srv.Close()
@@ -2460,12 +2459,50 @@ func TestQueryFilterLabelsDiagnostic(t *testing.T) {
 		}
 	})
 
+	t.Run("a name repeated across segments warns once per negation family", func(t *testing.T) {
+		tests := []struct {
+			name          string
+			filter        string
+			wantWarnCount int
+		}{
+			{"comma-separated duplicate dedupes to one warn", "labels=needs-triage,needs-triage", 1},
+			{"repeated array key with the same value dedupes to one warn", "labels[]=needs-triage&labels[]=needs-triage", 1},
+			{"the same text under labels and not[labels] each warn once", "labels=needs-triage&not[labels]=needs-triage", 2},
+		}
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				buf := swapDefaultLogger(t)
+
+				s := newFakeServer(t)
+				var srvURL string
+				registerTokenAndProject(t, s)
+				registerPagedLabels(t, s, &srvURL)
+				srv := httptest.NewServer(s)
+				defer srv.Close()
+				srvURL = srv.URL
+
+				cfg := validConfig(testProject)
+				cfg["endpoint"] = srv.URL
+				cfg["query_filter"] = tt.filter
+
+				if _, err := NewGitLabAdapter(cfg); err != nil {
+					t.Fatalf("NewGitLabAdapter(query_filter=%q): %v", tt.filter, err)
+				}
+
+				if got := strings.Count(buf.String(), labelAbsentFromCatalogMessage); got != tt.wantWarnCount {
+					t.Errorf("WARN count for %q = %d, want %d\noutput: %s", tt.filter, got, tt.wantWarnCount, buf.String())
+				}
+			})
+		}
+	})
+
 	t.Run("a failed catalog read during the diagnostic does not fail construction", func(t *testing.T) {
 		buf := swapDefaultLogger(t)
 
 		s := newFakeServer(t)
 		var srvURL string
-		registerTokenAndProject(t, s, testProject)
+		registerTokenAndProject(t, s)
 		basePath := "/api/v4/projects/" + testEscapedProject + "/labels"
 		var rootCalls atomic.Int32
 		s.handle(basePath, func(w http.ResponseWriter, r *http.Request) {
