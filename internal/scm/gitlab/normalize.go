@@ -49,6 +49,16 @@ type gitlabNote struct {
 	System    bool       `json:"system"`
 }
 
+// gitlabNoteCreated is the note-creation response. ID is a pointer so
+// that an absent id, which GitLab returns when the body was consumed
+// entirely as quick actions, is distinguishable from id zero.
+// CommandsChanges is non-empty when GitLab executed one or more quick
+// actions found in the body.
+type gitlabNoteCreated struct {
+	ID              *int64         `json:"id"`
+	CommandsChanges map[string]any `json:"commands_changes"`
+}
+
 // gitlabTokenInfo is the token-introspection record the construction
 // preflight decodes. It never carries the token value itself.
 type gitlabTokenInfo struct {

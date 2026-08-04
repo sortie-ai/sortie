@@ -18,15 +18,20 @@ import (
 // construction fails.
 var preflightBackoff = []time.Duration{time.Second, 2 * time.Second, 4 * time.Second}
 
-// runPreflight validates the credential and the configured project before
-// the first poll. It calls GET /personal_access_tokens/self once, with no
-// retry, as an advisory introspection, then GET /projects/{projectPath}
-// through [withRetry] as the authoritative gate.
+// runPreflight validates the credential, the configured project, and the
+// canonical casing of every configured state label before the first
+// poll. It calls GET /personal_access_tokens/self once, with no retry, as
+// an advisory introspection, then GET /projects/{projectPath} through
+// [withRetry] as the authoritative gate, then, when configuredStates is
+// non-empty, pages the project label catalog through [withRetry] to
+// resolve the stored casing of each configured name.
 //
 // Token introspection failure never blocks construction; its result only
 // informs the message on a not-found project error. The token never
-// appears in a log record.
-func runPreflight(ctx context.Context, client *httpkit.Client, projectPath string, log *slog.Logger) error {
+// appears in a log record. A configured state label absent from the
+// catalog is not an error: it is the operator's intended new label,
+// created on the first add_labels write.
+func runPreflight(ctx context.Context, client *httpkit.Client, projectPath string, configuredStates []string, log *slog.Logger) (map[string]string, error) {
 	if log == nil {
 		log = slog.Default()
 	}
@@ -58,16 +63,40 @@ func runPreflight(ctx context.Context, client *httpkit.Client, projectPath strin
 	})
 	if projectErr != nil {
 		if domain.IsNotFound(projectErr) {
-			return &domain.TrackerError{
+			return nil, &domain.TrackerError{
 				Kind: domain.ErrTrackerNotFound,
 				Message: fmt.Sprintf(
 					"gitlab: project not found or not accessible with the configured credential (token authenticated: %t)",
 					tokenValid),
 			}
 		}
-		return projectErr
+		return nil, projectErr
 	}
-	return nil
+
+	if len(configuredStates) == 0 {
+		return map[string]string{}, nil
+	}
+
+	var catalog []gitlabLabel
+	catalogErr := withRetry(ctx, func() error {
+		fetched, fetchErr := fetchProjectLabels(ctx, client, projectPath, log)
+		if fetchErr != nil {
+			return fetchErr
+		}
+		catalog = fetched
+		return nil
+	})
+	if catalogErr != nil {
+		return nil, catalogErr
+	}
+
+	casing := resolveCasing(catalog, configuredStates)
+	for _, name := range configuredStates {
+		if _, ok := casing[name]; !ok {
+			log.Debug("configured state label absent from project", slog.String("label", name))
+		}
+	}
+	return casing, nil
 }
 
 // withRetry runs fn, retrying transient tracker errors with the bounded

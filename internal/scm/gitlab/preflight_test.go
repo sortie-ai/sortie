@@ -169,15 +169,20 @@ func TestWithRetry(t *testing.T) {
 	})
 }
 
-// preflightServer builds an httptest.Server simulating the two preflight
+// preflightServer builds an httptest.Server simulating the three preflight
 // routes, with independently controllable status codes and atomic call
-// counters for the token and project checks.
+// counters for the token, project, and label-catalog checks. labelsFlaky,
+// when set, makes the labels route fail once with a 500 and succeed with
+// an empty catalog on every call after, regardless of labelsStatus.
 type preflightServer struct {
 	srv           *httptest.Server
 	tokenStatus   atomic.Int32
 	projectStatus atomic.Int32
+	labelsStatus  atomic.Int32
+	labelsFlaky   atomic.Bool
 	tokenCalls    atomic.Int32
 	projectCalls  atomic.Int32
+	labelsCalls   atomic.Int32
 }
 
 func newRawPreflightServer(t *testing.T) *preflightServer {
@@ -185,6 +190,7 @@ func newRawPreflightServer(t *testing.T) *preflightServer {
 	ps := &preflightServer{}
 	ps.tokenStatus.Store(http.StatusOK)
 	ps.projectStatus.Store(http.StatusOK)
+	ps.labelsStatus.Store(http.StatusOK)
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/personal_access_tokens/self", func(w http.ResponseWriter, r *http.Request) {
@@ -203,6 +209,21 @@ func newRawPreflightServer(t *testing.T) *preflightServer {
 			w.Write(loadFixture(t, "error_404_project.json")) //nolint:errcheck // test helper
 		}
 	})
+	mux.HandleFunc("/projects/"+testEscapedProject+"/labels", func(w http.ResponseWriter, r *http.Request) {
+		n := ps.labelsCalls.Add(1)
+		if ps.labelsFlaky.Load() && n == 1 {
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write(loadFixture(t, "error_500.json")) //nolint:errcheck // test helper
+			return
+		}
+		status := int(ps.labelsStatus.Load())
+		w.WriteHeader(status)
+		if status == http.StatusOK {
+			w.Write([]byte(`[]`)) //nolint:errcheck // test helper
+			return
+		}
+		w.Write(loadFixture(t, "error_500.json")) //nolint:errcheck // test helper
+	})
 
 	ps.srv = httptest.NewServer(mux)
 	t.Cleanup(ps.srv.Close)
@@ -214,7 +235,7 @@ func TestRunPreflight(t *testing.T) {
 		ps := newRawPreflightServer(t)
 		client := newGitLabClient(ps.srv.URL, "test-token", "sortie/test")
 
-		if err := runPreflight(context.Background(), client, testEscapedProject, slog.Default()); err != nil {
+		if _, err := runPreflight(context.Background(), client, testEscapedProject, nil, slog.Default()); err != nil {
 			t.Fatalf("runPreflight: %v", err)
 		}
 		if got := ps.tokenCalls.Load(); got != 1 {
@@ -230,7 +251,7 @@ func TestRunPreflight(t *testing.T) {
 		ps.tokenStatus.Store(http.StatusInternalServerError)
 		client := newGitLabClient(ps.srv.URL, "test-token", "sortie/test")
 
-		if err := runPreflight(context.Background(), client, testEscapedProject, slog.Default()); err != nil {
+		if _, err := runPreflight(context.Background(), client, testEscapedProject, nil, slog.Default()); err != nil {
 			t.Fatalf("runPreflight: %v (introspection failure must not block a healthy project check)", err)
 		}
 		if got := ps.projectCalls.Load(); got != 1 {
@@ -243,7 +264,7 @@ func TestRunPreflight(t *testing.T) {
 		ps.projectStatus.Store(http.StatusUnauthorized)
 		client := newGitLabClient(ps.srv.URL, "test-token", "sortie/test")
 
-		err := runPreflight(context.Background(), client, testEscapedProject, slog.Default())
+		_, err := runPreflight(context.Background(), client, testEscapedProject, nil, slog.Default())
 		assertTrackerErrorKind(t, err, domain.ErrTrackerAuth)
 
 		if got := ps.projectCalls.Load(); got != 1 {
@@ -256,7 +277,7 @@ func TestRunPreflight(t *testing.T) {
 		ps.projectStatus.Store(http.StatusNotFound)
 		client := newGitLabClient(ps.srv.URL, "test-token", "sortie/test")
 
-		err := runPreflight(context.Background(), client, testEscapedProject, slog.Default())
+		_, err := runPreflight(context.Background(), client, testEscapedProject, nil, slog.Default())
 		assertTrackerErrorKind(t, err, domain.ErrTrackerNotFound)
 
 		if got := ps.projectCalls.Load(); got != 1 {
@@ -271,7 +292,7 @@ func TestRunPreflight(t *testing.T) {
 		ps.projectStatus.Store(http.StatusInternalServerError)
 		client := newGitLabClient(ps.srv.URL, "test-token", "sortie/test")
 
-		err := runPreflight(context.Background(), client, testEscapedProject, slog.Default())
+		_, err := runPreflight(context.Background(), client, testEscapedProject, nil, slog.Default())
 		assertTrackerErrorKind(t, err, domain.ErrTrackerTransport)
 
 		wantCalls := int32(len(preflightBackoff) + 1)
@@ -288,7 +309,7 @@ func TestRunPreflight(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
 
-		err := runPreflight(ctx, client, testEscapedProject, slog.Default())
+		_, err := runPreflight(ctx, client, testEscapedProject, nil, slog.Default())
 		if !errors.Is(err, context.Canceled) {
 			t.Errorf("runPreflight error = %v, want context.Canceled", err)
 		}
@@ -305,11 +326,80 @@ func TestRunPreflight(t *testing.T) {
 		var buf bytes.Buffer
 		log := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
 
-		if err := runPreflight(context.Background(), client, testEscapedProject, log); err != nil {
+		if _, err := runPreflight(context.Background(), client, testEscapedProject, nil, log); err != nil {
 			t.Fatalf("runPreflight: %v", err)
 		}
 		if strings.Contains(buf.String(), "super-secret-token") {
 			t.Errorf("runPreflight logged the token\noutput: %s", buf.String())
+		}
+	})
+
+	t.Run("catalog read failing on every retry fails construction", func(t *testing.T) {
+		fastPreflightBackoff(t)
+
+		ps := newRawPreflightServer(t)
+		ps.labelsStatus.Store(http.StatusInternalServerError)
+		client := newGitLabClient(ps.srv.URL, "super-secret-token", "sortie/test")
+
+		var buf bytes.Buffer
+		log := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+		_, err := runPreflight(context.Background(), client, testEscapedProject, []string{"review", "done"}, log)
+		assertTrackerErrorKind(t, err, domain.ErrTrackerTransport)
+
+		wantCalls := int32(len(preflightBackoff) + 1)
+		if got := ps.labelsCalls.Load(); got != wantCalls {
+			t.Errorf("labels calls = %d, want %d (initial + one per backoff entry)", got, wantCalls)
+		}
+		if strings.Contains(buf.String(), "super-secret-token") {
+			t.Errorf("runPreflight logged the token\noutput: %s", buf.String())
+		}
+	})
+
+	t.Run("catalog read succeeding after one transient failure succeeds", func(t *testing.T) {
+		fastPreflightBackoff(t)
+
+		ps := newRawPreflightServer(t)
+		ps.labelsFlaky.Store(true)
+		client := newGitLabClient(ps.srv.URL, "super-secret-token", "sortie/test")
+
+		var buf bytes.Buffer
+		log := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+		if _, err := runPreflight(context.Background(), client, testEscapedProject, []string{"review", "done"}, log); err != nil {
+			t.Fatalf("runPreflight: %v (a single transient catalog failure must be absorbed by withRetry)", err)
+		}
+		if got := ps.labelsCalls.Load(); got != 2 {
+			t.Errorf("labels calls = %d, want 2 (one failure then one success, bounded by preflightBackoff)", got)
+		}
+		if strings.Contains(buf.String(), "super-secret-token") {
+			t.Errorf("runPreflight logged the token\noutput: %s", buf.String())
+		}
+	})
+
+	t.Run("a configured state label absent from the catalog does not fail construction and emits no WARN", func(t *testing.T) {
+		ps := newRawPreflightServer(t)
+		client := newGitLabClient(ps.srv.URL, "super-secret-token", "sortie/test")
+
+		var buf bytes.Buffer
+		log := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+		casing, err := runPreflight(context.Background(), client, testEscapedProject, []string{"review", "done"}, log)
+		if err != nil {
+			t.Fatalf("runPreflight: %v", err)
+		}
+		if len(casing) != 0 {
+			t.Errorf("casing = %v, want empty (the empty catalog resolves neither configured label)", casing)
+		}
+		output := buf.String()
+		if strings.Contains(output, "level=WARN") {
+			t.Errorf("runPreflight logged a WARN for an absent configured label, want none\noutput: %s", output)
+		}
+		if !strings.Contains(output, "configured state label absent from project") {
+			t.Errorf("log output missing the absent-label Debug message\noutput: %s", output)
+		}
+		if strings.Contains(output, "super-secret-token") {
+			t.Errorf("runPreflight logged the token\noutput: %s", output)
 		}
 	})
 }

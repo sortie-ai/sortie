@@ -9,11 +9,14 @@
 // blocked_by always a non-nil empty slice (GitLab Community Edition has no
 // blocks relation type).
 //
-// The constructor runs a two-call preflight, an advisory token
-// introspection followed by an authoritative project check, that fails
-// construction on an unreachable project, so a misconfiguration surfaces
-// at startup rather than on the first poll. Registered under kind "gitlab"
-// via an init function.
+// The constructor runs a preflight of an advisory token introspection, an
+// authoritative project check, and, when any state label is configured, a
+// paginated project label catalog read that resolves the canonical stored
+// casing of every configured state label, so a write never attaches a
+// case variant of a label the project already holds. A failed project
+// check or a failed catalog read fails construction, so a misconfiguration
+// surfaces at startup rather than on the first poll. Registered under kind
+// "gitlab" via an init function.
 //
 // This package sits under the source-control adapter family, but this
 // stage implements only the tracker contract: the source-control and CI
@@ -21,11 +24,15 @@
 package gitlab
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net/http"
 	"net/url"
+	"slices"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -77,6 +84,12 @@ type GitLabAdapter struct {
 	handoffState   string
 	log            *slog.Logger
 	metrics        domain.Metrics
+
+	// stateLabelCasing maps the lowercased form of each configured state
+	// label to the casing stored in the project, so a write never attaches a
+	// case variant of an existing label. A configured name absent from the
+	// project has no entry and is sent as configured, which creates it.
+	stateLabelCasing map[string]string
 }
 
 // NewGitLabAdapter creates a [GitLabAdapter] from adapter configuration and
@@ -164,19 +177,44 @@ func NewGitLabAdapter(config map[string]any) (domain.TrackerAdapter, error) {
 	client := newGitLabClient(baseURL, apiKey, userAgent)
 	log := slog.Default()
 
-	if err := runPreflight(context.Background(), client, projectPath, log); err != nil {
+	configuredStates := configuredStateNames(activeStates, terminalStates, handoffState)
+	stateLabelCasing, err := runPreflight(context.Background(), client, projectPath, configuredStates, log)
+	if err != nil {
 		return nil, err
 	}
 
 	return &GitLabAdapter{
-		client:         client,
-		project:        project,
-		projectPath:    projectPath,
-		activeStates:   activeStates,
-		terminalStates: terminalStates,
-		handoffState:   handoffState,
-		log:            log,
+		client:           client,
+		project:          project,
+		projectPath:      projectPath,
+		activeStates:     activeStates,
+		terminalStates:   terminalStates,
+		handoffState:     handoffState,
+		log:              log,
+		stateLabelCasing: stateLabelCasing,
 	}, nil
+}
+
+// configuredStateNames returns the union of activeStates, terminalStates,
+// and a non-empty handoffState, in that order, for the preflight's
+// label-catalog resolution. Callers already lowercase every element.
+func configuredStateNames(activeStates, terminalStates []string, handoffState string) []string {
+	names := make([]string, 0, len(activeStates)+len(terminalStates)+1)
+	names = append(names, activeStates...)
+	names = append(names, terminalStates...)
+	if handoffState != "" {
+		names = append(names, handoffState)
+	}
+	return names
+}
+
+// canonicalLabel returns the stored casing of lowered when
+// stateLabelCasing knows it, else lowered unchanged.
+func (a *GitLabAdapter) canonicalLabel(lowered string) string {
+	if casing, ok := a.stateLabelCasing[lowered]; ok {
+		return casing
+	}
+	return lowered
 }
 
 // SetMetrics configures the metrics recorder for tracker API call
@@ -601,29 +639,249 @@ func (a *GitLabAdapter) FetchIssueStatesByIdentifiers(ctx context.Context, ident
 	return states, err
 }
 
-// TransitionIssue returns [domain.ErrTrackerPayload] and issues no
-// request. The GitLab write path is not implemented yet.
-func (a *GitLabAdapter) TransitionIssue(_ context.Context, _, _ string) error {
-	return &domain.TrackerError{
-		Kind:    domain.ErrTrackerPayload,
-		Message: "gitlab: write path is not implemented yet",
-	}
+// gitlabIssueUpdate is the JSON body of the one issue-update route a
+// transition and a label attach both use. A zero field is omitted, which
+// is what lets [GitLabAdapter.TransitionIssue] send only the fields a
+// given transition actually changes. The field order matches the wire
+// examples this adapter's tests assert against.
+type gitlabIssueUpdate struct {
+	StateEvent   string   `json:"state_event,omitempty"`
+	AddLabels    []string `json:"add_labels,omitempty"`
+	RemoveLabels []string `json:"remove_labels,omitempty"`
 }
 
-// CommentIssue returns [domain.ErrTrackerPayload] and issues no request.
-// The GitLab write path is not implemented yet.
-func (a *GitLabAdapter) CommentIssue(_ context.Context, _, _ string) error {
-	return &domain.TrackerError{
-		Kind:    domain.ErrTrackerPayload,
-		Message: "gitlab: write path is not implemented yet",
-	}
+// TransitionIssue moves an issue to targetState by swapping its state
+// label and reconciling the native open/closed status in one PUT request.
+// targetState is compared case-insensitively against the configured
+// active, terminal, and handoff states; a value matching none of them, or
+// an empty string, returns [domain.ErrTrackerPayload] before any request.
+// issueID is guarded through [parseIID] before the GET; a rejected value,
+// a missing iid, or an entity whose issue_type is set and is not "issue"
+// returns [domain.ErrTrackerNotFound].
+//
+// Every case variant of the label being replaced, and any pre-existing
+// variant of the label being attached, is cleared in the same request, so
+// a project already holding a case-duplicate label does not accumulate
+// state labels on every transition. A transition that is already
+// converged issues no PUT and returns nil.
+func (a *GitLabAdapter) TransitionIssue(ctx context.Context, issueID, targetState string) error {
+	return trackermetrics.Track(a.metrics, "transition", func() error {
+		targetLower := strings.ToLower(targetState)
+		isHandoffTarget := a.handoffState != "" && targetLower == a.handoffState
+		if !slices.Contains(a.activeStates, targetLower) &&
+			!slices.Contains(a.terminalStates, targetLower) &&
+			!isHandoffTarget {
+			return &domain.TrackerError{
+				Kind:    domain.ErrTrackerPayload,
+				Message: fmt.Sprintf("invalid target state: %q is not a configured active, terminal, or handoff state", targetState),
+			}
+		}
+
+		n, ok := parseIID(issueID)
+		if !ok {
+			return &domain.TrackerError{
+				Kind:    domain.ErrTrackerNotFound,
+				Message: fmt.Sprintf("issue not found: %s", issueID),
+			}
+		}
+		path := "/projects/" + a.projectPath + "/issues/" + strconv.Itoa(n)
+
+		body, _, err := a.client.Get(ctx, path, nil)
+		if err != nil {
+			if domain.IsNotFound(err) {
+				return &domain.TrackerError{
+					Kind:    domain.ErrTrackerNotFound,
+					Message: fmt.Sprintf("issue not found: %s", issueID),
+				}
+			}
+			return err
+		}
+
+		var gi gitlabIssue
+		if err := json.Unmarshal(body, &gi); err != nil {
+			return &domain.TrackerError{
+				Kind:    domain.ErrTrackerPayload,
+				Message: "failed to parse issue response",
+				Err:     err,
+			}
+		}
+		if gi.IssueType != "" && gi.IssueType != "issue" {
+			return &domain.TrackerError{
+				Kind:    domain.ErrTrackerNotFound,
+				Message: fmt.Sprintf("not an issue: %s", issueID),
+			}
+		}
+
+		currentLower := findCurrentStateLabel(gi.Labels, a.activeStates, a.terminalStates, a.handoffState)
+
+		var addLabels, removeLabels []string
+		if currentLower != targetLower {
+			target := a.canonicalLabel(targetLower)
+			addLabels = []string{target}
+			if currentLower != "" {
+				removeLabels = append(removeLabels, labelVariants(gi.Labels, currentLower)...)
+			}
+			for _, variant := range labelVariants(gi.Labels, targetLower) {
+				if variant != target {
+					removeLabels = append(removeLabels, variant)
+				}
+			}
+		}
+
+		stateEvent := ""
+		switch {
+		case slices.Contains(a.terminalStates, targetLower) && gi.State == "opened":
+			stateEvent = "close"
+		case slices.Contains(a.activeStates, targetLower) && gi.State == "closed":
+			stateEvent = "reopen"
+		}
+
+		if len(addLabels) == 0 && len(removeLabels) == 0 && stateEvent == "" {
+			return nil
+		}
+
+		payload, err := json.Marshal(gitlabIssueUpdate{
+			StateEvent:   stateEvent,
+			AddLabels:    addLabels,
+			RemoveLabels: removeLabels,
+		})
+		if err != nil {
+			return &domain.TrackerError{
+				Kind:    domain.ErrTrackerPayload,
+				Message: "failed to marshal transition payload",
+				Err:     err,
+			}
+		}
+
+		_, err = a.client.Send(ctx, http.MethodPut, path, bytes.NewReader(payload))
+		return err
+	})
 }
 
-// AddLabel returns [domain.ErrTrackerPayload] and issues no request. The
-// GitLab write path is not implemented yet.
-func (a *GitLabAdapter) AddLabel(_ context.Context, _, _ string) error {
-	return &domain.TrackerError{
-		Kind:    domain.ErrTrackerPayload,
-		Message: "gitlab: write path is not implemented yet",
-	}
+// CommentIssue posts text verbatim as a new issue note. No Markdown
+// conversion, no escaping, and no truncation are applied. issueID is
+// guarded through [parseIID] before any request; a rejected value or a
+// missing iid returns [domain.ErrTrackerNotFound].
+//
+// GitLab executes a recognized slash command found at the start of a
+// line in the note body as a quick action. When the body was consumed
+// entirely as quick actions, GitLab creates no note and this method
+// returns [domain.ErrTrackerPayload] rather than reporting a false
+// success. Whenever GitLab executed one or more quick actions, whether or
+// not a note was also created, the executed command keys are logged at
+// WARN; the note text itself is never logged.
+func (a *GitLabAdapter) CommentIssue(ctx context.Context, issueID, text string) error {
+	return trackermetrics.Track(a.metrics, "comment", func() error {
+		n, ok := parseIID(issueID)
+		if !ok {
+			return &domain.TrackerError{
+				Kind:    domain.ErrTrackerNotFound,
+				Message: fmt.Sprintf("issue not found: %s", issueID),
+			}
+		}
+		path := "/projects/" + a.projectPath + "/issues/" + strconv.Itoa(n) + "/notes"
+
+		payload, err := json.Marshal(map[string]string{"body": text})
+		if err != nil {
+			return &domain.TrackerError{
+				Kind:    domain.ErrTrackerPayload,
+				Message: "failed to marshal comment payload",
+				Err:     err,
+			}
+		}
+
+		respBody, err := a.client.Send(ctx, http.MethodPost, path, bytes.NewReader(payload))
+		if err != nil {
+			return err
+		}
+
+		var created gitlabNoteCreated
+		if err := json.Unmarshal(respBody, &created); err != nil {
+			return &domain.TrackerError{
+				Kind:    domain.ErrTrackerPayload,
+				Message: "failed to parse note-creation response",
+				Err:     err,
+			}
+		}
+
+		if len(created.CommandsChanges) > 0 {
+			keys := make([]string, 0, len(created.CommandsChanges))
+			for key := range created.CommandsChanges {
+				keys = append(keys, key)
+			}
+			sort.Strings(keys)
+			a.log.Warn("gitlab executed quick actions in a comment body",
+				slog.String("iid", strconv.Itoa(n)),
+				slog.Any("commands", keys))
+		}
+
+		if created.ID == nil {
+			return &domain.TrackerError{
+				Kind:    domain.ErrTrackerPayload,
+				Message: fmt.Sprintf("gitlab created no note for issue %s: the comment body was consumed as quick actions", issueID),
+			}
+		}
+		return nil
+	})
+}
+
+// AddLabel attaches label to the issue, resolving its canonical stored
+// casing against the project label catalog first. issueID is guarded
+// through [parseIID] before any request; a rejected value or a missing
+// iid returns [domain.ErrTrackerNotFound]. An empty or whitespace-only
+// label attaches nothing, issues no request, returns nil, and logs a
+// WARN, so a caller reading nil as a successful escalation is not the
+// only record of the condition.
+//
+// The catalog is read fresh on every call, never from the
+// construction-time casing map, because an escalation label is not a
+// tracker-config value the constructor ever saw. A catalog read failure
+// does not fail the attach: the adapter logs a WARN and proceeds with the
+// label as given, because a missed escalation is worse than a cosmetic
+// duplicate. The label is never lowercased: GitLab resolves case
+// mismatches through the catalog, and lowercasing here would itself
+// create the case-variant duplicate the catalog resolution exists to
+// prevent. The attach is additive and may create the label as a
+// server-side side effect when it does not already exist.
+func (a *GitLabAdapter) AddLabel(ctx context.Context, issueID, label string) error {
+	return trackermetrics.Track(a.metrics, "add_label", func() error {
+		n, ok := parseIID(issueID)
+		if !ok {
+			return &domain.TrackerError{
+				Kind:    domain.ErrTrackerNotFound,
+				Message: fmt.Sprintf("issue not found: %s", issueID),
+			}
+		}
+
+		name := strings.TrimSpace(label)
+		if name == "" {
+			a.log.Warn("gitlab add_label received an empty label; nothing attached",
+				slog.String("iid", strconv.Itoa(n)))
+			return nil
+		}
+
+		catalog, err := fetchProjectLabels(ctx, a.client, a.projectPath, a.log)
+		if err != nil {
+			a.log.Warn("gitlab label catalog unavailable; attaching the configured spelling",
+				slog.Any("error", err))
+		} else {
+			casing := resolveCasing(catalog, []string{strings.ToLower(name)})
+			if stored, ok := casing[strings.ToLower(name)]; ok {
+				name = stored
+			}
+		}
+
+		path := "/projects/" + a.projectPath + "/issues/" + strconv.Itoa(n)
+		payload, err := json.Marshal(gitlabIssueUpdate{AddLabels: []string{name}})
+		if err != nil {
+			return &domain.TrackerError{
+				Kind:    domain.ErrTrackerPayload,
+				Message: "failed to marshal add-label payload",
+				Err:     err,
+			}
+		}
+
+		_, err = a.client.Send(ctx, http.MethodPut, path, bytes.NewReader(payload))
+		return err
+	})
 }

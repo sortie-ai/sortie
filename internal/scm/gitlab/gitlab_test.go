@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"maps"
 	"net/http"
@@ -90,12 +91,17 @@ func newFakeServer(t *testing.T) *fakeServer {
 	return &fakeServer{t: t, routes: make(map[string]http.HandlerFunc)}
 }
 
-// handle registers fn for a GET request against escapedPath. Every route
-// this suite exercises is a GET; a non-GET request (a write stub issuing a
-// request it must not issue) falls through to ServeHTTP's unmatched-route
-// failure regardless.
+// handleMethod registers fn for a request matching method against
+// escapedPath, so a PUT or POST route registers and dispatches exactly
+// like a GET route.
+func (s *fakeServer) handleMethod(method, escapedPath string, fn http.HandlerFunc) {
+	s.routes[method+" "+escapedPath] = fn
+}
+
+// handle registers fn for a GET request against escapedPath, the
+// shorthand every read-path test uses.
 func (s *fakeServer) handle(escapedPath string, fn http.HandlerFunc) {
-	s.routes[http.MethodGet+" "+escapedPath] = fn
+	s.handleMethod(http.MethodGet, escapedPath, fn)
 }
 
 func (s *fakeServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -108,10 +114,11 @@ func (s *fakeServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNotFound)
 }
 
-// withPreflight registers the two construction-preflight routes for
-// project on s. Every test that constructs an adapter must install both
-// before the operation under test, because [NewGitLabAdapter] runs the
-// preflight synchronously.
+// withPreflight registers the three construction-preflight routes for
+// project on s. Every test that constructs an adapter must install all
+// three before the operation under test, because [NewGitLabAdapter] runs
+// the preflight synchronously and, with the stock default state lists in
+// effect, always performs the label-catalog read.
 func withPreflight(t *testing.T, s *fakeServer, project string) {
 	t.Helper()
 	escaped := url.PathEscape(project)
@@ -124,9 +131,13 @@ func withPreflight(t *testing.T, s *fakeServer, project string) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(`{}`)) //nolint:errcheck // test helper
 	})
+	s.handle("/api/v4/projects/"+escaped+"/labels", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`[]`)) //nolint:errcheck // test helper
+	})
 }
 
-// newPreflightServer returns a [fakeServer] pre-registered with the two
+// newPreflightServer returns a [fakeServer] pre-registered with the three
 // construction-preflight routes for [testProject]. Callers register only
 // the routes their operation under test exercises.
 func newPreflightServer(t *testing.T) *fakeServer {
@@ -138,8 +149,8 @@ func newPreflightServer(t *testing.T) *fakeServer {
 
 // mustAdapter starts an httptest.Server for s and constructs a
 // [*GitLabAdapter] against it for [testProject], registering server
-// cleanup. s must already carry the two construction-preflight routes; see
-// [newPreflightServer].
+// cleanup. s must already carry the three construction-preflight routes;
+// see [newPreflightServer].
 func mustAdapter(t *testing.T, s *fakeServer) *GitLabAdapter {
 	t.Helper()
 	srv := httptest.NewServer(s)
@@ -152,6 +163,36 @@ func mustAdapter(t *testing.T, s *fakeServer) *GitLabAdapter {
 		t.Fatalf("NewGitLabAdapter: %v", err)
 	}
 	return a.(*GitLabAdapter)
+}
+
+// mustAdapterWithConfig behaves like [mustAdapter] but merges overrides
+// onto [validConfig] before construction, letting a test customize state
+// lists, handoff_state, or any other adapter config key. s must already
+// carry the three construction-preflight routes.
+func mustAdapterWithConfig(t *testing.T, s *fakeServer, overrides map[string]any) *GitLabAdapter {
+	t.Helper()
+	srv := httptest.NewServer(s)
+	t.Cleanup(srv.Close)
+
+	cfg := validConfig(testProject)
+	cfg["endpoint"] = srv.URL
+	maps.Copy(cfg, overrides)
+	a, err := NewGitLabAdapter(cfg)
+	if err != nil {
+		t.Fatalf("NewGitLabAdapter: %v", err)
+	}
+	return a.(*GitLabAdapter)
+}
+
+// readRequestBody reads and returns r's full body, failing the test if the
+// read itself fails.
+func readRequestBody(t *testing.T, r *http.Request) []byte {
+	t.Helper()
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		t.Fatalf("reading request body: %v", err)
+	}
+	return body
 }
 
 // loweredStates returns a lowercased copy of states, matching the
@@ -432,6 +473,10 @@ func TestProjectPathPercentEncoding(t *testing.T) {
 			gotPath = r.URL.EscapedPath()
 			w.WriteHeader(http.StatusOK)
 			w.Write([]byte(`{}`)) //nolint:errcheck // test helper
+		})
+		s.handle("/api/v4/projects/"+escaped+"/labels", func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`[]`)) //nolint:errcheck // test helper
 		})
 		srv := httptest.NewServer(s)
 		defer srv.Close()
@@ -1379,28 +1424,561 @@ func TestFetchIssueStatesByIdentifiers(t *testing.T) {
 	})
 }
 
-// --- Write stubs ---
+// --- TransitionIssue ---
 
-func TestWriteStubs(t *testing.T) {
+func TestTransitionIssue(t *testing.T) {
 	t.Parallel()
 
-	a := mustAdapter(t, newPreflightServer(t)) // no write route registered; any call fails the test
+	t.Run("active to terminal transition swaps the state label and closes the issue", func(t *testing.T) {
+		t.Parallel()
 
-	if err := a.TransitionIssue(context.Background(), "1", "done"); err == nil {
-		t.Error("TransitionIssue = nil, want ErrTrackerPayload")
-	} else {
+		s := newPreflightServer(t)
+		var getCalls, putCalls atomic.Int32
+		var putBody []byte
+		s.handle("/api/v4/projects/"+testEscapedProject+"/issues/42", func(w http.ResponseWriter, r *http.Request) {
+			getCalls.Add(1)
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{"iid":42,"state":"opened","issue_type":"issue","labels":["review"]}`)) //nolint:errcheck // test helper
+		})
+		s.handleMethod(http.MethodPut, "/api/v4/projects/"+testEscapedProject+"/issues/42", func(w http.ResponseWriter, r *http.Request) {
+			putCalls.Add(1)
+			putBody = readRequestBody(t, r)
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{}`)) //nolint:errcheck // test helper
+		})
+		a := mustAdapter(t, s)
+
+		if err := a.TransitionIssue(context.Background(), "42", "done"); err != nil {
+			t.Fatalf("TransitionIssue: %v", err)
+		}
+		if got := getCalls.Load(); got != 1 {
+			t.Errorf("GET call count = %d, want 1", got)
+		}
+		if got := putCalls.Load(); got != 1 {
+			t.Errorf("PUT call count = %d, want 1", got)
+		}
+		want := `{"state_event":"close","add_labels":["done"],"remove_labels":["review"]}`
+		if string(putBody) != want {
+			t.Errorf("PUT body = %s, want %s", putBody, want)
+		}
+	})
+
+	t.Run("handoff target also configured active leaves native state untouched", func(t *testing.T) {
+		t.Parallel()
+
+		s := newPreflightServer(t)
+		var putBody []byte
+		s.handle("/api/v4/projects/"+testEscapedProject+"/issues/7", func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{"iid":7,"state":"opened","issue_type":"issue","labels":["backlog"]}`)) //nolint:errcheck // test helper
+		})
+		s.handleMethod(http.MethodPut, "/api/v4/projects/"+testEscapedProject+"/issues/7", func(w http.ResponseWriter, r *http.Request) {
+			putBody = readRequestBody(t, r)
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{}`)) //nolint:errcheck // test helper
+		})
+		a := mustAdapterWithConfig(t, s, map[string]any{"handoff_state": "review"})
+
+		if err := a.TransitionIssue(context.Background(), "7", "review"); err != nil {
+			t.Fatalf("TransitionIssue: %v", err)
+		}
+		want := `{"add_labels":["review"],"remove_labels":["backlog"]}`
+		if string(putBody) != want {
+			t.Errorf("PUT body = %s, want %s (no state_event: review is also an active state and the issue is already open)", putBody, want)
+		}
+	})
+
+	t.Run("handoff target outside both lists leaves a closed issue closed", func(t *testing.T) {
+		t.Parallel()
+
+		s := newPreflightServer(t)
+		var putBody []byte
+		s.handle("/api/v4/projects/"+testEscapedProject+"/issues/9", func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{"iid":9,"state":"closed","issue_type":"issue","labels":["done"]}`)) //nolint:errcheck // test helper
+		})
+		s.handleMethod(http.MethodPut, "/api/v4/projects/"+testEscapedProject+"/issues/9", func(w http.ResponseWriter, r *http.Request) {
+			putBody = readRequestBody(t, r)
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{}`)) //nolint:errcheck // test helper
+		})
+		a := mustAdapterWithConfig(t, s, map[string]any{
+			"active_states":   []string{"backlog", "in-progress"},
+			"terminal_states": []string{"done", "wontfix"},
+			"handoff_state":   "needs-review",
+		})
+
+		if err := a.TransitionIssue(context.Background(), "9", "needs-review"); err != nil {
+			t.Fatalf("TransitionIssue: %v", err)
+		}
+		want := `{"add_labels":["needs-review"],"remove_labels":["done"]}`
+		if string(putBody) != want {
+			t.Errorf("PUT body = %s, want %s (no state_event: a handoff-only target never drives native state, and the issue stays closed)", putBody, want)
+		}
+	})
+
+	t.Run("invalid target state rejected before any request", func(t *testing.T) {
+		t.Parallel()
+
+		tests := []string{"", "not-a-configured-state"}
+		for _, target := range tests {
+			t.Run(fmt.Sprintf("target=%q", target), func(t *testing.T) {
+				t.Parallel()
+
+				a := mustAdapter(t, newPreflightServer(t)) // no issues route registered; any request fails the test
+
+				err := a.TransitionIssue(context.Background(), "1", target)
+				assertTrackerErrorKind(t, err, domain.ErrTrackerPayload)
+			})
+		}
+	})
+
+	t.Run("non-issue work item rejected before any write", func(t *testing.T) {
+		t.Parallel()
+
+		s := newPreflightServer(t)
+		s.handle("/api/v4/projects/"+testEscapedProject+"/issues/100", func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{"iid":100,"state":"opened","issue_type":"task","labels":["review"]}`)) //nolint:errcheck // test helper
+		})
+		a := mustAdapter(t, s) // no PUT route registered; a PUT would fail the test
+
+		err := a.TransitionIssue(context.Background(), "100", "done")
+		assertTrackerErrorKind(t, err, domain.ErrTrackerNotFound)
+	})
+
+	t.Run("a converged transition issues no request", func(t *testing.T) {
+		t.Parallel()
+
+		tests := []struct {
+			name   string
+			labels string
+		}{
+			{"exact casing match", `["done"]`},
+			{"issue holds a different stored casing of the same state", `["Done"]`},
+		}
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				t.Parallel()
+
+				s := newPreflightServer(t)
+				var getCalls atomic.Int32
+				s.handle("/api/v4/projects/"+testEscapedProject+"/issues/5", func(w http.ResponseWriter, r *http.Request) {
+					getCalls.Add(1)
+					w.WriteHeader(http.StatusOK)
+					w.Write(fmt.Appendf(nil, `{"iid":5,"state":"closed","issue_type":"issue","labels":%s}`, tt.labels)) //nolint:errcheck // test helper
+				})
+				a := mustAdapter(t, s) // no PUT route registered; a PUT would fail the test
+
+				if err := a.TransitionIssue(context.Background(), "5", "done"); err != nil {
+					t.Fatalf("TransitionIssue: %v", err)
+				}
+				if got := getCalls.Load(); got != 1 {
+					t.Errorf("GET call count = %d, want 1", got)
+				}
+			})
+		}
+	})
+
+	t.Run("the target label is sent in its canonical stored casing", func(t *testing.T) {
+		t.Parallel()
+
+		s := newPreflightServer(t)
+		s.handle("/api/v4/projects/"+testEscapedProject+"/labels", func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`[{"name":"Review"},{"name":"Done"}]`)) //nolint:errcheck // test helper
+		})
+		var putBody []byte
+		s.handle("/api/v4/projects/"+testEscapedProject+"/issues/3", func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{"iid":3,"state":"opened","issue_type":"issue","labels":["review"]}`)) //nolint:errcheck // test helper
+		})
+		s.handleMethod(http.MethodPut, "/api/v4/projects/"+testEscapedProject+"/issues/3", func(w http.ResponseWriter, r *http.Request) {
+			putBody = readRequestBody(t, r)
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{}`)) //nolint:errcheck // test helper
+		})
+		a := mustAdapter(t, s)
+
+		if err := a.TransitionIssue(context.Background(), "3", "done"); err != nil {
+			t.Fatalf("TransitionIssue: %v", err)
+		}
+		want := `{"state_event":"close","add_labels":["Done"],"remove_labels":["review"]}`
+		if string(putBody) != want {
+			t.Errorf("PUT body = %s, want %s (add_labels must carry the catalog's stored casing, not the configured spelling)", putBody, want)
+		}
+	})
+
+	t.Run("every case variant of the outgoing state label is removed in the same request", func(t *testing.T) {
+		t.Parallel()
+
+		s := newPreflightServer(t)
+		var putBody []byte
+		var putCalls atomic.Int32
+		s.handle("/api/v4/projects/"+testEscapedProject+"/issues/11", func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{"iid":11,"state":"opened","issue_type":"issue","labels":["REVIEW","review"]}`)) //nolint:errcheck // test helper
+		})
+		s.handleMethod(http.MethodPut, "/api/v4/projects/"+testEscapedProject+"/issues/11", func(w http.ResponseWriter, r *http.Request) {
+			putCalls.Add(1)
+			putBody = readRequestBody(t, r)
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{}`)) //nolint:errcheck // test helper
+		})
+		a := mustAdapter(t, s)
+
+		if err := a.TransitionIssue(context.Background(), "11", "done"); err != nil {
+			t.Fatalf("TransitionIssue: %v", err)
+		}
+		if got := putCalls.Load(); got != 1 {
+			t.Errorf("PUT call count = %d, want 1", got)
+		}
+		want := `{"state_event":"close","add_labels":["done"],"remove_labels":["REVIEW","review"]}`
+		if string(putBody) != want {
+			t.Errorf("PUT body = %s, want %s (both case variants removed, in issue-label order)", putBody, want)
+		}
+	})
+
+	t.Run("a pre-existing case variant of the incoming label is removed without cancelling the attach", func(t *testing.T) {
+		t.Parallel()
+
+		s := newPreflightServer(t)
+		var putBody []byte
+		s.handle("/api/v4/projects/"+testEscapedProject+"/issues/13", func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{"iid":13,"state":"opened","issue_type":"issue","labels":["backlog","DONE"]}`)) //nolint:errcheck // test helper
+		})
+		s.handleMethod(http.MethodPut, "/api/v4/projects/"+testEscapedProject+"/issues/13", func(w http.ResponseWriter, r *http.Request) {
+			putBody = readRequestBody(t, r)
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{}`)) //nolint:errcheck // test helper
+		})
+		a := mustAdapter(t, s)
+
+		if err := a.TransitionIssue(context.Background(), "13", "done"); err != nil {
+			t.Fatalf("TransitionIssue: %v", err)
+		}
+		want := `{"state_event":"close","add_labels":["done"],"remove_labels":["backlog","DONE"]}`
+		if string(putBody) != want {
+			t.Errorf("PUT body = %s, want %s (remove_labels must not carry the byte-identical done, which would cancel the attach)", putBody, want)
+		}
+	})
+}
+
+// --- CommentIssue ---
+
+func TestCommentIssue(t *testing.T) {
+	t.Parallel()
+
+	t.Run("posts the note verbatim including newlines", func(t *testing.T) {
+		t.Parallel()
+
+		const text = "Automated check failed.\nSee the CI log for detail."
+
+		s := newPreflightServer(t)
+		var postBody []byte
+		var postCalls atomic.Int32
+		s.handleMethod(http.MethodPost, "/api/v4/projects/"+testEscapedProject+"/issues/1/notes", func(w http.ResponseWriter, r *http.Request) {
+			postCalls.Add(1)
+			postBody = readRequestBody(t, r)
+			w.WriteHeader(http.StatusCreated)
+			w.Write(loadFixture(t, "note_created.json")) //nolint:errcheck // test helper
+		})
+		a := mustAdapter(t, s)
+
+		if err := a.CommentIssue(context.Background(), "1", text); err != nil {
+			t.Fatalf("CommentIssue: %v", err)
+		}
+		if got := postCalls.Load(); got != 1 {
+			t.Errorf("POST call count = %d, want 1", got)
+		}
+		want := `{"body":` + strconv.Quote(text) + `}`
+		if string(postBody) != want {
+			t.Errorf("POST body = %s, want %s (text must pass through byte-identical, including newlines)", postBody, want)
+		}
+	})
+
+	t.Run("a 2xx that created no note reports ErrTrackerPayload", func(t *testing.T) {
+		t.Parallel()
+
+		s := newPreflightServer(t)
+		s.handleMethod(http.MethodPost, "/api/v4/projects/"+testEscapedProject+"/issues/2/notes", func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusAccepted)
+			w.Write(loadFixture(t, "note_quick_action.json")) //nolint:errcheck // test helper
+		})
+		a := mustAdapter(t, s)
+
+		err := a.CommentIssue(context.Background(), "2", "/close")
 		assertTrackerErrorKind(t, err, domain.ErrTrackerPayload)
+	})
+
+	t.Run("a note that also executed quick actions logs a WARN naming the command keys", func(t *testing.T) {
+		t.Parallel()
+
+		s := newPreflightServer(t)
+		s.handleMethod(http.MethodPost, "/api/v4/projects/"+testEscapedProject+"/issues/3/notes", func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusCreated)
+			w.Write([]byte(`{"id":900,"body":"","commands_changes":{"add_label_ids":[5]}}`)) //nolint:errcheck // test helper
+		})
+		a := mustAdapter(t, s)
+
+		var buf bytes.Buffer
+		a.log = slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+		if err := a.CommentIssue(context.Background(), "3", "/close\nSome text"); err != nil {
+			t.Fatalf("CommentIssue: %v", err)
+		}
+		output := buf.String()
+		if !strings.Contains(output, "gitlab executed quick actions in a comment body") {
+			t.Errorf("log output missing the quick-action WARN\noutput: %s", output)
+		}
+		if !strings.Contains(output, "add_label_ids") {
+			t.Errorf("log output missing the executed command key add_label_ids\noutput: %s", output)
+		}
+	})
+}
+
+// --- AddLabel ---
+
+func TestAddLabel(t *testing.T) {
+	t.Parallel()
+
+	t.Run("additive attach preserving existing labels sends only add_labels", func(t *testing.T) {
+		t.Parallel()
+
+		s := newPreflightServer(t) // labels catalog route returns an empty array; no issue-read route registered
+		var putBody []byte
+		var putCalls atomic.Int32
+		s.handleMethod(http.MethodPut, "/api/v4/projects/"+testEscapedProject+"/issues/4", func(w http.ResponseWriter, r *http.Request) {
+			putCalls.Add(1)
+			putBody = readRequestBody(t, r)
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{}`)) //nolint:errcheck // test helper
+		})
+		a := mustAdapter(t, s)
+
+		if err := a.AddLabel(context.Background(), "4", "needs-human"); err != nil {
+			t.Fatalf("AddLabel: %v", err)
+		}
+		if got := putCalls.Load(); got != 1 {
+			t.Errorf("PUT call count = %d, want 1", got)
+		}
+		want := `{"add_labels":["needs-human"]}`
+		if string(putBody) != want {
+			t.Errorf("PUT body = %s, want %s (no labels key, no remove_labels key)", putBody, want)
+		}
+	})
+
+	t.Run("empty or whitespace-only label attaches nothing and warns", func(t *testing.T) {
+		t.Parallel()
+
+		tests := []string{"", "  "}
+		for _, label := range tests {
+			t.Run(fmt.Sprintf("label=%q", label), func(t *testing.T) {
+				t.Parallel()
+
+				s := newFakeServer(t)
+				withPreflight(t, s, testProject)
+				var labelCalls atomic.Int32
+				s.handle("/api/v4/projects/"+testEscapedProject+"/labels", func(w http.ResponseWriter, r *http.Request) {
+					labelCalls.Add(1)
+					w.WriteHeader(http.StatusOK)
+					w.Write([]byte(`[]`)) //nolint:errcheck // test helper
+				})
+				a := mustAdapter(t, s) // no PUT route registered; a PUT would fail the test
+
+				afterConstruction := labelCalls.Load()
+
+				var buf bytes.Buffer
+				a.log = slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+				if err := a.AddLabel(context.Background(), "1", label); err != nil {
+					t.Fatalf("AddLabel: %v", err)
+				}
+				if got := labelCalls.Load(); got != afterConstruction {
+					t.Errorf("labels-route call count = %d, want %d (no catalog read for an empty label)", got, afterConstruction)
+				}
+				if !strings.Contains(buf.String(), "gitlab add_label received an empty label; nothing attached") {
+					t.Errorf("log output missing the empty-label WARN\noutput: %s", buf.String())
+				}
+			})
+		}
+	})
+}
+
+// --- Label catalog pagination (multi-page regression) ---
+
+func TestLabelCatalogPagination(t *testing.T) {
+	t.Parallel()
+
+	t.Run("construction resolves a state label defined only on page two", func(t *testing.T) {
+		t.Parallel()
+
+		s := newFakeServer(t)
+		s.handle("/api/v4/personal_access_tokens/self", func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			w.Write(loadFixture(t, "token_self.json")) //nolint:errcheck // test helper
+		})
+		s.handle("/api/v4/projects/"+testEscapedProject, func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{}`)) //nolint:errcheck // test helper
+		})
+
+		var srvURL string
+		var calls atomic.Int32
+		basePath := "/api/v4/projects/" + testEscapedProject + "/labels"
+		s.handle(basePath, func(w http.ResponseWriter, r *http.Request) {
+			n := calls.Add(1)
+			if n == 1 {
+				next := fmt.Sprintf(`<%s%s?page=2>; rel="next"`, srvURL, basePath)
+				w.Header().Set("Link", next)
+				w.WriteHeader(http.StatusOK)
+				w.Write(loadFixture(t, "labels_page1.json")) //nolint:errcheck // test helper
+				return
+			}
+			w.WriteHeader(http.StatusOK)
+			w.Write(loadFixture(t, "labels_page2.json")) //nolint:errcheck // test helper
+		})
+
+		srv := httptest.NewServer(s)
+		defer srv.Close()
+		srvURL = srv.URL
+
+		cfg := validConfig(testProject)
+		cfg["endpoint"] = srv.URL
+		adapter, err := NewGitLabAdapter(cfg)
+		if err != nil {
+			t.Fatalf("NewGitLabAdapter: %v", err)
+		}
+		a := adapter.(*GitLabAdapter)
+
+		if got := calls.Load(); got != 2 {
+			t.Errorf("labels-route call count = %d, want 2 (page one plus page two)", got)
+		}
+		if got := a.stateLabelCasing["review"]; got != "Review" {
+			t.Errorf(`stateLabelCasing["review"] = %q, want %q (page two carries the stored casing)`, got, "Review")
+		}
+	})
+
+	t.Run("AddLabel sends page two's stored casing on the attach", func(t *testing.T) {
+		t.Parallel()
+
+		s := newFakeServer(t)
+		withPreflight(t, s, testProject) // construction consumes the default empty-array catalog once
+
+		var putBody []byte
+		s.handleMethod(http.MethodPut, "/api/v4/projects/"+testEscapedProject+"/issues/6", func(w http.ResponseWriter, r *http.Request) {
+			putBody = readRequestBody(t, r)
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(`{}`)) //nolint:errcheck // test helper
+		})
+
+		srv := httptest.NewServer(s)
+		defer srv.Close()
+		srvURL := srv.URL
+
+		cfg := validConfig(testProject)
+		cfg["endpoint"] = srv.URL
+		adapter, err := NewGitLabAdapter(cfg)
+		if err != nil {
+			t.Fatalf("NewGitLabAdapter: %v", err)
+		}
+		a := adapter.(*GitLabAdapter)
+
+		// Re-registered only after construction, so the two-page catalog
+		// below is exercised by AddLabel's own fresh call, not by the
+		// preflight's earlier, already-consumed empty-array read.
+		var calls atomic.Int32
+		basePath := "/api/v4/projects/" + testEscapedProject + "/labels"
+		s.handle(basePath, func(w http.ResponseWriter, r *http.Request) {
+			n := calls.Add(1)
+			if n == 1 {
+				next := fmt.Sprintf(`<%s%s?page=2>; rel="next"`, srvURL, basePath)
+				w.Header().Set("Link", next)
+				w.WriteHeader(http.StatusOK)
+				w.Write(loadFixture(t, "labels_page1.json")) //nolint:errcheck // test helper
+				return
+			}
+			w.WriteHeader(http.StatusOK)
+			w.Write(loadFixture(t, "labels_page2.json")) //nolint:errcheck // test helper
+		})
+
+		if err := a.AddLabel(context.Background(), "6", "review"); err != nil {
+			t.Fatalf("AddLabel: %v", err)
+		}
+		if got := calls.Load(); got != 2 {
+			t.Errorf("labels-route call count = %d, want 2 (page one plus page two)", got)
+		}
+		want := `{"add_labels":["Review"]}`
+		if string(putBody) != want {
+			t.Errorf("PUT body = %s, want %s (the attach must use page two's stored casing)", putBody, want)
+		}
+	})
+}
+
+// --- Error-category mapping for a rejected write ---
+
+func TestWriteErrorMapping(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		status   int
+		fixture  string
+		inline   string
+		wantKind domain.TrackerErrorKind
+	}{
+		{"400 bad request", http.StatusBadRequest, "error_400.json", "", domain.ErrTrackerPayload},
+		{"401 unauthorized", http.StatusUnauthorized, "error_401.json", "", domain.ErrTrackerAuth},
+		{"403 insufficient scope", http.StatusForbidden, "error_403.json", "", domain.ErrTrackerAuth},
+		{"404 issue not found", http.StatusNotFound, "error_404_issue.json", "", domain.ErrTrackerNotFound},
+		{"404 project not found", http.StatusNotFound, "error_404_project.json", "", domain.ErrTrackerNotFound},
+		{"429 rate limited", http.StatusTooManyRequests, "", "{}", domain.ErrTrackerAPI},
+		{"500 server error", http.StatusInternalServerError, "error_500.json", "", domain.ErrTrackerTransport},
 	}
 
-	if err := a.CommentIssue(context.Background(), "1", "hello"); err == nil {
-		t.Error("CommentIssue = nil, want ErrTrackerPayload")
-	} else {
-		assertTrackerErrorKind(t, err, domain.ErrTrackerPayload)
-	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
 
-	if err := a.AddLabel(context.Background(), "1", "ci-failure"); err == nil {
-		t.Error("AddLabel = nil, want ErrTrackerPayload")
-	} else {
-		assertTrackerErrorKind(t, err, domain.ErrTrackerPayload)
+			s := newPreflightServer(t)
+			s.handleMethod(http.MethodPut, "/api/v4/projects/"+testEscapedProject+"/issues/1", func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(tt.status)
+				if tt.fixture != "" {
+					w.Write(loadFixture(t, tt.fixture)) //nolint:errcheck // test helper
+					return
+				}
+				w.Write([]byte(tt.inline)) //nolint:errcheck // test helper
+			})
+			a := mustAdapter(t, s)
+
+			err := a.AddLabel(context.Background(), "1", "needs-human")
+			assertTrackerErrorKind(t, err, tt.wantKind)
+		})
+	}
+}
+
+// --- Identifier guard across all three writes ---
+
+func TestWriteIdentifierGuard(t *testing.T) {
+	t.Parallel()
+
+	tests := []string{"abc", "1.5", "-1", "0", "01", " ", ""}
+
+	for _, raw := range tests {
+		t.Run(fmt.Sprintf("issueID=%q", raw), func(t *testing.T) {
+			t.Parallel()
+
+			a := mustAdapter(t, newPreflightServer(t)) // no write route registered; any request fails the test
+
+			err := a.TransitionIssue(context.Background(), raw, "done")
+			assertTrackerErrorKind(t, err, domain.ErrTrackerNotFound)
+
+			err = a.CommentIssue(context.Background(), raw, "text")
+			assertTrackerErrorKind(t, err, domain.ErrTrackerNotFound)
+
+			err = a.AddLabel(context.Background(), raw, "needs-human")
+			assertTrackerErrorKind(t, err, domain.ErrTrackerNotFound)
+		})
 	}
 }
