@@ -3,6 +3,7 @@ package gitlab
 import (
 	"bytes"
 	"log/slog"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -186,5 +187,64 @@ func TestDeriveState_NilLoggerUsesDefaultWithoutPanic(t *testing.T) {
 	got := deriveState(labels, "opened", []string{"backlog"}, []string{"done"}, "", "1", nil)
 	if got != "backlog" {
 		t.Errorf("deriveState(nil logger) = %q, want %q", got, "backlog")
+	}
+}
+
+func TestFindCurrentStateLabel(t *testing.T) {
+	t.Parallel()
+
+	active := []string{"backlog", "in-progress", "review"}
+	terminal := []string{"done", "wontfix"}
+
+	tests := []struct {
+		name         string
+		labels       []string
+		handoffState string
+		want         string
+	}{
+		{"active match", []string{"in-progress"}, "", "in-progress"},
+		{"terminal match", []string{"done"}, "", "done"},
+		{"handoff match", []string{"needs-review"}, "needs-review", "needs-review"},
+		{"config-order precedence: active beats terminal", []string{"done", "backlog"}, "", "backlog"},
+		{"config-order precedence: active beats handoff", []string{"review", "in-progress"}, "review", "in-progress"},
+		{"no configured label present", []string{"bug"}, "", ""},
+		{"empty labels", nil, "", ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := findCurrentStateLabel(tt.labels, active, terminal, tt.handoffState)
+			if got != tt.want {
+				t.Errorf("findCurrentStateLabel(%v, handoff=%q) = %q, want %q", tt.labels, tt.handoffState, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestLabelVariants(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name    string
+		labels  []string
+		lowered string
+		want    []string
+	}{
+		{"no matches", []string{"bug", "documentation"}, "review", nil},
+		{"single match", []string{"backlog", "review"}, "review", []string{"review"}},
+		{"multiple case-variant matches preserve input order", []string{"REVIEW", "bug", "review", "Review"}, "review", []string{"REVIEW", "review", "Review"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := labelVariants(tt.labels, tt.lowered)
+			if !slices.Equal(got, tt.want) {
+				t.Errorf("labelVariants(%v, %q) = %v, want %v", tt.labels, tt.lowered, got, tt.want)
+			}
+		})
 	}
 }

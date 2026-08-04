@@ -62,3 +62,46 @@ func deriveState(labels []string, nativeState string, activeStates, terminalStat
 
 	return nativeState
 }
+
+// findCurrentStateLabel returns the lowercased name of the first
+// configured state label present on labels, scanning activeStates then
+// terminalStates then handoffState in config order, or "" when the issue
+// carries none. Unlike [deriveState] it reports only the first match and
+// never falls back to the native state, because the transition flow uses
+// it to locate the single state label being replaced.
+func findCurrentStateLabel(labels []string, activeStates, terminalStates []string, handoffState string) string {
+	present := make(map[string]struct{}, len(labels))
+	for _, l := range labels {
+		present[strings.ToLower(l)] = struct{}{}
+	}
+
+	for _, s := range activeStates {
+		if _, ok := present[s]; ok {
+			return s
+		}
+	}
+	for _, s := range terminalStates {
+		if _, ok := present[s]; ok {
+			return s
+		}
+	}
+	if handoffState != "" {
+		if _, ok := present[handoffState]; ok {
+			return handoffState
+		}
+	}
+	return ""
+}
+
+// labelVariants returns every entry of labels whose lowercased form
+// equals lowered, in input order. It is how the transition removes a
+// case-variant residue in the same request that applies the swap.
+func labelVariants(labels []string, lowered string) []string {
+	var out []string
+	for _, l := range labels {
+		if strings.ToLower(l) == lowered {
+			out = append(out, l)
+		}
+	}
+	return out
+}

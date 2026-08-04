@@ -1,0 +1,4 @@
+[
+  {"id": 12, "name": "Review", "color": "#f0ad4e", "text_color": "#FFFFFF", "description": "Needs review"},
+  {"id": 13, "name": "URGENT", "color": "#d9534f", "text_color": "#FFFFFF", "description": "Escalated"}
+]
