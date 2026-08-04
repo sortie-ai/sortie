@@ -144,13 +144,18 @@ type filterIdentity struct {
 //
 // canonical is key with one optional trailing "[]" suffix removed and,
 // when what remains both starts with "not[" and ends with "]", the inner
-// name with one further optional trailing "[]" suffix removed; negated is
-// true in that case and false otherwise. ok is false when key is empty,
-// when what remains after stripping a trailing "[]" starts with "not["
-// but does not end with "]", or when the inner name is empty. A key that
-// merely contains a bracket without an opening "not[", for example
-// "or[label_name][]", returns ok true with canonical "or[label_name]" and
-// negated false, leaving the allowlist to refuse it.
+// name between them; negated is true in that case and false otherwise. ok
+// is false when key is empty, when what remains after stripping a
+// trailing "[]" starts with "not[" but does not end with "]", when the
+// inner name is empty, or when the inner name itself contains a "[" or
+// "]". That last case rejects a key such as "not[labels[]]": GitLab's
+// Rack-based query parser does not fold a bracket nested inside the
+// not[...] hash into the enclosed name the way it folds the array marker
+// on "not[labels][]", so the two spellings are not equivalent and must
+// not canonicalize to the same identity. A key that merely contains a
+// bracket without an opening "not[", for example "or[label_name][]",
+// returns ok true with canonical "or[label_name]" and negated false,
+// leaving the allowlist to refuse it.
 func classifyFilterKey(key string) (canonical string, negated bool, ok bool) {
 	if key == "" {
 		return "", false, false
@@ -165,10 +170,10 @@ func classifyFilterKey(key string) (canonical string, negated bool, ok bool) {
 	}
 
 	inner := stripped[len("not[") : len(stripped)-1]
-	if inner == "" {
+	if inner == "" || strings.ContainsAny(inner, "[]") {
 		return "", false, false
 	}
-	return strings.TrimSuffix(inner, "[]"), true, true
+	return inner, true, true
 }
 
 // filterValueSegments returns every comma-separated segment of every
