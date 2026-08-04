@@ -13,10 +13,13 @@
 // authoritative project check, and, when any state label is configured, a
 // paginated project label catalog read that resolves the canonical stored
 // casing of every configured state label, so a write never attaches a
-// case variant of a label the project already holds. A failed project
-// check or a failed catalog read fails construction, so a misconfiguration
-// surfaces at startup rather than on the first poll. Registered under kind
-// "gitlab" via an init function.
+// case variant of a label the project already holds. An invalid
+// tracker.query_filter, a failed project check, or a failed preflight
+// catalog read fails construction, so a misconfiguration surfaces at
+// startup rather than on the first poll. A configured query_filter naming
+// a label triggers a second, diagnostic catalog read whose failure is
+// logged and does not fail construction. Registered under kind "gitlab"
+// via an init function.
 //
 // This package sits under the source-control adapter family, but this
 // stage implements only the tracker contract: the source-control and CI
@@ -29,6 +32,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"maps"
 	"net/http"
 	"net/url"
 	"slices"
@@ -85,11 +89,201 @@ type GitLabAdapter struct {
 	log            *slog.Logger
 	metrics        domain.Metrics
 
+	// queryFilter holds the validated tracker.query_filter parameters, or
+	// nil when the key is unset. Never mutated after construction.
+	queryFilter url.Values
+
 	// stateLabelCasing maps the lowercased form of each configured state
 	// label to the casing stored in the project, so a write never attaches a
 	// case variant of an existing label. A configured name absent from the
 	// project has no entry and is sent as configured, which creates it.
 	stateLabelCasing map[string]string
+}
+
+// reservedFilterKeys are the issue-list parameters this adapter owns. An
+// operator override changes correctness rather than scope, so the presence
+// of any of these fails construction. Iterated in this fixed slice order so
+// a fragment naming several of them always reports the same one.
+var reservedFilterKeys = []string{
+	"state", "issue_type", "order_by", "sort",
+	"page", "per_page", "pagination", "with_labels_details",
+}
+
+// allowedFilterKeys are the issue-list filter parameters the compatibility
+// floor declares and honors. A key outside this set is refused, because
+// GitLab silently ignores an unrecognized parameter.
+var allowedFilterKeys = map[string]struct{}{
+	"assignee_id": {}, "assignee_username": {}, "author_id": {},
+	"author_username": {}, "confidential": {}, "created_after": {},
+	"created_before": {}, "due_date": {}, "iids": {}, "in": {},
+	"labels": {}, "milestone": {}, "milestone_id": {},
+	"my_reaction_emoji": {}, "scope": {}, "search": {},
+	"updated_after": {}, "updated_before": {},
+}
+
+// negatableFilterKeys are the sub-keys the not[...] negation hash honors.
+// It is a strict subset of allowedFilterKeys: the excluded members parse
+// without error and then have no effect.
+var negatableFilterKeys = map[string]struct{}{
+	"assignee_id": {}, "assignee_username": {}, "author_id": {},
+	"author_username": {}, "iids": {}, "labels": {},
+	"milestone": {}, "milestone_id": {},
+}
+
+// filterIdentity identifies one query_filter parameter regardless of which
+// spelling named it, so labels and not[labels] are distinct identities
+// while labels and labels[] collide.
+type filterIdentity struct {
+	canonical string
+	negated   bool
+}
+
+// classifyFilterKey classifies one parsed query_filter key. canonical is
+// the name the key sets are looked up by; negated reports whether the key
+// arrived inside the not[...] hash.
+//
+// canonical is key with one optional trailing "[]" suffix removed and,
+// when what remains both starts with "not[" and ends with "]", the inner
+// name between them; negated is true in that case and false otherwise. ok
+// is false when key is empty, when what remains after stripping a
+// trailing "[]" starts with "not[" but does not end with "]", when the
+// inner name is empty, or when the inner name itself contains a "[" or
+// "]". That last case rejects a key such as "not[labels[]]": GitLab's
+// Rack-based query parser does not fold a bracket nested inside the
+// not[...] hash into the enclosed name the way it folds the array marker
+// on "not[labels][]", so the two spellings are not equivalent and must
+// not canonicalize to the same identity. A key that merely contains a
+// bracket without an opening "not[", for example "or[label_name][]",
+// returns ok true with canonical "or[label_name]" and negated false,
+// leaving the allowlist to refuse it.
+func classifyFilterKey(key string) (canonical string, negated bool, ok bool) {
+	if key == "" {
+		return "", false, false
+	}
+
+	stripped := strings.TrimSuffix(key, "[]")
+	if !strings.HasPrefix(stripped, "not[") {
+		return stripped, false, true
+	}
+	if !strings.HasSuffix(stripped, "]") {
+		return "", false, false
+	}
+
+	inner := stripped[len("not[") : len(stripped)-1]
+	if inner == "" || strings.ContainsAny(inner, "[]") {
+		return "", false, false
+	}
+	return inner, true, true
+}
+
+// filterValueSegments returns every comma-separated segment of every
+// string in values, in order, each trimmed of surrounding whitespace. An
+// empty segment is preserved rather than dropped, because an empty
+// segment is what parseQueryFilter refuses and what
+// warnUnresolvedFilterLabels never sees past that refusal.
+func filterValueSegments(values []string) []string {
+	segments := make([]string, 0, len(values))
+	for _, value := range values {
+		for part := range strings.SplitSeq(value, ",") {
+			segments = append(segments, strings.TrimSpace(part))
+		}
+	}
+	return segments
+}
+
+// parseQueryFilter parses the operator tracker.query_filter into
+// url.Values. It returns (nil, nil) when raw is empty or whitespace only.
+//
+// It returns a *domain.TrackerError of kind domain.ErrTrackerPayload when
+// raw does not parse as a URL query, names a key this adapter owns, names
+// a key GitLab does not honor on the issue-list route, carries a value
+// with an empty comma-separated segment, repeats a key whose name does
+// not end in "[]", or names one parameter under two spellings. It issues
+// no request and reads no package state beyond the key sets, so it is
+// safe to call from an offline configuration check.
+func parseQueryFilter(raw string) (url.Values, error) {
+	if strings.TrimSpace(raw) == "" {
+		return nil, nil
+	}
+
+	values, err := url.ParseQuery(raw)
+	if err != nil {
+		return nil, &domain.TrackerError{
+			Kind:    domain.ErrTrackerPayload,
+			Message: "gitlab: tracker.query_filter is not a valid url query fragment",
+			Err:     err,
+		}
+	}
+
+	sortedKeys := slices.Sorted(maps.Keys(values))
+
+	for _, reserved := range reservedFilterKeys {
+		for _, key := range sortedKeys {
+			canonical, negated, ok := classifyFilterKey(key)
+			if ok && !negated && canonical == reserved {
+				return nil, &domain.TrackerError{
+					Kind: domain.ErrTrackerPayload,
+					Message: fmt.Sprintf(
+						"gitlab: tracker.query_filter key %q is owned by the adapter and cannot be overridden", key),
+				}
+			}
+		}
+	}
+
+	unknownKeyMessage := func(key string) error {
+		return &domain.TrackerError{
+			Kind: domain.ErrTrackerPayload,
+			Message: fmt.Sprintf(
+				"gitlab: tracker.query_filter key %q is not a parameter gitlab's issue-list route honors; an unrecognized key is silently ignored rather than applied", key),
+		}
+	}
+	for _, key := range sortedKeys {
+		canonical, negated, ok := classifyFilterKey(key)
+		if !ok {
+			return nil, unknownKeyMessage(key)
+		}
+		if negated {
+			if _, allowed := negatableFilterKeys[canonical]; !allowed {
+				return nil, unknownKeyMessage(key)
+			}
+			continue
+		}
+		if _, allowed := allowedFilterKeys[canonical]; !allowed {
+			return nil, unknownKeyMessage(key)
+		}
+	}
+
+	claimed := make(map[filterIdentity]string, len(sortedKeys))
+	for _, key := range sortedKeys {
+		if slices.Contains(filterValueSegments(values[key]), "") {
+			return nil, &domain.TrackerError{
+				Kind: domain.ErrTrackerPayload,
+				Message: fmt.Sprintf(
+					"gitlab: tracker.query_filter key %q carries a value with an empty comma-separated segment", key),
+			}
+		}
+
+		if !strings.HasSuffix(key, "[]") && len(values[key]) > 1 {
+			return nil, &domain.TrackerError{
+				Kind: domain.ErrTrackerPayload,
+				Message: fmt.Sprintf(
+					"gitlab: tracker.query_filter key %q repeats a non-array parameter; repeat semantics are not portable across gitlab versions, so exactly one value is required", key),
+			}
+		}
+
+		canonical, negated, _ := classifyFilterKey(key)
+		identity := filterIdentity{canonical: canonical, negated: negated}
+		if first, seen := claimed[identity]; seen {
+			return nil, &domain.TrackerError{
+				Kind: domain.ErrTrackerPayload,
+				Message: fmt.Sprintf(
+					"gitlab: tracker.query_filter keys %q and %q name the same parameter under different spellings", first, key),
+			}
+		}
+		claimed[identity] = key
+	}
+
+	return values, nil
 }
 
 // NewGitLabAdapter creates a [GitLabAdapter] from adapter configuration and
@@ -99,11 +293,13 @@ type GitLabAdapter struct {
 // numeric project ID or a namespace path such as "group/project").
 // Optional: "endpoint" (instance base URL, defaulting to
 // "https://gitlab.com"), "active_states", "terminal_states",
-// "handoff_state" (label names, lowercased), and "user_agent". A
-// non-empty "query_filter" is rejected, because this adapter does not
-// support it yet. A missing or malformed key, or a preflight failure
-// (invalid token or an unreachable project), returns a
-// [*domain.TrackerError] and blocks construction.
+// "handoff_state" (label names, lowercased), "user_agent", and
+// "query_filter" (a URL query fragment merged into opened-issue
+// listings). A non-empty "query_filter" is parsed and validated against
+// the adapter's reserved and allowed key sets before any network call; a
+// value that fails validation blocks construction. A missing or malformed
+// key, or a preflight failure (invalid token or an unreachable project),
+// returns a [*domain.TrackerError] and blocks construction.
 func NewGitLabAdapter(config map[string]any) (domain.TrackerAdapter, error) {
 	apiKey, _ := config["api_key"].(string)
 	if apiKey == "" {
@@ -123,11 +319,9 @@ func NewGitLabAdapter(config map[string]any) (domain.TrackerAdapter, error) {
 	}
 
 	queryFilterRaw, _ := config["query_filter"].(string)
-	if strings.TrimSpace(queryFilterRaw) != "" {
-		return nil, &domain.TrackerError{
-			Kind:    domain.ErrTrackerPayload,
-			Message: "gitlab: tracker.query_filter is not supported yet; remove the key or leave it empty",
-		}
+	queryFilter, err := parseQueryFilter(queryFilterRaw)
+	if err != nil {
+		return nil, err
 	}
 
 	endpointRaw, _ := config["endpoint"].(string)
@@ -183,7 +377,7 @@ func NewGitLabAdapter(config map[string]any) (domain.TrackerAdapter, error) {
 		return nil, err
 	}
 
-	return &GitLabAdapter{
+	adapter := &GitLabAdapter{
 		client:           client,
 		project:          project,
 		projectPath:      projectPath,
@@ -191,8 +385,11 @@ func NewGitLabAdapter(config map[string]any) (domain.TrackerAdapter, error) {
 		terminalStates:   terminalStates,
 		handoffState:     handoffState,
 		log:              log,
+		queryFilter:      queryFilter,
 		stateLabelCasing: stateLabelCasing,
-	}, nil
+	}
+	adapter.warnUnresolvedFilterLabels(context.Background())
+	return adapter, nil
 }
 
 // configuredStateNames returns the union of activeStates, terminalStates,
@@ -215,6 +412,75 @@ func (a *GitLabAdapter) canonicalLabel(lowered string) string {
 		return casing
 	}
 	return lowered
+}
+
+// warnUnresolvedFilterLabels warns once for each distinct label name in
+// the configured query_filter that no project or group label matches by
+// exact, case-sensitive comparison. GitLab reserves "none" and "any" as
+// wildcards on the non-negated labels parameter, so a segment naming one
+// of those is skipped there and compared under not[labels], where GitLab
+// treats it as a literal name. A name repeated across several segments,
+// for example a comma-separated duplicate or an array key carrying the
+// same value twice, still produces exactly one WARN; the negated and
+// non-negated forms are distinct names for this purpose, so the same
+// text under labels and under not[labels] each warn once, distinguished
+// in the log record by a "negated" attribute.
+//
+// It returns without reading the label catalog when the filter names no
+// label, and never fails construction: a catalog read failure is logged
+// at WARN and the method returns.
+func (a *GitLabAdapter) warnUnresolvedFilterLabels(ctx context.Context) {
+	type labelsKey struct {
+		raw     string
+		negated bool
+	}
+	var keys []labelsKey
+	for key := range a.queryFilter {
+		canonical, negated, ok := classifyFilterKey(key)
+		if ok && canonical == "labels" {
+			keys = append(keys, labelsKey{raw: key, negated: negated})
+		}
+	}
+	if len(keys) == 0 {
+		return
+	}
+
+	catalog, err := fetchProjectLabels(ctx, a.client, a.projectPath, a.log)
+	if err != nil {
+		a.log.Warn("gitlab query_filter labels catalog unavailable; label names were not validated",
+			slog.Any("error", err))
+		return
+	}
+	known := make(map[string]struct{}, len(catalog))
+	for _, l := range catalog {
+		known[l.Name] = struct{}{}
+	}
+
+	type warnedName struct {
+		name    string
+		negated bool
+	}
+	warned := make(map[warnedName]struct{})
+	for _, k := range keys {
+		for _, segment := range filterValueSegments(a.queryFilter[k.raw]) {
+			if !k.negated {
+				switch strings.ToLower(segment) {
+				case "none", "any":
+					continue
+				}
+			}
+			if _, ok := known[segment]; ok {
+				continue
+			}
+			name := warnedName{name: segment, negated: k.negated}
+			if _, ok := warned[name]; ok {
+				continue
+			}
+			warned[name] = struct{}{}
+			a.log.Warn("gitlab query_filter names a label absent from the project catalog",
+				slog.String("label", segment), slog.Bool("negated", k.negated))
+		}
+	}
 }
 
 // SetMetrics configures the metrics recorder for tracker API call
@@ -318,8 +584,11 @@ func parseIID(raw string) (int, bool) {
 // State filtering stays client-side: the configured state labels are
 // never pushed into the labels query parameter, whose AND semantics and
 // lack of an OR filter make it unusable for correctness-critical
-// filtering.
-func (a *GitLabAdapter) listAndFilter(ctx context.Context, nativeState string, keep map[string]bool) ([]domain.Issue, error) {
+// filtering. When applyFilter is true and a tracker.query_filter is
+// configured, its parameters replace the adapter's own value for any
+// matching key before the request is issued; when applyFilter is false
+// the request carries only the adapter-owned parameters.
+func (a *GitLabAdapter) listAndFilter(ctx context.Context, nativeState string, keep map[string]bool, applyFilter bool) ([]domain.Issue, error) {
 	path := "/projects/" + a.projectPath + "/issues"
 	params := url.Values{
 		"state":      {nativeState},
@@ -328,6 +597,11 @@ func (a *GitLabAdapter) listAndFilter(ctx context.Context, nativeState string, k
 		"per_page":   {"100"},
 		"order_by":   {"created_at"},
 		"sort":       {"asc"},
+	}
+	if applyFilter && len(a.queryFilter) > 0 {
+		for key, vals := range a.queryFilter {
+			params[key] = slices.Clone(vals)
+		}
 	}
 
 	raw, err := a.paginateIssues(ctx, path, params)
@@ -361,7 +635,7 @@ func (a *GitLabAdapter) FetchCandidateIssues(ctx context.Context) ([]domain.Issu
 			keep[s] = true
 		}
 
-		fetched, fetchErr := a.listAndFilter(ctx, "opened", keep)
+		fetched, fetchErr := a.listAndFilter(ctx, "opened", keep, true)
 		if fetchErr != nil {
 			return fetchErr
 		}
@@ -411,7 +685,7 @@ func (a *GitLabAdapter) FetchIssuesByStates(ctx context.Context, states []string
 		result := make([]domain.Issue, 0)
 
 		if needOpened {
-			opened, fetchErr := a.listAndFilter(ctx, "opened", requested)
+			opened, fetchErr := a.listAndFilter(ctx, "opened", requested, true)
 			if fetchErr != nil {
 				return fetchErr
 			}
@@ -419,7 +693,7 @@ func (a *GitLabAdapter) FetchIssuesByStates(ctx context.Context, states []string
 		}
 
 		if needClosed {
-			closed, fetchErr := a.listAndFilter(ctx, "closed", requested)
+			closed, fetchErr := a.listAndFilter(ctx, "closed", requested, false)
 			if fetchErr != nil {
 				return fetchErr
 			}
