@@ -414,12 +414,16 @@ func (a *GitLabAdapter) canonicalLabel(lowered string) string {
 	return lowered
 }
 
-// warnUnresolvedFilterLabels warns once for each label name in the
-// configured query_filter that no project or group label matches by
+// warnUnresolvedFilterLabels warns once for each distinct label name in
+// the configured query_filter that no project or group label matches by
 // exact, case-sensitive comparison. GitLab reserves "none" and "any" as
 // wildcards on the non-negated labels parameter, so a segment naming one
 // of those is skipped there and compared under not[labels], where GitLab
-// treats it as a literal name.
+// treats it as a literal name. A name repeated across several segments,
+// for example a comma-separated duplicate or an array key carrying the
+// same value twice, still produces exactly one WARN; the negated and
+// non-negated forms are distinct names for this purpose, so the same
+// text under labels and under not[labels] each warn once.
 //
 // It returns without reading the label catalog when the filter names no
 // label, and never fails construction: a catalog read failure is logged
@@ -451,6 +455,11 @@ func (a *GitLabAdapter) warnUnresolvedFilterLabels(ctx context.Context) {
 		known[l.Name] = struct{}{}
 	}
 
+	type warnedName struct {
+		name    string
+		negated bool
+	}
+	warned := make(map[warnedName]struct{})
 	for _, k := range keys {
 		for _, segment := range filterValueSegments(a.queryFilter[k.raw]) {
 			if !k.negated {
@@ -459,10 +468,16 @@ func (a *GitLabAdapter) warnUnresolvedFilterLabels(ctx context.Context) {
 					continue
 				}
 			}
-			if _, ok := known[segment]; !ok {
-				a.log.Warn("gitlab query_filter names a label absent from the project catalog",
-					slog.String("label", segment))
+			if _, ok := known[segment]; ok {
+				continue
 			}
+			name := warnedName{name: segment, negated: k.negated}
+			if _, ok := warned[name]; ok {
+				continue
+			}
+			warned[name] = struct{}{}
+			a.log.Warn("gitlab query_filter names a label absent from the project catalog",
+				slog.String("label", segment))
 		}
 	}
 }
