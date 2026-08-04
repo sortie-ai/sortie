@@ -2461,13 +2461,19 @@ func TestQueryFilterLabelsDiagnostic(t *testing.T) {
 
 	t.Run("a name repeated across segments warns once per negation family", func(t *testing.T) {
 		tests := []struct {
-			name          string
-			filter        string
-			wantWarnCount int
+			name             string
+			filter           string
+			wantWarnCount    int
+			wantNegatedAttrs []string
 		}{
-			{"comma-separated duplicate dedupes to one warn", "labels=needs-triage,needs-triage", 1},
-			{"repeated array key with the same value dedupes to one warn", "labels[]=needs-triage&labels[]=needs-triage", 1},
-			{"the same text under labels and not[labels] each warn once", "labels=needs-triage&not[labels]=needs-triage", 2},
+			{"comma-separated duplicate dedupes to one warn", "labels=needs-triage,needs-triage", 1, []string{"negated=false"}},
+			{"repeated array key with the same value dedupes to one warn", "labels[]=needs-triage&labels[]=needs-triage", 1, []string{"negated=false"}},
+			{
+				"the same text under labels and not[labels] each warn once, distinguished by the negated attribute",
+				"labels=needs-triage&not[labels]=needs-triage",
+				2,
+				[]string{"negated=false", "negated=true"},
+			},
 		}
 
 		for _, tt := range tests {
@@ -2492,6 +2498,11 @@ func TestQueryFilterLabelsDiagnostic(t *testing.T) {
 
 				if got := strings.Count(buf.String(), labelAbsentFromCatalogMessage); got != tt.wantWarnCount {
 					t.Errorf("WARN count for %q = %d, want %d\noutput: %s", tt.filter, got, tt.wantWarnCount, buf.String())
+				}
+				for _, attr := range tt.wantNegatedAttrs {
+					if !strings.Contains(buf.String(), attr) {
+						t.Errorf("WARN output missing %q\noutput: %s", attr, buf.String())
+					}
 				}
 			})
 		}

@@ -423,7 +423,8 @@ func (a *GitLabAdapter) canonicalLabel(lowered string) string {
 // for example a comma-separated duplicate or an array key carrying the
 // same value twice, still produces exactly one WARN; the negated and
 // non-negated forms are distinct names for this purpose, so the same
-// text under labels and under not[labels] each warn once.
+// text under labels and under not[labels] each warn once, distinguished
+// in the log record by a "negated" attribute.
 //
 // It returns without reading the label catalog when the filter names no
 // label, and never fails construction: a catalog read failure is logged
@@ -477,7 +478,7 @@ func (a *GitLabAdapter) warnUnresolvedFilterLabels(ctx context.Context) {
 			}
 			warned[name] = struct{}{}
 			a.log.Warn("gitlab query_filter names a label absent from the project catalog",
-				slog.String("label", segment))
+				slog.String("label", segment), slog.Bool("negated", k.negated))
 		}
 	}
 }
