@@ -22,3 +22,4 @@ This directory contains architecturally significant decisions for Sortie, docume
 | [0013](0013-agent-cost-budget.md)                    | Use cumulative per-issue token counts for the agent cost budget   | Accepted |
 | [0014](0014-operator-notifications.md)               | Use an adapter family for operator notifications                  | Accepted |
 | [0015](0015-pr-label-command-detection.md)           | Detect PR Label Commands by Polling the Label-Event Journal       | Accepted |
+| [0016](0016-place-forge-integrations-in-one-package-per-forge.md) | Place Forge Integrations in One Package per Forge    | Proposed |
