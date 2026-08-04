@@ -27,6 +27,9 @@ var preflightBackoff = []time.Duration{time.Second, 2 * time.Second, 4 * time.Se
 // informs the message on a not-found project error. The token never
 // appears in a log record.
 func runPreflight(ctx context.Context, client *httpkit.Client, projectPath string, log *slog.Logger) error {
+	if log == nil {
+		log = slog.Default()
+	}
 	tokenValid := false
 
 	body, _, err := client.Get(ctx, "/personal_access_tokens/self", nil)
@@ -37,7 +40,7 @@ func runPreflight(ctx context.Context, client *httpkit.Client, projectPath strin
 		if err := json.Unmarshal(body, &info); err != nil {
 			log.Debug("gitlab token introspection unavailable", slog.Any("error", err))
 		} else {
-			tokenValid = true
+			tokenValid = info.Active && !info.Revoked
 			log.Debug("gitlab token introspected",
 				slog.Any("scopes", info.Scopes),
 				slog.Bool("active", info.Active),
