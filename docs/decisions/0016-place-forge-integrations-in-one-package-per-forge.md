@@ -1,7 +1,7 @@
 ---
-status: proposed
+status: accepted
 date: 2026-08-04
-decision-makers:
+decision-makers: Serghei Iakovlev
 ---
 
 # Place Forge Integrations in One Package per Forge
