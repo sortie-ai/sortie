@@ -136,6 +136,34 @@ jobs:
             version_cmd: printenv GITEA_IMAGE
             source: "docker.gitea.com/gitea:1.27.0-rootless (pinned container image)"
             container_image: docker.gitea.com/gitea:1.27.0-rootless
+            provision_script: scripts/gitea-integration-provision.sh
+
+          - name: GitLab
+            adapter: gitlab
+            kind: tracker
+            guard: SORTIE_GITLAB_TEST
+            run_filter: Integration
+            test_path: ./internal/scm/gitlab/...
+            timeout: ""
+            node: false
+            install: ""
+            version_cmd: printenv GITLAB_IMAGE
+            source: "gitlab/gitlab-ce:19.2.1-ce.0 (pinned container image)"
+            container_image: gitlab/gitlab-ce:19.2.1-ce.0
+            provision_script: scripts/gitlab-integration-provision.sh
+
+          - name: GitLab.com
+            adapter: gitlab-saas
+            kind: tracker
+            guard: SORTIE_GITLAB_TEST
+            run_filter: Integration
+            test_path: ./internal/scm/gitlab/...
+            timeout: ""
+            node: false
+            install: ""
+            version_cmd: ""
+            source: "GitLab.com REST API v4 (remote service, no pinned version)"
+            hosted: true
 
           - name: GitHub
             adapter: github
@@ -176,9 +204,38 @@ jobs:
         with:
           node-version: "24"
 
-      - name: Boot and provision Gitea
-        if: ${{ matrix.container_image != '' }}
-        run: scripts/gitea-integration-provision.sh "${{ matrix.container_image }}"
+      - name: Publish hosted GitLab coordinates
+        if: ${{ matrix.hosted }}
+        env:
+          HOSTED_TOKEN: ${{ secrets.SORTIE_GITLAB_TOKEN }}
+          HOSTED_ENDPOINT: ${{ vars.SORTIE_GITLAB_ENDPOINT }}
+          HOSTED_PROJECT: ${{ vars.SORTIE_GITLAB_PROJECT }}
+        run: |
+          if [ -z "${HOSTED_TOKEN}" ]; then
+            echo "::warning::SORTIE_GITLAB_TOKEN secret is not configured"
+          fi
+          if [ -z "${HOSTED_ENDPOINT}" ]; then
+            echo "::warning::SORTIE_GITLAB_ENDPOINT variable is not configured"
+          fi
+          if [ -z "${HOSTED_PROJECT}" ]; then
+            echo "::warning::SORTIE_GITLAB_PROJECT variable is not configured"
+          fi
+
+          if [ -n "${HOSTED_TOKEN}" ]; then
+            echo "::add-mask::${HOSTED_TOKEN}"
+          fi
+
+          {
+            echo "SORTIE_GITLAB_ENDPOINT=${HOSTED_ENDPOINT}"
+            echo "SORTIE_GITLAB_TOKEN=${HOSTED_TOKEN}"
+            echo "SORTIE_GITLAB_PROJECT=${HOSTED_PROJECT}"
+          } >> "$GITHUB_ENV"
+
+          exit 0
+
+      - name: Boot and provision the containerized instance
+        if: ${{ matrix.provision_script != '' }}
+        run: ${{ matrix.provision_script }} "${{ matrix.container_image }}"
 
       - name: Run integration check
         id: check
