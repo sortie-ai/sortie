@@ -38,6 +38,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ([#676](https://github.com/sortie-ai/sortie/issues/676),
   [#677](https://github.com/sortie-ai/sortie/issues/677),
   [#679](https://github.com/sortie-ai/sortie/issues/679))
+- `sortie validate` GitLab adapter config validation: emits offline
+  diagnostics for `tracker.kind: gitlab` covering `tracker.endpoint` URL
+  shape (flagging a cleartext `http` scheme and a base URL that already
+  ends in `/api/v4`), `tracker.project` as a `group/project` path or a
+  numeric project ID, a `$SORTIE_GITLAB_TOKEN` environment-variable
+  hint, `tracker.query_filter` syntax and adapter-owned keys, and empty,
+  untrimmed, or overlapping active/terminal state labels. Errors block
+  dispatch; warnings are advisory.
+  ([#678](https://github.com/sortie-ai/sortie/issues/678))
 
 ## [1.16.1] - 2026-08-03
 
