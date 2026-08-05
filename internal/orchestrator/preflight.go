@@ -162,6 +162,7 @@ func ValidateDispatchConfig(params PreflightParams) PreflightResult {
 				TerminalStates:  cfg.Tracker.TerminalStates,
 				HandoffState:    cfg.Tracker.HandoffState,
 				InProgressState: cfg.Tracker.InProgressState,
+				QueryFilter:     cfg.Tracker.QueryFilter,
 			}
 			for _, d := range trackerMeta.ValidateTrackerConfig(fields) {
 				switch d.Severity {

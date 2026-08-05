@@ -553,6 +553,91 @@ func TestValidateDispatchConfig(t *testing.T) {
 	}
 }
 
+// TestValidateDispatchConfig_QueryFilterPropagation covers the one
+// generic-layer plumbing addition: registry.TrackerConfigFields.QueryFilter
+// must reach the tracker hook populated from cfg.Tracker.QueryFilter, and a
+// validator that never reads it must see no change in its diagnostics.
+func TestValidateDispatchConfig_QueryFilterPropagation(t *testing.T) {
+	t.Parallel()
+
+	t.Run("hook receives the configured QueryFilter", func(t *testing.T) {
+		t.Parallel()
+
+		var captured registry.TrackerConfigFields
+		params := validPreflightParams()
+		params.ConfigFunc = func() config.ServiceConfig {
+			return config.ServiceConfig{
+				Tracker: config.TrackerConfig{
+					Kind:        "test-tracker",
+					APIKey:      "secret",
+					QueryFilter: "scope=assigned_to_me",
+				},
+				Agent: config.AgentConfig{
+					Kind:    "test-agent",
+					Command: "/usr/bin/agent",
+				},
+			}
+		}
+		params.TrackerRegistry = &stubTrackerRegistry{
+			getFunc: func(string) (registry.TrackerConstructor, error) { return nil, nil },
+			metaFunc: func(string) (registry.TrackerMeta, bool) {
+				return registry.TrackerMeta{
+					ValidateTrackerConfig: func(fields registry.TrackerConfigFields) []registry.ValidationDiag {
+						captured = fields
+						return nil
+					},
+				}, true
+			},
+		}
+
+		result := ValidateDispatchConfig(params)
+
+		if !result.OK() {
+			t.Fatalf("ValidateDispatchConfig() OK = false, want true; errors: %v", result.Errors)
+		}
+		if captured.QueryFilter != "scope=assigned_to_me" {
+			t.Errorf("ValidateDispatchConfig() captured fields.QueryFilter = %q, want %q",
+				captured.QueryFilter, "scope=assigned_to_me")
+		}
+	})
+
+	t.Run("a validator that ignores QueryFilter emits identical diagnostics regardless of its value", func(t *testing.T) {
+		t.Parallel()
+
+		validate := func(_ registry.TrackerConfigFields) []registry.ValidationDiag { return nil }
+
+		for _, queryFilter := range []string{"", "scope=assigned_to_me"} {
+			params := validPreflightParams()
+			params.ConfigFunc = func() config.ServiceConfig {
+				return config.ServiceConfig{
+					Tracker: config.TrackerConfig{
+						Kind:        "test-tracker",
+						APIKey:      "secret",
+						QueryFilter: queryFilter,
+					},
+					Agent: config.AgentConfig{
+						Kind:    "test-agent",
+						Command: "/usr/bin/agent",
+					},
+				}
+			}
+			params.TrackerRegistry = &stubTrackerRegistry{
+				getFunc: func(string) (registry.TrackerConstructor, error) { return nil, nil },
+				metaFunc: func(string) (registry.TrackerMeta, bool) {
+					return registry.TrackerMeta{ValidateTrackerConfig: validate}, true
+				},
+			}
+
+			result := ValidateDispatchConfig(params)
+
+			if !result.OK() || len(result.Warnings) != 0 {
+				t.Errorf("ValidateDispatchConfig() with QueryFilter=%q = OK:%v warnings:%v, want OK with no diagnostics",
+					queryFilter, result.OK(), result.Warnings)
+			}
+		}
+	})
+}
+
 // TestValidateDispatchConfig_DefaultedTrackerStates covers the collision
 // rules re-run against the effective state lists, the ones a tracker
 // adapter fills from its own fallback when the workflow list is empty.
