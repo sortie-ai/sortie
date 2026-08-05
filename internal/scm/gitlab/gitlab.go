@@ -53,6 +53,7 @@ func init() {
 		RequiresAPIKey:        true,
 		DefaultActiveStates:   defaultActiveStates,
 		DefaultTerminalStates: defaultTerminalStates,
+		ValidateTrackerConfig: validateConfig,
 	})
 }
 

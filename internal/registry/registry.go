@@ -88,6 +88,11 @@ type TrackerConfigFields struct {
 	TerminalStates  []string
 	HandoffState    string
 	InProgressState string
+
+	// QueryFilter is the resolved tracker.query_filter value. An adapter
+	// that interprets the key checks its shape here; an adapter that
+	// ignores the key leaves the field unread.
+	QueryFilter string
 }
 
 // ValidationDiag is a single diagnostic produced by adapter config

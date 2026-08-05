@@ -153,4 +153,16 @@ func TestAdapterMeta_RealRegistrations(t *testing.T) {
 			t.Error(`Trackers.Meta("github").ValidateTrackerConfig = nil, want non-nil`)
 		}
 	})
+
+	t.Run("gitlab exposes ValidateTrackerConfig", func(t *testing.T) {
+		t.Parallel()
+
+		meta, ok := registry.Trackers.Meta("gitlab")
+		if !ok {
+			t.Fatal(`Trackers.Meta("gitlab") reported not registered`)
+		}
+		if meta.ValidateTrackerConfig == nil {
+			t.Error(`Trackers.Meta("gitlab").ValidateTrackerConfig = nil, want non-nil`)
+		}
+	})
 }
