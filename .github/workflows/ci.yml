@@ -49,6 +49,19 @@ jobs:
           # masquerade as new 'latest' findings. setup-go's caches are unaffected.
           skip-cache: true
 
+      - name: Lint shell scripts
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          if git cat-file -e "${BASE_SHA}^{commit}" 2>/dev/null; then
+            changed=$(git diff --name-only --diff-filter=d "$BASE_SHA" HEAD -- '*.sh')
+          else
+            changed=$(git ls-files '*.sh')
+          fi
+          [ -n "$changed" ] || exit 0
+          printf '%s\n' "$changed"
+          printf '%s\n' "$changed" | xargs -d '\n' -r shellcheck -x --
+
   test:
     name: Test
     runs-on: ubuntu-latest
