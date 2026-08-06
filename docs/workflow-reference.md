@@ -191,14 +191,14 @@ tracker:
 
 | Field             | Type            | Required                  | Default         | Dynamic Reload                     | Description                                                                                                                                                                                     |
 | ----------------- | --------------- | ------------------------- | --------------- | ---------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `kind`            | string          | **Yes** (for dispatch)    | _(none)_        | Future dispatches                  | Adapter identifier. Supported: `jira`, `github`, `linear`, `gitea`, `file`. Additional adapters are registered separately.                                                                      |
+| `kind`            | string          | **Yes** (for dispatch)    | _(none)_        | Future dispatches                  | Adapter identifier. Supported: `jira`, `github`, `linear`, `gitea`, `gitlab`, `file`. Additional adapters are registered separately.                                                            |
 | `endpoint`        | string          | Adapter-defined           | Adapter-defined | Future dispatches                  | Tracker API endpoint URL. Supports `$VAR` indirection: if the value starts with `$`, it is expanded via `os.ExpandEnv`.                                                                         |
-| `api_key`         | string          | When adapter requires it  | _(none)_        | Future dispatches                  | API authentication token. May be a literal or `$VAR_NAME`. If `$VAR_NAME` resolves to empty, treated as missing. The `jira`, `github`, `linear`, and `gitea` adapters require this field; `file` does not. Full env expansion applied (`$VAR` at any position). |
-| `project`         | string          | When adapter requires it  | _(none)_        | Future dispatches                  | Project identifier. Interpretation is adapter-defined: Jira project key, GitHub or Gitea `owner/repo`, or Linear team key (e.g., `ENG`). Supports `$VAR` indirection: if the value starts with `$`, it is expanded via `os.ExpandEnv`. |
+| `api_key`         | string          | When adapter requires it  | _(none)_        | Future dispatches                  | API authentication token. May be a literal or `$VAR_NAME`. If `$VAR_NAME` resolves to empty, treated as missing. The `jira`, `github`, `linear`, `gitea`, and `gitlab` adapters require this field; `file` does not. Full env expansion applied (`$VAR` at any position). |
+| `project`         | string          | When adapter requires it  | _(none)_        | Future dispatches                  | Project identifier. Interpretation is adapter-defined: Jira project key, GitHub or Gitea `owner/repo`, GitLab namespace path (`group/project`) or numeric project ID, or Linear team key (e.g., `ENG`). Supports `$VAR` indirection: if the value starts with `$`, it is expanded via `os.ExpandEnv`. |
 | `api_version`     | string          | No                        | `"3"`           | Future dispatches                  | Jira REST API version selector: `"3"` (Cloud) or `"2"` (Server / Data Center). Supports `$VAR` indirection. Quote the value: a bare integer (`api_version: 2`) is coerced to its decimal string but emits a validation advisory. Adapters other than Jira ignore this field. |
 | `active_states`   | list of strings | **Yes** (see rules below) | `[]` (empty)    | Future dispatch and reconciliation | Issue states eligible for agent dispatch. An issue is eligible for dispatch only if its state appears in this list. An empty list means no issues will be dispatched.                           |
 | `terminal_states` | list of strings | **Yes** (see rules below) | `[]` (empty)    | Future dispatch and reconciliation | Issue states that release claims and trigger cleanup.                                                                                                                                           |
-| `query_filter`    | string          | No                        | `""` (empty)    | Future dispatches                  | Adapter-defined query fragment that narrows the candidate issue query and, for adapters that apply it there, the terminal-state query. Each adapter interprets it in its own query language. For Jira: JQL fragment (e.g., `"labels = 'agent-ready'"`). For Linear: an `IssueFilter` JSON object, merged rather than appended (see the Linear note below). For Gitea: a URL query fragment for the repo issue-list route, merged into candidate polling only (see the Gitea note below). |
+| `query_filter`    | string          | No                        | `""` (empty)    | Future dispatches                  | Adapter-defined query fragment that narrows the candidate issue query and, for adapters that apply it there, the terminal-state query. Each adapter interprets it in its own query language. For Jira: JQL fragment (e.g., `"labels = 'agent-ready'"`). For Linear: an `IssueFilter` JSON object, merged rather than appended (see the Linear note below). For Gitea: a URL query fragment for the repo issue-list route, merged into candidate polling only (see the Gitea note below). For GitLab: a URL query fragment for the project issue-list route, key-checked against an allowlist and merged into candidate polling only (see the GitLab note below). |
 | `handoff_state`   | string          | No                        | _(absent)_      | Future worker exits                | Target tracker state for orchestrator-initiated handoff after successful worker run. When absent, no handoff transition is performed.                                                           |
 | `in_progress_state` | string        | No                        | _(absent)_      | Future dispatches                  | Target tracker state for dispatch-time transition at the start of each worker attempt. When absent, no dispatch-time transition is performed. Must be in `active_states`. Must not collide with `terminal_states` or `handoff_state`. |
 | `comments`        | map of booleans | No                        | all `false`     | Future dispatches (`on_dispatch`); future worker exits (`on_completion`, `on_failure`) | Toggles for orchestrator-posted tracker comments at session lifecycle points. Keys: `on_dispatch`, `on_completion`, `on_failure`. Each is a boolean defaulting to `false`. Non-boolean values are rejected with a configuration error. See [Section 3.2](#32-curated-variable-list) for the matching `SORTIE_TRACKER_COMMENTS_*` env overrides. |
@@ -418,6 +418,154 @@ tracker:
 
 Fix {{ .issue.identifier }}: {{ .issue.title }}
 ```
+
+**GitLab tracker (`kind: gitlab`):**
+
+The GitLab adapter talks to GitLab.com or a self-managed instance over the GitLab REST API v4.
+Configure it with the same generic `tracker.*` fields used for every adapter; the GitLab-specific
+interpretation of those fields is:
+
+- `endpoint` is the instance base URL (for example `https://gitlab.example.com`) and is optional:
+  it defaults to `https://gitlab.com`, so a GitLab.com workflow omits it and a self-managed
+  workflow sets it. Supply the site root; the adapter trims a trailing slash and appends `/api/v4`,
+  and tolerates an endpoint that already ends in `/api/v4`, though `sortie validate` warns about the
+  redundant suffix. Use `https`, since the token travels in a request header; a cleartext `http`
+  endpoint also draws a validation warning.
+- `api_key` is a GitLab access token: personal, project, or group. The adapter sends it verbatim in
+  the `PRIVATE-TOKEN` header, so leading or trailing whitespace fails authentication. The token
+  needs the `api` scope, which is the only classic scope that permits issue writes; `read_api`
+  suffices only for a deployment that never transitions an issue, posts a comment, or attaches a
+  label. A project access token is the least-privilege choice, because GitLab confines it to one
+  project server-side, and a self-managed instance offers that token type at any license. On
+  GitLab.com it requires a Premium or Ultimate subscription, so a Free namespace uses a personal
+  access token. Supply the token through environment indirection like any other tracker, for
+  example `api_key: $SORTIE_GITLAB_TOKEN`. The
+  key resolves through the standard `tracker.api_key` field (env override `SORTIE_TRACKER_API_KEY`);
+  `SORTIE_GITLAB_TOKEN` is the conventional variable name the `sortie validate` advisory suggests,
+  not a separate config path.
+- `project` is the project's full namespace path (for example `group/project`) or its numeric
+  project ID (for example `"1"`, quoted so YAML keeps it a string). GitLab nests subgroups to any
+  depth, so `group/subgroup/project` is equally valid and the adapter enforces no one-slash rule,
+  unlike the GitHub and Gitea `owner/repo` grammar. A project in a user namespace works the same
+  way. Write the path unencoded: the adapter percent-encodes it once for the API path, and
+  `sortie validate` rejects a value that is already percent-encoded.
+- `active_states`, `terminal_states`, and `handoff_state` name project or group **labels**, compared
+  case-insensitively (the adapter lowercases them). The adapter carries internal fallback labels
+  (active `["backlog", "in-progress", "review"]`, terminal `["done", "wontfix"]`) that it applies
+  when the matching list is omitted or empty, both to derive an issue's state from its labels and to
+  decide which issues are candidates. The dispatch preflight also checks `handoff_state` and
+  `in_progress_state` against the fallback list when the matching workflow list is empty. But the
+  orchestrator gates dispatch and reconciliation on the workflow's `tracker.active_states` and
+  `tracker.terminal_states`, so the field-table rule above holds for GitLab. An empty
+  `active_states` dispatches nothing, and validation rejects a workflow with both lists empty.
+  Configure `active_states` with the labels a dispatched GitLab issue must carry.
+
+GitLab has no transition workflow, so the adapter derives an issue's state from its labels: it scans
+the configured active, terminal, then handoff labels in order and takes the first match. An issue
+carrying no configured state label falls back to the first active label when it is open and the
+first terminal label when it is closed. An issue carrying more than one configured state label logs
+a warning and keeps the first.
+
+GitLab label names are case-sensitive, and attaching a name no label matches creates that label
+rather than failing. Configuring `review` for a project that already holds `Review` would therefore
+leave the project with two near-duplicate labels. To prevent that, the adapter reads the project
+label catalog at startup, project labels and inherited group labels alike, and rewrites every
+configured state label to the casing the project already stores. Spell the configured labels however
+you like; the adapter writes the project's spelling. A configured label the project does not hold
+yet is not an error: it is created the first time an issue transitions into it.
+
+`handoff_state` and `in_progress_state` also name labels. At transition time the adapter swaps the
+issue's current state label for the target label and reconciles the native status in a single
+request: a move to a terminal label also closes the issue, and a move to an active label reopens a
+closed one. GitLab imposes no transition graph, so any state can move to any state, and a transition
+that is already converged issues no write at all. The dispatch-time `in_progress_state` transition
+runs through this same label swap, so its generic validation rules (must appear in `active_states`,
+must not collide with `terminal_states` or `handoff_state`) apply unchanged.
+
+**GitLab `query_filter`:** For `kind: gitlab`, `query_filter` is a URL query fragment for GitLab's
+project issue-list route, not a string predicate or a JSON object. The adapter parses it with
+`url.ParseQuery` and merges the parameters into candidate polling, so an operator can scope which
+open issues the agent picks up. Parameters combine with `&`. Every rejection below happens at
+startup, before the first poll, and `sortie validate` reports the same verdict offline by running
+the same parser. Rules:
+
+- The adapter rejects the eight keys it owns: `state`, `issue_type`, `order_by`, `sort`, `page`,
+  `per_page`, `pagination`, and `with_labels_details`. Naming any of them fails construction with a
+  configuration error, because overriding one changes correctness rather than scope.
+- Every other key MUST be one the project issue-list route honors: `assignee_id`,
+  `assignee_username`, `author_id`, `author_username`, `confidential`, `created_after`,
+  `created_before`, `due_date`, `iids`, `in`, `labels`, `milestone`, `milestone_id`,
+  `my_reaction_emoji`, `scope`, `search`, `updated_after`, and `updated_before`. An unrecognized key
+  fails construction rather than passing through. This is stricter than the Gitea adapter, which
+  warns and forwards, because GitLab silently ignores a parameter it does not recognize: a typo such
+  as `assignee=` for `assignee_username=` would return every open issue, widening the candidate set
+  with no visible signal.
+- Negation uses GitLab's `not[...]` hash, accepted for the subset GitLab honors there:
+  `not[assignee_id]`, `not[assignee_username]`, `not[author_id]`, `not[author_username]`,
+  `not[iids]`, `not[labels]`, `not[milestone]`, and `not[milestone_id]`. A `not[...]` key naming
+  anything else is rejected, since the excluded parameters parse without error and then have no
+  effect.
+- Repeat an array parameter with the `[]` suffix (`iids[]=3&iids[]=4`). A key without the suffix
+  MUST carry exactly one value: repeating it is rejected, because repeat semantics are not portable
+  across GitLab versions.
+- Naming one parameter under two spellings is rejected: `labels` and `labels[]` are the same
+  parameter. `labels` and `not[labels]` are different parameters and MAY both appear.
+- A value carrying an empty comma-separated segment (`labels=ready,,urgent`) is rejected.
+- `scope` is both adapter-set and operator-settable. The adapter polls with `scope=all`; an operator
+  value replaces it rather than combining with it, which is how a filter narrows polling to, for
+  example, `scope=assigned_to_me`.
+- A `labels` value inherits GitLab's server-side semantics: AND across comma-separated names, and
+  case-sensitive matching. A name matching no label returns an empty result rather than dropping the
+  filter, so a misspelling shows up as "no candidates" instead of "every candidate". The adapter
+  still warns at construction for each `labels` name absent from the project catalog, once per
+  distinct name, so the empty result has a stated cause. The warning does not block construction,
+  because an operator may reference a label that does not exist yet. GitLab reads `none` and `any`
+  as wildcards on the non-negated `labels` parameter, so neither is checked against the catalog
+  there.
+
+The filter merges into the open-issue listings that back candidate polling and not into the
+closed-issue listing used for terminal-state cleanup, so an operator filter never hides a terminal
+issue from reconciliation. The batched state lookups that reconcile active runs address issues by
+`iid` and carry no filter either, so a running issue stays visible even after an edit moves it
+outside the filter.
+
+```yaml
+tracker:
+  kind: gitlab
+  # Scope candidate polling to issues assigned to the automation identity
+  # that do not carry the "blocked" label.
+  query_filter: "assignee_username=hermes-bot&not[labels]=blocked"
+```
+
+A minimal valid GitLab workflow:
+
+```markdown
+---
+tracker:
+  kind: gitlab
+  endpoint: https://gitlab.example.com # omit for GitLab.com; the adapter appends /api/v4
+  api_key: $SORTIE_GITLAB_TOKEN # GitLab access token, api scope
+  project: group/project # namespace path, or a quoted numeric project ID
+  active_states:
+    - backlog
+    - in-progress
+  terminal_states:
+    - done
+    - wontfix
+  handoff_state: review # label moved to after a successful run
+---
+
+Fix {{ .issue.identifier }}: {{ .issue.title }}
+```
+
+Four prompt-template variables (see [Section 5.2](#52-template-input-variables)) are always empty
+for this tracker, so a template that reads them renders nothing rather than failing:
+`{{ .issue.priority }}`, because GitLab issues carry no priority field; `{{ .issue.blocked_by }}`,
+because Community Edition has no blocking relationship between issues; `{{ .issue.parent }}`,
+because the issue route exposes no sub-issue relationship; and `{{ .issue.branch_name }}`, because
+GitLab computes branch names in the UI rather than storing one on the issue. Both
+`{{ .issue.id }}` and `{{ .issue.identifier }}` are the project-scoped issue number (GitLab's
+`iid`), the number shown as `#7` in the GitLab UI, never the instance-global issue ID.
 
 ---
 
