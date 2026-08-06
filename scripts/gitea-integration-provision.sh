@@ -2,26 +2,16 @@
 # Boot and seed a throwaway containerized Gitea, then publish the coordinates
 # the gitea adapter integration suite reads.
 #
-# The instance is ephemeral: the access token is generated in-job against a
-# loopback container, so nothing long-lived is stored and no repository secret
-# is needed. In CI the runner is discarded after the job; locally the script
-# removes any prior container of its fixed name before booting, so a repeat run
-# does not collide on the host port.
-#
-# Output contract. Seven coordinates are published two ways. They are appended as
-# bare KEY=VALUE lines to the file named by $GITHUB_ENV when it is set and
-# writable, which Actions exports to successor CI steps. They are also printed to
-# stdout as export statements, so a developer can run
-#   eval "$(scripts/gitea-integration-provision.sh)"
-# and get them exported into the current shell. Everything else goes to stderr,
-# keeping stdout parseable by eval.
-#
-# Prerequisites, all present on ubuntu-latest and expected locally: docker (a
-# running daemon), curl, and jq.
-#
 # Usage: gitea-integration-provision.sh [IMAGE]
-#   IMAGE defaults to the pinned tag below, which is the authoritative version
-#   for the release path. Rolling the pinned version is a deliberate edit here.
+#   IMAGE defaults to the pinned tag below, the authoritative version for the
+#   release path. Rolling it is a deliberate edit here.
+#
+# The token is minted in-job against a loopback container, so no repository
+# secret is needed.
+#
+# Coordinates go to $GITHUB_ENV when writable and to stdout as exports, so
+#   eval "$(scripts/gitea-integration-provision.sh)"
+# works locally. Everything else goes to stderr, keeping stdout eval-parseable.
 
 set -euo pipefail
 
@@ -37,8 +27,8 @@ GITEA_EMAIL="sortie@example.com"
 GITEA_REPO="adapter-lab"
 PROJECT="${GITEA_USER}/${GITEA_REPO}"
 
-# The rootless image boots quickly; poll on a short interval and give up well
-# inside the nightly job budget rather than hang a stuck boot.
+# The rootless image boots in seconds, so poll tightly and give up well inside
+# the nightly job budget rather than hang on a stuck boot.
 READINESS_TIMEOUT=90
 POLL_INTERVAL=2
 
@@ -49,9 +39,8 @@ log() {
 	printf '%s\n' "$*" >&2
 }
 
-# On a non-zero exit after the container exists, surface its logs so a boot,
-# readiness, or provisioning failure is diagnosable. The container is never
-# removed here: CI discards the runner, and the next local run clears it.
+# Surface container logs on a non-zero exit. The container is left running: CI
+# discards the runner, and the next local run clears it.
 dump_logs_on_error() {
 	local code=$?
 	if [ "$code" -ne 0 ] && docker inspect "$CONTAINER_NAME" >/dev/null 2>&1; then
@@ -68,18 +57,13 @@ for tool in docker curl jq; do
 	fi
 done
 
-# A Gitea API call. Method, path, and auth mode are positional; the JSON request
-# body is read from stdin. Auth mode is "token" (the generated access token) or
-# "basic" (the admin user and password). On any non-2xx status the response body
-# is logged and the call fails, so set -e stops the script and the trap dumps
-# the container logs.
+# Method, path, and auth mode are positional; the JSON body comes from stdin.
+# Auth mode is "token" or "basic" (the admin user and password). A non-2xx status
+# logs the response and fails, which set -e turns into an exit.
 #
-# Repository creation runs under admin basic auth; every other call runs under
-# the token, exercising that the published scopes (write:issue for the issue and
-# label writes, write:repository for the branch, commit, status, pull-request,
-# merge, and branch-delete writes) cover the whole fixture and the operations
-# under test. Reviews are the exception: each is submitted under its own author's
-# basic auth, because a reviewer cannot review their own pull request.
+# Repository creation needs admin basic auth; everything else runs under the
+# token, so the run also proves the published scopes cover the whole fixture.
+# Reviews are the exception, see user_call.
 gitea_call() {
 	local method="$1" path="$2" auth="$3" body response status
 	body=$(cat)
@@ -110,11 +94,9 @@ gitea_call() {
 	esac
 }
 
-# A Gitea API call under an arbitrary user's basic auth, used only for the review
-# fixtures: a reviewer cannot review their own pull request, so each review must
-# be attributed to a distinct author. User, password, method, and path are
-# positional; the JSON request body is read from stdin. The password travels only
-# over the loopback instance and is never echoed.
+# Review fixtures only: a reviewer cannot review their own pull request, so each
+# review needs a distinct author. Passwords travel over loopback and are never
+# echoed.
 user_call() {
 	local user="$1" password="$2" method="$3" path="$4" body response status
 	body=$(cat)
@@ -141,9 +123,9 @@ user_call() {
 docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
 
 log "starting ${IMAGE} as ${CONTAINER_NAME} on host port ${HOST_PORT}"
-# INSTALL_LOCK skips the first-run install wizard and DISABLE_REGISTRATION turns
-# off open signup; without the lock the version route answers before the
-# instance can create a user or a token.
+# INSTALL_LOCK skips the first-run wizard, without which the version route
+# answers before a user or token can be created. DISABLE_REGISTRATION shuts off
+# open signup.
 docker run -d --name "$CONTAINER_NAME" \
 	-p "${HOST_PORT}:3000" \
 	-e GITEA__security__INSTALL_LOCK=true \
@@ -178,8 +160,8 @@ docker exec "$CONTAINER_NAME" gitea admin user create \
 	--admin \
 	--must-change-password=false >/dev/null
 
-# Mint the token under basic auth. The scope set is the minimum that covers
-# every operation the suite exercises plus the two construction preflights.
+# Minted under basic auth. The scopes are the minimum covering every operation
+# the suite exercises plus the two construction preflights.
 log "creating access token"
 token_response=$(curl -sS --max-time 30 \
 	-u "${GITEA_USER}:${GITEA_PASSWORD}" \
@@ -208,7 +190,7 @@ label_review=$(create_label "review")
 label_done=$(create_label "done")
 label_bug=$(create_label "bug")
 
-# Create an issue with the given title and label ids and echo its repo index.
+# Echoes the new issue's repo index.
 create_issue() {
 	local title="$1" labels="$2"
 	jq -nc --arg title "$title" --argjson labels "$labels" \
@@ -217,16 +199,14 @@ create_issue() {
 }
 
 # The earliest-created issue owns the comments and the blocker relationship, so
-# the candidate ordering (ascending by creation time) puts it first. A short
-# pause between creations keeps the second-precision timestamps strictly
-# ordered, so the first candidate is deterministic.
+# candidate ordering puts it first. The sleeps keep the second-precision
+# timestamps strictly ordered, which is what makes that first pick deterministic.
 log "creating seed issues"
 index_backlog=$(create_issue "Backlog seed issue" "[${label_backlog}]")
 sleep 1
 index_in_progress=$(create_issue "In-progress seed issue" "[${label_in_progress}, ${label_bug}]")
 sleep 1
-# The review issue only needs to exist as a third open candidate; its index is
-# not referenced again, so it is not captured.
+# Only needs to exist as a third open candidate; its index is never used again.
 create_issue "Review seed issue" "[${label_review}]" >/dev/null
 sleep 1
 index_done=$(create_issue "Done seed issue" "[${label_done}]")
@@ -237,9 +217,8 @@ jq -nc '{body: "First seed comment."}' |
 jq -nc '{body: "Second seed comment."}' |
 	gitea_call POST "/repos/${PROJECT}/issues/${index_backlog}/comments" token >/dev/null
 
-# Record that the backlog issue blocks the in-progress issue. Gitea reads the
-# blocker from the body and the blocked issue from the path, and it needs the
-# full owner/repo/index triple, not the index alone.
+# Gitea takes the blocker from the body and the blocked issue from the path, and
+# the body needs the full owner/repo/index triple, not the index alone.
 log "linking issue ${index_backlog} as a blocker of ${index_in_progress}"
 jq -nc --argjson index "$index_backlog" --arg owner "$GITEA_USER" --arg repo "$GITEA_REPO" \
 	'{index: $index, owner: $owner, repo: $repo}' |
@@ -249,9 +228,8 @@ log "closing issue ${index_done} into its terminal state"
 jq -nc '{state: "closed"}' |
 	gitea_call PATCH "/repos/${PROJECT}/issues/${index_done}" token >/dev/null
 
-# The SCM read and CI provider suite targets a seeded pull request. Gitea forbids
-# a REQUEST_CHANGES self-review, so the reviewer and the allowlisted bot are
-# distinct users from the admin PR author.
+# Gitea forbids a REQUEST_CHANGES self-review, so the reviewer and the
+# allowlisted bot are distinct users from the admin PR author.
 REVIEWER_USER="sortie-reviewer"
 REVIEWER_PASSWORD="Sortie-Reviewer-Pw1"
 BOT_USER="sortie-review-bot"
@@ -259,14 +237,11 @@ BOT_PASSWORD="Sortie-Review-Bot-Pw1"
 FEATURE_BRANCH="feature-x"
 PROBE_BRANCH="status-probe"
 SENTINEL_PATH="review-sentinel.txt"
-# The failing status carries this URL so the D3 reconciliation can assert the
-# per-status target_url field name round-trips to CheckRun.DetailsURL. The
-# integration test hard-codes the same value.
+# Proves the per-status target_url field name round-trips to CheckRun.DetailsURL.
+# The integration test hard-codes the same value.
 FAILING_TARGET_URL="https://ci.example.com/build/12345"
-# The probe commit carries this many distinct-context statuses, above
-# DEFAULT_PAGING_NUM (30) and MAX_RESPONSE_ITEMS (50), so the D4 reconciliation
-# proves whether the single-GET combined-status read truncates. The integration
-# test hard-codes the same count.
+# Above both DEFAULT_PAGING_NUM (30) and MAX_RESPONSE_ITEMS (50), so a truncating
+# combined-status read is detectable. The integration test hard-codes the count.
 PROBE_STATUS_COUNT=51
 
 log "creating reviewer and bot users"
@@ -287,8 +262,8 @@ jq -nc '{permission: "write"}' |
 jq -nc '{permission: "write"}' |
 	gitea_call PUT "/repos/${PROJECT}/collaborators/${BOT_USER}" basic >/dev/null
 
-# The repository is auto_init, so its default branch exists; resolve its name
-# rather than assume "main" so a changed instance default does not break the base.
+# Resolved rather than assumed to be "main", so a changed instance default does
+# not break the PR base.
 default_branch=$(curl -sS --max-time 30 \
 	-H "Authorization: token ${TOKEN}" \
 	"${ENDPOINT}/api/v1/repos/${PROJECT}" | jq -er '.default_branch')
@@ -319,9 +294,8 @@ jq -nc --arg path "$SENTINEL_PATH" \
 	'{event: "COMMENT", body: "Automated review note.", comments: [{path: $path, body: "Bot inline comment on the sentinel file.", new_position: 1}]}' |
 	user_call "$BOT_USER" "$BOT_PASSWORD" POST "/repos/${PROJECT}/pulls/${pr_index}/reviews" >/dev/null
 
-# Commit A (the PR head) carries a small determinate status set: one success and
-# one failure with a target_url, well under any page size, so the failing entry
-# is always on page one for the D3, GetCIStatus, and FetchCIStatus reads.
+# One success and one failure with a target_url, well under any page size, so the
+# failing entry is always on page one for every combined-status read.
 log "seeding commit A statuses on the pull request head"
 jq -nc '{state: "success", context: "ci/build"}' |
 	gitea_call POST "/repos/${PROJECT}/statuses/${head_sha}" token >/dev/null
@@ -329,8 +303,8 @@ jq -nc --arg url "$FAILING_TARGET_URL" \
 	'{state: "failure", context: "ci/test", target_url: $url, description: "The test job failed."}' |
 	gitea_call POST "/repos/${PROJECT}/statuses/${head_sha}" token >/dev/null
 
-# Commit B is a dedicated commit for the D4 pagination probe, decoupled from the
-# PR head so a paginating route cannot hide commit A's failing entry off page one.
+# A dedicated commit for the pagination probe, kept off the PR head so a
+# paginating route cannot push the head's failing entry off page one.
 log "creating the many-status probe commit on branch ${PROBE_BRANCH}"
 jq -nc --arg new "$PROBE_BRANCH" --arg old "$default_branch" \
 	'{new_branch_name: $new, old_branch_name: $old}' |
@@ -353,11 +327,8 @@ jq -nc --argjson id "$label_review" '{labels: [$id]}' |
 	gitea_call POST "/repos/${PROJECT}/issues/${pr_index}/labels" token >/dev/null
 gitea_call DELETE "/repos/${PROJECT}/issues/${pr_index}/labels/${label_review}" token </dev/null >/dev/null
 
-# Publish one coordinate to $GITHUB_ENV (when writable) and to stdout. The
-# $GITHUB_ENV file takes a bare KEY=VALUE line, which Actions exports to
-# successor steps. Stdout takes an export statement, so a developer running
-# eval "$(...)" gets the coordinate exported into the shell and inherited by the
-# test process, not merely set as a non-exported shell variable.
+# $GITHUB_ENV takes a bare KEY=VALUE; stdout takes an export statement, so an
+# eval'd coordinate is inherited by the test process rather than merely set.
 emit() {
 	if [ -n "${GITHUB_ENV:-}" ] && [ -w "${GITHUB_ENV}" ]; then
 		printf '%s=%s\n' "$1" "$2" >>"$GITHUB_ENV"
@@ -365,9 +336,8 @@ emit() {
 	printf "export %s='%s'\n" "$1" "$2"
 }
 
-# Register the token as a masked value so it is redacted from the CI log. The
-# mask directive is emitted only under Actions; locally it would pollute the
-# stdout that eval consumes.
+# Mask before the token is echoed anywhere. Only under Actions: locally this
+# would pollute eval's stdout.
 if [ "${GITHUB_ACTIONS:-}" = "true" ]; then
 	printf '::add-mask::%s\n' "$TOKEN"
 fi
