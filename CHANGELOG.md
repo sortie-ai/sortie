@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.17.0] - 2026-08-06
+
 ### Added
 
 - GitLab tracker adapter: set `tracker.kind: gitlab` to run Sortie
@@ -1265,7 +1267,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   execution via GitHub Actions.
 - Architecture Decision Records (ADR-0001 through ADR-0005).
 
-[Unreleased]: https://github.com/sortie-ai/sortie/compare/1.16.1...HEAD
+[Unreleased]: https://github.com/sortie-ai/sortie/compare/1.17.0...HEAD
+[1.17.0]: https://github.com/sortie-ai/sortie/compare/1.16.1...1.17.0
 [1.16.1]: https://github.com/sortie-ai/sortie/compare/1.16.0...1.16.1
 [1.16.0]: https://github.com/sortie-ai/sortie/compare/1.15.0...1.16.0
 [1.15.0]: https://github.com/sortie-ai/sortie/compare/1.14.1...1.15.0
