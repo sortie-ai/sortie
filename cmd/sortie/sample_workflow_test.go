@@ -107,6 +107,11 @@ func TestSampleWorkflowLoad(t *testing.T) {
 			file:     "WORKFLOW.gitea.md",
 			wantKeys: []string{"tracker", "polling", "workspace", "hooks", "agent", "claude-code", "server"},
 		},
+		{
+			name:     "WORKFLOW.gitlab.md loads with expected config keys",
+			file:     "WORKFLOW.gitlab.md",
+			wantKeys: []string{"tracker", "polling", "workspace", "hooks", "agent", "claude-code", "server"},
+		},
 	}
 
 	for _, tt := range tests {
@@ -188,6 +193,16 @@ func TestSampleWorkflowRender(t *testing.T) {
 			file:  "WORKFLOW.gitea.md",
 			issue: minimalIssue(),
 		},
+		{
+			name:  "WORKFLOW.gitlab.md full issue",
+			file:  "WORKFLOW.gitlab.md",
+			issue: fullIssue(),
+		},
+		{
+			name:  "WORKFLOW.gitlab.md minimal issue",
+			file:  "WORKFLOW.gitlab.md",
+			issue: minimalIssue(),
+		},
 	}
 
 	for _, tt := range tests {
@@ -219,6 +234,7 @@ var shippedExampleWorkflows = []string{
 	"WORKFLOW.linear.md",
 	"WORKFLOW.kiro.md",
 	"WORKFLOW.gitea.md",
+	"WORKFLOW.gitlab.md",
 }
 
 // TestSampleWorkflowMergeConflictBranch verifies AC13: each shipped example
@@ -447,7 +463,7 @@ func TestSampleWorkflowTestFilePathConfig(t *testing.T) {
 func TestSampleWorkflowNoHTMLComments(t *testing.T) {
 	t.Parallel()
 
-	files := []string{"WORKFLOW.md", "WORKFLOW.test.md", "WORKFLOW.opencode.md", "WORKFLOW.linear.md", "WORKFLOW.gitea.md"}
+	files := []string{"WORKFLOW.md", "WORKFLOW.test.md", "WORKFLOW.opencode.md", "WORKFLOW.linear.md", "WORKFLOW.gitea.md", "WORKFLOW.gitlab.md"}
 	for _, name := range files {
 		t.Run(name, func(t *testing.T) {
 			t.Parallel()
@@ -621,6 +637,41 @@ func TestSampleWorkflowGiteaEnvVarIndirection(t *testing.T) {
 		{"endpoint", "$SORTIE_GITEA_ENDPOINT"},
 		{"api_key", "$SORTIE_GITEA_TOKEN"},
 		{"project", "$SORTIE_GITEA_PROJECT"},
+	}
+	for _, c := range checks {
+		got, _ := tracker[c.key].(string)
+		if got != c.want {
+			t.Errorf("tracker.%s = %q, want %q", c.key, got, c.want)
+		}
+	}
+}
+
+func TestSampleWorkflowGitLabEnvVarIndirection(t *testing.T) {
+	t.Parallel()
+
+	path := filepath.Join(repoRoot(t), "examples", "WORKFLOW.gitlab.md")
+	wf, err := workflow.Load(path)
+	if err != nil {
+		t.Fatalf("workflow.Load(WORKFLOW.gitlab.md): %v", err)
+	}
+
+	tracker, ok := wf.Config["tracker"].(map[string]any)
+	if !ok {
+		t.Fatal("WORKFLOW.gitlab.md config missing tracker map")
+	}
+
+	if kind, _ := tracker["kind"].(string); kind != "gitlab" {
+		t.Errorf("tracker.kind = %q, want %q", kind, "gitlab")
+	}
+
+	// Connection fields must use $SORTIE_* indirection.
+	checks := []struct {
+		key  string
+		want string
+	}{
+		{"endpoint", "$SORTIE_GITLAB_ENDPOINT"},
+		{"api_key", "$SORTIE_GITLAB_TOKEN"},
+		{"project", "$SORTIE_GITLAB_PROJECT"},
 	}
 	for _, c := range checks {
 		got, _ := tracker[c.key].(string)
