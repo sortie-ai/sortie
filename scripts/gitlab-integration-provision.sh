@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/sh
 # Boot and seed a throwaway containerized GitLab Community Edition instance,
 # then publish the coordinates the gitlab adapter integration suite reads.
 #
@@ -18,7 +18,11 @@
 # 4 CPUs and 16 GB, the documented ubuntu-latest shape); the headroom covers a
 # hosted runner's disk throughput, which that constraint does not reproduce.
 
-set -euo pipefail
+set -eu
+
+SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
+# shellcheck source=scripts/lib/provision.sh
+. "${SCRIPT_DIR}/lib/provision.sh"
 
 IMAGE="${1:-gitlab/gitlab-ce:19.2.1-ce.0}"
 
@@ -36,57 +40,16 @@ GROUP_NAME="sortie-gitlab-integration"
 PRIMARY_PROJECT_NAME="primary"
 SIBLING_PROJECT_NAME="sibling"
 
-NEWLINE=$'\n'
-
-# Diagnostics go to stderr so stdout carries only the coordinate assignments.
-log() {
-	printf '%s\n' "$*" >&2
-}
-
-# Surface container logs on a non-zero exit. The container is left running: CI
-# discards the runner, and the next local run clears it.
-dump_logs_on_error() {
-	local code=$?
-	if [ "$code" -ne 0 ] && docker inspect "$CONTAINER_NAME" >/dev/null 2>&1; then
-		log "provisioning failed (exit ${code}); recent container logs follow:"
-		docker logs --tail 200 "$CONTAINER_NAME" >&2 || true
-	fi
-}
 trap dump_logs_on_error EXIT
 
-for tool in docker curl jq; do
-	if ! command -v "$tool" >/dev/null 2>&1; then
-		log "required command not found: ${tool}"
-		exit 1
-	fi
-done
+require_tools docker curl jq
 
-# Method, path, and token are positional; the JSON body comes from stdin. A
-# non-2xx status logs the response and fails, which set -e turns into an exit.
 gitlab_call() {
-	local method="$1" path="$2" token="$3" body response status
-	body=$(cat)
-	response=$(curl -sS --max-time 30 -w "${NEWLINE}%{http_code}" \
-		-H "PRIVATE-TOKEN: ${token}" \
-		-H 'Content-Type: application/json' \
-		-X "$method" "${ENDPOINT}/api/v4${path}" \
-		-d "$body")
-	status=${response##*"$NEWLINE"}
-	response=${response%"$NEWLINE"*}
-	case "$status" in
-	2*)
-		printf '%s' "$response"
-		;;
-	*)
-		log "gitlab API ${method} ${path} returned HTTP ${status}: ${response}"
-		return 1
-		;;
-	esac
+	_gl_method=$1 _gl_path=$2 _gl_token=$3
+	api_call "$_gl_method" "${ENDPOINT}/api/v4${_gl_path}" -H "PRIVATE-TOKEN: ${_gl_token}"
 }
 
-# Remove a prior container of the fixed name so a repeat local run reclaims
-# the host port instead of failing to bind it.
-docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
+reclaim_container
 
 # Released Community Edition images live only on Docker Hub, pulled anonymously.
 # Keeping the pull its own step separates a registry failure from a boot one.
@@ -105,35 +68,19 @@ log "starting ${IMAGE} as ${CONTAINER_NAME} on host port ${HOST_PORT}"
 # grafana['enable'], fails gitlab-ctl reconfigure and exits the container
 # within seconds.
 docker run -d --name "$CONTAINER_NAME" \
-	-p "${HOST_PORT}:8929" \
+	-p "${HOST_PORT}:${HOST_PORT}" \
 	--shm-size=256m \
 	-e GITLAB_OMNIBUS_CONFIG="external_url 'http://localhost:${HOST_PORT}'; puma['worker_processes'] = 0; sidekiq['concurrency'] = 1; prometheus_monitoring['enable'] = false; registry['enable'] = false; gitlab_kas['enable'] = false;" \
 	"$IMAGE" >/dev/null
 
+# 401 counts as ready: the route answers before any credential exists.
 log "waiting up to ${READINESS_TIMEOUT_SECONDS}s for ${ENDPOINT}/api/v4/version"
-SECONDS=0
-ready=false
-while [ "$SECONDS" -lt "$READINESS_TIMEOUT_SECONDS" ]; do
-	if [ "$(docker inspect -f '{{.State.Running}}' "$CONTAINER_NAME" 2>/dev/null || true)" != "true" ]; then
-		log "container exited before readiness; a boot-configuration failure is the usual cause"
-		exit 1
-	fi
-
-	status=$(curl -sS --max-time 5 -o /dev/null -w '%{http_code}' "${ENDPOINT}/api/v4/version" 2>/dev/null || true)
-	case "$status" in
-	200 | 401)
-		ready=true
-		break
-		;;
-	esac
-
-	sleep "$POLL_INTERVAL_SECONDS"
-done
-if [ "$ready" != "true" ]; then
+if ! wait_for_http "${ENDPOINT}/api/v4/version" "200 401" \
+	"$READINESS_TIMEOUT_SECONDS" "$POLL_INTERVAL_SECONDS"; then
 	log "gitlab did not become ready within ${READINESS_TIMEOUT_SECONDS}s"
 	exit 1
 fi
-log "gitlab ready after ${SECONDS}s"
+log "gitlab ready after ${WAITED_SECONDS}s"
 
 # No resource-owner password grant at this version, so the first token comes
 # from inside the container. The expiry is read off the instance clock: a date
@@ -196,31 +143,20 @@ PUBLISHED_TOKEN=$(printf '%s' "$published_response" | jq -er '.token')
 # until the authorization refresh commits. Gate on the project being visible
 # to the token itself, or every fixture below races that refresh.
 log "waiting up to ${AUTHORIZATION_TIMEOUT_SECONDS}s for the published token's project authorization"
-SECONDS=0
-authorized=false
-while [ "$SECONDS" -lt "$AUTHORIZATION_TIMEOUT_SECONDS" ]; do
-	status=$(curl -sS --max-time 10 -o /dev/null -w '%{http_code}' \
-		-H "PRIVATE-TOKEN: ${PUBLISHED_TOKEN}" \
-		"${ENDPOINT}/api/v4/projects/${PRIMARY_ID}" 2>/dev/null || true)
-	if [ "$status" = "200" ]; then
-		authorized=true
-		break
-	fi
-	sleep "$AUTHORIZATION_POLL_INTERVAL_SECONDS"
-done
-if [ "$authorized" != "true" ]; then
-	log "published token never saw project ${PRIMARY_ID} within ${AUTHORIZATION_TIMEOUT_SECONDS}s; last status ${status}"
+if ! wait_for_http "${ENDPOINT}/api/v4/projects/${PRIMARY_ID}" "200" \
+	"$AUTHORIZATION_TIMEOUT_SECONDS" "$AUTHORIZATION_POLL_INTERVAL_SECONDS" \
+	-H "PRIVATE-TOKEN: ${PUBLISHED_TOKEN}"; then
+	log "published token never saw project ${PRIMARY_ID} within ${AUTHORIZATION_TIMEOUT_SECONDS}s; last status ${WAIT_STATUS}"
 	exit 1
 fi
-log "published token authorized after ${SECONDS}s"
+log "published token authorized after ${WAITED_SECONDS}s"
 
 PUBLISHED_USER_ID=$(curl -sS --max-time 30 -H "PRIVATE-TOKEN: ${PUBLISHED_TOKEN}" "${ENDPOINT}/api/v4/user" | jq -er '.id')
 
 # Every fixture below is created under the published Developer-level token, so
 # the suite runs against objects its own identity could have made.
 log "creating project labels"
-primary_labels=(backlog in-progress review "done" needs-human)
-for label in "${primary_labels[@]}"; do
+for label in backlog in-progress review 'done' needs-human; do
 	jq -nc --arg name "$label" '{name: $name, color: "#cccccc"}' |
 		gitlab_call POST "/projects/${PRIMARY_ID}/labels" "$PUBLISHED_TOKEN" >/dev/null
 done
@@ -229,16 +165,16 @@ done
 # timestamps strictly ordered, which is what makes "first candidate" and
 # "earliest-created" deterministic.
 create_primary_issue() {
-	local title="$1" labels_json="$2" extra_json="${3:-{}}"
-	jq -nc --arg title "$title" --argjson labels "$labels_json" --argjson extra "$extra_json" \
+	_cpi_extra=${3:-\{\}}
+	_cpi_out=$(jq -nc --arg title "$1" --argjson labels "$2" --argjson extra "$_cpi_extra" \
 		'{title: $title, labels: $labels} + $extra' |
-		gitlab_call POST "/projects/${PRIMARY_ID}/issues" "$PUBLISHED_TOKEN" | jq -er '.iid'
+		gitlab_call POST "/projects/${PRIMARY_ID}/issues" "$PUBLISHED_TOKEN")
+	printf '%s' "$_cpi_out" | jq -er '.iid'
 }
 
 add_comment() {
-	local iid="$1" body="$2"
-	jq -nc --arg body "$body" '{body: $body}' |
-		gitlab_call POST "/projects/${PRIMARY_ID}/issues/${iid}/notes" "$PUBLISHED_TOKEN" >/dev/null
+	jq -nc --arg body "$2" '{body: $body}' |
+		gitlab_call POST "/projects/${PRIMARY_ID}/issues/${1}/notes" "$PUBLISHED_TOKEN" >/dev/null
 }
 
 log "creating seed issues in ascending time order"
@@ -266,8 +202,10 @@ add_comment "$issue_backlog_1" "First seed comment."
 add_comment "$issue_backlog_1" "Second seed comment."
 
 log "seeding at least 101 comments on issue ${issue_bulk}"
-for i in $(seq 1 101); do
+i=1
+while [ "$i" -le 101 ]; do
 	add_comment "$issue_bulk" "Bulk seed comment ${i}."
+	i=$((i + 1))
 done
 
 log "linking issue ${issue_bulk} to ${issue_linktarget}, which carries no human comment"
@@ -276,27 +214,16 @@ jq -nc --argjson target_project_id "$PRIMARY_ID" --argjson target_issue_iid "$is
 	gitlab_call POST "/projects/${PRIMARY_ID}/issues/${issue_bulk}/links" "$PUBLISHED_TOKEN" >/dev/null
 
 log "creating one non-issue work item"
-issue_task=$(jq -nc --arg title "Task work item" '{title: $title, issue_type: "task"}' |
-	gitlab_call POST "/projects/${PRIMARY_ID}/issues" "$PUBLISHED_TOKEN" | jq -er '.iid')
+task_response=$(jq -nc --arg title "Task work item" '{title: $title, issue_type: "task"}' |
+	gitlab_call POST "/projects/${PRIMARY_ID}/issues" "$PUBLISHED_TOKEN")
+issue_task=$(printf '%s' "$task_response" | jq -er '.iid')
 
 log "closing issue ${issue_done} into its terminal state"
 jq -nc '{state_event: "close"}' |
 	gitlab_call PUT "/projects/${PRIMARY_ID}/issues/${issue_done}" "$PUBLISHED_TOKEN" >/dev/null
 
-# $GITHUB_ENV takes a bare KEY=VALUE; stdout takes an export statement, so an
-# eval'd coordinate is inherited by the test process rather than merely set.
-emit() {
-	if [ -n "${GITHUB_ENV:-}" ] && [ -w "${GITHUB_ENV}" ]; then
-		printf '%s=%s\n' "$1" "$2" >>"$GITHUB_ENV"
-	fi
-	printf "export %s='%s'\n" "$1" "$2"
-}
-
-# Mask before the token is echoed anywhere. The bootstrap token is never
-# emitted at all. Only under Actions: locally this would pollute eval's stdout.
-if [ "${GITHUB_ACTIONS:-}" = "true" ]; then
-	printf '::add-mask::%s\n' "$PUBLISHED_TOKEN"
-fi
+# The bootstrap token is never emitted, so only this one needs masking.
+mask_secret "$PUBLISHED_TOKEN"
 
 log "provisioning complete; publishing coordinates"
 emit SORTIE_GITLAB_ENDPOINT "$ENDPOINT"

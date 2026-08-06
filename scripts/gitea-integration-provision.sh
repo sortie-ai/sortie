@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/bin/sh
 # Boot and seed a throwaway containerized Gitea, then publish the coordinates
 # the gitea adapter integration suite reads.
 #
@@ -13,7 +13,11 @@
 #   eval "$(scripts/gitea-integration-provision.sh)"
 # works locally. Everything else goes to stderr, keeping stdout eval-parseable.
 
-set -euo pipefail
+set -eu
+
+SCRIPT_DIR=$(CDPATH='' cd -- "$(dirname -- "$0")" && pwd)
+# shellcheck source=scripts/lib/provision.sh
+. "${SCRIPT_DIR}/lib/provision.sh"
 
 IMAGE="${1:-docker.gitea.com/gitea:1.27.0-rootless}"
 
@@ -32,63 +36,21 @@ PROJECT="${GITEA_USER}/${GITEA_REPO}"
 READINESS_TIMEOUT=90
 POLL_INTERVAL=2
 
-NEWLINE=$'\n'
-
-# Diagnostics go to stderr so stdout carries only the coordinate assignments.
-log() {
-	printf '%s\n' "$*" >&2
-}
-
-# Surface container logs on a non-zero exit. The container is left running: CI
-# discards the runner, and the next local run clears it.
-dump_logs_on_error() {
-	local code=$?
-	if [ "$code" -ne 0 ] && docker inspect "$CONTAINER_NAME" >/dev/null 2>&1; then
-		log "provisioning failed (exit ${code}); recent container logs follow:"
-		docker logs --tail 200 "$CONTAINER_NAME" >&2 || true
-	fi
-}
 trap dump_logs_on_error EXIT
 
-for tool in docker curl jq; do
-	if ! command -v "$tool" >/dev/null 2>&1; then
-		log "required command not found: ${tool}"
-		exit 1
-	fi
-done
+require_tools docker curl jq
 
-# Method, path, and auth mode are positional; the JSON body comes from stdin.
-# Auth mode is "token" or "basic" (the admin user and password). A non-2xx status
-# logs the response and fails, which set -e turns into an exit.
-#
-# Repository creation needs admin basic auth; everything else runs under the
-# token, so the run also proves the published scopes cover the whole fixture.
-# Reviews are the exception, see user_call.
+# Auth mode is "token" or "basic" (the admin user and password). Repository
+# creation needs basic auth; everything else runs under the token, so the run
+# also proves the published scopes cover the whole fixture. Reviews are the
+# exception, see user_call.
 gitea_call() {
-	local method="$1" path="$2" auth="$3" body response status
-	body=$(cat)
-	local auth_args=()
-	case "$auth" in
-	token) auth_args=(-H "Authorization: token ${TOKEN}") ;;
-	basic) auth_args=(-u "${GITEA_USER}:${GITEA_PASSWORD}") ;;
+	_gc_method=$1 _gc_path=$2 _gc_auth=$3
+	case "$_gc_auth" in
+	token) api_call "$_gc_method" "${ENDPOINT}/api/v1${_gc_path}" -H "Authorization: token ${TOKEN}" ;;
+	basic) api_call "$_gc_method" "${ENDPOINT}/api/v1${_gc_path}" -u "${GITEA_USER}:${GITEA_PASSWORD}" ;;
 	*)
-		log "unknown auth mode: ${auth}"
-		return 1
-		;;
-	esac
-	response=$(curl -sS --max-time 30 -w "${NEWLINE}%{http_code}" \
-		"${auth_args[@]}" \
-		-H 'Content-Type: application/json' \
-		-X "$method" "${ENDPOINT}/api/v1${path}" \
-		-d "$body")
-	status=${response##*"$NEWLINE"}
-	response=${response%"$NEWLINE"*}
-	case "$status" in
-	2*)
-		printf '%s' "$response"
-		;;
-	*)
-		log "gitea API ${method} ${path} returned HTTP ${status}: ${response}"
+		log "unknown auth mode: ${_gc_auth}"
 		return 1
 		;;
 	esac
@@ -98,29 +60,11 @@ gitea_call() {
 # review needs a distinct author. Passwords travel over loopback and are never
 # echoed.
 user_call() {
-	local user="$1" password="$2" method="$3" path="$4" body response status
-	body=$(cat)
-	response=$(curl -sS --max-time 30 -w "${NEWLINE}%{http_code}" \
-		-u "${user}:${password}" \
-		-H 'Content-Type: application/json' \
-		-X "$method" "${ENDPOINT}/api/v1${path}" \
-		-d "$body")
-	status=${response##*"$NEWLINE"}
-	response=${response%"$NEWLINE"*}
-	case "$status" in
-	2*)
-		printf '%s' "$response"
-		;;
-	*)
-		log "gitea API ${method} ${path} (as ${user}) returned HTTP ${status}: ${response}"
-		return 1
-		;;
-	esac
+	_uc_user=$1 _uc_password=$2 _uc_method=$3 _uc_path=$4
+	api_call "$_uc_method" "${ENDPOINT}/api/v1${_uc_path}" -u "${_uc_user}:${_uc_password}"
 }
 
-# Remove a prior container of the fixed name so a repeat local run reclaims the
-# host port instead of failing to bind it.
-docker rm -f "$CONTAINER_NAME" >/dev/null 2>&1 || true
+reclaim_container
 
 log "starting ${IMAGE} as ${CONTAINER_NAME} on host port ${HOST_PORT}"
 # INSTALL_LOCK skips the first-run wizard, without which the version route
@@ -133,22 +77,11 @@ docker run -d --name "$CONTAINER_NAME" \
 	"$IMAGE" >/dev/null
 
 log "waiting up to ${READINESS_TIMEOUT}s for ${ENDPOINT}/api/v1/version"
-deadline=$((SECONDS + READINESS_TIMEOUT))
-ready=false
-while [ "$SECONDS" -lt "$deadline" ]; do
-	status=$(curl -sS --max-time 5 -o /dev/null -w '%{http_code}' \
-		"${ENDPOINT}/api/v1/version" 2>/dev/null || true)
-	if [ "$status" = "200" ]; then
-		ready=true
-		break
-	fi
-	sleep "$POLL_INTERVAL"
-done
-if [ "$ready" != "true" ]; then
+if ! wait_for_http "${ENDPOINT}/api/v1/version" "200" "$READINESS_TIMEOUT" "$POLL_INTERVAL"; then
 	log "gitea did not become ready within ${READINESS_TIMEOUT}s"
 	exit 1
 fi
-log "gitea is ready"
+log "gitea ready after ${WAITED_SECONDS}s"
 
 # The --must-change-password=false flag is load-bearing: a fresh admin is
 # otherwise forced into a password-change state that blocks token creation.
@@ -179,9 +112,9 @@ jq -nc --arg name "$GITEA_REPO" '{name: $name, private: false, auto_init: true}'
 
 # The five workflow-state and category labels the fixture assigns to its issues.
 create_label() {
-	local name="$1"
-	jq -nc --arg name "$name" '{name: $name, color: "#cccccc"}' |
-		gitea_call POST "/repos/${PROJECT}/labels" token | jq -er '.id'
+	_cl_out=$(jq -nc --arg name "$1" '{name: $name, color: "#cccccc"}' |
+		gitea_call POST "/repos/${PROJECT}/labels" token)
+	printf '%s' "$_cl_out" | jq -er '.id'
 }
 log "creating labels"
 label_backlog=$(create_label "backlog")
@@ -192,10 +125,10 @@ label_bug=$(create_label "bug")
 
 # Echoes the new issue's repo index.
 create_issue() {
-	local title="$1" labels="$2"
-	jq -nc --arg title "$title" --argjson labels "$labels" \
+	_ci_out=$(jq -nc --arg title "$1" --argjson labels "$2" \
 		'{title: $title, body: "Seed issue for the gitea adapter integration fixture.", labels: $labels}' |
-		gitea_call POST "/repos/${PROJECT}/issues" token | jq -er '.number'
+		gitea_call POST "/repos/${PROJECT}/issues" token)
+	printf '%s' "$_ci_out" | jq -er '.number'
 }
 
 # The earliest-created issue owns the comments and the blocker relationship, so
@@ -264,9 +197,10 @@ jq -nc '{permission: "write"}' |
 
 # Resolved rather than assumed to be "main", so a changed instance default does
 # not break the PR base.
-default_branch=$(curl -sS --max-time 30 \
+repo_response=$(curl -sS --max-time 30 \
 	-H "Authorization: token ${TOKEN}" \
-	"${ENDPOINT}/api/v1/repos/${PROJECT}" | jq -er '.default_branch')
+	"${ENDPOINT}/api/v1/repos/${PROJECT}")
+default_branch=$(printf '%s' "$repo_response" | jq -er '.default_branch')
 
 log "creating branch ${FEATURE_BRANCH} and committing the sentinel file"
 jq -nc --arg new "$FEATURE_BRANCH" --arg old "$default_branch" \
@@ -275,14 +209,16 @@ jq -nc --arg new "$FEATURE_BRANCH" --arg old "$default_branch" \
 # A NEW multi-line file: every line is an added diff line, so an inline comment
 # anchored to line 1 reads back with position > 0 (Outdated == false).
 sentinel_content=$(printf 'sentinel line 1\nsentinel line 2\nsentinel line 3\nsentinel line 4\nsentinel line 5\n' | base64 | tr -d '\n')
-head_sha=$(jq -nc --arg content "$sentinel_content" --arg branch "$FEATURE_BRANCH" \
+sentinel_response=$(jq -nc --arg content "$sentinel_content" --arg branch "$FEATURE_BRANCH" \
 	'{content: $content, branch: $branch, message: "Add review sentinel file"}' |
-	gitea_call POST "/repos/${PROJECT}/contents/${SENTINEL_PATH}" token | jq -er '.commit.sha')
+	gitea_call POST "/repos/${PROJECT}/contents/${SENTINEL_PATH}" token)
+head_sha=$(printf '%s' "$sentinel_response" | jq -er '.commit.sha')
 
 log "opening the review pull request"
-pr_index=$(jq -nc --arg head "$FEATURE_BRANCH" --arg base "$default_branch" \
+pr_response=$(jq -nc --arg head "$FEATURE_BRANCH" --arg base "$default_branch" \
 	'{head: $head, base: $base, title: "Review fixture pull request", body: "Seed PR for the gitea SCM adapter integration fixture."}' |
-	gitea_call POST "/repos/${PROJECT}/pulls" token | jq -er '.number')
+	gitea_call POST "/repos/${PROJECT}/pulls" token)
+pr_index=$(printf '%s' "$pr_response" | jq -er '.number')
 
 log "submitting the human REQUEST_CHANGES review as ${REVIEWER_USER}"
 jq -nc --arg path "$SENTINEL_PATH" \
@@ -310,14 +246,17 @@ jq -nc --arg new "$PROBE_BRANCH" --arg old "$default_branch" \
 	'{new_branch_name: $new, old_branch_name: $old}' |
 	gitea_call POST "/repos/${PROJECT}/branches" token >/dev/null
 probe_content=$(printf 'status pagination probe commit\n' | base64 | tr -d '\n')
-probe_sha=$(jq -nc --arg content "$probe_content" --arg branch "$PROBE_BRANCH" \
+probe_response=$(jq -nc --arg content "$probe_content" --arg branch "$PROBE_BRANCH" \
 	'{content: $content, branch: $branch, message: "Add status probe file"}' |
-	gitea_call POST "/repos/${PROJECT}/contents/status-probe.txt" token | jq -er '.commit.sha')
+	gitea_call POST "/repos/${PROJECT}/contents/status-probe.txt" token)
+probe_sha=$(printf '%s' "$probe_response" | jq -er '.commit.sha')
 
 log "seeding ${PROBE_STATUS_COUNT} distinct-context statuses on the probe commit"
-for ((i = 1; i <= PROBE_STATUS_COUNT; i++)); do
+i=1
+while [ "$i" -le "$PROBE_STATUS_COUNT" ]; do
 	jq -nc --arg ctx "ci/probe-${i}" '{state: "success", context: $ctx}' |
 		gitea_call POST "/repos/${PROJECT}/statuses/${probe_sha}" token >/dev/null
+	i=$((i + 1))
 done
 
 # One add-and-remove pair on the PR timeline (PRs share the issue index space)
@@ -327,20 +266,7 @@ jq -nc --argjson id "$label_review" '{labels: [$id]}' |
 	gitea_call POST "/repos/${PROJECT}/issues/${pr_index}/labels" token >/dev/null
 gitea_call DELETE "/repos/${PROJECT}/issues/${pr_index}/labels/${label_review}" token </dev/null >/dev/null
 
-# $GITHUB_ENV takes a bare KEY=VALUE; stdout takes an export statement, so an
-# eval'd coordinate is inherited by the test process rather than merely set.
-emit() {
-	if [ -n "${GITHUB_ENV:-}" ] && [ -w "${GITHUB_ENV}" ]; then
-		printf '%s=%s\n' "$1" "$2" >>"$GITHUB_ENV"
-	fi
-	printf "export %s='%s'\n" "$1" "$2"
-}
-
-# Mask before the token is echoed anywhere. Only under Actions: locally this
-# would pollute eval's stdout.
-if [ "${GITHUB_ACTIONS:-}" = "true" ]; then
-	printf '::add-mask::%s\n' "$TOKEN"
-fi
+mask_secret "$TOKEN"
 
 log "provisioning complete; publishing coordinates"
 emit SORTIE_GITEA_ENDPOINT "$ENDPOINT"
