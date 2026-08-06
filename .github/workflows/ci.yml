@@ -60,7 +60,7 @@ jobs:
           fi
           [ -n "$changed" ] || exit 0
           printf '%s\n' "$changed"
-          printf '%s\n' "$changed" | xargs shellcheck -x
+          printf '%s\n' "$changed" | xargs -d '\n' -r shellcheck -x --
 
   test:
     name: Test
