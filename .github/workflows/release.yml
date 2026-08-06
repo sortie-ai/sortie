@@ -214,6 +214,27 @@ jobs:
       - name: Run integration tests
         run: go test -race -count=1 -v -run 'Integration' ./internal/scm/gitea/...
 
+  test-integration-gitlab:
+    name: "Integration: GitLab"
+    needs: [lint, test-unit]
+    runs-on: ubuntu-latest
+    env:
+      SORTIE_GITLAB_TEST: "1"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - name: Boot and provision GitLab
+        run: scripts/gitlab-integration-provision.sh
+
+      - name: Run integration tests
+        run: go test -race -count=1 -v -run 'Integration' ./internal/scm/gitlab/...
+
   test-e2e-github:
     name: "E2E: GitHub orchestrator"
     needs: [lint, test-unit]
@@ -430,6 +451,7 @@ jobs:
       - test-integration-github
       - test-integration-linear
       - test-integration-gitea
+      - test-integration-gitlab
       - test-e2e-github
       - test-integration-claude
       - test-integration-copilot

@@ -5,8 +5,11 @@
 > 2026-08-04. Community Edition is the compatibility floor: the adapter depends only on what
 > it provides. A second live instance, **GitLab.com** (version `19.3.0-pre`, revision
 > `7725732be39`, `enterprise: true`, namespace subscription plan `free`), was used solely for
-> the self-managed-versus-SaaS comparison. Reference for implementing the GitLab
-> `TrackerAdapter`.
+> the self-managed-versus-SaaS comparison. A second live pass on 2026-08-05 re-verified the
+> pinned container image `gitlab/gitlab-ce:19.2.1-ce.0` (version `19.2.1`, revision
+> `f4d029d2da8`, matching the self-managed lab) and GitLab.com, whose revision had moved to
+> `6f59ad3485c` as a continuously deployed instance does. Reference for implementing the
+> GitLab `TrackerAdapter`.
 >
 > Self-managed GitLab has no fixed host, so the instance base URL is part of every
 > self-managed configuration, and instances differ in version and settings. Facts hold for
@@ -19,8 +22,8 @@ Every statement below carries one of five tags. Nothing is asserted without one.
 
 | Tag | Meaning |
 | --- | --- |
-| **[live-CE]** | Observed directly against the self-managed Community Edition 19.2.1 instance on 2026-08-04. The strongest evidence for Community Edition behavior. |
-| **[live-SaaS]** | Observed directly against GitLab.com (`19.3.0-pre`, `enterprise: true`, plan `free`) on 2026-08-04. Evidence about GitLab.com only, never about self-managed. |
+| **[live-CE]** | Observed directly against the self-managed Community Edition 19.2.1 instance on 2026-08-04, and again on 2026-08-05 against the pinned container image `gitlab/gitlab-ce:19.2.1-ce.0` (version `19.2.1`, revision `f4d029d2da8`, matching the lab). The strongest evidence for Community Edition behavior. |
+| **[live-SaaS]** | Observed directly against GitLab.com (`19.3.0-pre`, `enterprise: true`, plan `free`) on 2026-08-04, and again on 2026-08-05 at revision `6f59ad3485c`, moved from the previously recorded `7725732be39` as a continuously deployed instance does. Evidence about GitLab.com only, never about self-managed. |
 | **[docs]** | First-party GitLab documentation, cited by URL. |
 | **[source]** | Upstream source in `gitlab-org/gitlab`, cited by path at ref `v19.2.1-ee` (the tag matching the researched Community Edition version; the `-ee` tag carries both the Community Edition code and the `ee/` tree, which is how a route's edition gating is proved). |
 | **[unknown]** | Not settled by this research. Listed with the evidence that would settle it. |
@@ -195,13 +198,20 @@ recognize a leak by shape.
 | Token type | Identity returned by `GET /user` | Access scope | Suitability |
 | --- | --- | --- | --- |
 | Personal access token | The owning human user, `bot: false` **[live-CE]** | Everything that user can reach | Works. Couples automation to a person's account and their whole project set |
-| **Project access token** | A generated bot user, `bot: true` **[live-CE]** | Exactly one project. A sibling project in the same group returns `404 {"message":"404 Project Not Found"}` **[live-CE]** | **Recommended for a single-project workflow.** Least privilege, and the containment is enforced by the server |
-| Group access token | A generated bot user, `bot: true` **[live-CE]** | Every project in the group, plus `GET /groups/:id/issues` **[live-CE]** | Appropriate when one workflow spans a group |
+| **Project access token** | A generated bot user, `bot: true` **[live-CE]** | Exactly one project. A sibling project in the same group returns `404 {"message":"404 Project Not Found"}` **[live-CE]** | **Recommended for a single-project workflow** on self-managed Community Edition, which has this token type at any license. On GitLab.com it requires a Premium or Ultimate subscription [[docs]](https://docs.gitlab.com/user/project/settings/project_access_tokens/), so a Free namespace can only use a personal access token. Least privilege, and the containment is enforced by the server |
+| Group access token | A generated bot user, `bot: true` **[live-CE]** | Every project in the group, plus `GET /groups/:id/issues` **[live-CE]** | Appropriate when one workflow spans a group, on self-managed Community Edition at any license. On GitLab.com it requires the same Premium or Ultimate subscription as the project access token [[docs]](https://docs.gitlab.com/user/group/settings/group_access_tokens/) |
 | OAuth 2.0 access token | The authorizing user | The granted scopes | Not used. Sortie runs as a headless service and implements no interactive authorization-code flow or callback, the same reasoning the Jira integration applies |
 
 Project and group access tokens are created with an `access_level`; the level must permit
 issue writes for the write operations. A `Developer`-level token performed every write in
 this research **[live-CE]**.
+
+`POST /projects/:id/access_tokens` also requires `expires_at`, and the accepted window is
+bounded at both ends by the run date: a date more than one year ahead returns
+`400 {"message":"400 Bad request - Expiration date must be before <one year from the run
+date>"}`, and a date in the past returns **201** carrying `"active": false`, whose token then
+fails every call with `401 {"error":"invalid_token"}` **[live-CE]**. The ceiling moves daily,
+so automation MUST derive the value at run time rather than carry a literal.
 
 The generated bot usernames take the form `project_<id>_bot_<hex>` and
 `group_<id>_bot_<hex>` **[live-CE]**. That matters for identity-based filtering: the
@@ -226,7 +236,9 @@ model. `read_api` is enough for a read-only deployment.
 GitLab also offers *granular* personal access tokens. The GitLab.com token used here was
 granular, and `GET /personal_access_tokens/self` reported `"scopes": ["granular"]` with
 `"granular": true` **[live-SaaS]**: the scopes array is opaque for granular tokens
-and carries no usable permission detail. Whether self-managed Community Edition 19.2.1
+and carries no usable permission detail. A granular GitLab.com token that reads successfully
+fails a note create with a bare `403 {"message":"403 Forbidden"}` carrying no
+`insufficient_scope` marker **[live-SaaS]**. Whether self-managed Community Edition 19.2.1
 supports granular tokens, and what its introspection reports, is **[unknown]**: both
 Community Edition tokens observed here reported `"granular": false`. Creating a granular
 token on a self-managed Community Edition instance and reading `/personal_access_tokens/self`
@@ -249,7 +261,10 @@ One request validates the credential and returns its lifecycle state. Observed s
 This is strictly better than a bare identity call: it reports `scopes`, `active`, `revoked`,
 and `expires_at`, so the constructor can fail with an actionable diagnostic (wrong scope,
 revoked, expired) instead of a generic 401. It works at `read_api` **[live-CE]** and works
-for project and group access tokens, returning the token record **[live-CE]**.
+for project and group access tokens, returning the token record **[live-CE]**. The
+actionable-diagnostic guarantee holds for classic tokens; for a granular token the scopes
+array is opaque (`["granular"]`), so no scope-based diagnostic is possible and the write
+failure arrives as a bare 403 **[live-SaaS]**.
 
 The three credential failure classes are distinguishable **[live-CE]**:
 
@@ -684,6 +699,11 @@ pre-provisioning and there is no silent no-op to guard against.
 
 The case-collision rule applies here too: the adapter MUST send the canonical casing when the
 label already exists in a different case, or the project grows a duplicate.
+
+GitLab performs no concurrency control on issue updates: two simultaneous `PUT`s carrying
+opposing `add_labels` and `remove_labels` both returned 200, with no 409 and no conflict
+signal, and their label deltas interleaved nondeterministically **[live-CE]**. Two concurrent
+writers against one project silently corrupt each other's state.
 
 Label errors remain non-fatal to the orchestrator.
 
@@ -1224,9 +1244,13 @@ times slower to become usable. Three consequences shape the recommendation:
   **The correct external gate is `GET /api/v4/version` returning any status other than a
   gateway error.** It returns `401 {"message":"401 Unauthorized"}` before provisioning
   **[live, measured]**, and a 401 is a positive signal: it proves the application is routing
-  and authenticating. Polling until the status is neither `000` nor `502` is the precise
-  condition. A job that must use a health endpoint has to run the poll *inside* the container
-  so the request originates from loopback.
+  and authenticating. Readiness is a positive set: the first HTTP 200 or 401 response from
+  this route is the precise condition **[live-CE]**, not the absence of the two transient
+  statuses observed during boot, because a negative set misreads any unlisted transient as
+  readiness. The poll MUST also abort as soon as the container is no longer running rather
+  than wait out its budget, because a boot failure exits the container within 8 s
+  **[live-CE]**. A job that must use a health endpoint has to run the poll *inside* the
+  container so the request originates from loopback.
 
 ### Why the container still wins on correctness
 
@@ -1238,7 +1262,14 @@ risk:
   is an Enterprise Edition codebase; a test suite green against GitLab.com proves nothing
   about Community Edition, and this research found four places where the two differ in
   observable behavior (`link_type`, `weight`, `epic_id`, `assignee_username` cardinality). A
-  GitLab.com-only strategy would have silently accepted every one of them.
+  GitLab.com-only strategy would have silently accepted every one of them. All four are
+  unobservable through `domain.TrackerAdapter` as implemented: `normalizeIssue` sets
+  `BlockedBy` empty unconditionally and the adapter creates no issue link, so `link_type`
+  behavior is unreachable; `gitlabIssue` decodes neither `weight` nor `epic_id` and
+  `gitlabIssueUpdate` sends neither; `assignee_username` reaches the wire only through an
+  operator-written `query_filter` **[live-CE]**. What a GitLab.com job buys is forward-version
+  drift detection against a continuously deployed instance, not product-divergence coverage.
+  The compatibility-floor argument for the container is unaffected.
 - No repository secrets: the token is generated inside the job.
 - No shared mutable state between runs, and no cross-fork secret exposure.
 - Exact version pinning to the researched release, and local reproducibility.
@@ -1247,19 +1278,33 @@ risk:
 
 - Image: `gitlab/gitlab-ce:<version>-ce.0`, pinned. The Community Edition image is the
   correct choice precisely because it is *not* Enterprise Edition.
-- Reduce boot cost with an `GITLAB_OMNIBUS_CONFIG` that disables Prometheus monitoring and
-  lowers Puma workers and Sidekiq concurrency; the instance only serves API calls. This
-  research booted with exactly that configuration.
-- Provisioning: set the initial root password through `GITLAB_OMNIBUS_CONFIG`, create a token,
-  then create the project, labels, and issues through the API. Every provisioning call this
-  research made is a plain REST request, so the fixture is fully scriptable.
+- Reduce boot cost with a `GITLAB_OMNIBUS_CONFIG` limited to the verified-minimal key set:
+  `external_url`, `puma['worker_processes']`, `sidekiq['concurrency']`,
+  `prometheus_monitoring['enable']`, `registry['enable']`, and `gitlab_kas['enable']`; the
+  instance only serves API calls. `grafana['enable']` is **not** a supported key at 19.2.1:
+  `gitlab-ctl reconfigure` fails with `Mixlib::Config::UnknownConfigOptionError: Reading
+  unsupported config value grafana` and the container exits within 8 s **[live-CE]**. This
+  research booted with exactly the verified-minimal key set.
+- Provisioning: a token cannot be minted from credentials over HTTP: `POST /oauth/token` with
+  `grant_type=password` returns `400 {"error":"unsupported_grant_type"}` **[live-CE]**. The
+  bootstrap token instead comes from one Rails runner invocation inside the container,
+  measured at 24 s, and no initial root password is needed; the project, labels, and issues
+  are then created through the API. Every provisioning call this research made is a plain
+  REST request, so the fixture is fully scriptable.
 - Gate: `SORTIE_GITLAB_TEST=1`, with `SORTIE_GITLAB_ENDPOINT`, `SORTIE_GITLAB_TOKEN`, and
   `SORTIE_GITLAB_PROJECT` supplied by the job, following the sibling adapters' single-gate
   convention and their variable naming. Without the gate the tests MUST skip cleanly, never
   fail.
-- Supplement: a small GitLab.com job behind the same gate pattern, asserting only the handful
-  of behaviors where SaaS diverges (rate-limit headers present, note-creation limit lower).
-  It is a compatibility canary, not the primary suite.
+- Supplement: a GitLab.com job behind the same gate pattern, a compatibility canary rather
+  than the primary suite. Keeping it alive costs one access token with issue write, an
+  endpoint, and a project coordinate held as repository configuration; a hosted project
+  seeded with the state labels, the non-state label the label test attaches, at least four
+  open candidates, one closed terminal issue, and two ordered comments; a token expiry
+  bounded at one year **[live-SaaS]**, so the row fails on expiry; and a shared mutable
+  fixture whose open-candidate count is the maintenance obligation.
+
+This recommendation is implemented as `scripts/gitlab-integration-provision.sh` plus the two
+GitLab nightly matrix rows.
 
 ### Fixture blueprint
 
@@ -1269,9 +1314,12 @@ load-bearing rather than incidental:
 - **Two projects, not one.** A single-project instance makes `iid` and global `id` numerically
   identical for every issue, so a test suite cannot catch code that confuses them. The second
   project's first issue had `iid: 1` and global `id: 7` **[live-CE]**, which is the assertion
-  that pins the distinction. The second project also supplies the negative control for
-  authorization masking: a token that is a member of the first project only receives
-  `404 {"message":"404 Project Not Found"}` for the second **[live-CE]**.
+  that pins the distinction. The divergence requires seeding the sibling project's issues
+  before the primary project's: with two issues seeded in the sibling project first, the
+  primary project's first issue carried `iid: 1` and global `id: 3` **[live-CE]**. The second
+  project also supplies the negative control for authorization masking: a token that is a
+  member of the first project only receives `404 {"message":"404 Project Not Found"}` for the
+  second **[live-CE]**.
 - **A non-administrator identity.** An administrator token cannot observe the authorization
   failures a real deployment hits. Every probe reported here was run with a project
   Developer token; the administrator token was used only for provisioning.
@@ -1279,9 +1327,11 @@ load-bearing rather than incidental:
   is readable and attachable on a project issue **[live-CE]**.
 - Issues covering: open with a state label, open with two labels, closed with a terminal
   label, one **assigned** to the automation identity, one **mentioning** it in the
-  description, one carrying comments and an issue link. A bulk-comment issue (55 notes) to
-  assert note pagination, and one non-`issue` work item to assert the `issue_type=issue`
-  exclusion.
+  description, one carrying comments and an issue link. A bulk-comment issue (at least 101
+  notes, verified to produce `X-Total: 101`, `X-Total-Pages: 2`, `X-Next-Page: 2`, and a
+  `rel="next"` link, with exactly 100 entries on page one, because the adapter sends
+  `per_page=100` **[live-CE]**) to assert note pagination, and one non-`issue` work item to
+  assert the `issue_type=issue` exclusion.
 
 ---
 
