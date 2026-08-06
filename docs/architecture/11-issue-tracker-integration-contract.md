@@ -92,6 +92,7 @@ The following tracker adapters ship today:
 - Linear (`internal/tracker/linear`, GraphQL API)
 - GitHub (`internal/scm/github`, Issues and Labels REST API)
 - Gitea (`internal/scm/gitea`, Gitea REST API v1)
+- GitLab (`internal/scm/gitlab`, GitLab REST API v4)
 
 Each normalizes its native responses to the `Issue` model (Section 4.1.1), maps native errors to
 the categories in Section 11.4, and registers under its `kind` via `init()`. The orchestrator core
@@ -270,3 +271,142 @@ query parameter, whose AND semantics and silent drop on an unresolvable name mak
 correctness-critical filtering, so state filtering stays client-side. See the workflow reference for
 the operator-facing shape and the diagnostics the adapter emits for unrecognized or unresolved
 filter keys.
+
+#### 11.6.3 GitLab adapter
+
+The GitLab adapter targets the REST API v4 of GitLab.com or a self-managed instance, built on
+`internal/httpkit` with no third-party GitLab client library. `tracker.endpoint` carries the
+instance base URL and is optional: it defaults to the GitLab.com host, which a self-managed
+deployment overrides. The adapter trims a trailing slash, appends `/api/v4`, and tolerates an
+endpoint that already ends in `/api/v4`. Its wire model is closest to the GitHub and Gitea adapters,
+issues plus labels plus an opened/closed status, and it diverges where GitLab's API differs. The
+package belongs to the forge family, one package per forge per ADR-0016, because GitLab supplies
+code review and CI from the same API surface under the same authentication and project addressing.
+
+**Authentication.** The resolved `tracker.api_key` is a GitLab access token, personal, project, or
+group, sent verbatim in the `PRIVATE-TOKEN` header rather than through an `Authorization` scheme, so
+surrounding whitespace fails authentication. The constructor runs a three-part preflight before the
+first poll. A token introspection call reports the token's scopes, active flag, revocation flag, and
+expiry; it is advisory and never blocks construction, because its only job is to sharpen the
+diagnostic on a later failure. A project read follows as the authoritative gate. When any state
+label is configured, a paginated read of the project label catalog closes the preflight. A config
+error fails construction immediately, while a transient error is retried with a bounded backoff, so
+a misconfiguration surfaces at startup rather than on the first fetch. GitLab answers an
+inaccessible project and a missing project with an identical 404, so the not-found message reports
+whether introspection authenticated the token, which is what separates a wrong project from an
+under-scoped credential.
+
+**Project scoping.** `tracker.project` is either a numeric project ID or the project's full
+namespace path, percent-encoded once by the adapter. GitLab nests subgroups to any depth, so the
+path carries any number of slashes and the adapter enforces no `owner/repo` grammar, unlike the
+GitHub and Gitea adapters. The adapter uses no instance-global issue id: it addresses issues by
+their project-scoped `iid` and qualifies each issue's `display_id` from the server-computed
+reference, falling back to `<project>#<iid>` when that reference is empty.
+
+**State model.** GitLab has neither Jira's transition graph nor Linear's named workflow states. It
+offers a native opened/closed status plus free-form project and group labels, so the adapter models
+Sortie state with labels, as the GitHub and Gitea adapters do. Operators configure label names in
+`active_states`, `terminal_states`, and `handoff_state`; the adapter lowercases them and compares
+issue labels case-insensitively. State derivation scans the configured active, terminal, then
+handoff labels in config order and takes the first match; an issue carrying more than one configured
+state label logs a WARN and keeps the first. An issue with no configured state label falls back to
+the first active label when it is open and the first terminal label when it is closed. When
+`active_states` or `terminal_states` is omitted or empty, the adapter applies the internal defaults
+`["backlog", "in-progress", "review"]` and `["done", "wontfix"]` for this label-to-state derivation.
+These defaults are an adapter-internal derivation fallback, not a substitute for the workflow
+configuration: the orchestrator gates dispatch and reconciliation on the workflow's
+`tracker.active_states` and `tracker.terminal_states`. The fallback list is what
+`tracker.handoff_state` and `tracker.in_progress_state` are checked against in the dispatch
+preflight when the matching workflow list is empty.
+
+Label names are case-sensitive on GitLab, and attaching a name that matches no label creates it
+instead of failing, so a configured label differing only in case from a stored one would silently
+create a duplicate. The preflight catalog read resolves the stored casing of every configured state
+label, across project labels and inherited group labels alike, and every state-label write sends
+that stored casing. A configured name absent from the catalog resolves to nothing and is sent as
+configured, which creates it on the first write, so a label the project does not hold yet is an
+intended new label rather than an error.
+
+**Normalization specifics.** Beyond the shared rules in Section 11.3:
+
+- `id` and `identifier` are both the project-scoped `iid` as a string; the instance-global issue id
+  is never read, because the project-scoped routes do not accept it and the route that does is
+  closed to a non-administrator.
+- `priority` is always null. GitLab issues carry no priority field, and label priority is a
+  project-level ordering rather than a per-issue integer.
+- `parent` is always null, because the issue route exposes no sub-issue relationship, and no parent
+  request is issued.
+- `blocked_by` is always a non-nil empty slice. The issue-links route exists on Community Edition
+  but accepts only the `relates_to` link type, so no `blocks` relation exists to invert as
+  Section 11.3 describes, and no links request is issued.
+- `branch_name` is always empty, because GitLab derives branch names in the UI rather than storing
+  one on the issue.
+- `assignee` is the username of the first entry of the issue's assignee list.
+- `issue_type` passes through from the issue. GitLab models tasks, incidents, and test cases as
+  issue types on the same routes, so every list route filters to the `issue` type and the
+  single-issue routes reject anything else as not found. Non-issue work items never enter the
+  candidate set.
+- Comments come from the issue notes route, which interleaves human comments with system journal
+  entries. The adapter requests comments only and drops any note the server flags as a system note,
+  so a label change or a state change never reaches a prompt as a comment. A note marked internal
+  passes through, being a genuine human comment rather than a journal entry. GitLab returns notes
+  newest-first, so the adapter requests ascending order.
+
+**Transport and pagination.** GitLab paginates with `Link` response headers, so the adapter follows
+the header to exhaustion with a page size of 100, the server maximum and above the Section 11.2
+default of 50, and a 30,000 ms network timeout. An absent `Link` header, or a final page carrying no
+next relation, is the normal end of results, never a missing-cursor error. A bounded page ceiling
+stops a runaway walk and logs a WARN rather than looping. Request throttling is off by default on a
+self-managed instance and active on GitLab.com; the adapter surfaces the server's `Retry-After` in a
+log while leaving retry backoff to the orchestrator.
+
+**Error classification.** GitLab returns four different error envelope shapes, a string message, a
+non-string message, a bare error, and an error paired with a description, so the adapter reads all
+four to build one bounded diagnostic snippet. The snippet never carries the token, which travels
+only in the request header. 401 and 403 map to `tracker_auth_error`, 404 to a not-found result, 400,
+414, and 422 to `tracker_payload_error`, 409 and 429 to `tracker_api_error`, and 5xx and transport
+failures to `tracker_transport_error`. The 414 status extends the set the GitHub and Gitea adapters
+classify: it guards the batched state lookup, whose request line grows with the number of issue ids
+it carries.
+
+**Write operations.** The adapter implements the three writes the `TrackerAdapter` interface
+requires beyond the read set. GitLab has no transition endpoint, so both label writes compose from
+its one issue-update route, which carries the state event and the label additions and removals in a
+single body, and the comment write posts to the notes route:
+
+- `transition_issue` rejects a target that is not a configured active, terminal, or handoff label
+  before any write. Otherwise one request carries the whole transition: it attaches the target label
+  in the project's stored casing, removes every case variant of the label being replaced along with
+  any pre-existing variant of the target, and reconciles native status, closing an open issue for a
+  terminal target and reopening a closed one for an active target. Clearing the variants in the same
+  request is what stops a project already holding a case-duplicate label from accumulating state
+  labels on every transition. A transition that is already converged issues no request and reports
+  success. `handoff_state` and `in_progress_state` name labels applied through this same path, the
+  latter driven by the orchestrator's dispatch-time transition.
+- `comment_issue` posts the text verbatim as a note, with no conversion, escaping, or truncation.
+  GitLab executes a recognized slash command at the start of a line in a note body as a quick
+  action. When the body is consumed entirely as quick actions, GitLab creates no note, and the
+  adapter reports `tracker_payload_error` rather than a false success. Executed command keys are
+  logged at WARN whenever GitLab reports any; the note text itself is never logged.
+- `add_label` resolves the label's stored casing against a freshly read catalog and attaches it
+  additively, so existing labels are preserved. The catalog is re-read rather than taken from the
+  construction-time casing map, because an escalation label is not a tracker-config value the
+  constructor ever saw. A catalog read failure does not fail the attach: the adapter logs a WARN and
+  sends the label as configured, because a missed escalation is worse than a cosmetic duplicate. The
+  attach creates the label as a server-side side effect when it does not already exist.
+
+**Operator query filter.** `tracker.query_filter` (Section 5.3.1) is a URL query fragment for the
+project issue-list route, parsed the way the Gitea adapter parses its own. It merges into the
+open-issue listings that back candidate polling and not into the closed-issue listing used for
+terminal-state cleanup, nor into the batched state lookups that reconcile active runs, so an
+operator filter never hides an issue from reconciliation. The adapter reserves the eight keys it
+owns, whose override would change correctness rather than scope, and rejects a fragment naming any
+of them. Where the Gitea adapter warns and forwards an unrecognized key, this adapter refuses it:
+GitLab silently ignores a parameter it does not honor, so a typo would widen the candidate set to
+every open issue with no visible signal. Negation is accepted through GitLab's negation hash for the
+subset the server honors there. The adapter never pushes the configured state labels into GitLab's
+`labels` query parameter, whose AND semantics offer no way to express the disjunction state
+filtering needs, so state filtering stays client-side. The same grammar backs the adapter's offline
+configuration diagnostics, so the `sortie validate` verdict cannot drift from the construction
+verdict. See the workflow reference for the operator-facing shape and the diagnostics the adapter
+emits for filter labels absent from the project catalog.
