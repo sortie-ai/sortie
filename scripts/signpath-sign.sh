@@ -17,6 +17,7 @@ set -eu
 
 artifact=${1:?usage: signpath-sign.sh <path-to-binary>}
 
+
 # Only Authenticode-sign Windows PE executables.
 case "$artifact" in
     *.exe) ;;
