@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"sort"
 	"strings"
@@ -1885,6 +1886,9 @@ func TestSweepWorkspaces_TerminalAndOldCountedOnceUnderTerminal(t *testing.T) {
 // --- R14: Cleanup receives Identifier and IssueID both set to the key ---
 
 func TestSweepWorkspaces_AgeRemovalUsesIdentifierAndIssueIDAsKey(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("probe hook uses printf and $VAR expansion, unavailable under cmd.exe")
+	}
 	t.Parallel()
 
 	tmpDir := t.TempDir()
