@@ -781,6 +781,66 @@ func TestRunStatsAgainstLiveWriter(t *testing.T) {
 
 // --- degraded schema tier ---
 
+func TestDegradedSchemaWarning(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		caps   persistence.RunHistoryCapabilities
+		want   []string
+		absent []string
+	}{
+		{
+			name: "nothing recorded names every group once",
+			caps: persistence.RunHistoryCapabilities{},
+			want: []string{
+				"before sortie recorded turns, self-review results, dispatch-rule routing, tokens and cost",
+				"Run sortie once with this workflow to add them.",
+			},
+			absent: []string{"does carry", "falls back"},
+		},
+		{
+			// The shape this repository's own database has: turns and
+			// self-review are stored, rule routing and tokens are not. The
+			// report still drops all four, so the warning must say so.
+			name: "partly migrated discloses the figures it drops anyway",
+			caps: persistence.RunHistoryCapabilities{HasTurnsCompleted: true, HasReviewMetadata: true},
+			want: []string{
+				"before sortie recorded dispatch-rule routing, tokens and cost",
+				"also leaves out turns, self-review results, which this database does carry",
+			},
+		},
+		{
+			name: "only tokens absent still discloses the other three",
+			caps: persistence.RunHistoryCapabilities{
+				HasTurnsCompleted: true, HasReviewMetadata: true, HasRuleRouting: true,
+			},
+			want: []string{
+				"before sortie recorded tokens and cost",
+				"also leaves out turns, self-review results, dispatch-rule routing, which this database does carry",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := degradedSchemaWarning(tt.caps)
+			for _, want := range tt.want {
+				if !strings.Contains(got, want) {
+					t.Errorf("degradedSchemaWarning(%+v) = %q, want to contain %q", tt.caps, got, want)
+				}
+			}
+			for _, absent := range tt.absent {
+				if strings.Contains(got, absent) {
+					t.Errorf("degradedSchemaWarning(%+v) = %q, want it not to contain %q", tt.caps, got, absent)
+				}
+			}
+		})
+	}
+}
+
 func TestRunStatsDegradedSchema(t *testing.T) {
 	t.Parallel()
 

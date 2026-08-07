@@ -561,28 +561,45 @@ func (a *statsAggregator) selfReviewReport() *statsSelfReview {
 	return sr
 }
 
-// degradedSchemaWarning names the figures caps cannot supply and states
-// the remedy. It names only the groups whose flag is false, because a
-// partly migrated database is the common case and a fixed sentence would
-// disclaim figures the database can in fact supply.
+// degradedSchemaWarning names the figures the report leaves out and states
+// the remedy. It MUST NOT be called when caps is full.
+//
+// A partly migrated database is the common case, and on it the two lists
+// differ: the report falls back to the basic figures wholesale, so it drops
+// groups this database does carry as well as the ones it never recorded.
+// Naming only the unrecorded groups would let a reader conclude the
+// remaining figures are present when they are not.
 func degradedSchemaWarning(caps persistence.RunHistoryCapabilities) string {
-	var missing []string
-	if !caps.HasTurnsCompleted {
-		missing = append(missing, "turns")
+	groups := []struct {
+		recorded bool
+		name     string
+	}{
+		{caps.HasTurnsCompleted, "turns"},
+		{caps.HasReviewMetadata, "self-review results"},
+		{caps.HasRuleRouting, "dispatch-rule routing"},
+		{caps.HasTokens, "tokens and cost"},
 	}
-	if !caps.HasReviewMetadata {
-		missing = append(missing, "self-review results")
+
+	var unrecorded, dropped []string
+	for _, g := range groups {
+		if g.recorded {
+			dropped = append(dropped, g.name)
+		} else {
+			unrecorded = append(unrecorded, g.name)
+		}
 	}
-	if !caps.HasRuleRouting {
-		missing = append(missing, "dispatch-rule routing")
-	}
-	if !caps.HasTokens {
-		missing = append(missing, "tokens and cost")
+
+	if len(dropped) == 0 {
+		return fmt.Sprintf(
+			"this database was written before sortie recorded %s, so the report leaves them out. "+
+				"Run sortie once with this workflow to add them.",
+			strings.Join(unrecorded, ", "))
 	}
 	return fmt.Sprintf(
-		"this database was written before sortie recorded %s, so the report leaves them out. "+
-			"Run sortie once with this workflow to add them.",
-		strings.Join(missing, ", "))
+		"this database was written before sortie recorded %s. The report falls back to run counts and "+
+			"durations, so it also leaves out %s, which this database does carry. "+
+			"Run sortie once with this workflow to get the full report.",
+		strings.Join(unrecorded, ", "), strings.Join(dropped, ", "))
 }
 
 // formatShare renders a 0..1 fraction as a one-decimal percentage.
