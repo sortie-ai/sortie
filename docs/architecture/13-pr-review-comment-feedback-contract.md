@@ -100,11 +100,11 @@ CI status reconciliation. The flow is:
       matches and is marked dispatched: skip, re-enqueue with poll interval delay.
    j. If `now - LastEventAt < debounce_ms`: set `PendingRetryAt = LastEventAt + debounce_ms`,
       re-enqueue.
-   k. Mark dispatched in `reaction_fingerprints` synchronously (prevents duplicate dispatch on
-      entry recreation by concurrent worker exit).
-   l. Cancel existing retry for the issue.
-   m. Schedule review-fix dispatch with `ContinuationContext{"review_comments": [...]}`.
-   n. Increment `reaction_attempts[issue_id:review]`.
+   k. Cancel existing retry for the issue.
+   l. Schedule review-fix dispatch with `ContinuationContext{"review_comments": [...]}`.
+   m. Increment `reaction_attempts[issue_id:review]`.
+   n. The fingerprint is marked dispatched in `reaction_fingerprints` later, in
+      `HandleRetryTimer`, after the scheduled retry fires and dispatch succeeds.
 
 ### 11B.5 Review comment handling
 
@@ -189,9 +189,9 @@ provider match.
 
 Review comment reconciliation only processes PRs created by Sortie:
 
-1. `SCMMetadata.pr_number > 0` — only workspaces where the agent created a PR have this field.
-   Since `.sortie/scm.json` is written by the agent inside a Sortie-managed workspace, this is
-   inherently scoped.
+1. An entry is created only when `SCMMetadata` reports `pr_number > 0` and non-empty `owner`,
+   `repo`, and `branch`. Since `.sortie/scm.json` is written by the agent inside a Sortie-managed
+   workspace, this is inherently scoped.
 2. Runtime scope: review polling processes entries in `pending_reactions`. Normal worker exit can
   create those entries while the issue is still claimed, and startup recovery can recreate them for
   recent handoff-stage issues after the claim has been released.

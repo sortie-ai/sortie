@@ -119,7 +119,7 @@ Note:
 
 ### 8.5 Active Run Reconciliation
 
-Reconciliation runs every tick and has four parts.
+Reconciliation runs every tick and has nine parts, run in this order.
 
 Part A: Stall detection
 
@@ -141,10 +141,14 @@ Part B: Tracker state refresh
 Part C: CI status reconciliation (when `ci_feedback.kind` or `reactions.ci_failure` is configured)
 
 - For each entry in `pending_reactions` with kind `ci`:
+  - Deduplicate before fetching: a stored fingerprint equal to the current ref and already
+    marked dispatched drops the entry for this pass (§11A.5).
   - Call `CIStatusProvider.FetchCIStatus` with the SCM ref (SHA preferred, branch as fallback).
-  - If the call fails: log a warning, re-enqueue the entry, and continue to the next entry.
-  - If status is `passing`: clear reaction attempts for the issue and kind.
-  - If status is `pending`: re-enqueue the entry for the next tick.
+  - If the call fails: log a warning, re-enqueue with an exponential backoff delay derived from
+    the poll interval and the pending attempt count, and continue to the next entry.
+  - If status is `passing`: clear reaction attempts for the issue and kind, and delete the
+    fingerprint row.
+  - If status is `pending`: re-enqueue with the same exponential backoff as the fetch-error path.
   - If status is `failing`: handle as a CI failure (see Section 7.3, "CI Status Failing").
 
 Part D: Review comment reconciliation (when `reactions.review_comments` is configured)
@@ -162,12 +166,33 @@ Part D: Review comment reconciliation (when `reactions.review_comments` is confi
   - Filter out outdated comments. Compute max timestamp for debounce gating.
   - If no actionable comments: re-enqueue with poll interval delay.
   - Build fingerprint from sorted non-outdated comment IDs (SHA-256 hash).
-  - Check `reaction_fingerprints` table: if fingerprint matches and is marked dispatched, skip.
+  - Check `reaction_fingerprints` table: if the fingerprint matches and is marked dispatched,
+    re-enqueue with the poll interval delay and continue.
   - If within debounce window (`now - LastEventAt < debounce_ms`): defer and re-enqueue.
-  - Otherwise: mark dispatched in `reaction_fingerprints`, cancel existing retry, schedule a
-    review-fix dispatch with review comment context, increment `reaction_attempts`.
+  - Otherwise: cancel existing retry, schedule a review-fix dispatch with review comment
+    context, increment `reaction_attempts`. The fingerprint is marked dispatched later, when
+    the scheduled retry fires and dispatch succeeds, not during this pass.
 
-Part E: Auto-merge reconciliation (when `reactions.auto_merge` is configured)
+Part E: Bot review comment reconciliation (when `reactions.bot_review` is configured)
+
+- Skip entirely when no SCM adapter is configured.
+- Mirrors Part D's reconcile loop for the `bot-review` kind, but with no debounce gate and no
+  `LastEventAt` tracking, and it calls `SCMAdapter.FetchBotReviewComments` (allowlisted bot
+  authors) instead of `FetchPendingReviews`.
+- Dispatches immediately on a confirmed comment set, with no debounce window, because bot
+  comments arrive in bulk on push rather than trickling in from a human reviewer.
+- See Section 11D for the full contract.
+
+Part F: Merge conflict detection (when `reactions.merge_conflicts` is configured)
+
+- Skip entirely when no SCM adapter is configured.
+- For each `pending_reactions` entry with kind `merge-conflict`, call
+  `SCMAdapter.GetMergeability` on every due tick (no retry-budget check gates the read). A
+  dirty result runs the escalation-bearing conflict-resolution path; any other result closes
+  the episode and clears its fingerprint and attempt counter.
+- See Section 11E for the full contract.
+
+Part G: Auto-merge reconciliation (when `reactions.auto_merge` is configured)
 
 Activation gate: `reactions.auto_merge.provider` non-empty AND
 `state.AutoMergePreflightFailed == false`.
@@ -180,9 +205,12 @@ For each entry in `pending_reactions` with kind `merge`:
 
 1. Remove the entry from the `pending_reactions` map.
 2. Drop with a WARN log when `state.AutoMergePreflightFailed == true`.
-3. Drop when the entry has exceeded the configured TTL.
+3. Drop when the entry has exceeded the TTL backstop; the TTL is a fixed internal constant
+   (30 minutes), not operator-configurable.
 4. Re-enqueue when `now < pending.PendingRetryAt`.
-5. Escalate when `reaction_attempts[issue_id:merge] >= MaxRetries`.
+5. Escalate when `MaxRetries > 0` and `reaction_attempts[issue_id:merge] >= MaxRetries`; a
+   configured `MaxRetries` of `0` disables count-based escalation instead of firing it
+   immediately (Section 11C.6).
 6. Fetch mergeability via `SCMAdapter.GetMergeability`; re-enqueue on transport error or
    `MergeabilityUnknown`; re-enqueue with poll interval on `Draft`, `Dirty`, or `Blocked`.
 7. Fetch review decision via `SCMAdapter.GetReviewDecision`; re-enqueue when not `APPROVED`
@@ -205,12 +233,36 @@ Error dispositions:
 - On `ErrSCMConflict` (head SHA mismatch or branch-protection refusal): re-enqueue with
   poll interval; the next tick observes the new SHA via a refreshed fingerprint.
 - On `ErrSCMAuth` on the merge call: escalate immediately (do not re-enqueue).
-- On other transient errors: re-enqueue with backoff; escalate after `MaxRetries`.
+- On `ErrSCMPayload` on the merge call: escalate immediately (do not re-enqueue), the same
+  disposition as `ErrSCMAuth`.
+- On other transient errors: re-enqueue with backoff; escalate per the guard in item 5.
 
 Cross-kind isolation: the success and escalation paths MUST scope cleanup to `kind = "merge"`
 only. They MUST NOT mutate `ci` or `review` reaction state (full invariant in §11C.10).
 
-Part E runs after Part D so the precondition reads observe the most current per-kind state.
+Part G runs after Parts C through F (CI, review, bot review, and merge conflict) so its
+precondition reads observe the most current per-kind state. It runs before the label-command
+passes (Parts H and I); that relative order does not affect correctness because those passes
+are fully cross-kind isolated (Section 11F.4).
+
+Part H: Label review command detection (when `reactions.label_commands.review_label` is
+configured)
+
+- Skip entirely when no SCM adapter is configured or the `label_commands` block is absent.
+- For each Sortie-managed PR, read the label-event journal past its stored high-water mark via
+  `SCMAdapter.ListLabelEvents`; a confirmed `review_label` command dispatches a read-only,
+  no-clone review session and removes the label.
+- Ordering relative to the other parts does not affect correctness: the pass is fully
+  cross-kind isolated. See Section 11F for the full contract.
+
+Part I: Label fix command detection (when `reactions.label_commands.fix_label` is configured)
+
+- Structurally identical to Part H, scoped to the `fix_label` command and the `label-fix`
+  reaction kind.
+- A confirmed command dispatches a read-write, clone-and-checkout fix session instead of the
+  read-only review session.
+- Ordering relative to the other parts does not affect correctness: the pass is fully
+  cross-kind isolated. See Section 11F for the full contract.
 
 ### 8.6 Startup Terminal Workspace Cleanup
 
