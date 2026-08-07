@@ -5,10 +5,12 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/sortie-ai/sortie/internal/config"
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/persistence"
 )
@@ -363,6 +365,64 @@ func TestReconcileLabelReviewCommands_Dispatch(t *testing.T) {
 	}
 	if data.HighWaterMark == "" {
 		t.Error("LabelReviewReactionData.HighWaterMark is empty, want advanced")
+	}
+}
+
+// TestReconcileLabelReviewCommands_ContinuesAfterAgeRemoval covers R31: after
+// the periodic sweep removes a workspace by age, the label-review reconcile
+// pass still observes a matching label event and still schedules a retry
+// carrying ReactionKindLabelReview, re-enqueuing the pending entry. The
+// reconcile pass reads nothing from the workspace directory (R27), so its
+// removal has no bearing on detection.
+//
+// The recreate-through-dispatch property (workspace.Ensure/Prepare
+// returning CreatedNow == true so the read-only and read-write postures
+// each obtain a workspace directory again) is covered by
+// internal/workspace/workspace_test.go:279 (Ensure) and
+// internal/workspace/lifecycle_test.go:165 (Prepare re-running
+// after_create), not by this test.
+func TestReconcileLabelReviewCommands_ContinuesAfterAgeRemoval(t *testing.T) {
+	t.Parallel()
+
+	const issueID = "LR-AGE1"
+	identifier := issueID + "-ident"
+	tmpDir := t.TempDir()
+	wsPath := filepath.Join(tmpDir, identifier)
+	mustMkdirSweep(t, wsPath)
+	writeSweepSCMMetadata(t, wsPath, oldSweepTimestamp())
+
+	state := stateWithLabelReviewPending(t, issueID, 42)
+	rkey := ReactionKey(issueID, ReactionKindLabelReview)
+
+	sweepParams := defaultSweepParams(t, tmpDir, &sweepTracker{})
+	sweepParams.RetentionDays = config.WorkspaceRetentionMinDays
+	sweepParams.Store = &sweepStoreDouble{}
+	SweepWorkspaces(state, sweepParams)
+	assertSweepDirRemoved(t, wsPath)
+
+	if _, ok := state.PendingReactions[rkey]; !ok {
+		t.Fatal("PendingReactions entry removed by the sweep; want unaffected (test precondition)")
+	}
+
+	scm := &labelReviewSCMFake{
+		events: []domain.LabelEvent{
+			labelEvent("1", "sortie:review", "alice", true, labelReviewBaseTime.Add(-1*time.Minute)),
+		},
+	}
+	store := newLabelReviewFingerprintStore()
+	params := labelReviewParams(store, scm)
+
+	reconcileLabelReviewCommands(state, params, discardLogger(), context.Background(), &domain.NoopMetrics{})
+
+	retry, ok := state.RetryAttempts[issueID]
+	if !ok {
+		t.Fatal("retry not scheduled after age removal; want scheduled")
+	}
+	if retry.ReactionKind != ReactionKindLabelReview {
+		t.Errorf("RetryEntry.ReactionKind = %q, want %q", retry.ReactionKind, ReactionKindLabelReview)
+	}
+	if _, stillPending := state.PendingReactions[rkey]; !stillPending {
+		t.Error("PendingReactions entry removed after dispatch; want re-enqueued")
 	}
 }
 

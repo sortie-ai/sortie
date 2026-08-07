@@ -112,10 +112,17 @@ Per-issue token budget (cost ceiling):
 
 Note:
 
-- Terminal-state workspace cleanup is handled by startup cleanup and active-run reconciliation
-  (including terminal transitions for currently running issues).
+- Terminal-state workspace cleanup is handled by three paths: startup cleanup, active-run
+  reconciliation (including terminal transitions for currently running issues), and the periodic
+  workspace sweep described below.
 - Retry handling mainly operates on active candidates and releases claims when the issue is absent,
   rather than performing terminal cleanup itself.
+- Within one periodic sweep pass, the terminal check always runs before the age bound (see
+  `workspace.retention_days` in the configuration specification), and a key the terminal check
+  removes is never re-evaluated by the age bound on that same pass. The age bound needs no answer
+  from the tracker: it is evaluated from the workspace listing and the persistence layer alone, so
+  it runs whether or not the tracker state read for that pass succeeded, and it still evaluates and
+  can remove eligible workspaces on a pass where that read failed.
 
 ### 8.5 Active Run Reconciliation
 

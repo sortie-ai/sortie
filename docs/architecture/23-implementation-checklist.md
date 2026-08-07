@@ -28,7 +28,7 @@ Use the same validation profiles as Section 17:
 - Exponential retry queue with continuation retries after normal exit
 - Configurable retry backoff cap (`agent.max_retry_backoff_ms`, default 5m)
 - Reconciliation that stops runs on terminal/non-active tracker states
-- Workspace cleanup for terminal issues (startup sweep + active transition)
+- Workspace cleanup for terminal issues (startup sweep + active transition + periodic sweep)
 - Structured logs with `issue_id`, `issue_identifier`, and `session_id`
 - Operator-visible observability (structured logs; optional snapshot/status surface)
 

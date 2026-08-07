@@ -75,6 +75,15 @@ Sortie uses SQLite persistence to improve restart recovery semantics:
 - Running sessions are not recoverable (agent subprocesses do not survive restart), but the
   orchestrator knows which issues were in-flight at shutdown and re-dispatches them immediately
   rather than waiting for the next polling cycle to discover them.
+- Pending reaction recovery reconstructs runtime reaction entries after a restart by reading each
+  candidate's workspace SCM metadata, and it considers only a candidate whose latest activity
+  falls inside its lookback window. `workspace.retention_days` and this recovery lookback are
+  coupled: the retention floor (`WorkspaceRetentionMinDays`) in days equals the recovery lookback
+  in days, so any workspace the periodic sweep's age bound is permitted to remove is one recovery
+  would already have skipped as stale. Changing either window without the other reintroduces the
+  defect the coupling prevents. A shorter retention floor would let the age bound remove a
+  workspace recovery still regards as live, silently breaking reaction recovery for that issue
+  after a restart.
 
 ### 14.4 Operator Intervention Points
 

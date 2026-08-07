@@ -463,6 +463,25 @@ func TestApplyEnvOverrides(t *testing.T) {
 		assertEnvOverrideError(t, err, "polling.interval_ms", "invalid integer value")
 	})
 
+	t.Run("workspace retention days override reaches RetentionDays with no YAML key", func(t *testing.T) {
+		t.Setenv("SORTIE_WORKSPACE_RETENTION_DAYS", "45")
+
+		cfg, err := NewServiceConfig(map[string]any{})
+		if err != nil {
+			t.Fatalf("NewServiceConfig: unexpected error: %v", err)
+		}
+		if cfg.Workspace.RetentionDays != 45 {
+			t.Errorf("Workspace.RetentionDays = %d, want 45", cfg.Workspace.RetentionDays)
+		}
+	})
+
+	t.Run("workspace retention days override invalid value fails config construction", func(t *testing.T) {
+		t.Setenv("SORTIE_WORKSPACE_RETENTION_DAYS", "abc")
+
+		_, err := NewServiceConfig(map[string]any{})
+		assertEnvOverrideError(t, err, "workspace.retention_days", "SORTIE_WORKSPACE_RETENTION_DAYS")
+	})
+
 	t.Run("top-level SORTIE_DB_PATH", func(t *testing.T) {
 		t.Setenv("SORTIE_DB_PATH", "/data/sortie.db")
 

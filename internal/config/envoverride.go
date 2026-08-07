@@ -67,6 +67,7 @@ var envOverrides = []envOverride{
 
 	// Workspace
 	{"SORTIE_WORKSPACE_ROOT", "workspace", "root", coerceString},
+	{"SORTIE_WORKSPACE_RETENTION_DAYS", "workspace", "retention_days", coerceEnvInt},
 
 	// Agent
 	{"SORTIE_AGENT_KIND", "agent", "kind", coerceString},

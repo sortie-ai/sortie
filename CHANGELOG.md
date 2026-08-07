@@ -25,6 +25,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   database can supply and warns which ones are missing, rather than
   failing outright.
   ([#274](https://github.com/sortie-ai/sortie/issues/274))
+- `workspace.retention_days`: an opt-in age bound that removes a swept
+  workspace whose latest recorded activity is older than the configured
+  window, independently of tracker state. Off by default (`0`); the
+  smallest permitted non-zero value is 30 days, matching the window
+  pending-reaction recovery honors after a restart, so a workspace the
+  bound removes is always one recovery would already treat as stale. The
+  periodic sweep now emits one summary record per pass, whether or not
+  it removed anything, reporting how many workspaces were excluded as
+  in-flight, removed as terminal, removed by age, retained inside the
+  window, retained for want of an activity record, or not yet evaluated.
+  ([#706](https://github.com/sortie-ai/sortie/issues/706))
+
+### Changed
+
+- A terminal issue whose pull request still carries a pending
+  `sortie:review` or `sortie:fix` label-command entry is now cleaned up
+  by the periodic workspace sweep like any other terminal issue, instead
+  of being retained forever. This reaches every deployment on upgrade
+  without an opt-in: previously, a pending label-command entry excluded
+  its workspace from cleanup even after the linked issue reached a
+  terminal tracker state; the label-command detection loop is unaffected
+  by the change, since it reads nothing from the workspace directory.
+  ([#706](https://github.com/sortie-ai/sortie/issues/706))
 
 ## [1.17.0] - 2026-08-06
 

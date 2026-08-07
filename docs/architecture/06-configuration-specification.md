@@ -176,6 +176,13 @@ This section is intentionally redundant so a coding agent can implement the conf
   a validation advisory (`api_version: "2"`); supports `$VAR`
 - `polling.interval_ms`: integer, default `30000`
 - `workspace.root`: path, default `<system-temp>/sortie_workspaces`
+- `workspace.retention_days`: integer, default `0` (disabled); the maximum age in days of a swept
+  workspace's latest recorded activity before the periodic sweep removes it; `0` disables the
+  bound, a value from `1` to `29` is rejected, and `30` (`WorkspaceRetentionMinDays`) is the
+  smallest permitted non-zero value; expressed in days rather than milliseconds because every
+  other duration field is a sub-hour timing where the millisecond unit is proportionate to the
+  value, while a thirty-day window in milliseconds is unreadable and a dropped digit is
+  destructive; supports the `SORTIE_WORKSPACE_RETENTION_DAYS` environment override
 - `worker.ssh_hosts` (extension): list of SSH host strings, optional; when omitted, work runs
   locally
 - `worker.max_concurrent_agents_per_host` (extension): positive integer, optional; shared per-host

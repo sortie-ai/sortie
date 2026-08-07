@@ -1384,6 +1384,54 @@ func TestIsKnownReactionKind_AcceptsLabelReview(t *testing.T) {
 	}
 }
 
+// --- reactionKindPins / isKnownReactionKind / reactionKindPinsWorkspace ---
+
+// TestReactionKindPins covers R11: isKnownReactionKind and
+// reactionKindPinsWorkspace both derive from the single reactionKindPins
+// map, so the set of known kinds is asserted by iterating the map itself
+// rather than by a second hand-written list that could diverge from it.
+func TestReactionKindPins(t *testing.T) {
+	t.Parallel()
+
+	t.Run("isKnownReactionKind is true for exactly the registered kinds", func(t *testing.T) {
+		t.Parallel()
+
+		for kind := range reactionKindPins {
+			t.Run(kind, func(t *testing.T) {
+				t.Parallel()
+				if !isKnownReactionKind(kind) {
+					t.Errorf("isKnownReactionKind(%q) = false, want true (registered in reactionKindPins)", kind)
+				}
+			})
+		}
+
+		if isKnownReactionKind("merge-completion") {
+			t.Error(`isKnownReactionKind("merge-completion") = true, want false (unregistered kind)`)
+		}
+	})
+
+	t.Run("reactionKindPinsWorkspace returns the registered value for each of the seven kinds", func(t *testing.T) {
+		t.Parallel()
+
+		for kind, wantPins := range reactionKindPins {
+			t.Run(kind, func(t *testing.T) {
+				t.Parallel()
+				if got := reactionKindPinsWorkspace(kind); got != wantPins {
+					t.Errorf("reactionKindPinsWorkspace(%q) = %v, want %v", kind, got, wantPins)
+				}
+			})
+		}
+	})
+
+	t.Run("reactionKindPinsWorkspace returns true for an unregistered kind", func(t *testing.T) {
+		t.Parallel()
+
+		if got := reactionKindPinsWorkspace("merge-completion"); !got {
+			t.Error(`reactionKindPinsWorkspace("merge-completion") = false, want true (unregistered kind retains)`)
+		}
+	})
+}
+
 // --- BuildLabelReviewReactionConfig tests ---
 
 func TestBuildLabelReviewReactionConfig(t *testing.T) {

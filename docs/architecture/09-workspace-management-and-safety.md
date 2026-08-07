@@ -16,6 +16,28 @@ Workspace persistence:
 - Workspaces are reused across runs for the same issue.
 - Successful runs do not auto-delete workspaces.
 
+Workspace cleanup runs through two mechanisms, ordered and non-overlapping in intent:
+
+- **The terminal gate** is the primary mechanism. It is always on and unconditional: whenever the
+  tracker reports an issue's state as a member of `tracker.terminal_states`, the workspace for that
+  issue is removed, whether that gate fires from startup cleanup, active-run reconciliation, or the
+  periodic sweep.
+- **The age bound** is a backstop for the population the terminal gate can never reach: an issue
+  parked in the workflow's handoff state with no external automation advancing it, an issue left
+  active after a permanent failure, an issue moved to a state the configuration does not name, or
+  an issue deleted from the tracker entirely. It is opt-in and off by default, configured by
+  `workspace.retention_days`, and evaluated only by the periodic sweep. A workspace is removable by
+  age when its latest recorded activity is older than the configured window. That activity is
+  anchored on the later of two timestamps: the most recent `completed_at` recorded in the run
+  history for the workspace's identifier, and the `pushed_at` value recorded in the workspace's
+  `.sortie/scm.json`. A workspace with neither a parseable completion nor a parseable recorded push
+  is retained regardless of how long it has sat on disk: absence of a record is absence of
+  evidence, not evidence of age.
+
+The age bound never fires on a workspace the terminal gate would have removed on the same pass,
+because the terminal check runs first. It applies only to the periodic sweep, not to startup
+cleanup or active-run reconciliation; see the polling and reconciliation material for why.
+
 ### 9.2 Workspace Creation and Reuse
 
 Input: `issue.identifier`
@@ -158,4 +180,19 @@ Invariant 3: Workspace key is sanitized.
 
 - Only `[A-Za-z0-9._-]` allowed in workspace directory names.
 - Replace all other characters with `_`.
+
+Invariant 4: A workspace key held by an entry in the running map or the retry map is never removed
+by the age bound, whatever its age. These exclusions are absolute; the age bound does not weaken
+them.
+
+Invariant 5: `workspace.retention_days` cannot be configured below its floor, and that floor in
+days equals the pending-reaction recovery lookback in days. Any workspace the age bound may remove
+is one that pending reaction recovery would already have skipped as stale, so removing it cannot
+silently break recovery for an issue recovery still regards as live.
+
+Invariant 6: The age bound performs no tracker write, no source-control write, no reaction
+fingerprint write, and no creation or deletion of a pending reaction entry. Reaction state is
+read-only to the age bound. Every removal it performs routes through the same workspace removal
+path as the terminal gate, so key sanitization, containment under the workspace root, and the
+`before_remove` hook apply unchanged. The age bound introduces no new way to reach the filesystem.
 

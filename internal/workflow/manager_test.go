@@ -23,6 +23,12 @@ func validWorkflow(intervalMS int) []byte {
 	return fmt.Appendf(nil, "---\npolling:\n  interval_ms: %d\n---\nDo the task for {{ .issue.title }}.\n", intervalMS)
 }
 
+// retentionWorkflow returns a minimal WORKFLOW.md content with the given
+// workspace.retention_days value.
+func retentionWorkflow(days int) []byte {
+	return fmt.Appendf(nil, "---\npolling:\n  interval_ms: 5000\nworkspace:\n  retention_days: %d\n---\nDo the task for {{ .issue.title }}.\n", days)
+}
+
 func testLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: slog.LevelError}))
 }
@@ -219,6 +225,40 @@ func TestManager_ReloadRetainsOnError(t *testing.T) {
 	}
 	if mgr.Config().Polling.IntervalMS != 5000 {
 		t.Errorf("after failed Reload: Polling.IntervalMS = %d, want 5000", mgr.Config().Polling.IntervalMS)
+	}
+	if mgr.LastLoadError() == nil {
+		t.Error("after failed Reload: LastLoadError() is nil, want non-nil")
+	}
+}
+
+// TestManager_ReloadRetainsOnInvalidRetentionDays covers R5: a reload whose
+// workspace.retention_days fails validation leaves the previously loaded
+// configuration in force rather than disabling the bound or terminating
+// the process.
+func TestManager_ReloadRetainsOnInvalidRetentionDays(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "WORKFLOW.md")
+	mustWriteFile(t, path, retentionWorkflow(30))
+
+	mgr, err := NewManager(path, testLogger())
+	if err != nil {
+		t.Fatalf("NewManager: %v", err)
+	}
+	if got := mgr.Config().Workspace.RetentionDays; got != 30 {
+		t.Fatalf("initial Config().Workspace.RetentionDays = %d, want 30", got)
+	}
+
+	// 5 is in the rejected 1-29 range.
+	mustWriteFile(t, path, retentionWorkflow(5))
+
+	err = mgr.Reload()
+	if err == nil {
+		t.Fatal("Reload() error = nil, want error")
+	}
+	if got := mgr.Config().Workspace.RetentionDays; got != 30 {
+		t.Errorf("after failed Reload: Config().Workspace.RetentionDays = %d, want 30 (retained)", got)
 	}
 	if mgr.LastLoadError() == nil {
 		t.Error("after failed Reload: LastLoadError() is nil, want non-nil")

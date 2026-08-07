@@ -220,9 +220,12 @@ no branch. The read-only posture supplies exactly that:
 - **Scratch workspace, no hooks.** The session obtains a minimal per-issue scratch directory,
   containment-validated under the workspace root exactly as a normal dispatch (§9.6), but the
   operator `after_create`, `before_run`, and `after_run` hooks do not run. There is no clone, no
-  build, no branch, and no checkout. Because the directory is the reused per-issue workspace, a stale
-  `.sortie/status` from a prior session is cleared best-effort after creation so it cannot end the
-  review on turn one.
+  build, no branch, and no checkout. The directory is the per-issue workspace reused from an
+  earlier session when one still exists on disk, but its presence is not guaranteed: the periodic
+  sweep's age bound may have removed it since the pending entry was seeded (§11F.9). When absent,
+  the dispatch recreates the directory rather than fail, the same recreate step every dispatch
+  posture takes. Because the directory may carry state from a prior session, a stale
+  `.sortie/status` is cleared best-effort after creation so it cannot end the review on turn one.
 - **Fresh session.** The session starts with no resume identifier. It is a new session, not a
   continuation of a live one.
 - **Single selecting flag.** The posture is selected by one worker flag derived from the dispatch
@@ -400,6 +403,14 @@ restart (the journal is durable) for either command. The persisted mark is read 
 When the linked issue reaches a terminal state the reaction state is cleared with the rest of the
 issue's reactions by the issue-wide reaction cleanup, which removes the pending entry and the
 fingerprint row by issue id across every kind. Commands on such PRs are ignored thereafter.
+
+A pending `label-review` or `label-fix` entry no longer excludes its workspace from periodic-sweep
+candidacy, because neither kind carries an expiry. Detection is unaffected by that
+narrowing: the label-command reconcile pass polls the forge's label-event journal by PR number,
+owner, and repository, and compares the result against a high-water mark held in SQLite, reading
+nothing from the workspace directory. A workspace the sweep removes by age still leaves detection
+observing and dispatching commands for that pull request in the running process, and a dispatch
+after the removal recreates the directory rather than fail (§11F.6).
 
 ### 11F.10 Authorization posture
 

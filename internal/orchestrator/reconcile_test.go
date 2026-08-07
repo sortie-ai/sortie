@@ -3,14 +3,18 @@ package orchestrator
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/sortie-ai/sortie/internal/config"
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/persistence"
 )
@@ -108,7 +112,7 @@ func (m *mockReconcileTracker) AddLabel(context.Context, string, string) error {
 	panic("AddLabel must not be called by ReconcileRunningIssues")
 }
 
-// sweepTracker is a test double for [SweepTerminalWorkspaces]. Its
+// sweepTracker is a test double for [SweepWorkspaces]. Its
 // FetchIssueStatesByIdentifiers records the identifiers it receives and
 // returns the configured statesByKey map and fetchErr. All other methods
 // panic if called, matching the guard pattern in [mockReconcileTracker].
@@ -128,35 +132,35 @@ func (s *sweepTracker) FetchIssueStatesByIdentifiers(_ context.Context, ids []st
 }
 
 func (s *sweepTracker) FetchCandidateIssues(context.Context) ([]domain.Issue, error) {
-	panic("FetchCandidateIssues must not be called by SweepTerminalWorkspaces")
+	panic("FetchCandidateIssues must not be called by SweepWorkspaces")
 }
 
 func (s *sweepTracker) FetchIssueByID(context.Context, string) (domain.Issue, error) {
-	panic("FetchIssueByID must not be called by SweepTerminalWorkspaces")
+	panic("FetchIssueByID must not be called by SweepWorkspaces")
 }
 
 func (s *sweepTracker) FetchIssuesByStates(context.Context, []string) ([]domain.Issue, error) {
-	panic("FetchIssuesByStates must not be called by SweepTerminalWorkspaces")
+	panic("FetchIssuesByStates must not be called by SweepWorkspaces")
 }
 
 func (s *sweepTracker) FetchIssueStatesByIDs(context.Context, []string) (map[string]string, error) {
-	panic("FetchIssueStatesByIDs must not be called by SweepTerminalWorkspaces")
+	panic("FetchIssueStatesByIDs must not be called by SweepWorkspaces")
 }
 
 func (s *sweepTracker) FetchIssueComments(context.Context, string) ([]domain.Comment, error) {
-	panic("FetchIssueComments must not be called by SweepTerminalWorkspaces")
+	panic("FetchIssueComments must not be called by SweepWorkspaces")
 }
 
 func (s *sweepTracker) TransitionIssue(context.Context, string, string) error {
-	panic("TransitionIssue must not be called by SweepTerminalWorkspaces")
+	panic("TransitionIssue must not be called by SweepWorkspaces")
 }
 
 func (s *sweepTracker) CommentIssue(context.Context, string, string) error {
-	panic("CommentIssue must not be called by SweepTerminalWorkspaces")
+	panic("CommentIssue must not be called by SweepWorkspaces")
 }
 
 func (s *sweepTracker) AddLabel(context.Context, string, string) error {
-	panic("AddLabel must not be called by SweepTerminalWorkspaces")
+	panic("AddLabel must not be called by SweepWorkspaces")
 }
 
 // --- Test helpers ---
@@ -1060,14 +1064,14 @@ func TestReconcileStalled_WarnLogOnlyOnFirstTick(t *testing.T) {
 	}
 }
 
-// --- SweepTerminalWorkspaces helpers ---
+// --- SweepWorkspaces helpers ---
 
-// defaultSweepParams returns SweepTerminalWorkspacesParams with the given
+// defaultSweepParams returns SweepWorkspacesParams with the given
 // root and tracker. TerminalStates, Ctx, Logger, and Metrics use
 // test-suitable defaults.
-func defaultSweepParams(t *testing.T, root string, tracker *sweepTracker) SweepTerminalWorkspacesParams {
+func defaultSweepParams(t *testing.T, root string, tracker *sweepTracker) SweepWorkspacesParams {
 	t.Helper()
-	return SweepTerminalWorkspacesParams{
+	return SweepWorkspacesParams{
 		WorkspaceRoot:  root,
 		TrackerAdapter: tracker,
 		TerminalStates: []string{"Done"},
@@ -1101,9 +1105,9 @@ func assertSweepDirRemoved(t *testing.T, path string) {
 	}
 }
 
-// --- TestSweepTerminalWorkspaces ---
+// --- TestSweepWorkspaces ---
 
-func TestSweepTerminalWorkspaces(t *testing.T) {
+func TestSweepWorkspaces(t *testing.T) {
 	t.Parallel()
 
 	t.Run("EmptyWorkspaceRoot", func(t *testing.T) {
@@ -1111,7 +1115,7 @@ func TestSweepTerminalWorkspaces(t *testing.T) {
 
 		tracker := &sweepTracker{}
 		state := NewState(5000, 4, nil, AgentTotals{})
-		SweepTerminalWorkspaces(state, SweepTerminalWorkspacesParams{
+		SweepWorkspaces(state, SweepWorkspacesParams{
 			WorkspaceRoot:  "",
 			TrackerAdapter: tracker,
 			TerminalStates: []string{"Done"},
@@ -1132,7 +1136,7 @@ func TestSweepTerminalWorkspaces(t *testing.T) {
 		tracker := &sweepTracker{}
 		state := NewState(5000, 4, nil, AgentTotals{})
 
-		SweepTerminalWorkspaces(state, defaultSweepParams(t, tmpDir, tracker))
+		SweepWorkspaces(state, defaultSweepParams(t, tmpDir, tracker))
 
 		if tracker.calledWith != nil {
 			t.Errorf("FetchIssueStatesByIdentifiers called with %v, want not called", tracker.calledWith)
@@ -1149,7 +1153,7 @@ func TestSweepTerminalWorkspaces(t *testing.T) {
 		state := NewState(5000, 4, nil, AgentTotals{})
 		state.Running["id1"] = &RunningEntry{Identifier: "PROJ-1"}
 
-		SweepTerminalWorkspaces(state, defaultSweepParams(t, tmpDir, tracker))
+		SweepWorkspaces(state, defaultSweepParams(t, tmpDir, tracker))
 
 		if tracker.calledWith != nil {
 			t.Errorf("FetchIssueStatesByIdentifiers called with %v, want not called", tracker.calledWith)
@@ -1167,7 +1171,7 @@ func TestSweepTerminalWorkspaces(t *testing.T) {
 		state := NewState(5000, 4, nil, AgentTotals{})
 		state.RetryAttempts["id2"] = &RetryEntry{Identifier: "PROJ-2"}
 
-		SweepTerminalWorkspaces(state, defaultSweepParams(t, tmpDir, tracker))
+		SweepWorkspaces(state, defaultSweepParams(t, tmpDir, tracker))
 
 		if tracker.calledWith != nil {
 			t.Errorf("FetchIssueStatesByIdentifiers called with %v, want not called", tracker.calledWith)
@@ -1185,7 +1189,7 @@ func TestSweepTerminalWorkspaces(t *testing.T) {
 		state := NewState(5000, 4, nil, AgentTotals{})
 		state.PendingReactions["id3:ci"] = &PendingReaction{Identifier: "PROJ-3"}
 
-		SweepTerminalWorkspaces(state, defaultSweepParams(t, tmpDir, tracker))
+		SweepWorkspaces(state, defaultSweepParams(t, tmpDir, tracker))
 
 		if tracker.calledWith != nil {
 			t.Errorf("FetchIssueStatesByIdentifiers called with %v, want not called", tracker.calledWith)
@@ -1207,7 +1211,7 @@ func TestSweepTerminalWorkspaces(t *testing.T) {
 		state := NewState(5000, 4, nil, AgentTotals{})
 		state.Running["id1"] = &RunningEntry{Identifier: ""}
 
-		SweepTerminalWorkspaces(state, defaultSweepParams(t, tmpDir, tracker))
+		SweepWorkspaces(state, defaultSweepParams(t, tmpDir, tracker))
 
 		if tracker.calledWith == nil {
 			t.Fatal("FetchIssueStatesByIdentifiers not called, want called with [PROJ-4]")
@@ -1234,7 +1238,7 @@ func TestSweepTerminalWorkspaces(t *testing.T) {
 		state := NewState(5000, 4, nil, AgentTotals{})
 		state.Running["id5"] = &RunningEntry{Identifier: "PROJ-5"}
 
-		SweepTerminalWorkspaces(state, defaultSweepParams(t, tmpDir, tracker))
+		SweepWorkspaces(state, defaultSweepParams(t, tmpDir, tracker))
 
 		assertSweepDirExists(t, filepath.Join(tmpDir, "PROJ-5"))
 		assertSweepDirRemoved(t, filepath.Join(tmpDir, "PROJ-6"))
@@ -1255,7 +1259,7 @@ func TestSweepTerminalWorkspaces(t *testing.T) {
 		}
 		state := NewState(5000, 4, nil, AgentTotals{})
 
-		SweepTerminalWorkspaces(state, defaultSweepParams(t, tmpDir, tracker))
+		SweepWorkspaces(state, defaultSweepParams(t, tmpDir, tracker))
 
 		assertSweepDirRemoved(t, filepath.Join(tmpDir, "PROJ-7"))
 		assertSweepDirExists(t, filepath.Join(tmpDir, "PROJ-8"))
@@ -1272,7 +1276,7 @@ func TestSweepTerminalWorkspaces(t *testing.T) {
 		}
 		state := NewState(5000, 4, nil, AgentTotals{})
 
-		SweepTerminalWorkspaces(state, defaultSweepParams(t, tmpDir, tracker))
+		SweepWorkspaces(state, defaultSweepParams(t, tmpDir, tracker))
 
 		assertSweepDirExists(t, filepath.Join(tmpDir, "PROJ-9"))
 	})
@@ -1289,7 +1293,7 @@ func TestSweepTerminalWorkspaces(t *testing.T) {
 		}
 		state := NewState(5000, 4, nil, AgentTotals{})
 
-		SweepTerminalWorkspaces(state, defaultSweepParams(t, tmpDir, tracker))
+		SweepWorkspaces(state, defaultSweepParams(t, tmpDir, tracker))
 
 		assertSweepDirExists(t, filepath.Join(tmpDir, "PROJ-9"))
 	})
@@ -1309,7 +1313,7 @@ func TestSweepTerminalWorkspaces(t *testing.T) {
 		params := defaultSweepParams(t, tmpDir, tracker)
 		params.Metrics = spy
 
-		SweepTerminalWorkspaces(state, params)
+		SweepWorkspaces(state, params)
 
 		spy.mu.Lock()
 		acts := append([]string(nil), spy.reconciliationActs...)
@@ -1481,5 +1485,833 @@ func TestReconcileRunningIssues_ReactionInUnrelatedStateCancels(t *testing.T) {
 	}
 	if len(store.deletedIssueID) != 1 {
 		t.Fatalf("DeleteRetryEntry called %d times, want 1", len(store.deletedIssueID))
+	}
+}
+
+// --- Age pass (workspace.retention_days) test doubles and helpers ---
+
+// sweepStoreDouble is a test double for [SweepStore] returning a fixed
+// completions map or a fixed error.
+type sweepStoreDouble struct {
+	completions map[string]string
+	err         error
+}
+
+var _ SweepStore = (*sweepStoreDouble)(nil)
+
+func (s *sweepStoreDouble) LatestRunCompletionByIdentifier(_ context.Context, identifiers []string) (map[string]string, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
+	out := make(map[string]string, len(identifiers))
+	for _, id := range identifiers {
+		if v, ok := s.completions[id]; ok {
+			out[id] = v
+		}
+	}
+	return out, nil
+}
+
+// sweepRecord captures one slog record's message and attributes, keyed
+// by attribute name, for the age-pass summary and log assertions.
+type sweepRecord struct {
+	message string
+	attrs   map[string]any
+}
+
+// sweepLogHandler is a slog.Handler that captures every record it
+// receives for later inspection.
+type sweepLogHandler struct {
+	records []sweepRecord
+}
+
+func (h *sweepLogHandler) Enabled(_ context.Context, _ slog.Level) bool { return true }
+
+func (h *sweepLogHandler) Handle(_ context.Context, r slog.Record) error {
+	attrs := make(map[string]any, r.NumAttrs())
+	r.Attrs(func(a slog.Attr) bool {
+		attrs[a.Key] = a.Value.Any()
+		return true
+	})
+	h.records = append(h.records, sweepRecord{message: r.Message, attrs: attrs})
+	return nil
+}
+
+func (h *sweepLogHandler) WithAttrs(_ []slog.Attr) slog.Handler { return h }
+func (h *sweepLogHandler) WithGroup(_ string) slog.Handler      { return h }
+
+// countByMessage returns the number of captured records with the given message.
+func (h *sweepLogHandler) countByMessage(msg string) int {
+	n := 0
+	for _, r := range h.records {
+		if r.message == msg {
+			n++
+		}
+	}
+	return n
+}
+
+// findByMessage returns the first captured record with the given message.
+func (h *sweepLogHandler) findByMessage(msg string) (sweepRecord, bool) {
+	for _, r := range h.records {
+		if r.message == msg {
+			return r, true
+		}
+	}
+	return sweepRecord{}, false
+}
+
+// intAttr returns the record's attribute at key as an int, failing the
+// test if the attribute is absent or not an int64 value.
+func intAttr(t *testing.T, rec sweepRecord, key string) int {
+	t.Helper()
+	v, ok := rec.attrs[key]
+	if !ok {
+		t.Fatalf("record %q missing attribute %q", rec.message, key)
+	}
+	n, ok := v.(int64)
+	if !ok {
+		t.Fatalf("record %q attribute %q = %T, want int64", rec.message, key, v)
+	}
+	return int(n)
+}
+
+// stringAttr returns the record's attribute at key as a string, failing
+// the test if the attribute is absent or not a string value.
+func stringAttr(t *testing.T, rec sweepRecord, key string) string {
+	t.Helper()
+	v, ok := rec.attrs[key]
+	if !ok {
+		t.Fatalf("record %q missing attribute %q", rec.message, key)
+	}
+	s, ok := v.(string)
+	if !ok {
+		t.Fatalf("record %q attribute %q = %T, want string", rec.message, key, v)
+	}
+	return s
+}
+
+// assertSweepPartitionIdentity asserts that the summary record's
+// candidates attribute equals the sum of the other nine outcome
+// counters, the partition identity the summary record must hold on
+// every pass.
+func assertSweepPartitionIdentity(t *testing.T, rec sweepRecord) {
+	t.Helper()
+	candidates := intAttr(t, rec, "candidates")
+	sum := intAttr(t, rec, "excluded_running") +
+		intAttr(t, rec, "excluded_retry") +
+		intAttr(t, rec, "excluded_reaction") +
+		intAttr(t, rec, "removed_terminal") +
+		intAttr(t, rec, "removed_age") +
+		intAttr(t, rec, "retained_in_window") +
+		intAttr(t, rec, "retained_no_activity") +
+		intAttr(t, rec, "retained_not_evaluated") +
+		intAttr(t, rec, "failed")
+	if candidates != sum {
+		t.Errorf("sweep summary candidates = %d, want sum of other counters %d", candidates, sum)
+	}
+}
+
+// writeSweepSCMMetadata writes a minimal .sortie/scm.json under
+// workspacePath carrying pushedAt as the pushed_at field. Branch is set
+// to a fixed non-empty value because workspace.ReadSCMMetadata discards
+// the whole record when Branch is empty.
+func writeSweepSCMMetadata(t *testing.T, workspacePath, pushedAt string) {
+	t.Helper()
+	dotSortie := filepath.Join(workspacePath, ".sortie")
+	if err := os.MkdirAll(dotSortie, 0o755); err != nil {
+		t.Fatalf("os.MkdirAll(%q): %v", dotSortie, err)
+	}
+	meta := fmt.Sprintf(`{"branch":"feature/sweep-test","pushed_at":%q}`, pushedAt)
+	if err := os.WriteFile(filepath.Join(dotSortie, "scm.json"), []byte(meta), 0o644); err != nil {
+		t.Fatalf("os.WriteFile(scm.json): %v", err)
+	}
+}
+
+// oldSweepTimestamp returns an RFC3339 timestamp well outside a
+// [config.WorkspaceRetentionMinDays] window, for age-removal cases.
+func oldSweepTimestamp() string {
+	return time.Now().UTC().Add(-40 * 24 * time.Hour).Format(time.RFC3339)
+}
+
+// recentSweepTimestamp returns an RFC3339 timestamp inside a
+// [config.WorkspaceRetentionMinDays] window, for age-retention cases.
+func recentSweepTimestamp() string {
+	return time.Now().UTC().Add(-2 * 24 * time.Hour).Format(time.RFC3339)
+}
+
+// --- R6: the retention floor and the recovery lookback are coupled ---
+
+// TestWorkspaceRetentionFloorMatchesRecoveryLookback asserts the equality
+// [Spec-706 §3.3.5] relies on: the age pass never removes a workspace
+// pending-reaction recovery would not already have treated as stale.
+// Changing either constant without the other reintroduces that defect.
+func TestWorkspaceRetentionFloorMatchesRecoveryLookback(t *testing.T) {
+	t.Parallel()
+
+	floor := time.Duration(config.WorkspaceRetentionMinDays) * 24 * time.Hour
+	if floor != PendingReactionRecoveryLookback {
+		t.Errorf("WorkspaceRetentionMinDays as a duration = %v, want equal to PendingReactionRecoveryLookback %v",
+			floor, PendingReactionRecoveryLookback)
+	}
+}
+
+// --- R10: the narrowed pending-reaction exclusion ---
+
+func TestSweepWorkspaces_NarrowedReactionExclusion(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	mustMkdirSweep(t, filepath.Join(tmpDir, "PROJ-LR"))
+	mustMkdirSweep(t, filepath.Join(tmpDir, "PROJ-RV"))
+
+	tracker := &sweepTracker{statesByKey: map[string]string{"PROJ-LR": "In Progress"}}
+	state := NewState(5000, 4, nil, AgentTotals{})
+	state.PendingReactions["id-lr:label-review"] = &PendingReaction{Identifier: "PROJ-LR", Kind: ReactionKindLabelReview}
+	state.PendingReactions["id-rv:review"] = &PendingReaction{Identifier: "PROJ-RV", Kind: ReactionKindReview}
+
+	SweepWorkspaces(state, defaultSweepParams(t, tmpDir, tracker))
+
+	if !slices.Contains(tracker.calledWith, "PROJ-LR") {
+		t.Errorf("FetchIssueStatesByIdentifiers received %v, want to contain %q (label-review must not exclude)", tracker.calledWith, "PROJ-LR")
+	}
+	if slices.Contains(tracker.calledWith, "PROJ-RV") {
+		t.Errorf("FetchIssueStatesByIdentifiers received %v, want to omit %q (review must exclude)", tracker.calledWith, "PROJ-RV")
+	}
+}
+
+// --- R12: the summary partition identity across six pass shapes ---
+
+func TestSweepWorkspaces_SummaryPartitionIdentity(t *testing.T) {
+	t.Parallel()
+
+	t.Run("ZeroKeysOnDisk", func(t *testing.T) {
+		t.Parallel()
+
+		tmpDir := t.TempDir()
+		tracker := &sweepTracker{}
+		state := NewState(5000, 4, nil, AgentTotals{})
+		handler := &sweepLogHandler{}
+		params := defaultSweepParams(t, tmpDir, tracker)
+		params.Logger = slog.New(handler)
+
+		SweepWorkspaces(state, params)
+
+		if got := handler.countByMessage("sweep: pass complete"); got != 1 {
+			t.Fatalf(`"sweep: pass complete" logged %d times, want 1`, got)
+		}
+		rec, _ := handler.findByMessage("sweep: pass complete")
+		if got := intAttr(t, rec, "candidates"); got != 0 {
+			t.Errorf("candidates = %d, want 0", got)
+		}
+		assertSweepPartitionIdentity(t, rec)
+	})
+
+	t.Run("EveryListedKeyInFlight", func(t *testing.T) {
+		t.Parallel()
+
+		tmpDir := t.TempDir()
+		mustMkdirSweep(t, filepath.Join(tmpDir, "PROJ-RUN"))
+		mustMkdirSweep(t, filepath.Join(tmpDir, "PROJ-RETRY"))
+		mustMkdirSweep(t, filepath.Join(tmpDir, "PROJ-REACT"))
+
+		tracker := &sweepTracker{}
+		state := NewState(5000, 4, nil, AgentTotals{})
+		state.Running["id-run"] = &RunningEntry{Identifier: "PROJ-RUN"}
+		state.RetryAttempts["id-retry"] = &RetryEntry{Identifier: "PROJ-RETRY"}
+		state.PendingReactions["id-react:ci"] = &PendingReaction{Identifier: "PROJ-REACT", Kind: ReactionKindCI}
+		handler := &sweepLogHandler{}
+		params := defaultSweepParams(t, tmpDir, tracker)
+		params.Logger = slog.New(handler)
+
+		SweepWorkspaces(state, params)
+
+		if tracker.calledWith != nil {
+			t.Errorf("FetchIssueStatesByIdentifiers called with %v, want not called (nothing remains)", tracker.calledWith)
+		}
+		rec, _ := handler.findByMessage("sweep: pass complete")
+		if got := intAttr(t, rec, "candidates"); got != 3 {
+			t.Errorf("candidates = %d, want 3", got)
+		}
+		if got := intAttr(t, rec, "excluded_running"); got != 1 {
+			t.Errorf("excluded_running = %d, want 1", got)
+		}
+		if got := intAttr(t, rec, "excluded_retry"); got != 1 {
+			t.Errorf("excluded_retry = %d, want 1", got)
+		}
+		if got := intAttr(t, rec, "excluded_reaction"); got != 1 {
+			t.Errorf("excluded_reaction = %d, want 1", got)
+		}
+		assertSweepPartitionIdentity(t, rec)
+	})
+
+	t.Run("FailedTrackerRead", func(t *testing.T) {
+		t.Parallel()
+
+		tmpDir := t.TempDir()
+		mustMkdirSweep(t, filepath.Join(tmpDir, "PROJ-FAIL"))
+
+		tracker := &sweepTracker{fetchErr: errors.New("tracker unavailable")}
+		state := NewState(5000, 4, nil, AgentTotals{})
+		handler := &sweepLogHandler{}
+		params := defaultSweepParams(t, tmpDir, tracker)
+		params.Logger = slog.New(handler)
+
+		SweepWorkspaces(state, params)
+
+		rec, _ := handler.findByMessage("sweep: pass complete")
+		if got := stringAttr(t, rec, "tracker_read"); got != "failed" {
+			t.Errorf("tracker_read = %q, want %q", got, "failed")
+		}
+		if got := intAttr(t, rec, "retained_not_evaluated"); got != 1 {
+			t.Errorf("retained_not_evaluated = %d, want 1 (bound off by default)", got)
+		}
+		assertSweepPartitionIdentity(t, rec)
+	})
+
+	t.Run("BoundOffRetainsNotEvaluatedCount", func(t *testing.T) {
+		t.Parallel()
+
+		tmpDir := t.TempDir()
+		mustMkdirSweep(t, filepath.Join(tmpDir, "PROJ-EXCL"))
+		mustMkdirSweep(t, filepath.Join(tmpDir, "PROJ-CAND1"))
+		mustMkdirSweep(t, filepath.Join(tmpDir, "PROJ-CAND2"))
+
+		tracker := &sweepTracker{statesByKey: map[string]string{
+			"PROJ-CAND1": "In Progress",
+			"PROJ-CAND2": "In Progress",
+		}}
+		state := NewState(5000, 4, nil, AgentTotals{})
+		state.Running["id-excl"] = &RunningEntry{Identifier: "PROJ-EXCL"}
+		handler := &sweepLogHandler{}
+		params := defaultSweepParams(t, tmpDir, tracker) // RetentionDays zero value: bound off
+
+		params.Logger = slog.New(handler)
+
+		SweepWorkspaces(state, params)
+
+		rec, _ := handler.findByMessage("sweep: pass complete")
+		if got := stringAttr(t, rec, "age_pass"); got != "off" {
+			t.Errorf("age_pass = %q, want %q", got, "off")
+		}
+		if got := intAttr(t, rec, "retained_not_evaluated"); got != 2 {
+			t.Errorf("retained_not_evaluated = %d, want 2", got)
+		}
+		assertSweepPartitionIdentity(t, rec)
+	})
+
+	t.Run("BoundOnNilStore", func(t *testing.T) {
+		t.Parallel()
+
+		tmpDir := t.TempDir()
+		mustMkdirSweep(t, filepath.Join(tmpDir, "PROJ-NILSTORE"))
+
+		tracker := &sweepTracker{statesByKey: map[string]string{}}
+		state := NewState(5000, 4, nil, AgentTotals{})
+		handler := &sweepLogHandler{}
+		params := defaultSweepParams(t, tmpDir, tracker)
+		params.RetentionDays = config.WorkspaceRetentionMinDays
+		params.Store = nil
+		params.Logger = slog.New(handler)
+
+		SweepWorkspaces(state, params)
+
+		rec, _ := handler.findByMessage("sweep: pass complete")
+		if got := stringAttr(t, rec, "age_pass"); got != "unavailable" {
+			t.Errorf("age_pass = %q, want %q", got, "unavailable")
+		}
+		if got := intAttr(t, rec, "retained_not_evaluated"); got != 1 {
+			t.Errorf("retained_not_evaluated = %d, want 1", got)
+		}
+		assertSweepPartitionIdentity(t, rec)
+	})
+
+	t.Run("BoundOnStoreReadError", func(t *testing.T) {
+		t.Parallel()
+
+		tmpDir := t.TempDir()
+		mustMkdirSweep(t, filepath.Join(tmpDir, "PROJ-STOREERR"))
+
+		tracker := &sweepTracker{statesByKey: map[string]string{}}
+		state := NewState(5000, 4, nil, AgentTotals{})
+		handler := &sweepLogHandler{}
+		params := defaultSweepParams(t, tmpDir, tracker)
+		params.RetentionDays = config.WorkspaceRetentionMinDays
+		params.Store = &sweepStoreDouble{err: errors.New("db unavailable")}
+		params.Logger = slog.New(handler)
+
+		SweepWorkspaces(state, params)
+
+		rec, _ := handler.findByMessage("sweep: pass complete")
+		if got := stringAttr(t, rec, "age_pass"); got != "unavailable" {
+			t.Errorf("age_pass = %q, want %q", got, "unavailable")
+		}
+		if got := intAttr(t, rec, "retained_not_evaluated"); got != 1 {
+			t.Errorf("retained_not_evaluated = %d, want 1", got)
+		}
+		assertSweepPartitionIdentity(t, rec)
+	})
+}
+
+// --- R13: terminal-and-old is counted once, under removed_terminal ---
+
+func TestSweepWorkspaces_TerminalAndOldCountedOnceUnderTerminal(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	wsPath := filepath.Join(tmpDir, "PROJ-BOTH")
+	mustMkdirSweep(t, wsPath)
+	writeSweepSCMMetadata(t, wsPath, oldSweepTimestamp())
+
+	tracker := &sweepTracker{statesByKey: map[string]string{"PROJ-BOTH": "Done"}}
+	state := NewState(5000, 4, nil, AgentTotals{})
+	handler := &sweepLogHandler{}
+	params := defaultSweepParams(t, tmpDir, tracker)
+	params.RetentionDays = config.WorkspaceRetentionMinDays
+	params.Store = &sweepStoreDouble{}
+	params.Logger = slog.New(handler)
+
+	SweepWorkspaces(state, params)
+
+	assertSweepDirRemoved(t, wsPath)
+	rec, _ := handler.findByMessage("sweep: pass complete")
+	if got := intAttr(t, rec, "removed_terminal"); got != 1 {
+		t.Errorf("removed_terminal = %d, want 1", got)
+	}
+	if got := intAttr(t, rec, "removed_age"); got != 0 {
+		t.Errorf("removed_age = %d, want 0 (terminal check runs first and claims the key)", got)
+	}
+}
+
+// --- R14: Cleanup receives Identifier and IssueID both set to the key ---
+
+func TestSweepWorkspaces_AgeRemovalUsesIdentifierAndIssueIDAsKey(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("probe hook uses printf and $VAR expansion, unavailable under cmd.exe")
+	}
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	const key = "PROJ-HOOK"
+	wsPath := filepath.Join(tmpDir, key)
+	mustMkdirSweep(t, wsPath)
+	writeSweepSCMMetadata(t, wsPath, oldSweepTimestamp())
+
+	markerDir := t.TempDir()
+	envFile := filepath.Join(markerDir, "env.txt")
+	script := `printf "%s\n%s" "$SORTIE_ISSUE_ID" "$SORTIE_ISSUE_IDENTIFIER" > "` + envFile + `"`
+
+	tracker := &sweepTracker{statesByKey: map[string]string{}}
+	state := NewState(5000, 4, nil, AgentTotals{})
+	params := defaultSweepParams(t, tmpDir, tracker)
+	params.RetentionDays = config.WorkspaceRetentionMinDays
+	params.Store = &sweepStoreDouble{}
+	params.BeforeRemoveHook = script
+	params.HookTimeoutMS = 5000
+
+	SweepWorkspaces(state, params)
+
+	assertSweepDirRemoved(t, wsPath)
+	data, err := os.ReadFile(envFile)
+	if err != nil {
+		t.Fatalf("os.ReadFile(%q): %v", envFile, err)
+	}
+	lines := strings.Split(string(data), "\n")
+	if len(lines) != 2 || lines[0] != key || lines[1] != key {
+		t.Errorf("before_remove hook env (SORTIE_ISSUE_ID, SORTIE_ISSUE_IDENTIFIER) = %v, want both %q", lines, key)
+	}
+}
+
+// --- R15: the age pass removes eligible candidates on a failed tracker read ---
+
+func TestSweepWorkspaces_AgePassRemovesOnTrackerReadFailure(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	wsPath := filepath.Join(tmpDir, "PROJ-TRKFAIL")
+	mustMkdirSweep(t, wsPath)
+	writeSweepSCMMetadata(t, wsPath, oldSweepTimestamp())
+
+	tracker := &sweepTracker{fetchErr: errors.New("tracker unavailable")}
+	state := NewState(5000, 4, nil, AgentTotals{})
+	handler := &sweepLogHandler{}
+	params := defaultSweepParams(t, tmpDir, tracker)
+	params.RetentionDays = config.WorkspaceRetentionMinDays
+	params.Store = &sweepStoreDouble{}
+	params.Logger = slog.New(handler)
+
+	SweepWorkspaces(state, params)
+
+	assertSweepDirRemoved(t, wsPath)
+	rec, _ := handler.findByMessage("sweep: pass complete")
+	if got := intAttr(t, rec, "removed_age"); got != 1 {
+		t.Errorf("removed_age = %d, want 1", got)
+	}
+	if got := stringAttr(t, rec, "tracker_read"); got != "failed" {
+		t.Errorf("tracker_read = %q, want %q", got, "failed")
+	}
+}
+
+// --- R16: removal by age is independent of the issue's tracker condition ---
+
+func TestSweepWorkspaces_RemovedByAgeRegardlessOfTrackerCondition(t *testing.T) {
+	t.Parallel()
+
+	cases := []struct {
+		name      string
+		stateName string
+		absent    bool
+	}{
+		{name: "HandoffState", stateName: "Ready For Review"},
+		{name: "ActiveState", stateName: "In Progress"},
+		{name: "UnnamedState", stateName: "Some Other State"},
+		{name: "AbsentFromTrackerResponse", absent: true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			tmpDir := t.TempDir()
+			key := "PROJ-" + tc.name
+			wsPath := filepath.Join(tmpDir, key)
+			mustMkdirSweep(t, wsPath)
+			writeSweepSCMMetadata(t, wsPath, oldSweepTimestamp())
+
+			statesByKey := map[string]string{}
+			if !tc.absent {
+				statesByKey[key] = tc.stateName
+			}
+			tracker := &sweepTracker{statesByKey: statesByKey}
+			state := NewState(5000, 4, nil, AgentTotals{})
+			params := defaultSweepParams(t, tmpDir, tracker)
+			params.RetentionDays = config.WorkspaceRetentionMinDays
+			params.Store = &sweepStoreDouble{}
+
+			SweepWorkspaces(state, params)
+
+			assertSweepDirRemoved(t, wsPath)
+		})
+	}
+}
+
+// --- R17: no parseable activity retains the workspace regardless of age ---
+
+func TestSweepWorkspaces_RetainedNoActivity(t *testing.T) {
+	t.Parallel()
+
+	t.Run("NoRunHistoryAndNoSCMMetadata", func(t *testing.T) {
+		t.Parallel()
+
+		tmpDir := t.TempDir()
+		wsPath := filepath.Join(tmpDir, "PROJ-NOACT")
+		mustMkdirSweep(t, wsPath)
+
+		tracker := &sweepTracker{}
+		state := NewState(5000, 4, nil, AgentTotals{})
+		handler := &sweepLogHandler{}
+		params := defaultSweepParams(t, tmpDir, tracker)
+		params.RetentionDays = config.WorkspaceRetentionMinDays
+		params.Store = &sweepStoreDouble{}
+		params.Logger = slog.New(handler)
+
+		SweepWorkspaces(state, params)
+
+		assertSweepDirExists(t, wsPath)
+		rec, _ := handler.findByMessage("sweep: pass complete")
+		if got := intAttr(t, rec, "retained_no_activity"); got != 1 {
+			t.Errorf("retained_no_activity = %d, want 1", got)
+		}
+	})
+
+	t.Run("UnparseableCompletion", func(t *testing.T) {
+		t.Parallel()
+
+		tmpDir := t.TempDir()
+		const key = "PROJ-BADTIME"
+		wsPath := filepath.Join(tmpDir, key)
+		mustMkdirSweep(t, wsPath)
+
+		tracker := &sweepTracker{}
+		state := NewState(5000, 4, nil, AgentTotals{})
+		handler := &sweepLogHandler{}
+		params := defaultSweepParams(t, tmpDir, tracker)
+		params.RetentionDays = config.WorkspaceRetentionMinDays
+		params.Store = &sweepStoreDouble{completions: map[string]string{key: "not-a-time"}}
+		params.Logger = slog.New(handler)
+
+		SweepWorkspaces(state, params)
+
+		assertSweepDirExists(t, wsPath)
+		rec, _ := handler.findByMessage("sweep: pass complete")
+		if got := intAttr(t, rec, "retained_no_activity"); got != 1 {
+			t.Errorf("retained_no_activity = %d, want 1", got)
+		}
+	})
+}
+
+// --- R18: the anchor is the later of the two parsed timestamps ---
+
+func TestSweepWorkspaces_AnchorIsLaterTimestamp(t *testing.T) {
+	t.Parallel()
+
+	t.Run("OldCompletionRecentPush_Retained", func(t *testing.T) {
+		t.Parallel()
+
+		tmpDir := t.TempDir()
+		const key = "PROJ-ANCHOR1"
+		wsPath := filepath.Join(tmpDir, key)
+		mustMkdirSweep(t, wsPath)
+		writeSweepSCMMetadata(t, wsPath, recentSweepTimestamp())
+
+		tracker := &sweepTracker{}
+		state := NewState(5000, 4, nil, AgentTotals{})
+		params := defaultSweepParams(t, tmpDir, tracker)
+		params.RetentionDays = config.WorkspaceRetentionMinDays
+		params.Store = &sweepStoreDouble{completions: map[string]string{key: oldSweepTimestamp()}}
+
+		SweepWorkspaces(state, params)
+
+		assertSweepDirExists(t, wsPath)
+	})
+
+	t.Run("RecentCompletionOldPush_Retained", func(t *testing.T) {
+		t.Parallel()
+
+		tmpDir := t.TempDir()
+		const key = "PROJ-ANCHOR2"
+		wsPath := filepath.Join(tmpDir, key)
+		mustMkdirSweep(t, wsPath)
+		writeSweepSCMMetadata(t, wsPath, oldSweepTimestamp())
+
+		tracker := &sweepTracker{}
+		state := NewState(5000, 4, nil, AgentTotals{})
+		params := defaultSweepParams(t, tmpDir, tracker)
+		params.RetentionDays = config.WorkspaceRetentionMinDays
+		params.Store = &sweepStoreDouble{completions: map[string]string{key: recentSweepTimestamp()}}
+
+		SweepWorkspaces(state, params)
+
+		assertSweepDirExists(t, wsPath)
+	})
+
+	t.Run("BothOld_Removed", func(t *testing.T) {
+		t.Parallel()
+
+		tmpDir := t.TempDir()
+		const key = "PROJ-ANCHOR3"
+		wsPath := filepath.Join(tmpDir, key)
+		mustMkdirSweep(t, wsPath)
+		writeSweepSCMMetadata(t, wsPath, oldSweepTimestamp())
+
+		tracker := &sweepTracker{}
+		state := NewState(5000, 4, nil, AgentTotals{})
+		params := defaultSweepParams(t, tmpDir, tracker)
+		params.RetentionDays = config.WorkspaceRetentionMinDays
+		params.Store = &sweepStoreDouble{completions: map[string]string{key: oldSweepTimestamp()}}
+
+		SweepWorkspaces(state, params)
+
+		assertSweepDirRemoved(t, wsPath)
+	})
+}
+
+// --- R19: running/retry precedence in the in-flight exclusion ---
+
+func TestSweepWorkspaces_InFlightPrecedence(t *testing.T) {
+	t.Parallel()
+
+	t.Run("RunningOnly", func(t *testing.T) {
+		t.Parallel()
+
+		tmpDir := t.TempDir()
+		mustMkdirSweep(t, filepath.Join(tmpDir, "PROJ-RUNONLY"))
+
+		tracker := &sweepTracker{}
+		state := NewState(5000, 4, nil, AgentTotals{})
+		state.Running["id-run"] = &RunningEntry{Identifier: "PROJ-RUNONLY"}
+		handler := &sweepLogHandler{}
+		params := defaultSweepParams(t, tmpDir, tracker)
+		params.Logger = slog.New(handler)
+
+		SweepWorkspaces(state, params)
+
+		rec, _ := handler.findByMessage("sweep: pass complete")
+		if got := intAttr(t, rec, "excluded_running"); got != 1 {
+			t.Errorf("excluded_running = %d, want 1", got)
+		}
+		if got := intAttr(t, rec, "excluded_retry"); got != 0 {
+			t.Errorf("excluded_retry = %d, want 0", got)
+		}
+	})
+
+	t.Run("RetryOnly", func(t *testing.T) {
+		t.Parallel()
+
+		tmpDir := t.TempDir()
+		mustMkdirSweep(t, filepath.Join(tmpDir, "PROJ-RETRYONLY"))
+
+		tracker := &sweepTracker{}
+		state := NewState(5000, 4, nil, AgentTotals{})
+		state.RetryAttempts["id-retry"] = &RetryEntry{Identifier: "PROJ-RETRYONLY"}
+		handler := &sweepLogHandler{}
+		params := defaultSweepParams(t, tmpDir, tracker)
+		params.Logger = slog.New(handler)
+
+		SweepWorkspaces(state, params)
+
+		rec, _ := handler.findByMessage("sweep: pass complete")
+		if got := intAttr(t, rec, "excluded_running"); got != 0 {
+			t.Errorf("excluded_running = %d, want 0", got)
+		}
+		if got := intAttr(t, rec, "excluded_retry"); got != 1 {
+			t.Errorf("excluded_retry = %d, want 1", got)
+		}
+	})
+
+	t.Run("RunningTakesPrecedenceOverRetry", func(t *testing.T) {
+		t.Parallel()
+
+		tmpDir := t.TempDir()
+		mustMkdirSweep(t, filepath.Join(tmpDir, "PROJ-BOTHFLIGHT"))
+
+		tracker := &sweepTracker{}
+		state := NewState(5000, 4, nil, AgentTotals{})
+		state.Running["id-run"] = &RunningEntry{Identifier: "PROJ-BOTHFLIGHT"}
+		state.RetryAttempts["id-retry"] = &RetryEntry{Identifier: "PROJ-BOTHFLIGHT"}
+		handler := &sweepLogHandler{}
+		params := defaultSweepParams(t, tmpDir, tracker)
+		params.Logger = slog.New(handler)
+
+		SweepWorkspaces(state, params)
+
+		rec, _ := handler.findByMessage("sweep: pass complete")
+		if got := intAttr(t, rec, "excluded_running"); got != 1 {
+			t.Errorf("excluded_running = %d, want 1 (running takes precedence)", got)
+		}
+		if got := intAttr(t, rec, "excluded_retry"); got != 0 {
+			t.Errorf("excluded_retry = %d, want 0 (already counted as running)", got)
+		}
+	})
+}
+
+// --- R20: the sweep performs no reaction- or fingerprint-state mutation ---
+
+func TestSweepWorkspaces_AgeRemovalLeavesPendingReactionsAndFingerprintsUnchanged(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	wsPath := filepath.Join(tmpDir, "PROJ-NOSIDEFX")
+	mustMkdirSweep(t, wsPath)
+	writeSweepSCMMetadata(t, wsPath, oldSweepTimestamp())
+
+	ctx := context.Background()
+	store := openInMemoryStore(t)
+	if err := store.UpsertReactionFingerprint(ctx, "issue-nosidefx", ReactionKindCI, "fp-nosidefx"); err != nil {
+		t.Fatalf("UpsertReactionFingerprint: %v", err)
+	}
+
+	state := NewState(5000, 4, nil, AgentTotals{})
+	state.PendingReactions["other:ci"] = &PendingReaction{Identifier: "OTHER-1", Kind: ReactionKindCI}
+
+	tracker := &sweepTracker{}
+	params := defaultSweepParams(t, tmpDir, tracker)
+	params.RetentionDays = config.WorkspaceRetentionMinDays
+	params.Store = store
+	params.Ctx = ctx
+
+	SweepWorkspaces(state, params)
+
+	assertSweepDirRemoved(t, wsPath)
+	if len(state.PendingReactions) != 1 {
+		t.Errorf("len(state.PendingReactions) = %d, want 1 (unchanged)", len(state.PendingReactions))
+	}
+	fp, dispatched, err := store.GetReactionFingerprint(ctx, "issue-nosidefx", ReactionKindCI)
+	if err != nil {
+		t.Fatalf("GetReactionFingerprint: %v", err)
+	}
+	if fp != "fp-nosidefx" || dispatched {
+		t.Errorf("GetReactionFingerprint = (%q, %v), want (%q, false)", fp, dispatched, "fp-nosidefx")
+	}
+}
+
+// --- R22: both removal mechanisms record their own metric in one pass ---
+
+func TestSweepWorkspaces_MetricsRecordBothMechanismsInSamePass(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	terminalWsPath := filepath.Join(tmpDir, "PROJ-METRIC-TERM")
+	mustMkdirSweep(t, terminalWsPath)
+	ageWsPath := filepath.Join(tmpDir, "PROJ-METRIC-AGE")
+	mustMkdirSweep(t, ageWsPath)
+	writeSweepSCMMetadata(t, ageWsPath, oldSweepTimestamp())
+
+	tracker := &sweepTracker{statesByKey: map[string]string{"PROJ-METRIC-TERM": "Done"}}
+	state := NewState(5000, 4, nil, AgentTotals{})
+	spy := &spyMetrics{}
+	params := defaultSweepParams(t, tmpDir, tracker)
+	params.Metrics = spy
+	params.RetentionDays = config.WorkspaceRetentionMinDays
+	params.Store = &sweepStoreDouble{}
+
+	SweepWorkspaces(state, params)
+
+	assertSweepDirRemoved(t, terminalWsPath)
+	assertSweepDirRemoved(t, ageWsPath)
+
+	spy.mu.Lock()
+	acts := append([]string(nil), spy.reconciliationActs...)
+	spy.mu.Unlock()
+
+	var cleanupCount, expiredCount int
+	for _, a := range acts {
+		switch a {
+		case actionSweepCleanup:
+			cleanupCount++
+		case actionSweepExpired:
+			expiredCount++
+		}
+	}
+	if cleanupCount != 1 {
+		t.Errorf("IncReconciliationActions(%q) called %d times, want 1", actionSweepCleanup, cleanupCount)
+	}
+	if expiredCount != 1 {
+		t.Errorf("IncReconciliationActions(%q) called %d times, want 1", actionSweepExpired, expiredCount)
+	}
+}
+
+// --- R23: an age removal log record carries the required attributes ---
+
+func TestSweepWorkspaces_AgeRemovalLogCarriesRequiredAttributes(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	const key = "PROJ-LOGATTRS"
+	wsPath := filepath.Join(tmpDir, key)
+	mustMkdirSweep(t, wsPath)
+	writeSweepSCMMetadata(t, wsPath, oldSweepTimestamp())
+
+	tracker := &sweepTracker{}
+	state := NewState(5000, 4, nil, AgentTotals{})
+	handler := &sweepLogHandler{}
+	params := defaultSweepParams(t, tmpDir, tracker)
+	params.RetentionDays = config.WorkspaceRetentionMinDays
+	params.Store = &sweepStoreDouble{}
+	params.Logger = slog.New(handler)
+
+	SweepWorkspaces(state, params)
+
+	rec, ok := handler.findByMessage("sweep: removed expired workspace")
+	if !ok {
+		t.Fatal(`"sweep: removed expired workspace" not logged`)
+	}
+	for _, attrKey := range []string{"workspace_key", "last_activity", "age_days"} {
+		if _, ok := rec.attrs[attrKey]; !ok {
+			t.Errorf("removed-workspace log missing attribute %q", attrKey)
+		}
+	}
+	if got := stringAttr(t, rec, "workspace_key"); got != key {
+		t.Errorf("workspace_key = %q, want %q", got, key)
 	}
 }

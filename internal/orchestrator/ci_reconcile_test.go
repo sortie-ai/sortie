@@ -374,6 +374,38 @@ func TestReconcileCIStatus_Failing_UnderMaxRetries(t *testing.T) {
 	}
 }
 
+// TestReconcileCIStatus_Failing_RunHistoryCompletedAtIsUTC covers R9: the
+// CI-failure writer formats a UTC time with time.RFC3339, so the
+// persisted value ends in "Z" and parses back as RFC3339.
+func TestReconcileCIStatus_Failing_RunHistoryCompletedAtIsUTC(t *testing.T) {
+	t.Parallel()
+
+	state := stateWithPendingReaction(t, "ISS-CI-UTC", "feature/break", 1)
+	store := &ciReconcileStore{}
+	metrics := newCIMetricsSpy()
+	ci := &mockCIProvider{result: domain.CIResult{
+		Status:       domain.CIStatusFailing,
+		FailingCount: 1,
+		CheckRuns: []domain.CheckRun{
+			{Name: "lint", Status: domain.CheckRunStatusCompleted, Conclusion: domain.CheckConclusionFailure},
+		},
+	}}
+	params := ciParams(t, store, ci, nil)
+
+	reconcileCIStatus(state, params, discardLogger(), context.Background(), metrics)
+
+	if len(store.runHistories) != 1 {
+		t.Fatalf("AppendRunHistory call count = %d, want 1", len(store.runHistories))
+	}
+	completedAt := store.runHistories[0].CompletedAt
+	if !strings.HasSuffix(completedAt, "Z") {
+		t.Errorf("RunHistory.CompletedAt = %q, want suffix %q", completedAt, "Z")
+	}
+	if _, err := time.Parse(time.RFC3339, completedAt); err != nil {
+		t.Errorf("time.Parse(RFC3339, %q): %v", completedAt, err)
+	}
+}
+
 func TestReconcileCIStatus_Failing_ExceedsMaxRetries_Escalates(t *testing.T) {
 	t.Parallel()
 

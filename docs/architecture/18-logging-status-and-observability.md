@@ -18,6 +18,28 @@ Message formatting requirements:
 - Include concise failure reason when present.
 - Avoid logging large raw payloads unless necessary.
 
+The periodic workspace sweep emits exactly one summary record per pass, at `Info` level, message
+`"sweep: pass complete"`, on every pass that produced a candidate set, including a pass over zero
+keys, a pass whose tracker read failed, and a pass that removed nothing. This is deliberate: a
+sweep that finds nothing to remove and says nothing is indistinguishable from a sweep that is not
+running at all, which is the failure mode this record exists to close. The record carries thirteen
+attributes:
+
+- `candidates`, `excluded_running`, `excluded_retry`, `excluded_reaction`, `removed_terminal`,
+  `removed_age`, `retained_in_window`, `retained_no_activity`, `retained_not_evaluated`, and
+  `failed` are integer counts. The nine counters after `candidates` partition the candidate set, so
+  `candidates` equals their sum on every pass; `retained_not_evaluated` is what makes that identity
+  hold on a pass where the age bound did not evaluate anything.
+- `retention_days` is the configured `workspace.retention_days` value for that pass; `0` means the
+  bound is off.
+- `age_pass` is `"on"` when the age bound evaluated its candidates that pass, `"off"` when
+  `retention_days` is `0` or below the floor (`WorkspaceRetentionMinDays`), and `"unavailable"`
+  when the persistence read is not configured or its query failed.
+- `tracker_read` is `"ok"` or `"failed"`.
+
+Each workspace removed by the age bound also emits its own `Info` record, message `"sweep:
+removed expired workspace"`, carrying `workspace_key`, `last_activity` (RFC3339), and `age_days`.
+
 ### 13.2 Logging Outputs and Sinks
 
 Sortie does not prescribe where logs must go (stderr, file, remote sink, etc.).
@@ -320,7 +342,7 @@ Defined metrics (label sets and buckets are specified here; see ADR-0008 for his
 | `sortie_dispatches_total{outcome}` | Counter | Dispatch attempts, partitioned by outcome (`success`, `error`). |
 | `sortie_worker_exits_total{exit_type}` | Counter | Worker exits, partitioned by exit type (`normal`, `error`, `cancelled`). |
 | `sortie_retries_total{trigger}` | Counter | Retry schedule events, partitioned by trigger (`error`, `continuation`, `timer`, `stall`). |
-| `sortie_reconciliation_actions_total{action}` | Counter | Reconciliation outcomes per issue, partitioned by action (`stop`, `cleanup`, `keep`). |
+| `sortie_reconciliation_actions_total{action}` | Counter | Reconciliation outcomes per issue, partitioned by action (`stop`, `cleanup`, `keep`, `sweep_cleanup`, `sweep_expired`). |
 | `sortie_poll_cycles_total{result}` | Counter | Poll tick completions, partitioned by result (`success`, `error`, `skipped`). |
 | `sortie_tracker_requests_total{operation,result}` | Counter | Tracker adapter API calls, partitioned by operation (`fetch_candidates`, `fetch_issue`, `fetch_by_states`, `fetch_states_by_ids`, `fetch_states_by_identifiers`, `fetch_comments`, `transition`) and result (`success`, `error`). |
 | `sortie_tracker_comments_total{lifecycle,result}` | Counter | Tracker comment attempts, partitioned by lifecycle point (`dispatch`, `completion`, `failure`) and result (`success`, `error`). |

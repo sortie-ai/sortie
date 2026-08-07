@@ -2575,3 +2575,59 @@ func TestNewServiceConfigExtensions(t *testing.T) {
 		}
 	})
 }
+
+// --- buildWorkspaceConfig / workspace.retention_days tests ---
+
+func TestBuildWorkspaceConfig(t *testing.T) {
+	t.Parallel()
+
+	t.Run("no retention_days key defaults to 0", func(t *testing.T) {
+		t.Parallel()
+
+		cfg, err := buildWorkspaceConfig(map[string]any{}, map[string]bool{})
+		if err != nil {
+			t.Fatalf("buildWorkspaceConfig: unexpected error: %v", err)
+		}
+		if cfg.RetentionDays != 0 {
+			t.Errorf("RetentionDays = %d, want 0", cfg.RetentionDays)
+		}
+	})
+
+	tests := []struct {
+		name      string
+		retention int
+		wantErr   bool
+	}{
+		{name: "negative rejected", retention: -1, wantErr: true},
+		{name: "zero accepted (disables the bound)", retention: 0, wantErr: false},
+		{name: "one rejected (below the floor)", retention: 1, wantErr: true},
+		{name: "twenty-nine rejected (below the floor)", retention: 29, wantErr: true},
+		{name: "thirty accepted (at the floor)", retention: 30, wantErr: false},
+		{name: "three-sixty-five accepted", retention: 365, wantErr: false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			cfg, err := buildWorkspaceConfig(map[string]any{"retention_days": tt.retention}, map[string]bool{})
+
+			if tt.wantErr {
+				var ce *ConfigError
+				if !errors.As(err, &ce) {
+					t.Fatalf("buildWorkspaceConfig(retention_days=%d) error type = %T, want *ConfigError", tt.retention, err)
+				}
+				if ce.Field != "workspace.retention_days" {
+					t.Errorf("ConfigError.Field = %q, want %q", ce.Field, "workspace.retention_days")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("buildWorkspaceConfig(retention_days=%d) unexpected error: %v", tt.retention, err)
+			}
+			if cfg.RetentionDays != tt.retention {
+				t.Errorf("RetentionDays = %d, want %d", cfg.RetentionDays, tt.retention)
+			}
+		})
+	}
+}

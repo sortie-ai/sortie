@@ -2,6 +2,7 @@ package persistence
 
 import (
 	"context"
+	"fmt"
 	"slices"
 	"testing"
 	"time"
@@ -299,6 +300,99 @@ func TestQueryTokenExhaustedIssues(t *testing.T) {
 		}
 		if slices.Contains(aboveSum, "ISS-PARITY") {
 			t.Errorf("QueryTokenExhaustedIssues(maxTokens=%d) = %v, want ISS-PARITY absent", sum+1, aboveSum)
+		}
+	})
+}
+
+// completionRun returns a run_history row for identifier carrying
+// completedAt, with the remaining fields from newTestRun.
+func completionRun(i int, identifier, completedAt string) RunHistory {
+	run := newTestRun(i)
+	run.Identifier = identifier
+	run.IssueID = identifier
+	run.CompletedAt = completedAt
+	return run
+}
+
+func TestLatestRunCompletionByIdentifier(t *testing.T) {
+	t.Parallel()
+
+	t.Run("returns the later completion per identifier and omits identifiers with no rows", func(t *testing.T) {
+		t.Parallel()
+		s := openTestStore(t)
+		migrateOrFatal(t, s)
+
+		appendOrFatal(t, s, completionRun(1, "PROJ-A", "2026-01-01T00:00:00Z"))
+		appendOrFatal(t, s, completionRun(2, "PROJ-A", "2026-01-03T00:00:00Z"))
+		appendOrFatal(t, s, completionRun(3, "PROJ-B", "2026-02-01T00:00:00Z"))
+		appendOrFatal(t, s, completionRun(4, "PROJ-B", "2026-01-15T00:00:00Z"))
+		appendOrFatal(t, s, completionRun(5, "PROJ-C", "2026-03-01T00:00:00Z"))
+		appendOrFatal(t, s, completionRun(6, "PROJ-C", "2026-03-05T00:00:00Z"))
+
+		got, err := s.LatestRunCompletionByIdentifier(context.Background(), []string{"PROJ-A", "PROJ-B", "PROJ-C", "PROJ-D"})
+		if err != nil {
+			t.Fatalf("LatestRunCompletionByIdentifier: %v", err)
+		}
+		if len(got) != 3 {
+			t.Fatalf("len(result) = %d, want 3; result = %v", len(got), got)
+		}
+
+		want := map[string]string{
+			"PROJ-A": "2026-01-03T00:00:00Z",
+			"PROJ-B": "2026-02-01T00:00:00Z",
+			"PROJ-C": "2026-03-05T00:00:00Z",
+		}
+		for identifier, wantCompletedAt := range want {
+			if got[identifier] != wantCompletedAt {
+				t.Errorf("result[%q] = %q, want %q", identifier, got[identifier], wantCompletedAt)
+			}
+		}
+		if _, ok := got["PROJ-D"]; ok {
+			t.Error(`result["PROJ-D"] present, want omitted (no run_history rows)`)
+		}
+	})
+
+	t.Run("empty input returns empty non-nil map without querying", func(t *testing.T) {
+		t.Parallel()
+		s := openTestStore(t)
+		migrateOrFatal(t, s)
+
+		got, err := s.LatestRunCompletionByIdentifier(context.Background(), []string{})
+		if err != nil {
+			t.Fatalf("LatestRunCompletionByIdentifier: %v", err)
+		}
+		if got == nil {
+			t.Fatal("result = nil, want empty non-nil map")
+		}
+		if len(got) != 0 {
+			t.Errorf("result = %v, want empty map", got)
+		}
+	})
+
+	t.Run("batches identifiers at 500 per query and merges results", func(t *testing.T) {
+		t.Parallel()
+		s := openTestStore(t)
+		migrateOrFatal(t, s)
+
+		const total = 1200
+		identifiers := make([]string, total)
+		for i := range total {
+			id := fmt.Sprintf("PROJ-CHUNK-%d", i)
+			identifiers[i] = id
+			appendOrFatal(t, s, completionRun(i, id, "2026-01-01T00:00:00Z"))
+		}
+
+		got, err := s.LatestRunCompletionByIdentifier(context.Background(), identifiers)
+		if err != nil {
+			t.Fatalf("LatestRunCompletionByIdentifier: %v", err)
+		}
+		if len(got) != total {
+			t.Fatalf("len(result) = %d, want %d", len(got), total)
+		}
+		for _, id := range identifiers {
+			if _, ok := got[id]; !ok {
+				t.Fatalf("result missing identifier %q", id)
+			}
 		}
 	})
 }
