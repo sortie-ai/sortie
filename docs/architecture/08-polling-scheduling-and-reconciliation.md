@@ -228,6 +228,8 @@ Error dispositions:
 - On `ErrSCMConflict` (head SHA mismatch or branch-protection refusal): re-enqueue with
   poll interval; the next tick observes the new SHA via a refreshed fingerprint.
 - On `ErrSCMAuth` on the merge call: escalate immediately (do not re-enqueue).
+- On `ErrSCMPayload` on the merge call: escalate immediately (do not re-enqueue), the same
+  disposition as `ErrSCMAuth`.
 - On other transient errors: re-enqueue with backoff; escalate per the guard in item 5.
 
 Cross-kind isolation: the success and escalation paths MUST scope cleanup to `kind = "merge"`
