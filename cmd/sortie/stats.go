@@ -856,7 +856,16 @@ func renderStatsText(stdout, stderr io.Writer, report statsReport) {
 // same "warning: " prefix emitDiags uses, so a warning is never mistaken
 // for part of the report. The prefix belongs to the rendering rather than
 // to the message, keeping the JSON envelope's warnings field clean.
+//
+// A blank line opens the block so the warnings do not run into the report's
+// last line when both streams share a terminal. It is written to stderr
+// alongside the warnings it separates rather than to stdout, so a report
+// with nothing to warn about does not end in a stray blank line.
 func writeStatsWarnings(stderr io.Writer, warnings []string) {
+	if len(warnings) == 0 {
+		return
+	}
+	fmt.Fprintln(stderr) //nolint:errcheck // stderr write failure is unrecoverable
 	for _, w := range warnings {
 		fmt.Fprintf(stderr, "warning: %s\n", w) //nolint:errcheck // stderr write failure is unrecoverable
 	}

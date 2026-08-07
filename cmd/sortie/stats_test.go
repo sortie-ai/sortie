@@ -856,6 +856,14 @@ func TestRunStatsDegradedSchema(t *testing.T) {
 		if !strings.Contains(stderr.String(), "was written before sortie recorded") {
 			t.Errorf("stderr = %q, want a degraded-schema warning", stderr.String())
 		}
+		if !strings.HasPrefix(stderr.String(), "\nwarning: ") {
+			t.Errorf("stderr = %q, want a blank line before the first warning so it does not run into the report",
+				stderr.String())
+		}
+		if !strings.HasSuffix(stdout.String(), "\n") || strings.HasSuffix(stdout.String(), "\n\n") {
+			t.Errorf("stdout = %q, want exactly one trailing newline: the separator belongs to stderr",
+				stdout.String())
+		}
 		out := stdout.String()
 		for _, absent := range []string{"by dispatch rule", "by prompt template", "self review", "turns (succeeded)", "tokens (all runs)"} {
 			if strings.Contains(out, absent) {
