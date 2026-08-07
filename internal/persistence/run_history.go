@@ -342,6 +342,66 @@ func (s *Store) SumTotalTokensByIssue(ctx context.Context, issueID string) (sumT
 	return sumTotalTokens, sessionCount, nil
 }
 
+// latestRunCompletionChunkSize is the maximum number of identifiers
+// batched into a single IN (...) query. The on-disk workspace directory
+// count that feeds this lookup is unbounded by construction, unlike the
+// tracker-page-bounded inputs of the other IN (...) queries in this file.
+const latestRunCompletionChunkSize = 500
+
+// LatestRunCompletionByIdentifier returns the most recent completed_at
+// value for each of the given identifiers.
+//
+// Identifiers with no run_history rows are omitted from the result. An
+// empty input returns an empty non-nil map without querying. Identifiers
+// are queried in batches of at most [latestRunCompletionChunkSize] and
+// the per-batch results are merged.
+func (s *Store) LatestRunCompletionByIdentifier(ctx context.Context, identifiers []string) (map[string]string, error) {
+	result := make(map[string]string, len(identifiers))
+	if len(identifiers) == 0 {
+		return result, nil
+	}
+
+	for start := 0; start < len(identifiers); start += latestRunCompletionChunkSize {
+		end := min(start+latestRunCompletionChunkSize, len(identifiers))
+		chunk := identifiers[start:end]
+
+		placeholders := strings.Repeat("?,", len(chunk))
+		placeholders = placeholders[:len(placeholders)-1]
+
+		args := make([]any, len(chunk))
+		for i, id := range chunk {
+			args[i] = id
+		}
+
+		query := fmt.Sprintf( //nolint:gosec // placeholders is "?,?,..." built from len(chunk); no user data in format string
+			`SELECT identifier, MAX(completed_at) FROM run_history WHERE identifier IN (%s) GROUP BY identifier`,
+			placeholders,
+		)
+
+		rows, err := s.db.QueryContext(ctx, query, args...)
+		if err != nil {
+			return nil, fmt.Errorf("query latest run completion by identifier: %w", err)
+		}
+
+		scanErr := func() error {
+			defer rows.Close() //nolint:errcheck // read-only query; close error is non-actionable
+			for rows.Next() {
+				var identifier, completedAt string
+				if err := rows.Scan(&identifier, &completedAt); err != nil {
+					return fmt.Errorf("scan latest run completion by identifier: %w", err)
+				}
+				result[identifier] = completedAt
+			}
+			return rows.Err()
+		}()
+		if scanErr != nil {
+			return nil, fmt.Errorf("query latest run completion by identifier: %w", scanErr)
+		}
+	}
+
+	return result, nil
+}
+
 // QueryTokenExhaustedIssues returns issue IDs from candidateIDs whose
 // summed run_history total_tokens meet or exceed maxTokens. Returns an
 // empty non-nil slice when no issues qualify or candidateIDs is empty.
