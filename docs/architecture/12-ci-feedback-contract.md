@@ -126,8 +126,10 @@ upserted, so a new SHA (or a branch ref that has moved to a new SHA) always re-a
 fresh CI-fix dispatch. When the read-back fingerprint matches the current ref and `dispatched` is
 already true, the entry is dropped for this tick rather than re-enqueued: CI status is not polled
 again for that ref until a later worker exit or startup recovery creates a new pending entry.
-Fingerprint read or write errors are logged and treated as non-fatal; the pass proceeds to
-`FetchCIStatus` without dedup rather than dropping the entry.
+Fingerprint errors are logged and treated as non-fatal, but the two directions differ. A failed
+upsert does not disable dedup: the read-back still runs, so a stored row matching the current ref
+and already marked dispatched still drops the entry. Only a failed read-back skips dedup entirely,
+and the pass then proceeds to `FetchCIStatus` rather than dropping the entry.
 
 The `dispatched` flag is not set anywhere in this reconcile pass. `handleCIFailure` (Section 11A.6)
 schedules the CI-fix continuation through the shared retry machinery with `ReactionKind` set to
