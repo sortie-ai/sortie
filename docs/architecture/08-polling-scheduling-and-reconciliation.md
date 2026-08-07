@@ -164,8 +164,9 @@ Part D: Review comment reconciliation (when `reactions.review_comments` is confi
   - Build fingerprint from sorted non-outdated comment IDs (SHA-256 hash).
   - Check `reaction_fingerprints` table: if fingerprint matches and is marked dispatched, skip.
   - If within debounce window (`now - LastEventAt < debounce_ms`): defer and re-enqueue.
-  - Otherwise: mark dispatched in `reaction_fingerprints`, cancel existing retry, schedule a
-    review-fix dispatch with review comment context, increment `reaction_attempts`.
+  - Otherwise: cancel existing retry, schedule a review-fix dispatch with review comment
+    context, increment `reaction_attempts`. The fingerprint is marked dispatched later, when
+    the scheduled retry fires and dispatch succeeds, not during this pass.
 
 Part E: Bot review comment reconciliation (when `reactions.bot_review` is configured)
 

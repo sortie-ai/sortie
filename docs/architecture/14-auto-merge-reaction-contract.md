@@ -93,7 +93,7 @@ The auto-merge reconcile loop evaluates the merge preconditions reported by `Get
 | Merging | `ErrSCMConflict` (head SHA mismatch) | Pending | Re-enqueue with poll interval; next tick refreshes fingerprint. |
 | Merging | `ErrSCMAuth` | Escalated | Escalate immediately; do not re-enqueue. |
 | Merging | `ErrSCMPayload` | Escalated | Escalate immediately; do not re-enqueue. |
-| Merging | Other transient error | Pending | Re-enqueue with backoff; escalate after `MaxRetries`. |
+| Merging | Other transient error | Pending | Re-enqueue with backoff; escalate on a later tick when `MaxRetries > 0` and the attempt count reaches it (§11C.6). |
 
 **Gitea auto-merge reads.** The Gitea adapter has no aggregate review-decision field and no
 `mergeable_state` string, so it composes both preconditions itself. `GetReviewDecision` folds the
