@@ -90,8 +90,8 @@ type dashboardRunHistoryEntry struct {
 	Error        string
 }
 
-// fmtInt formats an int64 with comma thousand separators.
-func fmtInt(v int64) string {
+// FormatInt formats an int64 with comma thousand separators.
+func FormatInt(v int64) string {
 	// Format first to avoid negation overflow on math.MinInt64.
 	s := strconv.FormatInt(v, 10)
 
@@ -126,10 +126,10 @@ func fmtInt(v int64) string {
 	return string(buf)
 }
 
-// formatDuration formats a duration as a human-readable string with at
+// FormatDuration formats a duration as a human-readable string with at
 // most three components. When days are present, seconds are dropped.
 // Negative durations return "0s".
-func formatDuration(d time.Duration) string {
+func FormatDuration(d time.Duration) string {
 	if d <= 0 {
 		return "0s"
 	}
@@ -166,7 +166,7 @@ func formatRelativeTime(dueAtMS int64, now time.Time) string {
 		}
 		return "overdue"
 	}
-	return "in " + formatDuration(diff)
+	return "in " + FormatDuration(diff)
 }
 
 // buildDashboardData maps a [orchestrator.RuntimeSnapshotResult] into
@@ -197,13 +197,13 @@ func buildDashboardData(
 
 	data := dashboardData{
 		Version:         version,
-		Uptime:          formatDuration(uptimeDur),
+		Uptime:          FormatDuration(uptimeDur),
 		GeneratedAt:     snap.GeneratedAt,
 		RunningCount:    runningCount,
 		RetryingCount:   len(snap.Retrying),
 		AvailableSlots:  available,
 		TotalTokens:     snap.AgentTotals.TotalTokens,
-		RuntimeDisplay:  formatDuration(time.Duration(snap.AgentTotals.SecondsRunning * float64(time.Second))),
+		RuntimeDisplay:  FormatDuration(time.Duration(snap.AgentTotals.SecondsRunning * float64(time.Second))),
 		InputTokens:     snap.AgentTotals.InputTokens,
 		OutputTokens:    snap.AgentTotals.OutputTokens,
 		CacheReadTokens: snap.AgentTotals.CacheReadTokens,
@@ -246,8 +246,8 @@ func buildDashboardData(
 		var entryCostStr string
 		if hasRates && e.AgentKind != "" {
 			if rc, ok := tokenRates[e.AgentKind]; ok {
-				if c := estimateCost(e.AgentInputTokens, e.AgentOutputTokens, e.CacheReadTokens, &rc); c != nil {
-					entryCostStr = fmtCost(*c)
+				if c := EstimateCost(e.AgentInputTokens, e.AgentOutputTokens, e.CacheReadTokens, &rc); c != nil {
+					entryCostStr = FormatCost(*c)
 					aggregateCost += *c
 					aggregateCostSet = true
 				}
@@ -258,7 +258,7 @@ func buildDashboardData(
 			Identifier:       displayID,
 			State:            e.State,
 			TurnCount:        e.TurnCount,
-			Duration:         formatDuration(dur),
+			Duration:         FormatDuration(dur),
 			LastEvent:        string(e.LastAgentEvent),
 			TotalTokens:      e.AgentTotalTokens,
 			CacheReadTokens:  e.CacheReadTokens,
@@ -279,7 +279,7 @@ func buildDashboardData(
 		data.EstimatedCostLabel = "Active Est. Cost (USD)"
 	}
 	if aggregateCostSet {
-		s := fmtCost(aggregateCost)
+		s := FormatCost(aggregateCost)
 		data.EstimatedCostUSD = &s
 	}
 
@@ -319,7 +319,7 @@ func mapRunHistoryEntries(runs []RunHistoryEntry) []dashboardRunHistoryEntry {
 		startT, errS := time.Parse(time.RFC3339, r.StartedAt)
 		endT, errE := time.Parse(time.RFC3339, r.CompletedAt)
 		if errS == nil && errE == nil {
-			dur = formatDuration(endT.Sub(startT))
+			dur = FormatDuration(endT.Sub(startT))
 		}
 
 		errMsg := ""

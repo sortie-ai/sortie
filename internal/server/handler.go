@@ -189,7 +189,7 @@ func toStateResponse(snap orchestrator.RuntimeSnapshotResult, tokenRates TokenRa
 				continue
 			}
 			if rc, ok := tokenRates[e.AgentKind]; ok {
-				if c := estimateCost(e.AgentInputTokens, e.AgentOutputTokens, e.CacheReadTokens, &rc); c != nil {
+				if c := EstimateCost(e.AgentInputTokens, e.AgentOutputTokens, e.CacheReadTokens, &rc); c != nil {
 					total += *c
 					anySet = true
 				}

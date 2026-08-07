@@ -519,9 +519,9 @@ func TestFormatDuration(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			got := formatDuration(tt.d)
+			got := FormatDuration(tt.d)
 			if got != tt.want {
-				t.Errorf("formatDuration(%v) = %q, want %q", tt.d, got, tt.want)
+				t.Errorf("FormatDuration(%v) = %q, want %q", tt.d, got, tt.want)
 			}
 		})
 	}
@@ -557,7 +557,7 @@ func TestFormatRelativeTime(t *testing.T) {
 	}
 }
 
-func TestFmtInt(t *testing.T) {
+func TestFormatInt(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -579,9 +579,9 @@ func TestFmtInt(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			got := fmtInt(tt.input)
+			got := FormatInt(tt.input)
 			if got != tt.want {
-				t.Errorf("fmtInt(%d) = %q, want %q", tt.input, got, tt.want)
+				t.Errorf("FormatInt(%d) = %q, want %q", tt.input, got, tt.want)
 			}
 		})
 	}
