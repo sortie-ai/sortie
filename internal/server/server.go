@@ -172,8 +172,8 @@ func New(params Params) *Server {
 
 	tmpl := template.Must(
 		template.New("dashboard").Funcs(template.FuncMap{
-			"fmtInt":  fmtInt,
-			"fmtCost": fmtCost,
+			"fmtInt":  FormatInt,
+			"fmtCost": FormatCost,
 			"even":    func(i int) bool { return i%2 == 0 },
 		}).Parse(dashboardHTML),
 	)

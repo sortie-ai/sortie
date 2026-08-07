@@ -7,6 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `sortie stats` subcommand: summarizes how past runs went and what they
+  cost, opening the database read-only so it never blocks a running
+  orchestrator. `--format text|json` selects the output; `--since` and
+  `--until` bound the report by when a run finished, accepting an exact
+  timestamp, a `YYYY-MM-DD` date, or an age such as `24h`. The report
+  breaks runs down by outcome, by coding agent, by dispatch rule, and by
+  prompt template, with run counts, success rate, p50/p95/mean duration,
+  mean turns, and token totals for each. When the workflow configures
+  `token_rates`, USD cost is derived through the same formula and
+  renderers the dashboard uses, reported as total spend and as spend per
+  succeeded run; without `token_rates` the report shows token counts and
+  no cost figures rather than zeros. Against a database written by an
+  older binary the command still works: it reports the figures that
+  database can supply and warns which ones are missing, rather than
+  failing outright.
+  ([#274](https://github.com/sortie-ai/sortie/issues/274))
+
 ## [1.17.0] - 2026-08-06
 
 ### Added

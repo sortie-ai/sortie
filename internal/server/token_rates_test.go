@@ -252,7 +252,7 @@ func assertRateField(t *testing.T, kind, field string, got, want *float64) {
 	}
 }
 
-// --- estimateCost ---
+// --- EstimateCost ---
 
 func TestEstimateCost(t *testing.T) {
 	t.Parallel()
@@ -335,31 +335,31 @@ func TestEstimateCost(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			got := estimateCost(tt.input, tt.output, tt.cacheRead, tt.rates)
+			got := EstimateCost(tt.input, tt.output, tt.cacheRead, tt.rates)
 
 			if tt.wantNil {
 				if got != nil {
-					t.Errorf("estimateCost = %v, want nil", *got)
+					t.Errorf("EstimateCost = %v, want nil", *got)
 				}
 				return
 			}
 
 			if got == nil {
-				t.Fatal("estimateCost = nil, want non-nil")
+				t.Fatal("EstimateCost = nil, want non-nil")
 			}
 			if math.IsInf(*got, 0) || math.IsNaN(*got) {
-				t.Fatalf("estimateCost = %v, want finite number", *got)
+				t.Fatalf("EstimateCost = %v, want finite number", *got)
 			}
 			if diff := *got - tt.wantResult; diff > 1e-9 || diff < -1e-9 {
-				t.Errorf("estimateCost = %.10f, want %.10f", *got, tt.wantResult)
+				t.Errorf("EstimateCost = %.10f, want %.10f", *got, tt.wantResult)
 			}
 		})
 	}
 }
 
-// --- fmtCost ---
+// --- FormatCost ---
 
-func TestFmtCost(t *testing.T) {
+func TestFormatCost(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -382,9 +382,9 @@ func TestFmtCost(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			got := fmtCost(tt.input)
+			got := FormatCost(tt.input)
 			if got != tt.want {
-				t.Errorf("fmtCost(%v) = %q, want %q", tt.input, got, tt.want)
+				t.Errorf("FormatCost(%v) = %q, want %q", tt.input, got, tt.want)
 			}
 		})
 	}

@@ -104,9 +104,9 @@ func extractRate(m map[string]any, key, kind string) (*float64, string) {
 	return &f, ""
 }
 
-// estimateCost computes estimated USD cost from token counts and a rate
+// EstimateCost computes estimated USD cost from token counts and a rate
 // config. Returns nil when rates is nil or all rate fields are nil.
-func estimateCost(input, output, cacheRead int64, rates *TokenRateConfig) *float64 {
+func EstimateCost(input, output, cacheRead int64, rates *TokenRateConfig) *float64 {
 	if rates == nil {
 		return nil
 	}
@@ -133,16 +133,16 @@ func estimateCost(input, output, cacheRead int64, rates *TokenRateConfig) *float
 	return &cost
 }
 
-// fmtCost formats a USD cost value as a string with two decimal places.
+// FormatCost formats a USD cost value as a string with two decimal places.
 // Values >= 1000 receive comma thousand separators (e.g. "$1,234.56").
 // Rounding is performed on the integer-cents representation to avoid
 // float splitting artifacts near boundaries (e.g. 999.999 → "$1,000.00").
-func fmtCost(v float64) string {
+func FormatCost(v float64) string {
 	cents := int64(math.Round(v * 100))
 	dollars := cents / 100
 	remainder := cents % 100
 	if dollars >= 1000 {
-		return fmt.Sprintf("$%s.%02d", fmtInt(dollars), remainder)
+		return fmt.Sprintf("$%s.%02d", FormatInt(dollars), remainder)
 	}
 	return fmt.Sprintf("$%d.%02d", dollars, remainder)
 }
