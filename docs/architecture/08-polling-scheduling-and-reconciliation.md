@@ -141,10 +141,14 @@ Part B: Tracker state refresh
 Part C: CI status reconciliation (when `ci_feedback.kind` or `reactions.ci_failure` is configured)
 
 - For each entry in `pending_reactions` with kind `ci`:
+  - Deduplicate before fetching: a stored fingerprint equal to the current ref and already
+    marked dispatched drops the entry for this pass (§11A.5).
   - Call `CIStatusProvider.FetchCIStatus` with the SCM ref (SHA preferred, branch as fallback).
-  - If the call fails: log a warning, re-enqueue the entry, and continue to the next entry.
-  - If status is `passing`: clear reaction attempts for the issue and kind.
-  - If status is `pending`: re-enqueue the entry for the next tick.
+  - If the call fails: log a warning, re-enqueue with an exponential backoff delay derived from
+    the poll interval and the pending attempt count, and continue to the next entry.
+  - If status is `passing`: clear reaction attempts for the issue and kind, and delete the
+    fingerprint row.
+  - If status is `pending`: re-enqueue with the same exponential backoff as the fetch-error path.
   - If status is `failing`: handle as a CI failure (see Section 7.3, "CI Status Failing").
 
 Part D: Review comment reconciliation (when `reactions.review_comments` is configured)
