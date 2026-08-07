@@ -43,6 +43,7 @@ type OrchestratorStore interface {
 	GetReactionFingerprint(ctx context.Context, issueID, kind string) (fingerprint string, dispatched bool, err error)
 	MarkReactionDispatched(ctx context.Context, issueID, kind string) error
 	DeleteReactionFingerprint(ctx context.Context, issueID, kind string) error
+	LatestRunCompletionByIdentifier(ctx context.Context, identifiers []string) (map[string]string, error)
 }
 
 // Observer receives notifications when orchestrator state changes.
@@ -538,17 +539,20 @@ func (o *Orchestrator) handleTick(ctx context.Context) {
 		LabelFixReactionConfigured:      o.labelFixReactionConfigured,
 	})
 
-	// Sweep terminal workspaces periodically to catch issues that
-	// transitioned after their worker exited.
+	// Sweep workspaces periodically to catch issues that transitioned
+	// after their worker exited, or whose activity has aged past the
+	// configured retention window.
 	o.state.SweepTickCounter++
 	if o.state.SweepTickCounter >= sweepEveryNTicks {
 		o.state.SweepTickCounter = 0
-		SweepTerminalWorkspaces(o.state, SweepTerminalWorkspacesParams{
+		SweepWorkspaces(o.state, SweepWorkspacesParams{
 			WorkspaceRoot:    cfg.Workspace.Root,
 			TrackerAdapter:   o.trackerAdapter,
 			TerminalStates:   cfg.Tracker.TerminalStates,
 			BeforeRemoveHook: cfg.Hooks.BeforeRemove,
 			HookTimeoutMS:    cfg.Hooks.TimeoutMS,
+			RetentionDays:    cfg.Workspace.RetentionDays,
+			Store:            o.store,
 			Ctx:              ctx,
 			Logger:           o.logger,
 			Metrics:          o.metrics,

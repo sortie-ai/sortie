@@ -37,6 +37,7 @@ const (
 	actionCleanup      = "cleanup"
 	actionKeep         = "keep"
 	actionSweepCleanup = "sweep_cleanup"
+	actionSweepExpired = "sweep_expired"
 
 	handoffSuccess = "success"
 	handoffError   = "error"
@@ -356,13 +357,39 @@ const ReactionKindLabelFix = "label-fix"
 // lifetime.
 const AutoMergePreflightRetryDelay time.Duration = 5 * time.Minute
 
+// reactionKindPins is the single registry of reaction kinds. A kind
+// present in the map is a known kind; its value reports whether a
+// pending entry of that kind pins its workspace against sweep
+// candidacy. Both [isKnownReactionKind] and [reactionKindPinsWorkspace]
+// read this map, so a kind cannot be recognized without carrying an
+// explicit pin classification.
+var reactionKindPins = map[string]bool{
+	ReactionKindCI:            true,
+	ReactionKindReview:        true,
+	ReactionKindBotReview:     true,
+	ReactionKindAutoMerge:     true,
+	ReactionKindMergeConflict: true,
+	ReactionKindLabelReview:   false,
+	ReactionKindLabelFix:      false,
+}
+
 func isKnownReactionKind(kind string) bool {
-	switch kind {
-	case ReactionKindCI, ReactionKindReview, ReactionKindBotReview, ReactionKindAutoMerge, ReactionKindMergeConflict, ReactionKindLabelReview, ReactionKindLabelFix:
+	_, known := reactionKindPins[kind]
+	return known
+}
+
+// reactionKindPinsWorkspace reports whether a pending reaction entry of
+// the given kind excludes its workspace from sweep candidacy.
+//
+// An unregistered kind returns true, the non-destructive default,
+// because retention rather than removal is the safe outcome for a kind
+// the rest of the system does not yet classify.
+func reactionKindPinsWorkspace(kind string) bool {
+	pins, known := reactionKindPins[kind]
+	if !known {
 		return true
-	default:
-		return false
 	}
+	return pins
 }
 
 // ReactionKey returns the composite map key for a pending reaction.
@@ -755,8 +782,8 @@ type State struct {
 	// fires at most once per issue per orchestrator lifetime.
 	AutoMergeAuthLogged map[string]struct{}
 
-	// SweepTickCounter tracks poll ticks since the last terminal workspace
-	// sweep. Incremented by handleTick; reset to zero when the sweep fires.
+	// SweepTickCounter tracks poll ticks since the last workspace sweep.
+	// Incremented by handleTick; reset to zero when the sweep fires.
 	// Runtime-only (not persisted).
 	SweepTickCounter int
 }

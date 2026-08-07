@@ -212,6 +212,10 @@ func (s *stubStore) DeleteReactionFingerprint(_ context.Context, _, _ string) er
 	return nil
 }
 
+func (s *stubStore) LatestRunCompletionByIdentifier(_ context.Context, _ []string) (map[string]string, error) {
+	return map[string]string{}, nil
+}
+
 // stubObserver implements [Observer] with an atomic call counter.
 type stubObserver struct {
 	calls atomic.Int64

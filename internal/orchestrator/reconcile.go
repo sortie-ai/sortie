@@ -433,33 +433,256 @@ func reconcileTrackerState(state *State, params ReconcileParams, log *slog.Logge
 	}
 }
 
-// sweepEveryNTicks is the number of poll ticks between terminal workspace
-// sweeps. Running this sweep every 60 ticks is frequent enough for eventual
+// sweepEveryNTicks is the number of poll ticks between workspace sweeps.
+// Running this sweep every 60 ticks is frequent enough for eventual
 // consistency while avoiding unbounded tracker API load from orphaned
 // non-terminal workspaces.
 const sweepEveryNTicks = 60
 
-// SweepTerminalWorkspacesParams holds the dependencies for
-// [SweepTerminalWorkspaces]. All fields except Logger and Metrics are
-// required; nil Logger defaults to [slog.Default] and nil Metrics defaults
-// to [domain.NoopMetrics].
-type SweepTerminalWorkspacesParams struct {
+// SweepStore is the persistence interface required by [SweepWorkspaces].
+type SweepStore interface {
+	LatestRunCompletionByIdentifier(ctx context.Context, identifiers []string) (map[string]string, error)
+}
+
+// sweepSummary accumulates the per-pass outcome counts reported by
+// [emitSweepSummary]. The nine counters after candidates partition the
+// candidate set: candidates equals their sum on every pass.
+type sweepSummary struct {
+	candidates           int
+	excludedRunning      int
+	excludedRetry        int
+	excludedReaction     int
+	removedTerminal      int
+	removedAge           int
+	retainedInWindow     int
+	retainedNoActivity   int
+	retainedNotEvaluated int
+	failed               int
+	retentionDays        int
+	agePass              string // "on", "off", or "unavailable"
+	trackerRead          string // "ok" or "failed"
+}
+
+// emitSweepSummary logs the per-pass sweep outcome as a single Info
+// record. It is called unconditionally at the end of every pass that
+// produced a candidate set, including one that removed nothing.
+func emitSweepSummary(log *slog.Logger, summary sweepSummary) {
+	log.Info("sweep: pass complete",
+		slog.Int("candidates", summary.candidates),
+		slog.Int("excluded_running", summary.excludedRunning),
+		slog.Int("excluded_retry", summary.excludedRetry),
+		slog.Int("excluded_reaction", summary.excludedReaction),
+		slog.Int("removed_terminal", summary.removedTerminal),
+		slog.Int("removed_age", summary.removedAge),
+		slog.Int("retained_in_window", summary.retainedInWindow),
+		slog.Int("retained_no_activity", summary.retainedNoActivity),
+		slog.Int("retained_not_evaluated", summary.retainedNotEvaluated),
+		slog.Int("failed", summary.failed),
+		slog.Int("retention_days", summary.retentionDays),
+		slog.String("age_pass", summary.agePass),
+		slog.String("tracker_read", summary.trackerRead),
+	)
+}
+
+// activityAnchor returns the later of the two RFC3339 timestamps and
+// whether either parsed.
+//
+// An unparseable or empty value contributes nothing. A workspace whose
+// only timestamps are unparseable therefore has no anchor, the same
+// outcome as having no timestamps at all.
+func activityAnchor(completedAt, pushedAt string) (time.Time, bool) {
+	var best time.Time
+	found := false
+	for _, value := range [2]string{completedAt, pushedAt} {
+		if value == "" {
+			continue
+		}
+		parsed, err := time.Parse(time.RFC3339, value)
+		if err != nil {
+			continue
+		}
+		parsed = parsed.UTC()
+		if !found || parsed.After(best) {
+			best = parsed
+			found = true
+		}
+	}
+	return best, found
+}
+
+// buildSweepExclusions returns the map of workspace key to the reason it
+// is excluded from sweep candidacy: "running", "retry", or "reaction".
+//
+// Precedence is running, then retry, then reaction, so a key present in
+// more than one source is reported exactly once and the sweep's outcome
+// counters partition the candidate set.
+func buildSweepExclusions(state *State, log *slog.Logger) map[string]string {
+	out := make(map[string]string)
+
+	for _, entry := range state.Running {
+		key, err := workspace.SanitizeKey(entry.Identifier)
+		if err != nil {
+			log.Warn("sweep: failed to sanitize running identifier",
+				slog.String("identifier", entry.Identifier),
+				slog.Any("error", err),
+			)
+			continue
+		}
+		out[key] = "running"
+	}
+
+	for _, entry := range state.RetryAttempts {
+		key, err := workspace.SanitizeKey(entry.Identifier)
+		if err != nil {
+			log.Warn("sweep: failed to sanitize retry identifier",
+				slog.String("identifier", entry.Identifier),
+				slog.Any("error", err),
+			)
+			continue
+		}
+		if _, exists := out[key]; !exists {
+			out[key] = "retry"
+		}
+	}
+
+	for _, entry := range state.PendingReactions {
+		if !reactionKindPinsWorkspace(entry.Kind) {
+			continue
+		}
+		key, err := workspace.SanitizeKey(entry.Identifier)
+		if err != nil {
+			log.Warn("sweep: failed to sanitize pending reaction identifier",
+				slog.String("identifier", entry.Identifier),
+				slog.Any("error", err),
+			)
+			continue
+		}
+		if _, exists := out[key]; !exists {
+			out[key] = "reaction"
+		}
+	}
+
+	return out
+}
+
+// runAgePass evaluates every key in ageKeys against params.RetentionDays
+// and removes those whose latest recorded activity is older than that
+// window. Each early return credits every key in ageKeys to
+// summary.retainedNotEvaluated, so the pass never leaves a candidate
+// unaccounted for in the outcome partition.
+func runAgePass(params SweepWorkspacesParams, summary *sweepSummary, ageKeys []string, now time.Time, log *slog.Logger, metrics domain.Metrics) {
+	if params.RetentionDays < config.WorkspaceRetentionMinDays {
+		summary.retainedNotEvaluated += len(ageKeys)
+		return
+	}
+	if params.Store == nil {
+		summary.agePass = "unavailable"
+		summary.retainedNotEvaluated += len(ageKeys)
+		return
+	}
+
+	summary.agePass = "on"
+	retentionCutoff := now.UTC().Add(-time.Duration(params.RetentionDays) * 24 * time.Hour)
+
+	completions, err := params.Store.LatestRunCompletionByIdentifier(params.Ctx, ageKeys)
+	if err != nil {
+		log.Warn("sweep: failed to read run history activity",
+			slog.Any("error", err),
+		)
+		summary.agePass = "unavailable"
+		summary.retainedNotEvaluated += len(ageKeys)
+		return
+	}
+
+	for _, key := range ageKeys {
+		pathResult, pathErr := workspace.ComputePath(params.WorkspaceRoot, key)
+		if pathErr != nil {
+			log.Warn("sweep: failed to resolve workspace path",
+				slog.String("workspace_key", key),
+				slog.Any("error", pathErr),
+			)
+			summary.failed++
+			continue
+		}
+
+		meta := workspace.ReadSCMMetadata(pathResult.Path, log)
+		anchor, hasAnchor := activityAnchor(completions[key], meta.PushedAt)
+
+		if !hasAnchor {
+			summary.retainedNoActivity++
+			continue
+		}
+		if !anchor.Before(retentionCutoff) {
+			summary.retainedInWindow++
+			continue
+		}
+
+		cleanupErr := workspace.Cleanup(params.Ctx, workspace.CleanupParams{
+			Root:          params.WorkspaceRoot,
+			Identifier:    key,
+			IssueID:       key,
+			BeforeRemove:  params.BeforeRemoveHook,
+			HookTimeoutMS: params.HookTimeoutMS,
+			Logger:        log,
+		})
+		if cleanupErr != nil {
+			log.Warn("sweep: failed to remove expired workspace",
+				slog.String("workspace_key", key),
+				slog.Any("error", cleanupErr),
+			)
+			summary.failed++
+			continue
+		}
+
+		log.Info("sweep: removed expired workspace",
+			slog.String("workspace_key", key),
+			slog.String("last_activity", anchor.Format(time.RFC3339)),
+			slog.Int("age_days", int(now.UTC().Sub(anchor).Hours()/24)),
+		)
+		summary.removedAge++
+		metrics.IncReconciliationActions(actionSweepExpired)
+	}
+}
+
+// SweepWorkspacesParams holds the dependencies for [SweepWorkspaces]. All
+// fields except Logger and Metrics are required; nil Logger defaults to
+// [slog.Default] and nil Metrics defaults to [domain.NoopMetrics].
+type SweepWorkspacesParams struct {
 	WorkspaceRoot    string
 	TrackerAdapter   domain.TrackerAdapter
 	TerminalStates   []string
 	BeforeRemoveHook string
 	HookTimeoutMS    int
-	Ctx              context.Context
-	Logger           *slog.Logger
-	Metrics          domain.Metrics
+
+	// RetentionDays is the configured workspace.retention_days window.
+	// A value below [config.WorkspaceRetentionMinDays] disables the age
+	// pass, reported as agePass "off".
+	RetentionDays int
+
+	// Store resolves each age candidate's latest recorded activity. A
+	// nil Store disables the age pass, reported as agePass
+	// "unavailable".
+	Store SweepStore
+
+	// NowFunc returns the current time. If nil, time.Now is used.
+	NowFunc func() time.Time
+
+	Ctx     context.Context
+	Logger  *slog.Logger
+	Metrics domain.Metrics
 }
 
-// SweepTerminalWorkspaces removes workspace directories for issues that
-// transitioned to a terminal state after their worker exited. It lists
-// workspace keys on disk, excludes any that belong to in-flight entries,
-// queries the tracker for the remaining identifiers, and cleans up those
-// whose state is terminal.
-func SweepTerminalWorkspaces(state *State, params SweepTerminalWorkspacesParams) {
+// SweepWorkspaces removes workspace directories on two independent
+// grounds: the issue reached a terminal tracker state, or the
+// workspace's latest recorded activity is older than the configured
+// retention window. It lists workspace keys on disk, excludes any that
+// belong to in-flight work, queries the tracker for the state of the
+// rest, cleans up those reported terminal, and evaluates whatever
+// remains against the retention window.
+//
+// One summary record is emitted per pass that produced a candidate set,
+// whether or not anything was removed.
+func SweepWorkspaces(state *State, params SweepWorkspacesParams) {
 	log := params.Logger
 	if log == nil {
 		log = slog.Default()
@@ -470,6 +693,11 @@ func SweepTerminalWorkspaces(state *State, params SweepTerminalWorkspacesParams)
 		metrics = &domain.NoopMetrics{}
 	}
 
+	now := time.Now()
+	if params.NowFunc != nil {
+		now = params.NowFunc()
+	}
+
 	keys, err := workspace.ListWorkspaceKeys(params.WorkspaceRoot)
 	if err != nil {
 		log.Warn("sweep: failed to list workspace keys",
@@ -477,61 +705,39 @@ func SweepTerminalWorkspaces(state *State, params SweepTerminalWorkspacesParams)
 		)
 		return
 	}
-	if len(keys) == 0 {
-		return
+
+	summary := sweepSummary{
+		candidates:    len(keys),
+		retentionDays: params.RetentionDays,
+		trackerRead:   "ok",
+		agePass:       "off",
 	}
 
-	inFlightKeys := make(map[string]struct{})
-	for _, entry := range state.Running {
-		k, sErr := workspace.SanitizeKey(entry.Identifier)
-		if sErr != nil {
-			log.Warn("sweep: failed to sanitize running identifier",
-				slog.String("identifier", entry.Identifier),
-				slog.Any("error", sErr),
-			)
-			continue
-		}
-		inFlightKeys[k] = struct{}{}
-	}
-	for _, entry := range state.RetryAttempts {
-		k, sErr := workspace.SanitizeKey(entry.Identifier)
-		if sErr != nil {
-			log.Warn("sweep: failed to sanitize retry identifier",
-				slog.String("identifier", entry.Identifier),
-				slog.Any("error", sErr),
-			)
-			continue
-		}
-		inFlightKeys[k] = struct{}{}
-	}
-	for _, entry := range state.PendingReactions {
-		k, sErr := workspace.SanitizeKey(entry.Identifier)
-		if sErr != nil {
-			log.Warn("sweep: failed to sanitize pending reaction identifier",
-				slog.String("identifier", entry.Identifier),
-				slog.Any("error", sErr),
-			)
-			continue
-		}
-		inFlightKeys[k] = struct{}{}
-	}
-
-	unclaimedKeys := make([]string, 0, len(keys))
+	exclusions := buildSweepExclusions(state, log)
+	remaining := make([]string, 0, len(keys))
 	for _, key := range keys {
-		if _, ok := inFlightKeys[key]; !ok {
-			unclaimedKeys = append(unclaimedKeys, key)
+		switch exclusions[key] {
+		case "running":
+			summary.excludedRunning++
+		case "retry":
+			summary.excludedRetry++
+		case "reaction":
+			summary.excludedReaction++
+		default:
+			remaining = append(remaining, key)
 		}
 	}
-	if len(unclaimedKeys) == 0 {
-		return
-	}
 
-	statesByKey, err := params.TrackerAdapter.FetchIssueStatesByIdentifiers(params.Ctx, unclaimedKeys)
-	if err != nil {
-		log.Warn("sweep: failed to fetch issue states",
-			slog.Any("error", err),
-		)
-		return
+	statesByKey := map[string]string{}
+	if len(remaining) > 0 {
+		statesByKey, err = params.TrackerAdapter.FetchIssueStatesByIdentifiers(params.Ctx, remaining)
+		if err != nil {
+			log.Warn("sweep: failed to fetch issue states",
+				slog.Any("error", err),
+			)
+			statesByKey = map[string]string{}
+			summary.trackerRead = "failed"
+		}
 	}
 
 	terminalSet := make(map[string]struct{}, len(params.TerminalStates))
@@ -539,33 +745,37 @@ func SweepTerminalWorkspaces(state *State, params SweepTerminalWorkspacesParams)
 		terminalSet[strings.ToLower(s)] = struct{}{}
 	}
 
-	var toClean []string
-	for _, key := range unclaimedKeys {
-		stateName, ok := statesByKey[key]
-		if !ok {
+	terminalKeys := make([]string, 0, len(remaining))
+	ageKeys := make([]string, 0, len(remaining))
+	for _, key := range remaining {
+		stateName, known := statesByKey[key]
+		_, terminal := terminalSet[strings.ToLower(stateName)]
+		if known && terminal {
+			terminalKeys = append(terminalKeys, key)
 			continue
 		}
-		if _, terminal := terminalSet[strings.ToLower(stateName)]; terminal {
-			toClean = append(toClean, key)
+		ageKeys = append(ageKeys, key)
+	}
+
+	if len(terminalKeys) > 0 {
+		log.Info("sweep: cleaning terminal workspaces",
+			slog.Int("count", len(terminalKeys)),
+		)
+
+		result := workspace.CleanupTerminal(params.Ctx, workspace.CleanupTerminalParams{
+			Root:          params.WorkspaceRoot,
+			Identifiers:   terminalKeys,
+			BeforeRemove:  params.BeforeRemoveHook,
+			HookTimeoutMS: params.HookTimeoutMS,
+			Logger:        log,
+		})
+		summary.removedTerminal += len(result.Removed)
+		summary.failed += len(result.Errors)
+		for range result.Removed {
+			metrics.IncReconciliationActions(actionSweepCleanup)
 		}
 	}
-	if len(toClean) == 0 {
-		return
-	}
 
-	log.Info("sweep: cleaning terminal workspaces",
-		slog.Int("count", len(toClean)),
-	)
-
-	result := workspace.CleanupTerminal(params.Ctx, workspace.CleanupTerminalParams{
-		Root:          params.WorkspaceRoot,
-		Identifiers:   toClean,
-		BeforeRemove:  params.BeforeRemoveHook,
-		HookTimeoutMS: params.HookTimeoutMS,
-		Logger:        log,
-	})
-
-	for range result.Removed {
-		metrics.IncReconciliationActions(actionSweepCleanup)
-	}
+	runAgePass(params, &summary, ageKeys, now, log, metrics)
+	emitSweepSummary(log, summary)
 }

@@ -889,6 +889,38 @@ func TestHandleWorkerExit_RunHistoryFields(t *testing.T) {
 	}
 }
 
+// TestHandleWorkerExit_RunHistoryCompletedAtIsUTC covers R9: the
+// production writer formats a UTC time with time.RFC3339, so the
+// persisted value ends in "Z" and parses back as RFC3339. Unlike
+// TestHandleWorkerExit_RunHistoryFields, NowFunc is left nil so the
+// writer's own time.Now().UTC() call is exercised.
+func TestHandleWorkerExit_RunHistoryCompletedAtIsUTC(t *testing.T) {
+	t.Parallel()
+
+	store := &mockExitStore{}
+	state := exitState(t, "HIST-UTC", nil)
+	params := defaultExitParams(t, store)
+	params.NowFunc = nil
+
+	HandleWorkerExit(state, WorkerResult{
+		IssueID:      "HIST-UTC",
+		Identifier:   "HIST-UTC-ident",
+		ExitKind:     WorkerExitNormal,
+		AgentAdapter: "claude-code",
+	}, params)
+
+	if len(store.runHistories) != 1 {
+		t.Fatalf("AppendRunHistory called %d times, want 1", len(store.runHistories))
+	}
+	completedAt := store.runHistories[0].CompletedAt
+	if !strings.HasSuffix(completedAt, "Z") {
+		t.Errorf("RunHistory.CompletedAt = %q, want suffix %q", completedAt, "Z")
+	}
+	if _, err := time.Parse(time.RFC3339, completedAt); err != nil {
+		t.Errorf("time.Parse(RFC3339, %q): %v", completedAt, err)
+	}
+}
+
 func TestHandleWorkerExit_SessionMetadataPersisted(t *testing.T) {
 	t.Parallel()
 
