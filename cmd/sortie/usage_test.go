@@ -2,7 +2,9 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"os"
+	"strings"
 	"testing"
 )
 
@@ -91,6 +93,30 @@ func TestInterceptShortFlags(t *testing.T) {
 				t.Errorf("interceptShortFlags(%v) = %q, want %q", tt.args, action, tt.wantAction)
 			}
 		})
+	}
+}
+
+func TestStatsHelpRouting(t *testing.T) {
+	t.Parallel()
+
+	var stdout, stderr bytes.Buffer
+	code := run(context.Background(), []string{"stats", "-h"}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("run(stats -h) = %d, want 0", code)
+	}
+
+	got := stdout.String()
+	if strings.Contains(got, "Turn issue tracker tickets into autonomous coding agent sessions.") {
+		t.Errorf("run(stats -h) stdout = %q, want the stats help, not the global help", got)
+	}
+	if !strings.Contains(got, "Summarize how past runs went and what they cost.") {
+		t.Errorf("run(stats -h) stdout = %q, want the stats help text", got)
+	}
+
+	var helpBuf bytes.Buffer
+	printHelp(&helpBuf)
+	if !strings.Contains(helpBuf.String(), "stats") {
+		t.Errorf("printHelp() output = %q, want to contain %q", helpBuf.String(), "stats")
 	}
 }
 

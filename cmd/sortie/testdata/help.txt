@@ -6,6 +6,7 @@ Usage:
 
 Commands:
   validate                  Validate a workflow file without running it
+  stats                     Summarize past runs: outcomes, duration, and cost
   mcp-server                Start the MCP stdio server for agent-to-orchestrator communication
 
 Flags:
@@ -25,6 +26,7 @@ Examples:
   sortie WORKFLOW.md                     Run orchestrator with a workflow
   sortie --dry-run WORKFLOW.md           Validate config and poll once without side effects
   sortie validate --format json w.md     Check workflow syntax, output as JSON
+  sortie stats --since 24h               Summarize the last 24 hours of runs
 
 Learn more:
   https://docs.sortie-ai.com

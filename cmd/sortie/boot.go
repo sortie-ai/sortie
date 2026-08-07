@@ -59,6 +59,9 @@ func boot(ctx context.Context, p bootParams) (bootResult, int) {
 	if len(p.args) > 0 && p.args[0] == "validate" {
 		return bootResult{}, runValidate(ctx, p.args[1:], p.stdout, p.stderr)
 	}
+	if len(p.args) > 0 && p.args[0] == "stats" {
+		return bootResult{}, runStats(ctx, p.args[1:], p.stdout, p.stderr)
+	}
 	if len(p.args) > 0 && p.args[0] == "mcp-server" {
 		return bootResult{}, runMCPServer(ctx, p.args[1:], p.stdout, p.stderr)
 	}

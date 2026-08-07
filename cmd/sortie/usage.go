@@ -15,6 +15,7 @@ Usage:
 
 Commands:
   validate                  Validate a workflow file without running it
+  stats                     Summarize past runs: outcomes, duration, and cost
   mcp-server                Start the MCP stdio server for agent-to-orchestrator communication
 
 Flags:
@@ -34,6 +35,7 @@ Examples:
   sortie WORKFLOW.md                     Run orchestrator with a workflow
   sortie --dry-run WORKFLOW.md           Validate config and poll once without side effects
   sortie validate --format json w.md     Check workflow syntax, output as JSON
+  sortie stats --since 24h               Summarize the last 24 hours of runs
 
 Learn more:
   https://docs.sortie-ai.com
@@ -62,6 +64,44 @@ Examples:
 `)
 }
 
+func printStatsHelp(w io.Writer) {
+	fmt.Fprint(w, //nolint:errcheck // help output write failure is unrecoverable
+		`Summarize how past runs went and what they cost.
+
+Each time an agent session finishes, sortie records the outcome. This
+command reads that history back and reports how many runs there were, how
+many succeeded, how long they took, and, when the workflow sets
+token_rates, what they cost. The same figures are broken down by outcome,
+by coding agent, by dispatch rule, and by prompt template.
+
+The database is opened read-only, so this is safe to run while the
+orchestrator is working.
+
+Usage:
+  sortie stats [flags] [workflow-path]
+
+Flags:
+  --format FORMAT   Output format: text, json (default: text)
+  --since VALUE     Count only runs that finished at or after this point
+                    (default: no limit)
+  --until VALUE     Count only runs that finished before this point
+                    (default: no limit)
+
+--since and --until each accept one of:
+  an exact timestamp        2026-07-01T00:00:00Z
+  a calendar date           2026-07-01
+  an age counted from now   24h, or 90m (hours and minutes only)
+
+Global flags:
+  -h, --help        Print this help message and quit
+
+Examples:
+  sortie stats                           Summarize every recorded run
+  sortie stats --since 24h               Summarize the last 24 hours
+  sortie stats --since 2026-07-01 --format json WORKFLOW.md
+`)
+}
+
 func printMCPServerHelp(w io.Writer) {
 	fmt.Fprint(w, //nolint:errcheck // help output write failure is unrecoverable
 		`Start the MCP stdio server for agent-to-orchestrator communication.
@@ -86,7 +126,7 @@ Global flags:
 // tokens and the POSIX "--" terminator stop the scan immediately.
 func interceptShortFlags(args []string) string {
 	for _, arg := range args {
-		if arg == "validate" || arg == "mcp-server" {
+		if arg == "validate" || arg == "stats" || arg == "mcp-server" {
 			return ""
 		}
 		if arg == "--" {
