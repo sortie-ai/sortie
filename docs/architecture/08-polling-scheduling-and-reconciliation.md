@@ -162,7 +162,8 @@ Part D: Review comment reconciliation (when `reactions.review_comments` is confi
   - Filter out outdated comments. Compute max timestamp for debounce gating.
   - If no actionable comments: re-enqueue with poll interval delay.
   - Build fingerprint from sorted non-outdated comment IDs (SHA-256 hash).
-  - Check `reaction_fingerprints` table: if fingerprint matches and is marked dispatched, skip.
+  - Check `reaction_fingerprints` table: if the fingerprint matches and is marked dispatched,
+    re-enqueue with the poll interval delay and continue.
   - If within debounce window (`now - LastEventAt < debounce_ms`): defer and re-enqueue.
   - Otherwise: cancel existing retry, schedule a review-fix dispatch with review comment
     context, increment `reaction_attempts`. The fingerprint is marked dispatched later, when

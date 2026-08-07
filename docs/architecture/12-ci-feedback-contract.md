@@ -106,10 +106,12 @@ state refresh. The flow is:
    b. Determine the ref (SHA preferred, branch as fallback) and apply fingerprint deduplication
       (Section 11A.5). Entries already dispatched for this exact ref are dropped for this tick.
    c. Call `CIStatusProvider.FetchCIStatus` with the ref.
-   d. On fetch error: re-enqueue the entry; continue.
+   d. On fetch error: re-enqueue the entry with an exponential backoff delay derived from the
+      poll interval and the pending attempt count; continue.
    e. On `passing`: clear `reaction_attempts` for the issue and kind, and delete the fingerprint
       row.
-   f. On `pending`: re-enqueue the entry.
+   f. On `pending`: re-enqueue the entry with the same exponential backoff as the fetch-error
+      path.
    g. On `failing`: handle CI failure (see Section 11A.6).
 
 ### 11A.5 Fingerprint and deduplication
