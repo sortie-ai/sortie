@@ -17,7 +17,7 @@
   - [2.1 Top-Level Keys](#21-top-level-keys)
   - [2.2 `tracker` — Issue Tracker Configuration](#22-tracker--issue-tracker-configuration)
   - [2.3 `polling` — Poll Loop Timing](#23-polling--poll-loop-timing)
-  - [2.4 `workspace` — Workspace Root](#24-workspace--workspace-root)
+  - [2.4 `workspace` — Workspace Root and Retention](#24-workspace--workspace-root-and-retention)
   - [2.5 `hooks` — Workspace Lifecycle Hooks](#25-hooks--workspace-lifecycle-hooks)
   - [2.6 `agent` — Coding Agent Configuration](#26-agent--coding-agent-configuration)
   - [2.7 `db_path` — SQLite Database Path](#27-db_path--sqlite-database-path)
@@ -582,16 +582,18 @@ polling:
 
 ---
 
-### 2.4 `workspace` — Workspace Root
+### 2.4 `workspace` — Workspace Root and Retention
 
 ```yaml
 workspace:
   root: ~/workspace/sortie
+  retention_days: 30
 ```
 
-| Field  | Type                  | Required | Default                           | Dynamic Reload              | Description                              |
-| ------ | --------------------- | -------- | --------------------------------- | --------------------------- | ---------------------------------------- |
-| `root` | path string or `$VAR` | No       | `<system-temp>/sortie_workspaces` | Future workspace operations | Base directory for per-issue workspaces. |
+| Field            | Type    | Required | Default                           | Dynamic Reload               | Description                                                                                                                     |
+| ---------------- | ------- | -------- | ---------------------------------- | ----------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| `root`           | path string or `$VAR` | No | `<system-temp>/sortie_workspaces` | Future workspace operations | Base directory for per-issue workspaces. |
+| `retention_days` | integer | No       | `0` (disabled)                    | Applies on the next sweep pass | Maximum age in days of a swept workspace's latest recorded activity before the periodic sweep removes it. `0` disables the bound; `1`-`29` is rejected; `30` is the smallest permitted non-zero value. |
 
 **Path resolution:**
 
@@ -1537,9 +1539,10 @@ Each variable maps to exactly one config field. The naming convention is
 
 #### Workspace
 
-| Environment variable    | Config field     | Type   | Notes                                 |
-| ----------------------- | ---------------- | ------ | ------------------------------------- |
-| `SORTIE_WORKSPACE_ROOT` | `workspace.root` | string | `~` expansion applies; `$VAR` skipped |
+| Environment variable               | Config field              | Type    | Notes                                 |
+| ----------------------------------- | -------------------------- | ------- | -------------------------------------- |
+| `SORTIE_WORKSPACE_ROOT`             | `workspace.root`           | string  | `~` expansion applies; `$VAR` skipped |
+| `SORTIE_WORKSPACE_RETENTION_DAYS`   | `workspace.retention_days` | integer | No `~` expansion or `$VAR` handling   |
 
 #### Agent
 
@@ -1988,7 +1991,7 @@ are included alongside Sortie-specific metrics.
 | `sortie_dispatches_total`                       | Counter   | `outcome`                   | Dispatch attempts (`success`, `error`).                        |
 | `sortie_worker_exits_total`                     | Counter   | `exit_type`                 | Worker exits (`normal`, `error`, `cancelled`).                 |
 | `sortie_retries_total`                          | Counter   | `trigger`                   | Retry schedule events (`error`, `continuation`, `timer`, `stall`). |
-| `sortie_reconciliation_actions_total`           | Counter   | `action`                    | Reconciliation outcomes (`stop`, `cleanup`, `keep`).           |
+| `sortie_reconciliation_actions_total`           | Counter   | `action`                    | Reconciliation outcomes (`stop`, `cleanup`, `keep`, `sweep_cleanup`, `sweep_expired`). |
 | `sortie_poll_cycles_total`                      | Counter   | `result`                    | Poll tick completions (`success`, `error`, `skipped`).         |
 | `sortie_tracker_requests_total`                 | Counter   | `operation`, `result`       | Tracker adapter API calls by operation and result.             |
 | `sortie_handoff_transitions_total`              | Counter   | `result`                    | Handoff-state transition attempts (`success`, `error`, `skipped`). |
@@ -2935,6 +2938,7 @@ re-applies configuration and prompt template without restart.
 | `tracker.in_progress_state`            | Future dispatches, not in-flight sessions.                                                     |
 | `polling.interval_ms`                  | **Immediate** — affects future tick scheduling.                                                |
 | `workspace.root`                       | Future workspace operations.                                                                   |
+| `workspace.retention_days`             | Dynamic reload. Applies on the next sweep pass.                                                |
 | `hooks.*`                              | Future hook executions.                                                                        |
 | `hooks.timeout_ms`                     | Future hook executions.                                                                        |
 | `agent.kind`                           | Future dispatches.                                                                             |
@@ -3084,6 +3088,8 @@ Each error identifies the offending field path.
 | `config: tracker.in_progress_state: "<val>" is not in active_states...`            | `in_progress_state` is not in `active_states` (case-insensitive).            | Add the state to `active_states`, or use a state already in `active_states`.                                                         |
 | `config: tracker.in_progress_state: "<val>" collides with handoff_state "<state>"` | `in_progress_state` matches `handoff_state` (case-insensitive).              | Use different states for dispatch-time and exit-time transitions.                                                                    |
 | `config: workspace.root: cannot expand ~: <err>`                                | Home directory expansion failed.                                         | Check that the `HOME` environment variable is set.                                                                                   |
+| `config: workspace.retention_days: must not be negative`                        | Negative value for `retention_days`.                                     | Use `0` (disabled) or a positive integer of at least `30`.                                                                           |
+| `config: workspace.retention_days: must be 0 to disable or at least 30 days`    | `retention_days` is between `1` and `29` inclusive.                       | Use `0` to disable the bound, or a value of `30` or greater.                                                                         |
 | `config: db_path: expected string, got <type>`                                  | `db_path` is not a string value.                                         | Use a string path value, quoted if necessary.                                                                                        |
 | `config: db_path: resolved to empty (check environment variable)`               | `$VAR` reference resolved to empty.                                      | Set the environment variable or use a literal path.                                                                                  |
 | `config: ci_feedback.max_retries: invalid integer value: <val>`                 | Non-integer value for `max_retries`.                                     | Use a plain integer (e.g., `2`).                                                                                                     |
@@ -3146,6 +3152,7 @@ lists the `SORTIE_*` variable that overrides the field, or "—" if not overrida
 | `tracker.comments.on_failure`           | bool             | `false`                      | `SORTIE_TRACKER_COMMENTS_ON_FAILURE`     |                                                                                        |
 | `polling.interval_ms`                   | integer          | `30000`                      | `SORTIE_POLLING_INTERVAL_MS`             | Dynamic reload                                                                         |
 | `workspace.root`                        | path             | `<tmpdir>/sortie_workspaces` | `SORTIE_WORKSPACE_ROOT`                  | `~` expanded; `$VAR` skipped for env-sourced values                                    |
+| `workspace.retention_days`              | integer          | `0` (disabled)               | `SORTIE_WORKSPACE_RETENTION_DAYS`        | Floor `30`; `1`-`29` rejected; dynamic reload, applies on the next sweep pass          |
 | `hooks.after_create`                    | shell script     | _(null)_                     | —                                        | Fatal on failure                                                                       |
 | `hooks.before_run`                      | shell script     | _(null)_                     | —                                        | Fatal on failure                                                                       |
 | `hooks.after_run`                       | shell script     | _(null)_                     | —                                        | Failure ignored                                                                        |
