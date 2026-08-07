@@ -90,7 +90,7 @@ Flags:
 --since and --until each accept one of:
   an exact timestamp        2026-07-01T00:00:00Z
   a calendar date           2026-07-01
-  an age counted from now   24h, or 90m (hours and minutes only)
+  an age counted from now   24h, 90m, or 45s (any Go duration)
 
 Global flags:
   -h, --help        Print this help message and quit
