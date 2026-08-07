@@ -103,19 +103,47 @@ state refresh. The flow is:
    (no `CIStatusProvider` constructed).
 2. For each entry in `pending_reactions` with kind `ci`:
    a. Remove the entry from the map (prevents reprocessing within the same tick).
-   b. Call `CIStatusProvider.FetchCIStatus` with the SCM ref (SHA preferred, branch as fallback).
-   c. On fetch error: re-enqueue the entry; continue.
-   d. On `passing`: clear `reaction_attempts` for the issue and kind.
-   e. On `pending`: re-enqueue the entry.
-   f. On `failing`: handle CI failure (see Section 11A.5).
+   b. Determine the ref (SHA preferred, branch as fallback) and apply fingerprint deduplication
+      (Section 11A.5). Entries already dispatched for this exact ref are dropped for this tick.
+   c. Call `CIStatusProvider.FetchCIStatus` with the ref.
+   d. On fetch error: re-enqueue the entry; continue.
+   e. On `passing`: clear `reaction_attempts` for the issue and kind, and delete the fingerprint
+      row.
+   f. On `pending`: re-enqueue the entry.
+   g. On `failing`: handle CI failure (see Section 11A.6).
 
-### 11A.5 CI failure handling
+### 11A.5 Fingerprint and deduplication
+
+Before calling `FetchCIStatus`, the reconcile pass deduplicates against the same ref. The
+fingerprint value is the ref itself (`CIReactionData.SHA`, falling back to `CIReactionData.Branch`),
+the identical string passed to the status fetch. Unlike the merge-conflict (Section 11E.4) and
+review (Section 11B.7) fingerprints, which each hash their input with SHA-256, the CI fingerprint
+is stored as the raw ref string with no hashing.
+
+The pass upserts the ref into `reaction_fingerprints` (kind `ci`) and reads the row back. The
+upsert resets `dispatched` to false whenever the stored fingerprint differs from the ref being
+upserted, so a new SHA (or a branch ref that has moved to a new SHA) always re-arms the entry for a
+fresh CI-fix dispatch. When the read-back fingerprint matches the current ref and `dispatched` is
+already true, the entry is dropped for this tick rather than re-enqueued: CI status is not polled
+again for that ref until a later worker exit or startup recovery creates a new pending entry.
+Fingerprint read or write errors are logged and treated as non-fatal; the pass proceeds to
+`FetchCIStatus` without dedup rather than dropping the entry.
+
+The `dispatched` flag is not set anywhere in this reconcile pass. `handleCIFailure` (Section 11A.6)
+schedules the CI-fix continuation through the shared retry machinery with `ReactionKind` set to
+`ci`; the flag is marked only once that continuation retry actually fires and dispatches, in the
+shared retry-dispatch path, not in the CI reconcile pass itself.
+
+The fingerprint row is deleted, not merely left stale, when the episode closes: on a `passing`
+result (Section 11A.4) and during escalation (Section 11A.7).
+
+### 11A.6 CI failure handling
 
 When CI status is `failing`:
 
 1. Persist a CI-failure run history entry (`status: ci_failed`).
 2. Increment `reaction_attempts[issue_id:ci]`.
-3. If `reaction_attempts[issue_id:ci]` exceeds `ci_feedback.max_retries`: escalate (Section 11A.6).
+3. If `reaction_attempts[issue_id:ci]` exceeds `ci_feedback.max_retries`: escalate (Section 11A.7).
 4. Otherwise:
    a. Convert `CIResult` to a template map via `ToTemplateMap()`.
    b. Cancel the existing continuation retry for the issue.
@@ -126,7 +154,7 @@ When CI status is `failing`:
 CI-fix dispatches count toward the regular retry machinery but use a fixed delay rather than
 exponential backoff.
 
-### 11A.6 Escalation behavior
+### 11A.7 Escalation behavior
 
 When `reaction_attempts[issue_id:ci]` exceeds `ci_feedback.max_retries`:
 
@@ -143,11 +171,12 @@ After escalation:
 - Delete the persisted retry entry from SQLite.
 - Release the claim (`delete claimed[issue_id]`).
 - Clear all `reaction_attempts` and `pending_reactions` entries for the issue.
+- Delete the reaction fingerprint row for kind `ci`.
 
 Escalation failures are logged and counted (`sortie_ci_escalations_total{action="error"}`) but do
 not block claim release.
 
-### 11A.7 Adapter registration
+### 11A.8 Adapter registration
 
 CI status providers register via the CI provider registry using `init()` functions, following the
 same pattern as tracker and agent adapters:

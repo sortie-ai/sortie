@@ -2,9 +2,11 @@
 
 The auto-merge reaction is default-off; enablement requires `reactions.auto_merge.provider` to be
 non-empty in `WORKFLOW.md`. The merge operation is irreversible: the orchestrator does NOT roll back
-on partial-failure tail operations (branch delete, tracker comment). The reaction runs as the last
-reconcile pass in the tick (after CI and review-comment reconciliation) so the precondition reads
-observe the most current per-kind state.
+on partial-failure tail operations (branch delete, tracker comment). The reaction runs after the CI,
+review-comment, bot-review-comment, and merge-conflict reconcile passes in the tick, so the
+precondition reads observe the most current per-kind state; it runs before the label-review and
+label-fix passes, whose relative ordering does not affect correctness because each of those two is
+fully cross-kind isolated.
 
 ### 11C.1 SCMAdapter write surface
 
@@ -58,7 +60,7 @@ observes the new SHA via a refreshed fingerprint. The full disposition table is 
 
 ### 11C.4 Reconcile loop integration
 
-The auto-merge reconcile loop runs as Part E of active run reconciliation (see §8.5 Part E for
+The auto-merge reconcile loop runs as Part G of active run reconciliation (see §8.5 Part G for
 the algorithm). The loop processes entries from `pending_reactions` whose kind discriminator is
 `"merge"`.
 
@@ -90,6 +92,7 @@ The auto-merge reconcile loop evaluates the merge preconditions reported by `Get
 | Merging | `ErrSCMConflict` ("already merged") | Done | Treat as idempotent success; same actions as merge succeeded. |
 | Merging | `ErrSCMConflict` (head SHA mismatch) | Pending | Re-enqueue with poll interval; next tick refreshes fingerprint. |
 | Merging | `ErrSCMAuth` | Escalated | Escalate immediately; do not re-enqueue. |
+| Merging | `ErrSCMPayload` | Escalated | Escalate immediately; do not re-enqueue. |
 | Merging | Other transient error | Pending | Re-enqueue with backoff; escalate after `MaxRetries`. |
 
 **Gitea auto-merge reads.** The Gitea adapter has no aggregate review-decision field and no
@@ -104,9 +107,22 @@ interval as a transient state.
 
 ### 11C.6 Escalation behavior
 
-When `reaction_attempts[issue_id:merge] >= MaxRetries` or when `ErrSCMAuth` is returned on
-`MergePR`, the orchestrator escalates the issue. Two escalation postures are available, set by
-the operator in `WORKFLOW.md`:
+The count-based escalation check guards the comparison with `MaxRetries > 0`: the orchestrator
+escalates the issue when `MaxRetries > 0` and `reaction_attempts[issue_id:merge] >= MaxRetries`,
+or immediately when `ErrSCMAuth` or `ErrSCMPayload` is returned on `MergePR` (both paths invoke
+the escalation directly, bypassing the `MaxRetries` check). `MaxRetries` defaults to `2`.
+
+A configured `MaxRetries` of `0` disables count-based escalation rather than triggering it on the
+first attempt: the `> 0` guard keeps the comparison false no matter how large
+`reaction_attempts[issue_id:merge]` grows, so a `merge`-kind entry with no retry budget keeps
+retrying transient failures instead of escalating on them. This is the opposite of the sibling
+merge-conflict reaction, whose comparison (`attempts > MaxRetries`, §11E.5) carries no such guard,
+so a merge-conflict `MaxRetries` of `0` escalates on the first conflict detection (§11E.8). The
+same `0` literal therefore carries two incompatible meanings across these two adjacent
+`WORKFLOW.md` configuration blocks. An `ErrSCMAuth` or `ErrSCMPayload` failure still escalates
+immediately regardless of the configured `MaxRetries`, including when it is `0`.
+
+Two escalation postures are available, set by the operator in `WORKFLOW.md`:
 
 - `label`: applies the `needs-human` label to the tracker issue via `TrackerAdapter.AddLabel`.
   This is the default posture.
