@@ -163,6 +163,22 @@ func createLegacyStatsDB(t *testing.T, dbPath string) {
 	}
 }
 
+// newStatsWorkspace creates a temp directory holding a minimal
+// WORKFLOW.md and a database built by build, and returns the workflow
+// path.
+//
+// Every caller gets its own directory, so parallel subtests never share
+// one database file. Two read-only opens of the same file race to recover
+// its write-ahead log, and the loser gets SQLITE_BUSY; on Linux the race
+// is almost always won in time, on Windows it is not.
+func newStatsWorkspace(t *testing.T, build func(t *testing.T, dbPath string)) string {
+	t.Helper()
+	dir := t.TempDir()
+	wfPath := writeCustomWorkflowFile(t, dir, statsWorkflow(""))
+	build(t, filepath.Join(dir, ".sortie.db"))
+	return wfPath
+}
+
 // pinStatsNow overrides the package-level statsNow for the life of the
 // calling test, following the serverShutdownTimeout precedent. A test
 // that calls this must not also call t.Parallel().
@@ -580,17 +596,20 @@ func TestRunStatsJSON(t *testing.T) {
 func TestRunStatsEmptyRange(t *testing.T) {
 	t.Parallel()
 
-	dir := t.TempDir()
-	wfPath := writeCustomWorkflowFile(t, dir, statsWorkflow(""))
-	dbPath := filepath.Join(dir, ".sortie.db")
-	createStatsDB(t, dbPath, persistence.RunHistory{
-		IssueID: "ISS-1", Identifier: "PROJ-1", Attempt: 1, AgentAdapter: "mock", Workspace: "/tmp/ws",
-		StartedAt: "2026-01-01T00:00:00Z", CompletedAt: "2026-01-01T00:10:00Z", Status: "succeeded",
-	})
+	newWorkspace := func(t *testing.T) string {
+		t.Helper()
+		return newStatsWorkspace(t, func(t *testing.T, dbPath string) {
+			createStatsDB(t, dbPath, persistence.RunHistory{
+				IssueID: "ISS-1", Identifier: "PROJ-1", Attempt: 1, AgentAdapter: "mock", Workspace: "/tmp/ws",
+				StartedAt: "2026-01-01T00:00:00Z", CompletedAt: "2026-01-01T00:10:00Z", Status: "succeeded",
+			})
+		})
+	}
 
 	t.Run("text", func(t *testing.T) {
 		t.Parallel()
 
+		wfPath := newWorkspace(t)
 		var stdout, stderr bytes.Buffer
 		code := run(context.Background(), []string{"stats", "--since", "2099-01-01T00:00:00Z", wfPath}, &stdout, &stderr)
 		if code != 0 {
@@ -614,6 +633,7 @@ func TestRunStatsEmptyRange(t *testing.T) {
 	t.Run("json", func(t *testing.T) {
 		t.Parallel()
 
+		wfPath := newWorkspace(t)
 		var stdout, stderr bytes.Buffer
 		code := run(context.Background(), []string{"stats", "--format", "json", "--since", "2099-01-01T00:00:00Z", wfPath}, &stdout, &stderr)
 		if code != 0 {
@@ -764,14 +784,10 @@ func TestRunStatsAgainstLiveWriter(t *testing.T) {
 func TestRunStatsDegradedSchema(t *testing.T) {
 	t.Parallel()
 
-	dir := t.TempDir()
-	wfPath := writeCustomWorkflowFile(t, dir, statsWorkflow(""))
-	dbPath := filepath.Join(dir, ".sortie.db")
-	createLegacyStatsDB(t, dbPath)
-
 	t.Run("text", func(t *testing.T) {
 		t.Parallel()
 
+		wfPath := newStatsWorkspace(t, createLegacyStatsDB)
 		var stdout, stderr bytes.Buffer
 		code := run(context.Background(), []string{"stats", wfPath}, &stdout, &stderr)
 		if code != 0 {
@@ -791,6 +807,7 @@ func TestRunStatsDegradedSchema(t *testing.T) {
 	t.Run("json", func(t *testing.T) {
 		t.Parallel()
 
+		wfPath := newStatsWorkspace(t, createLegacyStatsDB)
 		var stdout, stderr bytes.Buffer
 		code := run(context.Background(), []string{"stats", "--format", "json", wfPath}, &stdout, &stderr)
 		if code != 0 {
