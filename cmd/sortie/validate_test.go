@@ -1834,6 +1834,51 @@ func TestValidateDispatch_ValidRulesPassThrough(t *testing.T) {
 	}
 }
 
+// TestValidateWorkspaceRetentionDaysOutOfRange covers R3: an out-of-range
+// workspace.retention_days value is reported as an error diagnostic with
+// check name config.workspace.retention_days, offline (the file tracker
+// makes no network call).
+func TestValidateWorkspaceRetentionDaysOutOfRange(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	content := []byte("---\n" +
+		"polling:\n  interval_ms: 30000\n" +
+		"tracker:\n  kind: file\n  active_states: [\"To Do\"]\n  terminal_states: [\"Done\"]\n" +
+		"agent:\n  kind: mock\n" +
+		"file:\n  path: issues.json\n" +
+		"workspace:\n  retention_days: 7\n" +
+		"---\nDo {{ .issue.title }}.\n")
+	wfPath := writeCustomWorkflowFile(t, dir, content)
+
+	var stdout, stderr bytes.Buffer
+	ctx := context.Background()
+
+	code := run(ctx, []string{"validate", "--format", "json", wfPath}, &stdout, &stderr)
+	if code != 1 {
+		t.Fatalf("run(validate) = %d, want 1; stderr: %s", code, stderr.String())
+	}
+
+	var out validateOutput
+	if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
+		t.Fatalf("json.Unmarshal(%q) error: %v", stdout.String(), err)
+	}
+	if out.Valid {
+		t.Errorf("validateOutput.Valid = true, want false")
+	}
+
+	found := false
+	for _, d := range out.Errors {
+		if d.Check == "config.workspace.retention_days" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("validateOutput.Errors = %v, want a diagnostic with check %q", out.Errors, "config.workspace.retention_days")
+	}
+}
+
 func TestValidateDispatch_ConfigErrorRouting(t *testing.T) {
 	t.Parallel()
 

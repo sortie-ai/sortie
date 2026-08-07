@@ -118,10 +118,20 @@ type PollingConfig struct {
 	IntervalMS int
 }
 
-// WorkspaceConfig holds the workspace root path after expansion.
+// WorkspaceConfig holds the workspace root path after expansion and the
+// retention window.
 type WorkspaceConfig struct {
 	Root string
+
+	// RetentionDays is the maximum age in days of a swept workspace's
+	// latest recorded activity before the periodic sweep removes it.
+	// Zero disables the bound.
+	RetentionDays int
 }
+
+// WorkspaceRetentionMinDays is the smallest permitted non-zero value of
+// workspace.retention_days, in days.
+const WorkspaceRetentionMinDays = 30
 
 // HooksConfig holds workspace lifecycle hook scripts and their timeout.
 type HooksConfig struct {
@@ -437,7 +447,25 @@ func buildWorkspaceConfig(m map[string]any, envKeys map[string]bool) (WorkspaceC
 	if root == "" {
 		root = filepath.Join(os.TempDir(), "sortie_workspaces")
 	}
-	return WorkspaceConfig{Root: root}, nil
+
+	retentionDays, err := coerceIntField(m, "retention_days", "workspace.retention_days")
+	if err != nil {
+		return WorkspaceConfig{}, err
+	}
+	if retentionDays < 0 {
+		return WorkspaceConfig{}, &ConfigError{
+			Field:   "workspace.retention_days",
+			Message: "must not be negative",
+		}
+	}
+	if retentionDays > 0 && retentionDays < WorkspaceRetentionMinDays {
+		return WorkspaceConfig{}, &ConfigError{
+			Field:   "workspace.retention_days",
+			Message: "must be 0 to disable or at least 30 days",
+		}
+	}
+
+	return WorkspaceConfig{Root: root, RetentionDays: retentionDays}, nil
 }
 
 func buildHooksConfig(m map[string]any) HooksConfig {
