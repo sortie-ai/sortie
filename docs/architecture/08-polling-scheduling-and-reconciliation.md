@@ -298,12 +298,13 @@ Part J: Merge completion reconciliation (when `reactions.merge_completion` is co
   the tracker error taxonomy: retry with backoff up to `max_retries` then escalate for
   transport and API failures, escalate immediately for auth and payload failures, and stop
   without escalating for a not-found issue.
-- Unlike every other kind in this list, a pending entry of this kind carries no expiry: a
-  merge can wait on human review for days, so the entry is bounded instead by the issue
-  leaving the handoff state and by the pending-reaction recovery lookback.
+- Unlike the CI, review, bot-review, merge-conflict, and auto-merge kinds in this list, a pending
+  entry of this kind carries no expiry, the same posture as the label-review and label-fix kinds
+  (Parts H and I): a merge can wait on human review for days, so the entry is bounded instead by
+  the issue leaving the handoff state and by the pending-reaction recovery lookback.
 - Placed last so a merge the orchestrator performed earlier in the same tick, in Part G, is
   observed on this same pass.
-- See ADR-0017 for the full contract.
+- See §11G for the full contract.
 
 ### 8.6 Startup Terminal Workspace Cleanup
 

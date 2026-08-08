@@ -219,3 +219,15 @@ state owned by a different reaction kind. Specifically, these paths MUST NOT cal
 A failed auto-merge does NOT invalidate parallel `ci` or `review` reaction continuations on
 the same issue, so the auto-merge cleanup path is scoped to the `merge` kind only.
 
+### 11C.11 Relationship to the merge completion reaction
+
+Both the auto-merge and merge-completion (§11G) reactions observe the merge state of the same
+pull request through `GetMergeability`, but they act on it independently and neither one performs
+the other's job. The already-merged disposition in §11C.3 and §11C.5 (a 409 response matched
+against the "already merged" phrase, treated as idempotent success) clears only the `merge`-kind
+pending entry and fingerprint; it never calls `TrackerAdapter.TransitionIssue` and never touches
+the tracker issue. Closing the tracker issue is the merge-completion reaction's exclusive
+responsibility, and it runs as an independent reconcile pass that reaches the same conclusion by
+observing `PRMergeStatus.Merged` on its own polling schedule, whether the merge that satisfied it
+was performed by this reaction, by a human, or by a forge automation rule.
+

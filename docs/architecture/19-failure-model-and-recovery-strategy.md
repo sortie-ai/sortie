@@ -64,6 +64,27 @@
   - Escalation failure: log and count error, but release claim anyway.
   - Missing/malformed SCM metadata: skip CI check silently (degrade to no-CI behavior).
 
+- Merge-completion reaction transition failures, routed by tracker error kind (§11G.5):
+  - Transport or API failure: retry with backoff, bounded by `max_retries`, then escalate.
+  - Authentication or payload failure: escalate immediately, consuming no retry budget.
+  - Issue not found: stop, mark the fingerprint dispatched, log a warning, no escalation.
+
+  Not every orchestrator-driven tracker write in this section gets a later re-attempt. A stalled
+  dispatch is retried and a CI check re-enqueues, but a dispatch-time in-progress transition
+  failure is only logged and never retried, and a handoff transition failure on a soft-stop worker
+  exit releases the claim without scheduling a continuation; both fail quietly with no re-attempt
+  to follow. Escalation failures, including merge-completion's own, are logged and counted but do
+  not reopen the dropped entry (see the escalation bullet above). What distinguishes
+  merge-completion is not the absence of any fallback, but where that fallback lives: within a
+  single process run, an escalated merge-completion transition fires once and nothing later in
+  that run revisits it. Across a restart, or a subsequent worker exit on the same issue, escalation
+  deliberately leaves the fingerprint row undispatched (§11G.4), so a freshly seeded pending entry
+  reconciles the same merge commit and retries the transition the escalated attempt could not
+  complete. This is why every disposition above ends in a bounded retry followed by escalation, an
+  immediate escalation, or an explicit logged stop, and never a silent drop: escalation is the
+  operator-visible signal within a run, and the undispatched fingerprint is what gives the
+  transition another chance across one.
+
 ### 14.3 Partial State Recovery (Restart)
 
 Sortie uses SQLite persistence to improve restart recovery semantics:
