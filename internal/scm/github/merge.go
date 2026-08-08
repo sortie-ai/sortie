@@ -57,6 +57,8 @@ func (a *GitHubSCMAdapter) GetReviewDecision(ctx context.Context, prNumber int, 
 type pullRequestResponse struct {
 	Draft          bool   `json:"draft"`
 	MergeableState string `json:"mergeable_state"`
+	Merged         bool   `json:"merged"`
+	MergeCommitSHA string `json:"merge_commit_sha"`
 	Head           struct {
 		SHA string `json:"sha"`
 		Ref string `json:"ref"`
@@ -194,12 +196,22 @@ func (a *GitHubSCMAdapter) GetMergeability(ctx context.Context, prNumber int, ow
 
 	mergeability := mapMergeableState(pr.MergeableState)
 
+	// GitHub reports a test-merge commit in merge_commit_sha for an open
+	// PR, so the value is gated on Merged to avoid asserting a merge
+	// that has not happened.
+	var mergeCommitSHA string
+	if pr.Merged {
+		mergeCommitSHA = pr.MergeCommitSHA
+	}
+
 	return domain.PRMergeStatus{
-		Draft:        pr.Draft,
-		Mergeability: mergeability,
-		HeadSHA:      pr.Head.SHA,
-		BranchName:   pr.Head.Ref,
-		BaseBranch:   pr.Base.Ref,
+		Draft:          pr.Draft,
+		Mergeability:   mergeability,
+		HeadSHA:        pr.Head.SHA,
+		BranchName:     pr.Head.Ref,
+		BaseBranch:     pr.Base.Ref,
+		Merged:         pr.Merged,
+		MergeCommitSHA: mergeCommitSHA,
 	}, nil
 }
 

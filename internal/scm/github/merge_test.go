@@ -613,6 +613,57 @@ func TestGetMergeability_BaseBranch(t *testing.T) {
 	}
 }
 
+// TestGetMergeability_Merged verifies that a merged pull request populates
+// Merged and MergeCommitSHA from the single pull-request object the adapter
+// already fetches.
+func TestGetMergeability_Merged(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"head":{"sha":"sha-merged"},"draft":false,"mergeable_state":"clean","merged":true,"merge_commit_sha":"abc123merged"}`))
+	}))
+	defer srv.Close()
+
+	a := newTestSCMAdapter(t, srv.URL)
+	status, err := a.GetMergeability(t.Context(), 1, "owner", "repo")
+	if err != nil {
+		t.Fatalf("GetMergeability: %v", err)
+	}
+	if !status.Merged {
+		t.Error("GetMergeability().Merged = false, want true")
+	}
+	if status.MergeCommitSHA != "abc123merged" {
+		t.Errorf("GetMergeability().MergeCommitSHA = %q, want %q", status.MergeCommitSHA, "abc123merged")
+	}
+}
+
+// TestGetMergeability_UnmergedIgnoresTestMergeCommit verifies that an open
+// pull request reporting a populated merge_commit_sha (GitHub's test-merge
+// value) is not mistaken for a merge: Merged stays false and MergeCommitSHA
+// stays empty.
+func TestGetMergeability_UnmergedIgnoresTestMergeCommit(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"head":{"sha":"sha-open"},"draft":false,"mergeable_state":"clean","merged":false,"merge_commit_sha":"test-merge-commit-sha"}`))
+	}))
+	defer srv.Close()
+
+	a := newTestSCMAdapter(t, srv.URL)
+	status, err := a.GetMergeability(t.Context(), 1, "owner", "repo")
+	if err != nil {
+		t.Fatalf("GetMergeability: %v", err)
+	}
+	if status.Merged {
+		t.Error("GetMergeability().Merged = true, want false for an open PR")
+	}
+	if status.MergeCommitSHA != "" {
+		t.Errorf("GetMergeability().MergeCommitSHA = %q, want empty (test-merge value must be gated on Merged)", status.MergeCommitSHA)
+	}
+}
+
 // --- mapMergeableState tests ---
 
 func TestMapMergeableState(t *testing.T) {

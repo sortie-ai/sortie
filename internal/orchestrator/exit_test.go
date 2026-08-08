@@ -4421,13 +4421,10 @@ func TestHandleWorkerExit_MergeConflictEnqueueDoesNotOverwrite(t *testing.T) {
 // nil, or PR metadata is incomplete.
 //
 // The fixture includes a branch even though the label-review enqueue
-// clause itself imposes no branch requirement: workspace.ReadSCMMetadata
-// unconditionally returns a zero value whenever the decoded branch is
-// empty (internal/workspace/scm.go), which also zeroes PRNumber/Owner/Repo
-// before the label-review clause ever inspects them. A workspace's scm.json
-// is written only by a normal (non-read-only) session, and such a session
-// always operates on a branch, so this reflects the only reachable
-// production case.
+// clause itself imposes no branch requirement: a workspace's scm.json is
+// written only by a normal (non-read-only) session, and such a session
+// always operates on a branch, so this reflects the common production
+// case rather than a requirement of the enqueue clause or the reader.
 func TestHandleWorkerExit_LabelReviewEnqueue(t *testing.T) {
 	t.Parallel()
 
@@ -4999,4 +4996,200 @@ func TestHandleWorkerExit_LabelFixExit_ErrorStillRetries(t *testing.T) {
 	if retry.ReactionKind != ReactionKindLabelFix {
 		t.Errorf("RetryEntry.ReactionKind = %q, want %q (propagated from the exiting entry)", retry.ReactionKind, ReactionKindLabelFix)
 	}
+}
+
+// --- merge-completion enqueue tests ---
+
+// TestHandleWorkerExit_MergeCompletionEnqueue verifies that a normal exit
+// with the SCM adapter present, the reaction configured, and workspace SCM
+// metadata naming a pull request with owner and repo creates exactly one
+// pending entry keyed by ReactionKey(issueID, ReactionKindMergeCompletion)
+// carrying the expected *MergeCompletionReactionData; and that nothing is
+// seeded when the reaction is not configured. The enqueue clause itself
+// imposes no branch requirement, unlike the checkout-bearing sibling
+// kinds; the fixtures below still carry a branch because that is the
+// common production case, not because the reader requires one.
+func TestHandleWorkerExit_MergeCompletionEnqueue(t *testing.T) {
+	t.Parallel()
+
+	t.Run("populates pending reaction with no branch check of its own", func(t *testing.T) {
+		t.Parallel()
+
+		wsPath := t.TempDir()
+		writePRSCMMetadata(t, wsPath, 42, "corp", "api", "feature/MGC-1", "c0ffee")
+
+		store := &mockExitStore{}
+		state := exitState(t, "MGC-1", nil)
+		params := defaultExitParams(t, store)
+		params.SCMAdapter = &scmAdapterStubExit{}
+		params.MergeCompletionReactionConfigured = true
+
+		HandleWorkerExit(state, WorkerResult{
+			IssueID:       "MGC-1",
+			Identifier:    "MGC-1-ident",
+			ExitKind:      WorkerExitNormal,
+			AgentAdapter:  "mock",
+			WorkspacePath: wsPath,
+		}, params)
+
+		rkey := ReactionKey("MGC-1", ReactionKindMergeCompletion)
+		pr, ok := state.PendingReactions[rkey]
+		if !ok {
+			t.Fatal("PendingReactions[MGC-1:merge-completion] missing after normal exit with PR metadata")
+		}
+		if pr.Kind != ReactionKindMergeCompletion {
+			t.Errorf("PendingReaction.Kind = %q, want %q", pr.Kind, ReactionKindMergeCompletion)
+		}
+		mcData, ok := pr.KindData.(*MergeCompletionReactionData)
+		if !ok {
+			t.Fatalf("KindData type = %T, want *MergeCompletionReactionData", pr.KindData)
+		}
+		if mcData.PRNumber != 42 {
+			t.Errorf("MergeCompletionReactionData.PRNumber = %d, want 42", mcData.PRNumber)
+		}
+		if mcData.Owner != "corp" {
+			t.Errorf("MergeCompletionReactionData.Owner = %q, want %q", mcData.Owner, "corp")
+		}
+		if mcData.Repo != "api" {
+			t.Errorf("MergeCompletionReactionData.Repo = %q, want %q", mcData.Repo, "api")
+		}
+	})
+
+	t.Run("not seeded when not configured", func(t *testing.T) {
+		t.Parallel()
+
+		wsPath := t.TempDir()
+		writePRSCMMetadata(t, wsPath, 43, "corp", "api", "feature/MGC-NC", "deadbeef")
+
+		store := &mockExitStore{}
+		state := exitState(t, "MGC-NC", nil)
+		params := defaultExitParams(t, store)
+		params.SCMAdapter = &scmAdapterStubExit{}
+		params.MergeCompletionReactionConfigured = false
+
+		HandleWorkerExit(state, WorkerResult{
+			IssueID:       "MGC-NC",
+			Identifier:    "MGC-NC-ident",
+			ExitKind:      WorkerExitNormal,
+			AgentAdapter:  "mock",
+			WorkspacePath: wsPath,
+		}, params)
+
+		rkey := ReactionKey("MGC-NC", ReactionKindMergeCompletion)
+		if _, ok := state.PendingReactions[rkey]; ok {
+			t.Error("PendingReactions[MGC-NC:merge-completion] present despite MergeCompletionReactionConfigured=false")
+		}
+	})
+
+	t.Run("not seeded when SCM adapter is nil", func(t *testing.T) {
+		t.Parallel()
+
+		wsPath := t.TempDir()
+		writePRSCMMetadata(t, wsPath, 44, "corp", "api", "feature/MGC-nil", "deadbeef")
+
+		store := &mockExitStore{}
+		state := exitState(t, "MGC-nil", nil)
+		params := defaultExitParams(t, store)
+		params.SCMAdapter = nil
+		params.MergeCompletionReactionConfigured = true
+
+		HandleWorkerExit(state, WorkerResult{
+			IssueID:       "MGC-nil",
+			Identifier:    "MGC-nil-ident",
+			ExitKind:      WorkerExitNormal,
+			AgentAdapter:  "mock",
+			WorkspacePath: wsPath,
+		}, params)
+
+		rkey := ReactionKey("MGC-nil", ReactionKindMergeCompletion)
+		if _, ok := state.PendingReactions[rkey]; ok {
+			t.Error("PendingReactions[MGC-nil:merge-completion] present despite nil SCMAdapter")
+		}
+	})
+
+	t.Run("does not overwrite an existing entry", func(t *testing.T) {
+		t.Parallel()
+
+		wsPath := t.TempDir()
+		writePRSCMMetadata(t, wsPath, 45, "corp", "api", "feature/MGC-DUP", "sha1")
+
+		store := &mockExitStore{}
+		state := exitState(t, "MGC-DUP", nil)
+		params := defaultExitParams(t, store)
+		params.SCMAdapter = &scmAdapterStubExit{}
+		params.MergeCompletionReactionConfigured = true
+
+		existingEntry := &PendingReaction{
+			IssueID: "MGC-DUP",
+			Kind:    ReactionKindMergeCompletion,
+			KindData: &MergeCompletionReactionData{
+				PRNumber: 99,
+				Owner:    "original",
+				Repo:     "original",
+			},
+		}
+		rkey := ReactionKey("MGC-DUP", ReactionKindMergeCompletion)
+		state.PendingReactions[rkey] = existingEntry
+
+		HandleWorkerExit(state, WorkerResult{
+			IssueID:       "MGC-DUP",
+			Identifier:    "MGC-DUP-ident",
+			ExitKind:      WorkerExitNormal,
+			AgentAdapter:  "mock",
+			WorkspacePath: wsPath,
+		}, params)
+
+		got := state.PendingReactions[rkey]
+		if got != existingEntry {
+			t.Error("PendingReactions[MGC-DUP:merge-completion] was replaced; want existing entry preserved")
+		}
+	})
+
+	t.Run("not seeded when PR metadata is incomplete", func(t *testing.T) {
+		t.Parallel()
+
+		tests := []struct {
+			name    string
+			content string
+		}{
+			{name: "missing pr_number", content: `{"branch":"feature/x","owner":"corp","repo":"api"}`},
+			{name: "missing owner", content: `{"branch":"feature/x","pr_number":10,"repo":"api"}`},
+			{name: "missing repo", content: `{"branch":"feature/x","pr_number":10,"owner":"corp"}`},
+			{name: "empty scm file", content: `{}`},
+		}
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				t.Parallel()
+
+				wsPath := t.TempDir()
+				dotSortie := filepath.Join(wsPath, ".sortie")
+				if err := os.MkdirAll(dotSortie, 0o750); err != nil {
+					t.Fatalf("MkdirAll .sortie: %v", err)
+				}
+				if err := os.WriteFile(filepath.Join(dotSortie, "scm.json"), []byte(tt.content), 0o600); err != nil {
+					t.Fatalf("WriteFile scm.json: %v", err)
+				}
+
+				store := &mockExitStore{}
+				state := exitState(t, "MGC-INC", nil)
+				params := defaultExitParams(t, store)
+				params.SCMAdapter = &scmAdapterStubExit{}
+				params.MergeCompletionReactionConfigured = true
+
+				HandleWorkerExit(state, WorkerResult{
+					IssueID:       "MGC-INC",
+					Identifier:    "MGC-INC-ident",
+					ExitKind:      WorkerExitNormal,
+					AgentAdapter:  "mock",
+					WorkspacePath: wsPath,
+				}, params)
+
+				rkey := ReactionKey("MGC-INC", ReactionKindMergeCompletion)
+				if _, ok := state.PendingReactions[rkey]; ok {
+					t.Errorf("PendingReactions[MGC-INC:merge-completion] present despite incomplete SCM metadata (%s)", tt.name)
+				}
+			})
+		}
+	})
 }

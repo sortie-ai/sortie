@@ -255,7 +255,9 @@ func handleCIFailure(
 
 // escalateCIFailure handles the case where CI fix retries are exhausted.
 // It applies the configured escalation action (label or comment), cancels
-// the retry, and releases the claim.
+// the retry, releases the claim, and clears the CI reaction's own pending
+// entry, counter, and fingerprint. Sibling reaction kinds for the same
+// issue are left untouched.
 func escalateCIFailure(
 	state *State,
 	params ReconcileParams,
@@ -341,8 +343,12 @@ func escalateCIFailure(
 	}
 
 	delete(state.Claimed, pending.IssueID)
-	ClearReactionsForIssue(ctx, state, params.Store, pending.IssueID, log)
 
+	// Scoped per-kind delete (not the issue-wide ClearReactionsForIssue)
+	// so sibling reactions' pending entries, counters, and fingerprints
+	// for the same issue survive a CI-only escalation.
+	delete(state.PendingReactions, ReactionKey(pending.IssueID, ReactionKindCI))
+	delete(state.ReactionAttempts, ReactionKey(pending.IssueID, ReactionKindCI))
 	if err := params.Store.DeleteReactionFingerprint(ctx, pending.IssueID, ReactionKindCI); err != nil {
 		log.Warn("failed to delete reaction fingerprint during CI escalation",
 			slog.Any("error", err),

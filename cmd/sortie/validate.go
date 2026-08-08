@@ -129,8 +129,10 @@ func runValidate(_ context.Context, args []string, stdout io.Writer, stderr io.W
 	// block dispatch even when the dispatch preflight passes, so both the
 	// exit code and the JSON valid flag key on the union of preflight,
 	// reaction, and activation errors.
+	trackerMeta, _ := registry.Trackers.Meta(cfg.Tracker.Kind)
+
 	var forgeDiags []validateDiag
-	for _, rd := range orchestrator.ValidateReactionConfigs(cfg) {
+	for _, rd := range orchestrator.ValidateReactionConfigs(cfg, trackerMeta) {
 		forgeDiags = append(forgeDiags, validateDiag{Severity: rd.Severity, Check: rd.Check, Message: rd.Message})
 	}
 	forgeDiags = append(forgeDiags, activationChecks(cfg)...)
@@ -242,6 +244,7 @@ func activationChecks(cfg config.ServiceConfig) []validateDiag {
 	autoMergeRC := cfg.Reactions["auto_merge"]
 	botReviewRC := cfg.Reactions["bot_review"]
 	mergeConflictRC := cfg.Reactions["merge_conflicts"]
+	mergeCompletionRC := cfg.Reactions["merge_completion"]
 	labelReviewActive := cfg.LabelCommands.Provider != "" && cfg.LabelCommands.ReviewLabel != ""
 	labelFixActive := cfg.LabelCommands.Provider != "" && cfg.LabelCommands.FixLabel != ""
 
@@ -251,6 +254,7 @@ func activationChecks(cfg config.ServiceConfig) []validateDiag {
 		{name: "bot_review", active: botReviewRC.Provider != "", provider: botReviewRC.Provider},
 		{name: "merge_conflicts", active: mergeConflictRC.Provider != "", provider: mergeConflictRC.Provider},
 		{name: "label_commands", active: labelReviewActive || labelFixActive, provider: cfg.LabelCommands.Provider},
+		{name: "merge_completion", active: mergeCompletionRC.Provider != "", provider: mergeCompletionRC.Provider},
 	}
 
 	activeKinds, providers := scmProviderConflict(activeSCMKinds)

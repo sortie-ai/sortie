@@ -170,6 +170,17 @@ type ReconcileParams struct {
 	// active for the current process. Reconcile, enqueue, and recovery
 	// paths gate on this flag.
 	LabelFixReactionConfigured bool
+
+	// MergeCompletionConfig holds merge-completion reaction
+	// configuration. Only read when MergeCompletionReactionConfigured
+	// is true. Unlike every expiring sibling kind there is no
+	// accompanying MergeCompletionPendingTTL: this kind has no expiry.
+	MergeCompletionConfig MergeCompletionReactionConfig
+
+	// MergeCompletionReactionConfigured marks whether the
+	// merge-completion feature is active for the current process.
+	// Reconcile, enqueue, and recovery paths gate on this flag.
+	MergeCompletionReactionConfigured bool
 }
 
 // ReconcileRunningIssues detects stalled workers and refreshes tracker
@@ -243,6 +254,12 @@ func ReconcileRunningIssues(state *State, params ReconcileParams) {
 	// fix sessions. Ordering does not affect correctness: the pass is fully
 	// cross-kind isolated, mutating only label-fix state.
 	reconcileLabelFixCommands(state, params, log, ctx, metrics)
+
+	// Observe the merge state of managed pull requests and transition
+	// the linked issue to the configured terminal state exactly once.
+	// Placed last so a merge the orchestrator performed earlier in the
+	// same tick can be observed on this pass.
+	reconcileMergeCompletion(state, params, log, ctx, metrics)
 }
 
 // reconcileStalled cancels running entries whose last activity exceeds the

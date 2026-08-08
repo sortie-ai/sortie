@@ -84,38 +84,40 @@ type ReactionRecoveryRunStore interface {
 
 // PendingReactionRecoveryParams holds all inputs for [RecoverPendingReactions].
 type PendingReactionRecoveryParams struct {
-	WorkspaceRoot                   string
-	TrackerAdapter                  domain.TrackerAdapter
-	HandoffState                    string
-	TerminalStates                  []string
-	CIProvider                      domain.CIStatusProvider
-	SCMAdapter                      domain.SCMAdapter
-	AutoMergeReactionConfigured     bool
-	BotReviewReactionConfigured     bool
-	MergeConflictReactionConfigured bool
-	LabelReviewReactionConfigured   bool
-	LabelFixReactionConfigured      bool
-	RecoveryLookback                time.Duration
-	MaxCandidates                   int
-	NowFunc                         func() time.Time
-	Logger                          *slog.Logger
+	WorkspaceRoot                     string
+	TrackerAdapter                    domain.TrackerAdapter
+	HandoffState                      string
+	TerminalStates                    []string
+	CIProvider                        domain.CIStatusProvider
+	SCMAdapter                        domain.SCMAdapter
+	AutoMergeReactionConfigured       bool
+	BotReviewReactionConfigured       bool
+	MergeConflictReactionConfigured   bool
+	LabelReviewReactionConfigured     bool
+	LabelFixReactionConfigured        bool
+	MergeCompletionReactionConfigured bool
+	RecoveryLookback                  time.Duration
+	MaxCandidates                     int
+	NowFunc                           func() time.Time
+	Logger                            *slog.Logger
 }
 
 // PendingReactionRecoveryResult reports outcome counts from a single
 // [RecoverPendingReactions] call.
 type PendingReactionRecoveryResult struct {
-	Candidates             int
-	CapSkipped             int
-	StateChecked           int
-	ReviewRecovered        int
-	CIRecovered            int
-	AutoMergeRecovered     int
-	BotReviewRecovered     int
-	MergeConflictRecovered int
-	LabelReviewRecovered   int
-	LabelFixRecovered      int
-	StaleSkipped           int
-	Skipped                int
+	Candidates               int
+	CapSkipped               int
+	StateChecked             int
+	ReviewRecovered          int
+	CIRecovered              int
+	AutoMergeRecovered       int
+	BotReviewRecovered       int
+	MergeConflictRecovered   int
+	LabelReviewRecovered     int
+	LabelFixRecovered        int
+	MergeCompletionRecovered int
+	StaleSkipped             int
+	Skipped                  int
 }
 
 // RecoverPendingReactions reconstructs runtime pending reaction entries from
@@ -469,6 +471,33 @@ func recoverPendingReactionKinds(
 				TemplateID: run.TemplateID,
 			}
 			outcome.LabelFixRecovered++
+			added++
+		}
+	}
+
+	// The merge-completion reaction has no checkout and requires no
+	// branch, so unlike the checkout-bearing kinds its guard omits the
+	// meta.Branch != "" clause, matching label-review.
+	if params.SCMAdapter != nil && params.MergeCompletionReactionConfigured && meta.PRNumber > 0 && meta.Owner != "" && meta.Repo != "" {
+		key := ReactionKey(run.IssueID, ReactionKindMergeCompletion)
+		if _, exists := state.PendingReactions[key]; !exists {
+			state.PendingReactions[key] = &PendingReaction{
+				IssueID:    run.IssueID,
+				Identifier: run.Identifier,
+				DisplayID:  run.DisplayID,
+				Attempt:    run.Attempt,
+				Kind:       ReactionKindMergeCompletion,
+				CreatedAt:  now,
+				KindData: &MergeCompletionReactionData{
+					PRNumber: meta.PRNumber,
+					Owner:    meta.Owner,
+					Repo:     meta.Repo,
+				},
+				AgentKind:  run.AgentAdapter,
+				RuleName:   run.RuleName,
+				TemplateID: run.TemplateID,
+			}
+			outcome.MergeCompletionRecovered++
 			added++
 		}
 	}

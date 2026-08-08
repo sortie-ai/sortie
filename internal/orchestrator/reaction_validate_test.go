@@ -149,13 +149,48 @@ func TestValidateReactionConfigs(t *testing.T) {
 			},
 			wantChecks: nil,
 		},
+		{
+			name: "merge_completion invalid target_state produces a diagnostic",
+			cfg: config.ServiceConfig{
+				Tracker: config.TrackerConfig{
+					HandoffState:   "in-review",
+					TerminalStates: []string{"done"},
+				},
+				Reactions: map[string]config.ReactionConfig{
+					"merge_completion": {Provider: "gitea", Extra: map[string]any{"target_state": "in-review"}},
+				},
+			},
+			wantChecks: []string{"reactions.merge_completion"},
+		},
+		{
+			name: "merge_completion valid block produces no diagnostic",
+			cfg: config.ServiceConfig{
+				Tracker: config.TrackerConfig{
+					HandoffState:   "in-review",
+					TerminalStates: []string{"done"},
+				},
+				Reactions: map[string]config.ReactionConfig{
+					"merge_completion": {Provider: "gitea", Extra: map[string]any{"target_state": "done"}},
+				},
+			},
+			wantChecks: nil,
+		},
+		{
+			name: "no merge_completion block produces no diagnostic of that check",
+			cfg: config.ServiceConfig{
+				Reactions: map[string]config.ReactionConfig{
+					"bot_review": {Provider: "gitea", Extra: map[string]any{"bot_usernames": []any{"alice"}}},
+				},
+			},
+			wantChecks: nil,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
 
-			got := ValidateReactionConfigs(tt.cfg)
+			got := ValidateReactionConfigs(tt.cfg, registry.TrackerMeta{})
 
 			if len(got) != len(tt.wantChecks) {
 				t.Fatalf("ValidateReactionConfigs(cfg) = %v, want %d diag(s) with checks %v", got, len(tt.wantChecks), tt.wantChecks)
@@ -184,7 +219,7 @@ func TestValidateReactionConfigs(t *testing.T) {
 			},
 		}
 
-		got := ValidateReactionConfigs(cfg)
+		got := ValidateReactionConfigs(cfg, registry.TrackerMeta{})
 
 		if len(got) != 2 {
 			t.Fatalf("ValidateReactionConfigs(cfg) = %v, want 2 diags", got)

@@ -124,8 +124,19 @@ Using the merge commit identifier rather than the pull request number is deliber
 reaction correctly when an issue legitimately produces a second merge, and it refuses to fire when
 the forge has not reported a merge commit, since an empty fingerprint is treated as no observation
 rather than as an observation of nothing. On a successful transition the row is marked dispatched and
-retained; it is not deleted, because deleting it would let the next poll tick observe the same merge
-as new.
+retained by this reaction; it is not deleted here, because deleting it would let the next poll tick
+observe the same merge as new.
+
+The latch is this reaction's alone to keep. An escalation that releases an issue after a retry
+budget is exhausted clears the escalating kind's own pending entry, attempt counter, and
+`reaction_fingerprints` row, and nothing else the issue holds, so a sibling kind escalating on the
+same issue leaves this reaction's entry and row intact. That scoping is what makes the
+once-per-merge property unconditional. A clear ranging over every pending entry and every
+`reaction_fingerprints` row an issue holds would take this reaction's entry and row with it and
+leave the same merge observable as new, so per-kind scope is an invariant of the escalation paths
+rather than a detail of any one of them. A second guard sits behind the latch: recovery rebuilds an
+entry only for an issue still parked in the handoff state, and an issue this reaction has already
+closed is no longer parked there.
 
 ### Failure posture
 
@@ -417,8 +428,9 @@ The decision is validated when all of the following hold:
    by a forge automation rule.
 2. A deployment that omits the reaction block behaves identically to one running without this
    change, performing no additional tracker write and no additional forge request.
-3. The transition fires exactly once per merge. Repeated poll ticks and a process restart between
-   the merge and the transition each produce one transition in total.
+3. The transition fires exactly once per merge. Repeated poll ticks, a process restart between the
+   merge and the transition, and an escalation of another reaction kind on the same issue each
+   produce one transition in total.
 4. The reaction transitions only to the state named by `target_state`, never to another member of
    the terminal-state list.
 5. Offline validation rejects a missing target state, a target that is not terminal, a target equal

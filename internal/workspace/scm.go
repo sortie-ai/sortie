@@ -65,10 +65,12 @@ func rejectSCMSymlinks(workspacePath string, logger *slog.Logger) bool {
 // <workspacePath>/.sortie/scm.json.
 //
 // Returns a zero-value [domain.SCMMetadata] when the file is absent,
-// unreadable, oversized, malformed, when the decoded metadata has an
-// empty or missing branch, or when either .sortie/ or scm.json is a
-// symbolic link. Read errors are logged at warn level; the function
-// never returns an error to the caller.
+// unreadable, oversized, malformed, or when either .sortie/ or
+// scm.json is a symbolic link. Read errors are logged at warn level;
+// the function never returns an error to the caller. Branch may be
+// empty in the returned value: some reaction kinds require no
+// checkout and therefore no branch, so validating Branch is the
+// caller's responsibility, not this reader's.
 func ReadSCMMetadata(workspacePath string, logger *slog.Logger) domain.SCMMetadata {
 	if logger == nil {
 		logger = slog.Default()
@@ -115,10 +117,6 @@ func ReadSCMMetadata(workspacePath string, logger *slog.Logger) domain.SCMMetada
 			slog.String("workspace", workspacePath),
 			slog.Any("error", err),
 		)
-		return domain.SCMMetadata{}
-	}
-
-	if meta.Branch == "" {
 		return domain.SCMMetadata{}
 	}
 

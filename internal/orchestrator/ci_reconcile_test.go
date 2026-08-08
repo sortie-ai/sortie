@@ -46,6 +46,7 @@ type ciReconcileStore struct {
 	getFingerprintCalls    int
 	markDispatchedCalls    int
 	deleteFingerprintCalls int
+	deleteFPByIssueCalls   int
 
 	upsertFingerprintErr     error
 	getFingerprintResult     string
@@ -73,6 +74,7 @@ func (s *ciReconcileStore) AppendRunHistory(_ context.Context, run persistence.R
 }
 
 func (s *ciReconcileStore) DeleteReactionFingerprintsByIssue(_ context.Context, _ string) error {
+	s.deleteFPByIssueCalls++
 	return s.deleteReactionFingerprintsByIssueErr
 }
 
@@ -1287,5 +1289,51 @@ func TestEscalateCIFailure_DeletesFingerprint(t *testing.T) {
 	// Claim must be released.
 	if _, ok := state.Claimed["ISS-FP-6"]; ok {
 		t.Error("claim not released after escalation")
+	}
+}
+
+// TestReconcileCIStatus_Failing_ExceedsMaxRetries_CrossKindIsolation verifies
+// that CI escalation clears only the CI reaction's own pending entry,
+// counter, and fingerprint. A sibling merge-completion entry parked on the
+// same issue (seeded from the same worker exit as the CI reaction) must
+// survive: the escalation must not call the issue-wide
+// DeleteReactionFingerprintsByIssue.
+func TestReconcileCIStatus_Failing_ExceedsMaxRetries_CrossKindIsolation(t *testing.T) {
+	t.Parallel()
+
+	issueID := "ISS-CI-ISO"
+	state := stateWithPendingReaction(t, issueID, "feature/broken", 3)
+	state.ReactionAttempts[ReactionKey(issueID, ReactionKindCI)] = 2
+
+	mcKey := ReactionKey(issueID, ReactionKindMergeCompletion)
+	state.PendingReactions[mcKey] = &PendingReaction{
+		IssueID:    issueID,
+		Identifier: issueID + "-ident",
+		Kind:       ReactionKindMergeCompletion,
+		CreatedAt:  ciBaseTime,
+		KindData:   &MergeCompletionReactionData{PRNumber: 42, Owner: "owner", Repo: "repo"},
+	}
+	state.ReactionAttempts[ReactionKey(issueID, ReactionKindMergeCompletion)] = 1
+
+	store := &ciReconcileStore{}
+	metrics := newCIMetricsSpy()
+	tracker := &ciTrackerStub{}
+	ci := &mockCIProvider{result: domain.CIResult{Status: domain.CIStatusFailing, FailingCount: 1}}
+	params := ciParams(t, store, ci, tracker)
+
+	reconcileCIStatus(state, params, discardLogger(), context.Background(), metrics)
+	state.TrackerOpsWg.Wait()
+
+	if _, ok := state.PendingReactions[mcKey]; !ok {
+		t.Error("sibling merge-completion PendingReactions entry removed by CI escalation; want untouched")
+	}
+	if state.ReactionAttempts[ReactionKey(issueID, ReactionKindMergeCompletion)] != 1 {
+		t.Error("sibling merge-completion ReactionAttempts counter altered by CI escalation; want untouched")
+	}
+	if store.deleteFPByIssueCalls != 0 {
+		t.Errorf("DeleteReactionFingerprintsByIssue calls = %d, want 0 (escalation must be scoped to CI)", store.deleteFPByIssueCalls)
+	}
+	if store.deleteFingerprintCalls != 1 {
+		t.Errorf("DeleteReactionFingerprint calls = %d, want 1 (the CI kind's own fingerprint)", store.deleteFingerprintCalls)
 	}
 }

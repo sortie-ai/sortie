@@ -112,9 +112,9 @@ Per-issue token budget (cost ceiling):
 
 Note:
 
-- Terminal-state workspace cleanup is handled by three paths: startup cleanup, active-run
-  reconciliation (including terminal transitions for currently running issues), and the periodic
-  workspace sweep described below.
+- Terminal-state workspace cleanup is handled by startup cleanup, active-run reconciliation
+  (including terminal transitions for currently running issues), and the periodic workspace
+  sweep described below.
 - Retry handling mainly operates on active candidates and releases claims when the issue is absent,
   rather than performing terminal cleanup itself.
 - Within one periodic sweep pass, the terminal check always runs before the age bound (see
@@ -126,7 +126,7 @@ Note:
 
 ### 8.5 Active Run Reconciliation
 
-Reconciliation runs every tick and has nine parts, run in this order.
+Reconciliation runs every tick, in the order below.
 
 Part A: Stall detection
 
@@ -270,6 +270,33 @@ Part I: Label fix command detection (when `reactions.label_commands.fix_label` i
   read-only review session.
 - Ordering relative to the other parts does not affect correctness: the pass is fully
   cross-kind isolated. See Section 11F for the full contract.
+
+Part J: Merge completion reconciliation (when `reactions.merge_completion` is configured)
+
+- Skip entirely when no SCM adapter or tracker adapter is configured.
+- Before examining any entry, check once whether the configured `target_state` is still a
+  member of the runtime terminal-state list; log one warning per onset of drift, suppressed
+  while the condition persists.
+- For each due entry in `pending_reactions` with kind `merge-completion`, fetch tracker state
+  for the linked issues in one batched read.
+- Drop an entry whose issue is missing from the response or already terminal. Defer an entry
+  whose issue is currently claimed. Stop an entry whose issue has left the configured handoff
+  state.
+- Fetch mergeability via `SCMAdapter.GetMergeability`; re-enqueue with backoff on a transport
+  error, and re-enqueue on the poll interval while the pull request is not yet reported merged
+  or reports no merge commit identifier.
+- Upsert the merge commit identifier into `reaction_fingerprints` under kind
+  `merge-completion`; skip an entry already latched to that identifier.
+- Call `TrackerAdapter.TransitionIssue` to the configured `target_state`. Route a failure by
+  the tracker error taxonomy: retry with backoff up to `max_retries` then escalate for
+  transport and API failures, escalate immediately for auth and payload failures, and stop
+  without escalating for a not-found issue.
+- Unlike every other kind in this list, a pending entry of this kind carries no expiry: a
+  merge can wait on human review for days, so the entry is bounded instead by the issue
+  leaving the handoff state and by the pending-reaction recovery lookback.
+- Placed last so a merge the orchestrator performed earlier in the same tick, in Part G, is
+  observed on this same pass.
+- See ADR-0017 for the full contract.
 
 ### 8.6 Startup Terminal Workspace Cleanup
 

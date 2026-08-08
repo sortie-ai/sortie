@@ -20,6 +20,7 @@ import (
 type giteaPullRequest struct {
 	Mergeable          bool        `json:"mergeable"`
 	Merged             bool        `json:"merged"`
+	MergeCommitSHA     *string     `json:"merge_commit_sha"`
 	Draft              bool        `json:"draft"`
 	RequestedReviewers []giteaUser `json:"requested_reviewers"`
 	Head               struct {
@@ -85,12 +86,23 @@ func (a *GiteaSCMAdapter) GetMergeability(ctx context.Context, prNumber int, own
 		return domain.PRMergeStatus{}, err
 	}
 
+	// The upstream field is a nullable pointer, so an unmerged PR
+	// serializes it as null or omits it; the value is also gated on
+	// Merged so a stale or misreported commit id on an open PR is never
+	// asserted as a merge.
+	var mergeCommitSHA string
+	if pr.Merged && pr.MergeCommitSHA != nil {
+		mergeCommitSHA = *pr.MergeCommitSHA
+	}
+
 	return domain.PRMergeStatus{
-		Draft:        pr.Draft,
-		Mergeability: mapMergeability(pr),
-		HeadSHA:      pr.Head.SHA,
-		BranchName:   pr.Head.Ref,
-		BaseBranch:   pr.Base.Ref,
+		Draft:          pr.Draft,
+		Mergeability:   mapMergeability(pr),
+		HeadSHA:        pr.Head.SHA,
+		BranchName:     pr.Head.Ref,
+		BaseBranch:     pr.Base.Ref,
+		Merged:         pr.Merged,
+		MergeCommitSHA: mergeCommitSHA,
 	}, nil
 }
 

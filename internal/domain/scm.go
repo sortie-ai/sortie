@@ -96,6 +96,13 @@ type PRMergeStatus struct {
 	// "develop". Populated by GetMergeability from the same PR object it
 	// already fetches; empty only when the provider omits the base ref.
 	BaseBranch string
+
+	// Merged reports whether the pull request has been merged.
+	Merged bool
+
+	// MergeCommitSHA is the merge commit identifier reported by the
+	// provider. Set only when Merged is true.
+	MergeCommitSHA string
 }
 
 // MergeResult carries the outcome of a successful merge call.

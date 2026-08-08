@@ -116,11 +116,13 @@ the `bot-review` fingerprint row. The escalation path MUST NOT call `ClearReacti
 the residual `reaction_attempts[issue_id:bot-review]` counter. The issue claim and that residual
 counter are owned by whichever kind currently holds the claim (the first-turn dispatch, `review`, or
 `merge`); releasing them from the bot-review path would corrupt sibling-kind ownership. Because the
-pending entry is deleted, the kind stops polling and the residual counter is inert until terminal
-cleanup removes it. When the issue reaches a terminal tracker state, `ClearReactionsForIssue` (run
-by the tracker-reconcile path) removes the residual counter and the claim along with any sibling
-slots. This mirrors how `escalateAutoMergeFailure` leaves `reaction_attempts[issue_id:merge]` and
-`state.Claimed` to terminal-state cleanup.
+pending entry is deleted, the kind stops polling, but the residual counter and the claim are not
+released by any path in the current implementation. `ClearReactionsForIssue` clears an issue's
+residual `reaction_attempts` counters and `pending_reactions` entries, but it does not touch
+`state.Claimed`, and no path, including the tracker-reconcile terminal-state path, calls it in
+production. The residual counter and the claim persist for the life of the orchestrator process.
+This mirrors how `escalateAutoMergeFailure` leaves `reaction_attempts[issue_id:merge]` and
+`state.Claimed` uncleaned after a merge-kind escalation.
 
 Escalation tracker-call failures are logged and counted
 (`sortie_bot_review_escalations_total{action="error"}`) but do not block the slot-scoped cleanup.
@@ -152,5 +154,5 @@ Per-issue `bot-review` reaction lifecycle (the `issue_id:bot-review` slot):
 | pending | Reconcile tick, fingerprint unchanged and dispatched | pending | Re-enqueue at `now + poll_interval`. |
 | pending | Reconcile tick, new actionable comments, attempts < cap | dispatched | Schedule continuation, increment attempts, count dispatched. |
 | pending | Reconcile tick, attempts reach cap | escalated | Apply escalation; clear ONLY the `bot-review` slot. MUST NOT release the claim or clear sibling slots (§11D.5). |
-| pending | Issue reaches terminal state (tracker reconcile) | (cleared) | `ClearReactionsForIssue` removes the slot, the residual counter, and the claim. |
+| pending | Issue reaches terminal state (tracker reconcile) | pending | No effect: the tracker-reconcile terminal-state path does not call `ClearReactionsForIssue`. The slot keeps re-enqueuing until the TTL backstop drops it; the residual counter and the claim are not released by any path. |
 
