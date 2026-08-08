@@ -362,8 +362,8 @@ func reconcileStalled(state *State, params ReconcileParams, log *slog.Logger, ct
 // state [reconcileTrackerState] must refresh: every id in state.Running
 // plus every issue id carried by an entry in state.PendingReactions.
 //
-// Returns nil when both inputs are empty; callers must treat that as "make
-// no tracker call".
+// Returns an empty slice when both inputs are empty; callers must treat
+// that as "make no tracker call".
 func trackerObservationIDs(state *State) []string {
 	seen := make(map[string]struct{}, len(state.Running)+len(state.PendingReactions))
 	for id := range state.Running {
