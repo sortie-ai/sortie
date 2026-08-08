@@ -25,3 +25,4 @@ This directory contains architecturally significant decisions for Sortie, docume
 | [0016](0016-place-forge-integrations-in-one-package-per-forge.md) | Place Forge Integrations in One Package per Forge    | Accepted |
 | [0017](0017-close-tracker-issue-on-managed-pr-merge.md) | Close the Tracker Issue When a Managed Pull Request Merges | Accepted |
 | [0018](0018-bound-workspace-retention-by-age.md)        | Bound Workspace Retention by Age Independently of Tracker State | Accepted |
+| [0019](0019-keep-usage-data-on-the-host.md)             | Keep Usage Data on the Host and Aggregate Across Instances by Pull | Accepted |

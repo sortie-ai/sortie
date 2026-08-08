@@ -68,7 +68,7 @@ The `agent.kind` field selects which coding agent runs each session. Sortie ship
 
 ## Architecture
 
-Sortie is a single Go binary. It uses SQLite for persistent state (retry queues, session metadata, run history) and communicates with coding agents over stdio. The orchestrator is the single authority for all scheduling decisions; there is no external job queue or distributed coordination. For full architectural details, see [`docs/architecture.md`](docs/architecture.md).
+Sortie is a single Go binary. It uses SQLite for persistent state (retry queues, session metadata, run history) and communicates with coding agents over stdio. The orchestrator is the single authority for all scheduling decisions; there is no external job queue or distributed coordination. The binary sends no telemetry: it has no analytics client and no update check, and the only endpoints it contacts belong to the adapters your workflow file selects. For full architectural details, see [`docs/architecture.md`](docs/architecture.md).
 
 Issue trackers and coding agents are integrated through adapter interfaces. Adding support for a new tracker or agent is an additive change: implement the interface in a new package.
 
