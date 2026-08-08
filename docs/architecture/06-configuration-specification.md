@@ -90,11 +90,12 @@ Validation checks:
 - `reactions.merge_completion.target_state`, checked once at construction against
   `tracker.handoff_state`, `tracker.active_states`, and `tracker.terminal_states`: required and
   non-empty when `reactions.merge_completion.provider` is set, must not equal
-  `tracker.handoff_state`, must not be a member of `tracker.active_states` (the tracker adapter's
-  fallback active-state list applies when that field is empty), and must be a member of
-  `tracker.terminal_states` exactly as written, with no adapter fallback. Reaction configuration
-  is not rebuilt on `WORKFLOW.md` reload (Section 6.4), so this check runs at startup and in
-  `sortie validate`, never on a dispatch tick.
+  `tracker.handoff_state` (case-insensitive), must not be a member of `tracker.active_states`
+  (case-insensitive; the tracker adapter's fallback active-state list applies when that field is
+  empty), and must be a member of `tracker.terminal_states` exactly as written in configuration
+  (case-insensitive), with no fallback to the adapter's default terminal-state list. Reaction
+  configuration is not rebuilt on `WORKFLOW.md` reload (Section 6.4), so this check runs at
+  startup and in `sortie validate`, never on a dispatch tick.
 
 Effort-budget and notification config are validated outside this preflight, by design:
 
@@ -170,7 +171,8 @@ This section is intentionally redundant so a coding agent can implement the conf
 - `tracker.terminal_states`: list of strings, defaults to empty; an empty value leaves the tracker
   adapter to apply its own internal fallback list; must be written non-empty in front matter when
   `reactions.merge_completion.provider` is set, because `target_state` is checked against the list
-  exactly as written, with no adapter fallback in that case
+  exactly as written in configuration (case-insensitive), with no fallback to the adapter's
+  default terminal-state list in that case
 - `tracker.query_filter`: string, optional, default empty (adapter-defined filter fragment)
 - `tracker.handoff_state`: string, optional, default absent; target state for
   orchestrator-initiated handoff after successful worker run; must not collide with
@@ -237,10 +239,11 @@ This section is intentionally redundant so a coding agent can implement the conf
 - `reactions.merge_completion.target_state`: string, required when
   `reactions.merge_completion.provider` is set, no default; the single tracker terminal state the
   linked issue moves to once its managed pull request merges; must not equal
-  `tracker.handoff_state`; must not be a member of `tracker.active_states` (falling back to the
-  tracker adapter's default active-state list when that field is empty); must be a member of
-  `tracker.terminal_states` exactly as written, with no adapter fallback; not rebuilt on
-  `WORKFLOW.md` reload; see §11G
+  `tracker.handoff_state` (case-insensitive); must not be a member of `tracker.active_states`
+  (case-insensitive, falling back to the tracker adapter's default active-state list when that
+  field is empty); must be a member of `tracker.terminal_states` exactly as written in
+  configuration (case-insensitive), with no fallback to the adapter's default terminal-state
+  list; not rebuilt on `WORKFLOW.md` reload; see §11G
 - `reactions.merge_completion.poll_interval_ms`: integer, default `60000` (1 minute); minimum
   `30000`
 - `dispatch.rules`: list of rule objects, optional; first-match-wins routing; see §5.3.10
