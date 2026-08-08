@@ -115,17 +115,17 @@ DeleteReactionFingerprint(issueID, "merge-conflict")
 delete(state.ReactionAttempts,    ReactionKey(issueID, "merge-conflict"))
 ```
 
-The counter reset is the scoped per-kind delete, NOT the issue-wide `ClearReactionsForIssue`. This
-makes both episode exits symmetric: the N1 branch and the escalation exit each leave the counter
-deleted, so a later independent conflict always opens a fresh episode at `attempts = 1` regardless of
-which exit closed the prior episode.
+The counter reset is scoped to this kind's own slot, not an issue-wide clear. This makes both
+episode exits symmetric: the N1 branch and the escalation exit each leave the counter deleted, so a
+later independent conflict always opens a fresh episode at `attempts = 1` regardless of which exit
+closed the prior episode.
 
 Cross-kind isolation: `escalateMergeConflictFailure` MUST scope all deletions to the `merge-conflict`
-kind only. It MUST NOT call `CancelRetry`, `DeleteRetryEntry`, `ClearReactionsForIssue`, or
-`delete state.Claimed[issue_id]`. A failed merge-conflict resolution MUST NOT invalidate parallel
-`ci`, `review`, `bot-review`, or `merge` reactions on the same issue. Escalation tracker-call
-failures are logged and counted (`sortie_merge_conflict_escalations_total{action="error"}`) but do
-not block the slot-scoped cleanup.
+kind only. It MUST NOT call `CancelRetry` or `DeleteRetryEntry`, MUST NOT clear any sibling kind's
+slot, and MUST NOT `delete state.Claimed[issue_id]`. A failed merge-conflict resolution MUST NOT
+invalidate parallel `ci`, `review`, `bot-review`, or `merge` reactions on the same issue. Escalation
+tracker-call failures are logged and counted
+(`sortie_merge_conflict_escalations_total{action="error"}`) but do not block the slot-scoped cleanup.
 
 ### 11E.6 Continuation data
 
@@ -204,5 +204,5 @@ Per-issue `merge-conflict` reaction lifecycle (the `issue_id:merge-conflict` slo
 | pending | Reconcile tick, `Mergeability == dirty`, fingerprint dispatched for this head | pending | Re-enqueue at `now + poll_interval`; do not increment counter. |
 | pending | Reconcile tick, `Mergeability == dirty`, new head, `attempts <= MaxRetries` | dispatched | Increment per-episode counter; schedule continuation; mark dispatched; count dispatched. |
 | pending | Reconcile tick, `Mergeability == dirty`, new head, `attempts > MaxRetries` | escalated | Increment per-episode counter; apply escalation; delete slot, fingerprint, and per-episode counter. MUST NOT release the claim or clear sibling slots (§11E.5). |
-| pending | Issue reaches terminal state (tracker reconcile) | pending | No effect: the tracker-reconcile terminal-state path does not call `ClearReactionsForIssue`. The slot keeps re-enqueuing until the TTL backstop drops it; the residual counter and the claim are not released by any path. |
+| pending | Issue reaches terminal state (tracker reconcile) | (none) | Drop the `merge-conflict` pending entry and its per-episode counter, cancel and delete the issue's retry, and release the claim; `reaction_fingerprints` is left intact. |
 

@@ -88,6 +88,7 @@ type statefulFingerprintStore struct {
 	getCalls            int
 	markDispatchedCalls int
 	deleteCalls         int
+	deleteRetryCalls    int
 
 	upsertErr error
 	getErr    error
@@ -157,12 +158,12 @@ func (s *statefulFingerprintStore) DeleteReactionFingerprint(_ context.Context, 
 	return nil
 }
 
-func (s *statefulFingerprintStore) DeleteRetryEntry(_ context.Context, _ string) error { return nil }
+func (s *statefulFingerprintStore) DeleteRetryEntry(_ context.Context, _ string) error {
+	s.deleteRetryCalls++
+	return nil
+}
 func (s *statefulFingerprintStore) AppendRunHistory(_ context.Context, run persistence.RunHistory) (persistence.RunHistory, error) {
 	return run, nil
-}
-func (s *statefulFingerprintStore) DeleteReactionFingerprintsByIssue(_ context.Context, _ string) error {
-	return nil
 }
 
 // has reports whether a fingerprint row exists for the issue+kind.
@@ -886,6 +887,54 @@ func TestReconcileMergeConflicts_EmptyBaseDefers(t *testing.T) {
 	}
 	if len(metrics.checks) != 0 {
 		t.Errorf("IncMergeConflictChecks called = %v, want none on empty-base defer", metrics.checks)
+	}
+}
+
+// TestReconcileMergeConflicts_DropOnAgeReleasesCounter verifies that the
+// drop-on-age branch also deletes the merge-conflict reaction attempt
+// counter, leaves a sibling kind's counter and the claim untouched, and
+// performs no retry or fingerprint store call.
+func TestReconcileMergeConflicts_DropOnAgeReleasesCounter(t *testing.T) {
+	t.Parallel()
+
+	issueID := "MC-AGE-1"
+	state := stateWithMergeConflict(t, issueID, 30)
+	mcKey := ReactionKey(issueID, ReactionKindMergeConflict)
+	state.ReactionAttempts[mcKey] = 2
+	state.PendingReactions[mcKey].CreatedAt = mcBaseTime.Add(-40 * time.Minute)
+	ciKey := ReactionKey(issueID, ReactionKindCI)
+	state.ReactionAttempts[ciKey] = 5
+	delete(state.Claimed, issueID)
+
+	store := newStatefulFingerprintStore()
+	metrics := newMergeConflictMetricsSpy()
+	scm := &mergeabilitySCM{}
+	params := mergeConflictParams(store, scm, nil)
+	params.MergeConflictPendingTTL = 30 * time.Minute
+
+	reconcileMergeConflicts(state, params, discardLogger(), context.Background(), metrics)
+
+	if scm.calls != 0 {
+		t.Errorf("GetMergeability calls = %d, want 0 (TTL exceeded before fetch)", scm.calls)
+	}
+	if _, ok := state.PendingReactions[mcKey]; ok {
+		t.Error("PendingReactions[merge-conflict] present after drop-on-age; want removed")
+	}
+	if _, ok := state.ReactionAttempts[mcKey]; ok {
+		t.Error("ReactionAttempts[merge-conflict] present after drop-on-age; want removed")
+	}
+	if state.ReactionAttempts[ciKey] != 5 {
+		t.Errorf("ReactionAttempts[ci] = %d, want 5 (untouched)", state.ReactionAttempts[ciKey])
+	}
+	if _, ok := state.Claimed[issueID]; ok {
+		t.Error("Claimed present after drop-on-age; want absent")
+	}
+	if store.deleteRetryCalls != 0 {
+		t.Errorf("DeleteRetryEntry calls = %d, want 0", store.deleteRetryCalls)
+	}
+	if store.upsertCalls != 0 || store.getCalls != 0 || store.deleteCalls != 0 {
+		t.Errorf("fingerprint calls = upsert:%d get:%d delete:%d, want all 0",
+			store.upsertCalls, store.getCalls, store.deleteCalls)
 	}
 }
 

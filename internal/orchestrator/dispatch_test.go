@@ -353,6 +353,37 @@ func TestShouldDispatch(t *testing.T) {
 	}
 }
 
+// TestShouldDispatch_ReopenAfterTerminalRelease verifies that releasing an
+// issue's claim through [releaseTerminalIssueState] makes it dispatchable
+// again once the tracker reports it back in an active state, and that the
+// same evaluation returns false beforehand while the claim is still held.
+func TestShouldDispatch_ReopenAfterTerminalRelease(t *testing.T) {
+	t.Parallel()
+
+	active := []string{"To Do"}
+	terminal := []string{"Done"}
+	issue := domain.Issue{ID: "REOPEN-1", Identifier: "REOPEN-1", Title: "T", State: "To Do"}
+
+	state := NewState(1000, 10, nil, AgentTotals{})
+	state.Claimed[issue.ID] = struct{}{}
+
+	if ShouldDispatch(issue, state, active, terminal) {
+		t.Fatal("ShouldDispatch = true while the claim is still held before release; want false")
+	}
+
+	store := &mockReconcileStore{}
+	releaseTerminalIssueState(context.Background(), state, store, issue.ID, discardLogger())
+
+	if len(state.Running) != 0 || len(state.RetryAttempts) != 0 || len(state.BudgetExhausted) != 0 {
+		t.Fatalf("state not empty after release: running=%d retry=%d budget=%d",
+			len(state.Running), len(state.RetryAttempts), len(state.BudgetExhausted))
+	}
+
+	if !ShouldDispatch(issue, state, active, terminal) {
+		t.Error("ShouldDispatch = false after terminal release and reopen into an active state; want true")
+	}
+}
+
 func TestIsBlockedByNonTerminal(t *testing.T) {
 	t.Parallel()
 

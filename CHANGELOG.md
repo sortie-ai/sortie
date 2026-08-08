@@ -54,6 +54,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   escalation no longer silently ends `reactions.merge_completion`
   observation (or any other sibling reaction) for that issue.
   ([#707](https://github.com/sortie-ai/sortie/issues/707))
+- An issue reaching a terminal tracker state now stops all of its
+  reaction polling immediately, including for a `sortie:review` or
+  `sortie:fix` label-command entry, which previously kept polling the
+  pull request's label journal for the life of the orchestrator process
+  even after the issue closed. This applies whether or not a worker is
+  still running for the issue, and it releases the issue for a fresh
+  dispatch as soon as it is reopened into an active state, rather than
+  after a pending retry happens to fire.
+  ([#741](https://github.com/sortie-ai/sortie/issues/741))
 
 ### Changed
 

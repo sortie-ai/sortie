@@ -192,10 +192,6 @@ func (s *stubStore) QueryTokenExhaustedIssues(_ context.Context, _ []string, _ i
 	return result, nil
 }
 
-func (s *stubStore) DeleteReactionFingerprintsByIssue(_ context.Context, _ string) error {
-	return nil
-}
-
 func (s *stubStore) UpsertReactionFingerprint(_ context.Context, _, _, _ string) error {
 	return nil
 }

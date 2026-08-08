@@ -51,10 +51,6 @@ func (s *labelFixDispatchedFlagStore) AppendRunHistory(_ context.Context, run pe
 	return run, nil
 }
 
-func (s *labelFixDispatchedFlagStore) DeleteReactionFingerprintsByIssue(_ context.Context, _ string) error {
-	return nil
-}
-
 func (s *labelFixDispatchedFlagStore) MarkReactionDispatched(_ context.Context, _, _ string) error {
 	return nil
 }

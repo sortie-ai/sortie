@@ -36,17 +36,15 @@ type ciReconcileStore struct {
 	deletedIssueIDs []string
 	runHistories    []persistence.RunHistory
 
-	saveRetryEntryErr                    error
-	deleteRetryEntryErr                  error
-	appendRunHistoryErr                  error
-	deleteReactionFingerprintsByIssueErr error
+	saveRetryEntryErr   error
+	deleteRetryEntryErr error
+	appendRunHistoryErr error
 
 	// Fingerprint dedup fields.
 	upsertFingerprintCalls int
 	getFingerprintCalls    int
 	markDispatchedCalls    int
 	deleteFingerprintCalls int
-	deleteFPByIssueCalls   int
 
 	upsertFingerprintErr     error
 	getFingerprintResult     string
@@ -71,11 +69,6 @@ func (s *ciReconcileStore) DeleteRetryEntry(_ context.Context, issueID string) e
 func (s *ciReconcileStore) AppendRunHistory(_ context.Context, run persistence.RunHistory) (persistence.RunHistory, error) {
 	s.runHistories = append(s.runHistories, run)
 	return run, s.appendRunHistoryErr
-}
-
-func (s *ciReconcileStore) DeleteReactionFingerprintsByIssue(_ context.Context, _ string) error {
-	s.deleteFPByIssueCalls++
-	return s.deleteReactionFingerprintsByIssueErr
 }
 
 func (s *ciReconcileStore) UpsertReactionFingerprint(_ context.Context, _, _, _ string) error {
@@ -1042,6 +1035,54 @@ func TestReconcileCIStatus_TTLExpiry(t *testing.T) {
 	}
 }
 
+// TestReconcileCIStatus_DropOnAgeReleasesCounter verifies that the
+// drop-on-age branch also deletes the ci reaction attempt counter, leaves
+// a sibling kind's counter and the claim untouched, and performs no retry
+// or fingerprint store call.
+func TestReconcileCIStatus_DropOnAgeReleasesCounter(t *testing.T) {
+	t.Parallel()
+
+	issueID := "CI-AGE-1"
+	state := stateWithPendingReaction(t, issueID, "main", 1)
+	ciKey := ReactionKey(issueID, ReactionKindCI)
+	state.ReactionAttempts[ciKey] = 2
+	reviewKey := ReactionKey(issueID, ReactionKindReview)
+	state.ReactionAttempts[reviewKey] = 4
+	delete(state.Claimed, issueID)
+
+	store := &ciReconcileStore{}
+	metrics := newCIMetricsSpy()
+	ci := &mockCIProvider{result: domain.CIResult{Status: domain.CIStatusPending}}
+	params := ciParams(t, store, ci, nil)
+	params.CIPendingTTL = 30 * time.Minute
+	params.NowFunc = func() time.Time { return ciBaseTime.Add(31 * time.Minute) }
+
+	reconcileCIStatus(state, params, discardLogger(), context.Background(), metrics)
+
+	if _, ok := state.PendingReactions[ciKey]; ok {
+		t.Error("PendingReactions[ci] present after drop-on-age; want removed")
+	}
+	if _, ok := state.ReactionAttempts[ciKey]; ok {
+		t.Error("ReactionAttempts[ci] present after drop-on-age; want removed")
+	}
+	if state.ReactionAttempts[reviewKey] != 4 {
+		t.Errorf("ReactionAttempts[review] = %d, want 4 (untouched)", state.ReactionAttempts[reviewKey])
+	}
+	if _, ok := state.Claimed[issueID]; ok {
+		t.Error("Claimed present after drop-on-age; want absent")
+	}
+	if len(store.deletedIssueIDs) != 0 {
+		t.Errorf("DeleteRetryEntry calls = %d, want 0", len(store.deletedIssueIDs))
+	}
+	if store.upsertFingerprintCalls != 0 || store.getFingerprintCalls != 0 || store.deleteFingerprintCalls != 0 {
+		t.Errorf("fingerprint calls = upsert:%d get:%d delete:%d, want all 0",
+			store.upsertFingerprintCalls, store.getFingerprintCalls, store.deleteFingerprintCalls)
+	}
+	if ci.calls != 0 {
+		t.Errorf("FetchCIStatus calls = %d, want 0 (TTL exceeded before fetch)", ci.calls)
+	}
+}
+
 // --- Fingerprint dedup tests ---
 
 // TestReconcileCIStatus_DedupSkip verifies that when GetReactionFingerprint
@@ -1296,8 +1337,7 @@ func TestEscalateCIFailure_DeletesFingerprint(t *testing.T) {
 // that CI escalation clears only the CI reaction's own pending entry,
 // counter, and fingerprint. A sibling merge-completion entry parked on the
 // same issue (seeded from the same worker exit as the CI reaction) must
-// survive: the escalation must not call the issue-wide
-// DeleteReactionFingerprintsByIssue.
+// survive: the escalation must not clear it.
 func TestReconcileCIStatus_Failing_ExceedsMaxRetries_CrossKindIsolation(t *testing.T) {
 	t.Parallel()
 
@@ -1329,9 +1369,6 @@ func TestReconcileCIStatus_Failing_ExceedsMaxRetries_CrossKindIsolation(t *testi
 	}
 	if state.ReactionAttempts[ReactionKey(issueID, ReactionKindMergeCompletion)] != 1 {
 		t.Error("sibling merge-completion ReactionAttempts counter altered by CI escalation; want untouched")
-	}
-	if store.deleteFPByIssueCalls != 0 {
-		t.Errorf("DeleteReactionFingerprintsByIssue calls = %d, want 0 (escalation must be scoped to CI)", store.deleteFPByIssueCalls)
 	}
 	if store.deleteFingerprintCalls != 1 {
 		t.Errorf("DeleteReactionFingerprint calls = %d, want 1 (the CI kind's own fingerprint)", store.deleteFingerprintCalls)

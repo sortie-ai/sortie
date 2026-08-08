@@ -57,6 +57,7 @@ func reconcileBotReviewComments(state *State, params ReconcileParams, log *slog.
 
 		// TTL enforcement.
 		if ttl > 0 && now.Sub(pending.CreatedAt) > ttl {
+			delete(state.ReactionAttempts, ReactionKey(pending.IssueID, ReactionKindBotReview))
 			entryLog.Warn("bot review pending entry exceeded ttl, dropping",
 				slog.Int64("ttl_ms", int64(ttl/time.Millisecond)),
 				slog.Int64("age_ms", int64(now.Sub(pending.CreatedAt)/time.Millisecond)),

@@ -1019,6 +1019,60 @@ func TestReconcileAutoMerge_TTLExpiry(t *testing.T) {
 	}
 }
 
+// TestReconcileAutoMerge_DropOnAgeReleasesCounter verifies that the
+// drop-on-age branch also deletes the merge reaction attempt counter,
+// leaves a sibling kind's counter and the claim untouched, and performs
+// no retry or fingerprint store call.
+func TestReconcileAutoMerge_DropOnAgeReleasesCounter(t *testing.T) {
+	t.Parallel()
+
+	issueID := "AM-AGE-1"
+	state := stateWithAutoMergePending(t, issueID, 20)
+	mergeKey := ReactionKey(issueID, ReactionKindAutoMerge)
+	state.ReactionAttempts[mergeKey] = 3
+	state.PendingReactions[mergeKey].CreatedAt = autoMergeBaseTime.Add(-40 * time.Minute)
+	ciKey := ReactionKey(issueID, ReactionKindCI)
+	state.ReactionAttempts[ciKey] = 6
+
+	store := &reviewReconcileStore{}
+	metrics := newAutoMergeMetricsSpy()
+
+	var mergeCalled bool
+	scm := &controlledSCMAdapter{
+		mergePRFn: func(_ context.Context, _ int, _, _ string, _ domain.MergeStrategy, _, _, _ string) (domain.MergeResult, error) {
+			mergeCalled = true
+			return domain.MergeResult{}, nil
+		},
+	}
+	params := autoMergeParams(store, scm, nil)
+	params.AutoMergePendingTTL = 30 * time.Minute
+
+	reconcileAutoMerge(state, params, discardLogger(), context.Background(), metrics)
+
+	if mergeCalled {
+		t.Error("MergePR called for TTL-expired entry; want dropped before fetch")
+	}
+	if _, ok := state.PendingReactions[mergeKey]; ok {
+		t.Error("PendingReactions[merge] present after drop-on-age; want removed")
+	}
+	if _, ok := state.ReactionAttempts[mergeKey]; ok {
+		t.Error("ReactionAttempts[merge] present after drop-on-age; want removed")
+	}
+	if state.ReactionAttempts[ciKey] != 6 {
+		t.Errorf("ReactionAttempts[ci] = %d, want 6 (untouched)", state.ReactionAttempts[ciKey])
+	}
+	if _, ok := state.Claimed[issueID]; ok {
+		t.Error("Claimed present after drop-on-age; want absent")
+	}
+	if len(store.deletedIssueIDs) != 0 {
+		t.Errorf("DeleteRetryEntry calls = %d, want 0", len(store.deletedIssueIDs))
+	}
+	if store.upsertFingerprintCalls != 0 || store.getFingerprintCalls != 0 || store.deleteFingerprintCalls != 0 {
+		t.Errorf("fingerprint calls = upsert:%d get:%d delete:%d, want all 0",
+			store.upsertFingerprintCalls, store.getFingerprintCalls, store.deleteFingerprintCalls)
+	}
+}
+
 // --- Pure function tests ---
 
 // TestBuildAutoMergeFingerprint verifies the SHA-256 hex fingerprint builder.

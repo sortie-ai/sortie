@@ -64,10 +64,6 @@ func (m *mockRetryStore) AppendRunHistory(_ context.Context, run persistence.Run
 	return run, nil
 }
 
-func (m *mockRetryStore) DeleteReactionFingerprintsByIssue(_ context.Context, _ string) error {
-	return nil
-}
-
 func (m *mockRetryStore) UpsertReactionFingerprint(_ context.Context, _, _, _ string) error {
 	return nil
 }

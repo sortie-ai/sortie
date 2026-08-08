@@ -82,7 +82,6 @@ type reviewReconcileStore struct {
 	getFingerprintCalls    int
 	markDispatchedCalls    int
 	deleteFingerprintCalls int
-	deleteFPByIssueCalls   int
 
 	getFingerprintResult     string
 	getFingerprintDispatched bool
@@ -106,11 +105,6 @@ func (s *reviewReconcileStore) DeleteRetryEntry(_ context.Context, issueID strin
 
 func (s *reviewReconcileStore) AppendRunHistory(_ context.Context, run persistence.RunHistory) (persistence.RunHistory, error) {
 	return run, nil
-}
-
-func (s *reviewReconcileStore) DeleteReactionFingerprintsByIssue(_ context.Context, _ string) error {
-	s.deleteFPByIssueCalls++
-	return nil
 }
 
 func (s *reviewReconcileStore) UpsertReactionFingerprint(_ context.Context, _, _, _ string) error {
@@ -340,6 +334,54 @@ func TestReconcileReviewComments_TTLExpired(t *testing.T) {
 	}
 	if scm.calls != 0 {
 		t.Errorf("FetchPendingReviews calls = %d, want 0 (TTL exceeded)", scm.calls)
+	}
+}
+
+// TestReconcileReviewComments_DropOnAgeReleasesCounter verifies that the
+// drop-on-age branch also deletes the review reaction attempt counter,
+// leaves a sibling kind's counter and the claim untouched, and performs
+// no retry or fingerprint store call.
+func TestReconcileReviewComments_DropOnAgeReleasesCounter(t *testing.T) {
+	t.Parallel()
+
+	issueID := "REV-AGE-1"
+	state := stateWithReviewReaction(t, issueID, 10)
+	reviewKey := ReactionKey(issueID, ReactionKindReview)
+	state.ReactionAttempts[reviewKey] = 3
+	state.PendingReactions[reviewKey].CreatedAt = reviewBaseTime.Add(-31 * time.Minute)
+	ciKey := ReactionKey(issueID, ReactionKindCI)
+	state.ReactionAttempts[ciKey] = 7
+	delete(state.Claimed, issueID)
+
+	store := &reviewReconcileStore{}
+	metrics := newReviewMetricsSpy()
+	scm := &mockSCMAdapter{}
+	params := reviewParams(store, scm, nil)
+	params.ReviewPendingTTL = 30 * time.Minute
+
+	reconcileReviewComments(state, params, discardLogger(), context.Background(), metrics)
+
+	if _, ok := state.PendingReactions[reviewKey]; ok {
+		t.Error("PendingReactions[review] present after drop-on-age; want removed")
+	}
+	if _, ok := state.ReactionAttempts[reviewKey]; ok {
+		t.Error("ReactionAttempts[review] present after drop-on-age; want removed")
+	}
+	if state.ReactionAttempts[ciKey] != 7 {
+		t.Errorf("ReactionAttempts[ci] = %d, want 7 (untouched)", state.ReactionAttempts[ciKey])
+	}
+	if _, ok := state.Claimed[issueID]; ok {
+		t.Error("Claimed present after drop-on-age; want absent")
+	}
+	if len(store.deletedIssueIDs) != 0 {
+		t.Errorf("DeleteRetryEntry calls = %d, want 0", len(store.deletedIssueIDs))
+	}
+	if store.upsertFingerprintCalls != 0 || store.getFingerprintCalls != 0 || store.deleteFingerprintCalls != 0 {
+		t.Errorf("fingerprint calls = upsert:%d get:%d delete:%d, want all 0",
+			store.upsertFingerprintCalls, store.getFingerprintCalls, store.deleteFingerprintCalls)
+	}
+	if scm.calls != 0 {
+		t.Errorf("FetchPendingReviews calls = %d, want 0 (TTL exceeded before fetch)", scm.calls)
 	}
 }
 
@@ -608,8 +650,7 @@ func TestReconcileReviewComments_TurnCapExceeded_Escalates(t *testing.T) {
 // that review escalation clears only the review reaction's own pending
 // entry, counter, and fingerprint. A sibling merge-completion entry parked
 // on the same issue (seeded from the same worker exit as the review
-// reaction) must survive: the escalation must not call the issue-wide
-// DeleteReactionFingerprintsByIssue.
+// reaction) must survive: the escalation must not clear it.
 func TestReconcileReviewComments_TurnCapExceeded_CrossKindIsolation(t *testing.T) {
 	t.Parallel()
 
@@ -642,9 +683,6 @@ func TestReconcileReviewComments_TurnCapExceeded_CrossKindIsolation(t *testing.T
 	}
 	if state.ReactionAttempts[ReactionKey(issueID, ReactionKindMergeCompletion)] != 1 {
 		t.Error("sibling merge-completion ReactionAttempts counter altered by review escalation; want untouched")
-	}
-	if store.deleteFPByIssueCalls != 0 {
-		t.Errorf("DeleteReactionFingerprintsByIssue calls = %d, want 0 (escalation must be scoped to review)", store.deleteFPByIssueCalls)
 	}
 	if store.deleteFingerprintCalls != 1 {
 		t.Errorf("DeleteReactionFingerprint calls = %d, want 1 (the review kind's own fingerprint)", store.deleteFingerprintCalls)

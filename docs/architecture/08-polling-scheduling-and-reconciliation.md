@@ -138,12 +138,19 @@ Part A: Stall detection
 
 Part B: Tracker state refresh
 
-- Fetch current issue states for all running issue IDs.
+- Fetch current issue states for the deduplicated union of all running issue IDs and every issue
+  ID holding a pending reaction entry; skip the call entirely when that union is empty or no
+  tracker adapter is configured.
 - For each running issue:
   - If tracker state is terminal: terminate worker and clean workspace.
   - If tracker state is still active: update the in-memory issue snapshot.
   - If tracker state is neither active nor terminal: terminate worker without workspace cleanup.
-- If state refresh fails, keep workers running and try again on the next tick.
+- For an issue reported terminal, whether or not it has a running worker: release the issue's
+  pending reaction entries, reaction attempt counters, pending retry, and dispatch claim, leaving
+  `reaction_fingerprints` intact. An issue with no running worker and no terminal state is left
+  untouched.
+- If state refresh fails, keep workers running and try again on the next tick, and release
+  nothing.
 
 Part C: CI status reconciliation (when `ci_feedback.kind` or `reactions.ci_failure` is configured)
 

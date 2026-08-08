@@ -150,10 +150,11 @@ type mgcStoreFake struct {
 	getErr    error
 	markErr   error
 
-	upsertCalls        int
-	getCalls           int
-	markCalls          int
-	deleteByIssueCalls int
+	upsertCalls      int
+	getCalls         int
+	markCalls        int
+	deleteCalls      int
+	deleteRetryCalls int
 }
 
 var _ ReconcileStore = (*mgcStoreFake)(nil)
@@ -163,20 +164,12 @@ func newMGCStore() *mgcStoreFake {
 }
 
 func (s *mgcStoreFake) SaveRetryEntry(context.Context, persistence.RetryEntry) error { return nil }
-func (s *mgcStoreFake) DeleteRetryEntry(context.Context, string) error               { return nil }
+func (s *mgcStoreFake) DeleteRetryEntry(context.Context, string) error {
+	s.deleteRetryCalls++
+	return nil
+}
 func (s *mgcStoreFake) AppendRunHistory(_ context.Context, run persistence.RunHistory) (persistence.RunHistory, error) {
 	return run, nil
-}
-
-func (s *mgcStoreFake) DeleteReactionFingerprintsByIssue(_ context.Context, issueID string) error {
-	s.deleteByIssueCalls++
-	prefix := issueID + ":"
-	for key := range s.fingerprints {
-		if strings.HasPrefix(key, prefix) {
-			delete(s.fingerprints, key)
-		}
-	}
-	return nil
 }
 
 func (s *mgcStoreFake) UpsertReactionFingerprint(_ context.Context, issueID, kind, fingerprint string) error {
@@ -216,6 +209,7 @@ func (s *mgcStoreFake) MarkReactionDispatched(_ context.Context, issueID, kind s
 }
 
 func (s *mgcStoreFake) DeleteReactionFingerprint(_ context.Context, issueID, kind string) error {
+	s.deleteCalls++
 	delete(s.fingerprints, issueID+":"+kind)
 	return nil
 }
@@ -676,8 +670,8 @@ func TestReconcileMergeCompletion_NotFoundStopsWithoutEscalating(t *testing.T) {
 }
 
 // Escalation dispatches AddLabel for "label" and CommentIssue for
-// "comment", never touches ClearReactionsForIssue-scoped state, and a
-// sibling CI pending entry for the same issue survives.
+// "comment", never touches an issue-wide reaction slot, and a sibling CI
+// pending entry for the same issue survives.
 
 func TestReconcileMergeCompletion_EscalationDispatchesConfiguredAction(t *testing.T) {
 	t.Parallel()
@@ -717,9 +711,6 @@ func TestReconcileMergeCompletion_EscalationDispatchesConfiguredAction(t *testin
 		}
 		if _, claimed := state.Claimed[issueID]; claimed {
 			t.Error("state.Claimed gained an entry from merge-completion escalation; want untouched")
-		}
-		if store.deleteByIssueCalls != 0 {
-			t.Errorf("DeleteReactionFingerprintsByIssue calls = %d, want 0 (escalation never clears issue-wide)", store.deleteByIssueCalls)
 		}
 	})
 
@@ -878,90 +869,6 @@ func TestReconcileMergeCompletion_MarkDispatchedFailureIsAcceptedResidue(t *test
 	}
 }
 
-// An issue-wide clear (the mechanism the CI and review escalations
-// call) removes both the merge-completion and a sibling CI entry and
-// deletes the merge-completion fingerprint row; the next tick performs
-// no forge call; a following recovery pass re-creates the entry.
-
-func TestReconcileMergeCompletion_ClearReactionsForIssueCrossKindInteraction(t *testing.T) {
-	t.Parallel()
-
-	issueID := "MGC-23"
-	identifier := "PROJ-MGC23"
-	state := mgcStateWithPending(issueID, 26)
-
-	ciKey := ReactionKey(issueID, ReactionKindCI)
-	state.PendingReactions[ciKey] = &PendingReaction{
-		IssueID: issueID, Identifier: identifier, Kind: ReactionKindCI,
-		CreatedAt: mgcBaseTime, KindData: &CIReactionData{Branch: "feature/mgc23"},
-	}
-
-	store := newMGCStore()
-	mcKey := ReactionKey(issueID, ReactionKindMergeCompletion)
-	store.fingerprints[mcKey] = mgcFingerprintRecord{fingerprint: "sha-23", dispatched: false}
-
-	ClearReactionsForIssue(context.Background(), state, store, issueID, discardLogger())
-
-	if _, ok := state.PendingReactions[mcKey]; ok {
-		t.Error("merge-completion PendingReactions entry survived ClearReactionsForIssue, want removed")
-	}
-	if _, ok := state.PendingReactions[ciKey]; ok {
-		t.Error("CI PendingReactions entry survived ClearReactionsForIssue, want removed")
-	}
-	if _, ok := store.has(issueID); ok {
-		t.Error("merge-completion fingerprint row survived ClearReactionsForIssue, want deleted")
-	}
-
-	tracker := &mgcTrackerFake{states: map[string]string{issueID: "In Review"}}
-	scm := &mgcSCMFake{}
-	params := mgcParams(store, scm, tracker)
-
-	reconcileMergeCompletion(state, params, discardLogger(), context.Background(), &domain.NoopMetrics{})
-
-	if got := scm.calls.Load(); got != 0 {
-		t.Errorf("GetMergeability calls = %d, want 0 (no pending entry survives the clear)", got)
-	}
-	if len(tracker.transitionCalls) != 0 {
-		t.Errorf("TransitionIssue calls = %d, want 0", len(tracker.transitionCalls))
-	}
-
-	// A recovery pass over run history, with the tracker reporting the
-	// handoff state and the workspace metadata intact, re-creates the
-	// merge-completion entry.
-	wsRoot := t.TempDir()
-	writeRecoverySCM(t, wsRoot, identifier, domain.SCMMetadata{
-		Branch:   "feature/mgc23",
-		SHA:      "headsha",
-		PushedAt: freshSCMTime(1),
-		PRNumber: 26,
-		Owner:    "owner",
-		Repo:     "repo",
-	})
-	run := freshRun(issueID, identifier, "owner/repo#26", 1)
-	recoverParams := PendingReactionRecoveryParams{
-		WorkspaceRoot:                     wsRoot,
-		TrackerAdapter:                    tracker,
-		HandoffState:                      "In Review",
-		TerminalStates:                    []string{"Done"},
-		SCMAdapter:                        scm,
-		MergeCompletionReactionConfigured: true,
-		RecoveryLookback:                  PendingReactionRecoveryLookback,
-		MaxCandidates:                     PendingReactionRecoveryMaxCandidates,
-		NowFunc:                           func() time.Time { return recoveryNow },
-		Logger:                            discardLogger(),
-	}
-	result, err := RecoverPendingReactions(context.Background(), state, []persistence.RunHistory{run}, recoverParams)
-	if err != nil {
-		t.Fatalf("RecoverPendingReactions: %v", err)
-	}
-	if result.MergeCompletionRecovered != 1 {
-		t.Errorf("MergeCompletionRecovered = %d, want 1", result.MergeCompletionRecovered)
-	}
-	if _, ok := state.PendingReactions[mcKey]; !ok {
-		t.Error("merge-completion PendingReactions entry not re-created by recovery")
-	}
-}
-
 // SweepWorkspaces collects a workspace as terminal only when the
 // tracker-reported state is a member of the written TerminalStates
 // list, not a defaulted one.
@@ -1066,5 +973,55 @@ func TestReconcileMergeCompletion_TerminalDriftWarningFiresOncePerOnset(t *testi
 
 	if out := tick(nil); !strings.Contains(out, driftMessage) {
 		t.Errorf("tick 4 (second onset) log = %q, want a second WARN", out)
+	}
+}
+
+// TestReconcileTrackerState_TerminalReleasePreservesFingerprints verifies
+// that releasing a merge-completion pending entry through the terminal
+// tracker-state path performs no reaction_fingerprints read or write,
+// leaving a dispatched fingerprint row byte-identical.
+func TestReconcileTrackerState_TerminalReleasePreservesFingerprints(t *testing.T) {
+	t.Parallel()
+
+	issueID := "MGC-TERM"
+	state := mgcStateWithPending(issueID, 10)
+	state.Claimed[issueID] = struct{}{}
+
+	store := newMGCStore()
+	if err := store.UpsertReactionFingerprint(context.Background(), issueID, ReactionKindMergeCompletion, "sha-abc123"); err != nil {
+		t.Fatalf("seed UpsertReactionFingerprint: %v", err)
+	}
+	if err := store.MarkReactionDispatched(context.Background(), issueID, ReactionKindMergeCompletion); err != nil {
+		t.Fatalf("seed MarkReactionDispatched: %v", err)
+	}
+	before, ok := store.has(issueID)
+	if !ok {
+		t.Fatal("fingerprint row not seeded")
+	}
+	store.upsertCalls = 0
+	store.getCalls = 0
+	store.markCalls = 0
+	store.deleteCalls = 0
+
+	tracker := &mgcTrackerFake{states: map[string]string{issueID: "Done"}}
+	scm := &mgcSCMFake{}
+	params := mgcParams(store, scm, tracker)
+
+	reconcileTrackerState(state, params, discardLogger(), context.Background(), &domain.NoopMetrics{})
+
+	if store.upsertCalls != 0 || store.getCalls != 0 || store.markCalls != 0 || store.deleteCalls != 0 {
+		t.Errorf("fingerprint store calls = upsert:%d get:%d mark:%d delete:%d, want all 0",
+			store.upsertCalls, store.getCalls, store.markCalls, store.deleteCalls)
+	}
+	after, ok := store.has(issueID)
+	if !ok {
+		t.Fatal("fingerprint row deleted by terminal release; want preserved")
+	}
+	if after != before {
+		t.Errorf("fingerprint row = %+v, want unchanged %+v", after, before)
+	}
+	rkey := ReactionKey(issueID, ReactionKindMergeCompletion)
+	if _, ok := state.PendingReactions[rkey]; ok {
+		t.Error("PendingReactions entry survived terminal release; want removed")
 	}
 }

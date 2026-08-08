@@ -1,7 +1,6 @@
 package orchestrator
 
 import (
-	"context"
 	"math"
 	"strings"
 	"testing"
@@ -1737,58 +1736,5 @@ func TestBuildLabelFixReactionConfig(t *testing.T) {
 	}
 	if got != want {
 		t.Errorf("BuildLabelFixReactionConfig(%+v) = %+v, want %+v", cfg, got, want)
-	}
-}
-
-// --- ClearReactionsForIssue cross-kind tests ---
-
-// TestClearReactionsForIssue verifies that clearing an issue's reactions on
-// a terminal transition removes every sibling kind's PendingReactions entry,
-// including label-review, alongside the reaction_fingerprints deletion,
-// while leaving another issue's entries untouched.
-func TestClearReactionsForIssue(t *testing.T) {
-	t.Parallel()
-
-	const issueID = "ISS-CLEAR"
-	const otherIssueID = "ISS-OTHER"
-
-	state := NewState(5000, 4, nil, AgentTotals{})
-	kinds := []string{
-		ReactionKindCI,
-		ReactionKindReview,
-		ReactionKindBotReview,
-		ReactionKindAutoMerge,
-		ReactionKindMergeConflict,
-		ReactionKindLabelReview,
-	}
-	for _, kind := range kinds {
-		state.PendingReactions[ReactionKey(issueID, kind)] = &PendingReaction{IssueID: issueID, Kind: kind}
-	}
-	state.ReactionAttempts[ReactionKey(issueID, ReactionKindReview)] = 2
-
-	// A sibling issue's label-review entry must survive.
-	state.PendingReactions[ReactionKey(otherIssueID, ReactionKindLabelReview)] = &PendingReaction{
-		IssueID: otherIssueID,
-		Kind:    ReactionKindLabelReview,
-	}
-
-	store := &reviewReconcileStore{}
-
-	ClearReactionsForIssue(context.Background(), state, store, issueID, discardLogger())
-
-	for _, kind := range kinds {
-		key := ReactionKey(issueID, kind)
-		if _, ok := state.PendingReactions[key]; ok {
-			t.Errorf("PendingReactions[%s] survived ClearReactionsForIssue, want removed", key)
-		}
-	}
-	if _, ok := state.ReactionAttempts[ReactionKey(issueID, ReactionKindReview)]; ok {
-		t.Error("ReactionAttempts entry survived ClearReactionsForIssue, want removed")
-	}
-	if _, ok := state.PendingReactions[ReactionKey(otherIssueID, ReactionKindLabelReview)]; !ok {
-		t.Error("sibling issue's label-review PendingReaction removed by ClearReactionsForIssue, want untouched")
-	}
-	if store.deleteFPByIssueCalls != 1 {
-		t.Errorf("DeleteReactionFingerprintsByIssue calls = %d, want 1", store.deleteFPByIssueCalls)
 	}
 }
