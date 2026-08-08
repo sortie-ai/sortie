@@ -111,18 +111,19 @@ escalates. Escalation follows the auto-merge cross-kind isolation contract in §
   continuation turns attempted, under the same goroutine pattern.
 
 Cleanup is scoped to the `bot-review` slot only: delete `pending_reactions[issue_id:bot-review]` and
-the `bot-review` fingerprint row. The escalation path MUST NOT call `ClearReactionsForIssue`,
-`CancelRetry`, or `DeleteRetryEntry`, MUST NOT delete `state.Claimed[issue_id]`, and MUST NOT delete
-the residual `reaction_attempts[issue_id:bot-review]` counter. The issue claim and that residual
+the `bot-review` fingerprint row. The escalation path MUST NOT clear any sibling kind's slot, MUST
+NOT call `CancelRetry` or `DeleteRetryEntry`, MUST NOT delete `state.Claimed[issue_id]`, and MUST NOT
+delete the residual `reaction_attempts[issue_id:bot-review]` counter. The issue claim and that residual
 counter are owned by whichever kind currently holds the claim (the first-turn dispatch, `review`, or
 `merge`); releasing them from the bot-review path would corrupt sibling-kind ownership. Because the
-pending entry is deleted, the kind stops polling, but the residual counter and the claim are not
-released by any path in the current implementation. `ClearReactionsForIssue` clears an issue's
-residual `reaction_attempts` counters and `pending_reactions` entries, but it does not touch
-`state.Claimed`, and no path, including the tracker-reconcile terminal-state path, calls it in
-production. The residual counter and the claim persist for the life of the orchestrator process.
-This mirrors how `escalateAutoMergeFailure` leaves `reaction_attempts[issue_id:merge]` and
-`state.Claimed` uncleaned after a merge-kind escalation.
+pending entry is deleted, the kind stops polling, but the residual counter is not released by any
+path scoped to bot-review. The residual counter and the claim are released together, whole-issue,
+once the tracker reports the issue terminal: the tracker-reconcile pass drops every pending entry
+and every attempt counter the issue holds, cancels its pending retry, and releases
+`state.Claimed[issue_id]`, leaving `reaction_fingerprints` untouched. This mirrors how
+`escalateAutoMergeFailure` leaves `reaction_attempts[issue_id:merge]` and `state.Claimed` uncleaned
+after a merge-kind escalation; that residue, too, is released once the issue reaches a terminal
+state.
 
 Escalation tracker-call failures are logged and counted
 (`sortie_bot_review_escalations_total{action="error"}`) but do not block the slot-scoped cleanup.
@@ -154,5 +155,5 @@ Per-issue `bot-review` reaction lifecycle (the `issue_id:bot-review` slot):
 | pending | Reconcile tick, fingerprint unchanged and dispatched | pending | Re-enqueue at `now + poll_interval`. |
 | pending | Reconcile tick, new actionable comments, attempts < cap | dispatched | Schedule continuation, increment attempts, count dispatched. |
 | pending | Reconcile tick, attempts reach cap | escalated | Apply escalation; clear ONLY the `bot-review` slot. MUST NOT release the claim or clear sibling slots (§11D.5). |
-| pending | Issue reaches terminal state (tracker reconcile) | pending | No effect: the tracker-reconcile terminal-state path does not call `ClearReactionsForIssue`. The slot keeps re-enqueuing until the TTL backstop drops it; the residual counter and the claim are not released by any path. |
+| pending | Issue reaches terminal state (tracker reconcile) | (none) | Drop the `bot-review` pending entry and its attempt counter, cancel and delete the issue's retry, and release the claim; `reaction_fingerprints` is left intact. |
 

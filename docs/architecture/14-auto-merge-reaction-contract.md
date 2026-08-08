@@ -212,7 +212,8 @@ state owned by a different reaction kind. Specifically, these paths MUST NOT cal
 
 - `CancelRetry`
 - `DeleteRetryEntry`
-- `ClearReactionsForIssue`
+- a clear that ranges over every pending entry, attempt counter, or `reaction_fingerprints` row an
+  issue holds
 - `delete state.Claimed[issue_id]`
 
 A failed auto-merge does NOT invalidate parallel `ci` or `review` reaction continuations on

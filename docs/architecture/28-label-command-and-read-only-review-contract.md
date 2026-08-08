@@ -400,10 +400,10 @@ guard seeding uses, so a label applied while Sortie was down is detected on the 
 restart (the journal is durable) for either command. The persisted mark is read back from
 `reaction_fingerprints` for each kind, so recovery does not reset deduplication state.
 
-When the linked issue reaches a terminal state, no path removes the `label-review` or `label-fix`
-reaction state: the tracker-reconcile terminal-state path does not call the issue-wide
-`ClearReactionsForIssue` cleanup, and neither kind carries a TTL to drop its own entry with age. A
-pending entry keeps polling the label-event journal after the issue closes.
+When the linked issue reaches a terminal state, the tracker-reconcile terminal-state path removes
+the `label-review` or `label-fix` pending entry, whether or not the entry carries a TTL of its own;
+neither kind carries an attempt counter to release alongside it. The label-journal poll stops on the
+next reconcile tick.
 
 A pending `label-review` or `label-fix` entry no longer excludes its workspace from periodic-sweep
 candidacy, because neither kind carries an expiry. Detection is unaffected by that
@@ -458,7 +458,7 @@ Per-issue `label-review` reaction lifecycle (the `issue_id:label-review` slot):
 | pending | Reconcile tick, new events but no confirmed command (retraction, foreign or unlabeled only, or collapse into an outstanding command) | pending | Advance the mark; re-enqueue at the poll interval; no dispatch. |
 | pending | Reconcile tick, confirmed command, none queued or running | dispatched | Advance the mark; schedule the read-only dispatch; remove the label best-effort; re-enqueue at the poll interval. |
 | pending | Reconcile tick, confirmed command, a `label-review` command already queued or running | pending | Advance the mark; re-enqueue; the gesture collapses into the outstanding command. |
-| pending | Issue reaches terminal state (tracker reconcile) | pending | No effect: the tracker-reconcile terminal-state path does not call `ClearReactionsForIssue`, and this kind carries no TTL to drop the entry on its own. Detection keeps polling. |
+| pending | Issue reaches terminal state (tracker reconcile) | (none) | Drop the pending entry; cancel and delete the issue's retry; release the claim. Detection stops polling on the next tick. |
 
 Per-issue `label-fix` reaction lifecycle (the `issue_id:label-fix` slot) follows the same three
 states, differing only in the seeding and recovery guard and in which dispatch the confirmed-command
@@ -474,7 +474,7 @@ transition schedules:
 | pending | Reconcile tick, new events but no confirmed command (retraction, foreign or unlabeled only, or collapse into an outstanding command) | pending | Advance the mark; re-enqueue at the poll interval; no dispatch. |
 | pending | Reconcile tick, confirmed command, none queued or running | dispatched | Advance the mark; schedule the fix dispatch (§11F.13); remove the label best-effort; re-enqueue at the poll interval. |
 | pending | Reconcile tick, confirmed command, a `label-fix` command already queued or running | pending | Advance the mark; re-enqueue; the gesture collapses into the outstanding command. |
-| pending | Issue reaches terminal state (tracker reconcile) | pending | No effect: the tracker-reconcile terminal-state path does not call `ClearReactionsForIssue`, and this kind carries no TTL to drop the entry on its own. Detection keeps polling. |
+| pending | Issue reaches terminal state (tracker reconcile) | (none) | Drop the pending entry; cancel and delete the issue's retry; release the claim. Detection stops polling on the next tick. |
 
 A PR record whose head branch is empty seeds and recovers no `label-fix` entry at all: the slot
 stays absent rather than entering `pending`, because a fix session with nothing to check out is

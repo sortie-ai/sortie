@@ -207,7 +207,7 @@ The GitHub adapter serves the terminal half through the search endpoint with a s
 
 ### 4. `FetchIssueStatesByIDs` and 5. `FetchIssueStatesByIdentifiers`
 
-Gitea has no bulk state-by-ids route. The adapter loops `GET .../issues/{index}` per requested id, skipping 404s (issues not found are omitted from the map, per the interface contract) and skipping PR entries. Both methods share one implementation because ID and Identifier are the same value. Conditional requests are not worth wiring: Gitea sends no `ETag` on API responses (verified), so the GitHub adapter's ETag cache pattern has nothing to key on. Reconciliation touches only the handful of currently running issues per tick, and the instance applies no rate limits, so the per-issue loop is acceptable as-is.
+Gitea has no bulk state-by-ids route. The adapter loops `GET .../issues/{index}` per requested id, skipping 404s (issues not found are omitted from the map, per the interface contract) and skipping PR entries. Both methods share one implementation because ID and Identifier are the same value. Conditional requests are not worth wiring: Gitea sends no `ETag` on API responses (verified), so the GitHub adapter's ETag cache pattern has nothing to key on. Reconciliation requests the running issues plus every issue holding a pending reaction entry per tick, and the instance applies no rate limits, so the per-issue loop is acceptable as-is.
 
 ### 6. `FetchIssueComments`
 
