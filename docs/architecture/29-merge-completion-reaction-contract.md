@@ -140,8 +140,9 @@ A transition failure is routed by the tracker error taxonomy defined in §11:
 | `ErrTrackerPayload` | Escalate immediately; consumes no retry budget. |
 | `ErrTrackerNotFound` | Stop: mark the fingerprint dispatched, drop the entry, log at warning level, no escalation. |
 
-`max_retries` defaults to `2` and bounds only the transport and API dispositions; the comparison
-is strict over-limit (`attempts > max_retries`) against a per-issue counter scoped to this kind.
+`max_retries` defaults to `2` and bounds every disposition in the retryable group above: the
+transport and API kinds, and any unclassified or unlisted kind routed with them. The comparison is
+strict over-limit (`attempts > max_retries`) against a per-issue counter scoped to this kind.
 The counter is incremented after every `TransitionIssue` call regardless of outcome, including on
 an authentication or payload failure; that disposition consumes no retry budget only in the sense
 that it skips the over-limit comparison against the counter, not that the counter is left

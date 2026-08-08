@@ -66,7 +66,8 @@
 
 - Merge-completion reaction transition failures, routed by tracker error kind (§11G.5):
   - Transport or API failure: retry with backoff, bounded by `max_retries`, then escalate.
-  - Authentication or payload failure: escalate immediately, consuming no retry budget.
+  - Authentication or payload failure: escalate immediately, skipping the over-limit comparison
+    against `max_retries`; the attempt counter still increments on the failed call.
   - Issue not found: stop, mark the fingerprint dispatched, log a warning, no escalation.
 
   Not every orchestrator-driven tracker write in this section gets a later re-attempt. A stalled
