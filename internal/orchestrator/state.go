@@ -13,6 +13,7 @@ import (
 
 	"github.com/sortie-ai/sortie/internal/config"
 	"github.com/sortie-ai/sortie/internal/domain"
+	"github.com/sortie-ai/sortie/internal/registry"
 )
 
 // Label value constants for metric instrumentation. Unexported; used as
@@ -351,6 +352,13 @@ const ReactionKindLabelReview = "label-review"
 // asymmetry the sibling kinds document.
 const ReactionKindLabelFix = "label-fix"
 
+// ReactionKindMergeCompletion is the reaction kind constant for the
+// merge-completion reaction. The user-facing YAML key is
+// reactions.merge_completion; the short form lives here as the runtime
+// and persisted discriminator, matching the YAML-versus-runtime
+// asymmetry the sibling kinds document.
+const ReactionKindMergeCompletion = "merge-completion"
+
 // AutoMergePreflightRetryDelay is the delay between the initial
 // auto-merge preflight failure (transport-class) and its single
 // scheduled retry. The retry runs at most once per orchestrator
@@ -364,13 +372,14 @@ const AutoMergePreflightRetryDelay time.Duration = 5 * time.Minute
 // read this map, so a kind cannot be recognized without carrying an
 // explicit pin classification.
 var reactionKindPins = map[string]bool{
-	ReactionKindCI:            true,
-	ReactionKindReview:        true,
-	ReactionKindBotReview:     true,
-	ReactionKindAutoMerge:     true,
-	ReactionKindMergeConflict: true,
-	ReactionKindLabelReview:   false,
-	ReactionKindLabelFix:      false,
+	ReactionKindCI:              true,
+	ReactionKindReview:          true,
+	ReactionKindBotReview:       true,
+	ReactionKindAutoMerge:       true,
+	ReactionKindMergeConflict:   true,
+	ReactionKindLabelReview:     false,
+	ReactionKindLabelFix:        false,
+	ReactionKindMergeCompletion: false,
 }
 
 func isKnownReactionKind(kind string) bool {
@@ -676,6 +685,37 @@ type LabelFixReactionConfig struct {
 	PollIntervalMS int
 }
 
+// MergeCompletionReactionData holds merge-completion-specific fields for
+// a pending merge-completion reaction. Stored in [PendingReaction.KindData]
+// for reactions with Kind == [ReactionKindMergeCompletion]. PRNumber,
+// Owner, and Repo are sourced from [domain.SCMMetadata] (written by the
+// agent to scm.json), never from the tracker project configuration.
+//
+// Unlike the checkout-bearing sibling kinds, no branch or commit SHA is
+// carried: the pass performs no checkout and fingerprints on the merge
+// commit identifier observed live, not on a value snapshotted at
+// enqueue time.
+type MergeCompletionReactionData struct {
+	// PRNumber is the pull request number.
+	PRNumber int
+
+	// Owner is the repository owner.
+	Owner string
+
+	// Repo is the repository name.
+	Repo string
+}
+
+// MergeCompletionReactionConfig holds validated merge-completion-specific
+// configuration extracted from [config.ReactionConfig] at startup.
+type MergeCompletionReactionConfig struct {
+	TargetState     string
+	PollIntervalMS  int
+	Escalation      string
+	EscalationLabel string
+	MaxRetries      int
+}
+
 // State is the single authoritative runtime state owned by the orchestrator.
 // The running map and claimed set are in-memory for performance. The
 // agent_totals and completed set are backed by SQLite and survive restarts.
@@ -781,6 +821,14 @@ type State struct {
 	// MergePR has already produced a structured ERROR log, so the log
 	// fires at most once per issue per orchestrator lifetime.
 	AutoMergeAuthLogged map[string]struct{}
+
+	// MergeCompletionTerminalDriftLogged suppresses the reload-drift
+	// warning emitted when the configured merge-completion target state
+	// is no longer a member of the runtime terminal-state list. Set on
+	// the onset of the condition and cleared once the target is present
+	// again, so a later onset produces a further warning. Runtime-only;
+	// mutated only by the reconcile pass on the event-loop goroutine.
+	MergeCompletionTerminalDriftLogged bool
 
 	// SweepTickCounter tracks poll ticks since the last workspace sweep.
 	// Incremented by handleTick; reset to zero when the sweep fires.
@@ -1336,6 +1384,81 @@ func BuildLabelFixReactionConfig(cfg config.LabelCommandsConfig) LabelFixReactio
 		FixLabel:       cfg.FixLabel,
 		PollIntervalMS: cfg.PollIntervalMS,
 	}
+}
+
+// BuildMergeCompletionReactionConfig extracts and validates
+// merge-completion-specific configuration from a [config.ReactionConfig].
+// Returns an error naming the offending field for invalid values.
+//
+// meta resolves the default active-state list only; the terminal list is
+// read from tracker as written, with no fallback to
+// [registry.TrackerMeta.DefaultTerminalStates], so the offline validator
+// and the runtime terminal drop agree on what "terminal" means. The
+// function performs no I/O and no network call.
+func BuildMergeCompletionReactionConfig(rc config.ReactionConfig, tracker config.TrackerConfig, meta registry.TrackerMeta) (MergeCompletionReactionConfig, error) {
+	cfg := MergeCompletionReactionConfig{
+		PollIntervalMS:  60000,
+		Escalation:      rc.Escalation,
+		EscalationLabel: rc.EscalationLabel,
+		MaxRetries:      rc.MaxRetries,
+	}
+
+	if cfg.Escalation == "" {
+		cfg.Escalation = "label"
+	}
+	if cfg.Escalation != "label" && cfg.Escalation != "comment" {
+		return MergeCompletionReactionConfig{}, fmt.Errorf("invalid escalation %q: must be \"label\" or \"comment\"", cfg.Escalation)
+	}
+
+	if cfg.EscalationLabel == "" {
+		cfg.EscalationLabel = "needs-human"
+	}
+
+	if tracker.HandoffState == "" {
+		return MergeCompletionReactionConfig{}, fmt.Errorf("tracker.handoff_state is required when reactions.merge_completion is configured")
+	}
+	if len(tracker.TerminalStates) == 0 {
+		return MergeCompletionReactionConfig{}, fmt.Errorf("tracker.terminal_states must be written when reactions.merge_completion is configured")
+	}
+
+	if raw, ok := rc.Extra["target_state"]; ok {
+		s, sok := raw.(string)
+		if !sok {
+			return MergeCompletionReactionConfig{}, fmt.Errorf("invalid target_state: expected string, got %T", raw)
+		}
+		cfg.TargetState = s
+	}
+	if cfg.TargetState == "" {
+		return MergeCompletionReactionConfig{}, fmt.Errorf("target_state is required")
+	}
+
+	effectiveActive := tracker.ActiveStates
+	if len(effectiveActive) == 0 {
+		effectiveActive = meta.DefaultActiveStates
+	}
+
+	if strings.EqualFold(cfg.TargetState, tracker.HandoffState) {
+		return MergeCompletionReactionConfig{}, fmt.Errorf("invalid target_state %q: must not equal tracker.handoff_state", cfg.TargetState)
+	}
+	if _, active := stateSet(effectiveActive)[strings.ToLower(cfg.TargetState)]; active {
+		return MergeCompletionReactionConfig{}, fmt.Errorf("invalid target_state %q: must not be a member of tracker.active_states", cfg.TargetState)
+	}
+	if _, terminal := stateSet(tracker.TerminalStates)[strings.ToLower(cfg.TargetState)]; !terminal {
+		return MergeCompletionReactionConfig{}, fmt.Errorf("invalid target_state %q: must be a member of tracker.terminal_states", cfg.TargetState)
+	}
+
+	if v, ok := rc.Extra["poll_interval_ms"]; ok {
+		n, err := toInt(v)
+		if err != nil {
+			return MergeCompletionReactionConfig{}, fmt.Errorf("invalid poll_interval_ms: %w", err)
+		}
+		if n < 30000 {
+			return MergeCompletionReactionConfig{}, fmt.Errorf("poll_interval_ms must be >= 30000, got %d", n)
+		}
+		cfg.PollIntervalMS = n
+	}
+
+	return cfg, nil
 }
 
 // toInt converts a YAML-decoded value (typically int or float64) to int.

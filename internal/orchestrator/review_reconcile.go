@@ -214,7 +214,9 @@ func computeReactionPendingDelay(attempts int) time.Duration {
 
 // escalateReviewFailure handles the case where review fix continuation
 // turns are exhausted. It applies the configured escalation action,
-// cancels the retry, and releases the claim.
+// cancels the retry, releases the claim, and clears the review reaction's
+// own pending entry, counter, and fingerprint. Sibling reaction kinds for
+// the same issue are left untouched.
 func escalateReviewFailure(
 	state *State,
 	params ReconcileParams,
@@ -306,7 +308,17 @@ func escalateReviewFailure(
 	}
 
 	delete(state.Claimed, pending.IssueID)
-	ClearReactionsForIssue(ctx, state, params.Store, pending.IssueID, log)
+
+	// Scoped per-kind delete (not the issue-wide ClearReactionsForIssue)
+	// so sibling reactions' pending entries, counters, and fingerprints
+	// for the same issue survive a review-only escalation.
+	delete(state.PendingReactions, ReactionKey(pending.IssueID, ReactionKindReview))
+	delete(state.ReactionAttempts, ReactionKey(pending.IssueID, ReactionKindReview))
+	if err := params.Store.DeleteReactionFingerprint(ctx, pending.IssueID, ReactionKindReview); err != nil {
+		log.Warn("failed to delete reaction fingerprint during review escalation",
+			slog.Any("error", err),
+		)
+	}
 }
 
 // buildReviewEscalationComment builds a plain-text escalation comment

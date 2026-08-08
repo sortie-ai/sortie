@@ -3,11 +3,13 @@ package orchestrator
 import (
 	"context"
 	"math"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/sortie-ai/sortie/internal/config"
 	"github.com/sortie-ai/sortie/internal/domain"
+	"github.com/sortie-ai/sortie/internal/registry"
 )
 
 func TestNewState(t *testing.T) {
@@ -1405,12 +1407,12 @@ func TestReactionKindPins(t *testing.T) {
 			})
 		}
 
-		if isKnownReactionKind("merge-completion") {
-			t.Error(`isKnownReactionKind("merge-completion") = true, want false (unregistered kind)`)
+		if isKnownReactionKind("totally-unregistered-kind") {
+			t.Error(`isKnownReactionKind("totally-unregistered-kind") = true, want false (unregistered kind)`)
 		}
 	})
 
-	t.Run("reactionKindPinsWorkspace returns the registered value for each of the seven kinds", func(t *testing.T) {
+	t.Run("reactionKindPinsWorkspace returns the registered value for each registered kind", func(t *testing.T) {
 		t.Parallel()
 
 		for kind, wantPins := range reactionKindPins {
@@ -1426,8 +1428,8 @@ func TestReactionKindPins(t *testing.T) {
 	t.Run("reactionKindPinsWorkspace returns true for an unregistered kind", func(t *testing.T) {
 		t.Parallel()
 
-		if got := reactionKindPinsWorkspace("merge-completion"); !got {
-			t.Error(`reactionKindPinsWorkspace("merge-completion") = false, want true (unregistered kind retains)`)
+		if got := reactionKindPinsWorkspace("totally-unregistered-kind"); !got {
+			t.Error(`reactionKindPinsWorkspace("totally-unregistered-kind") = false, want true (unregistered kind retains)`)
 		}
 	})
 }
@@ -1482,6 +1484,236 @@ func TestIsKnownReactionKind_AcceptsLabelFix(t *testing.T) {
 			}
 		})
 	}
+}
+
+// --- isKnownReactionKind merge-completion case ---
+
+// TestIsKnownReactionKind_AcceptsMergeCompletion verifies that the kind is
+// registered in reactionKindPins, and that reactionKindPinsWorkspace reports
+// false for it so a pending entry of this kind does not exclude its
+// workspace from sweep candidacy.
+func TestIsKnownReactionKind_AcceptsMergeCompletion(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		kind string
+		want bool
+	}{
+		{ReactionKindMergeCompletion, true},
+		{"merge-completion", true},
+		{"reactions.merge_completion", false}, // the YAML key, not the runtime discriminator
+		{"merge_completion", false},           // the template variable, not the discriminator
+		{"unknown", false},
+		{"", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.kind, func(t *testing.T) {
+			t.Parallel()
+			if got := isKnownReactionKind(tt.kind); got != tt.want {
+				t.Errorf("isKnownReactionKind(%q) = %v, want %v", tt.kind, got, tt.want)
+			}
+		})
+	}
+
+	if got := reactionKindPinsWorkspace(ReactionKindMergeCompletion); got {
+		t.Errorf("reactionKindPinsWorkspace(%q) = %v, want false", ReactionKindMergeCompletion, got)
+	}
+}
+
+// --- BuildMergeCompletionReactionConfig tests ---
+
+// TestBuildMergeCompletionReactionConfig covers the nine validation
+// failures of the stated evaluation order, the ADR-default success case,
+// and the two escalation edge cases asserted against a hand-built
+// config.ReactionConfig only.
+func TestBuildMergeCompletionReactionConfig(t *testing.T) {
+	t.Parallel()
+
+	validTracker := config.TrackerConfig{
+		HandoffState:   "in-review",
+		ActiveStates:   []string{"doing"},
+		TerminalStates: []string{"done"},
+	}
+
+	tests := []struct {
+		name        string
+		rc          config.ReactionConfig
+		tracker     config.TrackerConfig
+		meta        registry.TrackerMeta
+		want        MergeCompletionReactionConfig
+		wantErr     bool
+		wantErrText string
+	}{
+		{
+			name:        "unset tracker.handoff_state errors naming the field",
+			rc:          config.ReactionConfig{Extra: map[string]any{"target_state": "done"}},
+			tracker:     config.TrackerConfig{TerminalStates: []string{"done"}},
+			wantErr:     true,
+			wantErrText: "tracker.handoff_state",
+		},
+		{
+			name:        "empty tracker.terminal_states errors naming the field",
+			rc:          config.ReactionConfig{Extra: map[string]any{"target_state": "done"}},
+			tracker:     config.TrackerConfig{HandoffState: "in-review"},
+			wantErr:     true,
+			wantErrText: "tracker.terminal_states",
+		},
+		{
+			name:        "absent target_state errors",
+			rc:          config.ReactionConfig{},
+			tracker:     validTracker,
+			wantErr:     true,
+			wantErrText: "target_state is required",
+		},
+		{
+			name:        "non-string target_state errors naming the type",
+			rc:          config.ReactionConfig{Extra: map[string]any{"target_state": 123}},
+			tracker:     validTracker,
+			wantErr:     true,
+			wantErrText: "invalid target_state",
+		},
+		{
+			name:        "target_state equal to handoff_state errors",
+			rc:          config.ReactionConfig{Extra: map[string]any{"target_state": "in-review"}},
+			tracker:     validTracker,
+			wantErr:     true,
+			wantErrText: "must not equal tracker.handoff_state",
+		},
+		{
+			name:        "target_state present in active_states errors",
+			rc:          config.ReactionConfig{Extra: map[string]any{"target_state": "doing"}},
+			tracker:     validTracker,
+			wantErr:     true,
+			wantErrText: "must not be a member of tracker.active_states",
+		},
+		{
+			name:        "target_state absent from terminal_states errors",
+			rc:          config.ReactionConfig{Extra: map[string]any{"target_state": "wontfix"}},
+			tracker:     validTracker,
+			wantErr:     true,
+			wantErrText: "must be a member of tracker.terminal_states",
+		},
+		{
+			name: "non-integer poll_interval_ms errors",
+			rc: config.ReactionConfig{Extra: map[string]any{
+				"target_state":     "done",
+				"poll_interval_ms": "soon",
+			}},
+			tracker:     validTracker,
+			wantErr:     true,
+			wantErrText: "invalid poll_interval_ms",
+		},
+		{
+			name: "poll_interval_ms below floor errors",
+			rc: config.ReactionConfig{Extra: map[string]any{
+				"target_state":     "done",
+				"poll_interval_ms": 29999,
+			}},
+			tracker:     validTracker,
+			wantErr:     true,
+			wantErrText: "poll_interval_ms must be >= 30000",
+		},
+		{
+			name:    "ADR defaults with only target_state set",
+			rc:      config.ReactionConfig{Extra: map[string]any{"target_state": "done"}},
+			tracker: validTracker,
+			want: MergeCompletionReactionConfig{
+				TargetState:     "done",
+				PollIntervalMS:  60000,
+				Escalation:      "label",
+				EscalationLabel: "needs-human",
+			},
+		},
+		{
+			name: "invalid escalation errors against a hand-built config with no tracker set",
+			rc:   config.ReactionConfig{Escalation: "webhook"},
+			// tracker is the zero value: the escalation check runs before
+			// any tracker prerequisite, so this is a unit-level assertion
+			// only, not an end-to-end one.
+			wantErr:     true,
+			wantErrText: "invalid escalation",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got, err := BuildMergeCompletionReactionConfig(tt.rc, tt.tracker, tt.meta)
+			if tt.wantErr {
+				if err == nil {
+					t.Fatalf("BuildMergeCompletionReactionConfig(%+v, %+v) = %+v, want error", tt.rc, tt.tracker, got)
+				}
+				if tt.wantErrText != "" && !strings.Contains(err.Error(), tt.wantErrText) {
+					t.Errorf("BuildMergeCompletionReactionConfig(%+v, %+v) error = %q, want substring %q", tt.rc, tt.tracker, err.Error(), tt.wantErrText)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("BuildMergeCompletionReactionConfig(%+v, %+v) unexpected error: %v", tt.rc, tt.tracker, err)
+			}
+			if got != tt.want {
+				t.Errorf("BuildMergeCompletionReactionConfig(%+v, %+v) = %+v, want %+v", tt.rc, tt.tracker, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestBuildMergeCompletionReactionConfig_StateListFallbackAsymmetry
+// verifies that the terminal list never falls back to registry.TrackerMeta
+// defaults, while the active list does, and the fallback only ever makes
+// the active check stricter.
+func TestBuildMergeCompletionReactionConfig_StateListFallbackAsymmetry(t *testing.T) {
+	t.Parallel()
+
+	t.Run("terminal defaults never fill in an empty written list", func(t *testing.T) {
+		t.Parallel()
+
+		rc := config.ReactionConfig{Extra: map[string]any{"target_state": "done"}}
+		tracker := config.TrackerConfig{HandoffState: "in-review"}
+		meta := registry.TrackerMeta{DefaultTerminalStates: []string{"done"}}
+
+		_, err := BuildMergeCompletionReactionConfig(rc, tracker, meta)
+		if err == nil {
+			t.Fatal("BuildMergeCompletionReactionConfig(...) = nil error, want error (terminal defaults must not fill in)")
+		}
+		if !strings.Contains(err.Error(), "tracker.terminal_states") {
+			t.Errorf("BuildMergeCompletionReactionConfig(...) error = %q, want substring %q", err.Error(), "tracker.terminal_states")
+		}
+	})
+
+	t.Run("active defaults fill in and reject a target drawn from them", func(t *testing.T) {
+		t.Parallel()
+
+		rc := config.ReactionConfig{Extra: map[string]any{"target_state": "doing"}}
+		tracker := config.TrackerConfig{HandoffState: "in-review", TerminalStates: []string{"doing", "done"}}
+		meta := registry.TrackerMeta{DefaultActiveStates: []string{"doing"}}
+
+		_, err := BuildMergeCompletionReactionConfig(rc, tracker, meta)
+		if err == nil {
+			t.Fatal("BuildMergeCompletionReactionConfig(...) = nil error, want error (active defaults must fill in and reject)")
+		}
+		if !strings.Contains(err.Error(), "tracker.active_states") {
+			t.Errorf("BuildMergeCompletionReactionConfig(...) error = %q, want substring %q", err.Error(), "tracker.active_states")
+		}
+	})
+
+	t.Run("a target outside the active defaults and inside the written terminal list validates", func(t *testing.T) {
+		t.Parallel()
+
+		rc := config.ReactionConfig{Extra: map[string]any{"target_state": "done"}}
+		tracker := config.TrackerConfig{HandoffState: "in-review", TerminalStates: []string{"done"}}
+		meta := registry.TrackerMeta{DefaultActiveStates: []string{"doing"}}
+
+		got, err := BuildMergeCompletionReactionConfig(rc, tracker, meta)
+		if err != nil {
+			t.Fatalf("BuildMergeCompletionReactionConfig(...) unexpected error: %v", err)
+		}
+		if got.TargetState != "done" {
+			t.Errorf("BuildMergeCompletionReactionConfig(...).TargetState = %q, want %q", got.TargetState, "done")
+		}
+	})
 }
 
 // --- BuildLabelFixReactionConfig tests ---

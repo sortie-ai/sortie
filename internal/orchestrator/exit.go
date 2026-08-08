@@ -138,6 +138,11 @@ type HandleWorkerExitParams struct {
 	// active for the current process. The enqueue path gates on this flag
 	// and the SCMAdapter being non-nil.
 	LabelFixReactionConfigured bool
+
+	// MergeCompletionReactionConfigured marks whether the
+	// merge-completion feature is active for the current process. The
+	// enqueue path gates on this flag and the SCMAdapter being non-nil.
+	MergeCompletionReactionConfigured bool
 }
 
 // HandleWorkerExit processes a worker's terminal outcome. It removes the
@@ -721,6 +726,43 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 								Owner:    scm.Owner,
 								Repo:     scm.Repo,
 								Branch:   scm.Branch,
+							},
+							AgentKind:  entry.AgentKind,
+							RuleName:   entry.RuleName,
+							TemplateID: entry.TemplateID,
+						}
+					}
+				}
+			}
+		}
+
+		// Record a pending merge-completion entry when the SCM adapter
+		// is configured, merge-completion is enabled, and the workspace
+		// has PR metadata. Unlike the checkout-bearing kinds this
+		// requires no branch: the pass performs no checkout and reads
+		// no branch.
+		if params.SCMAdapter != nil && params.MergeCompletionReactionConfigured && workerResult.WorkspacePath != "" {
+			if reactionEnqueueAllowed {
+				scm := workspace.ReadSCMMetadata(workerResult.WorkspacePath, log)
+				if scm.PRNumber > 0 && scm.Owner != "" && scm.Repo != "" {
+					nowMergeCompletion := time.Now().UTC()
+					if params.NowFunc != nil {
+						nowMergeCompletion = params.NowFunc().UTC()
+					}
+					rkey := ReactionKey(workerResult.IssueID, ReactionKindMergeCompletion)
+					if _, exists := state.PendingReactions[rkey]; !exists {
+						state.PendingReactions[rkey] = &PendingReaction{
+							IssueID:     workerResult.IssueID,
+							Identifier:  workerResult.Identifier,
+							DisplayID:   entry.Issue.DisplayID,
+							Attempt:     normalizeAttempt(entry.RetryAttempt) + 1,
+							Kind:        ReactionKindMergeCompletion,
+							LastSSHHost: workerResult.SSHHost,
+							CreatedAt:   nowMergeCompletion,
+							KindData: &MergeCompletionReactionData{
+								PRNumber: scm.PRNumber,
+								Owner:    scm.Owner,
+								Repo:     scm.Repo,
 							},
 							AgentKind:  entry.AgentKind,
 							RuleName:   entry.RuleName,

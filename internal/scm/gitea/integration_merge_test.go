@@ -307,6 +307,22 @@ func TestIntegration_SCMMergeFlow(t *testing.T) {
 		t.Skip("MergePR_HappyPath subtest failed; skipping dependent subtests")
 	}
 
+	t.Run("GetMergeability_AfterMerge", func(t *testing.T) {
+		status, err := adapter.GetMergeability(ctx, prNumber, owner, repo)
+		if err != nil {
+			t.Fatalf("GetMergeability(PR #%d) after merge: %v", prNumber, err)
+		}
+		if !status.Merged {
+			t.Errorf("GetMergeability(PR #%d).Merged = false, want true after the happy-path merge", prNumber)
+		}
+		if status.MergeCommitSHA == "" {
+			t.Errorf("GetMergeability(PR #%d).MergeCommitSHA = %q, want non-empty after the happy-path merge", prNumber, status.MergeCommitSHA)
+		}
+	})
+	if t.Failed() {
+		t.Skip("GetMergeability_AfterMerge subtest failed; skipping dependent subtests")
+	}
+
 	t.Run("MergePR_AlreadyMerged", func(t *testing.T) {
 		// Gitea returns HTTP 405 "already merged" on a second merge, unlike the
 		// GitHub sibling's idempotent success.

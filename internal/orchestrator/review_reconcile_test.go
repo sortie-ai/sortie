@@ -604,6 +604,53 @@ func TestReconcileReviewComments_TurnCapExceeded_Escalates(t *testing.T) {
 	}
 }
 
+// TestReconcileReviewComments_TurnCapExceeded_CrossKindIsolation verifies
+// that review escalation clears only the review reaction's own pending
+// entry, counter, and fingerprint. A sibling merge-completion entry parked
+// on the same issue (seeded from the same worker exit as the review
+// reaction) must survive: the escalation must not call the issue-wide
+// DeleteReactionFingerprintsByIssue.
+func TestReconcileReviewComments_TurnCapExceeded_CrossKindIsolation(t *testing.T) {
+	t.Parallel()
+
+	issueID := "ISS-R-ISO"
+	state := stateWithReviewReaction(t, issueID, 10)
+	rkey := ReactionKey(issueID, ReactionKindReview)
+	state.ReactionAttempts[rkey] = 3
+
+	mcKey := ReactionKey(issueID, ReactionKindMergeCompletion)
+	state.PendingReactions[mcKey] = &PendingReaction{
+		IssueID:    issueID,
+		Identifier: issueID + "-ident",
+		Kind:       ReactionKindMergeCompletion,
+		CreatedAt:  reviewBaseTime,
+		KindData:   &MergeCompletionReactionData{PRNumber: 42, Owner: "owner", Repo: "repo"},
+	}
+	state.ReactionAttempts[ReactionKey(issueID, ReactionKindMergeCompletion)] = 1
+
+	store := &reviewReconcileStore{}
+	metrics := newReviewMetricsSpy()
+	tracker := &reviewTrackerStub{}
+	scm := &mockSCMAdapter{}
+	params := reviewParams(store, scm, tracker)
+
+	reconcileReviewComments(state, params, discardLogger(), context.Background(), metrics)
+	state.TrackerOpsWg.Wait()
+
+	if _, ok := state.PendingReactions[mcKey]; !ok {
+		t.Error("sibling merge-completion PendingReactions entry removed by review escalation; want untouched")
+	}
+	if state.ReactionAttempts[ReactionKey(issueID, ReactionKindMergeCompletion)] != 1 {
+		t.Error("sibling merge-completion ReactionAttempts counter altered by review escalation; want untouched")
+	}
+	if store.deleteFPByIssueCalls != 0 {
+		t.Errorf("DeleteReactionFingerprintsByIssue calls = %d, want 0 (escalation must be scoped to review)", store.deleteFPByIssueCalls)
+	}
+	if store.deleteFingerprintCalls != 1 {
+		t.Errorf("DeleteReactionFingerprint calls = %d, want 1 (the review kind's own fingerprint)", store.deleteFingerprintCalls)
+	}
+}
+
 // --- buildReviewFingerprint tests ---
 
 func TestBuildReviewFingerprint_EmptyInput(t *testing.T) {

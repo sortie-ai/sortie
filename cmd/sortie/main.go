@@ -378,15 +378,19 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 	var labelReviewConfigured bool
 	var labelFixConfig orchestrator.LabelFixReactionConfig
 	var labelFixConfigured bool
+	var mergeCompletionConfig orchestrator.MergeCompletionReactionConfig
+	var mergeCompletionConfigured bool
 
 	reviewRC, hasReview := br.cfg.Reactions["review_comments"]
 	autoMergeRC, hasAutoMerge := br.cfg.Reactions["auto_merge"]
 	botReviewRC, hasBotReview := br.cfg.Reactions["bot_review"]
 	mergeConflictRC, hasMergeConflict := br.cfg.Reactions["merge_conflicts"]
+	mergeCompletionRC, hasMergeCompletion := br.cfg.Reactions["merge_completion"]
 	reviewActive := hasReview && reviewRC.Provider != ""
 	autoMergeActive := hasAutoMerge && autoMergeRC.Provider != ""
 	botReviewActive := hasBotReview && botReviewRC.Provider != ""
 	mergeConflictActive := hasMergeConflict && mergeConflictRC.Provider != ""
+	mergeCompletionActive := hasMergeCompletion && mergeCompletionRC.Provider != ""
 	// label_commands parses through its own dedicated field, never the
 	// Reactions map; it activates when a provider and a review label are set.
 	labelReviewActive := br.cfg.LabelCommands.Provider != "" && br.cfg.LabelCommands.ReviewLabel != ""
@@ -401,6 +405,7 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 		{name: "bot_review", active: botReviewActive, provider: botReviewRC.Provider},
 		{name: "merge_conflicts", active: mergeConflictActive, provider: mergeConflictRC.Provider},
 		{name: "label_commands", active: labelReviewActive || labelFixActive, provider: br.cfg.LabelCommands.Provider},
+		{name: "merge_completion", active: mergeCompletionActive, provider: mergeCompletionRC.Provider},
 	}
 	if conflictKinds, conflictProviders := scmProviderConflict(activeSCMKinds); len(conflictProviders) > 1 {
 		br.logger.Error("unsupported: active SCM reaction kinds must use the same provider",
@@ -410,8 +415,8 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 		return 1
 	}
 
-	if reviewActive || autoMergeActive || botReviewActive || mergeConflictActive || labelReviewActive || labelFixActive {
-		provider := cmp.Or(reviewRC.Provider, autoMergeRC.Provider, botReviewRC.Provider, mergeConflictRC.Provider, br.cfg.LabelCommands.Provider)
+	if reviewActive || autoMergeActive || botReviewActive || mergeConflictActive || labelReviewActive || labelFixActive || mergeCompletionActive {
+		provider := cmp.Or(reviewRC.Provider, autoMergeRC.Provider, botReviewRC.Provider, mergeConflictRC.Provider, br.cfg.LabelCommands.Provider, mergeCompletionRC.Provider)
 		scmCtor, scmErr := registry.SCMAdapters.Get(provider)
 		if scmErr != nil {
 			br.logger.Error("unknown SCM adapter kind",
@@ -453,6 +458,10 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 				}
 			}
 		}
+		// merge_completion's Extra keys (target_state, poll_interval_ms)
+		// are orchestrator settings, not adapter settings, so unlike the
+		// sibling blocks above, its Extra map is never merged in, matching
+		// the label_commands precedent.
 		scmAdapter, scmErr = scmCtor(adapterCfgMap)
 		if scmErr != nil {
 			br.logger.Error("failed to construct SCM adapter",
@@ -555,6 +564,23 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 			// gates detection or dispatch, so the result is discarded.
 			_, _, _ = orchestrator.RunLabelFixScopePreflight(ctx, scmAdapter, br.logger)
 		}
+
+		if mergeCompletionActive {
+			trackerMeta, _ := registry.Trackers.Meta(br.cfg.Tracker.Kind)
+			var mcErr error
+			mergeCompletionConfig, mcErr = orchestrator.BuildMergeCompletionReactionConfig(mergeCompletionRC, br.cfg.Tracker, trackerMeta)
+			if mcErr != nil {
+				br.logger.Error("invalid merge_completion reaction config", slog.Any("error", mcErr))
+				return 1
+			}
+			mergeCompletionConfigured = true
+
+			br.logger.Info("merge completion reaction enabled",
+				slog.String("provider", mergeCompletionRC.Provider),
+				slog.String("target_state", mergeCompletionConfig.TargetState),
+				slog.Int("poll_interval_ms", mergeCompletionConfig.PollIntervalMS),
+			)
+		}
 	}
 
 	recoveryEnabled := br.cfg.Tracker.HandoffState != "" && (ciProvider != nil || scmAdapter != nil)
@@ -568,19 +594,20 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 		recoveryRuns, recoveryErr = store.LoadLatestSuccessfulRunsForReactionRecovery(ctx, recoveryCutoff, orchestrator.PendingReactionRecoveryMaxCandidates)
 		if recoveryErr == nil {
 			recoveryOutcome, recoveryErr = orchestrator.RecoverPendingReactions(ctx, state, recoveryRuns, orchestrator.PendingReactionRecoveryParams{
-				WorkspaceRoot:                   br.cfg.Workspace.Root,
-				TrackerAdapter:                  br.trackerAdapter,
-				HandoffState:                    br.cfg.Tracker.HandoffState,
-				TerminalStates:                  br.cfg.Tracker.TerminalStates,
-				CIProvider:                      ciProvider,
-				SCMAdapter:                      scmAdapter,
-				AutoMergeReactionConfigured:     autoMergeConfigured,
-				BotReviewReactionConfigured:     botReviewConfigured,
-				MergeConflictReactionConfigured: mergeConflictConfigured,
-				LabelReviewReactionConfigured:   labelReviewConfigured,
-				LabelFixReactionConfigured:      labelFixConfigured,
-				RecoveryLookback:                recoveryLookback,
-				MaxCandidates:                   orchestrator.PendingReactionRecoveryMaxCandidates,
+				WorkspaceRoot:                     br.cfg.Workspace.Root,
+				TrackerAdapter:                    br.trackerAdapter,
+				HandoffState:                      br.cfg.Tracker.HandoffState,
+				TerminalStates:                    br.cfg.Tracker.TerminalStates,
+				CIProvider:                        ciProvider,
+				SCMAdapter:                        scmAdapter,
+				AutoMergeReactionConfigured:       autoMergeConfigured,
+				BotReviewReactionConfigured:       botReviewConfigured,
+				MergeConflictReactionConfigured:   mergeConflictConfigured,
+				LabelReviewReactionConfigured:     labelReviewConfigured,
+				LabelFixReactionConfigured:        labelFixConfigured,
+				MergeCompletionReactionConfigured: mergeCompletionConfigured,
+				RecoveryLookback:                  recoveryLookback,
+				MaxCandidates:                     orchestrator.PendingReactionRecoveryMaxCandidates,
 				NowFunc: func() time.Time {
 					return recoveryNow
 				},
@@ -600,6 +627,7 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 		slog.Int("merge_conflict_recovered", recoveryOutcome.MergeConflictRecovered),
 		slog.Int("label_review_recovered", recoveryOutcome.LabelReviewRecovered),
 		slog.Int("label_fix_recovered", recoveryOutcome.LabelFixRecovered),
+		slog.Int("merge_completion_recovered", recoveryOutcome.MergeCompletionRecovered),
 		slog.Int("stale_skipped", recoveryOutcome.StaleSkipped),
 		slog.Int("skipped", recoveryOutcome.Skipped),
 	}
@@ -676,32 +704,34 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 	}
 
 	o := orchestrator.NewOrchestrator(orchestrator.OrchestratorParams{
-		State:                           state,
-		Logger:                          br.logger,
-		TrackerAdapter:                  br.trackerAdapter,
-		AgentAdapter:                    agentAdapter,
-		AgentAdapterByKind:              agentAdapterByKind,
-		WorkflowManager:                 br.mgr,
-		Store:                           store,
-		PreflightParams:                 br.preflightParams,
-		Metrics:                         orchMetrics,
-		ToolRegistry:                    toolRegistry,
-		SessionToolRegistryFunc:         sessionToolFunc,
-		WorkflowFileFunc:                br.mgr.FilePath,
-		DBPath:                          dbPath,
-		CIProvider:                      ciProvider,
-		SCMAdapter:                      scmAdapter,
-		ReviewConfig:                    reviewConfig,
-		AutoMergeConfig:                 autoMergeConfig,
-		AutoMergeReactionConfigured:     autoMergeConfigured,
-		BotReviewConfig:                 botReviewConfig,
-		BotReviewConfigured:             botReviewConfigured,
-		MergeConflictConfig:             mergeConflictConfig,
-		MergeConflictReactionConfigured: mergeConflictConfigured,
-		LabelReviewConfig:               labelReviewConfig,
-		LabelReviewReactionConfigured:   labelReviewConfigured,
-		LabelFixConfig:                  labelFixConfig,
-		LabelFixReactionConfigured:      labelFixConfigured,
+		State:                             state,
+		Logger:                            br.logger,
+		TrackerAdapter:                    br.trackerAdapter,
+		AgentAdapter:                      agentAdapter,
+		AgentAdapterByKind:                agentAdapterByKind,
+		WorkflowManager:                   br.mgr,
+		Store:                             store,
+		PreflightParams:                   br.preflightParams,
+		Metrics:                           orchMetrics,
+		ToolRegistry:                      toolRegistry,
+		SessionToolRegistryFunc:           sessionToolFunc,
+		WorkflowFileFunc:                  br.mgr.FilePath,
+		DBPath:                            dbPath,
+		CIProvider:                        ciProvider,
+		SCMAdapter:                        scmAdapter,
+		ReviewConfig:                      reviewConfig,
+		AutoMergeConfig:                   autoMergeConfig,
+		AutoMergeReactionConfigured:       autoMergeConfigured,
+		BotReviewConfig:                   botReviewConfig,
+		BotReviewConfigured:               botReviewConfigured,
+		MergeConflictConfig:               mergeConflictConfig,
+		MergeConflictReactionConfigured:   mergeConflictConfigured,
+		LabelReviewConfig:                 labelReviewConfig,
+		LabelReviewReactionConfigured:     labelReviewConfigured,
+		LabelFixConfig:                    labelFixConfig,
+		LabelFixReactionConfigured:        labelFixConfigured,
+		MergeCompletionConfig:             mergeCompletionConfig,
+		MergeCompletionReactionConfigured: mergeCompletionConfigured,
 	})
 
 	var srv *server.Server

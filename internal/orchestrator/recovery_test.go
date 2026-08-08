@@ -2035,3 +2035,144 @@ func TestRecoverPendingReactions_LabelFixMissingPRMetadata(t *testing.T) {
 		})
 	}
 }
+
+// TestRecoverPendingReactions_MergeCompletion verifies that a handoff-state
+// issue whose recovered SCM metadata carries a PR number, owner, and repo
+// (no branch requirement) recovers one merge-completion entry, carrying the
+// frozen dispatch fields, and increments MergeCompletionRecovered.
+func TestRecoverPendingReactions_MergeCompletion(t *testing.T) {
+	t.Parallel()
+
+	wsRoot := t.TempDir()
+	writeRecoverySCM(t, wsRoot, "PROJ-MGC1", domain.SCMMetadata{
+		Branch:   "feature/mgc-fix",
+		SHA:      "cafef00d",
+		PushedAt: freshSCMTime(1),
+		PRNumber: 66,
+		Owner:    "mgcowner",
+		Repo:     "mgcrepo",
+	})
+
+	tracker := &recoveryTrackerStub{states: map[string]string{"ISS-MGC1": "In Review"}}
+	state := NewState(5000, 4, nil, AgentTotals{})
+	run := freshRun("ISS-MGC1", "PROJ-MGC1", "mgcowner/mgcrepo#66", 3)
+	params := defaultRecoveryParams(wsRoot, tracker)
+	params.MergeCompletionReactionConfigured = true
+
+	result, err := RecoverPendingReactions(context.Background(), state, []persistence.RunHistory{run}, params)
+	if err != nil {
+		t.Fatalf("RecoverPendingReactions: %v", err)
+	}
+	if result.MergeCompletionRecovered != 1 {
+		t.Errorf("MergeCompletionRecovered = %d, want 1", result.MergeCompletionRecovered)
+	}
+
+	rkey := ReactionKey("ISS-MGC1", ReactionKindMergeCompletion)
+	pr, ok := state.PendingReactions[rkey]
+	if !ok {
+		t.Fatalf("PendingReactions[%q] missing, want present", rkey)
+	}
+	if pr.Kind != ReactionKindMergeCompletion {
+		t.Errorf("PendingReaction.Kind = %q, want %q", pr.Kind, ReactionKindMergeCompletion)
+	}
+	if pr.Attempt != 3 {
+		t.Errorf("PendingReaction.Attempt = %d, want 3", pr.Attempt)
+	}
+	if pr.AgentKind != run.AgentAdapter {
+		t.Errorf("PendingReaction.AgentKind = %q, want %q (frozen from the recovered run)", pr.AgentKind, run.AgentAdapter)
+	}
+	mcd, ok := pr.KindData.(*MergeCompletionReactionData)
+	if !ok {
+		t.Fatalf("KindData type = %T, want *MergeCompletionReactionData", pr.KindData)
+	}
+	if mcd.PRNumber != 66 {
+		t.Errorf("MergeCompletionReactionData.PRNumber = %d, want 66", mcd.PRNumber)
+	}
+	if mcd.Owner != "mgcowner" {
+		t.Errorf("MergeCompletionReactionData.Owner = %q, want %q", mcd.Owner, "mgcowner")
+	}
+	if mcd.Repo != "mgcrepo" {
+		t.Errorf("MergeCompletionReactionData.Repo = %q, want %q", mcd.Repo, "mgcrepo")
+	}
+	if _, claimed := state.Claimed["ISS-MGC1"]; claimed {
+		t.Error("ISS-MGC1 found in state.Claimed after recovery, want not claimed")
+	}
+}
+
+// TestRecoverPendingReactions_MergeCompletionNotRecoveredWhenFlagFalse
+// verifies that MergeCompletionReactionConfigured=false reconstructs no
+// merge-completion entry, even with full PR metadata present.
+func TestRecoverPendingReactions_MergeCompletionNotRecoveredWhenFlagFalse(t *testing.T) {
+	t.Parallel()
+
+	wsRoot := t.TempDir()
+	writeRecoverySCM(t, wsRoot, "PROJ-MGC2", domain.SCMMetadata{
+		Branch:   "feature/mgc-disabled",
+		SHA:      "abc",
+		PushedAt: freshSCMTime(1),
+		PRNumber: 10,
+		Owner:    "o",
+		Repo:     "r",
+	})
+
+	tracker := &recoveryTrackerStub{states: map[string]string{"ISS-MGC2": "In Review"}}
+	state := NewState(5000, 4, nil, AgentTotals{})
+	run := freshRun("ISS-MGC2", "PROJ-MGC2", "", 1)
+	params := defaultRecoveryParams(wsRoot, tracker)
+	params.MergeCompletionReactionConfigured = false
+
+	result, err := RecoverPendingReactions(context.Background(), state, []persistence.RunHistory{run}, params)
+	if err != nil {
+		t.Fatalf("RecoverPendingReactions: %v", err)
+	}
+	if result.MergeCompletionRecovered != 0 {
+		t.Errorf("MergeCompletionRecovered = %d, want 0 when flag is false", result.MergeCompletionRecovered)
+	}
+
+	rkey := ReactionKey("ISS-MGC2", ReactionKindMergeCompletion)
+	if _, ok := state.PendingReactions[rkey]; ok {
+		t.Error("merge-completion PendingReactions entry created with MergeCompletionReactionConfigured=false; want absent")
+	}
+}
+
+// TestRecoverPendingReactions_MergeCompletionSkipsWhenHandoffStateUnset
+// verifies that recovery reconstructs no merge-completion entry, and no
+// other reaction kind's entry, when tracker.handoff_state is unset: the
+// prerequisite the config builder requires disables the whole recovery
+// pass, per the recoveryEnabled gate cmd/sortie/main.go computes from it.
+func TestRecoverPendingReactions_MergeCompletionSkipsWhenHandoffStateUnset(t *testing.T) {
+	t.Parallel()
+
+	wsRoot := t.TempDir()
+	writeRecoverySCM(t, wsRoot, "PROJ-MGC3", domain.SCMMetadata{
+		Branch:   "feature/mgc-nohandoff",
+		SHA:      "abc",
+		PushedAt: freshSCMTime(1),
+		PRNumber: 20,
+		Owner:    "o",
+		Repo:     "r",
+	})
+
+	tracker := &recoveryTrackerStub{states: map[string]string{"ISS-MGC3": "In Review"}}
+	state := NewState(5000, 4, nil, AgentTotals{})
+	run := freshRun("ISS-MGC3", "PROJ-MGC3", "", 1)
+	params := defaultRecoveryParams(wsRoot, tracker)
+	params.HandoffState = ""
+	params.MergeCompletionReactionConfigured = true
+
+	result, err := RecoverPendingReactions(context.Background(), state, []persistence.RunHistory{run}, params)
+	if err != nil {
+		t.Fatalf("RecoverPendingReactions: %v", err)
+	}
+	if result.MergeCompletionRecovered != 0 {
+		t.Errorf("MergeCompletionRecovered = %d, want 0 when tracker.handoff_state is unset", result.MergeCompletionRecovered)
+	}
+	if result != (PendingReactionRecoveryResult{}) {
+		t.Errorf("RecoverPendingReactions(...) result = %+v, want the zero value (unset handoff_state disables recovery entirely)", result)
+	}
+
+	rkey := ReactionKey("ISS-MGC3", ReactionKindMergeCompletion)
+	if _, ok := state.PendingReactions[rkey]; ok {
+		t.Error("merge-completion PendingReactions entry created despite unset tracker.handoff_state")
+	}
+}

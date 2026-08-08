@@ -14,17 +14,24 @@ import (
 
 // --- GetMergeability ---
 
+// pr_merged.json is schema-inferred from the upstream MergedCommitID
+// *string field in modules/structs/pull.go at the Gitea v1.27.0 tag this
+// project pins (JSON key merge_commit_sha), the same provenance marker
+// docs/gitea-adapter-notes.md records for this field: the lab instance
+// carried no merged pull request to populate it live.
 func TestGiteaSCMGetMergeability(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name           string
-		fixture        string
-		wantMergeable  domain.MergeabilityState
-		wantDraft      bool
-		wantHeadSHA    string
-		wantBranchName string
-		wantBaseBranch string
+		name               string
+		fixture            string
+		wantMergeable      domain.MergeabilityState
+		wantDraft          bool
+		wantHeadSHA        string
+		wantBranchName     string
+		wantBaseBranch     string
+		wantMerged         bool
+		wantMergeCommitSHA string
 	}{
 		{
 			name:           "mergeable true maps to clean",
@@ -52,6 +59,17 @@ func TestGiteaSCMGetMergeability(t *testing.T) {
 			wantHeadSHA:    "sha-conflict-003",
 			wantBranchName: "feature/conflict",
 			wantBaseBranch: "develop",
+		},
+		{
+			name:               "merged true populates Merged and MergeCommitSHA",
+			fixture:            "pr_merged.json",
+			wantMergeable:      domain.MergeabilityUnknown,
+			wantDraft:          false,
+			wantHeadSHA:        "sha-clean-001",
+			wantBranchName:     "feature/gitea-scm-reads",
+			wantBaseBranch:     "main",
+			wantMerged:         true,
+			wantMergeCommitSHA: "9f3c1a2e4b5d6c7a8e9f0b1c2d3e4f5a6b7c8d9e",
 		},
 	}
 
@@ -92,6 +110,12 @@ func TestGiteaSCMGetMergeability(t *testing.T) {
 			}
 			if got.CIConclusion != "" {
 				t.Errorf("GetMergeability().CIConclusion = %q, want empty (left unset)", got.CIConclusion)
+			}
+			if got.Merged != tt.wantMerged {
+				t.Errorf("GetMergeability().Merged = %v, want %v", got.Merged, tt.wantMerged)
+			}
+			if got.MergeCommitSHA != tt.wantMergeCommitSHA {
+				t.Errorf("GetMergeability().MergeCommitSHA = %q, want %q", got.MergeCommitSHA, tt.wantMergeCommitSHA)
 			}
 		})
 	}

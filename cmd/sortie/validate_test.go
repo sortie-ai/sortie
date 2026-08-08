@@ -2355,6 +2355,40 @@ func TestActivationChecks(t *testing.T) {
 			},
 			wantChecks: nil,
 		},
+		{
+			// A configuration with no merge_completion block must leave the
+			// pre-existing diagnostic set unchanged: a single active
+			// reaction on one provider produces no diagnostic. This is the
+			// regression an implementer who wires merge_completion into
+			// activeSCMKinds unconditionally (ignoring its empty provider)
+			// would introduce as a spurious provider-conflict diagnostic.
+			name: "no merge_completion block leaves a single active reaction clean",
+			cfg: config.ServiceConfig{
+				Reactions: map[string]config.ReactionConfig{
+					"bot_review": {Provider: "gitea"},
+				},
+			},
+			wantChecks: nil,
+		},
+		{
+			name: "merge_completion as the sole active SCM reaction constructs an adapter path",
+			cfg: config.ServiceConfig{
+				Reactions: map[string]config.ReactionConfig{
+					"merge_completion": {Provider: "gitea"},
+				},
+			},
+			wantChecks: nil,
+		},
+		{
+			name: "merge_completion provider disagreement with another active SCM reaction",
+			cfg: config.ServiceConfig{
+				Reactions: map[string]config.ReactionConfig{
+					"merge_completion": {Provider: "github"},
+					"bot_review":       {Provider: "gitea"},
+				},
+			},
+			wantChecks: []string{"reactions.scm_provider_conflict"},
+		},
 	}
 
 	for _, tt := range tests {
@@ -2375,6 +2409,61 @@ func TestActivationChecks(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// mergeCompletionFaultWorkflow returns a WORKFLOW.md with a minimal valid
+// tracker (file) and agent plus a handoff_state, so ValidateDispatchConfig
+// passes cleanly, with a reactions.merge_completion block whose
+// target_state names an active rather than a terminal state.
+func mergeCompletionFaultWorkflow() []byte {
+	return []byte(`---
+tracker:
+  kind: file
+  active_states:
+    - To Do
+  terminal_states:
+    - Done
+  handoff_state: In Review
+agent:
+  kind: mock
+reactions:
+  merge_completion:
+    provider: gitea
+    target_state: To Do
+---
+Do {{ .issue.title }}.
+`)
+}
+
+// TestValidateMergeCompletionNonTerminalTargetState verifies that
+// "sortie validate --format json" on a workflow whose merge_completion
+// block sets a non-terminal target_state reports valid: false with an
+// error diagnostic whose check is reactions.merge_completion, and exits
+// 1, with no network access (the tracker is the offline file adapter).
+func TestValidateMergeCompletionNonTerminalTargetState(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	wfPath := writeCustomWorkflowFile(t, dir, mergeCompletionFaultWorkflow())
+
+	var stdout, stderr bytes.Buffer
+	code := run(context.Background(), []string{"validate", "--format", "json", wfPath}, &stdout, &stderr)
+	if code != 1 {
+		t.Fatalf("run(validate --format json) = %d, want 1; stderr: %s", code, stderr.String())
+	}
+
+	var out validateOutput
+	if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
+		t.Fatalf("json.Unmarshal(%q) error: %v", stdout.String(), err)
+	}
+	if out.Valid {
+		t.Errorf("validateOutput.Valid = true, want false")
+	}
+	if d := diagWithCheck(out.Errors, "reactions.merge_completion"); d == nil {
+		t.Errorf("validateOutput.Errors = %v, want a diagnostic with check %q", out.Errors, "reactions.merge_completion")
+	} else if d.Severity != "error" {
+		t.Errorf("reactions.merge_completion diagnostic severity = %q, want %q", d.Severity, "error")
 	}
 }
 
