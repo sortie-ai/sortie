@@ -459,6 +459,7 @@ GET /repos/{owner}/{repo}/pulls/{index}
 - The PR object carries `mergeable` (a plain bool, verified `true` on the lab PR), `merged`, `draft`, `head.sha`, `head.ref`, `base.ref`, and a `requested_reviewers` array. There is no `mergeable_state` string and no tri-state "computing" field (verified absent).
 - The boolean is the only mergeability signal, so the mapping to `MergeabilityState` is lossy: a draft maps to `blocked`, a mergeable non-draft to `clean`, and any other state to `unknown`. Gitea never yields `dirty` or `unstable`; a merge conflict and an in-progress recheck both collapse to `unknown`, which the auto-merge state machine re-enqueues rather than treating as a hard conflict.
 - The same read supplies `head.sha` (the CI ref for `GetCIStatus`), `head.ref` (the branch), and `base.ref` (the base branch the merge-conflict reaction needs).
+- The PR object also carries `merge_commit_sha`, serialized from the `MergedCommitID *string` field in `modules/structs/pull.go` at the Gitea `v1.27.0` tag this project pins. This is upstream-source provenance, not a live-verification claim: the lab PR carried no merged pull request to populate the field, so its presence and JSON key name are read from the upstream model rather than observed on the wire.
 
 ### Combined commit status
 

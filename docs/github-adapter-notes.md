@@ -614,8 +614,10 @@ GET /repos/{owner}/{repo}/pulls/{prNumber}
 Response subset:
 
 ```json
-{ "draft": false, "mergeable_state": "clean",
-  "head": { "sha": "<headSHA>", "ref": "<branch>" } }
+{ "draft": false, "mergeable_state": "clean", "merged": false,
+  "merge_commit_sha": "<shaOfATestMerge>",
+  "head": { "sha": "<headSHA>", "ref": "<branch>" },
+  "base": { "ref": "<baseBranch>" } }
 ```
 
 The adapter maps `mergeable_state` to `domain.MergeabilityState`:
@@ -628,11 +630,17 @@ The adapter maps `mergeable_state` to `domain.MergeabilityState`:
 | `dirty`                  | `MergeabilityDirty`        |
 | anything else (including the empty string) | `MergeabilityUnknown` |
 
-The returned `PRMergeStatus` populates `Draft`, `Mergeability`, `HeadSHA`,
-and `BranchName`. `ReviewDecision` and `CIConclusion` are left unset:
-callers obtain those values from the dedicated reads (see §1 and §2 above).
-GitHub computes `mergeable_state` asynchronously after a push, so callers
-treat `MergeabilityUnknown` as a deferral condition per [§11C.5](architecture/14-auto-merge-reaction-contract.md#11c5-merge-precondition-state-machine).
+The returned `PRMergeStatus` populates `Draft`, `Mergeability`, `HeadSHA`, `BranchName`,
+`BaseBranch` (from `base.ref`), `Merged` (from `merged`), and `MergeCommitSHA`.
+`ReviewDecision` and `CIConclusion` are left unset: callers obtain those values from the
+dedicated reads (see §1 and §2 above). GitHub computes `mergeable_state` asynchronously after
+a push, so callers treat `MergeabilityUnknown` as a deferral condition per
+[§11C.5](architecture/14-auto-merge-reaction-contract.md#11c5-merge-precondition-state-machine).
+
+GitHub populates `merge_commit_sha` on an open, unmerged pull request with a preview of the
+commit a merge would produce, not a record that a merge happened. The adapter reads
+`merge_commit_sha` into `MergeCommitSHA` only when `merged` is true, so the field is never
+populated for a pull request that has not actually merged.
 
 Idempotent and read-only.
 

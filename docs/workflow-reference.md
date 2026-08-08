@@ -1260,6 +1260,101 @@ reactions:
     poll_interval_ms: 60000
 ```
 
+#### Reaction kind: `merge_completion`
+
+Merge-completion detection. When configured, the orchestrator observes the merge state of
+Sortie-managed pull requests independently of who performs the merge, and transitions the
+linked issue to a single configured terminal state exactly once. The reaction is off by
+default: a deployment that omits the block behaves exactly as one running without it, and
+enabling it grants the tracker credential write authority it did not need before.
+
+Fields:
+
+| Field              | Type    | Default       | Dynamic Reload    | Description                                                                                    |
+| ------------------ | ------- | ------------- | ------------------ | ------------------------------------------------------------------------------------------------ |
+| `provider`         | string  | _(required)_  | Requires restart  | SCM adapter kind. Must match the provider of every other active SCM reaction. Activates the kind. |
+| `target_state`     | string  | _(required)_  | Requires restart  | The single terminal state the linked issue moves to once its pull request merges. Never inferred. |
+| `poll_interval_ms` | integer | `60000`       | Requires restart  | Polling interval for the merge-observation state machine. Minimum `30000` (30 sec).               |
+| `max_retries`      | integer | `2`           | Requires restart  | Retryable transition attempts before escalation. `0` escalates on the first failed attempt.       |
+| `escalation`       | string  | `label`       | Requires restart  | Escalation action when retries are exhausted. One of `label` or `comment`.                        |
+| `escalation_label` | string  | `needs-human` | Requires restart  | Label applied when `escalation` is `label`.                                                       |
+
+**Tracker prerequisites:** two `tracker` fields must be set before this block activates, and
+each is enforced offline. `tracker.handoff_state` must be non-empty: it is the state a merge
+waits in, and pending-reaction recovery across a restart is disabled entirely without it.
+`tracker.terminal_states` must be written out in front matter rather than left to the tracker
+adapter's default list: the reconcile pass and the terminal workspace sweep both read the
+list exactly as configured, with no fallback to an adapter default, so a defaulted list would
+let the validator accept a `target_state` the runtime never treats as terminal.
+
+**Activation:** The `reactions.merge_completion` block is active when `provider` is present
+and non-empty, on its own, with no other `reactions` block required. Agent-created PRs MUST
+write `pr_number` (positive integer), `owner`, and `repo` (all non-empty) to
+`.sortie/scm.json` in the workspace for merge-completion polling to activate; unlike the
+checkout-bearing kinds, no `branch` is required because the reaction performs no checkout.
+
+**Target-state rule and irreversibility:** the target is never inferred from the terminal
+list; the operator names it explicitly, and it is applied verbatim once the merge is
+observed. The transition is not reversible by the orchestrator: naming an abandonment state
+where a completion state was meant closes finished work under the wrong label, and no
+validator can detect that mistake, because it is a judgement about the issue rather than a
+configuration shape.
+
+**Idempotency key:** the fingerprint is the merge commit identifier reported by the
+provider, not the pull request number, persisted in the `reaction_fingerprints` SQLite table
+under a kind distinct from every other reaction. A row is created on the first observed
+merge, retained (never deleted) once the transition succeeds, and re-armed only when a later
+merge reports a different commit identifier. `Merged: true` with no reported commit
+identifier is treated as no observation rather than as a failure.
+
+**Failure matrix:**
+
+| Transition outcome            | Posture                                                     |
+| ------------------------------ | ------------------------------------------------------------ |
+| Transport or API failure       | Retry with backoff, bounded by `max_retries`, then escalate  |
+| Authentication failure         | Escalate immediately, no retry                                |
+| Payload failure (target state unreachable) | Escalate immediately, no retry                    |
+| Issue not found                | Stop, mark the fingerprint dispatched, log a warning, no escalation |
+
+**Restart-to-apply:** reaction configuration, including `target_state`, is captured once at
+orchestrator construction and is not rebuilt on a workflow reload. A change to this block, or
+to the two tracker prerequisites, takes effect only on the next restart; `sortie validate`
+compares the same configuration a restart would build, so the offline verdict and the
+construction verdict cannot diverge. Environment indirection through `$VAR` is not supported
+for any field in this block, matching every other reaction kind.
+
+**Request cost:** each parked issue costs one tracker issue-state read and one pull-request
+read per poll interval, plus one tracker write per observed merge. On a forge tracker the
+tracker and the SCM adapter share one credential against one host, so the steady-state cost
+approaches two requests per parked issue per poll interval. A deployment with many
+simultaneously parked issues SHOULD raise `poll_interval_ms` above the default rather than
+accept it.
+
+**Cross-kind isolation:** CI-failure and review escalations are scoped to their own kind:
+each clears only its own pending entry, attempt counter, and fingerprint, so merge-completion
+tracking for that issue survives an unrelated escalation. Other reaction kinds on the same
+issue are unaffected by a merge-completion transition or escalation, and vice versa.
+
+**Configuration drift on a running process:** editing `tracker.terminal_states` while the
+process runs does not update the `target_state` a running orchestrator already captured. When
+the two disagree, the reaction logs one warning naming both values and keeps transitioning
+issues to the frozen target; the terminal workspace sweep stops collecting the workspaces of
+issues this reaction closes until the two lists agree again. A restart re-validates the edited
+file offline and rejects the same drifted configuration before the process starts.
+
+Example:
+
+```yaml
+reactions:
+  merge_completion:
+    provider: github
+    target_state: done
+    poll_interval_ms: 60000
+    max_retries: 2
+    escalation: label
+    escalation_label: needs-human
+```
+
 **Validation rules:**
 
 - Reaction kind keys must match `[a-z][a-z0-9_-]*`. Invalid keys are rejected with a
@@ -1280,6 +1375,9 @@ reactions:
 - `review_label` and `fix_label` for `label_commands` must be strings; each defaults to a non-empty value, and an explicit `""` disables that command.
 - `poll_interval_ms` below `30000` for `label_commands` is clamped up to `30000` with a warning, not rejected.
 - For `label_commands`, setting `provider` while both `review_label` and `fix_label` are `""` is a configuration error surfaced offline by `sortie validate`.
+- `target_state` for `merge_completion` is required, must not equal `tracker.handoff_state`, must not be a member of `tracker.active_states` (falling back to the tracker adapter's default active states when that list is empty), and must be a member of `tracker.terminal_states` as written, with no fallback to the adapter's default terminal states.
+- `tracker.handoff_state` must be set and `tracker.terminal_states` must be non-empty in front matter when `reactions.merge_completion.provider` is set; each is reported as a configuration error naming the tracker field.
+- `poll_interval_ms` must be >= `30000` for `merge_completion`.
 - When `provider` is absent or empty, all other fields in the kind sub-object are ignored.
 
 ---

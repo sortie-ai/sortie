@@ -69,8 +69,9 @@
     - Read-write, multi-method contract (`FetchPendingReviews`, `GetReviewDecision`, `GetCIStatus`,
       `GetMergeability`, `MergePR`, `DeleteBranch`). Write methods are exercised only by the
       auto-merge reaction.
-    - Surfaces a sixth error kind, `ErrSCMConflict`, for HTTP 405 and HTTP 409 responses from
-      the merge endpoint (precondition raced, branch protection refused, or PR already merged).
+    - Surfaces an additional error kind, `ErrSCMConflict`, for HTTP 405 and HTTP 409 responses
+      from the merge endpoint (precondition raced, branch protection refused, or PR already
+      merged).
     - Activated by `reactions.review_comments.provider` or `reactions.auto_merge.provider`
       presence in workflow front matter. Auto-merge activation requires the provider token to
       carry `pull_requests:write` and, when branch deletion is enabled, `contents:write`.

@@ -186,11 +186,15 @@ On a normal worker exit, when a source-control adapter is configured, a label co
 and the workspace metadata names a pull request with an owner and a repository, the orchestrator
 seeds a pending reaction entry for that label command. Two reaction kinds are seeded this way,
 `label-review` and `label-fix`. Neither carries an expiry, deliberately: a human label gesture stays
-actionable regardless of age, so unlike the five kinds that do expire at thirty minutes, `ci`,
-`review`, `bot-review`, `merge`, and `merge-conflict`, the label-command kinds have no drop-on-age
-branch. Their reconcile passes re-enqueue the entry on every outcome, so once seeded the entry
-persists for the life of the process, and after a restart recovery rebuilds it for any issue still
-parked in the handoff state inside the lookback.
+actionable regardless of age, so unlike the kinds whose entry is dropped at thirty minutes, the
+label-command kinds have no drop-on-age branch. They are not the only kinds without one, and the set
+is not fixed. A kind carries an expiry only where the signal it waits on either arrives shortly
+after the agent finishes or does not arrive at all, which is what makes dropping the entry a bound
+on pointless polling; a kind that waits on a human keeps its entry, and the narrowing below is
+written against that property rather than against a list of kinds. The label-command reconcile
+passes re-enqueue the entry on every outcome, so once seeded the entry persists for the life of the
+process, and after a restart recovery rebuilds it for any issue still parked in the handoff state
+inside the lookback.
 
 The sweep excluded every key holding an entry in the running map, the retry map, or the pending
 reaction map. Composing those facts: in a deployment that configures label commands, every completed
@@ -211,10 +215,20 @@ the bound cannot tolerate.
 
 One genuine dependency remains, and the floor is what disarms it. Across a restart the runtime
 entry is gone and recovery rebuilds it from `.sortie/scm.json` in the workspace, so a removed
-directory ends label-command detection for that pull request. Because the window may not be set
-below the recovery lookback, a workspace the bound may remove is one whose latest activity already
-falls outside the window recovery honors, and recovery would have skipped it regardless. Nothing
-reachable is lost.
+directory ends detection for that pull request. Because the window may not be set below the recovery
+lookback, a workspace the bound may remove is one whose latest activity already falls outside the
+window recovery honors, and recovery would have skipped it regardless. Nothing reachable is lost.
+
+That dependency binds the merge-completion reaction hardest, because it is the kind whose issue is
+meant to sit still. Its entry carries no expiry and so does not pin, its issue is parked in the
+handoff state for as long as its pull request waits on review, and no orchestrator path moves that
+issue until the merge is observed. Its workspace is therefore an ordinary age candidate while the
+merge is still unobserved, and once the directory is gone no restart rebuilds the entry that would
+have observed it. The floor is the whole of the protection here, and it is sufficient: a pull
+request that outlives the window sits in a workspace whose latest activity recovery had already
+stopped honoring, so the removal ends an observation that would not have survived a restart in any
+case. Carrying that observation further would mean moving the floor and the recovery lookback
+together, which is the coupling stated above read from the other side.
 
 The alternative, redefining the pin as a property of the reaction so that the entry outlives the
 directory it was seeded from, was considered and rejected. It requires promoting pending reaction
@@ -346,11 +360,11 @@ For those, waiting is not a strategy, and the disk is consumed by work that fini
   for a post-mortem, leaves no trace in the run history and no push timestamp. If its last recorded
   activity is outside the window, it is removed. The floor makes this unlikely rather than
   impossible, and no signal short of an explicit marker file would make it impossible.
-- **Label-command detection ends at a restart for any workspace the bound removed.** Detection
-  continues in the running process, since it needs nothing from disk, but recovery cannot rebuild
-  the entry without `.sortie/scm.json`. The floor guarantees recovery would have skipped that
-  candidate anyway, so nothing reachable is lost, but the two windows are now coupled and a future
-  change to either silently changes the other.
+- **Detection by a reaction that does not pin ends at a restart for any workspace the bound
+  removed.** Detection continues in the running process, since it needs nothing from disk, but
+  recovery cannot rebuild the entry without `.sortie/scm.json`. The floor guarantees recovery would
+  have skipped that candidate anyway, so nothing reachable is lost, but the two windows are now
+  coupled and a future change to either silently changes the other.
 - **A label-fix session dispatched after removal pays a fresh checkout.** The workspace is recreated
   and the `after_create` hook runs again, which is where the clone happens. This applies only to
   issues idle beyond the window, and it costs time and bandwidth rather than correctness.

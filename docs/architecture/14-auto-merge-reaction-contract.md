@@ -11,11 +11,11 @@ fully cross-kind isolated.
 ### 11C.1 SCMAdapter write surface
 
 The `SCMAdapter` interface, introduced in §11B.1 for review-comment fetching, is widened by the
-read-write surface defined by the interface-surface section of the auto-merge ADR. The full
-interface now exposes six methods:
+read-write surface defined by the interface-surface section of the auto-merge ADR. The methods
+this reaction depends on are:
 
 ```text
-SCMAdapter:
+SCMAdapter (auto-merge surface):
   FetchPendingReviews(ctx, prNumber, owner, repo) ([]ReviewComment, error)
   GetReviewDecision(ctx, prNumber, owner, repo)   (ReviewDecision, error)
   GetCIStatus(ctx, prNumber, owner, repo)         (string, error)
@@ -24,13 +24,14 @@ SCMAdapter:
   DeleteBranch(ctx, owner, repo, branch)          error
 ```
 
-`FetchPendingReviews` is the original read-only method documented in §11B.1. The five new methods
-provide the write surface needed by the auto-merge reconcile loop. All implementations MUST be safe
-for concurrent use.
+`FetchPendingReviews` is the original read-only method documented in §11B.1. The remaining
+methods are the write surface the auto-merge reaction added. The interface has since widened
+further for other reaction kinds; see §11D for `FetchBotReviewComments` and §11F for
+`ListLabelEvents` and `RemoveLabel`. All implementations MUST be safe for concurrent use.
 
 ### 11C.2 Domain types
 
-The auto-merge reaction introduces five domain types:
+The auto-merge reaction introduces the following domain types:
 
 - `MergeStrategy`: merge strategy for `MergePR`. One of `merge`, `squash`, `rebase`.
 - `ReviewDecision`: normalized review status. One of `APPROVED`, `CHANGES_REQUESTED`,
@@ -39,8 +40,11 @@ The auto-merge reaction introduces five domain types:
   `dirty`, `unknown` (lowercase string values).
 - `PRMergeStatus`: struct carrying the merge precondition state. Fields: `ReviewDecision`,
   `CIConclusion`, `Draft` (bool, separate from `Mergeability`), `Mergeability`
-  (`MergeabilityState`), `HeadSHA`, `BranchName`. `ReviewDecision` and `CIConclusion` are unset
-  by `GetMergeability`; callers obtain those from dedicated reads.
+  (`MergeabilityState`), `HeadSHA`, `BranchName`, `BaseBranch` (the PR's target branch, added for
+  merge-conflict detection, §11E.1), `Merged` (bool reporting whether the pull request has
+  merged, added for the post-merge closure reaction, ADR-0017), and `MergeCommitSHA` (the merge
+  commit identifier, set only when `Merged` is true, added by the same reaction). `ReviewDecision`
+  and `CIConclusion` are unset by `GetMergeability`; callers obtain those from dedicated reads.
 - `MergeResult`: struct carrying `SHA` (merge commit SHA), `Merged` (bool reporting whether the
   merge completed), and `Message` (provider-supplied status text). The already-merged case is
   NOT signaled on this struct; it is signaled via `*SCMError` with kind `ErrSCMConflict` and the
@@ -49,8 +53,9 @@ The auto-merge reaction introduces five domain types:
 
 ### 11C.3 Error kind
 
-`ErrSCMConflict` is the sixth `SCMErrorKind` value. Its HTTP semantics (405 method-not-allowed
-and 409 conflict from the merge endpoint) are documented in the §11B.3 table.
+`ErrSCMConflict` is an `SCMErrorKind` value alongside the transport, auth, API, not-found, and
+payload categories already defined for review-comment fetching (§11B.3). Its HTTP semantics (405
+method-not-allowed and 409 conflict from the merge endpoint) are documented in the §11B.3 table.
 
 The auto-merge reconcile loop imposes merge-specific dispositions on this kind. A 409 response
 with an "already merged" body is treated as idempotent success. A 405 or a 409 with a head-SHA

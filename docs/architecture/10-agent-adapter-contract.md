@@ -282,7 +282,7 @@ Availability: registered when the database path and issue ID are present in the 
 session ID arrives through `SORTIE_SESSION_ID`. The tool takes no input.
 
 On success the tool returns, under `data` in the envelope `{"success": true, "data": {...}}` of
-Section 10.4.2, a JSON object with five fields:
+Section 10.4.2, a JSON object with the following fields:
 
 - `used_tokens`: cumulative `total_tokens` across the issue's completed sessions, plus the
   running session's recorded `total_tokens` when a session is in flight. The running session's
@@ -419,7 +419,7 @@ Operator notifications are an adapter family, the same shape as the tracker, age
 SCM families. The `notify_operator` tool (Section 10.4.5) is a thin Tier 2 wrapper over this
 family; a new channel is a new package behind the existing interface, not a tool rewrite.
 
-The family has four parts:
+The family has the following parts:
 
 - **The `domain.Notifier` interface** exposes one method, `Send(ctx, Notification) error`. A
   single method keeps every backend interchangeable and lets any producer reuse the family.

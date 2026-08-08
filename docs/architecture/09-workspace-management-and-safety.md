@@ -16,7 +16,7 @@ Workspace persistence:
 - Workspaces are reused across runs for the same issue.
 - Successful runs do not auto-delete workspaces.
 
-Workspace cleanup runs through two mechanisms, ordered and non-overlapping in intent:
+Workspace cleanup runs through the following mechanisms, ordered and non-overlapping in intent:
 
 - **The terminal gate** is the primary mechanism. It is always on and unconditional: whenever the
   tracker reports an issue's state as a member of `tracker.terminal_states`, the workspace for that

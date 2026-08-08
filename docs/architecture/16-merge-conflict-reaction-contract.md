@@ -204,5 +204,5 @@ Per-issue `merge-conflict` reaction lifecycle (the `issue_id:merge-conflict` slo
 | pending | Reconcile tick, `Mergeability == dirty`, fingerprint dispatched for this head | pending | Re-enqueue at `now + poll_interval`; do not increment counter. |
 | pending | Reconcile tick, `Mergeability == dirty`, new head, `attempts <= MaxRetries` | dispatched | Increment per-episode counter; schedule continuation; mark dispatched; count dispatched. |
 | pending | Reconcile tick, `Mergeability == dirty`, new head, `attempts > MaxRetries` | escalated | Increment per-episode counter; apply escalation; delete slot, fingerprint, and per-episode counter. MUST NOT release the claim or clear sibling slots (§11E.5). |
-| pending | Issue reaches terminal state (tracker reconcile) | (cleared) | `ClearReactionsForIssue` removes the slot, the residual counter, and the claim. |
+| pending | Issue reaches terminal state (tracker reconcile) | pending | No effect: the tracker-reconcile terminal-state path does not call `ClearReactionsForIssue`. The slot keeps re-enqueuing until the TTL backstop drops it; the residual counter and the claim are not released by any path. |
 
