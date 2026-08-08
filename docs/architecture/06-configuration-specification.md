@@ -87,6 +87,14 @@ Validation checks:
   state lists. An empty `tracker.active_states` or `tracker.terminal_states` takes the tracker
   adapter's declared fallback list, so a collision the config layer cannot see (because it rules
   on the lists as written) is reported here.
+- `reactions.merge_completion.target_state`, checked once at construction against
+  `tracker.handoff_state`, `tracker.active_states`, and `tracker.terminal_states`: required and
+  non-empty when `reactions.merge_completion.provider` is set, must not equal
+  `tracker.handoff_state`, must not be a member of `tracker.active_states` (the tracker adapter's
+  fallback active-state list applies when that field is empty), and must be a member of
+  `tracker.terminal_states` exactly as written, with no adapter fallback. Reaction configuration
+  is not rebuilt on `WORKFLOW.md` reload (Section 6.4), so this check runs at startup and in
+  `sortie validate`, never on a dispatch tick.
 
 Effort-budget and notification config are validated outside this preflight, by design:
 
@@ -160,12 +168,15 @@ This section is intentionally redundant so a coding agent can implement the conf
 - `tracker.active_states`: list of strings, defaults to empty; an empty value leaves the tracker
   adapter to apply its own internal fallback list
 - `tracker.terminal_states`: list of strings, defaults to empty; an empty value leaves the tracker
-  adapter to apply its own internal fallback list
+  adapter to apply its own internal fallback list; must be written non-empty in front matter when
+  `reactions.merge_completion.provider` is set, because `target_state` is checked against the list
+  exactly as written, with no adapter fallback in that case
 - `tracker.query_filter`: string, optional, default empty (adapter-defined filter fragment)
 - `tracker.handoff_state`: string, optional, default absent; target state for
   orchestrator-initiated handoff after successful worker run; must not collide with
   `active_states` or `terminal_states`, evaluated against the effective lists, so the tracker
-  adapter's fallback participates whenever the matching field is empty; supports `$VAR`
+  adapter's fallback participates whenever the matching field is empty; required, non-empty, when
+  `reactions.merge_completion.provider` is set; supports `$VAR`
 - `tracker.in_progress_state`: string, optional, default absent; target state for
   dispatch-time transition at the start of each worker attempt; must be in `active_states`,
   must not collide with `terminal_states` or `handoff_state`, and the `terminal_states` rule is
@@ -223,6 +234,15 @@ This section is intentionally redundant so a coding agent can implement the conf
 - `reactions.auto_merge.require_ci`: boolean, default `true`
 - `reactions.auto_merge.delete_branch`: boolean, default `true`
 - `reactions.auto_merge.poll_interval_ms`: integer, default `60000` (1 minute); minimum `30000`
+- `reactions.merge_completion.target_state`: string, required when
+  `reactions.merge_completion.provider` is set, no default; the single tracker terminal state the
+  linked issue moves to once its managed pull request merges; must not equal
+  `tracker.handoff_state`; must not be a member of `tracker.active_states` (falling back to the
+  tracker adapter's default active-state list when that field is empty); must be a member of
+  `tracker.terminal_states` exactly as written, with no adapter fallback; not rebuilt on
+  `WORKFLOW.md` reload; see §11G
+- `reactions.merge_completion.poll_interval_ms`: integer, default `60000` (1 minute); minimum
+  `30000`
 - `dispatch.rules`: list of rule objects, optional; first-match-wins routing; see §5.3.10
 - `dispatch.default.agent`: string, optional; default agent kind when no rule matches; falls through to top-level `agent.kind`
 - `dispatch.default.template`: path, optional; default template when no rule matches; falls through to the Markdown body
