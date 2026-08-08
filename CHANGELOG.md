@@ -36,6 +36,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   in-flight, removed as terminal, removed by age, retained inside the
   window, retained for want of an activity record, or not yet evaluated.
   ([#706](https://github.com/sortie-ai/sortie/issues/706))
+- `reactions.merge_completion`: an opt-in, default-off reaction that
+  observes the merge of a Sortie-managed pull request, whether performed
+  by the orchestrator, by a human, or by a forge automation rule, and
+  transitions the linked issue to a single configured terminal state
+  exactly once. Requires `tracker.handoff_state` and a written
+  `tracker.terminal_states` list; `sortie validate` reports a
+  misconfigured target state, an unset prerequisite, or a poll interval
+  below the floor before a run begins.
+  ([#707](https://github.com/sortie-ai/sortie/issues/707))
+
+### Fixed
+
+- `reactions.ci_failure` and `reactions.review_comments` escalation now
+  clears only its own kind's pending entry, attempt counter, and
+  fingerprint instead of every reaction on the issue, so an unrelated
+  escalation no longer silently ends `reactions.merge_completion`
+  observation (or any other sibling reaction) for that issue.
+  ([#707](https://github.com/sortie-ai/sortie/issues/707))
 
 ### Changed
 
