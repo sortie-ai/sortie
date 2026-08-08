@@ -3,7 +3,6 @@ package orchestrator
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"maps"
 	"math"
 	"slices"
@@ -854,34 +853,6 @@ func WithContinuationContext(ctx context.Context, data map[string]any) context.C
 func ContinuationFromContext(ctx context.Context) map[string]any {
 	v, _ := ctx.Value(continuationCtxKey{}).(map[string]any)
 	return v
-}
-
-// ClearReactionsForIssue removes all PendingReactions and
-// ReactionAttempts entries whose key starts with the given issue ID
-// prefix, and deletes the corresponding reaction_fingerprints rows from
-// SQLite. The SQLite call is best-effort: a failure is logged at warn
-// level but does not block the caller.
-func ClearReactionsForIssue(ctx context.Context, state *State, store ReconcileStore, issueID string, log *slog.Logger) {
-	prefix := issueID + ":"
-	for key := range state.PendingReactions {
-		if strings.HasPrefix(key, prefix) {
-			delete(state.PendingReactions, key)
-		}
-	}
-	for key := range state.ReactionAttempts {
-		if strings.HasPrefix(key, prefix) {
-			delete(state.ReactionAttempts, key)
-		}
-	}
-	if err := store.DeleteReactionFingerprintsByIssue(ctx, issueID); err != nil {
-		if log == nil {
-			log = slog.Default()
-		}
-		log.WarnContext(ctx, "failed to delete reaction fingerprints",
-			slog.String("issue_id", issueID),
-			slog.Any("error", err),
-		)
-	}
 }
 
 // NewState creates an initialized [State] with empty collections and the

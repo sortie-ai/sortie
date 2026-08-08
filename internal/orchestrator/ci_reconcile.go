@@ -83,6 +83,7 @@ func reconcileCIStatus(state *State, params ReconcileParams, log *slog.Logger, c
 		entryLog := logging.WithIssue(log, pending.IssueID, pending.Identifier)
 
 		if ttl > 0 && now.Sub(pending.CreatedAt) > ttl {
+			delete(state.ReactionAttempts, ReactionKey(pending.IssueID, ReactionKindCI))
 			entryLog.Warn("ci pending entry exceeded ttl, dropping",
 				slog.Int64("ttl_ms", int64(ttl/time.Millisecond)),
 				slog.Int64("age_ms", int64(now.Sub(pending.CreatedAt)/time.Millisecond)),
@@ -344,9 +345,9 @@ func escalateCIFailure(
 
 	delete(state.Claimed, pending.IssueID)
 
-	// Scoped per-kind delete (not the issue-wide ClearReactionsForIssue)
-	// so sibling reactions' pending entries, counters, and fingerprints
-	// for the same issue survive a CI-only escalation.
+	// Scoped to this kind's own slot: a sibling reaction's pending
+	// entry, counter, and fingerprint for the same issue survive a
+	// CI-only escalation.
 	delete(state.PendingReactions, ReactionKey(pending.IssueID, ReactionKindCI))
 	delete(state.ReactionAttempts, ReactionKey(pending.IssueID, ReactionKindCI))
 	if err := params.Store.DeleteReactionFingerprint(ctx, pending.IssueID, ReactionKindCI); err != nil {

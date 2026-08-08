@@ -167,10 +167,6 @@ func (s *labelReviewFingerprintStore) AppendRunHistory(_ context.Context, run pe
 	return run, nil
 }
 
-func (s *labelReviewFingerprintStore) DeleteReactionFingerprintsByIssue(_ context.Context, _ string) error {
-	return nil
-}
-
 func (s *labelReviewFingerprintStore) MarkReactionDispatched(_ context.Context, _, _ string) error {
 	return nil
 }
@@ -947,6 +943,56 @@ func TestReconcileLabelReviewCommands_JournalSubstrateNotSnapshot(t *testing.T) 
 
 	if _, ok := state.RetryAttempts[issueID]; !ok {
 		t.Error("dispatch did not fire; want scheduled using only ListLabelEvents/RemoveLabel")
+	}
+}
+
+// TestReconcileLabelCommands_StopPollingAfterTerminal covers both label
+// kinds together: neither has a TTL of its own, so the terminal-state
+// release inside reconcileTrackerState is the only mechanism that ever
+// stops their journal polling. Uses the labelReviewSCMFake and
+// labelReviewFingerprintStore declared above, shared with
+// label_fix_reconcile_test.go, since neither double is label-review- or
+// label-fix-specific.
+func TestReconcileLabelCommands_StopPollingAfterTerminal(t *testing.T) {
+	t.Parallel()
+
+	const issueID = "LBL-TERM"
+	state := stateWithLabelReviewPending(t, issueID, 42)
+	fixKey := ReactionKey(issueID, ReactionKindLabelFix)
+	state.PendingReactions[fixKey] = newLabelFixPending(issueID, 42, "feature/lbl-term")
+
+	store := newLabelReviewFingerprintStore()
+	scm := &labelReviewSCMFake{}
+	tracker := &mockReconcileTracker{states: map[string]string{issueID: "Done"}}
+
+	params := ReconcileParams{
+		TrackerAdapter:                tracker,
+		ActiveStates:                  []string{"In Progress"},
+		TerminalStates:                []string{"Done"},
+		SCMAdapter:                    scm,
+		LabelReviewConfig:             defaultLabelReviewConfig(),
+		LabelReviewReactionConfigured: true,
+		LabelFixConfig:                defaultLabelFixConfig(),
+		LabelFixReactionConfigured:    true,
+		Store:                         store,
+		OnRetryFire:                   noopRetryFire,
+		Ctx:                           context.Background(),
+		Logger:                        discardLogger(),
+		NowFunc:                       func() time.Time { return labelReviewBaseTime },
+	}
+
+	ReconcileRunningIssues(state, params)
+	ReconcileRunningIssues(state, params)
+
+	if scm.listCalls != 0 {
+		t.Errorf("ListLabelEvents calls = %d, want 0 across both ticks", scm.listCalls)
+	}
+	reviewKey := ReactionKey(issueID, ReactionKindLabelReview)
+	if _, ok := state.PendingReactions[reviewKey]; ok {
+		t.Error("PendingReactions[label-review] present after terminal release; want removed")
+	}
+	if _, ok := state.PendingReactions[fixKey]; ok {
+		t.Error("PendingReactions[label-fix] present after terminal release; want removed")
 	}
 }
 

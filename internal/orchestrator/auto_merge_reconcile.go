@@ -99,6 +99,7 @@ func reconcileAutoMerge(state *State, params ReconcileParams, log *slog.Logger, 
 		}
 
 		if ttl > 0 && now.Sub(pending.CreatedAt) > ttl {
+			delete(state.ReactionAttempts, ReactionKey(pending.IssueID, ReactionKindAutoMerge))
 			entryLog.Warn("auto_merge pending entry exceeded ttl, dropping",
 				slog.Int64("ttl_ms", int64(ttl/time.Millisecond)),
 				slog.Int64("age_ms", int64(now.Sub(pending.CreatedAt)/time.Millisecond)),

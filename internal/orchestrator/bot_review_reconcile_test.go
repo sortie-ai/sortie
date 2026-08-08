@@ -1057,6 +1057,54 @@ func TestReconcileBotReviewComments_TTLDrop(t *testing.T) {
 	}
 }
 
+// TestReconcileBotReviewComments_DropOnAgeReleasesCounter verifies that the
+// drop-on-age branch also deletes the bot-review reaction attempt counter,
+// leaves a sibling kind's counter and the claim untouched, and performs
+// no retry or fingerprint store call.
+func TestReconcileBotReviewComments_DropOnAgeReleasesCounter(t *testing.T) {
+	t.Parallel()
+
+	issueID := "BOT-AGE-1"
+	state := stateWithBotReviewReaction(t, issueID, 10)
+	botKey := ReactionKey(issueID, ReactionKindBotReview)
+	state.ReactionAttempts[botKey] = 2
+	reviewKey := ReactionKey(issueID, ReactionKindReview)
+	state.ReactionAttempts[reviewKey] = 9
+	delete(state.Claimed, issueID)
+
+	store := &reviewReconcileStore{}
+	metrics := newBotReviewMetricsSpy()
+	scm := &mockSCMAdapter{}
+	params := botReviewParams(store, scm, nil)
+	params.BotReviewPendingTTL = 1 * time.Minute
+	params.NowFunc = func() time.Time { return botReviewBaseTime.Add(2 * time.Minute) }
+
+	reconcileBotReviewComments(state, params, discardLogger(), context.Background(), metrics)
+
+	if _, ok := state.PendingReactions[botKey]; ok {
+		t.Error("PendingReactions[bot-review] present after drop-on-age; want removed")
+	}
+	if _, ok := state.ReactionAttempts[botKey]; ok {
+		t.Error("ReactionAttempts[bot-review] present after drop-on-age; want removed")
+	}
+	if state.ReactionAttempts[reviewKey] != 9 {
+		t.Errorf("ReactionAttempts[review] = %d, want 9 (untouched)", state.ReactionAttempts[reviewKey])
+	}
+	if _, ok := state.Claimed[issueID]; ok {
+		t.Error("Claimed present after drop-on-age; want absent")
+	}
+	if len(store.deletedIssueIDs) != 0 {
+		t.Errorf("DeleteRetryEntry calls = %d, want 0", len(store.deletedIssueIDs))
+	}
+	if store.upsertFingerprintCalls != 0 || store.getFingerprintCalls != 0 || store.deleteFingerprintCalls != 0 {
+		t.Errorf("fingerprint calls = upsert:%d get:%d delete:%d, want all 0",
+			store.upsertFingerprintCalls, store.getFingerprintCalls, store.deleteFingerprintCalls)
+	}
+	if scm.botCalls != 0 {
+		t.Errorf("FetchBotReviewComments calls = %d, want 0 (TTL drop before fetch)", scm.botCalls)
+	}
+}
+
 // TestReconcileBotReviewComments_ZeroPollIntervalUsesFallback verifies that a
 // zero PollIntervalMS falls back to the default backoff base when re-enqueuing
 // a pending entry with no actionable comments.

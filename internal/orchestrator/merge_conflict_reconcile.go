@@ -69,6 +69,7 @@ func reconcileMergeConflicts(state *State, params ReconcileParams, log *slog.Log
 		entryLog := logging.WithIssue(log, pending.IssueID, pending.Identifier)
 
 		if ttl > 0 && now.Sub(pending.CreatedAt) > ttl {
+			delete(state.ReactionAttempts, ReactionKey(pending.IssueID, ReactionKindMergeConflict))
 			entryLog.Warn("merge conflict pending entry exceeded ttl, dropping",
 				slog.Int64("ttl_ms", int64(ttl/time.Millisecond)),
 				slog.Int64("age_ms", int64(now.Sub(pending.CreatedAt)/time.Millisecond)),
@@ -303,8 +304,8 @@ func buildMergeConflictTemplateMap(data *MergeConflictReactionData, status domai
 // Unlike the bot-review and auto-merge escalations, this resets the
 // per-episode attempt counter via a scoped delete because the
 // merge-conflict counter is episodic, mirroring the CI reaction. The reset
-// is the scoped per-kind delete (not the issue-wide ClearReactionsForIssue)
-// so sibling reactions' counters and state.Claimed are never touched.
+// is scoped to this kind's own slot, so sibling reactions' counters and
+// state.Claimed are never touched.
 func escalateMergeConflictFailure(
 	state *State,
 	params ReconcileParams,

@@ -29,6 +29,11 @@ type mockReconcileStore struct {
 
 	saveRetryEntryErr   error
 	deleteRetryEntryErr error
+
+	upsertFingerprintCalls int
+	getFingerprintCalls    int
+	markDispatchedCalls    int
+	deleteFingerprintCalls int
 }
 
 var _ ReconcileStore = (*mockReconcileStore)(nil)
@@ -47,23 +52,23 @@ func (m *mockReconcileStore) AppendRunHistory(_ context.Context, run persistence
 	return run, nil
 }
 
-func (m *mockReconcileStore) DeleteReactionFingerprintsByIssue(_ context.Context, _ string) error {
-	return nil
-}
-
 func (m *mockReconcileStore) UpsertReactionFingerprint(_ context.Context, _, _, _ string) error {
+	m.upsertFingerprintCalls++
 	return nil
 }
 
 func (m *mockReconcileStore) GetReactionFingerprint(_ context.Context, _, _ string) (string, bool, error) {
+	m.getFingerprintCalls++
 	return "", false, nil
 }
 
 func (m *mockReconcileStore) MarkReactionDispatched(_ context.Context, _, _ string) error {
+	m.markDispatchedCalls++
 	return nil
 }
 
 func (m *mockReconcileStore) DeleteReactionFingerprint(_ context.Context, _, _ string) error {
+	m.deleteFingerprintCalls++
 	return nil
 }
 
@@ -72,11 +77,18 @@ func (m *mockReconcileStore) DeleteReactionFingerprint(_ context.Context, _, _ s
 type mockReconcileTracker struct {
 	states   map[string]string
 	fetchErr error
+
+	calls      int
+	calledWith []string // copy of the ids passed to the most recent FetchIssueStatesByIDs call
 }
 
 var _ domain.TrackerAdapter = (*mockReconcileTracker)(nil)
 
-func (m *mockReconcileTracker) FetchIssueStatesByIDs(_ context.Context, _ []string) (map[string]string, error) {
+func (m *mockReconcileTracker) FetchIssueStatesByIDs(_ context.Context, ids []string) (map[string]string, error) {
+	m.calls++
+	cp := make([]string, len(ids))
+	copy(cp, ids)
+	m.calledWith = cp
 	return m.states, m.fetchErr
 }
 
@@ -163,6 +175,58 @@ func (s *sweepTracker) AddLabel(context.Context, string, string) error {
 	panic("AddLabel must not be called by SweepWorkspaces")
 }
 
+// panicOnAnySCMAdapter panics on every domain.SCMAdapter method. Used to
+// prove that a terminal-issue release triggers no SCM call of any kind.
+type panicOnAnySCMAdapter struct{}
+
+var _ domain.SCMAdapter = panicOnAnySCMAdapter{}
+
+func (panicOnAnySCMAdapter) FetchPendingReviews(context.Context, int, string, string) ([]domain.ReviewComment, error) {
+	panic("FetchPendingReviews must not be called after a terminal release")
+}
+
+func (panicOnAnySCMAdapter) FetchBotReviewComments(context.Context, int, string, string, []string) ([]domain.ReviewComment, error) {
+	panic("FetchBotReviewComments must not be called after a terminal release")
+}
+
+func (panicOnAnySCMAdapter) GetReviewDecision(context.Context, int, string, string) (domain.ReviewDecision, error) {
+	panic("GetReviewDecision must not be called after a terminal release")
+}
+
+func (panicOnAnySCMAdapter) GetCIStatus(context.Context, int, string, string) (string, error) {
+	panic("GetCIStatus must not be called after a terminal release")
+}
+
+func (panicOnAnySCMAdapter) GetMergeability(context.Context, int, string, string) (domain.PRMergeStatus, error) {
+	panic("GetMergeability must not be called after a terminal release")
+}
+
+func (panicOnAnySCMAdapter) MergePR(context.Context, int, string, string, domain.MergeStrategy, string, string, string) (domain.MergeResult, error) {
+	panic("MergePR must not be called after a terminal release")
+}
+
+func (panicOnAnySCMAdapter) DeleteBranch(context.Context, string, string, string) error {
+	panic("DeleteBranch must not be called after a terminal release")
+}
+
+func (panicOnAnySCMAdapter) ListLabelEvents(context.Context, int, string, string) ([]domain.LabelEvent, error) {
+	panic("ListLabelEvents must not be called after a terminal release")
+}
+
+func (panicOnAnySCMAdapter) RemoveLabel(context.Context, int, string, string, string) error {
+	panic("RemoveLabel must not be called after a terminal release")
+}
+
+// panicOnAnyCIProvider panics on every domain.CIStatusProvider method. Used
+// to prove that a terminal-issue release triggers no CI status read.
+type panicOnAnyCIProvider struct{}
+
+var _ domain.CIStatusProvider = panicOnAnyCIProvider{}
+
+func (panicOnAnyCIProvider) FetchCIStatus(context.Context, string) (domain.CIResult, error) {
+	panic("FetchCIStatus must not be called after a terminal release")
+}
+
 // --- Test helpers ---
 
 // reconcileBaseTime is a fixed reference for reconcile tests.
@@ -193,6 +257,49 @@ type cancelCounter struct {
 
 func (c *cancelCounter) cancel() {
 	c.count++
+}
+
+// terminalReleaseIssueID is the issue id used by the terminal-release test
+// fixture shared across the running-issue, fetch-failure, and
+// no-side-effects release tests.
+const terminalReleaseIssueID = "REL-1"
+
+// terminalReleaseFixtureKinds are the reaction kinds seeded on the shared
+// terminal-release fixture, one non-expiring (label-review) and two
+// expiring (ci, review), so the release is proven to span both shapes.
+var terminalReleaseFixtureKinds = []string{ReactionKindCI, ReactionKindReview, ReactionKindLabelReview}
+
+// stateWithTerminalReleaseFixture builds a State with a running entry for
+// [terminalReleaseIssueID] backed by cc, a live retry, a claim, and a
+// pending entry plus a non-zero attempt counter for each kind in
+// [terminalReleaseFixtureKinds].
+func stateWithTerminalReleaseFixture(t *testing.T, cc *cancelCounter) *State {
+	t.Helper()
+
+	state := NewState(5000, 4, nil, AgentTotals{})
+	state.Running[terminalReleaseIssueID] = &RunningEntry{
+		Identifier: terminalReleaseIssueID + "-ident",
+		StartedAt:  reconcileBaseTime,
+		CancelFunc: cc.cancel,
+		Issue:      domain.Issue{State: "In Progress"},
+	}
+	state.Claimed[terminalReleaseIssueID] = struct{}{}
+	state.RetryAttempts[terminalReleaseIssueID] = &RetryEntry{
+		IssueID:    terminalReleaseIssueID,
+		Identifier: terminalReleaseIssueID + "-ident",
+		Attempt:    1,
+	}
+	for _, kind := range terminalReleaseFixtureKinds {
+		key := ReactionKey(terminalReleaseIssueID, kind)
+		state.PendingReactions[key] = &PendingReaction{
+			IssueID:    terminalReleaseIssueID,
+			Identifier: terminalReleaseIssueID + "-ident",
+			Kind:       kind,
+			CreatedAt:  reconcileBaseTime,
+		}
+		state.ReactionAttempts[key] = 2
+	}
+	return state
 }
 
 // --- Part A: Stall detection tests ---
@@ -726,6 +833,305 @@ func TestReconcileTrackerState_DeleteRetryEntryError(t *testing.T) {
 	}
 	if len(store.deletedIssueID) != 1 {
 		t.Errorf("DeleteRetryEntry called %d times, want 1", len(store.deletedIssueID))
+	}
+}
+
+func TestReconcileTrackerState_RunningIssueReleasesReactionState(t *testing.T) {
+	t.Parallel()
+
+	cc := &cancelCounter{}
+	state := stateWithTerminalReleaseFixture(t, cc)
+
+	store := &mockReconcileStore{}
+	tracker := &mockReconcileTracker{states: map[string]string{terminalReleaseIssueID: "Done"}}
+	params := defaultReconcileParams(t, store, tracker)
+	params.StallTimeoutMS = 0
+
+	ReconcileRunningIssues(state, params)
+
+	for _, kind := range terminalReleaseFixtureKinds {
+		key := ReactionKey(terminalReleaseIssueID, kind)
+		if _, ok := state.PendingReactions[key]; ok {
+			t.Errorf("PendingReactions[%q] present after terminal release; want removed", key)
+		}
+		if _, ok := state.ReactionAttempts[key]; ok {
+			t.Errorf("ReactionAttempts[%q] present after terminal release; want removed", key)
+		}
+	}
+	if _, ok := state.Claimed[terminalReleaseIssueID]; ok {
+		t.Error("Claimed entry present after terminal release; want removed")
+	}
+	if _, ok := state.RetryAttempts[terminalReleaseIssueID]; ok {
+		t.Error("RetryAttempts entry present after terminal release; want removed")
+	}
+	if len(store.deletedIssueID) != 1 || store.deletedIssueID[0] != terminalReleaseIssueID {
+		t.Errorf("DeleteRetryEntry calls = %v, want exactly one call for %q", store.deletedIssueID, terminalReleaseIssueID)
+	}
+	if !state.Running[terminalReleaseIssueID].PendingCleanup {
+		t.Error("PendingCleanup not set for terminal running issue")
+	}
+}
+
+func TestReconcileTrackerState_PendingOnlyIssueReleasesReactionState(t *testing.T) {
+	t.Parallel()
+
+	issueID := "REL-2"
+	store := &mockReconcileStore{}
+	tracker := &mockReconcileTracker{states: map[string]string{issueID: "Done"}}
+
+	log, buf := logCapture()
+
+	params := defaultReconcileParams(t, store, tracker)
+	params.StallTimeoutMS = 0
+	params.Logger = log
+
+	state := NewState(5000, 4, nil, AgentTotals{})
+	key := ReactionKey(issueID, ReactionKindCI)
+	state.PendingReactions[key] = &PendingReaction{
+		IssueID:    issueID,
+		Identifier: issueID + "-ident",
+		Kind:       ReactionKindCI,
+		CreatedAt:  reconcileBaseTime,
+	}
+	state.ReactionAttempts[key] = 1
+	state.Claimed[issueID] = struct{}{}
+
+	ReconcileRunningIssues(state, params)
+
+	if tracker.calls != 1 {
+		t.Fatalf("FetchIssueStatesByIDs calls = %d, want 1", tracker.calls)
+	}
+	if !slices.Contains(tracker.calledWith, issueID) {
+		t.Errorf("FetchIssueStatesByIDs called with %v, want it to contain %q", tracker.calledWith, issueID)
+	}
+	if _, ok := state.PendingReactions[key]; ok {
+		t.Error("PendingReactions entry present after terminal release; want removed")
+	}
+	if _, ok := state.ReactionAttempts[key]; ok {
+		t.Error("ReactionAttempts entry present after terminal release; want removed")
+	}
+	if _, ok := state.Claimed[issueID]; ok {
+		t.Error("Claimed entry present after terminal release; want removed")
+	}
+	if len(store.deletedIssueID) != 1 || store.deletedIssueID[0] != issueID {
+		t.Errorf("DeleteRetryEntry calls = %v, want exactly one call for %q", store.deletedIssueID, issueID)
+	}
+
+	out := buf.String()
+	if !strings.Contains(out, "released reaction state for terminal issue") {
+		t.Fatalf("log output = %q, want the terminal-release message", out)
+	}
+	if !strings.Contains(out, "issue_identifier="+issueID+"-ident") {
+		t.Errorf("log output = %q, want issue_identifier=%s-ident", out, issueID)
+	}
+}
+
+func TestTrackerObservationIDs_DeduplicatedUnion(t *testing.T) {
+	t.Parallel()
+
+	state := NewState(5000, 4, nil, AgentTotals{})
+
+	state.Running["I1"] = &RunningEntry{Identifier: "I1-ident"}
+	state.PendingReactions[ReactionKey("I1", ReactionKindCI)] = &PendingReaction{IssueID: "I1", Identifier: "I1-ident", Kind: ReactionKindCI}
+	state.PendingReactions[ReactionKey("I1", ReactionKindReview)] = &PendingReaction{IssueID: "I1", Identifier: "I1-ident", Kind: ReactionKindReview}
+
+	state.PendingReactions[ReactionKey("I2", ReactionKindCI)] = &PendingReaction{IssueID: "I2", Identifier: "I2-ident", Kind: ReactionKindCI}
+	state.PendingReactions[ReactionKey("I2", ReactionKindLabelReview)] = &PendingReaction{IssueID: "I2", Identifier: "I2-ident", Kind: ReactionKindLabelReview}
+
+	state.Running["I3"] = &RunningEntry{Identifier: "I3-ident"}
+
+	got := trackerObservationIDs(state)
+	slices.Sort(got)
+
+	want := []string{"I1", "I2", "I3"}
+	if !slices.Equal(got, want) {
+		t.Errorf("trackerObservationIDs(state) sorted = %v, want %v", got, want)
+	}
+}
+
+func TestReconcileTrackerState_FetchFailureReleasesNothing(t *testing.T) {
+	t.Parallel()
+
+	cc := &cancelCounter{}
+	state := stateWithTerminalReleaseFixture(t, cc)
+
+	store := &mockReconcileStore{}
+	tracker := &mockReconcileTracker{fetchErr: errors.New("connection timeout")}
+	params := defaultReconcileParams(t, store, tracker)
+	params.StallTimeoutMS = 0
+
+	ReconcileRunningIssues(state, params)
+
+	for _, kind := range terminalReleaseFixtureKinds {
+		key := ReactionKey(terminalReleaseIssueID, kind)
+		if _, ok := state.PendingReactions[key]; !ok {
+			t.Errorf("PendingReactions[%q] missing after fetch failure; want unchanged", key)
+		}
+		if state.ReactionAttempts[key] != 2 {
+			t.Errorf("ReactionAttempts[%q] = %d, want 2 (unchanged)", key, state.ReactionAttempts[key])
+		}
+	}
+	if _, ok := state.Claimed[terminalReleaseIssueID]; !ok {
+		t.Error("Claimed entry missing after fetch failure; want unchanged")
+	}
+	if _, ok := state.RetryAttempts[terminalReleaseIssueID]; !ok {
+		t.Error("RetryAttempts entry missing after fetch failure; want unchanged")
+	}
+	if len(store.deletedIssueID) != 0 {
+		t.Errorf("DeleteRetryEntry calls = %d, want 0", len(store.deletedIssueID))
+	}
+}
+
+func TestReconcileTrackerState_NonTerminalPendingOnlyReleasesNothing(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		state string
+	}{
+		{"active state", "In Progress"},
+		{"handoff state", "In Review"},
+		{"state named in no list", "Backlog"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			issueID := "REL-NONTERM"
+			store := &mockReconcileStore{}
+			tracker := &mockReconcileTracker{states: map[string]string{issueID: tt.state}}
+			params := defaultReconcileParams(t, store, tracker)
+			params.StallTimeoutMS = 0
+			params.HandoffState = "In Review"
+
+			state := NewState(5000, 4, nil, AgentTotals{})
+			key := ReactionKey(issueID, ReactionKindCI)
+			state.PendingReactions[key] = &PendingReaction{
+				IssueID:    issueID,
+				Identifier: issueID + "-ident",
+				Kind:       ReactionKindCI,
+				CreatedAt:  reconcileBaseTime,
+			}
+			state.ReactionAttempts[key] = 1
+			state.Claimed[issueID] = struct{}{}
+
+			ReconcileRunningIssues(state, params)
+
+			if _, ok := state.PendingReactions[key]; !ok {
+				t.Error("PendingReactions entry removed for a non-terminal pending-only issue; want unchanged")
+			}
+			if state.ReactionAttempts[key] != 1 {
+				t.Errorf("ReactionAttempts[%q] = %d, want 1 (unchanged)", key, state.ReactionAttempts[key])
+			}
+			if _, ok := state.Claimed[issueID]; !ok {
+				t.Error("Claimed entry removed for a non-terminal pending-only issue; want unchanged")
+			}
+		})
+	}
+}
+
+func TestReleaseTerminalIssueState_IssueIsolation(t *testing.T) {
+	t.Parallel()
+
+	state := NewState(5000, 4, nil, AgentTotals{})
+
+	keyI := ReactionKey("I", ReactionKindCI)
+	state.PendingReactions[keyI] = &PendingReaction{IssueID: "I", Identifier: "I-ident", Kind: ReactionKindCI, CreatedAt: reconcileBaseTime}
+	state.ReactionAttempts[keyI] = 3
+	state.Claimed["I"] = struct{}{}
+
+	keyI2 := ReactionKey("I2", ReactionKindCI)
+	state.PendingReactions[keyI2] = &PendingReaction{IssueID: "I2", Identifier: "I2-ident", Kind: ReactionKindCI, CreatedAt: reconcileBaseTime}
+	state.ReactionAttempts[keyI2] = 5
+	state.Claimed["I2"] = struct{}{}
+
+	store := &mockReconcileStore{}
+	releaseTerminalIssueState(context.Background(), state, store, "I", discardLogger())
+
+	if _, ok := state.PendingReactions[keyI]; ok {
+		t.Error("PendingReactions[I] present after its own release; want removed")
+	}
+	if _, ok := state.PendingReactions[keyI2]; !ok {
+		t.Error("PendingReactions[I2] removed by the release of I; want untouched")
+	}
+	if state.ReactionAttempts[keyI2] != 5 {
+		t.Errorf("ReactionAttempts[I2] = %d, want 5 (untouched)", state.ReactionAttempts[keyI2])
+	}
+	if _, ok := state.Claimed["I2"]; !ok {
+		t.Error("Claimed[I2] removed by the release of I; want untouched")
+	}
+}
+
+func TestReleaseTerminalIssueState_NoSideEffects(t *testing.T) {
+	t.Parallel()
+
+	cc := &cancelCounter{}
+	state := stateWithTerminalReleaseFixture(t, cc)
+
+	store := &mockReconcileStore{}
+	tracker := &mockReconcileTracker{states: map[string]string{terminalReleaseIssueID: "Done"}}
+	params := defaultReconcileParams(t, store, tracker)
+	params.StallTimeoutMS = 0
+	params.SCMAdapter = panicOnAnySCMAdapter{}
+	params.CIProvider = panicOnAnyCIProvider{}
+	params.LabelReviewReactionConfigured = true
+
+	ReconcileRunningIssues(state, params)
+
+	if store.upsertFingerprintCalls != 0 || store.getFingerprintCalls != 0 ||
+		store.markDispatchedCalls != 0 || store.deleteFingerprintCalls != 0 {
+		t.Errorf("fingerprint store calls = upsert:%d get:%d mark:%d delete:%d, want all 0",
+			store.upsertFingerprintCalls, store.getFingerprintCalls, store.markDispatchedCalls, store.deleteFingerprintCalls)
+	}
+	if len(store.savedEntries) != 0 {
+		t.Errorf("SaveRetryEntry calls = %d, want 0", len(store.savedEntries))
+	}
+	if len(store.deletedIssueID) != 1 {
+		t.Errorf("DeleteRetryEntry calls = %d, want 1", len(store.deletedIssueID))
+	}
+}
+
+func TestReconcileTrackerState_NilTrackerAdapterPendingOnly(t *testing.T) {
+	t.Parallel()
+
+	issueID := "REL-NIL"
+	state := NewState(5000, 4, nil, AgentTotals{})
+	key := ReactionKey(issueID, ReactionKindCI)
+	state.PendingReactions[key] = &PendingReaction{
+		IssueID:    issueID,
+		Identifier: issueID + "-ident",
+		Kind:       ReactionKindCI,
+		CreatedAt:  reconcileBaseTime,
+	}
+	state.ReactionAttempts[key] = 1
+	state.Claimed[issueID] = struct{}{}
+
+	store := &mockReconcileStore{}
+	params := ReconcileParams{
+		TrackerAdapter: nil,
+		ActiveStates:   []string{"In Progress", "In Review"},
+		TerminalStates: []string{"Done", "Closed"},
+		Store:          store,
+		OnRetryFire:    noopRetryFire,
+		NowFunc:        func() time.Time { return reconcileBaseTime },
+		Ctx:            context.Background(),
+		Logger:         discardLogger(),
+	}
+
+	reconcileTrackerState(state, params, discardLogger(), context.Background(), &domain.NoopMetrics{})
+
+	if _, ok := state.PendingReactions[key]; !ok {
+		t.Error("PendingReactions entry removed despite nil TrackerAdapter; want unchanged")
+	}
+	if state.ReactionAttempts[key] != 1 {
+		t.Errorf("ReactionAttempts[%q] = %d, want 1 (unchanged)", key, state.ReactionAttempts[key])
+	}
+	if _, ok := state.Claimed[issueID]; !ok {
+		t.Error("Claimed entry removed despite nil TrackerAdapter; want unchanged")
+	}
+	if len(store.deletedIssueID) != 0 {
+		t.Errorf("DeleteRetryEntry calls = %d, want 0", len(store.deletedIssueID))
 	}
 }
 
