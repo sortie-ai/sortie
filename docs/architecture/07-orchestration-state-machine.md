@@ -124,6 +124,22 @@ Distinct terminal reasons are important because retry logic and logs differ.
   - If continuation turns exhausted: escalate (add label or post comment per escalation
     config), cancel retry, release claim.
 
+- `Merge Completion Observed`
+  - Observed on the reconcile tick for an issue still parked in `tracker.handoff_state` and not
+    currently claimed by the orchestrator.
+  - Latch idempotency on the merge commit identifier; a commit already latched and dispatched is
+    dropped without a transition.
+  - Transition the issue to `reactions.merge_completion.target_state`, the last
+    orchestrator-driven tracker-state write in an issue's life, after the optional dispatch-time
+    in-progress transition and the handoff transition on worker exit (§11G).
+  - On failure, route by tracker error kind (§11G.5): a transport or API failure, or any other
+    kind, retries with backoff bounded by `reactions.merge_completion.max_retries`, then
+    escalates; an auth or payload failure escalates immediately, consuming no retry budget; a
+    not-found issue stops, marks the fingerprint dispatched, and logs a warning, with no
+    escalation.
+  - No orchestration-state transition occurs: the claim was already released when the issue
+    entered the handoff state.
+
 ### 7.4 Idempotency and Recovery Rules
 
 - The orchestrator serializes state mutations through one authority to avoid duplicate dispatch.
@@ -135,14 +151,18 @@ Distinct terminal reasons are important because retry logic and logs differ.
 - Startup pending reaction recovery uses `run_history`, tracker state, and `.sortie/scm.json` to
   reconstruct runtime `pending_reactions` for recent handoff-stage runs before the first poll tick.
   The scan is bounded by `PendingReactionRecoveryLookback` and a fixed candidate cap.
-- Startup terminal cleanup removes stale workspaces for issues already in terminal states.
+- Startup terminal cleanup maps existing workspace directories to issue identifiers, queries the
+  tracker for the states of those specific issues, and removes the ones in terminal states. An
+  issue that reaches a terminal state through the merge-completion transition (§11G) becomes
+  eligible for this same cleanup without a human relabeling it first.
 
 #### Startup Recovery Sequence (SQLite)
 
 1. Open or create the SQLite database and run schema migrations.
 2. Load persisted retry entries from SQLite.
 3. Reconstruct retry timers from persisted `due_at` timestamps.
-4. Query tracker for terminal-state issues and clean corresponding workspaces.
+4. Map existing workspace directories to issue identifiers, query the tracker for the states of
+   those specific issues, and clean the ones in terminal states.
 5. Construct reaction providers and call `RecoverPendingReactions` to restore eligible CI and
   review pending entries for handoff-stage issues.
 6. Query tracker for active issues and reconcile with persisted state.

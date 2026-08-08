@@ -12,7 +12,15 @@ A tracker adapter must support these operations:
      pre-dispatch revalidation and prompt rendering.
 
 3. `fetch_issues_by_states(state_names)`
-   - Used for startup terminal cleanup.
+   - Return issues in the specified states. The GitHub, Gitea, GitLab, and file adapters compare
+     state names case-insensitively in process. The Jira adapter sends each name verbatim into a
+     JQL `status IN (...)` clause, leaving matching to the server. The Linear adapter resolves
+     each name against the canonical casing of the team's workflow states, read once at
+     construction: a name matching one of those states resolves case-insensitively, and a name
+     matching none is sent as written and compared case-sensitively (§11.6.1).
+   - No orchestrator caller and no agent tool invokes this operation. Adapters implement it to
+     satisfy the `TrackerAdapter` interface; removing it would be an interface change, not an
+     adapter change.
 
 4. `fetch_issue_states_by_ids(issue_ids)`
    - Used for active-run reconciliation.
@@ -73,16 +81,41 @@ Orchestrator behavior on tracker errors:
 
 ### 11.5 Tracker Writes (Important Boundary)
 
-Sortie does not require first-class tracker write APIs in the orchestrator.
+The orchestrator writes tracker state at exactly three points in an issue's life, each one a
+single named state drawn from configuration, each one corresponding to an event the orchestrator
+itself observed:
 
-- Ticket mutations (state transitions, comments, PR metadata) are typically handled by the coding
-  agent using tools defined by the workflow prompt.
-- Sortie remains a scheduler/runner and tracker reader.
-- Workflow-specific success often means "reached the next handoff state" (for example
-  `Human Review`) rather than tracker terminal state `Done`.
-- The agent tool subsystem (Section 10.4) is part of the agent toolchain rather than
-  orchestrator business logic. `tracker_api` executes tracker operations through agent-initiated
-  tool calls, not orchestrator-driven writes.
+- The in-progress state (`tracker.in_progress_state`), at dispatch, when that field is
+  configured and the dispatch drives issue state (§11F excludes the read-only and read-write
+  label-command postures).
+- The handoff state (`tracker.handoff_state`), on a normal worker exit with the issue still in an
+  active tracker state and not a blocked soft stop, when that field is configured and the
+  dispatch drives issue state.
+- The merge-completion target state (`reactions.merge_completion.target_state`), when a
+  Sortie-managed pull request merges while the linked issue is still parked in
+  `tracker.handoff_state`, independently of who or what performed the merge. Active only when
+  `reactions.merge_completion.provider` is configured. See §11G for the full contract.
+
+The orchestrator writes no other tracker state. Beyond these three writes, it posts tracker
+comments and applies escalation labels, none of which carries state semantics: the dispatch
+comment (`tracker.comments.on_dispatch`), the worker-exit completion and failure comments
+(`tracker.comments.on_completion`, `tracker.comments.on_failure`), the auto-merge success comment
+(§11C), and a reaction escalation label or comment when a reaction's retry budget is exhausted or
+a non-retryable error occurs. None of these is a state transition.
+
+Free-form ticket mutation falls outside these three writes and stays with the coding agent, which
+mutates tickets through the `tracker_api` tool subsystem (Section 10.4), part of the agent
+toolchain rather than orchestrator business logic.
+
+The distinction that governs this boundary is not between reading and writing. It is between a
+write that reports an event the orchestrator observed and a write that expresses a judgment
+about the work. The orchestrator makes only the first kind: a case that requires judgment, such
+as choosing between a completion state and an abandonment state for a pull request closed
+unmerged, falls outside all three writes above and remains the operator's or the coding agent's
+to make.
+
+Workflow-specific success often means "reached the next handoff state" (for example
+`Human Review`) rather than tracker terminal state `Done`.
 
 ### 11.6 Implemented Tracker Adapters
 
@@ -123,11 +156,12 @@ immutable category (`triage`, `backlog`, `unstarted`, `started`, `completed`, `c
 `handoff_state`; the adapter treats the names as opaque strings and preserves their original
 casing in `Issue.state`, consistent with the other adapters. The category drives no candidate
 selection. At construction the adapter fetches the team's states once, fails when a configured
-name is absent from the team, caches the canonical casing of each configured name (the GraphQL
-`name: { in: [...] }` filter is case-sensitive), and emits a WARN when a configured `active_states`
-entry resolves to a terminal category or a `terminal_states` entry resolves to a non-terminal
-category. When `active_states` or `terminal_states` is omitted, the adapter applies the stock
-defaults `["Backlog", "Todo", "In Progress"]` and `["Done", "Canceled", "Duplicate"]`.
+name is absent from the team, caches the canonical casing of every workflow state the team
+defines (the GraphQL `name: { in: [...] }` filter is case-sensitive), and emits a WARN when a
+configured `active_states` entry resolves to a terminal category or a `terminal_states` entry
+resolves to a non-terminal category. When `active_states` or `terminal_states` is omitted, the
+adapter applies the stock defaults `["Backlog", "Todo", "In Progress"]` and
+`["Done", "Canceled", "Duplicate"]`.
 
 **Normalization specifics.** Beyond the shared rules in Section 11.3:
 
