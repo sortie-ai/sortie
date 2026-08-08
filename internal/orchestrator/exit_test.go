@@ -4421,13 +4421,10 @@ func TestHandleWorkerExit_MergeConflictEnqueueDoesNotOverwrite(t *testing.T) {
 // nil, or PR metadata is incomplete.
 //
 // The fixture includes a branch even though the label-review enqueue
-// clause itself imposes no branch requirement: workspace.ReadSCMMetadata
-// unconditionally returns a zero value whenever the decoded branch is
-// empty (internal/workspace/scm.go), which also zeroes PRNumber/Owner/Repo
-// before the label-review clause ever inspects them. A workspace's scm.json
-// is written only by a normal (non-read-only) session, and such a session
-// always operates on a branch, so this reflects the only reachable
-// production case.
+// clause itself imposes no branch requirement: a workspace's scm.json is
+// written only by a normal (non-read-only) session, and such a session
+// always operates on a branch, so this reflects the common production
+// case rather than a requirement of the enqueue clause or the reader.
 func TestHandleWorkerExit_LabelReviewEnqueue(t *testing.T) {
 	t.Parallel()
 
@@ -5010,11 +5007,8 @@ func TestHandleWorkerExit_LabelFixExit_ErrorStillRetries(t *testing.T) {
 // carrying the expected *MergeCompletionReactionData; and that nothing is
 // seeded when the reaction is not configured. The enqueue clause itself
 // imposes no branch requirement, unlike the checkout-bearing sibling
-// kinds; the fixtures below still carry a branch because
-// workspace.ReadSCMMetadata unconditionally returns a zero value whenever
-// the decoded branch is empty, which would zero PRNumber/Owner/Repo before
-// the merge-completion clause ever inspects them (see the label-review
-// enqueue test for the same precedent).
+// kinds; the fixtures below still carry a branch because that is the
+// common production case, not because the reader requires one.
 func TestHandleWorkerExit_MergeCompletionEnqueue(t *testing.T) {
 	t.Parallel()
 

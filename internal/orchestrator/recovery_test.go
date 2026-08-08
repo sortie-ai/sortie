@@ -1706,13 +1706,11 @@ func TestRecoverPendingReactions_MergeConflictNotRecoveredWhenFlagFalse(t *testi
 //
 // The fixture includes a branch even though the label-review recovery
 // clause itself imposes no branch requirement (recovery.go's per-kind
-// clause omits the meta.Branch != "" guard the sibling kinds carry):
-// workspace.ReadSCMMetadata unconditionally returns a zero value whenever
-// the decoded branch is empty, and RecoverPendingReactions skips the whole
-// run when that zero value comes back, before any per-kind clause runs. A
+// clause omits the meta.Branch != "" guard the sibling kinds carry): a
 // workspace's scm.json is written only by a normal (non-read-only)
 // session, and such a session always operates on a branch, so this
-// reflects the only reachable production case.
+// reflects the common production case rather than a requirement of the
+// recovery clause or the reader.
 func TestRecoverPendingReactions_LabelReview(t *testing.T) {
 	t.Parallel()
 

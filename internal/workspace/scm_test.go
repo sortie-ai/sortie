@@ -109,12 +109,15 @@ func TestReadSCMMetadata_EmptyBranchField(t *testing.T) {
 	t.Parallel()
 
 	wsPath := t.TempDir()
-	writeSCMFile(t, wsPath, []byte(`{"branch":"","sha":"abc"}`))
+	writeSCMFile(t, wsPath, []byte(`{"branch":"","sha":"abc","pr_number":7,"owner":"acme","repo":"widgets"}`))
 
 	got := ReadSCMMetadata(wsPath, slog.Default())
 
-	if got != (domain.SCMMetadata{}) {
-		t.Errorf("ReadSCMMetadata(empty branch) = %+v, want zero value", got)
+	if got.Branch != "" {
+		t.Errorf("ReadSCMMetadata(empty branch).Branch = %q, want empty", got.Branch)
+	}
+	if got.PRNumber != 7 || got.Owner != "acme" || got.Repo != "widgets" {
+		t.Errorf("ReadSCMMetadata(empty branch) = %+v, want PR fields preserved despite empty branch", got)
 	}
 }
 
