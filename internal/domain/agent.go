@@ -67,20 +67,32 @@ const (
 )
 
 // TokenUsage holds normalized token counts emitted by agent adapters.
-// The orchestrator computes deltas relative to previously reported
-// values to avoid double-counting.
+// Every field is cumulative over the agent session an adapter opened
+// with StartSession, across every turn of that session, and excludes
+// any usage a resumed session accumulated before StartSession. The
+// orchestrator computes deltas relative to previously reported values
+// to avoid double-counting.
+//
+// TotalTokens always equals InputTokens plus OutputTokens; adapters
+// compute it rather than passing a vendor-reported total through.
+// CacheReadTokens is the subset of InputTokens served from a prompt
+// cache and is never added to any other counter.
 type TokenUsage struct {
-	// InputTokens is the cumulative input token count.
+	// InputTokens is the cumulative input token count, including
+	// prompt-cache reads and prompt-cache writes.
 	InputTokens int64
 
-	// OutputTokens is the cumulative output token count.
+	// OutputTokens is the cumulative output token count, including
+	// reasoning tokens.
 	OutputTokens int64
 
-	// TotalTokens is the cumulative total token count.
+	// TotalTokens is the cumulative total token count: InputTokens
+	// plus OutputTokens.
 	TotalTokens int64
 
-	// CacheReadTokens is the cumulative cache-read token count.
-	// Zero when the adapter does not report cache data.
+	// CacheReadTokens is the cumulative cache-read token count, a
+	// subset of InputTokens. Zero when the adapter does not report
+	// cache data.
 	CacheReadTokens int64
 }
 
@@ -99,8 +111,11 @@ type AgentEvent struct {
 	// when not applicable.
 	AgentPID string
 
-	// Usage contains token counts for token_usage events. Zero value
-	// for non-token events.
+	// Usage carries the agent session's run-cumulative token counts as
+	// of this event, for any event type the adapter chooses to attach
+	// them to. The zero value means the event carries no usage
+	// information; it does not mean the session has consumed no
+	// tokens.
 	Usage TokenUsage
 
 	// Message is an adapter-normalized summary of the event payload.
@@ -257,9 +272,10 @@ type TurnResult struct {
 	// normalized event types (turn_completed, turn_failed, etc.).
 	ExitReason AgentEventType
 
-	// Usage contains the cumulative token usage as of this turn's
-	// completion. The orchestrator computes deltas relative to
-	// previous reports.
+	// Usage carries the agent session's run-cumulative token counts as
+	// of this turn's completion: total spend across every turn of the
+	// session so far, not just this turn's contribution. The
+	// orchestrator computes deltas relative to previous reports.
 	Usage TokenUsage
 }
 

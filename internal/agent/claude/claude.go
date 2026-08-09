@@ -61,12 +61,15 @@ type sessionState struct {
 	// forkSession owns the subprocess lifecycle for this session.
 	forkSession *agentcore.ForkPerTurnSession
 
+	// acc holds the session's run-cumulative token usage. Constructed
+	// once in StartSession and never reset between turns.
+	acc *agentcore.RunUsage
+
 	// Per-turn scan state owned by the ParseLine and OnFinalize hook
 	// closures. Reset at the top of each RunTurn call before delegating
 	// to forkSession.
-	acc              *agentcore.UsageAccumulator
+	turnMessages     map[string]domain.TokenUsage
 	lastModel        string
-	emittedUsage     bool
 	apiCallStart     time.Time
 	emittedAPITiming bool
 	inFlight         *agentcore.ToolTracker
@@ -119,6 +122,7 @@ func (a *ClaudeCodeAdapter) StartSession(_ context.Context, params domain.StartS
 		agentConfig:     params.AgentConfig,
 		baseLogger:      slog.Default().With(slog.String("component", "claude-adapter")),
 		mcpConfigPath:   params.MCPConfigPath,
+		acc:             agentcore.NewRunUsage(),
 	}
 
 	hooks := agentcore.ForkPerTurnHooks{
@@ -157,14 +161,17 @@ func (a *ClaudeCodeAdapter) StartSession(_ context.Context, params domain.StartS
 						if meta.Model != "" {
 							state.lastModel = meta.Model
 						}
-						if meta.Usage != nil {
-							snapshot, ready := state.acc.AddDelta(meta.Usage.InputTokens, meta.Usage.OutputTokens, meta.Usage.CacheReadInputTokens)
-							// Claude Code 2.x: tool_use-only assistant messages may
-							// carry output_tokens=0 (streaming message_start snapshot).
-							// Defer the token_usage event until cumulative output is
-							// non-zero so the orchestrator never receives an event
-							// claiming zero output tokens for a real API turn.
-							if ready {
+						if meta.Usage != nil && meta.ID != "" {
+							candidate := usageFromAssistant(meta.Usage)
+							prior, seen := state.turnMessages[meta.ID]
+							state.turnMessages[meta.ID] = componentwiseMaxUsage(prior, candidate)
+							provisional := sumTurnMessages(state.turnMessages)
+							snapshot := state.acc.SetTurnProvisional(provisional)
+
+							// Claude Code repeats one message id across every
+							// streamed event of the same model request; only the
+							// id's first sighting represents a new API request.
+							if !seen {
 								tokenEvt := domain.AgentEvent{
 									Type:      domain.EventTokenUsage,
 									Timestamp: now,
@@ -181,12 +188,6 @@ func (a *ClaudeCodeAdapter) StartSession(_ context.Context, params domain.StartS
 									state.emittedAPITiming = true
 								}
 								emit(tokenEvt)
-								state.emittedUsage = true
-							} else if !state.apiCallStart.IsZero() {
-								// Consume the timing window without emitting so
-								// that the next user event restarts fresh timing
-								// for the subsequent API call.
-								state.apiCallStart = time.Time{}
 							}
 						}
 					}
@@ -203,18 +204,14 @@ func (a *ClaudeCodeAdapter) StartSession(_ context.Context, params domain.StartS
 
 			case "result":
 				captured := event
-				// Only emit token_usage from the result event when no
-				// per-assistant-message usage was already emitted. This
-				// avoids inflating APIRequestCount in the orchestrator.
-				if !state.emittedUsage {
-					state.acc.ReplaceCumulative(normalizeUsage(event.Usage))
-					emit(domain.AgentEvent{
-						Type:      domain.EventTokenUsage,
-						Timestamp: now,
-						Usage:     state.acc.Snapshot(),
-						Model:     state.lastModel,
-					})
-				}
+				// The result event's modelUsage (or, absent that, its usage
+				// object) is the authoritative per-turn figure: it includes
+				// sub-agent activity the streamed assistant events never
+				// carry. It settles into the run total regardless of what
+				// the assistant events already contributed, so a message
+				// only some of whose usage streamed still counts in full.
+				authoritative, _ := usageFromResult(event)
+				state.acc.AddTurn(authoritative)
 				return &captured, nil
 
 			case "stream_event":
@@ -244,7 +241,7 @@ func (a *ClaudeCodeAdapter) StartSession(_ context.Context, params domain.StartS
 					turnAPIDuration = lastResult.DurationAPI
 				}
 				if lastResult.Subtype == "success" && !lastResult.IsError {
-					agentcore.EmitTurnCompleted(emit, typeutil.TruncateRunes(lastResult.Result, 500), turnAPIDuration)
+					agentcore.EmitTurnCompleted(emit, typeutil.TruncateRunes(lastResult.Result, 500), turnAPIDuration, usage)
 					return domain.TurnResult{
 						SessionID:  state.claudeSessionID,
 						ExitReason: domain.EventTurnCompleted,
@@ -252,7 +249,7 @@ func (a *ClaudeCodeAdapter) StartSession(_ context.Context, params domain.StartS
 					}, nil
 				}
 				// EmitWarnLines is called by the skeleton when agentErr is non-nil.
-				agentcore.EmitTurnFailed(emit, lastResult.Subtype, turnAPIDuration)
+				agentcore.EmitTurnFailed(emit, lastResult.Subtype, turnAPIDuration, usage)
 				return domain.TurnResult{
 						SessionID:  state.claudeSessionID,
 						ExitReason: domain.EventTurnFailed,
@@ -264,7 +261,7 @@ func (a *ClaudeCodeAdapter) StartSession(_ context.Context, params domain.StartS
 			}
 
 			if exitCode != 0 {
-				agentcore.EmitTurnFailed(emit, "non-zero exit", 0)
+				agentcore.EmitTurnFailed(emit, "non-zero exit", 0, usage)
 				return domain.TurnResult{
 						SessionID:  state.claudeSessionID,
 						ExitReason: domain.EventTurnFailed,
@@ -275,10 +272,11 @@ func (a *ClaudeCodeAdapter) StartSession(_ context.Context, params domain.StartS
 					}
 			}
 
-			// No result event and exit code 0.
-			if state.acc.Snapshot().OutputTokens == 0 {
+			// No result event and exit code 0. Test the turn's own output,
+			// not the run cumulative, which is non-zero on any second turn.
+			if sumTurnMessages(state.turnMessages).OutputTokens == 0 {
 				state.logger().Warn("agent exited without producing output, treating as failure")
-				agentcore.EmitTurnFailed(emit, "agent exited without producing output", 0)
+				agentcore.EmitTurnFailed(emit, "agent exited without producing output", 0, usage)
 				return domain.TurnResult{
 						SessionID:  state.claudeSessionID,
 						ExitReason: domain.EventTurnFailed,
@@ -289,7 +287,7 @@ func (a *ClaudeCodeAdapter) StartSession(_ context.Context, params domain.StartS
 					}
 			}
 
-			agentcore.EmitTurnCompleted(emit, "", 0)
+			agentcore.EmitTurnCompleted(emit, "", 0, usage)
 			return domain.TurnResult{
 				SessionID:  state.claudeSessionID,
 				ExitReason: domain.EventTurnCompleted,
@@ -325,10 +323,11 @@ func (a *ClaudeCodeAdapter) RunTurn(ctx context.Context, session domain.Session,
 
 	state.refreshForkLogger()
 
-	// Reset per-turn scan state before delegation.
-	state.acc = agentcore.NewUsageAccumulator()
+	// Reset per-turn scan state before delegation. state.acc is
+	// constructed once in StartSession and carries the run-cumulative
+	// snapshot across turns, so it is not reset here.
+	state.turnMessages = make(map[string]domain.TokenUsage)
 	state.lastModel = ""
-	state.emittedUsage = false
 	state.apiCallStart = time.Time{}
 	state.emittedAPITiming = false
 	state.inFlight = agentcore.NewToolTracker()

@@ -1,3 +1,4 @@
 {"id":1,"result":{"turn":{"id":"turn-001","status":"starting"}}}
 {"method":"turn/started","params":{"turnId":"turn-001"}}
-{"method":"turn/completed","params":{"turn":{"id":"turn-001","status":"completed"},"usage":{"input_tokens":100,"output_tokens":50,"cached_input_tokens":10}}}
+{"method":"thread/tokenUsage/updated","params":{"threadId":"thread-001","turnId":"turn-001","tokenUsage":{"last":{"totalTokens":150,"inputTokens":100,"cachedInputTokens":10,"outputTokens":50,"reasoningOutputTokens":0},"total":{"totalTokens":150,"inputTokens":100,"cachedInputTokens":10,"outputTokens":50,"reasoningOutputTokens":0}}}}
+{"method":"turn/completed","params":{"turn":{"id":"turn-001","status":"completed"}}}

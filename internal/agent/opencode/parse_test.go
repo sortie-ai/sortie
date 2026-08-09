@@ -227,16 +227,20 @@ func TestQueryExportUsage(t *testing.T) {
 		t.Parallel()
 
 		data := loadFixture(t, "export_usage.json")
-		usage := parseExportOutput(data, "ses_abc123")
+		usage := parseExportOutput(data, "ses_abc123", 0)
 
-		if usage.InputTokens != 1500 {
-			t.Errorf("InputTokens = %d, want 1500", usage.InputTokens)
+		// InputTokens is tokens.input plus cache.read plus cache.write
+		// (1500 + 200 + 50); OutputTokens is tokens.output plus
+		// tokens.reasoning (300 + 0); TotalTokens is InputTokens plus
+		// OutputTokens, not the vendor tokens.total field.
+		if usage.InputTokens != 1750 {
+			t.Errorf("InputTokens = %d, want 1750", usage.InputTokens)
 		}
 		if usage.OutputTokens != 300 {
 			t.Errorf("OutputTokens = %d, want 300", usage.OutputTokens)
 		}
-		if usage.TotalTokens != 1800 {
-			t.Errorf("TotalTokens = %d, want 1800", usage.TotalTokens)
+		if usage.TotalTokens != 2050 {
+			t.Errorf("TotalTokens = %d, want 2050", usage.TotalTokens)
 		}
 		if usage.CacheReadTokens != 200 {
 			t.Errorf("CacheReadTokens = %d, want 200", usage.CacheReadTokens)
@@ -250,7 +254,7 @@ func TestQueryExportUsage(t *testing.T) {
 		t.Parallel()
 
 		data := loadFixture(t, "export_usage_missing_tokens.json")
-		usage := parseExportOutput(data, "ses_abc123")
+		usage := parseExportOutput(data, "ses_abc123", 0)
 
 		if usage.InputTokens != 0 {
 			t.Errorf("InputTokens = %d, want 0", usage.InputTokens)
@@ -267,7 +271,7 @@ func TestQueryExportUsage(t *testing.T) {
 		t.Parallel()
 
 		data := loadFixture(t, "export_usage.json")
-		usage := parseExportOutput(data, "ses_different_session")
+		usage := parseExportOutput(data, "ses_different_session", 0)
 
 		if usage.InputTokens != 0 {
 			t.Errorf("InputTokens = %d, want 0 for mismatched session", usage.InputTokens)
@@ -277,7 +281,7 @@ func TestQueryExportUsage(t *testing.T) {
 	t.Run("parse_invalid_json_returns_zero", func(t *testing.T) {
 		t.Parallel()
 
-		usage := parseExportOutput([]byte("not valid json"), "ses_abc123")
+		usage := parseExportOutput([]byte("not valid json"), "ses_abc123", 0)
 		if usage.InputTokens != 0 || usage.OutputTokens != 0 {
 			t.Errorf("invalid JSON should return zero usage, got InputTokens=%d OutputTokens=%d",
 				usage.InputTokens, usage.OutputTokens)
@@ -287,7 +291,7 @@ func TestQueryExportUsage(t *testing.T) {
 	t.Run("parse_empty_messages_returns_zero", func(t *testing.T) {
 		t.Parallel()
 
-		usage := parseExportOutput([]byte(`{"messages":[]}`), "ses_abc123")
+		usage := parseExportOutput([]byte(`{"messages":[]}`), "ses_abc123", 0)
 		if usage.InputTokens != 0 {
 			t.Errorf("empty messages should return zero usage, got InputTokens=%d", usage.InputTokens)
 		}
@@ -298,9 +302,74 @@ func TestQueryExportUsage(t *testing.T) {
 
 		// Only user message in the array; should return zero usage.
 		data := []byte(`{"messages":[{"info":{"role":"user","sessionID":"ses_abc123","tokens":{"input":100,"output":50}}}]}`)
-		usage := parseExportOutput(data, "ses_abc123")
+		usage := parseExportOutput(data, "ses_abc123", 0)
 		if usage.InputTokens != 0 {
 			t.Errorf("user message should be skipped, got InputTokens=%d", usage.InputTokens)
+		}
+	})
+
+	// parse_multi_message_sums_across_the_session drives export_usage_multi.json,
+	// captured from opencode 1.17.1 (session ses_18c61ba15ffe1524eHja237B0R,
+	// per-message vendor totals 16593, 16609, 16626), asserting the sum
+	// across all three assistant messages rather than only the last one.
+	t.Run("parse_multi_message_sums_across_the_session", func(t *testing.T) {
+		t.Parallel()
+
+		data := loadFixture(t, "export_usage_multi.json")
+		usage := parseExportOutput(data, "ses_18c61ba15ffe1524eHja237B0R", 0)
+
+		if usage.InputTokens != 49814 {
+			t.Errorf("InputTokens = %d, want 49814", usage.InputTokens)
+		}
+		if usage.OutputTokens != 14 {
+			t.Errorf("OutputTokens = %d, want 14", usage.OutputTokens)
+		}
+		if usage.CacheReadTokens != 16586 {
+			t.Errorf("CacheReadTokens = %d, want 16586", usage.CacheReadTokens)
+		}
+		if usage.TotalTokens != 49828 {
+			t.Errorf("TotalTokens = %d, want 49828", usage.TotalTokens)
+		}
+
+		const vendorTotalSum = 16593 + 16609 + 16626
+		if usage.TotalTokens != vendorTotalSum {
+			t.Errorf("TotalTokens = %d, want %d (sum of the per-message vendor totals)", usage.TotalTokens, vendorTotalSum)
+		}
+	})
+
+	t.Run("parse_multi_message_window_keeps_only_messages_at_or_after_sinceUnixMS", func(t *testing.T) {
+		t.Parallel()
+
+		data := loadFixture(t, "export_usage_multi.json")
+
+		// The second message's own time.created (1780056268100): the
+		// first message (created 1780056264932) falls out of the window,
+		// leaving only the second and third.
+		windowed := parseExportOutput(data, "ses_18c61ba15ffe1524eHja237B0R", 1780056268100)
+		if windowed.InputTokens != 33225 {
+			t.Errorf("windowed InputTokens = %d, want 33225 (second and third messages' input+cache.read+cache.write)", windowed.InputTokens)
+		}
+		if windowed.OutputTokens != 10 {
+			t.Errorf("windowed OutputTokens = %d, want 10 (second and third messages only)", windowed.OutputTokens)
+		}
+		if windowed.CacheReadTokens != 11064 {
+			t.Errorf("windowed CacheReadTokens = %d, want 11064", windowed.CacheReadTokens)
+		}
+
+		// sinceUnixMS zero counts all three messages.
+		all := parseExportOutput(data, "ses_18c61ba15ffe1524eHja237B0R", 0)
+		if all.OutputTokens != 14 {
+			t.Errorf("unwindowed OutputTokens = %d, want 14 (all three messages)", all.OutputTokens)
+		}
+	})
+
+	t.Run("parse_export_without_tokens_object_returns_zero", func(t *testing.T) {
+		t.Parallel()
+
+		data := []byte(`{"messages":[{"info":{"role":"assistant","sessionID":"ses_abc123","providerID":"anthropic","modelID":"claude-sonnet-4-5"}}]}`)
+		usage := parseExportOutput(data, "ses_abc123", 0)
+		if usage != (exportUsage{}) {
+			t.Errorf("usage = %+v, want zero value (no tokens object)", usage)
 		}
 	})
 }

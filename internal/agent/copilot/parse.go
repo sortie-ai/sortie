@@ -78,6 +78,42 @@ type sessionTaskCompleteData struct {
 	Success bool   `json:"success"`
 }
 
+// shutdownEvent is one line of the copilot session-state events journal
+// (<session-state root>/<session id>/events.jsonl) whose Type is
+// "session.shutdown".
+type shutdownEvent struct {
+	Type string       `json:"type"`
+	Data shutdownData `json:"data"`
+}
+
+// shutdownData holds the two alternative token-count shapes a
+// session.shutdown record carries. ModelMetrics is preferred when
+// present and non-empty; TokenDetails is the fallback.
+type shutdownData struct {
+	TokenDetails map[string]shutdownTokenCount `json:"tokenDetails,omitempty"`
+	ModelMetrics map[string]shutdownModel      `json:"modelMetrics,omitempty"`
+}
+
+// shutdownTokenCount is one entry of a session.shutdown record's
+// tokenDetails map.
+type shutdownTokenCount struct {
+	TokenCount int64 `json:"tokenCount"`
+}
+
+// shutdownModel is one entry of a session.shutdown record's
+// modelMetrics map.
+type shutdownModel struct {
+	Usage shutdownModelUsage `json:"usage"`
+}
+
+// shutdownModelUsage holds one model's token counts from a
+// session.shutdown record's modelMetrics entry.
+type shutdownModelUsage struct {
+	InputTokens     int64 `json:"inputTokens"`
+	OutputTokens    int64 `json:"outputTokens"`
+	CacheReadTokens int64 `json:"cacheReadTokens"`
+}
+
 // parseEvent parses a single JSONL line from Copilot CLI stdout into
 // a [rawEvent]. Returns an error if JSON parsing fails.
 func parseEvent(line []byte) (rawEvent, error) {

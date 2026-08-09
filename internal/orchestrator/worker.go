@@ -159,6 +159,12 @@ type WorkerResult struct {
 	// terminal state ahead of the dispatch-time snapshot; it is not used
 	// for the active-state classification.
 	ObservedIssueState string
+
+	// Usage is the run-cumulative token usage the adapter reported for
+	// this run, as of worker exit. Folded from every usage-bearing
+	// event and every TurnResult.Usage the worker observed; zero for an
+	// exit before the first turn returns.
+	Usage domain.TokenUsage
 }
 
 // SessionToolRegistryFunc builds the per-session tool registry rendered
@@ -417,6 +423,33 @@ func exitKindForErr(ctx context.Context) WorkerExitKind {
 	return WorkerExitError
 }
 
+// foldLocalUsage applies the clamped-delta accounting rule to the
+// worker's local token mirror: it computes each component's delta
+// against lastUsage, clamped to zero, adds the deltas to cumulative,
+// and raises lastUsage to the componentwise maximum of its prior value
+// and usage. It returns the updated cumulative total and watermarks.
+// Confined to the worker goroutine; never touches orchestrator state.
+func foldLocalUsage(usage, cumulative, lastUsage domain.TokenUsage) (newCumulative, newLastUsage domain.TokenUsage) {
+	deltaInput := max(usage.InputTokens-lastUsage.InputTokens, 0)
+	deltaOutput := max(usage.OutputTokens-lastUsage.OutputTokens, 0)
+	deltaTotal := max(usage.TotalTokens-lastUsage.TotalTokens, 0)
+	deltaCacheRead := max(usage.CacheReadTokens-lastUsage.CacheReadTokens, 0)
+
+	newCumulative = domain.TokenUsage{
+		InputTokens:     cumulative.InputTokens + deltaInput,
+		OutputTokens:    cumulative.OutputTokens + deltaOutput,
+		TotalTokens:     cumulative.TotalTokens + deltaTotal,
+		CacheReadTokens: cumulative.CacheReadTokens + deltaCacheRead,
+	}
+	newLastUsage = domain.TokenUsage{
+		InputTokens:     max(lastUsage.InputTokens, usage.InputTokens),
+		OutputTokens:    max(lastUsage.OutputTokens, usage.OutputTokens),
+		TotalTokens:     max(lastUsage.TotalTokens, usage.TotalTokens),
+		CacheReadTokens: max(lastUsage.CacheReadTokens, usage.CacheReadTokens),
+	}
+	return newCumulative, newLastUsage
+}
+
 // RunWorkerAttempt executes a single worker attempt for the given issue.
 // It prepares the workspace, starts an agent session, runs the
 // multi-turn loop, and performs teardown. The function calls
@@ -519,15 +552,15 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 	var sessionStarted bool
 	var mcpConfigPath string
 	var sessionStartedAt time.Time
+	// localUsage is the worker's own mirror of the run-cumulative token
+	// counters, folded from any usage-bearing event on the worker
+	// goroutine; localLastUsage holds the matching last-reported
+	// watermarks. Both feed .sortie/state.json and WorkerResult.Usage.
+	// This mirror never touches orchestrator state and never calls
+	// applyUsageDelta.
 	var (
-		localInputTokens         int64
-		localOutputTokens        int64
-		localTotalTokens         int64
-		localCacheReadTokens     int64
-		localLastInputTokens     int64
-		localLastOutputTokens    int64
-		localLastTotalTokens     int64
-		localLastCacheReadTokens int64
+		localUsage     domain.TokenUsage
+		localLastUsage domain.TokenUsage
 	)
 
 	defer func() {
@@ -562,6 +595,7 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 					Attempt:            attempt,
 					SSHHost:            deps.SSHHost,
 					ObservedIssueState: observedIssueState,
+					Usage:              localUsage,
 				})
 			}
 		}
@@ -810,10 +844,10 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 				MaxTurns:        maxTurns,
 				Attempt:         attempt,
 				StartedAt:       sessionStartedAt.Format(time.RFC3339Nano),
-				InputTokens:     localInputTokens,
-				OutputTokens:    localOutputTokens,
-				TotalTokens:     localTotalTokens,
-				CacheReadTokens: localCacheReadTokens,
+				InputTokens:     localUsage.InputTokens,
+				OutputTokens:    localUsage.OutputTokens,
+				TotalTokens:     localUsage.TotalTokens,
+				CacheReadTokens: localUsage.CacheReadTokens,
 			}); err != nil {
 				logger.Warn("failed to write status state file at turn start",
 					slog.Int("turn_number", turnNumber),
@@ -851,6 +885,7 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 				Attempt:            attempt,
 				SSHHost:            deps.SSHHost,
 				ObservedIssueState: observedIssueState,
+				Usage:              localUsage,
 			})
 			return
 		}
@@ -882,19 +917,8 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 				if event.RateLimits != nil {
 					event.RateLimits = maps.Clone(event.RateLimits)
 				}
-				if event.Type == domain.EventTokenUsage {
-					dIn := max(event.Usage.InputTokens-localLastInputTokens, 0)
-					dOut := max(event.Usage.OutputTokens-localLastOutputTokens, 0)
-					dTot := max(event.Usage.TotalTokens-localLastTotalTokens, 0)
-					dCR := max(event.Usage.CacheReadTokens-localLastCacheReadTokens, 0)
-					localInputTokens += dIn
-					localOutputTokens += dOut
-					localTotalTokens += dTot
-					localCacheReadTokens += dCR
-					localLastInputTokens = max(localLastInputTokens, event.Usage.InputTokens)
-					localLastOutputTokens = max(localLastOutputTokens, event.Usage.OutputTokens)
-					localLastTotalTokens = max(localLastTotalTokens, event.Usage.TotalTokens)
-					localLastCacheReadTokens = max(localLastCacheReadTokens, event.Usage.CacheReadTokens)
+				if hasUsage(event.Usage) {
+					localUsage, localLastUsage = foldLocalUsage(event.Usage, localUsage, localLastUsage)
 
 					if mcpConfigPath != "" {
 						if err := writeWorkerState(wsResult.Path, workerState{
@@ -902,10 +926,10 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 							MaxTurns:        maxTurns,
 							Attempt:         attempt,
 							StartedAt:       sessionStartedAt.Format(time.RFC3339Nano),
-							InputTokens:     localInputTokens,
-							OutputTokens:    localOutputTokens,
-							TotalTokens:     localTotalTokens,
-							CacheReadTokens: localCacheReadTokens,
+							InputTokens:     localUsage.InputTokens,
+							OutputTokens:    localUsage.OutputTokens,
+							TotalTokens:     localUsage.TotalTokens,
+							CacheReadTokens: localUsage.CacheReadTokens,
 						}); err != nil {
 							logger.Warn("failed to write status state file on token event", slog.Any("error", err))
 						}
@@ -914,6 +938,14 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 				deps.OnEvent(issue.ID, event)
 			},
 		})
+
+		// Fold TurnResult.Usage into the local mirror on both the success
+		// and the error path, so a run-cumulative figure the adapter
+		// reported only on TurnResult (not through an event) is not lost.
+		if hasUsage(turnResult.Usage) {
+			localUsage, localLastUsage = foldLocalUsage(turnResult.Usage, localUsage, localLastUsage)
+		}
+
 		if err != nil {
 			stopSessionBestEffort(ctx, deps.AgentAdapter, session, cfg, logger)
 			finishWorkspace()
@@ -930,6 +962,7 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 				Attempt:            attempt,
 				SSHHost:            deps.SSHHost,
 				ObservedIssueState: observedIssueState,
+				Usage:              localUsage,
 			})
 			return
 		}
@@ -959,6 +992,7 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 				Attempt:            attempt,
 				SSHHost:            deps.SSHHost,
 				ObservedIssueState: observedIssueState,
+				Usage:              localUsage,
 			})
 			return
 		}
@@ -987,6 +1021,7 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 				SoftStop:           true,
 				SoftStopReason:     string(statusSignal),
 				ObservedIssueState: observedIssueState,
+				Usage:              localUsage,
 			})
 			return
 		}
@@ -1014,6 +1049,7 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 					Attempt:            attempt,
 					SSHHost:            deps.SSHHost,
 					ObservedIssueState: observedIssueState,
+					Usage:              localUsage,
 				})
 				return
 			}
@@ -1112,6 +1148,7 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 		SSHHost:            deps.SSHHost,
 		ReviewMetadata:     reviewMeta,
 		ObservedIssueState: observedIssueState,
+		Usage:              localUsage,
 	})
 }
 

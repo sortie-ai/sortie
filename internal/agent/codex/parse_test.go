@@ -201,46 +201,142 @@ func TestParseMessage_Malformed(t *testing.T) {
 	}
 }
 
-func TestNormalizeUsage(t *testing.T) {
+func TestNormalizeBreakdown(t *testing.T) {
 	t.Parallel()
 
-	t.Run("nil input returns zero usage", func(t *testing.T) {
+	tests := []struct {
+		name string
+		in   tokenUsageBreakdown
+		want domain.TokenUsage
+	}{
+		{
+			name: "inputTokens already includes cachedInputTokens",
+			in:   tokenUsageBreakdown{InputTokens: 27428, CachedInputTokens: 13696, OutputTokens: 30, ReasoningOutputTokens: 18, TotalTokens: 27458},
+			want: domain.TokenUsage{InputTokens: 27428, OutputTokens: 30, TotalTokens: 27458, CacheReadTokens: 13696},
+		},
+		{
+			name: "zero value",
+			in:   tokenUsageBreakdown{},
+			want: domain.TokenUsage{},
+		},
+		{
+			name: "totalTokens field ignored, recomputed from input plus output",
+			in:   tokenUsageBreakdown{InputTokens: 100, OutputTokens: 50, TotalTokens: 999999},
+			want: domain.TokenUsage{InputTokens: 100, OutputTokens: 50, TotalTokens: 150},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := normalizeBreakdown(tt.in)
+			if got != tt.want {
+				t.Errorf("normalizeBreakdown(%+v) = %+v, want %+v", tt.in, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestParseTokenUsageUpdated(t *testing.T) {
+	t.Parallel()
+
+	t.Run("valid payload", func(t *testing.T) {
 		t.Parallel()
-		got := normalizeUsage(nil)
-		if got != (domain.TokenUsage{}) {
-			t.Errorf("normalizeUsage(nil) = %+v, want zero", got)
+		raw := json.RawMessage(`{"threadId":"th-1","turnId":"tn-1","tokenUsage":{"last":{"totalTokens":150,"inputTokens":100,"cachedInputTokens":10,"outputTokens":50},"total":{"totalTokens":300,"inputTokens":200,"cachedInputTokens":20,"outputTokens":100}}}`)
+		got, err := parseTokenUsageUpdated(raw)
+		if err != nil {
+			t.Fatalf("parseTokenUsageUpdated() error = %v", err)
+		}
+		if got.ThreadID != "th-1" || got.TurnID != "tn-1" {
+			t.Errorf("ThreadID/TurnID = %q/%q, want %q/%q", got.ThreadID, got.TurnID, "th-1", "tn-1")
+		}
+		if got.TokenUsage.Total.InputTokens != 200 {
+			t.Errorf("TokenUsage.Total.InputTokens = %d, want 200", got.TokenUsage.Total.InputTokens)
+		}
+		if got.TokenUsage.Last.OutputTokens != 50 {
+			t.Errorf("TokenUsage.Last.OutputTokens = %d, want 50", got.TokenUsage.Last.OutputTokens)
 		}
 	})
 
-	t.Run("fields mapped correctly", func(t *testing.T) {
+	t.Run("malformed payload returns error", func(t *testing.T) {
 		t.Parallel()
-		u := &turnUsage{
-			InputTokens:       100,
-			OutputTokens:      50,
-			CachedInputTokens: 20,
-		}
-		got := normalizeUsage(u)
-		if got.InputTokens != 100 {
-			t.Errorf("InputTokens = %d, want 100", got.InputTokens)
-		}
-		if got.OutputTokens != 50 {
-			t.Errorf("OutputTokens = %d, want 50", got.OutputTokens)
-		}
-		if got.TotalTokens != 150 {
-			t.Errorf("TotalTokens = %d, want 150 (input+output)", got.TotalTokens)
-		}
-		if got.CacheReadTokens != 20 {
-			t.Errorf("CacheReadTokens = %d, want 20", got.CacheReadTokens)
+		_, err := parseTokenUsageUpdated(json.RawMessage(`not json`))
+		if err == nil {
+			t.Fatal("parseTokenUsageUpdated(malformed) error = nil, want non-nil")
 		}
 	})
+}
 
-	t.Run("zero usage struct", func(t *testing.T) {
-		t.Parallel()
-		got := normalizeUsage(&turnUsage{})
-		if got != (domain.TokenUsage{}) {
-			t.Errorf("normalizeUsage(&turnUsage{}) = %+v, want zero", got)
-		}
-	})
+func TestSubtractUsage(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		a, b domain.TokenUsage
+		want domain.TokenUsage
+	}{
+		{
+			name: "positive difference",
+			a:    domain.TokenUsage{InputTokens: 27549, OutputTokens: 82, CacheReadTokens: 27392},
+			b:    domain.TokenUsage{InputTokens: 13731, OutputTokens: 54, CacheReadTokens: 13700},
+			want: domain.TokenUsage{InputTokens: 13818, OutputTokens: 28, CacheReadTokens: 13692, TotalTokens: 13846},
+		},
+		{
+			name: "floored at zero when b exceeds a",
+			a:    domain.TokenUsage{InputTokens: 10, OutputTokens: 5, CacheReadTokens: 2},
+			b:    domain.TokenUsage{InputTokens: 100, OutputTokens: 100, CacheReadTokens: 100},
+			want: domain.TokenUsage{},
+		},
+		{
+			name: "equal values yield zero delta",
+			a:    domain.TokenUsage{InputTokens: 50, OutputTokens: 20, CacheReadTokens: 5},
+			b:    domain.TokenUsage{InputTokens: 50, OutputTokens: 20, CacheReadTokens: 5},
+			want: domain.TokenUsage{},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := subtractUsage(tt.a, tt.b)
+			if got != tt.want {
+				t.Errorf("subtractUsage(%+v, %+v) = %+v, want %+v", tt.a, tt.b, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestMaxUsage(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		a, b domain.TokenUsage
+		want domain.TokenUsage
+	}{
+		{
+			name: "componentwise maximum, mixed",
+			a:    domain.TokenUsage{InputTokens: 100, OutputTokens: 5, CacheReadTokens: 50},
+			b:    domain.TokenUsage{InputTokens: 20, OutputTokens: 40, CacheReadTokens: 10},
+			want: domain.TokenUsage{InputTokens: 100, OutputTokens: 40, CacheReadTokens: 50, TotalTokens: 140},
+		},
+		{
+			name: "b entirely zero returns a",
+			a:    domain.TokenUsage{InputTokens: 10, OutputTokens: 5, TotalTokens: 15},
+			b:    domain.TokenUsage{},
+			want: domain.TokenUsage{InputTokens: 10, OutputTokens: 5, TotalTokens: 15},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			got := maxUsage(tt.a, tt.b)
+			if got != tt.want {
+				t.Errorf("maxUsage(%+v, %+v) = %+v, want %+v", tt.a, tt.b, got, tt.want)
+			}
+		})
+	}
 }
 
 func TestMapTurnStatus(t *testing.T) {

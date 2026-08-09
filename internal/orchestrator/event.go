@@ -114,43 +114,21 @@ func HandleAgentEvent(state *State, issueID string, event domain.AgentEvent, log
 		}
 	}
 
-	// Apply the token delta algorithm when the adapter reports usage.
-	// Deltas are clamped to zero as a defensive guard against adapter
-	// regressions that emit decreasing cumulative counts.
+	// Apply the token delta algorithm for any event that reports usage,
+	// not only token_usage events, so an adapter can attach the
+	// authoritative run-cumulative snapshot to a turn-finalization
+	// event without losing it. api_request_count, ModelName, and
+	// RequestsByModel stay bound to token_usage events, mirroring the
+	// existing treatment of APIDurationMS.
+	var usageDelta domain.TokenUsage
+	if hasUsage(event.Usage) {
+		usageDelta = applyUsageDelta(state, entry, event.Usage, metrics)
+	}
+
 	if event.Type == domain.EventTokenUsage {
-		deltaInput := max(event.Usage.InputTokens-entry.LastReportedInputTokens, 0)
-		deltaOutput := max(event.Usage.OutputTokens-entry.LastReportedOutputTokens, 0)
-		deltaTotal := max(event.Usage.TotalTokens-entry.LastReportedTotalTokens, 0)
-
-		entry.AgentInputTokens += deltaInput
-		entry.AgentOutputTokens += deltaOutput
-		entry.AgentTotalTokens += deltaTotal
-
-		entry.LastReportedInputTokens = max(entry.LastReportedInputTokens, event.Usage.InputTokens)
-		entry.LastReportedOutputTokens = max(entry.LastReportedOutputTokens, event.Usage.OutputTokens)
-		entry.LastReportedTotalTokens = max(entry.LastReportedTotalTokens, event.Usage.TotalTokens)
-
-		deltaCacheRead := max(event.Usage.CacheReadTokens-entry.LastReportedCacheReadTokens, 0)
-		entry.CacheReadTokens += deltaCacheRead
-		entry.LastReportedCacheReadTokens = max(entry.LastReportedCacheReadTokens, event.Usage.CacheReadTokens)
-
-		state.AgentTotals.InputTokens += deltaInput
-		state.AgentTotals.OutputTokens += deltaOutput
-		state.AgentTotals.TotalTokens += deltaTotal
-		state.AgentTotals.CacheReadTokens += deltaCacheRead
-
-		if deltaInput > 0 {
-			metrics.AddTokens("input", deltaInput)
-		}
-		if deltaOutput > 0 {
-			metrics.AddTokens("output", deltaOutput)
-		}
-		if deltaCacheRead > 0 {
-			metrics.AddTokens("cache_read", deltaCacheRead)
-		}
-
 		// Increment API request count unconditionally — each
-		// token_usage event represents one API round-trip.
+		// token_usage event represents one API round-trip, including
+		// one whose reported usage is entirely zero.
 		entry.APIRequestCount++
 
 		// Track model: prefer the event's model, fall back to last known.
@@ -166,14 +144,6 @@ func HandleAgentEvent(state *State, issueID string, event domain.AgentEvent, log
 			}
 			entry.RequestsByModel[model]++
 		}
-
-		log.Debug("agent event processed",
-			slog.Any("event_type", event.Type),
-			slog.Int64("delta_input", deltaInput),
-			slog.Int64("delta_output", deltaOutput),
-			slog.Int64("delta_total", deltaTotal),
-			slog.Int64("delta_cache_read", deltaCacheRead),
-		)
 	}
 
 	// Snapshot the rate-limit payload when present. The worker's
@@ -204,7 +174,13 @@ func HandleAgentEvent(state *State, issueID string, event domain.AgentEvent, log
 			slog.String("session_id", event.SessionID),
 		)
 	case domain.EventTokenUsage:
-		// Logged inside the delta computation block above.
+		log.Debug("agent event processed",
+			slog.Any("event_type", event.Type),
+			slog.Int64("delta_input", usageDelta.InputTokens),
+			slog.Int64("delta_output", usageDelta.OutputTokens),
+			slog.Int64("delta_total", usageDelta.TotalTokens),
+			slog.Int64("delta_cache_read", usageDelta.CacheReadTokens),
+		)
 
 	case domain.EventTurnCompleted,
 		domain.EventTurnFailed,
@@ -219,5 +195,67 @@ func HandleAgentEvent(state *State, issueID string, event domain.AgentEvent, log
 		log.Debug("agent event processed",
 			slog.Any("event_type", event.Type),
 		)
+	}
+}
+
+// hasUsage reports whether usage carries a non-zero component. Shared
+// by HandleAgentEvent, the worker's OnEvent relay, and
+// maybeWriteIncrementalMetadata so all three sites apply the same
+// usage-bearing-event condition.
+func hasUsage(usage domain.TokenUsage) bool {
+	return usage.InputTokens != 0 || usage.OutputTokens != 0 || usage.TotalTokens != 0 || usage.CacheReadTokens != 0
+}
+
+// applyUsageDelta applies the monotone-delta token accounting rule to
+// entry and state.AgentTotals: it computes each component's delta
+// against entry's LastReported* watermarks, clamped to zero, adds the
+// deltas to entry and state.AgentTotals, raises the watermarks to the
+// componentwise maximum of their prior value and usage, emits the
+// non-zero deltas through metrics, and returns the applied delta.
+//
+// applyUsageDelta is the only function that mutates
+// entry.AgentInputTokens, entry.AgentOutputTokens,
+// entry.AgentTotalTokens, entry.CacheReadTokens, the
+// entry.LastReported* watermarks, and State.AgentTotals, and the only
+// caller of metrics.AddTokens for token counters. It runs only on the
+// orchestrator's single-writer event loop goroutine; the worker's own
+// local mirror of these counters applies the identical rule
+// independently on the worker goroutine and never calls this function.
+func applyUsageDelta(state *State, entry *RunningEntry, usage domain.TokenUsage, metrics domain.Metrics) domain.TokenUsage {
+	deltaInput := max(usage.InputTokens-entry.LastReportedInputTokens, 0)
+	deltaOutput := max(usage.OutputTokens-entry.LastReportedOutputTokens, 0)
+	deltaTotal := max(usage.TotalTokens-entry.LastReportedTotalTokens, 0)
+	deltaCacheRead := max(usage.CacheReadTokens-entry.LastReportedCacheReadTokens, 0)
+
+	entry.AgentInputTokens += deltaInput
+	entry.AgentOutputTokens += deltaOutput
+	entry.AgentTotalTokens += deltaTotal
+	entry.CacheReadTokens += deltaCacheRead
+
+	entry.LastReportedInputTokens = max(entry.LastReportedInputTokens, usage.InputTokens)
+	entry.LastReportedOutputTokens = max(entry.LastReportedOutputTokens, usage.OutputTokens)
+	entry.LastReportedTotalTokens = max(entry.LastReportedTotalTokens, usage.TotalTokens)
+	entry.LastReportedCacheReadTokens = max(entry.LastReportedCacheReadTokens, usage.CacheReadTokens)
+
+	state.AgentTotals.InputTokens += deltaInput
+	state.AgentTotals.OutputTokens += deltaOutput
+	state.AgentTotals.TotalTokens += deltaTotal
+	state.AgentTotals.CacheReadTokens += deltaCacheRead
+
+	if deltaInput > 0 {
+		metrics.AddTokens("input", deltaInput)
+	}
+	if deltaOutput > 0 {
+		metrics.AddTokens("output", deltaOutput)
+	}
+	if deltaCacheRead > 0 {
+		metrics.AddTokens("cache_read", deltaCacheRead)
+	}
+
+	return domain.TokenUsage{
+		InputTokens:     deltaInput,
+		OutputTokens:    deltaOutput,
+		TotalTokens:     deltaTotal,
+		CacheReadTokens: deltaCacheRead,
 	}
 }

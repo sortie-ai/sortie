@@ -273,6 +273,60 @@ func TestIntegration_RunTurn(t *testing.T) {
 	}
 }
 
+// TestIntegration_RunTurn_InputTokenRecovery drives one real turn with
+// COPILOT_HOME pointed at a temporary directory, so a single assertion
+// covers both halves of R20: the runtime honors the variable, and the
+// adapter resolves the same session-state root from it. It asserts the
+// recorded input token count is greater than zero and total_tokens
+// equals input_tokens plus output_tokens.
+func TestIntegration_RunTurn_InputTokenRecovery(t *testing.T) {
+	skipUnlessCopilotIntegration(t)
+
+	copilotHome := t.TempDir()
+	t.Setenv("COPILOT_HOME", copilotHome)
+
+	adapter, err := NewCopilotAdapter(integrationConfig())
+	if err != nil {
+		t.Fatalf("NewCopilotAdapter: %v", err)
+	}
+
+	workspace := t.TempDir()
+	if err := os.WriteFile(workspace+"/hello.txt", []byte("Hello"), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	session, err := adapter.StartSession(context.Background(), domain.StartSessionParams{
+		WorkspacePath: workspace,
+		AgentConfig:   domain.AgentConfig{Command: integrationCommand()},
+	})
+	if err != nil {
+		t.Fatalf("StartSession: %v", err)
+	}
+	t.Cleanup(func() { _ = adapter.StopSession(context.Background(), session) })
+
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Second)
+	defer cancel()
+
+	result, err := adapter.RunTurn(ctx, session, domain.RunTurnParams{
+		Prompt:  "Read the file hello.txt. Output EXACTLY the file content and absolutely nothing else. No preamble, no explanation.",
+		OnEvent: func(domain.AgentEvent) {},
+	})
+	if err != nil {
+		t.Fatalf("RunTurn: %v", err)
+	}
+	if result.ExitReason != domain.EventTurnCompleted {
+		t.Fatalf("TurnResult.ExitReason = %q, want %q", result.ExitReason, domain.EventTurnCompleted)
+	}
+
+	if result.Usage.InputTokens <= 0 {
+		t.Errorf("TurnResult.Usage.InputTokens = %d, want > 0 (recovered from the session-state journal)", result.Usage.InputTokens)
+	}
+	if result.Usage.TotalTokens != result.Usage.InputTokens+result.Usage.OutputTokens {
+		t.Errorf("TurnResult.Usage.TotalTokens = %d, want InputTokens+OutputTokens = %d",
+			result.Usage.TotalTokens, result.Usage.InputTokens+result.Usage.OutputTokens)
+	}
+}
+
 // TestIntegration_RunTurn_ContextCancellation verifies that cancelling the
 // context mid-turn causes RunTurn to return ErrTurnCancelled promptly and
 // cleans up the subprocess.

@@ -195,6 +195,15 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 	}
 	delete(state.Running, workerResult.IssueID)
 
+	// Reconcile the entry's token totals from the worker's own figure
+	// before run_history, session_metadata, and aggregate_metrics are
+	// built below, so a trailing usage event dropped by a full
+	// agentEventCh or processed after this entry was removed cannot
+	// leave the recorded total lower than what the worker actually
+	// spent. applyUsageDelta's monotone-delta rule applies a zero delta
+	// when workerResult.Usage is already fully accounted for.
+	applyUsageDelta(state, entry, workerResult.Usage, metrics)
+
 	// Release the SSH host slot so it becomes available for other issues.
 	// ReleaseHost is a no-op when issueID has no assignment, so calling
 	// it unconditionally is safe and more robust than gating on SSHHost.

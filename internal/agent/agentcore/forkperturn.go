@@ -72,12 +72,12 @@ type ForkPerTurnHooks struct {
 	// be concurrency-safe.
 	ParseLine func(line []byte, emit func(domain.AgentEvent), pid string) (result any, err error)
 
-	// GetUsage returns the token usage accumulated so far in this turn.
-	// The skeleton calls this when constructing the TurnResult for Arms
-	// 1–5 of the decision tree (cancellation, scan-error, exit-127, and
-	// signal paths). The adapter implements this as a one-line closure
-	// over its *[UsageAccumulator]: func() domain.TokenUsage { return
-	// acc.Snapshot() }.
+	// GetUsage returns the session's run-cumulative token usage snapshot,
+	// not a per-turn figure. The skeleton calls this when constructing the
+	// TurnResult and the terminal event for Arms 1–5 of the decision tree
+	// (cancellation, scan-error, exit-127, and signal paths). The adapter
+	// implements this as a one-line closure over its *[RunUsage]:
+	// func() domain.TokenUsage { return acc.Snapshot() }.
 	//
 	// GetUsage is called after the scan loop completes and is always
 	// called on RunTurn's goroutine.
@@ -271,10 +271,12 @@ func (s *ForkPerTurnSession) RunTurn(
 	if err != nil {
 		s.mu.Unlock()
 		if ctx.Err() != nil {
-			EmitTurnCancelled(emit, "context cancelled")
+			usage := s.hooks.GetUsage()
+			EmitTurnCancelled(emit, "context cancelled", usage)
 			return domain.TurnResult{
 					SessionID:  s.hooks.GetSessionID(),
 					ExitReason: domain.EventTurnCancelled,
+					Usage:      usage,
 				}, &domain.AgentError{
 					Kind:    domain.ErrTurnCancelled,
 					Message: "turn cancelled",
@@ -335,11 +337,12 @@ func (s *ForkPerTurnSession) RunTurn(
 		// Context cancellation propagates through exec.CommandContext
 		// and can surface as a pipe read error. Treat as cancellation.
 		if ctx.Err() != nil {
-			EmitTurnCancelled(emit, "context cancelled")
+			usage := s.hooks.GetUsage()
+			EmitTurnCancelled(emit, "context cancelled", usage)
 			return domain.TurnResult{
 					SessionID:  s.hooks.GetSessionID(),
 					ExitReason: domain.EventTurnCancelled,
-					Usage:      s.hooks.GetUsage(),
+					Usage:      usage,
 				}, &domain.AgentError{
 					Kind:    domain.ErrTurnCancelled,
 					Message: "turn cancelled",
@@ -348,11 +351,12 @@ func (s *ForkPerTurnSession) RunTurn(
 		}
 
 		procutil.EmitWarnLines(stderrLines, s.logger)
-		EmitTurnFailed(emit, "stdout read error: "+scanErr.Error(), 0)
+		usage := s.hooks.GetUsage()
+		EmitTurnFailed(emit, "stdout read error: "+scanErr.Error(), 0, usage)
 		return domain.TurnResult{
 				SessionID:  s.hooks.GetSessionID(),
 				ExitReason: domain.EventTurnFailed,
-				Usage:      s.hooks.GetUsage(),
+				Usage:      usage,
 			}, &domain.AgentError{
 				Kind:    domain.ErrPortExit,
 				Message: "stdout scanner error",
@@ -374,11 +378,12 @@ func (s *ForkPerTurnSession) RunTurn(
 	s.mu.Unlock()
 
 	if ctx.Err() != nil {
-		EmitTurnCancelled(emit, "context cancelled")
+		usage := s.hooks.GetUsage()
+		EmitTurnCancelled(emit, "context cancelled", usage)
 		return domain.TurnResult{
 				SessionID:  s.hooks.GetSessionID(),
 				ExitReason: domain.EventTurnCancelled,
-				Usage:      s.hooks.GetUsage(),
+				Usage:      usage,
 			}, &domain.AgentError{
 				Kind:    domain.ErrTurnCancelled,
 				Message: "turn cancelled",
@@ -390,11 +395,12 @@ func (s *ForkPerTurnSession) RunTurn(
 
 	if exitCode == 127 {
 		procutil.EmitWarnLines(stderrLines, s.logger)
-		EmitTurnFailed(emit, "agent binary not found", 0)
+		usage := s.hooks.GetUsage()
+		EmitTurnFailed(emit, "agent binary not found", 0, usage)
 		return domain.TurnResult{
 				SessionID:  s.hooks.GetSessionID(),
 				ExitReason: domain.EventTurnFailed,
-				Usage:      s.hooks.GetUsage(),
+				Usage:      usage,
 			}, &domain.AgentError{
 				Kind:    domain.ErrAgentNotFound,
 				Message: "exit code 127",
@@ -402,11 +408,12 @@ func (s *ForkPerTurnSession) RunTurn(
 	}
 
 	if procutil.WasSignaled(waitErr) {
-		EmitTurnCancelled(emit, "killed by signal")
+		usage := s.hooks.GetUsage()
+		EmitTurnCancelled(emit, "killed by signal", usage)
 		return domain.TurnResult{
 				SessionID:  s.hooks.GetSessionID(),
 				ExitReason: domain.EventTurnCancelled,
-				Usage:      s.hooks.GetUsage(),
+				Usage:      usage,
 			}, &domain.AgentError{
 				Kind:    domain.ErrTurnCancelled,
 				Message: "killed by signal",

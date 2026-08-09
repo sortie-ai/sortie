@@ -33,7 +33,7 @@ func noopHooks() ForkPerTurnHooks {
 		GetUsage:     func() domain.TokenUsage { return domain.TokenUsage{} },
 		GetSessionID: func() string { return "" },
 		OnFinalize: func(emit func(domain.AgentEvent), lastParsed any, exitCode int, stderrLines []string) (domain.TurnResult, *domain.AgentError) {
-			EmitTurnCompleted(emit, "ok", 0)
+			EmitTurnCompleted(emit, "ok", 0, domain.TokenUsage{})
 			return domain.TurnResult{ExitReason: domain.EventTurnCompleted}, nil
 		},
 	}
@@ -54,6 +54,17 @@ func hasEventType(events []domain.AgentEvent, kind domain.AgentEventType) bool {
 		}
 	}
 	return false
+}
+
+// findEventOfType returns the first event of the given type and true,
+// or the zero value and false when no matching event exists.
+func findEventOfType(events []domain.AgentEvent, kind domain.AgentEventType) (domain.AgentEvent, bool) {
+	for _, e := range events {
+		if e.Type == kind {
+			return e, true
+		}
+	}
+	return domain.AgentEvent{}, false
 }
 
 // requireAgentError fails if err is not a *domain.AgentError with the
@@ -99,6 +110,46 @@ func TestForkPerTurnSession(t *testing.T) {
 		}
 	})
 
+	t.Run("Arm1_UsageCarriage_CtxCancelBeforeEOF", func(t *testing.T) {
+		t.Parallel()
+		tmpDir := t.TempDir()
+		script := agenttest.WriteScript(t, tmpDir, "agent", `sleep 60`)
+		target := newTestTarget(tmpDir, script)
+		stubUsage := domain.TokenUsage{InputTokens: 500, OutputTokens: 100, TotalTokens: 600}
+		hooks := noopHooks()
+		hooks.GetUsage = func() domain.TokenUsage { return stubUsage }
+		sess := NewForkPerTurnSession(target, hooks, slog.Default())
+
+		ctx, cancel := context.WithCancel(context.Background())
+		emit, events := sinkEvents()
+		type outcome struct {
+			result domain.TurnResult
+			err    error
+		}
+		done := make(chan outcome, 1)
+		go func() {
+			result, err := sess.RunTurn(ctx, "p", emit)
+			done <- outcome{result, err}
+		}()
+
+		time.Sleep(100 * time.Millisecond) // let subprocess start
+		cancel()
+
+		got := <-done
+		requireAgentError(t, got.err, domain.ErrTurnCancelled)
+
+		cancelled, ok := findEventOfType(*events, domain.EventTurnCancelled)
+		if !ok {
+			t.Fatalf("EventTurnCancelled not emitted; got %v", *events)
+		}
+		if cancelled.Usage != stubUsage {
+			t.Errorf("EventTurnCancelled.Usage = %+v, want %+v (GetUsage stub)", cancelled.Usage, stubUsage)
+		}
+		if got.result.Usage != stubUsage {
+			t.Errorf("TurnResult.Usage = %+v, want %+v (GetUsage stub)", got.result.Usage, stubUsage)
+		}
+	})
+
 	t.Run("Arm2_ScannerOverflow", func(t *testing.T) {
 		t.Parallel()
 		tmpDir := t.TempDir()
@@ -120,6 +171,35 @@ printf '\n'
 			t.Errorf("EventTurnFailed not emitted; got %v", *events)
 		}
 		agenttest.RequireWarnLines(t, spy, "Arm2")
+	})
+
+	t.Run("Arm2_UsageCarriage_ScannerOverflow", func(t *testing.T) {
+		t.Parallel()
+		tmpDir := t.TempDir()
+		script := agenttest.WriteScript(t, tmpDir, "agent", `dd if=/dev/zero bs=11000001 count=1 2>/dev/null | tr '\000' 'x'
+printf '\n'
+`)
+		target := newTestTarget(tmpDir, script)
+		stubUsage := domain.TokenUsage{InputTokens: 500, OutputTokens: 100, TotalTokens: 600}
+		hooks := noopHooks()
+		hooks.GetUsage = func() domain.TokenUsage { return stubUsage }
+		sess := NewForkPerTurnSession(target, hooks, slog.Default())
+
+		emit, events := sinkEvents()
+		result, err := sess.RunTurn(context.Background(), "p", emit)
+
+		requireAgentError(t, err, domain.ErrPortExit)
+
+		failed, ok := findEventOfType(*events, domain.EventTurnFailed)
+		if !ok {
+			t.Fatalf("EventTurnFailed not emitted; got %v", *events)
+		}
+		if failed.Usage != stubUsage {
+			t.Errorf("EventTurnFailed.Usage = %+v, want %+v (GetUsage stub)", failed.Usage, stubUsage)
+		}
+		if result.Usage != stubUsage {
+			t.Errorf("TurnResult.Usage = %+v, want %+v (GetUsage stub)", result.Usage, stubUsage)
+		}
 	})
 
 	t.Run("Arm3_CtxCancelDuringScan", func(t *testing.T) {
@@ -191,7 +271,7 @@ sleep 60`)
 			if lastParsed == nil {
 				return domain.TurnResult{}, &domain.AgentError{Kind: domain.ErrTurnFailed, Message: "no result"}
 			}
-			EmitTurnCompleted(emit, "success", 0)
+			EmitTurnCompleted(emit, "success", 0, domain.TokenUsage{})
 			return domain.TurnResult{ExitReason: domain.EventTurnCompleted}, nil
 		}
 		sess := NewForkPerTurnSession(target, hooks, slog.Default())
@@ -216,7 +296,7 @@ sleep 60`)
 
 		hooks := noopHooks()
 		hooks.OnFinalize = func(emit func(domain.AgentEvent), lastParsed any, exitCode int, stderrLines []string) (domain.TurnResult, *domain.AgentError) {
-			EmitTurnFailed(emit, "finalize error", 0)
+			EmitTurnFailed(emit, "finalize error", 0, domain.TokenUsage{})
 			return domain.TurnResult{ExitReason: domain.EventTurnFailed}, &domain.AgentError{
 				Kind:    domain.ErrTurnFailed,
 				Message: "arm7 error",
@@ -244,7 +324,7 @@ exit 1`)
 
 		hooks := noopHooks()
 		hooks.OnFinalize = func(emit func(domain.AgentEvent), lastParsed any, exitCode int, stderrLines []string) (domain.TurnResult, *domain.AgentError) {
-			EmitTurnFailed(emit, "non-zero exit", 0)
+			EmitTurnFailed(emit, "non-zero exit", 0, domain.TokenUsage{})
 			return domain.TurnResult{ExitReason: domain.EventTurnFailed}, &domain.AgentError{
 				Kind:    domain.ErrPortExit,
 				Message: "exit code 1",
@@ -271,7 +351,7 @@ exit 1`)
 
 		hooks := noopHooks()
 		hooks.OnFinalize = func(emit func(domain.AgentEvent), lastParsed any, exitCode int, stderrLines []string) (domain.TurnResult, *domain.AgentError) {
-			EmitTurnFailed(emit, "no output", 0)
+			EmitTurnFailed(emit, "no output", 0, domain.TokenUsage{})
 			return domain.TurnResult{ExitReason: domain.EventTurnFailed}, &domain.AgentError{
 				Kind:    domain.ErrTurnFailed,
 				Message: "agent exited without output",
@@ -297,7 +377,7 @@ exit 1`)
 
 		hooks := noopHooks()
 		hooks.OnFinalize = func(emit func(domain.AgentEvent), lastParsed any, exitCode int, stderrLines []string) (domain.TurnResult, *domain.AgentError) {
-			EmitTurnCompleted(emit, "implicit success", 0)
+			EmitTurnCompleted(emit, "implicit success", 0, domain.TokenUsage{OutputTokens: 10})
 			return domain.TurnResult{
 				ExitReason: domain.EventTurnCompleted,
 				Usage:      domain.TokenUsage{OutputTokens: 10},

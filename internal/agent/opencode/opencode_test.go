@@ -403,6 +403,78 @@ func TestStopSession_WrongInternalType(t *testing.T) {
 	}
 }
 
+// TestRunTurn_MultiTurnAccumulation drives two turns on one session
+// where the underlying opencode export reports the session-cumulative
+// total after each turn (100 output tokens after turn 1, 160 after
+// turn 2), and asserts the adapter's run-cumulative snapshot after
+// turn 2 reports 160 output tokens rather than the 100 a per-turn
+// reset would leave in place.
+func TestRunTurn_MultiTurnAccumulation(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+
+	runFixture := loadFixture(t, "simple_turn.jsonl")
+	runPath := filepath.Join(tmpDir, "run.jsonl")
+	if err := os.WriteFile(runPath, runFixture, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	export1Path := filepath.Join(tmpDir, "export1.json")
+	export1 := `{"messages":[{"info":{"role":"assistant","sessionID":"ses_abc123","providerID":"anthropic","modelID":"claude-sonnet-4-5","tokens":{"input":0,"output":100,"total":100,"cache":{"read":0,"write":0}}}}]}`
+	if err := os.WriteFile(export1Path, []byte(export1), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	export2Path := filepath.Join(tmpDir, "export2.json")
+	export2 := `{"messages":[` +
+		`{"info":{"role":"assistant","sessionID":"ses_abc123","providerID":"anthropic","modelID":"claude-sonnet-4-5","tokens":{"input":0,"output":100,"total":100,"cache":{"read":0,"write":0}}}},` +
+		`{"info":{"role":"assistant","sessionID":"ses_abc123","providerID":"anthropic","modelID":"claude-sonnet-4-5","tokens":{"input":0,"output":60,"total":60,"cache":{"read":0,"write":0}}}}` +
+		`]}`
+	if err := os.WriteFile(export2Path, []byte(export2), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	counterPath := filepath.Join(tmpDir, "export-call-count")
+	script := writeOpenCodeScript(t, tmpDir, `case "$1" in
+  export)
+    if [ -f '`+counterPath+`' ]; then
+      cat '`+export2Path+`'
+    else
+      touch '`+counterPath+`'
+      cat '`+export1Path+`'
+    fi
+    exit 0
+    ;;
+esac
+cat '`+runPath+`'`)
+
+	a, _ := NewOpenCodeAdapter(map[string]any{})
+	session := mustStartSession(t, a, tmpDir, script)
+
+	var allEvents []domain.AgentEvent
+
+	events1, result1, err := collectEvents(t, a, session, "first prompt")
+	if err != nil {
+		t.Fatalf("RunTurn (turn 1) error = %v", err)
+	}
+	if result1.Usage.OutputTokens != 100 {
+		t.Errorf("turn 1: Usage.OutputTokens = %d, want 100", result1.Usage.OutputTokens)
+	}
+	allEvents = append(allEvents, events1...)
+
+	events2, result2, err := collectEvents(t, a, session, "second prompt")
+	if err != nil {
+		t.Fatalf("RunTurn (turn 2) error = %v", err)
+	}
+	if result2.Usage.OutputTokens != 160 {
+		t.Errorf("turn 2: Usage.OutputTokens = %d, want 160 (session-cumulative, not the max of the two turns)", result2.Usage.OutputTokens)
+	}
+	allEvents = append(allEvents, events2...)
+
+	agenttest.AssertUsageContract(t, allEvents)
+}
+
 func TestRunTurn_SessionStartedOnce(t *testing.T) {
 	t.Parallel()
 

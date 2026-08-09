@@ -161,7 +161,7 @@ func (a *KiroAdapter) StartSession(ctx context.Context, params domain.StartSessi
 
 			if exitCode == 0 && creditsSeen {
 				state.resumeRequested = true
-				agentcore.EmitTurnCompleted(emit, "", 0)
+				agentcore.EmitTurnCompleted(emit, "", 0, zero)
 				return domain.TurnResult{
 					SessionID:  state.sessionID,
 					ExitReason: domain.EventTurnCompleted,
@@ -170,7 +170,7 @@ func (a *KiroAdapter) StartSession(ctx context.Context, params domain.StartSessi
 			}
 
 			if exitCode == 0 && authFailed && state.turnStdout.Len() == 0 {
-				agentcore.EmitTurnFailed(emit, "kiro authentication failed", 0)
+				agentcore.EmitTurnFailed(emit, "kiro authentication failed", 0, zero)
 				return domain.TurnResult{
 						SessionID:  state.sessionID,
 						ExitReason: domain.EventTurnFailed,
@@ -182,7 +182,7 @@ func (a *KiroAdapter) StartSession(ctx context.Context, params domain.StartSessi
 			}
 
 			if exitCode == 0 {
-				agentcore.EmitTurnFailed(emit, "kiro exited without a credits trailer", 0)
+				agentcore.EmitTurnFailed(emit, "kiro exited without a credits trailer", 0, zero)
 				return domain.TurnResult{
 						SessionID:  state.sessionID,
 						ExitReason: domain.EventTurnFailed,
@@ -193,7 +193,7 @@ func (a *KiroAdapter) StartSession(ctx context.Context, params domain.StartSessi
 					}
 			}
 
-			agentcore.EmitTurnFailed(emit, "kiro exited with a non-zero status", 0)
+			agentcore.EmitTurnFailed(emit, "kiro exited with a non-zero status", 0, zero)
 			return domain.TurnResult{
 					SessionID:  state.sessionID,
 					ExitReason: domain.EventTurnFailed,

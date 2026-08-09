@@ -31,10 +31,10 @@ Built-in adapter summary:
 
 | Kind | Session model | Event surface | Resume and identity | Notable differences |
 |---|---|---|---|---|
-| `claude-code` | One subprocess per turn | Newline-delimited JSON from `claude -p --output-format stream-json --verbose` | New sessions use `--session-id`; continuation turns use `--resume`; runtime `session_id` may replace the provisional adapter-generated ID | Token usage is normalized from streamed assistant and result events. |
-| `copilot-cli` | One subprocess per turn | Newline-delimited JSON from an abbreviated `copilot -p --output-format json -s --autopilot --no-ask-user ...` invocation | Uses `--resume <session_id>` when a session ID is known; falls back to `--continue` when a prior result omitted `sessionId` | The adapter always includes `--max-autopilot-continues` and includes `--allow-all` when no tool-scoping flags are configured; session identity is captured from the terminal `result` event rather than a start event. |
-| `codex` | One persistent `codex app-server` subprocess per session | JSON-RPC 2.0 over stdio | `ResumeSessionID` maps to `thread/resume`; otherwise the adapter starts a new thread; thread ID is the session ID | Turns are started inside the persistent session with `turn/start`; tool and approval handling are part of the app-server protocol. |
-| `opencode` | One subprocess per turn | Line-delimited JSON from `opencode run --format json --dir <workspace>` | `ResumeSessionID` maps to `--session <session_id>`; the first observed `sessionID` becomes the session ID; a mismatch is `turn_ended_with_error` | The adapter maps `opencode.model`, `opencode.agent`, `opencode.variant`, `opencode.thinking`, `opencode.pure`, and `opencode.dangerously_skip_permissions` to CLI flags; parses `step_start`, `text`, `reasoning`, `tool_use`, `step_finish`, and `error`; maps plain-text permission warnings to `notification` and unknown output to `malformed`; recovers final token usage with `opencode export --sanitize <session_id>`; maps logical `error` events to `turn_failed` even when the process exits with status `0`. |
+| `claude-code` | One subprocess per turn | Newline-delimited JSON from `claude -p --output-format stream-json --verbose` | New sessions use `--session-id`; continuation turns use `--resume`; runtime `session_id` may replace the provisional adapter-generated ID | Token usage is normalized from the terminal `result` event's per-model usage, aggregated across models and added to the run total per turn. |
+| `copilot-cli` | One subprocess per turn | Newline-delimited JSON from an abbreviated `copilot -p --output-format json -s --autopilot --no-ask-user ...` invocation | Uses `--resume <session_id>` when a session ID is known; falls back to `--continue` when a prior result omitted `sessionId` | The adapter always includes `--max-autopilot-continues` and includes `--allow-all` when no tool-scoping flags are configured; session identity is captured from the terminal `result` event rather than a start event. Token usage is recovered from the runtime's session-state journal after process exit, with the stream's per-message output counts standing in as the in-turn estimate; unavailable in SSH mode. |
+| `codex` | One persistent `codex app-server` subprocess per session | JSON-RPC 2.0 over stdio | `ResumeSessionID` maps to `thread/resume`; otherwise the adapter starts a new thread; thread ID is the session ID | Turns are started inside the persistent session with `turn/start`; tool and approval handling are part of the app-server protocol. Token usage is normalized from `thread/tokenUsage/updated`, with a per-run baseline subtracted from the thread-cumulative total. |
+| `opencode` | One subprocess per turn | Line-delimited JSON from `opencode run --format json --dir <workspace>` | `ResumeSessionID` maps to `--session <session_id>`; the first observed `sessionID` becomes the session ID; a mismatch is `turn_ended_with_error` | The adapter maps `opencode.model`, `opencode.agent`, `opencode.variant`, `opencode.thinking`, `opencode.pure`, and `opencode.dangerously_skip_permissions` to CLI flags; parses `step_start`, `text`, `reasoning`, `tool_use`, `step_finish`, and `error`; maps plain-text permission warnings to `notification` and unknown output to `malformed`; recovers final token usage with `opencode export --sanitize <session_id>`, summed across the run's assistant messages; maps logical `error` events to `turn_failed` even when the process exits with status `0`. |
 | `kiro` | One subprocess per turn | Plain-text human transcript from `kiro-cli chat --no-interactive`; stdout carries the assistant answer (ANSI-stripped), stderr carries the `▸ Credits: … • Time: …` trailer and warnings | Headless mode does not surface a session ID; `ResumeSessionID` is recorded but continuation relies on `--resume` against the cwd-scoped conversation store keyed by the workspace path | Headless Kiro emits no structured output and no token counts, so the adapter emits no `token_usage` events and leaves `TurnResult.Usage` zero; token-based budget enforcement does not apply and the turn timeout is the only backstop. Exit code 0 is ambiguous (success and invalid-credential failure both exit 0): success requires the credits trailer on stderr, and `Authentication failed.` on stderr with empty stdout maps to `turn_failed`. `StartSession` requires `KIRO_API_KEY` and runs a `kiro-cli whoami` canary to reject silently invalid keys before any turn; a missing credential would otherwise block headless `chat` indefinitely on an interactive device-login flow, which the credential preflight and the mandatory `agent.turn_timeout_ms` together defend against. MCP injection has no effect under `KIRO_API_KEY` auth (the backend profile gate disables MCP), so `MCPConfigPath` is ignored and `--require-mcp-startup` is unreachable. Permissions are controlled by `--trust-all-tools` or a `--trust-tools=<names>` allowlist; the two modes are mutually exclusive. The model is pinned per turn with `--model` because the `/model` slash command is unavailable headless. |
 
 ### 10.2 Session Lifecycle
@@ -63,6 +63,27 @@ native protocol events to this normalized set:
 - `approval_auto_approved`: approval request was auto-resolved
 - `unsupported_tool_call`: agent requested an unsupported tool
 - `token_usage`: normalized token usage event: `{input_tokens, output_tokens, total_tokens, cache_read_tokens}`. Optional `model` field (string) identifies the LLM model when available. Optional `api_duration_ms` field (int64, milliseconds) carries per-request or per-turn API response wait time when the adapter can measure it.
+
+  Counter definitions: `input_tokens` counts every token sent to the model, including
+  prompt-cache reads and prompt-cache writes. `output_tokens` counts every token the model
+  generated, including reasoning tokens. `cache_read_tokens` is the subset of `input_tokens`
+  served from the prompt cache and MUST NOT be added to any other counter. `total_tokens` is
+  `input_tokens + output_tokens`, computed by the adapter: an adapter MUST NOT pass a vendor
+  total through, and MUST report `0` for a counter its runtime does not expose. This definition
+  supersedes the clause in ADR-0013 (`docs/decisions/0013-agent-cost-budget.md`) that leaves
+  `cache_read_tokens` undefined as either included in or disjoint from `total_tokens`.
+
+  Scope: every reported value is cumulative over the run, meaning the agent session the
+  orchestrator opened with `StartSession`, across every turn of that session, and excludes
+  usage a resumed session accumulated before `StartSession`. The sequence of values an adapter
+  reports within one run is monotonically non-decreasing per component.
+
+  Emission rules: an adapter SHOULD emit one `token_usage` event per model API request when it
+  can observe request boundaries, and MUST NOT emit more than one `token_usage` event per
+  observed request. An adapter MAY carry the run-cumulative snapshot on a turn-finalization
+  event (`turn_completed`, `turn_failed`, `turn_cancelled`, `turn_ended_with_error`), which the
+  orchestrator accumulates without counting it as an API request. `TurnResult.Usage` MUST carry
+  the same run-cumulative snapshot as the turn's last emitted value.
 - `tool_result`: a tool call completed. Optional fields: `tool_name` (string), `duration_ms` (int64).
 - `notification`: informational message from the agent
 - `other_message`: unclassified message

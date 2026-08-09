@@ -30,6 +30,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   of stalling.
   ([#743](https://github.com/sortie-ai/sortie/issues/743))
 
+- Token usage recorded for a run was undercounted on every adapter that
+  reports it - `claude-code`, `codex`, `copilot-cli`, and `opencode` -
+  by between one and three orders of magnitude, and was zero on `codex`
+  turns and on `claude-code` sessions whose work ran inside sub-agents.
+  A multi-turn session recorded only its largest single turn rather than
+  the whole session. Recorded figures now match what each runtime
+  reports for the same session, and `total_tokens` means input plus
+  output on every adapter, counting prompt-cache reads once within the
+  input total instead of adding them again. Everything derived from
+  these figures moves with them - `agent.max_tokens` enforcement, the
+  `cost_budget` agent tool, `sortie stats`, dashboard cost estimates,
+  and the Prometheus token counters - so an `agent.max_tokens` ceiling
+  tuned against the previous behavior will bind far sooner and is worth
+  revisiting before upgrading. Rows already written to `run_history`
+  keep their original figures, so a `sortie stats` window spanning the
+  upgrade mixes both. On `copilot-cli` input tokens are recovered from
+  the runtime's session journal after the agent process exits, so they
+  remain unreported when the agent runs over SSH.
+  ([#756](https://github.com/sortie-ai/sortie/issues/756))
+
 ## [1.18.0] - 2026-08-09
 
 ### Added

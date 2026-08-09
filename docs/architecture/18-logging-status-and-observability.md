@@ -102,13 +102,17 @@ Token accounting rules:
   `{input_tokens, output_tokens, total_tokens, cache_read_tokens}` directly.
 - For absolute totals, track deltas relative to last reported totals to avoid double-counting.
   The `cache_read_tokens` field follows the same cumulative-delta accounting as
-  `input_tokens` / `output_tokens`.
-- `api_request_count` is incremented monotonically per `token_usage` event.
+  `input_tokens` / `output_tokens`. Deltas are accumulated from any event carrying a non-zero
+  usage payload, not only `token_usage` events, so an adapter can attach the authoritative
+  run-cumulative snapshot to a turn-finalization event without losing it.
+- `api_request_count` is incremented monotonically, and only, per `token_usage` event; a
+  usage-bearing terminal event does not count as an additional request.
 - Accumulate aggregate totals in orchestrator state (`agent_totals`).
 - At session exit, the session's token totals are written to the `run_history` row alongside
-  the aggregate update. The per-issue token budget (`agent.max_tokens`) sums `run_history`
-  `total_tokens` per issue; the `cost_budget` tool reads the same sum plus the running
-  session's recorded total.
+  the aggregate update. The run's final usage is reconciled from the worker result before that
+  row is written, so a dropped or late event cannot lower the recorded total. The per-issue
+  token budget (`agent.max_tokens`) sums `run_history` `total_tokens` per issue; the
+  `cost_budget` tool reads the same sum plus the running session's recorded total.
 
 Timing accounting rules:
 

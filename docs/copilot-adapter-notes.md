@@ -379,31 +379,59 @@ The adapter reads stdout line by line. For each line:
 
 ### Token usage extraction
 
-Token usage data is available from multiple sources in the JSONL output:
+stdout carries no input token counts anywhere: the `result` event's `usage` object
+(`premiumRequests`, `totalApiDurationMs`, `sessionDurationMs`, `codeChanges`) and the
+`assistant.message` event's `data.outputTokens` are the only token-shaped fields on the JSONL
+stream, and neither reports input tokens. The adapter uses `data.outputTokens`, summed across
+the turn's `assistant.message` events, as an in-turn output estimate only.
 
-- **`result` event** (end of session): `usage.premiumRequests`, `usage.totalApiDurationMs`,
-  `usage.sessionDurationMs`, `usage.codeChanges`. Does **not** include raw input/output token
-  counts.
-- **`assistant.message` event**: `data.outputTokens` gives per-message output token count.
-  No `inputTokens` field observed.
-- **OTel spans** ([CLI command reference: OTel monitoring][cli-ref]): `invoke_agent` span
-  includes `gen_ai.usage.input_tokens` and `gen_ai.usage.output_tokens`. The `chat` span
-  includes per-LLM-request token counts.
+The runtime's own accounting lives in a session-state journal on disk:
+`<COPILOT_HOME or ~/.copilot>/session-state/<session id>/events.jsonl`. The adapter reads this
+file after the subprocess exits. The last line whose `type` is `session.shutdown` carries the
+authoritative totals for the session:
 
-The adapter normalizes available data into:
-
-```
-TokenUsage{
-    InputTokens:  <from OTel if available, else 0>,
-    OutputTokens: <sum of assistant.message outputTokens>,
-    TotalTokens:  <input + output>,
+```json
+{
+  "type": "session.shutdown",
+  "data": {
+    "tokenDetails": {"input": {"tokenCount": 10}, "cache_read": {"tokenCount": 154053}, "cache_write": {"tokenCount": 38948}, "output": {"tokenCount": 596}},
+    "modelMetrics": {
+      "claude-sonnet-5": {
+        "requests": {"count": 5},
+        "usage": {"inputTokens": 193011, "outputTokens": 596, "cacheReadTokens": 154053, "cacheWriteTokens": 38948, "reasoningTokens": 149}
+      }
+    }
+  }
 }
 ```
 
-> **Gap:** Per-session input token counts are not available in JSONL output — only output
-> tokens per `assistant.message` and aggregate `premiumRequests` in the `result` event.
-> For full input/output breakdowns, enable OTel with `COPILOT_OTEL_FILE_EXPORTER_PATH`
-> and parse the span data.
+`modelMetrics` is preferred when present, summed across every model entry; `tokenDetails` is
+the fallback. The two shapes agree by construction: `tokenDetails.input.tokenCount +
+tokenDetails.cache_read.tokenCount + tokenDetails.cache_write.tokenCount` equals
+`modelMetrics.<model>.usage.inputTokens` (10 + 154053 + 38948 = 193011 in the example above).
+
+The journal is session-cumulative across every process invocation that resumes the session with
+`--resume`: a second turn's `session.shutdown` record reports totals inclusive of the first
+turn's spend, not just the second turn's own contribution. The adapter recovers a single run's
+contribution by reading the record that predates the run (its own baseline) and subtracting it
+from the current record.
+
+The adapter normalizes a `session.shutdown` record into:
+
+```
+TokenUsage{
+    InputTokens:     modelMetrics.<model>.usage.inputTokens summed across models,
+    OutputTokens:    modelMetrics.<model>.usage.outputTokens summed across models,
+    TotalTokens:     InputTokens + OutputTokens,
+    CacheReadTokens: modelMetrics.<model>.usage.cacheReadTokens summed across models,
+}
+```
+
+**Alternative not used by Sortie:** OTel spans ([CLI command reference: OTel monitoring][cli-ref])
+also expose token counts (`invoke_agent` span's `gen_ai.usage.input_tokens` and
+`gen_ai.usage.output_tokens`), gated on `COPILOT_OTEL_FILE_EXPORTER_PATH`. The adapter does not
+configure or parse OTel output; the session-state journal is the source of truth because it
+requires no additional runtime configuration.
 
 ---
 

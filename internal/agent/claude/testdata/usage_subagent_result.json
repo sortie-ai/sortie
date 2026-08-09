@@ -1,0 +1,34 @@
+{
+  "type": "result",
+  "subtype": "success",
+  "result": "Delegated the work to sub-agents; both finished successfully.",
+  "session_id": "7c2a9e10-3b4c-4d5e-9f6a-1b2c3d4e5f60",
+  "is_error": false,
+  "total_cost_usd": 0.0512,
+  "duration_ms": 18000,
+  "duration_api_ms": 15000,
+  "num_turns": 1,
+  "usage": {
+    "input_tokens": 0,
+    "output_tokens": 0
+  },
+  "modelUsage": {
+    "claude-sonnet-4-5-20250929": {
+      "inputTokens": 5000,
+      "outputTokens": 800,
+      "cacheReadInputTokens": 1000,
+      "cacheCreationInputTokens": 200,
+      "costUSD": 0.021,
+      "contextWindow": 200000
+    },
+    "claude-haiku-4-5-20251001": {
+      "inputTokens": 3000,
+      "outputTokens": 1200,
+      "cacheReadInputTokens": 500,
+      "cacheCreationInputTokens": 100,
+      "costUSD": 0.0302,
+      "contextWindow": 200000
+    }
+  },
+  "stop_reason": "end_turn"
+}

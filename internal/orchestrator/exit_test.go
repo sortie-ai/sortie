@@ -352,6 +352,111 @@ func TestHandleWorkerExit_RunHistoryTokenColumns(t *testing.T) {
 	}
 }
 
+// TestHandleWorkerExit_UsageReconciliation_NoDoubleCount verifies that
+// when every usage event has already been delivered and
+// WorkerResult.Usage equals the entry's own current totals, the exit
+// path reconciliation applies a zero delta: the persisted run_history
+// row equals the pre-exit entry totals and neither entry nor
+// state.AgentTotals advances further.
+func TestHandleWorkerExit_UsageReconciliation_NoDoubleCount(t *testing.T) {
+	t.Parallel()
+
+	store := &mockExitStore{}
+	state := exitState(t, "ISSUE-USG1", nil)
+	entry := state.Running["ISSUE-USG1"]
+	entry.AgentInputTokens = 100
+	entry.AgentOutputTokens = 50
+	entry.AgentTotalTokens = 150
+	entry.CacheReadTokens = 10
+	entry.LastReportedInputTokens = 100
+	entry.LastReportedOutputTokens = 50
+	entry.LastReportedTotalTokens = 150
+	entry.LastReportedCacheReadTokens = 10
+	state.AgentTotals.InputTokens = 100
+	state.AgentTotals.OutputTokens = 50
+	state.AgentTotals.TotalTokens = 150
+	state.AgentTotals.CacheReadTokens = 10
+
+	HandleWorkerExit(state, WorkerResult{
+		IssueID:      "ISSUE-USG1",
+		Identifier:   "ISSUE-USG1-ident",
+		ExitKind:     WorkerExitNormal,
+		AgentAdapter: "mock",
+		Usage:        domain.TokenUsage{InputTokens: 100, OutputTokens: 50, TotalTokens: 150, CacheReadTokens: 10},
+	}, defaultExitParams(t, store))
+
+	if len(store.runHistories) != 1 {
+		t.Fatalf("AppendRunHistory called %d times, want 1", len(store.runHistories))
+	}
+	run := store.runHistories[0]
+	if run.InputTokens != 100 || run.OutputTokens != 50 || run.TotalTokens != 150 || run.CacheReadTokens != 10 {
+		t.Errorf("RunHistory tokens = (%d, %d, %d, %d), want (100, 50, 150, 10) (no counter advance)",
+			run.InputTokens, run.OutputTokens, run.TotalTokens, run.CacheReadTokens)
+	}
+	if state.AgentTotals.TotalTokens != 150 {
+		t.Errorf("AgentTotals.TotalTokens = %d, want 150 (unchanged)", state.AgentTotals.TotalTokens)
+	}
+}
+
+// TestHandleWorkerExit_UsageReconciliation_DroppedTrailingEvent
+// verifies that when the trailing usage event was dropped before it
+// reached HandleAgentEvent, WorkerResult.Usage carries the worker's own
+// higher figure and HandleWorkerExit reconciles it before persistence:
+// the run_history row reports the worker's figures, and
+// state.AgentTotals increases by exactly the difference.
+func TestHandleWorkerExit_UsageReconciliation_DroppedTrailingEvent(t *testing.T) {
+	t.Parallel()
+
+	store := &mockExitStore{}
+	state := exitState(t, "ISSUE-USG2", nil)
+	entry := state.Running["ISSUE-USG2"]
+	entry.AgentInputTokens = 100
+	entry.AgentOutputTokens = 50
+	entry.AgentTotalTokens = 150
+	entry.CacheReadTokens = 10
+	entry.LastReportedInputTokens = 100
+	entry.LastReportedOutputTokens = 50
+	entry.LastReportedTotalTokens = 150
+	entry.LastReportedCacheReadTokens = 10
+	state.AgentTotals.InputTokens = 100
+	state.AgentTotals.OutputTokens = 50
+	state.AgentTotals.TotalTokens = 150
+	state.AgentTotals.CacheReadTokens = 10
+
+	// The worker's own mirror observed more than the entry's last
+	// processed event: the trailing token_usage event never reached
+	// HandleAgentEvent (a full agentEventCh, or delivery after the
+	// entry was already removed).
+	workerUsage := domain.TokenUsage{InputTokens: 180, OutputTokens: 90, TotalTokens: 270, CacheReadTokens: 15}
+
+	HandleWorkerExit(state, WorkerResult{
+		IssueID:      "ISSUE-USG2",
+		Identifier:   "ISSUE-USG2-ident",
+		ExitKind:     WorkerExitNormal,
+		AgentAdapter: "mock",
+		Usage:        workerUsage,
+	}, defaultExitParams(t, store))
+
+	if len(store.runHistories) != 1 {
+		t.Fatalf("AppendRunHistory called %d times, want 1", len(store.runHistories))
+	}
+	run := store.runHistories[0]
+	if run.InputTokens != 180 || run.OutputTokens != 90 || run.TotalTokens != 270 || run.CacheReadTokens != 15 {
+		t.Errorf("RunHistory tokens = (%d, %d, %d, %d), want (180, 90, 270, 15) (worker's figure)",
+			run.InputTokens, run.OutputTokens, run.TotalTokens, run.CacheReadTokens)
+	}
+
+	// state.AgentTotals started at 150 (total) and must increase by
+	// exactly the difference (270 - 150 = 120), not by workerUsage.TotalTokens
+	// applied on top of an unreconciled baseline.
+	if state.AgentTotals.TotalTokens != 270 {
+		t.Errorf("AgentTotals.TotalTokens = %d, want 270 (150 + exactly the 120 difference)", state.AgentTotals.TotalTokens)
+	}
+	if state.AgentTotals.InputTokens != 180 {
+		t.Errorf("AgentTotals.InputTokens = %d, want 180", state.AgentTotals.InputTokens)
+	}
+}
+
 func TestHandleWorkerExit_RetryableError(t *testing.T) {
 	t.Parallel()
 
