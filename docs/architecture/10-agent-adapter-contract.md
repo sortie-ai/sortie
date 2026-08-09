@@ -262,7 +262,7 @@ Availability: registered when the database path and issue ID are present in the 
 On success the tool returns, under `data` in the envelope `{"success": true, "data": {...}}` of
 Section 10.4.2, a JSON object `{issue_id, entries}`, where `entries` lists at most the 10 most
 recent runs, newest first. Each entry has `attempt`, `agent_adapter`, `started_at`,
-`completed_at`, `status` (`succeeded`, `failed`, `timed_out`, `stalled`, or `cancelled`), and
+`completed_at`, `status` (`succeeded`, `failed`, `cancelled`, or `ci_failed`), and
 `error` (null unless the run failed). The per-entry `error` is the run's own error and is distinct
 from the envelope's `error` object.
 

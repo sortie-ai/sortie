@@ -23,7 +23,7 @@ type RunHistory struct {
 	Workspace      string  // Workspace path used for this run.
 	StartedAt      string  // ISO-8601 timestamp of run start.
 	CompletedAt    string  // ISO-8601 timestamp of run completion.
-	Status         string  // Terminal status: "succeeded", "failed", "timed_out", "stalled", etc.
+	Status         string  // Terminal status: "succeeded", "failed", "cancelled", or "ci_failed".
 	Error          *string // Error message if failed; nil on success.
 	WorkflowFile   string  // Base filename of the WORKFLOW.md file; empty for pre-migration rows.
 	TurnsCompleted int     // Number of coding turns completed in this run.

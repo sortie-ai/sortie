@@ -181,6 +181,13 @@ type RunningEntry struct {
 	// terminated, avoiding races with active file writes or hooks.
 	PendingCleanup bool
 
+	// ObservedTerminalState is the terminal tracker state name that
+	// reconciliation observed for this issue while the worker was still
+	// running. Empty when reconciliation observed no terminal state. Set
+	// beside PendingCleanup and never cleared: a terminal observation is
+	// final for the lifetime of the entry.
+	ObservedTerminalState string
+
 	// WorkspacePath is the absolute path to the workspace directory used
 	// by this worker. Populated from [WorkerResult.WorkspacePath] in
 	// [HandleWorkerExit] before cleanup runs. Empty if the worker exited

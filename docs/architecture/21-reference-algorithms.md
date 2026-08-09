@@ -315,6 +315,7 @@ function run_agent_attempt(issue, attempt, orchestrator_channel):
       fail_worker("issue state refresh error")
 
     issue = refreshed_issue[0] or issue
+    observed_issue_state = refreshed_issue[0].state or observed_issue_state  # carried into the exit report
 
     if issue.state is not active:
       break
@@ -360,6 +361,17 @@ on_worker_exit(issue_id, reason, state):
 
   if reason == normal:
     state.completed.add(issue_id)  # bookkeeping only
+
+    # A terminal observation — reconciliation's observation on the running
+    # entry, else the worker's own per-turn observation, else the
+    # dispatch-time snapshot — suppresses the handoff transition and every
+    # reaction enqueue below, directly, regardless of claim state.
+    observation = resolve_terminal_observation(running_entry, worker_result)
+    if is_terminal_state(observation, cfg.tracker.terminal_states):
+      log_info("handoff suppressed for terminal issue", observation)
+      notify_observers()
+      return state
+
     state = schedule_retry(state, issue_id, 1, {
       identifier: running_entry.identifier,
       delay_type: continuation,

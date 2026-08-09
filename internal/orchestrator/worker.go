@@ -147,6 +147,17 @@ type WorkerResult struct {
 	// The worker does not set this — it is populated by the exit
 	// handler from the running map entry.
 	StartedAt time.Time
+
+	// ObservedIssueState is the tracker state returned for this issue by
+	// the most recent successful FetchIssueStatesByIDs call the worker
+	// made. Empty when no such call returned a state for the issue: a
+	// dispatch posture that does not drive issue state, or an exit before
+	// the first refresh completed. On a soft-stop exit the value is the
+	// previous turn's observation, because the status-file check runs
+	// before that turn's refresh. The exit handler tests this value for a
+	// terminal state ahead of the dispatch-time snapshot; it is not used
+	// for the active-state classification.
+	ObservedIssueState string
 }
 
 // SessionToolRegistryFunc builds the per-session tool registry rendered
@@ -343,6 +354,14 @@ func isActiveState(state string, activeStates []string) bool {
 	})
 }
 
+// isTerminalState performs a case-insensitive check of state against the
+// terminal states list. Returns false for an empty terminalStates list.
+func isTerminalState(state string, terminalStates []string) bool {
+	return slices.ContainsFunc(terminalStates, func(s string) bool {
+		return strings.EqualFold(s, state)
+	})
+}
+
 // isTurnSuccess returns true when the turn result exit reason indicates
 // the turn completed successfully and the worker may continue to the
 // next turn.
@@ -494,6 +513,7 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 	var workspacePath string
 	var sessionID string
 	var turnsCompleted int
+	var observedIssueState string
 	var session domain.Session
 	var sessionStarted bool
 	var mcpConfigPath string
@@ -530,16 +550,17 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 			}
 			if !reported {
 				deps.OnExit(issue.ID, WorkerResult{
-					IssueID:        issue.ID,
-					Identifier:     issue.Identifier,
-					ExitKind:       WorkerExitError,
-					Error:          fmt.Errorf("worker panic: %v", r),
-					TurnsCompleted: turnsCompleted,
-					SessionID:      sessionID,
-					WorkspacePath:  workspacePath,
-					AgentAdapter:   agentKind,
-					Attempt:        attempt,
-					SSHHost:        deps.SSHHost,
+					IssueID:            issue.ID,
+					Identifier:         issue.Identifier,
+					ExitKind:           WorkerExitError,
+					Error:              fmt.Errorf("worker panic: %v", r),
+					TurnsCompleted:     turnsCompleted,
+					SessionID:          sessionID,
+					WorkspacePath:      workspacePath,
+					AgentAdapter:       agentKind,
+					Attempt:            attempt,
+					SSHHost:            deps.SSHHost,
+					ObservedIssueState: observedIssueState,
 				})
 			}
 		}
@@ -818,16 +839,17 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 			finishWorkspace()
 			reported = true
 			deps.OnExit(issue.ID, WorkerResult{
-				IssueID:        issue.ID,
-				Identifier:     issue.Identifier,
-				ExitKind:       exitKindForErr(ctx),
-				Error:          fmt.Errorf("prompt render (turn %d): %w", turnNumber, err),
-				TurnsCompleted: turnsCompleted,
-				SessionID:      session.ID,
-				WorkspacePath:  wsResult.Path,
-				AgentAdapter:   agentKind,
-				Attempt:        attempt,
-				SSHHost:        deps.SSHHost,
+				IssueID:            issue.ID,
+				Identifier:         issue.Identifier,
+				ExitKind:           exitKindForErr(ctx),
+				Error:              fmt.Errorf("prompt render (turn %d): %w", turnNumber, err),
+				TurnsCompleted:     turnsCompleted,
+				SessionID:          session.ID,
+				WorkspacePath:      wsResult.Path,
+				AgentAdapter:       agentKind,
+				Attempt:            attempt,
+				SSHHost:            deps.SSHHost,
+				ObservedIssueState: observedIssueState,
 			})
 			return
 		}
@@ -896,16 +918,17 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 			finishWorkspace()
 			reported = true
 			deps.OnExit(issue.ID, WorkerResult{
-				IssueID:        issue.ID,
-				Identifier:     issue.Identifier,
-				ExitKind:       exitKindForErr(ctx),
-				Error:          fmt.Errorf("agent turn %d: %w", turnNumber, err),
-				TurnsCompleted: turnsCompleted,
-				SessionID:      session.ID,
-				WorkspacePath:  wsResult.Path,
-				AgentAdapter:   agentKind,
-				Attempt:        attempt,
-				SSHHost:        deps.SSHHost,
+				IssueID:            issue.ID,
+				Identifier:         issue.Identifier,
+				ExitKind:           exitKindForErr(ctx),
+				Error:              fmt.Errorf("agent turn %d: %w", turnNumber, err),
+				TurnsCompleted:     turnsCompleted,
+				SessionID:          session.ID,
+				WorkspacePath:      wsResult.Path,
+				AgentAdapter:       agentKind,
+				Attempt:            attempt,
+				SSHHost:            deps.SSHHost,
+				ObservedIssueState: observedIssueState,
 			})
 			return
 		}
@@ -924,16 +947,17 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 				slog.Any("exit_reason", turnResult.ExitReason),
 			)
 			deps.OnExit(issue.ID, WorkerResult{
-				IssueID:        issue.ID,
-				Identifier:     issue.Identifier,
-				ExitKind:       exitKind,
-				Error:          fmt.Errorf("agent turn %d ended: %s", turnNumber, turnResult.ExitReason),
-				TurnsCompleted: turnsCompleted,
-				SessionID:      session.ID,
-				WorkspacePath:  wsResult.Path,
-				AgentAdapter:   agentKind,
-				Attempt:        attempt,
-				SSHHost:        deps.SSHHost,
+				IssueID:            issue.ID,
+				Identifier:         issue.Identifier,
+				ExitKind:           exitKind,
+				Error:              fmt.Errorf("agent turn %d ended: %s", turnNumber, turnResult.ExitReason),
+				TurnsCompleted:     turnsCompleted,
+				SessionID:          session.ID,
+				WorkspacePath:      wsResult.Path,
+				AgentAdapter:       agentKind,
+				Attempt:            attempt,
+				SSHHost:            deps.SSHHost,
+				ObservedIssueState: observedIssueState,
 			})
 			return
 		}
@@ -950,17 +974,18 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 			finishWorkspace()
 			reported = true
 			deps.OnExit(issue.ID, WorkerResult{
-				IssueID:        issue.ID,
-				Identifier:     issue.Identifier,
-				ExitKind:       WorkerExitNormal,
-				TurnsCompleted: turnsCompleted,
-				SessionID:      session.ID,
-				WorkspacePath:  wsResult.Path,
-				AgentAdapter:   agentKind,
-				Attempt:        attempt,
-				SSHHost:        deps.SSHHost,
-				SoftStop:       true,
-				SoftStopReason: string(statusSignal),
+				IssueID:            issue.ID,
+				Identifier:         issue.Identifier,
+				ExitKind:           WorkerExitNormal,
+				TurnsCompleted:     turnsCompleted,
+				SessionID:          session.ID,
+				WorkspacePath:      wsResult.Path,
+				AgentAdapter:       agentKind,
+				Attempt:            attempt,
+				SSHHost:            deps.SSHHost,
+				SoftStop:           true,
+				SoftStopReason:     string(statusSignal),
+				ObservedIssueState: observedIssueState,
 			})
 			return
 		}
@@ -977,22 +1002,24 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 				finishWorkspace()
 				reported = true
 				deps.OnExit(issue.ID, WorkerResult{
-					IssueID:        issue.ID,
-					Identifier:     issue.Identifier,
-					ExitKind:       exitKindForErr(ctx),
-					Error:          fmt.Errorf("issue state refresh (turn %d): %w", turnNumber, err),
-					TurnsCompleted: turnsCompleted,
-					SessionID:      session.ID,
-					WorkspacePath:  wsResult.Path,
-					AgentAdapter:   agentKind,
-					Attempt:        attempt,
-					SSHHost:        deps.SSHHost,
+					IssueID:            issue.ID,
+					Identifier:         issue.Identifier,
+					ExitKind:           exitKindForErr(ctx),
+					Error:              fmt.Errorf("issue state refresh (turn %d): %w", turnNumber, err),
+					TurnsCompleted:     turnsCompleted,
+					SessionID:          session.ID,
+					WorkspacePath:      wsResult.Path,
+					AgentAdapter:       agentKind,
+					Attempt:            attempt,
+					SSHHost:            deps.SSHHost,
+					ObservedIssueState: observedIssueState,
 				})
 				return
 			}
 
 			if stateStr, ok := refreshed[issue.ID]; ok {
 				issue.State = stateStr
+				observedIssueState = stateStr
 			}
 
 			logger.Info("issue state refreshed", slog.String("refreshed_state", issue.State))
@@ -1073,16 +1100,17 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 
 	reported = true
 	deps.OnExit(issue.ID, WorkerResult{
-		IssueID:        issue.ID,
-		Identifier:     issue.Identifier,
-		ExitKind:       WorkerExitNormal,
-		TurnsCompleted: turnsCompleted,
-		SessionID:      session.ID,
-		WorkspacePath:  wsResult.Path,
-		AgentAdapter:   agentKind,
-		Attempt:        attempt,
-		SSHHost:        deps.SSHHost,
-		ReviewMetadata: reviewMeta,
+		IssueID:            issue.ID,
+		Identifier:         issue.Identifier,
+		ExitKind:           WorkerExitNormal,
+		TurnsCompleted:     turnsCompleted,
+		SessionID:          session.ID,
+		WorkspacePath:      wsResult.Path,
+		AgentAdapter:       agentKind,
+		Attempt:            attempt,
+		SSHHost:            deps.SSHHost,
+		ReviewMetadata:     reviewMeta,
+		ObservedIssueState: observedIssueState,
 	})
 }
 

@@ -655,6 +655,9 @@ func TestReconcileTrackerState_TerminalSetsPendingCleanup(t *testing.T) {
 	if !state.Running["ISSUE-1"].PendingCleanup {
 		t.Error("PendingCleanup not set for terminal issue")
 	}
+	if got := state.Running["ISSUE-1"].ObservedTerminalState; got != "Done" {
+		t.Errorf("ObservedTerminalState = %q, want %q", got, "Done")
+	}
 	// Retry cancelled for terminal issue.
 	if _, ok := state.RetryAttempts["ISSUE-1"]; ok {
 		t.Error("retry not cancelled for terminal issue")

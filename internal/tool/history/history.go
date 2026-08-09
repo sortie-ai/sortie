@@ -32,7 +32,7 @@ type Entry struct {
 	AgentAdapter string  // Agent adapter kind used (e.g. "claude-code").
 	StartedAt    string  // ISO-8601 timestamp of run start.
 	CompletedAt  string  // ISO-8601 timestamp of run completion.
-	Status       string  // Terminal status: succeeded, failed, timed_out, stalled, cancelled.
+	Status       string  // Terminal status: succeeded, failed, cancelled, or ci_failed.
 	Error        *string // Error message if failed; nil on success.
 }
 

@@ -116,6 +116,13 @@ type mockTrackerAdapter struct {
 	transitionCalls   []transitionIssueCall
 	commentIssueFn    func(ctx context.Context, issueID, text string) error
 	commentCalls      []commentIssueCall
+
+	// fetchStatesCalls counts every FetchIssueStatesByIDs invocation,
+	// whether it originates from the worker goroutine's per-turn refresh
+	// or from the exit handler's verification read. atomic.Int64 because
+	// the double is shared across the worker goroutine and the test
+	// goroutine under -race.
+	fetchStatesCalls atomic.Int64
 }
 
 var _ domain.TrackerAdapter = (*mockTrackerAdapter)(nil)
@@ -133,6 +140,7 @@ func (m *mockTrackerAdapter) FetchIssuesByStates(_ context.Context, _ []string) 
 }
 
 func (m *mockTrackerAdapter) FetchIssueStatesByIDs(ctx context.Context, ids []string) (map[string]string, error) {
+	m.fetchStatesCalls.Add(1)
 	if m.fetchStatesFn != nil {
 		return m.fetchStatesFn(ctx, ids)
 	}
@@ -1537,6 +1545,105 @@ func TestRunWorkerAttempt(t *testing.T) {
 			t.Errorf("StartSessionParams.SSHStrictHostKeyChecking = %q, want %q", capturedSSHStrictHostKeyChecking, "yes")
 		}
 	})
+}
+
+// TestRunWorkerAttempt_ObservedIssueStatePropagated verifies that
+// WorkerResult.ObservedIssueState carries the state returned by the
+// per-turn refresh that ended the turn loop.
+func TestRunWorkerAttempt_ObservedIssueStatePropagated(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	cfg := defaultWorkerConfig(tmpDir)
+	cfg.Agent.MaxTurns = 5
+
+	var turnCount atomic.Int64
+	tracker := &mockTrackerAdapter{
+		fetchStatesFn: func(_ context.Context, ids []string) (map[string]string, error) {
+			turn := turnCount.Load()
+			result := make(map[string]string, len(ids))
+			for _, id := range ids {
+				if turn >= 1 {
+					result[id] = "Done"
+				} else {
+					result[id] = "To Do"
+				}
+			}
+			return result, nil
+		},
+	}
+	ec := newExitCapture()
+	deps := WorkerDeps{
+		TrackerAdapter: tracker,
+		AgentAdapter: &mockAgentAdapter{
+			runTurnFn: func(_ context.Context, session domain.Session, params domain.RunTurnParams) (domain.TurnResult, error) {
+				turnCount.Add(1)
+				if params.OnEvent != nil {
+					params.OnEvent(domain.AgentEvent{Type: domain.EventNotification, Timestamp: time.Now().UTC()})
+				}
+				return domain.TurnResult{SessionID: session.ID, ExitReason: domain.EventTurnCompleted}, nil
+			},
+		},
+		ConfigFunc:             func() config.ServiceConfig { return cfg },
+		PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "work on {{ .issue.title }}") },
+		OnEvent:                func(_ string, _ domain.AgentEvent) {},
+		OnExit:                 ec.onExit,
+		Logger:                 discardLogger(),
+	}
+
+	RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
+	result := ec.waitResult(t)
+
+	if result.ExitKind != WorkerExitNormal {
+		t.Errorf("ExitKind = %q, want %q", result.ExitKind, WorkerExitNormal)
+	}
+	if result.ObservedIssueState != "Done" {
+		t.Errorf("ObservedIssueState = %q, want %q", result.ObservedIssueState, "Done")
+	}
+}
+
+// TestRunWorkerAttempt_ObservedIssueStateEmptyWhenNoRefresh verifies that
+// WorkerResult.ObservedIssueState stays empty when the dispatch posture
+// does not drive issue state, so the per-turn refresh never runs.
+func TestRunWorkerAttempt_ObservedIssueStateEmptyWhenNoRefresh(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	cfg := defaultWorkerConfig(tmpDir)
+	cfg.Agent.MaxTurns = 2
+
+	var fetchCalls atomic.Int32
+	tracker := &mockTrackerAdapter{
+		fetchStatesFn: func(_ context.Context, ids []string) (map[string]string, error) {
+			fetchCalls.Add(1)
+			result := make(map[string]string, len(ids))
+			for _, id := range ids {
+				result[id] = "To Do"
+			}
+			return result, nil
+		},
+	}
+	ec := newExitCapture()
+	deps := WorkerDeps{
+		TrackerAdapter:         tracker,
+		AgentAdapter:           &mockAgentAdapter{},
+		ConfigFunc:             func() config.ServiceConfig { return cfg },
+		PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
+		OnEvent:                func(_ string, _ domain.AgentEvent) {},
+		OnExit:                 ec.onExit,
+		Logger:                 discardLogger(),
+		Posture:                PostureReview,
+	}
+
+	RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
+	result := ec.waitResult(t)
+
+	if fetchCalls.Load() != 0 {
+		t.Errorf("FetchIssueStatesByIDs call count = %d, want 0 (review posture drives no issue state)", fetchCalls.Load())
+	}
+	if result.ObservedIssueState != "" {
+		t.Errorf("ObservedIssueState = %q, want empty", result.ObservedIssueState)
+	}
 }
 
 // --- stopSessionBestEffort unit tests ---
