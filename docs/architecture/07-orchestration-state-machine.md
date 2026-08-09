@@ -86,6 +86,10 @@ Distinct terminal reasons are important because retry logic and logs differ.
     contains SCM metadata with `pr_number > 0`, non-empty `owner`, and non-empty `repo`, and the
     issue is still claimed: record a pending auto-merge entry for reconciliation. Only created if
     no entry already exists.
+  - When the freshest tracker observation for the issue is a terminal state — resolved with
+    precedence reconciliation's observation, then the worker's own per-turn observation, then the
+    dispatch-time snapshot — the handoff transition and the continuation retry are both
+    suppressed, and none of the reaction enqueues above fire on that exit.
 
 - `Worker Exit (abnormal)`
   - Remove running entry.

@@ -90,6 +90,13 @@ type HandleWorkerExitParams struct {
 	// case-insensitive.
 	ActiveStates []string
 
+	// TerminalStates is the current list of configured terminal issue
+	// states (from config.Tracker.TerminalStates). Used to suppress the
+	// handoff transition when the issue has already reached a terminal
+	// state. The check is case-insensitive. An empty list classifies no
+	// state as terminal, matching ReconcileParams.TerminalStates.
+	TerminalStates []string
+
 	// Metrics records instrumentation counters for worker exit events.
 	// If nil, defaults to [domain.NoopMetrics].
 	Metrics domain.Metrics
@@ -143,6 +150,21 @@ type HandleWorkerExitParams struct {
 	// merge-completion feature is active for the current process. The
 	// enqueue path gates on this flag and the SCMAdapter being non-nil.
 	MergeCompletionReactionConfigured bool
+}
+
+// resolveTerminalObservation returns the freshest tracker state observation
+// available for this exit and a stable source label for logging:
+// "reconcile", "worker", or "snapshot". The result feeds the terminal test
+// only; the active-state classification keeps reading entry.Issue.State.
+// Never returns an empty state when entry.Issue.State is non-empty.
+func resolveTerminalObservation(entry *RunningEntry, result WorkerResult) (state string, source string) {
+	if entry.ObservedTerminalState != "" {
+		return entry.ObservedTerminalState, "reconcile"
+	}
+	if result.ObservedIssueState != "" {
+		return result.ObservedIssueState, "worker"
+	}
+	return entry.Issue.State, "snapshot"
 }
 
 // HandleWorkerExit processes a worker's terminal outcome. It removes the
@@ -338,6 +360,14 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 		drivesIssue := dispatchPostureForReactionKind(entry.ReactionKind).DrivesIssueState()
 		handoffPath := params.HandoffState != "" && issueIsActive && !blockedSoftStop && drivesIssue
 
+		// The resolved observation feeds the terminal test only; it MUST
+		// NOT be substituted for entry.Issue.State above, because the most
+		// common non-active state at a normal exit is the handoff state
+		// itself, applied by the agent through its own tracker_api calls.
+		observation, observationSource := resolveTerminalObservation(entry, workerResult)
+		terminal := isTerminalState(observation, params.TerminalStates)
+		terminalSuppressed := false
+
 		switch {
 		case blockedSoftStop:
 			// Blocked agents have no further work; suppress continuation
@@ -345,6 +375,23 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 			log.Info("continuation retry suppressed",
 				slog.String("reason", workerResult.SoftStopReason),
 			)
+			CancelRetry(state, workerResult.IssueID)
+			delete(state.Claimed, workerResult.IssueID)
+
+		case terminal:
+			// The tracker already reports a terminal state for this issue,
+			// observed by reconciliation, by the worker's own per-turn
+			// refresh, or from the dispatch-time snapshot. Overwriting it
+			// with the handoff state would undo the operator's own action.
+			log.Info("handoff suppressed for terminal issue",
+				slog.String("state", observation),
+				slog.String("state_source", observationSource),
+				slog.String("handoff_state", params.HandoffState),
+			)
+			if params.HandoffState != "" {
+				metrics.IncHandoffTransitions(handoffSkipped)
+			}
+			terminalSuppressed = true
 			CancelRetry(state, workerResult.IssueID)
 			delete(state.Claimed, workerResult.IssueID)
 
@@ -380,43 +427,70 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 					metrics.IncRetries(triggerContinuation)
 					retryScheduled = true
 				}
-			} else if err := params.TrackerAdapter.TransitionIssue(ctx, workerResult.IssueID, params.HandoffState); err != nil {
-				metrics.IncHandoffTransitions(handoffError)
-				if workerResult.SoftStop {
-					log.Warn("handoff transition failed, releasing claim",
-						slog.String("handoff_state", params.HandoffState),
-						slog.Any("error", err),
+			} else {
+				// Verify the tracker state immediately before the write: the
+				// resolved observation above may already be stale by the
+				// time the worker's teardown has completed.
+				verifiedTerminal := false
+				if verified, verifyErr := params.TrackerAdapter.FetchIssueStatesByIDs(ctx, []string{workerResult.IssueID}); verifyErr != nil {
+					log.Warn("handoff verification read failed, proceeding with handoff",
+						slog.Any("error", verifyErr),
+						slog.String("state_source", observationSource),
 					)
+				} else if verifiedState, ok := verified[workerResult.IssueID]; ok && isTerminalState(verifiedState, params.TerminalStates) {
+					log.Info("handoff suppressed for terminal issue",
+						slog.String("state", verifiedState),
+						slog.String("state_source", "verified"),
+						slog.String("handoff_state", params.HandoffState),
+					)
+					if params.HandoffState != "" {
+						metrics.IncHandoffTransitions(handoffSkipped)
+					}
+					terminalSuppressed = true
+					verifiedTerminal = true
+				}
+
+				if verifiedTerminal {
 					CancelRetry(state, workerResult.IssueID)
 					delete(state.Claimed, workerResult.IssueID)
+				} else if err := params.TrackerAdapter.TransitionIssue(ctx, workerResult.IssueID, params.HandoffState); err != nil {
+					metrics.IncHandoffTransitions(handoffError)
+					if workerResult.SoftStop {
+						log.Warn("handoff transition failed, releasing claim",
+							slog.String("handoff_state", params.HandoffState),
+							slog.Any("error", err),
+						)
+						CancelRetry(state, workerResult.IssueID)
+						delete(state.Claimed, workerResult.IssueID)
+					} else {
+						log.Warn("handoff transition failed, scheduling continuation retry",
+							slog.String("handoff_state", params.HandoffState),
+							slog.Any("error", err),
+						)
+						ScheduleRetry(state, ScheduleRetryParams{
+							IssueID:     workerResult.IssueID,
+							Identifier:  workerResult.Identifier,
+							DisplayID:   entry.Issue.DisplayID,
+							Attempt:     NextAttempt(entry.RetryAttempt),
+							DelayMS:     continuationDelayMS,
+							Error:       "",
+							LastSSHHost: workerResult.SSHHost,
+							SessionID:   sessionID,
+							AgentKind:   entry.AgentKind,
+							RuleName:    entry.RuleName,
+							TemplateID:  entry.TemplateID,
+						}, params.OnRetryFire)
+						metrics.IncRetries(triggerContinuation)
+						retryScheduled = true
+					}
 				} else {
-					log.Warn("handoff transition failed, scheduling continuation retry",
+					log.Info("handoff transition succeeded, releasing claim",
 						slog.String("handoff_state", params.HandoffState),
-						slog.Any("error", err),
 					)
-					ScheduleRetry(state, ScheduleRetryParams{
-						IssueID:     workerResult.IssueID,
-						Identifier:  workerResult.Identifier,
-						DisplayID:   entry.Issue.DisplayID,
-						Attempt:     NextAttempt(entry.RetryAttempt),
-						DelayMS:     continuationDelayMS,
-						Error:       "",
-						LastSSHHost: workerResult.SSHHost,
-						SessionID:   sessionID,
-						AgentKind:   entry.AgentKind,
-						RuleName:    entry.RuleName,
-						TemplateID:  entry.TemplateID,
-					}, params.OnRetryFire)
-					metrics.IncRetries(triggerContinuation)
-					retryScheduled = true
+					metrics.IncHandoffTransitions(handoffSuccess)
+					CancelRetry(state, workerResult.IssueID)
+					delete(state.Claimed, workerResult.IssueID)
 				}
-			} else {
-				log.Info("handoff transition succeeded, releasing claim",
-					slog.String("handoff_state", params.HandoffState),
-				)
-				metrics.IncHandoffTransitions(handoffSuccess)
-				CancelRetry(state, workerResult.IssueID)
-				delete(state.Claimed, workerResult.IssueID)
 			}
 
 		case workerResult.SoftStop:
@@ -465,7 +539,7 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 		}
 
 		_, stillClaimed := state.Claimed[workerResult.IssueID]
-		reactionEnqueueAllowed := claimedAtExit && (handoffPath || stillClaimed)
+		reactionEnqueueAllowed := claimedAtExit && (handoffPath || stillClaimed) && !terminalSuppressed
 
 		// Record a pending CI check when the CI provider is configured and
 		// the worker produced workspace SCM metadata. Handoff paths remain

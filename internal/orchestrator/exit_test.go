@@ -1502,6 +1502,479 @@ func TestHandleWorkerExit_EmptyActiveStatesDefaultsToContinuationRetry(t *testin
 	}
 }
 
+// --- Terminal-observation suppression tests ---
+
+// TestHandleWorkerExit_WorkerObservationTerminalSuppressesHandoff is the
+// guard for the R4 arm of R7: handoffPath is true from the dispatch-time
+// snapshot, and only terminalSuppressed drives the enqueue gate false.
+func TestHandleWorkerExit_WorkerObservationTerminalSuppressesHandoff(t *testing.T) {
+	t.Parallel()
+
+	wsPath := t.TempDir()
+	writeSCMMetadata(t, wsPath, "feature/T-1", "sha1")
+
+	store := &mockExitStore{}
+	tracker := &mockTrackerAdapter{}
+	state := exitStateWithIssue(t, "T-1", "ai:in-progress")
+	params := defaultExitParams(t, store)
+	params.TrackerAdapter = tracker
+	params.ActiveStates = []string{"ai:ready", "ai:in-progress"}
+	params.TerminalStates = []string{"ai:done", "ai:cancelled"}
+	params.HandoffState = "ai:in-review"
+	params.CIProvider = &ciProviderStubExit{}
+
+	HandleWorkerExit(state, WorkerResult{
+		IssueID:            "T-1",
+		Identifier:         "T-1-ident",
+		ExitKind:           WorkerExitNormal,
+		AgentAdapter:       "mock",
+		WorkspacePath:      wsPath,
+		ObservedIssueState: "ai:cancelled",
+	}, params)
+
+	if len(tracker.transitionCalls) != 0 {
+		t.Errorf("TransitionIssue called %d times, want 0", len(tracker.transitionCalls))
+	}
+	if _, ok := state.RetryAttempts["T-1"]; ok {
+		t.Error("retry scheduled for terminal worker observation, should not be")
+	}
+	if _, ok := state.Claimed["T-1"]; ok {
+		t.Error("claim preserved for terminal worker observation, should be released")
+	}
+	if len(state.PendingReactions) != 0 {
+		t.Errorf("PendingReactions count = %d, want 0", len(state.PendingReactions))
+	}
+}
+
+// TestHandleWorkerExit_ReconcileObservationSkipsVerificationRead proves a
+// reconcile terminal observation takes precedence over an active worker
+// observation and short-circuits the verification read entirely.
+func TestHandleWorkerExit_ReconcileObservationSkipsVerificationRead(t *testing.T) {
+	t.Parallel()
+
+	wsPath := t.TempDir()
+	writeSCMMetadata(t, wsPath, "feature/T-2", "sha2")
+
+	store := &mockExitStore{}
+	tracker := &mockTrackerAdapter{}
+	state := exitStateWithIssue(t, "T-2", "ai:in-progress")
+	state.Running["T-2"].ObservedTerminalState = "ai:cancelled"
+	params := defaultExitParams(t, store)
+	params.TrackerAdapter = tracker
+	params.ActiveStates = []string{"ai:ready", "ai:in-progress"}
+	params.TerminalStates = []string{"ai:done", "ai:cancelled"}
+	params.HandoffState = "ai:in-review"
+	params.CIProvider = &ciProviderStubExit{}
+
+	HandleWorkerExit(state, WorkerResult{
+		IssueID:            "T-2",
+		Identifier:         "T-2-ident",
+		ExitKind:           WorkerExitNormal,
+		AgentAdapter:       "mock",
+		WorkspacePath:      wsPath,
+		ObservedIssueState: "ai:in-progress",
+	}, params)
+
+	if len(tracker.transitionCalls) != 0 {
+		t.Errorf("TransitionIssue called %d times, want 0", len(tracker.transitionCalls))
+	}
+	if got := tracker.fetchStatesCalls.Load(); got != 0 {
+		t.Errorf("FetchIssueStatesByIDs called %d times, want 0", got)
+	}
+}
+
+// TestHandleWorkerExit_VerificationReadReportsTerminalSuppressesHandoff is
+// the guard for the R6 arm of R7: the dispatch-time snapshot and the
+// worker observation are both active, and only the verification read
+// immediately before the write reports the terminal state.
+func TestHandleWorkerExit_VerificationReadReportsTerminalSuppressesHandoff(t *testing.T) {
+	t.Parallel()
+
+	wsPath := t.TempDir()
+	writeSCMMetadata(t, wsPath, "feature/T-3", "sha3")
+
+	store := &mockExitStore{}
+	tracker := &mockTrackerAdapter{
+		fetchStatesFn: func(_ context.Context, ids []string) (map[string]string, error) {
+			result := make(map[string]string, len(ids))
+			for _, id := range ids {
+				result[id] = "ai:cancelled"
+			}
+			return result, nil
+		},
+	}
+	state := exitStateWithIssue(t, "T-3", "ai:in-progress")
+	params := defaultExitParams(t, store)
+	params.TrackerAdapter = tracker
+	params.ActiveStates = []string{"ai:ready", "ai:in-progress"}
+	params.TerminalStates = []string{"ai:done", "ai:cancelled"}
+	params.HandoffState = "ai:in-review"
+	params.CIProvider = &ciProviderStubExit{}
+
+	HandleWorkerExit(state, WorkerResult{
+		IssueID:            "T-3",
+		Identifier:         "T-3-ident",
+		ExitKind:           WorkerExitNormal,
+		AgentAdapter:       "mock",
+		WorkspacePath:      wsPath,
+		ObservedIssueState: "ai:in-progress",
+	}, params)
+
+	if got := tracker.fetchStatesCalls.Load(); got != 1 {
+		t.Errorf("FetchIssueStatesByIDs called %d times, want 1", got)
+	}
+	if len(tracker.transitionCalls) != 0 {
+		t.Errorf("TransitionIssue called %d times, want 0", len(tracker.transitionCalls))
+	}
+	if _, ok := state.Claimed["T-3"]; ok {
+		t.Error("claim preserved after verified-terminal suppression, should be released")
+	}
+	if len(state.PendingReactions) != 0 {
+		t.Errorf("PendingReactions count = %d, want 0", len(state.PendingReactions))
+	}
+}
+
+// TestHandleWorkerExit_VerificationReadFailsProceedsWithHandoff proves the
+// fail-open rule: a verification-read error does not suppress the handoff.
+func TestHandleWorkerExit_VerificationReadFailsProceedsWithHandoff(t *testing.T) {
+	t.Parallel()
+
+	store := &mockExitStore{}
+	tracker := &mockTrackerAdapter{
+		fetchStatesFn: func(_ context.Context, _ []string) (map[string]string, error) {
+			return nil, &domain.TrackerError{Kind: domain.ErrTrackerTransport, Message: "timeout"}
+		},
+	}
+	state := exitStateWithIssue(t, "T-4", "ai:in-progress")
+	params := defaultExitParams(t, store)
+	params.TrackerAdapter = tracker
+	params.ActiveStates = []string{"ai:ready", "ai:in-progress"}
+	params.TerminalStates = []string{"ai:done", "ai:cancelled"}
+	params.HandoffState = "ai:in-review"
+
+	HandleWorkerExit(state, WorkerResult{
+		IssueID:            "T-4",
+		Identifier:         "T-4-ident",
+		ExitKind:           WorkerExitNormal,
+		AgentAdapter:       "mock",
+		ObservedIssueState: "ai:in-progress",
+	}, params)
+
+	if len(tracker.transitionCalls) != 1 {
+		t.Errorf("TransitionIssue called %d times, want 1 (fail open on verification read error)", len(tracker.transitionCalls))
+	}
+}
+
+// TestHandleWorkerExit_VerificationReadOmitsIssueProceedsWithHandoff pins
+// R6's rule that an issue absent from the verification read's response is
+// not a terminal observation.
+func TestHandleWorkerExit_VerificationReadOmitsIssueProceedsWithHandoff(t *testing.T) {
+	t.Parallel()
+
+	store := &mockExitStore{}
+	tracker := &mockTrackerAdapter{
+		fetchStatesFn: func(_ context.Context, _ []string) (map[string]string, error) {
+			return map[string]string{}, nil
+		},
+	}
+	state := exitStateWithIssue(t, "T-5", "ai:in-progress")
+	params := defaultExitParams(t, store)
+	params.TrackerAdapter = tracker
+	params.ActiveStates = []string{"ai:ready", "ai:in-progress"}
+	params.TerminalStates = []string{"ai:done", "ai:cancelled"}
+	params.HandoffState = "ai:in-review"
+
+	HandleWorkerExit(state, WorkerResult{
+		IssueID:            "T-5",
+		Identifier:         "T-5-ident",
+		ExitKind:           WorkerExitNormal,
+		AgentAdapter:       "mock",
+		ObservedIssueState: "ai:in-progress",
+	}, params)
+
+	if len(tracker.transitionCalls) != 1 {
+		t.Errorf("TransitionIssue called %d times, want 1 (absence is not a terminal observation)", len(tracker.transitionCalls))
+	}
+}
+
+// TestHandleWorkerExit_TerminalObservationNoHandoffStateCancelsRetry pins
+// R10's gating of the skipped-handoff metric on a configured handoff
+// state, and R4's replacement of today's continuation retry.
+func TestHandleWorkerExit_TerminalObservationNoHandoffStateCancelsRetry(t *testing.T) {
+	t.Parallel()
+
+	store := &mockExitStore{}
+	spy := &spyMetrics{}
+	state := exitStateWithIssue(t, "T-6", "ai:in-progress")
+	params := defaultExitParams(t, store)
+	params.Metrics = spy
+	params.ActiveStates = []string{"ai:ready", "ai:in-progress"}
+	params.TerminalStates = []string{"ai:done", "ai:cancelled"}
+	params.HandoffState = ""
+
+	HandleWorkerExit(state, WorkerResult{
+		IssueID:            "T-6",
+		Identifier:         "T-6-ident",
+		ExitKind:           WorkerExitNormal,
+		AgentAdapter:       "mock",
+		ObservedIssueState: "ai:cancelled",
+	}, params)
+
+	if _, ok := state.RetryAttempts["T-6"]; ok {
+		t.Error("continuation retry scheduled for terminal observation with no handoff state, should not be")
+	}
+	if _, ok := state.Claimed["T-6"]; ok {
+		t.Error("claim preserved for terminal observation, should be released")
+	}
+	if len(spy.handoffTransitions) != 0 {
+		t.Errorf("IncHandoffTransitions called %d times, want 0 (no handoff state configured)", len(spy.handoffTransitions))
+	}
+}
+
+// TestHandleWorkerExit_TerminalOverridesEmptyActiveStatesFallback pins
+// R5's rule that the terminal test overrides the empty-active_states
+// backward-compatibility fallback.
+func TestHandleWorkerExit_TerminalOverridesEmptyActiveStatesFallback(t *testing.T) {
+	t.Parallel()
+
+	store := &mockExitStore{}
+	tracker := &mockTrackerAdapter{}
+	state := exitStateWithIssue(t, "T-7", "ai:in-progress")
+	params := defaultExitParams(t, store)
+	params.TrackerAdapter = tracker
+	params.ActiveStates = []string{}
+	params.TerminalStates = []string{"ai:cancelled"}
+	params.HandoffState = "ai:in-review"
+
+	HandleWorkerExit(state, WorkerResult{
+		IssueID:            "T-7",
+		Identifier:         "T-7-ident",
+		ExitKind:           WorkerExitNormal,
+		AgentAdapter:       "mock",
+		ObservedIssueState: "ai:cancelled",
+	}, params)
+
+	if len(tracker.transitionCalls) != 0 {
+		t.Errorf("TransitionIssue called %d times, want 0", len(tracker.transitionCalls))
+	}
+	if _, ok := state.Claimed["T-7"]; ok {
+		t.Error("claim preserved despite terminal test overriding the empty-active_states fallback, should be released")
+	}
+}
+
+// TestHandleWorkerExit_TerminalTestIsCaseInsensitive pins the
+// case-insensitive comparison R5 requires.
+func TestHandleWorkerExit_TerminalTestIsCaseInsensitive(t *testing.T) {
+	t.Parallel()
+
+	store := &mockExitStore{}
+	tracker := &mockTrackerAdapter{}
+	state := exitStateWithIssue(t, "T-8", "ai:in-progress")
+	params := defaultExitParams(t, store)
+	params.TrackerAdapter = tracker
+	params.ActiveStates = []string{"ai:ready", "ai:in-progress"}
+	params.TerminalStates = []string{"ai:cancelled"}
+	params.HandoffState = "ai:in-review"
+
+	HandleWorkerExit(state, WorkerResult{
+		IssueID:            "T-8",
+		Identifier:         "T-8-ident",
+		ExitKind:           WorkerExitNormal,
+		AgentAdapter:       "mock",
+		ObservedIssueState: "AI:Cancelled",
+	}, params)
+
+	if len(tracker.transitionCalls) != 0 {
+		t.Errorf("TransitionIssue called %d times, want 0 (case-insensitive terminal match)", len(tracker.transitionCalls))
+	}
+}
+
+// TestHandleWorkerExit_ObservationEqualsHandoffStatePerformsHandoffAndEnqueues
+// is the regression test for the agent self-transition flow the handoff
+// design endorses: the freshest observation equals the configured handoff
+// state, which is not a terminal state, so the exit still performs the
+// handoff transition and enqueues its reactions.
+func TestHandleWorkerExit_ObservationEqualsHandoffStatePerformsHandoffAndEnqueues(t *testing.T) {
+	t.Parallel()
+
+	wsPath := t.TempDir()
+	writeSCMMetadata(t, wsPath, "feature/T-9", "sha9")
+
+	store := &mockExitStore{}
+	tracker := &mockTrackerAdapter{
+		fetchStatesFn: func(_ context.Context, ids []string) (map[string]string, error) {
+			result := make(map[string]string, len(ids))
+			for _, id := range ids {
+				result[id] = "ai:in-review"
+			}
+			return result, nil
+		},
+	}
+	state := exitStateWithIssue(t, "T-9", "ai:in-progress")
+	params := defaultExitParams(t, store)
+	params.TrackerAdapter = tracker
+	params.ActiveStates = []string{"ai:ready", "ai:in-progress"}
+	params.TerminalStates = []string{"ai:done", "ai:cancelled"}
+	params.HandoffState = "ai:in-review"
+	params.CIProvider = &ciProviderStubExit{}
+
+	HandleWorkerExit(state, WorkerResult{
+		IssueID:            "T-9",
+		Identifier:         "T-9-ident",
+		ExitKind:           WorkerExitNormal,
+		AgentAdapter:       "mock",
+		WorkspacePath:      wsPath,
+		ObservedIssueState: "ai:in-review",
+	}, params)
+
+	if len(tracker.transitionCalls) != 1 {
+		t.Fatalf("TransitionIssue called %d times, want 1", len(tracker.transitionCalls))
+	}
+	if got := tracker.transitionCalls[0].TargetState; got != "ai:in-review" {
+		t.Errorf("TransitionIssue TargetState = %q, want %q", got, "ai:in-review")
+	}
+	rkey := ReactionKey("T-9", ReactionKindCI)
+	if _, ok := state.PendingReactions[rkey]; !ok {
+		t.Error("PendingReactions[T-9:ci] missing; a fresh observation equal to handoff_state must still enqueue reactions")
+	}
+}
+
+// TestHandleWorkerExit_BothStateListsUnconfiguredHandoffStillFires asserts
+// the documented fallback for operators who configure neither
+// active_states nor terminal_states: the handoff still fires.
+func TestHandleWorkerExit_BothStateListsUnconfiguredHandoffStillFires(t *testing.T) {
+	t.Parallel()
+
+	store := &mockExitStore{}
+	tracker := &mockTrackerAdapter{
+		fetchStatesFn: func(_ context.Context, ids []string) (map[string]string, error) {
+			result := make(map[string]string, len(ids))
+			for _, id := range ids {
+				result[id] = "ai:cancelled"
+			}
+			return result, nil
+		},
+	}
+	state := exitStateWithIssue(t, "T-10", "ai:in-progress")
+	params := defaultExitParams(t, store)
+	params.TrackerAdapter = tracker
+	params.ActiveStates = nil
+	params.TerminalStates = nil
+	params.HandoffState = "ai:in-review"
+
+	HandleWorkerExit(state, WorkerResult{
+		IssueID:            "T-10",
+		Identifier:         "T-10-ident",
+		ExitKind:           WorkerExitNormal,
+		AgentAdapter:       "mock",
+		ObservedIssueState: "ai:cancelled",
+	}, params)
+
+	if len(tracker.transitionCalls) != 1 {
+		t.Fatalf("TransitionIssue called %d times, want 1", len(tracker.transitionCalls))
+	}
+	if got := tracker.transitionCalls[0].TargetState; got != "ai:in-review" {
+		t.Errorf("TransitionIssue TargetState = %q, want %q", got, "ai:in-review")
+	}
+}
+
+// TestHandleWorkerExit_HappyPathUnchangedWithVerificationRead confirms the
+// new verification read is transparent to the unmodified happy path.
+func TestHandleWorkerExit_HappyPathUnchangedWithVerificationRead(t *testing.T) {
+	t.Parallel()
+
+	wsPath := t.TempDir()
+	writeSCMMetadata(t, wsPath, "feature/T-11", "sha11")
+
+	store := &mockExitStore{}
+	tracker := &mockTrackerAdapter{
+		fetchStatesFn: func(_ context.Context, ids []string) (map[string]string, error) {
+			result := make(map[string]string, len(ids))
+			for _, id := range ids {
+				result[id] = "ai:in-progress"
+			}
+			return result, nil
+		},
+	}
+	state := exitStateWithIssue(t, "T-11", "ai:in-progress")
+	params := defaultExitParams(t, store)
+	params.TrackerAdapter = tracker
+	params.ActiveStates = []string{"ai:ready", "ai:in-progress"}
+	params.TerminalStates = []string{"ai:done", "ai:cancelled"}
+	params.HandoffState = "ai:in-review"
+	params.CIProvider = &ciProviderStubExit{}
+
+	HandleWorkerExit(state, WorkerResult{
+		IssueID:            "T-11",
+		Identifier:         "T-11-ident",
+		ExitKind:           WorkerExitNormal,
+		AgentAdapter:       "mock",
+		WorkspacePath:      wsPath,
+		ObservedIssueState: "ai:in-progress",
+	}, params)
+
+	if got := tracker.fetchStatesCalls.Load(); got != 1 {
+		t.Errorf("FetchIssueStatesByIDs called %d times, want 1", got)
+	}
+	if len(tracker.transitionCalls) != 1 {
+		t.Fatalf("TransitionIssue called %d times, want 1", len(tracker.transitionCalls))
+	}
+	if got := tracker.transitionCalls[0].TargetState; got != "ai:in-review" {
+		t.Errorf("TransitionIssue TargetState = %q, want %q", got, "ai:in-review")
+	}
+	if _, ok := state.Claimed["T-11"]; ok {
+		t.Error("claim preserved after successful handoff transition, should be released")
+	}
+	rkey := ReactionKey("T-11", ReactionKindCI)
+	if _, ok := state.PendingReactions[rkey]; !ok {
+		t.Error("PendingReactions[T-11:ci] missing, reaction enqueue should be allowed on the happy path")
+	}
+}
+
+// TestHandleWorkerExit_TerminalSuppressionIsObservable verifies the
+// suppression emits exactly one skipped handoff-transition metric and one
+// INFO log record carrying state, state_source, and handoff_state.
+func TestHandleWorkerExit_TerminalSuppressionIsObservable(t *testing.T) {
+	t.Parallel()
+
+	log, buf := logCapture()
+	store := &mockExitStore{}
+	spy := &spyMetrics{}
+	state := exitStateWithIssue(t, "T-12", "ai:in-progress")
+	params := defaultExitParams(t, store)
+	params.Logger = log
+	params.Metrics = spy
+	params.ActiveStates = []string{"ai:ready", "ai:in-progress"}
+	params.TerminalStates = []string{"ai:done", "ai:cancelled"}
+	params.HandoffState = "ai:in-review"
+
+	HandleWorkerExit(state, WorkerResult{
+		IssueID:            "T-12",
+		Identifier:         "T-12-ident",
+		ExitKind:           WorkerExitNormal,
+		AgentAdapter:       "mock",
+		ObservedIssueState: "ai:cancelled",
+	}, params)
+
+	if len(spy.handoffTransitions) != 1 || spy.handoffTransitions[0] != "skipped" {
+		t.Errorf("handoffTransitions = %v, want [skipped]", spy.handoffTransitions)
+	}
+
+	output := buf.String()
+	if !strings.Contains(output, "handoff suppressed for terminal issue") {
+		t.Errorf("log output missing %q message:\n%s", "handoff suppressed for terminal issue", output)
+	}
+	if !strings.Contains(output, "state=ai:cancelled") {
+		t.Errorf("log output missing state attribute:\n%s", output)
+	}
+	if !strings.Contains(output, "state_source=worker") {
+		t.Errorf("log output missing state_source attribute:\n%s", output)
+	}
+	if !strings.Contains(output, "handoff_state=ai:in-review") {
+		t.Errorf("log output missing handoff_state attribute:\n%s", output)
+	}
+}
+
 // --- Handoff pending-reaction regression tests ---
 
 func TestHandleWorkerExit_HandoffTransitionSucceeds_PopulatesReviewPendingReaction(t *testing.T) {

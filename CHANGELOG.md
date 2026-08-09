@@ -63,6 +63,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   dispatch as soon as it is reopened into an active state, rather than
   after a pending retry happens to fire.
   ([#741](https://github.com/sortie-ai/sortie/issues/741))
+- An issue moved to a state in `tracker.terminal_states` while its worker
+  is finishing its last turn is no longer overwritten with
+  `tracker.handoff_state`. Cancelling a running task by relabelling the
+  issue took effect before only when a reconcile tick observed the new
+  state ahead of the worker exit; otherwise the exit applied the handoff
+  state from the state read at dispatch, leaving a closed, cancelled
+  issue marked as awaiting review. Sortie now decides from the freshest
+  state it has observed and re-reads the issue immediately before the
+  transition, and a terminal state suppresses the handoff transition, the
+  continuation retry, and every pending reaction for that run - so
+  `reactions.auto_merge` can no longer merge the pull request of an issue
+  the operator cancelled. The suppression is logged and counted on
+  `sortie_handoff_transitions_total{result="skipped"}`; a failed
+  pre-transition read proceeds with the handoff as before. The same
+  applies without `tracker.handoff_state` configured, where a terminal
+  state now ends the run instead of scheduling a continuation retry.
+  ([#749](https://github.com/sortie-ai/sortie/issues/749))
 
 ### Changed
 

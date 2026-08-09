@@ -499,6 +499,7 @@ func reconcileTrackerState(state *State, params ReconcileParams, log *slog.Logge
 				}
 				counts = releaseTerminalIssueState(ctx, state, params.Store, issueID, entryLog)
 				entry.PendingCleanup = true
+				entry.ObservedTerminalState = stateName
 				metrics.IncReconciliationActions(actionCleanup)
 				entryLog.Info("stopping worker for terminal issue",
 					slog.String("state", stateName),

@@ -23,7 +23,11 @@ A tracker adapter must support these operations:
      adapter change.
 
 4. `fetch_issue_states_by_ids(issue_ids)`
-   - Used for active-run reconciliation.
+   - Return the current state for each requested issue ID. Issues not found are omitted (not an
+     error).
+   - Callers: active-run reconciliation, the worker's per-turn state refresh, startup pending-
+     reaction recovery, merge-completion reconciliation, and the exit-time verification read that
+     precedes an orchestrator-initiated handoff transition.
 
 5. `fetch_issue_states_by_identifiers(identifiers)`
    - Return the current state for each requested issue identifier (human-readable key).
@@ -90,7 +94,10 @@ itself observed:
   label-command postures).
 - The handoff state (`tracker.handoff_state`), on a normal worker exit with the issue still in an
   active tracker state and not a blocked soft stop, when that field is configured and the
-  dispatch drives issue state.
+  dispatch drives issue state. The write is preceded by a terminal test against the freshest
+  available observation of the issue's state, and, when that observation is not already
+  terminal, by one `fetch_issue_states_by_ids` verification read immediately before the write. A
+  terminal result from either the observation or the verification read suppresses the write.
 - The merge-completion target state (`reactions.merge_completion.target_state`), when a
   Sortie-managed pull request merges while the linked issue is still parked in
   `tracker.handoff_state`, independently of who or what performed the merge. Active only when
