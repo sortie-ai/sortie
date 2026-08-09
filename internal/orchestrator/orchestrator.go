@@ -810,13 +810,14 @@ const defaultDrainTimeout = 30 * time.Second
 const sessionMetadataWriteInterval = 2 * time.Second
 
 // maybeWriteIncrementalMetadata persists the running session's current
-// token totals to session_metadata when a token_usage event arrives and
-// the per-issue throttle interval has elapsed. It is a no-op for other
-// event types, for unknown issues, and while throttled. Must be called
-// from the orchestrator's single-writer event loop so it shares the one
-// SQLite writer and the running entry it mutates.
+// token totals to session_metadata when an event carrying non-zero
+// usage arrives and the per-issue throttle interval has elapsed. It is
+// a no-op for events carrying no usage, for unknown issues, and while
+// throttled. Must be called from the orchestrator's single-writer event
+// loop so it shares the one SQLite writer and the running entry it
+// mutates.
 func (o *Orchestrator) maybeWriteIncrementalMetadata(ctx context.Context, issueID string, event domain.AgentEvent) {
-	if event.Type != domain.EventTokenUsage {
+	if !hasUsage(event.Usage) {
 		return
 	}
 	entry := o.state.Running[issueID]

@@ -434,6 +434,92 @@ func TestRunWorkerAttempt(t *testing.T) {
 		}
 	})
 
+	t.Run("usage_fold_from_turn_result_only", func(t *testing.T) {
+		t.Parallel()
+
+		tmpDir := t.TempDir()
+		cfg := defaultWorkerConfig(tmpDir)
+		cfg.Agent.MaxTurns = 1
+
+		wantUsage := domain.TokenUsage{InputTokens: 500, OutputTokens: 100, TotalTokens: 600}
+		ec := newExitCapture()
+
+		deps := WorkerDeps{
+			TrackerAdapter: &mockTrackerAdapter{},
+			AgentAdapter: &mockAgentAdapter{
+				runTurnFn: func(_ context.Context, session domain.Session, params domain.RunTurnParams) (domain.TurnResult, error) {
+					// The relay delivers no usage-bearing event for this
+					// turn: only a plain notification.
+					if params.OnEvent != nil {
+						params.OnEvent(domain.AgentEvent{Type: domain.EventNotification, Timestamp: time.Now().UTC()})
+					}
+					return domain.TurnResult{
+						SessionID:  session.ID,
+						ExitReason: domain.EventTurnCompleted,
+						Usage:      wantUsage,
+					}, nil
+				},
+			},
+			ConfigFunc:             func() config.ServiceConfig { return cfg },
+			PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "do work on {{ .issue.title }}") },
+			OnEvent:                func(_ string, _ domain.AgentEvent) {},
+			OnExit:                 ec.onExit,
+			Logger:                 discardLogger(),
+		}
+
+		RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
+
+		result := ec.waitResult(t)
+		if result.Usage != wantUsage {
+			t.Errorf("WorkerResult.Usage = %+v, want %+v (folded from TurnResult.Usage alone)", result.Usage, wantUsage)
+		}
+	})
+
+	t.Run("usage_fold_event_and_turn_result_not_doubled", func(t *testing.T) {
+		t.Parallel()
+
+		tmpDir := t.TempDir()
+		cfg := defaultWorkerConfig(tmpDir)
+		cfg.Agent.MaxTurns = 1
+
+		sharedUsage := domain.TokenUsage{InputTokens: 500, OutputTokens: 100, TotalTokens: 600}
+		ec := newExitCapture()
+
+		deps := WorkerDeps{
+			TrackerAdapter: &mockTrackerAdapter{},
+			AgentAdapter: &mockAgentAdapter{
+				runTurnFn: func(_ context.Context, session domain.Session, params domain.RunTurnParams) (domain.TurnResult, error) {
+					// The same usage value arrives through both the event
+					// relay and TurnResult.Usage.
+					if params.OnEvent != nil {
+						params.OnEvent(domain.AgentEvent{
+							Type:      domain.EventTokenUsage,
+							Timestamp: time.Now().UTC(),
+							Usage:     sharedUsage,
+						})
+					}
+					return domain.TurnResult{
+						SessionID:  session.ID,
+						ExitReason: domain.EventTurnCompleted,
+						Usage:      sharedUsage,
+					}, nil
+				},
+			},
+			ConfigFunc:             func() config.ServiceConfig { return cfg },
+			PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "do work on {{ .issue.title }}") },
+			OnEvent:                func(_ string, _ domain.AgentEvent) {},
+			OnExit:                 ec.onExit,
+			Logger:                 discardLogger(),
+		}
+
+		RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
+
+		result := ec.waitResult(t)
+		if result.Usage != sharedUsage {
+			t.Errorf("WorkerResult.Usage = %+v, want %+v (single value, not doubled)", result.Usage, sharedUsage)
+		}
+	})
+
 	t.Run("early_exit_on_tracker_state_change", func(t *testing.T) {
 		t.Parallel()
 

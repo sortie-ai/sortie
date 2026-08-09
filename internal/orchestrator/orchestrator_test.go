@@ -4170,6 +4170,25 @@ func TestMaybeWriteIncrementalMetadata(t *testing.T) {
 		}
 	})
 
+	t.Run("turn_completed event with non-zero usage triggers a write", func(t *testing.T) {
+		t.Parallel()
+
+		store := &stubStore{}
+		o, _ := incrementalWriteOrchestrator(t, store)
+
+		event := tokenUsageEvent(10, 20, 30, 5)
+		event.Type = domain.EventTurnCompleted
+		o.maybeWriteIncrementalMetadata(ctx, "id-1", event)
+
+		writes := store.sessionWrites()
+		if len(writes) != 1 {
+			t.Fatalf("UpsertSessionMetadata calls = %d, want 1 (usage-bearing turn_completed event)", len(writes))
+		}
+		if writes[0].TotalTokens != 30 {
+			t.Errorf("SessionMetadata.TotalTokens = %d, want 30", writes[0].TotalTokens)
+		}
+	})
+
 	t.Run("unknown issue is ignored", func(t *testing.T) {
 		t.Parallel()
 

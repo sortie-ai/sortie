@@ -850,6 +850,81 @@ func TestHandleAgentEvent_APIRequestCount(t *testing.T) {
 	}
 }
 
+// TestHandleAgentEvent_TurnCompleted_AdvancesUsageWithoutRequestCount
+// verifies that a turn_completed event carrying a usage payload larger
+// than the last token_usage event's payload still advances the entry's
+// token totals, but neither APIRequestCount nor RequestsByModel
+// changes, because only EventTokenUsage drives those two fields.
+func TestHandleAgentEvent_TurnCompleted_AdvancesUsageWithoutRequestCount(t *testing.T) {
+	t.Parallel()
+
+	state, entry := newStateWithEntry("MT-TC1")
+	ts := time.Now().UTC()
+
+	HandleAgentEvent(state, "MT-TC1", domain.AgentEvent{
+		Type:      domain.EventTokenUsage,
+		Timestamp: ts,
+		Model:     "claude-haiku-4-5",
+		Usage:     domain.TokenUsage{InputTokens: 100, OutputTokens: 50, TotalTokens: 150},
+	}, slog.Default(), nil)
+
+	if entry.AgentTotalTokens != 150 {
+		t.Fatalf("after token_usage: AgentTotalTokens = %d, want 150", entry.AgentTotalTokens)
+	}
+	if entry.APIRequestCount != 1 {
+		t.Fatalf("after token_usage: APIRequestCount = %d, want 1", entry.APIRequestCount)
+	}
+
+	HandleAgentEvent(state, "MT-TC1", domain.AgentEvent{
+		Type:      domain.EventTurnCompleted,
+		Timestamp: ts,
+		Usage:     domain.TokenUsage{InputTokens: 130, OutputTokens: 70, TotalTokens: 200},
+	}, slog.Default(), nil)
+
+	if entry.AgentTotalTokens != 200 {
+		t.Errorf("after turn_completed: AgentTotalTokens = %d, want 200 (delta applied)", entry.AgentTotalTokens)
+	}
+	if entry.AgentInputTokens != 130 {
+		t.Errorf("after turn_completed: AgentInputTokens = %d, want 130 (delta applied)", entry.AgentInputTokens)
+	}
+	if entry.APIRequestCount != 1 {
+		t.Errorf("after turn_completed: APIRequestCount = %d, want 1 (unchanged; not a token_usage event)", entry.APIRequestCount)
+	}
+	if got := entry.RequestsByModel["claude-haiku-4-5"]; got != 1 {
+		t.Errorf("after turn_completed: RequestsByModel[%q] = %d, want 1 (unchanged)", "claude-haiku-4-5", got)
+	}
+	if len(entry.RequestsByModel) != 1 {
+		t.Errorf("after turn_completed: RequestsByModel = %v, want exactly one entry", entry.RequestsByModel)
+	}
+}
+
+// TestApplyUsageDelta_RepeatedCumulative_AppliesZeroDelta verifies that
+// calling applyUsageDelta twice with the same cumulative value applies
+// a non-zero delta only on the first call.
+func TestApplyUsageDelta_RepeatedCumulative_AppliesZeroDelta(t *testing.T) {
+	t.Parallel()
+
+	state, entry := newStateWithEntry("MT-AUD1")
+	usage := domain.TokenUsage{InputTokens: 100, OutputTokens: 50, TotalTokens: 150, CacheReadTokens: 10}
+	metrics := &domain.NoopMetrics{}
+
+	first := applyUsageDelta(state, entry, usage, metrics)
+	if first != usage {
+		t.Fatalf("first applyUsageDelta() = %+v, want %+v (full value against zero baseline)", first, usage)
+	}
+
+	second := applyUsageDelta(state, entry, usage, metrics)
+	if second != (domain.TokenUsage{}) {
+		t.Errorf("second applyUsageDelta() with identical cumulative value = %+v, want zero delta", second)
+	}
+	if entry.AgentTotalTokens != usage.TotalTokens {
+		t.Errorf("AgentTotalTokens after repeated cumulative = %d, want %d (no double count)", entry.AgentTotalTokens, usage.TotalTokens)
+	}
+	if state.AgentTotals.TotalTokens != usage.TotalTokens {
+		t.Errorf("AgentTotals.TotalTokens after repeated cumulative = %d, want %d (no double count)", state.AgentTotals.TotalTokens, usage.TotalTokens)
+	}
+}
+
 // TestHandleAgentEvent_ModelTracking_NoModel verifies that when no model
 // is ever reported, ModelName stays empty and RequestsByModel remains nil.
 func TestHandleAgentEvent_ModelTracking_NoModel(t *testing.T) {
