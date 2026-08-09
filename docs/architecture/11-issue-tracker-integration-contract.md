@@ -130,15 +130,16 @@ Workflow-specific success often means "reached the next handoff state" (for exam
 
 The following tracker adapters ship today:
 
-- Jira (`internal/tracker/jira`, Atlassian REST API)
-- Linear (`internal/tracker/linear`, GraphQL API)
-- GitHub (`internal/scm/github`, Issues and Labels REST API)
-- Gitea (`internal/scm/gitea`, Gitea REST API v1)
-- GitLab (`internal/scm/gitlab`, GitLab REST API v4)
+- Jira, over the Atlassian REST API.
+- Linear, over its GraphQL API.
+- GitHub, Gitea, and GitLab, each over its own REST API. On a forge the tracker role and the
+  source-control role share one integration, so the same credential and host serve both. See
+  ADR-0016.
 
 Each normalizes its native responses to the `Issue` model (Section 4.1.1), maps native errors to
-the categories in Section 11.4, and registers under its `kind` via `init()`. The orchestrator core
-never imports these packages; it resolves them through `internal/registry`.
+the categories in Section 11.4, and registers itself under its `kind` at initialization. The
+orchestrator core never depends on an adapter directly; it resolves one by `kind` through the
+adapter registry, which is what keeps the core free of vendor vocabulary.
 
 #### 11.6.1 Linear adapter
 

@@ -84,6 +84,16 @@ realization of this surface.
 If present, it should draw from orchestrator state/metrics only and must not be required for
 correctness.
 
+Live status answers what is happening now. A second, offline reporting surface answers what
+happened over a past window: it reads persisted run history without contacting the tracker, the
+coding agent, or a running orchestrator, and summarizes outcomes, durations, turn counts, and token
+spend, optionally grouped by the recorded run attributes and bounded by a time range. It prices
+token spend from the operator-supplied rates in workflow configuration; with no rates configured it
+reports the countable figures and omits cost rather than guessing at one. Because it reads only
+what earlier runs already recorded, a database written by an older schema yields a reduced set of
+figures, and the surface reports which figures it could not derive instead of presenting a zero.
+This surface performs no state mutation and is never required for orchestrator correctness.
+
 ### 13.5 Session Metrics and Token Accounting
 
 Token accounting rules:
@@ -313,8 +323,9 @@ API design notes:
 #### 13.7.3 Prometheus Metrics Endpoint (`/metrics`)
 
 When the HTTP server is enabled, Sortie exposes a Prometheus exposition-format scrape endpoint at
-`/metrics` via `github.com/prometheus/client_golang`. The endpoint is co-located with the JSON
-API and HTML dashboard on the same address and port — no separate configuration is required.
+`/metrics`, backed by a dedicated registry so the process exports only its own series and none of
+the runtime's defaults. See ADR-0008. The endpoint is co-located with the JSON
+API and HTML dashboard on the same address and port; no separate configuration is required.
 
 Implementation requirements:
 
@@ -340,13 +351,13 @@ Defined metrics (label sets and buckets are specified here; see ADR-0008 for his
 | `sortie_tokens_total{type}` | Counter | Tokens consumed, partitioned by type (`input`, `output`). |
 | `sortie_agent_runtime_seconds_total` | Counter | Cumulative agent-session wall-clock time for completed sessions. |
 | `sortie_dispatches_total{outcome}` | Counter | Dispatch attempts, partitioned by outcome (`success`, `error`). |
-| `sortie_worker_exits_total{exit_type}` | Counter | Worker exits, partitioned by exit type (`normal`, `error`, `cancelled`). |
-| `sortie_retries_total{trigger}` | Counter | Retry schedule events, partitioned by trigger (`error`, `continuation`, `timer`, `stall`). |
+| `sortie_worker_exits_total{exit_type}` | Counter | Worker exits, partitioned by exit type (`normal`, `error`, `cancelled`, `soft_stop`). A soft-stop exit reports `soft_stop` rather than the exit kind it would otherwise map to. |
+| `sortie_retries_total{trigger}` | Counter | Retry schedule events, partitioned by trigger (`error`, `continuation`, `timer`, `stall`, `ci_fix`). |
 | `sortie_reconciliation_actions_total{action}` | Counter | Reconciliation outcomes per issue, partitioned by action (`stop`, `cleanup`, `keep`, `sweep_cleanup`, `sweep_expired`). |
 | `sortie_poll_cycles_total{result}` | Counter | Poll tick completions, partitioned by result (`success`, `error`, `skipped`). |
-| `sortie_tracker_requests_total{operation,result}` | Counter | Tracker adapter API calls, partitioned by operation (`fetch_candidates`, `fetch_issue`, `fetch_by_states`, `fetch_states_by_ids`, `fetch_states_by_identifiers`, `fetch_comments`, `transition`) and result (`success`, `error`). |
+| `sortie_tracker_requests_total{operation,result}` | Counter | Tracker adapter API calls, partitioned by operation (`fetch_candidates`, `fetch_issue`, `fetch_by_states`, `fetch_states_by_ids`, `fetch_states_by_identifiers`, `fetch_comments`, `transition`, `comment`, `add_label`) and result (`success`, `error`). |
 | `sortie_tracker_comments_total{lifecycle,result}` | Counter | Tracker comment attempts, partitioned by lifecycle point (`dispatch`, `completion`, `failure`) and result (`success`, `error`). |
-| `sortie_handoff_transitions_total{result}` | Counter | Handoff-state transition attempts, partitioned by result (`success`, `error`, `skipped`). |
+| `sortie_handoff_transitions_total{result}` | Counter | Handoff-state transition attempts, partitioned by result (`success`, `error`, `skipped`). `skipped` has two causes and does not distinguish them: the issue was no longer in an active state at worker exit, or the issue was already reported terminal and the write was suppressed (Section 11.5). Both are counted only when `tracker.handoff_state` is configured. |
 | `sortie_dispatch_transitions_total{result}` | Counter | Dispatch-time in-progress transition attempts, partitioned by result (`success`, `error`, `skipped`). `skipped` indicates the issue was already in the target state. |
 | `sortie_dispatch_rule_match_total{layer,rule}` | Counter | Dispatch rule match outcomes, partitioned by resolution layer (`rule`, `default`, `fallback`) and matched rule name. Empty rule names report as `<none>` to bound label cardinality. |
 | `sortie_tool_calls_total{tool,result}` | Counter | Agent tool call completions, partitioned by tool name and result (`success`, `error`). |
@@ -359,7 +370,7 @@ Defined metrics (label sets and buckets are specified here; see ADR-0008 for his
 | `sortie_self_review_sessions_total{final_verdict}` | Counter | Self-review sessions, partitioned by final verdict (`pass`, `iterate`, `none`). |
 | `sortie_self_review_cap_reached_total` | Counter | Self-review sessions that reached the iteration cap without a passing verdict. |
 | `sortie_poll_duration_seconds` | Histogram | Wall-clock time per poll cycle; buckets via `ExponentialBuckets(0.1, 2, 10)` (0.1 s–51.2 s). |
-| `sortie_worker_duration_seconds{exit_type}` | Histogram | Worker session wall-clock time; buckets via `ExponentialBuckets(10, 2, 12)` (10 s–5.7 h). |
+| `sortie_worker_duration_seconds{exit_type}` | Histogram | Worker session wall-clock time; buckets via `ExponentialBuckets(10, 2, 12)` (10 s–5.7 h). `exit_type` carries the same values as `sortie_worker_exits_total`. |
 | `sortie_self_review_verification_duration_seconds{command}` | Histogram | Per-command verification duration during self-review; buckets via `ExponentialBuckets(10, 2, 12)` (10 s–5.7 h). The `command` label is truncated to the first 64 characters. |
 | `sortie_build_info{version,go_version}` | Gauge | Always `1`; carries build metadata as labels. |
 

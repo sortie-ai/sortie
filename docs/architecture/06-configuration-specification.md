@@ -8,7 +8,7 @@ Configuration precedence (highest to lowest):
 2. `SORTIE_*` real environment variables (curated set; see below).
 3. `.env` file values (opt-in via `SORTIE_ENV_FILE` env var or `--env-file` CLI flag).
 4. YAML front matter values.
-5. Environment indirection via `$VAR_NAME` inside selected YAML values — applies only to values
+5. Environment indirection via `$VAR_NAME` inside selected YAML values; applies only to values
    not overridden by env (layers 2–3).
 6. Built-in defaults.
 
@@ -41,8 +41,13 @@ Dynamic reload is required:
 - Sortie watches `WORKFLOW.md` for changes.
 - On change, it re-reads and re-applies workflow config and prompt template without restart.
 - Sortie adjusts live behavior to the new config (for example polling cadence, concurrency limits,
-  active/terminal states, agent settings, workspace paths/hooks, and prompt content for future
-  runs).
+  active/terminal states, agent settings, workspace paths/hooks, the workspace retention window,
+  and prompt content for future runs).
+- Reaction configuration is the documented exception: it is captured once at orchestrator
+  construction and is not rebuilt on reload, so a change to a reaction block, including whether a
+  kind is active at all, takes effect only on the next restart (Section 11G.3). The CI-failure kind
+  is the one carve-out: its configuration is folded into the CI feedback block, which reconciliation
+  re-reads from the current snapshot on every tick, so its fields do reload.
 - Reloaded config applies to future dispatch, retry scheduling, reconciliation decisions, hook
   execution, and agent launches.
 - In-flight agent sessions are not restarted automatically when config changes.
@@ -195,7 +200,9 @@ This section is intentionally redundant so a coding agent can implement the conf
   smallest permitted non-zero value; expressed in days rather than milliseconds because every
   other duration field is a sub-hour timing where the millisecond unit is proportionate to the
   value, while a thirty-day window in milliseconds is unreadable and a dropped digit is
-  destructive; supports the `SORTIE_WORKSPACE_RETENTION_DAYS` environment override
+  destructive; supports the `SORTIE_WORKSPACE_RETENTION_DAYS` environment override; validated
+  offline when the config is parsed, so both startup and the live-reload fail-safe path reject an
+  out-of-range value; reloads dynamically, taking effect on the next sweep pass with no restart
 - `worker.ssh_hosts` (extension): list of SSH host strings, optional; when omitted, work runs
   locally
 - `worker.max_concurrent_agents_per_host` (extension): positive integer, optional; shared per-host

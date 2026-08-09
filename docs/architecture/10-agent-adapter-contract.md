@@ -53,20 +53,20 @@ The session handle and any session identifiers are adapter-specific. The orchest
 The orchestrator expects the following event types from any agent adapter. Adapters map their
 native protocol events to this normalized set:
 
-- `session_started` — session initialized successfully
-- `startup_failed` — session could not be initialized
-- `turn_completed` — turn finished successfully
-- `turn_failed` — turn finished with failure
-- `turn_cancelled` — turn was cancelled
-- `turn_ended_with_error` — turn ended due to an error condition
-- `turn_input_required` — agent requested user input (hard failure per policy)
-- `approval_auto_approved` — approval request was auto-resolved
-- `unsupported_tool_call` — agent requested an unsupported tool
-- `token_usage` — normalized token usage event: `{input_tokens, output_tokens, total_tokens, cache_read_tokens}`. Optional `model` field (string) identifies the LLM model when available. Optional `api_duration_ms` field (int64, milliseconds) carries per-request or per-turn API response wait time when the adapter can measure it.
-- `tool_result` — a tool call completed. Optional fields: `tool_name` (string), `duration_ms` (int64).
-- `notification` — informational message from the agent
-- `other_message` — unclassified message
-- `malformed` — unparseable or unrecognized message
+- `session_started`: session initialized successfully
+- `startup_failed`: session could not be initialized
+- `turn_completed`: turn finished successfully
+- `turn_failed`: turn finished with failure
+- `turn_cancelled`: turn was cancelled
+- `turn_ended_with_error`: turn ended due to an error condition
+- `turn_input_required`: agent requested user input (hard failure per policy)
+- `approval_auto_approved`: approval request was auto-resolved
+- `unsupported_tool_call`: agent requested an unsupported tool
+- `token_usage`: normalized token usage event: `{input_tokens, output_tokens, total_tokens, cache_read_tokens}`. Optional `model` field (string) identifies the LLM model when available. Optional `api_duration_ms` field (int64, milliseconds) carries per-request or per-turn API response wait time when the adapter can measure it.
+- `tool_result`: a tool call completed. Optional fields: `tool_name` (string), `duration_ms` (int64).
+- `notification`: informational message from the agent
+- `other_message`: unclassified message
+- `malformed`: unparseable or unrecognized message
 
 Each event should include:
 
@@ -118,13 +118,13 @@ Hard failure on user input requirement:
 All tools that Sortie exposes to agents implement the `AgentTool` interface
 (`internal/domain/tool.go`):
 
-- `Name() string` — stable tool identifier used for matching tool call requests to
+- `Name() string`: stable tool identifier used for matching tool call requests to
   implementations. MUST be unique within a `ToolRegistry`.
-- `Description() string` — human-readable summary suitable for inclusion in agent prompts and
+- `Description() string`: human-readable summary suitable for inclusion in agent prompts and
   MCP `tools/list` responses.
-- `InputSchema() json.RawMessage` — JSON Schema describing the tool's expected input. Used for
+- `InputSchema() json.RawMessage`: JSON Schema describing the tool's expected input. Used for
   MCP tool registration and prompt-based documentation.
-- `Execute(ctx context.Context, input json.RawMessage) (json.RawMessage, error)` — runs the tool
+- `Execute(ctx context.Context, input json.RawMessage) (json.RawMessage, error)`: runs the tool
   and returns a structured JSON result. The Go `error` return is reserved for internal failures
   (nil adapter, marshal failure) that indicate programming errors.
 
@@ -157,7 +157,7 @@ Invariants:
 Tools are classified by their dependency profile. The tier determines security posture, test
 strategy, and failure characteristics.
 
-**Tier 1 — pure orchestrator state.** These tools read from local session state (a workspace
+**Tier 1, pure orchestrator state.** These tools read from local session state (a workspace
 state file or the SQLite database) with zero external calls. They are deterministic and fast.
 Beyond internal bugs, their only runtime failure mode is the failure envelope of Section 10.4.2
 when the local state they read is missing or unreadable. Their `error.kind` values come from the
@@ -169,7 +169,7 @@ oversized, or unreadable state file is `state_unavailable`, a present but unpars
 - `workspace_history` (Section 10.4.5)
 - `cost_budget` (Section 10.4.5)
 
-**Tier 2 — external dependencies.** These tools interact with external services (tracker APIs,
+**Tier 2, external dependencies.** These tools interact with external services (tracker APIs,
 future SCM APIs) through network calls using orchestrator-managed credentials. They are subject
 to transport failures, authentication errors, rate limits, and per-tool timeouts.
 

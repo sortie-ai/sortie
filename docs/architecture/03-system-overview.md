@@ -29,7 +29,8 @@
    - Maps issue identifiers to workspace paths.
    - Ensures per-issue workspace directories exist.
    - Runs workspace lifecycle hooks.
-   - Cleans workspaces for terminal issues.
+   - Cleans workspaces for terminal issues, and removes workspaces whose recorded activity has
+     aged past the configured retention window when that opt-in bound is enabled.
 
 6. `Agent Runner`
    - Creates workspace.
@@ -63,12 +64,15 @@
       front matter.
 
 11. `SCM Adapter`
-    - Provides read and write access to SCM platform features beyond CI status: PR review comment
-      fetching, review state queries, merge precondition reads, and orchestrator-driven PR merge
-      with optional branch deletion.
-    - Read-write, multi-method contract (`FetchPendingReviews`, `GetReviewDecision`, `GetCIStatus`,
-      `GetMergeability`, `MergePR`, `DeleteBranch`). Write methods are exercised only by the
-      auto-merge reaction.
+    - Provides read and write access to SCM platform features beyond CI status: human and bot PR
+      review comment fetching, review state queries, merge precondition reads, label-event journal
+      reads, orchestrator-driven PR merge with optional branch deletion, and label removal.
+    - Read-write, multi-method contract (`FetchPendingReviews`, `FetchBotReviewComments`,
+      `GetReviewDecision`, `GetCIStatus`, `GetMergeability`, `MergePR`, `DeleteBranch`,
+      `ListLabelEvents`, `RemoveLabel`). The write methods are exercised by two reactions only: the
+      auto-merge reaction performs the merge and the optional branch deletion, and the label-command
+      reactions retract a consumed command label. The merge-completion reaction (Section 11G) reads
+      merge state through this adapter and writes nothing through it.
     - Surfaces an additional error kind, `ErrSCMConflict`, for HTTP 405 and HTTP 409 responses
       from the merge endpoint (precondition raced, branch protection refused, or PR already
       merged).
@@ -110,22 +114,24 @@ Sortie is organized into these layers:
 
 ### 3.3 External Dependencies
 
-- Issue tracker API (Jira REST API for `tracker.kind: jira`, GitHub REST API for
-  `tracker.kind: github`, Linear GraphQL API for `tracker.kind: linear`, with additional tracker
-  adapters registered separately).
+This section names what the system depends on outside its own process, by role. Concrete library
+choices are recorded in the decision records, not here, because a name repeated in two places rots
+in one of them.
+
+- Issue tracker API, reached through whichever tracker adapter the `tracker.kind` names. Each
+  adapter carries its own protocol and dialect; the core depends on the contract in Section 11,
+  not on any one vendor.
 - Local filesystem for workspaces and logs.
-- Optional workspace population tooling (for example Git CLI, if used).
-- Coding agent CLI or executable reachable via the configured agent adapter.
-- Host environment authentication for the issue tracker and coding agent.
-- SQLite library (embedded, no external server).
-- Filesystem event library (`github.com/fsnotify/fsnotify`) for `WORKFLOW.md` live reload.
-  Pure Go, no CGo, no external daemon. See ADR-0006.
-- Metrics exposition library (`github.com/prometheus/client_golang`) for the Prometheus
-  `/metrics` endpoint when the HTTP server is enabled. Pure Go; does not require an external
-  Prometheus server. See ADR-0008.
-- CI platform API (GitHub Checks API for `ci_feedback.kind: github` or `reactions.ci_failure.provider: github`,
-  with additional providers registered separately). Only required when CI feedback is configured.
-- SCM platform API (GitHub REST API for `reactions.review_comments.provider: github`, with
-  additional adapters registered separately). Only required when `reactions.review_comments` is
-  configured.
+- Optional workspace population tooling, for example a version-control client invoked from a hook.
+- Coding agent CLI or executable, reached through the configured agent adapter.
+- Host environment authentication for the issue tracker and the coding agent.
+- Embedded SQL storage, in-process with no external server. See ADR-0002.
+- Filesystem event notification, for live reload of the workflow file. Pure Go, no CGo, no
+  external daemon. See ADR-0006.
+- Metrics exposition, for the Prometheus scrape endpoint when the HTTP server is enabled. Pure Go;
+  it does not require an external metrics server to be present. See ADR-0008.
+- CI platform API, reached through whichever CI status provider is configured. Required only when
+  CI feedback is configured.
+- Source-control platform API, reached through whichever SCM adapter is configured. Required only
+  when a reaction that observes or writes to a pull request is configured.
 

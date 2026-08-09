@@ -99,7 +99,18 @@ Sortie uses SQLite persistence to improve restart recovery semantics:
   rather than waiting for the next polling cycle to discover them.
 - Pending reaction recovery reconstructs runtime reaction entries after a restart by reading each
   candidate's workspace SCM metadata, and it considers only a candidate whose latest activity
-  falls inside its lookback window. `workspace.retention_days` and this recovery lookback are
+  falls inside its lookback window. The pass narrows in a fixed order: it first drops any candidate
+  the orchestrator already holds as running, retry-queued, or claimed, then truncates what is left
+  to a fixed cap on candidate issues per startup pass, and only then reads tracker state and keeps
+  the candidates still sitting in the configured handoff state. Because the cap is applied before
+  the tracker read, an issue beyond it is skipped without its state ever being fetched, and its
+  entry is not rebuilt until a later worker exit or a subsequent startup reaches it.
+- Recovery is decided per reaction kind, not once for the issue: each kind rebuilds its own entry
+  only when that kind is configured for this process and the candidate's SCM metadata satisfies
+  that kind's own field requirements. A kind that requires a head branch is not recovered from
+  metadata that records only a pull request, and a kind that is switched off recovers nothing even
+  when a sibling kind on the same issue does.
+- `workspace.retention_days` and this recovery lookback are
   coupled: the retention floor (`WorkspaceRetentionMinDays`) in days equals the recovery lookback
   in days, so any workspace the periodic sweep's age bound is permitted to remove is one recovery
   would already have skipped as stale. Changing either window without the other reintroduces the

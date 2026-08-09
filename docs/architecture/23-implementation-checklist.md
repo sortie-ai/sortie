@@ -40,8 +40,12 @@ Use the same validation profiles as Section 17:
   server is enabled (Section 13.7.3). Backed by `github.com/prometheus/client_golang` with a
   dedicated registry; no external Prometheus server required.
 - Agent tool subsystem: `ToolRegistry` populated with the built-in tools per Section 10.4
-  (`tracker_api`, `sortie_status`, `workspace_history`). The runtime execution channel is an
-  MCP stdio sidecar (per ADR-0009).
+  (`tracker_api`, `sortie_status`, `workspace_history`, `cost_budget`, `notify_operator`). The
+  runtime execution channel is an MCP stdio sidecar (per ADR-0009).
+- Opt-in age-based workspace retention (`workspace.retention_days`) evaluated by the periodic
+  sweep, with the floor and the recovery-lookback coupling in Section 9.6 preserved.
+- Orchestrator-driven terminal transition on managed pull request merge
+  (`reactions.merge_completion`), latched per merge commit identifier (Section 11G).
 - Make observability settings configurable in workflow front matter without prescribing UI
   implementation details.
 - First-class tracker write APIs (comments/state transitions) in the orchestrator, supplementing

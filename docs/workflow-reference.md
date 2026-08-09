@@ -199,7 +199,7 @@ tracker:
 | `active_states`   | list of strings | **Yes** (see rules below) | `[]` (empty)    | Future dispatch and reconciliation | Issue states eligible for agent dispatch. An issue is eligible for dispatch only if its state appears in this list. An empty list means no issues will be dispatched.                           |
 | `terminal_states` | list of strings | **Yes** (see rules below) | `[]` (empty)    | Future dispatch and reconciliation | Issue states that release claims and trigger cleanup.                                                                                                                                           |
 | `query_filter`    | string          | No                        | `""` (empty)    | Future dispatches                  | Adapter-defined query fragment that narrows the candidate issue query and, for adapters that apply it there, the terminal-state query. Each adapter interprets it in its own query language. For Jira: JQL fragment (e.g., `"labels = 'agent-ready'"`). For Linear: an `IssueFilter` JSON object, merged rather than appended (see the Linear note below). For Gitea: a URL query fragment for the repo issue-list route, merged into candidate polling only (see the Gitea note below). For GitLab: a URL query fragment for the project issue-list route, key-checked against an allowlist and merged into candidate polling only (see the GitLab note below). |
-| `handoff_state`   | string          | No                        | _(absent)_      | Future worker exits                | Target tracker state for orchestrator-initiated handoff after successful worker run. When absent, no handoff transition is performed.                                                           |
+| `handoff_state`   | string          | No                        | _(absent)_      | Future worker exits                | Target tracker state for orchestrator-initiated handoff after successful worker run. When absent, no handoff transition is performed. The transition is suppressed when the issue has already reached a terminal state.                                     |
 | `in_progress_state` | string        | No                        | _(absent)_      | Future dispatches                  | Target tracker state for dispatch-time transition at the start of each worker attempt. When absent, no dispatch-time transition is performed. Must be in `active_states`. Must not collide with `terminal_states` or `handoff_state`. |
 | `comments`        | map of booleans | No                        | all `false`     | Future dispatches (`on_dispatch`); future worker exits (`on_completion`, `on_failure`) | Toggles for orchestrator-posted tracker comments at session lifecycle points. Keys: `on_dispatch`, `on_completion`, `on_failure`. Each is a boolean defaulting to `false`. Non-boolean values are rejected with a configuration error. See [Section 3.2](#32-curated-variable-list) for the matching `SORTIE_TRACKER_COMMENTS_*` env overrides. |
 
@@ -224,6 +224,23 @@ tracker:
   the dispatch preflight reports the collision under check `tracker.handoff_state`.
 - Requires **write permissions** on the tracker API token. For Jira: `write:jira-work`
   (classic) or `write:issue:jira` (granular).
+
+**`handoff_state` runtime behavior:**
+
+- The handoff transition is suppressed when the issue has already reached a state in
+  `terminal_states`. Overwriting a terminal state with the handoff state would undo an
+  operator action such as cancelling the issue mid-turn.
+- The orchestrator resolves the freshest tracker observation available at worker exit, in
+  order: reconciliation's observation, then the worker's own per-turn state refresh, then
+  the dispatch-time snapshot. A terminal result suppresses the handoff transition, the
+  continuation retry, and every pending reaction enqueue for that exit.
+- When the resolved observation is not terminal, one verification read runs immediately
+  before the handoff write, so a state change that landed after the last observation is
+  still caught. The verification read is skipped when `terminal_states` is empty, because
+  no value can classify as terminal there. A failed verification read is logged and the
+  handoff proceeds.
+- Each suppressed transition increments `sortie_handoff_transitions_total` with
+  `result="skipped"` (see [Section 4.1](#41-http-server-serverport-serverhost)).
 
 **`in_progress_state` validation rules:**
 
@@ -873,10 +890,17 @@ under `reactions` identifies a reaction kind.
 
 | Field              | Type    | Required              | Default       | Dynamic Reload    | Description                                                                                     |
 | ------------------ | ------- | --------------------- | ------------- | ----------------- | ----------------------------------------------------------------------------------------------- |
-| `provider`         | string  | **Yes** (to activate) | _(absent)_    | Requires restart  | Adapter identifier (e.g. `github`). When absent or empty, the reaction kind is disabled.        |
-| `max_retries`      | integer | No                    | `2`           | Future dispatches | Maximum fix continuation dispatches per issue before escalation. Must be non-negative.           |
-| `escalation`       | string  | No                    | `label`       | Future dispatches | Action when retries are exhausted. Valid: `"label"`, `"comment"`.                                |
-| `escalation_label` | string  | No                    | `needs-human` | Future dispatches | Label applied when `escalation` is `"label"`.                                                    |
+| `provider`         | string  | **Yes** (to activate) | _(absent)_    | Requires restart | Adapter identifier (e.g. `github`). When absent or empty, the reaction kind is disabled.         |
+| `max_retries`      | integer | No                    | `2`           | Requires restart | Maximum fix continuation dispatches per issue before escalation. Must be non-negative.           |
+| `escalation`       | string  | No                    | `label`       | Requires restart | Action when retries are exhausted. Valid: `"label"`, `"comment"`.                                |
+| `escalation_label` | string  | No                    | `needs-human` | Requires restart | Label applied when `escalation` is `"label"`.                                                    |
+
+**Reload behavior:** every field of every reaction kind is read once when the orchestrator
+is constructed and is not rebuilt on a `WORKFLOW.md` reload, so a change takes effect only
+on the next restart. `reactions.ci_failure` is the single exception: the orchestrator folds
+it into the `ci_feedback` shape and re-reads `max_retries`, `escalation`, and
+`escalation_label` from the reloaded config on each tick. Its `max_log_lines` still requires
+a restart, because the CI provider is constructed once at process start.
 
 **Escalation recurrence:** `escalation: label` is idempotent (re-applying a
 present label is a no-op); `escalation: comment` posts a new comment each time
@@ -887,6 +911,14 @@ reaction re-arms if its condition recurs and escalates again, so on a long-lived
 PR `escalation: comment` can accumulate repeated comments while `escalation:
 label` stays a single mark. Prefer `label` for kinds that may escalate
 repeatedly.
+
+**Release on terminal state:** each reconcile pass reads tracker state for every running
+issue and for every issue holding a pending reaction entry, whether or not a worker is
+still running for it. When the tracker reports an issue in a state from
+`tracker.terminal_states`, the pass releases that issue's pending reaction entries, its
+reaction attempt counters, its pending retry, and its dispatch claim. Polling for that
+issue stops on the same pass. The release is scoped to in-memory state and leaves the
+`reaction_fingerprints` rows untouched.
 
 Remaining keys within a kind sub-object are kind-specific and collected into an `Extra` map.
 
@@ -910,7 +942,7 @@ Additional fields (via Extra):
 
 | Field           | Type    | Default | Dynamic Reload   | Description                                                           |
 | --------------- | ------- | ------- | ---------------- | --------------------------------------------------------------------- |
-| `max_log_lines` | integer | `50`    | Requires restart | Maximum CI log tail lines for prompt injection. `0` disables.         |
+| `max_log_lines` | integer | `50`    | Requires restart | Maximum CI log tail lines for prompt injection. `0` disables. Must be non-negative. |
 
 Example:
 
@@ -934,9 +966,9 @@ Additional fields (via Extra):
 
 | Field                    | Type    | Default  | Dynamic Reload    | Description                                                                                               |
 | ------------------------ | ------- | -------- | ----------------- | --------------------------------------------------------------------------------------------------------- |
-| `poll_interval_ms`       | integer | `120000` | Future dispatches | Polling interval for review comments. Minimum: `30000` (30 sec).                                          |
-| `debounce_ms`            | integer | `60000`  | Future dispatches | Debounce window after the last detected comment before dispatching. Must be non-negative.                 |
-| `max_continuation_turns` | integer | `3`      | Future dispatches | Maximum review-fix continuation dispatches per issue before escalation. Must be positive.                  |
+| `poll_interval_ms`       | integer | `120000` | Requires restart | Polling interval for review comments. Minimum: `30000` (30 sec).                                           |
+| `debounce_ms`            | integer | `60000`  | Requires restart | Debounce window after the last detected comment before dispatching. Must be non-negative.                  |
+| `max_continuation_turns` | integer | `3`      | Requires restart | Maximum review-fix continuation dispatches per issue before escalation. Must be positive.                  |
 
 **Activation:** The `reactions.review_comments` block is active when `provider` is present
 and non-empty. Agent-created PRs MUST write `pr_number`, `owner`, and `repo` to
@@ -990,10 +1022,10 @@ Additional fields (via Extra):
 
 | Field              | Type    | Default  | Dynamic Reload    | Description                                                                                              |
 | ------------------ | ------- | -------- | ----------------- | -------------------------------------------------------------------------------------------------------- |
-| `strategy`         | string  | `squash` | Future dispatches | Merge strategy. One of `merge`, `squash`, or `rebase`.                                                   |
-| `require_ci`       | boolean | `true`   | Future dispatches | When `true`, all CI checks must pass before the merge is attempted. When `false`, CI is advisory only.   |
-| `delete_branch`    | boolean | `true`   | Future dispatches | When `true`, the PR head branch is deleted after a successful merge. Failure to delete does not roll back the merge. |
-| `poll_interval_ms` | integer | `60000`  | Future dispatches | Polling interval for the precondition state machine. Minimum: `30000` (30 sec).                          |
+| `strategy`         | string  | `squash` | Requires restart | Merge strategy. One of `merge`, `squash`, or `rebase`.                                                    |
+| `require_ci`       | boolean | `true`   | Requires restart | When `true`, all CI checks must pass before the merge is attempted. When `false`, CI is advisory only.    |
+| `delete_branch`    | boolean | `true`   | Requires restart | When `true`, the PR head branch is deleted after a successful merge. Failure to delete does not roll back the merge. |
+| `poll_interval_ms` | integer | `60000`  | Requires restart | Polling interval for the precondition state machine. Minimum: `30000` (30 sec).                           |
 
 **Activation:** The `reactions.auto_merge` block is active when `provider` is present
 and non-empty. Agent-created PRs MUST write `pr_number` (positive integer), `owner`,
@@ -1057,8 +1089,8 @@ Additional fields (via Extra):
 | Field                    | Type         | Default | Dynamic Reload    | Description                                                                                               |
 | ------------------------ | ------------ | ------- | ----------------- | --------------------------------------------------------------------------------------------------------- |
 | `bot_usernames`          | list[string] | _(empty)_ | Requires restart | Allowlist of bot logins. A comment is bot-authored when the platform reports a bot user type OR its author login matches an entry here (case-insensitive). |
-| `poll_interval_ms`       | integer      | `60000` | Future dispatches | Polling interval for bot comments. Minimum: `30000` (30 sec). The default is tighter than `review_comments` because bot comments arrive in bulk on push. |
-| `max_continuation_turns` | integer      | `5`     | Future dispatches | Maximum bot-fix continuation dispatches per issue before escalation. Must be positive. Higher than `review_comments` because bot fixes are mechanical.    |
+| `poll_interval_ms`       | integer      | `60000` | Requires restart | Polling interval for bot comments. Minimum: `30000` (30 sec). The default is tighter than `review_comments` because bot comments arrive in bulk on push.  |
+| `max_continuation_turns` | integer      | `5`     | Requires restart | Maximum bot-fix continuation dispatches per issue before escalation. Must be positive. Higher than `review_comments` because bot fixes are mechanical.    |
 
 **Activation:** The `reactions.bot_review` block is active when `provider` is present
 and non-empty, on its own, with no `reactions.review_comments` or `reactions.auto_merge`
@@ -1125,11 +1157,11 @@ Fields:
 
 | Field              | Type    | Default       | Dynamic Reload    | Description                                                                                              |
 | ------------------ | ------- | ------------- | ----------------- | -------------------------------------------------------------------------------------------------------- |
-| `provider`         | string  | _(required)_  | Requires restart  | SCM adapter kind. Must match the provider of every other active SCM reaction. Activates the kind.        |
-| `max_retries`      | integer | `1`           | Future dispatches | Per-episode rebase attempts before escalation. `0` escalates on first detection without a rebase attempt. |
-| `escalation`       | string  | `label`       | Future dispatches | Escalation action when retries are exhausted. One of `label` or `comment`.                               |
-| `escalation_label` | string  | `needs-human` | Future dispatches | Label applied when `escalation` is `label`.                                                              |
-| `poll_interval_ms` | integer | `60000`       | Future dispatches | Polling interval for the conflict-detection state machine. Minimum: `30000` (30 sec).                    |
+| `provider`         | string  | _(required)_  | Requires restart | SCM adapter kind. Must match the provider of every other active SCM reaction. Activates the kind.         |
+| `max_retries`      | integer | `1`           | Requires restart | Per-episode rebase attempts before escalation. `0` escalates on first detection without a rebase attempt. |
+| `escalation`       | string  | `label`       | Requires restart | Escalation action when retries are exhausted. One of `label` or `comment`.                                |
+| `escalation_label` | string  | `needs-human` | Requires restart | Label applied when `escalation` is `label`.                                                               |
+| `poll_interval_ms` | integer | `60000`       | Requires restart | Polling interval for the conflict-detection state machine. Minimum: `30000` (30 sec).                     |
 
 **Activation:** The `reactions.merge_conflicts` block is active when `provider` is present
 and non-empty, on its own, with no other `reactions` block required. Agent-created PRs MUST
@@ -1379,6 +1411,14 @@ reactions:
 - `tracker.handoff_state` must be set and `tracker.terminal_states` must be non-empty in front matter when `reactions.merge_completion.provider` is set; each is reported as a configuration error naming the tracker field.
 - `poll_interval_ms` must be >= `30000` for `merge_completion`.
 - When `provider` is absent or empty, all other fields in the kind sub-object are ignored.
+
+**Where each rule is enforced:** the rules that the config layer owns (reaction key shape,
+`max_retries`, `escalation`, `escalation_label`, and every `label_commands` rule) run during
+typed config construction, so `sortie validate` reports them offline. Of the kind-specific
+rules, `sortie validate` additionally runs the `auto_merge`, `bot_review`, and
+`merge_completion` builders, so their rules are also reported offline. The `review_comments`
+and `merge_conflicts` kind-specific rules are checked only when the orchestrator constructs
+the reaction, so an invalid value there passes `sortie validate` and fails at startup.
 
 ---
 
@@ -1762,8 +1802,11 @@ as an environment variable reference.
 | `hooks.before_remove`                  | Same as above                                                   |
 | `hooks.timeout_ms`                     | Low-risk tuning; hooks are rarely changed per-environment       |
 | `agent.max_concurrent_agents_by_state` | Complex map type; no clean single-value representation          |
+| `tracker.api_version`                  | No override variable exists; set it in the front matter or through `$VAR` indirection |
 | `notifications`                        | List of pass-through backend maps; no single-value representation. Backend secrets are referenced via `$SORTIE_*` indirection from inside the entry (see Section 2.12), not as field-level overrides. |
-| `ci_feedback.escalation_label`         | Low-risk default; rarely differs per environment                |
+| `ci_feedback.*`                        | No override variables exist; the section is deprecated and rarely differs per environment |
+| `reactions.*` (including `reactions.label_commands`) | No override variables exist; reaction configuration comes from WORKFLOW.md |
+| `dispatch.*`                           | No override variables exist; rule definitions and template paths come from WORKFLOW.md |
 | `self_review.*`                        | Verification commands are security-sensitive privileged configuration that must come from the version-controlled WORKFLOW.md |
 | Extensions (`server`, `worker`, etc.)  | Extension-defined; would couple core env parsing to extensions  |
 | `logging.level` (via extensions)       | Resolved from `--log-level` flag; not part of typed config layer |
@@ -2092,7 +2135,7 @@ are included alongside Sortie-specific metrics.
 | `sortie_reconciliation_actions_total`           | Counter   | `action`                    | Reconciliation outcomes (`stop`, `cleanup`, `keep`, `sweep_cleanup`, `sweep_expired`). |
 | `sortie_poll_cycles_total`                      | Counter   | `result`                    | Poll tick completions (`success`, `error`, `skipped`).         |
 | `sortie_tracker_requests_total`                 | Counter   | `operation`, `result`       | Tracker adapter API calls by operation and result.             |
-| `sortie_handoff_transitions_total`              | Counter   | `result`                    | Handoff-state transition attempts (`success`, `error`, `skipped`). |
+| `sortie_handoff_transitions_total`              | Counter   | `result`                    | Handoff-state transition attempts (`success`, `error`, `skipped`). `skipped` covers both suppression causes: the issue had already reached a terminal state, or the issue was not in an active state at worker exit. Recorded only when `tracker.handoff_state` is set. |
 | `sortie_tool_calls_total`                       | Counter   | `tool`, `result`            | Agent tool call completions by tool name and result.           |
 | `sortie_poll_duration_seconds`                  | Histogram | —                           | Wall-clock time per poll cycle.                                |
 | `sortie_worker_duration_seconds`                | Histogram | `exit_type`                 | Worker session wall-clock time.                                |
@@ -2246,11 +2289,12 @@ token_rates:
 ```
 
 When `token_rates` is configured, the dashboard displays estimated USD cost for
-currently running sessions. Keys are agent adapter kind strings (e.g., `"claude-code"`,
+currently running sessions, and the `sortie stats` subcommand prices the runs it
+aggregates from run history. Keys are agent adapter kind strings (e.g., `"claude-code"`,
 `"copilot-cli"`, `"codex"`, `"opencode"`). All rates are in USD per 1 million tokens.
 
 When `token_rates` is absent or empty, the dashboard shows raw token counts without
-cost estimates.
+cost estimates and `sortie stats` reports no cost figures.
 
 The `kiro` adapter reports no token counts on the headless path, so a `token_rates.kiro`
 entry has no effect. Cost is surfaced only through the abstract credits figure in the
@@ -3057,12 +3101,16 @@ re-applies configuration and prompt template without restart.
 | `ci_feedback.escalation`               | Future dispatches.                                                                             |
 | `ci_feedback.escalation_label`                  | Future dispatches.                                                                             |
 | `reactions.<kind>.provider`                     | **No effect** — requires restart. Adapters are created once at process start.                  |
-| `reactions.<kind>.max_retries`                  | Future dispatches.                                                                             |
-| `reactions.<kind>.escalation`                   | Future dispatches.                                                                             |
-| `reactions.<kind>.escalation_label`             | Future dispatches.                                                                             |
-| `reactions.review_comments.poll_interval_ms`    | Future dispatches.                                                                             |
-| `reactions.review_comments.debounce_ms`         | Future dispatches.                                                                             |
-| `reactions.review_comments.max_continuation_turns` | Future dispatches.                                                                          |
+| `reactions.ci_failure.max_retries`              | Future dispatches.                                                                             |
+| `reactions.ci_failure.escalation`               | Future dispatches.                                                                             |
+| `reactions.ci_failure.escalation_label`         | Future dispatches.                                                                             |
+| `reactions.ci_failure.max_log_lines`            | **No effect.** Requires restart. CI provider is created once at process start.                 |
+| `reactions.review_comments.*`                   | **No effect.** Requires restart. The reaction config is built once at construction.            |
+| `reactions.auto_merge.*`                        | **No effect.** Requires restart. The reaction config is built once at construction.            |
+| `reactions.bot_review.*`                        | **No effect.** Requires restart. The reaction config is built once at construction.            |
+| `reactions.merge_conflicts.*`                   | **No effect.** Requires restart. The reaction config is built once at construction.            |
+| `reactions.label_commands.*`                    | **No effect.** Requires restart. The reaction config is built once at construction.            |
+| `reactions.merge_completion.*`                  | **No effect.** Requires restart. The reaction config, `target_state` included, is built once at construction. |
 | `notifications`                        | Future sessions. The `sortie mcp-server` sidecar re-reads `WORKFLOW.md` at each session start, so backend and cap changes apply to sessions started after the reload, not to in-flight sessions. |
 | `server.port`                          | **No effect** — requires restart.                                                              |
 | `server.host`                          | **No effect** — requires restart.                                                              |
@@ -3099,6 +3147,7 @@ skipped for that tick, reconciliation remains active, and an error is emitted.
 | `agent.command` present and non-empty          | Missing when `agent.kind` requires a local command.         |
 | Tracker adapter registered and available       | No adapter registered for the configured `tracker.kind`.    |
 | Agent adapter registered and available         | No adapter registered for the configured `agent.kind`.      |
+| `workspace.root` writable                      | The resolved root cannot be created, or a probe file cannot be written inside it. Reported under check `workspace.root_writable`. |
 | `dispatch` is a map; `dispatch.rules` is a sequence; `dispatch.default` is a map | Wrong YAML node type for `dispatch`, `dispatch.rules`, or `dispatch.default`. |
 | Each rule has at least one of `match`, `agent`, `template` | A rule map carries none of the three. |
 | Rule `name`, when present, matches `^[a-z][a-z0-9_-]*$` | Malformed rule name. |
@@ -3274,12 +3323,15 @@ lists the `SORTIE_*` variable that overrides the field, or "—" if not overrida
 | `ci_feedback.escalation`                | string           | `label`                      | —                                        | **Deprecated;** `"label"` or `"comment"`                                               |
 | `ci_feedback.escalation_label`          | string           | `needs-human`                | —                                        | **Deprecated;** applied when `escalation` is `"label"`                                 |
 | `reactions.<kind>.provider`             | string           | _(absent)_                   | —                                        | Adapter identifier; absent = disabled; restart required                                |
-| `reactions.<kind>.max_retries`          | integer          | `2`                          | —                                        | Fix continuations before escalation; non-negative                                      |
-| `reactions.<kind>.escalation`           | string           | `label`                      | —                                        | `"label"` or `"comment"`                                                               |
-| `reactions.<kind>.escalation_label`     | string           | `needs-human`                | —                                        | Applied when `escalation` is `"label"`                                                 |
-| `reactions.review_comments.poll_interval_ms` | integer     | `120000`                     | —                                        | Review poll interval; min `30000`                                                      |
-| `reactions.review_comments.debounce_ms` | integer          | `60000`                      | —                                        | Debounce after last comment; non-negative                                              |
-| `reactions.review_comments.max_continuation_turns` | integer | `3`                        | —                                        | Review-fix turns before escalation; positive                                           |
+| `reactions.<kind>.max_retries`          | integer          | `2`                          | —                                        | Fix continuations before escalation; non-negative; `merge_conflicts` defaults to `1`; restart required except for `ci_failure` |
+| `reactions.<kind>.escalation`           | string           | `label`                      | —                                        | `"label"` or `"comment"`; restart required except for `ci_failure`                     |
+| `reactions.<kind>.escalation_label`     | string           | `needs-human`                | —                                        | Applied when `escalation` is `"label"`; restart required except for `ci_failure`       |
+| `reactions.ci_failure.max_log_lines`    | integer          | `50`                         | —                                        | CI log tail lines; `0` disables; non-negative; restart required                        |
+| `reactions.review_comments.poll_interval_ms` | integer     | `120000`                     | —                                        | Review poll interval; min `30000`; restart required                                    |
+| `reactions.review_comments.debounce_ms` | integer          | `60000`                      | —                                        | Debounce after last comment; non-negative; restart required                            |
+| `reactions.review_comments.max_continuation_turns` | integer | `3`                        | —                                        | Review-fix turns before escalation; positive; restart required                         |
+| `reactions.merge_completion.target_state` | string         | _(required)_                 | —                                        | Terminal state applied on observed merge; must be in `terminal_states` as written; restart required |
+| `reactions.merge_completion.poll_interval_ms` | integer    | `60000`                      | —                                        | Merge-observation poll interval; min `30000`; restart required                         |
 | `self_review.enabled`                   | boolean          | `false`                      | —                                        | Activates self-review loop                                                             |
 | `self_review.max_iterations`            | integer          | `3`                          | —                                        | Range [1, 10]; up to `2N−1` extra turns                                                |
 | `self_review.verification_commands`     | `[string]`       | _(required when enabled)_    | —                                        | Shell commands for verification                                                        |

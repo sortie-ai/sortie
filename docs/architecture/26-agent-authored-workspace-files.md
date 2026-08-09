@@ -18,11 +18,11 @@ specific orchestrator behavior. Sortie reads this file after each turn completes
 
 Recognized values:
 
-- `blocked` — agent signals it cannot proceed without human intervention. The orchestrator treats
+- `blocked`: agent signals it cannot proceed without human intervention. The orchestrator treats
   this as a soft stop: it completes the current turn normally, suppresses continuation retries,
   and releases the issue claim. The issue becomes eligible for re-dispatch on future tracker
   polls under normal dispatch rules.
-- `needs-human-review` — agent signals that work is complete and requires review. Like `blocked`,
+- `needs-human-review`: agent signals that work is complete and requires review. Like `blocked`,
   this value suppresses continuation retries and releases the issue claim. Unlike `blocked`, when
   `tracker.handoff_state` is configured and the issue is in an active tracker state, the
   orchestrator performs the handoff transition (Section 5.3.1). This ensures completed work moves
@@ -34,8 +34,8 @@ If the file is absent or contains an unrecognized value, it is ignored.
 The `.sortie/status` file is not required for any core orchestration behavior. It is an advisory
 channel only.
 
-The full protocol specification — including file format, parsing rules, read timing, cleanup
-obligations, versioning, security considerations, and design rationale — is in
+The full protocol specification, including file format, parsing rules, read timing, cleanup
+obligations, versioning, security considerations, and design rationale, is in
 [agent-to-orchestrator-protocol.md](../agent-to-orchestrator-protocol.md).
 
 ### 21.2 `.sortie/review_verdict.json`
