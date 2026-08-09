@@ -95,9 +95,11 @@ itself observed:
 - The handoff state (`tracker.handoff_state`), on a normal worker exit with the issue still in an
   active tracker state and not a blocked soft stop, when that field is configured and the
   dispatch drives issue state. The write is preceded by a terminal test against the freshest
-  available observation of the issue's state, and, when that observation is not already
-  terminal, by one `fetch_issue_states_by_ids` verification read immediately before the write. A
-  terminal result from either the observation or the verification read suppresses the write.
+  available observation of the issue's state, and, when `tracker.terminal_states` is non-empty
+  and that observation is not already terminal, by one `fetch_issue_states_by_ids` verification
+  read immediately before the write. A terminal result from either the observation or the
+  verification read suppresses the write. With no terminal states configured no value can
+  classify as terminal, so the verification read is skipped.
 - The merge-completion target state (`reactions.merge_completion.target_state`), when a
   Sortie-managed pull request merges while the linked issue is still parked in
   `tracker.handoff_state`, independently of who or what performed the merge. Active only when

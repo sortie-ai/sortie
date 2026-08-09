@@ -1841,7 +1841,9 @@ func TestHandleWorkerExit_ObservationEqualsHandoffStatePerformsHandoffAndEnqueue
 
 // TestHandleWorkerExit_BothStateListsUnconfiguredHandoffStillFires asserts
 // the documented fallback for operators who configure neither
-// active_states nor terminal_states: the handoff still fires.
+// active_states nor terminal_states: the handoff still fires, and the
+// verification read is skipped because no value could classify as
+// terminal.
 func TestHandleWorkerExit_BothStateListsUnconfiguredHandoffStillFires(t *testing.T) {
 	t.Parallel()
 
@@ -1870,6 +1872,9 @@ func TestHandleWorkerExit_BothStateListsUnconfiguredHandoffStillFires(t *testing
 		ObservedIssueState: "ai:cancelled",
 	}, params)
 
+	if got := tracker.fetchStatesCalls.Load(); got != 0 {
+		t.Errorf("FetchIssueStatesByIDs called %d times, want 0", got)
+	}
 	if len(tracker.transitionCalls) != 1 {
 		t.Fatalf("TransitionIssue called %d times, want 1", len(tracker.transitionCalls))
 	}

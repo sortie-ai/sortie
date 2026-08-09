@@ -430,24 +430,30 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 			} else {
 				// Verify the tracker state immediately before the write: the
 				// resolved observation above may already be stale by the
-				// time the worker's teardown has completed.
+				// time the worker's teardown has completed. With no
+				// terminal states configured no value can classify as
+				// terminal, so the read would spend a tracker call and up
+				// to one request timeout on the event loop without ever
+				// suppressing the write.
 				verifiedTerminal := false
-				if verified, verifyErr := params.TrackerAdapter.FetchIssueStatesByIDs(ctx, []string{workerResult.IssueID}); verifyErr != nil {
-					log.Warn("handoff verification read failed, proceeding with handoff",
-						slog.Any("error", verifyErr),
-						slog.String("state_source", observationSource),
-					)
-				} else if verifiedState, ok := verified[workerResult.IssueID]; ok && isTerminalState(verifiedState, params.TerminalStates) {
-					log.Info("handoff suppressed for terminal issue",
-						slog.String("state", verifiedState),
-						slog.String("state_source", "verified"),
-						slog.String("handoff_state", params.HandoffState),
-					)
-					if params.HandoffState != "" {
-						metrics.IncHandoffTransitions(handoffSkipped)
+				if len(params.TerminalStates) > 0 {
+					if verified, verifyErr := params.TrackerAdapter.FetchIssueStatesByIDs(ctx, []string{workerResult.IssueID}); verifyErr != nil {
+						log.Warn("handoff verification read failed, proceeding with handoff",
+							slog.Any("error", verifyErr),
+							slog.String("state_source", observationSource),
+						)
+					} else if verifiedState, ok := verified[workerResult.IssueID]; ok && isTerminalState(verifiedState, params.TerminalStates) {
+						log.Info("handoff suppressed for terminal issue",
+							slog.String("state", verifiedState),
+							slog.String("state_source", "verified"),
+							slog.String("handoff_state", params.HandoffState),
+						)
+						if params.HandoffState != "" {
+							metrics.IncHandoffTransitions(handoffSkipped)
+						}
+						terminalSuppressed = true
+						verifiedTerminal = true
 					}
-					terminalSuppressed = true
-					verifiedTerminal = true
 				}
 
 				if verifiedTerminal {
