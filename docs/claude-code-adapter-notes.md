@@ -402,14 +402,24 @@ The adapter reads stdout line by line. For each line:
 
 ### Token usage extraction
 
-The result message provides direct token counts in the `usage` field. The adapter normalizes
-these into:
+Assistant events repeat one message id (`message.id`) for every event of the same model
+request; the adapter deduplicates by that id and emits at most one `token_usage` event per id.
+Streamed usage is a snapshot, not a final count: a later event carrying the same id can report a
+larger usage object than an earlier one as the response continues to generate.
+
+The terminal `result` event's top-level `usage` field excludes sub-agent activity, while its
+`modelUsage` map and `total_cost_usd` include it. The adapter derives the authoritative per-turn
+usage from `modelUsage` when present, summed across every model entry, and falls back to the
+top-level `usage` object only when `modelUsage` is absent or empty.
+
+The adapter normalizes a usage object into:
 
 ```
 TokenUsage{
-    InputTokens:  usage.input_tokens,
+    InputTokens:  usage.input_tokens + usage.cache_read_input_tokens + usage.cache_creation_input_tokens,
     OutputTokens: usage.output_tokens,
-    TotalTokens:  usage.input_tokens + usage.output_tokens,
+    TotalTokens:  InputTokens + OutputTokens,
+    CacheReadTokens: usage.cache_read_input_tokens,
 }
 ```
 
@@ -417,11 +427,12 @@ Additional available data:
 
 | Source         | Fields                                                                                    |
 | -------------- | ----------------------------------------------------------------------------------------- |
-| Result event   | `total_cost_usd`, `duration_ms`, `duration_api_ms`, `num_turns`, `usage.*`                |
+| Result event   | `total_cost_usd`, `duration_ms`, `duration_api_ms`, `num_turns`, `usage.*`, `modelUsage.*` |
 | Result `usage` | `input_tokens`, `output_tokens`, `cache_read_input_tokens`, `cache_creation_input_tokens` |
+| Result `modelUsage` (per model) | `inputTokens`, `outputTokens`, `cacheReadInputTokens`, `cacheCreationInputTokens`, `costUSD` |
 
-The `cache_read_input_tokens` and `cache_creation_input_tokens` fields are useful for cost
-analysis (cached tokens are cheaper) but are not required for the normalized `token_usage` event.
+`total_cost_usd` and `modelUsage[*].costUSD` are cost figures the adapter parses only where it
+already did; no new cost parsing is added.
 
 ---
 

@@ -484,14 +484,23 @@ monotonically accumulating:
 - Tool step: `{"input":14412,"output":58,"cache":{"read":1840}}`
 - Final step: `{"input":1446,"output":149,"cache":{"read":16240}}`
 
-By contrast, the server's `AssistantMessage` type includes per-message `cost` and `tokens`
-fields that are better candidates for authoritative turn totals (SDK v2 types). `run --format
-json` does not emit the final `AssistantMessage` envelope directly (`run.ts` source).
+The adapter recovers authoritative usage with `opencode export --sanitize <sessionID>` after the
+subprocess exits rather than reading `step_finish.part.tokens` from stdout. The export carries
+per-assistant-message `info.tokens {total, input, output, reasoning, cache{read, write}}`. The
+per-message `cache.write` field reaches no `step_finish` token count on stdout at all: a captured
+three-message session showed `cache.write` values of 16586, 15, and 16618 across the messages the
+stdout stream never surfaces. `tokens.total` includes both cache and reasoning tokens and is not
+`input + output`; the adapter computes its own total as `input + cache.read + cache.write` for
+`input_tokens` plus `output + reasoning` for `output_tokens`, rather than reading `tokens.total`
+directly.
 
-For precise `TurnResult.Usage`, prefer one of these approaches:
-
-1. Integrate against `serve` and use the server/SDK session APIs directly.
-2. Use `run` for execution, then query the session's final message through the server/API surface before returning.
+The export's session aggregate, at the top-level `info.tokens` of the export payload, equals the
+sum over every assistant message in the session: a captured session with per-message totals
+16593, 16609, and 16626 reported a session aggregate whose components (`input` 9, `output` 14,
+`reasoning` 0, `cache.read` 16586, `cache.write` 33219) sum to 49828, the sum of the three message
+totals. The adapter sums the run's own assistant messages directly rather than reading this
+aggregate field, because the aggregate spans the whole session (including turns from an earlier
+run when the session is resumed) while the adapter needs a run-scoped figure.
 
 ## Concurrency and session isolation
 

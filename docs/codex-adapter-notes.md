@@ -325,7 +325,8 @@ failed turns.
 | Notification          | Description                                       | Adapter mapping                  |
 | --------------------- | ------------------------------------------------- | -------------------------------- |
 | `turn/started`        | Turn begins. Contains turn ID.                    | `session_started` (first turn)   |
-| `turn/completed`      | Turn finished. Contains final status and usage.   | `turn_completed`                 |
+| `turn/completed`      | Turn finished. Contains final status. No usage member. | `turn_completed`            |
+| `thread/tokenUsage/updated` | Token usage snapshot for the thread.        | `token_usage`                    |
 | `turn/diff/updated`   | Aggregated diff across file changes.              | Log for observability            |
 | `turn/plan/updated`   | Agent's plan update.                              | `notification`                   |
 
@@ -381,33 +382,40 @@ On failure, `turn.error` contains `{message, codexErrorInfo?, additionalDetails?
 
 ## Token usage tracking
 
-On the app-server JSON-RPC surface, token usage is available from `turn/completed`
-and `thread/tokenUsage/updated` notifications.
+The `turn/completed` notification carries no `usage` member. The JSON Schema the binary
+generates for itself (`codex app-server generate-json-schema`) defines `TurnCompletedNotification`
+as `{threadId, turn}` and `Turn` as `{id, items, status, error, startedAt, completedAt,
+durationMs}`; there is no `usage` field anywhere in that shape.
 
-The `turn/completed` notification includes usage under `params`:
+Token usage arrives separately, on `thread/tokenUsage/updated`:
 
 ```json
-{"method": "turn/completed", "params": {
-  "turn": {
-    "id": "turn_456",
-    "status": "completed",
-    "usage": {
-      "input_tokens": 24763,
-      "cached_input_tokens": 24448,
-      "output_tokens": 122
-    }
+{"method": "thread/tokenUsage/updated", "params": {
+  "threadId": "019fe79e-9f78-7da1-8b6c-b15b630dff3f",
+  "turnId": "019fe79e-bd70-70e1-8d79-7ec812b4289d",
+  "tokenUsage": {
+    "total": {"totalTokens": 27458, "inputTokens": 27428, "cachedInputTokens": 13696, "outputTokens": 30, "reasoningOutputTokens": 18},
+    "last":  {"totalTokens": 13727, "inputTokens": 13722, "cachedInputTokens": 13696, "outputTokens": 5,  "reasoningOutputTokens": 0},
+    "modelContextWindow": 258400
   }
 }}
 ```
 
-Normalization to Sortie's `{input_tokens, output_tokens, total_tokens}`:
+`total` is thread-cumulative: it spans every turn of the thread, including turns from an earlier
+run when the thread is resumed. It accumulates as `total(n) = total(n-1) + last(n)`, so a fresh
+thread's first notification reports `total` equal to `last`. The adapter recovers this run's own
+contribution by subtracting a baseline captured at the first notification whose `turnId` matches
+the run's current turn: `baseline = total - last` at that first notification, and every
+subsequent matching notification reports `total - baseline`.
 
-| Codex field             | Sortie field      | Notes                                    |
+Normalization to Sortie's `{input_tokens, output_tokens, total_tokens, cache_read_tokens}`:
+
+| Codex field (`total` or `last` breakdown) | Sortie field      | Notes                                    |
 | ----------------------- | ----------------- | ---------------------------------------- |
-| `input_tokens`          | `input_tokens`    | Total input tokens (includes cached).    |
-| `output_tokens`         | `output_tokens`   | Output tokens generated.                 |
-| sum of above            | `total_tokens`    | Computed by adapter.                     |
-| `cached_input_tokens`   | n/a               | Logged for observability; not in Sortie's model. |
+| `inputTokens`            | `input_tokens`    | Already inclusive of `cachedInputTokens`. |
+| `outputTokens`           | `output_tokens`   | Already inclusive of `reasoningOutputTokens`. |
+| `inputTokens + outputTokens` | `total_tokens` | Computed by the adapter, not read from `totalTokens`. |
+| `cachedInputTokens`   | `cache_read_tokens` | Subset of `input_tokens`.              |
 
 ---
 
@@ -760,7 +768,8 @@ $ codex app-server
 ← {"method":"item/completed","params":{"item":{"id":"item_1","type":"commandExecution","status":"completed","exitCode":0}}}
 ← {"method":"item/started","params":{"item":{"id":"item_2","type":"agentMessage","text":"I found the bug..."}}}
 ← {"method":"item/completed","params":{"item":{"id":"item_2","type":"agentMessage","text":"I've fixed the authentication bug."}}}
-← {"method":"turn/completed","params":{"turn":{"id":"turn_001","status":"completed","items":[...],"error":null},"usage":{"input_tokens":15000,"output_tokens":500}}}
+← {"method":"thread/tokenUsage/updated","params":{"threadId":"thr_abc123","turnId":"turn_001","tokenUsage":{"total":{"totalTokens":15500,"inputTokens":15000,"cachedInputTokens":0,"outputTokens":500,"reasoningOutputTokens":0},"last":{"totalTokens":15500,"inputTokens":15000,"cachedInputTokens":0,"outputTokens":500,"reasoningOutputTokens":0}}}}
+← {"method":"turn/completed","params":{"turn":{"id":"turn_001","status":"completed","items":[...],"error":null}}}
 
 # 6. Start turn 2 (continuation)
 → {"method":"turn/start","id":31,"params":{"threadId":"thr_abc123","input":[{"type":"text","text":"Run the test suite to verify the fix."}],"cwd":"/var/sortie/workspaces/PROJ-123"}}
@@ -863,7 +872,7 @@ issue, preventing this scenario.
 | Cost cap                  | `--max-budget-usd <amount>`                                  | Subscription quota or API rate limits                          |
 | Internal turn limit       | `--max-turns <N>` (may be SDK-only)                          | Controlled by orchestrator via separate `turn/start` calls     |
 | Init event                | `system` type with `init` subtype, contains `session_id`     | `thread/started` notification contains `thread.id`             |
-| Result event              | Final `result` message with `subtype`, `is_error`, `usage`   | `turn/completed` notification with `turn.status`, `usage`      |
+| Result event              | Final `result` message with `subtype`, `is_error`, `usage`   | `turn/completed` notification with `turn.status`; usage arrives separately on `thread/tokenUsage/updated` |
 | Hooks location            | `.claude/hooks.json`                                          | `.codex/hooks.json`                                            |
 | OTel configuration        | `CLAUDE_CODE_ENABLE_TELEMETRY=1`                             | `[otel]` block in `config.toml`                                |
 | MCP config                | `--mcp-config <path>`, `--strict-mcp-config`                 | `.codex/mcp.json` (project-level), `config.toml`              |
@@ -902,8 +911,9 @@ issue, preventing this scenario.
    `item/commandExecution/requestApproval` and `item/fileChange/requestApproval` with
    `{"decision": "acceptForSession"}`. Execute `item/tool/call` requests via
    `DynamicTool` / `TrackerAdapter` dispatch.
-6. **Token tracking:** Extract `usage` from `turn/completed`. Normalize to
-   `{input_tokens, output_tokens, total_tokens}`.
+6. **Token tracking:** Extract `tokenUsage.total` and `tokenUsage.last` from
+   `thread/tokenUsage/updated`, subtract a per-run baseline from the thread-cumulative `total`,
+   and normalize to `{input_tokens, output_tokens, total_tokens, cache_read_tokens}`.
 7. **Timeout:** Enforce `turn_timeout_ms` via context deadline. On timeout, send
    `turn/interrupt` then SIGTERM → grace → SIGKILL.
 8. **Stall detection:** Reset stall timer on any `item/*` notification or delta event.
