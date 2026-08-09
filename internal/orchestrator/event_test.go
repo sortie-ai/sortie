@@ -850,6 +850,35 @@ func TestHandleAgentEvent_APIRequestCount(t *testing.T) {
 	}
 }
 
+// TestHandleAgentEvent_APIRequestCount_ZeroUsage verifies that a
+// token_usage event whose payload is entirely zero still counts as an
+// API round-trip. An adapter that reports one component per event, or
+// a request that returned no billable tokens, must not silently drop
+// out of the request count and the per-model breakdown.
+func TestHandleAgentEvent_APIRequestCount_ZeroUsage(t *testing.T) {
+	t.Parallel()
+
+	state, entry := newStateWithEntry("ARC-ZERO")
+	ts := time.Now().UTC()
+
+	HandleAgentEvent(state, "ARC-ZERO", domain.AgentEvent{
+		Type:      domain.EventTokenUsage,
+		Timestamp: ts,
+		Model:     "claude-opus-4",
+	}, slog.Default(), nil)
+
+	if entry.APIRequestCount != 1 {
+		t.Errorf("zero-usage token_usage: APIRequestCount = %d, want 1", entry.APIRequestCount)
+	}
+	if entry.RequestsByModel["claude-opus-4"] != 1 {
+		t.Errorf("zero-usage token_usage: RequestsByModel[claude-opus-4] = %d, want 1",
+			entry.RequestsByModel["claude-opus-4"])
+	}
+	if entry.AgentTotalTokens != 0 {
+		t.Errorf("zero-usage token_usage: AgentTotalTokens = %d, want 0", entry.AgentTotalTokens)
+	}
+}
+
 // TestHandleAgentEvent_TurnCompleted_AdvancesUsageWithoutRequestCount
 // verifies that a turn_completed event carrying a usage payload larger
 // than the last token_usage event's payload still advances the entry's

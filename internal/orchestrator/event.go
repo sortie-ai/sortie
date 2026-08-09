@@ -123,25 +123,26 @@ func HandleAgentEvent(state *State, issueID string, event domain.AgentEvent, log
 	var usageDelta domain.TokenUsage
 	if hasUsage(event.Usage) {
 		usageDelta = applyUsageDelta(state, entry, event.Usage, metrics)
+	}
 
-		if event.Type == domain.EventTokenUsage {
-			// Increment API request count unconditionally — each
-			// token_usage event represents one API round-trip.
-			entry.APIRequestCount++
+	if event.Type == domain.EventTokenUsage {
+		// Increment API request count unconditionally — each
+		// token_usage event represents one API round-trip, including
+		// one whose reported usage is entirely zero.
+		entry.APIRequestCount++
 
-			// Track model: prefer the event's model, fall back to last known.
-			model := event.Model
-			if model != "" {
-				entry.ModelName = model
-			} else {
-				model = entry.ModelName
+		// Track model: prefer the event's model, fall back to last known.
+		model := event.Model
+		if model != "" {
+			entry.ModelName = model
+		} else {
+			model = entry.ModelName
+		}
+		if model != "" {
+			if entry.RequestsByModel == nil {
+				entry.RequestsByModel = make(map[string]int)
 			}
-			if model != "" {
-				if entry.RequestsByModel == nil {
-					entry.RequestsByModel = make(map[string]int)
-				}
-				entry.RequestsByModel[model]++
-			}
+			entry.RequestsByModel[model]++
 		}
 	}
 
