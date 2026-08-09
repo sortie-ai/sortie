@@ -318,6 +318,14 @@ type RetryEntry struct {
 	// Propagated through every retry so [HandleRetryTimer] can look up
 	// the adapter without re-running rule resolution.
 	AgentKind string
+
+	// pausedSinceMS is the wall-clock millisecond at which this entry
+	// first took one of HandleRetryTimer's two paused-by-issue-state
+	// arms, because the issue's current state does not permit a
+	// dispatch. Zero means the entry is not paused. Runtime-only,
+	// alongside scheduledAt and scheduledDelayMS above: never persisted
+	// and never carried on ScheduleRetryParams.
+	pausedSinceMS int64
 }
 
 // ReactionKindCI is the reaction kind constant for CI failure reactions.

@@ -67,10 +67,12 @@ allowlist instead of `FetchPendingReviews`. The flow:
    g. Filter outdated comments. When none remain, re-enqueue with the poll-interval delay.
    h. Compute the fingerprint (§11D.4) and upsert it. When the stored fingerprint matches and is
       marked dispatched, re-enqueue with the poll-interval delay.
-   i. Dispatch immediately, with no debounce window: count
-      `sortie_bot_review_checks_total{result="dispatched"}`, cancel any in-flight first-turn retry
-      for the issue, schedule a continuation dispatch carrying the bot comments under the prompt key
-      `bot_review_comments`, and increment `reaction_attempts[issue_id:bot-review]`.
+   i. Consult the retry slot (Section 7.5). A non-nil incumbent means the pass defers,
+      re-enqueuing the entry unchanged rather than dispatching.
+   j. On a free slot, dispatch immediately, with no debounce window: count
+      `sortie_bot_review_checks_total{result="dispatched"}`, schedule a continuation dispatch
+      carrying the bot comments under the prompt key `bot_review_comments`, and increment
+      `reaction_attempts[issue_id:bot-review]`.
 
 Immediate dispatch is the defining runtime difference from `review`: bot comments arrive in bulk on
 push, so there is no reviewer-pacing window to wait out.

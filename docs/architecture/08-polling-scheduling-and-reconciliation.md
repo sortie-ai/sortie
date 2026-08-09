@@ -68,7 +68,9 @@ Optional SSH host limit:
 
 Retry entry creation:
 
-- Cancel any existing retry timer for the same issue.
+- The caller checks the retry slot first (Section 7.5): a challenger consults the slot and
+  schedules only when it is free. The cancellation the primitive performs internally is a
+  backstop for a call site that skipped the check, not the primitive's own contract.
 - Store `attempt`, `identifier`, `error`, `due_at_ms`, `session_id` (continuation retries propagate the session ID from the exiting worker; error and reaction retries leave it null), and new timer handle.
 
 Backoff formula:
@@ -86,6 +88,13 @@ Retry handling behavior:
    - Dispatch if slots are available.
    - Otherwise requeue with error `no available orchestrator slots`.
 5. If found but no longer active, release claim.
+6. A reaction retry the issue's own current state does not permit to dispatch is rescheduled with
+   backoff, but only for as long as it has been pausing consecutively for that reason; past 30
+   minutes of consecutive pausing it is dropped instead, its persisted row deleted and its claim
+   released, with a warning naming the kind and the dwell (Section 7.5).
+7. A retry entry whose timer event was never delivered is re-armed with a zero delay once its due
+   time is more than 60 seconds in the past, so a dropped timer event self-heals within a few
+   ticks instead of holding its slot for the process lifetime (Section 7.5).
 
 Per-issue effort budget (defense-in-depth):
 
@@ -140,7 +149,9 @@ Part A: Stall detection
 - For each running issue, compute `elapsed_ms` since:
   - `last_agent_timestamp` if any event has been seen, else
   - `started_at`
-- If `elapsed_ms > agent.stall_timeout_ms`, terminate the worker and queue a retry.
+- If `elapsed_ms > agent.stall_timeout_ms`, terminate the worker unconditionally, then queue a
+  retry when the retry slot is free or defer to the incumbent already occupying it, re-emitting
+  the cancellation warning on every stalled tick either way (Section 7.5).
 - If `stall_timeout_ms <= 0`, skip stall detection entirely.
 
 Part B: Tracker state refresh
@@ -151,7 +162,11 @@ Part B: Tracker state refresh
 - For each running issue:
   - If tracker state is terminal: terminate worker and clean workspace.
   - If tracker state is still active: update the in-memory issue snapshot.
-  - If tracker state is neither active nor terminal: terminate worker without workspace cleanup.
+  - If tracker state is neither active nor terminal: terminate the worker without workspace
+    cleanup, then cancel the pending retry and delete its persisted row, unless the retry slot is
+    occupied by an incumbent, in which case both are skipped together so the in-memory entry and
+    the persisted row stay in agreement and the incumbent survives (Section 7.5). This population
+    is exactly the mid-session-queued retries the design depends on protecting.
 - For an issue reported terminal, whether or not it has a running worker: release the issue's
   pending reaction entries, reaction attempt counters, pending retry, and dispatch claim, leaving
   `reaction_fingerprints` intact. An issue with no running worker and no terminal state is left
@@ -170,7 +185,8 @@ Part C: CI status reconciliation (when `ci_feedback.kind` or `reactions.ci_failu
   - If status is `passing`: clear reaction attempts for the issue and kind, and delete the
     fingerprint row.
   - If status is `pending`: re-enqueue with the same exponential backoff as the fetch-error path.
-  - If status is `failing`: handle as a CI failure (see Section 7.3, "CI Status Failing").
+  - If status is `failing`: consult the retry slot before handling as a CI failure; a non-nil
+    incumbent defers instead of dispatching (Section 7.5, Section 7.3 "CI Status Failing").
 
 Part D: Review comment reconciliation (when `reactions.review_comments` is configured)
 
@@ -190,9 +206,11 @@ Part D: Review comment reconciliation (when `reactions.review_comments` is confi
   - Check `reaction_fingerprints` table: if the fingerprint matches and is marked dispatched,
     re-enqueue with the poll interval delay and continue.
   - If within debounce window (`now - LastEventAt < debounce_ms`): defer and re-enqueue.
-  - Otherwise: cancel existing retry, schedule a review-fix dispatch with review comment
-    context, increment `reaction_attempts`. The fingerprint is marked dispatched later, when
-    the scheduled retry fires and dispatch succeeds, not during this pass.
+  - Otherwise: consult the retry slot (Section 7.5). A non-nil incumbent means the pass defers,
+    re-enqueuing the entry unchanged rather than dispatching. A free slot schedules a review-fix
+    dispatch with review comment context and increments `reaction_attempts`. The fingerprint is
+    marked dispatched later, when the scheduled retry fires and dispatch succeeds, not during
+    this pass.
 
 Part E: Bot review comment reconciliation (when `reactions.bot_review` is configured)
 
@@ -202,6 +220,8 @@ Part E: Bot review comment reconciliation (when `reactions.bot_review` is config
   authors) instead of `FetchPendingReviews`.
 - Dispatches immediately on a confirmed comment set, with no debounce window, because bot
   comments arrive in bulk on push rather than trickling in from a human reviewer.
+- Consults the retry slot before dispatching, exactly as Part D: a non-nil incumbent defers
+  instead (Section 7.5).
 - See Section 11D for the full contract.
 
 Part F: Merge conflict detection (when `reactions.merge_conflicts` is configured)
@@ -211,6 +231,8 @@ Part F: Merge conflict detection (when `reactions.merge_conflicts` is configured
   `SCMAdapter.GetMergeability` on every due tick (no retry-budget check gates the read). A
   dirty result runs the escalation-bearing conflict-resolution path; any other result closes
   the episode and clears its fingerprint and attempt counter.
+- The dirty branch consults the retry slot before its other guards (Section 7.5); a non-nil
+  incumbent defers the whole branch, re-enqueuing the entry unchanged.
 - See Section 11E for the full contract.
 
 Part G: Auto-merge reconciliation (when `reactions.auto_merge` is configured)
@@ -271,7 +293,10 @@ configured)
 
 - Skip entirely when no SCM adapter is configured or the `label_commands` block is absent.
 - For each Sortie-managed PR, read the label-event journal past its stored high-water mark via
-  `SCMAdapter.ListLabelEvents`; a confirmed `review_label` command dispatches a read-only,
+  `SCMAdapter.ListLabelEvents`. A confirmed `review_label` command is decided in this order: a
+  foreign-kind incumbent occupying the retry slot defers (Section 7.5), leaving the label and the
+  high-water mark untouched; a same-kind incumbent or a running worker of this kind collapses,
+  advancing the mark without a second dispatch; otherwise the pass dispatches a read-only,
   no-clone review session and removes the label.
 - Ordering relative to the other parts does not affect correctness: the pass is fully
   cross-kind isolated. See Section 11F for the full contract.
@@ -279,7 +304,7 @@ configured)
 Part I: Label fix command detection (when `reactions.label_commands.fix_label` is configured)
 
 - Structurally identical to Part H, scoped to the `fix_label` command and the `label-fix`
-  reaction kind.
+  reaction kind, including the same three-way retry-slot decision (Section 7.5).
 - A confirmed command dispatches a read-write, clone-and-checkout fix session instead of the
   read-only review session.
 - Ordering relative to the other parts does not affect correctness: the pass is fully

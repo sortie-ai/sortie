@@ -68,9 +68,13 @@ Loop body per `ReactionKindMergeConflict` entry in `state.PendingReactions`:
 
 ### 11E.4 Fingerprint and deduplication
 
-Before any dispatch, the dirty branch applies two precondition guards. Both run before any counter
-increment, so a deferral never burns an attempt:
+Before any dispatch, the dirty branch applies three precondition guards, in order. All three run
+before any counter increment, so a deferral never burns an attempt:
 
+- **Retry-slot guard**: consult the retry slot (Section 7.5) first, ahead of every other guard. A
+  non-nil incumbent means the branch defers as a whole, re-enqueuing the pending entry unchanged
+  except for a refreshed `CreatedAt` and returning without touching the fingerprint, the counter,
+  or `sortie_merge_conflict_checks_total`.
 - **D1a**: if `status.HeadSHA == ""`, defer at poll interval (no rebase anchor).
 - **D1b**: if `status.BaseBranch == ""`, defer at poll interval (no rebase target). This is
   defense-in-depth: the GitHub adapter always populates `BaseBranch` from `base.ref`, so D1b is a
@@ -129,8 +133,13 @@ tracker-call failures are logged and counted
 
 ### 11E.6 Continuation data
 
-`dispatchMergeConflictContinuation` calls `CancelRetry`, then schedules a continuation turn via
-`ScheduleRetry` with the prompt key `merge_conflict`. The continuation map contains:
+The retry-slot guard in Section 11E.4 is unaffected by anything in this section: a deferral
+returns before `dispatchMergeConflictContinuation` is ever called, so the `MarkReactionDispatched`
+timing this section describes only ever runs on a tick that actually dispatches.
+
+`dispatchMergeConflictContinuation` schedules a continuation turn via `ScheduleRetry` with the
+prompt key `merge_conflict`, admitted into the slot the guard above already confirmed is free. The
+continuation map contains:
 
 | Key | Value |
 |-----|-------|

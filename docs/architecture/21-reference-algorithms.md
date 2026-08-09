@@ -381,11 +381,14 @@ on_worker_exit(issue_id, reason, state):
       notify_observers()
       return state
 
-    state = schedule_retry(state, issue_id, 1, {
-      identifier: running_entry.identifier,
-      delay_type: continuation,
-      session_id: running_entry.session_id
-    })
+    if retry_slot_incumbent(state, issue_id) is nil:
+      state = schedule_retry(state, issue_id, 1, {
+        identifier: running_entry.identifier,
+        delay_type: continuation,
+        session_id: running_entry.session_id
+      })
+    # else: the retry slot (Section 7.5) is occupied, so this exit defers
+    # to the incumbent instead of scheduling a continuation.
 
     # Enqueue CI check when provider is configured and workspace has SCM metadata
     if ci_provider is not nil and workspace_path is not empty:
@@ -413,10 +416,13 @@ on_worker_exit(issue_id, reason, state):
               branch: scm.branch, sha: scm.sha
             }
   else:
-    state = schedule_retry(state, issue_id, next_attempt_from(running_entry), {
-      identifier: running_entry.identifier,
-      error: format("worker exited: %reason")
-    })
+    if retry_slot_incumbent(state, issue_id) is nil:
+      state = schedule_retry(state, issue_id, next_attempt_from(running_entry), {
+        identifier: running_entry.identifier,
+        error: format("worker exited: %reason")
+      })
+    # else: the retry slot (Section 7.5) is occupied, so this exit defers
+    # to the incumbent instead of scheduling a backoff retry.
 
   notify_observers()
   return state

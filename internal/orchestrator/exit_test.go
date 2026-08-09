@@ -5671,3 +5671,658 @@ func TestHandleWorkerExit_MergeCompletionEnqueue(t *testing.T) {
 		}
 	})
 }
+
+// --- Retry-slot arbitration: worker-exit incumbent protection ---
+
+// TestHandleWorkerExit_HandoffFailureDeferral covers the two handoff
+// branches that schedule a continuation on failure: the nil-adapter
+// branch and the transition-failure branch. Both must defer to a
+// foreign incumbent instead of scheduling their own retry.
+func TestHandleWorkerExit_HandoffFailureDeferral(t *testing.T) {
+	t.Parallel()
+
+	t.Run("nil adapter branch defers to a foreign incumbent", func(t *testing.T) {
+		t.Parallel()
+
+		const issueID = "HO-NIL-DEFER"
+		store := &mockExitStore{}
+		state := exitStateWithIssue(t, issueID, "In Progress")
+		state.RetryAttempts[issueID] = &RetryEntry{
+			IssueID:      issueID,
+			Attempt:      7,
+			ReactionKind: ReactionKindCI,
+		}
+		spy := &spyMetrics{}
+		params := defaultExitParams(t, store)
+		params.HandoffState = "Human Review"
+		params.ActiveStates = []string{"In Progress"}
+		params.Metrics = spy
+		// TrackerAdapter left nil.
+
+		HandleWorkerExit(state, WorkerResult{
+			IssueID:      issueID,
+			Identifier:   issueID + "-ident",
+			ExitKind:     WorkerExitNormal,
+			AgentAdapter: "mock",
+		}, params)
+
+		incumbent, ok := state.RetryAttempts[issueID]
+		if !ok {
+			t.Fatal("incumbent removed on a deferral, want preserved")
+		}
+		if incumbent.Attempt != 7 {
+			t.Errorf("RetryAttempts.Attempt = %d, want 7 (unchanged)", incumbent.Attempt)
+		}
+		if incumbent.ReactionKind != ReactionKindCI {
+			t.Errorf("RetryAttempts.ReactionKind = %q, want %q (unchanged)", incumbent.ReactionKind, ReactionKindCI)
+		}
+		if _, ok := state.Claimed[issueID]; !ok {
+			t.Error("claim released on a deferral, want held")
+		}
+		if len(spy.retries) != 0 {
+			t.Errorf("retries = %v, want [] (triggerContinuation must not fire on a deferral)", spy.retries)
+		}
+		if len(spy.handoffTransitions) != 1 || spy.handoffTransitions[0] != handoffError {
+			t.Errorf("handoffTransitions = %v, want [%s]", spy.handoffTransitions, handoffError)
+		}
+	})
+
+	t.Run("transition-failure branch defers to a foreign incumbent", func(t *testing.T) {
+		t.Parallel()
+
+		const issueID = "HO-TXNFAIL-DEFER"
+		store := &mockExitStore{}
+		tracker := &mockTrackerAdapter{
+			transitionIssueFn: func(_ context.Context, _, _ string) error {
+				return errors.New("permission denied")
+			},
+		}
+		state := exitStateWithIssue(t, issueID, "In Progress")
+		state.RetryAttempts[issueID] = &RetryEntry{
+			IssueID:      issueID,
+			Attempt:      3,
+			ReactionKind: ReactionKindReview,
+		}
+		spy := &spyMetrics{}
+		params := defaultExitParams(t, store)
+		params.TrackerAdapter = tracker
+		params.HandoffState = "Human Review"
+		params.ActiveStates = []string{"In Progress"}
+		params.Metrics = spy
+
+		HandleWorkerExit(state, WorkerResult{
+			IssueID:      issueID,
+			Identifier:   issueID + "-ident",
+			ExitKind:     WorkerExitNormal,
+			AgentAdapter: "mock",
+		}, params)
+
+		incumbent, ok := state.RetryAttempts[issueID]
+		if !ok {
+			t.Fatal("incumbent removed on a deferral, want preserved")
+		}
+		if incumbent.Attempt != 3 {
+			t.Errorf("RetryAttempts.Attempt = %d, want 3 (unchanged)", incumbent.Attempt)
+		}
+		if _, ok := state.Claimed[issueID]; !ok {
+			t.Error("claim released on a deferral, want held")
+		}
+		if len(spy.retries) != 0 {
+			t.Errorf("retries = %v, want [] (triggerContinuation must not fire on a deferral)", spy.retries)
+		}
+		if len(spy.handoffTransitions) != 1 || spy.handoffTransitions[0] != handoffError {
+			t.Errorf("handoffTransitions = %v, want [%s]", spy.handoffTransitions, handoffError)
+		}
+	})
+}
+
+// TestHandleWorkerExit_ActiveIssueContinuationDeferral covers the
+// active-issue continuation branch: a foreign incumbent survives
+// unchanged, no continuation retry counter fires, the claim stays held,
+// no retry entry is persisted for this exit, and the completion comment
+// still reports re-queuing even though this exit scheduled nothing.
+func TestHandleWorkerExit_ActiveIssueContinuationDeferral(t *testing.T) {
+	t.Parallel()
+
+	const issueID = "R17-DEFER"
+	store := &mockExitStore{}
+	tracker := &mockTrackerAdapter{}
+	spy := newCommentAwareMetrics()
+	state := exitStateWithIssue(t, issueID, "In Progress")
+	state.RetryAttempts[issueID] = &RetryEntry{
+		IssueID:      issueID,
+		Attempt:      6,
+		DueAtMS:      987654,
+		ReactionKind: ReactionKindCI,
+	}
+	params := exitParamsWithComments(t, store, tracker, config.TrackerCommentsConfig{OnCompletion: true})
+	params.Metrics = spy
+
+	HandleWorkerExit(state, WorkerResult{
+		IssueID:      issueID,
+		Identifier:   issueID + "-ident",
+		ExitKind:     WorkerExitNormal,
+		AgentAdapter: "mock",
+	}, params)
+
+	spy.waitComment(t)
+
+	incumbent, ok := state.RetryAttempts[issueID]
+	if !ok {
+		t.Fatal("incumbent removed on a deferral, want preserved")
+	}
+	if incumbent.ReactionKind != ReactionKindCI {
+		t.Errorf("RetryAttempts.ReactionKind = %q, want %q", incumbent.ReactionKind, ReactionKindCI)
+	}
+	if incumbent.DueAtMS != 987654 {
+		t.Errorf("RetryAttempts.DueAtMS = %d, want 987654 (unchanged)", incumbent.DueAtMS)
+	}
+	if len(spy.retries) != 0 {
+		t.Errorf("retries = %v, want [] (triggerContinuation must not fire on a deferral)", spy.retries)
+	}
+	if _, ok := state.Claimed[issueID]; !ok {
+		t.Error("claim released on a deferral, want held")
+	}
+	if len(store.retryEntries) != 0 {
+		t.Errorf("SaveRetryEntry called %d times, want 0 (this exit scheduled nothing)", len(store.retryEntries))
+	}
+	if len(tracker.commentCalls) != 1 {
+		t.Fatalf("CommentIssue call count = %d, want 1", len(tracker.commentCalls))
+	}
+	if !strings.HasPrefix(tracker.commentCalls[0].Text, "Sortie session completed (re-queuing).") {
+		t.Errorf("completion comment = %q, want prefix %q", tracker.commentCalls[0].Text, "Sortie session completed (re-queuing).")
+	}
+}
+
+// TestHandleWorkerExit_NonActiveDefaultDeferral covers the non-active
+// default branch: a foreign incumbent survives and the claim stays
+// held instead of being released.
+func TestHandleWorkerExit_NonActiveDefaultDeferral(t *testing.T) {
+	t.Parallel()
+
+	const issueID = "R18-DEFER"
+	store := &mockExitStore{}
+	state := exitStateWithIssue(t, issueID, "Some Other State")
+	state.RetryAttempts[issueID] = &RetryEntry{
+		IssueID:      issueID,
+		Attempt:      2,
+		ReactionKind: ReactionKindCI,
+	}
+	params := defaultExitParams(t, store)
+	params.ActiveStates = []string{"In Progress"}
+
+	HandleWorkerExit(state, WorkerResult{
+		IssueID:      issueID,
+		Identifier:   issueID + "-ident",
+		ExitKind:     WorkerExitNormal,
+		AgentAdapter: "mock",
+	}, params)
+
+	if _, ok := state.RetryAttempts[issueID]; !ok {
+		t.Error("ci entry removed by the non-active default branch, want preserved")
+	}
+	if _, ok := state.Claimed[issueID]; !ok {
+		t.Error("claim released by the non-active default branch, want held")
+	}
+}
+
+// TestHandleWorkerExit_RetryableErrorDeferral covers the retryable-error
+// branch: a foreign incumbent survives with its own attempt, the error
+// retry counter does not fire, the claim stays held, and the failure
+// comment reports the incumbent's own attempt number.
+func TestHandleWorkerExit_RetryableErrorDeferral(t *testing.T) {
+	t.Parallel()
+
+	const issueID = "R19-DEFER"
+	store := &mockExitStore{}
+	tracker := &mockTrackerAdapter{}
+	spy := newCommentAwareMetrics()
+	state := exitState(t, issueID, nil)
+	state.RetryAttempts[issueID] = &RetryEntry{
+		IssueID:      issueID,
+		Attempt:      5,
+		ReactionKind: ReactionKindReview,
+	}
+	params := exitParamsWithComments(t, store, tracker, config.TrackerCommentsConfig{OnFailure: true})
+	params.Metrics = spy
+
+	turnTimeoutErr := &domain.AgentError{Kind: domain.ErrTurnTimeout, Message: "timed out"}
+
+	HandleWorkerExit(state, WorkerResult{
+		IssueID:      issueID,
+		Identifier:   issueID + "-ident",
+		ExitKind:     WorkerExitError,
+		Error:        turnTimeoutErr,
+		AgentAdapter: "mock",
+	}, params)
+
+	spy.waitComment(t)
+
+	incumbent, ok := state.RetryAttempts[issueID]
+	if !ok {
+		t.Fatal("incumbent removed on a deferral, want preserved")
+	}
+	if incumbent.Attempt != 5 {
+		t.Errorf("RetryAttempts.Attempt = %d, want 5 (unchanged)", incumbent.Attempt)
+	}
+	if incumbent.ReactionKind != ReactionKindReview {
+		t.Errorf("RetryAttempts.ReactionKind = %q, want %q", incumbent.ReactionKind, ReactionKindReview)
+	}
+	if len(spy.retries) != 0 {
+		t.Errorf("retries = %v, want [] (the error retry counter must not fire on a deferral)", spy.retries)
+	}
+	if _, ok := state.Claimed[issueID]; !ok {
+		t.Error("claim released on a deferral, want held")
+	}
+	if len(tracker.commentCalls) != 1 {
+		t.Fatalf("CommentIssue call count = %d, want 1", len(tracker.commentCalls))
+	}
+	if !strings.Contains(tracker.commentCalls[0].Text, "Retry: yes (attempt 5)") {
+		t.Errorf("failure comment = %q, want to contain %q", tracker.commentCalls[0].Text, "Retry: yes (attempt 5)")
+	}
+}
+
+// TestHandleWorkerExit_StopSignalDispositionsDestroyForeignIncumbent
+// covers the six stop-signal dispositions that keep their destructive
+// behavior even against a foreign incumbent: blocked soft stop,
+// terminal observation, any other soft stop, the nil-adapter handoff
+// soft stop, a verified-terminal handoff observation, and a
+// transition-failure handoff soft stop.
+func TestHandleWorkerExit_StopSignalDispositionsDestroyForeignIncumbent(t *testing.T) {
+	t.Parallel()
+
+	type stopCase struct {
+		name       string
+		issueID    string
+		issueState string
+		build      func(t *testing.T, store *mockExitStore) (HandleWorkerExitParams, WorkerResult)
+	}
+
+	cases := []stopCase{
+		{
+			name:       "blocked soft stop",
+			issueID:    "STOP-BLOCKED",
+			issueState: "In Progress",
+			build: func(t *testing.T, store *mockExitStore) (HandleWorkerExitParams, WorkerResult) {
+				t.Helper()
+				params := defaultExitParams(t, store)
+				params.ActiveStates = []string{"In Progress"}
+				return params, WorkerResult{
+					IssueID:        "STOP-BLOCKED",
+					Identifier:     "STOP-BLOCKED-ident",
+					ExitKind:       WorkerExitNormal,
+					AgentAdapter:   "mock",
+					SoftStop:       true,
+					SoftStopReason: "blocked",
+				}
+			},
+		},
+		{
+			name:       "terminal observation",
+			issueID:    "STOP-TERMINAL",
+			issueState: "ai:in-progress",
+			build: func(t *testing.T, store *mockExitStore) (HandleWorkerExitParams, WorkerResult) {
+				t.Helper()
+				params := defaultExitParams(t, store)
+				params.ActiveStates = []string{"ai:ready", "ai:in-progress"}
+				params.TerminalStates = []string{"ai:done", "ai:cancelled"}
+				return params, WorkerResult{
+					IssueID:            "STOP-TERMINAL",
+					Identifier:         "STOP-TERMINAL-ident",
+					ExitKind:           WorkerExitNormal,
+					AgentAdapter:       "mock",
+					ObservedIssueState: "ai:cancelled",
+				}
+			},
+		},
+		{
+			name:       "other soft stop",
+			issueID:    "STOP-OTHER",
+			issueState: "In Progress",
+			build: func(t *testing.T, store *mockExitStore) (HandleWorkerExitParams, WorkerResult) {
+				t.Helper()
+				params := defaultExitParams(t, store)
+				params.ActiveStates = []string{"In Progress"}
+				return params, WorkerResult{
+					IssueID:        "STOP-OTHER",
+					Identifier:     "STOP-OTHER-ident",
+					ExitKind:       WorkerExitNormal,
+					AgentAdapter:   "mock",
+					SoftStop:       true,
+					SoftStopReason: "needs-human-review",
+				}
+			},
+		},
+		{
+			name:       "nil-adapter handoff soft stop",
+			issueID:    "STOP-NILADAPTER",
+			issueState: "In Progress",
+			build: func(t *testing.T, store *mockExitStore) (HandleWorkerExitParams, WorkerResult) {
+				t.Helper()
+				params := defaultExitParams(t, store)
+				params.ActiveStates = []string{"In Progress"}
+				params.HandoffState = "Human Review"
+				return params, WorkerResult{
+					IssueID:        "STOP-NILADAPTER",
+					Identifier:     "STOP-NILADAPTER-ident",
+					ExitKind:       WorkerExitNormal,
+					AgentAdapter:   "mock",
+					SoftStop:       true,
+					SoftStopReason: "needs-human-review",
+				}
+			},
+		},
+		{
+			name:       "verified-terminal handoff observation",
+			issueID:    "STOP-VERIFIED",
+			issueState: "ai:in-progress",
+			build: func(t *testing.T, store *mockExitStore) (HandleWorkerExitParams, WorkerResult) {
+				t.Helper()
+				tracker := &mockTrackerAdapter{
+					fetchStatesFn: func(_ context.Context, ids []string) (map[string]string, error) {
+						result := make(map[string]string, len(ids))
+						for _, id := range ids {
+							result[id] = "ai:cancelled"
+						}
+						return result, nil
+					},
+				}
+				params := defaultExitParams(t, store)
+				params.TrackerAdapter = tracker
+				params.ActiveStates = []string{"ai:ready", "ai:in-progress"}
+				params.TerminalStates = []string{"ai:done", "ai:cancelled"}
+				params.HandoffState = "ai:in-review"
+				return params, WorkerResult{
+					IssueID:            "STOP-VERIFIED",
+					Identifier:         "STOP-VERIFIED-ident",
+					ExitKind:           WorkerExitNormal,
+					AgentAdapter:       "mock",
+					ObservedIssueState: "ai:in-progress",
+				}
+			},
+		},
+		{
+			name:       "transition-failure handoff soft stop",
+			issueID:    "STOP-TXNFAIL",
+			issueState: "In Progress",
+			build: func(t *testing.T, store *mockExitStore) (HandleWorkerExitParams, WorkerResult) {
+				t.Helper()
+				tracker := &mockTrackerAdapter{
+					transitionIssueFn: func(_ context.Context, _, _ string) error {
+						return errors.New("permission denied")
+					},
+				}
+				params := defaultExitParams(t, store)
+				params.TrackerAdapter = tracker
+				params.ActiveStates = []string{"In Progress"}
+				params.HandoffState = "Human Review"
+				return params, WorkerResult{
+					IssueID:        "STOP-TXNFAIL",
+					Identifier:     "STOP-TXNFAIL-ident",
+					ExitKind:       WorkerExitNormal,
+					AgentAdapter:   "mock",
+					SoftStop:       true,
+					SoftStopReason: "needs-human-review",
+				}
+			},
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			store := &mockExitStore{}
+			state := exitStateWithIssue(t, tc.issueID, tc.issueState)
+			state.RetryAttempts[tc.issueID] = &RetryEntry{
+				IssueID:      tc.issueID,
+				Attempt:      9,
+				ReactionKind: ReactionKindCI,
+			}
+			params, result := tc.build(t, store)
+
+			HandleWorkerExit(state, result, params)
+
+			if _, ok := state.RetryAttempts[tc.issueID]; ok {
+				t.Error("RetryAttempts entry survived a stop-signal disposition, want destroyed even against a foreign incumbent")
+			}
+			if _, ok := state.Claimed[tc.issueID]; ok {
+				t.Error("Claimed entry survived a stop-signal disposition, want released even against a foreign incumbent")
+			}
+		})
+	}
+
+	t.Run("blocked soft stop destroys a label-review incumbent too", func(t *testing.T) {
+		t.Parallel()
+
+		const issueID = "STOP-LABELREVIEW"
+		store := &mockExitStore{}
+		state := exitStateWithIssue(t, issueID, "In Progress")
+		state.RetryAttempts[issueID] = &RetryEntry{
+			IssueID:      issueID,
+			Attempt:      1,
+			ReactionKind: ReactionKindLabelReview,
+		}
+		params := defaultExitParams(t, store)
+		params.ActiveStates = []string{"In Progress"}
+
+		HandleWorkerExit(state, WorkerResult{
+			IssueID:        issueID,
+			Identifier:     issueID + "-ident",
+			ExitKind:       WorkerExitNormal,
+			AgentAdapter:   "mock",
+			SoftStop:       true,
+			SoftStopReason: "blocked",
+		}, params)
+
+		if _, ok := state.RetryAttempts[issueID]; ok {
+			t.Error("label-review RetryAttempts entry survived a blocked soft stop, want destroyed")
+		}
+		if _, ok := state.Claimed[issueID]; ok {
+			t.Error("Claimed entry survived a blocked soft stop, want released")
+		}
+	})
+}
+
+// TestHandleWorkerExit_SuccessfulHandoffPreservesIncumbent covers the
+// successful-transition arm of the handoff disposition: a foreign
+// incumbent is preserved rather than cancelled, the claim stays held,
+// and the incumbent's own timer later dispatches from the handoff
+// state. The free-slot case is the unaffected control.
+func TestHandleWorkerExit_SuccessfulHandoffPreservesIncumbent(t *testing.T) {
+	t.Parallel()
+
+	t.Run("slot occupied: incumbent preserved, claim held, then dispatches from the handoff state", func(t *testing.T) {
+		t.Parallel()
+
+		const issueID = "HO-PRESERVE"
+		store := &mockExitStore{}
+		tracker := &mockTrackerAdapter{}
+		state := exitStateWithIssue(t, issueID, "In Progress")
+		state.RetryAttempts[issueID] = &RetryEntry{
+			IssueID:      issueID,
+			Attempt:      4,
+			DueAtMS:      123456,
+			ReactionKind: ReactionKindCI,
+		}
+		spy := &spyMetrics{}
+		params := defaultExitParams(t, store)
+		params.TrackerAdapter = tracker
+		params.HandoffState = "Human Review"
+		params.ActiveStates = []string{"In Progress"}
+		params.Metrics = spy
+
+		HandleWorkerExit(state, WorkerResult{
+			IssueID:      issueID,
+			Identifier:   issueID + "-ident",
+			ExitKind:     WorkerExitNormal,
+			AgentAdapter: "mock",
+		}, params)
+
+		if len(tracker.transitionCalls) != 1 {
+			t.Fatalf("TransitionIssue called %d times, want 1", len(tracker.transitionCalls))
+		}
+		if tracker.transitionCalls[0].TargetState != "Human Review" {
+			t.Errorf("TransitionIssue TargetState = %q, want %q", tracker.transitionCalls[0].TargetState, "Human Review")
+		}
+		if len(spy.handoffTransitions) != 1 || spy.handoffTransitions[0] != handoffSuccess {
+			t.Errorf("handoffTransitions = %v, want [%s]", spy.handoffTransitions, handoffSuccess)
+		}
+		incumbent, ok := state.RetryAttempts[issueID]
+		if !ok {
+			t.Fatal("incumbent removed after a successful handoff transition, want preserved")
+		}
+		if incumbent.ReactionKind != ReactionKindCI {
+			t.Errorf("RetryAttempts.ReactionKind = %q, want %q", incumbent.ReactionKind, ReactionKindCI)
+		}
+		if incumbent.Attempt != 4 {
+			t.Errorf("RetryAttempts.Attempt = %d, want 4 (unchanged)", incumbent.Attempt)
+		}
+		if incumbent.DueAtMS != 123456 {
+			t.Errorf("RetryAttempts.DueAtMS = %d, want 123456 (unchanged)", incumbent.DueAtMS)
+		}
+		if _, ok := state.Claimed[issueID]; !ok {
+			t.Error("claim released after a successful handoff transition with an incumbent, want held")
+		}
+
+		// Firing the incumbent's own timer against a tracker reporting the
+		// handoff state must dispatch: isActive is false, isKnownReaction
+		// is true, isHandoff is true, so HandleRetryTimer falls through to
+		// dispatch instead of taking a paused-reschedule arm.
+		retryStore := &mockRetryStore{}
+		retryTracker := &mockRetryTracker{
+			fetchedIssue: candidateIssue(issueID, issueID+"-ident", "Human Review"),
+		}
+		retryParams := defaultRetryParams(t, retryStore, retryTracker)
+		retryParams.HandoffState = "Human Review"
+
+		HandleRetryTimer(state, issueID, retryParams)
+
+		if _, running := state.Running[issueID]; !running {
+			t.Error("the CI-fix incumbent did not dispatch from the handoff state, want running")
+		}
+	})
+
+	t.Run("slot free: claim released, matching current behavior", func(t *testing.T) {
+		t.Parallel()
+
+		const issueID = "HO-FREE-CONTROL"
+		store := &mockExitStore{}
+		tracker := &mockTrackerAdapter{}
+		state := exitStateWithIssue(t, issueID, "In Progress")
+		params := defaultExitParams(t, store)
+		params.TrackerAdapter = tracker
+		params.HandoffState = "Human Review"
+		params.ActiveStates = []string{"In Progress"}
+
+		HandleWorkerExit(state, WorkerResult{
+			IssueID:      issueID,
+			Identifier:   issueID + "-ident",
+			ExitKind:     WorkerExitNormal,
+			AgentAdapter: "mock",
+		}, params)
+
+		if _, ok := state.Claimed[issueID]; ok {
+			t.Error("claim preserved after a successful handoff transition with a free slot, want released")
+		}
+		if _, ok := state.RetryAttempts[issueID]; ok {
+			t.Error("retry entry present after a free-slot successful handoff, want none")
+		}
+	})
+}
+
+// TestHandleWorkerExit_LabelReviewExitDoesNotWidenReactionSeeding covers
+// R28: retaining the claim to protect an incumbent on the non-active
+// default branch must not widen which reaction kinds a read-only
+// label-review exit seeds. Every reaction kind is configured and the
+// workspace carries full PR metadata, so the only variable between the
+// two subtests is whether the retry slot is occupied.
+func TestHandleWorkerExit_LabelReviewExitDoesNotWidenReactionSeeding(t *testing.T) {
+	t.Parallel()
+
+	buildParams := func(t *testing.T, store *mockExitStore) HandleWorkerExitParams {
+		t.Helper()
+		params := defaultExitParams(t, store)
+		params.ActiveStates = []string{"In Progress"}
+		params.CIProvider = &ciProviderStubExit{}
+		params.SCMAdapter = &scmAdapterStubExit{}
+		params.AutoMergeReactionConfigured = true
+		params.BotReviewReactionConfigured = true
+		params.MergeConflictReactionConfigured = true
+		params.LabelReviewReactionConfigured = true
+		params.LabelFixReactionConfigured = true
+		params.MergeCompletionReactionConfigured = true
+		return params
+	}
+
+	t.Run("slot occupied: incumbent survives, no PendingReactions gained", func(t *testing.T) {
+		t.Parallel()
+
+		const issueID = "LR-WIDEN-OCCUPIED"
+		wsPath := t.TempDir()
+		writePRSCMMetadata(t, wsPath, 55, "acme", "widgets", "feature/lr", "sha-lr")
+
+		store := &mockExitStore{}
+		state := exitStateWithIssue(t, issueID, "In Progress")
+		state.Running[issueID].ReactionKind = ReactionKindLabelReview
+		state.RetryAttempts[issueID] = &RetryEntry{
+			IssueID:      issueID,
+			Attempt:      2,
+			ReactionKind: ReactionKindCI,
+		}
+		params := buildParams(t, store)
+
+		HandleWorkerExit(state, WorkerResult{
+			IssueID:       issueID,
+			Identifier:    issueID + "-ident",
+			ExitKind:      WorkerExitNormal,
+			AgentAdapter:  "mock",
+			WorkspacePath: wsPath,
+		}, params)
+
+		incumbent, ok := state.RetryAttempts[issueID]
+		if !ok {
+			t.Fatal("incumbent removed by a label-review exit, want preserved")
+		}
+		if incumbent.ReactionKind != ReactionKindCI {
+			t.Errorf("RetryAttempts.ReactionKind = %q, want %q", incumbent.ReactionKind, ReactionKindCI)
+		}
+		if _, ok := state.Claimed[issueID]; !ok {
+			t.Error("claim released by a label-review exit with an occupied slot, want held")
+		}
+		if len(state.PendingReactions) != 0 {
+			t.Errorf("PendingReactions count = %d, want 0 (no reaction kind may be seeded by a label-review exit)", len(state.PendingReactions))
+		}
+	})
+
+	t.Run("slot free: entry cancelled, claim released, still no PendingReactions gained", func(t *testing.T) {
+		t.Parallel()
+
+		const issueID = "LR-WIDEN-FREE"
+		wsPath := t.TempDir()
+		writePRSCMMetadata(t, wsPath, 56, "acme", "widgets", "feature/lr2", "sha-lr2")
+
+		store := &mockExitStore{}
+		state := exitStateWithIssue(t, issueID, "In Progress")
+		state.Running[issueID].ReactionKind = ReactionKindLabelReview
+		params := buildParams(t, store)
+
+		HandleWorkerExit(state, WorkerResult{
+			IssueID:       issueID,
+			Identifier:    issueID + "-ident",
+			ExitKind:      WorkerExitNormal,
+			AgentAdapter:  "mock",
+			WorkspacePath: wsPath,
+		}, params)
+
+		if _, ok := state.RetryAttempts[issueID]; ok {
+			t.Error("retry entry present after a free-slot label-review exit, want none")
+		}
+		if _, ok := state.Claimed[issueID]; ok {
+			t.Error("claim preserved after a free-slot label-review exit, want released")
+		}
+		if len(state.PendingReactions) != 0 {
+			t.Errorf("PendingReactions count = %d, want 0 (no reaction kind may be seeded by a label-review exit)", len(state.PendingReactions))
+		}
+	})
+}

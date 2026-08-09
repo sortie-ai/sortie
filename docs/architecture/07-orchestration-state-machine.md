@@ -86,19 +86,30 @@ Distinct terminal reasons are important because retry logic and logs differ.
        made about this issue; overwriting it with the handoff state would undo it.
     3. A handoff state is configured, the issue is still in an active state, the exit is not a
        blocked soft stop, and the dispatch drives issue state. Perform the handoff transition
-       (Section 11.5) and release the claim. On transition failure, a soft-stop exit releases the
-       claim and a non-soft-stop exit schedules the continuation retry instead.
+       (Section 11.5). On a successful transition, release the claim, unless the retry slot
+       (Section 7.5) is occupied by an incumbent, in which case the incumbent is kept and the
+       claim stays so the poll loop cannot clear it. On transition failure, a soft-stop exit
+       releases the claim; a non-soft-stop exit schedules the continuation retry instead, unless
+       the retry slot is already occupied, in which case the exit defers to the incumbent.
     4. Any other soft stop. Suppress the continuation retry, cancel any pending retry, and release
        the claim. An unrecognized soft-stop reason is logged before taking this path.
     5. The issue is still in an active state and the dispatch drives issue state. Schedule the
        continuation retry (attempt `1`) so the next tick can re-check whether the issue needs
-       another worker session.
+       another worker session, unless the retry slot is already occupied, in which case the exit
+       defers to the incumbent instead.
     6. Otherwise the issue is no longer in an active state. Cancel any pending retry and release
-       the claim.
+       the claim, unless the retry slot is occupied by a foreign incumbent, in which case the
+       incumbent is kept and the claim stays to protect it — this is exactly the population
+       mid-session-queued retries need protected, since the issue may have left the active states
+       while a sibling reaction was still queued for it.
   - Reaction entries are enqueued only when the issue was claimed at the moment of exit, the exit
     either took the handoff disposition or left the issue still claimed, and the exit was not
-    suppressed by a terminal observation. A label-command dispatch never satisfies this predicate,
-    because it is excluded from the handoff disposition and releases its claim.
+    suppressed by a terminal observation. Because dispositions 3 and 6 can now retain the claim
+    solely to protect a foreign retry-slot incumbent, the predicate is evaluated as if that claim
+    had been released whenever it is retained for that reason alone, so protecting an incumbent
+    never widens which reaction kinds a later exit seeds. A label-command dispatch still never
+    satisfies this predicate: it takes disposition 6, and under this rule its retained claim
+    counts as released for the predicate's purposes exactly as an ordinary released claim would.
   - Subject to that predicate, each configured reaction kind records its own pending entry when
     the workspace SCM metadata (§9.5) satisfies that kind's field requirements. The kinds are
     independent: several fire from one exit. Every kind except the CI kind creates its entry only
@@ -109,7 +120,8 @@ Distinct terminal reasons are important because retry logic and logs differ.
   - Remove running entry.
   - Update aggregate runtime totals.
   - Persist completed run attempt to SQLite.
-  - Schedule exponential-backoff retry.
+  - Schedule an exponential-backoff retry when the retry slot (Section 7.5) is free; defer to the
+    incumbent already occupying it otherwise, keeping the claim.
 
 - `Agent Update Event`
   - Update live session fields, token counters, and rate limits.
@@ -121,14 +133,16 @@ Distinct terminal reasons are important because retry logic and logs differ.
   - Stop runs whose issue states are terminal or no longer active.
 
 - `Stall Timeout`
-  - Kill worker and schedule retry.
+  - Kill the worker unconditionally, then either schedule an exponential-backoff retry when the
+    retry slot (Section 7.5) is free, or defer to the incumbent already occupying it.
 
 - `CI Status Failing`
-  - Persist CI failure run history.
-  - Increment CI fix attempt counter.
-  - If within `ci_feedback.max_retries` (or `reactions.ci_failure.max_retries`): cancel the
-    existing continuation retry, schedule a CI-fix dispatch with failure context injected into
-    the prompt.
+  - Consult the retry slot (Section 7.5) first. If an incumbent occupies it, defer: re-enqueue the
+    pending entry with a refreshed `CreatedAt` and take none of the actions below on this tick —
+    no run-history row, no counter increment, no dispatch, and no escalation.
+  - On a free slot: persist CI failure run history and increment the CI fix attempt counter.
+  - If within `ci_feedback.max_retries` (or `reactions.ci_failure.max_retries`): schedule a CI-fix
+    dispatch with failure context injected into the prompt.
   - If retries exhausted: escalate (add label or post comment per escalation config),
     cancel retry, release claim.
 
@@ -136,9 +150,9 @@ Distinct terminal reasons are important because retry logic and logs differ.
   - Compute fingerprint from non-outdated review comment IDs.
   - If fingerprint is unchanged and already dispatched: skip.
   - If within debounce window: defer to next tick.
-  - If within `reactions.review_comments.max_continuation_turns`: cancel the existing
-    continuation retry, schedule a review-fix dispatch with review comment context injected
-    into the prompt.
+  - If within `reactions.review_comments.max_continuation_turns` and the retry slot is free:
+    schedule a review-fix dispatch with review comment context injected into the prompt. If the
+    slot is occupied by an incumbent, defer instead (Section 7.5).
   - If continuation turns exhausted: escalate (add label or post comment per escalation
     config), cancel retry, release claim.
 
@@ -185,4 +199,34 @@ Distinct terminal reasons are important because retry logic and logs differ.
   review pending entries for handoff-stage issues.
 6. Query tracker for active issues and reconcile with persisted state.
 7. Begin normal polling loop.
+
+### 7.5 Retry-Slot Arbitration
+
+`retry_attempts` holds at most one entry per issue: the retry slot. The entry's reaction kind
+records the owner, with the empty string meaning the orchestrator's own continuation lane. Every
+code path that wants to schedule a retry for an issue (a challenger) checks whether the slot is
+occupied before writing. A non-nil occupant (the incumbent) means another unit of work already
+owns the issue's next dispatch; the challenger defers instead of overwriting it, leaving the
+incumbent untouched and making no other state mutation. The rule keys on occupancy alone: it does
+not compare owners, rank reaction kinds, or preempt.
+
+Only two writers are exempt from checking first, because each frees the slot itself immediately
+before writing back into it: the retry-timer handler's inner reschedule, which pops and deletes
+the entry it is replacing before rescheduling it, and the overdue-retry re-arm pass (below), which
+cancels the same entry before re-arming it with a zero delay. Every other writer is admitted only
+into a free slot.
+
+Two liveness bounds keep an arbitrated slot from being held for the process lifetime:
+
+- A reaction retry that the issue's own current state does not permit to dispatch is rescheduled
+  with backoff, but only for as long as it has been pausing consecutively for that reason. Once
+  that dwell reaches 30 minutes, the entry is dropped instead of rescheduled, its persisted row
+  deleted, the claim released, and a warning logged naming the kind and how long it had paused.
+  The dwell resets whenever the entry is held for any other reason, so an otherwise healthy retry
+  is never penalized for an unrelated pause.
+- A retry entry whose timer event was dropped (Section 8.4) never fires again on its own. A
+  reconcile pass detects any entry whose due time is more than 60 seconds in the past and still
+  carries an active timer handle, and re-arms it with a zero delay, changing nothing about the
+  entry but its timer. A retry reconstructed at startup and still awaiting its first activation is
+  excluded from this pass, so a restart alone never produces the re-arm warning.
 

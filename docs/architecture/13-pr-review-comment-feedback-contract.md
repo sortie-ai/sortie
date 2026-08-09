@@ -100,8 +100,10 @@ CI status reconciliation. The flow is:
       matches and is marked dispatched: skip, re-enqueue with poll interval delay.
    j. If `now - LastEventAt < debounce_ms`: set `PendingRetryAt = LastEventAt + debounce_ms`,
       re-enqueue.
-   k. Cancel existing retry for the issue.
-   l. Schedule review-fix dispatch with `ContinuationContext{"review_comments": [...]}`.
+   k. Consult the retry slot (Section 7.5). A non-nil incumbent means the pass defers,
+      re-enqueuing the entry unchanged rather than dispatching.
+   l. On a free slot: schedule review-fix dispatch with
+      `ContinuationContext{"review_comments": [...]}`.
    m. Increment `reaction_attempts[issue_id:review]`.
    n. The fingerprint is marked dispatched in `reaction_fingerprints` later, in
       `HandleRetryTimer`, after the scheduled retry fires and dispatch succeeds.
@@ -111,8 +113,10 @@ CI status reconciliation. The flow is:
 When actionable review comments are detected and debounce has elapsed:
 
 1. Build a template map from actionable comments (Section 12.1).
-2. Cancel existing continuation retry for the issue.
-3. Schedule a review-fix dispatch carrying the review comment context via `ContinuationContext`.
+2. Consult the retry slot (Section 7.5). A non-nil incumbent means the pass defers instead of
+   dispatching, leaving the incumbent untouched.
+3. On a free slot: schedule a review-fix dispatch carrying the review comment context via
+   `ContinuationContext`.
 4. The worker injects the context into the prompt on turn 1 via `prompt.WithContinuationContext`.
 
 Review-fix dispatches count toward the regular retry machinery but use a fixed delay rather than

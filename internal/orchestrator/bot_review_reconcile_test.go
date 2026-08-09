@@ -1366,11 +1366,10 @@ func TestEscalateBotReviewFailure_DeleteFingerprintError(t *testing.T) {
 // The per-kind tracking state stays independent: each pass advances only its
 // own fingerprint row and attempt counter and consumes only its own pending
 // slot. The retry slot is shared: RetryAttempts is keyed by issue ID alone,
-// so the later bot-review pass overwrites the review pass's retry and only the
-// bot-review continuation survives the cycle. That overwrite does not strand
-// the review continuation, because its fingerprint stays undispatched and its
-// pending slot is recreated on the next worker exit, so it re-dispatches on a
-// later tick.
+// so the later bot-review pass finds the review retry occupying the slot and
+// defers to it instead of overwriting it. The deferral leaves the review
+// continuation as the incumbent and re-enqueues the bot-review pending entry
+// unconsumed, so bot-review re-detects on the next tick once the slot frees.
 func TestReconcileBotReviewComments_CoexistsWithReview(t *testing.T) {
 	t.Parallel()
 
@@ -1408,8 +1407,7 @@ func TestReconcileBotReviewComments_CoexistsWithReview(t *testing.T) {
 	reconcileReviewComments(state, params, discardLogger(), context.Background(), reviewMetrics)
 
 	// The review pass schedules its continuation retry in the issue-ID-keyed
-	// slot. Capture it to prove the bot-review pass overwrites it below, not to
-	// claim both retries survive the cycle.
+	// slot, becoming the incumbent the bot-review pass defers to below.
 	reviewRetry, reviewScheduled := state.RetryAttempts[issueID]
 	if !reviewScheduled {
 		t.Fatal("retry not scheduled after review dispatch; want scheduled")
@@ -1420,61 +1418,65 @@ func TestReconcileBotReviewComments_CoexistsWithReview(t *testing.T) {
 	if _, ok := reviewRetry.ContinuationContext["review_comments"]; !ok {
 		t.Error("review RetryEntry.ContinuationContext missing review_comments key")
 	}
+	reviewAttempt := reviewRetry.Attempt
 
 	reconcileBotReviewComments(state, params, discardLogger(), context.Background(), botMetrics)
 
-	// ScheduleRetry cancels the prior entry, so the bot-review pass replaces the
-	// review retry in the shared slot: only the bot-review continuation remains.
-	botRetry, botScheduled := state.RetryAttempts[issueID]
-	if !botScheduled {
-		t.Fatal("retry not scheduled after bot-review dispatch; want scheduled")
+	// The retry slot still holds the review incumbent, untouched by the
+	// deferring bot-review pass.
+	botRetry, stillScheduled := state.RetryAttempts[issueID]
+	if !stillScheduled {
+		t.Fatal("retry entry removed from slot; want review incumbent preserved")
 	}
-	if botRetry.ReactionKind != ReactionKindBotReview {
-		t.Errorf("bot-review RetryEntry.ReactionKind = %q, want %q", botRetry.ReactionKind, ReactionKindBotReview)
+	if botRetry != reviewRetry {
+		t.Error("RetryAttempts[issueID] replaced; want the original review entry preserved")
 	}
-	if _, ok := botRetry.ContinuationContext["bot_review_comments"]; !ok {
-		t.Error("bot-review RetryEntry.ContinuationContext missing bot_review_comments key")
+	if botRetry.ReactionKind != ReactionKindReview {
+		t.Errorf("RetryAttempts[issueID].ReactionKind = %q, want %q (review incumbent survives)", botRetry.ReactionKind, ReactionKindReview)
 	}
-	if botRetry == reviewRetry {
-		t.Error("RetryAttempts[issueID] = review entry, want bot-review entry (review retry overwritten)")
+	if botRetry.Attempt != reviewAttempt {
+		t.Errorf("RetryAttempts[issueID].Attempt = %d, want %d (unchanged by deferral)", botRetry.Attempt, reviewAttempt)
 	}
 	if len(state.RetryAttempts) != 1 {
-		t.Errorf("len(RetryAttempts) = %d, want 1 (review and bot-review share one issue-ID slot)", len(state.RetryAttempts))
+		t.Errorf("len(RetryAttempts) = %d, want 1 (bot-review defers instead of taking a second slot)", len(state.RetryAttempts))
 	}
 
 	if reviewMetrics.reviewChecks["dispatched"] != 1 {
 		t.Errorf(`IncReviewChecks("dispatched") = %d, want 1`, reviewMetrics.reviewChecks["dispatched"])
 	}
-	if botMetrics.botReviewChecks["dispatched"] != 1 {
-		t.Errorf(`IncBotReviewChecks("dispatched") = %d, want 1`, botMetrics.botReviewChecks["dispatched"])
+	if botMetrics.botReviewChecks["dispatched"] != 0 {
+		t.Errorf(`IncBotReviewChecks("dispatched") = %d, want 0 (deferred, not dispatched)`, botMetrics.botReviewChecks["dispatched"])
 	}
 	if state.ReactionAttempts[reviewKey] != 1 {
 		t.Errorf("ReactionAttempts[%s] = %d, want 1", reviewKey, state.ReactionAttempts[reviewKey])
 	}
-	if state.ReactionAttempts[botKey] != 1 {
-		t.Errorf("ReactionAttempts[%s] = %d, want 1", botKey, state.ReactionAttempts[botKey])
+	if _, ok := state.ReactionAttempts[botKey]; ok {
+		t.Errorf("ReactionAttempts[%s] present, want absent (deferral does not advance the counter)", botKey)
 	}
 
 	if _, ok := state.PendingReactions[reviewKey]; ok {
 		t.Error("review PendingReactions entry still present; want consumed by its own dispatch")
 	}
-	if _, ok := state.PendingReactions[botKey]; ok {
-		t.Error("bot-review PendingReactions entry still present; want consumed by its own dispatch")
+	botPending, botReenqueued := state.PendingReactions[botKey]
+	if !botReenqueued {
+		t.Fatal("bot-review PendingReactions entry missing; want re-enqueued by the deferral")
+	}
+	if botPending.CreatedAt != botReviewBaseTime {
+		t.Errorf("bot-review PendingReactions.CreatedAt = %v, want %v (refreshed to the tick's now)", botPending.CreatedAt, botReviewBaseTime)
 	}
 
 	reviewFingerprint := store.fingerprints[reviewKey].fingerprint
-	botFingerprint := store.fingerprints[botKey].fingerprint
 	if reviewFingerprint == "" {
 		t.Error("review fingerprint row is empty; want a non-empty hash after review dispatch")
 	}
-	if botFingerprint == "" {
-		t.Error("bot-review fingerprint row is empty; want a non-empty hash after bot-review dispatch")
-	}
-	if reviewFingerprint == botFingerprint {
-		t.Errorf("review and bot-review fingerprints both equal %q; want distinct values scoped to each kind", reviewFingerprint)
+	// The fingerprint upsert is per-tick bookkeeping that runs before the
+	// arbitration decision, so it still records the observed comment set;
+	// only the dispatched flag distinguishes a deferral from a dispatch.
+	if store.fingerprints[botKey].dispatched {
+		t.Error("bot-review fingerprint marked dispatched; want undispatched after a deferral")
 	}
 
 	if _, ok := state.Claimed[issueID]; !ok {
-		t.Error("state.Claimed[issueID] cleared during coexistence dispatch; want preserved")
+		t.Error("state.Claimed[issueID] cleared during deferral; want preserved")
 	}
 }

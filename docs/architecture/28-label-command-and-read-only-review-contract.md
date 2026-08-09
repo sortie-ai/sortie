@@ -164,18 +164,26 @@ Loop body per `label-review` entry in `pending_reactions`:
    unchanged.
 7. Compute the newest examined position. Collapse matching `labeled` events to at most one command
    and evaluate the retraction check.
-8. When a command is confirmed and no command of this kind is already queued or running: persist the
-   newest mark, then cancel any existing retry and schedule a fresh read-only dispatch carrying the
-   PR coordinates, then remove the label best-effort, then re-enqueue the entry at the next poll
-   interval.
-9. Otherwise (retraction, foreign labels, unlabeled-only, or collapse into an outstanding command):
-   persist the newest mark and re-enqueue at the poll interval without dispatching.
+8. When a command is confirmed, decide in this order:
+   a. A foreign-kind incumbent occupies the retry slot (Section 7.5): defer. Re-enqueue the entry
+      with the mark unchanged and `CreatedAt` refreshed to the tick's `now`; do not upsert the
+      mark, do not advance the high-water mark, and do not remove the label.
+   b. A same-kind incumbent occupies the slot, or a `label-review` worker is already running:
+      collapse. Persist the newest mark and re-enqueue at the poll interval without dispatching.
+   c. Otherwise: dispatch. Persist the newest mark, schedule a fresh read-only dispatch carrying
+      the PR coordinates into the slot the check above already confirmed free, remove the label
+      best-effort, and re-enqueue the entry at the next poll interval.
+9. When a command is not confirmed (retraction, foreign labels, or unlabeled-only): persist the
+   newest mark and re-enqueue at the poll interval without dispatching. This arm does not consult
+   the retry slot.
 
-The re-enqueue at step 8 is the property the sibling passes lack. Worker-exit seeding (§11F.9)
-cannot re-arm detection after a review completes, because a read-only exit never passes the
-reaction-enqueue gate. The pass instead keeps the detection entry alive across its own dispatch,
-carrying the PR identity in the entry's kind data, so a re-applied label after a completed review
-is detected on a later tick without a process restart.
+The re-enqueue at step 8c is the property the sibling passes lack. Worker-exit seeding (§11F.9)
+cannot re-arm detection after a review completes, because a read-only exit's claim, even when
+retained solely to protect a foreign retry-slot incumbent, is evaluated as released for the
+reaction-enqueue gate (Section 7.5), so a label-command dispatch never seeds any reaction kind.
+The pass instead keeps the detection entry alive across its own dispatch, carrying the PR identity
+in the entry's kind data, so a re-applied label after a completed review is detected on a later
+tick without a process restart.
 
 Cross-kind isolation: the pass MUST scope every `pending_reactions` and `reaction_fingerprints`
 mutation to `kind = "label-review"`. It MUST NOT read or write any other kind's entry, fingerprint,
@@ -455,9 +463,10 @@ Per-issue `label-review` reaction lifecycle (the `issue_id:label-review` slot):
 | pending | Reconcile tick, `now < PendingRetryAt` | pending | Re-enqueue, no journal read. |
 | pending | Reconcile tick, journal fetch error | pending | Increment backoff, set `PendingRetryAt`, re-enqueue. |
 | pending | Reconcile tick, no events past the mark | pending | Re-enqueue at the poll interval; mark unchanged. |
-| pending | Reconcile tick, new events but no confirmed command (retraction, foreign or unlabeled only, or collapse into an outstanding command) | pending | Advance the mark; re-enqueue at the poll interval; no dispatch. |
-| pending | Reconcile tick, confirmed command, none queued or running | dispatched | Advance the mark; schedule the read-only dispatch; remove the label best-effort; re-enqueue at the poll interval. |
+| pending | Reconcile tick, new events but no confirmed command (retraction, foreign or unlabeled only) | pending | Advance the mark; re-enqueue at the poll interval; no dispatch. |
+| pending | Reconcile tick, confirmed command, a foreign-kind incumbent occupies the retry slot (Section 7.5) | pending | Defer: re-enqueue with the mark unchanged and `CreatedAt` refreshed; no mark advance, no dispatch, no label removal. |
 | pending | Reconcile tick, confirmed command, a `label-review` command already queued or running | pending | Advance the mark; re-enqueue; the gesture collapses into the outstanding command. |
+| pending | Reconcile tick, confirmed command, retry slot free | dispatched | Advance the mark; schedule the read-only dispatch; remove the label best-effort; re-enqueue at the poll interval. |
 | pending | Issue reaches terminal state (tracker reconcile) | (none) | Drop the pending entry; cancel and delete the issue's retry; release the claim. Detection stops polling on the next tick. |
 
 Per-issue `label-fix` reaction lifecycle (the `issue_id:label-fix` slot) follows the same three
@@ -471,9 +480,10 @@ transition schedules:
 | pending | Reconcile tick, `now < PendingRetryAt` | pending | Re-enqueue, no journal read. |
 | pending | Reconcile tick, journal fetch error | pending | Increment backoff, set `PendingRetryAt`, re-enqueue. |
 | pending | Reconcile tick, no events past the mark | pending | Re-enqueue at the poll interval; mark unchanged. |
-| pending | Reconcile tick, new events but no confirmed command (retraction, foreign or unlabeled only, or collapse into an outstanding command) | pending | Advance the mark; re-enqueue at the poll interval; no dispatch. |
-| pending | Reconcile tick, confirmed command, none queued or running | dispatched | Advance the mark; schedule the fix dispatch (§11F.13); remove the label best-effort; re-enqueue at the poll interval. |
+| pending | Reconcile tick, new events but no confirmed command (retraction, foreign or unlabeled only) | pending | Advance the mark; re-enqueue at the poll interval; no dispatch. |
+| pending | Reconcile tick, confirmed command, a foreign-kind incumbent occupies the retry slot (Section 7.5) | pending | Defer: re-enqueue with the mark unchanged and `CreatedAt` refreshed; no mark advance, no dispatch, no label removal. |
 | pending | Reconcile tick, confirmed command, a `label-fix` command already queued or running | pending | Advance the mark; re-enqueue; the gesture collapses into the outstanding command. |
+| pending | Reconcile tick, confirmed command, retry slot free | dispatched | Advance the mark; schedule the fix dispatch (§11F.13); remove the label best-effort; re-enqueue at the poll interval. |
 | pending | Issue reaches terminal state (tracker reconcile) | (none) | Drop the pending entry; cancel and delete the issue's retry; release the claim. Detection stops polling on the next tick. |
 
 A PR record whose head branch is empty seeds and recovers no `label-fix` entry at all: the slot

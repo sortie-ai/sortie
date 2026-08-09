@@ -143,17 +143,21 @@ result (Section 11A.4) and during escalation (Section 11A.7).
 
 ### 11A.6 CI failure handling
 
-When CI status is `failing`:
+When CI status is `failing`, the pass first consults the retry slot (Section 7.5). A non-nil
+incumbent means the pass defers: it re-enqueues the pending entry unchanged except for a
+refreshed `CreatedAt`, and none of the steps below run for this tick — no run-history row is
+appended, no counter increments, and escalation is not evaluated.
+
+On a free slot:
 
 1. Persist a CI-failure run history entry (`status: ci_failed`).
 2. Increment `reaction_attempts[issue_id:ci]`.
 3. If `reaction_attempts[issue_id:ci]` exceeds `ci_feedback.max_retries`: escalate (Section 11A.7).
 4. Otherwise:
    a. Convert `CIResult` to a template map via `ToTemplateMap()`.
-   b. Cancel the existing continuation retry for the issue.
-   c. Schedule a CI-fix dispatch carrying the CI failure context. The retry entry's
+   b. Schedule a CI-fix dispatch carrying the CI failure context. The retry entry's
       `ContinuationContext` field carries the map through the timer to the worker goroutine.
-   d. The worker injects the context into the prompt on turn 1 via `prompt.WithContinuationContext`.
+   c. The worker injects the context into the prompt on turn 1 via `prompt.WithContinuationContext`.
 
 CI-fix dispatches count toward the regular retry machinery but use a fixed delay rather than
 exponential backoff.
