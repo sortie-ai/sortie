@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Follow-up work already queued for an issue is no longer discarded
+  when a second kind of follow-up becomes due for the same issue.
+  Sortie keeps one queued continuation per issue and the last writer
+  won silently, so a queued CI fix, review fix, bot-review fix,
+  post-merge-conflict rebase, or `sortie:review` / `sortie:fix` label
+  command could be dropped and never run, and a dropped continuation
+  could reappear after a restart. The losing side now waits and runs on
+  a later poll once the queued work has been dispatched; a label
+  command keeps its label on the pull request until it actually starts,
+  so an unremoved label means the command is accepted but not yet
+  running; and a worker finishing normally no longer cancels work
+  queued while it was running. Two cases that could otherwise hold the
+  queue indefinitely are now bounded and reported: a reaction for an
+  issue parked outside every configured state is dropped after 30
+  minutes with a warning naming the reaction kind and the issue state,
+  instead of retrying at the backoff ceiling for the life of the
+  process and blocking that issue's other reactions, and a retry whose
+  timer event was lost under load is re-armed on a later poll instead
+  of stalling.
+  ([#743](https://github.com/sortie-ai/sortie/issues/743))
+
 ## [1.18.0] - 2026-08-09
 
 ### Added
