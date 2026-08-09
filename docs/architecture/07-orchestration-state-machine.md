@@ -137,12 +137,12 @@ Distinct terminal reasons are important because retry logic and logs differ.
     retry slot (Section 7.5) is free, or defer to the incumbent already occupying it.
 
 - `CI Status Failing`
-  - Persist CI failure run history.
-  - Increment CI fix attempt counter.
-  - If within `ci_feedback.max_retries` (or `reactions.ci_failure.max_retries`) and the retry slot
-    is free: schedule a CI-fix dispatch with failure context injected into the prompt. If the slot
-    is occupied by an incumbent, defer instead (Section 7.5): the run-history row is still
-    appended and the attempt counter still increments, but nothing is scheduled.
+  - Consult the retry slot (Section 7.5) first. If an incumbent occupies it, defer: re-enqueue the
+    pending entry with a refreshed `CreatedAt` and take none of the actions below on this tick —
+    no run-history row, no counter increment, no dispatch, and no escalation.
+  - On a free slot: persist CI failure run history and increment the CI fix attempt counter.
+  - If within `ci_feedback.max_retries` (or `reactions.ci_failure.max_retries`): schedule a CI-fix
+    dispatch with failure context injected into the prompt.
   - If retries exhausted: escalate (add label or post comment per escalation config),
     cancel retry, release claim.
 
