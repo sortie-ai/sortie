@@ -1374,3 +1374,116 @@ func TestReconcileCIStatus_Failing_ExceedsMaxRetries_CrossKindIsolation(t *testi
 		t.Errorf("DeleteReactionFingerprint calls = %d, want 1 (the CI kind's own fingerprint)", store.deleteFingerprintCalls)
 	}
 }
+
+// --- Retry-slot arbitration tests ---
+
+// TestReconcileCIStatus_Failing_DeferralLeavesNoOrphanedRow seeds a
+// persisted retry row and a matching in-memory continuation entry, then
+// drives the CI pass with a failing status for the same issue. The
+// continuation entry must stay the incumbent, no ci retry may replace
+// it, and the persisted row must be left exactly as seeded: a
+// displacement that cancelled the in-memory entry without deleting its
+// persisted row would leave an orphan, which this test would catch via
+// LoadRetryEntries.
+func TestReconcileCIStatus_Failing_DeferralLeavesNoOrphanedRow(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	store := openInMemoryStore(t)
+
+	const issueID = "ISS-CI-ORPHAN"
+	seeded := persistence.RetryEntry{
+		IssueID:    issueID,
+		Identifier: issueID + "-ident",
+		Attempt:    5,
+		DueAtMs:    ciBaseTime.UnixMilli() + 60_000,
+	}
+	if err := store.SaveRetryEntry(ctx, seeded); err != nil {
+		t.Fatalf("SaveRetryEntry: %v", err)
+	}
+
+	state := stateWithPendingReaction(t, issueID, "feature/orphan", 1)
+	state.RetryAttempts[issueID] = &RetryEntry{
+		IssueID:    issueID,
+		Identifier: issueID + "-ident",
+		Attempt:    5,
+		DueAtMS:    seeded.DueAtMs,
+		// ReactionKind empty marks a continuation incumbent.
+	}
+
+	metrics := newCIMetricsSpy()
+	ci := &mockCIProvider{result: domain.CIResult{Status: domain.CIStatusFailing, FailingCount: 1}}
+	params := ReconcileParams{
+		CIProvider:     ci,
+		CIFeedback:     defaultCIFeedback(),
+		Store:          store,
+		OnRetryFire:    noopRetryFire,
+		Ctx:            ctx,
+		Logger:         discardLogger(),
+		ActiveStates:   []string{"In Progress"},
+		TerminalStates: []string{"Done"},
+	}
+
+	reconcileCIStatus(state, params, discardLogger(), ctx, metrics)
+
+	incumbent, ok := state.RetryAttempts[issueID]
+	if !ok {
+		t.Fatal("RetryAttempts entry removed while a continuation incumbent occupied the slot; want preserved")
+	}
+	if incumbent.ReactionKind != "" {
+		t.Errorf("RetryAttempts.ReactionKind = %q, want empty (continuation entry unchanged)", incumbent.ReactionKind)
+	}
+	if incumbent.Attempt != 5 {
+		t.Errorf("RetryAttempts.Attempt = %d, want 5 (unchanged)", incumbent.Attempt)
+	}
+
+	rows, err := store.LoadRetryEntries(ctx)
+	if err != nil {
+		t.Fatalf("LoadRetryEntries: %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("LoadRetryEntries returned %d rows, want 1", len(rows))
+	}
+	if rows[0].IssueID != issueID {
+		t.Errorf("persisted row IssueID = %q, want %q", rows[0].IssueID, issueID)
+	}
+	if rows[0].Attempt != seeded.Attempt {
+		t.Errorf("persisted row Attempt = %d, want %d (unchanged)", rows[0].Attempt, seeded.Attempt)
+	}
+	if rows[0].DueAtMs != seeded.DueAtMs {
+		t.Errorf("persisted row DueAtMs = %d, want %d (unchanged)", rows[0].DueAtMs, seeded.DueAtMs)
+	}
+}
+
+// TestReconcileCIStatus_Pending_LeavesCreatedAtUnchanged covers the
+// negative side of the CreatedAt refresh rule: the CIStatusPending arm
+// is the pass's own transient backoff, not an arbitration deferral, so
+// it must not touch CreatedAt even though PendingAttempts advances.
+func TestReconcileCIStatus_Pending_LeavesCreatedAtUnchanged(t *testing.T) {
+	t.Parallel()
+
+	const issueID = "ISS-CI-TTL-NEG"
+	state := stateWithPendingReaction(t, issueID, "feature/ttl", 1)
+	rkey := ReactionKey(issueID, ReactionKindCI)
+	seededCreatedAt := ciBaseTime.Add(-5 * time.Minute)
+	state.PendingReactions[rkey].CreatedAt = seededCreatedAt
+
+	store := &ciReconcileStore{}
+	metrics := newCIMetricsSpy()
+	ci := &mockCIProvider{result: domain.CIResult{Status: domain.CIStatusPending}}
+	params := ciParams(t, store, ci, nil)
+	params.NowFunc = func() time.Time { return ciBaseTime }
+
+	reconcileCIStatus(state, params, discardLogger(), context.Background(), metrics)
+
+	entry, ok := state.PendingReactions[rkey]
+	if !ok {
+		t.Fatal("PendingReactions entry dropped on CI pending; want re-enqueued")
+	}
+	if !entry.CreatedAt.Equal(seededCreatedAt) {
+		t.Errorf("CreatedAt = %v, want unchanged %v", entry.CreatedAt, seededCreatedAt)
+	}
+	if entry.PendingAttempts != 1 {
+		t.Errorf("PendingAttempts = %d, want 1 (the tick ran)", entry.PendingAttempts)
+	}
+}

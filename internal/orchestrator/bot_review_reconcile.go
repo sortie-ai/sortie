@@ -132,12 +132,18 @@ func reconcileBotReviewComments(state *State, params ReconcileParams, log *slog.
 			continue
 		}
 
+		// Arbitrate the retry slot before dispatching.
+		if incumbent := retrySlotIncumbent(state, pending.IssueID); incumbent != nil {
+			logRetrySlotDeferral(entryLog, ReactionKindBotReview, incumbent)
+			pending.CreatedAt = now
+			state.PendingReactions[key] = pending
+			continue
+		}
+
 		// Dispatch immediately: bot comments are not debounced.
 		metrics.IncBotReviewChecks("dispatched")
 
 		botContext := buildReviewTemplateMap(actionable)
-
-		CancelRetry(state, pending.IssueID)
 
 		ScheduleRetry(state, ScheduleRetryParams{
 			IssueID:     pending.IssueID,
@@ -153,6 +159,7 @@ func reconcileBotReviewComments(state *State, params ReconcileParams, log *slog.
 			AgentKind:    pending.AgentKind,
 			RuleName:     pending.RuleName,
 			TemplateID:   pending.TemplateID,
+			Logger:       entryLog,
 		}, params.OnRetryFire)
 
 		state.ReactionAttempts[rkey]++

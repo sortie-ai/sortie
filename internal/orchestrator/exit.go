@@ -341,6 +341,19 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 	}
 
 	retryScheduled := false
+	// retryDeferred is true whenever this exit found the retry slot
+	// occupied by a foreign incumbent and left it untouched instead of
+	// scheduling its own retry. Distinct from retryScheduled: the two
+	// share the "work remains queued for this issue" outcome the
+	// completion and failure comments report, but only retryScheduled
+	// means this exit itself created or replaced the retry entry.
+	retryDeferred := false
+	// claimRetainedForIncumbent is true on the two arms where the claim
+	// is kept solely to protect a foreign incumbent (the non-active
+	// default branch and the successful-handoff arm). The
+	// reaction-enqueue gate below treats the claim as released on those
+	// two arms specifically, so a deferral changes only the retry slot.
+	claimRetainedForIncumbent := false
 	nextAttempt := 0
 
 	switch workerResult.ExitKind {
@@ -407,6 +420,9 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 					)
 					CancelRetry(state, workerResult.IssueID)
 					delete(state.Claimed, workerResult.IssueID)
+				} else if incumbent := retrySlotIncumbent(state, workerResult.IssueID); incumbent != nil {
+					logRetrySlotDeferral(log, triggerContinuation, incumbent)
+					retryDeferred = true
 				} else {
 					log.Warn("handoff configured but tracker adapter is nil, scheduling continuation retry",
 						slog.String("handoff_state", params.HandoffState),
@@ -423,6 +439,7 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 						AgentKind:   entry.AgentKind,
 						RuleName:    entry.RuleName,
 						TemplateID:  entry.TemplateID,
+						Logger:      log,
 					}, params.OnRetryFire)
 					metrics.IncRetries(triggerContinuation)
 					retryScheduled = true
@@ -468,6 +485,9 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 						)
 						CancelRetry(state, workerResult.IssueID)
 						delete(state.Claimed, workerResult.IssueID)
+					} else if incumbent := retrySlotIncumbent(state, workerResult.IssueID); incumbent != nil {
+						logRetrySlotDeferral(log, triggerContinuation, incumbent)
+						retryDeferred = true
 					} else {
 						log.Warn("handoff transition failed, scheduling continuation retry",
 							slog.String("handoff_state", params.HandoffState),
@@ -485,10 +505,23 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 							AgentKind:   entry.AgentKind,
 							RuleName:    entry.RuleName,
 							TemplateID:  entry.TemplateID,
+							Logger:      log,
 						}, params.OnRetryFire)
 						metrics.IncRetries(triggerContinuation)
 						retryScheduled = true
 					}
+				} else if incumbent := retrySlotIncumbent(state, workerResult.IssueID); incumbent != nil {
+					// A successful handoff transition is not a stop signal:
+					// work queued for this issue during the session is
+					// still valid, so the incumbent is kept rather than
+					// cancelled.
+					logRetrySlotDeferral(log, triggerContinuation, incumbent)
+					metrics.IncHandoffTransitions(handoffSuccess)
+					log.Info("handoff transition succeeded, incumbent preserved",
+						slog.String("handoff_state", params.HandoffState),
+					)
+					retryDeferred = true
+					claimRetainedForIncumbent = true
 				} else {
 					log.Info("handoff transition succeeded, releasing claim",
 						slog.String("handoff_state", params.HandoffState),
@@ -516,35 +549,55 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 			delete(state.Claimed, workerResult.IssueID)
 
 		case issueIsActive && drivesIssue:
-			// No handoff configured but issue is still active:
-			// schedule continuation retry (existing behavior).
-			ScheduleRetry(state, ScheduleRetryParams{
-				IssueID:     workerResult.IssueID,
-				Identifier:  workerResult.Identifier,
-				DisplayID:   entry.Issue.DisplayID,
-				Attempt:     NextAttempt(entry.RetryAttempt),
-				DelayMS:     continuationDelayMS,
-				Error:       "",
-				LastSSHHost: workerResult.SSHHost,
-				SessionID:   sessionID,
-				AgentKind:   entry.AgentKind,
-				RuleName:    entry.RuleName,
-				TemplateID:  entry.TemplateID,
-			}, params.OnRetryFire)
-			metrics.IncRetries(triggerContinuation)
-			retryScheduled = true
+			// No handoff configured but issue is still active: schedule
+			// continuation retry, unless the slot is already occupied.
+			if incumbent := retrySlotIncumbent(state, workerResult.IssueID); incumbent != nil {
+				logRetrySlotDeferral(log, triggerContinuation, incumbent)
+				retryDeferred = true
+			} else {
+				ScheduleRetry(state, ScheduleRetryParams{
+					IssueID:     workerResult.IssueID,
+					Identifier:  workerResult.Identifier,
+					DisplayID:   entry.Issue.DisplayID,
+					Attempt:     NextAttempt(entry.RetryAttempt),
+					DelayMS:     continuationDelayMS,
+					Error:       "",
+					LastSSHHost: workerResult.SSHHost,
+					SessionID:   sessionID,
+					AgentKind:   entry.AgentKind,
+					RuleName:    entry.RuleName,
+					TemplateID:  entry.TemplateID,
+					Logger:      log,
+				}, params.OnRetryFire)
+				metrics.IncRetries(triggerContinuation)
+				retryScheduled = true
+			}
 
 		default:
 			// Issue is not in an active state: cancel any pending retry
-			// and release claim.
+			// and release claim, unless the slot is occupied by a
+			// foreign incumbent, which is exactly the population this
+			// disposition would otherwise strand.
 			if params.HandoffState != "" {
 				metrics.IncHandoffTransitions(handoffSkipped)
 			}
-			CancelRetry(state, workerResult.IssueID)
-			delete(state.Claimed, workerResult.IssueID)
+			if incumbent := retrySlotIncumbent(state, workerResult.IssueID); incumbent != nil {
+				logRetrySlotDeferral(log, triggerContinuation, incumbent)
+				retryDeferred = true
+				claimRetainedForIncumbent = true
+			} else {
+				CancelRetry(state, workerResult.IssueID)
+				delete(state.Claimed, workerResult.IssueID)
+			}
 		}
 
 		_, stillClaimed := state.Claimed[workerResult.IssueID]
+		// A claim retained solely to protect an incumbent must not widen
+		// reaction seeding, so the predicate is evaluated as if that
+		// claim had been released.
+		if claimRetainedForIncumbent {
+			stillClaimed = false
+		}
 		reactionEnqueueAllowed := claimedAtExit && (handoffPath || stillClaimed) && !terminalSuppressed
 
 		// Record a pending CI check when the CI provider is configured and
@@ -864,36 +917,43 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 	default: // WorkerExitError and any unknown kind
 		classification := classifyWorkerError(workerResult.Error)
 		if classification.Retryable {
-			nextAttempt = NextAttempt(entry.RetryAttempt)
-			delayMS := computeBackoffDelay(nextAttempt, params.MaxRetryBackoffMS)
+			if incumbent := retrySlotIncumbent(state, workerResult.IssueID); incumbent != nil {
+				logRetrySlotDeferral(log, "error-backoff", incumbent)
+				nextAttempt = incumbent.Attempt
+				retryDeferred = true
+			} else {
+				nextAttempt = NextAttempt(entry.RetryAttempt)
+				delayMS := computeBackoffDelay(nextAttempt, params.MaxRetryBackoffMS)
 
-			log.Warn("worker run failed, scheduling retry",
-				slog.Any("error", workerResult.Error),
-				slog.Int("next_attempt", nextAttempt),
-				slog.Int64("delay_ms", delayMS),
-			)
+				log.Warn("worker run failed, scheduling retry",
+					slog.Any("error", workerResult.Error),
+					slog.Int("next_attempt", nextAttempt),
+					slog.Int64("delay_ms", delayMS),
+				)
 
-			var errMsg string
-			if workerResult.Error != nil {
-				errMsg = "worker exited: " + workerResult.Error.Error()
+				var errMsg string
+				if workerResult.Error != nil {
+					errMsg = "worker exited: " + workerResult.Error.Error()
+				}
+
+				ScheduleRetry(state, ScheduleRetryParams{
+					IssueID:             workerResult.IssueID,
+					Identifier:          workerResult.Identifier,
+					DisplayID:           entry.Issue.DisplayID,
+					Attempt:             nextAttempt,
+					DelayMS:             delayMS,
+					Error:               errMsg,
+					LastSSHHost:         workerResult.SSHHost,
+					ContinuationContext: entry.ContinuationContext,
+					ReactionKind:        entry.ReactionKind,
+					AgentKind:           entry.AgentKind,
+					RuleName:            entry.RuleName,
+					TemplateID:          entry.TemplateID,
+					Logger:              log,
+				}, params.OnRetryFire)
+				metrics.IncRetries(triggerError)
+				retryScheduled = true
 			}
-
-			ScheduleRetry(state, ScheduleRetryParams{
-				IssueID:             workerResult.IssueID,
-				Identifier:          workerResult.Identifier,
-				DisplayID:           entry.Issue.DisplayID,
-				Attempt:             nextAttempt,
-				DelayMS:             delayMS,
-				Error:               errMsg,
-				LastSSHHost:         workerResult.SSHHost,
-				ContinuationContext: entry.ContinuationContext,
-				ReactionKind:        entry.ReactionKind,
-				AgentKind:           entry.AgentKind,
-				RuleName:            entry.RuleName,
-				TemplateID:          entry.TemplateID,
-			}, params.OnRetryFire)
-			metrics.IncRetries(triggerError)
-			retryScheduled = true
 		} else {
 			log.Error("worker run failed, non-retryable, releasing claim",
 				slog.Any("error", workerResult.Error),
@@ -937,13 +997,18 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 	}
 	runDuration := max(now.Sub(entry.StartedAt), 0)
 
+	// A deferral leaves work queued for the issue exactly as a scheduled
+	// retry does, so the completion and failure comments report
+	// re-queuing for either outcome.
+	retryPending := retryScheduled || retryDeferred
+
 	switch workerResult.ExitKind {
 	case WorkerExitNormal:
 		if params.CommentsConfig.OnCompletion {
 			if workerResult.SoftStop {
 				commentText = buildSoftStopComment(sessionID, runDuration, workerResult.TurnsCompleted, workerResult.SoftStopReason)
 			} else {
-				commentText = buildCompletionComment(sessionID, runDuration, workerResult.TurnsCompleted, retryScheduled)
+				commentText = buildCompletionComment(sessionID, runDuration, workerResult.TurnsCompleted, retryPending)
 			}
 			lifecycle = "completion"
 		}
@@ -951,7 +1016,7 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 		// No comment on cancellation.
 	default:
 		if params.CommentsConfig.OnFailure {
-			commentText = buildFailureComment(sessionID, runDuration, workerResult.Error, retryScheduled, nextAttempt)
+			commentText = buildFailureComment(sessionID, runDuration, workerResult.Error, retryPending, nextAttempt)
 			lifecycle = "failure"
 		}
 	}

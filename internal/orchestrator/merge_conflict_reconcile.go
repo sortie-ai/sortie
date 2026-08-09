@@ -156,6 +156,13 @@ func handleMergeConflictDirty(
 	ctx context.Context,
 	metrics domain.Metrics,
 ) {
+	if incumbent := retrySlotIncumbent(state, pending.IssueID); incumbent != nil {
+		logRetrySlotDeferral(log, ReactionKindMergeConflict, incumbent)
+		pending.CreatedAt = now
+		state.PendingReactions[key] = pending
+		return
+	}
+
 	// An empty head provides no rebase anchor. Defer without burning an
 	// attempt: a deferral is not a resolution attempt.
 	if status.HeadSHA == "" {
@@ -247,8 +254,6 @@ func dispatchMergeConflictContinuation(
 ) {
 	mergeContext := buildMergeConflictTemplateMap(data, status)
 
-	CancelRetry(state, pending.IssueID)
-
 	ScheduleRetry(state, ScheduleRetryParams{
 		IssueID:     pending.IssueID,
 		Identifier:  pending.Identifier,
@@ -263,6 +268,7 @@ func dispatchMergeConflictContinuation(
 		AgentKind:    pending.AgentKind,
 		RuleName:     pending.RuleName,
 		TemplateID:   pending.TemplateID,
+		Logger:       log,
 	}, params.OnRetryFire)
 
 	if markErr := params.Store.MarkReactionDispatched(ctx, pending.IssueID, ReactionKindMergeConflict); markErr != nil {

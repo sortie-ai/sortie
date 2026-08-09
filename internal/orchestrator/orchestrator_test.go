@@ -3295,11 +3295,14 @@ func TestGracefulShutdown(t *testing.T) {
 		// cancelRetryTimers fails to Stop() it, the timer will fire
 		// within the 200ms wait below, proving the test is effective.
 		// Since TimerHandle is non-nil, activateReconstructedRetries
-		// skips it.
+		// skips it. DueAtMS reflects the timer's real due time so the
+		// reconcile loop's overdue-retry re-arm pass does not treat this
+		// freshly-scheduled entry as one whose timer event was dropped.
 		state.RetryAttempts["retry-1"] = &RetryEntry{
 			IssueID:    "retry-1",
 			Identifier: "RETRY-1",
 			Attempt:    1,
+			DueAtMS:    time.Now().Add(50 * time.Millisecond).UnixMilli(),
 			TimerHandle: time.AfterFunc(50*time.Millisecond, func() {
 				o.onRetryFire("retry-1")
 			}),

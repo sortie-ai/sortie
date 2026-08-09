@@ -12,6 +12,15 @@ import (
 	"github.com/sortie-ai/sortie/internal/persistence"
 )
 
+// pausedRetryMaxDwell bounds how long a known-reaction retry may be
+// rescheduled consecutively because the issue's own state does not permit
+// a dispatch, before [HandleRetryTimer] drops it instead of holding the
+// retry slot for the process lifetime. Matches the 30-minute pending-entry
+// TTLs the reaction reconcile passes already use, because a paused retry
+// is the retry-slot analogue of a pending reaction that never becomes
+// actionable.
+const pausedRetryMaxDwell = 30 * time.Minute
+
 // RetryTimerStore is the persistence interface required by
 // [HandleRetryTimer]. It is satisfied by [persistence.Store] in production
 // and by test doubles in unit tests.
@@ -179,6 +188,7 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 			AgentKind:           popped.AgentKind,
 			RuleName:            popped.RuleName,
 			TemplateID:          popped.TemplateID,
+			Logger:              log,
 		}, params.OnRetryFire)
 		if isKnownReactionKind(popped.ReactionKind) {
 			if err := params.Store.DeleteRetryEntry(ctx, issueID); err != nil {
@@ -320,6 +330,43 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 		)
 	}
 
+	// pausedReschedule bounds the two arms below that reschedule a known
+	// reaction retry because the issue's current state does not permit a
+	// dispatch. Left unbounded, either arm re-occupies the slot on every
+	// fire and holds it for the process lifetime; pausedSince tracks how
+	// long the entry has taken one of these arms consecutively, and the
+	// entry is dropped rather than rescheduled once that dwell reaches
+	// pausedRetryMaxDwell.
+	pausedReschedule := func(nextAttempt int, delayMS int64, logReschedule func()) {
+		now := time.Now()
+		pausedSince := now
+		if popped.pausedSinceMS != 0 {
+			pausedSince = time.UnixMilli(popped.pausedSinceMS)
+		}
+		dwell := now.Sub(pausedSince)
+		if dwell >= pausedRetryMaxDwell {
+			delete(state.Claimed, issueID)
+			if err := params.Store.DeleteRetryEntry(ctx, issueID); err != nil {
+				log.Error("failed to delete retry entry after paused-dwell drop",
+					slog.Any("error", err),
+				)
+			}
+			log.Warn("paused reaction retry exceeded max dwell, dropping",
+				slog.String("kind", popped.ReactionKind),
+				slog.String("issue_state", issue.State),
+				slog.Int("attempt", popped.Attempt),
+				slog.Int64("dwell_ms", dwell.Milliseconds()),
+				slog.Int64("max_dwell_ms", pausedRetryMaxDwell.Milliseconds()),
+			)
+			return
+		}
+		logReschedule()
+		reschedule(nextAttempt, delayMS, popped.Error)
+		if entry, ok := state.RetryAttempts[issueID]; ok {
+			entry.pausedSinceMS = pausedSince.UnixMilli()
+		}
+	}
+
 	if issue.ID == "" || issue.Identifier == "" || issue.Title == "" || issue.State == "" {
 		log.Info("issue missing required fields, releasing claim")
 		delete(state.Claimed, issueID)
@@ -352,13 +399,14 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 				nextAttempt := popped.Attempt + 1
 				delayMS := computeBackoffDelay(nextAttempt, params.MaxRetryBackoffMS)
 
-				log.Info("issue blocked, rescheduling reaction retry",
-					slog.String("issue_state", issue.State),
-					slog.String("kind", popped.ReactionKind),
-					slog.Int("attempt", nextAttempt),
-					slog.Int64("delay_ms", delayMS),
-				)
-				reschedule(nextAttempt, delayMS, popped.Error)
+				pausedReschedule(nextAttempt, delayMS, func() {
+					log.Info("issue blocked, rescheduling reaction retry",
+						slog.String("issue_state", issue.State),
+						slog.String("kind", popped.ReactionKind),
+						slog.Int("attempt", nextAttempt),
+						slog.Int64("delay_ms", delayMS),
+					)
+				})
 				return
 			}
 
@@ -390,13 +438,14 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 		nextAttempt := popped.Attempt + 1
 		delayMS := computeBackoffDelay(nextAttempt, params.MaxRetryBackoffMS)
 
-		log.Info("reaction retry paused by issue state, rescheduling",
-			slog.String("issue_state", issue.State),
-			slog.String("kind", popped.ReactionKind),
-			slog.Int("attempt", nextAttempt),
-			slog.Int64("delay_ms", delayMS),
-		)
-		reschedule(nextAttempt, delayMS, popped.Error)
+		pausedReschedule(nextAttempt, delayMS, func() {
+			log.Info("reaction retry paused by issue state, rescheduling",
+				slog.String("issue_state", issue.State),
+				slog.String("kind", popped.ReactionKind),
+				slog.Int("attempt", nextAttempt),
+				slog.Int64("delay_ms", delayMS),
+			)
+		})
 		return
 	}
 

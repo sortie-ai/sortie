@@ -870,3 +870,100 @@ func TestBuildLabelFixMap_FieldMapping(t *testing.T) {
 		t.Errorf("buildLabelFixMap has %d keys, want %d", len(got), len(want))
 	}
 }
+
+// TestReconcileLabelFixCommands_ForeignIncumbentDefers mirrors
+// TestReconcileLabelReviewCommands_ForeignIncumbentDefers for the
+// label-fix kind: a confirmed command with a foreign incumbent occupying
+// the retry slot defers instead of dispatching, leaving the fingerprint
+// mark, the high-water mark, and the label untouched.
+func TestReconcileLabelFixCommands_ForeignIncumbentDefers(t *testing.T) {
+	t.Parallel()
+
+	const issueID = "LF-FOREIGN"
+	state := stateWithLabelFixPending(t, issueID, 10, "feature/lf-foreign")
+	rkey := ReactionKey(issueID, ReactionKindLabelFix)
+	state.RetryAttempts[issueID] = &RetryEntry{
+		IssueID:      issueID,
+		Attempt:      1,
+		ReactionKind: ReactionKindCI,
+	}
+
+	scm := &labelReviewSCMFake{
+		events: []domain.LabelEvent{
+			labelEvent("1", "sortie:fix", "alice", true, labelReviewBaseTime.Add(-1*time.Minute)),
+		},
+	}
+	store := newLabelReviewFingerprintStore()
+	params := labelFixParams(store, scm)
+
+	reconcileLabelFixCommands(state, params, discardLogger(), context.Background(), &domain.NoopMetrics{})
+
+	entry, ok := state.PendingReactions[rkey]
+	if !ok {
+		t.Fatal("PendingReactions entry dropped on a defer; want re-enqueued")
+	}
+	if !entry.CreatedAt.Equal(labelReviewBaseTime) {
+		t.Errorf("CreatedAt = %v, want refreshed to %v", entry.CreatedAt, labelReviewBaseTime)
+	}
+	incumbent := state.RetryAttempts[issueID]
+	if incumbent.ReactionKind != ReactionKindCI {
+		t.Errorf("RetryAttempts.ReactionKind = %q, want %q (incumbent unchanged)", incumbent.ReactionKind, ReactionKindCI)
+	}
+	mark, _, _ := store.GetReactionFingerprint(context.Background(), issueID, ReactionKindLabelFix)
+	if mark != "" {
+		t.Errorf("stored mark = %q, want empty (a defer must not upsert the fingerprint)", mark)
+	}
+	data, ok := entry.KindData.(*LabelFixReactionData)
+	if !ok {
+		t.Fatalf("KindData type = %T, want *LabelFixReactionData", entry.KindData)
+	}
+	if data.HighWaterMark != "" {
+		t.Errorf("HighWaterMark = %q, want empty (a defer must not advance it)", data.HighWaterMark)
+	}
+	if scm.removeCalls != 0 {
+		t.Errorf("RemoveLabel calls = %d, want 0 (a defer must not acknowledge the command)", scm.removeCalls)
+	}
+}
+
+// TestReconcileLabelFixCommands_SameKindCollapseAdvancesMarkAndReenqueues
+// mirrors the label-review same-kind collapse test: a same-kind
+// incumbent collapses the dispatch, but the mark still advances and the
+// pending entry still re-enqueues.
+func TestReconcileLabelFixCommands_SameKindCollapseAdvancesMarkAndReenqueues(t *testing.T) {
+	t.Parallel()
+
+	const issueID = "LF-COLLAPSE"
+	state := stateWithLabelFixPending(t, issueID, 10, "feature/lf-collapse")
+	rkey := ReactionKey(issueID, ReactionKindLabelFix)
+	state.RetryAttempts[issueID] = &RetryEntry{
+		IssueID:      issueID,
+		Attempt:      1,
+		ReactionKind: ReactionKindLabelFix,
+	}
+
+	event := labelEvent("1", "sortie:fix", "alice", true, labelReviewBaseTime.Add(-1*time.Minute))
+	scm := &labelReviewSCMFake{events: []domain.LabelEvent{event}}
+	store := newLabelReviewFingerprintStore()
+	params := labelFixParams(store, scm)
+
+	reconcileLabelFixCommands(state, params, discardLogger(), context.Background(), &domain.NoopMetrics{})
+
+	if len(state.RetryAttempts) != 1 {
+		t.Fatalf("RetryAttempts count = %d, want 1 (no second dispatch)", len(state.RetryAttempts))
+	}
+	pending, ok := state.PendingReactions[rkey]
+	if !ok {
+		t.Fatal("PendingReactions entry dropped after collapse; want re-enqueued")
+	}
+	mark, _, _ := store.GetReactionFingerprint(context.Background(), issueID, ReactionKindLabelFix)
+	if mark != labelReviewMark(event) {
+		t.Errorf("stored mark = %q, want %q (advanced to the newest examined event)", mark, labelReviewMark(event))
+	}
+	data, ok := pending.KindData.(*LabelFixReactionData)
+	if !ok {
+		t.Fatalf("KindData type = %T, want *LabelFixReactionData", pending.KindData)
+	}
+	if data.HighWaterMark != labelReviewMark(event) {
+		t.Errorf("HighWaterMark = %q, want %q", data.HighWaterMark, labelReviewMark(event))
+	}
+}

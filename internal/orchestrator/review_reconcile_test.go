@@ -1087,3 +1087,52 @@ func TestComputeReviewPendingDelay(t *testing.T) {
 		})
 	}
 }
+
+// TestReconcileReviewComments_ForeignIncumbentDefers verifies that a
+// foreign incumbent occupying the retry slot leaves the review pending
+// entry re-enqueued rather than dispatched, and that
+// state.ReactionAttempts for the review kind is left unchanged.
+func TestReconcileReviewComments_ForeignIncumbentDefers(t *testing.T) {
+	t.Parallel()
+
+	const issueID = "ISS-R-DEFER"
+	state := stateWithReviewReaction(t, issueID, 10)
+	rkey := ReactionKey(issueID, ReactionKindReview)
+	state.RetryAttempts[issueID] = &RetryEntry{
+		IssueID:      issueID,
+		Attempt:      1,
+		ReactionKind: ReactionKindLabelReview,
+	}
+
+	// Comment submitted 5 minutes ago — outside the debounce window.
+	comments := []domain.ReviewComment{
+		{ID: "900", Body: "needs fix", SubmittedAt: reviewBaseTime.Add(-5 * time.Minute)},
+	}
+	store := &reviewReconcileStore{}
+	metrics := newReviewMetricsSpy()
+	scm := &mockSCMAdapter{comments: comments}
+	params := reviewParams(store, scm, nil)
+
+	reconcileReviewComments(state, params, discardLogger(), context.Background(), metrics)
+
+	entry, ok := state.PendingReactions[rkey]
+	if !ok {
+		t.Fatal("PendingReactions entry dropped on a defer; want re-enqueued")
+	}
+	if !entry.CreatedAt.Equal(reviewBaseTime) {
+		t.Errorf("CreatedAt = %v, want refreshed to %v", entry.CreatedAt, reviewBaseTime)
+	}
+	incumbent := state.RetryAttempts[issueID]
+	if incumbent.ReactionKind != ReactionKindLabelReview {
+		t.Errorf("RetryAttempts.ReactionKind = %q, want %q (incumbent unchanged)", incumbent.ReactionKind, ReactionKindLabelReview)
+	}
+	if incumbent.Attempt != 1 {
+		t.Errorf("RetryAttempts.Attempt = %d, want 1 (unchanged)", incumbent.Attempt)
+	}
+	if _, ok := state.ReactionAttempts[rkey]; ok {
+		t.Errorf("ReactionAttempts[%s] = %d, want absent (a defer must not increment it)", rkey, state.ReactionAttempts[rkey])
+	}
+	if metrics.reviewChecks["dispatched"] != 0 {
+		t.Errorf(`IncReviewChecks("dispatched") = %d, want 0 (no dispatch on a defer)`, metrics.reviewChecks["dispatched"])
+	}
+}

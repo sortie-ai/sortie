@@ -2947,3 +2947,260 @@ func TestHandleRetryTimer_AgentAdapterLookupUsesAgentKind(t *testing.T) {
 		t.Error("DeleteRetryEntry not called after adapter lookup failure")
 	}
 }
+
+// --- Paused-retry dwell bound tests (R29) ---
+
+func TestHandleRetryTimer_PausedDwellBound(t *testing.T) {
+	t.Parallel()
+
+	t.Run("non-handoff arm: first fire re-occupies slot with incremented attempt and non-zero pausedSinceMS", func(t *testing.T) {
+		t.Parallel()
+
+		const id = "DWELL-UNRELATED-1"
+		state := NewState(5000, 4, nil, AgentTotals{})
+		state.Claimed[id] = struct{}{}
+		state.RetryAttempts[id] = &RetryEntry{
+			IssueID:      id,
+			Identifier:   id,
+			Attempt:      1,
+			ReactionKind: ReactionKindCI,
+		}
+
+		store := &mockRetryStore{}
+		tracker := &mockRetryTracker{
+			// Not active, not terminal, not handoff.
+			fetchedIssue: candidateIssue(id, id, "QA Review"),
+		}
+		params := defaultRetryParams(t, store, tracker)
+		params.HandoffState = "Ready For Review"
+
+		before := time.Now().UnixMilli()
+		HandleRetryTimer(state, id, params)
+		after := time.Now().UnixMilli()
+
+		entry, ok := state.RetryAttempts[id]
+		if !ok {
+			t.Fatal("RetryAttempts missing after non-handoff paused reschedule")
+		}
+		if entry.Attempt != 2 {
+			t.Errorf("RetryAttempts[%s].Attempt = %d, want 2", id, entry.Attempt)
+		}
+		if entry.pausedSinceMS < before || entry.pausedSinceMS > after {
+			t.Errorf("pausedSinceMS = %d, want between %d and %d", entry.pausedSinceMS, before, after)
+		}
+		if entry.TimerHandle != nil {
+			entry.TimerHandle.Stop()
+		}
+	})
+
+	t.Run("non-handoff arm: second fire past max dwell drops the entry", func(t *testing.T) {
+		t.Parallel()
+
+		const id = "DWELL-UNRELATED-2"
+		state := NewState(5000, 4, nil, AgentTotals{})
+		state.Claimed[id] = struct{}{}
+		staleSince := time.Now().Add(-(pausedRetryMaxDwell + time.Minute)).UnixMilli()
+		state.RetryAttempts[id] = &RetryEntry{
+			IssueID:       id,
+			Identifier:    id,
+			Attempt:       2,
+			ReactionKind:  ReactionKindCI,
+			pausedSinceMS: staleSince,
+		}
+
+		store := &mockRetryStore{}
+		tracker := &mockRetryTracker{
+			fetchedIssue: candidateIssue(id, id, "QA Review"),
+		}
+		var buf bytes.Buffer
+		log := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+		params := defaultRetryParams(t, store, tracker)
+		params.HandoffState = "Ready For Review"
+		params.Logger = log
+
+		HandleRetryTimer(state, id, params)
+
+		if _, ok := state.RetryAttempts[id]; ok {
+			t.Error("RetryAttempts entry present after dwell exceeded, want dropped")
+		}
+		if len(store.deletedIssueID) != 1 || store.deletedIssueID[0] != id {
+			t.Errorf("DeleteRetryEntry calls = %v, want [%s]", store.deletedIssueID, id)
+		}
+		if _, claimed := state.Claimed[id]; claimed {
+			t.Error("Claimed still present after dwell exceeded, want released")
+		}
+
+		output := buf.String()
+		if !strings.Contains(output, "paused reaction retry exceeded max dwell, dropping") {
+			t.Errorf("log output = %q, want message %q", output, "paused reaction retry exceeded max dwell, dropping")
+		}
+		if !strings.Contains(output, "kind=ci") {
+			t.Errorf("log output = %q, want kind=ci", output)
+		}
+		if !strings.Contains(output, `issue_state="QA Review"`) {
+			t.Errorf("log output = %q, want issue_state=\"QA Review\"", output)
+		}
+		if !strings.Contains(output, "attempt=2") {
+			t.Errorf("log output = %q, want attempt=2", output)
+		}
+		if !strings.Contains(output, "dwell_ms=") {
+			t.Errorf("log output = %q, want a dwell_ms attribute", output)
+		}
+		if !strings.Contains(output, "max_dwell_ms=") {
+			t.Errorf("log output = %q, want a max_dwell_ms attribute", output)
+		}
+	})
+
+	t.Run("blocked-issue arm: first fire re-occupies slot with incremented attempt and non-zero pausedSinceMS", func(t *testing.T) {
+		t.Parallel()
+
+		const id = "DWELL-BLOCKED-1"
+		state := NewState(5000, 4, nil, AgentTotals{})
+		state.Claimed[id] = struct{}{}
+		state.RetryAttempts[id] = &RetryEntry{
+			IssueID:      id,
+			Identifier:   id,
+			Attempt:      1,
+			ReactionKind: ReactionKindCI,
+		}
+
+		issue := candidateIssue(id, id, "To Do") // active
+		issue.BlockedBy = []domain.BlockerRef{
+			{ID: "BLOCK-1", Identifier: "BLOCK-1", State: "In Progress"}, // non-terminal blocker
+		}
+		store := &mockRetryStore{}
+		tracker := &mockRetryTracker{fetchedIssue: issue}
+		params := defaultRetryParams(t, store, tracker)
+
+		before := time.Now().UnixMilli()
+		HandleRetryTimer(state, id, params)
+		after := time.Now().UnixMilli()
+
+		entry, ok := state.RetryAttempts[id]
+		if !ok {
+			t.Fatal("RetryAttempts missing after blocked-issue paused reschedule")
+		}
+		if entry.Attempt != 2 {
+			t.Errorf("RetryAttempts[%s].Attempt = %d, want 2", id, entry.Attempt)
+		}
+		if entry.pausedSinceMS < before || entry.pausedSinceMS > after {
+			t.Errorf("pausedSinceMS = %d, want between %d and %d", entry.pausedSinceMS, before, after)
+		}
+		if entry.TimerHandle != nil {
+			entry.TimerHandle.Stop()
+		}
+	})
+
+	t.Run("blocked-issue arm: second fire past max dwell drops the entry", func(t *testing.T) {
+		t.Parallel()
+
+		const id = "DWELL-BLOCKED-2"
+		state := NewState(5000, 4, nil, AgentTotals{})
+		state.Claimed[id] = struct{}{}
+		staleSince := time.Now().Add(-(pausedRetryMaxDwell + time.Minute)).UnixMilli()
+		state.RetryAttempts[id] = &RetryEntry{
+			IssueID:       id,
+			Identifier:    id,
+			Attempt:       3,
+			ReactionKind:  ReactionKindReview,
+			pausedSinceMS: staleSince,
+		}
+
+		issue := candidateIssue(id, id, "To Do")
+		issue.BlockedBy = []domain.BlockerRef{
+			{ID: "BLOCK-1", Identifier: "BLOCK-1", State: "In Progress"},
+		}
+		store := &mockRetryStore{}
+		tracker := &mockRetryTracker{fetchedIssue: issue}
+		var buf bytes.Buffer
+		log := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+		params := defaultRetryParams(t, store, tracker)
+		params.Logger = log
+
+		HandleRetryTimer(state, id, params)
+
+		if _, ok := state.RetryAttempts[id]; ok {
+			t.Error("RetryAttempts entry present after dwell exceeded, want dropped")
+		}
+		if len(store.deletedIssueID) != 1 || store.deletedIssueID[0] != id {
+			t.Errorf("DeleteRetryEntry calls = %v, want [%s]", store.deletedIssueID, id)
+		}
+		if _, claimed := state.Claimed[id]; claimed {
+			t.Error("Claimed still present after dwell exceeded, want released")
+		}
+
+		output := buf.String()
+		if !strings.Contains(output, "paused reaction retry exceeded max dwell, dropping") {
+			t.Errorf("log output = %q, want message %q", output, "paused reaction retry exceeded max dwell, dropping")
+		}
+		if !strings.Contains(output, "kind=review") {
+			t.Errorf("log output = %q, want kind=review", output)
+		}
+		if !strings.Contains(output, "attempt=3") {
+			t.Errorf("log output = %q, want attempt=3", output)
+		}
+	})
+
+	t.Run("pausedSinceMS resets to zero after a paused fire followed by a no-orchestrator-slots fire", func(t *testing.T) {
+		t.Parallel()
+
+		const id = "DWELL-RESET"
+		state := NewState(5000, 1, nil, AgentTotals{})
+		state.Claimed[id] = struct{}{}
+		state.RetryAttempts[id] = &RetryEntry{
+			IssueID:      id,
+			Identifier:   id,
+			Attempt:      1,
+			ReactionKind: ReactionKindCI,
+		}
+
+		store := &mockRetryStore{}
+		tracker := &mockRetryTracker{
+			// Not active, not terminal, not handoff: paused arm.
+			fetchedIssue: candidateIssue(id, id, "QA Review"),
+		}
+		params := defaultRetryParams(t, store, tracker)
+		params.HandoffState = "Ready For Review"
+
+		HandleRetryTimer(state, id, params)
+
+		firstEntry, ok := state.RetryAttempts[id]
+		if !ok {
+			t.Fatal("RetryAttempts missing after first paused fire")
+		}
+		if firstEntry.pausedSinceMS == 0 {
+			t.Fatal("pausedSinceMS not set after first paused fire")
+		}
+		if firstEntry.TimerHandle != nil {
+			firstEntry.TimerHandle.Stop()
+		}
+		// A real timer fire only reaches HandleRetryTimer after its full
+		// delay elapses; clearing the monotonic staleness fields models
+		// that without the test sleeping out the backoff delay.
+		firstEntry.scheduledAt = time.Time{}
+		firstEntry.scheduledDelayMS = 0
+
+		// Second fire: the issue is now active with no blocker, and the
+		// sole concurrency slot is occupied by another running issue, so
+		// this fire takes the no-orchestrator-slots arm instead of a
+		// paused arm.
+		tracker.fetchedIssue = candidateIssue(id, id, "To Do")
+		state.Running["OTHER-1"] = &RunningEntry{
+			Identifier: "OTHER-1",
+			Issue:      candidateIssue("OTHER-1", "OTHER-1", "To Do"),
+		}
+
+		HandleRetryTimer(state, id, params)
+
+		secondEntry, ok := state.RetryAttempts[id]
+		if !ok {
+			t.Fatal("RetryAttempts missing after no-orchestrator-slots fire")
+		}
+		if secondEntry.pausedSinceMS != 0 {
+			t.Errorf("pausedSinceMS = %d, want 0 after a non-paused reschedule arm", secondEntry.pausedSinceMS)
+		}
+		if secondEntry.TimerHandle != nil {
+			secondEntry.TimerHandle.Stop()
+		}
+	})
+}

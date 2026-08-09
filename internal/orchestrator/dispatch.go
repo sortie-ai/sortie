@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"cmp"
 	"context"
+	"log/slog"
 	"slices"
 	"strings"
 	"time"
@@ -216,6 +217,38 @@ func CancelRetry(state *State, issueID string) {
 	delete(state.RetryAttempts, issueID)
 }
 
+// retrySlotIncumbent returns the retry entry occupying the issue's retry
+// slot, or nil when the slot is free. The retry slot holds at most one
+// entry per issue; a non-nil result means another unit of work already
+// owns the issue's next dispatch.
+func retrySlotIncumbent(state *State, issueID string) *RetryEntry {
+	return state.RetryAttempts[issueID]
+}
+
+// retrySlotOwnerLabel returns the reaction kind reported in a retry-slot
+// log record, substituting the literal "continuation" for the empty
+// reaction kind that marks the orchestrator's own continuation lane.
+func retrySlotOwnerLabel(reactionKind string) string {
+	if reactionKind == "" {
+		return "continuation"
+	}
+	return reactionKind
+}
+
+// logRetrySlotDeferral records that a challenger left the retry slot to
+// its incumbent.
+func logRetrySlotDeferral(log *slog.Logger, challenger string, incumbent *RetryEntry) {
+	if log == nil {
+		log = slog.Default()
+	}
+	log.Debug("retry slot occupied, deferring",
+		slog.String("challenger_kind", challenger),
+		slog.String("incumbent_kind", retrySlotOwnerLabel(incumbent.ReactionKind)),
+		slog.Int("incumbent_attempt", incumbent.Attempt),
+		slog.Int64("incumbent_due_at_ms", incumbent.DueAtMS),
+	)
+}
+
 // ScheduleRetryParams holds the inputs for [ScheduleRetry].
 type ScheduleRetryParams struct {
 	IssueID     string
@@ -226,6 +259,10 @@ type ScheduleRetryParams struct {
 	Error       string
 	LastSSHHost string // Runtime-only: SSH host from previous attempt for retry affinity.
 	SessionID   string // Session identifier from previous attempt for cross-retry resume.
+
+	// Logger receives the displacement warning when ScheduleRetry finds
+	// the retry slot occupied. Nil selects slog.Default().
+	Logger *slog.Logger
 
 	// ContinuationContext carries reaction continuation data to inject
 	// into the prompt template on the first turn of the retry worker.
@@ -253,10 +290,17 @@ type ScheduleRetryParams struct {
 	TemplateID string
 }
 
-// ScheduleRetry cancels any existing retry for the issue, creates a new
-// timer, and stores a [RetryEntry] in the state's retry map. The onFire
-// callback is invoked when the timer expires; the caller provides the
-// retry-timer handler. The claim on the issue is preserved.
+// ScheduleRetry creates a new timer and stores a [RetryEntry] in the
+// state's retry map. The onFire callback is invoked when the timer
+// expires; the caller provides the retry-timer handler. The claim on the
+// issue is preserved.
+//
+// Callers MUST consult [retrySlotIncumbent] for the issue and call
+// ScheduleRetry only when it returns nil, so the write always lands in a
+// free slot. HandleRetryTimer's inner reschedule closure is the one
+// exception: it pops and deletes the entry it is rescheduling before
+// calling ScheduleRetry, so it always writes back into the slot it just
+// freed.
 //
 // Concurrency note: [time.Timer.Stop] does not guarantee the callback
 // will not fire if the timer goroutine has already been scheduled. The
@@ -269,6 +313,22 @@ func ScheduleRetry(state *State, params ScheduleRetryParams, onFire func(issueID
 		panic("ScheduleRetry: nil onFire callback")
 	}
 
+	if incumbent := retrySlotIncumbent(state, params.IssueID); incumbent != nil {
+		log := params.Logger
+		if log == nil {
+			log = slog.Default()
+		}
+		log.Warn("retry slot displaced",
+			slog.String("challenger_kind", retrySlotOwnerLabel(params.ReactionKind)),
+			slog.String("incumbent_kind", retrySlotOwnerLabel(incumbent.ReactionKind)),
+			slog.Int("incumbent_attempt", incumbent.Attempt),
+		)
+	}
+
+	// Callers check the slot first, so this call never displaces an
+	// entry in practice. It stays as a backstop that frees the slot on
+	// the rare call site that skips the check, and it is what the Warn
+	// above reports when that happens.
 	CancelRetry(state, params.IssueID)
 
 	delayMS := max(params.DelayMS, 0)

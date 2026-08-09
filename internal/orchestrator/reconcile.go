@@ -215,6 +215,11 @@ func ReconcileRunningIssues(state *State, params ReconcileParams) {
 		now = params.NowFunc().UTC()
 	}
 
+	// Re-arm retry entries whose timer event was dropped by the retry
+	// timer channel's non-blocking send, so an undeliverable incumbent
+	// cannot hold the retry slot for the process lifetime.
+	reconcileOverdueRetries(state, params, log, now)
+
 	// Cancel stalled workers and schedule exponential-backoff retries.
 	reconcileStalled(state, params, log, ctx, now, metrics)
 
@@ -261,6 +266,68 @@ func ReconcileRunningIssues(state *State, params ReconcileParams) {
 	reconcileMergeCompletion(state, params, log, ctx, metrics)
 }
 
+// overdueRetryGrace bounds how long a retry entry's DueAtMS may lag the
+// current tick before [reconcileOverdueRetries] treats its timer event
+// as dropped and re-arms the entry with a zero delay.
+const overdueRetryGrace = 60 * time.Second
+
+// reconcileOverdueRetries re-arms retry entries whose timer event was
+// never delivered, so an undeliverable incumbent cannot hold the retry
+// slot for the process lifetime. Entries whose timer was never armed,
+// which are the startup reconstructions still awaiting activation, are
+// skipped.
+func reconcileOverdueRetries(state *State, params ReconcileParams, log *slog.Logger, now time.Time) {
+	graceMS := overdueRetryGrace.Milliseconds()
+
+	var overdueIDs []string
+	for issueID, entry := range state.RetryAttempts {
+		if entry.TimerHandle == nil {
+			continue
+		}
+		if now.UnixMilli()-entry.DueAtMS > graceMS {
+			overdueIDs = append(overdueIDs, issueID)
+		}
+	}
+
+	for _, issueID := range overdueIDs {
+		entry, ok := state.RetryAttempts[issueID]
+		if !ok {
+			continue
+		}
+
+		overdueMS := now.UnixMilli() - entry.DueAtMS
+		pausedSinceMS := entry.pausedSinceMS
+		entryLog := logging.WithIssue(log, issueID, entry.Identifier)
+
+		CancelRetry(state, issueID)
+		ScheduleRetry(state, ScheduleRetryParams{
+			IssueID:             issueID,
+			Identifier:          entry.Identifier,
+			DisplayID:           entry.DisplayID,
+			Attempt:             entry.Attempt,
+			Error:               entry.Error,
+			LastSSHHost:         entry.LastSSHHost,
+			SessionID:           entry.SessionID,
+			ContinuationContext: entry.ContinuationContext,
+			ReactionKind:        entry.ReactionKind,
+			AgentKind:           entry.AgentKind,
+			RuleName:            entry.RuleName,
+			TemplateID:          entry.TemplateID,
+			Logger:              entryLog,
+		}, params.OnRetryFire)
+
+		if rearmed, ok := state.RetryAttempts[issueID]; ok {
+			rearmed.pausedSinceMS = pausedSinceMS
+		}
+
+		entryLog.Warn("overdue retry re-armed",
+			slog.String("kind", entry.ReactionKind),
+			slog.Int("attempt", entry.Attempt),
+			slog.Int64("overdue_ms", overdueMS),
+		)
+	}
+}
+
 // reconcileStalled cancels running entries whose last activity exceeds the
 // stall timeout and schedules an exponential-backoff retry for each.
 func reconcileStalled(state *State, params ReconcileParams, log *slog.Logger, ctx context.Context, now time.Time, metrics domain.Metrics) {
@@ -287,20 +354,17 @@ func reconcileStalled(state *State, params ReconcileParams, log *slog.Logger, ct
 			entry.CancelFunc()
 		}
 
-		nextAttempt := NextAttempt(entry.RetryAttempt)
+		entryLog.Warn("stall detected, cancelling worker",
+			slog.Int64("elapsed_ms", elapsedMS),
+			slog.Int("stall_timeout_ms", params.StallTimeoutMS),
+		)
 
-		// Skip scheduling when a retry is already present at the same or
-		// higher attempt. Without this guard, every reconciliation tick
-		// would replace the existing timer, pushing DueAtMS forward and
-		// preventing the retry from ever firing.
-		if existing, ok := state.RetryAttempts[issueID]; ok && existing.Attempt >= nextAttempt {
-			entryLog.Debug("stall retry already scheduled, skipping reschedule",
-				slog.Int("current_attempt", existing.Attempt),
-				slog.Int("next_attempt", nextAttempt),
-			)
+		if incumbent := retrySlotIncumbent(state, issueID); incumbent != nil {
+			logRetrySlotDeferral(entryLog, "stall", incumbent)
 			continue
 		}
 
+		nextAttempt := NextAttempt(entry.RetryAttempt)
 		delayMS := computeBackoffDelay(nextAttempt, params.MaxRetryBackoffMS)
 
 		ScheduleRetry(state, ScheduleRetryParams{
@@ -317,6 +381,7 @@ func reconcileStalled(state *State, params ReconcileParams, log *slog.Logger, ct
 			AgentKind:           entry.AgentKind,
 			RuleName:            entry.RuleName,
 			TemplateID:          entry.TemplateID,
+			Logger:              entryLog,
 		}, params.OnRetryFire)
 		metrics.IncRetries(triggerStall)
 
@@ -327,10 +392,6 @@ func reconcileStalled(state *State, params ReconcileParams, log *slog.Logger, ct
 						slog.Any("error", err),
 					)
 				}
-				entryLog.Warn("stall detected, cancelling worker",
-					slog.Int64("elapsed_ms", elapsedMS),
-					slog.Int("stall_timeout_ms", params.StallTimeoutMS),
-				)
 				continue
 			}
 
@@ -350,11 +411,6 @@ func reconcileStalled(state *State, params ReconcileParams, log *slog.Logger, ct
 				)
 			}
 		}
-
-		entryLog.Warn("stall detected, cancelling worker",
-			slog.Int64("elapsed_ms", elapsedMS),
-			slog.Int("stall_timeout_ms", params.StallTimeoutMS),
-		)
 	}
 }
 
@@ -550,11 +606,18 @@ func reconcileTrackerState(state *State, params ReconcileParams, log *slog.Logge
 		if entry.CancelFunc != nil {
 			entry.CancelFunc()
 		}
-		CancelRetry(state, issueID)
-		if err := params.Store.DeleteRetryEntry(ctx, issueID); err != nil {
-			entryLog.Error("failed to delete retry entry for non-active issue",
-				slog.Any("error", err),
-			)
+		if incumbent := retrySlotIncumbent(state, issueID); incumbent != nil {
+			// Skipping only one of CancelRetry or DeleteRetryEntry would
+			// leave the in-memory entry and the persisted row disagreeing,
+			// so both are skipped together to protect the incumbent.
+			logRetrySlotDeferral(entryLog, "tracker-state", incumbent)
+		} else {
+			CancelRetry(state, issueID)
+			if err := params.Store.DeleteRetryEntry(ctx, issueID); err != nil {
+				entryLog.Error("failed to delete retry entry for non-active issue",
+					slog.Any("error", err),
+				)
+			}
 		}
 		metrics.IncReconciliationActions(actionStop)
 		entryLog.Info("stopping worker for non-active issue",

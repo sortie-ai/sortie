@@ -165,7 +165,13 @@ func reconcileCIStatus(state *State, params ReconcileParams, log *slog.Logger, c
 			)
 
 		case domain.CIStatusFailing:
-			handleCIFailure(state, params, pending, result, ref, entryLog, ctx, metrics)
+			if incumbent := retrySlotIncumbent(state, pending.IssueID); incumbent != nil {
+				logRetrySlotDeferral(entryLog, ReactionKindCI, incumbent)
+				pending.CreatedAt = now
+				state.PendingReactions[key] = pending
+			} else {
+				handleCIFailure(state, params, pending, result, ref, entryLog, ctx, metrics)
+			}
 
 		default:
 			entryLog.Warn("CI status provider returned unrecognized status, re-enqueueing",
@@ -224,8 +230,6 @@ func handleCIFailure(
 
 	ciContext := result.ToTemplateMap()
 
-	CancelRetry(state, pending.IssueID)
-
 	nextAttempt := pending.Attempt
 
 	ScheduleRetry(state, ScheduleRetryParams{
@@ -243,6 +247,7 @@ func handleCIFailure(
 		AgentKind:    pending.AgentKind,
 		RuleName:     pending.RuleName,
 		TemplateID:   pending.TemplateID,
+		Logger:       log,
 	}, params.OnRetryFire)
 	metrics.IncRetries(triggerCIFix)
 

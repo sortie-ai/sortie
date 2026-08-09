@@ -1,7 +1,10 @@
 package orchestrator
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -703,17 +706,23 @@ func TestScheduleRetry(t *testing.T) {
 		s := newTestState()
 		oldTimer := time.AfterFunc(time.Hour, func() {})
 		s.RetryAttempts["ISS-1"] = &RetryEntry{
-			IssueID:     "ISS-1",
-			Attempt:     1,
-			TimerHandle: oldTimer,
+			IssueID:      "ISS-1",
+			Attempt:      1,
+			ReactionKind: ReactionKindCI,
+			TimerHandle:  oldTimer,
 		}
 
+		var buf bytes.Buffer
+		log := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
 		ScheduleRetry(s, ScheduleRetryParams{
-			IssueID:    "ISS-1",
-			Identifier: "ISS-1",
-			Attempt:    2,
-			DelayMS:    1000,
-			Error:      "retry again",
+			IssueID:      "ISS-1",
+			Identifier:   "ISS-1",
+			Attempt:      2,
+			DelayMS:      1000,
+			Error:        "retry again",
+			ReactionKind: ReactionKindReview,
+			Logger:       log,
 		}, func(_ string) {})
 
 		entry := s.RetryAttempts["ISS-1"]
@@ -724,6 +733,24 @@ func TestScheduleRetry(t *testing.T) {
 		if oldTimer.Stop() {
 			t.Error("old timer was not stopped by ScheduleRetry")
 		}
+
+		output := buf.String()
+		if !strings.Contains(output, "level=WARN") {
+			t.Errorf("log output = %q, want a Warn-level record", output)
+		}
+		if !strings.Contains(output, "retry slot displaced") {
+			t.Errorf("log output = %q, want message %q", output, "retry slot displaced")
+		}
+		if !strings.Contains(output, "challenger_kind=review") {
+			t.Errorf("log output = %q, want challenger_kind=review", output)
+		}
+		if !strings.Contains(output, "incumbent_kind=ci") {
+			t.Errorf("log output = %q, want incumbent_kind=ci", output)
+		}
+		if !strings.Contains(output, "incumbent_attempt=1") {
+			t.Errorf("log output = %q, want incumbent_attempt=1", output)
+		}
+
 		// Clean up new timer.
 		entry.TimerHandle.Stop()
 	})
@@ -780,6 +807,97 @@ func TestScheduleRetry(t *testing.T) {
 			}
 		case <-time.After(time.Second):
 			t.Error("zero-delay timer did not fire within 1 second")
+		}
+	})
+}
+
+// --- Tests for retrySlotIncumbent ---
+
+func TestRetrySlotIncumbent(t *testing.T) {
+	t.Parallel()
+
+	t.Run("nil on free slot", func(t *testing.T) {
+		t.Parallel()
+
+		s := newTestState()
+
+		got := retrySlotIncumbent(s, "ISS-FREE")
+
+		if got != nil {
+			t.Errorf("retrySlotIncumbent(free slot) = %v, want nil", got)
+		}
+	})
+
+	t.Run("returns the stored entry on an occupied slot", func(t *testing.T) {
+		t.Parallel()
+
+		s := newTestState()
+		entry := &RetryEntry{IssueID: "ISS-1", Attempt: 3, ReactionKind: ReactionKindCI}
+		s.RetryAttempts["ISS-1"] = entry
+
+		got := retrySlotIncumbent(s, "ISS-1")
+
+		if got != entry {
+			t.Errorf("retrySlotIncumbent(occupied slot) = %v, want %v (the stored entry)", got, entry)
+		}
+	})
+}
+
+// --- Tests for logRetrySlotDeferral ---
+
+func TestLogRetrySlotDeferral(t *testing.T) {
+	t.Parallel()
+
+	t.Run("emits one Debug record with the expected attributes", func(t *testing.T) {
+		t.Parallel()
+
+		var buf bytes.Buffer
+		log := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+		incumbent := &RetryEntry{ReactionKind: ReactionKindCI, Attempt: 4, DueAtMS: 123456}
+
+		logRetrySlotDeferral(log, "review", incumbent)
+
+		output := buf.String()
+		if !strings.Contains(output, "level=DEBUG") {
+			t.Errorf("log output = %q, want a Debug-level record", output)
+		}
+		if !strings.Contains(output, "retry slot occupied, deferring") {
+			t.Errorf("log output = %q, want message %q", output, "retry slot occupied, deferring")
+		}
+		if !strings.Contains(output, "challenger_kind=review") {
+			t.Errorf("log output = %q, want challenger_kind=review", output)
+		}
+		if !strings.Contains(output, "incumbent_kind=ci") {
+			t.Errorf("log output = %q, want incumbent_kind=ci", output)
+		}
+		if !strings.Contains(output, "incumbent_attempt=4") {
+			t.Errorf("log output = %q, want incumbent_attempt=4", output)
+		}
+		if !strings.Contains(output, "incumbent_due_at_ms=123456") {
+			t.Errorf("log output = %q, want incumbent_due_at_ms=123456", output)
+		}
+	})
+
+	t.Run("nil logger falls back to slog.Default without panicking", func(t *testing.T) {
+		t.Parallel()
+
+		incumbent := &RetryEntry{ReactionKind: ReactionKindCI, Attempt: 1}
+
+		logRetrySlotDeferral(nil, "review", incumbent)
+	})
+
+	t.Run("empty incumbent reaction kind reports the literal continuation", func(t *testing.T) {
+		t.Parallel()
+
+		var buf bytes.Buffer
+		log := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+		incumbent := &RetryEntry{ReactionKind: "", Attempt: 1}
+
+		logRetrySlotDeferral(log, "ci", incumbent)
+
+		output := buf.String()
+		if !strings.Contains(output, "incumbent_kind=continuation") {
+			t.Errorf("log output = %q, want incumbent_kind=continuation", output)
 		}
 	})
 }

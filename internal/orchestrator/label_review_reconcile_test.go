@@ -1060,3 +1060,100 @@ func TestBuildLabelReviewMap_FieldMapping(t *testing.T) {
 		t.Errorf("buildLabelReviewMap has %d keys, want %d", len(got), len(want))
 	}
 }
+
+// TestReconcileLabelReviewCommands_ForeignIncumbentDefers covers the first
+// arm of the three-way decision: a confirmed command with a foreign
+// incumbent occupying the retry slot defers instead of dispatching. The
+// fingerprint mark, the high-water mark, and the label must all stay
+// untouched, and the pending entry re-enqueues with a refreshed CreatedAt.
+func TestReconcileLabelReviewCommands_ForeignIncumbentDefers(t *testing.T) {
+	t.Parallel()
+
+	const issueID = "LR-FOREIGN"
+	state := stateWithLabelReviewPending(t, issueID, 10)
+	rkey := ReactionKey(issueID, ReactionKindLabelReview)
+	state.RetryAttempts[issueID] = &RetryEntry{
+		IssueID:      issueID,
+		Attempt:      1,
+		ReactionKind: ReactionKindCI,
+	}
+
+	scm := &labelReviewSCMFake{
+		events: []domain.LabelEvent{
+			labelEvent("1", "sortie:review", "alice", true, labelReviewBaseTime.Add(-1*time.Minute)),
+		},
+	}
+	store := newLabelReviewFingerprintStore()
+	params := labelReviewParams(store, scm)
+
+	reconcileLabelReviewCommands(state, params, discardLogger(), context.Background(), &domain.NoopMetrics{})
+
+	entry, ok := state.PendingReactions[rkey]
+	if !ok {
+		t.Fatal("PendingReactions entry dropped on a defer; want re-enqueued")
+	}
+	if !entry.CreatedAt.Equal(labelReviewBaseTime) {
+		t.Errorf("CreatedAt = %v, want refreshed to %v", entry.CreatedAt, labelReviewBaseTime)
+	}
+	incumbent := state.RetryAttempts[issueID]
+	if incumbent.ReactionKind != ReactionKindCI {
+		t.Errorf("RetryAttempts.ReactionKind = %q, want %q (incumbent unchanged)", incumbent.ReactionKind, ReactionKindCI)
+	}
+	mark, _, _ := store.GetReactionFingerprint(context.Background(), issueID, ReactionKindLabelReview)
+	if mark != "" {
+		t.Errorf("stored mark = %q, want empty (a defer must not upsert the fingerprint)", mark)
+	}
+	data, ok := entry.KindData.(*LabelReviewReactionData)
+	if !ok {
+		t.Fatalf("KindData type = %T, want *LabelReviewReactionData", entry.KindData)
+	}
+	if data.HighWaterMark != "" {
+		t.Errorf("HighWaterMark = %q, want empty (a defer must not advance it)", data.HighWaterMark)
+	}
+	if scm.removeCalls != 0 {
+		t.Errorf("RemoveLabel calls = %d, want 0 (a defer must not acknowledge the command)", scm.removeCalls)
+	}
+}
+
+// TestReconcileLabelReviewCommands_SameKindCollapseAdvancesMarkAndReenqueues
+// covers the second arm of the three-way decision: a same-kind incumbent
+// collapses the dispatch, but the mark still advances to the newest
+// examined event and the pending entry still re-enqueues.
+func TestReconcileLabelReviewCommands_SameKindCollapseAdvancesMarkAndReenqueues(t *testing.T) {
+	t.Parallel()
+
+	const issueID = "LR-COLLAPSE"
+	state := stateWithLabelReviewPending(t, issueID, 10)
+	rkey := ReactionKey(issueID, ReactionKindLabelReview)
+	state.RetryAttempts[issueID] = &RetryEntry{
+		IssueID:      issueID,
+		Attempt:      1,
+		ReactionKind: ReactionKindLabelReview,
+	}
+
+	event := labelEvent("1", "sortie:review", "alice", true, labelReviewBaseTime.Add(-1*time.Minute))
+	scm := &labelReviewSCMFake{events: []domain.LabelEvent{event}}
+	store := newLabelReviewFingerprintStore()
+	params := labelReviewParams(store, scm)
+
+	reconcileLabelReviewCommands(state, params, discardLogger(), context.Background(), &domain.NoopMetrics{})
+
+	if len(state.RetryAttempts) != 1 {
+		t.Fatalf("RetryAttempts count = %d, want 1 (no second dispatch)", len(state.RetryAttempts))
+	}
+	pending, ok := state.PendingReactions[rkey]
+	if !ok {
+		t.Fatal("PendingReactions entry dropped after collapse; want re-enqueued")
+	}
+	mark, _, _ := store.GetReactionFingerprint(context.Background(), issueID, ReactionKindLabelReview)
+	if mark != labelReviewMark(event) {
+		t.Errorf("stored mark = %q, want %q (advanced to the newest examined event)", mark, labelReviewMark(event))
+	}
+	data, ok := pending.KindData.(*LabelReviewReactionData)
+	if !ok {
+		t.Fatalf("KindData type = %T, want *LabelReviewReactionData", pending.KindData)
+	}
+	if data.HighWaterMark != labelReviewMark(event) {
+		t.Errorf("HighWaterMark = %q, want %q", data.HighWaterMark, labelReviewMark(event))
+	}
+}

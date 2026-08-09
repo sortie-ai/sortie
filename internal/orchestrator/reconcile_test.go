@@ -734,6 +734,65 @@ func TestReconcileTrackerState_NonActiveNonTerminalCancelsWithoutCleanup(t *test
 	}
 }
 
+// TestReconcileTrackerState_NonActiveNonTerminalPreservesIncumbent verifies
+// that when the retry slot is occupied, the non-active stop still cancels
+// the worker and still counts the reconciliation action, but leaves the
+// incumbent retry entry alone — neither CancelRetry nor
+// Store.DeleteRetryEntry runs.
+func TestReconcileTrackerState_NonActiveNonTerminalPreservesIncumbent(t *testing.T) {
+	t.Parallel()
+
+	store := &mockReconcileStore{}
+	// "Backlog" is neither in ActiveStates nor TerminalStates.
+	tracker := &mockReconcileTracker{
+		states: map[string]string{"ISSUE-1": "Backlog"},
+	}
+	metrics := &spyMetrics{}
+	params := defaultReconcileParams(t, store, tracker)
+	params.StallTimeoutMS = 0
+	params.Metrics = metrics
+
+	state := NewState(5000, 4, nil, AgentTotals{})
+	cc := &cancelCounter{}
+	state.Running["ISSUE-1"] = &RunningEntry{
+		Identifier:   "ISSUE-1-ident",
+		StartedAt:    reconcileBaseTime,
+		CancelFunc:   cc.cancel,
+		Issue:        domain.Issue{State: "In Progress"},
+		ReactionKind: "", // continuation entry
+	}
+	state.Claimed["ISSUE-1"] = struct{}{}
+	state.RetryAttempts["ISSUE-1"] = &RetryEntry{
+		IssueID:      "ISSUE-1",
+		Identifier:   "ISSUE-1-ident",
+		Attempt:      1,
+		DueAtMS:      reconcileBaseTime.UnixMilli() + 60_000,
+		ReactionKind: ReactionKindCI,
+	}
+
+	ReconcileRunningIssues(state, params)
+
+	if cc.count != 1 {
+		t.Errorf("CancelFunc called %d times, want 1", cc.count)
+	}
+	entry, ok := state.RetryAttempts["ISSUE-1"]
+	if !ok {
+		t.Fatal("RetryAttempts entry removed while the slot was occupied; want preserved")
+	}
+	if entry.Attempt != 1 {
+		t.Errorf("RetryAttempts.Attempt = %d, want 1 (unchanged)", entry.Attempt)
+	}
+	if entry.DueAtMS != reconcileBaseTime.UnixMilli()+60_000 {
+		t.Errorf("RetryAttempts.DueAtMS = %d, want unchanged", entry.DueAtMS)
+	}
+	if len(store.deletedIssueID) != 0 {
+		t.Errorf("DeleteRetryEntry called %d times, want 0 (incumbent protected)", len(store.deletedIssueID))
+	}
+	if len(metrics.reconciliationActs) != 1 || metrics.reconciliationActs[0] != actionStop {
+		t.Errorf("IncReconciliationActions calls = %v, want [%q]", metrics.reconciliationActs, actionStop)
+	}
+}
+
 func TestReconcileTrackerState_OmittedIssueKeptRunning(t *testing.T) {
 	t.Parallel()
 
@@ -1396,9 +1455,17 @@ func TestReconcileTerminal_PendingCleanupSkipsLogAndRetryDeletion(t *testing.T) 
 	}
 
 	handler := &recordHandler{}
-	params := defaultReconcileParams(t, store, tracker)
-	params.StallTimeoutMS = 0
-	params.Logger = slog.New(handler)
+	params := ReconcileParams{
+		TrackerAdapter:    tracker,
+		ActiveStates:      []string{"In Progress", "In Review"},
+		TerminalStates:    []string{"Done", "Closed"},
+		MaxRetryBackoffMS: 300_000,
+		Store:             store,
+		OnRetryFire:       noopRetryFire,
+		NowFunc:           func() time.Time { return reconcileBaseTime },
+		Ctx:               context.Background(),
+		Logger:            slog.New(handler),
+	}
 
 	state := NewState(5000, 4, nil, AgentTotals{})
 	cc := &cancelCounter{}
@@ -1425,9 +1492,9 @@ func TestReconcileTerminal_PendingCleanupSkipsLogAndRetryDeletion(t *testing.T) 
 	}
 }
 
-// --- Stall Warn log first-tick-only test ---
+// --- Stall Warn log emitted every stalled tick test ---
 
-func TestReconcileStalled_WarnLogOnlyOnFirstTick(t *testing.T) {
+func TestReconcileStalled_WarnLogEveryStalledTick(t *testing.T) {
 	t.Parallel()
 
 	store := &mockReconcileStore{}
@@ -1450,7 +1517,7 @@ func TestReconcileStalled_WarnLogOnlyOnFirstTick(t *testing.T) {
 	}
 	state.Claimed["ISSUE-1"] = struct{}{}
 
-	// First tick: should emit Warn.
+	// First tick: schedules the stall retry and emits the Warn.
 	ReconcileRunningIssues(state, params)
 
 	warnCount := handler.countByMessage("stall detected, cancelling worker")
@@ -1458,18 +1525,88 @@ func TestReconcileStalled_WarnLogOnlyOnFirstTick(t *testing.T) {
 		t.Fatalf("Warn('stall detected, cancelling worker') emitted %d times after first tick, want 1", warnCount)
 	}
 
-	// Second tick: retry already scheduled → no Warn re-emitted.
+	// Second tick: the stall retry now occupies the slot, so the pass
+	// defers instead of rescheduling, but the cancellation Warn still
+	// fires because the worker cancellation is unconditional.
 	ReconcileRunningIssues(state, params)
 
 	warnCount = handler.countByMessage("stall detected, cancelling worker")
-	if warnCount != 1 {
-		t.Errorf("Warn('stall detected, cancelling worker') emitted %d times after second tick, want 1 (no additional Warn)", warnCount)
+	if warnCount != 2 {
+		t.Errorf("Warn('stall detected, cancelling worker') emitted %d times after second tick, want 2 (fires on every stalled tick)", warnCount)
 	}
 
-	// Verify Debug was emitted on second tick instead.
-	debugCount := handler.countByMessage("stall retry already scheduled, skipping reschedule")
-	if debugCount != 1 {
-		t.Errorf("Debug('stall retry already scheduled, skipping reschedule') emitted %d times, want 1", debugCount)
+	// The second tick's deferral is reported through the shared
+	// retry-slot Debug record instead of a stall-specific message.
+	deferCount := handler.countByMessage("retry slot occupied, deferring")
+	if deferCount != 1 {
+		t.Errorf("Debug('retry slot occupied, deferring') emitted %d times, want 1", deferCount)
+	}
+}
+
+// TestReconcileStalled_DeferralSkipsMutations verifies that a stall
+// deferral (the slot already occupied by the first tick's own stall
+// retry) still cancels the worker unconditionally but performs none of
+// the mutations the dispatch arm would: no additional ScheduleRetry (via
+// an unchanged DueAtMS and Attempt), no Store.SaveRetryEntry, no
+// Store.DeleteRetryEntry, and no IncRetries(triggerStall).
+func TestReconcileStalled_DeferralSkipsMutations(t *testing.T) {
+	t.Parallel()
+
+	store := &mockReconcileStore{}
+	tracker := &mockReconcileTracker{
+		states: map[string]string{"ISSUE-1": "In Progress"},
+	}
+	metrics := &spyMetrics{}
+	params := defaultReconcileParams(t, store, tracker)
+	params.StallTimeoutMS = 60_000
+	params.Metrics = metrics
+
+	state := NewState(5000, 4, nil, AgentTotals{})
+	cc := &cancelCounter{}
+	state.Running["ISSUE-1"] = &RunningEntry{
+		Identifier: "ISSUE-1-ident",
+		StartedAt:  reconcileBaseTime.Add(-120 * time.Second), // stalled
+		CancelFunc: cc.cancel,
+		Issue:      domain.Issue{State: "In Progress"},
+	}
+	state.Claimed["ISSUE-1"] = struct{}{}
+
+	// First tick: schedules the stall retry, occupying the slot.
+	ReconcileRunningIssues(state, params)
+
+	firstEntry, ok := state.RetryAttempts["ISSUE-1"]
+	if !ok {
+		t.Fatal("retry not scheduled after first tick")
+	}
+	firstDueAt := firstEntry.DueAtMS
+	firstAttempt := firstEntry.Attempt
+	firstStallTriggers := len(metrics.retries)
+
+	// Second tick: still stalled, but the slot is occupied by the
+	// first tick's own retry. The pass must defer, not reschedule.
+	ReconcileRunningIssues(state, params)
+
+	if cc.count != 2 {
+		t.Errorf("CancelFunc called %d times, want 2 (unconditional on every stalled tick)", cc.count)
+	}
+	secondEntry, ok := state.RetryAttempts["ISSUE-1"]
+	if !ok {
+		t.Fatal("retry entry removed after deferring tick")
+	}
+	if secondEntry.DueAtMS != firstDueAt {
+		t.Errorf("DueAtMS changed from %d to %d on a defer, want unchanged", firstDueAt, secondEntry.DueAtMS)
+	}
+	if secondEntry.Attempt != firstAttempt {
+		t.Errorf("Attempt changed from %d to %d on a defer, want unchanged", firstAttempt, secondEntry.Attempt)
+	}
+	if len(store.savedEntries) != 1 {
+		t.Errorf("SaveRetryEntry called %d times total, want 1 (none on the deferring tick)", len(store.savedEntries))
+	}
+	if len(store.deletedIssueID) != 0 {
+		t.Errorf("DeleteRetryEntry called %d times, want 0", len(store.deletedIssueID))
+	}
+	if len(metrics.retries) != firstStallTriggers {
+		t.Errorf("IncRetries called %d additional time(s) on the deferring tick, want 0", len(metrics.retries)-firstStallTriggers)
 	}
 }
 
@@ -2722,5 +2859,298 @@ func TestSweepWorkspaces_AgeRemovalLogCarriesRequiredAttributes(t *testing.T) {
 	}
 	if got := stringAttr(t, rec, "workspace_key"); got != key {
 		t.Errorf("workspace_key = %q, want %q", got, key)
+	}
+}
+
+// --- reconcileOverdueRetries tests ---
+
+// overdueRetryStore is a store double that records every method call so a
+// re-arm can be proven to perform none of them.
+type overdueRetryStore struct {
+	mockReconcileStore
+}
+
+// callCount returns the total number of ReconcileStore method calls
+// recorded across every method this double tracks.
+func (s *overdueRetryStore) callCount() int {
+	return len(s.savedEntries) + len(s.deletedIssueID) +
+		s.upsertFingerprintCalls + s.getFingerprintCalls +
+		s.markDispatchedCalls + s.deleteFingerprintCalls
+}
+
+func TestReconcileOverdueRetries_ReArmsOverdueEntry(t *testing.T) {
+	t.Parallel()
+
+	store := &overdueRetryStore{}
+	tracker := &mockReconcileTracker{}
+	fired := make(chan string, 4)
+	handler := &sweepLogHandler{}
+	params := ReconcileParams{
+		TrackerAdapter:    tracker,
+		ActiveStates:      []string{"In Progress", "In Review"},
+		TerminalStates:    []string{"Done", "Closed"},
+		MaxRetryBackoffMS: 300_000,
+		Store:             store,
+		OnRetryFire:       func(issueID string) { fired <- issueID },
+		NowFunc:           func() time.Time { return reconcileBaseTime },
+		Ctx:               context.Background(),
+		Logger:            slog.New(handler),
+	}
+
+	state := NewState(5000, 4, nil, AgentTotals{})
+	oldTimer := time.AfterFunc(time.Hour, func() {})
+	overdueDue := reconcileBaseTime.Add(-2 * time.Minute).UnixMilli()
+	state.RetryAttempts["OVERDUE-1"] = &RetryEntry{
+		IssueID:             "OVERDUE-1",
+		Identifier:          "OVERDUE-1-ident",
+		DisplayID:           "OVERDUE-1-display",
+		SessionID:           "sess-1",
+		Attempt:             3,
+		DueAtMS:             overdueDue,
+		Error:               "some error",
+		TimerHandle:         oldTimer,
+		LastSSHHost:         "host-a",
+		ContinuationContext: map[string]any{"ci_failure": map[string]any{"x": 1}},
+		ReactionKind:        ReactionKindCI,
+		RuleName:            "rule-1",
+		TemplateID:          "tmpl-1",
+		AgentKind:           "claude",
+	}
+	state.Claimed["OVERDUE-1"] = struct{}{}
+
+	before := time.Now().UnixMilli()
+	ReconcileRunningIssues(state, params)
+	after := time.Now().UnixMilli()
+
+	entry, ok := state.RetryAttempts["OVERDUE-1"]
+	if !ok {
+		t.Fatal("RetryAttempts entry missing after re-arm")
+	}
+	if entry.DueAtMS < before || entry.DueAtMS > after {
+		t.Errorf("DueAtMS = %d, want between %d and %d (re-armed at the tick's now)", entry.DueAtMS, before, after)
+	}
+	if entry.ReactionKind != ReactionKindCI {
+		t.Errorf("ReactionKind = %q, want %q", entry.ReactionKind, ReactionKindCI)
+	}
+	if entry.Attempt != 3 {
+		t.Errorf("Attempt = %d, want 3", entry.Attempt)
+	}
+	if entry.Identifier != "OVERDUE-1-ident" {
+		t.Errorf("Identifier = %q, want %q", entry.Identifier, "OVERDUE-1-ident")
+	}
+	if entry.DisplayID != "OVERDUE-1-display" {
+		t.Errorf("DisplayID = %q, want %q", entry.DisplayID, "OVERDUE-1-display")
+	}
+	if entry.SessionID != "sess-1" {
+		t.Errorf("SessionID = %q, want %q", entry.SessionID, "sess-1")
+	}
+	if entry.LastSSHHost != "host-a" {
+		t.Errorf("LastSSHHost = %q, want %q", entry.LastSSHHost, "host-a")
+	}
+	if entry.RuleName != "rule-1" {
+		t.Errorf("RuleName = %q, want %q", entry.RuleName, "rule-1")
+	}
+	if entry.TemplateID != "tmpl-1" {
+		t.Errorf("TemplateID = %q, want %q", entry.TemplateID, "tmpl-1")
+	}
+	if entry.AgentKind != "claude" {
+		t.Errorf("AgentKind = %q, want %q", entry.AgentKind, "claude")
+	}
+	if entry.ContinuationContext == nil {
+		t.Fatal("ContinuationContext is nil, want preserved")
+	}
+	if _, ok := state.Claimed["OVERDUE-1"]; !ok {
+		t.Error("Claimed entry removed by re-arm, want unchanged")
+	}
+	if handler.countByMessage("overdue retry re-armed") != 1 {
+		t.Errorf(`Warn("overdue retry re-armed") emitted %d times, want 1`, handler.countByMessage("overdue retry re-armed"))
+	}
+	if handler.countByMessage("retry slot displaced") != 0 {
+		t.Errorf(`Warn("retry slot displaced") emitted %d times, want 0`, handler.countByMessage("retry slot displaced"))
+	}
+	if rec, ok := handler.findByMessage("overdue retry re-armed"); ok {
+		if got := stringAttr(t, rec, "kind"); got != ReactionKindCI {
+			t.Errorf("kind attribute = %q, want %q", got, ReactionKindCI)
+		}
+		if got := intAttr(t, rec, "attempt"); got != 3 {
+			t.Errorf("attempt attribute = %d, want 3", got)
+		}
+		if _, hasOverdueMS := rec.attrs["overdue_ms"]; !hasOverdueMS {
+			t.Error("overdue_ms attribute missing")
+		}
+	}
+	if got := store.callCount(); got != 0 {
+		t.Errorf("Store method calls = %d, want 0", got)
+	}
+
+	select {
+	case id := <-fired:
+		if id != "OVERDUE-1" {
+			t.Errorf("OnRetryFire received %q, want %q", id, "OVERDUE-1")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("OnRetryFire not invoked within 1 second")
+	}
+
+	if entry.TimerHandle != nil {
+		entry.TimerHandle.Stop()
+	}
+}
+
+func TestReconcileOverdueRetries_FutureDueAtMSUntouched(t *testing.T) {
+	t.Parallel()
+
+	store := &overdueRetryStore{}
+	tracker := &mockReconcileTracker{}
+	handler := &sweepLogHandler{}
+	params := ReconcileParams{
+		TrackerAdapter:    tracker,
+		ActiveStates:      []string{"In Progress", "In Review"},
+		TerminalStates:    []string{"Done", "Closed"},
+		MaxRetryBackoffMS: 300_000,
+		Store:             store,
+		OnRetryFire:       noopRetryFire,
+		NowFunc:           func() time.Time { return reconcileBaseTime },
+		Ctx:               context.Background(),
+		Logger:            slog.New(handler),
+	}
+
+	state := NewState(5000, 4, nil, AgentTotals{})
+	timer := time.AfterFunc(time.Hour, func() {})
+	t.Cleanup(func() { timer.Stop() })
+	futureDue := reconcileBaseTime.Add(5 * time.Minute).UnixMilli()
+	original := &RetryEntry{
+		IssueID:      "FUTURE-1",
+		Identifier:   "FUTURE-1-ident",
+		Attempt:      1,
+		DueAtMS:      futureDue,
+		TimerHandle:  timer,
+		ReactionKind: ReactionKindCI,
+	}
+	state.RetryAttempts["FUTURE-1"] = original
+
+	ReconcileRunningIssues(state, params)
+
+	entry, ok := state.RetryAttempts["FUTURE-1"]
+	if !ok {
+		t.Fatal("RetryAttempts entry removed for a future-DueAtMS entry, want untouched")
+	}
+	if entry != original {
+		t.Error("RetryAttempts entry replaced for a future-DueAtMS entry, want the same pointer")
+	}
+	if entry.DueAtMS != futureDue {
+		t.Errorf("DueAtMS = %d, want unchanged %d", entry.DueAtMS, futureDue)
+	}
+	if handler.countByMessage("overdue retry re-armed") != 0 {
+		t.Errorf(`Warn("overdue retry re-armed") emitted %d times, want 0`, handler.countByMessage("overdue retry re-armed"))
+	}
+	if got := store.callCount(); got != 0 {
+		t.Errorf("Store method calls = %d, want 0", got)
+	}
+}
+
+func TestReconcileOverdueRetries_StartupReconstructedEntrySkipped(t *testing.T) {
+	t.Parallel()
+
+	store := &overdueRetryStore{}
+	tracker := &mockReconcileTracker{}
+	fired := make(chan string, 1)
+	handler := &sweepLogHandler{}
+	params := ReconcileParams{
+		TrackerAdapter:    tracker,
+		ActiveStates:      []string{"In Progress", "In Review"},
+		TerminalStates:    []string{"Done", "Closed"},
+		MaxRetryBackoffMS: 300_000,
+		Store:             store,
+		OnRetryFire:       func(issueID string) { fired <- issueID },
+		NowFunc:           func() time.Time { return reconcileBaseTime },
+		Ctx:               context.Background(),
+		Logger:            slog.New(handler),
+	}
+
+	state := NewState(5000, 4, nil, AgentTotals{})
+	overdueDueMs := reconcileBaseTime.Add(-5 * time.Minute).UnixMilli()
+	errStr := "prior error"
+	PopulateRetries(state, []persistence.PendingRetry{
+		{
+			Entry: persistence.RetryEntry{
+				IssueID:    "STARTUP-1",
+				Identifier: "STARTUP-1-ident",
+				Attempt:    2,
+				DueAtMs:    overdueDueMs,
+				Error:      &errStr,
+			},
+			RemainingMs: 0,
+		},
+	}, discardLogger())
+
+	ReconcileRunningIssues(state, params)
+
+	entry, ok := state.RetryAttempts["STARTUP-1"]
+	if !ok {
+		t.Fatal("RetryAttempts entry removed for a startup-reconstructed entry, want untouched")
+	}
+	if entry.TimerHandle != nil {
+		t.Error("TimerHandle became non-nil, want still nil (never activated)")
+	}
+	if entry.DueAtMS != overdueDueMs {
+		t.Errorf("DueAtMS = %d, want unchanged %d", entry.DueAtMS, overdueDueMs)
+	}
+	if handler.countByMessage("overdue retry re-armed") != 0 {
+		t.Errorf(`Warn("overdue retry re-armed") emitted %d times, want 0`, handler.countByMessage("overdue retry re-armed"))
+	}
+
+	select {
+	case id := <-fired:
+		t.Errorf("OnRetryFire invoked with %q, want no invocation for a startup-reconstructed entry", id)
+	case <-time.After(200 * time.Millisecond):
+	}
+}
+
+func TestReconcileOverdueRetries_LargeStartupBatchFiresNothing(t *testing.T) {
+	t.Parallel()
+
+	store := &overdueRetryStore{}
+	tracker := &mockReconcileTracker{}
+	fired := make(chan string, 200)
+	handler := &sweepLogHandler{}
+	params := ReconcileParams{
+		TrackerAdapter:    tracker,
+		ActiveStates:      []string{"In Progress", "In Review"},
+		TerminalStates:    []string{"Done", "Closed"},
+		MaxRetryBackoffMS: 300_000,
+		Store:             store,
+		OnRetryFire:       func(issueID string) { fired <- issueID },
+		NowFunc:           func() time.Time { return reconcileBaseTime },
+		Ctx:               context.Background(),
+		Logger:            slog.New(handler),
+	}
+
+	state := NewState(5000, 4, nil, AgentTotals{})
+	overdueDueMs := reconcileBaseTime.Add(-5 * time.Minute).UnixMilli()
+	entries := make([]persistence.PendingRetry, 0, 200)
+	for i := range 200 {
+		entries = append(entries, persistence.PendingRetry{
+			Entry: persistence.RetryEntry{
+				IssueID:    fmt.Sprintf("STARTUP-BATCH-%d", i),
+				Identifier: fmt.Sprintf("STARTUP-BATCH-%d-ident", i),
+				Attempt:    1,
+				DueAtMs:    overdueDueMs,
+			},
+			RemainingMs: 0,
+		})
+	}
+	PopulateRetries(state, entries, discardLogger())
+
+	ReconcileRunningIssues(state, params)
+
+	if handler.countByMessage("overdue retry re-armed") != 0 {
+		t.Errorf(`Warn("overdue retry re-armed") emitted %d times, want 0`, handler.countByMessage("overdue retry re-armed"))
+	}
+
+	select {
+	case id := <-fired:
+		t.Errorf("OnRetryFire invoked with %q, want no invocation for a 200-entry startup batch", id)
+	case <-time.After(200 * time.Millisecond):
 	}
 }

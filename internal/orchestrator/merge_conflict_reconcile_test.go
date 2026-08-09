@@ -517,10 +517,11 @@ func TestReconcileMergeConflicts_EpisodicReArm(t *testing.T) {
 	}
 
 	// Tick 2: head H2 clean → branch N1 resets the episode. A worker exit
-	// re-seeds the slot; advance the clock past the poll interval so the
-	// re-enqueued entry is due.
+	// re-seeds the slot and frees the tick-1 retry entry; advance the
+	// clock past the poll interval so the re-enqueued entry is due.
 	head = "H2-clean"
 	now = now.Add(2 * time.Minute)
+	CancelRetry(state, "MC-REARM")
 	state.PendingReactions[rkey] = newMergeConflictPending("MC-REARM", 10)
 	reconcileMergeConflicts(state, params, discardLogger(), context.Background(), metrics)
 	if metrics.checks["clear"] != 1 {
@@ -578,9 +579,10 @@ func TestReconcileMergeConflicts_Escalate(t *testing.T) {
 		t.Fatalf("after tick 1: dispatched = %d, want 1", metrics.checks["dispatched"])
 	}
 
-	// The agent rebased to a NEW head H2 that is still dirty. Re-seed the slot
-	// (a worker exit would do this) and run tick 2.
+	// The agent rebased to a NEW head H2 that is still dirty. A worker exit
+	// frees the tick-1 retry entry and re-seeds the slot; run tick 2.
 	head = "H2"
+	CancelRetry(state, issueID)
 	state.PendingReactions[rkey] = newMergeConflictPending(issueID, 77)
 
 	reconcileMergeConflicts(state, params, discardLogger(), context.Background(), metrics)
@@ -642,8 +644,9 @@ func TestReconcileMergeConflicts_EscalationResetsCounterReArm(t *testing.T) {
 	}
 
 	// Tick 2: still-dirty new head H2 → attempts 2, 2 > 1 → escalate, counter
-	// deleted.
+	// deleted. A worker exit frees the tick-1 retry entry before this tick.
 	head = "H2"
+	CancelRetry(state, issueID)
 	state.PendingReactions[rkey] = newMergeConflictPending(issueID, 88)
 	reconcileMergeConflicts(state, params, discardLogger(), context.Background(), metrics)
 	state.TrackerOpsWg.Wait()
@@ -1176,4 +1179,87 @@ func TestReconcileRunningIssues_MergeConflictOrdering(t *testing.T) {
 			t.Error("PendingReactions entry dropped while not due; want re-enqueued")
 		}
 	})
+}
+
+// TestReconcileMergeConflicts_ForeignIncumbentDefers covers the deferral
+// half of the retry-slot arbitration check at the top of the dirty
+// branch: a foreign incumbent survives, MarkReactionDispatched is not
+// called for the merge-conflict kind, and the merge-conflict
+// ReactionAttempts counter does not move.
+func TestReconcileMergeConflicts_ForeignIncumbentDefers(t *testing.T) {
+	t.Parallel()
+
+	const issueID = "MC-DEFER"
+	state := stateWithMergeConflict(t, issueID, 10)
+	rkey := ReactionKey(issueID, ReactionKindMergeConflict)
+	state.RetryAttempts[issueID] = &RetryEntry{
+		IssueID:      issueID,
+		Attempt:      1,
+		ReactionKind: ReactionKindCI,
+	}
+
+	store := newStatefulFingerprintStore()
+	metrics := newMergeConflictMetricsSpy()
+	scm := &mergeabilitySCM{fn: func() (domain.PRMergeStatus, error) {
+		return dirtyStatus("head-defer", "main"), nil
+	}}
+	params := mergeConflictParams(store, scm, nil)
+
+	reconcileMergeConflicts(state, params, discardLogger(), context.Background(), metrics)
+
+	entry, ok := state.PendingReactions[rkey]
+	if !ok {
+		t.Fatal("PendingReactions entry dropped on a defer; want re-enqueued")
+	}
+	if !entry.CreatedAt.Equal(mcBaseTime) {
+		t.Errorf("CreatedAt = %v, want refreshed to %v", entry.CreatedAt, mcBaseTime)
+	}
+	incumbent := state.RetryAttempts[issueID]
+	if incumbent.ReactionKind != ReactionKindCI {
+		t.Errorf("RetryAttempts.ReactionKind = %q, want %q (incumbent unchanged)", incumbent.ReactionKind, ReactionKindCI)
+	}
+	if _, ok := state.ReactionAttempts[rkey]; ok {
+		t.Errorf("ReactionAttempts[%s] = %d, want absent (a defer must not increment it)", rkey, state.ReactionAttempts[rkey])
+	}
+	if store.markDispatchedCalls != 0 {
+		t.Errorf("MarkReactionDispatched calls = %d, want 0 (no dispatch on a defer)", store.markDispatchedCalls)
+	}
+	if metrics.checks["dispatched"] != 0 {
+		t.Errorf(`IncMergeConflictChecks("dispatched") = %d, want 0`, metrics.checks["dispatched"])
+	}
+}
+
+// TestReconcileMergeConflicts_FreeSlotControlDispatches is the free-slot
+// control paired with TestReconcileMergeConflicts_ForeignIncumbentDefers:
+// the same dirty setup, but with no incumbent occupying the slot, results
+// in a merge-conflict retry and exactly one MarkReactionDispatched call.
+func TestReconcileMergeConflicts_FreeSlotControlDispatches(t *testing.T) {
+	t.Parallel()
+
+	const issueID = "MC-FREE"
+	state := stateWithMergeConflict(t, issueID, 10)
+	rkey := ReactionKey(issueID, ReactionKindMergeConflict)
+
+	store := newStatefulFingerprintStore()
+	metrics := newMergeConflictMetricsSpy()
+	scm := &mergeabilitySCM{fn: func() (domain.PRMergeStatus, error) {
+		return dirtyStatus("head-free", "main"), nil
+	}}
+	params := mergeConflictParams(store, scm, nil)
+
+	reconcileMergeConflicts(state, params, discardLogger(), context.Background(), metrics)
+
+	if _, ok := state.PendingReactions[rkey]; ok {
+		t.Error("PendingReactions entry still present after dispatch; want consumed")
+	}
+	retry, ok := state.RetryAttempts[issueID]
+	if !ok {
+		t.Fatal("retry not scheduled on a free slot; want scheduled")
+	}
+	if retry.ReactionKind != ReactionKindMergeConflict {
+		t.Errorf("RetryEntry.ReactionKind = %q, want %q", retry.ReactionKind, ReactionKindMergeConflict)
+	}
+	if store.markDispatchedCalls != 1 {
+		t.Errorf("MarkReactionDispatched calls = %d, want 1", store.markDispatchedCalls)
+	}
 }

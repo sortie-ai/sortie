@@ -159,12 +159,18 @@ func reconcileReviewComments(state *State, params ReconcileParams, log *slog.Log
 			continue
 		}
 
+		// Arbitrate the retry slot before dispatching.
+		if incumbent := retrySlotIncumbent(state, pending.IssueID); incumbent != nil {
+			logRetrySlotDeferral(entryLog, ReactionKindReview, incumbent)
+			pending.CreatedAt = now
+			state.PendingReactions[key] = pending
+			continue
+		}
+
 		// Dispatch.
 		metrics.IncReviewChecks("dispatched")
 
 		reviewContext := buildReviewTemplateMap(actionable)
-
-		CancelRetry(state, pending.IssueID)
 
 		ScheduleRetry(state, ScheduleRetryParams{
 			IssueID:     pending.IssueID,
@@ -180,6 +186,7 @@ func reconcileReviewComments(state *State, params ReconcileParams, log *slog.Log
 			AgentKind:    pending.AgentKind,
 			RuleName:     pending.RuleName,
 			TemplateID:   pending.TemplateID,
+			Logger:       entryLog,
 		}, params.OnRetryFire)
 
 		state.ReactionAttempts[rkey]++

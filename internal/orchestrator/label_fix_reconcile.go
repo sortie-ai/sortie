@@ -124,10 +124,21 @@ func reconcileLabelFixCommands(state *State, params ReconcileParams, log *slog.L
 		commandConfirmed := len(matches) > 0 && labelPresentNow
 
 		running := state.Running[pending.IssueID] != nil
-		existingRetry, retryQueued := state.RetryAttempts[pending.IssueID]
-		alreadyQueuedOrRunning := running || (retryQueued && existingRetry.ReactionKind == ReactionKindLabelFix)
+		incumbent := retrySlotIncumbent(state, pending.IssueID)
 
-		if commandConfirmed && !alreadyQueuedOrRunning {
+		// A foreign incumbent defers before the same-kind collapse check
+		// runs: evaluating the collapse arm first would advance the mark
+		// past the labeling event and swallow the gesture.
+		if commandConfirmed && incumbent != nil && incumbent.ReactionKind != ReactionKindLabelFix {
+			logRetrySlotDeferral(entryLog, ReactionKindLabelFix, incumbent)
+			pending.CreatedAt = now
+			state.PendingReactions[key] = pending
+			continue
+		}
+
+		sameKindQueuedOrRunning := running || (incumbent != nil && incumbent.ReactionKind == ReactionKindLabelFix)
+
+		if commandConfirmed && !sameKindQueuedOrRunning {
 			// Advance the mark BEFORE scheduling: at-most-once rests on the
 			// persisted mark, so a crash in the window between the two loses
 			// the command rather than duplicating it. The upsert is
@@ -144,7 +155,6 @@ func reconcileLabelFixCommands(state *State, params ReconcileParams, log *slog.L
 			data.HighWaterMark = newestMark
 			data.LastActor = newestMatch.Actor
 
-			CancelRetry(state, pending.IssueID)
 			ScheduleRetry(state, ScheduleRetryParams{
 				IssueID:    pending.IssueID,
 				Identifier: pending.Identifier,
@@ -158,6 +168,7 @@ func reconcileLabelFixCommands(state *State, params ReconcileParams, log *slog.L
 				AgentKind:    pending.AgentKind,
 				RuleName:     pending.RuleName,
 				TemplateID:   pending.TemplateID,
+				Logger:       entryLog,
 			}, params.OnRetryFire)
 
 			// Best-effort acknowledgment: the label's disappearance tells the
