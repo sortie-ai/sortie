@@ -1879,6 +1879,82 @@ func TestValidateWorkspaceRetentionDaysOutOfRange(t *testing.T) {
 	}
 }
 
+// TestValidateWorkspaceRetentionDaysValid covers R1 and R5: an in-range
+// workspace.retention_days value in the front matter is recognized by
+// the schema and produces no warnings, offline (the file tracker makes
+// no network call).
+func TestValidateWorkspaceRetentionDaysValid(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	content := []byte("---\n" +
+		"polling:\n  interval_ms: 30000\n" +
+		"tracker:\n  kind: file\n  active_states: [\"To Do\"]\n  terminal_states: [\"Done\"]\n" +
+		"agent:\n  kind: mock\n" +
+		"file:\n  path: issues.json\n" +
+		"workspace:\n  retention_days: 30\n" +
+		"---\nDo {{ .issue.title }}.\n")
+	wfPath := writeCustomWorkflowFile(t, dir, content)
+
+	var stdout, stderr bytes.Buffer
+	ctx := context.Background()
+
+	code := run(ctx, []string{"validate", "--format", "json", wfPath}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("run(validate) = %d, want 0; stderr: %s", code, stderr.String())
+	}
+
+	var out validateOutput
+	if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
+		t.Fatalf("json.Unmarshal(%q) error: %v", stdout.String(), err)
+	}
+	if !out.Valid {
+		t.Errorf("validateOutput.Valid = false, want true; errors: %v", out.Errors)
+	}
+	if len(out.Warnings) != 0 {
+		t.Errorf("validateOutput.Warnings = %v, want empty", out.Warnings)
+	}
+}
+
+// TestValidateWorkspaceRetentionDaysFromEnvOverride covers R1, R5, and
+// R9: a workspace.retention_days value supplied only through
+// SORTIE_WORKSPACE_RETENTION_DAYS, with no retention_days line in the
+// front matter, is recognized by the schema and produces no warnings.
+//
+// t.Setenv panics when called from a parallel test, so this test does
+// not call t.Parallel.
+func TestValidateWorkspaceRetentionDaysFromEnvOverride(t *testing.T) {
+	t.Setenv("SORTIE_WORKSPACE_RETENTION_DAYS", "30")
+
+	dir := t.TempDir()
+	content := []byte("---\n" +
+		"polling:\n  interval_ms: 30000\n" +
+		"tracker:\n  kind: file\n  active_states: [\"To Do\"]\n  terminal_states: [\"Done\"]\n" +
+		"agent:\n  kind: mock\n" +
+		"file:\n  path: issues.json\n" +
+		"---\nDo {{ .issue.title }}.\n")
+	wfPath := writeCustomWorkflowFile(t, dir, content)
+
+	var stdout, stderr bytes.Buffer
+	ctx := context.Background()
+
+	code := run(ctx, []string{"validate", "--format", "json", wfPath}, &stdout, &stderr)
+	if code != 0 {
+		t.Fatalf("run(validate) = %d, want 0; stderr: %s", code, stderr.String())
+	}
+
+	var out validateOutput
+	if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
+		t.Fatalf("json.Unmarshal(%q) error: %v", stdout.String(), err)
+	}
+	if !out.Valid {
+		t.Errorf("validateOutput.Valid = false, want true; errors: %v", out.Errors)
+	}
+	if len(out.Warnings) != 0 {
+		t.Errorf("validateOutput.Warnings = %v, want empty", out.Warnings)
+	}
+}
+
 func TestValidateDispatch_ConfigErrorRouting(t *testing.T) {
 	t.Parallel()
 
