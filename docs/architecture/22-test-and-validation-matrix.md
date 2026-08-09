@@ -187,6 +187,9 @@ Unless otherwise noted, Sections 17.1 through 17.7 are `Core Conformance`. Bulle
 - User input requests are handled according to the implementation's documented policy and do not
   stall indefinitely
 - Normalized token usage events are emitted with `{input_tokens, output_tokens, total_tokens}`
+- Each coding-agent adapter carries a token-accounting regression test whose input is output
+  captured from the runtime rather than a hand-written constant; the test asserts the
+  run-cumulative scope and monotonicity contract of Section 10.3
 - `ToolRegistry` is populated at startup and all registered tools appear in prompt-time
   advertisement
 - `tracker_api` tool:
