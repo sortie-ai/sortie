@@ -9,6 +9,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Token usage recorded per run was undercounted for every adapter that
+  reports it: `claude-code`, `codex`, `copilot-cli`, and `opencode`
+  each discarded, misread, or never reported most of a session's real
+  consumption. Recorded figures now match what each runtime reports.
+  An `agent.max_tokens` value tuned against the previous behavior will
+  bind sooner.
+  ([#756](https://github.com/sortie-ai/sortie/issues/756))
+
 - Follow-up work already queued for an issue is no longer discarded
   when a second kind of follow-up becomes due for the same issue.
   Sortie keeps one queued continuation per issue and the last writer
