@@ -54,9 +54,9 @@ func TestQueryExportSubprocess(t *testing.T) {
 		script, argsPath := writeExportScript(t, tmpDir, "export_usage.json", 0)
 		state := testExportState(script, tmpDir)
 
-		usage := queryExportUsage(context.Background(), state)
-		if usage.InputTokens != 1500 {
-			t.Errorf("InputTokens = %d, want 1500", usage.InputTokens)
+		usage := queryExportUsage(context.Background(), state, 0)
+		if usage.InputTokens != 1750 {
+			t.Errorf("InputTokens = %d, want 1750", usage.InputTokens)
 		}
 		if usage.OutputTokens != 300 {
 			t.Errorf("OutputTokens = %d, want 300", usage.OutputTokens)
@@ -81,7 +81,7 @@ func TestQueryExportSubprocess(t *testing.T) {
 		script, _ := writeExportScript(t, tmpDir, "export_usage_missing_tokens.json", 0)
 		state := testExportState(script, tmpDir)
 
-		usage := queryExportUsage(context.Background(), state)
+		usage := queryExportUsage(context.Background(), state, 0)
 		if usage != (exportUsage{}) {
 			t.Errorf("usage = %+v, want zero value", usage)
 		}
@@ -94,7 +94,7 @@ func TestQueryExportSubprocess(t *testing.T) {
 		script, _ := writeExportScript(t, tmpDir, "", 1)
 		state := testExportState(script, tmpDir)
 
-		usage := queryExportUsage(context.Background(), state)
+		usage := queryExportUsage(context.Background(), state, 0)
 		if usage != (exportUsage{}) {
 			t.Errorf("usage = %+v, want zero value", usage)
 		}
@@ -109,9 +109,9 @@ func TestQueryExportSubprocess(t *testing.T) {
 		state.target.RemoteCommand = "opencode"
 		state.target.SSHHost = "example.test"
 
-		usage := queryExportUsage(context.Background(), state)
-		if usage.InputTokens != 1500 {
-			t.Errorf("InputTokens = %d, want 1500", usage.InputTokens)
+		usage := queryExportUsage(context.Background(), state, 0)
+		if usage.InputTokens != 1750 {
+			t.Errorf("InputTokens = %d, want 1750", usage.InputTokens)
 		}
 		if usage.OutputTokens != 300 {
 			t.Errorf("OutputTokens = %d, want 300", usage.OutputTokens)

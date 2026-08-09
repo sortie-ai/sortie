@@ -69,8 +69,9 @@ func TestEmitSessionStarted_EmptyPID(t *testing.T) {
 func TestEmitTurnCompleted(t *testing.T) {
 	t.Parallel()
 
+	wantUsage := domain.TokenUsage{InputTokens: 42, OutputTokens: 7, TotalTokens: 49}
 	got := captureOne(t, func(emit func(domain.AgentEvent)) {
-		EmitTurnCompleted(emit, "done", 250)
+		EmitTurnCompleted(emit, "done", 250, wantUsage)
 	})
 
 	if got.Type != domain.EventTurnCompleted {
@@ -83,6 +84,9 @@ func TestEmitTurnCompleted(t *testing.T) {
 	if got.APIDurationMS != 250 {
 		t.Errorf("APIDurationMS = %d, want 250", got.APIDurationMS)
 	}
+	if got.Usage != wantUsage {
+		t.Errorf("Usage = %+v, want %+v", got.Usage, wantUsage)
+	}
 	if got.AgentPID != "" || got.SessionID != "" {
 		t.Errorf("AgentPID/SessionID should be zero, got %q/%q", got.AgentPID, got.SessionID)
 	}
@@ -92,7 +96,7 @@ func TestEmitTurnFailed(t *testing.T) {
 	t.Parallel()
 
 	got := captureOne(t, func(emit func(domain.AgentEvent)) {
-		EmitTurnFailed(emit, "oops", 100)
+		EmitTurnFailed(emit, "oops", 100, domain.TokenUsage{})
 	})
 
 	if got.Type != domain.EventTurnFailed {
@@ -111,7 +115,7 @@ func TestEmitTurnCancelled(t *testing.T) {
 	t.Parallel()
 
 	got := captureOne(t, func(emit func(domain.AgentEvent)) {
-		EmitTurnCancelled(emit, "cancelled by user")
+		EmitTurnCancelled(emit, "cancelled by user", domain.TokenUsage{})
 	})
 
 	if got.Type != domain.EventTurnCancelled {

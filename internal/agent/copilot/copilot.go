@@ -10,11 +10,14 @@ package copilot
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"regexp"
 	"strings"
 	"time"
 
@@ -23,6 +26,11 @@ import (
 	"github.com/sortie-ai/sortie/internal/logging"
 	"github.com/sortie-ai/sortie/internal/registry"
 )
+
+// sessionIDPattern matches the safe path-segment character set a
+// copilot session id must satisfy before it is joined into a
+// session-state path.
+var sessionIDPattern = regexp.MustCompile(`^[A-Za-z0-9._-]+$`)
 
 func init() {
 	registry.Agents.RegisterWithMeta("copilot-cli", NewCopilotAdapter, registry.AgentMeta{
@@ -61,11 +69,45 @@ type sessionState struct {
 	// forkSession owns the subprocess lifecycle for this session.
 	forkSession *agentcore.ForkPerTurnSession
 
+	// acc holds the session's run-cumulative token usage. Constructed
+	// once in StartSession and never reset between turns.
+	acc *agentcore.RunUsage
+
+	// runCreatedSession is true when this run started a new session
+	// (StartSessionParams.ResumeSessionID was empty), as opposed to
+	// resuming one from a prior worker attempt. Recorded once in
+	// StartSession; used by the post-exit recovery baseline logic to
+	// distinguish a run with nothing to recover from one that cannot
+	// separate its own spend from a resumed session's prior spend.
+	runCreatedSession bool
+
+	// baseline is the session-cumulative total to subtract from a
+	// successful session-state read to recover this run's own
+	// contribution. Resolved once per run; never reset between turns.
+	baseline         domain.TokenUsage
+	baselineResolved bool
+
+	// recoveryUnavailable is set when this run cannot separate its own
+	// spend from a resumed session's prior spend after missing its
+	// first read attempt. Once set, the output-only provisional figure
+	// stands for the remainder of the run.
+	recoveryUnavailable bool
+
+	// priorFinalizeOccurred is true once any turn of this run has
+	// completed OnFinalize, regardless of whether a session-state read
+	// was attempted, skipped, or failed. It distinguishes a read that
+	// is this run's first read attempt from one that is not.
+	priorFinalizeOccurred bool
+
+	// sessionIDRejectionLogged suppresses repeating the invalid-session-id
+	// Warn on every turn of a run whose session id never becomes valid.
+	sessionIDRejectionLogged bool
+
 	// Per-turn scan state owned by the ParseLine and OnFinalize hook
 	// closures. Reset at the top of each RunTurn call before delegating
 	// to forkSession.
-	acc      *agentcore.UsageAccumulator
-	inFlight *agentcore.ToolTracker
+	turnOutputTokens int64
+	inFlight         *agentcore.ToolTracker
 }
 
 func (s *sessionState) logger() *slog.Logger {
@@ -79,6 +121,88 @@ func (s *sessionState) refreshForkLogger() {
 	if s.forkSession != nil {
 		s.forkSession.SetLogger(s.logger())
 	}
+}
+
+// recoverUsage attempts to recover this run's authoritative token usage
+// from the runtime's session-state journal after the subprocess has
+// exited. It returns the run-cumulative snapshot to carry on the
+// terminal event and TurnResult.Usage.
+//
+// The read is skipped, and the output-only provisional snapshot already
+// held in s.acc stands, when the session id is unknown or fails the
+// path-segment check, when the launch target is in SSH mode, when
+// recovery has already been marked unavailable for this run, or when
+// the read fails or finds no session.shutdown record. On a successful
+// read, the baseline is resolved once per run: at the run's first read
+// attempt it is the record preceding the current one (zero when none
+// exists); at a later first-successful read it is zero when this run
+// created the session, and otherwise recovery is marked unavailable for
+// the remainder of the run because the boundary record that would
+// separate this run's spend from a resumed session's prior spend is no
+// longer available.
+func (s *sessionState) recoverUsage(logger *slog.Logger) domain.TokenUsage {
+	hadPriorFinalize := s.priorFinalizeOccurred
+	defer func() { s.priorFinalizeOccurred = true }()
+
+	if s.recoveryUnavailable {
+		return s.acc.Snapshot()
+	}
+
+	remote := s.target.RemoteCommand != ""
+	sessionID := s.copilotSessionID
+	validID := sessionID != "" && sessionIDPattern.MatchString(sessionID)
+
+	if remote || !validID {
+		if sessionID != "" && !validID && !s.sessionIDRejectionLogged {
+			logger.Warn("copilot session id rejected for session-state read",
+				slog.String("reason", "invalid_session_id"))
+			s.sessionIDRejectionLogged = true
+		}
+		return s.acc.Snapshot()
+	}
+
+	root, err := sessionStateRoot(os.Getenv, os.UserHomeDir)
+	if err != nil {
+		logger.Debug("copilot session-state root resolution failed",
+			slog.String("session_id", sessionID), slog.String("reason", "root_unresolved"))
+		return s.acc.Snapshot()
+	}
+	eventsPath := filepath.Join(root, sessionID, "events.jsonl")
+
+	current, previous, found, err := readSessionUsage(eventsPath)
+	if err != nil {
+		if errors.Is(err, errSessionStateCapExceeded) {
+			logger.Warn("copilot session-state read abandoned",
+				slog.String("session_id", sessionID), slog.String("reason", "cap_exceeded"))
+		} else {
+			logger.Debug("copilot session-state read failed",
+				slog.String("session_id", sessionID), slog.String("reason", "unreadable"))
+		}
+		return s.acc.Snapshot()
+	}
+
+	if !s.baselineResolved {
+		switch {
+		case !hadPriorFinalize:
+			s.baseline = previous
+		case s.runCreatedSession:
+			s.baseline = domain.TokenUsage{}
+		default:
+			s.recoveryUnavailable = true
+			logger.Warn("copilot session-state recovery abandoned for this run",
+				slog.String("session_id", sessionID), slog.String("reason", "boundary_record_unavailable"))
+			return s.acc.Snapshot()
+		}
+		s.baselineResolved = true
+	}
+
+	if !found {
+		logger.Debug("copilot session-state has no session.shutdown record yet",
+			slog.String("session_id", sessionID), slog.String("reason", "no_record"))
+		return s.acc.Snapshot()
+	}
+
+	return s.acc.SetRunCumulative(subtractUsage(current, s.baseline))
 }
 
 // NewCopilotAdapter creates a [CopilotAdapter] from adapter
@@ -124,11 +248,13 @@ func (a *CopilotAdapter) StartSession(ctx context.Context, params domain.StartSe
 	}
 
 	state := &sessionState{
-		target:           target,
-		copilotSessionID: copilotSessionID,
-		agentConfig:      params.AgentConfig,
-		baseLogger:       slog.Default().With(slog.String("component", "copilot-adapter")),
-		mcpConfigPath:    params.MCPConfigPath,
+		target:            target,
+		copilotSessionID:  copilotSessionID,
+		agentConfig:       params.AgentConfig,
+		baseLogger:        slog.Default().With(slog.String("component", "copilot-adapter")),
+		mcpConfigPath:     params.MCPConfigPath,
+		runCreatedSession: params.ResumeSessionID == "",
+		acc:               agentcore.NewRunUsage(),
 	}
 
 	hooks := agentcore.ForkPerTurnHooks{
@@ -152,7 +278,8 @@ func (a *CopilotAdapter) StartSession(ctx context.Context, params domain.StartSe
 				if len(event.Data) > 0 {
 					msgData, dataErr := parseAssistantMessageData(event.Data)
 					if dataErr == nil {
-						snapshot, _ := state.acc.AddDelta(0, msgData.OutputTokens, 0)
+						state.turnOutputTokens += msgData.OutputTokens
+						snapshot := state.acc.SetTurnProvisional(domain.TokenUsage{OutputTokens: state.turnOutputTokens})
 						emit(domain.AgentEvent{
 							Type:      domain.EventTokenUsage,
 							Timestamp: now,
@@ -261,7 +388,7 @@ func (a *CopilotAdapter) StartSession(ctx context.Context, params domain.StartSe
 				state.fallbackToContinue = true
 			}
 
-			usage := state.acc.Snapshot()
+			usage := state.recoverUsage(state.logger())
 
 			if lastResult != nil {
 				// Extract API duration from the result event.
@@ -273,7 +400,7 @@ func (a *CopilotAdapter) StartSession(ctx context.Context, params domain.StartSe
 				}
 
 				if lastResult.ExitCode != nil && *lastResult.ExitCode == 0 {
-					agentcore.EmitTurnCompleted(emit, "", apiDurationMS)
+					agentcore.EmitTurnCompleted(emit, "", apiDurationMS, usage)
 					return domain.TurnResult{
 						SessionID:  state.copilotSessionID,
 						ExitReason: domain.EventTurnCompleted,
@@ -281,7 +408,7 @@ func (a *CopilotAdapter) StartSession(ctx context.Context, params domain.StartSe
 					}, nil
 				}
 				// EmitWarnLines is called by the skeleton when agentErr is non-nil.
-				agentcore.EmitTurnFailed(emit, "non-zero exit in result event", apiDurationMS)
+				agentcore.EmitTurnFailed(emit, "non-zero exit in result event", apiDurationMS, usage)
 				return domain.TurnResult{
 						SessionID:  state.copilotSessionID,
 						ExitReason: domain.EventTurnFailed,
@@ -294,7 +421,7 @@ func (a *CopilotAdapter) StartSession(ctx context.Context, params domain.StartSe
 
 			// No result event.
 			if exitCode != 0 {
-				agentcore.EmitTurnFailed(emit, "non-zero exit", 0)
+				agentcore.EmitTurnFailed(emit, "non-zero exit", 0, usage)
 				return domain.TurnResult{
 						SessionID:  state.copilotSessionID,
 						ExitReason: domain.EventTurnFailed,
@@ -305,10 +432,11 @@ func (a *CopilotAdapter) StartSession(ctx context.Context, params domain.StartSe
 					}
 			}
 
-			// No result event and exit code 0.
-			if state.acc.Snapshot().OutputTokens == 0 {
+			// No result event and exit code 0. Test the turn's own output,
+			// not the run cumulative, which is non-zero on any second turn.
+			if state.turnOutputTokens == 0 {
 				state.logger().Warn("agent exited without producing output, treating as failure")
-				agentcore.EmitTurnFailed(emit, "agent exited without producing output", 0)
+				agentcore.EmitTurnFailed(emit, "agent exited without producing output", 0, usage)
 				return domain.TurnResult{
 						SessionID:  state.copilotSessionID,
 						ExitReason: domain.EventTurnFailed,
@@ -319,7 +447,7 @@ func (a *CopilotAdapter) StartSession(ctx context.Context, params domain.StartSe
 					}
 			}
 
-			agentcore.EmitTurnCompleted(emit, "", 0)
+			agentcore.EmitTurnCompleted(emit, "", 0, usage)
 			return domain.TurnResult{
 				SessionID:  state.copilotSessionID,
 				ExitReason: domain.EventTurnCompleted,
@@ -384,8 +512,10 @@ func (a *CopilotAdapter) RunTurn(ctx context.Context, session domain.Session, pa
 
 	state.refreshForkLogger()
 
-	// Reset per-turn scan state before delegation.
-	state.acc = agentcore.NewUsageAccumulator()
+	// Reset per-turn scan state before delegation. state.acc is
+	// constructed once in StartSession and carries the run-cumulative
+	// snapshot across turns, so it is not reset here.
+	state.turnOutputTokens = 0
 	state.inFlight = agentcore.NewToolTracker()
 
 	return state.forkSession.RunTurn(ctx, params.Prompt, params.OnEvent)

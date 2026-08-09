@@ -209,7 +209,7 @@ func TestParseEvent_Malformed(t *testing.T) {
 	}
 }
 
-func TestNormalizeUsage(t *testing.T) {
+func TestUsageFromAssistant(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -240,16 +240,16 @@ func TestNormalizeUsage(t *testing.T) {
 			want: domain.TokenUsage{},
 		},
 		{
-			name: "cache read input tokens",
+			name: "cache read and cache creation input tokens",
 			raw: &rawUsage{
 				InputTokens:          12000,
 				OutputTokens:         3000,
 				CacheReadInputTokens: 8000,
 			},
 			want: domain.TokenUsage{
-				InputTokens:     12000,
+				InputTokens:     20000,
 				OutputTokens:    3000,
-				TotalTokens:     15000,
+				TotalTokens:     23000,
 				CacheReadTokens: 8000,
 			},
 		},
@@ -258,9 +258,94 @@ func TestNormalizeUsage(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			got := normalizeUsage(tt.raw)
+			got := usageFromAssistant(tt.raw)
 			if got != tt.want {
-				t.Errorf("normalizeUsage() = %+v, want %+v", got, tt.want)
+				t.Errorf("usageFromAssistant() = %+v, want %+v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestUsageFromResult(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		event     rawEvent
+		wantUsage domain.TokenUsage
+		wantModel string
+	}{
+		{
+			name: "modelUsage single entry preferred over usage",
+			event: rawEvent{
+				Usage: &rawUsage{InputTokens: 1, OutputTokens: 1},
+				ModelUsage: map[string]rawModelUsage{
+					"claude-haiku-4-5-20251001": {
+						InputTokens: 10, OutputTokens: 64,
+						CacheReadInputTokens: 17706, CacheCreationInputTokens: 15933,
+					},
+				},
+			},
+			wantUsage: domain.TokenUsage{
+				InputTokens: 33649, OutputTokens: 64, TotalTokens: 33713, CacheReadTokens: 17706,
+			},
+			wantModel: "claude-haiku-4-5-20251001",
+		},
+		{
+			name: "modelUsage two entries sums components and picks greater output",
+			event: rawEvent{
+				ModelUsage: map[string]rawModelUsage{
+					"claude-sonnet-4-5-20250929": {InputTokens: 5000, OutputTokens: 800, CacheReadInputTokens: 1000, CacheCreationInputTokens: 200},
+					"claude-haiku-4-5-20251001":  {InputTokens: 3000, OutputTokens: 1200, CacheReadInputTokens: 500, CacheCreationInputTokens: 100},
+				},
+			},
+			wantUsage: domain.TokenUsage{
+				InputTokens: 9800, OutputTokens: 2000, TotalTokens: 11800, CacheReadTokens: 1500,
+			},
+			wantModel: "claude-haiku-4-5-20251001",
+		},
+		{
+			name: "modelUsage tie broken by lexicographically smallest key",
+			event: rawEvent{
+				ModelUsage: map[string]rawModelUsage{
+					"zeta-model":  {InputTokens: 100, OutputTokens: 50},
+					"alpha-model": {InputTokens: 200, OutputTokens: 50},
+				},
+			},
+			wantUsage: domain.TokenUsage{InputTokens: 300, OutputTokens: 100, TotalTokens: 400},
+			wantModel: "alpha-model",
+		},
+		{
+			name: "modelUsage absent falls back to usage",
+			event: rawEvent{
+				Usage: &rawUsage{InputTokens: 200, OutputTokens: 80, CacheReadInputTokens: 8000, CacheCreationInputTokens: 2000},
+			},
+			wantUsage: domain.TokenUsage{InputTokens: 10200, OutputTokens: 80, TotalTokens: 10280, CacheReadTokens: 8000},
+			wantModel: "",
+		},
+		{
+			name:      "modelUsage empty map falls back to usage",
+			event:     rawEvent{Usage: &rawUsage{InputTokens: 5, OutputTokens: 2}, ModelUsage: map[string]rawModelUsage{}},
+			wantUsage: domain.TokenUsage{InputTokens: 5, OutputTokens: 2, TotalTokens: 7},
+			wantModel: "",
+		},
+		{
+			name:      "neither modelUsage nor usage present",
+			event:     rawEvent{},
+			wantUsage: domain.TokenUsage{},
+			wantModel: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			gotUsage, gotModel := usageFromResult(tt.event)
+			if gotUsage != tt.wantUsage {
+				t.Errorf("usageFromResult() usage = %+v, want %+v", gotUsage, tt.wantUsage)
+			}
+			if gotModel != tt.wantModel {
+				t.Errorf("usageFromResult() model = %q, want %q", gotModel, tt.wantModel)
 			}
 		})
 	}
@@ -462,10 +547,14 @@ func TestRawAssistantMessageMeta_FromFixture(t *testing.T) {
 		t.Errorf("Usage.CacheReadInputTokens = %d, want 8000", meta.Usage.CacheReadInputTokens)
 	}
 
-	// normalizeUsage must map CacheReadInputTokens → CacheReadTokens.
-	normalized := normalizeUsage(meta.Usage)
+	// usageFromAssistant must map CacheReadInputTokens to CacheReadTokens
+	// and fold both cache fields into InputTokens (12500 + 8000 + 1500).
+	normalized := usageFromAssistant(meta.Usage)
 	if normalized.CacheReadTokens != 8000 {
-		t.Errorf("normalizeUsage().CacheReadTokens = %d, want 8000", normalized.CacheReadTokens)
+		t.Errorf("usageFromAssistant().CacheReadTokens = %d, want 8000", normalized.CacheReadTokens)
+	}
+	if normalized.InputTokens != 22000 {
+		t.Errorf("usageFromAssistant().InputTokens = %d, want 22000", normalized.InputTokens)
 	}
 }
 

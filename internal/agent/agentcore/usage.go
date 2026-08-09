@@ -2,56 +2,93 @@ package agentcore
 
 import "github.com/sortie-ai/sortie/internal/domain"
 
-// UsageAccumulator tracks cumulative token usage across the events of a
-// single agent turn. It is not safe for concurrent use; each RunTurn
-// invocation constructs its own UsageAccumulator and uses it on a single
-// goroutine.
-type UsageAccumulator struct {
-	current domain.TokenUsage
-}
-
-// NewUsageAccumulator returns a zero-value UsageAccumulator ready for use.
-func NewUsageAccumulator() *UsageAccumulator {
-	return &UsageAccumulator{}
-}
-
-// AddDelta adds per-request token delta counts to the running cumulative
-// totals and returns the updated snapshot. ready is true when cumulative
-// output tokens are non-zero, indicating the snapshot is suitable for
-// emission as an EventTokenUsage event. When ready is false the snapshot is
-// valid but the caller should defer emission.
+// RunUsage accumulates normalized token usage across every turn of one
+// agent session. It combines a settled total (closed turns and
+// run-cumulative snapshots) with a provisional contribution from the
+// turn currently in flight, and never returns a snapshot lower than any
+// snapshot it has already returned, so a caller that reports each
+// method's result observes a monotonically non-decreasing sequence per
+// component even when a later provisional estimate would otherwise be
+// smaller than an earlier one.
 //
-// TotalTokens in the returned snapshot is always InputTokens + OutputTokens.
-// All arguments must be non-negative; negative values are clamped to 0.
-func (u *UsageAccumulator) AddDelta(input, output, cacheRead int64) (domain.TokenUsage, bool) {
-	if input < 0 {
-		input = 0
-	}
-	if output < 0 {
-		output = 0
-	}
-	if cacheRead < 0 {
-		cacheRead = 0
-	}
-	u.current.InputTokens += input
-	u.current.OutputTokens += output
-	u.current.CacheReadTokens += cacheRead
-	u.current.TotalTokens = u.current.InputTokens + u.current.OutputTokens
-	return u.current, u.current.OutputTokens > 0
+// Not safe for concurrent use; each adapter session constructs its own
+// RunUsage in StartSession and uses it on the single goroutine that
+// executes RunTurn for that session.
+type RunUsage struct {
+	settled     domain.TokenUsage
+	provisional domain.TokenUsage
+	high        domain.TokenUsage
 }
 
-// ReplaceCumulative replaces the accumulator's internal state with the
-// complete snapshot in and returns it unchanged. Use this for adapters that
-// receive a single authoritative usage event (e.g., Codex's turn/completed).
-// Subsequent calls to [UsageAccumulator.Snapshot] return in.
-func (u *UsageAccumulator) ReplaceCumulative(in domain.TokenUsage) domain.TokenUsage {
-	u.current = in
-	return in
+// NewRunUsage returns a zero-value RunUsage ready for use.
+func NewRunUsage() *RunUsage {
+	return &RunUsage{}
 }
 
-// Snapshot returns the current cumulative token usage without modifying the
-// accumulator. Returns a zero [domain.TokenUsage] when no deltas have been
-// added and ReplaceCumulative has not been called.
-func (u *UsageAccumulator) Snapshot() domain.TokenUsage {
-	return u.current
+// SetTurnProvisional replaces the in-flight turn's contribution with
+// turn and returns the resulting run-cumulative snapshot (settled plus
+// the new provisional contribution), raised against the highest
+// snapshot returned so far.
+func (u *RunUsage) SetTurnProvisional(turn domain.TokenUsage) domain.TokenUsage {
+	u.provisional = clamp(turn)
+	return u.raise(add(u.settled, u.provisional))
+}
+
+// AddTurn adds turn to the settled total, clears the in-flight turn's
+// provisional contribution, and returns the new settled total, raised
+// against the highest snapshot returned so far.
+func (u *RunUsage) AddTurn(turn domain.TokenUsage) domain.TokenUsage {
+	u.settled = add(u.settled, clamp(turn))
+	u.provisional = domain.TokenUsage{}
+	return u.raise(u.settled)
+}
+
+// SetRunCumulative replaces the settled total with run outright, clears
+// the in-flight turn's provisional contribution, and returns the new
+// settled total, raised against the highest snapshot returned so far.
+func (u *RunUsage) SetRunCumulative(run domain.TokenUsage) domain.TokenUsage {
+	u.settled = clamp(run)
+	u.provisional = domain.TokenUsage{}
+	return u.raise(u.settled)
+}
+
+// Snapshot returns the highest run-cumulative snapshot returned so far
+// by any method, without modifying u. Returns the zero value before any
+// other method has been called.
+func (u *RunUsage) Snapshot() domain.TokenUsage {
+	return u.high
+}
+
+// raise sets u.high to the componentwise maximum of u.high and snapshot
+// and returns the result.
+func (u *RunUsage) raise(snapshot domain.TokenUsage) domain.TokenUsage {
+	u.high = domain.TokenUsage{
+		InputTokens:     max(u.high.InputTokens, snapshot.InputTokens),
+		OutputTokens:    max(u.high.OutputTokens, snapshot.OutputTokens),
+		CacheReadTokens: max(u.high.CacheReadTokens, snapshot.CacheReadTokens),
+	}
+	u.high.TotalTokens = u.high.InputTokens + u.high.OutputTokens
+	return u.high
+}
+
+// clamp floors every negative component of usage at zero and recomputes
+// TotalTokens as InputTokens plus OutputTokens.
+func clamp(usage domain.TokenUsage) domain.TokenUsage {
+	usage.InputTokens = max(usage.InputTokens, 0)
+	usage.OutputTokens = max(usage.OutputTokens, 0)
+	usage.CacheReadTokens = max(usage.CacheReadTokens, 0)
+	usage.TotalTokens = usage.InputTokens + usage.OutputTokens
+	return usage
+}
+
+// add returns the componentwise sum of a and b, with TotalTokens
+// recomputed as InputTokens plus OutputTokens.
+func add(a, b domain.TokenUsage) domain.TokenUsage {
+	sum := domain.TokenUsage{
+		InputTokens:     a.InputTokens + b.InputTokens,
+		OutputTokens:    a.OutputTokens + b.OutputTokens,
+		CacheReadTokens: a.CacheReadTokens + b.CacheReadTokens,
+	}
+	sum.TotalTokens = sum.InputTokens + sum.OutputTokens
+	return sum
 }

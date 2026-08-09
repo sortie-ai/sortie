@@ -165,7 +165,7 @@ func parseStepFinishPart(raw json.RawMessage) (rawStepFinishPart, error) {
 	return part, nil
 }
 
-func queryExportUsage(ctx context.Context, state *sessionState) exportUsage {
+func queryExportUsage(ctx context.Context, state *sessionState, sinceUnixMS int64) exportUsage {
 	sessionID := state.currentSessionID()
 	if sessionID == "" {
 		return exportUsage{}
@@ -211,7 +211,7 @@ func queryExportUsage(ctx context.Context, state *sessionState) exportUsage {
 		return exportUsage{}
 	}
 
-	usage := parseExportOutput(stdout, sessionID)
+	usage := parseExportOutput(stdout, sessionID, sinceUnixMS)
 	if usage.InputTokens == 0 && usage.OutputTokens == 0 {
 		state.logger().Warn("no assistant token usage found in opencode export")
 	}
@@ -280,11 +280,15 @@ func queryModelNotFound(ctx context.Context, state *sessionState) (message strin
 	return "Model not found: " + model, true
 }
 
-// parseExportOutput extracts token usage from the JSON returned by
-// opencode export, scanning messages in reverse to find the most recent
-// assistant message for sessionID. Returns zero exportUsage on any parse
-// failure or when no matching message is found.
-func parseExportOutput(data []byte, sessionID string) exportUsage {
+// parseExportOutput extracts run-cumulative token usage from the JSON
+// returned by opencode export, summing over every assistant message for
+// sessionID. When sinceUnixMS is non-zero, only messages whose
+// info.time.created is present, parseable, and greater than or equal to
+// sinceUnixMS are counted; sinceUnixMS of 0 counts every matching
+// message. A message without a tokens object is skipped. The reported
+// model and cost come from the last kept message. Returns the zero
+// exportUsage on any parse failure or when no message is kept.
+func parseExportOutput(data []byte, sessionID string, sinceUnixMS int64) exportUsage {
 	var payload map[string]any
 	if err := json.Unmarshal(data, &payload); err != nil {
 		return exportUsage{}
@@ -293,7 +297,10 @@ func parseExportOutput(data []byte, sessionID string) exportUsage {
 	if !ok {
 		return exportUsage{}
 	}
-	for _, v := range slices.Backward(messages) {
+
+	var sum exportUsage
+	kept := false
+	for _, v := range messages {
 		message, ok := v.(map[string]any)
 		if !ok {
 			continue
@@ -308,6 +315,12 @@ func parseExportOutput(data []byte, sessionID string) exportUsage {
 		if stringFromAny(info["sessionID"]) != sessionID {
 			continue
 		}
+		if sinceUnixMS != 0 {
+			created, ok := messageCreatedMS(info)
+			if !ok || created < sinceUnixMS {
+				continue
+			}
+		}
 		tokens := mapFromAny(info["tokens"])
 		if tokens == nil {
 			continue
@@ -320,33 +333,51 @@ func parseExportOutput(data []byte, sessionID string) exportUsage {
 		if !ok {
 			continue
 		}
-		totalTokens := inputTokens + outputTokens
-		if total, ok := int64FromAny(tokens["total"]); ok {
-			totalTokens = total
+		var reasoningTokens int64
+		if reasoning, ok := int64FromAny(tokens["reasoning"]); ok {
+			reasoningTokens = reasoning
 		}
-		var cacheReadTokens int64
+		var cacheReadTokens, cacheWriteTokens int64
 		if cache := mapFromAny(tokens["cache"]); cache != nil {
 			if read, ok := int64FromAny(cache["read"]); ok {
 				cacheReadTokens = read
 			}
+			if write, ok := int64FromAny(cache["write"]); ok {
+				cacheWriteTokens = write
+			}
 		}
-		var model string
+
+		sum.InputTokens += inputTokens + cacheReadTokens + cacheWriteTokens
+		sum.OutputTokens += outputTokens + reasoningTokens
+		sum.CacheReadTokens += cacheReadTokens
+		kept = true
+
 		providerID := stringFromAny(info["providerID"])
 		modelID := stringFromAny(info["modelID"])
 		if providerID != "" && modelID != "" {
-			model = providerID + "/" + modelID
+			sum.Model = providerID + "/" + modelID
 		}
-		cost, _ := float64FromAny(info["cost"])
-		return exportUsage{
-			InputTokens:     inputTokens,
-			OutputTokens:    outputTokens,
-			TotalTokens:     totalTokens,
-			CacheReadTokens: cacheReadTokens,
-			Model:           model,
-			Cost:            cost,
+		if cost, ok := float64FromAny(info["cost"]); ok {
+			sum.Cost = cost
 		}
 	}
-	return exportUsage{}
+	if !kept {
+		return exportUsage{}
+	}
+
+	sum.TotalTokens = sum.InputTokens + sum.OutputTokens
+	return sum
+}
+
+// messageCreatedMS extracts info.time.created (Unix milliseconds) from an
+// assistant message's info object. ok is false when the field is absent
+// or not parseable as a number.
+func messageCreatedMS(info map[string]any) (createdMS int64, ok bool) {
+	t := mapFromAny(info["time"])
+	if t == nil {
+		return 0, false
+	}
+	return int64FromAny(t["created"])
 }
 
 func mapFromAny(value any) map[string]any {

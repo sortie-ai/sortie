@@ -3,9 +3,11 @@
 package copilot
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -1033,4 +1035,290 @@ func TestRunTurn_StderrNoWarnOnSuccess(t *testing.T) {
 	if warnLines := spy.WarnLines(); len(warnLines) != 0 {
 		t.Errorf("success path produced %d WARN lines for stderr, want 0; got %v", len(warnLines), warnLines)
 	}
+}
+
+// journalPath returns the events.jsonl path readSessionUsage resolves
+// for sessionID when COPILOT_HOME is set to copilotHome.
+func journalPath(copilotHome, sessionID string) string {
+	return filepath.Join(copilotHome, "session-state", sessionID, "events.jsonl")
+}
+
+// writeJournal writes content to path, creating parent directories as
+// needed.
+func writeJournal(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("MkdirAll(%q): %v", filepath.Dir(path), err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("WriteFile(%q): %v", path, err)
+	}
+}
+
+// TestRunTurn_SessionStateRecovery_FirstRecord drives RunTurn with a
+// temporary session-state root containing one session.shutdown record
+// captured from Copilot CLI 1.0.78, whose modelMetrics reports
+// inputTokens 193011, outputTokens 596, cacheReadTokens 154053. It
+// asserts the terminal event carries the recovered totals, the
+// per-message token_usage event delivered before it carries only the
+// stream's output-only provisional count, and exactly one token_usage
+// event fires, matching the fixture's single assistant.message.
+func TestRunTurn_SessionStateRecovery_FirstRecord(t *testing.T) {
+	// No t.Parallel(): t.Setenv is incompatible with it.
+	t.Setenv("GH_TOKEN", "test-token-for-unit-test")
+	copilotHome := t.TempDir()
+	t.Setenv("COPILOT_HOME", copilotHome)
+
+	const sessionID = "aa778ea0-6eab-4ce9-b87e-11d6d33dab4f"
+	fixture := loadTestFixture(t, "session_shutdown.jsonl")
+	lines := strings.Split(strings.TrimRight(fixture, "\n"), "\n")
+	if len(lines) < 2 {
+		t.Fatalf("session_shutdown.jsonl has %d lines, want at least 2", len(lines))
+	}
+	writeJournal(t, journalPath(copilotHome, sessionID), lines[0]+"\n")
+
+	adapter, session := newTestSession(t, t.TempDir())
+	state := session.Internal.(*sessionState)
+	state.target.Command = fakeCopilotBinaryWithOutput(t, loadTestFixture(t, "simple_session.jsonl"), 0)
+
+	var events []domain.AgentEvent
+	result, err := adapter.RunTurn(context.Background(), session, domain.RunTurnParams{
+		Prompt:  "say hello",
+		OnEvent: func(e domain.AgentEvent) { events = append(events, e) },
+	})
+	if err != nil {
+		t.Fatalf("RunTurn() error = %v", err)
+	}
+	if result.SessionID != sessionID {
+		t.Fatalf("result.SessionID = %q, want %q", result.SessionID, sessionID)
+	}
+
+	wantUsage := domain.TokenUsage{InputTokens: 193011, OutputTokens: 596, TotalTokens: 193607, CacheReadTokens: 154053}
+	if result.Usage != wantUsage {
+		t.Errorf("TurnResult.Usage = %+v, want %+v", result.Usage, wantUsage)
+	}
+
+	completed, ok := findEventByType(events, domain.EventTurnCompleted)
+	if !ok {
+		t.Fatal("EventTurnCompleted not delivered")
+	}
+	if completed.Usage != wantUsage {
+		t.Errorf("EventTurnCompleted.Usage = %+v, want %+v", completed.Usage, wantUsage)
+	}
+
+	var tokenUsageEvents []domain.AgentEvent
+	for _, e := range events {
+		if e.Type == domain.EventTokenUsage {
+			tokenUsageEvents = append(tokenUsageEvents, e)
+		}
+	}
+	if len(tokenUsageEvents) != 1 {
+		t.Fatalf("token_usage event count = %d, want 1 (one assistant.message in the fixture)", len(tokenUsageEvents))
+	}
+	if tokenUsageEvents[0].Usage.InputTokens != 0 {
+		t.Errorf("token_usage event InputTokens = %d, want 0 (output-only provisional, not the recovered figure)", tokenUsageEvents[0].Usage.InputTokens)
+	}
+	if tokenUsageEvents[0].Usage.OutputTokens != 6 {
+		t.Errorf("token_usage event OutputTokens = %d, want 6", tokenUsageEvents[0].Usage.OutputTokens)
+	}
+
+	agenttest.AssertUsageContract(t, events)
+}
+
+// TestRunTurn_SessionStateRecovery_BaselineDifference repeats the
+// first-record scenario with both session_shutdown.jsonl records
+// already present, verifying the reported snapshot is the difference
+// between the two records rather than the second record's raw total.
+func TestRunTurn_SessionStateRecovery_BaselineDifference(t *testing.T) {
+	t.Setenv("GH_TOKEN", "test-token-for-unit-test")
+	copilotHome := t.TempDir()
+	t.Setenv("COPILOT_HOME", copilotHome)
+
+	const sessionID = "aa778ea0-6eab-4ce9-b87e-11d6d33dab4f"
+	writeJournal(t, journalPath(copilotHome, sessionID), loadTestFixture(t, "session_shutdown.jsonl"))
+
+	adapter, session := newTestSession(t, t.TempDir())
+	state := session.Internal.(*sessionState)
+	state.target.Command = fakeCopilotBinaryWithOutput(t, loadTestFixture(t, "simple_session.jsonl"), 0)
+
+	result, err := adapter.RunTurn(context.Background(), session, domain.RunTurnParams{
+		Prompt:  "say hello",
+		OnEvent: func(domain.AgentEvent) {},
+	})
+	if err != nil {
+		t.Fatalf("RunTurn() error = %v", err)
+	}
+
+	wantUsage := domain.TokenUsage{InputTokens: 78913, OutputTokens: 100, TotalTokens: 79013, CacheReadTokens: 78279}
+	if result.Usage != wantUsage {
+		t.Errorf("TurnResult.Usage = %+v, want %+v (difference between the two records)", result.Usage, wantUsage)
+	}
+}
+
+// TestRunTurn_SessionStateRecovery_Degradation drives
+// sessionState.recoverUsage directly (bypassing the subprocess) to
+// exercise the three read-skipping conditions: an absent events file,
+// a session id that fails the path-segment check, and SSH mode. In
+// every case the provisional output-only snapshot must stand, and only
+// the path-segment rejection logs a Warn.
+func TestRunTurn_SessionStateRecovery_Degradation(t *testing.T) {
+	t.Run("events file absent", func(t *testing.T) {
+		t.Setenv("COPILOT_HOME", t.TempDir())
+		var buf bytes.Buffer
+		logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+		state := &sessionState{
+			target:            agentcore.LaunchTarget{WorkspacePath: t.TempDir()},
+			copilotSessionID:  "no-file-session",
+			runCreatedSession: true,
+			acc:               agentcore.NewRunUsage(),
+		}
+		state.acc.SetTurnProvisional(domain.TokenUsage{OutputTokens: 42})
+
+		got := state.recoverUsage(logger)
+		want := domain.TokenUsage{OutputTokens: 42, TotalTokens: 42}
+		if got != want {
+			t.Errorf("recoverUsage() = %+v, want %+v (provisional stands)", got, want)
+		}
+		if strings.Contains(buf.String(), "level=WARN") {
+			t.Errorf("unexpected WARN log for a merely-absent events file: %s", buf.String())
+		}
+	})
+
+	t.Run("session id contains a path separator", func(t *testing.T) {
+		t.Setenv("COPILOT_HOME", t.TempDir())
+		var buf bytes.Buffer
+		logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+		state := &sessionState{
+			target:            agentcore.LaunchTarget{WorkspacePath: t.TempDir()},
+			copilotSessionID:  "abc/../def",
+			runCreatedSession: true,
+			acc:               agentcore.NewRunUsage(),
+		}
+		state.acc.SetTurnProvisional(domain.TokenUsage{OutputTokens: 7})
+
+		got := state.recoverUsage(logger)
+		want := domain.TokenUsage{OutputTokens: 7, TotalTokens: 7}
+		if got != want {
+			t.Errorf("recoverUsage() = %+v, want %+v (provisional stands)", got, want)
+		}
+		if warnCount := strings.Count(buf.String(), "level=WARN"); warnCount != 1 {
+			t.Errorf("WARN log count = %d, want 1 (path-separator rejection)", warnCount)
+		}
+
+		// A second finalize for the same run must not repeat the Warn.
+		state.recoverUsage(logger)
+		if warnCount := strings.Count(buf.String(), "level=WARN"); warnCount != 1 {
+			t.Errorf("WARN log count after second call = %d, want 1 (not repeated)", warnCount)
+		}
+	})
+
+	t.Run("SSH mode skips the read", func(t *testing.T) {
+		t.Setenv("COPILOT_HOME", t.TempDir())
+		var buf bytes.Buffer
+		logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+		state := &sessionState{
+			target: agentcore.LaunchTarget{
+				WorkspacePath: t.TempDir(),
+				RemoteCommand: "copilot",
+				SSHHost:       "dev-host.example.com",
+			},
+			copilotSessionID:  "valid-session-id",
+			runCreatedSession: true,
+			acc:               agentcore.NewRunUsage(),
+		}
+		state.acc.SetTurnProvisional(domain.TokenUsage{OutputTokens: 11})
+
+		got := state.recoverUsage(logger)
+		want := domain.TokenUsage{OutputTokens: 11, TotalTokens: 11}
+		if got != want {
+			t.Errorf("recoverUsage() = %+v, want %+v (provisional stands)", got, want)
+		}
+		if buf.Len() != 0 {
+			t.Errorf("unexpected log output in SSH mode: %s", buf.String())
+		}
+	})
+}
+
+// TestRunTurn_SessionStateRecovery_FirstReadAttempt drives
+// sessionState.recoverUsage directly across two simulated finalizes,
+// the first of which misses its read (the events file does not exist
+// yet), and asserts the two ways R24 resolves the resulting baseline
+// ambiguity: a run that created the session takes a zero baseline on
+// its later successful read, while a run that resumed a session marks
+// recovery unavailable for the rest of the run.
+func TestRunTurn_SessionStateRecovery_FirstReadAttempt(t *testing.T) {
+	t.Run("run created the session takes a zero baseline", func(t *testing.T) {
+		root := t.TempDir()
+		t.Setenv("COPILOT_HOME", root)
+		logger := slog.New(slog.NewTextHandler(&bytes.Buffer{}, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+		state := &sessionState{
+			target:            agentcore.LaunchTarget{WorkspacePath: t.TempDir()},
+			copilotSessionID:  "created-session",
+			runCreatedSession: true,
+			acc:               agentcore.NewRunUsage(),
+		}
+
+		// First finalize: the events file does not exist yet, so no read
+		// attempt succeeds.
+		state.acc.SetTurnProvisional(domain.TokenUsage{OutputTokens: 5})
+		first := state.recoverUsage(logger)
+		if first != (domain.TokenUsage{OutputTokens: 5, TotalTokens: 5}) {
+			t.Fatalf("first recoverUsage() = %+v, want provisional (5, 5)", first)
+		}
+
+		// Second finalize: the runtime has since written both records.
+		// Because this run created the session, the baseline is zero
+		// rather than the first record's totals, so the run's own
+		// earlier spend is not subtracted a second time.
+		writeJournal(t, journalPath(root, "created-session"), loadTestFixture(t, "session_shutdown.jsonl"))
+		second := state.recoverUsage(logger)
+		if second.InputTokens != 271924 {
+			t.Errorf("second recoverUsage().InputTokens = %d, want 271924 (zero baseline)", second.InputTokens)
+		}
+	})
+
+	t.Run("run resumed a session marks recovery unavailable", func(t *testing.T) {
+		root := t.TempDir()
+		t.Setenv("COPILOT_HOME", root)
+		var buf bytes.Buffer
+		logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+		state := &sessionState{
+			target:            agentcore.LaunchTarget{WorkspacePath: t.TempDir()},
+			copilotSessionID:  "resumed-session",
+			runCreatedSession: false,
+			acc:               agentcore.NewRunUsage(),
+		}
+
+		state.acc.SetTurnProvisional(domain.TokenUsage{OutputTokens: 9})
+		first := state.recoverUsage(logger)
+		if first != (domain.TokenUsage{OutputTokens: 9, TotalTokens: 9}) {
+			t.Fatalf("first recoverUsage() = %+v, want provisional (9, 9)", first)
+		}
+
+		writeJournal(t, journalPath(root, "resumed-session"), loadTestFixture(t, "session_shutdown.jsonl"))
+		second := state.recoverUsage(logger)
+		if !state.recoveryUnavailable {
+			t.Error("recoveryUnavailable = false, want true")
+		}
+		if second != (domain.TokenUsage{OutputTokens: 9, TotalTokens: 9}) {
+			t.Errorf("second recoverUsage() = %+v, want unchanged provisional (9, 9)", second)
+		}
+		if warnCount := strings.Count(buf.String(), "level=WARN"); warnCount != 1 {
+			t.Errorf("WARN log count = %d, want 1", warnCount)
+		}
+
+		// A third finalize must not attempt another read.
+		third := state.recoverUsage(logger)
+		if third != second {
+			t.Errorf("third recoverUsage() = %+v, want unchanged %+v", third, second)
+		}
+		if warnCount := strings.Count(buf.String(), "level=WARN"); warnCount != 1 {
+			t.Errorf("WARN log count after third call = %d, want 1 (no further read attempted)", warnCount)
+		}
+	})
 }

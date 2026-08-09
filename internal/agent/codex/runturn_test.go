@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/sortie-ai/sortie/internal/agent/agentcore"
+	"github.com/sortie-ai/sortie/internal/agent/agenttest"
 	"github.com/sortie-ai/sortie/internal/domain"
 )
 
@@ -48,6 +49,7 @@ func makeTestState(fixtureData []byte) *sessionState {
 		msgCh:      make(chan parsedMessage, 16),
 		readerDone: make(chan struct{}),
 		stopCh:     make(chan struct{}),
+		acc:        agentcore.NewRunUsage(),
 	}
 
 	go func() {
@@ -144,6 +146,155 @@ func TestRunTurn_SuccessfulTurn(t *testing.T) {
 	}
 	if _, ok := firstEventOfType(events, domain.EventTokenUsage); !ok {
 		t.Error("expected EventTokenUsage event, none found")
+	}
+}
+
+// filterEventsOfType returns every event of the given type, in order.
+func filterEventsOfType(events []domain.AgentEvent, typ domain.AgentEventType) []domain.AgentEvent {
+	var out []domain.AgentEvent
+	for _, e := range events {
+		if e.Type == typ {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+// TestRunTurn_TokenUsageUpdated drives RunTurn against a session
+// captured from codex 0.121.0 carrying two thread/tokenUsage/updated
+// notifications for the current turn followed by a turn/completed with
+// no usage member (the app-server protocol carries none there). It
+// asserts two token_usage events are emitted, the run-cumulative
+// snapshot after the second matches the notification's total minus the
+// zero baseline of a fresh thread, the turn_completed event carries the
+// same snapshot, and TurnResult.Usage equals it.
+func TestRunTurn_TokenUsageUpdated(t *testing.T) {
+	t.Parallel()
+
+	state := makeTestState(loadFixture(t, "token_usage_updated.jsonl"))
+	adapter, _ := NewCodexAdapter(map[string]any{})
+
+	var events []domain.AgentEvent
+	result, err := adapter.RunTurn(context.Background(), fakeSession(state), domain.RunTurnParams{
+		Prompt:  "do something",
+		OnEvent: collectEvents(&events),
+	})
+	if err != nil {
+		t.Fatalf("RunTurn() error = %v", err)
+	}
+
+	tokenUsageEvents := filterEventsOfType(events, domain.EventTokenUsage)
+	if len(tokenUsageEvents) != 2 {
+		t.Fatalf("token_usage event count = %d, want 2", len(tokenUsageEvents))
+	}
+
+	wantSnapshot := domain.TokenUsage{InputTokens: 27549, OutputTokens: 82, CacheReadTokens: 27392, TotalTokens: 27631}
+	if got := tokenUsageEvents[1].Usage; got != wantSnapshot {
+		t.Errorf("second token_usage event Usage = %+v, want %+v", got, wantSnapshot)
+	}
+
+	completed, ok := firstEventOfType(events, domain.EventTurnCompleted)
+	if !ok {
+		t.Fatal("expected turn_completed event, none found")
+	}
+	if completed.Usage != wantSnapshot {
+		t.Errorf("turn_completed.Usage = %+v, want %+v", completed.Usage, wantSnapshot)
+	}
+	if result.Usage != wantSnapshot {
+		t.Errorf("TurnResult.Usage = %+v, want %+v", result.Usage, wantSnapshot)
+	}
+
+	agenttest.AssertUsageContract(t, events)
+}
+
+// TestRunTurn_TokenUsageUpdated_ResumedThreadBaseline drives a thread
+// whose first matching notification already reports a non-zero
+// total.totalTokens because the thread resumed from a prior run. It
+// asserts a preceding notification carrying another turn's id
+// contributes nothing and only raises the baseline, and that the first
+// reported snapshot for the current turn is the difference between that
+// notification's total and last breakdowns.
+func TestRunTurn_TokenUsageUpdated_ResumedThreadBaseline(t *testing.T) {
+	t.Parallel()
+
+	fixture := "{\"id\":1,\"result\":{\"turn\":{\"id\":\"turn-002\",\"status\":\"starting\"}}}\n" +
+		"{\"method\":\"turn/started\",\"params\":{\"turnId\":\"turn-002\"}}\n" +
+		// A notification from an earlier turn of the resumed thread:
+		// contributes nothing to this turn and only raises the baseline.
+		"{\"method\":\"thread/tokenUsage/updated\",\"params\":{\"threadId\":\"thread-001\",\"turnId\":\"turn-001\",\"tokenUsage\":{\"last\":{\"totalTokens\":5000,\"inputTokens\":4000,\"cachedInputTokens\":1000,\"outputTokens\":1000,\"reasoningOutputTokens\":0},\"total\":{\"totalTokens\":5000,\"inputTokens\":4000,\"cachedInputTokens\":1000,\"outputTokens\":1000,\"reasoningOutputTokens\":0}}}}\n" +
+		// The current turn's first matching notification: total is
+		// already thread-cumulative from the resumed session.
+		"{\"method\":\"thread/tokenUsage/updated\",\"params\":{\"threadId\":\"thread-001\",\"turnId\":\"turn-002\",\"tokenUsage\":{\"last\":{\"totalTokens\":13846,\"inputTokens\":13818,\"cachedInputTokens\":13692,\"outputTokens\":28,\"reasoningOutputTokens\":0},\"total\":{\"totalTokens\":27631,\"inputTokens\":27549,\"cachedInputTokens\":27392,\"outputTokens\":82,\"reasoningOutputTokens\":0}}}}\n" +
+		"{\"method\":\"turn/completed\",\"params\":{\"turn\":{\"id\":\"turn-002\",\"status\":\"completed\"}}}\n"
+
+	state := makeTestState([]byte(fixture))
+	adapter, _ := NewCodexAdapter(map[string]any{})
+
+	var events []domain.AgentEvent
+	result, err := adapter.RunTurn(context.Background(), fakeSession(state), domain.RunTurnParams{
+		Prompt:  "continue",
+		OnEvent: collectEvents(&events),
+	})
+	if err != nil {
+		t.Fatalf("RunTurn() error = %v", err)
+	}
+
+	tokenUsageEvents := filterEventsOfType(events, domain.EventTokenUsage)
+	if len(tokenUsageEvents) != 1 {
+		t.Fatalf("token_usage event count = %d, want 1 (the other-turn notification contributes nothing)", len(tokenUsageEvents))
+	}
+
+	// The baseline is total minus last (27549-13818, 82-28, 27392-13692),
+	// so the reported snapshot equals last exactly: total_tokens 13846.
+	wantSnapshot := domain.TokenUsage{InputTokens: 13818, OutputTokens: 28, CacheReadTokens: 13692, TotalTokens: 13846}
+	if got := tokenUsageEvents[0].Usage; got != wantSnapshot {
+		t.Errorf("token_usage event Usage = %+v, want %+v (baseline is total minus last)", got, wantSnapshot)
+	}
+	if result.Usage != wantSnapshot {
+		t.Errorf("TurnResult.Usage = %+v, want %+v", result.Usage, wantSnapshot)
+	}
+}
+
+// TestRunTurn_TokenUsageUpdated_EmptyTurnIDAdoptsFirstNotification
+// drives a turn whose turn/start response body fails to unmarshal,
+// leaving the adapter's current turn id empty, followed by two
+// thread/tokenUsage/updated notifications sharing one non-empty turnId.
+// It asserts the adapter adopts the first notification's turnId rather
+// than treating every notification as belonging to another turn, so
+// both notifications contribute and the run-cumulative snapshot after
+// the second reports the full total rather than zero.
+func TestRunTurn_TokenUsageUpdated_EmptyTurnIDAdoptsFirstNotification(t *testing.T) {
+	t.Parallel()
+
+	fixture := "{\"id\":1,\"result\":\"malformed turn/start body\"}\n" +
+		"{\"method\":\"thread/tokenUsage/updated\",\"params\":{\"threadId\":\"thread-001\",\"turnId\":\"turn-777\",\"tokenUsage\":{\"last\":{\"totalTokens\":13785,\"inputTokens\":13731,\"cachedInputTokens\":13700,\"outputTokens\":54,\"reasoningOutputTokens\":0},\"total\":{\"totalTokens\":13785,\"inputTokens\":13731,\"cachedInputTokens\":13700,\"outputTokens\":54,\"reasoningOutputTokens\":0}}}}\n" +
+		"{\"method\":\"thread/tokenUsage/updated\",\"params\":{\"threadId\":\"thread-001\",\"turnId\":\"turn-777\",\"tokenUsage\":{\"last\":{\"totalTokens\":13846,\"inputTokens\":13818,\"cachedInputTokens\":13692,\"outputTokens\":28,\"reasoningOutputTokens\":0},\"total\":{\"totalTokens\":27631,\"inputTokens\":27549,\"cachedInputTokens\":27392,\"outputTokens\":82,\"reasoningOutputTokens\":0}}}}\n" +
+		"{\"method\":\"turn/completed\",\"params\":{\"turn\":{\"id\":\"turn-777\",\"status\":\"completed\"}}}\n"
+
+	state := makeTestState([]byte(fixture))
+	adapter, _ := NewCodexAdapter(map[string]any{})
+
+	var events []domain.AgentEvent
+	result, err := adapter.RunTurn(context.Background(), fakeSession(state), domain.RunTurnParams{
+		Prompt:  "do something",
+		OnEvent: collectEvents(&events),
+	})
+	if err != nil {
+		t.Fatalf("RunTurn() error = %v", err)
+	}
+
+	tokenUsageEvents := filterEventsOfType(events, domain.EventTokenUsage)
+	if len(tokenUsageEvents) != 2 {
+		t.Fatalf("token_usage event count = %d, want 2 (both notifications must contribute once the empty turn id adopts the first)", len(tokenUsageEvents))
+	}
+
+	wantSnapshot := domain.TokenUsage{InputTokens: 27549, OutputTokens: 82, TotalTokens: 27631}
+	got := tokenUsageEvents[1].Usage
+	if got.InputTokens != wantSnapshot.InputTokens || got.OutputTokens != wantSnapshot.OutputTokens || got.TotalTokens != wantSnapshot.TotalTokens {
+		t.Errorf("second token_usage event Usage = %+v, want input/output/total %+v (not zero)", got, wantSnapshot)
+	}
+	if result.Usage.TotalTokens != wantSnapshot.TotalTokens {
+		t.Errorf("TurnResult.Usage.TotalTokens = %d, want %d", result.Usage.TotalTokens, wantSnapshot.TotalTokens)
 	}
 }
 
@@ -686,10 +837,12 @@ func TestRunTurn_MultiTurnNoRace(t *testing.T) {
 
 	fixture := "{\"id\":1,\"result\":{\"turn\":{\"id\":\"turn-001\",\"status\":\"starting\"}}}\n" +
 		"{\"method\":\"turn/started\",\"params\":{\"turnId\":\"turn-001\"}}\n" +
-		"{\"method\":\"turn/completed\",\"params\":{\"turn\":{\"id\":\"turn-001\",\"status\":\"completed\"},\"usage\":{\"input_tokens\":100,\"output_tokens\":50,\"cached_input_tokens\":10}}}\n" +
+		"{\"method\":\"thread/tokenUsage/updated\",\"params\":{\"threadId\":\"thread-001\",\"turnId\":\"turn-001\",\"tokenUsage\":{\"last\":{\"totalTokens\":150,\"inputTokens\":100,\"cachedInputTokens\":10,\"outputTokens\":50,\"reasoningOutputTokens\":0},\"total\":{\"totalTokens\":150,\"inputTokens\":100,\"cachedInputTokens\":10,\"outputTokens\":50,\"reasoningOutputTokens\":0}}}}\n" +
+		"{\"method\":\"turn/completed\",\"params\":{\"turn\":{\"id\":\"turn-001\",\"status\":\"completed\"}}}\n" +
 		"{\"id\":2,\"result\":{\"turn\":{\"id\":\"turn-002\",\"status\":\"starting\"}}}\n" +
 		"{\"method\":\"turn/started\",\"params\":{\"turnId\":\"turn-002\"}}\n" +
-		"{\"method\":\"turn/completed\",\"params\":{\"turn\":{\"id\":\"turn-002\",\"status\":\"completed\"},\"usage\":{\"input_tokens\":200,\"output_tokens\":100,\"cached_input_tokens\":20}}}\n"
+		"{\"method\":\"thread/tokenUsage/updated\",\"params\":{\"threadId\":\"thread-001\",\"turnId\":\"turn-002\",\"tokenUsage\":{\"last\":{\"totalTokens\":300,\"inputTokens\":200,\"cachedInputTokens\":20,\"outputTokens\":100,\"reasoningOutputTokens\":0},\"total\":{\"totalTokens\":300,\"inputTokens\":200,\"cachedInputTokens\":20,\"outputTokens\":100,\"reasoningOutputTokens\":0}}}}\n" +
+		"{\"method\":\"turn/completed\",\"params\":{\"turn\":{\"id\":\"turn-002\",\"status\":\"completed\"}}}\n"
 
 	state := makeTestState([]byte(fixture))
 	adapter, _ := NewCodexAdapter(map[string]any{})
@@ -728,7 +881,8 @@ func TestRunTurn_StdoutEOFBetweenTurns(t *testing.T) {
 	// reader refactoring (previously undetected).
 	fixture := "{\"id\":1,\"result\":{\"turn\":{\"id\":\"turn-001\",\"status\":\"starting\"}}}\n" +
 		"{\"method\":\"turn/started\",\"params\":{\"turnId\":\"turn-001\"}}\n" +
-		"{\"method\":\"turn/completed\",\"params\":{\"turn\":{\"id\":\"turn-001\",\"status\":\"completed\"},\"usage\":{\"input_tokens\":10,\"output_tokens\":5,\"cached_input_tokens\":0}}}\n"
+		"{\"method\":\"thread/tokenUsage/updated\",\"params\":{\"threadId\":\"thread-001\",\"turnId\":\"turn-001\",\"tokenUsage\":{\"last\":{\"totalTokens\":15,\"inputTokens\":10,\"cachedInputTokens\":0,\"outputTokens\":5,\"reasoningOutputTokens\":0},\"total\":{\"totalTokens\":15,\"inputTokens\":10,\"cachedInputTokens\":0,\"outputTokens\":5,\"reasoningOutputTokens\":0}}}}\n" +
+		"{\"method\":\"turn/completed\",\"params\":{\"turn\":{\"id\":\"turn-001\",\"status\":\"completed\"}}}\n"
 
 	state := makeTestState([]byte(fixture))
 	adapter, _ := NewCodexAdapter(map[string]any{})

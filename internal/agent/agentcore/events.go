@@ -25,34 +25,42 @@ func EmitSessionStarted(emit func(domain.AgentEvent), agentPID string, sessionID
 // EmitTurnCompleted emits an EventTurnCompleted event. message is a
 // human-readable summary; use "" when unavailable. apiDurationMS is the LLM
 // API response wait time in milliseconds for this turn; use 0 when
-// unavailable.
-func EmitTurnCompleted(emit func(domain.AgentEvent), message string, apiDurationMS int64) {
+// unavailable. usage is the session's run-cumulative token usage snapshot;
+// the zero value means the caller reports no usage for this event.
+func EmitTurnCompleted(emit func(domain.AgentEvent), message string, apiDurationMS int64, usage domain.TokenUsage) {
 	emit(domain.AgentEvent{
 		Type:          domain.EventTurnCompleted,
 		Timestamp:     time.Now().UTC(),
 		Message:       message,
 		APIDurationMS: apiDurationMS,
+		Usage:         usage,
 	})
 }
 
 // EmitTurnFailed emits an EventTurnFailed event. message describes the
 // failure. apiDurationMS is attached to the event; use 0 when unavailable.
-func EmitTurnFailed(emit func(domain.AgentEvent), message string, apiDurationMS int64) {
+// usage is the session's run-cumulative token usage snapshot; the zero
+// value means the caller reports no usage for this event.
+func EmitTurnFailed(emit func(domain.AgentEvent), message string, apiDurationMS int64, usage domain.TokenUsage) {
 	emit(domain.AgentEvent{
 		Type:          domain.EventTurnFailed,
 		Timestamp:     time.Now().UTC(),
 		Message:       message,
 		APIDurationMS: apiDurationMS,
+		Usage:         usage,
 	})
 }
 
 // EmitTurnCancelled emits an EventTurnCancelled event with the given
-// human-readable message.
-func EmitTurnCancelled(emit func(domain.AgentEvent), message string) {
+// human-readable message. usage is the session's run-cumulative token
+// usage snapshot; the zero value means the caller reports no usage for
+// this event.
+func EmitTurnCancelled(emit func(domain.AgentEvent), message string, usage domain.TokenUsage) {
 	emit(domain.AgentEvent{
 		Type:      domain.EventTurnCancelled,
 		Timestamp: time.Now().UTC(),
 		Message:   message,
+		Usage:     usage,
 	})
 }
 

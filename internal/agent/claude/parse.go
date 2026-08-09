@@ -32,6 +32,10 @@ type rawEvent struct {
 	// Usage (present in result events).
 	Usage *rawUsage `json:"usage,omitempty"`
 
+	// ModelUsage is the per-model usage breakdown on a result event,
+	// present when the terminal turn touched at least one model.
+	ModelUsage map[string]rawModelUsage `json:"modelUsage,omitempty"`
+
 	// Assistant message wrapper.
 	Message json.RawMessage `json:"message,omitempty"`
 
@@ -49,6 +53,15 @@ type rawUsage struct {
 	OutputTokens             int64 `json:"output_tokens"`
 	CacheReadInputTokens     int64 `json:"cache_read_input_tokens,omitempty"`
 	CacheCreationInputTokens int64 `json:"cache_creation_input_tokens,omitempty"`
+}
+
+// rawModelUsage holds one model's token counts from a result event's
+// modelUsage map.
+type rawModelUsage struct {
+	InputTokens              int64 `json:"inputTokens"`
+	OutputTokens             int64 `json:"outputTokens"`
+	CacheReadInputTokens     int64 `json:"cacheReadInputTokens"`
+	CacheCreationInputTokens int64 `json:"cacheCreationInputTokens"`
 }
 
 // rawContentBlock represents a single block inside an assistant
@@ -69,9 +82,12 @@ type rawAssistantMessage struct {
 	Content []rawContentBlock `json:"content,omitempty"`
 }
 
-// rawAssistantMessageMeta holds the model and per-request usage
-// from an assistant event's message object.
+// rawAssistantMessageMeta holds the message id, model, and per-request
+// usage from an assistant event's message object. Claude Code repeats
+// one message id across every streamed event of the same model
+// request, so ID is the deduplication key.
 type rawAssistantMessageMeta struct {
+	ID    string    `json:"id,omitempty"`
 	Model string    `json:"model,omitempty"`
 	Usage *rawUsage `json:"usage,omitempty"`
 }
@@ -86,19 +102,76 @@ func parseEvent(line []byte) (rawEvent, error) {
 	return ev, nil
 }
 
-// normalizeUsage converts a raw usage payload from a Claude Code
-// result event into a [domain.TokenUsage]. TotalTokens is computed as
-// input + output.
-func normalizeUsage(raw *rawUsage) domain.TokenUsage {
+// usageFromAssistant converts a raw usage payload from a Claude Code
+// assistant event into a [domain.TokenUsage]. InputTokens includes
+// prompt-cache reads and prompt-cache writes; TotalTokens is computed
+// as InputTokens plus OutputTokens.
+func usageFromAssistant(raw *rawUsage) domain.TokenUsage {
 	if raw == nil {
 		return domain.TokenUsage{}
 	}
+	input := raw.InputTokens + raw.CacheReadInputTokens + raw.CacheCreationInputTokens
 	return domain.TokenUsage{
-		InputTokens:     raw.InputTokens,
+		InputTokens:     input,
 		OutputTokens:    raw.OutputTokens,
-		TotalTokens:     raw.InputTokens + raw.OutputTokens,
+		TotalTokens:     input + raw.OutputTokens,
 		CacheReadTokens: raw.CacheReadInputTokens,
 	}
+}
+
+// usageFromResult returns the authoritative per-turn usage and the
+// model that produced it from a result event. It prefers the
+// modelUsage map, which is present whenever the turn touched at least
+// one model and includes sub-agent activity that the top-level usage
+// object excludes; it falls back to the top-level usage object when
+// modelUsage is absent or empty. The reported model is the modelUsage
+// key with the greatest OutputTokens, ties broken by the
+// lexicographically smallest key. InputTokens includes prompt-cache
+// reads and prompt-cache writes in both cases; TotalTokens is computed
+// as InputTokens plus OutputTokens.
+func usageFromResult(event rawEvent) (usage domain.TokenUsage, model string) {
+	if len(event.ModelUsage) > 0 {
+		var bestOutput int64 = -1
+		for name, mu := range event.ModelUsage {
+			input := mu.InputTokens + mu.CacheReadInputTokens + mu.CacheCreationInputTokens
+			usage.InputTokens += input
+			usage.OutputTokens += mu.OutputTokens
+			usage.CacheReadTokens += mu.CacheReadInputTokens
+			if mu.OutputTokens > bestOutput || (mu.OutputTokens == bestOutput && name < model) {
+				bestOutput = mu.OutputTokens
+				model = name
+			}
+		}
+		usage.TotalTokens = usage.InputTokens + usage.OutputTokens
+		return usage, model
+	}
+	return usageFromAssistant(event.Usage), ""
+}
+
+// componentwiseMaxUsage returns the componentwise maximum of a and b,
+// with TotalTokens recomputed as InputTokens plus OutputTokens.
+func componentwiseMaxUsage(a, b domain.TokenUsage) domain.TokenUsage {
+	result := domain.TokenUsage{
+		InputTokens:     max(a.InputTokens, b.InputTokens),
+		OutputTokens:    max(a.OutputTokens, b.OutputTokens),
+		CacheReadTokens: max(a.CacheReadTokens, b.CacheReadTokens),
+	}
+	result.TotalTokens = result.InputTokens + result.OutputTokens
+	return result
+}
+
+// sumTurnMessages sums every stored per-message-id usage into one
+// turn-provisional [domain.TokenUsage], with TotalTokens recomputed as
+// InputTokens plus OutputTokens.
+func sumTurnMessages(turnMessages map[string]domain.TokenUsage) domain.TokenUsage {
+	var sum domain.TokenUsage
+	for _, usage := range turnMessages {
+		sum.InputTokens += usage.InputTokens
+		sum.OutputTokens += usage.OutputTokens
+		sum.CacheReadTokens += usage.CacheReadTokens
+	}
+	sum.TotalTokens = sum.InputTokens + sum.OutputTokens
+	return sum
 }
 
 // contentBlocks extracts the content array from an assistant message

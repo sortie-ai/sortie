@@ -2,6 +2,7 @@ package copilot
 
 import (
 	"bufio"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -583,6 +584,39 @@ func TestParseFixture_ResumeSession(t *testing.T) {
 	}
 	if *result.ExitCode != 0 {
 		t.Errorf("result.ExitCode = %d, want 0", *result.ExitCode)
+	}
+}
+
+// TestParseFixture_SessionShutdown parses session_shutdown.jsonl,
+// captured from Copilot CLI 1.0.78's session-state events journal, and
+// verifies both records decode into shutdownEvent with the
+// modelMetrics totals the fixture carries.
+func TestParseFixture_SessionShutdown(t *testing.T) {
+	t.Parallel()
+
+	lines := scanFixtureLines(t, "session_shutdown.jsonl")
+	if len(lines) != 2 {
+		t.Fatalf("session_shutdown.jsonl: got %d lines, want 2", len(lines))
+	}
+
+	events := make([]shutdownEvent, len(lines))
+	for i, line := range lines {
+		if err := json.Unmarshal(line, &events[i]); err != nil {
+			t.Fatalf("unmarshal shutdownEvent(line %d): %v", i+1, err)
+		}
+		if events[i].Type != "session.shutdown" {
+			t.Errorf("event[%d].Type = %q, want %q", i, events[i].Type, "session.shutdown")
+		}
+	}
+
+	first := events[0].Data.ModelMetrics["claude-sonnet-5"].Usage
+	if first.InputTokens != 193011 || first.OutputTokens != 596 || first.CacheReadTokens != 154053 {
+		t.Errorf("first record usage = %+v, want (193011, 596, cacheRead 154053)", first)
+	}
+
+	second := events[1].Data.ModelMetrics["claude-sonnet-5"].Usage
+	if second.InputTokens != 271924 || second.OutputTokens != 696 {
+		t.Errorf("second record usage = %+v, want (271924, 696)", second)
 	}
 }
 

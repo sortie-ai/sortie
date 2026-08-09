@@ -58,6 +58,18 @@ type sessionState struct {
 	threadID      string
 	nextRequestID int64
 
+	// acc holds the session's run-cumulative token usage. Constructed
+	// once in StartSession and never reset between turns.
+	acc *agentcore.RunUsage
+
+	// baseline is the thread-cumulative total to subtract from a
+	// matching thread/tokenUsage/updated notification's total to
+	// recover this run's own contribution. Per run; never reset
+	// between turns. Resolved on the first notification whose turnId
+	// matches the run's current turn.
+	baseline    domain.TokenUsage
+	baselineSet bool
+
 	mcpConfigPath string
 
 	// mu guards proc, waitCh, stdin, stdout, and stderrCollector for
@@ -111,6 +123,7 @@ func (a *CodexAdapter) StartSession(ctx context.Context, params domain.StartSess
 		target:        target,
 		agentConfig:   params.AgentConfig,
 		mcpConfigPath: params.MCPConfigPath,
+		acc:           agentcore.NewRunUsage(),
 	}
 
 	var cmd *exec.Cmd
@@ -418,8 +431,6 @@ func (a *CodexAdapter) RunTurn(ctx context.Context, session domain.Session, para
 	turnID := turnResult.Turn.ID
 
 	inFlight := agentcore.NewToolTracker()
-	acc := agentcore.NewUsageAccumulator()
-	var usage domain.TokenUsage
 	var toolWg sync.WaitGroup
 	toolEventCh := make(chan domain.AgentEvent, 8)
 	interrupted := false
@@ -477,14 +488,14 @@ func (a *CodexAdapter) RunTurn(ctx context.Context, session domain.Session, para
 				return domain.TurnResult{
 						SessionID:  state.threadID,
 						ExitReason: domain.EventTurnFailed,
-						Usage:      usage,
+						Usage:      state.acc.Snapshot(),
 					}, &domain.AgentError{
 						Kind:    domain.ErrPortExit,
 						Message: "subprocess stdout closed unexpectedly",
 					}
 			}
 			if msg.Err != nil {
-				agentcore.EmitTurnFailed(params.OnEvent, msg.Err.Error(), 0)
+				agentcore.EmitTurnFailed(params.OnEvent, msg.Err.Error(), 0, state.acc.Snapshot())
 				go func() { toolWg.Wait(); close(toolEventCh) }()
 				for evt := range toolEventCh {
 					params.OnEvent(evt)
@@ -492,7 +503,7 @@ func (a *CodexAdapter) RunTurn(ctx context.Context, session domain.Session, para
 				return domain.TurnResult{
 						SessionID:  state.threadID,
 						ExitReason: domain.EventTurnFailed,
-						Usage:      usage,
+						Usage:      state.acc.Snapshot(),
 					}, &domain.AgentError{
 						Kind:    domain.ErrPortExit,
 						Message: fmt.Sprintf("stdout read error: %v", msg.Err),
@@ -520,26 +531,47 @@ func (a *CodexAdapter) RunTurn(ctx context.Context, session domain.Session, para
 					agentcore.EmitNotification(params.OnEvent, "turn started")
 				}
 
+			case "thread/tokenUsage/updated":
+				p, parseErr := parseTokenUsageUpdated(msg.Notification.Params)
+				if parseErr != nil {
+					logger.Debug("thread/tokenUsage/updated unmarshal failed", slog.String("method", method))
+					continue
+				}
+				// A turn/start response that failed to unmarshal leaves
+				// turnID empty; adopt the first notification's turn id
+				// rather than treating every notification of this turn as
+				// belonging to another turn.
+				if turnID == "" {
+					turnID = p.TurnID
+				}
+				if p.TurnID != turnID {
+					state.baseline = maxUsage(state.baseline, normalizeBreakdown(p.TokenUsage.Total))
+					continue
+				}
+				if !state.baselineSet {
+					state.baseline = subtractUsage(normalizeBreakdown(p.TokenUsage.Total), normalizeBreakdown(p.TokenUsage.Last))
+					state.baselineSet = true
+				}
+				snapshot := state.acc.SetRunCumulative(subtractUsage(normalizeBreakdown(p.TokenUsage.Total), state.baseline))
+				params.OnEvent(domain.AgentEvent{
+					Type:      domain.EventTokenUsage,
+					Timestamp: now,
+					Usage:     snapshot,
+				})
+
 			case "turn/completed":
 				var tc turnCompletedParams
 				if err := json.Unmarshal(msg.Notification.Params, &tc); err != nil {
 					logger.Warn("turn/completed unmarshal failed", slog.Any("error", err))
 				}
 
-				if tc.Usage != nil {
-					usage = acc.ReplaceCumulative(normalizeUsage(tc.Usage))
-				}
 				exitReason := mapTurnStatus(tc.Turn.Status)
+				snapshot := state.acc.Snapshot()
 
 				if tc.Turn.Status == "failed" && tc.Turn.Error != nil {
 					kind := mapCodexErrorInfo(tc.Turn.Error.CodexErrorInfo)
 					errMsg := tc.Turn.Error.Message
-					agentcore.EmitTurnFailed(params.OnEvent, errMsg, 0)
-					params.OnEvent(domain.AgentEvent{
-						Type:      domain.EventTokenUsage,
-						Timestamp: now,
-						Usage:     usage,
-					})
+					agentcore.EmitTurnFailed(params.OnEvent, errMsg, 0, snapshot)
 					go func() { toolWg.Wait(); close(toolEventCh) }()
 					for evt := range toolEventCh {
 						params.OnEvent(evt)
@@ -547,7 +579,7 @@ func (a *CodexAdapter) RunTurn(ctx context.Context, session domain.Session, para
 					return domain.TurnResult{
 							SessionID:  state.threadID,
 							ExitReason: exitReason,
-							Usage:      usage,
+							Usage:      snapshot,
 						}, &domain.AgentError{
 							Kind:    kind,
 							Message: errMsg,
@@ -556,17 +588,12 @@ func (a *CodexAdapter) RunTurn(ctx context.Context, session domain.Session, para
 
 				switch exitReason {
 				case domain.EventTurnCompleted:
-					agentcore.EmitTurnCompleted(params.OnEvent, "turn "+tc.Turn.Status, 0)
+					agentcore.EmitTurnCompleted(params.OnEvent, "turn "+tc.Turn.Status, 0, snapshot)
 				case domain.EventTurnCancelled:
-					agentcore.EmitTurnCancelled(params.OnEvent, "turn "+tc.Turn.Status)
+					agentcore.EmitTurnCancelled(params.OnEvent, "turn "+tc.Turn.Status, snapshot)
 				default:
-					agentcore.EmitTurnFailed(params.OnEvent, "turn "+tc.Turn.Status, 0)
+					agentcore.EmitTurnFailed(params.OnEvent, "turn "+tc.Turn.Status, 0, snapshot)
 				}
-				params.OnEvent(domain.AgentEvent{
-					Type:      domain.EventTokenUsage,
-					Timestamp: now,
-					Usage:     usage,
-				})
 
 				go func() { toolWg.Wait(); close(toolEventCh) }()
 				for evt := range toolEventCh {
@@ -575,7 +602,7 @@ func (a *CodexAdapter) RunTurn(ctx context.Context, session domain.Session, para
 				return domain.TurnResult{
 					SessionID:  state.threadID,
 					ExitReason: exitReason,
-					Usage:      usage,
+					Usage:      snapshot,
 				}, nil
 
 			case "item/started":

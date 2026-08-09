@@ -5,6 +5,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/sortie-ai/sortie/internal/agent/agenttest"
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/registry"
 )
@@ -328,6 +329,28 @@ func TestRunTurn_MultiTurnTokenAccumulation(t *testing.T) {
 			t.Errorf("turn %d: Usage = %+v, want %+v", i+1, result.Usage, want)
 		}
 	}
+}
+
+// TestRunTurn_AssertUsageContract drives three turns and checks the
+// full emitted event sequence against the shared usage contract: every
+// component non-negative, TotalTokens equal to InputTokens plus
+// OutputTokens, and every component monotonically non-decreasing
+// across the run.
+func TestRunTurn_AssertUsageContract(t *testing.T) {
+	t.Parallel()
+
+	adapter, _ := NewMockAdapter(map[string]any{})
+	sess := domain.Session{ID: "s"}
+	params := defaultParams()
+	events := collectEvents(&params)
+
+	for i := range 3 {
+		if _, err := adapter.RunTurn(context.Background(), sess, params); err != nil {
+			t.Fatalf("turn %d: RunTurn() error = %v", i+1, err)
+		}
+	}
+
+	agenttest.AssertUsageContract(t, *events)
 }
 
 func TestRunTurn_ConfiguredOutcomes(t *testing.T) {

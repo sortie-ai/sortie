@@ -63,6 +63,11 @@ type mockToolCall struct {
 // Accepted config keys: session_id, agent_pid, start_error,
 // turn_outcomes, events_per_turn, input_tokens_per_turn,
 // output_tokens_per_turn, turn_delay_ms, stop_error.
+// input_tokens_per_turn counts all input including cache reads, so
+// cache_read_tokens_per_turn is a subset of it rather than an addition
+// to it. The adapter reports run-cumulative counts by construction:
+// each turn's contribution accrues onto the totals of every prior
+// turn in the same session.
 func NewMockAdapter(config map[string]any) (domain.AgentAdapter, error) {
 	m := &MockAdapter{
 		sessionID:           "mock-session-001",

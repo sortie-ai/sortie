@@ -1,4 +1,5 @@
 {"id":5,"result":{"turn":{"id":"turn-003","status":"starting"}}}
 {"method":"turn/started","params":{"turnId":"turn-003"}}
 {"id":42,"method":"item/tool/call","params":{"tool":"create_issue","arguments":{"title":"Bug report","description":"Some bug"}}}
-{"method":"turn/completed","params":{"turn":{"id":"turn-003","status":"completed"},"usage":{"input_tokens":50,"output_tokens":25,"cached_input_tokens":0}}}
+{"method":"thread/tokenUsage/updated","params":{"threadId":"thread-001","turnId":"turn-003","tokenUsage":{"last":{"totalTokens":75,"inputTokens":50,"cachedInputTokens":0,"outputTokens":25,"reasoningOutputTokens":0},"total":{"totalTokens":75,"inputTokens":50,"cachedInputTokens":0,"outputTokens":25,"reasoningOutputTokens":0}}}}
+{"method":"turn/completed","params":{"turn":{"id":"turn-003","status":"completed"}}}

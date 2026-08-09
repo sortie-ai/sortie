@@ -46,23 +46,40 @@ type parsedMessage struct {
 	Err            error
 }
 
-// turnUsage holds raw token usage fields from the app-server
-// turn/completed notification.
-type turnUsage struct {
-	InputTokens       int64 `json:"input_tokens"`
-	OutputTokens      int64 `json:"output_tokens"`
-	CachedInputTokens int64 `json:"cached_input_tokens"`
+// tokenUsageBreakdown is one token-count breakdown inside a
+// thread/tokenUsage/updated notification.
+type tokenUsageBreakdown struct {
+	InputTokens           int64 `json:"inputTokens"`
+	CachedInputTokens     int64 `json:"cachedInputTokens"`
+	OutputTokens          int64 `json:"outputTokens"`
+	ReasoningOutputTokens int64 `json:"reasoningOutputTokens"`
+	TotalTokens           int64 `json:"totalTokens"`
+}
+
+// threadTokenUsage holds the last and thread-cumulative total token
+// breakdowns from a thread/tokenUsage/updated notification.
+type threadTokenUsage struct {
+	Last  tokenUsageBreakdown `json:"last"`
+	Total tokenUsageBreakdown `json:"total"`
+}
+
+// tokenUsageUpdatedParams is the params payload of a
+// thread/tokenUsage/updated notification.
+type tokenUsageUpdatedParams struct {
+	ThreadID   string           `json:"threadId"`
+	TurnID     string           `json:"turnId"`
+	TokenUsage threadTokenUsage `json:"tokenUsage"`
 }
 
 // turnCompletedParams is the params payload of a turn/completed
-// notification.
+// notification. The app-server protocol carries no usage member here;
+// token usage arrives separately on thread/tokenUsage/updated.
 type turnCompletedParams struct {
 	Turn struct {
 		ID     string     `json:"id"`
 		Status string     `json:"status"`
 		Error  *turnError `json:"error,omitempty"`
 	} `json:"turn"`
-	Usage *turnUsage `json:"usage,omitempty"`
 }
 
 // turnError is the error object inside a failed turn/completed
@@ -168,19 +185,54 @@ func parseMessage(line []byte) parsedMessage {
 	return parsedMessage{Err: fmt.Errorf("parse message: no method or id in JSON-RPC message")}
 }
 
-// normalizeUsage converts raw app-server token usage into a
-// [domain.TokenUsage]. TotalTokens is computed as input + output.
-// CacheReadTokens is set from CachedInputTokens.
-func normalizeUsage(u *turnUsage) domain.TokenUsage {
-	if u == nil {
-		return domain.TokenUsage{}
-	}
+// normalizeBreakdown converts a raw [tokenUsageBreakdown] into a
+// [domain.TokenUsage]. InputTokens is taken from b.InputTokens, already
+// inclusive of b.CachedInputTokens; OutputTokens is taken from
+// b.OutputTokens, already inclusive of b.ReasoningOutputTokens;
+// CacheReadTokens is set from b.CachedInputTokens; TotalTokens is
+// computed as InputTokens plus OutputTokens rather than taken from
+// b.TotalTokens.
+func normalizeBreakdown(b tokenUsageBreakdown) domain.TokenUsage {
 	return domain.TokenUsage{
-		InputTokens:     u.InputTokens,
-		OutputTokens:    u.OutputTokens,
-		TotalTokens:     u.InputTokens + u.OutputTokens,
-		CacheReadTokens: u.CachedInputTokens,
+		InputTokens:     b.InputTokens,
+		OutputTokens:    b.OutputTokens,
+		TotalTokens:     b.InputTokens + b.OutputTokens,
+		CacheReadTokens: b.CachedInputTokens,
 	}
+}
+
+// parseTokenUsageUpdated unmarshals the params payload of a
+// thread/tokenUsage/updated notification.
+func parseTokenUsageUpdated(params json.RawMessage) (tokenUsageUpdatedParams, error) {
+	var p tokenUsageUpdatedParams
+	if err := json.Unmarshal(params, &p); err != nil {
+		return tokenUsageUpdatedParams{}, fmt.Errorf("parse thread/tokenUsage/updated params: %w", err)
+	}
+	return p, nil
+}
+
+// subtractUsage returns a minus b componentwise, floored at zero, with
+// TotalTokens recomputed as InputTokens plus OutputTokens.
+func subtractUsage(a, b domain.TokenUsage) domain.TokenUsage {
+	result := domain.TokenUsage{
+		InputTokens:     max(a.InputTokens-b.InputTokens, 0),
+		OutputTokens:    max(a.OutputTokens-b.OutputTokens, 0),
+		CacheReadTokens: max(a.CacheReadTokens-b.CacheReadTokens, 0),
+	}
+	result.TotalTokens = result.InputTokens + result.OutputTokens
+	return result
+}
+
+// maxUsage returns the componentwise maximum of a and b, with
+// TotalTokens recomputed as InputTokens plus OutputTokens.
+func maxUsage(a, b domain.TokenUsage) domain.TokenUsage {
+	result := domain.TokenUsage{
+		InputTokens:     max(a.InputTokens, b.InputTokens),
+		OutputTokens:    max(a.OutputTokens, b.OutputTokens),
+		CacheReadTokens: max(a.CacheReadTokens, b.CacheReadTokens),
+	}
+	result.TotalTokens = result.InputTokens + result.OutputTokens
+	return result
 }
 
 // mapTurnStatus maps a turn/completed status string to a domain event

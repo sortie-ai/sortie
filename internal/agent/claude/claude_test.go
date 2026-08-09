@@ -3,6 +3,7 @@
 package claude
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -589,7 +590,10 @@ exit 0
 		t.Errorf("claudeSessionID = %q, want test-session-id", state.claudeSessionID)
 	}
 
-	// Verify event sequence.
+	// Verify event sequence. The assistant message carries no usage
+	// object, so no token_usage event fires from it; the result event's
+	// usage settles into TurnResult.Usage without emitting its own
+	// token_usage event.
 	eventTypes := make([]domain.AgentEventType, len(events))
 	for i, e := range events {
 		eventTypes[i] = e.Type
@@ -597,7 +601,6 @@ exit 0
 	wantTypes := []domain.AgentEventType{
 		domain.EventSessionStarted,
 		domain.EventNotification,
-		domain.EventTokenUsage,
 		domain.EventTurnCompleted,
 	}
 	if len(eventTypes) != len(wantTypes) {
@@ -750,214 +753,15 @@ exit 0
 	t.Error("no turn_completed event found")
 }
 
-// TestRunTurn_AssistantUsage_SuppressesResultTokenUsage verifies that when
-// assistant messages emit per-request usage, the result event does NOT emit
-// a duplicate token_usage event. The dedup uses an explicit boolean.
-func TestRunTurn_AssistantUsage_SuppressesResultTokenUsage(t *testing.T) {
-	t.Parallel()
-
-	tmpDir := t.TempDir()
-	// Assistant message carries usage → emittedUsage = true.
-	// Result event should NOT emit token_usage.
-	script := writeScript(t, tmpDir, `
-cat <<'JSONL'
-{"type":"system","subtype":"init","session_id":"dedup-sess","cwd":"/tmp"}
-{"type":"assistant","message":{"model":"claude-sonnet-4-20250514","usage":{"input_tokens":80,"output_tokens":20,"cache_read_input_tokens":5},"content":[{"type":"text","text":"Working."}]},"session_id":"dedup-sess"}
-{"type":"result","subtype":"success","result":"Done.","is_error":false,"usage":{"input_tokens":80,"output_tokens":20},"session_id":"dedup-sess"}
-JSONL
-exit 0
-`)
-
-	adapter, _ := NewClaudeCodeAdapter(map[string]any{})
-	session, err := adapter.StartSession(context.Background(), domain.StartSessionParams{
-		WorkspacePath: tmpDir,
-		AgentConfig:   domain.AgentConfig{Command: script},
-	})
-	if err != nil {
-		t.Fatalf("StartSession() error = %v", err)
-	}
-
-	var events []domain.AgentEvent
-	_, err = adapter.RunTurn(context.Background(), session, domain.RunTurnParams{
-		Prompt: "test",
-		OnEvent: func(e domain.AgentEvent) {
-			events = append(events, e)
-		},
-	})
-	if err != nil {
-		t.Fatalf("RunTurn() error = %v", err)
-	}
-
-	// Count token_usage events — should be exactly 1 (from assistant), not 2.
-	var tokenUsageCount int
-	for _, e := range events {
-		if e.Type == domain.EventTokenUsage {
-			tokenUsageCount++
-		}
-	}
-	if tokenUsageCount != 1 {
-		eventTypes := make([]domain.AgentEventType, len(events))
-		for i, e := range events {
-			eventTypes[i] = e.Type
-		}
-		t.Errorf("token_usage events = %d, want 1 (dedup should suppress result emission); events = %v",
-			tokenUsageCount, eventTypes)
-	}
-}
-
-// TestRunTurn_AssistantZeroOutputTokens_FallsBackToResult verifies that when
-// an assistant message carries a usage object with output_tokens=0 (as
-// emitted by Claude Code 2.x for tool_use-only turns), the adapter does NOT
-// emit a token_usage event for that assistant message. Instead, the result
-// event acts as the fallback and emits exactly one token_usage event.
-func TestRunTurn_AssistantZeroOutputTokens_FallsBackToResult(t *testing.T) {
-	t.Parallel()
-
-	tmpDir := t.TempDir()
-	// Assistant carries usage with output_tokens=0 (tool_use-only message).
-	// The adapter must defer emission and let the result event provide
-	// the canonical token_usage.
-	script := writeScript(t, tmpDir, `
-cat <<'JSONL'
-{"type":"system","subtype":"init","session_id":"zero-output","cwd":"/tmp"}
-{"type":"assistant","message":{"model":"claude-sonnet-4-20250514","usage":{"input_tokens":80,"output_tokens":0,"cache_read_input_tokens":0},"content":[{"type":"text","text":"Thinking."}]},"session_id":"zero-output"}
-{"type":"result","subtype":"success","result":"OK.","is_error":false,"usage":{"input_tokens":80,"output_tokens":25},"session_id":"zero-output"}
-JSONL
-exit 0
-`)
-
-	adapter, _ := NewClaudeCodeAdapter(map[string]any{})
-	session, err := adapter.StartSession(context.Background(), domain.StartSessionParams{
-		WorkspacePath: tmpDir,
-		AgentConfig:   domain.AgentConfig{Command: script},
-	})
-	if err != nil {
-		t.Fatalf("StartSession() error = %v", err)
-	}
-
-	var events []domain.AgentEvent
-	result, err := adapter.RunTurn(context.Background(), session, domain.RunTurnParams{
-		Prompt: "test",
-		OnEvent: func(e domain.AgentEvent) {
-			events = append(events, e)
-		},
-	})
-	if err != nil {
-		t.Fatalf("RunTurn() error = %v", err)
-	}
-
-	// Exactly 1 token_usage event — from the result fallback (not from the
-	// zero-output-tokens assistant message).
-	var tokenUsageCount int
-	for _, e := range events {
-		if e.Type == domain.EventTokenUsage {
-			tokenUsageCount++
-			if e.Usage.OutputTokens <= 0 {
-				t.Errorf("EventTokenUsage.OutputTokens = %d, want > 0", e.Usage.OutputTokens)
-			}
-		}
-	}
-	if tokenUsageCount != 1 {
-		eventTypes := make([]domain.AgentEventType, len(events))
-		for i, e := range events {
-			eventTypes[i] = e.Type
-		}
-		t.Errorf("token_usage events = %d, want 1 (result fallback); events = %v",
-			tokenUsageCount, eventTypes)
-	}
-
-	// TurnResult.Usage reflects result event totals.
-	if result.Usage.OutputTokens != 25 {
-		t.Errorf("TurnResult.Usage.OutputTokens = %d, want 25", result.Usage.OutputTokens)
-	}
-}
-
-// TestRunTurn_ToolUseThenText verifies the tool_use → text assistant sequence
-// that caused Claude Code 2.x CI failures. The first assistant message
-// (tool_use, output_tokens=0) must not emit token_usage; the second
-// (text reply, output_tokens>0) emits the cumulative token_usage. The result
-// event is then suppressed to avoid inflating APIRequestCount.
-func TestRunTurn_ToolUseThenText(t *testing.T) {
-	t.Parallel()
-
-	tmpDir := t.TempDir()
-	script := writeScript(t, tmpDir, `
-cat <<'JSONL'
-{"type":"system","subtype":"init","session_id":"tool-then-text","cwd":"/tmp"}
-{"type":"assistant","message":{"model":"claude-sonnet-4-6","usage":{"input_tokens":120,"output_tokens":0},"content":[{"type":"tool_use","id":"tool_01","name":"Read","input":{"file_path":"hello.txt"}}]},"session_id":"tool-then-text"}
-{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"tool_01","content":"Hello"}]},"session_id":"tool-then-text"}
-{"type":"assistant","message":{"model":"claude-sonnet-4-6","usage":{"input_tokens":140,"output_tokens":3},"content":[{"type":"text","text":"Hello"}]},"session_id":"tool-then-text"}
-{"type":"result","subtype":"success","result":"Hello","is_error":false,"usage":{"input_tokens":260,"output_tokens":3},"session_id":"tool-then-text"}
-JSONL
-exit 0
-`)
-
-	adapter, _ := NewClaudeCodeAdapter(map[string]any{})
-	session, err := adapter.StartSession(context.Background(), domain.StartSessionParams{
-		WorkspacePath: tmpDir,
-		AgentConfig:   domain.AgentConfig{Command: script},
-	})
-	if err != nil {
-		t.Fatalf("StartSession() error = %v", err)
-	}
-
-	var events []domain.AgentEvent
-	result, err := adapter.RunTurn(context.Background(), session, domain.RunTurnParams{
-		Prompt: "read hello.txt",
-		OnEvent: func(e domain.AgentEvent) {
-			events = append(events, e)
-		},
-	})
-	if err != nil {
-		t.Fatalf("RunTurn() error = %v", err)
-	}
-
-	// Exactly 1 token_usage (from second assistant, not from first or result).
-	var tokenUsageCount int
-	var firstUsage domain.AgentEvent
-	for _, e := range events {
-		if e.Type == domain.EventTokenUsage {
-			if tokenUsageCount == 0 {
-				firstUsage = e
-			}
-			tokenUsageCount++
-		}
-	}
-	if tokenUsageCount != 1 {
-		eventTypes := make([]domain.AgentEventType, len(events))
-		for i, e := range events {
-			eventTypes[i] = e.Type
-		}
-		t.Errorf("token_usage events = %d, want 1; events = %v", tokenUsageCount, eventTypes)
-	}
-	if firstUsage.Usage.OutputTokens <= 0 {
-		t.Errorf("EventTokenUsage.OutputTokens = %d, want > 0", firstUsage.Usage.OutputTokens)
-	}
-	if firstUsage.Usage.InputTokens <= 0 {
-		t.Errorf("EventTokenUsage.InputTokens = %d, want > 0", firstUsage.Usage.InputTokens)
-	}
-	if firstUsage.Usage.TotalTokens != firstUsage.Usage.InputTokens+firstUsage.Usage.OutputTokens {
-		t.Errorf("EventTokenUsage.TotalTokens = %d, want %d",
-			firstUsage.Usage.TotalTokens, firstUsage.Usage.InputTokens+firstUsage.Usage.OutputTokens)
-	}
-
-	// TurnResult.Usage comes from the result event (authoritative totals).
-	if result.Usage.TotalTokens <= 0 {
-		t.Errorf("TurnResult.Usage.TotalTokens = %d, want > 0", result.Usage.TotalTokens)
-	}
-}
-
 // TestRunTurn_ResultOnlyFallback verifies that when no assistant message
-// carries usage, the result event emits token_usage as a fallback.
-// This is the "result-only" path — the existing TestRunTurn_SuccessfulSession
-// implicitly tests this (assistant has no usage field), but this test makes
-// the contract explicit.
+// carries usage, the result event's usage still settles into
+// TurnResult.Usage without emitting its own token_usage event: the
+// result event contributes to the run total unconditionally, not as a
+// fallback triggered by the absence of assistant-event usage.
 func TestRunTurn_ResultOnlyFallback(t *testing.T) {
 	t.Parallel()
 
 	tmpDir := t.TempDir()
-	// Assistant message with NO usage field → emittedUsage stays false.
-	// Result event must emit token_usage.
 	script := writeScript(t, tmpDir, `
 cat <<'JSONL'
 {"type":"system","subtype":"init","session_id":"fallback-sess","cwd":"/tmp"}
@@ -987,20 +791,21 @@ exit 0
 		t.Fatalf("RunTurn() error = %v", err)
 	}
 
-	// Exactly 1 token_usage event (from result fallback).
+	// No token_usage event: the assistant message carries no usage, and
+	// the result event's usage reaches TurnResult.Usage and the terminal
+	// event's Usage field without its own token_usage event.
 	var tokenUsageCount int
 	for _, e := range events {
 		if e.Type == domain.EventTokenUsage {
 			tokenUsageCount++
 		}
 	}
-	if tokenUsageCount != 1 {
+	if tokenUsageCount != 0 {
 		eventTypes := make([]domain.AgentEventType, len(events))
 		for i, e := range events {
 			eventTypes[i] = e.Type
 		}
-		t.Errorf("token_usage events = %d, want 1 (result fallback); events = %v",
-			tokenUsageCount, eventTypes)
+		t.Errorf("token_usage events = %d, want 0; events = %v", tokenUsageCount, eventTypes)
 	}
 
 	// Verify the usage from the result event.
@@ -1010,6 +815,164 @@ exit 0
 	if result.Usage.OutputTokens != 80 {
 		t.Errorf("Usage.OutputTokens = %d, want 80", result.Usage.OutputTokens)
 	}
+}
+
+// TestRunTurn_ParallelToolCalls_DedupesMessageID drives RunTurn against
+// a stream captured from claude-code 2.1.226 (a non-delegating "claude
+// -p --output-format stream-json --verbose --model haiku" invocation)
+// whose assistant events repeat one message id and whose result event
+// carries modelUsage. It verifies the adapter emits exactly one
+// token_usage event for the repeated id, and that the final
+// run-cumulative snapshot equals the result event's authoritative
+// modelUsage figure rather than the sum of the duplicated assistant
+// events.
+func TestRunTurn_ParallelToolCalls_DedupesMessageID(t *testing.T) {
+	t.Parallel()
+
+	fixture := loadFixture(t, "usage_parallel_tools.jsonl")
+	tmpDir := t.TempDir()
+	script := writeScript(t, tmpDir, fmt.Sprintf(`cat <<'JSONL'
+%s
+JSONL
+exit 0
+`, string(fixture)))
+
+	adapter, _ := NewClaudeCodeAdapter(map[string]any{})
+	session, err := adapter.StartSession(context.Background(), domain.StartSessionParams{
+		WorkspacePath: tmpDir,
+		AgentConfig:   domain.AgentConfig{Command: script},
+	})
+	if err != nil {
+		t.Fatalf("StartSession() error = %v", err)
+	}
+
+	var events []domain.AgentEvent
+	result, err := adapter.RunTurn(context.Background(), session, domain.RunTurnParams{
+		Prompt: "Reply with exactly the word: ok",
+		OnEvent: func(e domain.AgentEvent) {
+			events = append(events, e)
+		},
+	})
+	if err != nil {
+		t.Fatalf("RunTurn() error = %v", err)
+	}
+
+	var tokenUsageEvents []domain.AgentEvent
+	for _, e := range events {
+		if e.Type == domain.EventTokenUsage {
+			tokenUsageEvents = append(tokenUsageEvents, e)
+		}
+	}
+	if len(tokenUsageEvents) != 1 {
+		eventTypes := make([]domain.AgentEventType, len(events))
+		for i, e := range events {
+			eventTypes[i] = e.Type
+		}
+		t.Fatalf("token_usage event count = %d, want 1 (deduplicated by message id); events = %v", len(tokenUsageEvents), eventTypes)
+	}
+
+	wantSnapshot := domain.TokenUsage{InputTokens: 33649, OutputTokens: 64, TotalTokens: 33713, CacheReadTokens: 17706}
+	if result.Usage != wantSnapshot {
+		t.Errorf("TurnResult.Usage = %+v, want %+v", result.Usage, wantSnapshot)
+	}
+
+	agenttest.AssertUsageContract(t, events)
+}
+
+// TestRunTurn_SubAgentUsage exercises R15's sub-agent accounting rule
+// using a fixture whose result event carries a two-model modelUsage map
+// and a top-level usage object whose output_tokens is zero, the shape a
+// fully-delegating session produces because usage excludes sub-agent
+// activity while modelUsage includes it.
+func TestRunTurn_SubAgentUsage(t *testing.T) {
+	t.Parallel()
+
+	t.Run("modelUsage present sums sub-agent output", func(t *testing.T) {
+		t.Parallel()
+
+		fixture := loadFixture(t, "usage_subagent_result.json")
+		var compact bytes.Buffer
+		if err := json.Compact(&compact, fixture); err != nil {
+			t.Fatalf("json.Compact: %v", err)
+		}
+
+		tmpDir := t.TempDir()
+		script := writeScript(t, tmpDir, fmt.Sprintf(`cat <<'JSONL'
+{"type":"system","subtype":"init","session_id":"7c2a9e10-3b4c-4d5e-9f6a-1b2c3d4e5f60","cwd":"/tmp"}
+%s
+JSONL
+exit 0
+`, compact.String()))
+
+		adapter, _ := NewClaudeCodeAdapter(map[string]any{})
+		session, err := adapter.StartSession(context.Background(), domain.StartSessionParams{
+			WorkspacePath: tmpDir,
+			AgentConfig:   domain.AgentConfig{Command: script},
+		})
+		if err != nil {
+			t.Fatalf("StartSession() error = %v", err)
+		}
+
+		var events []domain.AgentEvent
+		result, err := adapter.RunTurn(context.Background(), session, domain.RunTurnParams{
+			Prompt: "delegate to sub-agents",
+			OnEvent: func(e domain.AgentEvent) {
+				events = append(events, e)
+			},
+		})
+		if err != nil {
+			t.Fatalf("RunTurn() error = %v", err)
+		}
+
+		const wantOutput = 800 + 1200 // sum of the fixture's two modelUsage outputTokens values
+		if result.Usage.OutputTokens != wantOutput {
+			t.Errorf("Usage.OutputTokens = %d, want %d (sum of modelUsage outputTokens)", result.Usage.OutputTokens, wantOutput)
+		}
+		if result.Usage.OutputTokens == 0 {
+			t.Error("Usage.OutputTokens = 0, want non-zero even though the top-level usage object reports zero")
+		}
+		agenttest.AssertUsageContract(t, events)
+	})
+
+	t.Run("modelUsage removed falls back to usage", func(t *testing.T) {
+		t.Parallel()
+
+		// A variant whose modelUsage map is absent and whose usage object
+		// itself carries non-zero output, proving the fallback surfaces
+		// real figures rather than defaulting to zero.
+		tmpDir := t.TempDir()
+		script := writeScript(t, tmpDir, `
+cat <<'JSONL'
+{"type":"system","subtype":"init","session_id":"fallback-subagent","cwd":"/tmp"}
+{"type":"result","subtype":"success","result":"done","session_id":"fallback-subagent","is_error":false,"usage":{"input_tokens":1000,"output_tokens":500}}
+JSONL
+exit 0
+`)
+
+		adapter, _ := NewClaudeCodeAdapter(map[string]any{})
+		session, err := adapter.StartSession(context.Background(), domain.StartSessionParams{
+			WorkspacePath: tmpDir,
+			AgentConfig:   domain.AgentConfig{Command: script},
+		})
+		if err != nil {
+			t.Fatalf("StartSession() error = %v", err)
+		}
+
+		result, err := adapter.RunTurn(context.Background(), session, domain.RunTurnParams{
+			Prompt:  "delegate to sub-agents",
+			OnEvent: func(domain.AgentEvent) {},
+		})
+		if err != nil {
+			t.Fatalf("RunTurn() error = %v", err)
+		}
+
+		if result.Usage.OutputTokens != 500 {
+			t.Errorf("Usage.OutputTokens = %d, want 500 (fallback to usage)", result.Usage.OutputTokens)
+		}
+		if result.Usage.InputTokens != 1000 {
+			t.Errorf("Usage.InputTokens = %d, want 1000 (fallback to usage)", result.Usage.InputTokens)
+		}
+	})
 }
 
 func TestRunTurn_ErrorResult(t *testing.T) {
@@ -1451,7 +1414,7 @@ func TestRunTurn_PartialOutputNoResultExitZero(t *testing.T) {
 	tmpDir := t.TempDir()
 	script := writeScript(t, tmpDir, `
 echo '{"type":"system","subtype":"init","session_id":"partial","cwd":"/tmp"}'
-echo '{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"hello"}],"usage":{"input_tokens":10,"output_tokens":42,"cache_read_input_tokens":0},"model":"claude-sonnet-4-20250514"}}'
+echo '{"type":"assistant","message":{"id":"msg_partial","role":"assistant","content":[{"type":"text","text":"hello"}],"usage":{"input_tokens":10,"output_tokens":42,"cache_read_input_tokens":0},"model":"claude-sonnet-4-20250514"}}'
 exit 0
 `)
 
@@ -2207,9 +2170,9 @@ func TestRunTurn_PerRequestAPIDurationMS(t *testing.T) {
 	script := writeScript(t, tmpDir, `
 cat <<'JSONL'
 {"type":"system","subtype":"init","session_id":"per-req-timing","cwd":"/tmp"}
-{"type":"assistant","message":{"model":"claude-sonnet-4-20250514","content":[{"type":"tool_use","id":"toolu_req01","name":"Read","input":{"file_path":"main.go"}}],"usage":{"input_tokens":100,"output_tokens":10}},"session_id":"per-req-timing"}
+{"type":"assistant","message":{"id":"msg_req01","model":"claude-sonnet-4-20250514","content":[{"type":"tool_use","id":"toolu_req01","name":"Read","input":{"file_path":"main.go"}}],"usage":{"input_tokens":100,"output_tokens":10}},"session_id":"per-req-timing"}
 {"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_req01","content":"package main","is_error":false}]}}
-{"type":"assistant","message":{"model":"claude-sonnet-4-20250514","content":[{"type":"text","text":"Done."}],"usage":{"input_tokens":150,"output_tokens":5}},"session_id":"per-req-timing"}
+{"type":"assistant","message":{"id":"msg_req02","model":"claude-sonnet-4-20250514","content":[{"type":"text","text":"Done."}],"usage":{"input_tokens":150,"output_tokens":5}},"session_id":"per-req-timing"}
 {"type":"result","subtype":"success","result":"Done.","is_error":false,"usage":{"input_tokens":250,"output_tokens":15},"session_id":"per-req-timing"}
 JSONL
 exit 0
@@ -2268,9 +2231,9 @@ func TestRunTurn_PerRequestAPIDurationMS_NoDoubleCount(t *testing.T) {
 	script := writeScript(t, tmpDir, `
 cat <<'JSONL'
 {"type":"system","subtype":"init","session_id":"no-double-count","cwd":"/tmp"}
-{"type":"assistant","message":{"model":"claude-sonnet-4-20250514","content":[{"type":"tool_use","id":"toolu_dc01","name":"Read","input":{"file_path":"main.go"}}],"usage":{"input_tokens":100,"output_tokens":10}},"session_id":"no-double-count"}
+{"type":"assistant","message":{"id":"msg_dc01","model":"claude-sonnet-4-20250514","content":[{"type":"tool_use","id":"toolu_dc01","name":"Read","input":{"file_path":"main.go"}}],"usage":{"input_tokens":100,"output_tokens":10}},"session_id":"no-double-count"}
 {"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"toolu_dc01","content":"package main","is_error":false}]}}
-{"type":"assistant","message":{"model":"claude-sonnet-4-20250514","content":[{"type":"text","text":"Done."}],"usage":{"input_tokens":150,"output_tokens":5}},"session_id":"no-double-count"}
+{"type":"assistant","message":{"id":"msg_dc02","model":"claude-sonnet-4-20250514","content":[{"type":"text","text":"Done."}],"usage":{"input_tokens":150,"output_tokens":5}},"session_id":"no-double-count"}
 {"type":"result","subtype":"success","result":"Done.","is_error":false,"duration_api_ms":5000,"usage":{"input_tokens":250,"output_tokens":15},"session_id":"no-double-count"}
 JSONL
 exit 0
@@ -2320,7 +2283,7 @@ func TestRunTurn_PerRequestAPIDurationMS_NoInitGuard(t *testing.T) {
 	// emittedAPITiming stays false, so the fallback path fires on result.
 	script := writeScript(t, tmpDir, `
 cat <<'JSONL'
-{"type":"assistant","message":{"model":"claude-sonnet-4-20250514","content":[{"type":"text","text":"Working."}],"usage":{"input_tokens":100,"output_tokens":10}}}
+{"type":"assistant","message":{"id":"msg_no_init","model":"claude-sonnet-4-20250514","content":[{"type":"text","text":"Working."}],"usage":{"input_tokens":100,"output_tokens":10}}}
 {"type":"result","subtype":"success","result":"Done.","is_error":false,"duration_api_ms":1000,"usage":{"input_tokens":100,"output_tokens":10}}
 JSONL
 exit 0

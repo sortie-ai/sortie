@@ -1,0 +1,76 @@
+{
+  "messages": [
+    {
+      "info": {
+        "role": "user",
+        "sessionID": "ses_18c61ba15ffe1524eHja237B0R"
+      }
+    },
+    {
+      "info": {
+        "role": "assistant",
+        "sessionID": "ses_18c61ba15ffe1524eHja237B0R",
+        "providerID": "anthropic",
+        "modelID": "claude-haiku-4-5",
+        "tokens": {
+          "total": 16593,
+          "input": 3,
+          "output": 4,
+          "reasoning": 0,
+          "cache": {
+            "read": 5522,
+            "write": 11064
+          }
+        },
+        "time": {
+          "created": 1780056264932,
+          "completed": 1780056265900
+        }
+      }
+    },
+    {
+      "info": {
+        "role": "assistant",
+        "sessionID": "ses_18c61ba15ffe1524eHja237B0R",
+        "providerID": "anthropic",
+        "modelID": "claude-haiku-4-5",
+        "tokens": {
+          "total": 16609,
+          "input": 3,
+          "output": 5,
+          "reasoning": 0,
+          "cache": {
+            "read": 5528,
+            "write": 11073
+          }
+        },
+        "time": {
+          "created": 1780056268100,
+          "completed": 1780056269200
+        }
+      }
+    },
+    {
+      "info": {
+        "role": "assistant",
+        "sessionID": "ses_18c61ba15ffe1524eHja237B0R",
+        "providerID": "anthropic",
+        "modelID": "claude-haiku-4-5",
+        "tokens": {
+          "total": 16626,
+          "input": 3,
+          "output": 5,
+          "reasoning": 0,
+          "cache": {
+            "read": 5536,
+            "write": 11082
+          }
+        },
+        "time": {
+          "created": 1780056271400,
+          "completed": 1780056272600
+        }
+      }
+    }
+  ]
+}
