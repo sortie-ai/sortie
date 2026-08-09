@@ -141,6 +141,11 @@ Fields:
   - `~` and strings containing path separators are expanded.
   - Bare strings without path separators are preserved as-is (relative roots are allowed but
     discouraged).
+- `retention_days` (integer or string integer, optional)
+  - Default: `0` (disables the bound).
+  - A value from `1` to `29` and any negative value are rejected when the configuration is
+    parsed.
+  - The window is evaluated by the periodic workspace sweep.
 
 #### 5.3.4 `hooks` (object)
 

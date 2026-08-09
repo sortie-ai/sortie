@@ -68,6 +68,7 @@ var knownFieldsRegistry = map[string]SectionSchema{
 	"workspace": {
 		Fields: []FieldDef{
 			{Name: "root", Type: FieldString},
+			{Name: "retention_days", Type: FieldInt},
 		},
 	},
 	"hooks": {
