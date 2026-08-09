@@ -157,7 +157,7 @@ Only non-outdated comment IDs are included. This means:
 
 The fingerprint is stored in `reaction_fingerprints` (Section 19.2) with kind `review`.
 
-Debounce uses `PendingRetryAt` — the same mechanism as CI pending backoff. When review comments
+Debounce uses `PendingRetryAt`: the same mechanism as CI pending backoff. When review comments
 are detected but the newest comment timestamp is within the debounce window
 (`reactions.review_comments.debounce_ms`):
 

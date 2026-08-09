@@ -106,17 +106,17 @@ Failure semantics:
 
 Hook environment variables available to all hooks:
 
-- `SORTIE_ISSUE_ID` — tracker-internal issue ID.
-- `SORTIE_ISSUE_IDENTIFIER` — human-readable ticket key.
-- `SORTIE_WORKSPACE` — absolute path to the per-issue workspace directory.
-- `SORTIE_ATTEMPT` — current attempt number.
+- `SORTIE_ISSUE_ID`: tracker-internal issue ID.
+- `SORTIE_ISSUE_IDENTIFIER`: human-readable ticket key.
+- `SORTIE_WORKSPACE`: absolute path to the per-issue workspace directory.
+- `SORTIE_ATTEMPT`: current attempt number.
 
 Hook environment variables available only to `after_run`:
 
-- `SORTIE_SELF_REVIEW_STATUS` — self-review outcome for the current run: `"disabled"`,
+- `SORTIE_SELF_REVIEW_STATUS`: self-review outcome for the current run: `"disabled"`,
   `"passed"`, `"cap_reached"`, or `"error"`. Defaults to `"disabled"` when self-review
   is not configured.
-- `SORTIE_SELF_REVIEW_SUMMARY_PATH` — absolute path to `.sortie/review_summary.md` in
+- `SORTIE_SELF_REVIEW_SUMMARY_PATH`: absolute path to `.sortie/review_summary.md` in
   the workspace. Absent when self-review did not run or summary was not written.
 
 ### 9.5 Workspace SCM metadata (`.sortie/scm.json`)
@@ -145,7 +145,7 @@ feedback, review comment routing, and other features can reuse.
   is `0`, both review polling and auto-merge are skipped.
 - `owner` (string, optional): the SCM repository owner (e.g. GitHub org or user). Written by
   the agent alongside `pr_number`. Required for review comment polling; when empty, review
-  polling is skipped. The `owner` field is the authoritative source of SCM repository identity —
+  polling is skipped. The `owner` field is the authoritative source of SCM repository identity;
   it is never derived from the tracker project configuration, which may be a Jira key or other
   non-SCM identifier.
 - `repo` (string, optional): the SCM repository name. Written by the agent alongside
@@ -181,9 +181,17 @@ Invariant 3: Workspace key is sanitized.
 - Only `[A-Za-z0-9._-]` allowed in workspace directory names.
 - Replace all other characters with `_`.
 
-Invariant 4: A workspace key held by an entry in the running map or the retry map is never removed
-by the age bound, whatever its age. These exclusions are absolute; the age bound does not weaken
-them.
+Invariant 4: A workspace key held by an entry in the running map or the retry map is never a sweep
+candidate, whatever its age, and so is removed by neither the terminal gate nor the age bound on
+that pass. These exclusions are absolute; the age bound does not weaken them.
+
+Invariant 4a: A workspace key held by a pending reaction entry is a sweep candidate unless that
+entry's kind carries an expiry. A kind whose pending entry is bounded by a TTL pins its workspace
+for as long as the entry lives; a kind that polls an external fact for an unbounded time does not,
+because pinning it would hold the directory for as long as that poll runs. A reaction kind the
+orchestrator does not recognize pins, so an unclassified kind fails toward retention rather than
+removal. A kind that does not pin MUST NOT depend on the workspace directory surviving between its
+own polls.
 
 Invariant 5: `workspace.retention_days` cannot be configured below its floor, and that floor in
 days equals the pending-reaction recovery lookback in days. Any workspace the age bound may remove

@@ -15,7 +15,9 @@ configured, the reaction is configured, the exiting worker produced a non-empty 
 and the workspace's `SCMMetadata` (§9.5) reports `pr_number > 0` and non-empty `owner` and `repo`.
 Seeding additionally requires that the issue was claimed by the orchestrator at the moment of
 exit, and that either the exit followed the handoff-transition path or the issue remains claimed
-afterward. Unlike the checkout-bearing sibling kinds, no `branch` field is required: the reaction
+afterward. An exit whose handoff was suppressed because the issue was already reported terminal
+seeds nothing, this kind included: that exit performs no handoff and enqueues no reaction of any
+kind (§7.3). Unlike the checkout-bearing sibling kinds, no `branch` field is required: the reaction
 performs no checkout and reads no branch. A "create only if absent" guard preserves an in-progress
 pending entry across a re-exit on the same issue.
 
@@ -51,8 +53,10 @@ expiry. CI, review, bot-review, auto-merge, and merge-conflict each observe some
 and bound their pending entries with a fixed TTL so a dropped observation does not poll forever.
 Merge-completion carries no such TTL, the same posture as the label-review and label-fix kinds: a
 merge instead waits on human review for an unbounded time, so this kind has no equivalent TTL
-constant. The entry is bounded another way: it stops being re-enqueued once the issue leaves the
-configured handoff state. It is rebuilt through two paths: a fresh pending entry seeded on a
+constant. Carrying no expiry has a second consequence: a pending `merge-completion` entry does not
+pin its workspace against periodic-sweep candidacy (§9.6, Invariant 4a), which is safe here because
+the pass reads nothing from the workspace directory. The entry is bounded another way: it stops
+being re-enqueued once the issue leaves the configured handoff state. It is rebuilt through two paths: a fresh pending entry seeded on a
 qualifying normal worker exit (§11G.1), and a startup recovery re-seed for an issue still in the
 handoff state within the shared thirty-day recovery lookback (§14.3).
 

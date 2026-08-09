@@ -9,15 +9,21 @@ The effective poll interval should be updated when workflow config changes are r
 
 Tick sequence:
 
-1. Reconcile running issues.
-2. Run dispatch preflight validation.
-3. Fetch candidate issues from tracker using active states.
-4. Sort issues by dispatch priority.
-5. Dispatch eligible issues while slots remain.
-6. Notify observability/status consumers of state changes.
+1. Run dispatch preflight validation, which triggers a defensive config reload so every later step
+   in the tick sees the same fresh configuration snapshot.
+2. Apply the reloaded configuration to runtime state.
+3. Reconcile running issues.
+4. Run the periodic workspace sweep when its tick counter is due (Section 8.7).
+5. Fetch candidate issues from tracker using active states.
+6. Sort issues by dispatch priority.
+7. Dispatch eligible issues while slots remain.
+8. Notify observability/status consumers of state changes.
 
-If per-tick validation fails, dispatch is skipped for that tick, but reconciliation still happens
-first.
+Preflight runs first so the reload it forces is visible to reconciliation and to the sweep, not
+only to dispatch. If validation fails, dispatch is skipped for that tick, but configuration is
+still applied, reconciliation still runs, and the sweep still runs when due: those steps keep
+orchestrator state aligned with the tracker using the last known good configuration, which remains
+valid for that purpose. Dispatch is the only step gated on preflight success.
 
 ### 8.2 Candidate Selection Rules
 
@@ -114,7 +120,7 @@ Note:
 
 - Terminal-state workspace cleanup is handled by startup cleanup, active-run reconciliation
   (including terminal transitions for currently running issues), and the periodic workspace
-  sweep described below.
+  sweep (Section 8.7).
 - Retry handling mainly operates on active candidates and releases claims when the issue is absent,
   rather than performing terminal cleanup itself.
 - Within one periodic sweep pass, the terminal check always runs before the age bound (see
@@ -122,7 +128,8 @@ Note:
   removes is never re-evaluated by the age bound on that same pass. The age bound needs no answer
   from the tracker: it is evaluated from the workspace listing and the persistence layer alone, so
   it runs whether or not the tracker state read for that pass succeeded, and it still evaluates and
-  can remove eligible workspaces on a pass where that read failed.
+  can remove eligible workspaces on a pass where that read failed. Section 8.7 defines the full
+  pass.
 
 ### 8.5 Active Run Reconciliation
 
@@ -318,4 +325,67 @@ When Sortie starts:
 
 This approach scopes the query to workspaces that actually exist on disk, avoiding expensive
 full-project terminal issue sweeps for large trackers.
+
+### 8.7 Periodic Workspace Sweep
+
+Startup cleanup and active-run reconciliation between them cover an issue that is terminal when the
+process starts and an issue that turns terminal while a worker is running. Neither covers an issue
+whose worker has already exited: it holds no running entry, so nothing observes it turning terminal
+and nothing observes its workspace aging on disk. The periodic sweep closes that gap.
+
+The sweep runs on the poll tick, throttled to one pass every sixty ticks rather than every tick,
+because its cost scales with the number of leftover directories rather than with the number of
+running agents. Its work is housekeeping: a workspace left behind wastes disk, but it never
+produces a wrong scheduling decision, so bounded tracker load is worth more than immediate removal.
+
+One pass proceeds as follows:
+
+```text
+sweep_workspaces(state, config):
+  keys = list_workspace_keys(config.workspace.root)
+  if listing failed:
+    log_warning()
+    return                              # no summary record for this pass
+
+  exclusions = {}                       # workspace key -> reason, first writer wins
+  for entry in state.running:
+    set_if_absent(exclusions, key_of(entry), "running")
+  for entry in state.retry_attempts:
+    set_if_absent(exclusions, key_of(entry), "retry")
+  for entry in state.pending_reactions:
+    if reaction_kind_pins_workspace(entry.kind):
+      set_if_absent(exclusions, key_of(entry), "reaction")
+
+  remaining = keys - exclusions.keys
+  states = tracker.fetch_issue_states_by_identifiers(remaining)
+  if fetch failed:
+    states = {}                         # every key falls through to the age bound
+
+  terminal_keys = [k for k in remaining if states[k] is known and terminal]
+  age_keys      = remaining - terminal_keys
+
+  remove_workspaces(terminal_keys)      # the terminal gate
+  run_age_bound(age_keys, config.workspace.retention_days)
+  emit_sweep_summary()
+```
+
+Rules that govern the pass:
+
+- The candidate set for a pass is every workspace key the listing returned. A key is excluded from
+  evaluation before any tracker call when it belongs to a running entry, a scheduled retry, or a
+  pending reaction entry whose kind pins its workspace. Exclusion precedence is running, then
+  retry, then reaction, so a key present in more than one source is attributed to exactly one
+  reason and the pass's outcome counters partition the candidate set (Section 13.1).
+- A pending reaction entry pins its workspace only when its kind carries an expiry. A kind that
+  polls an external fact indefinitely (§11F and §11G) does not pin, because pinning it would hold a
+  workspace on disk for as long as that unbounded poll runs. A kind the orchestrator does not
+  recognize pins, the non-destructive default.
+- The terminal gate removes every evaluated key the tracker reports in a terminal state. A key
+  whose state the tracker does not report on is not removed by this gate.
+- The age bound then evaluates whatever the terminal gate left, under the rules in Section 9.1. A
+  failed tracker read leaves every evaluated key unclassified, so all of them reach the age bound
+  rather than being skipped.
+- Each pass that produced a candidate set emits exactly one summary record, including a pass over
+  zero keys and a pass that removed nothing (Section 13.1). A pass that could not list the
+  workspace root emits no summary and removes nothing.
 

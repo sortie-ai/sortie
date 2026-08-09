@@ -46,13 +46,14 @@ type Metrics interface {
 	IncWorkerExits(exitType string)
 
 	// IncRetries increments the retry scheduling counter.
-	// trigger is "error", "continuation", "timer", or "stall"
-	// (sortie_retries_total{trigger} counter).
+	// trigger is "error", "continuation", "timer", "stall", or
+	// "ci_fix" (sortie_retries_total{trigger} counter).
 	IncRetries(trigger string)
 
 	// IncReconciliationActions increments the reconciliation outcome
-	// counter. action is "stop", "cleanup", "keep", or "sweep_cleanup"
-	// (sortie_reconciliation_actions_total{action} counter).
+	// counter. action is "stop", "cleanup", "keep", "sweep_cleanup", or
+	// "sweep_expired" (sortie_reconciliation_actions_total{action}
+	// counter).
 	IncReconciliationActions(action string)
 
 	// IncPollCycles increments the poll tick outcome counter.

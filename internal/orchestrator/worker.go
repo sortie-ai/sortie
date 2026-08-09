@@ -148,9 +148,10 @@ type WorkerResult struct {
 	// handler from the running map entry.
 	StartedAt time.Time
 
-	// ObservedIssueState is the tracker state returned for this issue by
-	// the most recent successful FetchIssueStatesByIDs call the worker
-	// made. Empty when no such call returned a state for the issue: a
+	// ObservedIssueState is the most recent tracker state a worker state
+	// refresh returned for this issue. A refresh whose response omits the
+	// issue leaves the previous observation in place rather than clearing
+	// it. Empty when no refresh returned a state for the issue: a
 	// dispatch posture that does not drive issue state, or an exit before
 	// the first refresh completed. On a soft-stop exit the value is the
 	// previous turn's observation, because the status-file check runs

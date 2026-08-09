@@ -42,9 +42,18 @@ function start_service():
 
 ```text
 on_tick(state):
+  # Preflight forces a defensive reload, so it runs before every step
+  # that reads config, not only before dispatch.
+  validation = validate_dispatch_config()
+  state = apply_config_to_state(state, current_config())
+
   state = reconcile_running_issues(state)
 
-  validation = validate_dispatch_config()
+  state.sweep_tick_counter += 1
+  if state.sweep_tick_counter >= sweep_every_n_ticks:
+    state.sweep_tick_counter = 0
+    sweep_workspaces(state)
+
   if validation is not ok:
     log_validation_error(validation)
     notify_observers()
@@ -362,9 +371,9 @@ on_worker_exit(issue_id, reason, state):
   if reason == normal:
     state.completed.add(issue_id)  # bookkeeping only
 
-    # A terminal observation — reconciliation's observation on the running
+    # A terminal observation (reconciliation's observation on the running
     # entry, else the worker's own per-turn observation, else the
-    # dispatch-time snapshot — suppresses the handoff transition and every
+    # dispatch-time snapshot) suppresses the handoff transition and every
     # reaction enqueue below, directly, regardless of claim state.
     observation = resolve_terminal_observation(running_entry, worker_result)
     if is_terminal_state(observation, cfg.tracker.terminal_states):

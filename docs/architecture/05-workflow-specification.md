@@ -117,7 +117,7 @@ Fields:
   - MUST NOT appear in `terminal_states` (a terminal state would trigger workspace cleanup
     on the next reconciliation tick).
   - MUST NOT collide with `handoff_state` (the two transitions represent different lifecycle
-    phases — dispatch vs. exit).
+    phases: dispatch vs. exit).
   - Transition failure is non-fatal: the worker logs a warning and continues to workspace
     preparation.
   - If the issue is already in the target state (case-insensitive comparison), the

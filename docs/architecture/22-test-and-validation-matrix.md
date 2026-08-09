@@ -49,6 +49,20 @@ Unless otherwise noted, Sections 17.1 through 17.7 are `Core Conformance`. Bulle
 - Agent launch uses the per-issue workspace path as cwd and rejects out-of-root paths
 - Hook environment variables (`SORTIE_ISSUE_ID`, `SORTIE_ISSUE_IDENTIFIER`, `SORTIE_WORKSPACE`,
   `SORTIE_ATTEMPT`) are set correctly
+- The periodic sweep excludes workspace keys held by running entries and scheduled retries, and
+  keys held by a pending reaction entry whose kind pins its workspace, while a non-pinning kind
+  leaves its key a candidate
+- Within one sweep pass the terminal check runs before the age bound, and a key removed by the
+  terminal check is not re-evaluated by the age bound
+- The age bound removes a workspace whose latest recorded activity precedes the retention window,
+  anchoring on the later of the recorded completion and the recorded push
+- A workspace with no parseable activity timestamp is retained regardless of age
+- A retention value of `0` or below the floor disables the age bound; a value between `1` and the
+  floor is rejected at config parse time
+- A failed tracker state read still lets the age bound evaluate and remove eligible workspaces on
+  that pass
+- One sweep summary record is emitted per pass that produced a candidate set, including a pass
+  that removed nothing, and its outcome counters sum to the candidate count
 
 ### 17.3 Issue Tracker Client
 
@@ -78,7 +92,25 @@ Unless otherwise noted, Sections 17.1 through 17.7 are `Core Conformance`. Bulle
 - Non-active state stops running agent without workspace cleanup
 - Terminal state stops running agent and cleans workspace
 - Reconciliation with no running issues is a no-op
-- Normal worker exit schedules a short continuation retry (attempt 1)
+- An issue reported terminal releases its pending reaction entries, reaction attempt counters,
+  pending retry, and claim, whether or not it has a running worker, leaving fingerprint rows intact
+- A failed tracker state refresh keeps workers running and releases nothing
+- Normal worker exit with the issue still active and no handoff state configured schedules a short
+  continuation retry (attempt 1)
+- Normal worker exit with a handoff state configured and the issue still active performs the
+  handoff transition and releases the claim without scheduling a continuation retry
+- Handoff transition failure schedules a continuation retry on a non-soft-stop exit and releases
+  the claim on a soft-stop exit
+- Normal worker exit whose freshest observation is terminal suppresses the handoff transition, the
+  continuation retry, and every reaction enqueue, from each of the three observation sources
+  (reconciliation, the worker's own refresh, and the dispatch-time snapshot)
+- With terminal states configured and a non-terminal observation, one verification read runs
+  immediately before the handoff write; a terminal result suppresses the write and a failed read
+  lets it proceed
+- With no terminal states configured, no verification read is issued
+- A blocked soft stop releases the claim with no handoff and no continuation retry
+- A dispatch that does not drive issue state performs neither the dispatch-time transition nor the
+  handoff transition, and enqueues no reaction on its own exit
 - Abnormal worker exit increments retries with 10s-based exponential backoff
 - Retry backoff cap uses configured `agent.max_retry_backoff_ms`
 - Retry queue entries include attempt, due time, identifier, and error
@@ -116,6 +148,20 @@ Unless otherwise noted, Sections 17.1 through 17.7 are `Core Conformance`. Bulle
 - Worker exit with `scm.json` containing `pr_number > 0`, `owner`, and `repo` creates review
   pending reaction; missing fields degrade to no-review behavior
 - Worker exit does not overwrite existing pending review entry (preserves debounce state)
+- Merge-completion reconciliation is skipped when `reactions.merge_completion` is not configured,
+  or when no SCM adapter or no tracker adapter is present
+- Merge-completion drops an entry whose issue is missing from the state response, already terminal,
+  or has left the handoff state, and defers one whose issue is still claimed
+- Merge-completion transitions the issue to `target_state` once per merge commit identifier, and a
+  second reconcile of the same identifier performs no further transition
+- A merged pull request reporting no merge commit identifier re-enqueues rather than latching
+- Merge-completion transition failure routes by tracker error kind: transport and API retry with
+  backoff to `max_retries` then escalate, auth and payload escalate immediately, and not-found
+  stops while marking the fingerprint dispatched
+- A `target_state` that equals the handoff state, is a member of the active states, or is absent
+  from the configured terminal states is rejected offline
+- A `target_state` that drifts out of a reloaded terminal-state list logs one warning per onset and
+  does not change any entry's disposition
 - Self-review disabled adds zero overhead (no review turns, no review metadata)
 - Self-review runs verification commands and passes results to agent
 - Review verdict "pass" terminates loop

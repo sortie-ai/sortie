@@ -35,9 +35,10 @@ Important nuance:
 - The first turn should use the full rendered task prompt.
 - Continuation turns should send only continuation guidance to the existing thread, not resend the
   original task prompt that is already present in thread history.
-- Once the worker exits normally, the orchestrator still schedules a short continuation retry
-  (about 1 second) so it can re-check whether the issue remains active and needs another worker
-  session.
+- Once the worker exits normally with the issue still active and no handoff state configured, the
+  orchestrator schedules a short continuation retry (about 1 second) so it can re-check whether
+  the issue remains active and needs another worker session. Section 7.3 gives the full set of
+  exit dispositions and the order they are evaluated in.
 
 ### 7.2 Run Attempt Lifecycle
 
@@ -48,7 +49,7 @@ A run attempt transitions through these phases:
 3. `LaunchingAgentProcess`
 4. `InitializingSession`
 5. `StreamingTurn`
-6. `SelfReviewing` — entered only when `self_review.enabled` is true and the coding turn
+6. `SelfReviewing`, entered only when `self_review.enabled` is true and the coding turn
    loop completed successfully (not on turn failure).
 7. `Finishing`
 8. `Succeeded`
@@ -62,34 +63,47 @@ Distinct terminal reasons are important because retry logic and logs differ.
 ### 7.3 Transition Triggers
 
 - `Poll Tick`
+  - Validate config, which forces a defensive reload, then apply the result to runtime state.
   - Reconcile active runs.
-  - Validate config.
+  - Run the periodic workspace sweep when due (Section 8.7).
   - Fetch candidate issues.
-  - Dispatch until slots are exhausted.
+  - Dispatch until slots are exhausted. Dispatch is the only step gated on validation success.
   - Dispatched workers perform the optional dispatch-time in-progress transition
     (via `tracker.in_progress_state`) as their first step, before workspace preparation.
 
 - `Worker Exit (normal)`
-  - Remove running entry.
-  - Update aggregate runtime totals.
-  - Persist completed run attempt to SQLite.
-  - Schedule continuation retry (attempt `1`) after the worker exhausts or finishes its in-process
-    turn loop.
-  - When a CI status provider is configured, the workspace contains SCM metadata
-    (`.sortie/scm.json` with a non-empty `branch`), and the issue is still claimed: record a
-    pending CI check entry for reconciliation.
-  - When an SCM adapter is configured, the workspace contains SCM metadata with
-    `pr_number > 0`, non-empty `owner`, and non-empty `repo`, and the issue is still claimed:
-    record a pending review comment entry for reconciliation. Only created if no entry already
-    exists (preserves in-progress debounce state).
-  - When an SCM adapter is configured (`reactions.auto_merge.provider` non-empty), the workspace
-    contains SCM metadata with `pr_number > 0`, non-empty `owner`, and non-empty `repo`, and the
-    issue is still claimed: record a pending auto-merge entry for reconciliation. Only created if
-    no entry already exists.
-  - When the freshest tracker observation for the issue is a terminal state — resolved with
-    precedence reconciliation's observation, then the worker's own per-turn observation, then the
-    dispatch-time snapshot — the handoff transition and the continuation retry are both
-    suppressed, and none of the reaction enqueues above fire on that exit.
+  - Unconditional steps, taken on every normal exit: remove the running entry, update aggregate
+    runtime totals, and persist the completed run attempt to SQLite.
+  - The exit then takes exactly one disposition. The conditions are evaluated in the order below
+    and the first match wins, so an earlier disposition overrides every later one:
+
+    1. The agent reported itself blocked through a soft stop. Suppress the continuation retry,
+       cancel any pending retry, and release the claim. Blocked work has nowhere to continue to.
+    2. The freshest tracker observation for the issue reports a terminal state, resolved with
+       precedence reconciliation's observation, then the worker's own per-turn observation, then
+       the dispatch-time snapshot. Suppress the handoff transition and the continuation retry,
+       cancel any pending retry, and release the claim. A terminal state is a decision already
+       made about this issue; overwriting it with the handoff state would undo it.
+    3. A handoff state is configured, the issue is still in an active state, the exit is not a
+       blocked soft stop, and the dispatch drives issue state. Perform the handoff transition
+       (Section 11.5) and release the claim. On transition failure, a soft-stop exit releases the
+       claim and a non-soft-stop exit schedules the continuation retry instead.
+    4. Any other soft stop. Suppress the continuation retry, cancel any pending retry, and release
+       the claim. An unrecognized soft-stop reason is logged before taking this path.
+    5. The issue is still in an active state and the dispatch drives issue state. Schedule the
+       continuation retry (attempt `1`) so the next tick can re-check whether the issue needs
+       another worker session.
+    6. Otherwise the issue is no longer in an active state. Cancel any pending retry and release
+       the claim.
+  - Reaction entries are enqueued only when the issue was claimed at the moment of exit, the exit
+    either took the handoff disposition or left the issue still claimed, and the exit was not
+    suppressed by a terminal observation. A label-command dispatch never satisfies this predicate,
+    because it is excluded from the handoff disposition and releases its claim.
+  - Subject to that predicate, each configured reaction kind records its own pending entry when
+    the workspace SCM metadata (§9.5) satisfies that kind's field requirements. The kinds are
+    independent: several fire from one exit. Every kind except the CI kind creates its entry only
+    when no entry of that kind already exists, which preserves in-progress debounce state; the CI
+    entry is rewritten on each exit so it always carries the ref the latest run pushed.
 
 - `Worker Exit (abnormal)`
   - Remove running entry.
