@@ -31,7 +31,7 @@ the issue's arrival in the handoff state looked exactly like every other complet
 observer positioned to notice was the human who opened the issue expecting to review something and
 found nothing there.
 
-The post-run workspace hook could not substitute for the missing check. It runs inside the worker,
+The `after_run` workspace hook could not substitute for the missing check. It runs inside the worker,
 before the exit disposition is computed, and its failure is logged and ignored by contract. A hook
 that observed an empty workspace could say so and change nothing. Ordering was not the obstacle,
 since the hook's exit status is available before the disposition is decided, so a design that gave
@@ -82,11 +82,11 @@ therefore became the row that seeded reaction state after a restart.
    adapters supply nothing comparable, and a durable distinction between a count measured as zero and
    a count never measured is a recent addition rather than an old assumption. A system-wide rule
    cannot rest on a signal that the runtimes do not report on comparable terms.
-6. **A successful run routinely leaves a clean working tree.** A post-run hook that stages, commits
-   and pushes the agent's work is a common and entirely correct configuration, and it leaves nothing
-   behind in the working tree for a later inspection to find. Any test evaluated only against the
-   workspace as it stands at exit reads those runs as empty, which inverts the outcome on the
-   best-configured deployments.
+6. **A successful run routinely leaves a clean working tree.** An `after_run` hook that stages,
+   commits and pushes the agent's work is a common and entirely correct configuration, and it leaves
+   nothing behind in the working tree for a later inspection to find. Any test evaluated only
+   against the workspace as it stands at exit reads those runs as empty, which inverts the outcome
+   on the best-configured deployments.
 7. **Coverage must not depend on the operator already knowing about the failure, and what is offered
    must be a single choice.** A remedy that protects only deployments which configure it protects
    the population that has already diagnosed the problem, which is not the population that has it. A
@@ -180,7 +180,7 @@ checkout. Capturing later would miss the beginning of the agent's own work. The 
 workspace's committed position together with enough of its working-tree state to establish, later,
 whether anything changed.
 
-Two failure modes are closed by measuring a difference rather than a state. A post-run hook that
+Two failure modes are closed by measuring a difference rather than a state. An `after_run` hook that
 commits and pushes leaves a clean working tree at exit, so a test asking only whether the tree is
 dirty would classify the most completely successful runs as empty. And a per-issue workspace carries
 forward whatever an earlier run left uncommitted, so a test asking only whether the tree differs
@@ -473,8 +473,8 @@ Named by document and topic rather than by section or filename, since neither is
    its default, and its validation as a closed set of names checkable offline.
 3. The workspace management and safety material: the baseline captured at the boundary between
    workspace preparation and agent launch, what it records, and the rule that evidence is a
-   difference against it rather than a property of the tree at exit. The post-run hook's contract is
-   unchanged and is explicitly not given a vote in the disposition.
+   difference against it rather than a property of the tree at exit. The `after_run` hook's contract
+   is unchanged and is explicitly not given a vote in the disposition.
 4. The agent adapter contract material: the statement that the verdict belongs to the orchestrator,
    that no obligation is added to any adapter, and that an adapter may later contribute a positive
    signal without owning the verdict.
@@ -504,8 +504,8 @@ The decision is validated when all of the following hold:
 2. A run that exits normally in a version-controlled workspace, changing no file and holding no
    source-control metadata, does not advance its issue. The attempt is recorded as unsuccessful with
    the evidence verdict named as its cause, and the issue remains in its active state.
-3. A run whose post-run hook stages, commits and pushes every change, leaving a clean working tree at
-   exit, advances its issue.
+3. A run whose `after_run` hook stages, commits and pushes every change, leaving a clean working
+   tree at exit, advances its issue.
 4. A run in a workspace that is not a version-controlled tree advances its issue under the default
    policy, does not advance it under `strict`, and records the undeterminable verdict in both cases.
 5. A run that produces nothing in a workspace whose earlier run already pushed a branch or opened a
