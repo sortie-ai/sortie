@@ -42,6 +42,7 @@ import (
 
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/httpkit"
+	"github.com/sortie-ai/sortie/internal/issuekit"
 	"github.com/sortie-ai/sortie/internal/registry"
 	"github.com/sortie-ai/sortie/internal/trackermetrics"
 	"github.com/sortie-ai/sortie/internal/typeutil"
@@ -72,10 +73,10 @@ const maxPages = 200
 const stateBatchSize = 50
 
 // defaultActiveStates is applied when the config omits active_states.
-var defaultActiveStates = []string{"backlog", "in-progress", "review"}
+var defaultActiveStates = issuekit.DefaultActiveLabelStates()
 
 // defaultTerminalStates is applied when the config omits terminal_states.
-var defaultTerminalStates = []string{"done", "wontfix"}
+var defaultTerminalStates = issuekit.DefaultTerminalLabelStates()
 
 // GitLabAdapter implements [domain.TrackerAdapter] against the GitLab REST
 // API v4. All fields except metrics are set once at construction and never
@@ -872,7 +873,8 @@ func (a *GitLabAdapter) fetchStatesByIIDs(ctx context.Context, requested []strin
 			if !ok {
 				continue
 			}
-			derived := deriveState(gi.Labels, gi.State, a.activeStates, a.terminalStates, a.handoffState, strconv.Itoa(gi.IID), a.log)
+			derived := issuekit.DeriveLabelState(gi.Labels, gi.State, "opened", "closed",
+				issuekit.LabelStates{Active: a.activeStates, Terminal: a.terminalStates, Handoff: a.handoffState}, strconv.Itoa(gi.IID), a.log)
 			for _, key := range keys {
 				states[key] = derived
 			}
@@ -987,7 +989,8 @@ func (a *GitLabAdapter) TransitionIssue(ctx context.Context, issueID, targetStat
 			}
 		}
 
-		currentLower := findCurrentStateLabel(gi.Labels, a.activeStates, a.terminalStates, a.handoffState)
+		currentLower := issuekit.CurrentLabelState(gi.Labels,
+			issuekit.LabelStates{Active: a.activeStates, Terminal: a.terminalStates, Handoff: a.handoffState})
 
 		var addLabels, removeLabels []string
 		if currentLower != targetLower {

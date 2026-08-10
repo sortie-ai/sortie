@@ -185,18 +185,6 @@ func TestClassifyHTTPError(t *testing.T) {
 	})
 }
 
-func TestClassifyTransportError(t *testing.T) {
-	t.Parallel()
-
-	wrapped := errors.New("dial tcp: connection refused")
-	err := classifyTransportError(wrapped, http.MethodGet, "/projects/1")
-
-	assertTrackerErrorKind(t, err, domain.ErrTrackerTransport)
-	if !errors.Is(err, wrapped) {
-		t.Errorf("classifyTransportError(%v) chain missing wrapped error", wrapped)
-	}
-}
-
 func TestErrorDetail(t *testing.T) {
 	t.Parallel()
 

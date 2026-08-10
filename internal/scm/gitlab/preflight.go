@@ -3,10 +3,8 @@ package gitlab
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log/slog"
-	"time"
 
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/httpkit"
@@ -16,14 +14,18 @@ import (
 // transient preflight failures. A config error fails construction
 // immediately with no retry; these delays absorb a brief outage before
 // construction fails.
-var preflightBackoff = []time.Duration{time.Second, 2 * time.Second, 4 * time.Second}
+//
+// preflightBackoff is a package variable, not a [httpkit.RetryWithBackoff]
+// argument baked in at each call site, so a test can substitute a fast
+// schedule for the retry-exhaustion subtests.
+var preflightBackoff = httpkit.DefaultPreflightBackoff()
 
 // runPreflight validates the credential, the configured project, and the
 // canonical casing of every configured state label before the first
 // poll. It calls GET /personal_access_tokens/self once, with no retry, as
 // an advisory introspection, then GET /projects/{projectPath} through
-// [withRetry] as the authoritative gate, then, when configuredStates is
-// non-empty, pages the project label catalog through [withRetry] to
+// [httpkit.RetryWithBackoff] as the authoritative gate, then, when configuredStates is
+// non-empty, pages the project label catalog through [httpkit.RetryWithBackoff] to
 // resolve the stored casing of each configured name.
 //
 // Token introspection failure never blocks construction; its result only
@@ -57,7 +59,7 @@ func runPreflight(ctx context.Context, client *httpkit.Client, projectPath strin
 		}
 	}
 
-	projectErr := withRetry(ctx, func() error {
+	projectErr := httpkit.RetryWithBackoff(ctx, preflightBackoff, func() error {
 		_, _, getErr := client.Get(ctx, "/projects/"+projectPath, nil)
 		return getErr
 	})
@@ -78,7 +80,7 @@ func runPreflight(ctx context.Context, client *httpkit.Client, projectPath strin
 	}
 
 	var catalog []gitlabLabel
-	catalogErr := withRetry(ctx, func() error {
+	catalogErr := httpkit.RetryWithBackoff(ctx, preflightBackoff, func() error {
 		fetched, fetchErr := fetchProjectLabels(ctx, client, projectPath, log)
 		if fetchErr != nil {
 			return fetchErr
@@ -97,48 +99,4 @@ func runPreflight(ctx context.Context, client *httpkit.Client, projectPath strin
 		}
 	}
 	return casing, nil
-}
-
-// withRetry runs fn, retrying transient tracker errors with the bounded
-// [preflightBackoff] schedule. Config errors return immediately without a
-// retry.
-//
-// The backoff wait honors ctx: a cancellation during a backoff returns
-// ctx.Err() without waiting for the delay to elapse.
-func withRetry(ctx context.Context, fn func() error) error {
-	err := fn()
-	for attempt := 0; err != nil && attempt < len(preflightBackoff); attempt++ {
-		if !isRetryable(err) {
-			return err
-		}
-		if waitErr := sleepContext(ctx, preflightBackoff[attempt]); waitErr != nil {
-			return waitErr
-		}
-		err = fn()
-	}
-	return err
-}
-
-// sleepContext blocks for d or until ctx is cancelled, whichever comes
-// first. It returns ctx.Err() on cancellation and nil once the full delay
-// elapses.
-func sleepContext(ctx context.Context, d time.Duration) error {
-	timer := time.NewTimer(d)
-	defer timer.Stop()
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-timer.C:
-		return nil
-	}
-}
-
-// isRetryable reports whether err is a tracker error whose kind is
-// retryable.
-func isRetryable(err error) bool {
-	var te *domain.TrackerError
-	if !errors.As(err, &te) {
-		return false
-	}
-	return te.Kind.RetryClassification().Retryable
 }

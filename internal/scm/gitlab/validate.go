@@ -2,7 +2,6 @@ package gitlab
 
 import (
 	"errors"
-	"fmt"
 	"net/url"
 	"os"
 	"slices"
@@ -10,6 +9,7 @@ import (
 
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/registry"
+	"github.com/sortie-ai/sortie/internal/typeutil"
 )
 
 // validateConfig checks GitLab-specific configuration constraints and
@@ -21,32 +21,16 @@ func validateConfig(fields registry.TrackerConfigFields) []registry.ValidationDi
 	diags = append(diags, validateEndpoint(fields.Endpoint)...)
 	diags = append(diags, validateProject(fields.Project)...)
 	diags = append(diags, validateAPIKeyHint(fields.APIKey)...)
-	diags = append(diags, validateStateLabels("tracker.active_states", fields.ActiveStates)...)
-	diags = append(diags, validateStateLabels("tracker.terminal_states", fields.TerminalStates)...)
-	diags = append(diags, validateStateOverlap(fields)...)
+	// The untrimmed-element diagnostic is warning-severity because
+	// [NewGitLabAdapter] lowercases each configured state without trimming
+	// and construction proceeds, so a padded value never aborts startup;
+	// it only ever fails to match a normalized issue label at dispatch time.
+	diags = append(diags, registry.DiagStateLabelElements("tracker.active_states", fields.ActiveStates, registry.SeverityWarning)...)
+	diags = append(diags, registry.DiagStateLabelElements("tracker.terminal_states", fields.TerminalStates, registry.SeverityWarning)...)
+	diags = append(diags, registry.DiagStateOverlap(fields)...)
 	diags = append(diags, validateQueryFilter(fields.QueryFilter)...)
 
 	return diags
-}
-
-// containsWhitespace reports whether s contains any whitespace
-// characters.
-func containsWhitespace(s string) bool {
-	for _, r := range s {
-		if r == ' ' || r == '\t' || r == '\n' || r == '\r' {
-			return true
-		}
-	}
-	return false
-}
-
-// toLowerSet builds a set of lowercased strings from a slice.
-func toLowerSet(ss []string) map[string]struct{} {
-	m := make(map[string]struct{}, len(ss))
-	for _, s := range ss {
-		m[strings.ToLower(s)] = struct{}{}
-	}
-	return m
 }
 
 // containsFold reports whether s contains substr, comparing
@@ -139,7 +123,7 @@ func validateProject(project string) []registry.ValidationDiag {
 		return nil
 	}
 
-	if containsWhitespace(trimmed) {
+	if typeutil.HasWhitespace(trimmed) {
 		return []registry.ValidationDiag{{
 			Severity: "error",
 			Check:    "tracker.project.format",
@@ -209,73 +193,6 @@ func validateAPIKeyHint(apiKey string) []registry.ValidationDiag {
 	}
 
 	return nil
-}
-
-// validateStateLabels checks for empty or untrimmed elements in a state
-// label list.
-//
-// Both fault classes are warnings, never errors, because [NewGitLabAdapter]
-// substitutes its default state lists for an omitted or wholly empty list
-// and the online preflight treats an absent configured label as the
-// operator's intended new label rather than an error. The untrimmed arm is
-// carried, unlike the sibling GitHub and Gitea validators, because GitLab
-// lowercases configured states without trimming, so a padded label can
-// never match a normalized issue label.
-func validateStateLabels(field string, states []string) []registry.ValidationDiag {
-	var diags []registry.ValidationDiag
-	for i, s := range states {
-		trimmed := strings.TrimSpace(s)
-		if trimmed == "" {
-			diags = append(diags, registry.ValidationDiag{
-				Severity: "warning",
-				Check:    field + ".empty_element",
-				Message:  fmt.Sprintf("%s[%d]: empty state label never matches an issue label", field, i),
-			})
-			continue
-		}
-		if trimmed != s {
-			diags = append(diags, registry.ValidationDiag{
-				Severity: "warning",
-				Check:    field + ".untrimmed_element",
-				Message: fmt.Sprintf(
-					"%s[%d]: state label has leading or trailing whitespace; it never matches a normalized issue label, and a write would create a padded label", field, i),
-			})
-		}
-	}
-	return diags
-}
-
-// validateStateOverlap detects state names shared between active_states
-// and terminal_states, compared case-insensitively. Collisions involving
-// handoff_state or in_progress_state are rejected by the generic config
-// validation before this hook runs, and in_progress_state is not a
-// GitLab config key at all, so there are no arms for either here.
-func validateStateOverlap(fields registry.TrackerConfigFields) []registry.ValidationDiag {
-	var diags []registry.ValidationDiag
-
-	activeSet := toLowerSet(fields.ActiveStates)
-	terminalSet := toLowerSet(fields.TerminalStates)
-
-	var overlap []string
-	for name := range activeSet {
-		if strings.TrimSpace(name) == "" {
-			continue
-		}
-		if _, ok := terminalSet[name]; ok {
-			overlap = append(overlap, name)
-		}
-	}
-	slices.Sort(overlap)
-	for _, name := range overlap {
-		diags = append(diags, registry.ValidationDiag{
-			Severity: "warning",
-			Check:    "tracker.states.overlap",
-			Message: fmt.Sprintf(
-				"tracker.active_states and tracker.terminal_states overlap on %q; an issue in state %q would match both sets", name, name),
-		})
-	}
-
-	return diags
 }
 
 // validateQueryFilter checks the shape of tracker.query_filter by

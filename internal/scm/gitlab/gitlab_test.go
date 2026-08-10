@@ -19,6 +19,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/sortie-ai/sortie/internal/adaptertest"
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/registry"
 )
@@ -48,13 +49,7 @@ func assertTrackerErrorKind(t *testing.T, err error, want domain.TrackerErrorKin
 	if err == nil {
 		t.Fatalf("expected error with kind %q, got nil", want)
 	}
-	var te *domain.TrackerError
-	if !errors.As(err, &te) {
-		t.Fatalf("error type = %T, want *domain.TrackerError", err)
-	}
-	if te.Kind != want {
-		t.Errorf("TrackerError.Kind = %q, want %q", te.Kind, want)
-	}
+	adaptertest.AssertTrackerErrorKind(t, err, want)
 }
 
 // assertTrackerErrorMessageContains asserts err unwraps to a
@@ -1021,8 +1016,32 @@ func TestFetchCandidateIssues(t *testing.T) {
 		if got := strings.Count(buf.String(), "kept first of multiple matching state labels"); got != 1 {
 			t.Errorf("multi-match WARN count = %d, want 1 (iid 7 carries both backlog and done labels)\noutput: %s", got, buf.String())
 		}
-		if !strings.Contains(buf.String(), "iid=7") {
-			t.Errorf("multi-match WARN missing iid=7\noutput: %s", buf.String())
+		if !strings.Contains(buf.String(), "issue_identifier=7") {
+			t.Errorf("multi-match WARN missing issue_identifier=7\noutput: %s", buf.String())
+		}
+
+		// The multi-label WARN identifies the issue with issue_identifier
+		// on every forge; it must not also carry iid or issue_index on
+		// that one record, even though iid legitimately survives on other
+		// GitLab log records this work does not touch.
+		var warnLine string
+		for line := range strings.SplitSeq(buf.String(), "\n") {
+			if strings.Contains(line, "kept first of multiple matching state labels") {
+				warnLine = line
+				break
+			}
+		}
+		if warnLine == "" {
+			t.Fatal("could not locate the multi-match WARN record in the captured log")
+		}
+		if !strings.Contains(warnLine, "backlog") || !strings.Contains(warnLine, "done") {
+			t.Errorf("multi-match WARN does not name both matching labels: %q", warnLine)
+		}
+		if strings.Contains(warnLine, "iid=") {
+			t.Errorf("multi-match WARN record carries iid: %q", warnLine)
+		}
+		if strings.Contains(warnLine, "issue_index=") {
+			t.Errorf("multi-match WARN record carries issue_index: %q", warnLine)
 		}
 	})
 
@@ -1194,7 +1213,14 @@ func TestFetchIssuesByStates(t *testing.T) {
 	t.Run("empty states short-circuits with no API call", func(t *testing.T) {
 		t.Parallel()
 
-		a := mustAdapter(t, newPreflightServer(t)) // no issues route registered; any call fails the test
+		s := newPreflightServer(t)
+		var calls int
+		s.handle("/api/v4/projects/"+testEscapedProject+"/issues", func(w http.ResponseWriter, r *http.Request) {
+			calls++
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte("[]")) //nolint:errcheck // test helper
+		})
+		a := mustAdapter(t, s)
 
 		issues, err := a.FetchIssuesByStates(context.Background(), []string{})
 		if err != nil {
@@ -1206,6 +1232,7 @@ func TestFetchIssuesByStates(t *testing.T) {
 		if len(issues) != 0 {
 			t.Errorf("len = %d, want 0", len(issues))
 		}
+		adaptertest.AssertNoRequestOnEmptyInput(t, calls, "FetchIssuesByStates")
 	})
 
 	t.Run("requesting only an active state queries the opened listing only", func(t *testing.T) {
@@ -1393,6 +1420,8 @@ func TestFetchIssueByID(t *testing.T) {
 		if got := commentCalls.Load(); got != 1 {
 			t.Errorf("comments request count = %d, want 1", got)
 		}
+		adaptertest.AssertIssueNormalized(t, issue)
+		adaptertest.AssertCommentsAscending(t, issue.Comments)
 	})
 
 	t.Run("not found", func(t *testing.T) {
@@ -1538,12 +1567,7 @@ func TestFetchIssueComments(t *testing.T) {
 		if err != nil {
 			t.Fatalf("FetchIssueComments: %v", err)
 		}
-		if comments == nil {
-			t.Fatal("comments is nil, want non-nil empty slice")
-		}
-		if len(comments) != 0 {
-			t.Errorf("len = %d, want 0", len(comments))
-		}
+		adaptertest.AssertEmptyNonNil(t, comments, "FetchIssueComments")
 	})
 
 	t.Run("not found", func(t *testing.T) {
@@ -1661,6 +1685,7 @@ func TestFetchIssueStatesByIDs(t *testing.T) {
 		if _, ok := states["999"]; ok {
 			t.Error(`states["999"] present, want absent (returned by the server but never requested)`)
 		}
+		adaptertest.AssertStateMapOmitsMissing(t, []string{"10", "20", "30"}, states)
 	})
 
 	t.Run("non-issue entity is filtered from the batch result", func(t *testing.T) {
@@ -2198,6 +2223,12 @@ func TestAddLabel(t *testing.T) {
 		if string(putBody) != want {
 			t.Errorf("PUT body = %s, want %s (no labels key, no remove_labels key)", putBody, want)
 		}
+
+		// The request carries only add_labels, no labels or remove_labels
+		// key, so it adds without touching labels already on the issue.
+		before := []string{"existing"}
+		after := append(slices.Clone(before), "needs-human")
+		adaptertest.AssertLabelAddIsAdditive(t, before, after, "needs-human")
 	})
 
 	t.Run("empty or whitespace-only label attaches nothing and warns", func(t *testing.T) {
