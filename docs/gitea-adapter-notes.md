@@ -441,7 +441,7 @@ GET /repos/{owner}/{repo}/pulls/{index}/reviews/{id}/comments
 
 - Each comment carries `path`, `body`, `position`, `original_position`, `created_at`, `id`, and `user.login`. There is no `line`, `start_line`, or `end_line` field, so review comments are single-line and `EndLine` normalizes to 0.
 - `position` is the line on the current diff; `position: 0` marks a comment whose anchor a later push removed, in which case `original_position` holds the line it was written against and the comment normalizes with `Outdated` true.
-- The route is present in the instance OpenAPI; the lab PR carried no review comments, so the `position`/`original_position` semantics and the outdated derivation are schema-inferred and MUST be reconciled against a captured live review-comment fixture (issue #660).
+- The route is present in the instance OpenAPI; the lab PR carried no review comments, so the `position`/`original_position` semantics and the outdated derivation are schema-inferred and MUST be reconciled against a captured live review-comment fixture. Issue #660, which tracked this reconciliation, is closed; its closing PR #670 touched only `internal/scm/gitea/integration_merge_test.go`, `internal/scm/gitea/integration_scm_test.go`, and `scripts/gitea-integration-provision.sh`, so the review-comment fixture this note calls for was never captured.
 
 ### Review decision
 

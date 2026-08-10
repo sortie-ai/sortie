@@ -106,7 +106,7 @@ Read the project Makefile to discover available targets before running any Go to
 - Put integration-specific logic (Jira field names, Claude Code CLI flags) in orchestrator core packages.
 - Weaken workspace path containment or sanitization rules.
 - Do not reference `docs/architecture.md`, `docs/decisions/*.md`, section numbers, ADR numbers, or ticket IDs in any comment — godoc or inline. Those belong in specs and plans, not in source files.
-- NEVER prefix commands with `GOPATH=...`, `GOMODCACHE=...`, or any Go environment overrides. The asdf shim configures everything.
+- NEVER prefix commands with `GOPATH=...`, `GOMODCACHE=...`, or any override of the Go toolchain or its paths. The asdf shim configures everything. Build flags such as `GOFLAGS=` are not such an override and are allowed.
 - NEVER use `/usr/local/go/bin/go`, `/usr/bin/go`, or any absolute path to a Go binary.
 - NEVER downgrade the `go` directive in `go.mod`. NEVER add or modify `toolchain` directives in `go.mod` unless explicitly asked.
 

@@ -506,7 +506,10 @@ other messages) by inspecting the response body. Rate limit 403s map to
 - **Network timeout:** 30,000 ms per [architecture Section 11.2](architecture/11-issue-tracker-integration-contract.md#112-query-semantics).
 - **API version header:** The adapter must send `X-GitHub-Api-Version: 2026-03-10` on
   every request. This pins behavior to the latest supported version and prevents
-  breakage from future API evolution.
+  breakage from future API evolution. This version also removes `head.repo.has_downloads`
+  and `base.repo.has_downloads` from the pull request read and `use_squash_pr_title_as_default`
+  from the repository read; the adapter does not read any of these three fields. The prior
+  version, `2022-11-28`, remains supported until March 10, 2028.
 - **User-Agent header:** The adapter must send a `User-Agent` header identifying the
   application, for example `Sortie/<version>`.
 
@@ -615,7 +618,6 @@ Response subset:
 
 ```json
 { "draft": false, "mergeable_state": "clean", "merged": false,
-  "merge_commit_sha": "<shaOfATestMerge>",
   "head": { "sha": "<headSHA>", "ref": "<branch>" },
   "base": { "ref": "<baseBranch>" } }
 ```
@@ -631,16 +633,17 @@ The adapter maps `mergeable_state` to `domain.MergeabilityState`:
 | anything else (including the empty string) | `MergeabilityUnknown` |
 
 The returned `PRMergeStatus` populates `Draft`, `Mergeability`, `HeadSHA`, `BranchName`,
-`BaseBranch` (from `base.ref`), `Merged` (from `merged`), and `MergeCommitSHA`.
+`BaseBranch` (from `base.ref`), and `Merged` (from `merged`). `MergeCommitSHA` is never
+populated under the pinned API version.
 `ReviewDecision` and `CIConclusion` are left unset: callers obtain those values from the
 dedicated reads (see §1 and §2 above). GitHub computes `mergeable_state` asynchronously after
 a push, so callers treat `MergeabilityUnknown` as a deferral condition per
 [§11C.5](architecture/14-auto-merge-reaction-contract.md#11c5-merge-precondition-state-machine).
 
-GitHub populates `merge_commit_sha` on an open, unmerged pull request with a preview of the
-commit a merge would produce, not a record that a merge happened. The adapter reads
-`merge_commit_sha` into `MergeCommitSHA` only when `merged` is true, so the field is never
-populated for a pull request that has not actually merged.
+API version `2026-03-10` removes `merge_commit_sha` from pull request payloads across every
+endpoint that returns a pull request object, the same version that removed `Assignee`. Because
+the adapter pins `2026-03-10` on every request, the response never carries `merge_commit_sha`,
+and `PRMergeStatus.MergeCommitSHA` is never populated by this read.
 
 Idempotent and read-only.
 
