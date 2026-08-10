@@ -266,7 +266,10 @@ func TestIntegration_StartSession_InvalidCommand(t *testing.T) {
 // TestIntegration_RunTurn executes a single turn and verifies the mandatory
 // event sequence, token usage, and tool result correlation. A file-read
 // prompt is used so the adapter emits at least one EventToolResult with a
-// populated ToolName.
+// populated ToolName. Its turn_completed assertion is this adapter's
+// live-runtime obligation for the shared disposition decision: the only
+// check that can catch an evidence mapping that is internally consistent
+// but wrong against the actual wire format.
 func TestIntegration_RunTurn(t *testing.T) {
 	skipUnlessCodexIntegration(t)
 

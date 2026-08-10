@@ -401,9 +401,19 @@ func (a *CopilotAdapter) StartSession(ctx context.Context, params domain.StartSe
 			usage, journalMeasured := state.recoverUsage(state.logger())
 			measured := journalMeasured || state.assistantFieldSeen
 
+			// Work tests this turn's own output, not the run cumulative,
+			// which is non-zero on any second turn.
+			ev := agentcore.TurnEvidence{
+				ExitObserved: true,
+				ExitCode:     exitCode,
+				Work:         agentcore.WorkAbsent,
+			}
+			if state.turnOutputTokens > 0 {
+				ev.Work = agentcore.WorkPresent
+			}
+
+			var apiDurationMS int64
 			if lastResult != nil {
-				// Extract API duration from the result event.
-				var apiDurationMS int64
 				if lastResult.Usage != nil {
 					apiDurationMS = lastResult.Usage.TotalAPIDurMS
 					state.logger().Info("copilot turn completed",
@@ -411,64 +421,21 @@ func (a *CopilotAdapter) StartSession(ctx context.Context, params domain.StartSe
 				}
 
 				if lastResult.ExitCode != nil && *lastResult.ExitCode == 0 {
-					agentcore.EmitTurnCompleted(emit, "", apiDurationMS, usage)
-					return domain.TurnResult{
-						SessionID:     state.copilotSessionID,
-						ExitReason:    domain.EventTurnCompleted,
-						Usage:         usage,
-						UsageMeasured: measured,
-					}, nil
+					ev.Terminal = agentcore.TerminalSuccess
+				} else {
+					ev.Terminal = agentcore.TerminalFailure
+					ev.TerminalMessage = "non-zero exit in result event"
 				}
-				// EmitWarnLines is called by the skeleton when agentErr is non-nil.
-				agentcore.EmitTurnFailed(emit, "non-zero exit in result event", apiDurationMS, usage)
-				return domain.TurnResult{
-						SessionID:     state.copilotSessionID,
-						ExitReason:    domain.EventTurnFailed,
-						Usage:         usage,
-						UsageMeasured: measured,
-					}, &domain.AgentError{
-						Kind:    domain.ErrTurnFailed,
-						Message: "non-zero exit in result event",
-					}
 			}
 
-			// No result event.
-			if exitCode != 0 {
-				agentcore.EmitTurnFailed(emit, "non-zero exit", 0, usage)
-				return domain.TurnResult{
-						SessionID:     state.copilotSessionID,
-						ExitReason:    domain.EventTurnFailed,
-						Usage:         usage,
-						UsageMeasured: measured,
-					}, &domain.AgentError{
-						Kind:    domain.ErrPortExit,
-						Message: fmt.Sprintf("exit code %d", exitCode),
-					}
-			}
-
-			// No result event and exit code 0. Test the turn's own output,
-			// not the run cumulative, which is non-zero on any second turn.
-			if state.turnOutputTokens == 0 {
-				state.logger().Warn("agent exited without producing output, treating as failure")
-				agentcore.EmitTurnFailed(emit, "agent exited without producing output", 0, usage)
-				return domain.TurnResult{
-						SessionID:     state.copilotSessionID,
-						ExitReason:    domain.EventTurnFailed,
-						Usage:         usage,
-						UsageMeasured: measured,
-					}, &domain.AgentError{
-						Kind:    domain.ErrTurnFailed,
-						Message: "agent exited without producing output",
-					}
-			}
-
-			agentcore.EmitTurnCompleted(emit, "", 0, usage)
-			return domain.TurnResult{
+			meta := agentcore.TurnMeta{
 				SessionID:     state.copilotSessionID,
-				ExitReason:    domain.EventTurnCompleted,
 				Usage:         usage,
 				UsageMeasured: measured,
-			}, nil
+				APIDurationMS: apiDurationMS,
+			}
+
+			return agentcore.FinalizeTurn(emit, state.logger(), ev, meta)
 		},
 		// Copilot emits EventSessionStarted before the scan loop using the
 		// current session ID (empty on turn 1; populated on turns 2+ from

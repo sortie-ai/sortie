@@ -182,7 +182,10 @@ func TestIntegration_StartSession_InvalidCommand(t *testing.T) {
 
 // TestIntegration_RunTurn executes a single-turn session, verifying that the
 // adapter delivers the mandatory event sequence and populates TurnResult
-// correctly.
+// correctly. Its turn_completed assertion is this adapter's live-runtime
+// obligation for the shared disposition decision: the only check that can
+// catch an evidence mapping that is internally consistent but wrong against
+// the actual wire format.
 func TestIntegration_RunTurn(t *testing.T) {
 	skipUnlessCopilotIntegration(t)
 
@@ -235,14 +238,18 @@ func TestIntegration_RunTurn(t *testing.T) {
 	assertNoEventType(t, events, domain.EventTurnFailed)
 	assertNoEventType(t, events, domain.EventStartupFailed)
 
-	// Copilot CLI does not expose per-message input tokens; verify
-	// cumulative output tokens are positive.
+	// Cumulative output tokens must be positive regardless of which usage
+	// path recovered them. TotalTokens must equal InputTokens plus
+	// OutputTokens on both paths: the output-only fallback (SSH mode, or a
+	// failed journal read) reports InputTokens 0, so the two forms agree
+	// there, and a successful session-state journal read reports the full
+	// breakdown, where TotalTokens must not silently drop the input half.
 	if result.Usage.OutputTokens <= 0 {
 		t.Errorf("TurnResult.Usage.OutputTokens = %d, want > 0", result.Usage.OutputTokens)
 	}
-	if result.Usage.TotalTokens != result.Usage.OutputTokens {
-		t.Errorf("TurnResult.Usage.TotalTokens = %d, want == OutputTokens (%d)",
-			result.Usage.TotalTokens, result.Usage.OutputTokens)
+	if result.Usage.TotalTokens != result.Usage.InputTokens+result.Usage.OutputTokens {
+		t.Errorf("TurnResult.Usage.TotalTokens = %d, want InputTokens+OutputTokens (%d)",
+			result.Usage.TotalTokens, result.Usage.InputTokens+result.Usage.OutputTokens)
 	}
 
 	// At least one EventTokenUsage must have been delivered.

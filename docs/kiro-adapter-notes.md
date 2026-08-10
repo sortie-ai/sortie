@@ -541,6 +541,14 @@ Suggested mapping to `domain.TurnResult.ExitReason`:
 | Binary not found on `PATH` (exit 127) | `startup_failed` |
 | No-credential launch that hangs | Prevent by preflight; if it occurs, the orchestrator timeout yields `turn_cancelled` |
 
+The turn-disposition rule the adapter family shares treats a zero exit code with no positive
+signal as a failed turn, and the positive signal is ordinarily a per-turn token count. Headless
+Kiro reports no token counts at all, so it expresses the same guard in a different currency: the
+`▸ Credits:` trailer is the adapter's sole positive success signal, and its absence with exit 0 is
+the adapter's only evidence that nothing was produced. Non-empty answer stdout is deliberately not
+read as a second, looser signal, because Kiro's stdout is an unstructured transcript with no field
+distinguishing an answer from an error message.
+
 ## Token usage and cost reporting
 
 This section answers the core question in the research issue: whether token usage or cost is

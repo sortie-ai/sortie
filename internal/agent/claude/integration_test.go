@@ -150,6 +150,11 @@ func TestIntegration_StartSession_InvalidCommand(t *testing.T) {
 	}
 }
 
+// TestIntegration_RunTurn drives one real turn against the live
+// claude-code binary and asserts turn_completed, satisfying the shared
+// disposition decision's live-runtime obligation for this adapter: the
+// only check that can catch an evidence mapping that is internally
+// consistent but wrong against the actual wire format.
 func TestIntegration_RunTurn(t *testing.T) {
 	skipUnlessIntegration(t)
 

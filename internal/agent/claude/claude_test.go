@@ -19,6 +19,7 @@ import (
 
 	"github.com/sortie-ai/sortie/internal/agent/agentcore"
 	"github.com/sortie-ai/sortie/internal/agent/agenttest"
+	"github.com/sortie-ai/sortie/internal/agent/agenttest/dispositiontest"
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/registry"
 )
@@ -611,6 +612,21 @@ exit 0
 			t.Errorf("event[%d] = %q, want %q", i, eventTypes[i], wt)
 		}
 	}
+
+	// The successful result event's own text reaches the emitted
+	// turn_completed event's message (regression pin against the
+	// success-message mapping reverting to empty).
+	if events[len(events)-1].Message != "All done." {
+		t.Errorf("turn_completed Message = %q, want %q", events[len(events)-1].Message, "All done.")
+	}
+
+	dispositiontest.AssertDispositionContract(t, agentcore.TurnEvidence{
+		Terminal:        agentcore.TerminalSuccess,
+		TerminalMessage: "All done.",
+		ExitObserved:    true,
+		ExitCode:        0,
+		Work:            agentcore.WorkAbsent,
+	}, result, err)
 }
 
 // TestRunTurn_UsageMeasured_AbsentWhenNoUsageObserved verifies that a turn
@@ -1091,6 +1107,14 @@ exit 0
 	if result.ExitReason != domain.EventTurnFailed {
 		t.Errorf("ExitReason = %q, want %q", result.ExitReason, domain.EventTurnFailed)
 	}
+
+	dispositiontest.AssertDispositionContract(t, agentcore.TurnEvidence{
+		Terminal:        agentcore.TerminalFailure,
+		TerminalMessage: "error_max_turns",
+		ExitObserved:    true,
+		ExitCode:        0,
+		Work:            agentcore.WorkAbsent,
+	}, result, err)
 }
 
 func TestRunTurn_NonZeroExit(t *testing.T) {
@@ -1126,6 +1150,12 @@ func TestRunTurn_NonZeroExit(t *testing.T) {
 	if result.ExitReason != domain.EventTurnFailed {
 		t.Errorf("ExitReason = %q", result.ExitReason)
 	}
+
+	dispositiontest.AssertDispositionContract(t, agentcore.TurnEvidence{
+		ExitObserved: true,
+		ExitCode:     1,
+		Work:         agentcore.WorkAbsent,
+	}, result, err)
 }
 
 func TestRunTurn_Exit127(t *testing.T) {
@@ -1483,6 +1513,12 @@ exit 0
 	if result.ExitReason != domain.EventTurnFailed {
 		t.Errorf("ExitReason = %q, want %q", result.ExitReason, domain.EventTurnFailed)
 	}
+
+	dispositiontest.AssertDispositionContract(t, agentcore.TurnEvidence{
+		ExitObserved: true,
+		ExitCode:     0,
+		Work:         agentcore.WorkAbsent,
+	}, result, err)
 }
 
 func TestRunTurn_PartialOutputNoResultExitZero(t *testing.T) {
@@ -1529,6 +1565,12 @@ exit 0
 	if result.Usage.OutputTokens != wantTokens {
 		t.Errorf("Usage.OutputTokens = %d, want %d", result.Usage.OutputTokens, wantTokens)
 	}
+
+	dispositiontest.AssertDispositionContract(t, agentcore.TurnEvidence{
+		ExitObserved: true,
+		ExitCode:     0,
+		Work:         agentcore.WorkPresent,
+	}, result, err)
 }
 
 func TestRunTurn_StderrWarnOnNoOutputExitZero(t *testing.T) {
@@ -2565,5 +2607,106 @@ JSONL
 
 	if warnLines := spy.WarnLines(); len(warnLines) != 0 {
 		t.Errorf("success path produced %d WARN lines for stderr, want 0; got %v", len(warnLines), warnLines)
+	}
+}
+
+// TestRunTurn_SuccessfulResultZeroOutputTokens pins that a successful
+// result event completes the turn even when this turn's output tokens
+// are zero, because a positive terminal report is authoritative and
+// never consults Work.
+func TestRunTurn_SuccessfulResultZeroOutputTokens(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	script := writeScript(t, tmpDir, `
+cat <<'JSONL'
+{"type":"system","subtype":"init","session_id":"zero-output-success","cwd":"/tmp"}
+{"type":"result","subtype":"success","result":"Nothing to change.","is_error":false,"usage":{"input_tokens":10,"output_tokens":0},"session_id":"zero-output-success"}
+JSONL
+exit 0
+`)
+
+	adapter, _ := NewClaudeCodeAdapter(map[string]any{})
+	session, err := adapter.StartSession(context.Background(), domain.StartSessionParams{
+		WorkspacePath: tmpDir,
+		AgentConfig:   domain.AgentConfig{Command: script},
+	})
+	if err != nil {
+		t.Fatalf("StartSession() error = %v", err)
+	}
+
+	result, err := adapter.RunTurn(context.Background(), session, domain.RunTurnParams{
+		Prompt:  "test",
+		OnEvent: func(domain.AgentEvent) {},
+	})
+	if err != nil {
+		t.Fatalf("RunTurn() error = %v", err)
+	}
+	if result.ExitReason != domain.EventTurnCompleted {
+		t.Errorf("ExitReason = %q, want %q", result.ExitReason, domain.EventTurnCompleted)
+	}
+
+	dispositiontest.AssertDispositionContract(t, agentcore.TurnEvidence{
+		Terminal:        agentcore.TerminalSuccess,
+		TerminalMessage: "Nothing to change.",
+		ExitObserved:    true,
+		ExitCode:        0,
+		Work:            agentcore.WorkAbsent,
+	}, result, err)
+}
+
+// TestRunTurn_WorkPredicateIsPerTurn pins that the work predicate reads
+// this turn's own output tokens, not the run cumulative. The first turn
+// produces output and completes; the second turn, on the same session,
+// produces none and must fail rather than inherit the first turn's
+// evidence.
+func TestRunTurn_WorkPredicateIsPerTurn(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	counterFile := filepath.Join(tmpDir, "turn-count")
+	script := writeScript(t, tmpDir, fmt.Sprintf(`
+if [ -f '%s' ]; then
+  echo '{"type":"system","subtype":"init","session_id":"per-turn-work","cwd":"/tmp"}'
+else
+  touch '%s'
+  cat <<'JSONL'
+{"type":"system","subtype":"init","session_id":"per-turn-work","cwd":"/tmp"}
+{"type":"assistant","message":{"id":"msg_1","content":[{"type":"text","text":"ok"}],"usage":{"input_tokens":10,"output_tokens":5}},"session_id":"per-turn-work"}
+JSONL
+fi
+exit 0
+`, counterFile, counterFile))
+
+	adapter, _ := NewClaudeCodeAdapter(map[string]any{})
+	session, err := adapter.StartSession(context.Background(), domain.StartSessionParams{
+		WorkspacePath: tmpDir,
+		AgentConfig:   domain.AgentConfig{Command: script},
+	})
+	if err != nil {
+		t.Fatalf("StartSession() error = %v", err)
+	}
+
+	result1, err := adapter.RunTurn(context.Background(), session, domain.RunTurnParams{
+		Prompt:  "first",
+		OnEvent: func(domain.AgentEvent) {},
+	})
+	if err != nil {
+		t.Fatalf("RunTurn(first) error = %v", err)
+	}
+	if result1.ExitReason != domain.EventTurnCompleted {
+		t.Fatalf("RunTurn(first).ExitReason = %q, want %q", result1.ExitReason, domain.EventTurnCompleted)
+	}
+
+	result2, err := adapter.RunTurn(context.Background(), session, domain.RunTurnParams{
+		Prompt:  "second",
+		OnEvent: func(domain.AgentEvent) {},
+	})
+	if result2.ExitReason != domain.EventTurnFailed {
+		t.Errorf("RunTurn(second).ExitReason = %q, want %q (per-turn work predicate must not carry the first turn's output forward)", result2.ExitReason, domain.EventTurnFailed)
+	}
+	var agentErr *domain.AgentError
+	if !errors.As(err, &agentErr) || agentErr.Kind != domain.ErrTurnFailed {
+		t.Errorf("RunTurn(second) error = %v, want AgentError{Kind: %q}", err, domain.ErrTurnFailed)
 	}
 }

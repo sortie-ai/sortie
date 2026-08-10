@@ -421,14 +421,17 @@ func (a *CodexAdapter) RunTurn(ctx context.Context, session domain.Session, para
 		}
 	}
 	if turnStartResp.Error != nil {
-		return domain.TurnResult{
-				SessionID:     state.threadID,
-				ExitReason:    domain.EventTurnFailed,
-				UsageMeasured: state.usageMeasured,
-			}, &domain.AgentError{
-				Kind:    domain.ErrTurnFailed,
-				Message: fmt.Sprintf("turn/start error: %s", turnStartResp.Error.Message),
-			}
+		ev := agentcore.TurnEvidence{
+			Terminal:          agentcore.TerminalFailure,
+			TerminalErrorKind: domain.ErrTurnFailed,
+			TerminalMessage:   fmt.Sprintf("turn/start error: %s", turnStartResp.Error.Message),
+		}
+		meta := agentcore.TurnMeta{SessionID: state.threadID, UsageMeasured: state.usageMeasured}
+		result, agentErr := agentcore.FinalizeTurn(params.OnEvent, logger, ev, meta)
+		if agentErr != nil {
+			return result, agentErr
+		}
+		return result, nil
 	}
 
 	var turnResult turnStartResult
@@ -492,32 +495,43 @@ func (a *CodexAdapter) RunTurn(ctx context.Context, session domain.Session, para
 				for evt := range toolEventCh {
 					params.OnEvent(evt)
 				}
-				return domain.TurnResult{
-						SessionID:     state.threadID,
-						ExitReason:    domain.EventTurnFailed,
-						Usage:         state.acc.Snapshot(),
-						UsageMeasured: state.usageMeasured,
-					}, &domain.AgentError{
-						Kind:    domain.ErrPortExit,
-						Message: "subprocess stdout closed unexpectedly",
-					}
+				ev := agentcore.TurnEvidence{
+					Terminal:          agentcore.TerminalFailure,
+					TerminalErrorKind: domain.ErrPortExit,
+					TerminalMessage:   "subprocess stdout closed unexpectedly",
+				}
+				meta := agentcore.TurnMeta{
+					SessionID:     state.threadID,
+					Usage:         state.acc.Snapshot(),
+					UsageMeasured: state.usageMeasured,
+				}
+				result, agentErr := agentcore.FinalizeTurn(params.OnEvent, logger, ev, meta)
+				if agentErr != nil {
+					return result, agentErr
+				}
+				return result, nil
 			}
 			if msg.Err != nil {
-				agentcore.EmitTurnFailed(params.OnEvent, msg.Err.Error(), 0, state.acc.Snapshot())
 				go func() { toolWg.Wait(); close(toolEventCh) }()
 				for evt := range toolEventCh {
 					params.OnEvent(evt)
 				}
-				return domain.TurnResult{
-						SessionID:     state.threadID,
-						ExitReason:    domain.EventTurnFailed,
-						Usage:         state.acc.Snapshot(),
-						UsageMeasured: state.usageMeasured,
-					}, &domain.AgentError{
-						Kind:    domain.ErrPortExit,
-						Message: fmt.Sprintf("stdout read error: %v", msg.Err),
-						Err:     msg.Err,
-					}
+				ev := agentcore.TurnEvidence{
+					Terminal:          agentcore.TerminalFailure,
+					TerminalErrorKind: domain.ErrPortExit,
+					TerminalMessage:   fmt.Sprintf("stdout read error: %v", msg.Err),
+					Cause:             msg.Err,
+				}
+				meta := agentcore.TurnMeta{
+					SessionID:     state.threadID,
+					Usage:         state.acc.Snapshot(),
+					UsageMeasured: state.usageMeasured,
+				}
+				result, agentErr := agentcore.FinalizeTurn(params.OnEvent, logger, ev, meta)
+				if agentErr != nil {
+					return result, agentErr
+				}
+				return result, nil
 			}
 
 			// Response messages (echoed tool-call confirmations).
@@ -582,47 +596,52 @@ func (a *CodexAdapter) RunTurn(ctx context.Context, session domain.Session, para
 					logger.Warn("turn/completed unmarshal failed", slog.Any("error", err))
 				}
 
-				exitReason := mapTurnStatus(tc.Turn.Status)
 				snapshot := state.acc.Snapshot()
 
-				if tc.Turn.Status == "failed" && tc.Turn.Error != nil {
-					kind := mapCodexErrorInfo(tc.Turn.Error.CodexErrorInfo)
-					errMsg := tc.Turn.Error.Message
-					agentcore.EmitTurnFailed(params.OnEvent, errMsg, 0, snapshot)
-					go func() { toolWg.Wait(); close(toolEventCh) }()
-					for evt := range toolEventCh {
-						params.OnEvent(evt)
-					}
-					return domain.TurnResult{
-							SessionID:     state.threadID,
-							ExitReason:    exitReason,
-							Usage:         snapshot,
-							UsageMeasured: state.usageMeasured,
-						}, &domain.AgentError{
-							Kind:    kind,
-							Message: errMsg,
-						}
+				// Work is unreachable here: codex's persistent subprocess
+				// has no per-turn process exit to observe, so the shared
+				// decision's zero-work row never applies to this adapter.
+				ev := agentcore.TurnEvidence{Work: agentcore.WorkUnobservable}
+
+				switch {
+				case tc.Turn.Status == "completed":
+					ev.Terminal = agentcore.TerminalSuccess
+				case tc.Turn.Status == "interrupted" && ctx.Err() != nil:
+					ev.Terminal = agentcore.TerminalCancelled
+				case tc.Turn.Status == "interrupted":
+					// An interrupt sortie did not request is a failure,
+					// not a cancellation, from the orchestrator's side:
+					// it must not release the claim in place of a retry.
+					ev.Terminal = agentcore.TerminalFailure
+					ev.TerminalErrorKind = domain.ErrTurnFailed
+				case tc.Turn.Status == "failed" && tc.Turn.Error != nil:
+					ev.Terminal = agentcore.TerminalFailure
+					ev.TerminalErrorKind = mapCodexErrorInfo(tc.Turn.Error.CodexErrorInfo)
+					ev.TerminalMessage = tc.Turn.Error.Message
+				default:
+					ev.Terminal = agentcore.TerminalFailure
+					ev.TerminalErrorKind = domain.ErrTurnFailed
+				}
+				if ev.TerminalMessage == "" {
+					ev.TerminalMessage = "turn " + tc.Turn.Status
 				}
 
-				switch exitReason {
-				case domain.EventTurnCompleted:
-					agentcore.EmitTurnCompleted(params.OnEvent, "turn "+tc.Turn.Status, 0, snapshot)
-				case domain.EventTurnCancelled:
-					agentcore.EmitTurnCancelled(params.OnEvent, "turn "+tc.Turn.Status, snapshot)
-				default:
-					agentcore.EmitTurnFailed(params.OnEvent, "turn "+tc.Turn.Status, 0, snapshot)
+				meta := agentcore.TurnMeta{
+					SessionID:     state.threadID,
+					Usage:         snapshot,
+					UsageMeasured: state.usageMeasured,
 				}
 
 				go func() { toolWg.Wait(); close(toolEventCh) }()
 				for evt := range toolEventCh {
 					params.OnEvent(evt)
 				}
-				return domain.TurnResult{
-					SessionID:     state.threadID,
-					ExitReason:    exitReason,
-					Usage:         snapshot,
-					UsageMeasured: state.usageMeasured,
-				}, nil
+
+				result, agentErr := agentcore.FinalizeTurn(params.OnEvent, logger, ev, meta)
+				if agentErr != nil {
+					return result, agentErr
+				}
+				return result, nil
 
 			case "item/started":
 				var ip itemParams

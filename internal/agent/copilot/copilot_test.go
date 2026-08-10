@@ -17,6 +17,7 @@ import (
 
 	"github.com/sortie-ai/sortie/internal/agent/agentcore"
 	"github.com/sortie-ai/sortie/internal/agent/agenttest"
+	"github.com/sortie-ai/sortie/internal/agent/agenttest/dispositiontest"
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/registry"
 )
@@ -551,6 +552,13 @@ func TestRunTurn_HappyPath(t *testing.T) {
 			break
 		}
 	}
+
+	dispositiontest.AssertDispositionContract(t, agentcore.TurnEvidence{
+		Terminal:     agentcore.TerminalSuccess,
+		ExitObserved: true,
+		ExitCode:     0,
+		Work:         agentcore.WorkPresent,
+	}, result, err)
 }
 
 func TestRunTurn_ExitCode127(t *testing.T) {
@@ -581,7 +589,7 @@ func TestRunTurn_NonZeroExitNoResult(t *testing.T) {
 	state.target.Command = fakeCopilotBinaryWithOutput(t, "", 1)
 
 	var events []domain.AgentEvent
-	_, err := adapter.RunTurn(context.Background(), session, domain.RunTurnParams{
+	result, err := adapter.RunTurn(context.Background(), session, domain.RunTurnParams{
 		OnEvent: func(e domain.AgentEvent) { events = append(events, e) },
 	})
 
@@ -589,6 +597,12 @@ func TestRunTurn_NonZeroExitNoResult(t *testing.T) {
 	if !hasEventType(events, domain.EventTurnFailed) {
 		t.Error("EventTurnFailed not delivered for non-zero exit")
 	}
+
+	dispositiontest.AssertDispositionContract(t, agentcore.TurnEvidence{
+		ExitObserved: true,
+		ExitCode:     1,
+		Work:         agentcore.WorkAbsent,
+	}, result, err)
 }
 
 func TestRunTurn_NoOutputExitZero(t *testing.T) {
@@ -610,6 +624,12 @@ func TestRunTurn_NoOutputExitZero(t *testing.T) {
 	if !hasEventType(events, domain.EventTurnFailed) {
 		t.Error("EventTurnFailed not delivered for no-output exit 0")
 	}
+
+	dispositiontest.AssertDispositionContract(t, agentcore.TurnEvidence{
+		ExitObserved: true,
+		ExitCode:     0,
+		Work:         agentcore.WorkAbsent,
+	}, result, err)
 }
 
 func TestRunTurn_PartialOutputNoResultExitZero(t *testing.T) {
@@ -639,6 +659,12 @@ func TestRunTurn_PartialOutputNoResultExitZero(t *testing.T) {
 	if result.Usage.OutputTokens != wantTokens {
 		t.Errorf("Usage.OutputTokens = %d, want %d", result.Usage.OutputTokens, wantTokens)
 	}
+
+	dispositiontest.AssertDispositionContract(t, agentcore.TurnEvidence{
+		ExitObserved: true,
+		ExitCode:     0,
+		Work:         agentcore.WorkPresent,
+	}, result, err)
 }
 
 func TestRunTurn_StderrWarnOnNoOutputExitZero(t *testing.T) {
@@ -762,7 +788,7 @@ func TestRunTurn_NonZeroResultExitCode(t *testing.T) {
 	state.target.Command = fakeCopilotBinaryWithOutput(t, failResultJSONL, 0)
 
 	var events []domain.AgentEvent
-	_, err := adapter.RunTurn(context.Background(), session, domain.RunTurnParams{
+	result, err := adapter.RunTurn(context.Background(), session, domain.RunTurnParams{
 		OnEvent: func(e domain.AgentEvent) { events = append(events, e) },
 	})
 
@@ -770,6 +796,14 @@ func TestRunTurn_NonZeroResultExitCode(t *testing.T) {
 	if !hasEventType(events, domain.EventTurnFailed) {
 		t.Error("EventTurnFailed not delivered for non-zero result exit code")
 	}
+
+	dispositiontest.AssertDispositionContract(t, agentcore.TurnEvidence{
+		Terminal:        agentcore.TerminalFailure,
+		TerminalMessage: "non-zero exit in result event",
+		ExitObserved:    true,
+		ExitCode:        0,
+		Work:            agentcore.WorkAbsent,
+	}, result, err)
 }
 
 // TestRunTurn_TurnFailed_APIDurationMS verifies that EventTurnFailed carries
@@ -1436,4 +1470,148 @@ func TestRunTurn_SessionStateRecovery_FirstReadAttempt(t *testing.T) {
 			t.Errorf("WARN log count after third call = %d, want 1 (no further read attempted)", warnCount)
 		}
 	})
+}
+
+// TestRunTurn_SuccessfulResultZeroOutputTokens pins that a successful
+// result event completes the turn even when this turn's own output
+// tokens are zero, because a positive terminal report is authoritative
+// and never consults Work.
+func TestRunTurn_SuccessfulResultZeroOutputTokens(t *testing.T) {
+	// t.Setenv is incompatible with t.Parallel.
+	t.Setenv("GH_TOKEN", "test-token-for-unit-test")
+
+	const successJSONL = `{"type":"result","timestamp":"2026-04-08T00:00:01Z","sessionId":"zero-output-success-session","exitCode":0,"usage":{"premiumRequests":1,"totalApiDurationMs":10}}`
+
+	adapter, session := newTestSession(t, t.TempDir())
+	state := session.Internal.(*sessionState)
+	state.target.Command = fakeCopilotBinaryWithOutput(t, successJSONL, 0)
+
+	result, err := adapter.RunTurn(context.Background(), session, domain.RunTurnParams{
+		OnEvent: func(domain.AgentEvent) {},
+	})
+	if err != nil {
+		t.Fatalf("RunTurn() error = %v", err)
+	}
+	if result.ExitReason != domain.EventTurnCompleted {
+		t.Errorf("ExitReason = %q, want %q", result.ExitReason, domain.EventTurnCompleted)
+	}
+
+	dispositiontest.AssertDispositionContract(t, agentcore.TurnEvidence{
+		Terminal:     agentcore.TerminalSuccess,
+		ExitObserved: true,
+		ExitCode:     0,
+		Work:         agentcore.WorkAbsent,
+	}, result, err)
+}
+
+// TestRunTurn_SuccessMessageStaysEmpty is the regression pin for the
+// success-message mapping: copilot's result event carries no completion
+// text, so the emitted turn_completed event's message stays empty
+// unchanged, even on a turn that produced real assistant output.
+func TestRunTurn_SuccessMessageStaysEmpty(t *testing.T) {
+	// t.Setenv is incompatible with t.Parallel.
+	t.Setenv("GH_TOKEN", "test-token-for-unit-test")
+
+	adapter, session := newTestSession(t, t.TempDir())
+	state := session.Internal.(*sessionState)
+	state.target.Command = fakeCopilotBinaryWithOutput(t, loadTestFixture(t, "simple_session.jsonl"), 0)
+
+	var events []domain.AgentEvent
+	result, err := adapter.RunTurn(context.Background(), session, domain.RunTurnParams{
+		OnEvent: func(e domain.AgentEvent) { events = append(events, e) },
+	})
+	if err != nil {
+		t.Fatalf("RunTurn() error = %v", err)
+	}
+	if result.ExitReason != domain.EventTurnCompleted {
+		t.Fatalf("ExitReason = %q, want %q", result.ExitReason, domain.EventTurnCompleted)
+	}
+
+	e, ok := findEventByType(events, domain.EventTurnCompleted)
+	if !ok {
+		t.Fatal("turn_completed event not delivered")
+	}
+	if e.Message != "" {
+		t.Errorf("turn_completed Message = %q, want empty (copilot's result event carries no completion text)", e.Message)
+	}
+}
+
+// TestRunTurn_WorkPredicateIsPerTurn pins that the work predicate reads
+// this turn's own output tokens, not the run cumulative. The first turn
+// produces output and completes; the second turn, on the same session,
+// produces none and must fail rather than inherit the first turn's
+// evidence.
+func TestRunTurn_WorkPredicateIsPerTurn(t *testing.T) {
+	// t.Setenv is incompatible with t.Parallel.
+	t.Setenv("GH_TOKEN", "test-token-for-unit-test")
+
+	adapter, session := newTestSession(t, t.TempDir())
+	state := session.Internal.(*sessionState)
+
+	tmpDir := t.TempDir()
+	counterFile := filepath.Join(tmpDir, "turn-count")
+	outFile := filepath.Join(tmpDir, "out.jsonl")
+	const outputJSONL = `{"type":"assistant.message","timestamp":"2026-04-08T00:00:00Z","data":{"role":"assistant","content":"hello","outputTokens":10}}` + "\n"
+	if err := os.WriteFile(outFile, []byte(outputJSONL), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	state.target.Command = agenttest.WriteScript(t, tmpDir, "copilot", fmt.Sprintf(`
+if [ -f '%s' ]; then
+  exit 0
+fi
+touch '%s'
+cat '%s'
+exit 0
+`, counterFile, counterFile, outFile))
+
+	result1, err := adapter.RunTurn(context.Background(), session, domain.RunTurnParams{
+		OnEvent: func(domain.AgentEvent) {},
+	})
+	if err != nil {
+		t.Fatalf("RunTurn(first) error = %v", err)
+	}
+	if result1.ExitReason != domain.EventTurnCompleted {
+		t.Fatalf("RunTurn(first).ExitReason = %q, want %q", result1.ExitReason, domain.EventTurnCompleted)
+	}
+
+	result2, err := adapter.RunTurn(context.Background(), session, domain.RunTurnParams{
+		OnEvent: func(domain.AgentEvent) {},
+	})
+	if result2.ExitReason != domain.EventTurnFailed {
+		t.Errorf("RunTurn(second).ExitReason = %q, want %q (per-turn work predicate must not carry the first turn's output forward)", result2.ExitReason, domain.EventTurnFailed)
+	}
+	requireAgentError(t, err, domain.ErrTurnFailed)
+}
+
+// TestRunTurn_PremiumRequestsLoggedOnce pins the premium_requests side
+// effect: the Info log keeps firing on exactly today's condition, a
+// result event carrying a non-nil usage object, exactly once per turn.
+func TestRunTurn_PremiumRequestsLoggedOnce(t *testing.T) {
+	// No t.Parallel(): installs a global slog default; t.Setenv is also
+	// incompatible with t.Parallel.
+	spy := agenttest.InstallLogSpy(t)
+	t.Setenv("GH_TOKEN", "test-token-for-unit-test")
+
+	const successJSONL = `{"type":"result","timestamp":"2026-04-08T00:00:01Z","sessionId":"premium-session","exitCode":0,"usage":{"premiumRequests":3,"totalApiDurationMs":10}}`
+
+	adapter, session := newTestSession(t, t.TempDir())
+	state := session.Internal.(*sessionState)
+	state.target.Command = fakeCopilotBinaryWithOutput(t, successJSONL, 0)
+
+	_, err := adapter.RunTurn(context.Background(), session, domain.RunTurnParams{
+		OnEvent: func(domain.AgentEvent) {},
+	})
+	if err != nil {
+		t.Fatalf("RunTurn() error = %v", err)
+	}
+
+	var premiumCount int
+	for _, e := range spy.Entries() {
+		if e.Msg == "copilot turn completed" {
+			premiumCount++
+		}
+	}
+	if premiumCount != 1 {
+		t.Errorf("premium_requests Info line count = %d, want 1", premiumCount)
+	}
 }

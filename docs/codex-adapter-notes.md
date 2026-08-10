@@ -370,13 +370,21 @@ The `turn/completed` notification contains the final turn state:
 
 `turn.status` values:
 
-| Status          | Adapter mapping    | Description                          |
-| --------------- | ------------------ | ------------------------------------ |
-| `completed`     | `turn_completed`   | Agent finished normally.             |
-| `interrupted`   | `turn_cancelled`   | Cancelled via `turn/interrupt`.      |
-| `failed`        | `turn_failed`      | Error during turn execution.         |
+| Status           | Adapter mapping                                                                                                            | Description                                       |
+| ---------------- | ---------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------- |
+| `completed`      | `turn_completed`                                                                                                            | Agent finished normally.                          |
+| `interrupted`    | `turn_cancelled` when the turn's context was already cancelled; `turn_failed` when the context was still live               | Cancelled via `turn/interrupt`, or an interruption sortie did not request. |
+| `failed`         | `turn_failed`                                                                                                                | Error during turn execution.                      |
+| any other status | `turn_failed`                                                                                                                | An unrecognized status is treated as a failure.   |
 
 On failure, `turn.error` contains `{message, codexErrorInfo?, additionalDetails?}`.
+
+Codex's persistent per-session subprocess exits once at session end, not once per turn, so the
+turn-disposition rule the adapter family shares has no per-turn process exit to consult for this
+adapter. The rule's zero-work row, which the other four adapters reach when their runtime reports
+no outcome and the process exits `0`, is structurally unreachable here: an absent `turn/completed`
+notification is already a failure on its own terms (the stdout channel closed before it arrived),
+so the adapter never needs a separate zero-work guard.
 
 ---
 

@@ -50,6 +50,11 @@ func mustNewAdapter(t *testing.T) domain.AgentAdapter {
 	return a
 }
 
+// TestKiroAdapter_Integration drives one real turn against the live
+// kiro-cli binary and asserts turn_completed, satisfying the shared
+// disposition decision's live-runtime obligation for this adapter: the
+// only check that can catch an evidence mapping that is internally
+// consistent but wrong against the actual wire format.
 func TestKiroAdapter_Integration(t *testing.T) {
 	skipIfNotEnabled(t)
 

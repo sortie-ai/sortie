@@ -84,6 +84,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the dispatch proceeds either way.
   ([#757](https://github.com/sortie-ai/sortie/issues/757))
 
+- An `opencode` turn that exits cleanly having produced no model output
+  at all - no text, no reasoning, no tool call - is no longer reported
+  as completed. The turn now fails and is retried, instead of counting
+  as work done and letting the run advance the issue on nothing.
+
+- A failed or cancelled turn on `opencode` and `codex` now records why
+  it ended. Both agents reported the outcome with no accompanying
+  error, so the run's `error` column and the dashboard showed a failure
+  with no reason attached; the runtime's own diagnostic now reaches
+  both. On `codex`, a turn that fails before it starts and one whose
+  subprocess output ends early also reach the event stream, so the
+  dashboard's last event no longer stops at the last step that worked.
+
+### Changed
+
+- `opencode` transport failures - a stdout read error, a session id
+  mismatch, or a timeout waiting for the first response - now report
+  `exit_reason=turn_failed` instead of `turn_ended_with_error`, which
+  no built-in coding agent reports any more. An alert or dashboard
+  filter on the old value must match on the error kind instead, which
+  already drew the same distinction.
+
+- Turn failure text is now the same across every coding agent: a turn
+  that exits successfully having produced nothing reports `agent exited
+  without producing output`, and a non-zero exit reports `exit code N`.
+  An alert matching the previous `kiro` or `opencode` wording needs
+  updating.
+
+- `run_history.turns_completed` no longer counts a turn that ended in
+  failure or cancellation on `opencode` and `codex`, so the column
+  means the same thing on every coding agent. Turn counts and mean
+  turns per run in `sortie stats` and on the dashboard drop for those
+  two agents at this release, with no change in behavior behind the
+  numbers.
+
 ### Migrations
 
 - Add `tokens_measured INTEGER NOT NULL DEFAULT 1` to `run_history`;

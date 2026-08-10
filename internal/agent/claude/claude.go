@@ -244,71 +244,41 @@ func (a *ClaudeCodeAdapter) StartSession(_ context.Context, params domain.StartS
 			lastResult, _ := lastParsed.(*rawEvent)
 			usage := state.acc.Snapshot()
 
+			// Work tests this turn's own output, not the run cumulative,
+			// which is non-zero on any second turn.
+			ev := agentcore.TurnEvidence{
+				ExitObserved: true,
+				ExitCode:     exitCode,
+				Work:         agentcore.WorkAbsent,
+			}
+			if sumTurnMessages(state.turnMessages).OutputTokens > 0 {
+				ev.Work = agentcore.WorkPresent
+			}
+
+			var turnAPIDuration int64
 			if lastResult != nil {
 				// Use turn-level duration_api_ms only when no per-request
 				// API timing was emitted, to avoid double-counting.
-				var turnAPIDuration int64
 				if !state.emittedAPITiming {
 					turnAPIDuration = lastResult.DurationAPI
 				}
 				if lastResult.Subtype == "success" && !lastResult.IsError {
-					agentcore.EmitTurnCompleted(emit, typeutil.TruncateRunes(lastResult.Result, 500), turnAPIDuration, usage)
-					return domain.TurnResult{
-						SessionID:     state.claudeSessionID,
-						ExitReason:    domain.EventTurnCompleted,
-						Usage:         usage,
-						UsageMeasured: state.usageMeasured,
-					}, nil
+					ev.Terminal = agentcore.TerminalSuccess
+					ev.TerminalMessage = typeutil.TruncateRunes(lastResult.Result, 500)
+				} else {
+					ev.Terminal = agentcore.TerminalFailure
+					ev.TerminalMessage = lastResult.Subtype
 				}
-				// EmitWarnLines is called by the skeleton when agentErr is non-nil.
-				agentcore.EmitTurnFailed(emit, lastResult.Subtype, turnAPIDuration, usage)
-				return domain.TurnResult{
-						SessionID:     state.claudeSessionID,
-						ExitReason:    domain.EventTurnFailed,
-						Usage:         usage,
-						UsageMeasured: state.usageMeasured,
-					}, &domain.AgentError{
-						Kind:    domain.ErrTurnFailed,
-						Message: lastResult.Subtype,
-					}
 			}
 
-			if exitCode != 0 {
-				agentcore.EmitTurnFailed(emit, "non-zero exit", 0, usage)
-				return domain.TurnResult{
-						SessionID:     state.claudeSessionID,
-						ExitReason:    domain.EventTurnFailed,
-						Usage:         usage,
-						UsageMeasured: state.usageMeasured,
-					}, &domain.AgentError{
-						Kind:    domain.ErrPortExit,
-						Message: fmt.Sprintf("exit code %d", exitCode),
-					}
-			}
-
-			// No result event and exit code 0. Test the turn's own output,
-			// not the run cumulative, which is non-zero on any second turn.
-			if sumTurnMessages(state.turnMessages).OutputTokens == 0 {
-				state.logger().Warn("agent exited without producing output, treating as failure")
-				agentcore.EmitTurnFailed(emit, "agent exited without producing output", 0, usage)
-				return domain.TurnResult{
-						SessionID:     state.claudeSessionID,
-						ExitReason:    domain.EventTurnFailed,
-						Usage:         usage,
-						UsageMeasured: state.usageMeasured,
-					}, &domain.AgentError{
-						Kind:    domain.ErrTurnFailed,
-						Message: "agent exited without producing output",
-					}
-			}
-
-			agentcore.EmitTurnCompleted(emit, "", 0, usage)
-			return domain.TurnResult{
+			meta := agentcore.TurnMeta{
 				SessionID:     state.claudeSessionID,
-				ExitReason:    domain.EventTurnCompleted,
 				Usage:         usage,
 				UsageMeasured: state.usageMeasured,
-			}, nil
+				APIDurationMS: turnAPIDuration,
+			}
+
+			return agentcore.FinalizeTurn(emit, state.logger(), ev, meta)
 		},
 		EmitSessionStartID: nil, // Claude emits EventSessionStarted from ParseLine on "system/init"
 	}
