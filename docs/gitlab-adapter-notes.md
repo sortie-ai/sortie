@@ -8,8 +8,11 @@
 > the self-managed-versus-SaaS comparison. A second live pass on 2026-08-05 re-verified the
 > pinned container image `gitlab/gitlab-ce:19.2.1-ce.0` (version `19.2.1`, revision
 > `f4d029d2da8`, matching the self-managed lab) and GitLab.com, whose revision had moved to
-> `6f59ad3485c` as a continuously deployed instance does. Reference for implementing the
-> GitLab `TrackerAdapter`.
+> `6f59ad3485c` as a continuously deployed instance does. A third live pass on 2026-08-10
+> characterized the merge-request, approval, review, pipeline, and job surface against the same
+> self-managed Community Edition 19.2.1 instance (revision `f4d029d2da8`), using a project at
+> namespace depth three and a registered runner executing real jobs. Reference for implementing
+> the GitLab `TrackerAdapter` and `SCMAdapter`.
 >
 > Self-managed GitLab has no fixed host, so the instance base URL is part of every
 > self-managed configuration, and instances differ in version and settings. Facts hold for
@@ -22,7 +25,7 @@ Every statement below carries one of five tags. Nothing is asserted without one.
 
 | Tag | Meaning |
 | --- | --- |
-| **[live-CE]** | Observed directly against the self-managed Community Edition 19.2.1 instance on 2026-08-04, and again on 2026-08-05 against the pinned container image `gitlab/gitlab-ce:19.2.1-ce.0` (version `19.2.1`, revision `f4d029d2da8`, matching the lab). The strongest evidence for Community Edition behavior. |
+| **[live-CE]** | Observed directly against the self-managed Community Edition 19.2.1 instance on 2026-08-04, again on 2026-08-05 against the pinned container image `gitlab/gitlab-ce:19.2.1-ce.0` (version `19.2.1`, revision `f4d029d2da8`, matching the lab), and again on 2026-08-10 for the merge-request, approval, pipeline, and job surface. The strongest evidence for Community Edition behavior. On 2026-08-10 the tag also covers the instance's **own GraphQL introspection response**, which is version-exact for the deployment under test and is named as such wherever it is the source. |
 | **[live-SaaS]** | Observed directly against GitLab.com (`19.3.0-pre`, `enterprise: true`, plan `free`) on 2026-08-04, and again on 2026-08-05 at revision `6f59ad3485c`, moved from the previously recorded `7725732be39` as a continuously deployed instance does. Evidence about GitLab.com only, never about self-managed. |
 | **[docs]** | First-party GitLab documentation, cited by URL. |
 | **[source]** | Upstream source in `gitlab-org/gitlab`, cited by path at ref `v19.2.1-ee` (the tag matching the researched Community Edition version; the `-ee` tag carries both the Community Edition code and the `ee/` tree, which is how a route's edition gating is proved). |
@@ -129,8 +132,11 @@ round trips on other trackers are cheaper on REST here than they would be anywhe
 therefore stays on REST v4, consistent with the transport constraint of building on
 `internal/httpkit` with no third-party GitLab client library.
 
-GraphQL becomes relevant only for surfaces outside the tracker contract; see the
-[gap map](#out-of-scope-gap-map-for-merge-requests-and-pipelines).
+The forge surface does not need GraphQL either: the merge-request, approval, review-state,
+pipeline, and job routes the `SCMAdapter` consumes are all REST, and each was exercised there
+(see [Merge requests, approvals, and pipelines](#merge-requests-approvals-and-pipelines)).
+GraphQL is used in these notes only as a research instrument, to read an instance's own
+version-exact enumerations.
 
 ---
 
@@ -1335,34 +1341,641 @@ load-bearing rather than incidental:
 
 ---
 
-## Out of scope: gap map for merge requests and pipelines
+## Merge requests, approvals, and pipelines
 
-Recorded for planning only; nothing below is part of the tracker adapter. Route existence was
-confirmed **[live-CE]** by reaching each route (a `404` on a resource that does not exist
-proves the route matched; see [Error model](#four-envelope-shapes) for how that is
-distinguished from an unmatched route). Response shapes are not characterized here.
+This section characterizes the surface the GitLab `SCMAdapter` half will implement. Each
+capability records the response shape, the mapping onto the `internal/domain` SCM type, and the
+decision taken. Nothing here is part of the tracker adapter.
 
-| Future capability | GitLab surface | Community Edition status |
+The fixture is a project at namespace depth three (`scmlab/team/squad/mrlab`), five merge
+requests covering the clean, conflicting, draft, and merged cases, a registered runner
+executing real jobs, and a project access token identity for the bot probes. Every probe
+below was run against it. Reads use the project Developer token unless a probe is explicitly
+about the administrator view.
+
+Three findings dominate the design and are stated once here because several capabilities
+depend on them:
+
+- **`detailed_merge_status` is a single value that recomputes.** Approving a merge request
+  flipped it from `mergeable` to `checking` and back **[live-CE]**. Any read can land on a
+  transient computing value, so no single read is authoritative.
+- **The merge endpoint's rejection body does not name its reason.** Already-merged, draft, and
+  conflicting merge requests all return the byte-identical `405 {"message":"405 Method Not
+  Allowed"}` **[live-CE]**. See [the merge call](#6-merge-call) for what that forces.
+- **Embedded user objects carry no bot marker.** The `bot` field exists on `GET /users/:id` but
+  not on the author of a note **[live-CE]** **[source]**, which reopens a claim the earlier
+  gap map got wrong.
+
+### The merge-request object
+
+`GET /projects/:id/merge_requests/:iid` returns 58 keys on Community Edition **[live-CE]**. The
+fields the SCM contract consumes:
+
+| Field | Observed values | Feeds |
 | --- | --- | --- |
-| Merge-request list and detail | `GET /projects/:id/merge_requests`, `.../merge_requests/:iid` | Available **[live-CE]** |
-| Review decision | `GET .../merge_requests/:iid/approvals` | Route available **[live-CE]** **[source]**. The richer `approval_state` and all approval-*rule* routes are Enterprise Edition only: `approval_state` returned `404 {"error":"404 Not Found"}` (route unmatched) and is defined only under `ee/` **[live-CE]** **[source]**. A Community Edition review decision must be folded from `approvals` plus the merge-request object, as the Gitea adapter folds one from its review list |
-| Mergeability | The merge-request object's merge-status fields | Available **[live-CE]**; field semantics not characterized |
-| CI status | `GET /projects/:id/pipelines`, plus commit status routes | Available **[live-CE]** |
-| Review threads and comments | `GET .../merge_requests/:iid/notes`, `.../discussions` | Available **[live-CE]**. Same note entity as issues, so the comment normalization is shared |
-| Label-event journal for label commands | `GET .../merge_requests/:iid/resource_label_events` | Available **[live-CE]**. Shape verified on the issue variant: each event carries `id`, `action` (`add` or `remove`), `label.name`, `user.username`, `created_at`, `resource_type` **[live-CE]** |
-| Branch delete after merge | `DELETE /projects/:id/repository/branches/:branch` | Route family available **[live-CE]** |
-| Protected-branch awareness | `GET /projects/:id/protected_branches` | Available **[live-CE]** |
-| Webhooks | `POST /projects/:id/hooks` | Not exercised |
+| `iid` | Project-scoped integer | The `prNumber` argument on every method |
+| `state` | `opened`, `merged`, `closed`, `locked` | `PRMergeStatus.Merged` (`state == "merged"`) |
+| `draft` | Boolean, duplicated by the deprecated `work_in_progress` | `PRMergeStatus.Draft` |
+| `sha` | Head commit of the source branch | `PRMergeStatus.HeadSHA`, and the merge precondition |
+| `source_branch` / `target_branch` | Branch names | `PRMergeStatus.BranchName` / `.BaseBranch` |
+| `merge_commit_sha` | Null until merged, then the merge commit | `PRMergeStatus.MergeCommitSHA` |
+| `merge_status` | `checking`, `can_be_merged`, `cannot_be_merged` | Nothing: superseded by `detailed_merge_status` |
+| `detailed_merge_status` | 24-value enum, see [mergeability](#2-mergeability) | `PRMergeStatus.Mergeability` |
+| `has_conflicts` | Boolean | Corroborates `conflict`, not used alone |
+| `head_pipeline` | Full pipeline object, or null | [CI status](#4-ci-status-source) |
+| `reviewers` | Array of bare user objects, **no review state** | Nothing, see [changes-requested reviews](#3-changes-requested-reviews) |
 
-Two findings from this research that a future forge half will need:
+Community Edition carries **no** `approvals_before_merge` key on the merge-request object
+**[live-CE]**.
 
-- **State-change and label-change events are not notes.** GitLab keeps them in separate
-  journals: `resource_label_events` and `resource_state_events`, both available on Community
-  Edition and both verified to return typed entries **[live-CE]**. The label-command reaction
-  reads the label journal, not the note stream.
-- **Bot identity is a platform marker here.** Project and group access token identities report
-  `bot: true`, and a human-owned personal access token identity reports `bot: false`
-  **[live-CE]**. Unlike Gitea, bot classification need not rest on a username allowlist alone.
+A merged merge request reports `state: "merged"`, a non-null `merged_at` and `merge_commit_sha`,
+and `detailed_merge_status: "not_open"` **[live-CE]**. That combination is the only reliable
+already-merged signal the adapter has.
+
+### 1. Review decision
+
+**The Community Edition approvals payload is smaller than the documentation implies.** The
+route is available on all tiers, but what it returns on Community Edition is four keys, and
+two of them are viewer-relative:
+
+```json
+{"user_has_approved": false, "user_can_approve": true, "approved": false, "approved_by": []}
+```
+
+After an approval **[live-CE]**:
+
+```json
+{"user_has_approved": true, "user_can_approve": false, "approved": true,
+ "approved_by": [{"user": {"id": 1, "username": "root", ...},
+                  "approved_at": "2026-08-10T15:33:59.184+02:00"}]}
+```
+
+There is **no `approvals_required` and no `approvals_left`** on Community Edition **[live-CE]**.
+Those are Enterprise fields, and their absence is the decisive constraint: the approvals payload
+alone cannot say whether review is *required*, only whether one happened. Every richer route is
+Enterprise Edition and returns `404 {"error":"404 Not Found"}`, the unmatched-route envelope:
+`approval_state`, `approval_rules`, and the project-level `approvals` configuration
+**[live-CE]** **[source]**.
+
+`user_has_approved` and `user_can_approve` are computed for the **calling token**, not for the
+merge request. The same merge request reported `user_has_approved: true` to the approver and
+`false` to a different token in the same second **[live-CE]**. The adapter MUST ignore both
+fields; only `approved` and `approved_by[]` are identity-independent.
+
+**Decision: fold `ReviewDecision` from the approvals payload plus the per-reviewer states**, in
+the same spirit as the Gitea adapter folding a decision from its review list plus the
+requested-reviewers signal. The reviewer states come from the dedicated route characterized in
+[changes-requested reviews](#3-changes-requested-reviews). Evaluated in order:
+
+| Condition | `ReviewDecision` |
+| --- | --- |
+| Any reviewer state is `requested_changes` | `CHANGES_REQUESTED` |
+| `approved == true` | `APPROVED` |
+| The reviewer list is non-empty | `REVIEW_REQUIRED` |
+| No reviewers and no approvals | `NOT_REQUIRED` |
+
+The changes-requested arm is tested first so a later approval by a second reviewer cannot
+silently clear an outstanding block, matching the contract's rule that `APPROVED` holds only
+when no `CHANGES_REQUESTED` supersedes it.
+
+The last row is the load-bearing one, and it is a deliberate widening of the merge gate.
+Community Edition has no approval rules, so it can never *require* an approval; a merge request
+with no reviewer assigned is genuinely unreviewed rather than pending. `NOT_REQUIRED` lets the
+auto-merge loop proceed on such a merge request. An operator who wants review enforced on
+Community Edition MUST assign a reviewer, because the platform offers no server-side
+alternative.
+
+Corroborating evidence that Community Edition cannot require approval: after `unapprove` left
+the merge request with zero approvals, `detailed_merge_status` was still `mergeable`
+**[live-CE]**. The `not_approved` value exists in the enum but has no rule that can produce it
+on Community Edition.
+
+**`ReviewDecision` MUST NOT be derived from `detailed_merge_status`.** That field reports one
+blocker at a time with undocumented precedence (see [mergeability](#2-mergeability)), so its
+`not_approved` value is a sufficient signal of a missing approval and never a necessary one.
+
+### 2. Mergeability
+
+`detailed_merge_status` is a single string naming **one** blocking condition. The version-exact
+enumeration was read from the live instance's own GraphQL schema, which is the authority for
+this deployment rather than the upstream default branch:
+
+```
+approvals_syncing  blocked_status  checking  ci_must_pass  ci_still_running
+commits_status  conflict  discussions_not_resolved  draft_status
+external_status_checks  jira_association  locked_lfs_files  locked_paths
+mergeable  merge_time  need_rebase  not_approved  not_open  preparing
+requested_changes  security_policies_violations  security_policy_pipeline_check
+title_not_matching  unchecked
+```
+
+24 values **[live-CE]**. REST renders them lowercase snake_case; the GraphQL enum renders the
+same symbols upper-case. Six were observed directly in REST bodies: `preparing`, `checking`,
+`mergeable`, `conflict`, `draft_status`, and `not_open` **[live-CE]**. The rest are
+**[live-CE]** at schema level only.
+
+**The source file and the running instance disagree, and the gap was not fully explained.**
+`app/graphql/types/merge_requests/detailed_merge_status_enum.rb` declares **22** values, and the
+file is byte-identical at the `v19.2.1-ee` tag and on the upstream default branch (its last
+change was 2025-04-15, confirmed through the repository commit history) **[source]**. The
+running Community Edition 19.2.1 instance serves **24**, adding `requested_changes` and
+`security_policy_pipeline_check` **[live-CE]**. The file ends with
+`DetailedMergeStatusEnum.prepend_mod_with(...)`, the hook an Enterprise module uses to extend it,
+but the expected `ee/app/graphql/types/merge_requests/detailed_merge_status_enum.rb` path returns
+404 **[source]**, so **the file that contributes the two extra values was not located**. This is
+carried into the [open questions](#open-questions) rather than resolved by inference.
+
+Two consequences hold regardless of where the extra values come from:
+
+- **A declared value is not a reachable value.** Enum membership describes the schema surface,
+  not what a licensed check can actually emit. `not_approved` is declared and, as shown above,
+  cannot occur on Community Edition because no approval rule exists to produce it.
+- **The mapping MUST have a default arm.** The list is demonstrably not closed against the source
+  file, so an adapter that switches exhaustively over 22 or even 24 values will meet a string it
+  does not know.
+
+**Mapping to `domain.MergeabilityState`:**
+
+| `detailed_merge_status` | `MergeabilityState` | Why |
+| --- | --- | --- |
+| `mergeable` | `clean` | The only affirmative value |
+| `conflict` | `dirty` | The only conflict value; corroborated by `has_conflicts: true` **[live-CE]** |
+| `unchecked`, `checking`, `preparing`, `approvals_syncing` | `unknown` | The platform is still computing |
+| everything else | `blocked` | A precondition is unmet |
+
+The four computing values are the load-bearing group, because the contract makes `unknown` a
+deferral condition and the reconcile loop re-enqueues on it. A newly created merge request
+reported `preparing` on the list route within a second of creation and `mergeable` moments later
+**[live-CE]**, and approving one moved it back to `checking` **[live-CE]**. Classifying either as
+`blocked` would still re-enqueue, but classifying either as `clean` would let the loop merge on a
+stale computation.
+
+**`unstable` is unreachable, by design rather than omission.** A pipeline whose only failing job
+carries `allow_failure: true` reports top-level `status: "success"` **[live-CE]**, so a merge
+request in that state reports `mergeable` and maps to `clean`. The warning is visible only in
+`detailed_status.group == "success-with-warnings"` on the pipeline detail route **[live-CE]**.
+The merge state machine treats `clean` and `unstable` identically, so nothing is lost; the
+adapter simply never emits `unstable`, matching the Gitea adapter, which never emits it either.
+
+**Unrecognized values map to `blocked`, not `unknown`.** Every value in the live enum other than
+`mergeable` and the four computing states is a blocking reason, so an unfamiliar value from a
+newer instance is far more likely to be a new blocker than a new computing state. Both arms
+re-enqueue, so this choice is about not misreporting a permanent blocker as transient. The
+adapter SHOULD log the unrecognized value at WARN.
+
+**Robustness to masking, which the mapping MUST assume.** GitLab returns one value even when
+several conditions block at once, and the precedence between them is neither documented nor
+guaranteed. Upstream issue
+[gitlab-org/gitlab#570458](https://gitlab.com/gitlab-org/gitlab/-/issues/570458) reports
+`not_approved` masking `need_rebase` **[docs]**. Three rules follow, and they are what make the
+mapping safe:
+
+1. Treat the value as a **sufficient** signal that merging is blocked, never as a **necessary**
+   one. The adapter MUST NOT conclude "no conflict" from a value of `not_approved`.
+2. Derive nothing else from it. `ReviewDecision` comes from the approvals fold and
+   `CIConclusion` from the pipeline read, so a masked value cannot corrupt either.
+3. Rely on re-reading rather than on completeness. Masking changes only *which* blocker is
+   reported, never *whether* one is, so the mapping above yields a non-`clean` state whenever
+   any blocker exists. Each blocker surfaces in turn as the previous one clears, which costs
+   extra poll ticks and cannot produce a wrong merge.
+
+The merge endpoint is the backstop: it re-evaluates every precondition server-side and rejects
+with 405 if any still holds, so a stale `clean` read cannot merge a blocked merge request.
+
+### 3. Changes-requested reviews
+
+**GitLab does have a per-reviewer review state on the REST surface, and the reference
+documentation does not mention it.** This was the single most contested question in this
+research, because two sources appeared to disagree. Both turned out to be describing different
+objects.
+
+The **merge-request object's** `reviewers[]` array holds bare user objects whose `state` is the
+user's *account* state **[live-CE]**:
+
+```json
+"reviewers": [{"id": 1, "username": "root", "state": "active", "locked": false, ...}]
+```
+
+The reference documentation is correct about this array: "Current state of the reviewer's user
+account. Possible values: `active`, `blocked`, or `deactivated`" **[docs]**.
+
+The **dedicated reviewers route**, `GET /projects/:id/merge_requests/:iid/reviewers`, returns a
+different entity: the user is nested under `user`, and the top-level `state` is the *review*
+state **[live-CE]**:
+
+```json
+[{"user": {"id": 1, "username": "root", "state": "active", ...},
+  "state": "unreviewed",
+  "created_at": "2026-08-10T15:33:58.714+02:00"}]
+```
+
+Both `state` fields appear in one response and mean different things. Reading the account state
+where the review state was intended is the trap, and it is easy to fall into because the outer
+object nests the very field name it shadows.
+
+Three independent confirmations that the review state is Community Edition and real:
+
+- `lib/api/merge_requests.rb` defines the route at CE level, outside the `ee/` tree, and renders
+  it with `Entities::MergeRequestReviewer`, which exposes `user`, `state`, and `created_at`
+  **[source]**.
+- The state enum lives in `app/models/concerns/merge_request_reviewer_state.rb` as
+  `unreviewed: 0, reviewed: 1, requested_changes: 2, approved: 3, unapproved: 4,
+  review_started: 5`, with no `ee/` override (that path returns 404) **[source]**. The live
+  instance's own GraphQL schema exposes the same six values as `MergeRequestReviewState`
+  **[live-CE]**.
+- The field tracks real review actions: it read `unreviewed` on assignment, `approved` after an
+  approval, and `unapproved` after an unapprove, all on Community Edition **[live-CE]**.
+
+**Decision: `FetchPendingReviews` selects notes on merge requests whose reviewer state is
+`requested_changes`.** GitLab has no review object bundling a state with a comment set the way
+GitHub does, so selection is two reads: fetch the reviewer states, then fetch the notes and keep
+those authored by a reviewer in `requested_changes`. Notes carry no review-state field of their
+own, so the author login is the only join key.
+
+**What this cannot do, and the degradation that follows.** GitLab does not attach comments to a
+review verdict, so a reviewer who requests changes and comments separately produces a comment
+set that is *everything that reviewer ever wrote on the merge request*, not the comments
+belonging to one review round. The adapter MUST NOT claim finer granularity. When no reviewer is
+in `requested_changes`, `FetchPendingReviews` returns an empty non-nil slice.
+
+**No REST or GraphQL route sets the state on this version.** `PUT .../reviewers/:user_id`,
+`PUT .../request_changes`, and a bogus-state variant all returned
+`404 {"error":"404 Not Found"}` **[live-CE]**, and the live GraphQL schema exposes only
+`mergeRequestReviewerRereview` and `mergeRequestSetReviewers` **[live-CE]**. This does not
+affect the adapter, which only reads, but it does mean an integration test cannot drive a
+merge request into `requested_changes` through the API. The state must be set through the web
+UI, or the test must assert on the two states the API can produce (`approved` via `approve`,
+`unapproved` via `unapprove`).
+
+The note shape itself matches the issue notes already characterized, plus the review-specific
+fields. A diff note carries `type: "DiffNote"`, a `position` object with
+`base_sha`/`start_sha`/`head_sha`, `old_path`/`new_path`, `position_type`, and
+`old_line`/`new_line`, and the resolution triple `resolvable`, `resolved`, `resolved_by`
+**[live-CE]**. `POST .../discussions` returns a discussion wrapper with an `id`, `individual_note`,
+`resolvable`, `resolved`, and a `notes[]` array **[live-CE]**. GitLab exposes no
+platform "outdated" flag on a note, so `ReviewComment.Outdated` has no direct source; the
+adapter derives it by comparing the note's `position.head_sha` against the merge request's
+current `sha`.
+
+### 4. CI status source
+
+The issue frames pipelines and commit statuses as two competing models. They are not: **GitLab
+unifies them, and the unification was verified in both directions.**
+
+Posting an external commit status to a SHA that **already has a pipeline** attaches it to that
+pipeline and changes the pipeline's own status. A pipeline reporting `success` (its only failing
+job carried `allow_failure: true`) became `failed` after one external `failed` status was posted
+to its SHA, and the new entry came back carrying `pipeline_id: 4`, the existing pipeline
+**[live-CE]**.
+
+Posting an external commit status to a SHA with **no pipeline** creates one. A SHA that reported
+zero pipelines gained pipeline 5 with `source: "external"`, and that pipeline immediately became
+the merge request's `head_pipeline` **[live-CE]**.
+
+**Decision: `head_pipeline` on the merge-request object is the single CI source, and no manual
+fold is needed.** The externally-reported status is already folded in by the platform. This
+saves a request compared with the Gitea adapter, which must aggregate a status list itself.
+
+`head_pipeline` is a full pipeline object embedded in the merge-request response, carrying
+`id`, `status`, `source`, `sha`, `ref`, `web_url`, timing fields, and a `detailed_status`
+sub-object **[live-CE]**. Reading it costs nothing beyond the merge-request read that
+`GetMergeability` already performs.
+
+**`GetCIStatus` mapping.** The orchestrator compares the returned string against the literal
+`"success"` and treats the empty string as "no checks exist"
+(`internal/orchestrator/auto_merge_reconcile.go`), so the adapter returns GitLab's pipeline
+status verbatim, with one substitution:
+
+| `head_pipeline` | `GetCIStatus` returns |
+| --- | --- |
+| `null` (no pipeline for the head SHA) | `""` |
+| `success` | `"success"` |
+| any other status | that status verbatim |
+
+Returning the status verbatim keeps every non-success value out of the merge gate without the
+adapter having to enumerate GitLab's pipeline states, and it puts the real reason in the log.
+
+**`FetchCIStatus` mapping to `domain.CIResult`.** The check-run list comes from
+`GET /projects/:id/repository/commits/:sha/statuses`, which returns one entry per job **and**
+per external status, each with `name`, `status`, `allow_failure`, `pipeline_id`, and
+`target_url` **[live-CE]**:
+
+| GitLab job or status | `CheckConclusion` | `CheckRunStatus` |
+| --- | --- | --- |
+| `success` | `success` | `completed` |
+| `failed` | `failure` | `completed` |
+| `canceled` | `cancelled` | `completed` |
+| `skipped` | `skipped` | `completed` |
+| `manual` | `neutral` | `completed` |
+| `created`, `pending`, `waiting_for_resource`, `preparing`, `scheduled` | `pending` | `queued` |
+| `running` | `pending` | `in_progress` |
+
+The aggregate `CIStatus` is taken from the pipeline's own status rather than recomputed from the
+entries, because the platform already applied the `allow_failure` rule that a naive fold would
+get wrong: `success` maps to `passing`, `failed` and `canceled` to `failing`, and everything else
+to `pending`.
+
+`FailingCount` MUST count only entries with `allow_failure: false`. Counting all failures would
+report a failing check on a pipeline the platform calls successful, which is exactly the
+warnings-only case observed live: `soft-fail` was `failed` with `allow_failure: true` while the
+pipeline was `success` **[live-CE]**.
+
+The warnings-only case is also the one place where the pipeline's `detailed_status` sub-object
+carries information the top-level status does not: `{"label": "passed with warnings", "group":
+"success-with-warnings", "icon": "status_warning"}` **[live-CE]**. It is available on the
+pipeline detail route and on the embedded `head_pipeline`, but **not** on the pipeline list
+route **[live-CE]**.
+
+### 5. Job log retrieval
+
+`GET /projects/:id/jobs/:job_id/trace` returns the job log as `Content-Type: text/plain` with an
+explicit `Content-Length` and no `Transfer-Encoding: chunked` **[live-CE]**. A job that does not
+exist returns `404 {"message":"404 Not found"}` **[live-CE]**.
+
+**The trace is not a plain log, and treating it as one would put terminal control bytes into an
+agent prompt.** A real failing job's trace, 3,926 bytes over 44 lines, has three layers of markup
+on every line **[live-CE]**:
+
+```
+2026-08-10T13:32:58.212878Z 01O ESC[32;1m$ ls /definitely-missing-pathESC[0;m
+2026-08-10T13:32:58.213217Z 01E ls: /definitely-missing-path: No such file or directory
+2026-08-10T13:32:58.264859Z 00O section_end:1786368778:step_scriptCR ESC[0K
+2026-08-10T13:32:58.512771Z 00O ESC[31;1mERROR: Job failed: exit code 1ESC[0;m
+```
+
+`ESC` is byte `0x1b` and `CR` is byte `0x0d`; both are literal in the response. Each line carries:
+
+1. An RFC 3339 timestamp with nanosecond precision, then a space.
+2. A four-character stream token: `00O`, `01O`, `01E`, or `00O+`. The trailing `E` marks stderr
+   and `O` stdout; the `+` marks a continuation of the previous logical line.
+3. ANSI SGR escape sequences for color, plus `ESC[0K` erase-to-end-of-line, plus
+   `section_start:<epoch>:<name>` and `section_end:<epoch>:<name>` collapsible-section markers
+   each terminated by a carriage return.
+
+The `domain.CIResult.LogExcerpt` godoc already requires adapters to "truncate to a configurable
+line count" and "strip ANSI escape sequences", so the sanitizing obligation is contract, not
+preference. For GitLab that means stripping all three layers, not only the ANSI one.
+
+**Decision: fetch the whole trace, then truncate client-side.** The route does not support
+partial fetches. A request carrying `Range: bytes=0-99` returned `200` with the full
+`Content-Length: 3926` and no `Accept-Ranges` or `Content-Range` header **[live-CE]**, so the
+server ignored it. `ci_feedback.max_log_lines` is therefore applied after the body is read: take
+the last N lines of the sanitized text, matching the reaction's intent of showing the end of a
+failing job.
+
+**Which job to fetch, and the trap that a commit-status entry is not always a job.** Jobs and
+external statuses share one identifier space, because GitLab stores both in the same table. The
+commit-statuses list therefore mixes entries whose `id` works on the trace route with entries
+whose `id` does not, and nothing in the entry's own fields separates them.
+
+Confirmed with a positive control on one pipeline **[live-CE]**:
+
+```
+id 11  soft-fail        (job)              GET .../jobs/11/trace -> 200
+id 12  external-scanner (external status)  GET .../jobs/12/trace -> 404 {"message":"404 Not found"}
+                                           GET .../jobs/12       -> 404 {"message":"404 Not found"}
+```
+
+`FetchCIStatus` populates `LogExcerpt` from the first failing check run, which on GitLab is the
+first entry with `status: "failed"` and `allow_failure: false`. **Decision: resolve the job set
+from `GET /projects/:id/pipelines/:pipeline_id/jobs` and select only from entries appearing
+there**, rather than calling the trace route speculatively and treating a 404 as a negative.
+That costs one request instead of one per candidate, and it avoids logging a 404 that is not an
+error. When the first failing entry is an external status, the adapter leaves `LogExcerpt` empty
+rather than fabricating one, which is the behavior the godoc already prescribes for a provider
+that cannot retrieve a log.
+
+The job object itself (`GET /projects/:id/jobs/:job_id`) supplies the rest of the check-run
+mapping: `name`, `stage`, `status`, `allow_failure`, `web_url` for `CheckRun.DetailsURL`, and
+`failure_reason`, which read `script_failure` for the deliberately failing job **[live-CE]**.
+
+### 6. Merge call
+
+The verb is `PUT /projects/:id/merge_requests/:iid/merge`. Success returns `200` with the full
+merge-request object, from which `MergeResult.SHA` is taken from `merge_commit_sha` and
+`MergeResult.Merged` from `state == "merged"` **[live-CE]**.
+
+**The precondition parameter is `sha`, and it is the head of the *source* branch, not the target.**
+On this instance it is **required, not optional**: omitting it returned
+`400 {"message":"SHA must be provided when merging"}` for both a Developer and an administrator
+token, on both a `checking` and a `mergeable` merge request **[live-CE]**. The source shows the
+requirement is conditional on `user_project.namespace.require_sha_for_merge?` **[source]**, so an
+instance may not enforce it. The adapter MUST always send `sha` regardless, which satisfies both
+configurations and gives the precondition semantics the contract wants anyway.
+
+**Parameter mapping for `domain.MergeStrategy`:**
+
+| Strategy | Parameters | Note |
+| --- | --- | --- |
+| `StrategyMerge` | `sha`, optional `merge_commit_message` | The project's `merge_method` was `merge` **[live-CE]** |
+| `StrategySquash` | `sha`, `squash: true`, optional `squash_commit_message` | Verified: returned both a `squash_commit_sha` and a `merge_commit_sha` **[live-CE]** |
+| `StrategyRebase` | Not expressible on this endpoint | See below |
+
+**`StrategyRebase` degrades and the degradation MUST be explicit.** GitLab has no per-call rebase
+strategy. Rebase-on-merge is a project-level setting (`merge_method` of `rebase_merge` or `ff`),
+and the standalone `PUT .../rebase` route is asynchronous: it returned
+`202 {"rebase_in_progress":true}` and does not merge **[live-CE]**. The adapter MUST NOT silently
+substitute a merge commit for a requested rebase. It either rejects a configured `rebase`
+strategy at construction time, or documents that the strategy is governed by the project's
+`merge_method` and that the configured value is inert.
+
+`commitTitle` and `commitMessage` map to `merge_commit_message` for a merge and
+`squash_commit_message` for a squash. GitLab takes a single message field per strategy rather
+than a separate title, so the adapter joins the two with a blank line, matching how GitLab's own
+UI composes them.
+
+**Rejection bodies, and the disambiguation problem this creates.** The checks fire in a fixed
+order, confirmed both live and in source (`build_merge_params` calls `check_sha_param!` before
+`execute_merge` reaches the mergeability gate) **[source]**:
+
+| Order | Condition | Response |
+| --- | --- | --- |
+| 1 | Merge request does not exist | `404 {"message":"404 Not found"}` |
+| 2 | `sha` omitted where required | `400 {"message":"SHA must be provided when merging"}` |
+| 3 | Caller may not merge the target branch | `401 {"message":"401 Unauthorized"}` |
+| 4 | `sha` does not match the source head | `409 {"message":"SHA does not match HEAD of source branch: <actual sha>"}` |
+| 5 | Not mergeable, for any reason at all | `405 {"message":"405 Method Not Allowed"}` |
+
+All five were observed live **[live-CE]**.
+
+**The 405 body carries no reason, and this is the finding that shapes the implementation.**
+Already-merged, draft, and conflicting merge requests produced byte-identical 405 responses
+**[live-CE]**:
+
+```
+already merged (iid 4, correct sha) -> 405 {"message":"405 Method Not Allowed"}
+draft          (iid 3, correct sha) -> 405 {"message":"405 Method Not Allowed"}
+conflicting    (iid 2, correct sha) -> 405 {"message":"405 Method Not Allowed"}
+```
+
+The source explains why: both arms of `execute_merge` call the same bare `not_allowed!` helper,
+which renders a constant **[source]**. The `SCMAdapter` contract requires implementations to
+surface the substring "already merged" in `SCMError.Message` "when, and only when, the
+provider's response body indicates the PR was already merged". **GitLab's body never indicates
+it.** Taken literally, the phrase could never be emitted, and every already-merged race would be
+misclassified as a transient precondition failure and retried forever.
+
+**Decision: on 405, re-read the merge request and classify from its state.**
+
+```
+PUT .../merge -> 405
+  GET /projects/:id/merge_requests/:iid
+    state == "merged"  -> ErrSCMConflict, Message contains "already merged"
+    otherwise          -> ErrSCMConflict, Message names detailed_merge_status, no phrase
+  read fails           -> ErrSCMConflict, no phrase (retry is the safe default)
+```
+
+The re-read is authoritative for this purpose because a merged merge request reports
+`state: "merged"` together with a non-null `merged_at` and `merge_commit_sha`, and
+`detailed_merge_status: "not_open"` **[live-CE]**. It costs one extra request only on the error
+path, and it satisfies the "and only when" half of the contract, which a substring match against
+GitLab's constant body could not.
+
+The 409 arm needs no re-read: it is unambiguously head-SHA drift, and its message even echoes the
+actual source head, which the state machine's "head SHA mismatch" transition re-enqueues.
+`MergeResult.SHA` on that path is unset.
+
+**A 401 on this route is an authorization failure, not a bad token.** The Developer token
+received `401 {"message":"401 Unauthorized"}` on every merge attempt because `main` is protected
+with `merge_access_levels` of Maintainers **[live-CE]**, and the source guards the route with
+`unauthorized! unless merge_request.can_be_merged_by?(current_user)`, commented "the user doesn't
+have permissions to push into target branch" **[source]**. This deviates from the rest of the
+GitLab API, which uses 403 for insufficient permission and 401 for a bad credential. Mapping 401
+to `ErrSCMAuth` is still the right behavior, because both causes need a human, and `ErrSCMAuth`
+escalates immediately rather than retrying. But the adapter cannot tell the operator *which* of
+the two it is, so the error message MUST name both possibilities.
+
+**Branch deletion after merge** is `DELETE /projects/:id/repository/branches/:branch`, returning
+`204` with an empty body on success and `404 {"message":"404 Branch Not Found"}` when the branch
+is already gone **[live-CE]**, which the contract maps to a successful no-op. Branch names
+containing a slash MUST be percent-encoded: `feat%2Fnested-name` deleted successfully
+**[live-CE]**. Note that `should_remove_source_branch: true` on the merge call is asynchronous;
+the branch was still readable immediately after a 200 merge response **[live-CE]**, so
+`DeleteBranch` must tolerate both the branch being present and it having already been reaped.
+
+### 7. Bot classification
+
+**The platform bot marker does not reach note authors, which corrects a claim in the earlier gap
+map.** That claim was true of *token identities* and does not carry to *note authors*.
+
+Every embedded user object in the API, including a note's `author`, is rendered with
+`API::Entities::UserBasic`, which exposes `id`, `username`, `name`, `state`, `locked`,
+`public_email`, `avatar_url`, and `web_url`, and **no `bot` field** **[source]**. Live
+confirmation on notes written by a project access token identity and by a human, on the same
+merge request **[live-CE]**:
+
+```
+note 97 system=False author=project_3_bot_e24d338cfed686e5ed9e28650363bc72
+        author keys: [avatar_url, id, locked, name, public_email, state, username, web_url]
+note 98 system=False author=sortie-bot
+        author keys: [avatar_url, id, locked, name, public_email, state, username, web_url]
+```
+
+The two are indistinguishable by shape. The list route `GET /users?username=<name>` also renders
+`UserBasic` and likewise omits `bot` **[live-CE]**.
+
+`bot` is available, on one route only: `GET /users/:id` returns it, and **a non-administrator
+token can read it** **[live-CE]**. That last point is what makes the platform predicate usable at
+all; had it been administrator-only, the allowlist would have been the only option.
+
+**Decision: implement the contract's union with the allowlist as the primary signal and a cached
+`GET /users/:id` lookup as the platform signal.** `FetchBotReviewComments` collects the distinct
+author IDs from the notes it already fetched, resolves each once through `GET /users/:id`, and
+keeps a comment when the author's `bot` is true **or** the login matches `botUsernames`
+case-insensitively. The lookup is cached for the adapter's lifetime, and the cost is bounded by
+the number of distinct authors on one merge request, not by the number of comments.
+
+An adapter that wants to avoid the extra requests entirely may pass an empty `botUsernames` and
+skip the lookup, but then bot selection returns nothing, so the allowlist stops being optional.
+That is the degradation to state in the configuration documentation.
+
+**The username pattern is a hint, not a contract.** GitLab names its managed token identities
+`project_<id>_bot_<hex>` and `group_<id>_bot_<hex>` **[live-CE]**, so a prefix match would
+classify GitLab's own token identities for free. It would not classify a third-party review bot
+driven by a personal access token, which is the common case for the review-comments reaction.
+The adapter MUST NOT use the pattern as its only platform signal.
+
+### 8. Project addressing
+
+**A subgroup path round-trips through the contract's `(owner, repo)` pair at any nesting depth.**
+The fixture project sits three namespaces deep, which is one level deeper than a subgroup needs
+to be to break a single-slash assumption:
+
+```
+GET /api/v4/projects/scmlab%2Fteam%2Fsquad%2Fmrlab
+-> 200 {"id": 3, "path_with_namespace": "scmlab/team/squad/mrlab", ...}
+```
+
+**[live-CE]**. Sub-routes resolve identically under the same encoded prefix:
+`.../merge_requests` returned `200 []` **[live-CE]**.
+
+**Decision: the adapter joins `owner` and `repo` with `/` and percent-encodes the result once.**
+`owner` carries the whole namespace path (`scmlab/team/squad`) and `repo` the project path
+(`mrlab`). Two prohibitions follow, and both are the kind of assumption a GitHub or Gitea
+implementation carries in by habit:
+
+- The adapter MUST NOT validate `owner` as a single path segment, and MUST NOT split it on `/`.
+- The adapter MUST NOT encode `owner` and `repo` separately and then join them, because that
+  encodes the separator between them while leaving the separators inside `owner` unencoded.
+
+Both failure modes were probed, and they fail differently, which is useful for diagnosis:
+
+| Form | Response | Meaning |
+| --- | --- | --- |
+| `scmlab%2Fteam%2Fsquad%2Fmrlab` | `200` | Correct |
+| `scmlab/team/squad/mrlab` (unencoded) | `404 {"error":"404 Not Found"}` | Route never matched |
+| `scmlab%252Fteam%252Fsquad%252Fmrlab` (double-encoded) | `404 {"message":"404 Project Not Found"}` | Route matched, no such project |
+
+**[live-CE]**. The two envelopes are the ones already distinguished in
+[Error model](#four-envelope-shapes): the `error` key means the router found nothing, and the
+`message` key means the router found the route and the resource lookup failed. An adapter that
+logs the raw body can tell an encoding bug from a configuration mistake without further probing.
+
+This matches the tracker half's existing rule that `tracker.project` MUST NOT be validated as
+exactly one slash, so the two halves share one addressing convention.
+
+### Route inventory
+
+Every route below was exercised on the fixture unless the status column says otherwise.
+
+| Contract method | Route | Status |
+| --- | --- | --- |
+| `GetMergeability` | `GET /projects/:id/merge_requests/:iid` | Verified **[live-CE]** |
+| `GetReviewDecision` | `GET .../merge_requests/:iid/approvals` plus `.../reviewers` | Verified, two requests **[live-CE]** |
+| `GetCIStatus` | `head_pipeline` on the merge-request object | Verified, no extra request **[live-CE]** |
+| `FetchCIStatus` | `GET /projects/:id/repository/commits/:sha/statuses` | Verified **[live-CE]** |
+| Job log for `max_log_lines` | `GET /projects/:id/jobs/:job_id/trace` | Verified, `text/plain`, no range support **[live-CE]** |
+| `FetchPendingReviews` | `.../merge_requests/:iid/reviewers` plus `.../notes` | Verified **[live-CE]** |
+| `FetchBotReviewComments` | `.../merge_requests/:iid/notes` plus `GET /users/:id` | Verified **[live-CE]** |
+| `MergePR` | `PUT .../merge_requests/:iid/merge` | Verified, all five response classes **[live-CE]** |
+| `DeleteBranch` | `DELETE /projects/:id/repository/branches/:branch` | Verified, 204 and 404 **[live-CE]** |
+| `ListLabelEvents` | `GET .../merge_requests/:iid/resource_label_events` | Route verified, `200 []`; shape verified on the issue variant **[live-CE]** |
+| `RemoveLabel` | `PUT .../merge_requests/:iid` with `remove_labels` | Not exercised on merge requests; identical parameter to the issue route |
+
+Two findings from the tracker research that the forge half inherits unchanged:
+
+- **State-change and label-change events are not notes.** GitLab keeps them in separate journals,
+  `resource_label_events` and `resource_state_events`, both available on Community Edition and
+  both verified to return typed entries **[live-CE]**. The label-command reaction reads the label
+  journal, not the note stream.
+- **Notes are the same entity as on issues**, so the comment normalization is shared. System notes
+  must be filtered the same way, and the merge-request notes route accepts the same
+  `activity_filter` and `sort` parameters.
+
+### What Community Edition cannot do
+
+Stated plainly, with the degradation rather than a workaround:
+
+| Capability | Community Edition | Degradation |
+| --- | --- | --- |
+| Required approvals | No approval rules exist; `approvals_required` and `approvals_left` are absent from the payload **[live-CE]** | `ReviewDecision` returns `NOT_REQUIRED` when no reviewer is assigned, so the merge gate is open unless the operator assigns reviewers |
+| `approval_state`, approval rules, project approval settings | All routes return the unmatched-route `404 {"error":"404 Not Found"}` **[live-CE]** **[source]** | The decision is folded from `approvals` plus `reviewers`; per-rule detail is unavailable |
+| Setting a reviewer's review state through the API | No REST route and no GraphQL mutation on 19.2.1 **[live-CE]** | Reading works; integration tests can only produce `approved` and `unapproved` |
+| Per-review comment grouping | GitLab has no review object bundling a verdict with comments | `FetchPendingReviews` returns all comments by reviewers in `requested_changes`, not one review round |
+| Bot marker on a note author | `UserBasic` has no `bot` field **[source]** **[live-CE]** | One `GET /users/:id` per distinct author, cached, or the username allowlist alone |
+| Per-call rebase merge strategy | The merge endpoint has no rebase parameter; `.../rebase` is a separate async route **[live-CE]** | `StrategyRebase` is governed by the project's `merge_method`, not by the call |
+| A merge rejection reason | Every non-mergeable cause returns the same 405 constant **[live-CE]** **[source]** | One extra merge-request read on the error path to classify already-merged |
+| `unstable` mergeability | A warnings-only pipeline reports `success` and the merge request reports `mergeable` **[live-CE]** | The adapter never emits `unstable`; the state machine treats it as `clean` anyway |
 
 ---
 
@@ -1531,7 +2144,7 @@ only for the comparisons marked **[live-SaaS]**.
     `404 {"message":"404 Project Not Found"}`; an unmatched route returned
     `404 {"error":"404 Not Found"}`; a non-numeric `iid` returned
     `400 {"error":"issue_iid is invalid"}`.
-21. **Gap-map route existence.** Merge-request list, merge-request notes and discussions,
+21. **Forge route existence.** Merge-request list, merge-request notes and discussions,
     merge-request `approvals`, pipelines, commits, branches, protected branches,
     `related_merge_requests`, and both resource-event journals all matched their routes;
     merge-request `approval_state` did not.
@@ -1547,9 +2160,68 @@ only for the comparisons marked **[live-SaaS]**.
     '::1/128']` read from the image's own configuration template, while
     `GET /api/v4/version` returned `401` from both.
 
-All fixture mutations made during this research were reverted: probe-created issues, notes,
-issue links, and labels were deleted, altered label sets and issue states were restored, and
-every token created for scope probing was revoked.
+The 2026-08-10 pass added the following against a purpose-built project at namespace depth three
+(`scmlab/team/squad/mrlab`), with a registered Docker-executor runner:
+
+23. **Project addressing at depth.** `GET /projects/scmlab%2Fteam%2Fsquad%2Fmrlab` returned 200
+    and echoed `path_with_namespace: "scmlab/team/squad/mrlab"`; the sub-route
+    `.../merge_requests` returned `200 []`. Unencoded slashes returned
+    `404 {"error":"404 Not Found"}` and double-encoded `%252F` returned
+    `404 {"message":"404 Project Not Found"}`, the two envelopes distinguishing an unmatched
+    route from a failed lookup.
+24. **`detailed_merge_status` values.** Six values were observed in REST bodies: `preparing` and
+    `checking` on freshly created or freshly approved merge requests, `mergeable`, `conflict`
+    (with `has_conflicts: true`), `draft_status`, and `not_open` after merge. The instance's own
+    GraphQL schema enumerated 24 values, two more than the upstream default branch carries.
+    Approving a merge request moved the field from `mergeable` back to `checking`, proving it
+    recomputes.
+25. **Approvals payload.** Community Edition returned exactly four keys: `user_has_approved`,
+    `user_can_approve`, `approved`, `approved_by[]`. No `approvals_required` and no
+    `approvals_left`. The first two keys were viewer-relative: the same merge request reported
+    `user_has_approved: true` to the approver and `false` to another token. `approval_state`,
+    `approval_rules`, and the project-level `approvals` route each returned
+    `404 {"error":"404 Not Found"}`. With zero approvals the merge request was still `mergeable`.
+26. **Per-reviewer review state.** `GET .../merge_requests/:iid/reviewers` returned objects
+    nesting the user under `user` and exposing a top-level `state`, which read `unreviewed` on
+    assignment, `approved` after `approve`, and `unapproved` after `unapprove`. The
+    merge-request object's own `reviewers[]` array carried only bare user objects whose `state`
+    was the account state `active`. No REST route and no GraphQL mutation set the review state.
+27. **CI unification.** An external commit status posted to a SHA that already had a pipeline
+    attached to that pipeline (`pipeline_id` echoed the existing id) and flipped the pipeline
+    from `success` to `failed`. An external status posted to a SHA with no pipeline created one
+    with `source: "external"`, which became the merge request's `head_pipeline`. A pipeline whose
+    only failing job carried `allow_failure: true` reported top-level `success` with
+    `detailed_status.group: "success-with-warnings"`, and `detailed_status` was present on the
+    pipeline detail route and on `head_pipeline` but absent from the pipeline list route.
+28. **Job trace.** `GET /projects/:id/jobs/:job_id/trace` returned `text/plain` with
+    `Content-Length: 3926` over 44 lines for a real failing job. Every line carried an RFC 3339
+    nanosecond timestamp, a stream token (`00O`, `01O`, `01E`, `00O+`), and ANSI escape
+    sequences, plus `section_start`/`section_end` markers terminated by carriage returns. A
+    `Range: bytes=0-99` request returned 200 with the full body and no `Accept-Ranges` or
+    `Content-Range` header. A nonexistent job returned `404 {"message":"404 Not found"}`.
+29. **Merge endpoint.** Omitting `sha` returned `400 {"message":"SHA must be provided when
+    merging"}` for both token identities. A Developer token returned
+    `401 {"message":"401 Unauthorized"}` against the default branch, which is protected with
+    `merge_access_levels` of Maintainers. A wrong `sha` returned `409 {"message":"SHA does not
+    match HEAD of source branch: <actual sha>"}`. Already-merged, draft, and conflicting merge
+    requests each returned the byte-identical `405 {"message":"405 Method Not Allowed"}`. A
+    squash merge returned both a `squash_commit_sha` and a `merge_commit_sha`. The standalone
+    rebase route returned `202 {"rebase_in_progress":true}`.
+30. **Bot marker.** A note authored by a project access token identity and a note authored by a
+    human carried identical author key sets, neither containing `bot`. `GET /users/:id` returned
+    `bot: true` for the token identity, and returned it to a non-administrator token.
+    `GET /users?username=` omitted the field.
+31. **Branch deletion.** `DELETE .../repository/branches/:branch` returned 204 with an empty body
+    on success and `404 {"message":"404 Branch Not Found"}` for an absent branch. A branch name
+    containing a slash deleted successfully when percent-encoded. `should_remove_source_branch:
+    true` on the merge call did not delete the branch synchronously: it was still readable
+    immediately after the 200 merge response.
+
+All fixture mutations made during the 2026-08-04 and 2026-08-05 passes were reverted:
+probe-created issues, notes, issue links, and labels were deleted, altered label sets and issue
+states were restored, and every token created for scope probing was revoked. The 2026-08-10
+fixtures were **left in place** as the SCM fixture blueprint: the `scmlab` group tree, the
+`scmlab/team/squad/mrlab` project, its merge requests, and the registered runner.
 
 ---
 
@@ -1572,6 +2244,12 @@ every token created for scope probing was revoked.
 | Rate-limit headers and self-managed defaults | [User and IP rate limits](https://docs.gitlab.com/administration/settings/user_and_ip_rate_limits/) | Live: instance settings readout, and header presence on GitLab.com versus absence on Community Edition |
 | GitLab.com rate limits | [GitLab.com settings](https://docs.gitlab.com/user/gitlab_com/#rate-limits-on-gitlabcom) | Live `ratelimit-limit: 2000` |
 | Merge-request approval Community/Enterprise split | [`lib/api/merge_request_approvals.rb`](https://gitlab.com/gitlab-org/gitlab/-/blob/v19.2.1-ee/lib/api/merge_request_approvals.rb) and [`ee/lib/ee/api/merge_request_approvals.rb`](https://gitlab.com/gitlab-org/gitlab/-/blob/v19.2.1-ee/ee/lib/ee/api/merge_request_approvals.rb) | Live: `approvals` route matched, `approval_state` did not |
+| Per-reviewer review state route and entity | [`lib/api/merge_requests.rb`](https://gitlab.com/gitlab-org/gitlab/-/blob/v19.2.1-ee/lib/api/merge_requests.rb) and [`lib/api/entities/merge_request_reviewer.rb`](https://gitlab.com/gitlab-org/gitlab/-/blob/v19.2.1-ee/lib/api/entities/merge_request_reviewer.rb) | Live: state read as `unreviewed`, `approved`, and `unapproved` in turn. Route is defined outside `ee/` and is undocumented in the reference docs |
+| Review-state enum | [`app/models/concerns/merge_request_reviewer_state.rb`](https://gitlab.com/gitlab-org/gitlab/-/blob/v19.2.1-ee/app/models/concerns/merge_request_reviewer_state.rb) | Six values; the `ee/` override path returns 404. Corroborated by the live instance's `MergeRequestReviewState` GraphQL enum |
+| `detailed_merge_status` enumeration | The live instance's own GraphQL introspection, and [`app/graphql/types/merge_requests/detailed_merge_status_enum.rb`](https://gitlab.com/gitlab-org/gitlab/-/blob/v19.2.1-ee/app/graphql/types/merge_requests/detailed_merge_status_enum.rb) | 24 values on 19.2.1 against 22 on the upstream default branch; six confirmed in REST bodies |
+| Merge-endpoint check ordering, the 405 constant, and the conditional `sha` requirement | [`lib/api/merge_requests.rb`](https://gitlab.com/gitlab-org/gitlab/-/blob/v19.2.1-ee/lib/api/merge_requests.rb) (`build_merge_params`, `check_sha_param!`, `execute_merge`, `not_allowed!`) | Live: all five response classes provoked in order |
+| Absence of a bot marker on embedded users | [`lib/api/entities/note.rb`](https://gitlab.com/gitlab-org/gitlab/-/blob/v19.2.1-ee/lib/api/entities/note.rb) and [`lib/api/entities/user_basic.rb`](https://gitlab.com/gitlab-org/gitlab/-/blob/v19.2.1-ee/lib/api/entities/user_basic.rb) | Live: identical author key sets for a token-bot note and a human note; `bot` present only on `GET /users/:id` |
+| Single-value `detailed_merge_status` masking | [gitlab-org/gitlab#570458](https://gitlab.com/gitlab-org/gitlab/-/issues/570458) | Upstream issue report; the precedence itself was not reproduced here |
 | Declared authentication mechanisms, and the incompleteness of the machine-readable route surface | [`doc/api/openapi/openapi_v2.yaml`](https://gitlab.com/gitlab-org/gitlab/-/blob/v19.2.1-ee/doc/api/openapi/openapi_v2.yaml) and the [interactive rendering](https://docs.gitlab.com/api/openapi/openapi_interactive/) | Inspected for declared paths and parameters; live 404 on every instance-served description path |
 | Container image size and boot behavior | Docker Hub registry API; local image inspection | Measured pull, boot, healthcheck, and readiness polling |
 | Gitea and GitHub adapter behavior used in the comparison tables | The Gitea and GitHub adapter research notes in this directory, and `internal/domain/tracker.go` | Document and code reading at research time |
@@ -1588,4 +2266,11 @@ Carried forward explicitly rather than resolved by inference:
 | Does self-managed Community Edition 19.2.1 support granular access tokens, and what does introspection report? | Decides whether scope preflight can be trusted on self-managed | Create a granular token on a self-managed Community Edition instance and read `/personal_access_tokens/self` |
 | At what `iids[]` count does a deployment return `414`? | Sets the batch chunk size for reconciliation | Increase `iids[]` count against a representative front-end web server configuration |
 | Do 409 or 422 statuses occur anywhere on the nine operations' routes? | Two rows of the error mapping are unexercised | Provoke a conflict or unprocessable-entity condition on the issue routes |
+| Which file contributes `requested_changes` and `security_policy_pipeline_check` to a Community Edition instance's `DetailedMergeStatus` enum? | The Community Edition source file declares 22 values and the running instance serves 24, so the enum cannot be enumerated from the source path alone, and it is unclear whether either value is reachable without a license | Locate the module reached by `DetailedMergeStatusEnum.prepend_mod_with`, and check whether its mergeability checks are license-gated at runtime |
+| What is the precedence order among simultaneously blocking `detailed_merge_status` values? | Decides how many poll ticks a merge request needs to clear several blockers, and whether any blocker can be starved indefinitely | Construct a merge request that is simultaneously conflicted, draft, and unapproved, and record which value is reported as each condition is cleared in turn |
+| Does `require_sha_for_merge?` vary by namespace or instance, and what governs it? | The adapter always sends `sha`, so behavior is safe either way, but a wrong error message would mislead an operator whose instance does not require it | Read `require_sha_for_merge?` on a second namespace, and on an instance where the merge call succeeds without `sha` |
+| Can a reviewer reach `requested_changes` on Community Edition through the web UI, and does the REST `reviewers` route then report it? | The `FetchPendingReviews` selection rests on that state being reachable; only `approved` and `unapproved` were produced through the API | Drive the "request changes" action in the Community Edition web UI, then re-read `GET .../merge_requests/:iid/reviewers` |
+| Is the timestamp-and-stream prefix on the job trace a property of the API, the runner version, or a runner feature flag? | Decides whether the trace sanitizer can rely on the prefix being present, or must handle both shapes | Fetch a trace produced by an older runner, and one produced with the runner timestamp feature flag disabled |
+| Does the notes route on a merge request paginate and filter identically to the issue variant? | The comment normalization is assumed shared; a divergence would surface as dropped review comments | Seed a merge request with more than 100 notes and repeat the issue-side pagination and `activity_filter` probes |
+| Does `GET /users/:id` draw on a distinct rate-limit budget from the merge-request reads? | Bot classification adds one request per distinct author; a stricter budget would change the caching strategy | Compare `RateLimit-Name` on a throttled `GET /users/:id` against a throttled merge-request read on GitLab.com |
 | Does self-managed Enterprise Edition behave as its source implies? | Every Enterprise Edition claim here is source plus documentation, never observed | Run the same probe set against a licensed self-managed Enterprise Edition instance |
