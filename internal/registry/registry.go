@@ -93,6 +93,13 @@ type TrackerConfigFields struct {
 	// that interprets the key checks its shape here; an adapter that
 	// ignores the key leaves the field unread.
 	QueryFilter string
+
+	// APIVersion is the resolved tracker.api_version value, empty when
+	// the value is absent or the config layer produced no string for
+	// it. An adapter that selects an API version resolves its own
+	// default from this value; an adapter without a version selector
+	// leaves the field unread.
+	APIVersion string
 }
 
 // ValidationDiag is a single diagnostic produced by adapter config

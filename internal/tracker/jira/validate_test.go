@@ -1,6 +1,7 @@
 package jira
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -23,9 +24,10 @@ func hasCheck(diags []registry.ValidationDiag, check string) bool {
 // verdict and the construction verdict agree on one input.
 func configFromFields(fields registry.TrackerConfigFields) map[string]any {
 	config := map[string]any{
-		"endpoint": fields.Endpoint,
-		"api_key":  fields.APIKey,
-		"project":  fields.Project,
+		"endpoint":    fields.Endpoint,
+		"api_key":     fields.APIKey,
+		"project":     fields.Project,
+		"api_version": fields.APIVersion,
 	}
 	if fields.ActiveStates != nil {
 		config["active_states"] = fields.ActiveStates
@@ -88,6 +90,24 @@ func TestValidateConfig_ErrorRows(t *testing.T) {
 			name:              "colon-free api_key against a Jira Cloud host carrying a port",
 			fields:            registry.TrackerConfigFields{Endpoint: "https://x.atlassian.net:8443", APIKey: "notoken", Project: "PROJ"},
 			wantCheck:         "tracker.api_key.jira_cloud_format",
+			wantConstructKind: domain.ErrTrackerAuth,
+		},
+		{
+			name:              "api_version outside 2 and 3",
+			fields:            registry.TrackerConfigFields{Endpoint: "https://jira.internal.example.com", APIKey: "user@test.com:tok", Project: "PROJ", APIVersion: "4"},
+			wantCheck:         "tracker.api_version.invalid",
+			wantConstructKind: domain.ErrTrackerPayload,
+		},
+		{
+			name:              "api_version 2 against a Jira Cloud endpoint",
+			fields:            registry.TrackerConfigFields{Endpoint: "https://x.atlassian.net", APIKey: "user@test.com:tok", Project: "PROJ", APIVersion: "2"},
+			wantCheck:         "tracker.api_version.cloud_conflict",
+			wantConstructKind: domain.ErrTrackerPayload,
+		},
+		{
+			name:              "colon-free api_key against a non-Cloud endpoint at effective version 3",
+			fields:            registry.TrackerConfigFields{Endpoint: "https://jira.internal.example.com", APIKey: "notoken", Project: "PROJ"},
+			wantCheck:         "tracker.api_key.jira_v3_format",
 			wantConstructKind: domain.ErrTrackerAuth,
 		},
 	}
@@ -275,6 +295,10 @@ func TestValidateConfig_NeverPlacesAPIKeyValueInMessage(t *testing.T) {
 			name:   "jira_cloud_format diagnostic",
 			fields: registry.TrackerConfigFields{Endpoint: "https://x.atlassian.net", APIKey: "super-secret-token-2", Project: "PROJ"},
 		},
+		{
+			name:   "jira_v3_format diagnostic",
+			fields: registry.TrackerConfigFields{Endpoint: "https://jira.internal.example.com", APIKey: "super-secret-token-3", Project: "PROJ"},
+		},
 	}
 
 	for _, tt := range tests {
@@ -286,6 +310,217 @@ func TestValidateConfig_NeverPlacesAPIKeyValueInMessage(t *testing.T) {
 				if strings.Contains(d.Message, tt.fields.APIKey) {
 					t.Errorf("validateConfig(...) diag.Message = %q, must not contain the api_key value %q", d.Message, tt.fields.APIKey)
 				}
+			}
+		})
+	}
+}
+
+// checkNames extracts the Check field of each diagnostic in order, so a
+// test can assert the exact ordered diagnostic set rather than the
+// presence of one check.
+func checkNames(diags []registry.ValidationDiag) []string {
+	names := make([]string, len(diags))
+	for i, d := range diags {
+		names[i] = d.Check
+	}
+	return names
+}
+
+// TestValidateConfig_ExactDiagnosticSets covers the suppression rule
+// (R11.2), the api_key precedence rule (R11.3), and the three
+// verdict-preservation input classes R7 enumerates (R11.7). Each case
+// asserts the full ordered diagnostic set rather than the presence of
+// one check, since a check that silently stops firing would otherwise
+// pass a presence-only assertion.
+func TestValidateConfig_ExactDiagnosticSets(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		fields     registry.TrackerConfigFields
+		wantChecks []string
+	}{
+		{
+			name: "suppression: invalid api_version suppresses cloud_conflict but not jira_cloud_format",
+			fields: registry.TrackerConfigFields{
+				Endpoint:   "https://x.atlassian.net",
+				APIKey:     "notoken",
+				Project:    "PROJ",
+				APIVersion: "4",
+			},
+			wantChecks: []string{"tracker.api_version.invalid", "tracker.api_key.jira_cloud_format"},
+		},
+		{
+			name: "precedence: jira_cloud_format wins over jira_v3_format for a Cloud host",
+			fields: registry.TrackerConfigFields{
+				Endpoint: "https://x.atlassian.net",
+				APIKey:   "notoken",
+				Project:  "PROJ",
+			},
+			wantChecks: []string{"tracker.api_key.jira_cloud_format"},
+		},
+		{
+			name: "verdict preservation: scheme-less Cloud authority still reports endpoint.invalid and jira_cloud_format",
+			fields: registry.TrackerConfigFields{
+				Endpoint: "//x.atlassian.net",
+				APIKey:   "notoken",
+				Project:  "PROJ",
+			},
+			wantChecks: []string{"tracker.endpoint.invalid", "tracker.api_key.jira_cloud_format"},
+		},
+		{
+			name: "verdict preservation: endpoint that fails to parse reports only endpoint.invalid",
+			fields: registry.TrackerConfigFields{
+				Endpoint: "https://x.atlassian.net:notaport",
+				APIKey:   "notoken",
+				Project:  "PROJ",
+			},
+			wantChecks: []string{"tracker.endpoint.invalid"},
+		},
+		{
+			name: "verdict preservation: empty endpoint reports only endpoint.missing",
+			fields: registry.TrackerConfigFields{
+				Endpoint: "",
+				APIKey:   "notoken",
+				Project:  "PROJ",
+			},
+			wantChecks: []string{"tracker.endpoint.missing"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := validateConfig(tt.fields)
+
+			gotChecks := checkNames(got)
+			if len(gotChecks) != len(tt.wantChecks) {
+				t.Fatalf("validateConfig(%+v) checks = %v, want %v", tt.fields, gotChecks, tt.wantChecks)
+			}
+			for i, want := range tt.wantChecks {
+				if gotChecks[i] != want {
+					t.Errorf("validateConfig(%+v) checks = %v, want %v", tt.fields, gotChecks, tt.wantChecks)
+					break
+				}
+			}
+			for _, d := range got {
+				if d.Severity != string(registry.SeverityError) {
+					t.Errorf("validateConfig(%+v) diag %q Severity = %q, want %q", tt.fields, d.Check, d.Severity, registry.SeverityError)
+				}
+			}
+		})
+	}
+}
+
+// TestValidateConfig_CleanAPIVersionConfigsProduceNoDiagnostics covers
+// R11.4: three configurations that construct successfully today and
+// must acquire no diagnostic from the widened hook.
+func TestValidateConfig_CleanAPIVersionConfigsProduceNoDiagnostics(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		fields registry.TrackerConfigFields
+	}{
+		{
+			name: "api_version 2 with a non-Cloud endpoint and a colon-free key",
+			fields: registry.TrackerConfigFields{
+				Endpoint:   "https://jira.internal.example.com",
+				APIKey:     "notoken",
+				Project:    "PROJ",
+				APIVersion: "2",
+			},
+		},
+		{
+			name: "whitespace-padded api_version 2 with the same non-Cloud endpoint and key",
+			fields: registry.TrackerConfigFields{
+				Endpoint:   "https://jira.internal.example.com",
+				APIKey:     "notoken",
+				Project:    "PROJ",
+				APIVersion: " 2 ",
+			},
+		},
+		{
+			name: "absent api_version with a Cloud endpoint and an email:token key",
+			fields: registry.TrackerConfigFields{
+				Endpoint: "https://x.atlassian.net",
+				APIKey:   "user@test.com:tok",
+				Project:  "PROJ",
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := validateConfig(tt.fields)
+			if len(got) != 0 {
+				t.Errorf("validateConfig(%+v) = %v, want empty", tt.fields, got)
+			}
+
+			if _, err := NewJiraAdapter(configFromFields(tt.fields)); err != nil {
+				t.Errorf("NewJiraAdapter(%+v) = %v, want nil", tt.fields, err)
+			}
+		})
+	}
+}
+
+// TestValidateConfig_APIVersionMessageParity covers R11.5: the
+// tracker.api_version.invalid and tracker.api_version.cloud_conflict
+// messages must be the exact Message NewJiraAdapter's own error owner
+// produces for the same input, never a hook-authored restatement.
+func TestValidateConfig_APIVersionMessageParity(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name      string
+		fields    registry.TrackerConfigFields
+		wantCheck string
+	}{
+		{
+			name: "tracker.api_version.invalid",
+			fields: registry.TrackerConfigFields{
+				Endpoint:   "https://jira.internal.example.com",
+				APIKey:     "user@test.com:tok",
+				Project:    "PROJ",
+				APIVersion: "4",
+			},
+			wantCheck: "tracker.api_version.invalid",
+		},
+		{
+			name: "tracker.api_version.cloud_conflict",
+			fields: registry.TrackerConfigFields{
+				Endpoint:   "https://x.atlassian.net",
+				APIKey:     "user@test.com:tok",
+				Project:    "PROJ",
+				APIVersion: "2",
+			},
+			wantCheck: "tracker.api_version.cloud_conflict",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := validateConfig(tt.fields)
+			if len(got) != 1 || got[0].Check != tt.wantCheck {
+				t.Fatalf("validateConfig(%+v) checks = %v, want exactly [%q]", tt.fields, checkNames(got), tt.wantCheck)
+			}
+
+			_, err := NewJiraAdapter(configFromFields(tt.fields))
+			if err == nil {
+				t.Fatalf("NewJiraAdapter(%+v) = nil error, want a rejection matching the offline verdict", tt.fields)
+			}
+			var trackerErr *domain.TrackerError
+			if !errors.As(err, &trackerErr) {
+				t.Fatalf("NewJiraAdapter(%+v) error type = %T, want *domain.TrackerError", tt.fields, err)
+			}
+
+			if got[0].Message != trackerErr.Message {
+				t.Errorf("validateConfig(%+v) diag.Message = %q, want NewJiraAdapter error Message %q", tt.fields, got[0].Message, trackerErr.Message)
 			}
 		})
 	}
