@@ -54,31 +54,39 @@ type giteaErrorBody struct {
 	Message string `json:"message"`
 }
 
+// giteaLabelNames extracts the label names from a Gitea label list, in the
+// order the API returned them.
+func giteaLabelNames(labels []giteaLabel) []string {
+	names := make([]string, 0, len(labels))
+	for _, l := range labels {
+		names = append(names, l.Name)
+	}
+	return names
+}
+
 // normalizeIssue maps a Gitea API issue response to a [domain.Issue]. ID and
 // Identifier are both set to the repo-scoped index; the global id is never used.
 // Parent and Comments remain nil; BlockedBy is a non-nil empty slice.
 //
 // DisplayID is left empty; callers apply [setDisplayID] after normalization.
-// The state lists and log are threaded to [deriveState].
+// The state lists and log are threaded to [issuekit.DeriveLabelState].
 func normalizeIssue(gi giteaIssue, activeStates, terminalStates []string, handoffState string, log *slog.Logger) domain.Issue {
 	num := strconv.Itoa(gi.Number)
-
-	labelNames := make([]string, 0, len(gi.Labels))
-	for _, l := range gi.Labels {
-		labelNames = append(labelNames, l.Name)
-	}
+	labelNames := giteaLabelNames(gi.Labels)
 
 	assignee := ""
 	if len(gi.Assignees) > 0 {
 		assignee = gi.Assignees[0].Login
 	}
 
+	states := issuekit.LabelStates{Active: activeStates, Terminal: terminalStates, Handoff: handoffState}
+
 	return domain.Issue{
 		ID:          num,
 		Identifier:  num,
 		Title:       gi.Title,
 		Description: gi.Body,
-		State:       deriveState(gi.Labels, gi.State, activeStates, terminalStates, handoffState, num, log),
+		State:       issuekit.DeriveLabelState(labelNames, gi.State, "open", "closed", states, num, log),
 		BranchName:  gi.Ref,
 		URL:         gi.HTMLURL,
 		Labels:      issuekit.NormalizeLabels(labelNames),
@@ -118,13 +126,15 @@ func normalizeComments(raw []giteaComment) []domain.Comment {
 // values. Returns a non-nil empty slice when input is empty. Each blocker's
 // state is derived from its labels and native state.
 func normalizeBlockers(blockers []giteaIssue, activeStates, terminalStates []string, handoffState string, log *slog.Logger) []domain.BlockerRef {
+	states := issuekit.LabelStates{Active: activeStates, Terminal: terminalStates, Handoff: handoffState}
+
 	refs := make([]domain.BlockerRef, 0, len(blockers))
 	for _, b := range blockers {
 		num := strconv.Itoa(b.Number)
 		refs = append(refs, domain.BlockerRef{
 			ID:         num,
 			Identifier: num,
-			State:      deriveState(b.Labels, b.State, activeStates, terminalStates, handoffState, num, log),
+			State:      issuekit.DeriveLabelState(giteaLabelNames(b.Labels), b.State, "open", "closed", states, num, log),
 		})
 	}
 	return refs

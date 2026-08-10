@@ -18,6 +18,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/sortie-ai/sortie/internal/adaptertest"
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/registry"
 )
@@ -49,13 +50,7 @@ func assertTrackerErrorKind(t *testing.T, err error, want domain.TrackerErrorKin
 	if err == nil {
 		t.Fatalf("expected error with kind %q, got nil", want)
 	}
-	var te *domain.TrackerError
-	if !errors.As(err, &te) {
-		t.Fatalf("error type = %T, want *domain.TrackerError", err)
-	}
-	if te.Kind != want {
-		t.Errorf("TrackerError.Kind = %q, want %q", te.Kind, want)
-	}
+	adaptertest.AssertTrackerErrorKind(t, err, want)
 }
 
 // decodeRequestBody decodes r's JSON body into v, recording a test failure
@@ -661,6 +656,54 @@ func TestFetchCandidateIssues(t *testing.T) {
 		}
 	})
 
+	t.Run("multi-label WARN carries issue_identifier, not issue_index", func(t *testing.T) {
+		t.Parallel()
+
+		// #9 carries both "backlog" and "in-progress", two configured
+		// active-state labels.
+		const twoLabels = `[{"id":9009,"number":9,"title":"Two state labels","body":null,"state":"open","ref":"",
+			"html_url":"https://git.example.com/acme/widgets/issues/9",
+			"labels":[{"id":1,"name":"backlog","color":"cccccc"},{"id":2,"name":"in-progress","color":"cccccc"}],
+			"assignees":[],"pull_request":null,"created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z"}]`
+
+		mux := newPreflightMux(t)
+		mux.HandleFunc("GET /api/v1/repos/"+testOwner+"/"+testRepo+"/issues", func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(twoLabels)) //nolint:errcheck // test helper
+		})
+		a := mustAdapter(t, mux)
+
+		var buf bytes.Buffer
+		a.log = slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+		if _, err := a.FetchCandidateIssues(context.Background()); err != nil {
+			t.Fatalf("FetchCandidateIssues: %v", err)
+		}
+
+		var warnLine string
+		for line := range strings.SplitSeq(buf.String(), "\n") {
+			if strings.Contains(line, "kept first of multiple matching state labels") {
+				warnLine = line
+				break
+			}
+		}
+		if warnLine == "" {
+			t.Fatalf("multi-match WARN not found in captured log: %s", buf.String())
+		}
+		if !strings.Contains(warnLine, "issue_identifier=9") {
+			t.Errorf("multi-match WARN missing issue_identifier=9: %q", warnLine)
+		}
+		if !strings.Contains(warnLine, "backlog") || !strings.Contains(warnLine, "in-progress") {
+			t.Errorf("multi-match WARN does not name both matching labels: %q", warnLine)
+		}
+		if strings.Contains(warnLine, "issue_index=") {
+			t.Errorf("multi-match WARN record carries issue_index: %q", warnLine)
+		}
+		if strings.Contains(warnLine, "iid=") {
+			t.Errorf("multi-match WARN record carries iid: %q", warnLine)
+		}
+	})
+
 	t.Run("empty response returns non-nil empty slice", func(t *testing.T) {
 		t.Parallel()
 
@@ -851,7 +894,14 @@ func TestFetchIssuesByStates(t *testing.T) {
 	t.Run("empty states short-circuits with no API call", func(t *testing.T) {
 		t.Parallel()
 
-		a := mustAdapter(t, newPreflightMux(t)) // no issues route registered; any call fails the test
+		mux := newPreflightMux(t)
+		var calls int
+		mux.HandleFunc("GET /api/v1/repos/"+testOwner+"/"+testRepo+"/issues", func(w http.ResponseWriter, r *http.Request) {
+			calls++
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte("[]")) //nolint:errcheck // test helper
+		})
+		a := mustAdapter(t, mux)
 
 		issues, err := a.FetchIssuesByStates(context.Background(), []string{})
 		if err != nil {
@@ -863,6 +913,7 @@ func TestFetchIssuesByStates(t *testing.T) {
 		if len(issues) != 0 {
 			t.Errorf("len = %d, want 0", len(issues))
 		}
+		adaptertest.AssertNoRequestOnEmptyInput(t, calls, "FetchIssuesByStates")
 	})
 
 	t.Run("requesting only an active state queries the open listing only", func(t *testing.T) {
@@ -1244,6 +1295,8 @@ func TestFetchIssueByID(t *testing.T) {
 		if got := commentCalls.Load(); got != 1 {
 			t.Errorf("comments request count = %d, want 1 (unpaginated, single request)", got)
 		}
+		adaptertest.AssertIssueNormalized(t, issue)
+		adaptertest.AssertCommentsAscending(t, issue.Comments)
 	})
 
 	t.Run("not found", func(t *testing.T) {
@@ -1350,12 +1403,7 @@ func TestFetchIssueComments(t *testing.T) {
 		if err != nil {
 			t.Fatalf("FetchIssueComments: %v", err)
 		}
-		if comments == nil {
-			t.Fatal("comments is nil, want non-nil empty slice")
-		}
-		if len(comments) != 0 {
-			t.Errorf("len = %d, want 0", len(comments))
-		}
+		adaptertest.AssertEmptyNonNil(t, comments, "FetchIssueComments")
 	})
 
 	t.Run("not found", func(t *testing.T) {
@@ -1381,7 +1429,13 @@ func TestFetchIssueStatesByIDs(t *testing.T) {
 	t.Run("empty input returns empty map with no request", func(t *testing.T) {
 		t.Parallel()
 
-		a := mustAdapter(t, newPreflightMux(t))
+		mux := newPreflightMux(t)
+		var calls int
+		mux.HandleFunc("GET /api/v1/repos/"+testOwner+"/"+testRepo+"/issues/{index}", func(w http.ResponseWriter, r *http.Request) {
+			calls++
+			w.WriteHeader(http.StatusNotFound)
+		})
+		a := mustAdapter(t, mux)
 
 		states, err := a.FetchIssueStatesByIDs(context.Background(), []string{})
 		if err != nil {
@@ -1393,6 +1447,7 @@ func TestFetchIssueStatesByIDs(t *testing.T) {
 		if len(states) != 0 {
 			t.Errorf("len = %d, want 0", len(states))
 		}
+		adaptertest.AssertNoRequestOnEmptyInput(t, calls, "FetchIssueStatesByIDs")
 	})
 
 	t.Run("404 and pull-request entries are omitted, found entries keep the derived state", func(t *testing.T) {
@@ -1430,6 +1485,7 @@ func TestFetchIssueStatesByIDs(t *testing.T) {
 		if len(states) != 1 {
 			t.Errorf("len = %d, want 1", len(states))
 		}
+		adaptertest.AssertStateMapOmitsMissing(t, []string{"1", "6", "999"}, states)
 	})
 
 	t.Run("context cancellation between requests returns ctx.Err", func(t *testing.T) {
@@ -1873,6 +1929,12 @@ func TestAddLabel(t *testing.T) {
 		if want := []int64{701}; !slices.Equal(attachBody.Labels, want) {
 			t.Errorf("attach body labels = %v, want %v (numeric created id, not the name)", attachBody.Labels, want)
 		}
+
+		// The attach route's request body carries only the new label's id,
+		// so it adds without touching labels already on the issue.
+		before := []string{"existing"}
+		after := append(slices.Clone(before), "needs-human")
+		adaptertest.AssertLabelAddIsAdditive(t, before, after, "needs-human")
 	})
 
 	t.Run("resolves a label defined only on page two of the catalog with no duplicate create", func(t *testing.T) {

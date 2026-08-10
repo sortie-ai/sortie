@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/sortie-ai/sortie/internal/domain"
+	"github.com/sortie-ai/sortie/internal/scm/scmcore"
 )
 
 // giteaTimelineEntry is one entry from the issue timeline route. Only entries
@@ -24,14 +25,6 @@ type giteaTimelineEntry struct {
 	CreatedAt string `json:"created_at"`
 }
 
-// sortableEventID formats a numeric timeline id as a fixed-width, zero-padded
-// decimal so lexical string comparison matches numeric order. The width covers
-// the maximum int64, keeping (At, ID) string ordering consistent with journal
-// order for entries that share a timestamp.
-func sortableEventID(id int64) string {
-	return fmt.Sprintf("%019d", id)
-}
-
 // ListLabelEvents returns the label add and remove events from the given PR's
 // timeline, normalized to [domain.LabelEvent] and oldest-first.
 //
@@ -44,7 +37,7 @@ func (a *GiteaSCMAdapter) ListLabelEvents(ctx context.Context, prNumber int, own
 	path := fmt.Sprintf("/repos/%s/%s/issues/%d/timeline",
 		url.PathEscape(owner), url.PathEscape(repo), prNumber)
 
-	entries, err := paginatePages(ctx, a.client, path, func(body []byte) ([]giteaTimelineEntry, error) {
+	entries, err := paginateSCM(ctx, a.client, path, func(body []byte) ([]giteaTimelineEntry, error) {
 		var batch []giteaTimelineEntry
 		if jsonErr := json.Unmarshal(body, &batch); jsonErr != nil {
 			return nil, &domain.SCMError{
@@ -69,7 +62,7 @@ func (a *GiteaSCMAdapter) ListLabelEvents(ctx context.Context, prNumber int, own
 		}
 
 		events = append(events, domain.LabelEvent{
-			ID:    sortableEventID(e.ID),
+			ID:    scmcore.SortableEventID(e.ID),
 			Label: strings.ToLower(e.Label.Name),
 			Actor: e.User.Login,
 			Added: e.Body == "1",
@@ -83,15 +76,15 @@ func (a *GiteaSCMAdapter) ListLabelEvents(ctx context.Context, prNumber int, own
 // fetchIssueLabels returns the labels currently attached to the given pull
 // request via GET /repos/{owner}/{repo}/issues/{prNumber}/labels.
 //
-// The read is paginated through [paginatePages]; a transport or HTTP failure is
-// mapped through [giteaToSCMError] and a decode failure to a [*domain.SCMError]
-// of kind [domain.ErrSCMPayload]. The returned slice is non-nil even when the PR
-// carries no labels.
+// The read is paginated through [paginateSCM]; a transport or HTTP failure is
+// mapped through [scmcore.ToSCMError] and a decode failure to a
+// [*domain.SCMError] of kind [domain.ErrSCMPayload]. The returned slice is
+// non-nil even when the PR carries no labels.
 func (a *GiteaSCMAdapter) fetchIssueLabels(ctx context.Context, prNumber int, owner, repo string) ([]giteaLabel, error) {
 	path := fmt.Sprintf("/repos/%s/%s/issues/%d/labels",
 		url.PathEscape(owner), url.PathEscape(repo), prNumber)
 
-	return paginatePages(ctx, a.client, path, func(body []byte) ([]giteaLabel, error) {
+	return paginateSCM(ctx, a.client, path, func(body []byte) ([]giteaLabel, error) {
 		var batch []giteaLabel
 		if jsonErr := json.Unmarshal(body, &batch); jsonErr != nil {
 			return nil, &domain.SCMError{

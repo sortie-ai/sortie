@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -14,6 +16,7 @@ import (
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/httpkit"
 	"github.com/sortie-ai/sortie/internal/registry"
+	"github.com/sortie-ai/sortie/internal/scm/scmcore"
 )
 
 func init() {
@@ -130,7 +133,7 @@ func (a *GiteaSCMAdapter) MergePR(ctx context.Context, prNumber int, owner, repo
 	path := fmt.Sprintf("/repos/%s/%s/pulls/%d/merge",
 		url.PathEscape(owner), url.PathEscape(repo), prNumber)
 	if _, err := a.client.Send(ctx, http.MethodPost, path, bytes.NewReader(payload)); err != nil {
-		scm := giteaToSCMError(err)
+		scm := scmcore.AsMergeConflict(scmcore.ToSCMError(err))
 		switch scm.Kind {
 		case domain.ErrSCMConflict:
 			return domain.MergeResult{}, a.resolveMergeConflict(ctx, prNumber, owner, repo, scm)
@@ -156,7 +159,7 @@ func (a *GiteaSCMAdapter) DeleteBranch(ctx context.Context, owner, repo, branch 
 	path := fmt.Sprintf("/repos/%s/%s/branches/%s",
 		url.PathEscape(owner), url.PathEscape(repo), url.PathEscape(branch))
 	if err := a.client.SendNoBody(ctx, http.MethodDelete, path); err != nil {
-		scm := giteaToSCMError(err)
+		scm := scmcore.ToSCMError(err)
 		if scm.Kind == domain.ErrSCMAuth {
 			return enrichScopeError(scm)
 		}
@@ -189,7 +192,7 @@ func (a *GiteaSCMAdapter) RemoveLabel(ctx context.Context, prNumber int, owner, 
 	path := fmt.Sprintf("/repos/%s/%s/issues/%d/labels/%s",
 		url.PathEscape(owner), url.PathEscape(repo), prNumber, strconv.FormatInt(id, 10))
 	if err := a.client.SendNoBody(ctx, http.MethodDelete, path); err != nil {
-		scm := giteaToSCMError(err)
+		scm := scmcore.ToSCMError(err)
 		if scm.Kind == domain.ErrSCMNotFound {
 			return nil
 		}
@@ -210,4 +213,36 @@ func parseUTC(s string) time.Time {
 		return time.Time{}
 	}
 	return t.UTC()
+}
+
+// paginateSCM walks a page-number-paginated Gitea route through the shared
+// paginator, using the same page and limit parameters and page ceiling every
+// SCM-boundary reader shares, and converts the walk's result to the SCM
+// boundary.
+//
+// decode returning a typed [*domain.SCMError] passes through unchanged; any
+// other error the walk returns, a transport failure or a canceled context,
+// converts through [scmcore.ToSCMError].
+func paginateSCM[T any](ctx context.Context, client *httpkit.Client, path string, decode httpkit.LinkPageDecoder[T]) ([]T, error) {
+	paginator := httpkit.NewPagePaginator(client, path, nil, decode, httpkit.PageOptions{
+		PageParam: "page",
+		SizeParam: "limit",
+		PageSize:  50,
+		MaxPages:  scmMaxPages,
+		OnLimitReached: func(limit int) {
+			slog.WarnContext(ctx, "response truncated at page limit",
+				slog.String("path", path),
+				slog.Int("max_pages", limit))
+		},
+	})
+
+	items, err := paginator.All(ctx)
+	if err != nil {
+		var scmErr *domain.SCMError
+		if errors.As(err, &scmErr) {
+			return nil, scmErr
+		}
+		return nil, scmcore.ToSCMError(err)
+	}
+	return items, nil
 }

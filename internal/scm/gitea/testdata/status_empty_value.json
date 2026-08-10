@@ -1,0 +1,8 @@
+{
+  "state": "",
+  "sha": "sha-clean-001",
+  "total_count": 1,
+  "statuses": [
+    { "id": 10, "status": "", "context": "ci/external", "description": "Empty status value" }
+  ]
+}

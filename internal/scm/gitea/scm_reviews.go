@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/sortie-ai/sortie/internal/domain"
+	"github.com/sortie-ai/sortie/internal/scm/scmcore"
 )
 
 // giteaReview is one entry from the pull request reviews route. Dismissed marks
@@ -60,10 +61,10 @@ type giteaReviewComment struct {
 func (a *GiteaSCMAdapter) FetchPendingReviews(ctx context.Context, prNumber int, owner, repo string) ([]domain.ReviewComment, error) {
 	return a.collectReviewComments(ctx, prNumber, owner, repo,
 		func(r giteaReview) bool {
-			return r.State == "REQUEST_CHANGES" && !isBotAuthor(r.User.Login, nil)
+			return r.State == "REQUEST_CHANGES" && !scmcore.IsBotAuthor(r.User.Login, false, nil)
 		},
 		func(c giteaReviewComment) bool {
-			return !isBotAuthor(c.User.Login, nil)
+			return !scmcore.IsBotAuthor(c.User.Login, false, nil)
 		})
 }
 
@@ -81,10 +82,10 @@ func (a *GiteaSCMAdapter) FetchPendingReviews(ctx context.Context, prNumber int,
 func (a *GiteaSCMAdapter) FetchBotReviewComments(ctx context.Context, prNumber int, owner, repo string, botUsernames []string) ([]domain.ReviewComment, error) {
 	return a.collectReviewComments(ctx, prNumber, owner, repo,
 		func(r giteaReview) bool {
-			return isBotAuthor(r.User.Login, botUsernames)
+			return scmcore.IsBotAuthor(r.User.Login, false, botUsernames)
 		},
 		func(c giteaReviewComment) bool {
-			return isBotAuthor(c.User.Login, botUsernames)
+			return scmcore.IsBotAuthor(c.User.Login, false, botUsernames)
 		})
 }
 
@@ -193,15 +194,6 @@ func normalizeReviewComment(c giteaReviewComment) domain.ReviewComment {
 	}
 }
 
-// isBotAuthor reports whether login matches an entry in botUsernames under a
-// case-insensitive comparison. Gitea carries no platform bot marker, so a nil or
-// empty allowlist selects nothing.
-func isBotAuthor(login string, botUsernames []string) bool {
-	return slices.ContainsFunc(botUsernames, func(name string) bool {
-		return strings.EqualFold(login, name)
-	})
-}
-
 // foldReviewDecision aggregates the per-review states with the PR's
 // requested-reviewers signal into one [domain.ReviewDecision].
 //
@@ -262,7 +254,7 @@ func (a *GiteaSCMAdapter) fetchAllReviews(ctx context.Context, prNumber int, own
 	path := fmt.Sprintf("/repos/%s/%s/pulls/%d/reviews",
 		url.PathEscape(owner), url.PathEscape(repo), prNumber)
 
-	return paginatePages(ctx, a.client, path, func(body []byte) ([]giteaReview, error) {
+	return paginateSCM(ctx, a.client, path, func(body []byte) ([]giteaReview, error) {
 		var batch []giteaReview
 		if err := json.Unmarshal(body, &batch); err != nil {
 			return nil, &domain.SCMError{
@@ -282,7 +274,7 @@ func (a *GiteaSCMAdapter) fetchReviewComments(ctx context.Context, prNumber int,
 	path := fmt.Sprintf("/repos/%s/%s/pulls/%d/reviews/%d/comments",
 		url.PathEscape(owner), url.PathEscape(repo), prNumber, reviewID)
 
-	return paginatePages(ctx, a.client, path, func(body []byte) ([]giteaReviewComment, error) {
+	return paginateSCM(ctx, a.client, path, func(body []byte) ([]giteaReviewComment, error) {
 		var batch []giteaReviewComment
 		if err := json.Unmarshal(body, &batch); err != nil {
 			return nil, &domain.SCMError{
