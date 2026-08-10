@@ -636,8 +636,7 @@ The adapter maps `mergeable_state` to `domain.MergeabilityState`:
 | anything else (including the empty string) | `MergeabilityUnknown` |
 
 The returned `PRMergeStatus` populates `Draft`, `Mergeability`, `HeadSHA`, `BranchName`,
-`BaseBranch` (from `base.ref`), and `Merged` (from `merged`). `MergeCommitSHA` is never
-populated under the pinned API version.
+`BaseBranch` (from `base.ref`), and `Merged` (from `merged`) from this REST read, unchanged.
 `ReviewDecision` and `CIConclusion` are left unset: callers obtain those values from the
 dedicated reads (see §1 and §2 above). GitHub computes `mergeable_state` asynchronously after
 a push, so callers treat `MergeabilityUnknown` as a deferral condition per
@@ -645,8 +644,36 @@ a push, so callers treat `MergeabilityUnknown` as a deferral condition per
 
 API version `2026-03-10` removes `merge_commit_sha` from pull request payloads across every
 endpoint that returns a pull request object, the same version that removed `Assignee`. Because
-the adapter pins `2026-03-10` on every request, the response never carries `merge_commit_sha`,
-and `PRMergeStatus.MergeCommitSHA` is never populated by this read.
+the adapter pins `2026-03-10` on every request, the response never carries `merge_commit_sha`.
+
+`MergeCommitSHA` is instead sourced from a second, gated GraphQL call. When the REST read
+reports `merged: true`, the adapter issues one `POST /graphql` carrying a pinned query:
+
+```graphql
+query($owner: String!, $repo: String!, $number: Int!) {
+  repository(owner: $owner, name: $repo) {
+    pullRequest(number: $number) {
+      mergeCommit {
+        oid
+      }
+    }
+  }
+}
+```
+
+The query requests only `mergeCommit { oid }`, never `potentialMergeCommit`, so GitHub's
+test-merge commit cannot enter `MergeCommitSHA` through this path. The call is gated on
+`merged: true`: an open, draft, or closed-unmerged pull request costs no GraphQL request and
+`MergeCommitSHA` stays the empty string. A merged pull request whose `mergeCommit` field is
+null (no commit reported) also yields `MergeCommitSHA` as the empty string, with no error.
+A GraphQL failure on this call fails the whole `GetMergeability` read.
+
+The added cost is one GraphQL POST per merged pull request per `GetMergeability` call, measured
+at 1 point against the GraphQL rate limit, which is a budget separate from the REST rate limit
+consumed by the pull request read above. A deployment that configures `reactions.merge_completion`
+without also configuring `auto_merge` now needs a token that can read the GitHub GraphQL API,
+a requirement `GetReviewDecision` already imposes but that `GetMergeability` did not previously
+share.
 
 Idempotent and read-only.
 
