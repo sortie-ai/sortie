@@ -29,9 +29,10 @@ import (
 
 func init() {
 	registry.Trackers.RegisterWithMeta("jira", NewJiraAdapter, registry.TrackerMeta{
-		RequiresProject:     true,
-		RequiresAPIKey:      true,
-		DefaultActiveStates: defaultActiveStates,
+		RequiresProject:       true,
+		RequiresAPIKey:        true,
+		DefaultActiveStates:   defaultActiveStates,
+		ValidateTrackerConfig: validateConfig,
 	})
 }
 
@@ -548,37 +549,27 @@ func (a *JiraAdapter) SetMetrics(m domain.Metrics) {
 // Returns an error if the request fails; the orchestrator treats AddLabel
 // errors as non-fatal.
 func (a *JiraAdapter) AddLabel(ctx context.Context, issueID string, label string) error {
-	path := a.basePath + "/issue/" + url.PathEscape(issueID)
+	return trackermetrics.Track(a.metrics, "add_label", func() error {
+		path := a.basePath + "/issue/" + url.PathEscape(issueID)
 
-	payload, err := json.Marshal(map[string]any{
-		"update": map[string]any{
-			"labels": []map[string]any{
-				{"add": label},
+		payload, err := json.Marshal(map[string]any{
+			"update": map[string]any{
+				"labels": []map[string]any{
+					{"add": label},
+				},
 			},
-		},
-	})
-	if err != nil {
-		a.incTrackerRequest("add_label", "error")
-		return &domain.TrackerError{
-			Kind:    domain.ErrTrackerPayload,
-			Message: "failed to marshal label payload",
-			Err:     err,
+		})
+		if err != nil {
+			return &domain.TrackerError{
+				Kind:    domain.ErrTrackerPayload,
+				Message: "failed to marshal label payload",
+				Err:     err,
+			}
 		}
-	}
 
-	_, err = a.client.Send(ctx, "PUT", path, bytes.NewReader(payload))
-	if err != nil {
-		a.incTrackerRequest("add_label", "error")
+		_, err = a.client.Send(ctx, "PUT", path, bytes.NewReader(payload))
 		return err
-	}
-	a.incTrackerRequest("add_label", "success")
-	return nil
-}
-
-func (a *JiraAdapter) incTrackerRequest(operation, result string) {
-	if a.metrics != nil {
-		a.metrics.IncTrackerRequests(operation, result)
-	}
+	})
 }
 
 // paginatedSearch executes a paginated JQL search and returns all
