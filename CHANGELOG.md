@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Install script (macOS and Linux): command-line flags next to the
+  existing environment variables - `--version`, `--install-dir`,
+  `--no-verify`, `--binary`, and `--help` - passed through a pipe with
+  `sh -s --`. A flag overrides the matching variable, and an
+  unrecognized flag now aborts the install instead of being ignored.
+  `--binary` installs a binary already on disk instead of downloading
+  one. Re-running the script no longer re-downloads a release that is
+  already installed in the target directory. On a GitHub Actions runner
+  the install directory is appended to `$GITHUB_PATH`, so later steps
+  find `sortie` without extra wiring. Resolving the latest release no
+  longer consumes the unauthenticated GitHub API quota, which is what
+  made unpinned installs fail on shared CI runners.
+
 ### Fixed
 
 - Follow-up work already queued for an issue is no longer discarded
