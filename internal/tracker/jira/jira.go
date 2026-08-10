@@ -238,6 +238,37 @@ func authFormatError(apiVersion string) error {
 	}
 }
 
+// jiraHost parses a trailing-slash-trimmed endpoint once and returns
+// both facts its callers need. host is the lowercased URL host, empty
+// when the value does not parse as a URL at all. ok reports whether the
+// value parses as a URL carrying both a scheme and a host, which is the
+// rule the endpoint check applies. jiraHost performs no logging.
+func jiraHost(endpoint string) (host string, ok bool) {
+	parsed, err := url.Parse(endpoint)
+	if err != nil {
+		return "", false
+	}
+	host = strings.ToLower(parsed.Hostname())
+	ok = parsed.Scheme != "" && parsed.Host != ""
+	return host, ok
+}
+
+// isCloudHost reports whether a lowercased host is an Atlassian Cloud
+// host. An empty host is not a Cloud host.
+func isCloudHost(host string) bool {
+	return host != "" && strings.HasSuffix(host, ".atlassian.net")
+}
+
+// cloudVersionConflict returns the error a Cloud host configured with
+// api_version "2" produces. It owns that message text for both the
+// constructor and the validate hook.
+func cloudVersionConflict(host string) *domain.TrackerError {
+	return &domain.TrackerError{
+		Kind:    domain.ErrTrackerPayload,
+		Message: fmt.Sprintf("tracker.api_version 2 targets Jira Server / Data Center; endpoint %s is Jira Cloud, which requires api_version 3", host),
+	}
+}
+
 // checkHostVersion runs a static consistency check between the endpoint
 // host and the API version. It also rejects an endpoint that is not a URL
 // with a scheme and host. It performs no network I/O. A Cloud host
@@ -249,21 +280,17 @@ func authFormatError(apiVersion string) error {
 // Center instance, so it is not warned. All other combinations return
 // nil.
 func checkHostVersion(endpoint, apiVersion string) error {
-	parsed, err := url.Parse(endpoint)
-	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+	host, ok := jiraHost(endpoint)
+	if !ok {
 		return &domain.TrackerError{
 			Kind:    domain.ErrTrackerPayload,
 			Message: fmt.Sprintf("endpoint %q must be a URL with a scheme and host", endpoint),
 		}
 	}
-	host := strings.ToLower(parsed.Hostname())
-	isCloud := strings.HasSuffix(host, ".atlassian.net")
+	isCloud := isCloudHost(host)
 
 	if isCloud && apiVersion == "2" {
-		return &domain.TrackerError{
-			Kind:    domain.ErrTrackerPayload,
-			Message: fmt.Sprintf("tracker.api_version 2 targets Jira Server / Data Center; endpoint %s is Jira Cloud, which requires api_version 3", host),
-		}
+		return cloudVersionConflict(host)
 	}
 
 	if !isCloud && apiVersion == "3" && !isLocalEndpoint(host) {

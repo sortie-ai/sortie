@@ -36,6 +36,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   diagnostics. The empty-element and untrimmed-element diagnostic
   wording is now identical across every tracker adapter that reports it.
 
+- `sortie validate` now checks the Jira API version, catching three
+  `tracker.kind: jira` misconfigurations that used to pass validation
+  and then abort the run at startup: a `tracker.api_version` other than
+  `"2"` or `"3"`; `"2"` against an Atlassian Cloud endpoint, which only
+  serves version 3; and a colon-free `tracker.api_key` against a
+  self-hosted endpoint whose effective version is `"3"` - the default
+  when `tracker.api_version` is unset - where a personal access token
+  needs either an `email:token` key or `tracker.api_version: "2"`. All
+  three are errors that block dispatch.
+  ([#785](https://github.com/sortie-ai/sortie/issues/785))
+
 ### Fixed
 
 - Follow-up work already queued for an issue is no longer discarded
