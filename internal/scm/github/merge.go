@@ -60,7 +60,6 @@ type pullRequestResponse struct {
 	Draft          bool   `json:"draft"`
 	MergeableState string `json:"mergeable_state"`
 	Merged         bool   `json:"merged"`
-	MergeCommitSHA string `json:"merge_commit_sha"`
 	Head           struct {
 		SHA string `json:"sha"`
 		Ref string `json:"ref"`
@@ -239,12 +238,19 @@ func (a *GitHubSCMAdapter) GetMergeability(ctx context.Context, prNumber int, ow
 
 	mergeability := mapMergeableState(pr.MergeableState)
 
-	// GitHub reports a test-merge commit in merge_commit_sha for an open
-	// PR, so the value is gated on Merged to avoid asserting a merge
-	// that has not happened.
+	// The REST pull request object no longer carries merge_commit_sha under
+	// the pinned API version, so the identifier is sourced from a second,
+	// GraphQL read. The Merged gate that used to guard against reading
+	// GitHub's test-merge value out of merge_commit_sha is retained here: it
+	// now also bounds the extra request to merged pull requests only. The
+	// test-merge commit itself is structurally unreachable through this
+	// path, because fetchMergeCommitOID's query requests only mergeCommit.
 	var mergeCommitSHA string
 	if pr.Merged {
-		mergeCommitSHA = pr.MergeCommitSHA
+		mergeCommitSHA, err = a.fetchMergeCommitOID(ctx, prNumber, owner, repo)
+		if err != nil {
+			return domain.PRMergeStatus{}, err
+		}
 	}
 
 	return domain.PRMergeStatus{
@@ -256,6 +262,37 @@ func (a *GitHubSCMAdapter) GetMergeability(ctx context.Context, prNumber int, ow
 		Merged:         pr.Merged,
 		MergeCommitSHA: mergeCommitSHA,
 	}, nil
+}
+
+// fetchMergeCommitOID returns the merge commit identifier for a merged
+// pull request, read from GraphQL PullRequest.mergeCommit.oid. This
+// substitutes for the merge_commit_sha REST property, which the pinned
+// API version removes from every pull request payload. The empty string
+// is returned, with a nil error, when the provider reports no merge
+// commit for the pull request.
+func (a *GitHubSCMAdapter) fetchMergeCommitOID(ctx context.Context, prNumber int, owner, repo string) (string, error) {
+	variables := map[string]any{
+		"owner":  owner,
+		"repo":   repo,
+		"number": prNumber,
+	}
+	envelope := graphqlResponseEnvelope[mergeCommitResponseData]{}
+	if err := a.postGraphQL(ctx, mergeCommitQuery, variables, &envelope); err != nil {
+		return "", err
+	}
+
+	pr := envelope.Data.Repository.PullRequest
+	if pr == nil {
+		return "", &domain.SCMError{
+			Kind:    domain.ErrSCMPayload,
+			Message: "graphql response missing pullRequest payload",
+		}
+	}
+	if pr.MergeCommit == nil {
+		return "", nil
+	}
+
+	return pr.MergeCommit.OID, nil
 }
 
 // mapMergeableState translates the GitHub mergeable_state field to the

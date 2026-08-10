@@ -195,6 +195,24 @@ func TestSCMAdapter_MergeFlow_Integration(t *testing.T) {
 		t.Skip("MergePR_AlreadyMerged_IdempotentSuccess subtest failed; skipping DeleteBranch")
 	}
 
+	t.Run("GetMergeability_AfterMerge", func(t *testing.T) {
+		status, err := a.GetMergeability(ctx, prNumber, owner, repo)
+		if err != nil {
+			t.Fatalf("GetMergeability(PR #%d) after merge: %v", prNumber, err)
+		}
+		if !status.Merged {
+			t.Errorf("GetMergeability(PR #%d).Merged = false, want true after the happy-path merge", prNumber)
+		}
+		if status.MergeCommitSHA != mergeSHA {
+			t.Errorf("GetMergeability(PR #%d).MergeCommitSHA = %q, want %q (the SHA MergePR_HappyPath captured)",
+				prNumber, status.MergeCommitSHA, mergeSHA)
+		}
+	})
+
+	if t.Failed() {
+		t.Skip("GetMergeability_AfterMerge subtest failed; skipping DeleteBranch")
+	}
+
 	t.Run("DeleteBranch", func(t *testing.T) {
 		err := a.DeleteBranch(ctx, owner, repo, branch)
 		if err != nil {
