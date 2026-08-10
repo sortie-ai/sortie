@@ -59,6 +59,10 @@ type TrackerError struct {
 
 	// Err is the underlying error, if any.
 	Err error
+
+	// Status is the HTTP status code that produced this error, or 0
+	// when the error did not come from an HTTP response.
+	Status int
 }
 
 // Error returns a human-readable diagnostic including the error

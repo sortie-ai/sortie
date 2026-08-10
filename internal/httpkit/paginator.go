@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/url"
 	"slices"
+	"strconv"
 	"strings"
 )
 
@@ -23,14 +24,53 @@ type PaginatorOptions struct {
 	OnLimitReached func(limit int)
 }
 
-// Paginator accumulates items across token-based or Link-header pagination.
+// PageOptions configures a page-number-paginated walk: the query parameter
+// names the route expects, the page size, and the same limit and
+// limit-notification controls [PaginatorOptions] offers the token and Link
+// modes.
+type PageOptions struct {
+	// PageParam is the query key carrying the one-based page number
+	// (for example "page").
+	PageParam string
+
+	// SizeParam is the query key carrying the requested page size (for
+	// example "per_page" or "limit").
+	SizeParam string
+
+	// PageSize is the number of elements requested per page. A page
+	// returning fewer than PageSize elements ends the walk.
+	PageSize int
+
+	// MaxPages limits the number of pages fetched when greater than zero.
+	MaxPages int
+
+	// OnLimitReached is invoked once when a next page exists but MaxPages blocks it.
+	OnLimitReached func(limit int)
+}
+
+// paginationMode selects which walk [Paginator.All] runs. Each constructor
+// sets it explicitly so a third mode is never reached by testing which
+// decoder field happens to be non-nil.
+type paginationMode int
+
+const (
+	paginationModeToken paginationMode = iota
+	paginationModeLink
+	paginationModePage
+)
+
+// Paginator accumulates items across token-based, Link-header, or
+// page-number pagination.
 type Paginator[T any] struct {
 	client      *Client
 	path        string
 	baseParams  url.Values
+	mode        paginationMode
 	tokenParam  string
 	tokenDecode TokenPageDecoder[T]
 	linkDecode  LinkPageDecoder[T]
+	pageDecode  LinkPageDecoder[T]
+	pageOptions PageOptions
 	options     PaginatorOptions
 }
 
@@ -40,6 +80,7 @@ func NewTokenPaginator[T any](client *Client, path string, baseParams url.Values
 		client:      client,
 		path:        path,
 		baseParams:  baseParams,
+		mode:        paginationModeToken,
 		tokenParam:  tokenParam,
 		tokenDecode: decode,
 		options:     opts,
@@ -52,17 +93,39 @@ func NewLinkPaginator[T any](client *Client, path string, baseParams url.Values,
 		client:     client,
 		path:       path,
 		baseParams: baseParams,
+		mode:       paginationModeLink,
 		linkDecode: decode,
 		options:    opts,
 	}
 }
 
+// NewPagePaginator constructs a [Paginator] for APIs that expose
+// page-number pagination: the walk requests page 1, 2, 3, ... through
+// opts.PageParam and opts.SizeParam, and stops once a page returns fewer
+// than opts.PageSize elements. decode reads one page's body, so an
+// object-shaped response (for example a combined status carrying a nested
+// array) decodes as readily as a top-level array.
+func NewPagePaginator[T any](client *Client, path string, baseParams url.Values, decode LinkPageDecoder[T], opts PageOptions) *Paginator[T] {
+	return &Paginator[T]{
+		client:      client,
+		path:        path,
+		baseParams:  baseParams,
+		mode:        paginationModePage,
+		pageDecode:  decode,
+		pageOptions: opts,
+	}
+}
+
 // All fetches every page and returns the accumulated items.
 func (p *Paginator[T]) All(ctx context.Context) ([]T, error) {
-	if p.linkDecode != nil {
+	switch p.mode {
+	case paginationModeLink:
 		return p.allLinks(ctx)
+	case paginationModePage:
+		return p.allPages(ctx)
+	default:
+		return p.allTokens(ctx)
 	}
-	return p.allTokens(ctx)
 }
 
 func (p *Paginator[T]) allTokens(ctx context.Context) ([]T, error) {
@@ -145,6 +208,52 @@ func (p *Paginator[T]) allLinks(ctx context.Context) ([]T, error) {
 		}
 
 		useFullURL = true
+	}
+}
+
+// allPages walks a page-number-paginated route, requesting page 1, 2, 3,
+// ... until a page returns fewer than pageOptions.PageSize elements or the
+// pageOptions.MaxPages ceiling stops the walk. A classified client error is
+// returned unconverted, so a caller on the source-control path and a caller
+// on the CI path can each apply their own conversion.
+func (p *Paginator[T]) allPages(ctx context.Context) ([]T, error) {
+	items := make([]T, 0)
+	page := 1
+	pageCount := 0
+
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+
+		params := cloneValues(p.baseParams)
+		params.Set(p.pageOptions.PageParam, strconv.Itoa(page))
+		params.Set(p.pageOptions.SizeParam, strconv.Itoa(p.pageOptions.PageSize))
+
+		body, _, err := p.client.Get(ctx, p.path, params)
+		if err != nil {
+			return nil, err
+		}
+		pageCount++
+
+		pageItems, err := p.pageDecode(body)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, pageItems...)
+
+		if len(pageItems) < p.pageOptions.PageSize {
+			return items, nil
+		}
+
+		if p.pageOptions.MaxPages > 0 && pageCount == p.pageOptions.MaxPages {
+			if p.pageOptions.OnLimitReached != nil {
+				p.pageOptions.OnLimitReached(p.pageOptions.MaxPages)
+			}
+			return items, nil
+		}
+
+		page++
 	}
 }
 

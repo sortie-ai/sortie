@@ -3,7 +3,10 @@
 // packages that cannot import each other.
 package typeutil
 
-import "unicode/utf8"
+import (
+	"strings"
+	"unicode/utf8"
+)
 
 // ExtractStringSlice converts a loosely-typed value to []string.
 //
@@ -106,4 +109,25 @@ func MapFrom(config map[string]any, key string) map[string]any {
 		return nil
 	}
 	return v
+}
+
+// LowerSet builds a membership set of the lowercased elements of ss, for
+// case-insensitive lookups.
+func LowerSet(ss []string) map[string]struct{} {
+	m := make(map[string]struct{}, len(ss))
+	for _, s := range ss {
+		m[strings.ToLower(s)] = struct{}{}
+	}
+	return m
+}
+
+// HasWhitespace reports whether s contains a space, tab, newline, or
+// carriage return character.
+func HasWhitespace(s string) bool {
+	for _, r := range s {
+		if r == ' ' || r == '\t' || r == '\n' || r == '\r' {
+			return true
+		}
+	}
+	return false
 }
