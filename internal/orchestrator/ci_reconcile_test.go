@@ -335,6 +335,9 @@ func TestReconcileCIStatus_Failing_UnderMaxRetries(t *testing.T) {
 	if store.runHistories[0].IssueID != "ISS-CI-5" {
 		t.Errorf("RunHistory.IssueID = %q, want %q", store.runHistories[0].IssueID, "ISS-CI-5")
 	}
+	if !store.runHistories[0].TokensMeasured {
+		t.Error("RunHistory.TokensMeasured = false, want true (no agent session ran, so zero spend is exact)")
+	}
 
 	// SaveRetryEntry NOT called: CI fix retries are in-memory until HandleRetryTimer.
 	if len(store.savedEntries) != 0 {

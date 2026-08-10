@@ -70,6 +70,12 @@ type sessionState struct {
 	baseline    domain.TokenUsage
 	baselineSet bool
 
+	// usageMeasured reports whether at least one
+	// thread/tokenUsage/updated notification carrying a token-usage
+	// object has been processed for this run. Monotone: set true once
+	// and never cleared.
+	usageMeasured bool
+
 	mcpConfigPath string
 
 	// mu guards proc, waitCh, stdin, stdout, and stderrCollector for
@@ -366,7 +372,7 @@ func (a *CodexAdapter) RunTurn(ctx context.Context, session domain.Session, para
 
 	id, err := sendRequest(state, "turn/start", turnParams)
 	if err != nil {
-		return domain.TurnResult{}, &domain.AgentError{
+		return domain.TurnResult{UsageMeasured: state.usageMeasured}, &domain.AgentError{
 			Kind:    domain.ErrPortExit,
 			Message: fmt.Sprintf("turn/start failed: %v", err),
 			Err:     err,
@@ -375,7 +381,7 @@ func (a *CodexAdapter) RunTurn(ctx context.Context, session domain.Session, para
 
 	// Fast-path: return immediately if the context is already done.
 	if ctx.Err() != nil {
-		return domain.TurnResult{}, &domain.AgentError{
+		return domain.TurnResult{UsageMeasured: state.usageMeasured}, &domain.AgentError{
 			Kind:    domain.ErrPortExit,
 			Message: fmt.Sprintf("turn/start response: %v", ctx.Err()),
 			Err:     ctx.Err(),
@@ -391,14 +397,14 @@ func (a *CodexAdapter) RunTurn(ctx context.Context, session domain.Session, para
 	for turnStartResp.ID == 0 {
 		select {
 		case <-ctx.Done():
-			return domain.TurnResult{}, &domain.AgentError{
+			return domain.TurnResult{UsageMeasured: state.usageMeasured}, &domain.AgentError{
 				Kind:    domain.ErrPortExit,
 				Message: fmt.Sprintf("turn/start response: %v", ctx.Err()),
 				Err:     ctx.Err(),
 			}
 		case msg, ok := <-state.msgCh:
 			if !ok {
-				return domain.TurnResult{}, &domain.AgentError{
+				return domain.TurnResult{UsageMeasured: state.usageMeasured}, &domain.AgentError{
 					Kind:    domain.ErrPortExit,
 					Message: "stdout closed before turn/start response",
 				}
@@ -416,8 +422,9 @@ func (a *CodexAdapter) RunTurn(ctx context.Context, session domain.Session, para
 	}
 	if turnStartResp.Error != nil {
 		return domain.TurnResult{
-				SessionID:  state.threadID,
-				ExitReason: domain.EventTurnFailed,
+				SessionID:     state.threadID,
+				ExitReason:    domain.EventTurnFailed,
+				UsageMeasured: state.usageMeasured,
 			}, &domain.AgentError{
 				Kind:    domain.ErrTurnFailed,
 				Message: fmt.Sprintf("turn/start error: %s", turnStartResp.Error.Message),
@@ -486,9 +493,10 @@ func (a *CodexAdapter) RunTurn(ctx context.Context, session domain.Session, para
 					params.OnEvent(evt)
 				}
 				return domain.TurnResult{
-						SessionID:  state.threadID,
-						ExitReason: domain.EventTurnFailed,
-						Usage:      state.acc.Snapshot(),
+						SessionID:     state.threadID,
+						ExitReason:    domain.EventTurnFailed,
+						Usage:         state.acc.Snapshot(),
+						UsageMeasured: state.usageMeasured,
 					}, &domain.AgentError{
 						Kind:    domain.ErrPortExit,
 						Message: "subprocess stdout closed unexpectedly",
@@ -501,9 +509,10 @@ func (a *CodexAdapter) RunTurn(ctx context.Context, session domain.Session, para
 					params.OnEvent(evt)
 				}
 				return domain.TurnResult{
-						SessionID:  state.threadID,
-						ExitReason: domain.EventTurnFailed,
-						Usage:      state.acc.Snapshot(),
+						SessionID:     state.threadID,
+						ExitReason:    domain.EventTurnFailed,
+						Usage:         state.acc.Snapshot(),
+						UsageMeasured: state.usageMeasured,
 					}, &domain.AgentError{
 						Kind:    domain.ErrPortExit,
 						Message: fmt.Sprintf("stdout read error: %v", msg.Err),
@@ -537,6 +546,14 @@ func (a *CodexAdapter) RunTurn(ctx context.Context, session domain.Session, para
 					logger.Debug("thread/tokenUsage/updated unmarshal failed", slog.String("method", method))
 					continue
 				}
+				if p.TokenUsage == nil {
+					// No token-usage object on the wire: the runtime
+					// reported nothing for this notification, so no
+					// event is emitted and the measurement flag is
+					// left untouched.
+					continue
+				}
+				state.usageMeasured = true
 				// A turn/start response that failed to unmarshal leaves
 				// turnID empty; adopt the first notification's turn id
 				// rather than treating every notification of this turn as
@@ -577,9 +594,10 @@ func (a *CodexAdapter) RunTurn(ctx context.Context, session domain.Session, para
 						params.OnEvent(evt)
 					}
 					return domain.TurnResult{
-							SessionID:  state.threadID,
-							ExitReason: exitReason,
-							Usage:      snapshot,
+							SessionID:     state.threadID,
+							ExitReason:    exitReason,
+							Usage:         snapshot,
+							UsageMeasured: state.usageMeasured,
 						}, &domain.AgentError{
 							Kind:    kind,
 							Message: errMsg,
@@ -600,9 +618,10 @@ func (a *CodexAdapter) RunTurn(ctx context.Context, session domain.Session, para
 					params.OnEvent(evt)
 				}
 				return domain.TurnResult{
-					SessionID:  state.threadID,
-					ExitReason: exitReason,
-					Usage:      snapshot,
+					SessionID:     state.threadID,
+					ExitReason:    exitReason,
+					Usage:         snapshot,
+					UsageMeasured: state.usageMeasured,
 				}, nil
 
 			case "item/started":

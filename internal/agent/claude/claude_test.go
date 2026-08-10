@@ -613,6 +613,83 @@ exit 0
 	}
 }
 
+// TestRunTurn_UsageMeasured_AbsentWhenNoUsageObserved verifies that a turn
+// whose assistant message carries no usage object and whose result event
+// carries neither modelUsage nor usage reports the run unmeasured.
+func TestRunTurn_UsageMeasured_AbsentWhenNoUsageObserved(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	script := writeScript(t, tmpDir, `
+cat <<'JSONL'
+{"type":"system","subtype":"init","session_id":"no-usage","cwd":"/tmp"}
+{"type":"assistant","message":{"content":[{"type":"text","text":"Working on it."}]},"session_id":"no-usage"}
+{"type":"result","subtype":"success","result":"All done.","is_error":false,"session_id":"no-usage"}
+JSONL
+exit 0
+`)
+
+	adapter, _ := NewClaudeCodeAdapter(map[string]any{})
+	session, err := adapter.StartSession(context.Background(), domain.StartSessionParams{
+		WorkspacePath: tmpDir,
+		AgentConfig:   domain.AgentConfig{Command: script},
+	})
+	if err != nil {
+		t.Fatalf("StartSession() error = %v", err)
+	}
+
+	var events []domain.AgentEvent
+	result, err := adapter.RunTurn(context.Background(), session, domain.RunTurnParams{
+		Prompt: "do the thing",
+		OnEvent: func(e domain.AgentEvent) {
+			events = append(events, e)
+		},
+	})
+	if err != nil {
+		t.Fatalf("RunTurn() error = %v", err)
+	}
+
+	agenttest.AssertMeasurementAbsent(t, events, result)
+}
+
+// TestRunTurn_UsageMeasured_TrueOnResultUsage verifies that a turn whose
+// result event carries a usage object, even without a matching assistant
+// usage object or a token_usage event, reports the run measured.
+func TestRunTurn_UsageMeasured_TrueOnResultUsage(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	script := writeScript(t, tmpDir, `
+cat <<'JSONL'
+{"type":"system","subtype":"init","session_id":"result-usage","cwd":"/tmp"}
+{"type":"assistant","message":{"content":[{"type":"text","text":"Working on it."}]},"session_id":"result-usage"}
+{"type":"result","subtype":"success","result":"All done.","is_error":false,"usage":{"input_tokens":100,"output_tokens":50},"session_id":"result-usage"}
+JSONL
+exit 0
+`)
+
+	adapter, _ := NewClaudeCodeAdapter(map[string]any{})
+	session, err := adapter.StartSession(context.Background(), domain.StartSessionParams{
+		WorkspacePath: tmpDir,
+		AgentConfig:   domain.AgentConfig{Command: script},
+	})
+	if err != nil {
+		t.Fatalf("StartSession() error = %v", err)
+	}
+
+	result, err := adapter.RunTurn(context.Background(), session, domain.RunTurnParams{
+		Prompt:  "do the thing",
+		OnEvent: func(domain.AgentEvent) {},
+	})
+	if err != nil {
+		t.Fatalf("RunTurn() error = %v", err)
+	}
+
+	if !result.UsageMeasured {
+		t.Error("RunTurn().UsageMeasured = false, want true when the result event carries a usage object")
+	}
+}
+
 // TestRunTurn_APIDurationMS_Success verifies that the turn-completed event
 // carries APIDurationMS from the result's duration_api_ms field.
 func TestRunTurn_APIDurationMS_Success(t *testing.T) {

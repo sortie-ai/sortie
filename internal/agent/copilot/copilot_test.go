@@ -1155,6 +1155,121 @@ func TestRunTurn_SessionStateRecovery_BaselineDifference(t *testing.T) {
 	}
 }
 
+// TestRunTurn_UsageMeasured_OutputTokenField covers the outputTokens
+// field's role in measurement, independent of the session-state journal
+// read, including the boundary case where the journal cannot be read at
+// all: SSH mode, one of the runtime conditions the adapter treats the
+// same way as an invalid session id or an unreadable file.
+func TestRunTurn_UsageMeasured_OutputTokenField(t *testing.T) {
+	// t.Setenv is incompatible with t.Parallel.
+	t.Setenv("GH_TOKEN", "test-token-for-unit-test")
+
+	t.Run("present zero field measures the run", func(t *testing.T) {
+		t.Setenv("COPILOT_HOME", t.TempDir())
+
+		const jsonl = `{"type":"assistant.message","timestamp":"2026-04-08T00:00:00Z","data":{"role":"assistant","content":"hello","outputTokens":0}}
+{"type":"result","timestamp":"2026-04-08T00:00:01Z","sessionId":"zero-output-session","exitCode":0,"usage":{"premiumRequests":1,"totalApiDurationMs":10}}
+`
+		adapter, session := newTestSession(t, t.TempDir())
+		state := session.Internal.(*sessionState)
+		state.target.Command = fakeCopilotBinaryWithOutput(t, jsonl, 0)
+
+		var events []domain.AgentEvent
+		result, err := adapter.RunTurn(context.Background(), session, domain.RunTurnParams{
+			Prompt:  "say hello",
+			OnEvent: func(e domain.AgentEvent) { events = append(events, e) },
+		})
+		if err != nil {
+			t.Fatalf("RunTurn() error = %v", err)
+		}
+
+		tokenUsageEvents := 0
+		for _, e := range events {
+			if e.Type == domain.EventTokenUsage {
+				tokenUsageEvents++
+			}
+		}
+		if tokenUsageEvents != 1 {
+			t.Errorf("token_usage event count = %d, want 1", tokenUsageEvents)
+		}
+		if !result.UsageMeasured {
+			t.Error("RunTurn().UsageMeasured = false, want true for a present zero outputTokens field")
+		}
+	})
+
+	t.Run("absent field alone leaves the run unmeasured", func(t *testing.T) {
+		t.Setenv("COPILOT_HOME", t.TempDir())
+
+		const jsonl = `{"type":"assistant.message","timestamp":"2026-04-08T00:00:00Z","data":{"role":"assistant","content":"hello"}}
+{"type":"result","timestamp":"2026-04-08T00:00:01Z","sessionId":"no-output-session","exitCode":0,"usage":{"premiumRequests":1,"totalApiDurationMs":10}}
+`
+		adapter, session := newTestSession(t, t.TempDir())
+		state := session.Internal.(*sessionState)
+		state.target.Command = fakeCopilotBinaryWithOutput(t, jsonl, 0)
+
+		var events []domain.AgentEvent
+		result, err := adapter.RunTurn(context.Background(), session, domain.RunTurnParams{
+			Prompt:  "say hello",
+			OnEvent: func(e domain.AgentEvent) { events = append(events, e) },
+		})
+		if err != nil {
+			t.Fatalf("RunTurn() error = %v", err)
+		}
+
+		agenttest.AssertMeasurementAbsent(t, events, result)
+	})
+
+	t.Run("unreadable journal in SSH mode with the field carried still measures the run, output-only", func(t *testing.T) {
+		t.Setenv("COPILOT_HOME", t.TempDir())
+
+		adapter, session := newTestSession(t, t.TempDir())
+		state := session.Internal.(*sessionState)
+		state.target.Command = fakeCopilotBinaryWithOutput(t, loadTestFixture(t, "simple_session.jsonl"), 0)
+		state.target.RemoteCommand = "copilot"
+		state.target.SSHHost = "dev-host.example.com"
+
+		result, err := adapter.RunTurn(context.Background(), session, domain.RunTurnParams{
+			Prompt:  "say hello",
+			OnEvent: func(domain.AgentEvent) {},
+		})
+		if err != nil {
+			t.Fatalf("RunTurn() error = %v", err)
+		}
+
+		if !result.UsageMeasured {
+			t.Error("RunTurn().UsageMeasured = false, want true when the stream carried the output-token field despite an unreadable session-state journal")
+		}
+		wantUsage := domain.TokenUsage{OutputTokens: 6, TotalTokens: 6}
+		if result.Usage != wantUsage {
+			t.Errorf("TurnResult.Usage = %+v, want %+v (output-only, journal unreadable in SSH mode)", result.Usage, wantUsage)
+		}
+	})
+
+	t.Run("unreadable journal in SSH mode with no field carried leaves the run unmeasured", func(t *testing.T) {
+		t.Setenv("COPILOT_HOME", t.TempDir())
+
+		const jsonl = `{"type":"assistant.message","timestamp":"2026-04-08T00:00:00Z","data":{"role":"assistant","content":"hello"}}
+{"type":"result","timestamp":"2026-04-08T00:00:01Z","sessionId":"ssh-no-output-session","exitCode":0,"usage":{"premiumRequests":1,"totalApiDurationMs":10}}
+`
+		adapter, session := newTestSession(t, t.TempDir())
+		state := session.Internal.(*sessionState)
+		state.target.Command = fakeCopilotBinaryWithOutput(t, jsonl, 0)
+		state.target.RemoteCommand = "copilot"
+		state.target.SSHHost = "dev-host.example.com"
+
+		var events []domain.AgentEvent
+		result, err := adapter.RunTurn(context.Background(), session, domain.RunTurnParams{
+			Prompt:  "say hello",
+			OnEvent: func(e domain.AgentEvent) { events = append(events, e) },
+		})
+		if err != nil {
+			t.Fatalf("RunTurn() error = %v", err)
+		}
+
+		agenttest.AssertMeasurementAbsent(t, events, result)
+	})
+}
+
 // TestRunTurn_SessionStateRecovery_Degradation drives
 // sessionState.recoverUsage directly (bypassing the subprocess) to
 // exercise the three read-skipping conditions: an absent events file,
@@ -1175,7 +1290,7 @@ func TestRunTurn_SessionStateRecovery_Degradation(t *testing.T) {
 		}
 		state.acc.SetTurnProvisional(domain.TokenUsage{OutputTokens: 42})
 
-		got := state.recoverUsage(logger)
+		got, _ := state.recoverUsage(logger)
 		want := domain.TokenUsage{OutputTokens: 42, TotalTokens: 42}
 		if got != want {
 			t.Errorf("recoverUsage() = %+v, want %+v (provisional stands)", got, want)
@@ -1198,7 +1313,7 @@ func TestRunTurn_SessionStateRecovery_Degradation(t *testing.T) {
 		}
 		state.acc.SetTurnProvisional(domain.TokenUsage{OutputTokens: 7})
 
-		got := state.recoverUsage(logger)
+		got, _ := state.recoverUsage(logger)
 		want := domain.TokenUsage{OutputTokens: 7, TotalTokens: 7}
 		if got != want {
 			t.Errorf("recoverUsage() = %+v, want %+v (provisional stands)", got, want)
@@ -1231,7 +1346,7 @@ func TestRunTurn_SessionStateRecovery_Degradation(t *testing.T) {
 		}
 		state.acc.SetTurnProvisional(domain.TokenUsage{OutputTokens: 11})
 
-		got := state.recoverUsage(logger)
+		got, _ := state.recoverUsage(logger)
 		want := domain.TokenUsage{OutputTokens: 11, TotalTokens: 11}
 		if got != want {
 			t.Errorf("recoverUsage() = %+v, want %+v (provisional stands)", got, want)
@@ -1265,7 +1380,7 @@ func TestRunTurn_SessionStateRecovery_FirstReadAttempt(t *testing.T) {
 		// First finalize: the events file does not exist yet, so no read
 		// attempt succeeds.
 		state.acc.SetTurnProvisional(domain.TokenUsage{OutputTokens: 5})
-		first := state.recoverUsage(logger)
+		first, _ := state.recoverUsage(logger)
 		if first != (domain.TokenUsage{OutputTokens: 5, TotalTokens: 5}) {
 			t.Fatalf("first recoverUsage() = %+v, want provisional (5, 5)", first)
 		}
@@ -1275,7 +1390,7 @@ func TestRunTurn_SessionStateRecovery_FirstReadAttempt(t *testing.T) {
 		// rather than the first record's totals, so the run's own
 		// earlier spend is not subtracted a second time.
 		writeJournal(t, journalPath(root, "created-session"), loadTestFixture(t, "session_shutdown.jsonl"))
-		second := state.recoverUsage(logger)
+		second, _ := state.recoverUsage(logger)
 		if second.InputTokens != 271924 {
 			t.Errorf("second recoverUsage().InputTokens = %d, want 271924 (zero baseline)", second.InputTokens)
 		}
@@ -1295,13 +1410,13 @@ func TestRunTurn_SessionStateRecovery_FirstReadAttempt(t *testing.T) {
 		}
 
 		state.acc.SetTurnProvisional(domain.TokenUsage{OutputTokens: 9})
-		first := state.recoverUsage(logger)
+		first, _ := state.recoverUsage(logger)
 		if first != (domain.TokenUsage{OutputTokens: 9, TotalTokens: 9}) {
 			t.Fatalf("first recoverUsage() = %+v, want provisional (9, 9)", first)
 		}
 
 		writeJournal(t, journalPath(root, "resumed-session"), loadTestFixture(t, "session_shutdown.jsonl"))
-		second := state.recoverUsage(logger)
+		second, _ := state.recoverUsage(logger)
 		if !state.recoveryUnavailable {
 			t.Error("recoveryUnavailable = false, want true")
 		}
@@ -1313,7 +1428,7 @@ func TestRunTurn_SessionStateRecovery_FirstReadAttempt(t *testing.T) {
 		}
 
 		// A third finalize must not attempt another read.
-		third := state.recoverUsage(logger)
+		third, _ := state.recoverUsage(logger)
 		if third != second {
 			t.Errorf("third recoverUsage() = %+v, want unchanged %+v", third, second)
 		}

@@ -46,6 +46,7 @@ type runningEntryResponse struct {
 	RequestsByModel   map[string]int `json:"requests_by_model,omitempty"`
 	ToolTimePercent   *float64       `json:"tool_time_percent"`
 	APITimePercent    *float64       `json:"api_time_percent"`
+	TokensMeasured    bool           `json:"tokens_measured"`
 }
 
 type tokenInfo struct {
@@ -124,6 +125,7 @@ func toRunningEntryResponse(e orchestrator.SnapshotRunningEntry, nowArgs ...time
 		ModelName:       e.ModelName,
 		APIRequestCount: e.APIRequestCount,
 		RequestsByModel: e.RequestsByModel,
+		TokensMeasured:  e.UsageMeasured,
 	}
 
 	if len(nowArgs) > 0 && !e.StartedAt.IsZero() {
@@ -185,7 +187,7 @@ func toStateResponse(snap orchestrator.RuntimeSnapshotResult, tokenRates TokenRa
 		var total float64
 		anySet := false
 		for _, e := range snap.Running {
-			if e.AgentKind == "" {
+			if e.AgentKind == "" || !e.UsageMeasured {
 				continue
 			}
 			if rc, ok := tokenRates[e.AgentKind]; ok {

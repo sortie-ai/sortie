@@ -29,6 +29,7 @@ type mockRetryStore struct {
 
 	tokenSum                 int64
 	tokenSessionCount        int
+	tokenUnmeasured          int
 	sumTotalTokensByIssueErr error
 	summedTokenIssueIDs      []string
 
@@ -55,9 +56,13 @@ func (m *mockRetryStore) CountRunHistoryByIssue(_ context.Context, issueID strin
 	return m.runHistoryCount, m.countRunHistoryByIssueErr
 }
 
-func (m *mockRetryStore) SumTotalTokensByIssue(_ context.Context, issueID string) (int64, int, error) {
+func (m *mockRetryStore) TokenUsageByIssue(_ context.Context, issueID string) (persistence.IssueTokenUsage, error) {
 	m.summedTokenIssueIDs = append(m.summedTokenIssueIDs, issueID)
-	return m.tokenSum, m.tokenSessionCount, m.sumTotalTokensByIssueErr
+	return persistence.IssueTokenUsage{
+		TotalTokens:        m.tokenSum,
+		Sessions:           m.tokenSessionCount,
+		UnmeasuredSessions: m.tokenUnmeasured,
+	}, m.sumTotalTokensByIssueErr
 }
 
 func (m *mockRetryStore) AppendRunHistory(_ context.Context, run persistence.RunHistory) (persistence.RunHistory, error) {
@@ -1429,6 +1434,75 @@ func TestHandleRetryTimer_TokenBudgetLogLine(t *testing.T) {
 		if !strings.Contains(output, attr) {
 			t.Errorf("log output missing attribute %q: %q", attr, output)
 		}
+	}
+	if strings.Contains(output, "token budget cannot be fully evaluated") {
+		t.Errorf("unexpected incomplete-budget warning for an issue blocked on measured spend: %q", output)
+	}
+}
+
+// TestHandleRetryTimer_TokenBudgetIncomplete covers the fourth token
+// ceiling outcome on the retry path: a sum below the ceiling with at
+// least one unmeasured session permits the dispatch and logs the
+// incomplete-budget warning on every occurrence, unlike the per-tick
+// path's edge-triggered warning.
+func TestHandleRetryTimer_TokenBudgetIncomplete(t *testing.T) {
+	t.Parallel()
+
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	store := &mockRetryStore{tokenSum: 500, tokenUnmeasured: 1}
+	tracker := &mockRetryTracker{
+		fetchedIssue: candidateIssue("ISS-TOK-INC", "PROJ-TOK-INC", "To Do"),
+	}
+
+	dispatched := make(chan struct{}, 2)
+	params := defaultRetryParams(t, store, tracker)
+	params.MaxTokens = 1000
+	params.Logger = logger
+	params.MakeWorkerFn = func(_, _, _, _, _ string, _ domain.AgentAdapter) WorkerFunc {
+		return func(_ context.Context, _ domain.Issue, _ *int) {
+			dispatched <- struct{}{}
+		}
+	}
+
+	state := retryState(t, "ISS-TOK-INC", "PROJ-TOK-INC", 1)
+	HandleRetryTimer(state, "ISS-TOK-INC", params)
+
+	select {
+	case <-dispatched:
+	case <-time.After(time.Second):
+		t.Fatal("worker not dispatched within 1 second (an unmeasured session must not block dispatch)")
+	}
+
+	output := buf.String()
+	if !strings.Contains(output, "token budget cannot be fully evaluated, allowing dispatch") {
+		t.Fatalf("log output = %q, want to contain the incomplete-budget warning", output)
+	}
+	for _, attr := range []string{
+		"used_tokens=500",
+		"budget_tokens=1000",
+		"unmeasured_sessions=1",
+		"issue_id=ISS-TOK-INC",
+	} {
+		if !strings.Contains(output, attr) {
+			t.Errorf("log output missing attribute %q: %q", attr, output)
+		}
+	}
+
+	// A second occurrence must warn again: the retry path runs once per
+	// retry rather than once per tick, so it is not edge-triggered.
+	state = retryState(t, "ISS-TOK-INC", "PROJ-TOK-INC", 1)
+	HandleRetryTimer(state, "ISS-TOK-INC", params)
+
+	select {
+	case <-dispatched:
+	case <-time.After(time.Second):
+		t.Fatal("worker not dispatched on the second occurrence within 1 second")
+	}
+
+	if got := strings.Count(buf.String(), "token budget cannot be fully evaluated, allowing dispatch"); got != 2 {
+		t.Errorf("warning count after two occurrences = %d, want 2 (not edge-triggered)", got)
 	}
 }
 

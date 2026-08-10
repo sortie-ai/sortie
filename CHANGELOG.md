@@ -50,6 +50,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   remain unreported when the agent runs over SSH.
   ([#756](https://github.com/sortie-ai/sortie/issues/756))
 
+- A run whose coding agent reported no token usage was stored, summed,
+  priced, and displayed as a run that spent nothing, so an unmeasured
+  run looked identical to a genuinely free one. Each run now records
+  whether its token figures are a measurement, and the surfaces that
+  report spend keep the two apart. `sortie stats` counts tokens and cost
+  over measured runs only, labels them that way, and footnotes how many
+  runs it skipped; `--format json` gains `tokens_unmeasured_runs`
+  overall and per group. The dashboard shows a running session that has
+  reported no usage yet as `not reported`, leaves it out of the active
+  token and cost totals, and says how many it left out; the state API
+  gains `tokens_measured` per running entry. The `cost_budget` agent
+  tool gains `unmeasured_sessions` and `used_tokens_complete` so an
+  agent can tell a lower bound from an exact figure. An unmeasured run
+  still contributes nothing to the `agent.max_tokens` ceiling, but the
+  orchestrator now logs a warning that the ceiling could not be fully
+  evaluated instead of treating the incomplete total as authoritative;
+  the dispatch proceeds either way.
+  ([#757](https://github.com/sortie-ai/sortie/issues/757))
+
+### Migrations
+
+- Add `tokens_measured INTEGER NOT NULL DEFAULT 1` to `run_history`;
+  pre-migration rows read back as measured, so a run recorded before the
+  upgrade that reported no token usage still counts as a genuine zero.
+
 ## [1.18.0] - 2026-08-09
 
 ### Added

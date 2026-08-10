@@ -451,7 +451,7 @@
                     </div>
                     <div class="detail-item">
                       <dt>Tokens</dt>
-                      <dd>{{fmtInt $e.TotalTokens}}{{if $e.CacheReadTokens}} <small title="Prompt cache read tokens — served from cache, not reprocessed">({{fmtInt $e.CacheReadTokens}} cached)</small>{{end}}</dd>
+                      <dd>{{if $e.UsageMeasured}}{{fmtInt $e.TotalTokens}}{{if $e.CacheReadTokens}} <small title="Prompt cache read tokens — served from cache, not reprocessed">({{fmtInt $e.CacheReadTokens}} cached)</small>{{end}}{{else}}<span title="the coding agent has reported no token usage for this session yet">not reported</span>{{end}}</dd>
                     </div>
                     <div class="detail-item">
                       <dt>Tool Time</dt>
@@ -611,6 +611,7 @@
         &middot; Est. Cost: {{if .EstimatedCostUSD}}{{.EstimatedCostUSD}}{{else}}&mdash;{{end}}{{end}}
       </div>
       {{if .HasTokenRates}}<div>Cost estimates are based on configured token rates and may differ from actual provider billing.</div>{{end}}
+      {{if .UnmeasuredRunningCount}}<div>{{.UnmeasuredRunningCount}} running sessions have not reported token usage; the totals above exclude them.</div>{{end}}
       <div>Auto-refresh every 5s</div>
     </footer>
     <script>

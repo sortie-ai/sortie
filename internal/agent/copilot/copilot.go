@@ -103,6 +103,11 @@ type sessionState struct {
 	// Warn on every turn of a run whose session id never becomes valid.
 	sessionIDRejectionLogged bool
 
+	// assistantFieldSeen is true once at least one assistant.message
+	// event of this run has carried a present outputTokens field.
+	// Monotone: set true once and never cleared.
+	assistantFieldSeen bool
+
 	// Per-turn scan state owned by the ParseLine and OnFinalize hook
 	// closures. Reset at the top of each RunTurn call before delegating
 	// to forkSession.
@@ -126,26 +131,28 @@ func (s *sessionState) refreshForkLogger() {
 // recoverUsage attempts to recover this run's authoritative token usage
 // from the runtime's session-state journal after the subprocess has
 // exited. It returns the run-cumulative snapshot to carry on the
-// terminal event and TurnResult.Usage.
+// terminal event and TurnResult.Usage, and whether the journal read
+// itself yielded a usage figure for the run.
 //
 // The read is skipped, and the output-only provisional snapshot already
 // held in s.acc stands, when the session id is unknown or fails the
 // path-segment check, when the launch target is in SSH mode, when
 // recovery has already been marked unavailable for this run, or when
-// the read fails or finds no session.shutdown record. On a successful
-// read, the baseline is resolved once per run: at the run's first read
-// attempt it is the record preceding the current one (zero when none
-// exists); at a later first-successful read it is zero when this run
-// created the session, and otherwise recovery is marked unavailable for
-// the remainder of the run because the boundary record that would
-// separate this run's spend from a resumed session's prior spend is no
-// longer available.
-func (s *sessionState) recoverUsage(logger *slog.Logger) domain.TokenUsage {
+// the read fails or finds no session.shutdown record; journalMeasured
+// is false in every one of those cases. On a successful read, the
+// baseline is resolved once per run: at the run's first read attempt it
+// is the record preceding the current one (zero when none exists); at a
+// later first-successful read it is zero when this run created the
+// session, and otherwise recovery is marked unavailable for the
+// remainder of the run because the boundary record that would separate
+// this run's spend from a resumed session's prior spend is no longer
+// available.
+func (s *sessionState) recoverUsage(logger *slog.Logger) (usage domain.TokenUsage, journalMeasured bool) {
 	hadPriorFinalize := s.priorFinalizeOccurred
 	defer func() { s.priorFinalizeOccurred = true }()
 
 	if s.recoveryUnavailable {
-		return s.acc.Snapshot()
+		return s.acc.Snapshot(), false
 	}
 
 	remote := s.target.RemoteCommand != ""
@@ -158,14 +165,14 @@ func (s *sessionState) recoverUsage(logger *slog.Logger) domain.TokenUsage {
 				slog.String("reason", "invalid_session_id"))
 			s.sessionIDRejectionLogged = true
 		}
-		return s.acc.Snapshot()
+		return s.acc.Snapshot(), false
 	}
 
 	root, err := sessionStateRoot(os.Getenv, os.UserHomeDir)
 	if err != nil {
 		logger.Debug("copilot session-state root resolution failed",
 			slog.String("session_id", sessionID), slog.String("reason", "root_unresolved"))
-		return s.acc.Snapshot()
+		return s.acc.Snapshot(), false
 	}
 	eventsPath := filepath.Join(root, sessionID, "events.jsonl")
 
@@ -178,7 +185,7 @@ func (s *sessionState) recoverUsage(logger *slog.Logger) domain.TokenUsage {
 			logger.Debug("copilot session-state read failed",
 				slog.String("session_id", sessionID), slog.String("reason", "unreadable"))
 		}
-		return s.acc.Snapshot()
+		return s.acc.Snapshot(), false
 	}
 
 	if !s.baselineResolved {
@@ -191,7 +198,7 @@ func (s *sessionState) recoverUsage(logger *slog.Logger) domain.TokenUsage {
 			s.recoveryUnavailable = true
 			logger.Warn("copilot session-state recovery abandoned for this run",
 				slog.String("session_id", sessionID), slog.String("reason", "boundary_record_unavailable"))
-			return s.acc.Snapshot()
+			return s.acc.Snapshot(), false
 		}
 		s.baselineResolved = true
 	}
@@ -199,10 +206,10 @@ func (s *sessionState) recoverUsage(logger *slog.Logger) domain.TokenUsage {
 	if !found {
 		logger.Debug("copilot session-state has no session.shutdown record yet",
 			slog.String("session_id", sessionID), slog.String("reason", "no_record"))
-		return s.acc.Snapshot()
+		return s.acc.Snapshot(), false
 	}
 
-	return s.acc.SetRunCumulative(subtractUsage(current, s.baseline))
+	return s.acc.SetRunCumulative(subtractUsage(current, s.baseline)), true
 }
 
 // NewCopilotAdapter creates a [CopilotAdapter] from adapter
@@ -278,13 +285,16 @@ func (a *CopilotAdapter) StartSession(ctx context.Context, params domain.StartSe
 				if len(event.Data) > 0 {
 					msgData, dataErr := parseAssistantMessageData(event.Data)
 					if dataErr == nil {
-						state.turnOutputTokens += msgData.OutputTokens
-						snapshot := state.acc.SetTurnProvisional(domain.TokenUsage{OutputTokens: state.turnOutputTokens})
-						emit(domain.AgentEvent{
-							Type:      domain.EventTokenUsage,
-							Timestamp: now,
-							Usage:     snapshot,
-						})
+						if msgData.OutputTokens != nil {
+							state.assistantFieldSeen = true
+							state.turnOutputTokens += *msgData.OutputTokens
+							snapshot := state.acc.SetTurnProvisional(domain.TokenUsage{OutputTokens: state.turnOutputTokens})
+							emit(domain.AgentEvent{
+								Type:      domain.EventTokenUsage,
+								Timestamp: now,
+								Usage:     snapshot,
+							})
+						}
 						agentcore.EmitNotification(emit, summarizeAssistantMessage(msgData))
 					} else {
 						state.logger().Debug("failed to parse assistant.message data", slog.Any("error", dataErr))
@@ -388,7 +398,8 @@ func (a *CopilotAdapter) StartSession(ctx context.Context, params domain.StartSe
 				state.fallbackToContinue = true
 			}
 
-			usage := state.recoverUsage(state.logger())
+			usage, journalMeasured := state.recoverUsage(state.logger())
+			measured := journalMeasured || state.assistantFieldSeen
 
 			if lastResult != nil {
 				// Extract API duration from the result event.
@@ -402,17 +413,19 @@ func (a *CopilotAdapter) StartSession(ctx context.Context, params domain.StartSe
 				if lastResult.ExitCode != nil && *lastResult.ExitCode == 0 {
 					agentcore.EmitTurnCompleted(emit, "", apiDurationMS, usage)
 					return domain.TurnResult{
-						SessionID:  state.copilotSessionID,
-						ExitReason: domain.EventTurnCompleted,
-						Usage:      usage,
+						SessionID:     state.copilotSessionID,
+						ExitReason:    domain.EventTurnCompleted,
+						Usage:         usage,
+						UsageMeasured: measured,
 					}, nil
 				}
 				// EmitWarnLines is called by the skeleton when agentErr is non-nil.
 				agentcore.EmitTurnFailed(emit, "non-zero exit in result event", apiDurationMS, usage)
 				return domain.TurnResult{
-						SessionID:  state.copilotSessionID,
-						ExitReason: domain.EventTurnFailed,
-						Usage:      usage,
+						SessionID:     state.copilotSessionID,
+						ExitReason:    domain.EventTurnFailed,
+						Usage:         usage,
+						UsageMeasured: measured,
 					}, &domain.AgentError{
 						Kind:    domain.ErrTurnFailed,
 						Message: "non-zero exit in result event",
@@ -423,9 +436,10 @@ func (a *CopilotAdapter) StartSession(ctx context.Context, params domain.StartSe
 			if exitCode != 0 {
 				agentcore.EmitTurnFailed(emit, "non-zero exit", 0, usage)
 				return domain.TurnResult{
-						SessionID:  state.copilotSessionID,
-						ExitReason: domain.EventTurnFailed,
-						Usage:      usage,
+						SessionID:     state.copilotSessionID,
+						ExitReason:    domain.EventTurnFailed,
+						Usage:         usage,
+						UsageMeasured: measured,
 					}, &domain.AgentError{
 						Kind:    domain.ErrPortExit,
 						Message: fmt.Sprintf("exit code %d", exitCode),
@@ -438,9 +452,10 @@ func (a *CopilotAdapter) StartSession(ctx context.Context, params domain.StartSe
 				state.logger().Warn("agent exited without producing output, treating as failure")
 				agentcore.EmitTurnFailed(emit, "agent exited without producing output", 0, usage)
 				return domain.TurnResult{
-						SessionID:  state.copilotSessionID,
-						ExitReason: domain.EventTurnFailed,
-						Usage:      usage,
+						SessionID:     state.copilotSessionID,
+						ExitReason:    domain.EventTurnFailed,
+						Usage:         usage,
+						UsageMeasured: measured,
 					}, &domain.AgentError{
 						Kind:    domain.ErrTurnFailed,
 						Message: "agent exited without producing output",
@@ -449,9 +464,10 @@ func (a *CopilotAdapter) StartSession(ctx context.Context, params domain.StartSe
 
 			agentcore.EmitTurnCompleted(emit, "", 0, usage)
 			return domain.TurnResult{
-				SessionID:  state.copilotSessionID,
-				ExitReason: domain.EventTurnCompleted,
-				Usage:      usage,
+				SessionID:     state.copilotSessionID,
+				ExitReason:    domain.EventTurnCompleted,
+				Usage:         usage,
+				UsageMeasured: measured,
 			}, nil
 		},
 		// Copilot emits EventSessionStarted before the scan loop using the

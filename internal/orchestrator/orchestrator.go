@@ -35,9 +35,9 @@ type OrchestratorStore interface {
 	SaveRetryEntry(ctx context.Context, entry persistence.RetryEntry) error
 	DeleteRetryEntry(ctx context.Context, issueID string) error
 	CountRunHistoryByIssue(ctx context.Context, issueID string) (int, error)
-	SumTotalTokensByIssue(ctx context.Context, issueID string) (int64, int, error)
+	TokenUsageByIssue(ctx context.Context, issueID string) (persistence.IssueTokenUsage, error)
 	QueryBudgetExhaustedIssues(ctx context.Context, candidateIDs []string, maxSessions int) ([]string, error)
-	QueryTokenExhaustedIssues(ctx context.Context, candidateIDs []string, maxTokens int) ([]string, error)
+	QueryTokenBudgetUsage(ctx context.Context, candidateIDs []string) (map[string]persistence.IssueTokenUsage, error)
 	UpsertReactionFingerprint(ctx context.Context, issueID, kind, fingerprint string) error
 	GetReactionFingerprint(ctx context.Context, issueID, kind string) (fingerprint string, dispatched bool, err error)
 	MarkReactionDispatched(ctx context.Context, issueID, kind string) error
@@ -811,13 +811,17 @@ const sessionMetadataWriteInterval = 2 * time.Second
 
 // maybeWriteIncrementalMetadata persists the running session's current
 // token totals to session_metadata when an event carrying non-zero
-// usage arrives and the per-issue throttle interval has elapsed. It is
-// a no-op for events carrying no usage, for unknown issues, and while
-// throttled. Must be called from the orchestrator's single-writer event
-// loop so it shares the one SQLite writer and the running entry it
-// mutates.
+// usage arrives, or a token_usage event carrying a measurement of zero
+// arrives, and the per-issue throttle interval has elapsed. Widening
+// the gate to the token_usage event type, not only a non-zero usage
+// component, makes a session_metadata row exist exactly when the
+// session has reported a measurement, including one that reports zero.
+// It is a no-op for an event carrying neither signal, for unknown
+// issues, and while throttled. Must be called from the orchestrator's
+// single-writer event loop so it shares the one SQLite writer and the
+// running entry it mutates.
 func (o *Orchestrator) maybeWriteIncrementalMetadata(ctx context.Context, issueID string, event domain.AgentEvent) {
-	if !hasUsage(event.Usage) {
+	if !hasUsage(event.Usage) && event.Type != domain.EventTokenUsage {
 		return
 	}
 	entry := o.state.Running[issueID]
@@ -864,12 +868,15 @@ func (o *Orchestrator) rebuildBudgetExhausted(ctx context.Context, cfg config.Se
 	if cfg.Agent.MaxSessions == 0 && cfg.Agent.MaxTokens == 0 {
 		o.state.BudgetExhausted = make(map[string]struct{})
 		o.state.BudgetExhaustedReason = make(map[string]string)
+		o.state.TokenBudgetIncomplete = make(map[string]struct{})
 		return
 	}
 
 	candidateIDs := make([]string, len(sorted))
+	identifierByID := make(map[string]string, len(sorted))
 	for i, issue := range sorted {
 		candidateIDs[i] = issue.ID
+		identifierByID[issue.ID] = issue.Identifier
 	}
 
 	prior := o.state.BudgetExhausted
@@ -898,8 +905,9 @@ func (o *Orchestrator) rebuildBudgetExhausted(ctx context.Context, cfg config.Se
 		}
 	}
 
+	freshIncomplete := make(map[string]struct{})
 	if cfg.Agent.MaxTokens > 0 {
-		tokenExhausted, qErr := o.store.QueryTokenExhaustedIssues(ctx, candidateIDs, cfg.Agent.MaxTokens)
+		usageByIssue, qErr := o.store.QueryTokenBudgetUsage(ctx, candidateIDs)
 		if qErr != nil {
 			o.logger.Warn("token budget exhaustion query failed, retaining previous set",
 				slog.Any("error", qErr),
@@ -912,12 +920,30 @@ func (o *Orchestrator) rebuildBudgetExhausted(ctx context.Context, cfg config.Se
 				freshReason[id] = budgetReasonToken
 			}
 		} else {
-			for _, id := range tokenExhausted {
-				fresh[id] = struct{}{}
-				freshReason[id] = budgetReasonToken
+			for _, id := range candidateIDs {
+				usage := usageByIssue[id]
+				if usage.TotalTokens >= int64(cfg.Agent.MaxTokens) {
+					fresh[id] = struct{}{}
+					freshReason[id] = budgetReasonToken
+					continue
+				}
+				if usage.UnmeasuredSessions == 0 {
+					continue
+				}
+				freshIncomplete[id] = struct{}{}
+				if _, wasIncomplete := o.state.TokenBudgetIncomplete[id]; wasIncomplete {
+					continue
+				}
+				issueLog := logging.WithIssue(o.logger, id, identifierByID[id])
+				issueLog.Warn("token budget cannot be fully evaluated, allowing dispatch",
+					slog.Int64("used_tokens", usage.TotalTokens),
+					slog.Int64("budget_tokens", int64(cfg.Agent.MaxTokens)),
+					slog.Int("unmeasured_sessions", usage.UnmeasuredSessions),
+				)
 			}
 		}
 	}
+	o.state.TokenBudgetIncomplete = freshIncomplete
 
 	o.state.BudgetExhausted = fresh
 	o.state.BudgetExhaustedReason = freshReason

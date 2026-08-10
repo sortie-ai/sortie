@@ -64,11 +64,13 @@ type threadTokenUsage struct {
 }
 
 // tokenUsageUpdatedParams is the params payload of a
-// thread/tokenUsage/updated notification.
+// thread/tokenUsage/updated notification. TokenUsage is a pointer so a
+// notification whose tokenUsage object is absent from the wire payload
+// is distinguishable from one reporting an all-zero breakdown.
 type tokenUsageUpdatedParams struct {
-	ThreadID   string           `json:"threadId"`
-	TurnID     string           `json:"turnId"`
-	TokenUsage threadTokenUsage `json:"tokenUsage"`
+	ThreadID   string            `json:"threadId"`
+	TurnID     string            `json:"turnId"`
+	TokenUsage *threadTokenUsage `json:"tokenUsage"`
 }
 
 // turnCompletedParams is the params payload of a turn/completed

@@ -41,6 +41,7 @@ type MockAdapter struct {
 	stopError              string
 	apiDurationMS          int64
 	toolCalls              []mockToolCall
+	reportTokenUsage       bool
 
 	// mu guards turnIndex for concurrent RunTurn calls.
 	mu        sync.Mutex
@@ -62,18 +63,22 @@ type mockToolCall struct {
 //
 // Accepted config keys: session_id, agent_pid, start_error,
 // turn_outcomes, events_per_turn, input_tokens_per_turn,
-// output_tokens_per_turn, turn_delay_ms, stop_error.
-// input_tokens_per_turn counts all input including cache reads, so
-// cache_read_tokens_per_turn is a subset of it rather than an addition
-// to it. The adapter reports run-cumulative counts by construction:
-// each turn's contribution accrues onto the totals of every prior
-// turn in the same session.
+// output_tokens_per_turn, turn_delay_ms, stop_error,
+// report_token_usage. input_tokens_per_turn counts all input including
+// cache reads, so cache_read_tokens_per_turn is a subset of it rather
+// than an addition to it. The adapter reports run-cumulative counts by
+// construction: each turn's contribution accrues onto the totals of
+// every prior turn in the same session. report_token_usage defaults to
+// true; when false, the adapter emits no token_usage event, leaves
+// [domain.TurnResult] Usage at the zero value, and reports
+// UsageMeasured false, simulating a runtime that reported nothing.
 func NewMockAdapter(config map[string]any) (domain.AgentAdapter, error) {
 	m := &MockAdapter{
 		sessionID:           "mock-session-001",
 		eventsPerTurn:       3,
 		inputTokensPerTurn:  100,
 		outputTokensPerTurn: 50,
+		reportTokenUsage:    true,
 	}
 
 	if v, ok := config["session_id"].(string); ok {
@@ -111,6 +116,7 @@ func NewMockAdapter(config map[string]any) (domain.AgentAdapter, error) {
 	m.outputTokensPerTurn = intFromConfig(config, "output_tokens_per_turn", m.outputTokensPerTurn)
 	m.cacheReadTokensPerTurn = intFromConfig(config, "cache_read_tokens_per_turn", m.cacheReadTokensPerTurn)
 	m.turnDelayMS = intFromConfig(config, "turn_delay_ms", m.turnDelayMS)
+	m.reportTokenUsage = boolFromConfig(config, "report_token_usage", m.reportTokenUsage)
 	if v, ok := config["model_name"].(string); ok {
 		m.modelName = v
 	}
@@ -213,27 +219,30 @@ func (m *MockAdapter) RunTurn(ctx context.Context, session domain.Session, param
 		})
 	}
 
-	cumulativeInput := int64(currentIndex+1) * int64(m.inputTokensPerTurn)
-	cumulativeOutput := int64(currentIndex+1) * int64(m.outputTokensPerTurn)
-	cumulativeCacheRead := int64(currentIndex+1) * int64(m.cacheReadTokensPerTurn)
-	usage := domain.TokenUsage{
-		InputTokens:     cumulativeInput,
-		OutputTokens:    cumulativeOutput,
-		TotalTokens:     cumulativeInput + cumulativeOutput,
-		CacheReadTokens: cumulativeCacheRead,
-	}
+	var usage domain.TokenUsage
+	if m.reportTokenUsage {
+		cumulativeInput := int64(currentIndex+1) * int64(m.inputTokensPerTurn)
+		cumulativeOutput := int64(currentIndex+1) * int64(m.outputTokensPerTurn)
+		cumulativeCacheRead := int64(currentIndex+1) * int64(m.cacheReadTokensPerTurn)
+		usage = domain.TokenUsage{
+			InputTokens:     cumulativeInput,
+			OutputTokens:    cumulativeOutput,
+			TotalTokens:     cumulativeInput + cumulativeOutput,
+			CacheReadTokens: cumulativeCacheRead,
+		}
 
-	tokenEvt := domain.AgentEvent{
-		Type:      domain.EventTokenUsage,
-		Timestamp: time.Now().UTC(),
-		Usage:     usage,
-		Model:     m.modelName,
-		Message:   "mock token usage",
+		tokenEvt := domain.AgentEvent{
+			Type:      domain.EventTokenUsage,
+			Timestamp: time.Now().UTC(),
+			Usage:     usage,
+			Model:     m.modelName,
+			Message:   "mock token usage",
+		}
+		if m.apiDurationMS > 0 {
+			tokenEvt.APIDurationMS = m.apiDurationMS
+		}
+		params.OnEvent(tokenEvt)
 	}
-	if m.apiDurationMS > 0 {
-		tokenEvt.APIDurationMS = m.apiDurationMS
-	}
-	params.OnEvent(tokenEvt)
 
 	for _, tc := range m.toolCalls {
 		params.OnEvent(domain.AgentEvent{
@@ -254,9 +263,10 @@ func (m *MockAdapter) RunTurn(ctx context.Context, session domain.Session, param
 	})
 
 	turnResult := domain.TurnResult{
-		SessionID:  session.ID,
-		ExitReason: exitReason,
-		Usage:      usage,
+		SessionID:     session.ID,
+		ExitReason:    exitReason,
+		Usage:         usage,
+		UsageMeasured: m.reportTokenUsage,
 	}
 
 	if isError {
@@ -331,6 +341,22 @@ func intFromConfig(config map[string]any, key string, fallback int) int {
 	default:
 		return fallback
 	}
+}
+
+// boolFromConfig extracts a boolean value from a config map, accepting
+// a Go bool (the type a YAML boolean reaches the constructor as).
+// Returns the fallback if the key is missing or has an unexpected
+// type.
+func boolFromConfig(config map[string]any, key string, fallback bool) bool {
+	v, ok := config[key]
+	if !ok {
+		return fallback
+	}
+	b, ok := v.(bool)
+	if !ok {
+		return fallback
+	}
+	return b
 }
 
 // int64FromConfig extracts an int64 value from a config map, accepting

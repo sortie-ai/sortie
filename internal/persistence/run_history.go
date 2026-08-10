@@ -35,6 +35,15 @@ type RunHistory struct {
 	OutputTokens    int64 // Accumulated output tokens for the run; 0 for pre-migration rows.
 	TotalTokens     int64 // Accumulated total tokens for the run; 0 for pre-migration rows.
 	CacheReadTokens int64 // Accumulated cache-read tokens for the run; 0 for pre-migration rows.
+
+	// TokensMeasured is true when the row's four token columns carry a
+	// figure the coding agent's runtime reported, and false when the
+	// run's spend is unknown rather than zero. Every writer must set
+	// this field explicitly: the column's SQL default is 1, which does
+	// not match this field's Go zero value of false, so a writer that
+	// omits it records an unmeasured run rather than inheriting the
+	// column default.
+	TokensMeasured bool
 }
 
 // AppendRunHistory inserts a completed run attempt into run_history. The ID
@@ -63,12 +72,12 @@ func (s *Store) AppendRunHistory(ctx context.Context, run RunHistory) (RunHistor
 
 	res, err := s.db.ExecContext(ctx,
 		`INSERT INTO run_history
-			(issue_id, identifier, display_identifier, attempt, agent_adapter, workspace, started_at, completed_at, status, error, workflow_file, turns_completed, review_metadata, rule_name, template_id, input_tokens, output_tokens, total_tokens, cache_read_tokens)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+			(issue_id, identifier, display_identifier, attempt, agent_adapter, workspace, started_at, completed_at, status, error, workflow_file, turns_completed, review_metadata, rule_name, template_id, input_tokens, output_tokens, total_tokens, cache_read_tokens, tokens_measured)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		run.IssueID, run.Identifier, dispIDVal, run.Attempt, run.AgentAdapter,
 		run.Workspace, run.StartedAt, run.CompletedAt, run.Status, errVal, wfVal,
 		run.TurnsCompleted, reviewMetaVal, run.RuleName, run.TemplateID,
-		run.InputTokens, run.OutputTokens, run.TotalTokens, run.CacheReadTokens,
+		run.InputTokens, run.OutputTokens, run.TotalTokens, run.CacheReadTokens, run.TokensMeasured,
 	)
 	if err != nil {
 		return RunHistory{}, fmt.Errorf("append run history for %q: %w", run.IssueID, err)
@@ -89,7 +98,7 @@ func (s *Store) QueryRunHistoryByIssue(ctx context.Context, issueID string) ([]R
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT id, issue_id, identifier, display_identifier, attempt, agent_adapter, workspace,
 			started_at, completed_at, status, error, workflow_file, turns_completed, review_metadata, rule_name, template_id,
-			input_tokens, output_tokens, total_tokens, cache_read_tokens
+			input_tokens, output_tokens, total_tokens, cache_read_tokens, tokens_measured
 		FROM run_history
 		WHERE issue_id = ?
 		ORDER BY id DESC`, issueID)
@@ -106,7 +115,7 @@ func (s *Store) QueryRunHistoryByIssue(ctx context.Context, issueID string) ([]R
 			&r.ID, &r.IssueID, &r.Identifier, &dispIDVal, &r.Attempt, &r.AgentAdapter,
 			&r.Workspace, &r.StartedAt, &r.CompletedAt, &r.Status, &errVal, &wfVal,
 			&r.TurnsCompleted, &reviewMetaVal, &r.RuleName, &r.TemplateID,
-			&r.InputTokens, &r.OutputTokens, &r.TotalTokens, &r.CacheReadTokens,
+			&r.InputTokens, &r.OutputTokens, &r.TotalTokens, &r.CacheReadTokens, &r.TokensMeasured,
 		); err != nil {
 			return nil, fmt.Errorf("scan run history: %w", err)
 		}
@@ -162,7 +171,7 @@ func (s *Store) LoadLatestSuccessfulRunsForReactionRecovery(ctx context.Context,
 		SELECT r.id, r.issue_id, r.identifier, r.display_identifier, r.attempt, r.agent_adapter,
 			r.workspace, r.started_at, r.completed_at, r.status, r.error, r.workflow_file,
 			r.turns_completed, r.review_metadata, r.rule_name, r.template_id,
-			r.input_tokens, r.output_tokens, r.total_tokens, r.cache_read_tokens
+			r.input_tokens, r.output_tokens, r.total_tokens, r.cache_read_tokens, r.tokens_measured
 		FROM run_history AS r
 		JOIN bounded ON bounded.latest_id = r.id
 		ORDER BY r.id DESC`, completedAfter.UTC().Format(time.RFC3339), limit)
@@ -179,7 +188,7 @@ func (s *Store) LoadLatestSuccessfulRunsForReactionRecovery(ctx context.Context,
 			&run.ID, &run.IssueID, &run.Identifier, &dispIDVal, &run.Attempt, &run.AgentAdapter,
 			&run.Workspace, &run.StartedAt, &run.CompletedAt, &run.Status, &errVal, &wfVal,
 			&run.TurnsCompleted, &reviewMetaVal, &run.RuleName, &run.TemplateID,
-			&run.InputTokens, &run.OutputTokens, &run.TotalTokens, &run.CacheReadTokens,
+			&run.InputTokens, &run.OutputTokens, &run.TotalTokens, &run.CacheReadTokens, &run.TokensMeasured,
 		); err != nil {
 			return nil, fmt.Errorf("load recovery runs: %w", err)
 		}
@@ -221,7 +230,7 @@ func (s *Store) QueryRecentRunHistory(ctx context.Context, limit int, afterID in
 		rows, err = s.db.QueryContext(ctx,
 			`SELECT id, issue_id, identifier, display_identifier, attempt, agent_adapter, workspace,
 				started_at, completed_at, status, error, workflow_file, turns_completed, review_metadata, rule_name, template_id,
-				input_tokens, output_tokens, total_tokens, cache_read_tokens
+				input_tokens, output_tokens, total_tokens, cache_read_tokens, tokens_measured
 			FROM run_history
 			WHERE id < ?
 			ORDER BY id DESC
@@ -230,7 +239,7 @@ func (s *Store) QueryRecentRunHistory(ctx context.Context, limit int, afterID in
 		rows, err = s.db.QueryContext(ctx,
 			`SELECT id, issue_id, identifier, display_identifier, attempt, agent_adapter, workspace,
 				started_at, completed_at, status, error, workflow_file, turns_completed, review_metadata, rule_name, template_id,
-				input_tokens, output_tokens, total_tokens, cache_read_tokens
+				input_tokens, output_tokens, total_tokens, cache_read_tokens, tokens_measured
 			FROM run_history
 			ORDER BY id DESC
 			LIMIT ?`, limit)
@@ -248,7 +257,7 @@ func (s *Store) QueryRecentRunHistory(ctx context.Context, limit int, afterID in
 			&r.ID, &r.IssueID, &r.Identifier, &dispIDVal, &r.Attempt, &r.AgentAdapter,
 			&r.Workspace, &r.StartedAt, &r.CompletedAt, &r.Status, &errVal, &wfVal,
 			&r.TurnsCompleted, &reviewMetaVal, &r.RuleName, &r.TemplateID,
-			&r.InputTokens, &r.OutputTokens, &r.TotalTokens, &r.CacheReadTokens,
+			&r.InputTokens, &r.OutputTokens, &r.TotalTokens, &r.CacheReadTokens, &r.TokensMeasured,
 		); err != nil {
 			return nil, fmt.Errorf("scan run history: %w", err)
 		}
@@ -329,17 +338,32 @@ func (s *Store) QueryBudgetExhaustedIssues(ctx context.Context, candidateIDs []s
 	return exhaustedIDs, nil
 }
 
-// SumTotalTokensByIssue returns the sum of total_tokens across all
-// run_history rows for the issue and the count of those rows. Returns
-// (0, 0, nil) when no rows exist.
-func (s *Store) SumTotalTokensByIssue(ctx context.Context, issueID string) (sumTotalTokens int64, sessionCount int, err error) {
+// IssueTokenUsage is the per-issue token spend read by the token
+// ceiling and by the cost_budget tool: a summed total, a row count,
+// and a count of rows whose spend is unknown rather than zero.
+type IssueTokenUsage struct {
+	TotalTokens        int64
+	Sessions           int
+	UnmeasuredSessions int
+}
+
+// TokenUsageByIssue returns the summed total_tokens, the row count, and
+// the count of unmeasured rows across all run_history rows for the
+// issue. Returns the zero [IssueTokenUsage] and a nil error when the
+// issue has no rows. The summed total is exact even though an
+// unmeasured row's token columns are always zero.
+func (s *Store) TokenUsageByIssue(ctx context.Context, issueID string) (IssueTokenUsage, error) {
+	var usage IssueTokenUsage
 	row := s.db.QueryRowContext(ctx,
-		`SELECT COALESCE(SUM(total_tokens), 0), COUNT(*) FROM run_history WHERE issue_id = ?`, issueID,
+		`SELECT COALESCE(SUM(total_tokens), 0), COUNT(*), SUM(CASE WHEN tokens_measured = 0 THEN 1 ELSE 0 END)
+		FROM run_history WHERE issue_id = ?`, issueID,
 	)
-	if err := row.Scan(&sumTotalTokens, &sessionCount); err != nil {
-		return 0, 0, fmt.Errorf("sum total tokens by issue %q: %w", issueID, err)
+	var unmeasured sql.NullInt64
+	if err := row.Scan(&usage.TotalTokens, &usage.Sessions, &unmeasured); err != nil {
+		return IssueTokenUsage{}, fmt.Errorf("token usage by issue %q: %w", issueID, err)
 	}
-	return sumTotalTokens, sessionCount, nil
+	usage.UnmeasuredSessions = int(unmeasured.Int64)
+	return usage, nil
 }
 
 // latestRunCompletionChunkSize is the maximum number of identifiers
@@ -402,44 +426,50 @@ func (s *Store) LatestRunCompletionByIdentifier(ctx context.Context, identifiers
 	return result, nil
 }
 
-// QueryTokenExhaustedIssues returns issue IDs from candidateIDs whose
-// summed run_history total_tokens meet or exceed maxTokens. Returns an
-// empty non-nil slice when no issues qualify or candidateIDs is empty.
-func (s *Store) QueryTokenExhaustedIssues(ctx context.Context, candidateIDs []string, maxTokens int) ([]string, error) {
+// QueryTokenBudgetUsage returns one [IssueTokenUsage] per candidate in
+// candidateIDs that has at least one run_history row. A candidate with
+// no rows is absent from the returned map; the caller reads that as
+// zero spend and zero unmeasured sessions. An empty candidateIDs
+// returns an empty non-nil map without querying. The threshold
+// comparison against a token ceiling is the caller's responsibility.
+func (s *Store) QueryTokenBudgetUsage(ctx context.Context, candidateIDs []string) (map[string]IssueTokenUsage, error) {
+	usage := map[string]IssueTokenUsage{}
 	if len(candidateIDs) == 0 {
-		return []string{}, nil
+		return usage, nil
 	}
 
 	placeholders := strings.Repeat("?,", len(candidateIDs))
 	placeholders = placeholders[:len(placeholders)-1]
 
-	args := make([]any, 0, len(candidateIDs)+1)
+	args := make([]any, 0, len(candidateIDs))
 	for _, id := range candidateIDs {
 		args = append(args, id)
 	}
-	args = append(args, maxTokens)
 
 	query := fmt.Sprintf( //nolint:gosec // placeholders is "?,?,..." built from len(candidateIDs); no user data in format string
-		`SELECT issue_id FROM run_history WHERE issue_id IN (%s) GROUP BY issue_id HAVING SUM(total_tokens) >= ?`,
+		`SELECT issue_id, COALESCE(SUM(total_tokens), 0), COUNT(*), SUM(CASE WHEN tokens_measured = 0 THEN 1 ELSE 0 END)
+		FROM run_history WHERE issue_id IN (%s) GROUP BY issue_id`,
 		placeholders,
 	)
 
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
-		return nil, fmt.Errorf("query token exhausted issues: %w", err)
+		return nil, fmt.Errorf("query token budget usage: %w", err)
 	}
 	defer rows.Close() //nolint:errcheck // read-only query; close error is non-actionable
 
-	exhaustedIDs := []string{}
 	for rows.Next() {
 		var issueID string
-		if err := rows.Scan(&issueID); err != nil {
-			return nil, fmt.Errorf("scan token exhausted issue: %w", err)
+		var issueUsage IssueTokenUsage
+		var unmeasured sql.NullInt64
+		if err := rows.Scan(&issueID, &issueUsage.TotalTokens, &issueUsage.Sessions, &unmeasured); err != nil {
+			return nil, fmt.Errorf("scan token budget usage: %w", err)
 		}
-		exhaustedIDs = append(exhaustedIDs, issueID)
+		issueUsage.UnmeasuredSessions = int(unmeasured.Int64)
+		usage[issueID] = issueUsage
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("query token exhausted issues: %w", err)
+		return nil, fmt.Errorf("query token budget usage: %w", err)
 	}
-	return exhaustedIDs, nil
+	return usage, nil
 }

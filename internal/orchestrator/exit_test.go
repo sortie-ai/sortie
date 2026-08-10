@@ -316,6 +316,9 @@ func TestHandleWorkerExit_RunHistoryTokenColumns(t *testing.T) {
 	entry.AgentOutputTokens = 200
 	entry.AgentTotalTokens = 300
 	entry.CacheReadTokens = 40
+	// The event that advanced these totals also marked the entry
+	// measured, so a fixture carrying totals must carry the flag.
+	entry.UsageMeasured = true
 
 	HandleWorkerExit(state, WorkerResult{
 		IssueID:       "ISSUE-TOK",
@@ -364,6 +367,7 @@ func TestHandleWorkerExit_UsageReconciliation_NoDoubleCount(t *testing.T) {
 	store := &mockExitStore{}
 	state := exitState(t, "ISSUE-USG1", nil)
 	entry := state.Running["ISSUE-USG1"]
+	entry.UsageMeasured = true
 	entry.AgentInputTokens = 100
 	entry.AgentOutputTokens = 50
 	entry.AgentTotalTokens = 150
@@ -410,6 +414,7 @@ func TestHandleWorkerExit_UsageReconciliation_DroppedTrailingEvent(t *testing.T)
 	store := &mockExitStore{}
 	state := exitState(t, "ISSUE-USG2", nil)
 	entry := state.Running["ISSUE-USG2"]
+	entry.UsageMeasured = true
 	entry.AgentInputTokens = 100
 	entry.AgentOutputTokens = 50
 	entry.AgentTotalTokens = 150
@@ -455,6 +460,152 @@ func TestHandleWorkerExit_UsageReconciliation_DroppedTrailingEvent(t *testing.T)
 	if state.AgentTotals.InputTokens != 180 {
 		t.Errorf("AgentTotals.InputTokens = %d, want 180", state.AgentTotals.InputTokens)
 	}
+}
+
+// TestHandleWorkerExit_TokensMeasured verifies the exit path's fold of
+// entry.UsageMeasured and WorkerResult.UsageMeasured into
+// RunHistory.TokensMeasured: an unmeasured run, a measured-zero run, a
+// run that exits before entering a turn, a measurement recovered only
+// from the worker result, and a usage figure reported without any
+// measurement assertion.
+func TestHandleWorkerExit_TokensMeasured(t *testing.T) {
+	t.Parallel()
+
+	t.Run("unmeasured run writes tokens_measured 0 with four zero token columns", func(t *testing.T) {
+		t.Parallel()
+
+		store := &mockExitStore{}
+		state := exitState(t, "ISSUE-UNM", nil)
+
+		HandleWorkerExit(state, WorkerResult{
+			IssueID:      "ISSUE-UNM",
+			Identifier:   "ISSUE-UNM-ident",
+			ExitKind:     WorkerExitNormal,
+			AgentAdapter: "mock",
+		}, defaultExitParams(t, store))
+
+		if len(store.runHistories) != 1 {
+			t.Fatalf("AppendRunHistory called %d times, want 1", len(store.runHistories))
+		}
+		run := store.runHistories[0]
+		if run.TokensMeasured {
+			t.Error("RunHistory.TokensMeasured = true, want false for an unmeasured run")
+		}
+		if run.InputTokens != 0 || run.OutputTokens != 0 || run.TotalTokens != 0 || run.CacheReadTokens != 0 {
+			t.Errorf("RunHistory tokens = (%d, %d, %d, %d), want all zero", run.InputTokens, run.OutputTokens, run.TotalTokens, run.CacheReadTokens)
+		}
+	})
+
+	t.Run("measured-zero run writes tokens_measured 1 with four zero token columns", func(t *testing.T) {
+		t.Parallel()
+
+		store := &mockExitStore{}
+		state := exitState(t, "ISSUE-MZ", nil)
+		state.Running["ISSUE-MZ"].UsageMeasured = true
+
+		HandleWorkerExit(state, WorkerResult{
+			IssueID:      "ISSUE-MZ",
+			Identifier:   "ISSUE-MZ-ident",
+			ExitKind:     WorkerExitNormal,
+			AgentAdapter: "mock",
+		}, defaultExitParams(t, store))
+
+		if len(store.runHistories) != 1 {
+			t.Fatalf("AppendRunHistory called %d times, want 1", len(store.runHistories))
+		}
+		run := store.runHistories[0]
+		if !run.TokensMeasured {
+			t.Error("RunHistory.TokensMeasured = false, want true for a measured-zero run")
+		}
+		if run.InputTokens != 0 || run.OutputTokens != 0 || run.TotalTokens != 0 || run.CacheReadTokens != 0 {
+			t.Errorf("RunHistory tokens = (%d, %d, %d, %d), want all zero", run.InputTokens, run.OutputTokens, run.TotalTokens, run.CacheReadTokens)
+		}
+	})
+
+	t.Run("run exiting before entering a turn writes tokens_measured 1", func(t *testing.T) {
+		t.Parallel()
+
+		store := &mockExitStore{}
+		state := exitState(t, "ISSUE-EARLY", nil)
+
+		HandleWorkerExit(state, WorkerResult{
+			IssueID:       "ISSUE-EARLY",
+			Identifier:    "ISSUE-EARLY-ident",
+			ExitKind:      WorkerExitError,
+			AgentAdapter:  "mock",
+			UsageMeasured: true,
+		}, defaultExitParams(t, store))
+
+		if len(store.runHistories) != 1 {
+			t.Fatalf("AppendRunHistory called %d times, want 1", len(store.runHistories))
+		}
+		run := store.runHistories[0]
+		if !run.TokensMeasured {
+			t.Error("RunHistory.TokensMeasured = false, want true for a run that exited before entering a turn")
+		}
+	})
+
+	t.Run("a measurement delivered only on WorkerResult.UsageMeasured is recovered", func(t *testing.T) {
+		t.Parallel()
+
+		store := &mockExitStore{}
+		state := exitState(t, "ISSUE-RECOVER", nil)
+		// entry.UsageMeasured stays at its zero value: the orchestrator
+		// event loop never observed a qualifying event.
+
+		HandleWorkerExit(state, WorkerResult{
+			IssueID:       "ISSUE-RECOVER",
+			Identifier:    "ISSUE-RECOVER-ident",
+			ExitKind:      WorkerExitNormal,
+			AgentAdapter:  "mock",
+			UsageMeasured: true,
+		}, defaultExitParams(t, store))
+
+		if len(store.runHistories) != 1 {
+			t.Fatalf("AppendRunHistory called %d times, want 1", len(store.runHistories))
+		}
+		run := store.runHistories[0]
+		if !run.TokensMeasured {
+			t.Error("RunHistory.TokensMeasured = false, want true (recovered from WorkerResult.UsageMeasured alone)")
+		}
+	})
+
+	t.Run("usage reported without a measurement assertion is zeroed, not recorded", func(t *testing.T) {
+		t.Parallel()
+
+		store := &mockExitStore{}
+		state := exitState(t, "ISSUE-NOASSERT", nil)
+
+		// An adapter that reports a usage figure on the worker result but
+		// never asserts UsageMeasured, and whose events the event loop
+		// never saw. The exit path's usage reconciliation populates the
+		// entry's token totals from that figure, so without the zeroing
+		// the row would carry non-zero tokens against tokens_measured = 0.
+		HandleWorkerExit(state, WorkerResult{
+			IssueID:      "ISSUE-NOASSERT",
+			Identifier:   "ISSUE-NOASSERT-ident",
+			ExitKind:     WorkerExitNormal,
+			AgentAdapter: "mock",
+			Usage: domain.TokenUsage{
+				InputTokens:     1000,
+				OutputTokens:    200,
+				TotalTokens:     1200,
+				CacheReadTokens: 100,
+			},
+		}, defaultExitParams(t, store))
+
+		if len(store.runHistories) != 1 {
+			t.Fatalf("AppendRunHistory called %d times, want 1", len(store.runHistories))
+		}
+		run := store.runHistories[0]
+		if run.TokensMeasured {
+			t.Error("RunHistory.TokensMeasured = true, want false when no adapter asserted a measurement")
+		}
+		if run.InputTokens != 0 || run.OutputTokens != 0 || run.TotalTokens != 0 || run.CacheReadTokens != 0 {
+			t.Errorf("RunHistory tokens = (%d, %d, %d, %d), want all zero alongside tokens_measured = 0",
+				run.InputTokens, run.OutputTokens, run.TotalTokens, run.CacheReadTokens)
+		}
+	})
 }
 
 func TestHandleWorkerExit_RetryableError(t *testing.T) {
@@ -1038,6 +1189,7 @@ func TestHandleWorkerExit_SessionMetadataPersisted(t *testing.T) {
 	entry.AgentInputTokens = 500
 	entry.AgentOutputTokens = 200
 	entry.AgentTotalTokens = 700
+	entry.UsageMeasured = true
 	params := defaultExitParams(t, store)
 
 	HandleWorkerExit(state, WorkerResult{

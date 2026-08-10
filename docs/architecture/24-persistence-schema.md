@@ -49,6 +49,15 @@ Note: `timer_handle` is runtime-only and is not stored.
 | `output_tokens`     | INTEGER | Accumulated output tokens, 0 for pre-migration rows (migration 011) |
 | `total_tokens`      | INTEGER | Accumulated total tokens, 0 for pre-migration rows (migration 011) |
 | `cache_read_tokens` | INTEGER | Accumulated cache-read tokens, 0 for pre-migration rows (migration 011) |
+| `tokens_measured`   | INTEGER | `1` when the four token columns above carry a figure the coding agent's runtime reported; `0` when the run's spend is unknown and all four are zero (migration 012) |
+
+A row with `tokens_measured = 0` always carries zero in all four token columns; the invariant
+runs in one direction only, because a measured run can legitimately report a zero spend. Every
+writer sets `tokens_measured` explicitly rather than relying on the column's default: the SQL
+default is `1`, but the Go zero value of the corresponding struct field is `false`, so a writer
+that omits the field records an unmeasured run rather than inheriting the default. The column
+default of `1` exists solely to answer for rows written before migration 012, whose provenance
+is not recoverable and are treated as measured.
 
 The token columns mirror those on `session_metadata`. The per-issue token budget
 (`agent.max_tokens`) sums `total_tokens` here; the other three are recorded for parity and

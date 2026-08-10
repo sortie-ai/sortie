@@ -10,6 +10,9 @@
 // abstract credits figure, never token counts, so it emits no token-usage
 // events and leaves [domain.TurnResult] Usage at the zero value. Token-based
 // budget enforcement is therefore inert; only the turn timeout applies.
+// Every run is reported unmeasured, because the headless runtime reports no
+// token counts: [domain.TurnResult] UsageMeasured is left at its zero value
+// on every turn.
 //
 // MCP injection has no effect under KIRO_API_KEY authentication: the backend
 // profile gate disables MCP, so [domain.StartSessionParams] MCPConfigPath is

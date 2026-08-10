@@ -277,6 +277,14 @@ type TurnResult struct {
 	// session so far, not just this turn's contribution. The
 	// orchestrator computes deltas relative to previous reports.
 	Usage TokenUsage
+
+	// UsageMeasured reports whether the adapter observed at least one
+	// usage figure for the session by the end of this turn. A false
+	// value paired with a zero Usage means the session's spend is
+	// unknown, not that it spent nothing. UsageMeasured is monotone:
+	// once an adapter has reported true for a session, it must not
+	// report false on a later turn of the same session.
+	UsageMeasured bool
 }
 
 // AgentAdapter defines the contract that all coding-agent integrations

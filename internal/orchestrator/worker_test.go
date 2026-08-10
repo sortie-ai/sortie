@@ -520,6 +520,175 @@ func TestRunWorkerAttempt(t *testing.T) {
 		}
 	})
 
+	t.Run("usage_measured_exit_before_first_turn_stays_true", func(t *testing.T) {
+		t.Parallel()
+
+		tmpDir := t.TempDir()
+		cfg := defaultWorkerConfig(tmpDir)
+		ec := newExitCapture()
+
+		deps := WorkerDeps{
+			TrackerAdapter:         &mockTrackerAdapter{},
+			AgentAdapter:           &mockAgentAdapter{},
+			ConfigFunc:             func() config.ServiceConfig { return cfg },
+			PromptTemplateByIDFunc: func(_ string) *prompt.Template { return nil },
+			TemplateID:             "/nonexistent/template.md",
+			OnEvent:                func(_ string, _ domain.AgentEvent) {},
+			OnExit:                 ec.onExit,
+			Logger:                 discardLogger(),
+			Metrics:                &domain.NoopMetrics{},
+		}
+
+		RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
+		result := ec.waitResult(t)
+
+		if !result.UsageMeasured {
+			t.Error("WorkerResult.UsageMeasured = false, want true for an exit before any turn was entered")
+		}
+	})
+
+	t.Run("usage_measured_drops_to_false_before_the_first_turn", func(t *testing.T) {
+		t.Parallel()
+
+		tmpDir := t.TempDir()
+		cfg := defaultWorkerConfig(tmpDir)
+		cfg.Agent.MaxTurns = 1
+		ec := newExitCapture()
+
+		deps := WorkerDeps{
+			TrackerAdapter: &mockTrackerAdapter{},
+			AgentAdapter: &mockAgentAdapter{
+				runTurnFn: func(_ context.Context, session domain.Session, _ domain.RunTurnParams) (domain.TurnResult, error) {
+					// No usage-bearing event and no UsageMeasured signal:
+					// the mirror must stay at the false value it dropped to
+					// before this call.
+					return domain.TurnResult{SessionID: session.ID, ExitReason: domain.EventTurnFailed}, errors.New("boom")
+				},
+			},
+			ConfigFunc:             func() config.ServiceConfig { return cfg },
+			PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "do work on {{ .issue.title }}") },
+			OnEvent:                func(_ string, _ domain.AgentEvent) {},
+			OnExit:                 ec.onExit,
+			Logger:                 discardLogger(),
+		}
+
+		RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
+		result := ec.waitResult(t)
+
+		if result.UsageMeasured {
+			t.Error("WorkerResult.UsageMeasured = true, want false after entering the first turn with no usage signal")
+		}
+	})
+
+	t.Run("usage_measured_flips_true_on_a_usage_bearing_event", func(t *testing.T) {
+		t.Parallel()
+
+		tmpDir := t.TempDir()
+		cfg := defaultWorkerConfig(tmpDir)
+		cfg.Agent.MaxTurns = 1
+		ec := newExitCapture()
+
+		deps := WorkerDeps{
+			TrackerAdapter: &mockTrackerAdapter{},
+			AgentAdapter: &mockAgentAdapter{
+				runTurnFn: func(_ context.Context, session domain.Session, params domain.RunTurnParams) (domain.TurnResult, error) {
+					if params.OnEvent != nil {
+						params.OnEvent(domain.AgentEvent{
+							Type:      domain.EventTurnCompleted,
+							Timestamp: time.Now().UTC(),
+							Usage:     domain.TokenUsage{InputTokens: 5, OutputTokens: 5, TotalTokens: 10},
+						})
+					}
+					return domain.TurnResult{SessionID: session.ID, ExitReason: domain.EventTurnFailed}, errors.New("boom")
+				},
+			},
+			ConfigFunc:             func() config.ServiceConfig { return cfg },
+			PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "do work on {{ .issue.title }}") },
+			OnEvent:                func(_ string, _ domain.AgentEvent) {},
+			OnExit:                 ec.onExit,
+			Logger:                 discardLogger(),
+		}
+
+		RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
+		result := ec.waitResult(t)
+
+		if !result.UsageMeasured {
+			t.Error("WorkerResult.UsageMeasured = false, want true after a usage-bearing event, even on the error exit path")
+		}
+	})
+
+	t.Run("usage_measured_flips_true_on_an_all_zero_token_usage_event", func(t *testing.T) {
+		t.Parallel()
+
+		tmpDir := t.TempDir()
+		cfg := defaultWorkerConfig(tmpDir)
+		cfg.Agent.MaxTurns = 1
+		ec := newExitCapture()
+
+		deps := WorkerDeps{
+			TrackerAdapter: &mockTrackerAdapter{},
+			AgentAdapter: &mockAgentAdapter{
+				runTurnFn: func(_ context.Context, session domain.Session, params domain.RunTurnParams) (domain.TurnResult, error) {
+					if params.OnEvent != nil {
+						params.OnEvent(domain.AgentEvent{
+							Type:      domain.EventTokenUsage,
+							Timestamp: time.Now().UTC(),
+						})
+					}
+					return domain.TurnResult{SessionID: session.ID, ExitReason: domain.EventTurnFailed}, errors.New("boom")
+				},
+			},
+			ConfigFunc:             func() config.ServiceConfig { return cfg },
+			PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "do work on {{ .issue.title }}") },
+			OnEvent:                func(_ string, _ domain.AgentEvent) {},
+			OnExit:                 ec.onExit,
+			Logger:                 discardLogger(),
+		}
+
+		RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
+		result := ec.waitResult(t)
+
+		if !result.UsageMeasured {
+			t.Error("WorkerResult.UsageMeasured = false, want true after an all-zero token_usage event")
+		}
+	})
+
+	t.Run("usage_measured_flips_true_on_turn_result_alone", func(t *testing.T) {
+		t.Parallel()
+
+		tmpDir := t.TempDir()
+		cfg := defaultWorkerConfig(tmpDir)
+		cfg.Agent.MaxTurns = 1
+		ec := newExitCapture()
+
+		deps := WorkerDeps{
+			TrackerAdapter: &mockTrackerAdapter{},
+			AgentAdapter: &mockAgentAdapter{
+				runTurnFn: func(_ context.Context, session domain.Session, _ domain.RunTurnParams) (domain.TurnResult, error) {
+					// No event carries usage; only TurnResult reports the
+					// run measured.
+					return domain.TurnResult{
+						SessionID:     session.ID,
+						ExitReason:    domain.EventTurnFailed,
+						UsageMeasured: true,
+					}, errors.New("boom")
+				},
+			},
+			ConfigFunc:             func() config.ServiceConfig { return cfg },
+			PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "do work on {{ .issue.title }}") },
+			OnEvent:                func(_ string, _ domain.AgentEvent) {},
+			OnExit:                 ec.onExit,
+			Logger:                 discardLogger(),
+		}
+
+		RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
+		result := ec.waitResult(t)
+
+		if !result.UsageMeasured {
+			t.Error("WorkerResult.UsageMeasured = false, want true when only TurnResult.UsageMeasured reports the run measured")
+		}
+	})
+
 	t.Run("early_exit_on_tracker_state_change", func(t *testing.T) {
 		t.Parallel()
 
