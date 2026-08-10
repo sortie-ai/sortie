@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -15,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sortie-ai/sortie/internal/adaptertest"
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/registry"
 )
@@ -43,13 +45,7 @@ func assertTrackerErrorKind(t *testing.T, err error, want domain.TrackerErrorKin
 	if err == nil {
 		t.Fatalf("expected error with kind %q, got nil", want)
 	}
-	var te *domain.TrackerError
-	if !errors.As(err, &te) {
-		t.Fatalf("error type = %T, want *domain.TrackerError", err)
-	}
-	if te.Kind != want {
-		t.Errorf("TrackerError.Kind = %q, want %q", te.Kind, want)
-	}
+	adaptertest.AssertTrackerErrorKind(t, err, want)
 }
 
 func loadFixture(t *testing.T, name string) []byte {
@@ -483,6 +479,53 @@ func TestFetchCandidateIssues_NonNilEmptySlice(t *testing.T) {
 	}
 }
 
+func TestFetchCandidateIssues_MultiLabelWarnCarriesIssueIdentifier(t *testing.T) {
+	t.Parallel()
+
+	// #9 carries both "backlog" and "in-progress", two configured
+	// active-state labels.
+	const twoLabels = `[{"id":900,"number":9,"title":"Two state labels","body":null,"state":"open","html_url":"u",
+		"labels":[{"name":"backlog"},{"name":"in-progress"}],"assignees":[],"type":null,"pull_request":null,
+		"created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z"}]`
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(twoLabels)) //nolint:errcheck // test helper
+	}))
+	defer srv.Close()
+
+	a := mustAdapter(t, validConfig(srv.URL))
+	var buf strings.Builder
+	a.log = slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	if _, err := a.FetchCandidateIssues(context.Background()); err != nil {
+		t.Fatalf("FetchCandidateIssues: %v", err)
+	}
+
+	var warnLine string
+	for line := range strings.SplitSeq(buf.String(), "\n") {
+		if strings.Contains(line, "kept first of multiple matching state labels") {
+			warnLine = line
+			break
+		}
+	}
+	if warnLine == "" {
+		t.Fatalf("multi-match WARN not found in captured log: %s", buf.String())
+	}
+	if !strings.Contains(warnLine, "issue_identifier=9") {
+		t.Errorf("multi-match WARN missing issue_identifier=9: %q", warnLine)
+	}
+	if !strings.Contains(warnLine, "backlog") || !strings.Contains(warnLine, "in-progress") {
+		t.Errorf("multi-match WARN does not name both matching labels: %q", warnLine)
+	}
+	if strings.Contains(warnLine, "issue_index=") {
+		t.Errorf("multi-match WARN record carries issue_index: %q", warnLine)
+	}
+	if strings.Contains(warnLine, "iid=") {
+		t.Errorf("multi-match WARN record carries iid: %q", warnLine)
+	}
+}
+
 func TestFetchCandidateIssues_Pagination(t *testing.T) {
 	t.Parallel()
 
@@ -694,6 +737,8 @@ func TestFetchIssueByID_FullPopulation(t *testing.T) {
 	if issue.Comments[0].Body != "Looks good, please proceed." {
 		t.Errorf("Comments[0].Body = %q", issue.Comments[0].Body)
 	}
+	adaptertest.AssertIssueNormalized(t, issue)
+	adaptertest.AssertCommentsAscending(t, issue.Comments)
 }
 
 func TestFetchIssueByID_NotFound(t *testing.T) {
@@ -812,9 +857,9 @@ func TestFetchIssueByID_CommentsNotFound(t *testing.T) {
 func TestFetchIssuesByStates_EmptyInput(t *testing.T) {
 	t.Parallel()
 
-	var called bool
+	var calls int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		called = true
+		calls++
 	}))
 	defer srv.Close()
 
@@ -829,9 +874,7 @@ func TestFetchIssuesByStates_EmptyInput(t *testing.T) {
 	if len(issues) != 0 {
 		t.Errorf("len = %d, want 0", len(issues))
 	}
-	if called {
-		t.Error("server called for empty states — should short-circuit")
-	}
+	adaptertest.AssertNoRequestOnEmptyInput(t, calls, "FetchIssuesByStates")
 }
 
 func TestFetchIssuesByStates_ActiveStatesUsesIssuesEndpoint(t *testing.T) {
@@ -1033,6 +1076,7 @@ func TestFetchIssueStatesByIDs_NotFoundOmitted(t *testing.T) {
 	if _, ok := result["999"]; ok {
 		t.Error("result should NOT contain 999 (not found)")
 	}
+	adaptertest.AssertStateMapOmitsMissing(t, []string{"1", "999"}, result)
 }
 
 func TestFetchIssueStatesByIDs_ContextCancellation(t *testing.T) {
@@ -1116,6 +1160,7 @@ func TestFetchIssueComments_SinglePage(t *testing.T) {
 	if comments[1].Author != "bob" {
 		t.Errorf("comments[1].Author = %q, want bob", comments[1].Author)
 	}
+	adaptertest.AssertCommentsAscending(t, comments)
 }
 
 func TestFetchIssueComments_EmptyIsNonNil(t *testing.T) {
@@ -1132,12 +1177,7 @@ func TestFetchIssueComments_EmptyIsNonNil(t *testing.T) {
 	if err != nil {
 		t.Fatalf("FetchIssueComments: %v", err)
 	}
-	if comments == nil {
-		t.Fatal("comments is nil, want non-nil empty slice")
-	}
-	if len(comments) != 0 {
-		t.Errorf("len = %d, want 0", len(comments))
-	}
+	adaptertest.AssertEmptyNonNil(t, comments, "FetchIssueComments")
 }
 
 func TestFetchIssueComments_Pagination(t *testing.T) {
@@ -1357,6 +1397,40 @@ func TestTransitionIssue_PartialFailure_AddLabel(t *testing.T) {
 	}
 }
 
+func TestAddLabel_Additive(t *testing.T) {
+	t.Parallel()
+
+	var receivedBody []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedBody, _ = io.ReadAll(r.Body)
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("[]")) //nolint:errcheck // test helper
+	}))
+	defer srv.Close()
+
+	a := mustAdapter(t, validConfig(srv.URL))
+	if err := a.AddLabel(context.Background(), "42", "urgent"); err != nil {
+		t.Fatalf("AddLabel: %v", err)
+	}
+
+	var body struct {
+		Labels []string `json:"labels"`
+	}
+	if err := json.Unmarshal(receivedBody, &body); err != nil {
+		t.Fatalf("unmarshal request body: %v", err)
+	}
+	if !slices.Equal(body.Labels, []string{"urgent"}) {
+		t.Fatalf("request labels = %v, want [urgent]", body.Labels)
+	}
+
+	// The GitHub Labels API's POST route adds without removing, so the
+	// request carrying only the new label still leaves pre-existing labels
+	// in place.
+	before := []string{"existing"}
+	after := append(slices.Clone(before), body.Labels[0])
+	adaptertest.AssertLabelAddIsAdditive(t, before, after, body.Labels[0])
+}
+
 func TestTransitionIssue_InvalidTargetState(t *testing.T) {
 	t.Parallel()
 
@@ -1563,6 +1637,49 @@ func TestSetMetrics_RecordsOperations(t *testing.T) {
 	found := slices.Contains(spy.calls, "fetch_candidates:success")
 	if !found {
 		t.Errorf("metrics calls = %v, want fetch_candidates:success recorded", spy.calls)
+	}
+}
+
+func TestSetMetrics_RecordsAddLabelOperations(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		statusCode int
+		wantErr    bool
+		wantCall   string
+	}{
+		{"success", http.StatusOK, false, "add_label:success"},
+		{"error", http.StatusInternalServerError, true, "add_label:error"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(tt.statusCode)
+				w.Write([]byte("[]")) //nolint:errcheck // test helper
+			}))
+			defer srv.Close()
+
+			spy := &spyMetrics{}
+			a := mustAdapter(t, validConfig(srv.URL))
+			a.SetMetrics(spy)
+
+			err := a.AddLabel(context.Background(), "42", "urgent")
+			if tt.wantErr && err == nil {
+				t.Fatal("AddLabel: expected error, got nil")
+			}
+			if !tt.wantErr && err != nil {
+				t.Fatalf("AddLabel: %v", err)
+			}
+
+			found := slices.Contains(spy.calls, tt.wantCall)
+			if !found {
+				t.Errorf("metrics calls = %v, want %s recorded", spy.calls, tt.wantCall)
+			}
+		})
 	}
 }
 

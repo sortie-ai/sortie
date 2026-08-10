@@ -12,7 +12,7 @@
 // filtering. GitHub has no native workflow states — only open and
 // closed — so the adapter must derive Sortie states entirely from
 // labels. This requires knowledge of both active and terminal state
-// sets for extractState fallback logic, FetchIssuesByStates
+// sets for the label-state derivation fallback, FetchIssuesByStates
 // open/closed routing, and TransitionIssue close/reopen decisions.
 package github
 
@@ -28,6 +28,7 @@ import (
 
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/httpkit"
+	"github.com/sortie-ai/sortie/internal/issuekit"
 	"github.com/sortie-ai/sortie/internal/registry"
 	"github.com/sortie-ai/sortie/internal/trackermetrics"
 	"github.com/sortie-ai/sortie/internal/typeutil"
@@ -52,10 +53,10 @@ var _ domain.TrackerAdapter = (*GitHubAdapter)(nil)
 const maxPages = 200
 
 // defaultActiveStates is applied when the config omits active_states.
-var defaultActiveStates = []string{"backlog", "in-progress", "review"}
+var defaultActiveStates = issuekit.DefaultActiveLabelStates()
 
 // defaultTerminalStates is applied when the config omits terminal_states.
-var defaultTerminalStates = []string{"done", "wontfix"}
+var defaultTerminalStates = issuekit.DefaultTerminalLabelStates()
 
 // GitHubAdapter implements [domain.TrackerAdapter] against the GitHub
 // REST API. Safe for concurrent use.
@@ -69,6 +70,7 @@ type GitHubAdapter struct {
 	queryFilter    string
 	metrics        domain.Metrics
 	etagCache      *etagCache
+	log            *slog.Logger
 }
 
 // NewGitHubAdapter creates a [GitHubAdapter] from adapter configuration.
@@ -161,6 +163,7 @@ func NewGitHubAdapter(config map[string]any) (domain.TrackerAdapter, error) {
 		handoffState:   handoffState,
 		queryFilter:    queryFilter,
 		etagCache:      newETagCache(etagCacheSize),
+		log:            slog.Default(),
 	}, nil
 }
 
@@ -212,7 +215,7 @@ func (a *GitHubAdapter) fetchCandidatesViaIssues(ctx context.Context) ([]domain.
 			if isPullRequest(gi) {
 				continue
 			}
-			issue := normalizeIssue(gi, a.activeStates, a.terminalStates, a.handoffState)
+			issue := normalizeIssue(gi, a.activeStates, a.terminalStates, a.handoffState, a.log)
 			a.qualifyDisplayID(&issue)
 			if _, ok := activeSet[issue.State]; !ok {
 				continue
@@ -266,7 +269,7 @@ func (a *GitHubAdapter) fetchCandidatesViaSearch(ctx context.Context) ([]domain.
 			if isPullRequest(gi) {
 				continue
 			}
-			issue := normalizeIssue(gi, a.activeStates, a.terminalStates, a.handoffState)
+			issue := normalizeIssue(gi, a.activeStates, a.terminalStates, a.handoffState, a.log)
 			a.qualifyDisplayID(&issue)
 			if _, ok := activeSet[issue.State]; !ok {
 				continue
@@ -321,7 +324,7 @@ func (a *GitHubAdapter) FetchIssueByID(ctx context.Context, issueID string) (dom
 			}
 		}
 
-		fetchedIssue := normalizeIssue(gi, a.activeStates, a.terminalStates, a.handoffState)
+		fetchedIssue := normalizeIssue(gi, a.activeStates, a.terminalStates, a.handoffState, a.log)
 		a.qualifyDisplayID(&fetchedIssue)
 
 		fetchedIssue.BlockedBy, err = a.fetchBlockers(ctx, issueID)
@@ -376,7 +379,7 @@ func (a *GitHubAdapter) fetchBlockers(ctx context.Context, issueID string) ([]do
 		return nil, err
 	}
 
-	return normalizeBlockers(blockers, a.activeStates, a.terminalStates, a.handoffState), nil
+	return normalizeBlockers(blockers, a.activeStates, a.terminalStates, a.handoffState, a.log), nil
 }
 
 func (a *GitHubAdapter) fetchParent(ctx context.Context, issueID string) (*domain.ParentRef, error) {
@@ -491,7 +494,7 @@ func (a *GitHubAdapter) fetchOpenIssuesByStates(ctx context.Context, stateSet ma
 			if isPullRequest(gi) {
 				continue
 			}
-			issue := normalizeIssue(gi, a.activeStates, a.terminalStates, a.handoffState)
+			issue := normalizeIssue(gi, a.activeStates, a.terminalStates, a.handoffState, a.log)
 			a.qualifyDisplayID(&issue)
 			if _, ok := stateSet[issue.State]; !ok {
 				continue
@@ -545,7 +548,7 @@ func (a *GitHubAdapter) fetchClosedIssuesByLabel(ctx context.Context, label stri
 			if isPullRequest(gi) {
 				continue
 			}
-			issue := normalizeIssue(gi, a.activeStates, a.terminalStates, a.handoffState)
+			issue := normalizeIssue(gi, a.activeStates, a.terminalStates, a.handoffState, a.log)
 			a.qualifyDisplayID(&issue)
 			if _, dup := seen[issue.Identifier]; dup {
 				continue
@@ -639,7 +642,8 @@ func (a *GitHubAdapter) fetchStatesByNumbers(ctx context.Context, numbers []stri
 		if isPullRequest(gi) {
 			continue
 		}
-		state := extractState(gi.Labels, gi.State, a.activeStates, a.terminalStates, a.handoffState)
+		state := issuekit.DeriveLabelState(githubLabelNames(gi.Labels), gi.State, "open", "closed",
+			issuekit.LabelStates{Active: a.activeStates, Terminal: a.terminalStates, Handoff: a.handoffState}, num, a.log)
 
 		if responseETag != "" {
 			a.etagCache.put(path, responseETag, state)
@@ -733,7 +737,8 @@ func (a *GitHubAdapter) TransitionIssue(ctx context.Context, issueID string, tar
 			}
 		}
 
-		currentLabel := findCurrentStateLabel(gi.Labels, a.activeStates, a.terminalStates, a.handoffState)
+		currentLabel := issuekit.CurrentLabelState(githubLabelNames(gi.Labels),
+			issuekit.LabelStates{Active: a.activeStates, Terminal: a.terminalStates, Handoff: a.handoffState})
 		currentNative := gi.State
 
 		if currentLabel != "" && currentLabel != targetLower {
@@ -819,28 +824,19 @@ func (a *GitHubAdapter) SetMetrics(m domain.Metrics) {
 
 // AddLabel adds a label to the specified issue via the GitHub Labels API.
 func (a *GitHubAdapter) AddLabel(ctx context.Context, issueID string, label string) error {
-	path := "/repos/" + a.owner + "/" + a.repo + "/issues/" + url.PathEscape(issueID) + "/labels"
+	return trackermetrics.Track(a.metrics, "add_label", func() error {
+		path := "/repos/" + a.owner + "/" + a.repo + "/issues/" + url.PathEscape(issueID) + "/labels"
 
-	payload, err := json.Marshal(map[string][]string{"labels": {label}})
-	if err != nil {
-		a.incTrackerRequest("add_label", "error")
-		return &domain.TrackerError{
-			Kind:    domain.ErrTrackerPayload,
-			Message: "failed to marshal label payload",
-			Err:     err,
+		payload, err := json.Marshal(map[string][]string{"labels": {label}})
+		if err != nil {
+			return &domain.TrackerError{
+				Kind:    domain.ErrTrackerPayload,
+				Message: "failed to marshal label payload",
+				Err:     err,
+			}
 		}
-	}
 
-	if _, err := a.client.Send(ctx, "POST", path, bytes.NewReader(payload)); err != nil {
-		a.incTrackerRequest("add_label", "error")
+		_, err = a.client.Send(ctx, "POST", path, bytes.NewReader(payload))
 		return err
-	}
-	a.incTrackerRequest("add_label", "success")
-	return nil
-}
-
-func (a *GitHubAdapter) incTrackerRequest(operation, outcome string) {
-	if a.metrics != nil {
-		a.metrics.IncTrackerRequests(operation, outcome)
-	}
+	})
 }

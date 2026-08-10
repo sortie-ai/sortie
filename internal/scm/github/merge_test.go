@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/sortie-ai/sortie/internal/adaptertest"
 	"github.com/sortie-ai/sortie/internal/domain"
 )
 
@@ -530,6 +531,132 @@ func TestGetCIStatus_NoSignals_ReturnsEmpty(t *testing.T) {
 	}
 }
 
+// combinedStatusPageJSON builds one combined-status page carrying n
+// same-state entries, matching the wire shape [decodeCombinedStatusPage]
+// unmarshals.
+func combinedStatusPageJSON(t *testing.T, n int, state string) []byte {
+	t.Helper()
+	statuses := make([]map[string]string, n)
+	for i := range statuses {
+		statuses[i] = map[string]string{"state": state}
+	}
+	body, err := json.Marshal(map[string]any{"state": state, "statuses": statuses})
+	if err != nil {
+		t.Fatalf("marshal combined status page: %v", err)
+	}
+	return body
+}
+
+// checkRunsPageJSON builds one check-runs page carrying n same-status
+// entries, matching the wire shape [decodeCheckRunsPage] unmarshals.
+func checkRunsPageJSON(t *testing.T, n int, status, conclusion string) []byte {
+	t.Helper()
+	runs := make([]map[string]string, n)
+	for i := range runs {
+		runs[i] = map[string]string{"status": status, "conclusion": conclusion}
+	}
+	body, err := json.Marshal(map[string]any{"total_count": n, "check_runs": runs})
+	if err != nil {
+		t.Fatalf("marshal check runs page: %v", err)
+	}
+	return body
+}
+
+// TestGetCIStatus_Pagination_FailingSignalOnSecondPage covers a commit
+// whose only failing combined status and only failing check run each sit
+// past the first page: the full-page-size first page carries no failure,
+// and the gate only sees the failure by walking to page two on both
+// routes.
+func TestGetCIStatus_Pagination_FailingSignalOnSecondPage(t *testing.T) {
+	t.Parallel()
+
+	var statusPage2Requested, checksPage2Requested atomic.Bool
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		page := r.URL.Query().Get("page")
+		switch {
+		case strings.Contains(r.URL.Path, "/pulls/"):
+			_, _ = w.Write([]byte(`{"head":{"sha":"abc123"},"draft":false,"mergeable_state":"clean"}`))
+		case strings.Contains(r.URL.Path, "/status"):
+			if page == "2" {
+				statusPage2Requested.Store(true)
+				_, _ = w.Write(combinedStatusPageJSON(t, 1, "failure"))
+				return
+			}
+			_, _ = w.Write(combinedStatusPageJSON(t, 100, "success"))
+		case strings.Contains(r.URL.Path, "/check-runs"):
+			if page == "2" {
+				checksPage2Requested.Store(true)
+				_, _ = w.Write(checkRunsPageJSON(t, 1, "completed", "failure"))
+				return
+			}
+			_, _ = w.Write(checkRunsPageJSON(t, 100, "completed", "success"))
+		}
+	}))
+	defer srv.Close()
+
+	a := newTestSCMAdapter(t, srv.URL)
+	status, err := a.GetCIStatus(t.Context(), 1, "owner", "repo")
+	if err != nil {
+		t.Fatalf("GetCIStatus: %v", err)
+	}
+	if status != "failing" {
+		t.Errorf("GetCIStatus() = %q, want %q", status, "failing")
+	}
+	if !statusPage2Requested.Load() {
+		t.Error("combined-status route: page 2 was never requested")
+	}
+	if !checksPage2Requested.Load() {
+		t.Error("check-runs route: page 2 was never requested")
+	}
+}
+
+// TestGetCIStatus_CombinedStatusStateValues covers the combined-status
+// vocabulary: an "error" combined status fails the gate exactly like
+// "failure", and a value the gate does not recognize defers rather than
+// passing.
+func TestGetCIStatus_CombinedStatusStateValues(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		state string
+		want  string
+	}{
+		{"error_state_fails", "error", "failing"},
+		{"unrecognized_state_defers", "some-custom-state", "pending"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				switch {
+				case strings.Contains(r.URL.Path, "/pulls/"):
+					_, _ = w.Write([]byte(`{"head":{"sha":"abc123"},"draft":false,"mergeable_state":"clean"}`))
+				case strings.Contains(r.URL.Path, "/status"):
+					_, _ = w.Write(combinedStatusPageJSON(t, 1, tt.state))
+				case strings.Contains(r.URL.Path, "/check-runs"):
+					_, _ = w.Write([]byte(`{"total_count":0,"check_runs":[]}`))
+				}
+			}))
+			defer srv.Close()
+
+			a := newTestSCMAdapter(t, srv.URL)
+			status, err := a.GetCIStatus(t.Context(), 1, "owner", "repo")
+			if err != nil {
+				t.Fatalf("GetCIStatus: %v", err)
+			}
+			if status != tt.want {
+				t.Errorf("GetCIStatus() with combined status %q = %q, want %q", tt.state, status, tt.want)
+			}
+		})
+	}
+}
+
 // --- GetMergeability tests ---
 
 func TestGetMergeability_Clean(t *testing.T) {
@@ -777,6 +904,30 @@ func TestMergePR_409_ReturnsSCMConflict(t *testing.T) {
 	assertSCMErrorKind(t, err, domain.ErrSCMConflict)
 }
 
+// TestMergePR_409ThenConfirmedMerged_CarriesAlreadyMergedMarker covers the
+// race a prior Sortie attempt or an external actor can win: the merge
+// endpoint rejects with 409, and re-reading the PR confirms it is merged.
+func TestMergePR_409ThenConfirmedMerged_CarriesAlreadyMergedMarker(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.Method {
+		case http.MethodPut:
+			w.WriteHeader(http.StatusConflict)
+			_, _ = w.Write([]byte(`{"message":"Pull Request is not mergeable"}`))
+		case http.MethodGet:
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"head":{"sha":"abc123"},"merged":true,"draft":false,"mergeable_state":"clean"}`))
+		}
+	}))
+	defer srv.Close()
+
+	a := newTestSCMAdapter(t, srv.URL)
+	_, err := a.MergePR(t.Context(), 1, "owner", "repo", domain.StrategySquash, "", "", "sha")
+	adaptertest.AssertAlreadyMergedMarker(t, err)
+}
+
 // --- DeleteBranch tests ---
 
 func TestDeleteBranch_Success(t *testing.T) {
@@ -813,7 +964,24 @@ func TestDeleteBranch_404_ReturnsSCMNotFound(t *testing.T) {
 
 	a := newTestSCMAdapter(t, srv.URL)
 	err := a.DeleteBranch(t.Context(), "owner", "repo", "already-gone")
-	assertSCMErrorKind(t, err, domain.ErrSCMNotFound)
+	adaptertest.AssertBranchAbsentDisposition(t, err)
+}
+
+func TestDeleteBranch_409IsNotPromotedToConflict(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusConflict)
+		_, _ = w.Write([]byte(`{"message":"conflict"}`))
+	}))
+	defer srv.Close()
+
+	a := newTestSCMAdapter(t, srv.URL)
+	err := a.DeleteBranch(t.Context(), "owner", "repo", "feature/x")
+
+	// Only a merge write path promotes 405/409 to ErrSCMConflict;
+	// DeleteBranch is not on that path.
+	adaptertest.AssertSCMErrorKind(t, err, domain.ErrSCMAPI)
 }
 
 // --- VerifyAutoMergeScopes tests ---

@@ -12,7 +12,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sortie-ai/sortie/internal/adaptertest"
 	"github.com/sortie-ai/sortie/internal/domain"
+	"github.com/sortie-ai/sortie/internal/scm/scmcore"
 )
 
 // journalBaseTime anchors the synthetic created_at timestamps used across
@@ -91,7 +93,7 @@ func TestListLabelEvents_Normalization(t *testing.T) {
 		t.Fatalf("ListLabelEvents() len = %d, want 3 (the commented event is excluded)", len(events))
 	}
 
-	if events[0].ID != sortableEventID(1) || events[1].ID != sortableEventID(2) || events[2].ID != sortableEventID(4) {
+	if events[0].ID != scmcore.SortableEventID(1) || events[1].ID != scmcore.SortableEventID(2) || events[2].ID != scmcore.SortableEventID(4) {
 		t.Fatalf("ListLabelEvents() ids = [%s %s %s], want [1 2 4] normalized (oldest-first)",
 			events[0].ID, events[1].ID, events[2].ID)
 	}
@@ -122,6 +124,7 @@ func TestListLabelEvents_Normalization(t *testing.T) {
 	if events[2].Actor != "carol" {
 		t.Errorf("events[2].Actor = %q, want %q", events[2].Actor, "carol")
 	}
+	adaptertest.AssertLabelEventsOrdered(t, events)
 }
 
 func TestListLabelEvents_NewestRetainedPaging(t *testing.T) {
@@ -140,17 +143,17 @@ func TestListLabelEvents_NewestRetainedPaging(t *testing.T) {
 		t.Fatalf("ListLabelEvents() len = %d, want %d (retained window)", len(events), maxLabelEventPages)
 	}
 
-	wantOldestID := sortableEventID(int64(truncatedJournalPageCount - maxLabelEventPages + 1))
+	wantOldestID := scmcore.SortableEventID(int64(truncatedJournalPageCount - maxLabelEventPages + 1))
 	if events[0].ID != wantOldestID {
 		t.Errorf("ListLabelEvents()[0].ID = %q, want %q (oldest ID retained within the cap)", events[0].ID, wantOldestID)
 	}
-	wantNewestID := sortableEventID(int64(truncatedJournalPageCount))
+	wantNewestID := scmcore.SortableEventID(int64(truncatedJournalPageCount))
 	if events[len(events)-1].ID != wantNewestID {
 		t.Errorf("ListLabelEvents()[last].ID = %q, want %q (newest event present despite the cap)",
 			events[len(events)-1].ID, wantNewestID)
 	}
 	for _, e := range events {
-		if e.ID == sortableEventID(1) {
+		if e.ID == scmcore.SortableEventID(1) {
 			t.Error("ListLabelEvents() contains the oldest journal entry (id=1); want it truncated away")
 		}
 	}
@@ -208,6 +211,23 @@ func TestListLabelEvents_SinglePageNoLinkHeader(t *testing.T) {
 	}
 }
 
+func TestListLabelEvents_NoEvents(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`[]`))
+	}))
+	defer srv.Close()
+
+	adapter := newTestSCMAdapter(t, srv.URL)
+	events, err := adapter.ListLabelEvents(context.Background(), 1, "o", "r")
+	if err != nil {
+		t.Fatalf("ListLabelEvents: unexpected error: %v", err)
+	}
+	adaptertest.AssertEmptyNonNil(t, events, "ListLabelEvents")
+}
+
 func TestListLabelEvents_TransportError(t *testing.T) {
 	t.Parallel()
 
@@ -217,6 +237,38 @@ func TestListLabelEvents_TransportError(t *testing.T) {
 	adapter := newTestSCMAdapter(t, srv.URL)
 	_, err := adapter.ListLabelEvents(context.Background(), 1, "o", "r")
 	assertSCMErrorKind(t, err, domain.ErrSCMTransport)
+}
+
+// --- RemoveLabel tests ---
+
+func TestRemoveLabel_AbsentLabelIsNoOp(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	adapter := newTestSCMAdapter(t, srv.URL)
+	err := adapter.RemoveLabel(context.Background(), 1, "owner", "repo", "urgent")
+	adaptertest.AssertLabelAbsentDisposition(t, err)
+}
+
+func TestRemoveLabel_409IsNotPromotedToConflict(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusConflict)
+		_, _ = w.Write([]byte(`{"message":"conflict"}`))
+	}))
+	defer srv.Close()
+
+	adapter := newTestSCMAdapter(t, srv.URL)
+	err := adapter.RemoveLabel(context.Background(), 1, "owner", "repo", "urgent")
+
+	// Only a merge write path promotes 405/409 to ErrSCMConflict; RemoveLabel
+	// is not on that path.
+	adaptertest.AssertSCMErrorKind(t, err, domain.ErrSCMAPI)
 }
 
 func TestListLabelEvents_MalformedTimestampIsPayloadError(t *testing.T) {
@@ -231,111 +283,4 @@ func TestListLabelEvents_MalformedTimestampIsPayloadError(t *testing.T) {
 	adapter := newTestSCMAdapter(t, srv.URL)
 	_, err := adapter.ListLabelEvents(context.Background(), 1, "o", "r")
 	assertSCMErrorKind(t, err, domain.ErrSCMPayload)
-}
-
-func TestSortableEventID_LexicalMatchesNumericAcrossDigitBoundary(t *testing.T) {
-	t.Parallel()
-
-	// Raw decimal ids misorder lexically across a digit-width boundary
-	// ("9" sorts after "10"); the normalized form must preserve numeric
-	// order so the reconcile's (At, id) mark comparison stays chronological
-	// for events that share a timestamp.
-	for _, pair := range []struct{ lo, hi int64 }{{9, 10}, {99, 100}, {999999999, 1000000000}} {
-		if sortableEventID(pair.lo) >= sortableEventID(pair.hi) {
-			t.Errorf("sortableEventID(%d)=%q not lexically before sortableEventID(%d)=%q",
-				pair.lo, sortableEventID(pair.lo), pair.hi, sortableEventID(pair.hi))
-		}
-	}
-}
-
-func TestListLabelEvents_EmptyJournalReturnsNonNilEmptySlice(t *testing.T) {
-	t.Parallel()
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`[]`))
-	}))
-	defer srv.Close()
-
-	adapter := newTestSCMAdapter(t, srv.URL)
-	events, err := adapter.ListLabelEvents(context.Background(), 1, "o", "r")
-	if err != nil {
-		t.Fatalf("ListLabelEvents: unexpected error: %v", err)
-	}
-	if events == nil {
-		t.Fatal("ListLabelEvents() = nil, want non-nil empty slice")
-	}
-	if len(events) != 0 {
-		t.Errorf("ListLabelEvents() len = %d, want 0", len(events))
-	}
-}
-
-func TestListLabelEvents_MalformedJSONReturnsPayloadError(t *testing.T) {
-	t.Parallel()
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte(`not valid json {{{`))
-	}))
-	defer srv.Close()
-
-	adapter := newTestSCMAdapter(t, srv.URL)
-	_, err := adapter.ListLabelEvents(context.Background(), 1, "o", "r")
-	assertSCMErrorKind(t, err, domain.ErrSCMPayload)
-}
-
-// --- RemoveLabel tests ---
-
-func TestRemoveLabel_NotFoundIsNoop(t *testing.T) {
-	t.Parallel()
-
-	var gotMethod, gotPath string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotMethod = r.Method
-		gotPath = r.URL.Path
-		w.WriteHeader(http.StatusNotFound)
-		_, _ = w.Write([]byte(`{"message":"Label does not exist"}`))
-	}))
-	defer srv.Close()
-
-	adapter := newTestSCMAdapter(t, srv.URL)
-	if err := adapter.RemoveLabel(context.Background(), 1, "owner", "repo", "sortie:review"); err != nil {
-		t.Errorf("RemoveLabel() = %v, want nil (already-absent label is a successful no-op)", err)
-	}
-	if gotMethod != http.MethodDelete {
-		t.Errorf("request method = %q, want %q", gotMethod, http.MethodDelete)
-	}
-	wantPath := "/repos/owner/repo/issues/1/labels/sortie:review"
-	if gotPath != wantPath {
-		t.Errorf("request path = %q, want %q", gotPath, wantPath)
-	}
-}
-
-func TestRemoveLabel_OtherFailurePassesThrough(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name       string
-		statusCode int
-		wantKind   domain.SCMErrorKind
-	}{
-		{"server error", http.StatusInternalServerError, domain.ErrSCMTransport},
-		{"auth failure", http.StatusUnauthorized, domain.ErrSCMAuth},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				w.WriteHeader(tt.statusCode)
-				_, _ = w.Write([]byte(`{"message":"failure"}`))
-			}))
-			defer srv.Close()
-
-			adapter := newTestSCMAdapter(t, srv.URL)
-			err := adapter.RemoveLabel(context.Background(), 1, "owner", "repo", "sortie:review")
-			assertSCMErrorKind(t, err, tt.wantKind)
-		})
-	}
 }

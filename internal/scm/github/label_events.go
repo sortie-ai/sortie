@@ -13,6 +13,7 @@ import (
 
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/httpkit"
+	"github.com/sortie-ai/sortie/internal/scm/scmcore"
 )
 
 // maxLabelEventPages caps the number of journal pages read for a single
@@ -54,7 +55,7 @@ func (a *GitHubSCMAdapter) ListLabelEvents(ctx context.Context, prNumber int, ow
 
 	body, headers, err := a.client.Get(ctx, path, params)
 	if err != nil {
-		return nil, toSCMError(err)
+		return nil, scmcore.ToSCMError(err)
 	}
 
 	lastURL := httpkit.ParseLinkRel(headers.Get("Link"), "last")
@@ -71,7 +72,7 @@ func (a *GitHubSCMAdapter) ListLabelEvents(ctx context.Context, prNumber int, ow
 	for {
 		pageBody, pageHeaders, pageErr := a.client.GetURL(ctx, nextURL)
 		if pageErr != nil {
-			return nil, toSCMError(pageErr)
+			return nil, scmcore.ToSCMError(pageErr)
 		}
 		pageEvents, decErr := decodeLabelEvents(pageBody)
 		if decErr != nil {
@@ -152,7 +153,7 @@ func decodeLabelEvents(body []byte) ([]domain.LabelEvent, error) {
 			// Normalize the id so the orchestrator's lexical (At, id) mark
 			// comparison matches chronological order even for events that
 			// share a timestamp.
-			ID:    sortableEventID(e.ID),
+			ID:    scmcore.SortableEventID(e.ID),
 			Label: strings.ToLower(e.Label.Name),
 			Actor: actor,
 			Added: e.Event == "labeled",
@@ -162,13 +163,6 @@ func decodeLabelEvents(body []byte) ([]domain.LabelEvent, error) {
 	return events, nil
 }
 
-// sortableEventID formats a numeric journal-event id as a fixed-width,
-// zero-padded decimal so lexical string comparison matches numeric order.
-// The width covers the maximum int64.
-func sortableEventID(id int64) string {
-	return fmt.Sprintf("%019d", id)
-}
-
 // RemoveLabel deletes the named label from the given pull request. An
 // already-absent label (HTTP 404) is a successful no-op. Returns a
 // [*domain.SCMError] on any other failure.
@@ -176,7 +170,7 @@ func (a *GitHubSCMAdapter) RemoveLabel(ctx context.Context, prNumber int, owner,
 	path := fmt.Sprintf("/repos/%s/%s/issues/%d/labels/%s",
 		url.PathEscape(owner), url.PathEscape(repo), prNumber, url.PathEscape(label))
 	if err := a.client.SendNoBody(ctx, http.MethodDelete, path); err != nil {
-		scm := toSCMError(err)
+		scm := scmcore.ToSCMError(err)
 		if scm.Kind == domain.ErrSCMNotFound {
 			return nil
 		}

@@ -2,7 +2,6 @@ package github
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -10,6 +9,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/sortie-ai/sortie/internal/adaptertest"
 	"github.com/sortie-ai/sortie/internal/domain"
 )
 
@@ -32,13 +32,7 @@ func assertSCMErrorKind(t *testing.T, err error, want domain.SCMErrorKind) {
 	if err == nil {
 		t.Fatalf("expected SCMError with kind %q, got nil", want)
 	}
-	var se *domain.SCMError
-	if !errors.As(err, &se) {
-		t.Fatalf("error type = %T, want *domain.SCMError", err)
-	}
-	if se.Kind != want {
-		t.Errorf("SCMError.Kind = %q, want %q", se.Kind, want)
-	}
+	adaptertest.AssertSCMErrorKind(t, err, want)
 }
 
 // reviewsAndCommentsHandler builds an httptest handler that serves review
@@ -145,12 +139,7 @@ func TestFetchPendingReviews_NoReviews(t *testing.T) {
 	if err != nil {
 		t.Fatalf("FetchPendingReviews: unexpected error: %v", err)
 	}
-	if len(got) != 0 {
-		t.Errorf("FetchPendingReviews len = %d, want 0", len(got))
-	}
-	if got == nil {
-		t.Error("FetchPendingReviews returned nil, want non-nil empty slice")
-	}
+	adaptertest.AssertEmptyNonNil(t, got, "FetchPendingReviews")
 }
 
 func TestFetchPendingReviews_ApprovedOnly(t *testing.T) {
@@ -503,6 +492,36 @@ func TestFetchBotReviewComments_BotTypeReturned(t *testing.T) {
 	}
 }
 
+// TestFetchBotReviewComments_BotTypeCaseInsensitive verifies that user.type
+// is matched against "Bot" case-insensitively. The fixture's allowlist is
+// empty (nil), so login matching cannot classify the author as a bot;
+// selection can only occur through the type comparison.
+func TestFetchBotReviewComments_BotTypeCaseInsensitive(t *testing.T) {
+	t.Parallel()
+
+	reviewsFixture := loadFixture(t, "reviews_bot_lowercase_type.json")
+	commentsFixture := loadFixture(t, "comments_empty.json")
+	srv := httptest.NewServer(reviewsAndCommentsHandler(t, reviewsFixture, commentsFixture))
+	defer srv.Close()
+
+	adapter := newTestSCMAdapter(t, srv.URL)
+	got, err := adapter.FetchBotReviewComments(context.Background(), 1, "owner", "repo", nil)
+	if err != nil {
+		t.Fatalf("FetchBotReviewComments: unexpected error: %v", err)
+	}
+
+	found := false
+	for _, c := range got {
+		if c.Reviewer == "github-actions[bot]" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("FetchBotReviewComments with lowercase user.type %q: reviewer %q not found, want case-insensitive type match",
+			"bot", "github-actions[bot]")
+	}
+}
+
 // TestFetchBotReviewComments_BotExcludedByFetchPendingReviews verifies R1: the
 // same bot fixture that FetchBotReviewComments returns is excluded by
 // FetchPendingReviews.
@@ -651,12 +670,7 @@ func TestFetchBotReviewComments_EmptyResultNonNil(t *testing.T) {
 	if err != nil {
 		t.Fatalf("FetchBotReviewComments: %v", err)
 	}
-	if got == nil {
-		t.Error("FetchBotReviewComments with no bot matches: returned nil, want non-nil empty slice")
-	}
-	if len(got) != 0 {
-		t.Errorf("FetchBotReviewComments with no bot matches: len = %d, want 0", len(got))
-	}
+	adaptertest.AssertEmptyNonNil(t, got, "FetchBotReviewComments")
 }
 
 // TestFetchBotReviewComments_OutdatedCommentFlag verifies that a bot inline
@@ -788,171 +802,5 @@ func TestFetchBotReviewComments_SkipsNonBotInlineComment(t *testing.T) {
 	}
 	if botInlineCount != 1 {
 		t.Errorf("bot inline comment id 700 appeared %d time(s); want exactly 1 (deduped)", botInlineCount)
-	}
-}
-
-// TestIsBotAuthor verifies the isBotAuthor predicate covers all union branches.
-func TestIsBotAuthor(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name      string
-		login     string
-		userType  string
-		allowlist []string
-		want      bool
-	}{
-		{
-			name:     "user.type Bot (exact case)",
-			login:    "golangci-lint[bot]",
-			userType: "Bot",
-			want:     true,
-		},
-		{
-			name:     "user.type bot (lower case)",
-			login:    "golangci-lint[bot]",
-			userType: "bot",
-			want:     true,
-		},
-		{
-			name:     "user.type BOT (upper case)",
-			login:    "golangci-lint[bot]",
-			userType: "BOT",
-			want:     true,
-		},
-		{
-			name:     "user.type User not in allowlist",
-			login:    "alice",
-			userType: "User",
-			want:     false,
-		},
-		{
-			name:      "user.type User in allowlist exact match",
-			login:     "houndci-bot",
-			userType:  "User",
-			allowlist: []string{"houndci-bot"},
-			want:      true,
-		},
-		{
-			name:      "user.type User in allowlist case-insensitive",
-			login:     "houndci-bot",
-			userType:  "User",
-			allowlist: []string{"HOUNDCI-BOT"},
-			want:      true,
-		},
-		{
-			name:      "user.type User not in populated allowlist",
-			login:     "bob",
-			userType:  "User",
-			allowlist: []string{"houndci-bot", "golangci-lint[bot]"},
-			want:      false,
-		},
-		{
-			name:      "empty allowlist and non-bot type",
-			login:     "carol",
-			userType:  "User",
-			allowlist: []string{},
-			want:      false,
-		},
-		{
-			name:     "nil allowlist and non-bot type",
-			login:    "carol",
-			userType: "User",
-			want:     false,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-
-			got := isBotAuthor(tt.login, tt.userType, tt.allowlist)
-			if got != tt.want {
-				t.Errorf("isBotAuthor(%q, %q, %v) = %v, want %v",
-					tt.login, tt.userType, tt.allowlist, got, tt.want)
-			}
-		})
-	}
-}
-
-// --- TestToSCMError ---
-
-func TestToSCMError(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name     string
-		input    error
-		wantKind domain.SCMErrorKind
-	}{
-		{
-			name:     "ErrTrackerTransport → ErrSCMTransport",
-			input:    &domain.TrackerError{Kind: domain.ErrTrackerTransport, Message: "net"},
-			wantKind: domain.ErrSCMTransport,
-		},
-		{
-			name:     "ErrTrackerAuth → ErrSCMAuth",
-			input:    &domain.TrackerError{Kind: domain.ErrTrackerAuth, Message: "auth"},
-			wantKind: domain.ErrSCMAuth,
-		},
-		{
-			name:     "ErrTrackerAPI → ErrSCMAPI",
-			input:    &domain.TrackerError{Kind: domain.ErrTrackerAPI, Message: "api"},
-			wantKind: domain.ErrSCMAPI,
-		},
-		{
-			name:     "ErrTrackerNotFound → ErrSCMNotFound",
-			input:    &domain.TrackerError{Kind: domain.ErrTrackerNotFound, Message: "nf"},
-			wantKind: domain.ErrSCMNotFound,
-		},
-		{
-			name:     "ErrTrackerPayload → ErrSCMPayload",
-			input:    &domain.TrackerError{Kind: domain.ErrTrackerPayload, Message: "pl"},
-			wantKind: domain.ErrSCMPayload,
-		},
-		{
-			name:     "unknown TrackerErrorKind → ErrSCMAPI",
-			input:    &domain.TrackerError{Kind: "unknown_kind", Message: "x"},
-			wantKind: domain.ErrSCMAPI,
-		},
-		{
-			name:     "non-TrackerError → ErrSCMTransport",
-			input:    fmt.Errorf("some generic transport error"),
-			wantKind: domain.ErrSCMTransport,
-		},
-		// 405 "method not allowed" messages produced by classifyHTTPError
-		// are promoted to ErrSCMConflict.
-		{
-			name: "ErrTrackerAPI with 'method not allowed' → ErrSCMConflict",
-			input: &domain.TrackerError{
-				Kind:    domain.ErrTrackerAPI,
-				Message: "PUT /repos/o/r/pulls/1/merge: method not allowed: branch protection refuses",
-			},
-			wantKind: domain.ErrSCMConflict,
-		},
-		// 409 "conflict" messages produced by classifyHTTPError are promoted.
-		{
-			name: "ErrTrackerAPI with ': conflict:' → ErrSCMConflict",
-			input: &domain.TrackerError{
-				Kind:    domain.ErrTrackerAPI,
-				Message: "PUT /repos/o/r/pulls/1/merge: conflict: head sha mismatch",
-			},
-			wantKind: domain.ErrSCMConflict,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-
-			got := toSCMError(tt.input)
-			var se *domain.SCMError
-			if !errors.As(got, &se) {
-				t.Fatalf("toSCMError returned %T, want *domain.SCMError", got)
-			}
-			if se.Kind != tt.wantKind {
-				t.Errorf("SCMError.Kind = %q, want %q", se.Kind, tt.wantKind)
-			}
-		})
 	}
 }

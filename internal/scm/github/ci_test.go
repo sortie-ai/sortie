@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/sortie-ai/sortie/internal/adaptertest"
 	"github.com/sortie-ai/sortie/internal/domain"
 )
 
@@ -104,158 +105,6 @@ func TestMapCheckConclusion(t *testing.T) {
 					inputStr = *tt.input
 				}
 				t.Errorf("mapCheckConclusion(%q) = %q, want %q", inputStr, got, tt.want)
-			}
-		})
-	}
-}
-
-// --- TestComputeAggregateStatus ---
-
-func TestComputeAggregateStatus(t *testing.T) {
-	t.Parallel()
-
-	run := func(status domain.CheckRunStatus, conclusion domain.CheckConclusion) domain.CheckRun {
-		return domain.CheckRun{Status: status, Conclusion: conclusion}
-	}
-
-	tests := []struct {
-		name string
-		runs []domain.CheckRun
-		want domain.CIStatus
-	}{
-		{
-			name: "nil slice returns Pending",
-			runs: nil,
-			want: domain.CIStatusPending,
-		},
-		{
-			name: "empty slice returns Pending",
-			runs: []domain.CheckRun{},
-			want: domain.CIStatusPending,
-		},
-		{
-			name: "all success completed returns Passing",
-			runs: []domain.CheckRun{
-				run(domain.CheckRunStatusCompleted, domain.CheckConclusionSuccess),
-				run(domain.CheckRunStatusCompleted, domain.CheckConclusionSuccess),
-			},
-			want: domain.CIStatusPassing,
-		},
-		{
-			name: "one failure returns Failing",
-			runs: []domain.CheckRun{
-				run(domain.CheckRunStatusCompleted, domain.CheckConclusionFailure),
-				run(domain.CheckRunStatusCompleted, domain.CheckConclusionSuccess),
-			},
-			want: domain.CIStatusFailing,
-		},
-		{
-			name: "any in_progress returns Pending",
-			runs: []domain.CheckRun{
-				run(domain.CheckRunStatusCompleted, domain.CheckConclusionSuccess),
-				run(domain.CheckRunStatusInProgress, domain.CheckConclusionPending),
-			},
-			want: domain.CIStatusPending,
-		},
-		{
-			name: "cancelled returns Failing",
-			runs: []domain.CheckRun{
-				run(domain.CheckRunStatusCompleted, domain.CheckConclusionCancelled),
-				run(domain.CheckRunStatusCompleted, domain.CheckConclusionSuccess),
-			},
-			want: domain.CIStatusFailing,
-		},
-		{
-			name: "timed_out returns Failing",
-			runs: []domain.CheckRun{
-				run(domain.CheckRunStatusCompleted, domain.CheckConclusionTimedOut),
-			},
-			want: domain.CIStatusFailing,
-		},
-		{
-			name: "all neutral and skipped completed returns Passing",
-			runs: []domain.CheckRun{
-				run(domain.CheckRunStatusCompleted, domain.CheckConclusionNeutral),
-				run(domain.CheckRunStatusCompleted, domain.CheckConclusionSkipped),
-			},
-			want: domain.CIStatusPassing,
-		},
-		{
-			name: "failure and in_progress returns Failing",
-			runs: []domain.CheckRun{
-				run(domain.CheckRunStatusCompleted, domain.CheckConclusionFailure),
-				run(domain.CheckRunStatusInProgress, domain.CheckConclusionPending),
-			},
-			want: domain.CIStatusFailing,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			got := computeAggregateStatus(tt.runs)
-			if got != tt.want {
-				t.Errorf("computeAggregateStatus: got %q, want %q", got, tt.want)
-			}
-		})
-	}
-}
-
-// --- TestComputeFailingCount ---
-
-func TestComputeFailingCount(t *testing.T) {
-	t.Parallel()
-
-	run := func(conclusion domain.CheckConclusion) domain.CheckRun {
-		return domain.CheckRun{Status: domain.CheckRunStatusCompleted, Conclusion: conclusion}
-	}
-
-	tests := []struct {
-		name string
-		runs []domain.CheckRun
-		want int
-	}{
-		{"nil returns 0", nil, 0},
-		{
-			name: "all passing returns 0",
-			runs: []domain.CheckRun{
-				run(domain.CheckConclusionSuccess),
-				run(domain.CheckConclusionNeutral),
-				run(domain.CheckConclusionSkipped),
-			},
-			want: 0,
-		},
-		{
-			name: "one failure",
-			runs: []domain.CheckRun{
-				run(domain.CheckConclusionFailure),
-				run(domain.CheckConclusionSuccess),
-			},
-			want: 1,
-		},
-		{
-			name: "counts failure timed_out and cancelled",
-			runs: []domain.CheckRun{
-				run(domain.CheckConclusionFailure),
-				run(domain.CheckConclusionTimedOut),
-				run(domain.CheckConclusionCancelled),
-				run(domain.CheckConclusionSuccess),
-			},
-			want: 3,
-		},
-		{
-			name: "empty slice returns 0",
-			runs: []domain.CheckRun{},
-			want: 0,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			got := computeFailingCount(tt.runs)
-			if got != tt.want {
-				t.Errorf("computeFailingCount: got %d, want %d", got, tt.want)
 			}
 		})
 	}
@@ -696,6 +545,36 @@ func TestFetchCIStatus_Failing(t *testing.T) {
 	if len(result.CheckRuns) != 2 {
 		t.Errorf("len(CheckRuns) = %d, want 2", len(result.CheckRuns))
 	}
+}
+
+// TestFetchCIStatus_MixedRunsMatchesCore pins the aggregate contract
+// against a run set carrying a completed-failing, an in-progress, and a
+// completed-success run together, so the verdict this provider reports
+// is provably the same rule scmcore.AggregateCIStatus implements.
+func TestFetchCIStatus_MixedRunsMatchesCore(t *testing.T) {
+	t.Parallel()
+
+	fixture := loadFixture(t, "check_runs_mixed.json")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/check-runs") {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusOK)
+			w.Write(fixture) //nolint:errcheck // test helper
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	provider := newTestCIProvider(t, srv.URL, 50)
+	result, err := provider.FetchCIStatus(context.Background(), "main")
+	if err != nil {
+		t.Fatalf("FetchCIStatus: unexpected error: %v", err)
+	}
+	if len(result.CheckRuns) != 3 {
+		t.Fatalf("len(CheckRuns) = %d, want 3", len(result.CheckRuns))
+	}
+	adaptertest.AssertCIAggregateMatchesCore(t, result)
 }
 
 func TestFetchCIStatus_Pending(t *testing.T) {

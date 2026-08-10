@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/sortie-ai/sortie/internal/domain"
+	"github.com/sortie-ai/sortie/internal/scm/scmcore"
 )
 
 // graphqlEndpointPath is the path segment appended to the adapter's
@@ -84,10 +85,10 @@ func (a *GitHubSCMAdapter) graphqlBasePath() string {
 // postGraphQL issues a POST to the GraphQL endpoint with the given
 // query and variables. The response envelope is decoded into the
 // caller-provided pointer. A non-empty Errors slice on a 200 response
-// is surfaced as *domain.SCMError with Kind ErrSCMAPI. Transport,
-// auth, and other HTTP failures are routed through toSCMError, which
-// suppresses the 405/409 promotion for messages carrying the
-// "POST /graphql:" prefix.
+// is surfaced as *domain.SCMError with Kind ErrSCMAPI. Transport, auth,
+// and other HTTP failures are routed through [scmcore.ToSCMError], which
+// performs no conflict promotion, so this read surface never produces
+// ErrSCMConflict.
 func (a *GitHubSCMAdapter) postGraphQL(ctx context.Context, query string, variables map[string]any, dest envelopeWithErrors) error {
 	body := graphqlRequestBody{Query: query, Variables: variables}
 	raw, marshalErr := json.Marshal(body)
@@ -101,7 +102,7 @@ func (a *GitHubSCMAdapter) postGraphQL(ctx context.Context, query string, variab
 
 	respBody, err := a.graphqlClient.Send(ctx, http.MethodPost, graphqlEndpointPath, bytes.NewReader(raw))
 	if err != nil {
-		return toSCMError(err)
+		return scmcore.ToSCMError(err)
 	}
 
 	if unmarshalErr := json.Unmarshal(respBody, dest); unmarshalErr != nil {
