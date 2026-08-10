@@ -237,8 +237,8 @@ install_release() {
     info "Release:  ${_tag}"
 
     if [ "$(installed_version "${_dir}/${BIN}")" = "$_version" ]; then
-        ok "${BIN} ${_tag} is already installed at ${_dir}/${BIN}"
-        exit 0
+        _already_installed=1
+        return 0
     fi
 
     _archive="${BIN}_${_version}_${OS}_${ARCH}.tar.gz"
@@ -270,8 +270,10 @@ install_release() {
 main() {
     setup_colors
     parse_args "$@"
+    need_cmd install
 
     _dir=$(resolve_install_dir)
+    _already_installed=""
 
     if [ -n "$BINARY" ]; then
         install_local
@@ -279,7 +281,11 @@ main() {
         install_release
     fi
 
-    ok "Installed ${BIN} ${_tag} to ${_dir}/${BIN}"
+    if [ -n "$_already_installed" ]; then
+        ok "${BIN} ${_tag} is already installed at ${_dir}/${BIN}"
+    else
+        ok "Installed ${BIN} ${_tag} to ${_dir}/${BIN}"
+    fi
 
     case ":${PATH}:" in
         *":${_dir}:"*) ;;
