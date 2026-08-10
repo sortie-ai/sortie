@@ -44,6 +44,9 @@ var migration010SQL string
 //go:embed sql/011_run_history_token_columns.sql
 var migration011SQL string
 
+//go:embed sql/012_run_history_tokens_measured.sql
+var migration012SQL string
+
 var migrations = []Migration{
 	{Version: 1, Description: "core persistence tables", SQL: migration001SQL},
 	{Version: 2, Description: "extended token metrics", SQL: migration002SQL},
@@ -56,4 +59,5 @@ var migrations = []Migration{
 	{Version: 9, Description: "session ID in retry entries for cross-retry resume", SQL: migration009SQL},
 	{Version: 10, Description: "dispatch rule routing columns on retry_entries and run_history", SQL: migration010SQL},
 	{Version: 11, Description: "run_history token columns", SQL: migration011SQL},
+	{Version: 12, Description: "tokens_measured column on run_history", SQL: migration012SQL},
 }

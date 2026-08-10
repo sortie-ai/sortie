@@ -353,6 +353,98 @@ func TestRunTurn_AssertUsageContract(t *testing.T) {
 	agenttest.AssertUsageContract(t, *events)
 }
 
+// TestRunTurn_ReportTokenUsage covers the report_token_usage config key's
+// three reachable states: explicitly false, absent or true with an
+// all-zero per-turn configuration, and a value of an unrecognized type.
+func TestRunTurn_ReportTokenUsage(t *testing.T) {
+	t.Parallel()
+
+	t.Run("false emits no token_usage event and leaves the run unmeasured", func(t *testing.T) {
+		t.Parallel()
+
+		adapter, _ := NewMockAdapter(map[string]any{"report_token_usage": false})
+		sess := domain.Session{ID: "s"}
+		params := defaultParams()
+		events := collectEvents(&params)
+
+		result, err := adapter.RunTurn(context.Background(), sess, params)
+		if err != nil {
+			t.Fatalf("RunTurn() error = %v", err)
+		}
+
+		agenttest.AssertMeasurementAbsent(t, *events, result)
+	})
+
+	t.Run("absent with zero per-turn config reports a measurement of zero", func(t *testing.T) {
+		t.Parallel()
+
+		adapter, _ := NewMockAdapter(map[string]any{
+			"input_tokens_per_turn":      0,
+			"output_tokens_per_turn":     0,
+			"cache_read_tokens_per_turn": 0,
+		})
+		sess := domain.Session{ID: "s"}
+		params := defaultParams()
+		events := collectEvents(&params)
+
+		result, err := adapter.RunTurn(context.Background(), sess, params)
+		if err != nil {
+			t.Fatalf("RunTurn() error = %v", err)
+		}
+
+		if !result.UsageMeasured {
+			t.Error("RunTurn().UsageMeasured = false, want true when report_token_usage defaults to true")
+		}
+		if result.Usage != (domain.TokenUsage{}) {
+			t.Errorf("RunTurn().Usage = %+v, want zero TokenUsage", result.Usage)
+		}
+		tokenUsageEvents := 0
+		for _, e := range *events {
+			if e.Type == domain.EventTokenUsage {
+				tokenUsageEvents++
+				if e.Usage != (domain.TokenUsage{}) {
+					t.Errorf("token_usage event Usage = %+v, want zero TokenUsage", e.Usage)
+				}
+			}
+		}
+		if tokenUsageEvents != 1 {
+			t.Errorf("token_usage event count = %d, want 1 (a measurement of zero, not an absent measurement)", tokenUsageEvents)
+		}
+	})
+
+	t.Run("true reports a measurement", func(t *testing.T) {
+		t.Parallel()
+
+		adapter, _ := NewMockAdapter(map[string]any{"report_token_usage": true})
+		sess := domain.Session{ID: "s"}
+
+		result, err := adapter.RunTurn(context.Background(), sess, defaultParams())
+		if err != nil {
+			t.Fatalf("RunTurn() error = %v", err)
+		}
+
+		if !result.UsageMeasured {
+			t.Error("RunTurn().UsageMeasured = false, want true")
+		}
+	})
+
+	t.Run("unrecognized value type falls back to true", func(t *testing.T) {
+		t.Parallel()
+
+		adapter, _ := NewMockAdapter(map[string]any{"report_token_usage": "false"})
+		sess := domain.Session{ID: "s"}
+
+		result, err := adapter.RunTurn(context.Background(), sess, defaultParams())
+		if err != nil {
+			t.Fatalf("RunTurn() error = %v", err)
+		}
+
+		if !result.UsageMeasured {
+			t.Error("RunTurn().UsageMeasured = false, want true (unrecognized config value type falls back to true)")
+		}
+	})
+}
+
 func TestRunTurn_ConfiguredOutcomes(t *testing.T) {
 	t.Parallel()
 

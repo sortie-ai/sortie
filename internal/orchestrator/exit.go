@@ -204,6 +204,13 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 	// when workerResult.Usage is already fully accounted for.
 	applyUsageDelta(state, entry, workerResult.Usage, metrics)
 
+	// measured is the OR of the entry's own measurement flag and the
+	// worker's mirror, computed after the usage reconciliation above so
+	// a measurement that arrived only on the worker result still
+	// counts. An unmeasured run's four token columns are already zero,
+	// because no usage-bearing event ever arrived to populate them.
+	measured := entry.UsageMeasured || workerResult.UsageMeasured
+
 	// Release the SSH host slot so it becomes available for other issues.
 	// ReleaseHost is a no-op when issueID has no assignment, so calling
 	// it unconditionally is safe and more robust than gating on SSHHost.
@@ -290,6 +297,7 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 		OutputTokens:    entry.AgentOutputTokens,
 		TotalTokens:     entry.AgentTotalTokens,
 		CacheReadTokens: entry.CacheReadTokens,
+		TokensMeasured:  measured,
 	}
 	if workerResult.ReviewMetadata != nil {
 		data, marshalErr := json.Marshal(workerResult.ReviewMetadata)

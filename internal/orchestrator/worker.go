@@ -165,6 +165,15 @@ type WorkerResult struct {
 	// event and every TurnResult.Usage the worker observed; zero for an
 	// exit before the first turn returns.
 	Usage domain.TokenUsage
+
+	// UsageMeasured is true when the run's spend is known: either no
+	// agent turn was entered before exit, so a zero spend is exact, or
+	// at least one usage-bearing event, one token_usage event, or one
+	// TurnResult reporting UsageMeasured true was observed since the
+	// first turn began. False means the run entered a turn and no
+	// measurement ever arrived, so the spend is unknown rather than
+	// zero.
+	UsageMeasured bool
 }
 
 // SessionToolRegistryFunc builds the per-session tool registry rendered
@@ -478,18 +487,27 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 		deps.Metrics = &domain.NoopMetrics{}
 	}
 
+	// localMeasured mirrors the run's measurement state on the worker
+	// goroutine. It starts true because a run that never enters a turn
+	// spent exactly zero; it flips to false immediately before the
+	// worker's first RunTurn call, and back to true on the first
+	// usage-bearing event, the first token_usage event, or the first
+	// TurnResult reporting UsageMeasured true.
+	localMeasured := true
+
 	if tmpl == nil {
 		logger.Error("prompt template lookup returned nil",
 			slog.String("template_id", deps.TemplateID),
 		)
 		deps.OnExit(issue.ID, WorkerResult{
-			IssueID:      issue.ID,
-			Identifier:   issue.Identifier,
-			ExitKind:     WorkerExitError,
-			Error:        fmt.Errorf("prompt template %q is not registered", deps.TemplateID),
-			AgentAdapter: agentKind,
-			Attempt:      attempt,
-			SSHHost:      deps.SSHHost,
+			IssueID:       issue.ID,
+			Identifier:    issue.Identifier,
+			ExitKind:      WorkerExitError,
+			Error:         fmt.Errorf("prompt template %q is not registered", deps.TemplateID),
+			AgentAdapter:  agentKind,
+			Attempt:       attempt,
+			SSHHost:       deps.SSHHost,
+			UsageMeasured: localMeasured,
 		})
 		return
 	}
@@ -596,6 +614,7 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 					SSHHost:            deps.SSHHost,
 					ObservedIssueState: observedIssueState,
 					Usage:              localUsage,
+					UsageMeasured:      localMeasured,
 				})
 			}
 		}
@@ -619,13 +638,14 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 		if prepErr != nil {
 			reported = true
 			deps.OnExit(issue.ID, WorkerResult{
-				IssueID:      issue.ID,
-				Identifier:   issue.Identifier,
-				ExitKind:     exitKindForErr(ctx),
-				Error:        fmt.Errorf("workspace preparation: %w", prepErr),
-				AgentAdapter: agentKind,
-				Attempt:      attempt,
-				SSHHost:      deps.SSHHost,
+				IssueID:       issue.ID,
+				Identifier:    issue.Identifier,
+				ExitKind:      exitKindForErr(ctx),
+				Error:         fmt.Errorf("workspace preparation: %w", prepErr),
+				AgentAdapter:  agentKind,
+				Attempt:       attempt,
+				SSHHost:       deps.SSHHost,
+				UsageMeasured: localMeasured,
 			})
 			return
 		}
@@ -653,13 +673,14 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 		if err != nil {
 			reported = true
 			deps.OnExit(issue.ID, WorkerResult{
-				IssueID:      issue.ID,
-				Identifier:   issue.Identifier,
-				ExitKind:     exitKindForErr(ctx),
-				Error:        fmt.Errorf("workspace preparation: %w", err),
-				AgentAdapter: agentKind,
-				Attempt:      attempt,
-				SSHHost:      deps.SSHHost,
+				IssueID:       issue.ID,
+				Identifier:    issue.Identifier,
+				ExitKind:      exitKindForErr(ctx),
+				Error:         fmt.Errorf("workspace preparation: %w", err),
+				AgentAdapter:  agentKind,
+				Attempt:       attempt,
+				SSHHost:       deps.SSHHost,
+				UsageMeasured: localMeasured,
 			})
 			return
 		}
@@ -705,6 +726,7 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 				AgentAdapter:  agentKind,
 				Attempt:       attempt,
 				SSHHost:       deps.SSHHost,
+				UsageMeasured: localMeasured,
 			})
 			return
 		}
@@ -722,6 +744,7 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 				AgentAdapter:  agentKind,
 				Attempt:       attempt,
 				SSHHost:       deps.SSHHost,
+				UsageMeasured: localMeasured,
 			})
 			return
 		}
@@ -762,6 +785,7 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 				AgentAdapter:  agentKind,
 				Attempt:       attempt,
 				SSHHost:       deps.SSHHost,
+				UsageMeasured: localMeasured,
 			})
 			return
 		}
@@ -782,6 +806,7 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 			AgentAdapter:  agentKind,
 			Attempt:       attempt,
 			SSHHost:       deps.SSHHost,
+			UsageMeasured: localMeasured,
 		})
 		return
 	}
@@ -806,6 +831,7 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 			AgentAdapter:  agentKind,
 			Attempt:       attempt,
 			SSHHost:       deps.SSHHost,
+			UsageMeasured: localMeasured,
 		})
 		return
 	}
@@ -886,6 +912,7 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 				SSHHost:            deps.SSHHost,
 				ObservedIssueState: observedIssueState,
 				Usage:              localUsage,
+				UsageMeasured:      localMeasured,
 			})
 			return
 		}
@@ -906,6 +933,10 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 
 		logger.Info("turn started", slog.Int("turn_number", turnNumber), slog.Int("max_turns", maxTurns))
 
+		if turnNumber == 1 {
+			localMeasured = false
+		}
+
 		turnResult, err := deps.AgentAdapter.RunTurn(ctx, session, domain.RunTurnParams{
 			Prompt: rendered,
 			Issue:  issue,
@@ -916,6 +947,9 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 				// iterates a map that the adapter may still mutate.
 				if event.RateLimits != nil {
 					event.RateLimits = maps.Clone(event.RateLimits)
+				}
+				if event.Type == domain.EventTokenUsage || hasUsage(event.Usage) {
+					localMeasured = true
 				}
 				if hasUsage(event.Usage) {
 					localUsage, localLastUsage = foldLocalUsage(event.Usage, localUsage, localLastUsage)
@@ -945,6 +979,9 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 		if hasUsage(turnResult.Usage) {
 			localUsage, localLastUsage = foldLocalUsage(turnResult.Usage, localUsage, localLastUsage)
 		}
+		if turnResult.UsageMeasured {
+			localMeasured = true
+		}
 
 		if err != nil {
 			stopSessionBestEffort(ctx, deps.AgentAdapter, session, cfg, logger)
@@ -963,6 +1000,7 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 				SSHHost:            deps.SSHHost,
 				ObservedIssueState: observedIssueState,
 				Usage:              localUsage,
+				UsageMeasured:      localMeasured,
 			})
 			return
 		}
@@ -993,6 +1031,7 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 				SSHHost:            deps.SSHHost,
 				ObservedIssueState: observedIssueState,
 				Usage:              localUsage,
+				UsageMeasured:      localMeasured,
 			})
 			return
 		}
@@ -1022,6 +1061,7 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 				SoftStopReason:     string(statusSignal),
 				ObservedIssueState: observedIssueState,
 				Usage:              localUsage,
+				UsageMeasured:      localMeasured,
 			})
 			return
 		}
@@ -1050,6 +1090,7 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 					SSHHost:            deps.SSHHost,
 					ObservedIssueState: observedIssueState,
 					Usage:              localUsage,
+					UsageMeasured:      localMeasured,
 				})
 				return
 			}
@@ -1149,6 +1190,7 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 		ReviewMetadata:     reviewMeta,
 		ObservedIssueState: observedIssueState,
 		Usage:              localUsage,
+		UsageMeasured:      localMeasured,
 	})
 }
 

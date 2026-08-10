@@ -28,7 +28,7 @@ type RetryTimerStore interface {
 	SaveRetryEntry(ctx context.Context, entry persistence.RetryEntry) error
 	DeleteRetryEntry(ctx context.Context, issueID string) error
 	CountRunHistoryByIssue(ctx context.Context, issueID string) (int, error)
-	SumTotalTokensByIssue(ctx context.Context, issueID string) (int64, int, error)
+	TokenUsageByIssue(ctx context.Context, issueID string) (persistence.IssueTokenUsage, error)
 	MarkReactionDispatched(ctx context.Context, issueID, kind string) error
 }
 
@@ -262,20 +262,26 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 	// token axis only: a session block already recorded above still holds.
 	// Runs before the tracker fetch.
 	if params.MaxTokens > 0 {
-		sumTokens, sessionCount, sumErr := params.Store.SumTotalTokensByIssue(ctx, issueID)
-		if sumErr != nil {
+		usage, usageErr := params.Store.TokenUsageByIssue(ctx, issueID)
+		if usageErr != nil {
 			log.Warn("token budget check failed, proceeding with dispatch",
-				slog.Any("error", sumErr),
+				slog.Any("error", usageErr),
 			)
-		} else if sumTokens >= int64(params.MaxTokens) {
+		} else if usage.TotalTokens >= int64(params.MaxTokens) {
 			log.Warn("token budget exhausted, blocking re-dispatch",
 				slog.String("reason", budgetReasonToken),
-				slog.Int64("used_tokens", sumTokens),
+				slog.Int64("used_tokens", usage.TotalTokens),
 				slog.Int("budget_tokens", params.MaxTokens),
-				slog.Int("used_sessions", sessionCount),
+				slog.Int("used_sessions", usage.Sessions),
 				slog.Int("budget_sessions", params.MaxSessions),
 			)
 			blockBudget(budgetReasonToken)
+		} else if usage.UnmeasuredSessions > 0 {
+			log.Warn("token budget cannot be fully evaluated, allowing dispatch",
+				slog.Int64("used_tokens", usage.TotalTokens),
+				slog.Int64("budget_tokens", int64(params.MaxTokens)),
+				slog.Int("unmeasured_sessions", usage.UnmeasuredSessions),
+			)
 		}
 	}
 

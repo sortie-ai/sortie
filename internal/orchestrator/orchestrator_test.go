@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -111,6 +112,13 @@ type stubStore struct {
 	tokenExhaustedErr error
 	tokenSum          int64
 	tokenSessionCount int
+	tokenUnmeasured   int
+
+	// tokenIncompleteIDs reports a candidate below the token ceiling with
+	// one unmeasured session, for the per-tick token budget rebuild's
+	// "cannot be fully evaluated" outcome. Distinct from tokenExhaustedIDs,
+	// which reports a candidate at the ceiling.
+	tokenIncompleteIDs []string
 
 	upsertSessionMetadataErr error
 }
@@ -164,10 +172,14 @@ func (s *stubStore) CountRunHistoryByIssue(_ context.Context, _ string) (int, er
 	return 0, nil
 }
 
-func (s *stubStore) SumTotalTokensByIssue(_ context.Context, _ string) (int64, int, error) {
+func (s *stubStore) TokenUsageByIssue(_ context.Context, _ string) (persistence.IssueTokenUsage, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.tokenSum, s.tokenSessionCount, nil
+	return persistence.IssueTokenUsage{
+		TotalTokens:        s.tokenSum,
+		Sessions:           s.tokenSessionCount,
+		UnmeasuredSessions: s.tokenUnmeasured,
+	}, nil
 }
 
 func (s *stubStore) QueryBudgetExhaustedIssues(_ context.Context, _ []string, _ int) ([]string, error) {
@@ -181,15 +193,27 @@ func (s *stubStore) QueryBudgetExhaustedIssues(_ context.Context, _ []string, _ 
 	return result, nil
 }
 
-func (s *stubStore) QueryTokenExhaustedIssues(_ context.Context, _ []string, _ int) ([]string, error) {
+// QueryTokenBudgetUsage reports a candidate named in tokenExhaustedIDs as
+// carrying a total at the fixed threshold every test in this file
+// configures (1000), so the caller's threshold comparison marks it
+// exhausted; every other candidate is absent, which the caller reads as
+// zero spend.
+func (s *stubStore) QueryTokenBudgetUsage(_ context.Context, candidateIDs []string) (map[string]persistence.IssueTokenUsage, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.tokenExhaustedErr != nil {
 		return nil, s.tokenExhaustedErr
 	}
-	result := make([]string, len(s.tokenExhaustedIDs))
-	copy(result, s.tokenExhaustedIDs)
-	return result, nil
+	usage := make(map[string]persistence.IssueTokenUsage, len(candidateIDs))
+	for _, id := range candidateIDs {
+		switch {
+		case slices.Contains(s.tokenExhaustedIDs, id):
+			usage[id] = persistence.IssueTokenUsage{TotalTokens: 1000}
+		case slices.Contains(s.tokenIncompleteIDs, id):
+			usage[id] = persistence.IssueTokenUsage{TotalTokens: 0, UnmeasuredSessions: 1}
+		}
+	}
+	return usage, nil
 }
 
 func (s *stubStore) UpsertReactionFingerprint(_ context.Context, _, _, _ string) error {
@@ -3679,6 +3703,24 @@ func budgetOrchestrator(state *State, wm *stubWorkflowManager, store *stubStore,
 	})
 }
 
+// budgetOrchestratorWithLogger mirrors budgetOrchestrator but accepts an
+// explicit logger, for tests asserting on the token-budget-incomplete
+// warning's log output.
+func budgetOrchestratorWithLogger(state *State, wm *stubWorkflowManager, store *stubStore, tracker *candidateTrackerAdapter, logger *slog.Logger) *Orchestrator {
+	regs := passingPreflightRegistries()
+	regs.ReloadWorkflow = func() error { return nil }
+	regs.ConfigFunc = wm.Config
+	return NewOrchestrator(OrchestratorParams{
+		State:           state,
+		Logger:          logger,
+		TrackerAdapter:  tracker,
+		AgentAdapter:    &mockAgentAdapter{},
+		WorkflowManager: wm,
+		Store:           store,
+		PreflightParams: regs,
+	})
+}
+
 func TestHandleTick_BudgetExhaustionRebuildsState(t *testing.T) {
 	t.Parallel()
 
@@ -4047,6 +4089,108 @@ func TestHandleTick_TokenBudgetRebuild(t *testing.T) {
 			t.Errorf("BudgetExhaustedReason = %v, want cleared in lockstep", state.BudgetExhaustedReason)
 		}
 	})
+
+	t.Run("a candidate below the ceiling with an unmeasured session permits dispatch and warns once, then stays silent on the next tick", func(t *testing.T) {
+		t.Parallel()
+
+		wm := budgetTickConfigTokens(0, 1000)
+		store := &stubStore{tokenIncompleteIDs: []string{issueA.ID}}
+		state := NewState(60000, 10, nil, AgentTotals{})
+		var buf bytes.Buffer
+		logger := slog.New(slog.NewTextHandler(&buf, nil))
+
+		orch := budgetOrchestratorWithLogger(state, wm, store, candidates(issueA), logger)
+		orch.handleTick(context.Background())
+
+		if _, ok := state.BudgetExhausted[issueA.ID]; ok {
+			t.Errorf("BudgetExhausted[%s] present, want absent (below the ceiling permits dispatch)", issueA.ID)
+		}
+		if _, ok := state.TokenBudgetIncomplete[issueA.ID]; !ok {
+			t.Errorf("TokenBudgetIncomplete[%s] missing, want present", issueA.ID)
+		}
+		output := buf.String()
+		if got := strings.Count(output, "token budget cannot be fully evaluated, allowing dispatch"); got != 1 {
+			t.Fatalf("warning count after first tick = %d, want 1; log:\n%s", got, output)
+		}
+		for _, want := range []string{
+			`issue_id=` + issueA.ID,
+			`issue_identifier=` + issueA.Identifier,
+			"used_tokens=0",
+			"budget_tokens=1000",
+			"unmeasured_sessions=1",
+		} {
+			if !strings.Contains(output, want) {
+				t.Errorf("warning log missing %q; log:\n%s", want, output)
+			}
+		}
+
+		// A second consecutive tick with the same condition must not log
+		// a further warning: edge-triggered against the prior set.
+		orch.handleTick(context.Background())
+		if got := strings.Count(buf.String(), "token budget cannot be fully evaluated, allowing dispatch"); got != 1 {
+			t.Errorf("warning count after second tick = %d, want 1 (edge-triggered)", got)
+		}
+	})
+
+	t.Run("a candidate reaching the ceiling is blocked and emits no unmeasured-budget warning", func(t *testing.T) {
+		t.Parallel()
+
+		wm := budgetTickConfigTokens(0, 1000)
+		store := &stubStore{tokenExhaustedIDs: []string{issueA.ID}}
+		state := NewState(60000, 10, nil, AgentTotals{})
+		var buf bytes.Buffer
+		logger := slog.New(slog.NewTextHandler(&buf, nil))
+
+		budgetOrchestratorWithLogger(state, wm, store, candidates(issueA), logger).handleTick(context.Background())
+
+		if _, ok := state.BudgetExhausted[issueA.ID]; !ok {
+			t.Fatalf("BudgetExhausted[%s] missing, want present (at the ceiling)", issueA.ID)
+		}
+		if got := state.BudgetExhaustedReason[issueA.ID]; got != budgetReasonToken {
+			t.Errorf("BudgetExhaustedReason[%s] = %q, want %q", issueA.ID, got, budgetReasonToken)
+		}
+		if _, ok := state.TokenBudgetIncomplete[issueA.ID]; ok {
+			t.Errorf("TokenBudgetIncomplete[%s] present, want absent for a blocked issue", issueA.ID)
+		}
+		if strings.Contains(buf.String(), "token budget cannot be fully evaluated") {
+			t.Errorf("unexpected incomplete-budget warning for a blocked issue; log:\n%s", buf.String())
+		}
+	})
+
+	t.Run("only agent.max_sessions configured issues no token query and leaves TokenBudgetIncomplete empty", func(t *testing.T) {
+		t.Parallel()
+
+		wm := budgetTickConfigTokens(3, 0)
+		store := &stubStore{tokenIncompleteIDs: []string{issueA.ID}}
+		state := NewState(60000, 10, nil, AgentTotals{})
+
+		budgetOrchestrator(state, wm, store, candidates(issueA)).handleTick(context.Background())
+
+		if len(state.TokenBudgetIncomplete) != 0 {
+			t.Errorf("TokenBudgetIncomplete = %v, want empty when agent.max_tokens is unset", state.TokenBudgetIncomplete)
+		}
+	})
+
+	t.Run("a live config reload removing the token ceiling clears TokenBudgetIncomplete", func(t *testing.T) {
+		t.Parallel()
+
+		wm := budgetTickConfigTokens(0, 1000)
+		store := &stubStore{tokenIncompleteIDs: []string{issueA.ID}}
+		state := NewState(60000, 10, nil, AgentTotals{})
+
+		orch := budgetOrchestrator(state, wm, store, candidates(issueA))
+		orch.handleTick(context.Background())
+		if len(state.TokenBudgetIncomplete) == 0 {
+			t.Fatal("TokenBudgetIncomplete empty after the first tick, want the candidate present")
+		}
+
+		wm.config.Agent.MaxTokens = 0
+		orch.handleTick(context.Background())
+
+		if len(state.TokenBudgetIncomplete) != 0 {
+			t.Errorf("TokenBudgetIncomplete = %v, want cleared after the token ceiling was removed", state.TokenBudgetIncomplete)
+		}
+	})
 }
 
 // --- Incremental session_metadata write tests ---
@@ -4186,6 +4330,29 @@ func TestMaybeWriteIncrementalMetadata(t *testing.T) {
 		}
 		if writes[0].TotalTokens != 30 {
 			t.Errorf("SessionMetadata.TotalTokens = %d, want 30", writes[0].TotalTokens)
+		}
+	})
+
+	// A session whose only usage event carries an all-zero payload (a
+	// measurement of zero) still writes a row, so row presence is exact
+	// rather than conservative for such a session.
+	t.Run("all-zero token_usage event still writes a row", func(t *testing.T) {
+		t.Parallel()
+
+		store := &stubStore{}
+		o, _ := incrementalWriteOrchestrator(t, store)
+
+		o.maybeWriteIncrementalMetadata(ctx, "id-1", domain.AgentEvent{
+			Type:      domain.EventTokenUsage,
+			Timestamp: time.Now().UTC(),
+		})
+
+		// The row's contents come from the running entry's own totals
+		// (pre-set by incrementalWriteOrchestrator), not from the
+		// triggering event's own zero payload; only row presence is
+		// under test here.
+		if writes := store.sessionWrites(); len(writes) != 1 {
+			t.Fatalf("UpsertSessionMetadata calls = %d, want 1 (a measurement of zero still writes a row)", len(writes))
 		}
 	})
 

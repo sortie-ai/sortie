@@ -441,6 +441,34 @@ func TestPromMetricsCounters(t *testing.T) {
 		}
 	})
 
+	// Regression coverage: a session that reported no measurement never
+	// reaches AddTokens on the orchestrator's token-delta path (gated on
+	// a non-zero usage component), so a scrape must expose no
+	// sortie_tokens_total series at all, not a series holding zero.
+	t.Run("no AddTokens call exposes no sortie_tokens_total series", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestMetrics(t)
+
+		families := gatherFamilies(t, m)
+		if _, ok := families["sortie_tokens_total"]; ok {
+			t.Error("sortie_tokens_total family present before any AddTokens call, want absent (no series, not a zero-valued one)")
+		}
+	})
+
+	t.Run("a zero or negative AddTokens call creates no series either", func(t *testing.T) {
+		t.Parallel()
+
+		m := newTestMetrics(t)
+		m.AddTokens("input", 0)
+		m.AddTokens("output", -5)
+
+		families := gatherFamilies(t, m)
+		if _, ok := families["sortie_tokens_total"]; ok {
+			t.Error("sortie_tokens_total family present after a zero/negative AddTokens call, want absent")
+		}
+	})
+
 	t.Run("AddAgentRuntime", func(t *testing.T) {
 		t.Parallel()
 

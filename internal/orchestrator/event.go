@@ -125,6 +125,14 @@ func HandleAgentEvent(state *State, issueID string, event domain.AgentEvent, log
 		usageDelta = applyUsageDelta(state, entry, event.Usage, metrics)
 	}
 
+	// A token_usage event, even one carrying an all-zero payload, or any
+	// event carrying a non-zero usage component asserts that the agent's
+	// runtime reported a measurement. Monotone from false: set once and
+	// never cleared.
+	if event.Type == domain.EventTokenUsage || hasUsage(event.Usage) {
+		entry.UsageMeasured = true
+	}
+
 	if event.Type == domain.EventTokenUsage {
 		// Increment API request count unconditionally — each
 		// token_usage event represents one API round-trip, including

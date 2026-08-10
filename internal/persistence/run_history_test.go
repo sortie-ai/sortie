@@ -3,7 +3,6 @@ package persistence
 import (
 	"context"
 	"fmt"
-	"slices"
 	"testing"
 	"time"
 )
@@ -17,8 +16,9 @@ func tokenRun(i int, issueID string, totalTokens int64) RunHistory {
 	return run
 }
 
-// assertTokenFields verifies the four token counters of a RunHistory row.
-func assertTokenFields(t *testing.T, reader string, got RunHistory, wantIn, wantOut, wantTotal, wantCache int64) {
+// assertTokenFields verifies the four token counters and the measurement
+// flag of a RunHistory row.
+func assertTokenFields(t *testing.T, reader string, got RunHistory, wantIn, wantOut, wantTotal, wantCache int64, wantMeasured bool) {
 	t.Helper()
 	if got.InputTokens != wantIn {
 		t.Errorf("%s InputTokens = %d, want %d", reader, got.InputTokens, wantIn)
@@ -31,6 +31,9 @@ func assertTokenFields(t *testing.T, reader string, got RunHistory, wantIn, want
 	}
 	if got.CacheReadTokens != wantCache {
 		t.Errorf("%s CacheReadTokens = %d, want %d", reader, got.CacheReadTokens, wantCache)
+	}
+	if got.TokensMeasured != wantMeasured {
+		t.Errorf("%s TokensMeasured = %v, want %v", reader, got.TokensMeasured, wantMeasured)
 	}
 }
 
@@ -50,9 +53,10 @@ func TestRunHistoryTokenColumns_RoundTrip(t *testing.T) {
 	run.OutputTokens = 2200
 	run.TotalTokens = 3300
 	run.CacheReadTokens = 440
+	run.TokensMeasured = true
 	inserted := appendOrFatal(t, s, run)
 
-	assertTokenFields(t, "AppendRunHistory", inserted, 1100, 2200, 3300, 440)
+	assertTokenFields(t, "AppendRunHistory", inserted, 1100, 2200, 3300, 440, true)
 
 	byIssue, err := s.QueryRunHistoryByIssue(ctx, run.IssueID)
 	if err != nil {
@@ -61,7 +65,7 @@ func TestRunHistoryTokenColumns_RoundTrip(t *testing.T) {
 	if len(byIssue) != 1 {
 		t.Fatalf("QueryRunHistoryByIssue returned %d entries, want 1", len(byIssue))
 	}
-	assertTokenFields(t, "QueryRunHistoryByIssue", byIssue[0], 1100, 2200, 3300, 440)
+	assertTokenFields(t, "QueryRunHistoryByIssue", byIssue[0], 1100, 2200, 3300, 440, true)
 
 	recent, err := s.QueryRecentRunHistory(ctx, 1, 0)
 	if err != nil {
@@ -70,7 +74,7 @@ func TestRunHistoryTokenColumns_RoundTrip(t *testing.T) {
 	if len(recent) != 1 {
 		t.Fatalf("QueryRecentRunHistory returned %d entries, want 1", len(recent))
 	}
-	assertTokenFields(t, "QueryRecentRunHistory", recent[0], 1100, 2200, 3300, 440)
+	assertTokenFields(t, "QueryRecentRunHistory", recent[0], 1100, 2200, 3300, 440, true)
 
 	// The paginated branch of QueryRecentRunHistory uses a separate SELECT;
 	// exercise it with a cursor past the inserted row.
@@ -81,7 +85,7 @@ func TestRunHistoryTokenColumns_RoundTrip(t *testing.T) {
 	if len(paginated) != 1 {
 		t.Fatalf("QueryRecentRunHistory(afterID) returned %d entries, want 1", len(paginated))
 	}
-	assertTokenFields(t, "QueryRecentRunHistory(afterID)", paginated[0], 1100, 2200, 3300, 440)
+	assertTokenFields(t, "QueryRecentRunHistory(afterID)", paginated[0], 1100, 2200, 3300, 440, true)
 
 	recovery, err := s.LoadLatestSuccessfulRunsForReactionRecovery(ctx, time.Time{}, 10)
 	if err != nil {
@@ -90,7 +94,52 @@ func TestRunHistoryTokenColumns_RoundTrip(t *testing.T) {
 	if len(recovery) != 1 {
 		t.Fatalf("LoadLatestSuccessfulRunsForReactionRecovery returned %d entries, want 1", len(recovery))
 	}
-	assertTokenFields(t, "LoadLatestSuccessfulRunsForReactionRecovery", recovery[0], 1100, 2200, 3300, 440)
+	assertTokenFields(t, "LoadLatestSuccessfulRunsForReactionRecovery", recovery[0], 1100, 2200, 3300, 440, true)
+}
+
+// TestRunHistoryTokenColumns_UnmeasuredRoundTrip verifies that a row
+// written with TokensMeasured false round-trips that value, alongside its
+// zero token columns, through every reader that projects the token
+// columns.
+func TestRunHistoryTokenColumns_UnmeasuredRoundTrip(t *testing.T) {
+	t.Parallel()
+
+	s := openTestStore(t)
+	migrateOrFatal(t, s)
+	ctx := context.Background()
+
+	run := newTestRun(1)
+	run.TokensMeasured = false
+	inserted := appendOrFatal(t, s, run)
+
+	assertTokenFields(t, "AppendRunHistory", inserted, 0, 0, 0, 0, false)
+
+	byIssue, err := s.QueryRunHistoryByIssue(ctx, run.IssueID)
+	if err != nil {
+		t.Fatalf("QueryRunHistoryByIssue: %v", err)
+	}
+	if len(byIssue) != 1 {
+		t.Fatalf("QueryRunHistoryByIssue returned %d entries, want 1", len(byIssue))
+	}
+	assertTokenFields(t, "QueryRunHistoryByIssue", byIssue[0], 0, 0, 0, 0, false)
+
+	recent, err := s.QueryRecentRunHistory(ctx, 1, 0)
+	if err != nil {
+		t.Fatalf("QueryRecentRunHistory: %v", err)
+	}
+	if len(recent) != 1 {
+		t.Fatalf("QueryRecentRunHistory returned %d entries, want 1", len(recent))
+	}
+	assertTokenFields(t, "QueryRecentRunHistory", recent[0], 0, 0, 0, 0, false)
+
+	recovery, err := s.LoadLatestSuccessfulRunsForReactionRecovery(ctx, time.Time{}, 10)
+	if err != nil {
+		t.Fatalf("LoadLatestSuccessfulRunsForReactionRecovery: %v", err)
+	}
+	if len(recovery) != 1 {
+		t.Fatalf("LoadLatestSuccessfulRunsForReactionRecovery returned %d entries, want 1", len(recovery))
+	}
+	assertTokenFields(t, "LoadLatestSuccessfulRunsForReactionRecovery", recovery[0], 0, 0, 0, 0, false)
 }
 
 // TestRunHistoryTokenColumns_LegacyRowsReadZero verifies that rows written
@@ -116,23 +165,23 @@ func TestRunHistoryTokenColumns_LegacyRowsReadZero(t *testing.T) {
 	if len(entries) != 1 {
 		t.Fatalf("QueryRunHistoryByIssue returned %d entries, want 1", len(entries))
 	}
-	assertTokenFields(t, "QueryRunHistoryByIssue(legacy)", entries[0], 0, 0, 0, 0)
+	assertTokenFields(t, "QueryRunHistoryByIssue(legacy)", entries[0], 0, 0, 0, 0, true)
 }
 
-func TestSumTotalTokensByIssue(t *testing.T) {
+func TestTokenUsageByIssue(t *testing.T) {
 	t.Parallel()
 
-	t.Run("no rows returns zero sum and zero count", func(t *testing.T) {
+	t.Run("no rows returns zero usage", func(t *testing.T) {
 		t.Parallel()
 		s := openTestStore(t)
 		migrateOrFatal(t, s)
 
-		sum, count, err := s.SumTotalTokensByIssue(context.Background(), "ISS-NONE")
+		usage, err := s.TokenUsageByIssue(context.Background(), "ISS-NONE")
 		if err != nil {
-			t.Fatalf("SumTotalTokensByIssue(ISS-NONE) unexpected error: %v", err)
+			t.Fatalf("TokenUsageByIssue(ISS-NONE) unexpected error: %v", err)
 		}
-		if sum != 0 || count != 0 {
-			t.Errorf("SumTotalTokensByIssue(ISS-NONE) = (%d, %d), want (0, 0)", sum, count)
+		if usage != (IssueTokenUsage{}) {
+			t.Errorf("TokenUsageByIssue(ISS-NONE) = %+v, want zero value", usage)
 		}
 	})
 
@@ -146,40 +195,72 @@ func TestSumTotalTokensByIssue(t *testing.T) {
 		appendOrFatal(t, s, tokenRun(3, "ISS-SUM", 300))
 		appendOrFatal(t, s, tokenRun(4, "ISS-OTHER", 5000))
 
-		sum, count, err := s.SumTotalTokensByIssue(context.Background(), "ISS-SUM")
+		usage, err := s.TokenUsageByIssue(context.Background(), "ISS-SUM")
 		if err != nil {
-			t.Fatalf("SumTotalTokensByIssue(ISS-SUM) unexpected error: %v", err)
+			t.Fatalf("TokenUsageByIssue(ISS-SUM) unexpected error: %v", err)
 		}
-		if sum != 600 {
-			t.Errorf("SumTotalTokensByIssue(ISS-SUM) sum = %d, want 600", sum)
+		if usage.TotalTokens != 600 {
+			t.Errorf("TokenUsageByIssue(ISS-SUM).TotalTokens = %d, want 600", usage.TotalTokens)
 		}
-		if count != 3 {
-			t.Errorf("SumTotalTokensByIssue(ISS-SUM) count = %d, want 3", count)
+		if usage.Sessions != 3 {
+			t.Errorf("TokenUsageByIssue(ISS-SUM).Sessions = %d, want 3", usage.Sessions)
 		}
 	})
-}
 
-func TestQueryTokenExhaustedIssues(t *testing.T) {
-	t.Parallel()
-
-	t.Run("empty candidateIDs returns empty non-nil slice", func(t *testing.T) {
+	t.Run("counts unmeasured sessions for a mixed-measurement issue", func(t *testing.T) {
 		t.Parallel()
 		s := openTestStore(t)
 		migrateOrFatal(t, s)
 
-		result, err := s.QueryTokenExhaustedIssues(context.Background(), []string{}, 1000)
+		measured := tokenRun(1, "ISS-MIXED", 100)
+		measured.TokensMeasured = true
+		appendOrFatal(t, s, measured)
+
+		unmeasured1 := tokenRun(2, "ISS-MIXED", 0)
+		unmeasured1.TokensMeasured = false
+		appendOrFatal(t, s, unmeasured1)
+
+		unmeasured2 := tokenRun(3, "ISS-MIXED", 0)
+		unmeasured2.TokensMeasured = false
+		appendOrFatal(t, s, unmeasured2)
+
+		usage, err := s.TokenUsageByIssue(context.Background(), "ISS-MIXED")
+		if err != nil {
+			t.Fatalf("TokenUsageByIssue(ISS-MIXED) unexpected error: %v", err)
+		}
+		if usage.TotalTokens != 100 {
+			t.Errorf("TokenUsageByIssue(ISS-MIXED).TotalTokens = %d, want 100", usage.TotalTokens)
+		}
+		if usage.Sessions != 3 {
+			t.Errorf("TokenUsageByIssue(ISS-MIXED).Sessions = %d, want 3", usage.Sessions)
+		}
+		if usage.UnmeasuredSessions != 2 {
+			t.Errorf("TokenUsageByIssue(ISS-MIXED).UnmeasuredSessions = %d, want 2", usage.UnmeasuredSessions)
+		}
+	})
+}
+
+func TestQueryTokenBudgetUsage(t *testing.T) {
+	t.Parallel()
+
+	t.Run("empty candidateIDs returns empty non-nil map", func(t *testing.T) {
+		t.Parallel()
+		s := openTestStore(t)
+		migrateOrFatal(t, s)
+
+		result, err := s.QueryTokenBudgetUsage(context.Background(), []string{})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 		if result == nil {
-			t.Fatal("result = nil, want empty non-nil slice")
+			t.Fatal("result = nil, want empty non-nil map")
 		}
 		if len(result) != 0 {
-			t.Errorf("result = %v, want empty slice", result)
+			t.Errorf("result = %v, want empty map", result)
 		}
 	})
 
-	t.Run("candidate with sum below maxTokens not returned", func(t *testing.T) {
+	t.Run("candidate with rows is returned with its usage", func(t *testing.T) {
 		t.Parallel()
 		s := openTestStore(t)
 		migrateOrFatal(t, s)
@@ -187,69 +268,70 @@ func TestQueryTokenExhaustedIssues(t *testing.T) {
 		appendOrFatal(t, s, tokenRun(1, "ISS-UNDER", 400))
 		appendOrFatal(t, s, tokenRun(2, "ISS-UNDER", 500))
 
-		result, err := s.QueryTokenExhaustedIssues(context.Background(), []string{"ISS-UNDER"}, 1000)
+		result, err := s.QueryTokenBudgetUsage(context.Background(), []string{"ISS-UNDER"})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if len(result) != 0 {
-			t.Errorf("result = %v, want empty (sum 900 < maxTokens 1000)", result)
+		usage, ok := result["ISS-UNDER"]
+		if !ok {
+			t.Fatalf("result = %v, want an entry for ISS-UNDER", result)
+		}
+		if usage.TotalTokens != 900 || usage.Sessions != 2 {
+			t.Errorf("result[ISS-UNDER] = %+v, want TotalTokens=900 Sessions=2", usage)
 		}
 	})
 
-	t.Run("candidate with sum equal to maxTokens is returned", func(t *testing.T) {
+	t.Run("counts unmeasured sessions per candidate", func(t *testing.T) {
 		t.Parallel()
 		s := openTestStore(t)
 		migrateOrFatal(t, s)
 
-		appendOrFatal(t, s, tokenRun(1, "ISS-EXACT", 600))
-		appendOrFatal(t, s, tokenRun(2, "ISS-EXACT", 400))
+		measured := tokenRun(1, "ISS-MIXED", 250)
+		measured.TokensMeasured = true
+		appendOrFatal(t, s, measured)
 
-		result, err := s.QueryTokenExhaustedIssues(context.Background(), []string{"ISS-EXACT"}, 1000)
+		unmeasured := tokenRun(2, "ISS-MIXED", 0)
+		unmeasured.TokensMeasured = false
+		appendOrFatal(t, s, unmeasured)
+
+		result, err := s.QueryTokenBudgetUsage(context.Background(), []string{"ISS-MIXED"})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if len(result) != 1 || result[0] != "ISS-EXACT" {
-			t.Errorf("result = %v, want [ISS-EXACT]", result)
+		usage, ok := result["ISS-MIXED"]
+		if !ok {
+			t.Fatalf("result = %v, want an entry for ISS-MIXED", result)
+		}
+		if usage.TotalTokens != 250 || usage.Sessions != 2 || usage.UnmeasuredSessions != 1 {
+			t.Errorf("result[ISS-MIXED] = %+v, want TotalTokens=250 Sessions=2 UnmeasuredSessions=1", usage)
 		}
 	})
 
-	t.Run("candidate with sum exceeding maxTokens is returned", func(t *testing.T) {
+	t.Run("mixed candidates report per-candidate usage", func(t *testing.T) {
 		t.Parallel()
 		s := openTestStore(t)
 		migrateOrFatal(t, s)
 
-		appendOrFatal(t, s, tokenRun(1, "ISS-OVER", 900))
-		appendOrFatal(t, s, tokenRun(2, "ISS-OVER", 900))
-
-		result, err := s.QueryTokenExhaustedIssues(context.Background(), []string{"ISS-OVER"}, 1000)
-		if err != nil {
-			t.Fatalf("unexpected error: %v", err)
-		}
-		if len(result) != 1 || result[0] != "ISS-OVER" {
-			t.Errorf("result = %v, want [ISS-OVER]", result)
-		}
-	})
-
-	t.Run("mixed candidates only qualifying ones returned", func(t *testing.T) {
-		t.Parallel()
-		s := openTestStore(t)
-		migrateOrFatal(t, s)
-
-		// ISS-HOT: 1200 tokens (exhausted), ISS-COLD: 300 (not), ISS-NONE: no rows.
+		// ISS-HOT: 1200 tokens, ISS-COLD: 300, ISS-NONE: no rows.
 		appendOrFatal(t, s, tokenRun(1, "ISS-HOT", 700))
 		appendOrFatal(t, s, tokenRun(2, "ISS-HOT", 500))
 		appendOrFatal(t, s, tokenRun(3, "ISS-COLD", 300))
 
-		result, err := s.QueryTokenExhaustedIssues(
+		result, err := s.QueryTokenBudgetUsage(
 			context.Background(),
 			[]string{"ISS-HOT", "ISS-COLD", "ISS-NONE"},
-			1000,
 		)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		if len(result) != 1 || result[0] != "ISS-HOT" {
-			t.Errorf("result = %v, want [ISS-HOT]", result)
+		if got := result["ISS-HOT"].TotalTokens; got != 1200 {
+			t.Errorf("result[ISS-HOT].TotalTokens = %d, want 1200", got)
+		}
+		if got := result["ISS-COLD"].TotalTokens; got != 300 {
+			t.Errorf("result[ISS-COLD].TotalTokens = %d, want 300", got)
+		}
+		if _, ok := result["ISS-NONE"]; ok {
+			t.Errorf("result = %v, want no entry for ISS-NONE (no rows)", result)
 		}
 	})
 
@@ -260,18 +342,18 @@ func TestQueryTokenExhaustedIssues(t *testing.T) {
 
 		appendOrFatal(t, s, tokenRun(1, "ISS-OUTSIDE", 9000))
 
-		result, err := s.QueryTokenExhaustedIssues(context.Background(), []string{"ISS-INSIDE"}, 1000)
+		result, err := s.QueryTokenBudgetUsage(context.Background(), []string{"ISS-INSIDE"})
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 		if len(result) != 0 {
-			t.Errorf("result = %v, want empty (exhausted issue not in candidate list)", result)
+			t.Errorf("result = %v, want empty (outside issue not in candidate list)", result)
 		}
 	})
 
-	// The advisory tool reads SumTotalTokensByIssue while enforcement reads
-	// QueryTokenExhaustedIssues; both must agree on the same ledger value.
-	t.Run("completed-session sum matches enforcement threshold", func(t *testing.T) {
+	// The advisory tool reads TokenUsageByIssue while enforcement reads
+	// QueryTokenBudgetUsage; both must agree on the same ledger value.
+	t.Run("completed-session sum matches across both queries", func(t *testing.T) {
 		t.Parallel()
 		s := openTestStore(t)
 		migrateOrFatal(t, s)
@@ -281,25 +363,18 @@ func TestQueryTokenExhaustedIssues(t *testing.T) {
 		appendOrFatal(t, s, tokenRun(2, "ISS-PARITY", 456))
 		appendOrFatal(t, s, tokenRun(3, "ISS-PARITY", 789))
 
-		sum, _, err := s.SumTotalTokensByIssue(ctx, "ISS-PARITY")
+		usage, err := s.TokenUsageByIssue(ctx, "ISS-PARITY")
 		if err != nil {
-			t.Fatalf("SumTotalTokensByIssue(ISS-PARITY) unexpected error: %v", err)
+			t.Fatalf("TokenUsageByIssue(ISS-PARITY) unexpected error: %v", err)
 		}
 
-		atSum, err := s.QueryTokenExhaustedIssues(ctx, []string{"ISS-PARITY"}, int(sum))
+		budget, err := s.QueryTokenBudgetUsage(ctx, []string{"ISS-PARITY"})
 		if err != nil {
-			t.Fatalf("QueryTokenExhaustedIssues(maxTokens=%d) unexpected error: %v", sum, err)
+			t.Fatalf("QueryTokenBudgetUsage unexpected error: %v", err)
 		}
-		if !slices.Contains(atSum, "ISS-PARITY") {
-			t.Errorf("QueryTokenExhaustedIssues(maxTokens=%d) = %v, want to contain ISS-PARITY", sum, atSum)
-		}
-
-		aboveSum, err := s.QueryTokenExhaustedIssues(ctx, []string{"ISS-PARITY"}, int(sum)+1)
-		if err != nil {
-			t.Fatalf("QueryTokenExhaustedIssues(maxTokens=%d) unexpected error: %v", sum+1, err)
-		}
-		if slices.Contains(aboveSum, "ISS-PARITY") {
-			t.Errorf("QueryTokenExhaustedIssues(maxTokens=%d) = %v, want ISS-PARITY absent", sum+1, aboveSum)
+		if budget["ISS-PARITY"].TotalTokens != usage.TotalTokens {
+			t.Errorf("QueryTokenBudgetUsage total = %d, want %d (parity with TokenUsageByIssue)",
+				budget["ISS-PARITY"].TotalTokens, usage.TotalTokens)
 		}
 	})
 }

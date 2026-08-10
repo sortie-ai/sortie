@@ -9,6 +9,7 @@ import (
 	"math"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -736,6 +737,7 @@ func TestToStateResponse(t *testing.T) {
 					AgentKind:         "claude",
 					AgentInputTokens:  2_000_000,
 					AgentOutputTokens: 1_000_000,
+					UsageMeasured:     true,
 				},
 			},
 		}
@@ -824,6 +826,7 @@ func TestToStateResponse(t *testing.T) {
 					AgentKind:         "claude",
 					AgentInputTokens:  1_000_000,
 					AgentOutputTokens: 0,
+					UsageMeasured:     true,
 				},
 			},
 		}
@@ -851,6 +854,84 @@ func TestToStateResponse(t *testing.T) {
 			t.Errorf("JSON active_estimated_cost_usd = %v, want 5.0", costVal)
 		}
 	})
+
+	t.Run("tokens_measured reflects each running entry's own flag", func(t *testing.T) {
+		t.Parallel()
+
+		snap := orchestrator.RuntimeSnapshotResult{
+			GeneratedAt: time.Now().UTC(),
+			Running: []orchestrator.SnapshotRunningEntry{
+				{IssueID: "measured", Identifier: "MT-MEAS", UsageMeasured: true},
+				{IssueID: "unmeasured", Identifier: "MT-UNM", UsageMeasured: false},
+			},
+		}
+
+		got := toStateResponse(snap, nil)
+
+		if len(got.Running) != 2 {
+			t.Fatalf("len(Running) = %d, want 2", len(got.Running))
+		}
+		byID := make(map[string]bool, len(got.Running))
+		for _, e := range got.Running {
+			byID[e.IssueID] = e.TokensMeasured
+		}
+		if !byID["measured"] {
+			t.Error(`Running[issue_id="measured"].TokensMeasured = false, want true`)
+		}
+		if byID["unmeasured"] {
+			t.Error(`Running[issue_id="unmeasured"].TokensMeasured = true, want false`)
+		}
+
+		data, err := json.Marshal(got)
+		if err != nil {
+			t.Fatalf("json.Marshal: %v", err)
+		}
+		if !strings.Contains(string(data), `"tokens_measured":true`) || !strings.Contains(string(data), `"tokens_measured":false`) {
+			t.Errorf("JSON = %s, want both tokens_measured:true and tokens_measured:false", data)
+		}
+	})
+
+	t.Run("an unmeasured entry is excluded from active_estimated_cost_usd while a measured entry with the same adapter and rate is included", func(t *testing.T) {
+		t.Parallel()
+
+		fptr := func(v float64) *float64 { return &v }
+
+		snap := orchestrator.RuntimeSnapshotResult{
+			GeneratedAt: time.Now().UTC(),
+			Running: []orchestrator.SnapshotRunningEntry{
+				{
+					IssueID:           "measured",
+					Identifier:        "MT-MEAS",
+					AgentKind:         "claude",
+					AgentInputTokens:  1_000_000,
+					AgentOutputTokens: 0,
+					UsageMeasured:     true,
+				},
+				{
+					IssueID:           "unmeasured",
+					Identifier:        "MT-UNM",
+					AgentKind:         "claude",
+					AgentInputTokens:  1_000_000,
+					AgentOutputTokens: 0,
+					UsageMeasured:     false,
+				},
+			},
+		}
+
+		rates := TokenRates{
+			"claude": TokenRateConfig{InputPerMtok: fptr(3.0)},
+		}
+
+		got := toStateResponse(snap, rates)
+
+		// 1M input @ $3/Mtok = $3, from the measured entry alone.
+		if got.ActiveEstimatedCostUSD == nil {
+			t.Fatal("ActiveEstimatedCostUSD = nil, want non-nil")
+		}
+		if diff := *got.ActiveEstimatedCostUSD - 3.0; diff > 1e-9 || diff < -1e-9 {
+			t.Errorf("ActiveEstimatedCostUSD = %v, want 3.0 (unmeasured entry excluded)", *got.ActiveEstimatedCostUSD)
+		}
+	})
 }
 
 func TestBuildIssueDetail(t *testing.T) {
@@ -866,6 +947,7 @@ func TestBuildIssueDetail(t *testing.T) {
 				State:         "In Progress",
 				StartedAt:     now,
 				WorkspacePath: "/tmp/ws/mt-100",
+				UsageMeasured: true,
 			},
 		},
 		Retrying: []orchestrator.SnapshotRetryEntry{
@@ -903,6 +985,9 @@ func TestBuildIssueDetail(t *testing.T) {
 		}
 		if got.Workspace.Path != "/tmp/ws/mt-100" {
 			t.Errorf("Workspace.Path = %q, want %q", got.Workspace.Path, "/tmp/ws/mt-100")
+		}
+		if !got.Running.TokensMeasured {
+			t.Error("Running.TokensMeasured = false, want true")
 		}
 		if got.Attempts == nil {
 			t.Fatal("Attempts = nil, want non-nil")

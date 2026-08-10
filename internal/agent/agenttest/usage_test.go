@@ -78,3 +78,65 @@ func TestAssertUsageContract_Violating(t *testing.T) {
 		t.Error("assertUsageContract recorded no failures on a monotonicity-violating sequence, want at least one")
 	}
 }
+
+// TestAssertMeasurementAbsent_Passing exercises the exported
+// AssertMeasurementAbsent entry point against a real *testing.T with an
+// event slice carrying no token_usage event and no non-zero Usage, and a
+// result whose UsageMeasured is false. It must report no failures.
+func TestAssertMeasurementAbsent_Passing(t *testing.T) {
+	t.Parallel()
+
+	events := []domain.AgentEvent{
+		{Type: domain.EventNotification},
+		{Type: domain.EventTurnCompleted},
+	}
+	result := domain.TurnResult{UsageMeasured: false}
+
+	AssertMeasurementAbsent(t, events, result)
+}
+
+// TestAssertMeasurementAbsent_Violating drives assertMeasurementAbsent
+// against a fakeReporter for each of the three ways a runtime that
+// reported nothing must not assert a measurement: a token_usage event, a
+// non-zero Usage on a differently typed event, and a true
+// result.UsageMeasured. Each case must record at least one failure.
+func TestAssertMeasurementAbsent_Violating(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		events []domain.AgentEvent
+		result domain.TurnResult
+	}{
+		{
+			name:   "token_usage event present",
+			events: []domain.AgentEvent{{Type: domain.EventTokenUsage}},
+			result: domain.TurnResult{},
+		},
+		{
+			name: "non-zero usage on a non-token_usage event",
+			events: []domain.AgentEvent{
+				{Type: domain.EventNotification, Usage: domain.TokenUsage{TotalTokens: 5, OutputTokens: 5}},
+			},
+			result: domain.TurnResult{},
+		},
+		{
+			name:   "UsageMeasured true with no events",
+			events: nil,
+			result: domain.TurnResult{UsageMeasured: true},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			reporter := &fakeReporter{}
+			assertMeasurementAbsent(reporter, tt.events, tt.result)
+
+			if len(reporter.errors) == 0 {
+				t.Errorf("assertMeasurementAbsent(%s) recorded no failures, want at least one", tt.name)
+			}
+		})
+	}
+}

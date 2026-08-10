@@ -189,14 +189,15 @@ func resolveNotificationCap(backends []config.NotificationBackend) int {
 
 func buildBudgetQuery(store *persistence.Store) budget.BudgetQueryFunc {
 	return func(ctx context.Context, issueID string, runningSessionID string) (budget.BudgetUsage, error) {
-		completedTotal, completedSessions, err := store.SumTotalTokensByIssue(ctx, issueID)
+		completed, err := store.TokenUsageByIssue(ctx, issueID)
 		if err != nil {
 			return budget.BudgetUsage{}, err
 		}
 
 		usage := budget.BudgetUsage{
-			CompletedTotalTokens: completedTotal,
-			CompletedSessions:    completedSessions,
+			CompletedTotalTokens: completed.TotalTokens,
+			CompletedSessions:    completed.Sessions,
+			UnmeasuredSessions:   completed.UnmeasuredSessions,
 		}
 
 		// The running session's recorded spend lives in session_metadata,
@@ -212,6 +213,7 @@ func buildBudgetQuery(store *persistence.Store) budget.BudgetQueryFunc {
 		}
 		if found && meta.SessionID == runningSessionID {
 			usage.RunningTotalTokens = meta.TotalTokens
+			usage.RunningMeasured = true
 		}
 		return usage, nil
 	}

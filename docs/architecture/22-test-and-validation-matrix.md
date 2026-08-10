@@ -190,6 +190,8 @@ Unless otherwise noted, Sections 17.1 through 17.7 are `Core Conformance`. Bulle
 - Each coding-agent adapter carries a token-accounting regression test whose input is output
   captured from the runtime rather than a hand-written constant; the test asserts the
   run-cumulative scope and monotonicity contract of Section 10.3
+- Each coding-agent adapter carries a test proving it emits no `token_usage` event and reports
+  the run unmeasured when its runtime supplies no usage figure for that run
 - `ToolRegistry` is populated at startup and all registered tools appear in prompt-time
   advertisement
 - `tracker_api` tool:
@@ -210,6 +212,9 @@ Unless otherwise noted, Sections 17.1 through 17.7 are `Core Conformance`. Bulle
   not affect correctness
 - If humanized event summaries are implemented, they cover key agent event classes without changing
   orchestrator behavior
+- An unmeasured run is distinguishable from a zero-consumption run in the persisted row, in both
+  `sortie stats` output forms, on the dashboard, and in the `cost_budget` result; an unmeasured
+  run creates no Prometheus series
 
 ### 17.7 CLI and Host Lifecycle
 

@@ -232,7 +232,10 @@ func TestOnFinalize_AuthLineWithStdoutIsNotAuthError(t *testing.T) {
 }
 
 // TestOnFinalize_NoTokenEvent verifies that across every owned OnFinalize row,
-// TurnResult.Usage stays zero and no EventTokenUsage is ever emitted.
+// TurnResult.Usage stays zero, no EventTokenUsage is ever emitted, and the
+// run is reported unmeasured: the headless kiro-cli runtime reports no
+// token counts on any exit path, so TurnResult.UsageMeasured stays at its
+// Go zero value regardless of how the turn ended.
 func TestOnFinalize_NoTokenEvent(t *testing.T) {
 	// t.Setenv is incompatible with t.Parallel.
 	setValidAPIKey(t)
@@ -257,17 +260,7 @@ func TestOnFinalize_NoTokenEvent(t *testing.T) {
 
 			events, result, _ := runChatTurn(t, adapter, session, "ping")
 
-			if result.Usage != (domain.TokenUsage{}) {
-				t.Errorf("result.Usage = %+v, want zero TokenUsage", result.Usage)
-			}
-			if hasEventType(events, domain.EventTokenUsage) {
-				t.Error("EventTokenUsage emitted, want none for a no-token-accounting adapter")
-			}
-			for _, e := range events {
-				if e.Usage != (domain.TokenUsage{}) {
-					t.Errorf("event %q carried non-zero Usage %+v, want zero", e.Type, e.Usage)
-				}
-			}
+			agenttest.AssertMeasurementAbsent(t, events, result)
 		})
 	}
 }

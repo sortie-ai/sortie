@@ -22,10 +22,11 @@ import (
 // fullCaps reports every optional run_history column group present, so
 // the "full" projection and every summary and group figure are computed.
 var fullCaps = persistence.RunHistoryCapabilities{
-	HasTurnsCompleted: true,
-	HasReviewMetadata: true,
-	HasRuleRouting:    true,
-	HasTokens:         true,
+	HasTurnsCompleted:   true,
+	HasReviewMetadata:   true,
+	HasRuleRouting:      true,
+	HasTokens:           true,
+	HasTokenMeasurement: true,
 }
 
 // fixedNow is a deterministic generatedAt value for aggregator-level
@@ -241,12 +242,12 @@ func TestStatsSummaryFormulas(t *testing.T) {
 			persistence.RunStatsRow{
 				Status: "succeeded", AgentAdapter: "mock", TurnsCompleted: 4,
 				StartedAt: "2026-01-01T00:00:00Z", CompletedAt: "2026-01-01T00:10:00Z",
-				InputTokens: 1_000_000,
+				InputTokens: 1_000_000, TokensMeasured: true,
 			},
 			persistence.RunStatsRow{
 				Status: "failed", AgentAdapter: "mock", TurnsCompleted: 8,
 				StartedAt: "2026-01-01T00:00:00Z", CompletedAt: "2026-01-01T01:00:00Z",
-				InputTokens: 500_000,
+				InputTokens: 500_000, TokensMeasured: true,
 			},
 		)
 
@@ -280,9 +281,10 @@ func TestStatsGroupDisclosure(t *testing.T) {
 	agg := newStatsAggregator(fullCaps, rates)
 
 	addRows(t, agg, persistence.RunStatsRow{
-		Status:      "ci_failed",
-		StartedAt:   "2026-01-01T00:00:00Z",
-		CompletedAt: "2026-01-01T00:00:00Z",
+		Status:         "ci_failed",
+		StartedAt:      "2026-01-01T00:00:00Z",
+		CompletedAt:    "2026-01-01T00:00:00Z",
+		TokensMeasured: true,
 	})
 
 	report := agg.report(fixedNow, "/wf", "/db", nil, nil, nil)
@@ -327,7 +329,7 @@ func TestStatsCostDerivation(t *testing.T) {
 		return persistence.RunStatsRow{
 			Status: "succeeded", AgentAdapter: adapter,
 			StartedAt: "2026-01-01T00:00:00Z", CompletedAt: "2026-01-01T00:10:00Z",
-			InputTokens: input,
+			InputTokens: input, TokensMeasured: true,
 		}
 	}
 
@@ -411,6 +413,73 @@ func TestStatsCostDerivation(t *testing.T) {
 			t.Errorf("renderStatsText stdout = %q, want no unpriced disclosure", out)
 		}
 	})
+
+	t.Run("all runs unmeasured with token_rates configured renders a dash for both figures", func(t *testing.T) {
+		t.Parallel()
+
+		rates := server.TokenRates{"kiro": server.TokenRateConfig{InputPerMtok: floatPtr(10)}}
+		agg := newStatsAggregator(fullCaps, rates)
+		addRows(t, agg, persistence.RunStatsRow{
+			Status: "succeeded", AgentAdapter: "kiro",
+			StartedAt: "2026-01-01T00:00:00Z", CompletedAt: "2026-01-01T00:10:00Z",
+			TokensMeasured: false,
+		})
+
+		report := agg.report(fixedNow, "/wf", "/db", nil, nil, nil)
+		if report.Summary.CostUSD != nil {
+			t.Errorf("Summary.CostUSD = %v, want nil (no measured run in range)", *report.Summary.CostUSD)
+		}
+
+		var stdout, stderr bytes.Buffer
+		renderStatsText(&stdout, &stderr, report)
+		out := stdout.String()
+		if !strings.Contains(out, "cost (measured runs)    -   per succeeded run -") {
+			t.Errorf("renderStatsText stdout = %q, want the dash arm, not the token_rates remedy", out)
+		}
+		if strings.Contains(out, "not estimated; set token_rates") {
+			t.Errorf("renderStatsText stdout = %q, want no token_rates remedy naming a cause that is not the actual one", out)
+		}
+	})
+
+	t.Run("a mixed range with no rates configured still names token_rates as the remedy", func(t *testing.T) {
+		t.Parallel()
+
+		agg := newStatsAggregator(fullCaps, nil)
+		addRows(t, agg,
+			makeRow("claude-code", 1_000_000),
+			persistence.RunStatsRow{
+				Status: "succeeded", AgentAdapter: "kiro",
+				StartedAt: "2026-01-01T00:00:00Z", CompletedAt: "2026-01-01T00:10:00Z",
+				TokensMeasured: false,
+			},
+		)
+
+		report := agg.report(fixedNow, "/wf", "/db", nil, nil, nil)
+
+		var stdout, stderr bytes.Buffer
+		renderStatsText(&stdout, &stderr, report)
+		out := stdout.String()
+		if !strings.Contains(out, "not estimated; set token_rates in the workflow") {
+			t.Errorf("renderStatsText stdout = %q, want the token_rates remedy for a range with a measured run", out)
+		}
+	})
+
+	t.Run("a range with a measured priced run renders numbers", func(t *testing.T) {
+		t.Parallel()
+
+		rates := server.TokenRates{"claude-code": server.TokenRateConfig{InputPerMtok: floatPtr(10)}}
+		agg := newStatsAggregator(fullCaps, rates)
+		addRows(t, agg, makeRow("claude-code", 1_000_000))
+
+		report := agg.report(fixedNow, "/wf", "/db", nil, nil, nil)
+
+		var stdout, stderr bytes.Buffer
+		renderStatsText(&stdout, &stderr, report)
+		out := stdout.String()
+		if !strings.Contains(out, "cost (measured runs)    $10.00   per succeeded run $10.00") {
+			t.Errorf("renderStatsText stdout = %q, want the priced numbers line", out)
+		}
+	})
 }
 
 // --- stored total_tokens is reported unchanged ---
@@ -418,23 +487,180 @@ func TestStatsCostDerivation(t *testing.T) {
 func TestStatsTokenReporting(t *testing.T) {
 	t.Parallel()
 
-	agg := newStatsAggregator(fullCaps, nil)
-	addRows(t, agg, persistence.RunStatsRow{
-		Status: "succeeded", AgentAdapter: "mock",
-		StartedAt: "2026-01-01T00:00:00Z", CompletedAt: "2026-01-01T00:10:00Z",
-		InputTokens: 100, OutputTokens: 50, CacheReadTokens: 10,
-		TotalTokens: 999, // deliberately inconsistent with input+output+cache_read = 160
+	t.Run("stored total_tokens is reported unchanged", func(t *testing.T) {
+		t.Parallel()
+
+		agg := newStatsAggregator(fullCaps, nil)
+		addRows(t, agg, persistence.RunStatsRow{
+			Status: "succeeded", AgentAdapter: "mock",
+			StartedAt: "2026-01-01T00:00:00Z", CompletedAt: "2026-01-01T00:10:00Z",
+			InputTokens: 100, OutputTokens: 50, CacheReadTokens: 10,
+			TotalTokens:    999, // deliberately inconsistent with input+output+cache_read = 160
+			TokensMeasured: true,
+		})
+
+		report := agg.report(fixedNow, "/wf", "/db", nil, nil, nil)
+
+		if report.Summary.Tokens == nil || report.Summary.Tokens.Total != 999 {
+			t.Errorf("Summary.Tokens.Total = %v, want 999 (stored total, never recomputed)", report.Summary.Tokens)
+		}
+		adapterGroup := findGroup(t, report.ByAdapter, "mock")
+		if adapterGroup.Tokens == nil || adapterGroup.Tokens.Total != 999 {
+			t.Errorf("by_adapter[mock].Tokens.Total = %v, want 999", adapterGroup.Tokens)
+		}
 	})
 
-	report := agg.report(fixedNow, "/wf", "/db", nil, nil, nil)
+	// measuredUnmeasuredRows returns a measured run of 1000 total tokens,
+	// a measured-zero run, and an unmeasured run on a distinct adapter.
+	measuredUnmeasuredRows := func() []persistence.RunStatsRow {
+		return []persistence.RunStatsRow{
+			{
+				Status: "succeeded", AgentAdapter: "claude-code",
+				StartedAt: "2026-01-01T00:00:00Z", CompletedAt: "2026-01-01T00:10:00Z",
+				InputTokens: 1_000_000, TotalTokens: 1_000_000, TokensMeasured: true,
+			},
+			{
+				Status: "succeeded", AgentAdapter: "claude-code",
+				StartedAt: "2026-01-01T01:00:00Z", CompletedAt: "2026-01-01T01:10:00Z",
+				TokensMeasured: true, // a measurement of zero
+			},
+			{
+				Status: "succeeded", AgentAdapter: "kiro",
+				StartedAt: "2026-01-01T02:00:00Z", CompletedAt: "2026-01-01T02:10:00Z",
+				TokensMeasured: false,
+			},
+		}
+	}
 
-	if report.Summary.Tokens == nil || report.Summary.Tokens.Total != 999 {
-		t.Errorf("Summary.Tokens.Total = %v, want 999 (stored total, never recomputed)", report.Summary.Tokens)
-	}
-	adapterGroup := findGroup(t, report.ByAdapter, "mock")
-	if adapterGroup.Tokens == nil || adapterGroup.Tokens.Total != 999 {
-		t.Errorf("by_adapter[mock].Tokens.Total = %v, want 999", adapterGroup.Tokens)
-	}
+	t.Run("JSON form folds a measured, measured-zero, and unmeasured run", func(t *testing.T) {
+		t.Parallel()
+
+		rates := server.TokenRates{
+			"claude-code": server.TokenRateConfig{InputPerMtok: floatPtr(10)},
+			"kiro":        server.TokenRateConfig{InputPerMtok: floatPtr(10)},
+		}
+		agg := newStatsAggregator(fullCaps, rates)
+		addRows(t, agg, measuredUnmeasuredRows()...)
+
+		report := agg.report(fixedNow, "/wf", "/db", nil, nil, nil)
+
+		if report.Summary.Tokens == nil || report.Summary.Tokens.Total != 1_000_000 {
+			t.Errorf("Summary.Tokens.Total = %v, want 1000000 (measured runs only)", report.Summary.Tokens)
+		}
+		if report.Summary.TokensUnmeasuredRuns != 1 {
+			t.Errorf("Summary.TokensUnmeasuredRuns = %d, want 1", report.Summary.TokensUnmeasuredRuns)
+		}
+		if report.Summary.CostUSD == nil || *report.Summary.CostUSD != 10 {
+			t.Fatalf("Summary.CostUSD = %v, want 10 (prices only the measured claude-code runs)", report.Summary.CostUSD)
+		}
+		if report.Summary.CostPerSucceededRunUSD == nil || *report.Summary.CostPerSucceededRunUSD != 5 {
+			t.Errorf("Summary.CostPerSucceededRunUSD = %v, want 5 (10 / 2 succeeded measured runs)", report.Summary.CostPerSucceededRunUSD)
+		}
+
+		kiroGroup := findGroup(t, report.ByAdapter, "kiro")
+		if kiroGroup.Tokens != nil {
+			t.Errorf("by_adapter[kiro].Tokens = %+v, want nil (no measured run)", kiroGroup.Tokens)
+		}
+		if kiroGroup.CostUSD != nil {
+			t.Errorf("by_adapter[kiro].CostUSD = %v, want nil", *kiroGroup.CostUSD)
+		}
+		if kiroGroup.TokensUnmeasuredRuns != 1 {
+			t.Errorf("by_adapter[kiro].TokensUnmeasuredRuns = %d, want 1", kiroGroup.TokensUnmeasuredRuns)
+		}
+	})
+
+	t.Run("text form labels the measured-runs lines and dashes the unmeasured adapter row", func(t *testing.T) {
+		t.Parallel()
+
+		rates := server.TokenRates{
+			"claude-code": server.TokenRateConfig{InputPerMtok: floatPtr(10)},
+			"kiro":        server.TokenRateConfig{InputPerMtok: floatPtr(10)},
+		}
+		agg := newStatsAggregator(fullCaps, rates)
+		addRows(t, agg, measuredUnmeasuredRows()...)
+		report := agg.report(fixedNow, "/wf", "/db", nil, nil, nil)
+
+		var stdout, stderr bytes.Buffer
+		renderStatsText(&stdout, &stderr, report)
+		out := stdout.String()
+
+		if !strings.Contains(out, "tokens (measured runs)") {
+			t.Errorf("stdout = %q, want the %q label", out, "tokens (measured runs)")
+		}
+		if !strings.Contains(out, "cost (measured runs)") {
+			t.Errorf("stdout = %q, want the %q label", out, "cost (measured runs)")
+		}
+		if strings.Contains(out, "tokens (all runs)") || strings.Contains(out, "cost (all runs)") {
+			t.Errorf("stdout = %q, want no trace of the old \"(all runs)\" labels", out)
+		}
+
+		kiroLine := ""
+		for line := range strings.SplitSeq(out, "\n") {
+			if strings.HasPrefix(strings.TrimSpace(line), "kiro") {
+				kiroLine = line
+				break
+			}
+		}
+		if kiroLine == "" {
+			t.Fatalf("stdout = %q, want a kiro row in the by-coding-agent table", out)
+		}
+		fields := strings.Fields(kiroLine)
+		if len(fields) == 0 || fields[len(fields)-1] != "-" || fields[len(fields)-2] != "-" {
+			t.Errorf("kiro row = %q, want its total-tokens and cost columns to both be %q", kiroLine, "-")
+		}
+
+		if !strings.Contains(out, "the token and cost figures skip 1 of these runs") {
+			t.Errorf("stdout = %q, want the unmeasured-runs footnote", out)
+		}
+	})
+
+	t.Run("footnote order places the unmeasured note after duration notes and before the unpriced-cost note", func(t *testing.T) {
+		t.Parallel()
+
+		summary := statsSummary{
+			ZeroDurationRuns:     1,
+			DurationExcludedRuns: 1,
+			TokensUnmeasuredRuns: 1,
+			CostUnpricedRuns:     1,
+		}
+
+		notes := statsFootnotes(summary)
+		if len(notes) != 4 {
+			t.Fatalf("statsFootnotes(%+v) = %v, want 4 lines", summary, notes)
+		}
+		unmeasuredIdx := slices.IndexFunc(notes, func(n string) bool {
+			return strings.Contains(n, "the token and cost figures skip")
+		})
+		unpricedIdx := slices.IndexFunc(notes, func(n string) bool {
+			return strings.Contains(n, "the cost figures skip")
+		})
+		if unmeasuredIdx == -1 || unpricedIdx == -1 {
+			t.Fatalf("statsFootnotes = %v, want both the unmeasured and unpriced notes present", notes)
+		}
+		if unmeasuredIdx != 2 {
+			t.Errorf("unmeasured note at index %d, want 2 (after the two duration notes)", unmeasuredIdx)
+		}
+		if unmeasuredIdx >= unpricedIdx {
+			t.Errorf("unmeasured note at index %d, unpriced note at index %d, want unmeasured before unpriced", unmeasuredIdx, unpricedIdx)
+		}
+	})
+
+	t.Run("base tier reports zero unmeasured runs", func(t *testing.T) {
+		t.Parallel()
+
+		baseCaps := persistence.RunHistoryCapabilities{}
+		agg := newStatsAggregator(baseCaps, nil)
+		addRows(t, agg, persistence.RunStatsRow{
+			Status: "succeeded", AgentAdapter: "kiro",
+			StartedAt: "2026-01-01T00:00:00Z", CompletedAt: "2026-01-01T00:10:00Z",
+		})
+
+		report := agg.report(fixedNow, "/wf", "/db", nil, nil, nil)
+
+		if report.Summary.TokensUnmeasuredRuns != 0 {
+			t.Errorf("Summary.TokensUnmeasuredRuns = %d, want 0 on the base tier (absent record, not zero unmeasured runs)", report.Summary.TokensUnmeasuredRuns)
+		}
+	})
 }
 
 // --- self-review aggregation ---
@@ -820,6 +1046,17 @@ func TestDegradedSchemaWarning(t *testing.T) {
 				"also leaves out turns, self-review results, dispatch-rule routing, which this database does carry",
 			},
 		},
+		{
+			name: "only the measurement record absent names it in plain language",
+			caps: persistence.RunHistoryCapabilities{
+				HasTurnsCompleted: true, HasReviewMetadata: true, HasRuleRouting: true, HasTokens: true,
+			},
+			want: []string{
+				"before sortie recorded which runs the coding agent could measure",
+				"also leaves out turns, self-review results, dispatch-rule routing, tokens and cost, which this database does carry",
+			},
+			absent: []string{"tokens_measured", "run_history"},
+		},
 	}
 
 	for _, tt := range tests {
@@ -865,7 +1102,7 @@ func TestRunStatsDegradedSchema(t *testing.T) {
 				stdout.String())
 		}
 		out := stdout.String()
-		for _, absent := range []string{"by dispatch rule", "by prompt template", "self review", "turns (succeeded)", "tokens (all runs)"} {
+		for _, absent := range []string{"by dispatch rule", "by prompt template", "self review", "turns (succeeded)", "tokens (measured runs)"} {
 			if strings.Contains(out, absent) {
 				t.Errorf("stdout contains %q, want it absent on the base tier", absent)
 			}
@@ -912,6 +1149,9 @@ func TestRunStatsDegradedSchema(t *testing.T) {
 		}
 		if report.Summary.CostUSD != nil {
 			t.Errorf("Summary.CostUSD = %v, want nil on the base tier", *report.Summary.CostUSD)
+		}
+		if report.Summary.TokensUnmeasuredRuns != 0 {
+			t.Errorf("Summary.TokensUnmeasuredRuns = %d, want 0 on the base tier", report.Summary.TokensUnmeasuredRuns)
 		}
 	})
 }

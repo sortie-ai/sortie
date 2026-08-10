@@ -65,6 +65,11 @@ type sessionState struct {
 	// once in StartSession and never reset between turns.
 	acc *agentcore.RunUsage
 
+	// usageMeasured reports whether an assistant usage object or a
+	// result-event usage figure has been observed for this session.
+	// Monotone: set true once and never cleared.
+	usageMeasured bool
+
 	// Per-turn scan state owned by the ParseLine and OnFinalize hook
 	// closures. Reset at the top of each RunTurn call before delegating
 	// to forkSession.
@@ -161,6 +166,9 @@ func (a *ClaudeCodeAdapter) StartSession(_ context.Context, params domain.StartS
 						if meta.Model != "" {
 							state.lastModel = meta.Model
 						}
+						if meta.Usage != nil {
+							state.usageMeasured = true
+						}
 						if meta.Usage != nil && meta.ID != "" {
 							candidate := usageFromAssistant(meta.Usage)
 							prior, seen := state.turnMessages[meta.ID]
@@ -212,6 +220,9 @@ func (a *ClaudeCodeAdapter) StartSession(_ context.Context, params domain.StartS
 				// only some of whose usage streamed still counts in full.
 				authoritative, _ := usageFromResult(event)
 				state.acc.AddTurn(authoritative)
+				if len(event.ModelUsage) > 0 || event.Usage != nil {
+					state.usageMeasured = true
+				}
 				return &captured, nil
 
 			case "stream_event":
@@ -243,17 +254,19 @@ func (a *ClaudeCodeAdapter) StartSession(_ context.Context, params domain.StartS
 				if lastResult.Subtype == "success" && !lastResult.IsError {
 					agentcore.EmitTurnCompleted(emit, typeutil.TruncateRunes(lastResult.Result, 500), turnAPIDuration, usage)
 					return domain.TurnResult{
-						SessionID:  state.claudeSessionID,
-						ExitReason: domain.EventTurnCompleted,
-						Usage:      usage,
+						SessionID:     state.claudeSessionID,
+						ExitReason:    domain.EventTurnCompleted,
+						Usage:         usage,
+						UsageMeasured: state.usageMeasured,
 					}, nil
 				}
 				// EmitWarnLines is called by the skeleton when agentErr is non-nil.
 				agentcore.EmitTurnFailed(emit, lastResult.Subtype, turnAPIDuration, usage)
 				return domain.TurnResult{
-						SessionID:  state.claudeSessionID,
-						ExitReason: domain.EventTurnFailed,
-						Usage:      usage,
+						SessionID:     state.claudeSessionID,
+						ExitReason:    domain.EventTurnFailed,
+						Usage:         usage,
+						UsageMeasured: state.usageMeasured,
 					}, &domain.AgentError{
 						Kind:    domain.ErrTurnFailed,
 						Message: lastResult.Subtype,
@@ -263,9 +276,10 @@ func (a *ClaudeCodeAdapter) StartSession(_ context.Context, params domain.StartS
 			if exitCode != 0 {
 				agentcore.EmitTurnFailed(emit, "non-zero exit", 0, usage)
 				return domain.TurnResult{
-						SessionID:  state.claudeSessionID,
-						ExitReason: domain.EventTurnFailed,
-						Usage:      usage,
+						SessionID:     state.claudeSessionID,
+						ExitReason:    domain.EventTurnFailed,
+						Usage:         usage,
+						UsageMeasured: state.usageMeasured,
 					}, &domain.AgentError{
 						Kind:    domain.ErrPortExit,
 						Message: fmt.Sprintf("exit code %d", exitCode),
@@ -278,9 +292,10 @@ func (a *ClaudeCodeAdapter) StartSession(_ context.Context, params domain.StartS
 				state.logger().Warn("agent exited without producing output, treating as failure")
 				agentcore.EmitTurnFailed(emit, "agent exited without producing output", 0, usage)
 				return domain.TurnResult{
-						SessionID:  state.claudeSessionID,
-						ExitReason: domain.EventTurnFailed,
-						Usage:      usage,
+						SessionID:     state.claudeSessionID,
+						ExitReason:    domain.EventTurnFailed,
+						Usage:         usage,
+						UsageMeasured: state.usageMeasured,
 					}, &domain.AgentError{
 						Kind:    domain.ErrTurnFailed,
 						Message: "agent exited without producing output",
@@ -289,9 +304,10 @@ func (a *ClaudeCodeAdapter) StartSession(_ context.Context, params domain.StartS
 
 			agentcore.EmitTurnCompleted(emit, "", 0, usage)
 			return domain.TurnResult{
-				SessionID:  state.claudeSessionID,
-				ExitReason: domain.EventTurnCompleted,
-				Usage:      usage,
+				SessionID:     state.claudeSessionID,
+				ExitReason:    domain.EventTurnCompleted,
+				Usage:         usage,
+				UsageMeasured: state.usageMeasured,
 			}, nil
 		},
 		EmitSessionStartID: nil, // Claude emits EventSessionStarted from ParseLine on "system/init"

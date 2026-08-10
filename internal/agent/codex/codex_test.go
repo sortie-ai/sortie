@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/sortie-ai/sortie/internal/agent/agenttest"
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/registry"
 )
@@ -187,4 +188,47 @@ func TestStartSession_BinaryNotFound(t *testing.T) {
 		AgentConfig:   domain.AgentConfig{Command: "sortie-nonexistent-codex-binary-99999"},
 	})
 	requireAgentError(t, err, domain.ErrAgentNotFound)
+}
+
+// TestRunTurn_UsageMeasured_AbsentWhenNoTokenUsageNotification drives a
+// turn whose stream carries no thread/tokenUsage/updated notification and
+// asserts the run is reported unmeasured.
+func TestRunTurn_UsageMeasured_AbsentWhenNoTokenUsageNotification(t *testing.T) {
+	t.Parallel()
+
+	state := makeTestState(loadFixture(t, "runturn_misc_notifications.jsonl"))
+	adapter, _ := NewCodexAdapter(map[string]any{})
+
+	var events []domain.AgentEvent
+	result, err := adapter.RunTurn(context.Background(), fakeSession(state), domain.RunTurnParams{
+		Prompt:  "do something",
+		OnEvent: collectEvents(&events),
+	})
+	if err != nil {
+		t.Fatalf("RunTurn() error = %v", err)
+	}
+
+	agenttest.AssertMeasurementAbsent(t, events, result)
+}
+
+// TestRunTurn_UsageMeasured_TrueOnTokenUsageNotification drives a turn
+// whose stream carries a thread/tokenUsage/updated notification and
+// asserts the run is reported measured.
+func TestRunTurn_UsageMeasured_TrueOnTokenUsageNotification(t *testing.T) {
+	t.Parallel()
+
+	state := makeTestState(loadFixture(t, "runturn_success.jsonl"))
+	adapter, _ := NewCodexAdapter(map[string]any{})
+
+	result, err := adapter.RunTurn(context.Background(), fakeSession(state), domain.RunTurnParams{
+		Prompt:  "do something",
+		OnEvent: func(domain.AgentEvent) {},
+	})
+	if err != nil {
+		t.Fatalf("RunTurn() error = %v", err)
+	}
+
+	if !result.UsageMeasured {
+		t.Error("RunTurn().UsageMeasured = false, want true when a thread/tokenUsage/updated notification carried a token-usage object")
+	}
 }

@@ -833,6 +833,64 @@ func TestRunTurn_EventAgentPID(t *testing.T) {
 	})
 }
 
+// TestRunTurn_UsageMeasured_AbsentWhenExportYieldsNoUsage verifies that a
+// turn whose session export carries no usage figure (an empty messages
+// list) reports the run unmeasured.
+func TestRunTurn_UsageMeasured_AbsentWhenExportYieldsNoUsage(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	script := writeRunFixtureScript(t, tmpDir, "simple_turn.jsonl")
+
+	a, _ := NewOpenCodeAdapter(map[string]any{})
+	session := mustStartSession(t, a, tmpDir, script)
+
+	events, result, err := collectEvents(t, a, session, "work")
+	if err != nil {
+		t.Fatalf("RunTurn() error = %v", err)
+	}
+
+	agenttest.AssertMeasurementAbsent(t, events, result)
+}
+
+// TestRunTurn_UsageMeasured_TrueWhenExportYieldsUsage verifies that a
+// turn whose session export carries a usage figure reports the run
+// measured.
+func TestRunTurn_UsageMeasured_TrueWhenExportYieldsUsage(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+
+	runFixture := loadFixture(t, "simple_turn.jsonl")
+	runPath := filepath.Join(tmpDir, "run.jsonl")
+	if err := os.WriteFile(runPath, runFixture, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	exportPath := filepath.Join(tmpDir, "export.json")
+	const export = `{"messages":[{"info":{"role":"assistant","sessionID":"ses_abc123","providerID":"anthropic","modelID":"claude-sonnet-4-5","tokens":{"input":10,"output":20,"total":30,"cache":{"read":0,"write":0}}}}]}`
+	if err := os.WriteFile(exportPath, []byte(export), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	script := writeOpenCodeScript(t, tmpDir, `case "$1" in
+  export) cat '`+exportPath+`'; exit 0;;
+esac
+cat '`+runPath+`'`)
+
+	a, _ := NewOpenCodeAdapter(map[string]any{})
+	session := mustStartSession(t, a, tmpDir, script)
+
+	_, result, err := collectEvents(t, a, session, "work")
+	if err != nil {
+		t.Fatalf("RunTurn() error = %v", err)
+	}
+
+	if !result.UsageMeasured {
+		t.Error("RunTurn().UsageMeasured = false, want true when the session export yielded a usage figure")
+	}
+}
+
 func TestRunTurn_ActivityVisibilityForStallWatchdog(t *testing.T) {
 	t.Parallel()
 

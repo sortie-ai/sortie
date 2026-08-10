@@ -61,15 +61,15 @@ func TestRunHistoryCapabilities(t *testing.T) {
 		if err != nil {
 			t.Fatalf("RunHistoryCapabilities: %v", err)
 		}
-		if !caps.HasTurnsCompleted || !caps.HasReviewMetadata || !caps.HasRuleRouting || !caps.HasTokens {
-			t.Errorf("RunHistoryCapabilities() = %+v, want all four flags true", caps)
+		if !caps.HasTurnsCompleted || !caps.HasReviewMetadata || !caps.HasRuleRouting || !caps.HasTokens || !caps.HasTokenMeasurement {
+			t.Errorf("RunHistoryCapabilities() = %+v, want all five flags true", caps)
 		}
 		if !caps.Full() {
 			t.Errorf("Full() = false, want true for a fully migrated store")
 		}
 	})
 
-	t.Run("migration-001-only table reports all four flags false", func(t *testing.T) {
+	t.Run("migration-001-only table reports all five flags false", func(t *testing.T) {
 		t.Parallel()
 
 		s := openTestStore(t)
@@ -79,11 +79,32 @@ func TestRunHistoryCapabilities(t *testing.T) {
 		if err != nil {
 			t.Fatalf("RunHistoryCapabilities: %v", err)
 		}
-		if caps.HasTurnsCompleted || caps.HasReviewMetadata || caps.HasRuleRouting || caps.HasTokens {
-			t.Errorf("RunHistoryCapabilities() = %+v, want all four flags false", caps)
+		if caps.HasTurnsCompleted || caps.HasReviewMetadata || caps.HasRuleRouting || caps.HasTokens || caps.HasTokenMeasurement {
+			t.Errorf("RunHistoryCapabilities() = %+v, want all five flags false", caps)
 		}
 		if caps.Full() {
 			t.Errorf("Full() = true, want false for a migration-001-only table")
+		}
+	})
+
+	t.Run("tokens present but tokens_measured absent reports the fifth flag false", func(t *testing.T) {
+		t.Parallel()
+
+		s := openTestStore(t)
+		migrateToVersion(t, s, 11)
+
+		caps, err := s.RunHistoryCapabilities(context.Background())
+		if err != nil {
+			t.Fatalf("RunHistoryCapabilities: %v", err)
+		}
+		if !caps.HasTokens {
+			t.Errorf("HasTokens = false, want true (migration 011 applied)")
+		}
+		if caps.HasTokenMeasurement {
+			t.Errorf("HasTokenMeasurement = true, want false (migration 012 not applied)")
+		}
+		if caps.Full() {
+			t.Errorf("Full() = true, want false when tokens_measured is absent")
 		}
 	})
 
@@ -252,6 +273,46 @@ func TestScanRunHistoryRange(t *testing.T) {
 		want := []string{"order-1", "order-2"}
 		if !slices.Equal(visited, want) {
 			t.Errorf("ScanRunHistoryRange visited = %v, want %v (ascending id order, aborted after the error)", visited, want)
+		}
+	})
+
+	t.Run("full projection populates TokensMeasured", func(t *testing.T) {
+		t.Parallel()
+
+		s := openTestStore(t)
+		migrateOrFatal(t, s)
+		ctx := context.Background()
+
+		measured := runAt("measured-row", "2026-01-01T00:00:00Z")
+		measured.Status = "measured"
+		measured.TokensMeasured = true
+		appendOrFatal(t, s, measured)
+
+		unmeasured := runAt("unmeasured-row", "2026-01-02T00:00:00Z")
+		unmeasured.Status = "unmeasured"
+		unmeasured.TokensMeasured = false
+		appendOrFatal(t, s, unmeasured)
+
+		caps, err := s.RunHistoryCapabilities(ctx)
+		if err != nil {
+			t.Fatalf("RunHistoryCapabilities: %v", err)
+		}
+		if !caps.Full() {
+			t.Fatalf("caps.Full() = false, want true for a fully migrated store")
+		}
+
+		got := make(map[string]bool)
+		if err := s.ScanRunHistoryRange(ctx, caps, nil, nil, func(row RunStatsRow) error {
+			got[row.Status] = row.TokensMeasured
+			return nil
+		}); err != nil {
+			t.Fatalf("ScanRunHistoryRange: %v", err)
+		}
+		if !got["measured"] {
+			t.Error(`RunStatsRow{Status: "measured"}.TokensMeasured = false, want true`)
+		}
+		if got["unmeasured"] {
+			t.Error(`RunStatsRow{Status: "unmeasured"}.TokensMeasured = true, want false`)
 		}
 	})
 

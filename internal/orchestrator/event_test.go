@@ -879,6 +879,80 @@ func TestHandleAgentEvent_APIRequestCount_ZeroUsage(t *testing.T) {
 	}
 }
 
+// TestHandleAgentEvent_UsageMeasured verifies the entry.UsageMeasured
+// derivation: an all-zero token_usage event asserts a measurement, a
+// non-token_usage event carrying a non-zero usage component also asserts
+// one, and once true the flag is never cleared by a later event.
+func TestHandleAgentEvent_UsageMeasured(t *testing.T) {
+	t.Parallel()
+
+	t.Run("all-zero token_usage payload sets UsageMeasured true", func(t *testing.T) {
+		t.Parallel()
+		state, entry := newStateWithEntry("UM-1")
+
+		HandleAgentEvent(state, "UM-1", domain.AgentEvent{
+			Type:      domain.EventTokenUsage,
+			Timestamp: time.Now().UTC(),
+		}, slog.Default(), nil)
+
+		if !entry.UsageMeasured {
+			t.Error("entry.UsageMeasured = false, want true for an all-zero token_usage event")
+		}
+	})
+
+	t.Run("non-token_usage event carrying non-zero usage sets UsageMeasured true", func(t *testing.T) {
+		t.Parallel()
+		state, entry := newStateWithEntry("UM-2")
+
+		HandleAgentEvent(state, "UM-2", domain.AgentEvent{
+			Type:      domain.EventTurnCompleted,
+			Timestamp: time.Now().UTC(),
+			Usage:     domain.TokenUsage{InputTokens: 10, OutputTokens: 5, TotalTokens: 15},
+		}, slog.Default(), nil)
+
+		if !entry.UsageMeasured {
+			t.Error("entry.UsageMeasured = false, want true for a turn_completed event carrying non-zero usage")
+		}
+	})
+
+	t.Run("a plain notification leaves UsageMeasured false", func(t *testing.T) {
+		t.Parallel()
+		state, entry := newStateWithEntry("UM-3")
+
+		HandleAgentEvent(state, "UM-3", domain.AgentEvent{
+			Type:      domain.EventNotification,
+			Timestamp: time.Now().UTC(),
+		}, slog.Default(), nil)
+
+		if entry.UsageMeasured {
+			t.Error("entry.UsageMeasured = true, want false for a plain notification with no usage")
+		}
+	})
+
+	t.Run("UsageMeasured is monotone: a later event never clears it", func(t *testing.T) {
+		t.Parallel()
+		state, entry := newStateWithEntry("UM-4")
+
+		HandleAgentEvent(state, "UM-4", domain.AgentEvent{
+			Type:      domain.EventTokenUsage,
+			Timestamp: time.Now().UTC(),
+			Usage:     domain.TokenUsage{InputTokens: 10, OutputTokens: 5, TotalTokens: 15},
+		}, slog.Default(), nil)
+		if !entry.UsageMeasured {
+			t.Fatal("entry.UsageMeasured = false after the first event, want true")
+		}
+
+		HandleAgentEvent(state, "UM-4", domain.AgentEvent{
+			Type:      domain.EventNotification,
+			Timestamp: time.Now().UTC(),
+		}, slog.Default(), nil)
+
+		if !entry.UsageMeasured {
+			t.Error("entry.UsageMeasured = false after a later notification event, want true (monotone)")
+		}
+	})
+}
+
 // TestHandleAgentEvent_TurnCompleted_AdvancesUsageWithoutRequestCount
 // verifies that a turn_completed event carrying a usage payload larger
 // than the last token_usage event's payload still advances the entry's

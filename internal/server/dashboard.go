@@ -52,6 +52,11 @@ type dashboardData struct {
 	HasTokenRates      bool
 	EstimatedCostUSD   *string
 	EstimatedCostLabel string
+
+	// UnmeasuredRunningCount is the number of running sessions that have
+	// reported no token measurement so far. Excluded from TotalTokens,
+	// InputTokens, OutputTokens, CacheReadTokens, and EstimatedCostUSD.
+	UnmeasuredRunningCount int
 }
 
 type dashboardRunningEntry struct {
@@ -70,6 +75,7 @@ type dashboardRunningEntry struct {
 	APITimePct       string
 	WorkflowFile     string
 	EstimatedCostUSD string
+	UsageMeasured    bool
 }
 
 type dashboardRetryEntry struct {
@@ -220,6 +226,7 @@ func buildDashboardData(
 	hasRates := len(tokenRates) > 0
 	var aggregateCost float64
 	aggregateCostSet := false
+	unmeasuredCount := 0
 	for i, e := range sortedRunning {
 		dur := max(snap.GeneratedAt.Sub(e.StartedAt), 0)
 		if e.SSHHost != "" {
@@ -243,8 +250,12 @@ func buildDashboardData(
 			displayID = e.DisplayID
 		}
 
+		if !e.UsageMeasured {
+			unmeasuredCount++
+		}
+
 		var entryCostStr string
-		if hasRates && e.AgentKind != "" {
+		if hasRates && e.AgentKind != "" && e.UsageMeasured {
 			if rc, ok := tokenRates[e.AgentKind]; ok {
 				if c := EstimateCost(e.AgentInputTokens, e.AgentOutputTokens, e.CacheReadTokens, &rc); c != nil {
 					entryCostStr = FormatCost(*c)
@@ -270,11 +281,13 @@ func buildDashboardData(
 			APITimePct:       apiPct,
 			WorkflowFile:     e.WorkflowFile,
 			EstimatedCostUSD: entryCostStr,
+			UsageMeasured:    e.UsageMeasured,
 		}
 	}
 	data.Running = running
 	data.HasSSH = hasSSH
 	data.HasTokenRates = hasRates
+	data.UnmeasuredRunningCount = unmeasuredCount
 	if hasRates {
 		data.EstimatedCostLabel = "Active Est. Cost (USD)"
 	}

@@ -107,8 +107,8 @@ func TestParseEvent(t *testing.T) {
 				if err != nil {
 					t.Fatalf("parseAssistantMessageData: %v", err)
 				}
-				if data.OutputTokens != 42 {
-					t.Errorf("OutputTokens = %d, want 42", data.OutputTokens)
+				if data.OutputTokens == nil || *data.OutputTokens != 42 {
+					t.Errorf("OutputTokens = %v, want 42", data.OutputTokens)
 				}
 				if data.Content != "hello" {
 					t.Errorf("Content = %q, want %q", data.Content, "hello")
@@ -344,8 +344,8 @@ func TestParseFixture_SimpleSession(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parseAssistantMessageData(events[5]): %v", err)
 	}
-	if msgData.OutputTokens != 6 {
-		t.Errorf("assistant.message.outputTokens = %d, want 6", msgData.OutputTokens)
+	if msgData.OutputTokens == nil || *msgData.OutputTokens != 6 {
+		t.Errorf("assistant.message.outputTokens = %v, want 6", msgData.OutputTokens)
 	}
 
 	// Verify the result event carries the session ID and exit code.

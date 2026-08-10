@@ -56,6 +56,11 @@ type sessionState struct {
 	acc            *agentcore.RunUsage
 	mu             sync.Mutex
 	active         *turnRuntime
+
+	// usageMeasured reports whether a session export has yielded a
+	// usage figure for this run. Monotone: set true once and never
+	// cleared.
+	usageMeasured bool
 }
 
 type turnRuntime struct {
@@ -277,9 +282,10 @@ func (a *OpenCodeAdapter) RunTurn(ctx context.Context, session domain.Session, p
 					usage := state.acc.Snapshot()
 					agentcore.EmitTurnCancelled(emit, "turn cancelled", usage)
 					return domain.TurnResult{
-						SessionID:  state.currentSessionID(),
-						ExitReason: domain.EventTurnCancelled,
-						Usage:      usage,
+						SessionID:     state.currentSessionID(),
+						ExitReason:    domain.EventTurnCancelled,
+						Usage:         usage,
+						UsageMeasured: state.usageMeasured,
 					}, nil
 				}
 
@@ -292,9 +298,10 @@ func (a *OpenCodeAdapter) RunTurn(ctx context.Context, session domain.Session, p
 				clearActive(state, runtime)
 				usage := state.acc.Snapshot()
 				return domain.TurnResult{
-						SessionID:  state.currentSessionID(),
-						ExitReason: domain.EventTurnEndedWithError,
-						Usage:      usage,
+						SessionID:     state.currentSessionID(),
+						ExitReason:    domain.EventTurnEndedWithError,
+						Usage:         usage,
+						UsageMeasured: state.usageMeasured,
 					}, &domain.AgentError{
 						Kind:    domain.ErrResponseError,
 						Message: "stdout read error",
@@ -342,9 +349,10 @@ func (a *OpenCodeAdapter) RunTurn(ctx context.Context, session domain.Session, p
 				procutil.EmitWarnLines(runtime.stderrCollector.Lines(), state.logger())
 				clearActive(state, runtime)
 				return domain.TurnResult{
-						SessionID:  state.currentSessionID(),
-						ExitReason: domain.EventTurnEndedWithError,
-						Usage:      state.acc.Snapshot(),
+						SessionID:     state.currentSessionID(),
+						ExitReason:    domain.EventTurnEndedWithError,
+						Usage:         state.acc.Snapshot(),
+						UsageMeasured: state.usageMeasured,
 					}, &domain.AgentError{
 						Kind:    domain.ErrResponseError,
 						Message: message,
@@ -440,9 +448,10 @@ func (a *OpenCodeAdapter) RunTurn(ctx context.Context, session domain.Session, p
 			usage := state.acc.Snapshot()
 			agentcore.EmitTurnCancelled(emit, "turn cancelled", usage)
 			return domain.TurnResult{
-				SessionID:  state.currentSessionID(),
-				ExitReason: domain.EventTurnCancelled,
-				Usage:      usage,
+				SessionID:     state.currentSessionID(),
+				ExitReason:    domain.EventTurnCancelled,
+				Usage:         usage,
+				UsageMeasured: state.usageMeasured,
 			}, nil
 
 		case <-readTimeoutC:
@@ -454,9 +463,10 @@ func (a *OpenCodeAdapter) RunTurn(ctx context.Context, session domain.Session, p
 			procutil.EmitWarnLines(runtime.stderrCollector.Lines(), state.logger())
 			clearActive(state, runtime)
 			return domain.TurnResult{
-					SessionID:  state.currentSessionID(),
-					ExitReason: domain.EventTurnEndedWithError,
-					Usage:      state.acc.Snapshot(),
+					SessionID:     state.currentSessionID(),
+					ExitReason:    domain.EventTurnEndedWithError,
+					Usage:         state.acc.Snapshot(),
+					UsageMeasured: state.usageMeasured,
 				}, &domain.AgentError{
 					Kind:    domain.ErrResponseTimeout,
 					Message: "timed out waiting for first opencode json event",
@@ -502,6 +512,7 @@ func (a *OpenCodeAdapter) finalizeExitedTurn(ctx context.Context, state *session
 	// settled with the zero value.
 	snapshot := state.acc.Snapshot()
 	if hasUsage(usage) {
+		state.usageMeasured = true
 		snapshot = state.acc.SetRunCumulative(domain.TokenUsage{
 			InputTokens:     usage.InputTokens,
 			OutputTokens:    usage.OutputTokens,
@@ -528,27 +539,30 @@ func (a *OpenCodeAdapter) finalizeExitedTurn(ctx context.Context, state *session
 		}
 		procutil.EmitWarnLines(stderrLines, state.logger())
 		return domain.TurnResult{
-			SessionID:  sessionID,
-			ExitReason: domain.EventTurnFailed,
-			Usage:      snapshot,
+			SessionID:     sessionID,
+			ExitReason:    domain.EventTurnFailed,
+			Usage:         snapshot,
+			UsageMeasured: state.usageMeasured,
 		}, nil
 	}
 
 	if ctx.Err() != nil {
 		agentcore.EmitTurnCancelled(emit, "turn cancelled", snapshot)
 		return domain.TurnResult{
-			SessionID:  sessionID,
-			ExitReason: domain.EventTurnCancelled,
-			Usage:      snapshot,
+			SessionID:     sessionID,
+			ExitReason:    domain.EventTurnCancelled,
+			Usage:         snapshot,
+			UsageMeasured: state.usageMeasured,
 		}, nil
 	}
 
 	if state.isClosed() {
 		agentcore.EmitTurnCancelled(emit, "turn cancelled", snapshot)
 		return domain.TurnResult{
-			SessionID:  sessionID,
-			ExitReason: domain.EventTurnCancelled,
-			Usage:      snapshot,
+			SessionID:     sessionID,
+			ExitReason:    domain.EventTurnCancelled,
+			Usage:         snapshot,
+			UsageMeasured: state.usageMeasured,
 		}, nil
 	}
 
@@ -556,9 +570,10 @@ func (a *OpenCodeAdapter) finalizeExitedTurn(ctx context.Context, state *session
 		procutil.EmitWarnLines(stderrLines, state.logger())
 		emitTurnEndedWithError(emit, "process exited before first opencode json event")
 		return domain.TurnResult{
-				SessionID:  sessionID,
-				ExitReason: domain.EventTurnEndedWithError,
-				Usage:      snapshot,
+				SessionID:     sessionID,
+				ExitReason:    domain.EventTurnEndedWithError,
+				Usage:         snapshot,
+				UsageMeasured: state.usageMeasured,
 			}, &domain.AgentError{
 				Kind:    domain.ErrPortExit,
 				Message: "process exited before first opencode json event",
@@ -571,9 +586,10 @@ func (a *OpenCodeAdapter) finalizeExitedTurn(ctx context.Context, state *session
 		message := portExitMessage(exit)
 		emitTurnEndedWithError(emit, message)
 		return domain.TurnResult{
-				SessionID:  sessionID,
-				ExitReason: domain.EventTurnEndedWithError,
-				Usage:      snapshot,
+				SessionID:     sessionID,
+				ExitReason:    domain.EventTurnEndedWithError,
+				Usage:         snapshot,
+				UsageMeasured: state.usageMeasured,
 			}, &domain.AgentError{
 				Kind:    domain.ErrPortExit,
 				Message: message,
@@ -583,9 +599,10 @@ func (a *OpenCodeAdapter) finalizeExitedTurn(ctx context.Context, state *session
 
 	agentcore.EmitTurnCompleted(emit, "", 0, snapshot)
 	return domain.TurnResult{
-		SessionID:  sessionID,
-		ExitReason: domain.EventTurnCompleted,
-		Usage:      snapshot,
+		SessionID:     sessionID,
+		ExitReason:    domain.EventTurnCompleted,
+		Usage:         snapshot,
+		UsageMeasured: state.usageMeasured,
 	}, nil
 }
 

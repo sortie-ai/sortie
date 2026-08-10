@@ -349,6 +349,144 @@ func TestBuildBudgetQuery(t *testing.T) {
 	})
 }
 
+// seedBudgetMeasurementStore builds a store with run_history and
+// session_metadata rows exercising the three running-session measurement
+// cases: a mismatched running session id (unmeasured), a matching row
+// reporting a genuine spend, and a matching row reporting a measurement
+// of zero.
+func seedBudgetMeasurementStore(t *testing.T) *persistence.Store {
+	t.Helper()
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "budget-measurement.db")
+
+	rw, err := persistence.Open(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("Open(%q): %v", dbPath, err)
+	}
+	if err := rw.Migrate(ctx); err != nil {
+		t.Fatalf("Migrate: %v", err)
+	}
+
+	runs := []persistence.RunHistory{
+		{
+			IssueID: "iss-mixed", Identifier: "PROJ-MIXED", Attempt: 1, AgentAdapter: "mock",
+			Workspace: "/tmp/ws/PROJ-MIXED", StartedAt: "2026-03-19T10:00:00Z", CompletedAt: "2026-03-19T10:00:30Z",
+			Status: "succeeded", TotalTokens: 400, TokensMeasured: true,
+		},
+		{
+			IssueID: "iss-mixed", Identifier: "PROJ-MIXED", Attempt: 2, AgentAdapter: "mock",
+			Workspace: "/tmp/ws/PROJ-MIXED", StartedAt: "2026-03-19T10:01:00Z", CompletedAt: "2026-03-19T10:01:30Z",
+			Status: "succeeded", TotalTokens: 0, TokensMeasured: false,
+		},
+		{
+			IssueID: "iss-zero", Identifier: "PROJ-ZERO", Attempt: 1, AgentAdapter: "mock",
+			Workspace: "/tmp/ws/PROJ-ZERO", StartedAt: "2026-03-19T10:00:00Z", CompletedAt: "2026-03-19T10:00:30Z",
+			Status: "succeeded", TotalTokens: 500, TokensMeasured: true,
+		},
+	}
+	for i, run := range runs {
+		if _, err := rw.AppendRunHistory(ctx, run); err != nil {
+			t.Fatalf("AppendRunHistory(%d): %v", i, err)
+		}
+	}
+
+	metas := []persistence.SessionMetadata{
+		{IssueID: "iss-mixed", SessionID: "sess-mixed-live", TotalTokens: 50, UpdatedAt: "2026-03-19T10:02:00Z"},
+		{IssueID: "iss-zero", SessionID: "sess-zero-live", TotalTokens: 0, UpdatedAt: "2026-03-19T10:02:00Z"},
+	}
+	for _, meta := range metas {
+		if err := rw.UpsertSessionMetadata(ctx, meta); err != nil {
+			t.Fatalf("UpsertSessionMetadata(%s): %v", meta.IssueID, err)
+		}
+	}
+
+	if err := rw.Close(); err != nil {
+		t.Fatalf("Close read-write store: %v", err)
+	}
+
+	ro, err := persistence.OpenReadOnly(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("OpenReadOnly(%q): %v", dbPath, err)
+	}
+	t.Cleanup(func() {
+		if err := ro.Close(); err != nil {
+			t.Errorf("Close read-only store: %v", err)
+		}
+	})
+	return ro
+}
+
+// TestBuildBudgetQuery_Measurement covers the wiring layer's
+// UnmeasuredSessions and RunningMeasured population, at the three
+// running-session cases the budget tool's own test suite exercises at
+// the result-shape layer.
+func TestBuildBudgetQuery_Measurement(t *testing.T) {
+	t.Parallel()
+
+	t.Run("UnmeasuredSessions comes from TokenUsageByIssue", func(t *testing.T) {
+		t.Parallel()
+
+		query := buildBudgetQuery(seedBudgetMeasurementStore(t))
+
+		usage, err := query(context.Background(), "iss-mixed", "sess-mixed-live")
+		if err != nil {
+			t.Fatalf("buildBudgetQuery query: %v", err)
+		}
+		if usage.UnmeasuredSessions != 1 {
+			t.Errorf("UnmeasuredSessions = %d, want 1", usage.UnmeasuredSessions)
+		}
+		if usage.CompletedTotalTokens != 400 {
+			t.Errorf("CompletedTotalTokens = %d, want 400 (the unmeasured row contributes zero)", usage.CompletedTotalTokens)
+		}
+		if !usage.RunningMeasured {
+			t.Error("RunningMeasured = false, want true (session_metadata row matches the running session id)")
+		}
+		if usage.RunningTotalTokens != 50 {
+			t.Errorf("RunningTotalTokens = %d, want 50", usage.RunningTotalTokens)
+		}
+	})
+
+	t.Run("RunningMeasured false when no session_metadata row matches", func(t *testing.T) {
+		t.Parallel()
+
+		query := buildBudgetQuery(seedBudgetMeasurementStore(t))
+
+		usage, err := query(context.Background(), "iss-mixed", "sess-does-not-exist")
+		if err != nil {
+			t.Fatalf("buildBudgetQuery query: %v", err)
+		}
+		if usage.RunningMeasured {
+			t.Error("RunningMeasured = true, want false (no matching session_metadata row)")
+		}
+		if usage.RunningTotalTokens != 0 {
+			t.Errorf("RunningTotalTokens = %d, want 0", usage.RunningTotalTokens)
+		}
+	})
+
+	t.Run("RunningMeasured true when the running session reported a measurement of zero", func(t *testing.T) {
+		t.Parallel()
+
+		query := buildBudgetQuery(seedBudgetMeasurementStore(t))
+
+		usage, err := query(context.Background(), "iss-zero", "sess-zero-live")
+		if err != nil {
+			t.Fatalf("buildBudgetQuery query: %v", err)
+		}
+		if usage.UnmeasuredSessions != 0 {
+			t.Errorf("UnmeasuredSessions = %d, want 0", usage.UnmeasuredSessions)
+		}
+		if !usage.RunningMeasured {
+			t.Error("RunningMeasured = false, want true (the session_metadata row exists, reporting zero)")
+		}
+		if usage.RunningTotalTokens != 0 {
+			t.Errorf("RunningTotalTokens = %d, want 0", usage.RunningTotalTokens)
+		}
+		if usage.CompletedTotalTokens != 500 {
+			t.Errorf("CompletedTotalTokens = %d, want 500", usage.CompletedTotalTokens)
+		}
+	})
+}
+
 func TestBuildNotifyTool_EmptyBackends_ReturnsNilNil(t *testing.T) {
 	t.Parallel()
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 )
 
@@ -53,8 +54,12 @@ func TestBudgetTool_Description(t *testing.T) {
 	t.Parallel()
 
 	tool := New(noopQuery, "10042", "sess-1", 0, 0)
-	if got := tool.Description(); got == "" {
+	got := tool.Description()
+	if got == "" {
 		t.Error(`Description() = "", want non-empty`)
+	}
+	if !strings.Contains(got, "used_tokens_complete") || !strings.Contains(got, "lower bound") {
+		t.Errorf("Description() = %q, want it to state that a false used_tokens_complete makes used_tokens a lower bound", got)
 	}
 }
 
@@ -207,8 +212,124 @@ func TestBudgetTool_Execute(t *testing.T) {
 	}
 }
 
+// TestBudgetTool_Execute_UsedTokensComplete covers the used_tokens_complete
+// derivation: an unmeasured completed session, a fully measured reading
+// with a matching running session, and a running session that reported a
+// measurement of zero and nothing else.
+func TestBudgetTool_Execute_UsedTokensComplete(t *testing.T) {
+	t.Parallel()
+
+	t.Run("one unmeasured completed session", func(t *testing.T) {
+		t.Parallel()
+
+		query := func(_ context.Context, _ string, _ string) (BudgetUsage, error) {
+			return BudgetUsage{
+				CompletedTotalTokens: 500,
+				CompletedSessions:    2,
+				UnmeasuredSessions:   1,
+			}, nil
+		}
+		tool := New(query, "10042", "", 1000, 5)
+
+		resp := executeOK(t, tool)
+
+		if resp.UnmeasuredSessions != 1 {
+			t.Errorf("data.unmeasured_sessions = %d, want 1", resp.UnmeasuredSessions)
+		}
+		if resp.UsedTokensComplete {
+			t.Error("data.used_tokens_complete = true, want false (one session unmeasured)")
+		}
+		if resp.UsedTokens != 500 {
+			t.Errorf("data.used_tokens = %d, want 500", resp.UsedTokens)
+		}
+		if resp.BudgetTokens != 1000 {
+			t.Errorf("data.budget_tokens = %d, want 1000", resp.BudgetTokens)
+		}
+		if resp.RemainingTokens == nil || *resp.RemainingTokens != 500 {
+			t.Errorf("data.remaining_tokens = %v, want 500", resp.RemainingTokens)
+		}
+		if resp.UsedSessions != 2 {
+			t.Errorf("data.used_sessions = %d, want 2", resp.UsedSessions)
+		}
+		if resp.BudgetSessions != 5 {
+			t.Errorf("data.budget_sessions = %d, want 5", resp.BudgetSessions)
+		}
+	})
+
+	t.Run("all completed sessions measured and the running session has a matching row", func(t *testing.T) {
+		t.Parallel()
+
+		query := func(_ context.Context, _ string, _ string) (BudgetUsage, error) {
+			return BudgetUsage{
+				CompletedTotalTokens: 500,
+				CompletedSessions:    2,
+				UnmeasuredSessions:   0,
+				RunningTotalTokens:   50,
+				RunningMeasured:      true,
+			}, nil
+		}
+		tool := New(query, "10042", "sess-running", 1000, 5)
+
+		resp := executeOK(t, tool)
+
+		if resp.UnmeasuredSessions != 0 {
+			t.Errorf("data.unmeasured_sessions = %d, want 0", resp.UnmeasuredSessions)
+		}
+		if !resp.UsedTokensComplete {
+			t.Error("data.used_tokens_complete = false, want true")
+		}
+		if resp.UsedTokens != 550 {
+			t.Errorf("data.used_tokens = %d, want 550 (completed sum plus the running session)", resp.UsedTokens)
+		}
+	})
+
+	t.Run("running session reported a measurement of zero and nothing else", func(t *testing.T) {
+		t.Parallel()
+
+		query := func(_ context.Context, _ string, _ string) (BudgetUsage, error) {
+			return BudgetUsage{
+				CompletedTotalTokens: 500,
+				CompletedSessions:    2,
+				UnmeasuredSessions:   0,
+				RunningTotalTokens:   0,
+				RunningMeasured:      true,
+			}, nil
+		}
+		tool := New(query, "10042", "sess-running", 1000, 5)
+
+		resp := executeOK(t, tool)
+
+		if !resp.UsedTokensComplete {
+			t.Error("data.used_tokens_complete = false, want true (the running session's row exists, reporting zero)")
+		}
+		if resp.UsedTokens != 500 {
+			t.Errorf("data.used_tokens = %d, want 500 (completed sum alone)", resp.UsedTokens)
+		}
+	})
+
+	t.Run("running session id supplied but no matching row leaves the reading incomplete", func(t *testing.T) {
+		t.Parallel()
+
+		query := func(_ context.Context, _ string, _ string) (BudgetUsage, error) {
+			return BudgetUsage{
+				CompletedTotalTokens: 500,
+				CompletedSessions:    2,
+				UnmeasuredSessions:   0,
+				RunningMeasured:      false,
+			}, nil
+		}
+		tool := New(query, "10042", "sess-running", 1000, 5)
+
+		resp := executeOK(t, tool)
+
+		if resp.UsedTokensComplete {
+			t.Error("data.used_tokens_complete = true, want false (no session_metadata row found for the running session)")
+		}
+	})
+}
+
 // TestBudgetTool_Execute_SuccessEnvelopeShape pins the success-envelope contract:
-// top-level keys are exactly {success, data}, data carries the five fields,
+// top-level keys are exactly {success, data}, data carries the seven fields,
 // and remaining_tokens is an explicit null when the budget is unlimited.
 func TestBudgetTool_Execute_SuccessEnvelopeShape(t *testing.T) {
 	t.Parallel()
@@ -240,14 +361,18 @@ func TestBudgetTool_Execute_SuccessEnvelopeShape(t *testing.T) {
 		t.Fatalf("Execute success[\"data\"] = %T %v, want map", top["data"], top["data"])
 	}
 
-	// data must carry exactly the five budget fields.
-	for _, key := range []string{"used_tokens", "budget_tokens", "remaining_tokens", "used_sessions", "budget_sessions"} {
+	// data must carry exactly the seven budget fields.
+	budgetKeys := []string{
+		"used_tokens", "budget_tokens", "remaining_tokens", "used_sessions", "budget_sessions",
+		"unmeasured_sessions", "used_tokens_complete",
+	}
+	for _, key := range budgetKeys {
 		if _, ok := data[key]; !ok {
 			t.Errorf("data missing key %q: %s", key, out)
 		}
 	}
-	if len(data) != 5 {
-		t.Errorf("data has %d keys, want 5: %s", len(data), out)
+	if len(data) != 7 {
+		t.Errorf("data has %d keys, want 7: %s", len(data), out)
 	}
 
 	// remaining_tokens must be explicit null under unlimited budget.
@@ -256,7 +381,7 @@ func TestBudgetTool_Execute_SuccessEnvelopeShape(t *testing.T) {
 	}
 
 	// Payload fields must NOT appear at the top level.
-	for _, payloadKey := range []string{"used_tokens", "budget_tokens", "remaining_tokens", "used_sessions", "budget_sessions"} {
+	for _, payloadKey := range budgetKeys {
 		if _, exists := top[payloadKey]; exists {
 			t.Errorf("Execute success has payload key %q at top level, want it under data", payloadKey)
 		}

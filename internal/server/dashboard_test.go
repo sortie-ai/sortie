@@ -46,6 +46,7 @@ func dashboardSnapshot() orchestrator.RuntimeSnapshotResult {
 				LastAgentEvent:   domain.EventTurnCompleted,
 				StartedAt:        now.Add(-5 * time.Minute),
 				AgentTotalTokens: 1200,
+				UsageMeasured:    true,
 			},
 			{
 				IssueID:          "id-649",
@@ -55,6 +56,7 @@ func dashboardSnapshot() orchestrator.RuntimeSnapshotResult {
 				LastAgentEvent:   domain.EventNotification,
 				StartedAt:        now.Add(-12 * time.Minute),
 				AgentTotalTokens: 2000,
+				UsageMeasured:    true,
 			},
 		},
 		Retrying: []orchestrator.SnapshotRetryEntry{
@@ -775,6 +777,7 @@ func TestHandleDashboard_ExtendedFieldsRendered(t *testing.T) {
 				CacheReadTokens:  12345,
 				ModelName:        "claude-sonnet-4-20250514",
 				APIRequestCount:  9,
+				UsageMeasured:    true,
 			},
 		},
 		AgentTotals: orchestrator.SnapshotAgentTotals{
@@ -1138,6 +1141,7 @@ func TestHandleDashboard_SessionsCachedTokensTooltip(t *testing.T) {
 						StartedAt:        now.Add(-5 * time.Minute),
 						AgentTotalTokens: 1000,
 						CacheReadTokens:  tt.cacheReadTokens,
+						UsageMeasured:    true,
 					},
 				},
 			}
@@ -1555,6 +1559,7 @@ func TestBuildDashboardData_TokenRates(t *testing.T) {
 					AgentKind:         "claude",
 					AgentInputTokens:  2_000_000,
 					AgentOutputTokens: 1_000_000,
+					UsageMeasured:     true,
 				},
 			},
 		}
@@ -1650,6 +1655,7 @@ func TestBuildDashboardData_TokenRates(t *testing.T) {
 					AgentKind:         "claude",
 					AgentInputTokens:  0,
 					AgentOutputTokens: 0,
+					UsageMeasured:     true,
 				},
 			},
 		}
@@ -1664,6 +1670,88 @@ func TestBuildDashboardData_TokenRates(t *testing.T) {
 		}
 		if *data.EstimatedCostUSD != "$0.00" {
 			t.Errorf("EstimatedCostUSD = %q, want %q", *data.EstimatedCostUSD, "$0.00")
+		}
+	})
+
+	t.Run("unmeasured entry contributes nothing to the aggregate cost", func(t *testing.T) {
+		t.Parallel()
+
+		snap := orchestrator.RuntimeSnapshotResult{
+			GeneratedAt: now,
+			Running: []orchestrator.SnapshotRunningEntry{
+				{
+					Identifier:        "MT-MEASURED",
+					State:             "In Progress",
+					StartedAt:         now.Add(-5 * time.Minute),
+					AgentKind:         "claude",
+					AgentInputTokens:  1_000_000,
+					AgentOutputTokens: 0,
+					UsageMeasured:     true,
+				},
+				{
+					Identifier:        "MT-UNMEASURED",
+					State:             "In Progress",
+					StartedAt:         now.Add(-3 * time.Minute),
+					AgentKind:         "claude",
+					AgentInputTokens:  1_000_000,
+					AgentOutputTokens: 0,
+					UsageMeasured:     false,
+				},
+			},
+		}
+
+		data := buildDashboardData(snap, "v1", now.Add(-1*time.Hour), nil, now, rates)
+
+		// 1M input @ $3/Mtok = $3, from the measured entry alone.
+		if data.EstimatedCostUSD == nil || *data.EstimatedCostUSD != "$3.00" {
+			t.Errorf("EstimatedCostUSD = %v, want $3.00 (only the measured entry)", data.EstimatedCostUSD)
+		}
+		if data.UnmeasuredRunningCount != 1 {
+			t.Errorf("UnmeasuredRunningCount = %d, want 1", data.UnmeasuredRunningCount)
+		}
+
+		var measured, unmeasured dashboardRunningEntry
+		for _, e := range data.Running {
+			switch e.Identifier {
+			case "MT-MEASURED":
+				measured = e
+			case "MT-UNMEASURED":
+				unmeasured = e
+			}
+		}
+		if measured.EstimatedCostUSD != "$3.00" {
+			t.Errorf("measured entry EstimatedCostUSD = %q, want %q", measured.EstimatedCostUSD, "$3.00")
+		}
+		if unmeasured.EstimatedCostUSD != "" {
+			t.Errorf("unmeasured entry EstimatedCostUSD = %q, want empty", unmeasured.EstimatedCostUSD)
+		}
+		if !measured.UsageMeasured {
+			t.Error("measured entry UsageMeasured = false, want true")
+		}
+		if unmeasured.UsageMeasured {
+			t.Error("unmeasured entry UsageMeasured = true, want false")
+		}
+	})
+
+	t.Run("no unmeasured entries leaves UnmeasuredRunningCount at zero", func(t *testing.T) {
+		t.Parallel()
+
+		snap := orchestrator.RuntimeSnapshotResult{
+			GeneratedAt: now,
+			Running: []orchestrator.SnapshotRunningEntry{
+				{
+					Identifier:    "MT-ALL-MEASURED",
+					State:         "In Progress",
+					StartedAt:     now.Add(-5 * time.Minute),
+					UsageMeasured: true,
+				},
+			},
+		}
+
+		data := buildDashboardData(snap, "v1", now.Add(-1*time.Hour), nil, now, rates)
+
+		if data.UnmeasuredRunningCount != 0 {
+			t.Errorf("UnmeasuredRunningCount = %d, want 0", data.UnmeasuredRunningCount)
 		}
 	})
 }
@@ -1685,6 +1773,7 @@ func TestHandleDashboard_WithTokenRates(t *testing.T) {
 				AgentKind:         "claude",
 				AgentInputTokens:  1_000_000,
 				AgentOutputTokens: 1_000_000,
+				UsageMeasured:     true,
 			},
 		},
 	}
@@ -1756,5 +1845,73 @@ func TestHandleDashboard_WithoutTokenRates(t *testing.T) {
 	}
 	if strings.Contains(dr.Body, "Cost estimates are based on configured token rates") {
 		t.Error("body contains cost disclaimer but no token rates configured")
+	}
+}
+
+// TestHandleDashboard_UnmeasuredRunningEntry verifies the rendered
+// markers for a running session that has reported no measurement: the
+// Tokens cell reads "not reported", the Est. Cost cell keeps its
+// existing missing-value marker, and the footer note names the count.
+func TestHandleDashboard_UnmeasuredRunningEntry(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 3, 24, 12, 0, 0, 0, time.UTC)
+
+	snap := orchestrator.RuntimeSnapshotResult{
+		GeneratedAt: now,
+		Running: []orchestrator.SnapshotRunningEntry{
+			{
+				IssueID:       "id-unm",
+				Identifier:    "MT-UNM",
+				State:         "In Progress",
+				StartedAt:     now.Add(-3 * time.Minute),
+				UsageMeasured: false,
+			},
+		},
+	}
+
+	ts := dashboardServer(t, fixedSnapshot(snap), "1.0.0", nil)
+	dr := getDashboard(t, ts, "/")
+
+	if dr.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want %d", dr.StatusCode, http.StatusOK)
+	}
+	if !strings.Contains(dr.Body, "not reported") {
+		t.Error("body missing \"not reported\" for an unmeasured running entry's Tokens cell")
+	}
+	if !strings.Contains(dr.Body, "1 running sessions have not reported token usage; the totals above exclude them.") {
+		t.Errorf("body = %q, want the footer note naming the unmeasured count", dr.Body)
+	}
+}
+
+// TestHandleDashboard_NoUnmeasuredEntries_NoFooterNote verifies that the
+// unmeasured-sessions footer note is absent when every running entry has
+// reported a measurement.
+func TestHandleDashboard_NoUnmeasuredEntries_NoFooterNote(t *testing.T) {
+	t.Parallel()
+
+	now := time.Date(2026, 3, 24, 12, 0, 0, 0, time.UTC)
+
+	snap := orchestrator.RuntimeSnapshotResult{
+		GeneratedAt: now,
+		Running: []orchestrator.SnapshotRunningEntry{
+			{
+				IssueID:       "id-m",
+				Identifier:    "MT-M",
+				State:         "In Progress",
+				StartedAt:     now.Add(-3 * time.Minute),
+				UsageMeasured: true,
+			},
+		},
+	}
+
+	ts := dashboardServer(t, fixedSnapshot(snap), "1.0.0", nil)
+	dr := getDashboard(t, ts, "/")
+
+	if dr.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want %d", dr.StatusCode, http.StatusOK)
+	}
+	if strings.Contains(dr.Body, "have not reported token usage") {
+		t.Errorf("body = %q, want no unmeasured-sessions footer note", dr.Body)
 	}
 }

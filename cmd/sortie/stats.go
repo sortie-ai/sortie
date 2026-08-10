@@ -62,6 +62,7 @@ type statsSummary struct {
 	ZeroDurationRuns       int           `json:"zero_duration_runs"`
 	DurationExcludedRuns   int           `json:"duration_excluded_runs"`
 	CostUnpricedRuns       int           `json:"cost_unpriced_runs"`
+	TokensUnmeasuredRuns   int           `json:"tokens_unmeasured_runs"`
 }
 
 // statsDuration reports p50, p95, and the arithmetic mean over a sample
@@ -99,6 +100,7 @@ type statsGroup struct {
 	Tokens                 *statsTokens  `json:"tokens"`
 	CostUSD                *float64      `json:"cost_usd"`
 	CostPerSucceededRunUSD *float64      `json:"cost_per_succeeded_run_usd"`
+	TokensUnmeasuredRuns   int           `json:"tokens_unmeasured_runs"`
 }
 
 // statsSelfReview reports the self-review aggregation. MeanIterations is
@@ -234,14 +236,17 @@ func parseRangeBound(raw string) (*time.Time, error) {
 // statsGroupAccum accumulates the folding state for one statsGroup row
 // before the derived figures are computed in statsAggregator.report.
 type statsGroupAccum struct {
-	name            string
-	runs            int
-	succeeded       int
-	turnSum         int
-	tokens          statsTokens
-	costUSD         float64
-	pricedRuns      int
-	durationSamples []float64
+	name              string
+	runs              int
+	succeeded         int
+	turnSum           int
+	tokens            statsTokens
+	costUSD           float64
+	pricedRuns        int
+	measuredRuns      int
+	unmeasuredRuns    int
+	succeededMeasured int
+	durationSamples   []float64
 }
 
 // statsTotalAccum accumulates the report-wide folding state.
@@ -253,6 +258,9 @@ type statsTotalAccum struct {
 	costUSD              float64
 	pricedRuns           int
 	costUnpricedRuns     int
+	measuredRuns         int
+	unmeasuredRuns       int
+	succeededMeasured    int
 	zeroDurationRuns     int
 	durationExcludedRuns int
 	succeededSamples     []float64
@@ -335,30 +343,48 @@ func (a *statsAggregator) add(row persistence.RunStatsRow) error {
 		)
 
 		for _, g := range bumped {
-			g.tokens.Input += row.InputTokens
-			g.tokens.Output += row.OutputTokens
-			g.tokens.Total += row.TotalTokens
-			g.tokens.CacheRead += row.CacheReadTokens
 			g.turnSum += row.TurnsCompleted
 		}
-		a.total.tokens.Input += row.InputTokens
-		a.total.tokens.Output += row.OutputTokens
-		a.total.tokens.Total += row.TotalTokens
-		a.total.tokens.CacheRead += row.CacheReadTokens
 		if isSucceeded {
 			a.total.succeededTurns += row.TurnsCompleted
 		}
 
-		if a.ratesConfigured {
-			cost := priceOf(row, a.rates)
-			if cost == nil {
-				a.total.costUnpricedRuns++
-			} else {
-				a.total.costUSD += *cost
-				a.total.pricedRuns++
-				for _, g := range bumped {
-					g.costUSD += *cost
-					g.pricedRuns++
+		if !row.TokensMeasured {
+			a.total.unmeasuredRuns++
+			for _, g := range bumped {
+				g.unmeasuredRuns++
+			}
+		} else {
+			for _, g := range bumped {
+				g.tokens.Input += row.InputTokens
+				g.tokens.Output += row.OutputTokens
+				g.tokens.Total += row.TotalTokens
+				g.tokens.CacheRead += row.CacheReadTokens
+				g.measuredRuns++
+				if isSucceeded {
+					g.succeededMeasured++
+				}
+			}
+			a.total.tokens.Input += row.InputTokens
+			a.total.tokens.Output += row.OutputTokens
+			a.total.tokens.Total += row.TotalTokens
+			a.total.tokens.CacheRead += row.CacheReadTokens
+			a.total.measuredRuns++
+			if isSucceeded {
+				a.total.succeededMeasured++
+			}
+
+			if a.ratesConfigured {
+				cost := priceOf(row, a.rates)
+				if cost == nil {
+					a.total.costUnpricedRuns++
+				} else {
+					a.total.costUSD += *cost
+					a.total.pricedRuns++
+					for _, g := range bumped {
+						g.costUSD += *cost
+						g.pricedRuns++
+					}
 				}
 			}
 		}
@@ -476,14 +502,17 @@ func (a *statsAggregator) summary(full bool) statsSummary {
 		s.MeanTurnsSucceeded = &mean
 	}
 	if full {
+		s.TokensUnmeasuredRuns = a.total.unmeasuredRuns
+	}
+	if full && a.total.measuredRuns > 0 {
 		tokens := a.total.tokens
 		s.Tokens = &tokens
 	}
 	if full && a.total.pricedRuns > 0 {
 		cost := round2(a.total.costUSD)
 		s.CostUSD = &cost
-		if s.Succeeded > 0 {
-			perRun := round2(cost / float64(s.Succeeded))
+		if a.total.succeededMeasured > 0 {
+			perRun := round2(cost / float64(a.total.succeededMeasured))
 			s.CostPerSucceededRunUSD = &perRun
 		}
 	}
@@ -525,13 +554,16 @@ func (a *statsAggregator) groupStat(g *statsGroupAccum, full bool) statsGroup {
 	if full {
 		mean := round2(float64(g.turnSum) / float64(g.runs))
 		stat.MeanTurns = &mean
-		tokens := g.tokens
-		stat.Tokens = &tokens
+		stat.TokensUnmeasuredRuns = g.unmeasuredRuns
+		if g.measuredRuns > 0 {
+			tokens := g.tokens
+			stat.Tokens = &tokens
+		}
 		if g.pricedRuns > 0 {
 			cost := round2(g.costUSD)
 			stat.CostUSD = &cost
-			if g.succeeded > 0 {
-				perRun := round2(cost / float64(g.succeeded))
+			if g.succeededMeasured > 0 {
+				perRun := round2(cost / float64(g.succeededMeasured))
 				stat.CostPerSucceededRunUSD = &perRun
 			}
 		}
@@ -578,6 +610,7 @@ func degradedSchemaWarning(caps persistence.RunHistoryCapabilities) string {
 		{caps.HasReviewMetadata, "self-review results"},
 		{caps.HasRuleRouting, "dispatch-rule routing"},
 		{caps.HasTokens, "tokens and cost"},
+		{caps.HasTokenMeasurement, "which runs the coding agent could measure"},
 	}
 
 	var unrecorded, dropped []string
@@ -760,6 +793,11 @@ func statsFootnotes(s statsSummary) []string {
 			"note: the duration figures skip %d of these runs, whose recorded start and finish times were unusable.",
 			s.DurationExcludedRuns))
 	}
+	if s.TokensUnmeasuredRuns > 0 {
+		lines = append(lines, fmt.Sprintf(
+			"note: the token and cost figures skip %d of these runs, because the coding agent behind them reported no token usage.",
+			s.TokensUnmeasuredRuns))
+	}
 	if s.CostUnpricedRuns > 0 {
 		lines = append(lines, fmt.Sprintf(
 			"note: the cost figures skip %d of these runs, because token_rates has no price for the coding agent behind them.",
@@ -816,16 +854,16 @@ func renderStatsText(stdout, stderr io.Writer, report statsReport) {
 	if full {
 		fmt.Fprintf(stdout, "turns (succeeded)       %s\n", //nolint:errcheck // stdout write failure is unrecoverable
 			formatFloatDash(report.Summary.MeanTurnsSucceeded, "%.1f"))
-		fmt.Fprintf(stdout, "tokens (all runs)       %s\n", formatStatsTokens(report.Summary.Tokens)) //nolint:errcheck // stdout write failure is unrecoverable
+		fmt.Fprintf(stdout, "tokens (measured runs)  %s\n", formatStatsTokens(report.Summary.Tokens)) //nolint:errcheck // stdout write failure is unrecoverable
 		switch {
 		case report.Summary.CostUSD != nil:
-			fmt.Fprintf(stdout, "cost (all runs)         %s   per succeeded run %s\n", //nolint:errcheck // stdout write failure is unrecoverable
+			fmt.Fprintf(stdout, "cost (measured runs)    %s   per succeeded run %s\n", //nolint:errcheck // stdout write failure is unrecoverable
 				server.FormatCost(*report.Summary.CostUSD), formatCostDash(report.Summary.CostPerSucceededRunUSD))
-		case report.Summary.CostUnpricedRuns == 0:
+		case report.Summary.CostUnpricedRuns == 0 && report.Summary.Tokens != nil:
 			fmt.Fprintln(stdout, //nolint:errcheck // stdout write failure is unrecoverable
 				"cost                    not estimated; set token_rates in the workflow to price these runs")
 		default:
-			fmt.Fprintln(stdout, "cost (all runs)         -   per succeeded run -") //nolint:errcheck // stdout write failure is unrecoverable
+			fmt.Fprintln(stdout, "cost (measured runs)    -   per succeeded run -") //nolint:errcheck // stdout write failure is unrecoverable
 		}
 	}
 	fmt.Fprintln(stdout) //nolint:errcheck // stdout write failure is unrecoverable

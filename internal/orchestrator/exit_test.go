@@ -457,6 +457,114 @@ func TestHandleWorkerExit_UsageReconciliation_DroppedTrailingEvent(t *testing.T)
 	}
 }
 
+// TestHandleWorkerExit_TokensMeasured verifies the exit path's fold of
+// entry.UsageMeasured and WorkerResult.UsageMeasured into
+// RunHistory.TokensMeasured, across the four cases R38 requires: an
+// unmeasured run, a measured-zero run, a run that exits before entering a
+// turn, and a measurement recovered only from the worker result.
+func TestHandleWorkerExit_TokensMeasured(t *testing.T) {
+	t.Parallel()
+
+	t.Run("unmeasured run writes tokens_measured 0 with four zero token columns", func(t *testing.T) {
+		t.Parallel()
+
+		store := &mockExitStore{}
+		state := exitState(t, "ISSUE-UNM", nil)
+
+		HandleWorkerExit(state, WorkerResult{
+			IssueID:      "ISSUE-UNM",
+			Identifier:   "ISSUE-UNM-ident",
+			ExitKind:     WorkerExitNormal,
+			AgentAdapter: "mock",
+		}, defaultExitParams(t, store))
+
+		if len(store.runHistories) != 1 {
+			t.Fatalf("AppendRunHistory called %d times, want 1", len(store.runHistories))
+		}
+		run := store.runHistories[0]
+		if run.TokensMeasured {
+			t.Error("RunHistory.TokensMeasured = true, want false for an unmeasured run")
+		}
+		if run.InputTokens != 0 || run.OutputTokens != 0 || run.TotalTokens != 0 || run.CacheReadTokens != 0 {
+			t.Errorf("RunHistory tokens = (%d, %d, %d, %d), want all zero", run.InputTokens, run.OutputTokens, run.TotalTokens, run.CacheReadTokens)
+		}
+	})
+
+	t.Run("measured-zero run writes tokens_measured 1 with four zero token columns", func(t *testing.T) {
+		t.Parallel()
+
+		store := &mockExitStore{}
+		state := exitState(t, "ISSUE-MZ", nil)
+		state.Running["ISSUE-MZ"].UsageMeasured = true
+
+		HandleWorkerExit(state, WorkerResult{
+			IssueID:      "ISSUE-MZ",
+			Identifier:   "ISSUE-MZ-ident",
+			ExitKind:     WorkerExitNormal,
+			AgentAdapter: "mock",
+		}, defaultExitParams(t, store))
+
+		if len(store.runHistories) != 1 {
+			t.Fatalf("AppendRunHistory called %d times, want 1", len(store.runHistories))
+		}
+		run := store.runHistories[0]
+		if !run.TokensMeasured {
+			t.Error("RunHistory.TokensMeasured = false, want true for a measured-zero run")
+		}
+		if run.InputTokens != 0 || run.OutputTokens != 0 || run.TotalTokens != 0 || run.CacheReadTokens != 0 {
+			t.Errorf("RunHistory tokens = (%d, %d, %d, %d), want all zero", run.InputTokens, run.OutputTokens, run.TotalTokens, run.CacheReadTokens)
+		}
+	})
+
+	t.Run("run exiting before entering a turn writes tokens_measured 1", func(t *testing.T) {
+		t.Parallel()
+
+		store := &mockExitStore{}
+		state := exitState(t, "ISSUE-EARLY", nil)
+
+		HandleWorkerExit(state, WorkerResult{
+			IssueID:       "ISSUE-EARLY",
+			Identifier:    "ISSUE-EARLY-ident",
+			ExitKind:      WorkerExitError,
+			AgentAdapter:  "mock",
+			UsageMeasured: true,
+		}, defaultExitParams(t, store))
+
+		if len(store.runHistories) != 1 {
+			t.Fatalf("AppendRunHistory called %d times, want 1", len(store.runHistories))
+		}
+		run := store.runHistories[0]
+		if !run.TokensMeasured {
+			t.Error("RunHistory.TokensMeasured = false, want true for a run that exited before entering a turn")
+		}
+	})
+
+	t.Run("a measurement delivered only on WorkerResult.UsageMeasured is recovered", func(t *testing.T) {
+		t.Parallel()
+
+		store := &mockExitStore{}
+		state := exitState(t, "ISSUE-RECOVER", nil)
+		// entry.UsageMeasured stays at its zero value: the orchestrator
+		// event loop never observed a qualifying event.
+
+		HandleWorkerExit(state, WorkerResult{
+			IssueID:       "ISSUE-RECOVER",
+			Identifier:    "ISSUE-RECOVER-ident",
+			ExitKind:      WorkerExitNormal,
+			AgentAdapter:  "mock",
+			UsageMeasured: true,
+		}, defaultExitParams(t, store))
+
+		if len(store.runHistories) != 1 {
+			t.Fatalf("AppendRunHistory called %d times, want 1", len(store.runHistories))
+		}
+		run := store.runHistories[0]
+		if !run.TokensMeasured {
+			t.Error("RunHistory.TokensMeasured = false, want true (recovered from WorkerResult.UsageMeasured alone)")
+		}
+	})
+}
+
 func TestHandleWorkerExit_RetryableError(t *testing.T) {
 	t.Parallel()
 

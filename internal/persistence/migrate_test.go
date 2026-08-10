@@ -208,6 +208,7 @@ func TestMigrate_ColumnCorrectness(t *testing.T) {
 				{"output_tokens", "INTEGER", true, 0},
 				{"total_tokens", "INTEGER", true, 0},
 				{"cache_read_tokens", "INTEGER", true, 0},
+				{"tokens_measured", "INTEGER", true, 0},
 			},
 		},
 		{
@@ -415,6 +416,60 @@ func TestMigrations_Registry(t *testing.T) {
 	}
 	if versions[0] != 1 {
 		t.Errorf("first migration version = %d, want 1", versions[0])
+	}
+}
+
+// migrateToVersion applies every registered migration up to and including
+// version, leaving later migrations unapplied.
+func migrateToVersion(t *testing.T, s *Store, version int) {
+	t.Helper()
+	ctx := context.Background()
+	if _, err := s.db.ExecContext(ctx,
+		`CREATE TABLE IF NOT EXISTS schema_migrations (
+			version    INTEGER PRIMARY KEY,
+			applied_at TEXT    NOT NULL
+		)`); err != nil {
+		t.Fatalf("create schema_migrations table: %v", err)
+	}
+	for _, m := range migrations {
+		if m.Version > version {
+			break
+		}
+		if err := s.applyMigration(ctx, m); err != nil {
+			t.Fatalf("apply migration %d: %v", m.Version, err)
+		}
+	}
+}
+
+// TestMigrate_Migration012_TokensMeasuredDefault verifies that a
+// run_history row written before migration 012 reads tokens_measured = 1
+// (the column default) once the database is migrated to the current
+// schema, so an upgraded deployment's pre-existing rows keep behaving as
+// measured runs.
+func TestMigrate_Migration012_TokensMeasuredDefault(t *testing.T) {
+	t.Parallel()
+
+	s := openTestStore(t)
+	migrateToVersion(t, s, 11)
+	ctx := context.Background()
+
+	if _, err := s.db.ExecContext(ctx,
+		`INSERT INTO run_history (issue_id, identifier, attempt, agent_adapter, workspace, started_at, completed_at, status)
+		 VALUES ('rh-pre012', 'MT-1', 1, 'mock', '/tmp', '2026-01-01T00:00:00Z', '2026-01-01T00:01:00Z', 'succeeded')`,
+	); err != nil {
+		t.Fatalf("insert pre-migration-012 run_history row: %v", err)
+	}
+
+	migrateOrFatal(t, s)
+
+	var tokensMeasured int
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT tokens_measured FROM run_history WHERE issue_id = 'rh-pre012'`,
+	).Scan(&tokensMeasured); err != nil {
+		t.Fatalf("query tokens_measured: %v", err)
+	}
+	if tokensMeasured != 1 {
+		t.Errorf("tokens_measured for a pre-migration-012 row = %d, want 1 (the column default)", tokensMeasured)
 	}
 }
 

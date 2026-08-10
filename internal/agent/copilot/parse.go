@@ -38,11 +38,15 @@ type rawCodeChange struct {
 	FilesModified []string `json:"filesModified"`
 }
 
+// assistantMessageData is the data payload of an assistant.message
+// event. OutputTokens is a pointer so a message whose outputTokens
+// field is absent from the wire payload is distinguishable from one
+// reporting a measured zero.
 type assistantMessageData struct {
 	MessageID    string           `json:"messageId"`
 	Content      string           `json:"content"`
 	ToolRequests []rawToolRequest `json:"toolRequests"`
-	OutputTokens int64            `json:"outputTokens"`
+	OutputTokens *int64           `json:"outputTokens"`
 }
 
 type rawToolRequest struct {

@@ -58,6 +58,8 @@ should return:
 
 - `running` (list of running session rows)
 - each running row should include `turn_count`
+- each running row should include `tokens_measured`, meaning at least one usage measurement has
+  been reported so far in that session
 - `retrying` (list of retry queue rows)
 - `agent_totals`
   - `input_tokens`
@@ -94,7 +96,28 @@ what earlier runs already recorded, a database written by an older schema yields
 figures, and the surface reports which figures it could not derive instead of presenting a zero.
 This surface performs no state mutation and is never required for orchestrator correctness.
 
+A figure can be missing for two distinct reasons: the database predates the schema that records
+it, or nothing measured it because the coding agent behind the run reported no token usage. The
+schema tier alone no longer separates the two: a full-tier report can still carry a null `tokens`
+summary or breakdown row when every run in range is unmeasured. `tokens_unmeasured_runs` is the
+field that distinguishes a figure missing for want of a schema from one missing for want of a
+measurement. This supersedes the clause in ADR-0019
+(`docs/decisions/0019-keep-usage-data-on-the-host.md`) stating that `schema_tier` alone tells a
+consumer whether token and cost figures were available at all.
+
 ### 13.5 Session Metrics and Token Accounting
+
+A run is measured when the runtime reported at least one usage figure for the session and the
+adapter carried it into the recorded counters, or when the worker never entered an agent turn,
+because a run that launched no agent spent exactly zero. A run is unmeasured when an agent turn
+began and no usage figure ever arrived; its recorded token figures are zero and that zero carries
+no information. A measurement of zero is a measured run whose reported figures are zero, which is
+a legitimate statement recorded as measured.
+
+The run record carries this distinction alongside the four token counters. An unmeasured run
+contributes nothing to any token counter and is excluded from cost pricing. It advances no
+Prometheus token counter and creates no series, the same as a run that never emitted a usage
+event.
 
 Token accounting rules:
 
@@ -220,7 +243,8 @@ Minimum endpoints:
           "api_request_count": 3,
           "requests_by_model": {"claude-sonnet-4-20250514": 3},
           "tool_time_percent": 12.3,
-          "api_time_percent": 45.6
+          "api_time_percent": 45.6,
+          "tokens_measured": true
         }
       ],
       "retrying": [

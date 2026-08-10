@@ -28,6 +28,31 @@ type usageContractReporter interface {
 	Errorf(format string, args ...any)
 }
 
+// AssertMeasurementAbsent fails t when the given events or result assert a
+// usage measurement that a runtime reporting nothing must not produce: any
+// event of type [domain.EventTokenUsage], any event carrying a non-zero
+// Usage, or a true result.UsageMeasured.
+func AssertMeasurementAbsent(t *testing.T, events []domain.AgentEvent, result domain.TurnResult) {
+	t.Helper()
+	assertMeasurementAbsent(t, events, result)
+}
+
+func assertMeasurementAbsent(t usageContractReporter, events []domain.AgentEvent, result domain.TurnResult) {
+	t.Helper()
+
+	for i, event := range events {
+		if event.Type == domain.EventTokenUsage {
+			t.Errorf("event %d: type = %q, want no token_usage event when the runtime reported nothing", i, event.Type)
+		}
+		if event.Usage != (domain.TokenUsage{}) {
+			t.Errorf("event %d: Usage = %+v, want zero value when the runtime reported nothing", i, event.Usage)
+		}
+	}
+	if result.UsageMeasured {
+		t.Errorf("result.UsageMeasured = true, want false when the runtime reported nothing")
+	}
+}
+
 func assertUsageContract(t usageContractReporter, events []domain.AgentEvent) {
 	t.Helper()
 

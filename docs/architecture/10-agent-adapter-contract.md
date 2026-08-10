@@ -32,10 +32,10 @@ Built-in adapter summary:
 | Kind | Session model | Event surface | Resume and identity | Notable differences |
 |---|---|---|---|---|
 | `claude-code` | One subprocess per turn | Newline-delimited JSON from `claude -p --output-format stream-json --verbose` | New sessions use `--session-id`; continuation turns use `--resume`; runtime `session_id` may replace the provisional adapter-generated ID | Token usage is normalized from the terminal `result` event's per-model usage, aggregated across models and added to the run total per turn. |
-| `copilot-cli` | One subprocess per turn | Newline-delimited JSON from an abbreviated `copilot -p --output-format json -s --autopilot --no-ask-user ...` invocation | Uses `--resume <session_id>` when a session ID is known; falls back to `--continue` when a prior result omitted `sessionId` | The adapter always includes `--max-autopilot-continues` and includes `--allow-all` when no tool-scoping flags are configured; session identity is captured from the terminal `result` event rather than a start event. Token usage is recovered from the runtime's session-state journal after process exit, with the stream's per-message output counts standing in as the in-turn estimate; unavailable in SSH mode. |
+| `copilot-cli` | One subprocess per turn | Newline-delimited JSON from an abbreviated `copilot -p --output-format json -s --autopilot --no-ask-user ...` invocation | Uses `--resume <session_id>` when a session ID is known; falls back to `--continue` when a prior result omitted `sessionId` | The adapter always includes `--max-autopilot-continues` and includes `--allow-all` when no tool-scoping flags are configured; session identity is captured from the terminal `result` event rather than a start event. Token usage is recovered from the runtime's session-state journal after process exit, with the stream's per-message output counts standing in as the in-turn estimate; unavailable in SSH mode. A run whose session-state journal cannot be read, which includes SSH mode, is reported measured on the stream's output-token figures alone: it carries no input or cache-read component, so its recorded total is output-only. It is reported unmeasured only when no assistant message carried the output-token field either. |
 | `codex` | One persistent `codex app-server` subprocess per session | JSON-RPC 2.0 over stdio | `ResumeSessionID` maps to `thread/resume`; otherwise the adapter starts a new thread; thread ID is the session ID | Turns are started inside the persistent session with `turn/start`; tool and approval handling are part of the app-server protocol. Token usage is normalized from `thread/tokenUsage/updated`, with a per-run baseline subtracted from the thread-cumulative total. |
 | `opencode` | One subprocess per turn | Line-delimited JSON from `opencode run --format json --dir <workspace>` | `ResumeSessionID` maps to `--session <session_id>`; the first observed `sessionID` becomes the session ID; a mismatch is `turn_ended_with_error` | The adapter maps `opencode.model`, `opencode.agent`, `opencode.variant`, `opencode.thinking`, `opencode.pure`, and `opencode.dangerously_skip_permissions` to CLI flags; parses `step_start`, `text`, `reasoning`, `tool_use`, `step_finish`, and `error`; maps plain-text permission warnings to `notification` and unknown output to `malformed`; recovers final token usage with `opencode export --sanitize <session_id>`, summed across the run's assistant messages; maps logical `error` events to `turn_failed` even when the process exits with status `0`. |
-| `kiro` | One subprocess per turn | Plain-text human transcript from `kiro-cli chat --no-interactive`; stdout carries the assistant answer (ANSI-stripped), stderr carries the `▸ Credits: … • Time: …` trailer and warnings | Headless mode does not surface a session ID; `ResumeSessionID` is recorded but continuation relies on `--resume` against the cwd-scoped conversation store keyed by the workspace path | Headless Kiro emits no structured output and no token counts, so the adapter emits no `token_usage` events and leaves `TurnResult.Usage` zero; token-based budget enforcement does not apply and the turn timeout is the only backstop. Exit code 0 is ambiguous (success and invalid-credential failure both exit 0): success requires the credits trailer on stderr, and `Authentication failed.` on stderr with empty stdout maps to `turn_failed`. `StartSession` requires `KIRO_API_KEY` and runs a `kiro-cli whoami` canary to reject silently invalid keys before any turn; a missing credential would otherwise block headless `chat` indefinitely on an interactive device-login flow, which the credential preflight and the mandatory `agent.turn_timeout_ms` together defend against. MCP injection has no effect under `KIRO_API_KEY` auth (the backend profile gate disables MCP), so `MCPConfigPath` is ignored and `--require-mcp-startup` is unreachable. Permissions are controlled by `--trust-all-tools` or a `--trust-tools=<names>` allowlist; the two modes are mutually exclusive. The model is pinned per turn with `--model` because the `/model` slash command is unavailable headless. |
+| `kiro` | One subprocess per turn | Plain-text human transcript from `kiro-cli chat --no-interactive`; stdout carries the assistant answer (ANSI-stripped), stderr carries the `▸ Credits: … • Time: …` trailer and warnings | Headless mode does not surface a session ID; `ResumeSessionID` is recorded but continuation relies on `--resume` against the cwd-scoped conversation store keyed by the workspace path | Headless Kiro emits no structured output and no token counts, so the adapter emits no `token_usage` events and leaves `TurnResult.Usage` zero; token-based budget enforcement does not apply and the turn timeout is the only backstop. Every run is reported unmeasured, because the headless runtime reports no token counts. Exit code 0 is ambiguous (success and invalid-credential failure both exit 0): success requires the credits trailer on stderr, and `Authentication failed.` on stderr with empty stdout maps to `turn_failed`. `StartSession` requires `KIRO_API_KEY` and runs a `kiro-cli whoami` canary to reject silently invalid keys before any turn; a missing credential would otherwise block headless `chat` indefinitely on an interactive device-login flow, which the credential preflight and the mandatory `agent.turn_timeout_ms` together defend against. MCP injection has no effect under `KIRO_API_KEY` auth (the backend profile gate disables MCP), so `MCPConfigPath` is ignored and `--require-mcp-startup` is unreachable. Permissions are controlled by `--trust-all-tools` or a `--trust-tools=<names>` allowlist; the two modes are mutually exclusive. The model is pinned per turn with `--model` because the `/model` slash command is unavailable headless. |
 
 ### 10.2 Session Lifecycle
 
@@ -84,6 +84,22 @@ native protocol events to this normalized set:
   event (`turn_completed`, `turn_failed`, `turn_cancelled`, `turn_ended_with_error`), which the
   orchestrator accumulates without counting it as an API request. `TurnResult.Usage` MUST carry
   the same run-cumulative snapshot as the turn's last emitted value.
+
+  Measurement semantics: emitting a `token_usage` event asserts that the runtime reported usage
+  for the observed request. An all-zero payload asserts a measurement of zero, which is a
+  legitimate statement distinct from having no measurement at all. An adapter MUST NOT emit the
+  event when the runtime supplied no usage figure for the observed event. This qualifies, rather
+  than repeals, the sentence above requiring an adapter to report `0` for a counter its runtime
+  does not expose: reporting `0` for one counter inside a measurement is a statement about that
+  counter, while emitting no event is a statement about the whole request.
+
+  `TurnResult.UsageMeasured` carries the same assertion at turn granularity: it is true once the
+  adapter has observed at least one usage measurement for the session, by the end of that turn,
+  and false otherwise. It is monotone: once true for a session, it MUST remain true for every
+  later turn of that session. An adapter that can never measure usage reports `UsageMeasured`
+  false on every turn and emits no `token_usage` event. An adapter whose ability to measure
+  depends on the run, rather than being permanently absent, reports the property per run rather
+  than as a static adapter property.
 - `tool_result`: a tool call completed. Optional fields: `tool_name` (string), `duration_ms` (int64).
 - `notification`: informational message from the agent
 - `other_message`: unclassified message
@@ -313,8 +329,15 @@ Section 10.4.2, a JSON object with the following fields:
 - `remaining_tokens`: `budget_tokens - used_tokens`, floored at `0`; `null` when the budget is
   unlimited, so the agent distinguishes "no limit" from "nothing left".
 - `used_sessions`: completed sessions for the issue. The running session is not counted,
-  matching how `agent.max_sessions` counts.
+  matching how `agent.max_sessions` counts. Continues to count sessions whose spend is unknown,
+  because `agent.max_sessions` counts sessions rather than spend.
 - `budget_sessions`: the configured `agent.max_sessions`. `0` means unlimited.
+- `unmeasured_sessions`: the count of the issue's completed sessions whose coding agent reported
+  no token usage, so `used_tokens` excludes them rather than counting them as zero spend.
+- `used_tokens_complete`: `false` when `unmeasured_sessions` is greater than zero, or when a
+  running session ID was supplied and no matching `session_metadata` row was found for it;
+  `true` otherwise. A `false` value tells the agent that `used_tokens` is a lower bound and
+  `remaining_tokens` an upper bound, rather than exact figures.
 
 The asymmetry between `used_tokens` (includes the running session) and `used_sessions`
 (excludes it) is deliberate: a session is discrete and either finished or not, whereas tokens
@@ -326,6 +349,10 @@ session exit, so no window double counts.
 On failure the tool returns the failure envelope
 `{"success": false, "error": {"kind": "<kind>", "message": "<message>"}}` with `error.kind`
 `query_failed`. This happens when the budget query fails.
+
+This result shape supersedes the five-field description of ADR-0013
+(`docs/decisions/0013-agent-cost-budget.md`); `unmeasured_sessions` and `used_tokens_complete`
+are additions this section now records as current.
 
 **`notify_operator` (Tier 2)** sends a real-time notification to an operator-configured
 channel while a session runs. The agent uses it to escalate a decision it should not make

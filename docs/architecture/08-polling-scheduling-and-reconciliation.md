@@ -123,6 +123,10 @@ Per-issue token budget (cost ceiling):
   snapshot beside the exhausted set.
 - If the token query fails, the check fails open and dispatch proceeds, matching the session
   check. A token sum recorded before the token columns were added reads as zero.
+- A sum below the ceiling that includes at least one unmeasured run allows the dispatch and
+  logs a warning naming the issue, the sum, the ceiling, and the unmeasured count, matching the
+  visibility of the query-failure fail-open case above. The retry path warns on every occurrence
+  rather than once per issue, because it runs once per retry rather than once per poll tick.
 - `max_tokens = 0` (default) disables the budget entirely.
 
 Note:

@@ -202,14 +202,15 @@ func handleCIFailure(
 	now := time.Now().UTC()
 
 	ciRunHistory := persistence.RunHistory{
-		IssueID:     pending.IssueID,
-		Identifier:  pending.Identifier,
-		DisplayID:   pending.DisplayID,
-		Attempt:     pending.Attempt,
-		StartedAt:   now.Format(time.RFC3339),
-		CompletedAt: now.Format(time.RFC3339),
-		Status:      "ci_failed",
-		Error:       stringPtr("CI checks failed on ref " + ref),
+		IssueID:        pending.IssueID,
+		Identifier:     pending.Identifier,
+		DisplayID:      pending.DisplayID,
+		Attempt:        pending.Attempt,
+		StartedAt:      now.Format(time.RFC3339),
+		CompletedAt:    now.Format(time.RFC3339),
+		Status:         "ci_failed",
+		Error:          stringPtr("CI checks failed on ref " + ref),
+		TokensMeasured: true,
 	}
 	if _, err := params.Store.AppendRunHistory(ctx, ciRunHistory); err != nil {
 		log.Error("failed to persist CI failure run history",

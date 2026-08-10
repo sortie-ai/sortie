@@ -33,6 +33,15 @@ type BudgetUsage struct {
 	CompletedTotalTokens int64 // SUM(total_tokens) over run_history rows for the issue.
 	CompletedSessions    int   // COUNT(*) of run_history rows for the issue.
 	RunningTotalTokens   int64 // session_metadata.total_tokens when session_id matches; else 0.
+
+	// UnmeasuredSessions is the count of the issue's run_history rows
+	// with tokens_measured = 0.
+	UnmeasuredSessions int
+
+	// RunningMeasured is true when a session_metadata row was found
+	// whose session ID matches the running session ID, which is the
+	// same condition that gates RunningTotalTokens.
+	RunningMeasured bool
 }
 
 // BudgetTool implements [domain.AgentTool] for the cost_budget tool.
@@ -48,11 +57,13 @@ type BudgetTool struct {
 // costBudgetResponse is the JSON result of the cost_budget tool. The field
 // names and null semantics are part of the tool's public contract.
 type costBudgetResponse struct {
-	UsedTokens      int64  `json:"used_tokens"`
-	BudgetTokens    int64  `json:"budget_tokens"`
-	RemainingTokens *int64 `json:"remaining_tokens"` // null when budget is unlimited.
-	UsedSessions    int    `json:"used_sessions"`
-	BudgetSessions  int    `json:"budget_sessions"`
+	UsedTokens         int64  `json:"used_tokens"`
+	BudgetTokens       int64  `json:"budget_tokens"`
+	RemainingTokens    *int64 `json:"remaining_tokens"` // null when budget is unlimited.
+	UsedSessions       int    `json:"used_sessions"`
+	BudgetSessions     int    `json:"budget_sessions"`
+	UnmeasuredSessions int    `json:"unmeasured_sessions"`
+	UsedTokensComplete bool   `json:"used_tokens_complete"`
 }
 
 // New returns a [BudgetTool] for the given issue and running session.
@@ -85,7 +96,9 @@ func (t *BudgetTool) Name() string { return "cost_budget" }
 func (t *BudgetTool) Description() string {
 	return "Returns cumulative token spend for the current issue and the remaining token " +
 		"budget. Use this to decide whether to skip an expensive step, return partial work, " +
-		"or hand off before the orchestrator blocks further sessions on the token ceiling."
+		"or hand off before the orchestrator blocks further sessions on the token ceiling. " +
+		"A false used_tokens_complete means some sessions could not be measured, so used_tokens " +
+		"is a lower bound."
 }
 
 // InputSchema returns the JSON Schema for cost_budget input.
@@ -97,7 +110,7 @@ func (t *BudgetTool) InputSchema() json.RawMessage {
 	return out
 }
 
-// Execute computes the five-field budget result for the current issue.
+// Execute computes the budget result for the current issue.
 //
 // Query failures are returned as a JSON error response with a nil Go
 // error. Only internal marshal failures produce a non-nil Go error.
@@ -115,11 +128,16 @@ func (t *BudgetTool) Execute(ctx context.Context, _ json.RawMessage) (json.RawMe
 		remaining = &r
 	}
 
+	usedTokensComplete := usage.UnmeasuredSessions == 0 &&
+		(t.runningSessionID == "" || usage.RunningMeasured)
+
 	return toolresult.Success(costBudgetResponse{
-		UsedTokens:      usedTokens,
-		BudgetTokens:    int64(t.budgetTokens),
-		RemainingTokens: remaining,
-		UsedSessions:    usage.CompletedSessions,
-		BudgetSessions:  t.budgetSessions,
+		UsedTokens:         usedTokens,
+		BudgetTokens:       int64(t.budgetTokens),
+		RemainingTokens:    remaining,
+		UsedSessions:       usage.CompletedSessions,
+		BudgetSessions:     t.budgetSessions,
+		UnmeasuredSessions: usage.UnmeasuredSessions,
+		UsedTokensComplete: usedTokensComplete,
 	})
 }

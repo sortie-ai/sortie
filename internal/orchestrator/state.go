@@ -257,6 +257,11 @@ type RunningEntry struct {
 	// means no incremental write has occurred, so the first token_usage
 	// event writes immediately.
 	LastMetadataWrite time.Time
+
+	// UsageMeasured is true once at least one usage measurement has been
+	// reported so far in this running session. Monotone: set true by
+	// [HandleAgentEvent] and never cleared.
+	UsageMeasured bool
 }
 
 // RetryEntry holds the runtime state for a pending retry. The persisted
@@ -848,6 +853,15 @@ type State struct {
 	// Incremented by handleTick; reset to zero when the sweep fires.
 	// Runtime-only (not persisted).
 	SweepTickCounter int
+
+	// TokenBudgetIncomplete is the set of issue IDs whose per-issue token
+	// spend, as evaluated on the most recent poll tick, is below the
+	// configured max_tokens budget but includes at least one unmeasured
+	// run, so the ceiling could not be fully evaluated for that issue.
+	// Rebuilt wholesale on every poll tick when the token budget is
+	// enabled, and cleared when it is not. Owned by the single-writer
+	// event loop.
+	TokenBudgetIncomplete map[string]struct{}
 }
 
 // continuationCtxKey is the context key for reaction continuation data
@@ -893,6 +907,7 @@ func NewState(pollIntervalMS, maxConcurrentAgents int, maxConcurrentByState map[
 		ReactionAttempts:      make(map[string]int),
 		PendingReactions:      make(map[string]*PendingReaction),
 		AutoMergeAuthLogged:   make(map[string]struct{}),
+		TokenBudgetIncomplete: make(map[string]struct{}),
 	}
 }
 
@@ -942,6 +957,7 @@ type SnapshotRunningEntry struct {
 	SelfReviewIteration int                   `json:"self_review_iteration,omitempty"`
 	AgentKind           string                `json:"agent_kind,omitempty"`
 	RuleName            string                `json:"rule_name,omitempty"`
+	UsageMeasured       bool                  `json:"tokens_measured"`
 }
 
 // SnapshotRetryEntry is a read-only view of a pending retry for
@@ -1056,6 +1072,7 @@ func RuntimeSnapshot(state *State, now time.Time) RuntimeSnapshotResult {
 			SelfReviewIteration: entry.SelfReviewIteration,
 			AgentKind:           entry.AgentKind,
 			RuleName:            entry.RuleName,
+			UsageMeasured:       entry.UsageMeasured,
 		})
 
 		if !entry.StartedAt.IsZero() {

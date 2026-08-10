@@ -12,10 +12,11 @@ import (
 // supports. A field the underlying table does not carry holds its zero
 // value in every [RunStatsRow] the read returns.
 type RunHistoryCapabilities struct {
-	HasTurnsCompleted bool // migration 005
-	HasReviewMetadata bool // migration 007
-	HasRuleRouting    bool // migration 010: rule_name, template_id
-	HasTokens         bool // migration 011: the four token columns
+	HasTurnsCompleted   bool // migration 005
+	HasReviewMetadata   bool // migration 007
+	HasRuleRouting      bool // migration 010: rule_name, template_id
+	HasTokens           bool // migration 011: the four token columns
+	HasTokenMeasurement bool // migration 012: tokens_measured
 }
 
 // Full reports whether the database carries every optional run_history
@@ -25,7 +26,7 @@ type RunHistoryCapabilities struct {
 // because a database migrated only partway is the common case rather than
 // an exceptional one.
 func (c RunHistoryCapabilities) Full() bool {
-	return c.HasTurnsCompleted && c.HasReviewMetadata && c.HasRuleRouting && c.HasTokens
+	return c.HasTurnsCompleted && c.HasReviewMetadata && c.HasRuleRouting && c.HasTokens && c.HasTokenMeasurement
 }
 
 // RunStatsRow is the narrow run_history projection the aggregate read
@@ -43,12 +44,13 @@ type RunStatsRow struct {
 	OutputTokens    int64
 	TotalTokens     int64
 	CacheReadTokens int64
+	TokensMeasured  bool
 }
 
 // runStatsSelectFull projects every RunStatsRow field. It is used when
 // RunHistoryCapabilities.Full reports true.
 const runStatsSelectFull = `SELECT status, agent_adapter, rule_name, template_id, started_at, completed_at,
-	turns_completed, review_metadata, input_tokens, output_tokens, total_tokens, cache_read_tokens
+	turns_completed, review_metadata, input_tokens, output_tokens, total_tokens, cache_read_tokens, tokens_measured
 FROM run_history`
 
 // runStatsSelectBase projects only the base columns every schema version
@@ -96,6 +98,7 @@ func (s *Store) RunHistoryCapabilities(ctx context.Context) (RunHistoryCapabilit
 		HasRuleRouting:    columns["rule_name"] && columns["template_id"],
 		HasTokens: columns["input_tokens"] && columns["output_tokens"] &&
 			columns["total_tokens"] && columns["cache_read_tokens"],
+		HasTokenMeasurement: columns["tokens_measured"],
 	}, nil
 }
 
@@ -154,7 +157,7 @@ func (s *Store) ScanRunHistoryRange(
 			if err := rows.Scan(
 				&row.Status, &row.AgentAdapter, &row.RuleName, &row.TemplateID,
 				&row.StartedAt, &row.CompletedAt, &row.TurnsCompleted, &reviewMeta,
-				&row.InputTokens, &row.OutputTokens, &row.TotalTokens, &row.CacheReadTokens,
+				&row.InputTokens, &row.OutputTokens, &row.TotalTokens, &row.CacheReadTokens, &row.TokensMeasured,
 			); err != nil {
 				return fmt.Errorf("scan run history range: %w", err)
 			}
