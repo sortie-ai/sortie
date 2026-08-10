@@ -470,10 +470,22 @@ For a Sortie adapter built on `opencode run`, a sensible normalization rule is:
 | `session_started` | First successfully parsed JSON envelope carrying `sessionID`, or session ID known from a server/API response |
 | `tool_result` | Each `tool_use` event, using `part.tool`, `part.state.status`, and `part.state.time` |
 | `notification` / `other_message` | Default-mode-only prose is not available in JSON mode; optional if adapter also captures stderr |
-| `turn_completed` | Process exits after a normal run and no terminal `error` was observed |
-| `turn_failed` | Any terminal `error` event, or a process-level CLI/setup failure |
+| `turn_completed` | Process exits after a normal run, no terminal `error` was observed, and at least one `text`, `reasoning`, or `tool_use` part was parsed during the turn |
+| `turn_failed` | Any terminal `error` event; a process-level CLI/setup failure; or the process exits after a normal run with no `text`, `reasoning`, or `tool_use` part parsed, even when the exit code is `0` |
 | `turn_cancelled` | Prefer the server API surface, which exposes `session.abort` and `session.status`; `run --format json` does not emit a dedicated cancel envelope |
 | `token_usage` | Do not treat `step_finish.part.tokens` as authoritative turn totals without extra logic |
+
+A `text`, `reasoning`, or `tool_use` part observed during the turn is the positive work signal
+that decides `turn_completed` when the process exits `0` with no terminal `error`. Without it, an
+exit-`0` run that parsed a JSON envelope but produced no assistant output (an empty step, or a
+stream of `step_start`/`step_finish` bracketing nothing) is `turn_failed`, not `turn_completed`.
+Process exit code stays informative rather than load-bearing, per the row above, but that framing
+no longer extends to meaning an exit-`0` run with no terminal `error` is automatically complete.
+
+A transport-class failure (a stdout read error, a session id mismatch, or a timeout waiting for
+the first JSON event) reports `turn_failed` with the failure's specific error kind, the same
+normalized event the other four adapters in the family use for the same class, rather than
+`turn_ended_with_error`.
 
 ### Token usage caveat
 

@@ -589,3 +589,47 @@ Recommended additional process settings:
 
 - Max line size: 10 MB (for safe buffering)
 
+### 10.8 Turn Disposition
+
+Every adapter must decide, at the end of each turn, whether the turn completed, failed, or was
+cancelled, and pair that decision with the returned error. This decision follows one shared rule
+so that a new adapter inherits it rather than re-deriving it.
+
+The rule is evaluated as an ordered table. The first matching row decides the turn:
+
+1. The runtime reported the turn cancelled (an orchestrator-initiated cancellation): `turn_cancelled`.
+2. The runtime reported the turn failed, or the adapter itself ended the turn on its own
+   determination (a protocol violation, a timeout waiting for the first response, or a transport
+   failure): `turn_failed`, with the error kind the runtime or the adapter supplied.
+3. The runtime reported the turn succeeded: `turn_completed`. A positive report from the runtime is
+   authoritative and is never second-guessed by counting output.
+4. The runtime reported no outcome at all, and the adapter observed no process exit for the turn (a
+   persistent session with no per-turn exit): `turn_failed`.
+5. The runtime reported no outcome, a process exit was observed, and the exit code is non-zero:
+   `turn_failed`.
+6. The runtime reported no outcome, the process exited zero, and the adapter found no evidence the
+   model produced anything this turn: `turn_failed`. Exit code zero is never by itself a success
+   signal; an adapter with nothing positive to offer reports a failed turn.
+7. The runtime reported no outcome, the process exited zero, and the adapter found evidence the
+   model produced something this turn: `turn_completed`.
+
+Extracting the runtime's own report and the per-turn work evidence from a vendor's wire format is
+adapter-local, and each adapter's protocol document states how it does so. Turning that evidence
+into a disposition is not adapter-local: every adapter obtains its turn disposition from the one
+shared rule above, and an adapter whose runtime reports something the rule cannot express extends
+the rule itself, under review, rather than deciding the case in a private branch.
+
+Two adapters cannot supply the rule's per-turn work evidence in the same currency as the others,
+and diverge from the rule's letter while obeying its intent:
+
+- Headless Kiro reports no token counts at all, so its zero-work guard is expressed in a different
+  currency: the credits trailer on stderr is the positive success signal, and its absence with a
+  zero exit code is the adapter's only evidence of nothing produced.
+- Codex's persistent per-session subprocess has no per-turn process exit to observe, so the rule's
+  zero-work row (row 6 above) is structurally unreachable for it: an absent turn-completion report
+  is already a failure on its own terms.
+
+`turn_ended_with_error` remains a documented normalized event type (Section 10.3), reserved for a
+future adapter whose runtime genuinely distinguishes a transport-class failure from every other
+failure, even though no built-in adapter emits it today.
+
