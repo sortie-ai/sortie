@@ -133,6 +133,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   counting it as merged, which is what Gitea already did.
   ([#786](https://github.com/sortie-ai/sortie/issues/786))
 
+- On GitHub, `reactions.merge_completion` never moved an issue to its
+  terminal state after the pull request merged. The GitHub API version
+  Sortie pins stopped reporting the merge commit the reaction uses to
+  recognize a merge, so the issue stayed in its pre-merge state, its
+  workspace was never cleaned up, and a warning repeated at every poll
+  for the life of the process. Sortie now reads the merge commit from
+  GitHub's GraphQL API and the transition lands on the first poll after
+  the merge. A GitHub token used with `merge_completion` must therefore
+  be able to read the GraphQL API; a token that cannot now fails the
+  read with a logged error and backoff instead of looping silently.
+  ([#775](https://github.com/sortie-ai/sortie/issues/775))
+
 ### Changed
 
 - `opencode` transport failures - a stdout read error, a session id

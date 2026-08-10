@@ -740,41 +740,79 @@ func TestGetMergeability_BaseBranch(t *testing.T) {
 	}
 }
 
-// TestGetMergeability_Merged verifies that a merged pull request populates
-// Merged and MergeCommitSHA from the single pull-request object the adapter
-// already fetches.
+// pinnedMergeCommitOID is the live-verified oid testdata/graphql_merge_commit.json
+// carries for sortie-ai/sortie pull request 772. A future recapture that
+// moves the fixtures to a different pull request must update this value in
+// the same change.
+const pinnedMergeCommitOID = "52512b6736c84bd66169f80f3fa851cfb951a8c2"
+
+// mergeabilityFixtureHandler builds an httptest handler that serves prBody
+// on any request whose path contains "/pulls/" and graphqlBody on the
+// literal path "/graphql", incrementing the matching atomic counter for
+// each request observed.
+func mergeabilityFixtureHandler(t *testing.T, prBody, graphqlBody []byte, restRequests, graphqlRequests *atomic.Int64) http.HandlerFunc {
+	t.Helper()
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.URL.Path == "/graphql":
+			graphqlRequests.Add(1)
+			_, _ = w.Write(graphqlBody)
+		case strings.Contains(r.URL.Path, "/pulls/"):
+			restRequests.Add(1)
+			_, _ = w.Write(prBody)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}
+}
+
+// TestGetMergeability_Merged verifies that a merged pull request sources
+// Merged from the REST pull-request object and MergeCommitSHA from a second,
+// gated GraphQL read, issuing exactly one request on each surface.
 func TestGetMergeability_Merged(t *testing.T) {
 	t.Parallel()
 
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"head":{"sha":"sha-merged"},"draft":false,"mergeable_state":"clean","merged":true,"merge_commit_sha":"abc123merged"}`))
-	}))
+	var restRequests, graphqlRequests atomic.Int64
+	srv := httptest.NewServer(mergeabilityFixtureHandler(t,
+		loadFixture(t, "pr_merged.json"), loadFixture(t, "graphql_merge_commit.json"),
+		&restRequests, &graphqlRequests))
 	defer srv.Close()
 
 	a := newTestSCMAdapter(t, srv.URL)
-	status, err := a.GetMergeability(t.Context(), 1, "owner", "repo")
+	status, err := a.GetMergeability(t.Context(), 772, "owner", "repo")
 	if err != nil {
 		t.Fatalf("GetMergeability: %v", err)
 	}
 	if !status.Merged {
 		t.Error("GetMergeability().Merged = false, want true")
 	}
-	if status.MergeCommitSHA != "abc123merged" {
-		t.Errorf("GetMergeability().MergeCommitSHA = %q, want %q", status.MergeCommitSHA, "abc123merged")
+	if status.MergeCommitSHA != pinnedMergeCommitOID {
+		t.Errorf("GetMergeability().MergeCommitSHA = %q, want %q", status.MergeCommitSHA, pinnedMergeCommitOID)
+	}
+	if got := restRequests.Load(); got != 1 {
+		t.Errorf("REST request count = %d, want 1", got)
+	}
+	if got := graphqlRequests.Load(); got != 1 {
+		t.Errorf("GraphQL request count = %d, want 1", got)
 	}
 }
 
-// TestGetMergeability_UnmergedIgnoresTestMergeCommit verifies that an open
-// pull request reporting a populated merge_commit_sha (GitHub's test-merge
-// value) is not mistaken for a merge: Merged stays false and MergeCommitSHA
-// stays empty.
-func TestGetMergeability_UnmergedIgnoresTestMergeCommit(t *testing.T) {
+// TestGetMergeability_Open verifies that an open pull request reports an
+// empty MergeCommitSHA with no GraphQL request issued at all: the request
+// is gated on Merged, so the adapter never needs to distinguish GitHub's
+// test-merge commit from the real one.
+func TestGetMergeability_Open(t *testing.T) {
 	t.Parallel()
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/graphql" {
+			t.Errorf("unexpected /graphql request for an open pull request")
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"head":{"sha":"sha-open"},"draft":false,"mergeable_state":"clean","merged":false,"merge_commit_sha":"test-merge-commit-sha"}`))
+		_, _ = w.Write(loadFixture(t, "pr_open.json"))
 	}))
 	defer srv.Close()
 
@@ -787,8 +825,219 @@ func TestGetMergeability_UnmergedIgnoresTestMergeCommit(t *testing.T) {
 		t.Error("GetMergeability().Merged = true, want false for an open PR")
 	}
 	if status.MergeCommitSHA != "" {
-		t.Errorf("GetMergeability().MergeCommitSHA = %q, want empty (test-merge value must be gated on Merged)", status.MergeCommitSHA)
+		t.Errorf("GetMergeability().MergeCommitSHA = %q, want empty for an open PR", status.MergeCommitSHA)
 	}
+}
+
+// TestGetMergeability_MergedNullMergeCommit verifies that a merged pull
+// request whose GraphQL response reports a null mergeCommit yields a nil
+// error, Merged true, and an empty MergeCommitSHA rather than an error.
+func TestGetMergeability_MergedNullMergeCommit(t *testing.T) {
+	t.Parallel()
+
+	var restRequests, graphqlRequests atomic.Int64
+	srv := httptest.NewServer(mergeabilityFixtureHandler(t,
+		loadFixture(t, "pr_merged.json"), loadFixture(t, "graphql_merge_commit_null.json"),
+		&restRequests, &graphqlRequests))
+	defer srv.Close()
+
+	a := newTestSCMAdapter(t, srv.URL)
+	status, err := a.GetMergeability(t.Context(), 772, "owner", "repo")
+	if err != nil {
+		t.Fatalf("GetMergeability: %v", err)
+	}
+	if !status.Merged {
+		t.Error("GetMergeability().Merged = false, want true")
+	}
+	if status.MergeCommitSHA != "" {
+		t.Errorf("GetMergeability().MergeCommitSHA = %q, want empty when GraphQL reports a null mergeCommit", status.MergeCommitSHA)
+	}
+}
+
+// TestGetMergeability_GraphQLFailureModes covers every GraphQL failure mode
+// that can occur once a merged pull request gates the second read: the
+// error GetMergeability returns must unwrap to the *domain.SCMError kind
+// the failure model specifies for each mode.
+func TestGetMergeability_GraphQLFailureModes(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name     string
+		respond  func(w http.ResponseWriter)
+		wantKind domain.SCMErrorKind
+	}{
+		{
+			name: "not_found_errors_array",
+			respond: func(w http.ResponseWriter) {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write(loadFixture(t, "graphql_pull_request_not_found.json"))
+			},
+			wantKind: domain.ErrSCMAPI,
+		},
+		{
+			name: "malformed_json",
+			respond: func(w http.ResponseWriter) {
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(`not valid json {{{`))
+			},
+			wantKind: domain.ErrSCMPayload,
+		},
+		{
+			name: "null_pull_request_no_errors",
+			respond: func(w http.ResponseWriter) {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"data":{"repository":{"pullRequest":null}}}`))
+			},
+			wantKind: domain.ErrSCMPayload,
+		},
+		{
+			name: "http_401",
+			respond: func(w http.ResponseWriter) {
+				w.WriteHeader(http.StatusUnauthorized)
+				_, _ = w.Write([]byte(`{"message":"Bad credentials"}`))
+			},
+			wantKind: domain.ErrSCMAuth,
+		},
+		{
+			name: "http_500",
+			respond: func(w http.ResponseWriter) {
+				w.WriteHeader(http.StatusInternalServerError)
+				_, _ = w.Write([]byte(`{"message":"Internal Server Error"}`))
+			},
+			wantKind: domain.ErrSCMTransport,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			prBody := loadFixture(t, "pr_merged.json")
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/graphql" {
+					tt.respond(w)
+					return
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write(prBody)
+			}))
+			defer srv.Close()
+
+			a := newTestSCMAdapter(t, srv.URL)
+			_, err := a.GetMergeability(t.Context(), 772, "owner", "repo")
+			assertSCMErrorKind(t, err, tt.wantKind)
+		})
+	}
+}
+
+// TestGetMergeability_MergeCommitQueryRequestShape verifies that the
+// GraphQL POST body issued for a merged pull request carries the exact
+// mergeCommitQuery constant text and the expected owner/repo/number
+// variables.
+func TestGetMergeability_MergeCommitQueryRequestShape(t *testing.T) {
+	t.Parallel()
+
+	prBody := loadFixture(t, "pr_merged.json")
+	var gotBody []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/graphql" {
+			body, _ := io.ReadAll(r.Body)
+			gotBody = body
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write(loadFixture(t, "graphql_merge_commit.json"))
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(prBody)
+	}))
+	defer srv.Close()
+
+	a := newTestSCMAdapter(t, srv.URL)
+	_, err := a.GetMergeability(t.Context(), 772, "owner-x", "repo-y")
+	if err != nil {
+		t.Fatalf("GetMergeability() unexpected error: %v", err)
+	}
+
+	var payload struct {
+		Query     string         `json:"query"`
+		Variables map[string]any `json:"variables"`
+	}
+	if err := json.Unmarshal(gotBody, &payload); err != nil {
+		t.Fatalf("json.Unmarshal(request body) = %v, want nil error", err)
+	}
+	if payload.Query != mergeCommitQuery {
+		t.Errorf("request query = %q, want mergeCommitQuery constant", payload.Query)
+	}
+
+	wantVars := map[string]any{
+		"owner":  "owner-x",
+		"repo":   "repo-y",
+		"number": float64(772),
+	}
+	for k, wantV := range wantVars {
+		gotV, ok := payload.Variables[k]
+		if !ok {
+			t.Errorf("request variables[%q] missing, want %v", k, wantV)
+			continue
+		}
+		if gotV != wantV {
+			t.Errorf("request variables[%q] = %v, want %v", k, gotV, wantV)
+		}
+	}
+}
+
+// TestGitHubMergeFixtures_Provenance pins the merged-path fixtures' load-
+// bearing provenance: the merged-PR REST fixture carries no merge_commit_sha
+// key, and both merged-path fixtures describe the same live-verified pull
+// request. A future recapture that moves the fixtures to a different pull
+// request must update both expected values here in the same change.
+func TestGitHubMergeFixtures_Provenance(t *testing.T) {
+	t.Parallel()
+
+	t.Run("no_merge_commit_sha_key", func(t *testing.T) {
+		t.Parallel()
+
+		var pr map[string]any
+		if err := json.Unmarshal(loadFixture(t, "pr_merged.json"), &pr); err != nil {
+			t.Fatalf("json.Unmarshal(pr_merged.json) = %v, want nil error", err)
+		}
+		if _, present := pr["merge_commit_sha"]; present {
+			t.Error(`pr_merged.json carries a "merge_commit_sha" key, want absent`)
+		}
+		if merged, _ := pr["merged"].(bool); !merged {
+			t.Errorf(`pr_merged.json["merged"] = %v, want true`, pr["merged"])
+		}
+	})
+
+	t.Run("pinned_identifiers", func(t *testing.T) {
+		t.Parallel()
+
+		var pr map[string]any
+		if err := json.Unmarshal(loadFixture(t, "pr_merged.json"), &pr); err != nil {
+			t.Fatalf("json.Unmarshal(pr_merged.json) = %v, want nil error", err)
+		}
+		if number, _ := pr["number"].(float64); number != 772 {
+			t.Errorf(`pr_merged.json["number"] = %v, want 772`, pr["number"])
+		}
+
+		var envelope struct {
+			Data struct {
+				Repository struct {
+					PullRequest struct {
+						MergeCommit struct {
+							OID string `json:"oid"`
+						} `json:"mergeCommit"`
+					} `json:"pullRequest"`
+				} `json:"repository"`
+			} `json:"data"`
+		}
+		if err := json.Unmarshal(loadFixture(t, "graphql_merge_commit.json"), &envelope); err != nil {
+			t.Fatalf("json.Unmarshal(graphql_merge_commit.json) = %v, want nil error", err)
+		}
+		if got := envelope.Data.Repository.PullRequest.MergeCommit.OID; got != pinnedMergeCommitOID {
+			t.Errorf("graphql_merge_commit.json oid = %q, want %q", got, pinnedMergeCommitOID)
+		}
+	})
 }
 
 // --- mapMergeableState tests ---

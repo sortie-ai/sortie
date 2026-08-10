@@ -30,6 +30,21 @@ const reviewDecisionQuery = `query($owner: String!, $repo: String!, $number: Int
   }
 }`
 
+// mergeCommitQuery is the static GraphQL query used to read the merge
+// commit identifier for a merged pull request. Operators MUST NOT extend
+// this query without updating the request-shape unit test that pins the
+// exact text: requesting a field beyond mergeCommit would risk pulling in
+// GitHub's test-merge commit through potentialMergeCommit.
+const mergeCommitQuery = `query($owner: String!, $repo: String!, $number: Int!) {
+  repository(owner: $owner, name: $repo) {
+    pullRequest(number: $number) {
+      mergeCommit {
+        oid
+      }
+    }
+  }
+}`
+
 // graphqlRequestBody is the wire shape of a GitHub GraphQL POST body.
 type graphqlRequestBody struct {
 	Query     string         `json:"query"`
@@ -65,6 +80,21 @@ type reviewDecisionResponseData struct {
 	Repository struct {
 		PullRequest *struct {
 			ReviewDecision *string `json:"reviewDecision"`
+		} `json:"pullRequest"`
+	} `json:"repository"`
+}
+
+// mergeCommitResponseData is the call-specific Data shape for
+// mergeCommitQuery. Both PullRequest and MergeCommit are pointers: a nil
+// PullRequest means the payload is missing, and a nil MergeCommit means
+// the provider reported no merge commit for a pull request that is
+// present.
+type mergeCommitResponseData struct {
+	Repository struct {
+		PullRequest *struct {
+			MergeCommit *struct {
+				OID string `json:"oid"`
+			} `json:"mergeCommit"`
 		} `json:"pullRequest"`
 	} `json:"repository"`
 }
