@@ -104,14 +104,15 @@ func normalizeIssue(gi gitlabIssue, project string, activeStates, terminalStates
 		DisplayID:   displayID,
 		Title:       gi.Title,
 		Description: gi.Description,
-		State:       deriveState(gi.Labels, gi.State, activeStates, terminalStates, handoffState, iid, log),
-		URL:         gi.WebURL,
-		Labels:      issuekit.NormalizeLabels(gi.Labels),
-		Assignee:    assignee,
-		IssueType:   gi.IssueType,
-		BlockedBy:   []domain.BlockerRef{},
-		CreatedAt:   gi.CreatedAt,
-		UpdatedAt:   gi.UpdatedAt,
+		State: issuekit.DeriveLabelState(gi.Labels, gi.State, "opened", "closed",
+			issuekit.LabelStates{Active: activeStates, Terminal: terminalStates, Handoff: handoffState}, iid, log),
+		URL:       gi.WebURL,
+		Labels:    issuekit.NormalizeLabels(gi.Labels),
+		Assignee:  assignee,
+		IssueType: gi.IssueType,
+		BlockedBy: []domain.BlockerRef{},
+		CreatedAt: gi.CreatedAt,
+		UpdatedAt: gi.UpdatedAt,
 	}
 }
 

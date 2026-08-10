@@ -9,6 +9,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/sortie-ai/sortie/internal/adaptertest"
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/registry"
 )
@@ -46,13 +47,7 @@ func requireTrackerErrorKind(t *testing.T, err error, kind domain.TrackerErrorKi
 	if err == nil {
 		t.Fatalf("expected error with kind %q, got nil", kind)
 	}
-	var te *domain.TrackerError
-	if !errors.As(err, &te) {
-		t.Fatalf("error type = %T, want *domain.TrackerError", err)
-	}
-	if te.Kind != kind {
-		t.Fatalf("TrackerError.Kind = %q, want %q", te.Kind, kind)
-	}
+	adaptertest.AssertTrackerErrorKind(t, err, kind)
 }
 
 // --- Constructor tests ---
@@ -306,6 +301,8 @@ func TestFetchIssueByID(t *testing.T) {
 		if len(iss.BlockedBy) != 1 || iss.BlockedBy[0].ID != "10002" {
 			t.Errorf("BlockedBy = %v", iss.BlockedBy)
 		}
+
+		adaptertest.AssertIssueNormalized(t, iss)
 	})
 
 	t.Run("not found", func(t *testing.T) {
@@ -433,6 +430,7 @@ func TestFetchIssueStatesByIDs(t *testing.T) {
 		if _, ok := m["99999"]; ok {
 			t.Error("missing ID should be omitted from result")
 		}
+		adaptertest.AssertStateMapOmitsMissing(t, []string{"10001", "99999"}, m)
 	})
 
 	t.Run("empty IDs", func(t *testing.T) {
@@ -539,6 +537,7 @@ func TestFetchIssueComments(t *testing.T) {
 		if c.CreatedAt != "2026-03-01T10:00:00Z" {
 			t.Errorf("CreatedAt = %q", c.CreatedAt)
 		}
+		adaptertest.AssertCommentsAscending(t, comments)
 	})
 
 	t.Run("empty comments array", func(t *testing.T) {
@@ -548,12 +547,7 @@ func TestFetchIssueComments(t *testing.T) {
 		if err != nil {
 			t.Fatalf("FetchIssueComments: %v", err)
 		}
-		if comments == nil {
-			t.Fatal("comments is nil, want non-nil empty slice")
-		}
-		if len(comments) != 0 {
-			t.Fatalf("got %d comments, want 0", len(comments))
-		}
+		adaptertest.AssertEmptyNonNil(t, comments, "FetchIssueComments")
 	})
 
 	t.Run("null comments coerced to empty", func(t *testing.T) {
@@ -1025,6 +1019,7 @@ func TestFileAdapterMetrics(t *testing.T) {
 			t.Fatalf("FetchIssuesByStates: %v", err)
 		}
 		requireNoCalls(t, spy)
+		adaptertest.AssertNoRequestOnEmptyInput(t, len(spy.calls), "FetchIssuesByStates")
 	})
 
 	t.Run("FetchIssueStatesByIDs/success", func(t *testing.T) {
@@ -1087,6 +1082,16 @@ func TestFileAdapterMetrics(t *testing.T) {
 		requireSingleCall(t, spy, "transition", "error")
 	})
 
+	t.Run("AddLabel/success", func(t *testing.T) {
+		t.Parallel()
+		a, spy := newAdapterWithMetrics(t, fixture("basic.json"))
+		err := a.AddLabel(ctx, "10001", "urgent")
+		if err != nil {
+			t.Fatalf("AddLabel: %v", err)
+		}
+		requireSingleCall(t, spy, "add_label", "success")
+	})
+
 	t.Run("nil_metrics", func(t *testing.T) {
 		t.Parallel()
 		a := newAdapter(t, fixture("basic.json"), nil)
@@ -1099,7 +1104,22 @@ func TestFileAdapterMetrics(t *testing.T) {
 		a.FetchIssueComments(ctx, "10001")                       //nolint:errcheck // verifying no panic
 		a.TransitionIssue(ctx, "10001", "Done")                  //nolint:errcheck // verifying no panic
 		a.CommentIssue(ctx, "10001", "ping")                     //nolint:errcheck // verifying no panic
+		a.AddLabel(ctx, "10001", "urgent")                       //nolint:errcheck // verifying no panic
 	})
+}
+
+// TestAddLabel_IsANoOp documents the file adapter's stated contract: its
+// AddLabel neither reads nor stores label state, so the additive-write
+// invariant [adaptertest.AssertLabelAddIsAdditive] pins for a tracker that
+// manages labels does not apply here. The only observable behavior is a
+// nil return and a recorded metric, both asserted by TestFileAdapterMetrics.
+func TestAddLabel_IsANoOp(t *testing.T) {
+	t.Parallel()
+
+	a := newAdapter(t, fixture("basic.json"), nil)
+	if err := a.AddLabel(context.Background(), "10001", "urgent"); err != nil {
+		t.Fatalf("AddLabel: %v", err)
+	}
 }
 
 func TestCommentIssue(t *testing.T) {

@@ -29,8 +29,10 @@ type TrackerAdapter interface {
 
 	// FetchIssuesByStates returns issues in the specified states.
 	//
-	// Used for startup terminal cleanup. State names are compared
-	// case-insensitively by the adapter.
+	// No orchestrator caller and no agent tool invokes this operation.
+	// Adapters implement it to satisfy this interface; removing it would
+	// be an interface change, not an adapter change. State names are
+	// compared case-insensitively by the adapter.
 	FetchIssuesByStates(ctx context.Context, states []string) ([]Issue, error)
 
 	// FetchIssueStatesByIDs returns the current state for each

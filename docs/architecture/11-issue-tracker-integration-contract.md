@@ -141,6 +141,28 @@ the categories in Section 11.4, and registers itself under its `kind` at initial
 orchestrator core never depends on an adapter directly; it resolves one by `kind` through the
 adapter registry, which is what keeps the core free of vendor vocabulary.
 
+**Label-state derivation, shared by GitHub, Gitea, and GitLab.** None of the three forges has a
+native Sortie-recognized workflow state: each exposes only an open/closed status plus free-form
+labels, so all three derive issue state from configured labels through one rule. Operators
+configure label names in `active_states`, `terminal_states`, and `handoff_state`; each adapter
+lowercases them and compares issue labels case-insensitively. State derivation scans the
+configured active labels, then the terminal labels, then the handoff label, in that order, and
+takes the first match. An issue carrying more than one configured state label logs one WARN naming
+every matched label and the issue identifier, and keeps the first match. An issue with no
+configured state label falls back to the first active label when the platform's native status
+reports open (`opened` on GitLab) and to the first terminal label when it reports closed. When
+`active_states` or `terminal_states` is omitted or empty, all three adapters apply the same
+internal defaults, `["backlog", "in-progress", "review"]` and `["done", "wontfix"]`, for this
+label-to-state derivation. These defaults are an adapter-internal derivation fallback, not a
+substitute for the workflow configuration: the orchestrator gates dispatch and reconciliation on
+the workflow's `tracker.active_states` and `tracker.terminal_states`, which an operator sets to the
+labels that should be treated as active or terminal. The fallback list is what
+`tracker.handoff_state` and `tracker.in_progress_state` are checked against in the dispatch
+preflight when the matching workflow list is empty, so a handoff target that belongs to the
+fallback is rejected whether or not the workflow spells the list out. The GitHub, Gitea, and GitLab
+subsections below record only where an adapter's native open/closed spelling or label handling
+diverges from this shared rule.
+
 #### 11.6.1 Linear adapter
 
 The Linear adapter targets Linear's single GraphQL endpoint
@@ -246,21 +268,8 @@ repository-scoped index (the Gitea `number`) and qualifies each issue's `display
 
 **State model.** Gitea has neither Jira's transition graph nor Linear's named workflow states. It
 offers a native open/closed status plus free-form repository labels, so the adapter models Sortie
-state with labels, closest to the GitHub adapter. Operators configure label names in
-`active_states`, `terminal_states`, and `handoff_state`; the adapter lowercases them and compares
-issue labels case-insensitively. State derivation scans the configured active, terminal, then
-handoff labels in config order and takes the first match; an issue carrying more than one configured
-state label logs a WARN and keeps the first. An issue with no configured state label falls back to
-the first active label when it is open and the first terminal label when it is closed. When
-`active_states` or `terminal_states` is omitted or empty, the adapter applies the internal defaults
-`["backlog", "in-progress", "review"]` and `["done", "wontfix"]` for this label-to-state
-derivation. These defaults are an adapter-internal derivation fallback, not a substitute for the
-workflow configuration: the orchestrator gates dispatch and reconciliation on the workflow's
-`tracker.active_states` and `tracker.terminal_states`, which an operator sets to the labels that
-should be treated as active or terminal. The fallback list is what `tracker.handoff_state` and
-`tracker.in_progress_state` are checked against in the dispatch preflight when the matching
-workflow list is empty, so a handoff target that belongs to the fallback is rejected whether or not
-the workflow spells the list out.
+state with labels, closest to the GitHub adapter, following the shared label-state derivation rule
+above. Its native open and closed status values are `open` and `closed`.
 
 **Normalization specifics.** Beyond the shared rules in Section 11.3:
 
@@ -349,19 +358,8 @@ reference, falling back to `<project>#<iid>` when that reference is empty.
 
 **State model.** GitLab has neither Jira's transition graph nor Linear's named workflow states. It
 offers a native opened/closed status plus free-form project and group labels, so the adapter models
-Sortie state with labels, as the GitHub and Gitea adapters do. Operators configure label names in
-`active_states`, `terminal_states`, and `handoff_state`; the adapter lowercases them and compares
-issue labels case-insensitively. State derivation scans the configured active, terminal, then
-handoff labels in config order and takes the first match; an issue carrying more than one configured
-state label logs a WARN and keeps the first. An issue with no configured state label falls back to
-the first active label when it is open and the first terminal label when it is closed. When
-`active_states` or `terminal_states` is omitted or empty, the adapter applies the internal defaults
-`["backlog", "in-progress", "review"]` and `["done", "wontfix"]` for this label-to-state derivation.
-These defaults are an adapter-internal derivation fallback, not a substitute for the workflow
-configuration: the orchestrator gates dispatch and reconciliation on the workflow's
-`tracker.active_states` and `tracker.terminal_states`. The fallback list is what
-`tracker.handoff_state` and `tracker.in_progress_state` are checked against in the dispatch
-preflight when the matching workflow list is empty.
+Sortie state with labels, as the GitHub and Gitea adapters do, following the shared label-state
+derivation rule above. Its native open and closed status values are `opened` and `closed`.
 
 Label names are case-sensitive on GitLab, and attaching a name that matches no label creates it
 instead of failing, so a configured label differing only in case from a stored one would silently
@@ -454,3 +452,78 @@ filtering needs, so state filtering stays client-side. The same grammar backs th
 configuration diagnostics, so the `sortie validate` verdict cannot drift from the construction
 verdict. See the workflow reference for the operator-facing shape and the diagnostics the adapter
 emits for filter labels absent from the project catalog.
+
+#### 11.6.4 GitHub adapter
+
+The GitHub adapter targets the REST API (plus the search endpoint) at `tracker.endpoint`, which
+defaults to `https://api.github.com`, built on `internal/httpkit` with no third-party GitHub client
+library. Its wire model is the closest of the three forges to Gitea's, issues plus labels plus an
+open/closed status, and the two diverge mainly in how each locates issues by state.
+
+**Authentication.** The resolved `tracker.api_key` is sent as a `Bearer` token in the
+`Authorization` header alongside a pinned API-version header. Unlike the Gitea and GitLab adapters,
+the constructor runs no credential or project preflight; a misconfigured token or an inaccessible
+repository surfaces on the first read rather than at startup.
+
+**Repository scoping.** `tracker.project` is the repository in `owner/repo` form, exactly one slash
+with non-empty halves, the same grammar Gitea enforces. Every read and write route is scoped to
+that repository. The adapter uses no global issue id: it addresses issues by their
+repository-scoped `number` and qualifies each issue's `display_id` as `owner/repo#N`.
+
+**State model.** GitHub has neither Jira's transition graph nor Linear's named workflow states. It
+offers a native open/closed status plus free-form repository labels, so the adapter models Sortie
+state with labels, following the shared label-state derivation rule above. Its native open and
+closed status values are `open` and `closed`, the same spelling Gitea uses.
+
+**Normalization specifics.** Beyond the shared rules in Section 11.3:
+
+- `id` and `identifier` are both the repository-scoped issue number as a string; GitHub's global
+  issue id is never read.
+- `priority` is always null, because GitHub issues carry no priority field.
+- `blocked_by` is read from the issue dependencies route
+  (`/issues/{number}/dependencies/blocked_by`), the GitHub form of the inverse `blocks` relation
+  described in Section 11.3.
+- `parent` comes from the issue's parent route; a missing parent (HTTP 404) normalizes to nil
+  rather than an error.
+- `assignee` is the first entry of the issue's assignee list.
+- `issue_type` passes through the issue's native type field when GitHub reports one, and is empty
+  otherwise.
+- Comments are fetched only by `fetch_issue_by_id` and `fetch_issue_comments`; GitHub returns them
+  in ascending creation order already, so the adapter re-sorts nothing.
+- The issues-list and search routes co-mingle pull requests with issues; the adapter drops any
+  entry carrying a non-nil pull-request marker before it reaches normalization.
+
+**Transport and pagination.** GitHub paginates with `Link` response headers, so the adapter follows
+the header to exhaustion with a page size of 50, a bounded ceiling of 200 pages, and a 30,000 ms
+network timeout. `fetch_issue_states_by_ids` and `fetch_issue_states_by_identifiers` read one issue
+at a time instead, through a per-path ETag cache: a cached `304 Not Modified` response reuses the
+last derived state without re-deriving it, and a fresh response replaces the cache entry.
+
+**Error classification.** The adapter maps HTTP status to the Section 11.4 categories from the
+response body's first bytes, read only as a bounded diagnostic snippet and never echoing the
+token. 401 maps to `tracker_auth_error`; 403 maps to `tracker_auth_error` unless the response
+carries an exhausted primary rate-limit header or a secondary rate-limit message, in which case it
+maps to `tracker_api_error`; 404 maps to a not-found result; 400 and 422 map to
+`tracker_payload_error`; 410, 405, 409, and 429 map to `tracker_api_error`; 5xx and transport
+failures map to `tracker_transport_error`; and any other status maps to `tracker_api_error`.
+
+**Write operations.** The adapter implements the three writes the `TrackerAdapter` interface
+requires beyond the read set, composing each from GitHub's label and issue-edit routes because
+GitHub has no transition endpoint:
+
+- `transition_issue` rejects a target that is not a configured active, terminal, or handoff label
+  before any write. Otherwise it removes the current state label, adds the target label, and
+  reconciles native status: a terminal target closes an open issue with a completed state reason,
+  and an active target reopens a closed one. Every step is idempotent, so a partial failure
+  converges on retry.
+- `comment_issue` posts the text verbatim as a Markdown comment; GitHub accepts Markdown natively,
+  so no format conversion happens.
+- `add_label` attaches a label by name additively through GitHub's labels-add route, so existing
+  labels are preserved.
+
+**Operator query filter.** `tracker.query_filter` (Section 5.3.1) is a raw GitHub search-qualifier
+fragment appended after the adapter's own `repo:`, `type:issue`, and `state:open` qualifiers. It
+merges into the search-endpoint candidate fetch when non-empty (an empty filter keeps candidate
+fetches on the plain issues-list route) and never into the closed-issue search
+`fetch_issues_by_states` performs for terminal-state matching, so an operator filter never hides a
+terminal issue from that lookup.

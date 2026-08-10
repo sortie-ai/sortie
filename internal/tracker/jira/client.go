@@ -26,7 +26,7 @@ func newJiraClient(baseURL, authHeader, userAgent string) *httpkit.Client {
 			req.Header.Set("User-Agent", userAgent)
 		},
 		ClassifyError:     classifyHTTPError,
-		ClassifyTransport: classifyTransportError,
+		ClassifyTransport: httpkit.ClassifyTransport,
 	})
 }
 
@@ -48,6 +48,7 @@ func classifyHTTPError(resp *http.Response, method, path string) error {
 		return &domain.TrackerError{
 			Kind:    domain.ErrTrackerPayload,
 			Message: fmt.Sprintf("%s %s: bad request: %s", method, path, detail),
+			Status:  resp.StatusCode,
 		}
 
 	case resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden:
@@ -58,12 +59,14 @@ func classifyHTTPError(resp *http.Response, method, path string) error {
 		return &domain.TrackerError{
 			Kind:    domain.ErrTrackerAuth,
 			Message: msg,
+			Status:  resp.StatusCode,
 		}
 
 	case resp.StatusCode == http.StatusNotFound:
 		return &domain.TrackerError{
 			Kind:    domain.ErrTrackerNotFound,
 			Message: fmt.Sprintf("%s %s: not found", method, path),
+			Status:  resp.StatusCode,
 		}
 
 	case resp.StatusCode == http.StatusTooManyRequests:
@@ -75,26 +78,21 @@ func classifyHTTPError(resp *http.Response, method, path string) error {
 		return &domain.TrackerError{
 			Kind:    domain.ErrTrackerAPI,
 			Message: msg,
+			Status:  resp.StatusCode,
 		}
 
 	case resp.StatusCode >= 500:
 		return &domain.TrackerError{
 			Kind:    domain.ErrTrackerTransport,
 			Message: fmt.Sprintf("%s %s: server error %d: %s", method, path, resp.StatusCode, detail),
+			Status:  resp.StatusCode,
 		}
 
 	default:
 		return &domain.TrackerError{
 			Kind:    domain.ErrTrackerAPI,
 			Message: fmt.Sprintf("%s %s: unexpected status %d: %s", method, path, resp.StatusCode, detail),
+			Status:  resp.StatusCode,
 		}
-	}
-}
-
-func classifyTransportError(err error, method, path string) error {
-	return &domain.TrackerError{
-		Kind:    domain.ErrTrackerTransport,
-		Message: fmt.Sprintf("%s %s: transport error", method, path),
-		Err:     err,
 	}
 }

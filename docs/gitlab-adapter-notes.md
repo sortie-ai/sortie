@@ -21,7 +21,10 @@
 
 ## Provenance of every claim
 
-Every statement below carries one of five tags. Nothing is asserted without one.
+Every statement about GitLab below carries one of five tags. Nothing about the platform is
+asserted without one. Claims about Sortie's own code carry a Go symbol or package path
+instead of a tag: the tags record what was observed of GitLab, and reading this repository
+is not an observation of GitLab.
 
 | Tag | Meaning |
 | --- | --- |
@@ -166,12 +169,23 @@ orchestrator imports, and external responses are normalized to domain types at t
 The orchestrator resolves the adapter through `internal/registry` under tracker kind
 `gitlab`.
 
-Helper sharing follows the Linear and Gitea precedent: `internal/httpkit` for the HTTP client
-and the `Link`-header paginator (`httpkit.NewLinkPaginator`, `httpkit.ParseLinkRel`),
-`internal/issuekit` for shared normalization, `internal/trackermetrics` for instrumentation,
-and `internal/typeutil` for config decoding. No shared base structs with the GitHub or Gitea
-adapters: GitLab's REST v4 is not GitHub-compatible, so the overlap is transport-shaped and
-already lives in `httpkit`.
+Helper sharing follows the Linear and Gitea precedent, and the shared homes cover decisions as
+well as transport: `internal/httpkit` for the HTTP client, transport-error classification
+(`httpkit.ClassifyTransport`), the `Link`-header paginator (`httpkit.NewLinkPaginator`,
+`httpkit.ParseLinkRel`), the page-number paginator (`httpkit.NewPagePaginator`), and preflight
+retry (`httpkit.RetryWithBackoff`); `internal/issuekit` for shared normalization and
+label-state derivation (`issuekit.DeriveLabelState`, `issuekit.CurrentLabelState`) plus the
+default state lists; `internal/registry` for the offline validate primitives
+(`registry.DiagStateLabelElements`, `registry.DiagStateOverlap`); `internal/scm/scmcore` for
+the decisions every forge half shares; `internal/adaptertest` for the conformance assertions
+an adapter suite calls; `internal/trackermetrics` for instrumentation; and `internal/typeutil`
+for config decoding.
+
+No shared base structs with the GitHub or Gitea adapters: GitLab's REST v4 is not
+GitHub-compatible, so the wire overlap is transport-shaped and lives in `httpkit`. The overlap
+that is not transport-shaped is the set of decisions taken over normalized domain types, and
+that lives in `scmcore`; see
+[decisions the adapter does not make](#decisions-the-adapter-does-not-make).
 
 ---
 
@@ -361,6 +375,15 @@ lists and takes the first match; native `opened` with no state label maps to the
 `active_states` entry and native `closed` with no terminal label to the first
 `terminal_states` entry; a terminal transition also closes the issue and an active
 transition reopens it.
+
+The derivation itself is not GitLab code. `issuekit.DeriveLabelState` owns the scan order, the
+first-match rule, the fallback to the first configured entry, and the WARN it logs under the
+`issue_identifier` attribute when an issue carries more than one configured state label;
+`issuekit.CurrentLabelState` answers the same question with no native fallback, which is what
+the transition needs. GitLab supplies only its own spelling of the two native statuses, which
+`normalizeIssue` passes as `opened` and `closed` alongside the configured lists, and the
+defaults come from `issuekit.DefaultActiveLabelStates` and
+`issuekit.DefaultTerminalLabelStates`. The adapter writes the wire decode, not the rule.
 
 Three GitLab behaviors make this materially better than the equivalent on Gitea, and one
 makes it materially more dangerous.
@@ -1110,6 +1133,13 @@ and the `domain.TrackerErrorKind` values:
 | network | DNS, TCP, TLS failure | `tracker_transport_error` |
 | decode | JSON decode failure on a 2xx | `tracker_payload_error` |
 
+Every row also records the originating HTTP status in `domain.TrackerError.Status`, which
+`classifyHTTPError` (`internal/scm/gitlab/client.go`) sets on each classified response. A
+status with no dedicated arm, 405 among them, reaches the default arm and still carries its
+own value there. That field is what the forge half's merge-conflict promotion keys on, so the
+forge half inherits it without a second classification path (see
+[the merge call](#6-merge-call)).
+
 The categories the adapter never needs: `tracker_missing_end_cursor` has no analogue (see
 [Pagination](#pagination)).
 
@@ -1365,6 +1395,44 @@ depend on them:
 - **Embedded user objects carry no bot marker.** The `bot` field exists on `GET /users/:id` but
   not on the author of a note **[live-CE]** **[source]**, which reopens a claim the earlier
   gap map got wrong.
+
+### Decisions the adapter does not make
+
+Several decisions this section once left to the GitLab author arrive from
+`internal/scm/scmcore`, which every forge half depends on and which imports only
+`internal/domain`. The adapter supplies the wire read and the normalization; the verdict is
+computed once, shared:
+
+| Decision | Shared owner | What GitLab supplies |
+| --- | --- | --- |
+| Which check-run conclusions count as failing | `scmcore.IsFailingConclusion` | The GitLab job or status value to normalize |
+| The aggregate CI verdict, and the failing count | `scmcore.AggregateCIStatus`, `scmcore.FailingCount` | The normalized `domain.CheckRun` set |
+| The merge-gate CI answer | `scmcore.MergeGate` | The same normalized set |
+| Tracker error to `domain.SCMError` conversion | `scmcore.ToSCMError` | Nothing; the tracker client's classification feeds it |
+| Promotion of a merge rejection to `ErrSCMConflict` | `scmcore.AsMergeConflict` | The status on the originating `domain.TrackerError` |
+| The already-merged marker phrase | `scmcore.AlreadyMergedConflict` | The re-read that confirms the merge landed |
+| Bot-author classification | `scmcore.IsBotAuthor` | The platform bot flag and the configured allowlist |
+| Label-event id ordering | `scmcore.SortableEventID` | The numeric journal id |
+
+Two consequences change behavior this section previously described as the adapter's own:
+
+- **`ErrSCMConflict` is reachable only from the merge write path.** `scmcore.ToSCMError`
+  performs no promotion, and `scmcore.AsMergeConflict` is called only by `MergePR`. A 405 or
+  409 from `RemoveLabel`, `DeleteBranch`, or any read keeps the kind `scmcore.ToSCMError`
+  assigned. The promotion reads `domain.TrackerError.Status` directly rather than matching
+  message text, so no route-shaped or prefix-shaped exemption is needed.
+- **The already-merged marker is constructed, not matched.** It is emitted only after a
+  re-read of the merge request confirms the merge landed, never from the provider's response
+  body. See [the merge call](#6-merge-call), where this is the contract rather than a
+  workaround for it.
+
+`internal/adaptertest` holds the conformance assertions an adapter suite calls rather than
+restates: `AssertSCMErrorKind`, `AssertAlreadyMergedMarker`, `AssertBranchAbsentDisposition`,
+`AssertLabelAbsentDisposition`, `AssertCIAggregateMatchesCore`, and
+`AssertLabelEventsOrdered`. Each pins one clause of the contract, and
+`AssertCIAggregateMatchesCore` recomputes the aggregate and the failing count from the
+returned `CheckRuns`, so a provider that sources either from anywhere else fails the
+assertion.
 
 ### The merge-request object
 
@@ -1643,17 +1711,25 @@ sub-object **[live-CE]**. Reading it costs nothing beyond the merge-request read
 
 **`GetCIStatus` mapping.** The orchestrator compares the returned string against the literal
 `"success"` and treats the empty string as "no checks exist"
-(`internal/orchestrator/auto_merge_reconcile.go`), so the adapter returns GitLab's pipeline
-status verbatim, with one substitution:
+(`internal/orchestrator/auto_merge_reconcile.go`). Returning GitLab's pipeline status verbatim
+would satisfy that comparison, but it is not the right answer: `scmcore.MergeGate` owns the
+merge-gate vocabulary so that one forge cannot answer "is CI green" two ways, and the GitHub
+and Gitea adapters both return its four values (`success`, `pending`, `failing`, and the empty
+string). GitLab maps into the same four, over the partition this section already applies to
+the aggregate:
 
-| `head_pipeline` | `GetCIStatus` returns |
+| `head_pipeline.status` | `GetCIStatus` returns |
 | --- | --- |
 | `null` (no pipeline for the head SHA) | `""` |
 | `success` | `"success"` |
-| any other status | that status verbatim |
+| `failed`, `canceled` | `"failing"` |
+| any other status | `"pending"` |
 
-Returning the status verbatim keeps every non-success value out of the merge gate without the
-adapter having to enumerate GitLab's pipeline states, and it puts the real reason in the log.
+Expressing the shared rule over the platform's own aggregate rather than over a fetched run
+set preserves the saving recorded above: the answer still costs no request beyond the
+merge-request read. Whether GitLab should instead fetch the statuses list and call
+`scmcore.MergeGate` on the normalized runs, paying one extra request to share the code path
+rather than only the rule, is carried into the [open questions](#open-questions).
 
 **`FetchCIStatus` mapping to `domain.CIResult`.** The check-run list comes from
 `GET /projects/:id/repository/commits/:sha/statuses`, which returns one entry per job **and**
@@ -1663,22 +1739,30 @@ per external status, each with `name`, `status`, `allow_failure`, `pipeline_id`,
 | GitLab job or status | `CheckConclusion` | `CheckRunStatus` |
 | --- | --- | --- |
 | `success` | `success` | `completed` |
-| `failed` | `failure` | `completed` |
+| `failed`, `allow_failure: false` | `failure` | `completed` |
+| `failed`, `allow_failure: true` | `neutral` | `completed` |
 | `canceled` | `cancelled` | `completed` |
 | `skipped` | `skipped` | `completed` |
 | `manual` | `neutral` | `completed` |
 | `created`, `pending`, `waiting_for_resource`, `preparing`, `scheduled` | `pending` | `queued` |
 | `running` | `pending` | `in_progress` |
 
-The aggregate `CIStatus` is taken from the pipeline's own status rather than recomputed from the
-entries, because the platform already applied the `allow_failure` rule that a naive fold would
-get wrong: `success` maps to `passing`, `failed` and `canceled` to `failing`, and everything else
-to `pending`.
+**`allow_failure` belongs in the conclusion, not in the aggregate.** Neither the aggregate nor
+the failing count is the adapter's to choose: `scmcore.AggregateCIStatus` and
+`scmcore.FailingCount` compute both from the normalized `CheckRun` set, and
+`adaptertest.AssertCIAggregateMatchesCore` recomputes them from the returned `CheckRuns` and
+fails the suite when either disagrees. Sourcing the aggregate from the pipeline's own status,
+as this section previously specified, would fail that assertion on exactly the case that
+motivated it.
 
-`FailingCount` MUST count only entries with `allow_failure: false`. Counting all failures would
-report a failing check on a pipeline the platform calls successful, which is exactly the
-warnings-only case observed live: `soft-fail` was `failed` with `allow_failure: true` while the
-pipeline was `success` **[live-CE]**.
+Mapping a soft-failing job to `neutral` reconciles the two: the platform's `allow_failure`
+rule is applied once, where the entry is normalized, and the shared fold then agrees with the
+platform for free. The warnings-only case observed live is the test. `soft-fail` was `failed`
+with `allow_failure: true` while the pipeline was `success` **[live-CE]**, and under this
+mapping the run is non-failing, `AggregateCIStatus` returns `passing`, and `FailingCount`
+returns zero. A separate "count only `allow_failure: false` entries" rule is therefore not
+needed and MUST NOT be written: it would restate in the count what the conclusion already
+encodes, and the two would drift.
 
 The warnings-only case is also the one place where the pipeline's `detailed_status` sub-object
 carries information the top-level status does not: `{"label": "passed with warnings", "group":
@@ -1712,9 +1796,10 @@ on every line **[live-CE]**:
    `section_start:<epoch>:<name>` and `section_end:<epoch>:<name>` collapsible-section markers
    each terminated by a carriage return.
 
-The `domain.CIResult.LogExcerpt` godoc already requires adapters to "truncate to a configurable
-line count" and "strip ANSI escape sequences", so the sanitizing obligation is contract, not
-preference. For GitLab that means stripping all three layers, not only the ANSI one.
+The `domain.CIResult.LogExcerpt` godoc already tells adapters they "must truncate to a
+configurable line count" and "should strip ANSI escape sequences", so truncation is a
+requirement and stripping is a recommendation the GitLab trace makes unavoidable in practice.
+For GitLab that means stripping all three layers, not only the ANSI one.
 
 **Decision: fetch the whole trace, then truncate client-side.** The route does not support
 partial fetches. A request carrying `Range: bytes=0-99` returned `200` with the full
@@ -1736,8 +1821,12 @@ id 12  external-scanner (external status)  GET .../jobs/12/trace -> 404 {"messag
                                            GET .../jobs/12       -> 404 {"message":"404 Not found"}
 ```
 
-`FetchCIStatus` populates `LogExcerpt` from the first failing check run, which on GitLab is the
-first entry with `status: "failed"` and `allow_failure: false`. **Decision: resolve the job set
+`FetchCIStatus` populates `LogExcerpt` from the first failing check run. "Failing" here is not
+a GitLab predicate the adapter restates: `scmcore.IsFailingConclusion` is the selector, and its
+godoc names log selection as the reason it is exported separately from the verdict. Under the
+conclusion mapping above that resolves to the first entry with `status: "failed"` and
+`allow_failure: false`, because a soft-failing job normalizes to `neutral`, which is not a
+failing conclusion. **Decision: resolve the job set
 from `GET /projects/:id/pipelines/:pipeline_id/jobs` and select only from entries appearing
 there**, rather than calling the trace route speculatively and treating a 404 as a negative.
 That costs one request instead of one per candidate, and it avoids logging a 404 that is not an
@@ -1809,31 +1898,43 @@ conflicting    (iid 2, correct sha) -> 405 {"message":"405 Method Not Allowed"}
 ```
 
 The source explains why: both arms of `execute_merge` call the same bare `not_allowed!` helper,
-which renders a constant **[source]**. The `SCMAdapter` contract requires implementations to
-surface the substring "already merged" in `SCMError.Message` "when, and only when, the
-provider's response body indicates the PR was already merged". **GitLab's body never indicates
-it.** Taken literally, the phrase could never be emitted, and every already-merged race would be
-misclassified as a transient precondition failure and retried forever.
+which renders a constant **[source]**. When these notes were written the `SCMAdapter` contract
+keyed the already-merged marker on the provider's response body, and GitLab's constant body was
+a problem to be worked around. It is no longer one. The contract requires implementations to
+surface the substring "already merged" in `SCMError.Message` "when they have confirmed, by
+re-reading the pull request, that the pull request is merged, rather than by matching the
+provider's response wording" (`MergePR`, `internal/domain/scm.go`). GitLab's opaque 405 is
+therefore no longer exceptional: GitHub and Gitea re-read for the same reason, and Gitea does
+so even though its own body does say "already merged".
 
-**Decision: on 405, re-read the merge request and classify from its state.**
+**Decision: on 405, re-read the merge request and classify from its state.** This is the
+contract's own procedure rather than a substitute for it.
 
 ```
 PUT .../merge -> 405
+  scmcore.AsMergeConflict promotes on TrackerError.Status, giving ErrSCMConflict
   GET /projects/:id/merge_requests/:iid
-    state == "merged"  -> ErrSCMConflict, Message contains "already merged"
-    otherwise          -> ErrSCMConflict, Message names detailed_merge_status, no phrase
-  read fails           -> ErrSCMConflict, no phrase (retry is the safe default)
+    state == "merged"  -> scmcore.AlreadyMergedConflict, Message carries "already merged"
+    otherwise          -> the promoted ErrSCMConflict, Message names detailed_merge_status
+  read fails           -> the promoted ErrSCMConflict unchanged (retry is the safe default)
 ```
 
 The re-read is authoritative for this purpose because a merged merge request reports
 `state: "merged"` together with a non-null `merged_at` and `merge_commit_sha`, and
 `detailed_merge_status: "not_open"` **[live-CE]**. It costs one extra request only on the error
-path, and it satisfies the "and only when" half of the contract, which a substring match against
-GitLab's constant body could not.
+path. Two steps belong to the shared owners rather than to the adapter: the promotion to
+`ErrSCMConflict` is `scmcore.AsMergeConflict`, which reads `domain.TrackerError.Status`, matches
+405 or 409, and never inspects body text; and the marker phrase is
+`scmcore.AlreadyMergedConflict`, which the adapter calls only once the re-read confirms the
+merge. The tracker client already records `Status` on every classified response, so the forge
+half needs no second classification path (see
+[status-to-category mapping](#status-to-category-mapping)).
 
-The 409 arm needs no re-read: it is unambiguously head-SHA drift, and its message even echoes the
-actual source head, which the state machine's "head SHA mismatch" transition re-enqueues.
-`MergeResult.SHA` on that path is unset.
+The 409 arm is promoted by the same `scmcore.AsMergeConflict` call and arrives as
+`ErrSCMConflict` too, but it needs no re-read: it is unambiguously head-SHA drift, and its
+message even echoes the actual source head, which the state machine's "head SHA mismatch"
+transition re-enqueues. Carrying no marker is exactly right there, since an unmarked
+`ErrSCMConflict` is the retry disposition. `MergeResult.SHA` on that path is unset.
 
 **A 401 on this route is an authorization failure, not a bad token.** The Developer token
 received `401 {"message":"401 Unauthorized"}` on every merge attempt because `main` is protected
@@ -1847,11 +1948,17 @@ the two it is, so the error message MUST name both possibilities.
 
 **Branch deletion after merge** is `DELETE /projects/:id/repository/branches/:branch`, returning
 `204` with an empty body on success and `404 {"message":"404 Branch Not Found"}` when the branch
-is already gone **[live-CE]**, which the contract maps to a successful no-op. Branch names
-containing a slash MUST be percent-encoded: `feat%2Fnested-name` deleted successfully
-**[live-CE]**. Note that `should_remove_source_branch: true` on the merge call is asynchronous;
-the branch was still readable immediately after a 200 merge response **[live-CE]**, so
-`DeleteBranch` must tolerate both the branch being present and it having already been reaped.
+is already gone **[live-CE]**. The 404 is not mapped to nil: `DeleteBranch` returns a
+`domain.SCMError` of kind `ErrSCMNotFound` and the caller treats that as a successful no-op,
+which is what `adaptertest.AssertBranchAbsentDisposition` pins. `RemoveLabel` disposes of its
+already-absent case the other way, returning nil
+(`adaptertest.AssertLabelAbsentDisposition`), so the two must not be written from one template.
+Branch names containing a slash MUST be percent-encoded: `feat%2Fnested-name` deleted
+successfully **[live-CE]**. Note that `should_remove_source_branch: true` on the merge call is
+asynchronous; the branch was still readable immediately after a 200 merge response
+**[live-CE]**, so `DeleteBranch` must tolerate both the branch being present and it having
+already been reaped. Neither route may produce `ErrSCMConflict`, whatever status it returns:
+only the merge write path promotes.
 
 ### 7. Bot classification
 
@@ -1878,12 +1985,16 @@ The two are indistinguishable by shape. The list route `GET /users?username=<nam
 token can read it** **[live-CE]**. That last point is what makes the platform predicate usable at
 all; had it been administrator-only, the allowlist would have been the only option.
 
-**Decision: implement the contract's union with the allowlist as the primary signal and a cached
-`GET /users/:id` lookup as the platform signal.** `FetchBotReviewComments` collects the distinct
-author IDs from the notes it already fetched, resolves each once through `GET /users/:id`, and
-keeps a comment when the author's `bot` is true **or** the login matches `botUsernames`
-case-insensitively. The lookup is cached for the adapter's lifetime, and the cost is bounded by
-the number of distinct authors on one merge request, not by the number of comments.
+**Decision: supply the contract's union with the allowlist as the primary signal and a cached
+`GET /users/:id` lookup as the platform signal.** The union itself is `scmcore.IsBotAuthor`,
+which every forge calls with the same two inputs: GitHub passes its `user.type == "Bot"` flag,
+Gitea passes a constant false because it has no platform marker, and GitLab passes the `bot`
+field the per-user route returns. `FetchBotReviewComments` collects the distinct author IDs
+from the notes it already fetched, resolves each once through `GET /users/:id`, and calls
+`scmcore.IsBotAuthor(login, bot, botUsernames)` per comment. The lookup is cached for the
+adapter's lifetime, and the cost is bounded by the number of distinct authors on one merge
+request, not by the number of comments. GitLab is the only forge of the three that spends a
+request to answer the platform half.
 
 An adapter that wants to avoid the extra requests entirely may pass an empty `botUsernames` and
 skip the lookup, but then bot selection returns nothing, so the allowlist stops being optional.
@@ -1932,7 +2043,11 @@ Both failure modes were probed, and they fail differently, which is useful for d
 logs the raw body can tell an encoding bug from a configuration mistake without further probing.
 
 This matches the tracker half's existing rule that `tracker.project` MUST NOT be validated as
-exactly one slash, so the two halves share one addressing convention.
+exactly one slash, so the two halves share one addressing convention. The one-slash grammar has
+a shared home, `registry.DiagOwnerRepoProject`, which the GitHub and Gitea validators call and
+which the GitLab validator deliberately does not (`validateProject`,
+`internal/scm/gitlab/validate.go`). Reaching for the shared helper by reflex would reintroduce
+the rule this section rules out.
 
 ### Route inventory
 
@@ -1949,8 +2064,8 @@ Every route below was exercised on the fixture unless the status column says oth
 | `FetchBotReviewComments` | `.../merge_requests/:iid/notes` plus `GET /users/:id` | Verified **[live-CE]** |
 | `MergePR` | `PUT .../merge_requests/:iid/merge` | Verified, all five response classes **[live-CE]** |
 | `DeleteBranch` | `DELETE /projects/:id/repository/branches/:branch` | Verified, 204 and 404 **[live-CE]** |
-| `ListLabelEvents` | `GET .../merge_requests/:iid/resource_label_events` | Route verified, `200 []`; shape verified on the issue variant **[live-CE]** |
-| `RemoveLabel` | `PUT .../merge_requests/:iid` with `remove_labels` | Not exercised on merge requests; identical parameter to the issue route |
+| `ListLabelEvents` | `GET .../merge_requests/:iid/resource_label_events` | Route verified, `200 []`; shape verified on the issue variant **[live-CE]**. Entry ids normalize through `scmcore.SortableEventID`, so ordering by `(At, ID)` as strings matches journal order |
+| `RemoveLabel` | `PUT .../merge_requests/:iid` with `remove_labels` | Not exercised on merge requests; identical parameter to the issue route. A name that does not exist returns `200` and changes nothing **[live-CE]**, which is already the contract's nil-return no-op |
 
 Two findings from the tracker research that the forge half inherits unchanged:
 
@@ -2253,6 +2368,7 @@ fixtures were **left in place** as the SCM fixture blueprint: the `scmlab` group
 | Declared authentication mechanisms, and the incompleteness of the machine-readable route surface | [`doc/api/openapi/openapi_v2.yaml`](https://gitlab.com/gitlab-org/gitlab/-/blob/v19.2.1-ee/doc/api/openapi/openapi_v2.yaml) and the [interactive rendering](https://docs.gitlab.com/api/openapi/openapi_interactive/) | Inspected for declared paths and parameters; live 404 on every instance-served description path |
 | Container image size and boot behavior | Docker Hub registry API; local image inspection | Measured pull, boot, healthcheck, and readiness polling |
 | Gitea and GitHub adapter behavior used in the comparison tables | The Gitea and GitHub adapter research notes in this directory, and `internal/domain/tracker.go` | Document and code reading at research time |
+| Decisions attributed to a shared package rather than to this adapter | `internal/scm/scmcore`, `internal/adaptertest`, `internal/httpkit`, `internal/issuekit`, `internal/registry`, and the `domain.SCMAdapter` and `domain.CIResult` godoc in `internal/domain` | Repository code reading after the adapter-family consolidation. No GitLab observation is involved, so these claims carry a symbol rather than an evidence tag |
 
 ### Open questions
 
@@ -2273,4 +2389,6 @@ Carried forward explicitly rather than resolved by inference:
 | Is the timestamp-and-stream prefix on the job trace a property of the API, the runner version, or a runner feature flag? | Decides whether the trace sanitizer can rely on the prefix being present, or must handle both shapes | Fetch a trace produced by an older runner, and one produced with the runner timestamp feature flag disabled |
 | Does the notes route on a merge request paginate and filter identically to the issue variant? | The comment normalization is assumed shared; a divergence would surface as dropped review comments | Seed a merge request with more than 100 notes and repeat the issue-side pagination and `activity_filter` probes |
 | Does `GET /users/:id` draw on a distinct rate-limit budget from the merge-request reads? | Bot classification adds one request per distinct author; a stricter budget would change the caching strategy | Compare `RateLimit-Name` on a throttled `GET /users/:id` against a throttled merge-request read on GitLab.com |
+| Does `GET /projects/:id/repository/commits/:sha/statuses` paginate, and at what page size? | `FetchCIStatus` builds `CheckRuns` from that route and the shared aggregate is computed over whatever the adapter returns, so a silently truncated first page would report a passing verdict for a pipeline whose failing job sits beyond it. Every other list route on this instance paginates at 20 by default **[live-CE]** | Seed a pipeline with more jobs than the default page size, read the route with and without `per_page`, and compare `X-Total` and the `rel="next"` link against the entry count |
+| Should `GetCIStatus` map `head_pipeline.status` into the merge-gate vocabulary, or fetch the statuses list and call `scmcore.MergeGate` over the normalized runs? | The first preserves the measured one-request saving; the second shares the code path rather than only the rule, and cannot drift from `FetchCIStatus` on a status the two partition differently | Compare the two answers on a pipeline whose top-level status and normalized run set disagree, starting with a wholly `skipped` pipeline and with the `allow_failure` warnings-only case |
 | Does self-managed Enterprise Edition behave as its source implies? | Every Enterprise Edition claim here is source plus documentation, never observed | Run the same probe set against a licensed self-managed Enterprise Edition instance |

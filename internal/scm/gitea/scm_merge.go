@@ -3,13 +3,14 @@ package gitea
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/url"
-	"strconv"
-	"strings"
 
 	"github.com/sortie-ai/sortie/internal/domain"
+	"github.com/sortie-ai/sortie/internal/httpkit"
+	"github.com/sortie-ai/sortie/internal/scm/scmcore"
 )
 
 // giteaPullRequest carries the fields of a Gitea pull request object consumed by
@@ -56,13 +57,13 @@ type giteaCommitState struct {
 // fetchPullRequest issues GET /repos/{owner}/{repo}/pulls/{prNumber} and decodes
 // the response into a [giteaPullRequest].
 //
-// A transport or HTTP failure is mapped through [giteaToSCMError]; a decode
+// A transport or HTTP failure is mapped through [scmcore.ToSCMError]; a decode
 // failure returns a [*domain.SCMError] of kind [domain.ErrSCMPayload].
 func (a *GiteaSCMAdapter) fetchPullRequest(ctx context.Context, prNumber int, owner, repo string) (giteaPullRequest, error) {
 	path := fmt.Sprintf("/repos/%s/%s/pulls/%d", url.PathEscape(owner), url.PathEscape(repo), prNumber)
 	body, _, err := a.client.Get(ctx, path, nil)
 	if err != nil {
-		return giteaPullRequest{}, giteaToSCMError(err)
+		return giteaPullRequest{}, scmcore.ToSCMError(err)
 	}
 
 	var pr giteaPullRequest
@@ -126,11 +127,13 @@ func mapMergeability(pr giteaPullRequest) domain.MergeabilityState {
 // commit carries no statuses.
 //
 // The empty case is detected by the accumulated status count, not the top-level
-// state, which Gitea reports as "pending" even for a commit with no CI. A failure
-// or error status makes the result failing; otherwise a pending status makes it
-// pending; success and warning are non-failing. Returns a [*domain.SCMError] on
-// failure, including [domain.ErrSCMPayload] when the PR response omits the head
-// SHA.
+// state, which Gitea reports as "pending" even for a commit with no CI. The
+// answer is derived through [scmcore.MergeGate] over the same normalized set
+// the CI provider of this package computes, so a failure or error status
+// makes the result failing, a pending, unrecognized, or empty status makes it
+// pending, and success and warning are non-failing. Returns a
+// [*domain.SCMError] on failure, including [domain.ErrSCMPayload] when the PR
+// response omits the head SHA.
 func (a *GiteaSCMAdapter) GetCIStatus(ctx context.Context, prNumber int, owner, repo string) (string, error) {
 	pr, err := a.fetchPullRequest(ctx, prNumber, owner, repo)
 	if err != nil {
@@ -146,70 +149,52 @@ func (a *GiteaSCMAdapter) GetCIStatus(ctx context.Context, prNumber int, owner, 
 	statusPath := fmt.Sprintf("/repos/%s/%s/commits/%s/status",
 		url.PathEscape(owner), url.PathEscape(repo), url.PathEscape(pr.Head.SHA))
 
-	const limit = 50
-	statuses := make([]giteaCommitState, 0)
-	page := 1
-	for {
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			return "", giteaToSCMError(ctxErr)
-		}
-
-		params := url.Values{
-			"page":  {strconv.Itoa(page)},
-			"limit": {strconv.Itoa(limit)},
-		}
-		body, _, statusErr := a.client.Get(ctx, statusPath, params)
-		if statusErr != nil {
-			return "", giteaToSCMError(statusErr)
-		}
-
-		var combined giteaCombinedStatus
-		if jsonErr := json.Unmarshal(body, &combined); jsonErr != nil {
-			return "", &domain.SCMError{
-				Kind:    domain.ErrSCMPayload,
-				Message: "failed to parse combined status response",
-				Err:     jsonErr,
-			}
-		}
-
-		statuses = append(statuses, combined.Statuses...)
-		if len(combined.Statuses) < limit {
-			break
-		}
-
-		page++
-		if page > scmMaxPages {
+	paginator := httpkit.NewPagePaginator(a.client, statusPath, nil, decodeGiteaCombinedStatusForSCM, httpkit.PageOptions{
+		PageParam: "page",
+		SizeParam: "limit",
+		PageSize:  50,
+		MaxPages:  scmMaxPages,
+		OnLimitReached: func(limit int) {
 			slog.WarnContext(ctx, "response truncated at page limit",
 				slog.String("path", statusPath),
-				slog.Int("max_pages", scmMaxPages))
-			break
+				slog.Int("max_pages", limit))
+		},
+	})
+
+	statuses, statusErr := paginator.All(ctx)
+	if statusErr != nil {
+		var scmErr *domain.SCMError
+		if errors.As(statusErr, &scmErr) {
+			return "", scmErr
+		}
+		return "", scmcore.ToSCMError(statusErr)
+	}
+
+	runs := make([]domain.CheckRun, len(statuses))
+	for i, s := range statuses {
+		runs[i] = domain.CheckRun{
+			Status:     mapRunStatus(s.Status),
+			Conclusion: mapConclusion(s.Status),
 		}
 	}
 
-	if len(statuses) == 0 {
-		return "", nil
-	}
+	return string(scmcore.MergeGate(runs)), nil
+}
 
-	anyFailing := false
-	anyPending := false
-	for _, s := range statuses {
-		switch strings.ToLower(s.Status) {
-		case "failure", "error":
-			anyFailing = true
-		case "pending":
-			anyPending = true
-		case "success", "warning":
-			// A non-failing status contributes no blocking signal.
+// decodeGiteaCombinedStatusForSCM decodes one page of the combined-status
+// response for the source-control boundary. A decode failure is returned as
+// a [*domain.SCMError] of kind [domain.ErrSCMPayload], since the shared
+// page-number walk returns whatever the decoder produces unconverted.
+func decodeGiteaCombinedStatusForSCM(body []byte) ([]giteaCommitState, error) {
+	var combined giteaCombinedStatus
+	if err := json.Unmarshal(body, &combined); err != nil {
+		return nil, &domain.SCMError{
+			Kind:    domain.ErrSCMPayload,
+			Message: "failed to parse combined status response",
+			Err:     err,
 		}
 	}
-
-	if anyFailing {
-		return "failing", nil
-	}
-	if anyPending {
-		return "pending", nil
-	}
-	return "success", nil
+	return combined.Statuses, nil
 }
 
 // giteaMergeOption is the request body for POST
@@ -254,11 +239,7 @@ func mapMergeStrategy(strategy domain.MergeStrategy) string {
 func (a *GiteaSCMAdapter) resolveMergeConflict(ctx context.Context, prNumber int, owner, repo string, scm *domain.SCMError) *domain.SCMError {
 	pr, readErr := a.fetchPullRequest(ctx, prNumber, owner, repo)
 	if readErr == nil && pr.Merged {
-		return &domain.SCMError{
-			Kind:    domain.ErrSCMConflict,
-			Message: "pull request already merged: " + scm.Message,
-			Err:     scm.Err,
-		}
+		return scmcore.AlreadyMergedConflict(scm.Message, scm.Err)
 	}
 	return scm
 }

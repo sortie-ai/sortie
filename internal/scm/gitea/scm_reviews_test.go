@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/sortie-ai/sortie/internal/adaptertest"
 	"github.com/sortie-ai/sortie/internal/domain"
 )
 
@@ -126,12 +127,7 @@ func TestGiteaSCMFetchPendingReviews(t *testing.T) {
 		if err != nil {
 			t.Fatalf("FetchPendingReviews: unexpected error: %v", err)
 		}
-		if got == nil {
-			t.Error("FetchPendingReviews() = nil, want non-nil empty slice")
-		}
-		if len(got) != 0 {
-			t.Errorf("FetchPendingReviews() len = %d, want 0", len(got))
-		}
+		adaptertest.AssertEmptyNonNil(t, got, "FetchPendingReviews")
 	})
 
 	t.Run("malformed reviews response is a payload error", func(t *testing.T) {
@@ -196,12 +192,7 @@ func TestGiteaSCMFetchBotReviewComments(t *testing.T) {
 		if err != nil {
 			t.Fatalf("FetchBotReviewComments: unexpected error: %v", err)
 		}
-		if got == nil {
-			t.Error("FetchBotReviewComments() = nil, want non-nil empty slice")
-		}
-		if len(got) != 0 {
-			t.Errorf("FetchBotReviewComments() len = %d, want 0 (nil allowlist and no platform bot signal)", len(got))
-		}
+		adaptertest.AssertEmptyNonNil(t, got, "FetchBotReviewComments")
 	})
 
 	t.Run("allowlist match is case-insensitive", func(t *testing.T) {

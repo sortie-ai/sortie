@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/sortie-ai/sortie/internal/adaptertest"
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/registry"
 )
@@ -211,6 +212,7 @@ func TestFetchCandidateIssues(t *testing.T) {
 			if iss.Comments != nil {
 				t.Errorf("issue %s: Comments = %v, want nil for candidate fetch", iss.Identifier, iss.Comments)
 			}
+			adaptertest.AssertIssueNormalized(t, iss)
 		}
 
 		calls := f.callsFor("query CandidateIssues")
@@ -398,9 +400,7 @@ func TestFetchIssuesByStates(t *testing.T) {
 		if issues == nil || len(issues) != 0 {
 			t.Errorf("FetchIssuesByStates(nil) = %v, want non-nil empty slice", issues)
 		}
-		if calls := f.callsFor("query IssuesByStates"); len(calls) != 0 {
-			t.Errorf("IssuesByStates call count = %d, want 0 for empty input", len(calls))
-		}
+		adaptertest.AssertNoRequestOnEmptyInput(t, len(f.callsFor("query IssuesByStates")), "FetchIssuesByStates")
 	})
 
 	t.Run("canonical-cases supplied states inside the merged filter", func(t *testing.T) {
@@ -486,6 +486,7 @@ func TestFetchIssueByID(t *testing.T) {
 		if issue.Identifier != "SOR-5" {
 			t.Errorf("Identifier = %q, want %q", issue.Identifier, "SOR-5")
 		}
+		adaptertest.AssertCommentsAscending(t, issue.Comments)
 
 		continuation := f.callsFor("query IssueComments")
 		if len(continuation) != 1 {
@@ -613,12 +614,7 @@ func TestFetchIssueComments(t *testing.T) {
 		if err != nil {
 			t.Fatalf("FetchIssueComments: %v", err)
 		}
-		if comments == nil {
-			t.Fatal("FetchIssueComments = nil, want non-nil empty slice")
-		}
-		if len(comments) != 0 {
-			t.Errorf("FetchIssueComments len = %d, want 0", len(comments))
-		}
+		adaptertest.AssertEmptyNonNil(t, comments, "FetchIssueComments")
 	})
 
 	t.Run("nonexistent issue is not found", func(t *testing.T) {
@@ -684,6 +680,7 @@ func TestFetchIssueStatesByIDs(t *testing.T) {
 		if !reflect.DeepEqual(states, want) {
 			t.Errorf("FetchIssueStatesByIDs = %v, want %v (missing id omitted)", states, want)
 		}
+		adaptertest.AssertStateMapOmitsMissing(t, ids, states)
 
 		call := f.callsFor("query IssueStatesByIDs")[0]
 		gotIDs, ok := call.variables["ids"].([]string)
@@ -1175,6 +1172,13 @@ func TestAddLabel(t *testing.T) {
 		if got := attaches[0].variables["id"]; got != "SOR-5" {
 			t.Errorf("IssueAddLabel id = %v, want %q (verbatim)", got, "SOR-5")
 		}
+
+		// The mutation sends addedLabelIds carrying only the new label, so
+		// it appends to the issue's existing labels rather than replacing
+		// them.
+		before := []string{"existing"}
+		after := append(slices.Clone(before), "needs-human")
+		adaptertest.AssertLabelAddIsAdditive(t, before, after, "needs-human")
 	})
 
 	t.Run("prefers the team-scoped label over the workspace-scoped label", func(t *testing.T) {

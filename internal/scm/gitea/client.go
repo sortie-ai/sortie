@@ -29,7 +29,7 @@ func newGiteaClient(baseURL, token, userAgent string) *httpkit.Client {
 			req.Header.Set("User-Agent", userAgent)
 		},
 		ClassifyError:     classifyHTTPError,
-		ClassifyTransport: classifyTransportError,
+		ClassifyTransport: httpkit.ClassifyTransport,
 	})
 }
 
@@ -48,54 +48,63 @@ func classifyHTTPError(resp *http.Response, method, path string) error {
 		return &domain.TrackerError{
 			Kind:    domain.ErrTrackerPayload,
 			Message: fmt.Sprintf("%s %s: bad request: %s", method, path, detail),
+			Status:  resp.StatusCode,
 		}
 
 	case resp.StatusCode == http.StatusUnauthorized:
 		return &domain.TrackerError{
 			Kind:    domain.ErrTrackerAuth,
 			Message: fmt.Sprintf("%s %s: invalid credentials", method, path),
+			Status:  resp.StatusCode,
 		}
 
 	case resp.StatusCode == http.StatusForbidden:
 		return &domain.TrackerError{
 			Kind:    domain.ErrTrackerAuth,
 			Message: fmt.Sprintf("%s %s: insufficient permissions: %s", method, path, detail),
+			Status:  resp.StatusCode,
 		}
 
 	case resp.StatusCode == http.StatusNotFound:
 		return &domain.TrackerError{
 			Kind:    domain.ErrTrackerNotFound,
 			Message: fmt.Sprintf("%s %s: not found", method, path),
+			Status:  resp.StatusCode,
 		}
 
 	case resp.StatusCode == http.StatusMethodNotAllowed:
 		return &domain.TrackerError{
 			Kind:    domain.ErrTrackerAPI,
 			Message: fmt.Sprintf("%s %s: method not allowed: %s", method, path, detail),
+			Status:  resp.StatusCode,
 		}
 
 	case resp.StatusCode == http.StatusConflict:
 		return &domain.TrackerError{
 			Kind:    domain.ErrTrackerAPI,
 			Message: fmt.Sprintf("%s %s: conflict: %s", method, path, detail),
+			Status:  resp.StatusCode,
 		}
 
 	case resp.StatusCode == http.StatusPreconditionFailed:
 		return &domain.TrackerError{
 			Kind:    domain.ErrTrackerPayload,
 			Message: fmt.Sprintf("%s %s: precondition failed: %s", method, path, detail),
+			Status:  resp.StatusCode,
 		}
 
 	case resp.StatusCode == http.StatusUnprocessableEntity:
 		return &domain.TrackerError{
 			Kind:    domain.ErrTrackerPayload,
 			Message: fmt.Sprintf("%s %s: validation failed: %s", method, path, detail),
+			Status:  resp.StatusCode,
 		}
 
 	case resp.StatusCode == http.StatusLocked:
 		return &domain.TrackerError{
 			Kind:    domain.ErrTrackerAPI,
 			Message: fmt.Sprintf("%s %s: locked: %s", method, path, detail),
+			Status:  resp.StatusCode,
 		}
 
 	case resp.StatusCode == http.StatusTooManyRequests:
@@ -107,30 +116,22 @@ func classifyHTTPError(resp *http.Response, method, path string) error {
 		return &domain.TrackerError{
 			Kind:    domain.ErrTrackerAPI,
 			Message: fmt.Sprintf("%s %s: rate limited", method, path),
+			Status:  resp.StatusCode,
 		}
 
 	case resp.StatusCode >= 500:
 		return &domain.TrackerError{
 			Kind:    domain.ErrTrackerTransport,
 			Message: fmt.Sprintf("%s %s: server error %d: %s", method, path, resp.StatusCode, detail),
+			Status:  resp.StatusCode,
 		}
 
 	default:
 		return &domain.TrackerError{
 			Kind:    domain.ErrTrackerAPI,
 			Message: fmt.Sprintf("%s %s: unexpected status %d: %s", method, path, resp.StatusCode, detail),
+			Status:  resp.StatusCode,
 		}
-	}
-}
-
-// classifyTransportError maps a transport or body-read failure to a
-// [*domain.TrackerError] of kind [domain.ErrTrackerTransport], preserving the
-// underlying error for the chain.
-func classifyTransportError(err error, method, path string) error {
-	return &domain.TrackerError{
-		Kind:    domain.ErrTrackerTransport,
-		Message: fmt.Sprintf("%s %s: transport error", method, path),
-		Err:     err,
 	}
 }
 

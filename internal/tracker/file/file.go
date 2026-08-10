@@ -364,7 +364,7 @@ func (a *FileAdapter) SetMetrics(m domain.Metrics) {
 // AddLabel is a no-op for the file adapter. File-based issues do not
 // support labels.
 func (a *FileAdapter) AddLabel(_ context.Context, _ string, _ string) error {
-	return nil
+	return trackermetrics.Track(a.metrics, "add_label", func() error { return nil })
 }
 
 // applyOverride returns a copy of raw with its State replaced by the

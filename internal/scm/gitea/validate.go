@@ -1,12 +1,12 @@
 package gitea
 
 import (
-	"fmt"
+	"errors"
 	"net/url"
 	"os"
-	"slices"
 	"strings"
 
+	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/registry"
 )
 
@@ -17,33 +17,41 @@ func validateConfig(fields registry.TrackerConfigFields) []registry.ValidationDi
 	var diags []registry.ValidationDiag
 
 	diags = append(diags, validateEndpoint(fields.Endpoint)...)
-	diags = append(diags, validateProject(fields.Project)...)
+	diags = append(diags, registry.DiagOwnerRepoProject(fields.Project)...)
 	diags = append(diags, validateAPIKeyHint(fields.APIKey)...)
-	diags = append(diags, validateStateLabels("tracker.active_states", fields.ActiveStates)...)
-	diags = append(diags, validateStateLabels("tracker.terminal_states", fields.TerminalStates)...)
-	diags = append(diags, validateStateOverlap(fields)...)
+	// The untrimmed-element diagnostic is warning-severity because
+	// [NewGiteaAdapter] lowercases each configured state without trimming
+	// and construction proceeds, so a padded value never aborts startup;
+	// it only ever fails to match a normalized issue label at dispatch time.
+	diags = append(diags, registry.DiagStateLabelElements("tracker.active_states", fields.ActiveStates, registry.SeverityWarning)...)
+	diags = append(diags, registry.DiagStateLabelElements("tracker.terminal_states", fields.TerminalStates, registry.SeverityWarning)...)
+	diags = append(diags, registry.DiagStateOverlap(fields)...)
+	diags = append(diags, validateQueryFilter(fields.QueryFilter)...)
 
 	return diags
 }
 
-// containsWhitespace reports whether s contains any whitespace
-// characters.
-func containsWhitespace(s string) bool {
-	for _, r := range s {
-		if r == ' ' || r == '\t' || r == '\n' || r == '\r' {
-			return true
-		}
+// validateQueryFilter checks the shape of tracker.query_filter by reusing
+// [parseGiteaQueryFilter], the same grammar [NewGiteaAdapter] enforces at
+// construction, so the offline verdict cannot drift from the construction
+// verdict.
+func validateQueryFilter(raw string) []registry.ValidationDiag {
+	_, err := parseGiteaQueryFilter(raw)
+	if err == nil {
+		return nil
 	}
-	return false
-}
 
-// toLowerSet builds a set of lowercased strings from a slice.
-func toLowerSet(ss []string) map[string]struct{} {
-	m := make(map[string]struct{}, len(ss))
-	for _, s := range ss {
-		m[strings.ToLower(s)] = struct{}{}
+	message := err.Error()
+	var trackerErr *domain.TrackerError
+	if errors.As(err, &trackerErr) {
+		message = trackerErr.Message
 	}
-	return m
+
+	return []registry.ValidationDiag{{
+		Severity: "error",
+		Check:    "tracker.query_filter.invalid",
+		Message:  message,
+	}}
 }
 
 // validateEndpoint checks that tracker.endpoint is present and shaped
@@ -92,45 +100,6 @@ func validateEndpoint(endpoint string) []registry.ValidationDiag {
 	return diags
 }
 
-// validateProject checks that tracker.project is in owner/repo format.
-// Empty project is skipped because the required-field check runs earlier
-// in the preflight pipeline. Whitespace in either half is flagged because
-// a Gitea owner or repository name cannot contain spaces and would fail
-// the online preflight.
-func validateProject(project string) []registry.ValidationDiag {
-	if project == "" {
-		return nil
-	}
-
-	if strings.Count(project, "/") != 1 {
-		return []registry.ValidationDiag{{
-			Severity: "error",
-			Check:    "tracker.project.format",
-			Message:  `tracker.project must be in owner/repo format (e.g. "sortie-ai/sortie")`,
-		}}
-	}
-
-	owner, repo, _ := strings.Cut(project, "/")
-
-	if owner == "" || repo == "" {
-		return []registry.ValidationDiag{{
-			Severity: "error",
-			Check:    "tracker.project.format",
-			Message:  `tracker.project must be in owner/repo format (e.g. "sortie-ai/sortie")`,
-		}}
-	}
-
-	if containsWhitespace(owner) || containsWhitespace(repo) {
-		return []registry.ValidationDiag{{
-			Severity: "error",
-			Check:    "tracker.project.format",
-			Message:  "tracker.project owner and repo must not contain whitespace",
-		}}
-	}
-
-	return nil
-}
-
 // validateAPIKeyHint produces advisory diagnostics for the resolved
 // tracker.api_key. An empty key hints about the SORTIE_GITEA_TOKEN
 // environment variable; a non-empty key surrounded by whitespace is
@@ -164,57 +133,4 @@ func validateAPIKeyHint(apiKey string) []registry.ValidationDiag {
 	}
 
 	return nil
-}
-
-// validateStateLabels checks for empty or whitespace-only elements in a
-// state label list.
-//
-// An empty element is a warning, not an error, because Gitea creates a
-// missing state label on demand, so the element is inert rather than fatal
-// at construction. An absent or wholly empty list yields no diagnostic
-// because the adapter applies defaults in that case.
-func validateStateLabels(field string, states []string) []registry.ValidationDiag {
-	var diags []registry.ValidationDiag
-	for i, s := range states {
-		if strings.TrimSpace(s) == "" {
-			diags = append(diags, registry.ValidationDiag{
-				Severity: "warning",
-				Check:    field + ".empty_element",
-				Message:  fmt.Sprintf("%s[%d]: empty state label will never match any issue", field, i),
-			})
-		}
-	}
-	return diags
-}
-
-// validateStateOverlap detects state names shared between active_states
-// and terminal_states. All comparisons are case-insensitive. Collisions
-// involving handoff_state or in_progress_state are rejected by the
-// generic config validation before this hook runs, so there are no arms
-// for them here.
-func validateStateOverlap(fields registry.TrackerConfigFields) []registry.ValidationDiag {
-	var diags []registry.ValidationDiag
-
-	activeSet := toLowerSet(fields.ActiveStates)
-	terminalSet := toLowerSet(fields.TerminalStates)
-
-	var overlap []string
-	for name := range activeSet {
-		if strings.TrimSpace(name) == "" {
-			continue
-		}
-		if _, ok := terminalSet[name]; ok {
-			overlap = append(overlap, name)
-		}
-	}
-	slices.Sort(overlap)
-	for _, name := range overlap {
-		diags = append(diags, registry.ValidationDiag{
-			Severity: "warning",
-			Check:    "tracker.states.overlap",
-			Message:  fmt.Sprintf("tracker.active_states and tracker.terminal_states overlap on %q; an issue in state %q would match both sets", name, name),
-		})
-	}
-
-	return diags
 }

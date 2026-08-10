@@ -26,6 +26,7 @@ import (
 
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/httpkit"
+	"github.com/sortie-ai/sortie/internal/issuekit"
 	"github.com/sortie-ai/sortie/internal/registry"
 	"github.com/sortie-ai/sortie/internal/trackermetrics"
 	"github.com/sortie-ai/sortie/internal/typeutil"
@@ -49,10 +50,10 @@ var _ domain.TrackerAdapter = (*GiteaAdapter)(nil)
 const maxPages = 200
 
 // defaultActiveStates is applied when the config omits active_states.
-var defaultActiveStates = []string{"backlog", "in-progress", "review"}
+var defaultActiveStates = issuekit.DefaultActiveLabelStates()
 
 // defaultTerminalStates is applied when the config omits terminal_states.
-var defaultTerminalStates = []string{"done", "wontfix"}
+var defaultTerminalStates = issuekit.DefaultTerminalLabelStates()
 
 // GiteaAdapter implements [domain.TrackerAdapter] against the Gitea REST API v1.
 // All fields except metrics are set once at construction and never mutated, so
@@ -712,7 +713,8 @@ func (a *GiteaAdapter) fetchStatesByIndexes(ctx context.Context, indexes []strin
 			continue
 		}
 
-		states[index] = deriveState(gi.Labels, gi.State, a.activeStates, a.terminalStates, a.handoffState, index, a.log)
+		states[index] = issuekit.DeriveLabelState(giteaLabelNames(gi.Labels), gi.State, "open", "closed",
+			issuekit.LabelStates{Active: a.activeStates, Terminal: a.terminalStates, Handoff: a.handoffState}, index, a.log)
 	}
 
 	return states, nil
@@ -853,7 +855,8 @@ func (a *GiteaAdapter) TransitionIssue(ctx context.Context, issueID, targetState
 			}
 		}
 
-		currentLabel := findCurrentStateLabel(gi.Labels, a.activeStates, a.terminalStates, a.handoffState)
+		currentLabel := issuekit.CurrentLabelState(giteaLabelNames(gi.Labels),
+			issuekit.LabelStates{Active: a.activeStates, Terminal: a.terminalStates, Handoff: a.handoffState})
 
 		if currentLabel != targetLower {
 			index, err := a.resolveLabelIndex(ctx)

@@ -12,6 +12,8 @@ import (
 	"strings"
 
 	"github.com/sortie-ai/sortie/internal/domain"
+	"github.com/sortie-ai/sortie/internal/httpkit"
+	"github.com/sortie-ai/sortie/internal/scm/scmcore"
 )
 
 // GetReviewDecision returns the platform's authoritative review
@@ -74,7 +76,7 @@ func (a *GitHubSCMAdapter) fetchPullRequest(ctx context.Context, prNumber int, o
 	path := fmt.Sprintf("/repos/%s/%s/pulls/%d", url.PathEscape(owner), url.PathEscape(repo), prNumber)
 	body, _, err := a.client.Get(ctx, path, nil)
 	if err != nil {
-		return pullRequestResponse{}, toSCMError(err)
+		return pullRequestResponse{}, scmcore.ToSCMError(err)
 	}
 	var pr pullRequestResponse
 	if jsonErr := json.Unmarshal(body, &pr); jsonErr != nil {
@@ -87,13 +89,75 @@ func (a *GitHubSCMAdapter) fetchPullRequest(ctx context.Context, prNumber int, o
 	return pr, nil
 }
 
+// combinedStatusRun is one entry of the GitHub combined commit-status
+// response's statuses array.
+type combinedStatusRun struct {
+	State string `json:"state"`
+}
+
 // combinedStatusResponse captures the GitHub combined commit-status
 // response (state plus the list of statuses).
 type combinedStatusResponse struct {
-	State    string `json:"state"`
-	Statuses []struct {
-		State string `json:"state"`
-	} `json:"statuses"`
+	State    string              `json:"state"`
+	Statuses []combinedStatusRun `json:"statuses"`
+}
+
+// decodeCombinedStatusPage decodes one page of the combined commit-status
+// response and returns its statuses array.
+func decodeCombinedStatusPage(body []byte) ([]combinedStatusRun, error) {
+	var combined combinedStatusResponse
+	if err := json.Unmarshal(body, &combined); err != nil {
+		return nil, &domain.SCMError{
+			Kind:    domain.ErrSCMPayload,
+			Message: "failed to parse combined status response",
+			Err:     err,
+		}
+	}
+	return combined.Statuses, nil
+}
+
+// decodeCheckRunsPage decodes one page of the check-runs response and
+// returns its check runs array.
+func decodeCheckRunsPage(body []byte) ([]githubCheckRun, error) {
+	var checks checkRunsResponse
+	if err := json.Unmarshal(body, &checks); err != nil {
+		return nil, &domain.SCMError{
+			Kind:    domain.ErrSCMPayload,
+			Message: "failed to parse check runs response",
+			Err:     err,
+		}
+	}
+	return checks.CheckRuns, nil
+}
+
+// asSCMError returns err unchanged when it is already a [*domain.SCMError]
+// (a decode failure, already classified at the point of failure), and
+// converts it through [scmcore.ToSCMError] otherwise (a transport or HTTP
+// failure, which [httpkit.Paginator.All] returns unconverted).
+func asSCMError(err error) *domain.SCMError {
+	var scmErr *domain.SCMError
+	if errors.As(err, &scmErr) {
+		return scmErr
+	}
+	return scmcore.ToSCMError(err)
+}
+
+// mapCombinedStatusRun normalizes one combined-status entry's state to a
+// [domain.CheckRun]. It is distinct from [mapCheckConclusion], the
+// check-runs vocabulary: "error" completes as failing here, which
+// [mapCheckConclusion] would default to pending, since the two routes use
+// different wire vocabularies for the same underlying gate. Any state
+// other than "success", "failure", or "error", including "pending" and an
+// empty value, defers rather than passing.
+func mapCombinedStatusRun(state string) domain.CheckRun {
+	switch strings.ToLower(state) {
+	case "success":
+		return domain.CheckRun{Status: domain.CheckRunStatusCompleted, Conclusion: domain.CheckConclusionSuccess}
+	case "failure", "error":
+		return domain.CheckRun{Status: domain.CheckRunStatusCompleted, Conclusion: domain.CheckConclusionFailure}
+	default:
+		return domain.CheckRun{Status: domain.CheckRunStatusInProgress, Conclusion: domain.CheckConclusionPending}
+	}
 }
 
 // GetCIStatus returns the aggregated CI conclusion string for the PR
@@ -110,79 +174,58 @@ func (a *GitHubSCMAdapter) GetCIStatus(ctx context.Context, prNumber int, owner,
 		}
 	}
 
-	// Combined commit status.
+	// Combined commit status, walked across every page so a commit
+	// carrying more than one page of statuses contributes all of them to
+	// the verdict below, not just the first page.
 	statusPath := fmt.Sprintf("/repos/%s/%s/commits/%s/status",
 		url.PathEscape(owner), url.PathEscape(repo), url.PathEscape(pr.Head.SHA))
-	statusBody, _, statusErr := a.client.Get(ctx, statusPath, nil)
+	statusPaginator := httpkit.NewPagePaginator(a.client, statusPath, url.Values{}, decodeCombinedStatusPage, httpkit.PageOptions{
+		PageParam: "page",
+		SizeParam: "per_page",
+		PageSize:  100,
+		MaxPages:  maxCIPages,
+		OnLimitReached: func(limit int) {
+			slog.WarnContext(ctx, "response truncated at page limit",
+				slog.String("path", statusPath),
+				slog.Int("max_pages", limit))
+		},
+	})
+	statuses, statusErr := statusPaginator.All(ctx)
 	if statusErr != nil {
-		return "", toSCMError(statusErr)
-	}
-	var combined combinedStatusResponse
-	if jsonErr := json.Unmarshal(statusBody, &combined); jsonErr != nil {
-		return "", &domain.SCMError{
-			Kind:    domain.ErrSCMPayload,
-			Message: "failed to parse combined status response",
-			Err:     jsonErr,
-		}
+		return "", asSCMError(statusErr)
 	}
 
-	// Check runs.
+	// Check runs, walked the same way and for the same reason.
 	checksPath := fmt.Sprintf("/repos/%s/%s/commits/%s/check-runs",
 		url.PathEscape(owner), url.PathEscape(repo), url.PathEscape(pr.Head.SHA))
-	checksBody, _, checksErr := a.client.Get(ctx, checksPath, nil)
+	checksPaginator := httpkit.NewPagePaginator(a.client, checksPath, url.Values{}, decodeCheckRunsPage, httpkit.PageOptions{
+		PageParam: "page",
+		SizeParam: "per_page",
+		PageSize:  100,
+		MaxPages:  maxCIPages,
+		OnLimitReached: func(limit int) {
+			slog.WarnContext(ctx, "response truncated at page limit",
+				slog.String("path", checksPath),
+				slog.Int("max_pages", limit))
+		},
+	})
+	checkRuns, checksErr := checksPaginator.All(ctx)
 	if checksErr != nil {
-		return "", toSCMError(checksErr)
-	}
-	var checks checkRunsResponse
-	if jsonErr := json.Unmarshal(checksBody, &checks); jsonErr != nil {
-		return "", &domain.SCMError{
-			Kind:    domain.ErrSCMPayload,
-			Message: "failed to parse check runs response",
-			Err:     jsonErr,
-		}
+		return "", asSCMError(checksErr)
 	}
 
-	hasAnySignal := len(combined.Statuses) > 0 || checks.TotalCount > 0
-	if !hasAnySignal {
-		return "", nil
+	runs := make([]domain.CheckRun, 0, len(statuses)+len(checkRuns))
+	for _, s := range statuses {
+		runs = append(runs, mapCombinedStatusRun(s.State))
+	}
+	for _, cr := range checkRuns {
+		runs = append(runs, domain.CheckRun{
+			Status:     mapCheckRunStatus(cr.Status),
+			Conclusion: mapCheckConclusion(cr.Conclusion),
+		})
 	}
 
-	anyFailing := false
-	anyPending := false
-
-	for _, s := range combined.Statuses {
-		switch strings.ToLower(s.State) {
-		case "failure", "error":
-			anyFailing = true
-		case "pending":
-			anyPending = true
-		}
-	}
-
-	for _, cr := range checks.CheckRuns {
-		status := strings.ToLower(cr.Status)
-		if status == "in_progress" || status == "queued" || status == "pending" {
-			anyPending = true
-			continue
-		}
-		if cr.Conclusion == nil {
-			continue
-		}
-		switch strings.ToLower(*cr.Conclusion) {
-		case "failure", "timed_out", "cancelled", "action_required":
-			anyFailing = true
-		case "success", "neutral", "skipped":
-			// passing or non-failing conclusion; no signal.
-		}
-	}
-
-	if anyFailing {
-		return "failing", nil
-	}
-	if anyPending {
-		return "pending", nil
-	}
-	return "success", nil
+	return string(scmcore.MergeGate(runs)), nil
 }
 
 // GetMergeability returns the PR merge precondition status. The
@@ -272,7 +315,11 @@ func (a *GitHubSCMAdapter) MergePR(ctx context.Context, prNumber int, owner, rep
 		url.PathEscape(owner), url.PathEscape(repo), prNumber)
 	respBody, err := a.client.Send(ctx, http.MethodPut, path, bytes.NewReader(payload))
 	if err != nil {
-		return domain.MergeResult{}, toSCMError(err)
+		scm := scmcore.AsMergeConflict(scmcore.ToSCMError(err))
+		if scm.Kind == domain.ErrSCMConflict {
+			return domain.MergeResult{}, a.resolveMergeConflict(ctx, prNumber, owner, repo, scm)
+		}
+		return domain.MergeResult{}, scm
 	}
 
 	var mr mergeResponse
@@ -298,6 +345,22 @@ func (a *GitHubSCMAdapter) MergePR(ctx context.Context, prNumber int, owner, rep
 	}, nil
 }
 
+// resolveMergeConflict re-reads the PR after a merge conflict and returns a
+// conflict carrying the canonical already-merged marker when the PR is in
+// fact merged.
+//
+// The marker is gated on the observed merged state rather than on GitHub's
+// rejection wording, so it survives a reworded rejection and never fires on
+// a stale-head 409. A failed re-read returns the original conflict
+// unchanged, at most delaying the outcome by one retry cycle.
+func (a *GitHubSCMAdapter) resolveMergeConflict(ctx context.Context, prNumber int, owner, repo string, scm *domain.SCMError) *domain.SCMError {
+	pr, readErr := a.fetchPullRequest(ctx, prNumber, owner, repo)
+	if readErr == nil && pr.Merged {
+		return scmcore.AlreadyMergedConflict(scm.Message, scm.Err)
+	}
+	return scm
+}
+
 // DeleteBranch deletes the branch reference. Returns nil on success.
 // Returns *SCMError with Kind ErrSCMNotFound when the branch is
 // already gone; callers treat this as a successful no-op.
@@ -305,7 +368,7 @@ func (a *GitHubSCMAdapter) DeleteBranch(ctx context.Context, owner, repo, branch
 	path := fmt.Sprintf("/repos/%s/%s/git/refs/heads/%s",
 		url.PathEscape(owner), url.PathEscape(repo), url.PathEscape(branch))
 	if err := a.client.SendNoBody(ctx, http.MethodDelete, path); err != nil {
-		scm := toSCMError(err)
+		scm := scmcore.ToSCMError(err)
 		return scm
 	}
 	return nil
@@ -340,7 +403,7 @@ func (a *GitHubSCMAdapter) VerifyAutoMergeScopes(ctx context.Context, requireCon
 		if errors.As(err, &scmErr) {
 			return nil, nil, scmErr
 		}
-		return nil, nil, toSCMError(err)
+		return nil, nil, scmcore.ToSCMError(err)
 	}
 
 	// Fine-grained PATs and GitHub App installation tokens do not

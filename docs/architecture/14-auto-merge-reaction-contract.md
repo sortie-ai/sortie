@@ -29,6 +29,13 @@ methods are the write surface the auto-merge reaction added. The interface has s
 further for other reaction kinds; see §11D for `FetchBotReviewComments` and §11F for
 `ListLabelEvents` and `RemoveLabel`. All implementations MUST be safe for concurrent use.
 
+`ErrSCMConflict` is produced by a merge write path only: `MergePR` promotes a rejection to this
+kind, and no read method, `RemoveLabel`, or `DeleteBranch` returns it. The already-merged marker
+(§11C.2) is produced by the implementation itself, after it has confirmed by re-reading the pull
+request that the pull request is merged, rather than by matching the provider's response wording,
+so the disposition survives a reworded rejection and never fires on an unrelated conflict that
+happens to carry the word "conflict".
+
 ### 11C.2 Domain types
 
 The auto-merge reaction introduces the following domain types:
@@ -57,11 +64,11 @@ The auto-merge reaction introduces the following domain types:
 payload categories already defined for review-comment fetching (§11B.3). Its HTTP semantics (405
 method-not-allowed and 409 conflict from the merge endpoint) are documented in the §11B.3 table.
 
-The auto-merge reconcile loop imposes merge-specific dispositions on this kind. A 409 response
-with an "already merged" body is treated as idempotent success. A 405 or a 409 with a head-SHA
-mismatch or branch-protection refusal is re-enqueued with the poll interval; the next tick
-observes the new SHA via a refreshed fingerprint. The full disposition table is in §11C.5 and
-§11C.6.
+The auto-merge reconcile loop imposes merge-specific dispositions on this kind. A rejection the
+adapter has confirmed by re-reading the pull request to be an already-completed merge carries the
+already-merged marker and is treated as idempotent success. Any other 405 or 409, whether head-SHA
+drift or a branch-protection refusal, is re-enqueued with the poll interval; the next tick observes
+the new SHA via a refreshed fingerprint. The full disposition table is in §11C.5 and §11C.6.
 
 ### 11C.4 Reconcile loop integration
 
@@ -223,10 +230,10 @@ the same issue, so the auto-merge cleanup path is scoped to the `merge` kind onl
 
 Both the auto-merge and merge-completion (§11G) reactions observe the merge state of the same
 pull request through `GetMergeability`, but they act on it independently and neither one performs
-the other's job. The already-merged disposition in §11C.3 and §11C.5 (a 409 response matched
-against the "already merged" phrase, treated as idempotent success) clears only the `merge`-kind
-pending entry and fingerprint; it never calls `TrackerAdapter.TransitionIssue` and never touches
-the tracker issue. Closing the tracker issue is the merge-completion reaction's exclusive
+the other's job. The already-merged disposition in §11C.3 and §11C.5 (a merge rejection the adapter
+confirmed by re-read to be an already-completed merge, treated as idempotent success) clears only
+the `merge`-kind pending entry and fingerprint; it never calls `TrackerAdapter.TransitionIssue` and
+never touches the tracker issue. Closing the tracker issue is the merge-completion reaction's exclusive
 responsibility, and it runs as an independent reconcile pass that reaches the same conclusion by
 observing `PRMergeStatus.Merged` on its own polling schedule, whether the merge that satisfied it
 was performed by this reaction, by a human, or by a forge automation rule.

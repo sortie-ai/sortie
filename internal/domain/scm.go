@@ -209,11 +209,12 @@ type SCMAdapter interface {
 	//
 	// Callers disambiguate the already-merged subcase by inspecting
 	// the [SCMError] Message for the substring "already merged"
-	// (case-insensitive); implementations must surface that phrase
-	// in Message when, and only when, the provider's response body
-	// indicates the PR was already merged. Without that marker the
-	// caller treats the conflict as a transient precondition failure
-	// and reattempts after re-reading the merge state.
+	// (case-insensitive); implementations must surface that phrase in
+	// Message when they have confirmed, by re-reading the pull request,
+	// that the pull request is merged, rather than by matching the
+	// provider's response wording. Without that marker the caller
+	// treats the conflict as a transient precondition failure and
+	// reattempts after re-reading the merge state.
 	//
 	// Returns a [*SCMError] on any other failure.
 	MergePR(ctx context.Context, prNumber int, owner, repo string, strategy MergeStrategy, commitTitle, commitMessage, expectedHeadSHA string) (MergeResult, error)
@@ -231,9 +232,9 @@ type SCMAdapter interface {
 
 	// RemoveLabel removes the named label from the given PR. Returns nil
 	// on success and treats an already-absent label as a successful
-	// no-op: a [*SCMError] with Kind [ErrSCMNotFound] is mapped to nil,
-	// matching the [SCMAdapter.DeleteBranch] precedent. Returns a
-	// [*SCMError] on any other failure.
+	// no-op: implementations map a [*SCMError] with Kind [ErrSCMNotFound]
+	// to nil rather than returning it. Returns a [*SCMError] on any
+	// other failure.
 	RemoveLabel(ctx context.Context, prNumber int, owner, repo, label string) error
 }
 

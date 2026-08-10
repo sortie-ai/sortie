@@ -13,16 +13,6 @@ import (
 
 // --- Test helpers ---
 
-// hasDiagCheck reports whether any diag in the slice has the given check name.
-func hasDiagCheck(diags []registry.ValidationDiag, check string) bool {
-	for _, d := range diags {
-		if d.Check == check {
-			return true
-		}
-	}
-	return false
-}
-
 // diagsWithSeverity returns the subset of diags with the given severity.
 func diagsWithSeverity(diags []registry.ValidationDiag, severity string) []registry.ValidationDiag {
 	var out []registry.ValidationDiag
@@ -264,155 +254,6 @@ func TestValidateAPIKeyHint(t *testing.T) {
 	})
 }
 
-func TestValidateStateLabels(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name      string
-		field     string
-		states    []string
-		wantCount int
-		wantCheck string
-	}{
-		{name: "nil slice has no diagnostics", field: "tracker.active_states", states: nil, wantCount: 0},
-		{name: "empty slice has no diagnostics", field: "tracker.active_states", states: []string{}, wantCount: 0},
-		{
-			name: "all clean has no diagnostics", field: "tracker.active_states",
-			states: []string{"backlog", "in-progress"}, wantCount: 0,
-		},
-		{
-			name: "single empty element", field: "tracker.active_states", states: []string{""},
-			wantCount: 1, wantCheck: "tracker.active_states.empty_element",
-		},
-		{
-			name: "whitespace-only element", field: "tracker.terminal_states", states: []string{"done", "   "},
-			wantCount: 1, wantCheck: "tracker.terminal_states.empty_element",
-		},
-		{
-			name: "non-empty padded element", field: "tracker.active_states", states: []string{" review"},
-			wantCount: 1, wantCheck: "tracker.active_states.untrimmed_element",
-		},
-		{
-			name: "trailing padded element", field: "tracker.terminal_states", states: []string{"done "},
-			wantCount: 1, wantCheck: "tracker.terminal_states.untrimmed_element",
-		},
-		{
-			name: "multiple empties", field: "tracker.active_states", states: []string{"", "backlog", ""},
-			wantCount: 2, wantCheck: "tracker.active_states.empty_element",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-
-			got := validateStateLabels(tt.field, tt.states)
-
-			if len(got) != tt.wantCount {
-				t.Fatalf("validateStateLabels(%q, %v) = %d diags, want %d; diags: %v",
-					tt.field, tt.states, len(got), tt.wantCount, got)
-			}
-			for i, d := range got {
-				if d.Severity != "warning" {
-					t.Errorf("validateStateLabels(%q) diag[%d].Severity = %q, want %q", tt.field, i, d.Severity, "warning")
-				}
-			}
-			if tt.wantCount == 0 {
-				return
-			}
-			if got[0].Check != tt.wantCheck {
-				t.Errorf("validateStateLabels(%q) diag[0].Check = %q, want %q", tt.field, got[0].Check, tt.wantCheck)
-			}
-		})
-	}
-}
-
-func TestValidateStateOverlap(t *testing.T) {
-	t.Parallel()
-
-	tests := []struct {
-		name          string
-		fields        registry.TrackerConfigFields
-		wantChecks    []string
-		wantDiagCount int
-	}{
-		{
-			name: "no overlap",
-			fields: registry.TrackerConfigFields{
-				ActiveStates:   []string{"backlog", "in-progress"},
-				TerminalStates: []string{"done", "wontfix"},
-			},
-			wantDiagCount: 0,
-		},
-		{
-			name: "case-insensitive overlap on done",
-			fields: registry.TrackerConfigFields{
-				ActiveStates:   []string{"done"},
-				TerminalStates: []string{"Done"},
-			},
-			wantChecks:    []string{"tracker.states.overlap"},
-			wantDiagCount: 1,
-		},
-		{
-			name: "multiple overlaps are sorted",
-			fields: registry.TrackerConfigFields{
-				ActiveStates:   []string{"a", "b"},
-				TerminalStates: []string{"b", "c", "a"},
-			},
-			wantChecks:    []string{"tracker.states.overlap"},
-			wantDiagCount: 2,
-		},
-		{
-			name: "empty-string elements are skipped",
-			fields: registry.TrackerConfigFields{
-				ActiveStates:   []string{""},
-				TerminalStates: []string{""},
-			},
-			wantDiagCount: 0,
-		},
-		{
-			name: "handoff_state and in_progress_state are not this hook's concern",
-			fields: registry.TrackerConfigFields{
-				ActiveStates:    []string{"backlog"},
-				TerminalStates:  []string{"done"},
-				HandoffState:    "done",
-				InProgressState: "done",
-			},
-			wantDiagCount: 0,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-
-			got := validateStateOverlap(tt.fields)
-
-			if len(got) != tt.wantDiagCount {
-				t.Fatalf("validateStateOverlap() = %d diags, want %d; diags: %v", len(got), tt.wantDiagCount, got)
-			}
-			for _, check := range tt.wantChecks {
-				if !hasDiagCheck(got, check) {
-					t.Errorf("validateStateOverlap() missing diag with check %q; got: %v", check, got)
-				}
-			}
-			for i, d := range got {
-				if d.Severity != "warning" {
-					t.Errorf("validateStateOverlap() diag[%d].Severity = %q, want %q", i, d.Severity, "warning")
-				}
-				if strings.HasPrefix(d.Check, "tracker.handoff_state") {
-					t.Errorf("validateStateOverlap() diag[%d].Check = %q, must not begin with %q",
-						i, d.Check, "tracker.handoff_state")
-				}
-				if strings.HasPrefix(d.Check, "tracker.in_progress_state") {
-					t.Errorf("validateStateOverlap() diag[%d].Check = %q, must not begin with %q",
-						i, d.Check, "tracker.in_progress_state")
-				}
-			}
-		})
-	}
-}
-
 func TestValidateQueryFilter(t *testing.T) {
 	t.Parallel()
 
@@ -544,6 +385,33 @@ func TestValidateConfig(t *testing.T) {
 				d.Check == "tracker.states.overlap" {
 				t.Errorf("validateConfig(both state lists empty) unexpected diag %v", d)
 			}
+		}
+	})
+
+	t.Run("untrimmed active state element is a warning, not an error", func(t *testing.T) {
+		t.Setenv("SORTIE_GITLAB_TOKEN", "")
+
+		fields := registry.TrackerConfigFields{
+			Kind:         "gitlab",
+			Project:      "group/project",
+			APIKey:       "glpat-a1b2c3tokenvalue",
+			ActiveStates: []string{" backlog"},
+		}
+
+		got := validateConfig(fields)
+
+		warnings := diagsWithSeverity(got, "warning")
+		var found bool
+		for _, d := range warnings {
+			if d.Check == "tracker.active_states.untrimmed_element" {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("validateConfig(untrimmed active state) warnings = %v, want tracker.active_states.untrimmed_element", warnings)
+		}
+		if errs := diagsWithSeverity(got, "error"); len(errs) != 0 {
+			t.Errorf("validateConfig(untrimmed active state) errors = %v, want empty (construction proceeds)", errs)
 		}
 	})
 

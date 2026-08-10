@@ -15,6 +15,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/sortie-ai/sortie/internal/adaptertest"
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/registry"
 )
@@ -41,13 +42,7 @@ func assertTrackerErrorKind(t *testing.T, err error, want domain.TrackerErrorKin
 	if err == nil {
 		t.Fatalf("expected error with kind %q, got nil", want)
 	}
-	var te *domain.TrackerError
-	if !errors.As(err, &te) {
-		t.Fatalf("error type = %T, want *domain.TrackerError", err)
-	}
-	if te.Kind != want {
-		t.Errorf("TrackerError.Kind = %q, want %q", te.Kind, want)
-	}
+	adaptertest.AssertTrackerErrorKind(t, err, want)
 }
 
 func loadFixture(t *testing.T, name string) []byte {
@@ -278,6 +273,9 @@ func TestFetchCandidateIssues_SinglePage(t *testing.T) {
 	if issues[1].Comments != nil {
 		t.Error("Comments should be nil for search results")
 	}
+
+	adaptertest.AssertIssueNormalized(t, issues[0])
+	adaptertest.AssertIssueNormalized(t, issues[1])
 
 	// Verify JQL
 	if !strings.Contains(receivedJQL, "ORDER BY priority ASC, created ASC") {
@@ -616,9 +614,9 @@ func TestFetchIssueByID_MultiPageComments(t *testing.T) {
 func TestFetchIssuesByStates_EmptyStates(t *testing.T) {
 	t.Parallel()
 
-	var called bool
+	var calls int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		called = true
+		calls++
 	}))
 	defer srv.Close()
 
@@ -633,9 +631,7 @@ func TestFetchIssuesByStates_EmptyStates(t *testing.T) {
 	if len(issues) != 0 {
 		t.Errorf("len = %d, want 0", len(issues))
 	}
-	if called {
-		t.Error("server was called, but empty states should return immediately")
-	}
+	adaptertest.AssertNoRequestOnEmptyInput(t, calls, "FetchIssuesByStates")
 }
 
 func TestFetchIssuesByStates_SingleState(t *testing.T) {
@@ -751,6 +747,7 @@ func TestFetchIssueStatesByIDs_SingleBatch(t *testing.T) {
 	if _, exists := result["3"]; exists {
 		t.Error("ID \"3\" should be absent from result")
 	}
+	adaptertest.AssertStateMapOmitsMissing(t, []string{"1", "2", "3"}, result)
 
 	// Verify JQL uses id IN (numeric IDs), not key IN
 	if !strings.Contains(receivedJQL, "id IN") {
@@ -1050,6 +1047,7 @@ func TestFetchIssueComments_MultiPage(t *testing.T) {
 	if comments[2].Body != "Third comment." {
 		t.Errorf("comments[2].Body = %q", comments[2].Body)
 	}
+	adaptertest.AssertCommentsAscending(t, comments)
 }
 
 func TestFetchIssueComments_Empty(t *testing.T) {
@@ -1066,12 +1064,7 @@ func TestFetchIssueComments_Empty(t *testing.T) {
 	if err != nil {
 		t.Fatalf("FetchIssueComments: %v", err)
 	}
-	if comments == nil {
-		t.Fatal("comments is nil, want non-nil empty slice")
-	}
-	if len(comments) != 0 {
-		t.Errorf("len = %d, want 0", len(comments))
-	}
+	adaptertest.AssertEmptyNonNil(t, comments, "FetchIssueComments")
 }
 
 func TestFetchIssueComments_NotFound(t *testing.T) {
@@ -1785,6 +1778,35 @@ func TestJiraAdapterMetrics(t *testing.T) {
 		requireSingleCall(t, spy, "comment", "error")
 	})
 
+	t.Run("AddLabel/success", func(t *testing.T) {
+		t.Parallel()
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		}))
+		defer srv.Close()
+
+		a, spy := mustAdapterWithMetrics(t, validConfig(srv.URL))
+		if err := a.AddLabel(ctx, "PROJ-123", "urgent"); err != nil {
+			t.Fatalf("AddLabel: %v", err)
+		}
+		requireSingleCall(t, spy, "add_label", "success")
+	})
+
+	t.Run("AddLabel/error", func(t *testing.T) {
+		t.Parallel()
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusInternalServerError)
+		}))
+		defer srv.Close()
+
+		a, spy := mustAdapterWithMetrics(t, validConfig(srv.URL))
+		err := a.AddLabel(ctx, "PROJ-123", "urgent")
+		if err == nil {
+			t.Fatal("expected error, got nil")
+		}
+		requireSingleCall(t, spy, "add_label", "error")
+	})
+
 	t.Run("nil_metrics", func(t *testing.T) {
 		t.Parallel()
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1815,6 +1837,7 @@ func TestJiraAdapterMetrics(t *testing.T) {
 		a.FetchIssueComments(ctx, "PROJ-5")                      //nolint:errcheck // verifying no panic
 		a.TransitionIssue(ctx, "PROJ-123", "Human Review")       //nolint:errcheck // verifying no panic
 		a.CommentIssue(ctx, "PROJ-5", "test")                    //nolint:errcheck // verifying no panic
+		a.AddLabel(ctx, "PROJ-123", "urgent")                    //nolint:errcheck // verifying no panic
 	})
 }
 
@@ -1918,6 +1941,44 @@ func TestCommentIssue_ErrorCases(t *testing.T) {
 			assertTrackerErrorKind(t, err, tt.wantKind)
 		})
 	}
+}
+
+func TestAddLabel_Additive(t *testing.T) {
+	t.Parallel()
+
+	var receivedBody []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedBody, _ = io.ReadAll(r.Body)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	a := mustAdapter(t, validConfig(srv.URL))
+	if err := a.AddLabel(context.Background(), "PROJ-123", "urgent"); err != nil {
+		t.Fatalf("AddLabel: %v", err)
+	}
+
+	var body struct {
+		Update struct {
+			Labels []map[string]string `json:"labels"`
+		} `json:"update"`
+	}
+	if err := json.Unmarshal(receivedBody, &body); err != nil {
+		t.Fatalf("unmarshal request body: %v", err)
+	}
+	if len(body.Update.Labels) != 1 {
+		t.Fatalf("len(update.labels) = %d, want 1", len(body.Update.Labels))
+	}
+	added, ok := body.Update.Labels[0]["add"]
+	if !ok {
+		t.Fatalf("update.labels[0] carries no \"add\" key, want an additive operation: %v", body.Update.Labels[0])
+	}
+
+	// The wire payload names the label under "add" rather than "set", so
+	// AddLabel never touches labels already present on the issue.
+	before := []string{"existing"}
+	after := append(slices.Clone(before), added)
+	adaptertest.AssertLabelAddIsAdditive(t, before, after, added)
 }
 
 func TestNewJiraAdapter_UserAgentFromConfig(t *testing.T) {

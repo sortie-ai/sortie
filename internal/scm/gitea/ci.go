@@ -8,12 +8,12 @@ import (
 	"log/slog"
 	"net/url"
 	"regexp"
-	"strconv"
 	"strings"
 
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/httpkit"
 	"github.com/sortie-ai/sortie/internal/registry"
+	"github.com/sortie-ai/sortie/internal/scm/scmcore"
 )
 
 func init() {
@@ -22,6 +22,12 @@ func init() {
 
 // Compile-time interface satisfaction check.
 var _ domain.CIStatusProvider = (*GiteaCIProvider)(nil)
+
+// scmMaxPages caps the number of pages fetched for a single combined-status
+// walk, whether the reader is the CI provider or the source-control merge
+// gate. At 50 entries per page this bounds a read at 2500 entries, generous
+// for the short-lived, low-traffic pull requests Sortie manages.
+const scmMaxPages = 50
 
 // ansiPattern matches the ANSI escape sequences a CI-produced status
 // description may carry (CSI color and cursor codes, and OSC sequences).
@@ -115,44 +121,25 @@ func (p *GiteaCIProvider) FetchCIStatus(ctx context.Context, ref string) (domain
 	path := fmt.Sprintf("/repos/%s/%s/commits/%s/status",
 		url.PathEscape(p.owner), url.PathEscape(p.repo), url.PathEscape(ref))
 
-	const limit = 50
-	statuses := make([]giteaCommitState, 0)
-	page := 1
-	for {
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			return domain.CIResult{}, giteaToCIError(fmt.Errorf("fetching ci status for ref %q: %w", ref, ctxErr))
-		}
-
-		params := url.Values{
-			"page":  {strconv.Itoa(page)},
-			"limit": {strconv.Itoa(limit)},
-		}
-		body, _, err := p.client.Get(ctx, path, params)
-		if err != nil {
-			return domain.CIResult{}, giteaToCIError(fmt.Errorf("fetching ci status for ref %q: %w", ref, err))
-		}
-
-		var combined giteaCombinedStatus
-		if jsonErr := json.Unmarshal(body, &combined); jsonErr != nil {
-			return domain.CIResult{}, &domain.CIError{
-				Kind:    domain.ErrCIPayload,
-				Message: "failed to parse combined status response",
-				Err:     jsonErr,
-			}
-		}
-
-		statuses = append(statuses, combined.Statuses...)
-		if len(combined.Statuses) < limit {
-			break
-		}
-
-		page++
-		if page > scmMaxPages {
+	paginator := httpkit.NewPagePaginator(p.client, path, nil, decodeGiteaCombinedStatusForCI, httpkit.PageOptions{
+		PageParam: "page",
+		SizeParam: "limit",
+		PageSize:  50,
+		MaxPages:  scmMaxPages,
+		OnLimitReached: func(limit int) {
 			slog.WarnContext(ctx, "response truncated at page limit",
 				slog.String("path", path),
-				slog.Int("max_pages", scmMaxPages))
-			break
+				slog.Int("max_pages", limit))
+		},
+	})
+
+	statuses, err := paginator.All(ctx)
+	if err != nil {
+		var ciErr *domain.CIError
+		if errors.As(err, &ciErr) {
+			return domain.CIResult{}, ciErr
 		}
+		return domain.CIResult{}, giteaToCIError(fmt.Errorf("fetching ci status for ref %q: %w", ref, err))
 	}
 
 	runs := make([]domain.CheckRun, len(statuses))
@@ -165,7 +152,7 @@ func (p *GiteaCIProvider) FetchCIStatus(ctx context.Context, ref string) (domain
 		}
 	}
 
-	status := aggregateStatus(runs)
+	status := scmcore.AggregateCIStatus(runs)
 
 	var logExcerpt string
 	if status == domain.CIStatusFailing {
@@ -176,9 +163,25 @@ func (p *GiteaCIProvider) FetchCIStatus(ctx context.Context, ref string) (domain
 		Status:       status,
 		CheckRuns:    runs,
 		LogExcerpt:   logExcerpt,
-		FailingCount: failingCount(runs),
+		FailingCount: scmcore.FailingCount(runs),
 		Ref:          ref,
 	}, nil
+}
+
+// decodeGiteaCombinedStatusForCI decodes one page of the combined-status
+// response for the CI provider boundary. A decode failure is returned as a
+// [*domain.CIError] of kind [domain.ErrCIPayload], since the shared
+// page-number walk returns whatever the decoder produces unconverted.
+func decodeGiteaCombinedStatusForCI(body []byte) ([]giteaCommitState, error) {
+	var combined giteaCombinedStatus
+	if err := json.Unmarshal(body, &combined); err != nil {
+		return nil, &domain.CIError{
+			Kind:    domain.ErrCIPayload,
+			Message: "failed to parse combined status response",
+			Err:     err,
+		}
+	}
+	return combined.Statuses, nil
 }
 
 // mapRunStatus maps a Gitea commit-status value to a [domain.CheckRunStatus],
@@ -208,41 +211,6 @@ func mapConclusion(status string) domain.CheckConclusion {
 	default:
 		return domain.CheckConclusionPending
 	}
-}
-
-func aggregateStatus(runs []domain.CheckRun) domain.CIStatus {
-	if len(runs) == 0 {
-		return domain.CIStatusPending
-	}
-
-	anyFailed := false
-	allCompleted := true
-	for _, run := range runs {
-		if run.Status != domain.CheckRunStatusCompleted {
-			allCompleted = false
-		}
-		if run.Conclusion == domain.CheckConclusionFailure {
-			anyFailed = true
-		}
-	}
-
-	if anyFailed {
-		return domain.CIStatusFailing
-	}
-	if allCompleted {
-		return domain.CIStatusPassing
-	}
-	return domain.CIStatusPending
-}
-
-func failingCount(runs []domain.CheckRun) int {
-	count := 0
-	for _, run := range runs {
-		if run.Conclusion == domain.CheckConclusionFailure {
-			count++
-		}
-	}
-	return count
 }
 
 // buildLogExcerpt assembles a truncated excerpt from the first failing commit

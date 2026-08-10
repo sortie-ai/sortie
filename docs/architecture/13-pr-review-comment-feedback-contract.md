@@ -68,7 +68,7 @@ Error categories:
 | `scm_api_error` | Non-success HTTP status or API-level error. |
 | `scm_not_found` | PR or repository does not exist. |
 | `scm_payload_error` | Malformed or unexpected response structure. |
-| `scm_conflict_error` | Conflict on a write-class operation (HTTP 405 method-not-allowed or HTTP 409 conflict from the merge endpoint). |
+| `scm_conflict_error` | Conflict on the merge write path (HTTP 405 method-not-allowed or HTTP 409 conflict from the merge endpoint). No other operation returns this kind. |
 
 `SCMError` implements `Error()` and `Unwrap()` for use with `errors.Is`/`errors.As`.
 

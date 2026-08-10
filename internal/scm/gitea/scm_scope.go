@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/sortie-ai/sortie/internal/domain"
+	"github.com/sortie-ai/sortie/internal/scm/scmcore"
 )
 
 // writeRepositoryScope is Gitea's single coarse token scope covering both the
@@ -103,7 +104,7 @@ func (a *GiteaSCMAdapter) VerifyAutoMergeScopes(ctx context.Context, requireCont
 	path := fmt.Sprintf("/repos/%s/%s", url.PathEscape(a.preflightOwner), url.PathEscape(a.preflightRepo))
 	body, _, getErr := a.client.Get(ctx, path, nil)
 	if getErr != nil {
-		return nil, nil, giteaToSCMError(getErr)
+		return nil, nil, scmcore.ToSCMError(getErr)
 	}
 
 	var perms giteaRepoPermissions

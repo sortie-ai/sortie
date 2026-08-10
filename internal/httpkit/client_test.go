@@ -10,11 +10,55 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+
+	"github.com/sortie-ai/sortie/internal/domain"
 )
 
 func mustClient(t *testing.T, opts ClientOptions) *Client {
 	t.Helper()
 	return NewClient(opts)
+}
+
+func TestClassifyTransportError(t *testing.T) {
+	t.Parallel()
+
+	wrapped := errors.New("dial tcp: connection refused")
+	err := ClassifyTransport(wrapped, http.MethodGet, "/user")
+
+	assertTrackerErrorKind(t, err, domain.ErrTrackerTransport)
+	if !errors.Is(err, wrapped) {
+		t.Errorf("ClassifyTransport(%v) chain missing wrapped error", wrapped)
+	}
+}
+
+func TestClassifyTransport_MessageFormat(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		method string
+		path   string
+		want   string
+	}{
+		{"GET request", http.MethodGet, "/user", "GET /user: transport error"},
+		{"POST request with a nested path", http.MethodPost, "/repos/o/r/issues", "POST /repos/o/r/issues: transport error"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			err := ClassifyTransport(errors.New("boom"), tt.method, tt.path)
+
+			var te *domain.TrackerError
+			if !errors.As(err, &te) {
+				t.Fatalf("ClassifyTransport(%q, %q) error type = %T, want *domain.TrackerError", tt.method, tt.path, err)
+			}
+			if te.Message != tt.want {
+				t.Errorf("ClassifyTransport(%q, %q) message = %q, want %q", tt.method, tt.path, te.Message, tt.want)
+			}
+		})
+	}
 }
 
 func TestClient_Get_success(t *testing.T) {

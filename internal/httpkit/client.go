@@ -12,7 +12,21 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/sortie-ai/sortie/internal/domain"
 )
+
+// ClassifyTransport maps a transport or body-read failure to a
+// [*domain.TrackerError] of kind [domain.ErrTrackerTransport], preserving
+// the underlying error for the chain. The message names the request
+// method and path so the diagnostic identifies which call failed.
+func ClassifyTransport(err error, method, path string) error {
+	return &domain.TrackerError{
+		Kind:    domain.ErrTrackerTransport,
+		Message: fmt.Sprintf("%s %s: transport error", method, path),
+		Err:     err,
+	}
+}
 
 // Authorizer mutates an outgoing request before dispatch.
 type Authorizer func(*http.Request)

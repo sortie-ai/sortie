@@ -3,19 +3,22 @@ package linear
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
-	"time"
 
 	"github.com/sortie-ai/sortie/internal/domain"
+	"github.com/sortie-ai/sortie/internal/httpkit"
 )
 
 // preflightBackoff is the bounded exponential backoff applied to transient
 // preflight failures. A config error fails construction immediately with no
 // retry; these delays absorb a brief outage before construction fails.
-var preflightBackoff = []time.Duration{time.Second, 2 * time.Second, 4 * time.Second}
+//
+// preflightBackoff is a package variable, not a [httpkit.RetryWithBackoff]
+// argument baked in at each call site, so a test can substitute a fast
+// schedule for the retry-exhaustion subtests.
+var preflightBackoff = httpkit.DefaultPreflightBackoff()
 
 // terminalStateTypes are the workflow-state categories that close an issue.
 var terminalStateTypes = map[string]struct{}{
@@ -35,14 +38,14 @@ var terminalStateTypes = map[string]struct{}{
 // A configured name whose category contradicts its list emits a WARN without
 // failing.
 func runPreflight(ctx context.Context, client graphQLClient, project string, active, terminal []string, handoff string, log *slog.Logger) (map[string]string, error) {
-	if err := withRetry(ctx, func() error {
+	if err := httpkit.RetryWithBackoff(ctx, preflightBackoff, func() error {
 		return checkViewer(ctx, client)
 	}); err != nil {
 		return nil, err
 	}
 
 	var states []teamState
-	if err := withRetry(ctx, func() error {
+	if err := httpkit.RetryWithBackoff(ctx, preflightBackoff, func() error {
 		var fetchErr error
 		states, fetchErr = fetchTeamStates(ctx, client, project)
 		return fetchErr
@@ -138,46 +141,4 @@ func fetchTeamStates(ctx context.Context, client graphQLClient, project string) 
 		}
 	}
 	return resp.Data.Teams.Nodes[0].States.Nodes, nil
-}
-
-// withRetry runs fn, retrying transient tracker errors with the bounded
-// preflight backoff. Config errors return immediately without a retry.
-//
-// The backoff wait honors ctx: a cancellation during a backoff returns
-// ctx.Err() without waiting for the delay to elapse, matching the per-chunk
-// cancellation checks in the read paths.
-func withRetry(ctx context.Context, fn func() error) error {
-	err := fn()
-	for attempt := 0; err != nil && attempt < len(preflightBackoff); attempt++ {
-		if !isRetryable(err) {
-			return err
-		}
-		if waitErr := sleepContext(ctx, preflightBackoff[attempt]); waitErr != nil {
-			return waitErr
-		}
-		err = fn()
-	}
-	return err
-}
-
-// sleepContext blocks for d or until ctx is cancelled, whichever comes first.
-// It returns ctx.Err() on cancellation and nil once the full delay elapses.
-func sleepContext(ctx context.Context, d time.Duration) error {
-	timer := time.NewTimer(d)
-	defer timer.Stop()
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-timer.C:
-		return nil
-	}
-}
-
-// isRetryable reports whether err is a tracker error whose kind is retryable.
-func isRetryable(err error) bool {
-	var te *domain.TrackerError
-	if !errors.As(err, &te) {
-		return false
-	}
-	return te.Kind.RetryClassification().Retryable
 }

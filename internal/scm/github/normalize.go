@@ -1,6 +1,7 @@
 package github
 
 import (
+	"log/slog"
 	"strconv"
 
 	"github.com/sortie-ai/sortie/internal/domain"
@@ -54,6 +55,16 @@ type searchResponse struct {
 	Items             []githubIssue `json:"items"`
 }
 
+// githubLabelNames extracts the label names from a GitHub label list, in
+// the order the API returned them.
+func githubLabelNames(labels []githubLabel) []string {
+	names := make([]string, 0, len(labels))
+	for _, l := range labels {
+		names = append(names, l.Name)
+	}
+	return names
+}
+
 // normalizeIssue maps a GitHub API issue response to a [domain.Issue].
 // The ID and Identifier are both set to the issue number since the
 // GitHub REST API indexes issues by number, not by global integer ID.
@@ -63,17 +74,13 @@ type searchResponse struct {
 //
 // DisplayID is left empty; callers that know the repository
 // owner and name should set it to "owner/repo#N" after normalization.
-func normalizeIssue(gi githubIssue, activeStates, terminalStates []string, handoffState string) domain.Issue {
+func normalizeIssue(gi githubIssue, activeStates, terminalStates []string, handoffState string, log *slog.Logger) domain.Issue {
 	num := strconv.Itoa(gi.Number)
+	labelNames := githubLabelNames(gi.Labels)
 
 	desc := ""
 	if gi.Body != nil {
 		desc = *gi.Body
-	}
-
-	labelNames := make([]string, 0, len(gi.Labels))
-	for _, l := range gi.Labels {
-		labelNames = append(labelNames, l.Name)
 	}
 
 	assignee := ""
@@ -86,12 +93,14 @@ func normalizeIssue(gi githubIssue, activeStates, terminalStates []string, hando
 		issueType = gi.Type.Name
 	}
 
+	states := issuekit.LabelStates{Active: activeStates, Terminal: terminalStates, Handoff: handoffState}
+
 	return domain.Issue{
 		ID:          num,
 		Identifier:  num,
 		Title:       gi.Title,
 		Description: desc,
-		State:       extractState(gi.Labels, gi.State, activeStates, terminalStates, handoffState),
+		State:       issuekit.DeriveLabelState(labelNames, gi.State, "open", "closed", states, num, log),
 		URL:         gi.HTMLURL,
 		Labels:      issuekit.NormalizeLabels(labelNames),
 		Assignee:    assignee,
@@ -115,14 +124,16 @@ func (a *GitHubAdapter) qualifyDisplayID(issue *domain.Issue) {
 // normalizeBlockers converts blocker issue responses to
 // [domain.BlockerRef] values. Returns a non-nil empty slice when
 // input is empty.
-func normalizeBlockers(blockers []githubIssue, activeStates, terminalStates []string, handoffState string) []domain.BlockerRef {
+func normalizeBlockers(blockers []githubIssue, activeStates, terminalStates []string, handoffState string, log *slog.Logger) []domain.BlockerRef {
+	states := issuekit.LabelStates{Active: activeStates, Terminal: terminalStates, Handoff: handoffState}
+
 	refs := make([]domain.BlockerRef, 0, len(blockers))
 	for _, b := range blockers {
 		num := strconv.Itoa(b.Number)
 		refs = append(refs, domain.BlockerRef{
 			ID:         num,
 			Identifier: num,
-			State:      extractState(b.Labels, b.State, activeStates, terminalStates, handoffState),
+			State:      issuekit.DeriveLabelState(githubLabelNames(b.Labels), b.State, "open", "closed", states, num, log),
 		})
 	}
 	return refs

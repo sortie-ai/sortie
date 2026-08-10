@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/sortie-ai/sortie/internal/adaptertest"
 	"github.com/sortie-ai/sortie/internal/domain"
 )
 
@@ -136,6 +137,8 @@ func TestGiteaSCMGetCIStatus(t *testing.T) {
 		{"a failure among successes marks failing", "status_has_failure.json", "failing"},
 		{"a pending with no failure marks pending", "status_has_pending.json", "pending"},
 		{"a warning among successes is non-failing", "status_warning_only.json", "success"},
+		{"an unrecognized status value defers to pending, not success", "status_unrecognized_value.json", "pending"},
+		{"an empty status value defers to pending, not success", "status_empty_value.json", "pending"},
 	}
 
 	for _, tt := range tests {
@@ -168,6 +171,47 @@ func TestGiteaSCMGetCIStatus(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("an unrecognized status value agrees with the CI provider's own answer", func(t *testing.T) {
+		t.Parallel()
+
+		prFixture := loadFixture(t, "pr_clean.json")
+		statusFixture := loadFixture(t, "status_unrecognized_value.json")
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			switch {
+			case strings.Contains(r.URL.Path, "/status"):
+				_, _ = w.Write(statusFixture)
+			case strings.Contains(r.URL.Path, "/pulls/"):
+				_, _ = w.Write(prFixture)
+			default:
+				t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+				w.WriteHeader(http.StatusNotFound)
+			}
+		}))
+		defer srv.Close()
+
+		scmAdapter := mustSCMAdapter(t, srv.URL)
+		gateStatus, err := scmAdapter.GetCIStatus(context.Background(), 6, testOwner, testRepo)
+		if err != nil {
+			t.Fatalf("GetCIStatus: unexpected error: %v", err)
+		}
+		if gateStatus != "pending" {
+			t.Errorf("GetCIStatus() = %q, want %q", gateStatus, "pending")
+		}
+
+		ciProvider := mustCIProvider(t, srv.URL, 50)
+		result, err := ciProvider.FetchCIStatus(context.Background(), "sha-clean-001")
+		if err != nil {
+			t.Fatalf("FetchCIStatus: unexpected error: %v", err)
+		}
+		if result.Status != domain.CIStatusPending {
+			t.Errorf("FetchCIStatus().Status = %q, want %q", result.Status, domain.CIStatusPending)
+		}
+		if gateStatus != string(result.Status) {
+			t.Errorf("GetCIStatus() = %q disagrees with FetchCIStatus().Status = %q for the same commit", gateStatus, result.Status)
+		}
+	})
 
 	t.Run("missing head sha is a payload error", func(t *testing.T) {
 		t.Parallel()
@@ -408,10 +452,7 @@ func TestGiteaSCMMergePR(t *testing.T) {
 		adapter := mustSCMAdapter(t, srv.URL)
 		_, err := adapter.MergePR(context.Background(), 6, testOwner, testRepo, domain.StrategyMerge, "", "", "sha-expected-head-001")
 
-		se := assertSCMConflict(t, err)
-		if !strings.Contains(strings.ToLower(se.Message), "already merged") {
-			t.Errorf("SCMError.Message = %q, want it to contain %q (case-insensitive)", se.Message, "already merged")
-		}
+		adaptertest.AssertAlreadyMergedMarker(t, err)
 	})
 
 	t.Run("a stale 409 plus a merged:false re-read yields a conflict without the already-merged marker", func(t *testing.T) {
@@ -565,7 +606,24 @@ func TestGiteaSCMDeleteBranch(t *testing.T) {
 
 		adapter := mustSCMAdapter(t, srv.URL)
 		err := adapter.DeleteBranch(context.Background(), testOwner, testRepo, "feature/gone")
-		assertSCMErrorKind(t, err, domain.ErrSCMNotFound)
+		adaptertest.AssertBranchAbsentDisposition(t, err)
+	})
+
+	t.Run("a 409 is not promoted to conflict", func(t *testing.T) {
+		t.Parallel()
+
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusConflict)
+			_, _ = w.Write([]byte(`{"message":"conflict"}`))
+		}))
+		defer srv.Close()
+
+		adapter := mustSCMAdapter(t, srv.URL)
+		err := adapter.DeleteBranch(context.Background(), testOwner, testRepo, "feature/blocked-by-race")
+
+		// Only a merge write path promotes 405/409 to ErrSCMConflict;
+		// DeleteBranch is not on that path.
+		adaptertest.AssertSCMErrorKind(t, err, domain.ErrSCMAPI)
 	})
 
 	t.Run("a slash-bearing branch name reaches the server percent-encoded", func(t *testing.T) {

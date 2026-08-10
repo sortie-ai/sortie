@@ -1,0 +1,8 @@
+{
+  "state": "",
+  "sha": "sha-clean-001",
+  "total_count": 1,
+  "statuses": [
+    { "id": 9, "status": "custom-provider-status", "context": "ci/external", "description": "Unrecognized status value" }
+  ]
+}

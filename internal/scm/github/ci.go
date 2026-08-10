@@ -13,6 +13,7 @@ import (
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/httpkit"
 	"github.com/sortie-ai/sortie/internal/registry"
+	"github.com/sortie-ai/sortie/internal/scm/scmcore"
 )
 
 func init() {
@@ -128,14 +129,13 @@ func (p *GitHubCIProvider) FetchCIStatus(ctx context.Context, ref string) (domai
 		}
 	}
 
-	status := computeAggregateStatus(runs)
-	failCount := computeFailingCount(runs)
+	status := scmcore.AggregateCIStatus(runs)
+	failCount := scmcore.FailingCount(runs)
 
 	var logExcerpt string
 	if status == domain.CIStatusFailing && p.maxLogLines > 0 {
 		for _, gh := range raw {
-			c := mapCheckConclusion(gh.Conclusion)
-			if c == domain.CheckConclusionFailure || c == domain.CheckConclusionTimedOut || c == domain.CheckConclusionCancelled {
+			if scmcore.IsFailingConclusion(mapCheckConclusion(gh.Conclusion)) {
 				if gh.App != nil && gh.App.Slug == "github-actions" {
 					logExcerpt = p.fetchLogExcerpt(ctx, gh)
 					break
@@ -246,44 +246,6 @@ func mapCheckConclusion(c *string) domain.CheckConclusion {
 	default:
 		return domain.CheckConclusionPending
 	}
-}
-
-func computeAggregateStatus(runs []domain.CheckRun) domain.CIStatus {
-	if len(runs) == 0 {
-		return domain.CIStatusPending
-	}
-
-	allCompleted := true
-	anyFailed := false
-
-	for _, run := range runs {
-		if run.Status != domain.CheckRunStatusCompleted {
-			allCompleted = false
-		}
-		switch run.Conclusion {
-		case domain.CheckConclusionFailure, domain.CheckConclusionTimedOut, domain.CheckConclusionCancelled:
-			anyFailed = true
-		}
-	}
-
-	if anyFailed {
-		return domain.CIStatusFailing
-	}
-	if allCompleted {
-		return domain.CIStatusPassing
-	}
-	return domain.CIStatusPending
-}
-
-func computeFailingCount(runs []domain.CheckRun) int {
-	count := 0
-	for _, run := range runs {
-		switch run.Conclusion {
-		case domain.CheckConclusionFailure, domain.CheckConclusionTimedOut, domain.CheckConclusionCancelled:
-			count++
-		}
-	}
-	return count
 }
 
 func toCIError(err error) error {

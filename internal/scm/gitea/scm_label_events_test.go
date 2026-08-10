@@ -9,7 +9,9 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/sortie-ai/sortie/internal/adaptertest"
 	"github.com/sortie-ai/sortie/internal/domain"
+	"github.com/sortie-ai/sortie/internal/scm/scmcore"
 )
 
 // buildLabelTimelinePage returns a JSON array of n synthetic label-add
@@ -59,8 +61,8 @@ func TestGiteaSCMListLabelEvents(t *testing.T) {
 
 		wantIDs := []int64{1, 9, 10, 12}
 		for i, id := range wantIDs {
-			if events[i].ID != sortableEventID(id) {
-				t.Errorf("events[%d].ID = %q, want %q (oldest-first order)", i, events[i].ID, sortableEventID(id))
+			if events[i].ID != scmcore.SortableEventID(id) {
+				t.Errorf("events[%d].ID = %q, want %q (oldest-first order)", i, events[i].ID, scmcore.SortableEventID(id))
 			}
 		}
 
@@ -113,6 +115,7 @@ func TestGiteaSCMListLabelEvents(t *testing.T) {
 		if n := requestCount.Load(); n != 2 {
 			t.Errorf("request count = %d, want 2 (the response carries no Link header; a Link-based paginator would stop at 1)", n)
 		}
+		adaptertest.AssertLabelEventsOrdered(t, events)
 	})
 
 	t.Run("empty timeline returns a non-nil empty slice", func(t *testing.T) {
@@ -129,12 +132,7 @@ func TestGiteaSCMListLabelEvents(t *testing.T) {
 		if err != nil {
 			t.Fatalf("ListLabelEvents: unexpected error: %v", err)
 		}
-		if events == nil {
-			t.Error("ListLabelEvents() = nil, want non-nil empty slice")
-		}
-		if len(events) != 0 {
-			t.Errorf("ListLabelEvents() len = %d, want 0", len(events))
-		}
+		adaptertest.AssertEmptyNonNil(t, events, "ListLabelEvents")
 	})
 
 	t.Run("malformed timeline response is a payload error", func(t *testing.T) {
@@ -244,8 +242,34 @@ func TestGiteaSCMRemoveLabel(t *testing.T) {
 		defer srv.Close()
 
 		adapter := mustSCMAdapter(t, srv.URL)
-		if err := adapter.RemoveLabel(context.Background(), 6, testOwner, testRepo, "bug"); err != nil {
-			t.Errorf("RemoveLabel: got error %v, want nil (a raced 404 on delete must map to nil)", err)
-		}
+		err := adapter.RemoveLabel(context.Background(), 6, testOwner, testRepo, "bug")
+		adaptertest.AssertLabelAbsentDisposition(t, err)
+	})
+
+	t.Run("a 409 from the delete route is not promoted to conflict", func(t *testing.T) {
+		t.Parallel()
+
+		labelsFixture := loadFixture(t, "issue_labels_bug.json")
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch {
+			case r.Method == http.MethodDelete:
+				w.WriteHeader(http.StatusConflict)
+				_, _ = w.Write([]byte(`{"message":"conflict"}`))
+			case strings.HasSuffix(r.URL.Path, "/labels"):
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write(labelsFixture)
+			default:
+				t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+				w.WriteHeader(http.StatusNotFound)
+			}
+		}))
+		defer srv.Close()
+
+		adapter := mustSCMAdapter(t, srv.URL)
+		err := adapter.RemoveLabel(context.Background(), 6, testOwner, testRepo, "bug")
+
+		// Only a merge write path promotes 405/409 to ErrSCMConflict;
+		// RemoveLabel is not on that path.
+		adaptertest.AssertSCMErrorKind(t, err, domain.ErrSCMAPI)
 	})
 }

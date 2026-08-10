@@ -22,6 +22,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   longer consumes the unauthenticated GitHub API quota, which is what
   made unpinned installs fail on shared CI runners.
 
+- `sortie validate` Jira adapter config validation: emits offline
+  diagnostics for `tracker.kind: jira` covering endpoint presence,
+  endpoint URL shape (a scheme and a host), an endpoint that already
+  contains `/rest/api/`, and `api_key` shape (a colon in the first or
+  last position, and a colon-free key against an Atlassian Cloud host).
+  All four checks are errors that block dispatch.
+
+- `sortie validate` now reports a malformed Gitea `tracker.query_filter`
+  using the same grammar the adapter enforces at startup, and an
+  untrimmed element in `tracker.active_states` or `tracker.terminal_states`
+  on GitHub and Gitea, matching the existing GitLab and Linear
+  diagnostics. The empty-element and untrimmed-element diagnostic
+  wording is now identical across every tracker adapter that reports it.
+
 ### Fixed
 
 - Follow-up work already queued for an issue is no longer discarded
@@ -97,6 +111,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   subprocess output ends early also reach the event stream, so the
   dashboard's last event no longer stops at the last step that worked.
 
+- The GitHub auto-merge CI gate read only the first page of a commit's
+  combined statuses and check runs, so a commit carrying more than 30
+  of either could report the wrong merge verdict. Both routes are now
+  paginated to exhaustion.
+  ([#784](https://github.com/sortie-ai/sortie/issues/784))
+
+- The Gitea auto-merge CI gate treated a commit status it did not
+  recognize as passing, letting auto-merge proceed on a signal it could
+  not interpret. It now treats an unrecognized or empty status as
+  pending, matching the Gitea CI reaction's own reading of the same
+  value.
+
+- An auto-merge on GitHub that lost the race to a merge performed by
+  someone else no longer retries until it escalates. Sortie recognized
+  that case only when GitHub's rejection wording said the pull request
+  was already merged, which it does not say, so the reaction re-polled
+  a merge that had already landed and eventually asked for a human.
+  Sortie now re-reads the pull request after a rejected merge and
+  treats a confirmed merge as success, closing out the reaction and
+  counting it as merged, which is what Gitea already did.
+  ([#786](https://github.com/sortie-ai/sortie/issues/786))
+
 ### Changed
 
 - `opencode` transport failures - a stdout read error, a session id
@@ -118,6 +154,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   turns per run in `sortie stats` and on the dashboard drop for those
   two agents at this release, with no change in behavior behind the
   numbers.
+
+- The multi-label state WARN, logged when an issue carries more than
+  one configured active, terminal, or handoff label, now identifies the
+  issue with `issue_identifier` on every forge, replacing `issue_index`
+  on Gitea and `iid` on GitLab. GitHub now logs this WARN as well,
+  matching Gitea and GitLab. An operator's saved log filter on the old
+  attribute name needs updating.
+
+- A source-control failure on GitHub or Gitea that is not a merge no
+  longer reports the `scm_conflict_error` category. A 405 or 409 from a
+  review read, a CI read, a label removal, or a branch delete now
+  reports `scm_api_error`; only a rejected merge reports a conflict. An
+  operator's alert on `scm_conflict_error` now fires on merges only.
 
 ### Migrations
 

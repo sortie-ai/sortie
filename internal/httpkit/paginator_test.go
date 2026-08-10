@@ -438,6 +438,197 @@ func TestLinkPaginator_cancellation(t *testing.T) {
 	}
 }
 
+// buildIntRange returns a JSON array of n consecutive integers starting at
+// start, modeling one page-number page without hand-authoring a repetitive
+// fixture.
+func buildIntRange(t *testing.T, start, n int) []byte {
+	t.Helper()
+	values := make([]int, n)
+	for i := range n {
+		values[i] = start + i
+	}
+	data, err := json.Marshal(values)
+	if err != nil {
+		t.Fatalf("marshal int range: %v", err)
+	}
+	return data
+}
+
+func TestPagePaginator(t *testing.T) {
+	t.Parallel()
+
+	t.Run("accumulates across a full page and a short page", func(t *testing.T) {
+		t.Parallel()
+
+		const pageSize = 50
+		page1 := buildIntRange(t, 1, pageSize)
+		page2 := buildIntRange(t, pageSize+1, 2)
+
+		var requestCount atomic.Int32
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			n := requestCount.Add(1)
+			w.Header().Set("Content-Type", "application/json")
+			if n == 1 {
+				if got := r.URL.Query().Get("page"); got != "1" {
+					t.Errorf("page 1 request: page = %q, want %q", got, "1")
+				}
+				if got := r.URL.Query().Get("limit"); got != "50" {
+					t.Errorf("page 1 request: limit = %q, want %q", got, "50")
+				}
+				_, _ = w.Write(page1)
+				return
+			}
+			if got := r.URL.Query().Get("page"); got != "2" {
+				t.Errorf("page 2 request: page = %q, want %q", got, "2")
+			}
+			if got := r.URL.Query().Get("limit"); got != "50" {
+				t.Errorf("page 2 request: limit = %q, want %q", got, "50")
+			}
+			_, _ = w.Write(page2)
+		}))
+		defer srv.Close()
+
+		c := mustClient(t, ClientOptions{BaseURL: srv.URL})
+		p := NewPagePaginator(c, "/items", nil, decodeInts, PageOptions{PageParam: "page", SizeParam: "limit", PageSize: pageSize})
+
+		got, err := p.All(context.Background())
+		if err != nil {
+			t.Fatalf("All: unexpected error: %v", err)
+		}
+		if len(got) != pageSize+2 {
+			t.Fatalf("All() len = %d, want %d", len(got), pageSize+2)
+		}
+		if got[0] != 1 || got[len(got)-1] != pageSize+2 {
+			t.Errorf("All() = [%d...%d], want [1...%d]", got[0], got[len(got)-1], pageSize+2)
+		}
+		if n := requestCount.Load(); n != 2 {
+			t.Errorf("request count = %d, want 2", n)
+		}
+	})
+
+	t.Run("a single short page stops after one request", func(t *testing.T) {
+		t.Parallel()
+
+		var requestCount atomic.Int32
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			requestCount.Add(1)
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`[1,2,3]`))
+		}))
+		defer srv.Close()
+
+		c := mustClient(t, ClientOptions{BaseURL: srv.URL})
+		p := NewPagePaginator(c, "/items", nil, decodeInts, PageOptions{PageParam: "page", SizeParam: "limit", PageSize: 50})
+
+		got, err := p.All(context.Background())
+		if err != nil {
+			t.Fatalf("All: unexpected error: %v", err)
+		}
+		if len(got) != 3 {
+			t.Errorf("All() len = %d, want 3", len(got))
+		}
+		if n := requestCount.Load(); n != 1 {
+			t.Errorf("request count = %d, want 1 (a page shorter than the limit must stop pagination)", n)
+		}
+	})
+
+	t.Run("MaxPages caps the walk and invokes OnLimitReached exactly once", func(t *testing.T) {
+		t.Parallel()
+
+		var requestCount atomic.Int32
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			n := requestCount.Add(1)
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write(buildIntRange(t, int(n-1)*3+1, 3))
+		}))
+		defer srv.Close()
+
+		var limitCalled atomic.Int32
+		c := mustClient(t, ClientOptions{BaseURL: srv.URL})
+		p := NewPagePaginator(c, "/items", nil, decodeInts, PageOptions{
+			PageParam: "page",
+			SizeParam: "limit",
+			PageSize:  3,
+			MaxPages:  2,
+			OnLimitReached: func(limit int) {
+				limitCalled.Add(1)
+			},
+		})
+
+		got, err := p.All(context.Background())
+		if err != nil {
+			t.Fatalf("All: unexpected error: %v", err)
+		}
+		if len(got) != 6 {
+			t.Errorf("All() len = %d, want 6 (two full pages, then the cap stops the walk)", len(got))
+		}
+		if n := requestCount.Load(); n != 2 {
+			t.Errorf("request count = %d, want 2 (MaxPages must stop further requests)", n)
+		}
+		if n := limitCalled.Load(); n != 1 {
+			t.Errorf("OnLimitReached calls = %d, want 1", n)
+		}
+	})
+
+	t.Run("a page reporting zero items returns a non-nil empty slice", func(t *testing.T) {
+		t.Parallel()
+
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`[]`))
+		}))
+		defer srv.Close()
+
+		c := mustClient(t, ClientOptions{BaseURL: srv.URL})
+		p := NewPagePaginator(c, "/items", nil, decodeInts, PageOptions{PageParam: "page", SizeParam: "limit", PageSize: 50})
+
+		got, err := p.All(context.Background())
+		if err != nil {
+			t.Fatalf("All: unexpected error: %v", err)
+		}
+		if got == nil {
+			t.Fatal("All() = nil, want non-nil empty slice")
+		}
+		if len(got) != 0 {
+			t.Errorf("All() = %v, want empty", got)
+		}
+	})
+
+	t.Run("a canceled context returns immediately with no request", func(t *testing.T) {
+		t.Parallel()
+
+		var requestCount atomic.Int32
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			requestCount.Add(1)
+			_, _ = w.Write([]byte(`[]`))
+		}))
+		defer srv.Close()
+
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+
+		c := mustClient(t, ClientOptions{BaseURL: srv.URL})
+		p := NewPagePaginator(c, "/items", nil, decodeInts, PageOptions{PageParam: "page", SizeParam: "limit", PageSize: 50})
+
+		items, err := p.All(ctx)
+		// allPages checks ctx.Err() before issuing a request and returns it
+		// unconverted, matching the token- and Link-mode cancellation
+		// behavior: the error is the raw context error, not a classified
+		// *domain.TrackerError, so a caller on the SCM boundary converts it
+		// at its own call site (see the gitea package's own paginateSCM
+		// test for that conversion).
+		if items != nil {
+			t.Errorf("All() items = %v, want nil", items)
+		}
+		if !errors.Is(err, context.Canceled) {
+			t.Errorf("All() err = %v, want %v", err, context.Canceled)
+		}
+		if n := requestCount.Load(); n != 0 {
+			t.Errorf("request count = %d, want 0 (a canceled context must be checked before the first request)", n)
+		}
+	})
+}
+
 func TestParseLinkRel(t *testing.T) {
 	t.Parallel()
 
