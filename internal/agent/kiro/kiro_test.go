@@ -12,7 +12,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/sortie-ai/sortie/internal/agent/agentcore"
 	"github.com/sortie-ai/sortie/internal/agent/agenttest"
+	"github.com/sortie-ai/sortie/internal/agent/agenttest/dispositiontest"
 	"github.com/sortie-ai/sortie/internal/domain"
 )
 
@@ -43,6 +45,34 @@ cat '%s'
 cat '%s' >&2
 exit %d
 `, outFile, errFile, chatExit)
+
+	return agenttest.WriteScript(t, dir, "kiro-cli", body)
+}
+
+// fakeChatScriptWithArgsLog behaves exactly like fakeChatScript, except
+// every non-whoami invocation appends its argument list to argsLog
+// before replaying stdoutBody and stderrBody, so a test can inspect
+// what buildArgs produced for each turn.
+func fakeChatScriptWithArgsLog(t *testing.T, dir, stdoutBody, stderrBody string, chatExit int, argsLog string) string {
+	t.Helper()
+	outFile := filepath.Join(dir, "chat_stdout")
+	errFile := filepath.Join(dir, "chat_stderr")
+	if err := os.WriteFile(outFile, []byte(stdoutBody), 0o644); err != nil {
+		t.Fatalf("writing chat stdout fixture: %v", err)
+	}
+	if err := os.WriteFile(errFile, []byte(stderrBody), 0o644); err != nil {
+		t.Fatalf("writing chat stderr fixture: %v", err)
+	}
+
+	body := fmt.Sprintf(`if [ "$1" = "whoami" ]; then
+  printf '%%s\n' 'Authenticated with API key'
+  exit 0
+fi
+printf '%%s\n' "$*" >> '%s'
+cat '%s'
+cat '%s' >&2
+exit %d
+`, argsLog, outFile, errFile, chatExit)
 
 	return agenttest.WriteScript(t, dir, "kiro-cli", body)
 }
@@ -115,6 +145,17 @@ func hasEventType(events []domain.AgentEvent, typ domain.AgentEventType) bool {
 	return false
 }
 
+// findEventByType returns the first event matching typ and true, or a
+// zero value and false when no matching event exists.
+func findEventByType(events []domain.AgentEvent, typ domain.AgentEventType) (domain.AgentEvent, bool) {
+	for _, e := range events {
+		if e.Type == typ {
+			return e, true
+		}
+	}
+	return domain.AgentEvent{}, false
+}
+
 // The observed success trailer and auth-failure line use the exact literals
 // from the adapter research notes: stderr carries "▸ Credits: … • Time: …" on
 // a turn that ran, and "Authentication failed." on an invalid-credential turn.
@@ -146,6 +187,14 @@ func TestOnFinalize_SuccessWithCredits(t *testing.T) {
 	if !state.resumeRequested {
 		t.Error("state.resumeRequested = false, want true after a turn with the credits trailer")
 	}
+
+	dispositiontest.AssertDispositionContract(t, agentcore.TurnEvidence{
+		Terminal:     agentcore.TerminalSuccess,
+		ExitObserved: true,
+		ExitCode:     0,
+		Work:         agentcore.WorkUnobservable,
+		WorkDetail:   "no credits trailer on stderr",
+	}, result, err)
 }
 
 func TestOnFinalize_AuthFailed(t *testing.T) {
@@ -170,6 +219,16 @@ func TestOnFinalize_AuthFailed(t *testing.T) {
 	if state.resumeRequested {
 		t.Error("state.resumeRequested = true, want false after an auth-failed turn")
 	}
+
+	dispositiontest.AssertDispositionContract(t, agentcore.TurnEvidence{
+		Terminal:          agentcore.TerminalFailure,
+		TerminalErrorKind: domain.ErrResponseError,
+		TerminalMessage:   "kiro authentication failed",
+		ExitObserved:      true,
+		ExitCode:          0,
+		Work:              agentcore.WorkUnobservable,
+		WorkDetail:        "no credits trailer on stderr",
+	}, result, err)
 }
 
 func TestOnFinalize_ExitZeroNoSignal(t *testing.T) {
@@ -193,6 +252,29 @@ func TestOnFinalize_ExitZeroNoSignal(t *testing.T) {
 	if state.resumeRequested {
 		t.Error("state.resumeRequested = true, want false after a no-credits turn")
 	}
+
+	// The zero-work message carries the family-wide stem plus the
+	// credits-trailer detail, so an operator can grep one string across
+	// every adapter and still see kiro's own signal.
+	const wantMessage = "agent exited without producing output: no credits trailer on stderr"
+	turnFailed, ok := findEventByType(events, domain.EventTurnFailed)
+	if !ok {
+		t.Fatal("turn_failed event not found")
+	}
+	if turnFailed.Message != wantMessage {
+		t.Errorf("turn_failed Message = %q, want %q", turnFailed.Message, wantMessage)
+	}
+	var agentErr *domain.AgentError
+	if errors.As(err, &agentErr) && agentErr.Message != wantMessage {
+		t.Errorf("AgentError.Message = %q, want %q", agentErr.Message, wantMessage)
+	}
+
+	dispositiontest.AssertDispositionContract(t, agentcore.TurnEvidence{
+		ExitObserved: true,
+		ExitCode:     0,
+		Work:         agentcore.WorkUnobservable,
+		WorkDetail:   "no credits trailer on stderr",
+	}, result, err)
 }
 
 func TestOnFinalize_NonZeroExit(t *testing.T) {
@@ -211,6 +293,27 @@ func TestOnFinalize_NonZeroExit(t *testing.T) {
 	if !hasEventType(events, domain.EventTurnFailed) {
 		t.Error("EventTurnFailed not delivered for non-zero exit")
 	}
+
+	// The non-zero-exit row deliberately uses two different texts: the
+	// event message names the class, the error message names the code.
+	turnFailed, ok := findEventByType(events, domain.EventTurnFailed)
+	if !ok {
+		t.Fatal("turn_failed event not found")
+	}
+	if turnFailed.Message != "non-zero exit" {
+		t.Errorf("turn_failed Message = %q, want %q", turnFailed.Message, "non-zero exit")
+	}
+	var agentErr *domain.AgentError
+	if errors.As(err, &agentErr) && agentErr.Message != "exit code 1" {
+		t.Errorf("AgentError.Message = %q, want %q", agentErr.Message, "exit code 1")
+	}
+
+	dispositiontest.AssertDispositionContract(t, agentcore.TurnEvidence{
+		ExitObserved: true,
+		ExitCode:     1,
+		Work:         agentcore.WorkUnobservable,
+		WorkDetail:   "no credits trailer on stderr",
+	}, result, err)
 }
 
 // TestOnFinalize_AuthLineWithStdoutIsNotAuthError verifies the auth-failure arm
@@ -229,6 +332,13 @@ func TestOnFinalize_AuthLineWithStdoutIsNotAuthError(t *testing.T) {
 		t.Errorf("result.ExitReason = %q, want %q", result.ExitReason, domain.EventTurnFailed)
 	}
 	requireAgentError(t, err, domain.ErrTurnFailed)
+
+	dispositiontest.AssertDispositionContract(t, agentcore.TurnEvidence{
+		ExitObserved: true,
+		ExitCode:     0,
+		Work:         agentcore.WorkUnobservable,
+		WorkDetail:   "no credits trailer on stderr",
+	}, result, err)
 }
 
 // TestOnFinalize_NoTokenEvent verifies that across every owned OnFinalize row,
@@ -262,6 +372,50 @@ func TestOnFinalize_NoTokenEvent(t *testing.T) {
 
 			agenttest.AssertMeasurementAbsent(t, events, result)
 		})
+	}
+}
+
+// TestOnFinalize_ResumeRequestedOnSecondTurn pins the resumeRequested
+// side effect against being dropped in the move to the shared decision:
+// a successful turn sets it, and the next turn's argument list carries
+// the resume flag as a result.
+func TestOnFinalize_ResumeRequestedOnSecondTurn(t *testing.T) {
+	// t.Setenv is incompatible with t.Parallel.
+	setValidAPIKey(t)
+
+	dir := t.TempDir()
+	argsLog := filepath.Join(dir, "args.log")
+	bin := fakeChatScriptWithArgsLog(t, dir, "PONG", creditsLine, 0, argsLog)
+	adapter, session, state := mustStartSession(t, bin)
+
+	_, result1, err := runChatTurn(t, adapter, session, "first")
+	if err != nil {
+		t.Fatalf("RunTurn(first) error = %v", err)
+	}
+	if result1.ExitReason != domain.EventTurnCompleted {
+		t.Fatalf("RunTurn(first).ExitReason = %q, want %q", result1.ExitReason, domain.EventTurnCompleted)
+	}
+	if !state.resumeRequested {
+		t.Fatal("state.resumeRequested = false after a successful turn, want true")
+	}
+
+	if _, _, err := runChatTurn(t, adapter, session, "second"); err != nil {
+		t.Fatalf("RunTurn(second) error = %v", err)
+	}
+
+	logged, err := os.ReadFile(argsLog)
+	if err != nil {
+		t.Fatalf("reading captured args: %v", err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(logged)), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("captured chat invocations = %d, want 2; log = %q", len(lines), string(logged))
+	}
+	if strings.Contains(lines[0], "--resume") {
+		t.Errorf("first turn args = %q, want no --resume flag", lines[0])
+	}
+	if !strings.Contains(lines[1], "--resume") {
+		t.Errorf("second turn args = %q, want the --resume flag", lines[1])
 	}
 }
 

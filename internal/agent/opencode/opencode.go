@@ -77,6 +77,11 @@ type turnRuntime struct {
 	terminalOutcome domain.AgentEventType
 	waitMu          sync.Mutex
 	waitRes         waitResult
+
+	// assistantOutputSeen is true once at least one text, reasoning, or
+	// tool_use part has been parsed during this turn. It is the per-turn
+	// work signal for the shared turn-disposition decision.
+	assistantOutputSeen bool
 }
 
 type waitResult struct {
@@ -273,40 +278,28 @@ func (a *OpenCodeAdapter) RunTurn(ctx context.Context, session domain.Session, p
 			}
 
 			if parsed.Err != nil {
-				if ctx.Err() != nil || state.isClosed() {
-					closeStop(runtime)
-					killTurnProcess(runtime)
-					<-runtime.readerDone
-					_ = waitForProcess(runtime)
-					clearActive(state, runtime)
-					usage := state.acc.Snapshot()
-					agentcore.EmitTurnCancelled(emit, "turn cancelled", usage)
-					return domain.TurnResult{
-						SessionID:     state.currentSessionID(),
-						ExitReason:    domain.EventTurnCancelled,
-						Usage:         usage,
-						UsageMeasured: state.usageMeasured,
-					}, nil
-				}
-
-				emitTurnEndedWithError(emit, "stdout read error")
 				closeStop(runtime)
 				killTurnProcess(runtime)
 				<-runtime.readerDone
 				_ = waitForProcess(runtime)
-				procutil.EmitWarnLines(runtime.stderrCollector.Lines(), state.logger())
 				clearActive(state, runtime)
-				usage := state.acc.Snapshot()
-				return domain.TurnResult{
-						SessionID:     state.currentSessionID(),
-						ExitReason:    domain.EventTurnEndedWithError,
-						Usage:         usage,
-						UsageMeasured: state.usageMeasured,
-					}, &domain.AgentError{
-						Kind:    domain.ErrResponseError,
-						Message: "stdout read error",
-						Err:     parsed.Err,
+
+				ev := agentcore.TurnEvidence{Terminal: agentcore.TerminalCancelled, TerminalMessage: "turn cancelled"}
+				if ctx.Err() == nil && !state.isClosed() {
+					procutil.EmitWarnLines(runtime.stderrCollector.Lines(), state.logger())
+					ev = agentcore.TurnEvidence{
+						Terminal:          agentcore.TerminalFailure,
+						TerminalErrorKind: domain.ErrResponseError,
+						TerminalMessage:   "stdout read error",
+						Cause:             parsed.Err,
 					}
+				}
+				meta := agentcore.TurnMeta{SessionID: state.currentSessionID(), Usage: state.acc.Snapshot(), UsageMeasured: state.usageMeasured}
+				result, agentErr := agentcore.FinalizeTurn(emit, state.logger(), ev, meta)
+				if agentErr != nil {
+					return result, agentErr
+				}
+				return result, nil
 			}
 
 			if parsed.PlainText != "" {
@@ -341,22 +334,23 @@ func (a *OpenCodeAdapter) RunTurn(ctx context.Context, session domain.Session, p
 			started, mismatch := state.applySessionEvent(event.SessionID)
 			if mismatch {
 				message := fmt.Sprintf("session id mismatch: expected %q, got %q", state.currentSessionID(), event.SessionID)
-				emitTurnEndedWithError(emit, message)
 				closeStop(runtime)
 				killTurnProcess(runtime)
 				<-runtime.readerDone
 				_ = waitForProcess(runtime)
 				procutil.EmitWarnLines(runtime.stderrCollector.Lines(), state.logger())
 				clearActive(state, runtime)
-				return domain.TurnResult{
-						SessionID:     state.currentSessionID(),
-						ExitReason:    domain.EventTurnEndedWithError,
-						Usage:         state.acc.Snapshot(),
-						UsageMeasured: state.usageMeasured,
-					}, &domain.AgentError{
-						Kind:    domain.ErrResponseError,
-						Message: message,
-					}
+				ev := agentcore.TurnEvidence{
+					Terminal:          agentcore.TerminalFailure,
+					TerminalErrorKind: domain.ErrResponseError,
+					TerminalMessage:   message,
+				}
+				meta := agentcore.TurnMeta{SessionID: state.currentSessionID(), Usage: state.acc.Snapshot(), UsageMeasured: state.usageMeasured}
+				result, agentErr := agentcore.FinalizeTurn(emit, state.logger(), ev, meta)
+				if agentErr != nil {
+					return result, agentErr
+				}
+				return result, nil
 			}
 			if started {
 				emit(domain.AgentEvent{
@@ -382,6 +376,7 @@ func (a *OpenCodeAdapter) RunTurn(ctx context.Context, session domain.Session, p
 					emit(domain.AgentEvent{Type: domain.EventMalformed, Timestamp: now, Message: "invalid text payload"})
 					continue
 				}
+				runtime.assistantOutputSeen = true
 				agentcore.EmitNotification(emit, typeutil.TruncateRunes(part.Text, 500))
 
 			case "reasoning":
@@ -389,6 +384,7 @@ func (a *OpenCodeAdapter) RunTurn(ctx context.Context, session domain.Session, p
 					emit(domain.AgentEvent{Type: domain.EventMalformed, Timestamp: now, Message: "invalid reasoning payload"})
 					continue
 				}
+				runtime.assistantOutputSeen = true
 				emit(domain.AgentEvent{
 					Type:      domain.EventOtherMessage,
 					Timestamp: now,
@@ -401,6 +397,7 @@ func (a *OpenCodeAdapter) RunTurn(ctx context.Context, session domain.Session, p
 					emit(domain.AgentEvent{Type: domain.EventMalformed, Timestamp: now, Message: "invalid tool_use payload"})
 					continue
 				}
+				runtime.assistantOutputSeen = true
 				emit(domain.AgentEvent{
 					Type:           domain.EventToolResult,
 					Timestamp:      now,
@@ -421,7 +418,6 @@ func (a *OpenCodeAdapter) RunTurn(ctx context.Context, session domain.Session, p
 			case "error":
 				runtime.terminalOutcome = domain.EventTurnFailed
 				runtime.terminalError = event.Error
-				agentcore.EmitTurnFailed(emit, rawRunErrorMessage(event.Error), 0, state.acc.Snapshot())
 
 			default:
 				emit(domain.AgentEvent{
@@ -445,32 +441,32 @@ func (a *OpenCodeAdapter) RunTurn(ctx context.Context, session domain.Session, p
 			<-runtime.readerDone
 			_ = waitForProcess(runtime)
 			clearActive(state, runtime)
-			usage := state.acc.Snapshot()
-			agentcore.EmitTurnCancelled(emit, "turn cancelled", usage)
-			return domain.TurnResult{
-				SessionID:     state.currentSessionID(),
-				ExitReason:    domain.EventTurnCancelled,
-				Usage:         usage,
-				UsageMeasured: state.usageMeasured,
-			}, nil
+			ev := agentcore.TurnEvidence{Terminal: agentcore.TerminalCancelled, TerminalMessage: "turn cancelled"}
+			meta := agentcore.TurnMeta{SessionID: state.currentSessionID(), Usage: state.acc.Snapshot(), UsageMeasured: state.usageMeasured}
+			result, agentErr := agentcore.FinalizeTurn(emit, state.logger(), ev, meta)
+			if agentErr != nil {
+				return result, agentErr
+			}
+			return result, nil
 
 		case <-readTimeoutC:
-			emitTurnEndedWithError(emit, "timed out waiting for first opencode json event")
 			closeStop(runtime)
 			killTurnProcess(runtime)
 			<-runtime.readerDone
 			_ = waitForProcess(runtime)
 			procutil.EmitWarnLines(runtime.stderrCollector.Lines(), state.logger())
 			clearActive(state, runtime)
-			return domain.TurnResult{
-					SessionID:     state.currentSessionID(),
-					ExitReason:    domain.EventTurnEndedWithError,
-					Usage:         state.acc.Snapshot(),
-					UsageMeasured: state.usageMeasured,
-				}, &domain.AgentError{
-					Kind:    domain.ErrResponseTimeout,
-					Message: "timed out waiting for first opencode json event",
-				}
+			ev := agentcore.TurnEvidence{
+				Terminal:          agentcore.TerminalFailure,
+				TerminalErrorKind: domain.ErrResponseTimeout,
+				TerminalMessage:   "timed out waiting for first opencode json event",
+			}
+			meta := agentcore.TurnMeta{SessionID: state.currentSessionID(), Usage: state.acc.Snapshot(), UsageMeasured: state.usageMeasured}
+			result, agentErr := agentcore.FinalizeTurn(emit, state.logger(), ev, meta)
+			if agentErr != nil {
+				return result, agentErr
+			}
+			return result, nil
 		}
 	}
 }
@@ -530,80 +526,56 @@ func (a *OpenCodeAdapter) finalizeExitedTurn(ctx context.Context, state *session
 	stderrLines := runtime.stderrCollector.Lines()
 	sessionID := state.currentSessionID()
 
-	if runtime.terminalError != nil {
-		if isMaskedServerError(rawRunErrorMessage(runtime.terminalError)) {
+	// Work reflects this turn's own parsed parts, not the run-cumulative
+	// export figure, which is non-zero on any turn after the first.
+	ev := agentcore.TurnEvidence{
+		ExitObserved: true,
+		ExitCode:     exit.exitCode,
+		Cause:        exit.err,
+		Work:         agentcore.WorkAbsent,
+		WorkDetail:   "no assistant output on the run stream",
+	}
+	if runtime.assistantOutputSeen {
+		ev.Work = agentcore.WorkPresent
+	}
+
+	switch {
+	case runtime.terminalOutcome == domain.EventTurnFailed:
+		ev.Terminal = agentcore.TerminalFailure
+		ev.TerminalErrorKind = domain.ErrTurnFailed
+		ev.Cause = nil
+		ev.TerminalMessage = rawRunErrorMessage(runtime.terminalError)
+		if isMaskedServerError(ev.TerminalMessage) {
 			if detail, ok := queryModelNotFound(ctx, state); ok {
 				state.logger().Debug("recovered masked opencode failure detail", slog.String("detail", detail))
-				agentcore.EmitTurnFailed(emit, detail, 0, snapshot)
+				ev.TerminalMessage = detail
 			}
 		}
 		procutil.EmitWarnLines(stderrLines, state.logger())
-		return domain.TurnResult{
-			SessionID:     sessionID,
-			ExitReason:    domain.EventTurnFailed,
-			Usage:         snapshot,
-			UsageMeasured: state.usageMeasured,
-		}, nil
-	}
 
-	if ctx.Err() != nil {
-		agentcore.EmitTurnCancelled(emit, "turn cancelled", snapshot)
-		return domain.TurnResult{
-			SessionID:     sessionID,
-			ExitReason:    domain.EventTurnCancelled,
-			Usage:         snapshot,
-			UsageMeasured: state.usageMeasured,
-		}, nil
-	}
+	case ctx.Err() != nil || state.isClosed():
+		ev.Terminal = agentcore.TerminalCancelled
+		ev.TerminalMessage = "turn cancelled"
+		ev.Cause = nil
 
-	if state.isClosed() {
-		agentcore.EmitTurnCancelled(emit, "turn cancelled", snapshot)
-		return domain.TurnResult{
-			SessionID:     sessionID,
-			ExitReason:    domain.EventTurnCancelled,
-			Usage:         snapshot,
-			UsageMeasured: state.usageMeasured,
-		}, nil
-	}
-
-	if !runtime.firstJSONSeen {
+	case !runtime.firstJSONSeen:
 		procutil.EmitWarnLines(stderrLines, state.logger())
-		emitTurnEndedWithError(emit, "process exited before first opencode json event")
-		return domain.TurnResult{
-				SessionID:     sessionID,
-				ExitReason:    domain.EventTurnEndedWithError,
-				Usage:         snapshot,
-				UsageMeasured: state.usageMeasured,
-			}, &domain.AgentError{
-				Kind:    domain.ErrPortExit,
-				Message: "process exited before first opencode json event",
-				Err:     exit.err,
-			}
-	}
 
-	if exit.err != nil || exit.exitCode != 0 {
+	case exit.err != nil || exit.exitCode != 0:
 		procutil.EmitWarnLines(stderrLines, state.logger())
-		message := portExitMessage(exit)
-		emitTurnEndedWithError(emit, message)
-		return domain.TurnResult{
-				SessionID:     sessionID,
-				ExitReason:    domain.EventTurnEndedWithError,
-				Usage:         snapshot,
-				UsageMeasured: state.usageMeasured,
-			}, &domain.AgentError{
-				Kind:    domain.ErrPortExit,
-				Message: message,
-				Err:     exit.err,
-			}
 	}
 
-	agentcore.EmitTurnCompleted(emit, "", 0, snapshot)
-	return domain.TurnResult{
+	meta := agentcore.TurnMeta{
 		SessionID:     sessionID,
-		ExitReason:    domain.EventTurnCompleted,
 		Usage:         snapshot,
 		UsageMeasured: state.usageMeasured,
-	}, nil
+	}
+
+	result, agentErr := agentcore.FinalizeTurn(emit, state.logger(), ev, meta)
+	if agentErr != nil {
+		return result, agentErr
+	}
+	return result, nil
 }
 
 func (s *sessionState) logger() *slog.Logger {
@@ -800,14 +772,6 @@ func exportTimeout(state *sessionState) time.Duration {
 	return timeout
 }
 
-func emitTurnEndedWithError(emit func(domain.AgentEvent), message string) {
-	emit(domain.AgentEvent{
-		Type:      domain.EventTurnEndedWithError,
-		Timestamp: time.Now().UTC(),
-		Message:   message,
-	})
-}
-
 func isPermissionWarning(line string) bool {
 	return strings.HasPrefix(strings.TrimSpace(line), "! permission requested:")
 }
@@ -843,16 +807,6 @@ const maskedServerErrorMessage = "Unexpected server error. Check server logs for
 // beyond opencode's generic server-error placeholder.
 func isMaskedServerError(message string) bool {
 	return strings.TrimSpace(message) == maskedServerErrorMessage
-}
-
-func portExitMessage(exit waitResult) string {
-	if exit.exitCode > 0 {
-		return fmt.Sprintf("opencode exited with code %d", exit.exitCode)
-	}
-	if exit.err != nil {
-		return fmt.Sprintf("opencode exited unexpectedly: %v", exit.err)
-	}
-	return "opencode exited unexpectedly"
 }
 
 func hasUsage(usage exportUsage) bool {

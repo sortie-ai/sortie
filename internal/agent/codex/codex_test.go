@@ -3,13 +3,19 @@
 package codex
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync/atomic"
 	"testing"
 
+	"github.com/sortie-ai/sortie/internal/agent/agentcore"
 	"github.com/sortie-ai/sortie/internal/agent/agenttest"
+	"github.com/sortie-ai/sortie/internal/agent/agenttest/dispositiontest"
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/registry"
 )
@@ -230,5 +236,247 @@ func TestRunTurn_UsageMeasured_TrueOnTokenUsageNotification(t *testing.T) {
 
 	if !result.UsageMeasured {
 		t.Error("RunTurn().UsageMeasured = false, want true when a thread/tokenUsage/updated notification carried a token-usage object")
+	}
+}
+
+// TestRunTurn_CompletedTurnReturnsUntypedNilError pins that a completed
+// turn's returned error interface is genuinely nil, not a typed-nil
+// *domain.AgentError promoted to a non-nil error interface.
+func TestRunTurn_CompletedTurnReturnsUntypedNilError(t *testing.T) {
+	t.Parallel()
+
+	state := makeTestState(loadFixture(t, "runturn_success.jsonl"))
+	adapter, _ := NewCodexAdapter(map[string]any{})
+
+	_, err := adapter.RunTurn(context.Background(), fakeSession(state), domain.RunTurnParams{
+		Prompt:  "do something",
+		OnEvent: func(domain.AgentEvent) {},
+	})
+	if err != nil {
+		t.Errorf("RunTurn() error = %v, want nil (not a typed-nil *domain.AgentError)", err)
+	}
+}
+
+// atomicErrContext behaves like context.Background() to every consumer
+// that selects on Done() (the channel is nil and never closes), but its
+// Err() method reports context.Canceled once cancelled is set, so a
+// test can drive a code path that reads ctx.Err() synchronously without
+// racing RunTurn's own <-ctx.Done() select case.
+type atomicErrContext struct {
+	context.Context
+	cancelled *atomic.Bool
+}
+
+func (c atomicErrContext) Err() error {
+	if c.cancelled.Load() {
+		return context.Canceled
+	}
+	return nil
+}
+
+// newInterruptedStatusState builds a sessionState whose msgCh is
+// unbuffered, so the test driving it can set the cancellation flag at
+// the exact point between the turn/start response and the
+// turn/completed notification: an unbuffered send only returns once
+// RunTurn's own goroutine has received it, and the Go memory model
+// guarantees everything RunTurn did before that receive (including its
+// ctx.Err() fast-path check) happened before the send returns.
+func newInterruptedStatusState() *sessionState {
+	return &sessionState{
+		threadID:   "thread-001",
+		target:     agentcore.LaunchTarget{WorkspacePath: "/tmp"},
+		waitCh:     make(chan struct{}),
+		stdin:      nopWriteCloser{},
+		stdout:     io.NopCloser(bytes.NewReader(nil)),
+		msgCh:      make(chan parsedMessage),
+		readerDone: make(chan struct{}),
+		stopCh:     make(chan struct{}),
+		acc:        agentcore.NewRunUsage(),
+	}
+}
+
+// TestRunTurn_InterruptedStatus pins the context-gated mapping for a
+// turn/completed notification reporting status interrupted: cancelled
+// only when the turn context is already done, failed (preserving the
+// retryable classification) when the context is still live.
+func TestRunTurn_InterruptedStatus(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name           string
+		contextIsLive  bool
+		wantExitReason domain.AgentEventType
+		wantErrorKind  domain.AgentErrorKind
+	}{
+		{
+			name:           "live context maps to failure, preserving the retryable classification",
+			contextIsLive:  true,
+			wantExitReason: domain.EventTurnFailed,
+			wantErrorKind:  domain.ErrTurnFailed,
+		},
+		{
+			name:           "already-cancelled context maps to cancellation",
+			contextIsLive:  false,
+			wantExitReason: domain.EventTurnCancelled,
+			wantErrorKind:  domain.ErrTurnCancelled,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			state := newInterruptedStatusState()
+			close(state.readerDone)
+
+			var cancelled atomic.Bool
+			ctx := atomicErrContext{Context: context.Background(), cancelled: &cancelled}
+
+			type outcome struct {
+				result domain.TurnResult
+				err    error
+			}
+			outcomeCh := make(chan outcome, 1)
+
+			adapter, _ := NewCodexAdapter(map[string]any{})
+			go func() {
+				result, err := adapter.RunTurn(ctx, fakeSession(state), domain.RunTurnParams{
+					Prompt:  "go",
+					OnEvent: func(domain.AgentEvent) {},
+				})
+				outcomeCh <- outcome{result, err}
+			}()
+
+			// This send returns only once RunTurn's response-wait loop has
+			// received it, which happens strictly after the ctx.Err()
+			// fast-path check, so cancelled is still guaranteed false here.
+			state.msgCh <- parseMessage([]byte(`{"id":1,"result":{"turn":{"id":"turn-001","status":"starting"}}}`))
+
+			if !tt.contextIsLive {
+				cancelled.Store(true)
+			}
+
+			// This send returns only once RunTurn's main loop is ready to
+			// receive again, which happens strictly after the turn/start
+			// response above has been fully processed.
+			state.msgCh <- parseMessage([]byte(`{"method":"turn/completed","params":{"turn":{"id":"turn-001","status":"interrupted"}}}`))
+
+			got := <-outcomeCh
+			result, err := got.result, got.err
+
+			if result.ExitReason != tt.wantExitReason {
+				t.Errorf("ExitReason = %q, want %q", result.ExitReason, tt.wantExitReason)
+			}
+			var agentErr *domain.AgentError
+			if !errors.As(err, &agentErr) {
+				t.Fatalf("error type = %T, want *domain.AgentError", err)
+			}
+			if agentErr.Kind != tt.wantErrorKind {
+				t.Errorf("AgentError.Kind = %q, want %q", agentErr.Kind, tt.wantErrorKind)
+			}
+		})
+	}
+}
+
+// TestRunTurn_FailedOrUnrecognizedStatus pins that a failed status with
+// no turn.error object, and any status other than completed,
+// interrupted, and failed, both produce turn_failed with a non-nil
+// error and the message "turn <status>", unchanged from before the
+// shared decision.
+func TestRunTurn_FailedOrUnrecognizedStatus(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name        string
+		fixture     string
+		wantMessage string
+	}{
+		{
+			name:        "failed status with no turn.error object",
+			fixture:     `{"method":"turn/completed","params":{"turn":{"id":"turn-001","status":"failed"}}}` + "\n",
+			wantMessage: "turn failed",
+		},
+		{
+			name:        "unrecognized status",
+			fixture:     `{"method":"turn/completed","params":{"turn":{"id":"turn-001","status":"queued_for_review"}}}` + "\n",
+			wantMessage: "turn queued_for_review",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			fixture := `{"id":1,"result":{"turn":{"id":"turn-001","status":"starting"}}}` + "\n" + tt.fixture
+			state := makeTestState([]byte(fixture))
+			adapter, _ := NewCodexAdapter(map[string]any{})
+
+			result, err := adapter.RunTurn(context.Background(), fakeSession(state), domain.RunTurnParams{
+				Prompt:  "go",
+				OnEvent: func(domain.AgentEvent) {},
+			})
+
+			if result.ExitReason != domain.EventTurnFailed {
+				t.Errorf("ExitReason = %q, want %q", result.ExitReason, domain.EventTurnFailed)
+			}
+			var agentErr *domain.AgentError
+			if !errors.As(err, &agentErr) {
+				t.Fatalf("error type = %T, want *domain.AgentError", err)
+			}
+			if agentErr.Kind != domain.ErrTurnFailed {
+				t.Errorf("AgentError.Kind = %q, want %q", agentErr.Kind, domain.ErrTurnFailed)
+			}
+			if agentErr.Message != tt.wantMessage {
+				t.Errorf("AgentError.Message = %q, want %q", agentErr.Message, tt.wantMessage)
+			}
+
+			dispositiontest.AssertDispositionContract(t, agentcore.TurnEvidence{
+				Terminal:          agentcore.TerminalFailure,
+				TerminalErrorKind: domain.ErrTurnFailed,
+				TerminalMessage:   tt.wantMessage,
+				Work:              agentcore.WorkUnobservable,
+			}, result, err)
+		})
+	}
+}
+
+// TestRunTurn_StdoutParseFailure pins that a stdout line that fails to
+// parse produces the same text on both the emitted event and the
+// returned error, prefixed "stdout read error: ", and preserves the
+// underlying parse error on the unwrap chain.
+func TestRunTurn_StdoutParseFailure(t *testing.T) {
+	t.Parallel()
+
+	fixture := "{\"id\":1,\"result\":{\"turn\":{\"id\":\"turn-001\",\"status\":\"starting\"}}}\n" +
+		"not valid json\n"
+	state := makeTestState([]byte(fixture))
+	adapter, _ := NewCodexAdapter(map[string]any{})
+
+	var events []domain.AgentEvent
+	result, err := adapter.RunTurn(context.Background(), fakeSession(state), domain.RunTurnParams{
+		Prompt:  "go",
+		OnEvent: collectEvents(&events),
+	})
+
+	if result.ExitReason != domain.EventTurnFailed {
+		t.Errorf("ExitReason = %q, want %q", result.ExitReason, domain.EventTurnFailed)
+	}
+	var agentErr *domain.AgentError
+	if !errors.As(err, &agentErr) {
+		t.Fatalf("error type = %T, want *domain.AgentError", err)
+	}
+	if agentErr.Kind != domain.ErrPortExit {
+		t.Errorf("AgentError.Kind = %q, want %q", agentErr.Kind, domain.ErrPortExit)
+	}
+	if !strings.HasPrefix(agentErr.Message, "stdout read error: ") {
+		t.Errorf("AgentError.Message = %q, want prefix %q", agentErr.Message, "stdout read error: ")
+	}
+
+	turnFailedEvents := filterEventsOfType(events, domain.EventTurnFailed)
+	if len(turnFailedEvents) != 1 {
+		t.Fatalf("turn_failed event count = %d, want 1", len(turnFailedEvents))
+	}
+	if turnFailedEvents[0].Message != agentErr.Message {
+		t.Errorf("turn_failed Message = %q, want the same text as AgentError.Message %q", turnFailedEvents[0].Message, agentErr.Message)
 	}
 }

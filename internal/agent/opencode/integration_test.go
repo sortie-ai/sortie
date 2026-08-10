@@ -109,6 +109,14 @@ func collectAllEvents(t *testing.T, a domain.AgentAdapter, session domain.Sessio
 	return events, result
 }
 
+// TestIntegration_HappyPathFreshTurn drives one real turn against the
+// live opencode binary and asserts turn_completed, satisfying the
+// shared disposition decision's live-runtime obligation for this
+// adapter. A live opencode turn reports no terminal outcome of its own,
+// so turn_completed is reachable only when the work predicate resolves
+// to present; this test therefore also exercises that predicate against
+// the real wire format, which is the only check that can catch it being
+// internally consistent but wrong.
 func TestIntegration_HappyPathFreshTurn(t *testing.T) {
 	skipIfNotEnabled(t)
 

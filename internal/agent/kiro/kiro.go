@@ -160,51 +160,31 @@ func (a *KiroAdapter) StartSession(ctx context.Context, params domain.StartSessi
 		GetSessionID: func() string { return state.sessionID },
 		OnFinalize: func(emit func(domain.AgentEvent), _ any, exitCode int, stderrLines []string) (domain.TurnResult, *domain.AgentError) {
 			creditsSeen, authFailed := classifyStderr(stderrLines)
-			zero := domain.TokenUsage{}
 
-			if exitCode == 0 && creditsSeen {
+			// Headless Kiro reports no per-turn token count, so the work
+			// signal this adapter can offer is the currency the runtime
+			// actually exposes: the credits trailer, consumed below as the
+			// success signal rather than as Work.
+			ev := agentcore.TurnEvidence{
+				ExitObserved: true,
+				ExitCode:     exitCode,
+				Work:         agentcore.WorkUnobservable,
+				WorkDetail:   "no credits trailer on stderr",
+			}
+
+			switch {
+			case exitCode == 0 && creditsSeen:
+				ev.Terminal = agentcore.TerminalSuccess
 				state.resumeRequested = true
-				agentcore.EmitTurnCompleted(emit, "", 0, zero)
-				return domain.TurnResult{
-					SessionID:  state.sessionID,
-					ExitReason: domain.EventTurnCompleted,
-					Usage:      zero,
-				}, nil
+			case exitCode == 0 && authFailed && state.turnStdout.Len() == 0:
+				ev.Terminal = agentcore.TerminalFailure
+				ev.TerminalErrorKind = domain.ErrResponseError
+				ev.TerminalMessage = "kiro authentication failed"
 			}
 
-			if exitCode == 0 && authFailed && state.turnStdout.Len() == 0 {
-				agentcore.EmitTurnFailed(emit, "kiro authentication failed", 0, zero)
-				return domain.TurnResult{
-						SessionID:  state.sessionID,
-						ExitReason: domain.EventTurnFailed,
-						Usage:      zero,
-					}, &domain.AgentError{
-						Kind:    domain.ErrResponseError,
-						Message: "kiro authentication failed",
-					}
-			}
+			meta := agentcore.TurnMeta{SessionID: state.sessionID}
 
-			if exitCode == 0 {
-				agentcore.EmitTurnFailed(emit, "kiro exited without a credits trailer", 0, zero)
-				return domain.TurnResult{
-						SessionID:  state.sessionID,
-						ExitReason: domain.EventTurnFailed,
-						Usage:      zero,
-					}, &domain.AgentError{
-						Kind:    domain.ErrTurnFailed,
-						Message: "kiro exited without a credits trailer",
-					}
-			}
-
-			agentcore.EmitTurnFailed(emit, "kiro exited with a non-zero status", 0, zero)
-			return domain.TurnResult{
-					SessionID:  state.sessionID,
-					ExitReason: domain.EventTurnFailed,
-					Usage:      zero,
-				}, &domain.AgentError{
-					Kind:    domain.ErrPortExit,
-					Message: "kiro exited with a non-zero status",
-				}
+			return agentcore.FinalizeTurn(emit, state.logger(), ev, meta)
 		},
 	}
 

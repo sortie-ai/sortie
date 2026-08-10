@@ -17,6 +17,7 @@ import (
 
 	"github.com/sortie-ai/sortie/internal/agent/agentcore"
 	"github.com/sortie-ai/sortie/internal/agent/agenttest"
+	"github.com/sortie-ai/sortie/internal/agent/agenttest/dispositiontest"
 	"github.com/sortie-ai/sortie/internal/domain"
 )
 
@@ -147,6 +148,11 @@ func TestRunTurn_SuccessfulTurn(t *testing.T) {
 	if _, ok := firstEventOfType(events, domain.EventTokenUsage); !ok {
 		t.Error("expected EventTokenUsage event, none found")
 	}
+
+	dispositiontest.AssertDispositionContract(t, agentcore.TurnEvidence{
+		Terminal: agentcore.TerminalSuccess,
+		Work:     agentcore.WorkUnobservable,
+	}, result, err)
 }
 
 // filterEventsOfType returns every event of the given type, in order.
@@ -371,8 +377,19 @@ func TestRunTurn_FailedTurnContextWindowExceeded(t *testing.T) {
 	if _, ok := firstEventOfType(events, domain.EventTokenUsage); !ok {
 		t.Error("expected EventTokenUsage event on failed turn, none found")
 	}
+
+	dispositiontest.AssertDispositionContract(t, agentcore.TurnEvidence{
+		Terminal:          agentcore.TerminalFailure,
+		TerminalErrorKind: domain.ErrTurnFailed,
+		TerminalMessage:   "Context window exceeded",
+		Work:              agentcore.WorkUnobservable,
+	}, result, err)
 }
 
+// TestRunTurn_StdoutClosedBeforeTurnCompleted pins the channel-closed
+// abort arm: the disposition and kind are unchanged from before the
+// shared decision, and the arm now emits exactly one turn_failed event
+// where it emitted none before.
 func TestRunTurn_StdoutClosedBeforeTurnCompleted(t *testing.T) {
 	t.Parallel()
 
@@ -383,11 +400,27 @@ func TestRunTurn_StdoutClosedBeforeTurnCompleted(t *testing.T) {
 	state := makeTestState([]byte(fixture))
 	adapter, _ := NewCodexAdapter(map[string]any{})
 
-	_, err := adapter.RunTurn(context.Background(), fakeSession(state), domain.RunTurnParams{
+	var events []domain.AgentEvent
+	result, err := adapter.RunTurn(context.Background(), fakeSession(state), domain.RunTurnParams{
 		Prompt:  "go",
-		OnEvent: func(domain.AgentEvent) {},
+		OnEvent: collectEvents(&events),
 	})
 	requireAgentError(t, err, domain.ErrPortExit)
+
+	turnFailedEvents := filterEventsOfType(events, domain.EventTurnFailed)
+	if len(turnFailedEvents) != 1 {
+		t.Fatalf("turn_failed event count = %d, want 1", len(turnFailedEvents))
+	}
+	if turnFailedEvents[0].Message != "subprocess stdout closed unexpectedly" {
+		t.Errorf("turn_failed Message = %q, want %q", turnFailedEvents[0].Message, "subprocess stdout closed unexpectedly")
+	}
+
+	dispositiontest.AssertDispositionContract(t, agentcore.TurnEvidence{
+		Terminal:          agentcore.TerminalFailure,
+		TerminalErrorKind: domain.ErrPortExit,
+		TerminalMessage:   "subprocess stdout closed unexpectedly",
+		Work:              agentcore.WorkUnobservable,
+	}, result, err)
 }
 
 func TestRunTurn_StdoutEOFBeforeTurnStartResponse(t *testing.T) {
@@ -405,6 +438,10 @@ func TestRunTurn_StdoutEOFBeforeTurnStartResponse(t *testing.T) {
 	requireAgentError(t, err, domain.ErrPortExit)
 }
 
+// TestRunTurn_TurnStartErrorResponse pins the turn/start error abort
+// arm: the disposition and kind are unchanged from before the shared
+// decision, and the arm now emits exactly one turn_failed event where
+// it emitted none before.
 func TestRunTurn_TurnStartErrorResponse(t *testing.T) {
 	t.Parallel()
 
@@ -413,11 +450,28 @@ func TestRunTurn_TurnStartErrorResponse(t *testing.T) {
 	state := makeTestState([]byte(fixture))
 	adapter, _ := NewCodexAdapter(map[string]any{})
 
-	_, err := adapter.RunTurn(context.Background(), fakeSession(state), domain.RunTurnParams{
+	var events []domain.AgentEvent
+	result, err := adapter.RunTurn(context.Background(), fakeSession(state), domain.RunTurnParams{
 		Prompt:  "go",
-		OnEvent: func(domain.AgentEvent) {},
+		OnEvent: collectEvents(&events),
 	})
 	requireAgentError(t, err, domain.ErrTurnFailed)
+
+	const wantMessage = "turn/start error: thread not found"
+	turnFailedEvents := filterEventsOfType(events, domain.EventTurnFailed)
+	if len(turnFailedEvents) != 1 {
+		t.Fatalf("turn_failed event count = %d, want 1", len(turnFailedEvents))
+	}
+	if turnFailedEvents[0].Message != wantMessage {
+		t.Errorf("turn_failed Message = %q, want %q", turnFailedEvents[0].Message, wantMessage)
+	}
+
+	dispositiontest.AssertDispositionContract(t, agentcore.TurnEvidence{
+		Terminal:          agentcore.TerminalFailure,
+		TerminalErrorKind: domain.ErrTurnFailed,
+		TerminalMessage:   wantMessage,
+		Work:              agentcore.WorkUnobservable,
+	}, result, err)
 }
 
 func TestRunTurn_CancelledContextReturnsError(t *testing.T) {

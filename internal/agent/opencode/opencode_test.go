@@ -5,13 +5,16 @@ package opencode
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/sortie-ai/sortie/internal/agent/agentcore"
 	"github.com/sortie-ai/sortie/internal/agent/agenttest"
+	"github.com/sortie-ai/sortie/internal/agent/agenttest/dispositiontest"
 	"github.com/sortie-ai/sortie/internal/domain"
 )
 
@@ -280,25 +283,33 @@ func TestRunTurn_SessionIDMismatch(t *testing.T) {
 	if agentErr.Kind != domain.ErrResponseError {
 		t.Errorf("Kind = %q, want %q", agentErr.Kind, domain.ErrResponseError)
 	}
-	if result.ExitReason != domain.EventTurnEndedWithError {
-		t.Errorf("ExitReason = %q, want %q", result.ExitReason, domain.EventTurnEndedWithError)
+	if result.ExitReason != domain.EventTurnFailed {
+		t.Errorf("ExitReason = %q, want %q", result.ExitReason, domain.EventTurnFailed)
 	}
 
 	var mismatchCount int
+	var mismatchMessage string
 	for _, event := range events {
 		if event.Type == domain.EventSessionStarted {
 			t.Fatalf("unexpected session_started event for mismatched session: %+v", event)
 		}
-		if event.Type == domain.EventTurnEndedWithError {
+		if event.Type == domain.EventTurnFailed {
 			mismatchCount++
+			mismatchMessage = event.Message
 			if !strings.Contains(event.Message, `expected "ses_expected"`) || !strings.Contains(event.Message, `got "ses_abc123"`) {
-				t.Errorf("turn_ended_with_error message = %q, want mismatch details", event.Message)
+				t.Errorf("turn_failed message = %q, want mismatch details", event.Message)
 			}
 		}
 	}
 	if mismatchCount != 1 {
-		t.Errorf("turn_ended_with_error count = %d, want 1", mismatchCount)
+		t.Errorf("turn_failed count = %d, want 1", mismatchCount)
 	}
+
+	dispositiontest.AssertDispositionContract(t, agentcore.TurnEvidence{
+		Terminal:          agentcore.TerminalFailure,
+		TerminalErrorKind: domain.ErrResponseError,
+		TerminalMessage:   mismatchMessage,
+	}, result, runErr)
 }
 
 func TestStopSession_NoActiveTurn(t *testing.T) {
@@ -376,8 +387,10 @@ while :; do sleep 1; done`)
 		if result.ExitReason != domain.EventTurnCancelled {
 			t.Errorf("ExitReason = %q, want %q", result.ExitReason, domain.EventTurnCancelled)
 		}
-		if runErr := <-errCh; runErr != nil {
-			t.Errorf("RunTurn() error = %v, want nil", runErr)
+		runErr := <-errCh
+		var agentErr *domain.AgentError
+		if !errors.As(runErr, &agentErr) || agentErr.Kind != domain.ErrTurnCancelled {
+			t.Errorf("RunTurn() error = %v, want AgentError{Kind: %q}", runErr, domain.ErrTurnCancelled)
 		}
 	case <-testCtx.Done():
 		t.Fatal("RunTurn did not return after StopSession timeout")
@@ -537,25 +550,38 @@ func TestRunTurn_LogicalFailureExitZero(t *testing.T) {
 	session := mustStartSession(t, a, tmpDir, script)
 
 	events, result, err := collectEvents(t, a, session, "work")
-	if err != nil {
-		t.Fatalf("RunTurn() error = %v, want nil", err)
-	}
 	if result.ExitReason != domain.EventTurnFailed {
 		t.Errorf("ExitReason = %q, want %q", result.ExitReason, domain.EventTurnFailed)
 	}
+	var agentErr *domain.AgentError
+	if !errors.As(err, &agentErr) || agentErr.Kind != domain.ErrTurnFailed {
+		t.Fatalf("RunTurn() error = %v, want AgentError{Kind: %q}", err, domain.ErrTurnFailed)
+	}
 
 	var turnFailedCount int
+	var turnFailedMessage string
 	for _, event := range events {
 		if event.Type == domain.EventTurnEndedWithError {
 			t.Fatalf("unexpected turn_ended_with_error event: %+v", event)
 		}
 		if event.Type == domain.EventTurnFailed {
 			turnFailedCount++
+			turnFailedMessage = event.Message
 		}
 	}
 	if turnFailedCount != 1 {
 		t.Errorf("turn_failed count = %d, want 1", turnFailedCount)
 	}
+
+	dispositiontest.AssertDispositionContract(t, agentcore.TurnEvidence{
+		Terminal:          agentcore.TerminalFailure,
+		TerminalErrorKind: domain.ErrTurnFailed,
+		TerminalMessage:   turnFailedMessage,
+		ExitObserved:      true,
+		ExitCode:          0,
+		Work:              agentcore.WorkAbsent,
+		WorkDetail:        "no assistant output on the run stream",
+	}, result, err)
 }
 
 func TestRunTurn_LogicalFailureDualError(t *testing.T) {
@@ -568,13 +594,18 @@ func TestRunTurn_LogicalFailureDualError(t *testing.T) {
 	session := mustStartSession(t, a, tmpDir, script)
 
 	events, result, err := collectEvents(t, a, session, "work")
-	if err != nil {
-		t.Fatalf("RunTurn() error = %v, want nil", err)
-	}
 	if result.ExitReason != domain.EventTurnFailed {
 		t.Errorf("ExitReason = %q, want %q", result.ExitReason, domain.EventTurnFailed)
 	}
+	var agentErr *domain.AgentError
+	if !errors.As(err, &agentErr) || agentErr.Kind != domain.ErrTurnFailed {
+		t.Fatalf("RunTurn() error = %v, want AgentError{Kind: %q}", err, domain.ErrTurnFailed)
+	}
 
+	// Exactly one terminal event fires per turn: the second "error"
+	// event on the run stream overwrites the first in per-turn state, so
+	// only the last error's detail survives to the single emitted
+	// turn_failed event.
 	var turnFailedMessages []string
 	for _, event := range events {
 		if event.Type == domain.EventTurnEndedWithError {
@@ -584,15 +615,22 @@ func TestRunTurn_LogicalFailureDualError(t *testing.T) {
 			turnFailedMessages = append(turnFailedMessages, event.Message)
 		}
 	}
-	if len(turnFailedMessages) != 2 {
-		t.Fatalf("turn_failed count = %d, want 2 (one per upstream error event)", len(turnFailedMessages))
+	if len(turnFailedMessages) != 1 {
+		t.Fatalf("turn_failed count = %d, want 1; messages = %q", len(turnFailedMessages), turnFailedMessages)
 	}
-	if !strings.Contains(turnFailedMessages[0], "Model not found") {
-		t.Errorf("first turn_failed message = %q, want substring %q", turnFailedMessages[0], "Model not found")
+	if !strings.Contains(turnFailedMessages[0], "Unexpected server error") {
+		t.Errorf("turn_failed message = %q, want substring %q (the last error event on the stream)", turnFailedMessages[0], "Unexpected server error")
 	}
-	if !strings.Contains(turnFailedMessages[1], "Unexpected server error") {
-		t.Errorf("second turn_failed message = %q, want substring %q", turnFailedMessages[1], "Unexpected server error")
-	}
+
+	dispositiontest.AssertDispositionContract(t, agentcore.TurnEvidence{
+		Terminal:          agentcore.TerminalFailure,
+		TerminalErrorKind: domain.ErrTurnFailed,
+		TerminalMessage:   turnFailedMessages[0],
+		ExitObserved:      true,
+		ExitCode:          0,
+		Work:              agentcore.WorkAbsent,
+		WorkDetail:        "no assistant output on the run stream",
+	}, result, err)
 }
 
 // writeMaskedRunScript writes a fake opencode whose run stream emits only the
@@ -629,6 +667,17 @@ func collectTurnFailedMessages(events []domain.AgentEvent) []string {
 	return messages
 }
 
+// turnFailedEvents returns every turn_failed event in events, in order.
+func turnFailedEvents(events []domain.AgentEvent) []domain.AgentEvent {
+	var out []domain.AgentEvent
+	for _, e := range events {
+		if e.Type == domain.EventTurnFailed {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
 func TestRunTurn_MaskedErrorRecoversModelNotFound(t *testing.T) {
 	t.Parallel()
 
@@ -639,23 +688,36 @@ func TestRunTurn_MaskedErrorRecoversModelNotFound(t *testing.T) {
 	session := mustStartSession(t, a, tmpDir, script)
 
 	events, result, err := collectEvents(t, a, session, "work")
-	if err != nil {
-		t.Fatalf("RunTurn() error = %v, want nil", err)
-	}
 	if result.ExitReason != domain.EventTurnFailed {
 		t.Errorf("ExitReason = %q, want %q", result.ExitReason, domain.EventTurnFailed)
 	}
+	var agentErr *domain.AgentError
+	if !errors.As(err, &agentErr) || agentErr.Kind != domain.ErrTurnFailed {
+		t.Fatalf("RunTurn() error = %v, want AgentError{Kind: %q}", err, domain.ErrTurnFailed)
+	}
 
+	// Exactly one terminal event fires per turn even when the
+	// masked-model recovery succeeds: the recovered detail replaces the
+	// masked relay message in place, rather than the two-event trail
+	// this arm produced before the shared decision.
 	messages := collectTurnFailedMessages(events)
-	if len(messages) != 2 {
-		t.Fatalf("turn_failed count = %d, want 2 (masked relay plus recovered detail), messages=%q", len(messages), messages)
+	if len(messages) != 1 {
+		t.Fatalf("turn_failed count = %d, want 1 (the recovered detail replaces the masked relay), messages=%q", len(messages), messages)
 	}
-	if !strings.Contains(messages[0], "Unexpected server error") {
-		t.Errorf("first turn_failed message = %q, want substring %q", messages[0], "Unexpected server error")
+	const wantMessage = "Model not found: nonexistent/nonexistent"
+	if messages[0] != wantMessage {
+		t.Errorf("turn_failed message = %q, want %q", messages[0], wantMessage)
 	}
-	if messages[1] != "Model not found: nonexistent/nonexistent" {
-		t.Errorf("second turn_failed message = %q, want %q", messages[1], "Model not found: nonexistent/nonexistent")
-	}
+
+	dispositiontest.AssertDispositionContract(t, agentcore.TurnEvidence{
+		Terminal:          agentcore.TerminalFailure,
+		TerminalErrorKind: domain.ErrTurnFailed,
+		TerminalMessage:   wantMessage,
+		ExitObserved:      true,
+		ExitCode:          0,
+		Work:              agentcore.WorkAbsent,
+		WorkDetail:        "no assistant output on the run stream",
+	}, result, err)
 }
 
 func TestRunTurn_MaskedErrorModelListed(t *testing.T) {
@@ -668,11 +730,12 @@ func TestRunTurn_MaskedErrorModelListed(t *testing.T) {
 	session := mustStartSession(t, a, tmpDir, script)
 
 	events, result, err := collectEvents(t, a, session, "work")
-	if err != nil {
-		t.Fatalf("RunTurn() error = %v, want nil", err)
-	}
 	if result.ExitReason != domain.EventTurnFailed {
 		t.Errorf("ExitReason = %q, want %q", result.ExitReason, domain.EventTurnFailed)
+	}
+	var agentErr *domain.AgentError
+	if !errors.As(err, &agentErr) || agentErr.Kind != domain.ErrTurnFailed {
+		t.Fatalf("RunTurn() error = %v, want AgentError{Kind: %q}", err, domain.ErrTurnFailed)
 	}
 
 	messages := collectTurnFailedMessages(events)
@@ -682,6 +745,16 @@ func TestRunTurn_MaskedErrorModelListed(t *testing.T) {
 	if !strings.Contains(messages[0], "Unexpected server error") {
 		t.Errorf("turn_failed message = %q, want substring %q", messages[0], "Unexpected server error")
 	}
+
+	dispositiontest.AssertDispositionContract(t, agentcore.TurnEvidence{
+		Terminal:          agentcore.TerminalFailure,
+		TerminalErrorKind: domain.ErrTurnFailed,
+		TerminalMessage:   messages[0],
+		ExitObserved:      true,
+		ExitCode:          0,
+		Work:              agentcore.WorkAbsent,
+		WorkDetail:        "no assistant output on the run stream",
+	}, result, err)
 }
 
 func TestRunTurn_MaskedErrorModelsCommandFails(t *testing.T) {
@@ -694,11 +767,12 @@ func TestRunTurn_MaskedErrorModelsCommandFails(t *testing.T) {
 	session := mustStartSession(t, a, tmpDir, script)
 
 	events, result, err := collectEvents(t, a, session, "work")
-	if err != nil {
-		t.Fatalf("RunTurn() error = %v, want nil", err)
-	}
 	if result.ExitReason != domain.EventTurnFailed {
 		t.Errorf("ExitReason = %q, want %q", result.ExitReason, domain.EventTurnFailed)
+	}
+	var agentErr *domain.AgentError
+	if !errors.As(err, &agentErr) || agentErr.Kind != domain.ErrTurnFailed {
+		t.Fatalf("RunTurn() error = %v, want AgentError{Kind: %q}", err, domain.ErrTurnFailed)
 	}
 
 	messages := collectTurnFailedMessages(events)
@@ -708,6 +782,16 @@ func TestRunTurn_MaskedErrorModelsCommandFails(t *testing.T) {
 	if !strings.Contains(messages[0], "Unexpected server error") {
 		t.Errorf("turn_failed message = %q, want substring %q", messages[0], "Unexpected server error")
 	}
+
+	dispositiontest.AssertDispositionContract(t, agentcore.TurnEvidence{
+		Terminal:          agentcore.TerminalFailure,
+		TerminalErrorKind: domain.ErrTurnFailed,
+		TerminalMessage:   messages[0],
+		ExitObserved:      true,
+		ExitCode:          0,
+		Work:              agentcore.WorkAbsent,
+		WorkDetail:        "no assistant output on the run stream",
+	}, result, err)
 }
 
 func TestRunTurn_MaskedErrorNoModelConfigured(t *testing.T) {
@@ -721,20 +805,31 @@ func TestRunTurn_MaskedErrorNoModelConfigured(t *testing.T) {
 	session := mustStartSession(t, a, tmpDir, script)
 
 	events, result, err := collectEvents(t, a, session, "work")
-	if err != nil {
-		t.Fatalf("RunTurn() error = %v, want nil", err)
-	}
 	if result.ExitReason != domain.EventTurnFailed {
 		t.Errorf("ExitReason = %q, want %q", result.ExitReason, domain.EventTurnFailed)
+	}
+	var agentErr *domain.AgentError
+	if !errors.As(err, &agentErr) || agentErr.Kind != domain.ErrTurnFailed {
+		t.Fatalf("RunTurn() error = %v, want AgentError{Kind: %q}", err, domain.ErrTurnFailed)
 	}
 
 	messages := collectTurnFailedMessages(events)
 	if len(messages) != 1 {
 		t.Fatalf("turn_failed count = %d, want 1, messages=%q", len(messages), messages)
 	}
-	if _, err := os.Stat(sentinel); !errors.Is(err, os.ErrNotExist) {
-		t.Errorf("models subcommand was invoked without a configured model (sentinel stat err = %v)", err)
+	if _, statErr := os.Stat(sentinel); !errors.Is(statErr, os.ErrNotExist) {
+		t.Errorf("models subcommand was invoked without a configured model (sentinel stat err = %v)", statErr)
 	}
+
+	dispositiontest.AssertDispositionContract(t, agentcore.TurnEvidence{
+		Terminal:          agentcore.TerminalFailure,
+		TerminalErrorKind: domain.ErrTurnFailed,
+		TerminalMessage:   messages[0],
+		ExitObserved:      true,
+		ExitCode:          0,
+		Work:              agentcore.WorkAbsent,
+		WorkDetail:        "no assistant output on the run stream",
+	}, result, err)
 }
 
 func TestRunTurn_OversizedStdoutLine(t *testing.T) {
@@ -747,7 +842,7 @@ printf '\n'`)
 	a, _ := NewOpenCodeAdapter(map[string]any{})
 	session := mustStartSession(t, a, tmpDir, script)
 
-	_, result, err := collectEvents(t, a, session, "work")
+	events, result, err := collectEvents(t, a, session, "work")
 	if err == nil {
 		t.Fatal("RunTurn() error = nil, want oversized-line failure")
 	}
@@ -758,9 +853,23 @@ printf '\n'`)
 	if agentErr.Kind != domain.ErrResponseError {
 		t.Errorf("Kind = %q, want %q", agentErr.Kind, domain.ErrResponseError)
 	}
-	if result.ExitReason != domain.EventTurnEndedWithError {
-		t.Errorf("ExitReason = %q, want %q", result.ExitReason, domain.EventTurnEndedWithError)
+	if result.ExitReason != domain.EventTurnFailed {
+		t.Errorf("ExitReason = %q, want %q", result.ExitReason, domain.EventTurnFailed)
 	}
+
+	failedEvents := turnFailedEvents(events)
+	if len(failedEvents) != 1 {
+		t.Fatalf("turn_failed event count = %d, want 1", len(failedEvents))
+	}
+	if failedEvents[0].Message != "stdout read error" {
+		t.Errorf("turn_failed Message = %q, want %q", failedEvents[0].Message, "stdout read error")
+	}
+
+	dispositiontest.AssertDispositionContract(t, agentcore.TurnEvidence{
+		Terminal:          agentcore.TerminalFailure,
+		TerminalErrorKind: domain.ErrResponseError,
+		TerminalMessage:   "stdout read error",
+	}, result, err)
 }
 
 func TestRunTurn_EventAgentPID(t *testing.T) {
@@ -851,6 +960,12 @@ func TestRunTurn_UsageMeasured_AbsentWhenExportYieldsNoUsage(t *testing.T) {
 	}
 
 	agenttest.AssertMeasurementAbsent(t, events, result)
+
+	dispositiontest.AssertDispositionContract(t, agentcore.TurnEvidence{
+		ExitObserved: true,
+		ExitCode:     0,
+		Work:         agentcore.WorkPresent,
+	}, result, err)
 }
 
 // TestRunTurn_UsageMeasured_TrueWhenExportYieldsUsage verifies that a
@@ -895,11 +1010,17 @@ func TestRunTurn_ActivityVisibilityForStallWatchdog(t *testing.T) {
 	t.Parallel()
 
 	tmpDir := t.TempDir()
+	// A "text" part carries the turn's own work evidence, keeping this
+	// turn on row R7 (turn_completed) so the test still exercises
+	// notification, malformed-event, and session-lifecycle visibility
+	// during an otherwise-successful turn, rather than becoming a
+	// duplicate of the dedicated zero-work-row pin.
 	script := writeOpenCodeScript(t, tmpDir, `case "$1" in
   export) echo '{"messages":[]}'; exit 0;;
 esac
 printf '! permission requested: external_directory (/etc/*); auto-rejecting\n'
 printf '{"type":"step_start","timestamp":1000,"sessionID":"ses_visibility123","part":{"id":"p1","messageID":"m1","sessionID":"ses_visibility123","snapshot":"","type":"step-start"}}\n'
+printf '{"type":"text","timestamp":1001,"sessionID":"ses_visibility123","part":{"id":"p3","messageID":"m1","sessionID":"ses_visibility123","type":"text","text":"working on it","time":{"start":1001,"end":1001}}}\n'
 printf '{"type":"unknown_future_type","timestamp":1001,"sessionID":"ses_visibility123","data":"something"}\n'
 printf '{"type":"step_finish","timestamp":1002,"sessionID":"ses_visibility123","part":{"id":"p2","messageID":"m1","sessionID":"ses_visibility123","type":"step-finish","reason":"stop"}}\n'`)
 
@@ -961,6 +1082,12 @@ printf '{"type":"step_finish","timestamp":1002,"sessionID":"ses_visibility123","
 	if !sawTurnCompleted {
 		t.Error("turn_completed event was not emitted")
 	}
+
+	dispositiontest.AssertDispositionContract(t, agentcore.TurnEvidence{
+		ExitObserved: true,
+		ExitCode:     0,
+		Work:         agentcore.WorkPresent,
+	}, result, err)
 }
 
 func TestRunTurn_TurnCancelledOnContextCancel(t *testing.T) {
@@ -1021,8 +1148,10 @@ sleep 1000`)
 		if result.ExitReason != domain.EventTurnCancelled {
 			t.Errorf("ExitReason = %q, want %q", result.ExitReason, domain.EventTurnCancelled)
 		}
-		if err := <-errCh; err != nil {
-			t.Errorf("RunTurn() error = %v, want nil on cancel", err)
+		err := <-errCh
+		var agentErr *domain.AgentError
+		if !errors.As(err, &agentErr) || agentErr.Kind != domain.ErrTurnCancelled {
+			t.Errorf("RunTurn() error = %v, want AgentError{Kind: %q}", err, domain.ErrTurnCancelled)
 		}
 	case <-outerCtx.Done():
 		t.Fatal("RunTurn did not return after context cancel")
@@ -1100,4 +1229,240 @@ sleep 1000`)
 func mustMakeTempDir(t *testing.T) string {
 	t.Helper()
 	return t.TempDir()
+}
+
+// TestRunTurn_ExitZeroNoAssistantOutputPart pins that a process which
+// exits 0 having parsed JSON events but never a text, reasoning, or
+// tool_use part reports turn_failed, not the silent success this class
+// of bug produced before the shared decision.
+func TestRunTurn_ExitZeroNoAssistantOutputPart(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	script := writeOpenCodeScript(t, tmpDir, `case "$1" in
+  export) echo '{"messages":[]}'; exit 0;;
+esac
+printf '{"type":"step_start","timestamp":1000,"sessionID":"ses_c1","part":{"id":"p1","messageID":"m1","sessionID":"ses_c1","snapshot":"","type":"step-start"}}\n'
+printf '{"type":"step_finish","timestamp":1001,"sessionID":"ses_c1","part":{"id":"p2","messageID":"m1","sessionID":"ses_c1","type":"step-finish","reason":"stop"}}\n'`)
+
+	a, _ := NewOpenCodeAdapter(map[string]any{})
+	session := mustStartSession(t, a, tmpDir, script)
+
+	events, result, err := collectEvents(t, a, session, "work")
+	if result.ExitReason != domain.EventTurnFailed {
+		t.Errorf("ExitReason = %q, want %q", result.ExitReason, domain.EventTurnFailed)
+	}
+	var agentErr *domain.AgentError
+	if !errors.As(err, &agentErr) || agentErr.Kind != domain.ErrTurnFailed {
+		t.Fatalf("RunTurn() error = %v, want AgentError{Kind: %q}", err, domain.ErrTurnFailed)
+	}
+	const wantMessage = "agent exited without producing output: no assistant output on the run stream"
+	if agentErr.Message != wantMessage {
+		t.Errorf("AgentError.Message = %q, want %q", agentErr.Message, wantMessage)
+	}
+
+	failedEvents := turnFailedEvents(events)
+	if len(failedEvents) != 1 {
+		t.Fatalf("turn_failed event count = %d, want 1", len(failedEvents))
+	}
+
+	dispositiontest.AssertDispositionContract(t, agentcore.TurnEvidence{
+		ExitObserved: true,
+		ExitCode:     0,
+		Work:         agentcore.WorkAbsent,
+		WorkDetail:   "no assistant output on the run stream",
+	}, result, err)
+}
+
+// TestRunTurn_ExitZeroNoJSONEventAtAll pins an emptier variant of the
+// no-output case: the process exits 0 having emitted nothing parseable
+// at all. It routes to the same zero-work row rather than letting the
+// adapter pre-classify a bare exit 0 as a success.
+func TestRunTurn_ExitZeroNoJSONEventAtAll(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	script := writeOpenCodeScript(t, tmpDir, `case "$1" in
+  export) echo '{"messages":[]}'; exit 0;;
+esac
+exit 0`)
+
+	a, _ := NewOpenCodeAdapter(map[string]any{})
+	session := mustStartSession(t, a, tmpDir, script)
+
+	events, result, err := collectEvents(t, a, session, "work")
+	if result.ExitReason != domain.EventTurnFailed {
+		t.Errorf("ExitReason = %q, want %q", result.ExitReason, domain.EventTurnFailed)
+	}
+	var agentErr *domain.AgentError
+	if !errors.As(err, &agentErr) || agentErr.Kind != domain.ErrTurnFailed {
+		t.Fatalf("RunTurn() error = %v, want AgentError{Kind: %q}", err, domain.ErrTurnFailed)
+	}
+	const wantMessage = "agent exited without producing output: no assistant output on the run stream"
+	if agentErr.Message != wantMessage {
+		t.Errorf("AgentError.Message = %q, want %q", agentErr.Message, wantMessage)
+	}
+
+	failedEvents := turnFailedEvents(events)
+	if len(failedEvents) != 1 {
+		t.Fatalf("turn_failed event count = %d, want 1", len(failedEvents))
+	}
+
+	dispositiontest.AssertDispositionContract(t, agentcore.TurnEvidence{
+		ExitObserved: true,
+		ExitCode:     0,
+		Work:         agentcore.WorkAbsent,
+		WorkDetail:   "no assistant output on the run stream",
+	}, result, err)
+}
+
+// TestRunTurn_NonZeroExitNoTerminalReport pins the non-zero-exit
+// transport-class abort: the disposition, kind, and message pair are the
+// same ones every adapter produces for this row.
+func TestRunTurn_NonZeroExitNoTerminalReport(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	script := writeOpenCodeScript(t, tmpDir, `case "$1" in
+  export) echo '{"messages":[]}'; exit 0;;
+esac
+printf '{"type":"step_start","timestamp":1000,"sessionID":"ses_nonzero","part":{"id":"p1","messageID":"m1","sessionID":"ses_nonzero","snapshot":"","type":"step-start"}}\n'
+exit 7`)
+
+	a, _ := NewOpenCodeAdapter(map[string]any{})
+	session := mustStartSession(t, a, tmpDir, script)
+
+	events, result, err := collectEvents(t, a, session, "work")
+	if result.ExitReason != domain.EventTurnFailed {
+		t.Errorf("ExitReason = %q, want %q", result.ExitReason, domain.EventTurnFailed)
+	}
+	var agentErr *domain.AgentError
+	if !errors.As(err, &agentErr) || agentErr.Kind != domain.ErrPortExit {
+		t.Fatalf("RunTurn() error = %v, want AgentError{Kind: %q}", err, domain.ErrPortExit)
+	}
+	if agentErr.Message != "exit code 7" {
+		t.Errorf("AgentError.Message = %q, want %q", agentErr.Message, "exit code 7")
+	}
+
+	failedEvents := turnFailedEvents(events)
+	if len(failedEvents) != 1 {
+		t.Fatalf("turn_failed event count = %d, want 1", len(failedEvents))
+	}
+	if failedEvents[0].Message != "non-zero exit" {
+		t.Errorf("turn_failed Message = %q, want %q", failedEvents[0].Message, "non-zero exit")
+	}
+
+	dispositiontest.AssertDispositionContract(t, agentcore.TurnEvidence{
+		ExitObserved: true,
+		ExitCode:     7,
+		Work:         agentcore.WorkAbsent,
+	}, result, err)
+}
+
+// TestRunTurn_ReadTimeoutBeforeFirstJSONEvent pins the read-timeout
+// transport-class abort: the disposition, kind, and message pair are the
+// same ones today's arm already produces.
+func TestRunTurn_ReadTimeoutBeforeFirstJSONEvent(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	script := writeOpenCodeScript(t, tmpDir, `case "$1" in
+  export) echo '{"messages":[]}'; exit 0;;
+esac
+sleep 5`)
+
+	a, _ := NewOpenCodeAdapter(map[string]any{})
+	session, err := a.StartSession(context.Background(), domain.StartSessionParams{
+		WorkspacePath: tmpDir,
+		AgentConfig:   domain.AgentConfig{Command: script, ReadTimeoutMS: 100},
+	})
+	if err != nil {
+		t.Fatalf("StartSession() error = %v", err)
+	}
+
+	events, result, err := collectEvents(t, a, session, "work")
+	if result.ExitReason != domain.EventTurnFailed {
+		t.Errorf("ExitReason = %q, want %q", result.ExitReason, domain.EventTurnFailed)
+	}
+	var agentErr *domain.AgentError
+	if !errors.As(err, &agentErr) || agentErr.Kind != domain.ErrResponseTimeout {
+		t.Fatalf("RunTurn() error = %v, want AgentError{Kind: %q}", err, domain.ErrResponseTimeout)
+	}
+	const wantMessage = "timed out waiting for first opencode json event"
+	if agentErr.Message != wantMessage {
+		t.Errorf("AgentError.Message = %q, want %q", agentErr.Message, wantMessage)
+	}
+
+	failedEvents := turnFailedEvents(events)
+	if len(failedEvents) != 1 {
+		t.Fatalf("turn_failed event count = %d, want 1", len(failedEvents))
+	}
+
+	dispositiontest.AssertDispositionContract(t, agentcore.TurnEvidence{
+		Terminal:          agentcore.TerminalFailure,
+		TerminalErrorKind: domain.ErrResponseTimeout,
+		TerminalMessage:   wantMessage,
+	}, result, err)
+}
+
+// TestRunTurn_CompletedTurnReturnsUntypedNilError pins that a completed
+// turn's returned error interface is genuinely nil, not a typed-nil
+// *domain.AgentError promoted to a non-nil error interface.
+func TestRunTurn_CompletedTurnReturnsUntypedNilError(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	script := writeRunFixtureScript(t, tmpDir, "simple_turn.jsonl")
+
+	a, _ := NewOpenCodeAdapter(map[string]any{})
+	session := mustStartSession(t, a, tmpDir, script)
+
+	_, result, err := collectEvents(t, a, session, "work")
+	if result.ExitReason != domain.EventTurnCompleted {
+		t.Fatalf("ExitReason = %q, want %q", result.ExitReason, domain.EventTurnCompleted)
+	}
+	if err != nil {
+		t.Errorf("RunTurn() error = %v, want nil (not a typed-nil *domain.AgentError)", err)
+	}
+}
+
+// TestRunTurn_WorkPredicateIsPerTurn pins that the work predicate reads
+// this turn's own parsed parts, not the run cumulative. The first turn
+// produces a text part and completes; the second turn, on the same
+// session, produces none and must fail rather than inherit the first
+// turn's evidence.
+func TestRunTurn_WorkPredicateIsPerTurn(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	counterFile := filepath.Join(tmpDir, "turn-count")
+	script := writeOpenCodeScript(t, tmpDir, fmt.Sprintf(`case "$1" in
+  export) echo '{"messages":[]}'; exit 0;;
+esac
+if [ -f '%s' ]; then
+  printf '{"type":"step_start","timestamp":1000,"sessionID":"ses_work_pin","part":{"id":"p1","messageID":"m1","sessionID":"ses_work_pin","snapshot":"","type":"step-start"}}\n'
+else
+  touch '%s'
+  printf '{"type":"text","timestamp":1000,"sessionID":"ses_work_pin","part":{"id":"p1","messageID":"m1","sessionID":"ses_work_pin","type":"text","text":"ok","time":{"start":1000,"end":1000}}}\n'
+fi`, counterFile, counterFile))
+
+	a, _ := NewOpenCodeAdapter(map[string]any{})
+	session := mustStartSession(t, a, tmpDir, script)
+
+	_, result1, err := collectEvents(t, a, session, "first")
+	if err != nil {
+		t.Fatalf("RunTurn(first) error = %v", err)
+	}
+	if result1.ExitReason != domain.EventTurnCompleted {
+		t.Fatalf("RunTurn(first).ExitReason = %q, want %q", result1.ExitReason, domain.EventTurnCompleted)
+	}
+
+	_, result2, err := collectEvents(t, a, session, "second")
+	if result2.ExitReason != domain.EventTurnFailed {
+		t.Errorf("RunTurn(second).ExitReason = %q, want %q (per-turn work predicate must not carry the first turn's output forward)", result2.ExitReason, domain.EventTurnFailed)
+	}
+	var agentErr *domain.AgentError
+	if !errors.As(err, &agentErr) || agentErr.Kind != domain.ErrTurnFailed {
+		t.Errorf("RunTurn(second) error = %v, want AgentError{Kind: %q}", err, domain.ErrTurnFailed)
+	}
 }
