@@ -25,7 +25,7 @@ Every route and behavior the GitHub tracker adapter (`internal/scm/github`, `tra
 | `pull_request` key on PR entries in the issue list | Present (verified) | PR skip logic works |
 | `Link` header pagination | Same `rel="next"` / `rel="last"` format (verified) | Works |
 | ETag conditional requests (`If-None-Match`) | No `ETag` header on API responses (verified) | Cache never hits; every poll pays full cost |
-| `GET /search/issues` (used for `query_filter` candidates and for terminal states in `FetchIssuesByStates`) | Route absent; Gitea's search lives at `/repos/issues/search` with different, non-qualifier parameters (verified 404) | `query_filter` breaks; startup terminal cleanup degrades to a permanent warning |
+| `GET /search/issues` (used for `query_filter` candidates and for terminal states in `FetchIssuesByStates`) | Route absent; Gitea's search lives at `/repos/issues/search` with different, non-qualifier parameters (verified 404) | `query_filter` breaks; the terminal-state half of `FetchIssuesByStates` also breaks, but that method has no orchestrator caller, so nothing observes the failure |
 | `GET .../issues/{n}/dependencies/blocked_by` | Route absent (verified 404); Gitea serves the same data at `.../issues/{index}/dependencies` | Adapter swallows the 404 and returns no blockers: **silent loss of `blocked_by`**, so blocked issues dispatch anyway |
 | `GET .../issues/{n}/parent` | Route absent; Gitea has no parent concept | 404 tolerated, parent is nil; harmless |
 | `DELETE .../issues/{n}/labels/{name}` in `TransitionIssue` | Route parameter is a numeric label id; a name parses to 0 and returns 404 `label does not exist [label_id: 0, ...]` (422 on Gitea 1.26.x and earlier) | Adapter tolerates the 404, so the old state label is **never removed: state labels accumulate and state reads silently corrupt** |
@@ -203,7 +203,7 @@ Two paginated list queries at most, both with client-side state filtering:
 - Requested states intersecting `active_states`: `GET .../issues?state=open&type=issues&limit=50`.
 - Requested states intersecting `terminal_states`: `GET .../issues?state=closed&type=issues&limit=50`.
 
-The GitHub adapter serves the terminal half through the search endpoint with a server-side label qualifier. Gitea gets the plain closed listing instead, for three reasons: the search route cannot scope to one repository (see Server-side filtering), a server-side `labels` filter inherits the unresolvable-name foot-gun, and a label filter misses closed issues with no terminal label, which the state model still counts as terminal (first `terminal_states` entry). A full closed-issue scan is more traffic, but startup terminal cleanup runs once per process start against an unthrottled self-hosted instance.
+The GitHub adapter serves the terminal half through the search endpoint with a server-side label qualifier. Gitea gets the plain closed listing instead, for three reasons: the search route cannot scope to one repository (see Server-side filtering), a server-side `labels` filter inherits the unresolvable-name foot-gun, and a label filter misses closed issues with no terminal label, which the state model still counts as terminal (first `terminal_states` entry). A full closed-issue scan is more traffic, but this method has no orchestrator caller: nothing invokes `FetchIssuesByStates` today. Startup terminal cleanup is served by `FetchIssueStatesByIdentifiers` instead.
 
 ### 4. `FetchIssueStatesByIDs` and 5. `FetchIssueStatesByIdentifiers`
 
@@ -521,9 +521,9 @@ POST /repos/{owner}/{repo}/pulls/{index}/merge
 
 - Field binding is case-insensitive: Gitea accepts `"Do"` or `"do"`.
 - A successful merge returns HTTP 200 with an **empty body** (`Content-Length: 0`, verified live): no merge-commit SHA comes back on this route.
-- An already-merged PR returns HTTP 405 `{"message":"The PR is already merged"}`. That message already contains the substring "already merged" case-insensitively, the marker the caller's success dispatch looks for.
+- An already-merged PR returns HTTP 405 `{"message":"The PR is already merged"}`. The adapter does not match this wording: `MergePR` re-reads the pull request after the rejection and, on a confirmed merge, reports `scmcore.AlreadyMergedConflict`, which carries the marker text the caller's success dispatch looks for.
 - A stale precondition (a `head_commit_id` behind the branch's current head) returns HTTP 409 `{"message":"head out of date"}`.
-- Both 405 and 409 map to `ErrSCMConflict`; only the already-merged case carries the marker text.
+- Both 405 and 409 map to `ErrSCMConflict` on this merge call; only the already-merged case carries the marker text.
 - The commit-title and commit-message fields and Gitea's own `delete_branch_after_merge` and `merge_when_checks_succeed` options are not exercised: Sortie keeps the two-step merge-then-delete flow and gates CI itself before calling this route.
 
 ### DeleteBranch

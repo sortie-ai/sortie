@@ -142,7 +142,8 @@ JQL:
 project = "<KEY>" AND status IN ("<state1>", ...) ORDER BY created ASC
 ```
 
-Same endpoint as candidate fetch, different JQL. Used for startup terminal cleanup.
+Same endpoint as candidate fetch, different JQL. No orchestrator caller invokes this
+operation; startup terminal cleanup is served by `FetchIssueStatesByIdentifiers` instead.
 Paginate to fetch all matching issues.
 
 ### 4. `FetchIssueStatesByIDs` → `GET /rest/api/3/search/jql`

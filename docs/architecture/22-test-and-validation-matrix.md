@@ -82,6 +82,10 @@ Unless otherwise noted, Sections 17.1 through 17.7 are `Core Conformance`. Bulle
 - SQLite persistence layer correctly saves and restores retry entries across simulated restart
 - Startup recovery from SQLite reconstructs retry timers with correct remaining delays
 - Run history is queryable after session completion
+- Each tracker adapter's suite exercises the shared tracker conformance assertions: normalized
+  issue shape, ascending comment order, an empty-but-non-nil result on an empty list operation, a
+  state map that omits an unknown id, no request issued on empty input, tracker error kind mapping
+  for every class the adapter can produce, and an additive label write
 
 ### 17.4 Orchestrator Dispatch, Reconciliation, and Retry
 
@@ -237,4 +241,17 @@ network access, or external service permissions are unavailable.
 - A skipped real-integration test should be reported as skipped, not silently treated as passed.
 - If a real-integration profile is explicitly enabled in CI or release validation, failures should
   fail that job.
+
+### 17.9 Source-control Adapter and CI Provider Roles (Core Conformance)
+
+- Each source-control adapter's suite exercises the shared source-control conformance assertions:
+  an empty-but-non-nil result on each list method with no results, source-control error kind
+  mapping for the auth, not-found, payload, and API classes, the already-merged marker on a merge
+  that raced an external merge, the absent-branch disposition on a delete of a missing branch, the
+  absent-label disposition on a removal of an absent label, and a correctly ordered label-event
+  journal.
+- Each CI provider's suite exercises the shared CI-aggregate conformance assertion against a result
+  containing at least one completed-failing run, one in-progress run, and one completed-success
+  run, confirming the provider's aggregate status and failing count agree with the forge decision
+  core.
 

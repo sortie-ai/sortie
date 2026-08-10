@@ -44,7 +44,19 @@ CIResult:
 |-------|---------|
 | `pending` | CI checks are still running or no checks have been reported. |
 | `passing` | All checks completed successfully. |
-| `failing` | At least one check completed with a failure conclusion. |
+| `failing` | At least one check completed with a failure, timed-out, or cancelled conclusion. |
+
+The aggregate treats exactly three completed conclusions as failing: `failure`, `timed_out`, and
+`cancelled`. A `neutral` or `skipped` conclusion is non-failing, and an unmappable platform
+conclusion maps to `pending`, which is also non-failing. Whether the aggregate defers is decided by
+the run's `status`, not its conclusion: a run that has not completed holds the aggregate at
+`pending`, while a completed run carrying a `pending` conclusion counts toward `passing`.
+
+Every forge that exposes both a CI provider and a source-control merge-gate read applies this one
+aggregation rule, so neither reader can invent its own definition of failing. The two can still
+reach different verdicts when they read different signals: on GitHub the CI provider reads check
+runs only, while the merge gate reads the combined commit status as well, so a commit whose sole
+failing signal is a legacy commit status is passing to one and failing to the other.
 
 Each `CheckRun` contains:
 

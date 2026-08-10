@@ -528,9 +528,11 @@ All implementations are safe for concurrent use. SCM errors are normalized to
 `*domain.SCMError` with a `SCMErrorKind` drawn from the six values in
 `internal/domain/scm.go`. Network and HTTP classification is shared with the
 tracker adapter via `internal/httpkit` and the `classifyHTTPError` helper in
-`internal/scm/github/client.go`; the SCM-specific remapping (including the
-405/409 promotion to `ErrSCMConflict`) lives in `toSCMError`
-(`internal/scm/github/review.go`).
+`internal/scm/github/client.go`; `scmcore.ToSCMError` remaps the result into
+the SCM error namespace and performs no conflict promotion of its own. The
+405/409 promotion to `ErrSCMConflict` is a separate step, applied by
+`scmcore.AsMergeConflict` only to the error `MergePR` gets back from the
+merge write call.
 
 ### 1. `GetReviewDecision` (GraphQL `pullRequest.reviewDecision`)
 
@@ -571,9 +573,10 @@ Mapping from GraphQL value to `domain.ReviewDecision`:
 | Unknown enum value  | `ReviewDecisionNotRequired` (logs warn) |
 
 Idempotent and read-only: repeated calls return the current decision and do
-not mutate platform state. The GraphQL transport prefix
-`POST /graphql:` exempts errors from the 405/409 promotion that applies to
-the REST surface (see `toSCMError`).
+not mutate platform state. Errors route through `scmcore.ToSCMError` like
+every other read, which never promotes a status to `ErrSCMConflict`; only
+`MergePR` calls `scmcore.AsMergeConflict`, so this read path cannot produce
+that kind and needs no exemption from it.
 
 ### 2. `GetCIStatus` (combined status + check runs)
 
@@ -693,11 +696,14 @@ with a nil error, and the orchestrator's reconcile loop
 (`internal/orchestrator/auto_merge_reconcile.go`) records the duplicate
 merge as success through its normal success path.
 
-The generic promotion of HTTP 405 and 409 to `ErrSCMConflict` in the
-`SCMAdapter` contract, and the orchestrator's `already merged` substring
-check, remain the fallback for a provider that rejects a re-merge. GitHub
-does not exercise that path for an already-merged PR; the `expectedHeadSHA`
-precondition produces HTTP 409 only while the PR is still open and its head
+The 405/409 promotion to `ErrSCMConflict`, and the orchestrator's
+`already merged` substring check, are exactly the path GitHub exercises
+when a different actor merges the PR first: GitHub's rejection carries no
+wording saying the pull request was already merged, so `MergePR` re-reads
+the pull request after the rejection and, on a confirmed merge, reports
+the already-merged marker itself (see the already-merged subcase in the
+HTTP status mapping below). The `expectedHeadSHA` precondition, in
+contrast, produces HTTP 409 only while the PR is still open and its head
 has moved.
 
 A success response with `"merged": false` (the platform's documented but
@@ -733,8 +739,9 @@ condition.
 The mapping below is the SCM view: each row reports the HTTP status the
 adapter receives and the `SCMErrorKind` it returns. The base classification
 happens in `classifyHTTPError` (`internal/scm/github/client.go`), and
-`toSCMError` (`internal/scm/github/review.go`) remaps the result for the
-SCM error namespace, including the 405/409 promotion to `ErrSCMConflict`.
+`scmcore.ToSCMError` remaps the result for the SCM error namespace. The 405
+and 409 rows reflect the merge write path only; every other call keeps the
+`ErrSCMAPI` kind `scmcore.ToSCMError` assigns.
 
 | HTTP Status | Condition                                          | SCM error kind        |
 | ----------- | -------------------------------------------------- | --------------------- |
@@ -744,34 +751,33 @@ SCM error namespace, including the 405/409 promotion to `ErrSCMConflict`.
 | 403         | Insufficient permissions (non-rate-limit body)     | `ErrSCMAuth`          |
 | 403, 429    | Rate limit (primary or secondary, with `Retry-After` or `X-RateLimit-Remaining: 0` or `rate limit` body) | `ErrSCMAPI` |
 | 404         | Resource not found (PR, branch, ref)               | `ErrSCMNotFound`      |
-| 405         | Method not allowed on any non-GraphQL REST SCM call | `ErrSCMConflict`      |
-| 409         | Conflict on any non-GraphQL REST SCM call (merge head SHA drift, branch protection refusal, `already merged` body, or a `DeleteBranch` ref conflict) | `ErrSCMConflict` |
+| 405         | Method not allowed. On `MergePR` this promotes to `ErrSCMConflict`; every other call keeps `ErrSCMAPI` | `ErrSCMConflict` on `MergePR`, `ErrSCMAPI` elsewhere |
+| 409         | Conflict: head-SHA drift or branch-protection refusal on `MergePR`, or a ref conflict on `DeleteBranch`. Only `MergePR` promotes; `DeleteBranch` and every other call keep `ErrSCMAPI` | `ErrSCMConflict` on `MergePR`, `ErrSCMAPI` elsewhere |
 | 410         | Resource permanently gone                          | `ErrSCMAPI`           |
 | 422         | Validation failed (unsupported `merge_method`, default-branch delete, spam check) | `ErrSCMPayload` |
 | 5xx         | Server error                                       | `ErrSCMTransport`     |
 | network     | DNS, TCP, TLS failure                              | `ErrSCMTransport`     |
 | payload     | JSON decode failure on a 2xx response              | `ErrSCMPayload`       |
 
-The 405/409-to-`ErrSCMConflict` promotion is keyed on the error message,
-not on the endpoint path. `classifyHTTPError` formats a 405 as
-`"<method> <path>: method not allowed: <detail>"` and a 409 as
-`"<method> <path>: conflict: <detail>"`. `toSCMError` promotes any
-`ErrSCMAPI` error whose message contains `method not allowed` or
-`: conflict:` to `ErrSCMConflict`, so the promotion applies to every
-non-GraphQL REST SCM call, not only the merge endpoint. In practice the
-merge endpoint is the main source of these statuses (GitHub returns 405
-when the PR is in a state that bars any merge, and 409 on head-SHA drift,
-branch-protection refusal, or an already-merged PR), but a 409 from
-`DeleteBranch` (a ref conflict) is promoted the same way. Collapsing both
-statuses into one kind lets the reconcile loop apply a single disposition
-policy on the merge path. The promotion is suppressed for messages prefixed
-with `POST /graphql:` so a 405 or 409 against the GraphQL endpoint is not
-misread as a conflict.
+The 405/409-to-`ErrSCMConflict` promotion is keyed on the originating
+`domain.TrackerError.Status` field, not on the error message text.
+`scmcore.AsMergeConflict` checks that field directly against 405 and 409
+and promotes only on a match; any other error, including one whose message
+happens to mention "conflict", passes through unchanged. `MergePR` is the
+only caller: it applies the promotion to the error the merge PUT call
+returns, and no other GitHub SCM method calls it. A 409 from `DeleteBranch`
+(a ref conflict) therefore keeps `ErrSCMAPI` like the rest of the REST
+surface. Because the promotion never inspects the error message, and the
+GraphQL surface never calls it at all, no exemption for the
+`POST /graphql:` prefix is needed.
 
-The `already merged` 409 subcase is signaled by the verbatim GitHub body in
-`SCMError.Message`. The orchestrator inspects the message case-insensitively
-and dispatches the subcase to the merge-success branch; every other
-`ErrSCMConflict` is re-enqueued at the poll interval per [§11C.5](architecture/14-auto-merge-reaction-contract.md#11c5-merge-precondition-state-machine).
+The already-merged 409 subcase is not signaled by GitHub's response body:
+`MergePR` re-reads the pull request after a rejected merge and, when the
+re-read confirms the pull request is merged, returns `ErrSCMConflict` with
+the marker phrase `already merged` in `SCMError.Message` itself. The
+orchestrator inspects the message case-insensitively and dispatches the
+subcase to the merge-success branch; every other `ErrSCMConflict` is
+re-enqueued at the poll interval per [§11C.5](architecture/14-auto-merge-reaction-contract.md#11c5-merge-precondition-state-machine).
 
 ### Token scopes
 
