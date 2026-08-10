@@ -21,8 +21,7 @@ require no prior discussion:
 
 ```bash
 # Find packages with low coverage
-go test -coverprofile=coverage.out ./...
-go tool cover -func=coverage.out | grep -v '100.0%' | sort -k3 -n
+make test-coverage | grep -v '100.0%' | sort -k3 -n
 ```
 
 For larger work - new features, new adapters, architectural changes - open an issue
@@ -97,6 +96,11 @@ linter enforces:
   `logging.WithIssue` and `logging.WithSession`.
 - **Templates:** `Option("missingkey=error")` on every `text/template` - strict mode is
   mandatory.
+- **Shared adapter helpers:** don't re-implement a helper already extracted to a shared
+  package (`internal/httpkit`, `internal/typeutil`, `internal/issuekit`, or an
+  adapter-family package like `internal/scm/scmcore`). A contract test in
+  `internal/adaptertest` fails `make test` if a tracker or SCM package re-declares one of
+  these under a local name.
 
 ## Testing conventions
 
@@ -119,7 +123,7 @@ test(tracker): cover pagination edge cases in Jira adapter
 ```
 
 PRs use the [template](.github/pull_request_template.md). One logical change per PR.
-CI runs `make lint` and `make test` - both must pass.
+CI lints, tests (including on Windows), and builds the binary - all must pass.
 
 ## What will not be merged
 
