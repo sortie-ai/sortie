@@ -3,8 +3,9 @@
 #
 # Usage:
 #   curl -sSL https://get.sortie-ai.com/install.sh | sh
+#   curl -sSL https://get.sortie-ai.com/install.sh | sh -s -- --help
 #
-# Environment:
+# Environment (each has an equivalent flag, see --help):
 #   SORTIE_VERSION      Pin a specific release tag (e.g. 1.17.0 or 0.0.7).
 #   SORTIE_INSTALL_DIR  Override install directory
 #                       (default: /usr/local/bin as root, ~/.local/bin otherwise).
@@ -14,6 +15,7 @@ set -eu
 
 REPO="sortie-ai/sortie"
 BIN="sortie"
+BINARY=""
 
 # ── Formatting ────────────────────────────────────────────────────────────────
 
@@ -31,6 +33,52 @@ info() { printf '%b%s\n' "${BOLD}${CYAN}:: ${RESET}" "$*"; }
 ok()   { printf '%b%s\n' "${BOLD}${GREEN}:: ${RESET}" "$*"; }
 err()  { printf '%b%s\n' "${BOLD}${RED}error: ${RESET}" "$*" >&2; }
 die()  { err "$@"; exit 1; }
+
+# ── Arguments ─────────────────────────────────────────────────────────────────
+
+usage() {
+    cat <<EOF
+Installer for ${BIN} - spec-first agent orchestrator.
+
+Usage: install.sh [options]
+
+Options:
+  -h, --help                Show this message
+  -v, --version <version>   Install a specific release (default: latest)
+  -d, --install-dir <dir>   Install into <dir>
+  -b, --binary <path>       Install a local binary instead of downloading
+      --no-verify           Skip checksum verification
+
+Flags override the SORTIE_VERSION, SORTIE_INSTALL_DIR and SORTIE_NO_VERIFY
+environment variables.
+
+Examples:
+  curl -sSL https://get.sortie-ai.com/install.sh | sh
+  curl -sSL https://get.sortie-ai.com/install.sh | sh -s -- --version 1.18.0
+EOF
+}
+
+parse_args() {
+    while [ $# -gt 0 ]; do
+        case $1 in
+            -h|--help)
+                usage; exit 0 ;;
+            -v|--version)
+                [ $# -ge 2 ] || die "$1 requires an argument"
+                SORTIE_VERSION=$2; shift 2 ;;
+            -d|--install-dir)
+                [ $# -ge 2 ] || die "$1 requires an argument"
+                SORTIE_INSTALL_DIR=$2; shift 2 ;;
+            -b|--binary)
+                [ $# -ge 2 ] || die "$1 requires an argument"
+                BINARY=$2; shift 2 ;;
+            --no-verify)
+                SORTIE_NO_VERIFY=1; shift ;;
+            *)
+                die "unknown option: $1 (try --help)" ;;
+        esac
+    done
+}
 
 # ── Platform detection ────────────────────────────────────────────────────────
 
@@ -77,9 +125,26 @@ fetch() {
 
 # ── Version resolution ────────────────────────────────────────────────────────
 
+# The releases/latest HTML endpoint redirects to the tagged release and, unlike
+# the GitHub API, is not rate-limited per IP - which is what breaks on shared
+# CI runners. curl only: wget cannot report a Location header portably.
+latest_tag_via_redirect() {
+    command -v curl >/dev/null 2>&1 || return 1
+    _loc=$(curl -fsSI -o /dev/null -w '%{redirect_url}' \
+        "https://github.com/${REPO}/releases/latest") || return 1
+    case "$_loc" in
+        */releases/tag/?*) printf '%s' "${_loc##*/}" ;;
+        *)                 return 1 ;;
+    esac
+}
+
 resolve_tag() {
     if [ -n "${SORTIE_VERSION-}" ]; then
         printf '%s' "$SORTIE_VERSION"
+        return
+    fi
+    if _redirect_tag=$(latest_tag_via_redirect); then
+        printf '%s' "$_redirect_tag"
         return
     fi
     _json=$(fetch "https://api.github.com/repos/${REPO}/releases/latest") \
@@ -87,6 +152,12 @@ resolve_tag() {
     printf '%s' "$_json" \
         | sed -n 's/.*"tag_name"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
         | head -n1
+}
+
+# Version of an already-installed binary; empty when absent or not runnable.
+installed_version() {
+    [ -x "$1" ] || return 0
+    "$1" --version 2>/dev/null | awk 'NR == 1 { print $2 }'
 }
 
 # ── Checksum verification ────────────────────────────────────────────────────
@@ -140,10 +211,20 @@ shell_rc() {
 
 cleanup() { [ -d "${TMPDIR_INSTALL-}" ] && rm -rf "$TMPDIR_INSTALL"; }
 
-# ── Main ──────────────────────────────────────────────────────────────────────
+# ── Install strategies ────────────────────────────────────────────────────────
 
-main() {
-    setup_colors
+install_local() {
+    [ -f "$BINARY" ] || die "binary not found: ${BINARY}"
+    info "Source:   ${BINARY}"
+
+    mkdir -p "$_dir"
+    install -m 755 "$BINARY" "${_dir}/${BIN}"
+
+    _version=$(installed_version "${_dir}/${BIN}")
+    _tag=${_version:-local}
+}
+
+install_release() {
     need_cmd uname
     need_cmd tar
 
@@ -154,6 +235,11 @@ main() {
     [ -n "$_tag" ] || die "could not determine latest release"
     _version=$(printf '%s' "$_tag" | sed 's/^v//')
     info "Release:  ${_tag}"
+
+    if [ "$(installed_version "${_dir}/${BIN}")" = "$_version" ]; then
+        ok "${BIN} ${_tag} is already installed at ${_dir}/${BIN}"
+        exit 0
+    fi
 
     _archive="${BIN}_${_version}_${OS}_${ARCH}.tar.gz"
     _base="https://github.com/${REPO}/releases/download/${_tag}"
@@ -175,21 +261,40 @@ main() {
 
     tar -xzf "${TMPDIR_INSTALL}/${_archive}" -C "${TMPDIR_INSTALL}"
 
-    _dir=$(resolve_install_dir)
     mkdir -p "$_dir"
     install -m 755 "${TMPDIR_INSTALL}/${BIN}" "${_dir}/${BIN}"
+}
+
+# ── Main ──────────────────────────────────────────────────────────────────────
+
+main() {
+    setup_colors
+    parse_args "$@"
+
+    _dir=$(resolve_install_dir)
+
+    if [ -n "$BINARY" ]; then
+        install_local
+    else
+        install_release
+    fi
 
     ok "Installed ${BIN} ${_tag} to ${_dir}/${BIN}"
 
     case ":${PATH}:" in
         *":${_dir}:"*) ;;
         *)
-            _rc=$(shell_rc)
-            printf '\n'
-            info "Add to your PATH to get started:"
-            # shellcheck disable=SC2016
-            printf '  %becho '\''export PATH="%s:$PATH"'\'' >> %s%b\n\n' \
-                "${DIM}" "$_dir" "$_rc" "${RESET}"
+            if [ "${GITHUB_ACTIONS-}" = "true" ] && [ -n "${GITHUB_PATH-}" ]; then
+                printf '%s\n' "$_dir" >> "$GITHUB_PATH"
+                info "Added ${_dir} to \$GITHUB_PATH"
+            else
+                _rc=$(shell_rc)
+                printf '\n'
+                info "Add to your PATH to get started:"
+                # shellcheck disable=SC2016
+                printf '  %becho '\''export PATH="%s:$PATH"'\'' >> %s%b\n\n' \
+                    "${DIM}" "$_dir" "$_rc" "${RESET}"
+            fi
             ;;
     esac
 
@@ -217,7 +322,9 @@ main() {
 
     printf '  %bTurns issue tickets into autonomous sessions.%b\n\n' "${DIM}" "${RESET}"
     printf '\n  %bDocs:%b       https://docs.sortie-ai.com\n' "${BOLD}${YELLOW}" "${RESET}"
-    printf '  %bChangelog:%b  https://docs.sortie-ai.com/changelog/#%s\n' "${BOLD}${YELLOW}" "${RESET}" "$_version"
+    if [ -n "$_version" ]; then
+        printf '  %bChangelog:%b  https://docs.sortie-ai.com/changelog/#%s\n' "${BOLD}${YELLOW}" "${RESET}" "$_version"
+    fi
     printf '  %bGitHub:%b     https://github.com/%s\n' "${BOLD}${YELLOW}" "${RESET}" "$REPO"
     if [ "$_utf8" = "true" ]; then
         printf '\n  Happy hacking! %b♠%b\n\n' "${CYAN}" "${RESET}"
