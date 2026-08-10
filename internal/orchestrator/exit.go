@@ -207,8 +207,7 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 	// measured is the OR of the entry's own measurement flag and the
 	// worker's mirror, computed after the usage reconciliation above so
 	// a measurement that arrived only on the worker result still
-	// counts. An unmeasured run's four token columns are already zero,
-	// because no usage-bearing event ever arrived to populate them.
+	// counts.
 	measured := entry.UsageMeasured || workerResult.UsageMeasured
 
 	// Release the SSH host slot so it becomes available for other issues.
@@ -298,6 +297,16 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 		TotalTokens:     entry.AgentTotalTokens,
 		CacheReadTokens: entry.CacheReadTokens,
 		TokensMeasured:  measured,
+	}
+	// A row recording no measurement must carry zero in all four token
+	// columns. The reconciliation above populates them from the worker's
+	// own figure, which an adapter can report without also asserting
+	// that it measured the run, so the zeroing cannot be left implicit.
+	if !measured {
+		runHistory.InputTokens = 0
+		runHistory.OutputTokens = 0
+		runHistory.TotalTokens = 0
+		runHistory.CacheReadTokens = 0
 	}
 	if workerResult.ReviewMetadata != nil {
 		data, marshalErr := json.Marshal(workerResult.ReviewMetadata)
