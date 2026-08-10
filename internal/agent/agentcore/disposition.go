@@ -229,8 +229,8 @@ func DecideTurn(ev TurnEvidence) TurnDisposition {
 			Row:          RowNoExitObserved,
 			ExitReason:   domain.EventTurnFailed,
 			ErrorKind:    domain.ErrPortExit,
-			EventMessage: "runtime ended without reporting a turn outcome",
-			ErrorMessage: "runtime ended without reporting a turn outcome",
+			EventMessage: "runtime reported no turn outcome",
+			ErrorMessage: "runtime reported no turn outcome",
 		}
 	}
 

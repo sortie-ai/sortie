@@ -54,8 +54,8 @@ func TestDecideTurn_Rows(t *testing.T) {
 			wantRow:          RowNoExitObserved,
 			wantExitReason:   domain.EventTurnFailed,
 			wantErrorKind:    domain.ErrPortExit,
-			wantEventMessage: "runtime ended without reporting a turn outcome",
-			wantErrorMessage: "runtime ended without reporting a turn outcome",
+			wantEventMessage: "runtime reported no turn outcome",
+			wantErrorMessage: "runtime reported no turn outcome",
 		},
 		{
 			name:             "R5 non-zero exit differs between event and error message",
