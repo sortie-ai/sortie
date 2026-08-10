@@ -2,7 +2,6 @@ package linear
 
 import (
 	"context"
-	"errors"
 	"io"
 	"log/slog"
 	"maps"
@@ -11,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/sortie-ai/sortie/internal/adaptertest"
 	"github.com/sortie-ai/sortie/internal/domain"
 )
 
@@ -158,11 +158,5 @@ func assertTrackerErrorKind(t *testing.T, err error, want domain.TrackerErrorKin
 	if err == nil {
 		t.Fatalf("expected error with kind %q, got nil", want)
 	}
-	var te *domain.TrackerError
-	if !errors.As(err, &te) {
-		t.Fatalf("error type = %T, want *domain.TrackerError", err)
-	}
-	if te.Kind != want {
-		t.Errorf("TrackerError.Kind = %q, want %q", te.Kind, want)
-	}
+	adaptertest.AssertTrackerErrorKind(t, err, want)
 }

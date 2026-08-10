@@ -1,12 +1,11 @@
 package linear
 
 import (
-	"fmt"
 	"os"
-	"slices"
 	"strings"
 
 	"github.com/sortie-ai/sortie/internal/registry"
+	"github.com/sortie-ai/sortie/internal/typeutil"
 )
 
 // validateConfig checks Linear-specific configuration constraints and
@@ -17,9 +16,13 @@ func validateConfig(fields registry.TrackerConfigFields) []registry.ValidationDi
 
 	diags = append(diags, validateProject(fields.Project)...)
 	diags = append(diags, validateAPIKeyHint(fields.APIKey)...)
-	diags = append(diags, validateStateLabels("tracker.active_states", fields.ActiveStates)...)
-	diags = append(diags, validateStateLabels("tracker.terminal_states", fields.TerminalStates)...)
-	diags = append(diags, validateStateOverlap(fields)...)
+	// Linear rejects an empty or padded configured state name at
+	// construction (a present list element is matched against the team's
+	// workflow states by exact case-insensitive name), so both faults are
+	// errors here, unlike the sibling forge validators.
+	diags = append(diags, registry.DiagStateLabelElements("tracker.active_states", fields.ActiveStates, registry.SeverityError)...)
+	diags = append(diags, registry.DiagStateLabelElements("tracker.terminal_states", fields.TerminalStates, registry.SeverityError)...)
+	diags = append(diags, registry.DiagStateOverlap(fields)...)
 
 	return diags
 }
@@ -34,7 +37,7 @@ func validateProject(project string) []registry.ValidationDiag {
 		return nil
 	}
 
-	if containsWhitespace(project) {
+	if typeutil.HasWhitespace(project) {
 		return []registry.ValidationDiag{{
 			Severity: "error",
 			Check:    "tracker.project.format",
@@ -96,87 +99,4 @@ func validateAPIKeyHint(apiKey string) []registry.ValidationDiag {
 	}
 
 	return nil
-}
-
-// validateStateLabels checks for empty, whitespace-only, or untrimmed
-// elements in a state name list. An absent or wholly empty list yields no
-// diagnostic because the adapter applies defaults in that case.
-//
-// Both faults are errors, not warnings: a present list element is matched
-// against the team's workflow states by exact case-insensitive name, so an
-// empty name or one carrying leading or trailing whitespace can never match
-// and aborts adapter construction before any issue is dispatched.
-func validateStateLabels(field string, states []string) []registry.ValidationDiag {
-	var diags []registry.ValidationDiag
-	for i, s := range states {
-		trimmed := strings.TrimSpace(s)
-		if trimmed == "" {
-			diags = append(diags, registry.ValidationDiag{
-				Severity: "error",
-				Check:    field + ".empty_element",
-				Message:  fmt.Sprintf("%s[%d]: empty state name can never match a team state", field, i),
-			})
-			continue
-		}
-		if trimmed != s {
-			diags = append(diags, registry.ValidationDiag{
-				Severity: "error",
-				Check:    field + ".untrimmed_element",
-				Message:  fmt.Sprintf("%s[%d]: state name has leading or trailing whitespace and can never match a team state", field, i),
-			})
-		}
-	}
-	return diags
-}
-
-// validateStateOverlap detects state names shared between active_states
-// and terminal_states. All comparisons are case-insensitive. Collisions
-// involving handoff_state or in_progress_state are rejected by the
-// generic config validation before this hook runs, so there are no arms
-// for them here.
-func validateStateOverlap(fields registry.TrackerConfigFields) []registry.ValidationDiag {
-	var diags []registry.ValidationDiag
-
-	activeSet := toLowerSet(fields.ActiveStates)
-	terminalSet := toLowerSet(fields.TerminalStates)
-
-	var overlap []string
-	for name := range activeSet {
-		if strings.TrimSpace(name) == "" {
-			continue
-		}
-		if _, ok := terminalSet[name]; ok {
-			overlap = append(overlap, name)
-		}
-	}
-	slices.Sort(overlap)
-	for _, name := range overlap {
-		diags = append(diags, registry.ValidationDiag{
-			Severity: "warning",
-			Check:    "tracker.states.overlap",
-			Message:  fmt.Sprintf("tracker.active_states and tracker.terminal_states overlap on %q; an issue in state %q would match both sets", name, name),
-		})
-	}
-
-	return diags
-}
-
-// containsWhitespace reports whether s contains any whitespace
-// characters.
-func containsWhitespace(s string) bool {
-	for _, r := range s {
-		if r == ' ' || r == '\t' || r == '\n' || r == '\r' {
-			return true
-		}
-	}
-	return false
-}
-
-// toLowerSet builds a set of lowercased strings from a slice.
-func toLowerSet(ss []string) map[string]struct{} {
-	m := make(map[string]struct{}, len(ss))
-	for _, s := range ss {
-		m[strings.ToLower(s)] = struct{}{}
-	}
-	return m
 }
