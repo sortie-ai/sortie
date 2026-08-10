@@ -176,17 +176,20 @@ Sortie is a single-binary Go service with this internal layout:
 | Package                  | Layer         | Purpose                                              |
 | ------------------------ | ------------- | ---------------------------------------------------- |
 | `internal/domain/`       | Domain        | Pure types, interfaces, constants - zero I/O         |
-| `internal/config/`       | Configuration | Typed config, env-var resolution, template rendering |
+| `internal/config/`       | Configuration | Typed config, env-var resolution, dispatch rule routing |
 | `internal/workflow/`     | Configuration | WORKFLOW.md parsing, file watching, dynamic reload   |
 | `internal/persistence/`  | Persistence   | SQLite schema, migrations, CRUD                      |
-| `internal/httpkit/`      | Integration   | Shared REST transport, conditional GET, and pagination helpers |
+| `internal/httpkit/`      | Integration   | Shared REST transport, conditional GET, retry/backoff, and pagination helpers |
 | `internal/issuekit/`     | Integration   | Shared issue normalization helpers                   |
 | `internal/trackermetrics/` | Integration | Shared tracker-operation metrics decorator           |
+| `internal/scm/scmcore/`  | Integration   | Shared CI-verdict, SCM-error, and merge-conflict decision logic across SCM adapters |
 | `internal/tracker/jira/` | Integration   | Jira adapter behind `TrackerAdapter` interface       |
 | `internal/scm/github/`   | Integration   | GitHub tracker, CI, and review adapters behind `TrackerAdapter`, `CIStatusProvider`, and `SCMAdapter` interfaces |
+| `internal/scm/gitea/`    | Integration   | Gitea tracker, CI, and review adapters behind `TrackerAdapter`, `CIStatusProvider`, and `SCMAdapter` interfaces |
+| `internal/scm/gitlab/`   | Integration   | GitLab adapter behind `TrackerAdapter` interface (tracker only; no CI or SCM role yet) |
 | `internal/tracker/file/` | Integration   | File-based tracker for dev/test                      |
 | `internal/tracker/linear/` | Integration | Linear adapter behind `TrackerAdapter` interface     |
-| `internal/agent/agentcore/` | Integration | Shared agent adapter command, event, usage, and workspace helpers |
+| `internal/agent/agentcore/` | Integration | Shared agent adapter command, event, usage, workspace, and turn-disposition helpers |
 | `internal/agent/procutil/` | Integration | Shared subprocess lifecycle helpers for agent adapters |
 | `internal/agent/sshutil/`  | Integration | Shared SSH invocation helpers for agent adapters     |
 | `internal/agent/claude/` | Integration   | Claude Code adapter behind `AgentAdapter` interface  |
@@ -201,10 +204,13 @@ Sortie is a single-binary Go service with this internal layout:
 | `internal/orchestrator/` | Coordination  | Poll loop, dispatch, retry, reconciliation           |
 | `internal/server/`       | Observability | HTTP API server, JSON endpoints, dashboard           |
 | `internal/prompt/`       | Support       | Prompt template utilities                            |
-| `internal/registry/`     | Support       | Adapter registration                                 |
+| `internal/registry/`     | Support       | Adapter registration, shared validation diagnostics  |
 | `internal/logging/`      | Support       | Structured logging setup                             |
 | `internal/maputil/`      | Support       | Generic map helpers, sorted key iteration            |
 | `internal/typeutil/`     | Support       | Type coercion helpers for loosely-typed values        |
+| `internal/adaptertest/`  | Support       | Shared tracker/SCM adapter conformance test assertions |
+| `internal/agent/agenttest/` | Support    | Shared agent adapter test helpers (script writing, log capture, usage assertions) |
+| `internal/agent/agenttest/dispositiontest/` | Support | Shared turn-disposition conformance assertion for agent adapter tests |
 | `internal/tool/trackerapi/` | Support    | Agent tool for tracker operations                    |
 | `internal/tool/history/`    | Support    | Agent tool for workspace run history                 |
 | `internal/tool/mcpserver/`  | Support    | MCP stdio server for tool dispatch                   |
