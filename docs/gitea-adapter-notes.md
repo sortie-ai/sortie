@@ -39,7 +39,7 @@ Reuse survives the read-mostly happy path and breaks exactly where issue polling
 
 ### Helper sharing
 
-The native adapter is built on the existing shared utility packages, the same way the Linear adapter is: `internal/httpkit` for the HTTP client and the `Link`-header paginator (`httpkit.NewLinkPaginator`, `httpkit.ParseLinkRel`), `internal/issuekit` for shared normalization helpers, `internal/trackermetrics` for instrumentation, and `internal/typeutil` for config decoding. No third-party Gitea client library, consistent with the zero-runtime-dependency model, and no shared base structs with the GitHub adapter: the overlap is transport-shaped, not domain-shaped, and lives in `httpkit` already.
+The native adapter is built on the existing shared utility packages, the same way the Linear adapter is: `internal/httpkit` for the HTTP client and the `Link`-header paginator (`httpkit.NewLinkPaginator`, `httpkit.ParseLinkRel`), `internal/issuekit` for shared normalization helpers, `internal/trackermetrics` for instrumentation, and `internal/typeutil` for config decoding. The SCM and CI surfaces added later lean on `internal/scm/scmcore` for the forge decision logic every SCM adapter shares (error conversion and merge-conflict promotion, bot-author classification, sortable event ids, and the CI aggregate). No third-party Gitea client library, consistent with the zero-runtime-dependency model, and no shared base structs with the GitHub adapter: the overlap is transport-shaped, not domain-shaped, and lives in `httpkit` already.
 
 ### Package placement
 
@@ -410,7 +410,7 @@ Sketch, verified end-to-end by this research's provisioning sequence:
 
 ## SCM read surface
 
-The tracker adapter package also implements the SCM read methods `GetReviewDecision`, `GetMergeability`, `GetCIStatus`, `FetchPendingReviews`, `FetchBotReviewComments`, and `ListLabelEvents` (`domain.SCMAdapter`, `internal/domain/scm.go`). Gitea exposes no GraphQL API and no aggregate review-decision or check-runs endpoint, so each read is composed from REST routes under `/api/v1`. Every route below was reached live against the localhost Gitea 1.27.0 lab instance and returned HTTP 200; where the lab PR carried no data to populate a response, the object shape is schema-inferred from the instance OpenAPI description and marked for reconciliation against a captured live fixture in the env-gated integration tests (issue #660).
+The tracker adapter package also implements the SCM read methods `GetReviewDecision`, `GetMergeability`, `GetCIStatus`, `FetchPendingReviews`, `FetchBotReviewComments`, and `ListLabelEvents` (`domain.SCMAdapter`, `internal/domain/scm.go`). Gitea exposes no GraphQL API and no aggregate review-decision or check-runs endpoint, so each read is composed from REST routes under `/api/v1`. Every route below was reached live against the localhost Gitea 1.27.0 lab instance and returned HTTP 200; where that lab PR carried no data to populate a response, the object shape was schema-inferred from the instance OpenAPI description pending a captured live fixture. Those fixtures have since been captured. On 2026-08-10 a lab instance running **Gitea 1.26.4** was provisioned with reviews, inline review comments, and a 51-status commit, and the review list, the review comments, and the combined commit status were each observed populated; the shapes recorded below are the observed ones. Claims from that second pass are marked "verified live" and scoped to 1.26.4, because the two lab instances do not run the same release.
 
 | Method | Gitea route(s) |
 | --- | --- |
@@ -431,7 +431,7 @@ GET /repos/{owner}/{repo}/pulls/{index}/reviews
 - Each review carries `dismissed` (an operator nullified the review), `official`, `stale`, `body`, `submitted_at`, `user.login`, and `id`. Dismissed reviews are skipped by every read.
 - `FetchPendingReviews` returns the comments of non-bot `REQUEST_CHANGES` reviews; `FetchBotReviewComments` returns the comments of reviews whose author matches a bot-username allowlist, with no review-state filter. Gitea users carry no `type: Bot` marker, so bot classification is the allowlist alone (see [Bot classification](#bot-classification)).
 - Paginated by page number, not the `Link` header (see [SCM read pagination](#scm-read-pagination)).
-- The route was reached live (HTTP 200); the lab PR carried zero reviews, so the populated `PullReview` object shape is schema-inferred and MUST be reconciled against a captured live review-list fixture (issue #660).
+- Verified live against a provisioned PR carrying a `REQUEST_CHANGES` review and a `COMMENT` review: the populated object returned `id`, `state`, `body`, `user.login`, `dismissed`, `official`, `stale`, and `submitted_at`, which is every field these reads consume, plus `comments_count`, `commit_id`, `team`, `updated_at`, and the two HTML URLs.
 
 ### Review comments
 
@@ -439,9 +439,10 @@ GET /repos/{owner}/{repo}/pulls/{index}/reviews
 GET /repos/{owner}/{repo}/pulls/{index}/reviews/{id}/comments
 ```
 
-- Each comment carries `path`, `body`, `position`, `original_position`, `created_at`, `id`, and `user.login`. There is no `line`, `start_line`, or `end_line` field, so review comments are single-line and `EndLine` normalizes to 0.
-- `position` is the line on the current diff; `position: 0` marks a comment whose anchor a later push removed, in which case `original_position` holds the line it was written against and the comment normalizes with `Outdated` true.
-- The route is present in the instance OpenAPI; the lab PR carried no review comments, so the `position`/`original_position` semantics and the outdated derivation are schema-inferred and MUST be reconciled against a captured live review-comment fixture. Issue #660, which tracked this reconciliation, is closed; its closing PR #670 touched only `internal/scm/gitea/integration_merge_test.go`, `internal/scm/gitea/integration_scm_test.go`, and `scripts/gitea-integration-provision.sh`, so the review-comment fixture this note calls for was never captured.
+- Each comment carries `path`, `body`, `position`, `original_position`, `created_at`, `id`, and `user.login`, alongside `commit_id`, `original_commit_id`, `diff_hunk`, `resolver`, `updated_at`, and the two HTML URLs (verified live). There is no `line`, `start_line`, or `end_line` field (verified live), so review comments are single-line and `EndLine` normalizes to 0.
+- `position` and `original_position` are **file line numbers, not diff offsets**, and they select the side of the diff rather than the freshness of the anchor. `position` is the new-side line, `original_position` the old-side line; each is 0 when the comment is not anchored to that side. Verified live by anchoring two comments on the same modified line of a PR whose hunk header is `@@ -9,7 +9,7 @@`: the comment created with `new_position: 12` returned `position: 12, original_position: 0`, and the one created with `old_position: 12` returned `position: 0, original_position: 12`. A diff-offset reading would have returned 5 for both. The upstream model names the fields `LineNum` and `OldLineNum` (`modules/structs/pull_review.go`, identical at the `v1.26.4` and `v1.27.0` tags), and the write side documents `new_position` as "if comment to new file line or 0".
+- **A zero `position` therefore does not mean outdated.** It means the comment is anchored to the old side of the diff, which is true the moment the comment is created. Verified live: after pushing a commit that deleted the anchored line outright, both comments came back with their `position` and `original_position` unchanged and their `commit_id` still naming the superseded head. The route exposes no invalidation field at all: `PullReviewComment` carries no `invalidated` key in the instance OpenAPI or in the upstream model at either tag, so the only staleness signal available on this route is comparing each comment's `commit_id` against the PR head, which the adapter does not do.
+- Open item: the adapter derives `Outdated` from `position == 0`, so it marks every old-side-anchored comment outdated and never marks a genuinely superseded comment. The derivation predates this fixture and no live observation supported it; the corrected semantics above are recorded here rather than in code.
 
 ### Review decision
 
@@ -468,9 +469,11 @@ GET /repos/{owner}/{repo}/commits/{sha}/status
 ```
 
 - Returns `{state, sha, statuses, total_count}`. The top-level `state` is the aggregate; each entry in the `statuses` array carries its own `status`. The two field names differ and MUST NOT be conflated.
-- Empty detection keys on `total_count == 0`: a commit with no CI returns `total_count: 0`, `statuses: null`, and a spurious top-level `state: "pending"` (verified). Trusting the top-level `state` would report `pending` for a no-CI commit and wrongly hold auto-merge, so the aggregate is read from the per-status entries instead.
+- A commit with no CI returns `total_count: 0`, `statuses: null`, and a spurious top-level `state: "pending"` (verified, re-verified live on 1.26.4). Trusting the top-level `state` would report `pending` for a no-CI commit and wrongly hold auto-merge, so the aggregate is read from the per-status entries instead.
+- **`total_count` is the current page's length, not the grand total** (verified live: a 51-status commit returned `total_count: 30` on the default page, `50` at `limit=50`, `1` on page two, and `20` at `limit=20`). It can therefore detect neither emptiness nor truncation, so both readers key the empty case on the accumulated status count across every page. The grand total is available, but only in the `X-Total-Count` header, which reported 51 on every one of those requests.
 - Per-status `status` values are `success`, `failure`, `error`, `warning`, and `pending`. `failure` and `error` are failing; `warning` and `success` are non-failing; `pending` is pending. Each entry also carries `context` (the check name), `target_url`, and `description`.
-- The per-status `target_url` field name is authored from the Gitea `CommitStatus` swagger and was absent from the lab data, and whether this route paginates for a many-status commit is unverified; both are deferred to the env-gated integration tests (issue #660).
+- The per-status `target_url` field name is verified live: every seeded status returned the URL it was created with under that key, and the env-gated integration suite asserts the round-trip from a seeded failing status into the failing check run's `DetailsURL`.
+- **The route paginates**, contrary to the single-GET read the adapter shipped with. Verified live: the default page size is 30, `limit` is honored, and the response carries an RFC 8288 `Link` header with `rel="next"` and `rel="last"` (unlike the reviews, review-comments, and timeline routes, which emit none). A commit with more statuses than one page silently returned only the first page, so a failing status ordered onto a later page could be read as passing by both the CI-failure reaction and the auto-merge CI gate. Both readers now walk every page to a shared page ceiling.
 
 ### Label event timeline
 
@@ -488,7 +491,7 @@ Gitea users carry no `type: Bot` marker (verified: the review `user` object has 
 
 ### SCM read pagination
 
-The reviews, review-comments, and timeline routes paginate by page number, not by the `Link` header the tracker issue routes use. The timeline route was verified live to emit no `Link` header and an unreliable `X-Total-Count` (it returns the page size, not the grand total), so `httpkit.NewLinkPaginator` MUST NOT drive these reads: it stops at the first response with no `Link` header, which would truncate a multi-page timeline to page one. A package-local page-number paginator with a max-page guard drives all three reads. Because the timeline is oldest-first and read forward to the cap, an unusually long timeline truncates its newest entries, where a label command lives; the adapter logs a WARN on reaching the cap.
+The reviews, review-comments, and timeline routes paginate by page number, not by the `Link` header the tracker issue routes use. The timeline route was verified live to emit no `Link` header and an unreliable `X-Total-Count` (it returns the page size, not the grand total), so `httpkit.NewLinkPaginator` MUST NOT drive these reads: it stops at the first response with no `Link` header, which would truncate a multi-page timeline to page one. The shared page-number paginator (`httpkit.NewPagePaginator`) drives all three reads, reached through the package's own `paginateSCM` wrapper, which pins the `page` and `limit` parameter names and the page ceiling every SCM-boundary reader shares and converts a walk failure to the SCM boundary. The package owns no paginator of its own. Because the timeline is oldest-first and read forward to the cap, an unusually long timeline truncates its newest entries, where a label command lives; the adapter logs a WARN on reaching the cap.
 
 ---
 
@@ -504,7 +507,7 @@ GET /repos/{owner}/{repo}/commits/{ref}/status
 - Each per-status entry becomes a `CheckRun`: `context` is the check name, `status` maps to the run status and conclusion (`success` to success, `failure` and `error` to failure, `warning` to neutral, everything else to pending), and `target_url` is the details URL.
 - The aggregate is computed from the per-status entries, never the top-level `state` (the same spurious-`pending`-on-empty trap as the SCM read). An empty status set yields a pending result with an empty, non-nil check-run slice.
 - The failing-status log excerpt is assembled from the first failing entry's `description` and `target_url`, both already in the authenticated combined-status response. The provider never fetches `target_url`, so an operator-configured or third-party run URL cannot expand the request beyond the Gitea API. ANSI escape sequences are stripped and the excerpt is truncated to `max_log_lines`; a zero budget, or a failing entry with neither field, omits the excerpt.
-- The `target_url` field name and the route's pagination behavior carry the same deferred verification (issue #660) as the combined-status SCM read.
+- The `target_url` field name and the route's pagination are verified live; see Combined commit status. This reader walks every page for the same reason the SCM read does, so a many-status commit cannot hide a failing entry behind the first page.
 
 ---
 
@@ -652,6 +655,9 @@ The verification lab doubles as the fixture blueprint: a primary test repository
 | Docker image registry and tags | docs.gitea.com: installation with Docker (via Context7) | Documentation only |
 | Forgejo API base, token header, pagination | forgejo.org/docs: API usage | Codeberg live swagger and version endpoint |
 | Codeberg version marker and label-route divergence | **Live Codeberg** `GET /api/v1/version` and `/swagger.v1.json` | Fetched 2026-07-14 |
+| Populated `PullReview` and `PullReviewComment` shapes | **Live API** (lab instance, Gitea 1.26.4) | Provisioned a PR with two reviews and inline comments, then read both routes; re-read the comments under a non-admin identity with identical results |
+| Review-comment `position` / `original_position` semantics | **Live API** (lab instance, Gitea 1.26.4), corroborated by `modules/structs/pull_review.go` at the `v1.26.4` and `v1.27.0` tags | Anchored one comment new-side and one old-side on the same modified line, then pushed a commit deleting that line and re-read both |
+| Combined-status pagination, `total_count` per-page semantics, and `target_url` | **Live API** (lab instance, Gitea 1.26.4) | Seeded 51 statuses on one commit and read the route at the default page size, `limit=50` pages one and two, and `limit=20`, with response headers captured |
 | GitHub adapter behavior used in the reuse matrix | `internal/scm/github/tracker.go` (`fetchCandidatesViaIssues`, `fetchCandidatesViaSearch`, `fetchStatesByNumbers`, `fetchBlockers`, `fetchParent`, `TransitionIssue`, `AddLabel`) | Code reading at research time |
 
 ### Context7 verification report
