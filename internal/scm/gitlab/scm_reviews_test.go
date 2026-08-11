@@ -558,6 +558,28 @@ func TestNormalizeNotes_OutdatedDerivationAndConditionalRead(t *testing.T) {
 	})
 }
 
+// TestNormalizeNotes_MalformedTimestampTolerated verifies that a note's
+// created_at that is not RFC 3339 does not fail the read: the comment is
+// returned with a zero SubmittedAt while a sibling note's well-formed
+// timestamp survives.
+func TestNormalizeNotes_MalformedTimestampTolerated(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(loadFixture(t, "mr_basic.json"))
+	}))
+	defer srv.Close()
+
+	adapter := mustSCMAdapter(t, srv.URL)
+	notes := []gitlabNote{
+		{ID: 7, Author: gitlabUser{Username: "alice"}, Body: "malformed", CreatedAt: "not-a-timestamp"},
+		{ID: 8, Author: gitlabUser{Username: "alice"}, Body: "well formed", CreatedAt: "2026-08-10T08:00:00Z"},
+	}
+	got, err := adapter.normalizeNotes(context.Background(), testPRNumber, scmOwner, scmRepo, notes)
+	adaptertest.AssertReviewCommentTimestampTolerated(t, got, err)
+}
+
 // --- GetReviewDecision ---
 
 func TestGetReviewDecision_ArmOrder(t *testing.T) {

@@ -148,6 +148,47 @@ func TestGiteaSCMListLabelEvents(t *testing.T) {
 		_, err := adapter.ListLabelEvents(context.Background(), 6, testOwner, testRepo)
 		assertSCMErrorKind(t, err, domain.ErrSCMPayload)
 	})
+
+	t.Run("a retained label entry with a malformed created_at fails the read", func(t *testing.T) {
+		t.Parallel()
+
+		const fixture = `[{"id":1,"type":"label","body":"1","user":{"login":"alice"},"label":{"name":"bug"},"created_at":"not-a-timestamp"}]`
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(fixture))
+		}))
+		defer srv.Close()
+
+		adapter := mustSCMAdapter(t, srv.URL)
+		events, err := adapter.ListLabelEvents(context.Background(), 6, testOwner, testRepo)
+		adaptertest.AssertLabelEventTimestampRejected(t, events, err)
+	})
+
+	t.Run("a malformed created_at on a skipped comment entry does not fail the read", func(t *testing.T) {
+		t.Parallel()
+
+		const fixture = `[
+			{"id":2,"type":"comment","body":"checking in","user":{"login":"bob"},"label":null,"created_at":"not-a-timestamp"},
+			{"id":1,"type":"label","body":"1","user":{"login":"alice"},"label":{"name":"bug"},"created_at":"2026-07-14T10:00:00Z"}
+		]`
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(fixture))
+		}))
+		defer srv.Close()
+
+		adapter := mustSCMAdapter(t, srv.URL)
+		events, err := adapter.ListLabelEvents(context.Background(), 6, testOwner, testRepo)
+		if err != nil {
+			t.Fatalf("ListLabelEvents: unexpected error: %v", err)
+		}
+		if len(events) != 1 {
+			t.Fatalf("ListLabelEvents() len = %d, want 1 (the malformed comment entry is skipped before its timestamp is parsed)", len(events))
+		}
+		if events[0].Label != "bug" {
+			t.Errorf("events[0].Label = %q, want %q", events[0].Label, "bug")
+		}
+	})
 }
 
 // --- RemoveLabel ---

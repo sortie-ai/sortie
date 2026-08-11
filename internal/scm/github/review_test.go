@@ -771,6 +771,84 @@ func TestFetchBotReviewComments_CommentsFetchError(t *testing.T) {
 	assertSCMErrorKind(t, err, domain.ErrSCMPayload)
 }
 
+// TestFetchPendingReviews_MalformedReviewBodyTimestampTolerated verifies
+// that a CHANGES_REQUESTED review body whose submitted_at is not RFC 3339
+// does not fail the read: the comment is returned with a zero SubmittedAt
+// while a sibling review's well-formed timestamp survives.
+func TestFetchPendingReviews_MalformedReviewBodyTimestampTolerated(t *testing.T) {
+	t.Parallel()
+
+	const reviewsFixture = `[
+		{"id":10,"state":"CHANGES_REQUESTED","body":"Fix A","user":{"login":"alice","type":"User"},"submitted_at":"not-a-timestamp"},
+		{"id":11,"state":"CHANGES_REQUESTED","body":"Fix B","user":{"login":"bob","type":"User"},"submitted_at":"2026-04-01T10:00:00Z"}
+	]`
+	srv := httptest.NewServer(reviewsAndCommentsHandler(t, []byte(reviewsFixture), loadFixture(t, "comments_empty.json")))
+	defer srv.Close()
+
+	adapter := newTestSCMAdapter(t, srv.URL)
+	got, err := adapter.FetchPendingReviews(context.Background(), 1, "owner", "repo")
+	adaptertest.AssertReviewCommentTimestampTolerated(t, got, err)
+}
+
+// TestFetchPendingReviews_MalformedInlineCommentTimestampTolerated verifies
+// that an inline comment's created_at that is not RFC 3339 does not fail
+// the read: the comment is returned with a zero SubmittedAt while a
+// sibling comment's well-formed timestamp survives.
+func TestFetchPendingReviews_MalformedInlineCommentTimestampTolerated(t *testing.T) {
+	t.Parallel()
+
+	reviewsFixture := loadFixture(t, "reviews_changes_requested_no_body.json")
+	const commentsFixture = `[
+		{"id":100,"path":"internal/handler.go","start_line":10,"line":12,"position":5,"body":"A","user":{"login":"alice","type":"User"},"created_at":"not-a-timestamp"},
+		{"id":101,"path":"internal/handler.go","start_line":20,"line":22,"position":6,"body":"B","user":{"login":"alice","type":"User"},"created_at":"2026-04-01T10:05:00Z"}
+	]`
+	srv := httptest.NewServer(reviewsAndCommentsHandler(t, reviewsFixture, []byte(commentsFixture)))
+	defer srv.Close()
+
+	adapter := newTestSCMAdapter(t, srv.URL)
+	got, err := adapter.FetchPendingReviews(context.Background(), 1, "owner", "repo")
+	adaptertest.AssertReviewCommentTimestampTolerated(t, got, err)
+}
+
+// TestFetchBotReviewComments_MalformedReviewBodyTimestampTolerated verifies
+// that a bot review body whose submitted_at is not RFC 3339 does not fail
+// the read: the comment is returned with a zero SubmittedAt while a
+// sibling bot review's well-formed timestamp survives.
+func TestFetchBotReviewComments_MalformedReviewBodyTimestampTolerated(t *testing.T) {
+	t.Parallel()
+
+	const reviewsFixture = `[
+		{"id":30,"state":"CHANGES_REQUESTED","body":"Feedback A","user":{"login":"github-actions[bot]","type":"Bot"},"submitted_at":"not-a-timestamp"},
+		{"id":31,"state":"COMMENTED","body":"Feedback B","user":{"login":"github-actions[bot]","type":"Bot"},"submitted_at":"2026-04-01T10:00:00Z"}
+	]`
+	srv := httptest.NewServer(reviewsAndCommentsHandler(t, []byte(reviewsFixture), loadFixture(t, "comments_empty.json")))
+	defer srv.Close()
+
+	adapter := newTestSCMAdapter(t, srv.URL)
+	got, err := adapter.FetchBotReviewComments(context.Background(), 1, "owner", "repo", nil)
+	adaptertest.AssertReviewCommentTimestampTolerated(t, got, err)
+}
+
+// TestFetchBotReviewComments_MalformedInlineCommentTimestampTolerated
+// verifies that a bot inline comment's created_at that is not RFC 3339
+// does not fail the read: the comment is returned with a zero SubmittedAt
+// while a sibling bot inline comment's well-formed timestamp survives.
+func TestFetchBotReviewComments_MalformedInlineCommentTimestampTolerated(t *testing.T) {
+	t.Parallel()
+
+	reviewsFixture := loadFixture(t, "reviews_bot_commented.json")
+	const commentsFixture = `[
+		{"id":501,"path":"internal/handler.go","start_line":20,"line":22,"position":3,"body":"A","user":{"login":"golangci-lint[bot]","type":"Bot"},"created_at":"not-a-timestamp"},
+		{"id":502,"path":"internal/handler.go","start_line":30,"line":32,"position":4,"body":"B","user":{"login":"golangci-lint[bot]","type":"Bot"},"created_at":"2026-04-01T10:10:00Z"}
+	]`
+	srv := httptest.NewServer(reviewsAndCommentsHandler(t, reviewsFixture, []byte(commentsFixture)))
+	defer srv.Close()
+
+	adapter := newTestSCMAdapter(t, srv.URL)
+	got, err := adapter.FetchBotReviewComments(context.Background(), 1, "owner", "repo", nil)
+	adaptertest.AssertReviewCommentTimestampTolerated(t, got, err)
+}
+
 // TestFetchBotReviewComments_SkipsNonBotInlineComment verifies that an inline
 // comment authored by a non-bot, non-allowlisted user is excluded from the
 // results while bot-authored inline comments are kept.

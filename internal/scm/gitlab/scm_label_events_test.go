@@ -135,6 +135,41 @@ func TestListLabelEvents_ErrorStatuses(t *testing.T) {
 		_, err := adapter.ListLabelEvents(context.Background(), testPRNumber, scmOwner, scmRepo)
 		adaptertest.AssertSCMErrorKind(t, err, domain.ErrSCMPayload)
 	})
+
+	t.Run("a retained label event with a malformed created_at fails the read", func(t *testing.T) {
+		t.Parallel()
+
+		const fixture = `[{"id":701,"user":{"id":501,"username":"alice"},"created_at":"not-a-timestamp","action":"add","label":{"name":"bug"}}]`
+		srv := serveJSON(t, []byte(fixture))
+		defer srv.Close()
+
+		adapter := mustSCMAdapter(t, srv.URL)
+		got, err := adapter.ListLabelEvents(context.Background(), testPRNumber, scmOwner, scmRepo)
+		adaptertest.AssertLabelEventTimestampRejected(t, got, err)
+	})
+
+	t.Run("a malformed created_at on a null-label entry does not fail the read", func(t *testing.T) {
+		t.Parallel()
+
+		const fixture = `[
+			{"id":702,"user":{"id":501,"username":"alice"},"created_at":"not-a-timestamp","action":"add","label":null},
+			{"id":703,"user":{"id":501,"username":"alice"},"created_at":"2026-08-10T08:00:00Z","action":"add","label":{"name":"bug"}}
+		]`
+		srv := serveJSON(t, []byte(fixture))
+		defer srv.Close()
+
+		adapter := mustSCMAdapter(t, srv.URL)
+		got, err := adapter.ListLabelEvents(context.Background(), testPRNumber, scmOwner, scmRepo)
+		if err != nil {
+			t.Fatalf("ListLabelEvents: unexpected error: %v", err)
+		}
+		if len(got) != 1 {
+			t.Fatalf("ListLabelEvents() len = %d, want 1 (the null-label entry is skipped before its timestamp is parsed)", len(got))
+		}
+		if got[0].Label != "bug" {
+			t.Errorf("events[0].Label = %q, want %q", got[0].Label, "bug")
+		}
+	})
 }
 
 // --- RemoveLabel (AC7) ---
