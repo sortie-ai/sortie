@@ -47,6 +47,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   three are errors that block dispatch.
   ([#785](https://github.com/sortie-ai/sortie/issues/785))
 
+- GitLab SCM provider: Sortie's pull-request automation now runs against
+  GitLab.com or a self-managed GitLab instance, at parity with the GitHub
+  and Gitea SCM providers. Set `provider: gitlab` on a
+  `reactions.auto_merge`, `reactions.review_comments`,
+  `reactions.bot_review`, `reactions.merge_conflicts`,
+  `reactions.ci_failure`, or `reactions.label_commands` block to drive it
+  through GitLab: Sortie routes human and bot review feedback on a merge
+  request back into the agent session, reacts to merge conflicts, to a
+  failing pipeline on an agent's merge request (surfacing an excerpt of
+  the failing job's log), and to the `sortie:review` / `sortie:fix` label
+  commands, and, with `reactions.auto_merge`, merges an approved merge
+  request once its approval state, pipeline status, and mergeability
+  satisfy the configured preconditions (sending the expected head SHA so
+  a moved head aborts the merge rather than merging stale work) and
+  deletes the merged branch. Auto-merge on GitLab requires an access
+  token carrying GitLab's `api` scope; a token without it is reported at
+  startup.
+  ([#720](https://github.com/sortie-ai/sortie/issues/720),
+  [#721](https://github.com/sortie-ai/sortie/issues/721),
+  [#722](https://github.com/sortie-ai/sortie/issues/722))
+
 ### Fixed
 
 - Follow-up work already queued for an issue is no longer discarded
