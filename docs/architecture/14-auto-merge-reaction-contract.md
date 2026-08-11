@@ -82,6 +82,11 @@ The auto-merge reconcile loop runs as Part G of active run reconciliation (see �
 the algorithm). The loop processes entries from `pending_reactions` whose kind discriminator is
 `"merge"`.
 
+The loop drops an entry whose age exceeds `AutoMergePendingTTL` (TTL backstop) and deletes the
+`merge`-kind attempt counter with it. The TTL is a fixed internal constant of 30 minutes, not
+operator-configurable. The drop logs at WARN and performs no escalation, so an entry that never
+satisfies its preconditions produces no tracker-visible signal.
+
 There is an intentional asymmetry between the YAML configuration key and the runtime kind value.
 The YAML key the operator sets in `WORKFLOW.md` is `reactions.auto_merge`. The runtime and
 persisted kind value used in `pending_reactions` map keys and in the `reaction_fingerprints`
@@ -104,7 +109,7 @@ The auto-merge reconcile loop evaluates the merge preconditions reported by `Get
 | Pending | `Mergeability == unknown` | Pending | Re-enqueue with poll interval (transient state). |
 | Pending | `Mergeability` not in (`clean`, `unstable`) | Pending | Re-enqueue with poll interval. |
 | Pending | `ReviewDecision != APPROVED` and `!= NOT_REQUIRED` | Pending | Re-enqueue with poll interval. |
-| Pending | `require_ci == true` and `CI != success` | Pending | Re-enqueue with poll interval. |
+| Pending | `require_ci == true` and `CI` is neither `success` nor the empty no-checks value | Pending | Re-enqueue with poll interval. |
 | Pending | All preconditions satisfied (`Mergeability` in (`clean`, `unstable`); `!Draft`; review and CI satisfied) | Merging | Call `SCMAdapter.MergePR`. |
 | Merging | Merge succeeded | Done | Post tracker comment; delete branch when `delete_branch == true`; clear fingerprint; increment `sortie_reactions_auto_merge_total{result="merged"}`. |
 | Merging | `ErrSCMConflict` ("already merged") | Done | Treat as idempotent success; same actions as merge succeeded. |
@@ -169,8 +174,14 @@ Two escalation postures are available, set by the operator in `WORKFLOW.md`:
 - `comment`: posts a plain-text message to the tracker issue identifying the PR number, the
   retry count, and that manual merge is required.
 
-Both postures record the escalation in the reaction attempt state and stop further auto-merge
-retries for that issue.
+Neither posture writes to the reaction attempt state. What makes escalation terminal is the
+cleanup that follows the action: the `merge`-kind pending entry is deleted from `pending_reactions`
+and its `reaction_fingerprints` row is removed, and because the reconcile loop iterates only over
+pending entries, that issue's merge kind is polled no further. The
+`reaction_attempts[issue_id:merge]` counter is left in place, unlike the merge-conflict
+episode-exit cleanup (§11E.5) and unlike this kind's own TTL drop (§11C.4), so a `merge` entry
+re-created for the same issue later in the same process escalates on its first tick whenever
+`MaxRetries > 0`.
 
 Cross-kind isolation: escalation cleanup MUST scope deletions to the `merge` kind only. The
 escalation path MUST NOT mutate `ci` or `review` reaction state. The full normative invariant
@@ -183,9 +194,23 @@ head SHA, a newline byte, and the review-decision string (for example:
 `sha256(headSHA + "\n" + reviewDecision)`). The fingerprint is upserted into the
 `reaction_fingerprints` table with `kind = "merge"`.
 
-The fingerprint's purpose is to deduplicate merge attempts: if the same head SHA and review
-decision are observed across multiple ticks before a successful merge result is persisted, the
-loop skips the re-attempt. When the merge succeeds, the fingerprint entry is cleared.
+The fingerprint's purpose is to let a changed pull request re-arm the merge, not to suppress a
+retry of an unchanged one. The upsert carries that behavior: a computed value differing from the
+stored one resets the row's `dispatched` flag, and an unchanged value preserves whatever flag the
+row already holds, so a new push or a changed review decision produces a new fingerprint and a
+fresh attempt. The flag is set only after a merge the loop treats as complete, which is a
+successful `MergePR` return or the already-merged rejection of §11C.3. A failed attempt
+deliberately leaves the flag clear, so a transient or transport-class failure retries on the next
+due tick instead of being skipped as a duplicate.
+
+Three exits delete the row, and each one ends this kind's work on the issue: a successful merge,
+the already-merged idempotent success, and escalation. Each of them also removes the `merge`-kind
+pending entry in the same tick, so on the ordinary path no later tick holds both a dispatched row
+and an entry to observe it, and the guard before `MergePR` (stored fingerprint equal to the
+computed one and `dispatched` set) does not fire. It is reachable only when the row outlives its
+deletion, because `reaction_fingerprints` is persisted while pending entries are held in memory
+and re-created after a restart from recovered run metadata: a surviving dispatched row then meets
+a re-created entry and skips a merge that already completed.
 
 ### 11C.8 Adapter registration
 

@@ -3,6 +3,8 @@
 > Gitea REST API v1, researched July 2026 and pinned to **Gitea 1.27.0**. Route surface taken from the instance's own OpenAPI description (`GET /swagger.v1.json`), cross-checked against docs.gitea.com, then **verified live** against a local Gitea 1.27.0 instance on 2026-07-14. Forgejo compatibility checked against Codeberg's published swagger and version endpoint on the same date. Reference for implementing the Gitea `TrackerAdapter`, `SCMAdapter`, and `CIStatusProvider`. The [SCM read surface](#scm-read-surface) covers review decisions, mergeability, CI status, review comments, and label events; the [SCM write surface](#scm-write-surface) covers merge, branch delete, label removal, and the auto-merge preflight; the [CI status provider](#ci-status-provider) reads combined-status CI feedback.
 >
 > Gitea is self-hosted: there is no fixed default host, so the instance base URL is part of every configuration, and instances differ in version and settings. Facts below hold for 1.27.0 defaults unless marked otherwise. Gitea exposes no GraphQL API; the REST surface under `/api/v1` is the whole contract.
+>
+> **Three verification passes, two releases.** The tracker surface was verified on Gitea 1.27.0 (2026-07-14); the SCM read surface on Gitea 1.26.4 (2026-08-10); and on 2026-08-11 a regression pass re-exercised both surfaces against a Gitea **1.26.4** instance whose own OpenAPI description reports `Gitea API 1.26.4`. The lab available for re-verification no longer runs 1.27.0, so every claim in this document that is marked verified but not re-confirmed below rests on the 1.27.0 pass alone and has not been re-observed since 2026-07-14. Claims added or corrected by the 2026-08-11 pass are dated inline and scoped to 1.26.4.
 
 ---
 
@@ -548,9 +550,9 @@ GET /repos/{owner}/{repo}/issues/{index}/labels          (resolve name to id)
 DELETE /repos/{owner}/{repo}/issues/{index}/labels/{id}
 ```
 
-- A name placed directly in the id position is rejected: HTTP 404 `{"message":"label does not exist [label_id: 0]"}` on Gitea 1.27.0, or 422 with the same message on Gitea 1.26.x and earlier. The adapter resolves the name against the PR's own labels first and never places a name in the id slot, so neither status is reachable in practice.
+- A name placed directly in the id position is rejected: HTTP 404 `{"message":"label does not exist [label_id: 0]"}` on Gitea 1.27.0, or 422 with the same message on Gitea 1.26.x and earlier. The 422 half is verified live on 1.26.4 (2026-08-11), which returned exactly that body for a non-numeric name in the id slot. The adapter resolves the name against the PR's own labels first and never places a name in the id slot, so neither status is reachable in practice.
 - An unresolved label name is a no-op: no `DELETE` is issued and the call returns success.
-- Deleting an already-removed label (a raced 404 on a valid numeric id) is also treated as success.
+- Removing a label the issue does not carry is **not** an error. On 1.26.4 a `DELETE` naming an existing repository label that the issue does not have returns 204, repeatably (verified live, 2026-08-11). A numeric id matching no repository label returns 422 with the same `[label_id: 0]` body as the name case, not 404. On that release the route therefore has no 404 path, and the adapter's tolerance of 404 as already-removed never fires. Whether 1.27.0 answers 404 here, as it does for the name case, was not re-tested.
 
 ### Auto-merge scope preflight
 
@@ -614,7 +616,7 @@ Webhooks are the only PR-reaction surface with no adapter implementation. Gitea 
 
 ## Live verification results
 
-All facts marked "verified" were established against a local Gitea 1.27.0 instance on 2026-07-14:
+The fourteen results below were established against a local Gitea 1.27.0 instance on 2026-07-14. They are the first pass only: the SCM read surface was verified separately on 1.26.4 (see [SCM read surface](#scm-read-surface)), and the 2026-08-11 regression pass is recorded after this list.
 
 1. **Auth scheme matrix.** `token`, `Bearer`, basic with token as password, basic with token as username, and the `access_token` query parameter all authenticate; missing token yields 401 `token is required`, a bad token 401 `invalid username, password or token`.
 2. **Scope collapse and sufficiency.** Requested `read:issue` + `write:issue` + `read:repository` + `write:repository` collapsed to the write pair; a `write:issue`-only token performed every one of the nine operations, including label creation, but got 403 on `GET /user` and `GET /repos/{owner}/{repo}`.
@@ -630,6 +632,33 @@ All facts marked "verified" were established against a local Gitea 1.27.0 instan
 12. **Errors.** 404 body is `not found` for both a missing issue and a missing repository; 422 `[Title]: Required` on an empty create; 403 scope message names the required and held scopes; comment write on an archived repository returns 423 `repo is archived`.
 13. **No rate limiting.** `/api/v1/rate_limit` returns 404; no `x-ratelimit-*` headers on any response; no `ETag` header on API responses.
 14. **Forgejo probe.** Codeberg's swagger title is "Forgejo API" at `/api/v1`; its version string is `15.0.0-209-2308e484+gitea-1.22.0`; the label-remove route is `.../labels/{identifier}` ("name or id"), and `IssueLabelsOption` gains `updated_at`.
+
+### Regression pass, 2026-08-11 (Gitea 1.26.4)
+
+A read-only re-exercise of the cheap claims above against a 1.26.4 lab, with every absence claim paired with a positive control. Re-confirmed unchanged on 1.26.4:
+
+- **No rate limiting.** `/rate_limit` 404 (control: `/version` 200); no `x-ratelimit-*` and no `ETag` on any response.
+- **Pagination.** `/settings/api` reports `max_response_items: 50`, `default_paging_num: 30`; a 56-issue repository returned 50 at `limit=100` and 30 with no `limit`; `Link` carries `rel="next"` and `rel="last"` alongside `X-Total-Count`.
+- **List parameters.** `sort=created&direction=asc` changed nothing, `per_page` was ignored while `limit` was honored, and `type=issues` excluded all ten PRs from a 16-entry listing. Ordering is `created_at` descending; the five same-second fixture issues tie and arrive in index order.
+- **Label filter.** `labels=bug,in-progress` matched only the issue holding both, `labels=backlog,bug` matched nothing, and `labels=BACKLOG` returned every open issue, reproducing the dropped-filter foot-gun.
+- **Absent routes.** `/search/issues`, `.../issues/{index}/dependencies/blocked_by`, and `.../issues/{index}/parent` all 404, with `.../issues/{index}/dependencies` 200 as the control; `/repos/issues/search` is present.
+- **Dependencies direction.** Re-established by creating and then deleting one dependency: `POST` with only `{"index":1}` returns 404 `IsErrRepoNotExist`, the full `IssueMeta` body returns 201, `.../issues/2/dependencies` then lists #1 and `.../issues/1/blocks` lists #2. The blocker entry carries `number`, `state`, and `labels`, which is everything `domain.BlockerRef` needs.
+- **Auth matrix and error model.** All five auth schemes returned 200; 401 `token is required` with no credential and 401 `invalid username, password or token` with a bad one; 404 `not found` identically for a missing issue and a missing repository; 412 `unknown state: bogus`; 422 `[Color]: Required`.
+- **Comments route unpaginated.** A 61-comment issue returned all 61 in one body with `X-Total-Count: 61`, no `Link`, and no truncation even at `limit=5`, which the route ignores. The instance OpenAPI confirms it: the route declares only `since` and `before`, no `page` or `limit`.
+- **Combined commit status.** A 51-status commit returned `total_count` 30 at the default page, 50 at `limit=50`, 1 on page two, and 20 at `limit=20`, with `X-Total-Count: 51` on every request, so `total_count` is the page length. `limit=100` clamped to 50. A commit with no CI returned `total_count: 0`, `statuses: null`, and the spurious top-level `state: "pending"`. The OpenAPI declares `page` and `limit` on the route, corroborating that it paginates.
+- **Review comment side selectors.** The two-comment fixture still returns `position: 12, original_position: 0` for the new-side anchor and `position: 0, original_position: 12` for the old-side one, with no `line`, `start_line`, `end_line`, `invalidated`, or `outdated` key present, and each `commit_id` still naming the superseded head rather than the current PR head.
+- **Reviews and timeline.** `REQUEST_CHANGES` remains the changes-requested spelling. The timeline emits no `Link` header, and its `X-Total-Count` returned 2, 5, and 30 against `limit=2`, `limit=5`, and the default on an issue whose timeline exceeds a page, confirming it reports page length rather than the grand total.
+- **PR object.** `mergeable` is a plain bool and `mergeable_state` is absent.
+- **MergePR rejection.** `POST .../pulls/{index}/merge` against an already-merged PR returns 405 `{"message":"The PR is already merged"}`, and the PR was unchanged afterward.
+
+Reachable per-status values were `success` and `failure` only; `error`, `warning`, and `pending` are declared by the schema but were not produced by this lab.
+
+Not settled by this pass, and still resting on the dates recorded elsewhere in this document:
+
+- **Scope sufficiency.** Every scope claim (`write:issue` covering the nine tracker operations, the 403s without `read:user` and `read:repository`, and the read-plus-write collapse) requires minting scoped tokens, which this pass did not do. The 403 scope-rejection body that `enrichScopeError` parses was therefore not re-observed.
+- **423 `repo is archived`.** The lab's second repository still holds the 56 bulk issues used for the clamp check but is no longer archived, so the archived-repository status could not be re-provoked.
+- **`assigned_by` and `mentioned_by`.** Both returned zero for every instance user. No issue carries an assignee any more, so `assigned_by` had no positive control. Two issue bodies do mention another user, and `mentioned_by` still matched nothing for either, but the fixture was partly built by import and Gitea indexes mentions at write time, so a stale mention index and a behavior change are indistinguishable here. The claim is left as recorded; settling it needs a freshly created issue.
+- **MergePR success and conflict shapes.** The empty 200 body and the 409 `head out of date` were not re-exercised, because both require merging or racing a live pull request. The case-insensitive `Do` / `do` binding is also unconfirmed: both spellings returned the already-merged 405, which is reached without discriminating the binding.
 
 ### Integration test setup
 
@@ -658,6 +687,8 @@ The verification lab doubles as the fixture blueprint: a primary test repository
 | Populated `PullReview` and `PullReviewComment` shapes | **Live API** (lab instance, Gitea 1.26.4) | Provisioned a PR with two reviews and inline comments, then read both routes; re-read the comments under a non-admin identity with identical results |
 | Review-comment `position` / `original_position` semantics | **Live API** (lab instance, Gitea 1.26.4), corroborated by `modules/structs/pull_review.go` at the `v1.26.4` and `v1.27.0` tags | Anchored one comment new-side and one old-side on the same modified line, then pushed a commit deleting that line and re-read both |
 | Combined-status pagination, `total_count` per-page semantics, and `target_url` | **Live API** (lab instance, Gitea 1.26.4) | Seeded 51 statuses on one commit and read the route at the default page size, `limit=50` pages one and two, and `limit=20`, with response headers captured |
+| 2026-08-11 regression pass: rate limiting, pagination and clamps, list parameters, label filter, absent routes, dependency direction, auth matrix, error statuses, unpaginated comments, combined-status paging, review-comment side selectors, timeline headers, PR object shape, already-merged merge rejection | **Live API** (lab instance, Gitea 1.26.4) corroborated by the instance's own OpenAPI (`GET /swagger.v1.json`, which self-reports `Gitea API 1.26.4`) | Read-only probes with a positive control paired to every absence claim; one dependency created and deleted to restore the instance |
+| Label-remove statuses on 1.26.x | **Live API** (lab instance, Gitea 1.26.4) | 422 for a non-numeric name and for an unmatched numeric id; 204 for an existing label the issue does not carry |
 | GitHub adapter behavior used in the reuse matrix | `internal/scm/github/tracker.go` (`fetchCandidatesViaIssues`, `fetchCandidatesViaSearch`, `fetchStatesByNumbers`, `fetchBlockers`, `fetchParent`, `TransitionIssue`, `AddLabel`) | Code reading at research time |
 
 ### Context7 verification report
