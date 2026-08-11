@@ -95,8 +95,9 @@ type GitLabCIProvider struct {
 // fetching.
 //
 // Required config keys: "api_key" (access token) and "project" (a
-// numeric project ID or a namespace path of any depth, percent-encoded
-// once as a whole and never split on "/"). "endpoint" defaults to
+// numeric project ID or an unescaped namespace path of any depth, such
+// as "group/subgroup/project", which the constructor percent-encodes
+// once as a whole and never splits on "/"). "endpoint" defaults to
 // "https://gitlab.com", is trimmed of trailing slashes, and is suffixed
 // with "/api/v4" unless already present; a value that does not parse as
 // an absolute http or https URL with a host returns a [*domain.CIError]
