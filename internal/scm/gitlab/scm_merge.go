@@ -119,13 +119,44 @@ func (a *GitLabSCMAdapter) GetMergeability(ctx context.Context, prNumber int, ow
 	}, nil
 }
 
+// mapPipelineStatus classifies a GitLab head_pipeline.status value into
+// the merge-gate vocabulary. recognized is false for any value outside
+// the platform's pipeline-status enum, including the empty string, in
+// which case the returned gate still holds at [scmcore.CIGatePending]
+// rather than guessing a more permissive verdict.
+//
+// manual sits in the CIGatePending arm by name rather than by falling
+// through the default: the platform reports manual for a pipeline that
+// has settled, not one still running, but its job set can still carry a
+// failed job alongside the untriggered manual one, so the gate holds
+// until that shape is resolved on its own.
+func mapPipelineStatus(status string) (gate scmcore.CIGate, recognized bool) {
+	switch status {
+	case "success", "skipped":
+		return scmcore.CIGateSuccess, true
+	case "failed", "canceled":
+		return scmcore.CIGateFailing, true
+	case "created", "waiting_for_resource", "preparing", "waiting_for_callback",
+		"pending", "running", "canceling", "scheduled", "manual":
+		return scmcore.CIGatePending, true
+	default:
+		return scmcore.CIGatePending, false
+	}
+}
+
 // GetCIStatus returns the merge-gate CI conclusion for the PR head,
-// mapped from the merge request's head_pipeline status: one of
-// [scmcore.CIGateSuccess], [scmcore.CIGatePending], or
-// [scmcore.CIGateFailing], or the empty [scmcore.CIGateAbsent] when the
-// head carries no pipeline. The platform already folds externally
-// reported commit statuses into head_pipeline, so no second request is
-// issued.
+// mapped from the merge request's head_pipeline status through
+// [mapPipelineStatus]: one of [scmcore.CIGateSuccess],
+// [scmcore.CIGatePending], or [scmcore.CIGateFailing], or the empty
+// [scmcore.CIGateAbsent] when the head carries no pipeline. A skipped
+// pipeline resolves to CIGateSuccess, since the platform reports it only
+// for a job set with no failing conclusion. A manual pipeline resolves
+// to CIGatePending regardless of settlement, because the platform can
+// report it for a job set that still carries a failed job. A status
+// outside the recognized set logs one WARN naming the observed value so
+// a stalled gate is diagnosable at the tick it stalls. The platform
+// already folds externally reported commit statuses into head_pipeline,
+// so no second request is issued.
 func (a *GitLabSCMAdapter) GetCIStatus(ctx context.Context, prNumber int, owner, repo string) (string, error) {
 	mr, err := a.fetchMergeRequest(ctx, prNumber, owner, repo)
 	if err != nil {
@@ -135,14 +166,12 @@ func (a *GitLabSCMAdapter) GetCIStatus(ctx context.Context, prNumber int, owner,
 		return string(scmcore.CIGateAbsent), nil
 	}
 
-	switch mr.HeadPipeline.Status {
-	case "success":
-		return string(scmcore.CIGateSuccess), nil
-	case "failed", "canceled":
-		return string(scmcore.CIGateFailing), nil
-	default:
-		return string(scmcore.CIGatePending), nil
+	gate, recognized := mapPipelineStatus(mr.HeadPipeline.Status)
+	if !recognized {
+		a.log.Warn("unrecognized gitlab pipeline status",
+			slog.String("pipeline_status", mr.HeadPipeline.Status))
 	}
+	return string(gate), nil
 }
 
 // gitlabMergeAccept is the JSON body of PUT
