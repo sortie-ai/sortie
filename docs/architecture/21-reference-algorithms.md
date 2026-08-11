@@ -370,51 +370,140 @@ on_worker_exit(issue_id, reason, state):
 
   if reason == normal:
     state.completed.add(issue_id)  # bookkeeping only
+    was_claimed = issue_id in state.claimed
+    claim_protected_for_incumbent = false
 
-    # A terminal observation (reconciliation's observation on the running
-    # entry, else the worker's own per-turn observation, else the
-    # dispatch-time snapshot) suppresses the handoff transition and every
-    # reaction enqueue below, directly, regardless of claim state.
+    # Exactly one of six dispositions applies, evaluated in this order;
+    # the first match wins and overrides every later one.
+
+    # Disposition 1: the agent reported itself blocked through a soft
+    # stop. Blocked work has nowhere to continue to.
+    if is_blocked_soft_stop(running_entry, worker_result):
+      cancel_retry(state, issue_id)
+      state.claimed.remove(issue_id)
+      notify_observers()
+      return state
+
+    # Disposition 2: the freshest tracker observation (reconciliation's
+    # observation, else the worker's own per-turn observation, else the
+    # dispatch-time snapshot) reports a terminal state. Overwriting a
+    # terminal decision with the handoff state would undo it, so no
+    # handoff, retry, or reaction follows.
     observation = resolve_terminal_observation(running_entry, worker_result)
     if is_terminal_state(observation, cfg.tracker.terminal_states):
+      cancel_retry(state, issue_id)
+      state.claimed.remove(issue_id)
       log_info("handoff suppressed for terminal issue", observation)
       notify_observers()
       return state
 
-    if retry_slot_incumbent(state, issue_id) is nil:
-      state = schedule_retry(state, issue_id, 1, {
-        identifier: running_entry.identifier,
-        delay_type: continuation,
-        session_id: running_entry.session_id
-      })
-    # else: the retry slot (Section 7.5) is occupied, so this exit defers
-    # to the incumbent instead of scheduling a continuation.
+    is_active = is_active_state(observation, cfg.tracker.active_states)
+    drives_state = dispatch_drives_issue_state(running_entry)
+    handoff_taken = false
 
-    # Enqueue CI check when provider is configured and workspace has SCM metadata
-    if ci_provider is not nil and workspace_path is not empty:
-      if issue_id in state.claimed:
-        scm = read_scm_metadata(workspace_path)
-        if scm.branch is not empty:
-          rkey = reaction_key(issue_id, "ci")
+    # Disposition 3: a handoff state is configured, the issue is still
+    # active, and the dispatch drives issue state. Perform the handoff
+    # transition (Section 11.5).
+    if cfg.tracker.handoff_state is not empty and is_active and drives_state:
+      handoff_taken = true
+      result = perform_handoff_transition(issue_id, cfg.tracker.handoff_state)
+      if result.ok:
+        if retry_slot_incumbent(state, issue_id) is nil:
+          state.claimed.remove(issue_id)
+        else:
+          claim_protected_for_incumbent = true  # incumbent kept, claim stays
+      elif is_soft_stop(running_entry, worker_result):
+        state.claimed.remove(issue_id)
+      elif retry_slot_incumbent(state, issue_id) is nil:
+        state = schedule_retry(state, issue_id, 1, {
+          identifier: running_entry.identifier,
+          delay_type: continuation,
+          session_id: running_entry.session_id
+        })
+      else:
+        claim_protected_for_incumbent = true  # deferred to incumbent, claim stays
+
+    # Disposition 4: any other soft stop. An unrecognized soft-stop
+    # reason is logged before taking this path.
+    elif is_soft_stop(running_entry, worker_result):
+      if is_unrecognized_soft_stop(running_entry, worker_result):
+        log_warn("unrecognized soft-stop reason", issue_id, running_entry.soft_stop_reason)
+      cancel_retry(state, issue_id)
+      state.claimed.remove(issue_id)
+
+    # Disposition 5: the issue is still active and the dispatch drives
+    # issue state. Schedule the continuation retry (attempt 1) so the
+    # next tick can re-check whether the issue needs another session.
+    elif is_active and drives_state:
+      if retry_slot_incumbent(state, issue_id) is nil:
+        state = schedule_retry(state, issue_id, 1, {
+          identifier: running_entry.identifier,
+          delay_type: continuation,
+          session_id: running_entry.session_id
+        })
+      # else: the retry slot (Section 7.5) is occupied, so this exit
+      # defers to the incumbent instead of scheduling a continuation.
+
+    # Disposition 6: otherwise the issue is no longer active.
+    else:
+      cancel_retry(state, issue_id)
+      if retry_slot_incumbent(state, issue_id) is nil:
+        state.claimed.remove(issue_id)
+      else:
+        # An incumbent occupies the retry slot, so the claim stays to
+        # protect it -- exactly the population mid-session-queued
+        # retries need protected, since the issue may have left the
+        # active states while a sibling reaction was still queued for it.
+        claim_protected_for_incumbent = true
+
+    # A reaction entry is enqueued only when the issue was claimed at the
+    # moment of exit, the exit either took the handoff disposition or
+    # left the issue still claimed, and the exit was not suppressed by a
+    # terminal observation (already returned above, at disposition 2). A
+    # claim retained solely to protect a foreign retry-slot incumbent
+    # counts as released for this predicate, so protecting an incumbent
+    # never widens which reaction kinds this exit seeds. A label-command
+    # dispatch never satisfies this predicate: it always takes
+    # disposition 6, and its retained claim counts as released here
+    # exactly as an ordinary released claim would.
+    still_claimed = (issue_id in state.claimed) and not claim_protected_for_incumbent
+    if was_claimed and (handoff_taken or still_claimed):
+      scm = read_scm_metadata(workspace_path) if workspace_path is not empty else nil
+
+      # CI is rewritten on every exit so it always carries the ref the
+      # latest run pushed.
+      if ci_provider is not nil and scm is not nil and scm.branch is not empty:
+        rkey = reaction_key(issue_id, "ci")
+        state.pending_reactions[rkey] = {
+          issue_id, identifier, display_id, attempt,
+          kind: "ci", branch: scm.branch, sha: scm.sha
+        }
+
+      # Review is created only when not already present, preserving
+      # in-progress debounce state.
+      if scm_adapter is not nil and scm is not nil and scm.pr_number > 0
+          and scm.owner is not empty and scm.repo is not empty:
+        rkey = reaction_key(issue_id, "review")
+        if rkey not in state.pending_reactions:
           state.pending_reactions[rkey] = {
             issue_id, identifier, display_id, attempt,
-            kind: "ci", branch: scm.branch, sha: scm.sha
+            kind: "review",
+            pr_number: scm.pr_number, owner: scm.owner, repo: scm.repo,
+            branch: scm.branch, sha: scm.sha
           }
 
-    # Enqueue review check when SCM adapter is configured and workspace has PR metadata
-    if scm_adapter is not nil and workspace_path is not empty:
-      if issue_id in state.claimed:
-        scm = read_scm_metadata(workspace_path)
-        if scm.pr_number > 0 and scm.owner is not empty and scm.repo is not empty:
-          rkey = reaction_key(issue_id, "review")
-          # Only create if not already present (preserves in-progress debounce)
-          if rkey not in state.pending_reactions:
-            state.pending_reactions[rkey] = {
-              issue_id, identifier, display_id, attempt,
-              kind: "review",
-              pr_number: scm.pr_number, owner: scm.owner, repo: scm.repo,
-              branch: scm.branch, sha: scm.sha
-            }
+      # Every other configured reaction kind (bot-review, merge,
+      # merge-conflict, label-review, label-fix, merge-completion) records
+      # its own pending entry, created only when one is not already
+      # present, when the workspace SCM metadata satisfies that kind's
+      # field requirements.
+      for kind in configured_reaction_kinds(cfg) - {"ci", "review"}:
+        rkey = reaction_key(issue_id, kind)
+        if rkey not in state.pending_reactions and scm is not nil
+            and satisfies_field_requirements(scm, kind):
+          state.pending_reactions[rkey] = {
+            issue_id, identifier, display_id, attempt, kind
+          }
   else:
     if retry_slot_incumbent(state, issue_id) is nil:
       state = schedule_retry(state, issue_id, next_attempt_from(running_entry), {

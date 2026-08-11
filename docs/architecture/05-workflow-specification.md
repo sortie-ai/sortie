@@ -225,6 +225,10 @@ Fields:
     issue's `run_history` entries and stops re-dispatching once the sum reaches `max_tokens`.
   - When the sum reaches `max_tokens`, the claim is released and a warning is logged, exactly
     as `max_sessions` does. A failed token query fails open: dispatch proceeds.
+  - A run whose coding agent reported no token usage is recorded unmeasured and contributes
+    nothing to the sum. A sum below `max_tokens` that includes at least one unmeasured run
+    allows the dispatch and logs a warning naming the issue, the sum, the ceiling, and the
+    unmeasured count.
   - Overridable through `SORTIE_AGENT_MAX_TOKENS`. `0` disables the budget.
   - Changes are re-applied at runtime and affect future retry timer evaluations.
 
