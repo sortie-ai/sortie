@@ -785,3 +785,73 @@ func TestGitLabSCM_ConflictKindBelongsToMergeOnly(t *testing.T) {
 		})
 	}
 }
+
+// --- MergePR: message composition and non-conflict failure classes ---
+
+func TestComposeMessage(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		title string
+		body  string
+		want  string
+	}{
+		{"both sides join with a blank line", "Merge feature", "Closes the cycle.", "Merge feature\n\nCloses the cycle."},
+		{"an empty body yields the title alone", "Merge feature", "", "Merge feature"},
+		{"an empty title yields the body alone", "", "Closes the cycle.", "Closes the cycle."},
+		{"both empty leaves the platform default", "", "", ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			if got := composeMessage(tt.title, tt.body); got != tt.want {
+				t.Errorf("composeMessage(%q, %q) = %q, want %q", tt.title, tt.body, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestMergePR_NonConflictErrorPassthrough(t *testing.T) {
+	t.Parallel()
+
+	var requests atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write(loadFixture(t, "error_500.json"))
+	}))
+	defer srv.Close()
+
+	adapter := mustSCMAdapter(t, srv.URL)
+	got, err := adapter.MergePR(context.Background(), testPRNumber, scmOwner, scmRepo, domain.StrategyMerge, "", "", "sha-expected-head-001")
+
+	adaptertest.AssertSCMErrorKind(t, err, domain.ErrSCMTransport)
+	if got != (domain.MergeResult{}) {
+		t.Errorf("MergePR(...) result = %+v, want the zero value", got)
+	}
+	if n := requests.Load(); n != 1 {
+		t.Errorf("requests = %d, want 1 (a non-conflict rejection must not trigger a merge request re-read)", n)
+	}
+}
+
+func TestMergePR_MalformedSuccessBody(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"state": "merged"`))
+	}))
+	defer srv.Close()
+
+	adapter := mustSCMAdapter(t, srv.URL)
+	got, err := adapter.MergePR(context.Background(), testPRNumber, scmOwner, scmRepo, domain.StrategyMerge, "", "", "sha-expected-head-001")
+
+	adaptertest.AssertSCMErrorKind(t, err, domain.ErrSCMPayload)
+	if got != (domain.MergeResult{}) {
+		t.Errorf("MergePR(...) result = %+v, want the zero value", got)
+	}
+}

@@ -278,3 +278,37 @@ func TestRemoveLabel_NotFoundMapsToNil(t *testing.T) {
 		}
 	})
 }
+
+func TestRemoveLabel_BlankLabelNoRequest(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		label string
+	}{
+		{"an empty label", ""},
+		{"a whitespace-only label", "   "},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name+" issues no request", func(t *testing.T) {
+			t.Parallel()
+
+			var requests atomic.Int32
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				requests.Add(1)
+				t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+				w.WriteHeader(http.StatusNotFound)
+			}))
+			defer srv.Close()
+
+			adapter := mustSCMAdapter(t, srv.URL)
+			err := adapter.RemoveLabel(context.Background(), testPRNumber, scmOwner, scmRepo, tt.label)
+			adaptertest.AssertLabelAbsentDisposition(t, err)
+
+			if n := requests.Load(); n != 0 {
+				t.Errorf("requests = %d, want 0 (a blank label resolves to no target and must not reach the network)", n)
+			}
+		})
+	}
+}

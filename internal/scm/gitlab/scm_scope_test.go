@@ -185,3 +185,29 @@ func TestVerifyAutoMergeScopes_ErrorClasses(t *testing.T) {
 		}
 	})
 }
+
+func TestVerifyAutoMergeScopes_RevokedTokenWarns(t *testing.T) {
+	t.Parallel()
+
+	srv := serveJSON(t, loadFixture(t, "token_self_revoked.json"))
+	defer srv.Close()
+
+	adapter := mustSCMAdapter(t, srv.URL)
+	log, buf := newCapturingLogger()
+	adapter.log = log
+
+	scopes, missing, err := adapter.VerifyAutoMergeScopes(context.Background(), false)
+	if err != nil {
+		t.Fatalf("VerifyAutoMergeScopes: unexpected error: %v", err)
+	}
+	if len(scopes) == 0 {
+		t.Errorf("VerifyAutoMergeScopes() scopes = %v, want non-empty (a revoked token still reports its granted scopes)", scopes)
+	}
+	if len(missing) != 0 {
+		t.Errorf("VerifyAutoMergeScopes() missing = %v, want empty", missing)
+	}
+
+	if logOutput := buf.String(); !strings.Contains(logOutput, "gitlab token reports revoked or inactive") {
+		t.Errorf("log output = %q, want it to contain %q", logOutput, "gitlab token reports revoked or inactive")
+	}
+}
