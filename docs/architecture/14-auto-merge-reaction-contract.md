@@ -123,6 +123,28 @@ the result with the PR's requested-reviewers signal into one decision. `GetMerge
 from an in-progress recheck, so both present as `unknown`, which this table re-enqueues on the poll
 interval as a transient state.
 
+**GitLab auto-merge reads.** The GitLab adapter has no aggregate review-decision field and no
+per-condition mergeability enum, so it composes the first and maps the second from a single string.
+`GetReviewDecision` folds two reads: a reviewer whose review state is `requested_changes` returns
+`CHANGES_REQUESTED` before the approvals payload is read at all, then an approved payload returns
+`APPROVED`, a non-empty reviewer list returns `REVIEW_REQUIRED`, and neither returns
+`NOT_REQUIRED`. The changes-requested arm returns unconditionally, so a later approval by a second
+reviewer never clears an outstanding block. Community Edition carries no `approvals_required` and
+no `approvals_left` on the merge request, exposes no approval-state route, and has no approval
+rules at all, so it can never require an approval: a merge request with no reviewer assigned folds
+to `NOT_REQUIRED`, and this table proceeds to the merge. Enforcing review on Community Edition
+means assigning a reviewer, because the platform offers no server-side alternative.
+`GetMergeability` maps GitLab's single `detailed_merge_status` value: `mergeable` to `clean`,
+`conflict` to `dirty`, `unchecked`, `checking`, `preparing`, and `approvals_syncing` to `unknown`,
+and every other value, recognized or not, to `blocked`, logging an unrecognized one at WARN. It
+never yields `unstable`, because a pipeline whose only failing job is allowed to fail reports
+success and leaves the merge request `mergeable`, and this table treats `clean` and `unstable`
+identically. The value names one blocking condition at a time and recomputes: approving a merge
+request has been observed to move it from `mergeable` to `checking` and back, so a read landing
+mid-recompute reports `unknown` and re-enqueues as a transient state. A `dirty` read is a
+mergeability observation rather than an error, re-enqueued on the poll interval, so the conflict
+error kind stays confined to the merge write path.
+
 ### 11C.6 Escalation behavior
 
 The count-based escalation check guards the comparison with `MaxRetries > 0`: the orchestrator
@@ -220,11 +242,13 @@ Gitea token's user repository write access and the token the `write:repository` 
 repository or organization signal: it reads the token-introspection endpoint at startup. GitLab
 has no contents-versus-pull-request scope split, so the single `api` scope is the one requirement
 covering the merge, the branch delete, and the label write. A granular token's scope report is
-opaque and takes the fail-open path, and an instance whose introspection route is unavailable
-takes the same fail-open path rather than disabling auto-merge, because that route can answer 404
-for a hidden or blocked path as readily as for a genuinely missing one. A branch-protection
-refusal on this platform is reported at runtime as an auth-class failure rather than being caught
-at startup.
+opaque and takes the fail-open path, as do an empty scope list and an introspection response the
+adapter cannot read, and an instance whose introspection route is unavailable takes the same
+fail-open path rather than disabling auto-merge, because that route can answer 404
+for a hidden or blocked path as readily as for a genuinely missing one. A classic token whose
+scope list omits `api` is a verified gap instead, and takes the auth-class sticky posture. A
+branch-protection refusal on this platform is reported at runtime as an auth-class failure rather
+than being caught at startup.
 
 For the full preflight algorithm, see §6.3.
 

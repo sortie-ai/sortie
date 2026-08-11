@@ -92,9 +92,15 @@ When the journal exceeds the cap the adapter emits a warning naming the PR, so a
 never silently dropped on an event-heavy PR. Managed PRs are short-lived and low-traffic, so
 journals stay small; a page cache is an available optimization if profiling ever demands one.
 
-The abstraction is portable. The normalized `LabelEvent` shape is satisfiable by GitLab resource
-label events on merge requests, which carry the same id, user, action, and timestamp; a future
-adapter fits without a contract change.
+The abstraction is portable, and the GitLab adapter fits it without a contract change. On GitLab
+the journal is the merge request's resource label-event route, whose entries carry the same id,
+user, action, and timestamp, and whose numeric ids satisfy the `ID` ordering rule through the same
+zero-padding the GitHub adapter applies. The GitLab adapter walks that journal forward rather than
+from the tail, and sorts the normalized events ascending by `(At, ID)` itself, so ordering does not
+depend on the server's. An entry whose label was later deleted from the project renders its label
+object null and is skipped, because it carries no name to normalize. The forward walk retains the
+oldest events when a journal exceeds the page cap, the opposite of the GitHub tail walk, and the
+adapter warns when the cap is reached.
 
 ### 11F.3 Command contract and detection invariants
 
