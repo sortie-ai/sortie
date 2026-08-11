@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -223,11 +222,7 @@ func paginateSCM[T any](ctx context.Context, client *httpkit.Client, path string
 
 	items, err := paginator.All(ctx)
 	if err != nil {
-		var scmErr *domain.SCMError
-		if errors.As(err, &scmErr) {
-			return nil, scmErr
-		}
-		return nil, scmcore.ToSCMError(err)
+		return nil, scmcore.AsSCMError(err)
 	}
 	return items, nil
 }

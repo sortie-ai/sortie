@@ -110,6 +110,65 @@ func TestToSCMError(t *testing.T) {
 	}
 }
 
+func TestAsSCMError(t *testing.T) {
+	t.Parallel()
+
+	bare := &domain.SCMError{Kind: domain.ErrSCMConflict, Message: "already merged: pull request 6"}
+	trackerErr := &domain.TrackerError{Kind: domain.ErrTrackerNotFound, Message: "not found"}
+	plainErr := errors.New("dial tcp: connection refused")
+
+	tests := []struct {
+		name     string
+		input    error
+		want     *domain.SCMError
+		wantSame bool
+	}{
+		{
+			name:     "bare SCMError returns the same pointer",
+			input:    bare,
+			want:     bare,
+			wantSame: true,
+		},
+		{
+			name:     "wrapped SCMError returns the unwrapped pointer, not the wrapper",
+			input:    fmt.Errorf("merging pull request: %w", bare),
+			want:     bare,
+			wantSame: true,
+		},
+		{
+			name:  "TrackerError delegates to ToSCMError",
+			input: trackerErr,
+			want:  &domain.SCMError{Kind: domain.ErrSCMNotFound, Message: trackerErr.Message, Err: trackerErr},
+		},
+		{
+			name:  "plain error delegates to ToSCMError",
+			input: plainErr,
+			want:  &domain.SCMError{Kind: domain.ErrSCMTransport, Message: plainErr.Error(), Err: plainErr},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := scmcore.AsSCMError(tt.input)
+
+			if tt.wantSame && got != tt.want {
+				t.Errorf("AsSCMError(%v) = %p, want the same pointer %p", tt.input, got, tt.want)
+			}
+			if got.Kind != tt.want.Kind {
+				t.Errorf("AsSCMError(%v).Kind = %q, want %q", tt.input, got.Kind, tt.want.Kind)
+			}
+			if got.Message != tt.want.Message {
+				t.Errorf("AsSCMError(%v).Message = %q, want %q", tt.input, got.Message, tt.want.Message)
+			}
+			if got.Err != tt.want.Err {
+				t.Errorf("AsSCMError(%v).Err = %v, want %v", tt.input, got.Err, tt.want.Err)
+			}
+		})
+	}
+}
+
 func TestAsMergeConflict(t *testing.T) {
 	t.Parallel()
 

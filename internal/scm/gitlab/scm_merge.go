@@ -43,13 +43,13 @@ type gitlabPipeline struct {
 // fetchMergeRequest issues GET /projects/{projectPath}/merge_requests/{prNumber}
 // and decodes the response into a [gitlabMergeRequest].
 //
-// A transport or HTTP failure is mapped through [asSCMError]; a decode
-// failure returns a [*domain.SCMError] of kind [domain.ErrSCMPayload].
+// A transport or HTTP failure is mapped through [scmcore.AsSCMError]; a
+// decode failure returns a [*domain.SCMError] of kind [domain.ErrSCMPayload].
 func (a *GitLabSCMAdapter) fetchMergeRequest(ctx context.Context, prNumber int, owner, repo string) (gitlabMergeRequest, error) {
 	path := "/projects/" + projectPath(owner, repo) + "/merge_requests/" + strconv.Itoa(prNumber)
 	body, _, err := a.client.Get(ctx, path, nil)
 	if err != nil {
-		return gitlabMergeRequest{}, asSCMError(err)
+		return gitlabMergeRequest{}, scmcore.AsSCMError(err)
 	}
 
 	var mr gitlabMergeRequest
@@ -274,7 +274,7 @@ func (a *GitLabSCMAdapter) MergePR(ctx context.Context, prNumber int, owner, rep
 	path := "/projects/" + projectPath(owner, repo) + "/merge_requests/" + strconv.Itoa(prNumber) + "/merge"
 	respBody, sendErr := a.client.Send(ctx, http.MethodPut, path, bytes.NewReader(payload))
 	if sendErr != nil {
-		scm := scmcore.AsMergeConflict(asSCMError(sendErr))
+		scm := scmcore.AsMergeConflict(scmcore.AsSCMError(sendErr))
 		switch scm.Kind {
 		case domain.ErrSCMConflict:
 			return domain.MergeResult{}, a.resolveMergeConflict(ctx, prNumber, owner, repo, scm)
@@ -342,7 +342,7 @@ func enrichMergeAuthError(scm *domain.SCMError) *domain.SCMError {
 func (a *GitLabSCMAdapter) DeleteBranch(ctx context.Context, owner, repo, branch string) error {
 	path := "/projects/" + projectPath(owner, repo) + "/repository/branches/" + url.PathEscape(branch)
 	if err := a.client.SendNoBody(ctx, http.MethodDelete, path); err != nil {
-		return asSCMError(err)
+		return scmcore.AsSCMError(err)
 	}
 	return nil
 }

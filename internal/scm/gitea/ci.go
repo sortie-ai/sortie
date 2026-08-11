@@ -139,7 +139,7 @@ func (p *GiteaCIProvider) FetchCIStatus(ctx context.Context, ref string) (domain
 		if errors.As(err, &ciErr) {
 			return domain.CIResult{}, ciErr
 		}
-		return domain.CIResult{}, giteaToCIError(fmt.Errorf("fetching ci status for ref %q: %w", ref, err))
+		return domain.CIResult{}, scmcore.ToCIError(fmt.Errorf("fetching ci status for ref %q: %w", ref, err))
 	}
 
 	runs := make([]domain.CheckRun, len(statuses))
@@ -261,51 +261,4 @@ func truncateLines(raw string, maxLines int) string {
 
 func stripANSI(s string) string {
 	return ansiPattern.ReplaceAllString(s, "")
-}
-
-// giteaToCIError converts an error from the shared Gitea transport into a
-// [*domain.CIError] at the CI boundary.
-//
-// A context cancellation or deadline error is returned as-is, without
-// conversion to a [*domain.CIError], so a caller can match it with [errors.Is].
-// A [*domain.TrackerError] is mapped by its Kind onto the matching CI kind,
-// preserving the chain; any other error becomes [domain.ErrCIAPI].
-func giteaToCIError(err error) error {
-	if err == nil {
-		return nil
-	}
-
-	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-		return err
-	}
-
-	var te *domain.TrackerError
-	if errors.As(err, &te) {
-		var kind domain.CIErrorKind
-		switch te.Kind {
-		case domain.ErrTrackerTransport:
-			kind = domain.ErrCITransport
-		case domain.ErrTrackerAuth:
-			kind = domain.ErrCIAuth
-		case domain.ErrTrackerAPI:
-			kind = domain.ErrCIAPI
-		case domain.ErrTrackerNotFound:
-			kind = domain.ErrCINotFound
-		case domain.ErrTrackerPayload:
-			kind = domain.ErrCIPayload
-		default:
-			kind = domain.ErrCIAPI
-		}
-		return &domain.CIError{
-			Kind:    kind,
-			Message: te.Message,
-			Err:     err,
-		}
-	}
-
-	return &domain.CIError{
-		Kind:    domain.ErrCIAPI,
-		Message: err.Error(),
-		Err:     err,
-	}
 }

@@ -146,7 +146,7 @@ func (a *GitLabSCMAdapter) RemoveLabel(ctx context.Context, prNumber int, owner,
 // write to nil, logging one WARN naming prNumber, and returns every
 // other kind unchanged.
 func (a *GitLabSCMAdapter) labelNotFoundToNil(err error, prNumber int) error {
-	scm := asSCMError(err)
+	scm := scmcore.AsSCMError(err)
 	if scm.Kind == domain.ErrSCMNotFound {
 		a.log.Warn("gitlab merge request not found during label removal",
 			slog.Int("pr_number", prNumber))

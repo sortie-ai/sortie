@@ -3,7 +3,6 @@ package github
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log/slog"
 	"net/url"
@@ -116,7 +115,7 @@ func NewGitHubCIProvider(maxLogLines int, adapterConfig map[string]any) (domain.
 func (p *GitHubCIProvider) FetchCIStatus(ctx context.Context, ref string) (domain.CIResult, error) {
 	raw, err := p.fetchAllCheckRuns(ctx, ref)
 	if err != nil {
-		return domain.CIResult{}, toCIError(fmt.Errorf("fetching checks for ref %q: %w", ref, err))
+		return domain.CIResult{}, scmcore.ToCIError(fmt.Errorf("fetching checks for ref %q: %w", ref, err))
 	}
 
 	runs := make([]domain.CheckRun, len(raw))
@@ -245,46 +244,6 @@ func mapCheckConclusion(c *string) domain.CheckConclusion {
 		return domain.CheckConclusionPending
 	default:
 		return domain.CheckConclusionPending
-	}
-}
-
-func toCIError(err error) error {
-	if err == nil {
-		return nil
-	}
-
-	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-		return err
-	}
-
-	var te *domain.TrackerError
-	if errors.As(err, &te) {
-		var kind domain.CIErrorKind
-		switch te.Kind {
-		case domain.ErrTrackerTransport:
-			kind = domain.ErrCITransport
-		case domain.ErrTrackerAuth, domain.ErrMissingTrackerAPIKey:
-			kind = domain.ErrCIAuth
-		case domain.ErrTrackerAPI:
-			kind = domain.ErrCIAPI
-		case domain.ErrTrackerNotFound:
-			kind = domain.ErrCINotFound
-		case domain.ErrTrackerPayload, domain.ErrMissingTrackerProject:
-			kind = domain.ErrCIPayload
-		default:
-			kind = domain.ErrCIAPI
-		}
-		return &domain.CIError{
-			Kind:    kind,
-			Message: te.Message,
-			Err:     err,
-		}
-	}
-
-	return &domain.CIError{
-		Kind:    domain.ErrCIAPI,
-		Message: err.Error(),
-		Err:     err,
 	}
 }
 

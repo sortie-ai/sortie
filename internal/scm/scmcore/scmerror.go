@@ -28,6 +28,11 @@ var trackerToSCMKind = map[domain.TrackerErrorKind]domain.SCMErrorKind{
 //
 // ToSCMError performs no conflict promotion. A caller on a merge write
 // path applies [AsMergeConflict] to the result.
+//
+// A caller holding an error returned directly by an [httpkit.Client] call
+// uses ToSCMError. A caller holding an error from a paginator walk, whose
+// decoder may already have constructed a [*domain.SCMError], uses
+// [AsSCMError] instead.
 func ToSCMError(err error) *domain.SCMError {
 	var te *domain.TrackerError
 	if !errors.As(err, &te) {
@@ -48,6 +53,25 @@ func ToSCMError(err error) *domain.SCMError {
 		Message: te.Message,
 		Err:     err,
 	}
+}
+
+// AsSCMError returns err's chain as a [*domain.SCMError]. When err already
+// unwraps to a [*domain.SCMError], AsSCMError returns that value unwrapped,
+// discarding the outer wrapper. When err instead unwraps to a
+// [*domain.TrackerError], or to neither, AsSCMError delegates to
+// [ToSCMError].
+//
+// err must be non-nil; AsSCMError has no nil branch. A caller holding an
+// error from an httpkit paginator walk, whose decoder may already have
+// constructed a [*domain.SCMError], uses AsSCMError. A caller holding an
+// error returned directly by an [httpkit.Client] call uses [ToSCMError]
+// instead.
+func AsSCMError(err error) *domain.SCMError {
+	var scmErr *domain.SCMError
+	if errors.As(err, &scmErr) {
+		return scmErr
+	}
+	return ToSCMError(err)
 }
 
 // AsMergeConflict promotes err to [domain.ErrSCMConflict] when, and only

@@ -6,6 +6,7 @@ import (
 	"slices"
 
 	"github.com/sortie-ai/sortie/internal/domain"
+	"github.com/sortie-ai/sortie/internal/scm/scmcore"
 )
 
 // VerifyAutoMergeScopes reports whether the configured credential can
@@ -26,7 +27,7 @@ import (
 func (a *GitLabSCMAdapter) VerifyAutoMergeScopes(ctx context.Context, requireContents bool) (scopes []string, missing []string, err error) {
 	body, _, getErr := a.client.Get(ctx, "/personal_access_tokens/self", nil)
 	if getErr != nil {
-		scm := asSCMError(getErr)
+		scm := scmcore.AsSCMError(getErr)
 		if scm.Kind == domain.ErrSCMNotFound {
 			a.log.Warn("gitlab token introspection route unavailable")
 			return nil, nil, nil

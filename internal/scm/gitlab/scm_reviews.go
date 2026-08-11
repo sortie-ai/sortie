@@ -100,7 +100,7 @@ func (a *GitLabSCMAdapter) resolveBotFlag(ctx context.Context, userID int64) (bo
 	path := "/users/" + strconv.FormatInt(userID, 10)
 	body, _, err := a.client.Get(ctx, path, nil)
 	if err != nil {
-		scmErr := asSCMError(err)
+		scmErr := scmcore.AsSCMError(err)
 		if scmErr.Kind == domain.ErrSCMNotFound {
 			a.mu.Lock()
 			a.botCache[userID] = false
@@ -296,7 +296,7 @@ func (a *GitLabSCMAdapter) GetReviewDecision(ctx context.Context, prNumber int, 
 	path := "/projects/" + projectPath(owner, repo) + "/merge_requests/" + strconv.Itoa(prNumber) + "/approvals"
 	body, _, err := a.client.Get(ctx, path, nil)
 	if err != nil {
-		return "", asSCMError(err)
+		return "", scmcore.AsSCMError(err)
 	}
 
 	var approvals gitlabApprovals
