@@ -4,11 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"go/parser"
-	"go/token"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -253,7 +250,7 @@ func TestGiteaPaginateSCM(t *testing.T) {
 	})
 }
 
-// --- Write-path transport and import boundary ---
+// --- Write-path transport ---
 
 func TestGiteaSCMWriteBoundary(t *testing.T) {
 	t.Parallel()
@@ -279,50 +276,6 @@ func TestGiteaSCMWriteBoundary(t *testing.T) {
 		}
 		if !strings.HasPrefix(gotPath, "/api/v1/") {
 			t.Errorf("request path = %q, want it to start with %q", gotPath, "/api/v1/")
-		}
-	})
-
-	t.Run("package imports no sibling adapter, no orchestrator, and no gitea sdk", func(t *testing.T) {
-		t.Parallel()
-
-		entries, err := os.ReadDir(".")
-		if err != nil {
-			t.Fatalf("ReadDir(.): %v", err)
-		}
-
-		banned := []string{
-			"github.com/sortie-ai/sortie/internal/scm/github",
-			"github.com/sortie-ai/sortie/internal/orchestrator",
-			"github.com/sortie-ai/sortie/internal/tracker/",
-			"code.gitea.io/sdk",
-		}
-
-		fset := token.NewFileSet()
-		checked := 0
-		for _, entry := range entries {
-			name := entry.Name()
-			if entry.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
-				continue
-			}
-			checked++
-
-			f, parseErr := parser.ParseFile(fset, name, nil, parser.ImportsOnly)
-			if parseErr != nil {
-				t.Fatalf("ParseFile(%s): %v", name, parseErr)
-			}
-
-			for _, imp := range f.Imports {
-				importPath := strings.Trim(imp.Path.Value, `"`)
-				for _, forbidden := range banned {
-					if strings.Contains(importPath, forbidden) {
-						t.Errorf("%s imports %q, want no import matching %q", name, importPath, forbidden)
-					}
-				}
-			}
-		}
-
-		if checked == 0 {
-			t.Fatal("no production .go files were checked, want at least one")
 		}
 	})
 }

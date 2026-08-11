@@ -76,7 +76,33 @@ const (
 	ruleBAN     contractRule = "BAN"
 	ruleMETRICS contractRule = "METRICS"
 	ruleHOOK    contractRule = "HOOK"
+	ruleIMPORT  contractRule = "IMPORT"
 )
+
+// Family roots and the orchestrator path rule IMPORT matches an import
+// path against.
+const (
+	contractTrackerFamilyPath = "github.com/sortie-ai/sortie/internal/tracker"
+	contractSCMFamilyPath     = "github.com/sortie-ai/sortie/internal/scm"
+	contractOrchestratorPath  = "github.com/sortie-ai/sortie/internal/orchestrator"
+)
+
+// contractSharedFamilyPackages names each package under a family root that
+// holds no adapter, so any package under either root may import it, and
+// states why. A package under a family root that is absent from this map
+// may be imported only by itself and by packages under its own path.
+var contractSharedFamilyPackages = map[string]string{
+	"github.com/sortie-ai/sortie/internal/scm/scmcore": "shared forge decision core; registers no kind and holds no adapter",
+}
+
+// contractPackageBannedImports maps one package's import path to the
+// import prefixes that package alone may not reach, with a reason per
+// entry.
+var contractPackageBannedImports = map[string]map[string]string{
+	"github.com/sortie-ai/sortie/internal/scm/gitea": {
+		"code.gitea.io/sdk": "the adapter speaks the REST API directly; the vendor SDK is not a dependency of this project",
+	},
+}
 
 // contractAllowlist exempts a package, named by its directory's base
 // name, from one specific rule and states why; the package stays subject
@@ -96,6 +122,16 @@ var contractAllowlist = map[string]map[contractRule]string{
 type contractViolation struct {
 	pos  token.Position
 	text string
+}
+
+// contractPackage carries one package's identity and its parsed files.
+// Non-test files are fully parsed and feed rules BAN, METRICS, and HOOK;
+// test files are parsed imports-only and feed rule IMPORT alone.
+type contractPackage struct {
+	dirName    string
+	importPath string
+	files      []*ast.File
+	testFiles  []*ast.File
 }
 
 // resolveContractImportName returns the local identifier a file binds to
@@ -295,6 +331,77 @@ func checkContractMetrics(fset *token.FileSet, file *ast.File, registersTracker 
 	return violations
 }
 
+// contractPathIsUnder reports whether importPath is prefix itself or
+// denotes a path below it. It matches on path segments, never on a bare
+// substring, so a vanity path that merely embeds prefix does not match.
+func contractPathIsUnder(importPath, prefix string) bool {
+	if importPath == prefix {
+		return true
+	}
+	return strings.HasPrefix(importPath, prefix+"/")
+}
+
+// contractPackageImportPath maps dir, a directory found while walking
+// root, to its full import path, given the import path root itself
+// resolves to. It normalizes path separators so the result is identical
+// on every platform the project's CI runs.
+func contractPackageImportPath(root, rootImportPath, dir string) string {
+	rel, err := filepath.Rel(root, dir)
+	if err != nil || rel == "." {
+		return rootImportPath
+	}
+	return rootImportPath + "/" + filepath.ToSlash(rel)
+}
+
+// contractImportBanReason returns the reason importPath is banned for
+// pkg, or the empty string when it is allowed. Conditions are evaluated
+// in order and the function returns on the first match, so one import
+// yields at most one reason.
+func contractImportBanReason(importPath string, pkg contractPackage) string {
+	if contractPathIsUnder(importPath, contractOrchestratorPath) {
+		return "an adapter package must not import the orchestrator"
+	}
+
+	underTrackerFamily := contractPathIsUnder(importPath, contractTrackerFamilyPath)
+	underSCMFamily := contractPathIsUnder(importPath, contractSCMFamilyPath)
+	if underTrackerFamily || underSCMFamily {
+		if !contractPathIsUnder(importPath, pkg.importPath) {
+			if _, shared := contractSharedFamilyPackages[importPath]; !shared {
+				return "an adapter package must not import a sibling adapter package"
+			}
+		}
+	}
+
+	for prefix, reason := range contractPackageBannedImports[pkg.importPath] {
+		if contractPathIsUnder(importPath, prefix) {
+			return reason
+		}
+	}
+
+	return ""
+}
+
+// checkContractImports reports a violation for every import declaration
+// in file that contractImportBanReason rejects for pkg.
+func checkContractImports(fset *token.FileSet, file *ast.File, pkg contractPackage) []contractViolation {
+	var violations []contractViolation
+	for _, imp := range file.Imports {
+		importPath, err := strconv.Unquote(imp.Path.Value)
+		if err != nil {
+			continue
+		}
+		reason := contractImportBanReason(importPath, pkg)
+		if reason == "" {
+			continue
+		}
+		violations = append(violations, contractViolation{
+			pos:  fset.Position(imp.Pos()),
+			text: "imports " + importPath + "; " + reason,
+		})
+	}
+	return violations
+}
+
 // contractExempt reports whether the package named dirName is
 // allowlisted for rule.
 func contractExempt(dirName string, rule contractRule) bool {
@@ -306,27 +413,35 @@ func contractExempt(dirName string, rule contractRule) bool {
 	return ok
 }
 
-// checkAdapterContractPackage evaluates rules BAN, METRICS, and HOOK
-// against every file belonging to one package, honoring the allowlist
-// entries for dirName, the package's own directory base name.
-func checkAdapterContractPackage(fset *token.FileSet, dirName string, files []*ast.File) []contractViolation {
+// checkAdapterContractPackage evaluates rules BAN, METRICS, HOOK, and
+// IMPORT against pkg, honoring the allowlist entries for pkg.dirName.
+// Rules BAN, METRICS, and HOOK read pkg.files only; rule IMPORT reads
+// pkg.files and pkg.testFiles.
+//
+// A ruleIMPORT entry in contractAllowlist is all-or-nothing: it lifts the
+// orchestrator ban, the sibling-adapter ban, and the package's own
+// contractPackageBannedImports prefixes together, in that package's
+// non-test and test files alike. There is no narrower exemption; a case
+// that needs only one of the three lifted requires a new mechanism,
+// decided when it appears rather than pre-built here.
+func checkAdapterContractPackage(fset *token.FileSet, pkg contractPackage) []contractViolation {
 	var violations []contractViolation
 
-	if !contractExempt(dirName, ruleBAN) {
-		for _, file := range files {
+	if !contractExempt(pkg.dirName, ruleBAN) {
+		for _, file := range pkg.files {
 			violations = append(violations, checkContractBan(fset, file)...)
 		}
 	}
 
-	registers, usedMeta, hasHook, hookPos := contractRegistrationFacts(fset, files)
+	registers, usedMeta, hasHook, hookPos := contractRegistrationFacts(fset, pkg.files)
 
-	if !contractExempt(dirName, ruleMETRICS) {
-		for _, file := range files {
+	if !contractExempt(pkg.dirName, ruleMETRICS) {
+		for _, file := range pkg.files {
 			violations = append(violations, checkContractMetrics(fset, file, registers)...)
 		}
 	}
 
-	if registers && !contractExempt(dirName, ruleHOOK) {
+	if registers && !contractExempt(pkg.dirName, ruleHOOK) {
 		if !usedMeta || !hasHook {
 			violations = append(violations, contractViolation{
 				pos:  hookPos,
@@ -335,23 +450,42 @@ func checkAdapterContractPackage(fset *token.FileSet, dirName string, files []*a
 		}
 	}
 
+	if !contractExempt(pkg.dirName, ruleIMPORT) {
+		for _, file := range pkg.files {
+			violations = append(violations, checkContractImports(fset, file, pkg)...)
+		}
+		for _, file := range pkg.testFiles {
+			violations = append(violations, checkContractImports(fset, file, pkg)...)
+		}
+	}
+
 	return violations
 }
 
-// TestCheckAdapterContract walks the non-test Go files under
-// internal/tracker and internal/scm, excluding testdata, and fails when
-// any package breaks the shared-decision invariant this work
-// establishes: a re-declared reimplementation of a name the ban table
-// names, a domain.TrackerAdapter method that does not record through
-// trackermetrics.Track, a direct call to IncTrackerRequests, or a
-// tracker-registering package supplying no config validation hook.
+// TestCheckAdapterContract walks the Go files under internal/tracker and
+// internal/scm, excluding testdata, and fails when any package breaks the
+// shared-decision invariant this work establishes: a re-declared
+// reimplementation of a name the ban table names, a domain.TrackerAdapter
+// method that does not record through trackermetrics.Track, a direct
+// call to IncTrackerRequests, a tracker-registering package supplying no
+// config validation hook, or an import rule IMPORT rejects.
 func TestCheckAdapterContract(t *testing.T) {
 	fset := token.NewFileSet()
-	filesByDir := map[string][]*ast.File{}
+	packages := map[string]*contractPackage{}
 	var dirOrder []string
+	registryImported := false
 
-	for _, root := range []string{filepath.Join("..", "tracker"), filepath.Join("..", "scm")} {
-		err := filepath.WalkDir(root, func(path string, d fs.DirEntry, walkErr error) error {
+	roots := []struct {
+		dir        string
+		importPath string
+	}{
+		{filepath.Join("..", "tracker"), contractTrackerFamilyPath},
+		{filepath.Join("..", "scm"), contractSCMFamilyPath},
+	}
+
+	for _, root := range roots {
+		parsed := 0
+		err := filepath.WalkDir(root.dir, func(path string, d fs.DirEntry, walkErr error) error {
 			if walkErr != nil {
 				return walkErr
 			}
@@ -361,32 +495,59 @@ func TestCheckAdapterContract(t *testing.T) {
 				}
 				return nil
 			}
-			if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			if !strings.HasSuffix(path, ".go") {
 				return nil
 			}
 
-			file, parseErr := parser.ParseFile(fset, path, nil, parser.SkipObjectResolution)
+			dir := filepath.Dir(path)
+			pkg, seen := packages[dir]
+			if !seen {
+				pkg = &contractPackage{
+					dirName:    filepath.Base(dir),
+					importPath: contractPackageImportPath(root.dir, root.importPath, dir),
+				}
+				packages[dir] = pkg
+				dirOrder = append(dirOrder, dir)
+			}
+
+			isTestFile := strings.HasSuffix(path, "_test.go")
+			mode := parser.SkipObjectResolution
+			if isTestFile {
+				mode |= parser.ImportsOnly
+			}
+			file, parseErr := parser.ParseFile(fset, path, nil, mode)
 			if parseErr != nil {
 				t.Errorf("parse %s: %v", path, parseErr)
 				return nil
 			}
 
-			dir := filepath.Dir(path)
-			if _, seen := filesByDir[dir]; !seen {
-				dirOrder = append(dirOrder, dir)
+			if isTestFile {
+				pkg.testFiles = append(pkg.testFiles, file)
+			} else {
+				pkg.files = append(pkg.files, file)
 			}
-			filesByDir[dir] = append(filesByDir[dir], file)
+			parsed++
+
+			if !registryImported && resolveContractImportName(file, contractRegistryImportPath) != "" {
+				registryImported = true
+			}
 			return nil
 		})
 		if err != nil {
-			t.Fatalf("walk %s: %v", root, err)
+			t.Fatalf("walk %s: %v", root.dir, err)
 		}
+		if parsed == 0 {
+			t.Fatalf("root %s yielded no parsed Go files, want at least one", root.dir)
+		}
+	}
+
+	if !registryImported {
+		t.Fatalf("no parsed file under either root imports %s, want at least one", contractRegistryImportPath)
 	}
 
 	sort.Strings(dirOrder)
 	for _, dir := range dirOrder {
-		dirName := filepath.Base(dir)
-		for _, v := range checkAdapterContractPackage(fset, dirName, filesByDir[dir]) {
+		for _, v := range checkAdapterContractPackage(fset, *packages[dir]) {
 			t.Errorf("%s: %s", v.pos, v.text)
 		}
 	}
@@ -401,14 +562,17 @@ func TestCheckAdapterContract_DetectsViolations(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name      string
-		dirName   string
-		src       string
-		wantCount int
+		name       string
+		dirName    string
+		importPath string
+		src        string
+		inTestFile bool
+		wantCount  int
 	}{
 		{
-			name:    "a re-declared ban-table name is rejected",
-			dirName: "fixture",
+			name:       "a re-declared ban-table name is rejected",
+			dirName:    "fixture",
+			importPath: "github.com/sortie-ai/sortie/internal/tracker/fixture",
 			src: `package fixture
 
 func withRetry() error { return nil }
@@ -416,8 +580,9 @@ func withRetry() error { return nil }
 			wantCount: 1,
 		},
 		{
-			name:    "a tracker-registering package's method with no trackermetrics.Track call is rejected",
-			dirName: "fixture",
+			name:       "a tracker-registering package's method with no trackermetrics.Track call is rejected",
+			dirName:    "fixture",
+			importPath: "github.com/sortie-ai/sortie/internal/tracker/fixture",
 			src: `package fixture
 
 import "github.com/sortie-ai/sortie/internal/registry"
@@ -437,8 +602,9 @@ func (a *fixtureAdapter) FetchIssueByID(ctx int, id string) (int, error) {
 			wantCount: 1,
 		},
 		{
-			name:    "a direct call to IncTrackerRequests is rejected",
-			dirName: "fixture",
+			name:       "a direct call to IncTrackerRequests is rejected",
+			dirName:    "fixture",
+			importPath: "github.com/sortie-ai/sortie/internal/tracker/fixture",
 			src: `package fixture
 
 func record(metrics Metrics) {
@@ -448,8 +614,9 @@ func record(metrics Metrics) {
 			wantCount: 1,
 		},
 		{
-			name:    "a tracker kind registered through plain Register is rejected",
-			dirName: "fixture",
+			name:       "a tracker kind registered through plain Register is rejected",
+			dirName:    "fixture",
+			importPath: "github.com/sortie-ai/sortie/internal/tracker/fixture",
 			src: `package fixture
 
 import "github.com/sortie-ai/sortie/internal/registry"
@@ -461,8 +628,9 @@ func init() {
 			wantCount: 1,
 		},
 		{
-			name:    "a RegisterWithMeta literal omitting ValidateTrackerConfig is rejected",
-			dirName: "fixture",
+			name:       "a RegisterWithMeta literal omitting ValidateTrackerConfig is rejected",
+			dirName:    "fixture",
+			importPath: "github.com/sortie-ai/sortie/internal/tracker/fixture",
 			src: `package fixture
 
 import "github.com/sortie-ai/sortie/internal/registry"
@@ -476,8 +644,9 @@ func init() {
 			wantCount: 1,
 		},
 		{
-			name:    "a fully compliant tracker-registering package is accepted",
-			dirName: "fixture",
+			name:       "a fully compliant tracker-registering package is accepted",
+			dirName:    "fixture",
+			importPath: "github.com/sortie-ai/sortie/internal/tracker/fixture",
 			src: `package fixture
 
 import (
@@ -500,8 +669,9 @@ func (a *fixtureAdapter) FetchIssueByID(ctx int, id string) (int, error) {
 			wantCount: 0,
 		},
 		{
-			name:    "a package allowlisted for HOOK stays subject to BAN",
-			dirName: "file",
+			name:       "a package allowlisted for HOOK stays subject to BAN",
+			dirName:    "file",
+			importPath: "github.com/sortie-ai/sortie/internal/tracker/file",
 			src: `package fixture
 
 import "github.com/sortie-ai/sortie/internal/registry"
@@ -511,6 +681,128 @@ func init() {
 }
 
 func withRetry() error { return nil }
+`,
+			wantCount: 1,
+		},
+		{
+			name:       "the github SCM package importing a sibling SCM adapter package is rejected",
+			dirName:    "github",
+			importPath: "github.com/sortie-ai/sortie/internal/scm/github",
+			src: `package fixture
+
+import "github.com/sortie-ai/sortie/internal/scm/gitlab"
+`,
+			wantCount: 1,
+		},
+		{
+			name:       "the gitea SCM package importing a sibling SCM adapter package is rejected",
+			dirName:    "gitea",
+			importPath: "github.com/sortie-ai/sortie/internal/scm/gitea",
+			src: `package fixture
+
+import "github.com/sortie-ai/sortie/internal/scm/gitlab"
+`,
+			wantCount: 1,
+		},
+		{
+			name:       "the gitlab SCM package importing a sibling SCM adapter package is rejected",
+			dirName:    "gitlab",
+			importPath: "github.com/sortie-ai/sortie/internal/scm/gitlab",
+			src: `package fixture
+
+import "github.com/sortie-ai/sortie/internal/scm/gitea"
+`,
+			wantCount: 1,
+		},
+		{
+			name:       "a tracker package importing a sibling tracker adapter package is rejected",
+			dirName:    "jira",
+			importPath: "github.com/sortie-ai/sortie/internal/tracker/jira",
+			src: `package fixture
+
+import "github.com/sortie-ai/sortie/internal/tracker/linear"
+`,
+			wantCount: 1,
+		},
+		{
+			name:       "an adapter package importing the orchestrator is rejected",
+			dirName:    "gitea",
+			importPath: "github.com/sortie-ai/sortie/internal/scm/gitea",
+			src: `package fixture
+
+import "github.com/sortie-ai/sortie/internal/orchestrator"
+`,
+			wantCount: 1,
+		},
+		{
+			name:       "an adapter package importing a shared family package is accepted",
+			dirName:    "gitea",
+			importPath: "github.com/sortie-ai/sortie/internal/scm/gitea",
+			src: `package fixture
+
+import "github.com/sortie-ai/sortie/internal/scm/scmcore"
+`,
+			wantCount: 0,
+		},
+		{
+			name:       "an adapter package importing its own path is accepted",
+			dirName:    "gitea",
+			importPath: "github.com/sortie-ai/sortie/internal/scm/gitea",
+			src: `package fixture
+
+import "github.com/sortie-ai/sortie/internal/scm/gitea"
+`,
+			inTestFile: true,
+			wantCount:  0,
+		},
+		{
+			name:       "rule IMPORT reaches a package's test files",
+			dirName:    "gitlab",
+			importPath: "github.com/sortie-ai/sortie/internal/scm/gitlab",
+			src: `package fixture
+
+import "github.com/sortie-ai/sortie/internal/scm/github"
+`,
+			inTestFile: true,
+			wantCount:  1,
+		},
+		{
+			name:       "gitea importing the banned vendor SDK is rejected",
+			dirName:    "gitea",
+			importPath: "github.com/sortie-ai/sortie/internal/scm/gitea",
+			src: `package fixture
+
+import "code.gitea.io/sdk/gitea"
+`,
+			wantCount: 1,
+		},
+		{
+			name:       "the per-package banned import table does not extend to a package it does not name",
+			dirName:    "gitlab",
+			importPath: "github.com/sortie-ai/sortie/internal/scm/gitlab",
+			src: `package fixture
+
+import "code.gitea.io/sdk/gitea"
+`,
+			wantCount: 0,
+		},
+		{
+			name:       "a blank import of a sibling adapter package is rejected the same as a named import",
+			dirName:    "github",
+			importPath: "github.com/sortie-ai/sortie/internal/scm/github",
+			src: `package fixture
+
+import _ "github.com/sortie-ai/sortie/internal/scm/gitea"
+`,
+			wantCount: 1,
+		},
+		{
+			name:       "the HOOK allowlist entry for file does not exempt it from IMPORT",
+			dirName:    "file",
+			importPath: "github.com/sortie-ai/sortie/internal/tracker/file",
+			src: `package fixture
+
+import "github.com/sortie-ai/sortie/internal/tracker/jira"
 `,
 			wantCount: 1,
 		},
@@ -526,7 +818,13 @@ func withRetry() error { return nil }
 				t.Fatalf("parser.ParseFile: %v", err)
 			}
 
-			got := checkAdapterContractPackage(fset, tt.dirName, []*ast.File{file})
+			pkg := contractPackage{dirName: tt.dirName, importPath: tt.importPath}
+			if tt.inTestFile {
+				pkg.testFiles = []*ast.File{file}
+			} else {
+				pkg.files = []*ast.File{file}
+			}
+			got := checkAdapterContractPackage(fset, pkg)
 			if len(got) != tt.wantCount {
 				t.Errorf("checkAdapterContractPackage() returned %d violations, want %d: %+v", len(got), tt.wantCount, got)
 			}
