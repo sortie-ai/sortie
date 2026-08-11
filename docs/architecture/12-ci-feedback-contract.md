@@ -56,7 +56,10 @@ Every forge that exposes both a CI provider and a source-control merge-gate read
 aggregation rule, so neither reader can invent its own definition of failing. The two can still
 reach different verdicts when they read different signals: on GitHub the CI provider reads check
 runs only, while the merge gate reads the combined commit status as well, so a commit whose sole
-failing signal is a legacy commit status is passing to one and failing to the other.
+failing signal is a legacy commit status is passing to one and failing to the other. On GitLab the
+CI provider derives its verdict from the normalized run set while the merge gate reads the
+platform's own pipeline aggregate, so the two can differ whenever that aggregate is not a function
+of the failing set.
 
 Each `CheckRun` contains:
 
@@ -229,10 +232,14 @@ status description and target URL already present in the authenticated response;
 fetches the target URL, so the trust boundary stays at the Gitea API.
 
 **GitLab provider.** A GitLab CI status provider registers under kind `gitlab`. Every ref is
-resolved to a full commit SHA first, because the commit-status route matches its path segment
-literally and answers a branch name or an abbreviated SHA with an empty list. The same commit
+resolved to a full commit SHA first, through the commit-retrieval route, which accepts a branch or
+tag name where the commit-status route documents its path segment as a commit hash. The same commit
 response names the pipeline the read is scoped to, so a superseded pipeline's entries cannot hold a
-green commit at failing. Each entry of that pipeline maps to one check run, with `allow_failure`
-folded into the conclusion. The failing-check log excerpt is a real job trace, fetched under a byte
-cap and sanitized, which is the capability Gitea has no equivalent for.
+green commit at failing; the scope is applied twice, once as a query parameter and again after
+decoding, so a deployment that ignores the parameter cannot widen it. Each entry of that pipeline
+maps to one check run, with `allow_failure` folded into the conclusion. The failing-check log
+excerpt is a real job trace, fetched under a byte cap and sanitized, which is the capability Gitea
+has no equivalent for. The trace route ignores a range request, so a trace exceeding the cap yields
+the tail of the fetched prefix rather than the true tail, and an entry that is an externally
+reported status rather than a pipeline job has no trace at all, leaving the excerpt empty.
 

@@ -152,6 +152,105 @@ Unless otherwise noted, Sections 17.1 through 17.7 are `Core Conformance`. Bulle
 - Worker exit with `scm.json` containing `pr_number > 0`, `owner`, and `repo` creates review
   pending reaction; missing fields degrade to no-review behavior
 - Worker exit does not overwrite existing pending review entry (preserves debounce state)
+- Bot-review reconciliation is skipped when no SCM adapter is constructed or when bot-review is not
+  configured
+- Bot classification is the union of the platform bot marker and the `bot_usernames` allowlist, so
+  on a provider that reports no bot marker an empty allowlist selects nothing and the kind never
+  dispatches
+- Bot-review selection requires no `CHANGES_REQUESTED` review state, and outdated comments are
+  filtered before the fingerprint is computed
+- New actionable bot comments dispatch on the tick they are detected, with no debounce window and no
+  `debounce_ms` field
+- The bot-review budget is `max_continuation_turns` with a per-kind default of `5` and a poll
+  interval defaulting to `60000`, both independent of the `review` kind's values
+- The bot-review fingerprint is the sorted non-outdated comment-ID hash under its own kind row; a
+  changed comment set resets the dispatched flag and re-arms a dispatch, leaving the `review`
+  fingerprint untouched
+- A non-nil retry-slot incumbent defers the bot-review pass without dispatching
+- Bot-review escalation at the cap clears only the `bot-review` pending entry and fingerprint row,
+  leaving the residual attempt counter, the pending retry, and the claim for the terminal-state path
+- Bot-review escalation tracker-call failures are logged and counted but do not block the
+  slot-scoped cleanup
+- Worker-exit seeding and startup recovery create a bot-review entry only when SCM metadata reports
+  `pr_number > 0` and non-empty `owner`, `repo`, and `branch`, and recovery is gated on the
+  configured flag so a configured-but-providerless setup recovers none
+- Merge-conflict reconciliation is skipped when no SCM adapter is constructed or when merge-conflict
+  is not configured, and the pass runs after bot-review and before auto-merge
+- Only the normalized `dirty` state arms the reaction; `unknown` defers at the poll interval without
+  touching the fingerprint or the attempt counter
+- A provider whose mergeability mapping never yields `dirty` leaves the kind inert: every due tick
+  defers and the pending TTL drops the entry without escalating
+- The mergeability read runs on every due tick with no retry-budget check ahead of it, so the
+  not-dirty branch that closes the episode stays reachable
+- The retry-slot guard, the empty head-SHA guard, and the empty base-branch guard all run before the
+  attempt increment, so a deferral never burns an attempt
+- The merge-conflict fingerprint is the SHA-256 of the head SHA under its own kind row; a same-head
+  dispatched observation re-enqueues without incrementing or dispatching, a new head re-arms a fresh
+  attempt, and the not-dirty branch deletes the row so the next dirty observation dispatches
+- The merge-conflict cap is a strict over-limit comparison against `max_retries`, whose per-kind
+  default is `1`, so a configured `0` escalates on the first conflict detection
+- Both merge-conflict episode exits, the not-dirty branch and escalation, delete the per-episode
+  attempt counter, so a later independent conflict opens a fresh episode at attempt 1
+- Merge-conflict escalation scopes every deletion to the `merge-conflict` kind, cancels and deletes
+  no retry, releases no claim, and leaves parallel `ci`, `review`, `bot-review`, and `merge`
+  reactions intact
+- The rebase continuation carries the PR's base branch read live on the dispatching tick rather than
+  an assumed default branch
+- Auto-merge reconciliation is skipped when `reactions.auto_merge.provider` is empty or no SCM
+  adapter is present
+- The auto-merge pass runs after the CI, review-comment, bot-review, and merge-conflict passes and
+  before the two label-command passes
+- A sticky auth-class preflight failure drops every `merge`-kind pending entry on each later tick, a
+  transport-class preflight failure schedules exactly one retry before the flag sticks, and absent
+  scope information fails open with auto-merge enabled
+- A draft PR, a mergeability outside `clean` and `unstable`, a review decision other than `APPROVED`
+  or `NOT_REQUIRED`, and a CI conclusion other than success while `require_ci` holds each re-enqueue
+  at the poll interval instead of merging
+- Count-based auto-merge escalation applies only when `max_retries > 0`, whose default is `2`, so a
+  configured `0` disables it rather than escalating on the first attempt
+- An auth-class or payload-class `MergePR` failure escalates immediately, bypassing the
+  `max_retries` check, including when it is `0`; any other conflict re-enqueues at the poll interval
+- A merge rejection carrying the already-merged marker is treated as idempotent success and takes
+  the same post-merge actions as a completed merge
+- The merge fingerprint is the SHA-256 of the head SHA, a newline byte, and the review-decision
+  string under kind `merge`; a changed head SHA or review decision refreshes it, and a successful
+  merge clears it
+- A branch-delete or tracker-comment failure after a completed merge is not rolled back
+- Neither the post-merge success path nor the auto-merge escalation path cancels or deletes a retry,
+  clears every entry an issue holds, or deletes the issue's claim, so parallel `ci` and `review`
+  continuations survive
+- The already-merged disposition clears only the `merge`-kind pending entry and fingerprint and
+  never transitions the tracker issue
+- Each label-command pass is skipped when no SCM adapter is constructed or its own command is not
+  configured, and an absent or empty `provider` means no journal read happens for either command
+- A fix-only configuration, with `review_label` empty and `fix_label` non-empty, activates the block
+  and constructs the SCM adapter exactly as a review-only configuration does
+- A `provider` set while both command labels are empty is rejected offline
+- The high-water mark advances to the newest examined event on every tick that reads new events,
+  including `unlabeled` entries, foreign labels, and retracted gestures
+- All matching `labeled` events in one batch collapse to at most one command
+- A command is confirmed only when its label is still present on the PR at detection time; otherwise
+  the mark advances and nothing dispatches
+- The mark is persisted before the dispatch is scheduled, so a crash between the two loses the
+  command rather than duplicating it
+- The `dispatched` flag is not a deduplication input for either label kind, and the review pass's
+  "stored fingerprint matches and dispatched" skip is not adopted
+- A failed mark read backs off without dispatching, while a failed mark upsert proceeds
+- Neither label kind carries a TTL, a drop-on-age branch, an attempt counter, or an escalation
+  posture
+- A foreign-kind retry-slot incumbent defers with the mark unchanged and no label removal, a
+  same-kind incumbent or a running command of the same kind advances the mark and collapses the
+  gesture, and only a free slot dispatches
+- Each label-command pass re-enqueues its own detection entry on dispatch, because neither command's
+  exit satisfies the reaction-enqueue gate and so re-seeds nothing
+- A `label-review` entry seeds and recovers on PR metadata without a branch, while a `label-fix`
+  entry additionally requires a non-empty head branch and seeds none without one
+- A `label-review` dispatch runs the read-only, no-clone posture with the operator hooks skipped and
+  a `label-fix` dispatch takes the normal workspace preparation path with the hooks run; both
+  suppress the dispatch-time transition, the dispatch comment, the per-turn tracker-state refresh,
+  the self-review loop, the handoff transition, and the active-issue continuation retry
+- Each label-command pass scopes every `pending_reactions` and `reaction_fingerprints` mutation to
+  its own kind, so the relative ordering of the two passes does not affect correctness
 - Merge-completion reconciliation is skipped when `reactions.merge_completion` is not configured,
   or when no SCM adapter or no tracker adapter is present
 - Merge-completion drops an entry whose issue is missing from the state response, already terminal,

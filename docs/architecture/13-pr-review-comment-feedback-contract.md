@@ -36,6 +36,20 @@ bot-authored changes-requested review the way the GitHub adapter's platform-mark
 automated-reviewer feedback is separated instead through the bot-review reaction's username
 allowlist (§11D).
 
+**GitLab adapter.** A GitLab SCM adapter registers under kind `gitlab`. GitLab has no review
+object bundling a verdict with a comment set, so `FetchPendingReviews` composes the selection from
+two reads: the merge request's dedicated reviewers route supplies each reviewer's review state, and
+the notes route supplies the comments, joined on the author login. Only a reviewer whose review
+state is `requested_changes` is kept, and because the platform attaches no comment to a verdict,
+the returned set is every comment that reviewer wrote on the merge request rather than the comments
+of one review round. No embedded user object in the API carries a platform bot marker, so a
+reviewer is classified through a separate per-user lookup cached for the adapter's lifetime; a
+lookup that fails for any reason other than a deleted account treats the reviewer as not a bot and
+the read continues. `end_line` is always zero, because a GitLab comment position describes one
+line, and `outdated` has no platform field: the adapter derives it by comparing the recorded head
+SHA against the merge request's current head, so a comment carrying no diff position is never
+outdated.
+
 ### 11B.2 ReviewComment structure
 
 ```text

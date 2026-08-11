@@ -20,7 +20,7 @@ Conflict detection reuses the existing `GetMergeability` read. No new method is 
 `SCMAdapter` interface. The interface's `PRMergeStatus` return type gains one additive field:
 
 ```go
-// PRMergeStatus addition (internal/domain/scm.go):
+// PRMergeStatus addition:
 BaseBranch string
 ```
 
