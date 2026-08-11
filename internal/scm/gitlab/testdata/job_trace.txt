@@ -1,0 +1,14 @@
+section_start:1754838293:prepare_executor[0KPreparing the "docker+machine" executor[0K
+2026-08-10T14:24:52.1000000Z 00O Using Docker executor with image golang:1.26 ...
+2026-08-10T14:24:52.2000000Z 00O Pulling docker image golang:1.26 ...
+section_end:1754838293:prepare_executor[0K
+section_start:1754838294:step_script[0K[0KRunning with gitlab-runner 16.11.0[0K
+2026-08-10T14:24:53.1000000Z 00O $ go build ./...
+2026-08-10T14:24:55.3000000Z 00O [0;32mBuild succeeded[0m
+2026-08-10T14:24:56.4000000Z 00O $ go test ./...
+2026-08-10T14:24:58.5000000Z 00O+--- FAIL: TestBuildPackage (0.02s)
+2026-08-10T14:24:58.6000000Z 00O     build_test.go:42: unexpected artifact checksum
+2026-08-10T14:24:58.7000000Z 00O [0;31mFAIL[0m
+2026-08-10T14:24:58.8000000Z 00O FAIL	github.com/acme/widgets/build	0.031s
+2026-08-10T14:24:59.0000000Z 00E ERROR: Job failed: exit code 1
+section_end:1754838299:step_script[0K
