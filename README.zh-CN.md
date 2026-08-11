@@ -14,7 +14,7 @@
 [![codecov](https://codecov.io/gh/sortie-ai/sortie/graph/badge.svg?token=K2TPXBCbvb)](https://codecov.io/gh/sortie-ai/sortie)
 [![Go Reference](https://pkg.go.dev/badge/github.com/sortie-ai/sortie.svg)](https://pkg.go.dev/github.com/sortie-ai/sortie)
 
-[文档](https://docs.sortie-ai.com) · [参与贡献](CONTRIBUTING.md)
+[官网](https://sortie-ai.com) · [文档](https://docs.sortie-ai.com) · [参与贡献](CONTRIBUTING.md)
 
 **[English](README.md) | 简体中文**
 
