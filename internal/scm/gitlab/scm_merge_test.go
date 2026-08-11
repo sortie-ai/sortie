@@ -14,6 +14,7 @@ import (
 
 	"github.com/sortie-ai/sortie/internal/adaptertest"
 	"github.com/sortie-ai/sortie/internal/domain"
+	"github.com/sortie-ai/sortie/internal/scm/scmcore"
 )
 
 // decodeRequestBody decodes r's JSON body into v, failing the test if the
@@ -232,13 +233,16 @@ func TestGetCIStatus_HeadPipelineMapping(t *testing.T) {
 		name      string
 		overrides map[string]any
 		want      string
+		wantWarn  bool
+		wantAttr  string // pipeline_status attribute value; checked only when wantWarn is true
 	}{
-		{"success maps to CIGateSuccess", map[string]any{"head_pipeline": map[string]any{"status": "success"}}, "success"},
-		{"failed maps to CIGateFailing", map[string]any{"head_pipeline": map[string]any{"status": "failed"}}, "failing"},
-		{"canceled maps to CIGateFailing", map[string]any{"head_pipeline": map[string]any{"status": "canceled"}}, "failing"},
-		{"an unrecognized status defers to CIGatePending", map[string]any{"head_pipeline": map[string]any{"status": "skipped"}}, "pending"},
-		{"a nil head_pipeline maps to CIGateAbsent (empty string)", map[string]any{"head_pipeline": nil}, ""},
-		{"a populated top-level pipeline is never substituted for a nil head_pipeline", map[string]any{"head_pipeline": nil, "pipeline": map[string]any{"status": "success"}}, ""},
+		{"success maps to CIGateSuccess", map[string]any{"head_pipeline": map[string]any{"status": "success"}}, "success", false, ""},
+		{"failed maps to CIGateFailing", map[string]any{"head_pipeline": map[string]any{"status": "failed"}}, "failing", false, ""},
+		{"canceled maps to CIGateFailing", map[string]any{"head_pipeline": map[string]any{"status": "canceled"}}, "failing", false, ""},
+		{"an unrecognized status defers to CIGatePending and logs a warning", map[string]any{"head_pipeline": map[string]any{"status": "expired"}}, "pending", true, "expired"},
+		{"an empty head_pipeline status defers to CIGatePending and logs a warning", map[string]any{"head_pipeline": map[string]any{"status": ""}}, "pending", true, ""},
+		{"a nil head_pipeline maps to CIGateAbsent (empty string)", map[string]any{"head_pipeline": nil}, "", false, ""},
+		{"a populated top-level pipeline is never substituted for a nil head_pipeline", map[string]any{"head_pipeline": nil, "pipeline": map[string]any{"status": "success"}}, "", false, ""},
 	}
 
 	for _, tt := range tests {
@@ -250,6 +254,9 @@ func TestGetCIStatus_HeadPipelineMapping(t *testing.T) {
 			defer srv.Close()
 
 			adapter := mustSCMAdapter(t, srv.URL)
+			log, buf := newCapturingLogger()
+			adapter.log = log
+
 			got, err := adapter.GetCIStatus(context.Background(), testPRNumber, scmOwner, scmRepo)
 			if err != nil {
 				t.Fatalf("GetCIStatus: unexpected error: %v", err)
@@ -257,7 +264,112 @@ func TestGetCIStatus_HeadPipelineMapping(t *testing.T) {
 			if got != tt.want {
 				t.Errorf("GetCIStatus() = %q, want %q", got, tt.want)
 			}
+
+			logOutput := buf.String()
+			gotWarn := strings.Contains(logOutput, "unrecognized gitlab pipeline status")
+			if gotWarn != tt.wantWarn {
+				t.Errorf("WARN logged = %v, want %v (log output: %q)", gotWarn, tt.wantWarn, logOutput)
+			}
+			if tt.wantWarn {
+				if n := strings.Count(logOutput, "unrecognized gitlab pipeline status"); n != 1 {
+					t.Errorf("occurrences of %q in log output = %d, want 1 (log output: %q)", "unrecognized gitlab pipeline status", n, logOutput)
+				}
+				if !strings.Contains(logOutput, "pipeline_status="+quoteIfEmpty(tt.wantAttr)) {
+					t.Errorf("log output = %q, want it to carry the observed value as an attribute", logOutput)
+				}
+			}
 		})
+	}
+}
+
+// --- GetCIStatus: agreement with the CI provider's own normalization over
+// the full 13-value pipeline-status enum ---
+
+func TestGetCIStatus_PipelineStatusEnumAgreement(t *testing.T) {
+	t.Parallel()
+
+	statuses := []string{
+		"created", "waiting_for_resource", "preparing", "waiting_for_callback",
+		"pending", "running", "success", "failed", "canceling", "canceled",
+		"skipped", "scheduled", "manual",
+	}
+
+	for _, status := range statuses {
+		t.Run(status, func(t *testing.T) {
+			t.Parallel()
+
+			conclusion, runStatus, recognized := mapJobOutcome(status, false)
+			if !recognized {
+				t.Fatalf("mapJobOutcome(%q, false) recognized = false, want true (every enumerated pipeline status must be recognized by the CI provider's own normalization)", status)
+			}
+			runs := []domain.CheckRun{
+				{Name: "job-1", Status: runStatus, Conclusion: conclusion},
+				{Name: "job-2", Status: runStatus, Conclusion: conclusion},
+			}
+			want := string(scmcore.MergeGate(runs))
+
+			fixture := mergeRequestFixture(t, map[string]any{"head_pipeline": map[string]any{"status": status}})
+			srv := serveJSON(t, fixture)
+			defer srv.Close()
+
+			adapter := mustSCMAdapter(t, srv.URL)
+			log, buf := newCapturingLogger()
+			adapter.log = log
+
+			got, err := adapter.GetCIStatus(context.Background(), testPRNumber, scmOwner, scmRepo)
+			if err != nil {
+				t.Fatalf("GetCIStatus: unexpected error: %v", err)
+			}
+
+			if status == "manual" {
+				if got != string(scmcore.CIGatePending) {
+					t.Errorf("GetCIStatus() for pipeline status %q = %q, want %q", status, got, string(scmcore.CIGatePending))
+				}
+				if got == want {
+					t.Errorf("GetCIStatus() for pipeline status %q = %q, want it to differ from the computed fold %q (manual is a deliberate divergence)", status, got, want)
+				}
+			} else if got != want {
+				t.Errorf("GetCIStatus() for pipeline status %q = %q, want %q (the fold of mapJobOutcome(%q, false) through scmcore.MergeGate)", status, got, want, status)
+			}
+
+			logOutput := buf.String()
+			if strings.Contains(logOutput, "unrecognized gitlab pipeline status") {
+				t.Errorf("GetCIStatus() for pipeline status %q logged an unrecognized-status WARN, want none (log output: %q)", status, logOutput)
+			}
+		})
+	}
+}
+
+// --- GetCIStatus: request budget ---
+
+func TestGetCIStatus_SingleRequestRouteScope(t *testing.T) {
+	t.Parallel()
+
+	fixture := mergeRequestFixture(t, map[string]any{"head_pipeline": map[string]any{"status": "success"}})
+
+	wantSuffix := "/merge_requests/" + strconv.Itoa(testPRNumber)
+
+	var requests atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		if strings.Contains(r.URL.Path, "/statuses") || strings.Contains(r.URL.Path, "/pipelines") || strings.Contains(r.URL.Path, "/jobs") {
+			t.Errorf("unexpected request to %s, want only the merge-request read", r.URL.Path)
+		}
+		if !strings.HasSuffix(r.URL.Path, wantSuffix) {
+			t.Errorf("request path = %q, want it to end with %q", r.URL.Path, wantSuffix)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(fixture)
+	}))
+	defer srv.Close()
+
+	adapter := mustSCMAdapter(t, srv.URL)
+	if _, err := adapter.GetCIStatus(context.Background(), testPRNumber, scmOwner, scmRepo); err != nil {
+		t.Fatalf("GetCIStatus: unexpected error: %v", err)
+	}
+
+	if n := requests.Load(); n != 1 {
+		t.Errorf("requests = %d, want 1 (GetCIStatus must issue exactly one request)", n)
 	}
 }
 

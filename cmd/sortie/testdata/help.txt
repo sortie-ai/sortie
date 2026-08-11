@@ -24,7 +24,7 @@ Run options:
 
 Examples:
   sortie WORKFLOW.md                     Run orchestrator with a workflow
-  sortie --dry-run WORKFLOW.md           Validate config and poll once without side effects
+  sortie --dry-run WORKFLOW.md           Validate config and poll once without writing state
   sortie validate --format json w.md     Check workflow syntax, output as JSON
   sortie stats --since 24h               Summarize the last 24 hours of runs
 
