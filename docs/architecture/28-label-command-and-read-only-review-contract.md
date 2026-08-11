@@ -99,8 +99,8 @@ zero-padding the GitHub adapter applies. The GitLab adapter walks that journal f
 from the tail, and sorts the normalized events ascending by `(At, ID)` itself, so ordering does not
 depend on the server's. An entry whose label was later deleted from the project renders its label
 object null and is skipped, because it carries no name to normalize. The forward walk retains the
-oldest events when a journal exceeds the page cap, the opposite of the GitHub tail walk, and the
-adapter warns when the cap is reached.
+events GitLab serves first when a journal exceeds the page cap, where the GitHub tail walk retains
+the newest, and the adapter warns when the cap is reached.
 
 ### 11F.3 Command contract and detection invariants
 
