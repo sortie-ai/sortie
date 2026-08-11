@@ -1715,21 +1715,58 @@ sub-object **[live-CE]**. Reading it costs nothing beyond the merge-request read
 would satisfy that comparison, but it is not the right answer: `scmcore.MergeGate` owns the
 merge-gate vocabulary so that one forge cannot answer "is CI green" two ways, and the GitHub
 and Gitea adapters both return its four values (`success`, `pending`, `failing`, and the empty
-string). GitLab maps into the same four, over the partition this section already applies to
-the aggregate:
+string). GitLab maps into the same four through `mapPipelineStatus`
+(`internal/scm/gitlab/scm_merge.go`), which partitions every value of the platform's 13-value
+`head_pipeline.status` enum:
 
 | `head_pipeline.status` | `GetCIStatus` returns |
 | --- | --- |
 | `null` (no pipeline for the head SHA) | `""` |
-| `success` | `"success"` |
+| `success`, `skipped` | `"success"` |
 | `failed`, `canceled` | `"failing"` |
-| any other status | `"pending"` |
+| `created`, `waiting_for_resource`, `preparing`, `waiting_for_callback`, `pending`, `running`, `canceling`, `scheduled` | `"pending"` (still settling) |
+| `manual` | `"pending"` (settled, but deliberately held; see below) |
+| any other value, including the empty string | `"pending"`, and logs one WARN naming the observed value |
+
+`skipped` is a terminal, non-failing status, and it folds to a merge-eligible verdict rather
+than to a deferral. The platform's composite-status computation reports `skipped` for a pipeline
+only when every job in it is either `skipped` or an ignored `manual` job, and the weaker branch
+that would also call a pipeline `skipped` when only some of its jobs are skipped is guarded by a
+`needs`-DAG flag that the pipeline's own status computation never sets. A `skipped` pipeline's
+job set therefore cannot carry a failing conclusion, and no fetch of the statuses list can
+reveal one it does not already rule out.
 
 Expressing the shared rule over the platform's own aggregate rather than over a fetched run
 set preserves the saving recorded above: the answer still costs no request beyond the
-merge-request read. Whether GitLab should instead fetch the statuses list and call
-`scmcore.MergeGate` on the normalized runs, paying one extra request to share the code path
-rather than only the rule, is carried into the [open questions](#open-questions).
+merge-request read. Fetching the statuses list and calling `scmcore.MergeGate` on the
+normalized runs would pay one extra request per tick per pending merge, against a rate-limited
+API, to resolve a difference the platform already reports for free, so `GetCIStatus` reads the
+platform aggregate unconditionally rather than deriving the gate from a fetched run set.
+
+`manual` is named in the pending row on purpose, not because it fell through a default. The
+platform reports `manual` for a settled pipeline, one with no job left running or queued, but
+its branch ordering checks for a blocking manual job before it falls back to reporting
+`failed`, so a pipeline holding both a blocking manual job and a failed job still reports
+`manual`. Two arrangements reach that shape: a blocking manual job sharing a stage with the job
+that failed, and any pipeline that uses `needs`, where a job starts as soon as its own
+dependencies finish and can fail while an earlier-stage manual job is still untriggered.
+Mapping `manual` to a merge-eligible verdict on that shape would let an auto-merge reaction
+merge a commit whose CI provider reports failing, on an operation that cannot be undone. A
+project that enables the "Pipelines must succeed" setting closes the exposure by blocking the
+merge on mergeability rather than on the CI gate: `mapMergeability` reports a head pipeline
+that is neither successful nor still active as `blocked`, so `manual` never reaches the CI read
+on such a project. `GetCIStatus` keeps returning `"pending"` for `manual` until that arm is
+resolved on its own terms.
+
+A `skipped` pipeline created by a `[ci skip]` commit carries no commit-status entry at all,
+rather than one entry per skipped job: the pipeline-creation chain halts before it seeds any
+job. `GetCIStatus` still returns `"success"` for it, because the mapping reads the pipeline's
+own status field rather than the entry list. `FetchCIStatus` reads the entry list instead, so
+it sees an empty run set and reports `"pending"`, and the merge gate that
+`scmcore.MergeGate` would compute over that same empty set is `CIGateAbsent`, the empty string.
+Both `""` and `"success"` are merge-eligible to the auto-merge reaction, and a `"pending"`
+`FetchCIStatus` verdict is non-failing, so neither reader's answer for this shape lets a
+failing commit merge or lets a passing one go unmerged.
 
 **`FetchCIStatus` mapping to `domain.CIResult`.** The check-run list comes from
 `GET /projects/:id/repository/commits/:sha/statuses`, which returns one entry per job **and**
@@ -1744,8 +1781,8 @@ per external status, each with `name`, `status`, `allow_failure`, `pipeline_id`,
 | `canceled` | `cancelled` | `completed` |
 | `skipped` | `skipped` | `completed` |
 | `manual` | `neutral` | `completed` |
-| `created`, `pending`, `waiting_for_resource`, `preparing`, `scheduled` | `pending` | `queued` |
-| `running` | `pending` | `in_progress` |
+| `created`, `pending`, `waiting_for_resource`, `waiting_for_callback`, `preparing`, `scheduled` | `pending` | `queued` |
+| `running`, `canceling` | `pending` | `in_progress` |
 
 **The statuses route paginates.** `GET /projects/:id/repository/commits/:sha/statuses` returns
 `X-Per-Page: 20` by default and honors `per_page` up to 100, advertising `X-Total`,
@@ -2397,5 +2434,5 @@ Carried forward explicitly rather than resolved by inference:
 | Is the timestamp-and-stream prefix on the job trace a property of the API, the runner version, or a runner feature flag? | Decides whether the trace sanitizer can rely on the prefix being present, or must handle both shapes | Fetch a trace produced by an older runner, and one produced with the runner timestamp feature flag disabled |
 | Does the notes route on a merge request paginate and filter identically to the issue variant? | The comment normalization is assumed shared; a divergence would surface as dropped review comments | Seed a merge request with more than 100 notes and repeat the issue-side pagination and `activity_filter` probes |
 | Does `GET /users/:id` draw on a distinct rate-limit budget from the merge-request reads? | Bot classification adds one request per distinct author; a stricter budget would change the caching strategy | Compare `RateLimit-Name` on a throttled `GET /users/:id` against a throttled merge-request read on GitLab.com |
-| Should `GetCIStatus` map `head_pipeline.status` into the merge-gate vocabulary, or fetch the statuses list and call `scmcore.MergeGate` over the normalized runs? | The first preserves the measured one-request saving; the second shares the code path rather than only the rule, and cannot drift from `FetchCIStatus` on a status the two partition differently | Compare the two answers on a pipeline whose top-level status and normalized run set disagree, starting with a wholly `skipped` pipeline and with the `allow_failure` warnings-only case |
+| Which route closes the `manual` arm of `GetCIStatus`: fold the pipeline's job set through `scmcore.MergeGate` only when `head_pipeline.status` is `manual`, or map `manual` to `CIGateSuccess` and narrow the CI feedback contract's one-aggregation-rule claim to forges whose merge gate derives from a run set? | `GetCIStatus` now maps every other value of the platform's pipeline-status enum by the disposition folding the equivalent normalized run set through `scmcore.MergeGate` would produce; `manual` is the one value held at `pending` by decision, because the platform can report it for a job set that still carries a failed job | Sample how often a `manual` pipeline in real projects also carries a failed job, which any pipeline using `needs` can reach; tracked in a follow-up issue linked from this section's originating change |
 | Does self-managed Enterprise Edition behave as its source implies? | Every Enterprise Edition claim here is source plus documentation, never observed | Run the same probe set against a licensed self-managed Enterprise Edition instance |

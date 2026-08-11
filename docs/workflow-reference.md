@@ -1029,9 +1029,16 @@ Additional fields (via Extra):
 | Field              | Type    | Default  | Dynamic Reload    | Description                                                                                              |
 | ------------------ | ------- | -------- | ----------------- | -------------------------------------------------------------------------------------------------------- |
 | `strategy`         | string  | `squash` | Requires restart | Merge strategy. One of `merge`, `squash`, or `rebase`.                                                    |
-| `require_ci`       | boolean | `true`   | Requires restart | When `true`, all CI checks must pass before the merge is attempted. When `false`, CI is advisory only.    |
+| `require_ci`       | boolean | `true`   | Requires restart | When `true`, the merge waits until every reported check has completed with no failing conclusion; a `skipped` or `neutral` conclusion counts as non-failing. When `false`, CI is advisory only.    |
 | `delete_branch`    | boolean | `true`   | Requires restart | When `true`, the PR head branch is deleted after a successful merge. Failure to delete does not roll back the merge. |
 | `poll_interval_ms` | integer | `60000`  | Requires restart | Polling interval for the precondition state machine. Minimum: `30000` (30 sec).                           |
+
+For a GitLab provider, `require_ci` reads the head pipeline the platform reports for the PR,
+rather than a fetched check-run list. A head pipeline the platform reports as `skipped`
+satisfies the gate, because that status is non-failing. A head pipeline the platform reports as
+`manual` does not satisfy the gate and defers until an operator resolves it. A project's
+"Pipelines must succeed" setting is the control that holds a merge on a pipeline that did not
+succeed.
 
 **Activation:** The `reactions.auto_merge` block is active when `provider` is present
 and non-empty. Agent-created PRs MUST write `pr_number` (positive integer), `owner`,
@@ -1054,6 +1061,16 @@ and disabling auto-merge when the token's user lacks repository write access. A 
 whose user has write access passes that gate and surfaces the missing scope only at runtime, as a
 403 on the first merge or branch delete that the adapter rewrites to name `write:repository`.
 Grant the token's user repository write access and the token the `write:repository` scope.
+
+For a GitLab provider one scope covers the whole API. `api` grants complete read and write access,
+so it covers the merge and branch-delete routes together and `delete_branch` does not change what
+the token needs; `read_api` covers the reads and is refused on every write. The startup check reads
+`GET /personal_access_tokens/self`: a classic token whose scopes omit `api` is a verified gap and
+disables auto-merge, while four responses leave the check unable to classify the token at all and
+auto-merge enabled. Those four are the opaque `granular` scopes value a fine-grained token reports,
+an empty scopes array, an unreadable introspection body, and a 404 on the introspection route. That
+skip is not a preflight failure and blocks nothing, so confirm a fine-grained token's permissions
+directly. Grant the token the `api` scope.
 
 **Fingerprint dedup:** The fingerprint is the SHA-256 of the PR head SHA concatenated
 with the review decision. A new push or a change in review decision invalidates the
