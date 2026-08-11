@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/sortie-ai/sortie/internal/adaptertest"
 	"github.com/sortie-ai/sortie/internal/domain"
@@ -352,6 +353,66 @@ func TestProjectPath(t *testing.T) {
 			t.Errorf("projectPath(%q, %q) = %q, want %q", "acme/team/squad", "widgets", got, want)
 		}
 	})
+}
+
+// TestParseUTC pins the timestamp shapes GitLab actually emits. Self-hosted
+// instances render a fractional second and a numeric zone offset, and the
+// fractional part must survive the conversion to UTC rather than truncate or
+// fail the parse: a dropped timestamp would collapse to the zero time, which
+// orders every event identically instead of erroring.
+func TestParseUTC(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		input string
+		want  time.Time
+	}{
+		{
+			name:  "fractional second with positive zone offset",
+			input: "2026-08-11T01:53:22.509+02:00",
+			want:  time.Date(2026, time.August, 10, 23, 53, 22, 509000000, time.UTC),
+		},
+		{
+			name:  "fractional second on a note timestamp",
+			input: "2026-08-10T15:45:19.454+02:00",
+			want:  time.Date(2026, time.August, 10, 13, 45, 19, 454000000, time.UTC),
+		},
+		{
+			name:  "fractional second in zulu form",
+			input: "2026-01-10T09:00:00.000Z",
+			want:  time.Date(2026, time.January, 10, 9, 0, 0, 0, time.UTC),
+		},
+		{
+			name:  "whole second in zulu form",
+			input: "2026-08-10T08:00:00Z",
+			want:  time.Date(2026, time.August, 10, 8, 0, 0, 0, time.UTC),
+		},
+		{
+			name:  "malformed timestamp yields the zero time",
+			input: "not-a-timestamp",
+			want:  time.Time{},
+		},
+		{
+			name:  "empty timestamp yields the zero time",
+			input: "",
+			want:  time.Time{},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			got := parseUTC(tt.input)
+			if !got.Equal(tt.want) {
+				t.Errorf("parseUTC(%q) = %v, want %v", tt.input, got, tt.want)
+			}
+			if got.Location() != time.UTC {
+				t.Errorf("parseUTC(%q): location = %v, want UTC", tt.input, got.Location())
+			}
+		})
+	}
 }
 
 // --- paginateSCM ---
