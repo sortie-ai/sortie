@@ -607,13 +607,24 @@ func TestFetchCIStatus_StatusPagination(t *testing.T) {
 	withCommitStatuses(t, s, func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		statusesPath := "/api/v4/projects/" + testEscapedProject + "/repository/commits/" + testCommitSHA + "/statuses"
+		wantPipeline := strconv.Itoa(testPipelineID)
+		// The platform echoes every request parameter into the Link URLs
+		// it emits, so a later page that arrived without the pipeline
+		// scope would read the whole commit instead of the one pipeline.
+		if got := r.URL.Query().Get("pipeline_id"); got != wantPipeline {
+			t.Errorf("statuses request %q carried pipeline_id=%q, want %q", r.URL.RequestURI(), got, wantPipeline)
+		}
+		nextLink := func(page int) string {
+			return `<` + srv.URL + statusesPath + `?order_by=id&page=` + strconv.Itoa(page) +
+				`&per_page=100&pipeline_id=` + wantPipeline + `&sha=` + testCommitSHA + `>; rel="next"`
+		}
 		switch r.URL.Query().Get("page") {
 		case "":
-			w.Header().Set("Link", `<`+srv.URL+statusesPath+`?page=2>; rel="next"`)
+			w.Header().Set("Link", nextLink(2))
 			w.WriteHeader(http.StatusOK)
 			w.Write(page1) //nolint:errcheck // test helper
 		case "2":
-			w.Header().Set("Link", `<`+srv.URL+statusesPath+`?page=3>; rel="next"`)
+			w.Header().Set("Link", nextLink(3))
 			w.WriteHeader(http.StatusOK)
 			w.Write(page2) //nolint:errcheck // test helper
 		case "3":
