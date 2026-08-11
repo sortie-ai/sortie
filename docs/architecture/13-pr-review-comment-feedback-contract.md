@@ -64,6 +64,12 @@ ReviewComment:
   outdated:     bool        # true when the commented code was modified by a subsequent push
 ```
 
+`submitted_at` feeds the debounce window and nothing else, and a platform value that is absent or
+is not a valid RFC 3339 value normalizes to the zero time and does not fail the read. A zero value
+cannot raise the debounce window's upper bound, so the affected comment set can dispatch up to one
+debounce interval earlier than it otherwise would, and deduplication is unaffected because the
+fingerprint (§11B.7) is built from comment identifiers.
+
 ### 11B.3 SCMError type
 
 ```text

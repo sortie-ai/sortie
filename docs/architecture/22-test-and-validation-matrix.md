@@ -347,8 +347,12 @@ network access, or external service permissions are unavailable.
   an empty-but-non-nil result on each list method with no results, source-control error kind
   mapping for the auth, not-found, payload, and API classes, the already-merged marker on a merge
   that raced an external merge, the absent-branch disposition on a delete of a missing branch, the
-  absent-label disposition on a removal of an absent label, and a correctly ordered label-event
-  journal.
+  absent-label disposition on a removal of an absent label, a correctly ordered label-event
+  journal, a label-event entry whose timestamp does not parse failing the read with the payload
+  error kind and yielding no events, and a review comment whose timestamp does not parse not
+  failing the read and carrying the zero timestamp. A forge whose review decision is folded from
+  per-review submission times fails that read on an unparseable timestamp of a review that can
+  change the verdict, an adapter-specific obligation with no shared assertion.
 - Each CI provider's suite exercises the shared CI-aggregate conformance assertion against a result
   containing at least one completed-failing run, one in-progress run, and one completed-success
   run, confirming the provider's aggregate status and failing count agree with the forge decision

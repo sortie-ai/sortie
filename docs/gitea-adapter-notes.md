@@ -451,6 +451,7 @@ GET /repos/{owner}/{repo}/pulls/{index}/reviews/{id}/comments
 Gitea has no aggregate review-decision field; the GitHub adapter reads one from GraphQL, which Gitea does not offer. `GetReviewDecision` folds the review list together with the PR object's `requested_reviewers` signal:
 
 - Reviews are ordered by `submitted_at` then `id`, so the latest `APPROVED` or `REQUEST_CHANGES` per reviewer supersedes that reviewer's earlier reviews. `COMMENT`, `PENDING`, and `REQUEST_REVIEW` are not decisions, and dismissed reviews do not contribute.
+- The ordering depends on `submitted_at` parsing as RFC 3339, so a value that does not parse fails the decision read instead of sorting the review to the epoch, and only reviews that can change the verdict are parsed.
 - Any standing `REQUEST_CHANGES` yields changes-requested; otherwise any `APPROVED` yields approved; otherwise a non-empty `requested_reviewers` yields review-required; otherwise not-required.
 
 ### Mergeability
