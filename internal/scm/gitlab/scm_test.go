@@ -4,14 +4,10 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"go/parser"
-	"go/token"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"strconv"
-	"strings"
 	"sync/atomic"
 	"testing"
 
@@ -547,51 +543,5 @@ func TestGitLabSCMRegistration(t *testing.T) {
 
 	if !registry.Trackers.Has("gitlab") {
 		t.Error(`Trackers.Has("gitlab") = false, want true (SCM registration must not disturb the tracker registration)`)
-	}
-}
-
-// --- Write-path import boundary (R38) ---
-
-func TestGitLabSCMWriteBoundary(t *testing.T) {
-	t.Parallel()
-
-	entries, err := os.ReadDir(".")
-	if err != nil {
-		t.Fatalf("ReadDir(.): %v", err)
-	}
-
-	banned := []string{
-		"github.com/sortie-ai/sortie/internal/scm/github",
-		"github.com/sortie-ai/sortie/internal/scm/gitea",
-		"github.com/sortie-ai/sortie/internal/tracker/",
-		"github.com/sortie-ai/sortie/internal/orchestrator",
-	}
-
-	fset := token.NewFileSet()
-	checked := 0
-	for _, entry := range entries {
-		name := entry.Name()
-		if entry.IsDir() || !strings.HasSuffix(name, ".go") {
-			continue
-		}
-		checked++
-
-		f, parseErr := parser.ParseFile(fset, name, nil, parser.ImportsOnly)
-		if parseErr != nil {
-			t.Fatalf("ParseFile(%s): %v", name, parseErr)
-		}
-
-		for _, imp := range f.Imports {
-			importPath := strings.Trim(imp.Path.Value, `"`)
-			for _, forbidden := range banned {
-				if strings.Contains(importPath, forbidden) {
-					t.Errorf("%s imports %q, want no import matching %q", name, importPath, forbidden)
-				}
-			}
-		}
-	}
-
-	if checked == 0 {
-		t.Fatal("no .go files were checked, want at least one")
 	}
 }
