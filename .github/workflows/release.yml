@@ -657,3 +657,55 @@ jobs:
             echo "**Platforms:** linux/amd64, linux/arm64" >> "$GITHUB_STEP_SUMMARY"
             echo "**Digest:** \`${{ steps.build.outputs.digest }}\`" >> "$GITHUB_STEP_SUMMARY"
           fi
+
+  notify-sites:
+    name: "Notify: ${{ matrix.repository }}"
+    # Depends on `release`, not on `validate` or `docker`.
+    #
+    # The tag is pushed before GoReleaser runs, but GoReleaser creates the
+    # Release object as a draft and undrafts it only after every artifact has
+    # been uploaded, so until the `release` job finishes the tag page carries no
+    # notes and no assets and /releases/latest still resolves to the previous
+    # release. `release` finishing is the first moment the new release is
+    # observable to anyone without push access.
+    #
+    # `docker` is deliberately not a dependency: neither site names a container
+    # tag, so waiting on the multi-arch build would only delay a notification
+    # that is already correct.
+    needs: [validate, release]
+    if: ${{ !inputs.dry_run }}
+    runs-on: ubuntu-latest
+
+    # This job must never fail the release
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        repository:
+          - sortie-ai/sortie-ai.com
+          - sortie-ai/docs
+
+    # The dispatch uses SITE_DISPATCH_TOKEN. GITHUB_TOKEN cannot do this: its
+    # permissions are limited to the repository that contains the workflow.
+    permissions: {}
+
+    steps:
+      - name: Send repository_dispatch
+        env:
+          GH_TOKEN: ${{ secrets.SITE_DISPATCH_TOKEN }}
+          TARGET: ${{ matrix.repository }}
+          VERSION: ${{ needs.validate.outputs.version }}
+        run: |
+          if [ -z "$GH_TOKEN" ]; then
+            echo "::warning::SITE_DISPATCH_TOKEN is not configured; ${TARGET} was not notified."
+            exit 0
+          fi
+          # The payload is a hint for the log, not an instruction: each receiver
+          # re-derives the version from the Releases API before it writes
+          # anything. Keeping it non-authoritative means a stale or malformed
+          # dispatch cannot put a wrong number on a site.
+          jq -nc --arg v "$VERSION" \
+            '{event_type: "sortie-release", client_payload: {version: $v}}' \
+            | gh api --method POST "repos/${TARGET}/dispatches" --input -
+          echo "✓ dispatched sortie-release (${VERSION}) to ${TARGET}"
+          echo "### Notified \`${TARGET}\` of ${VERSION}" >> "$GITHUB_STEP_SUMMARY"
