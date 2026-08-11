@@ -4,11 +4,14 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"go/parser"
+	"go/token"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
-	"reflect"
+	"os"
 	"strconv"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -37,7 +40,7 @@ func mustSCMAdapter(t *testing.T, endpoint string) *GitLabSCMAdapter {
 	if err != nil {
 		t.Fatalf("NewGitLabSCMAdapter: %v", err)
 	}
-	return a
+	return a.(*GitLabSCMAdapter)
 }
 
 // newCapturingLogger returns a logger backed by a buffer so a test can
@@ -578,19 +581,78 @@ func TestErrorStatusMapping(t *testing.T) {
 	}
 }
 
-// --- No write methods, no registration (R4) ---
+// --- Registration (R34, AC1) ---
 
-func TestGitLabSCM_NoWriteMethodsNoRegistration(t *testing.T) {
+func TestGitLabSCMRegistration(t *testing.T) {
 	t.Parallel()
 
-	adapterType := reflect.TypeFor[*GitLabSCMAdapter]()
-	for _, banned := range []string{"MergePR", "DeleteBranch", "RemoveLabel"} {
-		if _, ok := adapterType.MethodByName(banned); ok {
-			t.Errorf("*GitLabSCMAdapter declares %s, which belongs to the write half", banned)
+	if !registry.SCMAdapters.Has("gitlab") {
+		t.Fatal(`SCMAdapters.Has("gitlab") = false, want true`)
+	}
+
+	constructor, err := registry.SCMAdapters.Get("gitlab")
+	if err != nil {
+		t.Fatalf(`SCMAdapters.Get("gitlab") = %v, want registered constructor`, err)
+	}
+
+	adapter, err := constructor(map[string]any{
+		"api_key":  "test-token",
+		"endpoint": "http://gitlab.invalid",
+	})
+	if err != nil {
+		t.Fatalf("registered gitlab SCM constructor(...) = %v, want nil error", err)
+	}
+	if _, ok := adapter.(*GitLabSCMAdapter); !ok {
+		t.Errorf("registered gitlab SCM constructor(...) = %T, want *GitLabSCMAdapter", adapter)
+	}
+
+	if !registry.Trackers.Has("gitlab") {
+		t.Error(`Trackers.Has("gitlab") = false, want true (SCM registration must not disturb the tracker registration)`)
+	}
+}
+
+// --- Write-path import boundary (R38) ---
+
+func TestGitLabSCMWriteBoundary(t *testing.T) {
+	t.Parallel()
+
+	entries, err := os.ReadDir(".")
+	if err != nil {
+		t.Fatalf("ReadDir(.): %v", err)
+	}
+
+	banned := []string{
+		"github.com/sortie-ai/sortie/internal/scm/github",
+		"github.com/sortie-ai/sortie/internal/scm/gitea",
+		"github.com/sortie-ai/sortie/internal/tracker/",
+		"github.com/sortie-ai/sortie/internal/orchestrator",
+	}
+
+	fset := token.NewFileSet()
+	checked := 0
+	for _, entry := range entries {
+		name := entry.Name()
+		if entry.IsDir() || !strings.HasSuffix(name, ".go") {
+			continue
+		}
+		checked++
+
+		f, parseErr := parser.ParseFile(fset, name, nil, parser.ImportsOnly)
+		if parseErr != nil {
+			t.Fatalf("ParseFile(%s): %v", name, parseErr)
+		}
+
+		for _, imp := range f.Imports {
+			importPath := strings.Trim(imp.Path.Value, `"`)
+			for _, forbidden := range banned {
+				if strings.Contains(importPath, forbidden) {
+					t.Errorf("%s imports %q, want no import matching %q", name, importPath, forbidden)
+				}
+			}
 		}
 	}
 
-	if registry.SCMAdapters.Has("gitlab") {
-		t.Error(`registry.SCMAdapters.Has("gitlab") = true, want false (registration is out of scope for this task)`)
+	if checked == 0 {
+		t.Fatal("no .go files were checked, want at least one")
 	}
 }

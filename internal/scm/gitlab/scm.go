@@ -12,17 +12,22 @@ import (
 
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/httpkit"
+	"github.com/sortie-ai/sortie/internal/registry"
 	"github.com/sortie-ai/sortie/internal/scm/scmcore"
 )
 
-// GitLabSCMAdapter implements the read half of [domain.SCMAdapter] for
-// GitLab merge requests over the REST API v4. The client and logger are
-// set once at construction and never mutated; botCache is the only
-// mutable state, guarded by a mutex held only around map access. The
-// adapter is safe for concurrent use.
-//
-// This type does not yet satisfy the full [domain.SCMAdapter] interface:
-// the write methods and registration are a separate concern.
+func init() {
+	registry.SCMAdapters.Register("gitlab", NewGitLabSCMAdapter)
+}
+
+// Compile-time interface satisfaction check.
+var _ domain.SCMAdapter = (*GitLabSCMAdapter)(nil)
+
+// GitLabSCMAdapter implements [domain.SCMAdapter] for GitLab merge
+// requests over the REST API v4. The client and logger are set once at
+// construction and never mutated; botCache is the only mutable state,
+// guarded by a mutex held only around map access. The adapter is safe
+// for concurrent use.
 type GitLabSCMAdapter struct {
 	client *httpkit.Client
 	log    *slog.Logger
@@ -42,7 +47,7 @@ type GitLabSCMAdapter struct {
 // owner and repo arrive per call.
 //
 // Construction performs no network request.
-func NewGitLabSCMAdapter(adapterConfig map[string]any) (*GitLabSCMAdapter, error) {
+func NewGitLabSCMAdapter(adapterConfig map[string]any) (domain.SCMAdapter, error) {
 	apiKey, _ := adapterConfig["api_key"].(string)
 	if apiKey == "" {
 		return nil, &domain.SCMError{

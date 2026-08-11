@@ -76,12 +76,21 @@ type gitlabNoteCreated struct {
 }
 
 // gitlabTokenInfo is the token-introspection record the construction
-// preflight decodes. It never carries the token value itself.
+// preflight and the auto-merge scope preflight decode. It never carries
+// the token value itself.
 type gitlabTokenInfo struct {
 	Scopes    []string `json:"scopes"`
 	Active    bool     `json:"active"`
 	Revoked   bool     `json:"revoked"`
 	ExpiresAt string   `json:"expires_at"`
+
+	// Granular reports that the credential is a granular access token,
+	// whose Scopes array carries no usable permission detail. The
+	// response's granular_scopes array stays undecoded: its entries are
+	// scoped to a project or group this method never receives, and no
+	// published mapping turns a permission name into merge-request write
+	// authorization.
+	Granular bool `json:"granular"`
 }
 
 // gitlabErrorBody covers the four error envelopes GitLab returns on a

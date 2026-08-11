@@ -3,15 +3,27 @@ package gitlab
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"maps"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/sortie-ai/sortie/internal/adaptertest"
 	"github.com/sortie-ai/sortie/internal/domain"
 )
+
+// decodeRequestBody decodes r's JSON body into v, failing the test if the
+// decode itself fails.
+func decodeRequestBody(t *testing.T, r *http.Request, v any) {
+	t.Helper()
+	if err := json.NewDecoder(r.Body).Decode(v); err != nil {
+		t.Fatalf("decode request body: %v", err)
+	}
+}
 
 // mergeRequestFixture returns a JSON-encoded merge request object built
 // from a documented baseline shape, with overrides applied on top. This
@@ -317,4 +329,459 @@ func TestGetCIStatus_ErrorStatuses(t *testing.T) {
 		_, err := adapter.GetCIStatus(context.Background(), testPRNumber, scmOwner, scmRepo)
 		adaptertest.AssertSCMErrorKind(t, err, domain.ErrSCMPayload)
 	})
+}
+
+// --- MergePR: success, strategy encoding, and request shape (AC3, AC13, R35) ---
+
+func TestMergePR_StrategyEncodingAndRequestShape(t *testing.T) {
+	t.Parallel()
+
+	const (
+		wantSHA            = "sha-expected-head-001"
+		wantMergeCommitSHA = "9f8e7d6c5b4a392817061524334251627384950a"
+		commitTitle        = "Merge feature branch"
+		commitMessage      = "Closes the review cycle."
+	)
+	wantMessage := commitTitle + "\n\n" + commitMessage
+
+	tests := []struct {
+		name       string
+		strategy   domain.MergeStrategy
+		wantSquash bool
+	}{
+		{"merge strategy sends merge_commit_message", domain.StrategyMerge, false},
+		{"squash strategy sends squash true and squash_commit_message", domain.StrategySquash, true},
+		{"rebase strategy sends merge_commit_message, governed by project merge_method", domain.StrategyRebase, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			fixture := mergeRequestFixture(t, map[string]any{
+				"state":            "merged",
+				"merge_commit_sha": wantMergeCommitSHA,
+			})
+
+			var gotMethod, gotPath string
+			var gotBody gitlabMergeAccept
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				gotMethod = r.Method
+				gotPath = r.URL.EscapedPath()
+				decodeRequestBody(t, r, &gotBody)
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write(fixture)
+			}))
+			defer srv.Close()
+
+			adapter := mustSCMAdapter(t, srv.URL)
+			got, err := adapter.MergePR(context.Background(), testPRNumber, scmOwner, scmRepo, tt.strategy, commitTitle, commitMessage, wantSHA)
+			if err != nil {
+				t.Fatalf("MergePR: unexpected error: %v", err)
+			}
+
+			if gotMethod != http.MethodPut {
+				t.Errorf("request method = %q, want %q", gotMethod, http.MethodPut)
+			}
+			wantPath := "/api/v4/projects/" + projectPath(scmOwner, scmRepo) + "/merge_requests/" + strconv.Itoa(testPRNumber) + "/merge"
+			if gotPath != wantPath {
+				t.Errorf("request path = %q, want %q", gotPath, wantPath)
+			}
+			if gotBody.SHA != wantSHA {
+				t.Errorf("request body sha = %q, want %q", gotBody.SHA, wantSHA)
+			}
+			if gotBody.Squash != tt.wantSquash {
+				t.Errorf("request body squash = %v, want %v", gotBody.Squash, tt.wantSquash)
+			}
+			if tt.wantSquash {
+				if gotBody.SquashCommitMessage != wantMessage {
+					t.Errorf("request body squash_commit_message = %q, want %q", gotBody.SquashCommitMessage, wantMessage)
+				}
+				if gotBody.MergeCommitMessage != "" {
+					t.Errorf("request body merge_commit_message = %q, want empty for the squash strategy", gotBody.MergeCommitMessage)
+				}
+			} else {
+				if gotBody.MergeCommitMessage != wantMessage {
+					t.Errorf("request body merge_commit_message = %q, want %q", gotBody.MergeCommitMessage, wantMessage)
+				}
+				if gotBody.SquashCommitMessage != "" {
+					t.Errorf("request body squash_commit_message = %q, want empty for the %s strategy", gotBody.SquashCommitMessage, tt.strategy)
+				}
+			}
+
+			want := domain.MergeResult{SHA: wantMergeCommitSHA, Merged: true}
+			if got != want {
+				t.Errorf("MergePR(...) = %+v, want %+v", got, want)
+			}
+		})
+	}
+}
+
+func TestMergePR_RebaseStrategyLogsGovernanceWarning(t *testing.T) {
+	t.Parallel()
+
+	fixture := mergeRequestFixture(t, map[string]any{
+		"state":            "merged",
+		"merge_commit_sha": "9f8e7d6c5b4a392817061524334251627384950a",
+	})
+	srv := serveJSON(t, fixture)
+	defer srv.Close()
+
+	adapter := mustSCMAdapter(t, srv.URL)
+	log, buf := newCapturingLogger()
+	adapter.log = log
+
+	if _, err := adapter.MergePR(context.Background(), testPRNumber, scmOwner, scmRepo, domain.StrategyRebase, "", "", "sha-expected-head-001"); err != nil {
+		t.Fatalf("MergePR: unexpected error: %v", err)
+	}
+
+	logOutput := buf.String()
+	const wantWarn = "gitlab rebase strategy is governed by the project merge method"
+	if got := strings.Count(logOutput, wantWarn); got != 1 {
+		t.Errorf("occurrences of %q in log output = %d, want 1 (log output: %q)", wantWarn, got, logOutput)
+	}
+}
+
+func TestMergePR_ResponseStateNotMerged(t *testing.T) {
+	t.Parallel()
+
+	fixture := mergeRequestFixture(t, map[string]any{"state": "opened"})
+	srv := serveJSON(t, fixture)
+	defer srv.Close()
+
+	adapter := mustSCMAdapter(t, srv.URL)
+	got, err := adapter.MergePR(context.Background(), testPRNumber, scmOwner, scmRepo, domain.StrategyMerge, "", "", "sha-expected-head-001")
+
+	se := assertMergeConflict(t, err)
+	if strings.Contains(strings.ToLower(se.Message), "already merged") {
+		t.Errorf("SCMError.Message = %q, want it NOT to contain %q (a 200 whose state is not merged carries no marker)", se.Message, "already merged")
+	}
+	if got != (domain.MergeResult{}) {
+		t.Errorf("MergePR(...) result = %+v, want the zero value", got)
+	}
+}
+
+func TestMergePR_PayloadValidation(t *testing.T) {
+	t.Parallel()
+
+	t.Run("an empty expectedHeadSHA returns ErrSCMPayload with no request issued", func(t *testing.T) {
+		t.Parallel()
+
+		var requests atomic.Int32
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			requests.Add(1)
+			w.WriteHeader(http.StatusInternalServerError)
+		}))
+		defer srv.Close()
+
+		adapter := mustSCMAdapter(t, srv.URL)
+		got, err := adapter.MergePR(context.Background(), testPRNumber, scmOwner, scmRepo, domain.StrategyMerge, "", "", "")
+		adaptertest.AssertSCMErrorKind(t, err, domain.ErrSCMPayload)
+		if got != (domain.MergeResult{}) {
+			t.Errorf("MergePR(...) result = %+v, want the zero value", got)
+		}
+		if n := requests.Load(); n != 0 {
+			t.Errorf("requests = %d, want 0 (an empty expectedHeadSHA must not reach the network)", n)
+		}
+	})
+
+	t.Run("an unsupported strategy returns ErrSCMPayload with no request issued", func(t *testing.T) {
+		t.Parallel()
+
+		var requests atomic.Int32
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			requests.Add(1)
+			w.WriteHeader(http.StatusInternalServerError)
+		}))
+		defer srv.Close()
+
+		adapter := mustSCMAdapter(t, srv.URL)
+		got, err := adapter.MergePR(context.Background(), testPRNumber, scmOwner, scmRepo, domain.MergeStrategy("bogus"), "", "", "sha-expected-head-001")
+		adaptertest.AssertSCMErrorKind(t, err, domain.ErrSCMPayload)
+		if got != (domain.MergeResult{}) {
+			t.Errorf("MergePR(...) result = %+v, want the zero value", got)
+		}
+		if n := requests.Load(); n != 0 {
+			t.Errorf("requests = %d, want 0 (an unsupported strategy must not reach the network)", n)
+		}
+	})
+}
+
+// --- MergePR: conflict promotion, already-merged marker, and auth enrichment (AC4, AC5, AC10, R10-R14) ---
+
+func TestMergePR_ConflictPromotion(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name          string
+		status        int
+		rejectionBody []byte
+	}{
+		{"405 rejection", http.StatusMethodNotAllowed, loadFixture(t, "error_405.json")},
+		{"409 rejection", http.StatusConflict, loadFixture(t, "error_409.json")},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			rereadFixture := mergeRequestFixture(t, map[string]any{"state": "opened"})
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				switch {
+				case r.Method == http.MethodPut && strings.HasSuffix(r.URL.Path, "/merge"):
+					w.WriteHeader(tt.status)
+					_, _ = w.Write(tt.rejectionBody)
+				case r.Method == http.MethodGet:
+					_, _ = w.Write(rereadFixture)
+				default:
+					t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+					w.WriteHeader(http.StatusNotFound)
+				}
+			}))
+			defer srv.Close()
+
+			adapter := mustSCMAdapter(t, srv.URL)
+			_, err := adapter.MergePR(context.Background(), testPRNumber, scmOwner, scmRepo, domain.StrategyMerge, "", "", "sha-expected-head-001")
+
+			se := assertMergeConflict(t, err)
+			if strings.Contains(strings.ToLower(se.Message), "already merged") {
+				t.Errorf("SCMError.Message = %q, want it NOT to contain %q (the re-read shows the merge request still open)", se.Message, "already merged")
+			}
+		})
+	}
+}
+
+func TestMergePR_AlreadyMergedMarker(t *testing.T) {
+	t.Parallel()
+
+	statuses := []struct {
+		name          string
+		status        int
+		rejectionBody []byte
+	}{
+		{"405 rejection", http.StatusMethodNotAllowed, loadFixture(t, "error_405.json")},
+		{"409 rejection", http.StatusConflict, loadFixture(t, "error_409.json")},
+	}
+
+	for _, tt := range statuses {
+		t.Run(tt.name+" plus a merged re-read carries the already-merged marker", func(t *testing.T) {
+			t.Parallel()
+
+			rereadFixture := loadFixture(t, "mr_merged.json")
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				switch {
+				case r.Method == http.MethodPut && strings.HasSuffix(r.URL.Path, "/merge"):
+					w.WriteHeader(tt.status)
+					_, _ = w.Write(tt.rejectionBody)
+				case r.Method == http.MethodGet:
+					_, _ = w.Write(rereadFixture)
+				default:
+					t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+					w.WriteHeader(http.StatusNotFound)
+				}
+			}))
+			defer srv.Close()
+
+			adapter := mustSCMAdapter(t, srv.URL)
+			_, err := adapter.MergePR(context.Background(), testPRNumber, scmOwner, scmRepo, domain.StrategyMerge, "", "", "sha-expected-head-001")
+
+			adaptertest.AssertAlreadyMergedMarker(t, err)
+		})
+	}
+
+	t.Run("a failed re-read leaves the conflict without the already-merged marker", func(t *testing.T) {
+		t.Parallel()
+
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "application/json")
+			switch {
+			case r.Method == http.MethodPut && strings.HasSuffix(r.URL.Path, "/merge"):
+				w.WriteHeader(http.StatusConflict)
+				_, _ = w.Write(loadFixture(t, "error_409.json"))
+			case r.Method == http.MethodGet:
+				w.WriteHeader(http.StatusInternalServerError)
+				_, _ = w.Write(loadFixture(t, "error_500.json"))
+			default:
+				t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+				w.WriteHeader(http.StatusNotFound)
+			}
+		}))
+		defer srv.Close()
+
+		adapter := mustSCMAdapter(t, srv.URL)
+		_, err := adapter.MergePR(context.Background(), testPRNumber, scmOwner, scmRepo, domain.StrategyMerge, "", "", "sha-expected-head-001")
+
+		se := assertMergeConflict(t, err)
+		if strings.Contains(strings.ToLower(se.Message), "already merged") {
+			t.Errorf("SCMError.Message = %q, want it NOT to contain %q (a failed re-read must not synthesize the marker)", se.Message, "already merged")
+		}
+	})
+}
+
+func TestMergePR_AuthEnrichment(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name   string
+		status int
+		body   []byte
+	}{
+		{"401 from the merge route", http.StatusUnauthorized, loadFixture(t, "error_401.json")},
+		{"403 from the merge route", http.StatusForbidden, loadFixture(t, "error_403.json")},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.WriteHeader(tt.status)
+				_, _ = w.Write(tt.body)
+			}))
+			defer srv.Close()
+
+			adapter := mustSCMAdapter(t, srv.URL)
+			_, err := adapter.MergePR(context.Background(), testPRNumber, scmOwner, scmRepo, domain.StrategyMerge, "", "", "sha-expected-head-001")
+			adaptertest.AssertSCMErrorKind(t, err, domain.ErrSCMAuth)
+
+			var se *domain.SCMError
+			if !errors.As(err, &se) {
+				t.Fatalf("error type = %T, want *domain.SCMError", err)
+			}
+			if !strings.Contains(se.Message, "credential is invalid") {
+				t.Errorf("SCMError.Message = %q, want it to name the invalid-credential cause", se.Message)
+			}
+			if !strings.Contains(se.Message, "may not merge into the target branch") {
+				t.Errorf("SCMError.Message = %q, want it to name the branch-protection-refusal cause", se.Message)
+			}
+		})
+	}
+}
+
+// assertMergeConflict fails the test if err is not a *domain.SCMError of
+// kind ErrSCMConflict, returning the typed error for further message
+// inspection.
+func assertMergeConflict(t *testing.T, err error) *domain.SCMError {
+	t.Helper()
+	adaptertest.AssertSCMErrorKind(t, err, domain.ErrSCMConflict)
+	var se *domain.SCMError
+	if !errors.As(err, &se) {
+		t.Fatalf("error type = %T, want *domain.SCMError", err)
+	}
+	return se
+}
+
+// --- DeleteBranch (AC6) ---
+
+func TestDeleteBranch_AbsentBranchDisposition(t *testing.T) {
+	t.Parallel()
+
+	errorBody := loadFixture(t, "error_404_project.json")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = w.Write(errorBody)
+	}))
+	defer srv.Close()
+
+	adapter := mustSCMAdapter(t, srv.URL)
+	err := adapter.DeleteBranch(context.Background(), scmOwner, scmRepo, "feature/gone")
+	adaptertest.AssertBranchAbsentDisposition(t, err)
+}
+
+func TestDeleteBranch_Success(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+
+	adapter := mustSCMAdapter(t, srv.URL)
+	if err := adapter.DeleteBranch(context.Background(), scmOwner, scmRepo, "feature/done"); err != nil {
+		t.Fatalf("DeleteBranch: unexpected error: %v", err)
+	}
+}
+
+func TestDeleteBranch_SlashBearingNameEncoded(t *testing.T) {
+	t.Parallel()
+
+	var gotPath, gotEscapedPath string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		gotEscapedPath = r.URL.EscapedPath()
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+
+	adapter := mustSCMAdapter(t, srv.URL)
+	if err := adapter.DeleteBranch(context.Background(), scmOwner, scmRepo, "feature/needs-slash"); err != nil {
+		t.Fatalf("DeleteBranch: unexpected error: %v", err)
+	}
+
+	wantPath := "/api/v4/projects/" + scmOwner + "/" + scmRepo + "/repository/branches/feature/needs-slash"
+	if gotPath != wantPath {
+		t.Errorf("decoded request path = %q, want %q", gotPath, wantPath)
+	}
+	const wantEscapedSuffix = "/repository/branches/feature%2Fneeds-slash"
+	if !strings.HasSuffix(gotEscapedPath, wantEscapedSuffix) {
+		t.Errorf("escaped request path = %q, want it to end with %q (the branch slash percent-encoded)", gotEscapedPath, wantEscapedSuffix)
+	}
+}
+
+// --- Cross-kind conflict isolation (AC9, R17, R36) ---
+
+func TestGitLabSCM_ConflictKindBelongsToMergeOnly(t *testing.T) {
+	t.Parallel()
+
+	statuses := []struct {
+		name          string
+		status        int
+		rejectionBody []byte
+	}{
+		{"405", http.StatusMethodNotAllowed, loadFixture(t, "error_405.json")},
+		{"409", http.StatusConflict, loadFixture(t, "error_409.json")},
+	}
+
+	for _, st := range statuses {
+		t.Run(st.name+" on DeleteBranch", func(t *testing.T) {
+			t.Parallel()
+
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(st.status)
+				_, _ = w.Write(st.rejectionBody)
+			}))
+			defer srv.Close()
+
+			adapter := mustSCMAdapter(t, srv.URL)
+			err := adapter.DeleteBranch(context.Background(), scmOwner, scmRepo, "feature/blocked-by-race")
+			adaptertest.AssertSCMErrorKind(t, err, domain.ErrSCMAPI)
+		})
+
+		t.Run(st.name+" on RemoveLabel", func(t *testing.T) {
+			t.Parallel()
+
+			mrFixture := mergeRequestFixture(t, map[string]any{"labels": []string{"Sortie:Review"}})
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				switch r.Method {
+				case http.MethodGet:
+					_, _ = w.Write(mrFixture)
+				case http.MethodPut:
+					w.WriteHeader(st.status)
+					_, _ = w.Write(st.rejectionBody)
+				default:
+					t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+					w.WriteHeader(http.StatusNotFound)
+				}
+			}))
+			defer srv.Close()
+
+			adapter := mustSCMAdapter(t, srv.URL)
+			err := adapter.RemoveLabel(context.Background(), testPRNumber, scmOwner, scmRepo, "sortie:review")
+			adaptertest.AssertSCMErrorKind(t, err, domain.ErrSCMAPI)
+		})
+	}
 }

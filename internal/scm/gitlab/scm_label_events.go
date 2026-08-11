@@ -1,9 +1,12 @@
 package gitlab
 
 import (
+	"bytes"
 	"cmp"
 	"context"
 	"encoding/json"
+	"log/slog"
+	"net/http"
 	"slices"
 	"strconv"
 	"strings"
@@ -77,4 +80,68 @@ func (a *GitLabSCMAdapter) ListLabelEvents(ctx context.Context, prNumber int, ow
 	})
 
 	return events, nil
+}
+
+// gitlabMergeRequestUpdate is the JSON body of PUT
+// /projects/{project}/merge_requests/{iid}, carrying only the label
+// removal [GitLabSCMAdapter.RemoveLabel] performs.
+type gitlabMergeRequestUpdate struct {
+	RemoveLabels []string `json:"remove_labels,omitempty"`
+}
+
+// RemoveLabel removes every case variant of label from the given merge
+// request via PUT /projects/{project}/merge_requests/{iid}.
+//
+// label is matched against the merge request's stored labels
+// case-insensitively, and every matching variant is sent in
+// remove_labels, so a stored "Sortie:Review" is removed even when label
+// is configured in lowercase; GitLab matches label names
+// case-sensitively. When no stored label matches, RemoveLabel returns
+// nil and issues no write. A [domain.ErrSCMNotFound] reading or writing
+// the merge request maps to nil, since on GitLab that status can only
+// mean the merge request or the project is gone or invisible, never an
+// absent label.
+func (a *GitLabSCMAdapter) RemoveLabel(ctx context.Context, prNumber int, owner, repo, label string) error {
+	target := strings.ToLower(strings.TrimSpace(label))
+	if target == "" {
+		return nil
+	}
+
+	mr, err := a.fetchMergeRequest(ctx, prNumber, owner, repo)
+	if err != nil {
+		return a.labelNotFoundToNil(err, prNumber)
+	}
+
+	variants := labelVariants(mr.Labels, target)
+	if len(variants) == 0 {
+		return nil
+	}
+
+	payload, marshalErr := json.Marshal(gitlabMergeRequestUpdate{RemoveLabels: variants})
+	if marshalErr != nil {
+		return &domain.SCMError{
+			Kind:    domain.ErrSCMPayload,
+			Message: "failed to encode merge request update body",
+			Err:     marshalErr,
+		}
+	}
+
+	path := "/projects/" + projectPath(owner, repo) + "/merge_requests/" + strconv.Itoa(prNumber)
+	if _, sendErr := a.client.Send(ctx, http.MethodPut, path, bytes.NewReader(payload)); sendErr != nil {
+		return a.labelNotFoundToNil(sendErr, prNumber)
+	}
+	return nil
+}
+
+// labelNotFoundToNil maps a [domain.ErrSCMNotFound] from a label read or
+// write to nil, logging one WARN naming prNumber, and returns every
+// other kind unchanged.
+func (a *GitLabSCMAdapter) labelNotFoundToNil(err error, prNumber int) error {
+	scm := asSCMError(err)
+	if scm.Kind == domain.ErrSCMNotFound {
+		a.log.Warn("gitlab merge request not found during label removal",
+			slog.Int("pr_number", prNumber))
+		return nil
+	}
+	return scm
 }

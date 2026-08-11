@@ -1,0 +1,11 @@
+{
+  "id": 9,
+  "name": "sortie-ci-granular",
+  "revoked": false,
+  "created_at": "2026-01-01T00:00:00.000Z",
+  "scopes": ["granular"],
+  "granular": true,
+  "user_id": 3,
+  "active": true,
+  "expires_at": "2027-01-01"
+}
