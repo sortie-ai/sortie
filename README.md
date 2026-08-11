@@ -12,6 +12,7 @@ Turn tracker tickets into autonomous agent sessions. Agent-agnostic, tracker-agn
 
 [![CI](https://github.com/sortie-ai/sortie/actions/workflows/ci.yml/badge.svg)](https://github.com/sortie-ai/sortie/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/sortie-ai/sortie/graph/badge.svg?token=K2TPXBCbvb)](https://codecov.io/gh/sortie-ai/sortie)
+[![Go Reference](https://pkg.go.dev/badge/github.com/sortie-ai/sortie.svg)](https://pkg.go.dev/github.com/sortie-ai/sortie)
 
 [Documentation](https://docs.sortie-ai.com) · [Contributing](CONTRIBUTING.md)
 
