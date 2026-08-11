@@ -341,6 +341,34 @@ func TestGiteaSCMGetReviewDecision(t *testing.T) {
 	}
 }
 
+// TestGiteaSCMGetReviewDecision_EqualTimestampTiebreak pins the review id
+// as the tiebreaker when two decision-bearing reviews by one reviewer share
+// a submitted_at. The sort is not stable, so without the tiebreaker the
+// winning review is unspecified. The fixture serves the reviews in
+// descending id order so a fold that preserved wire order would yield the
+// opposite verdict.
+func TestGiteaSCMGetReviewDecision_EqualTimestampTiebreak(t *testing.T) {
+	t.Parallel()
+
+	const reviewsFixture = `[
+		{"id":607,"state":"REQUEST_CHANGES","body":"","user":{"login":"alice"},"dismissed":false,"submitted_at":"2026-07-14T09:00:00Z"},
+		{"id":606,"state":"APPROVED","body":"","user":{"login":"alice"},"dismissed":false,"submitted_at":"2026-07-14T09:00:00Z"}
+	]`
+	prFixture := loadFixture(t, "pr_clean.json")
+	srv := httptest.NewServer(giteaReviewDecisionHandler(t, []byte(reviewsFixture), prFixture))
+	defer srv.Close()
+
+	adapter := mustSCMAdapter(t, srv.URL)
+	got, err := adapter.GetReviewDecision(context.Background(), 6, testOwner, testRepo)
+	if err != nil {
+		t.Fatalf("GetReviewDecision: unexpected error: %v", err)
+	}
+	if got != domain.ReviewDecisionChangesRequested {
+		t.Errorf("GetReviewDecision() = %q, want %q (review 607 outranks 606 on the id tiebreak)",
+			got, domain.ReviewDecisionChangesRequested)
+	}
+}
+
 // TestGiteaSCMGetReviewDecision_MalformedTimestamp pins the fold's strict
 // disposition: a decision-bearing review's malformed submitted_at fails
 // the read, while the same malformed value on a review the fold never
