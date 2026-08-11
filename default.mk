@@ -3,7 +3,7 @@
 # Included by the root Makefile.  Every variable is defined with ?= so any of
 # them can be overridden on the command line or in the environment:
 #
-#   make build VERSION=v1.2.3
+#   make build VERSION=1.2.3
 #   make lint  LINT=/usr/local/bin/golangci-lint
 #
 # Requires GNU make >= 3.81 (the version shipped with macOS Xcode CLT).
@@ -20,10 +20,11 @@ BIN    := sortie
 
 # ── Versioning ────────────────────────────────────────────────────────────────
 #
-# Derived from the nearest reachable git tag.  Falls back to "dev" in shallow
-# clones, detached HEADs without tags, or non-git directories.
+# Derived from the nearest reachable git tag, with any leading "v" stripped so
+# a local build reports the same string as a released binary.  Falls back to
+# "dev" in shallow clones, detached HEADs without tags, or non-git directories.
 
-VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+VERSION ?= $(patsubst v%,%,$(shell git describe --tags --always --dirty 2>/dev/null || echo dev))
 COMMIT  ?= $(shell git rev-parse HEAD 2>/dev/null || echo unknown)
 DATE    ?= $(shell date -u +%Y-%m-%d)
 

@@ -10,7 +10,8 @@
         irm 'https://get.sortie-ai.com/install.ps1' | iex
 
     Environment:
-        SORTIE_VERSION      Pin a specific release tag (e.g. 1.14.0 or 0.0.7).
+        SORTIE_VERSION      Pin a specific release, with or without the
+                            leading "v" (e.g. 1.18.0 or v1.18.0).
         SORTIE_INSTALL_DIR  Override install directory
                             (default: %LOCALAPPDATA%\Programs\sortie).
         SORTIE_NO_VERIFY    Set to 1 to skip checksum verification.
@@ -239,12 +240,25 @@ function Invoke-Install {
     $arch = Get-Architecture
     Write-Info "Platform: windows/$arch"
 
-    $tag = Resolve-Tag
-    $version = $tag -replace '^v', ''
-    Write-Info "Release:  $tag"
+    $resolved = Resolve-Tag
+    $version = $resolved -replace '^v', ''
+    # $tag is the label reported to the user; the tag form itself matters only
+    # when building the download URL.
+    $tag = $version
+    Write-Info "Release:  $version"
 
     $archive = "${Bin}_${version}_windows_${arch}.zip"
-    $base    = "https://github.com/$Repo/releases/download/$tag"
+
+    # Releases from 1.19.0 on are tagged "v1.19.0"; earlier ones are tagged
+    # "1.18.0". A pinned version comes from the user and may use either form,
+    # so try the current convention first and fall back to the legacy one. A
+    # tag read from the latest release is already exact - use it as is.
+    if (-not [string]::IsNullOrEmpty($env:SORTIE_VERSION)) {
+        $candidates = @("v$version", $version)
+    }
+    else {
+        $candidates = @($resolved)
+    }
 
     $tmpDir = Join-Path ([System.IO.Path]::GetTempPath()) ("sortie-install-" + (New-Guid).Guid)
     New-Item -ItemType Directory -Path $tmpDir -Force | Out-Null
@@ -253,11 +267,20 @@ function Invoke-Install {
         $archivePath = Join-Path $tmpDir $archive
 
         Write-Info "Downloading $archive"
-        try {
-            Invoke-Download -Url "$base/$archive" -OutFile $archivePath
+        $base = $null
+        foreach ($candidate in $candidates) {
+            $candidateBase = "https://github.com/$Repo/releases/download/$candidate"
+            try {
+                Invoke-Download -Url "$candidateBase/$archive" -OutFile $archivePath
+                $base = $candidateBase
+                break
+            }
+            catch {
+                # Try the next tag form before giving up.
+            }
         }
-        catch {
-            throw "download failed - verify release $tag has asset for windows/$arch"
+        if ($null -eq $base) {
+            throw "download failed - verify release $version has asset for windows/$arch"
         }
 
         if ($env:SORTIE_NO_VERIFY -ne '1') {

@@ -6,7 +6,8 @@
 #   curl -sSL https://get.sortie-ai.com/install.sh | sh -s -- --help
 #
 # Environment (each has an equivalent flag, see --help):
-#   SORTIE_VERSION      Pin a specific release tag (e.g. 1.17.0 or 0.0.7).
+#   SORTIE_VERSION      Pin a specific release, with or without the leading
+#                       "v" (e.g. 1.18.0 or v1.18.0).
 #   SORTIE_INSTALL_DIR  Override install directory
 #                       (default: /usr/local/bin as root, ~/.local/bin otherwise).
 #   SORTIE_NO_VERIFY    Set to 1 to skip checksum verification.
@@ -231,10 +232,13 @@ install_release() {
     detect_platform
     info "Platform: ${OS}/${ARCH}"
 
-    _tag=$(resolve_tag)
-    [ -n "$_tag" ] || die "could not determine latest release"
-    _version=$(printf '%s' "$_tag" | sed 's/^v//')
-    info "Release:  ${_tag}"
+    _resolved=$(resolve_tag)
+    [ -n "$_resolved" ] || die "could not determine latest release"
+    _version=${_resolved#[vV]}
+    # _tag is the label both install paths report; the tag form itself matters
+    # only when building the download URL.
+    _tag=$_version
+    info "Release:  ${_version}"
 
     if [ "$(installed_version "${_dir}/${BIN}")" = "$_version" ]; then
         _already_installed=1
@@ -242,15 +246,41 @@ install_release() {
     fi
 
     _archive="${BIN}_${_version}_${OS}_${ARCH}.tar.gz"
-    _base="https://github.com/${REPO}/releases/download/${_tag}"
+
+    # Releases from 1.19.0 on are tagged "v1.19.0"; earlier ones are tagged
+    # "1.18.0". A pinned version comes from the user and may use either form,
+    # so try the current convention first and fall back to the legacy one. A
+    # tag discovered from the latest release is already exact - use it as is.
+    if [ -n "${SORTIE_VERSION-}" ]; then
+        _candidates="v${_version} ${_version}"
+    else
+        _candidates=$_resolved
+    fi
 
     TMPDIR_INSTALL=$(mktemp -d)
     trap cleanup EXIT
     trap 'exit 1' INT TERM
 
     info "Downloading ${_archive}"
-    fetch "${_base}/${_archive}" "${TMPDIR_INSTALL}/${_archive}" \
-        || die "download failed - verify release ${_tag} has asset for ${OS}/${ARCH}"
+    # Errors are held back while candidates are tried: a 404 on the first form
+    # only means the release uses the other one, and printing it would alarm a
+    # user whose install then succeeds. If every form fails, the last error is
+    # released so a genuine network fault stays diagnosable.
+    _found=0
+    for _candidate in $_candidates; do
+        _base="https://github.com/${REPO}/releases/download/${_candidate}"
+        if fetch "${_base}/${_archive}" "${TMPDIR_INSTALL}/${_archive}" \
+            2>"${TMPDIR_INSTALL}/fetch.err"; then
+            _found=1
+            break
+        fi
+    done
+    if [ "$_found" != 1 ]; then
+        if [ -s "${TMPDIR_INSTALL}/fetch.err" ]; then
+            cat "${TMPDIR_INSTALL}/fetch.err" >&2
+        fi
+        die "download failed - verify release ${_version} has asset for ${OS}/${ARCH}"
+    fi
 
     if [ "${SORTIE_NO_VERIFY-}" != "1" ]; then
         fetch "${_base}/checksums.txt" "${TMPDIR_INSTALL}/checksums.txt" \
