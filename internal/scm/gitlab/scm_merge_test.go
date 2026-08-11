@@ -347,13 +347,16 @@ func TestGetCIStatus_SingleRequestRouteScope(t *testing.T) {
 
 	fixture := mergeRequestFixture(t, map[string]any{"head_pipeline": map[string]any{"status": "success"}})
 
+	wantSuffix := "/merge_requests/" + strconv.Itoa(testPRNumber)
+
 	var requests atomic.Int32
-	var gotPath string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests.Add(1)
-		gotPath = r.URL.Path
 		if strings.Contains(r.URL.Path, "/statuses") || strings.Contains(r.URL.Path, "/pipelines") || strings.Contains(r.URL.Path, "/jobs") {
 			t.Errorf("unexpected request to %s, want only the merge-request read", r.URL.Path)
+		}
+		if !strings.HasSuffix(r.URL.Path, wantSuffix) {
+			t.Errorf("request path = %q, want it to end with %q", r.URL.Path, wantSuffix)
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write(fixture)
@@ -367,10 +370,6 @@ func TestGetCIStatus_SingleRequestRouteScope(t *testing.T) {
 
 	if n := requests.Load(); n != 1 {
 		t.Errorf("requests = %d, want 1 (GetCIStatus must issue exactly one request)", n)
-	}
-	wantSuffix := "/merge_requests/" + strconv.Itoa(testPRNumber)
-	if !strings.HasSuffix(gotPath, wantSuffix) {
-		t.Errorf("request path = %q, want it to end with %q", gotPath, wantSuffix)
 	}
 }
 
