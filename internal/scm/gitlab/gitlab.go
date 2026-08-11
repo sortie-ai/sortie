@@ -27,6 +27,16 @@
 // These reads share the tracker transport, normalize every response to
 // the domain review, mergeability, and label-event types, and classify a
 // bot review or comment author through a cached per-user lookup.
+//
+// The package also implements [domain.CIStatusProvider], registered under
+// kind "gitlab". Every ref is resolved to a full commit SHA and its
+// current pipeline id through the commit-resolution route before any
+// status is read, and the status read is scoped to that one pipeline, so
+// a superseded pipeline's entries cannot hold a green commit at failing.
+// Each entry of that pipeline maps to one check run, with allow_failure
+// folded into the conclusion. A failing check's log excerpt is a real job
+// trace, fetched under a byte cap and sanitized of timestamps, stream
+// tokens, ANSI escapes, and section markers.
 package gitlab
 
 import (
