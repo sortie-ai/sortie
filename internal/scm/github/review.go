@@ -3,7 +3,6 @@ package github
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log/slog"
 	"net/url"
@@ -302,11 +301,7 @@ func (a *GitHubSCMAdapter) fetchAllReviews(ctx context.Context, prNumber int, ow
 
 	all, err := paginator.All(ctx)
 	if err != nil {
-		var scmErr *domain.SCMError
-		if errors.As(err, &scmErr) {
-			return nil, scmErr
-		}
-		return nil, scmcore.ToSCMError(err)
+		return nil, scmcore.AsSCMError(err)
 	}
 	return all, nil
 }
@@ -340,11 +335,7 @@ func (a *GitHubSCMAdapter) fetchReviewComments(ctx context.Context, prNumber int
 
 	all, err := paginator.All(ctx)
 	if err != nil {
-		var scmErr *domain.SCMError
-		if errors.As(err, &scmErr) {
-			return nil, scmErr
-		}
-		return nil, scmcore.ToSCMError(err)
+		return nil, scmcore.AsSCMError(err)
 	}
 	return all, nil
 }

@@ -3,7 +3,6 @@ package gitea
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log/slog"
 	"net/url"
@@ -163,11 +162,7 @@ func (a *GiteaSCMAdapter) GetCIStatus(ctx context.Context, prNumber int, owner, 
 
 	statuses, statusErr := paginator.All(ctx)
 	if statusErr != nil {
-		var scmErr *domain.SCMError
-		if errors.As(statusErr, &scmErr) {
-			return "", scmErr
-		}
-		return "", scmcore.ToSCMError(statusErr)
+		return "", scmcore.AsSCMError(statusErr)
 	}
 
 	runs := make([]domain.CheckRun, len(statuses))

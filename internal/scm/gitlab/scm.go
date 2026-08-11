@@ -2,7 +2,6 @@ package gitlab
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 	"net/url"
@@ -92,18 +91,6 @@ func projectPath(owner, repo string) string {
 	return url.PathEscape(owner + "/" + repo)
 }
 
-// asSCMError normalizes err to a [*domain.SCMError]. An error that
-// already unwraps to one is returned unchanged, preserving a page
-// decoder's own constructed kind; any other error converts through
-// [scmcore.ToSCMError].
-func asSCMError(err error) *domain.SCMError {
-	var scmErr *domain.SCMError
-	if errors.As(err, &scmErr) {
-		return scmErr
-	}
-	return scmcore.ToSCMError(err)
-}
-
 // paginateSCM walks a Link-header-paginated GitLab route through the
 // shared paginator, requesting the server maximum of 100 items per page
 // and stopping at the package's maxPages ceiling.
@@ -128,7 +115,7 @@ func paginateSCM[T any](ctx context.Context, client *httpkit.Client, log *slog.L
 
 	items, err := paginator.All(ctx)
 	if err != nil {
-		return nil, asSCMError(err)
+		return nil, scmcore.AsSCMError(err)
 	}
 	return items, nil
 }

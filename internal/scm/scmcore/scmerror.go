@@ -28,6 +28,11 @@ var trackerToSCMKind = map[domain.TrackerErrorKind]domain.SCMErrorKind{
 //
 // ToSCMError performs no conflict promotion. A caller on a merge write
 // path applies [AsMergeConflict] to the result.
+//
+// ToSCMError always constructs its result and never passes an existing
+// [*domain.SCMError] through. A caller whose error may already carry one,
+// such as an error from a paginator walk whose page decoder constructs its
+// own, uses [AsSCMError] instead.
 func ToSCMError(err error) *domain.SCMError {
 	var te *domain.TrackerError
 	if !errors.As(err, &te) {
@@ -48,6 +53,25 @@ func ToSCMError(err error) *domain.SCMError {
 		Message: te.Message,
 		Err:     err,
 	}
+}
+
+// AsSCMError returns err's chain as a [*domain.SCMError]. When err already
+// unwraps to a [*domain.SCMError], AsSCMError returns that value unwrapped,
+// discarding the outer wrapper. When err instead unwraps to a
+// [*domain.TrackerError], or to neither, AsSCMError delegates to
+// [ToSCMError].
+//
+// err must be non-nil; AsSCMError has no nil branch, and [ToSCMError]
+// carries the same precondition. AsSCMError differs from [ToSCMError] only
+// by passing an existing [*domain.SCMError] through instead of rewrapping
+// it, so it is the safe choice whenever an error may already carry one; an
+// error that cannot may use [ToSCMError] directly.
+func AsSCMError(err error) *domain.SCMError {
+	var scmErr *domain.SCMError
+	if errors.As(err, &scmErr) {
+		return scmErr
+	}
+	return ToSCMError(err)
 }
 
 // AsMergeConflict promotes err to [domain.ErrSCMConflict] when, and only

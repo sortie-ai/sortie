@@ -64,29 +64,65 @@ func TestToCIError_NilInput(t *testing.T) {
 func TestToCIError_ContextCanceled(t *testing.T) {
 	t.Parallel()
 
-	got := scmcore.ToCIError(fmt.Errorf("fetching ci status: %w", context.Canceled))
+	t.Run("wrapped", func(t *testing.T) {
+		t.Parallel()
 
-	if !errors.Is(got, context.Canceled) {
-		t.Errorf("ToCIError(context.Canceled) = %v, want context.Canceled passthrough", got)
-	}
-	var ce *domain.CIError
-	if errors.As(got, &ce) {
-		t.Errorf("ToCIError(context.Canceled) = %v, want no CIError conversion", ce)
-	}
+		got := scmcore.ToCIError(fmt.Errorf("fetching ci status: %w", context.Canceled))
+
+		if !errors.Is(got, context.Canceled) {
+			t.Errorf("ToCIError(context.Canceled) = %v, want context.Canceled passthrough", got)
+		}
+		var ce *domain.CIError
+		if errors.As(got, &ce) {
+			t.Errorf("ToCIError(context.Canceled) = %v, want no CIError conversion", ce)
+		}
+	})
+
+	t.Run("bare", func(t *testing.T) {
+		t.Parallel()
+
+		got := scmcore.ToCIError(context.Canceled)
+
+		if got != context.Canceled {
+			t.Errorf("ToCIError(context.Canceled) = %v, want context.Canceled returned unchanged", got)
+		}
+		var ce *domain.CIError
+		if errors.As(got, &ce) {
+			t.Errorf("ToCIError(context.Canceled) = %v, want no CIError conversion", ce)
+		}
+	})
 }
 
 func TestToCIError_DeadlineExceeded(t *testing.T) {
 	t.Parallel()
 
-	got := scmcore.ToCIError(fmt.Errorf("fetching ci status: %w", context.DeadlineExceeded))
+	t.Run("wrapped", func(t *testing.T) {
+		t.Parallel()
 
-	if !errors.Is(got, context.DeadlineExceeded) {
-		t.Errorf("ToCIError(context.DeadlineExceeded) = %v, want context.DeadlineExceeded passthrough", got)
-	}
-	var ce *domain.CIError
-	if errors.As(got, &ce) {
-		t.Errorf("ToCIError(context.DeadlineExceeded) = %v, want no CIError conversion", ce)
-	}
+		got := scmcore.ToCIError(fmt.Errorf("fetching ci status: %w", context.DeadlineExceeded))
+
+		if !errors.Is(got, context.DeadlineExceeded) {
+			t.Errorf("ToCIError(context.DeadlineExceeded) = %v, want context.DeadlineExceeded passthrough", got)
+		}
+		var ce *domain.CIError
+		if errors.As(got, &ce) {
+			t.Errorf("ToCIError(context.DeadlineExceeded) = %v, want no CIError conversion", ce)
+		}
+	})
+
+	t.Run("bare", func(t *testing.T) {
+		t.Parallel()
+
+		got := scmcore.ToCIError(context.DeadlineExceeded)
+
+		if got != context.DeadlineExceeded {
+			t.Errorf("ToCIError(context.DeadlineExceeded) = %v, want context.DeadlineExceeded returned unchanged", got)
+		}
+		var ce *domain.CIError
+		if errors.As(got, &ce) {
+			t.Errorf("ToCIError(context.DeadlineExceeded) = %v, want no CIError conversion", ce)
+		}
+	})
 }
 
 func TestToCIError_CIErrorPassthrough(t *testing.T) {

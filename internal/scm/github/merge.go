@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -129,18 +128,6 @@ func decodeCheckRunsPage(body []byte) ([]githubCheckRun, error) {
 	return checks.CheckRuns, nil
 }
 
-// asSCMError returns err unchanged when it is already a [*domain.SCMError]
-// (a decode failure, already classified at the point of failure), and
-// converts it through [scmcore.ToSCMError] otherwise (a transport or HTTP
-// failure, which [httpkit.Paginator.All] returns unconverted).
-func asSCMError(err error) *domain.SCMError {
-	var scmErr *domain.SCMError
-	if errors.As(err, &scmErr) {
-		return scmErr
-	}
-	return scmcore.ToSCMError(err)
-}
-
 // mapCombinedStatusRun normalizes one combined-status entry's state to a
 // [domain.CheckRun]. It is distinct from [mapCheckConclusion], the
 // check-runs vocabulary: "error" completes as failing here, which
@@ -191,7 +178,7 @@ func (a *GitHubSCMAdapter) GetCIStatus(ctx context.Context, prNumber int, owner,
 	})
 	statuses, statusErr := statusPaginator.All(ctx)
 	if statusErr != nil {
-		return "", asSCMError(statusErr)
+		return "", scmcore.AsSCMError(statusErr)
 	}
 
 	// Check runs, walked the same way and for the same reason.
@@ -210,7 +197,7 @@ func (a *GitHubSCMAdapter) GetCIStatus(ctx context.Context, prNumber int, owner,
 	})
 	checkRuns, checksErr := checksPaginator.All(ctx)
 	if checksErr != nil {
-		return "", asSCMError(checksErr)
+		return "", scmcore.AsSCMError(checksErr)
 	}
 
 	runs := make([]domain.CheckRun, 0, len(statuses)+len(checkRuns))
@@ -435,12 +422,7 @@ const legacyRepoScope = "repo"
 func (a *GitHubSCMAdapter) VerifyAutoMergeScopes(ctx context.Context, requireContents bool) ([]string, []string, error) {
 	_, header, err := a.client.Get(ctx, "/rate_limit", nil)
 	if err != nil {
-		// Unwrap to ensure callers can detect transport vs API class.
-		var scmErr *domain.SCMError
-		if errors.As(err, &scmErr) {
-			return nil, nil, scmErr
-		}
-		return nil, nil, scmcore.ToSCMError(err)
+		return nil, nil, scmcore.AsSCMError(err)
 	}
 
 	// Fine-grained PATs and GitHub App installation tokens do not
