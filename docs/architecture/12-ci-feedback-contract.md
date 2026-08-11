@@ -228,3 +228,11 @@ ref reports `pending` from an empty check set rather than a false `passing` or `
 status description and target URL already present in the authenticated response; the provider never
 fetches the target URL, so the trust boundary stays at the Gitea API.
 
+**GitLab provider.** A GitLab CI status provider registers under kind `gitlab`. Every ref is
+resolved to a full commit SHA first, because the commit-status route matches its path segment
+literally and answers a branch name or an abbreviated SHA with an empty list. The same commit
+response names the pipeline the read is scoped to, so a superseded pipeline's entries cannot hold a
+green commit at failing. Each entry of that pipeline maps to one check run, with `allow_failure`
+folded into the conclusion. The failing-check log excerpt is a real job trace, fetched under a byte
+cap and sanitized, which is the capability Gitea has no equivalent for.
+
