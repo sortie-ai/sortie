@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.19.0] - 2026-08-12
+
 ### Added
 
 - Install script (macOS and Linux): command-line flags next to the
@@ -1593,6 +1595,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Architecture Decision Records (ADR-0001 through ADR-0005).
 
 [Unreleased]: https://github.com/sortie-ai/sortie/compare/v1.18.0...HEAD
+[1.19.0]: https://github.com/sortie-ai/sortie/compare/v1.18.0...v1.18.0
 [1.18.0]: https://github.com/sortie-ai/sortie/compare/v1.17.0...v1.18.0
 [1.17.0]: https://github.com/sortie-ai/sortie/compare/v1.16.1...v1.17.0
 [1.16.1]: https://github.com/sortie-ai/sortie/compare/v1.16.0...v1.16.1
