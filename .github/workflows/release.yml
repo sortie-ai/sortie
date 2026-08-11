@@ -547,7 +547,7 @@ jobs:
       - name: Release summary
         if: ${{ !inputs.dry_run }}
         run: |
-          echo "### Release ${{ needs.validate.outputs.version }} published" >> "$GITHUB_STEP_SUMMARY"
+          echo "### Release ${{ needs.validate.outputs.tag }} published" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "**Artifacts:**" >> "$GITHUB_STEP_SUMMARY"
           echo "- \`sortie_${{ needs.validate.outputs.version }}_linux_amd64.tar.gz\`" >> "$GITHUB_STEP_SUMMARY"
@@ -562,7 +562,7 @@ jobs:
       - name: Dry run summary
         if: ${{ inputs.dry_run }}
         run: |
-          echo "### Dry run complete for ${{ needs.validate.outputs.version }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "### Dry run complete for ${{ needs.validate.outputs.tag }}" >> "$GITHUB_STEP_SUMMARY"
           echo "No tag was created and no release was published." >> "$GITHUB_STEP_SUMMARY"
 
   docker:
