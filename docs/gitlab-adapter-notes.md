@@ -1373,7 +1373,7 @@ load-bearing rather than incidental:
 
 ## Merge requests, approvals, and pipelines
 
-This section characterizes the surface the GitLab `SCMAdapter` half will implement. Each
+This section characterizes the surface the GitLab `SCMAdapter` half implements. Each
 capability records the response shape, the mapping onto the `internal/domain` SCM type, and the
 decision taken. Nothing here is part of the tracker adapter.
 
@@ -2141,13 +2141,14 @@ Stated plainly, with the degradation rather than a workaround:
 
 ## Config notes
 
-- **`tracker.endpoint`:** required for self-managed, no default host; `https://gitlab.com`
-  for SaaS. The adapter appends `/api/v4`. TLS strongly recommended: the token travels in a
-  header.
-- **`tracker.api_key`:** access token string, sent as `PRIVATE-TOKEN`. Carries GitLab's
-  fixed access-token prefix and was 51 characters long at the researched version, so a
-  shape hint is possible in configuration validation. Scope `api` for the
-  full surface, `read_api` for a read-only deployment.
+- **`tracker.endpoint`:** optional, defaulting to `https://gitlab.com`, so only a
+  self-managed deployment sets it. The adapter appends `/api/v4`. TLS strongly recommended:
+  the token travels in a header.
+- **`tracker.api_key`:** access token string, sent as `PRIVATE-TOKEN`. The adapter and the
+  validator run no prefix or length check: the access-token prefix is an
+  administrator-writable application setting, so a shape check would reject valid tokens on
+  a customized instance. Scope `api` for the full surface, `read_api` for a read-only
+  deployment.
 - **`tracker.project`:** numeric project ID or `group/project` path, percent-encoded once by
   the adapter. MUST NOT be validated as exactly one slash: subgroups produce more.
 - **`tracker.active_states` / `tracker.terminal_states` / `tracker.handoff_state`:** project
@@ -2160,12 +2161,16 @@ Stated plainly, with the degradation rather than a workaround:
 - **Page size:** `per_page=100`, the server maximum, above the architecture's default of 50
   (per [architecture Section 11.2](architecture/11-issue-tracker-integration-contract.md#112-query-semantics)).
 - **Network timeout:** 30,000 ms per the same section.
-- **Headers:** `PRIVATE-TOKEN` on every request; `User-Agent: Sortie/<version>`;
+- **Headers:** `PRIVATE-TOKEN` on every request; `User-Agent: sortie/<version>` on tracker
+  requests and the configured `user_agent` on the SCM and CI roles;
   `Content-Type: application/json` on writes. No API version header exists.
 - **Construction preflight:** `GET /personal_access_tokens/self` (credential, scope, and
   expiry check), `GET /projects/:id` (project check, and the only way to separate a wrong
   project from an unauthorized token), and `GET /projects/:id/labels` (canonical casing of the
-  configured state labels). All three failures are configuration errors surfaced at startup.
+  configured state labels). The token introspection is advisory and never blocks
+  construction; its result only reports whether the token authenticated in the project-check
+  failure message. A failure of either of the other two is a configuration error surfaced at
+  startup.
 
 ---
 

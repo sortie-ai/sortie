@@ -24,9 +24,10 @@ Conflict detection reuses the existing `GetMergeability` read. No new method is 
 BaseBranch string
 ```
 
-`BaseBranch` carries the PR target (base) branch name, for example `"main"` or `"develop"`. The
-GitHub adapter populates it from the `base.ref` field of the PR object that `GetMergeability`
-already fetches, at no additional request cost. Other callers of `GetMergeability` (the auto-merge
+`BaseBranch` carries the PR target (base) branch name, for example `"main"` or `"develop"`. Every
+wired adapter populates it from the same pull-request object `GetMergeability` already fetches, at
+no additional request cost: the GitHub and Gitea adapters from that object's base ref, the GitLab
+adapter from the merge request's target branch. Other callers of `GetMergeability` (the auto-merge
 reconcile pass) ignore the new field. Platform-specific field names do not leave the adapter
 package; the orchestrator reads only the domain field.
 
@@ -36,6 +37,13 @@ A PR is conflicted when `status.Mergeability == MergeabilityDirty`. `Mergeabilit
 deferral condition (the provider is still computing), not a conflict. The two values MUST NOT be
 conflated: `MergeabilityUnknown` defers at the poll interval without touching the fingerprint or
 the attempt counter, exactly as auto-merge handles it (§11C.5).
+
+Not every adapter can satisfy the rule. The Gitea adapter's single `mergeable` boolean cannot
+separate a conflict from an in-progress recheck, so it maps a conflicted pull request to
+`MergeabilityUnknown` and never to `MergeabilityDirty` (§11C.5). This reaction therefore never arms
+on that provider: its entry takes the U1 deferral on every tick until the TTL backstop drops it,
+which escalates nothing and leaves no tracker-visible signal. Configuration shape is still valid, so
+neither the offline validator nor construction rejects the pairing.
 
 ### 11E.3 Reconcile loop integration
 
@@ -77,10 +85,10 @@ before any counter increment, so a deferral never burns an attempt:
   or `sortie_merge_conflict_checks_total`.
 - **D1a**: if `status.HeadSHA == ""`, defer at poll interval (no rebase anchor).
 - **D1b**: if `status.BaseBranch == ""`, defer at poll interval (no rebase target). This is
-  defense-in-depth: the GitHub adapter always populates `BaseBranch` from `base.ref`, so D1b is a
-  safety net rather than a normal-operation path for the only wired provider.
+  defense-in-depth: every wired adapter always populates `BaseBranch` (§11E.1), so D1b is a safety
+  net rather than a normal-operation path on any of them.
 
-After both guards pass, the fingerprint is computed as `sha256(headSHA)` and upserted into
+After all three guards pass, the fingerprint is computed as `sha256(headSHA)` and upserted into
 `reaction_fingerprints` with `kind = "merge-conflict"`. The reaction reuses the existing table;
 no migration is required. The fingerprint key `(issue_id, "merge-conflict")` is independent of
 the `"merge"` fingerprint the auto-merge reaction maintains.

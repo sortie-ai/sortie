@@ -46,8 +46,11 @@ selects the auth mode from the `tracker.api_key` value using a presence-of-colon
 - `api_key` has no colon (a colon-free token string): Bearer auth, `Authorization:
   Bearer <token>`. This is the PAT path for Server and Data Center.
 
-Under `api_version: "3"` (Cloud), a colon-free `api_key` is always rejected because
-Cloud requires `email:token` format.
+Under an effective `api_version` of `"3"` - the default when the field is unset - a
+colon-free `api_key` is always rejected with `ErrTrackerAuth`, because v3 requires
+`email:token` format. The rule keys on the version, not the host: a self-hosted endpoint
+left at the default version rejects a PAT the same way a Cloud endpoint does, and the
+remedy is either an `email:token` key or `tracker.api_version: "2"`.
 
 ### Config mapping
 
@@ -68,6 +71,14 @@ with `api_version: "2"` is rejected at startup (`ErrTrackerPayload`). A non-`.at
 endpoint combined with `api_version: "3"` emits a warning and proceeds, except for a
 loopback IP or `localhost` endpoint, which is a test or local-dev target and does not
 warn.
+
+**Offline parity:** the adapter's `sortie validate` hook re-decides the three
+version-dependent faults above without constructing an adapter or touching the network -
+an `api_version` outside `"2"` and `"3"`, `"2"` against an `.atlassian.net` endpoint, and
+a colon-free `api_key` at an effective version of `"3"` - and reuses the constructor's own
+message text, so the offline verdict cannot drift from the startup verdict. An invalid
+`api_version` suppresses the Cloud-conflict diagnostic, mirroring the constructor, which
+never reaches the host/version guard for a version it rejects.
 
 **CAPTCHA caveat:** After several failed logins Jira triggers CAPTCHA and returns
 `X-Seraph-LoginReason: AUTHENTICATION_DENIED`. The adapter should detect this header and

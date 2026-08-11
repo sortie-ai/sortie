@@ -104,10 +104,10 @@ Sortie is organized into these layers:
 5. `Integration Layer` (tracker adapters, agent adapters, CI status providers, and SCM adapters)
    - API calls and normalization for tracker data; session lifecycle for agent runtimes; CI
      pipeline status queries; PR review comment fetching.
-   - Multiple adapters per dimension: tracker adapters (Jira, GitHub, …), agent adapters
-     (Claude Code, Copilot CLI, Codex CLI, OpenCode CLI, Kiro CLI, …), CI status providers
-     (GitHub Checks, …), and SCM adapters
-     (GitHub, …).
+   - Multiple adapters per dimension: tracker adapters (Jira, GitHub, GitLab, Gitea, Linear, …),
+     agent adapters (Claude Code, Copilot CLI, Codex CLI, OpenCode CLI, Kiro CLI, …), CI status
+     providers (GitHub, Gitea, GitLab, …), and SCM adapters
+     (GitHub, Gitea, GitLab, …).
 
 6. `Observability Layer` (logs + status surface)
    - Operator visibility into orchestrator and agent behavior.

@@ -66,6 +66,15 @@ running session (at most one write per issue per two seconds, on the orchestrato
 so the `cost_budget` tool can read in-flight spend before the session's `run_history` row
 exists.
 
+`tokens_measured` is not mirrored onto `session_metadata`, and does not need to be. The
+throttled in-flight write is gated on a usage-bearing event, so while a session runs its row
+comes into existence exactly when that session has reported a measurement, and the presence of
+a row whose `session_id` matches the live session is itself the measurement signal the
+`cost_budget` tool reads. A running session with no matching row is what makes that tool's
+`used_tokens_complete` false, on the same footing as a completed run with
+`tokens_measured = 0`. The unconditional write at session exit is outside that window: by then
+the run's own measurement state has already been recorded on its `run_history` row.
+
 **`session_metadata`**: last known session metadata per issue (for observability and debug)
 
 | Column              | Type    | Notes                             |

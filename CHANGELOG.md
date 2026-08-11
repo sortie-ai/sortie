@@ -177,6 +177,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   read with a logged error and backoff instead of looping silently.
   ([#775](https://github.com/sortie-ai/sortie/issues/775))
 
+- On Gitea, a pull request label event whose timestamp the forge
+  returned in an unreadable form silently skipped the `sortie:review`
+  and `sortie:fix` label commands. The unreadable value was substituted
+  with the epoch, which sorts ahead of every position the detector had
+  already recorded, so the command was passed over and its label left on
+  the pull request. The read now fails with a payload error and backs
+  off, which is what GitHub already did. A review comment's timestamp is
+  still tolerated, because it feeds only the review debounce window. And
+  because Gitea folds its review decision from each review's submission
+  time, a review that can change the verdict and carries an unreadable
+  timestamp now fails the precondition read rather than letting a
+  superseded approval outrank the changes-requested review that
+  supersedes it, so `reactions.auto_merge` defers instead of merging on
+  a misread verdict.
+  ([#798](https://github.com/sortie-ai/sortie/issues/798))
+
 ### Changed
 
 - `opencode` transport failures - a stdout read error, a session id

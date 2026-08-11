@@ -397,7 +397,11 @@ on_worker_exit(issue_id, reason, state):
       notify_observers()
       return state
 
-    is_active = is_active_state(observation, cfg.tracker.active_states)
+    # The resolved observation feeds the terminal test above and nothing
+    # else. The active test reads the dispatch-time snapshot, because the
+    # most common non-active state at a normal exit is the handoff state
+    # itself, applied by the agent through its own tracker calls.
+    is_active = is_active_state(running_entry.issue.state, cfg.tracker.active_states)
     drives_state = dispatch_drives_issue_state(running_entry)
     handoff_taken = false
 
@@ -444,10 +448,12 @@ on_worker_exit(issue_id, reason, state):
       # else: the retry slot (Section 7.5) is occupied, so this exit
       # defers to the incumbent instead of scheduling a continuation.
 
-    # Disposition 6: otherwise the issue is no longer active.
+    # Disposition 6: otherwise the issue is no longer active. The slot is
+    # consulted before the cancellation, so an incumbent is never
+    # destroyed by the very step that is meant to leave it alone.
     else:
-      cancel_retry(state, issue_id)
       if retry_slot_incumbent(state, issue_id) is nil:
+        cancel_retry(state, issue_id)
         state.claimed.remove(issue_id)
       else:
         # An incumbent occupies the retry slot, so the claim stays to

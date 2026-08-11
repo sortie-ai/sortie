@@ -186,7 +186,7 @@ Sortie is a single-binary Go service with this internal layout:
 | `internal/tracker/jira/` | Integration   | Jira adapter behind `TrackerAdapter` interface       |
 | `internal/scm/github/`   | Integration   | GitHub tracker, CI, and review adapters behind `TrackerAdapter`, `CIStatusProvider`, and `SCMAdapter` interfaces |
 | `internal/scm/gitea/`    | Integration   | Gitea tracker, CI, and review adapters behind `TrackerAdapter`, `CIStatusProvider`, and `SCMAdapter` interfaces |
-| `internal/scm/gitlab/`   | Integration   | GitLab adapter behind `TrackerAdapter` interface (tracker only; no CI or SCM role yet) |
+| `internal/scm/gitlab/`   | Integration   | GitLab tracker, CI, and merge-request adapters behind `TrackerAdapter`, `CIStatusProvider`, and `SCMAdapter` interfaces |
 | `internal/tracker/file/` | Integration   | File-based tracker for dev/test                      |
 | `internal/tracker/linear/` | Integration | Linear adapter behind `TrackerAdapter` interface     |
 | `internal/agent/agentcore/` | Integration | Shared agent adapter command, event, usage, workspace, and turn-disposition helpers |

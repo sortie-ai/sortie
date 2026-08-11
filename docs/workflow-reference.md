@@ -1274,8 +1274,9 @@ the label after a review completes is a new gesture and produces a new session.
 **Validation:** Setting `provider` while both `review_label` and `fix_label` are empty is a
 configuration error. Because the defaults are non-empty, this occurs only when the operator
 explicitly sets both labels to `""`. The rule is a config-shape check and surfaces offline
-via `sortie validate`. A `provider` naming an unregistered SCM adapter is NOT a `validate`
-error; it fails at construction.
+via `sortie validate`. A `provider` naming an unregistered SCM adapter is also a `validate`
+error, reported under the check name `scm_adapter` by the activation checks that fold every
+active SCM reaction kind, `label_commands` included, into one provider set.
 
 **Operator prerequisite:** Enabling `review_label` requires the active prompt template to
 contain a `{{ if .label_review }}` branch that fetches the PR diff and posts review comments
