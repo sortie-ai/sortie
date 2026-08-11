@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Release version (semver, e.g. 1.0.0 or 1.0.0-rc.1 - no 'v' prefix)"
+        description: "Release version"
         required: true
         type: string
       dry_run:
@@ -25,15 +25,25 @@ jobs:
   validate:
     name: Validate inputs
     runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.normalize.outputs.version }}
+      tag: ${{ steps.normalize.outputs.tag }}
     steps:
-      - name: Validate version format
+      # An optional leading "v" is accepted and stripped, so both 1.0.0 and
+      # v1.0.0 are valid input. Downstream jobs consume the normalized pair:
+      # bare version for artifact names, image tags and CHANGELOG lookups, and
+      # the v-prefixed tag for git.
+      - name: Normalize and validate version
+        id: normalize
         run: |
-          VERSION='${{ inputs.version }}'
+          INPUT='${{ inputs.version }}'
+          VERSION="${INPUT#[vV]}"
           if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9]+(\.[a-zA-Z0-9]+)*)?$ ]]; then
-            echo "::error::Invalid version format: '${VERSION}'. Expected semver (e.g. 1.0.0 or 1.0.0-rc.1)"
+            echo "::error::Invalid version format: '${INPUT}'. Expected semver (e.g. 1.0.0, v1.0.0 or 1.0.0-rc.1)"
             exit 1
           fi
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "tag=v${VERSION}" >> "$GITHUB_OUTPUT"
 
       - name: Check tag does not already exist
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -42,7 +52,7 @@ jobs:
 
       - name: Verify tag is new
         run: |
-          TAG='${{ inputs.version }}'
+          TAG='${{ steps.normalize.outputs.tag }}'
           if git rev-parse "$TAG" >/dev/null 2>&1; then
             echo "::error::Tag ${TAG} already exists. Delete it first or choose a different version."
             exit 1
@@ -51,7 +61,7 @@ jobs:
 
       - name: Verify CHANGELOG.md contains release version
         run: |
-          VERSION='${{ inputs.version }}'
+          VERSION='${{ steps.normalize.outputs.version }}'
           if ! grep -qP "^## \[${VERSION}\]" CHANGELOG.md; then
             echo "::error::CHANGELOG.md has no entry for version ${VERSION}. Add a '## [${VERSION}] - YYYY-MM-DD' section before releasing."
             exit 1
@@ -445,6 +455,7 @@ jobs:
   release:
     name: Tag & Release
     needs:
+      - validate
       - lint
       - test-unit
       - test-integration-jira
@@ -504,7 +515,7 @@ jobs:
       - name: Create and push tag
         if: ${{ !inputs.dry_run }}
         run: |
-          TAG='${{ inputs.version }}'
+          TAG='${{ needs.validate.outputs.tag }}'
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git tag -a "$TAG" -m "Release ${TAG}"
@@ -514,7 +525,7 @@ jobs:
       - name: Create local tag (dry run)
         if: ${{ inputs.dry_run }}
         run: |
-          TAG='${{ inputs.version }}'
+          TAG='${{ needs.validate.outputs.tag }}'
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git tag -a "$TAG" -m "Dry run ${TAG}"
@@ -536,27 +547,27 @@ jobs:
       - name: Release summary
         if: ${{ !inputs.dry_run }}
         run: |
-          echo "### Release ${{ inputs.version }} published" >> "$GITHUB_STEP_SUMMARY"
+          echo "### Release ${{ needs.validate.outputs.tag }} published" >> "$GITHUB_STEP_SUMMARY"
           echo "" >> "$GITHUB_STEP_SUMMARY"
           echo "**Artifacts:**" >> "$GITHUB_STEP_SUMMARY"
-          echo "- \`sortie_${{ inputs.version }}_linux_amd64.tar.gz\`" >> "$GITHUB_STEP_SUMMARY"
-          echo "- \`sortie_${{ inputs.version }}_linux_arm64.tar.gz\`" >> "$GITHUB_STEP_SUMMARY"
-          echo "- \`sortie_${{ inputs.version }}_darwin_amd64.tar.gz\`" >> "$GITHUB_STEP_SUMMARY"
-          echo "- \`sortie_${{ inputs.version }}_darwin_arm64.tar.gz\`" >> "$GITHUB_STEP_SUMMARY"
-          echo "- \`sortie_${{ inputs.version }}_windows_amd64.zip\`" >> "$GITHUB_STEP_SUMMARY"
-          echo "- \`sortie_${{ inputs.version }}_windows_arm64.zip\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- \`sortie_${{ needs.validate.outputs.version }}_linux_amd64.tar.gz\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- \`sortie_${{ needs.validate.outputs.version }}_linux_arm64.tar.gz\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- \`sortie_${{ needs.validate.outputs.version }}_darwin_amd64.tar.gz\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- \`sortie_${{ needs.validate.outputs.version }}_darwin_arm64.tar.gz\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- \`sortie_${{ needs.validate.outputs.version }}_windows_amd64.zip\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- \`sortie_${{ needs.validate.outputs.version }}_windows_arm64.zip\`" >> "$GITHUB_STEP_SUMMARY"
           echo "- \`checksums.txt\`" >> "$GITHUB_STEP_SUMMARY"
           echo "- SBOM manifests (\`*.sbom.json\`)" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Dry run summary
         if: ${{ inputs.dry_run }}
         run: |
-          echo "### Dry run complete for ${{ inputs.version }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "### Dry run complete for ${{ needs.validate.outputs.tag }}" >> "$GITHUB_STEP_SUMMARY"
           echo "No tag was created and no release was published." >> "$GITHUB_STEP_SUMMARY"
 
   docker:
     name: Docker image
-    needs: [release]
+    needs: [validate, release]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -570,7 +581,7 @@ jobs:
       - name: Determine pre-release
         id: prerelease
         run: |
-          VERSION='${{ inputs.version }}'
+          VERSION='${{ needs.validate.outputs.version }}'
           if [[ "$VERSION" == *-* ]]; then
             echo "is_prerelease=true" >> "$GITHUB_OUTPUT"
           else
@@ -599,9 +610,9 @@ jobs:
         with:
           images: ghcr.io/${{ github.repository }}
           tags: |
-            type=semver,pattern={{version}},value=${{ inputs.version }}
-            type=semver,pattern={{major}}.{{minor}},value=${{ inputs.version }}
-            type=semver,pattern={{major}},value=${{ inputs.version }},enable=${{ steps.prerelease.outputs.is_prerelease == 'false' }}
+            type=semver,pattern={{version}},value=${{ needs.validate.outputs.version }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ needs.validate.outputs.version }}
+            type=semver,pattern={{major}},value=${{ needs.validate.outputs.version }},enable=${{ steps.prerelease.outputs.is_prerelease == 'false' }}
 
       - name: Build and push
         id: build
@@ -614,7 +625,7 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           annotations: ${{ steps.meta.outputs.annotations }}
           build-args: |
-            VERSION=${{ inputs.version }}
+            VERSION=${{ needs.validate.outputs.version }}
             REVISION=${{ github.sha }}
             BUILD_DATE=${{ env.BUILD_DATE }}
           provenance: mode=max

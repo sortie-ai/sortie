@@ -191,6 +191,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reports `scm_api_error`; only a rejected merge reports a conflict. An
   operator's alert on `scm_conflict_error` now fires on merges only.
 
+- Release tags now carry a `v` prefix (`v1.19.0`). Every earlier version
+  was additionally tagged under its prefixed name against the same
+  commit, so the Go module proxy now publishes the full version list and
+  `go install github.com/sortie-ai/sortie/cmd/sortie@v1.18.0` resolves;
+  it previously published no versions at all, leaving the module
+  installable only at a pseudo-version. The install scripts for macOS,
+  Linux, and Windows take a pinned version with or without the prefix,
+  so an existing `SORTIE_VERSION=1.18.0` or `--version 1.18.0` still
+  selects that release.
+
 ### Migrations
 
 - Add `tokens_measured INTEGER NOT NULL DEFAULT 1` to `run_history`;
@@ -1545,41 +1555,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   execution via GitHub Actions.
 - Architecture Decision Records (ADR-0001 through ADR-0005).
 
-[Unreleased]: https://github.com/sortie-ai/sortie/compare/1.18.0...HEAD
-[1.18.0]: https://github.com/sortie-ai/sortie/compare/1.17.0...1.18.0
-[1.17.0]: https://github.com/sortie-ai/sortie/compare/1.16.1...1.17.0
-[1.16.1]: https://github.com/sortie-ai/sortie/compare/1.16.0...1.16.1
-[1.16.0]: https://github.com/sortie-ai/sortie/compare/1.15.0...1.16.0
-[1.15.0]: https://github.com/sortie-ai/sortie/compare/1.14.1...1.15.0
-[1.14.1]: https://github.com/sortie-ai/sortie/compare/1.14.0...1.14.1
-[1.14.0]: https://github.com/sortie-ai/sortie/compare/1.13.0...1.14.0
-[1.13.0]: https://github.com/sortie-ai/sortie/compare/1.12.0...1.13.0
-[1.12.0]: https://github.com/sortie-ai/sortie/compare/1.11.0...1.12.0
-[1.11.0]: https://github.com/sortie-ai/sortie/compare/1.10.0...1.11.0
-[1.10.0]: https://github.com/sortie-ai/sortie/compare/1.9.1...1.10.0
-[1.9.1]: https://github.com/sortie-ai/sortie/compare/1.9.0...1.9.1
-[1.9.0]: https://github.com/sortie-ai/sortie/compare/1.8.0...1.9.0
-[1.8.0]: https://github.com/sortie-ai/sortie/compare/1.7.1...1.8.0
-[1.7.1]: https://github.com/sortie-ai/sortie/compare/1.7.0...1.7.1
-[1.7.0]: https://github.com/sortie-ai/sortie/compare/1.6.1...1.7.0
-[1.6.1]: https://github.com/sortie-ai/sortie/compare/1.6.0...1.6.1
-[1.6.0]: https://github.com/sortie-ai/sortie/compare/1.5.1...1.6.0
-[1.5.1]: https://github.com/sortie-ai/sortie/compare/1.5.0...1.5.1
-[1.5.0]: https://github.com/sortie-ai/sortie/compare/1.4.0...1.5.0
-[1.4.0]: https://github.com/sortie-ai/sortie/compare/1.3.0...1.4.0
-[1.3.0]: https://github.com/sortie-ai/sortie/compare/1.2.1...1.3.0
-[1.2.1]: https://github.com/sortie-ai/sortie/compare/1.2.0...1.2.1
-[1.2.0]: https://github.com/sortie-ai/sortie/compare/1.1.0...1.2.0
-[1.1.0]: https://github.com/sortie-ai/sortie/compare/1.0.0...1.1.0
-[1.0.0]: https://github.com/sortie-ai/sortie/compare/0.0.10...1.0.0
-[0.0.10]: https://github.com/sortie-ai/sortie/compare/0.0.9...0.0.10
-[0.0.9]: https://github.com/sortie-ai/sortie/compare/0.0.8...0.0.9
-[0.0.8]: https://github.com/sortie-ai/sortie/compare/0.0.7...0.0.8
-[0.0.7]: https://github.com/sortie-ai/sortie/compare/0.0.6...0.0.7
-[0.0.6]: https://github.com/sortie-ai/sortie/compare/0.0.5...0.0.6
-[0.0.5]: https://github.com/sortie-ai/sortie/compare/0.0.4...0.0.5
-[0.0.4]: https://github.com/sortie-ai/sortie/compare/0.0.3...0.0.4
-[0.0.3]: https://github.com/sortie-ai/sortie/compare/0.0.2...0.0.3
-[0.0.2]: https://github.com/sortie-ai/sortie/compare/0.0.1...0.0.2
-[0.0.1]: https://github.com/sortie-ai/sortie/compare/0.0.0...0.0.1
+[Unreleased]: https://github.com/sortie-ai/sortie/compare/v1.18.0...HEAD
+[1.18.0]: https://github.com/sortie-ai/sortie/compare/v1.17.0...v1.18.0
+[1.17.0]: https://github.com/sortie-ai/sortie/compare/v1.16.1...v1.17.0
+[1.16.1]: https://github.com/sortie-ai/sortie/compare/v1.16.0...v1.16.1
+[1.16.0]: https://github.com/sortie-ai/sortie/compare/v1.15.0...v1.16.0
+[1.15.0]: https://github.com/sortie-ai/sortie/compare/v1.14.1...v1.15.0
+[1.14.1]: https://github.com/sortie-ai/sortie/compare/v1.14.0...v1.14.1
+[1.14.0]: https://github.com/sortie-ai/sortie/compare/v1.13.0...v1.14.0
+[1.13.0]: https://github.com/sortie-ai/sortie/compare/v1.12.0...v1.13.0
+[1.12.0]: https://github.com/sortie-ai/sortie/compare/v1.11.0...v1.12.0
+[1.11.0]: https://github.com/sortie-ai/sortie/compare/v1.10.0...v1.11.0
+[1.10.0]: https://github.com/sortie-ai/sortie/compare/v1.9.1...v1.10.0
+[1.9.1]: https://github.com/sortie-ai/sortie/compare/v1.9.0...v1.9.1
+[1.9.0]: https://github.com/sortie-ai/sortie/compare/v1.8.0...v1.9.0
+[1.8.0]: https://github.com/sortie-ai/sortie/compare/v1.7.1...v1.8.0
+[1.7.1]: https://github.com/sortie-ai/sortie/compare/v1.7.0...v1.7.1
+[1.7.0]: https://github.com/sortie-ai/sortie/compare/v1.6.1...v1.7.0
+[1.6.1]: https://github.com/sortie-ai/sortie/compare/v1.6.0...v1.6.1
+[1.6.0]: https://github.com/sortie-ai/sortie/compare/v1.5.1...v1.6.0
+[1.5.1]: https://github.com/sortie-ai/sortie/compare/v1.5.0...v1.5.1
+[1.5.0]: https://github.com/sortie-ai/sortie/compare/v1.4.0...v1.5.0
+[1.4.0]: https://github.com/sortie-ai/sortie/compare/v1.3.0...v1.4.0
+[1.3.0]: https://github.com/sortie-ai/sortie/compare/v1.2.1...v1.3.0
+[1.2.1]: https://github.com/sortie-ai/sortie/compare/v1.2.0...v1.2.1
+[1.2.0]: https://github.com/sortie-ai/sortie/compare/v1.1.0...v1.2.0
+[1.1.0]: https://github.com/sortie-ai/sortie/compare/v1.0.0...v1.1.0
+[1.0.0]: https://github.com/sortie-ai/sortie/compare/v0.0.10...v1.0.0
+[0.0.10]: https://github.com/sortie-ai/sortie/compare/v0.0.9...v0.0.10
+[0.0.9]: https://github.com/sortie-ai/sortie/compare/v0.0.8...v0.0.9
+[0.0.8]: https://github.com/sortie-ai/sortie/compare/v0.0.7...v0.0.8
+[0.0.7]: https://github.com/sortie-ai/sortie/compare/v0.0.6...v0.0.7
+[0.0.6]: https://github.com/sortie-ai/sortie/compare/v0.0.5...v0.0.6
+[0.0.5]: https://github.com/sortie-ai/sortie/compare/v0.0.4...v0.0.5
+[0.0.4]: https://github.com/sortie-ai/sortie/compare/v0.0.3...v0.0.4
+[0.0.3]: https://github.com/sortie-ai/sortie/compare/v0.0.2...v0.0.3
+[0.0.2]: https://github.com/sortie-ai/sortie/compare/v0.0.1...v0.0.2
+[0.0.1]: https://github.com/sortie-ai/sortie/compare/v0.0.0...v0.0.1
 [0.0.0]: https://github.com/sortie-ai/sortie/releases/tag/0.0.0
