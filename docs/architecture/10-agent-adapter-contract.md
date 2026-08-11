@@ -152,8 +152,7 @@ Hard failure on user input requirement:
 
 #### 10.4.2 Tool interface contract
 
-All tools that Sortie exposes to agents implement the `AgentTool` interface
-(`internal/domain/tool.go`):
+All tools that Sortie exposes to agents implement the `AgentTool` interface:
 
 - `Name() string`: stable tool identifier used for matching tool call requests to
   implementations. MUST be unique within a `ToolRegistry`.
@@ -176,7 +175,7 @@ the two shapes are byte-identical at the top level across tools.
 
 #### 10.4.3 Tool registry
 
-`ToolRegistry` (`internal/domain/tool.go`) is the central registration point for all agent tools.
+`ToolRegistry` is the central registration point for all agent tools.
 
 Invariants:
 
@@ -482,7 +481,7 @@ The family has the following parts:
 - **The `registry.Notifiers` registry** maps a `kind` string to a constructor. Backend
   packages register in `init()`; the sidecar resolves backends by `kind` at runtime. This
   mirrors `registry.SCMAdapters` exactly.
-- **The backend packages** live under `internal/notify/<kind>/`. v1 ships `webhook` (posts
+- **The backend packages** are one per `kind`. v1 ships `webhook` (posts
   the notification as a JSON object using generic field names) and `slack` (posts a
   Slack-shaped body with a `text` field). Each builds on the shared HTTP client with its
   configured endpoint as the base URL, applies a mandatory per-call timeout, and classifies

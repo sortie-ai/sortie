@@ -168,7 +168,7 @@ diverges from this shared rule.
 The Linear adapter targets Linear's single GraphQL endpoint
 (`https://api.linear.app/graphql`). Unlike the Jira and GitHub adapters, which call multiple REST
 endpoints, every Linear operation is an HTTP POST of a `{ "query", "variables" }` body to that one
-endpoint, built on `internal/httpkit` with no third-party GraphQL library.
+endpoint, built on the shared HTTP client with no third-party GraphQL library.
 
 **Authentication.** The resolved `tracker.api_key` is sent verbatim in the `Authorization` header
 with no `Bearer` prefix and no `email:token` composition. Linear personal API keys carry the
@@ -246,7 +246,7 @@ and GitHub adapters do. See the workflow reference for the operator-facing shape
 #### 11.6.2 Gitea adapter
 
 The Gitea adapter targets the REST API v1 of a self-hosted Gitea instance, built on
-`internal/httpkit` with no third-party Gitea client library. Gitea has no hosted tier, so
+the shared HTTP client with no third-party Gitea client library. Gitea has no hosted tier, so
 `tracker.endpoint` is required and carries the instance base URL; the adapter trims a trailing
 slash, appends `/api/v1`, and tolerates an endpoint that already ends in `/api/v1`. Its wire model
 is close to the GitHub adapter's, issues plus labels plus an open/closed status, and it diverges
@@ -328,7 +328,7 @@ filter keys.
 #### 11.6.3 GitLab adapter
 
 The GitLab adapter targets the REST API v4 of GitLab.com or a self-managed instance, built on
-`internal/httpkit` with no third-party GitLab client library. `tracker.endpoint` carries the
+the shared HTTP client with no third-party GitLab client library. `tracker.endpoint` carries the
 instance base URL and is optional: it defaults to the GitLab.com host, which a self-managed
 deployment overrides. The adapter trims a trailing slash, appends `/api/v4`, and tolerates an
 endpoint that already ends in `/api/v4`. Its wire model is closest to the GitHub and Gitea adapters,
@@ -456,9 +456,9 @@ emits for filter labels absent from the project catalog.
 #### 11.6.4 GitHub adapter
 
 The GitHub adapter targets the REST API (plus the search endpoint) at `tracker.endpoint`, which
-defaults to `https://api.github.com`, built on `internal/httpkit` with no third-party GitHub client
-library. Its wire model is the closest of the three forges to Gitea's, issues plus labels plus an
-open/closed status, and the two diverge mainly in how each locates issues by state.
+defaults to `https://api.github.com`, built on the shared HTTP client with no third-party GitHub
+client library. Its wire model is the closest of the three forges to Gitea's, issues plus labels
+plus an open/closed status, and the two diverge mainly in how each locates issues by state.
 
 **Authentication.** The resolved `tracker.api_key` is sent as a `Bearer` token in the
 `Authorization` header alongside a pinned API-version header. Unlike the Gitea and GitLab adapters,
