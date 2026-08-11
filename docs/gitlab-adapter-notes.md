@@ -1747,6 +1747,14 @@ per external status, each with `name`, `status`, `allow_failure`, `pipeline_id`,
 | `created`, `pending`, `waiting_for_resource`, `preparing`, `scheduled` | `pending` | `queued` |
 | `running` | `pending` | `in_progress` |
 
+**The statuses route paginates.** `GET /projects/:id/repository/commits/:sha/statuses` returns
+`X-Per-Page: 20` by default and honors `per_page` up to 100, advertising `X-Total`,
+`X-Total-Pages`, `X-Next-Page`, and a `Link` header carrying `rel="next"` **[live-CE]**. A commit
+carrying 103 seeded statuses returned 100 entries on page one with `X-Total-Pages: 2` and a
+`rel="next"` link at `per_page=100`, confirming `FetchCIStatus`'s walk through
+`httpkit.NewLinkPaginator` must cross a page boundary to see the full set on a pipeline this
+size.
+
 **`allow_failure` belongs in the conclusion, not in the aggregate.** Neither the aggregate nor
 the failing count is the adapter's to choose: `scmcore.AggregateCIStatus` and
 `scmcore.FailingCount` compute both from the normalized `CheckRun` set, and
@@ -2389,6 +2397,5 @@ Carried forward explicitly rather than resolved by inference:
 | Is the timestamp-and-stream prefix on the job trace a property of the API, the runner version, or a runner feature flag? | Decides whether the trace sanitizer can rely on the prefix being present, or must handle both shapes | Fetch a trace produced by an older runner, and one produced with the runner timestamp feature flag disabled |
 | Does the notes route on a merge request paginate and filter identically to the issue variant? | The comment normalization is assumed shared; a divergence would surface as dropped review comments | Seed a merge request with more than 100 notes and repeat the issue-side pagination and `activity_filter` probes |
 | Does `GET /users/:id` draw on a distinct rate-limit budget from the merge-request reads? | Bot classification adds one request per distinct author; a stricter budget would change the caching strategy | Compare `RateLimit-Name` on a throttled `GET /users/:id` against a throttled merge-request read on GitLab.com |
-| Does `GET /projects/:id/repository/commits/:sha/statuses` paginate, and at what page size? | `FetchCIStatus` builds `CheckRuns` from that route and the shared aggregate is computed over whatever the adapter returns, so a silently truncated first page would report a passing verdict for a pipeline whose failing job sits beyond it. Every other list route on this instance paginates at 20 by default **[live-CE]** | Seed a pipeline with more jobs than the default page size, read the route with and without `per_page`, and compare `X-Total` and the `rel="next"` link against the entry count |
 | Should `GetCIStatus` map `head_pipeline.status` into the merge-gate vocabulary, or fetch the statuses list and call `scmcore.MergeGate` over the normalized runs? | The first preserves the measured one-request saving; the second shares the code path rather than only the rule, and cannot drift from `FetchCIStatus` on a status the two partition differently | Compare the two answers on a pipeline whose top-level status and normalized run set disagree, starting with a wholly `skipped` pipeline and with the `allow_failure` warnings-only case |
 | Does self-managed Enterprise Edition behave as its source implies? | Every Enterprise Edition claim here is source plus documentation, never observed | Run the same probe set against a licensed self-managed Enterprise Edition instance |
