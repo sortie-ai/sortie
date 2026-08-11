@@ -8,7 +8,6 @@ import (
 	"net/url"
 	"strings"
 	"sync"
-	"time"
 
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/httpkit"
@@ -91,18 +90,6 @@ func NewGitLabSCMAdapter(adapterConfig map[string]any) (domain.SCMAdapter, error
 // or encoded separately.
 func projectPath(owner, repo string) string {
 	return url.PathEscape(owner + "/" + repo)
-}
-
-// parseUTC parses an RFC 3339 timestamp and returns it in UTC.
-//
-// A malformed timestamp yields the zero [time.Time] rather than an
-// error, so a single unparseable field never fails an entire read.
-func parseUTC(s string) time.Time {
-	t, err := time.Parse(time.RFC3339, s)
-	if err != nil {
-		return time.Time{}
-	}
-	return t.UTC()
 }
 
 // asSCMError normalizes err to a [*domain.SCMError]. An error that

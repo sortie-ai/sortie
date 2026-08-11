@@ -27,7 +27,8 @@ type ReviewComment struct {
 
 	// SubmittedAt is the UTC timestamp when the comment was created
 	// on the SCM platform. Used by the orchestrator to drive debounce
-	// gating.
+	// gating. A platform timestamp that is absent or is not RFC 3339
+	// normalizes to the zero time and does not fail the read.
 	SubmittedAt time.Time
 
 	// Outdated indicates the commented code has been modified by a

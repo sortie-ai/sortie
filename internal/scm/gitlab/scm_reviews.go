@@ -155,7 +155,7 @@ func (a *GitLabSCMAdapter) normalizeNotes(ctx context.Context, prNumber int, own
 			ID:          strconv.FormatInt(n.ID, 10),
 			Reviewer:    n.Author.Username,
 			Body:        n.Body,
-			SubmittedAt: parseUTC(n.CreatedAt),
+			SubmittedAt: scmcore.ParseTimestampOrZero(n.CreatedAt),
 		}
 
 		if n.Position != nil {

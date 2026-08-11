@@ -9,7 +9,6 @@ import (
 	"net/url"
 	"slices"
 	"strings"
-	"time"
 
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/httpkit"
@@ -110,10 +109,12 @@ func (a *GitHubSCMAdapter) ListLabelEvents(ctx context.Context, prNumber int, ow
 
 // decodeLabelEvents parses one page of issue events, retaining only
 // labeled and unlabeled entries and normalizing each to a
-// [domain.LabelEvent] with a lowercased label name and a UTC timestamp.
-// Returns a non-nil empty slice when the page carries no label events and
-// a [*domain.SCMError] with Kind [domain.ErrSCMPayload] on a malformed
-// payload.
+// [domain.LabelEvent] with a lowercased label name and a UTC timestamp via
+// [scmcore.ParseTimestamp]. Returns a non-nil empty slice when the page
+// carries no label events. A retained entry whose created_at does not
+// parse as RFC 3339 fails the read with a [*domain.SCMError] of Kind
+// [domain.ErrSCMPayload]; a skipped entry is never parsed and cannot fail
+// the read. Returns the same kind on a malformed payload.
 func decodeLabelEvents(body []byte) ([]domain.LabelEvent, error) {
 	var raw []githubIssueEvent
 	if err := json.Unmarshal(body, &raw); err != nil {
@@ -140,13 +141,9 @@ func decodeLabelEvents(body []byte) ([]domain.LabelEvent, error) {
 			actor = e.Actor.Login
 		}
 
-		at, parseErr := time.Parse(time.RFC3339, e.CreatedAt)
-		if parseErr != nil {
-			return nil, &domain.SCMError{
-				Kind:    domain.ErrSCMPayload,
-				Message: "failed to parse issue event created_at",
-				Err:     parseErr,
-			}
+		at, err := scmcore.ParseTimestamp("issue event created_at", e.CreatedAt)
+		if err != nil {
+			return nil, err
 		}
 
 		events = append(events, domain.LabelEvent{
@@ -157,7 +154,7 @@ func decodeLabelEvents(body []byte) ([]domain.LabelEvent, error) {
 			Label: strings.ToLower(e.Label.Name),
 			Actor: actor,
 			Added: e.Event == "labeled",
-			At:    at.UTC(),
+			At:    at,
 		})
 	}
 	return events, nil

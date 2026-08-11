@@ -9,7 +9,6 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/httpkit"
@@ -95,6 +94,10 @@ func NewGitHubSCMAdapter(adapterConfig map[string]any) (domain.SCMAdapter, error
 // CHANGES_REQUESTED reviews on the given PR. Outdated comments (where
 // GitHub reports position as null) have Outdated=true. Returns an empty
 // non-nil slice when no matching reviews exist.
+//
+// SubmittedAt is parsed via [scmcore.ParseTimestampOrZero]: a review or
+// comment timestamp that is not RFC 3339 normalizes to the zero time
+// rather than failing the read, since SubmittedAt drives debounce only.
 func (a *GitHubSCMAdapter) FetchPendingReviews(ctx context.Context, prNumber int, owner, repo string) ([]domain.ReviewComment, error) {
 	reviews, err := a.fetchAllReviews(ctx, prNumber, owner, repo)
 	if err != nil {
@@ -118,7 +121,7 @@ func (a *GitHubSCMAdapter) FetchPendingReviews(ctx context.Context, prNumber int
 			prCommentID := fmt.Sprintf("review-%d", review.ID)
 			if _, dup := seen[prCommentID]; !dup {
 				seen[prCommentID] = struct{}{}
-				submittedAt, _ := time.Parse(time.RFC3339, review.SubmittedAt)
+				submittedAt := scmcore.ParseTimestampOrZero(review.SubmittedAt)
 				result = append(result, domain.ReviewComment{
 					ID:          prCommentID,
 					Reviewer:    review.User.Login,
@@ -157,7 +160,7 @@ func (a *GitHubSCMAdapter) FetchPendingReviews(ctx context.Context, prNumber int
 				endLine = *c.Line
 			}
 
-			createdAt, _ := time.Parse(time.RFC3339, c.CreatedAt)
+			createdAt := scmcore.ParseTimestampOrZero(c.CreatedAt)
 
 			result = append(result, domain.ReviewComment{
 				ID:          commentID,
@@ -188,6 +191,10 @@ func (a *GitHubSCMAdapter) FetchPendingReviews(ctx context.Context, prNumber int
 // Unlike [GitHubSCMAdapter.FetchPendingReviews], no review-state filter is
 // applied: review bots commonly post COMMENTED reviews, so requiring
 // CHANGES_REQUESTED would drop most bot findings.
+//
+// SubmittedAt is parsed via [scmcore.ParseTimestampOrZero]: a review or
+// comment timestamp that is not RFC 3339 normalizes to the zero time
+// rather than failing the read, since SubmittedAt drives debounce only.
 func (a *GitHubSCMAdapter) FetchBotReviewComments(ctx context.Context, prNumber int, owner, repo string, botUsernames []string) ([]domain.ReviewComment, error) {
 	reviews, err := a.fetchAllReviews(ctx, prNumber, owner, repo)
 	if err != nil {
@@ -208,7 +215,7 @@ func (a *GitHubSCMAdapter) FetchBotReviewComments(ctx context.Context, prNumber 
 			prCommentID := fmt.Sprintf("review-%d", review.ID)
 			if _, dup := seen[prCommentID]; !dup {
 				seen[prCommentID] = struct{}{}
-				submittedAt, _ := time.Parse(time.RFC3339, review.SubmittedAt)
+				submittedAt := scmcore.ParseTimestampOrZero(review.SubmittedAt)
 				result = append(result, domain.ReviewComment{
 					ID:          prCommentID,
 					Reviewer:    review.User.Login,
@@ -247,7 +254,7 @@ func (a *GitHubSCMAdapter) FetchBotReviewComments(ctx context.Context, prNumber 
 				endLine = *c.Line
 			}
 
-			createdAt, _ := time.Parse(time.RFC3339, c.CreatedAt)
+			createdAt := scmcore.ParseTimestampOrZero(c.CreatedAt)
 
 			result = append(result, domain.ReviewComment{
 				ID:          commentID,
