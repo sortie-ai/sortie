@@ -1,0 +1,4 @@
+[
+  {"id": 301, "user": {"id": 501, "username": "alice"}, "created_at": "2026-08-10T08:00:00Z", "action": "add", "label": {"name": "Priority"}},
+  {"id": 302, "user": {"id": 503, "username": "bob"}, "created_at": "2026-08-10T09:00:00Z", "action": "remove", "label": {"name": "Priority"}}
+]

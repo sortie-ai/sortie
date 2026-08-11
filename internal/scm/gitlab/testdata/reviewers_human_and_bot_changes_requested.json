@@ -1,0 +1,4 @@
+[
+  {"user": {"id": 501, "username": "alice", "state": "active"}, "state": "requested_changes"},
+  {"user": {"id": 502, "username": "ci-bot", "state": "active"}, "state": "requested_changes"}
+]

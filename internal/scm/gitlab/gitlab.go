@@ -21,9 +21,12 @@
 // logged and does not fail construction. Registered under kind "gitlab"
 // via an init function.
 //
-// This package sits under the source-control adapter family, but this
-// stage implements only the tracker contract: the source-control and CI
-// roles the family's path implies are not implemented here.
+// The package also implements the read half of [domain.SCMAdapter] for
+// GitLab merge requests: FetchPendingReviews, FetchBotReviewComments,
+// GetReviewDecision, GetMergeability, GetCIStatus, and ListLabelEvents.
+// These reads share the tracker transport, normalize every response to
+// the domain review, mergeability, and label-event types, and classify a
+// bot review or comment author through a cached per-user lookup.
 package gitlab
 
 import (

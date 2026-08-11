@@ -32,21 +32,37 @@ type gitlabReferences struct {
 	Full string `json:"full"`
 }
 
-// gitlabUser carries the username used for an issue assignee and a note
-// author.
+// gitlabUser carries the username and instance-global id used for an
+// issue assignee, a note author, and a merge-request reviewer. The
+// tracker read path uses only Username; the source-control bot lookup
+// addresses users by ID.
 type gitlabUser struct {
+	ID       int64  `json:"id"`
 	Username string `json:"username"`
 }
 
-// gitlabNote is one note from the issue notes route. System is the
-// authoritative marker distinguishing a journal entry from a human
-// comment.
+// gitlabNote is one note from the issue notes and merge-request notes
+// routes. System is the authoritative marker distinguishing a journal
+// entry from a human comment. Position is nil for a top-level note and
+// non-nil for a diff note attached to a specific line.
 type gitlabNote struct {
-	ID        int64      `json:"id"`
-	Author    gitlabUser `json:"author"`
-	Body      string     `json:"body"`
-	CreatedAt string     `json:"created_at"`
-	System    bool       `json:"system"`
+	ID        int64               `json:"id"`
+	Author    gitlabUser          `json:"author"`
+	Body      string              `json:"body"`
+	CreatedAt string              `json:"created_at"`
+	System    bool                `json:"system"`
+	Position  *gitlabNotePosition `json:"position"`
+}
+
+// gitlabNotePosition is the diff anchor of a merge-request diff note. A
+// nil OldLine or NewLine mirrors GitLab's own null rendering for a line
+// added or removed relative to the other side of the diff.
+type gitlabNotePosition struct {
+	HeadSHA string `json:"head_sha"`
+	OldPath string `json:"old_path"`
+	NewPath string `json:"new_path"`
+	OldLine *int   `json:"old_line"`
+	NewLine *int   `json:"new_line"`
 }
 
 // gitlabNoteCreated is the note-creation response. ID is a pointer so

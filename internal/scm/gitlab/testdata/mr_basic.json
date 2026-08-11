@@ -1,0 +1,11 @@
+{
+  "iid": 6,
+  "state": "opened",
+  "draft": false,
+  "sha": "d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0",
+  "source_branch": "feature/scm-reads",
+  "target_branch": "main",
+  "merge_commit_sha": "",
+  "detailed_merge_status": "mergeable",
+  "head_pipeline": null
+}

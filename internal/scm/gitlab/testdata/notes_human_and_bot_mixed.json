@@ -1,0 +1,5 @@
+[
+  {"id": 9001, "author": {"id": 999, "username": "system-note-author"}, "body": "changed the description", "created_at": "2026-08-10T08:00:00Z", "system": true},
+  {"id": 9002, "author": {"id": 501, "username": "alice"}, "body": "please rename this variable", "created_at": "2026-08-10T08:05:00Z", "system": false},
+  {"id": 9003, "author": {"id": 502, "username": "ci-bot"}, "body": "automated lint feedback", "created_at": "2026-08-10T08:10:00Z", "system": false}
+]

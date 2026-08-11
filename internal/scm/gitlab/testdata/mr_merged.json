@@ -1,0 +1,11 @@
+{
+  "iid": 6,
+  "state": "merged",
+  "draft": false,
+  "sha": "d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0",
+  "source_branch": "feature/scm-reads",
+  "target_branch": "main",
+  "merge_commit_sha": "9f8e7d6c5b4a392817061524334251627384950a",
+  "detailed_merge_status": "not_open",
+  "head_pipeline": null
+}
