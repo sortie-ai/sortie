@@ -58,6 +58,12 @@ The auto-merge reaction introduces the following domain types:
   substring `already merged` (case-insensitive) in the error message. Callers disambiguate that
   subcase as documented in §11C.3.
 
+**GitLab caveat.** On GitLab the effective merge strategy is the project's own `merge_method`
+setting rather than a per-call choice. The adapter always calls the one merge route and never the
+asynchronous standalone rebase route, so a configured `rebase` performs the operator's intent on a
+project set to fast-forward or semi-linear history and produces a merge commit on a project set to
+merge commits. The adapter logs one WARN per merge naming that governance.
+
 ### 11C.3 Error kind
 
 `ErrSCMConflict` is an `SCMErrorKind` value alongside the transport, auth, API, not-found, and
@@ -209,6 +215,16 @@ still passes even when the token itself is scoped read-only. That gap surfaces o
 when a `MergePR` or `DeleteBranch` call returns a 403 that the adapter enriches to name the
 missing `write:repository` scope explicitly. An operator satisfies both checks by granting the
 Gitea token's user repository write access and the token the `write:repository` scope.
+
+**GitLab caveat.** The GitLab adapter verifies the credential's own scope record rather than a
+repository or organization signal: it reads the token-introspection endpoint at startup. GitLab
+has no contents-versus-pull-request scope split, so the single `api` scope is the one requirement
+covering the merge, the branch delete, and the label write. A granular token's scope report is
+opaque and takes the fail-open path, and an instance whose introspection route is unavailable
+takes the same fail-open path rather than disabling auto-merge, because that route can answer 404
+for a hidden or blocked path as readily as for a genuinely missing one. A branch-protection
+refusal on this platform is reported at runtime as an auth-class failure rather than being caught
+at startup.
 
 For the full preflight algorithm, see §6.3.
 

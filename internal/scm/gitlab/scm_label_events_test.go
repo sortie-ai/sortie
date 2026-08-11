@@ -4,6 +4,9 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
+	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/sortie-ai/sortie/internal/adaptertest"
@@ -132,4 +135,180 @@ func TestListLabelEvents_ErrorStatuses(t *testing.T) {
 		_, err := adapter.ListLabelEvents(context.Background(), testPRNumber, scmOwner, scmRepo)
 		adaptertest.AssertSCMErrorKind(t, err, domain.ErrSCMPayload)
 	})
+}
+
+// --- RemoveLabel (AC7) ---
+
+func TestRemoveLabel_AbsentLabelNoOp(t *testing.T) {
+	t.Parallel()
+
+	mrFixture := mergeRequestFixture(t, map[string]any{"labels": []string{"unrelated-label"}})
+	var putCalls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.Method {
+		case http.MethodGet:
+			_, _ = w.Write(mrFixture)
+		case http.MethodPut:
+			putCalls.Add(1)
+			_, _ = w.Write(mrFixture)
+		default:
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	adapter := mustSCMAdapter(t, srv.URL)
+	err := adapter.RemoveLabel(context.Background(), testPRNumber, scmOwner, scmRepo, "sortie:review")
+	adaptertest.AssertLabelAbsentDisposition(t, err)
+
+	if n := putCalls.Load(); n != 0 {
+		t.Errorf("PUT calls = %d, want 0 (no stored variant matches, so no write is issued)", n)
+	}
+}
+
+func TestRemoveLabel_CaseVariantResolution(t *testing.T) {
+	t.Parallel()
+
+	const storedLabel = "Sortie:Review"
+	mrFixture := mergeRequestFixture(t, map[string]any{"labels": []string{storedLabel, "unrelated-label"}})
+
+	var gotMethod, gotPath string
+	var gotBody gitlabMergeRequestUpdate
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.Method {
+		case http.MethodGet:
+			_, _ = w.Write(mrFixture)
+		case http.MethodPut:
+			gotMethod = r.Method
+			gotPath = r.URL.EscapedPath()
+			decodeRequestBody(t, r, &gotBody)
+			_, _ = w.Write(mrFixture)
+		default:
+			t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	adapter := mustSCMAdapter(t, srv.URL)
+	if err := adapter.RemoveLabel(context.Background(), testPRNumber, scmOwner, scmRepo, "sortie:review"); err != nil {
+		t.Fatalf("RemoveLabel: unexpected error: %v", err)
+	}
+
+	if gotMethod != http.MethodPut {
+		t.Errorf("request method = %q, want %q", gotMethod, http.MethodPut)
+	}
+	wantPath := "/api/v4/projects/" + projectPath(scmOwner, scmRepo) + "/merge_requests/" + strconv.Itoa(testPRNumber)
+	if gotPath != wantPath {
+		t.Errorf("request path = %q, want %q", gotPath, wantPath)
+	}
+	if len(gotBody.RemoveLabels) != 1 || gotBody.RemoveLabels[0] != storedLabel {
+		t.Errorf("request body remove_labels = %v, want [%q] (the stored spelling, not the configured lowercase form)", gotBody.RemoveLabels, storedLabel)
+	}
+}
+
+func TestRemoveLabel_NotFoundMapsToNil(t *testing.T) {
+	t.Parallel()
+
+	t.Run("404 on the merge-request read maps to nil with one WARN", func(t *testing.T) {
+		t.Parallel()
+
+		errorBody := loadFixture(t, "error_404_project.json")
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write(errorBody)
+		}))
+		defer srv.Close()
+
+		adapter := mustSCMAdapter(t, srv.URL)
+		log, buf := newCapturingLogger()
+		adapter.log = log
+
+		err := adapter.RemoveLabel(context.Background(), testPRNumber, scmOwner, scmRepo, "sortie:review")
+		if err != nil {
+			t.Errorf("RemoveLabel = %v, want nil", err)
+		}
+
+		logOutput := buf.String()
+		const wantWarn = "gitlab merge request not found during label removal"
+		if got := strings.Count(logOutput, wantWarn); got != 1 {
+			t.Errorf("occurrences of %q in log output = %d, want 1 (log output: %q)", wantWarn, got, logOutput)
+		}
+		if !strings.Contains(logOutput, "pr_number="+strconv.Itoa(testPRNumber)) {
+			t.Errorf("log output = %q, want it to carry pr_number=%d", logOutput, testPRNumber)
+		}
+	})
+
+	t.Run("404 on the merge-request update maps to nil with one WARN", func(t *testing.T) {
+		t.Parallel()
+
+		mrFixture := mergeRequestFixture(t, map[string]any{"labels": []string{"Sortie:Review"}})
+		errorBody := loadFixture(t, "error_404_project.json")
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			switch r.Method {
+			case http.MethodGet:
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write(mrFixture)
+			case http.MethodPut:
+				w.WriteHeader(http.StatusNotFound)
+				_, _ = w.Write(errorBody)
+			default:
+				t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+				w.WriteHeader(http.StatusNotFound)
+			}
+		}))
+		defer srv.Close()
+
+		adapter := mustSCMAdapter(t, srv.URL)
+		log, buf := newCapturingLogger()
+		adapter.log = log
+
+		err := adapter.RemoveLabel(context.Background(), testPRNumber, scmOwner, scmRepo, "sortie:review")
+		if err != nil {
+			t.Errorf("RemoveLabel = %v, want nil", err)
+		}
+
+		logOutput := buf.String()
+		const wantWarn = "gitlab merge request not found during label removal"
+		if got := strings.Count(logOutput, wantWarn); got != 1 {
+			t.Errorf("occurrences of %q in log output = %d, want 1 (log output: %q)", wantWarn, got, logOutput)
+		}
+	})
+}
+
+func TestRemoveLabel_BlankLabelNoRequest(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name  string
+		label string
+	}{
+		{"an empty label", ""},
+		{"a whitespace-only label", "   "},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name+" issues no request", func(t *testing.T) {
+			t.Parallel()
+
+			var requests atomic.Int32
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				requests.Add(1)
+				t.Errorf("unexpected request: %s %s", r.Method, r.URL.Path)
+				w.WriteHeader(http.StatusNotFound)
+			}))
+			defer srv.Close()
+
+			adapter := mustSCMAdapter(t, srv.URL)
+			err := adapter.RemoveLabel(context.Background(), testPRNumber, scmOwner, scmRepo, tt.label)
+			adaptertest.AssertLabelAbsentDisposition(t, err)
+
+			if n := requests.Load(); n != 0 {
+				t.Errorf("requests = %d, want 0 (a blank label resolves to no target and must not reach the network)", n)
+			}
+		})
+	}
 }
