@@ -126,7 +126,15 @@ the result with the PR's requested-reviewers signal into one decision. `GetMerge
 `mergeable` boolean to `clean` (mergeable and not a draft), `blocked` (draft), or `unknown`
 (anything else), and never yields `dirty` or `unstable`. Gitea cannot distinguish a merge conflict
 from an in-progress recheck, so both present as `unknown`, which this table re-enqueues on the poll
-interval as a transient state.
+interval as a transient state. The fold orders decision-bearing reviews by submission time, so that
+timestamp is load-bearing; a review that can change the verdict and carries a submission timestamp
+that is not a valid RFC 3339 value fails the read with a `scm_payload_error` rather than sorting to
+the epoch, because a substituted timestamp can let a superseded approval outrank the
+changes-requested review that supersedes it. A review that cannot change the verdict, a dismissed
+review or one whose state is not a decision, is not parsed and cannot fail the read. The
+precondition read defers with backoff and never merges on this failure, and the pending entry is
+dropped once its age exceeds the TTL backstop (§11C.4), which escalates nothing and leaves the pull
+request unmerged for the operator to merge manually.
 
 **GitLab auto-merge reads.** The GitLab adapter has no aggregate review-decision field and no
 per-condition mergeability enum, so it composes the first and maps the second from a single string.

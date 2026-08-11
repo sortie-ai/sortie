@@ -69,6 +69,13 @@ RemoveLabel(ctx context.Context, prNumber int, owner, repo, label string) error
   this by zero-padding the decimal id to a fixed width (the GitHub adapter pads to 19 digits, the
   int64 maximum). An adapter whose native ids do not sort lexically in journal order MUST derive a
   sortable surrogate at the boundary; raw UUIDs do not qualify.
+- `At` MUST be the entry's own timestamp normalized to UTC; an entry whose timestamp is absent or
+  is not a valid RFC 3339 value MUST fail the read with a `scm_payload_error`, and an implementation
+  MUST NOT substitute the zero time or any other synthesized value. `At` is half of the `(At, id)`
+  high-water-mark position, the zero time sorts before every recorded position, and a substituted
+  timestamp therefore withdraws the entry from detection and drops the command it carries. The
+  timestamp is parsed only for entries the adapter retains, so an entry skipped for its kind or its
+  missing label name cannot fail the read.
 - Implementations MUST be safe for concurrent use.
 
 No diff-fetch method and no review-comment-posting method are added. The reviewing agent fetches the
@@ -100,7 +107,10 @@ from the tail, and sorts the normalized events ascending by `(At, ID)` itself, s
 depend on the server's. An entry whose label was later deleted from the project renders its label
 object null and is skipped, because it carries no name to normalize. The forward walk retains the
 events GitLab serves first when a journal exceeds the page cap, where the GitHub tail walk retains
-the newest, and the adapter warns when the cap is reached.
+the newest, and the adapter warns when the cap is reached. An adapter that walks the journal forward
+retains its earliest entries, so an entry whose timestamp fails to parse stays in the retained window
+and does not age out of it, where a tail walk drops such an entry only once the journal grows past
+the page cap.
 
 ### 11F.3 Command contract and detection invariants
 
@@ -447,6 +457,7 @@ budget machinery.
 | Condition | Visibility | Recovery |
 |-----------|------------|----------|
 | `ListLabelEvents` returns a `*SCMError` | Warn with PR number and error kind | Increment per-entry backoff, set `PendingRetryAt`, re-enqueue; retried on the next due tick. No escalation. |
+| `ListLabelEvents` fails because a retained entry's timestamp does not parse | Same Warn | Same backoff and re-enqueue. No command on that PR dispatches for as long as the forge serves that entry: this kind's pending entry has no TTL and no drop-on-age branch, so the retry ends only when the forge serves a parseable value or the issue reaches a terminal state, dropping the entry (§11F.12). |
 | `RemoveLabel` returns a `*SCMError` (including a scope gap) | Warn with PR number and label | None required; deduplication is already committed. The label lingers until removed manually. |
 | Fingerprint read fails | Warn | The pass backs off and re-enqueues without dispatching: at-most-once rests solely on the mark, so a command must not dispatch when the stored mark cannot be read. |
 | Fingerprint upsert fails | Warn | The pass proceeds; the durable guarantee degrades to best-effort for that tick, matching the siblings. |

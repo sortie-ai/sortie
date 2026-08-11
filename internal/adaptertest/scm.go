@@ -104,3 +104,45 @@ func AssertLabelEventsOrdered(t *testing.T, events []domain.LabelEvent) {
 		}
 	}
 }
+
+// AssertLabelEventTimestampRejected pins the disposition of a
+// label-event journal entry whose timestamp does not parse: err unwraps
+// to a [*domain.SCMError] of Kind [domain.ErrSCMPayload], and events is
+// empty. The emptiness clause catches an adapter that returns both an
+// error and a poisoned event, which the error kind alone would not.
+func AssertLabelEventTimestampRejected(t *testing.T, events []domain.LabelEvent, err error) {
+	t.Helper()
+
+	AssertSCMErrorKind(t, err, domain.ErrSCMPayload)
+	if len(events) != 0 {
+		t.Errorf("AssertLabelEventTimestampRejected: events = %v, want empty", events)
+	}
+}
+
+// AssertReviewCommentTimestampTolerated pins the disposition of a
+// review comment whose timestamp does not parse: the read succeeds,
+// exactly one returned comment carries the zero SubmittedAt, and every
+// other comment carries a non-zero SubmittedAt. The fixture driving this
+// assertion MUST carry exactly one malformed timestamp per call.
+func AssertReviewCommentTimestampTolerated(t *testing.T, comments []domain.ReviewComment, err error) {
+	t.Helper()
+
+	if err != nil {
+		t.Errorf("AssertReviewCommentTimestampTolerated: err = %v, want nil", err)
+		return
+	}
+	if len(comments) == 0 {
+		t.Errorf("AssertReviewCommentTimestampTolerated: comments is empty, want at least one")
+		return
+	}
+
+	zeroCount := 0
+	for _, c := range comments {
+		if c.SubmittedAt.IsZero() {
+			zeroCount++
+		}
+	}
+	if zeroCount != 1 {
+		t.Errorf("AssertReviewCommentTimestampTolerated: %d comments carry a zero SubmittedAt, want exactly 1", zeroCount)
+	}
+}

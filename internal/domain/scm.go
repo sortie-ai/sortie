@@ -135,7 +135,10 @@ type LabelEvent struct {
 	// Added is true for a labeled event and false for an unlabeled event.
 	Added bool
 
-	// At is the journal timestamp in UTC.
+	// At is the entry's own timestamp, normalized to UTC. It is never
+	// synthesized: At is half of the (At, ID) high-water-mark position,
+	// and the zero time sorts before every recorded position, so a
+	// substituted value would make the entry unreachable for detection.
 	At time.Time
 }
 
@@ -228,6 +231,13 @@ type SCMAdapter interface {
 	// ListLabelEvents returns the label-event journal for the given PR,
 	// oldest first. Returns an empty non-nil slice when the PR has no
 	// label events. Returns a [*SCMError] on failure.
+	//
+	// An entry whose timestamp is absent or is not RFC 3339 MUST fail the
+	// read with a [*SCMError] of Kind [ErrSCMPayload]; an implementation
+	// MUST NOT substitute the zero time or any other synthesized value.
+	// The timestamp is parsed only for entries the implementation
+	// retains, so an entry skipped for its kind or its missing label
+	// name cannot fail the read.
 	ListLabelEvents(ctx context.Context, prNumber int, owner, repo string) ([]LabelEvent, error)
 
 	// RemoveLabel removes the named label from the given PR. Returns nil

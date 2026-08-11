@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/scm/scmcore"
@@ -105,7 +106,11 @@ func (a *GiteaSCMAdapter) GetReviewDecision(ctx context.Context, prNumber int, o
 		return "", err
 	}
 
-	return foldReviewDecision(reviews, len(pr.RequestedReviewers) > 0), nil
+	decision, err := foldReviewDecision(reviews, len(pr.RequestedReviewers) > 0)
+	if err != nil {
+		return "", err
+	}
+	return decision, nil
 }
 
 // collectReviewComments fetches every review, retains those passing keepReview
@@ -145,7 +150,7 @@ func (a *GiteaSCMAdapter) collectReviewComments(ctx context.Context, prNumber in
 					ID:          prCommentID,
 					Reviewer:    r.User.Login,
 					Body:        body,
-					SubmittedAt: parseUTC(r.SubmittedAt),
+					SubmittedAt: scmcore.ParseTimestampOrZero(r.SubmittedAt),
 				})
 			}
 		}
@@ -189,39 +194,59 @@ func normalizeReviewComment(c giteaReviewComment) domain.ReviewComment {
 		StartLine:   startLine,
 		Reviewer:    c.User.Login,
 		Body:        c.Body,
-		SubmittedAt: parseUTC(c.CreatedAt),
+		SubmittedAt: scmcore.ParseTimestampOrZero(c.CreatedAt),
 		Outdated:    outdated,
 	}
+}
+
+// giteaContributingReview pairs a decision-bearing [giteaReview] with its
+// parsed submission time, so the ordering timestamp is parsed once, ahead
+// of the sort that depends on it.
+type giteaContributingReview struct {
+	review giteaReview
+	at     time.Time
 }
 
 // foldReviewDecision aggregates the per-review states with the PR's
 // requested-reviewers signal into one [domain.ReviewDecision].
 //
-// Dismissed reviews are skipped. Reviews are ordered by submission time then id
-// so the latest APPROVED or REQUEST_CHANGES per reviewer supersedes their earlier
-// ones; COMMENT, PENDING, and REQUEST_REVIEW states are not decisions. Any
-// standing REQUEST_CHANGES yields changes-requested; otherwise any APPROVED
-// yields approved; otherwise reviewRequested yields review-required; otherwise
-// not-required.
-func foldReviewDecision(reviews []giteaReview, reviewRequested bool) domain.ReviewDecision {
-	slices.SortFunc(reviews, func(a, b giteaReview) int {
-		if c := parseUTC(a.SubmittedAt).Compare(parseUTC(b.SubmittedAt)); c != 0 {
-			return c
-		}
-		return cmp.Compare(a.ID, b.ID)
-	})
-
-	latestDecision := make(map[string]string)
+// Dismissed reviews, and any review whose state is not APPROVED or
+// REQUEST_CHANGES, are filtered out before the parse; only a review that can
+// change the verdict is parsed, so a malformed timestamp on a review that
+// cannot change the verdict never fails the read. A retained review's
+// submitted_at is ordered then id so the latest per reviewer supersedes
+// their earlier ones. A retained review whose submitted_at does not parse
+// as RFC 3339 fails with a [*domain.SCMError] of Kind
+// [domain.ErrSCMPayload]. Any standing REQUEST_CHANGES yields
+// changes-requested; otherwise any APPROVED yields approved; otherwise
+// reviewRequested yields review-required; otherwise not-required.
+func foldReviewDecision(reviews []giteaReview, reviewRequested bool) (domain.ReviewDecision, error) {
+	contributing := make([]giteaContributingReview, 0, len(reviews))
 	for _, r := range reviews {
 		if r.Dismissed {
 			continue
 		}
-		switch r.State {
-		case "APPROVED":
-			latestDecision[r.User.Login] = "APPROVED"
-		case "REQUEST_CHANGES":
-			latestDecision[r.User.Login] = "REQUEST_CHANGES"
+		if r.State != "APPROVED" && r.State != "REQUEST_CHANGES" {
+			continue
 		}
+
+		at, err := scmcore.ParseTimestamp("review submitted_at", r.SubmittedAt)
+		if err != nil {
+			return "", err
+		}
+		contributing = append(contributing, giteaContributingReview{review: r, at: at})
+	}
+
+	slices.SortFunc(contributing, func(a, b giteaContributingReview) int {
+		if c := a.at.Compare(b.at); c != 0 {
+			return c
+		}
+		return cmp.Compare(a.review.ID, b.review.ID)
+	})
+
+	latestDecision := make(map[string]string)
+	for _, pair := range contributing {
+		latestDecision[pair.review.User.Login] = pair.review.State
 	}
 
 	anyChangesRequested := false
@@ -236,15 +261,15 @@ func foldReviewDecision(reviews []giteaReview, reviewRequested bool) domain.Revi
 	}
 
 	if anyChangesRequested {
-		return domain.ReviewDecisionChangesRequested
+		return domain.ReviewDecisionChangesRequested, nil
 	}
 	if anyApproved {
-		return domain.ReviewDecisionApproved
+		return domain.ReviewDecisionApproved, nil
 	}
 	if reviewRequested {
-		return domain.ReviewDecisionReviewRequired
+		return domain.ReviewDecisionReviewRequired, nil
 	}
-	return domain.ReviewDecisionNotRequired
+	return domain.ReviewDecisionNotRequired, nil
 }
 
 // fetchAllReviews returns every review on the given PR, following page-number

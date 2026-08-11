@@ -14,3 +14,9 @@ coverage:
 comment:
   layout: "condensed_header, condensed_files, condensed_footer"
   require_changes: true   # only comment when coverage changes
+
+ignore:
+  # Shared test-support assertions, called only from sibling packages'
+  # tests. `go test ./...` instruments the package under test, so these
+  # lines are always reported as uncovered no matter how often they run.
+  - "internal/adaptertest"

@@ -2,6 +2,7 @@ package github
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -281,6 +282,40 @@ func TestListLabelEvents_MalformedTimestampIsPayloadError(t *testing.T) {
 	defer srv.Close()
 
 	adapter := newTestSCMAdapter(t, srv.URL)
-	_, err := adapter.ListLabelEvents(context.Background(), 1, "o", "r")
-	assertSCMErrorKind(t, err, domain.ErrSCMPayload)
+	events, err := adapter.ListLabelEvents(context.Background(), 1, "o", "r")
+	adaptertest.AssertLabelEventTimestampRejected(t, events, err)
+
+	var scmErr *domain.SCMError
+	if !errors.As(err, &scmErr) {
+		t.Fatalf("ListLabelEvents() error = %v, want *domain.SCMError", err)
+	}
+	const wantMessage = "failed to parse issue event created_at"
+	if scmErr.Message != wantMessage {
+		t.Errorf("ListLabelEvents() error Message = %q, want %q", scmErr.Message, wantMessage)
+	}
+}
+
+func TestListLabelEvents_MalformedTimestampOnSkippedEventDoesNotFail(t *testing.T) {
+	t.Parallel()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`[
+			{"id":2,"event":"commented","actor":{"login":"bob"},"label":null,"created_at":"not-a-timestamp"},
+			{"id":1,"event":"labeled","actor":{"login":"alice"},"label":{"name":"sortie:review"},"created_at":"2026-01-01T00:00:00Z"}
+		]`))
+	}))
+	defer srv.Close()
+
+	adapter := newTestSCMAdapter(t, srv.URL)
+	events, err := adapter.ListLabelEvents(context.Background(), 1, "o", "r")
+	if err != nil {
+		t.Fatalf("ListLabelEvents: unexpected error: %v", err)
+	}
+	if len(events) != 1 {
+		t.Fatalf("ListLabelEvents() len = %d, want 1 (the malformed commented event is skipped before its timestamp is parsed)", len(events))
+	}
+	if events[0].Label != "sortie:review" {
+		t.Errorf("events[0].Label = %q, want %q", events[0].Label, "sortie:review")
+	}
 }

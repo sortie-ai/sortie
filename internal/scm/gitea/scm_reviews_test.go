@@ -143,6 +143,19 @@ func TestGiteaSCMFetchPendingReviews(t *testing.T) {
 		_, err := adapter.FetchPendingReviews(context.Background(), 6, testOwner, testRepo)
 		assertSCMErrorKind(t, err, domain.ErrSCMPayload)
 	})
+
+	t.Run("a malformed review submitted_at does not fail the read and normalizes to the zero time", func(t *testing.T) {
+		t.Parallel()
+
+		const reviewsFixture = `[{"id":201,"state":"REQUEST_CHANGES","body":"Fix this","user":{"login":"alice"},"dismissed":false,"submitted_at":"not-a-timestamp"}]`
+		const commentsFixture = `[{"id":3001,"path":"a.go","body":"nit","position":5,"original_position":5,"user":{"login":"alice"},"created_at":"2026-07-14T09:00:00Z"}]`
+		srv := httptest.NewServer(giteaReviewsAndCommentsHandler(t, []byte(reviewsFixture), []byte(commentsFixture)))
+		defer srv.Close()
+
+		adapter := mustSCMAdapter(t, srv.URL)
+		got, err := adapter.FetchPendingReviews(context.Background(), 6, testOwner, testRepo)
+		adaptertest.AssertReviewCommentTimestampTolerated(t, got, err)
+	})
 }
 
 // --- FetchBotReviewComments ---
@@ -326,4 +339,99 @@ func TestGiteaSCMGetReviewDecision(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestGiteaSCMGetReviewDecision_EqualTimestampTiebreak pins the review id
+// as the tiebreaker when two decision-bearing reviews by one reviewer share
+// a submitted_at. The sort is not stable, so without the tiebreaker the
+// winning review is unspecified. The fixture serves the reviews in
+// descending id order so a fold that preserved wire order would yield the
+// opposite verdict.
+func TestGiteaSCMGetReviewDecision_EqualTimestampTiebreak(t *testing.T) {
+	t.Parallel()
+
+	const reviewsFixture = `[
+		{"id":607,"state":"REQUEST_CHANGES","body":"","user":{"login":"alice"},"dismissed":false,"submitted_at":"2026-07-14T09:00:00Z"},
+		{"id":606,"state":"APPROVED","body":"","user":{"login":"alice"},"dismissed":false,"submitted_at":"2026-07-14T09:00:00Z"}
+	]`
+	prFixture := loadFixture(t, "pr_clean.json")
+	srv := httptest.NewServer(giteaReviewDecisionHandler(t, []byte(reviewsFixture), prFixture))
+	defer srv.Close()
+
+	adapter := mustSCMAdapter(t, srv.URL)
+	got, err := adapter.GetReviewDecision(context.Background(), 6, testOwner, testRepo)
+	if err != nil {
+		t.Fatalf("GetReviewDecision: unexpected error: %v", err)
+	}
+	if got != domain.ReviewDecisionChangesRequested {
+		t.Errorf("GetReviewDecision() = %q, want %q (review 607 outranks 606 on the id tiebreak)",
+			got, domain.ReviewDecisionChangesRequested)
+	}
+}
+
+// TestGiteaSCMGetReviewDecision_MalformedTimestamp pins the fold's strict
+// disposition: a decision-bearing review's malformed submitted_at fails
+// the read, while the same malformed value on a review the fold never
+// parses (dismissed, or a non-decision state) leaves the verdict
+// unaffected.
+func TestGiteaSCMGetReviewDecision_MalformedTimestamp(t *testing.T) {
+	t.Parallel()
+
+	t.Run("a decision-bearing review with a malformed submitted_at fails the read", func(t *testing.T) {
+		t.Parallel()
+
+		const reviewsFixture = `[{"id":601,"state":"APPROVED","body":"","user":{"login":"alice"},"dismissed":false,"submitted_at":"not-a-timestamp"}]`
+		prFixture := loadFixture(t, "pr_clean.json")
+		srv := httptest.NewServer(giteaReviewDecisionHandler(t, []byte(reviewsFixture), prFixture))
+		defer srv.Close()
+
+		adapter := mustSCMAdapter(t, srv.URL)
+		got, err := adapter.GetReviewDecision(context.Background(), 6, testOwner, testRepo)
+		adaptertest.AssertSCMErrorKind(t, err, domain.ErrSCMPayload)
+		if got != "" {
+			t.Errorf("GetReviewDecision() = %q, want empty on failure", got)
+		}
+	})
+
+	t.Run("a dismissed review with a malformed submitted_at does not block a live changes-requested verdict", func(t *testing.T) {
+		t.Parallel()
+
+		const reviewsFixture = `[
+			{"id":602,"state":"REQUEST_CHANGES","body":"","user":{"login":"alice"},"dismissed":false,"submitted_at":"2026-07-14T09:00:00Z"},
+			{"id":603,"state":"REQUEST_CHANGES","body":"","user":{"login":"bob"},"dismissed":true,"submitted_at":"not-a-timestamp"}
+		]`
+		prFixture := loadFixture(t, "pr_clean.json")
+		srv := httptest.NewServer(giteaReviewDecisionHandler(t, []byte(reviewsFixture), prFixture))
+		defer srv.Close()
+
+		adapter := mustSCMAdapter(t, srv.URL)
+		got, err := adapter.GetReviewDecision(context.Background(), 6, testOwner, testRepo)
+		if err != nil {
+			t.Fatalf("GetReviewDecision: unexpected error: %v", err)
+		}
+		if got != domain.ReviewDecisionChangesRequested {
+			t.Errorf("GetReviewDecision() = %q, want %q", got, domain.ReviewDecisionChangesRequested)
+		}
+	})
+
+	t.Run("a COMMENT review with a malformed submitted_at does not block a live approved verdict", func(t *testing.T) {
+		t.Parallel()
+
+		const reviewsFixture = `[
+			{"id":604,"state":"APPROVED","body":"","user":{"login":"alice"},"dismissed":false,"submitted_at":"2026-07-14T09:00:00Z"},
+			{"id":605,"state":"COMMENT","body":"","user":{"login":"bob"},"dismissed":false,"submitted_at":"not-a-timestamp"}
+		]`
+		prFixture := loadFixture(t, "pr_clean.json")
+		srv := httptest.NewServer(giteaReviewDecisionHandler(t, []byte(reviewsFixture), prFixture))
+		defer srv.Close()
+
+		adapter := mustSCMAdapter(t, srv.URL)
+		got, err := adapter.GetReviewDecision(context.Background(), 6, testOwner, testRepo)
+		if err != nil {
+			t.Fatalf("GetReviewDecision: unexpected error: %v", err)
+		}
+		if got != domain.ReviewDecisionApproved {
+			t.Errorf("GetReviewDecision() = %q, want %q", got, domain.ReviewDecisionApproved)
+		}
+	})
 }

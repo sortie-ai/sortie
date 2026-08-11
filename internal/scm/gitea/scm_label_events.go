@@ -31,8 +31,10 @@ type giteaTimelineEntry struct {
 // Pull requests share the issue timeline route. Only "label" entries with a
 // named label are retained; the label is lowercased and Added is true only for a
 // body of "1". The timeline arrives oldest-first, so the result needs no re-sort.
-// The returned slice is non-nil even when empty; a failure returns a
-// [*domain.SCMError].
+// The returned slice is non-nil even when empty. A retained entry whose
+// created_at does not parse as RFC 3339 fails the read with a
+// [*domain.SCMError] of Kind [domain.ErrSCMPayload]; an entry skipped for its
+// kind or its missing label name is never parsed and cannot fail the read.
 func (a *GiteaSCMAdapter) ListLabelEvents(ctx context.Context, prNumber int, owner, repo string) ([]domain.LabelEvent, error) {
 	path := fmt.Sprintf("/repos/%s/%s/issues/%d/timeline",
 		url.PathEscape(owner), url.PathEscape(repo), prNumber)
@@ -61,12 +63,17 @@ func (a *GiteaSCMAdapter) ListLabelEvents(ctx context.Context, prNumber int, own
 			continue
 		}
 
+		at, err := scmcore.ParseTimestamp("timeline entry created_at", e.CreatedAt)
+		if err != nil {
+			return nil, err
+		}
+
 		events = append(events, domain.LabelEvent{
 			ID:    scmcore.SortableEventID(e.ID),
 			Label: strings.ToLower(e.Label.Name),
 			Actor: e.User.Login,
 			Added: e.Body == "1",
-			At:    parseUTC(e.CreatedAt),
+			At:    at,
 		})
 	}
 

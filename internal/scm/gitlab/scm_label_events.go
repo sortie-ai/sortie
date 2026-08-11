@@ -38,8 +38,11 @@ type gitlabResourceLabelEvent struct {
 //
 // An entry whose label is null or unnamed describes a label later
 // deleted from the project and is skipped, since it carries no name to
-// normalize. Added is true only for action "add". The returned slice is
-// non-nil even when empty; a failure returns a [*domain.SCMError].
+// normalize; a skipped entry is never parsed and cannot fail the read.
+// Added is true only for action "add". The returned slice is non-nil
+// even when empty. A retained entry whose created_at does not parse as
+// RFC 3339 fails the read with a [*domain.SCMError] of Kind
+// [domain.ErrSCMPayload].
 func (a *GitLabSCMAdapter) ListLabelEvents(ctx context.Context, prNumber int, owner, repo string) ([]domain.LabelEvent, error) {
 	path := "/projects/" + projectPath(owner, repo) + "/merge_requests/" + strconv.Itoa(prNumber) + "/resource_label_events"
 
@@ -63,12 +66,18 @@ func (a *GitLabSCMAdapter) ListLabelEvents(ctx context.Context, prNumber int, ow
 		if e.Label == nil || e.Label.Name == "" {
 			continue
 		}
+
+		at, err := scmcore.ParseTimestamp("label event created_at", e.CreatedAt)
+		if err != nil {
+			return nil, err
+		}
+
 		events = append(events, domain.LabelEvent{
 			ID:    scmcore.SortableEventID(e.ID),
 			Label: strings.ToLower(e.Label.Name),
 			Actor: e.User.Username,
 			Added: e.Action == "add",
-			At:    parseUTC(e.CreatedAt),
+			At:    at,
 		})
 	}
 

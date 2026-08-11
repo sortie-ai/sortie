@@ -47,6 +47,7 @@ var contractBanTable = map[string]string{
 	"extractState":           "issuekit.DeriveLabelState",
 	"findCurrentStateLabel":  "issuekit.CurrentLabelState",
 	"paginatePages":          "httpkit.NewPagePaginator",
+	"parseUTC":               "scmcore.ParseTimestamp or scmcore.ParseTimestampOrZero",
 }
 
 // contractTrackerAdapterMethods are the domain.TrackerAdapter method
