@@ -267,7 +267,12 @@ function Invoke-Install {
         $archivePath = Join-Path $tmpDir $archive
 
         Write-Info "Downloading $archive"
+        # Errors are held back while candidates are tried: a 404 on the first
+        # form only means the release uses the other one, and reporting it would
+        # alarm a user whose install then succeeds. If every form fails, the last
+        # error is released so a genuine network fault stays diagnosable.
         $base = $null
+        $lastError = $null
         foreach ($candidate in $candidates) {
             $candidateBase = "https://github.com/$Repo/releases/download/$candidate"
             try {
@@ -276,10 +281,13 @@ function Invoke-Install {
                 break
             }
             catch {
-                # Try the next tag form before giving up.
+                $lastError = $_
             }
         }
         if ($null -eq $base) {
+            if ($null -ne $lastError) {
+                Write-Err $lastError.Exception.Message
+            }
             throw "download failed - verify release $version has asset for windows/$arch"
         }
 
