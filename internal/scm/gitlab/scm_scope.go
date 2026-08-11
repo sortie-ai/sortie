@@ -12,17 +12,17 @@ import (
 // perform GitLab's merge, branch-delete, and label-write routes, reading
 // GET /personal_access_tokens/self once.
 //
-// requireContents is accepted and ignored: GitLab has no contents and
-// pull-request scope split, so the single coarse api scope covers every
-// write this adapter performs. A non-empty scopes with an empty missing
-// means the credential can perform the writes; a non-empty missing
-// (always ["api"]) is a verified gap. (nil, nil, nil) means no usable
-// scope report is available and the caller fails open: this covers a
-// granular token, whose Scopes carry no usable permission detail, an
-// empty Scopes array, an unreadable response body, and an instance whose
-// introspection route answers 404, which never distinguishes an absent
-// route from a credential that cannot see it. Any other failure is
-// returned as err.
+// requireContents is accepted and ignored, because GitLab has one coarse
+// api scope covering every write this adapter performs rather than a
+// contents and pull-request split. A non-empty scopes slice with an empty
+// missing list means the credential can perform those writes; a non-empty
+// missing list (always ["api"]) is a verified gap. The (nil, nil, nil)
+// sentinel means no usable scope report exists and the caller fails open,
+// which covers a granular token whose scopes carry no permission detail,
+// an empty scopes array, an unreadable response body, and an instance
+// answering 404 on the introspection route, a status that never separates
+// an absent route from a credential that cannot see it. Any other failure
+// is returned as err.
 func (a *GitLabSCMAdapter) VerifyAutoMergeScopes(ctx context.Context, requireContents bool) (scopes []string, missing []string, err error) {
 	body, _, getErr := a.client.Get(ctx, "/personal_access_tokens/self", nil)
 	if getErr != nil {
