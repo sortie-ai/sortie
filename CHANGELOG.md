@@ -1594,8 +1594,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   execution via GitHub Actions.
 - Architecture Decision Records (ADR-0001 through ADR-0005).
 
-[Unreleased]: https://github.com/sortie-ai/sortie/compare/v1.18.0...HEAD
-[1.19.0]: https://github.com/sortie-ai/sortie/compare/v1.18.0...v1.18.0
+[Unreleased]: https://github.com/sortie-ai/sortie/compare/v1.19.0...HEAD
+[1.19.0]: https://github.com/sortie-ai/sortie/compare/v1.18.0...v1.19.0
 [1.18.0]: https://github.com/sortie-ai/sortie/compare/v1.17.0...v1.18.0
 [1.17.0]: https://github.com/sortie-ai/sortie/compare/v1.16.1...v1.17.0
 [1.16.1]: https://github.com/sortie-ai/sortie/compare/v1.16.0...v1.16.1
