@@ -31,6 +31,33 @@ func TestValidateReactionConfigs(t *testing.T) {
 		wantChecks []string
 	}{
 		{
+			name: "review_comments poll_interval_ms below minimum",
+			cfg: config.ServiceConfig{
+				Reactions: map[string]config.ReactionConfig{
+					"review_comments": {Provider: "gitea", Extra: map[string]any{"poll_interval_ms": 1000}},
+				},
+			},
+			wantChecks: []string{"reactions.review_comments"},
+		},
+		{
+			name: "review_comments debounce_ms negative",
+			cfg: config.ServiceConfig{
+				Reactions: map[string]config.ReactionConfig{
+					"review_comments": {Provider: "gitea", Extra: map[string]any{"debounce_ms": -1}},
+				},
+			},
+			wantChecks: []string{"reactions.review_comments"},
+		},
+		{
+			name: "review_comments max_continuation_turns zero",
+			cfg: config.ServiceConfig{
+				Reactions: map[string]config.ReactionConfig{
+					"review_comments": {Provider: "gitea", Extra: map[string]any{"max_continuation_turns": 0}},
+				},
+			},
+			wantChecks: []string{"reactions.review_comments"},
+		},
+		{
 			name: "bot_review bare string bot_usernames",
 			cfg: config.ServiceConfig{
 				Reactions: map[string]config.ReactionConfig{
@@ -65,6 +92,15 @@ func TestValidateReactionConfigs(t *testing.T) {
 				},
 			},
 			wantChecks: []string{"reactions.auto_merge"},
+		},
+		{
+			name: "merge_conflicts poll_interval_ms below minimum",
+			cfg: config.ServiceConfig{
+				Reactions: map[string]config.ReactionConfig{
+					"merge_conflicts": {Provider: "gitea", Extra: map[string]any{"poll_interval_ms": 1000}},
+				},
+			},
+			wantChecks: []string{"reactions.merge_conflicts"},
 		},
 		{
 			// buildReactionsConfig hard-errors on a malformed escalation
@@ -110,6 +146,33 @@ func TestValidateReactionConfigs(t *testing.T) {
 			wantChecks: nil,
 		},
 		{
+			name: "clean review_comments and merge_conflicts produce no diags",
+			cfg: config.ServiceConfig{
+				Reactions: map[string]config.ReactionConfig{
+					"review_comments": {
+						Provider: "gitea",
+						Extra: map[string]any{
+							"poll_interval_ms":       30000,
+							"debounce_ms":            0,
+							"max_continuation_turns": 1,
+						},
+					},
+					"merge_conflicts": {Provider: "gitea", Extra: map[string]any{"poll_interval_ms": 30000}},
+				},
+			},
+			wantChecks: nil,
+		},
+		{
+			name: "review_comments and merge_conflicts invalid accumulate in order",
+			cfg: config.ServiceConfig{
+				Reactions: map[string]config.ReactionConfig{
+					"review_comments": {Provider: "gitea", Extra: map[string]any{"debounce_ms": -1}},
+					"merge_conflicts": {Provider: "gitea", Extra: map[string]any{"poll_interval_ms": 1000}},
+				},
+			},
+			wantChecks: []string{"reactions.review_comments", "reactions.merge_conflicts"},
+		},
+		{
 			name:       "absent reactions map",
 			cfg:        config.ServiceConfig{},
 			wantChecks: nil,
@@ -118,8 +181,10 @@ func TestValidateReactionConfigs(t *testing.T) {
 			name: "inactive reactions with empty provider are skipped",
 			cfg: config.ServiceConfig{
 				Reactions: map[string]config.ReactionConfig{
-					"bot_review": {Provider: "", Extra: map[string]any{"bot_usernames": "not-a-list"}},
-					"auto_merge": {Provider: "", Extra: map[string]any{"strategy": "bogus"}},
+					"review_comments": {Provider: "", Extra: map[string]any{"poll_interval_ms": 1000}},
+					"bot_review":      {Provider: "", Extra: map[string]any{"bot_usernames": "not-a-list"}},
+					"auto_merge":      {Provider: "", Extra: map[string]any{"strategy": "bogus"}},
+					"merge_conflicts": {Provider: "", Extra: map[string]any{"poll_interval_ms": 1000}},
 				},
 			},
 			wantChecks: nil,
@@ -128,21 +193,19 @@ func TestValidateReactionConfigs(t *testing.T) {
 			name: "nil Extra tolerated with defaults applied",
 			cfg: config.ServiceConfig{
 				Reactions: map[string]config.ReactionConfig{
-					"bot_review": {Provider: "gitea"},
-					"auto_merge": {Provider: "gitea"},
+					"review_comments": {Provider: "gitea"},
+					"bot_review":      {Provider: "gitea"},
+					"auto_merge":      {Provider: "gitea"},
+					"merge_conflicts": {Provider: "gitea"},
 				},
 			},
 			wantChecks: nil,
 		},
 		{
-			// Only bot_review and auto_merge are dispatched; a malformed
-			// review_comments or merge_conflicts Extra field must never
-			// surface a diagnostic here.
-			name: "review_comments and merge_conflicts are never inspected",
+			name: "unknown reaction fields and kinds are ignored",
 			cfg: config.ServiceConfig{
 				Reactions: map[string]config.ReactionConfig{
-					"review_comments":  {Provider: "gitea", Extra: map[string]any{"poll_interval_ms": "not-an-int"}},
-					"merge_conflicts":  {Provider: "gitea", Extra: map[string]any{"debounce_ms": "bad"}},
+					"merge_conflicts":  {Provider: "gitea", Extra: map[string]any{"debounce_ms": "unused"}},
 					"label_commands":   {Provider: "gitea", Extra: map[string]any{"anything": "goes"}},
 					"unknown_reaction": {Provider: "gitea", Extra: map[string]any{"anything": "goes"}},
 				},
