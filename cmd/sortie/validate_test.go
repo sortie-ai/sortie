@@ -2334,11 +2334,13 @@ func diagWithCheck(diags []validateDiag, want string) *validateDiag {
 	return nil
 }
 
-// forgeCheckKeys lists every check key this feature can emit: the two
-// reaction-config diagnostics plus the three activation diagnostics.
+// forgeCheckKeys lists every check key this feature can emit: the reaction-
+// config diagnostics plus the three activation diagnostics.
 var forgeCheckKeys = []string{
+	"reactions.review_comments",
 	"reactions.bot_review",
 	"reactions.auto_merge",
+	"reactions.merge_conflicts",
 	"scm_adapter",
 	"ci_provider",
 	"reactions.scm_provider_conflict",
@@ -2540,6 +2542,123 @@ func TestValidateMergeCompletionNonTerminalTargetState(t *testing.T) {
 		t.Errorf("validateOutput.Errors = %v, want a diagnostic with check %q", out.Errors, "reactions.merge_completion")
 	} else if d.Severity != "error" {
 		t.Errorf("reactions.merge_completion diagnostic severity = %q, want %q", d.Severity, "error")
+	}
+}
+
+// TestValidateReviewAndMergeConflictReactionConfigs verifies that validate
+// runs every kind-specific numeric rule for review_comments and
+// merge_conflicts without constructing an adapter or making a network call.
+func TestValidateReviewAndMergeConflictReactionConfigs(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name         string
+		extraYAML    string
+		wantCheck    string
+		wantField    string
+		wantExitCode int
+	}{
+		{
+			name: "review_comments poll_interval_ms below minimum",
+			extraYAML: `reactions:
+  review_comments:
+    provider: gitea
+    poll_interval_ms: 1000
+`,
+			wantCheck:    "reactions.review_comments",
+			wantField:    "poll_interval_ms",
+			wantExitCode: 1,
+		},
+		{
+			name: "review_comments debounce_ms negative",
+			extraYAML: `reactions:
+  review_comments:
+    provider: gitea
+    debounce_ms: -1
+`,
+			wantCheck:    "reactions.review_comments",
+			wantField:    "debounce_ms",
+			wantExitCode: 1,
+		},
+		{
+			name: "review_comments max_continuation_turns zero",
+			extraYAML: `reactions:
+  review_comments:
+    provider: gitea
+    max_continuation_turns: 0
+`,
+			wantCheck:    "reactions.review_comments",
+			wantField:    "max_continuation_turns",
+			wantExitCode: 1,
+		},
+		{
+			name: "merge_conflicts poll_interval_ms below minimum",
+			extraYAML: `reactions:
+  merge_conflicts:
+    provider: gitea
+    poll_interval_ms: 1000
+`,
+			wantCheck:    "reactions.merge_conflicts",
+			wantField:    "poll_interval_ms",
+			wantExitCode: 1,
+		},
+		{
+			name: "valid numeric settings",
+			extraYAML: `reactions:
+  review_comments:
+    provider: gitea
+    poll_interval_ms: 30000
+    debounce_ms: 0
+    max_continuation_turns: 1
+  merge_conflicts:
+    provider: gitea
+    poll_interval_ms: 30000
+`,
+			wantExitCode: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			dir := t.TempDir()
+			wfPath := writeCustomWorkflowFile(t, dir, forgeFaultWorkflow(tt.extraYAML))
+
+			var stdout, stderr bytes.Buffer
+			code := run(context.Background(), []string{"validate", "--format", "json", wfPath}, &stdout, &stderr)
+			if code != tt.wantExitCode {
+				t.Fatalf("run(validate --format json) = %d, want %d; stderr: %s", code, tt.wantExitCode, stderr.String())
+			}
+
+			var out validateOutput
+			if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
+				t.Fatalf("json.Unmarshal(%q) error: %v", stdout.String(), err)
+			}
+
+			if tt.wantCheck == "" {
+				if !out.Valid {
+					t.Errorf("validateOutput.Valid = false, want true; errors: %v", out.Errors)
+				}
+				for _, check := range []string{"reactions.review_comments", "reactions.merge_conflicts"} {
+					if d := diagWithCheck(out.Errors, check); d != nil {
+						t.Errorf("validateOutput.Errors contains %q = %v, want none", check, d)
+					}
+				}
+				return
+			}
+
+			if out.Valid {
+				t.Errorf("validateOutput.Valid = true, want false")
+			}
+			d := diagWithCheck(out.Errors, tt.wantCheck)
+			if d == nil {
+				t.Fatalf("validateOutput.Errors = %v, want a diagnostic with check %q", out.Errors, tt.wantCheck)
+			}
+			if !strings.Contains(d.Message, tt.wantField) {
+				t.Errorf("diagnostic message = %q, want field %q", d.Message, tt.wantField)
+			}
+		})
 	}
 }
 

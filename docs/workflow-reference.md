@@ -1438,11 +1438,10 @@ reactions:
 
 **Where each rule is enforced:** the rules that the config layer owns (reaction key shape,
 `max_retries`, `escalation`, `escalation_label`, and every `label_commands` rule) run during
-typed config construction, so `sortie validate` reports them offline. Of the kind-specific
-rules, `sortie validate` additionally runs the `auto_merge`, `bot_review`, and
-`merge_completion` builders, so their rules are also reported offline. The `review_comments`
-and `merge_conflicts` kind-specific rules are checked only when the orchestrator constructs
-the reaction, so an invalid value there passes `sortie validate` and fails at startup.
+typed config construction, so `sortie validate` reports them offline. For the kind-specific
+rules, `sortie validate` runs the `review_comments`, `auto_merge`, `bot_review`,
+`merge_conflicts`, and `merge_completion` builders. These are the same builders used when the
+orchestrator constructs the reactions at startup, so both paths report the same invalid values.
 
 ---
 
