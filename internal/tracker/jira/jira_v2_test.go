@@ -279,6 +279,33 @@ func TestNewJiraAdapter_HostVersionGuard_RejectUnparseableEndpoint(t *testing.T)
 	}
 }
 
+func TestNewJiraAdapter_HostVersionGuard_RedactsEndpointUserinfo(t *testing.T) {
+	t.Parallel()
+
+	const endpoint = "https://operator:secret@jira.example.com/%zz"
+	a, err := NewJiraAdapter(map[string]any{
+		"endpoint":    endpoint,
+		"api_key":     "user@test.com:tok",
+		"project":     "P",
+		"api_version": "3",
+	})
+
+	assertTrackerErrorKind(t, err, domain.ErrTrackerPayload)
+	if a != nil {
+		t.Error("adapter should be nil when the endpoint is malformed")
+	}
+	var trackerErr *domain.TrackerError
+	asTrackerError(t, err, &trackerErr)
+	if !strings.Contains(trackerErr.Message, "https://jira.example.com/%zz") {
+		t.Errorf("TrackerError.Message = %q, want the endpoint without userinfo", trackerErr.Message)
+	}
+	for _, secret := range []string{"operator", "secret"} {
+		if strings.Contains(trackerErr.Message, secret) {
+			t.Errorf("TrackerError.Message = %q, must not contain %q", trackerErr.Message, secret)
+		}
+	}
+}
+
 // TestNewJiraAdapter_HostVersionGuard_ConsistentCombos verifies the two
 // consistent (host, version) pairs construct successfully.
 func TestNewJiraAdapter_HostVersionGuard_ConsistentCombos(t *testing.T) {

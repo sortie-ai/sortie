@@ -63,7 +63,7 @@ func NewGitLabSCMAdapter(adapterConfig map[string]any) (domain.SCMAdapter, error
 	if err != nil || (parsedEndpoint.Scheme != "http" && parsedEndpoint.Scheme != "https") || parsedEndpoint.Host == "" {
 		return nil, &domain.SCMError{
 			Kind:    domain.ErrSCMPayload,
-			Message: fmt.Sprintf("gitlab: endpoint %q is not a valid absolute http(s) url", endpoint),
+			Message: fmt.Sprintf("gitlab: endpoint %q is not a valid absolute http(s) url", httpkit.RedactURLUserinfo(endpoint)),
 		}
 	}
 	baseURL := strings.TrimRight(endpoint, "/")

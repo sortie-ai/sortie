@@ -131,7 +131,7 @@ func NewGitLabCIProvider(maxLogLines int, adapterConfig map[string]any) (domain.
 	if err != nil || (parsedEndpoint.Scheme != "http" && parsedEndpoint.Scheme != "https") || parsedEndpoint.Host == "" {
 		return nil, &domain.CIError{
 			Kind:    domain.ErrCIPayload,
-			Message: fmt.Sprintf("gitlab: endpoint %q is not a valid absolute http(s) url", endpoint),
+			Message: fmt.Sprintf("gitlab: endpoint %q is not a valid absolute http(s) url", httpkit.RedactURLUserinfo(endpoint)),
 		}
 	}
 	baseURL := strings.TrimRight(endpoint, "/")
