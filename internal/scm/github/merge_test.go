@@ -531,6 +531,42 @@ func TestGetCIStatus_NoSignals_ReturnsEmpty(t *testing.T) {
 	}
 }
 
+func TestGetCIStatus_PaginatorErrors(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name         string
+		failingRoute string
+	}{
+		{name: "combined_status", failingRoute: "/status"},
+		{name: "check_runs", failingRoute: "/check-runs"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				switch {
+				case strings.Contains(r.URL.Path, "/pulls/"):
+					_, _ = w.Write([]byte(`{"head":{"sha":"abc123"}}`))
+				case strings.Contains(r.URL.Path, tt.failingRoute):
+					w.WriteHeader(http.StatusInternalServerError)
+					_, _ = w.Write([]byte(`{"message":"Internal Server Error"}`))
+				case strings.Contains(r.URL.Path, "/status"):
+					_, _ = w.Write([]byte(`{"state":"","statuses":[]}`))
+				}
+			}))
+			defer srv.Close()
+
+			a := newTestSCMAdapter(t, srv.URL)
+			_, err := a.GetCIStatus(t.Context(), 1, "owner", "repo")
+			assertSCMErrorKind(t, err, domain.ErrSCMTransport)
+		})
+	}
+}
+
 // combinedStatusPageJSON builds one combined-status page carrying n
 // same-state entries, matching the wire shape [decodeCombinedStatusPage]
 // unmarshals.
