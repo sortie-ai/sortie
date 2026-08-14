@@ -1,9 +1,13 @@
 [
   {
     "id": 100,
+    "pull_request_review_id": 20,
     "path": "internal/handler.go",
     "start_line": 10,
+    "original_start_line": 10,
     "line": 12,
+    "original_line": 12,
+    "subject_type": "line",
     "position": 5,
     "body": "This function is too long. Please extract a helper.",
     "user": {

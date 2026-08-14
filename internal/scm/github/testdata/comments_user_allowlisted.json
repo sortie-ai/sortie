@@ -1,9 +1,13 @@
 [
   {
     "id": 600,
+    "pull_request_review_id": 60,
     "path": "internal/handler.go",
     "start_line": 5,
+    "original_start_line": 5,
     "line": 7,
+    "original_line": 7,
+    "subject_type": "line",
     "position": 2,
     "body": "Trailing whitespace detected.",
     "user": {

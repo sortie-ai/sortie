@@ -37,13 +37,16 @@ type githubReview struct {
 }
 
 type githubReviewComment struct {
-	ID        int64  `json:"id"`
-	Path      string `json:"path"`
-	StartLine *int   `json:"start_line"`
-	Line      *int   `json:"line"`
-	Position  *int   `json:"position"`
-	Body      string `json:"body"`
-	User      struct {
+	ID                  int64  `json:"id"`
+	PullRequestReviewID *int64 `json:"pull_request_review_id"`
+	Path                string `json:"path"`
+	StartLine           *int   `json:"start_line"`
+	OriginalStartLine   *int   `json:"original_start_line"`
+	Line                *int   `json:"line"`
+	OriginalLine        *int   `json:"original_line"`
+	SubjectType         string `json:"subject_type"`
+	Body                string `json:"body"`
+	User                struct {
 		Login string `json:"login"`
 		Type  string `json:"type"`
 	} `json:"user"`
@@ -90,9 +93,9 @@ func NewGitHubSCMAdapter(adapterConfig map[string]any) (domain.SCMAdapter, error
 }
 
 // FetchPendingReviews returns review comments from non-bot
-// CHANGES_REQUESTED reviews on the given PR. Outdated comments (where
-// GitHub reports position as null) have Outdated=true. Returns an empty
-// non-nil slice when no matching reviews exist.
+// CHANGES_REQUESTED reviews on the given PR. Outdated line comments
+// (where GitHub no longer reports a current line) have Outdated=true.
+// Returns an empty non-nil slice when no matching reviews exist.
 //
 // SubmittedAt is parsed via [scmcore.ParseTimestampOrZero]: a review or
 // comment timestamp that is not RFC 3339 normalizes to the zero time
@@ -103,9 +106,7 @@ func (a *GitHubSCMAdapter) FetchPendingReviews(ctx context.Context, prNumber int
 		return nil, err
 	}
 
-	seen := make(map[string]struct{})
-	var result []domain.ReviewComment
-
+	selected := make([]githubReview, 0, len(reviews))
 	for _, review := range reviews {
 		if !strings.EqualFold(review.State, "CHANGES_REQUESTED") {
 			continue
@@ -113,79 +114,20 @@ func (a *GitHubSCMAdapter) FetchPendingReviews(ctx context.Context, prNumber int
 		if strings.EqualFold(review.User.Type, "Bot") {
 			continue
 		}
-
-		// Include non-empty review body as a PR-level comment.
-		body := strings.TrimSpace(review.Body)
-		if body != "" {
-			prCommentID := fmt.Sprintf("review-%d", review.ID)
-			if _, dup := seen[prCommentID]; !dup {
-				seen[prCommentID] = struct{}{}
-				submittedAt := scmcore.ParseTimestampOrZero(review.SubmittedAt)
-				result = append(result, domain.ReviewComment{
-					ID:          prCommentID,
-					Reviewer:    review.User.Login,
-					Body:        body,
-					SubmittedAt: submittedAt,
-				})
-			}
-		}
-
-		// Fetch inline comments for this review.
-		comments, fetchErr := a.fetchReviewComments(ctx, prNumber, owner, repo, review.ID)
-		if fetchErr != nil {
-			return nil, fetchErr
-		}
-
-		for _, c := range comments {
-			if strings.EqualFold(c.User.Type, "Bot") {
-				continue
-			}
-
-			commentID := strconv.FormatInt(c.ID, 10)
-			if _, dup := seen[commentID]; dup {
-				continue
-			}
-			seen[commentID] = struct{}{}
-
-			startLine := 0
-			if c.StartLine != nil {
-				startLine = *c.StartLine
-			} else if c.Line != nil {
-				startLine = *c.Line
-			}
-
-			endLine := 0
-			if c.Line != nil && *c.Line != startLine {
-				endLine = *c.Line
-			}
-
-			createdAt := scmcore.ParseTimestampOrZero(c.CreatedAt)
-
-			result = append(result, domain.ReviewComment{
-				ID:          commentID,
-				FilePath:    c.Path,
-				StartLine:   startLine,
-				EndLine:     endLine,
-				Reviewer:    c.User.Login,
-				Body:        c.Body,
-				SubmittedAt: createdAt,
-				Outdated:    c.Position == nil,
-			})
-		}
+		selected = append(selected, review)
 	}
 
-	if result == nil {
-		result = []domain.ReviewComment{}
-	}
-	return result, nil
+	return a.collectReviewComments(ctx, prNumber, owner, repo, selected, func(comment githubReviewComment) bool {
+		return !strings.EqualFold(comment.User.Type, "Bot")
+	})
 }
 
 // FetchBotReviewComments returns review comments authored by automated
 // review bots on the given PR. A review or comment is bot-authored when
 // its user.type is "Bot" or its author login matches a botUsernames entry
-// case-insensitively. Outdated comments (where GitHub reports position as
-// null) have Outdated=true. Returns an empty non-nil slice when no bot
-// comments exist.
+// case-insensitively. Outdated line comments (where GitHub no longer
+// reports a current line) have Outdated=true. Returns an empty non-nil
+// slice when no bot comments exist.
 //
 // Unlike [GitHubSCMAdapter.FetchPendingReviews], no review-state filter is
 // applied: review bots commonly post COMMENTED reviews, so requiring
@@ -200,78 +142,123 @@ func (a *GitHubSCMAdapter) FetchBotReviewComments(ctx context.Context, prNumber 
 		return nil, err
 	}
 
-	seen := make(map[string]struct{})
-	var result []domain.ReviewComment
-
+	selected := make([]githubReview, 0, len(reviews))
 	for _, review := range reviews {
 		if !scmcore.IsBotAuthor(review.User.Login, strings.EqualFold(review.User.Type, "Bot"), botUsernames) {
 			continue
 		}
+		selected = append(selected, review)
+	}
 
-		// Include non-empty review body as a PR-level comment.
+	return a.collectReviewComments(ctx, prNumber, owner, repo, selected, func(comment githubReviewComment) bool {
+		return scmcore.IsBotAuthor(comment.User.Login, strings.EqualFold(comment.User.Type, "Bot"), botUsernames)
+	})
+}
+
+func (a *GitHubSCMAdapter) collectReviewComments(
+	ctx context.Context,
+	prNumber int,
+	owner, repo string,
+	reviews []githubReview,
+	includeComment func(githubReviewComment) bool,
+) ([]domain.ReviewComment, error) {
+	result := make([]domain.ReviewComment, 0)
+	if len(reviews) == 0 {
+		return result, nil
+	}
+
+	comments, err := a.fetchAllReviewComments(ctx, prNumber, owner, repo)
+	if err != nil {
+		return nil, err
+	}
+
+	commentsByReview := make(map[int64][]githubReviewComment)
+	for _, comment := range comments {
+		if comment.PullRequestReviewID == nil {
+			continue
+		}
+		reviewID := *comment.PullRequestReviewID
+		commentsByReview[reviewID] = append(commentsByReview[reviewID], comment)
+	}
+
+	seen := make(map[string]struct{})
+	for _, review := range reviews {
 		body := strings.TrimSpace(review.Body)
 		if body != "" {
 			prCommentID := fmt.Sprintf("review-%d", review.ID)
 			if _, dup := seen[prCommentID]; !dup {
 				seen[prCommentID] = struct{}{}
-				submittedAt := scmcore.ParseTimestampOrZero(review.SubmittedAt)
 				result = append(result, domain.ReviewComment{
 					ID:          prCommentID,
 					Reviewer:    review.User.Login,
 					Body:        body,
-					SubmittedAt: submittedAt,
+					SubmittedAt: scmcore.ParseTimestampOrZero(review.SubmittedAt),
 				})
 			}
 		}
 
-		// Fetch inline comments for this review.
-		comments, fetchErr := a.fetchReviewComments(ctx, prNumber, owner, repo, review.ID)
-		if fetchErr != nil {
-			return nil, fetchErr
-		}
-
-		for _, c := range comments {
-			if !scmcore.IsBotAuthor(c.User.Login, strings.EqualFold(c.User.Type, "Bot"), botUsernames) {
+		for _, comment := range commentsByReview[review.ID] {
+			if !includeComment(comment) {
 				continue
 			}
 
-			commentID := strconv.FormatInt(c.ID, 10)
+			commentID := strconv.FormatInt(comment.ID, 10)
 			if _, dup := seen[commentID]; dup {
 				continue
 			}
 			seen[commentID] = struct{}{}
-
-			startLine := 0
-			if c.StartLine != nil {
-				startLine = *c.StartLine
-			} else if c.Line != nil {
-				startLine = *c.Line
-			}
-
-			endLine := 0
-			if c.Line != nil && *c.Line != startLine {
-				endLine = *c.Line
-			}
-
-			createdAt := scmcore.ParseTimestampOrZero(c.CreatedAt)
-
-			result = append(result, domain.ReviewComment{
-				ID:          commentID,
-				FilePath:    c.Path,
-				StartLine:   startLine,
-				EndLine:     endLine,
-				Reviewer:    c.User.Login,
-				Body:        c.Body,
-				SubmittedAt: createdAt,
-				Outdated:    c.Position == nil,
-			})
+			result = append(result, normalizeReviewComment(comment))
 		}
 	}
 
-	if result == nil {
-		result = []domain.ReviewComment{}
-	}
 	return result, nil
+}
+
+func normalizeReviewComment(comment githubReviewComment) domain.ReviewComment {
+	startLine, endLine := reviewCommentLines(comment)
+	return domain.ReviewComment{
+		ID:          strconv.FormatInt(comment.ID, 10),
+		FilePath:    comment.Path,
+		StartLine:   startLine,
+		EndLine:     endLine,
+		Reviewer:    comment.User.Login,
+		Body:        comment.Body,
+		SubmittedAt: scmcore.ParseTimestampOrZero(comment.CreatedAt),
+		Outdated:    isOutdatedReviewComment(comment),
+	}
+}
+
+func reviewCommentLines(comment githubReviewComment) (int, int) {
+	if strings.EqualFold(comment.SubjectType, "file") {
+		return 0, 0
+	}
+
+	var startLine, endLine int
+	if comment.Line != nil {
+		endLine = *comment.Line
+		startLine = endLine
+		if comment.StartLine != nil {
+			startLine = *comment.StartLine
+		}
+	} else if comment.OriginalLine != nil {
+		endLine = *comment.OriginalLine
+		startLine = endLine
+		if comment.OriginalStartLine != nil {
+			startLine = *comment.OriginalStartLine
+		}
+	}
+
+	if startLine == endLine {
+		endLine = 0
+	}
+	return startLine, endLine
+}
+
+func isOutdatedReviewComment(comment githubReviewComment) bool {
+	if strings.EqualFold(comment.SubjectType, "file") {
+		return false
+	}
+	return comment.Line == nil && (comment.OriginalLine != nil || strings.EqualFold(comment.SubjectType, "line"))
 }
 
 func (a *GitHubSCMAdapter) fetchAllReviews(ctx context.Context, prNumber int, owner, repo string) ([]githubReview, error) {
@@ -306,9 +293,9 @@ func (a *GitHubSCMAdapter) fetchAllReviews(ctx context.Context, prNumber int, ow
 	return all, nil
 }
 
-func (a *GitHubSCMAdapter) fetchReviewComments(ctx context.Context, prNumber int, owner, repo string, reviewID int64) ([]githubReviewComment, error) {
-	path := fmt.Sprintf("/repos/%s/%s/pulls/%d/reviews/%d/comments",
-		url.PathEscape(owner), url.PathEscape(repo), prNumber, reviewID)
+func (a *GitHubSCMAdapter) fetchAllReviewComments(ctx context.Context, prNumber int, owner, repo string) ([]githubReviewComment, error) {
+	path := fmt.Sprintf("/repos/%s/%s/pulls/%d/comments",
+		url.PathEscape(owner), url.PathEscape(repo), prNumber)
 	params := url.Values{"per_page": {"100"}}
 
 	paginator := httpkit.NewLinkPaginator(a.client, path, params, func(body []byte) ([]githubReviewComment, error) {
@@ -328,7 +315,6 @@ func (a *GitHubSCMAdapter) fetchReviewComments(ctx context.Context, prNumber int
 				slog.String("owner", owner),
 				slog.String("repo", repo),
 				slog.Int("pr_number", prNumber),
-				slog.Int64("review_id", reviewID),
 				slog.Int("max_pages", limit))
 		},
 	})

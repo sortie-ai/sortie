@@ -1,10 +1,14 @@
 [
   {
     "id": 200,
+    "pull_request_review_id": 20,
     "path": "internal/old.go",
     "start_line": null,
-    "line": 5,
-    "position": null,
+    "original_start_line": null,
+    "line": null,
+    "original_line": 5,
+    "position": 1,
+    "subject_type": "line",
     "body": "This comment refers to outdated code.",
     "user": {
       "login": "alice",

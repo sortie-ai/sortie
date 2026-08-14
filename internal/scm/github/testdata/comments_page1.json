@@ -1,9 +1,13 @@
 [
   {
     "id": 300,
+    "pull_request_review_id": 20,
     "path": "cmd/main.go",
     "start_line": null,
+    "original_start_line": null,
     "line": 20,
+    "original_line": 20,
+    "subject_type": "line",
     "position": 3,
     "body": "First page comment.",
     "user": {

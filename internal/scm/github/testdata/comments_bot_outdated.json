@@ -1,10 +1,14 @@
 [
   {
     "id": 500,
+    "pull_request_review_id": 50,
     "path": "internal/auth.go",
     "start_line": null,
-    "line": 42,
-    "position": null,
+    "original_start_line": null,
+    "line": null,
+    "original_line": 42,
+    "position": 1,
+    "subject_type": "line",
     "body": "Unused variable detected by linter.",
     "user": {
       "login": "golangci-lint[bot]",
