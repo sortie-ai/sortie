@@ -119,6 +119,35 @@ Hook environment variables available only to `after_run`:
 - `SORTIE_SELF_REVIEW_SUMMARY_PATH`: absolute path to `.sortie/review_summary.md` in
   the workspace. Absent when self-review did not run or summary was not written.
 
+#### 9.4.1 Handoff Evidence Baseline
+
+For a run whose frozen `tracker.handoff_evidence` policy is `observed` or `strict`, the
+orchestrator captures a workspace baseline at the boundary between preparation and agent launch:
+after directory creation/reuse, population, and the applicable pre-run hooks have finished, and
+before `StartSession` can begin agent work. Both the full preparation path and the ensure-only path
+must reach this boundary. Under `off`, no baseline is captured.
+
+The baseline records the workspace's committed position and enough working-tree state to determine
+later whether that state changed. Evidence is a difference from this baseline, not a property of the
+tree at exit:
+
+- A moved committed position or a working-tree state that differs from the baseline is work
+  observed.
+- Workspace SCM metadata naming a pushed commit or pull request for the issue is also work observed,
+  even when an earlier run wrote that metadata. Per-issue workspaces are reused, so this positive
+  signal prevents a later no-op run from stranding work that was already pushed.
+- When no positive signal holds, a successful inspection against a baseline is absence of work
+  observed. A missing baseline, a non-version-controlled workspace, a failed inspection, or no
+  recorded workspace yields evidence not determinable instead.
+
+No particular source-control command or baseline representation is prescribed. The contract must
+distinguish pre-existing uncommitted state from changes made by this run and must recognize a commit
+created by `after_run` even when that hook leaves the tree clean.
+
+The `after_run` contract itself is unchanged. Its failure remains logged and ignored, and its exit
+status has no vote in the handoff disposition. Any files, commits, pushes, or SCM metadata the hook
+produces are visible only through the same workspace evidence rules as other run output.
+
 ### 9.5 Workspace SCM metadata (`.sortie/scm.json`)
 
 The `.sortie/scm.json` file is a workspace-level file that carries SCM metadata written by the
@@ -203,4 +232,3 @@ fingerprint write, and no creation or deletion of a pending reaction entry. Reac
 read-only to the age bound. Every removal it performs routes through the same workspace removal
 path as the terminal gate, so key sanitization, containment under the workspace root, and the
 `before_remove` hook apply unchanged. The age bound introduces no new way to reach the filesystem.
-

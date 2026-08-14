@@ -48,6 +48,11 @@ Dynamic reload is required:
   kind is active at all, takes effect only on the next restart (Section 11G.3). The CI-failure kind
   is the one carve-out: its configuration is folded into the CI feedback block, which reconciliation
   re-reads from the current snapshot on every tick, so its fields do reload.
+- Primary-dispatch parking after repeated withheld handoffs takes its label name from the captured
+  `reactions.review_comments.escalation_label` value. This is a name lookup only: it does not require
+  the review-comments reaction to be enabled and does not inherit that reaction's `escalation`
+  action. Because the source value is reaction configuration, changing it takes effect only after a
+  restart as well.
 - Reloaded config applies to future dispatch, retry scheduling, reconciliation decisions, hook
   execution, and agent launches.
 - In-flight agent sessions are not restarted automatically when config changes.
@@ -92,6 +97,9 @@ Validation checks:
   state lists. An empty `tracker.active_states` or `tracker.terminal_states` takes the tracker
   adapter's declared fallback list, so a collision the config layer cannot see (because it rules
   on the lists as written) is reported here.
+- `tracker.handoff_evidence` is validated while configuration is parsed as the closed set
+  `observed`, `strict`, and `off`. This is a shape check and never contacts the tracker, so the same
+  invalid value is rejected by startup, reload, and `sortie validate`.
 - `reactions.merge_completion.target_state`, checked once at construction against
   `tracker.handoff_state`, `tracker.active_states`, and `tracker.terminal_states`: required and
   non-empty when `reactions.merge_completion.provider` is set, must not equal
@@ -180,10 +188,18 @@ This section is intentionally redundant so a coding agent can implement the conf
   default terminal-state list in that case
 - `tracker.query_filter`: string, optional, default empty (adapter-defined filter fragment)
 - `tracker.handoff_state`: string, optional, default absent; target state for
-  orchestrator-initiated handoff after successful worker run; must not collide with
+  orchestrator-initiated handoff after a worker run whose exit disposition and handoff-evidence
+  policy permit the write; must not collide with
   `active_states` or `terminal_states`, evaluated against the effective lists, so the tracker
   adapter's fallback participates whenever the matching field is empty; required, non-empty, when
   `reactions.merge_completion.provider` is set; supports `$VAR`
+- `tracker.handoff_evidence`: string, default `observed`; policy governing the evidence condition
+  on an otherwise-eligible handoff. `observed` withholds only when absence of work is positively
+  observed and allows an undeterminable verdict; `strict` also withholds an undeterminable verdict;
+  `off` restores the prior four-condition decision and performs no baseline capture, exit-time
+  workspace inspection, or evidence logging. Values outside `observed`, `strict`, and `off` are
+  rejected offline. The policy is frozen for each run before its baseline decision, so a reload
+  applies to future run launches and does not change an in-flight run's evidence contract
 - `tracker.in_progress_state`: string, optional, default absent; target state for
   dispatch-time transition at the start of each worker attempt; must be in `active_states`,
   must not collide with `terminal_states` or `handoff_state`, and the `terminal_states` rule is
@@ -224,7 +240,12 @@ This section is intentionally redundant so a coding agent can implement the conf
 - `agent.max_turns`: integer, default `20`
 - `agent.max_retry_backoff_ms`: integer, default `300000` (5m)
 - `agent.max_concurrent_agents_by_state`: map of positive integers, default `{}`
-- `agent.max_sessions`: integer, default `0` (unlimited)
+- `agent.max_sessions`: non-negative integer, default `0` (unlimited for the existing total
+  per-issue session budget). A positive value is also the ceiling on the **total count** of
+  consecutive handoff absences, not a retry count. For that safety ceiling only, `0` derives the
+  finite value `3`: the first observed absence may be followed by two retry dispatches, and the
+  third consecutive absence parks the issue. This does not make the ordinary total-session budget
+  finite. Any run on which work is observed resets the consecutive-absence count to zero
 - `agent.max_tokens`: integer, default `0` (unlimited)
 - `ci_feedback.kind`: string, optional, **deprecated**; identifies the CI status provider adapter;
   presence activates CI feedback; use `reactions.ci_failure` instead
@@ -238,7 +259,12 @@ This section is intentionally redundant so a coding agent can implement the conf
 - `reactions.<kind>.provider`: string, optional; adapter identifier; absent = disabled
 - `reactions.<kind>.max_retries`: integer, default `2`; fix continuation attempts before escalation
 - `reactions.<kind>.escalation`: string, default `label`; `label` or `comment`
-- `reactions.<kind>.escalation_label`: string, default `needs-human`
+- `reactions.<kind>.escalation_label`: string, default `needs-human`. Primary-dispatch parking uses
+  the resolved non-empty `reactions.review_comments.escalation_label`; when that block or value is
+  absent or empty it uses `needs-human`. The lookup ignores
+  `reactions.review_comments.provider`, ignores whether its `escalation` value is `label` or
+  `comment`, and never falls through to another reaction kind's label. The primary path always
+  parks by label; it borrows only this label name and no other review-reaction behavior
 - `reactions.review_comments.poll_interval_ms`: integer, default `120000` (2 min); minimum `30000`
 - `reactions.review_comments.debounce_ms`: integer, default `60000` (60 sec); non-negative
 - `reactions.review_comments.max_continuation_turns`: integer, default `3`; positive
@@ -283,4 +309,3 @@ This section is intentionally redundant so a coding agent can implement the conf
   required
 - `db_path`: path, default `.sortie.db` next to `WORKFLOW.md`; supports `$VAR` and `~`
   expansion; requires restart to take effect
-

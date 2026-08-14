@@ -18,6 +18,19 @@ Message formatting requirements:
 - Include concise failure reason when present.
 - Avoid logging large raw payloads unless necessary.
 
+Handoff-evidence records are part of the required operator surface:
+
+- A withheld handoff emits a `Warn` record naming the verdict and carrying
+  `turns_completed` plus the resulting `consecutive_absences` count. The standard issue context
+  fields identify the affected issue.
+- An `evidence not determinable` verdict emits an `Info` record under both `observed` and `strict`,
+  carrying the policy and `turns_completed`. Under `strict`, the separate withheld warning is also
+  emitted because that policy converts the verdict into the absence disposition.
+- Parking at the consecutive-absence ceiling emits a `Warn` record carrying
+  `consecutive_absences`, `absence_ceiling`, and `escalation_label`. A failed label write is recorded
+  separately as an escalation error and does not suppress the parking record.
+- A run frozen to `tracker.handoff_evidence: off` emits none of these evidence records.
+
 The periodic workspace sweep emits exactly one summary record per pass, at `Info` level, message
 `"sweep: pass complete"`, on every pass that produced a candidate set, including a pass over zero
 keys, a pass whose tracker read failed, and a pass that removed nothing. This is deliberate: a
@@ -385,7 +398,7 @@ Defined metrics (label sets and buckets are specified here; see ADR-0008 for his
 | `sortie_poll_cycles_total{result}` | Counter | Poll tick completions, partitioned by result (`success`, `error`, `skipped`). |
 | `sortie_tracker_requests_total{operation,result}` | Counter | Tracker adapter API calls, partitioned by operation (`fetch_candidates`, `fetch_issue`, `fetch_by_states`, `fetch_states_by_ids`, `fetch_states_by_identifiers`, `fetch_comments`, `transition`, `comment`, `add_label`) and result (`success`, `error`). |
 | `sortie_tracker_comments_total{lifecycle,result}` | Counter | Tracker comment attempts, partitioned by lifecycle point (`dispatch`, `completion`, `failure`) and result (`success`, `error`). |
-| `sortie_handoff_transitions_total{result}` | Counter | Handoff-state transition attempts, partitioned by result (`success`, `error`, `skipped`). `skipped` has two causes and does not distinguish them: the issue was no longer in an active state at worker exit, or the issue was already reported terminal and the write was suppressed (Section 11.5). Both are counted only when `tracker.handoff_state` is configured. |
+| `sortie_handoff_transitions_total{result}` | Counter | Handoff-state dispositions, partitioned by result (`success`, `error`, `skipped`, `withheld`). `withheld` means the handoff-evidence policy selected the absence failure path before any transition attempt, distinguishing it from an ordinary worker failure. `skipped` retains its two earlier causes and does not distinguish them: the issue was no longer in an active state at worker exit, or the issue was already reported terminal and the write was suppressed (Section 11.5). All four values are counted only when `tracker.handoff_state` is configured. |
 | `sortie_dispatch_transitions_total{result}` | Counter | Dispatch-time in-progress transition attempts, partitioned by result (`success`, `error`, `skipped`). `skipped` indicates the issue was already in the target state. |
 | `sortie_dispatch_rule_match_total{layer,rule}` | Counter | Dispatch rule match outcomes, partitioned by resolution layer (`rule`, `default`, `fallback`) and matched rule name. Empty rule names report as `<none>` to bound label cardinality. |
 | `sortie_tool_calls_total{tool,result}` | Counter | Agent tool call completions, partitioned by tool name and result (`success`, `error`). |
@@ -401,4 +414,3 @@ Defined metrics (label sets and buckets are specified here; see ADR-0008 for his
 | `sortie_worker_duration_seconds{exit_type}` | Histogram | Worker session wall-clock time; buckets via `ExponentialBuckets(10, 2, 12)` (10 s–5.7 h). `exit_type` carries the same values as `sortie_worker_exits_total`. |
 | `sortie_self_review_verification_duration_seconds{command}` | Histogram | Per-command verification duration during self-review; buckets via `ExponentialBuckets(10, 2, 12)` (10 s–5.7 h). The `command` label is truncated to the first 64 characters. |
 | `sortie_build_info{version,go_version}` | Gauge | Always `1`; carries build metadata as labels. |
-

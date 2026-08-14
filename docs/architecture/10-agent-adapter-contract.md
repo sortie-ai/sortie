@@ -48,6 +48,24 @@ The orchestrator interacts with an agent session as follows:
 The session handle and any session identifiers are adapter-specific. The orchestrator treats
 `session_id` as an opaque string.
 
+#### 10.2.1 Handoff-Evidence Ownership
+
+The handoff-evidence verdict belongs to the orchestrator. It is computed from the workspace baseline
+and the positive SCM signals the orchestrator already reads, after an otherwise-eligible normal
+worker exit. This decision adds no operation, event, result field, or work-classification obligation
+to the agent adapter interface.
+
+An adapter's turn disposition (§10.8) and the handoff-evidence verdict answer different questions.
+The former normalizes what one runtime reported about a turn; the latter decides whether the
+orchestrator observed durable output behind a tracker handoff. A successful adapter result, a
+non-zero completed-turn count, token usage, or a tool call is diagnostic context only and cannot by
+itself establish either work observed or absence of work.
+
+A future adapter may contribute a positive work signal. Such a signal can only change an absence or
+undeterminable case to work observed; it cannot declare absence and does not transfer ownership of
+the verdict from the orchestrator. This preserves one monotone verdict across present and future
+runtimes.
+
 ### 10.3 Normalized Event Types
 
 The orchestrator expects the following event types from any agent adapter. Adapters map their
@@ -631,4 +649,3 @@ and diverge from the rule's letter while obeying its intent:
 `turn_ended_with_error` remains a documented normalized event type (Section 10.3), reserved for a
 future adapter whose runtime genuinely distinguishes a transport-class failure from every other
 failure, even though no built-in adapter emits it today.
-

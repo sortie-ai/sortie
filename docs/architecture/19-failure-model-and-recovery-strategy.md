@@ -38,6 +38,12 @@
    - Escalation failures (label or comment write to tracker)
    - Missing or malformed `.sortie/scm.json`
 
+7. `Handoff Evidence Failures`
+   - Absence of work observed where the four pre-existing handoff conditions otherwise permit the
+     transition
+   - Evidence not determinable under the `strict` policy, which deliberately treats that verdict as
+     an absence
+
 ### 14.2 Recovery Behavior
 
 - Dispatch validation failures:
@@ -47,6 +53,45 @@
 
 - Worker failures:
   - Convert to retries with exponential backoff.
+
+- Withheld handoff evidence:
+  - Leave the issue in its active tracker state, record the run as `failed` with the evidence verdict
+    in its error reason, and schedule the ordinary exponential-backoff failure path. Do not use the
+    fixed-delay continuation path.
+  - Maintain a count of consecutive outcomes treated as handoff absences for each issue. `Absence of
+    work observed` increments it, as does `evidence not determinable` under `strict`. A
+    `work observed` verdict resets it to zero immediately; a later handoff-write error cannot restore
+    the old count. Outcomes that provide no work-observed verdict do not pretend to reset it.
+  - Derive the consecutive-absence ceiling from `agent.max_sessions`, without adding a setting:
+    when `agent.max_sessions > 0`, use that value verbatim; when it is `0`, use `3` for this ceiling
+    only while retaining `0` as unlimited for the ordinary total-session budget. The comparison is
+    against the incremented **total absence count**, and parking occurs when `count >= ceiling`.
+    Thus the default sequence is absence `1`, retry; absence `2`, retry; absence `3`, park. It is the
+    initial run plus two retries, not three retries. A positive `agent.max_sessions` continues to
+    enforce its existing all-run effort budget independently, so whichever applicable gate is
+    reached first stops re-dispatch.
+  - The derived default of `3` follows the `max_retries: 2` default used by most reaction kinds: one
+    initial attempt plus two retries. This avoids treating one legitimate no-change conclusion as
+    immediately terminal, gives two further sessions a chance to surface work, and bounds the cost
+    of full agent sessions. Turn, tool, or model-iteration limits inside one session do not set this
+    ceiling and are not comparable to it.
+  - On reaching the ceiling, cancel this retry sequence, apply the primary-dispatch parking label,
+    and release the claim. Ceiling exhaustion is an eligibility gate rather than only a cancelled
+    timer: ordinary polling and restart recovery must not silently begin another run in the same
+    exhausted absence sequence. Its representation is an implementation detail; the rule requires
+    neither a second numeric setting nor a durable verdict column on `run_history`.
+  - The parking label is the resolved non-empty
+    `reactions.review_comments.escalation_label` captured when the orchestrator starts, or
+    `needs-human` when that block or value is absent or empty. This lookup deliberately reuses only
+    the label name: review-comments need not be enabled, `escalation: comment` does not turn primary
+    parking into a comment, and labels configured under `ci_failure`, `merge_conflicts`,
+    `auto_merge`, or any other reaction do not participate. This explicit one-way dependency keeps
+    the existing operator-visible escalation channel without creating a second configuration field.
+    `review_comments` is the source because this parking happens immediately before human review;
+    CI, merge-conflict, and auto-merge labels describe different recovery domains.
+  - Announce parking with the issue, the consecutive count, the ceiling, and the label. A label-write
+    failure follows the existing escalation-failure rule: log and count the error and keep the
+    absence sequence stopped rather than resuming an unbounded loop.
 
 - Tracker candidate-fetch failures:
   - Skip this tick.
@@ -97,9 +142,12 @@ Sortie uses SQLite persistence to improve restart recovery semantics:
 - Running sessions are not recoverable (agent subprocesses do not survive restart), but the
   orchestrator knows which issues were in-flight at shutdown and re-dispatches them immediately
   rather than waiting for the next polling cycle to discover them.
-- Pending reaction recovery reconstructs runtime reaction entries after a restart by reading each
-  candidate's workspace SCM metadata, and it considers only a candidate whose latest activity
-  falls inside its lookback window. The pass narrows in a fixed order: it first drops any candidate
+- Pending reaction recovery reconstructs runtime reaction entries after a restart from the most
+  recent `run_history` row recorded as `succeeded` for each issue and by reading that candidate's
+  workspace SCM metadata. A later handoff withheld for absence is recorded as `failed`, so it no
+  longer displaces an earlier producing run in this selection; no query-shape change is required.
+  Recovery considers only a candidate whose selected successful activity falls inside its lookback
+  window. The pass narrows in a fixed order: it first drops any candidate
   the orchestrator already holds as running, retry-queued, or claimed, then truncates what is left
   to a fixed cap on candidate issues per startup pass, and only then reads tracker state and keeps
   the candidates still sitting in the configured handoff state. Because the cap is applied before
@@ -129,4 +177,3 @@ Operators can control behavior by:
   - non-active state -> running session is stopped without cleanup
 - Restarting the service for process recovery or deployment (not as the normal path for applying
   workflow config changes).
-
