@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -132,6 +133,26 @@ func TestNewGitLabSCMAdapter_Validation(t *testing.T) {
 				adaptertest.AssertSCMErrorKind(t, err, domain.ErrSCMPayload)
 			})
 		}
+	})
+
+	t.Run("invalid endpoint redacts userinfo", func(t *testing.T) {
+		t.Parallel()
+
+		const endpoint = "https:/operator:secret@gitlab.example.com/group"
+		a, err := NewGitLabSCMAdapter(map[string]any{
+			"api_key":  "test-token",
+			"endpoint": endpoint,
+		})
+
+		adaptertest.AssertSCMErrorKind(t, err, domain.ErrSCMPayload)
+		if a != nil {
+			t.Error("adapter should be nil on error")
+		}
+		var scmErr *domain.SCMError
+		if !errors.As(err, &scmErr) {
+			t.Fatalf("error type = %T, want *domain.SCMError", err)
+		}
+		assertMessageRedacted(t, scmErr.Message, "https:/gitlab.example.com/group", "operator", "secret")
 	})
 }
 

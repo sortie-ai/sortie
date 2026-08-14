@@ -284,7 +284,7 @@ func checkHostVersion(endpoint, apiVersion string) error {
 	if !ok {
 		return &domain.TrackerError{
 			Kind:    domain.ErrTrackerPayload,
-			Message: fmt.Sprintf("endpoint %q must be a URL with a scheme and host", endpoint),
+			Message: fmt.Sprintf("endpoint %q must be a URL with a scheme and host", httpkit.RedactURLUserinfo(endpoint)),
 		}
 	}
 	isCloud := isCloudHost(host)

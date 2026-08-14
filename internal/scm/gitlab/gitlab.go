@@ -348,7 +348,7 @@ func NewGitLabAdapter(config map[string]any) (domain.TrackerAdapter, error) {
 	if err != nil || (parsedEndpoint.Scheme != "http" && parsedEndpoint.Scheme != "https") || parsedEndpoint.Host == "" {
 		return nil, &domain.TrackerError{
 			Kind:    domain.ErrTrackerPayload,
-			Message: fmt.Sprintf("gitlab: tracker.endpoint %q is not a valid absolute http(s) url", endpoint),
+			Message: fmt.Sprintf("gitlab: tracker.endpoint %q is not a valid absolute http(s) url", httpkit.RedactURLUserinfo(endpoint)),
 		}
 	}
 	baseURL := strings.TrimRight(endpoint, "/")

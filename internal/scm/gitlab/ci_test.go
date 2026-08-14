@@ -281,6 +281,27 @@ func TestNewGitLabCIProvider_Validation(t *testing.T) {
 		})
 	}
 
+	t.Run("invalid endpoint redacts userinfo", func(t *testing.T) {
+		t.Parallel()
+
+		const endpoint = "operator:secret@gitlab.example.com/group"
+		provider, err := NewGitLabCIProvider(0, map[string]any{
+			"api_key":  "test-token",
+			"project":  testProject,
+			"endpoint": endpoint,
+		})
+
+		assertCIErrorKind(t, err, domain.ErrCIPayload)
+		if provider != nil {
+			t.Error("provider should be nil on error")
+		}
+		var ciErr *domain.CIError
+		if !errors.As(err, &ciErr) {
+			t.Fatalf("error type = %T, want *domain.CIError", err)
+		}
+		assertMessageRedacted(t, ciErr.Message, "gitlab.example.com/group", "operator", "secret")
+	})
+
 	t.Run("an absent endpoint defaults to https://gitlab.com", func(t *testing.T) {
 		t.Parallel()
 

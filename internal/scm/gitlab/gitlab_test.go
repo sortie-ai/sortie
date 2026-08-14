@@ -28,6 +28,18 @@ const testProject = "acme/widgets"
 
 var testEscapedProject = url.PathEscape(testProject)
 
+func assertMessageRedacted(t *testing.T, message, want string, forbidden ...string) {
+	t.Helper()
+	if !strings.Contains(message, want) {
+		t.Errorf("message = %q, want to contain %q", message, want)
+	}
+	for _, value := range forbidden {
+		if strings.Contains(message, value) {
+			t.Errorf("message = %q, must not contain %q", message, value)
+		}
+	}
+}
+
 func loadFixture(t *testing.T, name string) []byte {
 	t.Helper()
 	data, err := os.ReadFile("testdata/" + name)
@@ -386,6 +398,27 @@ func TestNewGitLabAdapter(t *testing.T) {
 				}
 			})
 		}
+	})
+
+	t.Run("invalid endpoint redacts userinfo", func(t *testing.T) {
+		t.Parallel()
+
+		const endpoint = "operator:secret@gitlab.example.com/group"
+		a, err := NewGitLabAdapter(map[string]any{
+			"api_key":  "tok",
+			"project":  testProject,
+			"endpoint": endpoint,
+		})
+
+		assertTrackerErrorKind(t, err, domain.ErrTrackerPayload)
+		if a != nil {
+			t.Error("adapter should be nil on error")
+		}
+		var trackerErr *domain.TrackerError
+		if !errors.As(err, &trackerErr) {
+			t.Fatalf("error type = %T, want *domain.TrackerError", err)
+		}
+		assertMessageRedacted(t, trackerErr.Message, "gitlab.example.com/group", "operator", "secret")
 	})
 
 	t.Run("query_filter colliding spellings name both keys and are order-independent", func(t *testing.T) {
