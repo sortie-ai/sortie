@@ -1,0 +1,140 @@
+[
+  {
+    "url": "https://api.github.com/repos/sortie-ai/sortie/pulls/comments/3585411603",
+    "pull_request_review_id": 4702010051,
+    "id": 3585411603,
+    "node_id": "PRRC_kwDORpXKYc7VtQoT",
+    "diff_hunk": "@@ -143,15 +144,183 @@ func NewGiteaAdapter(config map[string]any) (domain.TrackerAdapter, error) {\n \t\treturn nil, err\n \t}\n \n-\treturn &GiteaAdapter{\n+\traw, _ := config[\"query_filter\"].(string)\n+\tfilter, err := parseGiteaQueryFilter(raw)\n+\tif err != nil {\n+\t\treturn nil, err\n+\t}",
+    "path": "internal/scm/gitea/gitea.go",
+    "commit_id": "8fff6e3a0535ea0dcefb5938b37a5643566f723b",
+    "original_commit_id": "772b6ff7812d03b02dae5ded0fc2d456342d201f",
+    "user": {
+      "login": "Copilot",
+      "id": 175728472,
+      "node_id": "BOT_kgDOCnlnWA",
+      "avatar_url": "https://avatars.githubusercontent.com/in/946600?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/Copilot",
+      "html_url": "https://github.com/apps/copilot-pull-request-reviewer",
+      "followers_url": "https://api.github.com/users/Copilot/followers",
+      "following_url": "https://api.github.com/users/Copilot/following{/other_user}",
+      "gists_url": "https://api.github.com/users/Copilot/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/Copilot/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/Copilot/subscriptions",
+      "organizations_url": "https://api.github.com/users/Copilot/orgs",
+      "repos_url": "https://api.github.com/users/Copilot/repos",
+      "events_url": "https://api.github.com/users/Copilot/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/Copilot/received_events",
+      "type": "Bot",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "`query_filter` is read with a bare type assertion (`raw, _ := ....(string)`), so a mis-typed config value (e.g. YAML map/number via templating or env indirection mistakes) is silently treated as \"unset\" instead of failing fast like other config keys. This can widen candidate polling unexpectedly.",
+    "created_at": "2026-07-15T07:47:51Z",
+    "updated_at": "2026-07-15T07:47:53Z",
+    "html_url": "https://github.com/sortie-ai/sortie/pull/649#discussion_r3585411603",
+    "pull_request_url": "https://api.github.com/repos/sortie-ai/sortie/pulls/649",
+    "_links": {
+      "self": {
+        "href": "https://api.github.com/repos/sortie-ai/sortie/pulls/comments/3585411603"
+      },
+      "html": {
+        "href": "https://github.com/sortie-ai/sortie/pull/649#discussion_r3585411603"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/sortie-ai/sortie/pulls/649"
+      }
+    },
+    "reactions": {
+      "url": "https://api.github.com/repos/sortie-ai/sortie/pulls/comments/3585411603/reactions",
+      "total_count": 0,
+      "+1": 0,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "start_line": 147,
+    "original_start_line": 147,
+    "start_side": "RIGHT",
+    "line": 151,
+    "original_line": 151,
+    "side": "RIGHT",
+    "author_association": "NONE",
+    "original_position": 17,
+    "position": 17,
+    "subject_type": "line"
+  },
+  {
+    "url": "https://api.github.com/repos/sortie-ai/sortie/pulls/comments/3585411671",
+    "pull_request_review_id": 4702010051,
+    "id": 3585411671,
+    "node_id": "PRRC_kwDORpXKYc7VtQpX",
+    "diff_hunk": "@@ -539,6 +674,149 @@ func TestFetchCandidateIssues(t *testing.T) {\n \t\t_, err := a.FetchCandidateIssues(context.Background())\n \t\tassertTrackerErrorKind(t, err, domain.ErrTrackerAuth)\n \t})\n+\n+\tt.Run(\"operator query_filter merges into the request params\", func(t *testing.T) {\n+\t\tt.Parallel()\n+\n+\t\tmux := newPreflightMux(t)\n+\t\tvar gotQuery url.Values\n+\t\tmux.HandleFunc(\"GET /api/v1/repos/\"+testOwner+\"/\"+testRepo+\"/issues\", func(w http.ResponseWriter, r *http.Request) {\n+\t\t\tgotQuery = r.URL.Query()\n+\t\t\tw.WriteHeader(http.StatusOK)\n+\t\t\tw.Write(loadFixture(t, \"issues_candidates_page2.json\")) //nolint:errcheck // test helper\n+\t\t})\n+\t\tsrv := httptest.NewServer(mux)\n+\t\tdefer srv.Close()\n+\n+\t\tcfg := validConfig(srv.URL)\n+\t\tcfg[\"query_filter\"] = \"assigned_by=hermes-bot\"\n+\t\tadapter, err := NewGiteaAdapter(cfg)\n+\t\tif err != nil {\n+\t\t\tt.Fatalf(\"NewGiteaAdapter: %v\", err)\n+\t\t}\n+\n+\t\tissues, err := adapter.(*GiteaAdapter).FetchCandidateIssues(context.Background())\n+\t\tif err != nil {\n+\t\t\tt.Fatalf(\"FetchCandidateIssues: %v\", err)\n+\t\t}\n+\n+\t\tassertQueryParams(t, \"candidate\", gotQuery, map[string]string{",
+    "path": "internal/scm/gitea/gitea_test.go",
+    "commit_id": "772b6ff7812d03b02dae5ded0fc2d456342d201f",
+    "original_commit_id": "772b6ff7812d03b02dae5ded0fc2d456342d201f",
+    "user": {
+      "login": "Copilot",
+      "id": 175728472,
+      "node_id": "BOT_kgDOCnlnWA",
+      "avatar_url": "https://avatars.githubusercontent.com/in/946600?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/Copilot",
+      "html_url": "https://github.com/apps/copilot-pull-request-reviewer",
+      "followers_url": "https://api.github.com/users/Copilot/followers",
+      "following_url": "https://api.github.com/users/Copilot/following{/other_user}",
+      "gists_url": "https://api.github.com/users/Copilot/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/Copilot/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/Copilot/subscriptions",
+      "organizations_url": "https://api.github.com/users/Copilot/orgs",
+      "repos_url": "https://api.github.com/users/Copilot/repos",
+      "events_url": "https://api.github.com/users/Copilot/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/Copilot/received_events",
+      "type": "Bot",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "`gotQuery` is written by the httptest server goroutine and read later by the test goroutine without synchronization, which can trip `-race`. Use a channel (or mutex) to synchronize passing the captured query back to the test goroutine.",
+    "created_at": "2026-07-15T07:47:52Z",
+    "updated_at": "2026-07-15T07:47:53Z",
+    "html_url": "https://github.com/sortie-ai/sortie/pull/649#discussion_r3585411671",
+    "pull_request_url": "https://api.github.com/repos/sortie-ai/sortie/pulls/649",
+    "_links": {
+      "self": {
+        "href": "https://api.github.com/repos/sortie-ai/sortie/pulls/comments/3585411671"
+      },
+      "html": {
+        "href": "https://github.com/sortie-ai/sortie/pull/649#discussion_r3585411671"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/sortie-ai/sortie/pulls/649"
+      }
+    },
+    "reactions": {
+      "url": "https://api.github.com/repos/sortie-ai/sortie/pulls/comments/3585411671/reactions",
+      "total_count": 0,
+      "+1": 0,
+      "-1": 0,
+      "laugh": 0,
+      "hooray": 0,
+      "confused": 0,
+      "heart": 0,
+      "rocket": 0,
+      "eyes": 0
+    },
+    "start_line": null,
+    "original_start_line": 681,
+    "start_side": "RIGHT",
+    "line": null,
+    "original_line": 703,
+    "side": "RIGHT",
+    "author_association": "NONE",
+    "original_position": 192,
+    "position": 1,
+    "subject_type": "line"
+  }
+]

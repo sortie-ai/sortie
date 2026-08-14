@@ -1,0 +1,42 @@
+[
+  {
+    "id": 4702010051,
+    "node_id": "PRR_kwDORpXKYc8AAAABGEL6ww",
+    "user": {
+      "login": "copilot-pull-request-reviewer[bot]",
+      "id": 175728472,
+      "node_id": "BOT_kgDOCnlnWA",
+      "avatar_url": "https://avatars.githubusercontent.com/in/946600?v=4",
+      "gravatar_id": "",
+      "url": "https://api.github.com/users/copilot-pull-request-reviewer%5Bbot%5D",
+      "html_url": "https://github.com/apps/copilot-pull-request-reviewer",
+      "followers_url": "https://api.github.com/users/copilot-pull-request-reviewer%5Bbot%5D/followers",
+      "following_url": "https://api.github.com/users/copilot-pull-request-reviewer%5Bbot%5D/following{/other_user}",
+      "gists_url": "https://api.github.com/users/copilot-pull-request-reviewer%5Bbot%5D/gists{/gist_id}",
+      "starred_url": "https://api.github.com/users/copilot-pull-request-reviewer%5Bbot%5D/starred{/owner}{/repo}",
+      "subscriptions_url": "https://api.github.com/users/copilot-pull-request-reviewer%5Bbot%5D/subscriptions",
+      "organizations_url": "https://api.github.com/users/copilot-pull-request-reviewer%5Bbot%5D/orgs",
+      "repos_url": "https://api.github.com/users/copilot-pull-request-reviewer%5Bbot%5D/repos",
+      "events_url": "https://api.github.com/users/copilot-pull-request-reviewer%5Bbot%5D/events{/privacy}",
+      "received_events_url": "https://api.github.com/users/copilot-pull-request-reviewer%5Bbot%5D/received_events",
+      "type": "Bot",
+      "user_view_type": "public",
+      "site_admin": false
+    },
+    "body": "## Pull request overview\n\nCopilot reviewed 6 out of 6 changed files in this pull request and generated 8 comments.\n\n\n\n\n",
+    "state": "COMMENTED",
+    "html_url": "https://github.com/sortie-ai/sortie/pull/649#pullrequestreview-4702010051",
+    "pull_request_url": "https://api.github.com/repos/sortie-ai/sortie/pulls/649",
+    "author_association": "NONE",
+    "_links": {
+      "html": {
+        "href": "https://github.com/sortie-ai/sortie/pull/649#pullrequestreview-4702010051"
+      },
+      "pull_request": {
+        "href": "https://api.github.com/repos/sortie-ai/sortie/pulls/649"
+      }
+    },
+    "submitted_at": "2026-07-15T07:47:53Z",
+    "commit_id": "772b6ff7812d03b02dae5ded0fc2d456342d201f"
+  }
+]

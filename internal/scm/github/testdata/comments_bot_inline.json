@@ -1,9 +1,13 @@
 [
   {
     "id": 501,
+    "pull_request_review_id": 30,
     "path": "internal/handler.go",
     "start_line": 20,
+    "original_start_line": 20,
     "line": 22,
+    "original_line": 22,
+    "subject_type": "line",
     "position": 3,
     "body": "Error return value of `doWork` is not checked.",
     "user": {

@@ -38,14 +38,17 @@ func assertSCMErrorKind(t *testing.T, err error, want domain.SCMErrorKind) {
 // reviewsAndCommentsHandler builds an httptest handler that serves review
 // and comment fixtures from the testdata directory. It handles:
 //   - GET .../reviews → reviewsFixture (no Link header)
-//   - GET .../reviews/{id}/comments → commentsFixture (no Link header)
+//   - GET .../pulls/{number}/comments → commentsFixture (no Link header)
+//
+// The legacy review-scoped comments route is intentionally not served: it
+// omits line fields in GitHub's live response.
 func reviewsAndCommentsHandler(t *testing.T, reviewsFixture, commentsFixture []byte) http.HandlerFunc {
 	t.Helper()
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		path := r.URL.Path
 		switch {
-		case strings.Contains(path, "/comments"):
+		case strings.HasSuffix(path, "/comments") && !strings.Contains(path, "/reviews/"):
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write(commentsFixture)
 		case strings.HasSuffix(path, "/reviews"):
@@ -196,7 +199,7 @@ func TestFetchPendingReviews_ChangesRequestedWithInlineComment(t *testing.T) {
 		t.Error("Body is empty, want non-empty")
 	}
 	if c.Outdated {
-		t.Error("Outdated = true, want false (position is non-nil)")
+		t.Error("Outdated = true, want false (current line is present)")
 	}
 	if c.SubmittedAt.IsZero() {
 		t.Error("SubmittedAt is zero, want parsed timestamp")
@@ -238,8 +241,8 @@ func TestFetchPendingReviews_PRLevelBodyAppended(t *testing.T) {
 	}
 
 	c := got[0]
-	if c.ID != "review-10" {
-		t.Errorf("PR-level comment ID = %q, want %q", c.ID, "review-10")
+	if c.ID != "review-20" {
+		t.Errorf("PR-level comment ID = %q, want %q", c.ID, "review-20")
 	}
 	if c.FilePath != "" {
 		t.Errorf("PR-level comment FilePath = %q, want empty", c.FilePath)
@@ -272,14 +275,14 @@ func TestFetchPendingReviews_OutdatedComment(t *testing.T) {
 		t.Fatalf("FetchPendingReviews len = %d, want 1", len(got))
 	}
 	if !got[0].Outdated {
-		t.Error("Outdated = false, want true (position is nil)")
+		t.Error("Outdated = false, want true (current line is nil)")
 	}
 }
 
 func TestFetchPendingReviews_Deduplication(t *testing.T) {
 	t.Parallel()
 
-	// Review has both a body (becomes review-10) and one inline comment (100).
+	// Review has both a body (becomes review-20) and one inline comment (100).
 	// The same comment ID should not appear twice even if somehow duplicated.
 	reviewsFixture := loadFixture(t, "reviews_changes_requested_with_body.json")
 	commentsFixture := loadFixture(t, "comments_inline.json")
@@ -309,21 +312,17 @@ func TestFetchPendingReviews_Pagination_Reviews(t *testing.T) {
 
 	page1 := loadFixture(t, "reviews_page1.json")
 	page2 := loadFixture(t, "reviews_page2.json")
-	commentsPage1 := loadFixture(t, "comments_page1.json")
-	commentsPage2 := loadFixture(t, "comments_page2.json")
+	commentsFixture := loadFixture(t, "comments_reviews_paginated.json")
 
 	var reviewCallCount atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		path := r.URL.Path
 		switch {
-		case strings.Contains(path, "/reviews/11/comments"):
+		case strings.HasSuffix(path, "/comments") && !strings.Contains(path, "/reviews/"):
 			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write(commentsPage1)
-		case strings.Contains(path, "/reviews/12/comments"):
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write(commentsPage2)
-		case strings.Contains(path, "/reviews"):
+			_, _ = w.Write(commentsFixture)
+		case strings.HasSuffix(path, "/reviews"):
 			n := reviewCallCount.Add(1)
 			if n == 1 {
 				// Return page 1 with Link next header.
@@ -370,10 +369,10 @@ func TestFetchPendingReviews_Pagination_Comments(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		path := r.URL.Path
 		switch {
-		case strings.Contains(path, "/comments"):
+		case strings.HasSuffix(path, "/comments") && !strings.Contains(path, "/reviews/"):
 			n := commentCallCount.Add(1)
 			if n == 1 {
-				nextURL := fmt.Sprintf("http://%s/repos/owner/repo/pulls/1/reviews/20/comments?page=2", r.Host)
+				nextURL := fmt.Sprintf("http://%s/repos/owner/repo/pulls/1/comments?page=2", r.Host)
 				w.Header().Set("Link", fmt.Sprintf(`<%s>; rel="next"`, nextURL))
 				w.WriteHeader(http.StatusOK)
 				_, _ = w.Write(commentsPage1)
@@ -381,7 +380,7 @@ func TestFetchPendingReviews_Pagination_Comments(t *testing.T) {
 				w.WriteHeader(http.StatusOK)
 				_, _ = w.Write(commentsPage2)
 			}
-		case strings.Contains(path, "/reviews"):
+		case strings.HasSuffix(path, "/reviews"):
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write(reviewsFixture)
 		default:
@@ -674,12 +673,12 @@ func TestFetchBotReviewComments_EmptyResultNonNil(t *testing.T) {
 }
 
 // TestFetchBotReviewComments_OutdatedCommentFlag verifies that a bot inline
-// comment with null position carries Outdated == true.
+// comment with no current line carries Outdated == true.
 func TestFetchBotReviewComments_OutdatedCommentFlag(t *testing.T) {
 	t.Parallel()
 
 	// Use the COMMENTED bot review (user.type == "Bot") with an outdated inline
-	// comment (position == null).
+	// comment (line == null, original_line populated).
 	reviewsFixture := loadFixture(t, "reviews_bot_commented.json")
 	commentsFixture := loadFixture(t, "comments_bot_outdated.json")
 	srv := httptest.NewServer(reviewsAndCommentsHandler(t, reviewsFixture, commentsFixture))
@@ -696,12 +695,89 @@ func TestFetchBotReviewComments_OutdatedCommentFlag(t *testing.T) {
 		if c.ID == "500" {
 			foundOutdated = true
 			if !c.Outdated {
-				t.Errorf("FetchBotReviewComments: comment id %q Outdated = false, want true (position is null)", c.ID)
+				t.Errorf("FetchBotReviewComments: comment id %q Outdated = false, want true (current line is null)", c.ID)
 			}
 		}
 	}
 	if !foundOutdated {
 		t.Errorf("FetchBotReviewComments: outdated bot comment id %q not found in results", "500")
+	}
+}
+
+// TestFetchBotReviewComments_LiveResponseLocations uses responses captured
+// from sortie-ai/sortie PR #649. GitHub's review-scoped endpoint omitted all
+// line fields for the same comments, while the PR-scoped endpoint returned
+// the current and original ranges used below.
+func TestFetchBotReviewComments_LiveResponseLocations(t *testing.T) {
+	t.Parallel()
+
+	reviewsFixture := loadFixture(t, "reviews_live_pr649.json")
+	commentsFixture := loadFixture(t, "review_comments_live_pr649.json")
+	legacyFixture := loadFixture(t, "review_comments_legacy_live_pr649.json")
+
+	var legacyCalls atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/repos/sortie-ai/sortie/pulls/649/reviews":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write(reviewsFixture)
+		case "/repos/sortie-ai/sortie/pulls/649/comments":
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write(commentsFixture)
+		case "/repos/sortie-ai/sortie/pulls/649/reviews/4702010051/comments":
+			legacyCalls.Add(1)
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write(legacyFixture)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"message":"not found"}`))
+		}
+	}))
+	defer srv.Close()
+
+	adapter := newTestSCMAdapter(t, srv.URL)
+	got, err := adapter.FetchBotReviewComments(context.Background(), 649, "sortie-ai", "sortie", nil)
+	if err != nil {
+		t.Fatalf("FetchBotReviewComments: %v", err)
+	}
+	if legacyCalls.Load() != 0 {
+		t.Fatalf("legacy review-scoped comment calls = %d, want 0", legacyCalls.Load())
+	}
+	if len(got) != 3 {
+		t.Fatalf("FetchBotReviewComments len = %d, want 3", len(got))
+	}
+
+	byID := make(map[string]domain.ReviewComment, len(got))
+	for _, comment := range got {
+		byID[comment.ID] = comment
+	}
+
+	prLevel, ok := byID["review-4702010051"]
+	if !ok {
+		t.Fatal("PR-level review body not returned")
+	}
+	if prLevel.FilePath != "" || prLevel.StartLine != 0 || prLevel.EndLine != 0 || prLevel.Outdated {
+		t.Errorf("PR-level comment location = (%q, %d, %d, outdated=%t), want empty and zero",
+			prLevel.FilePath, prLevel.StartLine, prLevel.EndLine, prLevel.Outdated)
+	}
+
+	current, ok := byID["3585411603"]
+	if !ok {
+		t.Fatal("current multi-line review comment not returned")
+	}
+	if current.StartLine != 147 || current.EndLine != 151 || current.Outdated {
+		t.Errorf("current comment location = (%d, %d, outdated=%t), want (147, 151, false)",
+			current.StartLine, current.EndLine, current.Outdated)
+	}
+
+	outdated, ok := byID["3585411671"]
+	if !ok {
+		t.Fatal("outdated multi-line review comment not returned")
+	}
+	if outdated.StartLine != 681 || outdated.EndLine != 703 || !outdated.Outdated {
+		t.Errorf("outdated comment location = (%d, %d, outdated=%t), want (681, 703, true)",
+			outdated.StartLine, outdated.EndLine, outdated.Outdated)
 	}
 }
 
@@ -799,8 +875,8 @@ func TestFetchPendingReviews_MalformedInlineCommentTimestampTolerated(t *testing
 
 	reviewsFixture := loadFixture(t, "reviews_changes_requested_no_body.json")
 	const commentsFixture = `[
-		{"id":100,"path":"internal/handler.go","start_line":10,"line":12,"position":5,"body":"A","user":{"login":"alice","type":"User"},"created_at":"not-a-timestamp"},
-		{"id":101,"path":"internal/handler.go","start_line":20,"line":22,"position":6,"body":"B","user":{"login":"alice","type":"User"},"created_at":"2026-04-01T10:05:00Z"}
+		{"id":100,"pull_request_review_id":20,"path":"internal/handler.go","start_line":10,"original_start_line":10,"line":12,"original_line":12,"subject_type":"line","body":"A","user":{"login":"alice","type":"User"},"created_at":"not-a-timestamp"},
+		{"id":101,"pull_request_review_id":20,"path":"internal/handler.go","start_line":20,"original_start_line":20,"line":22,"original_line":22,"subject_type":"line","body":"B","user":{"login":"alice","type":"User"},"created_at":"2026-04-01T10:05:00Z"}
 	]`
 	srv := httptest.NewServer(reviewsAndCommentsHandler(t, reviewsFixture, []byte(commentsFixture)))
 	defer srv.Close()
@@ -838,8 +914,8 @@ func TestFetchBotReviewComments_MalformedInlineCommentTimestampTolerated(t *test
 
 	reviewsFixture := loadFixture(t, "reviews_bot_commented.json")
 	const commentsFixture = `[
-		{"id":501,"path":"internal/handler.go","start_line":20,"line":22,"position":3,"body":"A","user":{"login":"golangci-lint[bot]","type":"Bot"},"created_at":"not-a-timestamp"},
-		{"id":502,"path":"internal/handler.go","start_line":30,"line":32,"position":4,"body":"B","user":{"login":"golangci-lint[bot]","type":"Bot"},"created_at":"2026-04-01T10:10:00Z"}
+		{"id":501,"pull_request_review_id":50,"path":"internal/handler.go","start_line":20,"original_start_line":20,"line":22,"original_line":22,"subject_type":"line","body":"A","user":{"login":"golangci-lint[bot]","type":"Bot"},"created_at":"not-a-timestamp"},
+		{"id":502,"pull_request_review_id":50,"path":"internal/handler.go","start_line":30,"original_start_line":30,"line":32,"original_line":32,"subject_type":"line","body":"B","user":{"login":"golangci-lint[bot]","type":"Bot"},"created_at":"2026-04-01T10:10:00Z"}
 	]`
 	srv := httptest.NewServer(reviewsAndCommentsHandler(t, reviewsFixture, []byte(commentsFixture)))
 	defer srv.Close()

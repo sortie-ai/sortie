@@ -1,9 +1,13 @@
 [
   {
     "id": 301,
+    "pull_request_review_id": 20,
     "path": "cmd/main.go",
     "start_line": null,
+    "original_start_line": null,
     "line": 35,
+    "original_line": 35,
+    "subject_type": "line",
     "position": 7,
     "body": "Second page comment.",
     "user": {
