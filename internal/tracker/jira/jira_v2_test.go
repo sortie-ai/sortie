@@ -282,7 +282,7 @@ func TestNewJiraAdapter_HostVersionGuard_RejectUnparseableEndpoint(t *testing.T)
 func TestNewJiraAdapter_HostVersionGuard_RedactsEndpointUserinfo(t *testing.T) {
 	t.Parallel()
 
-	const endpoint = "https://operator:secret@jira.example.com/%zz"
+	const endpoint = "operator:secret@jira.example.com"
 	a, err := NewJiraAdapter(map[string]any{
 		"endpoint":    endpoint,
 		"api_key":     "user@test.com:tok",
@@ -296,7 +296,7 @@ func TestNewJiraAdapter_HostVersionGuard_RedactsEndpointUserinfo(t *testing.T) {
 	}
 	var trackerErr *domain.TrackerError
 	asTrackerError(t, err, &trackerErr)
-	if !strings.Contains(trackerErr.Message, "https://jira.example.com/%zz") {
+	if !strings.Contains(trackerErr.Message, "jira.example.com") {
 		t.Errorf("TrackerError.Message = %q, want the endpoint without userinfo", trackerErr.Message)
 	}
 	for _, secret := range []string{"operator", "secret"} {

@@ -403,7 +403,7 @@ func TestNewGitLabAdapter(t *testing.T) {
 	t.Run("invalid endpoint redacts userinfo", func(t *testing.T) {
 		t.Parallel()
 
-		const endpoint = "ftp://operator:secret@gitlab.example.com/group"
+		const endpoint = "operator:secret@gitlab.example.com/group"
 		a, err := NewGitLabAdapter(map[string]any{
 			"api_key":  "tok",
 			"project":  testProject,
@@ -418,7 +418,7 @@ func TestNewGitLabAdapter(t *testing.T) {
 		if !errors.As(err, &trackerErr) {
 			t.Fatalf("error type = %T, want *domain.TrackerError", err)
 		}
-		assertMessageRedacted(t, trackerErr.Message, "ftp://gitlab.example.com/group", "operator", "secret")
+		assertMessageRedacted(t, trackerErr.Message, "gitlab.example.com/group", "operator", "secret")
 	})
 
 	t.Run("query_filter colliding spellings name both keys and are order-independent", func(t *testing.T) {

@@ -4,17 +4,17 @@ import "strings"
 
 // RedactURLUserinfo removes the complete userinfo prefix from raw while
 // preserving the rest of the URL for diagnostics. It operates on the raw
-// string instead of parsing it so malformed URLs are redacted too. Values
-// without an authority marker or userinfo delimiter are returned unchanged.
+// string instead of parsing it so malformed URLs are redacted too. When the
+// authority marker is missing or malformed, the leading segment is treated as
+// the authority so credentials in invalid endpoint values are still removed.
 func RedactURLUserinfo(raw string) string {
-	authorityStart := -1
-	if strings.HasPrefix(raw, "//") {
-		authorityStart = 2
-	} else if marker := strings.Index(raw, "://"); marker >= 0 {
+	authorityStart := 0
+	if marker := strings.Index(raw, "://"); marker >= 0 {
 		authorityStart = marker + len("://")
-	}
-	if authorityStart < 0 {
-		return raw
+	} else if marker := strings.Index(raw, "//"); marker >= 0 {
+		authorityStart = marker + len("//")
+	} else if marker := strings.Index(raw, ":/"); marker >= 0 {
+		authorityStart = marker + len(":/")
 	}
 
 	authorityEnd := len(raw)

@@ -51,9 +51,19 @@ func TestRedactURLUserinfo(t *testing.T) {
 			want: "https://example.com/users/operator@example.com?owner=user@example.com",
 		},
 		{
-			name: "value without authority marker unchanged",
+			name: "userinfo without authority marker",
 			raw:  "operator:secret@example.com",
-			want: "operator:secret@example.com",
+			want: "example.com",
+		},
+		{
+			name: "userinfo after single slash scheme typo",
+			raw:  "https:/operator:secret@example.com/path",
+			want: "https:/example.com/path",
+		},
+		{
+			name: "at sign after path without authority marker unchanged",
+			raw:  "example.com/users/operator@example.com",
+			want: "example.com/users/operator@example.com",
 		},
 	}
 

@@ -135,10 +135,10 @@ func TestNewGitLabSCMAdapter_Validation(t *testing.T) {
 		}
 	})
 
-	t.Run("malformed endpoint redacts userinfo", func(t *testing.T) {
+	t.Run("invalid endpoint redacts userinfo", func(t *testing.T) {
 		t.Parallel()
 
-		const endpoint = "ftp://operator:secret@gitlab.example.com/group"
+		const endpoint = "https:/operator:secret@gitlab.example.com/group"
 		a, err := NewGitLabSCMAdapter(map[string]any{
 			"api_key":  "test-token",
 			"endpoint": endpoint,
@@ -152,7 +152,7 @@ func TestNewGitLabSCMAdapter_Validation(t *testing.T) {
 		if !errors.As(err, &scmErr) {
 			t.Fatalf("error type = %T, want *domain.SCMError", err)
 		}
-		assertMessageRedacted(t, scmErr.Message, "ftp://gitlab.example.com/group", "operator", "secret")
+		assertMessageRedacted(t, scmErr.Message, "https:/gitlab.example.com/group", "operator", "secret")
 	})
 }
 
