@@ -37,7 +37,7 @@ Note: `timer_handle` is runtime-only and is not stored.
 | `workspace`     | TEXT    | Workspace path                            |
 | `started_at`    | TEXT    | ISO-8601 timestamp                        |
 | `completed_at`  | TEXT    | ISO-8601 timestamp                        |
-| `status`          | TEXT    | Terminal status (succeeded, failed, etc.) |
+| `status`          | TEXT    | Run disposition (`succeeded`, `failed`, `cancelled`, or `ci_failed`) |
 | `error`           | TEXT    | Error message if failed, may be null      |
 | `workflow_file`   | TEXT    | Workflow file name the run was driven by, may be null (migration 003) |
 | `turns_completed`   | INTEGER | Agent turns the attempt completed (migration 005) |
@@ -50,6 +50,22 @@ Note: `timer_handle` is runtime-only and is not stored.
 | `total_tokens`      | INTEGER | Accumulated total tokens, 0 for pre-migration rows (migration 011) |
 | `cache_read_tokens` | INTEGER | Accumulated cache-read tokens, 0 for pre-migration rows (migration 011) |
 | `tokens_measured`   | INTEGER | `1` when the four token columns above carry a figure the coding agent's runtime reported; `0` when the run's spend is unknown and all four are zero (migration 012) |
+
+`status` is no longer a pure mapping from the worker's exit kind. A normal exit that reaches an
+otherwise-eligible handoff and is withheld by the handoff-evidence policy records `failed`; its
+`error` value names the evidence verdict as the cause. For an otherwise-normal exit on that handoff
+path, `succeeded` means the policy did not withhold it. It does not assert that work was positively
+observed: an undeterminable verdict under `observed`, and every normal exit under `off`, may still
+record `succeeded`.
+
+Rows written before this rule and rows written under `tracker.handoff_evidence: off` retain the
+earlier exit-kind-only meaning and are not rewritten. Reports spanning the change therefore span two
+definitions of `succeeded` and must not present a changed success rate as proof that agent behavior
+changed.
+
+No column stores the handoff-evidence verdict. The verdict is logged and counted, and a withheld
+run carries it in the existing `error` field. In particular, this change adds no evidence field to
+`run_history` and requires no rewrite of historical rows.
 
 A row with `tokens_measured = 0` always carries zero in all four token columns; the invariant
 runs in one direction only, because a measured run can legitimately report a zero spend. Every
@@ -133,4 +149,3 @@ than deleting it, because deleting it would let the next poll observe the same m
 - Applied migrations are tracked in a `schema_migrations` table.
 - Migrations are additive (new columns/tables) where possible; destructive migrations require
   explicit versioning.
-

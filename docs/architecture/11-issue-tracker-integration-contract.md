@@ -92,14 +92,22 @@ itself observed:
 - The in-progress state (`tracker.in_progress_state`), at dispatch, when that field is
   configured and the dispatch drives issue state (§11F excludes the read-only and read-write
   label-command postures).
-- The handoff state (`tracker.handoff_state`), on a normal worker exit with the issue still in an
-  active tracker state and not a blocked soft stop, when that field is configured and the
-  dispatch drives issue state. The write is preceded by a terminal test against the freshest
-  available observation of the issue's state, and, when `tracker.terminal_states` is non-empty
-  and that observation is not already terminal, by one `fetch_issue_states_by_ids` verification
-  read immediately before the write. A terminal result from either the observation or the
-  verification read suppresses the write. With no terminal states configured no value can
-  classify as terminal, so the verification read is skipped.
+- The handoff state (`tracker.handoff_state`), on a normal worker exit when that field is configured,
+  the issue is still in an active tracker state, the exit is not a blocked soft stop, and the
+  dispatch drives issue state. Only where those four conditions already select the handoff path is
+  the run's frozen `tracker.handoff_evidence` policy consulted as a fifth condition. `Work observed`
+  permits the write; `absence of work observed` withholds it; `evidence not determinable` permits it
+  under `observed` and withholds it under `strict`; and `off` computes no verdict and preserves the
+  four-condition decision. This condition can suppress a write and can never cause one. A withheld
+  outcome makes no handoff transition or pre-write verification call, leaves the issue in its active
+  state, and follows the failure and retry disposition in §14.2.
+
+  A write that the evidence policy permits is still preceded by a terminal test against the freshest
+  available observation of the issue's state and, when `tracker.terminal_states` is non-empty and
+  that observation is not already terminal, by one `fetch_issue_states_by_ids` verification read
+  immediately before the write. A terminal result from either the observation or the verification
+  read suppresses the write. With no terminal states configured no value can classify as terminal,
+  so the verification read is skipped.
 - The merge-completion target state (`reactions.merge_completion.target_state`), when a
   Sortie-managed pull request merges while the linked issue is still parked in
   `tracker.handoff_state`, independently of who or what performed the merge. Active only when
@@ -109,8 +117,9 @@ The orchestrator writes no other tracker state. Beyond these three writes, it po
 comments and applies escalation labels, none of which carries state semantics: the dispatch
 comment (`tracker.comments.on_dispatch`), the worker-exit completion and failure comments
 (`tracker.comments.on_completion`, `tracker.comments.on_failure`), the auto-merge success comment
-(§11C), and a reaction escalation label or comment when a reaction's retry budget is exhausted or
-a non-retryable error occurs. None of these is a state transition.
+(§11C), a reaction escalation label or comment when a reaction's retry budget is exhausted or a
+non-retryable error occurs, and the primary-dispatch parking label applied when the consecutive
+handoff-absence ceiling is reached (§14.2). None of these is a state transition.
 
 Free-form ticket mutation falls outside these three writes and stays with the coding agent, which
 mutates tickets through the `tracker_api` tool subsystem (Section 10.4), part of the agent

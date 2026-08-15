@@ -72,8 +72,11 @@ Distinct terminal reasons are important because retry logic and logs differ.
     (via `tracker.in_progress_state`) as their first step, before workspace preparation.
 
 - `Worker Exit (normal)`
-  - Unconditional steps, taken on every normal exit: remove the running entry, update aggregate
-    runtime totals, and persist the completed run attempt to SQLite.
+  - Unconditional steps, taken on every normal exit: remove the running entry and update aggregate
+    runtime totals. Every exit also persists exactly one completed run attempt to SQLite after any
+    handoff-evidence verdict needed for its status is known and before scheduling a retry. The normal
+    exit-kind mapping supplies the status unless the policy withholds the transition; that outcome
+    records `failed` with the evidence verdict named as the cause (§19.2).
   - The exit then takes exactly one disposition. The conditions are evaluated in the order below
     and the first match wins, so an earlier disposition overrides every later one:
 
@@ -85,12 +88,28 @@ Distinct terminal reasons are important because retry logic and logs differ.
        cancel any pending retry, and release the claim. A terminal state is a decision already
        made about this issue; overwriting it with the handoff state would undo it.
     3. A handoff state is configured, the issue is still in an active state, the exit is not a
-       blocked soft stop, and the dispatch drives issue state. Perform the handoff transition
-       (Section 11.5). On a successful transition, release the claim, unless the retry slot
-       (Section 7.5) is occupied by an incumbent, in which case the incumbent is kept and the
-       claim stays so the poll loop cannot clear it. On transition failure, a soft-stop exit
-       releases the claim; a non-soft-stop exit schedules the continuation retry instead, unless
-       the retry slot is already occupied, in which case the exit defers to the incumbent.
+       blocked soft stop, and the dispatch drives issue state. Only where all four conditions hold,
+       apply the run's frozen `tracker.handoff_evidence` policy as a fifth condition:
+       - Under `off`, compute no verdict and preserve the previous handoff behavior.
+       - `Work observed` permits the handoff. It also resets the issue's consecutive-absence count
+         to zero immediately, even if the later tracker write fails.
+       - `Absence of work observed` withholds the handoff.
+       - `Evidence not determinable` permits the handoff under `observed` and withholds it under
+         `strict`, where it is treated as an absence for the failure disposition and consecutive
+         count. The verdict is recorded in either policy.
+
+       A verdict that permits the write performs the handoff transition (Section 11.5). On a
+       successful transition, release the claim, unless the retry slot (Section 7.5) is occupied by
+       an incumbent, in which case the incumbent is kept and the claim stays so the poll loop cannot
+       clear it. On transition failure, a soft-stop exit releases the claim; a non-soft-stop exit
+       schedules the continuation retry instead, unless the retry slot is already occupied, in which
+       case the exit defers to the incumbent.
+
+       A verdict that withholds the write makes no tracker transition and leaves the issue in its
+       active state. Record the unsuccessful attempt, increment the consecutive-absence count, and
+       use the ordinary failure path with exponential backoff and retry-slot arbitration—not the
+       short continuation path. When the count reaches its ceiling, park the issue and stop the
+       sequence as specified in §14.2.
     4. Any other soft stop. Suppress the continuation retry, cancel any pending retry, and release
        the claim. An unrecognized soft-stop reason is logged before taking this path.
     5. The issue is still in an active state and the dispatch drives issue state. Schedule the
@@ -229,4 +248,3 @@ Two liveness bounds keep an arbitrated slot from being held for the process life
   carries an active timer handle, and re-arms it with a zero delay, changing nothing about the
   entry but its timer. A retry reconstructed at startup and still awaiting its first activation is
   excluded from this pass, so a restart alone never produces the re-arm warning.
-
