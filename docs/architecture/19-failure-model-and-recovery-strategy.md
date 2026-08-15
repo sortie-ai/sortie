@@ -65,7 +65,7 @@
   - Derive the consecutive-absence ceiling from `agent.max_sessions`, without adding a setting:
     when `agent.max_sessions > 0`, use that value verbatim; when it is `0`, use `3` for this ceiling
     only while retaining `0` as unlimited for the ordinary total-session budget. The comparison is
-    against the incremented **total absence count**, and parking occurs when `count >= ceiling`.
+    against the incremented **consecutive-absence count**, and parking occurs when `count >= ceiling`.
     Thus the default sequence is absence `1`, retry; absence `2`, retry; absence `3`, park. It is the
     initial run plus two retries, not three retries. A positive `agent.max_sessions` continues to
     enforce its existing all-run effort budget independently, so whichever applicable gate is

@@ -241,8 +241,8 @@ This section is intentionally redundant so a coding agent can implement the conf
 - `agent.max_retry_backoff_ms`: integer, default `300000` (5m)
 - `agent.max_concurrent_agents_by_state`: map of positive integers, default `{}`
 - `agent.max_sessions`: non-negative integer, default `0` (unlimited for the existing total
-  per-issue session budget). A positive value is also the ceiling on the **total count** of
-  consecutive handoff absences, not a retry count. For that safety ceiling only, `0` derives the
+  per-issue session budget). A positive value is also the ceiling on the **consecutive-absence
+  count**, not a retry count. For that safety ceiling only, `0` derives the
   finite value `3`: the first observed absence may be followed by two retry dispatches, and the
   third consecutive absence parks the issue. This does not make the ordinary total-session budget
   finite. Any run on which work is observed resets the consecutive-absence count to zero
