@@ -469,17 +469,23 @@ and network) is the alternative when workspace write is too narrow.
 
 ### Approval policies
 
-| Policy           | App-server value    | Behavior                                           |
-| ---------------- | ------------------- | -------------------------------------------------- |
-| Never ask        | `"never"`           | Never ask for approval. Auto-approve everything.   |
-| On request       | `"onRequest"`       | Ask only when agent explicitly requests it.        |
-| Unless trusted   | `"unlessTrusted"`   | Ask for untrusted commands.                        |
-| Always ask       | `"always"`          | Ask for every action.                              |
+| Policy         | App-server value | Behavior                                                                                                                   |
+| -------------- | ---------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| Never ask      | `"never"`        | Never ask. Execution failures return to the model immediately.                                                             |
+| Unless trusted | `"untrusted"`    | Run only trusted commands (`ls`, `cat`, `sed`) unasked, and escalate anything outside that set.                            |
+| On failure     | `"on-failure"`   | Run everything unasked, and ask only after a command fails, to escalate to un-sandboxed execution. Deprecated upstream.    |
+| On request     | `"on-request"`   | The model decides when to ask.                                                                                             |
 
-`startThread` sends `approvalPolicy: "never"` unless `codex.approval_policy` overrides it. That
-is the app-server equivalent of `--full-auto` or `--ask-for-approval never` in CLI mode, and it
-permits arbitrary command execution within the sandbox boundary, so OpenAI's guidance is to use
-it only in a sandboxed environment. Sortie's workspace isolation and hook system operate inside
+The value set is kebab-case and closed: `AskForApproval` in the app-server's own JSON Schema
+declares exactly these four strings, and the behaviors are the `--ask-for-approval` descriptions
+the binary prints. Both were read from the locally installed v0.121.0 rather than the pinned
+version, which has not been re-probed for this field. A value outside the set is rejected at
+`thread/start`.
+
+`startThread` sends `approvalPolicy: "never"` unless `codex.approval_policy` overrides it. In CLI
+mode the equivalent is `--ask-for-approval never`, not `--full-auto`, which selects `on-request`
+with a workspace-write sandbox. Sending `"never"` permits arbitrary command execution within the
+sandbox boundary, so OpenAI's guidance is to use it only in a sandboxed environment. Sortie's workspace isolation and hook system operate inside
 that sandbox as defense in depth and do not replace container-level isolation.
 
 ### Approval requests
@@ -752,7 +758,7 @@ The turn timeouts are not part of this block. `agent.turn_timeout_ms`, `agent.re
 and `agent.stall_timeout_ms` are core config fields, described under "Timeout enforcement".
 
 `typeutil.StringFrom` reads `approval_policy`, so only the four string values
-(`"never"`, `"onRequest"`, `"unlessTrusted"`, `"always"`) survive parsing. Symphony's client
+(`"never"`, `"untrusted"`, `"on-failure"`, `"on-request"`) survive parsing. Symphony's client
 exposes a granular rejection map for the same policy, which silently declines whole approval
 categories rather than auto-approving them:
 
@@ -937,7 +943,7 @@ Each entry names the probe that would settle it.
   the resulting `turn/completed` status.
 - What the app-server does when an approval request goes unanswered, which is what the adapter
   does whenever `codex.approval_policy` is not `never`. Probe: start a thread with
-  `approvalPolicy: "onRequest"`, provoke a command approval, send nothing, and watch whether
+  `approvalPolicy: "on-request"`, provoke a command approval, send nothing, and watch whether
   the turn blocks indefinitely or times out on its own.
 - How the app-server exits on a fatal internal error, and with which exit code. Probe: kill the
   upstream connection mid-turn under `strace`, or feed it a malformed request that trips a
