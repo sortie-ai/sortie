@@ -512,6 +512,13 @@ jobs:
           Set-PSRepository -Name PSGallery -InstallationPolicy Trusted
           Install-Module -Name SignPath -RequiredVersion 4.3.1 -Force -Scope CurrentUser -AcceptLicense
 
+      # Before the tag, like the SignPath check above: a failure here leaves no
+      # orphaned tag.
+      - name: Collect release contributors
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: scripts/release-contributors.sh '${{ needs.validate.outputs.tag }}'
+
       - name: Create and push tag
         if: ${{ !inputs.dry_run }}
         run: |
