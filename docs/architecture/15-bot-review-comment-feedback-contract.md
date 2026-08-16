@@ -38,10 +38,9 @@ The result reuses the `ReviewComment` shape from §11B.2 unchanged; the bot's lo
 resolved inside the adapter before the struct is constructed. No platform field name (`user.type`,
 `position`) leaves the adapter package.
 
-The reaction layer applies the allowlist arm of this same classification to the human half, by
-calling the shared forge decision core (`internal/scm/scmcore`) directly. It MUST NOT import an
-adapter package; the platform-marker arm stays exclusively inside the adapter, so the reaction
-layer always passes `false` for that argument.
+The reaction layer applies the allowlist arm of this same classification to the human half. It
+MUST NOT import an adapter package; the platform-marker arm stays exclusively inside the adapter,
+so the reaction layer always passes `false` for that argument.
 
 ### 11D.2 Classification predicate
 
