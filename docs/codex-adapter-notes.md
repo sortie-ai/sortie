@@ -5,15 +5,16 @@
 >
 > Coverage. The configuration surface, including the approval policy and the sandbox modes,
 > follows OpenAI's published [configuration schema](https://developers.openai.com/codex/config-schema.json),
-> which tracks the current release and is the authoritative source for those fields. Everything
-> observed locally, including the app-server transcripts, the protocol schema the binary
-> generates for itself, the flag surface, and the `codex exec` JSONL samples, comes from
-> **v0.121.0**, the only build installed on the research host; the `userAgent` values quoted in
-> the examples carry that version. Hosted-tool and model-tier behavior and the feature-flag
-> surface were recorded against v0.134.0 in May 2026 and cannot be re-observed here, so they are
-> the weakest claims in this document. Where the published schema and the installed binary
-> disagree, the schema wins and the divergence is named at the claim. The dynamic-tool response
-> payload rests on OpenAI Symphony's Elixir app-server client, not on a local probe.
+> which tracks the current release and is the authoritative source for those fields. The approval
+> value set and the flag surface were re-checked against **v0.147.0** on the research host and
+> agree with it. The app-server transcripts, the `codex exec` JSONL samples, and the `userAgent`
+> values quoted in the examples date from **v0.121.0** and have not been re-captured since, so a
+> shape shown in an example may lag the current release even where the surrounding claim does
+> not. Hosted-tool and model-tier behavior and the feature-flag surface were recorded against
+> v0.134.0 in May 2026 and have not been re-observed, which makes them the weakest claims in this
+> document. Where a local build and the published schema disagree, the schema wins and the
+> divergence is named at the claim. The dynamic-tool response payload rests on OpenAI Symphony's
+> Elixir app-server client, not on a local probe.
 >
 > Claims about Sortie's own code name a Go symbol and were verified against the tree.
 > Primary sources are linked under "Sources" at the end.
@@ -490,9 +491,10 @@ that category automatically instead of showing it.
 
 Values and behaviors above come from OpenAI's published configuration schema
 ([config-schema.json](https://developers.openai.com/codex/config-schema.json)), which is the
-authoritative surface for this field. A fourth string, `on-failure`, exists in the locally
-installed v0.121.0 and its help text marks it deprecated; the published schema no longer
-declares it, so treat it as removed. A value outside the accepted set is rejected at
+authoritative surface for this field. A fourth string, `on-failure`, existed in v0.121.0 with a
+help text marking it deprecated, and it is gone: neither the published schema nor the protocol
+schema v0.147.0 generates for itself declares it, and `--ask-for-approval` at that version
+documents only the three surviving values. A value outside the accepted set is rejected at
 `thread/start`.
 
 `startThread` sends `approvalPolicy: "never"` unless `codex.approval_policy` overrides it, and
