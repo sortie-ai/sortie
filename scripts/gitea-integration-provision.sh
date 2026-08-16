@@ -36,6 +36,36 @@ PROJECT="${GITEA_USER}/${GITEA_REPO}"
 READINESS_TIMEOUT=90
 POLL_INTERVAL=2
 
+# Gitea forbids a REQUEST_CHANGES self-review, so the reviewer and the
+# allowlisted bot are distinct users from the admin PR author.
+REVIEWER_USER="sortie-reviewer"
+REVIEWER_PASSWORD="Sortie-Reviewer-Pw1"
+BOT_USER="sortie-review-bot"
+BOT_PASSWORD="Sortie-Review-Bot-Pw1"
+FEATURE_BRANCH="feature-x"
+PROBE_BRANCH="status-probe"
+SENTINEL_PATH="review-sentinel.txt"
+
+# The feature branch modifies this pre-image line and inserts one line above
+# it, so the post-image number is the pre-image number plus one; a StartLine
+# assertion on either seeded line number can then tell which field the
+# adapter read. The integration test hard-codes both numbers.
+PRE_IMAGE_LINE=4
+POST_IMAGE_LINE=5
+
+# The human review's second comment anchors to the old side with this body,
+# fixed so the integration test can locate it by text.
+OLD_SIDE_COMMENT_BODY="Reviewer inline comment on the sentinel file's old side."
+
+# Proves the per-status target_url field name round-trips to CheckRun.DetailsURL.
+# The integration test hard-codes the same value.
+
+FAILING_TARGET_URL="https://ci.example.com/build/12345"
+# Above both DEFAULT_PAGING_NUM (30) and MAX_RESPONSE_ITEMS (50), so a truncating
+# combined-status read is detectable. The integration test hard-codes the count.
+
+PROBE_STATUS_COUNT=51
+
 trap dump_logs_on_error EXIT
 
 require_tools docker curl jq
@@ -158,31 +188,6 @@ jq -nc --argjson index "$index_backlog" --arg owner "$GITEA_USER" --arg repo "$G
 log "closing issue ${index_done} into its terminal state"
 jq -nc '{state: "closed"}' |
 	gitea_call PATCH "/repos/${PROJECT}/issues/${index_done}" token >/dev/null
-
-# Gitea forbids a REQUEST_CHANGES self-review, so the reviewer and the
-# allowlisted bot are distinct users from the admin PR author.
-REVIEWER_USER="sortie-reviewer"
-REVIEWER_PASSWORD="Sortie-Reviewer-Pw1"
-BOT_USER="sortie-review-bot"
-BOT_PASSWORD="Sortie-Review-Bot-Pw1"
-FEATURE_BRANCH="feature-x"
-PROBE_BRANCH="status-probe"
-SENTINEL_PATH="review-sentinel.txt"
-# The feature branch modifies this pre-image line and inserts one line above
-# it, so the post-image number is the pre-image number plus one; a StartLine
-# assertion on either seeded line number can then tell which field the
-# adapter read. The integration test hard-codes both numbers.
-PRE_IMAGE_LINE=4
-POST_IMAGE_LINE=5
-# The human review's second comment anchors to the old side with this body,
-# fixed so the integration test can locate it by text.
-OLD_SIDE_COMMENT_BODY="Reviewer inline comment on the sentinel file's old side."
-# Proves the per-status target_url field name round-trips to CheckRun.DetailsURL.
-# The integration test hard-codes the same value.
-FAILING_TARGET_URL="https://ci.example.com/build/12345"
-# Above both DEFAULT_PAGING_NUM (30) and MAX_RESPONSE_ITEMS (50), so a truncating
-# combined-status read is detectable. The integration test hard-codes the count.
-PROBE_STATUS_COUNT=51
 
 log "creating reviewer and bot users"
 docker exec "$CONTAINER_NAME" gitea admin user create \
