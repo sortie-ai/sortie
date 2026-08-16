@@ -1,16 +1,19 @@
 # OpenAI Codex CLI: adapter research notes
 
-> OpenAI Codex CLI v0.134.0 (npm `@openai/codex`, binary `codex`) on Linux x86_64.
-> Reference for the `domain.AgentAdapter` implementation in `internal/agent/codex`,
-> registered under kind `codex`.
+> OpenAI Codex CLI (npm `@openai/codex`, binary `codex`) on Linux x86_64. Reference for the
+> `domain.AgentAdapter` implementation in `internal/agent/codex`, registered under kind `codex`.
 >
-> Coverage: the hosted-tool and model-tier behavior, the feature-flag surface, and the
-> self-generated JSON Schema are anchored to v0.134.0, probed May 2026. The app-server
-> transcripts (initialize, thread, turn, item, and token-usage messages) and the `codex exec`
-> JSONL samples were captured on v0.121.0 in April 2026 and have not been re-observed since;
-> the `userAgent` values quoted in the examples carry that version. The dynamic-tool response
-> payload and the granular approval-policy map rest on OpenAI Symphony's Elixir app-server
-> client, not on a local probe.
+> Coverage. The configuration surface, including the approval policy and the sandbox modes,
+> follows OpenAI's published [configuration schema](https://developers.openai.com/codex/config-schema.json),
+> which tracks the current release and is the authoritative source for those fields. Everything
+> observed locally, including the app-server transcripts, the protocol schema the binary
+> generates for itself, the flag surface, and the `codex exec` JSONL samples, comes from
+> **v0.121.0**, the only build installed on the research host; the `userAgent` values quoted in
+> the examples carry that version. Hosted-tool and model-tier behavior and the feature-flag
+> surface were recorded against v0.134.0 in May 2026 and cannot be re-observed here, so they are
+> the weakest claims in this document. Where the published schema and the installed binary
+> disagree, the schema wins and the divergence is named at the claim. The dynamic-tool response
+> payload rests on OpenAI Symphony's Elixir app-server client, not on a local probe.
 >
 > Claims about Sortie's own code name a Go symbol and were verified against the tree.
 > Primary sources are linked under "Sources" at the end.
@@ -65,8 +68,11 @@ on whitespace, and resolves the first token through `exec.LookPath`; an operator
 
 - The `codex` binary, a statically linked native Rust build that needs no Node.js runtime.
 - A valid OpenAI API key (`CODEX_API_KEY` or ChatGPT session credentials).
-- A Git repository. Codex requires commands to run inside a Git repo, and `--skip-git-repo-check`
-  overrides that check.
+
+A Git repository is not among them for this adapter. The trusted-directory refusal lives in the
+`codex exec` wrapper, above the app-server layer, which is why `--skip-git-repo-check` is an
+`exec` flag and appears in no configuration surface. `thread/start` against a non-git `cwd`
+succeeds and reports `gitInfo: null`.
 
 **Supported platforms:** Linux (x86_64, arm64), macOS (x86_64, Apple Silicon), Windows (native
 or WSL2).
@@ -469,24 +475,34 @@ and network) is the alternative when workspace write is too narrow.
 
 ### Approval policies
 
-| Policy         | App-server value | Behavior                                                                                                                   |
-| -------------- | ---------------- | -------------------------------------------------------------------------------------------------------------------------- |
-| Never ask      | `"never"`        | Never ask. Execution failures return to the model immediately.                                                             |
-| Unless trusted | `"untrusted"`    | Run only trusted commands (`ls`, `cat`, `sed`) unasked, and escalate anything outside that set.                            |
-| On failure     | `"on-failure"`   | Run everything unasked, and ask only after a command fails, to escalate to un-sandboxed execution. Deprecated upstream.    |
-| On request     | `"on-request"`   | The model decides when to ask.                                                                                             |
+`AskForApproval` accepts three kebab-case strings or one object form. The strings:
 
-The value set is kebab-case and closed: `AskForApproval` in the app-server's own JSON Schema
-declares exactly these four strings, and the behaviors are the `--ask-for-approval` descriptions
-the binary prints. Both were read from the locally installed v0.121.0 rather than the pinned
-version, which has not been re-probed for this field. A value outside the set is rejected at
+| Policy         | Value           | Behavior                                                                                                          |
+| -------------- | --------------- | ------------------------------------------------------------------------------------------------------------------ |
+| Never ask      | `"never"`       | Never ask. Failures return to the model immediately and are never escalated to a user.                            |
+| Unless trusted | `"untrusted"`   | Auto-approve only known-safe commands that read files. Everything else asks.                                      |
+| On request     | `"on-request"`  | The model decides when to ask.                                                                                    |
+
+The object form takes a single `granular` member whose booleans allow or reject each approval
+category rather than surfacing it: `sandbox_approval`, `rules`, and `mcp_elicitations` are
+required, and `request_permissions` and `skill_approval` are optional. A `false` field rejects
+that category automatically instead of showing it.
+
+Values and behaviors above come from OpenAI's published configuration schema
+([config-schema.json](https://developers.openai.com/codex/config-schema.json)), which is the
+authoritative surface for this field. A fourth string, `on-failure`, exists in the locally
+installed v0.121.0 and its help text marks it deprecated; the published schema no longer
+declares it, so treat it as removed. A value outside the accepted set is rejected at
 `thread/start`.
 
-`startThread` sends `approvalPolicy: "never"` unless `codex.approval_policy` overrides it. In CLI
-mode the equivalent is `--ask-for-approval never`, not `--full-auto`, which selects `on-request`
-with a workspace-write sandbox. Sending `"never"` permits arbitrary command execution within the
-sandbox boundary, so OpenAI's guidance is to use it only in a sandboxed environment. Sortie's workspace isolation and hook system operate inside
-that sandbox as defense in depth and do not replace container-level isolation.
+`startThread` sends `approvalPolicy: "never"` unless `codex.approval_policy` overrides it, and
+`typeutil.StringFrom` accepts only the string form, so the `granular` object cannot be expressed
+through `codex.approval_policy` and silently falls back to `never`. In CLI mode the equivalent of
+`"never"` is `--ask-for-approval never`, not `--full-auto`, which selects `on-request` with a
+workspace-write sandbox. Sending `"never"` permits arbitrary command execution within the sandbox
+boundary, so OpenAI's guidance is to use it only in a sandboxed environment. Sortie's workspace
+isolation and hook system operate inside that sandbox as defense in depth and do not replace
+container-level isolation.
 
 ### Approval requests
 
@@ -759,21 +775,23 @@ codex:
 The turn timeouts are not part of this block. `agent.turn_timeout_ms`, `agent.read_timeout_ms`,
 and `agent.stall_timeout_ms` are core config fields, described under "Timeout enforcement".
 
-`typeutil.StringFrom` reads `approval_policy`, so only the four string values
-(`"never"`, `"untrusted"`, `"on-failure"`, `"on-request"`) survive parsing. Symphony's client
-exposes a granular rejection map for the same policy, which silently declines whole approval
-categories rather than auto-approving them:
+`typeutil.StringFrom` reads `approval_policy`, so only the three string values
+(`"never"`, `"untrusted"`, `"on-request"`) survive parsing. The object form the schema also
+accepts, a `granular` member whose booleans decide each approval category, is dropped by
+`parsePassthroughConfig`, and the thread falls back to `never`. Written out, the form that
+cannot be expressed here is:
 
 ```yaml
+# Accepted by Codex, rejected by parsePassthroughConfig.
 approval_policy:
-  reject:
+  granular:
     sandbox_approval: true
     rules: true
     mcp_elicitations: true
 ```
 
-A map written under `codex.approval_policy` is dropped by `parsePassthroughConfig` and the
-thread falls back to `never`.
+Symphony configures the same policy with a differently-named map, keyed `reject`, so a snippet
+copied from that project does not describe this wire format either.
 
 ---
 
@@ -872,9 +890,10 @@ workspace.
 
 ## Runtime constraints
 
-- **Git repository required.** Codex refuses to run outside a Git repository unless
-  `--skip-git-repo-check` is passed. Nothing in the adapter initializes a repository or passes
-  that flag, so the workspace must already be a Git repository when the app-server launches.
+- **No Git repository gate on this surface.** The trusted-directory refusal belongs to the
+  `codex exec` wrapper, so `--skip-git-repo-check` guards a path the adapter never takes.
+  `thread/start` accepts a non-git `cwd` and reports `gitInfo: null`, and a workspace that no
+  hook has cloned into is the ordinary case rather than a failure.
 - **Context compaction.** Codex handles context window limits internally through background
   compaction, surfaced as `contextCompaction` item events. No adapter action follows.
 - **Protected paths.** In `workspaceWrite` mode, the `.git`, `.agents`, and `.codex`
