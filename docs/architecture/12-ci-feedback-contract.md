@@ -57,9 +57,18 @@ aggregation rule, so neither reader can invent its own definition of failing. Th
 reach different verdicts when they read different signals: on GitHub the CI provider reads check
 runs only, while the merge gate reads the combined commit status as well, so a commit whose sole
 failing signal is a legacy commit status is passing to one and failing to the other. On GitLab the
-CI provider derives its verdict from the normalized run set while the merge gate reads the
-platform's own pipeline aggregate, so the two can differ whenever that aggregate is not a function
-of the failing set.
+CI provider derives its verdict from the normalized run set. The merge gate reads the platform's
+own pipeline aggregate for every pipeline status whose aggregate is a function of the failing set,
+and falls back to that same normalized run set for the one status where it is not: a pipeline
+blocked on a manual action. What remains is the shape where the platform reports a
+settled, non-failing pipeline that carries no run at all: the merge gate answers from the
+aggregate, and the CI provider answers `pending` from an empty run set.
+
+The two readers are also addressed differently, which is a second reason their answers can differ.
+`SCMAdapter.GetCIStatus` takes a pull-request identity (`prNumber`, `owner`, `repo`) and answers
+about that pull request as the forge currently reports it, while `CIStatusProvider.FetchCIStatus`
+takes a caller-supplied ref string and answers about that ref, which may no longer be the pull
+request's head.
 
 Each `CheckRun` contains:
 

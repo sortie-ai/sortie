@@ -11,8 +11,10 @@
 > `6f59ad3485c` as a continuously deployed instance does. A third live pass on 2026-08-10
 > characterized the merge-request, approval, review, pipeline, and job surface against the same
 > self-managed Community Edition 19.2.1 instance (revision `f4d029d2da8`), using a project at
-> namespace depth three and a registered runner executing real jobs. Reference for implementing
-> the GitLab `TrackerAdapter` and `SCMAdapter`.
+> namespace depth three and a registered runner executing real jobs. A fourth live pass on
+> 2026-08-16 characterized the `manual` pipeline shape against the same instance and revision,
+> using a purpose-built scratch project and its own registered runner. Reference for
+> implementing the GitLab `TrackerAdapter` and `SCMAdapter`.
 >
 > Self-managed GitLab has no fixed host, so the instance base URL is part of every
 > self-managed configuration, and instances differ in version and settings. Facts hold for
@@ -28,7 +30,7 @@ is not an observation of GitLab.
 
 | Tag | Meaning |
 | --- | --- |
-| **[live-CE]** | Observed directly against the self-managed Community Edition 19.2.1 instance on 2026-08-04, again on 2026-08-05 against the pinned container image `gitlab/gitlab-ce:19.2.1-ce.0` (version `19.2.1`, revision `f4d029d2da8`, matching the lab), and again on 2026-08-10 for the merge-request, approval, pipeline, and job surface. The strongest evidence for Community Edition behavior. On 2026-08-10 the tag also covers the instance's **own GraphQL introspection response**, which is version-exact for the deployment under test and is named as such wherever it is the source. |
+| **[live-CE]** | Observed directly against the self-managed Community Edition 19.2.1 instance on 2026-08-04, again on 2026-08-05 against the pinned container image `gitlab/gitlab-ce:19.2.1-ce.0` (version `19.2.1`, revision `f4d029d2da8`, matching the lab), again on 2026-08-10 for the merge-request, approval, pipeline, and job surface, and again on 2026-08-16 for the `manual` pipeline shape. The strongest evidence for Community Edition behavior. On 2026-08-10 and 2026-08-16 the tag also covers the instance's **own GraphQL introspection response**, which is version-exact for the deployment under test and is named as such wherever it is the source. |
 | **[live-SaaS]** | Observed directly against GitLab.com (`19.3.0-pre`, `enterprise: true`, plan `free`) on 2026-08-04, and again on 2026-08-05 at revision `6f59ad3485c`, moved from the previously recorded `7725732be39` as a continuously deployed instance does. Evidence about GitLab.com only, never about self-managed. |
 | **[docs]** | First-party GitLab documentation, cited by URL. |
 | **[source]** | Upstream source in `gitlab-org/gitlab`, cited by path at ref `v19.2.1-ee` (the tag matching the researched Community Edition version; the `-ee` tag carries both the Community Edition code and the `ee/` tree, which is how a route's edition gating is proved). |
@@ -1701,13 +1703,31 @@ zero pipelines gained pipeline 5 with `source: "external"`, and that pipeline im
 the merge request's `head_pipeline` **[live-CE]**.
 
 **Decision: `head_pipeline` on the merge-request object is the single CI source, and no manual
-fold is needed.** The externally-reported status is already folded in by the platform. This
-saves a request compared with the Gitea adapter, which must aggregate a status list itself.
+fold is needed for any status whose aggregate is a function of the failing set.** The
+externally-reported status is already folded in by the platform. This saves a request compared
+with the Gitea adapter, which must aggregate a status list itself. One status is not such a
+function and is the sole exception: `manual`, which fetches that pipeline's commit statuses and
+folds them through `scmcore.MergeGate`, as the `GetCIStatus` mapping below specifies.
 
 `head_pipeline` is a full pipeline object embedded in the merge-request response, carrying
 `id`, `status`, `source`, `sha`, `ref`, `web_url`, timing fields, and a `detailed_status`
 sub-object **[live-CE]**. Reading it costs nothing beyond the merge-request read that
 `GetMergeability` already performs.
+
+**`head_pipeline` is an association, not a derived field.** The REST entity exposes the
+`head_pipeline` association verbatim
+([`lib/api/entities/merge_request.rb`](https://gitlab.com/gitlab-org/gitlab/-/blob/v19.2.1-ee/lib/api/entities/merge_request.rb))
+**[source]**, and nothing re-validates it against the merge request's current head. A push that
+creates no pipeline leaves the field pointing at the superseded commit: a merge request whose
+`sha` had moved to `86c6dc4b` after a commit removed `.gitlab-ci.yml` still reported
+`head_pipeline` at `5487092b` with status `success`, and its pipeline list carried that one
+pipeline only **[live-CE]**. The platform's own mergeability checks read `diff_head_pipeline`
+instead, which is the same association narrowed to `nil` when it does not match the current
+head
+([`app/models/merge_request.rb`](https://gitlab.com/gitlab-org/gitlab/-/blob/v19.2.1-ee/app/models/merge_request.rb))
+**[source]**. Any read that folds the head pipeline's job set therefore addresses
+`head_pipeline.sha` and `head_pipeline.id`, never the merge request's own `sha`, so the
+pipeline and the commit it describes cannot disagree.
 
 **`GetCIStatus` mapping.** The orchestrator compares the returned string against the literal
 `"success"` and treats the empty string as "no checks exist"
@@ -1725,7 +1745,7 @@ string). GitLab maps into the same four through `mapPipelineStatus`
 | `success`, `skipped` | `"success"` |
 | `failed`, `canceled` | `"failing"` |
 | `created`, `waiting_for_resource`, `preparing`, `waiting_for_callback`, `pending`, `running`, `canceling`, `scheduled` | `"pending"` (still settling) |
-| `manual` | `"pending"` (settled, but deliberately held; see below) |
+| `manual` | the verdict `scmcore.MergeGate` computes over the pipeline's own job set, at the cost of one extra request (see below) |
 | any other value, including the empty string | `"pending"`, and logs one WARN naming the observed value |
 
 `skipped` is a terminal, non-failing status, and it folds to a merge-eligible verdict rather
@@ -1736,27 +1756,70 @@ that would also call a pipeline `skipped` when only some of its jobs are skipped
 job set therefore cannot carry a failing conclusion, and no fetch of the statuses list can
 reveal one it does not already rule out.
 
-Expressing the shared rule over the platform's own aggregate rather than over a fetched run
-set preserves the saving recorded above: the answer still costs no request beyond the
-merge-request read. Fetching the statuses list and calling `scmcore.MergeGate` on the
-normalized runs would pay one extra request per tick per pending merge, against a rate-limited
-API, to resolve a difference the platform already reports for free, so `GetCIStatus` reads the
-platform aggregate unconditionally rather than deriving the gate from a fetched run set.
+Expressing the shared rule over the platform's own aggregate rather than over a fetched run set
+preserves the saving recorded above for twelve of the thirteen values: those answers cost no
+request beyond the merge-request read. Fetching the statuses list for every status and calling
+`scmcore.MergeGate` on the normalized runs would pay one extra request per tick per pending
+merge, against a rate-limited API, to resolve differences the platform already reports for
+free. `manual` is the one value the platform aggregate cannot resolve, so it is the one value
+that pays for a job-set read.
 
-`manual` is named in the pending row on purpose, not because it fell through a default. The
-platform reports `manual` for a settled pipeline, one with no job left running or queued, but
-its branch ordering checks for a blocking manual job before it falls back to reporting
-`failed`, so a pipeline holding both a blocking manual job and a failed job still reports
-`manual`. Two arrangements reach that shape: a blocking manual job sharing a stage with the job
-that failed, and any pipeline that uses `needs`, where a job starts as soon as its own
-dependencies finish and can fail while an earlier-stage manual job is still untriggered.
-Mapping `manual` to a merge-eligible verdict on that shape would let an auto-merge reaction
-merge a commit whose CI provider reports failing, on an operation that cannot be undone. A
-project that enables the "Pipelines must succeed" setting closes the exposure by blocking the
-merge on mergeability rather than on the CI gate: `mapMergeability` reports a head pipeline
-that is neither successful nor still active as `blocked`, so `manual` never reaches the CI read
-on such a project. `GetCIStatus` keeps returning `"pending"` for `manual` until that arm is
-resolved on its own terms.
+`manual` is not a settled-and-clean signal. The platform reports it for a pipeline with no job
+left running or queued, but its composite-status computation tests for a blocking manual job
+before it falls through to reporting `failed`: the `any_of?(:manual)` branch precedes the final
+`else 'failed'`
+([`lib/gitlab/ci/status/composite.rb`](https://gitlab.com/gitlab-org/gitlab/-/blob/v19.2.1-ee/lib/gitlab/ci/status/composite.rb))
+**[source]**. A pipeline holding both a blocking manual job and a failed job therefore still
+reports `manual`. Two arrangements reach that shape, and both were reproduced **[live-CE]**:
+
+- A blocking manual job sharing a stage with the job that failed. Jobs `manual_gate` (`manual`)
+  and `failing_job` (`failed`, `allow_failure: false`), both in stage `test`, produced
+  `head_pipeline.status: "manual"`.
+- Any pipeline that uses `needs`, where a job starts as soon as its own dependencies finish and
+  can fail while an earlier-stage manual job is still untriggered. Jobs `build_job` (`success`,
+  stage `build`), `manual_gate` (`manual`, stage `gate`), and `failing_job` (`failed`, stage
+  `test`, `needs: [build_job]`) likewise produced `head_pipeline.status: "manual"`.
+
+Only the pipeline's own job set separates those shapes from the benign one; no other field of
+the merge-request response distinguishes them. Reading
+`GET /projects/:id/repository/commits/:sha/statuses` for `head_pipeline.sha`, scoped to
+`head_pipeline.id`, and folding the normalized entries through `scmcore.MergeGate` classifies
+each observed shape **[live-CE]**:
+
+| Job set on a `manual` head pipeline | Normalized conclusions | `scmcore.MergeGate` |
+| --- | --- | --- |
+| `manual` plus `failed`, same stage | `neutral`, `failure` | `failing` |
+| `success` plus `manual` plus `failed`, `needs` DAG | `success`, `neutral`, `failure` | `failing` |
+| `manual` plus `manual`, nothing else | `neutral`, `neutral` | `success` |
+| `manual` plus a later-stage `created` job | `neutral`, `pending` (still `queued`) | `pending` |
+
+The last row is the ordinary manual-gate pipeline, where the gate blocks a later stage whose
+jobs have been created but not made runnable. The fold answers it `pending`, which is correct:
+work remains that has not run. Mapping `manual` to a merge-eligible verdict without reading the
+job set would answer the first, second, and fourth rows wrongly, letting an auto-merge reaction
+merge a commit whose CI provider reports failing, or merge before the remaining work has run,
+on an operation that cannot be undone.
+
+The job-set read is one request in every observed case: the four fixtures returned `X-Total` of
+2, 3, 2, and 2, each with `X-Total-Pages: 1` **[live-CE]**. The `pipeline_id` scope is
+load-bearing rather than defensive. A commit carrying two pipelines returned both pipelines'
+entries unfiltered (`X-Total: 2`) and exactly one entry under each `pipeline_id` value
+(`X-Total: 1`), and `head_pipeline` moved to the newer pipeline **[live-CE]**.
+
+A project that enables the "Pipelines must succeed" setting never reaches the CI read at all.
+There a merge request whose head pipeline is `manual` reports
+`detailed_merge_status: "ci_still_running"` **[live-CE]**, which is outside `mapMergeability`'s
+recognized set and lands in its `blocked` arm, so the auto-merge precondition table stops on
+mergeability before it calls `GetCIStatus`. The value is `ci_still_running` rather than
+`ci_must_pass` because the reason is chosen by `diff_head_pipeline_considered_in_progress?`,
+which under that setting reduces to `!pipeline.complete?`, and `manual` is not one of the four
+completed statuses
+([`app/services/merge_requests/mergeability/detailed_merge_status_service.rb`](https://gitlab.com/gitlab-org/gitlab/-/blob/v19.2.1-ee/app/services/merge_requests/mergeability/detailed_merge_status_service.rb),
+[`app/models/merge_request.rb`](https://gitlab.com/gitlab-org/gitlab/-/blob/v19.2.1-ee/app/models/merge_request.rb),
+[`app/models/concerns/ci/has_status.rb`](https://gitlab.com/gitlab-org/gitlab/-/blob/v19.2.1-ee/app/models/concerns/ci/has_status.rb))
+**[source]**. `ci_still_running` is one of the 24 values the instance's own `DetailedMergeStatus`
+enum declares **[live-CE]**, and it reaches `mapMergeability`'s unrecognized arm, so the adapter
+logs one WARN naming it on each such read.
 
 A `skipped` pipeline created by a `[ci skip]` commit carries no commit-status entry at all,
 rather than one entry per skipped job: the pipeline-creation chain halts before it seeds any
@@ -1767,6 +1830,12 @@ it sees an empty run set and reports `"pending"`, and the merge gate that
 Both `""` and `"success"` are merge-eligible to the auto-merge reaction, and a `"pending"`
 `FetchCIStatus` verdict is non-failing, so neither reader's answer for this shape lets a
 failing commit merge or lets a passing one go unmerged.
+
+The empty run set is reachable only for `skipped`. A `manual` pipeline always carries at least
+the blocking manual job's entry, because the composite computation reports `manual` only for a
+status set holding one, and every observed `manual` fixture returned at least two entries
+**[live-CE]**. The `manual` arm therefore never folds an empty set, and it holds at `"pending"`
+rather than reporting `CIGateAbsent` if it ever observes one.
 
 **`FetchCIStatus` mapping to `domain.CIResult`.** The check-run list comes from
 `GET /projects/:id/repository/commits/:sha/statuses`, which returns one entry per job **and**
@@ -2102,7 +2171,7 @@ Every route below was exercised on the fixture unless the status column says oth
 | --- | --- | --- |
 | `GetMergeability` | `GET /projects/:id/merge_requests/:iid` | Verified **[live-CE]** |
 | `GetReviewDecision` | `GET .../merge_requests/:iid/approvals` plus `.../reviewers` | Verified, two requests **[live-CE]** |
-| `GetCIStatus` | `head_pipeline` on the merge-request object | Verified, no extra request **[live-CE]** |
+| `GetCIStatus` | `head_pipeline` on the merge-request object, plus `GET /projects/:id/repository/commits/:sha/statuses` on a `manual` head pipeline | Verified, no extra request for twelve of the thirteen pipeline statuses and one extra request for `manual` **[live-CE]** |
 | `FetchCIStatus` | `GET /projects/:id/repository/commits/:sha/statuses` | Verified **[live-CE]** |
 | Job log for `max_log_lines` | `GET /projects/:id/jobs/:job_id/trace` | Verified, `text/plain`, no range support **[live-CE]** |
 | `FetchPendingReviews` | `.../merge_requests/:iid/reviewers` plus `.../notes` | Verified **[live-CE]** |
@@ -2382,11 +2451,60 @@ The 2026-08-10 pass added the following against a purpose-built project at names
     true` on the merge call did not delete the branch synchronously: it was still readable
     immediately after the 200 merge response.
 
+The 2026-08-16 pass added the following against a purpose-built scratch project in the
+administrator's own namespace, with its own registered Docker-executor runner. Every result
+below was read with the project Developer token; the administrator token created the project,
+the runner, and the branches only.
+
+32. **A `manual` head pipeline can carry a failed job, in two arrangements.** A pipeline whose
+    stage `test` held `manual_gate` (`when: manual`, `allow_failure: false`) and `failing_job`
+    (`exit 1`) settled at `head_pipeline.status: "manual"` with jobs `failing_job: failed` and
+    `manual_gate: manual`. A second pipeline with `build_job` in stage `build`, `manual_gate` in
+    stage `gate`, and `failing_job` in stage `test` declaring `needs: [build_job]` likewise
+    settled at `manual`, with `build_job: success`, `manual_gate: manual`, and
+    `failing_job: failed`. Neither merge request's `detailed_merge_status` was affected: both
+    read `mergeable`, so the CI read is reached on a project that does not require passing
+    pipelines.
+33. **The commit-statuses view of those pipelines.** Scoped to `head_pipeline.sha` and
+    `head_pipeline.id`, the same-stage pipeline returned two entries (`manual_gate: manual`,
+    `failing_job: failed`, `allow_failure: false` on both) and the `needs` pipeline returned
+    three. Normalizing each through the job-outcome mapping yields `neutral` plus `failure`, and
+    `success` plus `neutral` plus `failure`, so `scmcore.MergeGate` returns `failing` for both.
+34. **A wholly manual pipeline folds to a merge-eligible verdict.** Two blocking manual jobs and
+    nothing else settled at `head_pipeline.status: "manual"` and returned two `manual` entries,
+    which normalize to two completed `neutral` runs, so `scmcore.MergeGate` returns `success`.
+35. **A manual gate blocking a later stage folds to a deferral.** `manual_gate` in stage `gate`
+    with `deploy_job` in stage `deploy` settled at `head_pipeline.status: "manual"` with
+    `deploy_job: created`, which normalizes to a `queued` run, so `scmcore.MergeGate` returns
+    `pending`. Folding the job set therefore distinguishes this shape from the wholly manual one,
+    which no single pipeline status can.
+36. **`pipeline_id` scoping is load-bearing on the statuses route.** Triggering a second pipeline
+    for an unchanged SHA moved `head_pipeline` to the new pipeline and left the commit carrying
+    two. The unfiltered statuses read returned `X-Total: 2` with one entry per pipeline; each
+    `pipeline_id` value returned `X-Total: 1`. Every fixture in this pass fit one page:
+    `X-Total` of 2, 3, 2, and 2 with `X-Total-Pages: 1`.
+37. **`head_pipeline` can describe a superseded commit.** After a commit that removed
+    `.gitlab-ci.yml`, and therefore created no pipeline, a merge request reported
+    `sha: 86c6dc4b` while `head_pipeline` still reported `id: 18`, `sha: 5487092b`, and
+    `status: "success"`. Its merge-request pipeline list carried that one pipeline only.
+38. **"Pipelines must succeed" reports `ci_still_running` for a `manual` head pipeline.** With
+    `only_allow_merge_if_pipeline_succeeds: true` on the project, all three `manual` merge
+    requests moved from `detailed_merge_status: "mergeable"` to `"ci_still_running"`, while
+    `merge_status` stayed `can_be_merged`. Setting the flag back to false restored `mergeable`.
+39. **The pipeline-status enum still has 13 values.** The instance's own GraphQL
+    `PipelineStatusEnum` and `CiJobStatus` each enumerate `created`, `waiting_for_resource`,
+    `preparing`, `waiting_for_callback`, `pending`, `running`, `success`, `failed`, `canceling`,
+    `canceled`, `skipped`, `manual`, and `scheduled`, matching `AVAILABLE_STATUSES` at
+    `v19.2.1-ee`. `DetailedMergeStatus` still enumerates 24 values, `ci_still_running` among
+    them.
+
 All fixture mutations made during the 2026-08-04 and 2026-08-05 passes were reverted:
 probe-created issues, notes, issue links, and labels were deleted, altered label sets and issue
 states were restored, and every token created for scope probing was revoked. The 2026-08-10
 fixtures were **left in place** as the SCM fixture blueprint: the `scmlab` group tree, the
-`scmlab/team/squad/mrlab` project, its merge requests, and the registered runner.
+`scmlab/team/squad/mrlab` project, its merge requests, and the registered runner. The 2026-08-16
+pass created its own project and runner rather than mutating that blueprint, and deleted both
+afterwards.
 
 ---
 
@@ -2415,6 +2533,10 @@ fixtures were **left in place** as the SCM fixture blueprint: the `scmlab` group
 | Merge-endpoint check ordering, the 405 constant, and the conditional `sha` requirement | [`lib/api/merge_requests.rb`](https://gitlab.com/gitlab-org/gitlab/-/blob/v19.2.1-ee/lib/api/merge_requests.rb) (`build_merge_params`, `check_sha_param!`, `execute_merge`, `not_allowed!`) | Live: all five response classes provoked in order |
 | Absence of a bot marker on embedded users | [`lib/api/entities/note.rb`](https://gitlab.com/gitlab-org/gitlab/-/blob/v19.2.1-ee/lib/api/entities/note.rb) and [`lib/api/entities/user_basic.rb`](https://gitlab.com/gitlab-org/gitlab/-/blob/v19.2.1-ee/lib/api/entities/user_basic.rb) | Live: identical author key sets for a token-bot note and a human note; `bot` present only on `GET /users/:id` |
 | Single-value `detailed_merge_status` masking | [gitlab-org/gitlab#570458](https://gitlab.com/gitlab-org/gitlab/-/issues/570458) | Upstream issue report; the precedence itself was not reproduced here |
+| Composite-status branch order, and why a `manual` pipeline can hold a failed job | [`lib/gitlab/ci/status/composite.rb`](https://gitlab.com/gitlab-org/gitlab/-/blob/v19.2.1-ee/lib/gitlab/ci/status/composite.rb) and [`app/models/concerns/ci/has_status.rb`](https://gitlab.com/gitlab-org/gitlab/-/blob/v19.2.1-ee/app/models/concerns/ci/has_status.rb) | Live: four pipeline shapes built and settled, each read back as jobs and as commit statuses |
+| `head_pipeline` as an unvalidated association, versus `diff_head_pipeline` | [`lib/api/entities/merge_request.rb`](https://gitlab.com/gitlab-org/gitlab/-/blob/v19.2.1-ee/lib/api/entities/merge_request.rb) and [`app/models/merge_request.rb`](https://gitlab.com/gitlab-org/gitlab/-/blob/v19.2.1-ee/app/models/merge_request.rb) | Live: a push creating no pipeline left the field on the superseded commit |
+| `ci_still_running` for a `manual` head pipeline under "Pipelines must succeed" | [`app/services/merge_requests/mergeability/detailed_merge_status_service.rb`](https://gitlab.com/gitlab-org/gitlab/-/blob/v19.2.1-ee/app/services/merge_requests/mergeability/detailed_merge_status_service.rb) and [`app/services/merge_requests/mergeability/check_ci_status_service.rb`](https://gitlab.com/gitlab-org/gitlab/-/blob/v19.2.1-ee/app/services/merge_requests/mergeability/check_ci_status_service.rb) | Live: the setting toggled on and off against three merge requests |
+| Pipeline-status enum completeness | The live instance's own GraphQL introspection, and [`app/models/concerns/ci/has_status.rb`](https://gitlab.com/gitlab-org/gitlab/-/blob/v19.2.1-ee/app/models/concerns/ci/has_status.rb) | 13 values on both, against a control query whose known-good types resolved |
 | Declared authentication mechanisms, and the incompleteness of the machine-readable route surface | [`doc/api/openapi/openapi_v2.yaml`](https://gitlab.com/gitlab-org/gitlab/-/blob/v19.2.1-ee/doc/api/openapi/openapi_v2.yaml) and the [interactive rendering](https://docs.gitlab.com/api/openapi/openapi_interactive/) | Inspected for declared paths and parameters; live 404 on every instance-served description path |
 | Container image size and boot behavior | Docker Hub registry API; local image inspection | Measured pull, boot, healthcheck, and readiness polling |
 | Gitea and GitHub adapter behavior used in the comparison tables | The Gitea and GitHub adapter research notes in this directory, and `internal/domain/tracker.go` | Document and code reading at research time |
@@ -2439,5 +2561,4 @@ Carried forward explicitly rather than resolved by inference:
 | Is the timestamp-and-stream prefix on the job trace a property of the API, the runner version, or a runner feature flag? | Decides whether the trace sanitizer can rely on the prefix being present, or must handle both shapes | Fetch a trace produced by an older runner, and one produced with the runner timestamp feature flag disabled |
 | Does the notes route on a merge request paginate and filter identically to the issue variant? | The comment normalization is assumed shared; a divergence would surface as dropped review comments | Seed a merge request with more than 100 notes and repeat the issue-side pagination and `activity_filter` probes |
 | Does `GET /users/:id` draw on a distinct rate-limit budget from the merge-request reads? | Bot classification adds one request per distinct author; a stricter budget would change the caching strategy | Compare `RateLimit-Name` on a throttled `GET /users/:id` against a throttled merge-request read on GitLab.com |
-| Which route closes the `manual` arm of `GetCIStatus`: fold the pipeline's job set through `scmcore.MergeGate` only when `head_pipeline.status` is `manual`, or map `manual` to `CIGateSuccess` and narrow the CI feedback contract's one-aggregation-rule claim to forges whose merge gate derives from a run set? | `GetCIStatus` now maps every other value of the platform's pipeline-status enum by the disposition folding the equivalent normalized run set through `scmcore.MergeGate` would produce; `manual` is the one value held at `pending` by decision, because the platform can report it for a job set that still carries a failed job | Sample how often a `manual` pipeline in real projects also carries a failed job, which any pipeline using `needs` can reach; tracked in issue #805 |
 | Does self-managed Enterprise Edition behave as its source implies? | Every Enterprise Edition claim here is source plus documentation, never observed | Run the same probe set against a licensed self-managed Enterprise Edition instance |
