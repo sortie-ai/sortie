@@ -40,10 +40,9 @@ trap dump_logs_on_error EXIT
 
 require_tools docker curl jq
 
-# Auth mode is "token" or "basic" (the admin user and password). Repository
-# creation needs basic auth; everything else runs under the token, so the run
-# also proves the published scopes cover the whole fixture. Reviews are the
-# exception, see user_call.
+# Repository creation needs basic auth; everything else runs under the token,
+# so the run also proves the published scopes cover the whole fixture.
+# Reviews are the exception, see user_call.
 gitea_call() {
 	_gc_method=$1 _gc_path=$2 _gc_auth=$3
 	case "$_gc_auth" in
@@ -93,8 +92,8 @@ docker exec "$CONTAINER_NAME" gitea admin user create \
 	--admin \
 	--must-change-password=false >/dev/null
 
-# Minted under basic auth. The scopes are the minimum covering every operation
-# the suite exercises plus the two construction preflights.
+# The scopes are the minimum covering every operation the suite exercises
+# plus the two construction preflights.
 log "creating access token"
 token_response=$(curl -sS --max-time 30 \
 	-u "${GITEA_USER}:${GITEA_PASSWORD}" \
@@ -110,7 +109,6 @@ log "creating repository ${PROJECT}"
 jq -nc --arg name "$GITEA_REPO" '{name: $name, private: false, auto_init: true}' |
 	gitea_call POST "/user/repos" basic >/dev/null
 
-# The five workflow-state and category labels the fixture assigns to its issues.
 create_label() {
 	_cl_out=$(jq -nc --arg name "$1" '{name: $name, color: "#cccccc"}' |
 		gitea_call POST "/repos/${PROJECT}/labels" token)
@@ -225,10 +223,6 @@ jq -nc --arg new "$FEATURE_BRANCH" --arg old "$default_branch" \
 	'{new_branch_name: $new, old_branch_name: $old}' |
 	gitea_call POST "/repos/${PROJECT}/branches" token >/dev/null
 
-# Modifies line PRE_IMAGE_LINE and inserts one line above it, so the modified
-# line's post-image number (POST_IMAGE_LINE) is one past its pre-image
-# number; the two seeded review comments below anchor to these two distinct
-# numbers on purpose.
 log "modifying the sentinel file on ${FEATURE_BRANCH}"
 feature_content=$(printf 'sentinel line 1\nsentinel line 2\nsentinel line 3\ninserted sentinel line\nsentinel line 4 MODIFIED\nsentinel line 5\nsentinel line 6\nsentinel line 7\n' | base64 | tr -d '\n')
 feature_response=$(jq -nc --arg content "$feature_content" --arg branch "$FEATURE_BRANCH" --arg sha "$sentinel_sha" \
@@ -243,8 +237,8 @@ pr_response=$(jq -nc --arg head "$FEATURE_BRANCH" --arg base "$default_branch" \
 pr_index=$(printf '%s' "$pr_response" | jq -er '.number')
 
 # The first comment anchors new-side at POST_IMAGE_LINE; the second anchors
-# old-side at PRE_IMAGE_LINE with new_position 0, the comment this fix exists
-# to deliver.
+# old-side at PRE_IMAGE_LINE with new_position 0, the old-side case the
+# adapter must not drop.
 log "submitting the human REQUEST_CHANGES review as ${REVIEWER_USER}"
 jq -nc --arg path "$SENTINEL_PATH" --argjson newLine "$POST_IMAGE_LINE" --argjson oldLine "$PRE_IMAGE_LINE" --arg oldBody "$OLD_SIDE_COMMENT_BODY" \
 	'{event: "REQUEST_CHANGES", body: "Please address the inline comments.", comments: [
