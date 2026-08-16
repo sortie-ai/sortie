@@ -1033,12 +1033,16 @@ Additional fields (via Extra):
 | `delete_branch`    | boolean | `true`   | Requires restart | When `true`, the PR head branch is deleted after a successful merge. Failure to delete does not roll back the merge. |
 | `poll_interval_ms` | integer | `60000`  | Requires restart | Polling interval for the precondition state machine. Minimum: `30000` (30 sec).                           |
 
-For a GitLab provider, `require_ci` reads the head pipeline the platform reports for the PR,
-rather than a fetched check-run list. A head pipeline the platform reports as `skipped`
-satisfies the gate, because that status is non-failing. A head pipeline the platform reports as
-`manual` does not satisfy the gate and defers until an operator resolves it. A project's
-"Pipelines must succeed" setting is the control that holds a merge on a pipeline that did not
-succeed.
+For a GitLab provider, `require_ci` reads the head pipeline the platform reports for the PR
+rather than a fetched check-run list, with one exception. A head pipeline the platform reports
+as `skipped` satisfies the gate, because that status is non-failing. A head pipeline the
+platform reports as `manual` is the exception, and the one case that costs a second request.
+GitLab reports `manual` both for a pipeline whose only remaining work is a manual job and for
+one that already carries a failed job beside it, so `require_ci` reads that pipeline's jobs and
+applies to them the same rule it applies to every other check. A manual pipeline whose jobs have
+all finished with no failure satisfies the gate; one carrying a failed job does not; one whose
+manual gate still blocks jobs that have not run defers until they do. A project's "Pipelines
+must succeed" setting is the control that holds a merge on a pipeline that did not succeed.
 
 **Activation:** The `reactions.auto_merge` block is active when `provider` is present
 and non-empty. Agent-created PRs MUST write `pr_number` (positive integer), `owner`,
