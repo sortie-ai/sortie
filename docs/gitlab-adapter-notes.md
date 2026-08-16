@@ -1703,8 +1703,11 @@ zero pipelines gained pipeline 5 with `source: "external"`, and that pipeline im
 the merge request's `head_pipeline` **[live-CE]**.
 
 **Decision: `head_pipeline` on the merge-request object is the single CI source, and no manual
-fold is needed.** The externally-reported status is already folded in by the platform. This
-saves a request compared with the Gitea adapter, which must aggregate a status list itself.
+fold is needed for any status whose aggregate is a function of the failing set.** The
+externally-reported status is already folded in by the platform. This saves a request compared
+with the Gitea adapter, which must aggregate a status list itself. One status is not such a
+function and is the sole exception: `manual`, which fetches that pipeline's commit statuses and
+folds them through `scmcore.MergeGate`, as the `GetCIStatus` mapping below specifies.
 
 `head_pipeline` is a full pipeline object embedded in the merge-request response, carrying
 `id`, `status`, `source`, `sha`, `ref`, `web_url`, timing fields, and a `detailed_status`

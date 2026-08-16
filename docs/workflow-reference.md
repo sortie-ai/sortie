@@ -1038,10 +1038,11 @@ rather than a fetched check-run list, with one exception. A head pipeline the pl
 as `skipped` satisfies the gate, because that status is non-failing. A head pipeline the
 platform reports as `manual` is the exception, and the one case that costs a second request.
 GitLab reports `manual` both for a pipeline whose only remaining work is a manual job and for
-one that already carries a failed job beside it, so `require_ci` reads that pipeline's jobs and
-applies to them the same rule it applies to every other check. A manual pipeline whose jobs have
-all finished with no failure satisfies the gate; one carrying a failed job does not; one whose
-manual gate still blocks jobs that have not run defers until they do. A project's "Pipelines
+one that already carries a failed job beside it, so `require_ci` reads the commit statuses
+GitLab records for that pipeline and applies to them the same rule it applies to every other
+check. An untriggered manual job is not a failure, so a manual pipeline carrying no failed job
+satisfies the gate even though that job has not run; one carrying a failed job does not; one
+whose manual gate still holds later jobs at not-yet-started defers until they run. A project's "Pipelines
 must succeed" setting is the control that holds a merge on a pipeline that did not succeed.
 
 **Activation:** The `reactions.auto_merge` block is active when `provider` is present
