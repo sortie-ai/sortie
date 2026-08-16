@@ -11,6 +11,7 @@ import (
 
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/logging"
+	"github.com/sortie-ai/sortie/internal/scm/scmcore"
 )
 
 // reviewPendingBackoffBase is the base interval for review-pending
@@ -103,12 +104,27 @@ func reconcileReviewComments(state *State, params ReconcileParams, log *slog.Log
 			continue
 		}
 
-		// Filter outdated comments.
+		// Filter outdated comments, then drop any comment whose author
+		// matches the operator allowlist; the platform-marker half of
+		// bot classification already ran inside the adapter. A comment
+		// with no known author is never treated as a bot.
+		allowlist := params.BotReviewConfig.BotUsernames
 		var actionable []domain.ReviewComment
+		excluded := 0
 		for _, c := range comments {
-			if !c.Outdated {
-				actionable = append(actionable, c)
+			if c.Outdated {
+				continue
 			}
+			if c.Reviewer != "" && scmcore.IsBotAuthor(c.Reviewer, false, allowlist) {
+				excluded++
+				continue
+			}
+			actionable = append(actionable, c)
+		}
+		if excluded > 0 {
+			entryLog.Debug("review comments excluded by bot allowlist",
+				slog.Int("excluded_count", excluded),
+			)
 		}
 
 		// Compute maximum comment timestamp for debounce gating.
@@ -193,6 +209,7 @@ func reconcileReviewComments(state *State, params ReconcileParams, log *slog.Log
 
 		entryLog.Info("review comments detected, scheduling review-fix dispatch",
 			slog.Int("comment_count", len(actionable)),
+			slog.Int("excluded_count", excluded),
 			slog.Int("review_fix_attempt", state.ReactionAttempts[rkey]),
 			slog.Int("max_continuation_turns", params.ReviewConfig.MaxContinuationTurns),
 		)

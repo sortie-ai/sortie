@@ -145,10 +145,13 @@ type LabelEvent struct {
 // SCMAdapter exposes read and write operations against the SCM platform.
 // Implementations must be safe for concurrent use.
 type SCMAdapter interface {
-	// FetchPendingReviews returns review comments from non-bot
-	// CHANGES_REQUESTED reviews on the given PR. Comments marked as
-	// outdated by the platform are included with Outdated=true; the
-	// caller is responsible for filtering.
+	// FetchPendingReviews returns review comments from CHANGES_REQUESTED
+	// reviews on the given PR. An implementation excludes an author only
+	// when its platform reports that author as an automated bot account;
+	// it MUST NOT consult an operator-configured allowlist, because the
+	// caller applies that half of bot classification itself. Comments
+	// marked as outdated by the platform are included with
+	// Outdated=true; the caller is responsible for filtering.
 	//
 	// Returns an empty non-nil slice when no pending review comments
 	// exist. Returns a [*SCMError] on failure.
@@ -161,6 +164,9 @@ type SCMAdapter interface {
 	// case-insensitive comparison. The two conditions form a union:
 	// either one qualifies. botUsernames may be nil or empty, in which
 	// case only the platform's bot-account signal selects comments.
+	// FetchBotReviewComments applies both arms itself; the caller applies
+	// only the allowlist arm on top of [SCMAdapter.FetchPendingReviews],
+	// which already carries the platform-marker arm.
 	//
 	// Unlike [SCMAdapter.FetchPendingReviews], selection does not require
 	// any particular review state. Comments marked as outdated by the
