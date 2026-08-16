@@ -1,49 +1,45 @@
-# OpenAI Codex CLI: Adapter Research Notes
+# OpenAI Codex CLI: adapter research notes
 
-> OpenAI Codex CLI v0.134.x (npm `@openai/codex`, binary `codex`), researched April 2026.
-> and updated research on May 2026. Reference for implementing the Codex `AgentAdapter`.
+> OpenAI Codex CLI (npm `@openai/codex`, binary `codex`) on Linux x86_64. Reference for the
+> `domain.AgentAdapter` implementation in `internal/agent/codex`, registered under kind `codex`.
 >
+> Coverage. The configuration surface, including the approval policy and the sandbox modes,
+> follows OpenAI's published [configuration schema](https://developers.openai.com/codex/config-schema.json),
+> which tracks the current release and is the authoritative source for those fields. Everything
+> observed locally, including the app-server transcripts, the protocol schema the binary
+> generates for itself, the flag surface, and the `codex exec` JSONL samples, comes from
+> **v0.121.0**, the only build installed on the research host; the `userAgent` values quoted in
+> the examples carry that version. Hosted-tool and model-tier behavior and the feature-flag
+> surface were recorded against v0.134.0 in May 2026 and cannot be re-observed here, so they are
+> the weakest claims in this document. Where the published schema and the installed binary
+> disagree, the schema wins and the divergence is named at the claim. The dynamic-tool response
+> payload rests on OpenAI Symphony's Elixir app-server client, not on a local probe.
+>
+> Claims about Sortie's own code name a Go symbol and were verified against the tree.
 > Primary sources are linked under "Sources" at the end.
->
-> **Prior art:** OpenAI Symphony (Elixir) uses the app-server JSON-RPC
-> protocol exclusively. Sortie's adapter uses the same protocol surface per architecture
-> [Section 10.7](architecture/10-agent-adapter-contract.md#107-local-subprocess-launch-contract) (Local Subprocess Launch Contract).
 
 ---
 
 ## Overview
 
-Codex CLI is an agentic coding tool from OpenAI that runs as a native Rust binary with a
-Node.js-optional architecture. It reads a codebase, executes tools (shell commands, file edits,
-MCP tool calls, web searches), and produces code changes autonomously. Sortie treats it as a
-subprocess: launch its app-server mode, send JSON-RPC commands over stdio, read structured
-event notifications, and terminate when done.
+Codex CLI is an agentic coding tool from OpenAI that runs as a native Rust binary. It reads a
+codebase, executes tools (shell commands, file edits, MCP tool calls, and web searches), and
+produces code changes autonomously.
 
-Two integration surfaces exist, in order of relevance to Sortie:
+Codex exposes two non-interactive surfaces:
 
 1. **App-server mode** (`codex app-server`) communicating over JSON-RPC 2.0 on stdio (JSONL).
-   This is the primary integration surface. The app-server protocol powers the Codex VS Code
-   extension and is the surface used by OpenAI's own Symphony orchestrator. It provides full
-   lifecycle control: thread management, turn execution, approval handling, dynamic tool
-   registration, and session resume.
-2. **Non-interactive CLI** (`codex exec`) with `--json` for JSONL output on stdout. This is
-   simpler but offers less control: no approval routing, no dynamic tool injection, no
-   mid-turn steering. Suitable for one-shot CI tasks but insufficient for Sortie's multi-turn
-   orchestration needs.
+   It provides full lifecycle control: thread management, turn execution, approval handling,
+   dynamic tool registration, and session resume. The same protocol powers the Codex VS Code
+   extension.
+2. **Non-interactive CLI** (`codex exec`) with `--json` for JSONL output on stdout. It carries
+   no approval routing, no dynamic tool injection, and no mid-turn steering.
 
-Sortie's Go adapter uses the app-server approach (surface 1). The `codex exec` surface is
-documented as a fallback reference.
-
-### Architectural difference from Claude Code and Copilot adapters
-
-The Claude Code and Copilot adapters use a "launch-per-turn" model: each `RunTurn` call spawns a
-new subprocess with `-p <prompt>` and reads JSONL until the process exits. Session continuity
-relies on `--resume <session_id>`.
-
-The Codex adapter uses a **persistent subprocess** model: `codex app-server` is launched once in
-`StartSession` and kept alive across turns. Each turn is a `turn/start` JSON-RPC request within
-a persistent thread. This matches Symphony's architecture and provides lower per-turn overhead,
-richer approval control, and reliable session state.
+`CodexAdapter` in `internal/agent/codex` uses the app-server surface. Unlike the Claude Code,
+Copilot, and OpenCode adapters, which fork one subprocess per turn, it launches
+`codex app-server` once in `StartSession` and keeps it alive for the whole session; each turn is
+a `turn/start` request on one persistent thread. The `codex exec` surface is described at the
+end of this document for reference; no adapter code path reaches it.
 
 ---
 
@@ -63,17 +59,20 @@ brew install --cask codex
 # codex-x86_64-unknown-linux-musl.tar.gz
 ```
 
-After installation the `codex` binary is available on `$PATH`. The adapter's `agent.command`
-config field defaults to `codex app-server` but can be overridden to point to a specific path
-or wrapper script.
+After installation the `codex` binary is available on `$PATH`. `agentcore.ResolveLaunchTarget`
+falls back to the command `codex app-server` when `agent.command` is unset, splits the command
+on whitespace, and resolves the first token through `exec.LookPath`; an operator can point
+`agent.command` at a specific path or wrapper script instead.
 
 **Runtime requirements:**
 
-- The `codex` binary (Rust-based, statically linked; no Node.js runtime required for the core
-  binary since the rewrite from TypeScript to Rust)
-- A valid OpenAI API key (`CODEX_API_KEY` or ChatGPT session credentials)
-- A Git repository (Codex requires commands to run inside a Git repo; override with
-  `--skip-git-repo-check` if necessary)
+- The `codex` binary, a statically linked native Rust build that needs no Node.js runtime.
+- A valid OpenAI API key (`CODEX_API_KEY` or ChatGPT session credentials).
+
+A Git repository is not among them for this adapter. The trusted-directory refusal lives in the
+`codex exec` wrapper, above the app-server layer, which is why `--skip-git-repo-check` is an
+`exec` flag and appears in no configuration surface. `thread/start` against a non-git `cwd`
+succeeds and reports `gitInfo: null`.
 
 **Supported platforms:** Linux (x86_64, arm64), macOS (x86_64, Apple Silicon), Windows (native
 or WSL2).
@@ -97,11 +96,11 @@ Codex CLI supports three authentication modes.
 | `agent.kind`         | `codex`                                            |
 | `agent.command`      | `codex app-server` (or full path to the binary)    |
 
-The adapter does **not** manage API keys directly. `CODEX_API_KEY` must be present in the
-environment of the Sortie process. The adapter inherits the parent process environment when
-spawning the subprocess.
+`CODEX_API_KEY` must be present in the environment of the Sortie process. `StartSession` sets
+`cmd.Env = os.Environ()`, so the subprocess inherits it. In SSH mode `buildSSHRemoteCmd`
+prepends `CODEX_API_KEY=<shell-quoted value>` to the remote command.
 
-For headless/CI environments where browser login is unavailable:
+For headless and CI environments where browser login is unavailable:
 
 1. Set `CODEX_API_KEY` as an environment variable (preferred).
 2. Alternatively, authenticate on a machine with a browser via `codex login`, then copy
@@ -109,20 +108,23 @@ For headless/CI environments where browser login is unavailable:
 
 ### App-server authentication sequence
 
-When using the app-server protocol, the adapter verifies auth state after initialization:
+`authenticateIfNeeded` runs after the initialization handshake and reads the auth state:
 
 ```json
 {"method": "account/read", "id": 1, "params": {"refreshToken": false}}
 ```
 
-If `result.account` is `null` and `CODEX_API_KEY` is set, the adapter logs in:
+A non-null `result.account` means the app-server already holds valid credentials and the
+function returns. When `result.account` is `null` and `CODEX_API_KEY` is set, it logs in:
 
 ```json
 {"method": "account/login/start", "id": 2, "params": {"type": "apiKey", "apiKey": "sk-..."}}
 ```
 
-The adapter waits for `account/login/completed` with `success: true` before proceeding to
-thread creation.
+It then waits up to `readTimeout(state)` for the `account/login/completed` notification and
+fails the session with `domain.ErrResponseError` unless it carries `success: true`. When
+`result.account` is `null` and `CODEX_API_KEY` is empty, the function returns without logging
+in and the session proceeds unauthenticated.
 
 **Credential storage:** Codex caches login details in `~/.codex/auth.json` (plaintext) or the
 OS keychain (configurable via `cli_auth_credentials_store` in `config.toml`). The adapter
@@ -147,25 +149,25 @@ adapter.
 
 ### Launching the app-server
 
-```
-sh -c '$AGENT_COMMAND' -- 
-```
-
-Where `$AGENT_COMMAND` defaults to `codex app-server`. The subprocess receives:
+`StartSession` execs the resolved binary directly through `exec.CommandContext`, with no shell
+in between: `LaunchTarget.Command` is the absolute path to `codex` and `LaunchTarget.Args` holds
+the remaining tokens of `agent.command`, so the default yields `codex app-server`. When
+`StartSessionParams.SSHHost` is set the local command is `ssh` and the codex command runs on the
+remote host. The subprocess receives:
 
 | Setting           | Value                                               | Rationale                                                 |
 | ----------------- | --------------------------------------------------- | --------------------------------------------------------- |
 | Working directory | Workspace path (`StartSessionParams.WorkspacePath`) | Agent must operate in the issue workspace.                |
 | Stdout            | Pipe (read by adapter)                              | JSONL output parsed line by line.                         |
 | Stdin             | Pipe (written by adapter)                           | JSON-RPC requests sent as JSONL.                          |
-| Stderr            | Pipe (read by adapter, logged)                      | Diagnostic output, not structured.                        |
+| Stderr            | Pipe (read by `procutil.StderrCollector`, logged)   | Diagnostic output, not structured.                        |
 | Environment       | Inherited from Sortie process                       | `CODEX_API_KEY` and other auth vars must be present.      |
-| Max line size     | 1 MB                                                | Safe buffering per Symphony's observed message sizes.     |
+| Max line size     | 1 MB                                                | `bufio.Scanner` buffer ceiling; a longer line fails the read. |
 
 ### Initialization handshake
 
-After launching, the adapter sends `initialize` followed by the `initialized` notification.
-Requests sent before initialization are rejected.
+`initializeHandshake` sends `initialize` and then the `initialized` notification. Requests sent
+before initialization are rejected.
 
 ```json
 {"method": "initialize", "id": 1, "params": {
@@ -192,8 +194,8 @@ Then:
 {"method": "initialized", "params": {}}
 ```
 
-`capabilities.experimentalApi` enables dynamic tool registration (`dynamicTools` on
-`thread/start`) which Sortie uses for the `tracker_api` tool.
+`initializeHandshake` always requests `capabilities.experimentalApi: true`, which is what
+unlocks the `dynamicTools` field on `thread/start`.
 
 ---
 
@@ -211,10 +213,10 @@ Then:
 
 | Sortie lifecycle event | App-server action                               |
 | ---------------------- | ----------------------------------------------- |
-| `StartSession`         | Launch `codex app-server`, `initialize`, `thread/start` |
+| `StartSession`         | Launch `codex app-server`, `initialize`, `account/read`, `thread/start` or `thread/resume` |
 | `RunTurn` (turn 1)     | `turn/start` with prompt and configuration      |
 | `RunTurn` (turn 2+)    | `turn/start` on the same thread                 |
-| `StopSession`          | Close stdin, SIGTERM → grace → SIGKILL          |
+| `StopSession`          | Close stdin, SIGTERM, grace period, SIGKILL     |
 
 ### Starting a thread
 
@@ -254,11 +256,17 @@ Followed by a notification:
 {"method": "thread/started", "params": {"thread": {"id": "thr_abc123"}}}
 ```
 
-The adapter records `thread.id` for all subsequent turn operations.
+`startThread` sends `cwd`, `approvalPolicy` (default `never`), and `sandbox` (default
+`workspace-write`) on every call, adds `model` and `personality` when the pass-through config
+sets them, and adds `dynamicTools` when the tool registry is non-empty. It reads `thread.id`
+from the response, fails the session when that field is empty, then waits up to
+`readTimeout(state)` for the `thread/started` notification and returns the thread ID even if
+that notification never arrives. `domain.Session.ID` carries the thread ID.
 
-**`dynamicTools`** is an experimental field that requires `experimentalApi` capability.
-It registers client-side tools that Codex can invoke during turns. The adapter uses this
-to expose `tracker_api` without requiring MCP server configuration.
+`dynamicTools` requires the `experimentalApi` capability. It registers client-side tools that
+Codex invokes through `item/tool/call` during turns, which is how Sortie exposes `tracker_api`
+without running an MCP server. `buildDynamicTools` emits one entry per tool in
+`domain.ToolRegistry`, each carrying the tool's `Name()`, `Description()`, and `InputSchema()`.
 
 ### Starting a turn
 
@@ -267,7 +275,6 @@ to expose `tracker_api` without requiring MCP server configuration.
   "threadId": "thr_abc123",
   "input": [{"type": "text", "text": "<rendered prompt>"}],
   "cwd": "/var/sortie/workspaces/PROJ-123",
-  "approvalPolicy": "never",
   "sandboxPolicy": {
     "type": "workspaceWrite",
     "writableRoots": ["/var/sortie/workspaces/PROJ-123"],
@@ -284,12 +291,16 @@ Response:
 {"id": 30, "result": {"turn": {"id": "turn_456", "status": "inProgress", "items": [], "error": null}}}
 ```
 
-The adapter records `turn.id` for timeout enforcement and interrupt capability.
+`RunTurn` sends `threadId`, `input`, and `cwd` on every call. It adds `sandboxPolicy` on the
+first turn of the session and on any turn when `codex.turn_sandbox_policy` is configured, and
+adds `model` and `effort` when the pass-through config sets them. `turn/start` also accepts an
+`approvalPolicy` override, which the adapter never sends, so the thread-level policy governs the
+whole session. The `turn.id` from the response is the interrupt target.
 
 ### Continuation turns
 
-For turn 2+, the adapter sends another `turn/start` on the same thread. No `--resume` flag
-is needed; the thread maintains full conversation history automatically.
+For turn 2 onward, `RunTurn` sends another `turn/start` on the same thread. No resume argument
+is needed; the thread maintains full conversation history.
 
 ```json
 {"method": "turn/start", "id": 31, "params": {
@@ -299,59 +310,64 @@ is needed; the thread maintains full conversation history automatically.
 }}
 ```
 
-This is simpler than the Claude Code and Copilot adapters, which require launching a new
-subprocess per turn with explicit session ID propagation.
-
 ### Resuming a previous session
 
-If the app-server process was terminated between Sortie runs but the thread log exists on disk:
+When `StartSessionParams.ResumeSessionID` is non-empty, `resumeThread` sends:
 
 ```json
 {"method": "thread/resume", "id": 11, "params": {"threadId": "thr_abc123"}}
 ```
 
 The response matches `thread/start`. History is restored from the thread's JSONL rollout file.
+When the resume request fails, `StartSession` logs a warning and falls back to `startThread`,
+so the session continues on a fresh thread with no history rather than failing.
 
 ---
 
 ## Event stream
 
-After `turn/start`, the adapter reads JSONL notifications from stdout until `turn/completed`
-is received. The `turn/completed` payload carries the final status for both successful and
-failed turns.
+After `turn/start`, `RunTurn` reads JSONL notifications from stdout until `turn/completed`
+arrives. The `turn/completed` payload carries the final status for both successful and failed
+turns. Any notification whose method is not listed below becomes a `domain.EventOtherMessage`
+carrying the method name.
 
 ### Turn events
 
 | Notification          | Description                                       | Adapter mapping                  |
 | --------------------- | ------------------------------------------------- | -------------------------------- |
-| `turn/started`        | Turn begins. Contains turn ID.                    | `session_started` (first turn)   |
-| `turn/completed`      | Turn finished. Contains final status. No usage member. | `turn_completed`            |
+| `turn/started`        | Turn begins. Contains turn ID.                    | `session_started` on the session's first turn, `notification` afterwards |
+| `turn/completed`      | Turn finished. Contains final status.             | Terminal event, see "Turn completion" |
 | `thread/tokenUsage/updated` | Token usage snapshot for the thread.        | `token_usage`                    |
-| `turn/diff/updated`   | Aggregated diff across file changes.              | Log for observability            |
+| `turn/diff/updated`   | Aggregated diff across file changes.              | Debug log only, no event         |
 | `turn/plan/updated`   | Agent's plan update.                              | `notification`                   |
 
 ### Item events
 
 | Notification             | Description                                    | Adapter mapping        |
 | ------------------------ | ---------------------------------------------- | ---------------------- |
-| `item/started`           | New item begins (command, message, tool call). | `tool_use` / `notification` |
-| `item/completed`         | Item finished with final state.                | `tool_result` / `assistant_message` |
-| `item/agentMessage/delta`| Streaming text delta for agent message.        | Stall detection timer reset |
-| `item/commandExecution/outputDelta` | Streaming command output.            | Stall detection timer reset |
+| `item/started`           | New item begins (command, message, tool call). | `notification` summarizing type and item ID; tool-shaped items also open an `agentcore.ToolTracker` entry |
+| `item/completed`         | Item finished with final state.                | `tool_result` when the item ID is tracked; `notification` with the first 200 runes for an `agentMessage` |
+| `item/agentMessage/delta`| Streaming text delta for agent message.        | Empty `notification`   |
+| `item/commandExecution/outputDelta` | Streaming command output.            | Empty `notification`   |
+| `item/tool/call`         | Dynamic tool invocation request.               | Dispatched to `domain.ToolRegistry`, see "Dynamic tool calls" |
+
+Every emitted event advances `RunningEntry.LastAgentTimestamp` in the orchestrator, which is
+what the stall detector reads. The empty-message notifications on the two delta methods exist
+for that reason alone.
 
 ### Item types
 
 | `item.type`            | Description                                      | Notes                                  |
 | ---------------------- | ------------------------------------------------ | -------------------------------------- |
-| `userMessage`          | User prompt (echoed back).                       | Ignored by adapter.                    |
-| `agentMessage`         | Agent's text response.                           | Map to `assistant_message`.            |
-| `reasoning`            | Model reasoning output (when supported).         | Log; not mapped to events.             |
-| `commandExecution`     | Shell command execution.                         | Map to `tool_use` / `tool_result`.     |
-| `fileChange`           | Proposed or applied file edits.                  | Map to `tool_use` / `tool_result`.     |
-| `mcpToolCall`          | MCP tool invocation.                             | Map to `tool_use` / `tool_result`.     |
-| `dynamicToolCall`      | Client-side dynamic tool invocation.             | Handle `tracker_api` calls.            |
-| `webSearch`            | Web search request.                              | Log as `notification`.                 |
-| `contextCompaction`    | History compaction event.                        | Log as `notification`.                 |
+| `userMessage`          | User prompt (echoed back).                       | No special handling; summarized as a notification. |
+| `agentMessage`         | Agent's text response.                           | Text emitted as a notification on `item/completed`. |
+| `reasoning`            | Model reasoning output (when supported).         | No special handling.                   |
+| `commandExecution`     | Shell command execution.                         | Tool-tracked under the `command` field, or under the item type when that field is empty. |
+| `fileChange`           | Proposed or applied file edits.                  | Tool-tracked under the item type name. |
+| `mcpToolCall`          | MCP tool invocation.                             | Tool-tracked under the item type name. |
+| `dynamicToolCall`      | Client-side dynamic tool invocation.             | Tool-tracked under the item type name. |
+| `webSearch`            | Web search request.                              | No special handling.                   |
+| `contextCompaction`    | History compaction event.                        | No special handling.                   |
 
 ### Turn completion
 
@@ -373,18 +389,18 @@ The `turn/completed` notification contains the final turn state:
 | Status           | Adapter mapping                                                                                                            | Description                                       |
 | ---------------- | ---------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------- |
 | `completed`      | `turn_completed`                                                                                                            | Agent finished normally.                          |
-| `interrupted`    | `turn_cancelled` when the turn's context was already cancelled; `turn_failed` when the context was still live               | Cancelled via `turn/interrupt`, or an interruption sortie did not request. |
+| `interrupted`    | `turn_cancelled` when the turn's context was already cancelled; `turn_failed` when the context was still live               | Cancelled via `turn/interrupt`, or an interruption Sortie did not request. |
 | `failed`         | `turn_failed`                                                                                                                | Error during turn execution.                      |
 | any other status | `turn_failed`                                                                                                                | An unrecognized status is treated as a failure.   |
 
-On failure, `turn.error` contains `{message, codexErrorInfo?, additionalDetails?}`.
+On failure, `turn.error` contains `{message, codexErrorInfo?, additionalDetails?}`. The adapter
+parses `message` and `codexErrorInfo`.
 
-Codex's persistent per-session subprocess exits once at session end, not once per turn, so the
-turn-disposition rule the adapter family shares has no per-turn process exit to consult for this
-adapter. The rule's zero-work row, which the other four adapters reach when their runtime reports
-no outcome and the process exits `0`, is structurally unreachable here: an absent `turn/completed`
-notification is already a failure on its own terms (the stdout channel closed before it arrived),
-so the adapter never needs a separate zero-work guard.
+The persistent subprocess exits once at session end, not once per turn, so `RunTurn` has no
+per-turn process exit to report to `agentcore.DecideTurn`. It builds every `TurnEvidence` with
+`Work: agentcore.WorkUnobservable` and leaves `ExitObserved` false, which makes the shared
+decision's zero-work row unreachable for this adapter: a missing `turn/completed` means the
+stdout channel closed first, and that path already finalizes as `domain.ErrPortExit`.
 
 ---
 
@@ -411,12 +427,18 @@ Token usage arrives separately, on `thread/tokenUsage/updated`:
 
 `total` is thread-cumulative: it spans every turn of the thread, including turns from an earlier
 run when the thread is resumed. It accumulates as `total(n) = total(n-1) + last(n)`, so a fresh
-thread's first notification reports `total` equal to `last`. The adapter recovers this run's own
+thread's first notification reports `total` equal to `last`. `RunTurn` recovers this run's own
 contribution by subtracting a baseline captured at the first notification whose `turnId` matches
 the run's current turn: `baseline = total - last` at that first notification, and every
-subsequent matching notification reports `total - baseline`.
+subsequent matching notification reports `total - baseline`. A notification carrying a different
+`turnId` raises the baseline to the componentwise maximum through `maxUsage` and emits nothing.
 
-Normalization to Sortie's `{input_tokens, output_tokens, total_tokens, cache_read_tokens}`:
+A notification whose `tokenUsage` object is absent from the wire payload is distinguishable
+from one reporting all-zero counts, because `tokenUsageUpdatedParams.TokenUsage` is a pointer.
+The absent case emits no event and leaves `sessionState.usageMeasured` untouched, so
+`domain.TurnResult.UsageMeasured` stays false until a real measurement arrives.
+
+Normalization by `normalizeBreakdown` to `domain.TokenUsage`:
 
 | Codex field (`total` or `last` breakdown) | Sortie field      | Notes                                    |
 | ----------------------- | ----------------- | ---------------------------------------- |
@@ -440,68 +462,71 @@ Codex enforces OS-level sandboxing (Seatbelt on macOS, bwrap + seccomp on Linux)
 | Danger full access    | `danger-full-access`   | `dangerFullAccess`   | No sandbox. Full filesystem and network access. |
 | External sandbox      | `external-sandbox`     | `externalSandbox`    | Codex skips its sandbox; external enforcement assumed. |
 
-The app-server uses **kebab-case** for the `sandbox` field on `thread/start` and **camelCase**
-for `sandboxPolicy.type` on `turn/start`. The adapter's WORKFLOW.md config (`thread_sandbox`)
-accepts camelCase values and translates to the correct wire format for each endpoint.
+The app-server uses kebab-case for the `sandbox` field on `thread/start` and camelCase for
+`sandboxPolicy.type` on `turn/start`. `normalizeSandbox` and `denormalizeSandbox` translate
+`codex.thread_sandbox` into whichever form the endpoint expects, and pass through a value
+already in the target form.
 
-For Sortie's headless operation in sandboxed containers, two approaches:
-
-1. **`workspaceWrite`** with `writableRoots` set to the workspace path. This is the default
-   and preferred approach, matching Symphony's configuration.
-2. **`dangerFullAccess`** inside an externally sandboxed container (Docker with restricted
-   filesystem and network). Use only when workspace-write is insufficient.
+`buildSandboxPolicy` defaults the turn policy to `workspaceWrite` with `writableRoots` set to
+the workspace path and `networkAccess: false`, then copies `codex.turn_sandbox_policy` over the
+result, so an operator override can replace any key including those two. Running
+`dangerFullAccess` inside an externally sandboxed container (Docker with a restricted filesystem
+and network) is the alternative when workspace write is too narrow.
 
 ### Approval policies
 
-| Policy           | App-server value    | Behavior                                           |
-| ---------------- | ------------------- | -------------------------------------------------- |
-| Never ask        | `"never"`           | Never ask for approval. Auto-approve everything.   |
-| On request       | `"onRequest"`       | Ask only when agent explicitly requests it.        |
-| Unless trusted   | `"unlessTrusted"`   | Ask for untrusted commands.                        |
-| Always ask       | `"always"`          | Ask for every action.                              |
+`AskForApproval` accepts three kebab-case strings or one object form. The strings:
 
-For headless orchestration, the adapter sets `approvalPolicy: "never"` on both `thread/start`
-and `turn/start`. This is equivalent to `--full-auto` or `--ask-for-approval never` in CLI
-mode.
+| Policy         | Value           | Behavior                                                                                                          |
+| -------------- | --------------- | ------------------------------------------------------------------------------------------------------------------ |
+| Never ask      | `"never"`       | Never ask. Failures return to the model immediately and are never escalated to a user.                            |
+| Unless trusted | `"untrusted"`   | Auto-approve only known-safe commands that read files. Everything else asks.                                      |
+| On request     | `"on-request"`  | The model decides when to ask.                                                                                    |
 
-> **Security note:** `approvalPolicy: "never"` allows arbitrary command execution within the
-> sandbox boundary. Per OpenAI's guidance, this should only be used in sandboxed environments.
-> Sortie's workspace isolation and hook system operate inside that sandbox as additional
-> defense-in-depth, but do not replace external container-level isolation.
+The object form takes a single `granular` member whose booleans allow or reject each approval
+category rather than surfacing it: `sandbox_approval`, `rules`, and `mcp_elicitations` are
+required, and `request_permissions` and `skill_approval` are optional. A `false` field rejects
+that category automatically instead of showing it.
 
-### Handling approval requests
+Values and behaviors above come from OpenAI's published configuration schema
+([config-schema.json](https://developers.openai.com/codex/config-schema.json)), which is the
+authoritative surface for this field. A fourth string, `on-failure`, exists in the locally
+installed v0.121.0 and its help text marks it deprecated; the published schema no longer
+declares it, so treat it as removed. A value outside the accepted set is rejected at
+`thread/start`.
+
+`startThread` sends `approvalPolicy: "never"` unless `codex.approval_policy` overrides it, and
+`typeutil.StringFrom` accepts only the string form, so the `granular` object cannot be expressed
+through `codex.approval_policy` and silently falls back to `never`. In CLI mode the equivalent of
+`"never"` is `--ask-for-approval never`, not `--full-auto`, which selects `on-request` with a
+workspace-write sandbox. Sending `"never"` permits arbitrary command execution within the sandbox
+boundary, so OpenAI's guidance is to use it only in a sandboxed environment. Sortie's workspace
+isolation and hook system operate inside that sandbox as defense in depth and do not replace
+container-level isolation.
+
+### Approval requests
 
 When `approvalPolicy` is not `"never"`, the app-server sends approval requests as JSON-RPC
 requests to the client:
 
-- `item/commandExecution/requestApproval`: shell command approval
-- `item/fileChange/requestApproval`: file edit approval
-- `item/tool/requestUserInput`: user input request (can carry approval questions)
-- `item/tool/call`: dynamic tool call (client must execute and return result)
+- `item/commandExecution/requestApproval`: shell command approval.
+- `item/fileChange/requestApproval`: file edit approval.
+- `item/tool/requestUserInput`: user input request, which can carry approval questions.
 
-The adapter responds with approval decisions:
+A client answers with one of `accept`, `acceptForSession`, `decline`, or `cancel`:
 
 ```json
 {"id": 42, "result": {"decision": "acceptForSession"}}
 ```
 
-Available decisions for command and file approvals: `accept`, `acceptForSession`, `decline`,
-`cancel`.
+`RunTurn` has no case for any of these three methods. They fall to the default arm of its
+notification switch, which emits a `domain.EventOtherMessage` carrying the method name and
+sends no response. The default `approvalPolicy: "never"` is what keeps that gap harmless,
+because it stops the app-server from asking. Setting `codex.approval_policy` to any other value
+leaves the app-server waiting for a decision the adapter does not send.
 
-For `item/tool/call` (dynamic tool invocations including `tracker_api`), the adapter executes
-the tool and returns the result:
-
-```json
-{"id": 43, "result": {
-  "success": true,
-  "output": "{\"issues\": [...]}",
-  "contentItems": [{"type": "inputText", "text": "{\"issues\": [...]}"}]
-}}
-```
-
-Symphony's implementation auto-approves all command and file change requests (`decision:
-"acceptForSession"`) and executes dynamic tools via a configurable executor function. The
-Sortie adapter follows the same pattern.
+`item/tool/call` is a separate request that the adapter does answer, described under "Dynamic
+tool calls".
 
 ---
 
@@ -509,18 +534,27 @@ Sortie adapter follows the same pattern.
 
 | Timeout           | Source                          | Enforcement                                        |
 | ----------------- | ------------------------------- | -------------------------------------------------- |
-| Turn timeout      | `agent.turn_timeout_ms`         | Context deadline on the turn read loop.            |
-| Read timeout      | `agent.read_timeout_ms`         | Applied to the `initialize` and `thread/start` responses. |
-| Stall timeout     | `agent.stall_timeout_ms`        | Reset on any `item/*` notification or delta event.  |
+| Read timeout      | `agent.read_timeout_ms`, default 30s | `readTimeout(state)` bounds the waits for the `account/login/completed` and `thread/started` notifications. |
+| Turn deadline     | The context passed to `RunTurn` | Cancellation triggers `turn/interrupt`.            |
+| Stall timeout     | `agent.stall_timeout_ms`        | `reconcileStalled` in `internal/orchestrator` cancels the worker context; each emitted event postpones it. |
 
-When the turn timeout fires:
+The adapter reads only `ReadTimeoutMS` from `domain.AgentConfig`. It derives no deadline of its
+own from `agent.turn_timeout_ms`; the turn's deadline is whatever context the orchestrator
+passes to `RunTurn`. The `initialize`, `account/read`, `thread/start`, and `thread/resume`
+responses are bounded by that same context, not by the read timeout.
 
-1. Send `turn/interrupt`:
-   ```json
-   {"method": "turn/interrupt", "id": 99, "params": {"threadId": "thr_abc123", "turnId": "turn_456"}}
-   ```
-2. Wait for `turn/completed` with `status: "interrupted"`.
-3. If no response within a grace period, SIGTERM → SIGKILL the subprocess.
+On context cancellation `RunTurn` sends `turn/interrupt` once. `sendRequest` takes no context
+and writes the frame straight to the app-server's stdin, so the cancelled parent cannot drop it
+and no deadline bounds the write. `RunTurn` builds a two-second context at that call site and
+never passes it in:
+
+```json
+{"method": "turn/interrupt", "id": 99, "params": {"threadId": "thr_abc123", "turnId": "turn_456"}}
+```
+
+It then keeps reading until `turn/completed` arrives or stdout closes. The escalation to
+SIGTERM, a five-second grace period, and SIGKILL belongs to `StopSession`, not to the interrupt
+path.
 
 ---
 
@@ -547,36 +581,41 @@ an `error` object:
 
 ### Error category mapping
 
-| `codexErrorInfo`                    | Adapter mapping     | Description                              |
-| ----------------------------------- | ------------------- | ---------------------------------------- |
-| `ContextWindowExceeded`             | `turn_failed`       | Token limit exceeded.                    |
-| `UsageLimitExceeded`                | `turn_failed`       | API usage quota exhausted.               |
-| `HttpConnectionFailed`              | `turn_failed`       | Upstream API 4xx/5xx.                    |
-| `ResponseStreamConnectionFailed`    | `turn_failed`       | SSE/WS stream disconnect.               |
-| `ResponseStreamDisconnected`        | `turn_failed`       | Mid-stream disconnect.                   |
-| `ResponseTooManyFailedAttempts`     | `turn_failed`       | Retry budget exhausted.                  |
-| `Unauthorized`                      | `agent_auth_error`  | Invalid or expired API credentials.      |
-| `BadRequest`                        | `turn_failed`       | Malformed request.                       |
-| `SandboxError`                      | `turn_failed`       | Sandbox enforcement failure.             |
-| `InternalServerError`               | `turn_failed`       | Server-side error.                       |
-| `Other`                             | `turn_failed`       | Catch-all.                               |
+`mapCodexErrorInfo` maps the `codexErrorInfo` string to a `domain.AgentErrorKind`. Any value
+outside this table, including an empty one, maps to `turn_failed`.
 
-### Process exit codes
+| `codexErrorInfo`                    | `domain.AgentErrorKind` | Description                          |
+| ----------------------------------- | ----------------------- | ------------------------------------ |
+| `ContextWindowExceeded`             | `turn_failed`           | Token limit exceeded.                |
+| `UsageLimitExceeded`                | `turn_failed`           | API usage quota exhausted.           |
+| `HttpConnectionFailed`              | `turn_failed`           | Upstream API 4xx/5xx.                |
+| `ResponseStreamConnectionFailed`    | `turn_failed`           | SSE or WebSocket stream disconnect.  |
+| `ResponseStreamDisconnected`        | `turn_failed`           | Mid-stream disconnect.               |
+| `ResponseTooManyFailedAttempts`     | `turn_failed`           | Retry budget exhausted.              |
+| `Unauthorized`                      | `response_error`        | Invalid or expired API credentials.  |
+| `BadRequest`                        | `response_error`        | Malformed request.                   |
+| `SandboxError`                      | `turn_failed`           | Sandbox enforcement failure.         |
+| `InternalServerError`               | `turn_failed`           | Server-side error.                   |
+| `Other`                             | `turn_failed`           | Catch-all.                           |
 
-| Exit scenario        | Adapter mapping      | Description                               |
-| -------------------- | -------------------- | ----------------------------------------- |
-| Clean shutdown       | n/a                  | Normal after stdin close or interrupt.     |
-| Non-zero exit        | `turn_failed`        | Unexpected failure.                        |
-| 127                  | `agent_not_found`    | `codex` binary not found on `$PATH`.       |
-| Signal (SIGTERM)     | `turn_cancelled`     | Killed by adapter timeout.                 |
-| Signal (SIGKILL)     | `turn_cancelled`     | Force-killed after grace period.           |
+### Failures outside the turn payload
+
+The subprocess outlives the turn, so `RunTurn` never inspects a process exit code. It reports
+`domain.ErrPortExit` when stdout closes before `turn/completed`, when a stdout read fails, when
+the `turn/start` write fails, and when the context is already done at entry. A `turn/start`
+response carrying a JSON-RPC `error` finalizes the turn as `turn_failed`.
+
+A missing binary is caught before launch: `agentcore.ResolveBinary` returns
+`domain.ErrAgentNotFound` when `exec.LookPath` cannot resolve the first token of
+`agent.command`, and again when that token contains whitespace.
 
 ---
 
-## Dynamic tool calls (`tracker_api`)
+## Dynamic tool calls
 
-The adapter registers `tracker_api` as a dynamic tool on `thread/start`. When the agent
-invokes it, the app-server sends an `item/tool/call` request:
+`StartSession` passes every tool in `domain.ToolRegistry` to `thread/start` as a dynamic tool;
+in a normal Sortie run that registry holds `trackerapi.TrackerAPITool`, whose `Name()` is
+`tracker_api`. When the agent invokes one, the app-server sends an `item/tool/call` request:
 
 ```json
 {"method": "item/tool/call", "id": 50, "params": {
@@ -588,7 +627,8 @@ invokes it, the app-server sends an `item/tool/call` request:
 }}
 ```
 
-The adapter dispatches to the configured `TrackerAdapter`, serializes the result, and responds:
+`handleToolCall` looks the name up in the registry and runs `AgentTool.Execute` in its own
+goroutine so the event read loop keeps draining stdout. `toolResultFor` builds the response:
 
 ```json
 {"id": 50, "result": {
@@ -598,8 +638,15 @@ The adapter dispatches to the configured `TrackerAdapter`, serializes the result
 }}
 ```
 
-The response includes `success` (boolean), `output` (string), and `contentItems` (array).
-This matches the dynamic tool response schema observed in Symphony's implementation.
+The result carries `success` (boolean), `output` (string), and `contentItems` (array). A tool
+that returns an error responds with `success: false` and the error text as `output`, and emits
+a `domain.EventToolResult` with `ToolError` set. When the tool name is not registered, or no
+registry was configured, the response is `success: false` with `unsupported tool: <name>` and
+the adapter emits `domain.EventUnsupportedToolCall`. Unparseable params draw a
+`success: false` response and no event.
+
+`RunTurn` waits for every in-flight tool goroutine before it finalizes the turn, so a tool
+result never arrives after the terminal event.
 
 ---
 
@@ -617,8 +664,9 @@ Archived threads move to:
 ~/.codex/sessions/archived/<thread-id>/rollout.jsonl
 ```
 
-The adapter does not interact with these files directly. Thread resume uses the app-server
-`thread/resume` method, which handles rollout loading internally.
+The adapter does not read or write these files. Thread resume goes through the app-server
+`thread/resume` method, which loads the rollout itself. In a containerized deployment,
+`~/.codex/sessions/` has to be a mounted volume for resume to survive a container restart.
 
 ---
 
@@ -649,32 +697,28 @@ codex_hooks = true
 Hooks run as shell commands with JSON on stdin and JSON/text on stdout. Each hook receives
 `session_id`, `transcript_path`, `cwd`, `hook_event_name`, and `model` as common fields.
 
-The `Stop` hook is notable: returning `{"decision": "block", "reason": "..."}` tells Codex
-to continue the turn with the `reason` as a new user prompt. This enables external
-continuation logic without orchestrator involvement.
+Returning `{"decision": "block", "reason": "..."}` from a `Stop` hook tells Codex to continue
+the turn with the `reason` as a new user prompt, which is continuation logic outside the
+orchestrator's view.
 
-Sortie's orchestrator manages its own continuation logic through `RunTurn` calls. The
-adapter does not rely on Codex hooks for turn continuation but does not interfere with
-hooks that the operator configures at the workspace level.
+Sortie drives continuation through repeated `RunTurn` calls. The adapter writes no hook
+configuration and reads no hook output, so hooks the operator places in the workspace run
+without adapter involvement.
 
 ---
 
 ## MCP server configuration
 
-Codex discovers MCP servers from project-level `.codex/mcp.json` files. The adapter can
-inject additional MCP servers (e.g., `tracker_api` as an MCP sidecar) through Codex's
-configuration system.
-
-However, the preferred approach for `tracker_api` is dynamic tool registration on
-`thread/start` (see Dynamic tool calls above), which avoids the need for a separate MCP
-server process.
-
-If MCP configuration is needed, the adapter writes a temporary `mcp.json` to the workspace's
-`.codex/` directory before launching the app-server.
-
+Codex discovers MCP servers from project-level `.codex/mcp.json` files and from `config.toml`.
 When an enabled MCP server is configured with `required = true` and fails to initialize,
-`thread/start` fails instead of continuing without it. The adapter avoids setting
-`required = true` on MCP servers unless they are essential for the workflow.
+`thread/start` fails instead of continuing without it.
+
+Sortie reaches Codex tools through dynamic tool registration on `thread/start` instead, which
+needs no separate server process. `StartSession` copies
+`StartSessionParams.MCPConfigPath` into `sessionState.mcpConfigPath` and nothing reads it
+again: the adapter writes no MCP config, passes no MCP argument, and leaves whatever the
+operator has placed in the workspace untouched. The Claude Code and Copilot adapters, by
+contrast, forward that path as a CLI argument.
 
 ---
 
@@ -704,7 +748,8 @@ observability pipeline.
 ## Adapter-specific pass-through config
 
 The workflow YAML front matter supports a `codex:` block forwarded to the adapter without
-core validation:
+core validation. `parsePassthroughConfig` reads it into `passthroughConfig`; a missing or
+wrong-typed key falls back to the zero value.
 
 ```yaml
 codex:
@@ -712,42 +757,47 @@ codex:
   thread_sandbox: workspaceWrite
   model: gpt-5.4
   effort: medium
-  turn_timeout_ms: 3600000
-  read_timeout_ms: 5000
-  stall_timeout_ms: 300000
+  personality: concise
+  turn_sandbox_policy:
+    networkAccess: true
 ```
 
 | Config key                  | Type    | Description                                                               |
 | --------------------------- | ------- | ------------------------------------------------------------------------- |
-| `codex.approval_policy`     | string or map | Approval policy for thread and turn. Maps to `approvalPolicy`.      |
-| `codex.thread_sandbox`      | string  | Thread sandbox mode. Maps to `sandbox` on `thread/start`.                 |
-| `codex.turn_sandbox_policy` | map     | Per-turn sandbox policy override. Maps to `sandboxPolicy` on `turn/start`.|
-| `codex.model`               | string  | Model override (e.g., `gpt-5.4`). Maps to `model` on `thread/start`.     |
+| `codex.approval_policy`     | string  | Approval policy for the thread. Maps to `approvalPolicy` on `thread/start`. Default `never`. |
+| `codex.thread_sandbox`      | string  | Thread sandbox mode. Maps to `sandbox` on `thread/start`. Default `workspace-write`. |
+| `codex.turn_sandbox_policy` | map     | Per-turn sandbox policy override. Merged over `sandboxPolicy` on `turn/start`. |
+| `codex.model`               | string  | Model override (e.g., `gpt-5.4`). Maps to `model` on `thread/start` and `turn/start`. |
 | `codex.effort`              | string  | Reasoning effort: `low`, `medium`, `high`. Maps to `effort` on `turn/start`.|
 | `codex.personality`         | string  | Personality preset. Maps to `personality` on `thread/start`.              |
+| `codex.skip_git_repo_check` | boolean | Parsed into `passthroughConfig.SkipGitRepoCheck` and read by no launch path, so the value never reaches the subprocess. |
 
-The `approval_policy` field accepts either a simple string (`"never"`, `"onRequest"`,
-`"unlessTrusted"`, `"always"`) or a granular rejection map matching Symphony's schema:
+The turn timeouts are not part of this block. `agent.turn_timeout_ms`, `agent.read_timeout_ms`,
+and `agent.stall_timeout_ms` are core config fields, described under "Timeout enforcement".
+
+`typeutil.StringFrom` reads `approval_policy`, so only the three string values
+(`"never"`, `"untrusted"`, `"on-request"`) survive parsing. The object form the schema also
+accepts, a `granular` member whose booleans decide each approval category, is dropped by
+`parsePassthroughConfig`, and the thread falls back to `never`. Written out, the form that
+cannot be expressed here is:
 
 ```yaml
-codex:
-  approval_policy:
-    reject:
-      sandbox_approval: true
-      rules: true
-      mcp_elicitations: true
+# Accepted by Codex, rejected by parsePassthroughConfig.
+approval_policy:
+  granular:
+    sandbox_approval: true
+    rules: true
+    mcp_elicitations: true
 ```
 
-When `approval_policy` is a map with `reject` keys, the adapter translates it to the
-app-server's granular approval policy format. With `reject.sandbox_approval: true`, the
-adapter auto-declines sandbox-related approval requests rather than forwarding them to an
-operator.
+Symphony configures the same policy with a differently-named map, keyed `reject`, so a snippet
+copied from that project does not describe this wire format either.
 
 ---
 
-## Example adapter invocation
+## Full session lifecycle
 
-### Full session lifecycle
+The message ordering across one session, with the `userAgent` value as captured on v0.121.0:
 
 ```
 # 1. Launch app-server
@@ -787,9 +837,12 @@ $ codex app-server
 
 ---
 
-## `codex exec` alternative (reference only)
+## The `codex exec` surface
 
-For one-shot tasks or fallback scenarios, the adapter can use `codex exec`:
+No adapter code path launches `codex exec`. The surface is recorded here because it is the
+other non-interactive entry point Codex ships, and its wire format shares nothing with the
+app-server's: snake_case item types, a `usage` member on `turn.completed`, and dotted event
+type names.
 
 ```bash
 CODEX_API_KEY=sk-... codex exec \
@@ -817,8 +870,8 @@ codex exec resume --last "Continue working on the remaining test failures"
 codex exec resume <session_id> "Pick up where you left off"
 ```
 
-The `codex exec` surface does not support dynamic tool registration, mid-turn steering, or
-programmatic approval routing. It is not the recommended surface for Sortie.
+The `codex exec` surface carries no dynamic tool registration, no mid-turn steering, and no
+programmatic approval routing.
 
 ---
 
@@ -828,38 +881,28 @@ Multiple `codex app-server` instances can run simultaneously, each in a differen
 directory. Each instance is an independent process with its own thread state. There is no
 shared state between instances beyond the filesystem.
 
-Codex's internal sandbox enforcement is per-process. Two instances writing to the same workspace
-directory would conflict. Sortie's orchestrator ensures one agent session per workspace per
-issue, preventing this scenario.
+Codex's internal sandbox enforcement is per-process, so two instances writing to the same
+workspace directory would conflict. The orchestrator keys `State.Running` by issue ID and
+refuses to dispatch an issue that already has an entry there, which keeps one agent session per
+workspace.
 
 ---
 
-## Known behavioral notes
+## Runtime constraints
 
-- **Git repository required:** Codex requires the working directory to be inside a Git
-  repository. The adapter ensures workspaces are initialized as Git repos (or passes
-  `--skip-git-repo-check` if configured). Symphony's workspace manager handles this via a
-  `before_run` hook that initializes Git if needed.
-- **Context compaction:** Codex handles context window limits internally via background
-  compaction. The adapter receives `contextCompaction` item events when this occurs.
-  No adapter action is required.
-- **Thread persistence:** Thread JSONL files are written to `~/.codex/sessions/`. In
-  containerized deployments, this directory should be mounted as a volume if session resume
-  across container restarts is desired.
-- **Protected paths:** In `workspaceWrite` mode, `.git`, `.agents`, and `.codex` directories
-  within writable roots are read-only. The agent cannot modify these directories directly.
-- **Approval policy granularity:** The `approval_policy = {reject: {...}}` map syntax
-  (observed in Symphony) allows silently declining specific approval categories rather than
-  auto-approving them. With `reject.sandbox_approval: true`, sandbox-related prompts are
-  rejected (agent sees a denial) rather than approved.
-- **Model and hosted-tool compatibility:** Previous Codex releases inject a `tool_search`
-  hosted tool into the app-server's default tool set on every turn. The `gpt-5.4-nano` model
-  rejects it with HTTP 400 (`invalid_request_error` on the `tools` param), which the adapter
-  normalizes to `turn_failed`. Use `gpt-5.4-mini` or higher as the minimum viable tier. The
-  tool is no longer gated by a user feature flag (`codex features list` reports `tool_search`
-  as `removed`), so `--disable tool_search` does not suppress it. Verified on CLI v0.134.0;
-  previous versions (e.g., v0.121.0) did not inject the tool, so `gpt-5.4-nano` completed
-  turns there.
+- **No Git repository gate on this surface.** The trusted-directory refusal belongs to the
+  `codex exec` wrapper, so `--skip-git-repo-check` guards a path the adapter never takes.
+  `thread/start` accepts a non-git `cwd` and reports `gitInfo: null`, and a workspace that no
+  hook has cloned into is the ordinary case rather than a failure.
+- **Context compaction.** Codex handles context window limits internally through background
+  compaction, surfaced as `contextCompaction` item events. No adapter action follows.
+- **Protected paths.** In `workspaceWrite` mode, the `.git`, `.agents`, and `.codex`
+  directories inside writable roots are read-only. The agent cannot modify them directly.
+- **Model and hosted-tool compatibility.** The app-server injects a `tool_search` hosted tool
+  into its default tool set on every turn. `gpt-5.4-nano` rejects that tool with HTTP 400
+  (`invalid_request_error` on the `tools` param) and the turn fails, so `gpt-5.4-mini` is the
+  lowest viable tier. `codex features list` reports `tool_search` as `removed`, so it is not a
+  user-togglable feature and `--disable tool_search` does not suppress the injection.
 
 ---
 
@@ -871,14 +914,14 @@ issue, preventing this scenario.
 | Runtime                   | Node.js                                                       | Rust (native binary; no Node.js required)                     |
 | Authentication            | `ANTHROPIC_API_KEY` (Anthropic), Bedrock, Vertex              | `CODEX_API_KEY` (OpenAI), ChatGPT session, external tokens    |
 | Integration protocol      | CLI subprocess per turn (`-p <prompt>`)                      | Persistent app-server subprocess (JSON-RPC over stdio)         |
-| Session continuity        | `--resume <session_id>` (new subprocess per turn)            | Same thread across turns (persistent process)                  |
+| Session continuity        | `--session-id` on the first turn, `--resume <session_id>` after (new subprocess per turn) | Same thread across turns (persistent process) |
 | Output format             | `--output-format stream-json` (JSONL)                        | JSON-RPC 2.0 notifications (JSONL)                             |
-| Permission bypass         | `--dangerously-skip-permissions`                             | `approvalPolicy: "never"` on thread/turn                       |
-| Sandbox enforcement       | None (relies on external container isolation)                | OS-level (Seatbelt/bwrap/seccomp) + configurable policies      |
+| Permission bypass         | `--dangerously-skip-permissions`                             | `approvalPolicy: "never"` on `thread/start`                    |
+| Sandbox enforcement       | None (relies on external container isolation)                | OS-level (Seatbelt/bwrap/seccomp) plus configurable policies   |
 | Dynamic tools             | `--mcp-config` (MCP sidecar required)                        | `dynamicTools` on `thread/start` (no sidecar needed)           |
-| Context management        | `compact_boundary` system event                              | `contextCompaction` item + background auto-compaction           |
+| Context management        | `compact_boundary` system event                              | `contextCompaction` item plus background auto-compaction       |
 | Cost cap                  | `--max-budget-usd <amount>`                                  | Subscription quota or API rate limits                          |
-| Internal turn limit       | `--max-turns <N>` (may be SDK-only)                          | Controlled by orchestrator via separate `turn/start` calls     |
+| Internal turn limit       | `--max-turns <N>` when `claude-code.max_turns` is set        | Controlled by orchestrator through separate `turn/start` calls |
 | Init event                | `system` type with `init` subtype, contains `session_id`     | `thread/started` notification contains `thread.id`             |
 | Result event              | Final `result` message with `subtype`, `is_error`, `usage`   | `turn/completed` notification with `turn.status`; usage arrives separately on `thread/tokenUsage/updated` |
 | Hooks location            | `.claude/hooks.json`                                          | `.codex/hooks.json`                                            |
@@ -893,63 +936,51 @@ issue, preventing this scenario.
 | Binary                    | `copilot` (npm `@github/copilot`)                            | `codex` (npm `@openai/codex`, native Rust binary)             |
 | Integration protocol      | CLI subprocess per turn (`-p <prompt>`)                      | Persistent app-server subprocess (JSON-RPC over stdio)         |
 | Authentication            | GitHub token (`GH_TOKEN`, `GITHUB_TOKEN`)                    | `CODEX_API_KEY` (OpenAI), ChatGPT session                     |
-| Permission bypass         | `--allow-all --no-ask-user`                                  | `approvalPolicy: "never"` on thread/turn                       |
+| Permission bypass         | `--allow-all --no-ask-user`                                  | `approvalPolicy: "never"` on `thread/start`                    |
 | Autonomous continuation   | `--autopilot --max-autopilot-continues <N>`                  | Orchestrator sends separate `turn/start` calls                 |
-| Session continuation      | `--resume <session_id>` (new subprocess per turn)            | Same thread across turns (persistent process)                  |
+| Session continuation      | `--resume <session_id>`, `--continue` when no session ID was captured (new subprocess per turn) | Same thread across turns (persistent process) |
 | Dynamic tools             | Not supported via CLI flags                                  | `dynamicTools` on `thread/start`                               |
 | Sandbox enforcement       | None (relies on external container isolation)                | OS-level (Seatbelt/bwrap/seccomp)                              |
-| Approval handling         | Pre-configured via CLI flags                                 | Programmatic approval routing via JSON-RPC                     |
+| Approval handling         | Pre-configured via CLI flags                                 | Thread-level `approvalPolicy`; over JSON-RPC the adapter answers `item/tool/call` only |
 | Models                    | Multi-provider (Claude, GPT-5, etc.)                         | OpenAI family (GPT-5.4 default), configurable providers        |
 
 ---
 
-## Summary: adapter implementation checklist
+## Open questions
 
-1. **StartSession:** Launch `codex app-server` with cwd = workspace. Send `initialize` +
-   `initialized`. Verify authentication via `account/read`. Start thread via `thread/start`
-   with `approvalPolicy`, `sandbox`, and `dynamicTools` configuration. Record `thread.id`.
-2. **RunTurn (turn 1):** Send `turn/start` with rendered prompt and turn configuration.
-   Record `turn.id`. Enter event read loop.
-3. **RunTurn (turn 2+):** Same as turn 1 on the same `thread.id`. No resume flag needed.
-4. **Event parsing:** Read JSONL notifications. Map `item/started` → `tool_use`,
-   `item/completed` → `tool_result` or `assistant_message`, `turn/completed` →
-   `turn_completed` or `turn_failed`. Handle `item/tool/call` for dynamic tool dispatch.
-   Log unknown notification methods as `other_message`.
-5. **Approval handling:** When `approvalPolicy != "never"`, respond to
-   `item/commandExecution/requestApproval` and `item/fileChange/requestApproval` with
-   `{"decision": "acceptForSession"}`. Execute `item/tool/call` requests via
-   `DynamicTool` / `TrackerAdapter` dispatch.
-6. **Token tracking:** Extract `tokenUsage.total` and `tokenUsage.last` from
-   `thread/tokenUsage/updated`, subtract a per-run baseline from the thread-cumulative `total`,
-   and normalize to `{input_tokens, output_tokens, total_tokens, cache_read_tokens}`.
-7. **Timeout:** Enforce `turn_timeout_ms` via context deadline. On timeout, send
-   `turn/interrupt` then SIGTERM → grace → SIGKILL.
-8. **Stall detection:** Reset stall timer on any `item/*` notification or delta event.
-   On stall timeout, treat as turn timeout.
-9. **StopSession:** Close stdin pipe. Send SIGTERM. Wait for process exit. SIGKILL after
-   grace period.
-10. **Error mapping:** Check `turn.status` and `turn.error.codexErrorInfo`. Map to
-    architecture error categories. Process exit code 127 → `agent_not_found`.
-11. **Session resume:** If app-server was restarted, use `thread/resume` with stored
-    `thread.id` to restore conversation history.
-12. **Git requirement:** Ensure workspace is a Git repository before launching app-server,
-    or configure `--skip-git-repo-check`.
+Each entry names the probe that would settle it.
 
-### Open questions
-
-The following behaviors are not characterized here and need experimental verification:
-
-- `dynamicTools` persistence across `thread/resume` (documented but not verified).
-- Exact `codexErrorInfo` values for authentication failures vs. rate limit exhaustion.
-- Behavior when `thread/start` is called with an already-active thread.
-- Whether `turn/interrupt` reliably produces `status: "interrupted"` under all conditions.
-- Process exit code mapping when app-server encounters a fatal internal error.
-- Interaction between OS sandbox enforcement and containerized deployment (Docker with
-  `--security-opt seccomp=unconfined`).
-- Thread storage location customization (whether `CODEX_HOME` env var is respected).
-- Maximum message size on stdio transport (observed 1 MB in Symphony; may vary).
-- `account/login/start` behavior when `CODEX_API_KEY` is already in the environment
-  (auto-login vs. explicit login required).
+- Whether `dynamicTools` registered on `thread/start` survive `thread/resume`. Probe: resume a
+  thread in a fresh app-server without re-registering, then prompt the agent to call
+  `tracker_api` and watch for an `item/tool/call` request.
+- Which `codexErrorInfo` value an authentication failure produces, and which one a rate-limit
+  exhaustion produces. The mapping table splits them across `response_error` and `turn_failed`
+  on the assumption that they arrive as `Unauthorized` and `UsageLimitExceeded`. Probe: run a
+  turn with a revoked key, and a turn on an exhausted quota, and read `turn.error`.
+- What `thread/start` returns when a thread is already active on the same connection. Probe:
+  send a second `thread/start` mid-turn and record the response.
+- Whether `turn/interrupt` always produces `status: "interrupted"`. Probe: interrupt at several
+  points (before the first item, mid command execution, during a dynamic tool call) and compare
+  the resulting `turn/completed` status.
+- What the app-server does when an approval request goes unanswered, which is what the adapter
+  does whenever `codex.approval_policy` is not `never`. Probe: start a thread with
+  `approvalPolicy: "on-request"`, provoke a command approval, send nothing, and watch whether
+  the turn blocks indefinitely or times out on its own.
+- How the app-server exits on a fatal internal error, and with which exit code. Probe: kill the
+  upstream connection mid-turn under `strace`, or feed it a malformed request that trips a
+  panic path.
+- How OS sandbox enforcement interacts with a containerized deployment. Probe: run a
+  `workspace-write` turn inside Docker with and without
+  `--security-opt seccomp=unconfined` and compare failures.
+- Whether `CODEX_HOME` relocates the thread store away from `~/.codex/sessions/`. Probe: set it
+  to a temporary directory, run a turn, and look for the rollout file under both paths.
+- The real maximum message size on the stdio transport. The adapter's 1 MB scanner buffer comes
+  from Symphony's observed message sizes, not from a documented app-server limit. Probe: request
+  a turn whose diff or tool output exceeds 1 MB in one notification and see whether the
+  app-server splits it.
+- Whether `account/login/start` is required when `CODEX_API_KEY` is already in the subprocess
+  environment, or whether `account/read` reports a non-null account on its own. Probe: launch
+  the app-server with the variable set and read the `account/read` response before logging in.
 
 ---
 

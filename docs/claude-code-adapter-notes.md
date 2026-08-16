@@ -1,7 +1,14 @@
-# Claude Code CLI: Adapter Research Notes
+# Claude Code CLI: adapter research notes
 
 > Claude Code CLI v2.x (npm `@anthropic-ai/claude-code`), researched March 2026.
-> Reference for implementing the Claude Code `AgentAdapter`.
+> Reference for implementing the Claude Code `AgentAdapter`, shipped as `internal/agent/claude`.
+>
+> Coverage: the flag surface is anchored to `claude --help` on CLI v2.1.76. The `stream-json`
+> message shapes, result fields, permission modes, session storage layout, hook behavior,
+> OpenTelemetry names, and SDK surface come from Anthropic's Claude Code documentation read in
+> March 2026 and have not been re-observed against a later binary. Statements about Sortie's own
+> code name the Go symbol that implements them and were verified against the tree. Unsettled
+> items are collected under "Open questions"; sources are listed under "Sources".
 
 ---
 
@@ -10,16 +17,17 @@
 Claude Code is an agentic coding tool that runs as a Node.js process in the terminal. It reads
 a codebase, executes tools (file edits, shell commands, searches), and produces code changes
 autonomously. Sortie treats it as a subprocess: launch it with a prompt, read structured output
-from stdout, and terminate it when done.
+from stdout, and terminate it when done. The adapter registers under the agent kind
+`claude-code` in the `claude` package `init` function, with `RequiresCommand: true`.
 
-The primary integration surface is the **CLI in non-interactive ("headless") mode** using the
-`-p` (print) flag. Anthropic also provides TypeScript and Python SDKs (`@anthropic-ai/claude-agent-sdk`
+The integration surface is the **CLI in non-interactive ("headless") mode** using the `-p`
+(print) flag. Anthropic also provides TypeScript and Python SDKs (`@anthropic-ai/claude-agent-sdk`
 and `claude-agent-sdk` respectively), but Sortie's Go adapter uses the CLI subprocess approach per
 [architecture Section 10.7](architecture/10-agent-adapter-contract.md#107-local-subprocess-launch-contract) (Local Subprocess Launch Contract).
 
 ---
 
-## Installation and Prerequisites
+## Installation and prerequisites
 
 Claude Code is an npm package:
 
@@ -27,8 +35,9 @@ Claude Code is an npm package:
 npm install -g @anthropic-ai/claude-code
 ```
 
-After installation the `claude` binary is available on `$PATH`. The adapter's `agent.command`
-config field defaults to `claude` but can be overridden to point to a specific path or wrapper.
+After installation the `claude` binary is available on `$PATH`. The `agent.command` config field
+defaults to `claude` (`agentcore.ResolveLaunchTarget(params, "claude")`) and can be overridden to
+point to a specific path or wrapper.
 
 **Runtime requirements:**
 
@@ -49,147 +58,128 @@ Claude Code authenticates against the Anthropic API (or a compatible provider).
 | Google Vertex AI       | `CLAUDE_CODE_USE_VERTEX=1`, `ANTHROPIC_VERTEX_PROJECT_ID`, `CLOUD_ML_REGION`            | GCP credentials via ADC or explicit env vars.           |
 | LLM Gateway / Proxy    | `ANTHROPIC_BASE_URL` or provider-specific base URL env vars                             | For LiteLLM, custom proxies, etc.                       |
 
-### Config mapping
-
-| Sortie config field           | Value                                                 |
-| ----------------------------- | ----------------------------------------------------- |
-| `agent.kind`                  | `claude-code`                                         |
-| `agent.command`               | `claude` (or full path to the binary)                 |
-| `claude-code.permission_mode` | Pass-through adapter config (see Permissions section) |
-
-The adapter does **not** manage API keys directly. The Anthropic API key must be present in
-the environment of the Sortie process (or passed through via hook env). The adapter inherits
-the parent process environment when spawning the subprocess.
+The adapter does not manage API keys. The Anthropic API key must be present in the environment of
+the Sortie process (or passed through via hook env): `agentcore.ForkPerTurnSession.RunTurn` sets
+`cmd.Env = os.Environ()`, so the subprocess inherits the parent process environment verbatim.
 
 ---
 
-## CLI Flags Reference
+## CLI flags reference
 
-The adapter constructs a `claude` invocation using these flags. Flags marked **(required)**
-are always set by the adapter; others are conditional.
+The adapter builds its argument list in `buildArgs`. Flags marked **(always)** are set on every
+invocation; the rest are conditional on pass-through config or on the session state, and flags
+marked "Not passed" are part of the CLI surface but never appear in a Sortie invocation.
 
 ### Core flags
 
-| Flag                                 | Description                                                                                                             | Adapter usage                                                                           |
-| ------------------------------------ | ----------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
-| `-p <prompt>`                        | Non-interactive (headless) mode. Passes the prompt and exits when done.                                                 | **(required)** Every turn invocation uses this.                                         |
-| `--output-format stream-json`        | Newline-delimited JSON on stdout. Each line is a JSON object.                                                           | **(required)** For real-time event parsing.                                             |
-| `--verbose`                          | Include internal events (tool calls, system messages) in stream output.                                                 | **(required)** Needed for full event visibility.                                        |
-| `--max-turns <N>`                    | Maximum number of agentic turns within a single CLI invocation. Not in `claude --help` v2.1.76; may be SDK/action only. | Set to `1` for single-turn control, or omit to let Claude decide. See Turn Model below. |
-| `--max-budget-usd <amount>`          | Maximum dollar spend for this invocation (print mode only).                                                             | Optional. Cost safety backstop. Exits with error when exceeded.                         |
-| `--model <model>`                    | Override the model (e.g., `claude-sonnet-4-6`, `claude-opus-4-6`).                                                      | Optional. Adapter passes through if configured.                                         |
-| `--fallback-model <model>`           | Automatic fallback model when primary is overloaded (print mode only).                                                  | Optional. Resilience for rate-limited deployments.                                      |
-| `--effort <level>`                   | Reasoning effort: `low`, `medium`, `high`, `max`.                                                                       | Optional. Controls depth of reasoning.                                                  |
-| `--allowedTools <tools>`             | Space-separated list of pre-approved tools. Supports prefix matching: `"Bash(git diff *)"`.                             | Optional. For tool restriction.                                                         |
-| `--disallowedTools <tools>`          | Tools to remove from model context entirely.                                                                            | Optional.                                                                               |
-| `--tools <tools>`                    | Restrict available built-in tools. `""` = none, `"default"` = all.                                                      | Optional. Limits the tool palette.                                                      |
-| `--append-system-prompt <text>`      | Append text to the system prompt. Preserves built-in capabilities.                                                      | Optional. For adapter-injected instructions.                                            |
-| `--system-prompt <text>`             | Replace entire default system prompt.                                                                                   | Optional. **Caution:** removes built-in tool instructions.                              |
-| `--system-prompt-file <path>`        | Replace system prompt from file.                                                                                        | Optional.                                                                               |
-| `--append-system-prompt-file <path>` | Append to system prompt from file.                                                                                      | Optional.                                                                               |
-| `--json-schema <schema>`             | JSON Schema for structured output validation (print mode only).                                                         | Optional. Forces output to conform to a schema.                                         |
-| `--mcp-config <path>`                | Path to MCP server configuration JSON.                                                                                  | Optional. For tool extensions (e.g., `tracker_api`).                                    |
-| `--strict-mcp-config`                | Only use MCP servers from `--mcp-config` (ignore workspace MCP configs).                                                | Optional. For controlled MCP environments.                                              |
-| `--add-dir <dirs>`                   | Additional directories for tool access beyond the cwd.                                                                  | Optional. Multi-repo workflows.                                                         |
-| `--debug [filter]`                   | Enable debug logging with optional category filter (e.g., `"api,hooks"`).                                               | Optional. For troubleshooting.                                                          |
-| `--include-partial-messages`         | Include partial message deltas in stream-json output.                                                                   | Optional. Provides token-by-token streaming for text deltas.                            |
-| `--agents <json>`                    | Define custom subagents via JSON.                                                                                       | Optional. Advanced multi-agent patterns.                                                |
-| `--agent <name>`                     | Use a specific named agent for the session.                                                                             | Optional. Agent routing.                                                                |
+| Flag                                 | Description                                                                                  | Adapter usage                                                                       |
+| ------------------------------------ | ---------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| `-p <prompt>`                        | Non-interactive (headless) mode. Passes the prompt and exits when done.                      | **(always)** Carries the rendered turn prompt.                                      |
+| `--output-format stream-json`        | Newline-delimited JSON on stdout. Each line is a JSON object.                                | **(always)** The adapter's only event source.                                       |
+| `--verbose`                          | Include internal events (tool calls, system messages) in stream output.                      | **(always)** Needed for full event visibility.                                      |
+| `--max-turns <N>`                    | Maximum number of agentic turns within a single CLI invocation.                               | Passed when `claude-code.max_turns` is set. Availability is an open question below. |
+| `--max-budget-usd <amount>`          | Maximum dollar spend for this invocation (print mode only). Exits with error when exceeded.  | Passed when `claude-code.max_budget_usd` is set.                                     |
+| `--model <model>`                    | Override the model (e.g., `claude-sonnet-4-6`, `claude-opus-4-6`).                           | Passed when `claude-code.model` is set.                                              |
+| `--fallback-model <model>`           | Automatic fallback model when primary is overloaded (print mode only).                       | Passed when `claude-code.fallback_model` is set.                                     |
+| `--effort <level>`                   | Reasoning effort: `low`, `medium`, `high`, `max`.                                             | Passed when `claude-code.effort` is set.                                             |
+| `--allowedTools <tools>`             | Space-separated list of pre-approved tools. Supports prefix matching: `"Bash(git diff *)"`.  | Passed when `claude-code.allowed_tools` is set.                                       |
+| `--disallowedTools <tools>`          | Tools to remove from model context entirely.                                                  | Passed when `claude-code.disallowed_tools` is set.                                    |
+| `--append-system-prompt <text>`      | Append text to the system prompt. Preserves built-in capabilities.                            | Passed when `claude-code.system_prompt` is set.                                       |
+| `--mcp-config <path>`                | Path to MCP server configuration JSON.                                                        | Passed with the worker-generated config path; see MCP server configuration.          |
+| `--tools <tools>`                    | Restrict available built-in tools. `""` = none, `"default"` = all.                            | Not passed.                                                                          |
+| `--system-prompt <text>`             | Replace entire default system prompt. Removes built-in tool instructions.                    | Not passed.                                                                          |
+| `--system-prompt-file <path>`        | Replace system prompt from file.                                                              | Not passed.                                                                          |
+| `--append-system-prompt-file <path>` | Append to system prompt from file.                                                            | Not passed.                                                                          |
+| `--json-schema <schema>`             | JSON Schema for structured output validation (print mode only).                              | Not passed.                                                                          |
+| `--strict-mcp-config`                | Restrict MCP servers to those in `--mcp-config`; see MCP server configuration.                | Not passed.                                                                          |
+| `--add-dir <dirs>`                   | Additional directories for tool access beyond the cwd.                                        | Not passed.                                                                          |
+| `--debug [filter]`                   | Enable debug logging with optional category filter (e.g., `"api,hooks"`).                    | Not passed.                                                                          |
+| `--include-partial-messages`         | Include partial message deltas in stream-json output.                                         | Not passed.                                                                          |
+| `--agents <json>`                    | Define custom subagents via JSON.                                                             | Not passed.                                                                          |
+| `--agent <name>`                     | Use a specific named agent for the session.                                                   | Not passed.                                                                          |
 
 ### Session management flags
 
-| Flag                           | Description                                                         | Adapter usage                                                          |
-| ------------------------------ | ------------------------------------------------------------------- | ---------------------------------------------------------------------- |
-| `--continue` / `-c`            | Resume the most recent conversation in the working directory.       | Used for continuation turns (turn 2+).                                 |
-| `--resume <session_id>` / `-r` | Resume a specific conversation by session ID.                       | Used for continuation turns when explicit session targeting is needed. |
-| `--session-id <uuid>`          | Use a specific UUID for the session (instead of auto-generated).    | Optional. For deterministic session ID assignment.                     |
-| `--fork-session`               | When resuming, create a new session ID instead of reusing original. | Optional. For branching conversations.                                 |
-| `--no-session-persistence`     | Don't save session to disk (print mode only).                       | Optional. For ephemeral runs that don't need history.                  |
-| `--name <name>` / `-n`         | Display name for the session.                                       | Optional. For human-readable session identification.                   |
+| Flag                           | Description                                                         | Adapter usage                                                                                  |
+| ------------------------------ | ------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| `--session-id <uuid>`          | Use a specific UUID for the session (instead of auto-generated).    | Passed on the first turn of a new session with the UUID minted by `newUUID`.                     |
+| `--resume <session_id>` / `-r` | Resume a specific conversation by session ID.                       | Passed on every other turn.                                                                      |
+| `--no-session-persistence`     | Don't save session to disk (print mode only).                       | Passed when `claude-code.session_persistence` is `false`.                                        |
+| `--continue` / `-c`            | Resume the most recent conversation in the working directory.       | Not passed. `--resume` targets the session explicitly and is unambiguous when several exist. |
+| `--fork-session`               | When resuming, create a new session ID instead of reusing original. | Not passed.                                                                                      |
+| `--name <name>` / `-n`         | Display name for the session.                                       | Not passed.                                                                                      |
 
 ### Permission flags
 
-| Flag                                   | Description                                                                                    | Adapter usage                                                                                                                                 |
-| -------------------------------------- | ---------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------- |
-| `--dangerously-skip-permissions`       | Bypass all permission prompts. No user confirmation required.                                  | **(required for headless)** Without this, the process may hang waiting for interactive approval. Must only be used in sandboxed environments. |
-| `--permission-mode <mode>`             | Set permission mode: `default`, `acceptEdits`, `dontAsk`, `bypassPermissions`, `plan`, `auto`. | Alternative to `--dangerously-skip-permissions`. `bypassPermissions` is equivalent.                                                           |
-| `--permission-prompt-tool <tool>`      | MCP tool to handle permission prompts programmatically in non-interactive mode.                | Optional. Enables programmatic approval decisions instead of blanket bypass.                                                                  |
-| `--allow-dangerously-skip-permissions` | Enable bypassing as an option without activating it.                                           | Optional. Pre-authorization for sandboxed environments.                                                                                       |
-
-> **Security warning:** `--dangerously-skip-permissions` allows arbitrary command execution.
-> Per Anthropic's guidance, this should only be used in sandboxed environments without internet
-> access, inside an externally enforced sandbox (for example a locked-down container or VM with
-> restricted filesystem and network access). Sortie's workspace isolation and hook system operate
-> inside that sandbox as additional defense-in-depth, but do not replace external isolation.
+| Flag                                   | Description                                                                                    | Adapter usage                                                        |
+| -------------------------------------- | ---------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| `--dangerously-skip-permissions`       | Bypass all permission prompts. No user confirmation required.                                  | Passed when `claude-code.permission_mode` is unset.                  |
+| `--permission-mode <mode>`             | Set permission mode: `default`, `acceptEdits`, `dontAsk`, `bypassPermissions`, `plan`, `auto`. | Passed instead when `claude-code.permission_mode` is set.            |
+| `--permission-prompt-tool <tool>`      | MCP tool to handle permission prompts programmatically in non-interactive mode.                | Not passed.                                                          |
+| `--allow-dangerously-skip-permissions` | Enable bypassing as an option without activating it.                                           | Not passed.                                                          |
 
 ### Input flags
 
-| Flag                      | Description                                                              | Adapter usage                                                        |
-| ------------------------- | ------------------------------------------------------------------------ | -------------------------------------------------------------------- |
-| `--input-format <format>` | Input format (print mode only): `text` (default), `stream-json`.         | Optional. `stream-json` enables real-time streaming input via stdin. |
-| `--replay-user-messages`  | Re-emit user messages from stdin on stdout (requires `stream-json` I/O). | Optional. For bidirectional streaming protocols.                     |
+| Flag                      | Description                                                              | Adapter usage |
+| ------------------------- | ------------------------------------------------------------------------ | ------------- |
+| `--input-format <format>` | Input format (print mode only): `text` (default), `stream-json`.         | Not passed.   |
+| `--replay-user-messages`  | Re-emit user messages from stdin on stdout (requires `stream-json` I/O). | Not passed.   |
 
-### Config/settings flags
+### Config and settings flags
 
-| Flag                          | Description                                                  | Adapter usage                                      |
-| ----------------------------- | ------------------------------------------------------------ | -------------------------------------------------- |
-| `--setting-sources <sources>` | Comma-separated setting sources: `user`, `project`, `local`. | Optional. Control which settings files are loaded. |
-| `--settings <file-or-json>`   | Additional settings JSON file or inline JSON.                | Optional. Inject adapter-specific settings.        |
+| Flag                          | Description                                                  | Adapter usage |
+| ----------------------------- | ------------------------------------------------------------ | ------------- |
+| `--setting-sources <sources>` | Comma-separated setting sources: `user`, `project`, `local`. | Not passed.   |
+| `--settings <file-or-json>`   | Additional settings JSON file or inline JSON.                | Not passed.   |
 
 ---
 
-## Subprocess Invocation
+## Subprocess invocation
 
-Per [architecture Section 10.7](architecture/10-agent-adapter-contract.md#107-local-subprocess-launch-contract), the adapter launches:
+`buildArgs` returns an argv slice and `agentcore.ForkPerTurnSession.RunTurn` launches the binary
+with `exec.CommandContext`. No shell wraps the invocation, so the prompt reaches the CLI as a
+single argv element and shell metacharacters in user-controlled issue content cannot be
+interpreted. A first turn of a new session produces:
 
 ```
-# POSIX (Linux / macOS)
-sh -c '<agent.command> -p "$1" --output-format stream-json --verbose --dangerously-skip-permissions ${2:+--resume "$2"}' -- "$prompt" "$session_id"
+claude -p <prompt> --output-format stream-json --verbose --dangerously-skip-permissions --session-id <uuid>
 ```
 
-On Windows, the adapter invokes the CLI directly without a shell wrapper. The subprocess receives
-`CREATE_NEW_PROCESS_GROUP` and is assigned to a Job Object for process tree management.
+When `StartSessionParams.SSHHost` is set, `agentcore.ResolveLaunchTarget` resolves the local `ssh`
+binary instead and `sshutil.BuildSSHArgs` wraps the same argv, the workspace path, and the remote
+command for remote execution.
 
-> **Shell safety:** The prompt must not be interpolated directly into the `sh -c` string.
-> Pass it as a positional parameter (`$1`) to avoid injection via shell metacharacters
-> in user-controlled issue content.
+Process-group isolation, the graceful-shutdown sequence, and the 10 MB stdout line ceiling follow
+[architecture Section 10.7](architecture/10-agent-adapter-contract.md#107-local-subprocess-launch-contract).
 
 ### Process settings
 
-| Setting           | Value                                               | Rationale                                                |
-| ----------------- | --------------------------------------------------- | -------------------------------------------------------- |
-| Working directory | Workspace path (`StartSessionParams.WorkspacePath`) | Agent must operate in the issue workspace.               |
-| Stdout            | Pipe (read by adapter)                              | `stream-json` output parsed line by line.                |
-| Stderr            | Pipe (read by adapter, logged)                      | Diagnostic output, not structured.                       |
-| Environment       | Inherited from Sortie process                       | `ANTHROPIC_API_KEY` and other auth vars must be present. |
-| Max line size     | 10 MB                                               | Safe buffering per architecture doc recommendation.      |
+| Setting           | Value                                                            | Rationale                                                                                       |
+| ----------------- | ------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------- |
+| Working directory | Workspace path, resolved by `agentcore.ResolveWorkspace`         | Agent must operate in the issue workspace.                                                      |
+| Stdout            | Pipe scanned line by line by `bufio.Scanner`                     | `stream-json` output is parsed one line per event.                                              |
+| Stderr            | Pipe drained by `procutil.NewStderrCollector`                    | Diagnostic output, not structured. Logged, and re-emitted at warn level on failure paths.       |
+| Environment       | `os.Environ()` of the Sortie process                             | `ANTHROPIC_API_KEY` and other auth vars must be present.                                        |
+| Max line size     | 10 MB (`stdoutScannerMaxTokenSize`)                              | A longer line ends the scan with `bufio.ErrTooLong` and fails the turn with `port_exit`.        |
+| Process group     | `procutil.SetProcessGroup` before start, `procutil.AssignProcess` after | POSIX process group and Windows Job Object, so the whole tree can be signaled and reaped. |
 
-### First turn vs. continuation turns
+### First turn and continuation turns
 
-| Turn                   | Invocation                                                                                                                     |
-| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
-| Turn 1 (new session)   | `claude -p "<full_prompt>" --output-format stream-json --verbose --dangerously-skip-permissions`                               |
-| Turn 2+ (continuation) | `claude -p "<continuation_prompt>" --output-format stream-json --verbose --dangerously-skip-permissions --resume <session_id>` |
+| Turn                                                     | Session flag                          |
+| -------------------------------------------------------- | ------------------------------------- |
+| First turn of a new session                              | `--session-id <uuid>`                 |
+| Every later turn, and every turn of a resumed session    | `--resume <session_id>`               |
 
-The `--resume <session_id>` flag continues the conversation in the same session, preserving
-the full message history from prior turns. The `session_id` is captured from the JSON output
-of the first turn.
-
-**Alternative:** `--continue` resumes the most recent conversation in the cwd. Since Sortie
-controls the workspace directory per issue, `--continue` would also work. However,
-`--resume <session_id>` is more explicit and avoids ambiguity if multiple sessions exist
-in the same workspace.
-
-**Deterministic session IDs:** The `--session-id <uuid>` flag allows the adapter to assign a
-known UUID before the first turn, eliminating the need to parse the session ID from output.
-This simplifies the turn-1 → turn-2 handoff.
-
-**Ephemeral runs:** `--no-session-persistence` avoids writing session history to disk,
-reducing I/O overhead for fire-and-forget runs that don't need continuation.
+`StartSession` mints the session UUID with `newUUID` before the first turn, so the adapter never
+has to parse an identifier out of the stream before it can continue a conversation. It marks the
+session a continuation when `StartSessionParams.ResumeSessionID` is non-empty, in which case even
+turn 1 resumes. `--resume` preserves the full message history from prior turns. When the
+`system/init` event reports a `session_id`, `ParseLine` adopts the reported value for later turns
+and for event correlation.
 
 ---
 
-## Output Format: `stream-json`
+## Output format: `stream-json`
 
 With `--output-format stream-json`, Claude Code writes one JSON object per line to stdout
 (newline-delimited JSON / JSONL). Each line is independently parseable.
@@ -202,27 +192,30 @@ The stream produces messages conforming to a union type:
 
 ### Event categories
 
-| `type` field   | Description                                               | Adapter mapping                        |
-| -------------- | --------------------------------------------------------- | -------------------------------------- |
-| `system`       | System/init messages (session start, retries, compaction) | `session_started` or `notification`    |
-| `assistant`    | Complete assistant message (text, tool calls)             | `notification` / `tool_use` tracking   |
-| `user`         | User-role message carrying tool execution results         | `tool_result` (via content blocks)     |
-| `result`       | Final result message when the turn/session completes      | `turn_completed` or `turn_failed`      |
-| `stream_event` | Streaming delta (with `--include-partial-messages`)       | Ignored or used for stall detection    |
+| `type` field   | Description                                               | Adapter mapping                                                                             |
+| -------------- | --------------------------------------------------------- | --------------------------------------------------------------------------------------------- |
+| `system`       | System/init messages (session start, retries, compaction) | `session_started` on the `init` subtype, `notification` otherwise                            |
+| `assistant`    | Complete assistant message (text, tool calls)             | `token_usage` on a message id's first sighting, tool tracking, and a `notification` summary  |
+| `user`         | User-role message carrying tool execution results         | `tool_result` (via content blocks)                                                           |
+| `result`       | Final result message when the turn/session completes      | Held as the turn's terminal report and read in `OnFinalize`                                  |
+| `stream_event` | Streaming delta (with `--include-partial-messages`)       | Empty `notification`, which only advances the orchestrator's stall clock                     |
+| Anything else  | Unrecognized line                                          | `other_message` carrying `type/subtype`                                                      |
 
-> **Note (v2.1.x change):** Earlier Claude Code versions emitted `tool_use` and `tool_result`
-> as separate top-level event types *or* as content blocks within `assistant` messages. As of
-> v2.1.x, the canonical flow is: `assistant` message with `ToolUseBlock` content → `user`
-> message with `ToolResultBlock` content. The adapter handles both the legacy (assistant-only)
-> and current (assistant + user) patterns.
+`processToolBlocks` scans the content blocks of both `assistant` and `user` events, so a
+`tool_result` block is correlated in either position; CLI versions before v2.1 emit it inside the
+`assistant` message. Correlation runs through `agentcore.ToolTracker`, which supplies the
+originating tool name and the execution duration; an uncorrelated result is reported as tool name
+`unknown`. Error text from a failed tool is unwrapped from Claude Code's
+`<tool_use_error>` envelope and stripped of ANSI escapes by `stripClaudeMarkup`, then bounded to
+2048 bytes by `truncateToolError`, which keeps the first line and the tail.
 
-### SystemMessage subtypes
+### System message subtypes
 
-| Subtype            | Description                                            | Adapter action                               |
-| ------------------ | ------------------------------------------------------ | -------------------------------------------- |
-| `init`             | First message. Contains `session_id` and `cwd`.        | Extract `session_id`, emit `session_started` |
-| `api_retry`        | API retry in progress.                                 | Log; update stall timer                      |
-| `compact_boundary` | Context was compacted (conversation truncated to fit). | Log as `notification`                        |
+| Subtype            | Description                                            | Adapter action                                                                  |
+| ------------------ | ------------------------------------------------------ | --------------------------------------------------------------------------------- |
+| `init`             | First message. Contains `session_id` and `cwd`.        | Adopt `session_id`, emit `session_started`, start the API-timing clock          |
+| `api_retry`        | API retry in progress.                                 | `notification` formatted by `formatAPIRetry`                                    |
+| `compact_boundary` | Context was compacted (conversation truncated to fit). | `notification` carrying `system/compact_boundary`                               |
 
 **Init/system event:**
 
@@ -254,9 +247,9 @@ The stream produces messages conforming to a union type:
 Retry error categories: `authentication_failed`, `billing_error`, `rate_limit`, `invalid_request`,
 `server_error`, `max_output_tokens`, `unknown`.
 
-### ResultMessage (turn/session completion)
+### Result message
 
-The result message is always the final line in the stream. It contains comprehensive metadata:
+The result message is the final line in the stream. It contains comprehensive metadata:
 
 ```json
 {
@@ -279,15 +272,15 @@ The result message is always the final line in the stream. It contains comprehen
 }
 ```
 
-**Result subtypes:**
+**Result subtypes** (their disposition is in Error detection and mapping):
 
-| `subtype`                             | Meaning                                                              | Adapter mapping  |
-| ------------------------------------- | -------------------------------------------------------------------- | ---------------- |
-| `success`                             | Turn completed normally.                                             | `turn_completed` |
-| `error_max_turns`                     | `--max-turns` limit reached.                                         | `turn_failed`    |
-| `error_max_budget_usd`                | `--max-budget-usd` limit reached.                                    | `turn_failed`    |
-| `error_during_execution`              | Runtime error during agent execution.                                | `turn_failed`    |
-| `error_max_structured_output_retries` | Structured output (`--json-schema`) validation failed after retries. | `turn_failed`    |
+| `subtype`                             | Meaning                                                              |
+| ------------------------------------- | -------------------------------------------------------------------- |
+| `success`                             | Turn completed normally.                                             |
+| `error_max_turns`                     | `--max-turns` limit reached.                                         |
+| `error_max_budget_usd`                | `--max-budget-usd` limit reached.                                    |
+| `error_during_execution`              | Runtime error during agent execution.                                |
+| `error_max_structured_output_retries` | Structured output (`--json-schema`) validation failed after retries. |
 
 **Result event fields:**
 
@@ -305,6 +298,11 @@ The result message is always the final line in the stream. It contains comprehen
 | `num_turns`         | integer | Number of internal agentic turns executed.          |
 | `usage`             | object  | Token usage breakdown (see below).                  |
 | `stop_reason`       | string? | `"end_turn"`, `"max_tokens"`, `"refusal"`, or null. |
+
+`rawEvent` decodes `subtype`, `is_error`, `result`, `duration_api_ms`, `usage`, and `modelUsage`
+and acts on all of them. It also decodes `total_cost_usd`, `duration_ms`, `num_turns`,
+`stop_reason`, and the init event's `cwd`, none of which reach a domain event.
+`structured_output` is not decoded.
 
 **Usage object fields:**
 
@@ -326,13 +324,15 @@ Assistant and user messages contain an array of content blocks:
 | `ToolUseBlock`    | `id`, `name`, `input`                | `assistant`   | Tool call request.                |
 | `ToolResultBlock` | `tool_use_id`, `content`, `is_error` | `user`        | Tool execution result.            |
 
-> **v2.1.x:** `ToolResultBlock` moved from `assistant` messages to `user` messages.
-> Legacy streams may still embed `ToolResultBlock` inside `assistant` messages; the
-> adapter handles both layouts.
+`rawContentBlock` decodes `type`, `text`, `name`, `id`, `tool_use_id`, `is_error`, and `content`.
+A `ToolUseBlock` `input` and a `ThinkingBlock` are not decoded. `toolResultText` reads a
+`tool_result` block's `content` in both shapes Claude Code emits: a plain JSON string, and an
+array of typed content objects from which the first `text` entry is taken.
 
-### StreamEvent (partial messages)
+### Stream events (partial messages)
 
-Only emitted when `--include-partial-messages` is set. Wraps raw Claude API streaming events:
+Only emitted when `--include-partial-messages` is set, which `buildArgs` never passes. Wraps raw
+Claude API streaming events:
 
 ```json
 {
@@ -377,42 +377,55 @@ When Claude Code spawns background tasks (subagents, background bash), these mes
 | `TaskProgressMessage`     | `task_id`, `usage`, `last_tool_name`  | Periodic progress update.                                         |
 | `TaskNotificationMessage` | `task_id`, `status`, `summary`        | Task completed. Status: `completed`, `failed`, `stopped`.         |
 
+`ParseLine` has no arm for these messages; they fall to the default arm and become
+`other_message` events. Their wire-level `type` values are an open question below.
+
 ### Parsing strategy
 
-The adapter reads stdout line by line. For each line:
+`agentcore.ForkPerTurnSession.RunTurn` scans stdout line by line and hands each line to the
+adapter's `ParseLine` hook, which:
 
-1. Parse as JSON. If parsing fails → emit `malformed` event.
-2. Check `type` field:
-   - `"system"` with `"init"` subtype → extract `session_id`, emit `session_started`.
-   - `"system"` with `"api_retry"` subtype → log retry info, update stall timer.
-   - `"system"` with `"compact_boundary"` subtype → log context compaction.
-   - `"result"` → extract all fields. Check `subtype` and `is_error`:
-     - `subtype == "success"` and `is_error == false` → emit `turn_completed`.
-     - Any other subtype or `is_error == true` → emit `turn_failed`.
-     - Extract `usage` for `token_usage` event.
-   - `"assistant"` → emit `notification` or `other_message` with content summary.
-     Inspect content blocks for `ToolUseBlock` entries (populate in-flight map).
-     Legacy streams may also contain `ToolResultBlock` here.
-   - `"user"` → inspect content blocks for `ToolResultBlock` entries. Correlate
-     each `tool_use_id` with the in-flight map to emit `tool_result` events with
-     the originating tool name and execution duration.
-   - `"stream_event"` → update stall detection timer. Optionally emit `notification`
-     for text deltas.
-3. Any event with recognizable token/cost data → emit `token_usage` event.
+1. Unmarshals the line into a `rawEvent` via `parseEvent`. On a JSON error the skeleton emits a
+   `malformed` event carrying the raw line truncated to 500 runes, and continues with the next
+   line.
+2. Switches on `type`:
+   - `"system"` with `"init"`: adopt `session_id`, emit `session_started` with the subprocess PID,
+     and start the API-timing clock.
+   - `"system"` with any other subtype: emit a `notification`.
+   - `"assistant"`: record the model, register per-message-id usage, emit `token_usage` on the
+     id's first sighting, scan content blocks for `tool_use` and `tool_result`, and emit a
+     `notification` summarizing the message (`summarizeAssistant`).
+   - `"user"`: scan content blocks for `tool_result` and restart the API-timing clock, because
+     the next API call follows tool execution.
+   - `"result"`: settle the turn's authoritative usage into the run accumulator and return the
+     event to the skeleton as the turn's terminal report.
+   - `"stream_event"`: emit an empty `notification`.
+   - anything else: emit `other_message` carrying `type/subtype`.
+
+Every line other than `result` returns nil, so the last `result` event seen is what `OnFinalize`
+reads. Emitted events carry a UTC timestamp; `orchestrator.HandleAgentEvent` advances the run
+entry's `LastAgentTimestamp` from it, which is what the stall detector reads. The adapter keeps no
+stall timer of its own.
 
 ### Token usage extraction
 
 Assistant events repeat one message id (`message.id`) for every event of the same model
 request; the adapter deduplicates by that id and emits at most one `token_usage` event per id.
 Streamed usage is a snapshot, not a final count: a later event carrying the same id can report a
-larger usage object than an earlier one as the response continues to generate.
+larger usage object than an earlier one as the response continues to generate, so
+`componentwiseMaxUsage` keeps the componentwise maximum per id.
 
 The terminal `result` event's top-level `usage` field excludes sub-agent activity, while its
-`modelUsage` map and `total_cost_usd` include it. The adapter derives the authoritative per-turn
-usage from `modelUsage` when present, summed across every model entry, and falls back to the
-top-level `usage` object only when `modelUsage` is absent or empty.
+`modelUsage` map and `total_cost_usd` include it. `usageFromResult` derives the authoritative
+per-turn usage from `modelUsage` when present, summed across every model entry, and falls back to
+the top-level `usage` object only when `modelUsage` is absent or empty.
 
-The adapter normalizes a usage object into:
+`agentcore.RunUsage` holds the session total: assistant events set the in-flight turn's
+provisional contribution (`SetTurnProvisional`), the result event settles the turn
+(`AddTurn`), and the snapshot never decreases. The terminal event and the `TurnResult` carry that
+run-cumulative snapshot, not a per-turn figure.
+
+`usageFromAssistant` normalizes a usage object into:
 
 ```
 TokenUsage{
@@ -431,153 +444,121 @@ Additional available data:
 | Result `usage` | `input_tokens`, `output_tokens`, `cache_read_input_tokens`, `cache_creation_input_tokens` |
 | Result `modelUsage` (per model) | `inputTokens`, `outputTokens`, `cacheReadInputTokens`, `cacheCreationInputTokens`, `costUSD` |
 
-`total_cost_usd` and `modelUsage[*].costUSD` are cost figures the adapter parses only where it
-already did; no new cost parsing is added.
+Of the cost figures, `rawEvent` decodes `total_cost_usd` and does not carry it anywhere;
+`rawModelUsage` does not decode `costUSD` at all. The adapter reports no cost.
+
+API timing is reported instead: the clock starts on `system/init` and restarts after each `user`
+event, and the elapsed time is attached to the next `token_usage` event as `APIDurationMS`,
+clamped to a minimum of 1 ms. When no per-request timing was emitted during the turn, `OnFinalize`
+falls back to the result event's `duration_api_ms` so the two are never double-counted.
 
 ---
 
-## Session Lifecycle Mapping
+## Session lifecycle mapping
 
 [Architecture Section 10.2](architecture/10-agent-adapter-contract.md#102-session-lifecycle) defines the session lifecycle. Here is how Claude Code maps to it:
 
 ### `StartSession`
 
-Architecture Sections 10.1 and 10.2 define `StartSession` as the operation that "launches or
-connects" to the agent. For Claude Code, the _session_ is disk-persisted and identified by
-`--session-id`, while the OS subprocess is short-lived and created per turn. This adapter
-treats `StartSession` as establishing and validating the logical Claude Code session, while
-deferring creation of the Node.js subprocess until `RunTurn`.
+For Claude Code, the _session_ is disk-persisted and identified by `--session-id`, while the OS
+subprocess is short-lived and created per turn. `StartSession` establishes the logical Claude Code
+session and defers creation of the Node.js subprocess to `RunTurn`. It:
 
-1. Record the workspace path and configuration.
-2. Perform preflight validation:
-   - Resolve and normalize the workspace path.
-   - Enforce workspace path containment rules.
-   - Validate that the Claude Code CLI command is resolvable on `$PATH`.
-3. Optionally assign a deterministic Claude Code session ID (for example a UUID) that will be
-   passed via `--session-id <uuid>` on the first `RunTurn`. This avoids needing to parse the
-   session ID from output before the second turn and makes retries idempotent.
-4. Initialize and return a `Session`:
-   - `ID`: the chosen session ID if pre-assigned, or empty (to be populated after the first
-     turn if Claude Code allocates it).
-   - `Internal`: adapter-internal state (workspace path, config snapshot, chosen session ID).
-     No OS subprocess is spawned at this point; that happens in `RunTurn` while resuming this
-     logical session.
+1. Calls `agentcore.ResolveLaunchTarget`, which resolves the workspace path to absolute form and
+   checks that it exists and is a directory (`agentcore.ResolveWorkspace`), then resolves the
+   `claude` binary on `$PATH` (`agentcore.ResolveBinary`). Workspace root containment is enforced
+   by the workspace manager before `StartSession` runs, not here.
+2. Assigns the Claude Code session ID: `StartSessionParams.ResumeSessionID` when resuming,
+   otherwise a fresh UUID from `newUUID`.
+3. Builds `sessionState` (launch target, session ID, agent config, MCP config path, run usage
+   accumulator) and constructs the `agentcore.ForkPerTurnSession` that owns the subprocess
+   lifecycle.
+4. Returns a `domain.Session` whose `ID` is the chosen session ID and whose `Internal` is the
+   `sessionState`. No OS subprocess exists at this point.
 
 ### `RunTurn`
 
-1. Build the CLI command:
-   - Turn 1: `claude -p "<prompt>" --output-format stream-json --verbose --dangerously-skip-permissions [--session-id <uuid>]`
-   - Turn 2+: append `--resume <session_id>` to continue the conversation.
-2. Launch subprocess (POSIX: `sh -c <command>`; Windows: direct invocation), cwd = workspace path.
-   The subprocess is placed in its own process group and assigned to platform-specific
-   process tree management (Unix process groups / Windows Job Objects).
-3. Read stdout line by line, parse each JSON event, and deliver to `OnEvent` callback.
-4. On each event, update the stall detection timer.
-5. When the process exits:
-   - **Exit code 0:** Parse the final `result` event. Check `subtype`:
-     - `"success"` → return `TurnResult{ExitReason: turn_completed}`.
-     - `"error_max_turns"` or `"error_max_budget_usd"` → return `TurnResult{ExitReason: turn_failed}`.
-     - `"error_during_execution"` → return `TurnResult{ExitReason: turn_failed}`.
-   - **Exit code 1:** General error → return `TurnResult{ExitReason: turn_failed}` with error details.
-   - **Exit code non-zero (other):** Return `TurnResult{ExitReason: turn_failed}`.
-   - **Killed by signal (timeout/cancellation):** Return `TurnResult{ExitReason: turn_cancelled}`.
-6. Extract `session_id` from the init or result event and store it in the `Session.Internal`
-   state for use in subsequent `--resume` invocations.
+`RunTurn` resets the per-turn scan state (message-id usage map, last model, API-timing clock, tool
+tracker) and delegates to `agentcore.ForkPerTurnSession.RunTurn`, which:
+
+1. Calls `buildArgs` for the argv, then starts the subprocess with cwd set to the workspace path.
+2. Scans stdout line by line, delivering normalized events to the `OnEvent` callback.
+3. Drains stderr, waits for the process, and reaps any surviving process-group members.
+4. Decides the outcome. Cancellation, a stdout scan error, exit code 127, and death by signal are
+   decided by the skeleton; every other exit reaches the adapter's `OnFinalize`, which reports the
+   terminal outcome to `agentcore.FinalizeTurn`.
+
+The run accumulator (`agentcore.RunUsage`) is constructed once in `StartSession` and is not reset
+between turns, so `TurnResult.Usage` is run-cumulative.
 
 ### `StopSession`
 
-1. If a subprocess is running, send a platform-appropriate graceful shutdown signal to the
-   process group (POSIX: `SIGTERM`; Windows: `CTRL_BREAK_EVENT`).
-2. Wait briefly (5 seconds) for clean exit.
-3. If still running, force-terminate the process tree (POSIX: `SIGKILL` to process group;
-   Windows: `TerminateJobObject`).
-4. Clean up file descriptors, goroutines, and platform-specific process group resources.
+`StopSession` delegates to `agentcore.ForkPerTurnSession.Stop`, which sends a platform-appropriate
+graceful shutdown signal to the process group (POSIX: `SIGTERM`; Windows: `CTRL_BREAK_EVENT`),
+waits up to 5 seconds for the turn to finish its own cleanup, and force-terminates the process
+group otherwise (POSIX: `SIGKILL`; Windows: `TerminateJobObject`). With no subprocess running it
+returns nil immediately.
 
 ### `EventStream`
 
-Return `nil`. The Claude Code adapter uses the synchronous `OnEvent` callback model, not
-the async channel model.
+Returns nil. The Claude Code adapter uses the synchronous `OnEvent` callback model, not the async
+channel model.
 
 ---
 
-## Turn Model
+## Turn model
 
 Claude Code has its own internal concept of "turns" (agentic loops within a single CLI
-invocation). The `--max-turns` flag controls how many internal turns Claude Code executes
-before returning.
+invocation). Sortie's turn is one CLI invocation, one `RunTurn` call; within it Claude Code may
+execute many internal agentic loops. The result event's `num_turns` field reports how many it ran.
 
-**Default behavior when `--max-turns` is omitted:** Claude Code runs until the model
-decides it is done (the agent loop completes naturally). There is no hardcoded internal
-turn limit — the agent continues executing tool calls and producing responses until it
-emits `end_turn`. In practice this means the only bounds are the cost budget
-(`--max-budget-usd`) and the adapter's `turn_timeout_ms` deadline in Sortie.
-
-> **Note:** `--max-turns` is documented in the GitHub Actions `claude_args` reference but
-> does not appear in `claude --help` as of CLI v2.1.76. It may be handled via the SDK
-> layer or settings rather than a direct CLI flag. Verify availability before relying on it
-> in the adapter; if unavailable, rely on `--max-budget-usd` and `turn_timeout_ms` as the
-> primary safety bounds.
-
-**Sortie's turn model is distinct from Claude Code's internal turns.** Sortie's "turn" is
-one CLI invocation (one `RunTurn` call). Within that invocation, Claude Code may execute
-multiple internal agentic loops.
-
-Two strategies:
-
-### Strategy A: Single Sortie turn = single Claude Code invocation (recommended)
-
-- Omit `--max-turns` (agent runs until done) or set it explicitly if available.
-- Claude Code runs its full agentic loop within one invocation.
-- Sortie calls `RunTurn` once per Sortie turn. Claude Code decides when it's done.
-- After each Sortie turn, the orchestrator re-checks tracker state and decides whether to
-  continue.
-- The result event's `num_turns` field reveals how many internal turns Claude Code executed.
-- Use `--max-budget-usd` as a cost safety backstop alongside `turn_timeout_ms`.
-
-### Strategy B: One-turn-per-invocation (fine-grained control)
-
-- Set `--max-turns 1` on each invocation.
-- Each `RunTurn` call runs exactly one Claude Code internal turn.
-- Sortie has maximum control over the loop but incurs subprocess launch overhead per turn
-  and may interrupt Claude Code's multi-step plans.
-
-**Recommendation:** Strategy A. Let Claude Code run its agentic loop to completion within
-each Sortie turn. Sortie's `agent.turn_timeout_ms` provides the safety backstop. This
-minimizes subprocess overhead and allows Claude Code's planner to execute multi-step
-operations atomically.
+`buildArgs` omits `--max-turns` unless `claude-code.max_turns` is configured, so by default Claude
+Code runs until the model decides it is done. There is no hardcoded internal turn limit: the agent
+continues executing tool calls and producing responses until it emits `end_turn`. The bounds that
+remain are the cost budget (`claude-code.max_budget_usd`) and orchestrator-side cancellation.
+Letting the agentic loop run to completion inside one Sortie turn minimizes subprocess overhead
+and keeps multi-step operations from being interrupted mid-plan; after each Sortie turn the
+orchestrator re-checks tracker state and decides whether to continue.
 
 ---
 
-## Timeout Enforcement
+## Timeout enforcement
 
-| Timeout                  | Source      | Enforcement                                                                                                                                                                                         |
-| ------------------------ | ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `agent.turn_timeout_ms`  | WORKFLOW.md | Adapter sets a deadline on the subprocess. On expiry, send SIGTERM → wait → SIGKILL. Map to `turn_cancelled`.                                                                                       |
-| `agent.read_timeout_ms`  | WORKFLOW.md | Not directly applicable to subprocess model (no request/response cycle during the turn). Could apply to initial subprocess startup: if no output within `read_timeout_ms`, consider startup failed. |
-| `agent.stall_timeout_ms` | WORKFLOW.md | Enforced by the **orchestrator**, not the adapter. The orchestrator monitors `last_agent_timestamp` from events. If the gap exceeds `stall_timeout_ms`, the orchestrator calls `StopSession`.       |
+| Timeout                  | Source      | Enforcement                                                                                                                                                                                |
+| ------------------------ | ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `agent.turn_timeout_ms`  | WORKFLOW.md | Reaches the adapter as `domain.AgentConfig.TurnTimeoutMS` and is stored in `sessionState`. Nothing on the Claude path reads it; no per-turn deadline is set on the subprocess.              |
+| `agent.read_timeout_ms`  | WORKFLOW.md | Bounds session teardown: `orchestrator.stopSessionBestEffort` gives `StopSession` this many milliseconds on a detached context, defaulting to 10 000 ms.                                    |
+| `agent.stall_timeout_ms` | WORKFLOW.md | Enforced by the orchestrator. `orchestrator.reconcileStalled` compares `LastAgentTimestamp` against the threshold and cancels the worker's context, which terminates the turn.              |
 
 ### Context cancellation
 
-The adapter must respect `context.Context` cancellation:
-
-- `RunTurn` receives a context. If the context is cancelled (e.g., due to tracker
-  reconciliation finding the issue is terminal), the adapter must kill the subprocess
-  promptly.
-- Use `cmd.Process.Signal(syscall.SIGTERM)` followed by a grace period, then
-  `cmd.Process.Kill()`.
+`RunTurn` receives a context; the skeleton passes it to `exec.CommandContext` and installs a
+`cmd.Cancel` that sends `SIGTERM` to the process group, with `cmd.WaitDelay` set to the same
+5-second grace period before the force kill. When the context is cancelled (for example because
+tracker reconciliation found the issue terminal, or the stall detector fired), the turn returns
+`turn_cancelled` with `domain.ErrTurnCancelled` and whatever usage accumulated before the kill.
 
 ---
 
-## Permission and Approval Policy
+## Permission and approval policy
 
 Per [architecture Section 10.4](architecture/10-agent-adapter-contract.md#104-approval-tools-and-user-input-policy), Sortie adopts a high-trust posture:
 
-| Policy                    | Implementation                                                                                                                                                                                                                                                     |
-| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Auto-approve commands     | `--dangerously-skip-permissions` bypasses all prompts.                                                                                                                                                                                                             |
-| Auto-approve file changes | Same flag covers file edits.                                                                                                                                                                                                                                       |
-| User input required       | The `-p` flag runs non-interactively. If Claude Code somehow requests user input (which should not happen in headless mode with `--dangerously-skip-permissions`), the process would stall. The adapter's turn timeout catches this. Map to `turn_input_required`. |
-| Unsupported tool calls    | Claude Code handles tool routing internally. Unknown MCP tools return failure and the session continues.                                                                                                                                                           |
+| Policy                    | Implementation                                                                                                                                                     |
+| ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Auto-approve commands     | `--dangerously-skip-permissions` bypasses all prompts.                                                                                                             |
+| Auto-approve file changes | Same flag covers file edits.                                                                                                                                       |
+| User input required       | The `-p` flag runs non-interactively, so no prompt is expected. A process that blocks anyway produces no output and is cut off by orchestrator-side cancellation.   |
+| Unsupported tool calls    | Claude Code handles tool routing internally. Unknown MCP tools return failure and the session continues.                                                            |
+
+`--dangerously-skip-permissions` allows arbitrary command execution. Per Anthropic's guidance it
+should only be used in sandboxed environments without internet access, inside an externally
+enforced sandbox (for example a locked-down container or VM with restricted filesystem and network
+access). Sortie's workspace isolation and hook system operate inside that sandbox as additional
+defense-in-depth, but do not replace external isolation. An operator who wants selective approval
+instead of blanket bypass sets `claude-code.permission_mode`, which replaces the flag, or
+`claude-code.allowed_tools`, which pre-approves a specific set of tools such as
+`"Edit Read Bash(git *) Bash(make *) Grep Glob"`.
 
 ### Permission modes
 
@@ -590,66 +571,38 @@ Per [architecture Section 10.4](architecture/10-agent-adapter-contract.md#104-ap
 | `bypassPermissions` | All tools run without asking. Cannot run as root on Unix.                    |
 | `auto`              | Automatic permission handling.                                               |
 
-### Programmatic permission handling: `--permission-prompt-tool`
-
-Instead of blanket `--dangerously-skip-permissions`, the adapter could use
-`--permission-prompt-tool <mcp_tool_name>` to delegate permission decisions to an MCP tool.
-This enables fine-grained, programmatic approval without human interaction. The MCP tool
-receives the permission request and returns allow/deny.
-
-This is relevant for deployments that want selective approval rather than blanket bypass.
-
-### Alternative: `--allowedTools` for restricted operation
-
-Instead of `--dangerously-skip-permissions`, the adapter could use `--allowedTools` to
-pre-approve a specific set of tools:
-
-```bash
-claude -p "..." --allowedTools "Edit" "Read" "Bash(git *)" "Bash(make *)" "Grep" "Glob"
-```
-
-This provides finer-grained control but requires curating the tool list per use case.
-The adapter could expose this via the `claude-code.allowed_tools` pass-through config.
-
 ---
 
-## Error Detection and Mapping
+## Error detection and mapping
 
-### Process exit codes
+### Process exit and turn disposition
 
-| Exit Code                | Meaning                                              | Adapter mapping                                   |
-| ------------------------ | ---------------------------------------------------- | ------------------------------------------------- |
-| 0                        | Success (check `subtype`/`is_error` in result event). If no `result` event was received and cumulative output tokens are zero, treated as `turn_failed` (no-output safety heuristic). | `turn_completed` or `turn_failed` based on result / no-output heuristic |
-| 1                        | General error                                        | `turn_failed`                                     |
-| Non-zero (other)         | Unexpected failure                                   | `turn_failed`                                     |
-| 127                      | `claude` binary not found                            | `agent_not_found`                                 |
-| Signal (SIGTERM/SIGKILL) | Killed by adapter or OS                              | `turn_cancelled`                                  |
+`agentcore.DecideTurn` is the shared decision table; the Claude adapter feeds it evidence and does
+not decide the disposition itself. The outcome column gives the emitted event and, where one is
+returned, the `domain.AgentError` kind.
 
-### Result event `subtype` and `is_error` fields
+| Condition                                                          | Decided by                                        | Outcome                                    |
+| ------------------------------------------------------------------ | --------------------------------------------------- | -------------------------------------------- |
+| Context cancelled at any point                                     | `agentcore.ForkPerTurnSession.RunTurn`            | `turn_cancelled` / `turn_cancelled`        |
+| Stdout line exceeds 10 MB, or the pipe read fails                  | `agentcore.ForkPerTurnSession.RunTurn`            | `turn_failed` / `port_exit`                |
+| Exit code 127                                                      | `agentcore.ForkPerTurnSession.RunTurn`            | `turn_failed` / `agent_not_found`          |
+| Killed by signal                                                   | `agentcore.ForkPerTurnSession.RunTurn`            | `turn_cancelled` / `turn_cancelled`        |
+| Result event with `subtype: "success"` and `is_error: false`       | `OnFinalize` reports `TerminalSuccess`            | `turn_completed`                            |
+| Result event with any other subtype, or `is_error: true`           | `OnFinalize` reports `TerminalFailure`            | `turn_failed` / `turn_failed`              |
+| No result event, non-zero exit                                     | `agentcore.DecideTurn` row `RowNonZeroExit`       | `turn_failed` / `port_exit`                |
+| No result event, exit 0, no assistant output tokens this turn      | `agentcore.DecideTurn` row `RowZeroWork`          | `turn_failed` / `turn_failed`              |
+| No result event, exit 0, assistant output tokens present           | `agentcore.DecideTurn` row `RowWorkPresent`       | `turn_completed`                            |
 
-Even with exit code 0, the result event may have `is_error: true` or a non-success `subtype`.
-The adapter must check both the exit code and the result event fields.
+The success message is the result event's `result` text truncated to 500 runes; the failure
+message is the result event's `subtype`. Work evidence is this turn's own summed assistant output
+tokens, not the run-cumulative figure, which is non-zero on any second turn.
 
-| `subtype`                             | `is_error` | Adapter mapping  | Description                                   |
-| ------------------------------------- | ---------- | ---------------- | --------------------------------------------- |
-| `success`                             | `false`    | `turn_completed` | Normal completion.                            |
-| `error_max_turns`                     | `true`     | `turn_failed`    | `--max-turns` limit reached.                  |
-| `error_max_budget_usd`                | `true`     | `turn_failed`    | `--max-budget-usd` limit reached.             |
-| `error_during_execution`              | `true`     | `turn_failed`    | Runtime error (API failure, tool crash, etc). |
-| `error_max_structured_output_retries` | `true`     | `turn_failed`    | `--json-schema` validation exhausted retries. |
+Workspace and binary resolution fail earlier, in `StartSession`: an unusable workspace path yields
+`invalid_workspace_cwd` and an unresolvable command yields `agent_not_found`
+(`agentcore.ResolveWorkspace`, `agentcore.ResolveBinary`).
 
-### Error category mapping (per [architecture Section 10.5](architecture/10-agent-adapter-contract.md#105-timeouts-and-error-mapping))
-
-| Condition                                 | Error category          |
-| ----------------------------------------- | ----------------------- |
-| `claude` binary not found on `$PATH`      | `agent_not_found`       |
-| Workspace path invalid or not a directory | `invalid_workspace_cwd` |
-| No output within `read_timeout_ms`        | `response_timeout`      |
-| Turn exceeds `turn_timeout_ms`            | `turn_timeout`          |
-| Process exits non-zero                    | `port_exit`             |
-| Result event `is_error: true`             | `turn_failed`           |
-| Process killed by signal                  | `turn_cancelled`        |
-| Agent requests user input                 | `turn_input_required`   |
+The Claude path never produces `response_timeout`, `turn_timeout`, or `turn_input_required`: it
+enforces no adapter-side deadline, and `-p` admits no interactive prompt.
 
 ### API retry errors
 
@@ -666,12 +619,12 @@ handles internally:
 | `max_output_tokens`     | Output truncated. May retry with continuation.           |
 | `unknown`               | Unclassified error.                                      |
 
-The adapter should log these for debugging but does not need to act on them — Claude Code
-handles retries internally. If retries are exhausted, the process exits with code 1.
+The adapter emits these as notifications and takes no other action, because Claude Code handles
+the retries. If retries are exhausted, the process exits with code 1.
 
 ---
 
-## Session Storage
+## Session storage
 
 Claude Code persists sessions to disk at:
 
@@ -685,32 +638,28 @@ replaced by `-`.
 This is relevant for:
 
 - **Continuation:** `--resume <session_id>` reads from this path.
-- **Cleanup:** Sortie may want to clean up session files when removing workspaces.
-- **Disk usage:** Long sessions can accumulate significant JSONL files.
+- **Disk usage:** long sessions accumulate large JSONL files, and they live under `~/.claude`,
+  outside the workspace, so removing a workspace does not remove them.
 - **Ephemeral mode:** `--no-session-persistence` skips writing entirely.
 
 ---
 
-## Hooks Integration
+## Hooks integration
 
 Claude Code supports lifecycle hooks (`.claude/hooks.json`) that can intercept tool calls,
-validate actions, and inject context. Sortie does **not** manage Claude Code's hook system
-directly — these are workspace-level configurations that the coding agent or `after_create`
-hook can set up.
+validate actions, and inject context. Sortie does not manage Claude Code's hook system: these are
+workspace-level configurations that the coding agent or the `after_create` hook can set up. The
+adapter neither parses nor manages them, but their behavior shows up in turn timing and outcomes:
 
-However, the adapter should be aware that:
-
-- Hooks can block tool calls (exit code 2 from hook → tool is denied).
-- Hooks can add latency to tool execution (timeout per hook: up to 60s default).
+- Hooks can block tool calls (exit code 2 from hook, tool is denied).
+- Hooks can add latency to tool execution (timeout per hook: up to 60s default), which counts
+  against the stall threshold.
 - The `Stop` hook can prevent session completion if it returns exit code 2 (the session
   continues rather than stopping).
 
-The adapter does not need to parse or manage hooks, but hook-induced delays should be
-accounted for in timeout calculations.
-
 ---
 
-## MCP Server Configuration
+## MCP server configuration
 
 The `--mcp-config <path>` flag points Claude Code to a JSON file that declares MCP servers
 for the session. The file uses the standard MCP configuration format with a top-level
@@ -738,30 +687,39 @@ command, arguments, and optional environment variables.
 | `command` | string   | Yes      | Executable to launch for stdio servers.                            |
 | `args`    | string[] | No       | Arguments passed to the command.                                   |
 | `env`     | object   | No       | Environment variables set for the server process. Keys are         |
-|           |          |          | variable names; values are strings. Used for non-secret config.    |
+|           |          |          | variable names; values are strings.                                |
 
 Claude Code reads the file at agent startup and spawns each declared server as a child
 process with the specified command and args. The server inherits the agent's environment,
 merged with any variables in the `env` field.
 
-### `--strict-mcp-config`
-
-When passed alongside `--mcp-config`, Claude Code ignores MCP server declarations from
-workspace-level `.mcp.json` files and only uses servers from the specified config file.
-This prevents workspace-controlled MCP servers from interfering with Sortie-managed tools.
+When `--strict-mcp-config` is passed alongside `--mcp-config`, Claude Code ignores MCP server
+declarations from workspace-level `.mcp.json` files and only uses servers from the specified
+config file.
 
 ### Sortie adapter usage
 
-The worker writes a temporary `.sortie/mcp.json` to the workspace directory containing the
-`sortie mcp-server` stdio declaration. If the operator also specifies `claude-code.mcp_config`
-in WORKFLOW.md, the worker merges both server sets into a single file — Claude Code accepts
-only one `--mcp-config` path. A name collision on the `sortie-tools` key fails the attempt.
-Credential values are never written to this file — they reach the MCP server through
-inherited environment variables. See ADR-0009 for the full merge algorithm.
+`orchestrator.GenerateMCPConfig` writes `<workspace>/.sortie/mcp.json` before the session starts,
+declaring the `sortie-tools` stdio server that runs the Sortie binary as `mcp-server --workflow
+<path>`. The file is written to a temporary path and renamed into place, and `.sortie/.gitignore`
+containing `*` is rewritten on every call so the directory stays out of git. If the operator also
+specifies `claude-code.mcp_config` in WORKFLOW.md, the worker reads that file and merges the
+`sortie-tools` entry into its `mcpServers` object, because Claude Code accepts only one
+`--mcp-config` path; a name collision on the `sortie-tools` key fails the attempt. See ADR-0009
+for the full merge algorithm.
+
+The `env` block of the generated entry carries the per-session variables (`SORTIE_ISSUE_ID`,
+`SORTIE_ISSUE_IDENTIFIER`, `SORTIE_WORKSPACE`, `SORTIE_DB_PATH`, `SORTIE_SESSION_ID`,
+`SORTIE_SESSION_AGENT_KIND`, and `SORTIE_ATTEMPT` on retries) layered over every `SORTIE_`-prefixed
+variable in the orchestrator's own environment (`orchestrator.CollectSortieEnv`), which includes
+tracker credentials. Per-session values win on collision. The file is written with mode 0600.
+
+`buildArgs` passes `--mcp-config` with the generated path whenever the worker produced one, and
+falls back to the operator's `claude-code.mcp_config` path only when it did not.
 
 ---
 
-## OpenTelemetry Integration
+## OpenTelemetry integration
 
 Claude Code supports OpenTelemetry for monitoring:
 
@@ -783,91 +741,71 @@ Available metrics and events:
 | `claude_code.api_request`   | Event   | Per-request: `input_tokens`, `output_tokens`, `cache_read_tokens`, `cost_usd`, `duration_ms` |
 | `claude_code.tool_result`   | Event   | Per-tool: `tool_name`, `success`, `duration_ms`                                              |
 
-Sortie may optionally enable telemetry in the subprocess environment for external monitoring,
-but the adapter's primary event source is the `stream-json` stdout output, not OTel.
+These variables reach the CLI when they are set in the Sortie process environment, since the
+subprocess inherits it. The adapter sets none of them itself, and its event source is the
+`stream-json` stdout output, not OTel.
 
 ---
 
-## Adapter-Specific Pass-Through Config
+## Adapter pass-through config
 
 Per [architecture Section 5.3.5](architecture/05-workflow-specification.md#535-agent-object), the adapter reads pass-through config from the `claude-code`
-sub-object in WORKFLOW.md:
+sub-object in WORKFLOW.md. `parsePassthroughConfig` reads these keys; a missing or wrong-typed key
+falls back to the zero value, except `session_persistence`, which defaults to `true`.
 
 | Config key                        | Type    | Description                                                                                                                                                 |
 | --------------------------------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `claude-code.permission_mode`     | string  | Permission mode: `default`, `acceptEdits`, `dontAsk`, `bypassPermissions`, `plan`, `auto`. Overrides the default `--dangerously-skip-permissions` behavior. |
+| `claude-code.permission_mode`     | string  | Permission mode: `default`, `acceptEdits`, `dontAsk`, `bypassPermissions`, `plan`, `auto`. Replaces the default `--dangerously-skip-permissions`.           |
 | `claude-code.model`               | string  | Model override (e.g., `claude-sonnet-4-6`). Maps to `--model`.                                                                                              |
 | `claude-code.fallback_model`      | string  | Fallback model for rate-limit resilience. Maps to `--fallback-model`.                                                                                       |
-| `claude-code.max_turns`           | integer | Claude Code internal max turns per invocation. Maps to `--max-turns`.                                                                                       |
-| `claude-code.max_budget_usd`      | number  | Cost cap per invocation. Maps to `--max-budget-usd`.                                                                                                        |
+| `claude-code.max_turns`           | integer | Claude Code internal max turns per invocation. Maps to `--max-turns` when greater than zero.                                                                |
+| `claude-code.max_budget_usd`      | number  | Cost cap per invocation. Maps to `--max-budget-usd` when greater than zero.                                                                                 |
 | `claude-code.effort`              | string  | Reasoning effort: `low`, `medium`, `high`, `max`. Maps to `--effort`.                                                                                       |
 | `claude-code.allowed_tools`       | string  | Space-separated tool list. Maps to `--allowedTools`.                                                                                                        |
 | `claude-code.disallowed_tools`    | string  | Space-separated denied tool list. Maps to `--disallowedTools`.                                                                                              |
 | `claude-code.system_prompt`       | string  | Additional system prompt text. Maps to `--append-system-prompt`.                                                                                            |
-| `claude-code.mcp_config`          | string  | Path to MCP config JSON. Maps to `--mcp-config`.                                                                                                            |
-| `claude-code.session_persistence` | boolean | If `false`, passes `--no-session-persistence`. Default: `true`.                                                                                             |
+| `claude-code.mcp_config`          | string  | Path to an operator MCP config JSON. Merged by the worker; see MCP server configuration.                                                                    |
+| `claude-code.session_persistence` | boolean | If `false`, passes `--no-session-persistence`. Default: `true`.                                                                                              |
 
 ---
 
-## Example Adapter Invocation
+## Example invocation
 
-### Turn 1 (new session)
+`buildArgs` emits flags in a fixed order: `-p`, output format, verbose, the permission flag, the
+session flag, then model, fallback model, max turns, max budget, effort, allowed tools,
+disallowed tools, system prompt, MCP config, and session persistence. A continuation turn of a
+workflow that sets a model, a fallback model, and a cost cap produces this argv (one entry per
+line, no shell involved):
 
-```bash
-prompt='You are working on issue PROJ-123. Fix the authentication bug described below.
-
-## Issue: Authentication fails on expired tokens
-
-The login endpoint returns 500 when the JWT token is expired instead of 401...
-
-## Instructions
-1. Read the relevant code files
-2. Implement the fix
-3. Run tests to verify'
-
-sh -c 'claude -p "$1" \
-  --output-format stream-json \
-  --verbose \
-  --dangerously-skip-permissions' -- "$prompt"
 ```
-
-Working directory: `/var/sortie/workspaces/PROJ-123`
-
-### Turn 2 (continuation)
-
-```bash
-prompt='Continue working on the issue. The previous turn made progress but tests are still failing. Focus on fixing the remaining test failures.'
-session_id='abc123-session-id'
-
-sh -c 'claude -p "$1" \
-  --output-format stream-json \
-  --verbose \
-  --dangerously-skip-permissions \
-  --resume "$2"' -- "$prompt" "$session_id"
-```
-
-Working directory: `/var/sortie/workspaces/PROJ-123`
-
-### With cost cap and model override
-
-```bash
-sh -c 'claude -p "$1" \
-  --output-format stream-json \
-  --verbose \
-  --dangerously-skip-permissions \
-  --model claude-sonnet-4-6 \
-  --fallback-model claude-haiku-4-5-20251001 \
-  --max-budget-usd 5.00 \
-  --max-turns 50' -- "$prompt"
+claude
+-p
+Continue working on the issue. The previous turn made progress but tests are still failing.
+--output-format
+stream-json
+--verbose
+--dangerously-skip-permissions
+--resume
+3f2a1b8c-5d6e-4f70-9a1b-2c3d4e5f6071
+--model
+claude-sonnet-4-6
+--fallback-model
+claude-haiku-4-5-20251001
+--max-budget-usd
+5
+--mcp-config
+/var/sortie/workspaces/PROJ-123/.sortie/mcp.json
 ```
 
 ---
 
-## SDK Alternative (Reference Only)
+## SDK alternative (reference only)
 
 Anthropic provides TypeScript and Python SDKs for programmatic Claude Code usage. Both
 internally spawn the Claude Code CLI as a subprocess with `--input-format stream-json
---output-format stream-json --include-partial-messages` and communicate over stdin/stdout.
+--output-format stream-json --include-partial-messages` and communicate over stdin/stdout. The SDK
+documentation is useful as a reference for expected message types and session behavior, because
+the SDK and CLI share the same underlying protocol.
 
 ### TypeScript SDK (`@anthropic-ai/claude-agent-sdk`)
 
@@ -928,35 +866,38 @@ async with ClaudeSDKClient(options=options) as client:
     await client.query("Now refactor it")  # same session
 ```
 
-Sortie does **not** use the SDKs because the adapter is implemented in Go and the
-architecture mandates subprocess-based integration ([Section 10.7](architecture/10-agent-adapter-contract.md#107-local-subprocess-launch-contract)). The CLI provides a
-clean, language-agnostic integration surface. The SDK documentation is useful as a
-reference for expected message types and session behavior, as the SDK and CLI share the
-same underlying protocol.
+---
+
+## Open questions
+
+- **Does the CLI accept `--max-turns`?** The flag is documented in the GitHub Actions
+  `claude_args` reference and does not appear in `claude --help` on v2.1.76, which leaves open
+  whether it is an SDK-and-settings surface rather than a CLI flag. `buildArgs` passes it whenever
+  `claude-code.max_turns` is configured, so an unsupported flag would break every turn of such a
+  workflow. Probe: run `claude -p 'reply with ok' --max-turns 1 --output-format stream-json
+  --verbose` against the pinned binary and read the parser exit code and the first stdout line; a
+  rejected flag fails before any JSON is emitted.
+- **What `type` values do task messages carry on the wire?** The message shapes are documented by
+  their SDK type names (`TaskStartedMessage`, `TaskProgressMessage`, `TaskNotificationMessage`),
+  not by the `type` string that `ParseLine` switches on, so they land in the default arm as
+  `other_message`. Probe: run a headless turn whose prompt forces a subagent or a
+  background bash task and record the `type` field of each resulting stdout line.
 
 ---
 
-## Summary: Adapter Implementation Checklist
+## Sources
 
-1. **StartSession:** Store workspace path and config. Optionally pre-assign session ID via
-   `--session-id`. Do not launch subprocess yet.
-2. **RunTurn (turn 1):** Launch `claude -p <prompt> --output-format stream-json --verbose
---dangerously-skip-permissions [--session-id <uuid>]` with cwd = workspace. Parse JSONL
-   stdout. Capture `session_id` from init event.
-3. **RunTurn (turn 2+):** Same as turn 1 but append `--resume <session_id>`.
-4. **Event parsing:** Map `stream-json` event types to normalized `AgentEvent` types. Handle
-   all message types: `system`, `assistant`, `result`, `stream_event`.
-5. **Result handling:** Check both `subtype` and `is_error` in result messages. Map subtypes
-   to appropriate exit reasons.
-6. **Token tracking:** Extract `usage` object from result events. Normalize to
-   `{input_tokens, output_tokens, total_tokens}`.
-7. **Cost tracking:** Extract `total_cost_usd` and `duration_ms` from result events.
-8. **Timeout:** Enforce `turn_timeout_ms` via context deadline + SIGTERM/SIGKILL.
-9. **StopSession:** Kill subprocess if running (SIGTERM → grace → SIGKILL).
-10. **Error mapping:** Check exit code, result `subtype`, and `is_error` field. Map to
-    architecture error categories.
-11. **Session continuity:** Use `--resume <session_id>` for multi-turn conversations.
-12. **Permissions:** Default to `--dangerously-skip-permissions` for headless operation.
-13. **Cost safety:** Optionally set `--max-budget-usd` as a per-invocation cost cap.
-14. **API retries:** Log `api_retry` system events for visibility; Claude Code handles
-    retries internally.
+Local probe:
+
+- `claude --help` on CLI v2.1.76 (flag surface and version pin).
+
+Anthropic first-party documentation, read March 2026:
+
+- Claude Code CLI reference: flags, headless (`-p`) mode, permission modes, session storage.
+- Claude Code `stream-json` output reference: message union, system subtypes, content blocks,
+  result fields and subtypes, task messages.
+- Claude Code monitoring reference: OpenTelemetry environment variables, metrics, and events.
+- Claude Code hooks reference: hook exit codes and per-hook timeout.
+- Claude Code GitHub Actions reference: `claude_args`, source of the `--max-turns` claim.
+- `@anthropic-ai/claude-agent-sdk` (TypeScript) and `claude-agent-sdk` (Python) SDK references.
+- Model Context Protocol configuration format (`mcpServers` object).

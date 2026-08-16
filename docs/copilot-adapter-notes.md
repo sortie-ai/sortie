@@ -1,10 +1,16 @@
-# GitHub Copilot CLI: Adapter Research Notes
+# GitHub Copilot CLI: adapter research notes
 
-> GitHub Copilot CLI v1.0.x (npm `@github/copilot`, binary `copilot`), researched March 2026.
-> Updated April 2026 for v1.0.21 `--additional-mcp-config` path syntax correction.
-> Reference for implementing the Copilot CLI `AgentAdapter`.
+> GitHub Copilot CLI v1.0.13 (npm `@github/copilot`, binary `copilot`), researched March 2026.
+> Instruments: the official documentation listed below, headless runs of the installed binary
+> with `-p --output-format json` and stdout captured, and reads of the on-disk session-state
+> journal. Reference for the Copilot CLI `AgentAdapter` in `internal/agent/copilot`.
 >
-> **Primary sources:** [CLI command reference][cli-ref], [CLI programmatic reference][cli-prog],
+> Coverage: the flag surface, the JSONL event schema, session-id capture, autopilot behavior,
+> and session-state token accounting are anchored to v1.0.13. The `--additional-mcp-config`
+> file syntax and the exit-0 outcome of a config parse failure are anchored to v1.0.21 (April
+> 2026). No other surface has been re-observed on v1.0.21.
+>
+> Primary sources: [CLI command reference][cli-ref], [CLI programmatic reference][cli-prog],
 > [hooks configuration reference][hooks-ref], [about hooks][hooks-about],
 > [hooks tutorial][hooks-tut].
 
@@ -23,18 +29,17 @@ Three integration surfaces exist, in order of relevance to Sortie:
    `--output-format json` for JSONL output. This is the primary integration surface per
    [architecture Section 10.7](architecture/10-agent-adapter-contract.md#107-local-subprocess-launch-contract) (Local Subprocess Launch Contract).
 2. **Agent Client Protocol (ACP)** via `copilot --acp` ([CLI command reference][cli-ref]),
-   which starts an ACP server. This is a structured alternative but details are sparse in
-   official documentation and the protocol surface is subject to breaking changes.
+   which starts an ACP server. The official documentation carries no protocol details for it.
 3. **TypeScript SDK** (`@github/copilot-sdk`), which internally communicates with the CLI process
    via JSON-RPC. Not usable from a Go adapter directly, but serves as reference for session
    behavior and event types.
 
 Sortie's Go adapter uses the CLI subprocess approach (surface 1). The ACP and SDK surfaces are
-documented as reference for expected behavior and as potential future integration paths.
+documented here only as reference for expected behavior.
 
 ---
 
-## Installation and Prerequisites
+## Installation and prerequisites
 
 Copilot CLI is distributed through multiple channels:
 
@@ -72,15 +77,14 @@ Copilot CLI authenticates against GitHub's Copilot API via a GitHub token.
 
 ### Token resolution order
 
-The CLI resolves authentication tokens in a precedence order with **fallback on failure**. The
+The CLI resolves authentication tokens in a precedence order with fallback on failure. The
 official documentation ([authenticate-copilot-cli][auth-ref]) states the order as
 `COPILOT_GITHUB_TOKEN`, `GH_TOKEN`, `GITHUB_TOKEN` (in order of precedence).
 
-**Experimental observation (v1.0.13):** the CLI implements try-and-fallback, not exclusive
-selection. Setting `COPILOT_GITHUB_TOKEN` to an invalid token while `GH_TOKEN` or
-`GITHUB_TOKEN` hold valid tokens does not cause failure — the CLI falls back to the next
-source. This means the precedence order matters only when **all** sources hold valid but
-different tokens.
+The CLI implements try-and-fallback, not exclusive selection. Setting `COPILOT_GITHUB_TOKEN` to
+an invalid token while `GH_TOKEN` or `GITHUB_TOKEN` hold valid tokens does not cause failure:
+the CLI falls back to the next source. So the precedence order matters only when all sources
+hold valid but different tokens.
 
 | Priority | Method                       | Environment Variable / Mechanism         | Notes                                                              |
 | -------- | ---------------------------- | ---------------------------------------- | ------------------------------------------------------------------ |
@@ -90,8 +94,11 @@ different tokens.
 | 4        | OAuth keychain               | System keychain / credential store       | From interactive `/login` device flow.                              |
 | 5        | `gh` CLI fallback            | `gh auth token`                          | Uses the `gh` CLI's stored credential if available.                |
 
-> **Note:** For Sortie's adapter, the precedence order is immaterial: the adapter checks
-> that **at least one** token source is present, not which specific one the CLI will select.
+The precedence order is immaterial to the adapter: `checkAuth` in
+`internal/agent/copilot/copilot.go` checks that at least one source is present, not which one
+the CLI will select. It accepts a non-empty `COPILOT_GITHUB_TOKEN`, `GH_TOKEN`, or
+`GITHUB_TOKEN`, and otherwise falls back to a successful `gh auth status` (logged at WARN).
+With no source at all it returns `agent_not_found` before any turn runs.
 
 [auth-ref]: https://docs.github.com/en/copilot/how-tos/copilot-cli/set-up-copilot-cli/authenticate-copilot-cli
 
@@ -102,7 +109,7 @@ different tokens.
 | OAuth token (device flow)     | `gho_`          | Created via interactive `/login`.                   |
 | Fine-grained PAT              | `github_pat_`   | Requires the "Copilot Requests" permission scope.   |
 | GitHub App user-to-server     | `ghu_`          | For GitHub App integrations.                         |
-| Classic PAT                   | `ghp_`          | **Observed:** failed Copilot CLI authentication in v1.0.13 testing. No official docs confirm this; do not treat as a permanent constraint. |
+| Classic PAT                   | `ghp_`          | Acceptance is unresolved. See "Open questions".      |
 
 ### Config mapping
 
@@ -111,69 +118,72 @@ different tokens.
 | `agent.kind`               | `copilot-cli`                                |
 | `agent.command`            | `copilot` (or full path to the binary)       |
 
-The adapter does **not** manage GitHub tokens directly. The token must be present in the
-environment of the Sortie process (or passed through via hook env). The adapter inherits the
-parent process environment when spawning the subprocess.
+The adapter does not manage GitHub tokens directly. The token must be present in the
+environment of the Sortie process (or passed through via hook env). The subprocess inherits the
+parent process environment.
 
-**Organization and enterprise restrictions:** If the user's Copilot access is provided via an
+Organization and enterprise restrictions: if the user's Copilot access is provided via an
 organization or enterprise, the administrator must enable the Copilot CLI policy in organization
-settings. The CLI will fail to authenticate if this policy is disabled.
+settings. The CLI fails to authenticate when this policy is disabled.
 
 ---
 
-## CLI Flags Reference
+## CLI flags reference
 
-The adapter constructs a `copilot` invocation using these flags. Flags marked **(required)** are
-always set by the adapter; others are conditional.
+`buildArgs` in `internal/agent/copilot/command.go` constructs the argument vector from these
+flags. Flags marked (always) appear on every invocation; the rest are conditional.
 
 ### Core flags
 
 | Flag                               | Description                                                                                        | Adapter usage                                                    |
 | ---------------------------------- | -------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------- |
-| `-p <prompt>` / `--prompt`         | Non-interactive (headless) mode. Passes the prompt and exits when done.                            | **(required)** Every turn invocation uses this.                  |
-| `-s` / `--silent`                  | Suppress stats and decoration, outputting only the agent's response ([CLI programmatic reference][cli-prog]).  | **(required)** Prevents non-JSON text from polluting stdout.     |
-| `--output-format json`             | JSONL on stdout. Each line is a JSON object.                                                       | **(required)** For structured event parsing.                     |
-| `--model <model>`                  | Override the AI model (e.g., `claude-sonnet-4.5`, `gpt-5`).                                       | Optional. Adapter passes through if configured.                  |
-| `--agent <name>`                   | Use a specific custom agent for the session.                                                       | Optional. Agent routing.                                         |
-| `--no-ask-user`                    | Disable the `ask_user` tool. Agent works autonomously without requesting user input ([`copilot --help`][cli-help-ref]). | **(required)** Prevents stalls waiting for user input.           |
-| `--additional-mcp-config <json>`   | Add MCP server configuration for the session (inline JSON or `@<path>` to JSON file).              | Optional. For tool extensions (e.g., `tracker_api`).             |
-| `--disable-builtin-mcps`           | Disable all built-in MCP servers.                                                                  | Optional. For controlled environments.                           |
-| `--disable-mcp-server <name>`      | Disable a specific built-in MCP server.                                                            | Optional.                                                        |
-| `--no-custom-instructions`         | Disable loading custom instructions from workspace files.                                          | Optional. For deterministic behavior.                            |
-| `--secret-env-vars <vars>`         | Redact the values of specified environment variables in output.                                     | Optional. For security when env contains secrets.                |
-| `--share <path>`                   | Export session transcript to markdown file on completion (prompt mode only).                        | Optional. For audit trail.                                       |
-| `--experimental`                   | Enable experimental features.                                                                      | Optional. See verification items.                                |
+| `-p <prompt>` / `--prompt`         | Non-interactive (headless) mode. Passes the prompt and exits when done.                            | (always) Carries the rendered turn prompt.                       |
+| `-s` / `--silent`                  | Suppress stats and decoration, outputting only the agent's response ([CLI programmatic reference][cli-prog]).  | (always) Prevents non-JSON text from polluting stdout.           |
+| `--output-format json`             | JSONL on stdout. Each line is a JSON object.                                                       | (always) For structured event parsing.                           |
+| `--model <model>`                  | Override the AI model (e.g., `claude-sonnet-4.5`, `gpt-5`).                                       | From `copilot-cli.model`.                                        |
+| `--agent <name>`                   | Use a specific custom agent for the session.                                                       | From `copilot-cli.agent`.                                        |
+| `--no-ask-user`                    | Disable the `ask_user` tool. Agent works autonomously without requesting user input ([`copilot --help`][cli-help-ref]). | (always) Prevents stalls waiting for user input.                 |
+| `--additional-mcp-config <json>`   | Add MCP server configuration for the session (inline JSON or `@<path>` to JSON file).              | Tool extensions. See "MCP server configuration".                 |
+| `--disable-builtin-mcps`           | Disable all built-in MCP servers.                                                                  | From `copilot-cli.disable_builtin_mcps`.                         |
+| `--disable-mcp-server <name>`      | Disable a specific built-in MCP server.                                                            | Not passed by the adapter.                                       |
+| `--no-custom-instructions`         | Disable loading custom instructions from workspace files.                                          | From `copilot-cli.no_custom_instructions`.                       |
+| `--secret-env-vars <vars>`         | Redact the values of specified environment variables in output.                                     | Not passed by the adapter.                                       |
+| `--share <path>`                   | Export session transcript to markdown file on completion (prompt mode only).                        | Not passed by the adapter.                                       |
+| `--experimental`                   | Enable experimental features.                                                                      | From `copilot-cli.experimental`. Feature set unenumerated; see "Open questions". |
 
 ### Session management flags
 
 | Flag                           | Description                                                         | Adapter usage                                                          |
 | ------------------------------ | ------------------------------------------------------------------- | ---------------------------------------------------------------------- |
-| `--resume <session_id>`        | Resume a specific conversation by session ID.                       | Used for continuation turns (turn 2+).                                 |
-| `--continue`                   | Resume the most recent conversation in the working directory.       | Alternative to `--resume` for continuation turns.                      |
+| `--resume <session_id>`        | Resume a specific conversation by session ID.                       | Continuation turns with a known session ID.                            |
+| `--continue`                   | Resume the most recent conversation in the working directory.       | Continuation turns after a turn produced no session ID.                |
+
+Both cases are described in "Session continuation".
 
 ### Permission flags
 
 | Flag                       | Description                                                                                                    | Adapter usage                                                                                                                           |
 | -------------------------- | -------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
-| `--allow-all` / `--yolo`   | Grant all permissions: tools, paths, and URLs. Agent operates without any approval prompts.                    | **(required for headless)** Without this, the process hangs waiting for interactive approval.                                           |
-| `--allow-all-tools`        | Allow all tools without confirmation, but still require path/URL approval.                                      | Alternative to `--allow-all` for partial permission.                                                                                    |
-| `--allow-all-paths`        | Disable path verification for file operations.                                                                  | Optional. For environments where path restrictions are handled externally.                                                              |
-| `--allow-all-urls`         | Disable URL verification for fetch operations.                                                                  | Optional.                                                                                                                               |
-| `--allow-tool <tools>`     | Allow specific tools without confirmation. Supports glob patterns (e.g., `"bash(git *)"`, `"edit_file"`).      | Optional. For selective tool approval.                                                                                                  |
-| `--deny-tool <tools>`      | Deny specific tools. Takes precedence over `--allow-tool`. Supports glob patterns.                              | Optional. For tool restriction.                                                                                                         |
+| `--allow-all` / `--yolo`   | Grant all permissions: tools, paths, and URLs. Agent operates without any approval prompts.                    | Passed when no tool-scoping key is configured. Without it, and without scoped grants, the process hangs waiting for interactive approval. |
+| `--allow-all-tools`        | Allow all tools without confirmation, but still require path/URL approval.                                      | Not passed by the adapter.                                                                                                              |
+| `--allow-all-paths`        | Disable path verification for file operations.                                                                  | Not passed by the adapter.                                                                                                              |
+| `--allow-all-urls`         | Disable URL verification for fetch operations.                                                                  | Not passed by the adapter.                                                                                                              |
+| `--allow-tool <tools>`     | Allow specific tools without confirmation. Supports glob patterns (e.g., `"bash(git *)"`, `"edit_file"`).      | From `copilot-cli.allowed_tools`.                                                                                                       |
+| `--deny-tool <tools>`      | Deny specific tools. Takes precedence over `--allow-tool`. Supports glob patterns.                              | From `copilot-cli.denied_tools`.                                                                                                        |
 
-> **Security note:** `--allow-all` / `--yolo` allows arbitrary command execution and file
-> modification. Per [architecture Section 10.4](architecture/10-agent-adapter-contract.md#104-approval-tools-and-user-input-policy), Sortie adopts a high-trust posture where
-> approval requests must not leave a run stalled. The `--allow-all` flag is appropriate for
-> headless operation in sandboxed environments. Sortie's workspace isolation and hook system
-> operate as additional defense-in-depth.
+`--allow-all` and `--yolo` allow arbitrary command execution and file modification. Per
+[architecture Section 10.4](architecture/10-agent-adapter-contract.md#104-approval-tools-and-user-input-policy), Sortie adopts a high-trust posture where approval requests must not leave a
+run stalled, so `buildArgs` grants `--allow-all` whenever the workflow configures none of
+`allowed_tools`, `denied_tools`, `available_tools`, or `excluded_tools`. Configuring any of
+those switches the invocation to scoped grants instead, because `--allow-all` would override
+them. Workspace isolation and the hook system operate as additional defense in depth.
 
 ### Tool filter flags
 
 | Flag                          | Description                                                                         | Adapter usage                                     |
 | ----------------------------- | ----------------------------------------------------------------------------------- | ------------------------------------------------- |
-| `--available-tools <tools>`   | Restrict the set of tools available to the agent. Only listed tools are accessible. | Optional. For tool palette restriction.            |
-| `--excluded-tools <tools>`    | Remove specific tools from the available set.                                       | Optional. For selectively disabling tools.         |
+| `--available-tools <tools>`   | Restrict the set of tools available to the agent. Only listed tools are accessible. | From `copilot-cli.available_tools`.                |
+| `--excluded-tools <tools>`    | Remove specific tools from the available set.                                       | From `copilot-cli.excluded_tools`.                 |
 
 Tool names follow the CLI's tool vocabulary ([CLI command reference: tool availability][cli-ref]).
 Built-in tools include: `bash`, `view`, `edit_file` (shown as `edit` in some CLI docs,
@@ -184,38 +194,45 @@ backed by `apply_patch`), `create`, `apply_patch`, `glob`, `grep`, `web_fetch`, 
 
 | Flag                                | Description                                                                                               | Adapter usage                                                          |
 | ----------------------------------- | --------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
-| `--autopilot`                       | Enable autopilot mode. Agent continues working through steps autonomously until task completion.           | **(required for headless)** Without this, agent may stop after one step. |
-| `--max-autopilot-continues <count>` | Limit the number of autonomous continuation steps. Prevents runaway loops.                                | **(recommended)** Safety backstop for programmatic use.                |
+| `--autopilot`                       | Enable autopilot mode. Agent continues working through steps autonomously until task completion.           | (always) Without it the agent stops after one response.                |
+| `--max-autopilot-continues <count>` | Limit the number of autonomous continuation steps. Prevents runaway loops.                                | (always) From `copilot-cli.max_autopilot_continues`, default 50.       |
 
-> **Autopilot mode is distinct from `--allow-all`.** `--allow-all` grants permission for
-> tool execution. `--autopilot` controls whether the agent continues working through
-> multi-step tasks without waiting for user input between steps. Both are needed for
-> fully autonomous headless operation.
+Autopilot mode is distinct from `--allow-all`. `--allow-all` grants permission for tool
+execution. `--autopilot` controls whether the agent continues working through multi-step tasks
+without waiting for user input between steps. Both are needed for fully autonomous headless
+operation.
 
-### Config/settings flags
+### Config and settings flags
 
 | Flag                    | Description                                      | Adapter usage                                                  |
 | ----------------------- | ------------------------------------------------ | -------------------------------------------------------------- |
-| `--config-dir <path>`   | Set the configuration directory.                | Optional. For isolated config environments.                    |
-| `--log-dir <path>`      | Set the log output directory.                    | Optional. Log file names contain the session ID.               |
+| `--config-dir <path>`   | Set the configuration directory.                | Not passed by the adapter.                                     |
+| `--log-dir <path>`      | Set the log output directory. Log file names contain the session ID. | Not passed by the adapter.                 |
 
 ---
 
-## Subprocess Invocation
+## Subprocess invocation
 
-Per [architecture Section 10.7](architecture/10-agent-adapter-contract.md#107-local-subprocess-launch-contract), the adapter launches:
+Per [architecture Section 10.7](architecture/10-agent-adapter-contract.md#107-local-subprocess-launch-contract), each turn is one subprocess. `agentcore.ForkPerTurnSession.RunTurn`
+execs the resolved binary directly with the argument vector `buildArgs` returns, on every
+platform. No shell is involved, so a prompt carrying shell metacharacters from user-controlled
+issue content cannot be reinterpreted. In SSH mode (`LaunchTarget.RemoteCommand` non-empty) the
+same vector is quoted into an `ssh` invocation by `sshutil.BuildSSHArgs`.
 
 ```
-# POSIX (Linux / macOS)
-sh -c 'copilot -p "$1" --output-format json -s --allow-all --autopilot --no-ask-user --max-autopilot-continues "$2" ${3:+--resume "$3"}' -- "$prompt" "$max_continues" "$session_id"
+copilot -p <prompt> --output-format json -s --autopilot --no-ask-user \
+  --max-autopilot-continues <N> [--resume <session_id> | --continue] \
+  [--model <model>] [--agent <name>] \
+  [--allow-all | --allow-tool <tools> --deny-tool <tools> --available-tools <tools> --excluded-tools <tools>] \
+  [--additional-mcp-config <value>] [--disable-builtin-mcps] [--no-custom-instructions] [--experimental]
 ```
 
-On Windows, the adapter invokes the CLI directly without a shell wrapper. The subprocess receives
-`CREATE_NEW_PROCESS_GROUP` and is assigned to a Job Object for process tree management.
+The flags after `--max-autopilot-continues` appear in that order, each one conditional on the
+workflow configuration described in "Adapter-specific pass-through config".
 
-> **Shell safety:** The prompt must not be interpolated directly into the `sh -c` string. Pass
-> it as a positional parameter (`$1`) to avoid injection via shell metacharacters in
-> user-controlled issue content.
+`procutil.SetProcessGroup` puts the child in its own process group; on Windows it also sets
+`CREATE_NEW_PROCESS_GROUP` and `procutil.AssignProcess` attaches the child to a Job Object for
+process tree termination.
 
 ### Process settings
 
@@ -223,62 +240,43 @@ On Windows, the adapter invokes the CLI directly without a shell wrapper. The su
 | ----------------- | --------------------------------------------------- | ---------------------------------------------------------- |
 | Working directory | Workspace path (`StartSessionParams.WorkspacePath`) | Agent must operate in the issue workspace.                 |
 | Stdout            | Pipe (read by adapter)                              | JSONL output parsed line by line.                          |
-| Stderr            | Pipe (read by adapter, logged)                      | Diagnostic output, not structured.                         |
+| Stderr            | Pipe (drained by `procutil.NewStderrCollector`)     | Diagnostic output, not structured.                         |
 | Environment       | Inherited from Sortie process                       | GitHub token and other auth vars must be present.          |
-| Max line size     | 10 MB                                               | Safe buffering per architecture doc recommendation.        |
+| Max line size     | 10 MB (`stdoutScannerMaxTokenSize`)                 | A longer line ends the scan and fails the turn.            |
 
-### First turn vs. continuation turns
+### Session continuation
 
-| Turn                   | Invocation                                                                                                                                       |
-| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Turn 1 (new session)   | `copilot -p "<prompt>" --output-format json -s --allow-all --autopilot --no-ask-user --max-autopilot-continues <N>`                              |
-| Turn 2+ (continuation) | `copilot -p "<prompt>" --output-format json -s --allow-all --autopilot --no-ask-user --max-autopilot-continues <N> --resume <session_id>`        |
-
-The `--resume <session_id>` flag continues the conversation in the same session, preserving the
-full message history from prior turns. The session ID is available in the final `result` JSONL
-event as the `sessionId` field (confirmed experimentally in v1.0.13).
-
-**Alternative:** `--continue` resumes the most recent conversation in the cwd. Since Sortie
-controls the workspace directory per issue, `--continue` would work. However, `--resume
-<session_id>` is more explicit and avoids ambiguity if multiple sessions exist in the same
-workspace.
-
-**Session ID is in the `result` event.** The `result` event — the last JSONL line before
-process exit — contains `"sessionId": "<uuid>"`. This was confirmed in v1.0.13:
+The `result` event, the last JSONL line before process exit, carries the session ID at the top
+level:
 
 ```json
 {"type":"result","timestamp":"...","sessionId":"aa778ea0-6eab-4ce9-b87e-11d6d33dab4f","exitCode":0,"usage":{...}}
 ```
 
-The adapter must parse the `result` event and store the `sessionId` for use in subsequent
-`--resume` invocations. Historical context: prior to JSONL support, the session ID was not
-programmatically discoverable ([github/copilot-cli#442](https://github.com/github/copilot-cli/issues/442)).
+The adapter's `OnFinalize` hook stores that `sessionId` in its session state, and `buildArgs`
+passes it as `--resume <session_id>` on the next turn. Resuming preserves the full message
+history from prior turns.
 
-> **Concurrency note for `max_concurrent_agents > 1`:** Since the `result` event contains the
-> session ID, the adapter has a reliable per-session ID source. The fallback strategy of
-> scanning `~/.copilot/session-state/` (mentioned in earlier research) is unreliable with
-> concurrent sessions and should not be used. If the `result` event is somehow missing (e.g.,
-> the process is killed before emitting it), the adapter can fall back to `--continue` which
-> resumes the most recent session in the workspace cwd — this is safe because Sortie uses
-> workspace-per-issue isolation.
+When a turn ends with no `result` event carrying a `sessionId` and no ID is known from an
+earlier turn, the adapter sets `fallbackToContinue` and the next turn passes `--continue`
+instead, which resumes the most recent conversation in the working directory. That is
+unambiguous here because Sortie isolates one workspace per issue. Scanning the session-state
+directory is not a session-discovery path: with `max_concurrent_agents > 1` the most recently
+written directory is not necessarily this session's, so the adapter opens that tree only by
+known session ID (`sessionStateRoot` and `readSessionUsage` in
+`internal/agent/copilot/sessionstate.go`).
 
 ---
 
-## Output Format: `--output-format json`
+## Output format: `--output-format json`
 
-With `--output-format json`, Copilot CLI writes one JSON object per line to stdout (newline-
-delimited JSON / JSONL). Each line is independently parseable.
+The [CLI command reference][cli-ref] documents `--output-format=FORMAT` where FORMAT is `text`
+(the default) or `json`. Under `json` the CLI writes one JSON object per line to stdout
+(newline-delimited JSON, JSONL), and each line is independently parseable.
 
-> **History:** JSONL output support was added in response to
-> [github/copilot-cli#52](https://github.com/github/copilot-cli/issues/52). The
-> [CLI command reference][cli-ref] documents `--output-format=FORMAT` where FORMAT is `text`
-> (default) or `json` (outputs JSONL: one JSON object per line).
+### JSONL event schema
 
-### JSONL event schema (observed v1.0.13)
-
-The following schema was determined experimentally by running Copilot CLI v1.0.13 with
-`--output-format json` and capturing stdout. The official documentation does not publish this
-schema; what follows is empirical observation.
+GitHub does not publish this schema; it comes from captured stdout.
 
 **Common envelope.** Every event is a JSON object with these top-level fields:
 
@@ -294,26 +292,26 @@ schema; what follows is empirical observation.
 The `result` event is an exception: it has no `data` or `id` fields and instead carries
 `sessionId`, `exitCode`, and `usage` at the top level.
 
-**Observed event types:**
+**Event types:**
 
 | Event type                        | Ephemeral | `data` fields                                                                              | Adapter mapping           |
 | --------------------------------- | --------- | ------------------------------------------------------------------------------------------ | ------------------------- |
-| `session.warning`                 | yes       | `warningType`, `message`                                                                   | `notification`            |
-| `session.mcp_server_status_changed` | yes     | `serverName`, `status`                                                                     | log only                  |
-| `session.mcp_servers_loaded`      | yes       | `servers` (array of `{name, status, source, error?}`)                                      | log only                  |
-| `session.tools_updated`           | yes       | `model`                                                                                    | log only                  |
-| `session.info`                    | yes       | `infoType`, `message`                                                                      | `notification`            |
-| `session.task_complete`           | no        | `summary`, `success`                                                                       | `notification`            |
-| `user.message`                    | no        | `content`, `transformedContent`, `attachments`, `agentMode`?, `interactionId`              | log only                  |
-| `assistant.turn_start`            | no        | `turnId`, `interactionId`                                                                  | `notification`            |
-| `assistant.message_delta`         | yes       | `messageId`, `deltaContent`                                                                | stall timer reset         |
-| `assistant.message`              | no        | `messageId`, `content`, `toolRequests` (array), `interactionId`, `outputTokens`            | `assistant_message`       |
-| `assistant.turn_end`             | no        | `turnId`                                                                                   | `notification`            |
-| `tool.execution_start`           | no        | `toolCallId`, `toolName`, `arguments`                                                      | `tool_use`                |
-| `tool.execution_complete`        | no        | `toolCallId`, `model`, `interactionId`, `success`, `result`, `toolTelemetry`               | `tool_result`             |
-| `result`                          | no        | *(top-level)* `sessionId`, `exitCode`, `usage{premiumRequests, totalApiDurationMs, sessionDurationMs, codeChanges{linesAdded, linesRemoved, filesModified}}` | `turn_completed` / `turn_failed` |
+| `session.warning`                 | yes       | `warningType`, `message`                                                                   | WARN log and `notification` carrying `message` |
+| `session.mcp_server_status_changed` | yes     | `serverName`, `status`                                                                     | DEBUG log only            |
+| `session.mcp_servers_loaded`      | yes       | `servers` (array of `{name, status, source, error?}`)                                      | DEBUG log only            |
+| `session.tools_updated`           | yes       | `model`                                                                                    | DEBUG log only            |
+| `session.info`                    | yes       | `infoType`, `message`                                                                      | `notification` carrying `message` |
+| `session.task_complete`           | no        | `summary`, `success`                                                                       | `notification` carrying `summary` |
+| `user.message`                    | no        | `content`, `transformedContent`, `attachments`, `agentMode`?, `interactionId`              | DEBUG log only            |
+| `assistant.turn_start`            | no        | `turnId`, `interactionId`                                                                  | `notification` carrying the event type |
+| `assistant.message_delta`         | yes       | `messageId`, `deltaContent`                                                                | empty `notification`, which resets the orchestrator's stall timer |
+| `assistant.message`              | no        | `messageId`, `content`, `toolRequests` (array), `interactionId`, `outputTokens`            | `token_usage` when `outputTokens` is present, plus a `notification` summarizing content or requested tool names |
+| `assistant.turn_end`             | no        | `turnId`                                                                                   | `notification` carrying the event type |
+| `tool.execution_start`           | no        | `toolCallId`, `toolName`, `arguments`                                                      | `notification` naming the tool; starts the duration timer in `agentcore.ToolTracker` |
+| `tool.execution_complete`        | no        | `toolCallId`, `model`, `interactionId`, `success`, `result`, `toolTelemetry`               | `tool_result` with tool name, duration, and the negated `success` as `ToolError` |
+| `result`                          | no        | *(top-level)* `sessionId`, `exitCode`, `usage{premiumRequests, totalApiDurationMs, sessionDurationMs, codeChanges{linesAdded, linesRemoved, filesModified}}` | Held as the turn's terminal record; see "Determining turn completion" |
 
-**Example output** (simple task, autopilot mode, v1.0.13):
+**Example output** (simple task, autopilot mode):
 
 ```jsonl
 {"type":"session.mcp_servers_loaded","data":{"servers":[{"name":"github-mcp-server","status":"connected","source":"builtin"}]},"id":"...","timestamp":"2026-03-30T22:19:18.132Z","parentId":"...","ephemeral":true}
@@ -326,7 +324,7 @@ The `result` event is an exception: it has no `data` or `id` fields and instead 
 {"type":"result","timestamp":"2026-03-30T22:19:28.097Z","sessionId":"aa778ea0-6eab-4ce9-b87e-11d6d33dab4f","exitCode":0,"usage":{"premiumRequests":6,"totalApiDurationMs":6866,"sessionDurationMs":12927,"codeChanges":{"linesAdded":0,"linesRemoved":0,"filesModified":[]}}}
 ```
 
-**Example with tool use** (read file task, v1.0.13):
+**Example with tool use** (read file task):
 
 ```jsonl
 {"type":"assistant.message","data":{"messageId":"...","content":"","toolRequests":[{"toolCallId":"toolu_vrtx_...","name":"view","arguments":{"path":"/tmp/copilot-test/main.go"},"type":"function","intentionSummary":"view the file..."}],"interactionId":"...","outputTokens":102},"id":"...","timestamp":"...","parentId":"..."}
@@ -334,48 +332,34 @@ The `result` event is an exception: it has no `data` or `id` fields and instead 
 {"type":"tool.execution_complete","data":{"toolCallId":"toolu_vrtx_...","model":"claude-opus-4.6","interactionId":"...","success":true,"result":{"content":"1. package main\n2. ","detailedContent":"..."},"toolTelemetry":{"properties":{"command":"view"},"metrics":{"resultLength":19}}},"id":"...","timestamp":"...","parentId":"..."}
 ```
 
-> **Session storage uses the same vocabulary.** The on-disk `events.jsonl` at
-> `~/.copilot/session-state/<session-id>/` uses the same `"type"` field and event type names
-> as stdout JSONL. The `"event"` field format observed in
-> [github/copilot-cli#2201](https://github.com/github/copilot-cli/issues/2201) appears to be
-> from an older CLI version.
->
-> **SDK event types match.** The SDK types (`user.message`, `assistant.message`,
-> `tool.execution_start`, etc.) turn out to be the *same* vocabulary used by
-> `--output-format json`, not a separate format.
+Three surfaces share one event vocabulary. The on-disk `events.jsonl` under the session-state
+root uses the same `"type"` field and event type names as stdout JSONL, and the SDK's session
+event types (`user.message`, `assistant.message`, `tool.execution_start`, and the rest) are the
+same names again rather than a separate format.
 
-> **Implementation note:** The adapter must still handle unknown event types gracefully by
-> logging them as `other_message` events. Future CLI versions may add new event types.
-
-### Determining session completion
-
-In the subprocess model with `-p`, the process exits when the agent completes its work.
-Completion is signaled by two mechanisms:
-
-1. **`result` JSONL event** — the last line emitted before exit, containing `exitCode`,
-   `sessionId`, and `usage` data.
-2. **Process exit code** — 0 for success, non-zero for failure.
-
-The adapter should use the `result` event as the primary completion signal (it contains richer
-data) and fall back to process exit code if the `result` event is missing (e.g., process was
-killed).
+An event type outside the table above is emitted as an `other_message` event carrying the type
+name, so an unrecognized event neither fails the turn nor is silently dropped.
 
 ### Parsing strategy
 
-The adapter reads stdout line by line. For each line:
+`agentcore.ForkPerTurnSession` reads stdout line by line and hands each line to the adapter's
+`ParseLine` hook. A line that fails to parse as JSON produces a `malformed` event and the scan
+continues. A parsed line is dispatched on its `"type"` field to the mapping in the table above.
+The `result` line is returned to the skeleton as the turn's terminal record instead of being
+emitted, and the skeleton keeps the last such record for finalization.
 
-1. Parse as JSON. If parsing fails, emit a `malformed` event and continue.
-2. Read the `"type"` field as the event discriminator.
-3. Based on the event type:
-   - `tool.execution_start` / `tool.execution_complete` -> log tool activity, emit `tool_use` /
-     `tool_result` with tool name, arguments, and result.
-   - `assistant.message` -> emit `assistant_message` with content and output token count.
-   - `assistant.message_delta` -> reset stall detection timer.
-   - `session.task_complete` -> log task completion summary.
-   - `result` -> extract `sessionId` (for `--resume`), `exitCode`, `usage`.
-   - `session.*` (ephemeral) -> log as `notification`, do not store.
-   - Unknown types -> emit `other_message`.
-4. On process exit, check exit code to determine `turn_completed` or `turn_failed`.
+### Determining turn completion
+
+The process exits when the agent completes its work, so a turn has two outcome signals: the
+`result` event, which carries `exitCode`, `sessionId`, and `usage`, and the process exit code.
+
+`OnFinalize` builds `agentcore.TurnEvidence` from both and delegates the decision to
+`agentcore.FinalizeTurn`. A `result` event is authoritative: an `exitCode` of 0 reports
+`TerminalSuccess`, and any other value, including an absent field, reports `TerminalFailure`
+regardless of the process exit code. With no `result` event the
+decision falls to the process exit and to the work evidence, which for this adapter is whether
+any `assistant.message` reported a positive `outputTokens` for the turn. See "Process exit
+codes" for the resulting dispositions.
 
 ### Token usage extraction
 
@@ -412,9 +396,16 @@ tokenDetails.cache_read.tokenCount + tokenDetails.cache_write.tokenCount` equals
 
 The journal is session-cumulative across every process invocation that resumes the session with
 `--resume`: a second turn's `session.shutdown` record reports totals inclusive of the first
-turn's spend, not just the second turn's own contribution. The adapter recovers a single run's
-contribution by reading the record that predates the run (its own baseline) and subtracting it
-from the current record.
+turn's spend, not just the second turn's own contribution. `sessionState.recoverUsage` recovers
+a single run's contribution by reading the record that predates the run (its own baseline) and
+subtracting it from the current record.
+
+The journal read is skipped, leaving the output-only provisional figure standing, when the
+session ID is unknown or fails the path-segment check `sessionIDPattern`, when the session runs
+in SSH mode, when the file exceeds 64 MB or holds a line over 10 MB (`readSessionUsage` returns
+`errSessionStateCapExceeded`), when the file holds no `session.shutdown` record yet, or when a
+resumed run has already missed its first read attempt and can no longer separate its own spend
+from the prior session's.
 
 The adapter normalizes a `session.shutdown` record into:
 
@@ -427,84 +418,68 @@ TokenUsage{
 }
 ```
 
-**Alternative not used by Sortie:** OTel spans ([CLI command reference: OTel monitoring][cli-ref])
-also expose token counts (`invoke_agent` span's `gen_ai.usage.input_tokens` and
-`gen_ai.usage.output_tokens`), gated on `COPILOT_OTEL_FILE_EXPORTER_PATH`. The adapter does not
-configure or parse OTel output; the session-state journal is the source of truth because it
-requires no additional runtime configuration.
+OTel spans ([CLI command reference: OTel monitoring][cli-ref]) also expose token counts, and the
+adapter does not read them. See "OpenTelemetry integration".
 
 ---
 
-## Session Lifecycle Mapping
+## Session lifecycle mapping
 
-[Architecture Section 10.2](architecture/10-agent-adapter-contract.md#102-session-lifecycle) defines the session lifecycle. Here is how Copilot CLI maps to it:
+[Architecture Section 10.2](architecture/10-agent-adapter-contract.md#102-session-lifecycle) defines the session lifecycle. `CopilotAdapter` in
+`internal/agent/copilot/copilot.go` maps onto it as follows.
 
 ### `StartSession`
 
-Architecture Sections 10.1 and 10.2 define `StartSession` as the operation that "launches or
-connects" to the agent. For Copilot CLI, the session is disk-persisted at
-`~/.copilot/session-state/<session-id>/` and identified by a UUID. The OS subprocess is
-short-lived and created per turn. This adapter treats `StartSession` as establishing the
-logical Copilot CLI session, while deferring creation of the Node.js subprocess until `RunTurn`.
+The Copilot CLI session is disk-persisted under the session-state root and identified by a
+UUID, while the OS subprocess is short-lived and created per turn. `StartSession` therefore
+establishes the logical session and spawns nothing.
 
-1. Record the workspace path and configuration.
-2. Perform preflight validation:
-   - Resolve and normalize the workspace path.
-   - Enforce workspace path containment rules.
-   - Validate that the `copilot` CLI command is resolvable on `$PATH`.
-   - Validate that Node.js 22+ is available (Copilot CLI requires it).
-3. Verify authentication by checking that at least one of `COPILOT_GITHUB_TOKEN`, `GH_TOKEN`,
-   or `GITHUB_TOKEN` is set in the environment, or that `gh auth token` returns a valid token.
-4. Initialize and return a `Session`:
-   - `ID`: empty (populated after the first turn from the `result` JSONL event's `sessionId`).
-   - `Internal`: adapter-internal state (workspace path, config snapshot).
-     No OS subprocess is spawned at this point; that happens in `RunTurn`.
+`agentcore.ResolveLaunchTarget` resolves and normalizes the workspace path under the
+containment rules, and resolves the `copilot` command (from `agent.command`, defaulting to
+`copilot`) to an absolute path. In local mode the adapter then runs `copilot --version` under a
+5-second timeout as a canary; a failure returns `agent_not_found` with a message pointing at
+the Node.js 22+ requirement, which is the only check that requirement gets. `checkAuth` runs
+next, as described in "Token resolution order". SSH mode skips both.
+
+The returned `domain.Session` carries `ID` set to `StartSessionParams.ResumeSessionID`, which
+is empty for a new session and populated when a prior attempt is being resumed, and `Internal`
+set to the adapter's `sessionState` (launch target, session ID, agent config, MCP config path,
+usage accumulator, and per-turn scan state).
 
 ### `RunTurn`
 
-1. Build the CLI command:
-   - Turn 1: `copilot -p "<prompt>" --output-format json -s --allow-all --autopilot
-     --no-ask-user --max-autopilot-continues <N>`
-   - Turn 2+: append `--resume <session_id>` to continue the conversation.
-2. Launch subprocess (POSIX: `sh -c <command>`; Windows: direct invocation), cwd = workspace path.
-   The subprocess is placed in its own process group and assigned to platform-specific
-   process tree management (Unix process groups / Windows Job Objects).
-3. Read stdout line by line, parse each JSON event, and deliver to `OnEvent` callback.
-4. On each event, update the stall detection timer.
-5. When the process exits:
-   - **Exit code 0:** Return `TurnResult{ExitReason: turn_completed}`.
-   - **Exit code non-zero:** Return `TurnResult{ExitReason: turn_failed}` with error details.
-   - **Killed by signal (timeout/cancellation):** Return `TurnResult{ExitReason: turn_cancelled}`.
-6. Extract `session_id` from the `result` JSONL event (`sessionId` field). Store it in
-   `Session.Internal` state for use in subsequent `--resume` invocations.
+`RunTurn` resets the per-turn scan state and delegates to
+`agentcore.ForkPerTurnSession.RunTurn`, which builds the argument vector from `buildArgs`,
+launches the subprocess with cwd set to the workspace path, emits `session_started` with the
+PID and the current session ID, scans stdout, and calls the adapter's `OnFinalize` hook once
+the process exits. Each emitted event updates the orchestrator's stall reference timestamp.
+`OnFinalize` stores the `sessionId` from the `result` event, recovers token usage, and returns
+the `TurnResult`.
 
 ### `StopSession`
 
-1. If a subprocess is running, send a platform-appropriate graceful shutdown signal to the
-   process group (POSIX: `SIGTERM`; Windows: `CTRL_BREAK_EVENT`).
-2. Wait briefly (5 seconds) for clean exit.
-3. If still running, force-terminate the process tree (POSIX: `SIGKILL` to process group;
-   Windows: `TerminateJobObject`).
-4. Clean up file descriptors, goroutines, and platform-specific process group resources.
+`StopSession` delegates to `ForkPerTurnSession.Stop`, which signals the process group
+gracefully (`SIGTERM` on POSIX, `CTRL_BREAK_EVENT` on Windows), waits up to 5 seconds for the
+turn goroutine to finish its cleanup, and then force-terminates the process tree (`SIGKILL` to
+the group on POSIX, `TerminateJobObject` on Windows). With no subprocess running it returns
+`nil` immediately.
 
 ### `EventStream`
 
-Return `nil`. The Copilot CLI adapter uses the synchronous `OnEvent` callback model, not the
-async channel model.
+Returns `nil`. The adapter delivers events synchronously through the `OnEvent` callback, not
+through a channel.
 
 ---
 
-## Turn Model
+## Turn model
 
 Copilot CLI has its own internal concept of autonomous continuations controlled by autopilot mode.
 The `--max-autopilot-continues` flag limits how many autonomous steps the agent takes within a
 single CLI invocation.
 
-**Default behavior in autopilot mode:** The agent continues working through steps until it
-determines the task is complete, encounters a problem, or reaches the continuation limit. Without
-`--autopilot`, the agent completes one interaction cycle and exits.
-
-**Experimentally observed difference (v1.0.13):**
+In autopilot mode the agent continues working through steps until it determines the task is
+complete, encounters a problem, or reaches the continuation limit. Without `--autopilot`, the
+agent completes one interaction cycle and exits.
 
 | Aspect                        | With `--autopilot`                                        | Without `--autopilot`                                |
 | ----------------------------- | --------------------------------------------------------- | ---------------------------------------------------- |
@@ -514,70 +489,48 @@ determines the task is complete, encounters a problem, or reaches the continuati
 | `session.info` events         | `infoType: "autopilot_continuation"` with premium request count | absent                                        |
 | `task_complete` tool          | Agent calls `task_complete` to signal completion          | Not invoked; process exits after first response      |
 
-Without `--autopilot`, the agent produces one response and exits — it does NOT run a multi-step
-agentic loop. The `--autopilot` flag is therefore **required** for any non-trivial task in
-headless mode.
+Without `--autopilot` the agent produces one response and exits rather than running a
+multi-step agentic loop, so the flag is what makes a non-trivial headless task possible. That
+is why `buildArgs` passes it unconditionally.
 
-**Sortie's turn model is distinct from Copilot CLI's internal continuations.** Sortie's "turn" is
-one CLI invocation (one `RunTurn` call). Within that invocation, Copilot CLI may execute multiple
-autonomous continuation steps.
-
-### Strategy A: Single Sortie turn = single Copilot CLI invocation with autopilot (recommended)
-
-- Set `--autopilot --max-autopilot-continues <N>` where N provides a reasonable safety limit.
-- Copilot CLI runs its full agentic loop within one invocation.
-- Sortie calls `RunTurn` once per Sortie turn. Copilot CLI decides when it's done.
-- After each Sortie turn, the orchestrator re-checks tracker state and decides whether to
-  continue.
-- Use `agent.turn_timeout_ms` as the time safety backstop.
-
-### Strategy B: Without autopilot (fine-grained control)
-
-- Omit `--autopilot`.
-- Each `RunTurn` call runs one interaction cycle.
-- Sortie has maximum control over the loop but incurs subprocess launch overhead per turn and
-  may interrupt Copilot CLI's multi-step plans.
-
-**Recommendation:** Strategy A. Let Copilot CLI run its agentic loop to completion within each
-Sortie turn. Sortie's `agent.turn_timeout_ms` provides the safety backstop. Set
-`--max-autopilot-continues` to a reasonable value (e.g., 50) to prevent runaway loops.
+Sortie's turn model is distinct from Copilot CLI's internal continuations. A Sortie turn is one
+CLI invocation (one `RunTurn` call), and within that invocation Copilot CLI runs its own
+agentic loop to completion, bounded by `--max-autopilot-continues`. After each turn the
+orchestrator re-checks tracker state and decides whether to run another.
 
 ---
 
-## Timeout Enforcement
+## Timeout enforcement
 
 | Timeout                  | Source      | Enforcement                                                                                                                                                                                           |
 | ------------------------ | ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `agent.turn_timeout_ms`  | WORKFLOW.md | Adapter sets a deadline on the subprocess. On expiry, send SIGTERM → wait → SIGKILL. Map to `turn_cancelled`.                                                                                         |
-| `agent.read_timeout_ms`  | WORKFLOW.md | Not directly applicable to subprocess model. Could apply to initial subprocess startup: if no output within `read_timeout_ms`, consider startup failed.                                               |
-| `agent.stall_timeout_ms` | WORKFLOW.md | Enforced by the **orchestrator**, not the adapter. The orchestrator monitors `last_agent_timestamp` from events. If the gap exceeds `stall_timeout_ms`, the orchestrator calls `StopSession`.         |
+| `agent.turn_timeout_ms`  | WORKFLOW.md | Reaches the adapter on `domain.AgentConfig`, and no code path reads it. See "Open questions".                                                                                                          |
+| `agent.read_timeout_ms`  | WORKFLOW.md | The adapter enforces no read deadline. The worker uses this value only to bound its best-effort `StopSession` call.                                                                                    |
+| `agent.stall_timeout_ms` | WORKFLOW.md | Enforced by the orchestrator, not the adapter. `reconcileStalled` in `internal/orchestrator/reconcile.go` compares `LastAgentTimestamp` against the threshold and cancels the worker's context.        |
 
-### Max autopilot continues as timeout proxy
-
-`--max-autopilot-continues <N>` acts as a step-based safety limit complementing the time-based
-`turn_timeout_ms`. Each continuation consumes one or more premium requests. Setting a reasonable
-limit prevents both runaway execution and excessive API cost.
+`--max-autopilot-continues <N>` is a step-based limit rather than a time-based one. Each
+continuation consumes one or more premium requests, so the limit bounds both runaway execution
+and API cost.
 
 ### Context cancellation
 
-The adapter must respect `context.Context` cancellation:
-
-- `RunTurn` receives a context. If the context is cancelled (e.g., due to tracker reconciliation
-  finding the issue is terminal), the adapter must kill the subprocess promptly.
-- The adapter sends a graceful shutdown signal to the process group, followed by a grace period,
-  then force-terminates the process tree. Platform-specific details are handled by `procutil`.
+`RunTurn` receives the worker's context. On cancellation, whether from stall reconciliation or
+from the tracker reporting the issue terminal, `exec.CommandContext` signals the process group
+gracefully through `procutil.SignalGraceful` and force-terminates the tree after the 5-second
+`WaitDelay`. The skeleton reports the turn as `turn_cancelled` with `ErrTurnCancelled`,
+carrying whatever usage had accumulated.
 
 ---
 
-## Permission and Approval Policy
+## Permission and approval policy
 
 Per [architecture Section 10.4](architecture/10-agent-adapter-contract.md#104-approval-tools-and-user-input-policy), Sortie adopts a high-trust posture:
 
 | Policy                    | Implementation                                                                                                                                                                                           |
 | ------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Auto-approve all actions  | `--allow-all` / `--yolo` bypasses all permission prompts for tools, paths, and URLs.                                                                                                                    |
-| User input suppression    | `--no-ask-user` disables the `ask_user` tool ([`copilot --help`][cli-help-ref]). The agent makes decisions autonomously.                                                                                 |
-| Autopilot permissions     | When entering autopilot mode, if `--allow-all` is not set, the CLI prompts for permissions. In headless mode (`-p`), this prompt would stall. `--allow-all` must be used with `--autopilot`.            |
+| Auto-approve all actions  | `--allow-all` / `--yolo` bypasses all permission prompts for tools, paths, and URLs. Passed under the condition described in "Permission flags".                                                         |
+| User input suppression    | `--no-ask-user` disables the `ask_user` tool ([`copilot --help`][cli-help-ref]). The agent makes decisions autonomously. Passed on every invocation, so a turn never ends in `turn_input_required`.       |
+| Autopilot permissions     | When entering autopilot mode without `--allow-all`, the CLI prompts for permissions. In headless mode (`-p`) that prompt stalls, so an operator who configures tool scoping must scope it wide enough to cover the run. |
 | Unsupported tool calls    | Copilot CLI handles tool routing internally. Unknown tools return failure and the session continues.                                                                                                      |
 
 ### Permission system details
@@ -609,85 +562,83 @@ is set.
 
 ---
 
-## Error Detection and Mapping
+## Error detection and mapping
 
 ### Process exit codes
 
-| Exit Code                | Meaning                                  | Adapter mapping                                   |
-| ------------------------ | ---------------------------------------- | ------------------------------------------------- |
-| 0                        | Success (task completed or autopilot ended normally). If no `result` event was received and cumulative output tokens are zero, treated as `turn_failed` (no-output safety heuristic). | `turn_completed` or `turn_failed` (no-output heuristic) |
-| Non-zero                 | General error                            | `turn_failed`                                     |
-| 127                      | `copilot` binary not found               | `agent_not_found`                                 |
-| Signal (graceful/force)  | Killed by adapter or OS                  | `turn_cancelled`                                  |
+Copilot CLI documents no per-failure-mode exit codes, so any non-zero value means only
+"failure" and stderr carries the diagnosis. `procutil.EmitWarnLines` logs the collected stderr
+lines at WARN whenever a turn ends in an error.
 
-> **Gap:** Copilot CLI does not document specific exit codes for different failure modes (unlike
-> Claude Code which uses exit code 1 for general errors). The adapter should treat any non-zero
-> exit code as `turn_failed` and capture stderr for diagnostics.
+| Outcome                                                | Exit reason      | Error category    |
+| ------------------------------------------------------ | ---------------- | ----------------- |
+| `result` event with `exitCode` 0                       | `turn_completed` | none              |
+| `result` event with non-zero `exitCode`                | `turn_failed`    | `turn_failed`     |
+| No `result` event, process exits 0, output tokens seen  | `turn_completed` | none              |
+| No `result` event, process exits 0, no output tokens    | `turn_failed`    | `turn_failed`     |
+| No `result` event, process exits non-zero               | `turn_failed`    | `port_exit`       |
+| Exit 127 (`copilot` not found)                          | `turn_failed`    | `agent_not_found` |
+| Killed by signal                                        | `turn_cancelled` | `turn_cancelled`  |
+| Stdout line over 10 MB, or another scanner error        | `turn_failed`    | `port_exit`       |
+
+The zero-output row is the safety heuristic: a process that exits 0 having produced nothing is
+reported as a failure rather than a silent success, and `FinalizeTurn` logs "agent exited
+without producing output, treating as failure".
 
 ### Authentication failures
 
 | Condition                                  | Behavior                                                  | Adapter mapping         |
 | ------------------------------------------ | --------------------------------------------------------- | ----------------------- |
-| No valid token in environment              | CLI fails to start, outputs error to stderr               | `agent_not_found` or `response_timeout` |
-| Token lacks Copilot access                 | CLI fails during API call                                 | `turn_failed`           |
-| Organization policy disables Copilot CLI   | CLI fails during authentication                            | `turn_failed`           |
-| Classic PAT (`ghp_*`) used                 | Authentication rejected                                    | `turn_failed`           |
+| No token source present                    | `checkAuth` rejects the session before any launch          | `agent_not_found`       |
+| Token present but rejected by the API      | CLI fails during the API call and exits non-zero            | `port_exit`             |
+| Organization policy disables Copilot CLI   | CLI fails during authentication                            | `port_exit`             |
 
 ### Error category mapping (per [architecture Section 10.5](architecture/10-agent-adapter-contract.md#105-timeouts-and-error-mapping))
 
-| Condition                                 | Error category          |
-| ----------------------------------------- | ----------------------- |
-| `copilot` binary not found on `$PATH`     | `agent_not_found`       |
-| Node.js 22+ not available                 | `agent_not_found`       |
-| Workspace path invalid or not a directory | `invalid_workspace_cwd` |
-| No output within `read_timeout_ms`        | `response_timeout`      |
-| Turn exceeds `turn_timeout_ms`            | `turn_timeout`          |
-| Process exits non-zero                    | `port_exit`             |
-| Turn completed with error                 | `turn_failed`           |
-| Process killed by signal                  | `turn_cancelled`        |
-| Agent requests user input (if `--no-ask-user` is not set) | `turn_input_required` |
+`StartSession` produces these categories before any subprocess runs:
+
+| Condition                                       | Error category          |
+| ----------------------------------------------- | ----------------------- |
+| Workspace path invalid or not a directory       | `invalid_workspace_cwd` |
+| `copilot` not resolvable, or `agent.command` empty | `agent_not_found`    |
+| `copilot --version` canary fails                | `agent_not_found`       |
+| No GitHub authentication source                 | `agent_not_found`       |
+
+Turn outcomes use the categories in the exit-code table above. `response_timeout`,
+`turn_timeout`, and `turn_input_required` are unreachable for this adapter: it enforces no read
+or turn deadline, and `--no-ask-user` is passed on every invocation.
 
 ### Known issues in the wild
 
 From [github/copilot-cli issues](https://github.com/github/copilot-cli/issues):
 
 - **Session file corruption** ([#2012](https://github.com/github/copilot-cli/issues/2012)):
-  Raw U+2028/U+2029 characters in `events.jsonl` break `JSON.parse()` on `--resume`. This may
-  affect session continuation.
+  raw U+2028/U+2029 characters in `events.jsonl` break `JSON.parse()` on `--resume`, which
+  breaks session continuation.
 - **Subprocess I/O deadlock** ([#1838](https://github.com/github/copilot-cli/issues/1838)):
-  In Nix/direnv environments, CLI hangs due to subprocess I/O deadlock. The adapter's turn
-  timeout catches this.
+  in Nix and direnv environments the CLI hangs on a subprocess I/O deadlock. Stall
+  reconciliation is what ends such a turn.
 - **Headless server fd leaks** ([#2389](https://github.com/github/copilot-cli/issues/2389)):
-  When running as a headless server, kqueue file descriptors leak and the bash tool stops
+  when running as a headless server, kqueue file descriptors leak and the bash tool stops
   working after prolonged use.
 - **Authentication failures without output** ([#2184](https://github.com/github/copilot-cli/issues/2184)):
-  CLI fails to start without any output when there is a login issue. The adapter should treat
-  no output within `read_timeout_ms` as `response_timeout`.
+  the CLI fails to start without any output when there is a login issue. The turn ends on the
+  process exit, which the zero-output row maps to `turn_failed`.
 - **sessionStart hook fires after userPromptSubmitted** ([#2201](https://github.com/github/copilot-cli/issues/2201)):
-  The `sessionStart` hook fires after `userPromptSubmitted`, not before. Provides real examples
-  of event format in `events.jsonl`.
-- **`--additional-mcp-config` requires `@` prefix for file paths** (confirmed v1.0.21): Bare
-  file paths are parsed as inline JSON and fail with `Invalid JSON in --additional-mcp-config`.
-  The documented syntax for file input is `@<path>` (`github/copilot-cli#428`). Earlier
-  versions (≤1.0.18) had an undocumented fallback that recognized bare paths; this fallback
-  was removed. The Sortie adapter now uses the `@` prefix consistently.
-- **Config parsing errors exit 0 without output** (observed v1.0.21, fixed by PR #405 for
-  the `@` prefix case): When Copilot CLI fails to parse `--additional-mcp-config`, it exits 0
-  without emitting any JSONL events. The adapter's no-output heuristic detects this as
-  `turn_failed`. Operators should check WARN-level logs for the stderr content explaining the
-  parse failure.
+  the `sessionStart` hook fires after `userPromptSubmitted`, not before.
+- **`--additional-mcp-config` requires the `@` prefix for file paths**: a bare file path is
+  parsed as inline JSON and fails with `Invalid JSON in --additional-mcp-config`. The
+  documented syntax for file input is `@<path>` (`github/copilot-cli#428`).
+- **Config parsing errors exit 0 without output**: when Copilot CLI fails to parse
+  `--additional-mcp-config`, it exits 0 without emitting any JSONL events. The zero-output row
+  maps this to `turn_failed`, and the WARN-level stderr log carries the parse failure.
 
 ---
 
-## Session Storage
+## Session storage
 
-Copilot CLI persists sessions to disk at:
-
-```
-~/.copilot/session-state/<session-id>/
-```
-
-Each session directory contains:
+Copilot CLI persists sessions to disk under `<COPILOT_HOME or ~/.copilot>/session-state/<session
+id>/`. Each session directory contains:
 
 | File/Directory    | Description                                                        |
 | ----------------- | ------------------------------------------------------------------ |
@@ -697,11 +648,9 @@ Each session directory contains:
 | `checkpoints/`    | Checkpoints for infinite session context compaction.               |
 | `files/`          | Files tracked by the session.                                      |
 
-This is relevant for:
-
-- **Continuation:** `--resume <session_id>` reads from this directory.
-- **Cleanup:** Sortie may want to clean up session state when removing workspaces.
-- **Disk usage:** Long sessions with infinite context compaction accumulate checkpoint data.
+`--resume <session_id>` reads the conversation back from this directory, and the adapter reads
+`events.jsonl` for token totals as described in "Token usage extraction". Long sessions
+accumulate checkpoint data here; Sortie removes workspaces but not session-state directories.
 
 ### Infinite sessions and context compaction
 
@@ -711,12 +660,12 @@ Copilot CLI uses "infinite sessions" by default. When the context window approac
 2. Processing blocks at ~95% context usage until compaction completes.
 3. Compaction summarizes older conversation history, preserving recent context.
 
-This means a single Copilot CLI session can run indefinitely without hitting context limits.
-The adapter does not need to manage context window size — Copilot CLI handles this internally.
+So a single Copilot CLI session runs indefinitely without hitting context limits, and the
+adapter manages no context window of its own.
 
 ---
 
-## Hooks Integration
+## Hooks integration
 
 Copilot CLI supports lifecycle hooks via `.github/hooks/*.json` in the workspace
 ([hooks configuration reference][hooks-ref], [about hooks][hooks-about]). Each hook file uses
@@ -817,22 +766,20 @@ control][cli-ref]):
 Where `decision` is `"block"` (force another agent turn using `reason` as the prompt) or
 `"allow"` (let the agent stop).
 
-Sortie does **not** manage Copilot CLI's hook system directly. These are workspace-level
-configurations that the coding agent or `after_create` workspace hook can set up. However,
-the adapter should be aware that:
-
-- Hooks can block tool calls (`preToolUse` returning `"deny"`).
-- Hooks can add latency to tool execution (timeout per hook up to 30s default).
-- The `agentStop` hook can prevent session completion if it returns `"block"`.
-- Hook-induced delays should be accounted for in timeout calculations.
+Sortie does not manage Copilot CLI's hook system. Hook files are workspace-level configuration
+that the coding agent or an `after_create` workspace hook sets up. They still change what a
+turn does: a `preToolUse` hook returning `"deny"` blocks a tool call, an `agentStop` hook
+returning `"block"` prevents the session from completing, and each hook adds latency to tool
+execution (30 seconds per hook by default), which lengthens the wall-clock turn a stall timeout
+has to accommodate.
 
 ---
 
-## MCP Server Configuration
+## MCP server configuration
 
 The `--additional-mcp-config <json>` flag adds MCP server declarations for the session.
 It accepts inline JSON or `@<path>` referencing a JSON file. The `@` prefix is required
-for file paths — bare paths are parsed as inline JSON and fail. The format follows the
+for file paths: a bare path is parsed as inline JSON and fails. The format follows the
 standard MCP configuration schema with a top-level `mcpServers` object.
 
 ### File format
@@ -860,9 +807,9 @@ standard MCP configuration schema with a top-level `mcpServers` object.
 
 Copilot CLI reads the configuration at agent startup and spawns each declared server as a
 child process. The server inherits the agent's environment, merged with any variables in
-the `env` field. Unlike `--mcp-config` in Claude Code, `--additional-mcp-config` is
-additive — it supplements rather than replaces Copilot CLI's built-in MCP servers
-(`github-mcp-server`, `playwright`, `fetch`, `time`).
+the `env` field. Unlike `--mcp-config` in Claude Code, `--additional-mcp-config` is additive:
+it supplements rather than replaces Copilot CLI's built-in MCP servers (`github-mcp-server`,
+`playwright`, `fetch`, `time`).
 
 ### Disabling built-in MCP servers
 
@@ -871,17 +818,21 @@ Use `--disable-builtin-mcps` to disable all built-in MCP servers, or
 
 ### Sortie adapter usage
 
-The worker writes `.sortie/mcp.json` to the workspace directory and passes it via
-`--additional-mcp-config @<path>` (the `@` prefix instructs the CLI to read the file).
-If the operator also specifies
-`copilot-cli.mcp_config` in WORKFLOW.md, the worker merges both server sets into a single
-file. A name collision on the `sortie-tools` key fails the attempt. Credential values are
-never written to this file — they reach the MCP server through inherited environment
-variables. See ADR-0009 for the full merge algorithm.
+`orchestrator.GenerateMCPConfig` writes `.sortie/mcp.json` into the workspace directory, and
+`buildArgs` passes that path as `--additional-mcp-config @<path>`. If the operator also sets
+`copilot-cli.mcp_config` in WORKFLOW.md, the worker merges both server sets into that one file;
+a name collision on the reserved `sortie-tools` key fails the attempt. Credential values are
+never written to the file, and reach the MCP server through inherited environment variables
+instead. See ADR-0009 for the full merge algorithm.
+
+When no generated config exists, `formatMCPConfigValue` passes an operator `mcp_config` value
+through on its own: inline JSON (a value starting with `{`) and a value already prefixed with
+`@` go through unchanged, and any other value is treated as a file path and given the `@`
+prefix.
 
 ---
 
-## OpenTelemetry Integration
+## OpenTelemetry integration
 
 Copilot CLI supports OpenTelemetry for monitoring ([CLI command reference: OTel
 monitoring][cli-ref]). OTel is off by default with zero overhead. It activates when any of the
@@ -925,13 +876,16 @@ Lifecycle events recorded on active spans:
 | `github.copilot.session.compaction_complete`  | History compaction completed          |
 | `github.copilot.session.shutdown`            | Session shutting down                  |
 
-Sortie may enable OTel in the subprocess environment for external monitoring, but the adapter's
-primary event source is the JSONL stdout output. OTel data is supplementary and useful for
-per-tool and per-request token breakdowns that JSONL may not provide.
+The adapter neither sets these variables nor parses OTel output: its event source is the JSONL
+stdout stream and its token source is the session-state journal, both of which need no extra
+runtime configuration. An operator who exports one of the variables into Sortie's environment
+gets OTel in the subprocess as well, since the subprocess inherits that environment, and the
+`invoke_agent` span then carries the per-request `gen_ai.usage.input_tokens` and
+`gen_ai.usage.output_tokens` breakdown that the JSONL stream does not.
 
 ---
 
-## Adapter-Specific Pass-Through Config
+## Adapter-specific pass-through config
 
 Per [architecture Section 5.3.5](architecture/05-workflow-specification.md#535-agent-object), the adapter reads pass-through config from the `copilot-cli`
 sub-object in WORKFLOW.md:
@@ -939,100 +893,28 @@ sub-object in WORKFLOW.md:
 | Config key                                | Type    | Description                                                                      |
 | ----------------------------------------- | ------- | -------------------------------------------------------------------------------- |
 | `copilot-cli.model`                       | string  | Model override (e.g., `claude-sonnet-4.5`, `gpt-5`). Maps to `--model`.         |
-| `copilot-cli.max_autopilot_continues`     | integer | Maximum autonomous continuation steps. Maps to `--max-autopilot-continues`.      |
+| `copilot-cli.max_autopilot_continues`     | integer | Maximum autonomous continuation steps. Maps to `--max-autopilot-continues`. A value of zero or less is replaced by 50. |
 | `copilot-cli.agent`                       | string  | Custom agent name. Maps to `--agent`.                                            |
 | `copilot-cli.allowed_tools`               | string  | Space-separated tool allow list. Maps to `--allow-tool`.                         |
 | `copilot-cli.denied_tools`                | string  | Space-separated tool deny list. Maps to `--deny-tool`.                           |
 | `copilot-cli.available_tools`             | string  | Space-separated available tools restriction. Maps to `--available-tools`.        |
 | `copilot-cli.excluded_tools`              | string  | Space-separated excluded tools. Maps to `--excluded-tools`.                      |
-| `copilot-cli.mcp_config`                  | string  | MCP server configuration (inline JSON or file path). The adapter adds the `@` prefix for file paths automatically. Maps to `--additional-mcp-config`. |
+| `copilot-cli.mcp_config`                  | string  | MCP server configuration (inline JSON or file path). Merged into the generated config, or passed through as described in "MCP server configuration". Maps to `--additional-mcp-config`. |
 | `copilot-cli.disable_builtin_mcps`        | boolean | If `true`, passes `--disable-builtin-mcps`. Default: `false`.                   |
 | `copilot-cli.no_custom_instructions`      | boolean | If `true`, passes `--no-custom-instructions`. Default: `false`.                 |
 | `copilot-cli.experimental`                | boolean | If `true`, passes `--experimental`. Default: `false`.                           |
 
 ---
 
-## Example Adapter Invocation
-
-### Turn 1 (new session)
-
-```bash
-prompt='You are working on issue PROJ-123. Fix the authentication bug described below.
-
-## Issue: Authentication fails on expired tokens
-
-The login endpoint returns 500 when the JWT token is expired instead of 401...
-
-## Instructions
-1. Read the relevant code files
-2. Implement the fix
-3. Run tests to verify'
-
-sh -c 'copilot -p "$1" \
-  --output-format json \
-  -s \
-  --allow-all \
-  --autopilot \
-  --no-ask-user \
-  --max-autopilot-continues 50' -- "$prompt"
-```
-
-Working directory: `/var/sortie/workspaces/PROJ-123`
-
-### Turn 2 (continuation)
-
-```bash
-prompt='Continue working on the issue. The previous turn made progress but tests are still failing. Focus on fixing the remaining test failures.'
-session_id='ec41fbe2-af76-4185-ccb9-a61461234abc'
-
-sh -c 'copilot -p "$1" \
-  --output-format json \
-  -s \
-  --allow-all \
-  --autopilot \
-  --no-ask-user \
-  --max-autopilot-continues 50 \
-  --resume "$2"' -- "$prompt" "$session_id"
-```
-
-Working directory: `/var/sortie/workspaces/PROJ-123`
-
-### With model override and tool restriction
-
-```bash
-sh -c 'copilot -p "$1" \
-  --output-format json \
-  -s \
-  --allow-all \
-  --autopilot \
-  --no-ask-user \
-  --max-autopilot-continues 30 \
-  --model gpt-5 \
-  --deny-tool "bash(rm -rf *)"' -- "$prompt"
-```
-
----
-
-## ACP Alternative (Reference Only)
+## ACP alternative (reference only)
 
 The [CLI command reference][cli-ref] lists `--acp` as "Start the Agent Client Protocol server."
-ACP is an open standard for client-agent communication.
+ACP is an open standard for client-agent communication. `copilot --acp` starts that server
+process. The official documentation carries no ACP protocol format, message types, session
+management API, or transport mechanism for Copilot CLI, so the surface is unusable as an
+integration target on the evidence available. See "Open questions".
 
-> **Status:** The `--acp` flag exists but the official documentation provides no details on the
-> ACP protocol format, message types, or session management API for Copilot CLI. Sortie's
-> initial adapter should use the CLI subprocess model. ACP may be considered for a future
-> iteration once documentation matures.
-
-### Starting an ACP server
-
-```bash
-copilot --acp
-```
-
-This starts a server process. The transport mechanism (stdio, TCP, or other) is not
-specified in the CLI documentation.
-
-### ACP vs. subprocess tradeoffs
+### ACP versus subprocess tradeoffs
 
 | Aspect             | Subprocess (`-p`)                           | ACP (`--acp`)                                |
 | ------------------ | ------------------------------------------- | -------------------------------------------- |
@@ -1045,12 +927,11 @@ specified in the CLI documentation.
 
 ---
 
-## SDK Alternative (Reference Only)
+## SDK alternative (reference only)
 
 GitHub provides a TypeScript SDK (`@github/copilot-sdk`, v0.2.0) for programmatic control of
 Copilot CLI via JSON-RPC. The SDK internally spawns the CLI and communicates over stdio or TCP.
-
-> **Status:** The SDK is in technical preview and may change in breaking ways.
+It is labeled a technical preview.
 
 ### SDK architecture
 
@@ -1082,42 +963,33 @@ await client.stop();
 | ------------------------- | ---------------------------------------------------------- | --------------------------------------------------------------- |
 | Permission handling       | `onPermissionRequest` callback required on every session.   | Confirms that headless mode needs explicit permission handling. |
 | Permission result kinds   | `approved`, `denied-interactively-by-user`, `denied-by-rules`, `denied-by-content-exclusion-policy` | Maps to Sortie's approval policy.     |
-| Session events            | `user.message`, `assistant.message`, `assistant.message_delta`, `tool.execution_start`, `tool.execution_complete`, `session.idle` | **Same vocabulary as `--output-format json`.** Confirmed experimentally in v1.0.13: JSONL stdout, session storage `events.jsonl`, and SDK all use the same event type names. |
+| Session events            | `user.message`, `assistant.message`, `assistant.message_delta`, `tool.execution_start`, `tool.execution_complete`, `session.idle` | The shared vocabulary described in "JSONL event schema".        |
 | Infinite sessions         | Background compaction at configurable thresholds.           | Confirms Copilot CLI handles context limits internally.         |
 | Multiple sessions         | Independent sessions with different models.                 | Confirms per-issue session isolation.                            |
 | Streaming                 | `assistant.message_delta` for incremental text.            | Useful for stall detection.                                      |
 | Custom tools              | `defineTool()` with Zod schemas, handler callbacks.        | Not applicable for subprocess model.                             |
 | System message override   | `customize` (per-section) or `replace` mode.               | Reference for prompt injection behavior.                         |
 
-Sortie does **not** use the SDK because the adapter is implemented in Go and the architecture
-mandates subprocess-based integration ([Section 10.7](architecture/10-agent-adapter-contract.md#107-local-subprocess-launch-contract)). The CLI provides a clean, language-agnostic
-integration surface. The SDK documentation is useful as a reference for expected event types and
-session behavior, as the SDK and CLI share the same underlying agent engine.
+Sortie does not use the SDK: the adapter is written in Go and the architecture mandates
+subprocess-based integration ([Section 10.7](architecture/10-agent-adapter-contract.md#107-local-subprocess-launch-contract)), for which the CLI is the language-agnostic surface.
+The SDK documentation stays useful as a reference for event types and session behavior, because
+the SDK and CLI share the same underlying agent engine.
 
 ---
 
-## Fleet Mode (Informational)
+## Fleet mode
 
 Copilot CLI's `/fleet` command breaks implementation plans into independent subtasks and executes
-them in parallel using subagents. Each subagent has its own independent context window.
-
-This is relevant to Sortie because:
-
-- **Parallel execution occurs inside the CLI,** not managed by Sortie. The adapter treats a
-  `/fleet`-based session as a single turn regardless of internal parallelism.
-- **Subagents use separate model configurations.** By default subagents use a low-cost model,
-  but the prompt can override this per-subtask.
-- **Premium request consumption increases** with subagent parallelism. Each subagent interaction
-  consumes premium requests independently.
-- **The `subagentStop` hook** can intercept and block subagent completion.
-
-Sortie's orchestrator manages its own concurrency model (per-issue sessions with
-`max_concurrent_agents`). The CLI's internal parallelism via `/fleet` is transparent to the
-adapter.
+them in parallel using subagents, each with its own context window. Parallel execution happens
+inside the CLI, so the adapter sees a `/fleet` session as one turn regardless of the internal
+parallelism, and Sortie's own concurrency model (per-issue sessions bounded by
+`max_concurrent_agents`) is unaffected. Subagents default to a low-cost model that the prompt
+can override per subtask, each subagent interaction consumes premium requests independently, and
+the `subagentStop` hook can intercept and block subagent completion.
 
 ---
 
-## Differences from Claude Code Adapter
+## Differences from the Claude Code adapter
 
 | Aspect                    | Claude Code                                                   | Copilot CLI                                                   |
 | ------------------------- | ------------------------------------------------------------- | ------------------------------------------------------------- |
@@ -1144,53 +1016,39 @@ adapter.
 
 ---
 
-## Summary: Adapter Implementation Checklist
+## Open questions
 
-1. **StartSession:** Store workspace path and config. Validate `copilot` binary on `$PATH` and
-   Node.js 22+ availability. Verify authentication environment. Do not launch subprocess yet.
-2. **RunTurn (turn 1):** Launch `copilot -p <prompt> --output-format json -s --allow-all
-   --autopilot --no-ask-user --max-autopilot-continues <N>` with cwd = workspace. Parse JSONL
-   stdout. Capture session ID from output.
-3. **RunTurn (turn 2+):** Same as turn 1 but append `--resume <session_id>` (from `result`
-   event's `sessionId` field).
-4. **Event parsing:** Parse `"type"` field. Map `assistant.message` → `assistant_message`,
-   `tool.execution_start` → `tool_use`, `tool.execution_complete` → `tool_result`,
-   `result` → extract session ID and usage. Log unknown types as `other_message`.
-5. **Result handling:** Treat exit code 0 as `turn_completed`, non-zero as `turn_failed`, signal
-   death as `turn_cancelled`.
-6. **Token tracking:** Extract `outputTokens` from `assistant.message` events and
-   `premiumRequests` from the `result` event. For input token counts, enable OTel.
-7. **Timeout:** Enforce `turn_timeout_ms` via context deadline + graceful signal → force-terminate.
-8. **StopSession:** Kill subprocess if running (graceful signal → grace → force-terminate).
-9. **Error mapping:** Check exit code and stderr output. Map to architecture error categories.
-10. **Session continuity:** Use `--resume <session_id>` for multi-turn conversations.
-11. **Permissions:** Default to `--allow-all --no-ask-user` for headless operation.
-12. **Autopilot:** Default to `--autopilot --max-autopilot-continues <N>` for autonomous task
-    completion.
-13. **MCP extensions:** Optionally pass `--additional-mcp-config` for tool extensions.
-
-### Verification items
-
-Resolved items (verified experimentally on v1.0.13):
-
-- [x] JSONL event schema: `"type"` field discriminator, event types documented above.
-- [x] JSONL events match the SDK vocabulary (`user.message`, `assistant.message`, etc.), not
-  the old hook-style format (`"event"` field) from issue #2201.
-- [x] Session ID is in the `result` event's `sessionId` field.
-- [x] `--no-ask-user` flag exists and works (confirmed in `copilot --help` v1.0.13).
-- [x] Without `--autopilot`, the agent exits after one response in `-p` mode.
-
-Remaining items requiring further verification:
-
-- [ ] Exit code behavior for different failure modes (authentication failure, API error, timeout).
-  Auth failure observed: emits `session.warning` + `session.mcp_server_status_changed` before
-  erroring to stderr (exit code non-zero).
-- [ ] Whether `--resume` works reliably with session IDs from the `result` event.
-- [ ] Interaction between `--max-autopilot-continues` and process exit code.
-- [ ] Session storage cleanup behavior when workspaces are removed.
-- [ ] ACP protocol details (`--acp`): transport mechanism, message format, session management.
-- [ ] Token resolution order when all sources have valid but different tokens (GH_TOKEN vs
-  GITHUB_TOKEN precedence — the CLI falls back on failure so the practical impact is minimal).
+- Whether a classic PAT (`ghp_*`) authenticates the CLI. One observation has a classic PAT
+  failing authentication, and no official documentation states such a restriction. Settle it by
+  running one headless turn per token type with every other source unset, and comparing the
+  stderr messages.
+- Exit codes per failure mode (rejected credential, upstream API error, backend timeout). An
+  authentication failure emits `session.warning` and `session.mcp_server_status_changed`, then
+  errors to stderr and exits non-zero; the other modes have not been induced. Settle it by
+  forcing each failure and recording exit code and stderr.
+- Whether `--resume` accepts a session ID taken from the `result` event on every path,
+  including after a turn that ended in failure. Settle it by running a two-turn session with a
+  forced failure on the first turn and checking that the second turn's `user.message` history
+  includes the first prompt.
+- How `--max-autopilot-continues` interacts with the process exit code when the limit is
+  reached. Settle it by running a task that cannot finish within a limit of 1 and reading the
+  `result` event's `exitCode` and the process exit code.
+- Whether Copilot CLI ever removes session-state directories on its own. Settle it by listing
+  the session-state root before and after a long-running session and a CLI restart.
+- What `--experimental` enables. The flag surfaces no feature list in `copilot --help`. Settle
+  it by diffing `copilot --help` and the JSONL event stream of one identical turn run with and
+  without the flag.
+- ACP protocol details for `--acp`: transport, message format, and session management. Settle
+  it by starting `copilot --acp` under a timeout with stdout captured and inspecting the first
+  frames it emits, or by finding an upstream schema dump.
+- Which token source the CLI selects when all sources hold valid but different tokens. The
+  fallback-on-failure behavior makes this immaterial to the adapter, which only checks that one
+  source exists. Settle it by setting three valid tokens for distinct accounts and reading back
+  the authenticated identity.
+- Whether `agent.turn_timeout_ms` is meant to bind this adapter. The value reaches
+  `domain.AgentConfig.TurnTimeoutMS` and no code reads it, so a turn is bounded only by
+  `stall_timeout_ms` and worker cancellation. Settle it against the agent adapter contract in
+  `docs/architecture/10-agent-adapter-contract.md`, not by probing the CLI.
 
 [cli-help-ref]: https://docs.github.com/en/copilot/reference/copilot-cli-reference/cli-command-reference "GitHub Copilot CLI command reference (includes flags such as --no-ask-user)"
 

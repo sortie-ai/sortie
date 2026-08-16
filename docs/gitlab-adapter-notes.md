@@ -1,20 +1,32 @@
 # GitLab REST API: Adapter research notes
 
-> GitLab REST API v4, researched August 2026 and pinned to **self-managed GitLab Community
-> Edition 19.2.1** (revision `f4d029d2da8`, `enterprise: false`), **verified live** on
-> 2026-08-04. Community Edition is the compatibility floor: the adapter depends only on what
-> it provides. A second live instance, **GitLab.com** (version `19.3.0-pre`, revision
-> `7725732be39`, `enterprise: true`, namespace subscription plan `free`), was used solely for
-> the self-managed-versus-SaaS comparison. A second live pass on 2026-08-05 re-verified the
-> pinned container image `gitlab/gitlab-ce:19.2.1-ce.0` (version `19.2.1`, revision
-> `f4d029d2da8`, matching the self-managed lab) and GitLab.com, whose revision had moved to
-> `6f59ad3485c` as a continuously deployed instance does. A third live pass on 2026-08-10
-> characterized the merge-request, approval, review, pipeline, and job surface against the same
-> self-managed Community Edition 19.2.1 instance (revision `f4d029d2da8`), using a project at
-> namespace depth three and a registered runner executing real jobs. A fourth live pass on
-> 2026-08-16 characterized the `manual` pipeline shape against the same instance and revision,
-> using a purpose-built scratch project and its own registered runner. Reference for
-> implementing the GitLab `TrackerAdapter` and `SCMAdapter`.
+> **Product:** GitLab REST API v4.
+>
+> **Pinned deployment:** self-managed GitLab **Community Edition 19.2.1**, revision
+> `f4d029d2da8`, `enterprise: false`, run from the container image
+> `gitlab/gitlab-ce:19.2.1-ce.0`. Community Edition is the compatibility floor: the adapter
+> depends only on what it provides.
+>
+> **Comparison deployment:** **GitLab.com**, version `19.3.0-pre`, `enterprise: true`,
+> namespace subscription plan `free`. It is continuously deployed, so its revision moves;
+> `7725732be39` and `6f59ad3485c` were both current during observation. It serves the
+> self-managed-versus-SaaS comparison only.
+>
+> **Instruments:** live HTTP against both deployments, the pinned instance's own GraphQL
+> introspection, first-party GitLab documentation, and upstream `gitlab-org/gitlab` source at
+> ref `v19.2.1-ee`.
+>
+> **Coverage.** The tracker surface (issues, notes, labels, filters, pagination, rate limits,
+> error envelopes) is anchored to Community Edition 19.2.1 at revision `f4d029d2da8`, observed
+> 2026-08-04 and 2026-08-05, with the GitLab.com comparisons observed on the same dates. The
+> merge-request, approval, review-state, pipeline, and job surface is anchored to the same
+> version and revision, observed 2026-08-10 against a project at namespace depth three with a
+> registered runner executing real jobs. The `manual` pipeline shape and the pipeline-status
+> enumeration are anchored to the same version and revision, observed 2026-08-16. No
+> self-managed Enterprise Edition instance was ever observed, so every Enterprise Edition
+> claim rests on **[source]** plus **[docs]**.
+>
+> **Interfaces served:** the GitLab `TrackerAdapter` and `SCMAdapter`.
 >
 > Self-managed GitLab has no fixed host, so the instance base URL is part of every
 > self-managed configuration, and instances differ in version and settings. Facts hold for
@@ -30,17 +42,19 @@ is not an observation of GitLab.
 
 | Tag | Meaning |
 | --- | --- |
-| **[live-CE]** | Observed directly against the self-managed Community Edition 19.2.1 instance on 2026-08-04, again on 2026-08-05 against the pinned container image `gitlab/gitlab-ce:19.2.1-ce.0` (version `19.2.1`, revision `f4d029d2da8`, matching the lab), again on 2026-08-10 for the merge-request, approval, pipeline, and job surface, and again on 2026-08-16 for the `manual` pipeline shape. The strongest evidence for Community Edition behavior. On 2026-08-10 and 2026-08-16 the tag also covers the instance's **own GraphQL introspection response**, which is version-exact for the deployment under test and is named as such wherever it is the source. |
-| **[live-SaaS]** | Observed directly against GitLab.com (`19.3.0-pre`, `enterprise: true`, plan `free`) on 2026-08-04, and again on 2026-08-05 at revision `6f59ad3485c`, moved from the previously recorded `7725732be39` as a continuously deployed instance does. Evidence about GitLab.com only, never about self-managed. |
+| **[live-CE]** | Observed directly against the pinned self-managed Community Edition 19.2.1 instance (revision `f4d029d2da8`), or against that instance's **own GraphQL introspection response**, which is version-exact for the deployment under test and is named as such wherever it is the source. The strongest evidence for Community Edition behavior. |
+| **[live-SaaS]** | Observed directly against GitLab.com (`19.3.0-pre`, `enterprise: true`, plan `free`). Evidence about GitLab.com only, never about self-managed. |
 | **[docs]** | First-party GitLab documentation, cited by URL. |
-| **[source]** | Upstream source in `gitlab-org/gitlab`, cited by path at ref `v19.2.1-ee` (the tag matching the researched Community Edition version; the `-ee` tag carries both the Community Edition code and the `ee/` tree, which is how a route's edition gating is proved). |
-| **[unknown]** | Not settled by this research. Listed with the evidence that would settle it. |
+| **[source]** | Upstream source in `gitlab-org/gitlab`, cited by path at ref `v19.2.1-ee` (the tag matching the pinned Community Edition version; the `-ee` tag carries both the Community Edition code and the `ee/` tree, which is how a route's edition gating is proved). |
+| **[unknown]** | Not settled by this research. Carried in [Open questions](#open-questions) with the evidence that would settle it. |
+
+A claim carries its own date when the date is load-bearing; otherwise the coverage
+statement in the provenance block supplies it.
 
 Where documentation and observed behavior disagree, both sides are recorded and the
-behavior the adapter must trust is named. No self-managed Enterprise Edition instance was
-available, so **every Enterprise Edition claim is [source] plus [docs] and was never
-observed live**; GitLab.com is an Enterprise Edition codebase but not a self-managed
-Enterprise Edition deployment, and the two are not interchangeable.
+behavior the adapter must trust is named. **Every Enterprise Edition claim is [source] plus
+[docs] and was never observed live**: GitLab.com is an Enterprise Edition codebase but not a
+self-managed Enterprise Edition deployment, and the two are not interchangeable.
 
 ### Why no machine-readable route surface backs these notes
 
@@ -212,9 +226,8 @@ header is shared with OAuth flows.
 ### Token types
 
 Four token types authenticate against the issue surface. All four are sent in the same
-header, and all carry the same fixed GitLab access-token prefix and were 51 characters
-long at the researched version
-**[live-CE]**. The prefix makes a token machine-identifiable, so secret scanners can
+header, and all carry the same fixed GitLab access-token prefix and are 51 characters
+long **[live-CE]**. The prefix makes a token machine-identifiable, so secret scanners can
 recognize a leak by shape.
 
 | Token type | Identity returned by `GET /user` | Access scope | Suitability |
@@ -262,9 +275,8 @@ and carries no usable permission detail. A granular GitLab.com token that reads 
 fails a note create with a bare `403 {"message":"403 Forbidden"}` carrying no
 `insufficient_scope` marker **[live-SaaS]**. Whether self-managed Community Edition 19.2.1
 supports granular tokens, and what its introspection reports, is **[unknown]**: both
-Community Edition tokens observed here reported `"granular": false`. Creating a granular
-token on a self-managed Community Edition instance and reading `/personal_access_tokens/self`
-would settle it.
+Community Edition tokens observed here reported `"granular": false`. See
+[Open questions](#open-questions).
 
 ### Cheap token validation
 
@@ -359,9 +371,10 @@ percent-encode the whole path segment exactly once. A project can be moved or
 renamed, which changes the path but not the ID; a deployment that expects to survive a
 rename SHOULD configure the numeric ID.
 
-Nested subgroups are supported and produce more than one slash
-(`group/subgroup/project` becomes `group%2Fsubgroup%2Fproject`), so unlike the GitHub and
-Gitea adapters the value MUST NOT be validated as "exactly one slash".
+Nested subgroups are supported and produce more than one slash, so unlike the GitHub and
+Gitea adapters the value MUST NOT be validated as "exactly one slash". The forge half shares
+this convention and carries the depth-three evidence and the encoding prohibitions; see
+[project addressing](#8-project-addressing).
 
 ---
 
@@ -495,9 +508,8 @@ merely cross-referenced issues. Because a blocker whose state is unknown is trea
 non-terminal (conservative), inventing blockers is the more harmful error.
 
 On an Enterprise Edition instance licensed at Premium or above, `GET .../links` entries carry
-`link_type: "blocks"` or `"is_blocked_by"` **[source]** and could populate `blocked_by`.
-Whether to read them conditionally is a design question this research does not settle; the
-Community Edition floor requires the empty-slice behavior regardless.
+`link_type: "blocks"` or `"is_blocked_by"` **[source]**. The Community Edition floor requires
+the empty-slice behavior regardless.
 
 ---
 
@@ -536,7 +548,8 @@ Each parameter earns its place:
 - **`issue_type=issue` excludes non-issue work items server-side.** GitLab's issue list
   returns tasks, incidents, and test cases alongside issues. Verified: after creating one
   `task` and one `incident`, the unfiltered `state=opened` listing returned all seven items
-  including both, while `issue_type=issue` returned exactly the five issues **[live-CE]**.
+  including both, `issue_type=issue` returned exactly the five issues, and `issue_type=task`
+  returned only the task **[live-CE]**.
   This is the direct analogue of Gitea's `type=issues` pull-request exclusion, and omitting
   it would dispatch agents against checklist items. Accepted values are `issue`, `incident`,
   `test_case`, `task` [[docs]](https://docs.gitlab.com/api/issues/).
@@ -617,13 +630,12 @@ configuration, not on GitLab; a conservative chunk size well below any plausible
 avoids the question. Both methods share one implementation because ID equals Identifier
 equals `iid`.
 
-Conditional requests are available and worth considering here, unlike on Gitea: GitLab sends
-a weak `ETag` on list and notes responses, and `If-None-Match` returns `304` **[live-CE]**
-(verified on both the issue list and the notes list). Whether a `304` is cheaper than a `200`
-against a rate-limit budget is **[unknown]**; GitLab's rate-limit documentation does not
-address conditional requests, and no `RateLimit-*` headers were observable on the
-Community Edition instance because throttling is off by default there. Measuring
-`RateLimit-Observed` across a `304` on GitLab.com would settle it.
+Conditional requests are available here, unlike on Gitea: GitLab sends a weak `ETag` on list
+and notes responses, and `If-None-Match` returns `304` **[live-CE]** (verified on both the
+issue list and the notes list). Whether a `304` is cheaper than a `200` against a rate-limit
+budget is **[unknown]**; GitLab's rate-limit documentation does not address conditional
+requests, and no `RateLimit-*` headers are observable on the Community Edition instance
+because throttling is off by default there. See [Open questions](#open-questions).
 
 ### 6. `FetchIssueComments`
 
@@ -661,8 +673,8 @@ GET /projects/:id/issues/:iid/notes?activity_filter=only_comments&sort=asc&per_p
   paginate.
 - Bodies are Markdown and pass through unflattened, like GitHub and Gitea and unlike Jira's
   ADF **[live-CE]**.
-- Notes carry an `internal` boolean (renamed from `confidential` in an earlier release)
-  **[live-CE]** **[source]**. Internal notes are visible only to project members at
+- Notes carry an `internal` boolean **[live-CE]** **[source]**. Internal notes are visible
+  only to project members at
   Reporter level and above; they are returned to a token that can see them. The adapter
   passes them through: they are genuine human comments, and an operator who does not want
   them in prompts controls that by not writing them.
@@ -843,8 +855,8 @@ The approximation's limits must be stated, because it looks like a mention filte
   [[docs]](https://docs.gitlab.com/user/gitlab_com/#rate-limits-on-gitlabcom), and
   `search_rate_limit = 30` per minute on the Community Edition instance's own settings
   **[live-CE]**. This applies to the dedicated search API; whether the `search` *parameter*
-  on the issue-list route draws on the same budget is **[unknown]** and would be settled by
-  observing `RateLimit-Name` on a throttled response.
+  on the issue-list route draws on the same budget is **[unknown]**, carried in
+  [Open questions](#open-questions).
 
 Recommendation: treat "assigned to the automation identity" as the supported scoping
 mechanism and "mentions" as a best-effort text filter the operator opts into, with the
@@ -977,12 +989,11 @@ diagnostically. It is recorded as the available remedy if a deployment shows pag
 itself: an absent `rel="next"` is the normal end-of-results signal in both modes, and in
 keyset mode the cursor is embedded in a URL the paginator follows opaquely.
 
-One caveat worth stating because it affects proxied self-managed deployments: the `Link`
-URLs observed were absolute and matched the requested host **[live-CE]**, but whether GitLab
-builds them from the incoming request or from the instance's configured external URL is
-**[unknown]**. On a deployment where the two differ, following an absolute `Link` URL could
-address the wrong host. Issuing one paginated request through a proxy whose forwarded host
-differs from the instance's external URL and inspecting the `Link` header would settle it.
+One caveat affects proxied self-managed deployments: the `Link` URLs are absolute and match
+the requested host **[live-CE]**, but whether GitLab builds them from the incoming request or
+from the instance's configured external URL is **[unknown]**. On a deployment where the two
+differ, following an absolute `Link` URL could address the wrong host. See
+[Open questions](#open-questions).
 
 ---
 
@@ -1380,10 +1391,11 @@ capability records the response shape, the mapping onto the `internal/domain` SC
 decision taken. Nothing here is part of the tracker adapter.
 
 The fixture is a project at namespace depth three (`scmlab/team/squad/mrlab`), five merge
-requests covering the clean, conflicting, draft, and merged cases, a registered runner
-executing real jobs, and a project access token identity for the bot probes. Every probe
-below was run against it. Reads use the project Developer token unless a probe is explicitly
-about the administrator view.
+requests covering the clean, conflicting, draft, and merged cases, a registered
+Docker-executor runner executing real jobs, and a project access token identity for the bot
+probes. It stands on the lab instance as the SCM fixture blueprint. Every probe below was run
+against it or against a scratch project of the same shape with its own runner. Reads use the
+project Developer token unless a probe is explicitly about the administrator view.
 
 Three findings dominate the design and are stated once here because several capabilities
 depend on them:
@@ -1394,16 +1406,14 @@ depend on them:
 - **The merge endpoint's rejection body does not name its reason.** Already-merged, draft, and
   conflicting merge requests all return the byte-identical `405 {"message":"405 Method Not
   Allowed"}` **[live-CE]**. See [the merge call](#6-merge-call) for what that forces.
-- **Embedded user objects carry no bot marker.** The `bot` field exists on `GET /users/:id` but
-  not on the author of a note **[live-CE]** **[source]**, which reopens a claim the earlier
-  gap map got wrong.
+- **Embedded user objects carry no bot marker.** The `bot` field exists on `GET /users/:id`
+  but not on the author of a note **[live-CE]** **[source]**.
 
 ### Decisions the adapter does not make
 
-Several decisions this section once left to the GitLab author arrive from
-`internal/scm/scmcore`, which every forge half depends on and which imports only
-`internal/domain`. The adapter supplies the wire read and the normalization; the verdict is
-computed once, shared:
+Several decisions arrive from `internal/scm/scmcore`, which every forge half depends on and
+which imports only `internal/domain`. The adapter supplies the wire read and the
+normalization; the verdict is computed once, shared:
 
 | Decision | Shared owner | What GitLab supplies |
 | --- | --- | --- |
@@ -1416,7 +1426,7 @@ computed once, shared:
 | Bot-author classification | `scmcore.IsBotAuthor` | The platform bot flag and the configured allowlist |
 | Label-event id ordering | `scmcore.SortableEventID` | The numeric journal id |
 
-Two consequences change behavior this section previously described as the adapter's own:
+Two consequences of that ownership shape the merge path:
 
 - **`ErrSCMConflict` is reachable only from the merge write path.** `scmcore.ToSCMError`
   performs no promotion, and `scmcore.AsMergeConflict` is called only by `MergePR`. A 405 or
@@ -1614,10 +1624,8 @@ with 405 if any still holds, so a stale `clean` read cannot merge a blocked merg
 
 ### 3. Changes-requested reviews
 
-**GitLab does have a per-reviewer review state on the REST surface, and the reference
-documentation does not mention it.** This was the single most contested question in this
-research, because two sources appeared to disagree. Both turned out to be describing different
-objects.
+**GitLab has a per-reviewer review state on the REST surface, and the reference documentation
+does not mention it.** Two objects carry a `state` field and they describe different things.
 
 The **merge-request object's** `reviewers[]` array holds bare user objects whose `state` is the
 user's *account* state **[live-CE]**:
@@ -1643,7 +1651,7 @@ Both `state` fields appear in one response and mean different things. Reading th
 where the review state was intended is the trap, and it is easy to fall into because the outer
 object nests the very field name it shadows.
 
-Three independent confirmations that the review state is Community Edition and real:
+Three independent confirmations that the review state is a Community Edition feature:
 
 - `lib/api/merge_requests.rb` defines the route at CE level, outside the `ee/` tree, and renders
   it with `Entities::MergeRequestReviewer`, which exposes `user`, `state`, and `created_at`
@@ -1689,8 +1697,8 @@ current `sha`.
 
 ### 4. CI status source
 
-The issue frames pipelines and commit statuses as two competing models. They are not: **GitLab
-unifies them, and the unification was verified in both directions.**
+**GitLab unifies pipelines and commit statuses, and the unification holds in both
+directions.** They are not two competing models.
 
 Posting an external commit status to a SHA that **already has a pipeline** attaches it to that
 pipeline and changes the pipeline's own status. A pipeline reporting `success` (its only failing
@@ -1737,7 +1745,11 @@ merge-gate vocabulary so that one forge cannot answer "is CI green" two ways, an
 and Gitea adapters both return its four values (`success`, `pending`, `failing`, and the empty
 string). GitLab maps into the same four through `mapPipelineStatus`
 (`internal/scm/gitlab/scm_merge.go`), which partitions every value of the platform's 13-value
-`head_pipeline.status` enum:
+`head_pipeline.status` enum. The instance's own GraphQL `PipelineStatusEnum` and `CiJobStatus`
+each enumerate exactly those 13 values (`created`, `waiting_for_resource`, `preparing`,
+`waiting_for_callback`, `pending`, `running`, `success`, `failed`, `canceling`, `canceled`,
+`skipped`, `manual`, `scheduled`) **[live-CE]**, matching `AVAILABLE_STATUSES` at
+`v19.2.1-ee` **[source]**:
 
 | `head_pipeline.status` | `GetCIStatus` returns |
 | --- | --- |
@@ -1780,6 +1792,10 @@ reports `manual`. Two arrangements reach that shape, and both were reproduced **
   stage `build`), `manual_gate` (`manual`, stage `gate`), and `failing_job` (`failed`, stage
   `test`, `needs: [build_job]`) likewise produced `head_pipeline.status: "manual"`.
 
+Neither arrangement moves `detailed_merge_status`: both merge requests read `mergeable`
+**[live-CE]**, so on a project that does not require passing pipelines the CI read is reached
+and the merge gate rests entirely on it.
+
 Only the pipeline's own job set separates those shapes from the benign one; no other field of
 the merge-request response distinguishes them. Reading
 `GET /projects/:id/repository/commits/:sha/statuses` for `head_pipeline.sha`, scoped to
@@ -1806,9 +1822,11 @@ load-bearing rather than defensive. A commit carrying two pipelines returned bot
 entries unfiltered (`X-Total: 2`) and exactly one entry under each `pipeline_id` value
 (`X-Total: 1`), and `head_pipeline` moved to the newer pipeline **[live-CE]**.
 
-A project that enables the "Pipelines must succeed" setting never reaches the CI read at all.
+A project that enables the "Pipelines must succeed" setting
+(`only_allow_merge_if_pipeline_succeeds: true`) never reaches the CI read at all.
 There a merge request whose head pipeline is `manual` reports
-`detailed_merge_status: "ci_still_running"` **[live-CE]**, which is outside `mapMergeability`'s
+`detailed_merge_status: "ci_still_running"` while `merge_status` stays `can_be_merged`
+**[live-CE]**, which is outside `mapMergeability`'s
 recognized set and lands in its `blocked` arm, so the auto-merge precondition table stops on
 mergeability before it calls `GetCIStatus`. The value is `ci_still_running` rather than
 `ci_must_pass` because the reason is chosen by `diff_head_pipeline_considered_in_progress?`,
@@ -1865,9 +1883,8 @@ size.
 the failing count is the adapter's to choose: `scmcore.AggregateCIStatus` and
 `scmcore.FailingCount` compute both from the normalized `CheckRun` set, and
 `adaptertest.AssertCIAggregateMatchesCore` recomputes them from the returned `CheckRuns` and
-fails the suite when either disagrees. Sourcing the aggregate from the pipeline's own status,
-as this section previously specified, would fail that assertion on exactly the case that
-motivated it.
+fails the suite when either disagrees. Sourcing the aggregate from the pipeline's own status
+would fail that assertion on exactly the case that motivated it.
 
 Mapping a soft-failing job to `neutral` reconciles the two: the platform's `allow_failure`
 rule is applied once, where the entry is normalized, and the shared fold then agrees with the
@@ -2012,14 +2029,12 @@ conflicting    (iid 2, correct sha) -> 405 {"message":"405 Method Not Allowed"}
 ```
 
 The source explains why: both arms of `execute_merge` call the same bare `not_allowed!` helper,
-which renders a constant **[source]**. When these notes were written the `SCMAdapter` contract
-keyed the already-merged marker on the provider's response body, and GitLab's constant body was
-a problem to be worked around. It is no longer one. The contract requires implementations to
-surface the substring "already merged" in `SCMError.Message` "when they have confirmed, by
-re-reading the pull request, that the pull request is merged, rather than by matching the
-provider's response wording" (`MergePR`, `internal/domain/scm.go`). GitLab's opaque 405 is
-therefore no longer exceptional: GitHub and Gitea re-read for the same reason, and Gitea does
-so even though its own body does say "already merged".
+which renders a constant **[source]**. The opaque body is not exceptional under the contract,
+which requires implementations to surface the substring "already merged" in `SCMError.Message`
+"when they have confirmed, by re-reading the pull request, that the pull request is merged,
+rather than by matching the provider's response wording" (`MergePR`,
+`internal/domain/scm.go`). GitHub and Gitea re-read for the same reason, and Gitea does so
+even though its own body does say "already merged".
 
 **Decision: on 405, re-read the merge request and classify from its state.** This is the
 contract's own procedure rather than a substitute for it.
@@ -2076,8 +2091,8 @@ only the merge write path promotes.
 
 ### 7. Bot classification
 
-**The platform bot marker does not reach note authors, which corrects a claim in the earlier gap
-map.** That claim was true of *token identities* and does not carry to *note authors*.
+**The platform bot marker does not reach note authors.** It is a property of *token
+identities*, readable on one route, and it does not travel with an embedded author object.
 
 Every embedded user object in the API, including a note's `author`, is rendered with
 `API::Entities::UserBasic`, which exposes `id`, `username`, `name`, `state`, `locked`,
@@ -2181,12 +2196,19 @@ Every route below was exercised on the fixture unless the status column says oth
 | `ListLabelEvents` | `GET .../merge_requests/:iid/resource_label_events` | Route verified, `200 []`; shape verified on the issue variant **[live-CE]**. Entry ids normalize through `scmcore.SortableEventID`, so ordering by `(At, ID)` as strings matches journal order |
 | `RemoveLabel` | `PUT .../merge_requests/:iid` with `remove_labels` | Not exercised on merge requests; identical parameter to the issue route. A name that does not exist returns `200` and changes nothing **[live-CE]**, which is already the contract's nil-return no-op |
 
-Two findings from the tracker research that the forge half inherits unchanged:
+Every other forge route the fixture exercised matches: merge-request list, merge-request notes
+and discussions, merge-request `approvals`, pipelines, commits, branches, protected branches,
+`related_merge_requests`, and both resource-event journals **[live-CE]**. Merge-request
+`approval_state` is the one route that does not match; see
+[what Community Edition cannot do](#what-community-edition-cannot-do).
+
+Two properties of the tracker surface the forge half inherits unchanged:
 
 - **State-change and label-change events are not notes.** GitLab keeps them in separate journals,
-  `resource_label_events` and `resource_state_events`, both available on Community Edition and
-  both verified to return typed entries **[live-CE]**. The label-command reaction reads the label
-  journal, not the note stream.
+  `resource_label_events` and `resource_state_events`, both available on Community Edition.
+  The label journal returns typed `add` and `remove` entries naming the label, the actor, and
+  the timestamp, and the state journal returns the close event **[live-CE]**. The
+  label-command reaction reads the label journal, not the note stream.
 - **Notes are the same entity as on issues**, so the comment normalization is shared. System notes
   must be filtered the same way, and the merge-request notes route accepts the same
   `activity_filter` and `sort` parameters.
@@ -2278,236 +2300,6 @@ Stated plainly, with the degradation rather than a workaround:
 
 ---
 
-## Live verification results
-
-Established against self-managed GitLab Community Edition 19.2.1 (revision `f4d029d2da8`,
-`enterprise: false`) on 2026-08-04, using a **project Developer** token for every probe whose
-result is reported, and an administrator token only for provisioning and cleanup. GitLab.com
-(`19.3.0-pre`, revision `7725732be39`, `enterprise: true`, namespace plan `free`) was used
-only for the comparisons marked **[live-SaaS]**.
-
-1. **Edition and tier.** `GET /version` reported `enterprise: false` on the self-managed
-   instance and `enterprise: true` on GitLab.com; `GET /namespaces` reported `plan: free` for
-   the GitLab.com namespace. Both `/version` and `/metadata` returned 401 without a token and
-   200 with a `read_api` token.
-2. **Auth scheme matrix.** `PRIVATE-TOKEN`, `Authorization: Bearer`, and
-   `?private_token=` all returned 200; `JOB-TOKEN` with a personal access token returned 401.
-   A bad token returned `401 {"message":"401 Unauthorized"}`; a revoked token returned
-   `401 {"error":"invalid_token","error_description":"Token was revoked. ..."}`; no token at
-   all against a private project returned `404 {"message":"404 Project Not Found"}`.
-3. **Scope sufficiency.** A `read_api`-only token performed all four probed reads and was
-   refused all three writes with
-   `403 {"error":"insufficient_scope",...}`; an `api` token performed everything.
-4. **Token types.** Personal, project, and group access tokens all authenticated. The project
-   token's identity was `project_<id>_bot_<hex>` with `bot: true` and could not see a sibling
-   project (404); the group token's identity was `group_<id>_bot_<hex>` with `bot: true` and
-   could see both projects in the group and `GET /groups/:id/issues`. A human-owned personal
-   access token reported `bot: false`. `GET /personal_access_tokens/self` returned the token
-   record for all of them.
-5. **Identifier divergence.** Two issues created in the first project had `(iid, id)` of
-   `(7, 9)` and `(8, 10)`; the second project's first two issues were `(1, 7)` and `(2, 8)`.
-   On GitLab.com a new project's first two issues were `(1, 196614283)` and `(2, 196614285)`.
-   `GET /issues/:id` returned 403 for the Developer token and 200 for the administrator.
-6. **Project addressing.** A percent-encoded `group%2Fproject` path resolved; an unencoded
-   slash returned `404 {"error":"404 Not Found"}`.
-7. **Blocking links.** `link_type=blocks` and `is_blocked_by` returned
-   `400 {"error":"link_type does not have a valid value"}`; `relates_to` returned 201; an
-   omitted `link_type` defaulted to `relates_to`; the created link was visible from both
-   endpoints of the relation. On GitLab.com the same two values returned
-   `403 {"message":"Blocked issues not available for current license"}`.
-8. **Tier boundaries.** A `PUT` carrying only `weight=3` returned a 400 enumerating the
-   entire accepted parameter set, which excluded `weight`; the same request on GitLab.com
-   returned a list additionally containing `weight`, `epic_id`, and `epic_iid`, and the write
-   itself returned 200. `weight=3` as a *filter* was silently ignored. Two
-   `assignee_username` values returned `400 {"error":"assignee_username allows one value, but
-   found 2: ...}` on Community Edition and 200 on GitLab.com. The Community Edition and
-   GitLab.com issue objects differed by exactly one key, `blocking_issues_count`.
-9. **Scoped labels.** `workflow::testing` and `workflow::other` were both created as ordinary
-   project labels and coexisted on one issue after a single `add_labels` carrying both.
-10. **Silent parameter ignore.** `labels=backlog` returned 3 of 6 issues, while `labelz=`,
-    `label=`, `assignee=`, `totally_bogus_param=`, `or[label_name][]=` (with an existing label
-    and with a nonexistent one), and `weight=` each returned all 6. On GitLab.com
-    `or[label_name][]=<existing label>` likewise returned every issue. By contrast
-    `state=open`, `state_event=closed`, and `activity_filter=bogus` each returned
-    `400 {"error":"<param> does not have a valid value"}`.
-11. **Filter semantics.** `labels=bug,in-progress` matched only the issue carrying both;
-    `labels=backlog,bug` matched nothing; `labels=BACKLOG` and `labels=no-such-label` returned
-    empty sets; `labels=Any` returned all, `labels=None` none; `not[labels]=backlog` returned
-    the complement; `assignee_username`, `assignee_id`, `assignee_id=None|Any`,
-    `author_username`, `scope=assigned_to_me`, `search`, `search&in=`, `iids[]`, and
-    `updated_after` (future timestamp empty, current day full) all behaved as documented.
-12. **Work item exclusion.** After creating one `task` and one `incident`, the unfiltered
-    `state=opened` list returned seven items including both; `issue_type=issue` returned
-    exactly the five issues; `issue_type=task` returned only the task.
-13. **State and label writes.** `state_event=close` then `reopen` toggled the native state and
-    were idempotent on repetition; `closed` and `open` returned 400. `add_labels` was additive
-    and created a nonexistent label as a project label; `remove_labels` tolerated a
-    nonexistent name; `add_labels=REVIEW` on an issue carrying `review` produced both labels
-    and a second project label; `labels=` replaced the entire set. A single `PUT` carrying
-    `state_event`, `add_labels`, and `remove_labels` applied all three, and `add` plus
-    `remove` of the same name resolved in favor of remove.
-14. **Group labels.** A group-level label (`is_project_label: false`) attached to a project
-    issue and matched a `labels=` filter.
-15. **Notes.** The route returned system notes mixed with user comments;
-    `activity_filter=only_comments` and `only_activity` partitioned them exactly;
-    `sort=asc` reordered them oldest-first against a `desc` default; a 55-note issue paginated
-    at 20 per page with `X-Total: 55` and a `rel="next"` link, and returned all 55 at
-    `per_page=100`; `user_notes_count` counted non-system notes only; creating a note returned
-    201 with the Markdown body and newlines preserved; an omitted body returned
-    `400 {"error":"body is missing"}` and an empty body a 400 embedding a model-validation
-    rendering.
-16. **Resource event journals.** `resource_label_events` returned typed `add` and `remove`
-    entries naming the label, actor, and timestamp; `resource_state_events` returned the close
-    event. Label changes appeared in the label journal and **not** in the note stream.
-17. **Pagination.** `per_page` defaulted to 20 and clamped 200 to 100; offset responses carried
-    `X-Total`, `X-Total-Pages`, `X-Page`, `X-Per-Page`, `X-Next-Page` and a `Link` header;
-    `pagination=keyset` returned a `rel="next"` link embedding an opaque `cursor` and omitted
-    the `X-Total` family; five `order_by` values were accepted in keyset mode; the keyset link
-    echoed the effective query, which is how the `state=all` default was established.
-18. **Conditional requests.** A weak `ETag` was present on the issue-list and notes responses,
-    and `If-None-Match` returned 304 for both.
-19. **Rate limiting.** No `RateLimit-*` headers appeared on any Community Edition response, and
-    the instance reported `throttle_authenticated_api_enabled: false` with a 7,200-per-3,600s
-    default, alongside enabled granular limits including `notes_create_limit: 300` and
-    `search_rate_limit: 30`, and a null `rate_limiting_response_text`. GitLab.com returned
-    `ratelimit-limit: 2000`, `ratelimit-name: throttle_authenticated_api`,
-    `ratelimit-observed`, `ratelimit-remaining`, and `ratelimit-reset`.
-20. **Errors.** Four envelope shapes were observed. A missing issue returned
-    `404 {"message":"404 Not found"}`; a missing project, an unauthorized project, and an
-    unauthenticated request to a private project all returned the byte-identical
-    `404 {"message":"404 Project Not Found"}`; an unmatched route returned
-    `404 {"error":"404 Not Found"}`; a non-numeric `iid` returned
-    `400 {"error":"issue_iid is invalid"}`.
-21. **Forge route existence.** Merge-request list, merge-request notes and discussions,
-    merge-request `approvals`, pipelines, commits, branches, protected branches,
-    `related_merge_requests`, and both resource-event journals all matched their routes;
-    merge-request `approval_state` did not.
-22. **Container cost and boot profile.** The `gitlab/gitlab-ce:19.2.1-ce.0` image is
-    1,382,863,597 bytes compressed and 3,555,125,274 bytes on disk, and pulled in 63 s. Two
-    independent boots of the same image and configuration produced the same three-stage
-    profile: no TCP connection for roughly the first 90 s, `502` from the web front end at
-    100 to 114 s, and a real application response by 120 to 124 s. The Docker healthcheck
-    reported `healthy` at 60 s, before the application answered at all. On a fully booted
-    instance, `/-/readiness` returned `200` from inside the container and
-    `404 {"error":"Not Found","status":404}` from the host through the published port,
-    matching the shipped default `gitlab_rails['monitoring_whitelist'] = ['127.0.0.0/8',
-    '::1/128']` read from the image's own configuration template, while
-    `GET /api/v4/version` returned `401` from both.
-
-The 2026-08-10 pass added the following against a purpose-built project at namespace depth three
-(`scmlab/team/squad/mrlab`), with a registered Docker-executor runner:
-
-23. **Project addressing at depth.** `GET /projects/scmlab%2Fteam%2Fsquad%2Fmrlab` returned 200
-    and echoed `path_with_namespace: "scmlab/team/squad/mrlab"`; the sub-route
-    `.../merge_requests` returned `200 []`. Unencoded slashes returned
-    `404 {"error":"404 Not Found"}` and double-encoded `%252F` returned
-    `404 {"message":"404 Project Not Found"}`, the two envelopes distinguishing an unmatched
-    route from a failed lookup.
-24. **`detailed_merge_status` values.** Six values were observed in REST bodies: `preparing` and
-    `checking` on freshly created or freshly approved merge requests, `mergeable`, `conflict`
-    (with `has_conflicts: true`), `draft_status`, and `not_open` after merge. The instance's own
-    GraphQL schema enumerated 24 values, two more than the upstream default branch carries.
-    Approving a merge request moved the field from `mergeable` back to `checking`, proving it
-    recomputes.
-25. **Approvals payload.** Community Edition returned exactly four keys: `user_has_approved`,
-    `user_can_approve`, `approved`, `approved_by[]`. No `approvals_required` and no
-    `approvals_left`. The first two keys were viewer-relative: the same merge request reported
-    `user_has_approved: true` to the approver and `false` to another token. `approval_state`,
-    `approval_rules`, and the project-level `approvals` route each returned
-    `404 {"error":"404 Not Found"}`. With zero approvals the merge request was still `mergeable`.
-26. **Per-reviewer review state.** `GET .../merge_requests/:iid/reviewers` returned objects
-    nesting the user under `user` and exposing a top-level `state`, which read `unreviewed` on
-    assignment, `approved` after `approve`, and `unapproved` after `unapprove`. The
-    merge-request object's own `reviewers[]` array carried only bare user objects whose `state`
-    was the account state `active`. No REST route and no GraphQL mutation set the review state.
-27. **CI unification.** An external commit status posted to a SHA that already had a pipeline
-    attached to that pipeline (`pipeline_id` echoed the existing id) and flipped the pipeline
-    from `success` to `failed`. An external status posted to a SHA with no pipeline created one
-    with `source: "external"`, which became the merge request's `head_pipeline`. A pipeline whose
-    only failing job carried `allow_failure: true` reported top-level `success` with
-    `detailed_status.group: "success-with-warnings"`, and `detailed_status` was present on the
-    pipeline detail route and on `head_pipeline` but absent from the pipeline list route.
-28. **Job trace.** `GET /projects/:id/jobs/:job_id/trace` returned `text/plain` with
-    `Content-Length: 3926` over 44 lines for a real failing job. Every line carried an RFC 3339
-    nanosecond timestamp, a stream token (`00O`, `01O`, `01E`, `00O+`), and ANSI escape
-    sequences, plus `section_start`/`section_end` markers terminated by carriage returns. A
-    `Range: bytes=0-99` request returned 200 with the full body and no `Accept-Ranges` or
-    `Content-Range` header. A nonexistent job returned `404 {"message":"404 Not found"}`.
-29. **Merge endpoint.** Omitting `sha` returned `400 {"message":"SHA must be provided when
-    merging"}` for both token identities. A Developer token returned
-    `401 {"message":"401 Unauthorized"}` against the default branch, which is protected with
-    `merge_access_levels` of Maintainers. A wrong `sha` returned `409 {"message":"SHA does not
-    match HEAD of source branch: <actual sha>"}`. Already-merged, draft, and conflicting merge
-    requests each returned the byte-identical `405 {"message":"405 Method Not Allowed"}`. A
-    squash merge returned both a `squash_commit_sha` and a `merge_commit_sha`. The standalone
-    rebase route returned `202 {"rebase_in_progress":true}`.
-30. **Bot marker.** A note authored by a project access token identity and a note authored by a
-    human carried identical author key sets, neither containing `bot`. `GET /users/:id` returned
-    `bot: true` for the token identity, and returned it to a non-administrator token.
-    `GET /users?username=` omitted the field.
-31. **Branch deletion.** `DELETE .../repository/branches/:branch` returned 204 with an empty body
-    on success and `404 {"message":"404 Branch Not Found"}` for an absent branch. A branch name
-    containing a slash deleted successfully when percent-encoded. `should_remove_source_branch:
-    true` on the merge call did not delete the branch synchronously: it was still readable
-    immediately after the 200 merge response.
-
-The 2026-08-16 pass added the following against a purpose-built scratch project in the
-administrator's own namespace, with its own registered Docker-executor runner. Every result
-below was read with the project Developer token; the administrator token created the project,
-the runner, and the branches only.
-
-32. **A `manual` head pipeline can carry a failed job, in two arrangements.** A pipeline whose
-    stage `test` held `manual_gate` (`when: manual`, `allow_failure: false`) and `failing_job`
-    (`exit 1`) settled at `head_pipeline.status: "manual"` with jobs `failing_job: failed` and
-    `manual_gate: manual`. A second pipeline with `build_job` in stage `build`, `manual_gate` in
-    stage `gate`, and `failing_job` in stage `test` declaring `needs: [build_job]` likewise
-    settled at `manual`, with `build_job: success`, `manual_gate: manual`, and
-    `failing_job: failed`. Neither merge request's `detailed_merge_status` was affected: both
-    read `mergeable`, so the CI read is reached on a project that does not require passing
-    pipelines.
-33. **The commit-statuses view of those pipelines.** Scoped to `head_pipeline.sha` and
-    `head_pipeline.id`, the same-stage pipeline returned two entries (`manual_gate: manual`,
-    `failing_job: failed`, `allow_failure: false` on both) and the `needs` pipeline returned
-    three. Normalizing each through the job-outcome mapping yields `neutral` plus `failure`, and
-    `success` plus `neutral` plus `failure`, so `scmcore.MergeGate` returns `failing` for both.
-34. **A wholly manual pipeline folds to a merge-eligible verdict.** Two blocking manual jobs and
-    nothing else settled at `head_pipeline.status: "manual"` and returned two `manual` entries,
-    which normalize to two completed `neutral` runs, so `scmcore.MergeGate` returns `success`.
-35. **A manual gate blocking a later stage folds to a deferral.** `manual_gate` in stage `gate`
-    with `deploy_job` in stage `deploy` settled at `head_pipeline.status: "manual"` with
-    `deploy_job: created`, which normalizes to a `queued` run, so `scmcore.MergeGate` returns
-    `pending`. Folding the job set therefore distinguishes this shape from the wholly manual one,
-    which no single pipeline status can.
-36. **`pipeline_id` scoping is load-bearing on the statuses route.** Triggering a second pipeline
-    for an unchanged SHA moved `head_pipeline` to the new pipeline and left the commit carrying
-    two. The unfiltered statuses read returned `X-Total: 2` with one entry per pipeline; each
-    `pipeline_id` value returned `X-Total: 1`. Every fixture in this pass fit one page:
-    `X-Total` of 2, 3, 2, and 2 with `X-Total-Pages: 1`.
-37. **`head_pipeline` can describe a superseded commit.** After a commit that removed
-    `.gitlab-ci.yml`, and therefore created no pipeline, a merge request reported
-    `sha: 86c6dc4b` while `head_pipeline` still reported `id: 18`, `sha: 5487092b`, and
-    `status: "success"`. Its merge-request pipeline list carried that one pipeline only.
-38. **"Pipelines must succeed" reports `ci_still_running` for a `manual` head pipeline.** With
-    `only_allow_merge_if_pipeline_succeeds: true` on the project, all three `manual` merge
-    requests moved from `detailed_merge_status: "mergeable"` to `"ci_still_running"`, while
-    `merge_status` stayed `can_be_merged`. Setting the flag back to false restored `mergeable`.
-39. **The pipeline-status enum still has 13 values.** The instance's own GraphQL
-    `PipelineStatusEnum` and `CiJobStatus` each enumerate `created`, `waiting_for_resource`,
-    `preparing`, `waiting_for_callback`, `pending`, `running`, `success`, `failed`, `canceling`,
-    `canceled`, `skipped`, `manual`, and `scheduled`, matching `AVAILABLE_STATUSES` at
-    `v19.2.1-ee`. `DetailedMergeStatus` still enumerates 24 values, `ci_still_running` among
-    them.
-
-All fixture mutations made during the 2026-08-04 and 2026-08-05 passes were reverted:
-probe-created issues, notes, issue links, and labels were deleted, altered label sets and issue
-states were restored, and every token created for scope probing was revoked. The 2026-08-10
-fixtures were **left in place** as the SCM fixture blueprint: the `scmlab` group tree, the
-`scmlab/team/squad/mrlab` project, its merge requests, and the registered runner. The 2026-08-16
-pass created its own project and runner rather than mutating that blueprint, and deleted both
-afterwards.
-
----
-
 ## Source attribution
 
 | Topic | Primary source | Verification method |
@@ -2539,12 +2331,15 @@ afterwards.
 | Pipeline-status enum completeness | The live instance's own GraphQL introspection, and [`app/models/concerns/ci/has_status.rb`](https://gitlab.com/gitlab-org/gitlab/-/blob/v19.2.1-ee/app/models/concerns/ci/has_status.rb) | 13 values on both, against a control query whose known-good types resolved |
 | Declared authentication mechanisms, and the incompleteness of the machine-readable route surface | [`doc/api/openapi/openapi_v2.yaml`](https://gitlab.com/gitlab-org/gitlab/-/blob/v19.2.1-ee/doc/api/openapi/openapi_v2.yaml) and the [interactive rendering](https://docs.gitlab.com/api/openapi/openapi_interactive/) | Inspected for declared paths and parameters; live 404 on every instance-served description path |
 | Container image size and boot behavior | Docker Hub registry API; local image inspection | Measured pull, boot, healthcheck, and readiness polling |
-| Gitea and GitHub adapter behavior used in the comparison tables | The Gitea and GitHub adapter research notes in this directory, and `internal/domain/tracker.go` | Document and code reading at research time |
-| Decisions attributed to a shared package rather than to this adapter | `internal/scm/scmcore`, `internal/adaptertest`, `internal/httpkit`, `internal/issuekit`, `internal/registry`, and the `domain.SCMAdapter` and `domain.CIResult` godoc in `internal/domain` | Repository code reading after the adapter-family consolidation. No GitLab observation is involved, so these claims carry a symbol rather than an evidence tag |
+| Gitea and GitHub adapter behavior used in the comparison tables | The Gitea and GitHub adapter research notes in this directory, and `internal/domain/tracker.go` | Document and code reading |
+| Decisions attributed to a shared package rather than to this adapter | `internal/scm/scmcore`, `internal/adaptertest`, `internal/httpkit`, `internal/issuekit`, `internal/registry`, and the `domain.SCMAdapter` and `domain.CIResult` godoc in `internal/domain` | Repository code reading. No GitLab observation is involved, so these claims carry a symbol rather than an evidence tag |
 
-### Open questions
+---
 
-Carried forward explicitly rather than resolved by inference:
+## Open questions
+
+Every **[unknown]** tag in this document resolves to one row here. Each names the evidence
+that would settle it.
 
 | Question | Why it matters | Evidence that would settle it |
 | --- | --- | --- |
