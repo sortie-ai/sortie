@@ -46,20 +46,20 @@ type giteaReviewComment struct {
 	CreatedAt        string    `json:"created_at"`
 }
 
-// FetchPendingReviews returns the review comments of non-bot REQUEST_CHANGES
-// reviews on the given PR.
+// FetchPendingReviews returns the review comments of REQUEST_CHANGES reviews
+// on the given PR.
 //
 // Each retained review contributes its trimmed body as a PR-level comment when
-// non-empty, followed by its inline comments filtered by the same non-bot
-// predicate. Dismissed reviews are skipped, and comments are deduplicated by id.
-// The returned slice is non-nil even when empty; a failure returns a
+// non-empty, followed by its inline comments passing the same predicate.
+// Dismissed reviews are skipped, and comments are deduplicated by id. The
+// returned slice is non-nil even when empty; a failure returns a
 // [*domain.SCMError]. An inline comment carries the file line of the diff
 // side it is anchored to, and no comment is reported outdated.
 //
-// The non-bot predicate has no effect on Gitea: there is no platform bot marker
-// and this method passes no allowlist, so it cannot exclude a bot-authored
-// review or comment, and a bot's REQUEST_CHANGES review is not excluded here.
-// The predicate is retained for structural parity with
+// The predicate nominally excludes bot-authored reviews and comments, but has
+// no effect on Gitea: there is no platform bot marker and this method passes
+// no allowlist, so a bot's REQUEST_CHANGES review is not excluded here. The
+// predicate is retained for structural parity with
 // [GiteaSCMAdapter.FetchBotReviewComments].
 func (a *GiteaSCMAdapter) FetchPendingReviews(ctx context.Context, prNumber int, owner, repo string) ([]domain.ReviewComment, error) {
 	return a.collectReviewComments(ctx, prNumber, owner, repo,
