@@ -999,6 +999,13 @@ non-outdated comment IDs. If the fingerprint has not changed since the last disp
 no new continuation is triggered. Fingerprints are persisted across restarts in the
 `reaction_fingerprints` SQLite table.
 
+**Bot exclusion:** Human-loop selection drops a comment whose author the platform reports as
+an automated bot account, and separately drops a comment whose author matches
+`reactions.bot_review.bot_usernames`. The allowlist half takes effect only while
+`reactions.bot_review` is configured with a provider, because that is the only condition under
+which the allowlist is built; a deployment running `review_comments` alone sees no allowlist
+exclusion.
+
 **Escalation:** When `max_continuation_turns` is exhausted, the orchestrator applies the
 configured escalation action (label or comment) and releases the claim.
 
@@ -1116,7 +1123,7 @@ Additional fields (via Extra):
 
 | Field                    | Type         | Default | Dynamic Reload    | Description                                                                                               |
 | ------------------------ | ------------ | ------- | ----------------- | --------------------------------------------------------------------------------------------------------- |
-| `bot_usernames`          | list[string] | _(empty)_ | Requires restart | Allowlist of bot logins. A comment is bot-authored when the platform reports a bot user type OR its author login matches an entry here (case-insensitive). |
+| `bot_usernames`          | list[string] | _(empty)_ | Requires restart | Allowlist of bot logins. A comment is bot-authored when the platform reports a bot user type OR its author login matches an entry here (case-insensitive). An entry here is also excluded from `review_comments`, so an allowlisted author does not drive both loops. |
 | `poll_interval_ms`       | integer      | `60000` | Requires restart | Polling interval for bot comments. Minimum: `30000` (30 sec). The default is tighter than `review_comments` because bot comments arrive in bulk on push.  |
 | `max_continuation_turns` | integer      | `5`     | Requires restart | Maximum bot-fix continuation dispatches per issue before escalation. Must be positive. Higher than `review_comments` because bot fixes are mechanical.    |
 
@@ -1132,7 +1139,9 @@ its author login matches a `bot_usernames` entry, case-insensitively. The `bot_u
 allowlist covers review tools that comment under a regular user account (`user.type == "User"`)
 rather than a bot account, such as Hound (`houndci-bot`), which posts inline style comments under a regular user account. Unlike
 `review_comments`, no `CHANGES_REQUESTED` review state is required, because review bots
-commonly post comment-only reviews.
+commonly post comment-only reviews. The same `bot_usernames` entry also excludes its author from
+`review_comments`, so a `bot_review` comment set and a `review_comments` comment set never both
+carry the same allowlisted author's feedback.
 
 **No debounce:** Bot comments are dispatched immediately. There is no `debounce_ms`
 field; the debounce window that `review_comments` applies does not apply to `bot_review`,

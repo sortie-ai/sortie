@@ -15,8 +15,13 @@ There is the same YAML-versus-runtime asymmetry §11C.4 documents for auto-merge
 
 ### 11D.1 SCMAdapter interface
 
-Bot classification is an SCM-adapter concern. `FetchPendingReviews` (§11B.1) returns the human
-half; the `SCMAdapter` interface is widened with a sibling method that returns the bot half:
+Bot classification splits across two arms and, for the human half, across two layers. The
+platform-marker arm (`user.type == "Bot"` or equivalent) stays inside the adapter for both halves.
+The allowlist arm stays inside the adapter for the bot half, resolved as part of
+`FetchBotReviewComments` before the struct is constructed; for the human half it moves to the
+reaction layer, which drops an allowlisted author from the set `FetchPendingReviews` (§11B.1)
+already returned, using the same predicate (§11D.2). `FetchPendingReviews` returns the human half;
+the `SCMAdapter` interface is widened with a sibling method that returns the bot half:
 
 ```go
 FetchBotReviewComments(ctx context.Context, prNumber int, owner, repo string, botUsernames []string) ([]ReviewComment, error)
@@ -33,6 +38,11 @@ The result reuses the `ReviewComment` shape from §11B.2 unchanged; the bot's lo
 resolved inside the adapter before the struct is constructed. No platform field name (`user.type`,
 `position`) leaves the adapter package.
 
+The reaction layer applies the allowlist arm of this same classification to the human half, by
+calling the shared forge decision core (`internal/scm/scmcore`) directly. It MUST NOT import an
+adapter package; the platform-marker arm stays exclusively inside the adapter, so the reaction
+layer always passes `false` for that argument.
+
 ### 11D.2 Classification predicate
 
 A review or comment is bot-authored when the platform reports `user.type == "Bot"` OR the author
@@ -41,11 +51,19 @@ union: either qualifies. The allowlist is the operator's escape hatch for bots t
 `Bot` user type. Classification reads only `user.type` and `user.login`; no comment-body content
 heuristic is used.
 
-This is the mirror image of the `FetchPendingReviews` selection, with one further difference: the
-bot path MUST NOT require a `CHANGES_REQUESTED` review state. Automated review tools commonly post
-`COMMENTED` reviews, so any review or comment passing the bot-author predicate is selected
+The bot path MUST NOT require a `CHANGES_REQUESTED` review state. Automated review tools commonly
+post `COMMENTED` reviews, so any review or comment passing the bot-author predicate is selected
 regardless of review state. Comments the platform marks outdated are returned with `outdated == true`
 for the caller to filter.
+
+The human kind and the bot kind are not exact complements; state the invariant the system actually
+provides rather than a complement. The human kind drops every comment whose own author is
+allowlisted. The bot kind surfaces the comments of reviews whose review author is bot-authored on
+GitHub and Gitea (selection runs per review, then collects every comment attached to that review),
+and every bot-authored note on GitLab (selection runs per note). Where a platform attaches a
+comment to a review authored by someone else, that comment can fall outside both kinds: the human
+kind drops it because its own author is allowlisted, and the bot kind does not select it because
+the review it is attached to was not authored by a bot.
 
 ### 11D.3 Reconcile loop integration
 
