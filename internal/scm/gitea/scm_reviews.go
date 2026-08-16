@@ -31,10 +31,11 @@ type giteaReview struct {
 	SubmittedAt string    `json:"submitted_at"`
 }
 
-// giteaReviewComment is one inline comment from a review. Position is the line
-// on the current diff; a zero Position marks a comment whose anchor a later push
-// removed, in which case OriginalPosition holds the line it was written against.
-// There is no end-line field, so comments are single-line.
+// giteaReviewComment is one inline comment from a review. Position is the
+// new-side file line and OriginalPosition the old-side file line; the side a
+// comment is not anchored to reads zero, and both read zero for a
+// file-scoped comment. There is no end-line field, so comments are
+// single-line.
 type giteaReviewComment struct {
 	ID               int64     `json:"id"`
 	Path             string    `json:"path"`
@@ -52,7 +53,8 @@ type giteaReviewComment struct {
 // non-empty, followed by its inline comments filtered by the same non-bot
 // predicate. Dismissed reviews are skipped, and comments are deduplicated by id.
 // The returned slice is non-nil even when empty; a failure returns a
-// [*domain.SCMError].
+// [*domain.SCMError]. An inline comment carries the file line of the diff
+// side it is anchored to, and no comment is reported outdated.
 //
 // The non-bot predicate has no effect on Gitea: there is no platform bot marker
 // and this method passes no allowlist, so it cannot exclude a bot-authored
@@ -79,7 +81,8 @@ func (a *GiteaSCMAdapter) FetchPendingReviews(ctx context.Context, prNumber int,
 // allowlisted, so a non-allowlisted reply inside a bot review is excluded.
 // Dismissed reviews are skipped and comments are deduplicated by id. The
 // returned slice is non-nil even when empty; a failure returns a
-// [*domain.SCMError].
+// [*domain.SCMError]. An inline comment carries the file line of the diff
+// side it is anchored to, and no comment is reported outdated.
 func (a *GiteaSCMAdapter) FetchBotReviewComments(ctx context.Context, prNumber int, owner, repo string, botUsernames []string) ([]domain.ReviewComment, error) {
 	return a.collectReviewComments(ctx, prNumber, owner, repo,
 		func(r giteaReview) bool {
@@ -178,13 +181,19 @@ func (a *GiteaSCMAdapter) collectReviewComments(ctx context.Context, prNumber in
 
 // normalizeReviewComment maps a [giteaReviewComment] to a [domain.ReviewComment].
 //
-// A zero Position marks an outdated comment whose anchor a later push removed;
-// its line falls back to OriginalPosition. EndLine stays zero because Gitea
-// review comments are single-line.
+// StartLine takes Position when it is positive, else OriginalPosition when
+// that is positive, else zero; when both are positive the new side wins, so
+// the mapping stays total over every integer pair. EndLine stays zero
+// because Gitea review comments are single-line. Outdated is never set: the
+// route carries no invalidation signal, and its only candidate, the
+// comment's stored commit identifier, is fixed when the comment is written
+// and does not track a later push.
 func normalizeReviewComment(c giteaReviewComment) domain.ReviewComment {
-	outdated := c.Position == 0
-	startLine := c.Position
-	if outdated {
+	startLine := 0
+	switch {
+	case c.Position > 0:
+		startLine = c.Position
+	case c.OriginalPosition > 0:
 		startLine = c.OriginalPosition
 	}
 
@@ -195,7 +204,6 @@ func normalizeReviewComment(c giteaReviewComment) domain.ReviewComment {
 		Reviewer:    c.User.Login,
 		Body:        c.Body,
 		SubmittedAt: scmcore.ParseTimestampOrZero(c.CreatedAt),
-		Outdated:    outdated,
 	}
 }
 

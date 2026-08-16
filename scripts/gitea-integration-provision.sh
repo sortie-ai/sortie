@@ -170,6 +170,15 @@ BOT_PASSWORD="Sortie-Review-Bot-Pw1"
 FEATURE_BRANCH="feature-x"
 PROBE_BRANCH="status-probe"
 SENTINEL_PATH="review-sentinel.txt"
+# The feature branch modifies this pre-image line and inserts one line above
+# it, so the post-image number is the pre-image number plus one; a StartLine
+# assertion on either seeded line number can then tell which field the
+# adapter read. The integration test hard-codes both numbers.
+PRE_IMAGE_LINE=4
+POST_IMAGE_LINE=5
+# The human review's second comment anchors to the old side with this body,
+# fixed so the integration test can locate it by text.
+OLD_SIDE_COMMENT_BODY="Reviewer inline comment on the sentinel file's old side."
 # Proves the per-status target_url field name round-trips to CheckRun.DetailsURL.
 # The integration test hard-codes the same value.
 FAILING_TARGET_URL="https://ci.example.com/build/12345"
@@ -202,17 +211,30 @@ repo_response=$(curl -sS --max-time 30 \
 	"${ENDPOINT}/api/v1/repos/${PROJECT}")
 default_branch=$(printf '%s' "$repo_response" | jq -er '.default_branch')
 
-log "creating branch ${FEATURE_BRANCH} and committing the sentinel file"
+# Committed to the default branch, not the feature branch, so the pull
+# request modifies an existing file and both diff sides are populated.
+log "committing the sentinel file to ${default_branch}"
+base_content=$(printf 'sentinel line 1\nsentinel line 2\nsentinel line 3\nsentinel line 4\nsentinel line 5\nsentinel line 6\nsentinel line 7\n' | base64 | tr -d '\n')
+base_response=$(jq -nc --arg content "$base_content" --arg branch "$default_branch" \
+	'{content: $content, branch: $branch, message: "Add review sentinel file"}' |
+	gitea_call POST "/repos/${PROJECT}/contents/${SENTINEL_PATH}" token)
+sentinel_sha=$(printf '%s' "$base_response" | jq -er '.content.sha')
+
+log "creating branch ${FEATURE_BRANCH}"
 jq -nc --arg new "$FEATURE_BRANCH" --arg old "$default_branch" \
 	'{new_branch_name: $new, old_branch_name: $old}' |
 	gitea_call POST "/repos/${PROJECT}/branches" token >/dev/null
-# A NEW multi-line file: every line is an added diff line, so an inline comment
-# anchored to line 1 reads back with position > 0 (Outdated == false).
-sentinel_content=$(printf 'sentinel line 1\nsentinel line 2\nsentinel line 3\nsentinel line 4\nsentinel line 5\n' | base64 | tr -d '\n')
-sentinel_response=$(jq -nc --arg content "$sentinel_content" --arg branch "$FEATURE_BRANCH" \
-	'{content: $content, branch: $branch, message: "Add review sentinel file"}' |
-	gitea_call POST "/repos/${PROJECT}/contents/${SENTINEL_PATH}" token)
-head_sha=$(printf '%s' "$sentinel_response" | jq -er '.commit.sha')
+
+# Modifies line PRE_IMAGE_LINE and inserts one line above it, so the modified
+# line's post-image number (POST_IMAGE_LINE) is one past its pre-image
+# number; the two seeded review comments below anchor to these two distinct
+# numbers on purpose.
+log "modifying the sentinel file on ${FEATURE_BRANCH}"
+feature_content=$(printf 'sentinel line 1\nsentinel line 2\nsentinel line 3\ninserted sentinel line\nsentinel line 4 MODIFIED\nsentinel line 5\nsentinel line 6\nsentinel line 7\n' | base64 | tr -d '\n')
+feature_response=$(jq -nc --arg content "$feature_content" --arg branch "$FEATURE_BRANCH" --arg sha "$sentinel_sha" \
+	'{content: $content, branch: $branch, sha: $sha, message: "Modify review sentinel file"}' |
+	gitea_call PUT "/repos/${PROJECT}/contents/${SENTINEL_PATH}" token)
+head_sha=$(printf '%s' "$feature_response" | jq -er '.commit.sha')
 
 log "opening the review pull request"
 pr_response=$(jq -nc --arg head "$FEATURE_BRANCH" --arg base "$default_branch" \
@@ -220,14 +242,20 @@ pr_response=$(jq -nc --arg head "$FEATURE_BRANCH" --arg base "$default_branch" \
 	gitea_call POST "/repos/${PROJECT}/pulls" token)
 pr_index=$(printf '%s' "$pr_response" | jq -er '.number')
 
+# The first comment anchors new-side at POST_IMAGE_LINE; the second anchors
+# old-side at PRE_IMAGE_LINE with new_position 0, the comment this fix exists
+# to deliver.
 log "submitting the human REQUEST_CHANGES review as ${REVIEWER_USER}"
-jq -nc --arg path "$SENTINEL_PATH" \
-	'{event: "REQUEST_CHANGES", body: "Please address the inline comment.", comments: [{path: $path, body: "Reviewer inline comment on the sentinel file.", new_position: 1}]}' |
+jq -nc --arg path "$SENTINEL_PATH" --argjson newLine "$POST_IMAGE_LINE" --argjson oldLine "$PRE_IMAGE_LINE" --arg oldBody "$OLD_SIDE_COMMENT_BODY" \
+	'{event: "REQUEST_CHANGES", body: "Please address the inline comments.", comments: [
+		{path: $path, body: "Reviewer inline comment on the sentinel file.", new_position: $newLine},
+		{path: $path, body: $oldBody, old_position: $oldLine, new_position: 0}
+	]}' |
 	user_call "$REVIEWER_USER" "$REVIEWER_PASSWORD" POST "/repos/${PROJECT}/pulls/${pr_index}/reviews" >/dev/null
 
 log "submitting the bot COMMENT review as ${BOT_USER}"
-jq -nc --arg path "$SENTINEL_PATH" \
-	'{event: "COMMENT", body: "Automated review note.", comments: [{path: $path, body: "Bot inline comment on the sentinel file.", new_position: 1}]}' |
+jq -nc --arg path "$SENTINEL_PATH" --argjson newLine "$POST_IMAGE_LINE" \
+	'{event: "COMMENT", body: "Automated review note.", comments: [{path: $path, body: "Bot inline comment on the sentinel file.", new_position: $newLine}]}' |
 	user_call "$BOT_USER" "$BOT_PASSWORD" POST "/repos/${PROJECT}/pulls/${pr_index}/reviews" >/dev/null
 
 # One success and one failure with a target_url, well under any page size, so the

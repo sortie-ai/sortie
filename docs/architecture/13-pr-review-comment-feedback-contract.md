@@ -34,7 +34,9 @@ decision this contract uses, skips dismissed reviews, and deduplicates comments 
 Gitea users carry no `type: Bot` marker, so `FetchPendingReviews` on Gitea cannot exclude a
 bot-authored changes-requested review the way the GitHub adapter's platform-marker check does;
 automated-reviewer feedback is separated instead through the bot-review reaction's username
-allowlist (§11D).
+allowlist (§11D). The platform reports the two diff sides as separate line fields rather than one
+signed offset, so a comment carries the line of the side it is anchored to, and `outdated` stays
+false because the route exposes no invalidation signal.
 
 **GitLab adapter.** A GitLab SCM adapter registers under kind `gitlab`. GitLab has no review
 object bundling a verdict with a comment set, so `FetchPendingReviews` composes the selection from
@@ -61,8 +63,13 @@ ReviewComment:
   reviewer:     string      # username of the comment author
   body:         string      # comment text
   submitted_at: time.Time   # UTC timestamp from the platform
-  outdated:     bool        # true when the commented code was modified by a subsequent push
+  outdated:     bool        # true when the platform reports the commented code modified by a push
 ```
+
+`outdated` is a positive signal only: `true` means the platform reported the commented code
+modified by a subsequent push, and `false` means no such report was made; it does not assert that
+the code is unchanged. A provider with no platform signal for anchor invalidation leaves the field
+false for every comment it returns.
 
 `submitted_at` feeds the debounce window and nothing else, and a platform value that is absent or
 is not a valid RFC 3339 value normalizes to the zero time and does not fail the read. A zero value

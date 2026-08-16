@@ -68,8 +68,8 @@ func TestGiteaSCMFetchPendingReviews(t *testing.T) {
 			t.Fatalf("FetchPendingReviews: unexpected error: %v", err)
 		}
 
-		// review-101's body plus its two inline comments (1001 current, 1002
-		// outdated); the APPROVED, COMMENT, and dismissed REQUEST_CHANGES
+		// review-101's body plus its two inline comments (1001 new-side, 1002
+		// old-side); the APPROVED, COMMENT, and dismissed REQUEST_CHANGES
 		// reviews must all be excluded.
 		if len(got) != 3 {
 			t.Fatalf("FetchPendingReviews() len = %d, want 3 (review body + 2 inline comments)", len(got))
@@ -78,6 +78,9 @@ func TestGiteaSCMFetchPendingReviews(t *testing.T) {
 		byID := make(map[string]domain.ReviewComment, len(got))
 		for _, c := range got {
 			byID[c.ID] = c
+			if c.Outdated {
+				t.Errorf("comment %q Outdated = true, want false for every comment this method returns", c.ID)
+			}
 		}
 
 		body, ok := byID["review-101"]
@@ -87,30 +90,161 @@ func TestGiteaSCMFetchPendingReviews(t *testing.T) {
 		if body.Reviewer != "alice" {
 			t.Errorf(`comment "review-101" Reviewer = %q, want %q`, body.Reviewer, "alice")
 		}
-		if body.Outdated {
-			t.Error(`comment "review-101" Outdated = true, want false (PR-level comment)`)
+		if body.FilePath != "" {
+			t.Errorf(`comment "review-101" FilePath = %q, want empty`, body.FilePath)
+		}
+		if body.StartLine != 0 {
+			t.Errorf(`comment "review-101" StartLine = %d, want 0`, body.StartLine)
 		}
 
-		current, ok := byID["1001"]
+		newSide, ok := byID["1001"]
 		if !ok {
 			t.Fatalf("FetchPendingReviews() missing inline comment %q", "1001")
 		}
-		if current.Outdated {
-			t.Error(`comment "1001" Outdated = true, want false (position is 42)`)
+		if newSide.StartLine != 12 {
+			t.Errorf(`comment "1001" StartLine = %d, want 12 (position)`, newSide.StartLine)
 		}
-		if current.StartLine != 42 {
-			t.Errorf(`comment "1001" StartLine = %d, want 42`, current.StartLine)
+		if newSide.EndLine != 0 {
+			t.Errorf(`comment "1001" EndLine = %d, want 0`, newSide.EndLine)
 		}
 
-		outdated, ok := byID["1002"]
+		oldSide, ok := byID["1002"]
 		if !ok {
 			t.Fatalf("FetchPendingReviews() missing inline comment %q", "1002")
 		}
-		if !outdated.Outdated {
-			t.Error(`comment "1002" Outdated = false, want true (position is 0)`)
+		if oldSide.StartLine != 12 {
+			t.Errorf(`comment "1002" StartLine = %d, want 12 (falls back to original_position)`, oldSide.StartLine)
 		}
-		if outdated.StartLine != 17 {
-			t.Errorf(`comment "1002" StartLine = %d, want 17 (falls back to original_position)`, outdated.StartLine)
+	})
+
+	t.Run("new-side and old-side comments select distinct anchored lines", func(t *testing.T) {
+		t.Parallel()
+
+		// The committed fixture's new-side and old-side comments both anchor
+		// to line 12 of the live-captured probe PR, so a defect that read the
+		// wrong field (or a decode-level swap of Position and
+		// OriginalPosition) would still produce the fixture's expected
+		// StartLine by coincidence. These two comments carry distinct lines
+		// specifically so the two fields cannot be confused; they are inline
+		// JSON, not a committed testdata fixture, so the fixture shape
+		// contract's live-capture requirement does not apply.
+		const reviewsFixture = `[{"id":401,"state":"REQUEST_CHANGES","body":"","user":{"login":"alice"},"dismissed":false,"submitted_at":"2026-07-14T09:00:00Z"}]`
+		const commentsFixture = `[
+			{"id":4001,"path":"a.go","body":"new side","position":7,"original_position":0,"user":{"login":"alice"},"created_at":"2026-07-14T09:00:00Z"},
+			{"id":4002,"path":"a.go","body":"old side","position":0,"original_position":19,"user":{"login":"alice"},"created_at":"2026-07-14T09:00:00Z"}
+		]`
+		srv := httptest.NewServer(giteaReviewsAndCommentsHandler(t, []byte(reviewsFixture), []byte(commentsFixture)))
+		defer srv.Close()
+
+		adapter := mustSCMAdapter(t, srv.URL)
+		got, err := adapter.FetchPendingReviews(context.Background(), 6, testOwner, testRepo)
+		if err != nil {
+			t.Fatalf("FetchPendingReviews: unexpected error: %v", err)
+		}
+
+		byID := make(map[string]domain.ReviewComment, len(got))
+		for _, c := range got {
+			byID[c.ID] = c
+		}
+
+		newSide, ok := byID["4001"]
+		if !ok {
+			t.Fatalf("FetchPendingReviews() missing inline comment %q", "4001")
+		}
+		if newSide.StartLine != 7 {
+			t.Errorf(`comment "4001" StartLine = %d, want 7 (position)`, newSide.StartLine)
+		}
+
+		oldSide, ok := byID["4002"]
+		if !ok {
+			t.Fatalf("FetchPendingReviews() missing inline comment %q", "4002")
+		}
+		if oldSide.StartLine != 19 {
+			t.Errorf(`comment "4002" StartLine = %d, want 19 (original_position)`, oldSide.StartLine)
+		}
+	})
+
+	t.Run("a file-scoped comment normalizes to StartLine 0 with its FilePath preserved", func(t *testing.T) {
+		t.Parallel()
+
+		reviewsFixture := loadFixture(t, "reviews_pending_mixed.json")
+		commentsFixture := loadFixture(t, "review_comments_file_scoped.json")
+		srv := httptest.NewServer(giteaReviewsAndCommentsHandler(t, reviewsFixture, commentsFixture))
+		defer srv.Close()
+
+		adapter := mustSCMAdapter(t, srv.URL)
+		got, err := adapter.FetchPendingReviews(context.Background(), 6, testOwner, testRepo)
+		if err != nil {
+			t.Fatalf("FetchPendingReviews: unexpected error: %v", err)
+		}
+
+		var found bool
+		for _, c := range got {
+			if c.ID != "1003" {
+				continue
+			}
+			found = true
+			if c.StartLine != 0 {
+				t.Errorf(`comment "1003" StartLine = %d, want 0`, c.StartLine)
+			}
+			if c.FilePath != "spec778-target.txt" {
+				t.Errorf(`comment "1003" FilePath = %q, want %q`, c.FilePath, "spec778-target.txt")
+			}
+			if c.Outdated {
+				t.Error(`comment "1003" Outdated = true, want false`)
+			}
+		}
+		if !found {
+			t.Fatalf("FetchPendingReviews() missing file-scoped inline comment %q", "1003")
+		}
+	})
+
+	t.Run("side selection precedence", func(t *testing.T) {
+		t.Parallel()
+
+		// Every row constructs a giteaReviewComment inline rather than
+		// loading a testdata fixture: the "both non-zero" and "negative"
+		// rows are not producible by the upstream converter, and the fixture
+		// shape contract's live-capture requirement applies only to
+		// committed testdata files.
+		tests := []struct {
+			name             string
+			position         int
+			originalPosition int
+			want             int
+		}{
+			{"new side only", 42, 0, 42},
+			{"old side only", 0, 17, 17},
+			{"neither side (file-scoped)", 0, 0, 0},
+			{"both non-zero prefers the new side", 99, 55, 99},
+			{"negative position falls back to the positive original", -3, 8, 8},
+			{"negative in both fields yields zero", -1, -1, 0},
+		}
+
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				t.Parallel()
+
+				c := giteaReviewComment{
+					ID:               9001,
+					Path:             "both-sides.go",
+					Body:             "constructed, not a platform shape",
+					Position:         tt.position,
+					OriginalPosition: tt.originalPosition,
+					User:             giteaUser{Login: "alice"},
+					CreatedAt:        "2026-07-14T09:00:00Z",
+				}
+
+				got := normalizeReviewComment(c)
+				if got.StartLine != tt.want {
+					t.Errorf("normalizeReviewComment(Position=%d, OriginalPosition=%d) StartLine = %d, want %d",
+						tt.position, tt.originalPosition, got.StartLine, tt.want)
+				}
+				if got.Outdated {
+					t.Errorf("normalizeReviewComment(Position=%d, OriginalPosition=%d) Outdated = true, want false",
+						tt.position, tt.originalPosition)
+				}
+			})
 		}
 	})
 
@@ -241,9 +375,10 @@ func TestGiteaSCMFetchBotReviewComments(t *testing.T) {
 		}
 
 		// The allowlisted bot review contributes its body (review-301) and its
-		// one bot-authored inline comment (3001); the inline comment by the
-		// non-allowlisted author (3002) is dropped by the comment-author
-		// predicate even though its parent review is allowlisted.
+		// one bot-authored inline comment (3001, old-side); the inline comment
+		// by the non-allowlisted author (3002) is dropped by the
+		// comment-author predicate even though its parent review is
+		// allowlisted.
 		if len(got) != 2 {
 			t.Fatalf("FetchBotReviewComments() len = %d, want 2 (review body + bot inline comment)", len(got))
 		}
@@ -251,6 +386,9 @@ func TestGiteaSCMFetchBotReviewComments(t *testing.T) {
 		byID := make(map[string]domain.ReviewComment, len(got))
 		for _, c := range got {
 			byID[c.ID] = c
+			if c.Outdated {
+				t.Errorf("comment %q Outdated = true, want false for every comment this method returns", c.ID)
+			}
 		}
 
 		if _, ok := byID["review-301"]; !ok {
@@ -263,6 +401,12 @@ func TestGiteaSCMFetchBotReviewComments(t *testing.T) {
 		}
 		if botComment.Reviewer != "sortie-ci-bot" {
 			t.Errorf(`comment "3001" Reviewer = %q, want %q`, botComment.Reviewer, "sortie-ci-bot")
+		}
+		if botComment.StartLine != 12 {
+			t.Errorf(`comment "3001" StartLine = %d, want 12 (falls back to original_position)`, botComment.StartLine)
+		}
+		if botComment.Outdated {
+			t.Error(`comment "3001" Outdated = true, want false`)
 		}
 
 		if _, present := byID["3002"]; present {

@@ -11,8 +11,10 @@ type ReviewComment struct {
 	// PR-level (non-inline) review comments.
 	FilePath string
 
-	// StartLine is the first line of the commented range. Zero when
-	// the comment is not attached to a specific line.
+	// StartLine is the line number on the side of the diff the comment
+	// is anchored to, so an adapter that anchors a comment to the
+	// pre-image side of a change reports the pre-image line. Zero when
+	// the comment is attached to no line.
 	StartLine int
 
 	// EndLine is the last line of the commented range. Zero when the
@@ -32,7 +34,10 @@ type ReviewComment struct {
 	SubmittedAt time.Time
 
 	// Outdated indicates the commented code has been modified by a
-	// subsequent push. The SCM adapter sets this from platform metadata.
+	// subsequent push. An adapter with no platform signal for anchor
+	// invalidation leaves this false, so false means "not known to be
+	// outdated" rather than "known to be current"; a caller treating
+	// this field as a drop instruction inherits that meaning.
 	Outdated bool
 }
 
