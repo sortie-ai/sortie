@@ -527,8 +527,10 @@ own from `agent.turn_timeout_ms`; the turn's deadline is whatever context the or
 passes to `RunTurn`. The `initialize`, `account/read`, `thread/start`, and `thread/resume`
 responses are bounded by that same context, not by the read timeout.
 
-On context cancellation `RunTurn` sends `turn/interrupt` once, on a detached two-second
-context so the cancelled parent cannot drop it:
+On context cancellation `RunTurn` sends `turn/interrupt` once. `sendRequest` takes no context
+and writes the frame straight to the app-server's stdin, so the cancelled parent cannot drop it
+and no deadline bounds the write. `RunTurn` builds a two-second context at that call site and
+never passes it in:
 
 ```json
 {"method": "turn/interrupt", "id": 99, "params": {"threadId": "thr_abc123", "turnId": "turn_456"}}
