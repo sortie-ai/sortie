@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `sortie validate` now checks the numeric settings of the
+  `reactions.review_comments` and `reactions.merge_conflicts` blocks: a
+  `poll_interval_ms` below `30000` on either block, and a negative
+  `debounce_ms` or a `max_continuation_turns` of zero or less on
+  `review_comments`. All four previously passed validation and then
+  stopped the run at startup, after the state database had already been
+  created.
+  ([#803](https://github.com/sortie-ai/sortie/issues/803))
+
+### Fixed
+
+- Adapter endpoint validation errors no longer print credentials
+  embedded in the configured `endpoint`. A Jira or GitLab endpoint
+  written as `scheme://user:secret@host` that fails validation is now
+  reported with its user and password masked, so the secret cannot
+  reach the operator log.
+  ([#791](https://github.com/sortie-ai/sortie/issues/791))
+
+- GitHub: inline review comments now reach the agent with the lines
+  they were written against. Both human and bot review feedback
+  arrived with no location at all, so the agent had to find the
+  referenced code itself and a prompt template guarded on the start
+  line - including the example published in the reference
+  documentation - never rendered its branch. Comments left on an
+  outdated diff report their original lines; pull-request-level review
+  bodies remain unlocated.
+  ([#776](https://github.com/sortie-ai/sortie/issues/776))
+
 ## [1.19.0] - 2026-08-12
 
 ### Added
