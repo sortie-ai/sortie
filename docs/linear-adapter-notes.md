@@ -1,20 +1,29 @@
 # Linear GraphQL API: Adapter research notes
 
-> Linear public GraphQL API, researched June 2026 against the official developer
-> documentation, the published SDK schema (`linear/linear@df20561`, 2026-06-11),
-> and the official TypeScript SDK error classifier, then **verified live** against
-> a real workspace (team `SOR`) on 2026-06-13.
-> Reference for implementing the Linear `TrackerAdapter`.
+> Linear public GraphQL API, hosted cloud only, pinned to the published SDK
+> schema `linear/linear@df20561` (2026-06-11). Instruments: live GraphQL calls
+> against the Linear workspace `sortie-ai`, team `SOR`, on 2026-06-13; the
+> official developer and user documentation; and the official TypeScript SDK
+> error classifier (`packages/sdk/src/error.ts`). Reference for the Linear
+> `domain.TrackerAdapter` implementation in `internal/tracker/linear`.
 >
-> Claims tagged **[live-verified]** were confirmed by direct GraphQL calls against
-> the live API, the strongest available evidence. Where the live API contradicted
-> the published documentation, the live behavior wins and the conflict is noted.
+> Claims tagged **[live-verified]** rest on the live pass, and where the live API
+> contradicts the published documentation the live behavior wins and the conflict
+> is recorded. Every other claim is schema- or documentation-sourced and names its
+> source in Source attribution.
+>
+> Coverage: authentication, identifiers, the team state model, all nine
+> `domain.TrackerAdapter` operations, field mapping, pagination, rate limiting,
+> and the error model are anchored to the pinned schema and the 2026-06-13 live
+> pass. The forbidden label-create path and the rate-limit response body are not
+> live-observed; see Open questions.
 
 Linear exposes a single GraphQL endpoint rather than the REST surfaces of the
-existing Jira and GitHub adapters. Client construction, query shapes, pagination,
-and error handling all differ. The adapter is built on `internal/httpkit` with no
-third-party GraphQL library: a GraphQL call is an HTTP POST with a JSON body, and
-the response is a JSON envelope. Nothing more is required.
+Jira and GitHub adapters. Client construction, query shapes, pagination, and
+error handling all differ. `linear.newLinearClient` builds on
+`httpkit.NewClient` with no third-party GraphQL library: a GraphQL call is an
+HTTP POST with a JSON body, and the response is a JSON envelope. Nothing more is
+required.
 
 ---
 
@@ -95,9 +104,9 @@ query Me {
 }
 ```
 
-The adapter should run this at construction time: a failure classifies the key
-before the first poll cycle, and the returned `viewer.id` is useful when an
-assignee filter is configured (see `FetchCandidateIssues`).
+`linear.checkViewer` runs it at construction, inside `linear.runPreflight`, so a
+failure classifies the key before the first poll cycle. The adapter discards the
+returned payload and keeps only the classification.
 
 **[live-verified]** A valid key returns
 `{ "data": { "viewer": { "id": "<uuid>", "name": "...", "email": "..." } } }`
@@ -107,14 +116,6 @@ error: `message: "Authentication required, not authenticated"`,
 `statusCode: 401`, `userPresentableMessage: "You need to authenticate to access
 this operation."` So an invalid key fails at both the HTTP layer (401) and the
 body layer; the adapter's body-first classifier handles it either way.
-
-### Config mapping
-
-| Config field       | Value                                                     |
-| ------------------ | --------------------------------------------------------- |
-| `tracker.endpoint` | `https://api.linear.app/graphql` (default, omit normally) |
-| `tracker.api_key`  | Personal API key (`lin_api_...`), sent verbatim           |
-| `tracker.project`  | Linear **team key**, e.g. `ENG` (see Identifiers below)   |
 
 ---
 
@@ -127,7 +128,8 @@ body layer; the adapter's body-first classifier handles it either way.
   top-level `errors` array, **potentially alongside partial `data`**.
 - The endpoint supports introspection; the full schema is also published at
   `linear/linear` (`packages/sdk/src/schema.graphql`).
-- Network timeout: 30,000 ms ([architecture Section 11.2](architecture/11-issue-tracker-integration-contract.md#112-query-semantics) default).
+- Network timeout: 30,000 ms, the [architecture Section 11.2](architecture/11-issue-tracker-integration-contract.md#112-query-semantics)
+  default, set by `linear.defaultTimeout` and passed to `httpkit.ClientOptions.Timeout`.
 
 HTTP status semantics differ from REST APIs and from each other. The table marks
 what was observed live:
@@ -141,7 +143,7 @@ what was observed live:
 | 429    | Also documented for rate limiting; the official SDK handles both 400 and 429                                                | documented                              |
 | 5xx    | Server-side failure                                                                                                         | documented                              |
 
-The decisive rule, now confirmed by the spread above: **HTTP status alone never
+The decisive rule, which the spread above confirms: **HTTP status alone never
 classifies a Linear response.** An entity-not-found and an argument-validation
 failure both arrive on HTTP 200 with the real error in the body; an invalid key
 arrives on 401 with the same body shape. Error classification inspects the
@@ -150,23 +152,24 @@ no `errors` array (see Error model).
 
 ### httpkit fit
 
-GraphQL inverts two assumptions baked into the current `httpkit` surface:
+GraphQL inverts two assumptions the REST side of `httpkit` is built on, and the
+adapter resolves each one:
 
-- All calls are `POST` to one path. `httpkit.Client.Send` provides POST, but it
-  returns only the body, not the response headers. Reading the rate-limit and
-  `X-Complexity` headers on success requires a Send variant that exposes
-  headers (small additive change).
+- All calls are `POST` to one path, and the rate-limit and `X-Complexity`
+  headers must be readable on success. `linearClient.Execute` posts through
+  `httpkit.Client.SendWithHeaders`, which returns the body together with a clone
+  of the response headers; the endpoint carries the full URL, so the path
+  argument is empty.
 - Cursor state travels in the JSON `variables` object (`after`), not in a URL
-  query parameter, so `httpkit.NewTokenPaginator` does not apply as-is. The
-  adapter implements the same loop shape over POST: issue request, decode
-  `nodes` + `pageInfo`, stop when `hasNextPage` is false, honor a `MaxPages`
-  bound, and report a missing cursor (see Pagination). Either generalize the
-  paginator with a request-builder hook or keep the loop local to the adapter;
-  the loop is ~30 lines either way.
+  query parameter, so `httpkit.NewTokenPaginator` does not apply. The adapter
+  keeps its own loop of the same shape, `linear.paginate`: issue the request,
+  decode `nodes` plus `pageInfo`, stop when `hasNextPage` is false, bound the
+  walk at `linear.maxPages`, and report a missing cursor (see Pagination).
 
-Error classification stays in the `httpkit` mold: the GraphQL transport wraps
-`ClassifyError`/`ClassifyTransport` for HTTP-level failures and adds a
-body-level classification pass that REST adapters do not need.
+Error classification stays in the `httpkit` mold: `linear.classifyResponseBody`
+and `linear.classifyTransport` are wired into `httpkit.ClientOptions` as the
+error and transport classifiers, and `classifyResponseBody` adds the body-level
+pass that REST adapters do not need.
 
 ---
 
@@ -188,8 +191,8 @@ Domain mapping: `issue.id` is the domain `ID`, `issue.identifier` is the domain
 `Identifier`. The lookup queries accept both forms: the official documentation
 queries `issue(id: "BLA-123")` directly, and documents `issueUpdate` as
 accepting "a UUID or a shorthand ID". This is convenient but silent: nothing in
-a response says which form was used, so the adapter should always pass the form
-it means and never construct one from the other.
+a response says which form was used, so the adapter passes the form it means
+verbatim and never constructs one from the other.
 
 **`tracker.project` selects the team key** (`ENG`), not a Linear project. Three
 reasons:
@@ -205,15 +208,15 @@ reasons:
    team for state resolution.
 
 The filter is `team: { key: { eq: "ENG" } }` (`TeamFilter.key` is a
-`StringComparator`); no team UUID resolution is needed for reads.
+`StringComparator`), built by `linear.buildFetchFilter`; no team UUID resolution
+is needed for reads. Only the label-create write path needs the team UUID, and
+it resolves one per call through `LinearAdapter.resolveTeamID` (see operation 9).
 
 ---
 
 ## State model
 
-This is the least mechanical part of the port. Jira has rich named workflow
-states; GitHub has only `open`/`closed` plus labels. Linear sits in between: it
-has real named states, but every state also carries a workspace-immutable
+Linear has real named states, and every state also carries a workspace-immutable
 **category** that tells you what the state means.
 
 ### Workflow state shape
@@ -243,11 +246,13 @@ type WorkflowState {
 **[live-verified]** A freshly created team (`SOR`) shipped with exactly six
 default states and no `triage`: Backlog (`backlog`), Todo (`unstarted`),
 In Progress (`started`), Done (`completed`), Canceled (`canceled`),
-Duplicate (`duplicate`). `triage` is opt-in per team, confirming it must be
-excluded by default. A sensible default mapping for this stock layout is active
-`["Backlog", "Todo", "In Progress"]`, terminal `["Done", "Canceled",
-"Duplicate"]`, and an operator-added `"In Review"` (`started`) for
-`handoff_state`.
+Duplicate (`duplicate`). `triage` is opt-in per team, so it is excluded by
+default. The adapter's defaults for this stock layout are
+`linear.defaultActiveStates` (`["Backlog", "Todo", "In Progress"]`) and
+`linear.defaultTerminalStates` (`["Done", "Canceled", "Duplicate"]`), applied
+when the config omits the list and registered as `DefaultActiveStates` and
+`DefaultTerminalStates` in the adapter's `registry.TrackerMeta`. There is no
+default `handoff_state`; an operator-added `"In Review"` (`started`) fills it.
 
 Two properties make this trickier than it looks:
 
@@ -271,10 +276,11 @@ tracker:
   handoff_state: "In Review"
 ```
 
-The `type` field is not used for candidate selection (names are more precise
-and match the other adapters), but it is the right tool for a **startup
-preflight**: fetch the team's states once and verify every configured name
-exists, with a case-insensitive comparison in Go:
+The `type` field does not drive candidate selection (names are more precise and
+match the other adapters). It serves the **startup preflight** instead:
+`linear.runPreflight` fetches the team's states once through
+`linear.fetchTeamStates` and verifies every configured name exists, comparing
+case-insensitively in Go:
 
 ```graphql
 query TeamStates($teamKey: String!) {
@@ -298,18 +304,21 @@ query TeamStates($teamKey: String!) {
 This preflight serves three purposes:
 
 1. Misconfigured state names fail at startup, not silently as an empty
-   candidate list.
-2. The adapter caches the canonical casing of each configured name. The `in`
-   state filter used by the fetch queries is case-sensitive
+   candidate list. A name absent from the team, and an unknown team key, both
+   return `domain.ErrTrackerPayload` and block construction.
+2. The adapter caches the canonical casing of each configured name in the map
+   `runPreflight` returns, and `linear.canonicalize` applies it to every state
+   list the fetch queries send. The `in` state filter is case-sensitive
    (`StringComparator` distinguishes `eq`/`in` from `eqIgnoreCase`, which has
    no `in` analogue), so queries must send the canonical names.
    **[live-verified]** `state: { name: { in: ["todo"] } }` returned zero issues
    while `["Todo"]` returned all six; case-sensitivity of the `in` filter is
    real, and the preflight casing cache is mandatory, not a nicety.
-3. Warn when a configured `active_states` entry resolves to a state whose
-   `type` is `completed`, `canceled`, or `duplicate` (and vice versa for
-   `terminal_states`). The categories are wrong-config tripwires even though
-   they do not drive selection.
+3. `linear.warnWrongCategory` emits a WARN when a configured `active_states`
+   entry resolves to a state whose `type` is `completed`, `canceled`, or
+   `duplicate`, and the reverse for `terminal_states`. The categories are
+   wrong-config tripwires even though they do not drive selection, so the
+   mismatch never fails construction.
 
 ### Transitions need a UUID
 
@@ -335,9 +344,10 @@ query ResolveStateID($issueId: String!, $stateName: String!) {
 
 `eqIgnoreCase` tolerates casing drift between operator config and Linear.
 An empty `nodes` array means no state with that name exists in the issue's
-team: return `ErrTrackerPayload` (no available transition leads to the target
-state). Unlike Jira there is no transition graph: any state can move to any
-state, so resolve-then-update is the entire flow.
+team, and `LinearAdapter.TransitionIssue` returns `domain.ErrTrackerPayload`
+for it; a null `issue` means the issue itself is missing and returns
+`domain.ErrTrackerNotFound`. Unlike Jira there is no transition graph: any state
+can move to any state, so resolve-then-update is the entire flow.
 
 **[live-verified]** The resolve query with `stateName: "in review"` (lowercase)
 against `issue("SOR-5")` returned the team's `In Review` state and its UUID, then
@@ -349,7 +359,7 @@ case-insensitive resolve plus update, works end to end.
 
 ## Operations
 
-The `TrackerAdapter` Go interface has nine methods. Seven of them are the
+The `domain.TrackerAdapter` Go interface has nine methods. Seven of them are the
 required tracker operations in the architecture spec ([Section 11.1](architecture/11-issue-tracker-integration-contract.md#111-required-operations)),
 `FetchCandidateIssues` through `TransitionIssue`; the interface adds
 `CommentIssue` (lifecycle comments) and `AddLabel` (CI-failure label
@@ -360,19 +370,11 @@ endpoint and are covered below as operations 1 through 9 (`CommentIssue` and
 ### 1. `FetchCandidateIssues`: `issues` query, team + active states
 
 ```graphql
-query CandidateIssues(
-  $teamKey: String!
-  $states: [String!]!
-  $first: Int!
-  $after: String
-) {
+query CandidateIssues($filter: IssueFilter!, $first: Int!, $after: String) {
   issues(
     first: $first
     after: $after
-    filter: {
-      team: { key: { eq: $teamKey } }
-      state: { name: { in: $states } }
-    }
+    filter: $filter
     sort: [
       { priority: { order: Ascending, noPriorityFirst: false } }
       { createdAt: { order: Ascending } }
@@ -404,6 +406,9 @@ query CandidateIssues(
         nodes {
           name
         }
+        pageInfo {
+          hasNextPage
+        }
       }
       inverseRelations(first: 25) {
         nodes {
@@ -416,6 +421,9 @@ query CandidateIssues(
             }
           }
         }
+        pageInfo {
+          hasNextPage
+        }
       }
     }
     pageInfo {
@@ -426,78 +434,53 @@ query CandidateIssues(
 }
 ```
 
-Variables: `{ "teamKey": "ENG", "states": ["Backlog", "Todo"], "first": 50, "after": null }`.
+Variables: `{ "filter": { ... }, "first": 50, "after": null }`. The filter
+travels in the variables object, never in the query text.
+`linear.buildFetchFilter` allocates it per call from the configured team key,
+the state list, and the operator's `tracker.query_filter` fragment (see Config
+notes), so concurrent fetches never share a map.
 
 Notes:
 
 - The `sort` argument exists on `issues` (`IssueSortInput`), but
-  **[live-verified]** its priority ordering is non-obvious and should not be
-  relied on. With issues of priority 0, 2, and 3 present,
+  **[live-verified]** its priority ordering is non-obvious and the adapter does
+  not rely on it. With issues of priority 0, 2, and 3 present,
   `sort: [{ priority: { order: Ascending, noPriorityFirst: false } }, { createdAt: { order: Ascending } }]`
   returned the no-priority (0) group first, then priority 3, then priority 2,
-  which is neither plain ascending nor descending by the numeric value. Rather
-  than depend on server-side priority semantics, the adapter should compute the
-  normalized domain priority (0 to nil, 1..4 to int) and **sort candidates
-  client-side** for deterministic, cross-adapter-consistent dispatch order. The
-  `sort` argument can be dropped or kept as a coarse hint; the createdAt
-  secondary is still a reasonable stable order for the fetch itself.
-- Comments are deliberately not fetched; `Issue.Comments` stays nil per the
-  interface contract, and the pre-dispatch `FetchIssueByID` supplies them.
+  which is neither plain ascending nor descending by the numeric value. Instead
+  of depending on server-side priority semantics,
+  `linear.sortByPriorityThenCreated` sorts candidates client-side by normalized
+  priority (nil last) then `createdAt`, giving deterministic dispatch order
+  consistent with the other adapters. The `sort` argument stays on the candidate
+  query as a coarse hint and is dropped from the by-states query
+  (`linear.queryIssuesByStates`), where dispatch order is irrelevant.
+- Comments are deliberately not fetched; `LinearAdapter.fetchIssues` sets
+  `Issue.Comments` to nil per the interface contract, and the pre-dispatch
+  `FetchIssueByID` supplies them.
 - Nested connections are capped at `first: 25` as cheap insurance against a
-  pathological issue (hundreds of labels/blockers); the candidate query
+  pathological issue (hundreds of labels or blockers); the candidate query
   measured only 95 complexity points, so this is not cap-avoidance (see Rate
-  limiting).
+  limiting). The adapter does not paginate nested connections. It selects their
+  `pageInfo.hasNextPage` and `linear.warnNestedOverflow` emits a WARN naming the
+  issue and the connection when the cap truncates, so a dropped label or blocker
+  stays observable.
 - Archived issues are excluded by default (`includeArchived` defaults to
-  false); do not pass the argument.
-- Optional assignee scoping, if ever configured, is a filter fragment rather
-  than a post-filter: `assignee: { isMe: { eq: true } }` selects issues
+  false); the adapter does not pass the argument.
+- Assignee scoping belongs in the operator's `tracker.query_filter` fragment
+  rather than a post-filter: `assignee: { isMe: { eq: true } }` selects issues
   assigned to the key's user without resolving the viewer id, and
-  `assignee: { id: { eq: $uuid } }` pins a specific user. **[live-verified]**
+  `assignee: { id: { eq: "<uuid>" } }` pins a specific user. **[live-verified]**
   `isMe: { eq: true }` returned only the one issue assigned to the key's user.
 
 ### 2. `FetchIssueByID`: `issue` query, UUID or identifier
 
+The issue selection is the one shown for operation 1, plus an inline first page
+of comments:
+
 ```graphql
 query IssueByID($id: String!) {
   issue(id: $id) {
-    id
-    identifier
-    title
-    description
-    priority
-    branchName
-    url
-    createdAt
-    updatedAt
-    state {
-      name
-    }
-    assignee {
-      displayName
-      name
-      email
-    }
-    parent {
-      id
-      identifier
-    }
-    labels(first: 25) {
-      nodes {
-        name
-      }
-    }
-    inverseRelations(first: 25) {
-      nodes {
-        type
-        issue {
-          id
-          identifier
-          state {
-            name
-          }
-        }
-      }
-    }
+    # ...the operation 1 node selection...
     comments(first: 50, orderBy: createdAt) {
       nodes {
         id
@@ -523,20 +506,24 @@ query IssueByID($id: String!) {
 
 `Query.issue(id: String!)` accepts either the UUID or the human identifier;
 the official docs query `issue(id: "BLA-123")` directly. When
-`comments.pageInfo.hasNextPage` is true, continue with the dedicated comment
-pagination from operation 6 and append.
+`comments.pageInfo.hasNextPage` is true, `LinearAdapter.collectComments`
+resumes the operation 6 connection from the inline `endCursor` and appends the
+continuation pages, so the inline page is never re-fetched; an inline
+`hasNextPage` with an empty `endCursor` returns
+`domain.ErrTrackerMissingCursor`.
 
-Not-found surfaces as a body-level error with `data.issue: null`; map it to
-`ErrTrackerNotFound` (see Error model).
+Not-found surfaces as a body-level error with `data.issue: null`, which
+`FetchIssueByID` maps to `domain.ErrTrackerNotFound` (see Error model).
 
 ### 3. `FetchIssuesByStates`: same query, caller-supplied states
 
-The `FetchCandidateIssues` query verbatim, with the orchestrator-supplied
-state list (terminal cleanup passes terminal states) and without the `sort`
-argument (order is irrelevant to cleanup). State names pass through the same
-canonical-casing cache built by the startup preflight, because `in` matching
-is case-sensitive while the interface contract promises case-insensitive
-comparison.
+`linear.queryIssuesByStates` is the `FetchCandidateIssues` query without the
+`sort` argument (order is irrelevant to cleanup), run with the
+orchestrator-supplied state list; terminal cleanup passes terminal states.
+`FetchIssuesByStates` returns an empty slice with no API call when the state
+list is empty, and otherwise passes the names through the same canonical-casing
+cache the preflight built, because `in` matching is case-sensitive while the
+interface contract promises case-insensitive comparison.
 
 ### 4. `FetchIssueStatesByIDs`: `issues` filtered by id batch
 
@@ -553,18 +540,24 @@ query IssueStatesByIDs($ids: [ID!]!, $first: Int!) {
 }
 ```
 
-`IssueIDComparator.in` takes UUIDs. Chunk at 50 ids per request and set
-`first` to the chunk length. Build the result map from the returned nodes;
-ids absent from the response are simply omitted from the map (the interface
-treats missing as not-an-error). No `pageInfo` is needed because the page size
-equals the requested id count.
+`IssueIDComparator.in` takes UUIDs. `FetchIssueStatesByIDs` chunks at
+`linear.stateBatchChunkSize` (50) ids per request and sets `first` to the chunk
+length, then builds the result map from the returned nodes; ids absent from the
+response are omitted from the map (the interface treats missing as
+not-an-error). No `pageInfo` is needed because the page size equals the
+requested id count. A connection filter is what makes that omission safe: an
+aliased `issue(id:)` batch fails the whole response on one miss (see Error
+model).
 
 ### 5. `FetchIssueStatesByIdentifiers`: team-key + number filter
 
 `IssueFilter` has **no `identifier` field** (schema-verified; it offers `id`,
-`number`, `team`, and others). The adapter splits each identifier into its team
-key and numeric part (`"SOR-7"` to `("SOR", 7)`) and filters by the number set,
-scoped to the configured team:
+`number`, `team`, and others). `linear.extractNumbers` splits each identifier on
+its last hyphen and keeps the trailing integer (`"SOR-7"` to `7`), skipping any
+identifier whose trailing part is not an integer, and the query filters by the
+number set scoped to the configured team key. The team half of the identifier is
+not read: every identifier the orchestrator passes belongs to the configured
+team, and `tracker.project` supplies the team key.
 
 ```graphql
 query IssueStatesByNumbers(
@@ -588,22 +581,17 @@ query IssueStatesByNumbers(
 ```
 
 `Issue.number` is a `Float` in the schema, and `NumberComparator.in` is the
-matching filter. Build the result map keyed by `identifier` from the returned
-nodes; numbers absent from the response are omitted (the interface treats
-missing as not-an-error). All identifiers share the configured `tracker.project`
-team key, so one filter covers the batch; chunk the number list at 50.
+matching filter. `FetchIssueStatesByIdentifiers` builds the result map keyed by
+`identifier` from the returned nodes; numbers absent from the response are
+omitted (the interface treats missing as not-an-error), and the number list is
+chunked at `linear.stateBatchChunkSize` (50).
 
-> **Do not use an aliased `issue(id:)` batch here.** It is the obvious design and
-> it is broken. `Query.issue` returns the non-null type `Issue!`, so when **any**
-> alias resolves to a missing issue, the GraphQL executor nulls the **entire**
-> `data` object and abandons the sibling aliases. **[live-verified]** A batch of
-> `i0: issue("SOR-5")`, `i1: issue("SOR-99999")`, `i2: issue("SOR-7")` returned
-> `data: null` with a single error for `i1`; the two valid lookups returned
-> nothing. A deleted or renamed issue, the exact reconciliation case this method
-> serves, would wipe the states of every other issue in the batch. The
-> connection-filter form above does not have this failure: **[live-verified]**
-> `number: { in: [5, 7, 99999] }` returned SOR-5 and SOR-7 and silently dropped 99999. The same reasoning is why `FetchIssueStatesByIDs` (operation 4) uses
-> `id: { in: [...] }` rather than aliased lookups.
+The connection filter, not an aliased `issue(id:)` batch, is what makes a
+missing issue harmless here. An alias batch nulls the entire `data` object when
+any one alias misses, which is the exact reconciliation case this method serves
+(see Error model). **[live-verified]** The connection-filter form has no such
+failure: `number: { in: [5, 7, 99999] }` returned SOR-5 and SOR-7 and silently
+dropped 99999.
 
 ### 6. `FetchIssueComments`: `issue.comments` connection
 
@@ -635,21 +623,24 @@ query IssueComments($id: String!, $first: Int!, $after: String) {
 
 - `orderBy: createdAt` is the documented default field. **[live-verified]** Its
   direction is **descending, newest first**: two comments created 28 ms apart
-  came back newest-then-oldest. Agents want chronological context, so the
-  adapter MUST sort the accumulated slice by `createdAt` ascending in Go before
-  returning. The client-side sort is mandatory, not defensive.
+  came back newest-then-oldest. Agents want chronological context, so
+  `linear.sortCommentsByCreatedAt` sorts the accumulated slice by `createdAt`
+  ascending before returning. The client-side sort is mandatory, not defensive.
 - `body` is markdown ("derived representation of the canonical bodyData
-  ProseMirror content" per the schema); no flattening, pass through.
+  ProseMirror content" per the schema); the adapter passes it through without
+  flattening.
 - `user` is null for comments created by integrations or bots; `botActor`
-  covers agent/bot comments. Author resolution: `user.displayName`, then
-  `user.name`, then `botActor.name`, else empty string. (`externalUser`
-  exists for Slack/Intercom-originated comments; not selected initially.)
-  **[live-verified]** A human-authored comment returned
-  `user: { displayName, name, email }` with `botActor: null`; the comment
-  `body` round-tripped verbatim, including a raw issue URL (mention rendering
-  happens in the UI, not in the stored markdown).
-- Empty connection returns an empty non-nil slice. Not-found maps to
-  `ErrTrackerNotFound`.
+  covers agent and bot comments. `linear.resolveCommentAuthor` resolves the
+  author as `user.displayName`, then `user.name`, then `botActor.name`, else the
+  empty string. `externalUser` exists for Slack- and Intercom-originated
+  comments and the adapter does not select it, so such comments resolve to
+  `botActor.name` or the empty string. **[live-verified]** A human-authored
+  comment returned `user: { displayName, name, email }` with `botActor: null`;
+  the comment `body` round-tripped verbatim, including a raw issue URL (mention
+  rendering happens in the UI, not in the stored markdown).
+- An empty connection returns an empty non-nil slice. The query re-selects the
+  parent issue on every continuation page, so a not-found mid-pagination
+  surfaces as `domain.ErrTrackerNotFound` from `linear.decodeCommentsPage`.
 
 ### 7. `TransitionIssue`: resolve query + `issueUpdate`
 
@@ -670,10 +661,11 @@ mutation IssueUpdateState($id: String!, $stateId: String!) {
 ```
 
 `issueUpdate` is documented to accept a UUID or shorthand id. The payload is
-`IssuePayload { success: Boolean!, issue: Issue, lastSyncId: Float! }`. Treat
-a non-empty `errors` array as failure regardless of `success`; treat
-`success: false` without errors as `ErrTrackerAPI` (defensive; Linear
-normally signals failure via `errors`).
+`IssuePayload { success: Boolean!, issue: Issue, lastSyncId: Float! }`.
+`linear.runMutation` applies the result policy for every mutation: a non-empty
+`errors` array is a failure regardless of `success`, and `success: false` with
+no errors maps to `domain.ErrTrackerAPI` (defensive; Linear normally signals
+failure through `errors`).
 
 ### 8. `CommentIssue`: `commentCreate`
 
@@ -699,27 +691,20 @@ UUID, so prefer it for clarity, but a shorthand-id call is not an error.
 `organization.urlKey` was `sortie-ai`, so SOR-5 is
 `https://linear.app/sortie-ai/issue/SOR-5/...`; a user profile is
 `https://linear.app/<urlKey>/profiles/<handle>`). An agent may embed such URLs
-in a comment body to reference issues for human readers. Do **not** rely on a
-plain URL rendering as an interactive mention "pill", though: **[live-verified]**
-the comment body round-trips verbatim through the API (the URL is stored as
-plain text), and mention-pill rendering is a paste-time editor behavior that the
-editor itself lets users decline ("Keep as link"). Whether a markdown-body URL
-becomes a mention on display is not documented for the API path and was not
-verified, so the adapter treats URLs as plain text and makes no mention
-guarantee.
+in a comment body to reference issues for human readers. A plain URL does not
+render as an interactive mention "pill": **[live-verified]** the comment body
+round-trips verbatim through the API (the URL is stored as plain text), and
+mention-pill rendering is a paste-time editor behavior that the editor itself
+lets users decline ("Keep as link"). The adapter treats URLs as plain text and
+makes no mention guarantee.
 
 ### 9. `AddLabel`: resolve + optional create + append
 
-Linear attaches labels by UUID, so "add label by name" is a compound
-operation. The schema offers two write shapes on `IssueUpdateInput`, and the
-choice matters (see Collection writes below for the hazard):
-
-- `labelIds: [String!]`: "the identifiers of the issue labels associated with
-  this ticket". **Replaces the full set.**
-- `addedLabelIds: [String!]` / `removedLabelIds: [String!]`: "labels to be
-  added to" / "removed from" the issue. **Append/remove semantics.**
-
-The adapter uses `addedLabelIds`, which reduces `AddLabel` to:
+Linear attaches labels by UUID, so "add label by name" is a compound operation.
+`IssueUpdateInput` offers a replace-style field and an append/remove pair for
+the same collection, and `LinearAdapter.AddLabel` uses the append form
+`addedLabelIds` (see Collection writes for the hazard the replace form carries).
+That reduces `AddLabel` to three steps.
 
 **Step 1.** Resolve the label by name, covering both team-scoped and
 workspace labels (the root query returns both, per its schema doc):
@@ -732,16 +717,25 @@ query ResolveLabel($name: String!) {
       name
       team {
         id
+        key
       }
     }
   }
 }
 ```
 
-Prefer a label whose `team.id` matches the configured team; fall back to a
-workspace label (`team` null).
+The selection carries `team.key`, not `team.id` alone, because
+`tracker.project` is a team **key** and `IssueLabel.team.id` is a UUID: matching
+the configured project against the UUID field never matches and silently
+demotes every team-scoped label. `LinearAdapter.resolveLabelID` compares
+`node.team.key` with the configured project, returns the first team-scoped
+match, and falls back to the first workspace label (`team` null) when no
+team-scoped label matches.
 
-**Step 2.** If no label matched, create it scoped to the team:
+**Step 2.** If no label matched, resolve the owning team's UUID with
+`LinearAdapter.resolveTeamID` (the label create needs a UUID, and the transition
+path that would otherwise resolve one does not run here), then create the label
+scoped to that team:
 
 ```graphql
 mutation LabelCreate($teamId: String!, $name: String!) {
@@ -755,12 +749,14 @@ mutation LabelCreate($teamId: String!, $name: String!) {
 ```
 
 Omitting `teamId` would create a workspace-level label (schema-documented);
-the adapter always passes the team id, because workspace-label management is
-more likely to require elevated permissions. On a name-uniqueness conflict
-from a concurrent create (`invalid input` class error), re-run step 1 once
-and use the now-existing id. If creation is forbidden for the key, return
-`ErrTrackerAuth`; the orchestrator treats label errors as non-fatal, and the
-operator remedy is to pre-create the escalation label in Linear.
+`LinearAdapter.createLabel` always passes the team id, because workspace-label
+management is more likely to require elevated permissions. On any payload-class
+create error, which covers the name-uniqueness conflict a concurrent create
+produces, `AddLabel` re-runs step 1 once and uses the now-existing id; only a
+re-resolve that still finds nothing surfaces the original create error. A
+create forbidden for the key classifies as `domain.ErrTrackerAuth`. The
+orchestrator treats label errors as non-fatal (`internal/orchestrator` logs the
+failure at WARN and counts a CI-escalation error), and the operator remedy is to pre-create the escalation label in Linear.
 
 Label-creation is gated by a specific, named team setting, not just admin
 status: under **Team settings > Access and permissions**, a team owner chooses
@@ -771,7 +767,7 @@ a Read+Write member key gets a `FORBIDDEN`/`feature not accessible` error on
 owners. The operator has two clean remedies: flip that team setting to allow
 members, or pre-create the escalation label (default `needs-human`) once, after
 which the adapter's lookup in step 1 finds it and never calls
-`issueLabelCreate`. Document both in the operator README.
+`issueLabelCreate`.
 
 **Step 3.** Append by id; no read of the existing label set is needed:
 
@@ -783,20 +779,20 @@ mutation IssueAddLabel($id: String!, $labelIds: [String!]!) {
 }
 ```
 
-**[live-verified]** The whole flow was exercised end to end:
-`issueLabelCreate(input: { teamId, name: "needs-human" })` returned
+**[live-verified]** The whole flow works end to end:
+`issueLabelCreate(input: { teamId, name: "needs-human" })` returns
 `success: true` with a team-scoped label id, and
 `issueUpdate(id: "SOR-5", input: { addedLabelIds: [<id>] })` left the issue with
 **both** its pre-existing `Feature` label and the new `needs-human` label. The
 append semantics are real and the read-before-write step is genuinely
-unnecessary. (The test key had full access, so the `FORBIDDEN` degradation path
-was not exercised; that branch remains documentation-sourced.)
+unnecessary.
 
 ---
 
 ## Field mapping
 
-`domain.Issue` field to Linear source (all field names schema-verified):
+`linear.normalizeIssue` maps a Linear issue node to `domain.Issue` as follows
+(all Linear field names schema-verified):
 
 | `domain.Issue` field | Linear source                                         | Notes                                                                                                                                                                                                                                                                  |
 | -------------------- | ----------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -805,16 +801,16 @@ was not exercised; that branch remains documentation-sourced.)
 | `DisplayID`          | empty                                                 | Identifiers are already display-ready                                                                                                                                                                                                                                  |
 | `Title`              | `issue.title`                                         |                                                                                                                                                                                                                                                                        |
 | `Description`        | `issue.description`                                   | Markdown per schema; nullable, null becomes empty string                                                                                                                                                                                                               |
-| `Priority`           | `issue.priority`                                      | Float in schema: 0 = No priority, 1 = Urgent, 2 = High, 3 = Medium, 4 = Low. Map 1..4 to `*int`; map 0 to nil                                                                                                                                                          |
+| `Priority`           | `issue.priority`                                      | Float in schema: 0 = No priority, 1 = Urgent, 2 = High, 3 = Medium, 4 = Low. `linear.normalizePriority` maps 1..4 to `*int` and 0 or null to nil                                                                                                                                                          |
 | `State`              | `issue.state.name`                                    | Original casing preserved                                                                                                                                                                                                                                              |
 | `BranchName`         | `issue.branchName`                                    | Non-null; auto-generated. Format is workspace-configurable (see below); treat the whole string as opaque, never parse the prefix                                                                                                                                       |
 | `URL`                | `issue.url`                                           | Provided directly, no construction                                                                                                                                                                                                                                     |
-| `Labels`             | `issue.labels.nodes[].name`                           | Lowercase each ([Section 11.3](architecture/11-issue-tracker-integration-contract.md#113-normalization-rules)); non-nil empty slice when none                                                                                                                                                                                                           |
-| `Assignee`           | `assignee.displayName`, fallback `name`, then `email` | `assignee` is strictly the `User` type, nullable; null becomes empty string. Agents/apps are not `User`s (they surface under the separate `delegate`/`botActor` fields the adapter does not read), so an agent-driven issue with no human assignee normalizes to empty |
+| `Labels`             | `issue.labels.nodes[].name`                           | Lowercased by `issuekit.NormalizeLabels` ([Section 11.3](architecture/11-issue-tracker-integration-contract.md#113-normalization-rules)); non-nil empty slice when none                                                                                                                                                                                                           |
+| `Assignee`           | `assignee.displayName`, fallback `name`, then `email` | Resolved by `linear.resolveAssignee`; `assignee` is strictly the `User` type, nullable; null becomes empty string. Agents/apps are not `User`s (they surface under the separate `delegate`/`botActor` fields the adapter does not read), so an agent-driven issue with no human assignee normalizes to empty |
 | `IssueType`          | empty                                                 | Linear has no native issue-type field                                                                                                                                                                                                                                  |
 | `Parent`             | `issue.parent` `{id, identifier}`                     | Nil when absent                                                                                                                                                                                                                                                        |
-| `Comments`           | separate connection (op 6)                            | Nil when not fetched; empty non-nil when fetched and empty                                                                                                                                                                                                             |
-| `BlockedBy`          | `inverseRelations.nodes` where `type == "blocks"`     | See below                                                                                                                                                                                                                                                              |
+| `Comments`           | separate connection (operation 6)                     | Nil when not fetched; empty non-nil when fetched and empty                                                                                                                                                                                                             |
+| `BlockedBy`          | `inverseRelations.nodes` where `type == "blocks"`     | Extracted by `linear.extractBlockers`; see below                                                                                                                                                                                                                                                              |
 | `CreatedAt`          | `issue.createdAt`                                     | ISO-8601 `DateTime`, passed through                                                                                                                                                                                                                                    |
 | `UpdatedAt`          | `issue.updatedAt`                                     | ISO-8601 `DateTime`, passed through                                                                                                                                                                                                                                    |
 
@@ -836,8 +832,9 @@ So when issue A blocks issue B, the relation record is
 
 This matches the architecture's normalization rule ("blocked_by derived from
 inverse relations where relation type is `blocks`") almost verbatim; Linear is
-the tracker whose native model the rule was phrased for. Compare `type`
-case-insensitively after trimming, defensively.
+the tracker whose native model the rule was phrased for. `linear.extractBlockers`
+compares `type` case-insensitively after trimming, defensively, and always
+returns a non-nil slice.
 
 **[live-verified]** With SOR-5 set to block SOR-7
 (`issueRelationCreate(issueId: SOR-5, relatedIssueId: SOR-7, type: blocks)`),
@@ -847,27 +844,25 @@ state: { name: "Todo" } } }]`. The blocked issue carries the relation, the
 blocker is `node.issue`, and `type` came back as the lowercase string
 `"blocks"`. The direction in the mapping above is correct.
 
-Other field mappings confirmed against live issues: `priority` 2 and 3 returned
-as expected and onboarding issues returned `priority: 0` (map to nil);
-`branchName` was always present and auto-generated (`tasks/sor-5-implement-...`,
-where the `tasks/` prefix is this workspace user's handle, not a fixed string);
-`description` was markdown and came back `null` for an issue created without one
-(map null to empty string); `assignee` returned
-`{ displayName, name, email }` for an assigned issue and `null` for unassigned;
-`parent` returned `{ id, identifier }` on the sub-issue; `url` was supplied
-directly.
+**[live-verified]** The nullability behavior in the table above holds on live
+issues: `priority` came back 2 and 3 on prioritized issues and 0 on onboarding
+issues; `description` was markdown and `null` on an issue created without one;
+`assignee` was `{ displayName, name, email }` when assigned and `null` when
+unassigned; `parent` was `{ id, identifier }` on a sub-issue; and `url` was
+supplied directly with no construction needed.
 
 ### `branchName` is not a fixed format
 
-The branch-name prefix is **not** stable across workspaces. This run observed
+`branchName` is non-null and auto-generated, but its prefix is **not** stable
+across workspaces. **[live-verified]** SOR-5 returned
 `tasks/sor-5-implement-...`, where `tasks/` is the acting user's handle rather
 than a fixed token. The schema explains why: `Organization.gitBranchFormat` is a
 workspace-level template ("Supports template variables like `{issueIdentifier}`
 and `{issueTitle}`. If null, the default formatting will be used"), so the
-default prefix is derived from the acting user's handle and the whole format is
+default prefix derives from the acting user's handle and the whole format is
 operator-configurable. The adapter MUST treat `branchName` as an opaque string:
-store it, never parse the prefix or assume a `<handle>/<identifier>-<slug>`
-shape.
+`linear.normalizeIssue` copies it into `domain.Issue.BranchName` unparsed, and
+no code may assume a `<handle>/<identifier>-<slug>` shape.
 
 ### Comment mapping
 
@@ -882,26 +877,36 @@ shape.
 
 ## Pagination
 
-Linear uses Relay-style cursor connections everywhere:
+Linear uses Relay-style cursor connections everywhere, and `linear.paginate`
+walks them:
 
 - Arguments: `first` (forward page size) + `after` (cursor); `last`/`before`
-  exist for backward paging and are not used.
-- Every connection exposes `pageInfo { hasNextPage endCursor }`. Loop: request
-  with `after: null`, then `after: endCursor`, until `hasNextPage` is false.
+  exist for backward paging and the adapter does not use them.
+- Every connection exposes `pageInfo { hasNextPage endCursor }`. The loop sends
+  `after: null` on the first request, then `after: endCursor`, until
+  `hasNextPage` is false. The cursor travels in the `variables` object, so a
+  caller may seed `variables["after"]` to resume a connection past a page it
+  already holds; `paginate` preserves that seed instead of restarting at the
+  first page, which is what keeps the inline comment page from being re-fetched
+  and duplicated (see operation 2).
 - Default page size is 50 when `first` is omitted (documented and repeated in
   every connection's schema doc). Sortie always passes `first` explicitly:
-  50 for top-level collections ([Section 11.2](architecture/11-issue-tracker-integration-contract.md#112-query-semantics)), smaller for nested connections
-  (complexity, below).
+  `linear.topLevelPageSize` (50) for top-level collections
+  ([Section 11.2](architecture/11-issue-tracker-integration-contract.md#112-query-semantics)),
+  and a literal 25 for the nested `labels` and `inverseRelations` connections
+  inside issue nodes.
 - `first` must be in the range **1 to 250**, both bounds enforced and
   **[live-verified]**: `first: 251` fails with
   `constraints.max: "first must not be greater than 250"` and `first: 0` fails
   with `constraints.min: "first must not be less than 1"`, both as an
   `Argument Validation Error` on HTTP 200. With Sortie's page size of 50, neither
   bound is reachable; keep `first` between 1 and 250.
-- If `hasNextPage` is true but `endCursor` is empty or null, return
-  `ErrTrackerMissingCursor` (`tracker_missing_end_cursor`, [Section 11.4](architecture/11-issue-tracker-integration-contract.md#114-error-handling-contract))
+- When `hasNextPage` is true but `endCursor` is empty or null, the loop returns
+  `domain.ErrTrackerMissingCursor` (`tracker_missing_end_cursor`, [Section 11.4](architecture/11-issue-tracker-integration-contract.md#114-error-handling-contract))
   instead of treating pagination as complete. Silent truncation here is a
   data-loss bug; this mirrors the Jira adapter's guard.
+  `LinearAdapter.collectComments` applies the same guard to the inline comment
+  page before it hands the cursor to `paginate`.
 - Default ordering is by `createdAt`; `orderBy: updatedAt` is the only
   alternative (`PaginationOrderBy` has exactly those two values).
   **[live-verified]** The direction is **descending (newest first)**, so any
@@ -912,8 +917,11 @@ Linear uses Relay-style cursor connections everywhere:
   (`eyJrZXkiOi..."`), while the `comments` connection returned a bare comment
   UUID. Treat `endCursor` as an opaque token and pass it back verbatim; never
   parse or construct it.
-- Cap the pagination loop with the existing `MaxPages`-style bound and surface
-  the same `OnLimitReached` warning the REST paginator emits today.
+- The loop is bounded by `linear.maxPages` (200, so 10,000 items at the
+  top-level page size). On reaching it with more pages available, `paginate`
+  logs a WARN carrying `max_pages` and returns the items accumulated so far.
+  This is the adapter's own bound; `httpkit.PaginatorOptions.OnLimitReached`
+  belongs to the REST paginator, which the GraphQL path does not use.
 
 ---
 
@@ -925,12 +933,13 @@ The official rate-limiting page documents 5,000 requests/hour for an API key,
 5,000 for an OAuth app, and 600 unauthenticated.
 
 **[live-verified] conflict:** the live test workspace returned
-`x-ratelimit-requests-limit: 2500`, **half** the documented figure. A
-follow-up confirmed the request limit is **dynamic**: Linear scales it by the
-number of paid seats in the workspace, so a free or single-seat workspace gets
-less than the documented headline. **Do not hardcode 5,000.** Read
-`x-ratelimit-requests-limit` and `-remaining` from each response and treat them
-as the source of truth.
+`x-ratelimit-requests-limit: 2500`, **half** the documented figure. The request
+limit is **dynamic**: Linear scales it by the number of paid seats in the
+workspace, so a free or single-seat workspace gets less than the documented
+headline. No quota figure may be hardcoded; the response headers are the source
+of truth. `linear.recordRateLimit` reads
+`x-ratelimit-requests-remaining` after every call and treats exhaustion as an
+observable event rather than tracking the quota itself.
 
 ### Complexity budget
 
@@ -974,9 +983,8 @@ Two lessons for the implementation:
   `inverseRelations` is cheap insurance against a pathological issue with
   hundreds of labels or blockers, not a cap-avoidance necessity.
 
-The authoritative cost is always the `X-Complexity` response header. Log it
-(the adapter can expose `sortie_tracker_complexity` later) rather than
-predicting from the formula.
+The authoritative cost is always the `X-Complexity` response header, never the
+documented formula.
 
 At Sortie's expected scale (poll every 60 s, one or two pages per poll, a
 handful of reconcile lookups) neither the hourly budgets nor the single-query
@@ -999,21 +1007,30 @@ All header names below were observed on live responses.
 | `Retry-After`                        | Seconds to wait (the official SDK reads it on rate-limit errors) |
 
 The `*-reset` values are epoch **milliseconds** (e.g. `1781361577787`), not
-seconds; divide by 1000 before comparing to a Go `time.Unix` value.
+seconds. `linear.parseResetSeconds` divides by `linear.rateLimitResetDivisor`
+(1000) before the value is comparable to a Go `time.Unix` value.
 
 ### Detection and backoff
 
 A rate-limited response is documented to arrive as **HTTP 400 with
 `errors[].extensions.code == "RATELIMITED"`**. The official SDK additionally
 treats HTTP 429 as rate-limited and reads `Retry-After`; the two sources
-disagree on the status code, so the adapter accepts **either** status and keys
-on the body code. (The limit could not be exhausted on the live workspace
-without abusing it, so the rate-limit body was not captured first-hand; the
-classifier keys on the body regardless.) Classification: `ErrTrackerAPI`
-(retryable, exponential backoff per the orchestrator's existing semantics).
-Honor `Retry-After` as a minimum delay when present; otherwise back off with
-the standard base 2 s, max 30 s, jitter plus or minus 30%, and log the relevant
-`*-reset` value at WARN.
+disagree on the status code, so `linear.classifyGraphQLErrors` keys on the body,
+accepting either `extensions.code == "RATELIMITED"` or
+`extensions.type == "ratelimited"` on any status, and `linear.classifyHTTPStatus`
+maps a bare 429 with no errors array to the same kind. Classification is
+`domain.ErrTrackerAPI`, which `domain.TrackerErrorKind.RetryClassification`
+reports as retryable with `domain.BackoffExponential`, so the orchestrator owns
+the delay.
+
+The adapter does not sleep on `Retry-After` and does not track the quota. Its
+only rate-limit behavior is observational: `linear.recordRateLimit` logs one
+WARN, "rate limit exhausted", carrying `requests_remaining`, the reset time in
+epoch seconds, and `Retry-After` when present, and only when
+`x-ratelimit-requests-remaining` reaches zero. The one place a delay is applied
+in the adapter is construction: `linear.runPreflight` retries a transient
+preflight failure through `httpkit.RetryWithBackoff` on the shared
+`httpkit.DefaultPreflightBackoff` schedule (1 s, 2 s, 4 s) before failing.
 
 ---
 
@@ -1079,31 +1096,32 @@ than 250" }`.
 
 ### The not-found special case [live-verified]
 
-This is the most important error finding, and it overturns the pre-key
-assumption. There is **no dedicated not-found code or type**. A nonexistent
-issue returns, on **HTTP 200**:
-
-- `message`: `"Entity not found: Issue"`
-- `extensions.type`: `"invalid input"` (the generic input-error bucket)
-- `extensions.code`: `"INPUT_ERROR"`
-- `extensions.userPresentableMessage`: `"Could not find referenced Issue."`
-- `data`: `null`
-
-Because `type` is the generic `"invalid input"`, the only signal that
-distinguishes not-found from any other input error is the **message**.
-Detection: an error whose `message` begins with `Entity not found`
-(case-insensitive) maps to `ErrTrackerNotFound`. The `userPresentableMessage`
+There is **no dedicated not-found code or type**. The envelope above is the
+whole of it: a nonexistent issue arrives on HTTP 200 under the generic
+`type: "invalid input"`, so the only signal that separates not-found from any
+other input error is the **message**. An error whose `message` begins with
+`Entity not found` (case-insensitive) maps to `domain.ErrTrackerNotFound`;
+`linear.notFoundPrefix` holds that prefix and the check is a lowercase,
+trimmed `strings.HasPrefix`. The `userPresentableMessage`
 "Could not find referenced Issue." is a secondary confirmation.
 
 **The non-null-abort gotcha.** `Query.issue` returns `Issue!`. When the
-resolver fails, the executor propagates null to the root and **nulls the entire
-`data` object**, and it abandons sibling root fields in the same operation
-(verified: a 3-alias batch with one bad id returned `data: null` and only the
-bad alias's error). This is why operation 5 must not use an aliased `issue(id:)`
-batch. For a single `FetchIssueByID`, a not-found simply yields `data: null`
+resolver fails, the executor propagates null to the root, **nulls the entire
+`data` object**, and abandons sibling root fields in the same operation.
+**[live-verified]** A batch of `i0: issue("SOR-5")`, `i1: issue("SOR-99999")`,
+`i2: issue("SOR-7")` returned `data: null` with a single error for `i1`, and the
+two valid lookups returned nothing. An aliased `issue(id:)` batch is therefore
+unusable for the state-batch operations 4 and 5, where a deleted or renamed
+issue is the normal case: one miss would wipe the states of every other issue in
+the batch. For a single `FetchIssueByID`, a not-found simply yields `data: null`
 plus the not-found error, which classifies cleanly.
 
 ### Classification algorithm
+
+`linear.classifyGraphQLErrors` classifies a decoded errors array, and
+`linear.classifyHTTPStatus` is the fallback for a non-2xx response with no
+errors array. `linear.classifyResponseBody`, wired in as the `httpkit` error
+classifier, runs the body test first and falls back to the status:
 
 ```
 classify(httpStatus, body):
@@ -1117,47 +1135,53 @@ classify(httpStatus, body):
     if type == "forbidden"
        or type == "feature not accessible":          ErrTrackerAuth
     if type in {"invalid input", "user error",
-                "graphql error"} or userError:       ErrTrackerPayload
+                "graphql error"}:                    ErrTrackerPayload
     if type in {"internal error", "network error",
                 "lock timeout", "bootstrap error"}:  ErrTrackerTransport
+    if userError:                                    ErrTrackerPayload
     otherwise:                                       ErrTrackerAPI
-  if httpStatus is not 200 (no errors array):
+  if the response is non-2xx with no errors array:
     400:                                             ErrTrackerPayload
-    401:                                             ErrTrackerAuth
-    403:                                             ErrTrackerAuth
+    401, 403:                                        ErrTrackerAuth
     429:                                             ErrTrackerAPI (retryable)
     5xx:                                             ErrTrackerTransport
-  if body does not parse as JSON on 200:             ErrTrackerPayload
+    any other:                                       ErrTrackerAPI
+  if the body does not parse as JSON:                ErrTrackerPayload
 ```
 
 The not-found message check runs **first**, before the `type`-based rules,
 precisely because not-found arrives under the generic `type: "invalid input"`
-that would otherwise classify as `ErrTrackerPayload`. Include the first error's
-`userPresentableMessage` (falling back to `message`) in `TrackerError.Message`
-so operators see Linear's own wording.
+that would otherwise classify as `ErrTrackerPayload`.
+`linear.classifiedMessage` puts the first error's `userPresentableMessage`
+(falling back to its `message`) in `domain.TrackerError.Message`, so operators
+see Linear's own wording.
 
-`feature not accessible` is grouped with `ErrTrackerAuth` deliberately. It means
-the workspace plan does not include a requested capability, which is an
-operator-actionable, **non-retryable** condition. The alternative mapping
-(`ErrTrackerAPI`) is retryable and would make the orchestrator retry a plan
-limitation forever, so the non-retryable bucket is the safer fit even though the
-condition is not strictly an auth failure. The domain error enum has no
-dedicated "configuration" kind; if one is added later, this is the case to move.
+`feature not accessible` is grouped with `domain.ErrTrackerAuth` deliberately.
+It means the workspace plan does not include a requested capability, which is an
+operator-actionable, **non-retryable** condition. The alternative mapping,
+`domain.ErrTrackerAPI`, is retryable and would make the orchestrator retry a
+plan limitation forever, so the non-retryable bucket is the safer fit even
+though the condition is not strictly an auth failure.
 
 ### Partial success
 
 GraphQL permits `data` populated alongside non-empty `errors` (officially
-documented: "queries can partially succeed with a 200"). Policy:
+documented: "queries can partially succeed with a 200"). The adapter does not
+consume partial data: every decode path runs `classifyGraphQLErrors` on the
+errors array before it looks at `data`, so a non-empty array fails the call on
+reads and writes alike.
 
-- **Mutations:** any non-empty `errors` array is a failure, regardless of
-  `data` or `success`.
+- **Mutations:** a non-empty `errors` array is a failure regardless of `data` or
+  `success`, enforced once in `linear.runMutation`.
 - **State batches (operations 4 and 5):** these use connection filters
-  (`id: { in }`, `number: { in }`), so a missing issue is simply an absent node,
-  never an error. Do not rely on per-alias error handling; the non-null-abort
-  behavior above makes aliased batches unusable for this.
-- **Other reads:** if the requested root field is non-null and usable, log the
-  errors at DEBUG and return the data; if the root field is null, classify the
-  first error.
+  (`id: { in }`, `number: { in }`), so a missing issue is an absent node rather
+  than an error, and no per-alias error handling is involved. The non-null-abort
+  behavior above is what makes aliased batches unusable here.
+- **Other reads:** a non-empty `errors` array is classified and returned as the
+  call's error even when the root field is populated. A null root field on a
+  clean errors array is the separate not-found case each read maps explicitly
+  (`FetchIssueByID`, `decodeCommentsPage`, `TransitionIssue`,
+  `resolveTeamID`).
 
 ---
 
@@ -1178,47 +1202,59 @@ implementation that reads one page (default 50) and writes back
 `existing + new` **silently deletes every label beyond the first page**. This
 is the read-before-write pagination hazard this adapter must not have:
 
-- `AddLabel` uses `addedLabelIds` exclusively. No read of the current set, no
-  pagination, no race window between read and write. **[live-verified]** Adding
-  `needs-human` via `addedLabelIds` to an issue that already had `Feature` left
-  the issue with both labels, so the append semantics hold and the read is
-  genuinely unnecessary.
-- If any future write path genuinely needs `labelIds` (full replacement), it
-  MUST paginate `issue.labels` to exhaustion first, and apply the
-  missing-cursor guard, before composing the write.
+- `LinearAdapter.AddLabel` uses `addedLabelIds` exclusively (query
+  `linear.queryIssueAddLabel`). No read of the current set, no pagination, no
+  race window between read and write; operation 9 carries the live evidence that
+  the append preserves existing labels.
+- A write through `labelIds` (full replacement) MUST paginate `issue.labels` to
+  exhaustion first, and apply the missing-cursor guard, before composing the
+  write. No adapter path uses `labelIds`.
 
-The same audit applies to any other collection-valued update field added
-later; check for an `added*`/`removed*` pair in the schema before reaching
-for the replace-style field. (Subscriber lists, for example, follow the same
-pattern in `IssueUpdateInput`.)
+Every collection-valued field in `IssueUpdateInput` needs the same audit: check
+for an `added*`/`removed*` pair in the schema before reaching for the
+replace-style field. Subscriber lists follow the same pattern.
 
 ---
 
 ## Config notes
 
 - **`tracker.api_key`:** single `lin_api_...` string, sent verbatim in
-  `Authorization` (no Bearer, no `email:token` composition).
-- **`tracker.endpoint`:** defaults to `https://api.linear.app/graphql`; there
-  is no self-hosted Linear, so overriding only serves tests and mocks.
-- **`tracker.project`:** the team key (`ENG`). Validated at startup by the
-  team-states preflight; an unknown key is a configuration error
-  (`ErrTrackerPayload` at construction).
+  `Authorization` (no Bearer, no `email:token` composition). Required:
+  `NewLinearAdapter` returns `domain.ErrMissingTrackerAPIKey` when it is empty.
+  The offline `sortie validate` hook `linear.validateAPIKeyHint` warns on a
+  missing key, on surrounding whitespace, and on a key without the `lin_api_`
+  prefix, and never puts the key value in a diagnostic.
+- **`tracker.endpoint`:** defaults to `linear.defaultEndpoint`
+  (`https://api.linear.app/graphql`); there is no self-hosted Linear, so
+  overriding only serves tests and mocks.
+- **`tracker.project`:** the team key (`ENG`). Required:
+  `NewLinearAdapter` returns `domain.ErrMissingTrackerProject` when it is empty.
+  Validated at construction by the team-states preflight; an unknown key returns
+  `domain.ErrTrackerPayload`. The offline hook `linear.validateProject` flags
+  whitespace as an error and a `/` as a warning, and leaves existence and casing
+  to the preflight.
 - **`tracker.active_states` / `tracker.terminal_states` /
-  `tracker.handoff_state`:** team-scoped state **names**, resolved to
-  canonical casing at startup. Example: active `["Backlog", "Todo"]`,
-  terminal `["Done", "Canceled", "Duplicate"]`, handoff `"In Review"`.
-- **Page size:** 50 top-level, 25 for nested connections inside issue nodes;
-  always explicit `first`.
-- **Network timeout:** 30,000 ms.
+  `tracker.handoff_state`:** team-scoped state **names**, resolved to canonical
+  casing at construction. Example: active `["Backlog", "Todo"]`, terminal
+  `["Done", "Canceled", "Duplicate"]`, handoff `"In Review"`. The two lists fall
+  back to the adapter defaults when omitted (see State model); `handoff_state`
+  has no default.
+- **`tracker.query_filter`:** an optional JSON object merged into the fetch
+  filter by `linear.buildFetchFilter` as extra `IssueFilter` fields, which
+  Linear ANDs with the adapter's own constraints. `linear.parseQueryFilter`
+  rejects a value that is not a JSON object, and rejects the top-level reserved
+  keys `team` and `state` so the operator cannot widen the team or state scope.
+  The fragment travels in the GraphQL variables object, never in the query text.
+- **Page size:** see Pagination.
+- **Network timeout:** see Endpoint and transport.
 - **No API-version header exists**; the GraphQL schema evolves in place.
   Breaking-change exposure is limited by requesting only needed fields.
 - **Write side effects:** Linear emits webhooks on data changes, including
   issue, comment, and label events. The adapter's writes (`TransitionIssue`,
   `CommentIssue`, `AddLabel`) are ordinary data changes, so they can trigger any
-  webhook automations the operator has configured in the workspace. Whether a
-  change made through the API also notifies the key's own user is not documented
-  and was not verified. Sortie polls rather than consuming webhooks, so this is
-  an operator-awareness note, not an adapter dependency.
+  webhook automations the operator has configured in the workspace. Sortie polls
+  rather than consuming webhooks, so this is an operator-awareness note, not an
+  adapter dependency.
 
 ---
 
@@ -1244,56 +1280,55 @@ pattern in `IssueUpdateInput`.)
 
 ---
 
-## Live verification results
-
-The six items the pre-key draft flagged as unverified were all resolved against
-the live API on 2026-06-13 (team `SOR`):
-
-1. **Entity-not-found shape.** HTTP 200, `extensions.type: "invalid input"`,
-   `code: "INPUT_ERROR"`, `message: "Entity not found: Issue"`. No dedicated
-   not-found code; classify by message. Also nulls the whole `data` object. See
-   Error model.
-2. **Maximum `first` = 250.** Confirmed: 251 is rejected with "first must not be
-   greater than 250".
-3. **`orderBy: createdAt` direction = descending (newest first).** Confirmed;
-   the adapter must re-sort comments ascending client-side.
-4. **`X-Complexity` measurements.** Candidate query 95 (not the ~5,900 the
-   documented formula predicts); the top-level `first` is not multiplied. See
-   the measured-complexity table.
-5. **`commentCreate.input.issueId` accepts shorthand identifiers.** Confirmed
-   (`"SOR-5"` worked); UUID still preferred for clarity.
-6. **`issueLabelCreate` permission.** Worked with the full-access test key and
-   created a team-scoped label. The `FORBIDDEN` degradation path for a
-   restricted key was not exercised and remains documentation-sourced.
-
-One additional finding the live run surfaced that the draft did not anticipate:
-the aliased-`issue(id:)` batch for `FetchIssueStatesByIdentifiers` is broken by
-the non-null `Issue!` return type (one miss nulls the whole response). Operation
-5 was rewritten to a `number: { in: [...] }` connection filter.
-
-A later verification pass confirmed several secondary facts now folded into the
-sections above: the `branchName` format is workspace-configurable
-(`Organization.gitBranchFormat` template), so the prefix is opaque; label
-creation is gated by the **Team settings > Access and permissions** label
-toggle, sharpening the `FORBIDDEN` guidance; `first` has an enforced minimum of 1
-(`first: 0` rejected); and the issue URL format is
-`https://linear.app/<urlKey>/issue/<IDENTIFIER>/<slug>` (live `urlKey` =
-`sortie-ai`).
-
-### Integration test setup
+## Integration test setup
 
 The live test workspace is configured and reusable: team key `SOR`, with states
-Backlog/Todo/In Progress/In Review/Done/Canceled/Duplicate and labels
-Feature/Bug/Improvement/needs-human. Issues SOR-5 (Todo, assigned, labeled,
-2 comments, blocks SOR-7, parent of SOR-8), SOR-6 (Done), SOR-7 (Backlog,
-blocked by SOR-5), SOR-8 (Todo sub-issue) exercise every read path; SOR-5 was
-moved to In Review by the transition test.
+Backlog, Todo, In Progress, In Review, Done, Canceled, and Duplicate, and labels
+Feature, Bug, Improvement, and needs-human. Issues SOR-5 (assigned, labeled,
+commented, blocks SOR-7, parent of SOR-8), SOR-6, SOR-7 (blocked by SOR-5), and
+SOR-8 (sub-issue) exercise every read path.
 
-Integration tests gate on `SORTIE_LINEAR_TEST=1` (plus `SORTIE_LINEAR_API_KEY`
-and `SORTIE_LINEAR_TEAM_KEY`) and must skip cleanly when unset, per the
-project's existing convention. Keep them read-only by default; gate the
-transition, comment, and label-write paths behind an additional explicit opt-in
-so a default run never mutates the workspace.
+`internal/tracker/linear/integration_test.go` gates every test, read and write
+alike, on the single variable `SORTIE_LINEAR_TEST=1` and skips cleanly when it
+is unset, matching the sibling adapters. `skipUnlessIntegration` enforces the
+gate; `newIntegrationAdapter` requires `SORTIE_LINEAR_API_KEY` and
+`SORTIE_LINEAR_TEAM_KEY`, and reads the optional `SORTIE_LINEAR_ENDPOINT` and
+`SORTIE_LINEAR_ACTIVE_STATES` overrides. The write tests are shaped to leave the
+workspace where they found it: `TestIntegration_TransitionIssue` re-applies the
+issue's current state, and `TestIntegration_AddLabel` adds the idempotent
+`needs-human` label. `TestIntegration_CommentIssue` is the one test that leaves a
+trace, a timestamped comment on the first candidate issue.
+
+---
+
+## Open questions
+
+Each entry names the probe that would settle it.
+
+- **The `FORBIDDEN` label-create path.** `issueLabelCreate` is documented to
+  fail for a member key when the team restricts label management to owners, and
+  the adapter classifies that as `domain.ErrTrackerAuth`, but the branch is
+  documentation-sourced: the live pass covers only a full-access key. Probe: set
+  **Team settings > Access and permissions** to owners-only, call
+  `issueLabelCreate` with a member key restricted to that team, and record the
+  status, `extensions.type`, and `extensions.code`.
+- **The rate-limit error body.** The 400-versus-429 status and the
+  `RATELIMITED` envelope are documentation- and SDK-sourced; the live workspace
+  cannot be exhausted without abusing it. Probe: on a disposable workspace,
+  drive requests past `x-ratelimit-requests-limit` and capture the status,
+  headers, and full errors array of the first rejected call.
+- **Mention rendering of a URL posted through the API.** A comment body
+  round-trips verbatim, but whether the Linear UI renders a bare issue URL in an
+  API-created comment as an interactive mention is not documented. Probe: post a
+  comment whose body is a bare issue URL through `commentCreate`, then read the
+  same comment's `bodyData` and compare it with a comment where the URL was
+  pasted in the editor.
+- **Self-notification on API writes.** Linear emits webhooks for the adapter's
+  writes, but whether a change made with a personal API key also notifies that
+  key's own user is not documented. Probe: with notifications enabled for the
+  key's user, run `issueUpdate` and `commentCreate` on an issue that user
+  subscribes to, then read the `notifications` connection for entries whose
+  actor is that user.
 
 ---
 
@@ -1314,14 +1349,3 @@ so a default run never mutates the workspace.
 | Relation direction semantics                                                    | **Live API** (created SOR-5 blocks SOR-7, read SOR-7 inverseRelations)             | Schema doc strings on `IssueRelation`                                                    |
 | Max `first`, orderBy direction, complexity, identifier acceptance, label append | **Live API**, team `SOR`, 2026-06-13                                               | Schema constraints and SDK where applicable                                              |
 | Dynamic request rate limit (2,500 live vs 5,000 documented)                     | **Live API** response headers                                                      | Web search: Linear scales request limit by paid seats                                    |
-
-### Context7 verification report
-
-Library resolved: `/websites/linear_app_developers` (347 snippets, High
-reputation). Queries confirmed: the auth header formats (API key verbatim vs
-OAuth Bearer), the `issue(id: "BLA-123")` lookup-by-identifier example, the
-`issueUpdate` "UUID or shorthand ID" statement, and the `RATELIMITED` error
-envelope. Context7 did not cover API key scopes (taken from first-party user
-docs). The items Context7 and the docs left open (not-found shape, maximum page
-size, sort direction, real complexity) are now closed by live verification
-rather than left single-sourced.
