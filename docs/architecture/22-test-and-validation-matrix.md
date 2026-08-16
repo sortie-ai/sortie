@@ -352,7 +352,10 @@ network access, or external service permissions are unavailable.
   error kind and yielding no events, and a review comment whose timestamp does not parse not
   failing the read and carrying the zero timestamp. A forge whose review decision is folded from
   per-review submission times fails that read on an unparseable timestamp of a review that can
-  change the verdict, an adapter-specific obligation with no shared assertion.
+  change the verdict, an adapter-specific obligation with no shared assertion. A forge whose
+  review-comment route reports the two diff sides as separate line fields returns each comment
+  with the line of the side it is anchored to and marks no comment outdated, an adapter-specific
+  obligation with no shared assertion.
 - Each CI provider's suite exercises the shared CI-aggregate conformance assertion against a result
   containing at least one completed-failing run, one in-progress run, and one completed-success
   run, confirming the provider's aggregate status and failing count agree with the forge decision

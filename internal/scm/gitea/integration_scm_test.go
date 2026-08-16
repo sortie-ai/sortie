@@ -24,6 +24,22 @@ const seededFailingTargetURL = "https://ci.example.com/build/12345"
 // seeds the same count.
 const manyStatusCount = 51
 
+// seededOldSideCommentBody is the body of the human review's old-side inline
+// comment. The provisioning script fixes the same value so the test can
+// locate the comment by text rather than by a platform-assigned id.
+const seededOldSideCommentBody = "Reviewer inline comment on the sentinel file's old side."
+
+// seededPreImageLine and seededPostImageLine are the sentinel file's line
+// numbers before and after the provisioning script's edit: it modifies
+// seededPreImageLine and inserts one line above it, so the two numbers
+// differ by one. The old-side comment anchors at the pre-image line, the
+// new-side comments (human and bot) anchor at the post-image line. The
+// committed provisioning script hard-codes the same two numbers.
+const (
+	seededPreImageLine  = 4
+	seededPostImageLine = 5
+)
+
 // newIntegrationSCMAdapter constructs a live Gitea SCM adapter from the
 // integration env vars, carrying the project preflight hint.
 func newIntegrationSCMAdapter(t *testing.T) domain.SCMAdapter {
@@ -112,7 +128,7 @@ func TestIntegration_FetchPendingReviews(t *testing.T) {
 	}
 
 	bot := os.Getenv("SORTIE_GITEA_BOT_USERNAME")
-	var hasReviewBody, hasInline bool
+	var hasReviewBody, hasInline, hasOldSide bool
 	for _, c := range comments {
 		if strings.HasPrefix(c.ID, "review-") {
 			if c.FilePath != "" {
@@ -138,12 +154,25 @@ func TestIntegration_FetchPendingReviews(t *testing.T) {
 			t.Errorf("inline comment %s Reviewer = %q, want the human reviewer, not the bot", c.ID, c.Reviewer)
 		}
 		hasInline = true
+
+		if c.Body == seededOldSideCommentBody {
+			hasOldSide = true
+			if c.StartLine != seededPreImageLine {
+				t.Errorf("old-side comment %s StartLine = %d, want %d (pre-image line)", c.ID, c.StartLine, seededPreImageLine)
+			}
+			if c.Outdated {
+				t.Errorf("old-side comment %s Outdated = true, want false", c.ID)
+			}
+		}
 	}
 	if !hasReviewBody {
 		t.Error("FetchPendingReviews returned no review-<id> body entry for the seeded REQUEST_CHANGES review")
 	}
 	if !hasInline {
 		t.Error("FetchPendingReviews returned no inline review comment with a file path")
+	}
+	if !hasOldSide {
+		t.Errorf("FetchPendingReviews returned no comment with body %q, want the seeded old-side comment", seededOldSideCommentBody)
 	}
 }
 
@@ -164,14 +193,25 @@ func TestIntegration_FetchBotReviewComments(t *testing.T) {
 	if comments == nil {
 		t.Fatal("FetchBotReviewComments returned nil, want non-nil slice")
 	}
-	found := false
+	var found, foundInline bool
 	for _, c := range comments {
-		if strings.EqualFold(c.Reviewer, botUsername) {
-			found = true
+		if !strings.EqualFold(c.Reviewer, botUsername) {
+			continue
+		}
+		found = true
+		if c.FilePath == "" {
+			continue
+		}
+		foundInline = true
+		if c.StartLine != seededPostImageLine {
+			t.Errorf("bot inline comment %s StartLine = %d, want %d (post-image line)", c.ID, c.StartLine, seededPostImageLine)
 		}
 	}
 	if !found {
 		t.Errorf("FetchBotReviewComments(PR #%d, [%s]) returned no comment authored by the bot", prNumber, botUsername)
+	}
+	if !foundInline {
+		t.Errorf("FetchBotReviewComments(PR #%d, [%s]) returned no inline comment authored by the bot", prNumber, botUsername)
 	}
 
 	empty, err := adapter.FetchBotReviewComments(ctx, prNumber, owner, repo, []string{})

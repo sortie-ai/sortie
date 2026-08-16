@@ -36,14 +36,43 @@ PROJECT="${GITEA_USER}/${GITEA_REPO}"
 READINESS_TIMEOUT=90
 POLL_INTERVAL=2
 
+# Gitea forbids a REQUEST_CHANGES self-review, so the reviewer and the
+# allowlisted bot are distinct users from the admin PR author.
+REVIEWER_USER="sortie-reviewer"
+REVIEWER_PASSWORD="Sortie-Reviewer-Pw1"
+BOT_USER="sortie-review-bot"
+BOT_PASSWORD="Sortie-Review-Bot-Pw1"
+FEATURE_BRANCH="feature-x"
+PROBE_BRANCH="status-probe"
+SENTINEL_PATH="review-sentinel.txt"
+
+# The feature branch modifies this pre-image line and inserts one line above
+# it, so the post-image number is the pre-image number plus one; a StartLine
+# assertion on either seeded line number can then tell which field the
+# adapter read. The integration test hard-codes both numbers.
+PRE_IMAGE_LINE=4
+POST_IMAGE_LINE=5
+
+# The human review's second comment anchors to the old side with this body,
+# fixed so the integration test can locate it by text.
+OLD_SIDE_COMMENT_BODY="Reviewer inline comment on the sentinel file's old side."
+
+# Proves the per-status target_url field name round-trips to CheckRun.DetailsURL.
+# The integration test hard-codes the same value.
+
+FAILING_TARGET_URL="https://ci.example.com/build/12345"
+# Above both DEFAULT_PAGING_NUM (30) and MAX_RESPONSE_ITEMS (50), so a truncating
+# combined-status read is detectable. The integration test hard-codes the count.
+
+PROBE_STATUS_COUNT=51
+
 trap dump_logs_on_error EXIT
 
 require_tools docker curl jq
 
-# Auth mode is "token" or "basic" (the admin user and password). Repository
-# creation needs basic auth; everything else runs under the token, so the run
-# also proves the published scopes cover the whole fixture. Reviews are the
-# exception, see user_call.
+# Repository creation needs basic auth; everything else runs under the token,
+# so the run also proves the published scopes cover the whole fixture.
+# Reviews are the exception, see user_call.
 gitea_call() {
 	_gc_method=$1 _gc_path=$2 _gc_auth=$3
 	case "$_gc_auth" in
@@ -93,8 +122,8 @@ docker exec "$CONTAINER_NAME" gitea admin user create \
 	--admin \
 	--must-change-password=false >/dev/null
 
-# Minted under basic auth. The scopes are the minimum covering every operation
-# the suite exercises plus the two construction preflights.
+# The scopes are the minimum covering every operation the suite exercises
+# plus the two construction preflights.
 log "creating access token"
 token_response=$(curl -sS --max-time 30 \
 	-u "${GITEA_USER}:${GITEA_PASSWORD}" \
@@ -110,7 +139,6 @@ log "creating repository ${PROJECT}"
 jq -nc --arg name "$GITEA_REPO" '{name: $name, private: false, auto_init: true}' |
 	gitea_call POST "/user/repos" basic >/dev/null
 
-# The five workflow-state and category labels the fixture assigns to its issues.
 create_label() {
 	_cl_out=$(jq -nc --arg name "$1" '{name: $name, color: "#cccccc"}' |
 		gitea_call POST "/repos/${PROJECT}/labels" token)
@@ -161,22 +189,6 @@ log "closing issue ${index_done} into its terminal state"
 jq -nc '{state: "closed"}' |
 	gitea_call PATCH "/repos/${PROJECT}/issues/${index_done}" token >/dev/null
 
-# Gitea forbids a REQUEST_CHANGES self-review, so the reviewer and the
-# allowlisted bot are distinct users from the admin PR author.
-REVIEWER_USER="sortie-reviewer"
-REVIEWER_PASSWORD="Sortie-Reviewer-Pw1"
-BOT_USER="sortie-review-bot"
-BOT_PASSWORD="Sortie-Review-Bot-Pw1"
-FEATURE_BRANCH="feature-x"
-PROBE_BRANCH="status-probe"
-SENTINEL_PATH="review-sentinel.txt"
-# Proves the per-status target_url field name round-trips to CheckRun.DetailsURL.
-# The integration test hard-codes the same value.
-FAILING_TARGET_URL="https://ci.example.com/build/12345"
-# Above both DEFAULT_PAGING_NUM (30) and MAX_RESPONSE_ITEMS (50), so a truncating
-# combined-status read is detectable. The integration test hard-codes the count.
-PROBE_STATUS_COUNT=51
-
 log "creating reviewer and bot users"
 docker exec "$CONTAINER_NAME" gitea admin user create \
 	--username "$REVIEWER_USER" \
@@ -202,17 +214,26 @@ repo_response=$(curl -sS --max-time 30 \
 	"${ENDPOINT}/api/v1/repos/${PROJECT}")
 default_branch=$(printf '%s' "$repo_response" | jq -er '.default_branch')
 
-log "creating branch ${FEATURE_BRANCH} and committing the sentinel file"
+# Committed to the default branch, not the feature branch, so the pull
+# request modifies an existing file and both diff sides are populated.
+log "committing the sentinel file to ${default_branch}"
+base_content=$(printf 'sentinel line 1\nsentinel line 2\nsentinel line 3\nsentinel line 4\nsentinel line 5\nsentinel line 6\nsentinel line 7\n' | base64 | tr -d '\n')
+base_response=$(jq -nc --arg content "$base_content" --arg branch "$default_branch" \
+	'{content: $content, branch: $branch, message: "Add review sentinel file"}' |
+	gitea_call POST "/repos/${PROJECT}/contents/${SENTINEL_PATH}" token)
+sentinel_sha=$(printf '%s' "$base_response" | jq -er '.content.sha')
+
+log "creating branch ${FEATURE_BRANCH}"
 jq -nc --arg new "$FEATURE_BRANCH" --arg old "$default_branch" \
 	'{new_branch_name: $new, old_branch_name: $old}' |
 	gitea_call POST "/repos/${PROJECT}/branches" token >/dev/null
-# A NEW multi-line file: every line is an added diff line, so an inline comment
-# anchored to line 1 reads back with position > 0 (Outdated == false).
-sentinel_content=$(printf 'sentinel line 1\nsentinel line 2\nsentinel line 3\nsentinel line 4\nsentinel line 5\n' | base64 | tr -d '\n')
-sentinel_response=$(jq -nc --arg content "$sentinel_content" --arg branch "$FEATURE_BRANCH" \
-	'{content: $content, branch: $branch, message: "Add review sentinel file"}' |
-	gitea_call POST "/repos/${PROJECT}/contents/${SENTINEL_PATH}" token)
-head_sha=$(printf '%s' "$sentinel_response" | jq -er '.commit.sha')
+
+log "modifying the sentinel file on ${FEATURE_BRANCH}"
+feature_content=$(printf 'sentinel line 1\nsentinel line 2\nsentinel line 3\ninserted sentinel line\nsentinel line 4 MODIFIED\nsentinel line 5\nsentinel line 6\nsentinel line 7\n' | base64 | tr -d '\n')
+feature_response=$(jq -nc --arg content "$feature_content" --arg branch "$FEATURE_BRANCH" --arg sha "$sentinel_sha" \
+	'{content: $content, branch: $branch, sha: $sha, message: "Modify review sentinel file"}' |
+	gitea_call PUT "/repos/${PROJECT}/contents/${SENTINEL_PATH}" token)
+head_sha=$(printf '%s' "$feature_response" | jq -er '.commit.sha')
 
 log "opening the review pull request"
 pr_response=$(jq -nc --arg head "$FEATURE_BRANCH" --arg base "$default_branch" \
@@ -220,14 +241,20 @@ pr_response=$(jq -nc --arg head "$FEATURE_BRANCH" --arg base "$default_branch" \
 	gitea_call POST "/repos/${PROJECT}/pulls" token)
 pr_index=$(printf '%s' "$pr_response" | jq -er '.number')
 
+# The first comment anchors new-side at POST_IMAGE_LINE; the second anchors
+# old-side at PRE_IMAGE_LINE with new_position 0, the old-side case the
+# adapter must not drop.
 log "submitting the human REQUEST_CHANGES review as ${REVIEWER_USER}"
-jq -nc --arg path "$SENTINEL_PATH" \
-	'{event: "REQUEST_CHANGES", body: "Please address the inline comment.", comments: [{path: $path, body: "Reviewer inline comment on the sentinel file.", new_position: 1}]}' |
+jq -nc --arg path "$SENTINEL_PATH" --argjson newLine "$POST_IMAGE_LINE" --argjson oldLine "$PRE_IMAGE_LINE" --arg oldBody "$OLD_SIDE_COMMENT_BODY" \
+	'{event: "REQUEST_CHANGES", body: "Please address the inline comments.", comments: [
+		{path: $path, body: "Reviewer inline comment on the sentinel file.", new_position: $newLine},
+		{path: $path, body: $oldBody, old_position: $oldLine, new_position: 0}
+	]}' |
 	user_call "$REVIEWER_USER" "$REVIEWER_PASSWORD" POST "/repos/${PROJECT}/pulls/${pr_index}/reviews" >/dev/null
 
 log "submitting the bot COMMENT review as ${BOT_USER}"
-jq -nc --arg path "$SENTINEL_PATH" \
-	'{event: "COMMENT", body: "Automated review note.", comments: [{path: $path, body: "Bot inline comment on the sentinel file.", new_position: 1}]}' |
+jq -nc --arg path "$SENTINEL_PATH" --argjson newLine "$POST_IMAGE_LINE" \
+	'{event: "COMMENT", body: "Automated review note.", comments: [{path: $path, body: "Bot inline comment on the sentinel file.", new_position: $newLine}]}' |
 	user_call "$BOT_USER" "$BOT_PASSWORD" POST "/repos/${PROJECT}/pulls/${pr_index}/reviews" >/dev/null
 
 # One success and one failure with a target_url, well under any page size, so the

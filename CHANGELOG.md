@@ -37,6 +37,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   bodies remain unlocated.
   ([#776](https://github.com/sortie-ai/sortie/issues/776))
 
+- Gitea: review comments anchored to the old side of the diff now
+  reach the agent, carrying the line they were left on, instead of
+  being silently discarded as outdated. A review whose comments were
+  all on the old side dispatched no agent turn and never escalated
+  either, so sortie appeared to ignore the review outright until the
+  pending check expired. Gitea review comments are no longer filtered
+  as outdated at all, because the platform reports no signal for an
+  anchor that a later push has superseded.
+  ([#778](https://github.com/sortie-ai/sortie/issues/778))
+
 ## [1.19.0] - 2026-08-12
 
 ### Added
