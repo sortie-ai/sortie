@@ -184,7 +184,7 @@ it remains an immediate exit whether or not self-review is configured. On worker
 orchestrator MUST NOT schedule a continuation retry
 ([architecture Section 8.4](architecture/08-polling-scheduling-and-reconciliation.md#84-retry-and-backoff)). When the dispatch that produced this run drives issue state, the orchestrator
 releases the claim and parks the issue: it records a durable park, applies the configured parking
-label to the issue, and holds it out of dispatch. The park is lifted, and normal dispatch
+label ([architecture Section 14.2](architecture/19-failure-model-and-recovery-strategy.md#142-recovery-behavior)) to the issue, and holds it out of dispatch. The park is lifted, and normal dispatch
 eligibility resumes, when the orchestrator observes either a change in the issue's tracker state
 or the removal of a parking label it has confirmed reached the tracker.
 
@@ -194,8 +194,8 @@ To clarify the two distinct suppression effects:
   immediately after reading the recognized status token. The worker does not proceed to the next
   turn.
 - **Continuation retries** (new worker runs scheduled after a normal worker exit): the
-  post-exit retry handler skips scheduling. The issue is not re-dispatched until its tracker
-  state changes.
+  post-exit retry handler skips scheduling. Where the dispatch drives issue state, the park
+  determines when the issue is re-dispatched; where it does not, nothing is parked.
 
 #### 2.3.2 `needs-human-review`
 
@@ -206,10 +206,12 @@ has low confidence in its solution.
 
 **Orchestrator behavior:** Like `blocked`, this value triggers a soft stop: the turn loop breaks,
 continuation retries are suppressed, and the issue claim is released. Unlike `blocked`, when
-`tracker.handoff_state` is configured ([architecture Section 5.3.1](architecture/05-workflow-specification.md#531-tracker-object)) and the issue is in an active
-tracker state, the orchestrator performs the handoff transition before releasing the claim. If the
-handoff transition fails (network error, permission denied, nil adapter), the orchestrator logs a
-warning and releases the claim without scheduling a retry.
+`tracker.handoff_state` is configured ([architecture Section 5.3.1](architecture/05-workflow-specification.md#531-tracker-object)), the issue is in an active
+tracker state, and the dispatch drives issue state, the orchestrator performs the handoff
+transition before releasing the claim. Where the dispatch does not drive issue state, no transition
+is attempted and the claim is released. If the handoff transition fails (network error, permission
+denied, nil adapter), the orchestrator logs a warning and releases the claim without scheduling a
+retry.
 
 The transition is additionally subject to the run's `tracker.handoff_evidence` verdict
 ([architecture Section 7.3](architecture/07-orchestration-state-machine.md#73-transition-triggers)).
@@ -444,8 +446,9 @@ The cleanup operation MUST apply the same symlink rejection as the read path (Se
 before deleting, verify via `Lstat` that neither `.sortie/` nor `status` is a symbolic link. If
 a symlink is detected, log a warning and skip the deletion — do not follow the link.
 
-If the deletion fails (e.g., the file was already removed, or the `.sortie/` directory does not
-exist), the error is logged at debug level and ignored.
+A deletion that fails because the file is already absent, or because the `.sortie/` directory
+does not exist, is ignored without a log entry. Any other removal error is logged at warn level
+and ignored.
 
 ```
 function pre_dispatch_cleanup(workspace_path):
@@ -455,7 +458,7 @@ function pre_dispatch_cleanup(workspace_path):
         return
     err = remove(status_path)
     if err and err is not "file not found":
-        log_debug("status file cleanup failed", workspace_path, err)
+        log_warn("status file cleanup failed", workspace_path, err)
 ```
 
 The orchestrator applies this same removal a second time during a run, at the moment it acts on
@@ -484,6 +487,13 @@ An update to the issue that is neither a state change nor a removal of the confi
 label, for example adding a comment while leaving both the state and the label untouched, does
 not lift the park.
 
+Where `tracker.query_filter` excludes the parking label, the label removal in step 3 releases
+nothing. The orchestrator observes labels only on the issues the candidate query returns, so it
+never confirms the label reached the tracker, and an unconfirmed label's absence does not lift
+the park. Such an issue is released by moving it to a different tracker state: the orchestrator
+reads the state of every parked issue the candidate query omits through a separate, filter-free
+tracker call.
+
 The polling interval provides natural rate limiting for this cycle. No additional idempotency
 mechanism is required.
 
@@ -495,9 +505,9 @@ exit phase. The status file value determines whether the handoff transition fire
 
 | `.sortie/status` value | Worker exit | Handoff transition | Continuation retry |
 |---|---|---|---|
-| `needs-human-review` | Normal | Performed (if configured and issue is active) | Suppressed |
+| `needs-human-review` | Normal | Performed (if configured, issue is active, and the dispatch drives issue state) | Suppressed |
 | `blocked` | Normal | Skipped; issue parked instead where the dispatch drives issue state | Suppressed |
-| absent or unrecognized | Normal | Performed (if configured and issue is active) | Depends on handoff result |
+| absent or unrecognized | Normal | Performed (if configured, issue is active, and the dispatch drives issue state) | Depends on handoff result |
 | (any) | Error | Skipped | Standard error retry |
 
 The parking label the orchestrator applies on a `blocked` park is a non-state write: it marks the
@@ -515,8 +525,7 @@ The semantic distinction drives the difference: `blocked` means the agent cannot
 there is no completed work to hand off. `needs-human-review` means the agent completed its work
 and the issue should move to a review state in the tracker.
 
-Both values suppress continuation retries and release the issue claim. The handoff transition is
-the only behavioral divergence between them.
+Both values suppress continuation retries and release the issue claim.
 
 When a `handoff_state` is configured and the agent writes `blocked`, the orchestrator skips the
 handoff transition entirely. The issue remains in its current tracker state. This is correct:
@@ -830,8 +839,8 @@ An implementation conforms to this specification if it satisfies all of the foll
    at the moment it acts on a recognized value that admits the run to the self-review phase per
    Section 2.3.2 and Section 3.4.
 6. The orchestrator never writes to `.sortie/status`, and its only removals of the file are the
-   pre-dispatch cleanup and the removal on admission to the self-review phase, both per
-   Section 3.2 and Section 3.4.
+   pre-dispatch cleanup and the removal it makes each time it acts on a recognized value read
+   during a run, both per Section 3.2 and Section 3.4.
 7. The status file does not trigger tracker state transitions per Section 3.6.
 8. Symbolic links at any path component are treated as read errors per Section 7.2.
 9. Pre-dispatch cleanup applies the same symlink rejection as reads per Section 3.4.

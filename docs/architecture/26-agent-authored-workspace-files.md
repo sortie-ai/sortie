@@ -27,8 +27,9 @@ Recognized values:
   (Section 7); it remains an immediate exit whether or not self-review is configured.
 - `needs-human-review`: agent signals that work is complete and requires review. Like `blocked`,
   this value suppresses continuation retries and releases the issue claim. Unlike `blocked`, when
-  `tracker.handoff_state` is configured and the issue is in an active tracker state, the
-  orchestrator performs the handoff transition (Section 5.3.1). This ensures completed work moves
+  `tracker.handoff_state` is configured, the issue is in an active tracker state, and the dispatch
+  drives issue state, the orchestrator performs the handoff transition (Section 5.3.1). This
+  ensures completed work moves
   to a review state in the tracker, maintaining tracker-as-source-of-truth semantics. If
   `tracker.handoff_state` is not configured, the issue becomes eligible for re-dispatch on future
   tracker polls under normal dispatch rules; unlike `blocked` in that deployment, no park is

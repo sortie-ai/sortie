@@ -199,7 +199,8 @@ tracker:
 | `active_states`   | list of strings | **Yes** (see rules below) | `[]` (empty)    | Future dispatch and reconciliation | Issue states eligible for agent dispatch. An issue is eligible for dispatch only if its state appears in this list. An empty list means no issues will be dispatched.                           |
 | `terminal_states` | list of strings | **Yes** (see rules below) | `[]` (empty)    | Future dispatch and reconciliation | Issue states that release claims and trigger cleanup.                                                                                                                                           |
 | `query_filter`    | string          | No                        | `""` (empty)    | Future dispatches                  | Adapter-defined query fragment that narrows the candidate issue query and, for adapters that apply it there, the terminal-state query. Each adapter interprets it in its own query language. For Jira: JQL fragment (e.g., `"labels = 'agent-ready'"`). For Linear: an `IssueFilter` JSON object, merged rather than appended (see the Linear note below). For Gitea: a URL query fragment for the repo issue-list route, merged into candidate polling only (see the Gitea note below). For GitLab: a URL query fragment for the project issue-list route, key-checked against an allowlist and merged into candidate polling only (see the GitLab note below). |
-| `handoff_state`   | string          | No                        | _(absent)_      | Future worker exits                | Target tracker state for orchestrator-initiated handoff after successful worker run. When absent, no handoff transition is performed. The transition is suppressed when the issue has already reached a terminal state.                                     |
+| `handoff_state`   | string          | No                        | _(absent)_      | Future worker exits                | Target tracker state for orchestrator-initiated handoff after successful worker run. When absent, no handoff transition is performed. The transition is suppressed when the issue has already reached a terminal state, and withheld when the run's frozen `handoff_evidence` policy does not permit the write ([architecture §11.5](architecture/11-issue-tracker-integration-contract.md#115-tracker-writes-important-boundary)). |
+| `handoff_evidence` | string         | No                        | `observed`      | Future worker attempts             | Policy governing the evidence condition on an otherwise-eligible handoff. `observed` withholds only when absence of work is positively observed and allows an undeterminable verdict; `strict` also withholds an undeterminable verdict; `off` restores the prior four-condition decision and performs no baseline capture, exit-time workspace inspection, or evidence logging. Values outside `observed`, `strict`, and `off` are rejected as a closed set while configuration is parsed, without contacting the tracker, so startup, reload, and `sortie validate` all reject the same value. See [architecture §6.4](architecture/06-configuration-specification.md#64-config-fields-summary-cheat-sheet) for the verdict's derivation. |
 | `in_progress_state` | string        | No                        | _(absent)_      | Future dispatches                  | Target tracker state for dispatch-time transition at the start of each worker attempt. When absent, no dispatch-time transition is performed. Must be in `active_states`. Must not collide with `terminal_states` or `handoff_state`. |
 | `comments`        | map of booleans | No                        | all `false`     | Future dispatches (`on_dispatch`); future worker exits (`on_completion`, `on_failure`) | Toggles for orchestrator-posted tracker comments at session lifecycle points. Keys: `on_dispatch`, `on_completion`, `on_failure`. Each is a boolean defaulting to `false`. Non-boolean values are rejected with a configuration error. See [Section 3.2](#32-curated-variable-list) for the matching `SORTIE_TRACKER_COMMENTS_*` env overrides. |
 
@@ -239,8 +240,30 @@ tracker:
   still caught. The verification read is skipped when `terminal_states` is empty, because
   no value can classify as terminal there. A failed verification read is logged and the
   handoff proceeds.
-- Each suppressed transition increments `sortie_handoff_transitions_total` with
-  `result="skipped"` (see [Section 4.1](#41-http-server-serverport-serverhost)).
+- A transition suppressed by a terminal state, or by the issue not being in an active state at
+  worker exit, increments `sortie_handoff_transitions_total` with `result="skipped"`. One withheld
+  by the evidence verdict increments the same counter with `result="withheld"` instead
+  (see [Section 4.1](#41-http-server-serverport-serverhost)).
+
+**`handoff_evidence` runtime behavior:**
+
+- The evidence condition is a fifth condition on the handoff path, consulted only where four
+  conditions already select that path: a handoff state is configured, the issue is still in an
+  active state, the exit is not a blocked soft stop, and the dispatch drives issue state. It can
+  suppress a handoff write and can never cause one.
+- The verdict has three values, not two: work observed, absence of work observed, and evidence not
+  determinable. It is computed at worker exit over the run's workspace against a baseline captured
+  immediately before the agent starts. Under `off` no baseline is captured and no verdict is
+  computed, so the four-condition decision stands unchanged.
+- A withheld run makes no handoff transition and no pre-write verification read, leaves the issue
+  in its active tracker state, is recorded in run history as `failed` with the verdict as its error
+  reason, and schedules the ordinary exponential-backoff failure path rather than the fixed-delay
+  continuation path.
+- Consecutive withheld outcomes are counted per issue, and reaching the ceiling parks the issue
+  under a label whose name is taken from `reactions.review_comments.escalation_label`. That
+  ceiling's derivation from `agent.max_sessions`, the reset rule for the count, and the two
+  operator gestures that release a park are specified in
+  [architecture §14.2](architecture/19-failure-model-and-recovery-strategy.md#142-recovery-behavior).
 
 **`in_progress_state` validation rules:**
 
@@ -1840,6 +1863,7 @@ as an environment variable reference.
 | `hooks.timeout_ms`                     | Low-risk tuning; hooks are rarely changed per-environment       |
 | `agent.max_concurrent_agents_by_state` | Complex map type; no clean single-value representation          |
 | `tracker.api_version`                  | No override variable exists; set it in the front matter or through `$VAR` indirection |
+| `tracker.handoff_evidence`             | No override variable exists; set it in the front matter. The value is matched against the closed set as written, so `$VAR` indirection does not apply. |
 | `notifications`                        | List of pass-through backend maps; no single-value representation. Backend secrets are referenced via `$SORTIE_*` indirection from inside the entry (see Section 2.12), not as field-level overrides. |
 | `ci_feedback.*`                        | No override variables exist; the section is deprecated and rarely differs per environment |
 | `reactions.*` (including `reactions.label_commands`) | No override variables exist; reaction configuration comes from WORKFLOW.md |
@@ -2167,12 +2191,13 @@ are included alongside Sortie-specific metrics.
 | `sortie_tokens_total`                           | Counter   | `type`                      | Tokens consumed, by type (`input`, `output`, `cache_read`).    |
 | `sortie_agent_runtime_seconds_total`            | Counter   | —                           | Cumulative agent-session wall-clock time for completed sessions. |
 | `sortie_dispatches_total`                       | Counter   | `outcome`                   | Dispatch attempts (`success`, `error`).                        |
-| `sortie_worker_exits_total`                     | Counter   | `exit_type`                 | Worker exits (`normal`, `error`, `cancelled`).                 |
+| `sortie_worker_exits_total`                     | Counter   | `exit_type`                 | Worker exits (`normal`, `error`, `cancelled`, `soft_stop`).    |
 | `sortie_retries_total`                          | Counter   | `trigger`                   | Retry schedule events (`error`, `continuation`, `timer`, `stall`). |
 | `sortie_reconciliation_actions_total`           | Counter   | `action`                    | Reconciliation outcomes (`stop`, `cleanup`, `keep`, `sweep_cleanup`, `sweep_expired`). |
 | `sortie_poll_cycles_total`                      | Counter   | `result`                    | Poll tick completions (`success`, `error`, `skipped`).         |
 | `sortie_tracker_requests_total`                 | Counter   | `operation`, `result`       | Tracker adapter API calls by operation and result.             |
-| `sortie_handoff_transitions_total`              | Counter   | `result`                    | Handoff-state transition attempts (`success`, `error`, `skipped`). `skipped` covers both suppression causes: the issue had already reached a terminal state, or the issue was not in an active state at worker exit. Recorded only when `tracker.handoff_state` is set. |
+| `sortie_handoff_transitions_total`              | Counter   | `result`                    | Handoff-state transition attempts (`success`, `error`, `skipped`, `withheld`). `skipped` covers two suppression causes: the issue had already reached a terminal state, or the issue was not in an active state at worker exit. `withheld` is the third: the run's handoff-evidence verdict did not permit the write, and the run is recorded as failed. Recorded only when `tracker.handoff_state` is set. |
+| `sortie_issue_parks_total`                      | Counter   | `reason`                    | Issue park events (`agent_blocked`, `handoff_absence`).        |
 | `sortie_tool_calls_total`                       | Counter   | `tool`, `result`            | Agent tool call completions by tool name and result.           |
 | `sortie_poll_duration_seconds`                  | Histogram | —                           | Wall-clock time per poll cycle.                                |
 | `sortie_worker_duration_seconds`                | Histogram | `exit_type`                 | Worker session wall-clock time.                                |
@@ -3115,6 +3140,7 @@ re-applies configuration and prompt template without restart.
 | `tracker.query_filter`                 | Future dispatches.                                                                             |
 | `tracker.handoff_state`                | Future worker exits, not in-flight sessions.                                                   |
 | `tracker.in_progress_state`            | Future dispatches, not in-flight sessions.                                                     |
+| `tracker.handoff_evidence`             | Future worker attempts, not in-flight sessions.                                                |
 | `polling.interval_ms`                  | **Immediate** — affects future tick scheduling.                                                |
 | `workspace.root`                       | Future workspace operations.                                                                   |
 | `workspace.retention_days`             | Dynamic reload. Applies on the next sweep pass.                                                |
@@ -3265,6 +3291,8 @@ Each error identifies the offending field path.
 | `config: tracker.handoff_state: resolved to empty (check environment variable)` | `$VAR` reference resolved to an empty string (variable unset or empty).  | Set the referenced environment variable to a valid state name.                                                                       |
 | `config: tracker.handoff_state: "<val>" collides with active state "<state>"`   | `handoff_state` matches one of the `active_states` (case-insensitive).   | Use a state that is not in `active_states`. The handoff state must be distinct from active and terminal states.                      |
 | `config: tracker.handoff_state: "<val>" collides with terminal state "<state>"` | `handoff_state` matches one of the `terminal_states` (case-insensitive). | Use a state that is not in `terminal_states`.                                                                                        |
+| `config: tracker.handoff_evidence: expected string, got <type>`                 | `handoff_evidence` is not a string (e.g., integer, boolean, list).       | Ensure the value is a string, quoted if necessary.                                                                                   |
+| `config: tracker.handoff_evidence: must be one of observed, strict, or off`     | `handoff_evidence` is set to a value outside the closed set.             | Use `observed`, `strict`, or `off`. Omit the field to keep the default `observed`.                                                   |
 | `config: tracker.in_progress_state: expected string, got <type>`                    | `in_progress_state` is not a string (e.g., integer, boolean, list).          | Ensure the value is a string, quoted if necessary.                                                                                   |
 | `config: tracker.in_progress_state: must not be empty`                              | `in_progress_state` is set to an explicit empty string.                      | Provide a valid state name, or omit the field entirely to disable dispatch-time transitions.                                         |
 | `config: tracker.in_progress_state: resolved to empty (check environment variable)` | `$VAR` reference resolved to an empty string (variable unset or empty).      | Set the referenced environment variable to a valid state name.                                                                       |
@@ -3329,6 +3357,7 @@ lists the `SORTIE_*` variable that overrides the field, or "—" if not overrida
 | `tracker.terminal_states`               | `[string]`       | `[]` (empty)                 | `SORTIE_TRACKER_TERMINAL_STATES`         | CSV; at least one of active/terminal required                                          |
 | `tracker.query_filter`                  | string           | `""`                         | `SORTIE_TRACKER_QUERY_FILTER`            | Adapter-interpreted                                                                    |
 | `tracker.handoff_state`                 | string           | _(absent)_                   | `SORTIE_TRACKER_HANDOFF_STATE`           | Must not collide with active/terminal                                                  |
+| `tracker.handoff_evidence`              | string           | `observed`                   | —                                        | `observed`, `strict`, or `off`; closed set                                             |
 | `tracker.in_progress_state`             | string           | _(absent)_                   | `SORTIE_TRACKER_IN_PROGRESS_STATE`       | Must be in active; must not collide with terminal/handoff                              |
 | `tracker.api_version`                   | string           | `"3"`                        | —                                        | Jira only; `"3"` (Cloud) or `"2"` (Server/DC); `$VAR` supported; quote the value       |
 | `tracker.comments.on_dispatch`          | bool             | `false`                      | `SORTIE_TRACKER_COMMENTS_ON_DISPATCH`    |                                                                                        |

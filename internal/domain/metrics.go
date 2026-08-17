@@ -71,8 +71,8 @@ type Metrics interface {
 	IncTrackerRequests(operation string, result string)
 
 	// IncHandoffTransitions increments the handoff state transition
-	// outcome counter. result is "success", "error", or "skipped"
-	// (sortie_handoff_transitions_total{result} counter).
+	// outcome counter. result is "success", "error", "skipped", or
+	// "withheld" (sortie_handoff_transitions_total{result} counter).
 	IncHandoffTransitions(result string)
 
 	// IncIssueParks increments the issue park counter. reason is
