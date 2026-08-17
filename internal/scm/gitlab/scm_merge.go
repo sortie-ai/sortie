@@ -182,9 +182,9 @@ func mapPipelineStatus(status string) (gate scmcore.CIGate, recognized bool) {
 // isGeneratedMergeRefPipeline reports whether pipeline is one the
 // platform generated for merge request prNumber and ran on a ref whose
 // commit exists in neither branch: a merged-results pipeline or a
-// merge-train pipeline. It returns false for every other input,
-// including a pipeline with an empty ref or an empty source, and for a
-// pipeline generated for a different merge request.
+// merge-train pipeline. It returns false for every other non-nil
+// pipeline, including one with an empty ref or an empty source, and one
+// generated for a different merge request. pipeline must not be nil.
 //
 // The comparison is an exact whole-string match on both source and ref,
 // never a prefix or suffix test over ref alone: a branch can be named
