@@ -58,20 +58,6 @@ type gitlabCommitPipeline struct {
 	ID int64 `json:"id"`
 }
 
-// gitlabCommitStatus is one entry of the commit-status list. The list
-// mixes runner jobs and externally reported statuses, and no field
-// separates them, so ID is what the log-excerpt read tests against the
-// pipeline's job set. PipelineID is what the scope filter tests against
-// the pipeline the read asked for.
-type gitlabCommitStatus struct {
-	ID           int64  `json:"id"`
-	Name         string `json:"name"`
-	Status       string `json:"status"`
-	AllowFailure bool   `json:"allow_failure"`
-	TargetURL    string `json:"target_url"`
-	PipelineID   int64  `json:"pipeline_id"`
-}
-
 // gitlabPipelineJob is one entry of the pipeline-jobs list, read only to
 // decide whether a failing commit-status entry is a job whose trace can
 // be fetched.
@@ -206,7 +192,7 @@ func (p *GitLabCIProvider) resolveCommit(ctx context.Context, ref string) (strin
 // walk returns is passed through unconverted for the caller to apply
 // [scmcore.ToCIError].
 func (p *GitLabCIProvider) fetchCommitStatuses(ctx context.Context, sha string, pipelineID int64) ([]gitlabCommitStatus, error) {
-	path := "/projects/" + p.project + "/repository/commits/" + url.PathEscape(sha) + "/statuses"
+	path := commitStatusesPath(p.project, sha)
 	params := url.Values{
 		"per_page":    {"100"},
 		"pipeline_id": {strconv.FormatInt(pipelineID, 10)},
@@ -236,43 +222,7 @@ func (p *GitLabCIProvider) fetchCommitStatuses(ctx context.Context, sha string, 
 		return nil, err
 	}
 
-	kept := make([]gitlabCommitStatus, 0, len(all))
-	for _, entry := range all {
-		if entry.PipelineID == pipelineID {
-			kept = append(kept, entry)
-		}
-	}
-	return kept, nil
-}
-
-// mapJobOutcome maps a commit-status entry's status and allow_failure to
-// its normalized conclusion and run status. recognized is false when
-// status matches no known value, in which case the pair is the same
-// [domain.CheckConclusionPending] / [domain.CheckRunStatusInProgress]
-// deferral the "running" arm produces, so an unrecognized status never
-// settles the aggregate.
-func mapJobOutcome(status string, allowFailure bool) (domain.CheckConclusion, domain.CheckRunStatus, bool) {
-	switch status {
-	case "success":
-		return domain.CheckConclusionSuccess, domain.CheckRunStatusCompleted, true
-	case "failed":
-		if allowFailure {
-			return domain.CheckConclusionNeutral, domain.CheckRunStatusCompleted, true
-		}
-		return domain.CheckConclusionFailure, domain.CheckRunStatusCompleted, true
-	case "canceled":
-		return domain.CheckConclusionCancelled, domain.CheckRunStatusCompleted, true
-	case "skipped":
-		return domain.CheckConclusionSkipped, domain.CheckRunStatusCompleted, true
-	case "manual":
-		return domain.CheckConclusionNeutral, domain.CheckRunStatusCompleted, true
-	case "created", "pending", "waiting_for_resource", "waiting_for_callback", "preparing", "scheduled":
-		return domain.CheckConclusionPending, domain.CheckRunStatusQueued, true
-	case "running", "canceling":
-		return domain.CheckConclusionPending, domain.CheckRunStatusInProgress, true
-	default:
-		return domain.CheckConclusionPending, domain.CheckRunStatusInProgress, false
-	}
+	return scopeToPipeline(all, pipelineID), nil
 }
 
 // fetchPipelineJobIDs walks every page of the pipeline-jobs route for
@@ -413,24 +363,7 @@ func (p *GitLabCIProvider) FetchCIStatus(ctx context.Context, ref string) (domai
 		}
 	}
 
-	runs := make([]domain.CheckRun, len(statuses))
-	var unknownCount int
-	var unknownExample string
-	for i, entry := range statuses {
-		conclusion, runStatus, recognized := mapJobOutcome(entry.Status, entry.AllowFailure)
-		if !recognized {
-			unknownCount++
-			if unknownExample == "" {
-				unknownExample = entry.Status
-			}
-		}
-		runs[i] = domain.CheckRun{
-			Name:       entry.Name,
-			Status:     runStatus,
-			Conclusion: conclusion,
-			DetailsURL: entry.TargetURL,
-		}
-	}
+	runs, unknownExample, unknownCount := normalizeCommitStatuses(statuses)
 	if unknownCount > 0 {
 		p.log.Warn("unrecognized gitlab job status",
 			slog.String("status", unknownExample),

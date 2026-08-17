@@ -36,8 +36,14 @@ type gitlabMergeRequest struct {
 // gitlabPipeline is the head_pipeline object embedded in a merge
 // request. The sibling top-level pipeline field is never decoded: it can
 // report null while head_pipeline is populated.
+//
+// ID and SHA address the pipeline's own job set. The merge request's own
+// sha is not interchangeable with SHA: nothing re-validates head_pipeline
+// against the current head, so the two can disagree.
 type gitlabPipeline struct {
 	Status string `json:"status"`
+	ID     int64  `json:"id"`
+	SHA    string `json:"sha"`
 }
 
 // fetchMergeRequest issues GET /projects/{projectPath}/merge_requests/{prNumber}
@@ -119,6 +125,25 @@ func (a *GitLabSCMAdapter) GetMergeability(ctx context.Context, prNumber int, ow
 	}, nil
 }
 
+// fetchPipelineStatuses walks every page of the commit-status route for
+// sha, scoped to pipelineID both on the wire, via the pipeline_id query
+// parameter, and again after decoding, through [scopeToPipeline].
+//
+// sha is percent-encoded inside [commitStatusesPath]. A decode failure
+// returns a [*domain.SCMError] of kind [domain.ErrSCMPayload]; any other
+// error is whatever [scmcore.AsSCMError] yields for the underlying
+// transport or HTTP failure, propagated unchanged from [paginateSCM].
+func (a *GitLabSCMAdapter) fetchPipelineStatuses(ctx context.Context, owner, repo, sha string, pipelineID int64) ([]gitlabCommitStatus, error) {
+	path := commitStatusesPath(projectPath(owner, repo), sha)
+	params := url.Values{"pipeline_id": {strconv.FormatInt(pipelineID, 10)}}
+
+	entries, err := paginateSCM(ctx, a.client, a.log, path, params, decodeCommitStatusPage)
+	if err != nil {
+		return nil, err
+	}
+	return scopeToPipeline(entries, pipelineID), nil
+}
+
 // mapPipelineStatus classifies a GitLab head_pipeline.status value into
 // the merge-gate vocabulary. recognized is false for any value outside
 // the platform's pipeline-status enum, including the empty string, in
@@ -126,10 +151,10 @@ func (a *GitLabSCMAdapter) GetMergeability(ctx context.Context, prNumber int, ow
 // rather than guessing a more permissive verdict.
 //
 // manual sits in the CIGatePending arm by name rather than by falling
-// through the default: the platform reports manual for a pipeline that
-// has settled, not one still running, but its job set can still carry a
-// failed job alongside the untriggered manual one, so the gate holds
-// until that shape is resolved on its own.
+// through the default: it is the conservative answer this classifier
+// gives when asked about a status its merge-gate caller, [GitLabSCMAdapter.GetCIStatus],
+// resolves for itself from that pipeline's own job set, rather than a
+// value the gate holds until the shape settles on its own.
 func mapPipelineStatus(status string) (gate scmcore.CIGate, recognized bool) {
 	switch status {
 	case "success", "skipped":
@@ -150,13 +175,15 @@ func mapPipelineStatus(status string) (gate scmcore.CIGate, recognized bool) {
 // [scmcore.CIGatePending], or [scmcore.CIGateFailing], or the empty
 // [scmcore.CIGateAbsent] when the head carries no pipeline. A skipped
 // pipeline resolves to CIGateSuccess, since the platform reports it only
-// for a job set with no failing conclusion. A manual pipeline resolves
-// to CIGatePending regardless of settlement, because the platform can
-// report it for a job set that still carries a failed job. A status
-// outside the recognized set logs one WARN naming the observed value so
-// a stalled gate is diagnosable at the tick it stalls. The platform
-// already folds externally reported commit statuses into head_pipeline,
-// so no second request is issued.
+// for a job set with no failing conclusion. A manual pipeline resolves to
+// the verdict computed over that pipeline's own job set, through
+// [GitLabSCMAdapter.manualGate]; an empty job set holds at CIGatePending
+// rather than reporting the absent value. A status outside the recognized
+// set logs one WARN naming the observed value so a stalled gate is
+// diagnosable at the tick it stalls. The platform already folds
+// externally reported commit statuses into head_pipeline for the twelve
+// other statuses, so no second request is issued for them; manual is the
+// exception that pays for one job-set read.
 func (a *GitLabSCMAdapter) GetCIStatus(ctx context.Context, prNumber int, owner, repo string) (string, error) {
 	mr, err := a.fetchMergeRequest(ctx, prNumber, owner, repo)
 	if err != nil {
@@ -165,11 +192,56 @@ func (a *GitLabSCMAdapter) GetCIStatus(ctx context.Context, prNumber int, owner,
 	if mr.HeadPipeline == nil {
 		return string(scmcore.CIGateAbsent), nil
 	}
+	if mr.HeadPipeline.Status == "manual" {
+		return a.manualGate(ctx, owner, repo, mr.HeadPipeline)
+	}
 
 	gate, recognized := mapPipelineStatus(mr.HeadPipeline.Status)
 	if !recognized {
 		a.log.Warn("unrecognized gitlab pipeline status",
 			slog.String("pipeline_status", mr.HeadPipeline.Status))
+	}
+	return string(gate), nil
+}
+
+// manualGate resolves the merge-gate verdict for a manual head pipeline
+// from that pipeline's own job set, folded through [scmcore.MergeGate].
+//
+// A missing sha or a zero id returns a [*domain.SCMError] of kind
+// [domain.ErrSCMPayload] and issues no request: the platform answers a
+// zero pipeline scope with an empty set rather than an error, which would
+// otherwise make the anomaly invisible. A job-set read failure is
+// returned unchanged, never degraded to a verdict. An unrecognized job
+// status logs one WARN naming it. A scoped job set that folds to
+// [scmcore.CIGateAbsent] logs one WARN naming the pipeline id and holds
+// at [scmcore.CIGatePending] rather than reporting the absent value,
+// because the platform never reports manual for a job set with no
+// entries, so an empty scoped set here means the read was mis-addressed.
+func (a *GitLabSCMAdapter) manualGate(ctx context.Context, owner, repo string, pipeline *gitlabPipeline) (string, error) {
+	if pipeline.SHA == "" || pipeline.ID == 0 {
+		return "", &domain.SCMError{
+			Kind:    domain.ErrSCMPayload,
+			Message: "head pipeline missing sha or id",
+		}
+	}
+
+	entries, err := a.fetchPipelineStatuses(ctx, owner, repo, pipeline.SHA, pipeline.ID)
+	if err != nil {
+		return "", err
+	}
+
+	runs, unrecognizedExample, unrecognizedCount := normalizeCommitStatuses(entries)
+	if unrecognizedCount > 0 {
+		a.log.Warn("unrecognized gitlab job status",
+			slog.String("status", unrecognizedExample),
+			slog.Int("count", unrecognizedCount))
+	}
+
+	gate := scmcore.MergeGate(runs)
+	if gate == scmcore.CIGateAbsent {
+		a.log.Warn("manual head pipeline carried no job status",
+			slog.Int64("pipeline_id", pipeline.ID))
+		return string(scmcore.CIGatePending), nil
 	}
 	return string(gate), nil
 }
