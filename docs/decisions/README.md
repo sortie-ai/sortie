@@ -28,3 +28,4 @@ This directory contains architecturally significant decisions for Sortie, docume
 | [0019](0019-keep-usage-data-on-the-host.md)             | Keep Usage Data on the Host and Aggregate Across Instances by Pull | Accepted |
 | [0020](0020-withhold-handoff-on-observed-absence-of-work.md) | Withhold the Handoff Transition Only When Absence of Work Is Observed | Accepted |
 | [0021](0021-run-self-review-before-ending-on-the-completion-signal.md) | Run Self-Review Before Ending the Run on the Completion Signal | Accepted |
+| [0022](0022-release-a-parked-issue-on-a-human-gesture.md) | Release a Parked Issue on a Human Gesture in the Tracker | Accepted |
