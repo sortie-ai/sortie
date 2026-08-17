@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -28,11 +29,14 @@ type mockExitStore struct {
 	metrics         []persistence.AggregateMetrics
 	sessionMetadata []persistence.SessionMetadata
 	retryEntries    []persistence.RetryEntry
+	deletedRetryIDs []string
 
 	appendRunHistoryErr       error
 	upsertAggregateMetricsErr error
 	upsertSessionMetadataErr  error
 	saveRetryEntryErr         error
+	deleteRetryEntryErr       error
+	absenceCountErr           error
 }
 
 var _ WorkerExitStore = (*mockExitStore)(nil)
@@ -54,6 +58,32 @@ func (m *mockExitStore) UpsertAggregateMetrics(_ context.Context, metrics persis
 func (m *mockExitStore) SaveRetryEntry(_ context.Context, entry persistence.RetryEntry) error {
 	m.retryEntries = append(m.retryEntries, entry)
 	return m.saveRetryEntryErr
+}
+
+func (m *mockExitStore) DeleteRetryEntry(_ context.Context, issueID string) error {
+	m.deletedRetryIDs = append(m.deletedRetryIDs, issueID)
+	return m.deleteRetryEntryErr
+}
+
+func (m *mockExitStore) QueryConsecutiveHandoffAbsenceCounts(_ context.Context, issueIDs []string) (map[string]int, error) {
+	if m.absenceCountErr != nil {
+		return nil, m.absenceCountErr
+	}
+	counts := make(map[string]int, len(issueIDs))
+	for _, issueID := range issueIDs {
+		for _, run := range slices.Backward(m.runHistories) {
+			if run.IssueID != issueID {
+				continue
+			}
+			if run.Status == "succeeded" {
+				break
+			}
+			if run.Status == "failed" && run.Error != nil && strings.HasPrefix(*run.Error, persistence.HandoffAbsenceErrorPrefix) {
+				counts[issueID]++
+			}
+		}
+	}
+	return counts, nil
 }
 
 func (m *mockExitStore) UpsertSessionMetadata(_ context.Context, meta persistence.SessionMetadata) error {

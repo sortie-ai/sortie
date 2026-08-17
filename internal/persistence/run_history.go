@@ -10,6 +10,13 @@ import (
 
 const reactionRecoveryMaxCandidates = 200
 
+// HandoffAbsenceErrorPrefix is the reserved prefix used when a handoff is
+// withheld because the orchestrator observed no work (or treats an
+// undeterminable verdict as absence under the strict policy). Keeping the
+// marker stable lets the retry and polling paths reconstruct the consecutive
+// absence sequence from run_history without adding a verdict column.
+const HandoffAbsenceErrorPrefix = "handoff withheld: "
+
 // RunHistory represents a single completed run attempt persisted in the
 // run_history table. The ID field is assigned by the database on insert and
 // should be left zero when calling [Store.AppendRunHistory].
@@ -294,6 +301,69 @@ func (s *Store) CountRunHistoryByIssue(ctx context.Context, issueID string) (int
 		return 0, fmt.Errorf("count run history by issue %q: %w", issueID, err)
 	}
 	return count, nil
+}
+
+// QueryConsecutiveHandoffAbsenceCounts returns the number of handoff-absence
+// failures for each requested issue since its most recent successful run.
+// Other failed or cancelled runs do not reset the sequence because they do not
+// establish that work was observed. Issues with no qualifying rows are omitted
+// from the returned map.
+//
+// A successful run ends the active absence sequence. On the otherwise-eligible
+// handoff path this includes a work-observed result, even when the subsequent
+// tracker handoff write fails; successful outcomes that hand off under the
+// observed or off policies also leave the active queue and therefore end that
+// dispatch sequence.
+func (s *Store) QueryConsecutiveHandoffAbsenceCounts(ctx context.Context, issueIDs []string) (map[string]int, error) {
+	counts := make(map[string]int)
+	if len(issueIDs) == 0 {
+		return counts, nil
+	}
+
+	placeholders := strings.Repeat("?,", len(issueIDs))
+	placeholders = placeholders[:len(placeholders)-1]
+
+	args := make([]any, 0, len(issueIDs)+2)
+	for _, id := range issueIDs {
+		args = append(args, id)
+	}
+	args = append(args, len(HandoffAbsenceErrorPrefix), HandoffAbsenceErrorPrefix)
+
+	query := fmt.Sprintf( //nolint:gosec // placeholders is built only from len(issueIDs); values remain bound parameters
+		`SELECT r.issue_id, COUNT(*)
+		 FROM run_history AS r
+		 WHERE r.issue_id IN (%s)
+		   AND r.status = 'failed'
+		   AND substr(r.error, 1, ?) = ?
+		   AND NOT EXISTS (
+		       SELECT 1
+		       FROM run_history AS succeeded
+		       WHERE succeeded.issue_id = r.issue_id
+		         AND succeeded.status = 'succeeded'
+		         AND succeeded.id > r.id
+		   )
+		 GROUP BY r.issue_id`,
+		placeholders,
+	)
+
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("query consecutive handoff absences: %w", err)
+	}
+	defer rows.Close() //nolint:errcheck // read-only query; close error is non-actionable
+
+	for rows.Next() {
+		var issueID string
+		var count int
+		if err := rows.Scan(&issueID, &count); err != nil {
+			return nil, fmt.Errorf("scan consecutive handoff absences: %w", err)
+		}
+		counts[issueID] = count
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("query consecutive handoff absences: %w", err)
+	}
+	return counts, nil
 }
 
 // QueryBudgetExhaustedIssues returns issue IDs from candidateIDs whose

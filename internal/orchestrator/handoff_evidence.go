@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/sortie-ai/sortie/internal/config"
+	"github.com/sortie-ai/sortie/internal/persistence"
 	"github.com/sortie-ai/sortie/internal/workspace"
 )
 
@@ -92,5 +93,5 @@ func handoffEvidenceWithholds(policy config.HandoffEvidencePolicy, result handof
 }
 
 func handoffEvidenceFailure(policy config.HandoffEvidencePolicy, result handoffEvidenceResult) error {
-	return fmt.Errorf("handoff withheld: %s under %s policy", result.Verdict, policy)
+	return fmt.Errorf("%s%s under %s policy", persistence.HandoffAbsenceErrorPrefix, result.Verdict, policy)
 }
