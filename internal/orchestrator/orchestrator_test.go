@@ -108,6 +108,8 @@ type stubStore struct {
 	budgetExhaustedErr error
 	absenceCounts      map[string]int
 	absenceCountErr    error
+	absenceQueryCalls  int
+	absenceResetOf     []string
 
 	// Token budget query configuration (per-tick rebuild and single-issue gate).
 	tokenExhaustedIDs []string
@@ -198,6 +200,7 @@ func (s *stubStore) QueryBudgetExhaustedIssues(_ context.Context, _ []string, _ 
 func (s *stubStore) QueryConsecutiveHandoffAbsenceCounts(_ context.Context, candidateIDs []string) (map[string]int, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.absenceQueryCalls++
 	if s.absenceCountErr != nil {
 		return nil, s.absenceCountErr
 	}
@@ -206,6 +209,14 @@ func (s *stubStore) QueryConsecutiveHandoffAbsenceCounts(_ context.Context, cand
 		result[id] = s.absenceCounts[id]
 	}
 	return result, nil
+}
+
+func (s *stubStore) ResetHandoffAbsenceSequence(_ context.Context, issueID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.absenceResetOf = append(s.absenceResetOf, issueID)
+	delete(s.absenceCounts, issueID)
+	return nil
 }
 
 // QueryTokenBudgetUsage reports a candidate named in tokenExhaustedIDs as

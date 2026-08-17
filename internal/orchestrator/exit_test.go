@@ -9,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
-	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -31,12 +30,19 @@ type mockExitStore struct {
 	retryEntries    []persistence.RetryEntry
 	deletedRetryIDs []string
 
+	// absenceResetAt maps an issue ID to the number of recorded runs at
+	// which its absence sequence was last reset, mirroring the run-history
+	// watermark the real store keeps.
+	absenceResetAt map[string]int
+	absenceResetOf []string
+
 	appendRunHistoryErr       error
 	upsertAggregateMetricsErr error
 	upsertSessionMetadataErr  error
 	saveRetryEntryErr         error
 	deleteRetryEntryErr       error
 	absenceCountErr           error
+	absenceResetErr           error
 }
 
 var _ WorkerExitStore = (*mockExitStore)(nil)
@@ -71,12 +77,12 @@ func (m *mockExitStore) QueryConsecutiveHandoffAbsenceCounts(_ context.Context, 
 	}
 	counts := make(map[string]int, len(issueIDs))
 	for _, issueID := range issueIDs {
-		for _, run := range slices.Backward(m.runHistories) {
+		// Only a recorded reset ends the sequence. A terminal status of
+		// "succeeded" does not, because it is also recorded for outcomes that
+		// carry no work-observed verdict.
+		for _, run := range m.runHistories[m.absenceResetAt[issueID]:] {
 			if run.IssueID != issueID {
 				continue
-			}
-			if run.Status == "succeeded" {
-				break
 			}
 			if run.Status == "failed" && run.Error != nil && strings.HasPrefix(*run.Error, persistence.HandoffAbsenceErrorPrefix) {
 				counts[issueID]++
@@ -84,6 +90,18 @@ func (m *mockExitStore) QueryConsecutiveHandoffAbsenceCounts(_ context.Context, 
 		}
 	}
 	return counts, nil
+}
+
+func (m *mockExitStore) ResetHandoffAbsenceSequence(_ context.Context, issueID string) error {
+	m.absenceResetOf = append(m.absenceResetOf, issueID)
+	if m.absenceResetErr != nil {
+		return m.absenceResetErr
+	}
+	if m.absenceResetAt == nil {
+		m.absenceResetAt = make(map[string]int)
+	}
+	m.absenceResetAt[issueID] = len(m.runHistories)
+	return nil
 }
 
 func (m *mockExitStore) UpsertSessionMetadata(_ context.Context, meta persistence.SessionMetadata) error {

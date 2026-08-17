@@ -270,6 +270,71 @@ func TestHandleWorkerExitWorkObservedResetsAbsenceSequenceBeforeHandoffWrite(t *
 	if len(tracker.transitionCalls) != 1 {
 		t.Errorf("TransitionIssue calls = %d, want 1 failing handoff attempt", len(tracker.transitionCalls))
 	}
+	if len(store.absenceResetOf) != 1 || store.absenceResetOf[0] != issueID {
+		t.Errorf("ResetHandoffAbsenceSequence calls = %v, want [%s]", store.absenceResetOf, issueID)
+	}
+}
+
+func TestHandleWorkerExitSucceededWithoutVerdictKeepsAbsenceSequence(t *testing.T) {
+	const issueID = "ABS-BLOCKED"
+	store := &mockExitStore{}
+	seedMockHandoffAbsences(store, issueID, 2)
+	tracker := newRecordingHandoffTracker()
+	blockedState := exitStateWithIssue(t, issueID, "In Progress")
+	params := handoffEvidenceExitParams(t, store, tracker.mockTrackerAdapter, &spyMetrics{})
+	params.TrackerAdapter = tracker
+
+	// A blocked soft stop records "succeeded" and carries no evidence verdict,
+	// so it must neither reset the sequence nor advance it.
+	blockedDir, blockedBaseline := handoffEvidenceGitWorkspace(t)
+	HandleWorkerExit(blockedState, WorkerResult{
+		IssueID:                 issueID,
+		Identifier:              "PROJ-BLOCKED",
+		ExitKind:                WorkerExitNormal,
+		WorkspacePath:           blockedDir,
+		SoftStop:                true,
+		SoftStopReason:          "blocked",
+		HandoffEvidencePolicy:   config.HandoffEvidenceObserved,
+		HandoffEvidenceBaseline: blockedBaseline,
+		AgentAdapter:            "mock",
+	}, params)
+
+	if len(store.runHistories) == 0 || store.runHistories[len(store.runHistories)-1].Status != "succeeded" {
+		t.Fatalf("blocked soft stop recorded %+v, want a succeeded row", store.runHistories)
+	}
+	if len(store.absenceResetOf) != 0 {
+		t.Errorf("ResetHandoffAbsenceSequence calls = %v, want none without a work-observed verdict", store.absenceResetOf)
+	}
+	counts, err := store.QueryConsecutiveHandoffAbsenceCounts(context.Background(), []string{issueID})
+	if err != nil {
+		t.Fatalf("QueryConsecutiveHandoffAbsenceCounts: %v", err)
+	}
+	if got := counts[issueID]; got != 2 {
+		t.Fatalf("consecutive absences after a blocked soft stop = %d, want 2", got)
+	}
+
+	// The next absence is therefore the third, and reaches the ceiling instead
+	// of restarting a sequence the soft stop appeared to have cleared.
+	absentDir, absentBaseline := handoffEvidenceGitWorkspace(t)
+	absentState := exitStateWithIssue(t, issueID, "In Progress")
+	HandleWorkerExit(absentState, WorkerResult{
+		IssueID:                 issueID,
+		Identifier:              "PROJ-BLOCKED",
+		ExitKind:                WorkerExitNormal,
+		WorkspacePath:           absentDir,
+		HandoffEvidencePolicy:   config.HandoffEvidenceObserved,
+		HandoffEvidenceBaseline: absentBaseline,
+		AgentAdapter:            "mock",
+	}, params)
+	absentState.TrackerOpsWg.Wait()
+	t.Cleanup(func() { CancelRetry(absentState, issueID) })
+
+	if _, ok := absentState.BudgetExhausted[issueID]; !ok {
+		t.Error("third consecutive absence did not park the issue")
+	}
+	if calls := tracker.labels(); len(calls) != 1 {
+		t.Errorf("AddLabel calls = %+v, want one parking call", calls)
+	}
 }
 
 func TestHandleRetryTimerKeepsRecoveredExhaustedAbsenceParkedWhenLabelFails(t *testing.T) {
