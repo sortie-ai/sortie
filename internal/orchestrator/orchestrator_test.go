@@ -106,6 +106,8 @@ type stubStore struct {
 	// Budget exhaustion query configuration (per-tick rebuild).
 	budgetExhaustedIDs []string
 	budgetExhaustedErr error
+	absenceCounts      map[string]int
+	absenceCountErr    error
 
 	// Token budget query configuration (per-tick rebuild and single-issue gate).
 	tokenExhaustedIDs []string
@@ -190,6 +192,19 @@ func (s *stubStore) QueryBudgetExhaustedIssues(_ context.Context, _ []string, _ 
 	}
 	result := make([]string, len(s.budgetExhaustedIDs))
 	copy(result, s.budgetExhaustedIDs)
+	return result, nil
+}
+
+func (s *stubStore) QueryConsecutiveHandoffAbsenceCounts(_ context.Context, candidateIDs []string) (map[string]int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.absenceCountErr != nil {
+		return nil, s.absenceCountErr
+	}
+	result := make(map[string]int, len(candidateIDs))
+	for _, id := range candidateIDs {
+		result[id] = s.absenceCounts[id]
+	}
 	return result, nil
 }
 

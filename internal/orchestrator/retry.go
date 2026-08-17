@@ -28,6 +28,7 @@ type RetryTimerStore interface {
 	SaveRetryEntry(ctx context.Context, entry persistence.RetryEntry) error
 	DeleteRetryEntry(ctx context.Context, issueID string) error
 	CountRunHistoryByIssue(ctx context.Context, issueID string) (int, error)
+	QueryConsecutiveHandoffAbsenceCounts(ctx context.Context, issueIDs []string) (map[string]int, error)
 	TokenUsageByIssue(ctx context.Context, issueID string) (persistence.IssueTokenUsage, error)
 	MarkReactionDispatched(ctx context.Context, issueID, kind string) error
 }
@@ -106,6 +107,10 @@ type HandleRetryTimerParams struct {
 	// the claim instead of dispatching if the count has reached the
 	// budget. When 0, no budget is enforced.
 	MaxSessions int
+
+	// HandoffParkingLabel is the review-comments escalation label captured
+	// at orchestrator construction. Empty falls back to "needs-human".
+	HandoffParkingLabel string
 
 	// MaxTokens is the configured per-issue token budget (from
 	// config.Agent.MaxTokens). When > 0, HandleRetryTimer sums
@@ -213,6 +218,36 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 			slog.Int("attempt", popped.Attempt),
 		)
 		reschedule(popped.Attempt, delayMS, popped.Error)
+		return
+	}
+
+	// Consecutive handoff-absence gate. This check runs for every retry
+	// fire, including entries reconstructed after restart, before any tracker
+	// fetch or worker dispatch. The persisted run-history sequence therefore
+	// remains a dispatch gate even if the process exited between recording the
+	// final absence and deleting its retry row.
+	absenceCeiling := handoffAbsenceCeiling(params.MaxSessions)
+	absenceCounts, absenceErr := params.Store.QueryConsecutiveHandoffAbsenceCounts(ctx, []string{issueID})
+	consecutiveAbsences := absenceCounts[issueID]
+	if absenceErr != nil {
+		consecutiveAbsences = max(popped.Attempt, 1)
+		log.Warn("handoff absence count query failed, using retry attempt fallback",
+			slog.Int("consecutive_absences", consecutiveAbsences),
+			slog.Any("error", absenceErr),
+		)
+	}
+	if consecutiveAbsences >= absenceCeiling {
+		parkHandoffAbsence(
+			state,
+			ctx,
+			params.Store,
+			params.TrackerAdapter,
+			issueID,
+			consecutiveAbsences,
+			absenceCeiling,
+			params.HandoffParkingLabel,
+			log,
+		)
 		return
 	}
 

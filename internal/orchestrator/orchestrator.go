@@ -35,6 +35,7 @@ type OrchestratorStore interface {
 	SaveRetryEntry(ctx context.Context, entry persistence.RetryEntry) error
 	DeleteRetryEntry(ctx context.Context, issueID string) error
 	CountRunHistoryByIssue(ctx context.Context, issueID string) (int, error)
+	QueryConsecutiveHandoffAbsenceCounts(ctx context.Context, issueIDs []string) (map[string]int, error)
 	TokenUsageByIssue(ctx context.Context, issueID string) (persistence.IssueTokenUsage, error)
 	QueryBudgetExhaustedIssues(ctx context.Context, candidateIDs []string, maxSessions int) ([]string, error)
 	QueryTokenBudgetUsage(ctx context.Context, candidateIDs []string) (map[string]persistence.IssueTokenUsage, error)
@@ -229,6 +230,7 @@ type Orchestrator struct {
 	labelFixReactionConfigured        bool
 	mergeCompletionConfig             MergeCompletionReactionConfig
 	mergeCompletionReactionConfigured bool
+	handoffParkingLabel               string
 
 	// sshStrictHostKeyChecking is the current effective OpenSSH
 	// StrictHostKeyChecking value. Written by handleTick on every
@@ -305,6 +307,11 @@ func NewOrchestrator(params OrchestratorParams) *Orchestrator {
 		logger.Warn("AgentAdapterByKind not provided; falling back to single-adapter mode for the workflow default kind only")
 	}
 
+	handoffParkingLabel := defaultHandoffParkingLabel
+	if params.WorkflowManager != nil {
+		handoffParkingLabel = resolveHandoffParkingLabel(params.WorkflowManager.Config().Reactions)
+	}
+
 	o := &Orchestrator{
 		state:                             params.State,
 		logger:                            logger,
@@ -343,6 +350,7 @@ func NewOrchestrator(params OrchestratorParams) *Orchestrator {
 		labelFixReactionConfigured:        params.LabelFixReactionConfigured,
 		mergeCompletionConfig:             params.MergeCompletionConfig,
 		mergeCompletionReactionConfigured: params.MergeCompletionReactionConfigured,
+		handoffParkingLabel:               handoffParkingLabel,
 	}
 	// Startup preflight must have passed for the orchestrator to be
 	// constructed, so the initial value is true.
@@ -383,6 +391,8 @@ func (o *Orchestrator) Run(ctx context.Context) {
 			HandleWorkerExit(o.state, workerExit, HandleWorkerExitParams{
 				Store:                             o.store,
 				MaxRetryBackoffMS:                 cfg.Agent.MaxRetryBackoffMS,
+				MaxSessions:                       cfg.Agent.MaxSessions,
+				HandoffParkingLabel:               o.handoffParkingLabel,
 				OnRetryFire:                       o.onRetryFire,
 				Ctx:                               ctx,
 				Logger:                            o.logger,
@@ -410,23 +420,24 @@ func (o *Orchestrator) Run(ctx context.Context) {
 		case issueID := <-o.retryTimerCh:
 			cfg := o.workflowManager.Config()
 			HandleRetryTimer(o.state, issueID, HandleRetryTimerParams{
-				Store:              o.store,
-				TrackerAdapter:     o.trackerAdapter,
-				ActiveStates:       cfg.Tracker.ActiveStates,
-				TerminalStates:     cfg.Tracker.TerminalStates,
-				HandoffState:       cfg.Tracker.HandoffState,
-				MaxRetryBackoffMS:  cfg.Agent.MaxRetryBackoffMS,
-				MakeWorkerFn:       o.makeWorkerFn,
-				AgentAdapterByKind: o.agentAdapterByKind,
-				DefaultAgentKind:   cfg.Agent.Kind,
-				OnRetryFire:        o.onRetryFire,
-				Ctx:                ctx,
-				Logger:             o.logger,
-				MaxSessions:        cfg.Agent.MaxSessions,
-				MaxTokens:          cfg.Agent.MaxTokens,
-				Metrics:            o.metrics,
-				HostPool:           o.hostPool,
-				WorkflowFile:       o.workflowFile(),
+				Store:               o.store,
+				TrackerAdapter:      o.trackerAdapter,
+				ActiveStates:        cfg.Tracker.ActiveStates,
+				TerminalStates:      cfg.Tracker.TerminalStates,
+				HandoffState:        cfg.Tracker.HandoffState,
+				MaxRetryBackoffMS:   cfg.Agent.MaxRetryBackoffMS,
+				MakeWorkerFn:        o.makeWorkerFn,
+				AgentAdapterByKind:  o.agentAdapterByKind,
+				DefaultAgentKind:    cfg.Agent.Kind,
+				OnRetryFire:         o.onRetryFire,
+				Ctx:                 ctx,
+				Logger:              o.logger,
+				MaxSessions:         cfg.Agent.MaxSessions,
+				HandoffParkingLabel: o.handoffParkingLabel,
+				MaxTokens:           cfg.Agent.MaxTokens,
+				Metrics:             o.metrics,
+				HostPool:            o.hostPool,
+				WorkflowFile:        o.workflowFile(),
 			})
 			o.updateGauges(time.Now())
 			o.notifyObservers()
@@ -857,21 +868,15 @@ func (o *Orchestrator) maybeWriteIncrementalMetadata(ctx context.Context, issueI
 }
 
 // rebuildBudgetExhausted replaces the BudgetExhausted set and its reason
-// map once per tick from run_history, as the union of the session-count
-// and token-sum budgets scoped to the candidate set. An issue blocked on
-// either budget is in the rebuilt set; an issue blocked on both reports
-// the token budget. On a query error for one axis, the prior entries
-// attributed to that axis are folded back in so a transient error never
-// drops an issue mid-tick, while the other axis keeps its fresh result.
+// map once per tick from run_history, as the union of the session-count,
+// token-sum, and consecutive handoff-absence gates scoped to the candidate
+// set. Handoff absence is the most specific reason and takes precedence;
+// token budget takes precedence over the ordinary session budget. On a
+// query error for one axis, the prior entries attributed to that axis are
+// folded back in so a transient error never drops an issue mid-tick, while
+// the other axes keep their fresh results.
 // Must be called from the event loop goroutine.
 func (o *Orchestrator) rebuildBudgetExhausted(ctx context.Context, cfg config.ServiceConfig, sorted []domain.Issue) {
-	if cfg.Agent.MaxSessions == 0 && cfg.Agent.MaxTokens == 0 {
-		o.state.BudgetExhausted = make(map[string]struct{})
-		o.state.BudgetExhaustedReason = make(map[string]string)
-		o.state.TokenBudgetIncomplete = make(map[string]struct{})
-		return
-	}
-
 	candidateIDs := make([]string, len(sorted))
 	identifierByID := make(map[string]string, len(sorted))
 	for i, issue := range sorted {
@@ -883,6 +888,11 @@ func (o *Orchestrator) rebuildBudgetExhausted(ctx context.Context, cfg config.Se
 	priorReason := o.state.BudgetExhaustedReason
 	fresh := make(map[string]struct{})
 	freshReason := make(map[string]string)
+	type parkedCandidate struct {
+		issueID string
+		count   int
+	}
+	newlyParked := make([]parkedCandidate, 0)
 
 	if cfg.Agent.MaxSessions > 0 {
 		sessionExhausted, qErr := o.store.QueryBudgetExhaustedIssues(ctx, candidateIDs, cfg.Agent.MaxSessions)
@@ -905,6 +915,37 @@ func (o *Orchestrator) rebuildBudgetExhausted(ctx context.Context, cfg config.Se
 		}
 	}
 
+	// The handoff-absence ceiling is always finite, including when the
+	// ordinary max_sessions budget is disabled. Rebuild it from run_history
+	// on every poll so a parked issue remains ineligible across restart and
+	// even when no retry row survived the final worker exit.
+	absenceCeiling := handoffAbsenceCeiling(cfg.Agent.MaxSessions)
+	absenceCounts, absenceErr := o.store.QueryConsecutiveHandoffAbsenceCounts(ctx, candidateIDs)
+	if absenceErr != nil {
+		o.logger.Warn("handoff absence exhaustion query failed, retaining previous set",
+			slog.Any("error", absenceErr),
+		)
+		for id := range prior {
+			if priorReason[id] != budgetReasonHandoffAbsence {
+				continue
+			}
+			fresh[id] = struct{}{}
+			freshReason[id] = budgetReasonHandoffAbsence
+		}
+	} else {
+		for _, id := range candidateIDs {
+			count := absenceCounts[id]
+			if count < absenceCeiling {
+				continue
+			}
+			fresh[id] = struct{}{}
+			freshReason[id] = budgetReasonHandoffAbsence
+			if priorReason[id] != budgetReasonHandoffAbsence {
+				newlyParked = append(newlyParked, parkedCandidate{issueID: id, count: count})
+			}
+		}
+	}
+
 	freshIncomplete := make(map[string]struct{})
 	if cfg.Agent.MaxTokens > 0 {
 		usageByIssue, qErr := o.store.QueryTokenBudgetUsage(ctx, candidateIDs)
@@ -916,15 +957,19 @@ func (o *Orchestrator) rebuildBudgetExhausted(ctx context.Context, cfg config.Se
 				if priorReason[id] != budgetReasonToken {
 					continue
 				}
-				fresh[id] = struct{}{}
-				freshReason[id] = budgetReasonToken
+				if freshReason[id] != budgetReasonHandoffAbsence {
+					fresh[id] = struct{}{}
+					freshReason[id] = budgetReasonToken
+				}
 			}
 		} else {
 			for _, id := range candidateIDs {
 				usage := usageByIssue[id]
 				if usage.TotalTokens >= int64(cfg.Agent.MaxTokens) {
-					fresh[id] = struct{}{}
-					freshReason[id] = budgetReasonToken
+					if freshReason[id] != budgetReasonHandoffAbsence {
+						fresh[id] = struct{}{}
+						freshReason[id] = budgetReasonToken
+					}
 					continue
 				}
 				if usage.UnmeasuredSessions == 0 {
@@ -947,6 +992,21 @@ func (o *Orchestrator) rebuildBudgetExhausted(ctx context.Context, cfg config.Se
 
 	o.state.BudgetExhausted = fresh
 	o.state.BudgetExhaustedReason = freshReason
+
+	for _, parked := range newlyParked {
+		issueLog := logging.WithIssue(o.logger, parked.issueID, identifierByID[parked.issueID])
+		parkHandoffAbsence(
+			o.state,
+			ctx,
+			o.store,
+			o.trackerAdapter,
+			parked.issueID,
+			parked.count,
+			absenceCeiling,
+			o.handoffParkingLabel,
+			issueLog,
+		)
+	}
 }
 
 // drainRunningWorkers cancels all running worker contexts and waits for

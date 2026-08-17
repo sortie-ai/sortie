@@ -45,12 +45,14 @@ const (
 	handoffWithheld = "withheld"
 )
 
-// Budget reason values recorded in [State.BudgetExhaustedReason] and the
-// runtime snapshot. budgetReasonToken takes precedence when both budgets
-// are exhausted for one issue.
+// Dispatch-gate reason values recorded in [State.BudgetExhaustedReason] and
+// the runtime snapshot. Handoff absence takes precedence so a parked issue
+// remains distinguishable; token budget still takes precedence over the
+// ordinary all-session budget.
 const (
-	budgetReasonToken   = "token_budget"
-	budgetReasonSession = "session_budget"
+	budgetReasonToken          = "token_budget"
+	budgetReasonHandoffAbsence = "handoff_absence"
+	budgetReasonSession        = "session_budget"
 )
 
 // AgentTotals holds cumulative token and runtime counters across all ended
@@ -784,21 +786,18 @@ type State struct {
 	// Bookkeeping only — not used for dispatch gating.
 	Completed map[string]struct{}
 
-	// BudgetExhausted is the set of issue IDs whose run_history count
-	// has reached or exceeded the configured max_sessions budget, or
-	// whose summed run_history total_tokens has reached or exceeded the
-	// configured max_tokens budget. Rebuilt from batch SQLite queries at
-	// the start of each poll tick when either budget is enabled. Updated
-	// inline by [HandleRetryTimer] on budget exhaustion. [ShouldDispatch]
-	// checks this set as a dispatch gate. Cleared when both budgets are 0.
+	// BudgetExhausted is the set of issue IDs blocked by a durable
+	// run_history-derived dispatch gate: the configured max_sessions
+	// budget, the max_tokens budget, or the consecutive handoff-absence
+	// ceiling. Rebuilt from batch SQLite queries at the start of each poll
+	// tick and updated inline by worker-exit and retry-timer handling.
+	// [ShouldDispatch] checks this set before dispatch.
 	BudgetExhausted map[string]struct{}
 
-	// BudgetExhaustedReason maps issue ID to the budget that fired for
-	// that issue, either "token_budget" or "session_budget". It is kept
-	// in lockstep with BudgetExhausted: every issue in BudgetExhausted
-	// has a reason entry, and no entry survives for an issue that leaves
-	// the set. When both budgets are exhausted for one issue the reason
-	// is "token_budget". Owned by the single-writer event loop.
+	// BudgetExhaustedReason maps issue ID to the gate that fired for that
+	// issue: "token_budget", "handoff_absence", or "session_budget". It
+	// is kept in lockstep with BudgetExhausted. Owned by the single-writer
+	// event loop.
 	BudgetExhaustedReason map[string]string
 
 	// AgentTotals holds aggregate token counts and cumulative runtime seconds

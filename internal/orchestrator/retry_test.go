@@ -26,6 +26,9 @@ type mockRetryStore struct {
 	runHistoryCount           int
 	countRunHistoryByIssueErr error
 	countedIssueIDs           []string
+	absenceCounts             map[string]int
+	absenceCountErr           error
+	absenceCountedIssueIDs    []string
 
 	tokenSum                 int64
 	tokenSessionCount        int
@@ -54,6 +57,18 @@ func (m *mockRetryStore) DeleteRetryEntry(_ context.Context, issueID string) err
 func (m *mockRetryStore) CountRunHistoryByIssue(_ context.Context, issueID string) (int, error) {
 	m.countedIssueIDs = append(m.countedIssueIDs, issueID)
 	return m.runHistoryCount, m.countRunHistoryByIssueErr
+}
+
+func (m *mockRetryStore) QueryConsecutiveHandoffAbsenceCounts(_ context.Context, issueIDs []string) (map[string]int, error) {
+	m.absenceCountedIssueIDs = append(m.absenceCountedIssueIDs, issueIDs...)
+	if m.absenceCountErr != nil {
+		return nil, m.absenceCountErr
+	}
+	result := make(map[string]int, len(issueIDs))
+	for _, id := range issueIDs {
+		result[id] = m.absenceCounts[id]
+	}
+	return result, nil
 }
 
 func (m *mockRetryStore) TokenUsageByIssue(_ context.Context, issueID string) (persistence.IssueTokenUsage, error) {
@@ -96,6 +111,8 @@ type mockRetryTracker struct {
 	fetchErr     error
 	fetchCount   int
 	fetchedID    string // records the last issueID arg received by FetchIssueByID
+	addLabelErr  error
+	addedLabels  []string
 }
 
 var _ domain.TrackerAdapter = (*mockRetryTracker)(nil)
@@ -134,8 +151,9 @@ func (m *mockRetryTracker) CommentIssue(context.Context, string, string) error {
 	panic("CommentIssue must not be called by HandleRetryTimer")
 }
 
-func (m *mockRetryTracker) AddLabel(context.Context, string, string) error {
-	panic("AddLabel must not be called by HandleRetryTimer")
+func (m *mockRetryTracker) AddLabel(_ context.Context, _ string, label string) error {
+	m.addedLabels = append(m.addedLabels, label)
+	return m.addLabelErr
 }
 
 // --- Test helpers ---

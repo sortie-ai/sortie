@@ -35,6 +35,8 @@ type WorkerExitStore interface {
 	UpsertAggregateMetrics(ctx context.Context, metrics persistence.AggregateMetrics) error
 	UpsertSessionMetadata(ctx context.Context, meta persistence.SessionMetadata) error
 	SaveRetryEntry(ctx context.Context, entry persistence.RetryEntry) error
+	DeleteRetryEntry(ctx context.Context, issueID string) error
+	QueryConsecutiveHandoffAbsenceCounts(ctx context.Context, issueIDs []string) (map[string]int, error)
 }
 
 // HandleWorkerExitParams holds the dependencies for [HandleWorkerExit] that
@@ -49,6 +51,15 @@ type HandleWorkerExitParams struct {
 	// MaxRetryBackoffMS is the configured cap for exponential backoff
 	// delay (from config.Agent.MaxRetryBackoffMS).
 	MaxRetryBackoffMS int
+
+	// MaxSessions supplies the consecutive handoff-absence ceiling when
+	// positive. Zero derives the safety default of three while remaining
+	// unlimited for the ordinary all-session budget.
+	MaxSessions int
+
+	// HandoffParkingLabel is the review-comments escalation label captured
+	// at orchestrator construction. Empty falls back to "needs-human".
+	HandoffParkingLabel string
 
 	// OnRetryFire is the callback invoked when the scheduled retry
 	// timer expires. The orchestrator provides this; it routes the
@@ -309,13 +320,12 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 			evidenceWithheld = handoffEvidenceWithholds(policy, evidenceResult)
 			if evidenceWithheld {
 				evidenceErr = handoffEvidenceFailure(policy, evidenceResult)
-				log.Warn("handoff withheld by evidence policy",
-					slog.String("policy", string(policy)),
-					slog.String("verdict", string(evidenceResult.Verdict)),
-					slog.String("reason", evidenceResult.Reason),
-					slog.Int("turns_completed", workerResult.TurnsCompleted),
-				)
 				metrics.IncHandoffTransitions(handoffWithheld)
+			} else if evidenceResult.Verdict == handoffWorkObserved {
+				// A positive verdict resets the runtime gate immediately. The
+				// successful run_history row below supplies the durable reset even
+				// when the later tracker handoff write fails.
+				clearHandoffAbsenceGate(state, workerResult.IssueID)
 			}
 		}
 	}
@@ -370,10 +380,60 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 			runHistory.ReviewMetadata = &s
 		}
 	}
+	runHistoryPersisted := true
 	if _, err := params.Store.AppendRunHistory(ctx, runHistory); err != nil {
+		runHistoryPersisted = false
 		log.Error("failed to persist run history",
 			slog.Any("error", err),
 		)
+	}
+
+	consecutiveAbsences := 0
+	absenceCeiling := handoffAbsenceCeiling(params.MaxSessions)
+	absenceParked := false
+	if evidenceWithheld {
+		counts, countErr := params.Store.QueryConsecutiveHandoffAbsenceCounts(ctx, []string{workerResult.IssueID})
+		if countErr != nil {
+			// The retry attempt is a conservative fallback when SQLite cannot
+			// answer. It may include other failure attempts, which can only stop
+			// sooner; it cannot reopen an otherwise exhausted loop.
+			consecutiveAbsences = NextAttempt(entry.RetryAttempt)
+			log.Warn("handoff absence count query failed, using retry attempt fallback",
+				slog.Int("consecutive_absences", consecutiveAbsences),
+				slog.Any("error", countErr),
+			)
+		} else {
+			consecutiveAbsences = counts[workerResult.IssueID]
+			if !runHistoryPersisted {
+				consecutiveAbsences++
+			}
+			if consecutiveAbsences == 0 {
+				consecutiveAbsences = 1
+			}
+		}
+
+		log.Warn("handoff withheld by evidence policy",
+			slog.String("policy", string(workerResult.HandoffEvidencePolicy.Effective())),
+			slog.String("verdict", string(evidenceResult.Verdict)),
+			slog.String("reason", evidenceResult.Reason),
+			slog.Int("turns_completed", workerResult.TurnsCompleted),
+			slog.Int("consecutive_absences", consecutiveAbsences),
+		)
+
+		if consecutiveAbsences >= absenceCeiling {
+			parkHandoffAbsence(
+				state,
+				ctx,
+				params.Store,
+				params.TrackerAdapter,
+				workerResult.IssueID,
+				consecutiveAbsences,
+				absenceCeiling,
+				params.HandoffParkingLabel,
+				log,
+			)
+			absenceParked = true
+		}
 	}
 
 	aggMetrics := persistence.AggregateMetrics{
@@ -468,6 +528,10 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 			terminalSuppressed = true
 			CancelRetry(state, workerResult.IssueID)
 			delete(state.Claimed, workerResult.IssueID)
+
+		case handoffPath && evidenceWithheld && absenceParked:
+			// Parking already cancelled the sequence, deleted any persisted
+			// retry, released the claim, and installed the durable runtime gate.
 
 		case handoffPath && evidenceWithheld:
 			// A withheld handoff is an unsuccessful run disposition even though
