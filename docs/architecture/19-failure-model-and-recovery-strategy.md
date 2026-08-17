@@ -103,12 +103,12 @@
     incremented and no *new* park is taken by this ceiling on any path: polling, retry firing, and
     worker exit all skip the trigger, and the policy costs nothing while it is selected. This
     governs only whether a *new* park is taken, not whether an existing one holds: a park already
-    recorded, by either trigger, is unaffected by the policy and is released only by the rule
+    recorded, by either trigger, is not lifted by selecting `off` and is released only by the rules
     below. Raising `agent.max_sessions` above the recorded count has the same narrowed effect: it
     changes the ceiling a future count is compared against, but it does not lift a park already
     taken, because the park is a row rather than a value re-derived from the current ceiling on
     every tick.
-  - A park is released by either of two operator gestures, whichever the orchestrator observes
+  - An operator releases a park with either of two gestures, whichever the orchestrator observes
     first, and both apply to every trigger that parks an issue, not only to this ceiling: moving
     the issue to a tracker state different from the one recorded when it was parked, or removing
     a parking label the orchestrator has confirmed reached the tracker. The label gesture carries
@@ -126,6 +126,11 @@
     resets the counter that produced the park, so a released absence-ceiling park does not
     immediately re-derive the same exhausted count and park itself again; release is evaluated
     ahead of the ceiling trigger on the same tick for exactly this reason.
+  - A third release takes no gesture: a worker exit whose evidence verdict is `work observed` lifts
+    the park of the issue it ran on, on the same verdict that resets the absence count, and it too
+    applies to every trigger that parks an issue. This is the one release the evidence policy
+    governs, since `off` computes no verdict, so a deployment that selects it keeps the two
+    gestures above as the only way out of a park.
   - The parking label is the resolved non-empty
     `reactions.review_comments.escalation_label` captured when the orchestrator starts, or
     `needs-human` when that block or value is absent or empty. This lookup deliberately reuses only
