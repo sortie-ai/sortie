@@ -374,6 +374,83 @@ func TestHandleRetryTimerKeepsRecoveredExhaustedAbsenceParkedWhenLabelFails(t *t
 	}
 }
 
+func TestHandleRetryTimerExemptsReactionContinuationFromAbsenceGate(t *testing.T) {
+	const issueID = "ABS-REACTION"
+	store := &mockRetryStore{absenceCounts: map[string]int{issueID: 3}}
+	tracker := &mockRetryTracker{fetchedIssue: candidateIssue(issueID, "PROJ-REACTION", "In Progress")}
+	state := retryState(t, issueID, "PROJ-REACTION", 1)
+	state.RetryAttempts[issueID].ReactionKind = ReactionKindReview
+	params := defaultRetryParams(t, store, tracker)
+	params.MaxSessions = 0
+
+	HandleRetryTimer(state, issueID, params)
+	state.TrackerOpsWg.Wait()
+
+	if tracker.fetchCount != 1 {
+		t.Errorf("FetchIssueByID calls = %d, want 1: the reaction retry was cancelled by unrelated absences", tracker.fetchCount)
+	}
+	if len(tracker.addedLabels) != 0 {
+		t.Errorf("AddLabel calls = %v, want none for a reaction continuation", tracker.addedLabels)
+	}
+	if _, ok := state.BudgetExhausted[issueID]; ok {
+		t.Error("reaction continuation parked by the handoff-absence ceiling")
+	}
+}
+
+func TestHandleRetryTimerSkipsAbsenceGateUnderOffPolicy(t *testing.T) {
+	const issueID = "ABS-OFF-RETRY"
+	store := &mockRetryStore{absenceCounts: map[string]int{issueID: 3}}
+	tracker := &mockRetryTracker{fetchedIssue: candidateIssue(issueID, "PROJ-OFF", "In Progress")}
+	state := retryState(t, issueID, "PROJ-OFF", 1)
+	params := defaultRetryParams(t, store, tracker)
+	params.MaxSessions = 0
+	params.HandoffEvidencePolicy = config.HandoffEvidenceOff
+
+	HandleRetryTimer(state, issueID, params)
+	state.TrackerOpsWg.Wait()
+
+	if len(store.absenceCountedIssueIDs) != 0 {
+		t.Errorf("absence query ran for %v under the off policy, want no query", store.absenceCountedIssueIDs)
+	}
+	if _, ok := state.BudgetExhausted[issueID]; ok {
+		t.Error("issue parked under the off policy")
+	}
+}
+
+func TestRebuildBudgetExhaustedSkipsAbsenceGateUnderOffPolicy(t *testing.T) {
+	const issueID = "ABS-OFF"
+	issue := candidateIssue(issueID, "PROJ-OFF", "To Do")
+	cfg := config.ServiceConfig{
+		Tracker: config.TrackerConfig{HandoffEvidence: config.HandoffEvidenceOff},
+	}
+	store := &stubStore{absenceCounts: map[string]int{issueID: 5}}
+	tracker := newRecordingHandoffTracker()
+	state := NewState(1000, 1, nil, AgentTotals{})
+	state.BudgetExhausted[issueID] = struct{}{}
+	state.BudgetExhaustedReason[issueID] = budgetReasonHandoffAbsence
+	orchestrator := NewOrchestrator(OrchestratorParams{
+		State:           state,
+		Logger:          discardLogger(),
+		TrackerAdapter:  tracker,
+		AgentAdapter:    &mockAgentAdapter{},
+		WorkflowManager: &stubWorkflowManager{config: cfg},
+		Store:           store,
+	})
+
+	orchestrator.rebuildBudgetExhausted(context.Background(), cfg, []domain.Issue{issue})
+	state.TrackerOpsWg.Wait()
+
+	if store.absenceQueryCalls != 0 {
+		t.Errorf("absence query ran %d times under the off policy, want 0", store.absenceQueryCalls)
+	}
+	if !ShouldDispatch(issue, state, []string{"To Do"}, []string{"Done"}) {
+		t.Error("the off policy left an issue gated by the absence ceiling")
+	}
+	if calls := tracker.labels(); len(calls) != 0 {
+		t.Errorf("AddLabel calls = %+v, want none under the off policy", calls)
+	}
+}
+
 func TestRebuildBudgetExhaustedRestoresAbsenceParkingAfterRestart(t *testing.T) {
 	const issueID = "ABS-POLL"
 	issue := candidateIssue(issueID, "PROJ-POLL", "To Do")

@@ -421,24 +421,25 @@ func (o *Orchestrator) Run(ctx context.Context) {
 		case issueID := <-o.retryTimerCh:
 			cfg := o.workflowManager.Config()
 			HandleRetryTimer(o.state, issueID, HandleRetryTimerParams{
-				Store:               o.store,
-				TrackerAdapter:      o.trackerAdapter,
-				ActiveStates:        cfg.Tracker.ActiveStates,
-				TerminalStates:      cfg.Tracker.TerminalStates,
-				HandoffState:        cfg.Tracker.HandoffState,
-				MaxRetryBackoffMS:   cfg.Agent.MaxRetryBackoffMS,
-				MakeWorkerFn:        o.makeWorkerFn,
-				AgentAdapterByKind:  o.agentAdapterByKind,
-				DefaultAgentKind:    cfg.Agent.Kind,
-				OnRetryFire:         o.onRetryFire,
-				Ctx:                 ctx,
-				Logger:              o.logger,
-				MaxSessions:         cfg.Agent.MaxSessions,
-				HandoffParkingLabel: o.handoffParkingLabel,
-				MaxTokens:           cfg.Agent.MaxTokens,
-				Metrics:             o.metrics,
-				HostPool:            o.hostPool,
-				WorkflowFile:        o.workflowFile(),
+				Store:                 o.store,
+				TrackerAdapter:        o.trackerAdapter,
+				ActiveStates:          cfg.Tracker.ActiveStates,
+				TerminalStates:        cfg.Tracker.TerminalStates,
+				HandoffState:          cfg.Tracker.HandoffState,
+				MaxRetryBackoffMS:     cfg.Agent.MaxRetryBackoffMS,
+				MakeWorkerFn:          o.makeWorkerFn,
+				AgentAdapterByKind:    o.agentAdapterByKind,
+				DefaultAgentKind:      cfg.Agent.Kind,
+				OnRetryFire:           o.onRetryFire,
+				Ctx:                   ctx,
+				Logger:                o.logger,
+				MaxSessions:           cfg.Agent.MaxSessions,
+				HandoffParkingLabel:   o.handoffParkingLabel,
+				HandoffEvidencePolicy: cfg.Tracker.HandoffEvidence,
+				MaxTokens:             cfg.Agent.MaxTokens,
+				Metrics:               o.metrics,
+				HostPool:              o.hostPool,
+				WorkflowFile:          o.workflowFile(),
 			})
 			o.updateGauges(time.Now())
 			o.notifyObservers()
@@ -875,9 +876,18 @@ func (o *Orchestrator) maybeWriteIncrementalMetadata(ctx context.Context, issueI
 // token budget takes precedence over the ordinary session budget. On a
 // query error for one axis, the prior entries attributed to that axis are
 // folded back in so a transient error never drops an issue mid-tick, while
-// the other axes keep their fresh results.
+// the other axes keep their fresh results. The absence gate is skipped under
+// the off evidence policy, which records no absence and must cost nothing.
 // Must be called from the event loop goroutine.
 func (o *Orchestrator) rebuildBudgetExhausted(ctx context.Context, cfg config.ServiceConfig, sorted []domain.Issue) {
+	absenceGateEnabled := cfg.Tracker.HandoffEvidence.Effective() != config.HandoffEvidenceOff
+	if cfg.Agent.MaxSessions == 0 && cfg.Agent.MaxTokens == 0 && !absenceGateEnabled {
+		o.state.BudgetExhausted = make(map[string]struct{})
+		o.state.BudgetExhaustedReason = make(map[string]string)
+		o.state.TokenBudgetIncomplete = make(map[string]struct{})
+		return
+	}
+
 	candidateIDs := make([]string, len(sorted))
 	identifierByID := make(map[string]string, len(sorted))
 	for i, issue := range sorted {
@@ -921,28 +931,30 @@ func (o *Orchestrator) rebuildBudgetExhausted(ctx context.Context, cfg config.Se
 	// on every poll so a parked issue remains ineligible across restart and
 	// even when no retry row survived the final worker exit.
 	absenceCeiling := handoffAbsenceCeiling(cfg.Agent.MaxSessions)
-	absenceCounts, absenceErr := o.store.QueryConsecutiveHandoffAbsenceCounts(ctx, candidateIDs)
-	if absenceErr != nil {
-		o.logger.Warn("handoff absence exhaustion query failed, retaining previous set",
-			slog.Any("error", absenceErr),
-		)
-		for id := range prior {
-			if priorReason[id] != budgetReasonHandoffAbsence {
-				continue
+	if absenceGateEnabled {
+		absenceCounts, absenceErr := o.store.QueryConsecutiveHandoffAbsenceCounts(ctx, candidateIDs)
+		if absenceErr != nil {
+			o.logger.Warn("handoff absence exhaustion query failed, retaining previous set",
+				slog.Any("error", absenceErr),
+			)
+			for id := range prior {
+				if priorReason[id] != budgetReasonHandoffAbsence {
+					continue
+				}
+				fresh[id] = struct{}{}
+				freshReason[id] = budgetReasonHandoffAbsence
 			}
-			fresh[id] = struct{}{}
-			freshReason[id] = budgetReasonHandoffAbsence
-		}
-	} else {
-		for _, id := range candidateIDs {
-			count := absenceCounts[id]
-			if count < absenceCeiling {
-				continue
-			}
-			fresh[id] = struct{}{}
-			freshReason[id] = budgetReasonHandoffAbsence
-			if priorReason[id] != budgetReasonHandoffAbsence {
-				newlyParked = append(newlyParked, parkedCandidate{issueID: id, count: count})
+		} else {
+			for _, id := range candidateIDs {
+				count := absenceCounts[id]
+				if count < absenceCeiling {
+					continue
+				}
+				fresh[id] = struct{}{}
+				freshReason[id] = budgetReasonHandoffAbsence
+				if priorReason[id] != budgetReasonHandoffAbsence {
+					newlyParked = append(newlyParked, parkedCandidate{issueID: id, count: count})
+				}
 			}
 		}
 	}

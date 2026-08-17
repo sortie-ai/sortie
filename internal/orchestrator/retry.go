@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/sortie-ai/sortie/internal/config"
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/logging"
 	"github.com/sortie-ai/sortie/internal/persistence"
@@ -111,6 +112,11 @@ type HandleRetryTimerParams struct {
 	// HandoffParkingLabel is the review-comments escalation label captured
 	// at orchestrator construction. Empty falls back to "needs-human".
 	HandoffParkingLabel string
+
+	// HandoffEvidencePolicy is the configured evidence policy. Under the
+	// off policy no absence is ever recorded, so the absence gate is not
+	// consulted. The zero value applies the default policy.
+	HandoffEvidencePolicy config.HandoffEvidencePolicy
 
 	// MaxTokens is the configured per-issue token budget (from
 	// config.Agent.MaxTokens). When > 0, HandleRetryTimer sums
@@ -221,34 +227,43 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 		return
 	}
 
-	// Consecutive handoff-absence gate. This check runs for every retry
-	// fire, including entries reconstructed after restart, before any tracker
-	// fetch or worker dispatch. The persisted run-history sequence therefore
-	// remains a dispatch gate even if the process exited between recording the
-	// final absence and deleting its retry row.
-	absenceCeiling := handoffAbsenceCeiling(params.MaxSessions)
-	absenceCounts, absenceErr := params.Store.QueryConsecutiveHandoffAbsenceCounts(ctx, []string{issueID})
-	consecutiveAbsences := absenceCounts[issueID]
-	if absenceErr != nil {
-		consecutiveAbsences = max(popped.Attempt, 1)
-		log.Warn("handoff absence count query failed, using retry attempt fallback",
-			slog.Int("consecutive_absences", consecutiveAbsences),
-			slog.Any("error", absenceErr),
-		)
-	}
-	if consecutiveAbsences >= absenceCeiling {
-		parkHandoffAbsence(
-			state,
-			ctx,
-			params.Store,
-			params.TrackerAdapter,
-			issueID,
-			consecutiveAbsences,
-			absenceCeiling,
-			params.HandoffParkingLabel,
-			log,
-		)
-		return
+	// Consecutive handoff-absence gate. This check runs for every primary
+	// retry fire, including entries reconstructed after restart, before any
+	// tracker fetch or worker dispatch. The persisted run-history sequence
+	// therefore remains a dispatch gate even if the process exited between
+	// recording the final absence and deleting its retry row.
+	//
+	// A reaction continuation is exempt. Only a primary dispatch can record an
+	// absence, so parking one here would cancel a retry sequence the ceiling
+	// does not govern, on the strength of absences from unrelated runs. The off
+	// policy records no absence at all and is not inspected here either.
+	absenceGateApplies := params.HandoffEvidencePolicy.Effective() != config.HandoffEvidenceOff &&
+		!isKnownReactionKind(popped.ReactionKind)
+	if absenceGateApplies {
+		absenceCeiling := handoffAbsenceCeiling(params.MaxSessions)
+		absenceCounts, absenceErr := params.Store.QueryConsecutiveHandoffAbsenceCounts(ctx, []string{issueID})
+		consecutiveAbsences := absenceCounts[issueID]
+		if absenceErr != nil {
+			consecutiveAbsences = max(popped.Attempt, 1)
+			log.Warn("handoff absence count query failed, using retry attempt fallback",
+				slog.Int("consecutive_absences", consecutiveAbsences),
+				slog.Any("error", absenceErr),
+			)
+		}
+		if consecutiveAbsences >= absenceCeiling {
+			parkHandoffAbsence(
+				state,
+				ctx,
+				params.Store,
+				params.TrackerAdapter,
+				issueID,
+				consecutiveAbsences,
+				absenceCeiling,
+				params.HandoffParkingLabel,
+				log,
+			)
+			return
+		}
 	}
 
 	// blockBudget releases the claim and drops the retry entry for an issue
