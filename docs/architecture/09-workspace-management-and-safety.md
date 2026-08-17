@@ -190,6 +190,19 @@ Safety and parsing rules:
 - The function never returns an error to the caller; all failure modes degrade gracefully to a
   zero-value metadata struct (CI queries are skipped).
 
+#### 9.5.1 `.sortie/status` lifecycle
+
+The orchestrator removes `.sortie/status` at two points in a run's lifetime, both best-effort and
+both subject to the same `Lstat` symlink rejection described for `.sortie/scm.json` above: neither
+removal follows a symbolic link at `.sortie/` or at the file itself, and a rejected or failed
+removal is logged and does not affect the run.
+
+The first removal happens before each new dispatch to a workspace, so a stale value from a
+previous run cannot affect the new one. The second happens during a run, at the moment the
+orchestrator acts on a recognized value read from the file: the removal runs immediately before
+the self-review phase's first review turn, so the file states what the agent has said since the
+orchestrator last responded to it rather than carrying forward a value already acted on.
+
 ### 9.6 Safety Invariants
 
 This is the most important portability constraint.

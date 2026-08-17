@@ -50,7 +50,10 @@ A run attempt transitions through these phases:
 4. `InitializingSession`
 5. `StreamingTurn`
 6. `SelfReviewing`, entered only when `self_review.enabled` is true and the coding turn
-   loop completed successfully (not on turn failure).
+   loop completed successfully (not on turn failure). The loop leaves that state in two ways
+   this phase admits: exhausting the configured turn budget, and the agent writing the
+   completion signal to the status file. It is never entered from a `blocked` signal, which
+   remains an immediate exit regardless of configuration.
 7. `Finishing`
 8. `Succeeded`
 9. `Failed`
@@ -72,6 +75,11 @@ Distinct terminal reasons are important because retry logic and logs differ.
     (via `tracker.in_progress_state`) as their first step, before workspace preparation.
 
 - `Worker Exit (normal)`
+  - On a recognized status value, the worker leaves the coding turn loop rather than returning
+    from it. The `SelfReviewing` phase runs first when its gate admits the exit (Section 7.2),
+    followed by session teardown, the `after_run` hook, and only then the exit disposition below.
+    The disposition itself is unchanged for both recognized values: what changes is the work
+    performed ahead of it.
   - Unconditional steps, taken on every normal exit: remove the running entry and update aggregate
     runtime totals. Every exit also persists exactly one completed run attempt to SQLite after any
     handoff-evidence verdict needed for its status is known and before scheduling a retry. The normal
