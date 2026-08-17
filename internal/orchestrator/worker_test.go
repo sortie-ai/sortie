@@ -5312,6 +5312,9 @@ func TestRunWorkerAttempt_InPhaseBlockedOnFixTurn(t *testing.T) {
 // its after_run hook receives a SORTIE_SELF_REVIEW_STATUS value other
 // than "disabled".
 func TestRunWorkerAttempt_CompletionSignalRecordsReviewMetadata(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("after_run hook uses echo -n and $VAR expansion")
+	}
 	t.Parallel()
 
 	tmpDir := t.TempDir()
