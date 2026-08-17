@@ -386,7 +386,7 @@ function run_agent_attempt(issue, attempt, orchestrator_channel):
 ### 16.6 Worker Exit and Retry Handling
 
 ```text
-on_worker_exit(issue_id, reason, state):
+on_worker_exit(issue_id, reason, worker_result, state):
   running_entry = state.running.remove(issue_id)
   state = add_runtime_seconds_to_totals(state, running_entry)
 
