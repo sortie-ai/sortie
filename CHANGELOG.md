@@ -109,6 +109,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `after_run` hook in place of `disabled`.
   ([#813](https://github.com/sortie-ai/sortie/issues/813))
 
+- An agent that writes `blocked` to `.sortie/status` now holds its
+  issue until a person acts, instead of having it dispatched again on
+  the next poll and on every poll after that. Sortie parks the issue:
+  it attaches the escalation label configured under
+  `reactions.review_comments.escalation_label` (`needs-human` when that
+  block or value is absent), holds the issue out of dispatch and out of
+  the retry lane, keeps it parked across a restart, and counts it on
+  `sortie_issue_parks_total{reason}`. The issue keeps the tracker state
+  it was dispatched in, so the label is what marks it as waiting on a
+  person. Nothing previously outlasted the run, leaving
+  `agent.max_sessions` as the only bound on the repeat and no bound at
+  all where it is unset. A park is released when Sortie observes
+  someone act on the issue: moving it to another tracker state, or
+  removing the parking label. The same release now applies to an issue
+  parked for producing no observable work. Where `tracker.query_filter`
+  excludes the parking label, Sortie never confirms the label is
+  present and removing it releases nothing, so release those issues by
+  moving them instead.
+  ([#811](https://github.com/sortie-ai/sortie/issues/811))
+
 ### Migrations
 
 - Add the `handoff_absence_resets` table, recording per issue where its
@@ -116,6 +136,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   work. An issue with no row there has its recorded empty runs counted
   in full, so an upgrade carries any absences already in the database
   into the new ceiling.
+
+- Add the `parked_issues` table, holding one row per issue currently
+  held out of dispatch. It records current state rather than history:
+  the row is deleted when the park is released. An upgrade starts with
+  no parked issues, so an issue whose agent reported itself blocked
+  before the upgrade is parked the next time it reports it.
 
 ## [1.19.0] - 2026-08-12
 
