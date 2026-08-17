@@ -60,6 +60,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   lives.
   ([#665](https://github.com/sortie-ai/sortie/issues/665))
 
+- Self-review now runs when the agent reports its work complete,
+  instead of only when the agent exhausts its turn budget. An operator
+  who set `self_review.enabled: true` got the verification commands and
+  the review turn on the one path a finished run never takes, so work
+  reached the handoff state with none of the configured checks having
+  run. A run that ends this way now takes longer, counts its review and
+  fix turns alongside its coding turns, records a review outcome where
+  it previously recorded none, and passes that outcome to the
+  `after_run` hook in place of `disabled`.
+  ([#813](https://github.com/sortie-ai/sortie/issues/813))
+
 ## [1.19.0] - 2026-08-12
 
 ### Added

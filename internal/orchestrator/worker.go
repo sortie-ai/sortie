@@ -877,6 +877,11 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 	turnNumber := 1
 	activeStates := cfg.Tracker.ActiveStates
 
+	// pendingSoftStopReason holds the recognized status token once a
+	// post-turn read admits one, so the single post-loop teardown can
+	// report it after the self-review phase has had a chance to run.
+	var pendingSoftStopReason string
+
 	if mcpConfigPath != "" {
 		if err := writeWorkerState(wsResult.Path, workerState{
 			TurnNumber: 0,
@@ -1062,36 +1067,13 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 		}
 
 		// Read the A2O status file to detect agent-reported blockage
-		// before making a tracker API call that would be wasted.
+		// before making a tracker API call that would be wasted. A
+		// recognized signal leaves the loop rather than returning, so
+		// the single post-loop teardown below is the only exit path.
 		statusSignal := workspace.ReadStatusFile(wsResult.Path, logger)
 		if statusSignal.IsRecognized() {
-			logger.Info("agent signaled status, exiting worker",
-				slog.String("status", string(statusSignal)),
-				slog.Int("turns_completed", turnsCompleted),
-			)
-			stopSessionBestEffort(ctx, deps.AgentAdapter, session, cfg, logger)
-			finishWorkspace()
-			reported = true
-			deps.OnExit(issue.ID, WorkerResult{
-				IssueID:                      issue.ID,
-				Identifier:                   issue.Identifier,
-				ExitKind:                     WorkerExitNormal,
-				TurnsCompleted:               turnsCompleted,
-				SessionID:                    session.ID,
-				WorkspacePath:                wsResult.Path,
-				HandoffEvidencePolicy:        handoffEvidencePolicy,
-				HandoffEvidenceBaseline:      handoffEvidenceBaseline,
-				HandoffEvidenceBaselineError: handoffEvidenceBaselineErr,
-				AgentAdapter:                 agentKind,
-				Attempt:                      attempt,
-				SSHHost:                      deps.SSHHost,
-				SoftStop:                     true,
-				SoftStopReason:               string(statusSignal),
-				ObservedIssueState:           observedIssueState,
-				Usage:                        localUsage,
-				UsageMeasured:                localMeasured,
-			})
-			return
+			pendingSoftStopReason = string(statusSignal)
+			break
 		}
 
 		// A dispatch that does not drive issue state skips the per-turn
@@ -1143,12 +1125,26 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 	}
 
 	// Self-review phase: run verification commands and iterate with the
-	// agent before final exit. Re-read config for dynamic reload.
+	// agent before final exit. Re-read config for dynamic reload. A
+	// pending status reason admits the phase only when it is empty (the
+	// loop left on max_turns or a non-active tracker state) or names
+	// the completion signal; a pending blocked reason skips the phase.
 	reviewCfg := deps.ConfigFunc()
 	var reviewMeta *domain.ReviewMetadata
 
-	if reviewCfg.SelfReview.Enabled && isActiveState(issue.State, activeStates) && ctx.Err() == nil && deps.Posture.DrivesIssueState() {
-		reviewMeta = runSelfReviewLoop(ctx, RunSelfReviewParams{
+	signalAdmits := pendingSoftStopReason == "" || pendingSoftStopReason == string(workspace.StatusNeedsHumanReview)
+	selfReviewGate := reviewCfg.SelfReview.Enabled && isActiveState(issue.State, activeStates) && ctx.Err() == nil && deps.Posture.DrivesIssueState() && signalAdmits
+
+	if selfReviewGate {
+		if pendingSoftStopReason != "" {
+			logger.Info("agent signaled completion, entering self-review",
+				slog.String("status", pendingSoftStopReason),
+				slog.Int("turns_completed", turnsCompleted),
+			)
+			workspace.CleanupStatusFile(wsResult.Path, logger)
+		}
+		var phaseSignal workspace.StatusSignal
+		reviewMeta, phaseSignal = runSelfReviewLoop(ctx, RunSelfReviewParams{
 			Session:        session,
 			Issue:          issue,
 			WorkspacePath:  wsResult.Path,
@@ -1160,6 +1156,18 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 			Metrics:        deps.Metrics,
 			TurnsCompleted: &turnsCompleted,
 		})
+		// A blocked signal read inside the phase only replaces the
+		// pending reason when one is already pending: a run admitted
+		// by turn-budget exhaustion carries no reason into the phase
+		// and must carry none out of it, so its exit is unchanged.
+		if pendingSoftStopReason != "" && phaseSignal == workspace.StatusBlocked {
+			pendingSoftStopReason = string(workspace.StatusBlocked)
+		}
+	} else if pendingSoftStopReason != "" {
+		logger.Info("agent signaled status, exiting worker",
+			slog.String("status", pendingSoftStopReason),
+			slog.Int("turns_completed", turnsCompleted),
+		)
 	}
 
 	selfReviewStatus := "disabled"
@@ -1218,6 +1226,8 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 		AgentAdapter:                 agentKind,
 		Attempt:                      attempt,
 		SSHHost:                      deps.SSHHost,
+		SoftStop:                     pendingSoftStopReason != "",
+		SoftStopReason:               pendingSoftStopReason,
 		ReviewMetadata:               reviewMeta,
 		ObservedIssueState:           observedIssueState,
 		Usage:                        localUsage,

@@ -6981,3 +6981,64 @@ func TestHandleWorkerExit_LabelReviewExitDoesNotWidenReactionSeeding(t *testing.
 		}
 	})
 }
+
+// TestHandleWorkerExit_CompletionSignalAfterSelfReview verifies that a run
+// ending on the completion signal, whose self-review phase ran and
+// recorded metadata, takes the same exit disposition it took before the
+// phase existed: the handoff transition fires where configured and the
+// issue is active, the continuation retry stays suppressed, and the claim
+// is released. HandleWorkerExit reads only SoftStop and SoftStopReason
+// from the result, so the phase having run ahead of the exit must not
+// change the disposition those two fields already produced.
+func TestHandleWorkerExit_CompletionSignalAfterSelfReview(t *testing.T) {
+	t.Parallel()
+
+	store := &mockExitStore{}
+	tracker := &mockTrackerAdapter{}
+	state := exitStateWithIssue(t, "CS-1", "In Progress")
+	params := defaultExitParams(t, store)
+	params.TrackerAdapter = tracker
+	params.HandoffState = "Human Review"
+	params.ActiveStates = []string{"In Progress"}
+
+	reviewMeta := &domain.ReviewMetadata{
+		Enabled:         true,
+		TotalIterations: 1,
+		FinalVerdict:    "pass",
+		Iterations: []domain.ReviewIterationRecord{
+			{Iteration: 1, Verdict: "pass"},
+		},
+	}
+
+	HandleWorkerExit(state, WorkerResult{
+		IssueID:        "CS-1",
+		Identifier:     "CS-1-ident",
+		ExitKind:       WorkerExitNormal,
+		AgentAdapter:   "mock",
+		SoftStop:       true,
+		SoftStopReason: "needs-human-review",
+		ReviewMetadata: reviewMeta,
+	}, params)
+
+	if len(tracker.transitionCalls) != 1 {
+		t.Fatalf("TransitionIssue called %d times, want 1 (handoff must fire for a completion-signal run that went through self-review)", len(tracker.transitionCalls))
+	}
+	if tracker.transitionCalls[0].TargetState != "Human Review" {
+		t.Errorf("TransitionIssue TargetState = %q, want %q", tracker.transitionCalls[0].TargetState, "Human Review")
+	}
+	if _, ok := state.RetryAttempts["CS-1"]; ok {
+		t.Error("continuation retry scheduled after a completion-signal handoff, want suppressed")
+	}
+	if _, ok := state.Claimed["CS-1"]; ok {
+		t.Error("claim preserved after a completion-signal handoff, want released")
+	}
+	if _, ok := state.Completed["CS-1"]; !ok {
+		t.Error("issue not added to Completed set after a completion-signal handoff")
+	}
+	if len(store.runHistories) != 1 {
+		t.Fatalf("AppendRunHistory called %d times, want 1", len(store.runHistories))
+	}
+	if store.runHistories[0].ReviewMetadata == nil {
+		t.Error("RunHistory.ReviewMetadata = nil, want the marshaled review metadata")
+	}
+}

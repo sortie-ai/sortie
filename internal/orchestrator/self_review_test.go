@@ -3,6 +3,7 @@ package orchestrator
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/sortie-ai/sortie/internal/config"
 	"github.com/sortie-ai/sortie/internal/domain"
+	"github.com/sortie-ai/sortie/internal/workspace"
 )
 
 // --- Shared test helpers ---
@@ -161,6 +163,90 @@ func (s *statusWriterAdapter) RunTurn(_ context.Context, sess domain.Session, _ 
 	dir := filepath.Join(s.wsPath, ".sortie")
 	_ = os.MkdirAll(dir, 0o755)
 	_ = os.WriteFile(filepath.Join(dir, "status"), []byte(s.status), 0o600)
+	return domain.TurnResult{SessionID: sess.ID, ExitReason: domain.EventTurnCompleted}, nil
+}
+
+// reviewStep describes one scripted RunTurn call for scriptedReviewAdapter:
+// an optional status token to write, an optional verdict to write, and an
+// optional error to return instead of either write.
+type reviewStep struct {
+	status  string
+	verdict *domain.ReviewVerdict
+	err     error
+}
+
+// scriptedReviewAdapter implements domain.AgentAdapter, replaying a fixed
+// sequence of status writes, verdict writes, and errors across successive
+// RunTurn calls. Calls beyond the scripted steps succeed with no side
+// effect, which lets a test script only the calls it cares about.
+type scriptedReviewAdapter struct {
+	wsPath  string
+	steps   []reviewStep
+	callIdx int
+}
+
+var _ domain.AgentAdapter = (*scriptedReviewAdapter)(nil)
+
+func (s *scriptedReviewAdapter) StartSession(_ context.Context, _ domain.StartSessionParams) (domain.Session, error) {
+	return domain.Session{ID: "scripted-sess"}, nil
+}
+func (s *scriptedReviewAdapter) StopSession(_ context.Context, _ domain.Session) error { return nil }
+func (s *scriptedReviewAdapter) EventStream() <-chan domain.AgentEvent                 { return nil }
+func (s *scriptedReviewAdapter) RunTurn(_ context.Context, sess domain.Session, params domain.RunTurnParams) (domain.TurnResult, error) {
+	idx := s.callIdx
+	s.callIdx++
+
+	var step reviewStep
+	if idx < len(s.steps) {
+		step = s.steps[idx]
+	}
+	if step.err != nil {
+		return domain.TurnResult{}, step.err
+	}
+
+	if step.status != "" || step.verdict != nil {
+		dir := filepath.Join(s.wsPath, ".sortie")
+		_ = os.MkdirAll(dir, 0o755)
+		if step.status != "" {
+			_ = os.WriteFile(filepath.Join(dir, "status"), []byte(step.status), 0o600)
+		}
+		if step.verdict != nil {
+			data, _ := json.Marshal(step.verdict)
+			_ = os.WriteFile(filepath.Join(dir, "review_verdict.json"), data, 0o600)
+		}
+	}
+
+	if params.OnEvent != nil {
+		params.OnEvent(domain.AgentEvent{Type: domain.EventNotification, Message: fmt.Sprintf("turn %d", idx+1)})
+	}
+	return domain.TurnResult{SessionID: sess.ID, ExitReason: domain.EventTurnCompleted}, nil
+}
+
+// repeatingNeedsReviewAdapter writes a needs-human-review status and an
+// iterate verdict on every RunTurn call, modeling an agent that restates
+// completion on every turn without ever satisfying the verification loop.
+type repeatingNeedsReviewAdapter struct {
+	wsPath string
+}
+
+var _ domain.AgentAdapter = (*repeatingNeedsReviewAdapter)(nil)
+
+func (r *repeatingNeedsReviewAdapter) StartSession(_ context.Context, _ domain.StartSessionParams) (domain.Session, error) {
+	return domain.Session{ID: "repeat-sess"}, nil
+}
+func (r *repeatingNeedsReviewAdapter) StopSession(_ context.Context, _ domain.Session) error {
+	return nil
+}
+func (r *repeatingNeedsReviewAdapter) EventStream() <-chan domain.AgentEvent { return nil }
+func (r *repeatingNeedsReviewAdapter) RunTurn(_ context.Context, sess domain.Session, params domain.RunTurnParams) (domain.TurnResult, error) {
+	dir := filepath.Join(r.wsPath, ".sortie")
+	_ = os.MkdirAll(dir, 0o755)
+	_ = os.WriteFile(filepath.Join(dir, "status"), []byte("needs-human-review"), 0o600)
+	data, _ := json.Marshal(domain.ReviewVerdict{Verdict: "iterate", Summary: "still broken"})
+	_ = os.WriteFile(filepath.Join(dir, "review_verdict.json"), data, 0o600)
+	if params.OnEvent != nil {
+		params.OnEvent(domain.AgentEvent{Type: domain.EventNotification})
+	}
 	return domain.TurnResult{SessionID: sess.ID, ExitReason: domain.EventTurnCompleted}, nil
 }
 
@@ -806,7 +892,7 @@ func TestSelfReviewLoop_PassOnFirst(t *testing.T) {
 		verdicts: []domain.ReviewVerdict{{Verdict: "pass", Summary: "looks good"}},
 	}
 
-	meta := runSelfReviewLoop(context.Background(), RunSelfReviewParams{
+	meta, _ := runSelfReviewLoop(context.Background(), RunSelfReviewParams{
 		Session:        domain.Session{ID: "sess"},
 		Issue:          selfReviewIssue(),
 		WorkspacePath:  wsPath,
@@ -868,7 +954,7 @@ func TestSelfReviewLoop_IterateThenPass(t *testing.T) {
 		},
 	}
 
-	meta := runSelfReviewLoop(context.Background(), RunSelfReviewParams{
+	meta, _ := runSelfReviewLoop(context.Background(), RunSelfReviewParams{
 		Session:        domain.Session{ID: "sess"},
 		Issue:          selfReviewIssue(),
 		WorkspacePath:  wsPath,
@@ -919,7 +1005,7 @@ func TestSelfReviewLoop_CapReached(t *testing.T) {
 		},
 	}
 
-	meta := runSelfReviewLoop(context.Background(), RunSelfReviewParams{
+	meta, _ := runSelfReviewLoop(context.Background(), RunSelfReviewParams{
 		Session:        domain.Session{ID: "sess"},
 		Issue:          selfReviewIssue(),
 		WorkspacePath:  wsPath,
@@ -960,7 +1046,7 @@ func TestSelfReviewLoop_MissingVerdict(t *testing.T) {
 	// Adapter writes no verdict file.
 	adapter := &verdictWriter{wsPath: wsPath, verdicts: nil}
 
-	meta := runSelfReviewLoop(context.Background(), RunSelfReviewParams{
+	meta, _ := runSelfReviewLoop(context.Background(), RunSelfReviewParams{
 		Session:        domain.Session{ID: "sess"},
 		Issue:          selfReviewIssue(),
 		WorkspacePath:  wsPath,
@@ -988,7 +1074,7 @@ func TestSelfReviewLoop_TurnError(t *testing.T) {
 
 	adapter := &failOnFirstAdapter{wsPath: wsPath}
 
-	meta := runSelfReviewLoop(context.Background(), RunSelfReviewParams{
+	meta, _ := runSelfReviewLoop(context.Background(), RunSelfReviewParams{
 		Session:        domain.Session{ID: "sess"},
 		Issue:          selfReviewIssue(),
 		WorkspacePath:  wsPath,
@@ -1018,7 +1104,7 @@ func TestSelfReviewLoop_StatusBlocked(t *testing.T) {
 	// Adapter writes "blocked" status signal during the first review turn.
 	adapter := &statusWriterAdapter{wsPath: wsPath, status: "blocked"}
 
-	meta := runSelfReviewLoop(context.Background(), RunSelfReviewParams{
+	meta, _ := runSelfReviewLoop(context.Background(), RunSelfReviewParams{
 		Session:        domain.Session{ID: "sess"},
 		Issue:          selfReviewIssue(),
 		WorkspacePath:  wsPath,
@@ -1057,7 +1143,7 @@ func TestSelfReviewLoop_ContextCancelled(t *testing.T) {
 		verdicts: []domain.ReviewVerdict{{Verdict: "pass", Summary: "done"}},
 	}
 
-	meta := runSelfReviewLoop(ctx, RunSelfReviewParams{
+	meta, _ := runSelfReviewLoop(ctx, RunSelfReviewParams{
 		Session:        domain.Session{ID: "sess"},
 		Issue:          selfReviewIssue(),
 		WorkspacePath:  wsPath,
@@ -1148,5 +1234,207 @@ func TestSelfReviewLoop_ReviewSummaryWritten(t *testing.T) {
 	summaryPath := filepath.Join(wsPath, ".sortie", "review_summary.md")
 	if _, err := os.Stat(summaryPath); os.IsNotExist(err) {
 		t.Error("review_summary.md was not written after loop completion")
+	}
+}
+
+// --- runSelfReviewLoop terminal status signal ---
+
+// TestSelfReviewLoop_TerminalStatusSignal covers every terminal path of
+// runSelfReviewLoop and asserts its second return value: StatusBlocked for
+// the two in-phase abort arms, StatusNone everywhere else.
+func TestSelfReviewLoop_TerminalStatusSignal(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		maxIter    int
+		cancelled  bool
+		newAdapter func(wsPath string) domain.AgentAdapter
+		wantSignal workspace.StatusSignal
+	}{
+		{
+			name:    "blocked_after_review_turn",
+			maxIter: 3,
+			newAdapter: func(wsPath string) domain.AgentAdapter {
+				return &statusWriterAdapter{wsPath: wsPath, status: "blocked"}
+			},
+			wantSignal: workspace.StatusBlocked,
+		},
+		{
+			name:    "blocked_after_fix_turn",
+			maxIter: 3,
+			newAdapter: func(wsPath string) domain.AgentAdapter {
+				return &scriptedReviewAdapter{wsPath: wsPath, steps: []reviewStep{
+					{verdict: &domain.ReviewVerdict{Verdict: "iterate", Summary: "needs fix"}},
+					{status: "blocked"},
+				}}
+			},
+			wantSignal: workspace.StatusBlocked,
+		},
+		{
+			name:    "cancelled_context_at_iteration_start",
+			maxIter: 3,
+			newAdapter: func(wsPath string) domain.AgentAdapter {
+				return &verdictWriter{wsPath: wsPath, verdicts: []domain.ReviewVerdict{{Verdict: "pass"}}}
+			},
+			cancelled:  true,
+			wantSignal: workspace.StatusNone,
+		},
+		{
+			name:    "review_turn_error",
+			maxIter: 3,
+			newAdapter: func(wsPath string) domain.AgentAdapter {
+				return &failOnFirstAdapter{wsPath: wsPath}
+			},
+			wantSignal: workspace.StatusNone,
+		},
+		{
+			name:    "fix_turn_error",
+			maxIter: 3,
+			newAdapter: func(wsPath string) domain.AgentAdapter {
+				return &scriptedReviewAdapter{wsPath: wsPath, steps: []reviewStep{
+					{verdict: &domain.ReviewVerdict{Verdict: "iterate", Summary: "needs fix"}},
+					{err: errors.New("simulated fix turn error")},
+				}}
+			},
+			wantSignal: workspace.StatusNone,
+		},
+		{
+			name:    "passing_verdict",
+			maxIter: 3,
+			newAdapter: func(wsPath string) domain.AgentAdapter {
+				return &verdictWriter{wsPath: wsPath, verdicts: []domain.ReviewVerdict{{Verdict: "pass"}}}
+			},
+			wantSignal: workspace.StatusNone,
+		},
+		{
+			name:    "reached_cap",
+			maxIter: 1,
+			newAdapter: func(wsPath string) domain.AgentAdapter {
+				return &verdictWriter{wsPath: wsPath, verdicts: []domain.ReviewVerdict{{Verdict: "iterate"}}}
+			},
+			wantSignal: workspace.StatusNone,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			wsPath := t.TempDir()
+			turns := 0
+			cfg := selfReviewCfg()
+			cfg.MaxIterations = tt.maxIter
+
+			ctx := context.Background()
+			if tt.cancelled {
+				var cancel context.CancelFunc
+				ctx, cancel = context.WithCancel(ctx)
+				cancel()
+			}
+
+			_, signal := runSelfReviewLoop(ctx, RunSelfReviewParams{
+				Session:        domain.Session{ID: "sess"},
+				Issue:          selfReviewIssue(),
+				WorkspacePath:  wsPath,
+				Config:         cfg,
+				AgentAdapter:   tt.newAdapter(wsPath),
+				OnEvent:        func(_ string, _ domain.AgentEvent) {},
+				Logger:         discardLogger(),
+				Metrics:        &domain.NoopMetrics{},
+				TurnsCompleted: &turns,
+			})
+
+			if signal != tt.wantSignal {
+				t.Errorf("runSelfReviewLoop(...) terminal signal = %q, want %q", signal, tt.wantSignal)
+			}
+		})
+	}
+}
+
+// TestSelfReviewLoop_NeedsHumanReviewOnFixTurnContinues verifies that a
+// needs-human-review signal read after a fix turn does not end the phase:
+// the loop re-runs its verification commands and its review turn, and the
+// status file is consumed rather than left to abort the next iteration.
+func TestSelfReviewLoop_NeedsHumanReviewOnFixTurnContinues(t *testing.T) {
+	t.Parallel()
+
+	wsPath := t.TempDir()
+	turns := 0
+	cfg := selfReviewCfg()
+	cfg.MaxIterations = 3
+
+	adapter := &scriptedReviewAdapter{
+		wsPath: wsPath,
+		steps: []reviewStep{
+			{verdict: &domain.ReviewVerdict{Verdict: "iterate", Summary: "needs fix"}},
+			{status: "needs-human-review"},
+			{verdict: &domain.ReviewVerdict{Verdict: "pass", Summary: "done"}},
+		},
+	}
+
+	meta, signal := runSelfReviewLoop(context.Background(), RunSelfReviewParams{
+		Session:        domain.Session{ID: "sess"},
+		Issue:          selfReviewIssue(),
+		WorkspacePath:  wsPath,
+		Config:         cfg,
+		AgentAdapter:   adapter,
+		OnEvent:        func(_ string, _ domain.AgentEvent) {},
+		Logger:         discardLogger(),
+		Metrics:        &domain.NoopMetrics{},
+		TurnsCompleted: &turns,
+	})
+
+	if signal != workspace.StatusNone {
+		t.Errorf("terminal signal = %q, want %q (needs-human-review must not abort the phase)", signal, workspace.StatusNone)
+	}
+	if meta.TotalIterations != 2 {
+		t.Errorf("TotalIterations = %d, want 2 (a fix-turn signal must not end the phase)", meta.TotalIterations)
+	}
+	if meta.FinalVerdict != "pass" {
+		t.Errorf("FinalVerdict = %q, want %q", meta.FinalVerdict, "pass")
+	}
+	if turns != 3 {
+		t.Errorf("TurnsCompleted = %d, want 3 (review, fix, review)", turns)
+	}
+	if _, err := os.Stat(filepath.Join(wsPath, ".sortie", "status")); !os.IsNotExist(err) {
+		t.Error("status file still present after a fix-turn needs-human-review, want removed")
+	}
+}
+
+// TestSelfReviewLoop_NeedsHumanReviewEveryTurnHitsCap verifies that an
+// agent restating needs-human-review on every turn cannot extend the loop
+// past self_review.max_iterations: it terminates with the cap-reached
+// outcome the loop already produces for a repeated "iterate" verdict.
+func TestSelfReviewLoop_NeedsHumanReviewEveryTurnHitsCap(t *testing.T) {
+	t.Parallel()
+
+	wsPath := t.TempDir()
+	turns := 0
+	cfg := selfReviewCfg()
+	cfg.MaxIterations = 3
+
+	adapter := &repeatingNeedsReviewAdapter{wsPath: wsPath}
+
+	meta, signal := runSelfReviewLoop(context.Background(), RunSelfReviewParams{
+		Session:        domain.Session{ID: "sess"},
+		Issue:          selfReviewIssue(),
+		WorkspacePath:  wsPath,
+		Config:         cfg,
+		AgentAdapter:   adapter,
+		OnEvent:        func(_ string, _ domain.AgentEvent) {},
+		Logger:         discardLogger(),
+		Metrics:        &domain.NoopMetrics{},
+		TurnsCompleted: &turns,
+	})
+
+	if signal != workspace.StatusNone {
+		t.Errorf("terminal signal = %q, want %q", signal, workspace.StatusNone)
+	}
+	if meta.TotalIterations != cfg.MaxIterations {
+		t.Errorf("TotalIterations = %d, want %d", meta.TotalIterations, cfg.MaxIterations)
+	}
+	if !meta.CapReached {
+		t.Error("CapReached = false, want true")
 	}
 }

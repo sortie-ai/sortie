@@ -435,10 +435,11 @@ func writeReviewSummary(workspacePath string, meta domain.ReviewMetadata, logger
 	}
 }
 
-func runSelfReviewLoop(ctx context.Context, params RunSelfReviewParams) *domain.ReviewMetadata {
+func runSelfReviewLoop(ctx context.Context, params RunSelfReviewParams) (*domain.ReviewMetadata, workspace.StatusSignal) {
 	maxIter := params.Config.MaxIterations
 	iterations := make([]domain.ReviewIterationRecord, 0, maxIter)
 	logger := params.Logger
+	terminalSignal := workspace.StatusNone
 
 	if params.OnProgress != nil {
 		params.OnProgress(selfReviewProgressMsg{
@@ -516,7 +517,7 @@ func runSelfReviewLoop(ctx context.Context, params RunSelfReviewParams) *domain.
 
 		// Check A2O status for early abort signals.
 		statusSignal := workspace.ReadStatusFile(params.WorkspacePath, logger)
-		if statusSignal.IsRecognized() {
+		if statusSignal == workspace.StatusBlocked {
 			logger.Info("self-review aborted by agent status",
 				slog.Int("iteration", i),
 				slog.String("status", string(statusSignal)),
@@ -528,7 +529,11 @@ func runSelfReviewLoop(ctx context.Context, params RunSelfReviewParams) *domain.
 				VerificationResults: verificationResults,
 				VerdictParseError:   fmt.Sprintf("aborted: agent status %q", statusSignal),
 			})
+			terminalSignal = workspace.StatusBlocked
 			break
+		}
+		if statusSignal == workspace.StatusNeedsHumanReview {
+			workspace.CleanupStatusFile(params.WorkspacePath, logger)
 		}
 
 		verdict, rawJSON, parseErr := readReviewVerdict(params.WorkspacePath)
@@ -611,12 +616,17 @@ func runSelfReviewLoop(ctx context.Context, params RunSelfReviewParams) *domain.
 
 		// Check A2O status after fix turn.
 		statusSignal = workspace.ReadStatusFile(params.WorkspacePath, logger)
-		if statusSignal.IsRecognized() {
+		if statusSignal == workspace.StatusBlocked {
 			logger.Info("self-review aborted by agent status after fix",
 				slog.Int("iteration", i),
 				slog.String("status", string(statusSignal)),
 			)
+			iterations[len(iterations)-1].VerdictParseError = fmt.Sprintf("aborted: agent status %q", statusSignal)
+			terminalSignal = workspace.StatusBlocked
 			break
+		}
+		if statusSignal == workspace.StatusNeedsHumanReview {
+			workspace.CleanupStatusFile(params.WorkspacePath, logger)
 		}
 	}
 
@@ -651,5 +661,5 @@ func runSelfReviewLoop(ctx context.Context, params RunSelfReviewParams) *domain.
 
 	params.Metrics.IncSelfReviewSessions(finalVerdict)
 
-	return meta
+	return meta, terminalSignal
 }
