@@ -221,11 +221,19 @@ func (f *gitlabMergeFixture) deleteBranch(t *testing.T, project, branch string) 
 }
 
 // awaitMergeability polls the merge request's detailed_merge_status with
-// a bounded number of tries until it leaves the computing set
-// (unchecked, checking, preparing, approvals_syncing), and returns
-// whatever status is observed last, settled or not; the caller decides
-// what a settled value other than the one it expects means.
-func (f *gitlabMergeFixture) awaitMergeability(t *testing.T, project string, iid int) string {
+// a bounded number of tries until it settles, and returns whatever status
+// is observed last, settled or not; the caller decides what a settled
+// value other than the one it expects means.
+//
+// A status counts as settled only when it lies outside the computing set
+// (unchecked, checking, preparing, approvals_syncing) and the merge
+// request's own head sha has caught up with wantSHA. GitLab reports the
+// identifier of the conflict check while that check is still running, so
+// a read taken before the merge-request diff is regenerated carries
+// "conflict" for a merge request that has none; such a read is
+// recognizable because its sha still lags the branch. An empty wantSHA
+// disables the sha gate. See gitlab-org/gitlab#608247.
+func (f *gitlabMergeFixture) awaitMergeability(t *testing.T, project string, iid int, wantSHA string) string {
 	t.Helper()
 
 	const maxAttempts = 10
@@ -246,7 +254,7 @@ func (f *gitlabMergeFixture) awaitMergeability(t *testing.T, project string, iid
 			t.Fatalf("unmarshal merge request response: %v", err)
 		}
 		status = mr.DetailedMergeStatus
-		if !computing[status] {
+		if !computing[status] && (wantSHA == "" || mr.SHA == wantSHA) {
 			return status
 		}
 		if attempt < maxAttempts-1 {
@@ -302,7 +310,7 @@ func TestIntegration_MergePR_ProtectedTarget(t *testing.T) {
 	head := "sortie-protected-head-" + suffix
 
 	fixture.createBranch(t, project, head, fixtureDefaultBranch(t, fixture, project))
-	fixture.commitFile(t, project, head, "sortie-protected-sentinel.txt", "protected target probe\n")
+	sentinelSHA := fixture.commitFile(t, project, head, "sortie-protected-sentinel.txt", "protected target probe\n")
 	iid := fixture.openMR(t, project, head, protectedBranch, "sortie protected target "+suffix)
 
 	t.Cleanup(func() {
@@ -310,7 +318,7 @@ func TestIntegration_MergePR_ProtectedTarget(t *testing.T) {
 		fixture.deleteBranch(t, project, head)
 	})
 
-	status := fixture.awaitMergeability(t, project, iid)
+	status := fixture.awaitMergeability(t, project, iid, sentinelSHA)
 	if status != "mergeable" {
 		t.Fatalf("merge request !%d detailed_merge_status = %q after polling, want %q", iid, status, "mergeable")
 	}
@@ -366,7 +374,7 @@ func TestIntegration_SCMMergeFlow(t *testing.T) {
 		fixture.deleteBranch(t, project, base)
 	})
 
-	var staleSHA, currentSHA string
+	var staleSHA, advancedSHA, currentSHA string
 
 	t.Run("GetMergeability", func(t *testing.T) {
 		status, err := adapter.GetMergeability(ctx, iid, owner, repo)
@@ -386,13 +394,36 @@ func TestIntegration_SCMMergeFlow(t *testing.T) {
 		// Advances the head, so staleSHA becomes valid but out of
 		// date, driving GitLab's stale-precondition rejection
 		// deterministically.
-		advancedSHA := fixture.commitFile(t, project, head, "sortie-merge-flow-advance.txt", "advance\n")
+		advancedSHA = fixture.commitFile(t, project, head, "sortie-merge-flow-advance.txt", "advance\n")
 		if advancedSHA == staleSHA {
 			t.Fatalf("commitFile did not advance the head past staleSHA %q", staleSHA)
 		}
 
+		// GitLab evaluates mergeability before the sha precondition, so a
+		// merge attempted while the push is still being processed is
+		// refused as unmergeable and never reaches the sha check at all.
+		// Letting the verdict settle against the pushed head is what makes
+		// the stale sha the reason this merge is rejected.
+		if status := fixture.awaitMergeability(t, project, iid, advancedSHA); status != "mergeable" {
+			t.Fatalf("merge request !%d detailed_merge_status = %q after polling, want %q",
+				iid, status, "mergeable")
+		}
+
 		_, err := adapter.MergePR(ctx, iid, owner, repo, domain.StrategySquash, "", "", staleSHA)
 		adaptertest.AssertSCMErrorKind(t, err, domain.ErrSCMConflict)
+
+		// ErrSCMConflict is promoted from both 405 and 409, so the kind
+		// alone cannot distinguish the stale-sha rejection this subtest
+		// exercises from a merge request GitLab refuses to merge for an
+		// unrelated reason. Only the 409 proves the precondition fired.
+		var te *domain.TrackerError
+		if !errors.As(err, &te) {
+			t.Fatalf("MergePR stale precondition error = %v, want a wrapped *domain.TrackerError", err)
+		}
+		if te.Status != http.StatusConflict {
+			t.Errorf("MergePR stale precondition HTTP status = %d, want %d for a stale-sha rejection",
+				te.Status, http.StatusConflict)
+		}
 
 		var se *domain.SCMError
 		if errors.As(err, &se) && strings.Contains(strings.ToLower(se.Message), "already merged") {
@@ -405,9 +436,10 @@ func TestIntegration_SCMMergeFlow(t *testing.T) {
 
 	t.Run("MergePR_HappyPath", func(t *testing.T) {
 		// The stale-precondition push makes GitLab recompute
-		// detailed_merge_status asynchronously; poll it out of the
-		// computing set before capturing the head SHA to merge with.
-		status := fixture.awaitMergeability(t, project, iid)
+		// detailed_merge_status asynchronously; poll until the verdict
+		// settles against that pushed head before capturing the head SHA
+		// to merge with.
+		status := fixture.awaitMergeability(t, project, iid, advancedSHA)
 		if status != "mergeable" {
 			t.Fatalf("merge request !%d detailed_merge_status = %q after polling, want %q", iid, status, "mergeable")
 		}

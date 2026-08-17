@@ -129,6 +129,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   moving them instead.
   ([#811](https://github.com/sortie-ai/sortie/issues/811))
 
+- GitLab: a merge request whose pipeline is waiting on a manual job is
+  no longer held out of auto-merge indefinitely. Such a pipeline was
+  reported as still running on every poll, so the auto-merge entry
+  expired on its timeout and the merge fell to a person. The verdict
+  now follows the pipeline's own jobs: one waiting only on manual jobs
+  counts as passing, one that also holds a failed job reports failing
+  instead of looking identical to a healthy one, and one with work
+  still queued stays pending. Reading a pipeline in this state costs
+  one extra API call per poll; every other pipeline state is unchanged.
+  ([#827](https://github.com/sortie-ai/sortie/issues/827))
+
 ### Migrations
 
 - Add the `handoff_absence_resets` table, recording per issue where its
