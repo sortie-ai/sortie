@@ -26,6 +26,12 @@ func decodeRequestBody(t *testing.T, r *http.Request, v any) {
 	}
 }
 
+// mrBaselineSHA is mergeRequestFixture's own default "sha" value. A
+// head_pipeline override that wants the status mapping exercised, rather
+// than the head-comparison deferral, sets its own "sha" to this value;
+// headPipeline does that by default.
+const mrBaselineSHA = "d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0"
+
 // mergeRequestFixture returns a JSON-encoded merge request object built
 // from a documented baseline shape, with overrides applied on top. This
 // lets the detailed_merge_status and head_pipeline enumeration tables
@@ -38,7 +44,7 @@ func mergeRequestFixture(t *testing.T, overrides map[string]any) []byte {
 		"iid":                   testPRNumber,
 		"state":                 "opened",
 		"draft":                 false,
-		"sha":                   "d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0",
+		"sha":                   mrBaselineSHA,
 		"source_branch":         "feature/scm-reads",
 		"target_branch":         "main",
 		"merge_commit_sha":      "",
@@ -52,6 +58,16 @@ func mergeRequestFixture(t *testing.T, overrides map[string]any) []byte {
 		t.Fatalf("marshal merge request fixture: %v", err)
 	}
 	return data
+}
+
+// headPipeline returns a head_pipeline override map whose "sha" defaults
+// to mrBaselineSHA, the merge request fixture's own sha, so the fixture
+// exercises the status mapping rather than the head-comparison deferral,
+// unless fields already sets "sha" itself.
+func headPipeline(fields map[string]any) map[string]any {
+	out := map[string]any{"sha": mrBaselineSHA}
+	maps.Copy(out, fields)
+	return out
 }
 
 func serveJSON(t *testing.T, body []byte) *httptest.Server {
@@ -236,11 +252,11 @@ func TestGetCIStatus_HeadPipelineMapping(t *testing.T) {
 		wantWarn  bool
 		wantAttr  string // pipeline_status attribute value; checked only when wantWarn is true
 	}{
-		{"success maps to CIGateSuccess", map[string]any{"head_pipeline": map[string]any{"status": "success"}}, "success", false, ""},
-		{"failed maps to CIGateFailing", map[string]any{"head_pipeline": map[string]any{"status": "failed"}}, "failing", false, ""},
-		{"canceled maps to CIGateFailing", map[string]any{"head_pipeline": map[string]any{"status": "canceled"}}, "failing", false, ""},
-		{"an unrecognized status defers to CIGatePending and logs a warning", map[string]any{"head_pipeline": map[string]any{"status": "expired"}}, "pending", true, "expired"},
-		{"an empty head_pipeline status defers to CIGatePending and logs a warning", map[string]any{"head_pipeline": map[string]any{"status": ""}}, "pending", true, ""},
+		{"success maps to CIGateSuccess", map[string]any{"head_pipeline": headPipeline(map[string]any{"status": "success"})}, "success", false, ""},
+		{"failed maps to CIGateFailing", map[string]any{"head_pipeline": headPipeline(map[string]any{"status": "failed"})}, "failing", false, ""},
+		{"canceled maps to CIGateFailing", map[string]any{"head_pipeline": headPipeline(map[string]any{"status": "canceled"})}, "failing", false, ""},
+		{"an unrecognized status defers to CIGatePending and logs a warning", map[string]any{"head_pipeline": headPipeline(map[string]any{"status": "expired"})}, "pending", true, "expired"},
+		{"an empty head_pipeline status defers to CIGatePending and logs a warning", map[string]any{"head_pipeline": headPipeline(map[string]any{"status": ""})}, "pending", true, ""},
 		{"a nil head_pipeline maps to CIGateAbsent (empty string)", map[string]any{"head_pipeline": nil}, "", false, ""},
 		{"a populated top-level pipeline is never substituted for a nil head_pipeline", map[string]any{"head_pipeline": nil, "pipeline": map[string]any{"status": "success"}}, "", false, ""},
 	}
@@ -316,7 +332,7 @@ func TestGetCIStatus_PipelineStatusEnumAgreement(t *testing.T) {
 					_, _ = w.Write(manualJobSetBody(t))
 				})
 			} else {
-				fixture := mergeRequestFixture(t, map[string]any{"head_pipeline": map[string]any{"status": status}})
+				fixture := mergeRequestFixture(t, map[string]any{"head_pipeline": headPipeline(map[string]any{"status": status})})
 				srv = serveJSON(t, fixture)
 			}
 			defer srv.Close()
@@ -386,7 +402,7 @@ func TestGetCIStatus_SingleRequestRouteScope(t *testing.T) {
 	for _, status := range statuses {
 		t.Run(status, func(t *testing.T) {
 			t.Parallel()
-			run(t, map[string]any{"head_pipeline": map[string]any{"status": status}})
+			run(t, map[string]any{"head_pipeline": headPipeline(map[string]any{"status": status})})
 		})
 	}
 
@@ -394,6 +410,445 @@ func TestGetCIStatus_SingleRequestRouteScope(t *testing.T) {
 		t.Parallel()
 		run(t, map[string]any{"head_pipeline": nil})
 	})
+}
+
+// --- GetCIStatus: head-comparison deferral ---
+
+// divergentPipelineSHA names a commit that is never the merge request's
+// own sha in any fixture in this file, so a head_pipeline carrying it
+// always describes a superseded commit.
+const divergentPipelineSHA = "1111222233334444555566667777888899990000"
+
+// assertHeadComparisonWarn asserts that logOutput carries exactly one
+// deferral WARN naming mrSHA, pipelineSHA, and pipelineID as its
+// merge_request_sha, head_pipeline_sha, and pipeline_id attributes.
+func assertHeadComparisonWarn(t *testing.T, logOutput, mrSHA, pipelineSHA string, pipelineID int64) {
+	t.Helper()
+
+	const msg = "head pipeline does not describe the merge request head"
+	if n := strings.Count(logOutput, msg); n != 1 {
+		t.Errorf("occurrences of %q in log output = %d, want 1 (log output: %q)", msg, n, logOutput)
+	}
+	if want := "merge_request_sha=" + mrSHA; !strings.Contains(logOutput, want) {
+		t.Errorf("log output = %q, want it to carry %q", logOutput, want)
+	}
+	if want := "head_pipeline_sha=" + quoteIfEmpty(pipelineSHA); !strings.Contains(logOutput, want) {
+		t.Errorf("log output = %q, want it to carry %q", logOutput, want)
+	}
+	if want := "pipeline_id=" + strconv.FormatInt(pipelineID, 10); !strings.Contains(logOutput, want) {
+		t.Errorf("log output = %q, want it to carry %q", logOutput, want)
+	}
+}
+
+func TestGetCIStatus_HeadComparisonDeferral(t *testing.T) {
+	t.Parallel()
+
+	run := func(t *testing.T, overrides map[string]any, wantPipelineSHA string) {
+		t.Helper()
+
+		fixture := mergeRequestFixture(t, overrides)
+
+		var requests atomic.Int32
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			requests.Add(1)
+			if strings.Contains(r.URL.Path, "/statuses") {
+				t.Errorf("unexpected request to %s, want no statuses request", r.URL.Path)
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write(fixture)
+		}))
+		defer srv.Close()
+
+		adapter := mustSCMAdapter(t, srv.URL)
+		log, buf := newCapturingLogger()
+		adapter.log = log
+
+		got, err := adapter.GetCIStatus(context.Background(), testPRNumber, scmOwner, scmRepo)
+		if err != nil {
+			t.Fatalf("GetCIStatus: unexpected error: %v", err)
+		}
+		if got != "pending" {
+			t.Errorf("GetCIStatus() = %q, want %q", got, "pending")
+		}
+		if got == "" || got == "success" {
+			t.Errorf("GetCIStatus() = %q, want neither the empty string nor %q", got, "success")
+		}
+		if n := requests.Load(); n != 1 {
+			t.Errorf("requests = %d, want 1", n)
+		}
+		assertHeadComparisonWarn(t, buf.String(), mrBaselineSHA, wantPipelineSHA, manualPipelineID)
+	}
+
+	statuses := []string{"success", "skipped", "failed", "canceled", "manual"}
+	for _, status := range statuses {
+		t.Run(status, func(t *testing.T) {
+			t.Parallel()
+			run(t, map[string]any{"head_pipeline": map[string]any{
+				"status": status,
+				"id":     manualPipelineID,
+				"sha":    divergentPipelineSHA,
+			}}, divergentPipelineSHA)
+		})
+	}
+
+	t.Run("an empty pipeline sha against a non-empty merge-request sha also defers, not a defensive pass-through", func(t *testing.T) {
+		t.Parallel()
+		run(t, map[string]any{"head_pipeline": map[string]any{
+			"status": "success",
+			"id":     manualPipelineID,
+			"sha":    "",
+		}}, "")
+	})
+}
+
+// --- GetCIStatus: absent head_pipeline ---
+
+func TestGetCIStatus_NilHeadPipelineIssuesNoWarning(t *testing.T) {
+	t.Parallel()
+
+	fixture := mergeRequestFixture(t, map[string]any{"head_pipeline": nil})
+
+	var requests atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(fixture)
+	}))
+	defer srv.Close()
+
+	adapter := mustSCMAdapter(t, srv.URL)
+	log, buf := newCapturingLogger()
+	adapter.log = log
+
+	got, err := adapter.GetCIStatus(context.Background(), testPRNumber, scmOwner, scmRepo)
+	if err != nil {
+		t.Fatalf("GetCIStatus: unexpected error: %v", err)
+	}
+	if got != "" {
+		t.Errorf("GetCIStatus() = %q, want empty string", got)
+	}
+	if n := requests.Load(); n != 1 {
+		t.Errorf("requests = %d, want 1", n)
+	}
+	if logOutput := buf.String(); strings.Contains(logOutput, "level=WARN") {
+		t.Errorf("log output = %q, want no WARN of any kind", logOutput)
+	}
+}
+
+// --- GetCIStatus: missing merge-request sha ---
+
+func TestGetCIStatus_MissingMergeRequestSHA(t *testing.T) {
+	t.Parallel()
+
+	fixture := mergeRequestFixture(t, map[string]any{
+		"sha": "",
+		"head_pipeline": map[string]any{
+			"status": "success",
+			"id":     manualPipelineID,
+			"sha":    manualPipelineSHA,
+		},
+	})
+
+	var requests atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(fixture)
+	}))
+	defer srv.Close()
+
+	adapter := mustSCMAdapter(t, srv.URL)
+	got, err := adapter.GetCIStatus(context.Background(), testPRNumber, scmOwner, scmRepo)
+	if got != "" {
+		t.Errorf("GetCIStatus() = %q, want empty string", got)
+	}
+	adaptertest.AssertSCMErrorKind(t, err, domain.ErrSCMPayload)
+
+	if n := requests.Load(); n != 1 {
+		t.Errorf("requests = %d, want 1", n)
+	}
+}
+
+// --- GetCIStatus: case-insensitive head comparison ---
+
+func TestGetCIStatus_HeadComparisonCaseInsensitive(t *testing.T) {
+	t.Parallel()
+
+	t.Run("a non-manual status maps normally despite a case difference", func(t *testing.T) {
+		t.Parallel()
+
+		fixture := mergeRequestFixture(t, map[string]any{
+			"head_pipeline": map[string]any{
+				"status": "success",
+				"sha":    strings.ToUpper(mrBaselineSHA),
+			},
+		})
+		srv := serveJSON(t, fixture)
+		defer srv.Close()
+
+		adapter := mustSCMAdapter(t, srv.URL)
+		log, buf := newCapturingLogger()
+		adapter.log = log
+
+		got, err := adapter.GetCIStatus(context.Background(), testPRNumber, scmOwner, scmRepo)
+		if err != nil {
+			t.Fatalf("GetCIStatus: unexpected error: %v", err)
+		}
+		if got != "success" {
+			t.Errorf("GetCIStatus() = %q, want %q", got, "success")
+		}
+		if logOutput := buf.String(); strings.Contains(logOutput, "head pipeline does not describe the merge request head") {
+			t.Errorf("log output = %q, want no deferral WARN", logOutput)
+		}
+	})
+
+	t.Run("a manual status still runs the job-set read", func(t *testing.T) {
+		t.Parallel()
+
+		mrFixture := manualHeadPipelineFixture(t, strings.ToUpper(manualPipelineSHA), manualPipelineID, map[string]any{"sha": manualPipelineSHA})
+		statusesBody := manualJobSetBody(t)
+
+		var statusesRequested atomic.Bool
+		srv := mergeRequestAndStatusesServer(t, mrFixture, func(w http.ResponseWriter, r *http.Request) {
+			statusesRequested.Store(true)
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write(statusesBody)
+		})
+		defer srv.Close()
+
+		adapter := mustSCMAdapter(t, srv.URL)
+		got, err := adapter.GetCIStatus(context.Background(), testPRNumber, scmOwner, scmRepo)
+		if err != nil {
+			t.Fatalf("GetCIStatus: unexpected error: %v", err)
+		}
+		if got != "success" {
+			t.Errorf("GetCIStatus() = %q, want %q", got, "success")
+		}
+		if !statusesRequested.Load() {
+			t.Error("no /statuses request issued, want the job-set read to run despite the case difference")
+		}
+	})
+}
+
+// --- GetCIStatus: generated merge-ref exemption ---
+
+// exemptPipelineSHA names a commit that is never the merge request's own
+// sha in any fixture in this file, matching the shape of a merged
+// results or merge-train pipeline: a sha that exists in neither branch.
+const exemptPipelineSHA = "2222333344445555666677778888999900001111"
+
+// assertGeneratedMergeRefDebug asserts that logOutput carries exactly
+// one exemption Debug line naming ref, id, and source as its
+// pipeline_ref, pipeline_id, and pipeline_source attributes.
+func assertGeneratedMergeRefDebug(t *testing.T, logOutput, ref string, id int64, source string) {
+	t.Helper()
+
+	const msg = "head pipeline runs on a generated merge-request ref"
+	if n := strings.Count(logOutput, msg); n != 1 {
+		t.Errorf("occurrences of %q in log output = %d, want 1 (log output: %q)", msg, n, logOutput)
+	}
+	if want := "pipeline_ref=" + ref; !strings.Contains(logOutput, want) {
+		t.Errorf("log output = %q, want it to carry %q", logOutput, want)
+	}
+	if want := "pipeline_id=" + strconv.FormatInt(id, 10); !strings.Contains(logOutput, want) {
+		t.Errorf("log output = %q, want it to carry %q", logOutput, want)
+	}
+	if want := "pipeline_source=" + source; !strings.Contains(logOutput, want) {
+		t.Errorf("log output = %q, want it to carry %q", logOutput, want)
+	}
+}
+
+func TestGetCIStatus_GeneratedMergeRefExemption(t *testing.T) {
+	t.Parallel()
+
+	mergeRef := "refs/merge-requests/" + strconv.Itoa(testPRNumber) + "/merge"
+	trainRef := "refs/merge-requests/" + strconv.Itoa(testPRNumber) + "/train"
+
+	t.Run("a merged-results pipeline is exempt and maps normally", func(t *testing.T) {
+		t.Parallel()
+
+		const exemptPipelineID = int64(4001)
+		fixture := mergeRequestFixture(t, map[string]any{
+			"head_pipeline": map[string]any{
+				"status": "success",
+				"id":     exemptPipelineID,
+				"sha":    exemptPipelineSHA,
+				"ref":    mergeRef,
+				"source": "merge_request_event",
+			},
+		})
+		srv := serveJSON(t, fixture)
+		defer srv.Close()
+
+		adapter := mustSCMAdapter(t, srv.URL)
+		log, buf := newCapturingLogger()
+		adapter.log = log
+
+		got, err := adapter.GetCIStatus(context.Background(), testPRNumber, scmOwner, scmRepo)
+		if err != nil {
+			t.Fatalf("GetCIStatus: unexpected error: %v", err)
+		}
+		if got != "success" {
+			t.Errorf("GetCIStatus() = %q, want %q", got, "success")
+		}
+
+		logOutput := buf.String()
+		if strings.Contains(logOutput, "head pipeline does not describe the merge request head") {
+			t.Errorf("log output = %q, want no deferral WARN", logOutput)
+		}
+		assertGeneratedMergeRefDebug(t, logOutput, mergeRef, exemptPipelineID, "merge_request_event")
+	})
+
+	t.Run("a merge-train pipeline is exempt and its manual status is addressed at the pipeline's own sha and id", func(t *testing.T) {
+		t.Parallel()
+
+		const exemptPipelineID = int64(4002)
+		mrFixture := mergeRequestFixture(t, map[string]any{
+			"head_pipeline": map[string]any{
+				"status": "manual",
+				"id":     exemptPipelineID,
+				"sha":    exemptPipelineSHA,
+				"ref":    trainRef,
+				"source": "merge_request_event",
+			},
+		})
+		statusesBody := commitStatusesJSON(t, []map[string]any{
+			commitStatusEntry(1, "manual-one", "manual", exemptPipelineID),
+			commitStatusEntry(2, "manual-two", "manual", exemptPipelineID),
+		})
+		wantStatusesSuffix := "/repository/commits/" + exemptPipelineSHA + "/statuses"
+
+		var statusesPath, statusesPipelineID string
+		srv := mergeRequestAndStatusesServer(t, mrFixture, func(w http.ResponseWriter, r *http.Request) {
+			statusesPath = r.URL.Path
+			statusesPipelineID = r.URL.Query().Get("pipeline_id")
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write(statusesBody)
+		})
+		defer srv.Close()
+
+		adapter := mustSCMAdapter(t, srv.URL)
+		log, buf := newCapturingLogger()
+		adapter.log = log
+
+		got, err := adapter.GetCIStatus(context.Background(), testPRNumber, scmOwner, scmRepo)
+		if err != nil {
+			t.Fatalf("GetCIStatus: unexpected error: %v", err)
+		}
+		if got != "success" {
+			t.Errorf("GetCIStatus() = %q, want %q", got, "success")
+		}
+		if !strings.HasSuffix(statusesPath, wantStatusesSuffix) {
+			t.Errorf("statuses request path = %q, want it to end with %q", statusesPath, wantStatusesSuffix)
+		}
+		if want := strconv.FormatInt(exemptPipelineID, 10); statusesPipelineID != want {
+			t.Errorf("statuses request pipeline_id query param = %q, want %q", statusesPipelineID, want)
+		}
+
+		assertGeneratedMergeRefDebug(t, buf.String(), trainRef, exemptPipelineID, "merge_request_event")
+	})
+}
+
+// --- GetCIStatus: detached merge-request pipeline ---
+
+func TestGetCIStatus_DetachedMergeRequestPipelineInsideComparison(t *testing.T) {
+	t.Parallel()
+
+	headRef := "refs/merge-requests/" + strconv.Itoa(testPRNumber) + "/head"
+
+	t.Run("equal shas map normally", func(t *testing.T) {
+		t.Parallel()
+
+		fixture := mergeRequestFixture(t, map[string]any{
+			"head_pipeline": map[string]any{
+				"status": "success",
+				"sha":    mrBaselineSHA,
+				"ref":    headRef,
+				"source": "merge_request_event",
+			},
+		})
+		srv := serveJSON(t, fixture)
+		defer srv.Close()
+
+		adapter := mustSCMAdapter(t, srv.URL)
+		got, err := adapter.GetCIStatus(context.Background(), testPRNumber, scmOwner, scmRepo)
+		if err != nil {
+			t.Fatalf("GetCIStatus: unexpected error: %v", err)
+		}
+		if got != "success" {
+			t.Errorf("GetCIStatus() = %q, want %q", got, "success")
+		}
+	})
+
+	t.Run("differing shas defer to pending", func(t *testing.T) {
+		t.Parallel()
+
+		fixture := mergeRequestFixture(t, map[string]any{
+			"head_pipeline": map[string]any{
+				"status": "success",
+				"sha":    divergentPipelineSHA,
+				"ref":    headRef,
+				"source": "merge_request_event",
+			},
+		})
+		srv := serveJSON(t, fixture)
+		defer srv.Close()
+
+		adapter := mustSCMAdapter(t, srv.URL)
+		got, err := adapter.GetCIStatus(context.Background(), testPRNumber, scmOwner, scmRepo)
+		if err != nil {
+			t.Fatalf("GetCIStatus: unexpected error: %v", err)
+		}
+		if got != "pending" {
+			t.Errorf("GetCIStatus() = %q, want %q", got, "pending")
+		}
+	})
+}
+
+// --- GetCIStatus: shapes that imitate the exemption ---
+
+func TestGetCIStatus_ExemptionRejectsImitatingShapes(t *testing.T) {
+	t.Parallel()
+
+	mergeRef := "refs/merge-requests/" + strconv.Itoa(testPRNumber) + "/merge"
+	otherMergeRef := "refs/merge-requests/" + strconv.Itoa(testPRNumber+1) + "/merge"
+
+	tests := []struct {
+		name   string
+		ref    string
+		source string
+	}{
+		{"an ordinary branch name", "feature/scm-reads", "push"},
+		{"a branch literally named after the generated merge ref, created by a push", mergeRef, "push"},
+		{"a branch literally named after the generated merge ref, reported externally", mergeRef, "external"},
+		{"a generated ref anchored to a different merge request", otherMergeRef, "merge_request_event"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			fixture := mergeRequestFixture(t, map[string]any{
+				"head_pipeline": map[string]any{
+					"status": "success",
+					"sha":    divergentPipelineSHA,
+					"ref":    tt.ref,
+					"source": tt.source,
+				},
+			})
+			srv := serveJSON(t, fixture)
+			defer srv.Close()
+
+			adapter := mustSCMAdapter(t, srv.URL)
+			got, err := adapter.GetCIStatus(context.Background(), testPRNumber, scmOwner, scmRepo)
+			if err != nil {
+				t.Fatalf("GetCIStatus: unexpected error: %v", err)
+			}
+			if got != "pending" {
+				t.Errorf("GetCIStatus() = %q, want %q (the exemption must not admit this shape)", got, "pending")
+			}
+		})
+	}
 }
 
 // --- GetCIStatus: manual head pipeline job-set fold ---
@@ -408,12 +863,16 @@ const (
 )
 
 // manualHeadPipelineFixture returns a merge-request fixture whose
-// head_pipeline reports "manual" at sha and pipelineID, with any
-// additional top-level merge-request field overrides applied on top.
+// head_pipeline reports "manual" at sha and pipelineID. The merge
+// request's own "sha" defaults to sha, the pipeline's own value, so the
+// job-set fold is reached rather than the head-comparison deferral,
+// unless overrides sets "sha" itself. Any additional top-level
+// merge-request field overrides are applied on top.
 func manualHeadPipelineFixture(t *testing.T, sha string, pipelineID int64, overrides map[string]any) []byte {
 	t.Helper()
 
 	fields := map[string]any{
+		"sha": sha,
 		"head_pipeline": map[string]any{
 			"status": "manual",
 			"id":     pipelineID,
@@ -485,49 +944,40 @@ func mergeRequestAndStatusesServer(t *testing.T, mrFixture []byte, statusesHandl
 	}))
 }
 
+// TestGetCIStatus_ManualRequestShape calls manualGate directly, rather
+// than through GetCIStatus, because a pipeline whose sha differs from
+// every merge-request fixture in this file no longer reaches manualGate
+// through GetCIStatus: it defers before the manual arm is considered.
+// The direct call preserves the addressing assertion this test has
+// always made, independent of that routing.
 func TestGetCIStatus_ManualRequestShape(t *testing.T) {
 	t.Parallel()
 
-	const mrSHA = "0000111122223333444455556666777788889999"
-
-	mrFixture := manualHeadPipelineFixture(t, manualPipelineSHA, manualPipelineID, map[string]any{"sha": mrSHA})
+	pipeline := &gitlabPipeline{Status: "manual", ID: manualPipelineID, SHA: manualPipelineSHA}
 	statusesBody := manualJobSetBody(t)
-
-	wantMRSuffix := "/merge_requests/" + strconv.Itoa(testPRNumber)
 	wantStatusesSuffix := "/repository/commits/" + manualPipelineSHA + "/statuses"
 
 	var requestPaths []string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requestPaths = append(requestPaths, r.URL.Path)
-		w.Header().Set("Content-Type", "application/json")
-		switch {
-		case strings.HasSuffix(r.URL.Path, wantStatusesSuffix):
-			if got := r.URL.Query().Get("pipeline_id"); got != strconv.FormatInt(manualPipelineID, 10) {
-				t.Errorf("statuses request pipeline_id query param = %q, want %q", got, strconv.FormatInt(manualPipelineID, 10))
-			}
-			_, _ = w.Write(statusesBody)
-		case strings.HasSuffix(r.URL.Path, wantMRSuffix):
-			_, _ = w.Write(mrFixture)
-		default:
-			t.Errorf("unexpected request to %s", r.URL.Path)
-			w.WriteHeader(http.StatusNotFound)
+		if got := r.URL.Query().Get("pipeline_id"); got != strconv.FormatInt(manualPipelineID, 10) {
+			t.Errorf("statuses request pipeline_id query param = %q, want %q", got, strconv.FormatInt(manualPipelineID, 10))
 		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(statusesBody)
 	}))
 	defer srv.Close()
 
 	adapter := mustSCMAdapter(t, srv.URL)
-	if _, err := adapter.GetCIStatus(context.Background(), testPRNumber, scmOwner, scmRepo); err != nil {
-		t.Fatalf("GetCIStatus: unexpected error: %v", err)
+	if _, err := adapter.manualGate(context.Background(), scmOwner, scmRepo, pipeline); err != nil {
+		t.Fatalf("manualGate: unexpected error: %v", err)
 	}
 
-	if len(requestPaths) != 2 {
-		t.Fatalf("requests = %d, want 2 (the merge-request read then one statuses request); paths: %v", len(requestPaths), requestPaths)
+	if len(requestPaths) != 1 {
+		t.Fatalf("requests = %d, want 1 (manualGate must issue exactly one request); paths: %v", len(requestPaths), requestPaths)
 	}
-	if !strings.HasSuffix(requestPaths[0], wantMRSuffix) {
-		t.Errorf("first request path = %q, want it to end with %q", requestPaths[0], wantMRSuffix)
-	}
-	if !strings.HasSuffix(requestPaths[1], wantStatusesSuffix) {
-		t.Errorf("second request path = %q, want it to end with %q (the merge request's own sha %q must not be addressed)", requestPaths[1], wantStatusesSuffix, mrSHA)
+	if !strings.HasSuffix(requestPaths[0], wantStatusesSuffix) {
+		t.Errorf("request path = %q, want it to end with %q (the pipeline's own sha %q must be addressed)", requestPaths[0], wantStatusesSuffix, manualPipelineSHA)
 	}
 }
 
@@ -730,44 +1180,62 @@ func TestGetCIStatus_ManualScoping(t *testing.T) {
 func TestGetCIStatus_ManualPayloadGuard(t *testing.T) {
 	t.Parallel()
 
-	tests := []struct {
-		name string
-		sha  string
-		id   int64
-	}{
-		{"empty sha issues no statuses request", "", manualPipelineID},
-		{"zero id issues no statuses request", manualPipelineSHA, 0},
-	}
+	t.Run("zero id issues no statuses request", func(t *testing.T) {
+		t.Parallel()
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
+		mrFixture := manualHeadPipelineFixture(t, manualPipelineSHA, 0, nil)
 
-			mrFixture := manualHeadPipelineFixture(t, tt.sha, tt.id, nil)
-
-			var requests atomic.Int32
-			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				requests.Add(1)
-				if strings.Contains(r.URL.Path, "/statuses") {
-					t.Errorf("unexpected request to %s, want no statuses request", r.URL.Path)
-				}
-				w.Header().Set("Content-Type", "application/json")
-				_, _ = w.Write(mrFixture)
-			}))
-			defer srv.Close()
-
-			adapter := mustSCMAdapter(t, srv.URL)
-			got, err := adapter.GetCIStatus(context.Background(), testPRNumber, scmOwner, scmRepo)
-			if got != "" {
-				t.Errorf("GetCIStatus() = %q, want empty string", got)
+		var requests atomic.Int32
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			requests.Add(1)
+			if strings.Contains(r.URL.Path, "/statuses") {
+				t.Errorf("unexpected request to %s, want no statuses request", r.URL.Path)
 			}
-			adaptertest.AssertSCMErrorKind(t, err, domain.ErrSCMPayload)
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write(mrFixture)
+		}))
+		defer srv.Close()
 
-			if n := requests.Load(); n != 1 {
-				t.Errorf("requests = %d, want 1 (the merge-request read alone; no statuses request)", n)
-			}
-		})
-	}
+		adapter := mustSCMAdapter(t, srv.URL)
+		got, err := adapter.GetCIStatus(context.Background(), testPRNumber, scmOwner, scmRepo)
+		if got != "" {
+			t.Errorf("GetCIStatus() = %q, want empty string", got)
+		}
+		adaptertest.AssertSCMErrorKind(t, err, domain.ErrSCMPayload)
+
+		if n := requests.Load(); n != 1 {
+			t.Errorf("requests = %d, want 1 (the merge-request read alone; no statuses request)", n)
+		}
+	})
+
+	// An empty pipeline sha reaches manualGate only through the
+	// generated-merge-ref exempt path once a non-empty merge-request sha
+	// is present, since a non-exempt divergence answers the
+	// head-comparison deferral first. The direct call keeps manualGate's
+	// own guard covered independent of that routing.
+	t.Run("empty sha issues no statuses request", func(t *testing.T) {
+		t.Parallel()
+
+		pipeline := &gitlabPipeline{Status: "manual", ID: manualPipelineID, SHA: ""}
+
+		var requests atomic.Int32
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			requests.Add(1)
+			t.Errorf("unexpected request to %s, want no request issued", r.URL.Path)
+		}))
+		defer srv.Close()
+
+		adapter := mustSCMAdapter(t, srv.URL)
+		got, err := adapter.manualGate(context.Background(), scmOwner, scmRepo, pipeline)
+		if got != "" {
+			t.Errorf("manualGate() = %q, want empty string", got)
+		}
+		adaptertest.AssertSCMErrorKind(t, err, domain.ErrSCMPayload)
+
+		if n := requests.Load(); n != 0 {
+			t.Errorf("requests = %d, want 0 (an empty pipeline sha must not reach the network)", n)
+		}
+	})
 }
 
 func TestMapPipelineStatus_RecognizesAllStatuses(t *testing.T) {

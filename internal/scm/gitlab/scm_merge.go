@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/scm/scmcore"
@@ -40,10 +41,19 @@ type gitlabMergeRequest struct {
 // ID and SHA address the pipeline's own job set. The merge request's own
 // sha is not interchangeable with SHA: nothing re-validates head_pipeline
 // against the current head, so the two can disagree.
+//
+// Ref and Source together recognize a pipeline the platform generated for
+// this merge request and ran on a ref whose commit exists in neither
+// branch. Neither field carries that meaning alone: a branch name can
+// imitate a generated ref and the platform reports Ref verbatim, and a
+// detached merge-request pipeline also reports Source as a
+// platform-generated value while its SHA equals the merge request's own.
 type gitlabPipeline struct {
 	Status string `json:"status"`
 	ID     int64  `json:"id"`
 	SHA    string `json:"sha"`
+	Ref    string `json:"ref"`
+	Source string `json:"source"`
 }
 
 // fetchMergeRequest issues GET /projects/{projectPath}/merge_requests/{prNumber}
@@ -169,21 +179,52 @@ func mapPipelineStatus(status string) (gate scmcore.CIGate, recognized bool) {
 	}
 }
 
+// isGeneratedMergeRefPipeline reports whether pipeline is one the
+// platform generated for merge request prNumber and ran on a ref whose
+// commit exists in neither branch: a merged-results pipeline or a
+// merge-train pipeline. It returns false for every other input,
+// including a pipeline with an empty ref or an empty source, and for a
+// pipeline generated for a different merge request.
+//
+// The comparison is an exact whole-string match on both source and ref,
+// never a prefix or suffix test over ref alone: a branch can be named
+// after a generated ref, and only source is a value a repository writer
+// cannot forge.
+func isGeneratedMergeRefPipeline(pipeline *gitlabPipeline, prNumber int) bool {
+	if pipeline.Source != "merge_request_event" {
+		return false
+	}
+	prefix := "refs/merge-requests/" + strconv.Itoa(prNumber) + "/"
+	return pipeline.Ref == prefix+"merge" || pipeline.Ref == prefix+"train"
+}
+
 // GetCIStatus returns the merge-gate CI conclusion for the PR head,
 // mapped from the merge request's head_pipeline status through
 // [mapPipelineStatus]: one of [scmcore.CIGateSuccess],
 // [scmcore.CIGatePending], or [scmcore.CIGateFailing], or the empty
-// [scmcore.CIGateAbsent] when the head carries no pipeline. A skipped
-// pipeline resolves to CIGateSuccess, since the platform reports it only
-// for a job set with no failing conclusion. A manual pipeline resolves to
-// the verdict computed over that pipeline's own job set, through
-// [GitLabSCMAdapter.manualGate]; an empty job set holds at CIGatePending
-// rather than reporting the absent value. A status outside the recognized
-// set logs one WARN naming the observed value so a stalled gate is
-// diagnosable at the tick it stalls. The platform already folds
-// externally reported commit statuses into head_pipeline for the twelve
-// other statuses, so no second request is issued for them; manual is the
-// exception that pays for one job-set read.
+// [scmcore.CIGateAbsent] when the head carries no pipeline. The mapping
+// applies only to a head pipeline that describes the merge request's
+// current head, established by comparing head_pipeline.sha against the
+// merge request's own sha; a merged-results or merge-train pipeline
+// generated for this merge request is exempt from that comparison,
+// through [isGeneratedMergeRefPipeline], because no REST field relates
+// its SHA to the merge request head. A head pipeline describing a
+// superseded commit resolves to CIGatePending with one WARN naming both
+// SHAs and the pipeline id, before either the exemption or the manual
+// arm are considered. A merge request whose response carries a head
+// pipeline but no head SHA of its own fails as a [*domain.SCMError] of
+// kind [domain.ErrSCMPayload], since head identity cannot be established
+// against an absent head. A skipped pipeline resolves to CIGateSuccess,
+// since the platform reports it only for a job set with no failing
+// conclusion. A manual pipeline resolves to the verdict computed over
+// that pipeline's own job set, through [GitLabSCMAdapter.manualGate]; an
+// empty job set holds at CIGatePending rather than reporting the absent
+// value. A status outside the recognized set logs one WARN naming the
+// observed value so a stalled gate is diagnosable at the tick it stalls.
+// The platform already folds externally reported commit statuses into
+// head_pipeline for the twelve other statuses, so no second request is
+// issued for them; manual is the exception that pays for one job-set
+// read.
 func (a *GitLabSCMAdapter) GetCIStatus(ctx context.Context, prNumber int, owner, repo string) (string, error) {
 	mr, err := a.fetchMergeRequest(ctx, prNumber, owner, repo)
 	if err != nil {
@@ -192,6 +233,26 @@ func (a *GitLabSCMAdapter) GetCIStatus(ctx context.Context, prNumber int, owner,
 	if mr.HeadPipeline == nil {
 		return string(scmcore.CIGateAbsent), nil
 	}
+	if mr.SHA == "" {
+		return "", &domain.SCMError{
+			Kind:    domain.ErrSCMPayload,
+			Message: "merge request response missing head sha",
+		}
+	}
+
+	if isGeneratedMergeRefPipeline(mr.HeadPipeline, prNumber) {
+		a.log.Debug("head pipeline runs on a generated merge-request ref",
+			slog.String("pipeline_ref", mr.HeadPipeline.Ref),
+			slog.Int64("pipeline_id", mr.HeadPipeline.ID),
+			slog.String("pipeline_source", mr.HeadPipeline.Source))
+	} else if !strings.EqualFold(mr.HeadPipeline.SHA, mr.SHA) {
+		a.log.Warn("head pipeline does not describe the merge request head",
+			slog.String("merge_request_sha", mr.SHA),
+			slog.String("head_pipeline_sha", mr.HeadPipeline.SHA),
+			slog.Int64("pipeline_id", mr.HeadPipeline.ID))
+		return string(scmcore.CIGatePending), nil
+	}
+
 	if mr.HeadPipeline.Status == "manual" {
 		return a.manualGate(ctx, owner, repo, mr.HeadPipeline)
 	}
@@ -206,6 +267,14 @@ func (a *GitLabSCMAdapter) GetCIStatus(ctx context.Context, prNumber int, owner,
 
 // manualGate resolves the merge-gate verdict for a manual head pipeline
 // from that pipeline's own job set, folded through [scmcore.MergeGate].
+//
+// Its caller, [GitLabSCMAdapter.GetCIStatus], establishes head identity,
+// the head-sha comparison and the generated-merge-ref exemption, before
+// calling manualGate, so on the ordinary matching path the empty-sha half
+// of the guard below is defense in depth rather than the route by which
+// this function is ordinarily reached. The exempt path skips that
+// comparison entirely and is the ordinary way to reach manualGate with an
+// empty pipeline sha.
 //
 // A missing sha or a zero id returns a [*domain.SCMError] of kind
 // [domain.ErrSCMPayload] and issues no request: the platform answers a
