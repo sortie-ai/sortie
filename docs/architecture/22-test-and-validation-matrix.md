@@ -273,6 +273,16 @@ Unless otherwise noted, Sections 17.1 through 17.7 are `Core Conformance`. Bulle
 - Missing verdict treated as iterate (non-final) / pass (final)
 - Verification command timeout does not block remaining commands
 - Review progress visible in runtime snapshot via selfReviewCh
+- Self-review is admitted from the agent's completion signal (`needs-human-review`), not only
+  from turn-budget exhaustion
+- A `blocked` signal skips self-review and remains an immediate exit, without entering the phase
+- The status file is removed on admission so self-review does not re-observe the signal that
+  admitted it
+- A `needs-human-review` signal read inside self-review is consumed and does not abort the loop
+- A `blocked` signal read inside self-review aborts the phase, and becomes the run's exit reason
+  on a run the completion signal admitted
+- A deployment with self-review disabled treats the completion signal exactly as before, ending
+  the run without entering the phase
 - On an SCM platform that exposes no bot-account marker, a `CHANGES_REQUESTED` review whose author
   matches the operator-configured `bot_usernames` allowlist does not trigger the human
   `review_comments` reaction
