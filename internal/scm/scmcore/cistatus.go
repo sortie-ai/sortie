@@ -4,7 +4,8 @@
 // to, the merge-conflict promotion and already-merged marker, and the
 // bot-author and event-id primitives. It imports internal/domain only, so
 // every forge adapter can depend on it without depending on a sibling
-// forge.
+// forge. The orchestrator also depends on it directly for bot-author
+// classification, without depending on any forge adapter.
 package scmcore
 
 import "github.com/sortie-ai/sortie/internal/domain"

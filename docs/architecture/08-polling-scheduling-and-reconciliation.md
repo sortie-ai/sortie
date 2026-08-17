@@ -204,9 +204,12 @@ Part D: Review comment reconciliation (when `reactions.review_comments` is confi
     `ReviewReactionData`.
   - If the call fails: increment backoff counter, set `PendingRetryAt` with exponential
     backoff, re-enqueue, and continue.
-  - Filter out outdated comments. Compute max timestamp for debounce gating.
+  - Filter out outdated comments, then drop any surviving comment whose author matches
+    `reactions.bot_review.bot_usernames` (Section 11D.2's allowlist arm, applied here rather than
+    inside the adapter). Compute max timestamp over the surviving set for debounce gating; an
+    excluded comment does not raise `LastEventAt`.
   - If no actionable comments: re-enqueue with poll interval delay.
-  - Build fingerprint from sorted non-outdated comment IDs (SHA-256 hash).
+  - Build fingerprint from the sorted IDs of the surviving comment set (SHA-256 hash).
   - Check `reaction_fingerprints` table: if the fingerprint matches and is marked dispatched,
     re-enqueue with the poll interval delay and continue.
   - If within debounce window (`now - LastEventAt < debounce_ms`): defer and re-enqueue.

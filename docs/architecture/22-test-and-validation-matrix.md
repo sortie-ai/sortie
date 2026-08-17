@@ -273,6 +273,14 @@ Unless otherwise noted, Sections 17.1 through 17.7 are `Core Conformance`. Bulle
 - Missing verdict treated as iterate (non-final) / pass (final)
 - Verification command timeout does not block remaining commands
 - Review progress visible in runtime snapshot via selfReviewCh
+- On an SCM platform that exposes no bot-account marker, a `CHANGES_REQUESTED` review whose author
+  matches the operator-configured `bot_usernames` allowlist does not trigger the human
+  `review_comments` reaction
+- A human-authored `CHANGES_REQUESTED` review still dispatches the human `review_comments`
+  reaction, covered by the same test as the prior bullet
+- An author the platform marks as a bot is excluded exactly as today, an author absent from the
+  allowlist dispatches exactly as today, and an allowlisted author the platform does not mark as a
+  bot is now excluded from the human loop instead of driving both the human and the bot-review loop
 
 ### 17.5 Coding-Agent Adapter Client
 

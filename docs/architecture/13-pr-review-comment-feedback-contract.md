@@ -25,16 +25,22 @@ type SCMAdapter interface {
   from the tracker project configuration.
 - Returns a non-nil (possibly empty) `[]ReviewComment` on success or a `*SCMError` on failure.
 - Implementations MUST be safe for concurrent use.
-- Only comments from `CHANGES_REQUESTED` reviews are returned. Approved reviews, comment-only
-  reviews, and bot comments (`user.type == "Bot"`) are excluded.
+- Only comments from `CHANGES_REQUESTED` reviews are returned. Approved reviews and comment-only
+  reviews are excluded here. Bot exclusion at this layer is platform-intrinsic only: an
+  implementation excludes an author its platform reports as an automated bot account
+  (`user.type == "Bot"` on GitHub); it does not consult the operator's `bot_usernames` allowlist.
+  The reaction layer applies that second arm on the returned set, before debounce, fingerprint,
+  and dispatch (§11B.4 step f, §11D.2).
 
 **Gitea adapter.** A Gitea SCM adapter registers under kind `gitea`, at parity with the GitHub
 adapter. It normalizes Gitea's native `REQUEST_CHANGES` review state to the `CHANGES_REQUESTED`
 decision this contract uses, skips dismissed reviews, and deduplicates comments by identifier.
 Gitea users carry no `type: Bot` marker, so `FetchPendingReviews` on Gitea cannot exclude a
 bot-authored changes-requested review the way the GitHub adapter's platform-marker check does;
-automated-reviewer feedback is separated instead through the bot-review reaction's username
-allowlist (§11D). The platform reports the two diff sides as separate line fields rather than one
+on Gitea, the reaction-layer username allowlist (§11D) is the only classification signal that
+separates automated-reviewer feedback from human feedback, and it now applies on every provider
+rather than only where the platform exposes no bot marker. The platform reports the two diff sides
+as separate line fields rather than one
 signed offset, so a comment carries the line of the side it is anchored to, and `outdated` stays
 false because the route exposes no invalidation signal.
 
@@ -120,9 +126,12 @@ CI status reconciliation. The flow is:
       `max_continuation_turns`, escalate (Section 11B.6) and continue.
    d. Call `SCMAdapter.FetchPendingReviews(ctx, pr_number, owner, repo)`.
    e. On fetch error: increment backoff, set `PendingRetryAt`, re-enqueue, continue.
-   f. Filter outdated comments. Compute max `submitted_at` timestamp for debounce.
+   f. Filter outdated comments, then drop any surviving comment whose author matches
+      `reactions.bot_review.bot_usernames` (§11D.2's allowlist arm). Compute max `submitted_at`
+      timestamp over the surviving set for debounce; an excluded comment does not raise
+      `LastEventAt`.
    g. If no actionable comments: re-enqueue with poll interval delay and continue.
-   h. Build fingerprint: `sha256(sorted(comment_id_1, comment_id_2, ...))` of non-outdated IDs.
+   h. Build fingerprint: `sha256(sorted(comment_id_1, comment_id_2, ...))` of the surviving IDs.
    i. Upsert fingerprint in `reaction_fingerprints` (kind `review`). If stored fingerprint
       matches and is marked dispatched: skip, re-enqueue with poll interval delay.
    j. If `now - LastEventAt < debounce_ms`: set `PendingRetryAt = LastEventAt + debounce_ms`,

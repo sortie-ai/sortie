@@ -47,6 +47,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   anchor that a later push has superseded.
   ([#778](https://github.com/sortie-ai/sortie/issues/778))
 
+- A review comment whose author is listed in `reactions.bot_review.bot_usernames`
+  no longer triggers the human `review_comments` reaction. The allowlist
+  previously suppressed an author only from the bot-review loop, so an
+  allowlisted reviewer's `CHANGES_REQUESTED` review also drove the human
+  loop on any provider with a bot-account marker, consuming two
+  independent continuation budgets for the same feedback. On Gitea, which
+  exposes no bot-account marker at all, the allowlist is the only
+  classification signal that exists, so a bot review there drove the human
+  loop unconditionally. The exclusion requires an active
+  `reactions.bot_review` block, because that is where `bot_usernames`
+  lives.
+  ([#665](https://github.com/sortie-ai/sortie/issues/665))
+
 ## [1.19.0] - 2026-08-12
 
 ### Added

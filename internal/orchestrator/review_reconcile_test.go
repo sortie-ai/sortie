@@ -1,8 +1,14 @@
 package orchestrator
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"fmt"
+	"log/slog"
+	"regexp"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -223,6 +229,48 @@ func defaultReviewConfig() ReviewReactionConfig {
 		PollIntervalMS:       60000,
 		DebounceMS:           30000,
 		MaxContinuationTurns: 3,
+	}
+}
+
+// Log messages asserted by the bot-allowlist exclusion table test, kept in
+// sync with the literal strings reconcileReviewComments logs.
+const (
+	reviewExclusionDebugMsg = "review comments excluded by bot allowlist"
+	reviewDispatchInfoMsg   = "review comments detected, scheduling review-fix dispatch"
+)
+
+// findLogLine returns the first line in logOutput whose msg attribute
+// equals msg, or the empty string when no such line exists.
+func findLogLine(logOutput, msg string) string {
+	want := `msg="` + msg + `"`
+	for line := range strings.SplitSeq(logOutput, "\n") {
+		if strings.Contains(line, want) {
+			return line
+		}
+	}
+	return ""
+}
+
+// assertLogLineHasIntAttr fails the test unless logOutput contains a line
+// for msg carrying key=want as a whole attribute (word-boundary matched,
+// so a want of 1 cannot be satisfied by an actual value of 10).
+func assertLogLineHasIntAttr(t *testing.T, logOutput, msg, key string, want int) {
+	t.Helper()
+	line := findLogLine(logOutput, msg)
+	if line == "" {
+		t.Fatalf("log output missing line with msg %q; log=%s", msg, logOutput)
+	}
+	pattern := regexp.MustCompile(fmt.Sprintf(`\b%s=%d\b`, regexp.QuoteMeta(key), want))
+	if !pattern.MatchString(line) {
+		t.Errorf("log line %q missing %s=%d", line, key, want)
+	}
+}
+
+// assertLogLacksLine fails the test if logOutput contains any line for msg.
+func assertLogLacksLine(t *testing.T, logOutput, msg string) {
+	t.Helper()
+	if line := findLogLine(logOutput, msg); line != "" {
+		t.Errorf("log output contains unexpected line with msg %q: %s", msg, line)
 	}
 }
 
@@ -686,6 +734,181 @@ func TestReconcileReviewComments_TurnCapExceeded_CrossKindIsolation(t *testing.T
 	}
 	if store.deleteFingerprintCalls != 1 {
 		t.Errorf("DeleteReactionFingerprint calls = %d, want 1 (the review kind's own fingerprint)", store.deleteFingerprintCalls)
+	}
+}
+
+// TestReconcileReviewComments_BotAllowlistExclusion verifies that
+// reconcileReviewComments drops a fetched comment whose author matches
+// params.BotReviewConfig.BotUsernames before the fingerprint and the
+// dispatch decision, leaving comments from non-allowlisted authors and
+// comments with no known author untouched.
+func TestReconcileReviewComments_BotAllowlistExclusion(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name              string
+		issueID           string
+		comments          []domain.ReviewComment
+		allowlist         []string
+		wantDispatch      bool
+		wantUpsertCalls   int
+		wantSurvivingIDs  []string
+		wantExcludedCount int
+	}{
+		{
+			name:    "single allowlisted author excluded, no dispatch",
+			issueID: "ISS-R-BOT-1",
+			comments: []domain.ReviewComment{
+				{ID: "1", Reviewer: "houndci-bot", SubmittedAt: reviewBaseTime.Add(-5 * time.Minute)},
+			},
+			allowlist:         []string{"houndci-bot"},
+			wantDispatch:      false,
+			wantUpsertCalls:   0,
+			wantExcludedCount: 1,
+		},
+		{
+			name:    "single non-allowlisted author dispatches as today",
+			issueID: "ISS-R-BOT-2",
+			comments: []domain.ReviewComment{
+				{ID: "2", Reviewer: "alice", SubmittedAt: reviewBaseTime.Add(-5 * time.Minute)},
+			},
+			allowlist:         []string{"houndci-bot"},
+			wantDispatch:      true,
+			wantUpsertCalls:   1,
+			wantSurvivingIDs:  []string{"2"},
+			wantExcludedCount: 0,
+		},
+		{
+			name:    "mixed set dispatches only surviving comments",
+			issueID: "ISS-R-BOT-3",
+			comments: []domain.ReviewComment{
+				{ID: "3", Reviewer: "houndci-bot", SubmittedAt: reviewBaseTime.Add(-5 * time.Minute)},
+				{ID: "4", Reviewer: "alice", SubmittedAt: reviewBaseTime.Add(-5 * time.Minute)},
+			},
+			allowlist:         []string{"houndci-bot"},
+			wantDispatch:      true,
+			wantUpsertCalls:   1,
+			wantSurvivingIDs:  []string{"4"},
+			wantExcludedCount: 1,
+		},
+		{
+			name:    "case-differing allowlist entry still excludes",
+			issueID: "ISS-R-BOT-4",
+			comments: []domain.ReviewComment{
+				{ID: "5", Reviewer: "houndci-bot", SubmittedAt: reviewBaseTime.Add(-5 * time.Minute)},
+			},
+			allowlist:         []string{"Houndci-Bot"},
+			wantDispatch:      false,
+			wantUpsertCalls:   0,
+			wantExcludedCount: 1,
+		},
+		{
+			name:    "nil allowlist excludes nothing",
+			issueID: "ISS-R-BOT-5",
+			comments: []domain.ReviewComment{
+				{ID: "6", Reviewer: "houndci-bot", SubmittedAt: reviewBaseTime.Add(-5 * time.Minute)},
+			},
+			allowlist:         nil,
+			wantDispatch:      true,
+			wantUpsertCalls:   1,
+			wantSurvivingIDs:  []string{"6"},
+			wantExcludedCount: 0,
+		},
+		{
+			name:    "empty reviewer not excluded even with empty-string allowlist entry",
+			issueID: "ISS-R-BOT-6",
+			comments: []domain.ReviewComment{
+				{ID: "7", Reviewer: "", SubmittedAt: reviewBaseTime.Add(-5 * time.Minute)},
+			},
+			allowlist:         []string{""},
+			wantDispatch:      true,
+			wantUpsertCalls:   1,
+			wantSurvivingIDs:  []string{"7"},
+			wantExcludedCount: 0,
+		},
+		{
+			name:    "outdated-and-allowlisted comment does not raise excluded_count",
+			issueID: "ISS-R-BOT-7",
+			comments: []domain.ReviewComment{
+				{ID: "8", Reviewer: "houndci-bot", Outdated: true, SubmittedAt: reviewBaseTime.Add(-1 * time.Hour)},
+				{ID: "9", Reviewer: "houndci-bot", SubmittedAt: reviewBaseTime.Add(-5 * time.Minute)},
+				{ID: "10", Reviewer: "alice", SubmittedAt: reviewBaseTime.Add(-5 * time.Minute)},
+			},
+			allowlist:         []string{"houndci-bot"},
+			wantDispatch:      true,
+			wantUpsertCalls:   1,
+			wantSurvivingIDs:  []string{"10"},
+			wantExcludedCount: 1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+
+			state := stateWithReviewReaction(t, tt.issueID, 10)
+			rkey := ReactionKey(tt.issueID, ReactionKindReview)
+
+			store := &reviewReconcileStore{}
+			metrics := newReviewMetricsSpy()
+			scm := &mockSCMAdapter{comments: tt.comments}
+			params := reviewParams(store, scm, nil)
+			params.BotReviewConfig.BotUsernames = tt.allowlist
+
+			var buf bytes.Buffer
+			logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+			reconcileReviewComments(state, params, logger, context.Background(), metrics)
+
+			_, rePending := state.PendingReactions[rkey]
+			if tt.wantDispatch && rePending {
+				t.Error("PendingReactions entry re-enqueued; want consumed by dispatch")
+			}
+			if !tt.wantDispatch && !rePending {
+				t.Error("PendingReactions entry consumed; want re-enqueued (all comments excluded)")
+			}
+
+			if store.upsertFingerprintCalls != tt.wantUpsertCalls {
+				t.Errorf("UpsertReactionFingerprint calls = %d, want %d", store.upsertFingerprintCalls, tt.wantUpsertCalls)
+			}
+
+			wantDispatchCount := 0
+			if tt.wantDispatch {
+				wantDispatchCount = 1
+			}
+			if metrics.reviewChecks["dispatched"] != wantDispatchCount {
+				t.Errorf(`IncReviewChecks("dispatched") = %d, want %d`, metrics.reviewChecks["dispatched"], wantDispatchCount)
+			}
+
+			logOutput := buf.String()
+			if tt.wantExcludedCount > 0 {
+				assertLogLineHasIntAttr(t, logOutput, reviewExclusionDebugMsg, "excluded_count", tt.wantExcludedCount)
+			} else {
+				assertLogLacksLine(t, logOutput, reviewExclusionDebugMsg)
+			}
+
+			if !tt.wantDispatch {
+				return
+			}
+
+			retry, ok := state.RetryAttempts[tt.issueID]
+			if !ok {
+				t.Fatal("retry not scheduled after dispatch; want scheduled")
+			}
+			reviewCtx, ok := retry.ContinuationContext["review_comments"].([]map[string]any)
+			if !ok {
+				t.Fatalf("ContinuationContext[review_comments] = %#v, want []map[string]any", retry.ContinuationContext["review_comments"])
+			}
+			gotIDs := make([]string, len(reviewCtx))
+			for i, m := range reviewCtx {
+				gotIDs[i], _ = m["id"].(string)
+			}
+			if !slices.Equal(gotIDs, tt.wantSurvivingIDs) {
+				t.Errorf("surviving comment ids = %v, want %v", gotIDs, tt.wantSurvivingIDs)
+			}
+
+			assertLogLineHasIntAttr(t, logOutput, reviewDispatchInfoMsg, "excluded_count", tt.wantExcludedCount)
+		})
 	}
 }
 
