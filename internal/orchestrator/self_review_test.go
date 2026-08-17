@@ -518,6 +518,28 @@ func TestAssembleReviewPrompt_PreviousFeedback(t *testing.T) {
 	}
 }
 
+func TestAssembleReviewPrompt_StatusFileInstruction(t *testing.T) {
+	t.Parallel()
+
+	issue := domain.Issue{ID: "ISS-1", Title: "Fix"}
+	prompt := assembleReviewPrompt(issue, "", false, nil, 1, 3)
+
+	checks := []struct {
+		label string
+		want  string
+	}{
+		{"verdict file over status file", "report your outcome through `.sortie/review_verdict.json`"},
+		{"status file does not end the phase", "does not end the phase and does not substitute for a verdict"},
+		{"blocked remains available", "`blocked` remains"},
+		{"blocked still ends the phase", "still ends the phase"},
+	}
+	for _, c := range checks {
+		if !strings.Contains(prompt, c.want) {
+			t.Errorf("prompt missing %s (%q); prompt = %q", c.label, c.want, prompt)
+		}
+	}
+}
+
 // --- buildFixPrompt tests ---
 
 func TestBuildFixPrompt_WithIssues(t *testing.T) {

@@ -326,7 +326,12 @@ func assembleReviewPrompt(issue domain.Issue, diff string, truncated bool, vresu
 	sb.WriteString("```\n\n")
 	sb.WriteString("Use \"pass\" when the changes are correct and verification passes. Use \"iterate\" when\n")
 	sb.WriteString("issues need to be fixed. On \"iterate\", the orchestrator will give you another turn to\n")
-	sb.WriteString("fix the identified issues.\n")
+	sb.WriteString("fix the identified issues.\n\n")
+	sb.WriteString("4. During this review phase, report your outcome through `.sortie/review_verdict.json`,\n")
+	sb.WriteString("not through `.sortie/status`. Writing \"needs-human-review\" to `.sortie/status` here\n")
+	sb.WriteString("does not end the phase and does not substitute for a verdict. `blocked` remains\n")
+	sb.WriteString("available and still ends the phase — use it when you genuinely cannot carry this\n")
+	sb.WriteString("work further.\n")
 
 	return sb.String()
 }
