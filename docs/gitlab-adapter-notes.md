@@ -22,9 +22,11 @@
 > merge-request, approval, review-state, pipeline, and job surface is anchored to the same
 > version and revision, observed 2026-08-10 against a project at namespace depth three with a
 > registered runner executing real jobs. The `manual` pipeline shape and the pipeline-status
-> enumeration are anchored to the same version and revision, observed 2026-08-16. No
-> self-managed Enterprise Edition instance was ever observed, so every Enterprise Edition
-> claim rests on **[source]** plus **[docs]**.
+> enumeration are anchored to the same version and revision, observed 2026-08-16. Which route
+> populates `head_pipeline`, and how the commit-statuses route answers an abbreviated SHA, an
+> unresolvable SHA, and a `pipeline_id` matching no pipeline, are anchored to the same version
+> and revision, observed 2026-08-17. No self-managed Enterprise Edition instance was ever
+> observed, so every Enterprise Edition claim rests on **[source]** plus **[docs]**.
 >
 > **Interfaces served:** the GitLab `TrackerAdapter` and `SCMAdapter`.
 >
@@ -1722,6 +1724,14 @@ folds them through `scmcore.MergeGate`, as the `GetCIStatus` mapping below speci
 sub-object **[live-CE]**. Reading it costs nothing beyond the merge-request read that
 `GetMergeability` already performs.
 
+**`head_pipeline` appears on the detail route only.** `GET /projects/:id/merge_requests/:iid`
+carries the object. The list route `GET /projects/:id/merge_requests` returns it as `null` for
+all five merge requests of the same project, including the two whose detail responses carry a
+pipeline, read on the same token seconds apart **[live-CE]**. A fold sourcing the field from a
+list response would find no pipeline anywhere and answer `CIGateAbsent` for every merge
+request, which the auto-merge reconciler treats as merge-eligible, so the fold reads the
+detail route.
+
 **`head_pipeline` is an association, not a derived field.** The REST entity exposes the
 `head_pipeline` association verbatim
 ([`lib/api/entities/merge_request.rb`](https://gitlab.com/gitlab-org/gitlab/-/blob/v19.2.1-ee/lib/api/entities/merge_request.rb))
@@ -1821,6 +1831,15 @@ The job-set read is one request in every observed case: the four fixtures return
 load-bearing rather than defensive. A commit carrying two pipelines returned both pipelines'
 entries unfiltered (`X-Total: 2`) and exactly one entry under each `pipeline_id` value
 (`X-Total: 1`), and `head_pipeline` moved to the newer pipeline **[live-CE]**.
+
+Two addressing mistakes on that route fail quietly rather than loudly. An abbreviated
+12-character SHA returns `200` with an empty array, while a well-formed but unresolvable
+40-character SHA returns `404` carrying `404 Commit Not Found` **[live-CE]**. A `pipeline_id`
+of `0`, which matches no pipeline, likewise returns `200` with an empty array rather than an
+error, on the same commit whose unscoped read returns three entries **[live-CE]**. A
+mis-addressed read is therefore indistinguishable from a pipeline carrying no job, which is
+why the `manual` arm holds at `"pending"` on an empty set rather than reporting
+`CIGateAbsent`.
 
 A project that enables the "Pipelines must succeed" setting
 (`only_allow_merge_if_pipeline_succeeds: true`) never reaches the CI read at all.
