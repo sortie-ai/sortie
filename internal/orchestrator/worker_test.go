@@ -2444,13 +2444,8 @@ func TestRunWorkerAttempt_HandoffEvidenceBaselineBoundary(t *testing.T) {
 		cfg := defaultWorkerConfig(root)
 		cfg.Agent.MaxTurns = 1
 		cfg.Tracker.HandoffEvidence = config.HandoffEvidenceObserved
-		cfg.Hooks.AfterCreate = `
-git init
-git config user.email test@example.com
-git config user.name Test
-git commit --allow-empty -m initial
-`
-		cfg.Hooks.BeforeRun = `printf 'prepared\n' > hook-output.txt`
+		cfg.Hooks.AfterCreate = "git init && git config user.email test@example.com && git config user.name Test && git commit --allow-empty -m initial"
+		cfg.Hooks.BeforeRun = "echo prepared > hook-output.txt"
 		ec := newExitCapture()
 
 		RunWorkerAttempt(context.Background(), workerTestIssue(), nil, WorkerDeps{
@@ -2481,13 +2476,8 @@ git commit --allow-empty -m initial
 		cfg := defaultWorkerConfig(root)
 		cfg.Agent.MaxTurns = 1
 		cfg.Tracker.HandoffEvidence = config.HandoffEvidenceObserved
-		cfg.Hooks.AfterCreate = `
-git init
-git config user.email test@example.com
-git config user.name Test
-git commit --allow-empty -m initial
-`
-		cfg.Hooks.BeforeRun = `printf 'prepared\n' > hook-output.txt`
+		cfg.Hooks.AfterCreate = "git init && git config user.email test@example.com && git config user.name Test && git commit --allow-empty -m initial"
+		cfg.Hooks.BeforeRun = "echo prepared > hook-output.txt"
 		ec := newExitCapture()
 
 		RunWorkerAttempt(context.Background(), workerTestIssue(), nil, WorkerDeps{
@@ -2570,12 +2560,7 @@ func TestRunWorkerAttempt_HandoffEvidencePolicyIsFrozen(t *testing.T) {
 	cfg := defaultWorkerConfig(root)
 	cfg.Agent.MaxTurns = 1
 	cfg.Tracker.HandoffEvidence = config.HandoffEvidenceObserved
-	cfg.Hooks.AfterCreate = `
-git init
-git config user.email test@example.com
-git config user.name Test
-git commit --allow-empty -m initial
-`
+	cfg.Hooks.AfterCreate = "git init && git config user.email test@example.com && git config user.name Test && git commit --allow-empty -m initial"
 	ec := newExitCapture()
 
 	RunWorkerAttempt(context.Background(), workerTestIssue(), nil, WorkerDeps{
@@ -2645,20 +2630,11 @@ func TestRunWorkerAttempt_AfterRunCommitPushCountsAsHandoffWork(t *testing.T) {
 	cfg := defaultWorkerConfig(root)
 	cfg.Agent.MaxTurns = 1
 	cfg.Tracker.HandoffEvidence = config.HandoffEvidenceObserved
-	cfg.Hooks.AfterCreate = fmt.Sprintf(`
-git init
-git config user.email test@example.com
-git config user.name Test
-git commit --allow-empty -m initial
-git branch -M main
-git remote add origin %q
-git push -u origin main
-`, remote)
-	cfg.Hooks.AfterRun = `
-git add agent-output.txt
-git commit -m after-run
-git push origin HEAD
-`
+	cfg.Hooks.AfterCreate = fmt.Sprintf(
+		"git init && git config user.email test@example.com && git config user.name Test && git commit --allow-empty -m initial && git branch -M main && git remote add origin %q && git push -u origin main",
+		filepath.ToSlash(remote),
+	)
+	cfg.Hooks.AfterRun = "git add agent-output.txt && git commit -m after-run && git push origin HEAD"
 	ec := newExitCapture()
 	var agentWorkspace string
 
