@@ -2627,18 +2627,24 @@ func TestRunWorkerAttempt_AfterRunCommitPushCountsAsHandoffWork(t *testing.T) {
 	root := t.TempDir()
 	remote := filepath.Join(t.TempDir(), "remote.git")
 	runGit(t, filepath.Dir(remote), "init", "--bare", remote)
+	issue := workerTestIssue()
+	ensured, err := workspace.Ensure(root, issue.Identifier)
+	if err != nil {
+		t.Fatalf("workspace.Ensure: %v", err)
+	}
+	initGitRepo(t, ensured.Path)
+	runGit(t, ensured.Path, "branch", "-M", "main")
+	runGit(t, ensured.Path, "remote", "add", "origin", remote)
+	runGit(t, ensured.Path, "push", "-u", "origin", "main")
+
 	cfg := defaultWorkerConfig(root)
 	cfg.Agent.MaxTurns = 1
 	cfg.Tracker.HandoffEvidence = config.HandoffEvidenceObserved
-	cfg.Hooks.AfterCreate = fmt.Sprintf(
-		"git init && git config user.email test@example.com && git config user.name Test && git commit --allow-empty -m initial && git branch -M main && git remote add origin %q && git push -u origin main",
-		filepath.ToSlash(remote),
-	)
 	cfg.Hooks.AfterRun = "git add agent-output.txt && git commit -m after-run && git push origin HEAD"
 	ec := newExitCapture()
 	var agentWorkspace string
 
-	RunWorkerAttempt(context.Background(), workerTestIssue(), nil, WorkerDeps{
+	RunWorkerAttempt(context.Background(), issue, nil, WorkerDeps{
 		TrackerAdapter: &mockTrackerAdapter{},
 		AgentAdapter: &mockAgentAdapter{
 			startSessionFn: func(_ context.Context, params domain.StartSessionParams) (domain.Session, error) {
