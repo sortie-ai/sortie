@@ -256,9 +256,9 @@ tracker:
   immediately before the agent starts. Under `off` no baseline is captured and no verdict is
   computed, so the four-condition decision stands unchanged.
 - A withheld run makes no handoff transition and no pre-write verification read, leaves the issue
-  in its active tracker state, is recorded in run history as `failed` with the verdict as its error
-  reason, and schedules the ordinary exponential-backoff failure path rather than the fixed-delay
-  continuation path.
+  in its active tracker state, is recorded in run history as `failed` with an error reason composed
+  of a reserved marker prefix, the verdict, and the policy that withheld it, and schedules the
+  ordinary exponential-backoff failure path rather than the fixed-delay continuation path.
 - Consecutive withheld outcomes are counted per issue, and reaching the ceiling parks the issue
   under a label whose name is taken from `reactions.review_comments.escalation_label`. That
   ceiling's derivation from `agent.max_sessions`, the reset rule for the count, and the two
