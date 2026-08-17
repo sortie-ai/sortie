@@ -4,10 +4,25 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/sortie-ai/sortie/internal/config"
 	"github.com/sortie-ai/sortie/internal/workspace"
 )
+
+// handoffEvidenceTimeout bounds a single workspace evidence inspection.
+//
+// The inspection runs Git subprocesses on the orchestrator's event loop, and
+// the context it inherits carries no deadline of its own: it is cancelled at
+// shutdown, and during drain it is never cancelled at all. An unresponsive
+// repository would therefore stall dispatch, agent-event processing, and
+// reconciliation for as long as the process lives. The bound is generous
+// because exceeding it is reported as a failed inspection, which yields the
+// undeterminable verdict and withholds the handoff under the strict policy.
+//
+// handoffEvidenceTimeout is a package variable, not a constant, so a test can
+// shorten it and assert that a stalled inspection still returns.
+var handoffEvidenceTimeout = 30 * time.Second
 
 type handoffEvidenceVerdict string
 
@@ -43,7 +58,10 @@ func evaluateHandoffEvidence(ctx context.Context, result WorkerResult, log *slog
 		return handoffEvidenceResult{Verdict: handoffEvidenceUndetermined, Reason: reason}
 	}
 
-	change, err := workspace.CompareHandoffEvidenceBaseline(ctx, result.WorkspacePath, *result.HandoffEvidenceBaseline)
+	compareCtx, cancel := context.WithTimeout(ctx, handoffEvidenceTimeout)
+	defer cancel()
+
+	change, err := workspace.CompareHandoffEvidenceBaseline(compareCtx, result.WorkspacePath, *result.HandoffEvidenceBaseline)
 	if err != nil {
 		return handoffEvidenceResult{
 			Verdict: handoffEvidenceUndetermined,

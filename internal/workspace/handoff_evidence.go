@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 // ErrNotGitWorkspace identifies a workspace that cannot provide a Git
@@ -189,6 +190,11 @@ func runGit(ctx context.Context, dir string, args ...string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, "git", args...) //nolint:gosec // executable is the fixed git binary; only its argument vector varies
 	cmd.Dir = dir
 	cmd.Env = append(os.Environ(), "GIT_OPTIONAL_LOCKS=0")
+	// Git can leave a child holding the output pipe — a submodule process, a
+	// filter, a credential helper. Without a wait delay, killing git on a
+	// cancelled context would still block the caller until that child exits,
+	// so the caller's deadline would not bound this call.
+	cmd.WaitDelay = 3 * time.Second
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	output, err := cmd.Output()

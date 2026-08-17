@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -1921,6 +1922,81 @@ func TestHandleWorkerExit_HandoffEvidenceOnlyAppliesToEligibleHandoff(t *testing
 			t.Errorf("handoffTransitions = %v, want [%s]", spy.handoffTransitions, handoffSkipped)
 		}
 	})
+}
+
+// stallingGitDir returns a directory holding a git shim that never produces
+// output, prepended to PATH so the evidence inspection stalls. The shim forks
+// its sleep and then exits, so the child outlives a kill of the shim itself
+// and keeps the output pipe open, which is the case a cancelled context alone
+// does not unblock.
+func stallingGitDir(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	script := "#!/bin/sh\nsleep 20\nexit 0\n"
+	if err := os.WriteFile(filepath.Join(dir, "git"), []byte(script), 0o755); err != nil { //nolint:gosec // test shim must be executable
+		t.Fatalf("writing stalling git shim: %v", err)
+	}
+	return dir
+}
+
+// TestHandleWorkerExit_HandoffEvidenceInspectionBounded verifies that the
+// workspace evidence inspection cannot block the caller indefinitely. The exit
+// handler runs on the orchestrator's single event loop and the context it
+// receives carries no deadline of its own, so a Git command that never returns
+// must be cut short by the inspection's own bound. Exceeding the bound is a
+// failed inspection, which is undeterminable and permits the handoff under the
+// observed policy.
+func TestHandleWorkerExit_HandoffEvidenceInspectionBounded(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the stalling git shim is a POSIX shell script")
+	}
+
+	const issueID = "HE-STALL"
+	dir, baseline := handoffEvidenceGitWorkspace(t)
+
+	// t.Setenv is incompatible with t.Parallel.
+	t.Setenv("PATH", stallingGitDir(t)+string(os.PathListSeparator)+os.Getenv("PATH"))
+	originalTimeout := handoffEvidenceTimeout
+	handoffEvidenceTimeout = 50 * time.Millisecond
+	t.Cleanup(func() { handoffEvidenceTimeout = originalTimeout })
+
+	store := &mockExitStore{}
+	tracker := &mockTrackerAdapter{}
+	spy := &spyMetrics{}
+	state := exitStateWithIssue(t, issueID, "In Progress")
+	params := handoffEvidenceExitParams(t, store, tracker, spy)
+	var logs bytes.Buffer
+	params.Logger = debugLogger(t, &logs)
+
+	start := time.Now()
+	HandleWorkerExit(state, WorkerResult{
+		IssueID:                 issueID,
+		Identifier:              issueID + "-ident",
+		ExitKind:                WorkerExitNormal,
+		WorkspacePath:           dir,
+		HandoffEvidencePolicy:   config.HandoffEvidenceObserved,
+		HandoffEvidenceBaseline: baseline,
+		AgentAdapter:            "mock",
+	}, params)
+	elapsed := time.Since(start)
+
+	if elapsed > 15*time.Second {
+		t.Errorf("HandleWorkerExit took %s, want the evidence inspection bounded well below the stalled command", elapsed)
+	}
+	if len(tracker.transitionCalls) != 1 {
+		t.Errorf("TransitionIssue called %d times, want 1: an undeterminable verdict permits the handoff under the observed policy", len(tracker.transitionCalls))
+	}
+	if store.runHistories[0].Status != "succeeded" {
+		t.Errorf("RunHistory.Status = %q, want succeeded", store.runHistories[0].Status)
+	}
+	for _, want := range []string{
+		`msg="handoff evidence not determinable"`,
+		`verdict="evidence not determinable"`,
+	} {
+		if !strings.Contains(logs.String(), want) {
+			t.Errorf("log output missing %q\ngot: %s", want, logs.String())
+		}
+	}
 }
 
 func TestHandleWorkerExit_HandoffTransitionSucceeds(t *testing.T) {
