@@ -464,7 +464,8 @@ simultaneously; no tool-call-based mechanism achieves this.
 1. Agent calls a tool (e.g., `tracker_api.fetch_issue`) to gather context.
 2. Agent determines the task requires a human architectural decision.
 3. Agent writes `mkdir -p .sortie && echo "blocked" > .sortie/status`.
-4. Turn completes; orchestrator reads the status file and suppresses retries.
+4. Turn completes; orchestrator reads the status file, suppresses retries, and, where the
+   dispatch drives issue state, parks the issue and applies the parking label.
 
 The two channels do not interact. A tool call cannot write to `.sortie/status` on behalf of
 the agent, and the `.sortie/status` file cannot trigger tool execution. The orchestrator

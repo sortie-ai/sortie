@@ -16,8 +16,16 @@ Tick sequence:
 4. Run the periodic workspace sweep when its tick counter is due (Section 8.7).
 5. Fetch candidate issues from tracker using active states.
 6. Sort issues by dispatch priority.
-7. Dispatch eligible issues while slots remain.
-8. Notify observability/status consumers of state changes.
+7. Rebuild the exhausted-issue set from the session and token ceilings (§14.2).
+8. Evaluate the release rule for every parked issue (§14.2): observe the tick's candidates
+   directly for a state change or a confirmed parking label's removal, then read the tracker
+   state of the parked issues the candidate fetch did not return, through one batched,
+   comment-free call. This is the only tracker call this step makes beyond the candidate fetch
+   in step 5; it is skipped when every parked issue is already a candidate.
+9. Park each candidate whose consecutive handoff-absence count has just reached the ceiling
+   (§14.2), skipped entirely under `tracker.handoff_evidence: off`.
+10. Dispatch eligible issues while slots remain.
+11. Notify observability/status consumers of state changes.
 
 Preflight runs first so the reload it forces is visible to reconciliation and to the sweep, not
 only to dispatch. If validation fails, dispatch is skipped for that tick, but configuration is
@@ -33,6 +41,7 @@ An issue is dispatch-eligible only if all are true:
 - Its state is in `active_states` and not in `terminal_states`.
 - It is not already in `running`.
 - It is not already in `claimed`.
+- It is not parked (§14.2).
 - Global concurrency slots are available.
 - Per-state concurrency slots are available.
 - Blocker rule passes: for issues in any non-running active state, do not dispatch when any blocker
@@ -116,15 +125,17 @@ Per-issue token budget (cost ceiling):
   either is reached, so whichever fills first across polling cycles is the one that fires. When
   a single evaluation finds both exhausted, the reported and logged reason names the token
   budget; the block itself is identical regardless of which ceiling triggered it.
-- The per-tick rebuild of the exhausted-issue set accounts for these ceilings and for the
-  consecutive handoff-absence ceiling (§14.2): it runs the session-count batch query when
-  `max_sessions > 0`, the token-sum batch query when `max_tokens > 0`, and the absence-count
-  batch query when `tracker.handoff_evidence` is not `off`, and unions the results. Each
-  blocked issue carries a machine-readable reason (`handoff_absence`, `token_budget` or
-  `session_budget`, absence taking precedence over both budgets and token over session)
-  surfaced in the runtime snapshot beside the exhausted set. Under `handoff_evidence: off` no
-  absence is recorded and none is queried, so the rebuild is skipped entirely when both budgets
-  are also disabled.
+- The per-tick rebuild of the exhausted-issue set accounts for these two ceilings only: it runs
+  the session-count batch query when `max_sessions > 0` and the token-sum batch query when
+  `max_tokens > 0`, and unions the results. Each blocked issue carries a machine-readable reason
+  (`token_budget` or `session_budget`, token taking precedence over session) surfaced in the
+  runtime snapshot beside the exhausted set. The rebuild is skipped entirely when both budgets
+  are disabled.
+- The consecutive handoff-absence ceiling (§14.2) is evaluated separately, by the same
+  mechanism that parks a `blocked` soft stop, after the release-evaluation step below so a
+  park released this tick is not immediately re-parked. It shares the `parked` reason
+  vocabulary with the `blocked` park rather than the exhausted-issue set's own reasons, and is
+  skipped entirely under `tracker.handoff_evidence: off`, which records no absence.
 - If the token query fails, the check fails open and dispatch proceeds, matching the session
   check. A token sum recorded before the token columns were added reads as zero.
 - A sum below the ceiling that includes at least one unmeasured run allows the dispatch and

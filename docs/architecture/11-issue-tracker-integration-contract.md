@@ -118,8 +118,17 @@ comments and applies escalation labels, none of which carries state semantics: t
 comment (`tracker.comments.on_dispatch`), the worker-exit completion and failure comments
 (`tracker.comments.on_completion`, `tracker.comments.on_failure`), the auto-merge success comment
 (§11C), a reaction escalation label or comment when a reaction's retry budget is exhausted or a
-non-retryable error occurs, and the primary-dispatch parking label applied when the consecutive
-handoff-absence ceiling is reached (§14.2). None of these is a state transition.
+non-retryable error occurs, and the primary-dispatch parking label applied both when a `blocked`
+soft stop parks an issue and when the consecutive handoff-absence ceiling is reached (§14.2).
+None of these is a state transition.
+
+The parking label is a non-state write whose later presence or absence on the issue is read back:
+the orchestrator's own release rule observes the label on a subsequent fetch of the issue to
+confirm the write took effect, and observes its absence to decide the park is released. An adapter
+that accepts a parking-label write MUST make that label visible to subsequent reads of the issue,
+in particular to the candidate fetch, so the release rule can observe it. An adapter that accepts
+the write and records nothing produces a park the label gesture can never confirm and, by design,
+therefore never release on that gesture (§14.2); the state gesture remains available regardless.
 
 Free-form ticket mutation falls outside these three writes and stays with the coding agent, which
 mutates tickets through the `tracker_api` tool subsystem (Section 10.4), part of the agent

@@ -26,10 +26,16 @@ Handoff-evidence records are part of the required operator surface:
 - An `evidence not determinable` verdict emits an `Info` record under both `observed` and `strict`,
   carrying the policy and `turns_completed`. Under `strict`, the separate withheld warning is also
   emitted because that policy converts the verdict into the absence disposition.
-- Parking at the consecutive-absence ceiling emits a `Warn` record carrying
-  `consecutive_absences`, `absence_ceiling`, and `escalation_label`. A failed label write is recorded
-  separately as an escalation error and does not suppress the parking record.
 - A run frozen to `tracker.handoff_evidence: off` emits none of these evidence records.
+
+Parking an issue, whichever trigger produced it, emits exactly one `Warn` record, message
+`"issue parked"`, carrying `reason` (`agent_blocked` or `handoff_absence`), `parked_state`
+(the tracker state recorded, empty when unobserved), and `label` (the parking label applied).
+The consecutive-absence ceiling's park additionally carries `consecutive_absences` and
+`absence_ceiling`; a `blocked` park carries neither. A failed label write is recorded separately,
+message `"park label write failed"`, at `Warn`, and does not suppress the parking record. Lifting
+a park emits one `Info` record, message `"issue unparked"`, carrying `trigger`
+(`state_changed`, `label_removed`, or `evidence_observed`) and `reason`.
 
 The periodic workspace sweep emits exactly one summary record per pass, at `Info` level, message
 `"sweep: pass complete"`, on every pass that produced a candidate set, including a pass over zero
@@ -83,7 +89,15 @@ should return:
 - `rate_limits` (latest coding-agent rate limit payload, if available)
 - `budget_exhausted_count` (number of issues currently blocked by a re-dispatch budget; always present)
 - `budget_exhausted` (sorted list of blocked issue IDs; omitted when the set is empty)
-- `budget_exhausted_reason` (map from blocked issue ID to the gate that fired, `handoff_absence`, `token_budget` or `session_budget`; `handoff_absence` takes precedence over both budgets and `token_budget` takes precedence over `session_budget` when one issue reaches more than one gate; omitted when the set is empty). The exhausted set and its reasons are rebuilt per tick from those gates (Section 8.4); an issue's reason entry exists exactly when that issue is in `budget_exhausted`.
+- `budget_exhausted_reason` (map from blocked issue ID to the gate that fired, `token_budget` or
+  `session_budget`; `token_budget` takes precedence over `session_budget` when one issue reaches
+  both gates; omitted when the set is empty). The exhausted set and its reasons are rebuilt per
+  tick from those two gates (Section 8.4); an issue's reason entry exists exactly when that issue
+  is in `budget_exhausted`.
+- `parked_count` (number of issues currently held out of primary dispatch; always present)
+- `parked` (sorted list of parked issue IDs; omitted when the set is empty)
+- `parked_reason` (map from parked issue ID to the park's reason, `agent_blocked` or
+  `handoff_absence`; omitted when the set is empty)
 
 Recommended snapshot error modes:
 
@@ -400,6 +414,7 @@ Defined metrics (label sets and buckets are specified here; see ADR-0008 for his
 | `sortie_tracker_comments_total{lifecycle,result}` | Counter | Tracker comment attempts, partitioned by lifecycle point (`dispatch`, `completion`, `failure`) and result (`success`, `error`). |
 | `sortie_handoff_transitions_total{result}` | Counter | Handoff-state dispositions, partitioned by result (`success`, `error`, `skipped`, `withheld`). `withheld` means the handoff-evidence policy selected the absence failure path before any transition attempt, distinguishing it from an ordinary worker failure. `skipped` retains its two earlier causes and does not distinguish them: the issue was no longer in an active state at worker exit, or the issue was already reported terminal and the write was suppressed (Section 11.5). All four values are counted only when `tracker.handoff_state` is configured. |
 | `sortie_dispatch_transitions_total{result}` | Counter | Dispatch-time in-progress transition attempts, partitioned by result (`success`, `error`, `skipped`). `skipped` indicates the issue was already in the target state. |
+| `sortie_issue_parks_total{reason}` | Counter | Issue park events, partitioned by reason (`agent_blocked`, `handoff_absence`). Incremented once per park, whichever trigger produced it. |
 | `sortie_dispatch_rule_match_total{layer,rule}` | Counter | Dispatch rule match outcomes, partitioned by resolution layer (`rule`, `default`, `fallback`) and matched rule name. Empty rule names report as `<none>` to bound label cardinality. |
 | `sortie_tool_calls_total{tool,result}` | Counter | Agent tool call completions, partitioned by tool name and result (`success`, `error`). |
 | `sortie_ci_status_checks_total{result}` | Counter | CI status check outcomes, partitioned by result (`passing`, `pending`, `failing`, `error`). |

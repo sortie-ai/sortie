@@ -112,7 +112,46 @@ Unless otherwise noted, Sections 17.1 through 17.7 are `Core Conformance`. Bulle
   immediately before the handoff write; a terminal result suppresses the write and a failed read
   lets it proceed
 - With no terminal states configured, no verification read is issued
-- A blocked soft stop releases the claim with no handoff and no continuation retry
+- A blocked soft stop releases the claim with no handoff and no continuation retry, and, where
+  the dispatch drives issue state, records a durable park, applies the parking label, and holds
+  the issue out of dispatch (§14.2)
+- A blocked soft stop from a dispatch that does not drive issue state records no park
+- `ShouldDispatch` and the dispatch loop's pre-built-set variant return false for a parked issue
+  regardless of the configured effort budgets
+- A retry timer firing for an already-parked issue releases the claim and deletes the retry row
+  without dispatching, under every evidence policy, and this refusal does not disturb the
+  retry lane's own ability to park a newly ceiling-exhausted issue
+- The release rule: a tracker state change unparks the issue; a confirmed parking label observed
+  absent unparks the issue; an unconfirmed label observed absent leaves the park in place; a
+  parking label observed while unconfirmed is recorded as confirmed
+- A failed parking-label write leaves the park in place with the label unconfirmed, and a later
+  release pass that still observes the label absent does not unpark the issue on that evidence
+  alone
+- A successful parking-label write does not by itself confirm the label; only a later observation
+  of the label on the issue does
+- Loading persisted park records at startup restores the runtime park set, skipping a malformed
+  record and loading a record with no recorded tracker state
+- The runtime snapshot reports the parked-issue count always, and the parked issue list and
+  reason map only when the parked set is non-empty
+- A parked issue absent from the poll tick's candidate set is read for its state through a
+  separate, filter-free tracker call, and that call carries only the parked issues the candidate
+  fetch did not return
+- Parking on the consecutive handoff-absence ceiling and parking on a blocked soft stop produce
+  the same durable record shape, differing only in the reason attributed to the park
+- Releasing an absence-ceiling park resets its consecutive-absence count, and the same poll tick
+  does not immediately re-derive the exhausted count and park the issue again
+- Releasing a `blocked` park does not touch the consecutive-absence count
+- A park held under `tracker.handoff_evidence: off` is not released by the policy, and no new
+  absence park is taken while the policy is set
+- A retry-lane absence park records no observed tracker state; the next poll tick backfills it
+  without releasing the park, and a state change observed after the backfill releases it
+- A worker exit whose own run is parked for absence and later reports a work-observed verdict
+  releases the park
+- One park produces exactly one park log record and one park counter increment, whichever
+  trigger produced it
+- The worker-exit absence park records the same tracker state the run's own terminal observation
+  resolved, not an unrecorded state, and is releasable by a later state change without an
+  intervening backfill tick
 - A dispatch that does not drive issue state performs neither the dispatch-time transition nor the
   handoff transition, and enqueues no reaction on its own exit
 - Abnormal worker exit increments retries with 10s-based exponential backoff

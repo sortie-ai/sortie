@@ -182,8 +182,11 @@ current turn normally, then breaks the turn loop — no further continuation tur
 the current worker run. This value never admits the run to the self-review phase (Section 2.3.2);
 it remains an immediate exit whether or not self-review is configured. On worker exit, the
 orchestrator MUST NOT schedule a continuation retry
-([architecture Section 8.4](architecture/08-polling-scheduling-and-reconciliation.md#84-retry-and-backoff)). The claim on the issue is released. If the issue subsequently returns
-to an active state (e.g., after a human updates it), normal dispatch eligibility resumes.
+([architecture Section 8.4](architecture/08-polling-scheduling-and-reconciliation.md#84-retry-and-backoff)). When the dispatch that produced this run drives issue state, the orchestrator
+releases the claim and parks the issue: it records a durable park, applies the configured parking
+label to the issue, and holds it out of dispatch. The park is lifted, and normal dispatch
+eligibility resumes, when the orchestrator observes either a change in the issue's tracker state
+or the removal of a parking label it has confirmed reached the tracker.
 
 To clarify the two distinct suppression effects:
 
@@ -247,9 +250,12 @@ Additionally, for `needs-human-review` only: when `tracker.handoff_state` is con
 issue is in an active tracker state, the orchestrator attempts the handoff transition between
 steps 6 and 8. See Section 2.3.2 for failure handling.
 
-After the orchestrator releases the claim, the issue becomes eligible for re-dispatch on a
-subsequent tracker poll if it still satisfies normal dispatch rules (active state, not
-claimed, not budget-exhausted).
+For `needs-human-review`, after the orchestrator releases the claim, the issue becomes eligible
+for re-dispatch on a subsequent tracker poll if it still satisfies normal dispatch rules (active
+state, not claimed, not budget-exhausted, not parked). For `blocked`, where the dispatch drove
+issue state, the orchestrator parks the issue instead (Section 2.3.1): the issue is held out of
+dispatch until the orchestrator observes a tracker state change or the removal of a confirmed
+parking label, not merely until it satisfies the ordinary rules again.
 
 #### 2.3.4 Last-state-wins semantics
 
@@ -464,12 +470,19 @@ not prevent the phase from running.
 The re-dispatch and re-block cycle is an expected operational pattern:
 
 1. Agent writes `blocked` to `.sortie/status`.
-2. Orchestrator reads the signal, exits normally, releases claim.
-3. A human updates the issue in the tracker (adds information, changes state).
-4. Next tracker poll detects the issue is active and eligible.
-5. Orchestrator dispatches a new worker run for the issue.
+2. Orchestrator reads the signal, exits normally, releases claim, records a park, and applies
+   the parking label.
+3. A human acts on the issue: either moves it to a different tracker state, or removes the
+   parking label the orchestrator has confirmed reached the tracker.
+4. The next poll tick observes the state change or the confirmed label's removal and lifts the
+   park.
+5. If the issue is now active and eligible, the orchestrator dispatches a new worker run for it.
 6. Pre-dispatch cleanup (Section 3.4) removes the stale `.sortie/status` file.
 7. Agent begins fresh work. If still blocked, it writes `blocked` again.
+
+An update to the issue that is neither a state change nor a removal of the confirmed parking
+label, for example adding a comment while leaving both the state and the label untouched, does
+not lift the park.
 
 The polling interval provides natural rate limiting for this cycle. No additional idempotency
 mechanism is required.
@@ -483,9 +496,13 @@ exit phase. The status file value determines whether the handoff transition fire
 | `.sortie/status` value | Worker exit | Handoff transition | Continuation retry |
 |---|---|---|---|
 | `needs-human-review` | Normal | Performed (if configured and issue is active) | Suppressed |
-| `blocked` | Normal | Skipped | Suppressed |
+| `blocked` | Normal | Skipped; issue parked instead where the dispatch drives issue state | Suppressed |
 | absent or unrecognized | Normal | Performed (if configured and issue is active) | Depends on handoff result |
 | (any) | Error | Skipped | Standard error retry |
+
+The parking label the orchestrator applies on a `blocked` park is a non-state write: it marks the
+issue without transitioning it, the same way the handoff transition moves the issue's state
+without touching any label.
 
 Every row that performs the handoff is additionally subject to the run's
 `tracker.handoff_evidence` verdict
@@ -818,6 +835,8 @@ An implementation conforms to this specification if it satisfies all of the foll
 7. The status file does not trigger tracker state transitions per Section 3.6.
 8. Symbolic links at any path component are treated as read errors per Section 7.2.
 9. Pre-dispatch cleanup applies the same symlink rejection as reads per Section 3.4.
+10. The orchestrator parks the issue on `blocked` where the dispatch drives issue state, and
+    holds it out of dispatch until it observes a release per Section 2.3.1 and Section 3.5.
 
 ## References
 
