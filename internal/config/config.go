@@ -100,9 +100,30 @@ type TrackerConfig struct {
 	TerminalStates  []string
 	QueryFilter     string
 	HandoffState    string
+	HandoffEvidence HandoffEvidencePolicy
 	InProgressState string
 	APIVersion      string
 	Comments        TrackerCommentsConfig
+}
+
+// HandoffEvidencePolicy controls whether the orchestrator requires
+// workspace evidence before moving an otherwise-eligible issue to its
+// configured handoff state.
+type HandoffEvidencePolicy string
+
+const (
+	HandoffEvidenceObserved HandoffEvidencePolicy = "observed"
+	HandoffEvidenceStrict   HandoffEvidencePolicy = "strict"
+	HandoffEvidenceOff      HandoffEvidencePolicy = "off"
+)
+
+// Effective returns the configured policy, applying the default for
+// zero-value TrackerConfig instances assembled by internal callers or tests.
+func (p HandoffEvidencePolicy) Effective() HandoffEvidencePolicy {
+	if p == "" {
+		return HandoffEvidenceObserved
+	}
+	return p
 }
 
 // TrackerCommentsConfig holds the boolean flags controlling whether
@@ -195,6 +216,12 @@ func NewServiceConfig(raw map[string]any) (ServiceConfig, error) {
 
 	rawTracker := extractSubMap(raw, "tracker")
 	tracker := buildTrackerConfig(rawTracker, envKeys)
+
+	handoffEvidence, err := parseHandoffEvidencePolicy(rawTracker)
+	if err != nil {
+		return ServiceConfig{}, err
+	}
+	tracker.HandoffEvidence = handoffEvidence
 
 	// Validate handoff_state: enforce string type, reject explicit empty
 	// values, and detect env var indirection that resolved to empty.
@@ -421,6 +448,32 @@ func buildTrackerConfig(m map[string]any, envKeys map[string]bool) TrackerConfig
 			OnCompletion: coerceBool(commentsMap, "on_completion"),
 			OnFailure:    coerceBool(commentsMap, "on_failure"),
 		},
+	}
+}
+
+func parseHandoffEvidencePolicy(m map[string]any) (HandoffEvidencePolicy, error) {
+	raw, exists := m["handoff_evidence"]
+	if !exists || raw == nil {
+		return HandoffEvidenceObserved, nil
+	}
+
+	value, ok := raw.(string)
+	if !ok {
+		return "", &ConfigError{
+			Field:   "tracker.handoff_evidence",
+			Message: fmt.Sprintf("expected string, got %T", raw),
+		}
+	}
+
+	policy := HandoffEvidencePolicy(value)
+	switch policy {
+	case HandoffEvidenceObserved, HandoffEvidenceStrict, HandoffEvidenceOff:
+		return policy, nil
+	default:
+		return "", &ConfigError{
+			Field:   "tracker.handoff_evidence",
+			Message: "must be one of observed, strict, or off",
+		}
 	}
 }
 

@@ -272,7 +272,60 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 	metrics.ObserveWorkerDuration(exitType, elapsed)
 	metrics.AddAgentRuntime(elapsed)
 
+	// Resolve the normal-exit disposition far enough to know whether the
+	// handoff-evidence policy changes this run's persisted status. Evidence is
+	// only consulted where the pre-existing handoff conditions already hold,
+	// and only after the higher-priority blocked and terminal dispositions have
+	// been ruled out.
+	var issueIsActive bool
+	var blockedSoftStop bool
+	var drivesIssue bool
+	var handoffPath bool
+	var observation string
+	var observationSource string
+	var terminal bool
+	var evidenceResult handoffEvidenceResult
+	var evidenceWithheld bool
+	var evidenceErr error
+	if workerResult.ExitKind == WorkerExitNormal {
+		issueIsActive = len(params.ActiveStates) == 0 || isActiveState(entry.Issue.State, params.ActiveStates)
+		blockedSoftStop = workerResult.SoftStop && workerResult.SoftStopReason == string(workspace.StatusBlocked)
+		drivesIssue = dispatchPostureForReactionKind(entry.ReactionKind).DrivesIssueState()
+		handoffPath = params.HandoffState != "" && issueIsActive && !blockedSoftStop && drivesIssue
+		observation, observationSource = resolveTerminalObservation(entry, workerResult)
+		terminal = isTerminalState(observation, params.TerminalStates)
+
+		policy := workerResult.HandoffEvidencePolicy.Effective()
+		if handoffPath && !terminal && policy != config.HandoffEvidenceOff {
+			evidenceResult = evaluateHandoffEvidence(ctx, workerResult, log)
+			if evidenceResult.Verdict == handoffEvidenceUndetermined {
+				log.Info("handoff evidence not determinable",
+					slog.String("policy", string(policy)),
+					slog.String("verdict", string(evidenceResult.Verdict)),
+					slog.String("reason", evidenceResult.Reason),
+					slog.Int("turns_completed", workerResult.TurnsCompleted),
+				)
+			}
+			evidenceWithheld = handoffEvidenceWithholds(policy, evidenceResult)
+			if evidenceWithheld {
+				evidenceErr = handoffEvidenceFailure(policy, evidenceResult)
+				log.Warn("handoff withheld by evidence policy",
+					slog.String("policy", string(policy)),
+					slog.String("verdict", string(evidenceResult.Verdict)),
+					slog.String("reason", evidenceResult.Reason),
+					slog.Int("turns_completed", workerResult.TurnsCompleted),
+				)
+				metrics.IncHandoffTransitions(handoffWithheld)
+			}
+		}
+	}
+
 	status := mapExitKindToStatus(workerResult.ExitKind)
+	runError := workerResult.Error
+	if evidenceWithheld {
+		status = "failed"
+		runError = evidenceErr
+	}
 
 	// RunHistory.Attempt is 1-based for display: first dispatch = 1,
 	// first retry = 2, etc. normalizeAttempt returns the 0-based retry
@@ -287,7 +340,7 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 		StartedAt:       entry.StartedAt.Format(time.RFC3339),
 		CompletedAt:     now.Format(time.RFC3339),
 		Status:          status,
-		Error:           errorStringPtr(workerResult.Error),
+		Error:           errorStringPtr(runError),
 		WorkflowFile:    entry.WorkflowFile,
 		TurnsCompleted:  workerResult.TurnsCompleted,
 		RuleName:        entry.RuleName,
@@ -386,25 +439,7 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 	case WorkerExitNormal:
 		state.Completed[workerResult.IssueID] = struct{}{}
 
-		// Determine whether the issue is still in an active tracker state.
-		// When ActiveStates is nil or empty, default to true (pessimistic —
-		// backward compatibility guard: continuation retry fires).
-		issueIsActive := len(params.ActiveStates) == 0 || isActiveState(entry.Issue.State, params.ActiveStates)
 		_, claimedAtExit := state.Claimed[workerResult.IssueID]
-		blockedSoftStop := workerResult.SoftStop && workerResult.SoftStopReason == string(workspace.StatusBlocked)
-		// A dispatch that does not drive issue state (a label-command
-		// posture) performs no work handoff and schedules no continuation
-		// on a clean exit, so it never takes the handoff path or the
-		// active-issue continuation-retry branch.
-		drivesIssue := dispatchPostureForReactionKind(entry.ReactionKind).DrivesIssueState()
-		handoffPath := params.HandoffState != "" && issueIsActive && !blockedSoftStop && drivesIssue
-
-		// The resolved observation feeds the terminal test only; it MUST
-		// NOT be substituted for entry.Issue.State above, because the most
-		// common non-active state at a normal exit is the handoff state
-		// itself, applied by the agent through its own tracker_api calls.
-		observation, observationSource := resolveTerminalObservation(entry, workerResult)
-		terminal := isTerminalState(observation, params.TerminalStates)
 		terminalSuppressed := false
 
 		switch {
@@ -433,6 +468,42 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 			terminalSuppressed = true
 			CancelRetry(state, workerResult.IssueID)
 			delete(state.Claimed, workerResult.IssueID)
+
+		case handoffPath && evidenceWithheld:
+			// A withheld handoff is an unsuccessful run disposition even though
+			// the agent process exited normally. Keep the issue claimed and use
+			// the ordinary exponential-backoff failure lane, not the short
+			// continuation lane.
+			if incumbent := retrySlotIncumbent(state, workerResult.IssueID); incumbent != nil {
+				logRetrySlotDeferral(log, "evidence-backoff", incumbent)
+				nextAttempt = incumbent.Attempt
+				retryDeferred = true
+			} else {
+				nextAttempt = NextAttempt(entry.RetryAttempt)
+				delayMS := computeBackoffDelay(nextAttempt, params.MaxRetryBackoffMS)
+				log.Warn("handoff evidence failure, scheduling retry",
+					slog.Any("error", evidenceErr),
+					slog.Int("next_attempt", nextAttempt),
+					slog.Int64("delay_ms", delayMS),
+				)
+				ScheduleRetry(state, ScheduleRetryParams{
+					IssueID:             workerResult.IssueID,
+					Identifier:          workerResult.Identifier,
+					DisplayID:           entry.Issue.DisplayID,
+					Attempt:             nextAttempt,
+					DelayMS:             delayMS,
+					Error:               "worker exited: " + evidenceErr.Error(),
+					LastSSHHost:         workerResult.SSHHost,
+					ContinuationContext: entry.ContinuationContext,
+					ReactionKind:        entry.ReactionKind,
+					AgentKind:           entry.AgentKind,
+					RuleName:            entry.RuleName,
+					TemplateID:          entry.TemplateID,
+					Logger:              log,
+				}, params.OnRetryFire)
+				metrics.IncRetries(triggerError)
+				retryScheduled = true
+			}
 
 		case handoffPath:
 			// Handoff: issue is active and handoff_state is configured.
@@ -1030,7 +1101,12 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 
 	switch workerResult.ExitKind {
 	case WorkerExitNormal:
-		if params.CommentsConfig.OnCompletion {
+		if evidenceWithheld {
+			if params.CommentsConfig.OnFailure {
+				commentText = buildFailureComment(sessionID, runDuration, evidenceErr, retryPending, nextAttempt)
+				lifecycle = "failure"
+			}
+		} else if params.CommentsConfig.OnCompletion {
 			if workerResult.SoftStop {
 				commentText = buildSoftStopComment(sessionID, runDuration, workerResult.TurnsCompleted, workerResult.SoftStopReason)
 			} else {

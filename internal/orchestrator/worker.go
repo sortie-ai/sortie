@@ -115,6 +115,19 @@ type WorkerResult struct {
 	// Empty if workspace preparation failed.
 	WorkspacePath string
 
+	// HandoffEvidencePolicy is frozen from the run's initial config snapshot
+	// before the baseline decision. Reloads during the run cannot change it.
+	HandoffEvidencePolicy config.HandoffEvidencePolicy
+
+	// HandoffEvidenceBaseline is the Git state captured after workspace
+	// preparation and pre-run hooks, immediately before StartSession. It is nil
+	// when capture failed or the frozen policy is off.
+	HandoffEvidenceBaseline *workspace.HandoffEvidenceBaseline
+
+	// HandoffEvidenceBaselineError records why baseline capture failed. It is
+	// nil when capture succeeded or the frozen policy is off.
+	HandoffEvidenceBaselineError error
+
 	// AgentAdapter is the agent adapter kind string used to dispatch
 	// this attempt. Equals the rule-resolved kind when dispatch routing
 	// selected a non-default agent; otherwise equals the workflow-wide
@@ -468,6 +481,7 @@ func foldLocalUsage(usage, cumulative, lastUsage domain.TokenUsage) (newCumulati
 // closure over deps.
 func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, deps WorkerDeps) {
 	cfg := deps.ConfigFunc()
+	handoffEvidencePolicy := cfg.Tracker.HandoffEvidence.Effective()
 	tmpl := deps.PromptTemplateByIDFunc(deps.TemplateID)
 	attemptInt := normalizeAttempt(attempt)
 	logger := deps.Logger
@@ -570,6 +584,8 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 	var sessionStarted bool
 	var mcpConfigPath string
 	var sessionStartedAt time.Time
+	var handoffEvidenceBaseline *workspace.HandoffEvidenceBaseline
+	var handoffEvidenceBaselineErr error
 	// localUsage is the worker's own mirror of the run-cumulative token
 	// counters, folded from any usage-bearing event on the worker
 	// goroutine; localLastUsage holds the matching last-reported
@@ -811,6 +827,15 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 		return
 	}
 
+	if handoffEvidencePolicy != config.HandoffEvidenceOff {
+		baseline, baselineErr := workspace.CaptureHandoffEvidenceBaseline(ctx, wsResult.Path)
+		if baselineErr != nil {
+			handoffEvidenceBaselineErr = baselineErr
+		} else {
+			handoffEvidenceBaseline = &baseline
+		}
+	}
+
 	session, err = deps.AgentAdapter.StartSession(ctx, domain.StartSessionParams{
 		WorkspacePath:            wsResult.Path,
 		AgentConfig:              toDomainAgentConfig(cfg.Agent),
@@ -1048,20 +1073,23 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 			finishWorkspace()
 			reported = true
 			deps.OnExit(issue.ID, WorkerResult{
-				IssueID:            issue.ID,
-				Identifier:         issue.Identifier,
-				ExitKind:           WorkerExitNormal,
-				TurnsCompleted:     turnsCompleted,
-				SessionID:          session.ID,
-				WorkspacePath:      wsResult.Path,
-				AgentAdapter:       agentKind,
-				Attempt:            attempt,
-				SSHHost:            deps.SSHHost,
-				SoftStop:           true,
-				SoftStopReason:     string(statusSignal),
-				ObservedIssueState: observedIssueState,
-				Usage:              localUsage,
-				UsageMeasured:      localMeasured,
+				IssueID:                      issue.ID,
+				Identifier:                   issue.Identifier,
+				ExitKind:                     WorkerExitNormal,
+				TurnsCompleted:               turnsCompleted,
+				SessionID:                    session.ID,
+				WorkspacePath:                wsResult.Path,
+				HandoffEvidencePolicy:        handoffEvidencePolicy,
+				HandoffEvidenceBaseline:      handoffEvidenceBaseline,
+				HandoffEvidenceBaselineError: handoffEvidenceBaselineErr,
+				AgentAdapter:                 agentKind,
+				Attempt:                      attempt,
+				SSHHost:                      deps.SSHHost,
+				SoftStop:                     true,
+				SoftStopReason:               string(statusSignal),
+				ObservedIssueState:           observedIssueState,
+				Usage:                        localUsage,
+				UsageMeasured:                localMeasured,
 			})
 			return
 		}
@@ -1178,19 +1206,22 @@ func RunWorkerAttempt(ctx context.Context, issue domain.Issue, attempt *int, dep
 
 	reported = true
 	deps.OnExit(issue.ID, WorkerResult{
-		IssueID:            issue.ID,
-		Identifier:         issue.Identifier,
-		ExitKind:           WorkerExitNormal,
-		TurnsCompleted:     turnsCompleted,
-		SessionID:          session.ID,
-		WorkspacePath:      wsResult.Path,
-		AgentAdapter:       agentKind,
-		Attempt:            attempt,
-		SSHHost:            deps.SSHHost,
-		ReviewMetadata:     reviewMeta,
-		ObservedIssueState: observedIssueState,
-		Usage:              localUsage,
-		UsageMeasured:      localMeasured,
+		IssueID:                      issue.ID,
+		Identifier:                   issue.Identifier,
+		ExitKind:                     WorkerExitNormal,
+		TurnsCompleted:               turnsCompleted,
+		SessionID:                    session.ID,
+		WorkspacePath:                wsResult.Path,
+		HandoffEvidencePolicy:        handoffEvidencePolicy,
+		HandoffEvidenceBaseline:      handoffEvidenceBaseline,
+		HandoffEvidenceBaselineError: handoffEvidenceBaselineErr,
+		AgentAdapter:                 agentKind,
+		Attempt:                      attempt,
+		SSHHost:                      deps.SSHHost,
+		ReviewMetadata:               reviewMeta,
+		ObservedIssueState:           observedIssueState,
+		Usage:                        localUsage,
+		UsageMeasured:                localMeasured,
 	})
 }
 
