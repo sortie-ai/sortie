@@ -304,16 +304,16 @@ func (s *Store) CountRunHistoryByIssue(ctx context.Context, issueID string) (int
 }
 
 // QueryConsecutiveHandoffAbsenceCounts returns the number of handoff-absence
-// failures for each requested issue since its most recent successful run.
-// Other failed or cancelled runs do not reset the sequence because they do not
-// establish that work was observed. Issues with no qualifying rows are omitted
-// from the returned map.
+// failures for each requested issue since the run at which
+// [Store.ResetHandoffAbsenceSequence] last ended that issue's sequence. Issues
+// with no qualifying rows are omitted from the returned map.
 //
-// A successful run ends the active absence sequence. On the otherwise-eligible
-// handoff path this includes a work-observed result, even when the subsequent
-// tracker handoff write fails; successful outcomes that hand off under the
-// observed or off policies also leave the active queue and therefore end that
-// dispatch sequence.
+// Only a work-observed verdict resets the sequence. A terminal status of
+// "succeeded" does not, because it is also recorded for outcomes that carry no
+// verdict at all: a blocked soft stop, a run that does not drive issue state, a
+// run whose evidence was not determinable, and every run under the off policy.
+// Counting those as a reset would let an absence sequence alternate below the
+// ceiling indefinitely.
 func (s *Store) QueryConsecutiveHandoffAbsenceCounts(ctx context.Context, issueIDs []string) (map[string]int, error) {
 	counts := make(map[string]int)
 	if len(issueIDs) == 0 {
@@ -335,13 +335,11 @@ func (s *Store) QueryConsecutiveHandoffAbsenceCounts(ctx context.Context, issueI
 		 WHERE r.issue_id IN (%s)
 		   AND r.status = 'failed'
 		   AND substr(r.error, 1, ?) = ?
-		   AND NOT EXISTS (
-		       SELECT 1
-		       FROM run_history AS succeeded
-		       WHERE succeeded.issue_id = r.issue_id
-		         AND succeeded.status = 'succeeded'
-		         AND succeeded.id > r.id
-		   )
+		   AND r.id > COALESCE((
+		       SELECT reset.reset_run_id
+		       FROM handoff_absence_resets AS reset
+		       WHERE reset.issue_id = r.issue_id
+		   ), 0)
 		 GROUP BY r.issue_id`,
 		placeholders,
 	)
@@ -364,6 +362,30 @@ func (s *Store) QueryConsecutiveHandoffAbsenceCounts(ctx context.Context, issueI
 		return nil, fmt.Errorf("query consecutive handoff absences: %w", err)
 	}
 	return counts, nil
+}
+
+// ResetHandoffAbsenceSequence ends the issue's consecutive handoff-absence
+// sequence at its most recently recorded run, so
+// [Store.QueryConsecutiveHandoffAbsenceCounts] reports zero until a further
+// absence is recorded.
+//
+// The reset point is read from run_history inside the statement rather than
+// supplied by the caller, so a work-observed run whose own history row could
+// not be persisted still clears the absences recorded before it.
+func (s *Store) ResetHandoffAbsenceSequence(ctx context.Context, issueID string) error {
+	now := time.Now().UTC().Format(time.RFC3339)
+	_, err := s.db.ExecContext(ctx, `
+		INSERT INTO handoff_absence_resets (issue_id, reset_run_id, updated_at)
+		VALUES (?, COALESCE((SELECT MAX(id) FROM run_history WHERE issue_id = ?), 0), ?)
+		ON CONFLICT (issue_id) DO UPDATE SET
+			reset_run_id = excluded.reset_run_id,
+			updated_at = excluded.updated_at`,
+		issueID, issueID, now,
+	)
+	if err != nil {
+		return fmt.Errorf("reset handoff absence sequence for %q: %w", issueID, err)
+	}
+	return nil
 }
 
 // QueryBudgetExhaustedIssues returns issue IDs from candidateIDs whose
