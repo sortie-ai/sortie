@@ -29,6 +29,7 @@ type PromMetrics struct {
 	pollCyclesTotal               *prometheus.CounterVec
 	trackerRequestsTotal          *prometheus.CounterVec
 	handoffTransitions            *prometheus.CounterVec
+	issueParksTotal               *prometheus.CounterVec
 	dispatchTransitions           *prometheus.CounterVec
 	trackerCommentsTotal          *prometheus.CounterVec
 	toolCallsTotal                *prometheus.CounterVec
@@ -145,6 +146,12 @@ func NewPromMetrics(version, goVersion string) *PromMetrics {
 		Name:      "handoff_transitions_total",
 		Help:      "Handoff state transition outcomes.",
 	}, []string{"result"})
+
+	issueParksTotal := prometheus.NewCounterVec(prometheus.CounterOpts{
+		Namespace: "sortie",
+		Name:      "issue_parks_total",
+		Help:      "Issue park events by reason.",
+	}, []string{"reason"})
 
 	dispatchTransitions := prometheus.NewCounterVec(prometheus.CounterOpts{
 		Namespace: "sortie",
@@ -290,6 +297,7 @@ func NewPromMetrics(version, goVersion string) *PromMetrics {
 		pollCyclesTotal,
 		trackerRequestsTotal,
 		handoffTransitions,
+		issueParksTotal,
 		dispatchTransitions,
 		trackerCommentsTotal,
 		toolCallsTotal,
@@ -328,6 +336,7 @@ func NewPromMetrics(version, goVersion string) *PromMetrics {
 		pollCyclesTotal:                pollCyclesTotal,
 		trackerRequestsTotal:           trackerRequestsTotal,
 		handoffTransitions:             handoffTransitions,
+		issueParksTotal:                issueParksTotal,
 		dispatchTransitions:            dispatchTransitions,
 		trackerCommentsTotal:           trackerCommentsTotal,
 		toolCallsTotal:                 toolCallsTotal,
@@ -430,6 +439,11 @@ func (p *PromMetrics) IncTrackerRequests(operation, outcome string) {
 // IncHandoffTransitions increments the handoff state transition outcome counter.
 func (p *PromMetrics) IncHandoffTransitions(outcome string) {
 	p.handoffTransitions.WithLabelValues(outcome).Inc()
+}
+
+// IncIssueParks increments the issue park counter.
+func (p *PromMetrics) IncIssueParks(reason string) {
+	p.issueParksTotal.WithLabelValues(reason).Inc()
 }
 
 // IncDispatchTransitions increments the dispatch-time in-progress transition counter.

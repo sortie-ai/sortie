@@ -125,6 +125,12 @@ type stubStore struct {
 	tokenIncompleteIDs []string
 
 	upsertSessionMetadataErr error
+
+	parkedIssues       []persistence.ParkedIssue
+	deletedParkedIDs   []string
+	labelAppliedIDs    []string
+	listParkedIssues   []persistence.ParkedIssue
+	listParkedIssueErr error
 }
 
 func (s *stubStore) AppendRunHistory(_ context.Context, run persistence.RunHistory) (persistence.RunHistory, error) {
@@ -260,6 +266,38 @@ func (s *stubStore) DeleteReactionFingerprint(_ context.Context, _, _ string) er
 
 func (s *stubStore) LatestRunCompletionByIdentifier(_ context.Context, _ []string) (map[string]string, error) {
 	return map[string]string{}, nil
+}
+
+func (s *stubStore) UpsertParkedIssue(_ context.Context, entry persistence.ParkedIssue) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.parkedIssues = append(s.parkedIssues, entry)
+	return nil
+}
+
+func (s *stubStore) DeleteParkedIssue(_ context.Context, issueID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.deletedParkedIDs = append(s.deletedParkedIDs, issueID)
+	return nil
+}
+
+func (s *stubStore) MarkParkedIssueLabelApplied(_ context.Context, issueID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.labelAppliedIDs = append(s.labelAppliedIDs, issueID)
+	return nil
+}
+
+func (s *stubStore) ListParkedIssues(_ context.Context) ([]persistence.ParkedIssue, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.listParkedIssueErr != nil {
+		return nil, s.listParkedIssueErr
+	}
+	out := make([]persistence.ParkedIssue, len(s.listParkedIssues))
+	copy(out, s.listParkedIssues)
+	return out, nil
 }
 
 // stubObserver implements [Observer] with an atomic call counter.

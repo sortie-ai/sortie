@@ -110,6 +110,12 @@ func ShouldDispatch(issue domain.Issue, state *State, activeStates, terminalStat
 		return false
 	}
 
+	// Parked issues are held out of dispatch until the release rule lifts
+	// the park, whatever the parking reason.
+	if _, parked := state.Parked[issue.ID]; parked {
+		return false
+	}
+
 	// Any non-terminal blocker blocks dispatch.
 	if isBlockedByNonTerminalSet(issue, terminalSet) {
 		return false
@@ -150,6 +156,12 @@ func ShouldDispatchWithSets(issue domain.Issue, state *State, activeSet, termina
 
 	// Issues that exhausted their effort budget are blocked from dispatch.
 	if _, exhausted := state.BudgetExhausted[issue.ID]; exhausted {
+		return false
+	}
+
+	// Parked issues are held out of dispatch until the release rule lifts
+	// the park, whatever the parking reason.
+	if _, parked := state.Parked[issue.ID]; parked {
 		return false
 	}
 

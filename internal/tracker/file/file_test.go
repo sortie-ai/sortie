@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -1120,6 +1121,54 @@ func TestAddLabel_IsANoOp(t *testing.T) {
 	if err := a.AddLabel(context.Background(), "10001", "urgent"); err != nil {
 		t.Fatalf("AddLabel: %v", err)
 	}
+}
+
+// TestAddLabel_VisibleOnSubsequentReads verifies that a label recorded
+// through AddLabel is visible on a later FetchCandidateIssues call — the
+// load-bearing read, since it is the one the orchestrator's park release
+// rule evaluates — and on a later FetchIssueByID call.
+func TestAddLabel_VisibleOnSubsequentReads(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+
+	t.Run("visible via FetchCandidateIssues", func(t *testing.T) {
+		t.Parallel()
+
+		a := newAdapter(t, fixture("basic.json"), nil)
+		if err := a.AddLabel(ctx, "10001", "needs-human"); err != nil {
+			t.Fatalf("AddLabel: %v", err)
+		}
+
+		issues, err := a.FetchCandidateIssues(ctx)
+		if err != nil {
+			t.Fatalf("FetchCandidateIssues: %v", err)
+		}
+		idx := slices.IndexFunc(issues, func(issue domain.Issue) bool { return issue.ID == "10001" })
+		if idx == -1 {
+			t.Fatal("issue 10001 not found in FetchCandidateIssues result")
+		}
+		if !slices.ContainsFunc(issues[idx].Labels, func(l string) bool { return strings.EqualFold(l, "needs-human") }) {
+			t.Errorf("FetchCandidateIssues labels = %v, want to include %q", issues[idx].Labels, "needs-human")
+		}
+	})
+
+	t.Run("visible via FetchIssueByID", func(t *testing.T) {
+		t.Parallel()
+
+		a := newAdapter(t, fixture("basic.json"), nil)
+		if err := a.AddLabel(ctx, "10001", "needs-human"); err != nil {
+			t.Fatalf("AddLabel: %v", err)
+		}
+
+		issue, err := a.FetchIssueByID(ctx, "10001")
+		if err != nil {
+			t.Fatalf("FetchIssueByID: %v", err)
+		}
+		if !slices.ContainsFunc(issue.Labels, func(l string) bool { return strings.EqualFold(l, "needs-human") }) {
+			t.Errorf("FetchIssueByID labels = %v, want to include %q", issue.Labels, "needs-human")
+		}
+	})
 }
 
 func TestCommentIssue(t *testing.T) {

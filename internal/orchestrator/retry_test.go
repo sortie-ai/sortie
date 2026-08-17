@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/sortie-ai/sortie/internal/config"
 	"github.com/sortie-ai/sortie/internal/domain"
 	"github.com/sortie-ai/sortie/internal/persistence"
 )
@@ -40,6 +41,13 @@ type mockRetryStore struct {
 	markDispatchedIssueID string
 	markDispatchedKind    string
 	markDispatchedErr     error
+
+	parkedIssues     []persistence.ParkedIssue
+	deletedParkedIDs []string
+	absenceResetOf   []string
+	upsertParkedErr  error
+	deleteParkedErr  error
+	absenceResetErr  error
 }
 
 var _ RetryTimerStore = (*mockRetryStore)(nil)
@@ -101,6 +109,21 @@ func (m *mockRetryStore) MarkReactionDispatched(_ context.Context, issueID, kind
 
 func (m *mockRetryStore) DeleteReactionFingerprint(_ context.Context, _, _ string) error {
 	return nil
+}
+
+func (m *mockRetryStore) UpsertParkedIssue(_ context.Context, entry persistence.ParkedIssue) error {
+	m.parkedIssues = append(m.parkedIssues, entry)
+	return m.upsertParkedErr
+}
+
+func (m *mockRetryStore) DeleteParkedIssue(_ context.Context, issueID string) error {
+	m.deletedParkedIDs = append(m.deletedParkedIDs, issueID)
+	return m.deleteParkedErr
+}
+
+func (m *mockRetryStore) ResetHandoffAbsenceSequence(_ context.Context, issueID string) error {
+	m.absenceResetOf = append(m.absenceResetOf, issueID)
+	return m.absenceResetErr
 }
 
 // mockRetryTracker implements domain.TrackerAdapter for retry timer tests.
@@ -3293,6 +3316,102 @@ func TestHandleRetryTimer_PausedDwellBound(t *testing.T) {
 		}
 		if secondEntry.TimerHandle != nil {
 			secondEntry.TimerHandle.Stop()
+		}
+	})
+}
+
+// TestHandleRetryTimerParkGate exercises the retry lane's two independent
+// decisions ahead of any tracker fetch: an already-parked issue is refused
+// regardless of the evidence policy, and an issue whose absence count has
+// just reached the ceiling is parked under any policy other than off.
+// Neither decision replaces the other, and a known reaction kind is exempt
+// from both.
+func TestHandleRetryTimerParkGate(t *testing.T) {
+	t.Parallel()
+
+	t.Run("already parked issue is refused under every evidence policy", func(t *testing.T) {
+		t.Parallel()
+
+		policies := []config.HandoffEvidencePolicy{"", config.HandoffEvidenceOff}
+		for _, policy := range policies {
+			t.Run(string(policy)+"_policy", func(t *testing.T) {
+				t.Parallel()
+
+				const issueID = "PARK-REFUSE"
+				store := &mockRetryStore{}
+				tracker := &mockRetryTracker{}
+				state := retryState(t, issueID, "PROJ-PARK", 1)
+				state.Parked[issueID] = &ParkedEntry{Identifier: "PROJ-PARK", Reason: parkReasonAgentBlocked}
+				params := defaultRetryParams(t, store, tracker)
+				params.HandoffEvidencePolicy = policy
+
+				HandleRetryTimer(state, issueID, params)
+
+				if _, ok := state.Claimed[issueID]; ok {
+					t.Error("claim remains after the retry timer fired for a parked issue")
+				}
+				if len(store.deletedIssueID) != 1 || store.deletedIssueID[0] != issueID {
+					t.Errorf("DeleteRetryEntry calls = %v, want [%s]", store.deletedIssueID, issueID)
+				}
+				// The discriminating assertion: a conjoined reaction-and-policy
+				// test would skip the park refusal entirely under the off
+				// policy and fall through to a tracker fetch instead.
+				if tracker.fetchCount != 0 {
+					t.Errorf("FetchIssueByID calls = %d, want 0 for an already-parked issue", tracker.fetchCount)
+				}
+				if len(store.absenceCountedIssueIDs) != 0 {
+					t.Errorf("absence query ran for %v, want none for an already-parked issue", store.absenceCountedIssueIDs)
+				}
+			})
+		}
+	})
+
+	t.Run("newly exhausted issue parks under a policy other than off", func(t *testing.T) {
+		t.Parallel()
+
+		const issueID = "PARK-NEWLY"
+		store := &mockRetryStore{absenceCounts: map[string]int{issueID: 3}}
+		tracker := &mockRetryTracker{}
+		state := retryState(t, issueID, "PROJ-NEWLY", 1)
+		params := defaultRetryParams(t, store, tracker)
+		params.MaxSessions = 0
+
+		HandleRetryTimer(state, issueID, params)
+		state.TrackerOpsWg.Wait()
+
+		if tracker.fetchCount != 0 {
+			t.Errorf("FetchIssueByID calls = %d, want 0: parking short-circuits before the fetch", tracker.fetchCount)
+		}
+		entry := state.Parked[issueID]
+		if entry == nil || entry.Reason != parkReasonHandoffAbsence {
+			t.Errorf("Parked[%s] = %+v, want reason %q", issueID, entry, parkReasonHandoffAbsence)
+		}
+	})
+
+	t.Run("known reaction kind dispatches regardless of park state or policy", func(t *testing.T) {
+		t.Parallel()
+
+		policies := []config.HandoffEvidencePolicy{"", config.HandoffEvidenceOff}
+		for _, policy := range policies {
+			t.Run(string(policy)+"_policy", func(t *testing.T) {
+				t.Parallel()
+
+				const issueID = "PARK-REACTION"
+				store := &mockRetryStore{absenceCounts: map[string]int{issueID: 99}}
+				tracker := &mockRetryTracker{fetchedIssue: candidateIssue(issueID, "PROJ-REACTION", "In Progress")}
+				state := retryState(t, issueID, "PROJ-REACTION", 1)
+				state.RetryAttempts[issueID].ReactionKind = ReactionKindReview
+				state.Parked[issueID] = &ParkedEntry{Identifier: "PROJ-REACTION", Reason: parkReasonAgentBlocked}
+				params := defaultRetryParams(t, store, tracker)
+				params.HandoffEvidencePolicy = policy
+
+				HandleRetryTimer(state, issueID, params)
+				state.TrackerOpsWg.Wait()
+
+				if tracker.fetchCount != 1 {
+					t.Errorf("FetchIssueByID calls = %d, want 1: a known reaction kind is exempt from the park gate", tracker.fetchCount)
+				}
+			})
 		}
 	})
 }

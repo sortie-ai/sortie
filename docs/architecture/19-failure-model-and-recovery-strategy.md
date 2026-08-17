@@ -56,7 +56,10 @@
 
 - Recognized `.sortie/status` signal:
   - Both values keep their existing dispositions. A `blocked` soft stop suppresses the handoff
-    transition and the continuation retry. A completion signal (`needs-human-review`) suppresses
+    transition and the continuation retry, and, where the dispatch drives issue state, parks the
+    issue instead of merely releasing the claim: it records a durable park and applies the
+    parking label, sharing both the mechanism and the release rule the consecutive-absence
+    ceiling uses below. A completion signal (`needs-human-review`) suppresses
     the continuation retry and takes the ordered handoff disposition (§7.3) unchanged: the
     transition fires only where a handoff state is configured, the issue is still active, the
     dispatch drives issue state, no terminal observation suppresses it, and the evidence verdict
@@ -92,11 +95,37 @@
     a reaction continuation retry on the same issue carries its own sequence, cannot record an
     absence, and is not cancelled here. Ceiling exhaustion is an eligibility gate rather than only a
     cancelled timer: ordinary polling and restart recovery must not silently begin another run in
-    the same exhausted absence sequence. Its representation is an implementation detail; the rule
+    the same exhausted absence sequence. The representation is fixed and shared with the `blocked`
+    park: the same durable park record, the same runtime gate, and the same release rule, tagged
+    with the reason this ceiling produced it rather than the reason a `blocked` signal did. The rule
     requires neither a second numeric setting nor a durable verdict column on `run_history`.
-  - Under `tracker.handoff_evidence: off` no absence is ever recorded, so neither the count nor the
-    gate is evaluated on any path: polling, retry firing, and worker exit all skip it. The policy
-    costs nothing and no issue is parked by this mechanism while it is selected.
+  - Under `tracker.handoff_evidence: off`, no absence is ever recorded, so the count is never
+    incremented and no *new* park is taken by this ceiling on any path: polling, retry firing, and
+    worker exit all skip the trigger, and the policy costs nothing while it is selected. This
+    governs only whether a *new* park is taken, not whether an existing one holds: a park already
+    recorded, by either trigger, is unaffected by the policy and is released only by the rule
+    below. Raising `agent.max_sessions` above the recorded count has the same narrowed effect: it
+    changes the ceiling a future count is compared against, but it does not lift a park already
+    taken, because the park is a row rather than a value re-derived from the current ceiling on
+    every tick.
+  - A park is released by either of two operator gestures, whichever the orchestrator observes
+    first, and both apply to every trigger that parks an issue, not only to this ceiling: moving
+    the issue to a tracker state different from the one recorded when it was parked, or removing
+    a parking label the orchestrator has confirmed reached the tracker. The label gesture carries
+    a confirmation guard: confirmation comes only from observing the label present on a later
+    fetch of the issue, never from the label write itself returning without error, because a
+    tracker adapter is permitted to accept a label write and record nothing. Releasing on an
+    unconfirmed label's absence would let such an adapter undo the park silently. A park taken
+    from the retry lane records no observed state at the moment it is taken, since the retry lane
+    parks ahead of its own tracker fetch by design; the first later observation backfills the
+    state without releasing the park on that same tick, so the operator's own action is never
+    mistaken for the very read that first captured the baseline. A parked issue absent from the
+    poll tick's candidate set, because it now sits in a state the deployment does not call
+    active, is still read for its state through a separate, filter-free tracker call, so the
+    state gesture reaches it exactly as it would if the issue were still a candidate. Release
+    resets the counter that produced the park, so a released absence-ceiling park does not
+    immediately re-derive the same exhausted count and park itself again; release is evaluated
+    ahead of the ceiling trigger on the same tick for exactly this reason.
   - The parking label is the resolved non-empty
     `reactions.review_comments.escalation_label` captured when the orchestrator starts, or
     `needs-human` when that block or value is absent or empty. This lookup deliberately reuses only
@@ -154,6 +183,9 @@ Sortie uses SQLite persistence to improve restart recovery semantics:
 
 - Retry entries with future `due_at` timestamps are restored from SQLite and rescheduled on
   startup.
+- Parked issues are reloaded from SQLite before the event loop starts, so an issue parked before
+  a restart stays out of dispatch across it without depending on any tracker read to rediscover
+  the park.
 - Session metadata from the previous run is available for observability and debugging.
 - Run history is preserved in SQLite for operational review.
 - Running sessions are not recoverable (agent subprocesses do not survive restart), but the

@@ -75,6 +75,11 @@ type Metrics interface {
 	// (sortie_handoff_transitions_total{result} counter).
 	IncHandoffTransitions(result string)
 
+	// IncIssueParks increments the issue park counter. reason is
+	// "agent_blocked" or "handoff_absence"
+	// (sortie_issue_parks_total{reason} counter).
+	IncIssueParks(reason string)
+
 	// IncDispatchTransitions increments the dispatch-time in-progress
 	// transition counter. result is "success", "error", or "skipped"
 	// (sortie_dispatch_transitions_total{result} counter).
@@ -201,6 +206,7 @@ func (*NoopMetrics) IncReconciliationActions(string)                       {}
 func (*NoopMetrics) IncPollCycles(string)                                  {}
 func (*NoopMetrics) IncTrackerRequests(string, string)                     {}
 func (*NoopMetrics) IncHandoffTransitions(string)                          {}
+func (*NoopMetrics) IncIssueParks(string)                                  {}
 func (*NoopMetrics) IncDispatchTransitions(string)                         {}
 func (*NoopMetrics) IncTrackerComments(string, string)                     {}
 func (*NoopMetrics) IncToolCalls(string, string)                           {}

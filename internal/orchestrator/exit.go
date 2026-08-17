@@ -38,6 +38,8 @@ type WorkerExitStore interface {
 	DeleteRetryEntry(ctx context.Context, issueID string) error
 	QueryConsecutiveHandoffAbsenceCounts(ctx context.Context, issueIDs []string) (map[string]int, error)
 	ResetHandoffAbsenceSequence(ctx context.Context, issueID string) error
+	UpsertParkedIssue(ctx context.Context, entry persistence.ParkedIssue) error
+	DeleteParkedIssue(ctx context.Context, issueID string) error
 }
 
 // HandleWorkerExitParams holds the dependencies for [HandleWorkerExit] that
@@ -324,11 +326,13 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 				evidenceErr = handoffEvidenceFailure(policy, evidenceResult)
 				metrics.IncHandoffTransitions(handoffWithheld)
 			} else if evidenceResult.Verdict == handoffWorkObserved {
-				// A positive verdict resets the runtime gate immediately. The
-				// durable reset recorded after the run_history write below holds
-				// even when the later tracker handoff write fails.
+				// A positive verdict releases a park immediately. The durable
+				// reset recorded after the run_history write below holds even
+				// when the later tracker handoff write fails.
 				evidenceWorkObserved = true
-				clearHandoffAbsenceGate(state, workerResult.IssueID)
+				if _, parked := state.Parked[workerResult.IssueID]; parked {
+					unparkIssue(ctx, state, workerResult.IssueID, unparkTriggerEvidenceObserved, params.Store, log)
+				}
 			}
 		}
 	}
@@ -437,7 +441,11 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 				ctx,
 				params.Store,
 				params.TrackerAdapter,
+				metrics,
 				workerResult.IssueID,
+				workerResult.Identifier,
+				entry.Issue.DisplayID,
+				observation,
 				consecutiveAbsences,
 				absenceCeiling,
 				params.HandoffParkingLabel,
@@ -520,8 +528,24 @@ func HandleWorkerExit(state *State, workerResult WorkerResult, params HandleWork
 			log.Info("continuation retry suppressed",
 				slog.String("reason", workerResult.SoftStopReason),
 			)
-			CancelRetry(state, workerResult.IssueID)
-			delete(state.Claimed, workerResult.IssueID)
+			if drivesIssue {
+				parkIssue(state, parkIssueParams{
+					IssueID:        workerResult.IssueID,
+					Identifier:     workerResult.Identifier,
+					DisplayID:      entry.Issue.DisplayID,
+					ObservedState:  observation,
+					Reason:         parkReasonAgentBlocked,
+					Label:          params.HandoffParkingLabel,
+					Store:          params.Store,
+					TrackerAdapter: params.TrackerAdapter,
+					Metrics:        metrics,
+					Logger:         log,
+					Ctx:            ctx,
+				})
+			} else {
+				CancelRetry(state, workerResult.IssueID)
+				delete(state.Claimed, workerResult.IssueID)
+			}
 
 		case terminal:
 			// The tracker already reports a terminal state for this issue,

@@ -253,6 +253,13 @@ func run(ctx context.Context, args []string, stdout io.Writer, stderr io.Writer)
 	)
 	orchestrator.PopulateRetries(state, pendingRetries, br.logger)
 
+	parkedRows, err := store.ListParkedIssues(ctx)
+	if err != nil {
+		br.logger.Warn("failed to load park records, starting with none", slog.Any("error", err))
+	} else {
+		orchestrator.PopulateParked(state, parkedRows, br.logger)
+	}
+
 	// --- Agent adapter construction ---
 
 	agentCtor, err := registry.Agents.Get(br.cfg.Agent.Kind)

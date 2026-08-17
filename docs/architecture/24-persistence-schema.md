@@ -163,7 +163,31 @@ or a run under `handoff_evidence: off` from resetting a sequence they say nothin
 The reset point is read from `run_history` inside the write, so a work-observed run whose own
 history row could not be persisted still clears the absences recorded before it. This table holds no
 verdict history: it is a per-issue position that is overwritten, and deleting a row only restores
-the issue's full recorded absence sequence.
+the issue's full recorded absence sequence. A work-observed run is no longer the table's only
+writer: releasing a parked issue whose park reason is the consecutive-absence ceiling (below) also
+writes a reset here, so the loop does not immediately re-derive the exhausted count and park the
+issue again on the tick that released it.
+
+**`parked_issues`**: issues held out of primary dispatch until a human acts (migration 014)
+
+| Column          | Type    | Notes                                                              |
+| --------------- | ------- | ------------------------------------------------------------------ |
+| `issue_id`      | TEXT PK | Tracker-internal issue ID                                          |
+| `identifier`    | TEXT    | Human-readable ticket key                                          |
+| `display_id`    | TEXT    | Qualified display form; empty when the tracker needs none          |
+| `reason`        | TEXT    | `agent_blocked` or `handoff_absence`                                |
+| `parked_state`  | TEXT    | Tracker state observed when the park was recorded; empty when unobserved |
+| `label`         | TEXT    | Parking label the orchestrator applied                             |
+| `label_applied` | INTEGER | `1` once the orchestrator has confirmed the label reached the tracker |
+| `parked_at`     | TEXT    | ISO-8601 timestamp                                                  |
+
+One row per parked issue, holding current state rather than history: the row is deleted the
+moment the park is lifted, not retained as a record of a past park. `parked_state` is nullable in
+meaning though not in type: an empty string means no tracker state was observed at park time,
+which only a park taken from the retry lane produces, since that lane parks ahead of its own
+tracker fetch by design (§14.2). `label_applied` has exactly one writer: the orchestrator's
+release-rule observation of the label on a later fetch of the issue, never the outcome of the
+label write itself.
 
 ### 19.3 Migration Strategy
 

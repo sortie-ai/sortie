@@ -88,8 +88,15 @@ Distinct terminal reasons are important because retry logic and logs differ.
   - The exit then takes exactly one disposition. The conditions are evaluated in the order below
     and the first match wins, so an earlier disposition overrides every later one:
 
-    1. The agent reported itself blocked through a soft stop. Suppress the continuation retry,
-       cancel any pending retry, and release the claim. Blocked work has nowhere to continue to.
+    1. The agent reported itself blocked through a soft stop. Suppress the continuation retry.
+       Where the dispatch drives issue state, park the issue instead of merely releasing the
+       claim: cancel any pending retry, release the claim, record a durable park keyed by issue
+       ID, and apply the configured parking label to the issue through the tracker adapter. The
+       park holds the issue out of dispatch until a later poll tick observes either a change in
+       the issue's tracker state or the removal of a parking label the orchestrator has confirmed
+       reached the tracker (§14.2). Where the dispatch does not drive issue state, cancel any
+       pending retry and release the claim without recording a park. Blocked work has nowhere to
+       continue to either way.
     2. The freshest tracker observation for the issue reports a terminal state, resolved with
        precedence reconciliation's observation, then the worker's own per-turn observation, then
        the dispatch-time snapshot. Suppress the handoff transition and the continuation retry,
@@ -204,9 +211,9 @@ Distinct terminal reasons are important because retry logic and logs differ.
 - The orchestrator serializes state mutations through one authority to avoid duplicate dispatch.
 - `claimed` and `running` checks are required before launching any worker.
 - Reconciliation runs before dispatch on every tick.
-- Restart recovery uses persisted state from SQLite for retry queues and session metadata,
-  supplemented by tracker polling for current issue states and filesystem inspection for workspace
-  existence.
+- Restart recovery uses persisted state from SQLite for retry queues, session metadata, and
+  parked issues, supplemented by tracker polling for current issue states and filesystem
+  inspection for workspace existence.
 - Startup pending reaction recovery uses `run_history`, tracker state, and `.sortie/scm.json` to
   reconstruct runtime `pending_reactions` for recent handoff-stage runs before the first poll tick.
   The scan is bounded by `PendingReactionRecoveryLookback` and a fixed candidate cap.
@@ -220,12 +227,14 @@ Distinct terminal reasons are important because retry logic and logs differ.
 1. Open or create the SQLite database and run schema migrations.
 2. Load persisted retry entries from SQLite.
 3. Reconstruct retry timers from persisted `due_at` timestamps.
-4. Map existing workspace directories to issue identifiers, query the tracker for the states of
+4. Load persisted park records from SQLite and reconstruct the runtime park set before the
+   event loop starts, so a parked issue stays out of dispatch across the restart.
+5. Map existing workspace directories to issue identifiers, query the tracker for the states of
    those specific issues, and clean the ones in terminal states.
-5. Construct reaction providers and call `RecoverPendingReactions` to restore eligible CI and
+6. Construct reaction providers and call `RecoverPendingReactions` to restore eligible CI and
   review pending entries for handoff-stage issues.
-6. Query tracker for active issues and reconcile with persisted state.
-7. Begin normal polling loop.
+7. Query tracker for active issues and reconcile with persisted state.
+8. Begin normal polling loop.
 
 ### 7.5 Retry-Slot Arbitration
 

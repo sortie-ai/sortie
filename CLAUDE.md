@@ -44,7 +44,7 @@ Read the Makefile to discover available targets before running any Go toolchain 
 Consult these for the area you are working on, not as a blanket prerequisite:
 
 - `docs/architecture.md` - the index. A system-at-a-glance plus a routing table mapping each task to the one section it needs. It is a map, not a second source of truth.
-- `docs/architecture/NN-<slug>.md` - the specification, one file per section. Open only the section the index routes you to; on conflict the section file wins.
+- `docs/architecture/NN-<slug>.md` - the specification, one file per section; `NN` is a file ordinal, not the section number (file 14 holds section 11C). Open only the section the index routes you to; on conflict the section file wins.
 - `docs/decisions/*.md` - accepted ADRs. Read when discussing or revising a prior design choice.
 - `docs/workflow-reference.md` - WORKFLOW.md syntax.
 - `docs/*-adapter-notes.md` - API details, response examples and implementation tips per integration.

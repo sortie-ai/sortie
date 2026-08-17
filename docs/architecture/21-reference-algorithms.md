@@ -67,7 +67,13 @@ on_tick(state):
     schedule_tick(state.poll_interval_ms)
     return state
 
-  for issue in sort_for_dispatch(issues):
+  sorted = sort_for_dispatch(issues)
+
+  state = rebuild_budget_exhausted(state, sorted)
+  state = refresh_parked_issues(state, sorted)
+  state = park_exhausted_absences(state, sorted)
+
+  for issue in sorted:
     if no_available_slots(state):
       break
 
@@ -394,10 +400,16 @@ on_worker_exit(issue_id, reason, state):
     # the first match wins and overrides every later one.
 
     # Disposition 1: the agent reported itself blocked through a soft
-    # stop. Blocked work has nowhere to continue to.
+    # stop. Blocked work has nowhere to continue to. Where the dispatch
+    # drives issue state, park the issue instead of merely releasing the
+    # claim, so it stays out of dispatch until a later tick observes a
+    # release (Section 14.2).
     if is_blocked_soft_stop(running_entry, worker_result):
-      cancel_retry(state, issue_id)
-      state.claimed.remove(issue_id)
+      if dispatch_drives_issue_state(running_entry):
+        park_issue(state, issue_id, reason="agent_blocked")
+      else:
+        cancel_retry(state, issue_id)
+        state.claimed.remove(issue_id)
       notify_observers()
       return state
 
