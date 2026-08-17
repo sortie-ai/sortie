@@ -252,6 +252,48 @@ type nopWriter struct{}
 
 func (nopWriter) Write(p []byte) (int, error) { return len(p), nil }
 
+// writeStatusFile writes an A2O status token to <wsPath>/.sortie/status,
+// creating the directory when needed.
+func writeStatusFile(t *testing.T, wsPath, status string) {
+	t.Helper()
+	dir := filepath.Join(wsPath, ".sortie")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(.sortie): %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "status"), []byte(status), 0o600); err != nil {
+		t.Fatalf("WriteFile(status): %v", err)
+	}
+}
+
+// captureWorkspacePath returns a StartSession hook that records the
+// session's workspace path, and an accessor that later runTurnFn closures
+// use to reach it without knowing the path ahead of dispatch.
+func captureWorkspacePath() (startFn func(ctx context.Context, params domain.StartSessionParams) (domain.Session, error), path func() string) {
+	var wsPath atomic.Value
+	startFn = func(_ context.Context, params domain.StartSessionParams) (domain.Session, error) {
+		wsPath.Store(params.WorkspacePath)
+		return domain.Session{ID: "sess-1"}, nil
+	}
+	path = func() string {
+		p, _ := wsPath.Load().(string)
+		return p
+	}
+	return startFn, path
+}
+
+// isSelfReviewTurnPrompt reports whether prompt is a self-review review-turn
+// prompt built by assembleReviewPrompt, as opposed to a coding-turn prompt
+// or the fix-turn variant built by buildFixPrompt.
+func isSelfReviewTurnPrompt(prompt string) bool {
+	return strings.Contains(prompt, "## Self-Review: Iteration")
+}
+
+// isSelfReviewFixPrompt reports whether prompt is a self-review fix-turn
+// prompt built by buildFixPrompt.
+func isSelfReviewFixPrompt(prompt string) bool {
+	return strings.Contains(prompt, "## Self-Review Fix: Iteration")
+}
+
 // --- Helper unit tests ---
 
 func TestNormalizeAttempt(t *testing.T) {
@@ -4372,7 +4414,9 @@ func TestRunWorkerAttempt_ReadOnly_SuppressesPerTurnRefresh(t *testing.T) {
 
 // TestRunWorkerAttempt_ReadOnly_SuppressesSelfReview verifies that a
 // read-only attempt never runs the self-review loop even when self-review
-// is enabled (A4).
+// is enabled (A4), including when the agent writes the completion signal:
+// DrivesIssueState is false for PostureReview, so the phase gate fails on
+// that condition regardless of the signal (W-14).
 func TestRunWorkerAttempt_ReadOnly_SuppressesSelfReview(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("self-review verification command uses touch")
@@ -4390,10 +4434,17 @@ func TestRunWorkerAttempt_ReadOnly_SuppressesSelfReview(t *testing.T) {
 		VerificationTimeoutMS: 5000,
 	}
 
+	startFn, wsPath := captureWorkspacePath()
 	ec := newExitCapture()
 	deps := WorkerDeps{
-		TrackerAdapter:         &mockTrackerAdapter{},
-		AgentAdapter:           &mockAgentAdapter{},
+		TrackerAdapter: &mockTrackerAdapter{},
+		AgentAdapter: &mockAgentAdapter{
+			startSessionFn: startFn,
+			runTurnFn: func(_ context.Context, session domain.Session, _ domain.RunTurnParams) (domain.TurnResult, error) {
+				writeStatusFile(t, wsPath(), "needs-human-review")
+				return domain.TurnResult{SessionID: session.ID, ExitReason: domain.EventTurnCompleted}, nil
+			},
+		},
 		ConfigFunc:             func() config.ServiceConfig { return cfg },
 		PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
 		OnEvent:                func(_ string, _ domain.AgentEvent) {},
@@ -4403,10 +4454,13 @@ func TestRunWorkerAttempt_ReadOnly_SuppressesSelfReview(t *testing.T) {
 	}
 
 	RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
-	ec.waitResult(t)
+	result := ec.waitResult(t)
 
 	if _, err := os.Stat(markerPath); err == nil {
 		t.Error("self-review verification command ran for a read-only dispatch; want no self-review")
+	}
+	if result.ReviewMetadata != nil {
+		t.Error("ReviewMetadata != nil, want nil (a read-only dispatch must not enter the phase even on the completion signal)")
 	}
 }
 
@@ -4738,7 +4792,10 @@ func TestRunWorkerAttempt_Fix_SuppressesPerTurnRefresh(t *testing.T) {
 }
 
 // TestRunWorkerAttempt_Fix_SuppressesSelfReview verifies that a fix attempt
-// never runs the self-review loop even when self-review is enabled (A4).
+// never runs the self-review loop even when self-review is enabled (A4),
+// including when the agent writes the completion signal: DrivesIssueState
+// is false for PostureFix, so the phase gate fails on that condition
+// regardless of the signal (W-14).
 func TestRunWorkerAttempt_Fix_SuppressesSelfReview(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("self-review verification command uses touch")
@@ -4756,10 +4813,17 @@ func TestRunWorkerAttempt_Fix_SuppressesSelfReview(t *testing.T) {
 		VerificationTimeoutMS: 5000,
 	}
 
+	startFn, wsPath := captureWorkspacePath()
 	ec := newExitCapture()
 	deps := WorkerDeps{
-		TrackerAdapter:         &mockTrackerAdapter{},
-		AgentAdapter:           &mockAgentAdapter{},
+		TrackerAdapter: &mockTrackerAdapter{},
+		AgentAdapter: &mockAgentAdapter{
+			startSessionFn: startFn,
+			runTurnFn: func(_ context.Context, session domain.Session, _ domain.RunTurnParams) (domain.TurnResult, error) {
+				writeStatusFile(t, wsPath(), "needs-human-review")
+				return domain.TurnResult{SessionID: session.ID, ExitReason: domain.EventTurnCompleted}, nil
+			},
+		},
 		ConfigFunc:             func() config.ServiceConfig { return cfg },
 		PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
 		OnEvent:                func(_ string, _ domain.AgentEvent) {},
@@ -4769,10 +4833,13 @@ func TestRunWorkerAttempt_Fix_SuppressesSelfReview(t *testing.T) {
 	}
 
 	RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
-	ec.waitResult(t)
+	result := ec.waitResult(t)
 
 	if _, err := os.Stat(markerPath); err == nil {
 		t.Error("self-review verification command ran for a fix dispatch; want no self-review")
+	}
+	if result.ReviewMetadata != nil {
+		t.Error("ReviewMetadata != nil, want nil (a fix dispatch must not enter the phase even on the completion signal)")
 	}
 }
 
@@ -4863,4 +4930,734 @@ func TestRunWorkerAttempt_Fix_AfterRunHookOnPanic(t *testing.T) {
 	if !stopCalled.Load() {
 		t.Error("StopSession was not called during panic recovery, want teardown")
 	}
+}
+
+// --- Self-review admission on the completion signal ---
+
+// TestRunWorkerAttempt_CompletionSignalEntersSelfReview verifies that a
+// needs-human-review signal read inside the turn loop, on a deployment
+// with self-review enabled, admits the run to the self-review phase
+// instead of ending the run at the read.
+func TestRunWorkerAttempt_CompletionSignalEntersSelfReview(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	cfg := defaultWorkerConfig(tmpDir)
+	cfg.Agent.MaxTurns = 10 // high enough that turn-budget exhaustion cannot explain admission
+	cfg.SelfReview = config.SelfReviewConfig{
+		Enabled:               true,
+		MaxIterations:         1,
+		VerificationCommands:  []string{"echo ok"},
+		VerificationTimeoutMS: 5000,
+	}
+
+	startFn, wsPath := captureWorkspacePath()
+	var codingTurns atomic.Int32
+	ec := newExitCapture()
+
+	deps := WorkerDeps{
+		TrackerAdapter: &mockTrackerAdapter{},
+		AgentAdapter: &mockAgentAdapter{
+			startSessionFn: startFn,
+			runTurnFn: func(_ context.Context, session domain.Session, params domain.RunTurnParams) (domain.TurnResult, error) {
+				switch {
+				case isSelfReviewTurnPrompt(params.Prompt):
+					writeVerdictFile(t, wsPath(), domain.ReviewVerdict{Verdict: "pass", Summary: "looks good"})
+				case !isSelfReviewFixPrompt(params.Prompt):
+					codingTurns.Add(1)
+					if codingTurns.Load() == 1 {
+						writeStatusFile(t, wsPath(), "needs-human-review")
+					}
+				}
+				return domain.TurnResult{SessionID: session.ID, ExitReason: domain.EventTurnCompleted}, nil
+			},
+		},
+		ConfigFunc:             func() config.ServiceConfig { return cfg },
+		PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
+		OnEvent:                func(_ string, _ domain.AgentEvent) {},
+		OnExit:                 ec.onExit,
+		Logger:                 discardLogger(),
+	}
+
+	RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
+	result := ec.waitResult(t)
+
+	if result.ReviewMetadata == nil {
+		t.Fatal("ReviewMetadata = nil, want non-nil (the phase must have run)")
+	}
+	if result.ReviewMetadata.TotalIterations < 1 {
+		t.Fatalf("ReviewMetadata.TotalIterations = %d, want >= 1", result.ReviewMetadata.TotalIterations)
+	}
+	if got := len(result.ReviewMetadata.Iterations[0].VerificationResults); got < 1 {
+		t.Errorf("Iterations[0].VerificationResults len = %d, want >= 1 (at least one verification command ran)", got)
+	}
+	if result.TurnsCompleted <= int(codingTurns.Load()) {
+		t.Errorf("TurnsCompleted = %d, want > %d coding turns (review turns must have run)", result.TurnsCompleted, codingTurns.Load())
+	}
+}
+
+// TestRunWorkerAttempt_BlockedSignalSkipsSelfReview is a regression test:
+// a blocked signal must end the run immediately, without ever admitting
+// the phase, even when self-review is enabled.
+func TestRunWorkerAttempt_BlockedSignalSkipsSelfReview(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	cfg := defaultWorkerConfig(tmpDir)
+	cfg.Agent.MaxTurns = 5
+	cfg.SelfReview = config.SelfReviewConfig{
+		Enabled:               true,
+		MaxIterations:         1,
+		VerificationCommands:  []string{"echo ok"},
+		VerificationTimeoutMS: 5000,
+	}
+
+	startFn, wsPath := captureWorkspacePath()
+	tracker := &mockTrackerAdapter{}
+	ec := newExitCapture()
+
+	deps := WorkerDeps{
+		TrackerAdapter: tracker,
+		AgentAdapter: &mockAgentAdapter{
+			startSessionFn: startFn,
+			runTurnFn: func(_ context.Context, session domain.Session, _ domain.RunTurnParams) (domain.TurnResult, error) {
+				writeStatusFile(t, wsPath(), "blocked")
+				return domain.TurnResult{SessionID: session.ID, ExitReason: domain.EventTurnCompleted}, nil
+			},
+		},
+		ConfigFunc:             func() config.ServiceConfig { return cfg },
+		PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
+		OnEvent:                func(_ string, _ domain.AgentEvent) {},
+		OnExit:                 ec.onExit,
+		Logger:                 discardLogger(),
+	}
+
+	RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
+	result := ec.waitResult(t)
+
+	if result.ReviewMetadata != nil {
+		t.Error("ReviewMetadata != nil, want nil (blocked must never enter the phase)")
+	}
+	if result.SoftStopReason != "blocked" {
+		t.Errorf("SoftStopReason = %q, want %q", result.SoftStopReason, "blocked")
+	}
+	if result.TurnsCompleted != 1 {
+		t.Errorf("TurnsCompleted = %d, want 1", result.TurnsCompleted)
+	}
+	if got := tracker.fetchStatesCalls.Load(); got != 0 {
+		t.Errorf("FetchIssueStatesByIDs called %d times, want 0 (no per-turn refresh on a blocked signal)", got)
+	}
+}
+
+// TestRunWorkerAttempt_SelfReviewDisabledSignalUnchanged is a regression
+// test: a deployment with self_review.enabled false must be unaffected
+// by a needs-human-review signal, byte-for-byte with the pre-existing
+// behavior.
+func TestRunWorkerAttempt_SelfReviewDisabledSignalUnchanged(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	cfg := defaultWorkerConfig(tmpDir)
+	cfg.Agent.MaxTurns = 5
+	// SelfReview left at its zero value: Enabled is false.
+
+	startFn, wsPath := captureWorkspacePath()
+	ec := newExitCapture()
+
+	deps := WorkerDeps{
+		TrackerAdapter: &mockTrackerAdapter{},
+		AgentAdapter: &mockAgentAdapter{
+			startSessionFn: startFn,
+			runTurnFn: func(_ context.Context, session domain.Session, _ domain.RunTurnParams) (domain.TurnResult, error) {
+				writeStatusFile(t, wsPath(), "needs-human-review")
+				return domain.TurnResult{SessionID: session.ID, ExitReason: domain.EventTurnCompleted}, nil
+			},
+		},
+		ConfigFunc:             func() config.ServiceConfig { return cfg },
+		PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
+		OnEvent:                func(_ string, _ domain.AgentEvent) {},
+		OnExit:                 ec.onExit,
+		Logger:                 discardLogger(),
+	}
+
+	RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
+	result := ec.waitResult(t)
+
+	if result.ReviewMetadata != nil {
+		t.Error("ReviewMetadata != nil, want nil (self-review disabled)")
+	}
+	if !result.SoftStop {
+		t.Error("SoftStop = false, want true")
+	}
+	if result.SoftStopReason != "needs-human-review" {
+		t.Errorf("SoftStopReason = %q, want %q", result.SoftStopReason, "needs-human-review")
+	}
+	if result.ExitKind != WorkerExitNormal {
+		t.Errorf("ExitKind = %q, want %q", result.ExitKind, WorkerExitNormal)
+	}
+	if result.TurnsCompleted != 1 {
+		t.Errorf("TurnsCompleted = %d, want 1", result.TurnsCompleted)
+	}
+
+	statusPath := filepath.Join(result.WorkspacePath, ".sortie", "status")
+	data, err := os.ReadFile(statusPath) //nolint:gosec // test-controlled path
+	if err != nil {
+		t.Fatalf("reading %q: %v", statusPath, err)
+	}
+	if strings.TrimSpace(string(data)) != "needs-human-review" {
+		t.Errorf("status file content = %q, want %q", strings.TrimSpace(string(data)), "needs-human-review")
+	}
+}
+
+// TestRunWorkerAttempt_CompletionSignalConsumedOnEntry verifies that the
+// status file is removed at the moment the run is admitted to the phase,
+// before the first review turn ever reads it: the file must already be
+// gone by the time the review turn's RunTurn call begins, which is the
+// one moment a P-3-only implementation (in-phase consumption after the
+// read, with no entry consumption) has not yet cleaned it up.
+func TestRunWorkerAttempt_CompletionSignalConsumedOnEntry(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	cfg := defaultWorkerConfig(tmpDir)
+	cfg.Agent.MaxTurns = 10
+	cfg.SelfReview = config.SelfReviewConfig{
+		Enabled:               true,
+		MaxIterations:         1,
+		VerificationCommands:  []string{"echo ok"},
+		VerificationTimeoutMS: 5000,
+	}
+
+	startFn, wsPath := captureWorkspacePath()
+	var statusExistedAtReviewTurn bool
+	var codingTurnDone bool
+	ec := newExitCapture()
+
+	deps := WorkerDeps{
+		TrackerAdapter: &mockTrackerAdapter{},
+		AgentAdapter: &mockAgentAdapter{
+			startSessionFn: startFn,
+			runTurnFn: func(_ context.Context, session domain.Session, params domain.RunTurnParams) (domain.TurnResult, error) {
+				switch {
+				case isSelfReviewTurnPrompt(params.Prompt):
+					statusPath := filepath.Join(wsPath(), ".sortie", "status")
+					_, statErr := os.Stat(statusPath)
+					statusExistedAtReviewTurn = statErr == nil
+					writeVerdictFile(t, wsPath(), domain.ReviewVerdict{Verdict: "pass", Summary: "looks good"})
+				case !codingTurnDone:
+					codingTurnDone = true
+					writeStatusFile(t, wsPath(), "needs-human-review")
+				}
+				return domain.TurnResult{SessionID: session.ID, ExitReason: domain.EventTurnCompleted}, nil
+			},
+		},
+		ConfigFunc:             func() config.ServiceConfig { return cfg },
+		PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
+		OnEvent:                func(_ string, _ domain.AgentEvent) {},
+		OnExit:                 ec.onExit,
+		Logger:                 discardLogger(),
+	}
+
+	RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
+	result := ec.waitResult(t)
+
+	if statusExistedAtReviewTurn {
+		t.Error("status file was still present when the review turn began; want removed on phase entry")
+	}
+	if result.ReviewMetadata == nil {
+		t.Fatal("ReviewMetadata = nil, want non-nil")
+	}
+	if result.ReviewMetadata.TotalIterations < 1 {
+		t.Fatalf("TotalIterations = %d, want >= 1", result.ReviewMetadata.TotalIterations)
+	}
+	if got := result.ReviewMetadata.Iterations[0].VerdictParseError; strings.Contains(got, "aborted") {
+		t.Errorf("Iterations[0].VerdictParseError = %q, want no status-signal abort marker (first iteration must not abort)", got)
+	}
+}
+
+// TestRunWorkerAttempt_InPhaseBlockedOnReviewTurn verifies that a blocked
+// signal read after a review turn ends the self-review phase, with the
+// iteration recorded as aborted, on a run the completion signal admitted.
+func TestRunWorkerAttempt_InPhaseBlockedOnReviewTurn(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	cfg := defaultWorkerConfig(tmpDir)
+	cfg.Agent.MaxTurns = 10
+	cfg.SelfReview = config.SelfReviewConfig{
+		Enabled:               true,
+		MaxIterations:         3,
+		VerificationCommands:  []string{"echo ok"},
+		VerificationTimeoutMS: 5000,
+	}
+
+	startFn, wsPath := captureWorkspacePath()
+	var codingTurnDone bool
+	ec := newExitCapture()
+
+	deps := WorkerDeps{
+		TrackerAdapter: &mockTrackerAdapter{},
+		AgentAdapter: &mockAgentAdapter{
+			startSessionFn: startFn,
+			runTurnFn: func(_ context.Context, session domain.Session, params domain.RunTurnParams) (domain.TurnResult, error) {
+				switch {
+				case isSelfReviewTurnPrompt(params.Prompt):
+					writeStatusFile(t, wsPath(), "blocked")
+				case !codingTurnDone:
+					codingTurnDone = true
+					writeStatusFile(t, wsPath(), "needs-human-review")
+				}
+				return domain.TurnResult{SessionID: session.ID, ExitReason: domain.EventTurnCompleted}, nil
+			},
+		},
+		ConfigFunc:             func() config.ServiceConfig { return cfg },
+		PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
+		OnEvent:                func(_ string, _ domain.AgentEvent) {},
+		OnExit:                 ec.onExit,
+		Logger:                 discardLogger(),
+	}
+
+	RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
+	result := ec.waitResult(t)
+
+	if result.SoftStopReason != "blocked" {
+		t.Errorf("SoftStopReason = %q, want %q", result.SoftStopReason, "blocked")
+	}
+	if result.ReviewMetadata == nil {
+		t.Fatal("ReviewMetadata = nil, want non-nil")
+	}
+	if len(result.ReviewMetadata.Iterations) == 0 {
+		t.Fatal("Iterations is empty, want the aborted iteration recorded")
+	}
+	last := result.ReviewMetadata.Iterations[len(result.ReviewMetadata.Iterations)-1]
+	if !strings.Contains(last.VerdictParseError, "blocked") {
+		t.Errorf("last iteration VerdictParseError = %q, want to name %q", last.VerdictParseError, "blocked")
+	}
+	if result.ExitKind != WorkerExitNormal {
+		t.Errorf("ExitKind = %q, want %q", result.ExitKind, WorkerExitNormal)
+	}
+}
+
+// TestRunWorkerAttempt_InPhaseBlockedOnFixTurn verifies that a blocked
+// signal read after a fix turn ends the self-review phase, with the
+// iteration record updated to name the signal while preserving the
+// review turn's verdict, on a run the completion signal admitted.
+func TestRunWorkerAttempt_InPhaseBlockedOnFixTurn(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	cfg := defaultWorkerConfig(tmpDir)
+	cfg.Agent.MaxTurns = 10
+	cfg.SelfReview = config.SelfReviewConfig{
+		Enabled:               true,
+		MaxIterations:         2, // room for a fix turn before the cap
+		VerificationCommands:  []string{"echo ok"},
+		VerificationTimeoutMS: 5000,
+	}
+
+	startFn, wsPath := captureWorkspacePath()
+	var codingTurnDone bool
+	ec := newExitCapture()
+
+	deps := WorkerDeps{
+		TrackerAdapter: &mockTrackerAdapter{},
+		AgentAdapter: &mockAgentAdapter{
+			startSessionFn: startFn,
+			runTurnFn: func(_ context.Context, session domain.Session, params domain.RunTurnParams) (domain.TurnResult, error) {
+				switch {
+				case isSelfReviewFixPrompt(params.Prompt):
+					writeStatusFile(t, wsPath(), "blocked")
+				case isSelfReviewTurnPrompt(params.Prompt):
+					writeVerdictFile(t, wsPath(), domain.ReviewVerdict{Verdict: "iterate", Summary: "needs fix"})
+				case !codingTurnDone:
+					codingTurnDone = true
+					writeStatusFile(t, wsPath(), "needs-human-review")
+				}
+				return domain.TurnResult{SessionID: session.ID, ExitReason: domain.EventTurnCompleted}, nil
+			},
+		},
+		ConfigFunc:             func() config.ServiceConfig { return cfg },
+		PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
+		OnEvent:                func(_ string, _ domain.AgentEvent) {},
+		OnExit:                 ec.onExit,
+		Logger:                 discardLogger(),
+	}
+
+	RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
+	result := ec.waitResult(t)
+
+	if result.SoftStopReason != "blocked" {
+		t.Errorf("SoftStopReason = %q, want %q", result.SoftStopReason, "blocked")
+	}
+	if result.ReviewMetadata == nil {
+		t.Fatal("ReviewMetadata = nil, want non-nil")
+	}
+	if len(result.ReviewMetadata.Iterations) == 0 {
+		t.Fatal("Iterations is empty, want the aborted iteration recorded")
+	}
+	last := result.ReviewMetadata.Iterations[len(result.ReviewMetadata.Iterations)-1]
+	if !strings.Contains(last.VerdictParseError, "blocked") {
+		t.Errorf("last iteration VerdictParseError = %q, want to name %q", last.VerdictParseError, "blocked")
+	}
+	if last.Verdict != "iterate" {
+		t.Errorf("last iteration Verdict = %q, want %q (the review turn's verdict must survive the fix-turn abort)", last.Verdict, "iterate")
+	}
+	if result.ExitKind != WorkerExitNormal {
+		t.Errorf("ExitKind = %q, want %q", result.ExitKind, WorkerExitNormal)
+	}
+}
+
+// TestRunWorkerAttempt_CompletionSignalRecordsReviewMetadata verifies that
+// a run ending on the completion signal records review metadata and that
+// its after_run hook receives a SORTIE_SELF_REVIEW_STATUS value other
+// than "disabled".
+func TestRunWorkerAttempt_CompletionSignalRecordsReviewMetadata(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("after_run hook uses echo -n and $VAR expansion")
+	}
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	statusOut := filepath.Join(tmpDir, "self_review_status.txt")
+
+	cfg := defaultWorkerConfig(tmpDir)
+	cfg.Agent.MaxTurns = 10
+	cfg.Hooks.AfterRun = fmt.Sprintf(`echo -n "$SORTIE_SELF_REVIEW_STATUS" > %q`, statusOut)
+	cfg.SelfReview = config.SelfReviewConfig{
+		Enabled:               true,
+		MaxIterations:         1,
+		VerificationCommands:  []string{"echo ok"},
+		VerificationTimeoutMS: 5000,
+	}
+
+	startFn, wsPath := captureWorkspacePath()
+	var codingTurnDone bool
+	ec := newExitCapture()
+
+	deps := WorkerDeps{
+		TrackerAdapter: &mockTrackerAdapter{},
+		AgentAdapter: &mockAgentAdapter{
+			startSessionFn: startFn,
+			runTurnFn: func(_ context.Context, session domain.Session, params domain.RunTurnParams) (domain.TurnResult, error) {
+				switch {
+				case isSelfReviewTurnPrompt(params.Prompt):
+					writeVerdictFile(t, wsPath(), domain.ReviewVerdict{Verdict: "pass", Summary: "looks good"})
+				case !codingTurnDone:
+					codingTurnDone = true
+					writeStatusFile(t, wsPath(), "needs-human-review")
+				}
+				return domain.TurnResult{SessionID: session.ID, ExitReason: domain.EventTurnCompleted}, nil
+			},
+		},
+		ConfigFunc:             func() config.ServiceConfig { return cfg },
+		PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
+		OnEvent:                func(_ string, _ domain.AgentEvent) {},
+		OnExit:                 ec.onExit,
+		Logger:                 discardLogger(),
+	}
+
+	RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
+	result := ec.waitResult(t)
+
+	if result.ReviewMetadata == nil {
+		t.Fatal("ReviewMetadata = nil, want non-nil")
+	}
+
+	data, err := os.ReadFile(statusOut) //nolint:gosec // test-controlled path
+	if err != nil {
+		t.Fatalf("reading %q: %v", statusOut, err)
+	}
+	if got := string(data); got != "passed" {
+		t.Errorf("SORTIE_SELF_REVIEW_STATUS = %q, want %q", got, "passed")
+	}
+}
+
+// TestRunWorkerAttempt_CompletionSignalPhaseRunsBeforeTeardown verifies
+// that the self-review phase runs while the agent session is live and
+// before the after_run teardown hook, on the completion-signal path.
+func TestRunWorkerAttempt_CompletionSignalPhaseRunsBeforeTeardown(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("ordering marker uses touch")
+	}
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	issue := workerTestIssue()
+	wsRoot := filepath.Join(tmpDir, issue.Identifier)
+	summaryPath := filepath.Join(wsRoot, ".sortie", "review_summary.md")
+	hookRanAfterSummary := filepath.Join(tmpDir, "hook_ran_after_summary")
+
+	cfg := defaultWorkerConfig(tmpDir)
+	cfg.Agent.MaxTurns = 10
+	cfg.Hooks.AfterRun = fmt.Sprintf("test -f %q && touch %q", summaryPath, hookRanAfterSummary)
+	cfg.SelfReview = config.SelfReviewConfig{
+		Enabled:               true,
+		MaxIterations:         1,
+		VerificationCommands:  []string{"echo ok"},
+		VerificationTimeoutMS: 5000,
+	}
+
+	startFn, wsPath := captureWorkspacePath()
+	var codingTurnDone bool
+	var reviewTurnRan bool
+	var stopCalledAfterReview bool
+	ec := newExitCapture()
+
+	deps := WorkerDeps{
+		TrackerAdapter: &mockTrackerAdapter{},
+		AgentAdapter: &mockAgentAdapter{
+			startSessionFn: startFn,
+			runTurnFn: func(_ context.Context, session domain.Session, params domain.RunTurnParams) (domain.TurnResult, error) {
+				switch {
+				case isSelfReviewTurnPrompt(params.Prompt):
+					reviewTurnRan = true
+					writeVerdictFile(t, wsPath(), domain.ReviewVerdict{Verdict: "pass", Summary: "looks good"})
+				case !codingTurnDone:
+					codingTurnDone = true
+					writeStatusFile(t, wsPath(), "needs-human-review")
+				}
+				return domain.TurnResult{SessionID: session.ID, ExitReason: domain.EventTurnCompleted}, nil
+			},
+			stopSessionFn: func(_ context.Context, _ domain.Session) error {
+				stopCalledAfterReview = reviewTurnRan
+				return nil
+			},
+		},
+		ConfigFunc:             func() config.ServiceConfig { return cfg },
+		PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
+		OnEvent:                func(_ string, _ domain.AgentEvent) {},
+		OnExit:                 ec.onExit,
+		Logger:                 discardLogger(),
+	}
+
+	RunWorkerAttempt(context.Background(), issue, nil, deps)
+	result := ec.waitResult(t)
+
+	if result.ExitKind != WorkerExitNormal {
+		t.Fatalf("ExitKind = %q, want %q", result.ExitKind, WorkerExitNormal)
+	}
+	if !stopCalledAfterReview {
+		t.Error("StopSession was called before the last review turn ran, want after")
+	}
+	if _, err := os.Stat(hookRanAfterSummary); err != nil {
+		t.Errorf("after_run hook did not observe the review summary already written: %v", err)
+	}
+}
+
+// TestRunWorkerAttempt_TurnBudgetInPhaseNeedsHumanReview verifies that an
+// in-phase needs-human-review signal on the agent.max_turns admission path
+// does not end the phase, and that the status file is removed, which is
+// the one behavior this path changes.
+func TestRunWorkerAttempt_TurnBudgetInPhaseNeedsHumanReview(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	cfg := defaultWorkerConfig(tmpDir)
+	cfg.Agent.MaxTurns = 2 // exhausted without any coding-turn signal
+	cfg.SelfReview = config.SelfReviewConfig{
+		Enabled:               true,
+		MaxIterations:         1,
+		VerificationCommands:  []string{"echo ok"},
+		VerificationTimeoutMS: 5000,
+	}
+
+	startFn, wsPath := captureWorkspacePath()
+	ec := newExitCapture()
+
+	deps := WorkerDeps{
+		TrackerAdapter: &mockTrackerAdapter{},
+		AgentAdapter: &mockAgentAdapter{
+			startSessionFn: startFn,
+			runTurnFn: func(_ context.Context, session domain.Session, params domain.RunTurnParams) (domain.TurnResult, error) {
+				if isSelfReviewTurnPrompt(params.Prompt) {
+					writeStatusFile(t, wsPath(), "needs-human-review")
+					writeVerdictFile(t, wsPath(), domain.ReviewVerdict{Verdict: "pass", Summary: "looks good"})
+				}
+				return domain.TurnResult{SessionID: session.ID, ExitReason: domain.EventTurnCompleted}, nil
+			},
+		},
+		ConfigFunc:             func() config.ServiceConfig { return cfg },
+		PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
+		OnEvent:                func(_ string, _ domain.AgentEvent) {},
+		OnExit:                 ec.onExit,
+		Logger:                 discardLogger(),
+	}
+
+	RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
+	result := ec.waitResult(t)
+
+	if result.SoftStop {
+		t.Error("SoftStop = true, want false (turn-budget admission carries no reason)")
+	}
+	if result.SoftStopReason != "" {
+		t.Errorf("SoftStopReason = %q, want empty", result.SoftStopReason)
+	}
+	if result.ReviewMetadata == nil {
+		t.Fatal("ReviewMetadata = nil, want non-nil (the phase must have continued to a verdict)")
+	}
+	if result.ReviewMetadata.FinalVerdict != "pass" {
+		t.Errorf("FinalVerdict = %q, want %q (the in-phase signal must not have aborted the phase)", result.ReviewMetadata.FinalVerdict, "pass")
+	}
+
+	statusPath := filepath.Join(result.WorkspacePath, ".sortie", "status")
+	if _, err := os.Stat(statusPath); !os.IsNotExist(err) {
+		t.Errorf("status file still present after an in-phase needs-human-review on the turn-budget path, want removed: err=%v", err)
+	}
+}
+
+// TestRunWorkerAttempt_TurnBudgetInPhaseBlocked_KeepsNormalExit pins the
+// W-9 scope condition: an in-phase blocked signal read during the phase
+// the agent.max_turns exit admits MUST NOT become the run's soft-stop
+// reason, because that admission carried no reason into the phase. This
+// is the regression the maintainer's turn-budget ruling protects: a run
+// that exhausts its coding-turn budget and then blocks during review
+// keeps the exit it has always taken.
+func TestRunWorkerAttempt_TurnBudgetInPhaseBlocked_KeepsNormalExit(t *testing.T) {
+	t.Parallel()
+
+	tmpDir := t.TempDir()
+	cfg := defaultWorkerConfig(tmpDir)
+	cfg.Agent.MaxTurns = 2 // exhausted without any coding-turn signal
+	cfg.SelfReview = config.SelfReviewConfig{
+		Enabled:               true,
+		MaxIterations:         1,
+		VerificationCommands:  []string{"echo ok"},
+		VerificationTimeoutMS: 5000,
+	}
+
+	startFn, wsPath := captureWorkspacePath()
+	ec := newExitCapture()
+
+	deps := WorkerDeps{
+		TrackerAdapter: &mockTrackerAdapter{},
+		AgentAdapter: &mockAgentAdapter{
+			startSessionFn: startFn,
+			runTurnFn: func(_ context.Context, session domain.Session, params domain.RunTurnParams) (domain.TurnResult, error) {
+				if isSelfReviewTurnPrompt(params.Prompt) {
+					writeStatusFile(t, wsPath(), "blocked")
+				}
+				return domain.TurnResult{SessionID: session.ID, ExitReason: domain.EventTurnCompleted}, nil
+			},
+		},
+		ConfigFunc:             func() config.ServiceConfig { return cfg },
+		PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
+		OnEvent:                func(_ string, _ domain.AgentEvent) {},
+		OnExit:                 ec.onExit,
+		Logger:                 discardLogger(),
+	}
+
+	RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
+	result := ec.waitResult(t)
+
+	if result.SoftStop {
+		t.Error("SoftStop = true, want false (an in-phase blocked on the turn-budget path must not become the run's reason)")
+	}
+	if result.SoftStopReason != "" {
+		t.Errorf("SoftStopReason = %q, want empty", result.SoftStopReason)
+	}
+	if result.ReviewMetadata == nil {
+		t.Fatal("ReviewMetadata = nil, want non-nil")
+	}
+	if len(result.ReviewMetadata.Iterations) == 0 {
+		t.Fatal("Iterations is empty, want the aborted iteration recorded")
+	}
+	last := result.ReviewMetadata.Iterations[len(result.ReviewMetadata.Iterations)-1]
+	if !strings.Contains(last.VerdictParseError, "blocked") {
+		t.Errorf("last iteration VerdictParseError = %q, want to name %q", last.VerdictParseError, "blocked")
+	}
+}
+
+// TestRunWorkerAttempt_StatusSignalLogLines verifies the two admission
+// log lines are emitted on exactly the runs W-3 specifies: the preserved
+// exit line when a recognized signal ends the run without the phase, and
+// the new admission line when the signal is admitted to the phase.
+func TestRunWorkerAttempt_StatusSignalLogLines(t *testing.T) {
+	t.Parallel()
+
+	runWithSignal := func(t *testing.T, status string, selfReviewEnabled bool) string {
+		t.Helper()
+
+		tmpDir := t.TempDir()
+		cfg := defaultWorkerConfig(tmpDir)
+		cfg.Agent.MaxTurns = 5
+		if selfReviewEnabled {
+			cfg.SelfReview = config.SelfReviewConfig{
+				Enabled:               true,
+				MaxIterations:         1,
+				VerificationCommands:  []string{"echo ok"},
+				VerificationTimeoutMS: 5000,
+			}
+		}
+
+		startFn, wsPath := captureWorkspacePath()
+		var buf bytes.Buffer
+		logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug}))
+		ec := newExitCapture()
+
+		deps := WorkerDeps{
+			TrackerAdapter: &mockTrackerAdapter{},
+			AgentAdapter: &mockAgentAdapter{
+				startSessionFn: startFn,
+				runTurnFn: func(_ context.Context, session domain.Session, params domain.RunTurnParams) (domain.TurnResult, error) {
+					if isSelfReviewTurnPrompt(params.Prompt) {
+						writeVerdictFile(t, wsPath(), domain.ReviewVerdict{Verdict: "pass", Summary: "ok"})
+						return domain.TurnResult{SessionID: session.ID, ExitReason: domain.EventTurnCompleted}, nil
+					}
+					writeStatusFile(t, wsPath(), status)
+					return domain.TurnResult{SessionID: session.ID, ExitReason: domain.EventTurnCompleted}, nil
+				},
+			},
+			ConfigFunc:             func() config.ServiceConfig { return cfg },
+			PromptTemplateByIDFunc: func(_ string) *prompt.Template { return mustParseTemplate(t, "{{ .issue.title }}") },
+			OnEvent:                func(_ string, _ domain.AgentEvent) {},
+			OnExit:                 ec.onExit,
+			Logger:                 logger,
+		}
+
+		RunWorkerAttempt(context.Background(), workerTestIssue(), nil, deps)
+		ec.waitResult(t)
+		return buf.String()
+	}
+
+	t.Run("blocked_exits_without_phase", func(t *testing.T) {
+		t.Parallel()
+		output := runWithSignal(t, "blocked", false)
+
+		if !strings.Contains(output, "agent signaled status, exiting worker") {
+			t.Errorf("log output missing the exit line; got: %s", output)
+		}
+		if !strings.Contains(output, "status=blocked") {
+			t.Errorf("log output missing status=blocked attribute; got: %s", output)
+		}
+		if !strings.Contains(output, "turns_completed=") {
+			t.Errorf("log output missing turns_completed attribute; got: %s", output)
+		}
+	})
+
+	t.Run("needs_human_review_disabled_exits_without_phase", func(t *testing.T) {
+		t.Parallel()
+		output := runWithSignal(t, "needs-human-review", false)
+
+		if !strings.Contains(output, "agent signaled status, exiting worker") {
+			t.Errorf("log output missing the exit line; got: %s", output)
+		}
+		if !strings.Contains(output, "status=needs-human-review") {
+			t.Errorf("log output missing status=needs-human-review attribute; got: %s", output)
+		}
+	})
+
+	t.Run("needs_human_review_enabled_enters_phase", func(t *testing.T) {
+		t.Parallel()
+		output := runWithSignal(t, "needs-human-review", true)
+
+		if !strings.Contains(output, "agent signaled completion, entering self-review") {
+			t.Errorf("log output missing the admission line; got: %s", output)
+		}
+		if strings.Contains(output, "agent signaled status, exiting worker") {
+			t.Errorf("log output contains the exit line, want the admission line only; got: %s", output)
+		}
+		if !strings.Contains(output, "status=needs-human-review") {
+			t.Errorf("log output missing status=needs-human-review attribute; got: %s", output)
+		}
+	})
 }

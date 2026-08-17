@@ -179,7 +179,9 @@ agent's scope, or repeated failures on the same operation.
 
 **Orchestrator behavior:** The orchestrator treats this as a **soft stop**. It completes the
 current turn normally, then breaks the turn loop — no further continuation turns execute within
-the current worker run. On worker exit, the orchestrator MUST NOT schedule a continuation retry
+the current worker run. This value never admits the run to the self-review phase (Section 2.3.2);
+it remains an immediate exit whether or not self-review is configured. On worker exit, the
+orchestrator MUST NOT schedule a continuation retry
 ([architecture Section 8.4](architecture/08-polling-scheduling-and-reconciliation.md#84-retry-and-backoff)). The claim on the issue is released. If the issue subsequently returns
 to an active state (e.g., after a human updates it), normal dispatch eligibility resumes.
 
@@ -206,9 +208,24 @@ tracker state, the orchestrator performs the handoff transition before releasing
 handoff transition fails (network error, permission denied, nil adapter), the orchestrator logs a
 warning and releases the claim without scheduling a retry.
 
+The transition is additionally subject to the run's `tracker.handoff_evidence` verdict
+([architecture Section 7.3](architecture/07-orchestration-state-machine.md#73-transition-triggers)).
+Where that verdict withholds the transition, no tracker write is attempted: the issue keeps its
+active state and its claim, and the exit takes the exponential-backoff failure path instead of
+releasing the claim.
+
 This distinction reflects the semantic difference between the two values: `blocked` means "I
 cannot proceed" (no completed work to hand off), while `needs-human-review` means "work is
 complete, ready for review" (completed work should be visible in the tracker via handoff).
+
+Where `self_review.enabled` is set and the self-review phase's other gate conditions hold
+(the issue is in an active tracker state, the run's context is not cancelled, and the dispatch
+posture drives issue state), this value does not end the run at the read. It admits the run to
+the self-review phase: the orchestrator runs the configured verification commands and gives the
+agent a review turn, iterating up to `self_review.max_iterations`. The run ends after the phase
+with the same exit kind, soft-stop reason, and disposition it would have taken at the read.
+Where self-review is off, or where any gate condition fails, the value ends the run exactly as
+Section 2.3.3 describes, with no phase entered.
 
 #### 2.3.3 Common orchestrator response
 
@@ -216,14 +233,19 @@ For both recognized values, the orchestrator:
 
 1. Completes the current turn normally (does not abort mid-turn).
 2. Breaks the turn loop (no further continuation turns in this worker run).
-3. Exits the worker run with a normal exit status.
-4. Does NOT schedule a continuation retry (new worker run).
-5. Releases the issue claim.
-6. Logs the status token value at `info` level with the issue identifier.
+3. Where `needs-human-review` admits the run to the self-review phase (Section 2.3.2), runs the
+   phase: verification commands and at least one review turn, with further fix turns as the
+   verdict directs, up to `self_review.max_iterations`.
+4. Stops the agent session.
+5. Runs the `after_run` hook.
+6. Exits the worker run with a normal exit status.
+7. Does NOT schedule a continuation retry (new worker run).
+8. Releases the issue claim.
+9. Logs the status token value at `info` level with the issue identifier.
 
 Additionally, for `needs-human-review` only: when `tracker.handoff_state` is configured and the
 issue is in an active tracker state, the orchestrator attempts the handoff transition between
-steps 3 and 5. See Section 2.3.2 for failure handling.
+steps 6 and 8. See Section 2.3.2 for failure handling.
 
 After the orchestrator releases the claim, the issue becomes eligible for re-dispatch on a
 subsequent tracker poll if it still satisfies normal dispatch rules (active state, not
@@ -237,6 +259,22 @@ the turn and later deletes the file or overwrites it with an empty string before
 the orchestrator sees the final state (absent or empty) and proceeds with default behavior.
 Conversely, if the agent writes `blocked` as its last action in the turn, that value is what the
 orchestrator reads.
+
+#### 2.3.5 In-phase meaning of the two values
+
+The self-review phase reads `.sortie/status` again after each review turn and each fix turn
+(Section 3.1). Inside the phase the two values diverge from their meaning outside it.
+
+`blocked` aborts the phase. The iteration in progress is recorded as aborted, naming the signal,
+and the run proceeds to its exit as if the phase had produced this outcome directly.
+
+`needs-human-review` does not end the phase. It is consumed on the same terms as the value that
+admitted the run: the file is removed, and the iteration continues exactly as if the file had
+been absent. Written during a review turn, the verdict file, not the status file, decides what
+the iteration does next. Written during a fix turn, the loop proceeds to re-verification, where
+the next verification commands and review turn decide whether the fix holds. An agent that
+restates `needs-human-review` on every fix turn does not extend the phase past
+`self_review.max_iterations`; the cap still bounds it.
 
 ### 2.4 Absent file
 
@@ -281,6 +319,10 @@ The orchestrator reads the status file **after each completed turn**, before mak
 continuation-turn or retry decision. The read occurs in the worker goroutine, within the turn
 loop described in [architecture Section 16.5](architecture/21-reference-algorithms.md#165-worker-attempt-workspace--prompt--agent).
 
+The read also happens after each review turn and each fix turn inside the self-review phase
+(Section 2.3.5), on the same terms: after the turn completes, before the phase decides whether
+to continue.
+
 The read-after-turn timing eliminates race conditions between agent writes and orchestrator
 reads: the agent's turn has completed and the agent process is no longer writing before the
 orchestrator reads the file.
@@ -305,6 +347,8 @@ where the status file does not trigger a soft stop.
 Pseudo-code placement within the worker turn loop (extending [architecture Section 16.5](architecture/21-reference-algorithms.md#165-worker-attempt-workspace--prompt--agent)):
 
 ```
+pending_reason = ""
+
 while true:
     prompt = build_turn_prompt(...)
     turn_result = agent_adapter.run_turn(session, prompt, issue, on_message)
@@ -315,14 +359,19 @@ while true:
     // --- STATUS FILE READ POINT ---
     status = read_sortie_status(workspace.path)
     if status in ["blocked", "needs-human-review"]:
-        log_info("agent signaled status", issue.id, status)
-        stop_session()
-        run_hook_best_effort("after_run", workspace.path)
-        exit_normal_soft_stop(status)    // breaks turn loop; exit handler differentiates (Section 3.6)
+        pending_reason = status
+        break    // leaves the turn loop; the phase and teardown follow below
     // --- END STATUS FILE READ ---
 
     refreshed_issue = tracker.fetch_issue_states_by_ids([issue.id])
     ...
+
+// --- LOOP LEFT: pending_reason may be "", "blocked", or "needs-human-review" ---
+// See architecture Section 16.5 for the self-review admission gate and the
+// consumption of .sortie/status on entry (Section 3.4).
+stop_session()
+run_hook_best_effort("after_run", workspace.path)
+exit_normal(pending_reason)    // exit handler differentiates (Section 3.6)
 ```
 
 ### 3.2 Write responsibility
@@ -330,8 +379,11 @@ while true:
 The **agent** is the sole writer of the `.sortie/status` file.
 
 The **orchestrator** MUST NOT write to or modify the `.sortie/status` file during a worker run.
-The orchestrator's only file-system operation on this path is the pre-dispatch cleanup
-(Section 3.4) and the post-turn read (Section 3.1).
+The orchestrator's file-system operations on this path are the pre-dispatch cleanup
+(Section 3.4), the post-turn read (Section 3.1), and a removal at the moment the orchestrator
+acts on a recognized value read during a run (Section 3.4). The file therefore states what the
+agent has said since the orchestrator last responded to it, rather than carrying forward a value
+the orchestrator has already acted on.
 
 The agent creates the `.sortie/` directory and status file as needed. The write is a simple
 file creation or overwrite:
@@ -400,6 +452,13 @@ function pre_dispatch_cleanup(workspace_path):
         log_debug("status file cleanup failed", workspace_path, err)
 ```
 
+The orchestrator applies this same removal a second time during a run, at the moment it acts on
+a recognized status value that admits the run to the self-review phase (Section 2.3.2): the file
+is removed immediately before the phase's first review turn, so the phase's own first read does
+not observe the value that admitted it. This second removal applies the same `Lstat` symlink
+rejection and the same tolerance of failure as the pre-dispatch removal; a failed removal does
+not prevent the phase from running.
+
 ### 3.5 Idempotency
 
 The re-dispatch and re-block cycle is an expected operational pattern:
@@ -428,6 +487,13 @@ exit phase. The status file value determines whether the handoff transition fire
 | absent or unrecognized | Normal | Performed (if configured and issue is active) | Depends on handoff result |
 | (any) | Error | Skipped | Standard error retry |
 
+Every row that performs the handoff is additionally subject to the run's
+`tracker.handoff_evidence` verdict
+([architecture Section 7.3](architecture/07-orchestration-state-machine.md#73-transition-triggers)).
+Where the verdict withholds the transition, the issue keeps its active state and its claim, the
+run is recorded as failed with the verdict as its reason, and the exit takes the
+exponential-backoff failure path rather than the row's stated retry outcome.
+
 The semantic distinction drives the difference: `blocked` means the agent cannot proceed, so
 there is no completed work to hand off. `needs-human-review` means the agent completed its work
 and the issue should move to a review state in the tracker.
@@ -443,6 +509,11 @@ When a `handoff_state` is configured and the agent writes `needs-human-review`, 
 attempts the handoff transition. On success, the issue moves to the configured handoff state. On
 failure (network error, permission denied, nil adapter), the orchestrator logs a warning and
 releases the claim without scheduling a retry.
+
+Where the self-review phase runs (Section 2.3.2), it runs before this disposition is computed:
+the phase does not change which row a run takes, but for `needs-human-review` on an enabled
+deployment the phase's verification commands and review turn complete first, and an in-phase
+`blocked` reached from that admission replaces the row the run takes with the `blocked` row.
 
 ## 4. Prompt integration
 
@@ -607,7 +678,9 @@ The following rules govern protocol evolution:
    specification of the orchestrator's behavioral response.
 
 2. **Existing values MUST NOT change meaning.** The semantics of `blocked` and
-   `needs-human-review` as defined in Section 2.3 are permanent.
+   `needs-human-review` as defined in Section 2.3 are permanent. This permanence covers what each
+   value states about the agent's assessment of the work; it does not fix the orchestrator's
+   scheduling response to a value, which Section 2.3.2 documents as configuration-dependent.
 
 3. **Values MUST NOT be removed.** An orchestrator must recognize all values from all previous
    protocol versions.
@@ -730,12 +803,18 @@ of `blocked` or `needs-human-review` indicates the agent's last assessment.
 
 An implementation conforms to this specification if it satisfies all of the following:
 
-1. The orchestrator reads `.sortie/status` after each completed turn, before the retry decision.
+1. The orchestrator reads `.sortie/status` after each completed turn, before the retry decision,
+   and again after each review turn and each fix turn inside the self-review phase per
+   Section 2.3.5.
 2. The orchestrator recognizes `blocked` and `needs-human-review` per Section 2.3.
 3. The orchestrator ignores unrecognized values per Section 2.5.
 4. The orchestrator handles read errors per Section 2.6.
-5. The orchestrator deletes `.sortie/status` before each new dispatch per Section 3.4.
-6. The orchestrator never writes to or modifies `.sortie/status` during a worker run.
+5. The orchestrator deletes `.sortie/status` before each new dispatch per Section 3.4, and again
+   at the moment it acts on a recognized value that admits the run to the self-review phase per
+   Section 2.3.2 and Section 3.4.
+6. The orchestrator never writes to `.sortie/status`, and its only removals of the file are the
+   pre-dispatch cleanup and the removal on admission to the self-review phase, both per
+   Section 3.2 and Section 3.4.
 7. The status file does not trigger tracker state transitions per Section 3.6.
 8. Symbolic links at any path component are treated as read errors per Section 7.2.
 9. Pre-dispatch cleanup applies the same symlink rejection as reads per Section 3.4.

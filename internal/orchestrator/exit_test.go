@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -1921,6 +1922,81 @@ func TestHandleWorkerExit_HandoffEvidenceOnlyAppliesToEligibleHandoff(t *testing
 			t.Errorf("handoffTransitions = %v, want [%s]", spy.handoffTransitions, handoffSkipped)
 		}
 	})
+}
+
+// stallingGitDir returns a directory holding a git shim that never produces
+// output, prepended to PATH so the evidence inspection stalls. The shim forks
+// its sleep and then exits, so the child outlives a kill of the shim itself
+// and keeps the output pipe open, which is the case a cancelled context alone
+// does not unblock.
+func stallingGitDir(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	script := "#!/bin/sh\nsleep 20\nexit 0\n"
+	if err := os.WriteFile(filepath.Join(dir, "git"), []byte(script), 0o755); err != nil { //nolint:gosec // test shim must be executable
+		t.Fatalf("writing stalling git shim: %v", err)
+	}
+	return dir
+}
+
+// TestHandleWorkerExit_HandoffEvidenceInspectionBounded verifies that the
+// workspace evidence inspection cannot block the caller indefinitely. The exit
+// handler runs on the orchestrator's single event loop and the context it
+// receives carries no deadline of its own, so a Git command that never returns
+// must be cut short by the inspection's own bound. Exceeding the bound is a
+// failed inspection, which is undeterminable and permits the handoff under the
+// observed policy.
+func TestHandleWorkerExit_HandoffEvidenceInspectionBounded(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the stalling git shim is a POSIX shell script")
+	}
+
+	const issueID = "HE-STALL"
+	dir, baseline := handoffEvidenceGitWorkspace(t)
+
+	// t.Setenv is incompatible with t.Parallel.
+	t.Setenv("PATH", stallingGitDir(t)+string(os.PathListSeparator)+os.Getenv("PATH"))
+	originalTimeout := handoffEvidenceTimeout
+	handoffEvidenceTimeout = 50 * time.Millisecond
+	t.Cleanup(func() { handoffEvidenceTimeout = originalTimeout })
+
+	store := &mockExitStore{}
+	tracker := &mockTrackerAdapter{}
+	spy := &spyMetrics{}
+	state := exitStateWithIssue(t, issueID, "In Progress")
+	params := handoffEvidenceExitParams(t, store, tracker, spy)
+	var logs bytes.Buffer
+	params.Logger = debugLogger(t, &logs)
+
+	start := time.Now()
+	HandleWorkerExit(state, WorkerResult{
+		IssueID:                 issueID,
+		Identifier:              issueID + "-ident",
+		ExitKind:                WorkerExitNormal,
+		WorkspacePath:           dir,
+		HandoffEvidencePolicy:   config.HandoffEvidenceObserved,
+		HandoffEvidenceBaseline: baseline,
+		AgentAdapter:            "mock",
+	}, params)
+	elapsed := time.Since(start)
+
+	if elapsed > 15*time.Second {
+		t.Errorf("HandleWorkerExit took %s, want the evidence inspection bounded well below the stalled command", elapsed)
+	}
+	if len(tracker.transitionCalls) != 1 {
+		t.Errorf("TransitionIssue called %d times, want 1: an undeterminable verdict permits the handoff under the observed policy", len(tracker.transitionCalls))
+	}
+	if store.runHistories[0].Status != "succeeded" {
+		t.Errorf("RunHistory.Status = %q, want succeeded", store.runHistories[0].Status)
+	}
+	for _, want := range []string{
+		`msg="handoff evidence not determinable"`,
+		`verdict="evidence not determinable"`,
+	} {
+		if !strings.Contains(logs.String(), want) {
+			t.Errorf("log output missing %q\ngot: %s", want, logs.String())
+		}
+	}
 }
 
 func TestHandleWorkerExit_HandoffTransitionSucceeds(t *testing.T) {
@@ -6980,4 +7056,65 @@ func TestHandleWorkerExit_LabelReviewExitDoesNotWidenReactionSeeding(t *testing.
 			t.Errorf("PendingReactions count = %d, want 0 (no reaction kind may be seeded by a label-review exit)", len(state.PendingReactions))
 		}
 	})
+}
+
+// TestHandleWorkerExit_CompletionSignalAfterSelfReview verifies that a run
+// ending on the completion signal, whose self-review phase ran and
+// recorded metadata, takes the same exit disposition it took before the
+// phase existed: the handoff transition fires where configured and the
+// issue is active, the continuation retry stays suppressed, and the claim
+// is released. HandleWorkerExit reads only SoftStop and SoftStopReason
+// from the result, so the phase having run ahead of the exit must not
+// change the disposition those two fields already produced.
+func TestHandleWorkerExit_CompletionSignalAfterSelfReview(t *testing.T) {
+	t.Parallel()
+
+	store := &mockExitStore{}
+	tracker := &mockTrackerAdapter{}
+	state := exitStateWithIssue(t, "CS-1", "In Progress")
+	params := defaultExitParams(t, store)
+	params.TrackerAdapter = tracker
+	params.HandoffState = "Human Review"
+	params.ActiveStates = []string{"In Progress"}
+
+	reviewMeta := &domain.ReviewMetadata{
+		Enabled:         true,
+		TotalIterations: 1,
+		FinalVerdict:    "pass",
+		Iterations: []domain.ReviewIterationRecord{
+			{Iteration: 1, Verdict: "pass"},
+		},
+	}
+
+	HandleWorkerExit(state, WorkerResult{
+		IssueID:        "CS-1",
+		Identifier:     "CS-1-ident",
+		ExitKind:       WorkerExitNormal,
+		AgentAdapter:   "mock",
+		SoftStop:       true,
+		SoftStopReason: "needs-human-review",
+		ReviewMetadata: reviewMeta,
+	}, params)
+
+	if len(tracker.transitionCalls) != 1 {
+		t.Fatalf("TransitionIssue called %d times, want 1 (handoff must fire for a completion-signal run that went through self-review)", len(tracker.transitionCalls))
+	}
+	if tracker.transitionCalls[0].TargetState != "Human Review" {
+		t.Errorf("TransitionIssue TargetState = %q, want %q", tracker.transitionCalls[0].TargetState, "Human Review")
+	}
+	if _, ok := state.RetryAttempts["CS-1"]; ok {
+		t.Error("continuation retry scheduled after a completion-signal handoff, want suppressed")
+	}
+	if _, ok := state.Claimed["CS-1"]; ok {
+		t.Error("claim preserved after a completion-signal handoff, want released")
+	}
+	if _, ok := state.Completed["CS-1"]; !ok {
+		t.Error("issue not added to Completed set after a completion-signal handoff")
+	}
+	if len(store.runHistories) != 1 {
+		t.Fatalf("AppendRunHistory called %d times, want 1", len(store.runHistories))
+	}
+	if store.runHistories[0].ReviewMetadata == nil {
+		t.Error("RunHistory.ReviewMetadata = nil, want the marshaled review metadata")
+	}
 }

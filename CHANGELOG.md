@@ -18,6 +18,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   created.
   ([#803](https://github.com/sortie-ai/sortie/issues/803))
 
+- Sortie now withholds the handoff transition from a run that produced
+  no work it could observe. The workspace is compared against a
+  baseline taken immediately before the agent starts, and the issue
+  advances to `tracker.handoff_state` only when the run moved the
+  committed position, changed the working tree, or left a pushed branch
+  or pull request behind - so a session that finished with nothing to
+  show no longer arrives for human review as if it had. Such a run is
+  recorded as failed, names the verdict as its reason, counts on
+  `sortie_handoff_transitions_total{result="withheld"}`, and leaves the
+  issue in its active state for a backoff retry. The new
+  `tracker.handoff_evidence` field selects the policy: `observed`, the
+  default, withholds only where the workspace could be inspected and
+  showed nothing; `strict` also withholds where it could not be
+  inspected at all, such as a workspace that is not a Git tree; `off`
+  computes no verdict and restores the previous behavior. A deployment
+  whose agents leave their result outside the workspace - a tracker
+  comment, say - sees those issues withheld and re-dispatched on every
+  run, and sets the field to `off`.
+  ([#768](https://github.com/sortie-ai/sortie/issues/768))
+
 ### Fixed
 
 - Adapter endpoint validation errors no longer print credentials
@@ -59,6 +79,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `reactions.bot_review` block, because that is where `bot_usernames`
   lives.
   ([#665](https://github.com/sortie-ai/sortie/issues/665))
+
+- Self-review now runs when the agent reports its work complete,
+  instead of only when the agent exhausts its turn budget. An operator
+  who set `self_review.enabled: true` got the verification commands and
+  the review turn on the one path a finished run never takes, so work
+  reached the handoff state with none of the configured checks having
+  run. A run that ends this way now takes longer, counts its review and
+  fix turns alongside its coding turns, records a review outcome where
+  it previously recorded none, and passes that outcome to the
+  `after_run` hook in place of `disabled`.
+  ([#813](https://github.com/sortie-ai/sortie/issues/813))
 
 ## [1.19.0] - 2026-08-12
 

@@ -21,13 +21,20 @@ Recognized values:
 - `blocked`: agent signals it cannot proceed without human intervention. The orchestrator treats
   this as a soft stop: it completes the current turn normally, suppresses continuation retries,
   and releases the issue claim. The issue becomes eligible for re-dispatch on future tracker
-  polls under normal dispatch rules.
+  polls under normal dispatch rules. This value never enters the self-review phase (Section 7);
+  it remains an immediate exit whether or not self-review is configured.
 - `needs-human-review`: agent signals that work is complete and requires review. Like `blocked`,
   this value suppresses continuation retries and releases the issue claim. Unlike `blocked`, when
   `tracker.handoff_state` is configured and the issue is in an active tracker state, the
   orchestrator performs the handoff transition (Section 5.3.1). This ensures completed work moves
   to a review state in the tracker, maintaining tracker-as-source-of-truth semantics. If
-  `tracker.handoff_state` is not configured, the behavior is identical to `blocked`.
+  `tracker.handoff_state` is not configured, the behavior is identical to `blocked`. The
+  transition is also subject to the run's `tracker.handoff_evidence` verdict (Section 7.3): a
+  verdict that withholds it leaves the issue in its active state, keeps the claim, and takes the
+  backoff failure path instead of releasing the claim. Where
+  self-review is enabled and the phase's other gate conditions hold, this value first admits the
+  run to the self-review phase (Section 7); the handoff transition and claim release described
+  above happen once that phase ends, rather than at the read.
 
 If the file is absent or contains an unrecognized value, it is ignored.
 

@@ -297,6 +297,7 @@ function run_agent_attempt(issue, attempt, orchestrator_channel):
 
   max_turns = config.agent.max_turns
   turn_number = 1
+  pending_reason = ""  // set once a post-turn read admits a recognized value
 
   while true:
     prompt = build_turn_prompt(workflow_template, issue, attempt, turn_number, max_turns)
@@ -317,6 +318,11 @@ function run_agent_attempt(issue, attempt, orchestrator_channel):
       run_hook_best_effort("after_run", workspace.path)
       fail_worker("agent turn error")
 
+    status = read_sortie_status(workspace.path)
+    if status in ["blocked", "needs-human-review"]:
+      pending_reason = status
+      break  // leaves the loop; the phase and teardown below run regardless of which value this is
+
     refreshed_issue = tracker.fetch_issue_states_by_ids([issue.id])
     if refreshed_issue failed:
       agent_adapter.stop_session(session)
@@ -334,13 +340,24 @@ function run_agent_attempt(issue, attempt, orchestrator_channel):
 
     turn_number = turn_number + 1
 
-  // Self-review phase (between turn loop exit and session teardown).
+  // Self-review phase (between turn loop exit and session teardown). The gate
+  // that already admits an exhausted turn budget also admits pending_reason
+  // when it is empty or names the completion signal; a pending "blocked"
+  // reason skips the phase.
   review_metadata = null
   cfg = current_config()  // re-read for dynamic reload
-  if cfg.self_review.enabled AND issue.state is active AND context not cancelled:
-    review_metadata = run_self_review_loop(
+  signal_admits = pending_reason == "" OR pending_reason == "needs-human-review"
+  if cfg.self_review.enabled AND issue.state is active AND context not cancelled AND signal_admits:
+    if pending_reason != "":
+      log_info("agent signaled completion, entering self-review", issue.id, pending_reason)
+      remove_sortie_status(workspace.path)  // consume on entry, before the phase's first read
+    review_metadata, phase_signal = run_self_review_loop(
       session, workspace, issue, cfg.self_review, agent_adapter, orchestrator_channel
     )
+    if pending_reason != "" AND phase_signal == "blocked":
+      pending_reason = "blocked"
+  else if pending_reason != "":
+    log_info("agent signaled status, exiting worker", issue.id, pending_reason)
 
   self_review_status = "disabled"
   if review_metadata != null:
@@ -357,7 +374,7 @@ function run_agent_attempt(issue, attempt, orchestrator_channel):
     SORTIE_SELF_REVIEW_SUMMARY_PATH: workspace.path + "/.sortie/review_summary.md"
   })
 
-  exit_normal()
+  exit_normal(soft_stop=pending_reason != "", soft_stop_reason=pending_reason)
 ```
 
 ### 16.6 Worker Exit and Retry Handling

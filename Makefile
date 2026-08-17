@@ -57,10 +57,6 @@ lint: ## Run golangci-lint on all packages
 tidy: ## Tidy go.sum and prune stale entries from go.mod
 	$(GO) mod tidy
 
-.PHONY: style
-style: ## Enforce style guidelines via Copilot CLI  (FLAGS=…  FILE=path)
-	sh scripts/enforce-style.sh $(FLAGS) $(if $(FILE),'$(FILE)',)
-
 # ── Utilities ─────────────────────────────────────────────────────────────────
 
 ##@ Utilities
@@ -95,8 +91,6 @@ endif
 	@printf '  $(CYAN)%-24s$(RESET) %s\n' \
 		'PKG'      ' Package filter for test targets (default: ./...)' \
 		'RUN'      ' Test name filter, passed to -run' \
-		'FLAGS'    ' Extra flags for the style target' \
-		'FILE'     ' Single file target for style' \
 		'VERSION'  ' Override version string (default: git describe)' \
 		'NO_COLOR' ' Disable color output (https://no-color.org/)'
 	@printf '\n'
