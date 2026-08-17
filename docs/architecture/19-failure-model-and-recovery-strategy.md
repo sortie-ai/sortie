@@ -56,9 +56,12 @@
 
 - Recognized `.sortie/status` signal:
   - Both values keep their existing dispositions. A `blocked` soft stop suppresses the handoff
-    transition and the continuation retry. A completion signal (`needs-human-review`) takes the
-    handoff transition where it is configured and the issue is still active, and also suppresses
-    the continuation retry.
+    transition and the continuation retry. A completion signal (`needs-human-review`) suppresses
+    the continuation retry and takes the ordered handoff disposition (§7.3) unchanged: the
+    transition fires only where a handoff state is configured, the issue is still active, the
+    dispatch drives issue state, no terminal observation suppresses it, and the evidence verdict
+    permits the write. A verdict that withholds the write routes this exit to the withheld-handoff
+    recovery below, exactly as it routes any other exit that reaches it.
   - Where self-review is enabled and its gate admits the exit, the completion signal now runs the
     self-review phase before that disposition is computed. The phase runs while the session is
     live and before session teardown; the disposition itself is unchanged.

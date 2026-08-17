@@ -208,6 +208,12 @@ tracker state, the orchestrator performs the handoff transition before releasing
 handoff transition fails (network error, permission denied, nil adapter), the orchestrator logs a
 warning and releases the claim without scheduling a retry.
 
+The transition is additionally subject to the run's `tracker.handoff_evidence` verdict
+([architecture Section 7.3](architecture/07-orchestration-state-machine.md#73-transition-triggers)).
+Where that verdict withholds the transition, no tracker write is attempted: the issue keeps its
+active state and its claim, and the exit takes the exponential-backoff failure path instead of
+releasing the claim.
+
 This distinction reflects the semantic difference between the two values: `blocked` means "I
 cannot proceed" (no completed work to hand off), while `needs-human-review` means "work is
 complete, ready for review" (completed work should be visible in the tracker via handoff).
@@ -481,6 +487,13 @@ exit phase. The status file value determines whether the handoff transition fire
 | absent or unrecognized | Normal | Performed (if configured and issue is active) | Depends on handoff result |
 | (any) | Error | Skipped | Standard error retry |
 
+Every row that performs the handoff is additionally subject to the run's
+`tracker.handoff_evidence` verdict
+([architecture Section 7.3](architecture/07-orchestration-state-machine.md#73-transition-triggers)).
+Where the verdict withholds the transition, the issue keeps its active state and its claim, the
+run is recorded as failed with the verdict as its reason, and the exit takes the
+exponential-backoff failure path rather than the row's stated retry outcome.
+
 The semantic distinction drives the difference: `blocked` means the agent cannot proceed, so
 there is no completed work to hand off. `needs-human-review` means the agent completed its work
 and the issue should move to a review state in the tracker.
@@ -498,7 +511,7 @@ failure (network error, permission denied, nil adapter), the orchestrator logs a
 releases the claim without scheduling a retry.
 
 Where the self-review phase runs (Section 2.3.2), it runs before this disposition is computed:
-the table's rows still describe the final outcome, but for `needs-human-review` on an enabled
+the phase does not change which row a run takes, but for `needs-human-review` on an enabled
 deployment the phase's verification commands and review turn complete first, and an in-phase
 `blocked` reached from that admission replaces the row the run takes with the `blocked` row.
 
