@@ -1747,6 +1747,21 @@ head
 `head_pipeline.sha` and `head_pipeline.id`, never the merge request's own `sha`, so the
 pipeline and the commit it describes cannot disagree.
 
+The consequence for `GetCIStatus`: it compares the two SHAs before classifying anything, and
+defers at `"pending"` rather than classify a status computed for a superseded commit. The
+divergence also reproduces on the external-status path: a merge request reported `sha` at
+`635f42a9` while `head_pipeline` reported `{id: 22, sha: 24f87df6, status: "success",
+ref: "feature-828b", source: "external"}`, stable across several minutes of re-reads and with
+`detailed_merge_status: "mergeable"`, so the CI read is genuinely reached rather than shadowed
+by a mergeability block **[live-CE]**. The same shape reproduces on GitLab.com: a merge request
+reported `sha: d959449b` against an unchanged `head_pipeline` at `d85c06f5`, settling at
+`detailed_merge_status: "mergeable"` and `merge_status: "can_be_merged"` **[live-SaaS]**, so the
+defect and its fix are not specific to the compatibility floor. The divergence also opens
+transiently on the ordinary path: sampling a merge request every 0.4 seconds across a push that
+does create a pipeline, one sample at t+0.75 s reported the new `sha` with `head_pipeline` still
+on the previous commit, and by t+1.32 s both had advanced **[live-CE]**, so `GetCIStatus` must
+treat the deferral as recoverable on the next poll rather than terminal.
+
 **`GetCIStatus` mapping.** The orchestrator compares the returned string against the literal
 `"success"` and treats the empty string as "no checks exist"
 (`internal/orchestrator/auto_merge_reconcile.go`). Returning GitLab's pipeline status verbatim
@@ -1769,6 +1784,53 @@ each enumerate exactly those 13 values (`created`, `waiting_for_resource`, `prep
 | `created`, `waiting_for_resource`, `preparing`, `waiting_for_callback`, `pending`, `running`, `canceling`, `scheduled` | `"pending"` (still settling) |
 | `manual` | the verdict `scmcore.MergeGate` computes over the pipeline's own job set, at the cost of one extra request (see below) |
 | any other value, including the empty string | `"pending"`, and logs one WARN naming the observed value |
+
+**The table above applies only when `head_pipeline.sha` matches the merge request's own `sha`,
+compared case-insensitively.** A difference means the platform has not caught up with a new
+head commit, most often because a push created no new pipeline of its own for it:
+`GET /projects/:id/repository/commits/:sha` for the new head reports `last_pipeline: null` and
+the statuses route for it returns `200 []`, so no read available to the adapter reports a
+verdict for that head **[live-CE]**. `GetCIStatus` answers `"pending"` for that shape, together
+with one WARN naming the merge request's own `sha`, the head pipeline's `sha`, and the head
+pipeline's id, rather than reporting the status the superseded pipeline carries. Three
+dispositions actually change: a superseded pipeline reporting `success` or `skipped` no longer
+answers `"success"`, and a superseded `manual` pipeline whose job set would fold to `success` no
+longer pays for the job-set read below at all. A superseded `failed`, `canceled`, or one of the
+eight settling statuses already answered a non-merge-eligible value and still does. A `null`
+`head_pipeline` is unaffected by the comparison and keeps its `""`: the platform reports a
+genuinely uncovered head with `head_pipeline: null` and `detailed_merge_status: "mergeable"`
+**[live-CE]**, a shape the wire distinguishes from a superseded pipeline, so the two are never
+conflated.
+
+**Two shapes are exempt from the comparison: a merged-results pipeline and a merge-train
+pipeline generated for the merge request being read.** Both run on a temporary ref whose commit
+exists in neither branch, so their `sha` can never equal the merge request's own, and neither
+the embedded `head_pipeline` object nor the pipeline detail route exposes a `source_sha` or a
+`target_sha` relating that commit to the head: an authenticated read of a GitLab.com merge
+request using merged results returned 22 keys on the embedded object and 23 on the pipeline
+detail route, and neither field appeared on either **[live-SaaS]**. Both shapes are Premium and
+Ultimate only; a Community Edition project carries neither the `merge_pipelines_enabled` nor
+the `merge_trains_enabled` setting, and a `PUT` request setting the former returns `200` with
+the key still absent **[live-CE]**, so every shape Community Edition can produce stays inside
+the comparison. The exemption is not a test of `ref` alone: a branch literally named
+`refs/merge-requests/999/merge` is accepted by the platform, and a pipeline created on it
+reports `source: "external"` or `source: "push"` depending on how the pipeline was created,
+neither of which is `merge_request_event` **[live-CE]**. `GetCIStatus` therefore tests the
+platform-set `source` together with the exact ref anchored to the merge request being read,
+which a branch name cannot forge. A detached merge-request pipeline
+(`ref: "refs/merge-requests/{iid}/head"`) is not exempt: its `sha` equals the merge request's
+own whenever it describes the head **[live-CE]**, so it stays inside the comparison like a
+branch pipeline. GitLab's own narrower association, `MergeRequest.headPipeline` on GraphQL,
+resolves this correctly for every shape: it returned `null` for a stale Community Edition
+fixture whose REST response reported the superseded pipeline, and the pipeline for a healthy
+fixture on the same instance, matching `diffHeadSha` **[live-CE]**; on GitLab.com it returned
+the merged-results pipeline for a merge request whose `sha` differs from that pipeline's own
+**[live-SaaS]**. The adapter stays on REST v4 for this read regardless; see
+[GraphQL](#graphql). The merge-train ref name rests on the
+merge-trains API reference's own example (`"ref": "refs/merge-requests/59/train"`) rather than
+on an observation, because merge trains are unreachable below Premium; if the name is wrong a
+train pipeline falls outside the exemption and defers at `"pending"` rather than merging
+**[docs]**.
 
 `skipped` is a terminal, non-failing status, and it folds to a merge-eligible verdict rather
 than to a deferral. The platform's composite-status computation reports `skipped` for a pipeline
@@ -2205,7 +2267,7 @@ Every route below was exercised on the fixture unless the status column says oth
 | --- | --- | --- |
 | `GetMergeability` | `GET /projects/:id/merge_requests/:iid` | Verified **[live-CE]** |
 | `GetReviewDecision` | `GET .../merge_requests/:iid/approvals` plus `.../reviewers` | Verified, two requests **[live-CE]** |
-| `GetCIStatus` | `head_pipeline` on the merge-request object, plus `GET /projects/:id/repository/commits/:sha/statuses` on a `manual` head pipeline | Verified, no extra request for twelve of the thirteen pipeline statuses and one extra request for `manual` **[live-CE]** |
+| `GetCIStatus` | `head_pipeline` on the merge-request object, plus `GET /projects/:id/repository/commits/:sha/statuses` on a `manual` head pipeline that describes the merge request head | Verified, no extra request for twelve of the thirteen pipeline statuses and one extra request for `manual`, spent only when the head pipeline describes the merge request head; a superseded head pipeline of any status costs nothing beyond the merge-request read **[live-CE]** |
 | `FetchCIStatus` | `GET /projects/:id/repository/commits/:sha/statuses` | Verified **[live-CE]** |
 | Job log for `max_log_lines` | `GET /projects/:id/jobs/:job_id/trace` | Verified, `text/plain`, no range support **[live-CE]** |
 | `FetchPendingReviews` | `.../merge_requests/:iid/reviewers` plus `.../notes` | Verified **[live-CE]** |

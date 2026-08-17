@@ -65,10 +65,10 @@ settled, non-failing pipeline that carries no run at all: the merge gate answers
 aggregate, and the CI provider answers `pending` from an empty run set.
 
 The two readers are also addressed differently, which is a second reason their answers can differ.
-`SCMAdapter.GetCIStatus` takes a pull-request identity (`prNumber`, `owner`, `repo`) and answers
-about that pull request as the forge currently reports it, while `CIStatusProvider.FetchCIStatus`
-takes a caller-supplied ref string and answers about that ref, which may no longer be the pull
-request's head.
+`SCMAdapter.GetCIStatus` takes a pull-request identity (`prNumber`, `owner`, `repo`). On GitLab the
+merge gate answers from the head pipeline only when that pipeline describes the pull request's
+current head, and defers otherwise; `CIStatusProvider.FetchCIStatus` takes a caller-supplied ref
+string and answers about that ref, which may no longer be the pull request's head.
 
 Each `CheckRun` contains:
 

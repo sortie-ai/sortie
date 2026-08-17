@@ -140,6 +140,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   one extra API call per poll; every other pipeline state is unchanged.
   ([#827](https://github.com/sortie-ai/sortie/issues/827))
 
+- GitLab: auto-merge no longer acts on a CI verdict belonging to an
+  earlier commit. GitLab reports a merge request's pipeline as stored,
+  not as re-checked against the current commit, so a push that produced
+  no pipeline of its own - removing the CI configuration, or a change
+  the pipeline rules exclude - left the previous commit's result in
+  place. A merge request could merge on a passing result that never
+  covered the commit being merged, and the same staleness held the gate
+  shut the other way. The verdict is now withheld as pending whenever
+  the pipeline on offer describes a commit other than the merge request
+  head. A merge request whose branch never produced a pipeline still
+  reports no verdict and merges where the deployment allows it.
+  Projects using merged results pipelines or merge trains keep the
+  previous behavior, because those pipelines run on a commit that
+  exists in neither branch and never match the head by design.
+  ([#828](https://github.com/sortie-ai/sortie/issues/828))
+
 ### Migrations
 
 - Add the `handoff_absence_resets` table, recording per issue where its
