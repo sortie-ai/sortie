@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -44,6 +45,7 @@ type FileAdapter struct {
 	mu               sync.RWMutex
 	overrides        map[string]string           // issue ID → overridden state
 	commentOverrides map[string][]domain.Comment // issue ID → appended comments
+	labelOverrides   map[string]string           // issue ID → label to merge into raw.Labels
 	metrics          domain.Metrics              // nil-safe: check before calling
 }
 
@@ -72,6 +74,7 @@ func NewFileAdapter(config map[string]any) (domain.TrackerAdapter, error) {
 		activeStates:     toStringSet(typeutil.ExtractStringSlice(config["active_states"])),
 		overrides:        make(map[string]string),
 		commentOverrides: make(map[string][]domain.Comment),
+		labelOverrides:   make(map[string]string),
 	}, nil
 }
 
@@ -361,18 +364,30 @@ func (a *FileAdapter) SetMetrics(m domain.Metrics) {
 	a.metrics = m
 }
 
-// AddLabel is a no-op for the file adapter. File-based issues do not
-// support labels.
-func (a *FileAdapter) AddLabel(_ context.Context, _ string, _ string) error {
-	return trackermetrics.Track(a.metrics, "add_label", func() error { return nil })
+// AddLabel records the label in the adapter's in-memory label overlay, so
+// it is visible on subsequent reads of the issue. Only one label per issue
+// is retained; a second call for the same issue ID overwrites the first.
+func (a *FileAdapter) AddLabel(_ context.Context, issueID string, label string) error {
+	return trackermetrics.Track(a.metrics, "add_label", func() error {
+		a.mu.Lock()
+		a.labelOverrides[issueID] = label
+		a.mu.Unlock()
+		return nil
+	})
 }
 
 // applyOverride returns a copy of raw with its State replaced by the
-// in-memory override value when one exists. Caller must hold at least
-// a read lock on a.mu.
+// in-memory state override when one exists, and with the in-memory label
+// override merged into Labels (case-insensitive against the existing
+// entries) when one exists. Caller must hold at least a read lock on a.mu.
 func (a *FileAdapter) applyOverride(raw rawIssue) rawIssue {
 	if st, ok := a.overrides[raw.ID]; ok {
 		raw.State = st
+	}
+	if label, ok := a.labelOverrides[raw.ID]; ok && !slices.ContainsFunc(raw.Labels, func(l string) bool {
+		return strings.EqualFold(l, label)
+	}) {
+		raw.Labels = append(raw.Labels, label)
 	}
 	return raw
 }

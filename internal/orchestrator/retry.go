@@ -32,6 +32,9 @@ type RetryTimerStore interface {
 	QueryConsecutiveHandoffAbsenceCounts(ctx context.Context, issueIDs []string) (map[string]int, error)
 	TokenUsageByIssue(ctx context.Context, issueID string) (persistence.IssueTokenUsage, error)
 	MarkReactionDispatched(ctx context.Context, issueID, kind string) error
+	UpsertParkedIssue(ctx context.Context, entry persistence.ParkedIssue) error
+	DeleteParkedIssue(ctx context.Context, issueID string) error
+	ResetHandoffAbsenceSequence(ctx context.Context, issueID string) error
 }
 
 // HandleRetryTimerParams holds the dependencies for [HandleRetryTimer]
@@ -227,42 +230,55 @@ func HandleRetryTimer(state *State, issueID string, params HandleRetryTimerParam
 		return
 	}
 
-	// Consecutive handoff-absence gate. This check runs for every primary
-	// retry fire, including entries reconstructed after restart, before any
-	// tracker fetch or worker dispatch. The persisted run-history sequence
-	// therefore remains a dispatch gate even if the process exited between
-	// recording the final absence and deleting its retry row.
-	//
-	// A reaction continuation is exempt. Only a primary dispatch can record an
-	// absence, so parking one here would cancel a retry sequence the ceiling
-	// does not govern, on the strength of absences from unrelated runs. The off
-	// policy records no absence at all and is not inspected here either.
-	absenceGateApplies := params.HandoffEvidencePolicy.Effective() != config.HandoffEvidenceOff &&
-		!isKnownReactionKind(popped.ReactionKind)
-	if absenceGateApplies {
-		absenceCeiling := handoffAbsenceCeiling(params.MaxSessions)
-		absenceCounts, absenceErr := params.Store.QueryConsecutiveHandoffAbsenceCounts(ctx, []string{issueID})
-		consecutiveAbsences := absenceCounts[issueID]
-		if absenceErr != nil {
-			consecutiveAbsences = max(popped.Attempt, 1)
-			log.Warn("handoff absence count query failed, using retry attempt fallback",
-				slog.Int("consecutive_absences", consecutiveAbsences),
-				slog.Any("error", absenceErr),
+	// The retry lane carries two decisions ahead of any tracker fetch or
+	// worker dispatch, both exempt for a known reaction continuation: an
+	// already-parked issue is refused regardless of evidence policy (the
+	// park gate is policy-independent), and an issue whose absence count
+	// has just reached the ceiling is parked, skipped under the off policy
+	// because that policy records no absence at all.
+	if !isKnownReactionKind(popped.ReactionKind) {
+		if parked := state.Parked[issueID]; parked != nil {
+			log.Info("issue parked, releasing claim",
+				slog.String("reason", parked.Reason),
 			)
-		}
-		if consecutiveAbsences >= absenceCeiling {
-			parkHandoffAbsence(
-				state,
-				ctx,
-				params.Store,
-				params.TrackerAdapter,
-				issueID,
-				consecutiveAbsences,
-				absenceCeiling,
-				params.HandoffParkingLabel,
-				log,
-			)
+			delete(state.Claimed, issueID)
+			if err := params.Store.DeleteRetryEntry(ctx, issueID); err != nil {
+				log.Error("failed to delete retry entry for parked issue",
+					slog.Any("error", err),
+				)
+			}
 			return
+		}
+
+		if params.HandoffEvidencePolicy.Effective() != config.HandoffEvidenceOff {
+			absenceCeiling := handoffAbsenceCeiling(params.MaxSessions)
+			absenceCounts, absenceErr := params.Store.QueryConsecutiveHandoffAbsenceCounts(ctx, []string{issueID})
+			consecutiveAbsences := absenceCounts[issueID]
+			if absenceErr != nil {
+				consecutiveAbsences = max(popped.Attempt, 1)
+				log.Warn("handoff absence count query failed, using retry attempt fallback",
+					slog.Int("consecutive_absences", consecutiveAbsences),
+					slog.Any("error", absenceErr),
+				)
+			}
+			if consecutiveAbsences >= absenceCeiling {
+				parkHandoffAbsence(
+					state,
+					ctx,
+					params.Store,
+					params.TrackerAdapter,
+					metrics,
+					issueID,
+					popped.Identifier,
+					popped.DisplayID,
+					"",
+					consecutiveAbsences,
+					absenceCeiling,
+					params.HandoffParkingLabel,
+					log,
+				)
+				return
+			}
 		}
 	}
 

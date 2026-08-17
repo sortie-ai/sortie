@@ -36,6 +36,11 @@ type mockExitStore struct {
 	absenceResetAt map[string]int
 	absenceResetOf []string
 
+	parkedIssues     []persistence.ParkedIssue
+	deletedParkedIDs []string
+	upsertParkedErr  error
+	deleteParkedErr  error
+
 	appendRunHistoryErr       error
 	upsertAggregateMetricsErr error
 	upsertSessionMetadataErr  error
@@ -107,6 +112,16 @@ func (m *mockExitStore) ResetHandoffAbsenceSequence(_ context.Context, issueID s
 func (m *mockExitStore) UpsertSessionMetadata(_ context.Context, meta persistence.SessionMetadata) error {
 	m.sessionMetadata = append(m.sessionMetadata, meta)
 	return m.upsertSessionMetadataErr
+}
+
+func (m *mockExitStore) UpsertParkedIssue(_ context.Context, entry persistence.ParkedIssue) error {
+	m.parkedIssues = append(m.parkedIssues, entry)
+	return m.upsertParkedErr
+}
+
+func (m *mockExitStore) DeleteParkedIssue(_ context.Context, issueID string) error {
+	m.deletedParkedIDs = append(m.deletedParkedIDs, issueID)
+	return m.deleteParkedErr
 }
 
 // --- Test helpers ---
@@ -4356,6 +4371,161 @@ func TestHandleWorkerExit_SoftStop(t *testing.T) {
 			t.Errorf("retries = %v, want [] (no retry on nil adapter soft-stop)", spy.retries)
 		}
 	})
+}
+
+// TestHandleWorkerExitBlockedDrivingDispatchParksIssue verifies that a
+// blocked soft stop from a dispatch that drives issue state records the
+// durable park, releases the claim, cancels and deletes the retry, counts
+// the park, and starts the parking-label write.
+func TestHandleWorkerExitBlockedDrivingDispatchParksIssue(t *testing.T) {
+	t.Parallel()
+
+	store := &mockExitStore{}
+	tracker := newRecordingHandoffTracker()
+	spy := &spyMetrics{}
+	state := exitStateWithIssue(t, "BLK-1", "In Progress")
+	params := defaultExitParams(t, store)
+	params.TrackerAdapter = tracker
+	params.HandoffParkingLabel = "needs-human"
+	params.Metrics = spy
+
+	HandleWorkerExit(state, WorkerResult{
+		IssueID:        "BLK-1",
+		Identifier:     "BLK-1-ident",
+		ExitKind:       WorkerExitNormal,
+		AgentAdapter:   "mock",
+		SoftStop:       true,
+		SoftStopReason: "blocked",
+	}, params)
+	state.TrackerOpsWg.Wait()
+
+	entry, ok := state.Parked["BLK-1"]
+	if !ok {
+		t.Fatal("issue not parked after a blocked soft stop that drives issue state")
+	}
+	if entry.Reason != parkReasonAgentBlocked {
+		t.Errorf("Parked[BLK-1].Reason = %q, want %q", entry.Reason, parkReasonAgentBlocked)
+	}
+	if len(store.parkedIssues) != 1 || store.parkedIssues[0].IssueID != "BLK-1" {
+		t.Errorf("UpsertParkedIssue calls = %+v, want one call for BLK-1", store.parkedIssues)
+	}
+	if _, ok := state.Claimed["BLK-1"]; ok {
+		t.Error("claim remains after parking")
+	}
+	if _, ok := state.RetryAttempts["BLK-1"]; ok {
+		t.Error("retry remains after parking")
+	}
+	if len(store.deletedRetryIDs) != 1 || store.deletedRetryIDs[0] != "BLK-1" {
+		t.Errorf("DeleteRetryEntry calls = %v, want [BLK-1]", store.deletedRetryIDs)
+	}
+	spy.mu.Lock()
+	parks := append([]string(nil), spy.issueParks...)
+	spy.mu.Unlock()
+	if len(parks) != 1 || parks[0] != parkReasonAgentBlocked {
+		t.Errorf("IncIssueParks calls = %v, want one %q call", parks, parkReasonAgentBlocked)
+	}
+	calls := tracker.labels()
+	if len(calls) != 1 || calls[0].issueID != "BLK-1" || calls[0].label != "needs-human" {
+		t.Errorf("AddLabel calls = %+v, want one needs-human call for BLK-1", calls)
+	}
+}
+
+// TestHandleWorkerExitBlockedLabelCommandPostureTakesUnchangedDisposition
+// verifies that a blocked soft stop from a dispatch whose posture does not
+// drive issue state keeps today's disposition: log, cancel the retry,
+// release the claim, no park recorded, no label write started.
+func TestHandleWorkerExitBlockedLabelCommandPostureTakesUnchangedDisposition(t *testing.T) {
+	t.Parallel()
+
+	store := &mockExitStore{}
+	tracker := newRecordingHandoffTracker()
+	spy := &spyMetrics{}
+	state := exitStateWithIssue(t, "BLK-2", "In Progress")
+	state.Running["BLK-2"].ReactionKind = ReactionKindLabelReview
+	params := defaultExitParams(t, store)
+	params.TrackerAdapter = tracker
+	params.HandoffParkingLabel = "needs-human"
+	params.Metrics = spy
+
+	HandleWorkerExit(state, WorkerResult{
+		IssueID:        "BLK-2",
+		Identifier:     "BLK-2-ident",
+		ExitKind:       WorkerExitNormal,
+		AgentAdapter:   "mock",
+		SoftStop:       true,
+		SoftStopReason: "blocked",
+	}, params)
+	state.TrackerOpsWg.Wait()
+
+	if _, ok := state.Parked["BLK-2"]; ok {
+		t.Error("issue parked despite a posture that does not drive issue state")
+	}
+	if len(store.parkedIssues) != 0 {
+		t.Errorf("UpsertParkedIssue calls = %+v, want none", store.parkedIssues)
+	}
+	if _, ok := state.Claimed["BLK-2"]; ok {
+		t.Error("claim remains after soft stop")
+	}
+	if _, ok := state.RetryAttempts["BLK-2"]; ok {
+		t.Error("retry remains after soft stop")
+	}
+	if calls := tracker.labels(); len(calls) != 0 {
+		t.Errorf("AddLabel calls = %+v, want none", calls)
+	}
+	spy.mu.Lock()
+	parks := append([]string(nil), spy.issueParks...)
+	spy.mu.Unlock()
+	if len(parks) != 0 {
+		t.Errorf("IncIssueParks calls = %v, want none", parks)
+	}
+}
+
+// TestHandleWorkerExitNeedsHumanReviewPerformsHandoffWithoutParking is
+// issue #811's own regression requirement: a needs-human-review exit still
+// performs the handoff transition where configured, records no park, and
+// applies no parking label.
+func TestHandleWorkerExitNeedsHumanReviewPerformsHandoffWithoutParking(t *testing.T) {
+	t.Parallel()
+
+	store := &mockExitStore{}
+	tracker := newRecordingHandoffTracker()
+	spy := &spyMetrics{}
+	state := exitStateWithIssue(t, "NHR-1", "In Progress")
+	params := defaultExitParams(t, store)
+	params.TrackerAdapter = tracker
+	params.HandoffState = "Human Review"
+	params.ActiveStates = []string{"In Progress"}
+	params.HandoffParkingLabel = "needs-human"
+	params.Metrics = spy
+
+	HandleWorkerExit(state, WorkerResult{
+		IssueID:        "NHR-1",
+		Identifier:     "NHR-1-ident",
+		ExitKind:       WorkerExitNormal,
+		AgentAdapter:   "mock",
+		SoftStop:       true,
+		SoftStopReason: "needs-human-review",
+	}, params)
+	state.TrackerOpsWg.Wait()
+
+	if len(tracker.transitionCalls) != 1 || tracker.transitionCalls[0].TargetState != "Human Review" {
+		t.Errorf("TransitionIssue calls = %+v, want one transition to %q", tracker.transitionCalls, "Human Review")
+	}
+	if _, ok := state.Parked["NHR-1"]; ok {
+		t.Error("needs-human-review recorded a park, want none")
+	}
+	if len(store.parkedIssues) != 0 {
+		t.Errorf("UpsertParkedIssue calls = %+v, want none", store.parkedIssues)
+	}
+	if calls := tracker.labels(); len(calls) != 0 {
+		t.Errorf("AddLabel calls = %+v, want none: needs-human-review applies no parking label", calls)
+	}
+	spy.mu.Lock()
+	parks := append([]string(nil), spy.issueParks...)
+	spy.mu.Unlock()
+	if len(parks) != 0 {
+		t.Errorf("IncIssueParks calls = %v, want none", parks)
+	}
 }
 
 // TestBuildSoftStopComment verifies the format of the soft-stop comment string.

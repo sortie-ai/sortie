@@ -1,6 +1,7 @@
 package orchestrator
 
 import (
+	"bytes"
 	"math"
 	"strings"
 	"testing"
@@ -8,6 +9,7 @@ import (
 
 	"github.com/sortie-ai/sortie/internal/config"
 	"github.com/sortie-ai/sortie/internal/domain"
+	"github.com/sortie-ai/sortie/internal/persistence"
 	"github.com/sortie-ai/sortie/internal/registry"
 )
 
@@ -1737,4 +1739,161 @@ func TestBuildLabelFixReactionConfig(t *testing.T) {
 	if got != want {
 		t.Errorf("BuildLabelFixReactionConfig(%+v) = %+v, want %+v", cfg, got, want)
 	}
+}
+
+// TestPopulateParked verifies that PopulateParked loads persisted rows into
+// state.Parked, skips a row with an empty issue_id while logging a
+// warning, loads a row with an empty parked_state rather than skipping it,
+// and that the resulting state.Parked is honored by ShouldDispatch's gate.
+func TestPopulateParked(t *testing.T) {
+	t.Parallel()
+
+	t.Run("loads rows into state.Parked", func(t *testing.T) {
+		t.Parallel()
+
+		state := NewState(5000, 4, nil, AgentTotals{})
+		rows := []persistence.ParkedIssue{
+			{
+				IssueID:      "id-1",
+				Identifier:   "PROJ-1",
+				DisplayID:    "PROJ-1-display",
+				Reason:       parkReasonAgentBlocked,
+				ParkedState:  "In Progress",
+				Label:        "needs-human",
+				LabelApplied: true,
+				ParkedAt:     "2026-08-17T00:00:00Z",
+			},
+			{
+				IssueID:     "id-2",
+				Identifier:  "PROJ-2",
+				Reason:      parkReasonHandoffAbsence,
+				ParkedState: "",
+				Label:       "needs-human",
+				ParkedAt:    "2026-08-17T01:00:00Z",
+			},
+		}
+
+		PopulateParked(state, rows, nil)
+
+		if len(state.Parked) != 2 {
+			t.Fatalf("len(state.Parked) = %d, want 2", len(state.Parked))
+		}
+
+		entry1, ok := state.Parked["id-1"]
+		if !ok {
+			t.Fatal("state.Parked missing id-1")
+		}
+		if entry1.Identifier != "PROJ-1" || entry1.DisplayID != "PROJ-1-display" ||
+			entry1.Reason != parkReasonAgentBlocked || entry1.ParkedState != "In Progress" ||
+			entry1.Label != "needs-human" || !entry1.LabelApplied {
+			t.Errorf("state.Parked[id-1] = %+v, want fields to match the persisted row", entry1)
+		}
+		if !entry1.ParkedAt.Equal(time.Date(2026, 8, 17, 0, 0, 0, 0, time.UTC)) {
+			t.Errorf("state.Parked[id-1].ParkedAt = %v, want 2026-08-17T00:00:00Z", entry1.ParkedAt)
+		}
+
+		// A row loaded with an empty parked_state is loaded, not skipped:
+		// only an empty issue_id is a malformed row.
+		entry2, ok := state.Parked["id-2"]
+		if !ok {
+			t.Fatal("state.Parked missing id-2")
+		}
+		if entry2.ParkedState != "" {
+			t.Errorf("state.Parked[id-2].ParkedState = %q, want empty", entry2.ParkedState)
+		}
+	})
+
+	t.Run("skips a row with an empty issue_id and logs a warning", func(t *testing.T) {
+		t.Parallel()
+
+		state := NewState(5000, 4, nil, AgentTotals{})
+		rows := []persistence.ParkedIssue{
+			{IssueID: "", Identifier: "PROJ-MALFORMED", Reason: parkReasonAgentBlocked, ParkedAt: "2026-08-17T00:00:00Z"},
+			{IssueID: "id-3", Identifier: "PROJ-3", Reason: parkReasonAgentBlocked, ParkedAt: "2026-08-17T00:00:00Z"},
+		}
+		var logs bytes.Buffer
+
+		PopulateParked(state, rows, debugLogger(t, &logs))
+
+		if len(state.Parked) != 1 {
+			t.Fatalf("len(state.Parked) = %d, want 1 (the malformed row skipped)", len(state.Parked))
+		}
+		if _, ok := state.Parked["id-3"]; !ok {
+			t.Error("state.Parked missing id-3")
+		}
+		if !strings.Contains(logs.String(), "skipping malformed park record") {
+			t.Errorf("missing malformed-row warning\nlogs: %s", logs.String())
+		}
+	})
+
+	t.Run("resulting state.Parked is honored by ShouldDispatch", func(t *testing.T) {
+		t.Parallel()
+
+		state := NewState(5000, 4, nil, AgentTotals{})
+		PopulateParked(state, []persistence.ParkedIssue{
+			{IssueID: "id-4", Identifier: "PROJ-4", Reason: parkReasonAgentBlocked, ParkedAt: "2026-08-17T00:00:00Z"},
+		}, nil)
+
+		issue := domain.Issue{ID: "id-4", Identifier: "PROJ-4", Title: "T", State: "To Do"}
+		if ShouldDispatch(issue, state, []string{"To Do"}, []string{"Done"}) {
+			t.Error("ShouldDispatch dispatched an issue PopulateParked loaded into state.Parked")
+		}
+	})
+}
+
+// TestRuntimeSnapshot_ParkedFields verifies that RuntimeSnapshot reports
+// ParkedCount always, including zero, and Parked/ParkedReason only when
+// state.Parked is non-empty, mirroring the BudgetExhausted* projection.
+func TestRuntimeSnapshot_ParkedFields(t *testing.T) {
+	t.Parallel()
+
+	fixedNow := time.Date(2026, 3, 24, 12, 0, 0, 0, time.UTC)
+
+	t.Run("empty Parked produces zero count and nil slices", func(t *testing.T) {
+		t.Parallel()
+
+		state := NewState(5000, 10, nil, AgentTotals{})
+
+		result := RuntimeSnapshot(state, fixedNow)
+
+		if result.ParkedCount != 0 {
+			t.Errorf("ParkedCount = %d, want 0", result.ParkedCount)
+		}
+		if result.Parked != nil {
+			t.Errorf("Parked = %v, want nil", result.Parked)
+		}
+		if result.ParkedReason != nil {
+			t.Errorf("ParkedReason = %v, want nil", result.ParkedReason)
+		}
+	})
+
+	t.Run("non-empty Parked sorted, counted, and reasoned", func(t *testing.T) {
+		t.Parallel()
+
+		state := NewState(5000, 10, nil, AgentTotals{})
+		state.Parked["ISS-C"] = &ParkedEntry{Identifier: "PROJ-C", Reason: parkReasonAgentBlocked}
+		state.Parked["ISS-A"] = &ParkedEntry{Identifier: "PROJ-A", Reason: parkReasonHandoffAbsence}
+		state.Parked["ISS-B"] = &ParkedEntry{Identifier: "PROJ-B", Reason: parkReasonAgentBlocked}
+
+		result := RuntimeSnapshot(state, fixedNow)
+
+		if result.ParkedCount != 3 {
+			t.Errorf("ParkedCount = %d, want 3", result.ParkedCount)
+		}
+		want := []string{"ISS-A", "ISS-B", "ISS-C"}
+		if len(result.Parked) != len(want) {
+			t.Fatalf("len(Parked) = %d, want %d", len(result.Parked), len(want))
+		}
+		for i, id := range want {
+			if result.Parked[i] != id {
+				t.Errorf("Parked[%d] = %q, want %q", i, result.Parked[i], id)
+			}
+		}
+		if got := result.ParkedReason["ISS-A"]; got != parkReasonHandoffAbsence {
+			t.Errorf("ParkedReason[ISS-A] = %q, want %q", got, parkReasonHandoffAbsence)
+		}
+		if got := result.ParkedReason["ISS-C"]; got != parkReasonAgentBlocked {
+			t.Errorf("ParkedReason[ISS-C] = %q, want %q", got, parkReasonAgentBlocked)
+		}
+	})
 }

@@ -29,6 +29,7 @@ type spyMetrics struct {
 	pollCycles           []string
 	trackerRequests      []trackerReqCall
 	handoffTransitions   []string
+	issueParks           []string
 	dispatchTransitions  []string
 	toolCalls            []toolCallCall
 	pollDurations        []float64
@@ -140,6 +141,12 @@ func (s *spyMetrics) IncHandoffTransitions(result string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.handoffTransitions = append(s.handoffTransitions, result)
+}
+
+func (s *spyMetrics) IncIssueParks(reason string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.issueParks = append(s.issueParks, reason)
 }
 
 func (s *spyMetrics) IncDispatchTransitions(result string) {

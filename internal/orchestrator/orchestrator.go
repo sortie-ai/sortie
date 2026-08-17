@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sync/atomic"
 	"time"
 
@@ -45,6 +46,10 @@ type OrchestratorStore interface {
 	MarkReactionDispatched(ctx context.Context, issueID, kind string) error
 	DeleteReactionFingerprint(ctx context.Context, issueID, kind string) error
 	LatestRunCompletionByIdentifier(ctx context.Context, identifiers []string) (map[string]string, error)
+	UpsertParkedIssue(ctx context.Context, entry persistence.ParkedIssue) error
+	DeleteParkedIssue(ctx context.Context, issueID string) error
+	MarkParkedIssueLabelApplied(ctx context.Context, issueID string) error
+	ListParkedIssues(ctx context.Context) ([]persistence.ParkedIssue, error)
 }
 
 // Observer receives notifications when orchestrator state changes.
@@ -614,6 +619,8 @@ func (o *Orchestrator) handleTick(ctx context.Context) {
 	sorted := SortForDispatch(issues)
 
 	o.rebuildBudgetExhausted(ctx, cfg, sorted)
+	o.refreshParkedIssues(ctx, sorted)
+	o.parkExhaustedAbsences(ctx, cfg, sorted)
 
 	// Pre-build state sets once for the dispatch loop.
 	activeSet := stateSet(cfg.Tracker.ActiveStates)
@@ -869,19 +876,121 @@ func (o *Orchestrator) maybeWriteIncrementalMetadata(ctx context.Context, issueI
 	entry.LastMetadataWrite = now
 }
 
+// refreshParkedIssues evaluates the release rule against this tick's
+// candidates, then against the state of every parked issue the candidate
+// slice does not carry, read through one batched, comment-free tracker
+// call. Must be called from the event loop goroutine, after the budget
+// rebuild and before the dispatch loop.
+func (o *Orchestrator) refreshParkedIssues(ctx context.Context, candidates []domain.Issue) {
+	if len(o.state.Parked) == 0 {
+		return
+	}
+
+	seen := make(map[string]struct{}, len(candidates))
+	for _, issue := range candidates {
+		entry, ok := o.state.Parked[issue.ID]
+		if !ok {
+			continue
+		}
+		seen[issue.ID] = struct{}{}
+		if !observeParkedState(ctx, o.state, o.store, o.logger, entry, issue.ID, issue.State) {
+			continue
+		}
+		observeParkedLabels(ctx, o.state, o.store, o.logger, entry, issue.ID, issue.Labels)
+	}
+
+	missing := make([]string, 0, len(o.state.Parked))
+	for id := range o.state.Parked {
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		missing = append(missing, id)
+	}
+	if len(missing) == 0 || o.trackerAdapter == nil {
+		return
+	}
+	slices.Sort(missing)
+
+	states, err := o.trackerAdapter.FetchIssueStatesByIDs(ctx, missing)
+	if err != nil {
+		o.logger.Warn("parked issue state read failed, retaining parks",
+			slog.Any("error", err),
+		)
+		return
+	}
+	for _, id := range missing {
+		entry, ok := o.state.Parked[id]
+		if !ok {
+			continue
+		}
+		observed, found := states[id]
+		if !found {
+			continue
+		}
+		observeParkedState(ctx, o.state, o.store, o.logger, entry, id, observed)
+	}
+}
+
+// parkExhaustedAbsences parks each candidate whose consecutive
+// handoff-absence count has just reached the ceiling. Skipped entirely
+// under the off evidence policy, which records no absence. Must be called
+// from the event loop goroutine, after [Orchestrator.refreshParkedIssues]
+// so a release on this tick is not immediately re-parked.
+func (o *Orchestrator) parkExhaustedAbsences(ctx context.Context, cfg config.ServiceConfig, candidates []domain.Issue) {
+	if cfg.Tracker.HandoffEvidence.Effective() == config.HandoffEvidenceOff {
+		return
+	}
+
+	candidateIDs := make([]string, len(candidates))
+	for i, issue := range candidates {
+		candidateIDs[i] = issue.ID
+	}
+
+	ceiling := handoffAbsenceCeiling(cfg.Agent.MaxSessions)
+	counts, err := o.store.QueryConsecutiveHandoffAbsenceCounts(ctx, candidateIDs)
+	if err != nil {
+		o.logger.Warn("handoff absence exhaustion query failed, retaining previous set",
+			slog.Any("error", err),
+		)
+		return
+	}
+
+	for _, issue := range candidates {
+		count := counts[issue.ID]
+		if count < ceiling {
+			continue
+		}
+		if _, parked := o.state.Parked[issue.ID]; parked {
+			continue
+		}
+		issueLog := logging.WithIssue(o.logger, issue.ID, issue.Identifier)
+		parkHandoffAbsence(
+			o.state,
+			ctx,
+			o.store,
+			o.trackerAdapter,
+			o.metrics,
+			issue.ID,
+			issue.Identifier,
+			issue.DisplayID,
+			issue.State,
+			count,
+			ceiling,
+			o.handoffParkingLabel,
+			issueLog,
+		)
+	}
+}
+
 // rebuildBudgetExhausted replaces the BudgetExhausted set and its reason
-// map once per tick from run_history, as the union of the session-count,
-// token-sum, and consecutive handoff-absence gates scoped to the candidate
-// set. Handoff absence is the most specific reason and takes precedence;
-// token budget takes precedence over the ordinary session budget. On a
-// query error for one axis, the prior entries attributed to that axis are
-// folded back in so a transient error never drops an issue mid-tick, while
-// the other axes keep their fresh results. The absence gate is skipped under
-// the off evidence policy, which records no absence and must cost nothing.
-// Must be called from the event loop goroutine.
+// map once per tick from run_history, as the union of the session-count
+// and token-sum gates scoped to the candidate set. Token budget takes
+// precedence over the ordinary session budget. On a query error for one
+// axis, the prior entries attributed to that axis are folded back in so a
+// transient error never drops an issue mid-tick, while the other axis
+// keeps its fresh results. Must be called from the event loop goroutine.
 func (o *Orchestrator) rebuildBudgetExhausted(ctx context.Context, cfg config.ServiceConfig, sorted []domain.Issue) {
-	absenceGateEnabled := cfg.Tracker.HandoffEvidence.Effective() != config.HandoffEvidenceOff
-	if cfg.Agent.MaxSessions == 0 && cfg.Agent.MaxTokens == 0 && !absenceGateEnabled {
+	if cfg.Agent.MaxSessions == 0 && cfg.Agent.MaxTokens == 0 {
 		o.state.BudgetExhausted = make(map[string]struct{})
 		o.state.BudgetExhaustedReason = make(map[string]string)
 		o.state.TokenBudgetIncomplete = make(map[string]struct{})
@@ -899,11 +1008,6 @@ func (o *Orchestrator) rebuildBudgetExhausted(ctx context.Context, cfg config.Se
 	priorReason := o.state.BudgetExhaustedReason
 	fresh := make(map[string]struct{})
 	freshReason := make(map[string]string)
-	type parkedCandidate struct {
-		issueID string
-		count   int
-	}
-	newlyParked := make([]parkedCandidate, 0)
 
 	if cfg.Agent.MaxSessions > 0 {
 		sessionExhausted, qErr := o.store.QueryBudgetExhaustedIssues(ctx, candidateIDs, cfg.Agent.MaxSessions)
@@ -926,39 +1030,6 @@ func (o *Orchestrator) rebuildBudgetExhausted(ctx context.Context, cfg config.Se
 		}
 	}
 
-	// The handoff-absence ceiling is always finite, including when the
-	// ordinary max_sessions budget is disabled. Rebuild it from run_history
-	// on every poll so a parked issue remains ineligible across restart and
-	// even when no retry row survived the final worker exit.
-	absenceCeiling := handoffAbsenceCeiling(cfg.Agent.MaxSessions)
-	if absenceGateEnabled {
-		absenceCounts, absenceErr := o.store.QueryConsecutiveHandoffAbsenceCounts(ctx, candidateIDs)
-		if absenceErr != nil {
-			o.logger.Warn("handoff absence exhaustion query failed, retaining previous set",
-				slog.Any("error", absenceErr),
-			)
-			for id := range prior {
-				if priorReason[id] != budgetReasonHandoffAbsence {
-					continue
-				}
-				fresh[id] = struct{}{}
-				freshReason[id] = budgetReasonHandoffAbsence
-			}
-		} else {
-			for _, id := range candidateIDs {
-				count := absenceCounts[id]
-				if count < absenceCeiling {
-					continue
-				}
-				fresh[id] = struct{}{}
-				freshReason[id] = budgetReasonHandoffAbsence
-				if priorReason[id] != budgetReasonHandoffAbsence {
-					newlyParked = append(newlyParked, parkedCandidate{issueID: id, count: count})
-				}
-			}
-		}
-	}
-
 	freshIncomplete := make(map[string]struct{})
 	if cfg.Agent.MaxTokens > 0 {
 		usageByIssue, qErr := o.store.QueryTokenBudgetUsage(ctx, candidateIDs)
@@ -970,19 +1041,15 @@ func (o *Orchestrator) rebuildBudgetExhausted(ctx context.Context, cfg config.Se
 				if priorReason[id] != budgetReasonToken {
 					continue
 				}
-				if freshReason[id] != budgetReasonHandoffAbsence {
-					fresh[id] = struct{}{}
-					freshReason[id] = budgetReasonToken
-				}
+				fresh[id] = struct{}{}
+				freshReason[id] = budgetReasonToken
 			}
 		} else {
 			for _, id := range candidateIDs {
 				usage := usageByIssue[id]
 				if usage.TotalTokens >= int64(cfg.Agent.MaxTokens) {
-					if freshReason[id] != budgetReasonHandoffAbsence {
-						fresh[id] = struct{}{}
-						freshReason[id] = budgetReasonToken
-					}
+					fresh[id] = struct{}{}
+					freshReason[id] = budgetReasonToken
 					continue
 				}
 				if usage.UnmeasuredSessions == 0 {
@@ -1005,21 +1072,6 @@ func (o *Orchestrator) rebuildBudgetExhausted(ctx context.Context, cfg config.Se
 
 	o.state.BudgetExhausted = fresh
 	o.state.BudgetExhaustedReason = freshReason
-
-	for _, parked := range newlyParked {
-		issueLog := logging.WithIssue(o.logger, parked.issueID, identifierByID[parked.issueID])
-		parkHandoffAbsence(
-			o.state,
-			ctx,
-			o.store,
-			o.trackerAdapter,
-			parked.issueID,
-			parked.count,
-			absenceCeiling,
-			o.handoffParkingLabel,
-			issueLog,
-		)
-	}
 }
 
 // drainRunningWorkers cancels all running worker contexts and waits for

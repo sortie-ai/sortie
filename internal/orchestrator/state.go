@@ -46,13 +46,11 @@ const (
 )
 
 // Dispatch-gate reason values recorded in [State.BudgetExhaustedReason] and
-// the runtime snapshot. Handoff absence takes precedence so a parked issue
-// remains distinguishable; token budget still takes precedence over the
-// ordinary all-session budget.
+// the runtime snapshot. Token budget takes precedence over the ordinary
+// all-session budget.
 const (
-	budgetReasonToken          = "token_budget"
-	budgetReasonHandoffAbsence = "handoff_absence"
-	budgetReasonSession        = "session_budget"
+	budgetReasonToken   = "token_budget"
+	budgetReasonSession = "session_budget"
 )
 
 // AgentTotals holds cumulative token and runtime counters across all ended
@@ -738,6 +736,18 @@ type MergeCompletionReactionConfig struct {
 	MaxRetries      int
 }
 
+// ParkedEntry is the runtime view of one issue held out of primary dispatch
+// until the orchestrator observes that a person acted on it.
+type ParkedEntry struct {
+	Identifier   string
+	DisplayID    string
+	Reason       string // "agent_blocked" or "handoff_absence"
+	ParkedState  string // tracker state observed at park time; empty when unobserved
+	Label        string // parking label the orchestrator applied
+	LabelApplied bool
+	ParkedAt     time.Time
+}
+
 // State is the single authoritative runtime state owned by the orchestrator.
 // The running map and claimed set are in-memory for performance. The
 // agent_totals and completed set are backed by SQLite and survive restarts.
@@ -787,18 +797,24 @@ type State struct {
 	Completed map[string]struct{}
 
 	// BudgetExhausted is the set of issue IDs blocked by a durable
-	// run_history-derived dispatch gate: the configured max_sessions
-	// budget, the max_tokens budget, or the consecutive handoff-absence
-	// ceiling. Rebuilt from batch SQLite queries at the start of each poll
-	// tick and updated inline by worker-exit and retry-timer handling.
-	// [ShouldDispatch] checks this set before dispatch.
+	// run_history-derived effort budget: the configured max_sessions
+	// budget or the max_tokens budget. Rebuilt from batch SQLite queries
+	// at the start of each poll tick and updated inline by worker-exit
+	// and retry-timer handling. [ShouldDispatch] checks this set before
+	// dispatch.
 	BudgetExhausted map[string]struct{}
 
-	// BudgetExhaustedReason maps issue ID to the gate that fired for that
-	// issue: "token_budget", "handoff_absence", or "session_budget". It
-	// is kept in lockstep with BudgetExhausted. Owned by the single-writer
-	// event loop.
+	// BudgetExhaustedReason maps issue ID to the budget that fired for
+	// that issue: "token_budget" or "session_budget". It is kept in
+	// lockstep with BudgetExhausted. Owned by the single-writer event
+	// loop.
 	BudgetExhaustedReason map[string]string
+
+	// Parked maps issue ID to the runtime view of an issue held out of
+	// primary dispatch until the orchestrator observes that a person acted
+	// on it. The durable mirror is the parked_issues table. Owned by the
+	// single-writer event loop.
+	Parked map[string]*ParkedEntry
 
 	// AgentTotals holds aggregate token counts and cumulative runtime seconds
 	// across all ended sessions. Active session elapsed time is computed at
@@ -903,6 +919,7 @@ func NewState(pollIntervalMS, maxConcurrentAgents int, maxConcurrentByState map[
 		Completed:             make(map[string]struct{}),
 		BudgetExhausted:       make(map[string]struct{}),
 		BudgetExhaustedReason: make(map[string]string),
+		Parked:                make(map[string]*ParkedEntry),
 		AgentTotals:           totals,
 		ReactionAttempts:      make(map[string]int),
 		PendingReactions:      make(map[string]*PendingReaction),
@@ -993,6 +1010,9 @@ type RuntimeSnapshotResult struct {
 	BudgetExhaustedCount  int                    `json:"budget_exhausted_count"`
 	BudgetExhausted       []string               `json:"budget_exhausted,omitempty"`
 	BudgetExhaustedReason map[string]string      `json:"budget_exhausted_reason,omitempty"`
+	ParkedCount           int                    `json:"parked_count"`
+	Parked                []string               `json:"parked,omitempty"`
+	ParkedReason          map[string]string      `json:"parked_reason,omitempty"`
 }
 
 // ActiveElapsedSeconds returns the sum of wall-clock elapsed seconds
@@ -1117,6 +1137,22 @@ func RuntimeSnapshot(state *State, now time.Time) RuntimeSnapshotResult {
 			reasons[id] = state.BudgetExhaustedReason[id]
 		}
 		snap.BudgetExhaustedReason = reasons
+	}
+
+	snap.ParkedCount = len(state.Parked)
+	if len(state.Parked) > 0 {
+		ids := make([]string, 0, len(state.Parked))
+		for id := range state.Parked {
+			ids = append(ids, id)
+		}
+		slices.Sort(ids)
+		snap.Parked = ids
+
+		reasons := make(map[string]string, len(state.Parked))
+		for _, id := range ids {
+			reasons[id] = state.Parked[id].Reason
+		}
+		snap.ParkedReason = reasons
 	}
 
 	if state.AgentRateLimits != nil {

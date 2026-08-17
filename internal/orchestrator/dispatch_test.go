@@ -356,6 +356,51 @@ func TestShouldDispatch(t *testing.T) {
 	}
 }
 
+// TestShouldDispatchParkedIssue verifies that both ShouldDispatch and
+// ShouldDispatchWithSets return false for a parked issue that satisfies
+// every other gate, with state.BudgetExhausted empty — matching a
+// deployment where both agent.max_sessions and agent.max_tokens are zero,
+// so the park gate alone, not a budget gate, accounts for the refusal.
+func TestShouldDispatchParkedIssue(t *testing.T) {
+	t.Parallel()
+
+	issue := domain.Issue{ID: "PARK-GATE", Identifier: "PARK-GATE", Title: "T", State: "To Do"}
+	active := []string{"To Do"}
+	terminal := []string{"Done"}
+
+	newParkedState := func() *State {
+		s := NewState(1000, 10, nil, AgentTotals{})
+		s.Parked[issue.ID] = &ParkedEntry{Identifier: issue.Identifier, Reason: parkReasonAgentBlocked}
+		return s
+	}
+
+	t.Run("ShouldDispatch", func(t *testing.T) {
+		t.Parallel()
+
+		s := newParkedState()
+		if len(s.BudgetExhausted) != 0 {
+			t.Fatalf("BudgetExhausted = %v, want empty", s.BudgetExhausted)
+		}
+		if got := ShouldDispatch(issue, s, active, terminal); got {
+			t.Errorf("ShouldDispatch(%q) = %t, want false for a parked issue", issue.Identifier, got)
+		}
+	})
+
+	t.Run("ShouldDispatchWithSets", func(t *testing.T) {
+		t.Parallel()
+
+		s := newParkedState()
+		activeSet := stateSet(active)
+		terminalSet := stateSet(terminal)
+		if len(s.BudgetExhausted) != 0 {
+			t.Fatalf("BudgetExhausted = %v, want empty", s.BudgetExhausted)
+		}
+		if got := ShouldDispatchWithSets(issue, s, activeSet, terminalSet); got {
+			t.Errorf("ShouldDispatchWithSets(%q) = %t, want false for a parked issue", issue.Identifier, got)
+		}
+	})
+}
+
 // TestShouldDispatch_ReopenAfterTerminalRelease verifies that releasing an
 // issue's claim through [releaseTerminalIssueState] makes it dispatchable
 // again once the tracker reports it back in an active state, and that the
